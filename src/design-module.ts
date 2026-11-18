@@ -4,14 +4,14 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Id, Refusal} from './contracts.ts';
-import {EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
+import {EXAM_LOGIN_RECOVERY_TEXT, EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {writeDesignLoginState} from './design-browser.ts';
 import {readDesignCaptureStageNote, writeDesignExamCaptures} from './design-capture-stage.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
 import {discoverRoutesFromSource, dynamicRoutesMissingExample, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type DiscoveredRoute, type ScreenCoverageRow} from './design-discover.ts';
 import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture} from './design-examine.ts';
-import {takeExamStripNote} from './exam-strip-note.ts';
+import {takeExamRecoveryNote, takeExamStripNote} from './exam-strip-note.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {
   applyHostFindingCounts,
@@ -105,6 +105,7 @@ export type DesignModuleResult = {
   coverageMarkdown: string;
   visualLow: boolean;
   loginStale: boolean;
+  loginRecovery?: boolean;
   visualUnjudged: boolean;
   visualRequested?: number;
   visualJudged?: number;
@@ -273,6 +274,14 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     if (at >= 0) notes.splice(at, 1);
     notes.unshift(EXAM_LOGIN_STALE_TEXT);
   }
+  const recovery = takeExamRecoveryNote(input.intentId);
+  const loginRecovery = Boolean(examined.loginRecovery || recovery);
+  if (loginRecovery) {
+    const text = recovery ?? EXAM_LOGIN_RECOVERY_TEXT;
+    const at = notes.indexOf(text);
+    if (at >= 0) notes.splice(at, 1);
+    notes.unshift(text);
+  }
   const strip = takeExamStripNote(input.intentId);
   if (strip) notes.push(strip);
   const regression = await regressionSection(input, captured.files);
@@ -352,6 +361,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     coverageMarkdown: read.coverageMarkdown,
     visualLow: examined.visual.some(row => row.examiner.some(score => score.score < 8)),
     loginStale: examined.loginStale,
+    ...(loginRecovery ? {loginRecovery: true} : {}),
     visualUnjudged: visualIncomplete,
     ...(input.scoreVisual === true
       ? {visualRequested, visualJudged: examined.visual.length, visualMissing}

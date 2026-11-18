@@ -1,5 +1,5 @@
 import {Refusal} from './contracts.ts';
-import {EXAM_LOGIN_STALE_TEXT, providerFailureCode, safeFailureCode} from './exam-login.ts';
+import {EXAM_LOGIN_RECOVERY_TEXT, EXAM_LOGIN_STALE_TEXT, examLoginRecoveryNote, markExamRecoverySaved, providerFailureCode, safeFailureCode} from './exam-login.ts';
 import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {
   parseVisualScores,
@@ -352,7 +352,7 @@ function visualTask(
   ].join('\n').slice(0, 100000);
 }
 
-type ModelHit = {output: string; failure: string | null};
+type ModelHit = {output: string; failure: string | null; recoverySaved?: boolean};
 
 /** A thrown model error or an auth sentence becomes a code. Login and provider refusal still propagate. */
 async function runModel(worker: DesignWorker, call: DesignWorkerCall): Promise<ModelHit> {
@@ -365,8 +365,12 @@ async function runModel(worker: DesignWorker, call: DesignWorkerCall): Promise<M
     }
     return {output, failure: null};
   } catch (error) {
-    if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
-    return {output: '', failure: error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED'};
+    if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_PROVIDER_UNSUPPORTED' || error.code === 'EXAM_LOGIN_BUSY')) throw error;
+    return {
+      output: '',
+      failure: error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED',
+      ...(examLoginRecoveryNote(error) ? {recoverySaved: true} : {}),
+    };
   }
 }
 
@@ -379,7 +383,7 @@ async function askVisual(
   input: DesignExamineInput,
   screen: DesignExamineInput['screens'][number],
   role: 'specialist' | 'reviewer',
-): Promise<{scores: VisualScore[] | null; failure: string | null; model: string}> {
+): Promise<{scores: VisualScore[] | null; failure: string | null; model: string; recoverySaved?: boolean}> {
   const seat = await input.reserve(role);
   try {
     acceptClaudeExamSeat(seat);
@@ -396,7 +400,7 @@ async function askVisual(
       writePaths: [] as const,
     });
     const hit = await runModel(input.worker, call);
-    if (hit.failure) return {scores: null, failure: hit.failure, model: seat.model};
+    if (hit.failure) return {scores: null, failure: hit.failure, model: seat.model, ...(hit.recoverySaved ? {recoverySaved: true} : {})};
     return {scores: parseVisualScores(parseJson(hit.output)), failure: null, model: seat.model};
   } finally {
     await input.release(seat);
@@ -426,7 +430,7 @@ function confirmationTask(
 }
 
 function rethrowReviewer(error: unknown): boolean {
-  return error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'DESIGN_CONFIRMATION_INVALID' || error.code === 'EXAM_PROVIDER_UNSUPPORTED');
+  return error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'DESIGN_CONFIRMATION_INVALID' || error.code === 'EXAM_PROVIDER_UNSUPPORTED' || error.code === 'EXAM_LOGIN_BUSY');
 }
 
 async function confirmFinding(
@@ -453,7 +457,11 @@ async function confirmFinding(
       writePaths: [] as const,
     });
     const hit = await runModel(input.worker, call);
-    if (hit.failure) throw new Refusal(hit.failure);
+    if (hit.failure) {
+      const refusal = new Refusal(hit.failure);
+      if (hit.recoverySaved) markExamRecoverySaved(refusal);
+      throw refusal;
+    }
     const parsed = DesignConfirmResult.safeParse(normalizeDesignConfirm(parseJson(hit.output)));
     if (!parsed.success) throw new Refusal('DESIGN_CONFIRMATION_INVALID');
     return {seat, confirm: parsed.data};
@@ -474,6 +482,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[];
   visualMissing: {file: string; route: string}[];
   loginStale: boolean;
+  loginRecovery: boolean;
   modelCoverage: DesignExamCoverage;
 }> {
   const findings: DesignExamFinding[] = [];
@@ -489,7 +498,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   if (ids.length === 0) {
     notes.push('A lista de verificação veio vazia.');
     if (input.scoreVisual === true) notes.push('A crítica visual foi pedida, mas nenhuma tela entrou no exame.');
-    return {findings, coverage, confirmations, notes, visual, visualMissing: [], loginStale: false, modelCoverage: blankExamCoverage()};
+    return {findings, coverage, confirmations, notes, visual, visualMissing: [], loginStale: false, loginRecovery: false, modelCoverage: blankExamCoverage()};
   }
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
@@ -512,6 +521,11 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     modelCoverage[role].failure = safeFailureCode(code);
   };
   let loginStale = false;
+  let loginRecovery = false;
+  const noteRecovery = () => {
+    loginRecovery = true;
+    if (!notes.includes(EXAM_LOGIN_RECOVERY_TEXT)) notes.push(EXAM_LOGIN_RECOVERY_TEXT);
+  };
   try {
   for (const screen of input.screens) {
     if (isNonHtmlResponse(screen.code)) {
@@ -539,6 +553,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       await input.release(seat);
     }
     remember('examiner', seat.model);
+    if (hit.recoverySaved) noteRecovery();
     if (hit.failure) {
       noteFailure('examiner', hit.failure);
       notes.push(`O examinador falhou em ${screen.file} com ${hit.failure}.`);
@@ -613,6 +628,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           });
         } catch (error) {
           if (rethrowReviewer(error)) throw error;
+          if (examLoginRecoveryNote(error)) noteRecovery();
           const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
           noteFailure('reviewer', code);
           notes.push(`O revisor falhou em ${screen.file} com ${code}.`);
@@ -624,6 +640,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       const reviewerVisual = await askVisual(input, screen, 'reviewer');
       remember('examiner', examinerVisual.model);
       remember('reviewer', reviewerVisual.model);
+      if (examinerVisual.recoverySaved || reviewerVisual.recoverySaved) noteRecovery();
       if (examinerVisual.failure) noteFailure('examiner', examinerVisual.failure);
       if (reviewerVisual.failure) noteFailure('reviewer', reviewerVisual.failure);
       if (examinerVisual.scores) modelCoverage.examiner.judged += 1;
@@ -651,6 +668,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
             });
           } catch (error) {
             if (rethrowReviewer(error)) throw error;
+            if (examLoginRecoveryNote(error)) noteRecovery();
             const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
             noteFailure('reviewer', code);
             notes.push(`O revisor falhou em ${screen.file} com ${code}.`);
@@ -673,5 +691,5 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         .map(screen => ({file: screen.file, route: screen.route}))
     : [];
 
-  return {findings, coverage, confirmations, notes, visual, visualMissing, loginStale, modelCoverage};
+  return {findings, coverage, confirmations, notes, visual, visualMissing, loginStale, loginRecovery, modelCoverage};
 }

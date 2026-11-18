@@ -1,7 +1,7 @@
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Id,Refusal} from './contracts.ts';
-import {EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
+import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_STALE_TEXT,examLoginRecoveryNote} from './exam-login.ts';
 import {loadInstallation} from './installation.ts';
 import {beginPersonalVerification,resolvePersonalVerification} from './verify-command.ts';
 import {removeSecurityReport} from './verify-report.ts';
@@ -25,9 +25,12 @@ const messages:Record<string,string>={
  VERIFY_TOO_MANY:'A reverificação aceita no máximo 20 achados.',
  EXAM_PROVIDER_UNSUPPORTED:'O exame de leitura só aceita uma conta Claude.',
  EXAM_LOGIN_STALE:EXAM_LOGIN_STALE_TEXT,
+ EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,
 };
 
 export function verifyCliFailureText(error:unknown):string{
+ const recovery=examLoginRecoveryNote(error);
+ if(recovery)return recovery;
  const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'';
  return messages[code]??(code||'A verificação falhou.');
 }

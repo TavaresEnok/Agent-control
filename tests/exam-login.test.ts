@@ -1,35 +1,45 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {chmod, lstat, mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from '../src/contracts.ts';
 import {loadDesignChecklist} from '../src/design-checklist.ts';
 import {examineDesignScreens} from '../src/design-examine.ts';
+import {runDesignModule} from '../src/design-module.ts';
 import type {DesignWorker} from '../src/design-types.ts';
+import {rememberExamRecoveryNote} from '../src/exam-strip-note.ts';
+import type {Installation} from '../src/installation.ts';
 import {
+  EXAM_LOGIN_BUSY_TEXT,
   EXAM_LOGIN_MARGIN_MS,
+  EXAM_LOGIN_RECOVERY_TEXT,
   EXAM_LOGIN_STALE_TEXT,
   applyReturnedExamCredential,
   classifyReturnedCredential,
   claudeAccessExpiresAt,
   ensureExamLoginFresh,
+  examLoginBusyNote,
   examLoginFreshAfterRenew,
   examLoginNeedsRefresh,
+  examLoginRecoveryNote,
   examLoginStaleNote,
   hashExamRefreshToken,
+  markExamRecoverySaved,
   postgresAccountLoginLock,
   providerFailureCode,
   readClaudeRefreshTokenHash,
   readExamCredentialReturn,
+  recoverAccountCredentialCommand,
+  recoverExamCredential,
   renewClaudeLoginInPlace,
   safeFailureCode,
   type AccountLoginLock,
 } from '../src/exam-login.ts';
 import {Ledger} from '../src/ledger.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
-import {designExamStatus} from '../src/personal-design-cli.ts';
+import {designCliFailureText, designExamStatus} from '../src/personal-design-cli.ts';
 import {verifyCliFailureText} from '../src/personal-verify-cli.ts';
 import {readonlyExamIsolation} from '../src/native-execution-supervisor.ts';
 
@@ -636,4 +646,443 @@ test('a CLI e o exame dizem para entrar de novo quando o login vence', async () 
   assert.deepEqual(calls, ['specialist', 'release']);
   assert.equal(result.notes.includes(EXAM_LOGIN_STALE_TEXT), true);
   assert.equal(JSON.stringify(result).includes(SECRET), false);
+});
+
+test('cada motivo de recusa grava recuperação 0600 sem seguir symlink; documento inválido é descartado; account-recover aplica a maior e limpa tudo', async () => {
+  const now = Date.now();
+  const baseDoc = {
+    claudeAiOauth: {
+      accessToken: 'fixture-access-base',
+      refreshToken: 'fixture-refresh-base',
+      expiresAt: now + 6 * 60 * 1000,
+      scopes: ['user:inference', 'user:profile'],
+      subscriptionType: 'max',
+      rateLimitTier: 'default_claude_max_20x',
+      keepNested: {v: 1},
+    },
+    mcpOAuth: {keepTop: true},
+  };
+  const baseText = JSON.stringify(baseDoc);
+  const baseMark = hashExamRefreshToken('fixture-refresh-base');
+  const {dir, file} = await loginFile(baseText);
+  try {
+    // Documento inválido (JSON ruim, sem accessToken, sem refreshToken) não gera arquivo de recuperação.
+    for (const bad of [
+      '{',
+      JSON.stringify({claudeAiOauth: {accessToken: '', refreshToken: 'r', expiresAt: now + 1000, scopes: ['user:inference']}}),
+      JSON.stringify({claudeAiOauth: {accessToken: 'a', expiresAt: now + 1000, scopes: ['user:inference']}}),
+    ]) {
+      const badId = randomUUID();
+      assert.equal(await applyReturnedExamCredential(dir, bad, {expectedRefreshTokenHash: baseMark, jobId: badId}), 'rejected');
+      await assert.rejects(() => lstat(join(dir, `.exam-credential-recovery-${badId}.json`)), {code: 'ENOENT'});
+    }
+
+    // 1) Hash diferente da marca -> arquivo de recuperação 0600.
+    const jobHash = 'job-hash-mismatch';
+    const docHash = JSON.stringify({
+      claudeAiOauth: {
+        ...baseDoc.claudeAiOauth,
+        accessToken: 'fixture-access-hash-mismatch',
+        refreshToken: 'fixture-refresh-hash-mismatch',
+        expiresAt: now + 8 * 3600_000,
+      },
+    });
+    assert.equal(
+      await applyReturnedExamCredential(dir, docHash, {expectedRefreshTokenHash: hashExamRefreshToken('other-token'), jobId: jobHash}),
+      'rejected',
+    );
+    const hashRecovery = join(dir, `.exam-credential-recovery-${jobHash}.json`);
+    assert.equal((await lstat(hashRecovery)).mode & 0o777, 0o600);
+    assert.equal(JSON.parse(await readFile(hashRecovery, 'utf8')).claudeAiOauth.refreshToken, 'fixture-refresh-hash-mismatch');
+
+    // 2) Marca ausente -> arquivo de recuperação 0600.
+    const jobMissing = 'job-missing-mark';
+    const docMissing = JSON.stringify({
+      claudeAiOauth: {
+        ...baseDoc.claudeAiOauth,
+        accessToken: 'fixture-access-missing-mark',
+        refreshToken: 'fixture-refresh-missing-mark',
+        expiresAt: now + 10 * 3600_000,
+      },
+    });
+    assert.equal(
+      await applyReturnedExamCredential(dir, docMissing, {expectedRefreshTokenHash: null, jobId: jobMissing}),
+      'rejected',
+    );
+    const missingRecovery = join(dir, `.exam-credential-recovery-${jobMissing}.json`);
+    assert.equal((await lstat(missingRecovery)).mode & 0o777, 0o600);
+
+    // 3) expiresAt não maior -> arquivo de recuperação 0600.
+    const jobExpires = 'job-expires-not-greater';
+    const docExpires = JSON.stringify({
+      claudeAiOauth: {
+        ...baseDoc.claudeAiOauth,
+        accessToken: 'fixture-access-smaller-exp',
+        refreshToken: 'fixture-refresh-smaller-exp',
+        expiresAt: baseDoc.claudeAiOauth.expiresAt,
+      },
+    });
+    assert.equal(
+      await applyReturnedExamCredential(dir, docExpires, {expectedRefreshTokenHash: baseMark, jobId: jobExpires}),
+      'rejected',
+    );
+    const expiresRecovery = join(dir, `.exam-credential-recovery-${jobExpires}.json`);
+    assert.equal((await lstat(expiresRecovery)).mode & 0o777, 0o600);
+
+    // 4) Falha de escrita (.credentials.json vira symlink ou arquivo com falha) -> grava recuperação sem seguir symlink.
+    const backup = await readFile(file, 'utf8');
+    const symlinkTarget = join(dir, 'outside-target.json');
+    await writeFile(symlinkTarget, backup, {mode: 0o600});
+    await rm(file);
+    await symlink(symlinkTarget, file);
+    const jobWriteFail = 'job-write-fail';
+    const docWriteFail = JSON.stringify({
+      claudeAiOauth: {
+        ...baseDoc.claudeAiOauth,
+        accessToken: 'fixture-access-write-fail',
+        refreshToken: 'fixture-refresh-write-fail',
+        expiresAt: now + 12 * 3600_000,
+      },
+      extraTopEvil: 'drop-me',
+    });
+    assert.equal(
+      await applyReturnedExamCredential(dir, docWriteFail, {expectedRefreshTokenHash: baseMark, jobId: jobWriteFail}),
+      'rejected',
+    );
+    const writeFailRecovery = join(dir, `.exam-credential-recovery-${jobWriteFail}.json`);
+    assert.equal((await lstat(writeFailRecovery)).mode & 0o777, 0o600);
+    assert.equal(await readFile(symlinkTarget, 'utf8'), backup);
+
+    // Symlink pré-existente no próprio arquivo de recuperação é recusado (não segue symlink).
+    const trapTarget = join(dir, 'trap.json');
+    await writeFile(trapTarget, 'untouched', {mode: 0o600});
+    const trapRecovery = join(dir, '.exam-credential-recovery-job-symlink-trap.json');
+    await symlink(trapTarget, trapRecovery);
+    await assert.rejects(
+      () => applyReturnedExamCredential(dir, docMissing, {expectedRefreshTokenHash: null, jobId: 'job-symlink-trap'}),
+      /EXAM_LOGIN_WRITE_REFUSED/,
+    );
+    assert.equal(await readFile(trapTarget, 'utf8'), 'untouched');
+    await rm(trapRecovery);
+
+    // Restaura arquivo regular e aplica account-recover: escolhe maior expiresAt (job-write-fail = +12h), aplica só os 3 campos e apaga recuperações.
+    await rm(file);
+    await writeFile(file, backup, {mode: 0o600});
+    const recovered = await recoverExamCredential(dir);
+    assert.equal(recovered.status, 'recovered');
+    assert.equal(recovered.filesRemoved, 4);
+    const afterRecover = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    const afterOauth = afterRecover.claudeAiOauth as Record<string, unknown>;
+    assert.equal(afterOauth.accessToken, 'fixture-access-write-fail');
+    assert.equal(afterOauth.refreshToken, 'fixture-refresh-write-fail');
+    assert.equal(afterOauth.expiresAt, now + 12 * 3600_000);
+    assert.deepEqual(afterOauth.keepNested, {v: 1});
+    assert.deepEqual(afterRecover.mcpOAuth, {keepTop: true});
+    assert.equal('extraTopEvil' in afterRecover, false);
+    const remaining = (await readdir(dir)).filter(name => name.startsWith('.exam-credential-recovery-'));
+    assert.deepEqual(remaining, []);
+
+    // Segunda execução sem arquivos de recuperação não altera nada.
+    const second = await recoverExamCredential(dir);
+    assert.equal(second.status, 'none');
+    assert.equal(second.filesRemoved, 0);
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('recoverAccountCredentialCommand aplica recuperação sob trava para account-recover CLI', async () => {
+  const area = await mkdtemp(join(tmpdir(), 'ac-account-recover-cli-'));
+  const dataDir = join(area, 'data');
+  const accountsRoot = join(dataDir, 'accounts');
+  const accountId = randomUUID();
+  const accountDir = join(accountsRoot, accountId);
+  const now = Date.now();
+  try {
+    await mkdir(accountDir, {recursive: true, mode: 0o700});
+    await writeFile(join(accountDir, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'fixture-access-old',
+        refreshToken: 'fixture-refresh-old',
+        expiresAt: now + 1000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+    await writeFile(join(accountDir, '.exam-credential-recovery-job-a.json'), JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'fixture-access-older-rec',
+        refreshToken: 'fixture-refresh-older-rec',
+        expiresAt: now + 2000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+    await writeFile(join(accountDir, '.exam-credential-recovery-job-b.json'), JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'fixture-access-newest-rec',
+        refreshToken: 'fixture-refresh-newest-rec',
+        expiresAt: now + 9000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+    let lockQueries = 0;
+    const fakeLedger = {
+      async tx<T>(fn: (c: {query: (sql: string, params?: unknown[]) => Promise<{rows: unknown[]; rowCount: number}>}) => Promise<T>): Promise<T> {
+        return fn({
+          async query(sql: string) {
+            if (sql.includes('pg_advisory_xact_lock') || sql.includes('lock_timeout')) lockQueries += 1;
+            return {rows: [], rowCount: 0};
+          },
+        });
+      },
+    };
+    const fakeConfig = {
+      activation: 'personal',
+      dataDirectory: dataDir,
+      accountHomesDirectory: accountsRoot,
+    } as unknown as Installation;
+    const result = await recoverAccountCredentialCommand(fakeConfig, fakeLedger as unknown as Ledger, accountId);
+    assert.deepEqual(result, {status: 'recovered', accountId, filesRemoved: 2});
+    assert.equal(lockQueries, 2);
+    assert.equal(JSON.stringify(result).includes('fixture-refresh-newest-rec'), false);
+    const saved = JSON.parse(await readFile(join(accountDir, '.credentials.json'), 'utf8')) as {claudeAiOauth: {refreshToken: string}};
+    assert.equal(saved.claudeAiOauth.refreshToken, 'fixture-refresh-newest-rec');
+  } finally {
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('relatório do exame e CLI exibem frase fixa de recuperação sem vazar o token', async () => {
+  const err = new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+  markExamRecoverySaved(err);
+  assert.equal(examLoginRecoveryNote(err), EXAM_LOGIN_RECOVERY_TEXT);
+  assert.equal(verifyCliFailureText(err), EXAM_LOGIN_RECOVERY_TEXT);
+  assert.equal(designCliFailureText(err), EXAM_LOGIN_RECOVERY_TEXT);
+  assert.deepEqual(designExamStatus({loginRecovery: true}), {code: 1, lines: [EXAM_LOGIN_RECOVERY_TEXT]});
+  assert.equal(EXAM_LOGIN_RECOVERY_TEXT.includes('account-recover'), true);
+  assert.equal(EXAM_LOGIN_RECOVERY_TEXT.includes(SECRET), false);
+
+  const area = await mkdtemp(join(tmpdir(), 'ac-exam-recovery-report-'));
+  const repo = join(area, 'repo');
+  const dataDir = join(area, 'data');
+  try {
+    await mkdir(repo, {mode: 0o700});
+    await mkdir(dataDir, {mode: 0o700});
+    const intentId = randomUUID();
+    const runId = randomUUID();
+    const result = await runDesignModule({
+      activation: 'personal',
+      projectId: randomUUID(),
+      repo,
+      targetUrl: 'http://127.0.0.1:3000',
+      dataDirectory: dataDir,
+      intentId,
+      runId,
+      createdAt: new Date(),
+      commit: 'a'.repeat(40),
+      files: [{path: 'index.html', text: '<html><body><main><h1>Oi</h1></main></body></html>'}],
+      worker: {
+        async run() {
+          const failure = new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+          markExamRecoverySaved(failure);
+          rememberExamRecoveryNote(intentId, EXAM_LOGIN_RECOVERY_TEXT);
+          throw failure;
+        },
+      },
+      reserve: async () => ({
+        provider: 'claude',
+        model: 'claude-sonnet-5-5',
+        accountId: randomUUID(),
+        profileId: randomUUID(),
+        grantId: randomUUID(),
+      }),
+      release: async () => {},
+    });
+    assert.equal(result.loginRecovery, true);
+    assert.deepEqual(designExamStatus(result), {code: 1, lines: [EXAM_LOGIN_RECOVERY_TEXT]});
+    const reportMd = await readFile(join(result.directory, 'README.md'), 'utf8');
+    assert.equal(reportMd.includes(EXAM_LOGIN_RECOVERY_TEXT), true);
+    assert.equal(reportMd.includes(SECRET), false);
+  } finally {
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('identidade: subscriptionType e rateLimitTier só divergem quando existem nos dois lados e diferem; scopes exige igualdade', async () => {
+  const now = Date.now();
+  const baseWithoutSoft = JSON.stringify({
+    claudeAiOauth: {
+      accessToken: 'fixture-access-0',
+      refreshToken: 'fixture-refresh-0',
+      expiresAt: now + 60_000,
+      scopes: ['user:inference', 'user:profile'],
+    },
+  });
+  const withSoft = JSON.stringify({
+    claudeAiOauth: {
+      accessToken: 'fixture-access-1',
+      refreshToken: 'fixture-refresh-1',
+      expiresAt: now + 8 * 3600_000,
+      scopes: ['user:profile', 'user:inference'],
+      subscriptionType: 'max',
+      rateLimitTier: 'default_claude_max_20x',
+    },
+  });
+  // Aparecem no retorno -> ok
+  assert.equal(classifyReturnedCredential(baseWithoutSoft, withSoft), 'ok');
+  // Somem no retorno -> ok
+  assert.equal(classifyReturnedCredential(withSoft, JSON.stringify({
+    claudeAiOauth: {
+      accessToken: 'fixture-access-2',
+      refreshToken: 'fixture-refresh-2',
+      expiresAt: now + 9 * 3600_000,
+      scopes: ['user:inference', 'user:profile'],
+    },
+  })), 'ok');
+  // Existem nos dois lados e diferem -> other-account
+  assert.equal(classifyReturnedCredential(withSoft, JSON.stringify({
+    claudeAiOauth: {
+      accessToken: 'fixture-access-3',
+      refreshToken: 'fixture-refresh-3',
+      expiresAt: now + 9 * 3600_000,
+      scopes: ['user:inference', 'user:profile'],
+      subscriptionType: 'pro',
+      rateLimitTier: 'default_claude_max_20x',
+    },
+  })), 'other-account');
+  // Scopes diferentes -> other-account
+  assert.equal(classifyReturnedCredential(baseWithoutSoft, JSON.stringify({
+    claudeAiOauth: {
+      accessToken: 'fixture-access-4',
+      refreshToken: 'fixture-refresh-4',
+      expiresAt: now + 9 * 3600_000,
+      scopes: ['user:inference'],
+    },
+  })), 'other-account');
+
+  // applyReturnedExamCredential grava quando campos aparecem/somem e preserva campos do arquivo atual
+  const {dir, file} = await loginFile(baseWithoutSoft);
+  try {
+    const mark0 = hashExamRefreshToken('fixture-refresh-0');
+    assert.equal(await applyReturnedExamCredential(dir, withSoft, {expectedRefreshTokenHash: mark0, jobId: 'id-appear'}), 'written');
+    assert.equal(JSON.parse(await readFile(file, 'utf8')).claudeAiOauth.refreshToken, 'fixture-refresh-1');
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('renewClaudeLoginInPlace envia SIGTERM, espera grace e manda SIGKILL esperando exit antes de apagar tmpdir e soltar trava', async () => {
+  const area = await mkdtemp(join(tmpdir(), 'ac-renew-sigkill-'));
+  const accountDir = join(area, 'account');
+  const bin = join(area, 'stubborn-claude');
+  const traceFile = join(area, 'events.log');
+  const prevBin = process.env.AC_NATIVE_CLAUDE_BIN;
+  try {
+    await mkdir(accountDir, {mode: 0o700});
+    await writeFile(
+      bin,
+      `#!${process.execPath}
+const fs = require('node:fs');
+const trace = ${JSON.stringify(traceFile)};
+fs.appendFileSync(trace, 'start:' + process.cwd() + '\\n');
+process.on('SIGTERM', () => {
+  const cwdExists = fs.existsSync(process.cwd());
+  fs.appendFileSync(trace, 'sigterm:cwd=' + cwdExists + '\\n');
+});
+setInterval(() => {
+  fs.appendFileSync(trace, 'alive:cwd=' + fs.existsSync(process.cwd()) + '\\n');
+}, 40);
+`,
+      {mode: 0o700},
+    );
+    await chmod(bin, 0o700);
+    process.env.AC_NATIVE_CLAUDE_BIN = bin;
+    let lockReleased = false;
+    let eventsAtLockRelease = '';
+    const lock: AccountLoginLock = async (_id, fn) => {
+      try {
+        return await fn();
+      } finally {
+        lockReleased = true;
+        eventsAtLockRelease = await readFile(traceFile, 'utf8');
+      }
+    };
+    await assert.rejects(
+      () => lock('acc-1', () => renewClaudeLoginInPlace(accountDir, {timeoutMs: 120, killGraceMs: 150})),
+      /EXAM_LOGIN_RENEW_FAILED/,
+    );
+    assert.equal(lockReleased, true);
+    const lines = eventsAtLockRelease.trim().split('\n');
+    const startLine = lines.find(line => line.startsWith('start:'));
+    assert.ok(startLine);
+    const scratchDir = startLine.slice('start:'.length);
+    // Enquanto o filho estava vivo recebendo SIGTERM/ticks, o scratch ainda existia; depois do exit, foi apagado.
+    assert.equal(lines.some(line => line === 'sigterm:cwd=true'), true);
+    assert.equal(lines.some(line => line === 'alive:cwd=false'), false);
+    await assert.rejects(() => lstat(scratchDir), {code: 'ENOENT'});
+    // Garante que o filho realmente morreu após o retorno (nenhuma nova linha aparece).
+    await new Promise(resolve => setTimeout(resolve, 120));
+    assert.equal(await readFile(traceFile, 'utf8'), eventsAtLockRelease);
+  } finally {
+    if (prevBin === undefined) delete process.env.AC_NATIVE_CLAUDE_BIN;
+    else process.env.AC_NATIVE_CLAUDE_BIN = prevBin;
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('ensureExamLoginFresh recalcula Date.now() dentro da trava e postgresAccountLoginLock usa lock_timeout 120s -> EXAM_LOGIN_BUSY', async () => {
+  let clock = 1_700_000_000_000;
+  const stale = document({expiresAt: clock - 10_000, refresh: 'fixture-refresh-clock-0'});
+  const {dir, file} = await loginFile(stale);
+  let renewed = 0;
+  try {
+    const lock: AccountLoginLock = async (_id, fn) => {
+      // Outro processo renovou para clock + 5m + 5s, mas a espera na trava durou 30s.
+      await writeFile(file, document({expiresAt: clock + EXAM_LOGIN_MARGIN_MS + 5_000, refresh: 'fixture-refresh-clock-1'}), {mode: 0o600});
+      clock += 30_000;
+      return fn();
+    };
+    const state = await ensureExamLoginFresh({
+      accountDir: dir,
+      accountId: randomUUID(),
+      now: () => clock,
+      lock,
+      renew: async () => {
+        renewed += 1;
+        await writeFile(file, document({expiresAt: clock + 3 * 3600_000, refresh: 'fixture-refresh-clock-2'}), {mode: 0o600});
+      },
+    });
+    assert.equal(state, 'renewed');
+    assert.equal(renewed, 1);
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+
+  const queries: string[] = [];
+  const busyLedger = {
+    async tx<T>(fn: (c: {query: (sql: string, params?: unknown[]) => Promise<unknown>}) => Promise<T>): Promise<T> {
+      return fn({
+        async query(sql: string) {
+          queries.push(sql);
+          if (sql.includes('pg_advisory_xact_lock')) {
+            const err = Object.assign(new Error('canceling statement due to lock timeout'), {code: '55P03'});
+            throw err;
+          }
+          return {rows: [], rowCount: 0};
+        },
+      });
+    },
+  };
+  const pgLock = postgresAccountLoginLock(busyLedger as unknown as Ledger);
+  await assert.rejects(
+    () => pgLock(randomUUID(), async () => 'never'),
+    (error: unknown) => {
+      assert.ok(error instanceof Refusal && error.code === 'EXAM_LOGIN_BUSY');
+      assert.equal(examLoginBusyNote(error), EXAM_LOGIN_BUSY_TEXT);
+      assert.equal(designCliFailureText(error), EXAM_LOGIN_BUSY_TEXT);
+      assert.equal(verifyCliFailureText(error), EXAM_LOGIN_BUSY_TEXT);
+      return true;
+    },
+  );
+  assert.equal(queries[0], "SET LOCAL lock_timeout = '120s'");
+  assert.match(queries[1] ?? '', /pg_advisory_xact_lock/);
 });

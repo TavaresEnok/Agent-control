@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
-import {examLoginStaleNote} from './exam-login.ts';
+import {examLoginBusyNote, examLoginRecoveryNote, examLoginStaleNote} from './exam-login.ts';
 import {loadInstallation, readPrivateFile, type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {personalAccountRoot} from './personal-health.ts';
@@ -491,7 +491,7 @@ async function runJob(input: {
         state.phase = 'failed';
         state.modelCalls = modelCalls.count;
         state.durationMs = Date.now() - startedMs;
-        const stale = examLoginStaleNote(error);
+        const stale = examLoginStaleNote(error) ?? examLoginRecoveryNote(error) ?? examLoginBusyNote(error);
         if (stale) state.note = stale;
         await writePrivateFile(progressPath, renderProgress(state));
         await removeExamOutput(ready.dataDirectory, ready.projectId, output);
