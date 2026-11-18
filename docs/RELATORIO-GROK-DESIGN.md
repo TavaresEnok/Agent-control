@@ -275,7 +275,7 @@ Nenhum campo da tabela de cobertura ficou vazio. Ferramenta quebrada, sem JSON, 
 | 5. Regressão | `16840af5` | pixelmatch depois da baseline aprovada |
 | 6. Estados | `e85c4f43` | `design.config.json` na raiz, sem seguir symlink |
 | 7. Modo criar | `e7c763b4` | Opus 5.5 medium forçado e a recusa do catálogo |
-| 8. Encaixe | `WIRING_COMMIT` | `runDesignModule`, CLI, fixture, suíte e este texto |
+| 8. Encaixe | `0e2ba503` | `runDesignModule`, CLI, fixture, suíte e este texto |
 
 O arquivo `upstream/happier/apps/server/generated` continua fora do git.
 
