@@ -79,7 +79,10 @@ for (let i = 0; i < incoming.length; i += 1) {
   if (incoming[i] === '--mcp-config') { i += 1; continue; }
   args.push(incoming[i]);
 }
-const child = spawn(real, args, {stdio: 'inherit'});
+const env = {...process.env};
+delete env.ANTHROPIC_API_KEY;
+delete env.CLAUDE_CONFIG_DIR;
+const child = spawn(real, args, {stdio: 'inherit', env});
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => child.kill(signal));
 child.on('exit', (code, signal) => {
   if (signal) { process.kill(process.pid, signal); return; }
@@ -151,6 +154,7 @@ const EXAM_LOGIN_FILES = [
  */
 const EXAM_DENY_PATHS = [
   '/account/.credentials.json', '/tmp/ac-exam-login-*', '/tmp/ac-exam-login-*/**',
+  '/tmp/ac-exam-claude-*', '/tmp/ac-exam-claude-*/**',
   '/proc/self/environ', '/runner', '/runner/**',
   '/proc/**', '/account/**', '/input/**', '/account/.claude.json',
 ] as const;
@@ -245,6 +249,20 @@ export async function prepareExamLoginCopy(source: string, tmpRoot = '/tmp'): Pr
   }
   if (claudeInfo?.isDirectory()) await writeSettingsWithDeny(join(claudeDir, 'settings.json'), false);
   return dest;
+}
+
+/**
+ * Credential-free home for a Claude exam worker. Contains only `.claude/settings.json` with read denies,
+ * never `.credentials.json` or any account file.
+ */
+export async function prepareExamClaudeHome(tmpRoot = '/tmp'): Promise<string> {
+  const home = await mkdtemp(join(tmpRoot, 'ac-exam-claude-'));
+  await chmod(home, 0o700);
+  const claudeDir = join(home, '.claude');
+  await mkdir(claudeDir, {mode: 0o700});
+  await chmod(claudeDir, 0o700);
+  await writeSettingsWithDeny(join(claudeDir, 'settings.json'), true);
+  return home;
 }
 
 /** Copy one allowlisted path. A symlink is recreated at the first link and not followed. */

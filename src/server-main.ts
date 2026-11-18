@@ -58,15 +58,6 @@ async function main(){
   finally{await ledger.close();}
   return;
  }
- if(command==='account-recover'){
-  const [accountId]=extra;
-  if(!path||!accountId||extra.length!==1)throw Error('INVALID_INSTALLATION_COMMAND');
-  const config=await loadInstallation(path);
-  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
-  try{const {recoverAccountCredentialCommand}=await import('./exam-login.ts');console.log(JSON.stringify(await recoverAccountCredentialCommand(config,ledger,accountId)));}
-  finally{await ledger.close();}
-  return;
- }
  if(command==='pair'){
   if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
   const config=await loadInstallation(path);

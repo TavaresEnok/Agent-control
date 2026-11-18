@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
-import {EXAM_LOGIN_BUSY_TEXT, EXAM_LOGIN_RECOVERY_TEXT, EXAM_LOGIN_STALE_TEXT, examLoginRecoveryNote, markExamRecoverySaved} from './exam-login.ts';
+import {EXAM_LOGIN_BUSY_TEXT, EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign} from './design-command.ts';
 import {DesignCreateModelFailure, runDesignCreate, type CreateExam} from './design-create.ts';
@@ -58,8 +58,6 @@ const messages: Record<string, string> = {
 
 /** Known codes keep their Portuguese line. Anything else is one fixed sentence, so a path or secret never reaches the terminal. */
 export function designCliFailureText(error: unknown): string {
-  const recovery = examLoginRecoveryNote(error);
-  if (recovery) return recovery;
   if (error instanceof DesignCreateModelFailure) return `O modelo não devolveu as telas. Causa: ${error.causeCode}.`;
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   return Object.hasOwn(messages, code) ? messages[code]! : 'O exame de design falhou.';
@@ -68,7 +66,6 @@ export function designCliFailureText(error: unknown): string {
 /** The report is already on disk. A stale login or an incomplete visual exam still exits non-zero. */
 export function designExamStatus(result: {
   loginStale?: boolean;
-  loginRecovery?: boolean;
   visualUnjudged?: boolean;
   visualRequested?: number;
   visualJudged?: number;
@@ -76,7 +73,6 @@ export function designExamStatus(result: {
 }): {code: number; lines: string[]} {
   const lines: string[] = [];
   if (result.loginStale) lines.push(EXAM_LOGIN_STALE_TEXT);
-  if (result.loginRecovery) lines.push(EXAM_LOGIN_RECOVERY_TEXT);
   if (result.visualUnjudged) {
     if (result.visualRequested === 0) {
       lines.push(messages.DESIGN_VISUAL_NO_SCREENS!);
@@ -450,12 +446,6 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
         if (exam.loginStale) {
           console.log(exam.directory);
           throw new Refusal('EXAM_LOGIN_STALE');
-        }
-        if (exam.loginRecovery) {
-          console.log(exam.directory);
-          const err = new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
-          markExamRecoverySaved(err);
-          throw err;
         }
         if (exam.visualUnjudged) {
           console.log(exam.directory);

@@ -1,10 +1,11 @@
 import {constants} from 'node:fs';
 import {waitForNativeLaunch} from './native-worker-gate.ts';
 import {open,lstat} from 'node:fs/promises';
+import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {z} from 'zod';
 import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity,runCodexExec} from './codex-personal.ts';
-import {examCodexArgv,examLoginHomes,installExamClaudeWrapper,prepareExamLoginCopy} from './verify-exam-isolation.ts';
-import {readExamCredentialReturn} from './exam-login.ts';
+import {examCodexArgv,examLoginHomes,installExamClaudeWrapper,prepareExamClaudeHome,prepareExamLoginCopy} from './verify-exam-isolation.ts';
 import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
 import {collectSecretValues,redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
@@ -22,7 +23,33 @@ const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,inte
  model:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/),effort:Effort,
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(z.string().max(240)).max(64),
  artifactCommit:z.string().regex(/^[a-f0-9]{40}$/).optional(),outputSchema:z.record(z.string(),z.unknown()).optional(),
- environmentId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),toolsAddress:z.string().refine(isPrivateToolAddress),timeoutMs:z.number().int().min(1000).max(1800000),expiresAt:z.number().int().positive(),provider:z.enum(['codex','claude','grok']).optional()}).strict();
+ environmentId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),toolsAddress:z.string().refine(isPrivateToolAddress),timeoutMs:z.number().int().min(1000).max(1800000),expiresAt:z.number().int().positive(),provider:z.enum(['codex','claude','grok']).optional(),
+ oauthAccessToken:z.string().min(1).max(16384).optional()}).strict();
+
+/**
+ * Configure a Claude exam worker with only the signed `CLAUDE_CODE_OAUTH_TOKEN` in env,
+ * no `.credentials.json` on disk, no `CLAUDE_CONFIG_DIR`, and no `ANTHROPIC_API_KEY`.
+ */
+export async function prepareClaudeExamWorkerEnv(input:{
+ oauthAccessToken:string|undefined;
+ credentialSnapshotTag:string;
+ execToken:string;
+ tmpRoot?:string;
+ realClaudeBin?:string;
+}):Promise<{secrets:string[];claudeBin:string;examHome:string}>{
+ if(!input.oauthAccessToken)throw Error('EXAM_OAUTH_TOKEN_MISSING');
+ const secrets=[input.oauthAccessToken];
+ const tmpRoot=input.tmpRoot??'/tmp';
+ await prepareNativeExternalAuth(secrets,input.execToken,input.credentialSnapshotTag,tmpRoot);
+ const examHome=await prepareExamClaudeHome(tmpRoot);
+ process.env.HOME=examHome;
+ delete process.env.CLAUDE_CONFIG_DIR;
+ delete process.env.ANTHROPIC_API_KEY;
+ process.env.CLAUDE_CODE_OAUTH_TOKEN=input.oauthAccessToken;
+ const claudeBin=await installExamClaudeWrapper(tmpRoot,input.realClaudeBin??'/usr/local/bin/claude');
+ return {secrets,claudeBin,examHome};
+}
+
 /** Fixed worker only: the broker must create a separately isolated exec-server,
  * enforce read-only evaluators and verify both physical exit and Git artifacts.
  * This file alone does not authorize, schedule, approve or integrate anything. */
@@ -35,26 +62,32 @@ async function main(){
  if(input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
  const personalCli=input.provider==='claude'||input.provider==='grok'||input.provider==='codex';
  initializeNativeWorkerEnvironment(personalCli?undefined:input.proxyUrl);
- const identified=codexWorkerAssertsSubscriptionIdentity(input.provider)?await assertCodexSubscriptionIdentity(input.providerSubjectDigest):null;
- const secrets=identified?.secrets??await readMountedCredentialSecrets(input.provider??'codex');
- const account=identified??{secrets,accessToken:'',accountId:input.accountId};
+ const claudeExam=verifyExam&&input.provider==='claude';
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_WORKER_DIRECTORY');
  const capability=await readPrivateWorkerFile('/runner/exec-token',512);let token:string;
  try{token=capability.toString('utf8').trim();if(!/^[A-Za-z0-9._~-]{32,512}$/.test(token))throw Error('INVALID_TOOL_CAPABILITY');}finally{capability.fill(0);}
- if(input.provider==='codex')process.env.CODEX_HOME='/account/.codex';
- else{
-  const home=await prepareNativeExternalAuth(account.secrets,token,input.credentialSnapshotTag);
-  if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR='/account';else if(input.provider!=='grok')process.env.CODEX_HOME=home;
- }
+ let account:{secrets:string[];accessToken:string;accountId:string};
  let claudeBin='/usr/local/bin/claude';
- let examLogin:string|undefined;
- if(verifyExam){
-  examLogin=await prepareExamLoginCopy('/account','/tmp');
-  const homes=examLoginHomes(examLogin);
-  process.env.CLAUDE_CONFIG_DIR=homes.claudeConfigDir;
-  process.env.CODEX_HOME=homes.codexHome;
-  process.env.HOME=homes.grokHome;
-  if(input.provider==='claude')claudeBin=await installExamClaudeWrapper('/tmp','/usr/local/bin/claude');
+ if(claudeExam){
+  const prepared=await prepareClaudeExamWorkerEnv({oauthAccessToken:input.oauthAccessToken,credentialSnapshotTag:input.credentialSnapshotTag,execToken:token});
+  account={secrets:prepared.secrets,accessToken:input.oauthAccessToken!,accountId:input.accountId};
+  claudeBin=prepared.claudeBin;
+ }else{
+  const identified=codexWorkerAssertsSubscriptionIdentity(input.provider)?await assertCodexSubscriptionIdentity(input.providerSubjectDigest):null;
+  const secrets=identified?.secrets??await readMountedCredentialSecrets(input.provider??'codex');
+  account=identified??{secrets,accessToken:'',accountId:input.accountId};
+  if(input.provider==='codex')process.env.CODEX_HOME='/account/.codex';
+  else{
+   const home=await prepareNativeExternalAuth(account.secrets,token,input.credentialSnapshotTag);
+   if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR='/account';else if(input.provider!=='grok')process.env.CODEX_HOME=home;
+  }
+  if(verifyExam){
+   const examLogin=await prepareExamLoginCopy('/account','/tmp');
+   const homes=examLoginHomes(examLogin);
+   process.env.CLAUDE_CONFIG_DIR=homes.claudeConfigDir;
+   process.env.CODEX_HOME=homes.codexHome;
+   process.env.HOME=homes.grokHome;
+  }
  }
  const forwarder=await startToolForwarder(input.toolsAddress);
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
@@ -88,13 +121,11 @@ async function main(){
  }catch(error){if(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure){failedUsage=error;failure=error.code;}else failure='EXECUTION_FAILED';}
  finally{forwarder.close();}
  const usage=result?.usageWindows??failedUsage?.usageWindows??null,safeUsage=Buffer.byteLength(JSON.stringify(usage))<=32768?usage:null;
- let examCredential:Record<string,unknown>|undefined;
- if(verifyExam&&input.provider==='claude'&&examLogin){
-  try{examCredential=await readExamCredentialReturn('/account/.credentials.json',examLogin+'/.credentials.json');}catch{examCredential=undefined;}
- }
  const output=await open('/output/execution-result.json',constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
  try{await output.writeFile(JSON.stringify({schemaVersion:1,jobId:input.jobId,output:result?.output??'',normalizedTokensUsed:result?.tokensUsed??failedUsage?.tokensUsed??null,
-  usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0,...(examCredential?{examCredential}:{})}));await output.sync();}finally{await output.close();}
+  usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0}));await output.sync();}finally{await output.close();}
  process.exit(failure?1:0);
 }
-main().catch(error=>{console.error('NATIVE_EXECUTION_WORKER_FAILED',error instanceof z.ZodError?'INVALID_LAUNCH_SHAPE':String((error as Error)?.message??'').replace(/[^A-Za-z0-9_ .:,/-]/g,'').slice(0,160));process.exitCode=1;});
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
+ main().catch(error=>{console.error('NATIVE_EXECUTION_WORKER_FAILED',error instanceof z.ZodError?'INVALID_LAUNCH_SHAPE':String((error as Error)?.message??'').replace(/[^A-Za-z0-9_ .:,/-]/g,'').slice(0,160));process.exitCode=1;});
+}
