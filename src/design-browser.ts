@@ -18,7 +18,7 @@ export type DesignBrowserRoute = {
   request(): {url(): string; resourceType?: () => string};
   abort(errorCode?: string): Promise<void>;
   continue(): Promise<void>;
-  fetch?: () => Promise<DesignBrowserResponse>;
+  fetch?: (options?: {maxRedirects?: number}) => Promise<DesignBrowserResponse>;
   fulfill?: (options: {response?: DesignBrowserResponse; status?: number; headers?: Record<string, string>; body?: string}) => Promise<void>;
 };
 
@@ -34,8 +34,18 @@ export type DesignBrowserGuardPage = {
   fill(selector: string, value: string): Promise<void>;
 };
 
+type DesignBrowserWebSocketRoute = {
+  url(): string;
+  connectToServer(): void;
+  close(): void | Promise<void>;
+};
+
 export type DesignBrowserGuardContext = {
   route(pattern: string, handler: (route: DesignBrowserRoute) => Promise<void>): Promise<void>;
+  routeWebSocket?: (
+    pattern: string,
+    handler: (socket: DesignBrowserWebSocketRoute) => Promise<void> | void,
+  ) => Promise<void>;
 };
 
 export type DesignBrowserGuard = {
@@ -51,7 +61,7 @@ type DesignContext = DesignBrowserGuardContext & {
 };
 
 type DesignBrowser = {
-  newContext(): Promise<DesignContext>;
+  newContext(options: {serviceWorkers: 'allow' | 'block'}): Promise<DesignContext>;
   close(): Promise<void>;
 };
 
@@ -60,6 +70,9 @@ type ChromiumLauncher = {
 };
 
 const CHROME = '/usr/bin/google-chrome';
+
+/** Service workers can answer fetches outside the page route, so the exam context blocks them. */
+export const designBrowserContextOptions = {serviceWorkers: 'block' as const};
 
 function readRequestUrl(route: DesignBrowserRoute): string | undefined {
   try {
@@ -81,6 +94,7 @@ function onDeclaredOrigin(origin: string, candidate: string): boolean {
 /**
  * The exam may only talk to the declared origin.
  * A redirect that lands elsewhere refuses the login fill.
+ * Document fetches stay on the first response so the host never follows a Location itself.
  */
 export async function installDesignBrowserGuard(
   context: DesignBrowserGuardContext,
@@ -95,13 +109,23 @@ export async function installDesignBrowserGuard(
       await route.abort('blockedbyclient');
       return;
     }
-    const remembered = await rememberNonHtmlDocument(route);
+    const remembered = await rememberNonHtmlDocument(route, origin);
     if (remembered.handled) {
       rawDocument = remembered.body;
       return;
     }
     await route.continue();
   });
+  if (context.routeWebSocket) {
+    await context.routeWebSocket('**/*', async (socket) => {
+      const url = readSocketUrl(socket);
+      if (url !== undefined && socketOnDeclaredOrigin(origin, url)) {
+        socket.connectToServer();
+        return;
+      }
+      await socket.close();
+    });
+  }
   return {
     async goto(url: string) {
       rawDocument = undefined;
@@ -126,10 +150,69 @@ function isHtmlContentType(type: string): boolean {
   return media === 'text/html' || media === 'application/xhtml+xml';
 }
 
-async function rememberNonHtmlDocument(route: DesignBrowserRoute): Promise<{handled: boolean; body?: string}> {
+function isRedirectStatus(status: number): boolean {
+  return status >= 300 && status < 400;
+}
+
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === wanted && typeof value === 'string') return value;
+  }
+  return undefined;
+}
+
+/** Resolve Location against the document URL. Only a same-origin target may be fulfilled. */
+function redirectStaysOnOrigin(origin: string, requestUrl: string | undefined, headers: Record<string, string>): boolean {
+  if (requestUrl === undefined) return false;
+  const location = headerValue(headers, 'location')?.trim();
+  if (!location) return false;
+  try {
+    return new URL(location, requestUrl).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+function readSocketUrl(socket: DesignBrowserWebSocketRoute): string | undefined {
+  try {
+    const value = socket.url();
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** ws/wss is the declared http(s) origin when host and port match. */
+function socketOnDeclaredOrigin(origin: string, candidate: string): boolean {
+  try {
+    const declared = new URL(origin);
+    const socket = new URL(candidate);
+    const protocol = socket.protocol === 'ws:' ? 'http:' : socket.protocol === 'wss:' ? 'https:' : '';
+    if (protocol === '') return false;
+    const mapped = new URL(socket.href);
+    mapped.protocol = protocol;
+    return mapped.origin === declared.origin;
+  } catch {
+    return false;
+  }
+}
+
+async function rememberNonHtmlDocument(
+  route: DesignBrowserRoute,
+  origin: string,
+): Promise<{handled: boolean; body?: string}> {
   const kind = route.request().resourceType?.();
   if (kind !== 'document' || route.fetch === undefined || route.fulfill === undefined) return {handled: false};
-  const response = await route.fetch();
+  const response = await route.fetch({maxRedirects: 0});
+  if (isRedirectStatus(response.status())) {
+    if (!redirectStaysOnOrigin(origin, readRequestUrl(route), response.headers())) {
+      await route.abort('blockedbyclient');
+      return {handled: true};
+    }
+    await route.fulfill({response});
+    return {handled: true};
+  }
   const type = response.headers()['content-type'] ?? '';
   if (isHtmlContentType(type)) {
     await route.fulfill({response});
@@ -166,7 +249,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   });
   try {
-    const context = await browser.newContext();
+    const context = await browser.newContext(designBrowserContextOptions);
     const page = await context.newPage();
     const guard = await installDesignBrowserGuard(context, page, targetUrl);
     let closed = false;
