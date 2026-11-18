@@ -1,3 +1,4 @@
+import {benchVisualScores} from './design-visual.ts';
 import {
   DESIGN_PLANTED_RULES,
   DesignConfirmResult,
@@ -25,14 +26,14 @@ function checklistFromTask(task: string): string[] {
   if (at < 0) return [];
   const inline = lines[at].slice('Itens:'.length).trim();
   const fromInline = inline.split(',').map(item => item.trim()).filter(item => item.length > 0);
-  if (fromInline.length > 0) return fromInline.map(item => item.slice(0, 80)).slice(0, 80);
+  if (fromInline.length > 0) return fromInline.map(item => item.slice(0, 80)).slice(0, 120);
   const listed: string[] = [];
   for (const line of lines.slice(at + 1)) {
     if (!line.startsWith('- ')) break;
     const value = line.slice(2).trim();
     if (value.length > 0) listed.push(value.slice(0, 80));
   }
-  return listed.slice(0, 80);
+  return listed.slice(0, 120);
 }
 
 function field(task: string, label: string): string {
@@ -192,6 +193,24 @@ function confirmFromTask(task: string): DesignConfirmResult {
   });
 }
 
+function benchCreateBundle(task: string): {kind: 'criacao'; tokens: Record<string, unknown>; screens: {name: string; html: string; css: string}[]} {
+  const fix = /Achados para corrigir/i.test(task);
+  const html = fix
+    ? '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><link rel="stylesheet" href="inicio.css"></head><body><main><h1>Início</h1><p>Texto corrido em uma coluna.</p></main></body></html>'
+    : '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><link rel="stylesheet" href="inicio.css"></head><body><main class="hero"><h1>Início</h1><p>Texto.</p></main></body></html>';
+  const css = fix
+    ? 'body{margin:0;background:#f4f1ea;color:#1b1b1b;font-family:Georgia,serif}h1{font-size:32px;font-weight:600}p{font-size:16px;max-width:60ch}'
+    : 'body{margin:0;background:linear-gradient(#6d28d9,#7c3aed);color:#fff}h1{font-size:32px}.cartao{box-shadow:0 8px 24px #000}';
+  return {
+    kind: 'criacao',
+    tokens: {$schema: 'https://www.designtokens.org/schemas/2025.10/format.json', color: {fundo: {$type: 'color', $value: fix ? '#f4f1ea' : '#6d28d9'}}},
+    screens: [
+      {name: 'inicio', html, css},
+      {name: 'detalhe', html: html.replace('Início', 'Detalhe'), css},
+    ],
+  };
+}
+
 export function designBenchWorker(): DesignWorker {
   return {
     async run(call) {
@@ -199,6 +218,9 @@ export function designBenchWorker(): DesignWorker {
       const task = call.task;
       if (task.startsWith('Pedido de exame.')) return JSON.stringify(examFromTask(task));
       if (task.startsWith('Pedido de confirmação.')) return JSON.stringify(confirmFromTask(task));
+      if (task.startsWith('Pedido de crítica visual do revisor.')) return JSON.stringify(benchVisualScores(task, 'reviewer'));
+      if (task.startsWith('Pedido de crítica visual.')) return JSON.stringify(benchVisualScores(task, 'specialist'));
+      if (task.startsWith('Pedido de criação.')) return JSON.stringify(benchCreateBundle(task));
       throw new Error('PEDIDO_DESCONHECIDO');
     },
   };

@@ -1,3 +1,4 @@
+import {visualChecklistItems} from './design-visual.ts';
 import {DesignChecklistItem, type DesignChecklistSource} from './design-types.ts';
 
 type AppliesTo = 'screen' | 'style' | 'copy' | 'any';
@@ -166,12 +167,12 @@ const BODY: DesignChecklistItem[] = [
 ];
 
 export function loadDesignChecklist(): DesignChecklistItem[] {
-  const parsed = DesignChecklistItem.array().parse(BODY);
+  const parsed = DesignChecklistItem.array().parse([...BODY, ...visualChecklistItems()]);
   const seen = new Set<string>();
   for (const entry of parsed) {
     if (seen.has(entry.id)) throw new Error(`CHECKLIST_ID_DUPLICADO:${entry.id}`);
     seen.add(entry.id);
   }
-  if (parsed.length > 80) throw new Error('CHECKLIST_ACIMA_DE_80');
+  if (parsed.length > 120) throw new Error('CHECKLIST_ACIMA_DE_120');
   return parsed;
 }

@@ -7,7 +7,7 @@ const SOURCES = ['NIELSEN', 'UX-LAW', 'WCAG-2.2', 'TOKENS', 'STATES', 'UX-WRITIN
 test('lista de design cobre fontes, números e leis', () => {
   const items = loadDesignChecklist();
   assert.ok(items.length >= 40);
-  assert.ok(items.length <= 80);
+  assert.ok(items.length <= 120);
   assert.equal(new Set(items.map(entry => entry.id)).size, items.length);
   const sources = new Set(items.map(entry => entry.source));
   for (const source of SOURCES) assert.ok(sources.has(source), source);
