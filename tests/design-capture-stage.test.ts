@@ -62,7 +62,7 @@ function examInput(
     files: [{path: 'src/Tela.tsx', text: 'export const tela = <main>Oi</main>;\n'}],
     worker,
     reserve: async role => ({
-      provider: role === 'reviewer' ? 'grok' : 'claude',
+      provider: 'claude',
       model: role,
       accountId: randomUUID(),
       profileId: randomUUID(),

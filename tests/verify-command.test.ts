@@ -156,20 +156,20 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
     await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
     await capacity.configure(principal, {programmingLimit: 10, evaluationLimit: 2});
-    const providers = ['claude', 'grok'] as const;
-    const accounts = providers.map(() => randomUUID());
-    const specialistProfiles = providers.map(() => randomUUID());
-    const reviewerProfiles = providers.map(() => randomUUID());
-    const adapters = providers.map(provider => createSyntheticProviderAdapter({
-      id: 'fixture-' + provider,
-      provider,
+    await capacity.registerModel(principal, {provider: 'claude', model: 'fixture-model', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://verify-command'});
+    const labels = ['claude-a', 'claude-b'] as const;
+    const accounts = labels.map(() => randomUUID());
+    const specialistProfiles = labels.map(() => randomUUID());
+    const reviewerProfiles = labels.map(() => randomUUID());
+    const adapters = labels.map(label => createSyntheticProviderAdapter({
+      id: 'fixture-' + label,
+      provider: 'claude',
       version: 'verify-v1',
-      runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider, accountId: input.accountId, status: 'available', remainingPercent: 75, resetAt: null}),
+      runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider: 'claude', accountId: input.accountId, status: 'available', remainingPercent: 75, resetAt: null}),
     }));
     const collectors = new ProviderCollectors(db, adapters);
-    for (let i = 0; i < providers.length; i++) {
-      await capacity.registerModel(principal, {provider: providers[i], model: 'fixture-model', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://verify-command'});
-      await capacity.addAccount(principal, project, {id: accounts[i], provider: providers[i], label: 'Synthetic ' + providers[i], resourceIdentity: 'verify-' + accounts[i], mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-command', maxConcurrent: 2});
+    for (let i = 0; i < labels.length; i++) {
+      await capacity.addAccount(principal, project, {id: accounts[i], provider: 'claude', label: 'Synthetic ' + labels[i], resourceIdentity: 'verify-' + accounts[i], mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-command', maxConcurrent: 2});
       await capacity.addProfile(principal, project, {id: specialistProfiles[i], accountId: accounts[i], model: 'fixture-model', effort: 'medium', role: 'specialist'});
       await capacity.addProfile(principal, project, {id: reviewerProfiles[i], accountId: accounts[i], model: 'fixture-model', effort: 'medium', role: 'reviewer'});
       await collectors.bind(principal, project, {accountId: accounts[i], adapterId: adapters[i].manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});

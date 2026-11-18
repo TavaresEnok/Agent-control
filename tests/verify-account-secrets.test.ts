@@ -18,7 +18,7 @@ import type {VerifyWorker} from '../src/verify-types.ts';
 const exec = promisify(execFile);
 const OWNED_DATABASE = 'ac_implementation_test_vordem5_m2';
 const CLAUDE_LOGIN = 'M2claudeLoginValueXXX';
-const GROK_LOGIN = 'M2grokLoginValueYYYYY';
+const SIBLING_LOGIN = 'M2grokLoginValueYYYYY';
 const PARENT_LOGIN = 'M2parentFolderValueZZ';
 
 function masked(secret: string): string {
@@ -96,20 +96,20 @@ test('login da conta reservada sai mascarado e o da conta irmã permanece', {tim
     await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
     await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
     await capacity.configure(principal, {programmingLimit: 10, evaluationLimit: 2});
-    const providers = ['claude', 'grok'] as const;
-    const accountIds = providers.map(() => randomUUID());
-    const specialistProfiles = providers.map(() => randomUUID());
-    const reviewerProfiles = providers.map(() => randomUUID());
-    const adapters = providers.map(provider => createSyntheticProviderAdapter({
-      id: 'fixture-' + provider,
-      provider,
+    await capacity.registerModel(principal, {provider: 'claude', model: 'fixture-model', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://verify-account-secrets'});
+    const labels = ['claude-a', 'claude-b'] as const;
+    const accountIds = labels.map(() => randomUUID());
+    const specialistProfiles = labels.map(() => randomUUID());
+    const reviewerProfiles = labels.map(() => randomUUID());
+    const adapters = labels.map(label => createSyntheticProviderAdapter({
+      id: 'fixture-' + label,
+      provider: 'claude',
       version: 'verify-v1',
-      runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider, accountId: input.accountId, status: 'available', remainingPercent: 75, resetAt: null}),
+      runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider: 'claude', accountId: input.accountId, status: 'available', remainingPercent: 75, resetAt: null}),
     }));
     const collectors = new ProviderCollectors(db, adapters);
-    for (let i = 0; i < providers.length; i++) {
-      await capacity.registerModel(principal, {provider: providers[i], model: 'fixture-model', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://verify-account-secrets'});
-      await capacity.addAccount(principal, project, {id: accountIds[i], provider: providers[i], label: 'Synthetic ' + providers[i], resourceIdentity: 'verify-' + accountIds[i], mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-account-secrets', maxConcurrent: 2});
+    for (let i = 0; i < labels.length; i++) {
+      await capacity.addAccount(principal, project, {id: accountIds[i], provider: 'claude', label: 'Synthetic ' + labels[i], resourceIdentity: 'verify-' + accountIds[i], mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-account-secrets', maxConcurrent: 2});
       await capacity.addProfile(principal, project, {id: specialistProfiles[i], accountId: accountIds[i], model: 'fixture-model', effort: 'medium', role: 'specialist'});
       await capacity.addProfile(principal, project, {id: reviewerProfiles[i], accountId: accountIds[i], model: 'fixture-model', effort: 'medium', role: 'reviewer'});
       await collectors.bind(principal, project, {accountId: accountIds[i], adapterId: adapters[i].manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});
@@ -126,7 +126,7 @@ test('login da conta reservada sai mascarado e o da conta irmã permanece', {tim
     await db.pool.query("UPDATE ac_provider_bindings SET last_started_at=clock_timestamp()-interval '2 seconds'");
     for (const accountId of accountIds) await collectors.collect(principal, project, accountId, randomUUID());
     await writeLogin(join(accounts, accountIds[0]!, '.credentials.json'), CLAUDE_LOGIN);
-    await writeLogin(join(accounts, accountIds[1]!, '.grok', 'auth.json'), GROK_LOGIN);
+    await writeLogin(join(accounts, accountIds[1]!, '.credentials.json'), SIBLING_LOGIN);
     await writeLogin(join(accounts, '.credentials.json'), PARENT_LOGIN);
     await mkdir(join(repo, 'src'), {recursive: true});
     await writeFile(join(repo, 'src', 'app.ts'), "export function register(app: {get(path: string, handler: () => string): void}) {\n  app.get('/admin', () => 'painel');\n}\n");
@@ -156,7 +156,7 @@ test('login da conta reservada sai mascarado e o da conta irmã permanece', {tim
               suggestion: 'Checar o acesso antes de responder.',
               cwe: 'CWE-862',
               reference: 'ASVS-5.0-V4',
-              snippet: `login ${CLAUDE_LOGIN} ${GROK_LOGIN} ${PARENT_LOGIN}`,
+              snippet: `login ${CLAUDE_LOGIN} ${SIBLING_LOGIN} ${PARENT_LOGIN}`,
             }],
           });
         }
@@ -190,8 +190,8 @@ test('login da conta reservada sai mascarado e o da conta irmã permanece', {tim
     assert.ok(observed);
     await observed;
     assert.ok(examAccountId === accountIds[0] || examAccountId === accountIds[1]);
-    const reservedSecret = examAccountId === accountIds[0] ? CLAUDE_LOGIN : GROK_LOGIN;
-    const siblingSecret = examAccountId === accountIds[0] ? GROK_LOGIN : CLAUDE_LOGIN;
+    const reservedSecret = examAccountId === accountIds[0] ? CLAUDE_LOGIN : SIBLING_LOGIN;
+    const siblingSecret = examAccountId === accountIds[0] ? SIBLING_LOGIN : CLAUDE_LOGIN;
     const stored = (await db.pool.query<{payload: string; status: string; report_dir: string}>(
       `SELECT f.payload::text AS payload, r.status, r.report_dir
        FROM ac_verify_findings f JOIN ac_verify_runs r ON r.id=f.run_id WHERE f.run_id=$1`,

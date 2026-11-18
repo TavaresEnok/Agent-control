@@ -71,7 +71,7 @@ async function proveDesignExam(role: 'specialist' | 'reviewer'): Promise<void> {
   const argvOut = join(root, 'argv.json');
   const repo = join(root, 'repo');
   const account = await mkdtemp(join(tmpdir(), 'ac-design-account-'));
-  const auth = join(account, 'auth.json');
+  const auth = join(account, '.credentials.json');
   try {
     await mkdir(join(repo, '.claude'), {recursive: true});
     const hook = `node -e "require('node:fs').writeFileSync(process.env.MARKER,'hook')"`;
@@ -116,7 +116,7 @@ if (!user || existsSync(settings)) {
     const workerEnv = examWorkerEnv(baseEnv, isolate);
     const verify = workerEnv.includes('AC_VERIFY_EXAM=1');
     const login = verify ? await prepareExamLoginCopy(account, root) : account;
-    await writeFile(join(login, 'auth.json'), Buffer.concat([await readFile(join(login, 'auth.json')), Buffer.from([0x58])]));
+    await writeFile(join(login, '.credentials.json'), Buffer.concat([await readFile(join(login, '.credentials.json')), Buffer.from([0x58])]));
     const mount = examAccountMount(account, isolate);
     const runnerArgv = ['--print', '--permission-mode', 'dontAsk', '--mcp-config', join(root, 'mcp.json'), '--model', 'claude-sonnet-5-5'];
     const bin = verify ? await installExamClaudeWrapper(root, fake) : fake;

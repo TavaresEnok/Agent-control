@@ -197,20 +197,19 @@ test('régua confirma falhas plantadas e descarta falsos positivos', async () =>
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await capacity.configure(principal, {programmingLimit: 4, evaluationLimit: 8});
     const claude = randomUUID();
-    const grok = randomUUID();
+    const claudeReviewer = randomUUID();
     const specialist = randomUUID();
     const reviewer = randomUUID();
-    await capacity.registerModel(principal, {provider: 'claude', model: 'claude-opus-5-5', efforts: ['high'], roles: ['specialist'], source: 'synthetic://verify-ruler'});
-    await capacity.registerModel(principal, {provider: 'grok', model: 'grok-4.7', efforts: ['high'], roles: ['reviewer'], source: 'synthetic://verify-ruler'});
+    await capacity.registerModel(principal, {provider: 'claude', model: 'claude-opus-5-5', efforts: ['high'], roles: ['specialist', 'reviewer'], source: 'synthetic://verify-ruler'});
     await capacity.addAccount(principal, project, {id: claude, provider: 'claude', label: 'claude', resourceIdentity: `claude:${claude}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-ruler', maxConcurrent: 4});
-    await capacity.addAccount(principal, project, {id: grok, provider: 'grok', label: 'grok', resourceIdentity: `grok:${grok}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-ruler', maxConcurrent: 4});
+    await capacity.addAccount(principal, project, {id: claudeReviewer, provider: 'claude', label: 'claude-revisor', resourceIdentity: `claude:${claudeReviewer}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-ruler', maxConcurrent: 4});
     await capacity.addProfile(principal, project, {id: specialist, accountId: claude, model: 'claude-opus-5-5', effort: 'high', role: 'specialist'});
-    await capacity.addProfile(principal, project, {id: reviewer, accountId: grok, model: 'grok-4.7', effort: 'high', role: 'reviewer'});
+    await capacity.addProfile(principal, project, {id: reviewer, accountId: claudeReviewer, model: 'claude-opus-5-5', effort: 'high', role: 'reviewer'});
     const revision = await capacity.publish(principal, project, 0, {schemaVersion: 1, maxProgrammersPerContext: 2, maxEvaluatorsPerContext: 4, roles: {specialist: {regular: [specialist], emergency: []}, reviewer: {regular: [reviewer], emergency: []}}});
     const context = await db.createContext(principal, project, randomUUID());
     await capacity.assignPolicy(principal, context, revision);
     await capacity.observeQuota(principal, claude, {status: 'available', source: 'synthetic://verify-ruler', ttlSeconds: 3600});
-    await capacity.observeQuota(principal, grok, {status: 'available', source: 'synthetic://verify-ruler', ttlSeconds: 3600});
+    await capacity.observeQuota(principal, claudeReviewer, {status: 'available', source: 'synthetic://verify-ruler', ttlSeconds: 3600});
     const authority = await db.acquire(principal, context, randomUUID(), 'verify-ruler', 60);
     const checklist = [
       ChecklistItem.parse({id: 'LAB-SQL', source: 'CWE-TOP-25', title: 'Consulta SQL', appliesTo: 'code', prompt: 'Concatenação de SQL com entrada.'}),
