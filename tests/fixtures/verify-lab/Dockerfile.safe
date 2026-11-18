@@ -1,0 +1,5 @@
+FROM node:20
+WORKDIR /app
+COPY package.json src ./
+USER node
+CMD ["node", "src/app.js"]

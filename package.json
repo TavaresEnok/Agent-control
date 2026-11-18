@@ -32,6 +32,7 @@
     "personal:watch": "node scripts/personal-watch.mjs",
     "personal:timers": "node scripts/personal-timers.mjs",
     "personal:maintenance": "node scripts/personal-maintenance.mjs",
+    "personal:verify": "node scripts/personal-verify.mjs",
     "personal:restore-proof": "node scripts/personal-restore-proof.mjs"
   },
   "dependencies": {

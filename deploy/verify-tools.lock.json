@@ -1,0 +1,113 @@
+{
+  "baseImage": {
+    "name": "debian",
+    "version": "trixie-slim",
+    "url": "https://hub.docker.com/_/debian",
+    "digest": "sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2",
+    "platform": "linux/amd64",
+    "platformDigest": "sha256:7378260c0a098d27ac206225db5e7d92b8c7c84ea7afccc86eeb513756bbd392",
+    "sourceUrl": "https://hub.docker.com/_/debian/tags?name=trixie-slim",
+    "releasedAt": "2026-11-04T21:23:39Z",
+    "note": "Índice OCI de trixie-slim conferido em 17/11/2026. Manifesto linux/amd64 no campo platformDigest. bookworm-slim (glibc 2.36) não executa o binário checkov 3.4.5, que exige GLIBC_2.38. trixie-slim traz glibc 2.41. O Dockerfile usa só o digest do índice, sem tag."
+  },
+  "tools": [
+    {
+      "name": "gitleaks",
+      "version": "8.30.1",
+      "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+      "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1",
+      "releasedAt": "2026-03-21T02:17:58Z",
+      "note": "Não havia release de novembro de 2026. Última estável na página do projeto.",
+      "kind": "tar.gz",
+      "file": "gitleaks_8.30.1_linux_x64.tar.gz",
+      "member": "gitleaks"
+    },
+    {
+      "name": "osv-scanner",
+      "version": "2.7.1",
+      "url": "https://github.com/google/osv-scanner/releases/download/v2.7.1/osv-scanner_linux_amd64",
+      "sha256": "fb7dab19a8bd9bbe5c3189f09d4b7ee1820c9553a23bac202648a56efd2f6ee8",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/google/osv-scanner/releases/tag/v2.7.1",
+      "releasedAt": "2026-11-09T04:15:04Z",
+      "kind": "bin",
+      "file": "osv-scanner_linux_amd64"
+    },
+    {
+      "name": "syft",
+      "version": "1.57.2",
+      "url": "https://github.com/anchore/syft/releases/download/v1.57.2/syft_1.57.2_linux_amd64.tar.gz",
+      "sha256": "ad92bd3ec1b94a3df01d4d0aec199afa9c42b72e86da436ff5f837914d32706b",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/anchore/syft/releases/tag/v1.57.2",
+      "releasedAt": "2026-11-16T20:05:41Z",
+      "kind": "tar.gz",
+      "file": "syft_1.57.2_linux_amd64.tar.gz",
+      "member": "syft"
+    },
+    {
+      "name": "grype",
+      "version": "0.122.0",
+      "url": "https://github.com/anchore/grype/releases/download/v0.122.0/grype_0.122.0_linux_amd64.tar.gz",
+      "sha256": "e697e6f7224637df87e267e4318cc027feae99a8e1b80280241d32b9ee5d4920",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/anchore/grype/releases/tag/v0.122.0",
+      "releasedAt": "2026-11-16T20:41:59Z",
+      "kind": "tar.gz",
+      "file": "grype_0.122.0_linux_amd64.tar.gz",
+      "member": "grype"
+    },
+    {
+      "name": "opengrep",
+      "version": "2.0.0",
+      "url": "https://github.com/opengrep/opengrep/releases/download/v2.0.0/opengrep_linux_x86",
+      "sha256": "37e93f4da5fd04a18c5c1febbdd12f7e98dfccd4d0c9cf2593bcb25eeb462da0",
+      "sha256Source": "computed",
+      "sourceUrl": "https://github.com/opengrep/opengrep/releases/tag/v2.0.0",
+      "releasedAt": "2026-11-13T13:14:27Z",
+      "note": "A release publica assinatura Cosign, não um arquivo SHA256. Hash calculado do asset oficial.",
+      "kind": "bin",
+      "file": "opengrep_linux_x86"
+    },
+    {
+      "name": "hadolint",
+      "version": "2.15.1",
+      "url": "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64",
+      "sha256": "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/hadolint/hadolint/releases/tag/v2.15.1",
+      "releasedAt": "2026-07-31T10:13:06Z",
+      "note": "Não havia release de novembro de 2026. Última estável na página do projeto.",
+      "kind": "bin",
+      "file": "hadolint-linux-x86_64"
+    },
+    {
+      "name": "trivy",
+      "version": "0.76.2",
+      "url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz",
+      "sha256": "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/aquasecurity/trivy/releases/tag/v0.76.2",
+      "releasedAt": "2026-11-05T12:50:25Z",
+      "note": "Binário do GitHub Release, não imagem de registro. Fora da janela comprometida de março de 2026 (binário v0.69.4 e imagens v0.69.5, v0.69.6 e a tag mutável).",
+      "kind": "tar.gz",
+      "file": "trivy_0.76.2_Linux-64bit.tar.gz",
+      "member": "trivy"
+    },
+    {
+      "name": "checkov",
+      "version": "3.4.5",
+      "url": "https://github.com/bridgecrewio/checkov/releases/download/3.4.5/checkov_linux_X86_64.zip",
+      "sha256": "8b088b4b7c0ffffa47c5c463978057187c457b62ccdcc2137697d5b3be3de79e",
+      "sha256Source": "computed",
+      "sourceUrl": "https://github.com/bridgecrewio/checkov/releases/tag/3.4.5",
+      "releasedAt": "2026-11-12T23:01:44Z",
+      "note": "A release não publica checksum. Hash calculado do zip oficial; o binário interno é dist/checkov.",
+      "kind": "zip",
+      "file": "checkov_linux_X86_64.zip",
+      "member": "dist/checkov"
+    }
+  ]
+}

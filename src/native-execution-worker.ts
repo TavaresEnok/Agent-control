@@ -3,6 +3,7 @@ import {waitForNativeLaunch} from './native-worker-gate.ts';
 import {open,lstat} from 'node:fs/promises';
 import {z} from 'zod';
 import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity,runCodexExec} from './codex-personal.ts';
+import {examCodexArgv,examLoginHomes,installExamClaudeWrapper,prepareExamLoginCopy} from './verify-exam-isolation.ts';
 import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
 import {collectSecretValues,redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
@@ -25,6 +26,7 @@ const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,inte
  * enforce read-only evaluators and verify both physical exit and Git artifacts.
  * This file alone does not authorize, schedule, approve or integrate anything. */
 async function main(){
+ const verifyExam=process.env.AC_VERIFY_EXAM==='1';
  if(process.argv.length!==2)throw Error('INVALID_WORKER_ARGUMENTS');
  initializeNativeWorkerEnvironment();
  await waitForNativeLaunch();
@@ -43,6 +45,15 @@ async function main(){
   const home=await prepareNativeExternalAuth(account.secrets,token,input.credentialSnapshotTag);
   if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR='/account';else if(input.provider!=='grok')process.env.CODEX_HOME=home;
  }
+ let claudeBin='/usr/local/bin/claude';
+ if(verifyExam){
+  const login=await prepareExamLoginCopy('/account','/tmp');
+  const homes=examLoginHomes(login);
+  process.env.CLAUDE_CONFIG_DIR=homes.claudeConfigDir;
+  process.env.CODEX_HOME=homes.codexHome;
+  process.env.HOME=homes.grokHome;
+  if(input.provider==='claude')claudeBin=await installExamClaudeWrapper('/tmp','/usr/local/bin/claude');
+ }
  const forwarder=await startToolForwarder(input.toolsAddress);
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
  let result:{output:string;tokensUsed:number|null;usageWindows:UsageWindowsObservation|null;nativeSessionId:string|null}|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|ClaudeExecutionFailure|GrokExecutionFailure|undefined;
@@ -54,11 +65,12 @@ async function main(){
   if(input.provider==='grok'){
    return {result:await runGrokProgrammer(request,abort.signal),failure:null};
   }else if(input.provider==='claude'){
-   const adapter=new ClaudeExecutionAdapter(new ClaudeCliRunner({bin:'/usr/local/bin/claude',timeoutMs:input.timeoutMs}));
+   const adapter=new ClaudeExecutionAdapter(new ClaudeCliRunner({bin:claudeBin,timeoutMs:input.timeoutMs}));
    return {result:await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)]),failure:null};
   }else if(input.provider==='codex'){
    const command=codexPersonalCommand({role:input.role,model:input.model,effort:input.effort,prompt:input.task,outputSchema:input.outputSchema});
-   const ran=await runCodexExec({args:command.args,timeoutMs:input.timeoutMs,signal:abort.signal,cwd:command.args.includes('-C')?String(command.args[command.args.indexOf('-C')+1]):'/work',kind:'execution',json:input.role!=='programmer'});
+   const args=verifyExam?examCodexArgv(command.args):command.args;
+   const ran=await runCodexExec({args,timeoutMs:input.timeoutMs,signal:abort.signal,cwd:args.includes('-C')?String(args[args.indexOf('-C')+1]):'/work',kind:'execution',json:input.role!=='programmer'});
    const output=redactSecrets(ran.output,[...account.secrets,...collectSecretValues(process.env)]);
    if(ran.failureCode)return {result:{output:'',tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null},failure:ran.failureCode};
    return {result:{output,tokensUsed:null,usageWindows:ran.usageWindows,nativeSessionId:null},failure:null};

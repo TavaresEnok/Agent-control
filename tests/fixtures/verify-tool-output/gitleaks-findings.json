@@ -1,0 +1,12 @@
+{
+  "findings": [
+    {
+      "Description": "Embrulho AKIAIOSFODNN7EXAMPLE",
+      "StartLine": 3,
+      "Match": "AKIAIOSFODNN7EXAMPLE",
+      "Secret": "AKIAIOSFODNN7EXAMPLE",
+      "File": "config/embrulhado.env",
+      "RuleID": "aws-access-key-embrulhado"
+    }
+  ]
+}

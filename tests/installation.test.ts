@@ -47,5 +47,9 @@ test('private installation initializes without fixtures, manager or worker; keys
   assert.throws(()=>Installation.parse({...config,dataDirectory:join(repo,'secrets')}));
   assert.throws(()=>Installation.parse({...config,mode:'execute-all'}));
   await assert.rejects(initializeInstallation({...config,project:{...config.project,label:'conflicting'}},ledger),/INSTALLATION_PROJECT_CONFLICT/);
+  assert.equal(Installation.parse(config).verifyHomologationContainers,undefined);
+  assert.deepEqual(Installation.parse({...config,verifyHomologationContainers:['verify-alvo']}).verifyHomologationContainers,['verify-alvo']);
+  assert.throws(()=>Installation.parse({...config,verifyHomologationContainers:['app.local']}));
+  assert.throws(()=>Installation.parse({...config,verifyHomologationContainers:Array.from({length:33},(_,index)=>`c${index}`)}));
  }finally{await ledger.close();await isolated.close();await rm(root,{recursive:true,force:true});}
 });

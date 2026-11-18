@@ -2,7 +2,7 @@ import {workflowDefSchema, type WorkflowDef} from '../upstream/cezar/packages/ce
 export type {WorkflowDef};
 import type {PoolClient} from 'pg';
 import {digest, Refusal} from './contracts.ts';
-import {baselineWorkflow, engineeringNativeWorkflow, engineeringWorkflow, semanticProposalWorkflow} from './workflows.ts';
+import {baselineWorkflow, engineeringNativeWorkflow, engineeringWorkflow, securityVerifyWorkflow, semanticProposalWorkflow} from './workflows.ts';
 
 /** This engine does not auto-upgrade a frozen execution onto a newer workflow definition. */
 export const WORKFLOW_VERSION_POLICIES = ['pinned'] as const;
@@ -51,6 +51,7 @@ export const workflowVersionRegistry: readonly WorkflowVersionEntry[] = Object.f
   entry(engineeringWorkflow, 'v1', 'current'), entry(engineeringWorkflow, 'v0', 'retained'),
   entry(engineeringNativeWorkflow, 'v1', 'current'), entry(engineeringNativeWorkflow, 'v0', 'retained'),
   entry(semanticProposalWorkflow, 'v1', 'current'), entry(semanticProposalWorkflow, 'v0', 'retained'),
+  entry(securityVerifyWorkflow, 'v1', 'current'), entry(securityVerifyWorkflow, 'v0', 'retained'),
 ]);
 
 const byName = new Map<string, WorkflowVersionEntry[]>();

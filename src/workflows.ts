@@ -27,8 +27,13 @@ export const engineeringNativeWorkflow=workflowDefSchema.parse({...engineeringWo
 // to Cezar as an execution graph; Cezar remains sole owner of work DAGs.
 export const semanticProposalWorkflow=workflowDefSchema.parse({name:'semantic-proposal-v1',source:'built-in',steps:[],
  graph:{version:2,nodes:[{id:'start',type:'start'},{id:'done',type:'end',status:'success'}],edges:[{from:'start',to:'done'}]}});
+/** Read-only security exam. A marker so capacity can bind specialist and reviewer grants.
+ * Cezar must not dispatch it: the verification module owns the exam.
+ * It stays in currentBuiltInWorkflows because workflowFor throws WORKFLOW_NOT_ADMITTED if it is absent. */
+export const securityVerifyWorkflow=workflowDefSchema.parse({name:'security-verify-readonly-v1',source:'built-in',steps:[],
+ graph:{version:2,nodes:[{id:'start',type:'start'},{id:'done',type:'end',status:'success'}],edges:[{from:'start',to:'done'}]}});
 /** Current built-ins only. A new execution never selects a retained snapshot; those stay in src/workflow-versions.ts. */
-export const currentBuiltInWorkflows=Object.freeze([semanticProposalWorkflow,baselineWorkflow,engineeringWorkflow,engineeringNativeWorkflow]);
+export const currentBuiltInWorkflows=Object.freeze([semanticProposalWorkflow,baselineWorkflow,engineeringWorkflow,engineeringNativeWorkflow,securityVerifyWorkflow]);
 export function workflowFor(name:string){
  const found=currentBuiltInWorkflows.find(item=>item.name===name);
  if(!found)throw new Refusal('WORKFLOW_NOT_ADMITTED');

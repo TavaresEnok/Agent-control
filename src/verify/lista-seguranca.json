@@ -1,0 +1,394 @@
+[
+  {
+    "id": "ASVS5-V1-SANITIZACAO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V1 (codificação e sanitização): saída codificada no contexto certo",
+    "appliesTo": "code",
+    "prompt": "No código Node, procure SQL do Postgres, HTML, comando e URL montados com dado externo. A saída tem de ser parametrizada ou codificada para aquele contexto."
+  },
+  {
+    "id": "ASVS5-V2-VALIDACAO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V2 (validação e lógica de negócio): entrada conferida no servidor",
+    "appliesTo": "code",
+    "prompt": "Confira se corpo, consulta e cabeçalho HTTP são validados no servidor antes do Postgres ou de uma conta de IA. Tipo certo não basta: a regra de negócio também tem de recusar o que não cabe."
+  },
+  {
+    "id": "ASVS5-V3-FRONTEND",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V3 (frontend web): conteúdo ativo só do próprio sítio",
+    "appliesTo": "code",
+    "prompt": "No painel, confira script e estilo de origem externa e HTML montado com dado do usuário. Conteúdo ativo vem do próprio aplicativo."
+  },
+  {
+    "id": "ASVS5-V4-API",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V4 (API e serviço web): contrato HTTP explícito",
+    "appliesTo": "route",
+    "prompt": "Em cada rota, veja método permitido, tamanho do pedido e quem autentica. Não use cabeçalho controlado pelo cliente para escolher projeto, usuário ou conta de IA."
+  },
+  {
+    "id": "ASVS5-V5-ARQUIVOS",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V5 (arquivos): leitura e upload presos ao diretório permitido",
+    "appliesTo": "code",
+    "prompt": "Procure caminho, upload e download que usem nome vindo de fora. Depois de resolver, o arquivo tem de continuar no diretório previsto, sem alcançar segredo nem backup."
+  },
+  {
+    "id": "ASVS5-V6-AUTENTICACAO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V6 (autenticação): identidade provada antes do acesso",
+    "appliesTo": "route",
+    "prompt": "No login e no uso de conta de IA, a identidade tem de ser provada. Senha e token não voltam na resposta, não ficam no código e a falha não revela se a conta existe."
+  },
+  {
+    "id": "ASVS5-V7-SESSAO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V7 (sessão): identificador imprevisível, com prazo e proteção",
+    "appliesTo": "route",
+    "prompt": "O identificador de sessão tem de ser imprevisível, expirar e cair no logout. Cookie com HttpOnly e Secure, ou equivalente, e sem valer para outro projeto."
+  },
+  {
+    "id": "ASVS5-V8-AUTORIZACAO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V8 (autorização): cada ação confere o dono do recurso",
+    "appliesTo": "route",
+    "prompt": "Em toda rota que lê ou grava, confira o dono do projeto, do pedido ou da conta. Trocar o id no caminho ou no corpo não pode alcançar recurso de outra pessoa."
+  },
+  {
+    "id": "ASVS5-V9-TOKENS",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V9 (tokens autocontidos): prazo, audiência e assinatura",
+    "appliesTo": "route",
+    "prompt": "Token de sessão ou de conta de IA tem prazo, audiência e assinatura conferida. Não aceite token sem verificar o emissor."
+  },
+  {
+    "id": "ASVS5-V10-OAUTH",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V10 (OAuth e OIDC): redirect e estado conferidos",
+    "appliesTo": "route",
+    "prompt": "No login por OAuth ou OIDC, confira redirect numa lista fechada, state imprevisível e código de uso único. O segredo do cliente não fica no navegador."
+  },
+  {
+    "id": "ASVS5-V11-CRIPTOGRAFIA",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V11 (criptografia): primitiva aprovada e segredo fora do código",
+    "appliesTo": "code",
+    "prompt": "Procure criptografia caseira, hash fraco de senha, chave fixa e aleatoriedade previsível. Segredo de banco, de sessão e de conta de IA vem de fora do código."
+  },
+  {
+    "id": "ASVS5-V12-COMUNICACAO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V12 (comunicação segura): tráfego protegido em trânsito",
+    "appliesTo": "config",
+    "prompt": "No compose e na configuração publicada, confira TLS no que é exposto e Postgres sem escuta aberta. Não deve haver canal em claro nem cliente que ignore certificado."
+  },
+  {
+    "id": "ASVS5-V13-CONFIGURACAO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V13 (configuração): padrão fechado e superfície mínima",
+    "appliesTo": "config",
+    "prompt": "Veja porta publicada, modo de depuração, senha padrão e serviço que o sistema não usa. O padrão tem de ser fechado."
+  },
+  {
+    "id": "ASVS5-V13-IMAGEM",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V13 (configuração): imagem sem privilégio e sem segredo",
+    "appliesTo": "dockerfile",
+    "prompt": "Na receita da imagem, confira usuário sem privilégio de root, base com versão fixa e ausência de segredo em camada. Credencial de conta de IA não entra na imagem."
+  },
+  {
+    "id": "ASVS5-V14-DADOS",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V14 (proteção de dados): dado sensível limitado e classificado",
+    "appliesTo": "code",
+    "prompt": "Procure dado pessoal, senha e token de conta de IA em resposta HTTP, log, fila ou histórico. No Postgres, grave só o que a função precisa."
+  },
+  {
+    "id": "ASVS5-V14-SEGREDO",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V14 (proteção de dados): arquivo de segredo sem valor real versionado",
+    "appliesTo": "secret",
+    "prompt": "Em arquivo de ambiente, chave ou credencial, veja se o valor real está versionado. Segredo de banco e de conta de IA não fica nesse arquivo no repositório."
+  },
+  {
+    "id": "ASVS5-V15-ARQUITETURA",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V15 (código e arquitetura): fronteira de confiança explícita",
+    "appliesTo": "any",
+    "prompt": "Dado que entra de HTTP, fila ou conta de IA passa por validação antes do Postgres ou de uma escrita. O exame somente leitura não se mistura com o caminho que grava."
+  },
+  {
+    "id": "ASVS5-V16-LOGS",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V16 (registro e erro): falha registrada sem vazar segredo",
+    "appliesTo": "code",
+    "prompt": "Login recusado, autorização negada e erro inesperado têm de deixar registro útil. A resposta ao cliente não traz stack, SQL nem token."
+  },
+  {
+    "id": "ASVS5-V17-WEBRTC",
+    "source": "ASVS-5.0",
+    "title": "ASVS 5.0 V17 (WebRTC): mídia só com sinalização autenticada",
+    "appliesTo": "route",
+    "prompt": "Se houver WebRTC, a sinalização exige sessão autenticada e o par não é escolhido por um campo aberto do cliente. Sem WebRTC, o item não se aplica."
+  },
+  {
+    "id": "OWASPT10-2025-01",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A01 Broken Access Control (controle de acesso quebrado)",
+    "appliesTo": "route",
+    "prompt": "Procure acesso fora do permitido: id trocado, função administrativa sem checagem e o servidor buscando URL que o cliente escolhe. Em 2025 o SSRF entrou neste item."
+  },
+  {
+    "id": "OWASPT10-2025-02",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A02 Security Misconfiguration (configuração insegura)",
+    "appliesTo": "config",
+    "prompt": "Procure configuração insegura no compose: porta a mais, erro verboso, origem aberta demais, credencial padrão e recurso ligado sem necessidade."
+  },
+  {
+    "id": "OWASPT10-2025-03",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A03 Software Supply Chain Failures (falha na cadeia de suprimento)",
+    "appliesTo": "dependency",
+    "prompt": "No manifesto e no arquivo de trava, procure dependência sem versão fixa, origem inesperada e script de instalação que o sistema não controla."
+  },
+  {
+    "id": "OWASPT10-2025-04",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A04 Cryptographic Failures (falha de criptografia)",
+    "appliesTo": "code",
+    "prompt": "Procure dado sensível sem proteção, cliente do Postgres sem TLS e chave no código. Senha e token de conta de IA não podem ser recuperáveis por quem lê o banco."
+  },
+  {
+    "id": "OWASPT10-2025-05",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A05 Injection (injeção)",
+    "appliesTo": "code",
+    "prompt": "Procure entrada que vira consulta, comando, HTML ou caminho. Use parâmetro ou API que não interpreta o texto."
+  },
+  {
+    "id": "OWASPT10-2025-06",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A06 Insecure Design (desenho inseguro)",
+    "appliesTo": "any",
+    "prompt": "Procure fluxo que já nasce frágil: sem limite de tentativa, ação irreversível sem confirmação, ou confiança em campo que o cliente envia. O desenho tem de impedir o abuso."
+  },
+  {
+    "id": "OWASPT10-2025-07",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A07 Authentication Failures (falha de autenticação)",
+    "appliesTo": "route",
+    "prompt": "Procure sessão que não expira, recuperação de senha previsível e conta de IA aceita sem prova. Erro repetido tem de ter trava."
+  },
+  {
+    "id": "OWASPT10-2025-08",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A08 Software or Data Integrity Failures (falha de integridade de software ou dado)",
+    "appliesTo": "code",
+    "prompt": "Procure desserializar dado não confiável e executar artefato sem conferir integridade. Não rode código só porque veio de uma conta ou de um arquivo."
+  },
+  {
+    "id": "OWASPT10-2025-09",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A09 Security Logging and Alerting Failures (falha de registro e alerta)",
+    "appliesTo": "code",
+    "prompt": "Procure ação sensível sem registro: login, troca de permissão e uso de conta de IA. O registro não leva segredo e tem de servir para alertar."
+  },
+  {
+    "id": "OWASPT10-2025-10",
+    "source": "OWASP-2025",
+    "title": "OWASP Top 10:2025 A10 Mishandling of Exceptional Conditions (erro e exceção maltratados)",
+    "appliesTo": "code",
+    "prompt": "Procure captura vazia, falha que libera acesso e resposta que vaza detalhe interno. Se o Postgres ou a conta de IA falhar, a operação é negada."
+  },
+  {
+    "id": "CWE-89",
+    "source": "CWE-TOP-25",
+    "title": "CWE-89: injeção de SQL",
+    "appliesTo": "code",
+    "prompt": "Procure SQL do Postgres montada com concatenação. O valor externo entra só como parâmetro."
+  },
+  {
+    "id": "CWE-79",
+    "source": "CWE-TOP-25",
+    "title": "CWE-79: XSS, script entre sites",
+    "appliesTo": "code",
+    "prompt": "Procure dado externo colocado em HTML ou template sem escape."
+  },
+  {
+    "id": "CWE-22",
+    "source": "CWE-TOP-25",
+    "title": "CWE-22: travessia de caminho",
+    "appliesTo": "code",
+    "prompt": "Procure subida de diretório e caminho absoluto vindos de fora. O caminho resolvido continua dentro da raiz prevista."
+  },
+  {
+    "id": "CWE-78",
+    "source": "CWE-TOP-25",
+    "title": "CWE-78: injeção de comando do sistema",
+    "appliesTo": "code",
+    "prompt": "Procure shell com texto do usuário. Argumento separado, sem shell, e só comando de uma lista fechada."
+  },
+  {
+    "id": "CWE-352",
+    "source": "CWE-TOP-25",
+    "title": "CWE-352: pedido forjado entre sites",
+    "appliesTo": "route",
+    "prompt": "Em rota que muda estado usando cookie de sessão, confira defesa contra pedido de outro site."
+  },
+  {
+    "id": "CWE-287",
+    "source": "CWE-TOP-25",
+    "title": "CWE-287: autenticação imprópria",
+    "appliesTo": "route",
+    "prompt": "Procure lugar em que a identidade é assumida sem prova, inclusive conta de IA, ou comparação de token fácil de contornar."
+  },
+  {
+    "id": "CWE-862",
+    "source": "CWE-TOP-25",
+    "title": "CWE-862: autorização ausente",
+    "appliesTo": "route",
+    "prompt": "Procure operação sensível sem checagem de autorização. Sessão válida não autoriza o recurso de outro dono."
+  },
+  {
+    "id": "CWE-798",
+    "source": "CWE-TOP-25",
+    "title": "CWE-798: senha ou chave fixa no código",
+    "appliesTo": "code",
+    "prompt": "Procure senha, token, chave e string de conexão gravados no fonte. Segredo vem do ambiente ou do cofre."
+  },
+  {
+    "id": "CWE-918",
+    "source": "CWE-TOP-25",
+    "title": "CWE-918: pedido forjado no servidor",
+    "appliesTo": "code",
+    "prompt": "Procure o servidor chamando uma URL escolhida pelo cliente. Bloqueie host interno e esquema que não foi previsto."
+  },
+  {
+    "id": "CWE-94",
+    "source": "CWE-TOP-25",
+    "title": "CWE-94: injeção de código",
+    "appliesTo": "code",
+    "prompt": "Procure eval, Function ou vm executando texto de fora. Não rode código que chegou da rede, de arquivo ou de uma conta."
+  },
+  {
+    "id": "CWE-502",
+    "source": "CWE-TOP-25",
+    "title": "CWE-502: desserialização de dado não confiável",
+    "appliesTo": "code",
+    "prompt": "Procure reconstruir objeto a partir de dado da rede ou do histórico. Aceite só o formato esperado, sem tipo controlado por quem envia."
+  },
+  {
+    "id": "CWE-787",
+    "source": "CWE-TOP-25",
+    "title": "CWE-787: escrita fora dos limites",
+    "appliesTo": "code",
+    "prompt": "Em addon nativo, WASM ou buffer, procure escrita que passe do tamanho alocado. Em TypeScript puro, marque só se o código chama essa superfície."
+  },
+  {
+    "id": "CWE-416",
+    "source": "CWE-TOP-25",
+    "title": "CWE-416: uso depois de liberar",
+    "appliesTo": "code",
+    "prompt": "Em addon nativo, procure uso de memória já liberada. Em TypeScript puro, marque só se o código chega nessa superfície."
+  },
+  {
+    "id": "CWE-125",
+    "source": "CWE-TOP-25",
+    "title": "CWE-125: leitura fora dos limites",
+    "appliesTo": "code",
+    "prompt": "Em addon nativo, WASM ou buffer, procure leitura além do tamanho. Em TypeScript puro, marque só se o código chama essa superfície."
+  },
+  {
+    "id": "CWE-120",
+    "source": "CWE-TOP-25",
+    "title": "CWE-120: cópia sem conferir o tamanho",
+    "appliesTo": "code",
+    "prompt": "Em addon nativo, procure cópia para buffer sem conferir o tamanho da entrada. Em TypeScript puro, marque só se o código chama essa superfície."
+  },
+  {
+    "id": "CWE-434",
+    "source": "CWE-TOP-25",
+    "title": "CWE-434: upload de tipo perigoso",
+    "appliesTo": "code",
+    "prompt": "Upload tem de recusar tipo e extensão fora da lista e gravar fora do diretório de execução."
+  },
+  {
+    "id": "CWE-476",
+    "source": "CWE-TOP-25",
+    "title": "CWE-476: ponteiro nulo",
+    "appliesTo": "code",
+    "prompt": "Em addon nativo, procure uso de ponteiro nulo. Em TypeScript, procure valor ausente usado sem conferência antes de efeito externo."
+  },
+  {
+    "id": "CWE-121",
+    "source": "CWE-TOP-25",
+    "title": "CWE-121: estouro de pilha",
+    "appliesTo": "code",
+    "prompt": "Em addon nativo, procure estouro de buffer na pilha. Em TypeScript puro, marque só se o código chama essa superfície."
+  },
+  {
+    "id": "CWE-122",
+    "source": "CWE-TOP-25",
+    "title": "CWE-122: estouro de heap",
+    "appliesTo": "code",
+    "prompt": "Em addon nativo, procure estouro de buffer no heap. Em TypeScript puro, marque só se o código chama essa superfície."
+  },
+  {
+    "id": "CWE-863",
+    "source": "CWE-TOP-25",
+    "title": "CWE-863: autorização incorreta",
+    "appliesTo": "route",
+    "prompt": "A checagem existe, mas confere o papel ou o dono errado. Sessão válida não autoriza o recurso de outra pessoa."
+  },
+  {
+    "id": "CWE-20",
+    "source": "CWE-TOP-25",
+    "title": "CWE-20: validação de entrada imprópria",
+    "appliesTo": "code",
+    "prompt": "Corpo, consulta e cabeçalho são conferidos no servidor antes de virar SQL, caminho, comando ou chamada de conta de IA."
+  },
+  {
+    "id": "CWE-284",
+    "source": "CWE-TOP-25",
+    "title": "CWE-284: controle de acesso impróprio",
+    "appliesTo": "route",
+    "prompt": "A decisão de acesso não pode depender só de um campo enviado pelo cliente. O servidor decide com a identidade já provada."
+  },
+  {
+    "id": "CWE-200",
+    "source": "CWE-TOP-25",
+    "title": "CWE-200: exposição de informação sensível",
+    "appliesTo": "code",
+    "prompt": "Resposta, log e relatório não levam senha, token, stack interno nem dado de outro projeto."
+  },
+  {
+    "id": "CWE-306",
+    "source": "CWE-TOP-25",
+    "title": "CWE-306: função crítica sem autenticação",
+    "appliesTo": "route",
+    "prompt": "Operação que muda estado ou lê dado de projeto exige identidade provada. Rota pública fica numa lista curta."
+  },
+  {
+    "id": "CWE-77",
+    "source": "CWE-TOP-25",
+    "title": "CWE-77: injeção de comando",
+    "appliesTo": "code",
+    "prompt": "Procure comando montado com texto de fora. Argumento separado, sem shell, e só de uma lista fechada."
+  },
+  {
+    "id": "CWE-639",
+    "source": "CWE-TOP-25",
+    "title": "CWE-639: autorização driblada por chave do usuário",
+    "appliesTo": "route",
+    "prompt": "Trocar o id no caminho ou no corpo não alcança recurso de outro dono. A chave sozinha não autoriza."
+  },
+  {
+    "id": "CWE-770",
+    "source": "CWE-TOP-25",
+    "title": "CWE-770: recurso sem limite",
+    "appliesTo": "code",
+    "prompt": "Pedido, fila, exame e processo têm limite de tamanho, tempo e quantidade. Sem limite, um cliente esgota memória ou disco."
+  }
+]
