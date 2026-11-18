@@ -34,3 +34,13 @@
 - Programador: Antigravity CLI (`agy`) com `gemini-4-hydrogen-high`, sem tela, até 3 trabalhadores, cada um no seu worktree e com itens que não tocam os mesmos arquivos.
 - Gerente e revisor: Claude, que escreve as ordens, junta os ramos, roda a suíte completa e o laboratório e faz a prova.
 - Trailer dos commits do Gemini: `Co-Authored-By: Gemini 4 Hydrogen <noreply@google.com>`.
+
+## Equipe final (Astra, Sol e Gemini)
+
+- Autorizada pelo titular em 18/11/2026 para terminar o projeto: o módulo 10 (design), as 20 telas do app do assinante e os módulos 2 a 9 de `docs/MODULOS-DE-VERIFICACAO.md`. Substitui, para esse trabalho, as seções de Codex nativo, Grok e Gemini acima.
+- **Gerente:** Codex CLI com `gpt-6.2-astra`, esforço `medium`, sem tela, a partir deste repositório. Escreve as ordens, distribui, junta os ramos, roda a suíte e os laboratórios, aplica na instalação viva e mantém `docs/PROGRESSO-FINAL.md`.
+- **Revisor:** Codex CLI com `gpt-6.2-sol`, esforço `high`, só leitura (`--sandbox read-only`), uma revisão independente depois de cada rodada; recebe o código e a ordem, nunca a conclusão do autor.
+- **Trabalhadores:** Antigravity CLI (`agy`), até 7 ao mesmo tempo: 3 com `gemini-4-argon-high` e 4 com `gemini-4-hydrogen-high`, cada um no seu worktree, com itens que não tocam os mesmos arquivos. Trailers: `Co-Authored-By: Gemini 4 Argon <noreply@google.com>` ou `Co-Authored-By: Gemini 4 Hydrogen <noreply@google.com>`.
+- **Telas:** geradas pelo próprio produto (`npm run personal:design -- criar`), que usa Claude Opus 5.5 médio. Nenhum outro modelo desenha telas.
+- **Supervisão:** Claude (sessão Claude Code) acompanha, confere e informa o titular.
+- Não substituir modelos em silêncio. Se um modelo ficar sem cota, esperar e tentar de novo; nunca comprar créditos.

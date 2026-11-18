@@ -1,0 +1,146 @@
+# Plano final — do estado de 18/11/2026 até o fim do projeto
+
+Escrito pelo supervisor (Claude) para o **gerente Astra** (`gpt-6.2-astra`, esforço médio). Leia também `AGENTS.md` (seção "Equipe final"), `docs/MODULOS-DE-VERIFICACAO.md` e `docs/RELATORIO-GROK-DESIGN.md`.
+
+Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de implementação, sempre pelo caminho mais seguro. Mantenha `docs/PROGRESSO-FINAL.md` atualizado a cada passo concluído: o que fez, os commits, os resultados de teste, o que falta e qualquer bloqueio. O supervisor acompanha esse arquivo.
+
+## Equipe e como acionar cada um
+
+- **Trabalhadores** (até 7 ao mesmo tempo: 3 Argon e 4 Hydrogen). Cada um roda no seu worktree próprio, com itens que não tocam os mesmos arquivos. Crie os worktrees com `git worktree add -b <ramo> <pasta> <base>` e `ln -s /home/app/projects/agent-control/node_modules <pasta>/node_modules`. Acione assim:
+
+  ```
+  cd <worktree> && setsid nohup agy -p "<pedido curto apontando para a ordem>" --model gemini-4-argon-high --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &
+  ```
+
+  - Para Hydrogen, troque o modelo por `gemini-4-hydrogen-high`.
+  - O `agy` só escreve no log no fim. Acompanhe pelos commits do ramo e espere o processo sair.
+  - Cada ordem fica num arquivo `docs/ORDEM-*.md` commitado, com estes pontos:
+    - o que fazer;
+    - quais arquivos;
+    - quais testes;
+    - o trailer do modelo;
+    - "Commite tudo";
+    - "rode `npx tsc --noEmit --skipLibCheck` e só os testes dos arquivos que mudou";
+    - "não rode a suíte completa, o laboratório nem reconstrua imagens";
+    - "proibido tocar a instalação viva e qualquer login real";
+    - "escreva `docs/RELATORIO-<rodada>-<trabalhador>.md`".
+- **Revisor Sol**, uma vez por rodada, depois de juntar:
+
+  ```
+  codex exec --skip-git-repo-check --sandbox read-only -m gpt-6.2-sol -c model_reasoning_effort=high -C <worktree> "<pedido>"
+  ```
+
+  - Entregue a ordem e o diff (`git diff <base>..HEAD`), nunca o relatório do autor.
+  - Peça defeitos ordenados por gravidade, com arquivo:linha e cenário.
+  - Defeito alto ou médio volta como nova rodada.
+  - Registre a revisão na matriz como "revisão independente por modelo distinto".
+- **Cota.**
+  - Se um modelo devolver erro de cota, espere e tente de novo a cada 10 min.
+  - Nunca compre créditos.
+  - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
+
+## Regras que não mudam
+
+- **Commits:** `git -c user.name="Enok Tavares" -c user.email="migration@localhost"`, com trailer do modelo que escreveu o código. Para os seus commits, use `Co-Authored-By: GPT-6.2 Astra <noreply@openai.com>`.
+- **Git:** nada de push nem de PR. O ramo de trabalho é `task/personal-activation`, neste checkout.
+- **Gateway vivo:** a instalação viva roda **deste checkout** (`systemctl --user … agent-control-gateway-ispagent`). Um reinício carrega o que estiver no disco. Só reinicie depois da suíte verde.
+- **Banco e imagens da instalação viva:** antes de qualquer migração ou de imagens novas, faça um backup:
+
+  ```
+  npm run personal:backup -- /home/app/.agent-control/ispagent/installation.json /home/app/backups-agent-control/<pasta-nova>
+  ```
+
+  A pasta tem que ser nova e ficar fora do diretório de dados.
+- **Logins reais:** nunca abra, copie, imprima, renove ou teste um login real (`.credentials.json`, `auth.json`) fora dos caminhos do produto. A renovação do Claude é do produto (`src/exam-login.ts`).
+- **Sem `sudo`.** Se precisar de algo que exija `sudo`, registre como bloqueio.
+- **Disco:** confira `df -h /` depois de reconstruir imagens. Acima de 90%, rode `docker builder prune -f --filter until=6h`.
+- **Testes:**
+  - Suíte oficial, a partir de um worktree ou deste checkout:
+
+    ```
+    umask 022 && AC_TEST_DATABASE_URL=postgresql://postgres:synthetic-design-r3@127.0.0.1:54333/ac_implementation_test env -u NO_COLOR -u FORCE_COLOR npm test
+    ```
+
+  - O executor deixa de fora os arquivos que citam Docker. Rode à parte, com o mesmo banco: `tests/verify-exam-worker-mount.test.ts`, `tests/native-execution-supervisor.test.ts`, `tests/exam-login.test.ts`, `tests/exam-context-isolation.test.ts` e `tests/workflow-generations.test.ts`.
+  - Laboratório de design: `AC_DESIGN_LAB=1 node --import tsx --test tests/design-lab-image.test.ts`.
+  - Depois da suíte, restaure com `git checkout -- docs/validation/evidence/runtime-result.json`.
+
+## Estado agora
+
+- O módulo 1 (validador) e o módulo 10 (design) estão no ramo `task/personal-activation`, até `44fa84ec`, e aplicados na instalação viva:
+  - imagens reconstruídas;
+  - migração 102 (`ac_exam_contexts`);
+  - gateway reiniciado.
+
+  Há backups de hoje em `/home/app/backups-agent-control/`.
+- A **rodada 12** (assento do revisor do exame vindo da cadeia `specialist`) está pronta no ramo `task/design-r5-b` (`da4af5e3`, worktree `/home/app/projects/agent-control-design-b`). Ainda não foi juntada, testada nem aplicada. Sem ela, o exame do criar para com `EXAM_PROVIDER_UNSUPPORTED`, porque o papel `reviewer` do IspAgent é o Codex.
+- Na instalação viva, o projeto IspAgent (`61713a2a-3955-4b28-875a-e906d301a85d`) tem a revisão 10 da política, já com `specialist`. A conta Claude `de7d4c47-…` tem login válido até cerca de 03:05 UTC de 19/11. O produto renova esse login sozinho, pelo caminho seguro.
+- O job nativo `a11f65ab-b216-4b5e-958c-47d4eda81e3d` está preso em `uncertain` desde uma tentativa que falhou. O gateway registra `NATIVE_EXECUTION_SCOPE_MISMATCH` a cada 4 s. Resolva pelo caminho do produto, recuperação ou retirada; se não houver caminho, corrija o produto. Explique no progresso.
+- Uma criação real de 2 telas funcionou até o exame, com saída em `/home/app/.agent-control/ispagent/design-criacoes/ed509166-…/rodada-1/`. As telas estão boas, mas:
+  - o botão "Código de barras" quebra em 2 linhas;
+  - a 2ª tela saiu como "Pagar fatura", e não como outro conceito da tela inicial.
+
+## Trabalho, em ordem
+
+### A. Fechar o módulo 10 (design)
+
+1. Junte `task/design-r5-b` (rodada 12) em `task/personal-activation`. Rode o `tsc`, a suíte, os testes à parte e o laboratório. Peça a revisão do Sol sobre o diff da rodada 12 e corrija o que ela achar.
+2. Aplique na instalação viva:
+   - faça o backup;
+   - rode `npm run personal:images -- /home/app/.agent-control/ispagent/installation.json`;
+   - reinicie o gateway;
+   - confira com `systemctl --user is-active` e no journal.
+3. Resolva o job preso `a11f65ab`.
+4. Faça a prova real: `npm run personal:design -- criar /home/app/.agent-control/ispagent/installation.json 61713a2a-3955-4b28-875a-e906d301a85d --briefing /home/app/design-briefings/tela-inicial-assinante.md --telas 2 --rodadas 2`. Tem que sair:
+   - o relatório com a tabela de cobertura;
+   - os tokens;
+   - as notas visuais do examinador e do revisor;
+   - a vitrine.
+
+   Cada falha é um defeito do produto: corrija com uma rodada e repita. Para ver a causa sem expor segredo, use as linhas `CLAUDE_ADAPTER_FAILURE` do worker e os códigos da CLI.
+5. Melhore o modo criar para que "N telas" de uma tela inicial produza **N conceitos visuais diferentes da mesma tela** quando o briefing pedir isso: a seção "Variedade entre as telas" do briefing.
+
+### B. As 20 telas do app do assinante
+
+- Gere **20 conceitos da tela inicial** pelo `criar`, em lotes: 10 lotes de 2, ou 5 de 4, com `--rodadas 3`. Use o briefing `/home/app/design-briefings/tela-inicial-assinante.md`. Cada lote tem que ter direções visuais distintas dos outros; use o próprio briefing ou um acréscimo por lote, sem repetir conceito.
+- Respeite a cota da conta Claude Max: no máximo 2 lotes ao mesmo tempo. Se a cota acabar, espere.
+- **Saída:**
+  - copie as telas aprovadas para `/home/app/projects/painel_provedores/html_app/telas-v2/` (HTML, CSS e capturas 390×844 a 1× e 2×);
+  - monte uma vitrine `index.html` nessa pasta;
+  - gere um arquivo único de download, com as telas embutidas (iframe `srcdoc`).
+- **Publicação:** publique esse arquivo como o anterior. O Caddy `edge_caddy` monta `/home/app/infra/caddy/sites` em `/etc/caddy/sites`. O download anterior está em `sites/downloads/telas-2b0caf4b478a2457eabe54d9/`, com o bloco `handle_path` em `sites/happier-ispagent.caddy`. Crie uma pasta nova com um sufixo aleatório e um bloco igual. Valide e recarregue com:
+
+  ```
+  docker exec edge_caddy caddy validate --config /etc/caddy/Caddyfile
+  docker exec edge_caddy caddy reload --config /etc/caddy/Caddyfile
+  ```
+
+  Faça backup do `.caddy` antes de mexer. O link fica `https://agentcontrol.tokstiloesporte.com/downloads/<pasta>/<arquivo>.html`. Registre o link no progresso.
+
+### C. Módulos 2 a 9
+
+Para cada módulo de `docs/MODULOS-DE-VERIFICACAO.md`, na ordem 2, 3, 4, 5, 6, 7, 8, 9, siga o mesmo padrão dos módulos 1 e 10:
+
+- **Execução:**
+  - CLI `npm run personal:<módulo>` numa instalação pessoal;
+  - ferramentas reais numa imagem fixada por digest, sem esqueleto;
+  - uma ferramenta que falha aparece como falha na tabela de cobertura.
+- **Achados e saída:**
+  - cada achado tem prova;
+  - os achados viram tarefas;
+  - o relatório fica em `<dataDirectory>/verificacoes/...`.
+- **Contexto:** o módulo roda num contexto de exame dedicado (`Ledger.ensureExamContext`; estenda o `module` com uma migração nova).
+- **Testes:** testes reais, mais um laboratório com defeito plantado que a ferramenta precisa achar.
+
+Distribua os módulos entre os 7 trabalhadores, até 7 módulos em paralelo, cada um no seu worktree e com arquivos próprios. Junte um por vez, sempre com suíte, laboratório e revisão do Sol. Atualize a seção de cada módulo em `docs/MODULOS-DE-VERIFICACAO.md` com o que foi entregue e o que ficou de fora.
+
+### D. Fim
+
+- Suíte e laboratórios verdes, tudo aplicado na instalação viva e o gateway saudável.
+- Em `docs/RELATORIO-FINAL.md`, registre:
+  - o que cada módulo entrega;
+  - os commits;
+  - os números dos testes;
+  - os links;
+  - o que **não** ficou pronto, dito com clareza.
+- Termine com a última linha de `docs/PROGRESSO-FINAL.md` dizendo `FIM`.
