@@ -1,6 +1,6 @@
 /** Contraste WCAG, ΔE2000 e APCA Lc. Números, sem texto de terceiros. */
 
-export type Rgb = {r: number; g: number; b: number};
+export type Rgb = {r: number; g: number; b: number; a?: number};
 
 function channel(value: number): number {
   const s = value / 255;
@@ -91,6 +91,8 @@ export function apcaLc(text: Rgb, background: Rgb): number {
   const blkClmp = 1.414;
   const scaleBoW = 1.14;
   const scaleWoB = 1.14;
+  const loBoWoffset = 0.027;
+  const loWoBoffset = 0.027;
   const loClip = 0.1;
   const deltaYmin = 0.0005;
   let textY = luminance(text);
@@ -100,20 +102,76 @@ export function apcaLc(text: Rgb, background: Rgb): number {
   if (Math.abs(backgroundY - textY) < deltaYmin) return 0;
   if (backgroundY > textY) {
     const sapc = (backgroundY ** normBG - textY ** normTXT) * scaleBoW;
-    return (sapc < loClip ? 0 : sapc - loClip) * 100;
+    return (sapc < loClip ? 0 : sapc - loBoWoffset) * 100;
   }
   const sapc = (backgroundY ** revBG - textY ** revTXT) * scaleWoB;
-  return (sapc > -loClip ? 0 : sapc + loClip) * 100;
+  return (sapc > -loClip ? 0 : sapc + loWoBoffset) * 100;
+}
+
+/** Src-over. Alfa ausente vale 1. Fundo opaco devolve `a: 1`. */
+export function compositeRgb(foreground: Rgb, background: Rgb): Rgb {
+  const fgA = foreground.a ?? 1;
+  const bgA = background.a ?? 1;
+  const outA = fgA + bgA * (1 - fgA);
+  if (outA <= 0) return {r: 0, g: 0, b: 0, a: 0};
+  const mix = (fg: number, bg: number) => (fg * fgA + bg * bgA * (1 - fgA)) / outA;
+  return {
+    r: mix(foreground.r, background.r),
+    g: mix(foreground.g, background.g),
+    b: mix(foreground.b, background.b),
+    a: bgA >= 1 ? 1 : outA,
+  };
+}
+
+function parseAlpha(token: string): number | null {
+  const raw = token.trim();
+  if (raw.length === 0) return null;
+  const percent = raw.endsWith('%');
+  const value = Number(percent ? raw.slice(0, -1) : raw);
+  if (!Number.isFinite(value)) return null;
+  const alpha = percent ? value / 100 : value;
+  return Math.min(1, Math.max(0, alpha));
+}
+
+function rgbResult(r: number, g: number, b: number, a: number): Rgb | null {
+  if (![r, g, b, a].every(Number.isFinite)) return null;
+  return {r, g, b, a};
 }
 
 export function parseCssColor(value: string | undefined): Rgb | null {
   if (!value) return null;
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+  const trimmed = value.trim();
+  if (/^transparent$/i.test(trimmed)) return {r: 0, g: 0, b: 0, a: 0};
+  const hex = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(trimmed);
   if (hex?.[1]) {
-    const raw = hex[1].length === 3 ? hex[1].split('').map(char => char + char).join('') : hex[1];
-    return {r: Number.parseInt(raw.slice(0, 2), 16), g: Number.parseInt(raw.slice(2, 4), 16), b: Number.parseInt(raw.slice(4, 6), 16)};
+    const digits = hex[1].length <= 4 ? hex[1].split('').map(char => char + char).join('') : hex[1];
+    const r = Number.parseInt(digits.slice(0, 2), 16);
+    const g = Number.parseInt(digits.slice(2, 4), 16);
+    const b = Number.parseInt(digits.slice(4, 6), 16);
+    const a = digits.length === 8 ? Number.parseInt(digits.slice(6, 8), 16) / 255 : 1;
+    return rgbResult(r, g, b, a);
   }
-  const rgb = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i.exec(value.trim());
-  if (!rgb) return null;
-  return {r: Number(rgb[1]), g: Number(rgb[2]), b: Number(rgb[3])};
+  const fn = /^rgba?\((.*)\)$/i.exec(trimmed);
+  if (!fn?.[1]) return null;
+  const inner = fn[1].trim();
+  let channels: string[];
+  let alphaToken: string | undefined;
+  if (inner.includes(',')) {
+    const parts = inner.split(',').map(part => part.trim()).filter(part => part.length > 0);
+    if (parts.length < 3 || parts.length > 4) return null;
+    channels = parts.slice(0, 3);
+    alphaToken = parts[3];
+  } else {
+    const [body, alpha, extra] = inner.split('/');
+    if (extra !== undefined) return null;
+    channels = (body ?? '').trim().split(/\s+/).filter(part => part.length > 0);
+    if (channels.length !== 3) return null;
+    alphaToken = alpha?.trim();
+  }
+  const r = Number(channels[0]);
+  const g = Number(channels[1]);
+  const b = Number(channels[2]);
+  const a = alphaToken === undefined || alphaToken.length === 0 ? 1 : parseAlpha(alphaToken);
+  if (a === null) return null;
+  return rgbResult(r, g, b, a);
 }
