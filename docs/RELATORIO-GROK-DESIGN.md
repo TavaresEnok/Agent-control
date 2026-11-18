@@ -445,3 +445,132 @@ Não há comando `npm run personal:*` que acrescente um perfil especialista `cla
 O login do host com arquivo de senha não rodou no Chrome. O laboratório prova o caminho "não capturado".
 
 Não houve push. O contêiner `ac-personal-pg`, o banco `ac_ispagent`, a instalação viva e o gateway vivo não foram alterados.
+
+## Reconstrução, rodada 3
+
+Feita em 18/11/2026 no ramo `task/design-r3-image-proof`. A ordem partiu do commit `3c5d24be`. O fechamento desta seção está em cima de `b7e2423c`.
+
+### 1. `personal:design preparar`
+
+Comandos, na instalação de teste, projeto `324be55d-b879-4314-a387-578fb299a7b4`:
+
+```
+npm run personal:design -- preparar /home/app/srv_projetos/workspace/ac-smoke-data/installation.json 324be55d-b879-4314-a387-578fb299a7b4
+```
+
+Saída, código 0:
+
+```
+Preparação, sem gravar.
+Catálogo: claude-opus-5-5 entraria por personal://account-add.
+Perfis specialist:
+- criar: claude-opus-5-5 medium conta 620428b1-5d25-4c31-bd3d-fa04a8c9827d perfil novo (criar, conta)
+- examinador: claude-sonnet-5-5 medium conta 620428b1-5d25-4c31-bd3d-fa04a8c9827d perfil novo (criar, conta)
+- revisor: claude-sonnet-5-5 medium conta 620428b1-5d25-4c31-bd3d-fa04a8c9827d perfil novo (criar, outra sessão)
+Cadeia specialist:
+- regular: novo:criar, novo:examinador
+- emergência: novo:revisor
+Contextos sem política: c35e02b4-d427-4198-80c6-2d6132990f9e
+Revisão atual: 1
+```
+
+O mesmo comando com `--aplicar`, código 0:
+
+```
+Preparação aplicada.
+Catálogo: claude-opus-5-5 entraria por personal://account-add.
+Perfis specialist:
+- criar: claude-opus-5-5 medium conta 620428b1-5d25-4c31-bd3d-fa04a8c9827d perfil 064dafd0-32a3-4216-9a07-8575d7dd8ad7 (criar, conta)
+- examinador: claude-sonnet-5-5 medium conta 620428b1-5d25-4c31-bd3d-fa04a8c9827d perfil d7406c15-34cb-4a7d-92c3-674a413ea63d (criar, conta)
+- revisor: claude-sonnet-5-5 medium conta 620428b1-5d25-4c31-bd3d-fa04a8c9827d perfil b6c06928-875b-4403-93e1-2e6700ea8e4c (criar, outra sessão)
+Cadeia specialist:
+- regular: 064dafd0-32a3-4216-9a07-8575d7dd8ad7, d7406c15-34cb-4a7d-92c3-674a413ea63d
+- emergência: b6c06928-875b-4403-93e1-2e6700ea8e4c
+Contextos sem política: c35e02b4-d427-4198-80c6-2d6132990f9e
+Revisão: 1 -> 2
+```
+
+A linha do catálogo dessa aplicação diz "entraria" porque o texto foi calculado antes da gravação. O commit `6e8fccef` faz a aplicação dizer "entrou por personal://account-add". A segunda execução com `--aplicar` imprimiu só `Nada a mudar.` e saiu com código 0.
+
+Há uma conta Claude no projeto, `620428b1-5d25-4c31-bd3d-fa04a8c9827d`, então o revisor ficou em outra sessão dessa conta. A revisão passou de 1 para 2 e só acrescenta `roles.specialist`. O contexto que estava sem política, `c35e02b4-d427-4198-80c6-2d6132990f9e`, passou a usar a revisão 2.
+
+Commits: `64ff4ea7` (comando, testes e a CLI) e `6e8fccef` (o texto do catálogo depois da gravação).
+
+### 2. Exame real com `--servir`
+
+A pasta servida foi `/tmp/design-r3-servir`, com `index.html`, `painel.html`, `item.html`, `css/site.css` e `foto.png`. O CSS não entra como tela.
+
+```
+npm run personal:design -- /home/app/srv_projetos/workspace/ac-smoke-data/installation.json 324be55d-b879-4314-a387-578fb299a7b4 --servir /tmp/design-r3-servir --url http://127.0.0.1:8080
+```
+
+A primeira corrida, `73f6d6c8-5f3d-43e7-bb88-52df6ffd9850`, diretório `20261118-074902-design`, saiu com código 0. A nota geral diz que nenhuma tela de código entrou no exame. O commit `8c7d2f53` manda os HTML servidos para o exame.
+
+As corridas seguintes recusaram `NATIVE_IMAGE_MISSING`. A CLI imprime "O exame de design falhou." O bootstrap da instalação de teste apontava imagens que o daemon não tinha. O acerto foi `native-setup` do produto, com as três imagens já no daemon, sem `personal:images` e sem `personal:setup`. O worker novo é `sha256:48270d13109118edc9a6679646e7344ff8f29bfa9676c1d65889c2a95e93057a`. O planning continua `sha256:8c9b7d04e9fffc0f495fadb4f616ee8d158075af7ffb6428377fa205fcb95c64`. As tools continuam `sha256:9a1fa0650e34b7e5421411264be3b1490b3ee9676ff982e89148f888ab31142b`. O resultado foi `{"state":"active","accounts":3}`. A imagem do worker foi reconstruída a partir do fonte atual para copiar o login do exame para um diretório gravável quando `AC_VERIFY_EXAM=1`. A imagem antiga do worker, `sha256:167ab26fc5fd519f05314749838640432dd44fdb0fc6fdf0f882dd990e35aed1`, continua no disco.
+
+A corrida `63e596a5-5905-48a3-bb39-61f9baa48db9`, diretório `20261118-081208-design`, saiu com código 0. As três telas entraram. A nota geral diz que o exame de `index.html`, `item.html` e `painel.html` não veio em JSON válido. Não há seção Crítica visual. Os jobs `06155339-b319-491d-b915-2669b169bfea`, `6dbb69be-7a0a-4a5a-a229-d022238f4b00` e `6fc7f75b-3ff8-4b5f-8069-22b56cf894dc` saíram com `EXECUTION_NATIVE_FAILED`, saída vazia e tokens nulos. Essa corrida ainda usava o worker antigo.
+
+O registro medido desta rodada é a execução `e13b3e7f-e5d0-44db-bdde-e0624f1efa58`, diretório `/home/app/srv_projetos/workspace/ac-smoke-data/verificacoes/324be55d-b879-4314-a387-578fb299a7b4/20261118-083422-design`, código 0, gerada em 2026-11-18T08:34:22.874Z. O commit do repositório smoke é `7e7c68dad3ee61468f1ac35d787241625a3074b8`. A imagem de design foi `localhost:5000/ac-design:reconstrucao@sha256:7320bb1b49eda069fb66da92455769abb2cbf5716adefcbb655ea332523cd3b0`. Os jobs `53ac94c7-0a3d-44c7-9a1e-9f36a9794bd1`, `3cab398d-bbc0-4f3a-91e3-5613cea6b8f5` e `989cab82-e9dc-43b5-bf4e-0358b799eb7f` saíram com `EXECUTION_NATIVE_FAILED`, saída de tamanho 0 e tokens nulos, já no worker novo.
+
+Cobertura das ferramentas:
+
+| Ferramenta | Versão | Executado | Achados | Falha |
+|---|---|---|---|---|
+| axe-core | 4.14.1 | 9 células | 88 | nenhuma |
+| pa11y | 10.0.0 | 9 células rota×viewport | 72 | nenhuma |
+| lighthouse | 13.6.0 | 3 mobile, 3 desktop | 2 | nenhuma |
+| stylelint | 18.0.0 | 0 arquivos do repositório, 0 blocos de página | 0 | nenhuma |
+| css-analyzer | 9.9.9 | 9 folhas | 12 | nenhuma |
+
+A tabela de itens por tela nomeia o examinador planejado `claude/claude-opus-5-5` em `index.html`, `item.html` e `painel.html`.
+
+Tokens: tamanhos 10, 11, 12, 13, 13.33, 15, 16, 18, 20, 22, 24, 28, 32, 40 e 48. Famílias Times New Roman e Arial. Espaçamentos fora da grade de 4 px: 10, 11, 13, 15, 18, 21.44 e 22. Há 72 pares de cinza com ΔE2000 menor que 3. A escala mais próxima é Material Design 3, distância 0,17. Medidos: 23. Julgados: 0. Gravidade alta 11, média 12. A nota de falha é a de achado alto confirmado. Sem baseline aprovada.
+
+Notas visuais do examinador e do revisor: o relatório não tem a seção Crítica visual. A nota geral repete que o JSON das três telas não veio válido.
+
+A causa está fora do produto. O Claude da conta respondeu `Failed to authenticate: OAuth session expired and could not be refreshed`. O access token do arquivo da conta expirou em 2026-11-11. O arquivo ainda guarda um refresh com data de cliente até 2026-12-06, e o provedor recusa renovar essa sessão. Uma cópia gravável do mesmo arquivo, com `CLAUDE_CONFIG_DIR` apontando para ela, na imagem nova do worker, devolveu a mesma frase. O arquivo original permaneceu com data de 2026-11-10 e 3343 bytes. Uma sonda anterior, numa cópia temporária que depois foi apagada, tinha autenticado; o refresh que o provedor aceitaria ficou nessa cópia. Outra chamada repetiria a recusa. O caminho do produto para entrar de novo é `npm run gateway -- account-add`. Não houve sexta corrida do exame.
+
+### 3. Criar real
+
+```
+npm run personal:design -- criar /home/app/srv_projetos/workspace/ac-smoke-data/installation.json 324be55d-b879-4314-a387-578fb299a7b4 --briefing /tmp/design-create-briefing.md --telas 2 --rodadas 1
+```
+
+Código 1. A CLI imprimiu "O pedido de criação não tem telas ou rodadas válidas." Os valores 2 e 1 passam na leitura dos argumentos. O job `cb251ff7-0590-4271-a0df-9bd8904f59ed` saiu com `EXECUTION_NATIVE_FAILED`, saída vazia e tokens nulos. A leitura do pacote trata essa saída vazia como `DESIGN_CREATE_INVALID`. O diretório `/home/app/srv_projetos/workspace/ac-smoke-data/design-criacoes/ca8dad97-8056-452c-9d5b-01e2e1c91a75` ficou vazio. Não há HTML, exame das telas criadas nem vitrine. A causa é a mesma recusa de refresh do provedor.
+
+### 4. Evidências
+
+Em `docs/validation/evidence/design/` estão `exame-e13b3e7f-README.md`, `exame-e13b3e7f-cobertura.md`, `exame-e13b3e7f-cobertura-ferramentas.md` e `LEIA-ME.md`. O `LEIA-ME.md` registra que essa cópia mede ferramentas e tokens e não traz notas visuais. Não há relatório de criar nem vitrine para copiar. Nenhum print entrou. O JSON bruto de achados de imagem, 620249 bytes, ficou na instalação de teste.
+
+### 5. Login no laboratório
+
+Commit `b7e2423c`. A imagem é `localhost:5000/ac-design:reconstrucao@sha256:7320bb1b49eda069fb66da92455769abb2cbf5716adefcbb655ea332523cd3b0`. O fixture tem o formulário em `/`, o POST `/entrar` e a rota `/conta`. A captura logada da home difere da anônima. `/painel` continua com a nota de logado não capturado, porque o config não declara esse estado nessa rota.
+
+O teste `tests/design-lab-image.test.ts` com `AC_DESIGN_LAB=1` passou 1, falhou 0, `duration_ms` 382569, código 0. O `storageState` saiu no modo 0600, escrito pelo uid 65532. A senha do laboratório não aparece no relatório nem nos brutos. Os controles do formulário medem 44 px, e o alvo plantado de 30 px continua sendo o medido.
+
+`npx tsc --noEmit`: código 0.
+
+### Suíte oficial
+
+`umask 022 && env -u NO_COLOR -u FORCE_COLOR npm test`, com `AC_TEST_DATABASE_URL` no Postgres descartável `ac-design-r3-pg` (`127.0.0.1:54333`, banco `ac_implementation_test`).
+
+Durou 694 s, código 0. Resumo: `{"passed":232,"failed":[],"excluded":87}`. `design-prepare.test.ts` (9 s), `design-serve-static.test.ts` (2 s) e `design-lab-image.test.ts` (2 s, pulado sem `AC_DESIGN_LAB`) estão entre os 232. `workflow-runtime-bootstrap.test.ts` (17 s) também. `npm test` reescreveu `docs/validation/evidence/runtime-result.json`. O arquivo foi restaurado para o blob `3ae5a15c9eeba482ac89eb790809df1aee81edef` e não entra no commit.
+
+### Commits
+
+| Item | Commit | O que entra |
+|---|---|---|
+| 1. preparar | `64ff4ea7`, `6e8fccef` | comando, testes e o texto do catálogo depois da gravação |
+| 2. HTML do `--servir` | `8c7d2f53` | as telas servidas entram no exame |
+| 3. Login | `b7e2423c` | storageState na imagem, captura logada e o alvo de 30 px |
+| Fechamento | este commit | evidências do exame medido e esta seção |
+
+O arquivo `upstream/happier/apps/server/generated` continua fora do git.
+
+### O que não ficou pronto
+
+As notas visuais reais do examinador e do revisor Claude não saíram. A sessão OAuth expirada não foi renovada pelo provedor.
+
+As telas criadas, o exame dessas telas e a vitrine não saíram. O diretório `ca8dad97-8056-452c-9d5b-01e2e1c91a75` está vazio.
+
+Não houve push. A instalação viva, o gateway vivo, o banco `ac_ispagent` e o contêiner `ac-personal-pg` não foram alterados.
