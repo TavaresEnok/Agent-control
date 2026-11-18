@@ -1,11 +1,13 @@
 import {spawn} from 'node:child_process';
-import {chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
 import type {DesignToolReports} from './design-collect.ts';
-import {designRunArguments, requirePinnedDesignImage} from './design-image.ts';
+import {DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
 import {stylelintConfig} from './design-stylelint.ts';
+import {designRawFinding, type DesignRawFinding} from './design-types.ts';
 
 export type DesignComputedSample = {
   selector?: string;
@@ -30,6 +32,7 @@ export type DesignComputedSample = {
 const REQUIRED_TOOLS = ['axe-core', 'pa11y', 'lighthouse', 'stylelint', 'css-analyzer'] as const;
 const VIEWPORTS = [375, 768, 1440] as const;
 const SHA = /^sha256:[a-f0-9]{64}$/;
+const CONTAINER_UID = Number(DESIGN_USER.split(':')[0]);
 
 export type ToolCoverageRow = {
   tool: string;
@@ -59,6 +62,7 @@ export type DesignImageExecution = {
   shots: DesignImageShot[];
   notes: string[];
   document: unknown;
+  declaredFindings: DesignRawFinding[];
 };
 
 function text(value: unknown, fallback: string, max = 240): string {
@@ -86,12 +90,16 @@ export function failedToolCoverage(code: string): ToolCoverageRow[] {
   return REQUIRED_TOOLS.map(tool => coverageRow({tool, version: 'desconhecida', executed: '0', findings: '0', failure}));
 }
 
+function tableCell(value: string): string {
+  return value.replace(/\|/g, '/').replace(/\s+/g, ' ');
+}
+
 export function toolCoverageTable(rows: readonly ToolCoverageRow[]): string {
   const body = rows.length > 0 ? rows : failedToolCoverage('DESIGN_IMAGE_NOT_RUN');
   return [
     '| Ferramenta | Versão | Executado | Achados | Falha |',
     '|---|---|---|---|---|',
-    ...body.map(row => `| ${row.tool} | ${row.version} | ${row.executed} | ${row.findings} | ${row.failure} |`),
+    ...body.map(row => `| ${tableCell(row.tool)} | ${tableCell(row.version)} | ${tableCell(row.executed)} | ${tableCell(row.findings)} | ${tableCell(row.failure)} |`),
     '',
   ].join('\n');
 }
@@ -124,6 +132,7 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
     pa11y: listOf(reports.pa11y).map(item => ({file: text(item.file, 'pagina', 400), json: item.json})),
     lighthouse: listOf(reports.lighthouse).map(item => ({file: text(item.file, 'pagina', 400), lhr: item.lhr})),
     stylelint: listOf(reports.stylelint).map(item => ({file: text(item.file, 'pagina', 400), report: item.report})),
+    cssAnalyzer: listOf(reports.cssAnalyzer).map(item => ({file: text(item.file, 'pagina', 400), report: item.report})),
   };
   const present = new Set(listOf(root.coverage).map(item => text(item.tool, '', 80)));
   const coverage = listOf(root.coverage).map(item => coverageRow(item));
@@ -138,6 +147,7 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
     }
   }
   const notes = Array.isArray(root.notes) ? root.notes.filter((item): item is string => typeof item === 'string').map(item => item.slice(0, 300)) : [];
+  const declared = routeFindings(root, notes);
   const shotMeta = listOf(root.screenshots).flatMap(item => {
     const fileName = text(item.fileName, '', 160);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,140}\.png$/.test(fileName)) return [];
@@ -151,7 +161,42 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
       state: text(item.state, 'padrao', 40),
     }];
   });
-  return {tools, coverage, computed, notes, document, shotMeta};
+  return {tools, coverage, computed, notes, document, shotMeta, declaredFindings: declared};
+}
+
+/** HTTP ≥ 400 vira achado de navegação. A folha do css-analyzer segue em tools.cssAnalyzer. */
+function routeFindings(root: Record<string, unknown>, notes: string[]): DesignRawFinding[] {
+  const found: DesignRawFinding[] = [];
+  const seen = new Set<string>();
+  const push = (file: string, snippet: string) => {
+    const key = `${file}\u0000${snippet}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push(designRawFinding({
+      tool: 'navegacao',
+      rule: 'DESIGN-ROTA-INDISPONIVEL',
+      file,
+      severity: 'media',
+      snippet,
+    }));
+  };
+  for (const item of listOf(root.findings)) {
+    const rule = text(item.rule, '', 80);
+    const tool = text(item.tool, '', 40);
+    if (tool !== 'navegacao' && rule !== 'DESIGN-ROTA-INDISPONIVEL') continue;
+    const status = typeof item.status === 'number' && Number.isFinite(item.status) ? String(Math.trunc(item.status)) : '';
+    const snippet = text(item.snippet, status.length > 0 ? `rota indisponível (${status})` : 'rota indisponível', 240);
+    push(text(item.file, text(item.route, '/', 200), 400), snippet);
+  }
+  for (const item of listOf(root.unavailable)) {
+    const status = typeof item.status === 'number' && Number.isFinite(item.status) ? String(Math.trunc(item.status)) : text(item.status, 'erro', 40);
+    const route = text(item.route, '/', 200);
+    const snippet = `rota indisponível (${status})`.slice(0, 240);
+    push(route, snippet);
+    const line = `${route}: ${snippet}`;
+    if (!notes.some(note => note.includes(snippet) && note.includes(route))) notes.push(line.slice(0, 300));
+  }
+  return found;
 }
 
 export function designExamPlan(routes: readonly {route: string}[], dark: boolean): {
@@ -206,8 +251,8 @@ async function defaultSpawn(argv: readonly string[], timeoutMs: number): Promise
 /**
  * Sobe a imagem com designRunArguments. O plano vai em pedido.json, fora do argv,
  * para os testes do contrato do contêiner continuarem iguais.
- * O diretório temporário fica 0777 só durante a corrida: o usuário 65532 precisa escrever.
- * Quem chama copia o que interessa e este método apaga o diretório.
+ * O diretório fica 0o1777 (sticky) só durante a escrita do contêiner: o processo
+ * interno é o uid 65532 e o host não é esse uid. O finally apaga o diretório.
  */
 export async function executeDesignImage(input: {
   image: string;
@@ -216,13 +261,15 @@ export async function executeDesignImage(input: {
   plan: unknown;
   timeoutMs?: number;
   run?: DesignImageSpawn;
+  loginState?: string;
 }): Promise<DesignImageExecution> {
   const output = await mkdtemp(join(tmpdir(), 'design-img-'));
   try {
-    await chmod(output, 0o777);
+    // 0o1777 só enquanto o uid 65532 escreve; o host não é esse uid.
+    await chmod(output, 0o1777);
     const captures = join(output, 'capturas');
-    await mkdir(captures, {mode: 0o777});
-    await chmod(captures, 0o777);
+    await mkdir(captures, {mode: 0o1777});
+    await chmod(captures, 0o1777);
     await writeFile(join(output, 'pedido.json'), `${JSON.stringify(input.plan)}\n`, {mode: 0o644});
     let argv: readonly string[];
     try {
@@ -234,6 +281,7 @@ export async function executeDesignImage(input: {
         memoryBytes: 2147483648,
         nanoCpus: 2_000_000_000,
         pidsLimit: 512,
+        ...(input.loginState === undefined ? {} : {loginState: input.loginState}),
       });
     } catch (error) {
       const code = error instanceof Refusal ? error.code : 'DESIGN_IMAGE_FAILED';
@@ -253,12 +301,7 @@ export async function executeDesignImage(input: {
         shots: [],
       };
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(await readFile(join(output, 'achados-brutos.json'), 'utf8')) as unknown;
-    } catch {
-      parsed = undefined;
-    }
+    const parsed = await readContainerJson(join(output, 'achados-brutos.json'));
     if (parsed === undefined) {
       const code = spawned.code === null ? 'DESIGN_IMAGE_TIMEOUT' : 'DESIGN_IMAGE_FAILED';
       const note = spawned.stderr.trim().slice(0, 180);
@@ -270,6 +313,9 @@ export async function executeDesignImage(input: {
         shots: [],
       };
     }
+    if (spawned.code === 0 && !reportsObject(parsed)) {
+      return {ok: false, code: 'DESIGN_IMAGE_FAILED', ...emptyExecution('DESIGN_IMAGE_FAILED'), shots: []};
+    }
     const interpreted = interpretDesignImageDocument(parsed);
     const shots: DesignImageShot[] = [];
     const names = new Set(await readdir(captures).catch(() => [] as string[]));
@@ -278,18 +324,55 @@ export async function executeDesignImage(input: {
       const bytes = await readFile(join(captures, meta.fileName));
       shots.push({...meta, bytes});
     }
+    const containerFailed = spawned.code !== 0 && spawned.code !== null;
+    const notes = containerFailed
+      ? [...interpreted.notes, `O contêiner saiu com código ${spawned.code}.`.slice(0, 300)]
+      : interpreted.notes;
     return {
       ok: true,
       code: spawned.code === 0 ? 'nenhuma' : 'DESIGN_IMAGE_FAILED',
       tools: interpreted.tools,
       coverage: interpreted.coverage,
       computed: interpreted.computed,
-      notes: interpreted.notes,
+      notes,
       document: interpreted.document,
+      declaredFindings: interpreted.declaredFindings,
       shots,
     };
   } finally {
     await rm(output, {recursive: true, force: true});
+  }
+}
+
+function reportsObject(document: unknown): boolean {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) return false;
+  const reports = (document as Record<string, unknown>).reports;
+  return reports !== null && typeof reports === 'object' && !Array.isArray(reports);
+}
+
+/** lstat antes do parse. Symlink, outro uid ou modo de grupo/outros gravável não é lido. */
+async function readContainerJson(path: string): Promise<unknown | undefined> {
+  let listed;
+  try {
+    listed = await lstat(path);
+  } catch {
+    return undefined;
+  }
+  if (listed.isSymbolicLink() || !listed.isFile() || listed.uid !== CONTAINER_UID || (listed.mode & 0o022) !== 0) return undefined;
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return undefined;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.uid !== CONTAINER_UID || (info.mode & 0o022) !== 0) return undefined;
+    return JSON.parse(await handle.readFile({encoding: 'utf8'})) as unknown;
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
   }
 }
 
@@ -300,5 +383,6 @@ function emptyExecution(code: string): Omit<DesignImageExecution, 'ok' | 'code' 
     computed: [],
     notes: [],
     document: null,
+    declaredFindings: [],
   };
 }

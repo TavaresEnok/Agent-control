@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {chmod, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -112,8 +113,7 @@ test('runDesignModule no caminho da CLI converte o JSON da imagem e publica a co
             && argv.includes('design-homologation')
             && argv.includes(pin)
             && argv.includes('--read-only');
-          const {writeFile} = await import('node:fs/promises');
-          await writeFile(join(output, 'achados-brutos.json'), JSON.stringify(imageDocument()));
+          await writeContainerJson(output, JSON.stringify(imageDocument()));
           return {code: 0, stderr: ''};
         },
       },
@@ -178,3 +178,22 @@ test('imagem que não grava JSON vira falha na tabela e recusa o exame', async (
     await rm(data, {recursive: true, force: true});
   }
 });
+
+/** O host deste teste não é o uid 65532. A imagem local grava o JSON com esse uid e modo 0644. */
+async function writeContainerJson(directory: string, body: string): Promise<void> {
+  const staging = join(directory, '.host-achados.json');
+  await writeFile(staging, body, {mode: 0o644});
+  await chmod(staging, 0o644);
+  try {
+    const result = spawnSync('docker', [
+      'run', '--rm', '--network', 'none', '--user', '65532:65532',
+      '--entrypoint', '/bin/sh',
+      '--mount', `type=bind,source=${directory},destination=/out`,
+      'ac-design:reconstrucao',
+      '-c', 'cp /out/.host-achados.json /out/achados-brutos.json && chmod 644 /out/achados-brutos.json',
+    ], {encoding: 'utf8', timeout: 120_000});
+    if (result.status !== 0) throw new Error(result.stderr || result.stdout || 'CONTAINER_WRITE_FAILED');
+  } finally {
+    await rm(staging, {force: true});
+  }
+}
