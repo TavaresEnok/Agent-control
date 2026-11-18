@@ -64,22 +64,34 @@ export async function readDesignCaptureStageNote(): Promise<string | undefined> 
   }
 }
 
+const REFERENCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(?:png|jpe?g)$/i;
+
+export type DesignStagedReference = {path: string; sha256: string; name: string};
+
 export async function writeDesignExamCaptures(
   dataDirectory: string,
   runId: string,
   held: readonly {route: string; viewport: number; theme: 'claro' | 'escuro'; state: string; bytes: Buffer}[],
+  extras: readonly {name: string; bytes: Buffer}[] = [],
 ): Promise<{
   byRoute: Map<string, DesignScreenCapture[]>;
+  references: DesignStagedReference[];
   publish: () => void;
   conceal: () => void;
   cleanup: () => Promise<void>;
 }> {
-  const idle = {byRoute: new Map<string, DesignScreenCapture[]>(), publish() {}, conceal() {}, cleanup: async () => {}};
+  const idle = {
+    byRoute: new Map<string, DesignScreenCapture[]>(),
+    references: [] as DesignStagedReference[],
+    publish() {},
+    conceal() {},
+    cleanup: async () => {},
+  };
   if (!Id.safeParse(runId).success || !RUN_DIR.test(runId)) {
-    if (held.length === 0) return idle;
+    if (held.length === 0 && extras.length === 0) return idle;
     throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
   }
-  if (held.length === 0) {
+  if (held.length === 0 && extras.length === 0) {
     await sweepQuietly(dataDirectory, runId);
     return idle;
   }
@@ -114,12 +126,36 @@ export async function writeDesignExamCaptures(
       list.push(capture);
       byRoute.set(item.route, list);
     }
+    const references = await writeReferenceImages(dir, extras, written);
+    const env = bindCaptureEnv(parent, runId);
+    return {byRoute, references, publish: env.publish, conceal: env.conceal, cleanup};
   } catch (error) {
     await cleanup();
     throw error;
   }
-  const env = bindCaptureEnv(parent, runId);
-  return {byRoute, publish: env.publish, conceal: env.conceal, cleanup};
+}
+
+/** A referência segue o PNG da captura: o nome no disco é o sha256, com sufixo .png, para o supervisor copiar. */
+async function writeReferenceImages(
+  dir: string,
+  extras: readonly {name: string; bytes: Buffer}[],
+  written: Map<string, string>,
+): Promise<DesignStagedReference[]> {
+  const references: DesignStagedReference[] = [];
+  for (const file of extras.slice(0, 10)) {
+    if (!REFERENCE_NAME.test(file.name) || file.bytes.length < 8 || file.bytes.length > MAX_BYTES) continue;
+    const png = file.bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const jpg = file.bytes[0] === 0xff && file.bytes[1] === 0xd8;
+    if (!png && !jpg) continue;
+    const sha256 = createHash('sha256').update(file.bytes).digest('hex');
+    let path = written.get(sha256);
+    if (path === undefined) {
+      path = await writePrivatePng(dir, sha256, file.bytes);
+      written.set(sha256, path);
+    }
+    references.push({path, sha256, name: file.name});
+  }
+  return references;
 }
 
 function readCaptureEnv(): CaptureEnv {

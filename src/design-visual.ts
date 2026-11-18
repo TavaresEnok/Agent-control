@@ -51,7 +51,7 @@ const ITEMS = [
 export const VISUAL_AXES = ['hierarquia', 'tipografia', 'cor', 'ritmo', 'grade', 'densidade', 'componentes', 'marca', 'polimento'] as const;
 export type VisualAxis = (typeof VISUAL_AXES)[number];
 
-export type VisualScore = {axis: VisualAxis; score: number; region: string; suggestion: string};
+export type VisualScore = {axis: VisualAxis; score: number; region: string; suggestion: string; distance?: number};
 
 export function visualChecklistItems(): DesignChecklistItem[] {
   return ITEMS.map(item => DesignChecklistItem.parse({
@@ -74,6 +74,15 @@ function finiteScore(value: unknown): number | null {
   return Math.max(0, Math.min(10, Math.round(number * 10) / 10));
 }
 
+/** Optional 0–10 distance. Out of range is omitted; the axis score still counts. */
+function readDistance(value: unknown): number | undefined {
+  if (value === undefined || value === null || typeof value === 'boolean') return undefined;
+  if (typeof value === 'string' && value.trim() === '') return undefined;
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : Number.NaN;
+  if (!Number.isFinite(number) || number < 0 || number > 10) return undefined;
+  return Math.round(number * 10) / 10;
+}
+
 export function parseVisualScores(value: unknown): VisualScore[] | null {
   if (!value || typeof value !== 'object') return null;
   const row = value as {kind?: unknown; scores?: unknown};
@@ -81,14 +90,17 @@ export function parseVisualScores(value: unknown): VisualScore[] | null {
   const scores: VisualScore[] = [];
   for (const item of row.scores) {
     if (!item || typeof item !== 'object') continue;
-    const score = item as {axis?: unknown; score?: unknown; region?: unknown; suggestion?: unknown};
+    const score = item as {axis?: unknown; score?: unknown; region?: unknown; suggestion?: unknown; distance?: unknown};
     const axis = typeof score.axis === 'string' ? score.axis : '';
     if (!(VISUAL_AXES as readonly string[]).includes(axis)) continue;
     const valueScore = finiteScore(score.score);
     const region = String(score.region ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
     const suggestion = String(score.suggestion ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
     if (valueScore === null || region.length === 0 || suggestion.length === 0) continue;
-    scores.push({axis: axis as VisualAxis, score: valueScore, region, suggestion});
+    const distance = readDistance(score.distance);
+    const parsed: VisualScore = {axis: axis as VisualAxis, score: valueScore, region, suggestion};
+    if (distance !== undefined) parsed.distance = distance;
+    scores.push(parsed);
   }
   return VISUAL_AXES.every(axis => scores.some(item => item.axis === axis)) ? scores : null;
 }
@@ -147,7 +159,10 @@ export function visualReportMarkdown(rows: readonly {route: string; examiner: re
   for (const row of rows) {
     lines.push(`### ${row.route}`);
     for (const score of row.examiner) {
-      lines.push(`- ${score.axis}: examinador ${score.score}/10 em ${score.region}. ${score.suggestion}`);
+      const review = row.reviewer.find(item => item.axis === score.axis);
+      const reviewText = review === undefined ? '' : `, revisor ${review.score}/10`;
+      const distance = score.distance === undefined ? '' : ` distância ${score.distance}/10`;
+      lines.push(`- ${score.axis}: examinador ${score.score}/10${reviewText} em ${score.region}. ${score.suggestion}${distance}`);
       const bucket = averages.get(score.axis) ?? {sum: 0, count: 0};
       bucket.sum += score.score;
       bucket.count += 1;
