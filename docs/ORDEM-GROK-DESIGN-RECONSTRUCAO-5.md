@@ -1,4 +1,13 @@
-# Ordem para o Grok — reconstrução do design, rodada 5
+# Ordem — reconstrução do design, rodada 5
+
+**Executor (mudança de 18/11/2026):** a cota do Grok acabou. Esta ordem passa a ser executada pelo Gemini 4 Hydrogen High (`agy`), em 3 trabalhadores, cada um no seu worktree:
+
+- **A** — item 1 (1a a 1d), worktree `/home/app/projects/agent-control-design`, ramo `task/design-r3-image-proof`.
+- **B** — itens 2 e 5, worktree `/home/app/projects/agent-control-design-b`, ramo `task/design-r5-b`.
+- **C** — itens 3 e 4, worktree `/home/app/projects/agent-control-design-c`, ramo `task/design-r5-c`.
+
+Cada trabalhador faz **só os seus itens** e não edita arquivos de outro bloco. No lugar do trailer do Grok, use `Co-Authored-By: Gemini 4 Hydrogen <noreply@google.com>`. Rode `npx tsc --noEmit` e os testes **dos arquivos que mudou** (`node --import tsx --test tests/<arquivo>.test.ts`). **Não** rode a suíte completa, o laboratório Docker nem reconstrua imagens: o gerente faz isso depois de juntar os três ramos. Em vez de editar `docs/RELATORIO-GROK-DESIGN.md`, escreva `docs/RELATORIO-R5-<A|B|C>.md` com os commits, os testes rodados e o que não ficou pronto.
+
 
 Escrita pelo gerente (Claude) em 18/11/2026. `grok-4.7`, esforço alto, **sem fast**, até 8 subagentes. Worktree `/home/app/projects/agent-control-design`, ramo `task/design-r3-image-proof` (HEAD `55ae133a`).
 
