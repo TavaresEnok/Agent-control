@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -13,10 +13,19 @@ import {DESIGN_PLANTED_RULES, type DesignWorker} from '../src/design-types.ts';
 
 const labRoot = fileURLToPath(new URL('./fixtures/design-lab-v2/', import.meta.url));
 const enabled = process.env.AC_DESIGN_LAB === '1';
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
 
-function harness(): Pick<DesignModuleInput, 'worker' | 'reserve' | 'release'> {
+function harness(tasks: string[]): Pick<DesignModuleInput, 'worker' | 'reserve' | 'release'> {
   const bench = designBenchWorker();
-  const worker: DesignWorker = {async run(call) { return bench.run(call); }};
+  const worker: DesignWorker = {
+    async run(call) {
+      tasks.push(call.task);
+      return bench.run(call);
+    },
+  };
   return {
     worker,
     reserve: async role => ({
@@ -34,6 +43,8 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
   const pin = readRebuildImagePin(await readFile(new URL('../deploy/design-image-digest.txt', import.meta.url), 'utf8'));
   const files = await readDesignRepository(labRoot);
   const data = await mkdtemp(join(tmpdir(), 'design-lab-v2-'));
+  const tasks: string[] = [];
+  const referenceName = 'referencia.png';
   try {
     const result = await runDesignModule({
       activation: 'personal',
@@ -46,7 +57,8 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
       createdAt: new Date('2026-11-18T18:00:00.000Z'),
       commit: 'lab',
       files,
-      ...harness(),
+      ...harness(tasks),
+      referenceFiles: [{name: referenceName, bytes: PNG_1X1}],
       image: {pinnedImage: pin, timeoutMs: 1_800_000},
       scoreVisual: true,
       recordStates: true,
@@ -57,13 +69,15 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     const coverage = await readFile(join(result.directory, 'cobertura-ferramentas.md'), 'utf8');
     const parsed = JSON.parse(raw) as {findings: {tool: string; rule: string; severity: string; snippet: string; measure?: {kind?: string; px?: number}}[]};
     const rules = parsed.findings.map(item => `${item.tool} ${item.rule} ${item.severity} ${item.snippet}`);
-    await writeFile('/tmp/design-lab-summary.json', JSON.stringify({
+    const summaryPath = join(data, 'lab-summary.json');
+    await writeFile(summaryPath, JSON.stringify({
       directory: result.directory,
       coverage,
       readmeExcerpt: readme.slice(0, 12000),
       rules,
-      achados: result.achados.map(item => ({id: item.id, reference: item.reference, status: item.status, severity: item.severity})),
+      achados: result.achados.map(item => ({id: item.id, reference: item.reference, status: item.status, severity: item.severity, verifier: item.verifier})),
     }, null, 2));
+    console.log(await readFile(summaryPath, 'utf8'));
     const has = (tool: string, rule: string) => parsed.findings.some(item => item.tool === tool && item.rule.includes(rule));
     assert.equal(has('axe', 'WCAG-1-4-3-CONTRASTE') || has('axe', DESIGN_PLANTED_RULES.contrast), true, rules.join('\n'));
     assert.equal(parsed.findings.some(item => item.tool === 'pa11y' && /alt|image-alt|H37/i.test(item.rule + item.snippet)), true, rules.join('\n'));
@@ -76,16 +90,30 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     assert.match(readme, /Julgamento incerto/);
     assert.match(readme, /A rota \/item\/:id usou o exemplo \/item\/42/);
     assert.match(readme, /\/painel: estado vazio, carregando, erro e logado não capturado/);
+    assert.match(readme, /logado não capturado/);
     assert.doesNotMatch(readme, /\/: estado vazio, carregando, erro e logado não capturado/);
+    assert.match(readme, /rota indisponível \(404\)/);
+    assert.match(readme, /examinador \d+\/10, revisor /);
+    assert.match(readme, /Medidos:/);
     assert.match(readme, /Esta rodada executou o contêiner/);
-    assert.match(coverage, /3 rotas/);
+    assert.match(coverage, /css-analyzer/);
     const imageDoc = JSON.parse(await readFile(join(result.directory, 'imagem-achados-brutos.json'), 'utf8')) as {
       screenshots?: {route?: string; state?: string}[];
     };
     const shots = imageDoc.screenshots ?? [];
-    assert.equal(shots.some(item => item.route === '/' && item.state === 'logado'), true);
+    assert.equal(shots.some(item => item.state === 'logado'), false);
     assert.equal(shots.some(item => item.route === '/' && item.state === 'vazio'), true);
     assert.equal(shots.some(item => item.route === '/item/42' && item.state === 'padrao'), true);
+    assert.equal(parsed.findings.some(item => item.rule === 'DESIGN-ROTA-INDISPONIVEL' && item.snippet.includes('404')), true, rules.join('\n'));
+    assert.equal(parsed.findings.some(item => item.tool === 'css-analyzer' && item.rule.startsWith('DESIGN-WALLACE-') && item.measure?.kind === 'wallace'), true, rules.join('\n'));
+    const wallace = parsed.findings.filter(item => item.tool === 'css-analyzer').length;
+    const cssRow = coverage.split('\n').find(line => line.includes('css-analyzer'));
+    assert.ok(cssRow, coverage);
+    const cssCells = cssRow.split('|').slice(1, -1).map(cell => cell.trim());
+    assert.equal(cssCells[3], String(wallace));
+    assert.match(cssCells[2] ?? '', /folhas/);
+    const referenceSha = createHash('sha256').update(PNG_1X1).digest('hex');
+    assert.equal(tasks.some(task => task.includes('Referências visuais:') && task.includes(`nome=${referenceName}`) && task.includes(`contêiner=/planning/capturas/${referenceSha}.png`)), true);
     for (const line of coverage.split('\n')) {
       if (!line.startsWith('|') || line.startsWith('| Ferramenta') || line.startsWith('|---')) continue;
       const cells = line.split('|').slice(1, -1).map(cell => cell.trim());

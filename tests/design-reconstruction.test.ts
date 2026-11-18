@@ -95,7 +95,9 @@ test('crítica visual diverge na tela genérica e confirma o eixo baixo', async 
 test('estados sem declaração ficam como não capturado e o parâmetro sem exemplo é pulado', async () => {
   const config = parseDesignProjectConfig(JSON.stringify({routes: {'/': {states: ['vazio', 'logado'], dark: true}}}));
   const planned = planDesignRoutes({discovered: [{route: '/'}], dynamicSkipped: ['/item/:id'], config, darkInSource: false});
-  assert.equal(planned.planned[0]?.states.includes('logado'), true);
+  assert.deepEqual(planned.planned[0]?.states, [{name: 'padrao'}]);
+  assert.equal(planned.wantsLogin, true);
+  assert.equal(planned.notes.some(note => note === '/: estado vazio e logado não capturado.'), true);
   assert.equal(planned.notes.some(note => note.includes('/item/:id') && note.includes('sem exemplo')), true);
   const withExample = parseDesignProjectConfig(JSON.stringify({
     routes: {
@@ -110,10 +112,10 @@ test('estados sem declaração ficam como não capturado e o parâmetro sem exem
     config: withExample,
     darkInSource: false,
   });
-  assert.equal(resolved.planned.some(item => item.route === '/item/42' && item.states.includes('erro')), true);
+  assert.equal(resolved.planned.some(item => item.route === '/item/42' && item.states.every(state => state.name === 'padrao')), true);
   assert.equal(resolved.notes.some(note => note.includes('A rota /item/:id usou o exemplo /item/42')), true);
-  assert.equal(resolved.notes.some(note => note.startsWith('/: estado')), false);
-  assert.equal(resolved.notes.some(note => note.startsWith('/item/42: estado')), false);
+  assert.equal(resolved.notes.some(note => note === '/: estado vazio e logado não capturado.'), true);
+  assert.equal(resolved.notes.some(note => note === '/item/42: estado erro não capturado.'), true);
   assert.equal(resolved.notes.some(note => note.startsWith('/painel: estado')), true);
   const data = await mkdtemp(join(tmpdir(), 'design-states-'));
   try {
@@ -175,7 +177,7 @@ test('o módulo lê design.config.json na raiz e não segue symlink', async () =
     });
     const readme = await readFile(join(result.directory, 'README.md'), 'utf8');
     assert.match(readme, /A rota \/item\/:id usou o exemplo \/item\/42/);
-    assert.doesNotMatch(readme, /\/: estado vazio, carregando, erro e logado não capturado/);
+    assert.match(readme, /\/: estado vazio, carregando, erro e logado não capturado/);
     assert.match(readme, /\/painel: estado vazio, carregando, erro e logado não capturado/);
     await rm(join(repo, 'design.config.json'));
     await writeFile(join(outside, 'design.config.json'), '{"routes":{"/":{"states":["logado"]}}}');
@@ -262,10 +264,21 @@ test('modo criar faz a rodada, grava fora do repositório e para quando a tela m
       intentId: randomUUID(),
       examine: async (round, files) => {
         rounds += 1;
-        const css = files.find(file => file.path.endsWith('.css'))?.text ?? '';
-        const high = css.includes('linear-gradient');
         assert.equal(files.every(file => !file.text.includes('base64,')), true);
-        return {high, belowVisual8: false, findings: high ? [{tool: 'visual', rule: 'DESIGN-VISUAL-MARCA', cwe: null, file: 'inicio.css', line: 1, severity: 'media', snippet: 'gradiente', fingerprint: 'a'.repeat(64)}] : [], notes: [`rodada ${round}`]};
+        const names = files.filter(file => file.path.endsWith('.html')).map(file => file.path.slice(0, -'.html'.length));
+        return {
+          notes: [`rodada ${round}`],
+          screens: names.map(name => {
+            const css = files.find(file => file.path === `${name}.css`)?.text ?? '';
+            const rejected = css.includes('linear-gradient');
+            return {
+              name,
+              rejected,
+              findings: rejected ? [{tool: 'visual', rule: 'DESIGN-VISUAL-MARCA', cwe: null, file: `${name}.css`, line: 1, severity: 'media', snippet: 'gradiente', fingerprint: 'a'.repeat(64), measure: {kind: 'token', px: 32}}] : [],
+              visualNotes: [],
+            };
+          }),
+        };
       },
     });
     assert.equal(rounds, 2);

@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {constants} from 'node:fs';
 import {mkdirSync} from 'node:fs';
@@ -96,8 +97,19 @@ export function regressionMarkdown(hits: readonly RegressionHit[]): string {
   return lines.join('\n');
 }
 
+const PROJECT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
+const BASELINE_PNG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,140}\.png$/;
+
 export function ensurePrivateDir(path: string): void {
   mkdirSync(path, {recursive: true, mode: 0o700});
+}
+
+/** `/a-b` e `/a/b` produzem nomes diferentes: 8 hex de sha256 da rota entram no arquivo. */
+export function baselineFileName(route: string, viewport: number, theme: string, state: string): string {
+  const hash = createHash('sha256').update(route).digest('hex').slice(0, 8);
+  const part = (value: string) => value.replace(/[^A-Za-z0-9._-]+/g, '').slice(0, 24);
+  const view = Number.isSafeInteger(viewport) ? String(Math.trunc(Math.abs(viewport))).slice(0, 6) : '0';
+  return `r${hash}-${view || '0'}-${part(theme) || 'tema'}-${part(state) || 'estado'}.png`;
 }
 
 export async function approveDesignBaseline(input: {
@@ -105,11 +117,11 @@ export async function approveDesignBaseline(input: {
   projectId: string;
   captures: readonly {fileName: string; bytes: Buffer}[];
 }): Promise<string> {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/.test(input.projectId)) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
+  if (!PROJECT_ID.test(input.projectId)) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
   const directory = join(input.dataDirectory, 'design-baseline', input.projectId);
   await mkdir(directory, {recursive: true, mode: 0o700});
   for (const capture of input.captures) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,140}\.png$/.test(capture.fileName)) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
+    if (!BASELINE_PNG.test(capture.fileName)) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
     const path = join(directory, capture.fileName);
     const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
     try {
@@ -124,6 +136,7 @@ export async function approveDesignBaseline(input: {
 }
 
 export async function baselineBuffer(dataDirectory: string, projectId: string, fileName: string): Promise<Buffer | null> {
+  if (!PROJECT_ID.test(projectId) || !BASELINE_PNG.test(fileName)) throw new Refusal('DESIGN_PATH_FORBIDDEN', 403);
   try {
     return await readFile(join(dataDirectory, 'design-baseline', projectId, fileName));
   } catch {

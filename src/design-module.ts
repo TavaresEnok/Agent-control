@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Id, Refusal} from './contracts.ts';
+import {writeDesignLoginState} from './design-browser.ts';
 import {readDesignCaptureStageNote, writeDesignExamCaptures} from './design-capture-stage.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
@@ -123,7 +124,21 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const reference = input.referenceFiles === undefined || input.referenceFiles.length === 0
     ? undefined
     : await stageDesignReferences({dataDirectory: input.dataDirectory, runId: input.runId, files: input.referenceFiles, repository: input.repo});
-  const image = input.image === undefined ? undefined : await executeDesignImage({
+  let loginState: string | undefined;
+  let loginDir: string | undefined;
+  let loginNote = '';
+  if (input.image !== undefined && plannedStates?.wantsLogin === true && input.login !== undefined) {
+    try {
+      loginState = await writeDesignLoginState(input.targetUrl, input.login);
+      loginDir = dirname(loginState);
+    } catch (error) {
+      if (error instanceof Refusal && error.code === 'DESIGN_PASSWORD_LEAK') throw error;
+      loginNote = 'O estado logado não foi capturado: o login no host falhou.';
+    }
+  }
+  const image = await (async () => {
+    try {
+      return input.image === undefined ? undefined : await executeDesignImage({
     image: input.image.pinnedImage,
     repository: input.repo,
     targetUrl: input.targetUrl,
@@ -140,13 +155,22 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       : plannedStates === undefined
       ? designExamPlan(discoverRoutesFromSource(input.files), filesDark(input.files))
       : {
-          routes: plannedStates.planned.map(route => ({route: route.route, themes: route.themes, states: route.states})),
+          routes: plannedStates.planned.map(route => ({
+            route: route.route,
+            themes: route.themes,
+            states: imageStates(route),
+          })),
           viewports: [375, 768, 1440],
           stylelint: stylelintConfig(),
         },
     ...(input.image.run === undefined ? {} : {run: input.image.run}),
     ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
-  });
+    ...(loginState === undefined ? {} : {loginState}),
+      });
+    } finally {
+      if (loginDir !== undefined) await rm(loginDir, {recursive: true, force: true});
+    }
+  })();
   if (image && !image.ok) {
     await writeImageFailure(input, target.origin, image);
     throw new Refusal(image.code === 'DESIGN_IMAGE_TIMEOUT' ? 'DESIGN_IMAGE_TIMEOUT' : 'DESIGN_IMAGE_FAILED');
@@ -156,6 +180,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     input.files,
     routeFileMap(input.files, projectConfig),
   );
+  for (const item of image?.declaredFindings ?? []) {
+    if (!findings.some(existing => existing.fingerprint === item.fingerprint)) findings.push(item);
+  }
   const samples = [...(image?.computed ?? []), ...(input.computedSamples ?? [])];
   const tokens = samples.length > 0 || input.analyzeTokens === true
     ? analyzeDesignTokens(input.files[0]?.path ?? 'tokens', samples, loadDesignReferences(referencesDirectory()))
@@ -163,7 +190,12 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   if (tokens) findings.push(...tokens.findings);
   const imageRows = image === undefined ? [] : applyHostFindingCounts(image.coverage, findings);
   const routes = discoverRoutesFromSource(input.files);
-  const notes: string[] = [...(plannedStates?.notes ?? [])];
+  const stateNotes = [
+    ...(plannedStates?.notes ?? []),
+    ...(loginNote.length > 0 ? [loginNote] : []),
+    ...(image?.notes.filter(note => note.includes('indisponível')) ?? []),
+  ];
+  const notes: string[] = [...stateNotes];
   if (reference) notes.push(reference.note);
   const captured = await captureIfAsked(input, target.origin, routes, notes);
   for (const shot of image?.shots ?? []) {
@@ -181,7 +213,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     });
   }
   if (image) notes.push(`Imagem ${image.code}.`);
-  const staged = await stageDesignCaptures(input.dataDirectory, input.runId, captured.held);
+  const staged = await stageDesignCaptures(input.dataDirectory, input.runId, captured.held, input.referenceFiles ?? []);
   const routesByFile = new Map<string, string[]>();
   for (const route of routes) {
     const key = route.file.slice(0, 400);
@@ -215,6 +247,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       release: input.release,
       ...(input.scoreVisual === true ? {scoreVisual: true} : {}),
       ...(reference?.note ? {referenceNote: reference.note} : {}),
+      ...(staged.references.length > 0 ? {references: staged.references} : {}),
     });
     const stageNote = await readDesignCaptureStageNote();
     if (stageNote !== undefined) notes.push(stageNote);
@@ -230,8 +263,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     if (!captured.files.some(file => file.fileName === diff.fileName)) captured.files.push(diff);
   }
   if (input.approveBaseline === true) await approveDesignBaseline({dataDirectory: input.dataDirectory, projectId: input.projectId, captures: captured.files.filter(file => !file.fileName.startsWith('diff-'))});
-  if (examined.confirmations.length > 999) throw new Refusal('DESIGN_FINDING_LIMIT');
-  const achados = examined.confirmations.map((item, index) => toAchado(index + 1, item.finding, item.confirm, item.verifier));
+  const achados = assembleAchados(findings, examined.confirmations);
+  if (achados.length > 999) throw new Refusal('DESIGN_FINDING_LIMIT');
   const coverageRows = screenRows(routes, captured.records);
   const mapMarkdown = [
     '# Mapa',
@@ -244,7 +277,19 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const raw = designRawDocument(target.origin, findings);
   const note = [input.note, ...notes].filter(part => part && part.trim().length > 0).join(' ').replace(/\s+/g, ' ').trim().slice(0, 500)
     || 'Verificação de design somente leitura concluída.';
-  assertPasswordAbsent(input.login?.password, {mapMarkdown, raw, note, achados});
+  const referenceMarkdown = referenceSection(reference?.note, staged.references);
+  const extras = reportExtras(input, image, imageRows, tokens, examined.visual, referenceMarkdown, regression.markdown, stateNotes);
+  const split = measuredJudgedMarkdown(achados);
+  if (split.length > 0) extras.sections = [...(extras.sections ?? []), {title: 'Medido e julgado', markdown: split}];
+  assertPasswordAbsent(input.login?.password, {
+    mapMarkdown,
+    raw,
+    note,
+    achados,
+    sections: extras.sections,
+    files: extras.files,
+    coverage: examined.coverage,
+  });
   const written = await writeDesignReport({
     dataDirectory: input.dataDirectory,
     projectId: input.projectId,
@@ -258,7 +303,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     note,
     captures: captured.files,
     emptyStates: captured.emptyStates,
-    ...reportExtras(input, image, imageRows, tokens, examined.visual, reference?.note, regression.markdown, plannedStates?.notes),
+    ...extras,
   });
   const read = await readDesignReport(input.dataDirectory, input.projectId, input.runId);
   return {
@@ -275,12 +320,15 @@ function toAchado(
   index: number,
   finding: DesignExamFinding,
   confirm: DesignConfirmResult,
-  verifier: {model: string; provider: string},
+  verifier: {model: string; provider: string} | null,
 ): DesignAchadoValue {
   const proof = [confirm.proof, confirm.reason]
     .filter((part, at, all) => part.length > 0 && all.indexOf(part) === at)
     .join('\n')
     .slice(0, 2000);
+  const sources = verifier === null
+    ? ['medida', finding.reference]
+    : ['examinador', finding.reference, verifier.provider];
   return DesignAchado.parse({
     id: `ACH-${String(index).padStart(3, '0')}`,
     title: finding.title.slice(0, 200),
@@ -293,9 +341,100 @@ function toAchado(
     proof,
     suggestion: finding.suggestion.slice(0, 2000),
     acceptance: DESIGN_ACCEPTANCE,
-    sources: ['examinador', finding.reference, verifier.provider].filter(part => part.length > 0).slice(0, 20),
+    sources: sources.filter(part => part.length > 0).slice(0, 20),
     secretPreview: null,
   });
+}
+
+function assembleAchados(
+  rawFindings: readonly DesignRawFinding[],
+  confirmations: readonly {
+    finding: DesignExamFinding;
+    confirm: DesignConfirmResult;
+    verifier: {model: string; provider: string} | null;
+  }[],
+): DesignAchadoValue[] {
+  const achados: DesignAchadoValue[] = [];
+  const covered: string[] = [];
+  for (const item of confirmations) {
+    achados.push(toAchado(achados.length + 1, item.finding, item.confirm, item.verifier));
+    if (item.verifier === null) covered.push(`${item.finding.file}\u0000${item.finding.reference}`);
+  }
+  for (const raw of rawFindings) {
+    const routeDown = raw.tool === 'navegacao' && raw.rule === 'DESIGN-ROTA-INDISPONIVEL';
+    if (raw.measure === undefined && !routeDown) continue;
+    const already = covered.some(entry => {
+      const split = entry.indexOf('\u0000');
+      return entry.slice(0, split) === raw.file && entry.slice(split + 1).includes(raw.rule);
+    });
+    if (already) continue;
+    achados.push(raw.measure === undefined ? routeDownAchado(achados.length + 1, raw) : measuredRawAchado(achados.length + 1, raw));
+  }
+  return achados;
+}
+
+function measuredRawAchado(index: number, finding: DesignRawFinding): DesignAchadoValue {
+  const measure = finding.measure;
+  if (measure === undefined) throw new Refusal('DESIGN_MODULE_INVALID', 400);
+  const detail = measure.kind === 'contrast' ? `razão ${measure.ratio}`
+    : measure.kind === 'empty' ? `captura ${measure.capture}`
+      : measure.kind === 'lighthouse' ? `${measure.metric} ${measure.value}`
+        : measure.kind === 'wallace' ? `${measure.metric} ${measure.value}`
+          : `${measure.kind} ${measure.px}px`;
+  return DesignAchado.parse({
+    id: `ACH-${String(index).padStart(3, '0')}`,
+    title: finding.rule.slice(0, 200),
+    severity: finding.severity,
+    status: 'confirmado',
+    verifier: null,
+    reference: finding.rule.slice(0, 200),
+    where: {file: finding.file.slice(0, 400), line: finding.line},
+    scenario: `Medido por ${finding.tool}. ${finding.snippet}`.slice(0, 2000),
+    proof: `Medido: ${detail}. ${finding.snippet}`.replace(/\s+/g, ' ').trim().slice(0, 2000),
+    suggestion: 'A medida confirma o achado. A correção precisa mudar o valor medido.',
+    acceptance: DESIGN_ACCEPTANCE,
+    sources: ['medida', finding.tool],
+    secretPreview: null,
+  });
+}
+
+function routeDownAchado(index: number, finding: DesignRawFinding): DesignAchadoValue {
+  return DesignAchado.parse({
+    id: `ACH-${String(index).padStart(3, '0')}`,
+    title: finding.rule.slice(0, 200),
+    severity: finding.severity,
+    status: 'confirmado',
+    verifier: null,
+    reference: finding.rule.slice(0, 200),
+    where: {file: finding.file.slice(0, 400), line: finding.line},
+    scenario: `Medido pela navegação. ${finding.snippet}`.slice(0, 2000),
+    proof: finding.snippet.slice(0, 2000),
+    suggestion: 'A rota precisa responder abaixo de 400 antes de entrar no exame.',
+    acceptance: DESIGN_ACCEPTANCE,
+    sources: ['medida', finding.tool],
+    secretPreview: null,
+  });
+}
+
+function referenceSection(note: string | undefined, references: readonly {name: string}[]): string | undefined {
+  const lines: string[] = [];
+  if (note !== undefined && note.trim().length > 0) lines.push(note.trim());
+  if (references.length > 0) lines.push(`Imagens enviadas ao exame, ao lado da captura: ${references.map(item => item.name).join(', ')}.`);
+  return lines.length === 0 ? undefined : lines.join('\n');
+}
+
+function measuredJudgedMarkdown(achados: readonly DesignAchadoValue[]): string {
+  if (achados.length === 0) return '';
+  const measured = achados.filter(item => item.verifier === null && item.sources.includes('medida'));
+  const judged = achados.filter(item => item.verifier !== null);
+  const line = (item: DesignAchadoValue) => `- ${item.id} ${item.reference} (${item.status})`;
+  return [
+    `Medidos: ${measured.length}. A medida confirma, sem modelo.`,
+    ...measured.map(line),
+    '',
+    `Julgados: ${judged.length}. O revisor confirmou.`,
+    ...judged.map(line),
+  ].join('\n');
 }
 
 function chooseScreens(
@@ -443,13 +582,15 @@ async function stageDesignCaptures(
   dataDirectory: string,
   runId: string,
   held: readonly HeldCapture[],
+  extras: readonly {name: string; bytes: Buffer}[],
 ): Promise<{
   byRoute: Map<string, DesignScreenCapture[]>;
+  references: {path: string; sha256: string; name: string}[];
   publish: () => void;
   conceal: () => void;
   cleanup: () => Promise<void>;
 }> {
-  return writeDesignExamCaptures(dataDirectory, runId, held);
+  return writeDesignExamCaptures(dataDirectory, runId, held, extras);
 }
 
 function referencesDirectory(): string {
@@ -525,6 +666,12 @@ async function readRepoDesignConfig(repo: string, files: readonly DesignSourceFi
   } finally {
     await handle.close();
   }
+}
+
+function imageStates(route: {states: readonly {name: string; url?: string; acoes?: readonly string[]}[]; loginState: boolean}): unknown[] {
+  const states: unknown[] = route.states.map(state => ({...state}));
+  if (route.loginState && !route.states.some(state => state.name === 'logado')) states.push({name: 'logado'});
+  return states;
 }
 
 function statePlan(files: readonly DesignSourceFile[], config: DesignProjectConfig) {
@@ -608,12 +755,14 @@ function mergeTools(left: DesignToolReports | undefined, right: DesignToolReport
   const pa11y = [...(left?.pa11y ?? []), ...(right?.pa11y ?? [])];
   const lighthouse = [...(left?.lighthouse ?? []), ...(right?.lighthouse ?? [])];
   const stylelint = [...(left?.stylelint ?? []), ...(right?.stylelint ?? [])];
+  const cssAnalyzer = [...(left?.cssAnalyzer ?? []), ...(right?.cssAnalyzer ?? [])];
   const keyboard = [...(left?.keyboard ?? []), ...(right?.keyboard ?? [])];
   return {
     ...(axe.length > 0 ? {axe} : {}),
     ...(pa11y.length > 0 ? {pa11y} : {}),
     ...(lighthouse.length > 0 ? {lighthouse} : {}),
     ...(stylelint.length > 0 ? {stylelint} : {}),
+    ...(cssAnalyzer.length > 0 ? {cssAnalyzer} : {}),
     ...(keyboard.length > 0 ? {keyboard} : {}),
   };
 }
