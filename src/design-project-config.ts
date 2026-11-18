@@ -37,6 +37,11 @@ const MAX_ACTION_LENGTH = 300;
 const CLICK_STEP = /^clicar\s+(\S+)$/u;
 const WAIT_STEP = /^esperar\s+(\S+)$/u;
 const FILL_STEP = /^preencher\s+(\S+)\s+(.+)$/u;
+const SIDE_EFFECT_STATE_TOKEN = /(?:logout|sair|delete|excluir|remover|apagar)/i;
+
+function hasSideEffectStateToken(value: string): boolean {
+  return SIDE_EFFECT_STATE_TOKEN.test(value);
+}
 
 /** A rota planejada pode ser o exemplo concreto de uma rota com parâmetro. */
 function declaredRoute(config: DesignProjectConfig, route: string): DesignRouteConfig | undefined {
@@ -63,25 +68,26 @@ export function parseDesignActionStep(step: string): DesignActionStep | undefine
   if (trimmed.length === 0 || trimmed.length > MAX_ACTION_LENGTH || /[\u0000-\u001f]/.test(trimmed)) return undefined;
   const click = CLICK_STEP.exec(trimmed);
   const clickSelector = click?.[1];
-  if (clickSelector !== undefined) return {op: 'clicar', selector: clickSelector};
+  if (clickSelector !== undefined) return hasSideEffectStateToken(clickSelector) ? undefined : {op: 'clicar', selector: clickSelector};
   const wait = WAIT_STEP.exec(trimmed);
   const waitSelector = wait?.[1];
-  if (waitSelector !== undefined) return {op: 'esperar', selector: waitSelector};
+  if (waitSelector !== undefined) return hasSideEffectStateToken(waitSelector) ? undefined : {op: 'esperar', selector: waitSelector};
   const fill = FILL_STEP.exec(trimmed);
   const fillSelector = fill?.[1];
   const fillText = fill?.[2];
   if (fillSelector !== undefined && fillText !== undefined && fillText.length > 0) {
-    return {op: 'preencher', selector: fillSelector, text: fillText};
+    return hasSideEffectStateToken(fillSelector) ? undefined : {op: 'preencher', selector: fillSelector, text: fillText};
   }
   return undefined;
 }
 
-/** Caminho relativo no mesmo host. Sem esquema, sem `..` e sem `javascript:`. */
+/** Caminho relativo no mesmo host. Sem esquema, sem `..`, sem `javascript:` e sem termos com efeito colateral. */
 export function isDesignStatePath(path: string): boolean {
   if (path.length === 0 || path.length > 200) return false;
   if (!path.startsWith('/') || path.startsWith('//')) return false;
   if (path.includes('\\') || /[\u0000-\u001f\s]/.test(path)) return false;
   if (/javascript:/i.test(path) || path.includes('://')) return false;
+  if (hasSideEffectStateToken(path)) return false;
   let decoded = path;
   try {
     decoded = decodeURI(path);
@@ -90,6 +96,7 @@ export function isDesignStatePath(path: string): boolean {
   }
   if (!decoded.startsWith('/') || decoded.startsWith('//')) return false;
   if (decoded.includes('..') || decoded.includes('\\') || /javascript:/i.test(decoded)) return false;
+  if (hasSideEffectStateToken(decoded)) return false;
   try {
     const url = new URL(path, 'http://design.local');
     if (url.origin !== 'http://design.local') return false;

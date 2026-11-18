@@ -472,6 +472,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   }[];
   notes: string[];
   visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[];
+  visualMissing: {file: string; route: string}[];
   loginStale: boolean;
   modelCoverage: DesignExamCoverage;
 }> {
@@ -487,15 +488,20 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   const ids = input.checklist.map(entry => entry.id).filter(id => id.length > 0 && id.length <= 80).slice(0, 120);
   if (ids.length === 0) {
     notes.push('A lista de verificação veio vazia.');
-    return {findings, coverage, confirmations, notes, visual, loginStale: false, modelCoverage: blankExamCoverage()};
+    if (input.scoreVisual === true) notes.push('A crítica visual foi pedida, mas nenhuma tela entrou no exame.');
+    return {findings, coverage, confirmations, notes, visual, visualMissing: [], loginStale: false, modelCoverage: blankExamCoverage()};
   }
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
   const htmlCount = input.screens.filter(screen => !isNonHtmlResponse(screen.code)).length;
+  if (input.scoreVisual === true && htmlCount === 0) {
+    notes.push('A crítica visual foi pedida, mas nenhuma tela entrou no exame.');
+  }
   const modelCoverage: DesignExamCoverage = {
     examiner: {model: 'desconhecido', requested: htmlCount, judged: 0, failure: 'nenhuma'},
     reviewer: {model: 'desconhecido', requested: input.scoreVisual === true ? htmlCount : 0, judged: 0, failure: 'nenhuma'},
   };
+  const visualComplete = new Set<(typeof input.screens)[number]>();
   const remember = (role: 'examiner' | 'reviewer', model: string) => {
     if (modelCoverage[role].model !== 'desconhecido') return;
     const clean = model.replace(/\|/g, '/').replace(/\s+/g, ' ').trim().slice(0, 100);
@@ -555,7 +561,6 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       /* The provider code is already on the coverage row. Visual scoring still runs when it was requested. */
     } else if (!exam?.success) {
       notes.push(`O exame de ${screen.file} não veio em JSON válido.`);
-      continue;
     } else {
       if (input.scoreVisual !== true) modelCoverage.examiner.judged += 1;
       if (!exam.data.filesRead.includes(screen.file)) {
@@ -624,8 +629,14 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       if (examinerVisual.scores) modelCoverage.examiner.judged += 1;
       if (reviewerVisual.scores) modelCoverage.reviewer.judged += 1;
       if (!examinerVisual.scores || !reviewerVisual.scores) {
-        notes.push(`A crítica visual de ${oneLine(screen.route)} não veio completa.`);
+        const missingRoles = !examinerVisual.scores && !reviewerVisual.scores
+          ? 'examinador e revisor'
+          : !examinerVisual.scores
+            ? 'examinador'
+            : 'revisor';
+        notes.push(`A crítica visual de ${oneLine(screen.route)} (${screen.file}) não veio completa (${missingRoles}).`);
       } else {
+        visualComplete.add(screen);
         const uncertain = uncertainVisualAxes(examinerVisual.scores, reviewerVisual.scores);
         visual.push({file: screen.file, route: screen.route, examiner: examinerVisual.scores, reviewer: reviewerVisual.scores, uncertain});
         if (uncertain.length > 0) notes.push(`Julgamento incerto em ${oneLine(screen.route)}: ${uncertain.join('; ')}.`.slice(0, 500));
@@ -656,5 +667,11 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     if (!notes.includes(EXAM_LOGIN_STALE_TEXT)) notes.push(EXAM_LOGIN_STALE_TEXT);
   }
 
-  return {findings, coverage, confirmations, notes, visual, loginStale, modelCoverage};
+  const visualMissing = input.scoreVisual === true
+    ? input.screens
+        .filter(screen => !isNonHtmlResponse(screen.code) && !visualComplete.has(screen))
+        .map(screen => ({file: screen.file, route: screen.route}))
+    : [];
+
+  return {findings, coverage, confirmations, notes, visual, visualMissing, loginStale, modelCoverage};
 }

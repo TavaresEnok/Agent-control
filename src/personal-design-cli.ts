@@ -48,6 +48,7 @@ const messages: Record<string, string> = {
   DESIGN_CREATE_INVALID: 'O pedido de criação não tem telas ou rodadas válidas.',
   DESIGN_CREATE_MODEL_FAILED: 'O modelo não devolveu as telas.',
   DESIGN_VISUAL_UNJUDGED: 'A crítica visual foi pedida e nenhuma tela foi julgada.',
+  DESIGN_VISUAL_NO_SCREENS: 'A crítica visual foi pedida, mas nenhuma tela entrou no exame.',
   EXAM_LOGIN_STALE: EXAM_LOGIN_STALE_TEXT,
   DESIGN_REFERENCE_INVALID: 'A referência tem que ser PNG ou JPG.',
   DESIGN_REFERENCE_LIMIT: 'O exame aceita no máximo 10 referências.',
@@ -61,11 +62,25 @@ export function designCliFailureText(error: unknown): string {
   return Object.hasOwn(messages, code) ? messages[code]! : 'O exame de design falhou.';
 }
 
-/** The report is already on disk. A stale login or an unjudged visual exam still exits non-zero. */
-export function designExamStatus(result: {loginStale?: boolean; visualUnjudged?: boolean}): {code: number; lines: string[]} {
+/** The report is already on disk. A stale login or an incomplete visual exam still exits non-zero. */
+export function designExamStatus(result: {
+  loginStale?: boolean;
+  visualUnjudged?: boolean;
+  visualRequested?: number;
+  visualJudged?: number;
+  visualMissing?: readonly string[];
+}): {code: number; lines: string[]} {
   const lines: string[] = [];
   if (result.loginStale) lines.push(EXAM_LOGIN_STALE_TEXT);
-  if (result.visualUnjudged) lines.push(messages.DESIGN_VISUAL_UNJUDGED!);
+  if (result.visualUnjudged) {
+    if (result.visualRequested === 0) {
+      lines.push(messages.DESIGN_VISUAL_NO_SCREENS!);
+    } else if ((result.visualJudged ?? 0) > 0 && result.visualMissing && result.visualMissing.length > 0) {
+      lines.push(`A crítica visual ficou incompleta. Telas sem nota completa: ${result.visualMissing.join(', ')}.`);
+    } else {
+      lines.push(messages.DESIGN_VISUAL_UNJUDGED!);
+    }
+  }
   return {code: lines.length > 0 ? 1 : 0, lines};
 }
 
