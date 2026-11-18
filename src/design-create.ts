@@ -10,7 +10,8 @@ import {DesignWorkerCall} from './design-types.ts';
 
 const SCREEN_NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
-const DROPPED_TAGS = new Set(['script', 'iframe', 'object', 'embed', 'base']);
+const ALLOWED_DATA_IMAGE = /^data:image\/(?:png|jpeg|webp)(?:;base64)?,/i;
+const DROPPED_TAGS = new Set(['script', 'iframe', 'object', 'embed', 'base', 'noscript']);
 const URL_ATTRIBUTES = new Set(['href', 'src', 'action', 'formaction', 'poster', 'cite', 'background', 'data', 'ping']);
 const HTML_NS = parse5Html.NS.HTML;
 
@@ -111,44 +112,28 @@ function decodeCssValue(value: string): string {
   return out;
 }
 
-function stripCssComments(value: string): string {
-  let out = '';
-  for (let index = 0; index < value.length; index += 1) {
-    if (value.startsWith('/*', index)) {
-      const end = value.indexOf('*/', index + 2);
-      if (end === -1) break;
-      index = end + 1;
-      continue;
-    }
-    out += value[index] ?? '';
-  }
-  return out;
-}
-
-/** URL que o navegador iria buscar fora da pasta, ou esquema de script. */
-function isRemoteOrScriptUrl(raw: string): boolean {
-  let value = stripCssComments(raw).trim();
-  if (value.length >= 2) {
-    const quote = value[0];
-    if ((quote === '"' || quote === "'") && value.endsWith(quote)) value = value.slice(1, -1).trim();
-  }
-  value = decodeCssValue(value).trim();
-  const compact = value.replace(/[\u0000-\u0020]+/g, '').replace(/\\/g, '/').toLowerCase();
-  if (compact.startsWith('javascript:') || compact.startsWith('vbscript:')) return true;
-  if (compact.startsWith('http:') || compact.startsWith('https:')) return true;
-  return compact.startsWith('//');
-}
-
 function isAllowedFontHref(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (/[\u0000-\u001f\u007f\\]/.test(trimmed)) return false;
   let url: URL;
   try {
-    url = new URL(raw.trim());
+    url = new URL(trimmed);
   } catch {
     return false;
   }
-  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '') return false;
+  if (url.protocol !== 'https:' || url.port !== '' || url.username !== '' || url.password !== '') return false;
   const host = url.hostname.toLowerCase().replace(/\.$/, '');
   return FONT_HOSTS.has(host);
+}
+
+/** Lista permitida: só URL relativa (sem esquema e sem //), data:image/{png,jpeg,webp}, ou fontes do Google quando permitido. */
+function isAllowedUrl(raw: string, options: {allowFontHost: boolean; allowDataImage: boolean}): boolean {
+  const trimmed = raw.trim();
+  if (options.allowFontHost && isAllowedFontHref(trimmed)) return true;
+  const compact = trimmed.replace(/[\u0000-\u0020]+/g, '').replace(/\\/g, '/').toLowerCase();
+  if (options.allowDataImage && ALLOWED_DATA_IMAGE.test(compact)) return true;
+  if (compact.startsWith('//')) return false;
+  return !/^[^/?#]*:/.test(compact);
 }
 
 function consumeCssString(css: string, index: number): number {
@@ -191,6 +176,59 @@ function startsIdent(css: string, index: number): boolean {
   return /[A-Za-z0-9_-]/i.test(read.value);
 }
 
+function skipCssSpaceAndComments(css: string, start: number): number {
+  let index = start;
+  while (index < css.length) {
+    if (/\s/.test(css[index] ?? '')) {
+      index += 1;
+      continue;
+    }
+    if (css.startsWith('/*', index)) {
+      const end = css.indexOf('*/', index + 2);
+      if (end === -1) return css.length;
+      index = end + 2;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+function unquoteCssToken(raw: string): string | null {
+  const start = skipCssSpaceAndComments(raw, 0);
+  if (start >= raw.length) return '';
+  const quote = raw[start];
+  if (quote === '"' || quote === "'") {
+    const end = consumeCssString(raw, start);
+    if (end <= start + 1 || raw[end - 1] !== quote) return null;
+    const trailing = skipCssSpaceAndComments(raw, end);
+    if (trailing < raw.length) return null;
+    return decodeCssValue(raw.slice(start + 1, end - 1)).trim();
+  }
+  let out = '';
+  let index = start;
+  while (index < raw.length) {
+    if (raw.startsWith('/*', index)) {
+      const end = raw.indexOf('*/', index + 2);
+      if (end === -1) return null;
+      index = end + 2;
+      continue;
+    }
+    const ch = raw[index] ?? '';
+    if (/\s/.test(ch)) {
+      const rest = skipCssSpaceAndComments(raw, index);
+      if (rest < raw.length) return null;
+      break;
+    }
+    if (ch === '"' || ch === "'") return null;
+    const read = readCssChar(raw, index);
+    if (!read || read.next <= index) return null;
+    out += read.value;
+    index = read.next;
+  }
+  return out.trim();
+}
+
 function endOfUrl(css: string, start: number): number {
   let index = start;
   while (index < css.length) {
@@ -214,6 +252,34 @@ function endOfUrl(css: string, start: number): number {
   return -1;
 }
 
+function endOfParenFunction(css: string, start: number): number {
+  let depth = 1;
+  let index = start;
+  while (index < css.length) {
+    if (css.startsWith('/*', index)) {
+      const end = css.indexOf('*/', index + 2);
+      if (end === -1) return -1;
+      index = end + 2;
+      continue;
+    }
+    if (css[index] === '"' || css[index] === "'") {
+      index = consumeCssString(css, index);
+      continue;
+    }
+    if (css[index] === '\\') {
+      index += index + 1 < css.length ? 2 : 1;
+      continue;
+    }
+    if (css[index] === '(') depth += 1;
+    else if (css[index] === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
 function endOfImport(css: string, start: number): number {
   let index = start;
   while (index < css.length) {
@@ -226,6 +292,12 @@ function endOfImport(css: string, start: number): number {
       index = consumeCssString(css, index);
       continue;
     }
+    const urlAt = matchKeyword(css, index, 'url(');
+    if (urlAt !== null) {
+      const endParen = endOfUrl(css, urlAt);
+      index = endParen === -1 ? css.length : endParen + 1;
+      continue;
+    }
     if (css[index] === ';' || css[index] === '{' || css[index] === '}') return css[index] === ';' ? index + 1 : index;
     if (css[index] === '\\') {
       index += index + 1 < css.length ? 2 : 1;
@@ -236,39 +308,103 @@ function endOfImport(css: string, start: number): number {
   return index;
 }
 
-function ruleContainsRemoteUrl(rule: string): boolean {
-  let index = 0;
-  while (index < rule.length) {
-    if (rule.startsWith('/*', index)) {
-      const end = rule.indexOf('*/', index + 2);
-      index = end === -1 ? rule.length : end + 2;
+function allCssUrlsAllowed(
+  segment: string,
+  startIndex: number,
+  options: {allowFontHost: boolean; allowDataImage: boolean},
+): boolean {
+  let index = startIndex;
+  while (index < segment.length) {
+    if (segment.startsWith('/*', index)) {
+      const end = segment.indexOf('*/', index + 2);
+      if (end === -1) return false;
+      index = end + 2;
       continue;
     }
-    if (rule[index] === '"' || rule[index] === "'") {
-      const end = consumeCssString(rule, index);
-      const literal = rule.slice(index + 1, Math.max(index + 1, end - (rule[end - 1] === rule[index] ? 1 : 0)));
-      if (isRemoteOrScriptUrl(literal)) return true;
+    if (segment[index] === '"' || segment[index] === "'") {
+      const end = consumeCssString(segment, index);
+      if (end <= index + 1 || segment[end - 1] !== segment[index]) return false;
+      const decoded = decodeCssValue(segment.slice(index + 1, end - 1)).trim();
+      if (!isAllowedUrl(decoded, options)) return false;
       index = end;
       continue;
     }
-    const urlAt = matchKeyword(rule, index, 'url(');
+    const urlAt = matchKeyword(segment, index, 'url(');
     if (urlAt !== null) {
-      const endParen = endOfUrl(rule, urlAt);
-      const inner = rule.slice(urlAt, endParen === -1 ? rule.length : endParen);
-      if (isRemoteOrScriptUrl(inner)) return true;
-      const next = endParen === -1 ? rule.length : endParen + 1;
-      index = next > index ? next : index + 1;
+      const endParen = endOfUrl(segment, urlAt);
+      if (endParen === -1) return false;
+      const decoded = unquoteCssToken(segment.slice(urlAt, endParen));
+      if (decoded === null || !isAllowedUrl(decoded, options)) return false;
+      index = endParen + 1;
+      continue;
+    }
+    if (segment[index] === '\\') {
+      index += index + 1 < segment.length ? 2 : 1;
       continue;
     }
     index += 1;
   }
-  return false;
+  return true;
 }
 
-/** parse5 não entra em CSS. Esta varredura tira url() e @import que saem da pasta. */
-export function sanitizeCss(css: string): string {
+function isAllowedImportRule(rule: string, allowFontHost: boolean): boolean {
+  const importAt = matchKeyword(rule, 0, '@import');
+  if (importAt === null) return false;
+  const targetStart = skipCssSpaceAndComments(rule, importAt);
+  const firstCh = rule[targetStart];
+  if (firstCh !== '"' && firstCh !== "'" && matchKeyword(rule, targetStart, 'url(') === null) return false;
+  return allCssUrlsAllowed(rule, targetStart, {allowFontHost, allowDataImage: false});
+}
+
+function splitTopLevelCssCommas(inner: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let index = 0;
+  while (index < inner.length) {
+    if (inner.startsWith('/*', index)) {
+      const end = inner.indexOf('*/', index + 2);
+      if (end === -1) break;
+      index = end + 2;
+      continue;
+    }
+    if (inner[index] === '"' || inner[index] === "'") {
+      index = consumeCssString(inner, index);
+      continue;
+    }
+    if (inner[index] === '\\') {
+      index += index + 1 < inner.length ? 2 : 1;
+      continue;
+    }
+    if (inner[index] === '(') depth += 1;
+    else if (inner[index] === ')' && depth > 0) depth -= 1;
+    else if (inner[index] === ',' && depth === 0) {
+      parts.push(inner.slice(start, index));
+      start = index + 1;
+    }
+    index += 1;
+  }
+  parts.push(inner.slice(start));
+  return parts;
+}
+
+function sanitizeImageSet(inner: string, prefix: string): string {
+  const kept: string[] = [];
+  for (const part of splitTopLevelCssCommas(inner)) {
+    const candidate = part.trim();
+    if (candidate.length === 0) continue;
+    if (allCssUrlsAllowed(candidate, 0, {allowFontHost: false, allowDataImage: true})) kept.push(candidate);
+  }
+  return kept.length > 0 ? `${prefix}${kept.join(', ')})` : 'none';
+}
+
+/** parse5 não entra em CSS. Esta varredura aceita só URL relativa, data:image/{png,jpeg,webp} e fontes do Google em @import/@font-face. */
+export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {}): string {
+  const allowFontRules = options.allowFontRules ?? true;
   let out = '';
   let index = 0;
+  let pendingFontFace = false;
+  let fontFaceDepth = 0;
   while (index < css.length) {
     if (css.startsWith('/*', index)) {
       const end = css.indexOf('*/', index + 2);
@@ -283,6 +419,15 @@ export function sanitizeCss(css: string): string {
       index = end > index ? end : index + 1;
       continue;
     }
+    if (allowFontRules && fontFaceDepth === 0) {
+      const fontFaceAt = matchKeyword(css, index, '@font-face');
+      if (fontFaceAt !== null && !startsIdent(css, fontFaceAt)) {
+        pendingFontFace = true;
+        out += css.slice(index, fontFaceAt);
+        index = fontFaceAt;
+        continue;
+      }
+    }
     const importAt = matchKeyword(css, index, '@import');
     if (importAt !== null && !startsIdent(css, importAt)) {
       const end = endOfImport(css, importAt);
@@ -292,25 +437,52 @@ export function sanitizeCss(css: string): string {
         continue;
       }
       const rule = css.slice(index, end);
-      if (!ruleContainsRemoteUrl(rule)) out += rule;
+      if (isAllowedImportRule(rule, allowFontRules)) out += rule;
       index = end;
+      continue;
+    }
+    const imageSetAt = matchKeyword(css, index, '-webkit-image-set(') ?? matchKeyword(css, index, 'image-set(');
+    if (imageSetAt !== null) {
+      const endParen = endOfParenFunction(css, imageSetAt);
+      if (endParen === -1) {
+        out += 'none';
+        break;
+      }
+      out += sanitizeImageSet(css.slice(imageSetAt, endParen), css.slice(index, imageSetAt));
+      index = endParen + 1;
       continue;
     }
     const urlAt = matchKeyword(css, index, 'url(');
     if (urlAt !== null) {
       const endParen = endOfUrl(css, urlAt);
-      const end = endParen === -1 ? css.length : endParen + 1;
-      if (end <= index) {
-        out += css[index] ?? '';
-        index += 1;
-        continue;
+      if (endParen === -1) {
+        out += 'none';
+        break;
       }
-      const inner = css.slice(urlAt, endParen === -1 ? css.length : endParen);
-      out += isRemoteOrScriptUrl(inner) ? 'none' : css.slice(index, end);
-      index = end;
+      const decoded = unquoteCssToken(css.slice(urlAt, endParen));
+      const allowed = decoded !== null && isAllowedUrl(decoded, {
+        allowFontHost: allowFontRules && fontFaceDepth > 0,
+        allowDataImage: true,
+      });
+      out += allowed ? css.slice(index, endParen + 1) : 'none';
+      index = endParen + 1;
       continue;
     }
-    out += css[index] ?? '';
+    const ch = css[index] ?? '';
+    if (ch === '{') {
+      if (pendingFontFace) {
+        pendingFontFace = false;
+        fontFaceDepth = 1;
+      } else if (fontFaceDepth > 0) {
+        fontFaceDepth += 1;
+      }
+    } else if (ch === '}') {
+      if (fontFaceDepth > 0) fontFaceDepth -= 1;
+      pendingFontFace = false;
+    } else if (ch === ';') {
+      pendingFontFace = false;
+    }
+    out += ch;
     index += 1;
   }
   return out;
@@ -327,8 +499,7 @@ function hasRefresh(element: ElementNode): boolean {
 function linkHrefIsBlocked(element: ElementNode): boolean {
   const href = element.attrs.find(attr => attr.name.toLowerCase() === 'href');
   if (!href) return false;
-  if (isAllowedFontHref(href.value)) return false;
-  return isRemoteOrScriptUrl(href.value);
+  return !isAllowedUrl(href.value, {allowFontHost: true, allowDataImage: true});
 }
 
 function shouldDrop(element: ElementNode): boolean {
@@ -338,13 +509,32 @@ function shouldDrop(element: ElementNode): boolean {
   return tag === 'link' && linkHrefIsBlocked(element);
 }
 
+function splitSrcsetCandidates(value: string): string[] {
+  const parts: string[] = [];
+  let index = 0;
+  while (index < value.length) {
+    while (index < value.length && /[\s,]/.test(value[index] ?? '')) index += 1;
+    if (index >= value.length) break;
+    const urlStart = index;
+    const isData = value.slice(index, index + 5).toLowerCase() === 'data:';
+    if (isData) {
+      while (index < value.length && !/\s/.test(value[index] ?? '')) index += 1;
+    } else {
+      while (index < value.length && !/[\s,]/.test(value[index] ?? '')) index += 1;
+    }
+    while (index < value.length && value[index] !== ',') index += 1;
+    parts.push(value.slice(urlStart, index).trim());
+    if (value[index] === ',') index += 1;
+  }
+  return parts;
+}
+
 function sanitizeSrcset(value: string): string | null {
   const kept: string[] = [];
-  for (const part of value.split(',')) {
-    const candidate = part.trim();
+  for (const candidate of splitSrcsetCandidates(value)) {
     if (candidate.length === 0) continue;
     const urlToken = candidate.split(/\s+/)[0] ?? '';
-    if (urlToken.length === 0 || isRemoteOrScriptUrl(urlToken)) continue;
+    if (urlToken.length === 0 || !isAllowedUrl(urlToken, {allowFontHost: false, allowDataImage: true})) continue;
     kept.push(candidate);
   }
   return kept.length > 0 ? kept.join(', ') : null;
@@ -357,7 +547,7 @@ function sanitizeElement(element: ElementNode): void {
     const name = attr.name.toLowerCase();
     if (name.startsWith('on')) continue;
     if (name === 'style') {
-      const value = sanitizeCss(attr.value);
+      const value = sanitizeCss(attr.value, {allowFontRules: false});
       if (value.trim().length > 0) kept.push({...attr, value});
       continue;
     }
@@ -367,12 +557,8 @@ function sanitizeElement(element: ElementNode): void {
       continue;
     }
     if (isUrlAttribute(name)) {
-      if (tag === 'link' && name === 'href' && isAllowedFontHref(attr.value)) {
-        kept.push(attr);
-        continue;
-      }
-      if (isRemoteOrScriptUrl(attr.value)) continue;
-    } else if (isRemoteOrScriptUrl(attr.value) && (attr.value.replace(/[\u0000-\u0020]+/g, '').toLowerCase().startsWith('javascript:') || attr.value.replace(/[\u0000-\u0020]+/g, '').toLowerCase().startsWith('vbscript:'))) {
+      if (!isAllowedUrl(attr.value, {allowFontHost: tag === 'link' && name === 'href', allowDataImage: true})) continue;
+    } else if (/^(?:javascript|vbscript):/i.test(attr.value.replace(/[\u0000-\u0020]+/g, ''))) {
       continue;
     }
     kept.push(attr);
@@ -380,7 +566,7 @@ function sanitizeElement(element: ElementNode): void {
   element.attrs = kept;
   if (tag === 'style') {
     for (const child of element.childNodes) {
-      if (isText(child)) child.value = sanitizeCss(child.value);
+      if (isText(child)) child.value = sanitizeCss(child.value, {allowFontRules: true});
     }
   }
 }
@@ -406,7 +592,7 @@ export function sanitizeGeneratedHtml(html: string): string {
 }
 
 function referencesStylesheet(value: string, cssName: string): boolean {
-  if (isRemoteOrScriptUrl(value)) return false;
+  if (!isAllowedUrl(value, {allowFontHost: false, allowDataImage: false})) return false;
   const trimmed = value.trim();
   return trimmed === cssName || trimmed === `./${cssName}` || trimmed.endsWith(`/${cssName}`);
 }
