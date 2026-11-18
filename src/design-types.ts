@@ -37,6 +37,8 @@ export const DesignMeasure = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('overflow'), px: MEASURE_PX}).strict(),
   z.object({kind: z.literal('empty'), capture: EMPTY_CAPTURE}).strict(),
   z.object({kind: z.literal('token'), px: MEASURE_PX}).strict(),
+  z.object({kind: z.literal('lighthouse'), metric: z.enum(['lcp', 'cls', 'tbt']), value: z.number().finite().nonnegative()}).strict(),
+  z.object({kind: z.literal('wallace'), metric: z.string().min(1).max(40), value: z.number().finite().nonnegative()}).strict(),
 ]);
 export type DesignMeasure = z.infer<typeof DesignMeasure>;
 
@@ -174,6 +176,8 @@ export function designFingerprint(parts: readonly string[]): string {
 function measureToken(measure: DesignMeasure): string {
   if (measure.kind === 'contrast') return `contrast:${measure.ratio}`;
   if (measure.kind === 'empty') return `empty:${measure.capture}`;
+  if (measure.kind === 'lighthouse') return `lighthouse:${measure.metric}:${measure.value}`;
+  if (measure.kind === 'wallace') return `wallace:${measure.metric}:${measure.value}`;
   return `${measure.kind}:${measure.px}`;
 }
 

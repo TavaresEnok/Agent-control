@@ -51,6 +51,13 @@ test('converte axe, pa11y, lighthouse, stylelint e teclado sem promover gosto a 
   assert.ok(findings.some(item => item.tool === 'stylelint' && item.severity === 'baixa'));
   assert.equal(findings.some(item => item.tool === 'stylelint' && item.severity === 'alta'), false);
   assert.ok(findings.some(item => item.tool === 'teclado' && item.rule === DESIGN_PLANTED_RULES.invisibleFocus));
+  const wallace = collectDesignFindings([], {
+    cssAnalyzer: [{
+      file: 'tela.css',
+      report: {values: {fontSizes: {totalUnique: 12}, colors: {totalUnique: 1}, fontFamilies: {totalUnique: 1}, zindexes: {totalUnique: 0}, units: {totalUnique: 1}}, declarations: {importants: {total: 0}, total: 1, totalUnique: 1}, selectors: {specificity: {max: [0, 1, 0]}}, rules: {selectors: {mean: 1}}},
+    }],
+  });
+  assert.ok(wallace.some(item => item.tool === 'css-analyzer' && item.rule === 'DESIGN-WALLACE-FONTES' && item.measure?.kind === 'wallace'));
   const document = designRawDocument('http://127.0.0.1:4173', findings);
   assert.equal(document.schema, DESIGN_RAW_SCHEMA);
   assert.equal(document.findings.length, findings.length);

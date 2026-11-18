@@ -5,6 +5,7 @@ import {focusFindingsFromCss, keyboardFindings, type FocusStep} from './design-k
 import {lighthouseToFindings} from './design-lighthouse.ts';
 import {stylelintToFindings} from './design-stylelint.ts';
 import {dedupeDesignFindings, type DesignRawFinding} from './design-types.ts';
+import {wallaceFindings} from './design-wallace.ts';
 
 const MARKUP = /\.(?:html?|tsx|jsx|vue)$/i;
 const STYLE = /\.css$/i;
@@ -19,6 +20,7 @@ export type DesignToolReports = {
   pa11y?: readonly {file: string; json: unknown}[];
   lighthouse?: readonly {file: string; lhr: unknown}[];
   stylelint?: readonly {file: string; report: unknown}[];
+  cssAnalyzer?: readonly {file: string; report: unknown}[];
   keyboard?: readonly {file: string; steps: readonly FocusStep[]}[];
 };
 
@@ -45,6 +47,7 @@ export function collectDesignFindings(
   for (const entry of tools?.pa11y ?? []) findings.push(...pa11yToFindings(entry.file, entry.json));
   for (const entry of tools?.lighthouse ?? []) findings.push(...lighthouseToFindings(entry.file, entry.lhr));
   for (const entry of tools?.stylelint ?? []) findings.push(...stylelintToFindings(entry.file, entry.report));
+  for (const entry of tools?.cssAnalyzer ?? []) findings.push(...wallaceFindings(entry.file, entry.report));
   for (const entry of tools?.keyboard ?? []) findings.push(...keyboardFindings(entry.file, entry.steps));
   return dedupeDesignFindings(findings);
 }
