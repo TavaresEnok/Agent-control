@@ -57,11 +57,80 @@ function sendFile(res, relative) {
   }
 }
 
+const LAB_USER = 'ada';
+const LAB_PASSWORD = 'senha-lab-3';
+
+function hasSession(req) {
+  const header = req.headers.cookie ?? '';
+  return header.split(';').some(part => part.trim() === 'ac_lab_session=aberta');
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > 4096) {
+        reject(new Error('grande'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function sendLoggedHome(res) {
+  try {
+    const html = readFileSync(join(root, 'public/index.html'), 'utf8')
+      .replace('</body>', '<h1 id="conta">Conta de ada aberta</h1></body>');
+    res.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store'});
+    res.end(html);
+  } catch {
+    res.writeHead(404, {'content-type': 'text/plain; charset=utf-8'});
+    res.end('ausente');
+  }
+}
+
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://design-lab.local');
+  if (req.method === 'POST' && url.pathname === '/entrar') {
+    readBody(req).then(body => {
+      const fields = new URLSearchParams(body);
+      if (fields.get('usuario') === LAB_USER && fields.get('senha') === LAB_PASSWORD) {
+        res.writeHead(303, {
+          location: '/',
+          'set-cookie': 'ac_lab_session=aberta; HttpOnly; Path=/; SameSite=Lax',
+          'cache-control': 'no-store',
+        });
+        res.end();
+        return;
+      }
+      res.writeHead(401, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});
+      res.end('não entrou');
+    }).catch(() => {
+      res.writeHead(401, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});
+      res.end('não entrou');
+    });
+    return;
+  }
+  if (url.pathname === '/conta') {
+    const html = hasSession(req)
+      ? '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Conta</title></head><body><h1 id="conta">Conta de ada aberta</h1></body></html>'
+      : '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Conta</title></head><body><p>Entre para continuar</p></body></html>';
+    res.writeHead(200, {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store'});
+    res.end(html);
+    return;
+  }
   if (url.pathname === '/' || url.pathname === '/index.html') {
     // O documento só sai depois de 5,2s para o LCP observado passar de 4s.
-    setTimeout(() => sendFile(res, 'public/index.html'), 5200);
+    setTimeout(() => {
+      if (hasSession(req)) sendLoggedHome(res);
+      else sendFile(res, 'public/index.html');
+    }, 5200);
     return;
   }
   if (url.pathname === '/hero.jpg') {

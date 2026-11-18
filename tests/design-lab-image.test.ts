@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {createHash, randomUUID} from 'node:crypto';
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {chmod, mkdtemp, readFile, readdir, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {writeDesignLoginState} from '../src/design-browser.ts';
 import {readDesignRepository} from '../src/design-command.ts';
 import {designBenchWorker} from '../src/design-bench.ts';
 import {readRebuildImagePin} from '../src/design-image-run.ts';
@@ -12,6 +13,7 @@ import {runDesignModule, type DesignModuleInput} from '../src/design-module.ts';
 import {DESIGN_PLANTED_RULES, type DesignWorker} from '../src/design-types.ts';
 
 const labRoot = fileURLToPath(new URL('./fixtures/design-lab-v2/', import.meta.url));
+const labPassword = 'senha-lab-3';
 const enabled = process.env.AC_DESIGN_LAB === '1';
 const PNG_1X1 = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -45,7 +47,23 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
   const data = await mkdtemp(join(tmpdir(), 'design-lab-v2-'));
   const tasks: string[] = [];
   const referenceName = 'referencia.png';
+  let loginDir = '';
   try {
+    loginDir = await mkdtemp(join(tmpdir(), 'design-lab-login-'));
+    const loginFile = join(loginDir, 'login.json');
+    const login = {
+      username: 'ada',
+      password: labPassword,
+      usernameSelector: '#usuario',
+      passwordSelector: '#senha',
+      submitSelector: '#entrar',
+    };
+    await writeFile(loginFile, JSON.stringify(login), {mode: 0o600});
+    await chmod(loginFile, 0o600);
+    assert.equal((await stat(loginFile)).mode & 0o777, 0o600);
+    const statePath = await writeDesignLoginState('http://design-lab.local:8080', login, pin);
+    assert.equal((await stat(statePath)).mode & 0o777, 0o600);
+    await rm(dirname(statePath), {recursive: true, force: true});
     const result = await runDesignModule({
       activation: 'personal',
       projectId: randomUUID(),
@@ -63,6 +81,7 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
       scoreVisual: true,
       recordStates: true,
       regressionThreshold: 0.1,
+      login,
     });
     const readme = await readFile(join(result.directory, 'README.md'), 'utf8');
     const raw = await readFile(join(result.directory, 'bruto', 'achados-brutos.json'), 'utf8');
@@ -98,10 +117,23 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     assert.match(readme, /Esta rodada executou o contêiner/);
     assert.match(coverage, /css-analyzer/);
     const imageDoc = JSON.parse(await readFile(join(result.directory, 'imagem-achados-brutos.json'), 'utf8')) as {
-      screenshots?: {route?: string; state?: string}[];
+      screenshots?: {route?: string; state?: string; fileName?: string; viewport?: number}[];
     };
     const shots = imageDoc.screenshots ?? [];
-    assert.equal(shots.some(item => item.state === 'logado'), false);
+    assert.equal(shots.some(item => item.state === 'logado'), true);
+    assert.equal(shots.some(item => item.route === '/' && item.state === 'logado'), true);
+    const shotNamed = (state: string) => shots.find(item => item.route === '/' && item.state === state && item.viewport === 1440 && item.fileName);
+    const anonShot = shotNamed('vazio') ?? shotNamed('padrao');
+    const loggedShot = shotNamed('logado');
+    assert.ok(anonShot?.fileName && loggedShot?.fileName);
+    const anonBytes = await readFile(join(result.directory, 'capturas', anonShot.fileName));
+    const loggedBytes = await readFile(join(result.directory, 'capturas', loggedShot.fileName));
+    assert.notEqual(createHash('sha256').update(anonBytes).digest('hex'), createHash('sha256').update(loggedBytes).digest('hex'));
+    const seen = await filesUnder(result.directory);
+    for (const path of seen) {
+      assert.equal((await readFile(path)).includes(Buffer.from(labPassword)), false, path);
+    }
+    assert.equal((await readFile(join(labRoot, 'public/index.html'), 'utf8')).includes(labPassword), false);
     assert.equal(shots.some(item => item.route === '/' && item.state === 'vazio'), true);
     assert.equal(shots.some(item => item.route === '/item/42' && item.state === 'padrao'), true);
     assert.equal(parsed.findings.some(item => item.rule === 'DESIGN-ROTA-INDISPONIVEL' && item.snippet.includes('404')), true, rules.join('\n'));
@@ -125,5 +157,17 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     assert.equal(result.achados.some(item => item.reference.includes('WCAG') || item.reference.startsWith('DESIGN-')), true);
   } finally {
     await rm(data, {recursive: true, force: true});
+    await rm(loginDir, {recursive: true, force: true}).catch(() => undefined);
   }
 });
+
+async function filesUnder(directory: string): Promise<string[]> {
+  const found: string[] = [];
+  const entries = await readdir(directory, {withFileTypes: true});
+  for (const entry of entries) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) found.push(...await filesUnder(path));
+    else if (entry.isFile()) found.push(path);
+  }
+  return found;
+}

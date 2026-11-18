@@ -1,4 +1,5 @@
-import {chmod, mkdtemp, writeFile} from 'node:fs/promises';
+import {spawn} from 'node:child_process';
+import {chmod, mkdir, mkdtemp, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -239,10 +240,12 @@ async function waitForPaint(page: DesignPage): Promise<void> {
 
 /**
  * O host faz o login e grava o storageState em 0600.
- * A senha não entra no arquivo. O chamador apaga o diretório no fim.
+ * Um alvo `.local` entra pela imagem, na rede de homologação: o host não resolve esse nome.
+ * A senha não entra no arquivo nem na linha de comando. O chamador apaga o diretório no fim.
  */
-export async function writeDesignLoginState(targetUrl: string, login: DesignLogin): Promise<string> {
-  assertDesignTarget(targetUrl);
+export async function writeDesignLoginState(targetUrl: string, login: DesignLogin, pinnedImage?: string): Promise<string> {
+  const target = assertDesignTarget(targetUrl);
+  if (pinnedImage !== undefined && target.host.endsWith('.local')) return writeLoginStateInImage(targetUrl, login, pinnedImage);
   const chromium = await loadChromium();
   const browser = await chromium.launch({
     executablePath: CHROME,
@@ -271,6 +274,60 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     throw error;
   } finally {
     await browser.close().catch(() => undefined);
+  }
+}
+
+function commandCode(command: string, args: readonly string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {stdio: 'ignore'});
+    child.on('error', () => reject(new Error('DESIGN_LOGIN_IMAGE')));
+    child.on('close', code => resolve(code ?? 1));
+  });
+}
+
+/** O contêiner 65532 lê a senha pelo arquivo e grava o estado no mesmo uid, modo 0600. */
+async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pinnedImage: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'design-login-'));
+  const cred = join(directory, 'login.json');
+  const out = join(directory, 'out');
+  try {
+    await chmod(directory, 0o700);
+    await writeFile(cred, JSON.stringify({
+      url: targetUrl,
+      username: login.username,
+      password: login.password,
+      usernameSelector: login.usernameSelector,
+      passwordSelector: login.passwordSelector,
+      submitSelector: login.submitSelector,
+    }), {mode: 0o600});
+    await chmod(cred, 0o600);
+    await mkdir(out, {mode: 0o1777});
+    await chmod(out, 0o1777);
+    if (await commandCode('setfacl', ['-m', 'u:65532:r', cred]) !== 0) throw new Error('DESIGN_LOGIN_IMAGE');
+    const code = await commandCode('docker', [
+      'run', '--rm', '--pull', 'never', '--user', '65532:65532',
+      '--network', 'design-homologation',
+      '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--pids-limit', '512', '--memory', '2147483648', '--memory-swap', '2147483648',
+      '--tmpfs', '/tmp:rw,nosuid,nodev,size=512m',
+      '--env', 'HOME=/tmp', '--env', 'TMPDIR=/tmp',
+      '--entrypoint', 'node',
+      '--mount', `type=bind,source=${cred},destination=/login/login.json,readonly`,
+      '--mount', `type=bind,source=${out},destination=/output`,
+      pinnedImage,
+      '/opt/design-tools/write-login-state.mjs',
+    ]);
+    if (code === 2) throw new Refusal('DESIGN_PASSWORD_LEAK');
+    if (code !== 0) throw new Error('DESIGN_LOGIN_IMAGE');
+    const state = join(out, 'state.json');
+    const info = await stat(state);
+    if (!info.isFile() || (info.mode & 0o777) !== 0o600) throw new Error('DESIGN_LOGIN_IMAGE');
+    return state;
+  } catch (error) {
+    await rm(directory, {recursive: true, force: true});
+    throw error;
+  } finally {
+    await commandCode('setfacl', ['-b', cred]).catch(() => undefined);
   }
 }
 

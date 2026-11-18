@@ -11,6 +11,14 @@ body {
 
 .alvo { width: 30px; height: 30px; }
 
+#login input,
+#login button {
+  box-sizing: border-box;
+  width: 180px;
+  height: 44px;
+  padding: 0;
+}
+
 .alvo {
   padding: 0;
   border: 0;

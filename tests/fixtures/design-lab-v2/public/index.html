@@ -42,6 +42,13 @@
     <span class="cinza-8">#717171</span>
     <span class="cinza-9">#727272</span>
   </p>
+  <form id="login" action="/entrar" method="post">
+    <label for="usuario">Usuário</label>
+    <input id="usuario" name="usuario" autocomplete="username">
+    <label for="senha">Senha</label>
+    <input id="senha" name="senha" type="password" autocomplete="current-password">
+    <button id="entrar" type="submit">Entrar</button>
+  </form>
   <p id="estado"></p>
   <script>
     (function () {

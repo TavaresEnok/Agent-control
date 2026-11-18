@@ -129,7 +129,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   let loginNote = '';
   if (input.image !== undefined && plannedStates?.wantsLogin === true && input.login !== undefined) {
     try {
-      loginState = await writeDesignLoginState(input.targetUrl, input.login);
+      loginState = await writeDesignLoginState(input.targetUrl, input.login, input.image.pinnedImage);
       loginDir = dirname(loginState);
     } catch (error) {
       if (error instanceof Refusal && error.code === 'DESIGN_PASSWORD_LEAK') throw error;
@@ -190,8 +190,12 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   if (tokens) findings.push(...tokens.findings);
   const imageRows = image === undefined ? [] : applyHostFindingCounts(image.coverage, findings);
   const routes = screenRoutesForExam(input.files, input.routes);
+  const loggedRoutes = new Set((image?.shots ?? []).filter(shot => shot.state === 'logado').map(shot => shot.route));
   const stateNotes = [
-    ...(plannedStates?.notes ?? []),
+    ...(plannedStates?.notes ?? []).filter(note => {
+      const route = note.split(':')[0] ?? '';
+      return !(loggedRoutes.has(route) && note.includes('logado não capturado'));
+    }),
     ...(loginNote.length > 0 ? [loginNote] : []),
     ...(image?.notes.filter(note => note.includes('indisponível')) ?? []),
   ];
