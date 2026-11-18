@@ -17,21 +17,22 @@ const OPEN_DIR = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLL
 type CaptureFile = {name: string; from: string};
 
 type CaptureEnv =
-  | {kind: 'repository'}
+  | {kind: 'absent'}
   | {kind: 'invalid'}
   | {kind: 'private'; dir: string; run: string};
 
 /**
  * Copies design PNGs into the native job directories the model can open.
- * `AC_DESIGN_CAPTURE_DIR` and `AC_DESIGN_CAPTURE_RUN`, when both are set, select one
- * private run and the repository tree is ignored. Otherwise every run under
- * `<repository>/.design-captures` is copied. A missing source is a no-op.
+ * Both `AC_DESIGN_CAPTURE_DIR` and `AC_DESIGN_CAPTURE_RUN` must name one private run.
+ * The repository tree, including `.design-captures`, is never a source. An absent or
+ * invalid pair copies nothing. A private PNG is copied only when its filename is the
+ * sha256 of its bytes.
  */
 export async function stageDesignCapturesForJob(repository: string, destinations: readonly string[]): Promise<number> {
+  void repository;
   const selected = readCaptureEnv();
-  if (selected.kind === 'invalid') return 0;
-  if (selected.kind === 'private') return copyPrivateRun(selected.dir, selected.run, destinations);
-  return copyRepositoryCaptures(repository, destinations);
+  if (selected.kind !== 'private') return 0;
+  return copyPrivateRun(selected.dir, selected.run, destinations);
 }
 
 export async function writeDesignExamCaptures(
@@ -95,7 +96,7 @@ export async function writeDesignExamCaptures(
 function readCaptureEnv(): CaptureEnv {
   const dir = process.env[CAPTURE_DIR_ENV];
   const run = process.env[CAPTURE_RUN_ENV];
-  if ((dir === undefined || dir === '') && (run === undefined || run === '')) return {kind: 'repository'};
+  if ((dir === undefined || dir === '') && (run === undefined || run === '')) return {kind: 'absent'};
   if (dir === undefined || dir === '' || run === undefined || run === '' || !isAbsolute(dir) || dir.includes('\0') || !RUN_DIR.test(run)) {
     return {kind: 'invalid'};
   }
@@ -124,29 +125,6 @@ function bindCaptureEnv(parent: string, runId: string): {publish: () => void; co
       published = false;
     },
   };
-}
-
-async function copyRepositoryCaptures(repository: string, destinations: readonly string[]): Promise<number> {
-  const root = await realpath(repository);
-  const source = join(root, '.design-captures');
-  let runs;
-  try {
-    runs = await readdir(source, {withFileTypes: true});
-  } catch {
-    return 0;
-  }
-  const sourceReal = await realpath(source);
-  if (sourceReal !== source || !sourceReal.startsWith(root + sep)) return 0;
-  const files: CaptureFile[] = [];
-  for (const run of runs) {
-    if (files.length >= MAX_FILES) break;
-    if (!run.isDirectory() || run.isSymbolicLink() || !RUN_DIR.test(run.name)) continue;
-    const dir = join(source, run.name);
-    const dirReal = await realpath(dir).catch(() => '');
-    if (dirReal !== dir || !dirReal.startsWith(source + sep)) continue;
-    await collectPngs(dir, files);
-  }
-  return copyCollected(source, files, destinations);
 }
 
 async function copyPrivateRun(dir: string, run: string, destinations: readonly string[]): Promise<number> {
@@ -187,7 +165,28 @@ async function collectPngs(dir: string, files: CaptureFile[]): Promise<void> {
     const from = join(dir, file.name);
     const stat = await lstat(from);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_BYTES) continue;
+    const bytes = await readRegularFile(from, stat.size);
+    if (bytes === undefined) continue;
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    if (file.name !== `${sha256}.png`) continue;
     files.push({name: file.name, from});
+  }
+}
+
+/** Reads a regular file without following a symlink that replaced it. */
+async function readRegularFile(path: string, expectedSize: number): Promise<Buffer | undefined> {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return undefined;
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size !== expectedSize || info.size < 1 || info.size > MAX_BYTES) return undefined;
+    return await handle.readFile();
+  } finally {
+    await handle.close();
   }
 }
 

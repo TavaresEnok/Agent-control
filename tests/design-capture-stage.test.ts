@@ -125,9 +125,11 @@ alone('copia png de capturas para planning e work e ignora o resto', async () =>
     await writeFile(join(root, '.design-captures', run, 'nota.txt'), 'nao');
     await symlink('/etc/hostname', join(root, '.design-captures', run, `${'ab'.repeat(32)}.png`));
     const copied = await stageDesignCapturesForJob(root, [planning, work]);
-    assert.equal(copied, 2);
-    assert.equal(await readFile(join(planning, 'capturas', name), 'utf8'), 'png-da-tela');
-    assert.equal(await readFile(join(work, 'capturas', name), 'utf8'), 'png-da-tela');
+    assert.equal(copied, 0);
+    assert.equal(existsSync(join(planning, 'capturas')), false);
+    assert.equal(existsSync(join(work, 'capturas')), false);
+    assert.equal(existsSync(join(planning, 'capturas', name)), false);
+    assert.equal(existsSync(join(work, 'capturas', name)), false);
     assert.equal(await stageDesignCapturesForJob(join(root, 'job'), [planning]), 0);
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -166,6 +168,37 @@ alone('com as variáveis de ambiente copia o run mesmo sem .design-captures no r
     delete process.env[CAPTURE_RUN];
     assert.equal(await stageDesignCapturesForJob(repo, [otherDest]), 0);
     assert.equal(existsSync(join(otherDest, 'capturas', decoyName)), false);
+  } finally {
+    restoreEnv(previousDir, previousRun);
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+alone('não copia png privado cujo nome não é o sha256 dos bytes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'design-stage-hash-'));
+  const repo = join(root, 'repo');
+  const dest = join(root, 'planning');
+  const run = randomUUID();
+  const good = Buffer.from('png-integro');
+  const bad = Buffer.from('png-mentira');
+  const goodName = pngName(good);
+  const badName = pngName(Buffer.from('nome-falso'));
+  const parent = join(root, 'data', 'design-captures');
+  const previousDir = process.env[CAPTURE_DIR];
+  const previousRun = process.env[CAPTURE_RUN];
+  try {
+    await mkdir(join(parent, run), {recursive: true});
+    await mkdir(repo);
+    await mkdir(dest);
+    await writeFile(join(parent, run, goodName), good, {mode: 0o600});
+    await writeFile(join(parent, run, badName), bad, {mode: 0o600});
+    process.env[CAPTURE_DIR] = parent;
+    process.env[CAPTURE_RUN] = run;
+    const copied = await stageDesignCapturesForJob(repo, [dest]);
+    assert.equal(copied, 1);
+    const copiedBytes = await readFile(join(dest, 'capturas', goodName));
+    assert.equal(pngName(copiedBytes), goodName);
+    assert.equal(existsSync(join(dest, 'capturas', badName)), false);
   } finally {
     restoreEnv(previousDir, previousRun);
     await rm(root, {recursive: true, force: true});
