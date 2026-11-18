@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
+import {EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign} from './design-command.ts';
 import {runDesignCreate, type CreateExam} from './design-create.ts';
@@ -45,6 +46,7 @@ const messages: Record<string, string> = {
   CONTROL_ADMIN_REQUIRED: 'Falta o administrador de controle para registrar claude-opus-5-5 no catálogo.',
   PROJECT_OWNER_REQUIRED: 'Só o dono do projeto prepara o exame.',
   DESIGN_CREATE_INVALID: 'O pedido de criação não tem telas ou rodadas válidas.',
+  EXAM_LOGIN_STALE: EXAM_LOGIN_STALE_TEXT,
   DESIGN_REFERENCE_INVALID: 'A referência tem que ser PNG ou JPG.',
   DESIGN_REFERENCE_LIMIT: 'O exame aceita no máximo 10 referências.',
   DESIGN_CONFIG_INVALID: 'O design.config.json do projeto é inválido.',
@@ -53,7 +55,13 @@ const messages: Record<string, string> = {
 /** Known codes keep their Portuguese line. Anything else is one fixed sentence, so a path or secret never reaches the terminal. */
 export function designCliFailureText(error: unknown): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
-  return Object.hasOwn(messages, code) ? messages[code] : 'O exame de design falhou.';
+  return Object.hasOwn(messages, code) ? messages[code]! : 'O exame de design falhou.';
+}
+
+/** The report is already on disk. A stale login still exits non-zero, after the directory has been printed. */
+export function designExamStatus(result: {loginStale?: boolean}): {code: number; lines: string[]} {
+  if (result.loginStale) return {code: 1, lines: [EXAM_LOGIN_STALE_TEXT]};
+  return {code: 0, lines: []};
 }
 
 function readPinnedImage(): string {
@@ -305,6 +313,7 @@ async function main() {
   const parsed = parseDesignArgs(invocation.argv);
   const opened = parsed.loginFile === undefined ? undefined : await readDesignLoginFile(parsed.loginFile);
   let resolved: Awaited<ReturnType<typeof resolvePersonalDesign>> | undefined;
+  let examStatus: {code: number; lines: string[]} = {code: 0, lines: []};
   try {
     resolved = await resolvePersonalDesign(invocation.argv);
     const design = resolved;
@@ -343,6 +352,7 @@ async function main() {
         : await withServedDirectory(pinnedImage, invocation.serveDir, examAt);
       console.log(runId);
       console.log(result.directory);
+      examStatus = designExamStatus(result);
     } finally {
       stopLease();
       await browser?.close();
@@ -358,7 +368,8 @@ async function main() {
   }
   opened?.wipe();
   await resolved?.close();
-  process.exit(0);
+  for (const line of examStatus.lines) console.error(line);
+  process.exit(examStatus.code);
 }
 
 async function runCreate(invocation: {installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number}) {
@@ -411,6 +422,10 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
             visualNotes: exam.visualLow ? ['nota visual abaixo de 8'] : [],
           };
         });
+        if (exam.loginStale) {
+          console.log(exam.directory);
+          throw new Refusal('EXAM_LOGIN_STALE');
+        }
         const report: CreateExam = {screens, notes: []};
         return report;
       },

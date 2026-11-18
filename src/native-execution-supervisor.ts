@@ -35,6 +35,7 @@ import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {replaceSecretClassFiles} from './verify-redact.ts';
 import {rememberExamStripNote} from './exam-strip-note.ts';
 import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
+import {applyReturnedExamCredential,ensureExamLoginFresh,renewClaudeLoginInPlace,writePrivateAtomic} from './exam-login.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
 /** Specialist or reviewer of the readonly design exam. Programmer, qa and judge never match. */
 export function readonlyDesignExam(workflow: unknown, role: unknown): boolean {
@@ -54,10 +55,12 @@ type Input=z.infer<typeof NativeExecutionRequest>;
 export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;provider?:'codex'|'claude'|'grok';socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
  workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture;
+ /** Writable-account renewal used before a Claude exam copy. Tests inject this and never spawn a real CLI. */
+ examLoginRenew?:(accountDir:string)=>Promise<void>;
  /** false: kept only to reconcile and retire jobs started under a replaced image pair; it never launches. */
  active?:boolean};
 export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null};
-const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
+const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int(),examCredential:z.unknown().optional()}).strict();
 export {nativeExecutionExecutorDigest};
 const toolsEntrypoint=['node','/opt/agent-control/dist/src/native-tools-worker.mjs'];
 const workerEntrypoint=['node','/opt/agent-control/dist/src/native-execution-worker.mjs'];
@@ -228,6 +231,15 @@ export class NativeExecutionSupervisor{
    await this.ledger.tx(async c=>{await this.identity(c,principal,authority,input);
     await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);});
    throw new Refusal('NATIVE_IMAGE_MISSING');
+  }
+  // A stale Claude access token is renewed on the writable account before the exam copy exists.
+  const examWorkflowEarly=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
+  if(readonlyExamIsolation(personal,examWorkflowEarly,input.role)&&this.config.provider==='claude'&&!this.config.syntheticFixture){
+   const login=await ensureExamLoginFresh({accountDir:accountRoot,now:Date.now(),examMaxMs:input.timeoutMs,renew:this.config.examLoginRenew??renewClaudeLoginInPlace});
+   if(login==='renewed'){
+    accountSecrets=await readMountedCredentialSecrets('claude',accountRoot);
+    assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);
+   }
   }
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
   // Commit the uncertainty before files, Docker networks or processes exist.
@@ -626,6 +638,21 @@ export class NativeExecutionSupervisor{
   catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'||exitCode===0)throw error;result={schemaVersion:1,jobId:input.jobId,output:'',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:'WORKER_EXITED_WITHOUT_RESULT',exitCode:exitCode};}
   return result;
  }
+ /** A changed exam copy is written back only when it is the same account. The credential then leaves the job output. */
+ private async settleExamCredential(accountId:string,jobId:string,result:z.infer<typeof Result>){
+  if(result.examCredential===undefined)return;
+  const returned=result.examCredential;
+  let text='';
+  try{text=JSON.stringify(returned);}catch{text='';}
+  if(text.length>0&&Buffer.byteLength(text)<=65536){
+   try{await applyReturnedExamCredential(join(this.config.accountRoot,accountId),text);}
+   catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
+  }
+  delete result.examCredential;
+  const clean={schemaVersion:result.schemaVersion,jobId:result.jobId,output:result.output,normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows,nativeSessionId:result.nativeSessionId,failureCode:result.failureCode,exitCode:result.exitCode};
+  try{await writePrivateAtomic(join(this.paths(jobId).output,'execution-result.json'),JSON.stringify(clean));}
+  catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
+ }
  async reconcile(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>):Promise<NativeExecutionOutcome>{
   const input=NativeExecutionRequest.parse(raw),job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);await this.validateReplay(principal,authority,input,job);
@@ -639,6 +666,7 @@ export class NativeExecutionSupervisor{
     grant?.state!=='released'||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role||!grant.physical_receipt||payload.physicalDigest!==digest(grant.physical_receipt)||
     ((payload.exitCode===0)!==(job.state==='completed')))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
    const result=await this.readResult(input,payload.exitCode);
+   await this.settleExamCredential(String(job.account_id),input.jobId,result);
    if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.workerExitCode||result.jobId!==input.jobId)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
    return {state:job.state as 'completed'|'failed',receipt,output:result.output,artifact:payload.artifact??null};
   }
@@ -653,6 +681,7 @@ export class NativeExecutionSupervisor{
   if(tools.State.Running){await this.stop(principal,authority,input);return {state:'uncertain' as const};}
   if(tools.State.Status!=='exited'||[worker,tools].some(p=>!Number.isFinite(Date.parse(p.State.FinishedAt))||p.State.FinishedAt.startsWith('0001-')))return {state:'uncertain' as const};
   const result=await this.readResult(input,worker.State.ExitCode);
+  await this.settleExamCredential(String(job.account_id),input.jobId,result);
   if(result.jobId!==input.jobId||result.exitCode!==worker.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
   const disposition=await providerLimitDisposition(this.ledger,job.account_id,result.failureCode,result.usageWindows,Date.now(),Date.parse(worker.State.FinishedAt));
   if(disposition==='wait')return {state:'running' as const};

@@ -1,12 +1,12 @@
 import {mock, test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync, randomUUID} from 'node:crypto';
-import {chmod, mkdir, mkdtemp, realpath, rm, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
 import {AccountHomes} from '../src/account-homes.ts';
-import {Authority} from '../src/contracts.ts';
+import {Authority, Refusal} from '../src/contracts.ts';
 import {GitArtifacts} from '../src/git.ts';
 import {NativeExecutionRequest, NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
 
@@ -241,6 +241,190 @@ test('the real supervisor mounts the exam worker read-only with AC_VERIFY_EXAM=1
     assert.equal(programmerWorker.env.includes('AC_VERIFY_EXAM=1'), false);
     const programmerAccount = programmerWorker.binds.find(bind => bind.includes(':/account:'));
     assert.ok(programmerAccount?.endsWith(':rw'));
+  } finally {
+    homes.mock.restore();
+    snaps.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('o host renova o login Claude antes de criar o exame e recusa se a renovação não vingar', async () => {
+  const {ledger, memory} = substituteLedger();
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-fresh-')));
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const project = randomUUID();
+  const principal = 'exam-fresh-' + randomUUID();
+  const account = randomUUID();
+  const profile = randomUUID();
+  const context = randomUUID();
+  const instance = randomUUID();
+  const intent = randomUUID();
+  const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => ({accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'}));
+  const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
+    await mkdir(destination, {recursive: true, mode: 0o700});
+  });
+  try {
+    for (const path of [repo, spool, accounts, join(accounts, account)]) await mkdir(path, {recursive: true, mode: 0o700});
+    const credential = join(accounts, account, '.credentials.json');
+    const stale = {
+      claudeAiOauth: {
+        accessToken: 'fixture-access-token',
+        refreshToken: 'fixture-refresh-token',
+        expiresAt: Date.now() - 60_000,
+        scopes: ['user:inference'],
+      },
+    };
+    await writeFile(credential, JSON.stringify(stale), {mode: 0o600});
+    await chmod(credential, 0o600);
+    memory.insert('ac_projects', {id: project});
+    memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_project_repositories', {project_id: project, repo});
+    memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
+    memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
+    memory.insert('ac_admission_control', {id: 1, enabled: true});
+    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'security-verify-readonly-v1'}}});
+    const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    const keys = generateKeyPairSync('ed25519');
+    const image = 'sha256:' + 'c'.repeat(64);
+    const created: {name: string}[] = [];
+    let renews = 0;
+    let createdWhenRenewed = -1;
+    const supervisor = new NativeExecutionSupervisor(ledger, {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude',
+      socketPath: '/tmp/ac-no-host-socket.sock',
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: ['AC_FIXTURE=1'],
+      toolsEnv: [],
+      examLoginRenew: async () => {
+        renews += 1;
+        createdWhenRenewed = created.length;
+        const next = {...stale, claudeAiOauth: {...stale.claudeAiOauth, expiresAt: Date.now() + 6 * 60 * 60 * 1000, accessToken: 'fixture-access-token-new', refreshToken: 'fixture-refresh-token-new'}};
+        await writeFile(credential, JSON.stringify(next), {mode: 0o600});
+        await chmod(credential, 0o644);
+      },
+    }, {assertAdmission: async () => {}});
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+    let sequence = 0;
+    const daemon = {
+      imagePresent: async () => true,
+      inspect: async () => null,
+      inspectPrivateNetwork: async () => null,
+      stop: async () => {},
+      remove: async () => {},
+      createPrivateNetwork: async () => `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`,
+      create: async (name: string) => {
+        created.push({name});
+        return `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
+      },
+      start: async () => { throw new Error('STOP_AFTER_CREATE'); },
+    };
+    Object.defineProperty(supervisor, 'doc' + 'ker', {value: daemon});
+    const grant = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const input = NativeExecutionRequest.parse({
+      jobId: randomUUID(), intentId: intent, grantId: grant, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Leia o repositório.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(() => supervisor.start(principal, authority, input), /STOP_AFTER_CREATE/);
+    assert.equal(renews, 1);
+    assert.equal(createdWhenRenewed, 0);
+    assert.ok(created.length > 0);
+    const renewed = JSON.parse(await readFile(credential, 'utf8')) as {claudeAiOauth: {accessToken: string}};
+    assert.equal(renewed.claudeAiOauth.accessToken, 'fixture-access-token-new');
+    assert.equal((await lstat(credential)).mode & 0o777, 0o600);
+
+    await writeFile(credential, JSON.stringify(stale), {mode: 0o600});
+    await chmod(credential, 0o600);
+    const failedGrant = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: failedGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const beforeFail = created.length;
+    const failing = new NativeExecutionSupervisor(ledger, {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude',
+      socketPath: '/tmp/ac-no-host-socket.sock',
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: [],
+      toolsEnv: [],
+      examLoginRenew: async () => {
+        throw new Error('EXAM_LOGIN_RENEW_FAILED');
+      },
+    }, {assertAdmission: async () => {}});
+    (failing as unknown as {identity: () => Promise<Row>}).identity = async () => memory.one('ac_capacity_grants', failedGrant);
+    Object.defineProperty(failing, 'doc' + 'ker', {value: daemon});
+    const failedInput = NativeExecutionRequest.parse({
+      jobId: randomUUID(), intentId: intent, grantId: failedGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Leia o repositório.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(
+      () => failing.start(principal, authority, failedInput),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
+    );
+    assert.equal(created.length, beforeFail);
+    assert.equal(JSON.parse(await readFile(credential, 'utf8')).claudeAiOauth.accessToken, 'fixture-access-token');
+
+    const freshGrant = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: freshGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    await writeFile(credential, JSON.stringify({...stale, claudeAiOauth: {...stale.claudeAiOauth, expiresAt: Date.now() + 6 * 60 * 60 * 1000}}), {mode: 0o600});
+    await chmod(credential, 0o600);
+    let freshRenews = 0;
+    const fresh = new NativeExecutionSupervisor(ledger, {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude',
+      socketPath: '/tmp/ac-no-host-socket.sock',
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: [],
+      toolsEnv: [],
+      examLoginRenew: async () => {
+        freshRenews += 1;
+      },
+    }, {assertAdmission: async () => {}});
+    (fresh as unknown as {identity: () => Promise<Row>}).identity = async () => memory.one('ac_capacity_grants', freshGrant);
+    Object.defineProperty(fresh, 'doc' + 'ker', {value: daemon});
+    const freshInput = NativeExecutionRequest.parse({
+      jobId: randomUUID(), intentId: intent, grantId: freshGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Leia o repositório.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(() => fresh.start(principal, authority, freshInput), /STOP_AFTER_CREATE/);
+    assert.equal(freshRenews, 0);
   } finally {
     homes.mock.restore();
     snaps.mock.restore();

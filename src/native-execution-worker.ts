@@ -4,6 +4,7 @@ import {open,lstat} from 'node:fs/promises';
 import {z} from 'zod';
 import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity,runCodexExec} from './codex-personal.ts';
 import {examCodexArgv,examLoginHomes,installExamClaudeWrapper,prepareExamLoginCopy} from './verify-exam-isolation.ts';
+import {readExamCredentialReturn} from './exam-login.ts';
 import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
 import {collectSecretValues,redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
@@ -46,9 +47,10 @@ async function main(){
   if(input.provider==='claude')process.env.CLAUDE_CONFIG_DIR='/account';else if(input.provider!=='grok')process.env.CODEX_HOME=home;
  }
  let claudeBin='/usr/local/bin/claude';
+ let examLogin:string|undefined;
  if(verifyExam){
-  const login=await prepareExamLoginCopy('/account','/tmp');
-  const homes=examLoginHomes(login);
+  examLogin=await prepareExamLoginCopy('/account','/tmp');
+  const homes=examLoginHomes(examLogin);
   process.env.CLAUDE_CONFIG_DIR=homes.claudeConfigDir;
   process.env.CODEX_HOME=homes.codexHome;
   process.env.HOME=homes.grokHome;
@@ -86,9 +88,13 @@ async function main(){
  }catch(error){if(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure){failedUsage=error;failure=error.code;}else failure='EXECUTION_FAILED';}
  finally{forwarder.close();}
  const usage=result?.usageWindows??failedUsage?.usageWindows??null,safeUsage=Buffer.byteLength(JSON.stringify(usage))<=32768?usage:null;
+ let examCredential:Record<string,unknown>|undefined;
+ if(verifyExam&&input.provider==='claude'&&examLogin){
+  try{examCredential=await readExamCredentialReturn('/account/.credentials.json',examLogin+'/.credentials.json');}catch{examCredential=undefined;}
+ }
  const output=await open('/output/execution-result.json',constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
  try{await output.writeFile(JSON.stringify({schemaVersion:1,jobId:input.jobId,output:result?.output??'',normalizedTokensUsed:result?.tokensUsed??failedUsage?.tokensUsed??null,
-  usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0}));await output.sync();}finally{await output.close();}
+  usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0,...(examCredential?{examCredential}:{})}));await output.sync();}finally{await output.close();}
  process.exit(failure?1:0);
 }
 main().catch(error=>{console.error('NATIVE_EXECUTION_WORKER_FAILED',error instanceof z.ZodError?'INVALID_LAUNCH_SHAPE':String((error as Error)?.message??'').replace(/[^A-Za-z0-9_ .:,/-]/g,'').slice(0,160));process.exitCode=1;});

@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Id, Refusal} from './contracts.ts';
+import {EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {writeDesignLoginState} from './design-browser.ts';
 import {readDesignCaptureStageNote, writeDesignExamCaptures} from './design-capture-stage.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
@@ -103,6 +104,7 @@ export type DesignModuleResult = {
   directoryName: string;
   coverageMarkdown: string;
   visualLow: boolean;
+  loginStale: boolean;
 };
 
 /**
@@ -260,6 +262,11 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     await staged.cleanup();
   }
   notes.push(...examined.notes);
+  if (examined.loginStale) {
+    const at = notes.indexOf(EXAM_LOGIN_STALE_TEXT);
+    if (at >= 0) notes.splice(at, 1);
+    notes.unshift(EXAM_LOGIN_STALE_TEXT);
+  }
   const strip = takeExamStripNote(input.intentId);
   if (strip) notes.push(strip);
   const regression = await regressionSection(input, captured.files);
@@ -317,6 +324,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     directoryName: written.directoryName,
     coverageMarkdown: read.coverageMarkdown,
     visualLow: examined.visual.some(row => row.examiner.some(score => score.score < 8)),
+    loginStale: examined.loginStale,
   };
 }
 

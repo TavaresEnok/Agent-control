@@ -1,4 +1,5 @@
 import {Refusal} from './contracts.ts';
+import {EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {
   parseVisualScores,
@@ -439,6 +440,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   }[];
   notes: string[];
   visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[];
+  loginStale: boolean;
 }> {
   const findings: DesignExamFinding[] = [];
   const coverage: DesignCoverageRow[] = [];
@@ -452,10 +454,12 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   const ids = input.checklist.map(entry => entry.id).filter(id => id.length > 0 && id.length <= 80).slice(0, 120);
   if (ids.length === 0) {
     notes.push('A lista de verificação veio vazia.');
-    return {findings, coverage, confirmations, notes, visual};
+    return {findings, coverage, confirmations, notes, visual, loginStale: false};
   }
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
+  let loginStale = false;
+  try {
   for (const screen of input.screens) {
     if (isNonHtmlResponse(screen.code)) {
       notes.push(`A resposta de ${oneLine(screen.route)} não é tela: o corpo não é HTML.`);
@@ -558,6 +562,11 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       }
     }
   }
+  } catch (error) {
+    if (!(error instanceof Refusal) || error.code !== 'EXAM_LOGIN_STALE') throw error;
+    loginStale = true;
+    if (!notes.includes(EXAM_LOGIN_STALE_TEXT)) notes.push(EXAM_LOGIN_STALE_TEXT);
+  }
 
-  return {findings, coverage, confirmations, notes, visual};
+  return {findings, coverage, confirmations, notes, visual, loginStale};
 }
