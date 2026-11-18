@@ -35,7 +35,7 @@ import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {replaceSecretClassFiles} from './verify-redact.ts';
 import {rememberExamStripNote} from './exam-strip-note.ts';
 import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
-import {applyReturnedExamCredential,ensureExamLoginFresh,renewClaudeLoginInPlace,writePrivateAtomic} from './exam-login.ts';
+import {applyReturnedExamCredential,ensureExamLoginFresh,postgresAccountLoginLock,readClaudeRefreshTokenHash,renewClaudeLoginInPlace,writePrivateAtomic} from './exam-login.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
 /** Specialist or reviewer of the readonly design exam. Programmer, qa and judge never match. */
 export function readonlyDesignExam(workflow: unknown, role: unknown): boolean {
@@ -106,6 +106,7 @@ export class NativeExecutionSupervisor{
  get keyFingerprint(){return this.fingerprint;}private readonly key;private readonly publicKey:string;private readonly fingerprint:string;
  private readonly subjects=new Map<string,string>();private readonly docker:DockerDaemon;private readonly user:string;
  private readonly effectTails=new Map<string,Promise<void>>();
+ private readonly examRefreshMarks=new Map<string,string>();
  constructor(readonly ledger:Ledger,private readonly config:NativeExecutionSupervisorConfig,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){
   z.string().regex(/^[a-z][a-z0-9._-]{0,99}$/).parse(config.id);this.scopeId=config.id+'@'+(config.provider??'codex');
   for(const image of [config.workerImage,config.toolsImage])z.string().regex(/^sha256:[a-f0-9]{64}$/).parse(image);
@@ -235,11 +236,14 @@ export class NativeExecutionSupervisor{
   // A stale Claude access token is renewed on the writable account before the exam copy exists.
   const examWorkflowEarly=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
   if(readonlyExamIsolation(personal,examWorkflowEarly,input.role)&&this.config.provider==='claude'&&!this.config.syntheticFixture){
-   const login=await ensureExamLoginFresh({accountDir:accountRoot,now:Date.now(),renew:this.config.examLoginRenew??renewClaudeLoginInPlace});
+   const login=await ensureExamLoginFresh({accountDir:accountRoot,accountId:String(g.account_id),now:Date.now(),renew:this.config.examLoginRenew??renewClaudeLoginInPlace,lock:postgresAccountLoginLock(this.ledger)});
    if(login==='renewed'){
     accountSecrets=await readMountedCredentialSecrets('claude',accountRoot);
     assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);
    }
+   const mark=await readClaudeRefreshTokenHash(accountRoot);
+   if(!mark)throw new Refusal('EXAM_LOGIN_STALE',409);
+   this.examRefreshMarks.set(input.jobId,mark);
   }
   await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
   // Commit the uncertainty before files, Docker networks or processes exist.
@@ -638,20 +642,24 @@ export class NativeExecutionSupervisor{
   catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'||exitCode===0)throw error;result={schemaVersion:1,jobId:input.jobId,output:'',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:'WORKER_EXITED_WITHOUT_RESULT',exitCode:exitCode};}
   return result;
  }
- /** A changed exam copy is written back only when it is the same account. The credential then leaves the job output. */
+ /** A changed exam copy is written back only when it matches the starting mark and account. The credential always leaves the job output first. */
  private async settleExamCredential(accountId:string,jobId:string,result:z.infer<typeof Result>){
   if(result.examCredential===undefined)return;
   const returned=result.examCredential;
-  let text='';
-  try{text=JSON.stringify(returned);}catch{text='';}
-  if(text.length>0&&Buffer.byteLength(text)<=65536){
-   try{await applyReturnedExamCredential(join(this.config.accountRoot,accountId),text);}
-   catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
-  }
   delete result.examCredential;
   const clean={schemaVersion:result.schemaVersion,jobId:result.jobId,output:result.output,normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows,nativeSessionId:result.nativeSessionId,failureCode:result.failureCode,exitCode:result.exitCode};
   try{await writePrivateAtomic(join(this.paths(jobId).output,'execution-result.json'),JSON.stringify(clean));}
   catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
+  const mark=this.examRefreshMarks.get(jobId);
+  this.examRefreshMarks.delete(jobId);
+  let text='';
+  try{text=JSON.stringify(returned);}catch{text='';}
+  if(!mark||text.length===0||Buffer.byteLength(text)>65536)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+  let outcome:'written'|'rejected';
+  try{
+   outcome=await applyReturnedExamCredential(join(this.config.accountRoot,accountId),text,{accountId,expectedRefreshTokenHash:mark,lock:postgresAccountLoginLock(this.ledger)});
+  }catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
+  if(outcome!=='written')throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
  }
  async reconcile(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>):Promise<NativeExecutionOutcome>{
   const input=NativeExecutionRequest.parse(raw),job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];

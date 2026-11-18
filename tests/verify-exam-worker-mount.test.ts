@@ -50,6 +50,26 @@ class MountMemory {
       grant.state = 'uncertain';
       return wrote(1);
     }
+    if (text.startsWith("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1")) {
+      const grant = this.tables.ac_capacity_grants?.find(row => row.id === params[0]);
+      if (!grant) return wrote(0);
+      if (text.includes("('reserved','uncertain')") && grant.state !== 'reserved' && grant.state !== 'uncertain') return wrote(0);
+      grant.state = 'released';
+      grant.physical_receipt = params[1];
+      return wrote(1);
+    }
+    if (text.startsWith('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE')) {
+      const grant = this.tables.ac_capacity_grants?.find(row => row.id === params[0]);
+      return selected(grant ? [{...grant}] : []);
+    }
+    if (text.startsWith('UPDATE ac_native_execution_jobs SET state=$2,worker_id=$3,tools_id=$4,receipt=$5 WHERE id=$1')) {
+      const job = this.one('ac_native_execution_jobs', String(params[0]));
+      job.state = params[1];
+      job.worker_id = params[2];
+      job.tools_id = params[3];
+      job.receipt = params[4];
+      return wrote(1);
+    }
     if (text.startsWith('UPDATE ac_native_execution_jobs SET network_id=$2')) {
       const job = this.one('ac_native_execution_jobs', String(params[0]));
       job.network_id = params[1];
@@ -425,6 +445,202 @@ test('o host renova o login Claude antes de criar o exame e recusa se a renovaç
     });
     await assert.rejects(() => fresh.start(principal, authority, freshInput), /STOP_AFTER_CREATE/);
     assert.equal(freshRenews, 0);
+  } finally {
+    homes.mock.restore();
+    snaps.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('devolução válida grava e falha na devolução apaga examCredential de execution-result.json antes de recusar', async () => {
+  const {ledger, memory} = substituteLedger();
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-settle-')));
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const project = randomUUID();
+  const principal = 'exam-settle-' + randomUUID();
+  const account = randomUUID();
+  const profile = randomUUID();
+  const context = randomUUID();
+  const instance = randomUUID();
+  const intent = randomUUID();
+  const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => ({accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'}));
+  const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
+    await mkdir(destination, {recursive: true, mode: 0o700});
+  });
+  try {
+    for (const path of [repo, spool, accounts, join(accounts, account)]) await mkdir(path, {recursive: true, mode: 0o700});
+    const credential = join(accounts, account, '.credentials.json');
+    const now = Date.now();
+    const initialCred = {
+      claudeAiOauth: {
+        accessToken: 'fixture-access-start',
+        refreshToken: 'fixture-refresh-start',
+        expiresAt: now + 20 * 60 * 1000,
+        scopes: ['user:inference'],
+        subscriptionType: 'max',
+        rateLimitTier: 'default_claude_max_20x',
+      },
+      mcpOAuth: {keep: true},
+    };
+    await writeFile(credential, JSON.stringify(initialCred), {mode: 0o600});
+    await chmod(credential, 0o600);
+    memory.insert('ac_projects', {id: project});
+    memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_project_repositories', {project_id: project, repo});
+    memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
+    memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
+    memory.insert('ac_admission_control', {id: 1, enabled: true});
+    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    const keys = generateKeyPairSync('ed25519');
+    const image = 'sha256:' + 'c'.repeat(64);
+    const createdContainers = new Map<string, {id: string; labels: Record<string, string>}>();
+    let sequence = 0;
+    const supervisor = new NativeExecutionSupervisor(ledger, {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude',
+      socketPath: '/tmp/ac-no-host-socket.sock',
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: [],
+      toolsEnv: [],
+    }, {assertAdmission: async () => {}});
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+    const daemon = {
+      imagePresent: async () => true,
+      inspect: async (name: string) => {
+        const entry = createdContainers.get(name);
+        if (!entry) return null;
+        return {
+          Id: entry.id,
+          Image: image,
+          Config: {Labels: entry.labels},
+          State: {Status: 'exited', Running: false, ExitCode: 0, FinishedAt: '2026-11-18T12:00:00Z'},
+        };
+      },
+      inspectPrivateNetwork: async () => null,
+      stop: async () => {},
+      remove: async () => {},
+      createPrivateNetwork: async () => `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`,
+      create: async (name: string, configuration: {Labels?: Record<string, string>}) => {
+        const id = `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
+        createdContainers.set(name, {id, labels: configuration.Labels ?? {}});
+        return id;
+      },
+      start: async () => { throw new Error('STOP_AFTER_CREATE'); },
+    };
+    Object.defineProperty(supervisor, 'doc' + 'ker', {value: daemon});
+
+    // Caso 1: falha na devolução (arquivo trocado no meio) apaga examCredential de execution-result.json antes de recusar.
+    const grantFail = randomUUID();
+    const jobFail = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grantFail, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const inputFail = NativeExecutionRequest.parse({
+      jobId: jobFail, intentId: intent, grantId: grantFail, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(() => supervisor.start(principal, authority, inputFail), /STOP_AFTER_CREATE/);
+    // Troca o arquivo da conta no disco antes da devolução.
+    await writeFile(credential, JSON.stringify({
+      ...initialCred,
+      claudeAiOauth: {...initialCred.claudeAiOauth, refreshToken: 'fixture-refresh-concurrent-other'},
+    }), {mode: 0o600});
+    const failResultPath = join(spool, jobFail, 'output', 'execution-result.json');
+    const secretToken = 'sk-REJECTED-RETURN-TOKEN';
+    await writeFile(failResultPath, JSON.stringify({
+      schemaVersion: 1,
+      jobId: jobFail,
+      output: '{}',
+      normalizedTokensUsed: null,
+      usageWindows: null,
+      nativeSessionId: null,
+      failureCode: null,
+      exitCode: 0,
+      examCredential: {
+        claudeAiOauth: {
+          accessToken: secretToken,
+          refreshToken: 'fixture-refresh-worker-1',
+          expiresAt: now + 8 * 3600_000,
+          scopes: ['user:inference'],
+          subscriptionType: 'max',
+          rateLimitTier: 'default_claude_max_20x',
+        },
+      },
+    }), {mode: 0o600});
+    await assert.rejects(
+      () => supervisor.reconcile(principal, authority, inputFail),
+      (error: unknown) => error instanceof Refusal && error.code === 'NATIVE_EXECUTION_OUTPUT_INVALID',
+    );
+    const cleanedFailDisk = await readFile(failResultPath, 'utf8');
+    assert.equal(cleanedFailDisk.includes(secretToken), false);
+    assert.equal('examCredential' in JSON.parse(cleanedFailDisk), false);
+    assert.equal(JSON.parse(await readFile(credential, 'utf8')).claudeAiOauth.refreshToken, 'fixture-refresh-concurrent-other');
+
+    // Caso 2: devolução válida grava e também limpa examCredential do disco do job.
+    await writeFile(credential, JSON.stringify(initialCred), {mode: 0o600});
+    const grantOk = randomUUID();
+    const jobOk = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grantOk, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const inputOk = NativeExecutionRequest.parse({
+      jobId: jobOk, intentId: intent, grantId: grantOk, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(() => supervisor.start(principal, authority, inputOk), /STOP_AFTER_CREATE/);
+    const okResultPath = join(spool, jobOk, 'output', 'execution-result.json');
+    await writeFile(okResultPath, JSON.stringify({
+      schemaVersion: 1,
+      jobId: jobOk,
+      output: '{"ok":true}',
+      normalizedTokensUsed: null,
+      usageWindows: null,
+      nativeSessionId: null,
+      failureCode: null,
+      exitCode: 0,
+      examCredential: {
+        claudeAiOauth: {
+          accessToken: 'fixture-access-rotated-ok',
+          refreshToken: 'fixture-refresh-rotated-ok',
+          expiresAt: now + 8 * 3600_000,
+          scopes: ['user:inference'],
+          subscriptionType: 'max',
+          rateLimitTier: 'default_claude_max_20x',
+          extraNested: 'drop-me',
+        },
+        extraTop: 'drop-me-too',
+      },
+    }), {mode: 0o600});
+    const reconciled = await supervisor.reconcile(principal, authority, inputOk);
+    assert.equal(reconciled.state, 'completed');
+    const cleanedOkDisk = await readFile(okResultPath, 'utf8');
+    assert.equal('examCredential' in JSON.parse(cleanedOkDisk), false);
+    assert.equal(cleanedOkDisk.includes('fixture-refresh-rotated-ok'), false);
+    const savedCred = JSON.parse(await readFile(credential, 'utf8')) as {
+      claudeAiOauth: Record<string, unknown>;
+      mcpOAuth: {keep: boolean};
+      extraTop?: unknown;
+    };
+    assert.equal(savedCred.claudeAiOauth.accessToken, 'fixture-access-rotated-ok');
+    assert.equal(savedCred.claudeAiOauth.refreshToken, 'fixture-refresh-rotated-ok');
+    assert.equal('extraNested' in savedCred.claudeAiOauth, false);
+    assert.equal('extraTop' in savedCred, false);
+    assert.deepEqual(savedCred.mcpOAuth, {keep: true});
   } finally {
     homes.mock.restore();
     snaps.mock.restore();

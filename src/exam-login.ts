@@ -1,10 +1,11 @@
 import {spawn} from 'node:child_process';
-import {randomBytes} from 'node:crypto';
+import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, mkdtemp, open, rename, rm, unlink, type FileHandle} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {Refusal} from './contracts.ts';
+import type {Ledger} from './ledger.ts';
 
 /** Renew in place only when `expiresAt` is missing, unreadable, or has less than 5 minutes remaining. */
 export const EXAM_LOGIN_MARGIN_MS = 5 * 60 * 1000;
@@ -14,9 +15,36 @@ export const EXAM_LOGIN_STALE_TEXT = 'O login da conta venceu. Entre de novo: np
 const CREDENTIAL_LIMIT = 65536;
 const READ_OWN = constants.O_RDONLY | constants.O_NOFOLLOW;
 const WRITE_NEW = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
-const IDENTITY_FIELDS = ['organizationUuid', 'accountUuid', 'uuid'] as const;
+const IDENTITY_FIELDS = ['organizationUuid', 'accountUuid', 'uuid', 'subscriptionType', 'rateLimitTier'] as const;
 
 export type ReturnedCredentialClass = 'ok' | 'invalid' | 'other-account';
+export type AccountLoginLock = <T>(accountId: string, fn: () => Promise<T>) => Promise<T>;
+
+/** Advisory lock keyed by accountId on the installation Postgres, shared across gateway and CLI. */
+export function postgresAccountLoginLock(ledger: Pick<Ledger, 'tx'>): AccountLoginLock {
+  return (accountId, fn) =>
+    ledger.tx(async client => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 90))', [accountId]);
+      return fn();
+    });
+}
+
+export function hashExamRefreshToken(refreshToken: string): string {
+  return createHash('sha256').update(refreshToken, 'utf8').digest('hex');
+}
+
+/** Read only the SHA-256 hash of `claudeAiOauth.refreshToken` from the account directory. */
+export async function readClaudeRefreshTokenHash(accountDir: string): Promise<string | null> {
+  const text = await readCredentialText(join(accountDir, '.credentials.json')).catch(() => undefined);
+  if (text === undefined) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    const oauth = oauthOf(parsed);
+    return nonEmpty(oauth?.refreshToken) ? hashExamRefreshToken(oauth.refreshToken) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** `expiresAt` only. Values below 1e12 are seconds and become milliseconds. Anything else is unreadable. */
 export function claudeAccessExpiresAt(raw: unknown): number | null {
@@ -102,7 +130,7 @@ export function classifyReturnedCredential(originalText: string, returnedText: s
 
 /**
  * Compare the mounted login with the exam copy. An unchanged file, a symlink, or an unreadable file
- * sends nothing. Only a changed document that still belongs to the same account is returned.
+ * sends nothing. Only a rotated document that still belongs to the same account is returned.
  */
 export async function readExamCredentialReturn(originalPath: string, copyPath: string): Promise<Record<string, unknown> | undefined> {
   try {
@@ -111,30 +139,85 @@ export async function readExamCredentialReturn(originalPath: string, copyPath: s
     if (original === undefined || copy === undefined || original === copy) return undefined;
     if (Buffer.byteLength(copy) > CREDENTIAL_LIMIT) return undefined;
     if (classifyReturnedCredential(original, copy) !== 'ok') return undefined;
-    const parsed: unknown = JSON.parse(copy);
-    if (!isRecord(parsed)) return undefined;
-    return parsed;
+    const origParsed: unknown = JSON.parse(original);
+    const copyParsed: unknown = JSON.parse(copy);
+    if (!isRecord(origParsed) || !isRecord(copyParsed)) return undefined;
+    const origOauth = oauthOf(origParsed);
+    const copyOauth = oauthOf(copyParsed);
+    if (!origOauth || !copyOauth) return undefined;
+    if (!nonEmpty(origOauth.refreshToken) || !nonEmpty(copyOauth.refreshToken)) return undefined;
+    if (copyOauth.refreshToken === origOauth.refreshToken) return undefined;
+    const origExpires = claudeAccessExpiresAt(origOauth.expiresAt);
+    const copyExpires = claudeAccessExpiresAt(copyOauth.expiresAt);
+    if (copyExpires === null || !Number.isFinite(copyExpires)) return undefined;
+    if (origExpires !== null && copyExpires <= origExpires) return undefined;
+    return copyParsed;
   } catch {
     return undefined;
   }
 }
 
-/** Write the validated document back. Invalid JSON, another account, or a symlink is rejected and the file stays. */
-export async function applyReturnedExamCredential(accountDir: string, returnedText: string): Promise<'written' | 'rejected'> {
+/**
+ * Write back only `accessToken`, `refreshToken`, and `expiresAt` under the account lock when:
+ * - current `refreshToken` SHA-256 still matches the starting mark;
+ * - returned `expiresAt` is greater than current;
+ * - returned `refreshToken` differs from current;
+ * - `scopes`, `subscriptionType`, `rateLimitTier` (and any UUID identity fields) match.
+ * All other top-level and nested keys stay from the current file.
+ */
+export async function applyReturnedExamCredential(
+  accountDir: string,
+  returnedText: string,
+  options: {
+    expectedRefreshTokenHash: string;
+    accountId?: string;
+    lock?: AccountLoginLock;
+  },
+): Promise<'written' | 'rejected'> {
   if (Buffer.byteLength(returnedText) > CREDENTIAL_LIMIT) return 'rejected';
-  const file = join(accountDir, '.credentials.json');
-  const original = await readCredentialText(file).catch(() => undefined);
-  if (original === undefined) return 'rejected';
-  if (classifyReturnedCredential(original, returnedText) !== 'ok') return 'rejected';
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(returnedText);
-  } catch {
-    return 'rejected';
-  }
-  if (!isRecord(parsed)) return 'rejected';
-  await writePrivateAtomic(file, JSON.stringify(parsed));
-  return 'written';
+  if (!/^[a-f0-9]{64}$/.test(options.expectedRefreshTokenHash)) return 'rejected';
+  const run = async (): Promise<'written' | 'rejected'> => {
+    const file = join(accountDir, '.credentials.json');
+    const original = await readCredentialText(file).catch(() => undefined);
+    if (original === undefined) return 'rejected';
+    if (classifyReturnedCredential(original, returnedText) !== 'ok') return 'rejected';
+    let currentParsed: unknown;
+    let returnedParsed: unknown;
+    try {
+      currentParsed = JSON.parse(original);
+      returnedParsed = JSON.parse(returnedText);
+    } catch {
+      return 'rejected';
+    }
+    if (!isRecord(currentParsed) || !isRecord(returnedParsed)) return 'rejected';
+    const currentOauth = oauthOf(currentParsed);
+    const returnedOauth = oauthOf(returnedParsed);
+    if (!currentOauth || !returnedOauth) return 'rejected';
+    if (!nonEmpty(currentOauth.refreshToken) || !nonEmpty(returnedOauth.refreshToken) || !nonEmpty(returnedOauth.accessToken)) {
+      return 'rejected';
+    }
+    if (!hashesEqual(hashExamRefreshToken(currentOauth.refreshToken), options.expectedRefreshTokenHash)) {
+      return 'rejected';
+    }
+    if (returnedOauth.refreshToken === currentOauth.refreshToken) return 'rejected';
+    const currentExpires = claudeAccessExpiresAt(currentOauth.expiresAt);
+    const returnedExpires = claudeAccessExpiresAt(returnedOauth.expiresAt);
+    if (returnedExpires === null || !Number.isFinite(returnedExpires)) return 'rejected';
+    if (currentExpires !== null && returnedExpires <= currentExpires) return 'rejected';
+    const nextDoc: Record<string, unknown> = {
+      ...currentParsed,
+      claudeAiOauth: {
+        ...currentOauth,
+        accessToken: returnedOauth.accessToken,
+        refreshToken: returnedOauth.refreshToken,
+        expiresAt: returnedOauth.expiresAt,
+      },
+    };
+    await writePrivateAtomic(file, JSON.stringify(nextDoc));
+    return 'written';
+  };
+  if (options.lock && options.accountId) return options.lock(options.accountId, run);
+  return run();
 }
 
 /** Rewrite `.credentials.json` as compact JSON, mode 0600, keeping the owner. A symlink is refused. */
@@ -188,25 +271,33 @@ export async function writePrivateAtomic(file: string, body: string): Promise<vo
  */
 export async function ensureExamLoginFresh(input: {
   accountDir: string;
+  accountId?: string;
   now: number;
   examMaxMs?: number;
   renew: (accountDir: string) => Promise<void>;
+  lock?: AccountLoginLock;
 }): Promise<'fresh' | 'renewed'> {
   const before = await readClaudeExpiresAt(input.accountDir);
   if (!examLoginNeedsRefresh(before, input.now)) return 'fresh';
-  try {
-    await input.renew(input.accountDir);
-  } catch {
-    /* The file is the record. A non-zero exit can still have written a fresh token. */
-  }
-  const after = await readClaudeExpiresAt(input.accountDir);
-  if (!examLoginFreshAfterRenew(after, input.now)) throw new Refusal('EXAM_LOGIN_STALE', 409);
-  try {
-    await normalizeAccountCredential(input.accountDir);
-  } catch {
-    throw new Refusal('EXAM_LOGIN_STALE', 409);
-  }
-  return 'renewed';
+  const run = async (): Promise<'fresh' | 'renewed'> => {
+    const current = await readClaudeExpiresAt(input.accountDir);
+    if (!examLoginNeedsRefresh(current, input.now)) return 'fresh';
+    try {
+      await input.renew(input.accountDir);
+    } catch {
+      /* The file is the record. A non-zero exit can still have written a fresh token. */
+    }
+    const after = await readClaudeExpiresAt(input.accountDir);
+    if (!examLoginFreshAfterRenew(after, input.now)) throw new Refusal('EXAM_LOGIN_STALE', 409);
+    try {
+      await normalizeAccountCredential(input.accountDir);
+    } catch {
+      throw new Refusal('EXAM_LOGIN_STALE', 409);
+    }
+    return 'renewed';
+  };
+  if (input.lock && input.accountId) return input.lock(input.accountId, run);
+  return run();
 }
 
 /**
@@ -279,6 +370,11 @@ function oauthOf(value: unknown): Record<string, unknown> | null {
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function hashesEqual(leftHex: string, rightHex: string): boolean {
+  if (!/^[a-f0-9]{64}$/.test(leftHex) || !/^[a-f0-9]{64}$/.test(rightHex)) return false;
+  return timingSafeEqual(Buffer.from(leftHex, 'hex'), Buffer.from(rightHex, 'hex'));
 }
 
 /** Sorted scope set. `null` means the field is not a list of strings. Missing scopes are an empty set. */
