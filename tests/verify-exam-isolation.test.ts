@@ -211,6 +211,7 @@ test('a origem da conta não muda e só o mount do exame é somente leitura', as
       for (const path of [
         '/account/.credentials.json', '/tmp/ac-exam-login-*', '/tmp/ac-exam-login-*/**',
         '/proc/self/environ', '/runner', '/runner/**',
+        '/proc/**', '/account/**', '/input/**', '/account/.claude.json',
       ]) {
         for (const tool of ['Read', 'Grep', 'Glob']) {
           assert.ok(deny.includes(`${tool}(${path})`), `${tool}(${path})`);

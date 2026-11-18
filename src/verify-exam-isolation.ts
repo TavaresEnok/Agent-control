@@ -127,6 +127,7 @@ const EXAM_LOGIN_FILES = [
 const EXAM_DENY_PATHS = [
   '/account/.credentials.json', '/tmp/ac-exam-login-*', '/tmp/ac-exam-login-*/**',
   '/proc/self/environ', '/runner', '/runner/**',
+  '/proc/**', '/account/**', '/input/**', '/account/.claude.json',
 ] as const;
 
 function examReadDenyRules(): string[] {
