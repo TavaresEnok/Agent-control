@@ -6,10 +6,11 @@ import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
 import {finishExamIntent} from './exam-intent.ts';
-import {acceptClaudeExamSeat} from './exam-provider.ts';
+import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {publicLoginRecord, type DesignLogin, type PublicLoginRecord} from './design-discover.ts';
 import type {DesignSourceFile} from './design-collect.ts';
+import type {DesignReserveOptions, DesignSeat} from './design-examine.ts';
 import {createDesignNativeWorker, type DesignExamSupervisor} from './design-native-launch.ts';
 import {loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
@@ -26,14 +27,6 @@ const SKIP_DIR = new Set([
   'node_modules', '.git', 'dist', '.design-captures', '.ai', '.state', 'coverage', '.next', 'build', 'out',
   '.claude', '.mcp.json', '.codex', '.grok',
 ]);
-
-type DesignSeat = {
-  provider: string;
-  model: string;
-  accountId: string;
-  profileId: string;
-  grantId: string;
-};
 
 export type ParsedDesignArgs = {
   installationPath: string;
@@ -52,7 +45,7 @@ export type ResolvedPersonalDesign = {
   commit: string;
   intentId: string;
   worker: DesignWorker;
-  reserve(role: 'specialist' | 'reviewer', avoidProvider?: string): Promise<DesignSeat>;
+  reserve(role: 'specialist' | 'reviewer', avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat>;
   release(seat: DesignSeat): Promise<void>;
   close(): Promise<void>;
 };
@@ -376,15 +369,6 @@ async function insertDesignIntent(
   return intentId;
 }
 
-async function readSeat(ledger: Ledger, grantId: string, accountId: string, profileId: string): Promise<DesignSeat> {
-  const row = (await ledger.pool.query<{provider: string; model: string}>(
-    'SELECT a.provider, p.model FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',
-    [grantId],
-  )).rows[0];
-  if (!row?.provider || !row.model) throw new Refusal('GRANT_FORBIDDEN', 403);
-  return {provider: String(row.provider), model: String(row.model), accountId, profileId, grantId};
-}
-
 export async function resolvePersonalDesign(
   argv: readonly string[],
   known?: {installationPath?: string; projectId?: string; composeRuntime?: typeof composePersonalRuntime},
@@ -419,20 +403,32 @@ export async function resolvePersonalDesign(
       base: commit,
       releaseGrant,
     });
-    const reserve = async (role: 'specialist' | 'reviewer', avoidProvider?: string): Promise<DesignSeat> => {
+    let lastExaminerSeat: {profileId: string; accountId: string} | undefined;
+    const capacity = new Capacity(ledger);
+    const reserve = async (
+      role: 'specialist' | 'reviewer',
+      avoidProvider?: string,
+      options?: DesignReserveOptions,
+    ): Promise<DesignSeat> => {
       void avoidProvider;
-      const capacity = new Capacity(ledger);
-      const grant = await capacity.reserve(principal, {
-        attemptId: randomUUID(),
+      const purpose = options?.purpose ?? (role === 'reviewer' ? 'reviewer' : 'examiner');
+      const avoidProfileId = purpose === 'reviewer' ? (options?.avoidProfileId ?? lastExaminerSeat?.profileId) : undefined;
+      const avoidAccountId = purpose === 'reviewer' ? (options?.avoidAccountId ?? lastExaminerSeat?.accountId) : undefined;
+      const seat = await reserveSpecialistExamSeat({
+        capacity,
+        ledger,
+        principal,
+        authority: authority!,
         intentId: intentId!,
-        contextId: authority!.contextId,
-        role,
-      }, authority!);
-      const seat = await readSeat(ledger, grant.id, grant.account_id, grant.profile_id);
-      if (seat.provider !== 'claude') {
-        await releaseDesignGrant(ledger, principal, authority!, seat.grantId, 'not_started');
+        purpose,
+        avoidProfileId,
+        avoidAccountId,
+        releaseGrant: grantId => releaseGrant(grantId, 'not_started'),
+      });
+      if (purpose === 'examiner') {
+        lastExaminerSeat = {profileId: seat.profileId, accountId: seat.accountId};
       }
-      return acceptClaudeExamSeat(seat);
+      return {...seat, grantRole: 'specialist'};
     };
     return {
       ledger,

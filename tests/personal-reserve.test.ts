@@ -6,7 +6,8 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {Capacity,CapacityPolicy,programmerChain} from '../src/capacity.ts';
 import {reserveYieldReason} from '../src/capacity-exclusions.ts';
-import type {Command} from '../src/contracts.ts';
+import {projectCapacitySelection} from '../src/control.ts';
+import {Refusal, type Command} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {applyPersonalCombo,writeOwnerCombo,type PersonalCombo} from '../src/personal-combos.ts';
 import {reserveAssumptionNotices,reserveAssumptionText} from '../src/personal-team-feed.ts';
@@ -123,4 +124,56 @@ test('exhausted titular yields to the reserve and the reviewer stays on another 
   const fallback=await capacity.reserve(principal,{attemptId:randomUUID(),intentId:retried,contextId:context,role:'reviewer',avoidAccounts:[claude,grok]},authority);
   assert.equal(await providerOf(fallback.profile_id),'claude');
  }finally{await db.close();await database.close();await rm(dir,{recursive:true,force:true});}
+});
+
+test('preferredProfileId, avoidProfiles e provider selecionam perfil específico sem fallback proibido',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
+ const database=await isolatedDatabase(databaseUrl!,'specprof'),db=new Ledger(database.url);
+ try{
+  await db.migrate();
+  const principal='spec-owner',project=randomUUID(),capacity=new Capacity(db);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Specialist Reserve']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
+  await capacity.registerModel(principal,{provider:'claude',model:'claude-opus-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://spec'});
+  await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://spec'});
+  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.7',efforts:['medium'],roles:['specialist'],source:'synthetic://spec'});
+  const claudeA=randomUUID(),grokA=randomUUID();
+  await capacity.addAccount(principal,project,{id:claudeA,provider:'claude',label:'claude-a',resourceIdentity:`claude:${claudeA}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://spec',maxConcurrent:4});
+  await capacity.addAccount(principal,project,{id:grokA,provider:'grok',label:'grok-a',resourceIdentity:`grok:${grokA}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://spec',maxConcurrent:4});
+  await capacity.observeQuota(principal,claudeA,{status:'available',source:'synthetic://spec',ttlSeconds:3600});
+  await capacity.observeQuota(principal,grokA,{status:'available',source:'synthetic://spec',ttlSeconds:3600});
+  const pOpus=randomUUID(),pSonnet=randomUUID(),pGrok=randomUUID();
+  await capacity.addProfile(principal,project,{id:pOpus,accountId:claudeA,model:'claude-opus-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pSonnet,accountId:claudeA,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pGrok,accountId:grokA,model:'grok-4.7',effort:'medium',role:'specialist'});
+  const rev=await capacity.publish(principal,project,0,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   roles:{specialist:{regular:[pGrok,pOpus],emergency:[pSonnet]}},
+  });
+  const context=await db.createContext(principal,project,randomUUID());
+  await capacity.assignPolicy(principal,context,rev);
+  const authority=await db.acquire(principal,context,randomUUID(),'spec-reserve',60);
+  const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:rev,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'spec'}};
+  const intentId=(await db.accept(principal,command,authority,'api')).id;
+  const release=async(id:string)=>capacity.transition(principal,id,authority,'released',{processId:'spec',state:'not_started'});
+  const selectionOf=async(id:string)=>projectCapacitySelection((await db.pool.query('SELECT * FROM ac_capacity_grants WHERE id=$1',[id])).rows[0]);
+
+  const claudeOnly=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:context,role:'specialist',provider:'claude'},authority);
+  assert.equal(claudeOnly.profile_id,pOpus);
+  assert.ok(await selectionOf(claudeOnly.id));
+  await release(claudeOnly.id);
+
+  const preferredReviewer=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:context,role:'specialist',provider:'claude',preferredProfileId:pSonnet,avoidProfiles:[pOpus]},authority);
+  assert.equal(preferredReviewer.profile_id,pSonnet);
+  assert.equal(preferredReviewer.emergency,true);
+  assert.ok(await selectionOf(preferredReviewer.id));
+  await release(preferredReviewer.id);
+
+  await assert.rejects(
+   capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:context,role:'specialist',provider:'claude',avoidProfiles:[pOpus,pSonnet]},authority),
+   (error:unknown)=>error instanceof Refusal&&error.code==='NO_ELIGIBLE_CAPACITY',
+  );
+ }finally{await db.close();await database.close();}
 });

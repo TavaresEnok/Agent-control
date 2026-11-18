@@ -2073,6 +2073,7 @@ rl.once('line', line => {
     const principal = 'report-secret-' + randomUUID();
     const account = randomUUID();
     const specProfile = randomUUID();
+    const specRevProfile = randomUUID();
     const revProfile = randomUUID();
     await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'secret report test']);
     await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
@@ -2092,13 +2093,14 @@ rl.once('line', line => {
       mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://exam-report', maxConcurrent: 2,
     });
     await capacity.addProfile(principal, project, {id: specProfile, accountId: account, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, project, {id: specRevProfile, accountId: account, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
     await capacity.addProfile(principal, project, {id: revProfile, accountId: account, model: 'claude-sonnet-5-5', effort: 'medium', role: 'reviewer'});
     await collectors.bind(principal, project, {accountId: account, adapterId: adapterSpec.manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});
     const revision = await capacity.publish(principal, project, 0, {
       schemaVersion: 1,
       maxProgrammersPerContext: 1,
       maxEvaluatorsPerContext: 1,
-      roles: {specialist: {regular: [specProfile], emergency: []}, reviewer: {regular: [revProfile], emergency: []}},
+      roles: {specialist: {regular: [specProfile], emergency: [specRevProfile]}, reviewer: {regular: [revProfile], emergency: []}},
     });
     await mkdir(join(accounts, account), {recursive: true, mode: 0o700});
     await writeFile(join(accounts, account, '.credentials.json'), JSON.stringify({

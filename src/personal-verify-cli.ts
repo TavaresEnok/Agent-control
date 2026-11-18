@@ -24,6 +24,7 @@ const messages:Record<string,string>={
  VERIFY_TARGET_FORBIDDEN:'O contêiner de homologação não está na lista da instalação.',
  VERIFY_LEASE_LOST:'A locação da verificação falhou.',
  VERIFY_TOO_MANY:'A reverificação aceita no máximo 20 achados.',
+ DESIGN_REVIEWER_UNAVAILABLE:'Falta um segundo perfil Claude na cadeia specialist para o revisor; rode `npm run personal:design -- preparar <instalação.json> <projectId> --aplicar`.',
  EXAM_PROVIDER_UNSUPPORTED:'O exame de leitura só aceita uma conta Claude.',
  EXAM_LOGIN_STALE:EXAM_LOGIN_STALE_TEXT,
  EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,

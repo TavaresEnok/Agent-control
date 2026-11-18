@@ -299,10 +299,10 @@ async function main(){
      const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:async(intentId,avoidProviders)=>{
       const capacity=new Capacity(ledger);
       const avoided:string[]=[];
-      let fallback:{grantId:string;accountId:string;provider:string}|undefined;
-      try{
+       let fallback:{grantId:string;accountId:string;provider:string;role:'specialist'}|undefined;
+       try{
        for(let attempt=0;attempt<4;attempt++){
-        const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'reviewer',...(avoided.length?{avoidAccounts:[...avoided]}:{})},authority);
+        const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'specialist',provider:'claude',...(avoided.length?{avoidAccounts:[...avoided]}:{})},authority);
         const found=await ledger.pool.query('SELECT a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',[grant.id]);
         const row=found.rows[0] as {provider?:unknown}|undefined;
         const provider=typeof row?.provider==='string'?row.provider:'';
@@ -314,12 +314,12 @@ async function main(){
         }
         if(choice.kind==='hold'){
          if(fallback)await releaseGrant(principal,authority,fallback.grantId,'not_started');
-         fallback=choice.seat;
+         fallback={...choice.seat,role:'specialist'};
          avoided.push(choice.accountId);
          continue;
         }
         if(fallback&&fallback.grantId!==choice.seat.grantId)await releaseGrant(principal,authority,fallback.grantId,'not_started');
-        return choice.seat;
+        return {...choice.seat,role:'specialist' as const};
        }
       }catch(error){
        if(fallback)await releaseGrant(principal,authority,fallback.grantId,'not_started');

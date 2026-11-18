@@ -10,7 +10,7 @@ import {readDesignCaptureStageNote, writeDesignExamCaptures} from './design-capt
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
 import {discoverRoutesFromSource, dynamicRoutesMissingExample, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type DiscoveredRoute, type ScreenCoverageRow} from './design-discover.ts';
-import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture} from './design-examine.ts';
+import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture, type DesignSeat} from './design-examine.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {
@@ -44,14 +44,6 @@ import {
 
 const MAX_SCREENS = 40;
 const MAX_CAPTURE_ROUTES = 8;
-
-type DesignSeat = {
-  provider: string;
-  model: string;
-  accountId: string;
-  profileId: string;
-  grantId: string;
-};
 
 export type DesignModuleMark = {
   fileName: string;

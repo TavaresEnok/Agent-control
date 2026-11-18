@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {Refusal, type Authority} from '../src/contracts.ts';
 import type {Ledger} from '../src/ledger.ts';
-import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease} from '../src/personal-verify-cli.ts';
+import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease, verifyCliFailureText} from '../src/personal-verify-cli.ts';
 import {createCapacityNativeWorker, type SecurityExamSupervisor} from '../src/verify-native-launch.ts';
 import type {VerifyWorkerCall} from '../src/verify-types.ts';
 
@@ -164,4 +164,9 @@ test('perder a locação pede stop e mantém VERIFY_LEASE_LOST quando stop falha
   assert.ok(rejected instanceof Refusal && rejected.code === 'VERIFY_LEASE_LOST');
   release();
   assert.equal(await pending, 'ok');
+});
+
+test('DESIGN_REVIEWER_UNAVAILABLE no validador orienta rodar preparar --aplicar', () => {
+  const text = verifyCliFailureText(new Refusal('DESIGN_REVIEWER_UNAVAILABLE', 409));
+  assert.match(text, /npm run personal:design -- preparar .*--aplicar/);
 });

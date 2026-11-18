@@ -162,7 +162,7 @@ export function createRecheckNativeWorker(input: {
   principal: string;
   authority: Authority;
   base: string;
-  reserveReviewer(intentId: string, avoidProviders?: readonly string[]): Promise<{grantId: string; accountId: string; provider: string}>;
+  reserveReviewer(intentId: string, avoidProviders?: readonly string[]): Promise<{grantId: string; accountId: string; provider: string; role?: 'specialist' | 'reviewer'}>;
   releaseGrant?: ReleaseGrant;
   wait?: Wait;
 }): VerifyWorker {
@@ -187,7 +187,7 @@ export function createRecheckNativeWorker(input: {
           grantId: reserved.grantId,
           sessionId: randomUUID(),
           base,
-          role: 'reviewer',
+          role: reserved.role ?? 'reviewer',
           task: parsed.task,
           artifactId: randomUUID(),
         });
