@@ -4,6 +4,7 @@ import {redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-r
 import type {AgentRunner,AgentRunSpec,AgentSession} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 import {usageWindowsObservationSchema,type UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {Refusal} from './contracts.ts';
+import {providerFailureCode} from './exam-login.ts';
 import {claudeLimitFromText,preferredLimitUsage} from './quota-exhaustion.ts';
 import {extractJsonObject} from './claude-planning-adapter.ts';
 import {Effort,runnerEffort} from './effort.ts';
@@ -62,12 +63,16 @@ export class ClaudeExecutionAdapter{
    if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');if(timedOut)throw new Refusal('EXECUTION_TIMEOUT');
    const limit=failed||!completed?claudeLimitFromText([providerText,result.text]):null;
    if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
-   if(failed||!completed)throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
+   if(failed||!completed){
+    const auth=providerFailureCode([providerText,result.text].join('\n'));
+    if(auth)throw new ClaudeExecutionFailure(auth,tokens,usage);
+    throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
+   }
    const extracted=input.outputSchema?extractJsonObject(result.text):undefined;
    const text=extracted===undefined?result.text:JSON.stringify(extracted);
    if(Buffer.byteLength(text)>256*1024)throw new Refusal('EXECUTION_OUTPUT_TOO_LARGE');
    return {output:redactSecrets(text,secrets),tokensUsed:tokens,usageWindows:usage,nativeSessionId:result.sessionId??null};
-  }catch(error){if(error instanceof ClaudeExecutionFailure)throw error;const limit=claudeLimitFromText([providerText,error instanceof Error?error.message:'']);if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));throw new ClaudeExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage);}
+  }catch(error){if(error instanceof ClaudeExecutionFailure)throw error;const joined=[providerText,error instanceof Error?error.message:''].join('\n');const limit=claudeLimitFromText([providerText,error instanceof Error?error.message:'']);if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));const auth=providerFailureCode(joined);if(auth)throw new ClaudeExecutionFailure(auth,tokens,usage);throw new ClaudeExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage);}
   finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
  }
 }

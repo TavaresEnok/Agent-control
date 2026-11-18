@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {Refusal, type Authority} from './contracts.ts';
+import {safeFailureCode} from './exam-login.ts';
 import type {Ledger} from './ledger.ts';
 import {DesignWorkerCall, type DesignWorker} from './design-types.ts';
 import {NativeExecutionRequest} from './native-execution-supervisor.ts';
@@ -20,7 +21,7 @@ export type DesignExamSupervisor = {
   active: boolean;
   supportsAccount(accountId: string): boolean;
   start(principal: string, authority: Authority, request: DesignExamRequest): Promise<{state: string}>;
-  reconcile(principal: string, authority: Authority, request: DesignExamRequest): Promise<{state: string; output?: string}>;
+  reconcile(principal: string, authority: Authority, request: DesignExamRequest): Promise<{state: string; output?: string; failureCode?: string | null}>;
   retireTerminal(principal: string, authority: Authority, jobId: string): Promise<unknown>;
 };
 
@@ -71,7 +72,7 @@ async function observeExam(
   authority: Authority,
   request: DesignExamRequest,
   wait: Wait,
-): Promise<{state: string; output?: string}> {
+): Promise<{state: string; output?: string; failureCode?: string | null}> {
   await supervisor.start(principal, authority, request);
   for (let attempt = 0; attempt < EXAM_ATTEMPTS; attempt += 1) {
     const outcome = await supervisor.reconcile(principal, authority, request);
@@ -91,7 +92,7 @@ async function finishExam(
   grantId: string,
   wait: Wait,
 ): Promise<string> {
-  let outcome: {state: string; output?: string};
+  let outcome: {state: string; output?: string; failureCode?: string | null};
   try {
     outcome = await observeExam(supervisor, principal, authority, request, wait);
   } catch (error) {
@@ -99,6 +100,7 @@ async function finishExam(
     throw error;
   }
   await supervisor.retireTerminal(principal, authority, request.jobId);
+  if (outcome.state === 'failed') throw new Refusal(safeFailureCode(outcome.failureCode));
   return outcome.output ?? '';
 }
 

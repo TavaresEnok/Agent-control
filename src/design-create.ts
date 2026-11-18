@@ -4,6 +4,7 @@ import {join, relative, resolve} from 'node:path';
 import {defaultTreeAdapter, html as parse5Html, parse, serialize} from 'parse5';
 import type {DefaultTreeAdapterTypes} from 'parse5';
 import {Refusal} from './contracts.ts';
+import {providerFailureCode, safeFailureCode} from './exam-login.ts';
 import type {DesignRawFinding, DesignWorker} from './design-types.ts';
 import {DesignWorkerCall} from './design-types.ts';
 
@@ -32,6 +33,15 @@ export type CreateExamScreen = {
 };
 
 export type CreateExam = {screens: CreateExamScreen[]; notes: string[]};
+
+/** The model returned no screens. `causeCode` is a provider code, never the raw sentence. */
+export class DesignCreateModelFailure extends Refusal {
+  readonly causeCode: string;
+  constructor(cause: string) {
+    super('DESIGN_CREATE_MODEL_FAILED', 400);
+    this.causeCode = safeFailureCode(cause);
+  }
+}
 
 export type CreateRound = {
   round: number;
@@ -588,25 +598,33 @@ export async function runDesignCreate(input: {
   for (let round = 1; round <= input.rounds; round += 1) {
     const expect = rework.length > 0 ? rework.length : input.screens;
     const seat = await input.reserve();
+    const call = DesignWorkerCall.parse({
+      role: 'specialist',
+      provider: seat.provider,
+      accountId: seat.accountId,
+      profileId: seat.profileId,
+      model: seat.model,
+      grantId: seat.grantId,
+      intentId: input.intentId,
+      task: createTask({briefing: input.briefing, screens: expect, round, referenceNote: input.referenceNote, rework}),
+      repo: input.repository,
+      writePaths: [],
+      forcedModel: 'claude-opus-5-5',
+      forcedEffort: 'medium',
+    });
     let output = '';
     try {
-      const call = DesignWorkerCall.parse({
-        role: 'specialist',
-        provider: seat.provider,
-        accountId: seat.accountId,
-        profileId: seat.profileId,
-        model: seat.model,
-        grantId: seat.grantId,
-        intentId: input.intentId,
-        task: createTask({briefing: input.briefing, screens: expect, round, referenceNote: input.referenceNote, rework}),
-        repo: input.repository,
-        writePaths: [],
-        forcedModel: 'claude-opus-5-5',
-        forcedEffort: 'medium',
-      });
       output = await input.worker.run(call);
+    } catch (error) {
+      if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
+      throw new DesignCreateModelFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
     } finally {
       await input.release(seat);
+    }
+    const trimmed = output.trim();
+    if (trimmed.length === 0) throw new DesignCreateModelFailure('EXECUTION_NATIVE_FAILED');
+    if (providerFailureCode(output) === 'PROVIDER_AUTH_FAILED' && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      throw new DesignCreateModelFailure('PROVIDER_AUTH_FAILED');
     }
     let parsed: unknown = null;
     try {

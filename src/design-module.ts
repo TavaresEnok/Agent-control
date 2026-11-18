@@ -105,6 +105,7 @@ export type DesignModuleResult = {
   coverageMarkdown: string;
   visualLow: boolean;
   loginStale: boolean;
+  visualUnjudged: boolean;
 };
 
 /**
@@ -300,6 +301,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     sections: extras.sections,
     files: extras.files,
     coverage: examined.coverage,
+    modelCoverage: examined.modelCoverage,
   });
   const written = await writeDesignReport({
     dataDirectory: input.dataDirectory,
@@ -309,6 +311,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     commit: input.commit,
     mapMarkdown,
     coverage: examined.coverage,
+    modelCoverage: examined.modelCoverage,
     achados,
     raw,
     note,
@@ -325,6 +328,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     coverageMarkdown: read.coverageMarkdown,
     visualLow: examined.visual.some(row => row.examiner.some(score => score.score < 8)),
     loginStale: examined.loginStale,
+    visualUnjudged: input.scoreVisual === true && examined.modelCoverage.examiner.requested > 0 && examined.visual.length === 0,
   };
 }
 

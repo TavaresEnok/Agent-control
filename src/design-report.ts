@@ -4,7 +4,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments, type DesignRunInput} from './design-image.ts';
 import {captureProof} from './design-mark.ts';
-import {DesignAchado, DesignCoverageRow, DesignReportSummary} from './design-types.ts';
+import {DesignAchado, DesignCoverageRow, DesignReportSummary, type DesignExamCoverage} from './design-types.ts';
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}-design$/;
 const ACHADO_FILE = /^ACH-\d{3}\.md$/;
@@ -56,6 +56,8 @@ export type DesignReportWriteInput = {
   sections?: readonly {title: string; markdown: string}[];
   /** Arquivos extras na raiz do relatório, modo 0600. */
   files?: readonly {name: string; body: string}[];
+  /** Examiner and reviewer rows. Absent, cobertura.md stays the file table only. */
+  modelCoverage?: DesignExamCoverage;
 };
 
 function hasLiveAccessKey(text: string): boolean {
@@ -190,7 +192,23 @@ function cell(value: string): string {
   return value.replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
 }
 
-function coverageMarkdown(rows: readonly DesignCoverageRow[]): string {
+function failureCell(value: string): string {
+  return value === 'nenhuma' || /^[A-Z][A-Z0-9_]{0,79}$/.test(value) ? value : 'EXECUTION_NATIVE_FAILED';
+}
+
+function modelCoverageTable(exam: DesignExamCoverage): string {
+  const line = (role: 'examinador' | 'revisor', row: DesignExamCoverage['examiner']) =>
+    `| ${role} | ${cell(row.model)} | ${row.requested} | ${row.judged} | ${cell(failureCell(row.failure))} |`;
+  return [
+    '| Papel | Modelo | Telas pedidas | Telas julgadas | Falha |',
+    '|---|---|---|---|---|',
+    line('examinador', exam.examiner),
+    line('revisor', exam.reviewer),
+    '',
+  ].join('\n');
+}
+
+function coverageMarkdown(rows: readonly DesignCoverageRow[], exam?: DesignExamCoverage): string {
   const lines = [
     '# Cobertura',
     '',
@@ -199,7 +217,8 @@ function coverageMarkdown(rows: readonly DesignCoverageRow[]): string {
     ...rows.map(row => `| ${cell(row.file)} | ${cell(`${row.examinerProvider}/${row.examinerModel}`)} | ${cell(row.checklist.join(', '))} |`),
     '',
   ];
-  return lines.join('\n');
+  const fileTable = lines.join('\n');
+  return exam === undefined ? fileTable : `${fileTable}${modelCoverageTable(exam)}`;
 }
 
 const PROBE_RUN: Omit<DesignRunInput, 'memoryBytes' | 'nanoCpus' | 'pidsLimit'> = {
@@ -744,6 +763,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     }
     return {title: section.title, markdown: section.markdown};
   });
+  if (input.modelCoverage) sections.push({title: 'Cobertura do exame', markdown: modelCoverageTable(input.modelCoverage)});
   const extras = (input.files ?? []).map(file => {
     if (!file || typeof file.name !== 'string' || !EXTRA_FILE.test(file.name) || typeof file.body !== 'string') {
       throw new Refusal('DESIGN_REPORT_INVALID', 400);
@@ -759,6 +779,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     raw: input.raw,
     sections,
     extras,
+    modelCoverage: input.modelCoverage ?? null,
   });
   const rawBody = serializedRaw(input.raw);
   const achados = parseAchados(input.achados);
@@ -791,7 +812,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
       sections,
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
-    {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage))},
+    {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage, input.modelCoverage))},
     {segments: ['achados.json'], body: guard(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guard(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},

@@ -1,5 +1,5 @@
 import {Refusal} from './contracts.ts';
-import {EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
+import {EXAM_LOGIN_STALE_TEXT, providerFailureCode, safeFailureCode} from './exam-login.ts';
 import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {
   parseVisualScores,
@@ -13,6 +13,7 @@ import {
   DesignExamFinding,
   DesignExamResult,
   DesignWorkerCall,
+  type DesignExamCoverage,
   clampHighSeverity,
   type DesignChecklistItem,
   type DesignMeasure as DesignMeasureValue,
@@ -351,11 +352,34 @@ function visualTask(
   ].join('\n').slice(0, 100000);
 }
 
+type ModelHit = {output: string; failure: string | null};
+
+/** A thrown model error or an auth sentence becomes a code. Login and provider refusal still propagate. */
+async function runModel(worker: DesignWorker, call: DesignWorkerCall): Promise<ModelHit> {
+  try {
+    const output = await worker.run(call);
+    const trimmed = output.trim();
+    if (trimmed.length === 0) return {output: '', failure: 'EXECUTION_NATIVE_FAILED'};
+    if (providerFailureCode(output) === 'PROVIDER_AUTH_FAILED' && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      return {output: '', failure: 'PROVIDER_AUTH_FAILED'};
+    }
+    return {output, failure: null};
+  } catch (error) {
+    if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
+    return {output: '', failure: error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED'};
+  }
+}
+
+function blankExamCoverage(): DesignExamCoverage {
+  const row = {model: 'desconhecido', requested: 0, judged: 0, failure: 'nenhuma'};
+  return {examiner: {...row}, reviewer: {...row}};
+}
+
 async function askVisual(
   input: DesignExamineInput,
   screen: DesignExamineInput['screens'][number],
   role: 'specialist' | 'reviewer',
-): Promise<VisualScore[] | null> {
+): Promise<{scores: VisualScore[] | null; failure: string | null; model: string}> {
   const seat = await input.reserve(role);
   try {
     acceptClaudeExamSeat(seat);
@@ -371,8 +395,9 @@ async function askVisual(
       repo: input.repo,
       writePaths: [] as const,
     });
-    const output = await input.worker.run(call);
-    return parseVisualScores(parseJson(output));
+    const hit = await runModel(input.worker, call);
+    if (hit.failure) return {scores: null, failure: hit.failure, model: seat.model};
+    return {scores: parseVisualScores(parseJson(hit.output)), failure: null, model: seat.model};
   } finally {
     await input.release(seat);
   }
@@ -400,15 +425,21 @@ function confirmationTask(
   ].join('\n').slice(0, 100000);
 }
 
+function rethrowReviewer(error: unknown): boolean {
+  return error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'DESIGN_CONFIRMATION_INVALID' || error.code === 'EXAM_PROVIDER_UNSUPPORTED');
+}
+
 async function confirmFinding(
   input: DesignExamineInput,
   finding: DesignExamFinding,
   code: string,
   captures: readonly DesignScreenCapture[] | undefined,
+  noteModel: (model: string) => void,
 ): Promise<{seat: DesignSeat; confirm: DesignConfirmResult}> {
   const seat = await input.reserve('reviewer');
   try {
     acceptClaudeExamSeat(seat);
+    noteModel(seat.model);
     const call = DesignWorkerCall.parse({
       role: 'reviewer',
       provider: seat.provider,
@@ -421,8 +452,9 @@ async function confirmFinding(
       repo: input.repo,
       writePaths: [] as const,
     });
-    const output = await input.worker.run(call);
-    const parsed = DesignConfirmResult.safeParse(normalizeDesignConfirm(parseJson(output)));
+    const hit = await runModel(input.worker, call);
+    if (hit.failure) throw new Refusal(hit.failure);
+    const parsed = DesignConfirmResult.safeParse(normalizeDesignConfirm(parseJson(hit.output)));
     if (!parsed.success) throw new Refusal('DESIGN_CONFIRMATION_INVALID');
     return {seat, confirm: parsed.data};
   } finally {
@@ -441,6 +473,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   notes: string[];
   visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[];
   loginStale: boolean;
+  modelCoverage: DesignExamCoverage;
 }> {
   const findings: DesignExamFinding[] = [];
   const coverage: DesignCoverageRow[] = [];
@@ -454,10 +487,24 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   const ids = input.checklist.map(entry => entry.id).filter(id => id.length > 0 && id.length <= 80).slice(0, 120);
   if (ids.length === 0) {
     notes.push('A lista de verificação veio vazia.');
-    return {findings, coverage, confirmations, notes, visual, loginStale: false};
+    return {findings, coverage, confirmations, notes, visual, loginStale: false, modelCoverage: blankExamCoverage()};
   }
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
+  const htmlCount = input.screens.filter(screen => !isNonHtmlResponse(screen.code)).length;
+  const modelCoverage: DesignExamCoverage = {
+    examiner: {model: 'desconhecido', requested: htmlCount, judged: 0, failure: 'nenhuma'},
+    reviewer: {model: 'desconhecido', requested: input.scoreVisual === true ? htmlCount : 0, judged: 0, failure: 'nenhuma'},
+  };
+  const remember = (role: 'examiner' | 'reviewer', model: string) => {
+    if (modelCoverage[role].model !== 'desconhecido') return;
+    const clean = model.replace(/\|/g, '/').replace(/\s+/g, ' ').trim().slice(0, 100);
+    if (clean.length > 0) modelCoverage[role].model = clean;
+  };
+  const noteFailure = (role: 'examiner' | 'reviewer', code: string) => {
+    if (modelCoverage[role].failure !== 'nenhuma') return;
+    modelCoverage[role].failure = safeFailureCode(code);
+  };
   let loginStale = false;
   try {
   for (const screen of input.screens) {
@@ -466,7 +513,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       continue;
     }
     const seat = await input.reserve('specialist');
-    let output = '';
+    let hit: ModelHit;
     try {
       acceptClaudeExamSeat(seat);
       const call = DesignWorkerCall.parse({
@@ -481,13 +528,18 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         repo: input.repo,
         writePaths: [] as const,
       });
-      output = await input.worker.run(call);
+      hit = await runModel(input.worker, call);
     } finally {
       await input.release(seat);
     }
+    remember('examiner', seat.model);
+    if (hit.failure) {
+      noteFailure('examiner', hit.failure);
+      notes.push(`O examinador falhou em ${screen.file} com ${hit.failure}.`);
+    }
 
-    const exam = DesignExamResult.safeParse(normalizeDesignExam(parseJson(output), {file: screen.file, checklist: ids}));
-    const echoed = exam.success ? exam.data.checklist : [];
+    const exam = hit.failure ? null : DesignExamResult.safeParse(normalizeDesignExam(parseJson(hit.output), {file: screen.file, checklist: ids}));
+    const echoed = exam?.success ? exam.data.checklist : [];
     const applied = (echoed.length > 0 ? echoed : ids)
       .map(id => id.slice(0, 80))
       .filter(id => id.length > 0)
@@ -499,65 +551,99 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       profileId: seat.profileId,
       checklist: applied,
     }));
-    if (!exam.success) {
+    if (hit.failure) {
+      /* The provider code is already on the coverage row. Visual scoring still runs when it was requested. */
+    } else if (!exam?.success) {
       notes.push(`O exame de ${screen.file} não veio em JSON válido.`);
       continue;
-    }
-    if (!exam.data.filesRead.includes(screen.file)) {
-      notes.push(`O examinador não marcou como lido: ${screen.file}.`);
-    }
-    for (const finding of exam.data.findings) {
-      const measure = examMeasure(finding, input.rawFindings, screen.captures);
-      const clamped = DesignExamFinding.parse({
-        title: finding.title,
-        severity: clampHighSeverity(finding.severity, measure),
-        file: finding.file,
-        line: finding.line,
-        scenario: finding.scenario,
-        suggestion: finding.suggestion,
-        cwe: finding.cwe,
-        reference: finding.reference,
-        snippet: finding.snippet,
-        ...(measure === undefined ? {} : {measure}),
-      });
-      findings.push(clamped);
-      if (measure !== undefined) {
-        confirmations.push({
-          finding: clamped,
-          confirm: {
-            kind: 'confirmacao',
-            status: 'confirmado',
-            reason: 'A medida confirma o achado.',
-            proof: measureProof(measure, clamped.snippet),
-          },
-          verifier: null,
-        });
-        continue;
+    } else {
+      if (input.scoreVisual !== true) modelCoverage.examiner.judged += 1;
+      if (!exam.data.filesRead.includes(screen.file)) {
+        notes.push(`O examinador não marcou como lido: ${screen.file}.`);
       }
-      const reviewed = await confirmFinding(input, finding, screen.code, screen.captures);
-      confirmations.push({
-        finding: clamped,
-        confirm: reviewed.confirm,
-        verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
-      });
-    }
-    if (input.scoreVisual === true) {
-      const examinerScores = await askVisual(input, screen, 'specialist');
-      const reviewerScores = await askVisual(input, screen, 'reviewer');
-      if (!examinerScores || !reviewerScores) {
-        notes.push(`A crítica visual de ${oneLine(screen.route)} não veio completa.`);
-      } else {
-        const uncertain = uncertainVisualAxes(examinerScores, reviewerScores);
-        visual.push({file: screen.file, route: screen.route, examiner: examinerScores, reviewer: reviewerScores, uncertain});
-        if (uncertain.length > 0) notes.push(`Julgamento incerto em ${oneLine(screen.route)}: ${uncertain.join('; ')}.`.slice(0, 500));
-        for (const finding of visualExamFindings(screen.file, examinerScores)) {
-          const reviewed = await confirmFinding(input, finding, screen.code, screen.captures);
-          findings.push(finding);
+      let reviewerAsked = false;
+      let reviewerJudged = false;
+      for (const finding of exam.data.findings) {
+        const measure = examMeasure(finding, input.rawFindings, screen.captures);
+        const clamped = DesignExamFinding.parse({
+          title: finding.title,
+          severity: clampHighSeverity(finding.severity, measure),
+          file: finding.file,
+          line: finding.line,
+          scenario: finding.scenario,
+          suggestion: finding.suggestion,
+          cwe: finding.cwe,
+          reference: finding.reference,
+          snippet: finding.snippet,
+          ...(measure === undefined ? {} : {measure}),
+        });
+        findings.push(clamped);
+        if (measure !== undefined) {
           confirmations.push({
-            finding,
+            finding: clamped,
+            confirm: {
+              kind: 'confirmacao',
+              status: 'confirmado',
+              reason: 'A medida confirma o achado.',
+              proof: measureProof(measure, clamped.snippet),
+            },
+            verifier: null,
+          });
+          continue;
+        }
+        if (input.scoreVisual !== true && !reviewerAsked) {
+          modelCoverage.reviewer.requested += 1;
+          reviewerAsked = true;
+        }
+        try {
+          const reviewed = await confirmFinding(input, finding, screen.code, screen.captures, model => remember('reviewer', model));
+          if (input.scoreVisual !== true && !reviewerJudged) {
+            modelCoverage.reviewer.judged += 1;
+            reviewerJudged = true;
+          }
+          confirmations.push({
+            finding: clamped,
             confirm: reviewed.confirm,
             verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
           });
+        } catch (error) {
+          if (rethrowReviewer(error)) throw error;
+          const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
+          noteFailure('reviewer', code);
+          notes.push(`O revisor falhou em ${screen.file} com ${code}.`);
+        }
+      }
+    }
+    if (input.scoreVisual === true) {
+      const examinerVisual = await askVisual(input, screen, 'specialist');
+      const reviewerVisual = await askVisual(input, screen, 'reviewer');
+      remember('examiner', examinerVisual.model);
+      remember('reviewer', reviewerVisual.model);
+      if (examinerVisual.failure) noteFailure('examiner', examinerVisual.failure);
+      if (reviewerVisual.failure) noteFailure('reviewer', reviewerVisual.failure);
+      if (examinerVisual.scores) modelCoverage.examiner.judged += 1;
+      if (reviewerVisual.scores) modelCoverage.reviewer.judged += 1;
+      if (!examinerVisual.scores || !reviewerVisual.scores) {
+        notes.push(`A crítica visual de ${oneLine(screen.route)} não veio completa.`);
+      } else {
+        const uncertain = uncertainVisualAxes(examinerVisual.scores, reviewerVisual.scores);
+        visual.push({file: screen.file, route: screen.route, examiner: examinerVisual.scores, reviewer: reviewerVisual.scores, uncertain});
+        if (uncertain.length > 0) notes.push(`Julgamento incerto em ${oneLine(screen.route)}: ${uncertain.join('; ')}.`.slice(0, 500));
+        for (const finding of visualExamFindings(screen.file, examinerVisual.scores)) {
+          try {
+            const reviewed = await confirmFinding(input, finding, screen.code, screen.captures, model => remember('reviewer', model));
+            findings.push(finding);
+            confirmations.push({
+              finding,
+              confirm: reviewed.confirm,
+              verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
+            });
+          } catch (error) {
+            if (rethrowReviewer(error)) throw error;
+            const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
+            noteFailure('reviewer', code);
+            notes.push(`O revisor falhou em ${screen.file} com ${code}.`);
+          }
         }
       }
     }
@@ -565,8 +651,10 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   } catch (error) {
     if (!(error instanceof Refusal) || error.code !== 'EXAM_LOGIN_STALE') throw error;
     loginStale = true;
+    modelCoverage.examiner.failure = 'EXAM_LOGIN_STALE';
+    modelCoverage.reviewer.failure = 'EXAM_LOGIN_STALE';
     if (!notes.includes(EXAM_LOGIN_STALE_TEXT)) notes.push(EXAM_LOGIN_STALE_TEXT);
   }
 
-  return {findings, coverage, confirmations, notes, visual, loginStale};
+  return {findings, coverage, confirmations, notes, visual, loginStale, modelCoverage};
 }

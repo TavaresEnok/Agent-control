@@ -59,7 +59,7 @@ export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsI
  examLoginRenew?:(accountDir:string)=>Promise<void>;
  /** false: kept only to reconcile and retire jobs started under a replaced image pair; it never launches. */
  active?:boolean};
-export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null};
+export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null;failureCode:string|null};
 const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int(),examCredential:z.unknown().optional()}).strict();
 export {nativeExecutionExecutorDigest};
 const toolsEntrypoint=['node','/opt/agent-control/dist/src/native-tools-worker.mjs'];
@@ -668,7 +668,7 @@ export class NativeExecutionSupervisor{
    const result=await this.readResult(input,payload.exitCode);
    await this.settleExamCredential(String(job.account_id),input.jobId,result);
    if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.workerExitCode||result.jobId!==input.jobId)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
-   return {state:job.state as 'completed'|'failed',receipt,output:result.output,artifact:payload.artifact??null};
+   return {state:job.state as 'completed'|'failed',receipt,output:result.output,artifact:payload.artifact??null,failureCode:result.failureCode};
   }
   // Never recreate missing resources or rerun an uncertain start.
   const worker=await this.docker.inspect('ac-native-worker-'+input.jobId),tools=await this.docker.inspect('ac-native-tools-'+input.jobId);
@@ -727,7 +727,7 @@ export class NativeExecutionSupervisor{
    }
 
   });
-  return {state:effectiveExitCode===0?'completed' as const:'failed' as const,receipt,output:result.output,artifact};
+  return {state:effectiveExitCode===0?'completed' as const:'failed' as const,receipt,output:result.output,artifact,failureCode:finalization?.failureCode??result.failureCode??null};
  }
  /** Register only the exact finalized artifact; Quality still requires
   * independent QA/review and authorized integration. No branch is changed. */

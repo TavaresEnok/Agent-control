@@ -106,6 +106,12 @@ export type DesignWorker = {
   run(call: DesignWorkerCall): Promise<string>;
 };
 
+/** Examiner and reviewer rows appended to the design coverage table. */
+export type DesignExamCoverage = {
+  examiner: {model: string; requested: number; judged: number; failure: string};
+  reviewer: {model: string; requested: number; judged: number; failure: string};
+};
+
 export const DesignAchado = z.object({
   id: z.string().regex(/^ACH-\d{3}$/),
   title: z.string().min(1).max(200),

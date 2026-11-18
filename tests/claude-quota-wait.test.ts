@@ -57,6 +57,18 @@ test('a fake claude planning or review failure with a usage limit becomes the li
  await assert.rejects(new ClaudePlanningAdapter(planningRunner('claude',Promise.resolve({text:'not a plan',toolCalls:[],tokensUsed:0}),[{type:'error',message:'private upstream diagnostic'},{type:'turn-end'}])).generate(planRequest(),async()=>{}),/PLANNING_NATIVE_TURN_FAILED/);
 });
 
+test('a fake claude execution auth failure becomes PROVIDER_AUTH_FAILED',async()=>{
+ const runInput={sessionId:randomUUID(),model:'fixture-model',effort:'high' as const,role:'reviewer' as const,task:'Leia o diff.',writePaths:[] as string[],artifactCommit:'a'.repeat(40),environment:{id:'private-job-tools',url:'ws://127.0.0.1:19493',authBearerToken:'b'.repeat(32),cwd:'/work' as const},timeoutMs:1000,outputSchema:{type:'object'}};
+ const stderr=new Error('Failed to authenticate: OAuth session expired and could not be refreshed');
+ await assert.rejects(new ClaudeExecutionAdapter(planningRunner('claude',Promise.reject(stderr))).run(runInput,async()=>{}),error=>{
+  assert.ok(error instanceof ClaudeExecutionFailure);assert.equal(error.code,'PROVIDER_AUTH_FAILED');assert.equal(error.message.includes('Failed to authenticate'),false);assert.equal(error.message.includes('usage limit'),false);return true;
+ });
+ const events:AgentEvent[]=[{type:'error',message:'Failed to authenticate: OAuth session expired'},{type:'turn-end'}];
+ await assert.rejects(new ClaudeExecutionAdapter(planningRunner('claude',Promise.resolve({text:'still no json',toolCalls:[],tokensUsed:1}),events)).run(runInput,async()=>{}),error=>{
+  assert.ok(error instanceof ClaudeExecutionFailure);assert.equal(error.code,'PROVIDER_AUTH_FAILED');assert.equal(error.message.includes('authenticate'),false);return true;
+ });
+});
+
 test('a claude planning limit exhausts the account and the stage waits without failing the plan',async()=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
  const fixture=await isolatedDatabase(base,'claudelimit'),db=new Ledger(fixture.url),capacity=new Capacity(db),area=await mkdtemp(join(tmpdir(),'ac-claude-limit-'));

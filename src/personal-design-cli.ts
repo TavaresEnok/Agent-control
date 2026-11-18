@@ -9,7 +9,7 @@ import {Refusal} from './contracts.ts';
 import {EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign} from './design-command.ts';
-import {runDesignCreate, type CreateExam} from './design-create.ts';
+import {DesignCreateModelFailure, runDesignCreate, type CreateExam} from './design-create.ts';
 import {readRebuildImagePin} from './design-image-run.ts';
 import {runDesignModule} from './design-module.ts';
 import {formatDesignPrepare, prepareDesignSpecialist} from './design-prepare.ts';
@@ -46,6 +46,8 @@ const messages: Record<string, string> = {
   CONTROL_ADMIN_REQUIRED: 'Falta o administrador de controle para registrar claude-opus-5-5 no catálogo.',
   PROJECT_OWNER_REQUIRED: 'Só o dono do projeto prepara o exame.',
   DESIGN_CREATE_INVALID: 'O pedido de criação não tem telas ou rodadas válidas.',
+  DESIGN_CREATE_MODEL_FAILED: 'O modelo não devolveu as telas.',
+  DESIGN_VISUAL_UNJUDGED: 'A crítica visual foi pedida e nenhuma tela foi julgada.',
   EXAM_LOGIN_STALE: EXAM_LOGIN_STALE_TEXT,
   DESIGN_REFERENCE_INVALID: 'A referência tem que ser PNG ou JPG.',
   DESIGN_REFERENCE_LIMIT: 'O exame aceita no máximo 10 referências.',
@@ -54,14 +56,17 @@ const messages: Record<string, string> = {
 
 /** Known codes keep their Portuguese line. Anything else is one fixed sentence, so a path or secret never reaches the terminal. */
 export function designCliFailureText(error: unknown): string {
+  if (error instanceof DesignCreateModelFailure) return `O modelo não devolveu as telas. Causa: ${error.causeCode}.`;
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   return Object.hasOwn(messages, code) ? messages[code]! : 'O exame de design falhou.';
 }
 
-/** The report is already on disk. A stale login still exits non-zero, after the directory has been printed. */
-export function designExamStatus(result: {loginStale?: boolean}): {code: number; lines: string[]} {
-  if (result.loginStale) return {code: 1, lines: [EXAM_LOGIN_STALE_TEXT]};
-  return {code: 0, lines: []};
+/** The report is already on disk. A stale login or an unjudged visual exam still exits non-zero. */
+export function designExamStatus(result: {loginStale?: boolean; visualUnjudged?: boolean}): {code: number; lines: string[]} {
+  const lines: string[] = [];
+  if (result.loginStale) lines.push(EXAM_LOGIN_STALE_TEXT);
+  if (result.visualUnjudged) lines.push(messages.DESIGN_VISUAL_UNJUDGED!);
+  return {code: lines.length > 0 ? 1 : 0, lines};
 }
 
 function readPinnedImage(): string {
@@ -425,6 +430,10 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
         if (exam.loginStale) {
           console.log(exam.directory);
           throw new Refusal('EXAM_LOGIN_STALE');
+        }
+        if (exam.visualUnjudged) {
+          console.log(exam.directory);
+          throw new Refusal('DESIGN_VISUAL_UNJUDGED');
         }
         const report: CreateExam = {screens, notes: []};
         return report;

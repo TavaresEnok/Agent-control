@@ -188,3 +188,37 @@ test('o revisor nativo também vai sem writePaths e com a mesma captura no task'
   assert.equal(seen?.task.includes(capturePath), true);
   assert.equal(seen?.task.includes('cd'.repeat(32)), true);
 });
+
+test('createDesignNativeWorker aposenta e recusa quando o job do modelo falha', async () => {
+  const asked = call();
+  const released: string[] = [];
+  let retired = '';
+  const chosen = supervisor(asked.accountId, {
+    async start() {
+      return {state: 'running'};
+    },
+    async reconcile() {
+      return {state: 'failed', output: '', failureCode: 'PROVIDER_AUTH_FAILED'};
+    },
+    async retireTerminal(_principal, _authority, jobId) {
+      retired = jobId;
+      return {state: 'removed'};
+    },
+  });
+  const worker = createDesignNativeWorker({
+    supervisors: [chosen],
+    principal: 'owner',
+    authority: authority(),
+    ledger,
+    base,
+    releaseGrant: async grantId => {
+      released.push(grantId);
+    },
+    wait: async () => {
+      throw new Error('wait-called');
+    },
+  });
+  await assert.rejects(() => worker.run(asked), (error: unknown) => error instanceof Refusal && error.code === 'PROVIDER_AUTH_FAILED');
+  assert.equal(retired.length, 36);
+  assert.deepEqual(released, []);
+});
