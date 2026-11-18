@@ -8,8 +8,9 @@ import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import {designBenchWorker} from '../src/design-bench.ts';
 import {type DesignCaptureDriver} from '../src/design-capture.ts';
-import {stageDesignCapturesForJob, writeDesignExamCaptures} from '../src/design-capture-stage.ts';
+import {readDesignCaptureStageNote, stageDesignCapturesForJob, writeDesignExamCaptures} from '../src/design-capture-stage.ts';
 import {runDesignModule, type DesignModuleInput} from '../src/design-module.ts';
+import {readDesignReport} from '../src/design-report.ts';
 
 const CAPTURE_DIR = 'AC_DESIGN_CAPTURE_DIR';
 const CAPTURE_RUN = 'AC_DESIGN_CAPTURE_RUN';
@@ -199,6 +200,57 @@ alone('não copia png privado cujo nome não é o sha256 dos bytes', async () =>
     const copiedBytes = await readFile(join(dest, 'capturas', goodName));
     assert.equal(pngName(copiedBytes), goodName);
     assert.equal(existsSync(join(dest, 'capturas', badName)), false);
+  } finally {
+    restoreEnv(previousDir, previousRun);
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+alone('descarta png acima de 2 MB com nota e copia o de exatamente 2 MB', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'design-stage-big-'));
+  const repo = join(root, 'repo');
+  const data = join(root, 'data');
+  const dest = join(root, 'planning');
+  const runId = randomUUID();
+  const projectId = randomUUID();
+  const big = Buffer.alloc(2_000_001, 7);
+  const exact = Buffer.alloc(2_000_000, 8);
+  const bigName = pngName(big);
+  const exactName = pngName(exact);
+  const expected = `PNG acima de 2 MB descartado no staging: ${bigName}.`;
+  const previousDir = process.env[CAPTURE_DIR];
+  const previousRun = process.env[CAPTURE_RUN];
+  let saw = 0;
+  try {
+    await mkdir(repo);
+    await mkdir(data);
+    await mkdir(dest);
+    const input = examInput(data, repo, runId, workerSeeing(async () => {
+      const dir = process.env[CAPTURE_DIR];
+      const run = process.env[CAPTURE_RUN];
+      assert.equal(typeof dir, 'string');
+      assert.equal(run, runId);
+      const runDir = join(dir ?? '', run ?? '');
+      await writeFile(join(runDir, bigName), big, {mode: 0o600});
+      await writeFile(join(runDir, exactName), exact, {mode: 0o600});
+      await stageDesignCapturesForJob(repo, [dest]);
+      const exactBytes = await readFile(join(dest, 'capturas', exactName));
+      assert.equal(exactBytes.length, 2_000_000);
+      assert.equal(pngName(exactBytes), exactName);
+      assert.equal(existsSync(join(dest, 'capturas', bigName)), false);
+      const note = await readDesignCaptureStageNote();
+      assert.equal(note, expected);
+      const info = await lstat(join(runDir, 'stage-notes.txt'));
+      assert.equal(info.isSymbolicLink(), false);
+      assert.equal(info.isFile(), true);
+      assert.equal(info.mode & 0o777, 0o600);
+      saw += 1;
+    }));
+    input.projectId = projectId;
+    await runDesignModule(input);
+    assert.ok(saw >= 1);
+    const report = await readDesignReport(data, projectId, runId);
+    assert.equal(report.summary.note.includes(expected), true);
   } finally {
     restoreEnv(previousDir, previousRun);
     await rm(root, {recursive: true, force: true});

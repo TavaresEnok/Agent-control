@@ -2,7 +2,7 @@ import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Id, Refusal} from './contracts.ts';
-import {writeDesignExamCaptures} from './design-capture-stage.ts';
+import {readDesignCaptureStageNote, writeDesignExamCaptures} from './design-capture-stage.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmptyStateRecord} from './design-capture.ts';
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
 import {discoverRoutesFromSource, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type ScreenCoverageRow} from './design-discover.ts';
@@ -125,6 +125,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       reserve: input.reserve,
       release: input.release,
     });
+    const stageNote = await readDesignCaptureStageNote();
+    if (stageNote !== undefined) notes.push(stageNote);
   } finally {
     staged.conceal();
     await staged.cleanup();

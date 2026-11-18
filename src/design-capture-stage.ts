@@ -35,6 +35,35 @@ export async function stageDesignCapturesForJob(repository: string, destinations
   return copyPrivateRun(selected.dir, selected.run, destinations);
 }
 
+const STAGE_NOTE_NAME = 'stage-notes.txt';
+
+/** One line from `stage-notes.txt` in the private run, or nothing when staging wrote no note. */
+export async function readDesignCaptureStageNote(): Promise<string | undefined> {
+  const selected = readCaptureEnv();
+  if (selected.kind !== 'private') return undefined;
+  const path = join(selected.dir, selected.run, STAGE_NOTE_NAME);
+  let info;
+  try {
+    info = await lstat(path);
+  } catch {
+    return undefined;
+  }
+  if (info.isSymbolicLink() || !info.isFile() || info.size < 1 || info.size > 4096) return undefined;
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch {
+    return undefined;
+  }
+  try {
+    const text = await handle.readFile({encoding: 'utf8'});
+    const line = text.trim();
+    return line.length > 0 ? line : undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function writeDesignExamCaptures(
   dataDirectory: string,
   runId: string,
@@ -148,11 +177,13 @@ async function copyPrivateRun(dir: string, run: string, destinations: readonly s
   const runReal = await realpath(runDir).catch(() => '');
   if (runReal !== runDir || !runReal.startsWith(dir + sep)) return 0;
   const files: CaptureFile[] = [];
-  await collectPngs(runDir, files);
+  const oversized: string[] = [];
+  await collectPngs(runDir, files, oversized);
+  await writeStageNote(runDir, oversized);
   return copyCollected(dir, files, destinations);
 }
 
-async function collectPngs(dir: string, files: CaptureFile[]): Promise<void> {
+async function collectPngs(dir: string, files: CaptureFile[], oversized: string[]): Promise<void> {
   let inner;
   try {
     inner = await readdir(dir, {withFileTypes: true});
@@ -160,16 +191,39 @@ async function collectPngs(dir: string, files: CaptureFile[]): Promise<void> {
     return;
   }
   for (const file of inner) {
-    if (files.length >= MAX_FILES) break;
     if (!file.isFile() || file.isSymbolicLink() || !PNG_NAME.test(file.name)) continue;
     const from = join(dir, file.name);
     const stat = await lstat(from);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_BYTES) continue;
+    if (stat.isSymbolicLink() || !stat.isFile()) continue;
+    if (stat.size > MAX_BYTES) {
+      oversized.push(file.name);
+      continue;
+    }
+    if (stat.size < 1 || files.length >= MAX_FILES) continue;
     const bytes = await readRegularFile(from, stat.size);
     if (bytes === undefined) continue;
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     if (file.name !== `${sha256}.png`) continue;
     files.push({name: file.name, from});
+  }
+}
+
+async function writeStageNote(runDir: string, names: readonly string[]): Promise<void> {
+  if (names.length === 0) return;
+  const path = join(runDir, STAGE_NOTE_NAME);
+  const line = `PNG acima de 2 MB descartado no staging: ${names.join(', ')}.\n`;
+  let handle;
+  try {
+    handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  } catch (error) {
+    if (isErrno(error, 'ELOOP')) return;
+    throw error;
+  }
+  try {
+    await handle.writeFile(line);
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
   }
 }
 
