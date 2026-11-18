@@ -574,3 +574,47 @@ As notas visuais reais do examinador e do revisor Claude não saíram. A sessão
 As telas criadas, o exame dessas telas e a vitrine não saíram. O diretório `ca8dad97-8056-452c-9d5b-01e2e1c91a75` está vazio.
 
 Não houve push. A instalação viva, o gateway vivo, o banco `ac_ispagent` e o contêiner `ac-personal-pg` não foram alterados.
+
+## Reconstrução, rodada 4
+
+Feita em 18/11/2026 no ramo `task/design-r3-image-proof`. A ordem está no commit `7bbc5414`. Os itens abaixo fecham em `976f531a` e `f93078ce`.
+
+### 1. Login do exame
+
+Commit `976f531a`. Antes de montar a cópia, o host lê só o `expiresAt` da conta Claude reservada. Se resta menos que o tempo máximo do exame mais 10 minutos, renova pelo caminho gravável da conta, a mesma chamada mínima que já renovava no lugar. O arquivo da conta recebe o refresh novo em escrita atômica, modo 0600, com o mesmo dono. Se a renovação falha, o exame recusa `EXAM_LOGIN_STALE` antes da cópia. O relatório e as CLIs de design e de verificação pedem para entrar de novo: `npm run gateway -- account-add`.
+
+Depois do exame, o worker compara o `.credentials.json` da cópia com o original montado. Se mudou e o JSON é da mesma conta, com `claudeAiOauth` e os mesmos escopos, devolve só esse arquivo pelo canal de saída já assinado. O host grava de volta na conta, modo 0600, e retira o campo do resultado. JSON inválido ou outra conta não grava. A cópia do login continua. `/account` continua `:ro` dentro do exame.
+
+Os testes usam credenciais falsas. Login vencido chama a renovação. Renovação que falha recusa `EXAM_LOGIN_STALE`. Cópia alterada da mesma conta volta para o arquivo. JSON inválido ou outra conta não grava.
+
+### 2. Falha do modelo
+
+Commit `f93078ce`. `cobertura.md` ganha a tabela com as colunas Papel, Modelo, Telas pedidas, Telas julgadas e Falha, nas linhas examinador e revisor. O README ganha a seção "Cobertura do exame". A frase `Failed to authenticate` vira `PROVIDER_AUTH_FAILED`, sem a frase e sem token. Se `scoreVisual` foi pedido, havia tela e nenhuma foi julgada, o relatório fica gravado e a CLI sai com código 1: "A crítica visual foi pedida e nenhuma tela foi julgada." No criar, resposta vazia ou falha do modelo vira `DESIGN_CREATE_MODEL_FAILED` com a causa. Um JSON que não é pacote de telas continua `DESIGN_CREATE_INVALID`. Um job nativo em estado failed aposenta o contêiner e o worker de design recusa com o código da falha.
+
+### 3. Prova
+
+`npx tsc --noEmit`: código 0.
+
+`umask 022 && env -u NO_COLOR -u FORCE_COLOR npm test`, com `AC_TEST_DATABASE_URL` no Postgres descartável `ac-design-r3-pg` (`127.0.0.1:54333`, banco `ac_implementation_test`). Durou 702 s, código 0. Resumo: `{"passed":234,"failed":[],"excluded":87}`. `exam-login.test.ts`, `design-model-failure.test.ts`, `design-examine.test.ts` e `verify-exam-worker-mount.test.ts` estão entre os 234. `design-lab-image.test.ts` entra pulado, sem `AC_DESIGN_LAB`. `npm test` reescreveu `docs/validation/evidence/runtime-result.json`. O arquivo foi restaurado para o blob `3ae5a15c9eeba482ac89eb790809df1aee81edef` e não entra no commit.
+
+Uma corrida anterior da mesma suíte, com o laboratório e o build da imagem ao mesmo tempo, falhou só `completed-node-recovery.test.ts` no limite de 30 s. Esse arquivo, sozinho, passou 9 e falhou 0. A suíte de 702 s é a registrada.
+
+O teste `tests/design-lab-image.test.ts` com `AC_DESIGN_LAB=1` passou 1, falhou 0, `duration_ms` 398432, código 0.
+
+A imagem do worker foi reconstruída só para `ac-native-execution`, com `scripts/prepare-native-execution-image.mjs` e `docker build -t ac-native-execution:personal`. Digest `sha256:b0e1e0ce798c11da5e290b54d2a9b3bb6b0a991411d36f4b92d28e298086c596`. A imagem anterior do worker, `sha256:48270d13109118edc9a6679646e7344ff8f29bfa9676c1d65889c2a95e93057a`, continua no disco. O planning continua `sha256:8c9b7d04e9fffc0f495fadb4f616ee8d158075af7ffb6428377fa205fcb95c64`. As tools continuam `sha256:9a1fa0650e34b7e5421411264be3b1490b3ee9676ff982e89148f888ab31142b`. Não houve `personal:setup` nem `personal:images`. Nada da instalação viva foi reiniciado.
+
+Não houve exame real com modelo.
+
+### Commits
+
+| Item | Commit | O que entra |
+|---|---|---|
+| 1. Login do exame | `976f531a` | renovação no arquivo gravável e a rede de segurança da cópia |
+| 2. Falha do modelo | `f93078ce` | cobertura do examinador e do revisor, CLI e criação |
+| Fechamento | este commit | esta seção |
+
+### O que não ficou pronto
+
+As notas visuais reais e um exame com login válido ficam para o gerente, com uma conta que ainda entra. Esta rodada deixa o produto renovar o login no arquivo da conta antes da cópia e sair com código diferente de 0 quando o modelo não julga a tela.
+
+Não houve push. A instalação viva, o gateway vivo, o banco `ac_ispagent` e o contêiner `ac-personal-pg` não foram alterados. O diretório `upstream/happier/apps/server/generated` continua fora do git.
