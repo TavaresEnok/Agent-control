@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
 import {access, chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/promises';
@@ -8,7 +9,7 @@ import assert from 'node:assert/strict';
 import {codexPersonalCommand} from '../src/codex-personal.ts';
 import {grokProgrammerArgs} from '../src/grok-execution-adapter.ts';
 import {
-  describeBind, examAccountMount, examClaudeArgv, examCodexArgv, examLoginHomes, examWorkerEnv,
+  describeBind, examAccountMount, examClaudeArgv, examClaudeWrapperSource, examCodexArgv, examLoginHomes, examWorkerEnv,
   installExamClaudeWrapper, prepareExamLoginCopy, stripExamHostileConfig,
 } from '../src/verify-exam-isolation.ts';
 
@@ -274,4 +275,17 @@ test('o argv do Codex e do Grok no exame não aponta config de projeto', () => {
     if (savedExam === undefined) delete process.env.AC_VERIFY_EXAM;
     else process.env.AC_VERIFY_EXAM = savedExam;
   }
+});
+
+test('o wrapper fixo do exame é copiado em 0755 no Dockerfile e bate com examClaudeWrapperSource', () => {
+  const dockerfile = readFileSync(new URL('../deploy/Dockerfile.native-execution', import.meta.url), 'utf8');
+  const shipped = readFileSync(new URL('../deploy/ac-exam-claude.cjs', import.meta.url), 'utf8');
+  const builder = readFileSync(new URL('../scripts/native-image-builder.mjs', import.meta.url), 'utf8');
+  assert.equal(shipped, examClaudeWrapperSource('/usr/local/bin/claude'));
+  assert.ok(shipped.startsWith('#!/usr/bin/env node\n'));
+  const copyIdx = dockerfile.indexOf('COPY --chmod=0755 ac-exam-claude.cjs /usr/local/bin/ac-exam-claude');
+  const userIdx = dockerfile.indexOf('\nUSER node');
+  assert.ok(copyIdx >= 0);
+  assert.ok(userIdx > copyIdx);
+  assert.ok(builder.includes("ac-exam-claude.cjs"));
 });

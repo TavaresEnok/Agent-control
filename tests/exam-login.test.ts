@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/promises';
+import {chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from '../src/contracts.ts';
@@ -779,6 +779,49 @@ test('prepareClaudeExamAccessToken compara antes de gravar expiresAt=0 e antes d
         return true;
       },
     );
+
+    // 4) Se o renovador apagar .credentials.json, recria o original em 0600 (sem seguir symlink) e recusa com EXAM_LOGIN_STALE.
+    await chmod(dir, 0o700);
+    const deletedDoc = document({expiresAt: oldExpires, access: 'a-deleted', refresh: 'r-deleted'});
+    await writeFile(file, deletedDoc, {mode: 0o600});
+    await assert.rejects(
+      () => prepareClaudeExamAccessToken({
+        accountDir: dir,
+        now,
+        examMaxMs: 900_000,
+        renew: async () => {
+          await unlink(file);
+        },
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
+    );
+    const recreatedStat = await lstat(file);
+    assert.equal(recreatedStat.isSymbolicLink(), false);
+    assert.equal(recreatedStat.isFile(), true);
+    assert.equal(recreatedStat.mode & 0o777, 0o600);
+    assert.equal(await readFile(file, 'utf8'), deletedDoc);
+
+    // 5) Se o arquivo sumir e um symlink for plantado antes da restauração, não segue nem sobrescreve o alvo.
+    const symlinkTarget = join(dir, 'outside-target.txt');
+    await writeFile(symlinkTarget, 'keep-outside', {mode: 0o600});
+    await assert.rejects(
+      () => prepareClaudeExamAccessToken({
+        accountDir: dir,
+        now,
+        examMaxMs: 900_000,
+        renew: async () => {
+          await unlink(file);
+        },
+        hooks: {
+          beforeRestore: async () => {
+            await symlink(symlinkTarget, file);
+          },
+        },
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_RESTORE_FAILED',
+    );
+    assert.equal((await lstat(file)).isSymbolicLink(), true);
+    assert.equal(await readFile(symlinkTarget, 'utf8'), 'keep-outside');
   } finally {
     await chmod(dir, 0o700).catch(() => undefined);
     await rm(dir, {recursive: true, force: true});

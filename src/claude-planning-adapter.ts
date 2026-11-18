@@ -1,6 +1,8 @@
 import {z} from 'zod';
 import type {AgentRunner,AgentRunSpec,AgentSession} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
+import {collectSecretValues,redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {Refusal} from './contracts.ts';
+import {providerFailureCode} from './exam-login.ts';
 import {claudeLimitFromText,preferredLimitUsage} from './quota-exhaustion.ts';
 import {usageWindowsObservationSchema,type UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {Effort,runnerEffort} from './effort.ts';
@@ -44,12 +46,33 @@ export function coerceClaudePlan(value:unknown,sourceMessageRef:string,c:Constra
 export class ClaudePlanningFailure extends Refusal{
  constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null){super(code);}
 }
+export function claudeSpawnFailureCode(error:unknown):string|null{
+ if(!error||typeof error!=='object'||error instanceof Refusal)return null;
+ const raw='code' in error&&typeof (error as {code?:unknown}).code==='string'?(error as {code:string}).code.trim().toUpperCase():'';
+ if(/^E[A-Z]{1,31}$/.test(raw))return `CLAUDE_SPAWN_${raw}`;
+ if(error instanceof Error&&/not found on PATH/i.test(error.message))return 'CLAUDE_SPAWN_ENOENT';
+ return null;
+}
+export function claudeExitFailureCode(error:unknown,joinedText:string):string|null{
+ if(error instanceof Refusal)return null;
+ if(/\bclaude CLI exited with code \d+/i.test(joinedText)||/\bexited with code \d+/i.test(joinedText))return 'CLAUDE_EXIT_FAILED';
+ if(error&&typeof error==='object'&&'exitCode' in error&&typeof (error as {exitCode?:unknown}).exitCode==='number')return 'CLAUDE_EXIT_FAILED';
+ return null;
+}
+export function formatClaudeAdapterFailureLine(code:string,rawMessage:string,secrets:readonly string[]=[]):string{
+ const redacted=redactSecrets(rawMessage,[...secrets,...collectSecretValues(process.env)]);
+ const cleaned=redacted.replace(/[^A-Za-z0-9_ .:,/-]/g,'').slice(0,200);
+ return `CLAUDE_ADAPTER_FAILURE ${code} ${cleaned||code}`;
+}
+export function logClaudeAdapterFailure(code:string,rawMessage:string,secrets:readonly string[]=[]):void{
+ console.error(formatClaudeAdapterFailureLine(code,rawMessage,secrets));
+}
 /** Invoked INSIDE an admitted isolated planning worker, not by the HTTP server.
  * Native Cezar owns the app-server protocol. This adapter does not mint receipts,
  * release capacity, read credentials or claim to prove container isolation. */
 export class ClaudePlanningAdapter{
  constructor(private readonly runner:AgentRunner){if(runner.backend!=='claude')throw new Refusal('PLANNING_BACKEND_MISMATCH');}
- async generate(raw:z.input<typeof Input>,assertAuthorized:()=>Promise<void>,signal?:AbortSignal){
+ async generate(raw:z.input<typeof Input>,assertAuthorized:()=>Promise<void>,signal?:AbortSignal,knownSecrets:readonly string[]=[]){
   if(process.env.AC_DEBUG_QUOTA_EXHAUSTED==='1')throw new ClaudePlanningFailure('PROVIDER_USAGE_LIMIT',null,null);
   const input=Input.parse(raw);if(signal?.aborted)throw new Refusal('PLANNING_CANCELED');
   await assertAuthorized();if(signal?.aborted)throw new Refusal('PLANNING_CANCELED');
@@ -75,13 +98,40 @@ export class ClaudePlanningAdapter{
    const result=await Promise.race([session.result,stopped]);
    if(timedOut)throw new Refusal('PLANNING_TIMEOUT');if(signal?.aborted)throw new Refusal('PLANNING_CANCELED');
    const limit=failedTurn||!completedTurn?claudeLimitFromText([providerText,result.text]):null;
-   if(limit)throw new ClaudePlanningFailure(limit.failureCode,observedTokens,preferredLimitUsage(usage,limit.usageWindows));
-   if(failedTurn||!completedTurn||result.toolCalls.length>0)throw new Refusal('PLANNING_NATIVE_TURN_FAILED');
+   if(limit){
+    logClaudeAdapterFailure(limit.failureCode,[providerText,result.text].map(s=>s.trim()).filter(Boolean).join(' '),knownSecrets);
+    throw new ClaudePlanningFailure(limit.failureCode,observedTokens,preferredLimitUsage(usage,limit.usageWindows));
+   }
+   if(failedTurn||!completedTurn||result.toolCalls.length>0){
+    const auth=providerFailureCode([providerText,result.text].join('\n'));
+    if(auth){
+     logClaudeAdapterFailure(auth,[providerText,result.text].map(s=>s.trim()).filter(Boolean).join(' '),knownSecrets);
+     throw new ClaudePlanningFailure(auth,observedTokens,usage);
+    }
+    throw new Refusal('PLANNING_NATIVE_TURN_FAILED');
+   }
    if(Buffer.byteLength(result.text)>256*1024)throw new Refusal('PLANNING_OUTPUT_TOO_LARGE');
    const parsed=extractJsonObject(result.text);
    const output=parsed===undefined?result.text:JSON.stringify(coerceClaudePlan(parsed,input.sourceMessageRef,input.constraints));
    return {output,tokensUsed:usageObserved&&Number.isSafeInteger(result.tokensUsed)&&result.tokensUsed>=0?result.tokensUsed:null,usageWindows:usage,sessionId:result.sessionId??input.sessionId};
-  }catch(error){if(error instanceof ClaudePlanningFailure)throw error;const limit=claudeLimitFromText([providerText,error instanceof Error?error.message:'']);if(limit)throw new ClaudePlanningFailure(limit.failureCode,observedTokens,preferredLimitUsage(usage,limit.usageWindows));throw new ClaudePlanningFailure(error instanceof Refusal?error.code:'PLANNING_NATIVE_EXECUTION_FAILED',observedTokens,usage);}
+  }catch(error){
+   if(error instanceof ClaudePlanningFailure)throw error;
+   const rawMsg=error instanceof Error?error.message:String(error??'');
+   const joined=[providerText,rawMsg].map(s=>s.trim()).filter(Boolean).join(' ');
+   const limit=claudeLimitFromText([providerText,rawMsg]);
+   if(limit){
+    logClaudeAdapterFailure(limit.failureCode,joined,knownSecrets);
+    throw new ClaudePlanningFailure(limit.failureCode,observedTokens,preferredLimitUsage(usage,limit.usageWindows));
+   }
+   const auth=providerFailureCode(joined);
+   if(auth){
+    logClaudeAdapterFailure(auth,joined,knownSecrets);
+    throw new ClaudePlanningFailure(auth,observedTokens,usage);
+   }
+   const code=error instanceof Refusal?error.code:claudeSpawnFailureCode(error)??claudeExitFailureCode(error,joined)??'PLANNING_NATIVE_EXECUTION_FAILED';
+   logClaudeAdapterFailure(code,joined,knownSecrets);
+   throw new ClaudePlanningFailure(code,observedTokens,usage);
+  }
   finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
  }
 }

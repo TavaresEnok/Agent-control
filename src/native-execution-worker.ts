@@ -5,7 +5,7 @@ import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {z} from 'zod';
 import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity,runCodexExec} from './codex-personal.ts';
-import {examCodexArgv,examLoginHomes,installExamClaudeWrapper,prepareExamClaudeHome,prepareExamLoginCopy} from './verify-exam-isolation.ts';
+import {EXAM_CLAUDE_WRAPPER_BIN,examCodexArgv,examLoginHomes,prepareExamClaudeHome,prepareExamLoginCopy} from './verify-exam-isolation.ts';
 import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
 import {collectSecretValues,redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
@@ -42,7 +42,6 @@ export async function prepareClaudeExamWorkerEnv(input:{
  credentialSnapshotTag:string;
  execToken:string;
  tmpRoot?:string;
- realClaudeBin?:string;
 }):Promise<{secrets:string[];claudeBin:string;examHome:string}>{
  if(!input.oauthAccessToken)throw Error('EXAM_OAUTH_TOKEN_MISSING');
  const secrets=[input.oauthAccessToken];
@@ -58,8 +57,11 @@ export async function prepareClaudeExamWorkerEnv(input:{
   if(key.startsWith('CLAUDE_CODE_USE_'))delete process.env[key];
  }
  process.env.CLAUDE_CODE_OAUTH_TOKEN=input.oauthAccessToken;
- const claudeBin=await installExamClaudeWrapper(tmpRoot,input.realClaudeBin??'/usr/local/bin/claude');
- return {secrets,claudeBin,examHome};
+ return {secrets,claudeBin:EXAM_CLAUDE_WRAPPER_BIN,examHome};
+}
+
+export function createClaudeWorkerRunner(claudeBin:string,timeoutMs:number):ClaudeCliRunner{
+ return new ClaudeCliRunner({bin:claudeBin,timeoutMs});
 }
 
 /** Fixed worker only: the broker must create a separately isolated exec-server,
@@ -112,7 +114,7 @@ async function main(){
   if(input.provider==='grok'){
    return {result:await runGrokProgrammer(request,abort.signal),failure:null};
   }else if(input.provider==='claude'){
-   const adapter=new ClaudeExecutionAdapter(new ClaudeCliRunner({bin:claudeBin,timeoutMs:input.timeoutMs}));
+   const adapter=new ClaudeExecutionAdapter(createClaudeWorkerRunner(claudeBin,input.timeoutMs));
    return {result:await adapter.run(request,async()=>{if(abort.signal.aborted)throw Error('WORKER_STOPPED');},abort.signal,[...account.secrets,...collectSecretValues(process.env)]),failure:null};
   }else if(input.provider==='codex'){
    const command=codexPersonalCommand({role:input.role,model:input.model,effort:input.effort,prompt:input.task,outputSchema:input.outputSchema});

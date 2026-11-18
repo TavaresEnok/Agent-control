@@ -5,6 +5,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
+import {finishExamIntent} from './exam-intent.ts';
 import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {publicLoginRecord, type DesignLogin, type PublicLoginRecord} from './design-discover.ts';
@@ -397,6 +398,7 @@ export async function resolvePersonalDesign(
   if (!project) throw new Refusal('NOT_FOUND', 404);
   const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
   let authority: Authority | undefined;
+  let intentId: string | undefined;
   try {
     const commit = await readHead(project.repo);
     const principal = project.owner;
@@ -407,7 +409,7 @@ export async function resolvePersonalDesign(
     }
     const runtime = await (known?.composeRuntime ?? composePersonalRuntime)(config, ledger);
     if (!runtime) throw new Refusal('DESIGN_WORKER_UNAVAILABLE', 503);
-    const intentId = await insertDesignIntent(ledger, principal, authority, project.id, commit);
+    intentId = await insertDesignIntent(ledger, principal, authority, project.id, commit);
     const releaseGrant = (grantId: string, how: 'not_started' | 'exited') => releaseDesignGrant(ledger, principal, authority!, grantId, how);
     const worker = createDesignNativeWorker({
       supervisors: runtime.executions as unknown as readonly DesignExamSupervisor[],
@@ -422,7 +424,7 @@ export async function resolvePersonalDesign(
       const capacity = new Capacity(ledger);
       const grant = await capacity.reserve(principal, {
         attemptId: randomUUID(),
-        intentId,
+        intentId: intentId!,
         contextId: authority!.contextId,
         role,
       }, authority!);
@@ -449,6 +451,7 @@ export async function resolvePersonalDesign(
       },
     };
   } catch (error) {
+    if (intentId && authority) await finishExamIntent(ledger, {intentId, contextId: authority.contextId}, 'failed').catch(() => undefined);
     if (authority) await ledger.releaseLease(authority).catch(() => undefined);
     await ledger.close();
     throw error;

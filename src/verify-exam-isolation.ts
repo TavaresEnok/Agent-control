@@ -68,9 +68,11 @@ export function examClaudeArgv(runnerArgv: readonly string[]): string[] {
   return ['--setting-sources', 'user', ...filtered];
 }
 
+export const EXAM_CLAUDE_WRAPPER_BIN = '/usr/local/bin/ac-exam-claude';
+
 /** CommonJS wrapper. `/tmp` has no `"type":"module"`, and a `.cjs` file stays CommonJS inside this repo too. */
-export function examClaudeWrapperSource(realBin: string): string {
-  return `#!${process.execPath}
+export function examClaudeWrapperSource(realBin: string, nodeShebang = '/usr/bin/env node'): string {
+  return `#!${nodeShebang}
 const {spawn} = require('node:child_process');
 const real = ${JSON.stringify(realBin)};
 const incoming = process.argv.slice(2);
@@ -97,10 +99,10 @@ child.on('error', () => process.exit(127));
 `;
 }
 
-/** Executable wrapper on the container tmpfs. Only the exam worker should pass this as Claude's bin. */
+/** Executable wrapper on the host tmpfs for tests. The container worker uses the image's fixed `/usr/local/bin/ac-exam-claude`. */
 export async function installExamClaudeWrapper(directory: string, realBin: string): Promise<string> {
   const file = join(directory, 'ac-exam-claude.cjs');
-  await writeFile(file, examClaudeWrapperSource(realBin), {mode: 0o700});
+  await writeFile(file, examClaudeWrapperSource(realBin, process.execPath), {mode: 0o700});
   await chmod(file, 0o700);
   return file;
 }

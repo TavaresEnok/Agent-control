@@ -47,7 +47,7 @@ export class WorkflowGenerations{
  async selectForNew(principal:string,projectId:string,buildId:string){
   Build.parse(buildId);await this.ledger.tx(async c=>{await this.owner(c,principal,projectId);
    await requireRuntime(c,projectId,buildId);
-   if((await c.query(`SELECT 1 FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id WHERE x.project_id=$1 AND i.parent_intent_id IS NULL AND i.state NOT IN ('completed','done','review','failed','canceled','cancelled') AND NOT EXISTS(SELECT 1 FROM ac_workflow_generations g WHERE g.intent_id=i.id) LIMIT 1`,[projectId])).rowCount)throw new Refusal('WORKFLOW_LEGACY_RETENTION_REQUIRED');
+   if((await c.query(`SELECT 1 FROM ac_intents i JOIN ac_contexts x ON x.id=i.context_id WHERE x.project_id=$1 AND i.parent_intent_id IS NULL AND i.state NOT IN ('completed','done','review','failed','canceled','cancelled') AND NOT EXISTS(SELECT 1 FROM ac_workflow_generations g WHERE g.intent_id=i.id) AND NOT EXISTS(SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=x.id) LIMIT 1`,[projectId])).rowCount)throw new Refusal('WORKFLOW_LEGACY_RETENTION_REQUIRED');
    await c.query('INSERT INTO ac_workflow_runtime_defaults VALUES($1,$2) ON CONFLICT(project_id) DO UPDATE SET build_id=excluded.build_id',[projectId,buildId]);
   });
  }

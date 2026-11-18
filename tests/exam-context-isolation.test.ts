@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {chmod, mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
@@ -13,8 +13,11 @@ import {runDesignCreate} from '../src/design-create.ts';
 import {runDesignModule} from '../src/design-module.ts';
 import {prepareDesignSpecialist} from '../src/design-prepare.ts';
 import {Ledger} from '../src/ledger.ts';
-import {designCliFailureText} from '../src/personal-design-cli.ts';
+import {designCliFailureText, runDesignSession} from '../src/personal-design-cli.ts';
+import {runPersonalVerifySession} from '../src/personal-verify-cli.ts';
 import {beginPersonalVerification, resolvePersonalVerification} from '../src/verify-command.ts';
+import {runSecurityVerification} from '../src/verify-runtime.ts';
+import {WorkflowGenerations} from '../src/workflow-generations.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const exec = promisify(execFile);
@@ -484,5 +487,208 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
     await db.close();
     await database.close();
     await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('exame de design, criar e validador deixam intenção em failed na falha e no Ctrl-C', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const database = await isolatedDatabase(databaseUrl!, 'examfail');
+  const db = new Ledger(database.url);
+  const root = await mkdtemp(join(tmpdir(), 'ac-exam-fail-'));
+  const dataDirectory = join(root, 'data');
+  const databasesDirectory = join(dataDirectory, 'verify-db', '20261118-000000');
+  try {
+    await mkdir(databasesDirectory, {recursive: true, mode: 0o700});
+    await writeFile(join(dataDirectory, 'verify-image.json'), JSON.stringify({image: `sha256:${'ab'.repeat(32)}`}), {mode: 0o600});
+    await writeFile(
+      join(dataDirectory, 'verify-db', 'current.json'),
+      JSON.stringify({directory: databasesDirectory, fetchedAt: new Date().toISOString(), manifestSha256: 'c'.repeat(64)}),
+      {mode: 0o600},
+    );
+    await db.migrate();
+    const principal = 'exam-fail-owner';
+    const projectId = randomUUID();
+    const capacity = new Capacity(db);
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'Exam Fail']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
+    await capacity.registerModel(principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'synthetic://examfail',
+    });
+    const accountId = randomUUID();
+    await capacity.addAccount(principal, projectId, {
+      id: accountId, provider: 'claude', label: 'claude', resourceIdentity: `claude:${accountId}`, mode: 'synthetic',
+      eligibility: 'documented_supported', eligibilitySource: 'synthetic://examfail', maxConcurrent: 4,
+    });
+    await capacity.observeQuota(principal, accountId, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+    const spec = randomUUID();
+    const rev = randomUUID();
+    await capacity.addProfile(principal, projectId, {id: spec, accountId, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: rev, accountId, model: 'claude-sonnet-5-5', effort: 'medium', role: 'reviewer'});
+    const policyRev = await capacity.publish(principal, projectId, 0, {
+      schemaVersion: 1,
+      maxProgrammersPerContext: 1,
+      maxEvaluatorsPerContext: 2,
+      roles: {specialist: {regular: [spec], emergency: []}, reviewer: {regular: [rev], emergency: []}},
+    });
+    const mainContext = await db.createContext(principal, projectId, randomUUID());
+    await capacity.assignPolicy(principal, mainContext, policyRev);
+    const repo = await initRepo(root);
+    const installationPath = await writeInstallation(root, {databaseUrl: database.url, projectId, repo, owner: principal, dataDirectory});
+    const composeRuntime = async () => ({executions: [benchDesignSupervisor([accountId])]}) as never;
+
+    // 1) Falha por exceção no exame/criar de design deixa intenção em failed.
+    const designFail = await resolvePersonalDesign([], {installationPath, projectId, composeRuntime});
+    await assert.rejects(
+      () => runDesignSession(designFail, async () => { throw new Refusal('DESIGN_IMAGE_FAILED'); }),
+      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_IMAGE_FAILED',
+    );
+    assert.equal(
+      (await db.pool.query<{state: string}>('SELECT state FROM ac_intents WHERE id=$1', [designFail.intentId])).rows[0]?.state,
+      'failed',
+    );
+
+    // 2) Ctrl-C (SIGINT) no exame/criar de design deixa intenção em failed.
+    const designInterrupt = await resolvePersonalDesign([], {installationPath, projectId, composeRuntime});
+    await assert.rejects(
+      () => runDesignSession(designInterrupt, () => new Promise<void>(resolveLater => {
+        setImmediate(() => { process.emit('SIGINT', 'SIGINT'); });
+        void resolveLater;
+      })),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_INTERRUPTED',
+    );
+    assert.equal(
+      (await db.pool.query<{state: string}>('SELECT state FROM ac_intents WHERE id=$1', [designInterrupt.intentId])).rows[0]?.state,
+      'failed',
+    );
+
+    // 3) Sucesso em runDesignSession deixa intenção em done.
+    const designDone = await resolvePersonalDesign([], {installationPath, projectId, composeRuntime});
+    await runDesignSession(designDone, async () => 'ok');
+    assert.equal(
+      (await db.pool.query<{state: string}>('SELECT state FROM ac_intents WHERE id=$1', [designDone.intentId])).rows[0]?.state,
+      'done',
+    );
+
+    // 4) Falha direta em runSecurityVerification deixa run e intenção em failed.
+    const verifyRes1 = await resolvePersonalVerification([installationPath, projectId], {composeRuntime});
+    try {
+      await assert.rejects(
+        () => runSecurityVerification({
+          ledger: verifyRes1.input.ledger!,
+          principal: verifyRes1.input.principal!,
+          authority: verifyRes1.input.authority!,
+          projectId,
+          repoPath: repo,
+          dataDirectory,
+          commit: verifyRes1.input.commit!,
+          policyRevision: verifyRes1.input.policyRevision!,
+          worker: {async run() { throw new Refusal('CLAUDE_SPAWN_EACCES'); }},
+        }),
+        (error: unknown) => error instanceof Refusal && error.code === 'CLAUDE_SPAWN_EACCES',
+      );
+      const lastVerify = (await db.pool.query<{status: string; intent_state: string}>(
+        `SELECT r.status, i.state AS intent_state
+         FROM ac_verify_runs r JOIN ac_intents i ON i.id=r.intent_id
+         WHERE r.context_id=$1 ORDER BY r.created_at DESC LIMIT 1`,
+        [verifyRes1.input.authority!.contextId],
+      )).rows[0];
+      assert.equal(lastVerify?.status, 'failed');
+      assert.equal(lastVerify?.intent_state, 'failed');
+    } finally {
+      await verifyRes1.close();
+    }
+
+    // 5) Ctrl-C (SIGINT) em runPersonalVerifySession deixa run e intenção em failed.
+    const verifyRes2 = await resolvePersonalVerification([installationPath, projectId], {composeRuntime});
+    const runIdInterrupt = randomUUID();
+    await assert.rejects(
+      () => runPersonalVerifySession(verifyRes2, {
+        begin: async input => {
+          const pending = runSecurityVerification({
+            ledger: input.ledger!,
+            principal: input.principal!,
+            authority: input.authority!,
+            projectId: input.projectId,
+            repoPath: input.repoPath,
+            dataDirectory: input.dataDirectory,
+            commit: input.commit!,
+            policyRevision: input.policyRevision!,
+            runId: runIdInterrupt,
+            worker: {
+              async run() {
+                setImmediate(() => { process.emit('SIGINT', 'SIGINT'); });
+                await new Promise(resolveWait => setTimeout(resolveWait, 200));
+                return '{}';
+              },
+            },
+          }).then(() => undefined);
+          input.observe?.(pending);
+          return {id: runIdInterrupt, status: 'running', phase: 'mapa'};
+        },
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_INTERRUPTED',
+    );
+    const interruptedRow = (await db.pool.query<{status: string; intent_state: string}>(
+      `SELECT r.status, i.state AS intent_state
+       FROM ac_verify_runs r JOIN ac_intents i ON i.id=r.intent_id
+       WHERE r.id=$1`,
+      [runIdInterrupt],
+    )).rows[0];
+    assert.equal(interruptedRow?.status, 'failed');
+    assert.equal(interruptedRow?.intent_state, 'failed');
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('selectForNew do projeto não é bloqueado por intenção accepted em contexto de exame, mas continua bloqueado em contexto comum', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const database = await isolatedDatabase(databaseUrl!, 'examselect');
+  const db = new Ledger(database.url);
+  try {
+    await db.migrate();
+    const principal = 'select-owner';
+    const projectId = randomUUID();
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'Exam Select']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
+    await db.createContext(principal, projectId, randomUUID());
+    const exam = await db.ensureExamContext(principal, projectId, 'design');
+    const stat = await readFile('/proc/self/stat', 'utf8');
+    const processStart = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19]!;
+    const buildId = `cezar-${'b'.repeat(32)}`;
+    await db.pool.query(
+      `INSERT INTO ac_workflow_runtime_instances(project_id,instance_id,build_id,executable_digest,runtime_digest,process_id,process_start,protocol,workflow_digests,lease_until)
+       VALUES($1,$2,$3,$4,$5,$6,$7,'cezar-frozen-graph-generation-v1','[]'::jsonb,clock_timestamp()+interval '60 seconds')`,
+      [projectId, randomUUID(), buildId, 'a'.repeat(64), 'b'.repeat(64), process.pid, processStart],
+    );
+    await db.pool.query(
+      `INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,state)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,1,0,'accepted')`,
+      [randomUUID(), exam.contextId, principal, '0'.repeat(64), JSON.stringify({schemaVersion: 1}), randomUUID(), randomUUID()],
+    );
+    const generations = new WorkflowGenerations(db);
+    await generations.selectForNew(principal, projectId, buildId);
+    const saved = (await db.pool.query<{build_id: string}>(
+      'SELECT build_id FROM ac_workflow_runtime_defaults WHERE project_id=$1',
+      [projectId],
+    )).rows[0];
+    assert.equal(saved?.build_id, buildId);
+
+    const normalContext = await db.createContext(principal, projectId, randomUUID());
+    await db.pool.query(
+      `INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,state)
+       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,1,0,'accepted')`,
+      [randomUUID(), normalContext, principal, '1'.repeat(64), JSON.stringify({schemaVersion: 1}), randomUUID(), randomUUID()],
+    );
+    await assert.rejects(
+      () => generations.selectForNew(principal, projectId, buildId),
+      (error: unknown) => error instanceof Refusal && error.code === 'WORKFLOW_LEGACY_RETENTION_REQUIRED',
+    );
+  } finally {
+    await db.close();
+    await database.close();
   }
 });

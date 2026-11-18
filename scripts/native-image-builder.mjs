@@ -33,6 +33,7 @@ export async function prepareNativeImage(kind,binaryPath,expected){
   if(found){const data=await readFile(helper);if(data[0]===127&&data.subarray(1,4).toString()==='ELF'&&data.length<=512*1024*1024){extra['codex-code-mode-host']=createHash('sha256').update(data).digest('hex');await writeFile(join(context,'extra-bin','codex-code-mode-host'),data,{mode:0o555,flag:'wx'});}data.fill(0);}
  }
  await copyFile(join(repo,'deploy',selected.dockerfile),join(context,'Dockerfile'));await chmod(join(context,'Dockerfile'),0o600);
+ if(kind==='execution'){await copyFile(join(repo,'deploy','ac-exam-claude.cjs'),join(context,'ac-exam-claude.cjs'));await chmod(join(context,'ac-exam-claude.cjs'),0o755);}
  const bundle=await readFile(bundlePath),dockerfile=await readFile(join(context,'Dockerfile'));
  await writeFile(join(context,'MANIFEST.json'),JSON.stringify({schemaVersion:1,kind,publicCodexSha256:expected,extraBinarySha256:extra,bundleSha256:createHash('sha256').update(bundle).digest('hex'),
   dockerfileSha256:createHash('sha256').update(dockerfile).digest('hex'),sourceCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),

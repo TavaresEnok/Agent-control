@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {constants} from 'node:fs';
-import {chmod, lstat, mkdtemp, open, rename, rm, unlink, type FileHandle} from 'node:fs/promises';
+import {chmod, link, lstat, mkdtemp, open, rename, rm, unlink, type FileHandle} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {Refusal} from './contracts.ts';
@@ -137,12 +137,29 @@ export async function normalizeAccountCredential(accountDir: string): Promise<vo
 }
 
 /**
- * Replace a regular file in place. The temporary file is mode 0600 in the same directory,
- * then renamed. The previous owner is kept. A symlink is not followed and is not replaced.
+ * Replace a regular file in place (or recreate it when `allowCreate` is set and it is absent).
+ * The temporary file is mode 0600 in the same directory, then linked/renamed atomically.
+ * The previous owner (or directory owner on create) is kept. A symlink is not followed and is not replaced.
  */
-export async function writePrivateAtomic(file: string, body: string): Promise<void> {
-  const info = await lstat(file);
-  if (info.isSymbolicLink() || !info.isFile()) throw new Error('EXAM_LOGIN_WRITE_REFUSED');
+export async function writePrivateAtomic(file: string, body: string, options?: {allowCreate?: boolean}): Promise<void> {
+  let info;
+  try {
+    info = await lstat(file);
+  } catch (error) {
+    if (!options?.allowCreate || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  let targetUid: number;
+  let targetGid: number;
+  if (info) {
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('EXAM_LOGIN_WRITE_REFUSED');
+    targetUid = info.uid;
+    targetGid = info.gid;
+  } else {
+    const dirInfo = await lstat(dirname(file));
+    if (dirInfo.isSymbolicLink() || !dirInfo.isDirectory()) throw new Error('EXAM_LOGIN_WRITE_REFUSED');
+    targetUid = dirInfo.uid;
+    targetGid = dirInfo.gid;
+  }
   const temp = join(dirname(file), `.ac-private-${randomBytes(8).toString('hex')}.tmp`);
   let handle: FileHandle | undefined;
   try {
@@ -150,13 +167,26 @@ export async function writePrivateAtomic(file: string, body: string): Promise<vo
     await handle.writeFile(body, 'utf8');
     await handle.sync();
     try {
-      await handle.chown(info.uid, info.gid);
+      await handle.chown(targetUid, targetGid);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'EPERM' || process.getuid?.() !== info.uid) throw error;
+      if (code !== 'EPERM' || process.getuid?.() !== targetUid) throw error;
     }
     await handle.close();
     handle = undefined;
+    if (!info) {
+      try {
+        await link(temp, file);
+        await unlink(temp);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'EEXIST') throw new Error('EXAM_LOGIN_WRITE_REFUSED');
+        if (code !== 'EPERM' && code !== 'EXDEV' && code !== 'EOPNOTSUPP') throw error;
+        const current = await lstat(file).catch(err => ((err as NodeJS.ErrnoException).code === 'ENOENT' ? undefined : Promise.reject(err)));
+        if (current) throw new Error('EXAM_LOGIN_WRITE_REFUSED');
+      }
+    }
     await rename(temp, file);
   } catch (error) {
     if (handle) await handle.close().catch(() => undefined);
@@ -281,9 +311,9 @@ export async function prepareClaudeExamAccessToken(input: {
       } catch {
         throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
       }
-      if (afterText === undefined || restoreText === afterText) {
+      if (restoreText === afterText) {
         try {
-          await writePrivateAtomic(file, originalText);
+          await writePrivateAtomic(file, originalText, {allowCreate: afterText === undefined});
         } catch {
           throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
         }

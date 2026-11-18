@@ -6,7 +6,7 @@ import {usageWindowsObservationSchema,type UsageWindowsObservation} from '../ups
 import {Refusal} from './contracts.ts';
 import {providerFailureCode} from './exam-login.ts';
 import {claudeLimitFromText,preferredLimitUsage} from './quota-exhaustion.ts';
-import {extractJsonObject} from './claude-planning-adapter.ts';
+import {claudeExitFailureCode,claudeSpawnFailureCode,extractJsonObject,logClaudeAdapterFailure} from './claude-planning-adapter.ts';
 import {Effort,runnerEffort} from './effort.ts';
 
 const Path=z.string().min(1).max(240).refine(path=>!path.startsWith('/')&&!path.includes('\\')&&
@@ -62,17 +62,41 @@ export class ClaudeExecutionAdapter{
    const result=await Promise.race([session.result,stopped]);
    if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');if(timedOut)throw new Refusal('EXECUTION_TIMEOUT');
    const limit=failed||!completed?claudeLimitFromText([providerText,result.text]):null;
-   if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
+   if(limit){
+    logClaudeAdapterFailure(limit.failureCode,[providerText,result.text].map(s=>s.trim()).filter(Boolean).join(' '),secrets);
+    throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
+   }
    if(failed||!completed){
-    const auth=providerFailureCode([providerText,result.text].join('\n'));
-    if(auth)throw new ClaudeExecutionFailure(auth,tokens,usage);
+    const joined=[providerText,result.text].map(s=>s.trim()).filter(Boolean).join(' ');
+    const auth=providerFailureCode(joined);
+    if(auth){
+     logClaudeAdapterFailure(auth,joined,secrets);
+     throw new ClaudeExecutionFailure(auth,tokens,usage);
+    }
     throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
    }
    const extracted=input.outputSchema?extractJsonObject(result.text):undefined;
    const text=extracted===undefined?result.text:JSON.stringify(extracted);
    if(Buffer.byteLength(text)>256*1024)throw new Refusal('EXECUTION_OUTPUT_TOO_LARGE');
    return {output:redactSecrets(text,secrets),tokensUsed:tokens,usageWindows:usage,nativeSessionId:result.sessionId??null};
-  }catch(error){if(error instanceof ClaudeExecutionFailure)throw error;const joined=[providerText,error instanceof Error?error.message:''].join('\n');const limit=claudeLimitFromText([providerText,error instanceof Error?error.message:'']);if(limit)throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));const auth=providerFailureCode(joined);if(auth)throw new ClaudeExecutionFailure(auth,tokens,usage);throw new ClaudeExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage);}
+  }catch(error){
+   if(error instanceof ClaudeExecutionFailure)throw error;
+   const rawMsg=error instanceof Error?error.message:String(error??'');
+   const joined=[providerText,rawMsg].map(s=>s.trim()).filter(Boolean).join(' ');
+   const limit=claudeLimitFromText([providerText,rawMsg]);
+   if(limit){
+    logClaudeAdapterFailure(limit.failureCode,joined,secrets);
+    throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
+   }
+   const auth=providerFailureCode(joined);
+   if(auth){
+    logClaudeAdapterFailure(auth,joined,secrets);
+    throw new ClaudeExecutionFailure(auth,tokens,usage);
+   }
+   const code=error instanceof Refusal?error.code:claudeSpawnFailureCode(error)??claudeExitFailureCode(error,joined)??'EXECUTION_NATIVE_FAILED';
+   logClaudeAdapterFailure(code,joined,secrets);
+   throw new ClaudeExecutionFailure(code,tokens,usage);
+  }
   finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
  }
 }

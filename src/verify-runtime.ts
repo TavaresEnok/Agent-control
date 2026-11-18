@@ -5,6 +5,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {promisify} from 'node:util';
 import {Capacity, type Grant} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
+import {finishExamIntent, finishExamIntentTx} from './exam-intent.ts';
 import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {Ledger, type Intent} from './ledger.ts';
 import {readMountedCredentialSecrets} from './native-worker-security.ts';
@@ -109,11 +110,12 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
     commit: input.commit,
     policyRevision: input.policyRevision,
   });
-  await insertRun(input, intent, runId);
   try {
+    await insertRun(input, intent, runId);
     return await examine(input, intent, runId, createdAt, reserved.directoryName, modelCallBudget);
   } catch (error) {
     try { await markFailed(input.ledger, runId); } catch { /* the original failure stays visible */ }
+    try { await finishExamIntent(input.ledger, {intentId: intent.id, contextId: input.authority.contextId}, 'failed'); } catch { /* the original failure stays visible */ }
     throw error;
   }
 }
@@ -334,8 +336,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       [runId, report.directory, input.authority.contextId],
     );
     if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
-    await c.query("UPDATE ac_intents SET state='done' WHERE id=$1 AND context_id=$2", [intent.id, input.authority.contextId]);
-    await input.ledger.refreshPending(c, input.authority.contextId);
+    await finishExamIntentTx(c, input.ledger, {intentId: intent.id, contextId: input.authority.contextId}, 'done');
   });
   return {runId, directory: report.directory, achados, coverage: rows};
 }

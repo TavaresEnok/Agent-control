@@ -179,3 +179,62 @@ test('a native planning failure that is not a usage limit still rejects the call
   assert.equal((await db.pool.query('SELECT exhausted_until FROM ac_accounts WHERE id=$1',[account])).rows[0].exhausted_until,null);
  }finally{await db.close();await fixture.close();await rm(area,{recursive:true,force:true});}
 });
+
+function captureStderr():{lines:string[];restore:()=>void}{
+ const lines:string[]=[];
+ const original=console.error;
+ console.error=(...args:unknown[])=>{lines.push(args.map(arg=>String(arg)).join(' '));};
+ return {lines,restore:()=>{console.error=original;}};
+}
+
+test('erro de spawn ou de saída no ClaudeExecutionAdapter e ClaudePlanningAdapter vira código legível e grava stderr limpo sem segredos',async()=>{
+ const runInput={sessionId:randomUUID(),model:'fixture-model',effort:'high' as const,role:'reviewer' as const,task:'Leia o diff.',writePaths:[] as string[],artifactCommit:'a'.repeat(40),environment:{id:'private-job-tools',url:'ws://127.0.0.1:19493',authBearerToken:'b'.repeat(32),cwd:'/work' as const},timeoutMs:1000,outputSchema:{type:'object'}};
+ const secret='oauth-secret-value-1234567890';
+ const cap=captureStderr();
+ try{
+  const eacces=Object.assign(new Error(`spawn /tmp/ac-exam-claude.cjs EACCES [secret=${secret}]`+'!@#\n'+'x'.repeat(250)),{code:'EACCES'});
+  await assert.rejects(
+   new ClaudeExecutionAdapter(planningRunner('claude',Promise.reject(eacces))).run(runInput,async()=>{},undefined,[secret]),
+   error=>{assert.ok(error instanceof ClaudeExecutionFailure);assert.equal(error.code,'CLAUDE_SPAWN_EACCES');return true;},
+  );
+  const spawnLine=cap.lines.at(-1)??'';
+  assert.ok(spawnLine.startsWith('CLAUDE_ADAPTER_FAILURE CLAUDE_SPAWN_EACCES '));
+  const spawnMsg=spawnLine.slice('CLAUDE_ADAPTER_FAILURE CLAUDE_SPAWN_EACCES '.length);
+  assert.ok(spawnMsg.length<=200);
+  assert.match(spawnMsg,/^[A-Za-z0-9_ .:,/-]+$/);
+  assert.equal(spawnMsg.includes(secret),false);
+  assert.equal(spawnMsg.includes('EACCES'),true);
+
+  const eperm=Object.assign(new Error('spawn /usr/local/bin/claude EPERM'),{code:'EPERM'});
+  await assert.rejects(
+   new ClaudeExecutionAdapter(planningRunner('claude',Promise.reject(eperm))).run(runInput,async()=>{}),
+   error=>error instanceof ClaudeExecutionFailure&&error.code==='CLAUDE_SPAWN_EPERM',
+  );
+  const enoent=new Error('`/usr/local/bin/ac-exam-claude` not found on PATH');
+  await assert.rejects(
+   new ClaudeExecutionAdapter(planningRunner('claude',Promise.reject(enoent))).run(runInput,async()=>{}),
+   error=>error instanceof ClaudeExecutionFailure&&error.code==='CLAUDE_SPAWN_ENOENT',
+  );
+
+  const exitErr=new Error('claude CLI exited with code 127 — missing library');
+  await assert.rejects(
+   new ClaudeExecutionAdapter(planningRunner('claude',Promise.reject(exitErr))).run(runInput,async()=>{}),
+   error=>error instanceof ClaudeExecutionFailure&&error.code==='CLAUDE_EXIT_FAILED',
+  );
+  assert.ok((cap.lines.at(-1)??'').startsWith('CLAUDE_ADAPTER_FAILURE CLAUDE_EXIT_FAILED '));
+
+  await assert.rejects(
+   new ClaudePlanningAdapter(planningRunner('claude',Promise.reject(Object.assign(new Error('spawn /usr/local/bin/claude EACCES'),{code:'EACCES'})))).generate(planRequest(),async()=>{}),
+   error=>error instanceof ClaudePlanningFailure&&error.code==='CLAUDE_SPAWN_EACCES',
+  );
+  assert.ok((cap.lines.at(-1)??'').startsWith('CLAUDE_ADAPTER_FAILURE CLAUDE_SPAWN_EACCES '));
+
+  await assert.rejects(
+   new ClaudePlanningAdapter(planningRunner('claude',Promise.reject(new Error('claude CLI exited with code 2')))).generate(planRequest(),async()=>{}),
+   error=>error instanceof ClaudePlanningFailure&&error.code==='CLAUDE_EXIT_FAILED',
+  );
+  assert.ok((cap.lines.at(-1)??'').startsWith('CLAUDE_ADAPTER_FAILURE CLAUDE_EXIT_FAILED '));
+ }finally{
+  cap.restore();
+ }
+});

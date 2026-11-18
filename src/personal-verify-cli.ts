@@ -1,6 +1,7 @@
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Id,Refusal} from './contracts.ts';
+import {finishExamIntent,withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_RESTORE_FAILED_TEXT,EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {loadInstallation} from './installation.ts';
 import {beginPersonalVerification,resolvePersonalVerification} from './verify-command.ts';
@@ -27,6 +28,7 @@ const messages:Record<string,string>={
  EXAM_LOGIN_STALE:EXAM_LOGIN_STALE_TEXT,
  EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,
  EXAM_LOGIN_RESTORE_FAILED:EXAM_LOGIN_RESTORE_FAILED_TEXT,
+ EXAM_INTERRUPTED:'O exame foi interrompido.',
 };
 
 export function verifyCliFailureText(error:unknown):string{
@@ -117,13 +119,11 @@ export async function discardPersonalVerification(argv:readonly string[],beginPe
  return true;
 }
 
-async function main(){
- if(await discardPersonalVerification(process.argv.slice(2))){
-  console.log('Relatório descartado.');
-  process.exit(0);
- }
- const resolved=await resolvePersonalVerification(process.argv.slice(2));
- if(!resolved.input.ledger||!resolved.input.authority)fail(new Refusal('VERIFY_CONTEXT_REQUIRED',409));
+export async function runPersonalVerifySession(
+ resolved:Awaited<ReturnType<typeof resolvePersonalVerification>>,
+ deps?:{begin?:typeof beginPersonalVerification},
+):Promise<string>{
+ if(!resolved.input.ledger||!resolved.input.authority)throw new Refusal('VERIFY_CONTEXT_REQUIRED',409);
  const ledger=resolved.input.ledger;
  const authority=resolved.input.authority;
  const worker=resolved.input.worker;
@@ -142,27 +142,64 @@ async function main(){
  });
  let failed:unknown;
  try{
-  const started=await beginPersonalVerification({...resolved.input,observe(pending){job=pending;}});
-  runId=started.id;
-  console.log('Verificação '+started.id+' começou.');
-  await Promise.race([job,aborted]);
-  console.log('Verificação '+started.id+' concluída.');
+  return await withExamSignals(
+   async()=>{
+    const started=await (deps?.begin??beginPersonalVerification)({
+     ...resolved.input,
+     observe(pending){
+      job=pending;
+      void job.catch(()=>undefined);
+     },
+    });
+    runId=started.id;
+    console.log('Verificação '+started.id+' começou.');
+    await Promise.race([job,aborted]);
+    console.log('Verificação '+started.id+' concluída.');
+    return started.id;
+   },
+   ()=>{
+    void worker?.stop?.().catch(()=>undefined);
+   },
+  );
  }catch(error){
   failed=error;
-  if(runId&&error instanceof Refusal&&error.code==='VERIFY_LEASE_LOST'){
-   try{
-    await ledger.pool.query("UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running'",[runId]);
-   }catch{/* a status write must not replace the lease-loss failure */}
-  }
+  throw error;
  }finally{
   stopLease();
+  if(failed&&runId){
+   try{
+    const updated=(await ledger.pool.query<{intent_id:string}>(
+     "UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running' RETURNING intent_id::text AS intent_id",
+     [runId],
+    )).rows[0];
+    const intentId=updated?.intent_id??(await ledger.pool.query<{intent_id:string}>(
+     'SELECT intent_id::text AS intent_id FROM ac_verify_runs WHERE id=$1',
+     [runId],
+    )).rows[0]?.intent_id;
+    if(intentId){
+     await finishExamIntent(ledger,{intentId,contextId:authority.contextId},'failed');
+    }
+   }catch{/* status cleanup must not replace the original failure */}
+  }
   try{
    await releasePersonalVerifyLease({pool:{query:(sql,params)=>ledger.pool.query(sql,(params??[]) as never[])}},authority);
   }catch{/* release must not mask the exam error; the exit code is already chosen */}
   try{await resolved.close();}
-  catch(error){if(!failed)failed=error;}
+  catch(error){if(!failed)throw error;}
  }
- if(failed)fail(failed);
+}
+
+async function main(){
+ if(await discardPersonalVerification(process.argv.slice(2))){
+  console.log('Relatório descartado.');
+  process.exit(0);
+ }
+ try{
+  const resolved=await resolvePersonalVerification(process.argv.slice(2));
+  await runPersonalVerifySession(resolved);
+ }catch(error){
+  fail(error);
+ }
  process.exit(0);
 }
 

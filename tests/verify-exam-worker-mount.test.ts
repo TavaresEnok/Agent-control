@@ -12,7 +12,8 @@ import {AccountHomes} from '../src/account-homes.ts';
 import {Authority, Refusal, canonical, digest} from '../src/contracts.ts';
 import {GitArtifacts} from '../src/git.ts';
 import {NativeExecutionRequest, NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
-import {isClaudeExamWorker, prepareClaudeExamWorkerEnv} from '../src/native-execution-worker.ts';
+import {createClaudeWorkerRunner, isClaudeExamWorker, prepareClaudeExamWorkerEnv} from '../src/native-execution-worker.ts';
+import {EXAM_CLAUDE_WRAPPER_BIN, examClaudeWrapperSource, installExamClaudeWrapper} from '../src/verify-exam-isolation.ts';
 import {ClaudeExecutionAdapter, ClaudeExecutionFailure} from '../src/claude-execution-adapter.ts';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
 import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
@@ -853,8 +854,9 @@ rl.once('line', line => {
       credentialSnapshotTag: snapshotTag,
       execToken,
       tmpRoot: tmpArea,
-      realClaudeBin: fakeClaude,
     });
+    assert.equal(prepared.claudeBin, EXAM_CLAUDE_WRAPPER_BIN);
+    assert.equal((createClaudeWorkerRunner(prepared.claudeBin, 10_000) as unknown as {bin: string}).bin, EXAM_CLAUDE_WRAPPER_BIN);
 
     assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, accessToken);
     assert.equal(process.env.CLAUDE_CONFIG_DIR, undefined);
@@ -867,10 +869,12 @@ rl.once('line', line => {
     const filesInTmp = await listFilesRecursive(tmpArea);
     assert.equal(filesInTmp.some(f => f.endsWith('.credentials.json')), false);
     assert.equal(filesInTmp.some(f => f.endsWith('.claude.json')), false);
+    assert.equal(filesInTmp.some(f => f.endsWith('.cjs')), false);
     const settingsFiles = filesInTmp.filter(f => f.endsWith('settings.json'));
     assert.equal(settingsFiles.length, 1);
 
-    const runner = new ClaudeCliRunner({bin: prepared.claudeBin, timeoutMs: 10_000});
+    const hostWrapperBin = await installExamClaudeWrapper(area, fakeClaude);
+    const runner = new ClaudeCliRunner({bin: hostWrapperBin, timeoutMs: 10_000});
     const adaptedRunner = {
       backend: 'claude' as const,
       run(spec: Parameters<ClaudeCliRunner['run']>[0], onEvent?: Parameters<ClaudeCliRunner['run']>[1]) {
@@ -2029,10 +2033,11 @@ rl.once('line', line => {
       credentialSnapshotTag: snapshotTag,
       execToken,
       tmpRoot: tmpArea,
-      realClaudeBin: fakeClaude,
     });
+    assert.equal(prepared.claudeBin, EXAM_CLAUDE_WRAPPER_BIN);
 
-    const runner = new ClaudeCliRunner({bin: prepared.claudeBin, timeoutMs: 10_000});
+    const hostWrapperBin = await installExamClaudeWrapper(area, fakeClaude);
+    const runner = new ClaudeCliRunner({bin: hostWrapperBin, timeoutMs: 10_000});
     const adaptedRunner = {
       backend: 'claude' as const,
       run(spec: Parameters<ClaudeCliRunner['run']>[0], onEvent?: Parameters<ClaudeCliRunner['run']>[1]) {
@@ -2525,9 +2530,10 @@ rl.once('line', () => {
       credentialSnapshotTag: snapshotTag,
       execToken,
       tmpRoot: tmpArea,
-      realClaudeBin: fakeClaude,
     });
-    const runner = new ClaudeCliRunner({bin: preparedWorker.claudeBin, timeoutMs: 10_000});
+    assert.equal(preparedWorker.claudeBin, EXAM_CLAUDE_WRAPPER_BIN);
+    const hostWrapperBin = await installExamClaudeWrapper(area, fakeClaude);
+    const runner = new ClaudeCliRunner({bin: hostWrapperBin, timeoutMs: 10_000});
     const adaptedRunner = {
       backend: 'claude' as const,
       run(spec: Parameters<ClaudeCliRunner['run']>[0], onEvent?: Parameters<ClaudeCliRunner['run']>[1]) {

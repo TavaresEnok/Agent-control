@@ -6,9 +6,10 @@ import {tmpdir} from 'node:os';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
+import {finishExamIntent, withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT, EXAM_LOGIN_RESTORE_FAILED_TEXT, EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {openDesignBrowser} from './design-browser.ts';
-import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign} from './design-command.ts';
+import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign, type ResolvedPersonalDesign} from './design-command.ts';
 import {DesignCreateModelFailure, runDesignCreate, type CreateExam} from './design-create.ts';
 import {readRebuildImagePin} from './design-image-run.ts';
 import {runDesignModule} from './design-module.ts';
@@ -53,6 +54,7 @@ const messages: Record<string, string> = {
   EXAM_LOGIN_STALE: EXAM_LOGIN_STALE_TEXT,
   EXAM_LOGIN_BUSY: EXAM_LOGIN_BUSY_TEXT,
   EXAM_LOGIN_RESTORE_FAILED: EXAM_LOGIN_RESTORE_FAILED_TEXT,
+  EXAM_INTERRUPTED: 'O exame foi interrompido.',
   DESIGN_REFERENCE_INVALID: 'A referência tem que ser PNG ou JPG.',
   DESIGN_REFERENCE_LIMIT: 'O exame aceita no máximo 10 referências.',
   DESIGN_CONFIG_INVALID: 'O design.config.json do projeto é inválido.',
@@ -314,6 +316,39 @@ async function runPrepare(invocation: {installationPath: string; projectId: stri
   }
 }
 
+/** Shared exam/create lifecycle: keeps lease, catches Ctrl-C/SIGTERM, finalizes the intent (`done` or `failed`), and closes the ledger. */
+export async function runDesignSession<T>(
+  resolved: Pick<ResolvedPersonalDesign, 'ledger' | 'authority' | 'intentId' | 'close'>,
+  run: () => Promise<T>,
+  outcomeForResult: (result: T) => 'done' | 'failed' = () => 'done',
+  cleanup?: () => Promise<void>,
+): Promise<T> {
+  const stopLease = keepPersonalDesignLease(resolved.ledger, resolved.authority);
+  let outcome: 'done' | 'failed' = 'failed';
+  let failed = false;
+  try {
+    const result = await withExamSignals(() => run());
+    outcome = outcomeForResult(result);
+    return result;
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    stopLease();
+    if (cleanup) await cleanup().catch(() => undefined);
+    await finishExamIntent(
+      resolved.ledger,
+      {intentId: resolved.intentId, contextId: resolved.authority.contextId},
+      outcome,
+    ).catch(() => undefined);
+    try {
+      await resolved.close();
+    } catch (error) {
+      if (!failed) throw error;
+    }
+  }
+}
+
 async function main() {
   const invocation = parseDesignInvocation(process.argv.slice(2));
   if (invocation.kind === 'prepare') {
@@ -335,71 +370,66 @@ async function main() {
   }
   const parsed = parseDesignArgs(invocation.argv);
   const opened = parsed.loginFile === undefined ? undefined : await readDesignLoginFile(parsed.loginFile);
-  let resolved: Awaited<ReturnType<typeof resolvePersonalDesign>> | undefined;
   let examStatus: {code: number; lines: string[]} = {code: 0, lines: []};
+  let browser: Awaited<ReturnType<typeof openDesignBrowser>> | undefined;
   try {
-    resolved = await resolvePersonalDesign(invocation.argv);
-    const design = resolved;
-    const stopLease = keepPersonalDesignLease(design.ledger, design.authority);
-    const browser = opened === undefined ? undefined : await openDesignBrowser(parsed.url);
-    const pinnedImage = readPinnedImage();
-    const runId = randomUUID();
-    try {
-      const files = await readDesignRepository(design.repo);
-      const referenceFiles = invocation.references.length === 0 ? undefined : await readReferenceFiles(invocation.references);
-      const examAt = (targetUrl: string, routes?: readonly {route: string}[], servedFiles?: readonly {path: string; text: string}[]) => runDesignModule({
-        activation: 'personal',
-        projectId: design.projectId,
-        repo: design.repo,
-        targetUrl,
-        dataDirectory: design.dataDirectory,
-        intentId: design.intentId,
-        runId,
-        createdAt: new Date(),
-        commit: design.commit,
-        files: servedFiles !== undefined && servedFiles.length > 0 ? servedFiles : files,
-        worker: design.worker,
-        reserve: design.reserve,
-        release: design.release,
-        ...(browser === undefined ? {} : {driver: browser.driver}),
-        image: {pinnedImage},
-        scoreVisual: true,
-        recordStates: true,
-        regressionThreshold: invocation.threshold,
-        ...(referenceFiles === undefined ? {} : {referenceFiles}),
-        ...(opened === undefined ? {} : {login: opened.login}),
-        ...(routes === undefined ? {} : {routes}),
-      });
-      const result = invocation.serveDir === undefined
-        ? await examAt(parsed.url)
-        : await withServedDirectory(pinnedImage, invocation.serveDir, examAt);
-      console.log(runId);
-      console.log(result.directory);
-      examStatus = designExamStatus(result);
-    } finally {
-      stopLease();
-      await browser?.close();
-      await resolved.ledger.pool.query(
-        "UPDATE ac_intents SET state='done' WHERE id=$1 AND context_id=$2 AND state='accepted'",
-        [resolved.intentId, resolved.authority.contextId],
-      ).catch(() => undefined);
-    }
+    const resolved = await resolvePersonalDesign(invocation.argv);
+    examStatus = await runDesignSession(
+      resolved,
+      async () => {
+        browser = opened === undefined ? undefined : await openDesignBrowser(parsed.url);
+        const pinnedImage = readPinnedImage();
+        const runId = randomUUID();
+        const files = await readDesignRepository(resolved.repo);
+        const referenceFiles = invocation.references.length === 0 ? undefined : await readReferenceFiles(invocation.references);
+        const examAt = (targetUrl: string, routes?: readonly {route: string}[], servedFiles?: readonly {path: string; text: string}[]) => runDesignModule({
+          activation: 'personal',
+          projectId: resolved.projectId,
+          repo: resolved.repo,
+          targetUrl,
+          dataDirectory: resolved.dataDirectory,
+          intentId: resolved.intentId,
+          runId,
+          createdAt: new Date(),
+          commit: resolved.commit,
+          files: servedFiles !== undefined && servedFiles.length > 0 ? servedFiles : files,
+          worker: resolved.worker,
+          reserve: resolved.reserve,
+          release: resolved.release,
+          ...(browser === undefined ? {} : {driver: browser.driver}),
+          image: {pinnedImage},
+          scoreVisual: true,
+          recordStates: true,
+          regressionThreshold: invocation.threshold,
+          ...(referenceFiles === undefined ? {} : {referenceFiles}),
+          ...(opened === undefined ? {} : {login: opened.login}),
+          ...(routes === undefined ? {} : {routes}),
+        });
+        const result = invocation.serveDir === undefined
+          ? await examAt(parsed.url)
+          : await withServedDirectory(pinnedImage, invocation.serveDir, examAt);
+        console.log(runId);
+        console.log(result.directory);
+        return designExamStatus(result);
+      },
+      status => (status.code === 0 ? 'done' : 'failed'),
+      async () => {
+        await browser?.close();
+      },
+    );
   } catch (error) {
     opened?.wipe();
-    await resolved?.close();
     fail(error);
   }
   opened?.wipe();
-  await resolved?.close();
   for (const line of examStatus.lines) console.error(line);
   process.exit(examStatus.code);
 }
 
 async function runCreate(invocation: {installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number}) {
   const resolved = await resolvePersonalDesign([], {installationPath: invocation.installationPath, projectId: invocation.projectId});
-  const stopLease = keepPersonalDesignLease(resolved.ledger, resolved.authority);
-  const runId = randomUUID();
-  try {
+  await runDesignSession(resolved, async () => {
+    const runId = randomUUID();
     const briefing = await readFile(invocation.briefing, 'utf8');
     const references = invocation.references.length === 0 ? [] : await readReferenceFiles(invocation.references);
     const pinnedImage = readPinnedImage();
@@ -459,14 +489,7 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
     });
     console.log(runId);
     console.log(created.directory);
-  } finally {
-    stopLease();
-    await resolved.ledger.pool.query(
-      "UPDATE ac_intents SET state='done' WHERE id=$1 AND context_id=$2 AND state='accepted'",
-      [resolved.intentId, resolved.authority.contextId],
-    ).catch(() => undefined);
-    await resolved.close();
-  }
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
