@@ -25,7 +25,8 @@ RUN npm ci --omit=dev --legacy-peer-deps --no-audit --no-fund \
     && chown -R 65532:65532 /opt/design-tools
 
 COPY design-entrypoint.sh /usr/local/bin/design-entrypoint.sh
-RUN chmod 0555 /usr/local/bin/design-entrypoint.sh
+COPY design-tools/run-exam.mjs design-tools/serve-lab.mjs /opt/design-tools/
+RUN chmod 0555 /usr/local/bin/design-entrypoint.sh /opt/design-tools/run-exam.mjs /opt/design-tools/serve-lab.mjs
 
 USER 65532:65532
 WORKDIR /tmp

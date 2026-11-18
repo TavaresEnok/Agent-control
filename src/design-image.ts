@@ -22,7 +22,8 @@ const NANO_MIN = 100_000_000;
 const NANO_MAX = 4_000_000_000;
 
 const HOST = /^(?:127\.0\.0\.1|localhost|(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local)$/;
-const PINNED_IMAGE = /^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}@sha256:[a-f0-9]{64}$/;
+/** Nome pode trazer o host:porta de um registro. A tag continua sem dois-pontos e o digest é obrigatório. */
+const PINNED_IMAGE = /^[a-z0-9][a-z0-9._/:-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,127}@sha256:[a-f0-9]{64}$/;
 
 export type DesignTarget = {host: string; port: number; origin: string};
 
@@ -84,6 +85,12 @@ function assertPinnedImage(image: string): void {
   const colon = image.lastIndexOf(':', digestAt);
   const tag = image.slice(colon + 1, digestAt);
   if (tag.toLowerCase() === 'latest') throw new Refusal('DESIGN_IMAGE_UNPINNED');
+}
+
+/** Recusa referência solta. O retorno é a mesma string, já validada. */
+export function requirePinnedDesignImage(image: string): string {
+  assertPinnedImage(image);
+  return image;
 }
 
 /** Lê o primeiro `FROM` e devolve a referência com tag e digest. */

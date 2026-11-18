@@ -10,6 +10,7 @@ export function stylelintConfig(): Record<string, unknown> {
     rules: {
       'block-no-empty': true,
       'color-no-invalid-hex': true,
+      'declaration-no-important': true,
     },
   };
 }
