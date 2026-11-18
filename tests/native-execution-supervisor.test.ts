@@ -152,6 +152,10 @@ class ExecutionRecoveryMemory{
    const job=this.tables.ac_native_execution_jobs?.find(row=>row.id===params[0]);
    return job?selected([{...job}]):selected([]);
   }
+  if(text.startsWith('SELECT command FROM ac_intents WHERE id=$1')){
+   const intent=this.tables.ac_intents?.find(row=>row.id===params[0]);
+   return selected(intent?[{command:intent.command??null}]:[]);
+  }
   if(text.startsWith('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2')){
    const intent=this.tables.ac_intents?.find(row=>row.id===params[0]&&row.context_id===params[1]);
    return intent?selected([{principal_id:intent.principal_id}]):selected([]);
