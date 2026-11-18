@@ -1,7 +1,8 @@
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {constants} from 'node:fs';
-import {lstat, open, rename, unlink, type FileHandle} from 'node:fs/promises';
+import {chmod, lstat, mkdtemp, open, rename, rm, unlink, type FileHandle} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {Refusal} from './contracts.ts';
 
@@ -210,36 +211,61 @@ export async function ensureExamLoginFresh(input: {
 
 /**
  * The same non-exam Claude path that rewrites `.credentials.json` in the account directory.
+ * Runs in an isolated empty 0700 temp directory with user-only settings and empty MCP config
+ * so the repo's CLAUDE.md, hooks, and .mcp.json are never loaded.
  * Stdio is ignored so a token in the CLI output is never logged. Tests inject their own renewer.
  */
 export async function renewClaudeLoginInPlace(accountDir: string): Promise<void> {
   const configured = process.env.AC_NATIVE_CLAUDE_BIN;
   const bin = typeof configured === 'string' && configured.startsWith('/') && !configured.includes('\0') ? configured : 'claude';
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(bin, ['-p', 'ok', '--output-format', 'text'], {
-      env: {
-        PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
-        HOME: accountDir,
-        CLAUDE_CONFIG_DIR: accountDir,
-        TMPDIR: '/tmp',
-      },
-      stdio: 'ignore',
+  const scratch = await mkdtemp(join(tmpdir(), 'ac-claude-renew-'));
+  try {
+    await chmod(scratch, 0o700);
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        bin,
+        [
+          '-p',
+          'ok',
+          '--output-format',
+          'text',
+          '--setting-sources',
+          'user',
+          '--strict-mcp-config',
+          '--mcp-config',
+          '{"mcpServers":{}}',
+          '--max-turns',
+          '1',
+        ],
+        {
+          cwd: scratch,
+          env: {
+            PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+            HOME: accountDir,
+            CLAUDE_CONFIG_DIR: accountDir,
+            TMPDIR: scratch,
+          },
+          stdio: 'ignore',
+        },
+      );
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error('EXAM_LOGIN_RENEW_FAILED'));
+      }, 90_000);
+      const fail = () => {
+        clearTimeout(timer);
+        reject(new Error('EXAM_LOGIN_RENEW_FAILED'));
+      };
+      child.on('error', fail);
+      child.on('exit', code => {
+        clearTimeout(timer);
+        if (code === 0) resolve();
+        else reject(new Error('EXAM_LOGIN_RENEW_FAILED'));
+      });
     });
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error('EXAM_LOGIN_RENEW_FAILED'));
-    }, 90_000);
-    const fail = () => {
-      clearTimeout(timer);
-      reject(new Error('EXAM_LOGIN_RENEW_FAILED'));
-    };
-    child.on('error', fail);
-    child.on('exit', code => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error('EXAM_LOGIN_RENEW_FAILED'));
-    });
-  });
+  } finally {
+    await rm(scratch, {recursive: true, force: true});
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

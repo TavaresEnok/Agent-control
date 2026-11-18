@@ -20,6 +20,7 @@ import {
   examLoginStaleNote,
   providerFailureCode,
   readExamCredentialReturn,
+  renewClaudeLoginInPlace,
   safeFailureCode,
 } from '../src/exam-login.ts';
 import {designExamStatus} from '../src/personal-design-cli.ts';
@@ -284,6 +285,79 @@ test('cópia alterada da mesma conta volta para o arquivo e JSON inválido ou ou
   } finally {
     await rm(dir, {recursive: true, force: true});
     await rm(copyDir, {recursive: true, force: true});
+  }
+});
+
+test('renewClaudeLoginInPlace usa cwd temporário vazio 0700, flags isoladas e ambiente mínimo', async () => {
+  const area = await mkdtemp(join(tmpdir(), 'ac-renew-fake-'));
+  const accountDir = join(area, 'account');
+  const bin = join(area, 'fake-claude');
+  const traceFile = join(area, 'trace.json');
+  const prevBin = process.env.AC_NATIVE_CLAUDE_BIN;
+  try {
+    await writeFile(
+      bin,
+      `#!${process.execPath}
+const fs = require('node:fs');
+const cwd = process.cwd();
+const info = fs.statSync(cwd);
+const entries = fs.readdirSync(cwd);
+fs.writeFileSync(${JSON.stringify(traceFile)}, JSON.stringify({
+  cwd,
+  mode: info.mode & 0o777,
+  entries,
+  argv: process.argv.slice(2),
+  env: process.env,
+}));
+if (process.env.HOME && fs.existsSync(process.env.HOME)) {
+  const flag = process.env.HOME + '/fail';
+  if (fs.existsSync(flag)) process.exit(1);
+}
+`,
+      {mode: 0o700},
+    );
+    await chmod(bin, 0o700);
+    const {mkdir} = await import('node:fs/promises');
+    await mkdir(accountDir, {mode: 0o700});
+    process.env.AC_NATIVE_CLAUDE_BIN = bin;
+    await renewClaudeLoginInPlace(accountDir);
+    const trace = JSON.parse(await readFile(traceFile, 'utf8')) as {
+      cwd: string;
+      mode: number;
+      entries: string[];
+      argv: string[];
+      env: Record<string, string>;
+    };
+    assert.notEqual(trace.cwd, process.cwd());
+    assert.equal(trace.mode, 0o700);
+    assert.deepEqual(trace.entries, []);
+    assert.deepEqual(trace.argv, [
+      '-p',
+      'ok',
+      '--output-format',
+      'text',
+      '--setting-sources',
+      'user',
+      '--strict-mcp-config',
+      '--mcp-config',
+      '{"mcpServers":{}}',
+      '--max-turns',
+      '1',
+    ]);
+    assert.deepEqual(Object.keys(trace.env).sort(), ['CLAUDE_CONFIG_DIR', 'HOME', 'PATH', 'TMPDIR']);
+    assert.equal(trace.env.HOME, accountDir);
+    assert.equal(trace.env.CLAUDE_CONFIG_DIR, accountDir);
+    assert.equal(trace.env.TMPDIR, trace.cwd);
+    await assert.rejects(() => lstat(trace.cwd), {code: 'ENOENT'});
+
+    await writeFile(join(accountDir, 'fail'), '1', {mode: 0o600});
+    await assert.rejects(() => renewClaudeLoginInPlace(accountDir), /EXAM_LOGIN_RENEW_FAILED/);
+    const failedTrace = JSON.parse(await readFile(traceFile, 'utf8')) as {cwd: string};
+    await assert.rejects(() => lstat(failedTrace.cwd), {code: 'ENOENT'});
+  } finally {
+    if (prevBin === undefined) delete process.env.AC_NATIVE_CLAUDE_BIN;
+    else process.env.AC_NATIVE_CLAUDE_BIN = prevBin;
+    await rm(area, {recursive: true, force: true});
   }
 });
 
