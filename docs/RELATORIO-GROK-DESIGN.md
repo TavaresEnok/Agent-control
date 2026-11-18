@@ -288,3 +288,160 @@ O arquivo `upstream/happier/apps/server/generated` continua fora do git.
 - `DESIGN-ALVO-REFERENCIA`, os achados de token e os de Lighthouse estão no bruto e, no caso dos tokens, na seção Tokens. Não estão entre os achados confirmados da bancada.
 - Não houve push. O contêiner `ac-personal-pg` não foi reiniciado, removido nem migrado.
 
+
+## Reconstrução, rodada 2
+
+Feita em 18/11/2026 no ramo `task/design-r3-image-proof`, em cima de `1dbaca5a`. A imagem que rodou o laboratório e o `--servir` é `localhost:5000/ac-design:reconstrucao@sha256:70c5a72286bf518369b7a2683cff9ae7acaed0aa75bdde7bd31d14d0cc687502` (id local `sha256:9d58ee70d5c3c4ae83a6fa6975b9dc084318da7b44339d6b7a69e0021ae29dbd`). O digest está em `deploy/design-image-digest.txt`.
+
+### 1. Project Wallace
+
+`interpretDesignImageDocument` conserva `reports.cssAnalyzer`. `wallaceFindings` converte o relatório em achados com medida: cores, tamanhos de fonte, famílias, `!important`, especificidade máxima e média, seletores por regra, declarações duplicadas, z-index distintos e unidades misturadas. Os limites estão no código (mais de 8 tamanhos, especificidade estritamente acima de 0,3,0, e os demais cortes ao lado). A imagem grava 0 na coluna Achados; o host reconta os achados da ferramenta `css-analyzer`.
+
+No laboratório: 37 folhas executadas, 49 achados, falha nenhuma. Entraram, entre outros, `DESIGN-WALLACE-FONTES`, `DESIGN-WALLACE-ESPECIFICIDADE`, `DESIGN-WALLACE-UNIDADES` e `DESIGN-WALLACE-IMPORTANT`, confirmados pela medida.
+
+### 2. Contraste com transparência
+
+`parseCssColor` lê alfa em `rgb()`, `rgba()`, `#rgba`, `#rrggbbaa`, `transparent` e `rgb(0 0 0 / 0.5)`. O fundo efetivo é a composição dos ancestrais até um fundo opaco. Imagem ou gradiente no caminho vira "contraste não medido". O teste de unidade cobre texto escuro num elemento transparente dentro de fundo branco.
+
+No laboratório o parágrafo "Texto escuro sobre fundo herdado" (`#1c1c1c`, fundo transparente, seção `#ffffff`) aparece só como achado de região do axe. O contraste de token é o par plantado `#b0b0b0` sobre `#d0d0d0`, razão 1,41, APCA 14,5, confirmado sem revisor. A seção Tokens registra 54 contrastes não medidos, o gradiente do corpo.
+
+### 3. Referências do titular como imagem
+
+PNG e JPG do `--referencia` seguem o caminho da captura: cópia 0600, nome em minúsculas, até 10 arquivos, até 8 MB, mágica PNG ou JPG. Nome que só difere na caixa recusa com `DESIGN_REFERENCE_INVALID`. O pedido do worker lista o arquivo, o sha256 e `contêiner=/planning/capturas/<sha>.png`. O examinador recebe a distância por eixo (0–10). O relatório tem a seção Referências.
+
+O laboratório mandou um PNG de 1×1. A seção diz "Referências visuais (1): referencia.png" e o teste do pedido viu a linha com sha256 e o caminho no contêiner.
+
+### 4. APCA
+
+`apcaLc` subtrai 0,027 (`loBoWoffset` / `loWoBoffset`). O `loClip` 0,1 continua só como teto do grampo. Medido no teste: preto sobre branco 106,04067321268862; branco sobre preto −107,88473318309848; cinza 128 sobre branco 63,72448153616479.
+
+### 5. Estados de verdade
+
+O `?estado=` inventado saiu. Um estado entra na captura quando `design.config.json` traz `url` (caminho relativo, mesmo host) ou `acoes` (`clicar`, `preencher`, `esperar`). Os dois juntos recusam com `DESIGN_CONFIG_INVALID`. Logado usa `--login-file`: o host grava o `storageState` em 0600, monta só leitura em `/login/state.json` e apaga no fim. A senha não entra no contêiner, no `pedido.json`, no ambiente nem no relatório. Sem declaração, a linha é "não capturado".
+
+O laboratório devolve texto diferente em `/estado/vazio`, `/estado/carregando` e `/estado/erro`. As capturas saíram com esses nomes, nos dois temas. Não houve print de logado: o fixture não entregou arquivo de login, e o relatório diz "estado logado não capturado". O login no Chrome do host está no código e não foi exercido com senha nesta rodada.
+
+### 6. Status HTTP
+
+Status ≥ 400 ou erro de navegação não é examinado. A cobertura ganha "rota indisponível (status)" e o achado `DESIGN-ROTA-INDISPONIVEL` (ferramenta `navegacao`), confirmado pela medida. No laboratório, `/ausente` respondeu 404 e virou o achado ACH-105, sem revisor. Axe não rodou nessa célula.
+
+### 7. Executado é o que terminou
+
+A célula Executado conta células concluídas. Falha lista até 8 itens e o total ("e mais N"). pa11y corre por rota × viewport: saída 0 (limpo) e saída 2 (achados, JSON em lista) contam como feito; outro status, status ausente ou JSON ilegível é falha e a célula não entra na conta. Lighthouse corre mobile e desktop separados, com o fator de forma no relatório. JSON ilegível com saída 0 é falha. Contêiner com saída diferente de 0 conserva o JSON, marca `ok` para o exame seguir e grava o código `DESIGN_IMAGE_FAILED`. Um teste quebra axe, pa11y e Lighthouse um de cada vez e só aquela linha fica em falha.
+
+No laboratório a linha do pa11y é "nenhuma", com 84 achados: os defeitos plantados saem com status 2.
+
+### 8. Medido e julgado
+
+Achado com `DesignMeasure` entra confirmado pela medida, com verificador nulo e fonte `medida`: Lighthouse LCP, CLS e TBT, tokens, alvo menor que 24 px ou 44 px, contraste medido e Wallace. Se várias ferramentas nomeiam o mesmo achado, a medida guardada segue a ordem axe, pa11y, lighthouse, tokens, css-analyzer, régua. O modelo continua confirmando o que é subjetivo ou não tem medida. O relatório marca "confirmado (medido)" quando o verificador é nulo e as fontes incluem `medida`.
+
+No laboratório, contraste, tokens, Wallace, LH-LCP, LH-CLS, `DESIGN-ALVO-REFERENCIA` e `DESIGN-ROTA-INDISPONIVEL` ficaram sem revisor. A crítica visual foi confirmada pelo examinador Claude. Stylelint `block-no-empty` e `declaration-no-important` ficaram `provavel`.
+
+### 9. Referências de design system
+
+`spacePx`, `typePx`, `radiusPx` e `elevation` foram preenchidos onde a fonte publica o valor. Material 3 usa o espaçamento de 4 em 4. A paleta usa `colorSteps` do Radix. A distância é a média dos campos que os dois lados têm; elevação fica guardada e fora da conta; referência com menos de dois campos fica fora da disputa. Carbon entra com tipo e espaço, Polaris com tipo, espaço e raio, GOV.UK com tipo e espaço, Material com tipo, espaço e raio. Apple HIG publica só tipo e fica fora da disputa.
+
+No laboratório a escala mais próxima foi Material Design 3, distância 0,161. Quinze tamanhos contra 11 dessa escala, e 7 espaçamentos fora dela. A paleta mediu 0 passos por matiz, rampa não, 12 passos na referência. A distância 0,061 da Apple, da rodada 1, não se aplica a esta conta.
+
+### 10. HTML gerado
+
+`stripGeneratedHtml` por regex saiu. O sanitizador é parse5 7.3.0, versão exata. Saem `script`, `on*`, `iframe`, `object`, `embed`, meta refresh, `<base>` e `javascript:`. URL externa em `src`, `href`, `srcset`, `@import`, `url()` e `//` também sai. A exceção é `fonts.googleapis.com` e `fonts.gstatic.com` em `<link>`. Os vetores têm teste.
+
+### 11. Retrabalho por tela
+
+A aprovação é por tela: só a reprovada volta. O pedido leva o HTML anterior, cortado em 8000 caracteres, os achados com medida e as notas visuais. `</head>` ausente é inserido na árvore. A vitrine lista as rodadas e a evolução das notas. O retorno combinado do exame é `{screens: {name, rejected, findings, visualNotes}[]; notes}`. A CLI marca `rejected` quando a nota visual é baixa ou há achado alto da tela, e `visualNotes` fica vazio ou "nota visual abaixo de 8".
+
+### 12. Servidor do modo criar
+
+O criar deixou o `serve-lab.mjs` (os atrasos de `/` e `/hero.jpg` continuam só no laboratório). `serve-static.mjs` não atrasa, serve arquivos da pasta, não lista diretório, bloqueia `..` e symlink que escapa (realpath), manda MIME e `cache-control: no-store`. Responde GET e HEAD; o resto volta 405. A ordem pedia só GET; HEAD ficou porque é a mesma leitura, sem corpo, e o teste de ponta a ponta confere os dois. `createStaticServer(root)` só escuta quando o arquivo é o ponto de entrada. Raiz `DESIGN_STATIC_ROOT` ou `/srv`, porta `DESIGN_STATIC_PORT` ou 8080. O criar monta `pub` em `/srv` e usa o alias `design-create.local`.
+
+### 13. Supervisor
+
+`model` e `effort` forçados valem só para o papel de criar design numa instalação pessoal (`specialist`, fluxo `design-readonly-v1`, tarefa que começa com "Pedido de criação."). Qualquer outro pedido com esses campos recusa `DESIGN_CREATE_MODEL_UNAVAILABLE`. O par tem de ser `claude-opus-5-5` e `medium`. A conta reservada precisa oferecer esse par no catálogo e já no perfil do grant ou numa linha de `ac_profiles` dessa conta. O grant grava `effectiveModel` e `effectiveEffort` no `selection`, em merge, dentro da transação que o marca `running`. O criar segue por `acceptClaudeExamSeat`; provedor que não é `claude` recusa `EXAM_PROVIDER_UNSUPPORTED`.
+
+### 14. Diretório temporário
+
+Opção 3. O diretório de saída, e o de capturas, fica `01777` com sticky só enquanto o uid 65532 escreve. O host não é esse uid, e `DESIGN_USER` continua `65532:65532`. Antes de ler, `lstat`: arquivo regular, não symlink, uid 65532, `(mode & 022) === 0`, aberto com `O_NOFOLLOW`. 0644 passa. 0666 recusa e o exame fica `DESIGN_IMAGE_FAILED`. O `finally` apaga o diretório.
+
+### 15. `--servir`
+
+O exame sobe a pasta com `serve-static.mjs` na rede `design-homologation`, contêiner `ac-design-servir-` mais 8 hex, usuário 65532, raiz só leitura, cap-drop ALL, `pull` never, pasta em `/srv`, alias `design-servir.local:8080`. As rotas são os `.html` da pasta: `index.html` vira `/`, o resto o caminho, sem `node_modules`, profundidade até 4, no máximo 40. Alvo `localhost` ou `127.0.0.1` sem `--servir` recusa `DESIGN_TARGET_UNREACHABLE` (400) e a mensagem diz para usar `--servir`.
+
+Prova de ponta a ponta, `AC_DESIGN_LAB=1`, três HTML, 136,83 s, código 0. Rotas `/`, `/painel.html` e `/item/detalhe.html`. `node_modules/skip.html` não entrou. POST devolveu 405, HEAD 200, `/%2e%2e/secret` 404.
+
+| Ferramenta | Versão | Executado | Achados | Falha |
+|---|---|---|---|---|
+| axe-core | 4.14.1 | 9 células | 18 | nenhuma |
+| pa11y | 10.0.0 | 9 células rota×viewport | 0 | nenhuma |
+| lighthouse | 13.6.0 | 3 mobile, 3 desktop | 0 | nenhuma |
+| stylelint | 18.0.0 | 0 arquivos do repositório, 1 blocos de página | 0 | nenhuma |
+| css-analyzer | 9.9.9 | 9 folhas | 9 | nenhuma |
+
+O bloco de página é um porque as três páginas repetem o mesmo `body{margin:0}` e o exame deduplica o texto. As 9 folhas são o CSS computado das três rotas nos três viewports.
+
+### Baixos
+
+O nome da baseline leva 8 hex de sha256 da rota, então `/a-b` e `/a/b` não colidem. `baselineBuffer` também valida `projectId` e o nome do PNG; o resto recusa `DESIGN_PATH_FORBIDDEN`. Arquivos já aprovados não foram renomeados. Células das duas tabelas de cobertura escapam `|` e quebra de linha. `assertPasswordAbsent` serializa o relatório, seções, arquivos extras e cobertura. O laboratório escreve o JSON em `join(data, 'lab-summary.json')`, imprime no stdout e o `finally` apaga o diretório. Stylelint também corre nos `<style>` da página; sem CSS no repositório a linha é "0 arquivos do repositório, N blocos de página". O relatório mostra a nota do revisor ao lado da do examinador, e a distância da referência.
+
+### Laboratório da imagem
+
+`tests/design-lab-image.test.ts` com `AC_DESIGN_LAB=1`, 302,51 s, código 0, `fail 0`. A suíte oficial inclui esse arquivo e pula sem a variável (cerca de 1–2 s).
+
+| Ferramenta | Versão | Executado | Achados | Falha |
+|---|---|---|---|---|
+| axe-core | 4.14.1 | 36 células | 229 | nenhuma |
+| pa11y | 10.0.0 | 12 células rota×viewport | 84 | nenhuma |
+| lighthouse | 13.6.0 | 4 mobile, 4 desktop | 6 | nenhuma |
+| stylelint | 18.0.0 | 1 arquivos do repositório, 0 blocos de página | 2 | nenhuma |
+| css-analyzer | 9.9.9 | 37 folhas | 49 | nenhuma |
+
+A rota `/item/:id` abriu `/item/42`. O tema escuro aparece nas capturas porque o CSS do fixture tem `prefers-color-scheme`, e `planDesignRoutes` liga o tema quando a fonte ou o config pede. `dark: false` no config não desliga uma media query da fonte.
+
+### Suíte e tipos
+
+`npx tsc --noEmit`: código 0, depois da separação do teste que grava JSON como uid 65532.
+
+`umask 022 && env -u NO_COLOR -u FORCE_COLOR npm test`, com `AC_TEST_DATABASE_URL` no Postgres descartável `ac-design-r3-pg` (`127.0.0.1:54333`, banco `ac_implementation_test`).
+
+Durou 666 s, código 0. Resumo: `{"passed":231,"failed":[],"excluded":87}`. `design-measure-source.test.ts`, `design-image-run.test.ts` e `workflow-runtime-bootstrap.test.ts` (17 s) estão entre os 231. `design-lab-image.test.ts` entrou e foi pulado sem `AC_DESIGN_LAB` (1 s).
+
+Uma corrida anterior desta mesma árvore, antes do desempate da medida, falhou `design-measure-source.test.ts`: a primeira medida crua (stylelint, razão 9,9) ganhava da do axe (2,1). A ordem das ferramentas ficou axe, pa11y, lighthouse, tokens, css-analyzer, régua. A mesma corrida falhou `workflow-runtime-bootstrap.test.ts` em 6 s. Isolado, com o mesmo banco, esse arquivo passou em 18 s. O arquivo não foi alterado nesta rodada.
+
+Fora da suíte oficial, porque o fonte cita Docker: `design-image-owner.test.ts` (1 passou), `design-round2-guards.test.ts` (6 passaram), `design-servir-e2e.test.ts` (1 passou, a prova acima) e `native-execution-supervisor.test.ts` (4 passaram, com o banco descartável). `npm test` reescreve `docs/validation/evidence/runtime-result.json`. O arquivo foi restaurado para o blob `3ae5a15c9eeba482ac89eb790809df1aee81edef` e não entra no commit.
+
+### Commits
+
+| Item | Commit | O que entra |
+|---|---|---|
+| 1. Wallace | `d212f69f` | achados medidos; a coluna Achados é recontada no módulo `b02c9072`; a célula da imagem fica 0 em `7b82f352` e o host substitui pelo número de achados |
+| 2. Contraste | `18321af5`, `589960d6` | alfa e o achado; o fundo efetivo está em `7b82f352` |
+| 3. Referências como imagem | `f2028c1a` | cópia, distância e a seção; o examinador também em `f10039c3` |
+| 4. APCA | `18321af5` | deslocamento 0,027 |
+| 5. Estados | `c625f694` | declaração, login do host e o servidor do laboratório |
+| 6. Status HTTP | `7b82f352` | rota indisponível |
+| 7. Executado | `7b82f352`, `a3d41e62` | células concluídas e a saída do contêiner |
+| 8. Medido e julgado | `f10039c3` | confirmação pela medida e o rótulo do relatório |
+| 9. Escalas | `589960d6` | campos publicados e a disputa |
+| 10. HTML | `012ea4ac` | parse5 7.3.0 |
+| 11. Retrabalho | `012ea4ac` | uma tela por vez e a vitrine |
+| 12. Servidor estático | `8b3bd679` | `serve-static.mjs` no criar |
+| 13. Supervisor | `1251b298` | Opus 5.5 medium só no criar pessoal |
+| 14. Diretório temporário | `a3d41e62` | 01777 só durante a escrita, depois dono e modo |
+| 15. `--servir` | `8b3bd679` | pasta estática na rede de homologação |
+| Baixos e encaixe | `b02c9072`, `67940743` | módulo, baseline, fixture, digest; o teste sem Docker volta para a suíte |
+
+O arquivo `upstream/happier/apps/server/generated` continua fora do git.
+
+### O que não ficou pronto
+
+A criação real de 2 telas e 1 rodada não produziu HTML. O comando foi:
+
+`npm run personal:design -- criar /home/app/srv_projetos/workspace/ac-smoke-data/installation.json 324be55d-b879-4314-a387-578fb299a7b4 --briefing /tmp/design-create-briefing.md --telas 2 --rodadas 1`
+
+A CLI imprimiu "O exame de design falhou." e saiu com código 1. O mapa de mensagens da CLI não tem `CAPACITY_POLICY_REQUIRED`. Uma chamada seguinte pelas mesmas funções do produto (`resolvePersonalDesign` e `runDesignCreate`, com o worker recusando antes de desenhar) resolveu a intenção `f29ceae5-ca8c-4d7d-bc33-af89828018a4` e falhou com `CAPACITY_POLICY_REQUIRED`. `resolvePersonalDesign` escolhe `ORDER BY created_at LIMIT 1`. Esse contexto é `c35e02b4-d427-4198-80c6-2d6132990f9e`, criado em 2026-11-10, com `capacity_policy_revision` nulo. A revisão 1 da política não tem cadeia de especialista. Os perfis do projeto são Claude Sonnet medium (manager, qa, reviewer) e Grok programmer. O catálogo não tem `claude-opus-5-5`.
+
+Não há comando `npm run personal:*` que acrescente um perfil especialista `claude-opus-5-5` em esforço medium na conta Claude reservada e coloque esse perfil na cadeia de capacidade do projeto. `personal:combo apply complexo` publicaria uma política, registraria o Opus e trocaria o time atual por manager e revisor em esforço alto, sem papel especialista em medium. Não foi aplicado. Não houve SQL, nem `docker exec` no `ac-personal-pg`. A intenção aceita ficou na instalação de teste; o lease de manager da CLI expirou. O gateway em `127.0.0.1:18421` estava fora e não foi a causa: o criar monta o supervisor no processo.
+
+O login do host com arquivo de senha não rodou no Chrome. O laboratório prova o caminho "não capturado".
+
+Não houve push. O contêiner `ac-personal-pg`, o banco `ac_ispagent`, a instalação viva e o gateway vivo não foram alterados.
