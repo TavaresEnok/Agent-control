@@ -1,5 +1,5 @@
 import {constants, type Stats} from 'node:fs';
-import {chmod, lstat, mkdir, open, readdir, realpath, type FileHandle} from 'node:fs/promises';
+import {chmod, lstat, mkdir, open, readFile, readdir, realpath, type FileHandle} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments, type DesignRunInput} from './design-image.ts';
@@ -8,6 +8,8 @@ import {DesignAchado, DesignCoverageRow, DesignReportSummary} from './design-typ
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}-design$/;
 const ACHADO_FILE = /^ACH-\d{3}\.md$/;
+const EXTRA_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(?:md|json)$/;
+const SECTION_TITLE = /^[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9 ._-]{0,80}$/;
 const LIVE_ACCESS_KEY = /AKIA[0-9A-Z]{16}/;
 const MAX_CAPTURE_BYTES = 128 * 1024 * 1024;
 const WRITE_NEW = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW;
@@ -50,6 +52,10 @@ export type DesignReportWriteInput = {
   /** "capturado" ou "não deu", quando o chamador só tem um resultado. */
   emptyState?: 'capturado' | 'não deu';
   emptyStates?: readonly DesignReportEmptyState[];
+  /** Seções extras no README. Ausentes, o texto antigo permanece. */
+  sections?: readonly {title: string; markdown: string}[];
+  /** Arquivos extras na raiz do relatório, modo 0600. */
+  files?: readonly {name: string; body: string}[];
 };
 
 function hasLiveAccessKey(text: string): boolean {
@@ -386,6 +392,7 @@ function readme(input: {
   discarded: number;
   emptyState?: 'capturado' | 'não deu';
   emptyStates?: readonly DesignReportEmptyState[];
+  sections?: readonly {title: string; markdown: string}[];
 }): string {
   const failing = input.counts.alta + input.counts.media + input.counts.baixa + input.counts.informativa;
   const lines = [
@@ -433,6 +440,9 @@ function readme(input: {
     emptyStateBody(input.emptyState, input.emptyStates).trimEnd(),
     '',
   ];
+  for (const section of input.sections ?? []) {
+    lines.push(`## ${section.title}`, '', section.markdown.trimEnd(), '');
+  }
   return lines.join('\n');
 }
 
@@ -725,6 +735,18 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     throw new Refusal('DESIGN_REPORT_INVALID', 400);
   }
   const emptyState = parseEmptyState(input.emptyState);
+  const sections = (input.sections ?? []).map(section => {
+    if (!section || typeof section.title !== 'string' || !SECTION_TITLE.test(section.title) || typeof section.markdown !== 'string') {
+      throw new Refusal('DESIGN_REPORT_INVALID', 400);
+    }
+    return {title: section.title, markdown: section.markdown};
+  });
+  const extras = (input.files ?? []).map(file => {
+    if (!file || typeof file.name !== 'string' || !EXTRA_FILE.test(file.name) || typeof file.body !== 'string') {
+      throw new Refusal('DESIGN_REPORT_INVALID', 400);
+    }
+    return {name: file.name, body: file.body};
+  });
   assertNoLiveAccessKey({
     commit: input.commit,
     mapMarkdown: input.mapMarkdown,
@@ -732,6 +754,8 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     achados: input.achados,
     coverage: input.coverage,
     raw: input.raw,
+    sections,
+    extras,
   });
   const rawBody = serializedRaw(input.raw);
   const achados = parseAchados(input.achados);
@@ -761,6 +785,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
       discarded,
       emptyState,
       emptyStates: input.emptyStates,
+      sections,
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
     {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage))},
@@ -768,6 +793,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guard(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},
     {segments: ['run.json'], body: guard(`${JSON.stringify(summary, null, 2)}\n`)},
+    ...extras.map(file => ({segments: [file.name], body: guard(file.body.endsWith('\n') ? file.body : `${file.body}\n`)})),
   ];
   for (const file of planned) {
     for (const segment of file.segments) assertSafeSegment(segment);
@@ -802,6 +828,18 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     await writePrivate(path, directory, file.body);
   }
   return {directory, directoryName};
+}
+
+export async function readDesignCaptureFiles(dataDirectory: string, projectId: string, runId: string): Promise<{fileName: string; bytes: Buffer}[]> {
+  const report = await findReport(dataDirectory, projectId, runId);
+  const directory = join(report.directory, 'capturas');
+  const names = await readdir(directory).catch(() => [] as string[]);
+  const files: {fileName: string; bytes: Buffer}[] = [];
+  for (const fileName of names) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,140}\.png$/.test(fileName) || fileName.startsWith('diff-')) continue;
+    files.push({fileName, bytes: await readFile(join(directory, fileName))});
+  }
+  return files;
 }
 
 export async function readDesignReport(dataDirectory: string, projectId: string, runId: string): Promise<{summary: DesignReportSummary; achados: DesignAchado[]; coverageMarkdown: string}> {

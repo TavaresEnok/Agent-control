@@ -1,0 +1,7 @@
+{
+  "routes": {
+    "/": {"states": ["vazio", "carregando", "erro", "logado"], "dark": true},
+    "/painel": {"states": [], "dark": true},
+    "/item/:id": {"example": "/item/42", "states": [], "dark": false}
+  }
+}

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Início</title>
+  <link rel="stylesheet" href="/css/site.css">
+</head>
+<body>
+  <img id="hero" src="/hero.jpg">
+  <h1>Início</h1>
+  <p style="color: #b0b0b0; background-color: #d0d0d0; font-size: 16px;">Texto com contraste baixo.</p>
+  <img src="/foto.png" width="120" height="80">
+  <button class="alvo">Ok</button>
+  <div class="cartao">⭐ Recurso</div>
+  <div class="cartao">⭐ Recurso</div>
+  <div class="cartao">⭐ Recurso</div>
+  <p class="fonte-1">Fonte 10</p>
+  <p class="fonte-2">Fonte 11</p>
+  <p class="fonte-3">Fonte 12</p>
+  <p class="fonte-4">Fonte 13</p>
+  <p class="fonte-5">Fonte 15</p>
+  <p class="fonte-6">Fonte 16</p>
+  <p class="fonte-7">Fonte 18</p>
+  <p class="fonte-8">Fonte 20</p>
+  <p class="fonte-9">Fonte 22</p>
+  <p class="fonte-10">Fonte 24</p>
+  <p class="fonte-11">Fonte 28</p>
+  <p class="fonte-12">Fonte 32</p>
+  <p class="fonte-13">Fonte 40</p>
+  <p class="fonte-14">Fonte 48</p>
+  <p class="cinzas">
+    <span class="cinza-1">#6a6a6a</span>
+    <span class="cinza-2">#6b6b6b</span>
+    <span class="cinza-3">#6c6c6c</span>
+    <span class="cinza-4">#6d6d6d</span>
+    <span class="cinza-5">#6e6e6e</span>
+    <span class="cinza-6">#6f6f6f</span>
+    <span class="cinza-7">#707070</span>
+    <span class="cinza-8">#717171</span>
+    <span class="cinza-9">#727272</span>
+  </p>
+  <p id="estado"></p>
+  <script>
+    (function () {
+      var estado = new URLSearchParams(window.location.search).get('estado');
+      var texto = '';
+      if (estado === 'vazio') texto = 'Nenhum item';
+      else if (estado === 'carregando') texto = 'Carregando';
+      else if (estado === 'erro') texto = 'Não foi possível carregar';
+      else if (estado === 'logado') texto = 'Sessão de Ada';
+      var region = document.getElementById('estado');
+      if (region) region.textContent = texto;
+    })();
+  </script>
+</body>
+</html>

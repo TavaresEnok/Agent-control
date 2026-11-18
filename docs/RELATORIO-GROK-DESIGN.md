@@ -200,3 +200,91 @@ O relatório lista o estado vazio por rota (`capturado`, `ausente`, `não captur
 - `npm run test:all` não rodou. Os 84 arquivos de `excluded` (Docker, SSH, Happier, sudo e os dois que pedem o build do Happier) continuam fora.
 - Não houve push.
 
+## Reconstrução
+
+Feita em 18/11/2026 no ramo `task/design-r3-image-proof`. A ordem pedia `task/modulo-design`, que está preso em outro worktree. O commit `3b3cd9d4` já estava reaplicado em `98f484fc` e não foi emendado. A imagem que rodou o laboratório é `localhost:5000/ac-design:reconstrucao@sha256:6cc1f850e13525a32fd7fb1e6518fc365bbbbeb3d35db1638ed4ee01ac119bcc` (id `sha256:52fcff805cd886a785bcb4c971eecb5a7218358c1f723661f7d2d65346f140da`).
+
+### 1. Medição
+
+`runDesignModule` executa a imagem como a CLI: rede `design-homologation`, usuário 65532, raiz só de leitura, sem capability, e o plano em `/output/pedido.json`. Dentro da imagem, `run-exam.mjs` usa o Playwright do contêiner e grava `achados-brutos.json`. Uma corrida anterior nesta mesma imagem viu 2 rotas, porque `design.config.json` não entra na lista de código. A corrida que vale é a de 18/11/2026, 456 s, código 0, com o config lido da raiz do fixture.
+
+| Ferramenta | Versão | Executado | Achados | Falha |
+|---|---|---|---|---|
+| axe-core | 4.14.1 | 3 rotas × 3 viewports × 2 temas | 1027 | nenhuma |
+| pa11y | 10.0.0 | 6 urls × runners axe+htmlcs | 24 | nenhuma |
+| lighthouse | 13.6.0 | 6 corridas mobile+desktop | 6 | nenhuma |
+| stylelint | 18.0.0 | 1 arquivos css | 2 | nenhuma |
+| css-analyzer | 9.9.9 | 43 folhas | 43 | nenhuma |
+
+O lock de `deploy/design-tools` passou a listar `lighthouse`, `pixelmatch`, `playwright` e `pngjs` como dependências diretas, nas versões exatas, depois desta imagem. A imagem não foi reconstruída de novo. As versões da tabela são as que o exame leu em `/opt/design-tools/node_modules`.
+
+### 2. Tokens
+
+Os estilos computados viram `tokens.json` DTCG. No laboratório a escala mais próxima foi Apple Human Interface Guidelines, distância 0,061. O relatório lista 15 tamanhos (os 14 plantados e o 13,33 do navegador), 1305 pares de cinza com ΔE2000 abaixo de 3, e contraste 1,41 com APCA Lc 7,2. O alvo de 30 px está em `bruto/achados-brutos.json` como `DESIGN-ALVO-REFERENCIA`, medida `target` 30, contra o mínimo de 44 px da Apple. Esse achado não entrou na lista confirmada pelo examinador de bancada.
+
+### 3. Crítica visual
+
+Nove eixos, texto original do módulo. No laboratório a tela genérica (gradiente `#6d28d9`/`#7c3aed` e cartões iguais) gerou `DESIGN-VISUAL-HIERARQUIA`, `DESIGN-VISUAL-COMPONENTES` e `DESIGN-VISUAL-MARCA`, confirmados. A marca ficou em julgamento incerto: examinador 3, revisor 6.
+
+### 4. Referências do titular
+
+`--referencia` existe no exame e em `criar`, até 10 PNG ou JPG, copiados para o diretório privado do run em 0600. O teste de unidade cobre a cópia fora do repositório. O laboratório da imagem não recebeu arquivo de referência.
+
+### 5. Regressão visual
+
+Com limiar 0,1 e sem baseline aprovada, o relatório diz "Sem baseline aprovada. Nada foi comparado." A promoção da baseline é `--aprovar-baseline` e não relê o exame. Esse comando não foi exercido num relatório real desta rodada. Captura vazia nesse caminho recusa com `DESIGN_IMAGE_FAILED`.
+
+### 6. Estados
+
+O módulo lê `design.config.json` só na raiz, com `O_NOFOLLOW`, e não segue symlink. JSON inválido recusa com `DESIGN_CONFIG_INVALID`. No laboratório, `/` capturou vazio, carregando, erro e logado; `/item/:id` abriu `/item/42`; `/painel` e `/item/42` ficaram com a nota de estados não capturados, porque a declaração deles é uma lista vazia.
+
+### 7. Modo criar
+
+O comando rodou na instalação de teste `324be55d-b879-4314-a387-578fb299a7b4`:
+
+`npm run personal:design -- criar /home/app/srv_projetos/workspace/ac-smoke-data/installation.json 324be55d-b879-4314-a387-578fb299a7b4 --briefing /tmp/design-create-briefing.md --telas 2 --rodadas 1`
+
+A CLI imprimiu "O exame de design falhou." e saiu com código 1. A reserva do assento recusou com `CAPACITY_POLICY_REQUIRED`: o contexto mais antigo do projeto tem `capacity_policy_revision` nulo. O catálogo `ac_model_catalog` dessa instalação tem `claude-sonnet-5-5` (low, medium, high) e não tem `claude-opus-5-5`. O par forçado, se a reserva tivesse passado, cairia em `DESIGN_CREATE_MODEL_UNAVAILABLE`. Nenhuma tela foi desenhada nem gravada. O laço de rodadas com examinador de bancada está coberto por teste: duas rodadas, diretório fora do repositório, vitrine com aprovadas e rejeitadas.
+
+### 8. Prova do fixture
+
+`tests/fixtures/design-lab-v2`, teste `tests/design-lab-image.test.ts` com `AC_DESIGN_LAB=1`. Defeitos que chegaram ao relatório:
+
+- contraste `#b0b0b0` sobre `#d0d0d0`, razão 1,41, axe `WCAG-1-4-3-CONTRASTE`, alta confirmada
+- imagem sem alt, axe `WCAG-image-alt` e pa11y `H37`
+- Lighthouse `LH-LCP` 5289 ms, `LH-CLS` 0,557 e desempenho 0,35, no bruto; no achado confirmado o Stylelint `declaration-no-important` e `block-no-empty` ficaram `media` `provavel`
+- 14 tamanhos plantados dentro dos 15 medidos, e os 9 cinzas plantados dentro dos pares ΔE2000
+- alvo 30 px no bruto
+- tema escuro com texto `#1c1c1c` sobre fundo `#111111` entra no contraste do axe
+- crítica da tela genérica, como no item 3
+
+Nenhum campo da tabela de cobertura ficou vazio. Ferramenta quebrada, sem JSON, continua coberta pelo teste que marca as cinco linhas com `DESIGN_IMAGE_FAILED`.
+
+`npx tsc --noEmit`: código 0. Os testes de design focados, sem o laboratório de Docker: 51 passaram. `tests/design-image-run.test.ts` compara o binário com `DESIGN_RUNTIME_BIN`, para a suíte oficial não classificá-lo como teste de Docker.
+
+`umask 022 && env -u NO_COLOR -u FORCE_COLOR npm test`, com `AC_TEST_DATABASE_URL` no Postgres descartável `ac-design-r3-pg` (`127.0.0.1:54333`, banco `ac_implementation_test`): cerca de 662 s, código 0. Resumo: `{"passed":223,"failed":[],"excluded":84}`. `design-image-run.test.ts`, `design-reconstruction.test.ts` e `design-lab-image.test.ts` (pulado sem `AC_DESIGN_LAB`) estão entre os 223. O laboratório com `AC_DESIGN_LAB=1` é a corrida de 456 s acima, fora dessa suíte. `npm test` reescreveu `docs/validation/evidence/runtime-result.json`. O arquivo foi restaurado para o blob `3ae5a15c9eeba482ac89eb790809df1aee81edef` e não entra nos commits.
+
+### Commits
+
+| Item | Commit | O que entra |
+|---|---|---|
+| 1. Medição | `16815014` | imagem, `run-exam.mjs`, digest e leitura do JSON |
+| 2. Tokens | `bfd697c6` | DTCG, cor e as referências numéricas |
+| 3. Crítica visual | `11ddd4ce` | nove eixos e o julgamento incerto |
+| 4. Referências | `08fabdbb` | cópia privada dos PNG e JPG |
+| 5. Regressão | `16840af5` | pixelmatch depois da baseline aprovada |
+| 6. Estados | `e85c4f43` | `design.config.json` na raiz, sem seguir symlink |
+| 7. Modo criar | `e7c763b4` | Opus 5.5 medium forçado e a recusa do catálogo |
+| 8. Encaixe | `WIRING_COMMIT` | `runDesignModule`, CLI, fixture, suíte e este texto |
+
+O arquivo `upstream/happier/apps/server/generated` continua fora do git.
+
+### O que não ficou pronto
+
+- A criação real de 2 telas e 1 rodada não produziu HTML. O bloqueio é a política de capacidade do contexto e a ausência de `claude-opus-5-5` no catálogo.
+- Nenhuma referência PNG/JPG entrou no laboratório da imagem.
+- `--aprovar-baseline` não foi usado num relatório real com capturas.
+- A imagem não foi reconstruída depois da atualização do lock. O digest acima é o da imagem que executou a prova.
+- `DESIGN-ALVO-REFERENCIA`, os achados de token e os de Lighthouse estão no bruto e, no caso dos tokens, na seção Tokens. Não estão entre os achados confirmados da bancada.
+- Não houve push. O contêiner `ac-personal-pg` não foi reiniciado, removido nem migrado.
+

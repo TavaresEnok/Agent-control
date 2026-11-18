@@ -361,8 +361,8 @@ async function readSeat(ledger: Ledger, grantId: string, accountId: string, prof
   return {provider: String(row.provider), model: String(row.model), accountId, profileId, grantId};
 }
 
-export async function resolvePersonalDesign(argv: readonly string[]): Promise<ResolvedPersonalDesign> {
-  const parsed = parseDesignArgs(argv);
+export async function resolvePersonalDesign(argv: readonly string[], known?: {installationPath: string; projectId: string}): Promise<ResolvedPersonalDesign> {
+  const parsed = known ?? parseDesignArgs(argv);
   const config = await loadInstallation(resolve(parsed.installationPath));
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = [config.project, ...config.projects].find(item => item.id === parsed.projectId);
@@ -422,5 +422,62 @@ export async function resolvePersonalDesign(argv: readonly string[]): Promise<Re
     await ledger.close();
     throw error;
   }
+}
+
+export type DesignInvocation =
+  | {kind: 'exam'; argv: string[]; references: string[]; threshold: number}
+  | {kind: 'approve'; installationPath: string; projectId: string; runId: string}
+  | {kind: 'create'; installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number};
+
+function takeValues(argv: readonly string[], flag: string): {rest: string[]; values: string[]} {
+  const rest: string[] = [];
+  const values: string[] = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] !== flag) {
+      rest.push(argv[index] ?? '');
+      continue;
+    }
+    const value = argv[index + 1];
+    if (value === undefined || value.startsWith('--')) throw new Refusal('DESIGN_USAGE', 400);
+    values.push(value);
+    index += 1;
+  }
+  return {rest, values};
+}
+
+/** A forma antiga continua em parseDesignArgs. Aqui entram criar, baseline e referências. */
+export function parseDesignInvocation(argv: readonly string[]): DesignInvocation {
+  if (argv[0] === 'criar') {
+    const briefing = takeValues(argv.slice(1), '--briefing');
+    const references = takeValues(briefing.rest, '--referencia');
+    const screens = takeValues(references.rest, '--telas');
+    const rounds = takeValues(screens.rest, '--rodadas');
+    if (briefing.values.length !== 1 || screens.values.length > 1 || rounds.values.length > 1) throw new Refusal('DESIGN_USAGE', 400);
+    const [installationPath, projectId] = rounds.rest;
+    if (!installationPath || !projectId || rounds.rest.length !== 2) throw new Refusal('DESIGN_USAGE', 400);
+    if (!Id.safeParse(projectId).success) throw new Refusal('NOT_FOUND', 404);
+    const count = screens.values[0] === undefined ? 2 : Number(screens.values[0]);
+    const roundCount = rounds.values[0] === undefined ? 3 : Number(rounds.values[0]);
+    if (!Number.isInteger(count) || count < 1 || count > 8 || !Number.isInteger(roundCount) || roundCount < 1 || roundCount > 5) {
+      throw new Refusal('DESIGN_CREATE_INVALID', 400);
+    }
+    if (references.values.length > 10) throw new Refusal('DESIGN_REFERENCE_LIMIT', 400);
+    return {kind: 'create', installationPath, projectId, briefing: briefing.values[0], references: references.values, screens: count, rounds: roundCount};
+  }
+  const approved = takeValues(argv, '--aprovar-baseline');
+  if (approved.values.length > 0) {
+    if (approved.values.length !== 1) throw new Refusal('DESIGN_USAGE', 400);
+    const [installationPath, projectId] = approved.rest;
+    if (!installationPath || !projectId || approved.rest.length !== 2) throw new Refusal('DESIGN_USAGE', 400);
+    if (!Id.safeParse(projectId).success || !Id.safeParse(approved.values[0]).success) throw new Refusal('NOT_FOUND', 404);
+    return {kind: 'approve', installationPath, projectId, runId: approved.values[0]};
+  }
+  const references = takeValues(argv, '--referencia');
+  const threshold = takeValues(references.rest, '--limiar');
+  if (threshold.values.length > 1 || references.values.length > 10) throw new Refusal('DESIGN_USAGE', 400);
+  const limit = threshold.values[0] === undefined ? 0.1 : Number(threshold.values[0]);
+  if (!Number.isFinite(limit) || limit < 0 || limit > 1) throw new Refusal('DESIGN_USAGE', 400);
+  parseDesignArgs(threshold.rest);
+  return {kind: 'exam', argv: threshold.rest, references: references.values, threshold: limit};
 }
 

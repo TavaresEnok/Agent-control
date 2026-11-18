@@ -1,6 +1,12 @@
 import {Refusal} from './contracts.ts';
 import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {
+  parseVisualScores,
+  uncertainVisualAxes,
+  visualExamFindings,
+  type VisualScore,
+} from './design-visual.ts';
+import {
   DesignConfirmResult,
   DesignCoverageRow,
   DesignExamFinding,
@@ -45,6 +51,9 @@ export type DesignExamineInput = {
   worker: DesignWorker;
   reserve(role: 'specialist' | 'reviewer', avoidProvider?: string): Promise<DesignSeat>;
   release(seat: DesignSeat): Promise<void>;
+  /** Fora dos testes de sequência: a CLI liga a crítica visual. */
+  scoreVisual?: boolean;
+  referenceNote?: string;
 };
 
 function parseJson(text: string): unknown {
@@ -95,7 +104,7 @@ function checklistIds(value: unknown): string[] {
         : '';
     const id = source.trim().slice(0, 80);
     if (id.length > 0 && !ids.includes(id)) ids.push(id);
-    if (ids.length >= 80) break;
+    if (ids.length >= 120) break;
   }
   return ids;
 }
@@ -138,7 +147,7 @@ function normalizeDesignExam(value: unknown, fallback: {file: string; checklist:
   return {
     kind: 'exame',
     filesRead: (files.length > 0 ? files : [fallback.file]).slice(0, 80),
-    checklist: (checklist.length > 0 ? checklist : [...fallback.checklist]).slice(0, 80),
+    checklist: (checklist.length > 0 ? checklist : [...fallback.checklist]).slice(0, 120),
     findings,
   };
 }
@@ -205,7 +214,7 @@ function oneLine(value: string): string {
 }
 
 const CAPTURE_SHA = /^[a-f0-9]{64}$/;
-const CAPTURE_STATE = /^(?:padrao|vazio|carregando|erro)$/;
+const CAPTURE_STATE = /^(?:padrao|vazio|carregando|erro|logado)$/;
 
 function usableCapture(item: DesignScreenCapture): boolean {
   return CAPTURE_SHA.test(item.sha256)
@@ -274,6 +283,50 @@ function examTask(
   ].join('\n').slice(0, 100000);
 }
 
+function visualTask(screen: DesignExamineInput['screens'][number], role: 'specialist' | 'reviewer', referenceNote: string | undefined): string {
+  return [
+    role === 'specialist' ? 'Pedido de crítica visual.' : 'Pedido de crítica visual do revisor.',
+    'Responda só um JSON com kind "visual" e scores. Não escreva no repositório.',
+    'Eixos, cada um de 0 a 10: hierarquia, tipografia, cor, ritmo, grade, densidade, componentes, marca, polimento.',
+    'Cada item tem axis, score, region e suggestion. A suggestion traz cor, px, fonte ou layout.',
+    'A region aponta um trecho da captura ou um elemento. Não receba notas de outro examinador.',
+    `Tela: ${oneLine(screen.route)}`,
+    'Arquivos:',
+    `- ${screen.file}`,
+    ...(referenceNote && referenceNote.trim().length > 0 ? ['Referências:', referenceNote.trim().slice(0, 4000)] : []),
+    ...captureBlock(screen.captures),
+    'Código:',
+    screen.code.slice(0, 12000),
+  ].join('\n').slice(0, 100000);
+}
+
+async function askVisual(
+  input: DesignExamineInput,
+  screen: DesignExamineInput['screens'][number],
+  role: 'specialist' | 'reviewer',
+): Promise<VisualScore[] | null> {
+  const seat = await input.reserve(role);
+  try {
+    acceptClaudeExamSeat(seat);
+    const call = DesignWorkerCall.parse({
+      role,
+      provider: seat.provider,
+      accountId: seat.accountId,
+      profileId: seat.profileId,
+      model: seat.model,
+      grantId: seat.grantId,
+      intentId: input.intentId,
+      task: visualTask(screen, role, input.referenceNote),
+      repo: input.repo,
+      writePaths: [] as const,
+    });
+    const output = await input.worker.run(call);
+    return parseVisualScores(parseJson(output));
+  } finally {
+    await input.release(seat);
+  }
+}
+
 /** Arquivo, linha, regra, trecho e código. Sem a sugestão e sem a conclusão. */
 function confirmationTask(finding: DesignExamFinding, code: string, captures: readonly DesignScreenCapture[] | undefined): string {
   return [
@@ -329,6 +382,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     verifier: {model: string; provider: string};
   }[];
   notes: string[];
+  visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[];
 }> {
   const findings: DesignExamFinding[] = [];
   const coverage: DesignCoverageRow[] = [];
@@ -338,10 +392,11 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     verifier: {model: string; provider: string};
   }[] = [];
   const notes: string[] = [];
-  const ids = input.checklist.map(entry => entry.id).filter(id => id.length > 0 && id.length <= 80).slice(0, 80);
+  const visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[] = [];
+  const ids = input.checklist.map(entry => entry.id).filter(id => id.length > 0 && id.length <= 80).slice(0, 120);
   if (ids.length === 0) {
     notes.push('A lista de verificação veio vazia.');
-    return {findings, coverage, confirmations, notes};
+    return {findings, coverage, confirmations, notes, visual};
   }
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
@@ -376,7 +431,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     const applied = (echoed.length > 0 ? echoed : ids)
       .map(id => id.slice(0, 80))
       .filter(id => id.length > 0)
-      .slice(0, 80);
+      .slice(0, 120);
     coverage.push(DesignCoverageRow.parse({
       file: screen.file,
       examinerProvider: seat.provider,
@@ -413,7 +468,27 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
       });
     }
+    if (input.scoreVisual === true) {
+      const examinerScores = await askVisual(input, screen, 'specialist');
+      const reviewerScores = await askVisual(input, screen, 'reviewer');
+      if (!examinerScores || !reviewerScores) {
+        notes.push(`A crítica visual de ${oneLine(screen.route)} não veio completa.`);
+      } else {
+        const uncertain = uncertainVisualAxes(examinerScores, reviewerScores);
+        visual.push({file: screen.file, route: screen.route, examiner: examinerScores, reviewer: reviewerScores, uncertain});
+        if (uncertain.length > 0) notes.push(`Julgamento incerto em ${oneLine(screen.route)}: ${uncertain.join('; ')}.`.slice(0, 500));
+        for (const finding of visualExamFindings(screen.file, examinerScores)) {
+          const reviewed = await confirmFinding(input, finding, screen.code, screen.captures);
+          findings.push(finding);
+          confirmations.push({
+            finding,
+            confirm: reviewed.confirm,
+            verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
+          });
+        }
+      }
+    }
   }
 
-  return {findings, coverage, confirmations, notes};
+  return {findings, coverage, confirmations, notes, visual};
 }

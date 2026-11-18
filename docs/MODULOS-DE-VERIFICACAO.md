@@ -223,19 +223,22 @@ O suporte a CPF no Presidio não foi confirmado.
 
 ### 10. Design e experiência de uso
 
-Entrega, para cada tela do sistema em celular, tablet e computador, capturas, notas e achados de design com prova visual: inconsistência visual (cores, fontes, espaçamentos e componentes fora do padrão), contraste e acessibilidade (WCAG 2.2 AA), hierarquia e leitura, estados esquecidos (vazio, carregando, erro, sucesso, desabilitado), textos da interface, navegação e fluxos, comportamento em telas pequenas, tema escuro, e desempenho percebido. Cada achado traz a captura com a área marcada, a regra violada e a correção sugerida (com valores: cor, tamanho, espaçamento). A correção vai pelo mesmo botão "Corrigir" do módulo 1.
+Mede cada rota descoberta no código em 375, 768 e 1440 px, nos temas claro e escuro quando o projeto declara `prefers-color-scheme`, `data-theme` ou `color-scheme`. A imagem `ac-design` roda na rede `design-homologation`, com usuário 65532, raiz só de leitura e o digest gravado em `deploy/design-image-digest.txt`. O script da imagem é `deploy/design-tools/run-exam.mjs`. Ele não executa código do repositório. A tabela de cobertura lista ferramenta, versão, o que rodou, achados e falha. Ferramenta que quebra permanece na tabela com o código da falha.
+
+Estados além do padrão vêm de `design.config.json` na raiz do repositório: vazio, carregando, erro e logado. Sem declaração, o relatório diz "não capturado". Rota com `:param` só abre com o exemplo concreto desse arquivo.
 
 | Fase | Ferramentas | O que prova |
 |---|---|---|
-| Descoberta das telas | rotas do código e navegação com Playwright (Apache-2.0) | nenhuma tela fica sem exame; tabela de cobertura por tela |
-| Capturas | Playwright em 375, 768 e 1440 px, tema claro e escuro, estados forçados | o examinador vê a tela de verdade, não só o código |
-| Acessibilidade | axe-core (MPL-2.0) via `@axe-core/playwright`; pa11y (LGPL-3.0); navegação só por teclado | WCAG 2.2 AA, foco visível, rótulos, contraste |
-| Inventário visual | `@projectwallace/css-analyzer` (MIT) e estilos computados coletados pelo Playwright; Stylelint (MIT) | quantas cores, fontes, tamanhos e sombras diferentes existem; o que foge dos tokens |
-| Qualidade percebida | Lighthouse CI (Apache-2.0) | desempenho, CLS, boas práticas por tela |
-| Regressão visual | `toHaveScreenshot` do Playwright | depois da correção, só o que devia mudar mudou |
-| Exame por IA (multimodal) | as skills de design já sincronizadas nas contas Claude: `design-critique`, `accessibility-audit`, `design-elevation`, `ux-writing`, `frontend-design`; heurísticas de Nielsen, leis de UX, WCAG 2.2 | avaliação tela a tela com captura e código lado a lado |
+| Acessibilidade | axe-core 4.14.1 via `@axe-core/playwright` 4.14.0, tags wcag2a, wcag2aa, wcag21aa, wcag22aa e best-practice; pa11y 10.0.0 com runners axe e htmlcs | contraste, nome e alternativa das imagens, WCAG 2.2 AA |
+| Qualidade percebida | Lighthouse 13.6.0, programático, mobile e desktop, categorias acessibilidade, boas práticas, desempenho e SEO | CLS acima de 0,25, LCP acima de 4 s e desempenho abaixo de 0,5 |
+| CSS | Stylelint 18.0.0 com a config de `src/design-stylelint.ts`; `@projectwallace/css-analyzer` 9.9.9 no CSS do repositório e no CSS computado | regra proibida e o inventário de cores, tipos e sombras |
+| Tokens | estilos computados viram `tokens.json` no formato W3C DTCG; comparação numérica com Material Design 3, IBM Carbon, Shopify Polaris, Apple HIG, GOV.UK e Radix Colors em `deploy/design-references/` | escala de tipo, cinzas com ΔE2000 abaixo de 3, contraste WCAG e APCA, alvo de toque |
+| Crítica visual | nove eixos em português no próprio módulo: hierarquia, tipografia, cor, ritmo, grade, densidade, componentes, marca e polimento. O examinador nota de 0 a 10. Eixo abaixo de 7 vira achado. Um segundo Claude vê a captura e o código, sem as notas do primeiro. Divergência acima de 2 pontos fica "julgamento incerto" | tela genérica (gradiente roxo, cartões iguais) contra uma tela comum |
+| Referência do titular | `--referencia` no exame e na criação, até 10 PNG ou JPG, copiados para o diretório privado do run em 0600 | o examinador vê a referência e a captura lado a lado |
+| Regressão | pixelmatch 5.3.0, limiar padrão 0,1, só depois de `--aprovar-baseline` | telas mudadas, porcentagem de pixels e a imagem de diferença |
+| Criação | `npm run personal:design -- criar`, modelo `claude-opus-5-5` e esforço `medium` forçados. As telas geradas passam pelo exame. Achado alto ou eixo visual abaixo de 8 volta ao modelo, até o número de rodadas | `tokens.json` e HTML/CSS em `<dataDirectory>/design-criacoes/<runId>/`, fora do repositório, mais a vitrine `index.html` |
 
-O verificador de outro provedor confirma cada achado olhando a mesma captura. Opinião de gosto sem regra não vira achado de gravidade alta.
+O exame de leitura continua só com Claude. Achado `alta` sem medida estruturada desce para `media`, exceto inventário e teclado, que ficam informativos. O verificador confirma o achado cuja regra cabe na tela examinada. A senha de login não entra no relatório.
 
 ## Skills e catálogos conferidos
 
