@@ -192,7 +192,11 @@ export function designRawFinding(input: {
   const line = input.line ?? null;
   const cwe = input.cwe ?? null;
   const measure = acceptedMeasure(input.measure);
-  const severity = input.severity === 'alta' && measure === undefined ? 'informativa' : input.severity;
+  // Inventário e teclado sem medida continuam informativos; o resto da alta sem medida vira media.
+  const staysInformative = input.tool === 'inventario' || input.tool === 'teclado';
+  const severity = input.severity === 'alta' && measure === undefined
+    ? (staysInformative ? 'informativa' : 'media')
+    : input.severity;
   const parts = [input.tool, input.rule, input.file, String(line ?? ''), snippet];
   if (measure !== undefined) parts.push(measureToken(measure));
   return DesignRawFinding.parse({
@@ -222,6 +226,6 @@ export function dedupeDesignFindings(findings: readonly DesignRawFinding[]): Des
 
 /** Alta exige uma das quatro medidas. WCAG, DESIGN- e id plantado no texto não contam. */
 export function clampHighSeverity(severity: DesignSeverity, measure?: DesignMeasure | null): DesignSeverity {
-  if (severity === 'alta' && acceptedMeasure(measure) === undefined) return 'informativa';
+  if (severity === 'alta' && acceptedMeasure(measure) === undefined) return 'media';
   return severity;
 }

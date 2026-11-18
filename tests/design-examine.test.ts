@@ -494,7 +494,7 @@ test('o JSON de um modelo real entra mesmo com lista, gravidade e cwe fora do es
   assert.equal(result.notes.length, 0);
   assert.deepEqual(result.coverage[0]?.checklist, ['DESIGN-WCAG-143-CONTRASTE']);
   assert.equal(result.confirmations.length, 1);
-  assert.equal(result.confirmations[0]?.finding.severity, 'informativa');
+  assert.equal(result.confirmations[0]?.finding.severity, 'media');
   assert.equal(result.confirmations[0]?.finding.cwe, null);
   assert.equal(result.confirmations[0]?.confirm.status, 'confirmado');
   assert.equal(result.confirmations[0]?.verifier.provider, 'grok');
@@ -526,9 +526,9 @@ test('corpo JSON ou nao-HTML nao e tela e nao gera achado', async () => {
   assert.match(result.notes.join('\n'), /não é tela/);
 });
 
-test('alta sem medida estruturada vira informativa e a razao medida permanece alta', () => {
-  assert.equal(clampHighSeverity('alta', null), 'informativa');
-  assert.equal(clampHighSeverity('alta', undefined), 'informativa');
+test('alta sem medida estruturada vira media e a razao medida permanece alta', () => {
+  assert.equal(clampHighSeverity('alta', null), 'media');
+  assert.equal(clampHighSeverity('alta', undefined), 'media');
   assert.equal(clampHighSeverity('media', {kind: 'contrast', ratio: 2.1}), 'media');
   assert.equal(clampHighSeverity('alta', {kind: 'contrast', ratio: 2.1}), 'alta');
   assert.equal(clampHighSeverity('alta', {kind: 'target', px: 24}), 'alta');
@@ -553,6 +553,6 @@ test('alta sem medida estruturada vira informativa e a razao medida permanece al
     severity: 'alta',
     snippet: 'button',
   });
-  assert.equal(bare.severity, 'informativa');
+  assert.equal(bare.severity, 'media');
   assert.equal(bare.measure, undefined);
 });
