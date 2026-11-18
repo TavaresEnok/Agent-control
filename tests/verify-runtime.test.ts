@@ -712,6 +712,49 @@ test('caminho longo no snippet permanece inteiro', () => {
   assert.equal(parsed.findings[0]?.snippet, path);
 });
 
+test('base64 com barra é redigido só no token e caminho ou snake_case ficam', () => {
+  const secret = 'Zx9/Qw8+Er7tYu6iOp5aSd4fGh3jKl2zXc1vBn0M/q8WeRtYuIoPaSdF';
+  const path = '/home/app/projects/some-very-long-directory-name/src/handlers/auth-controller.ts';
+  const relativePath = 'src/handlers/auth-controller.ts';
+  const snake = 'user_password_reset_token_table_name_for_the_account_row';
+  assert.equal(secret.split('/')[1]?.length, 36);
+  assert.equal(hasRefusedSecretText(secret), true);
+  assert.equal(hasRefusedSecretText(`antes ${secret} resto`), true);
+  assert.equal(hasRefusedSecretText(path), false);
+  assert.equal(hasRefusedSecretText(relativePath), false);
+  assert.equal(hasRefusedSecretText(snake), false);
+  const parsed = ExamResult.parse(coerceExamResult({
+    kind: 'exame',
+    filesRead: ['src/app.ts'],
+    checklist: ['ASVS-5-V1'],
+    findings: [
+      {
+        title: `antes ${secret} resto`,
+        severity: 'alta',
+        file: 'src/app.ts',
+        line: 1,
+        scenario: 'segredo no meio da frase',
+        suggestion: 'tirar o token',
+        snippet: path,
+      },
+      {
+        title: snake,
+        severity: 'baixa',
+        file: 'src/app.ts',
+        line: 2,
+        scenario: 'identificador longo',
+        suggestion: 'nada',
+        snippet: relativePath,
+      },
+    ],
+  }));
+  assert.equal(parsed.findings[0]?.title, 'antes [removido: alta entropia] resto');
+  assert.equal(parsed.findings[0]?.snippet, path);
+  assert.equal(parsed.findings[1]?.title, snake);
+  assert.equal(parsed.findings[1]?.snippet, relativePath);
+  assert.equal(JSON.stringify(parsed).includes(secret), false);
+});
+
 test('nota do relatório cita a remoção por alta entropia', async () => {
   const entropy = '7f3a9c2e1b804d6f55aa0199cc33e7ab';
   const base64 = 'C'.repeat(40);

@@ -194,17 +194,21 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       else if (missing.length) notes.push(`O examinador não marcou como lido: ${missing.join(', ')}.`);
       if (!exam.success) continue;
       for (const finding of exam.data.findings) {
-        const titleRefused = finding.title === REMOVED_HIGH_ENTROPY || hasRefusedSecretText(finding.title);
-        const snippetRefused = finding.snippet === REMOVED_HIGH_ENTROPY || hasRefusedSecretText(finding.snippet);
-        if (titleRefused || snippetRefused) notes.push(HIGH_ENTROPY_NOTE);
-        const title = clipSecret(titleRefused ? REMOVED_HIGH_ENTROPY : finding.title, 200) || 'Achado';
+        const titleText = replaceSecretTokens(finding.title);
+        const snippetText = replaceSecretTokens(finding.snippet);
+        const tokenRemoved = titleText !== finding.title
+          || snippetText !== finding.snippet
+          || titleText.includes(REMOVED_HIGH_ENTROPY)
+          || snippetText.includes(REMOVED_HIGH_ENTROPY);
+        if (tokenRemoved) notes.push(HIGH_ENTROPY_NOTE);
+        const title = clipSecret(titleText, 200) || 'Achado';
         const reference = clipSecret([finding.reference, finding.cwe].filter((part): part is string => Boolean(part)).join(', '), 200) || title;
         open.push({
           file: finding.file,
           line: finding.line,
           title,
           rule: null,
-          snippet: clipSecret(snippetRefused ? REMOVED_HIGH_ENTROPY : finding.snippet, 240),
+          snippet: clipSecret(snippetText, 240),
           severity: finding.severity,
           scenario: clipSecret(finding.scenario, 2000) || title,
           suggestion: clipSecret(finding.suggestion, 2000) || 'Rever o ponto.',
@@ -554,27 +558,68 @@ function shannonEntropy(value: string): number {
 
 const REMOVED_HIGH_ENTROPY = '[removido: alta entropia]';
 const HIGH_ENTROPY_NOTE = 'Campo com alta entropia substituído por [removido: alta entropia].';
+// Slash stays out of base64 on purpose: a path must not look like a secret.
+const BASE64_SECRET = /[A-Za-z0-9+]{40,}={0,2}/;
+const SNAKE_IDENTIFIER = /^[a-z][a-z0-9_]{31,}$/;
+const SHORT_FILE_EXTENSION = /\.[A-Za-z0-9]{1,5}$/;
+
+function isSnakeIdentifier(value: string): boolean {
+  return SNAKE_IDENTIFIER.test(value);
+}
+
+/** Long snake_case, or a token made only of those identifiers plus separators. */
+function isSnakeToken(token: string): boolean {
+  if (isSnakeIdentifier(token)) return true;
+  const pieces = token.split(/[^A-Za-z0-9_]+/).filter(piece => piece.length > 0);
+  if (pieces.length === 0 || pieces.some(piece => !/^[a-z][a-z0-9_]*$/.test(piece))) return false;
+  return pieces.some(piece => isSnakeIdentifier(piece));
+}
+
+/** Absolute, `./`, `../`, or several short segments with a file extension. */
+function isPathToken(token: string): boolean {
+  if (token.startsWith('/') || token.startsWith('./') || token.startsWith('../')) return true;
+  const segments = token.split('/');
+  if (segments.length <= 1) return false;
+  if (!segments.every(segment => segment.length < 32)) return false;
+  return segments.some(segment => SHORT_FILE_EXTENSION.test(segment));
+}
+
+function isMaskToken(token: string): boolean {
+  return /^\(sha256:[a-f0-9]{64}\)$/.test(token);
+}
+
+function isSecretToken(token: string): boolean {
+  if (!token || isMaskToken(token) || isPathToken(token) || isSnakeToken(token)) return false;
+  if (!token.includes('/')) {
+    if (BASE64_SECRET.test(token)) return true;
+    return token.length >= 32 && shannonEntropy(token) >= 3.5;
+  }
+  return token.split('/').some(segment => {
+    if (!segment || isSnakeIdentifier(segment)) return false;
+    if (BASE64_SECRET.test(segment)) return true;
+    return segment.length >= 32 && shannonEntropy(segment) >= 3.5;
+  });
+}
+
+function replaceSecretTokens(text: string): string {
+  return text.replace(/\S+/g, token => isSecretToken(token) ? REMOVED_HIGH_ENTROPY : token);
+}
 
 /** True when a title or snippet carries a high-entropy token or a long base64 run.
- * Known secrets are masked first. A path token that contains `/` is not a secret.
- * Redaction masks (`xxxx… (sha256:…)`) are not themselves a secret. */
+ * Known secrets are masked first. A path token is not a secret. A `/` token that is
+ * not a path is judged per segment. Long snake_case is kept. Masks (`xxxx… (sha256:…)`)
+ * are not themselves a secret. */
 export function hasRefusedSecretText(text: string): boolean {
   if (!text) return false;
   const cleaned = redactUnknownSecrets(text).replace(/[^\s\u2026]{4}\u2026 \(sha256:[a-f0-9]{64}\)/g, ' ');
-  if (/[A-Za-z0-9+]{40,}={0,2}/.test(cleaned)) return true;
-  for (const token of cleaned.split(/\s+/)) {
-    if (token.includes('/')) continue;
-    if (token.length < 32) continue;
-    const chars = [...token];
-    if (chars.length >= 32 && shannonEntropy(token) >= 3.5) return true;
-  }
-  return false;
+  return cleaned.split(/\s+/).some(token => isSecretToken(token));
 }
 
 function screenedField(value: unknown, max: number): {text: string; removed: boolean} {
   const text = boundedText(value, max);
-  if (!hasRefusedSecretText(text)) return {text, removed: false};
-  return {text: REMOVED_HIGH_ENTROPY, removed: true};
+  const redacted = replaceSecretTokens(text);
+  if (redacted === text) return {text, removed: false};
+  return {text: redacted, removed: true};
 }
 
 function replaceRefusedRaw(finding: RawFinding, notes: string[]): RawFinding {
