@@ -6,6 +6,7 @@ import {z} from 'zod';
 import {join} from 'node:path';
 import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
 import {Refusal} from './contracts.ts';
+import {classifyExamReservation} from './exam-provider.ts';
 import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
 import {createProjectGateway} from './projects-api.ts';
@@ -298,19 +299,34 @@ async function main(){
      const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:async(intentId,avoidProviders)=>{
       const capacity=new Capacity(ledger);
       const avoided:string[]=[];
-      let last:{grantId:string;accountId:string;provider:string}|undefined;
-      for(let attempt=0;attempt<4;attempt++){
-       const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'reviewer',...(avoided.length?{avoidAccounts:[...avoided]}:{})},authority);
-       const found=await ledger.pool.query('SELECT a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',[grant.id]);
-       const row=found.rows[0] as {provider?:unknown}|undefined;
-       const provider=typeof row?.provider==='string'?row.provider:'';
-       last={grantId:grant.id,accountId:grant.account_id,provider};
-       if(!avoidProviders?.includes(provider)||attempt===3)return last;
-       await releaseGrant(principal,authority,grant.id,'not_started');
-       avoided.push(grant.account_id);
+      let fallback:{grantId:string;accountId:string;provider:string}|undefined;
+      try{
+       for(let attempt=0;attempt<4;attempt++){
+        const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'reviewer',...(avoided.length?{avoidAccounts:[...avoided]}:{})},authority);
+        const found=await ledger.pool.query('SELECT a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',[grant.id]);
+        const row=found.rows[0] as {provider?:unknown}|undefined;
+        const provider=typeof row?.provider==='string'?row.provider:'';
+        const choice=classifyExamReservation({grantId:grant.id,accountId:grant.account_id,provider},avoidProviders,attempt);
+        if(choice.kind==='skip'){
+         await releaseGrant(principal,authority,grant.id,'not_started');
+         avoided.push(choice.accountId);
+         continue;
+        }
+        if(choice.kind==='hold'){
+         if(fallback)await releaseGrant(principal,authority,fallback.grantId,'not_started');
+         fallback=choice.seat;
+         avoided.push(choice.accountId);
+         continue;
+        }
+        if(fallback&&fallback.grantId!==choice.seat.grantId)await releaseGrant(principal,authority,fallback.grantId,'not_started');
+        return choice.seat;
+       }
+      }catch(error){
+       if(fallback)await releaseGrant(principal,authority,fallback.grantId,'not_started');
+       throw error;
       }
-      if(!last)throw new Refusal('VERIFY_WORKER_UNAVAILABLE');
-      return last;
+      if(fallback)return fallback;
+      throw new Refusal('EXAM_PROVIDER_UNSUPPORTED',409);
      },releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
      return recheckFindings(ledger,principal,authority,{...input,worker});
     },

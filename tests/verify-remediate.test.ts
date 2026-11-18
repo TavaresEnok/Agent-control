@@ -71,10 +71,21 @@ function refusal(code: string) {
   return (error: unknown) => error instanceof Refusal && error.code === code;
 }
 
-function worker(status: 'descartado' | 'confirmado', seen: {role: string; task: string; writePaths: readonly string[]}[], providerFor: (avoided: readonly string[]) => string = avoided => avoided.includes('bancada') ? 'segunda' : 'bancada'): VerifyWorker {
+function worker(status: 'descartado' | 'confirmado', seen: {role: string; task: string; writePaths: readonly string[]}[], providerFor: (avoided: readonly string[]) => string = avoided => avoided.length > 0 ? 'claude-b' : 'claude-a'): VerifyWorker {
   return {async run(call) {
     seen.push({role: call.role, task: call.task, writePaths: call.writePaths});
-    (call as {reviewerProvider?: string}).reviewerProvider = providerFor(call.avoidProviders ?? []);
+    const label = providerFor(call.avoidProviders ?? []);
+    const marked = call as {reviewerProvider?: string; reviewerAccountId?: string; reviewerSessionId?: string};
+    if (label === 'unico') {
+      marked.reviewerProvider = 'unico';
+      marked.reviewerAccountId = 'conta-unica';
+      marked.reviewerSessionId = 'sessao-unica';
+    } else {
+      const second = (call.avoidProviders ?? []).length > 0;
+      marked.reviewerProvider = 'claude';
+      marked.reviewerAccountId = second ? 'conta-claude-b' : 'conta-claude-a';
+      marked.reviewerSessionId = second ? 'sessao-claude-b' : 'sessao-claude-a';
+    }
     return JSON.stringify({kind: 'confirmacao', status, reason: 'o ponto foi relido', proof: 'saida da bancada'});
   }};
 }

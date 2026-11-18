@@ -1,4 +1,5 @@
 import {Refusal} from './contracts.ts';
+import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {
   DesignConfirmResult,
   DesignCoverageRow,
@@ -291,14 +292,13 @@ function confirmationTask(finding: DesignExamFinding, code: string, captures: re
 
 async function confirmFinding(
   input: DesignExamineInput,
-  examinerProvider: string,
   finding: DesignExamFinding,
   code: string,
   captures: readonly DesignScreenCapture[] | undefined,
 ): Promise<{seat: DesignSeat; confirm: DesignConfirmResult}> {
-  const seat = await input.reserve('reviewer', examinerProvider);
+  const seat = await input.reserve('reviewer');
   try {
-    if (seat.provider === examinerProvider) throw new Refusal('DESIGN_PROVIDER_MUST_DIFFER');
+    acceptClaudeExamSeat(seat);
     const call = DesignWorkerCall.parse({
       role: 'reviewer',
       provider: seat.provider,
@@ -353,6 +353,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     const seat = await input.reserve('specialist');
     let output = '';
     try {
+      acceptClaudeExamSeat(seat);
       const call = DesignWorkerCall.parse({
         role: 'specialist',
         provider: seat.provider,
@@ -391,7 +392,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       notes.push(`O examinador não marcou como lido: ${screen.file}.`);
     }
     for (const finding of exam.data.findings) {
-      const reviewed = await confirmFinding(input, seat.provider, finding, screen.code, screen.captures);
+      const reviewed = await confirmFinding(input, finding, screen.code, screen.captures);
       const measure = examMeasure(finding, input.rawFindings, screen.captures);
       const clamped = DesignExamFinding.parse({
         title: finding.title,

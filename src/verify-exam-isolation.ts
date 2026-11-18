@@ -225,13 +225,6 @@ async function writeSettingsWithDeny(file: string, create: boolean): Promise<voi
   } finally { await handle.close(); }
 }
 
-const CODEX_CONTAINER_SANDBOX_LIMIT = [
-  'Codex stays on the container sandbox.',
-  'A read-only Codex sandbox cannot start inside the worker container, so the exam does not switch Codex off that sandbox.',
-  'Reads of these paths are not denied by Codex: /account/.credentials.json, /tmp/ac-exam-login-*, /proc/self/environ, /runner.',
-  '',
-].join('\n');
-
 /**
  * Copy credential and config files onto tmpfs. Regular files are new inodes.
  * Symlinks are recreated and not followed, so writing into the copy does not change the source.
@@ -251,12 +244,6 @@ export async function prepareExamLoginCopy(source: string, tmpRoot = '/tmp'): Pr
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   if (claudeInfo?.isDirectory()) await writeSettingsWithDeny(join(claudeDir, 'settings.json'), false);
-  const limit = join(dest, 'codex-container-sandbox-limit.txt');
-  const handle = await open(limit, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  try {
-    await handle.writeFile(CODEX_CONTAINER_SANDBOX_LIMIT);
-    await handle.chmod(0o600);
-  } finally { await handle.close(); }
   return dest;
 }
 

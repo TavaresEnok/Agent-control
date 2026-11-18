@@ -115,7 +115,7 @@ type Seat = {
   grantId: string;
 };
 
-function harness(sameProvider: boolean) {
+function harness(reviewerProvider: 'claude' | 'grok' | 'codex' = 'claude') {
   const events: string[] = [];
   const specialist = {
     provider: 'claude',
@@ -124,7 +124,7 @@ function harness(sameProvider: boolean) {
     profileId: randomUUID(),
   };
   const reviewer = {
-    provider: sameProvider ? 'claude' : 'grok',
+    provider: reviewerProvider,
     model: 'modelo-revisor',
     accountId: randomUUID(),
     profileId: randomUUID(),
@@ -139,7 +139,7 @@ function harness(sameProvider: boolean) {
   };
   const reserve = async (role: 'specialist' | 'reviewer', avoidProvider?: string): Promise<Seat> => {
     events.push(`reserve:${role}`);
-    if (role === 'reviewer') assert.equal(avoidProvider, specialist.provider);
+    if (role === 'reviewer') assert.equal(avoidProvider, undefined);
     const base = role === 'reviewer' ? reviewer : specialist;
     return {...base, grantId: randomUUID()};
   };
@@ -157,7 +157,7 @@ const screen = {
 };
 
 test('exame confirma regra plantada, descarta gosto e esconde a sugestão', async () => {
-  const kit = harness(false);
+  const kit = harness();
   const tasks: string[] = [];
   const checklist = loadDesignChecklist();
   const rawFindings = [
@@ -229,8 +229,9 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
   assert.equal(planted?.confirm.status, 'confirmado');
   assert.equal(planted?.finding.severity, 'alta');
   assert.deepEqual(planted?.finding.measure, {kind: 'contrast', ratio: 4.478089453577214});
-  assert.equal(planted?.verifier.provider, 'grok');
-  assert.notEqual(planted?.verifier.provider, result.coverage[0]?.examinerProvider);
+  assert.equal(planted?.verifier.provider, 'claude');
+  assert.equal(planted?.verifier.model, 'modelo-revisor');
+  assert.equal(result.coverage[0]?.examinerProvider, 'claude');
   assert.match(planted?.confirm.proof ?? '', /color:#777/);
   assert.equal(taste?.confirm.status, 'descartado');
   assert.equal(taste?.finding.severity, 'media');
@@ -242,7 +243,7 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
     'release:claude',
     'reserve:reviewer',
     'run:reviewer',
-    'release:grok',
+    'release:claude',
   ]);
   const reviewerTasks = tasks.filter(task => task.startsWith('Pedido de confirmação.'));
   const examTask = tasks.find(task => task.startsWith('Pedido de exame.'));
@@ -264,44 +265,61 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
   assert.match(reviewerTasks[0] ?? '', /color:#777/);
 });
 
-test('mesmo provedor nos dois papéis é recusado e a vaga sai', async () => {
-  const kit = harness(true);
-  await assert.rejects(
-    () => examineDesignScreens({
-      repo: '/tmp/repo-design',
-      intentId: randomUUID(),
-      screens: [screen],
-      checklist: loadDesignChecklist(),
-      rawFindings: [designRawFinding({
-        tool: 'axe',
-        rule: DESIGN_PLANTED_RULES.contrast,
-        file: screen.file,
-        line: 4,
-        severity: 'alta',
-        snippet: 'color:#777',
-        measure: {kind: 'contrast', ratio: 4.478089453577214},
-      })],
-      worker: kit.worker,
-      reserve: kit.reserve,
-      release: kit.release,
-    }),
-    (error: unknown) => {
-      assert.equal(error instanceof Refusal, true);
-      assert.equal((error as Refusal).code, 'DESIGN_PROVIDER_MUST_DIFFER');
-      return true;
-    },
-  );
-  assert.deepEqual(kit.events, [
-    'reserve:specialist',
-    'run:specialist',
-    'release:claude',
-    'reserve:reviewer',
-    'release:claude',
-  ]);
+test('dois papéis Claude são aceitos e grok ou codex são recusados', async () => {
+  const allowed = harness();
+  const raw = [designRawFinding({
+    tool: 'axe',
+    rule: DESIGN_PLANTED_RULES.contrast,
+    file: screen.file,
+    line: 4,
+    severity: 'alta',
+    snippet: 'color:#777',
+    measure: {kind: 'contrast', ratio: 4.478089453577214},
+  })];
+  const passed = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [screen],
+    checklist: loadDesignChecklist(),
+    rawFindings: raw,
+    worker: allowed.worker,
+    reserve: allowed.reserve,
+    release: allowed.release,
+  });
+  assert.equal(passed.confirmations[0]?.verifier.provider, 'claude');
+  assert.equal(passed.coverage[0]?.examinerProvider, 'claude');
+  assert.ok(allowed.events.includes('run:reviewer'));
+  for (const provider of ['grok', 'codex'] as const) {
+    const kit = harness(provider);
+    await assert.rejects(
+      () => examineDesignScreens({
+        repo: '/tmp/repo-design',
+        intentId: randomUUID(),
+        screens: [screen],
+        checklist: loadDesignChecklist(),
+        rawFindings: raw,
+        worker: kit.worker,
+        reserve: kit.reserve,
+        release: kit.release,
+      }),
+      (error: unknown) => {
+        assert.equal(error instanceof Refusal, true);
+        assert.equal((error as Refusal).code, 'EXAM_PROVIDER_UNSUPPORTED');
+        return true;
+      },
+    );
+    assert.deepEqual(kit.events, [
+      'reserve:specialist',
+      'run:specialist',
+      'release:claude',
+      'reserve:reviewer',
+      `release:${provider}`,
+    ]);
+  }
 });
 
 test('confirmação com JSON inválido é recusada e a vaga sai', async () => {
-  const kit = harness(false);
+  const kit = harness();
   const releases: string[] = [];
   await assert.rejects(
     () => examineDesignScreens({
@@ -336,11 +354,11 @@ test('confirmação com JSON inválido é recusada e a vaga sai', async () => {
       return true;
     },
   );
-  assert.deepEqual(releases, ['claude', 'grok']);
+  assert.deepEqual(releases, ['claude', 'claude']);
 });
 
 test('cada tela reserva um especialista e o revisor lê o JSON cercado', async () => {
-  const kit = harness(false);
+  const kit = harness();
   const screens = [
     {file: 'src/A.tsx', route: '/a', code: 'export const a = 1;\n', captureNote: 'a'},
     {file: 'src/B.tsx', route: '/b', code: 'export const b = 2;\n', captureNote: 'b'},
@@ -386,7 +404,7 @@ test('cada tela reserva um especialista e o revisor lê o JSON cercado', async (
 });
 
 test('captura falsa entra no exame e na confirmação com o mesmo caminho e o mesmo sha256', async () => {
-  const kit = harness(false);
+  const kit = harness();
   const tasks: string[] = [];
   const sha256 = 'ab'.repeat(32);
   const path = `/work/.design-captures/${sha256}.png`;
@@ -429,7 +447,7 @@ test('captura falsa entra no exame e na confirmação com o mesmo caminho e o me
   assert.match(reviewTask, new RegExp(`arquivo=${path.replaceAll('/', '\\/')} viewport=375 tema=claro estado=padrao sha256=${sha256}`));
   assert.equal(reviewTask.includes('suggestion'), false);
   assert.equal(result.confirmations[0]?.finding.reference, DESIGN_PLANTED_RULES.contrast);
-  assert.equal(result.confirmations[0]?.verifier.provider, 'grok');
+  assert.equal(result.confirmations[0]?.verifier.provider, 'claude');
   const bare = tasks.length;
   const without = await examineDesignScreens({
     repo: '/tmp/repo-design',
@@ -452,7 +470,7 @@ test('captura falsa entra no exame e na confirmação com o mesmo caminho e o me
 });
 
 test('o JSON de um modelo real entra mesmo com lista, gravidade e cwe fora do esquema', async () => {
-  const kit = harness(false);
+  const kit = harness();
   const result = await examineDesignScreens({
     repo: '/tmp/repo-design',
     intentId: randomUUID(),
@@ -497,12 +515,12 @@ test('o JSON de um modelo real entra mesmo com lista, gravidade e cwe fora do es
   assert.equal(result.confirmations[0]?.finding.severity, 'media');
   assert.equal(result.confirmations[0]?.finding.cwe, null);
   assert.equal(result.confirmations[0]?.confirm.status, 'confirmado');
-  assert.equal(result.confirmations[0]?.verifier.provider, 'grok');
+  assert.equal(result.confirmations[0]?.verifier.provider, 'claude');
   assert.equal(result.confirmations[0]?.finding.measure, undefined);
 });
 
 test('corpo JSON ou nao-HTML nao e tela e nao gera achado', async () => {
-  const kit = harness(false);
+  const kit = harness();
   const result = await examineDesignScreens({
     repo: '/tmp/repo-design',
     intentId: randomUUID(),

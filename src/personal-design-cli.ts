@@ -18,6 +18,7 @@ const messages: Record<string, string> = {
   DESIGN_LOGIN_INVALID: 'O arquivo de login não tem os campos esperados.',
   DESIGN_COMMIT_INVALID: 'Não foi possível ler o commit do repositório.',
   DESIGN_PROVIDER_MUST_DIFFER: 'O revisor tem que ser outro provedor.',
+  EXAM_PROVIDER_UNSUPPORTED: 'O exame de leitura só aceita uma conta Claude.',
   DESIGN_EXAM_TIMEOUT: 'O exame passou do tempo.',
   DESIGN_REPO_UNREADABLE: 'Não foi possível ler o repositório do projeto.',
   DESIGN_PASSWORD_LEAK: 'A senha de login apareceria no relatório.',

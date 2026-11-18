@@ -395,4 +395,6 @@ test('createRecheckNativeWorker repassa avoidProviders e devolve o provedor da r
   assert.equal(output, 'revisto');
   assert.deepEqual(avoided, ['grok']);
   assert.equal((asked as {reviewerProvider?: string}).reviewerProvider, 'claude');
+  assert.equal((asked as {reviewerAccountId?: string}).reviewerAccountId, accountId);
+  assert.match((asked as {reviewerSessionId?: string}).reviewerSessionId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });

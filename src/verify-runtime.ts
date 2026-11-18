@@ -5,6 +5,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {promisify} from 'node:util';
 import {Capacity, type Grant} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
+import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {Ledger, type Intent} from './ledger.ts';
 import {readMountedCredentialSecrets} from './native-worker-security.ts';
 import {loadSecurityChecklist} from './verify-checklist.ts';
@@ -161,7 +162,6 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   const exams: unknown[] = [];
   let map: MapResult = minimalMap(files);
   let mapMarkdown = redactUnknownSecrets(mapToMarkdown(map, files));
-  let mapProvider: string | null = null;
   let mapAccountId: string | null = null;
   let mapSeat: Seat | null = null;
 
@@ -171,7 +171,6 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     if (input.onPhase) await input.onPhase('mapa');
     const mapped = await reserveAndRun(input, capacity, intent.id, 'specialist', mapTask(files), 'verify-map', modelCallBudget, trackedCalls);
     mapSeat = mapped.seat;
-    mapProvider = mapped.seat.provider;
     mapAccountId = mapped.seat.accountId;
     const parsed = MapResult.safeParse(coerceMapResult(parseJson(mapped.output)));
     if (parsed.success) map = parsed.data;
@@ -254,7 +253,6 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   if (input.onPhase) await input.onPhase('confirmacao');
   for (const finding of open) {
     if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
-    const forbidden = finding.examinerProvider ?? mapProvider;
     const avoid = finding.examinerAccountId ?? mapAccountId;
     const content = await readRepoText(input.repoPath, finding.file, finding.line, allowedFiles);
     const reviewed = await reserveAndRun(
@@ -267,7 +265,6 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       modelCallBudget,
       trackedCalls,
       avoid ? [avoid] : undefined,
-      forbidden ?? undefined,
     );
     let confirm;
     try {
@@ -353,7 +350,6 @@ async function reserveAndRun(
   modelCallBudget: number,
   trackedCalls: {count: number},
   avoidAccounts?: readonly string[],
-  forbiddenProvider?: string,
 ): Promise<{seat: Seat; output: string}> {
   if (trackedCalls.count >= modelCallBudget) throw new Error('VERIFY_MODEL_BUDGET');
   const grant = await capacity.reserve(input.principal, {
@@ -366,7 +362,7 @@ async function reserveAndRun(
   let thrown: unknown;
   try {
     const seat = await readSeat(input.ledger, grant);
-    if (forbiddenProvider && seat.provider === forbiddenProvider) throw new Refusal('REVIEWER_PROVIDER_MUST_DIFFER');
+    acceptClaudeExamSeat(seat);
     const secrets = await reservedAccountSecrets(input.accountRoot, seat.accountId, input.accountSecrets);
     const call = VerifyWorkerCall.parse({
       role,

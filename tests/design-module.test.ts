@@ -46,11 +46,11 @@ function labFiles(): {path: string; text: string}[] {
   return out;
 }
 
-function harness(sameProvider = false): Pick<DesignModuleInput, 'worker' | 'reserve' | 'release'> {
+function harness(reviewerProvider: 'claude' | 'grok' | 'codex' = 'claude'): Pick<DesignModuleInput, 'worker' | 'reserve' | 'release'> {
   const bench = designBenchWorker();
   const specialist = {provider: 'claude', model: 'especialista', accountId: randomUUID(), profileId: randomUUID()};
   const reviewer = {
-    provider: sameProvider ? 'claude' : 'grok',
+    provider: reviewerProvider,
     model: 'revisor',
     accountId: randomUUID(),
     profileId: randomUUID(),
@@ -99,7 +99,7 @@ test('a régua confirmada entra no relatório e as telas corretas ficam sem alta
         assert.ok(hit, item.relative);
         assert.equal(hit.severity, raw.severity);
         assert.equal(hit.status, 'confirmado');
-        assert.equal(hit.verifier?.provider, 'grok');
+        assert.equal(hit.verifier?.provider, 'claude');
       } else {
         assert.equal(hit, undefined, item.rule);
       }
@@ -136,10 +136,29 @@ test('o mesmo provedor recusa e a senha de teste não entra no relatório', asyn
   const data = await mkdtemp(join(tmpdir(), 'design-mod-'));
   const password = 'senha-efemera-da-regua';
   try {
+    const released: string[] = [];
+    const blocked = harness('grok');
     await assert.rejects(
-      runDesignModule(request(data, harness(true))),
-      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_PROVIDER_MUST_DIFFER',
+      runDesignModule(request(data, {
+        worker: blocked.worker,
+        reserve: blocked.reserve,
+        release: async seat => { released.push(seat.provider); },
+      })),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_PROVIDER_UNSUPPORTED',
     );
+    assert.equal(released.at(-1), 'grok');
+    assert.ok(released.includes('claude'));
+    const codexReleased: string[] = [];
+    const codex = harness('codex');
+    await assert.rejects(
+      runDesignModule(request(data, {
+        worker: codex.worker,
+        reserve: codex.reserve,
+        release: async seat => { codexReleased.push(seat.provider); },
+      })),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_PROVIDER_UNSUPPORTED',
+    );
+    assert.equal(codexReleased.at(-1), 'codex');
     const seen: string[] = [];
     const driver: DesignCaptureDriver = {
       async setViewport() {},

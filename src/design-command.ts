@@ -5,6 +5,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
+import {acceptClaudeExamSeat} from './exam-provider.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {publicLoginRecord, type DesignLogin, type PublicLoginRecord} from './design-discover.ts';
 import type {DesignSourceFile} from './design-collect.ts';
@@ -390,26 +391,19 @@ export async function resolvePersonalDesign(argv: readonly string[]): Promise<Re
       releaseGrant,
     });
     const reserve = async (role: 'specialist' | 'reviewer', avoidProvider?: string): Promise<DesignSeat> => {
-      let avoidAccounts: string[] | undefined;
-      if (avoidProvider) {
-        const avoided = await ledger.pool.query<{id: string}>('SELECT id::text AS id FROM ac_accounts WHERE provider=$1 LIMIT 8', [avoidProvider]);
-        const ids = avoided.rows.map(item => item.id).filter(id => Id.safeParse(id).success);
-        if (ids.length > 0) avoidAccounts = ids;
-      }
+      void avoidProvider;
       const capacity = new Capacity(ledger);
       const grant = await capacity.reserve(principal, {
         attemptId: randomUUID(),
         intentId,
         contextId: authority.contextId,
         role,
-        ...(avoidAccounts ? {avoidAccounts} : {}),
       }, authority);
       const seat = await readSeat(ledger, grant.id, grant.account_id, grant.profile_id);
-      if (avoidProvider && seat.provider === avoidProvider) {
+      if (seat.provider !== 'claude') {
         await releaseDesignGrant(ledger, principal, authority, seat.grantId, 'not_started');
-        throw new Refusal('DESIGN_PROVIDER_MUST_DIFFER');
       }
-      return seat;
+      return acceptClaudeExamSeat(seat);
     };
     return {
       ledger,

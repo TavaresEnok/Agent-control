@@ -28,7 +28,13 @@ const AsvsToken = /^ASVS(?:-\d+){1,4}$/;
 const EXCERPT_LIMIT = 4000;
 
 type OpenFinding = {id: string; status: string; file: string; line: number | null; title: string; reference: string | null; severity: string; snippet: string};
-type ReviewerCall = VerifyWorkerCall & {reviewerProvider?: unknown};
+type ReviewerCall = VerifyWorkerCall & {reviewerProvider?: unknown; reviewerAccountId?: unknown; reviewerSessionId?: unknown};
+export type HighReview = {
+  status: 'descartado' | 'confirmado';
+  provider: string;
+  accountId: string;
+  sessionId: string;
+};
 type RunRef = {id: string; intentId: string; commitId: string};
 type ReportUpdate = {id: string; status: 'fechado' | 'reaberto'; file: string; line: number | null; title: string};
 type MatchedReport = {dir: string; runRaw: string; achadosRaw: string | null};
@@ -294,16 +300,39 @@ function recheckTask(finding: OpenFinding, excerpt: string): string {
   ].join('\n');
 }
 
-function reviewerProvider(call: ReviewerCall): string {
-  return typeof call.reviewerProvider === 'string' ? call.reviewerProvider : '';
+function reviewerText(call: ReviewerCall, key: 'reviewerProvider' | 'reviewerAccountId' | 'reviewerSessionId'): string {
+  const value = call[key];
+  return typeof value === 'string' ? value : '';
 }
 
-function avoidProviders(provider: string): string[] | undefined {
-  if (provider.length < 1 || provider.length > 80) return undefined;
-  return [provider];
+function avoidAccount(accountId: string): string[] | undefined {
+  if (accountId.length < 1 || accountId.length > 80) return undefined;
+  return [accountId];
 }
 
-async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt: string, intentId: string, avoid?: readonly string[]): Promise<{status: 'descartado' | 'confirmado'; provider: string}> {
+function reviewIdsDiffer(left: string, right: string): boolean {
+  return left.length > 0 && right.length > 0 && left !== right;
+}
+
+/** Fecha achado alto. Exames de leitura só usam Claude, então provedores distintos deixam de ser exigência. Dois Claude em contas ou sessões diferentes, ou a prova de diff, fecham o achado. */
+export function highFindingCloses(input: {
+  seen: boolean;
+  snippetGone: boolean;
+  first: HighReview;
+  second: HighReview;
+}): boolean {
+  const discarded = input.first.status === 'descartado' || input.second.status === 'descartado';
+  const proof = input.seen && discarded && input.snippetGone;
+  const agreed = input.seen
+    && input.first.status === 'descartado'
+    && input.second.status === 'descartado'
+    && input.first.provider === 'claude'
+    && input.second.provider === 'claude'
+    && (reviewIdsDiffer(input.first.accountId, input.second.accountId) || reviewIdsDiffer(input.first.sessionId, input.second.sessionId));
+  return proof || agreed;
+}
+
+async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt: string, intentId: string, avoid?: readonly string[]): Promise<HighReview> {
   const call: ReviewerCall = VerifyWorkerCall.parse({
     role: 'reviewer',
     provider: 'recheck',
@@ -318,7 +347,12 @@ async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt
     ...(avoid && avoid.length ? {avoidProviders: [...avoid]} : {}),
   });
   const verdict = parseVerdict(await worker.run(call));
-  return {status: verdict.status, provider: reviewerProvider(call)};
+  return {
+    status: verdict.status,
+    provider: reviewerText(call, 'reviewerProvider'),
+    accountId: reviewerText(call, 'reviewerAccountId'),
+    sessionId: reviewerText(call, 'reviewerSessionId'),
+  };
 }
 
 function correctionDiffInvocation(examinedCommit: string, relativeFile: string): {args: string[]; env: Record<string, string>} {
@@ -625,7 +659,7 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
     return {run, findings: await loadFindings(client, run.id, requested, false), repo: await projectRepo(client, input.projectId)};
   });
   const decided: ReportUpdate[] = [];
-  // reviewerProvider vem da reserva da conta, não do texto do modelo.
+  // Provedor, conta e sessão vêm da reserva, não do texto do modelo.
   for (const finding of loaded.findings) {
     const excerpt = await excerptFor(loaded.repo, finding);
     const first = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId);
@@ -633,11 +667,10 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
     if (finding.severity !== 'alta') {
       status = first.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto';
     } else {
-      const second = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId, avoidProviders(first.provider));
+      const second = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId, avoidAccount(first.accountId));
       const discarded = first.status === 'descartado' || second.status === 'descartado';
-      const proof = excerpt.seen && discarded && await snippetGone(loaded.repo, finding, loaded.run.commitId);
-      const agreed = excerpt.seen && first.status === 'descartado' && second.status === 'descartado' && first.provider.length > 0 && second.provider.length > 0 && first.provider !== second.provider;
-      status = proof || agreed ? 'fechado' : 'reaberto';
+      const gone = excerpt.seen && discarded ? await snippetGone(loaded.repo, finding, loaded.run.commitId) : false;
+      status = highFindingCloses({seen: excerpt.seen, snippetGone: gone, first, second}) ? 'fechado' : 'reaberto';
     }
     decided.push({id: finding.id, status, file: finding.file, line: finding.line, title: finding.title});
   }

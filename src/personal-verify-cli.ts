@@ -22,6 +22,7 @@ const messages:Record<string,string>={
  VERIFY_TARGET_FORBIDDEN:'O contêiner de homologação não está na lista da instalação.',
  VERIFY_LEASE_LOST:'A locação da verificação falhou.',
  VERIFY_TOO_MANY:'A reverificação aceita no máximo 20 achados.',
+ EXAM_PROVIDER_UNSUPPORTED:'O exame de leitura só aceita uma conta Claude.',
 };
 
 function fail(error:unknown):never{

@@ -219,11 +219,7 @@ test('a origem da conta não muda e só o mount do exame é somente leitura', as
         }
       }
     }
-    const limit = await readFile(join(copy, 'codex-container-sandbox-limit.txt'), 'utf8');
-    assert.match(limit, /Codex stays on the container sandbox/);
-    for (const path of ['/account/.credentials.json', '/tmp/ac-exam-login-*', '/proc/self/environ', '/runner']) {
-      assert.equal(limit.includes(path), true, path);
-    }
+    await assert.rejects(lstat(join(copy, 'codex-container-sandbox-limit.txt')), (error: NodeJS.ErrnoException) => error.code === 'ENOENT');
     const linkedCopy = await prepareExamLoginCopy(sourceLink, tmpRoot);
     const linkedPath = join(linkedCopy, 'settings.json');
     const linkedStat = await lstat(linkedPath);

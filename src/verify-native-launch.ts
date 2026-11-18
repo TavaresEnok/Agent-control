@@ -171,7 +171,9 @@ export function createRecheckNativeWorker(input: {
     async run(call) {
       const parsed = VerifyWorkerCall.parse(call);
       const reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders);
-      (call as {reviewerProvider?: string}).reviewerProvider = typeof reserved.provider === 'string' ? reserved.provider : '';
+      const marked = call as {reviewerProvider?: string; reviewerAccountId?: string; reviewerSessionId?: string};
+      marked.reviewerProvider = typeof reserved.provider === 'string' ? reserved.provider : '';
+      marked.reviewerAccountId = typeof reserved.accountId === 'string' ? reserved.accountId : '';
       const supervisor = supervisors.find(item => item.active && item.supportsAccount(reserved.accountId));
       if (!supervisor) {
         if (releaseGrant) await releaseGrant(reserved.grantId, 'exited');
@@ -189,6 +191,7 @@ export function createRecheckNativeWorker(input: {
           task: parsed.task,
           artifactId: randomUUID(),
         });
+        marked.reviewerSessionId = request.sessionId;
       } catch (error) {
         if (releaseGrant) await releaseGrant(reserved.grantId, 'exited');
         throw error;
