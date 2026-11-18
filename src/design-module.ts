@@ -125,7 +125,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     throw new Refusal('DESIGN_MODULE_INVALID', 400);
   }
   const target = assertDesignTarget(input.targetUrl);
-  const projectConfig = parseDesignProjectConfig(await readRepoDesignConfig(input.repo, input.files));
+  const rawDesignConfig = await readRepoDesignConfig(input.repo, input.files);
+  const projectConfig = parseDesignProjectConfig(rawDesignConfig);
+  const hasProjectConfig = rawDesignConfig !== undefined && rawDesignConfig.trim().length > 0;
   const plannedStates = input.recordStates === true ? statePlan(input.files, projectConfig) : undefined;
   const reference = input.referenceFiles === undefined || input.referenceFiles.length === 0
     ? undefined
@@ -302,6 +304,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     referenceMarkdown,
     regression.markdown,
     stateNotes,
+    hasProjectConfig,
   );
   const split = measuredJudgedMarkdown(achados);
   if (split.length > 0) extras.sections = [...(extras.sections ?? []), {title: 'Medido e julgado', markdown: split}];
@@ -785,6 +788,7 @@ function reportExtras(
   referenceNote: string | undefined,
   regression: string,
   stateNotes: readonly string[] | undefined,
+  hasProjectConfig: boolean,
 ): {sections?: {title: string; markdown: string}[]; files?: {name: string; body: string}[]} {
   const sections: {title: string; markdown: string}[] = [];
   const files: {name: string; body: string}[] = [];
@@ -809,7 +813,15 @@ function reportExtras(
   if (visualMarkdown !== undefined) sections.push({title: 'Crítica visual', markdown: visualMarkdown});
   if (referenceNote) sections.push({title: 'Referências', markdown: referenceNote});
   if (regression.trim().length > 0) sections.push({title: 'Regressão visual', markdown: withoutHeading(regression)});
-  if (stateNotes && stateNotes.length > 0) sections.push({title: 'Estados', markdown: stateNotes.join('\n')});
+  if (hasProjectConfig || (stateNotes && stateNotes.length > 0)) {
+    const configSourceNote = hasProjectConfig
+      ? 'A configuração de estados (design.config.json) vem do repositório do próprio titular.'
+      : 'Quando presente, a configuração de estados (design.config.json) vem do repositório do próprio titular.';
+    sections.push({
+      title: 'Estados',
+      markdown: [configSourceNote, ...(stateNotes ?? [])].join('\n'),
+    });
+  }
   return {
     ...(sections.length > 0 ? {sections} : {}),
     ...(files.length > 0 ? {files} : {}),

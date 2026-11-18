@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
-import {mkdtemp, rm} from 'node:fs/promises';
+import {createHash, randomUUID} from 'node:crypto';
+import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
+import {designBenchWorker} from '../src/design-bench.ts';
 import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignCapturePlan} from '../src/design-capture.ts';
+import {runDesignModule} from '../src/design-module.ts';
 import {parseDesignProjectConfig, planDesignRoutes, type DesignStateReach, type PlannedRoute} from '../src/design-project-config.ts';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -242,3 +244,92 @@ function toCapture(route: PlannedRoute, state: DesignStateReach): DesignCaptureP
     reach: {kind: 'acoes', steps: state.acoes},
   };
 }
+
+test('recusa urls e seletores de estado com palavras de efeito colateral', () => {
+  const forbidden = ['logout', 'Sair', 'DELETE', 'Excluir', 'rEmOvEr', 'apagar'];
+  for (const word of forbidden) {
+    assert.throws(
+      () => parseDesignProjectConfig(JSON.stringify({
+        routes: {'/': {states: {logado: {url: `/conta/${word}`}}}},
+      })),
+      isConfigRefusal,
+      `URL com ${word} deveria ser recusada`,
+    );
+    for (const action of [
+      `clicar button.${word}`,
+      `esperar #modal-${word}`,
+      `preencher input[name="${word}"] valor`,
+    ]) {
+      assert.throws(
+        () => parseDesignProjectConfig(JSON.stringify({
+          routes: {'/': {states: {erro: {acoes: [action]}}}},
+        })),
+        isConfigRefusal,
+        `Ação "${action}" deveria ser recusada`,
+      );
+    }
+  }
+  assert.throws(
+    () => parseDesignProjectConfig(JSON.stringify({
+      routes: {'/': {states: {logado: {url: '/%73air'}}}},
+    })),
+    isConfigRefusal,
+  );
+  const allowed = parseDesignProjectConfig(JSON.stringify({
+    routes: {
+      '/': {
+        states: {
+          vazio: {url: '/estado/vazio'},
+          erro: {acoes: ['clicar button.erro', 'esperar #mensagem', 'preencher #busca filtro']},
+        },
+      },
+    },
+  }));
+  assert.equal(allowed.routes['/']?.reaches.length, 2);
+});
+
+test('relatorio informa que design.config.json vem do repositorio do proprio titular', async () => {
+  const data = await mkdtemp(join(tmpdir(), 'ac-design-config-note-'));
+  const repo = await mkdtemp(join(tmpdir(), 'ac-design-config-repo-'));
+  const bench = designBenchWorker();
+  try {
+    const result = await runDesignModule({
+      activation: 'personal',
+      projectId: randomUUID(),
+      repo,
+      targetUrl: 'http://127.0.0.1:4173',
+      dataDirectory: data,
+      intentId: randomUUID(),
+      runId: randomUUID(),
+      createdAt: new Date('2026-11-18T12:30:00.000Z'),
+      commit: 'abc123',
+      files: [
+        {path: 'index.html', text: '<html><body><h1>Inicio</h1></body></html>'},
+        {
+          path: 'design.config.json',
+          text: JSON.stringify({
+            routes: {
+              '/': {
+                states: {
+                  vazio: {url: '/estado/vazio'},
+                  carregando: {url: '/estado/carregando'},
+                  erro: {acoes: ['clicar button.erro']},
+                  logado: {url: '/conta'},
+                },
+              },
+            },
+          }),
+        },
+      ],
+      worker: {async run(call) { return bench.run(call); }},
+      reserve: async role => ({provider: 'claude', model: role, accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()}),
+      release: async () => {},
+      recordStates: true,
+    });
+    const readme = await readFile(join(result.directory, 'README.md'), 'utf8');
+    assert.match(readme, /repositório do próprio titular/);
+  } finally {
+    await rm(data, {recursive: true, force: true});
+    await rm(repo, {recursive: true, force: true});
+  }
+});
