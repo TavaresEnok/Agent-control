@@ -1,6 +1,6 @@
 import {constants} from 'node:fs';
 import {chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, symlink, unlink, writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join, relative, sep} from 'node:path';
 
 /** Basenames removed from the exam copy. Match is case-insensitive. */
 const EXAM_HOSTILE_NAMES = new Set(['.claude', '.mcp.json', '.codex', '.grok', '.cursor', 'claude.md', 'agents.md', 'grok.md', 'claude.local.md', '.agents']);
@@ -9,16 +9,30 @@ export function isExamHostileName(name: string): boolean {
   return EXAM_HOSTILE_NAMES.has(name.toLowerCase());
 }
 
+/** Symlinks unlinked from the exam copy. `paths` is capped; `count` is the real total. */
+export type ExamStripResult = {count: number; paths: string[]};
+
+const STRIP_PATH_CAP = 20;
+
 /**
  * Remove hostile agent config from an exam copy. A symlink is unlinked and never followed,
  * whether or not its name is hostile. The original repository is not this tree.
+ * `paths` are relative to `root`, with `/`, and stop at 20. `count` includes every symlink.
  */
-export async function stripExamHostileConfig(root: string): Promise<void> {
-  const entries = await readdir(root, {withFileTypes: true});
+export async function stripExamHostileConfig(root: string): Promise<ExamStripResult> {
+  return stripExamTree(root, root);
+}
+
+async function stripExamTree(directory: string, root: string): Promise<ExamStripResult> {
+  const entries = await readdir(directory, {withFileTypes: true});
+  let count = 0;
+  const paths: string[] = [];
   for (const entry of entries) {
-    const path = join(root, entry.name);
+    const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) {
       await unlink(path);
+      count += 1;
+      if (paths.length < STRIP_PATH_CAP) paths.push(relative(root, path).split(sep).join('/'));
       continue;
     }
     if (isExamHostileName(entry.name)) {
@@ -26,8 +40,19 @@ export async function stripExamHostileConfig(root: string): Promise<void> {
       continue;
     }
     if (!entry.isDirectory()) continue;
-    await stripExamHostileConfig(path);
+    const nested = await stripExamTree(path, root);
+    count += nested.count;
+    for (const item of nested.paths) {
+      if (paths.length < STRIP_PATH_CAP) paths.push(item);
+    }
   }
+  return {count, paths};
+}
+
+/** Portuguese report sentence. Undefined when the copy had no symlink. */
+export function formatExamStripNote(result: {count: number; paths: readonly string[]}): string | undefined {
+  if (result.count === 0) return undefined;
+  return `Symlinks removidos da cópia do exame: ${result.count}. Onde: ${result.paths.join(', ')}.`;
 }
 
 /** Argv the exam wrapper execs. `--setting-sources user` is first; every `--mcp-config` pair is dropped. */

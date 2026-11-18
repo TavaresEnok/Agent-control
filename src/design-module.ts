@@ -7,6 +7,7 @@ import {captureScreens, planCaptures, type DesignCaptureDriver, type DesignEmpty
 import {collectDesignFindings, designRawDocument, type DesignSourceFile, type DesignToolReports} from './design-collect.ts';
 import {discoverRoutesFromSource, screenCoverageMarkdown, sourceHasEmptyState, type DesignLogin, type ScreenCoverageRow} from './design-discover.ts';
 import {examineDesignScreens, type DesignExamineInput, type DesignScreenCapture} from './design-examine.ts';
+import {takeExamStripNote} from './exam-strip-note.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {markPngRect} from './design-mark.ts';
 import {readDesignReport, writeDesignReport, type DesignReportCapture} from './design-report.ts';
@@ -129,6 +130,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     await staged.cleanup();
   }
   notes.push(...examined.notes);
+  const strip = takeExamStripNote(input.intentId);
+  if (strip) notes.push(strip);
   if (examined.confirmations.length > 999) throw new Refusal('DESIGN_FINDING_LIMIT');
   const achados = examined.confirmations.map((item, index) => toAchado(index + 1, item.finding, item.confirm, item.verifier));
   const coverageRows = screenRows(routes, captured.records);

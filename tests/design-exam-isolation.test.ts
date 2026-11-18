@@ -15,7 +15,7 @@ const supervisorSource = readFileSync(new URL('../src/native-execution-superviso
 
 /** Boolean the launch path passes to the strip, the account mount and the worker env. */
 function launchIsolates(personal: boolean, workflow: unknown, role: unknown): boolean {
-  const strip = /if\(([^)]+)\)\{await replaceSecretClassFiles\(workerArtifact\);await stripExamHostileConfig\(workerArtifact\);\}/.exec(supervisorSource);
+  const strip = /if\(([^)]+)\)\{await replaceSecretClassFiles\(workerArtifact\);const stripped=await stripExamHostileConfig\(workerArtifact\);/.exec(supervisorSource);
   const mount = /examAccountMount\(join\(this\.config\.accountRoot,g\.account_id\),([^)]+)\)/.exec(supervisorSource);
   const env = /examWorkerEnv\(this\.config\.workerEnv,([^)]+)\)/.exec(supervisorSource);
   assert.ok(strip && mount && env);

@@ -33,7 +33,8 @@ import {readPrivateWorkerFile} from './native-worker-security.ts';
 import {usageWindowsObservationSchema} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {replaceSecretClassFiles} from './verify-redact.ts';
-import {describeBind,examAccountMount,examWorkerEnv,stripExamHostileConfig} from './verify-exam-isolation.ts';
+import {rememberExamStripNote} from './exam-strip-note.ts';
+import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
 /** Specialist or reviewer of the readonly design exam. Programmer, qa and judge never match. */
 export function readonlyDesignExam(workflow: unknown, role: unknown): boolean {
@@ -254,7 +255,7 @@ export class NativeExecutionSupervisor{
   if(workerArtifact){
    // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
    await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
-   if(isolateExam){await replaceSecretClassFiles(workerArtifact);await stripExamHostileConfig(workerArtifact);}
+   if(isolateExam){await replaceSecretClassFiles(workerArtifact);const stripped=await stripExamHostileConfig(workerArtifact);const stripNote=formatExamStripNote(stripped);if(stripNote)rememberExamStripNote(input.intentId,stripNote);}
    if(!designExam&&!securityExam){
     // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
     const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];

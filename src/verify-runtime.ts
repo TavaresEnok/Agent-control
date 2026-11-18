@@ -11,6 +11,7 @@ import {loadSecurityChecklist} from './verify-checklist.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
+import {takeExamStripNote} from './exam-strip-note.ts';
 import {listExamFiles, sliceExamFiles} from './verify-slices.ts';
 import {
   Achado,
@@ -292,6 +293,8 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   }
 
   const rows = orderedCoverage(files, coverage);
+  const strip = takeExamStripNote(intent.id);
+  if (strip) notes.push(strip);
   const note = redactUnknownSecrets(notes.length ? notes.join(' ') : 'Verificação somente leitura concluída.').slice(0, 500);
   if (input.onPhase) await input.onPhase('relatorio');
   const report = await writeSecurityReport({
