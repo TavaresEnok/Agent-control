@@ -81,7 +81,12 @@ for (let i = 0; i < incoming.length; i += 1) {
 }
 const env = {...process.env};
 delete env.ANTHROPIC_API_KEY;
+delete env.ANTHROPIC_AUTH_TOKEN;
+delete env.ANTHROPIC_BASE_URL;
 delete env.CLAUDE_CONFIG_DIR;
+for (const key of Object.keys(env)) {
+  if (key.startsWith('CLAUDE_CODE_USE_')) delete env[key];
+}
 const child = spawn(real, args, {stdio: 'inherit', env});
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => child.kill(signal));
 child.on('exit', (code, signal) => {

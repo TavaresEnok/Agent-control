@@ -1,7 +1,7 @@
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Id,Refusal} from './contracts.ts';
-import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
+import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_RESTORE_FAILED_TEXT,EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {loadInstallation} from './installation.ts';
 import {beginPersonalVerification,resolvePersonalVerification} from './verify-command.ts';
 import {removeSecurityReport} from './verify-report.ts';
@@ -26,6 +26,7 @@ const messages:Record<string,string>={
  EXAM_PROVIDER_UNSUPPORTED:'O exame de leitura só aceita uma conta Claude.',
  EXAM_LOGIN_STALE:EXAM_LOGIN_STALE_TEXT,
  EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,
+ EXAM_LOGIN_RESTORE_FAILED:EXAM_LOGIN_RESTORE_FAILED_TEXT,
 };
 
 export function verifyCliFailureText(error:unknown):string{

@@ -819,7 +819,7 @@ export async function runDesignCreate(input: {
     try {
       output = await input.worker.run(call);
     } catch (error) {
-      if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
+      if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
       throw new DesignCreateModelFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
     } finally {
       await input.release(seat);

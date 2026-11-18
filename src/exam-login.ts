@@ -16,6 +16,7 @@ export const EXAM_LOGIN_LOCK_TIMEOUT = '120s';
 
 export const EXAM_LOGIN_STALE_TEXT = 'O login da conta venceu. Entre de novo: npm run gateway -- account-add.';
 export const EXAM_LOGIN_BUSY_TEXT = 'A conta está ocupada renovando o login em outra execução. Tente de novo em instantes.';
+export const EXAM_LOGIN_RESTORE_FAILED_TEXT = 'A renovação do login falhou e não foi possível restaurar o arquivo da conta.';
 
 const CREDENTIAL_LIMIT = 65536;
 const READ_OWN = constants.O_RDONLY | constants.O_NOFOLLOW;
@@ -104,6 +105,10 @@ export function examLoginBusyNote(error: unknown): string | undefined {
   return error instanceof Refusal && error.code === 'EXAM_LOGIN_BUSY' ? EXAM_LOGIN_BUSY_TEXT : undefined;
 }
 
+export function examLoginRestoreFailedNote(error: unknown): string | undefined {
+  return error instanceof Refusal && error.code === 'EXAM_LOGIN_RESTORE_FAILED' ? EXAM_LOGIN_RESTORE_FAILED_TEXT : undefined;
+}
+
 function extractCredentialSecrets(parsed: unknown): string[] {
   const strings = (value: unknown): string[] =>
     typeof value === 'string'
@@ -163,11 +168,12 @@ export async function writePrivateAtomic(file: string, body: string): Promise<vo
 /**
  * Under the account lock:
  * 1. Recalculate `Date.now()`. If remaining `expiresAt` > `examMaxMs + 10 min` and `accessToken` is present, return it without renewing.
- * 2. Otherwise atomically set `claudeAiOauth.expiresAt = 0` (preserving all other fields) and run `renew` in place.
- * 3. Require both a rotated `refreshToken` and `expiresAt > now + examMaxMs + 10 min` (+ non-empty `accessToken`).
- *    - If `refreshToken` did not change, restore the original `expiresAt` and refuse with `EXAM_LOGIN_STALE`.
- *    - If `refreshToken` changed but `expiresAt` is not fresh (or `accessToken` is missing), leave the file untouched and refuse with `EXAM_LOGIN_STALE`.
- * 4. Normalize and read the new `accessToken` still under the lock before returning.
+ * 2. Immediately before writing `claudeAiOauth.expiresAt = 0`, re-read the file; if it changed since the initial read, re-evaluate without writing `expiresAt = 0`.
+ * 3. Otherwise atomically set `claudeAiOauth.expiresAt = 0` (preserving all other fields) and run `renew` in place.
+ * 4. Require `expiresAt > now + examMaxMs + 10 min` and a changed non-empty `accessToken` (`refreshToken` may or may not have rotated).
+ *    - If renewal did not succeed and the file still has the original `refreshToken` and `accessToken`, re-read immediately before restoring `expiresAt`, and refuse with `EXAM_LOGIN_RESTORE_FAILED` if restoration write fails; otherwise refuse with `EXAM_LOGIN_STALE`.
+ *    - If `refreshToken` or `accessToken` changed but the new state is not usable, leave the file untouched and refuse with `EXAM_LOGIN_STALE`.
+ * 5. Normalize and read the new `accessToken` still under the lock before returning.
  */
 export async function prepareClaudeExamAccessToken(input: {
   accountDir: string;
@@ -176,36 +182,62 @@ export async function prepareClaudeExamAccessToken(input: {
   examMaxMs?: number;
   renew: (accountDir: string) => Promise<void>;
   lock?: AccountLoginLock;
+  hooks?: {beforeForceExpire?: () => Promise<void>; beforeRestore?: () => Promise<void>};
 }): Promise<{status: 'fresh' | 'renewed'; accessToken: string; secrets: string[]}> {
   const clock = typeof input.now === 'function' ? input.now : typeof input.now === 'number' ? () => input.now as number : () => Date.now();
   const examMaxMs = input.examMaxMs ?? DEFAULT_EXAM_MAX_MS;
 
-  const run = async (): Promise<{status: 'fresh' | 'renewed'; accessToken: string; secrets: string[]}> => {
-    const file = join(input.accountDir, '.credentials.json');
-    const lockedNow = clock();
-    const initialText = await readCredentialText(file);
-    if (initialText === undefined) throw new Refusal('EXAM_LOGIN_STALE', 409);
+  const parseCredential = (text: string | undefined): {parsed: Record<string, unknown>; oauth: Record<string, unknown> & {refreshToken: string}} => {
+    if (text === undefined) throw new Refusal('EXAM_LOGIN_STALE', 409);
     let parsed: unknown;
     try {
-      parsed = JSON.parse(initialText);
+      parsed = JSON.parse(text);
     } catch {
       throw new Refusal('EXAM_LOGIN_STALE', 409);
     }
     if (!isRecord(parsed)) throw new Refusal('EXAM_LOGIN_STALE', 409);
     const oauth = oauthOf(parsed);
     if (!oauth || !nonEmpty(oauth.refreshToken)) throw new Refusal('EXAM_LOGIN_STALE', 409);
-    const currentExpires = claudeAccessExpiresAt(oauth.expiresAt);
-    if (!examLoginNeedsRefresh(currentExpires, lockedNow, examMaxMs) && nonEmpty(oauth.accessToken)) {
-      return {
-        status: 'fresh',
-        accessToken: oauth.accessToken,
-        secrets: [...new Set([oauth.accessToken, ...extractCredentialSecrets(parsed)])],
-      };
+    return {parsed, oauth: oauth as Record<string, unknown> & {refreshToken: string}};
+  };
+
+  const run = async (): Promise<{status: 'fresh' | 'renewed'; accessToken: string; secrets: string[]}> => {
+    const file = join(input.accountDir, '.credentials.json');
+    let candidateText: string | undefined;
+    let parsed: Record<string, unknown>;
+    let oauth: Record<string, unknown> & {refreshToken: string};
+
+    for (let attempt = 0; ; attempt += 1) {
+      const lockedNow = clock();
+      const currentText = candidateText ?? (await readCredentialText(file));
+      const evaluated = parseCredential(currentText);
+      const currentExpires = claudeAccessExpiresAt(evaluated.oauth.expiresAt);
+      if (!examLoginNeedsRefresh(currentExpires, lockedNow, examMaxMs) && nonEmpty(evaluated.oauth.accessToken)) {
+        return {
+          status: 'fresh',
+          accessToken: evaluated.oauth.accessToken,
+          secrets: [...new Set([evaluated.oauth.accessToken, ...extractCredentialSecrets(evaluated.parsed)])],
+        };
+      }
+
+      await input.hooks?.beforeForceExpire?.();
+      const beforeWriteText = await readCredentialText(file);
+      if (beforeWriteText === undefined) throw new Refusal('EXAM_LOGIN_STALE', 409);
+      if (beforeWriteText !== currentText) {
+        if (attempt >= 4) throw new Refusal('EXAM_LOGIN_BUSY', 409);
+        candidateText = beforeWriteText;
+        continue;
+      }
+
+      parsed = evaluated.parsed;
+      oauth = evaluated.oauth;
+      break;
     }
 
     const hasOriginalExpiresAt = Object.prototype.hasOwnProperty.call(oauth, 'expiresAt');
     const originalRawExpiresAt = oauth.expiresAt;
     const originalRefreshToken = oauth.refreshToken;
+    const originalAccessToken = oauth.accessToken;
     const forcedDoc: Record<string, unknown> = {
       ...parsed,
       claudeAiOauth: {
@@ -222,38 +254,45 @@ export async function prepareClaudeExamAccessToken(input: {
     try {
       await input.renew(input.accountDir);
     } catch {
-      /* The file is the record. Check whether the CLI rotated and refreshed it. */
+      /* The file is the record. Check whether the CLI refreshed it. */
     }
 
     const afterNow = clock();
     const afterText = await readCredentialText(file);
-    if (afterText === undefined) throw new Refusal('EXAM_LOGIN_STALE', 409);
-    let afterParsed: unknown;
-    try {
-      afterParsed = JSON.parse(afterText);
-    } catch {
-      throw new Refusal('EXAM_LOGIN_STALE', 409);
-    }
-    if (!isRecord(afterParsed)) throw new Refusal('EXAM_LOGIN_STALE', 409);
-    const afterOauth = oauthOf(afterParsed);
-    if (!afterOauth || !nonEmpty(afterOauth.refreshToken)) throw new Refusal('EXAM_LOGIN_STALE', 409);
+    const {parsed: afterParsed, oauth: afterOauth} = parseCredential(afterText);
 
-    const refreshChanged = afterOauth.refreshToken !== originalRefreshToken;
     const afterExpires = claudeAccessExpiresAt(afterOauth.expiresAt);
     const expiresGood = examLoginFreshAfterRenew(afterExpires, afterNow, examMaxMs);
     const hasAccess = nonEmpty(afterOauth.accessToken);
+    const accessChanged = hasAccess && afterOauth.accessToken !== originalAccessToken;
 
-    if (!refreshChanged) {
-      const restoredOauth: Record<string, unknown> = {...afterOauth};
-      if (hasOriginalExpiresAt) restoredOauth.expiresAt = originalRawExpiresAt;
-      else delete restoredOauth.expiresAt;
-      const restoredDoc: Record<string, unknown> = {...afterParsed, claudeAiOauth: restoredOauth};
-      await writePrivateAtomic(file, JSON.stringify(restoredDoc)).catch(() => undefined);
-      throw new Refusal('EXAM_LOGIN_STALE', 409);
-    }
-
-    if (!expiresGood || !hasAccess) {
-      /* refreshToken rotated, but expiresAt/accessToken did not become usable: leave file untouched. */
+    if (!expiresGood || !accessChanged) {
+      if (afterOauth.refreshToken === originalRefreshToken && afterOauth.accessToken === originalAccessToken) {
+        await input.hooks?.beforeRestore?.();
+        let restoreText: string | undefined;
+        let restoreParsed: unknown;
+        try {
+          restoreText = await readCredentialText(file);
+          if (restoreText === undefined) throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
+          restoreParsed = JSON.parse(restoreText);
+        } catch {
+          throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
+        }
+        if (!isRecord(restoreParsed)) throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
+        const restoreOauth = oauthOf(restoreParsed);
+        if (!restoreOauth) throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
+        if (restoreOauth.refreshToken === originalRefreshToken && restoreOauth.accessToken === originalAccessToken) {
+          const restoredOauth: Record<string, unknown> = {...restoreOauth};
+          if (hasOriginalExpiresAt) restoredOauth.expiresAt = originalRawExpiresAt;
+          else delete restoredOauth.expiresAt;
+          const restoredDoc: Record<string, unknown> = {...restoreParsed, claudeAiOauth: restoredOauth};
+          try {
+            await writePrivateAtomic(file, JSON.stringify(restoredDoc));
+          } catch {
+            throw new Refusal('EXAM_LOGIN_RESTORE_FAILED', 409);
+          }
+        }
+      }
       throw new Refusal('EXAM_LOGIN_STALE', 409);
     }
 
@@ -386,6 +425,7 @@ export async function renewClaudeLoginInPlace(
         if (settled) return;
         settled = true;
         clearAllTimers();
+        killGroup('SIGKILL');
         if (!timedOut && code === 0) resolve();
         else reject(new Error('EXAM_LOGIN_RENEW_FAILED'));
       });

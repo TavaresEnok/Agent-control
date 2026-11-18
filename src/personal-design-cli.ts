@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
-import {EXAM_LOGIN_BUSY_TEXT, EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
+import {EXAM_LOGIN_BUSY_TEXT, EXAM_LOGIN_RESTORE_FAILED_TEXT, EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign} from './design-command.ts';
 import {DesignCreateModelFailure, runDesignCreate, type CreateExam} from './design-create.ts';
@@ -51,6 +51,7 @@ const messages: Record<string, string> = {
   DESIGN_VISUAL_NO_SCREENS: 'A crítica visual foi pedida, mas nenhuma tela entrou no exame.',
   EXAM_LOGIN_STALE: EXAM_LOGIN_STALE_TEXT,
   EXAM_LOGIN_BUSY: EXAM_LOGIN_BUSY_TEXT,
+  EXAM_LOGIN_RESTORE_FAILED: EXAM_LOGIN_RESTORE_FAILED_TEXT,
   DESIGN_REFERENCE_INVALID: 'A referência tem que ser PNG ou JPG.',
   DESIGN_REFERENCE_LIMIT: 'O exame aceita no máximo 10 referências.',
   DESIGN_CONFIG_INVALID: 'O design.config.json do projeto é inválido.',

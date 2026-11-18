@@ -12,12 +12,14 @@ import {
   DEFAULT_EXAM_MAX_MS,
   EXAM_LOGIN_BUSY_TEXT,
   EXAM_LOGIN_MARGIN_MS,
+  EXAM_LOGIN_RESTORE_FAILED_TEXT,
   EXAM_LOGIN_STALE_TEXT,
   claudeAccessExpiresAt,
   ensureExamLoginFresh,
   examLoginBusyNote,
   examLoginFreshAfterRenew,
   examLoginNeedsRefresh,
+  examLoginRestoreFailedNote,
   examLoginStaleNote,
   postgresAccountLoginLock,
   prepareClaudeExamAccessToken,
@@ -597,4 +599,199 @@ test('prepareClaudeExamAccessToken recalcula Date.now() dentro da trava e postgr
   );
   assert.equal(queries[0], "SET LOCAL lock_timeout = '120s'");
   assert.match(queries[1] ?? '', /pg_advisory_xact_lock/);
+});
+
+test('renovação vale com accessToken novo e expiresAt bom mesmo sem girar refreshToken, e falha se accessToken não mudar', async () => {
+  const now = Date.now();
+  const {dir, file} = await loginFile(document({
+    expiresAt: now + 5 * 60 * 1000,
+    access: 'fixture-access-before',
+    refresh: 'fixture-refresh-same',
+  }));
+  try {
+    const res = await prepareClaudeExamAccessToken({
+      accountDir: dir,
+      now,
+      examMaxMs: 900_000,
+      renew: async () => {
+        await writeFile(
+          file,
+          document({
+            expiresAt: now + 3 * 3600_000,
+            access: 'fixture-access-after',
+            refresh: 'fixture-refresh-same',
+          }),
+          {mode: 0o600},
+        );
+      },
+    });
+    assert.equal(res.status, 'renewed');
+    assert.equal(res.accessToken, 'fixture-access-after');
+
+    const originalExpires = now + 5 * 60 * 1000;
+    await writeFile(
+      file,
+      document({
+        expiresAt: originalExpires,
+        access: 'fixture-access-unchanged',
+        refresh: 'fixture-refresh-same-2',
+      }),
+      {mode: 0o600},
+    );
+    await assert.rejects(
+      () => prepareClaudeExamAccessToken({
+        accountDir: dir,
+        now,
+        examMaxMs: 900_000,
+        renew: async () => {
+          await writeFile(
+            file,
+            document({
+              expiresAt: now + 3 * 3600_000,
+              access: 'fixture-access-unchanged',
+              refresh: 'fixture-refresh-same-2',
+            }),
+            {mode: 0o600},
+          );
+        },
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
+    );
+    const restored = JSON.parse(await readFile(file, 'utf8')) as {claudeAiOauth: {expiresAt: number}};
+    assert.equal(restored.claudeAiOauth.expiresAt, originalExpires);
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('prepareClaudeExamAccessToken compara antes de gravar expiresAt=0 e antes de restaurar, e não engole falha na restauração', async () => {
+  const now = Date.now();
+  const staleDoc = document({expiresAt: now - 60_000, access: 'fixture-access-stale', refresh: 'fixture-refresh-stale'});
+  const {dir, file} = await loginFile(staleDoc);
+  let renewCalls = 0;
+  try {
+    // 1) Se o arquivo mudar para um token bom antes de gravar expiresAt=0, reavalia sem gravar nem renovar.
+    const freshAfterChange = document({expiresAt: now + 3 * 3600_000, access: 'fixture-access-concurrent-fresh', refresh: 'fixture-refresh-concurrent'});
+    let hooked = false;
+    const res = await prepareClaudeExamAccessToken({
+      accountDir: dir,
+      now,
+      examMaxMs: 900_000,
+      renew: async () => { renewCalls += 1; },
+      hooks: {
+        beforeForceExpire: async () => {
+          if (hooked) return;
+          hooked = true;
+          await writeFile(file, freshAfterChange, {mode: 0o600});
+        },
+      },
+    });
+    assert.equal(res.status, 'fresh');
+    assert.equal(res.accessToken, 'fixture-access-concurrent-fresh');
+    assert.equal(renewCalls, 0);
+    assert.equal(await readFile(file, 'utf8'), freshAfterChange);
+
+    // 2) Na restauração, se accessToken ou refreshToken tiver mudado no arquivo, não restaura por cima.
+    const oldExpires = now - 10_000;
+    await writeFile(file, document({expiresAt: oldExpires, access: 'a-orig', refresh: 'r-orig'}), {mode: 0o600});
+    const externalDoc = document({expiresAt: 0, access: 'a-external', refresh: 'r-orig'});
+    await assert.rejects(
+      () => prepareClaudeExamAccessToken({
+        accountDir: dir,
+        now,
+        examMaxMs: 900_000,
+        renew: async () => { throw new Error('RENEW_FAILED'); },
+        hooks: {
+          beforeRestore: async () => {
+            await writeFile(file, externalDoc, {mode: 0o600});
+          },
+        },
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
+    );
+    assert.equal(await readFile(file, 'utf8'), externalDoc);
+
+    // 3) Se a gravação da restauração falhar, propaga EXAM_LOGIN_RESTORE_FAILED com frase fixa sem token.
+    await writeFile(file, document({expiresAt: oldExpires, access: 'a-orig-2', refresh: 'r-orig-2'}), {mode: 0o600});
+    await assert.rejects(
+      () => prepareClaudeExamAccessToken({
+        accountDir: dir,
+        now,
+        examMaxMs: 900_000,
+        renew: async () => { throw new Error('RENEW_FAILED'); },
+        hooks: {
+          beforeRestore: async () => {
+            await chmod(dir, 0o500);
+          },
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Refusal && error.code === 'EXAM_LOGIN_RESTORE_FAILED');
+        const note = examLoginRestoreFailedNote(error);
+        assert.equal(note, EXAM_LOGIN_RESTORE_FAILED_TEXT);
+        assert.equal(designCliFailureText(error), EXAM_LOGIN_RESTORE_FAILED_TEXT);
+        assert.equal(verifyCliFailureText(error), EXAM_LOGIN_RESTORE_FAILED_TEXT);
+        assert.equal(EXAM_LOGIN_RESTORE_FAILED_TEXT.includes('a-orig-2'), false);
+        assert.equal(EXAM_LOGIN_RESTORE_FAILED_TEXT.includes('r-orig-2'), false);
+        return true;
+      },
+    );
+  } finally {
+    await chmod(dir, 0o700).catch(() => undefined);
+    await rm(dir, {recursive: true, force: true});
+  }
+});
+
+test('renewClaudeLoginInPlace envia SIGKILL ao grupo após exit normal do líder que deixou filho vivo antes de soltar trava', async () => {
+  const area = await mkdtemp(join(tmpdir(), 'ac-renew-orphan-'));
+  const accountDir = join(area, 'account');
+  const bin = join(area, 'parent-exits-fast');
+  const childPidFile = join(area, 'child.pid');
+  const heartbeatFile = join(area, 'child-heartbeat.log');
+  const prevBin = process.env.AC_NATIVE_CLAUDE_BIN;
+  try {
+    await mkdir(accountDir, {mode: 0o700});
+    await writeFile(
+      bin,
+      `#!${process.execPath}
+const fs = require('node:fs');
+const {spawn} = require('node:child_process');
+const child = spawn(process.execPath, ['-e', ${JSON.stringify(`
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(childPidFile)}, String(process.pid));
+setInterval(() => fs.appendFileSync(${JSON.stringify(heartbeatFile)}, 'tick\\n'), 25);
+`)}], {stdio: 'ignore'});
+child.unref();
+setTimeout(() => process.exit(0), 60);
+`,
+      {mode: 0o700},
+    );
+    await chmod(bin, 0o700);
+    process.env.AC_NATIVE_CLAUDE_BIN = bin;
+    let childAliveInsideLock = true;
+    let beatsAtLockRelease = '';
+    const lock: AccountLoginLock = async (_id, fn) => {
+      try {
+        return await fn();
+      } finally {
+        const pid = Number((await readFile(childPidFile, 'utf8')).trim());
+        await new Promise(resolve => setTimeout(resolve, 40));
+        try {
+          process.kill(pid, 0);
+          childAliveInsideLock = true;
+        } catch (error) {
+          childAliveInsideLock = (error as NodeJS.ErrnoException).code !== 'ESRCH';
+        }
+        beatsAtLockRelease = await readFile(heartbeatFile, 'utf8').catch(() => '');
+      }
+    };
+    await lock('acc-orphan', () => renewClaudeLoginInPlace(accountDir));
+    assert.equal(childAliveInsideLock, false);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(await readFile(heartbeatFile, 'utf8').catch(() => ''), beatsAtLockRelease);
+  } finally {
+    if (prevBin === undefined) delete process.env.AC_NATIVE_CLAUDE_BIN;
+    else process.env.AC_NATIVE_CLAUDE_BIN = prevBin;
+    await rm(area, {recursive: true, force: true});
+  }
 });

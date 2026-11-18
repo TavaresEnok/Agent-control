@@ -1,22 +1,30 @@
 import {mock, test} from 'node:test';
 import assert from 'node:assert/strict';
-import {generateKeyPairSync, randomUUID, verify} from 'node:crypto';
+import {createHash, createHmac, generateKeyPairSync, randomUUID, verify} from 'node:crypto';
 import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
+import {Capacity} from '../src/capacity.ts';
+import {ProviderCollectors} from '../src/providers.ts';
+import {createSyntheticProviderAdapter} from '../src/synthetic-provider-adapter.ts';
 import {AccountHomes} from '../src/account-homes.ts';
-import {Authority, Refusal, canonical} from '../src/contracts.ts';
+import {Authority, Refusal, canonical, digest} from '../src/contracts.ts';
 import {GitArtifacts} from '../src/git.ts';
 import {NativeExecutionRequest, NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
-import {prepareClaudeExamWorkerEnv} from '../src/native-execution-worker.ts';
+import {isClaudeExamWorker, prepareClaudeExamWorkerEnv} from '../src/native-execution-worker.ts';
 import {ClaudeExecutionAdapter, ClaudeExecutionFailure} from '../src/claude-execution-adapter.ts';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
 import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {readNativeSecretSnapshot} from '../src/native-execution-secret-snapshot.ts';
 import {redactNativeDockerLogs} from '../src/native-execution-redaction.ts';
+import {ProviderEligibility} from '../src/provider-eligibility.ts';
+import {authorizeNativeSyntheticFixture} from '../src/native-synthetic-fixture.ts';
+import {EXAM_LOGIN_MARGIN_MS} from '../src/exam-login.ts';
 import {runDesignModule} from '../src/design-module.ts';
 import {runDesignCreate} from '../src/design-create.ts';
+import {runSecurityVerification} from '../src/verify-runtime.ts';
+import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 type Row = Record<string, unknown>;
 
@@ -82,10 +90,58 @@ class MountMemory {
       grant.physical_receipt = params[1];
       return wrote(1);
     }
-    if (text.startsWith('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE')) {
+    if (text.startsWith('SELECT * FROM ac_capacity_grants WHERE id=$1')) {
       const grant = this.tables.ac_capacity_grants?.find(row => row.id === params[0]);
       return selected(grant ? [{...grant}] : []);
     }
+    if (text.startsWith('SELECT exhausted_until FROM ac_accounts WHERE id=$1')) {
+      const account = this.tables.ac_accounts?.find(row => row.id === params[0]);
+      return selected(account ? [{exhausted_until: account.exhausted_until ?? null}] : []);
+    }
+    if (text.startsWith('UPDATE ac_accounts SET exhausted_until=$2 WHERE id=$1')) {
+      let account = this.tables.ac_accounts?.find(row => row.id === params[0]);
+      if (!account) {
+        account = {id: params[0], exhausted_until: params[1]};
+        this.insert('ac_accounts', account);
+      } else {
+        account.exhausted_until = params[1];
+      }
+      return wrote(1);
+    }
+    if (text.startsWith('SELECT j.*,g.state grant_state,g.physical_receipt,g.manager_epoch grant_epoch')) {
+      const job = this.tables.ac_native_execution_jobs?.find(row => row.id === params[0] && row.context_id === params[1]);
+      const grant = this.tables.ac_capacity_grants?.find(row => row.id === job?.grant_id);
+      const intent = this.tables.ac_intents?.find(row => row.id === job?.intent_id);
+      return job && grant && intent ? selected([{
+        ...job,
+        grant_state: grant.state,
+        physical_receipt: grant.physical_receipt ?? null,
+        grant_epoch: grant.manager_epoch,
+        grant_intent: grant.intent_id,
+        grant_context: grant.context_id,
+        grant_account: grant.account_id,
+        grant_profile: grant.profile_id,
+        grant_role: grant.role,
+        resource_kind: grant.resource_kind,
+        parent_intent_id: intent.parent_intent_id ?? null,
+      }]) : selected([]);
+    }
+    if (text.startsWith('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1')) {
+      const row = this.tables.ac_native_terminal_retirements?.find(item => item.job_id === params[0]);
+      return selected(row ? [{...row}] : []);
+    }
+    if (text.startsWith('INSERT INTO ac_native_terminal_retirements')) {
+      this.insert('ac_native_terminal_retirements', {job_id: params[0], binding: params[1], state: 'prepared', proof: null});
+      return wrote(1);
+    }
+    if (text.startsWith("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1")) {
+      const row = this.tables.ac_native_terminal_retirements?.find(item => item.job_id === params[0] && item.state === 'prepared');
+      if (!row) return wrote(0);
+      row.state = 'removed';
+      row.proof = params[1];
+      return wrote(1);
+    }
+    if (text.startsWith('INSERT INTO ac_audit')) return wrote(1);
     if (text.startsWith('UPDATE ac_native_execution_jobs SET state=$2,worker_id=$3,tools_id=$4,receipt=$5 WHERE id=$1')) {
       const job = this.one('ac_native_execution_jobs', String(params[0]));
       job.state = params[1];
@@ -120,6 +176,10 @@ class MountMemory {
       const job = this.tables.ac_native_execution_jobs?.find(row => row.id === params[0] && row.context_id === params[1]);
       const grant = this.tables.ac_capacity_grants?.find(row => row.id === job?.grant_id);
       return job && grant ? selected([{...job, grant_state: grant.state, physical_receipt: grant.physical_receipt ?? null}]) : selected([]);
+    }
+    if (text.startsWith('SELECT intent_id FROM ac_native_execution_jobs WHERE id=$1 AND context_id=$2')) {
+      const job = this.tables.ac_native_execution_jobs?.find(row => row.id === params[0] && row.context_id === params[1]);
+      return selected(job ? [{intent_id: job.intent_id}] : []);
     }
     if (text.startsWith('SELECT * FROM ac_native_execution_jobs WHERE id=$1')) {
       const job = this.tables.ac_native_execution_jobs?.find(row => row.id === params[0]);
@@ -317,7 +377,6 @@ test('the real supervisor mounts the exam worker read-only with AC_VERIFY_EXAM=1
     await rm(area, {recursive: true, force: true});
   }
 });
-
 test('exame Claude não monta .credentials.json, força renovação no lugar, leva accessToken no launch assinado e libera grant em qualquer recusa', async () => {
   const {ledger, memory} = substituteLedger();
   const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-oauth-')));
@@ -736,13 +795,17 @@ test('o worker do exame não tem .credentials.json em disco, passa CLAUDE_CODE_O
       `#!${process.execPath}
 const fs = require('node:fs');
 const readline = require('node:readline');
-fs.writeFileSync(${JSON.stringify(tracePath)}, JSON.stringify({
-  argv: process.argv.slice(2),
-  oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
-  claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null,
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? null,
-  home: process.env.HOME ?? null,
-}));
+    fs.writeFileSync(${JSON.stringify(tracePath)}, JSON.stringify({
+      argv: process.argv.slice(2),
+      oauthToken: process.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
+      claudeConfigDir: process.env.CLAUDE_CONFIG_DIR ?? null,
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? null,
+      anthropicAuthToken: process.env.ANTHROPIC_AUTH_TOKEN ?? null,
+      anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL ?? null,
+      claudeCodeUseBedrock: process.env.CLAUDE_CODE_USE_BEDROCK ?? null,
+      claudeCodeUseVertex: process.env.CLAUDE_CODE_USE_VERTEX ?? null,
+      home: process.env.HOME ?? null,
+    }));
 const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});
 rl.once('line', line => {
   const parsed = JSON.parse(line);
@@ -773,6 +836,10 @@ rl.once('line', line => {
 
     // Simula variáveis que não podem vazar para o CLI do exame.
     process.env.ANTHROPIC_API_KEY = 'sk-ant-forbidden-key';
+    process.env.ANTHROPIC_AUTH_TOKEN = 'forbidden-auth-token';
+    process.env.ANTHROPIC_BASE_URL = 'https://forbidden.proxy.invalid';
+    process.env.CLAUDE_CODE_USE_BEDROCK = '1';
+    process.env.CLAUDE_CODE_USE_VERTEX = '1';
     process.env.CLAUDE_CONFIG_DIR = '/forbidden/config/dir';
 
     const prepared = await prepareClaudeExamWorkerEnv({
@@ -786,6 +853,10 @@ rl.once('line', line => {
     assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, accessToken);
     assert.equal(process.env.CLAUDE_CONFIG_DIR, undefined);
     assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
+    assert.equal(process.env.ANTHROPIC_AUTH_TOKEN, undefined);
+    assert.equal(process.env.ANTHROPIC_BASE_URL, undefined);
+    assert.equal(process.env.CLAUDE_CODE_USE_BEDROCK, undefined);
+    assert.equal(process.env.CLAUDE_CODE_USE_VERTEX, undefined);
 
     const filesInTmp = await listFilesRecursive(tmpArea);
     assert.equal(filesInTmp.some(f => f.endsWith('.credentials.json')), false);
@@ -830,15 +901,36 @@ rl.once('line', line => {
       oauthToken: string | null;
       claudeConfigDir: string | null;
       anthropicApiKey: string | null;
+      anthropicAuthToken: string | null;
+      anthropicBaseUrl: string | null;
+      claudeCodeUseBedrock: string | null;
+      claudeCodeUseVertex: string | null;
       home: string | null;
     };
     assert.equal(trace.oauthToken, accessToken);
     assert.equal(trace.claudeConfigDir, null);
     assert.equal(trace.anthropicApiKey, null);
+    assert.equal(trace.anthropicAuthToken, null);
+    assert.equal(trace.anthropicBaseUrl, null);
+    assert.equal(trace.claudeCodeUseBedrock, null);
+    assert.equal(trace.claudeCodeUseVertex, null);
     assert.equal(trace.home, prepared.examHome);
     assert.equal(trace.argv.includes(accessToken), false);
     assert.equal(ran.output.includes(accessToken), false);
     assert.equal(JSON.parse(ran.output).leaked, '[REDACTED]');
+
+    const execResultPath = join(area, 'execution-result.json');
+    await writeFile(execResultPath, JSON.stringify({
+      schemaVersion: 1,
+      jobId: randomUUID(),
+      output: ran.output,
+      normalizedTokensUsed: ran.tokensUsed,
+      usageWindows: ran.usageWindows,
+      nativeSessionId: ran.nativeSessionId,
+      failureCode: null,
+      exitCode: 0,
+    }), {mode: 0o600});
+    assert.equal((await readFile(execResultPath, 'utf8')).includes(accessToken), false);
 
     // Se o token vencer no meio do job, falha com PROVIDER_AUTH_FAILED sem vazar o token.
     await assert.rejects(
@@ -1022,6 +1114,1034 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
   } finally {
     homes.mock.restore();
     snaps.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no reconcile após reinício, e falha em stageDesignCapturesForJob libera grant', async () => {
+  const {ledger, memory} = substituteLedger();
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-lifecycle-')));
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const capturesRoot = join(area, 'captures');
+  const project = randomUUID();
+  const principal = 'exam-life-' + randomUUID();
+  const account = randomUUID();
+  const profile = randomUUID();
+  const context = randomUUID();
+  const instance = randomUUID();
+  const intent = randomUUID();
+  const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => ({accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'}));
+  const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
+    await mkdir(destination, {recursive: true, mode: 0o700});
+  });
+  const fakeSocketServer = await import('node:http');
+  const sockPath = join(area, 'docker.sock');
+  let workerContainerId = '';
+  let toolsContainerId = '';
+  let networkContainerId = '';
+  let lastJobId = '';
+  let lastLaunchHash = '';
+  let workerCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  let toolsCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  const createdConfigs: Array<{name: string; configuration: unknown}> = [];
+  const server = fakeSocketServer.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === `/v1.44/containers/${workerContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: workerContainerId,
+        Image: 'sha256:' + 'c'.repeat(64),
+        Config: {
+          User: `${process.getuid?.()}:${process.getgid?.()}`,
+          Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+          Entrypoint: ['node', '/opt/agent-control/dist/src/native-execution-worker.mjs'],
+          Cmd: [],
+          Env: workerCreatedConfig?.Env ?? [],
+          WorkingDir: '/planning',
+        },
+        State: {Status: 'running', Running: true},
+        HostConfig: {
+          NetworkMode: networkContainerId,
+          PidMode: '',
+          IpcMode: '',
+          Privileged: false,
+          ReadonlyRootfs: true,
+          CapDrop: ['ALL'],
+          CapAdd: [],
+          SecurityOpt: ['no-new-privileges:true'],
+          Devices: [],
+          PidsLimit: 96,
+          Memory: 512 * 1024 * 1024,
+          NanoCpus: 1e9,
+          PortBindings: {},
+        },
+        Mounts: (workerCreatedConfig?.HostConfig?.Binds ?? []).map(b => {
+          const [source, destination, mode] = b.split(':');
+          return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'};
+        }),
+        NetworkSettings: {Networks: {
+          [networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.3'},
+          ['d'.repeat(64)]: {NetworkID: 'd'.repeat(64), IPAddress: '172.21.0.3'},
+        }},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/containers/${toolsContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: toolsContainerId,
+        Image: 'sha256:' + 'c'.repeat(64),
+        Config: {
+          User: `${process.getuid?.()}:${process.getgid?.()}`,
+          Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+          Entrypoint: ['node', '/opt/agent-control/dist/src/native-tools-worker.mjs'],
+          Cmd: [],
+          Env: toolsCreatedConfig?.Env ?? [],
+          WorkingDir: '/work',
+        },
+        State: {Status: 'running', Running: true},
+        HostConfig: {
+          NetworkMode: networkContainerId,
+          PidMode: '',
+          IpcMode: '',
+          Privileged: false,
+          ReadonlyRootfs: true,
+          CapDrop: ['ALL'],
+          CapAdd: [],
+          SecurityOpt: ['no-new-privileges:true'],
+          Devices: [],
+          PidsLimit: 96,
+          Memory: 512 * 1024 * 1024,
+          NanoCpus: 1e9,
+          PortBindings: {},
+        },
+        Mounts: (toolsCreatedConfig?.HostConfig?.Binds ?? []).map(b => {
+          const [source, destination, mode] = b.split(':');
+          return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'};
+        }),
+        NetworkSettings: {Networks: {[networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.2'}}},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/networks/${networkContainerId}`) {
+      res.end(JSON.stringify({
+        Id: networkContainerId,
+        Internal: true,
+        Containers: {
+          [toolsContainerId]: {IPv4Address: '172.20.0.2/16'},
+          [workerContainerId]: {IPv4Address: '172.20.0.3/16'},
+        },
+      }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('{}');
+  });
+
+  const prevCaptureDir = process.env.AC_DESIGN_CAPTURE_DIR;
+  const prevCaptureRun = process.env.AC_DESIGN_CAPTURE_RUN;
+  const accessSecret = 'fixture-access-lifecycle-secret-9988';
+  const refreshSecret = 'fixture-refresh-lifecycle-secret-9988';
+  try {
+    await new Promise<void>(resolve => server.listen(sockPath, resolve));
+    for (const path of [repo, spool, accounts, join(accounts, account), capturesRoot]) {
+      await mkdir(path, {recursive: true, mode: 0o700});
+    }
+    await writeFile(join(accounts, account, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: {
+        accessToken: accessSecret,
+        refreshToken: refreshSecret,
+        expiresAt: Date.now() + 3 * 3600_000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+    memory.insert('ac_projects', {id: project});
+    memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_project_repositories', {project_id: project, repo});
+    memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
+    memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
+    memory.insert('ac_admission_control', {id: 1, enabled: true});
+    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    const keys = generateKeyPairSync('ed25519');
+    const image = 'sha256:' + 'c'.repeat(64);
+    const containers = new Map<string, Row>();
+    const networks = new Set<string>();
+    let sequence = 0;
+    const makeDaemon = () => ({
+      imagePresent: async () => true,
+      inspect: async (idOrName: string) => containers.get(idOrName) ?? null,
+      inspectPrivateNetwork: async (id: string) => networks.has(id) ? ({
+        Id: id,
+        Name: `ac-native-exec-${lastJobId}`,
+        Internal: true,
+        Labels: {'agent-control.contract': 'native-execution-v1', 'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+        Containers: Object.keys(containers.size ? {[toolsContainerId]: 1} : {}).length === 0 ? {} : (containers.has(toolsContainerId) || containers.has(workerContainerId) ? {[toolsContainerId]: {IPv4Address: '172.20.0.2/16'}, [workerContainerId]: {IPv4Address: '172.20.0.3/16'}} : {}),
+      }) : null,
+      stop: async () => {},
+      remove: async (id: string) => {
+        for (const [key, item] of [...containers]) {
+          if (key === id || item.Id === id) containers.delete(key);
+        }
+      },
+      removePrivateNetwork: async (id: string) => { networks.delete(id); },
+      logs: async () => {
+        const frame = Buffer.from(`worker log leaked ${accessSecret}\n`, 'utf8');
+        const header = Buffer.alloc(8);
+        header[0] = 1;
+        header.writeUInt32BE(frame.length, 4);
+        return Buffer.concat([header, frame]);
+      },
+      createPrivateNetwork: async () => {
+        networkContainerId = `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`;
+        networks.add(networkContainerId);
+        return networkContainerId;
+      },
+      create: async (name: string, configuration: {Image?: string; Labels?: Record<string, string>; Env?: string[]; HostConfig?: {Binds?: string[]}}) => {
+        const id = `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
+        createdConfigs.push({name, configuration});
+        const record: Row = {
+          Id: id,
+          Image: configuration.Image,
+          Config: {Labels: configuration.Labels ?? {}},
+          State: {Status: 'running', Running: true, ExitCode: 0, FinishedAt: '0001-01-01T00:00:00Z'},
+        };
+        containers.set(name, record);
+        containers.set(id, record);
+        if (name.startsWith('ac-native-worker-')) {
+          workerContainerId = id;
+          workerCreatedConfig = configuration;
+        } else {
+          toolsContainerId = id;
+          toolsCreatedConfig = configuration;
+        }
+        return id;
+      },
+      start: async () => {},
+    });
+
+    const supervisorConfig = {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [] as string[],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude' as const,
+      socketPath: sockPath,
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: ['AC_FIXTURE=1'],
+      toolsEnv: [] as string[],
+    };
+    const supervisor = new NativeExecutionSupervisor(ledger, supervisorConfig, {assertAdmission: async () => {}});
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+    Object.defineProperty(supervisor, 'doc' + 'ker', {value: makeDaemon()});
+
+    // 1) Execução completa -> reconcile apaga launch.json e docker create nunca recebe o token; retireTerminal redaciona o log do supervisor.
+    const grant1 = randomUUID();
+    const job1 = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grant1, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const input1 = NativeExecutionRequest.parse({
+      jobId: job1, intentId: intent, grantId: grant1, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    lastJobId = job1;
+    lastLaunchHash = digest(input1);
+    await supervisor.start(principal, authority, input1);
+
+    for (const item of createdConfigs) {
+      assert.equal(JSON.stringify(item.configuration).includes(accessSecret), false);
+      assert.equal(JSON.stringify(item.configuration).includes(refreshSecret), false);
+    }
+    const launchPath1 = join(spool, job1, 'input', 'launch.json');
+    assert.equal((await lstat(launchPath1)).isFile(), true);
+
+    const finishedAt = new Date().toISOString();
+    (containers.get(workerContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 0, FinishedAt: finishedAt};
+    (containers.get(toolsContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 0, FinishedAt: finishedAt};
+    await writeFile(join(spool, job1, 'output', 'execution-result.json'), JSON.stringify({
+      schemaVersion: 1, jobId: job1, output: '{"kind":"exame"}', normalizedTokensUsed: 10, usageWindows: null, nativeSessionId: null, failureCode: null, exitCode: 0,
+    }), {mode: 0o600});
+
+    const outcome1 = await supervisor.reconcile(principal, authority, input1);
+    assert.equal(outcome1.state, 'completed');
+    await assert.rejects(() => lstat(launchPath1), {code: 'ENOENT'});
+
+    // Reinício do supervisor: se launch.json reaparecer de execução antiga já finalizada, reconcile também o apaga.
+    await writeFile(launchPath1, '{"stale":true}\n', {mode: 0o600});
+    const restarted = new NativeExecutionSupervisor(ledger, supervisorConfig, {assertAdmission: async () => {}});
+    Object.defineProperty(restarted, 'doc' + 'ker', {value: makeDaemon()});
+    const replayed = await restarted.reconcile(principal, authority, input1);
+    assert.equal(replayed.state, 'completed');
+    await assert.rejects(() => lstat(launchPath1), {code: 'ENOENT'});
+
+    const retired = await restarted.retireTerminal(principal, authority, job1);
+    assert.equal(retired.state, 'removed');
+    await assert.rejects(() => lstat(launchPath1), {code: 'ENOENT'});
+    assert.equal((await readFile(join(spool, job1, 'worker-terminal.log'), 'utf8')).includes(accessSecret), false);
+    assert.equal((await readFile(join(spool, job1, 'tools-terminal.log'), 'utf8')).includes(accessSecret), false);
+
+    // 2) Falha injetada em stageDesignCapturesForJob antes do launch -> libera o grant e apaga diretório do job.
+    const badRun = randomUUID();
+    const badRunDir = join(capturesRoot, badRun);
+    await mkdir(badRunDir, {mode: 0o700});
+    const oversizedBytes = Buffer.alloc(2_000_100, 0x61);
+    const oversizedSha = createHash('sha256').update(oversizedBytes).digest('hex');
+    await writeFile(join(badRunDir, `${oversizedSha}.png`), oversizedBytes, {mode: 0o600});
+    await mkdir(join(badRunDir, 'stage-notes.txt'), {mode: 0o700});
+    process.env.AC_DESIGN_CAPTURE_DIR = capturesRoot;
+    process.env.AC_DESIGN_CAPTURE_RUN = badRun;
+
+    const failGrant = randomUUID();
+    const failJob = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: failGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const failInput = NativeExecutionRequest.parse({
+      jobId: failJob, intentId: intent, grantId: failGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(() => supervisor.start(principal, authority, failInput), /EISDIR/);
+    assert.equal(memory.one('ac_capacity_grants', failGrant).state, 'released');
+    assert.equal((memory.one('ac_capacity_grants', failGrant).physical_receipt as {reason: string}).reason, 'pre_launch_failed');
+    await assert.rejects(() => lstat(join(spool, failJob)), {code: 'ENOENT'});
+    await assert.rejects(() => lstat(join(spool, failJob, 'input', 'launch.json')), {code: 'ENOENT'});
+
+    // 3) Recuperação sem início (released_unstarted) também remove launch.pending/launch.json residuais.
+    const unstartedGrant = randomUUID();
+    const unstartedJob = randomUUID();
+    const unstartedSession = randomUUID();
+    const unstartedInput = NativeExecutionRequest.parse({
+      jobId: unstartedJob, intentId: intent, grantId: unstartedGrant, sessionId: unstartedSession, base: 'e'.repeat(40),
+      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    const unstartedHash = digest(unstartedInput);
+    const createdState = {Status: 'created', Running: false, ExitCode: 0, FinishedAt: '0001-01-01T00:00:00Z', StartedAt: '0001-01-01T00:00:00Z', Pid: 0};
+    const wUnstarted = '81'.repeat(32);
+    const tUnstarted = '82'.repeat(32);
+    const nUnstarted = '83'.repeat(32);
+    const uLabels = {'agent-control.job': unstartedJob, 'agent-control.launch': unstartedHash, 'agent-control.contract': 'native-execution-v1'};
+    containers.set(`ac-native-worker-${unstartedJob}`, {Id: wUnstarted, Image: image, Config: {Labels: uLabels}, State: createdState});
+    containers.set(`ac-native-tools-${unstartedJob}`, {Id: tUnstarted, Image: image, Config: {Labels: uLabels}, State: createdState});
+    memory.insert('ac_capacity_grants', {
+      id: unstartedGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'uncertain',
+    });
+    memory.insert('ac_native_execution_jobs', {
+      id: unstartedJob, grant_id: unstartedGrant, intent_id: intent, context_id: context, manager_epoch: authority.epoch,
+      session_id: unstartedSession, executor_digest: supervisor.executorDigest, key_fingerprint: supervisor.keyFingerprint,
+      input_digest: unstartedHash, base_id: unstartedInput.base, role: 'specialist', account_id: account, profile_id: profile,
+      profile_digest: digest({fixture: true}), eligibility_revision: 1, state: 'uncertain',
+      worker_id: wUnstarted, tools_id: tUnstarted, network_id: nUnstarted,
+    });
+    await mkdir(join(spool, unstartedJob, 'input'), {recursive: true, mode: 0o700});
+    await writeFile(join(spool, unstartedJob, 'input', 'launch.pending'), '{"pending":true}\n', {mode: 0o600});
+    const recUnstarted = await supervisor.recover(principal, authority, unstartedJob);
+    assert.equal(recUnstarted.state, 'released_unstarted');
+    await assert.rejects(() => lstat(join(spool, unstartedJob, 'input', 'launch.pending')), {code: 'ENOENT'});
+    await assert.rejects(() => lstat(join(spool, unstartedJob, 'input', 'launch.json')), {code: 'ENOENT'});
+  } finally {
+    if (prevCaptureDir === undefined) delete process.env.AC_DESIGN_CAPTURE_DIR;
+    else process.env.AC_DESIGN_CAPTURE_DIR = prevCaptureDir;
+    if (prevCaptureRun === undefined) delete process.env.AC_DESIGN_CAPTURE_RUN;
+    else process.env.AC_DESIGN_CAPTURE_RUN = prevCaptureRun;
+    server.close();
+    homes.mock.restore();
+    snaps.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('resumeExecutionContainers no exame Claude re-prepara token sem reutilizar antigo e falha job com código da recusa', async () => {
+  const {ledger, memory} = substituteLedger();
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-resume-')));
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const project = randomUUID();
+  const principal = 'exam-resume-' + randomUUID();
+  const account = randomUUID();
+  const profile = randomUUID();
+  const context = randomUUID();
+  const instance = randomUUID();
+  const intent = randomUUID();
+  const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => ({accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'}));
+  const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
+    await mkdir(destination, {recursive: true, mode: 0o700});
+  });
+  const fakeSocketServer = await import('node:http');
+  const sockPath = join(area, 'docker.sock');
+  let workerContainerId = '';
+  let toolsContainerId = '';
+  let networkContainerId = '';
+  let lastJobId = '';
+  let lastLaunchHash = '';
+  let workerCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  let toolsCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  const server = fakeSocketServer.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === `/v1.44/containers/${workerContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: workerContainerId,
+        Image: 'sha256:' + 'c'.repeat(64),
+        Config: {
+          User: `${process.getuid?.()}:${process.getgid?.()}`,
+          Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+          Entrypoint: ['node', '/opt/agent-control/dist/src/native-execution-worker.mjs'],
+          Cmd: [],
+          Env: workerCreatedConfig?.Env ?? [],
+          WorkingDir: '/planning',
+        },
+        State: {Status: 'running', Running: true},
+        HostConfig: {
+          NetworkMode: networkContainerId,
+          PidMode: '', IpcMode: '', Privileged: false, ReadonlyRootfs: true,
+          CapDrop: ['ALL'], CapAdd: [], SecurityOpt: ['no-new-privileges:true'], Devices: [],
+          PidsLimit: 96, Memory: 512 * 1024 * 1024, NanoCpus: 1e9, PortBindings: {},
+        },
+        Mounts: (workerCreatedConfig?.HostConfig?.Binds ?? []).map(b => {
+          const [source, destination, mode] = b.split(':');
+          return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'};
+        }),
+        NetworkSettings: {Networks: {
+          [networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.3'},
+          ['d'.repeat(64)]: {NetworkID: 'd'.repeat(64), IPAddress: '172.21.0.3'},
+        }},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/containers/${toolsContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: toolsContainerId,
+        Image: 'sha256:' + 'c'.repeat(64),
+        Config: {
+          User: `${process.getuid?.()}:${process.getgid?.()}`,
+          Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+          Entrypoint: ['node', '/opt/agent-control/dist/src/native-tools-worker.mjs'],
+          Cmd: [],
+          Env: toolsCreatedConfig?.Env ?? [],
+          WorkingDir: '/work',
+        },
+        State: {Status: 'running', Running: true},
+        HostConfig: {
+          NetworkMode: networkContainerId,
+          PidMode: '', IpcMode: '', Privileged: false, ReadonlyRootfs: true,
+          CapDrop: ['ALL'], CapAdd: [], SecurityOpt: ['no-new-privileges:true'], Devices: [],
+          PidsLimit: 96, Memory: 512 * 1024 * 1024, NanoCpus: 1e9, PortBindings: {},
+        },
+        Mounts: (toolsCreatedConfig?.HostConfig?.Binds ?? []).map(b => {
+          const [source, destination, mode] = b.split(':');
+          return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'};
+        }),
+        NetworkSettings: {Networks: {[networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.2'}}},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/networks/${networkContainerId}`) {
+      res.end(JSON.stringify({
+        Id: networkContainerId,
+        Internal: true,
+        Containers: {
+          [toolsContainerId]: {IPv4Address: '172.20.0.2/16'},
+          [workerContainerId]: {IPv4Address: '172.20.0.3/16'},
+        },
+      }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('{}');
+  });
+
+  try {
+    await new Promise<void>(resolve => server.listen(sockPath, resolve));
+    for (const path of [repo, spool, accounts, join(accounts, account)]) {
+      await mkdir(path, {recursive: true, mode: 0o700});
+    }
+    const credential = join(accounts, account, '.credentials.json');
+    await writeFile(credential, JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'fixture-access-initial-resume',
+        refreshToken: 'fixture-refresh-initial-resume',
+        expiresAt: Date.now() + 3 * 3600_000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+    memory.insert('ac_projects', {id: project});
+    memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_project_repositories', {project_id: project, repo});
+    memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
+    memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
+    memory.insert('ac_admission_control', {id: 1, enabled: true});
+    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'security-verify-readonly-v1'}}});
+    const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    const keys = generateKeyPairSync('ed25519');
+    const image = 'sha256:' + 'c'.repeat(64);
+    const containers = new Map<string, Row>();
+    const networks = new Set<string>();
+    let sequence = 0;
+    let startCalls = 0;
+    let renewMode: 'ok' | 'fail' = 'ok';
+    let renewCalls = 0;
+    const daemon = {
+      imagePresent: async () => true,
+      inspect: async (idOrName: string) => containers.get(idOrName) ?? null,
+      inspectPrivateNetwork: async (id: string) => networks.has(id) ? ({
+        Id: id,
+        Name: `ac-native-exec-${lastJobId}`,
+        Internal: true,
+        Labels: {'agent-control.contract': 'native-execution-v1', 'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+        Containers: containers.has(toolsContainerId) || containers.has(workerContainerId) ? {[toolsContainerId]: {IPv4Address: '172.20.0.2/16'}, [workerContainerId]: {IPv4Address: '172.20.0.3/16'}} : {},
+      }) : null,
+      stop: async () => {},
+      remove: async (id: string) => {
+        for (const [k, item] of [...containers]) if (k === id || item.Id === id) containers.delete(k);
+      },
+      removePrivateNetwork: async (id: string) => { networks.delete(id); },
+      logs: async () => Buffer.alloc(0),
+      createPrivateNetwork: async () => {
+        networkContainerId = `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`;
+        networks.add(networkContainerId);
+        return networkContainerId;
+      },
+      create: async (name: string, configuration: {Image?: string; Labels?: Record<string, string>; Env?: string[]; HostConfig?: {Binds?: string[]}}) => {
+        const id = `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
+        const record: Row = {
+          Id: id,
+          Image: configuration.Image,
+          Config: {Labels: configuration.Labels ?? {}},
+          State: {Status: 'running', Running: true, ExitCode: 0, FinishedAt: '0001-01-01T00:00:00Z'},
+        };
+        containers.set(name, record);
+        containers.set(id, record);
+        if (name.startsWith('ac-native-worker-')) {
+          workerContainerId = id;
+          workerCreatedConfig = configuration;
+        } else {
+          toolsContainerId = id;
+          toolsCreatedConfig = configuration;
+        }
+        return id;
+      },
+      start: async () => { startCalls += 1; },
+    };
+
+    const supervisor = new NativeExecutionSupervisor(ledger, {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude',
+      socketPath: sockPath,
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: [],
+      toolsEnv: [],
+      examLoginRenew: async () => {
+        renewCalls += 1;
+        if (renewMode === 'fail') throw new Error('RENEW_FAILED');
+        await writeFile(credential, JSON.stringify({
+          claudeAiOauth: {
+            accessToken: 'fixture-access-resumed-new',
+            refreshToken: 'fixture-refresh-resumed-new',
+            expiresAt: Date.now() + 3 * 3600_000,
+            scopes: ['user:inference'],
+          },
+        }), {mode: 0o600});
+      },
+    }, {assertAdmission: async () => {}});
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+    Object.defineProperty(supervisor, 'doc' + 'ker', {value: daemon});
+
+    const grantId = randomUUID();
+    const jobId = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grantId, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const req = NativeExecutionRequest.parse({
+      jobId, intentId: intent, grantId, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Exame retomada.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    lastJobId = jobId;
+    lastLaunchHash = digest(req);
+    await supervisor.start(principal, authority, req);
+    const startCallsAtLaunch = startCalls;
+
+    // 1) Worker sai por limite do provedor; depois do reset, retoma renovando o token no lugar e re-assinando launch.json.
+    const pastLimitAt = new Date(Date.now() - 60_000).toISOString();
+    (containers.get(workerContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 1, FinishedAt: pastLimitAt};
+    (containers.get(toolsContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 0, FinishedAt: pastLimitAt};
+    memory.insert('ac_accounts', {id: account, exhausted_until: new Date(Date.now() - 5_000).toISOString()});
+    await writeFile(join(spool, jobId, 'output', 'execution-result.json'), JSON.stringify({
+      schemaVersion: 1, jobId, output: '', normalizedTokensUsed: null, usageWindows: null, nativeSessionId: null, failureCode: 'PROVIDER_USAGE_LIMIT', exitCode: 1,
+    }), {mode: 0o600});
+
+    // Deixa o token atual prestes a vencer para obrigar a retomada a renovar.
+    await writeFile(credential, JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'fixture-access-initial-resume',
+        refreshToken: 'fixture-refresh-initial-resume',
+        expiresAt: Date.now() + EXAM_LOGIN_MARGIN_MS,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+
+    const resumedOutcome = await supervisor.reconcile(principal, authority, req);
+    assert.equal(resumedOutcome.state, 'running');
+    assert.equal(renewCalls, 1);
+    assert.equal(startCalls, startCallsAtLaunch + 2);
+    const resumedLaunch = JSON.parse(await readFile(join(spool, jobId, 'input', 'launch.json'), 'utf8')) as {
+      payload: {oauthAccessToken?: string; credentialSnapshotTag: string};
+      signature: string;
+    };
+    assert.equal(
+      verify(null, Buffer.from('agent-control:native-execution-launch:v1\n' + canonical(resumedLaunch.payload)), keys.publicKey, Buffer.from(resumedLaunch.signature, 'hex')),
+      true,
+    );
+    assert.equal(resumedLaunch.payload.oauthAccessToken, 'fixture-access-resumed-new');
+    const execToken = (await readFile(join(spool, jobId, 'worker-token'), 'utf8')).trim();
+    assert.equal(
+      resumedLaunch.payload.credentialSnapshotTag,
+      createHmac('sha256', execToken).update(canonical(['fixture-access-resumed-new'])).digest('hex'),
+    );
+    const updatedSnap = await readNativeSecretSnapshot(join(spool, jobId, 'redaction.enc'), jobId, keys.privateKey);
+    assert.equal(updatedSnap.includes('fixture-access-resumed-new'), true);
+
+    // 2) Se a preparação recusar na retomada (EXAM_LOGIN_STALE), não reinicia os contêineres, falha o job com o código e apaga launch.json.
+    renewMode = 'fail';
+    const secondLimitAt = new Date(Date.now() - 30_000).toISOString();
+    (containers.get(workerContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 1, FinishedAt: secondLimitAt};
+    (containers.get(toolsContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 0, FinishedAt: secondLimitAt};
+    memory.tables.ac_accounts![0]!.exhausted_until = new Date(Date.now() - 1_000).toISOString();
+    await writeFile(join(spool, jobId, 'output', 'execution-result.json'), JSON.stringify({
+      schemaVersion: 1, jobId, output: '', normalizedTokensUsed: null, usageWindows: null, nativeSessionId: null, failureCode: 'PROVIDER_USAGE_LIMIT', exitCode: 1,
+    }), {mode: 0o600});
+    await writeFile(credential, JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'fixture-access-resumed-new',
+        refreshToken: 'fixture-refresh-resumed-new',
+        expiresAt: Date.now() - 5_000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+
+    const failedOutcome = await supervisor.reconcile(principal, authority, req);
+    assert.equal(failedOutcome.state, 'failed');
+    assert.equal(failedOutcome.failureCode, 'EXAM_LOGIN_STALE');
+    assert.equal(startCalls, startCallsAtLaunch + 2);
+    assert.equal(memory.one('ac_capacity_grants', grantId).state, 'released');
+    await assert.rejects(() => lstat(join(spool, jobId, 'input', 'launch.json')), {code: 'ENOENT'});
+
+    // Replay e retireTerminal confirmam o mesmo failureCode.
+    const replayedFailure = await supervisor.reconcile(principal, authority, req);
+    assert.equal(replayedFailure.state, 'failed');
+    assert.equal(replayedFailure.failureCode, 'EXAM_LOGIN_STALE');
+    const retired = await supervisor.retireTerminal(principal, authority, jobId);
+    assert.equal(retired.state, 'removed');
+  } finally {
+    server.close();
+    homes.mock.restore();
+    snaps.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('syntheticFixture faz supervisor e worker concordarem que claudeExam é falso', async () => {
+  const {ledger, memory} = substituteLedger();
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-synthetic-coherent-')));
+  const binDir = join(area, 'bin');
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const project = randomUUID();
+  const principal = 'synth-' + randomUUID();
+  const account = randomUUID();
+  const profile = randomUUID();
+  const context = randomUUID();
+  const instance = randomUUID();
+  const intent = randomUUID();
+  const image = 'sha256:' + 'c'.repeat(64);
+  const providerNet = 'd'.repeat(64);
+  const label = 'ac-r3-flow-coherent';
+  const prevPath = process.env.PATH ?? '';
+  const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => ({accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'}));
+  const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
+    await mkdir(destination, {recursive: true, mode: 0o700});
+  });
+  const viewed = mock.method(ProviderEligibility.prototype, 'view', async () => ({
+    accountId: account,
+    latest: {
+      fresh: true,
+      effectiveStatus: 'documented_supported',
+      authenticationMode: 'synthetic',
+      executionMode: 'synthetic',
+      adapterId: 'synthetic-claude-supervisor',
+      adapterVersion: supervisor.executorDigest,
+      revision: 1,
+    },
+    history: [],
+  }));
+  const fakeSocketServer = await import('node:http');
+  const sockPath = join(area, 'docker.sock');
+  let workerContainerId = '';
+  let toolsContainerId = '';
+  let networkContainerId = '';
+  let lastJobId = '';
+  let lastLaunchHash = '';
+  let workerCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  let toolsCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  const server = fakeSocketServer.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === `/v1.44/containers/${workerContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: workerContainerId, Image: image,
+        Config: {User: `${process.getuid?.()}:${process.getgid?.()}`, Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash}, Entrypoint: ['node', '/opt/agent-control/dist/src/native-execution-worker.mjs'], Cmd: [], Env: workerCreatedConfig?.Env ?? [], WorkingDir: '/planning'},
+        State: {Status: 'running', Running: true},
+        HostConfig: {NetworkMode: networkContainerId, PidMode: '', IpcMode: '', Privileged: false, ReadonlyRootfs: true, CapDrop: ['ALL'], CapAdd: [], SecurityOpt: ['no-new-privileges:true'], Devices: [], PidsLimit: 96, Memory: 512 * 1024 * 1024, NanoCpus: 1e9, PortBindings: {}},
+        Mounts: (workerCreatedConfig?.HostConfig?.Binds ?? []).map(b => { const [source, destination, mode] = b.split(':'); return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'}; }),
+        NetworkSettings: {Networks: {[networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.3'}, [providerNet]: {NetworkID: providerNet, IPAddress: '172.21.0.3'}}},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/containers/${toolsContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: toolsContainerId, Image: image,
+        Config: {User: `${process.getuid?.()}:${process.getgid?.()}`, Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash}, Entrypoint: ['node', '/opt/agent-control/dist/src/native-tools-worker.mjs'], Cmd: [], Env: toolsCreatedConfig?.Env ?? [], WorkingDir: '/work'},
+        State: {Status: 'running', Running: true},
+        HostConfig: {NetworkMode: networkContainerId, PidMode: '', IpcMode: '', Privileged: false, ReadonlyRootfs: true, CapDrop: ['ALL'], CapAdd: [], SecurityOpt: ['no-new-privileges:true'], Devices: [], PidsLimit: 96, Memory: 512 * 1024 * 1024, NanoCpus: 1e9, PortBindings: {}},
+        Mounts: (toolsCreatedConfig?.HostConfig?.Binds ?? []).map(b => { const [source, destination, mode] = b.split(':'); return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'}; }),
+        NetworkSettings: {Networks: {[networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.2'}}},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/networks/${networkContainerId}`) {
+      res.end(JSON.stringify({Id: networkContainerId, Internal: true, Containers: {[toolsContainerId]: {IPv4Address: '172.20.0.2/16'}, [workerContainerId]: {IPv4Address: '172.20.0.3/16'}}}));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('{}');
+  });
+
+  let supervisor!: NativeExecutionSupervisor;
+  try {
+    await new Promise<void>(resolve => server.listen(sockPath, resolve));
+    for (const path of [binDir, repo, spool, accounts, join(accounts, account)]) {
+      await mkdir(path, {recursive: true, mode: 0o700});
+    }
+    const fakeDocker = join(binDir, 'docker');
+    await writeFile(fakeDocker, `#!${process.execPath}
+const args = process.argv.slice(2);
+if (args[0] === 'image' && args[1] === 'inspect') {
+  console.log(JSON.stringify([{Id: ${JSON.stringify(image)}, Config: {Labels: {'agent-control.synthetic-fixture': ${JSON.stringify(label)}}}}]));
+  process.exit(0);
+}
+if (args[0] === 'network' && args[1] === 'inspect') {
+  console.log(JSON.stringify([{Id: ${JSON.stringify(providerNet)}, Internal: true, Labels: {'agent-control.synthetic-fixture': ${JSON.stringify(label)}}}]));
+  process.exit(0);
+}
+process.exit(1);
+`, {mode: 0o700});
+    await chmod(fakeDocker, 0o700);
+    process.env.PATH = `${binDir}:${prevPath}`;
+
+    const fixture = await authorizeNativeSyntheticFixture({
+      contract: 'native-synthetic-fixture-v1',
+      projectId: project,
+      contextId: context,
+      provider: 'synthetic-engineering',
+      label,
+      workerImage: image,
+      toolsImage: image,
+      providerNetworkId: providerNet,
+    });
+    const keys = generateKeyPairSync('ed25519');
+    supervisor = new NativeExecutionSupervisor(ledger, {
+      id: 'synthetic-claude-supervisor',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: providerNet,
+      provider: 'claude',
+      socketPath: sockPath,
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: ['AC_VERIFY_EXAM=1', 'AC_FIXTURE=1'],
+      toolsEnv: [],
+      syntheticFixture: fixture,
+    }, {assertAdmission: async () => {}});
+    let sequence = 0;
+    const created: Array<{name: string; env: string[]; binds: string[]}> = [];
+    Object.defineProperty(supervisor, 'doc' + 'ker', {
+      value: {
+        imagePresent: async () => true,
+        inspect: async () => null,
+        inspectPrivateNetwork: async () => ({Id: networkContainerId, Internal: true, Containers: {[toolsContainerId]: {IPv4Address: '172.20.0.2/16'}, [workerContainerId]: {IPv4Address: '172.20.0.3/16'}}}),
+        stop: async () => {},
+        remove: async () => {},
+        createPrivateNetwork: async () => { networkContainerId = `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`; return networkContainerId; },
+        create: async (name: string, configuration: {Env?: string[]; HostConfig?: {Binds?: string[]}}) => {
+          const id = `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
+          created.push({name, env: [...(configuration.Env ?? [])], binds: [...(configuration.HostConfig?.Binds ?? [])]});
+          if (name.startsWith('ac-native-worker-')) { workerContainerId = id; workerCreatedConfig = configuration; }
+          else { toolsContainerId = id; toolsCreatedConfig = configuration; }
+          return id;
+        },
+        start: async () => {},
+      },
+    });
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+
+    memory.insert('ac_projects', {id: project});
+    memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_project_repositories', {project_id: project, repo});
+    memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
+    memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
+    memory.insert('ac_admission_control', {id: 1, enabled: true});
+    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    const grantId = randomUUID();
+    const jobId = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grantId, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const req = NativeExecutionRequest.parse({
+      jobId, intentId: intent, grantId, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Exame sintético.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    lastJobId = jobId;
+    lastLaunchHash = digest(req);
+    await supervisor.start(principal, authority, req);
+
+    const workerMeta = created.find(c => c.name === `ac-native-worker-${jobId}`);
+    assert.ok(workerMeta);
+    assert.equal(workerMeta.env.includes('AC_VERIFY_EXAM=1'), false);
+    assert.equal(workerMeta.binds.some(b => b.includes(':/account:')), true);
+
+    const launch = JSON.parse(await readFile(join(spool, jobId, 'input', 'launch.json'), 'utf8')) as {
+      payload: {provider?: string; synthetic?: boolean; oauthAccessToken?: string};
+    };
+    assert.equal(launch.payload.synthetic, true);
+    assert.equal(launch.payload.oauthAccessToken, undefined);
+    assert.equal(isClaudeExamWorker({verifyExam: workerMeta.env.includes('AC_VERIFY_EXAM=1'), provider: launch.payload.provider, synthetic: launch.payload.synthetic}), false);
+    assert.equal(isClaudeExamWorker({verifyExam: true, provider: launch.payload.provider, synthetic: launch.payload.synthetic}), false);
+  } finally {
+    process.env.PATH = prevPath;
+    server.close();
+    homes.mock.restore();
+    snaps.mock.restore();
+    viewed.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('accessToken falso não aparece nos relatórios de design e validador mesmo quando o CLI falso tenta vazar', {skip: !process.env.AC_TEST_DATABASE_URL}, async () => {
+  const baseUrl = process.env.AC_TEST_DATABASE_URL!;
+  const fixture = await isolatedDatabase(baseUrl, 'examsecreport');
+  const db = new Ledger(fixture.url);
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-report-secret-')));
+  const tmpArea = join(area, 'tmp');
+  const repo = join(area, 'repo');
+  const accounts = join(area, 'accounts');
+  const designData = join(area, 'design-data');
+  const verifyData = join(area, 'verify-data');
+  const fakeClaude = join(area, 'fake-claude');
+  const fakeAccessToken = 'oauth-access-report-leak-secret-424242';
+  const prevEnv = {...process.env};
+  try {
+    for (const dir of [tmpArea, repo, join(repo, 'src'), accounts, designData, verifyData]) {
+      await mkdir(dir, {recursive: true, mode: 0o700});
+    }
+    await writeFile(join(repo, 'src', 'app.ts'), 'export const hello = "world";\n', {mode: 0o644});
+    await writeFile(join(repo, 'index.html'), '<html><body><h1>Oi</h1></body></html>\n', {mode: 0o644});
+    await writeFile(
+      fakeClaude,
+      `#!${process.execPath}
+const readline = require('node:readline');
+const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});
+rl.once('line', line => {
+  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN || '';
+  const parsed = JSON.parse(line);
+  const textBlock = (parsed.message && parsed.message.content || []).find(c => c.type === 'text');
+  const promptText = textBlock ? textBlock.text : '';
+  let replyObj;
+  if (promptText.includes('Pedido de mapa.')) {
+    replyObj = {kind: 'mapa', routes: [{method: 'GET', path: '/', file: 'src/app.ts', line: 1}], surfaces: ['web ' + token]};
+  } else if (promptText.includes('Pedido de confirmação.')) {
+    replyObj = {kind: 'confirmacao', status: 'confirmado', reason: 'Confirmado ' + token, proof: 'Prova ' + token};
+  } else {
+    replyObj = {
+      kind: 'exame',
+      filesRead: ['src/app.ts', 'index.html'],
+      checklist: ['ASVS-5-V1'],
+      findings: [{
+        title: 'Achado ' + token,
+        severity: 'baixa',
+        file: promptText.includes('index.html') ? 'index.html' : 'src/app.ts',
+        line: 1,
+        scenario: 'Cenário ' + token,
+        suggestion: 'Troque cor #111 ' + token,
+        cwe: null,
+        reference: 'REF-1',
+        snippet: 'snippet ' + token,
+      }],
+    };
+  }
+  const reply = JSON.stringify(replyObj);
+  console.log(JSON.stringify({type: 'assistant', message: {role: 'assistant', content: [{type: 'text', text: reply}]}}));
+  console.log(JSON.stringify({type: 'result', subtype: 'success', is_error: false, result: reply}));
+  process.exit(0);
+});
+`,
+      {mode: 0o700},
+    );
+    await chmod(fakeClaude, 0o700);
+
+    const execToken = 'e'.repeat(48);
+    const snapshotTag = createHmac('sha256', execToken).update(canonical([fakeAccessToken])).digest('hex');
+    const prepared = await prepareClaudeExamWorkerEnv({
+      oauthAccessToken: fakeAccessToken,
+      credentialSnapshotTag: snapshotTag,
+      execToken,
+      tmpRoot: tmpArea,
+      realClaudeBin: fakeClaude,
+    });
+
+    const runner = new ClaudeCliRunner({bin: prepared.claudeBin, timeoutMs: 10_000});
+    const adaptedRunner = {
+      backend: 'claude' as const,
+      run(spec: Parameters<ClaudeCliRunner['run']>[0], onEvent?: Parameters<ClaudeCliRunner['run']>[1]) {
+        return runner.run({...spec, cwd: repo}, onEvent);
+      },
+      interrupt() { return runner.interrupt(); },
+      startSession(spec: Parameters<ClaudeCliRunner['startSession']>[0], onEvent: Parameters<ClaudeCliRunner['startSession']>[1], opts: Parameters<ClaudeCliRunner['startSession']>[2]) {
+        return runner.startSession({...spec, cwd: repo}, onEvent, opts);
+      },
+    };
+    const adapter = new ClaudeExecutionAdapter(adaptedRunner);
+    const runThroughAdapter = (call: {role: 'specialist' | 'reviewer'; task: string}) =>
+      adapter.run(
+        {
+          sessionId: randomUUID(),
+          model: 'claude-sonnet-5-5',
+          effort: 'medium',
+          role: call.role,
+          task: call.task,
+          writePaths: [],
+          artifactCommit: 'a'.repeat(40),
+          outputSchema: {type: 'object'},
+          timeoutMs: 10_000,
+          environment: {id: 'native_tools', url: 'ws://127.0.0.1:19492', authBearerToken: execToken, cwd: '/work'},
+        },
+        async () => {},
+        undefined,
+        [...prepared.secrets, ...collectSecretValues(process.env)],
+      ).then(res => res.output);
+
+    await db.migrate();
+    const project = randomUUID();
+    const principal = 'report-secret-' + randomUUID();
+    const account = randomUUID();
+    const specProfile = randomUUID();
+    const revProfile = randomUUID();
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'secret report test']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    const capacity = new Capacity(db);
+    await capacity.configure(principal, {programmingLimit: 10, evaluationLimit: 2});
+    await capacity.registerModel(principal, {provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://exam-report'});
+    const adapterSpec = createSyntheticProviderAdapter({
+      id: 'fixture-claude-report',
+      provider: 'claude',
+      version: 'verify-v1',
+      runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider: 'claude', accountId: input.accountId, status: 'available', remainingPercent: 80, resetAt: null}),
+    });
+    const collectors = new ProviderCollectors(db, [adapterSpec]);
+    await capacity.addAccount(principal, project, {
+      id: account, provider: 'claude', label: 'claude-exam', resourceIdentity: 'claude:' + 'f'.repeat(64),
+      mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://exam-report', maxConcurrent: 2,
+    });
+    await capacity.addProfile(principal, project, {id: specProfile, accountId: account, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, project, {id: revProfile, accountId: account, model: 'claude-sonnet-5-5', effort: 'medium', role: 'reviewer'});
+    await collectors.bind(principal, project, {accountId: account, adapterId: adapterSpec.manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});
+    const revision = await capacity.publish(principal, project, 0, {
+      schemaVersion: 1,
+      maxProgrammersPerContext: 1,
+      maxEvaluatorsPerContext: 1,
+      roles: {specialist: {regular: [specProfile], emergency: []}, reviewer: {regular: [revProfile], emergency: []}},
+    });
+    await mkdir(join(accounts, account), {recursive: true, mode: 0o700});
+    await writeFile(join(accounts, account, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: {accessToken: fakeAccessToken, refreshToken: 'fixture-refresh-report', expiresAt: Date.now() + 3 * 3600_000},
+    }), {mode: 0o600});
+    const context = await db.createContext(principal, project, randomUUID());
+    await capacity.assignPolicy(principal, context, revision);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await db.pool.query("UPDATE ac_provider_bindings SET last_started_at=clock_timestamp()-interval '2 seconds'");
+    await collectors.collect(principal, project, account, randomUUID());
+    const authority = await db.acquire(principal, context, randomUUID(), 'fixture-manager', 60);
+
+    const designRes = await runDesignModule({
+      activation: 'personal',
+      projectId: project,
+      repo,
+      targetUrl: 'http://127.0.0.1:4173',
+      dataDirectory: designData,
+      intentId: randomUUID(),
+      runId: randomUUID(),
+      createdAt: new Date(),
+      commit: 'e'.repeat(40),
+      files: [{path: 'index.html', text: '<html><body><h1>Oi</h1></body></html>'}],
+      worker: {run: call => runThroughAdapter({role: call.role, task: call.task})},
+      reserve: async role => ({provider: 'claude', model: 'claude-sonnet-5-5', accountId: account, profileId: role === 'specialist' ? specProfile : revProfile, grantId: randomUUID()}),
+      release: async () => {},
+    });
+    for (const file of await listFilesRecursive(designRes.directory)) {
+      assert.equal((await readFile(file, 'utf8')).includes(fakeAccessToken), false, file);
+    }
+
+    const verifyRes = await runSecurityVerification({
+      ledger: db,
+      principal,
+      authority,
+      projectId: project,
+      repoPath: repo,
+      dataDirectory: verifyData,
+      commit: 'e'.repeat(40),
+      policyRevision: 1,
+      accountRoot: accounts,
+      accountSecrets: [fakeAccessToken],
+      worker: {run: call => runThroughAdapter({role: call.role, task: call.task})},
+    });
+    for (const file of await listFilesRecursive(verifyRes.directory)) {
+      assert.equal((await readFile(file, 'utf8')).includes(fakeAccessToken), false, file);
+    }
+  } finally {
+    for (const k of Object.keys(process.env)) {
+      if (!(k in prevEnv)) delete process.env[k];
+    }
+    Object.assign(process.env, prevEnv);
+    await db.close();
+    await fixture.close();
     await rm(area, {recursive: true, force: true});
   }
 });

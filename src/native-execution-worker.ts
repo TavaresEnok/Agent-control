@@ -24,11 +24,18 @@ const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,inte
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(z.string().max(240)).max(64),
  artifactCommit:z.string().regex(/^[a-f0-9]{40}$/).optional(),outputSchema:z.record(z.string(),z.unknown()).optional(),
  environmentId:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),toolsAddress:z.string().refine(isPrivateToolAddress),timeoutMs:z.number().int().min(1000).max(1800000),expiresAt:z.number().int().positive(),provider:z.enum(['codex','claude','grok']).optional(),
+ synthetic:z.boolean().optional(),
  oauthAccessToken:z.string().min(1).max(16384).optional()}).strict();
+
+/** Coherent agreement with the supervisor: a synthetic fixture never runs the Claude exam token path. */
+export function isClaudeExamWorker(input:{verifyExam:boolean;provider?:string;synthetic?:boolean}):boolean{
+ return input.verifyExam&&input.provider==='claude'&&!input.synthetic;
+}
 
 /**
  * Configure a Claude exam worker with only the signed `CLAUDE_CODE_OAUTH_TOKEN` in env,
- * no `.credentials.json` on disk, no `CLAUDE_CONFIG_DIR`, and no `ANTHROPIC_API_KEY`.
+ * no `.credentials.json` on disk, no `CLAUDE_CONFIG_DIR`, and no `ANTHROPIC_API_KEY`,
+ * `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, or `CLAUDE_CODE_USE_*`.
  */
 export async function prepareClaudeExamWorkerEnv(input:{
  oauthAccessToken:string|undefined;
@@ -45,6 +52,11 @@ export async function prepareClaudeExamWorkerEnv(input:{
  process.env.HOME=examHome;
  delete process.env.CLAUDE_CONFIG_DIR;
  delete process.env.ANTHROPIC_API_KEY;
+ delete process.env.ANTHROPIC_AUTH_TOKEN;
+ delete process.env.ANTHROPIC_BASE_URL;
+ for(const key of Object.keys(process.env)){
+  if(key.startsWith('CLAUDE_CODE_USE_'))delete process.env[key];
+ }
  process.env.CLAUDE_CODE_OAUTH_TOKEN=input.oauthAccessToken;
  const claudeBin=await installExamClaudeWrapper(tmpRoot,input.realClaudeBin??'/usr/local/bin/claude');
  return {secrets,claudeBin,examHome};
@@ -62,7 +74,7 @@ async function main(){
  if(input.expiresAt<Date.now()||input.expiresAt>Date.now()+60000)throw Error('INVALID_WORKER_SCOPE');
  const personalCli=input.provider==='claude'||input.provider==='grok'||input.provider==='codex';
  initializeNativeWorkerEnvironment(personalCli?undefined:input.proxyUrl);
- const claudeExam=verifyExam&&input.provider==='claude';
+ const claudeExam=isClaudeExamWorker({verifyExam,provider:input.provider,synthetic:input.synthetic});
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_WORKER_DIRECTORY');
  const capability=await readPrivateWorkerFile('/runner/exec-token',512);let token:string;
  try{token=capability.toString('utf8').trim();if(!/^[A-Za-z0-9._~-]{32,512}$/.test(token))throw Error('INVALID_TOOL_CAPABILITY');}finally{capability.fill(0);}
