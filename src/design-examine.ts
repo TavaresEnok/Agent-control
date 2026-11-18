@@ -54,6 +54,7 @@ export type DesignExamineInput = {
   /** Fora dos testes de sequência: a CLI liga a crítica visual. */
   scoreVisual?: boolean;
   referenceNote?: string;
+  references?: readonly {path: string; sha256: string; name: string}[];
 };
 
 function parseJson(text: string): unknown {
@@ -163,12 +164,6 @@ function normalizeDesignConfirm(value: unknown): unknown {
   return {kind: 'confirmacao', status: mapped, reason: textOf(row.reason, 2000), proof: textOf(row.proof, 2000)};
 }
 
-const MEASURE_TOOLS = new Set(['axe', 'pa11y', 'regua', 'régua']);
-
-function measuredByTool(tool: string): boolean {
-  return MEASURE_TOOLS.has(tool.trim().toLowerCase());
-}
-
 function captureBasename(path: string): string {
   const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return cut >= 0 ? path.slice(cut + 1) : path;
@@ -182,20 +177,44 @@ function emptyCaptureListed(capture: string, captures: readonly DesignScreenCapt
   return false;
 }
 
+const MEASURE_TOOL_RANK: Record<string, number> = {
+  axe: 0,
+  pa11y: 1,
+  lighthouse: 2,
+  tokens: 3,
+  'css-analyzer': 4,
+  régua: 5,
+};
+
 function examMeasure(
   finding: DesignExamFinding,
   rawFindings: readonly DesignRawFinding[],
   captures: readonly DesignScreenCapture[] | undefined,
 ): DesignMeasureValue | undefined {
+  let best: DesignMeasureValue | undefined;
+  let bestRank = Number.POSITIVE_INFINITY;
   for (const raw of rawFindings) {
     if (raw.measure === undefined) continue;
-    if (!measuredByTool(raw.tool)) continue;
     if (raw.file !== finding.file) continue;
-    if (finding.reference !== raw.rule && !finding.reference.includes(raw.rule)) continue;
+    const named = finding.reference === raw.rule || finding.reference.includes(raw.rule) || finding.title.includes(raw.rule);
+    if (!named) continue;
     if (raw.measure.kind === 'empty' && !emptyCaptureListed(raw.measure.capture, captures)) continue;
-    return raw.measure;
+    const rank = MEASURE_TOOL_RANK[raw.tool] ?? 100;
+    if (rank < bestRank) {
+      best = raw.measure;
+      bestRank = rank;
+    }
   }
-  return undefined;
+  return best;
+}
+
+function measureProof(measure: DesignMeasureValue, snippet: string): string {
+  const detail = measure.kind === 'contrast' ? `razão ${measure.ratio}`
+    : measure.kind === 'empty' ? `captura ${measure.capture}`
+      : measure.kind === 'lighthouse' ? `${measure.metric} ${measure.value}`
+        : measure.kind === 'wallace' ? `${measure.metric} ${measure.value}`
+          : `${measure.kind} ${measure.px}px`;
+  return `Medido: ${detail}. ${snippet}`.replace(/\s+/g, ' ').trim().slice(0, 2000);
 }
 
 function isNonHtmlResponse(code: string): boolean {
@@ -246,6 +265,28 @@ function captureBlock(captures: readonly DesignScreenCapture[] | undefined): str
   ];
 }
 
+const REFERENCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(?:png|jpe?g)$/i;
+
+function usableReference(item: {path: string; sha256: string; name: string}): boolean {
+  return CAPTURE_SHA.test(item.sha256)
+    && REFERENCE_NAME.test(item.name)
+    && item.path.length > 1
+    && item.path.length <= 500
+    && !/[\s\r\n]/.test(item.path);
+}
+
+/** Same container paths as the screen PNG. The task names the file; it never embeds bytes. */
+export function referenceCaptureLines(references: readonly {path: string; sha256: string; name: string}[] | undefined): string[] {
+  const lines = (references ?? []).filter(usableReference).slice(0, 10);
+  if (lines.length === 0) return [];
+  return [
+    'Referências visuais:',
+    ...lines.map(item => `- arquivo=${item.path} nome=${item.name} sha256=${item.sha256}`),
+    ...lines.map(item => `- contêiner=/planning/capturas/${item.sha256}.png`),
+    ...lines.map(item => `- contêiner=/work/capturas/${item.sha256}.png`),
+  ];
+}
+
 function toolLine(finding: DesignRawFinding): string {
   const line = finding.line === null ? '-' : String(finding.line);
   return `- tool=${oneLine(finding.tool)} | rule=${oneLine(finding.rule)} | severity=${finding.severity} | line=${line} | file=${oneLine(finding.file)} | snippet=${oneLine(finding.snippet)}`;
@@ -256,6 +297,7 @@ function examTask(
   ids: readonly string[],
   checklist: readonly DesignChecklistItem[],
   rawFindings: readonly DesignRawFinding[],
+  references: DesignExamineInput['references'],
 ): string {
   const related = rawFindings.filter(item => item.file === screen.file);
   const questions = checklist
@@ -278,23 +320,31 @@ function examTask(
     'Perguntas:',
     ...questions,
     ...captureBlock(screen.captures),
+    ...referenceCaptureLines(references),
     'Código:',
     screen.code.slice(0, 20000),
   ].join('\n').slice(0, 100000);
 }
 
-function visualTask(screen: DesignExamineInput['screens'][number], role: 'specialist' | 'reviewer', referenceNote: string | undefined): string {
+function visualTask(
+  screen: DesignExamineInput['screens'][number],
+  role: 'specialist' | 'reviewer',
+  referenceNote: string | undefined,
+  references: DesignExamineInput['references'],
+): string {
   return [
     role === 'specialist' ? 'Pedido de crítica visual.' : 'Pedido de crítica visual do revisor.',
     'Responda só um JSON com kind "visual" e scores. Não escreva no repositório.',
     'Eixos, cada um de 0 a 10: hierarquia, tipografia, cor, ritmo, grade, densidade, componentes, marca, polimento.',
     'Cada item tem axis, score, region e suggestion. A suggestion traz cor, px, fonte ou layout.',
+    'Cada eixo inclui distance de 0 a 10: 0 é igual à referência, 10 é outra solução. No JSON de scores, distance é numérico e opcional.',
     'A region aponta um trecho da captura ou um elemento. Não receba notas de outro examinador.',
     `Tela: ${oneLine(screen.route)}`,
     'Arquivos:',
     `- ${screen.file}`,
     ...(referenceNote && referenceNote.trim().length > 0 ? ['Referências:', referenceNote.trim().slice(0, 4000)] : []),
     ...captureBlock(screen.captures),
+    ...referenceCaptureLines(references),
     'Código:',
     screen.code.slice(0, 12000),
   ].join('\n').slice(0, 100000);
@@ -316,7 +366,7 @@ async function askVisual(
       model: seat.model,
       grantId: seat.grantId,
       intentId: input.intentId,
-      task: visualTask(screen, role, input.referenceNote),
+      task: visualTask(screen, role, input.referenceNote, input.references),
       repo: input.repo,
       writePaths: [] as const,
     });
@@ -328,7 +378,12 @@ async function askVisual(
 }
 
 /** Arquivo, linha, regra, trecho e código. Sem a sugestão e sem a conclusão. */
-function confirmationTask(finding: DesignExamFinding, code: string, captures: readonly DesignScreenCapture[] | undefined): string {
+function confirmationTask(
+  finding: DesignExamFinding,
+  code: string,
+  captures: readonly DesignScreenCapture[] | undefined,
+  references: DesignExamineInput['references'],
+): string {
   return [
     'Pedido de confirmação.',
     'Tente derrubar o ponto. Responda só um JSON com kind "confirmacao", status (confirmado, provavel ou descartado), reason e proof.',
@@ -340,6 +395,7 @@ function confirmationTask(finding: DesignExamFinding, code: string, captures: re
     'Código:',
     code.slice(0, 20000),
     ...captureBlock(captures),
+    ...referenceCaptureLines(references),
   ].join('\n').slice(0, 100000);
 }
 
@@ -360,7 +416,7 @@ async function confirmFinding(
       model: seat.model,
       grantId: seat.grantId,
       intentId: input.intentId,
-      task: confirmationTask(finding, code, captures),
+      task: confirmationTask(finding, code, captures, input.references),
       repo: input.repo,
       writePaths: [] as const,
     });
@@ -379,7 +435,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   confirmations: {
     finding: DesignExamFinding;
     confirm: DesignConfirmResult;
-    verifier: {model: string; provider: string};
+    verifier: {model: string; provider: string} | null;
   }[];
   notes: string[];
   visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[];
@@ -389,7 +445,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   const confirmations: {
     finding: DesignExamFinding;
     confirm: DesignConfirmResult;
-    verifier: {model: string; provider: string};
+    verifier: {model: string; provider: string} | null;
   }[] = [];
   const notes: string[] = [];
   const visual: {file: string; route: string; examiner: VisualScore[]; reviewer: VisualScore[]; uncertain: string[]}[] = [];
@@ -417,7 +473,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         model: seat.model,
         grantId: seat.grantId,
         intentId: input.intentId,
-        task: examTask(screen, ids, input.checklist, input.rawFindings),
+        task: examTask(screen, ids, input.checklist, input.rawFindings, input.references),
         repo: input.repo,
         writePaths: [] as const,
       });
@@ -447,7 +503,6 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       notes.push(`O examinador não marcou como lido: ${screen.file}.`);
     }
     for (const finding of exam.data.findings) {
-      const reviewed = await confirmFinding(input, finding, screen.code, screen.captures);
       const measure = examMeasure(finding, input.rawFindings, screen.captures);
       const clamped = DesignExamFinding.parse({
         title: finding.title,
@@ -462,6 +517,20 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         ...(measure === undefined ? {} : {measure}),
       });
       findings.push(clamped);
+      if (measure !== undefined) {
+        confirmations.push({
+          finding: clamped,
+          confirm: {
+            kind: 'confirmacao',
+            status: 'confirmado',
+            reason: 'A medida confirma o achado.',
+            proof: measureProof(measure, clamped.snippet),
+          },
+          verifier: null,
+        });
+        continue;
+      }
+      const reviewed = await confirmFinding(input, finding, screen.code, screen.captures);
       confirmations.push({
         finding: clamped,
         confirm: reviewed.confirm,

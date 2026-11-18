@@ -165,9 +165,12 @@ function discardedText(discarded: number): string {
 
 function achadoMarkdown(achado: DesignAchado): string {
   const where = achado.where.line === null ? achado.where.file : `${achado.where.file}:${achado.where.line}`;
+  const measured = achado.verifier === null && achado.sources.includes('medida');
   const situacao = achado.verifier
     ? `${STATUS_LABEL[achado.status]} (verificador: ${achado.verifier.model}, ${achado.verifier.provider})`
-    : STATUS_LABEL[achado.status];
+    : measured
+      ? `${STATUS_LABEL[achado.status]} (medido)`
+      : STATUS_LABEL[achado.status];
   return [
     `# ${achado.id}: ${achado.title}`,
     `- Gravidade: ${SEVERITY_LABEL[achado.severity]}`,
@@ -184,7 +187,7 @@ function achadoMarkdown(achado: DesignAchado): string {
 }
 
 function cell(value: string): string {
-  return value.replace(/\r?\n/g, ' ');
+  return value.replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
 }
 
 function coverageMarkdown(rows: readonly DesignCoverageRow[]): string {

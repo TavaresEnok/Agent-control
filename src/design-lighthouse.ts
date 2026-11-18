@@ -1,4 +1,4 @@
-import {designRawFinding, type DesignRawFinding} from './design-types.ts';
+import {designRawFinding, type DesignMeasure, type DesignRawFinding} from './design-types.ts';
 
 type LighthouseSeverity = 'media' | 'baixa';
 
@@ -6,6 +6,7 @@ const TOOL = 'lighthouse';
 const PERFORMANCE_MIN = 0.5;
 const CLS_MAX = 0.25;
 const LCP_MAX = 4000;
+const TBT_MAX = 600;
 const ACCESSIBILITY_MIN = 0.9;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -40,12 +41,19 @@ function auditValue(root: Record<string, unknown>, name: string): number | null 
   return finiteNumber(audit.numericValue);
 }
 
+function formFactorLabel(root: Record<string, unknown>): string {
+  if (!isRecord(root.configSettings)) return '';
+  const factor = root.configSettings.formFactor;
+  return factor === 'mobile' || factor === 'desktop' ? factor : '';
+}
+
 function measuredFinding(
   file: string,
   rule: string,
   severity: LighthouseSeverity,
   label: string,
   value: number,
+  measure?: DesignMeasure,
 ): DesignRawFinding {
   return designRawFinding({
     tool: TOOL,
@@ -55,6 +63,7 @@ function measuredFinding(
     line: null,
     severity,
     snippet: `${label} ${value}`,
+    ...(measure === undefined ? {} : {measure}),
   });
 }
 
@@ -62,21 +71,27 @@ function findingsFromLhr(file: string, lhr: unknown): DesignRawFinding[] {
   const root = readRoot(lhr);
   if (root === null) return [];
   const findings: DesignRawFinding[] = [];
+  const factor = formFactorLabel(root);
+  const labeled = factor.length > 0 ? `${file} ${factor}` : file;
   const performance = categoryScore(root, 'performance');
   if (performance !== null && performance < PERFORMANCE_MIN) {
-    findings.push(measuredFinding(file, 'LH-PERFORMANCE', 'media', 'Desempenho', performance));
+    findings.push(measuredFinding(labeled, 'LH-PERFORMANCE', 'media', 'Desempenho', performance));
   }
   const cls = auditValue(root, 'cumulative-layout-shift');
   if (cls !== null && cls > CLS_MAX) {
-    findings.push(measuredFinding(file, 'LH-CLS', 'media', 'CLS', cls));
+    findings.push(measuredFinding(labeled, 'LH-CLS', 'media', 'CLS', cls, {kind: 'lighthouse', metric: 'cls', value: cls}));
   }
   const lcp = auditValue(root, 'largest-contentful-paint');
   if (lcp !== null && lcp > LCP_MAX) {
-    findings.push(measuredFinding(file, 'LH-LCP', 'media', 'LCP', lcp));
+    findings.push(measuredFinding(labeled, 'LH-LCP', 'media', 'LCP', lcp, {kind: 'lighthouse', metric: 'lcp', value: lcp}));
+  }
+  const tbt = auditValue(root, 'total-blocking-time');
+  if (tbt !== null && tbt > TBT_MAX) {
+    findings.push(measuredFinding(labeled, 'LH-TBT', 'media', 'TBT', tbt, {kind: 'lighthouse', metric: 'tbt', value: tbt}));
   }
   const accessibility = categoryScore(root, 'accessibility');
   if (accessibility !== null && accessibility < ACCESSIBILITY_MIN) {
-    findings.push(measuredFinding(file, 'LH-ACESSIBILIDADE', 'baixa', 'Acessibilidade', accessibility));
+    findings.push(measuredFinding(labeled, 'LH-ACESSIBILIDADE', 'baixa', 'Acessibilidade', accessibility));
   }
   return findings;
 }

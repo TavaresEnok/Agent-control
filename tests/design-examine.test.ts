@@ -229,10 +229,10 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
   assert.equal(planted?.confirm.status, 'confirmado');
   assert.equal(planted?.finding.severity, 'alta');
   assert.deepEqual(planted?.finding.measure, {kind: 'contrast', ratio: 4.478089453577214});
-  assert.equal(planted?.verifier.provider, 'claude');
-  assert.equal(planted?.verifier.model, 'modelo-revisor');
+  assert.equal(planted?.verifier, null);
   assert.equal(result.coverage[0]?.examinerProvider, 'claude');
   assert.match(planted?.confirm.proof ?? '', /color:#777/);
+  assert.match(planted?.confirm.proof ?? '', /Medido/);
   assert.equal(taste?.confirm.status, 'descartado');
   assert.equal(taste?.finding.severity, 'media');
   assert.equal(opinion?.confirm.status, 'provavel');
@@ -247,7 +247,8 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
   ]);
   const reviewerTasks = tasks.filter(task => task.startsWith('Pedido de confirmação.'));
   const examTask = tasks.find(task => task.startsWith('Pedido de exame.'));
-  assert.equal(reviewerTasks.length, 3);
+  assert.equal(reviewerTasks.length, 2);
+  assert.equal(reviewerTasks.some(task => task.includes(DESIGN_PLANTED_RULES.contrast)), false);
   assert.match(examTask ?? '', /Arquivos:\n- src\/Tela\.tsx/);
   assert.match(examTask ?? '', /Itens: DESIGN-NIELSEN-H1-ESTADO/);
   assert.match(examTask ?? '', new RegExp(`- tool=axe \\| rule=${DESIGN_PLANTED_RULES.contrast} \\| severity=alta`));
@@ -261,21 +262,30 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
       assert.equal(task.includes(finding.scenario), false);
     }
   }
-  assert.match(reviewerTasks[0] ?? '', new RegExp(DESIGN_PLANTED_RULES.contrast));
-  assert.match(reviewerTasks[0] ?? '', /color:#777/);
+  assert.match(reviewerTasks[0] ?? '', /GOSTO-PREFERENCIA/);
 });
 
 test('dois papéis Claude são aceitos e grok ou codex são recusados', async () => {
   const allowed = harness();
-  const raw = [designRawFinding({
-    tool: 'axe',
-    rule: DESIGN_PLANTED_RULES.contrast,
-    file: screen.file,
-    line: 4,
-    severity: 'alta',
-    snippet: 'color:#777',
-    measure: {kind: 'contrast', ratio: 4.478089453577214},
-  })];
+  const raw = [
+    designRawFinding({
+      tool: 'axe',
+      rule: DESIGN_PLANTED_RULES.contrast,
+      file: screen.file,
+      line: 4,
+      severity: 'alta',
+      snippet: 'color:#777',
+      measure: {kind: 'contrast', ratio: 4.478089453577214},
+    }),
+    designRawFinding({
+      tool: 'html',
+      rule: 'GOSTO-PREFERENCIA',
+      file: screen.file,
+      line: 8,
+      severity: 'media',
+      snippet: 'radius 13px',
+    }),
+  ];
   const passed = await examineDesignScreens({
     repo: '/tmp/repo-design',
     intentId: randomUUID(),
@@ -286,7 +296,8 @@ test('dois papéis Claude são aceitos e grok ou codex são recusados', async ()
     reserve: allowed.reserve,
     release: allowed.release,
   });
-  assert.equal(passed.confirmations[0]?.verifier.provider, 'claude');
+  assert.equal(passed.confirmations[0]?.verifier, null);
+  assert.equal(passed.confirmations.find(item => item.verifier !== null)?.verifier?.provider, 'claude');
   assert.equal(passed.coverage[0]?.examinerProvider, 'claude');
   assert.ok(allowed.events.includes('run:reviewer'));
   for (const provider of ['grok', 'codex'] as const) {
@@ -417,15 +428,25 @@ test('captura falsa entra no exame e na confirmação com o mesmo caminho e o me
       captures: [{path, viewport: 375, theme: 'claro', state: 'padrao', sha256}],
     }],
     checklist: loadDesignChecklist(),
-    rawFindings: [designRawFinding({
-      tool: 'axe',
-      rule: DESIGN_PLANTED_RULES.contrast,
-      file: screen.file,
-      line: 4,
-      severity: 'alta',
-      snippet: 'color:#777',
-      measure: {kind: 'contrast', ratio: 4.478089453577214},
-    })],
+    rawFindings: [
+      designRawFinding({
+        tool: 'axe',
+        rule: DESIGN_PLANTED_RULES.contrast,
+        file: screen.file,
+        line: 4,
+        severity: 'alta',
+        snippet: 'color:#777',
+        measure: {kind: 'contrast', ratio: 4.478089453577214},
+      }),
+      designRawFinding({
+        tool: 'html',
+        rule: 'GOSTO-PREFERENCIA',
+        file: screen.file,
+        line: 8,
+        severity: 'media',
+        snippet: 'radius 13px',
+      }),
+    ],
     worker: {
       async run(workerCall) {
         tasks.push(workerCall.task);
@@ -447,7 +468,8 @@ test('captura falsa entra no exame e na confirmação com o mesmo caminho e o me
   assert.match(reviewTask, new RegExp(`arquivo=${path.replaceAll('/', '\\/')} viewport=375 tema=claro estado=padrao sha256=${sha256}`));
   assert.equal(reviewTask.includes('suggestion'), false);
   assert.equal(result.confirmations[0]?.finding.reference, DESIGN_PLANTED_RULES.contrast);
-  assert.equal(result.confirmations[0]?.verifier.provider, 'claude');
+  assert.equal(result.confirmations[0]?.verifier, null);
+  assert.match(reviewTask, /GOSTO-PREFERENCIA|BONITO|radius 13px|sombra/);
   const bare = tasks.length;
   const without = await examineDesignScreens({
     repo: '/tmp/repo-design',
@@ -515,7 +537,7 @@ test('o JSON de um modelo real entra mesmo com lista, gravidade e cwe fora do es
   assert.equal(result.confirmations[0]?.finding.severity, 'media');
   assert.equal(result.confirmations[0]?.finding.cwe, null);
   assert.equal(result.confirmations[0]?.confirm.status, 'confirmado');
-  assert.equal(result.confirmations[0]?.verifier.provider, 'claude');
+  assert.equal(result.confirmations[0]?.verifier?.provider, 'claude');
   assert.equal(result.confirmations[0]?.finding.measure, undefined);
 });
 
