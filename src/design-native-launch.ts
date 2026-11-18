@@ -47,6 +47,8 @@ export function buildDesignExamRequest(input: {
   role: 'specialist' | 'reviewer';
   task: string;
   artifactId: string;
+  forcedModel?: 'claude-opus-5-5';
+  forcedEffort?: 'medium';
 }) {
   return NativeExecutionRequest.parse({
     jobId: input.jobId,
@@ -59,6 +61,7 @@ export function buildDesignExamRequest(input: {
     writePaths: [],
     artifactId: input.artifactId,
     outputSchema,
+    ...(input.forcedModel === undefined ? {} : {model: input.forcedModel, effort: input.forcedEffort ?? 'medium'}),
   });
 }
 
@@ -124,6 +127,7 @@ export function createDesignNativeWorker(input: {
         role: parsed.role,
         task: parsed.task,
         artifactId: randomUUID(),
+        ...(parsed.forcedModel === undefined ? {} : {forcedModel: parsed.forcedModel, forcedEffort: 'medium' as const}),
       });
       return finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait);
     },
