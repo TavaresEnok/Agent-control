@@ -1,0 +1,14 @@
+{
+  "id": "material-3",
+  "name": "Material Design 3",
+  "source": "Google",
+  "url": "https://m3.material.io/styles/typography/type-scale-tokens",
+  "consulted": "2026-11-18",
+  "typePx": [11, 12, 14, 16, 22, 24, 28, 32, 36, 45, 57],
+  "typeLinePx": [16, 16, 20, 24, 28, 32, 36, 40, 44, 52, 64],
+  "spacePx": [4],
+  "radiusPx": [0, 4, 8, 12, 16, 20, 28, 32, 48],
+  "elevation": ["0", "+1", "+2", "+3", "+4", "+5"],
+  "elevationDp": [0, 1, 3, 6, 8, 12],
+  "targetMinPx": 48
+}

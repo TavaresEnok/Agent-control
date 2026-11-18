@@ -1,0 +1,11 @@
+{
+  "id": "govuk",
+  "name": "GOV.UK Design System",
+  "source": "GOV.UK",
+  "url": "https://design-system.service.gov.uk/styles/type-scale/",
+  "consulted": "2026-11-18",
+  "typePx": [16, 19, 24, 27, 36, 48, 80],
+  "typeLinePx": [20, 25, 30, 30, 40, 50, 80],
+  "spacePx": [0, 5, 10, 15, 20, 25, 30, 40, 50, 60],
+  "targetMinPx": null
+}

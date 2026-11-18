@@ -1,0 +1,10 @@
+{
+  "id": "polaris",
+  "name": "Polaris",
+  "source": "Shopify",
+  "url": "https://github.com/Shopify/polaris/blob/main/polaris-tokens/src/themes/base/space.ts",
+  "consulted": "2026-11-18",
+  "typePx": [11, 12, 13, 14, 16, 18, 20, 22, 24, 30, 32, 36, 40],
+  "spacePx": [0, 1, 2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96, 112, 128],
+  "targetMinPx": null
+}

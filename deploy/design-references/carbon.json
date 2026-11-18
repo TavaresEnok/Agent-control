@@ -1,0 +1,10 @@
+{
+  "id": "carbon",
+  "name": "Carbon",
+  "source": "IBM",
+  "url": "https://www.carbondesignsystem.com/building-blocks/foundations/spacing/overview",
+  "consulted": "2026-11-18",
+  "typePx": [12, 14, 16, 20, 28, 32, 42, 54, 60, 92],
+  "spacePx": [2, 4, 8, 12, 16, 24, 32, 40, 48, 64, 80, 96, 160],
+  "targetMinPx": null
+}

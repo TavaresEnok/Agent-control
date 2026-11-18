@@ -14,7 +14,7 @@ export const DesignStatus = z.enum(['confirmado', 'provavel', 'descartado', 'fec
 export type DesignStatus = z.infer<typeof DesignStatus>;
 
 export const DesignChecklistSource = z.enum([
-  'NIELSEN', 'UX-LAW', 'WCAG-2.2', 'TOKENS', 'STATES', 'UX-WRITING', 'SMALL-SCREEN',
+  'NIELSEN', 'UX-LAW', 'WCAG-2.2', 'TOKENS', 'STATES', 'UX-WRITING', 'SMALL-SCREEN', 'VISUAL',
 ]);
 export type DesignChecklistSource = z.infer<typeof DesignChecklistSource>;
 
@@ -36,6 +36,7 @@ export const DesignMeasure = z.discriminatedUnion('kind', [
   z.object({kind: z.literal('target'), px: MEASURE_PX}).strict(),
   z.object({kind: z.literal('overflow'), px: MEASURE_PX}).strict(),
   z.object({kind: z.literal('empty'), capture: EMPTY_CAPTURE}).strict(),
+  z.object({kind: z.literal('token'), px: MEASURE_PX}).strict(),
 ]);
 export type DesignMeasure = z.infer<typeof DesignMeasure>;
 
@@ -69,7 +70,7 @@ export type DesignExamFinding = z.infer<typeof DesignExamFinding>;
 export const DesignExamResult = z.object({
   kind: z.literal('exame'),
   filesRead: z.array(z.string().min(1).max(400)).min(1).max(80),
-  checklist: z.array(z.string().min(1).max(80)).min(1).max(80),
+  checklist: z.array(z.string().min(1).max(80)).min(1).max(120),
   findings: z.array(DesignExamFinding).max(40),
 }).strict();
 export type DesignExamResult = z.infer<typeof DesignExamResult>;
@@ -93,6 +94,9 @@ export const DesignWorkerCall = z.object({
   task: z.string().min(1).max(100000),
   repo: z.string().min(1).max(500),
   writePaths: z.tuple([]),
+  /** Só o modo criar. O exame de leitura não preenche. */
+  forcedModel: z.literal('claude-opus-5-5').optional(),
+  forcedEffort: z.literal('medium').optional(),
 }).strict();
 export type DesignWorkerCall = z.infer<typeof DesignWorkerCall>;
 
