@@ -388,27 +388,33 @@ function splitTopLevelCssCommas(inner: string): string[] {
   return parts;
 }
 
-function sanitizeImageSet(inner: string, prefix: string): string {
+function sanitizeImageSet(inner: string, prefix: string): {value: string; rejected: boolean} {
   const kept: string[] = [];
+  let rejected = false;
   for (const part of splitTopLevelCssCommas(inner)) {
     const candidate = part.trim();
     if (candidate.length === 0) continue;
     if (allCssUrlsAllowed(candidate, 0, {allowFontHost: false, allowDataImage: true})) kept.push(candidate);
+    else rejected = true;
   }
-  return kept.length > 0 ? `${prefix}${kept.join(', ')})` : 'none';
+  return {
+    value: kept.length > 0 ? `${prefix}${kept.join(', ')})` : 'none',
+    rejected: rejected || kept.length === 0,
+  };
 }
 
 /** parse5 não entra em CSS. Esta varredura aceita só URL relativa, data:image/{png,jpeg,webp} e fontes do Google em @import/@font-face. */
-export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {}): string {
+function scanCss(css: string, options: {allowFontRules?: boolean} = {}): {css: string; hasBlockedUrl: boolean} {
   const allowFontRules = options.allowFontRules ?? true;
   let out = '';
   let index = 0;
   let pendingFontFace = false;
   let fontFaceDepth = 0;
+  let hasBlockedUrl = false;
   while (index < css.length) {
     if (css.startsWith('/*', index)) {
       const end = css.indexOf('*/', index + 2);
-      if (end === -1) return out + css.slice(index);
+      if (end === -1) return {css: out + css.slice(index), hasBlockedUrl};
       out += css.slice(index, end + 2);
       index = end + 2;
       continue;
@@ -438,6 +444,7 @@ export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {
       }
       const rule = css.slice(index, end);
       if (isAllowedImportRule(rule, allowFontRules)) out += rule;
+      else hasBlockedUrl = true;
       index = end;
       continue;
     }
@@ -446,9 +453,12 @@ export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {
       const endParen = endOfParenFunction(css, imageSetAt);
       if (endParen === -1) {
         out += 'none';
+        hasBlockedUrl = true;
         break;
       }
-      out += sanitizeImageSet(css.slice(imageSetAt, endParen), css.slice(index, imageSetAt));
+      const imageSet = sanitizeImageSet(css.slice(imageSetAt, endParen), css.slice(index, imageSetAt));
+      out += imageSet.value;
+      if (imageSet.rejected) hasBlockedUrl = true;
       index = endParen + 1;
       continue;
     }
@@ -457,6 +467,7 @@ export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {
       const endParen = endOfUrl(css, urlAt);
       if (endParen === -1) {
         out += 'none';
+        hasBlockedUrl = true;
         break;
       }
       const decoded = unquoteCssToken(css.slice(urlAt, endParen));
@@ -465,6 +476,7 @@ export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {
         allowDataImage: true,
       });
       out += allowed ? css.slice(index, endParen + 1) : 'none';
+      if (!allowed) hasBlockedUrl = true;
       index = endParen + 1;
       continue;
     }
@@ -485,7 +497,11 @@ export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {
     out += ch;
     index += 1;
   }
-  return out;
+  return {css: out, hasBlockedUrl};
+}
+
+export function sanitizeCss(css: string, options: {allowFontRules?: boolean} = {}): string {
+  return scanCss(css, options).css;
 }
 
 function isUrlAttribute(name: string): boolean {
@@ -561,6 +577,7 @@ function sanitizeElement(element: ElementNode): void {
     } else if (/^(?:javascript|vbscript):/i.test(attr.value.replace(/[\u0000-\u0020]+/g, ''))) {
       continue;
     }
+    if (scanCss(attr.value, {allowFontRules: false}).hasBlockedUrl) continue;
     kept.push(attr);
   }
   element.attrs = kept;

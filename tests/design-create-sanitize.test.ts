@@ -545,3 +545,68 @@ test('html anterior no retrabalho corta em 8000 caracteres', async () => {
     assert.match(index, /nota 2/);
   });
 });
+
+const PRESENTATION_URL_ATTRIBUTES = [
+  'fill',
+  'stroke',
+  'filter',
+  'mask',
+  'clip-path',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+  'cursor',
+  'marker',
+  'mask-image',
+  'data-bg',
+] as const;
+
+for (const attr of PRESENTATION_URL_ATTRIBUTES) {
+  test(`url() não permitida no atributo ${attr} remove o atributo (inclusive //x e escapes CSS)`, () => {
+    const suffix = attr === 'cursor' ? ', pointer' : '';
+    const html = [
+      '<svg viewBox="0 0 10 10">',
+      `<rect id="a" ${attr}="url(https://evil.example/a.svg#id)${suffix}" width="5" height="5"/>`,
+      `<rect id="b" ${attr}="url(//x)${suffix}" width="5" height="5"/>`,
+      `<rect id="c" ${attr}="url(\\68 ttps://evil.example/b.svg#id)${suffix}" width="5" height="5"/>`,
+      `<rect id="d" ${attr}="url(\\2f\\2f x)${suffix}" width="5" height="5"/>`,
+      `<rect id="e" ${attr}="\\75rl(//x)${suffix}" width="5" height="5"/>`,
+      `<rect id="f" ${attr}="u\\72 l('\\2f\\2f x')${suffix}" width="5" height="5"/>`,
+      `<rect id="g" ${attr}="url(https://fonts.googleapis.com/a.svg#id)${suffix}" width="5" height="5"/>`,
+      `<rect id="h" ${attr}="url(data:image/svg+xml,<svg>)${suffix}" width="5" height="5"/>`,
+      `<rect id="i" ${attr}="url(local.png), url(//x)${suffix}" width="5" height="5"/>`,
+      `<rect id="j" ${attr}="url(//x" width="5" height="5"/>`,
+      '</svg>',
+    ].join('');
+    const out = sanitizeGeneratedHtml(html);
+    assert.equal(out.includes(`${attr}=`), false, `atributo ${attr} não foi removido:\n${out}`);
+    for (const id of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']) {
+      assert.equal(out.includes(`id="${id}"`), true, `elemento ${id} sumiu em ${attr}`);
+    }
+    for (const leaked of ['evil.example', '//x', '\\68', '\\2f', '\\75', 'fonts.googleapis.com', 'svg+xml']) {
+      assert.equal(out.includes(leaked), false, `vazou ${leaked} em ${attr}:\n${out}`);
+    }
+  });
+}
+
+test('url() local, fragmento e data:image/{png,jpeg,webp} continuam permitidos em atributos de apresentação', () => {
+  const html = [
+    '<svg viewBox="0 0 10 10">',
+    '<rect fill="url(#grad)" stroke="url(strokes.svg#s)" filter="url(./fx.svg#blur)" mask="url(#m)" clip-path="url(#c)" marker-start="url(#ms)" marker-mid="url(#mm)" marker-end="url(#me)" cursor="url(data:image/png;base64,iVBORw0KGgo=), pointer" width="8" height="8"/>',
+    '</svg>',
+  ].join('');
+  const out = sanitizeGeneratedHtml(html);
+  for (const kept of [
+    'fill="url(#grad)"',
+    'stroke="url(strokes.svg#s)"',
+    'filter="url(./fx.svg#blur)"',
+    'mask="url(#m)"',
+    'clip-path="url(#c)"',
+    'marker-start="url(#ms)"',
+    'marker-mid="url(#mm)"',
+    'marker-end="url(#me)"',
+    'cursor="url(data:image/png;base64,iVBORw0KGgo=), pointer"',
+  ]) {
+    assert.equal(out.includes(kept), true, `perdeu ${kept} em:\n${out}`);
+  }
+});
