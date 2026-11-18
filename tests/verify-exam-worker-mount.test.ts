@@ -31,6 +31,7 @@ type Row = Record<string, unknown>;
 class MountMemory {
   tables: Record<string, Row[]> = {};
   lockTimeoutOnNextLock = false;
+  lockErrorOnNextLock: Error | null = null;
   insert(table: string, row: Row) { (this.tables[table] ??= []).push({...row}); }
   one(table: string, id: string) {
     const row = this.tables[table]?.find(item => item.id === id);
@@ -235,6 +236,11 @@ class MountMemory {
     if (text.includes('ac_project_environment_heads')) return selected([]);
     if (text.startsWith('SELECT domain_id FROM ac_installation_projects')) return selected([]);
     if (/^SELECT pg_advisory_xact_lock(_shared)?\(/.test(text)) {
+      if (this.lockErrorOnNextLock) {
+        const error = this.lockErrorOnNextLock;
+        this.lockErrorOnNextLock = null;
+        throw error;
+      }
       if (this.lockTimeoutOnNextLock) {
         this.lockTimeoutOnNextLock = false;
         throw Object.assign(new Error('canceling statement due to lock timeout'), {code: '55P03'});
@@ -2142,6 +2148,480 @@ rl.once('line', line => {
     Object.assign(process.env, prevEnv);
     await db.close();
     await fixture.close();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBeforeLaunch registra o código sem segredo e repropaga falha de liberação', async () => {
+  const {ledger, memory} = substituteLedger();
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-prelaunch-grant-')));
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const project = randomUUID();
+  const principal = 'prelaunch-grant-' + randomUUID();
+  const account = randomUUID();
+  const profile = randomUUID();
+  const context = randomUUID();
+  const instance = randomUUID();
+  const intent = randomUUID();
+  let inspectMode: 'ok' | 'fail' = 'ok';
+  const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => {
+    if (inspectMode === 'fail') throw new Refusal('ACCOUNT_HOME_GRANT_FORBIDDEN');
+    return {accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'};
+  });
+  const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
+    await mkdir(destination, {recursive: true, mode: 0o700});
+  });
+  const logged: string[] = [];
+  const consoleErr = mock.method(console, 'error', (...args: unknown[]) => {
+    logged.push(args.map(String).join(' '));
+  });
+  try {
+    for (const path of [repo, spool, accounts, join(accounts, account)]) {
+      await mkdir(path, {recursive: true, mode: 0o700});
+    }
+    await writeFile(join(accounts, account, '.credentials.json'), JSON.stringify({
+      claudeAiOauth: {
+        accessToken: 'fixture-access-prelaunch',
+        refreshToken: 'fixture-refresh-prelaunch',
+        expiresAt: Date.now() + 3 * 3600_000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+    memory.insert('ac_projects', {id: project});
+    memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_project_repositories', {project_id: project, repo});
+    memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
+    memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
+    memory.insert('ac_admission_control', {id: 1, enabled: true});
+    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    const keys = generateKeyPairSync('ed25519');
+    const image = 'sha256:' + 'c'.repeat(64);
+    let failDisk = true;
+    const supervisor = new NativeExecutionSupervisor(ledger, {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude',
+      socketPath: '/tmp/ac-no-host-socket.sock',
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: [],
+      toolsEnv: [],
+    }, {
+      async assertAdmission() {
+        if (failDisk) throw new Refusal('STORAGE_LOW_SPACE');
+      },
+    });
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+    Object.defineProperty(supervisor, 'doc' + 'ker', {
+      value: {
+        imagePresent: async () => true,
+        inspect: async () => null,
+        inspectPrivateNetwork: async () => null,
+        stop: async () => {},
+        remove: async () => {},
+      },
+    });
+
+    // 1) Falha injetada em diskGuard.assertAdmission -> libera o grant e repropaga o erro original.
+    const diskGrant = randomUUID();
+    const diskJob = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: diskGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const diskInput = NativeExecutionRequest.parse({
+      jobId: diskJob, intentId: intent, grantId: diskGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(
+      () => supervisor.start(principal, authority, diskInput),
+      (error: unknown) => error instanceof Refusal && error.code === 'STORAGE_LOW_SPACE',
+    );
+    assert.equal(memory.one('ac_capacity_grants', diskGrant).state, 'released');
+    assert.equal((memory.one('ac_capacity_grants', diskGrant).physical_receipt as {reason: string}).reason, 'pre_launch_failed');
+
+    // 2) Falha injetada em inspectGranted -> libera o grant e repropaga o erro original.
+    failDisk = false;
+    inspectMode = 'fail';
+    const inspectGrant = randomUUID();
+    const inspectJob = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: inspectGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const inspectInput = NativeExecutionRequest.parse({
+      jobId: inspectJob, intentId: intent, grantId: inspectGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    await assert.rejects(
+      () => supervisor.start(principal, authority, inspectInput),
+      (error: unknown) => error instanceof Refusal && error.code === 'ACCOUNT_HOME_GRANT_FORBIDDEN',
+    );
+    assert.equal(memory.one('ac_capacity_grants', inspectGrant).state, 'released');
+
+    // 3) Se releaseBeforeLaunch falhar dentro de failBeforeLaunch, registra o código (sem segredo) e repropaga.
+    inspectMode = 'ok';
+    failDisk = true;
+    const releaseFailGrant = randomUUID();
+    const releaseFailJob = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: releaseFailGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const releaseFailInput = NativeExecutionRequest.parse({
+      jobId: releaseFailJob, intentId: intent, grantId: releaseFailGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    let identityCalls = 0;
+    const secretInReleaseErr = 'secret-release-err-never-logged-123';
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => {
+      identityCalls += 1;
+      if (identityCalls >= 2) throw new Error('release failed ' + secretInReleaseErr);
+      return memory.one('ac_capacity_grants', input.grantId);
+    };
+    await assert.rejects(
+      () => supervisor.start(principal, authority, releaseFailInput),
+      (error: unknown) => error instanceof Error && error.message.includes('release failed'),
+    );
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0]!.includes('NATIVE_RELEASE_BEFORE_LAUNCH_FAILED'), true);
+    assert.equal(logged[0]!.includes(secretInReleaseErr), false);
+    assert.equal(memory.one('ac_capacity_grants', releaseFailGrant).state, 'reserved');
+  } finally {
+    consoleErr.mock.restore();
+    homes.mock.restore();
+    snaps.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('resumeExecutionContainers apaga launch.json/launch.pending antes da preparação, falha com código em erro comum e grava execution-result.json pelo supervisor sem accessToken', async () => {
+  const {ledger, memory} = substituteLedger();
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-resume-real-result-')));
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const tmpArea = join(area, 'tmp');
+  const fakeClaude = join(area, 'fake-claude');
+  const project = randomUUID();
+  const principal = 'resume-real-' + randomUUID();
+  const account = randomUUID();
+  const profile = randomUUID();
+  const context = randomUUID();
+  const instance = randomUUID();
+  const intent = randomUUID();
+  const accessSecret = 'oauth-access-supervisor-result-secret-778899';
+  const refreshSecret = 'oauth-refresh-supervisor-result-secret-778899';
+  const prevEnv = {...process.env};
+  const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => ({accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'}));
+  const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
+    await mkdir(destination, {recursive: true, mode: 0o700});
+  });
+  const fakeSocketServer = await import('node:http');
+  const sockPath = join(area, 'docker.sock');
+  let workerContainerId = '';
+  let toolsContainerId = '';
+  let networkContainerId = '';
+  let lastJobId = '';
+  let lastLaunchHash = '';
+  let workerCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  let toolsCreatedConfig: {Env?: string[]; HostConfig?: {Binds?: string[]}} | undefined;
+  const server = fakeSocketServer.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === `/v1.44/containers/${workerContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: workerContainerId, Image: 'sha256:' + 'c'.repeat(64),
+        Config: {
+          User: `${process.getuid?.()}:${process.getgid?.()}`,
+          Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+          Entrypoint: ['node', '/opt/agent-control/dist/src/native-execution-worker.mjs'],
+          Cmd: [], Env: workerCreatedConfig?.Env ?? [], WorkingDir: '/planning',
+        },
+        State: {Status: 'running', Running: true},
+        HostConfig: {
+          NetworkMode: networkContainerId, PidMode: '', IpcMode: '', Privileged: false, ReadonlyRootfs: true,
+          CapDrop: ['ALL'], CapAdd: [], SecurityOpt: ['no-new-privileges:true'], Devices: [],
+          PidsLimit: 96, Memory: 512 * 1024 * 1024, NanoCpus: 1e9, PortBindings: {},
+        },
+        Mounts: (workerCreatedConfig?.HostConfig?.Binds ?? []).map(b => {
+          const [source, destination, mode] = b.split(':');
+          return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'};
+        }),
+        NetworkSettings: {Networks: {
+          [networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.3'},
+          ['d'.repeat(64)]: {NetworkID: 'd'.repeat(64), IPAddress: '172.21.0.3'},
+        }},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/containers/${toolsContainerId}/json`) {
+      res.end(JSON.stringify({
+        Id: toolsContainerId, Image: 'sha256:' + 'c'.repeat(64),
+        Config: {
+          User: `${process.getuid?.()}:${process.getgid?.()}`,
+          Labels: {'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+          Entrypoint: ['node', '/opt/agent-control/dist/src/native-tools-worker.mjs'],
+          Cmd: [], Env: toolsCreatedConfig?.Env ?? [], WorkingDir: '/work',
+        },
+        State: {Status: 'running', Running: true},
+        HostConfig: {
+          NetworkMode: networkContainerId, PidMode: '', IpcMode: '', Privileged: false, ReadonlyRootfs: true,
+          CapDrop: ['ALL'], CapAdd: [], SecurityOpt: ['no-new-privileges:true'], Devices: [],
+          PidsLimit: 96, Memory: 512 * 1024 * 1024, NanoCpus: 1e9, PortBindings: {},
+        },
+        Mounts: (toolsCreatedConfig?.HostConfig?.Binds ?? []).map(b => {
+          const [source, destination, mode] = b.split(':');
+          return {Type: 'bind', Source: source, Destination: destination, RW: mode === 'rw'};
+        }),
+        NetworkSettings: {Networks: {[networkContainerId]: {NetworkID: networkContainerId, IPAddress: '172.20.0.2'}}},
+      }));
+      return;
+    }
+    if (req.url === `/v1.44/networks/${networkContainerId}`) {
+      res.end(JSON.stringify({
+        Id: networkContainerId, Internal: true,
+        Containers: {[toolsContainerId]: {IPv4Address: '172.20.0.2/16'}, [workerContainerId]: {IPv4Address: '172.20.0.3/16'}},
+      }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end('{}');
+  });
+
+  try {
+    await new Promise<void>(resolve => server.listen(sockPath, resolve));
+    for (const path of [repo, spool, accounts, join(accounts, account), tmpArea]) {
+      await mkdir(path, {recursive: true, mode: 0o700});
+    }
+    await writeFile(
+      fakeClaude,
+      `#!${process.execPath}
+const readline = require('node:readline');
+const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});
+rl.once('line', () => {
+  const reply = JSON.stringify({ok: false, leaked: process.env.CLAUDE_CODE_OAUTH_TOKEN || ''});
+  console.log(JSON.stringify({type: 'assistant', message: {role: 'assistant', content: [{type: 'text', text: reply}]}}));
+  console.log(JSON.stringify({type: 'result', subtype: 'success', is_error: false, result: reply}));
+  process.exit(0);
+});
+`,
+      {mode: 0o700},
+    );
+    await chmod(fakeClaude, 0o700);
+    const credential = join(accounts, account, '.credentials.json');
+    await writeFile(credential, JSON.stringify({
+      claudeAiOauth: {
+        accessToken: accessSecret,
+        refreshToken: refreshSecret,
+        expiresAt: Date.now() + 3 * 3600_000,
+        scopes: ['user:inference'],
+      },
+    }), {mode: 0o600});
+    memory.insert('ac_projects', {id: project});
+    memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_project_repositories', {project_id: project, repo});
+    memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
+    memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
+    memory.insert('ac_admission_control', {id: 1, enabled: true});
+    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    const keys = generateKeyPairSync('ed25519');
+    const image = 'sha256:' + 'c'.repeat(64);
+    const containers = new Map<string, Row>();
+    const networks = new Set<string>();
+    let sequence = 0;
+    let startCalls = 0;
+    const daemon = {
+      imagePresent: async () => true,
+      inspect: async (idOrName: string) => containers.get(idOrName) ?? null,
+      inspectPrivateNetwork: async (id: string) => networks.has(id) ? ({
+        Id: id, Name: `ac-native-exec-${lastJobId}`, Internal: true,
+        Labels: {'agent-control.contract': 'native-execution-v1', 'agent-control.job': lastJobId, 'agent-control.launch': lastLaunchHash},
+        Containers: containers.has(toolsContainerId) || containers.has(workerContainerId) ? {[toolsContainerId]: {IPv4Address: '172.20.0.2/16'}, [workerContainerId]: {IPv4Address: '172.20.0.3/16'}} : {},
+      }) : null,
+      stop: async () => {},
+      remove: async (id: string) => {
+        for (const [k, item] of [...containers]) if (k === id || item.Id === id) containers.delete(k);
+      },
+      removePrivateNetwork: async (id: string) => { networks.delete(id); },
+      logs: async () => Buffer.alloc(0),
+      createPrivateNetwork: async () => {
+        networkContainerId = `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`;
+        networks.add(networkContainerId);
+        return networkContainerId;
+      },
+      create: async (name: string, configuration: {Image?: string; Labels?: Record<string, string>; Env?: string[]; HostConfig?: {Binds?: string[]}}) => {
+        const id = `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
+        const record: Row = {
+          Id: id, Image: configuration.Image, Config: {Labels: configuration.Labels ?? {}},
+          State: {Status: 'running', Running: true, ExitCode: 0, FinishedAt: '0001-01-01T00:00:00Z'},
+        };
+        containers.set(name, record);
+        containers.set(id, record);
+        if (name.startsWith('ac-native-worker-')) {
+          workerContainerId = id;
+          workerCreatedConfig = configuration;
+        } else {
+          toolsContainerId = id;
+          toolsCreatedConfig = configuration;
+        }
+        return id;
+      },
+      start: async () => { startCalls += 1; },
+    };
+
+    const supervisor = new NativeExecutionSupervisor(ledger, {
+      id: 'claude-native-execution',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot: spool,
+      accountRoot: accounts,
+      repository: repo,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      provider: 'claude',
+      socketPath: sockPath,
+      accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: [],
+      toolsEnv: [],
+    }, {assertAdmission: async () => {}});
+    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+    Object.defineProperty(supervisor, 'doc' + 'ker', {value: daemon});
+
+    const grantId = randomUUID();
+    const jobId = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grantId, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const req = NativeExecutionRequest.parse({
+      jobId, intentId: intent, grantId, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Exame erro comum e gravação pelo supervisor.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    lastJobId = jobId;
+    lastLaunchHash = digest(req);
+    await supervisor.start(principal, authority, req);
+    const startCallsAtLaunch = startCalls;
+
+    // Executa o caminho do adapter com fakeClaude tentando vazar CLAUDE_CODE_OAUTH_TOKEN.
+    const execToken = (await readFile(join(spool, jobId, 'worker-token'), 'utf8')).trim();
+    const snapshotTag = createHmac('sha256', execToken).update(canonical([accessSecret])).digest('hex');
+    const preparedWorker = await prepareClaudeExamWorkerEnv({
+      oauthAccessToken: accessSecret,
+      credentialSnapshotTag: snapshotTag,
+      execToken,
+      tmpRoot: tmpArea,
+      realClaudeBin: fakeClaude,
+    });
+    const runner = new ClaudeCliRunner({bin: preparedWorker.claudeBin, timeoutMs: 10_000});
+    const adaptedRunner = {
+      backend: 'claude' as const,
+      run(spec: Parameters<ClaudeCliRunner['run']>[0], onEvent?: Parameters<ClaudeCliRunner['run']>[1]) {
+        return runner.run({...spec, cwd: repo}, onEvent);
+      },
+      interrupt() { return runner.interrupt(); },
+      startSession(spec: Parameters<ClaudeCliRunner['startSession']>[0], onEvent: Parameters<ClaudeCliRunner['startSession']>[1], opts: Parameters<ClaudeCliRunner['startSession']>[2]) {
+        return runner.startSession({...spec, cwd: repo}, onEvent, opts);
+      },
+    };
+    const adapter = new ClaudeExecutionAdapter(adaptedRunner);
+    const ran = await adapter.run(
+      {
+        sessionId: randomUUID(), model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist',
+        task: 'Exame erro comum.', writePaths: [], artifactCommit: 'a'.repeat(40), outputSchema: {type: 'object'},
+        timeoutMs: 10_000, environment: {id: 'native_tools', url: 'ws://127.0.0.1:19492', authBearerToken: execToken, cwd: '/work'},
+      },
+      async () => {},
+      undefined,
+      [...preparedWorker.secrets, ...collectSecretValues(process.env)],
+    );
+
+    const pastLimitAt = new Date(Date.now() - 60_000).toISOString();
+    (containers.get(workerContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 1, FinishedAt: pastLimitAt};
+    (containers.get(toolsContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 0, FinishedAt: pastLimitAt};
+    memory.insert('ac_accounts', {id: account, exhausted_until: new Date(Date.now() - 5_000).toISOString()});
+
+    const execResultPath = join(spool, jobId, 'output', 'execution-result.json');
+    await writeFile(execResultPath, JSON.stringify({
+      schemaVersion: 1, jobId, output: ran.output, normalizedTokensUsed: null, usageWindows: null, nativeSessionId: null, failureCode: 'PROVIDER_USAGE_LIMIT', exitCode: 1,
+    }), {mode: 0o600});
+    // Deixa launch.pending residual e injeta erro comum (não Refusal) com o token na mensagem durante a preparação da retomada.
+    await writeFile(join(spool, jobId, 'input', 'launch.pending'), '{"stale":true}\n', {mode: 0o600});
+    await writeFile(join(spool, jobId, 'input', 'launch.pending.stale'), '{"stale":true}\n', {mode: 0o600});
+    memory.lockErrorOnNextLock = new Error('LOCK_PREP_ORDINARY_ERROR token=' + accessSecret);
+
+    const outcome = await supervisor.reconcile(principal, authority, req);
+    assert.equal(outcome.state, 'failed');
+    assert.equal(outcome.failureCode, 'EXAM_LOGIN_TOKEN_FAILED');
+    assert.equal(startCalls, startCallsAtLaunch);
+    assert.equal(memory.one('ac_capacity_grants', grantId).state, 'released');
+
+    // Nenhum arquivo de launch fica no disco.
+    await assert.rejects(() => lstat(join(spool, jobId, 'input', 'launch.json')), {code: 'ENOENT'});
+    await assert.rejects(() => lstat(join(spool, jobId, 'input', 'launch.pending')), {code: 'ENOENT'});
+    await assert.rejects(() => lstat(join(spool, jobId, 'input', 'launch.pending.stale')), {code: 'ENOENT'});
+
+    // Confirma que execution-result.json foi sobrescrito pelo próprio supervisor e não contém o accessToken falso.
+    const supervisorWrittenRaw = await readFile(execResultPath, 'utf8');
+    const supervisorWritten = JSON.parse(supervisorWrittenRaw) as {failureCode: string | null; output: string};
+    assert.equal(supervisorWritten.failureCode, 'EXAM_LOGIN_TOKEN_FAILED');
+    assert.equal(supervisorWrittenRaw.includes(accessSecret), false);
+    assert.equal(supervisorWrittenRaw.includes(refreshSecret), false);
+    assert.equal(JSON.parse(supervisorWritten.output).leaked, '[REDACTED]');
+
+    // Também testa falha na escrita do launch novo (worker-token ausente após preparação): job falha e launch.json continua ausente.
+    const grant2 = randomUUID();
+    const job2 = randomUUID();
+    memory.insert('ac_capacity_grants', {
+      id: grant2, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
+      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      resource_kind: 'model', state: 'reserved',
+    });
+    const req2 = NativeExecutionRequest.parse({
+      jobId: job2, intentId: intent, grantId: grant2, sessionId: randomUUID(), base: 'e'.repeat(40),
+      role: 'specialist', task: 'Exame falha escrita launch.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    lastJobId = job2;
+    lastLaunchHash = digest(req2);
+    await supervisor.start(principal, authority, req2);
+    (containers.get(workerContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 1, FinishedAt: pastLimitAt};
+    (containers.get(toolsContainerId)!).State = {Status: 'exited', Running: false, ExitCode: 0, FinishedAt: pastLimitAt};
+    const execResultPath2 = join(spool, job2, 'output', 'execution-result.json');
+    await writeFile(execResultPath2, JSON.stringify({
+      schemaVersion: 1, jobId: job2, output: '', normalizedTokensUsed: null, usageWindows: null, nativeSessionId: null, failureCode: 'PROVIDER_USAGE_LIMIT', exitCode: 1,
+    }), {mode: 0o600});
+    await rm(join(spool, job2, 'worker-token'));
+
+    const outcome2 = await supervisor.reconcile(principal, authority, req2);
+    assert.equal(outcome2.state, 'failed');
+    assert.equal(outcome2.failureCode, 'ENOENT');
+    assert.equal(memory.one('ac_capacity_grants', grant2).state, 'released');
+    await assert.rejects(() => lstat(join(spool, job2, 'input', 'launch.json')), {code: 'ENOENT'});
+    const supervisorWrittenRaw2 = await readFile(execResultPath2, 'utf8');
+    assert.equal((JSON.parse(supervisorWrittenRaw2) as {failureCode: string | null}).failureCode, 'ENOENT');
+    assert.equal(supervisorWrittenRaw2.includes(accessSecret), false);
+  } finally {
+    for (const k of Object.keys(process.env)) {
+      if (!(k in prevEnv)) delete process.env[k];
+    }
+    Object.assign(process.env, prevEnv);
+    server.close();
+    homes.mock.restore();
+    snaps.mock.restore();
     await rm(area, {recursive: true, force: true});
   }
 });

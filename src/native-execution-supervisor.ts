@@ -10,7 +10,7 @@ import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
-import {mkdir,lstat,realpath,writeFile,open,rename,cp,rm} from 'node:fs/promises';
+import {mkdir,lstat,realpath,readdir,writeFile,open,rename,cp,rm} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
 import {createPrivateKey,createPublicKey,sign,createHash,createHmac,randomBytes,verify} from 'node:crypto';
 import {z} from 'zod';
@@ -210,27 +210,6 @@ export class NativeExecutionSupervisor{
    return grant;
   });
   const synthetic=Boolean(this.config.syntheticFixture);
-  const personal=!synthetic&&Boolean((await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
-  const assessment=personal?undefined:(await new ProviderEligibility(this.ledger).view(principal,g.project_id,g.account_id,1)).latest;
-  if(!personal&&(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.authenticationMode!==(synthetic?'synthetic':'subscription_oauth')||assessment.executionMode!==(synthetic?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.executorDigest))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
-  await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(principal,input.grantId,authority);
-  const envSecrets=[...this.config.workerEnv,...this.config.toolsEnv].flatMap(entry=>{const index=entry.indexOf('=');return index<0?[]:collectSecretValues({[entry.slice(0,index)]:entry.slice(index+1)});});
-  let accountSecrets:string[]=[];
-  const accountRoot=join(this.config.accountRoot,g.account_id);
-  const examWorkflowEarly=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
-  const claudeExam=!synthetic&&readonlyExamIsolation(personal,examWorkflowEarly,input.role)&&this.config.provider==='claude';
-  if(!claudeExam){
-   if(!synthetic)accountSecrets=personal?await readMountedCredentialSecrets(this.config.provider??'codex',accountRoot):(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
-   else{
-    // Synthetic fixtures may opt into the production worker with synthetic
-    // auth; older deterministic substitute workers have no auth file.
-    let present=true;try{await lstat(join(accountRoot,'.codex','auth.json'));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')present=false;else throw error;}
-    if(present)accountSecrets=(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
-   }
-   assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);
-  }
-  await this.diskGuard?.assertAdmission();
-  await this.directory(this.config.hostRoot);
   const releaseBeforeLaunch=async(reason:string)=>{
    const receipt={executionStarted:false,jobId:input.jobId,containerId:null,networkId:null,synthetic,modelInference:false,reason};
    await this.ledger.tx(async c=>{
@@ -250,11 +229,51 @@ export class NativeExecutionSupervisor{
   const p=this.paths(input.jobId);
   let jobDirCreated=false;
   const failBeforeLaunch=async(reason:string)=>{
-   await releaseBeforeLaunch(reason).catch(()=>undefined);
-   if(jobDirCreated)await rm(p.root,{recursive:true,force:true}).catch(()=>undefined);
+   try{
+    await releaseBeforeLaunch(reason);
+   }catch(releaseError){
+    const code=safeFailureCode(releaseError instanceof Refusal?releaseError.code:(releaseError as NodeJS.ErrnoException)?.code,'NATIVE_RELEASE_BEFORE_LAUNCH_FAILED');
+    console.error(JSON.stringify({event:'NATIVE_RELEASE_BEFORE_LAUNCH_FAILED',jobId:input.jobId,reason,code}));
+    throw releaseError;
+   }finally{
+    if(jobDirCreated)await rm(p.root,{recursive:true,force:true}).catch(()=>undefined);
+   }
   };
-  if(!(await this.docker.imagePresent(this.config.workerImage))||!(await this.docker.imagePresent(this.config.toolsImage))){
-   await releaseBeforeLaunch('native_image_missing');
+  let personal=false;
+  let assessment:Awaited<ReturnType<ProviderEligibility['view']>>['latest']|undefined;
+  let envSecrets:string[]=[];
+  let accountSecrets:string[]=[];
+  const accountRoot=join(this.config.accountRoot,g.account_id);
+  let examWorkflowEarly:unknown;
+  let claudeExam=false;
+  let imagesPresent=false;
+  try{
+   personal=!synthetic&&Boolean((await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
+   assessment=personal?undefined:(await new ProviderEligibility(this.ledger).view(principal,g.project_id,g.account_id,1)).latest;
+   if(!personal&&(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.authenticationMode!==(synthetic?'synthetic':'subscription_oauth')||assessment.executionMode!==(synthetic?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.executorDigest))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+   await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(principal,input.grantId,authority);
+   envSecrets=[...this.config.workerEnv,...this.config.toolsEnv].flatMap(entry=>{const index=entry.indexOf('=');return index<0?[]:collectSecretValues({[entry.slice(0,index)]:entry.slice(index+1)});});
+   examWorkflowEarly=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
+   claudeExam=!synthetic&&readonlyExamIsolation(personal,examWorkflowEarly,input.role)&&this.config.provider==='claude';
+   if(!claudeExam){
+    if(!synthetic)accountSecrets=personal?await readMountedCredentialSecrets(this.config.provider??'codex',accountRoot):(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
+    else{
+     // Synthetic fixtures may opt into the production worker with synthetic
+     // auth; older deterministic substitute workers have no auth file.
+     let present=true;try{await lstat(join(accountRoot,'.codex','auth.json'));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')present=false;else throw error;}
+     if(present)accountSecrets=(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
+    }
+    assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);
+   }
+   await this.diskGuard?.assertAdmission();
+   await this.directory(this.config.hostRoot);
+   imagesPresent=Boolean((await this.docker.imagePresent(this.config.workerImage))&&(await this.docker.imagePresent(this.config.toolsImage)));
+  }catch(error){
+   await failBeforeLaunch(error instanceof Refusal&&error.code==='NATIVE_EXECUTION_SECRET_IN_TASK'?'secret_in_task':'pre_launch_failed');
+   throw error;
+  }
+  if(!imagesPresent){
+   await failBeforeLaunch('native_image_missing');
    throw new Refusal('NATIVE_IMAGE_MISSING');
   }
   // Stored workflow is the signal; the task prefix only separates create from the readonly exam.
@@ -673,6 +692,13 @@ export class NativeExecutionSupervisor{
   const p=this.paths(jobId);
   await rm(join(p.input,'launch.json'),{force:true});
   await rm(join(p.input,'launch.pending'),{force:true});
+  try{
+   for(const entry of await readdir(p.input)){
+    if(entry.startsWith('launch.pending.'))await rm(join(p.input,entry),{force:true});
+   }
+  }catch(error){
+   if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+  }
  }
  /** Same worker, tools container and grant. Re-prepares Claude exam tokens (never reusing old tokens), renews launch expiry, then starts the exited pair again. */
  private async resumeExecutionContainers(input:Input,job:Record<string,any>,workerId:string,toolsId:string):Promise<{resumed:true}|{resumed:false;failureCode:string}>{
@@ -682,34 +708,35 @@ export class NativeExecutionSupervisor{
    const parsed=JSON.parse((await handle.readFile()).toString('utf8'));payload=parsed.payload;
    if(!payload||typeof payload!=='object'||!verify(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(String(parsed.signature),'hex')))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
   }finally{await handle.close();}
+  delete payload.oauthAccessToken;
+  await this.removeLaunchFiles(input.jobId);
   const synthetic=Boolean(this.config.syntheticFixture);
   const personal=!synthetic&&Boolean((await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
   const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
   const claudeExam=!synthetic&&readonlyExamIsolation(personal,examWorkflow,input.role)&&this.config.provider==='claude';
   if(claudeExam){
-   delete payload.oauthAccessToken;
-   let prepared:{status:'fresh'|'renewed';accessToken:string;secrets:string[]};
    try{
     const envSecrets=[...this.config.workerEnv,...this.config.toolsEnv].flatMap(entry=>{const index=entry.indexOf('=');return index<0?[]:collectSecretValues({[entry.slice(0,index)]:entry.slice(index+1)});});
-    prepared=await prepareClaudeExamAccessToken({accountDir:join(this.config.accountRoot,String(job.account_id)),accountId:String(job.account_id),examMaxMs:input.timeoutMs,renew:this.config.examLoginRenew??renewClaudeLoginInPlace,lock:postgresAccountLoginLock(this.ledger)});
+    const prepared=await prepareClaudeExamAccessToken({accountDir:join(this.config.accountRoot,String(job.account_id)),accountId:String(job.account_id),examMaxMs:input.timeoutMs,renew:this.config.examLoginRenew??renewClaudeLoginInPlace,lock:postgresAccountLoginLock(this.ledger)});
     assertNoNativeTaskSecrets(input.task,[...envSecrets,...prepared.secrets]);
+    const tokenBytes=await readPrivateWorkerFile(p.workerToken,512);
+    let token:string;try{token=tokenBytes.toString('utf8').trim();}finally{tokenBytes.fill(0);}
+    payload.oauthAccessToken=prepared.accessToken;
+    payload.credentialSnapshotTag=createHmac('sha256',token).update(canonical([prepared.accessToken])).digest('hex');
+    let existingSecrets:string[]=[];
+    try{existingSecrets=await readNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key);}catch{}
+    const tempSnap=p.secretSnapshot+'.pending.'+randomBytes(6).toString('hex');
+    try{
+     await writeNativeSecretSnapshot(tempSnap,input.jobId,this.key,[...new Set([...existingSecrets,...prepared.secrets])]);
+     await rename(tempSnap,p.secretSnapshot);
+    }catch(snapError){
+     await rm(tempSnap,{force:true}).catch(()=>undefined);
+     throw snapError;
+    }
    }catch(error){
-    if(error instanceof Refusal)return {resumed:false,failureCode:safeFailureCode(error.code,'EXAM_LOGIN_TOKEN_FAILED')};
-    throw error;
-   }
-   const tokenBytes=await readPrivateWorkerFile(p.workerToken,512);
-   let token:string;try{token=tokenBytes.toString('utf8').trim();}finally{tokenBytes.fill(0);}
-   payload.oauthAccessToken=prepared.accessToken;
-   payload.credentialSnapshotTag=createHmac('sha256',token).update(canonical([prepared.accessToken])).digest('hex');
-   let existingSecrets:string[]=[];
-   try{existingSecrets=await readNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key);}catch{}
-   const tempSnap=p.secretSnapshot+'.pending.'+randomBytes(6).toString('hex');
-   try{
-    await writeNativeSecretSnapshot(tempSnap,input.jobId,this.key,[...new Set([...existingSecrets,...prepared.secrets])]);
-    await rename(tempSnap,p.secretSnapshot);
-   }catch(error){
-    await rm(tempSnap,{force:true}).catch(()=>undefined);
-    throw error;
+    await this.removeLaunchFiles(input.jobId).catch(()=>undefined);
+    const code=error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code;
+    return {resumed:false,failureCode:safeFailureCode(code,'EXAM_LOGIN_TOKEN_FAILED')};
    }
   }
   payload.expiresAt=Date.now()+50000;
@@ -719,7 +746,9 @@ export class NativeExecutionSupervisor{
    await rename(pending,path);
   }catch(error){
    await rm(pending,{force:true}).catch(()=>undefined);
-   throw error;
+   await this.removeLaunchFiles(input.jobId).catch(()=>undefined);
+   const code=error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code;
+   return {resumed:false,failureCode:safeFailureCode(code,'NATIVE_EXECUTION_RESUME_FAILED')};
   }
   await rm(join(p.output,'execution-result.json'),{force:true});
   await this.docker.start(toolsId);await this.docker.start(workerId);
