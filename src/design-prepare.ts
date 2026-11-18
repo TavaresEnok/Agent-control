@@ -9,8 +9,8 @@ const CREATE_MODEL = 'claude-opus-5-5';
 const CREATE_EFFORT = 'medium' as const;
 const EXAMINER_MODEL = 'claude-sonnet-5-5';
 const CATALOG_SOURCE = 'personal://account-add';
-const CATALOG_EFFORTS = ['low', 'medium', 'high'] as const;
-const CATALOG_ROLES = ['manager', 'programmer', 'reviewer', 'qa', 'specialist', 'judge'] as const;
+const CATALOG_EFFORTS = [CREATE_EFFORT] as const;
+const CATALOG_ROLES = ['specialist'] as const;
 
 type ProfileRow = {
   id: string;
@@ -21,7 +21,7 @@ type ProfileRow = {
   revision: number;
 };
 
-type CatalogRow = {model: string; efforts: string[]};
+type CatalogRow = {model: string; efforts: string[]; roles: string[]};
 
 export type DesignPrepareProfile = {
   purpose: 'criar' | 'examinador' | 'revisor';
@@ -51,13 +51,16 @@ type PrepareFacts = {
   previous: CapacityPolicyValue | null;
   revision: number;
   contexts: string[];
-  opusEfforts: string[] | null;
+  opus: {efforts: string[]; roles: string[]} | null;
 };
 
 type SeatPlan = {
   criar: DesignPrepareProfile;
   examinador: DesignPrepareProfile;
   revisor: DesignPrepareProfile;
+  criarInChain: boolean;
+  examinerInChain: boolean;
+  reviewerInChain: boolean;
   chain: {regular: string[]; emergency: string[]};
   reusePolicy: boolean;
 };
@@ -65,7 +68,7 @@ type SeatPlan = {
 /**
  * Mostra ou publica a cadeia `roles.specialist` sem mexer nos outros papéis.
  * Sem `apply`, só lê. Com `apply`, cria perfis, registra o Opus se faltar e
- * atribui a revisão só aos contextos sem política.
+ * atribui a revisão só aos contextos sem política, tudo na mesma transação.
  */
 export async function prepareDesignSpecialist(input: {
   ledger: Ledger;
@@ -73,28 +76,28 @@ export async function prepareDesignSpecialist(input: {
   projectId: string;
   apply: boolean;
 }): Promise<DesignPrepareReport> {
-  const facts = await input.ledger.tx(client => loadFacts(client, input.owner, input.projectId));
-  if (facts.opusEfforts && !facts.opusEfforts.includes(CREATE_EFFORT)) {
-    throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
-  }
-  const plan = seatPlan(facts);
-  const catalogAction = facts.opusEfforts?.includes(CREATE_EFFORT) ? 'presente' as const : 'registrar' as const;
-  const contexts = facts.contexts;
-  const unchanged = plan.reusePolicy && catalogAction === 'presente' && contexts.length === 0
-    && plan.criar.action === 'reusar' && plan.examinador.action === 'reusar' && plan.revisor.action === 'reusar';
-  if (!input.apply || unchanged) {
-    return {
-      apply: input.apply,
-      unchanged,
-      catalogAction,
-      profiles: [plan.criar, plan.examinador, plan.revisor],
-      chain: plan.chain,
-      contexts,
-      revisionFrom: facts.revision,
-      revisionTo: unchanged || plan.reusePolicy ? facts.revision : null,
-    };
-  }
-  const written = await input.ledger.tx(async client => {
+  return input.ledger.tx(async client => {
+    const facts = await loadFacts(client, input.owner, input.projectId, input.apply);
+    if (facts.opus && (!facts.opus.efforts.includes(CREATE_EFFORT) || !facts.opus.roles.includes('specialist'))) {
+      throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
+    }
+    const plan = seatPlan(facts);
+    const catalogAction = facts.opus ? 'presente' as const : 'registrar' as const;
+    const contexts = facts.contexts;
+    const unchanged = plan.reusePolicy && catalogAction === 'presente' && contexts.length === 0
+      && plan.criar.action === 'reusar' && plan.examinador.action === 'reusar' && plan.revisor.action === 'reusar';
+    if (!input.apply || unchanged) {
+      return {
+        apply: input.apply,
+        unchanged,
+        catalogAction,
+        profiles: [plan.criar, plan.examinador, plan.revisor],
+        chain: plan.chain,
+        contexts,
+        revisionFrom: facts.revision,
+        revisionTo: unchanged || plan.reusePolicy ? facts.revision : null,
+      };
+    }
     const capacity = new Capacity(input.ledger, client);
     if (catalogAction === 'registrar') {
       try {
@@ -112,50 +115,66 @@ export async function prepareDesignSpecialist(input: {
         throw error;
       }
     }
-    const criar = await ensureProfile(capacity, client, input.owner, input.projectId, plan.criar);
-    const examinador = await ensureProfile(capacity, client, input.owner, input.projectId, plan.examinador, [criar]);
-    const revisor = await ensureProfile(capacity, client, input.owner, input.projectId, plan.revisor, [criar, examinador]);
+    const existingRegular = facts.previous?.roles.specialist?.regular ?? [];
+    const existingEmergency = facts.previous?.roles.specialist?.emergency ?? [];
+    const lockedIds = new Set([...existingRegular, ...existingEmergency]);
+    const criar = await ensureProfile(
+      capacity,
+      client,
+      input.owner,
+      input.projectId,
+      plan.criar,
+      [...lockedIds].filter(id => id !== plan.criar.profileId),
+    );
+    const examinador = await ensureProfile(
+      capacity,
+      client,
+      input.owner,
+      input.projectId,
+      plan.examinador,
+      [...new Set([...lockedIds, criar])].filter(id => id !== plan.examinador.profileId),
+    );
+    const revisor = await ensureProfile(
+      capacity,
+      client,
+      input.owner,
+      input.projectId,
+      plan.revisor,
+      [...new Set([...lockedIds, criar, examinador])].filter(id => id !== plan.revisor.profileId),
+    );
     if (new Set([criar, examinador, revisor]).size !== 3) {
       throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
     }
-    const chain = {regular: [criar, examinador], emergency: [revisor]};
-    const stored = (await client.query<{snapshot: unknown; revision: number}>(
-      'SELECT snapshot, revision FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',
-      [input.projectId],
-    )).rows[0];
-    const previous = stored ? CapacityPolicy.parse(stored.snapshot) : facts.previous;
-    const revisionNow = stored ? Number(stored.revision) : 0;
+    const regular = [...existingRegular];
+    if (!plan.criarInChain) regular.push(criar);
+    if (!plan.examinerInChain) regular.push(examinador);
+    const emergency = [...existingEmergency];
+    if (!plan.reviewerInChain) emergency.push(revisor);
+    const chain = {regular, emergency};
     const policy = CapacityPolicy.parse({
-      ...(previous ?? {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {}}),
-      roles: {...(previous?.roles ?? {}), specialist: chain},
+      ...(facts.previous ?? {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {}}),
+      roles: {...(facts.previous?.roles ?? {}), specialist: chain},
     });
-    let revision = revisionNow;
-    if (!sameChain(previous?.roles.specialist, chain)) {
-      revision = await capacity.publish(input.owner, input.projectId, revisionNow, policy);
+    let revision = facts.revision;
+    if (!sameChain(facts.previous?.roles.specialist, chain)) {
+      revision = await capacity.publish(input.owner, input.projectId, facts.revision, policy);
     }
-    const pending = (await client.query<{id: string}>(
-      `SELECT id::text AS id FROM ac_contexts
-       WHERE project_id=$1 AND NOT archived AND capacity_policy_revision IS NULL
-       ORDER BY id`,
-      [input.projectId],
-    )).rows.map(row => row.id);
-    for (const contextId of pending) await capacity.assignPolicy(input.owner, contextId, revision);
-    return {criar, examinador, revisor, chain, revision, contexts: pending};
+    for (const contextId of contexts) await capacity.assignPolicy(input.owner, contextId, revision);
+    return {
+      apply: true,
+      unchanged: false,
+      catalogAction,
+      profiles: [
+        {...plan.criar, profileId: criar},
+        {...plan.examinador, profileId: examinador},
+        {...plan.revisor, profileId: revisor},
+      ],
+      chain,
+      contexts,
+      revisionFrom: facts.revision,
+      revisionTo: revision,
+    };
   });
-  return {
-    apply: true,
-    unchanged: false,
-    catalogAction,
-    profiles: [
-      {...plan.criar, profileId: written.criar},
-      {...plan.examinador, profileId: written.examinador},
-      {...plan.revisor, profileId: written.revisor},
-    ],
-    chain: written.chain,
-    contexts: written.contexts,
-    revisionFrom: facts.revision,
-    revisionTo: written.revision,
-  };
 }
 
 export function formatDesignPrepare(report: DesignPrepareReport): string {
@@ -181,7 +200,7 @@ export function formatDesignPrepare(report: DesignPrepareReport): string {
   return lines.join('\n');
 }
 
-async function loadFacts(client: pg.PoolClient, owner: string, projectId: string): Promise<PrepareFacts> {
+async function loadFacts(client: pg.PoolClient, owner: string, projectId: string, apply: boolean): Promise<PrepareFacts> {
   const mode = (await client.query<{mode: string}>('SELECT mode FROM ac_installation_activation WHERE id=1')).rows[0]?.mode;
   if (mode !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const member = await client.query(
@@ -189,6 +208,7 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
     [projectId, owner],
   );
   if (!member.rowCount) throw new Refusal('PROJECT_OWNER_REQUIRED', 403);
+  if (apply) await client.query('SELECT id FROM ac_projects WHERE id=$1 FOR UPDATE', [projectId]);
   const accounts = (await client.query<{id: string}>(
     `SELECT a.id::text AS id FROM ac_accounts a
      JOIN ac_account_access x ON x.account_id=a.id
@@ -217,18 +237,18 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
     'SELECT snapshot, revision FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',
     [projectId],
   )).rows[0];
-  const opus = (await client.query<{efforts: string[]}>(
-    "SELECT efforts FROM ac_model_catalog WHERE provider='claude' AND model=$1",
+  const opus = (await client.query<{efforts: string[]; roles: string[]}>(
+    "SELECT efforts, roles FROM ac_model_catalog WHERE provider='claude' AND model=$1",
     [CREATE_MODEL],
-  )).rows[0];
+  )).rows[0] ?? null;
   const contexts = (await client.query<{id: string}>(
     `SELECT id::text AS id FROM ac_contexts
      WHERE project_id=$1 AND NOT archived AND capacity_policy_revision IS NULL
      ORDER BY id`,
     [projectId],
   )).rows.map(row => row.id);
-  const catalog = (await client.query<{model: string; efforts: string[]}>(
-    "SELECT model, efforts FROM ac_model_catalog WHERE provider='claude' ORDER BY model",
+  const catalog = (await client.query<{model: string; efforts: string[]; roles: string[]}>(
+    "SELECT model, efforts, roles FROM ac_model_catalog WHERE provider='claude' ORDER BY model",
   )).rows;
   return {
     accounts,
@@ -237,7 +257,7 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
     previous: stored ? CapacityPolicy.parse(stored.snapshot) : null,
     revision: stored ? Number(stored.revision) : 0,
     contexts,
-    opusEfforts: opus ? opus.efforts : null,
+    opus,
   };
 }
 
@@ -245,80 +265,90 @@ function seatPlan(facts: PrepareFacts): SeatPlan {
   const primary = facts.accounts[0];
   const secondary = facts.accounts[1] ?? primary;
   if (!primary || !secondary) throw new Refusal('DESIGN_PREPARE_NO_CLAUDE', 409);
-  const reused = facts.previous?.roles.specialist
-    ? reuseChain(facts.previous.roles.specialist, facts.profiles, primary.id, secondary.id)
-    : null;
-  if (reused) {
-    return {
-      criar: profileReport('criar', reused.criar, 'conta'),
-      examinador: profileReport('examinador', reused.examinador, 'conta'),
-      revisor: profileReport('revisor', reused.revisor, reused.revisor.accountId === primary.id ? 'outra sessão' : 'outra conta'),
-      chain: {
-        regular: [reused.criar.id, reused.examinador.id],
-        emergency: [reused.revisor.id],
-      },
-      reusePolicy: true,
-    };
-  }
+  const existing = facts.previous?.roles.specialist;
+  const existingRegular = existing?.regular ?? [];
+  const existingEmergency = existing?.emergency ?? [];
+  const byId = new Map(facts.profiles.map(row => [row.id, row]));
+  const chainRegularRows = existingRegular.map(id => byId.get(id)).filter((row): row is ProfileRow => row !== undefined);
+  const chainEmergencyRows = existingEmergency.map(id => byId.get(id)).filter((row): row is ProfileRow => row !== undefined);
+  const used = new Set<string>([...existingRegular, ...existingEmergency]);
+
+  const chainCriar = chainRegularRows.find(
+    row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === CREATE_EFFORT,
+  );
+  const chainExaminer = chainRegularRows.find(
+    row => row.accountId === primary.id && row.id !== chainCriar?.id,
+  );
+  const chainReviewer = chainEmergencyRows.find(
+    row => row.accountId === secondary.id && row.id !== chainCriar?.id && row.id !== chainExaminer?.id,
+  );
+
   const examiner = examinerChoice(facts);
-  const used = new Set<string>();
-  const criarRow = take(facts.profiles, row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === CREATE_EFFORT, used);
-  const examinerRow = take(facts.profiles, row => row.accountId === primary.id && row.model === examiner.model && row.effort === examiner.effort, used);
-  const reviewerRow = take(
+  const criarRow = chainCriar ?? take(
+    facts.profiles,
+    row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === CREATE_EFFORT,
+    used,
+  );
+  const examinerRow = chainExaminer ?? take(
+    facts.profiles,
+    row => row.accountId === primary.id && row.model === examiner.model && row.effort === examiner.effort,
+    used,
+  );
+  const reviewerRow = chainReviewer ?? take(
     facts.profiles,
     row => row.accountId === secondary.id && row.model === examiner.model && row.effort === examiner.effort,
     used,
   );
-  const criar = planned('criar', primary.id, CREATE_MODEL, CREATE_EFFORT, criarRow, 'conta');
-  const examinador = planned('examinador', primary.id, examiner.model, examiner.effort, examinerRow, 'conta');
-  const revisor = planned(
-    'revisor',
-    secondary.id,
-    examiner.model,
-    examiner.effort,
-    reviewerRow,
-    secondary.id === primary.id ? 'outra sessão' : 'outra conta',
-  );
+
+  const criar = chainCriar
+    ? profileReport('criar', chainCriar, 'conta')
+    : planned('criar', primary.id, CREATE_MODEL, CREATE_EFFORT, criarRow, 'conta');
+  const examinador = chainExaminer
+    ? profileReport('examinador', chainExaminer, 'conta')
+    : planned('examinador', primary.id, examiner.model, examiner.effort, examinerRow, 'conta');
+  const reviewerSeat = secondary.id === primary.id ? 'outra sessão' : 'outra conta';
+  const revisor = chainReviewer
+    ? profileReport('revisor', chainReviewer, chainReviewer.accountId === primary.id ? 'outra sessão' : 'outra conta')
+    : planned('revisor', secondary.id, examiner.model, examiner.effort, reviewerRow, reviewerSeat);
+
+  const criarInChain = chainCriar !== undefined;
+  const examinerInChain = chainExaminer !== undefined;
+  const reviewerInChain = chainReviewer !== undefined;
+  const regular = [...existingRegular];
+  if (!criarInChain) regular.push(criar.profileId ?? `novo:${criar.purpose}`);
+  if (!examinerInChain) regular.push(examinador.profileId ?? `novo:${examinador.purpose}`);
+  const emergency = [...existingEmergency];
+  if (!reviewerInChain) emergency.push(revisor.profileId ?? `novo:${revisor.purpose}`);
+
   return {
     criar,
     examinador,
     revisor,
-    chain: {
-      regular: [criar.profileId ?? `novo:${criar.purpose}`, examinador.profileId ?? `novo:${examinador.purpose}`],
-      emergency: [revisor.profileId ?? `novo:${revisor.purpose}`],
-    },
-    reusePolicy: false,
+    criarInChain,
+    examinerInChain,
+    reviewerInChain,
+    chain: {regular, emergency},
+    reusePolicy: existing !== undefined && criarInChain && examinerInChain && reviewerInChain,
   };
 }
 
 function examinerChoice(facts: PrepareFacts): {model: string; effort: Effort} {
-  const offers = (model: string, effort: string) => facts.catalog.some(row => row.model === model && row.efforts.includes(effort));
+  const offers = (model: string, effort: string) =>
+    facts.catalog.some(row => row.model === model && row.efforts.includes(effort) && row.roles.includes('specialist'));
   if (offers(EXAMINER_MODEL, 'medium')) return {model: EXAMINER_MODEL, effort: 'medium'};
-  const other = facts.catalog.find(row => row.model !== CREATE_MODEL && row.efforts.includes('medium'));
+  const other = facts.catalog.find(
+    row => row.model !== CREATE_MODEL && row.efforts.includes('medium') && row.roles.includes('specialist'),
+  );
   if (other) return {model: other.model, effort: 'medium'};
-  const opusReady = facts.opusEfforts === null || facts.opusEfforts.includes(CREATE_EFFORT);
+  const opusReady = facts.opus === null
+    || (facts.opus.efforts.includes(CREATE_EFFORT) && facts.opus.roles.includes('specialist'));
   if (opusReady) return {model: CREATE_MODEL, effort: 'medium'};
-  const any = facts.catalog.find(row => row.efforts.some(effort => effort === 'medium' || effort === 'high' || effort === 'low'));
+  const any = facts.catalog.find(
+    row => row.roles.includes('specialist') && row.efforts.some(effort => effort === 'medium' || effort === 'high' || effort === 'low'),
+  );
   const effort = any ? (['medium', 'high', 'low'] as const).find(item => any.efforts.includes(item)) : undefined;
   if (!any || !effort) throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
   return {model: any.model, effort};
-}
-
-function reuseChain(
-  chain: {regular: string[]; emergency: string[]},
-  rows: ProfileRow[],
-  primaryId: string,
-  secondaryId: string,
-): {criar: ProfileRow; examinador: ProfileRow; revisor: ProfileRow} | null {
-  const byId = new Map(rows.map(row => [row.id, row]));
-  const regular = chain.regular.map(id => byId.get(id)).filter((row): row is ProfileRow => row !== undefined);
-  const emergency = chain.emergency.map(id => byId.get(id)).filter((row): row is ProfileRow => row !== undefined);
-  const criar = regular.find(row => row.accountId === primaryId && row.model === CREATE_MODEL && row.effort === CREATE_EFFORT);
-  const examinador = regular.find(row => row.accountId === primaryId && row.id !== criar?.id);
-  const revisor = emergency.find(row => row.accountId === secondaryId && row.id !== criar?.id && row.id !== examinador?.id);
-  if (!criar || !examinador || !revisor) return null;
-  if (new Set([criar.id, examinador.id, revisor.id]).size !== 3) return null;
-  return {criar, examinador, revisor};
 }
 
 function profileReport(purpose: DesignPrepareProfile['purpose'], row: ProfileRow, seat: DesignPrepareProfile['seat']): DesignPrepareProfile {
