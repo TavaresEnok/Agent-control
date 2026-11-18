@@ -408,6 +408,17 @@ test('o host renova o login Claude antes de criar o exame e recusa se a renovaç
     );
     assert.equal(created.length, beforeFail);
     assert.equal(JSON.parse(await readFile(credential, 'utf8')).claudeAiOauth.accessToken, 'fixture-access-token');
+    const releasedGrant = memory.one('ac_capacity_grants', failedGrant);
+    assert.equal(releasedGrant.state, 'released');
+    assert.deepEqual(releasedGrant.physical_receipt, {
+      executionStarted: false,
+      jobId: failedInput.jobId,
+      containerId: null,
+      networkId: null,
+      synthetic: false,
+      modelInference: false,
+      reason: 'exam_login_stale',
+    });
 
     const freshGrant = randomUUID();
     memory.insert('ac_capacity_grants', {
