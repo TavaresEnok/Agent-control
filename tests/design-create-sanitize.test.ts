@@ -4,7 +4,7 @@ import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import {parseCreateBundle, runDesignCreate, sanitizeGeneratedHtml} from '../src/design-create.ts';
+import {parseCreateBundle, runDesignCreate, sanitizeCss, sanitizeGeneratedHtml} from '../src/design-create.ts';
 import {Refusal} from '../src/contracts.ts';
 import type {DesignRawFinding, DesignWorker} from '../src/design-types.ts';
 
@@ -158,6 +158,110 @@ test('css da tela perde import e url externos e guarda o resto', () => {
   assert.match(css, /@import "tema\.css"/);
   assert.match(css, /hero\.jpg/);
   assert.match(css, /#111/);
+});
+
+test('noscript é removido por inteiro', () => {
+  const out = sanitizeGeneratedHtml('<head><noscript><link rel="stylesheet" href="https://evil/a.css"></noscript></head><body><noscript><img src="https://evil/p.png"><p>sem-js</p></noscript><template><noscript>dentro-template</noscript></template><p>visivel</p></body>');
+  assert.equal(out.toLowerCase().includes('noscript'), false);
+  assert.equal(out.includes('evil'), false);
+  assert.equal(out.includes('sem-js'), false);
+  assert.equal(out.includes('dentro-template'), false);
+  assert.equal(out.includes('visivel'), true);
+});
+
+test('esquemas ftp, ws, file, blob e data fora de png/jpeg/webp são removidos em HTML e CSS', () => {
+  const html = [
+    '<a href="ftp://evil/arquivo">ftp-link</a>',
+    '<a href="ws://evil/socket">ws-link</a>',
+    '<a href="wss://evil/socket">wss-link</a>',
+    '<img src="file:///etc/passwd" alt="file-img">',
+    '<img src="blob:https://evil/123" alt="blob-img">',
+    '<img src="data:image/svg+xml,<svg onload=alert(1)>" alt="svg-img">',
+    '<img src="data:text/html,<script>alert(1)</script>" alt="html-img">',
+    '<img src="data:image/gif;base64,R0lGODlh" alt="gif-img">',
+    '<img src="data:image/png;base64,iVBORw0KGgo=" alt="png-ok">',
+    '<img src="data:image/jpeg;base64,/9j/4AAQ" alt="jpg-ok">',
+    '<img src="data:image/webp;base64,UklGRh4=" alt="webp-ok">',
+    '<img src="/\\evil/attr.png" alt="backslash-img">',
+    '<img srcset="ftp://evil/a.png 1x, data:image/svg+xml,<svg> 2x, data:image/png;base64,AAAA 2x, ./local.png 1x" alt="srcset-ok">',
+    '<div style="background:url(ftp://evil/a.png);list-style-image:url(ws://evil/b.png);mask-image:url(file:///a.png);content:url(blob:https://evil/1);border-image:url(data:image/svg+xml,<svg>);outline:1px solid #111">st</div>',
+    '<style>',
+    '@import "ftp://evil/x.css";',
+    '@import "data:text/css,body{color:red}";',
+    '.a{background:url(ftp://evil/a.png)}',
+    '.b{background:url(ws://evil/b.png)}',
+    '.c{background:url(file:///c.png)}',
+    '.d{background:url(blob:https://evil/d)}',
+    '.e{background:url(data:text/html,<script>)}',
+    '.f{background:url(data:image/svg+xml;base64,PHN2Zz4=)}',
+    '.g{background:url(data:image/png;base64,iVBORw0KGgo=)}',
+    '.h{background:url(data:image/jpeg;base64,/9j/4AAQ)}',
+    '.i{background:url(data:image/webp;base64,UklGRh4=)}',
+    '.j{background:url(/\\\\evil/j.png);mask:url(//evil/k.png)}',
+    '</style>',
+  ].join('');
+  const out = sanitizeGeneratedHtml(html);
+  for (const blocked of ['ftp:', 'ws:', 'wss:', 'file:', 'blob:', 'svg+xml', 'text/html', 'image/gif', 'text/css', '//evil', '/\\evil']) {
+    assert.equal(out.toLowerCase().includes(blocked), false, `vazou ${blocked} em:\n${out}`);
+  }
+  for (const kept of [
+    'data:image/png;base64,iVBORw0KGgo=',
+    'data:image/jpeg;base64,/9j/4AAQ',
+    'data:image/webp;base64,UklGRh4=',
+    'data:image/png;base64,AAAA 2x, ./local.png 1x',
+    'outline:1px solid #111',
+  ]) {
+    assert.equal(out.includes(kept), true, `perdeu ${kept} em:\n${out}`);
+  }
+});
+
+test('image-set e -webkit-image-set aceitam só relativo ou data:image/{png,jpeg,webp}', () => {
+  const html = [
+    '<div style="background-image:image-set(\'https://evil/a.png\' 1x, \'ftp://evil/b.png\' 2x, \'./local.png\' 2x, \'data:image/webp;base64,UklGRh4=\' type(\'image/webp\'))">ok1</div>',
+    '<div style="background-image:-webkit-image-set(url(ws://evil/a.png) 1x, \'data:image/svg+xml,<svg>\' 2x)">ok2</div>',
+    '<style>',
+    '.x{background-image:\\69 mage-set("https://evil/x.png" 1x, "blob:https://evil/y" 2x, "../hero.jpg" 1x)}',
+    '.y{background-image:-webkit-image-set("https://fonts.gstatic.com/a.png" 1x, "data:image/png;base64,AAAA" 2x)}',
+    '.z{background-image:image-set(url(file:///etc/passwd) 1x)}',
+    '</style>',
+  ].join('');
+  const out = sanitizeGeneratedHtml(html);
+  for (const blocked of ['https://evil', 'ftp://', 'ws://', 'svg+xml', 'blob:', 'fonts.gstatic.com', 'file://']) {
+    assert.equal(out.includes(blocked), false, `vazou ${blocked} em:\n${out}`);
+  }
+  assert.equal(out.includes("'./local.png' 2x"), true);
+  assert.equal(out.includes('data:image/webp;base64,UklGRh4='), true);
+  assert.equal(out.includes('"../hero.jpg" 1x'), true);
+  assert.equal(out.includes('data:image/png;base64,AAAA'), true);
+  assert.match(out, /ok2[\s\S]*background-image:none/);
+});
+
+test('fonts.googleapis.com e fonts.gstatic.com só passam em @import e @font-face', () => {
+  const css = [
+    '@import "https://fonts.googleapis.com/css2?family=Inter";',
+    '@import url("https://fonts.gstatic.com/s/inter.css");',
+    '@import "https://evil.example/x.css";',
+    '@import "https://fonts.googleapis.com@evil.example/x.css";',
+    '@import "tema.css";',
+    '@font-face{font-family:"Inter";src:url("https://fonts.gstatic.com/s/inter.woff2") format("woff2"),url("https://evil.example/f.woff2")}',
+    '@font-face{font-family:"G";src:url("https://fonts.googleapis.com/css?family=G")}',
+    'body{background:url("https://fonts.gstatic.com/leak.png");color:url("https://fonts.googleapis.com/leak2.png");mask:url("./ok.png")}',
+  ].join('\n');
+  const out = sanitizeCss(css);
+  assert.equal(out.includes('https://fonts.googleapis.com/css2?family=Inter'), true);
+  assert.equal(out.includes('https://fonts.gstatic.com/s/inter.css'), true);
+  assert.equal(out.includes('@import "tema.css";'), true);
+  assert.equal(out.includes('https://fonts.gstatic.com/s/inter.woff2'), true);
+  assert.equal(out.includes('https://fonts.googleapis.com/css?family=G'), true);
+  assert.equal(out.includes('./ok.png'), true);
+  assert.equal(out.includes('evil.example'), false);
+  assert.equal(out.includes('leak.png'), false);
+  assert.equal(out.includes('leak2.png'), false);
+
+  const inlineStyle = sanitizeGeneratedHtml('<div style="@import \'https://fonts.googleapis.com/css2\';background:url(\'https://fonts.gstatic.com/a.png\');color:#111">x</div>');
+  assert.equal(inlineStyle.includes('fonts.googleapis.com'), false);
+  assert.equal(inlineStyle.includes('fonts.gstatic.com'), false);
+  assert.equal(inlineStyle.includes('#111'), true);
 });
 
 function seat() {
