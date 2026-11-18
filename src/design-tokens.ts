@@ -1,6 +1,6 @@
 import {readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {apcaLc, deltaE2000, parseCssColor, wcagContrast, type Rgb} from './design-color.ts';
+import {apcaLc, compositeRgb, deltaE2000, parseCssColor, wcagContrast, type Rgb} from './design-color.ts';
 import {DESIGN_PLANTED_RULES, designRawFinding, type DesignRawFinding} from './design-types.ts';
 
 export type ComputedStyleSample = {
@@ -21,6 +21,8 @@ export type ComputedStyleSample = {
   transitionDuration?: string;
   width?: string;
   height?: string;
+  /** Fundo com imagem ou gradiente: o contraste não entra como achado. */
+  contrastNote?: string;
 };
 
 export type DesignReferenceScale = {
@@ -32,6 +34,8 @@ export type DesignReferenceScale = {
   typePx: number[];
   spacePx: number[];
   radiusPx: number[];
+  elevation: string[];
+  colorSteps: number[];
   targetMinPx: number | null;
 };
 
@@ -51,6 +55,8 @@ export type TokenAnalysis = {
     shadows: string[];
     durations: string[];
     contrasts: {ratio: number; apca: number}[];
+    contrastUnmeasured: number;
+    palette: {stepsByHue: number[]; hasRamp: boolean; referenceSteps: number};
   };
 };
 
@@ -111,6 +117,8 @@ export function loadDesignReferences(directory: string): DesignReferenceScale[] 
       const typePx = Array.isArray(parsed.typePx) ? parsed.typePx.filter((item): item is number => typeof item === 'number' && item > 0) : [];
       const spacePx = Array.isArray(parsed.spacePx) ? parsed.spacePx.filter((item): item is number => typeof item === 'number' && item > 0) : [];
       const radiusPx = Array.isArray(parsed.radiusPx) ? parsed.radiusPx.filter((item): item is number => typeof item === 'number' && item >= 0) : [];
+      const elevation = Array.isArray(parsed.elevation) ? parsed.elevation.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
+      const colorSteps = Array.isArray(parsed.colorSteps) ? parsed.colorSteps.filter((item): item is number => typeof item === 'number' && item > 0) : [];
       if (typeof parsed.id !== 'string' || typeof parsed.name !== 'string') continue;
       scales.push({
         id: parsed.id,
@@ -121,6 +129,8 @@ export function loadDesignReferences(directory: string): DesignReferenceScale[] 
         typePx,
         spacePx,
         radiusPx,
+        elevation,
+        colorSteps,
         targetMinPx: typeof parsed.targetMinPx === 'number' ? parsed.targetMinPx : null,
       });
     } catch {
@@ -130,37 +140,100 @@ export function loadDesignReferences(directory: string): DesignReferenceScale[] 
   return scales;
 }
 
-function nearestScale(sizes: number[], spaces: number[], references: readonly DesignReferenceScale[]): TokenAnalysis['nearest'] {
+function meanRelative(sample: readonly number[], scale: readonly number[]): number | null {
+  if (sample.length === 0 || scale.length === 0) return null;
+  const deltas = sample.map(size => Math.min(...scale.map(item => Math.abs(item - size) / Math.max(item, 1))));
+  return deltas.reduce((sum, item) => sum + item, 0) / deltas.length;
+}
+
+/**
+ * A distância é a média só dos campos que os dois lados têm.
+ * Referência com menos de dois campos comparáveis fica fora da disputa.
+ */
+function nearestScale(
+  sizes: number[],
+  spaces: number[],
+  radii: number[],
+  references: readonly DesignReferenceScale[],
+): TokenAnalysis['nearest'] {
   if (references.length === 0) return {id: 'nenhuma', name: 'nenhuma', distance: 1, notes: ['Não há referência versionada.']};
-  let best = references[0];
+  let best: DesignReferenceScale | undefined;
   let bestDistance = Number.POSITIVE_INFINITY;
   const notesOf = new Map<string, string[]>();
   for (const reference of references) {
     const notes: string[] = [];
-    let distance = 0;
-    if (sizes.length > 0 && reference.typePx.length > 0) {
-      const deltas = sizes.map(size => Math.min(...reference.typePx.map(item => Math.abs(item - size) / item)));
-      distance += deltas.reduce((sum, item) => sum + item, 0) / deltas.length;
+    const parts: number[] = [];
+    const typeDistance = meanRelative(sizes, reference.typePx);
+    if (typeDistance !== null) {
+      parts.push(typeDistance);
       if (sizes.length > reference.typePx.length + 2) notes.push(`${sizes.length} tamanhos contra ${reference.typePx.length} de ${reference.name}.`);
-    } else distance += 0.5;
+    }
     if (spaces.length > 0 && reference.spacePx.length > 0) {
       const off = spaces.filter(space => !reference.spacePx.some(item => Math.abs(item - space) < 0.5));
-      distance += off.length / spaces.length;
+      parts.push(off.length / spaces.length);
       if (off.length > 0) notes.push(`${off.length} espaçamentos fora da escala de ${reference.name}.`);
     }
+    const radiusDistance = meanRelative(radii, reference.radiusPx);
+    if (radiusDistance !== null) parts.push(Math.min(1, radiusDistance));
+    if (parts.length < 2) continue;
+    const distance = parts.reduce((sum, item) => sum + item, 0) / parts.length;
     notesOf.set(reference.id, notes);
     if (distance < bestDistance) {
       best = reference;
       bestDistance = distance;
     }
   }
-  const chosen = best ?? references[0];
+  if (best === undefined) return {id: 'nenhuma', name: 'nenhuma', distance: 1, notes: ['Nenhuma referência tem dois campos comparáveis.']};
   return {
-    id: chosen.id,
-    name: chosen.name,
-    distance: Number.isFinite(bestDistance) ? Math.round(bestDistance * 1000) / 1000 : 1,
-    notes: notesOf.get(chosen.id) ?? [],
+    id: best.id,
+    name: best.name,
+    distance: Math.round(bestDistance * 1000) / 1000,
+    notes: notesOf.get(best.id) ?? [],
   };
+}
+
+function hueBucket(rgb: Rgb): number | null {
+  const max = Math.max(rgb.r, rgb.g, rgb.b);
+  const min = Math.min(rgb.r, rgb.g, rgb.b);
+  if (max - min <= 18 || max === 0) return null;
+  const delta = max - min;
+  let hue = 0;
+  if (max === rgb.r) hue = ((rgb.g - rgb.b) / delta) % 6;
+  else if (max === rgb.g) hue = (rgb.b - rgb.r) / delta + 2;
+  else hue = (rgb.r - rgb.g) / delta + 4;
+  const degrees = Math.round((hue * 60 + 360) % 360 / 30) * 30;
+  return degrees === 360 ? 0 : degrees;
+}
+
+function paletteOf(colors: readonly Rgb[], references: readonly DesignReferenceScale[]): TokenAnalysis['summary']['palette'] {
+  const referenceSteps = Math.max(0, ...references.map(item => item.colorSteps.length));
+  const byHue = new Map<number, Set<number>>();
+  for (const rgb of colors) {
+    const hue = hueBucket(rgb);
+    if (hue === null) continue;
+    const light = Math.round(((Math.max(rgb.r, rgb.g, rgb.b) + Math.min(rgb.r, rgb.g, rgb.b)) / 2 / 255) * 20) / 20;
+    const bucket = byHue.get(hue) ?? new Set<number>();
+    bucket.add(light);
+    byHue.set(hue, bucket);
+  }
+  const stepsByHue = [...byHue.values()].map(bucket => bucket.size).sort((a, b) => b - a);
+  const rampFloor = referenceSteps > 0 ? Math.max(4, Math.ceil(referenceSteps / 2)) : 4;
+  return {stepsByHue, hasRamp: stepsByHue.some(steps => steps >= rampFloor), referenceSteps};
+}
+
+function contrastSample(sample: ComputedStyleSample): {ratio: number; apca: number} | 'unmeasured' | null {
+  if (sample.contrastNote === 'nao-medido') return 'unmeasured';
+  const text = parseCssColor(sample.color);
+  const background = parseCssColor(sample.backgroundColor);
+  if (!text || !background) return null;
+  const textAlpha = text.a ?? 1;
+  const backgroundAlpha = background.a ?? 1;
+  if (textAlpha <= 0) return null;
+  if (backgroundAlpha < 0.999) return 'unmeasured';
+  const flat = textAlpha < 0.999 ? compositeRgb(text, background) : text;
+  const ratio = wcagContrast(flat, background);
+  if (!Number.isFinite(ratio)) return null;
+  return {ratio: Math.round(ratio * 100) / 100, apca: Math.round(apcaLc(flat, background) * 10) / 10};
 }
 
 export function analyzeDesignTokens(file: string, samples: readonly ComputedStyleSample[], references: readonly DesignReferenceScale[]): TokenAnalysis {
@@ -174,7 +247,9 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
   const durations: string[] = [];
   const colors: Rgb[] = [];
   const contrasts: {ratio: number; apca: number}[] = [];
+  let contrastUnmeasured = 0;
   const targets: number[] = [];
+  const targets24: number[] = [];
   for (const sample of samples) {
     const size = pxOf(sample.fontSize);
     if (size !== null && size > 0) sizes.push(size);
@@ -192,17 +267,16 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
       const parsed = parseCssColor(key);
       if (parsed) colors.push(parsed);
     }
-    const text = parseCssColor(sample.color);
-    const background = parseCssColor(sample.backgroundColor);
-    if (text && background) {
-      const ratio = wcagContrast(text, background);
-      if (Number.isFinite(ratio)) contrasts.push({ratio: Math.round(ratio * 100) / 100, apca: Math.round(apcaLc(text, background) * 10) / 10});
-    }
+    const contrast = contrastSample(sample);
+    if (contrast === 'unmeasured') contrastUnmeasured += 1;
+    else if (contrast) contrasts.push(contrast);
     const width = pxOf(sample.width);
     const height = pxOf(sample.height);
     const control = sample.selector === 'button' || sample.selector === 'a' || sample.selector === 'input';
-    if (control && width !== null && height !== null && width >= 16 && width < 44 && height >= 16 && height < 44) {
-      targets.push(Math.min(width, height));
+    if (control && width !== null && height !== null && width >= 8 && height >= 8) {
+      const size = Math.min(width, height);
+      if (size < 44) targets.push(size);
+      if (size < 24) targets24.push(size);
     }
   }
   const fontSizes = uniqueSorted(sizes);
@@ -328,6 +402,18 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
       measure: {kind: 'target', px: smallTarget},
     }));
   }
+  const tinyTarget = targets24.sort((a, b) => a - b)[0];
+  if (tinyTarget !== undefined) {
+    findings.push(designRawFinding({
+      tool: 'tokens',
+      rule: 'DESIGN-ALVO-24',
+      file,
+      severity: 'alta',
+      snippet: `alvo ${tinyTarget}px abaixo de 24px`,
+      measure: {kind: 'target', px: tinyTarget},
+    }));
+  }
+  const palette = paletteOf(colors, references);
   const ratios: number[] = [];
   for (let index = 1; index < fontSizes.length; index += 1) {
     const previous = fontSizes[index - 1];
@@ -350,7 +436,7 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
   return {
     document,
     findings,
-    nearest: nearestScale(fontSizes, spaceList, references),
+    nearest: nearestScale(fontSizes, spaceList, radiusList, references),
     summary: {
       fontSizes,
       families: familyList,
@@ -363,6 +449,8 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
       shadows: shadowList,
       durations: durationList,
       contrasts: contrasts.slice(0, 20),
+      contrastUnmeasured,
+      palette,
     },
   };
 }
@@ -376,6 +464,8 @@ export function tokenReportMarkdown(analysis: TokenAnalysis): string {
     `Espaçamentos fora da grade de 4px: ${analysis.summary.offScale.join(', ') || 'nenhum'}.`,
     `Cinzas quase iguais (ΔE2000 < 3): ${analysis.summary.nearGrays}.`,
     `Acentos: ${analysis.summary.accents}. Raios: ${analysis.summary.radii.join(', ') || 'nenhum'}.`,
+    `Contraste não medido: ${analysis.summary.contrastUnmeasured}.`,
+    `Paleta: ${analysis.summary.palette.stepsByHue.join(', ') || '0'} passos por matiz. Rampa: ${analysis.summary.palette.hasRamp ? 'sim' : 'não'}. Passos da referência: ${analysis.summary.palette.referenceSteps}.`,
     `A escala mais próxima é ${analysis.nearest.name} (distância ${analysis.nearest.distance}).`,
     ...analysis.nearest.notes.map(note => `- ${note}`),
     '',

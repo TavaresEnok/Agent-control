@@ -1,3 +1,3 @@
 Este diretório reúne referências numéricas de sistemas de design consultadas em 2026-11-18. Cada arquivo JSON corresponde a um sistema — Material Design 3, Carbon, Polaris, Apple Human Interface Guidelines, GOV.UK Design System e Radix Colors — e registra a página usada na consulta.
 
-Os arquivos guardam apenas números e nomes de escala: tamanhos de tipo, espaçamento, raios, elevação e, no Radix Colors, os passos de cor de 1 a 12. Não há frases copiadas dos sites de origem.
+Os arquivos guardam apenas números e nomes de escala: tamanhos de tipo, espaçamento, raios, elevação e, no Radix Colors, os passos de cor de 1 a 12. Material 3 usa a grade de espaçamento de 4 em 4 publicada em m3.material.io. Polaris completa raio e elevação com os tokens `border-radius-*` e `shadow-*` do repositório polaris-tokens. Campo que a fonte não publica fica de fora. Não há frases copiadas dos sites de origem.
