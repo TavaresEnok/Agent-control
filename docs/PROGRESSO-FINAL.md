@@ -56,3 +56,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 01:32 UTC — C6-R4 iniciada em final-c6-r2 por Terra ultra normal.
 - 19/11/2026 01:32 UTC — Matriz A3-R2 em b8e21e29, revisão por sessão Sol high normal separada do trabalhador Sol. Um alto e três médios: classificação da intenção histórica sem prova, escopo da reconciliação, liberação do grant em falha de inspeção e idempotência após rotação. A3-R3 trata o pedido explícito de retirada autorizado pelo titular e exige prova física de que a tentativa de design nunca iniciou. A versão revisada segue no checkout isolado.
 - 19/11/2026 01:33 UTC — A1-R16 recebida em 0e161f4f e integrada em b6c9cfa0. O trabalhador passou TypeScript e 8 testes direcionados com três contas sintéticas. Começou a validação do gerente para o checkout integrado. A instalação viva ainda executa a versão anterior.
+- 19/11/2026 01:34 UTC — C6-R4 entregue por Terra em 698d22ce; aguardando a prova do gerente.
+- 19/11/2026 01:34 UTC — A3-R3 iniciada em final-a3 por Terra ultra normal.
+- 19/11/2026 01:35 UTC — C2-R3 iniciada em final-c2 por Terra ultra normal.
+- 19/11/2026 01:35 UTC — C-CLI-LAB-R3 iniciada em final-c-cli-lab por Terra ultra normal.
+- 19/11/2026 01:37 UTC — C-CLI-LAB-R3 entregue por Terra em 544777b2; aguardando a prova do gerente.
+- 19/11/2026 01:37 UTC — C8-R2 em bac44e5d passou o laboratório real e o contrato dos artefatos, 15 testes verdes e um opcional local pulado. Digest b566d00a572d fixado em f5e54c3b. Base C-R2 entregue parcialmente em a0ecf995; o caso com banco foi pulado pelo trabalhador. O gerente forneceu PostgreSQL 16 exclusivo, executou o caso e reproduziu a falha de expectativa em writePaths. C-BASE-R3 encomendada incluindo recuperação banco/disco.
+- 19/11/2026 01:37 UTC — C6-R4 detectou e mascarou a chave artificial no contêiner. O controle limpo acusou a regra DL3066 em USER node. C6-R5 corrige essa fixture. C3-R4 entregue em 86400fb9 e em laboratório após rebuild.
