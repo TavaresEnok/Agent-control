@@ -85,3 +85,9 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 01:47 UTC — C-CLI-LAB-R4 entregue por Terra em 73465026; aguardando a prova do gerente.
 - 19/11/2026 01:48 UTC — C2-R4 entregue por Terra em 66a637d6; aguardando a prova do gerente.
 - 19/11/2026 01:51 UTC — A1-R16 em b6c9cfa0 passou no TypeScript, em 237 arquivos da suíte oficial (86 excluídos pelo executor) e em 52 testes complementares. O backup A2 terminou em ispagent-antes-A2-20261119-014606, 525852508 bytes. Laboratório de design em andamento. C5-R2 passou a prova ponta a ponta pela CLI, 5/5, e o laboratório da imagem, 4 aprovados e 2 verificações avulsas opcionais omitidas. C6-R6 passou o laboratório da imagem, 1/1. C3-R4 recebeu três apontamentos médios do revisor Sol ultra. O build C9 encontrou uma incompatibilidade de plugin do ScanCode. Novas ordens abertas para C3, C9 e integração dos artefatos de documentação e dos caminhos protegidos.
+- 19/11/2026 01:51 UTC — C-INTEROP iniciada em final-c-interop por Terra ultra normal.
+- 19/11/2026 01:51 UTC — C9-R2 iniciada em final-c9 por Terra ultra normal.
+- 19/11/2026 01:52 UTC — C4-R3 entregue por Terra em 36c619a5; aguardando a prova do gerente.
+- 19/11/2026 01:52 UTC — C3-R5 iniciada em final-c3 por Terra ultra normal.
+- 19/11/2026 01:52 UTC — C7-R2 entregue por Terra em 547eddbc; aguardando a prova do gerente.
+- 19/11/2026 01:52 UTC — C8-R2 passou a prova ponta a ponta de documentação pela CLI, 6/6. Matriz C8 em 662eb1a6: revisão independente por modelo distinto, Sol ultra normal, cinco médios e um baixo no coletor. C8-R3 encomendada. C6-R6 fixada em 030b8543.
