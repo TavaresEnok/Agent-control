@@ -163,3 +163,11 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:36 UTC — Revisão C4-R4 iniciada por Sol high normal somente leitura em cbf83ce3.
 - 19/11/2026 02:36 UTC — Atualizadas as oito seções de MODULOS-DE-VERIFICACAO com o que foi demonstrado em homologação, os limites medidos e as ordens abertas. A aplicação desses módulos na instalação viva segue pendente.
 - 19/11/2026 02:37 UTC — Revisão C9 em a1e4ec28: os dois lockfiles indicados como ausentes foram confirmados no commit por git cat-file (330 e 321 bytes) e utilizados no laboratório real. Os seis médios e o baixo sobre cobertura LGPD, licenças, cache e linha da prova seguem para C9-R3.
+- 19/11/2026 02:38 UTC — Trabalhador encerrou C8-R4 em 9c2782fd (código 0). Gerente confere a entrega.
+- 19/11/2026 02:38 UTC — Trabalho C-EXAME-R2 iniciado por Sol high normal em final-c-exame.
+- 19/11/2026 02:39 UTC — C8-R4 chegou em 9c2782fd; iniciados build da imagem e laboratório de documentação. C-EXAME-R2 assumiu a ligação da CLI com a persistência já disponível no seu worktree.
+- 19/11/2026 02:39 UTC — C8-R4 passou nos 18 testes com os binários reais, incluindo as arestas ausentes e a resolução por moduleSuffixes; imagem fixada em da58dca6. Nova prova pela CLI de documentação em andamento.
+- 19/11/2026 02:40 UTC — Trabalhador encerrou C7-R4 em 9a7018c4 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:40 UTC — Trabalho C2-R6 iniciado por Sol high normal em final-c2.
+- 19/11/2026 02:40 UTC — C7-R4 chegou em 9a7018c4. Iniciei a construção da imagem e a ligação do coletor de desempenho à CLI no checkout de integração. C8-R4 passou novamente pela CLI pessoal da documentação, 6/6.
+- 19/11/2026 02:42 UTC — A hipótese da revisão C9 sobre reconstrução do índice do ScanCode foi conferida na imagem como UID 65532, com raiz somente leitura e /tmp novo: o pacote contém o cache de licença, get_index() carregou LicenseIndex e o cache do usuário ficou com zero bytes. C9-R3 foi atualizada com a prova. A integração de desempenho em 9fa35748 compilou no TypeScript e iniciou o laboratório Docker da imagem R4.
