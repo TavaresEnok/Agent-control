@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {randomBytes} from 'node:crypto';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -11,10 +12,10 @@ const pgTapVersion = '1.3.2';
 export const bancoLocalVersion = 'PostgreSQL 16.15 / pgTAP 1.3.2';
 const admin = 'qa_admin';
 const project = 'qa_project';
-const reader = 'qa_reader';
 const attestation = 'qa_attestation';
 const databases = ['fresh', 'previous', 'upgraded'];
 const tapLabel = 'invariante funcional';
+const booleanColumn = '{16}'; // OID do tipo boolean nativo em pg_catalog.pg_type.
 
 export function parseTap(output) {
   const [plan, result, ...diagnostics] = output.trim().split('\n');
@@ -27,9 +28,9 @@ export function parseTap(output) {
 export async function setupPostgres(psql) {
   await psql('postgres', [
     `CREATE ROLE ${project} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
-    `CREATE ROLE ${reader} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
-    `GRANT pg_read_all_data TO ${reader} WITH INHERIT FALSE, SET TRUE`,
     ...databases.map(db => `CREATE DATABASE ${db} OWNER ${project}`),
+    ...['postgres', 'template0', 'template1', ...databases].map(db =>
+      `REVOKE CONNECT, TEMPORARY ON DATABASE ${db} FROM PUBLIC`),
     `CREATE DATABASE ${attestation} WITH TEMPLATE template0`,
     `REVOKE ALL ON DATABASE ${attestation} FROM PUBLIC`,
   ], admin);
@@ -42,25 +43,73 @@ export async function setupPostgres(psql) {
 }
 
 export async function attestPostgres(psql, db, predicate) {
-  const scalar = await psql(db, [
-    'BEGIN READ ONLY',
-    // A leitura termina com a transação, sem alterar ACLs de schemas ou tabelas.
-    'SET LOCAL ROLE pg_read_all_data',
-    'SET LOCAL search_path TO pg_catalog, public',
-    `PREPARE qa_scalar AS\n${predicate}`,
-    "SELECT result_types = ARRAY['pg_catalog.bool'::pg_catalog.regtype] " +
-      "FROM pg_catalog.pg_prepared_statements WHERE name = 'qa_scalar'",
-    'EXECUTE qa_scalar',
-    'ROLLBACK',
-  ], reader);
-  // Com uma única coluna booleana confirmada, exige exatamente uma linha não nula.
-  if (scalar !== 't\nt\n' && scalar !== 't\nf\n') return 'invalid';
+  if (!databases.includes(db)) throw new Error('invalid fixture database');
+  const reader = `qa_reader_${randomBytes(12).toString('hex')}`;
+  let scalar;
+  try {
+    await psql(db, [
+      'BEGIN',
+      'SET LOCAL search_path TO pg_catalog, pg_temp',
+      `CREATE ROLE ${reader} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
+      `GRANT CONNECT ON DATABASE ${db} TO ${reader}`,
+      // O schema public padrão pertence implicitamente ao dono do banco.
+      `DO $scope$
+      DECLARE grant_sql text;
+      BEGIN
+        FOR grant_sql IN
+          WITH fixture_schemas AS (
+            SELECT oid, nspname FROM pg_namespace
+            WHERE nspowner = '${project}'::regrole
+               OR (nspname = 'public' AND nspowner = 'pg_database_owner'::regrole AND EXISTS (
+                 SELECT 1 FROM pg_database WHERE datname = current_database() AND datdba = '${project}'::regrole
+               ))
+          )
+          SELECT format('GRANT USAGE ON SCHEMA %I TO %I', nspname, '${reader}')
+          FROM fixture_schemas
+          UNION ALL
+          SELECT format('GRANT SELECT ON TABLE %I.%I TO %I', n.nspname, c.relname, '${reader}')
+          FROM pg_class c JOIN fixture_schemas n ON n.oid = c.relnamespace
+          WHERE c.relowner = '${project}'::regrole AND c.relkind IN ('r', 'p', 'v', 'm')
+        LOOP
+          EXECUTE grant_sql;
+        END LOOP;
+      END
+      $scope$`,
+      'COMMIT',
+    ], admin);
+    scalar = await psql(db, [
+      'BEGIN READ ONLY',
+      'SET LOCAL search_path TO pg_catalog, public',
+      // Com -c, \bind envia somente o próximo comando pelo protocolo estendido.
+      '\\bind',
+      `PREPARE qa_scalar AS\n${predicate}`,
+      "SELECT result_types::pg_catalog.oid[] FROM pg_catalog.pg_prepared_statements WHERE name = 'qa_scalar'",
+      'EXECUTE qa_scalar',
+      'ROLLBACK',
+    ], reader);
+  } finally {
+    await psql(db, [
+      'BEGIN',
+      'SET LOCAL search_path TO pg_catalog, pg_temp',
+      `DO $scope$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${reader}') THEN
+          DROP OWNED BY ${reader};
+          DROP ROLE ${reader};
+        END IF;
+      END
+      $scope$`,
+      'COMMIT',
+    ], admin);
+  }
+  // A primeira linha é a lista de tipos. A segunda é o único valor retornado.
+  if (scalar !== `${booleanColumn}\nt\n` && scalar !== `${booleanColumn}\nf\n`) return 'invalid';
 
   return parseTap(await psql(attestation, [
     'BEGIN',
     'SET LOCAL search_path TO pg_catalog, qa_tap, pg_temp',
     'SELECT qa_tap.plan(1)',
-    `SELECT qa_tap.ok(${scalar === 't\nt\n' ? 'TRUE' : 'FALSE'}, '${tapLabel}')`,
+    `SELECT qa_tap.ok(${scalar === `${booleanColumn}\nt\n` ? 'TRUE' : 'FALSE'}, '${tapLabel}')`,
     'SELECT * FROM qa_tap.finish()',
     'ROLLBACK',
   ], admin));
