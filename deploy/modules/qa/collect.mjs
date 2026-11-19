@@ -30,6 +30,8 @@ import {
   classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool, testIdentity,
 } from './execute-tests.mjs';
 import {collectLanguageSuite, hasLanguageTestCandidates, languageSuites} from './language-tests.mjs';
+import {collectLanguageMutation, collectPythonProperties, languageMeasurementTools} from './mutacao-linguagens/index.mjs';
+import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
@@ -1365,6 +1367,7 @@ export async function collectQaModule(options = {}) {
     const languageCandidates = hasLanguageTestCandidates(copiedFiles);
     context.emptyInventory &&= !matrixPartial && !languageCandidates;
     const executionPartial = context.files?.length < testFiles.length || (!testFiles.length && languageCandidates);
+    const measurementPath = file => abbreviateIdentity(displayPath(file), 100);
     const toolRunners = [
       {
         name: suiteTool,
@@ -1431,6 +1434,19 @@ export async function collectQaModule(options = {}) {
         run: () => {
           if (failTool === tool) throw new Error('QA_LANGUAGE_TEST_FORCED_FAILURE');
           return collectLanguageSuite(language, context, copiedFiles, incomplete);
+        },
+      })),
+      ...Object.entries(languageMeasurementTools).map(([kind, {tool, version}]) => ({
+        name: tool,
+        version,
+        run: async () => {
+          if (failTool === tool) throw new Error('QA_LANGUAGE_MEASUREMENT_FORCED_FAILURE');
+          if (kind === 'properties') {
+            const report = await collectPythonProperties(context, copiedFiles, incomplete);
+            return publishProperties(report, coverageRow, measurementPath);
+          }
+          const report = await collectLanguageMutation(kind, context, copiedFiles, incomplete);
+          return publishMutation(report, coverageRow, measurementPath);
         },
       })),
     ];

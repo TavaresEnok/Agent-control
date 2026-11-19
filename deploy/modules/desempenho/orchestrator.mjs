@@ -4,7 +4,7 @@ import {constants} from 'node:fs';
 import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, dirname, join, resolve} from 'node:path';
-import {creationRefused, openPerformanceRecoveryRun, performanceDocker} from './docker-recovery.mjs';
+import {openPerformanceRecoveryRun, performanceDocker} from './docker-recovery.mjs';
 import {startHostHttpLink} from './http-link.mjs';
 import {loadConfig, normalizeCoverageRow, validateModuleOutput} from './lib.mjs';
 import {compareIndependentMeasurement, validatePerformanceMeasurement} from './references.mjs';
@@ -167,7 +167,7 @@ export async function runPerformanceModule({snapshotPath, imageDigest, signal, r
       let created;
       try { created = await docker([...args, ...label, imageDigest, ...command], {signal: phase}); }
       catch (error) {
-        if (creationRefused(error)) await journal.record(resourceName);
+        await journal.recordFailedCreation(resourceName, error);
         throw error;
       }
       const id = await journal.confirmCreation(docker, resourceName, created, phase);
