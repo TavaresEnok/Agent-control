@@ -880,7 +880,7 @@ export async function runModuleCollectorContainer(input: {
       '--mount', `type=bind,src=${wrapper},dst=${COLLECTOR_WRAPPER_PATH},readonly`,
       '--tmpfs', `${COLLECTOR_CAPTURE_DIR}:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=${captureBytes}`,
       '--env', `AC_COLLECTOR_CAPTURE_DIR=${COLLECTOR_CAPTURE_DIR}`,
-      '--entrypoint', COLLECTOR_WRAPPER_PATH, ...baseArgs.slice(3)];
+      '--entrypoint', '/bin/sh', ...baseArgs.slice(3), COLLECTOR_WRAPPER_PATH];
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
     const stream = new AbortController();
     const signal = input.signal ? AbortSignal.any([input.signal, stream.signal]) : stream.signal;
@@ -918,17 +918,20 @@ export async function runModuleCollectorContainer(input: {
         return remaining;
       };
       const captured = await attached;
-      const waited = await run([MODULE_RUNTIME_BIN, 'wait', candidate],
+      // Inspect the final state of the exact container. The wait command
+      // exposes only the status code and hides errors reported by the daemon.
+      const terminalFormat = '{{.Id}} {{.State.Status}} {{.State.ExitCode}} ' +
+        '{{if or .State.Running .State.Paused .State.Restarting .State.Dead .State.OOMKilled .State.Error}}invalid{{else}}ok{{end}}';
+      const terminal = await run([MODULE_RUNTIME_BIN, 'inspect', '--type', 'container', '--format', terminalFormat, candidate],
         {timeoutMs: remainingTime(), maxStdoutBytes: 4096, signal});
       remainingTime();
-      const exitCode = waited.stdout.toString('utf8').trim();
-      if (waited.code !== 0 || !/^(0|[1-9][0-9]{0,2})$/.test(exitCode) || Number(exitCode) > 255
-        || Number(exitCode) !== captured.code) {
+      if (terminal.code !== 0 || !Number.isInteger(captured.code) || captured.code < 0 || captured.code > 255 ||
+          terminal.stdout.toString('utf8').trim() !== candidate + ' exited ' + captured.code + ' ok') {
         throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       }
       const stdout = verifyCollectorOutput(captured.stdout, token, captured.code, maxStdoutBytes);
       const output = parseModuleCollectorOutput(stdout, {maxStdoutBytes, module: input.module});
-      return {code: Number(exitCode), output};
+      return {code: captured.code, output};
     } finally {
       stream.abort();
       await input.journal.cleanup(token, id, {creationRejected, startAuthorized});
