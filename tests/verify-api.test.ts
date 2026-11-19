@@ -56,6 +56,8 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
  const findings = [fixed, likely, reopened, fourth];
  const toolCoverage = [
   {tool: 'fixture', version: '1', status: 'ok' as const, detail: 'Medição sintética.'},
+  {tool: 'fixture-seta', version: '1', status: 'ok' as const, detail: 'Origem: data/notes.txt-> revisão'},
+  {tool: 'fixture-composto', version: '1', status: 'ok' as const, detail: 'Guia docs/notes.txt.md'},
   {tool: 'fixture-nome', version: '1', status: 'ok' as const, detail: 'Arquivo notes.txt citado sem diretório.'},
  ];
  const fileCoverage = [{file, examinerProvider: 'ferramenta', examinerModel: 'fixture', profileId: null, checklist: ['FIXTURE']}];
@@ -168,7 +170,8 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   }
   const parsed = JSON.parse(body);
   assert.match(parsed.cobertura, /Medição sintética\./);
-  assert.doesNotMatch(parsed.cobertura, /notes\.txt|fixture-nome|docs\/publico\.md/);
+  assert.doesNotMatch(parsed.cobertura, /fixture-seta|fixture-nome|docs\/publico\.md/);
+  assert.match(parsed.cobertura, /docs\/notes\.txt\.md/);
   assert.match(parsed.cobertura, /Registro de arquivo protegido omitido/);
   assert.equal(parsed.achados[0].proof, `${fixed.proof} [redigido]`);
   assert.equal(parsed.achados[3].proof, 'Conteúdo protegido. Consulte a localização indicada.');

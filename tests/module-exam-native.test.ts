@@ -364,9 +364,9 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
 
       // A structured refutation without a committed change cannot close a stale collector finding.
       recheckAnswer = task => JSON.stringify(reviewFixtureVerdict(task, staleTest, 'descartado'));
-      assert.match((await collectorRecheck('ACH-002'))[0]!, /^ACH-002 pendente MODULE_RECHECK_SAME_COMMIT \(/);
+      assert.deepEqual(await collectorRecheck('ACH-002'), ['ACH-002 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
       commitChanges('synthetic unrelated change', '--allow-empty');
-      assert.match((await collectorRecheck('ACH-002'))[0]!, /^ACH-002 pendente MODULE_RECHECK_CHANGE_UNPROVEN \(/);
+      assert.deepEqual(await collectorRecheck('ACH-002'), ['ACH-002 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
       assert.deepEqual(await collectorStatuses(), ['provavel', 'provavel']);
 
       recheckAnswer = task => verdict(task);
@@ -374,7 +374,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       await writeIndex(correctedCode, 'NOVA_CREDENCIAL_SINTETICA');
       git('add', 'index.ts');
       commitChanges('synthetic correction');
-      assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED \(/);
+      assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
       recheckAnswer = task => verdict({...task, code: 'prova sem vínculo com o trecho'});
       assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
       assert.equal(await findingStatus(), 'confirmado');
@@ -395,6 +395,29 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         FROM ac_intents i JOIN ac_managers m USING (context_id) WHERE i.command->'payload'->>'messageRef'=$1
         ORDER BY i.manager_epoch DESC LIMIT 1`, [`recheck:${reviewRunId}`]);
       assert.deepEqual(cancelled, {state: 'failed', released: true});
+
+      recheckAnswer = verdict;
+      assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
+      assert.equal(await findingStatus(), 'confirmado');
+      const launch = docker.logs.at(-1)!;
+      assert.equal(launch.provider, 'codex');
+      assert.equal(launch.moduleExam, true);
+      assert.deepEqual(launch.writePaths, []);
+      assert.ok(JSON.parse(launch.task).code.includes(activeIndex));
+      const correctedHead = git('rev-parse', 'HEAD').toString().trim();
+      assert.doesNotMatch(launch.task, /NOVA_CREDENCIAL_SINTETICA|CONCLUSAO_DO_AUTOR|\/tmp\//);
+      const {rows: [pending]} = await ledger.pool.query(`SELECT detail FROM ac_audit
+        WHERE kind='module.finding_rechecked' AND detail->>'status'='pendente' AND context_id=$1
+          AND detail->>'commit'=$2`, [contextId, correctedHead]);
+      assert.equal(pending.detail.reason, 'MODULE_RECHECK_PROOF_UNAVAILABLE');
+      assert.equal(pending.detail.proofDigest, null);
+      assert.deepEqual(pending.detail.examiner, {provider: 'claude', model: 'claude-module-fixture',
+        accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0]});
+      assert.deepEqual(pending.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',
+        accountId: reviewerAccount, profileId: profiles[1], grantId: pending.detail.reviewer.grantId});
+      const {rows: [receipt]} = await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [pending.detail.reviewer.grantId]);
+      assert.equal(receipt.state, 'released');
+      assert.ok(receipt.physical_receipt.containerId);
 
       await writeFile(join(repo, 'runtime.log'), 'REGISTRO_SINTETICO_PROTEGIDO\n');
       git('add', 'runtime.log');

@@ -28,10 +28,25 @@ export function isDirectIdentifier(tokens: Token[], index: number): boolean {
   return tokens[index]?.kind === 'word' && !['.', '#', 'new'].includes(tokens[index - 1]?.text ?? '');
 }
 
+const closes = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
+const closing = new Set(closes.values());
+
+/** Depth before each token, including within arguments and callback bodies. */
+export function moduleExamDepths(tokens: Token[]): number[] | null {
+  const stack: string[] = [];
+  const depths: number[] = [];
+  for (const {text} of tokens) {
+    depths.push(stack.length);
+    const close = closes.get(text);
+    if (close) stack.push(close);
+    else if (closing.has(text) && stack.pop() !== text) return null;
+  }
+  return stack.length ? null : depths;
+}
+
 /** The matching close and the top-level argument separators for one call. */
 export function moduleExamCall(tokens: Token[], open: number) {
   if (tokens[open]?.text !== '(') return null;
-  const closes = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
   const stack = [')'];
   const commas: number[] = [];
   for (let i = open + 1; i < tokens.length; i++) {
@@ -39,7 +54,7 @@ export function moduleExamCall(tokens: Token[], open: number) {
     if (text === stack.at(-1)) {
       stack.pop();
       if (!stack.length) return {close: i, commas};
-    } else if (text === ')' || text === ']' || text === '}') {
+    } else if (closing.has(text)) {
       return null;
     } else if (text === ',' && stack.length === 1) {
       commas.push(i);

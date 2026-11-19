@@ -12,7 +12,8 @@ FROM docker.io/library/golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb0
 # linux/arm64: sha256:56be08aca06bf736a928da2e3235a3b63ef71ee97313beb18c6019fea791aba4
 FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
 
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PUPPETEER_SKIP_DOWNLOAD=1 \
     PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
@@ -29,14 +30,14 @@ RUN groupadd --system --gid 65532 qa \
 
 WORKDIR /opt/qa-tools
 COPY package.json package-lock.json qa-tools.lock.json verify-lock.mjs ./
-RUN echo "28a00f552a3041e5e95492ce8913012ac5e75d197cab41b741b0790e691a9083  package-lock.json" | sha256sum -c - \
+RUN echo "fd08d53610a4d9e3cba811b3dbb94a25470d1def52728ac9d6521f579e3cabfd  package-lock.json" | sha256sum -c - \
     && node /opt/qa-tools/verify-lock.mjs \
     && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force \
     && chown -R 65532:65532 /opt/qa-tools
 
 COPY entrypoint.sh /usr/local/bin/qa-entrypoint.sh
-COPY collect.mjs execute-tests.mjs language-tests.mjs node-test-runner.mjs python-test-runner.py /opt/qa-tools/
+COPY collect.mjs browser-qa.mjs visual-reference.mjs execute-tests.mjs language-tests.mjs node-test-runner.mjs python-test-runner.py /opt/qa-tools/
 COPY --from=qa-python /usr/local/bin/python3.12 /usr/local/bin/
 COPY --from=qa-python /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/
 COPY --from=qa-python /usr/local/lib/python3.12 /usr/local/lib/python3.12

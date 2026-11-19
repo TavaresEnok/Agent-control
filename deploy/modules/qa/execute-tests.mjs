@@ -32,7 +32,7 @@ export function selectNodeSuite({manifest, testFiles, readTest, incomplete, nest
   if (testFiles.some(file => file.endsWith('.tsx'))) return {reason: 'testes TSX exigem transformação fora do executor node:test'};
   const files = testFiles.filter(file => /(?:^|\/)(?:test\.(?:[cm]?js|[cm]?ts)|[^/]+[.-](?:test|spec)\.(?:[cm]?js|[cm]?ts))$/.test(file) ||
     /(?:^|\/)test\/.+\.[cm]?[jt]s$/.test(file));
-  if (files.length === 0) return {reason: 'nenhum arquivo de teste compatível com node:test'};
+  if (files.length === 0) return {reason: 'nenhum arquivo de teste compatível com node:test', emptyInventory: testFiles.length === 0};
   if (manifest?.scripts?.test === undefined && !files.some(file => /['"]node:test['"]/.test(readTest(file)))) {
     return {reason: 'projeto sem runner node:test identificado'};
   }
@@ -98,7 +98,9 @@ export function runBoundedProcess(binary, args, cwd, {timeoutMs = testTimeoutMs,
 
 const isCount = value => Number.isSafeInteger(value) && value >= 0;
 const testStatuses = new Set(['passed', 'failed', 'skipped', 'todo', 'error']);
-const assertionStatuses = new Set(['executed', 'unobserved', 'unsupported']);
+const assertionStatuses = new Set(['completed', 'failed', 'unobserved', 'unsupported']);
+const invalidFeatures = value => value !== undefined &&
+  (!Array.isArray(value) || value.some(feature => typeof feature !== 'string'));
 
 export function decodeNodeReport({code, output}, files, measure) {
   let report;
@@ -110,7 +112,7 @@ export function decodeNodeReport({code, output}, files, measure) {
   if (typeof report?.summary !== 'boolean' || !Array.isArray(report.tests) ||
       report.tests.some(t => !files.includes(t.file) || typeof t.name !== 'string' ||
         !testStatuses.has(t.status) || !isCount(t.line) || !isCount(t.column) ||
-        (t.features !== undefined && (!Array.isArray(t.features) || t.features.some(value => typeof value !== 'string'))) ||
+        invalidFeatures(t.features) || invalidFeatures(t.failedFeatures) ||
         (t.assertionStatus !== undefined && !assertionStatuses.has(t.assertionStatus)))) {
     throw new Error('QA_NODE_TEST_REPORT_INVALID');
   }
@@ -158,11 +160,13 @@ export function comparePasses(passes) {
       repeats.set(identity, occurrence);
       const key = `${identity}:${occurrence}`;
       if (!results.has(key)) results.set(key, {...result, statuses: passes.map(() => 'absent'),
-        featurePasses: passes.map(() => []), assertionStatuses: passes.map(() => 'unsupported')});
+        featurePasses: passes.map(() => []), failedFeaturePasses: passes.map(() => []),
+        assertionStatuses: passes.map(() => 'unsupported')});
       const test = results.get(key);
       test.statuses[index] = result.status;
       test.assertionStatuses[index] = result.assertionStatus ?? 'unsupported';
       test.featurePasses[index] = result.features ?? [];
+      test.failedFeaturePasses[index] = result.failedFeatures ?? [];
     }
   }
   return [...results.values()];
