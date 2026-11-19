@@ -2,12 +2,57 @@
  * Conferência de integridade dos lockfiles do Módulo 2 (QA pesado).
  * Executado no build da imagem antes do `npm ci` e também nos testes.
  */
+import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {dirname, join} from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
-export function verifyQaLockfiles(baseDir = dirname(fileURLToPath(import.meta.url))) {
+const baseDirectory = dirname(fileURLToPath(import.meta.url));
+const versionPattern = /^\d+\.\d+\.\d+$/;
+const pythonMeasurementTools = ['mutmut', 'pytest', 'hypothesis', 'libcst'];
+
+function checkFileHash(file, expected) {
+  const raw = readFileSync(file);
+  if (createHash('sha256').update(raw).digest('hex') !== expected) {
+    throw new Error(`QA_LANGUAGE_MEASUREMENT_LOCK_MISMATCH: ${file}`);
+  }
+  return raw.toString('utf8');
+}
+
+function verifyLanguageMeasurementLocks(baseDir, measurements) {
+  const dir = join(baseDir, 'mutacao-linguagens');
+  const {python, go} = measurements ?? {};
+  const requirements = checkFileHash(join(dir, 'requirements.lock'), python?.requirementsSha256).split('\n');
+  for (const tool of pythonMeasurementTools) {
+    const version = python.versions?.[tool];
+    if (!versionPattern.test(version) || !requirements.includes(`${tool}==${version} \\`)) {
+      throw new Error(`QA_PYTHON_MEASUREMENT_PIN_INVALID: ${tool}`);
+    }
+  }
+
+  const mod = checkFileHash(join(dir, 'go-mutesting/go.mod'), go?.modSha256).split('\n');
+  const sums = checkFileHash(join(dir, 'go-mutesting/go.sum'), go?.sumSha256).split('\n');
+  const module = 'github.com/avito-tech/go-mutesting';
+  if (go.module !== module || !/^v\d+\.\d+\.\d+-\d{14}-[a-f0-9]{12}$/.test(go.version) ||
+      !mod.includes(`require ${module} ${go.version}`) || ['', '/go.mod'].some(suffix =>
+        !sums.some(line => line.startsWith(`${module} ${go.version}${suffix} h1:`)))) {
+    throw new Error('QA_GO_MEASUREMENT_PIN_INVALID');
+  }
+}
+
+function verifyInstalledLanguageTools(baseDir, {python, go}) {
+  const dir = join(baseDir, 'mutacao-linguagens');
+  const options = {encoding: 'utf8', timeout: 10_000};
+  const installed = JSON.parse(execFileSync('/usr/local/bin/python3.12',
+    ['-I', '-S', '-B', join(dir, 'python-runner.py'), 'probe', 'plan'], options));
+  const planner = JSON.parse(execFileSync(join(dir, 'go-mutesting-plan'), ['--version'], options));
+  if (pythonMeasurementTools.some(tool => installed[tool] !== python.versions[tool]) || planner !== go.version) {
+    throw new Error('QA_LANGUAGE_MEASUREMENT_VERSION_MISMATCH');
+  }
+}
+
+export function verifyQaLockfiles(baseDir = baseDirectory, verifyInstalled = false) {
   const pkgRaw = readFileSync(join(baseDir, 'package.json'), 'utf8');
   const lockRaw = readFileSync(join(baseDir, 'package-lock.json'));
   const pinRaw = readFileSync(join(baseDir, 'qa-tools.lock.json'), 'utf8');
@@ -36,6 +81,8 @@ export function verifyQaLockfiles(baseDir = dirname(fileURLToPath(import.meta.ur
       !coverage.url.endsWith(`/coverage-${coverage.version}-py3-none-any.whl`)) {
     throw new Error('QA_PYTHON_COVERAGE_PIN_INVALID');
   }
+  verifyLanguageMeasurementLocks(baseDir, pin.languageMeasurements);
+  if (verifyInstalled) verifyInstalledLanguageTools(baseDir, pin.languageMeasurements);
 
   const declaredDeps = pkg.dependencies ?? {};
   const pinnedDeps = pin.dependencies ?? {};
@@ -84,6 +131,6 @@ export function verifyQaLockfiles(baseDir = dirname(fileURLToPath(import.meta.ur
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  verifyQaLockfiles();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  verifyQaLockfiles(baseDirectory, process.argv.includes('--language-tools-installed'));
 }
