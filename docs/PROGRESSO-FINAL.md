@@ -439,3 +439,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:16 UTC — Revisor encerrou C4-R6-REVISAO em db55280f (código 0). Gerente confere a entrega.
 - 19/11/2026 05:16 UTC — Revisão C7-R6 iniciada por Sol high normal somente leitura em e3527238.
 - 19/11/2026 05:17 UTC — QA Chromium em 6b312c2d passou nos oito testes físicos, incluindo contraste da linha plantada, controle visual limpo e a diferença de pixels esperada. API do painel corrigida em b809469f e aprovada nos sete testes. Revisão independente por modelo distinto de db55280f indicou três falhas médias de comprovação das atualizações; aberta C4-R7. Em 70a8c7cc o revisor encontrou duas observações baixas relativas ao limite de inventário e ao teste da raiz relativa.
+- 19/11/2026 05:17 UTC — Trabalhador encerrou C-EXAME-R5 em 6ec910f0 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:17 UTC — Trabalho C2-LINGUAGENS-R2 iniciado por Sol high normal em final-c2-linguagens-r2.
+- 19/11/2026 05:19 UTC — Trabalhador encerrou C2-MUTACAO-LINGUAGENS em 195c8cd8 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:19 UTC — Trabalho C4-R7 iniciado por Sol high normal em final-c4.
+- 19/11/2026 05:21 UTC — Revisor encerrou C7-R6 em e3527238 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:21 UTC — Revisão C7-HISTORICO-R2 iniciada por Sol high normal somente leitura em e4680e65.
+- 19/11/2026 05:22 UTC — As oito CLIs na entrega 6797c1a9 passaram nos seis testes de ponta a ponta em 167 s. Banco, prontidão e documentação tiveram 68/68 nos laboratórios e testes dirigidos, com as dependências fixadas habilitadas e a proteção dos achados prováveis verificada na CLI. A revisão de desempenho e3527238 retornou quatro correções de recursos e recuperação; aberta C7-R7. A medição de mutações de Python e Go chegou em 195c8cd8 e segue para ligação à CLI.
