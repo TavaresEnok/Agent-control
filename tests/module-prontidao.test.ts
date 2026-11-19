@@ -2777,12 +2777,12 @@ test('R16: retenção conservadora e segmentos recuperáveis de shell malformado
     };
     const coverage = (out: ReturnType<typeof audit>, pillar = 'backup-restauracao') => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`);
     const has = (out: ReturnType<typeof audit>, rule: string) => out.findings.some(f => f.rule === rule);
-    for (const expr of ['-mtime +7 -delete -mtime invalido', '-mtime 0 -mtime +7 -delete', '-type invalido -mtime +7 -delete', '-mtime +7 -delete -type invalido', '-type f -type d -mtime +7 -delete', '-mtime +7 -delete -atime errado', '-size errado -mtime +7 -delete', '-mtime +999999999999999999999999 -delete']) {
+    for (const expr of ['-mtime +7 -delete -mtime invalido', '-mtime 0 -mtime +7 -delete', '-type invalido -mtime +7 -delete', '-mtime +7 -delete -type invalido', '-type f -type d -mtime +7 -delete', '-mtime +7 -delete -type d', '-mtime +7 -delete -atime errado', '-size errado -mtime +7 -delete', '-mtime +999999999999999999999999 -delete']) {
       const out = audit(`pg_dump db\nfind . ${expr}`);
       assert.equal(coverage(out)?.status, 'failed', expr);
       assert.doesNotMatch(coverage(out)?.detail ?? '', /retenção de backup identificada/, expr);
     }
-    for (const expr of ['-mtime +7 -delete', '-type f -mtime +7 -delete', '-mtime +7 -delete -type d', '-name --help -mtime +7 -delete']) {
+    for (const expr of ['-mtime +7 -delete', '-type f -mtime +7 -delete', '-name --help -mtime +7 -delete']) {
       const out = audit(`pg_dump db\nfind . ${expr}`);
       assert.equal(coverage(out)?.status, 'ok', expr);
       assert.match(coverage(out)?.detail ?? '', /retenção de backup identificada/, expr);
@@ -2880,5 +2880,56 @@ test('R17: nomes de find e recuperação lexical usam classificação com argume
       commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: raw.coverage, fileCoverage: [], achados: [], raw});
     assert.equal(report.summary.toolFailures, raw.coverage.filter(c => c.status === 'failed').length);
     assert.equal(raw.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'ok');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
+
+
+test('R19: retenção demonstrável e recuperação lexical de redirecionamentos', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r19-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const audit = (line: string) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
+      return runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+    };
+    const status = (out: ReturnType<typeof audit>, pillar: string) => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status;
+    const backup = 'backup-restauracao', disk = 'disco-memoria', alert = 'alertas-logs';
+    for (const expr of [
+      "-path 'backup.sql' -mtime +7 -delete", "-ipath 'backup.sql' -mtime +7 -delete",
+      "-name 'backup.sql' -name 'archive.sql' -mtime +7 -delete",
+      "-name . -mtime +7 -delete", "-name .. -mtime +7 -delete",
+      `-name ${'a'.repeat(256)} -mtime +7 -delete`,
+      `-name ${'?'.repeat(256)} -mtime +7 -delete`,
+      '-mtime +7 -delete -name backup.sql', '-mtime +7 -print -delete',
+      '-mtime +7 -delete -delete',
+    ]) {
+      const out = audit(`pg_dump db\nfind /srv/backups ${expr}`);
+      assert.equal(status(out, backup), 'failed', expr);
+      assert.doesNotMatch(out.coverage.find(c => c.tool === `prontidao:requisito:${backup}`)?.detail ?? '', /retenção de backup identificada/, expr);
+    }
+    for (const expr of ['-name backup.sql -type f -mtime +7 -delete', '-mtime +7 -delete', `-name ${'a'.repeat(255)} -mtime +7 -delete`]) {
+      const out = audit(`pg_dump db\nfind . ${expr}`);
+      assert.equal(status(out, backup), 'ok', expr);
+      assert.match(out.coverage.find(c => c.tool === `prontidao:requisito:${backup}`)?.detail ?? '', /retenção de backup identificada/, expr);
+    }
+    assert.equal(status(audit('pg_dump db\nfind . -path backup.sql -print'), backup), 'ok');
+    const shell = (body: string) => `sh -c '${body.replace(/'/g, "'\\''")}'`;
+    for (const redirect of ['>&', '<&', '2>&', '0<&', '>', '<', '&>']) {
+      for (const target of ['df -P /', 'alertmanager', 'logrotate /tmp/log.conf', 'pg_dump db']) {
+        const body = `echo ${redirect}${target}; echo "`;
+        const out = audit(shell(body));
+        for (const pillar of [backup, disk, alert]) assert.equal(status(out, pillar), 'ok', `${body}: ${pillar}`);
+      }
+    }
+    for (const [command, pillar] of [['df -P /', disk], ['alertmanager', alert], ['logrotate /tmp/log.conf', alert], ['npm run personal:backup', backup]] as const) {
+      for (const prefix of ['echo ok; ', `echo "$(printf '%s' x\\ #)"; `, `echo "$(echo $(printf '%s' x\\ #))"; `]) {
+        const body = `${prefix}${command}; echo "`;
+        assert.equal(status(audit(shell(body)), pillar), 'failed', body);
+      }
+    }
+    for (const body of [`echo "$(echo # comment\ndf -P /)"; echo "`, `echo "$(echo # comment df -P /)"; echo "`, `echo "$(cat <<EOF)"; df -P /; echo "`, `echo >&; df -P /; echo "`, `echo <&; df -P /; echo "`]) {
+      assert.equal(status(audit(shell(body)), disk), 'ok', body);
+    }
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });

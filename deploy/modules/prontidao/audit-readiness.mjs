@@ -1549,7 +1549,7 @@ function* operationalCommands(file, onIncomplete) {
 // Literal command words and redirections. Expansion, shell control flow and scripts invoked
 // indirectly stay outside the static proof.
 function shellWords(command) {
-  const tokens = /#[^\r\n]*|\d*(?:<<<|<<-?)|(?:\d*>>?|[|;&<>])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^ \t\n"'\\|;&<>])+|[ \t\n]+/gy;
+  const tokens = /#[^\r\n]*|\d*(?:<<<|<<-?)|(?:\d*(?:>>?|<)|&>>?|[|;&])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^ \t\n"'\\|;&<>])+|[ \t\n]+/gy;
   const words = [];
   let operator = false;
   while (tokens.lastIndex < command.length) {
@@ -2175,7 +2175,7 @@ function splitShellSegments(words) {
       current.push(word);
       continue;
     }
-    if (/^(?:\d*(?:<<-?|<<<|>>?|<)|&>>?)$/.test(word.text)) {
+    if (/^(?:\d*(?:<<-?|<<<|>>?|<)[&]?|&>>?)$/.test(word.text)) {
       if (words[i + 1]?.operator && words[i + 1].text === '&') i++;
       if (words[i + 1] && !words[i + 1].operator) i++;
       continue;
@@ -2273,9 +2273,10 @@ function isFindRetention(args, onIncomplete) {
   let i = 0;
   while (i < args.length && !/^(?:-|!|\()/.test(args[i])) i++;
   let age = false, action = false, valid = true, needTerm = true, relevant = false;
-  let ageCount = 0, typeCount = 0;
+  let ageCount = 0, typeCount = 0, patternCount = 0;
   while (i < args.length) {
     const token = args[i++];
+    if (action) valid = false; // A terminal action is required; later tests cannot restrict it.
     if (token === '-a' || token === '-and') {
       if (needTerm) valid = false;
       needTerm = true;
@@ -2296,7 +2297,9 @@ function isFindRetention(args, onIncomplete) {
       } else if (patterns.has(token)) {
         // Only simple basename globs whose nonempty component is demonstrable.
         // Paths, bracket expressions, escapes and other pattern dialects need more semantics.
-        if (!/^[A-Za-z0-9_.?*+-]+$/.test(operand) || !/[A-Za-z0-9_.?+-]/.test(operand) && !/^\*+$/.test(operand)) valid = false;
+        if (++patternCount > 1 || token === '-path' || token === '-ipath'
+          || !/^[A-Za-z0-9_.?*+-]+$/.test(operand) || operand === '.' || operand === '..'
+          || operand.replace(/\*/g, '').length > 255) valid = false;
       } else if (token === '-type') {
         if (++typeCount > 1 || !/^[bcdflps]$/.test(operand)) valid = false;
       } else if (otherOperands.has(token) || printOperands.has(token)) {
@@ -2314,7 +2317,7 @@ function isFindRetention(args, onIncomplete) {
       if (!terminated) valid = false;
       // Other actions are not part of the positive grammar.
       valid = false;
-    } else if (!flags.has(token)) {
+    } else if (!flags.has(token) || token === '-print' || token === '-print0') {
       valid = false;
     }
     needTerm = false;
@@ -2375,20 +2378,26 @@ function malformedShellPrefix(command) {
   const segments = [];
   let fragment = '', quote = '', escaped = false, wordStart = -1;
   const substitutionEnd = start => {
-    const stack = [{quote: '', parens: 1}];
+    const stack = [{quote: '', parens: 1, wordStart: true}];
     for (let i = start + 2; i < command.length; i++) {
       const frame = stack[stack.length - 1], ch = command[i];
-      if (ch === '\\' && frame.quote !== "'") { i++; continue; }
+      if (ch === '\\' && frame.quote !== "'") {
+        if (i + 1 >= command.length) return -1;
+        if (command[i + 1] !== '\n') frame.wordStart = false;
+        i++; continue;
+      }
       if (frame.quote === "'") { if (ch === "'") frame.quote = ''; continue; }
-      if (ch === '$' && command[i + 1] === '(') { stack.push({quote: '', parens: 1}); i++; continue; }
+      if (ch === '$' && command[i + 1] === '(') { frame.wordStart = false; stack.push({quote: '', parens: 1, wordStart: true}); i++; continue; }
       if (frame.quote === '"') { if (ch === '"') frame.quote = ''; continue; }
-      if (ch === "'" || ch === '"') { frame.quote = ch; continue; }
+      if (ch === "'" || ch === '"') { frame.quote = ch; frame.wordStart = false; continue; }
       if (ch === '`' || (ch === '$' && command[i + 1] === '{')) return -1; // Unsupported nesting.
-      if (ch === '#' && (i === start + 2 || /[\s;|&()]/.test(command[i - 1]))) {
+      if (ch === '#' && frame.wordStart) {
         const newline = command.indexOf('\n', i);
         if (newline < 0) return -1;
-        i = newline; continue;
+        frame.wordStart = true; i = newline; continue;
       }
+      if (ch === '<' && command[i + 1] === '<') return -1;
+      frame.wordStart = /[\s;|&()<>]/.test(ch);
       if (ch === '(') frame.parens++;
       if (ch === ')' && --frame.parens === 0) { stack.pop(); if (!stack.length) return i; }
     }
@@ -2396,8 +2405,16 @@ function malformedShellPrefix(command) {
   };
   const emit = () => {
     const parsed = shellWords(fragment);
-    if (parsed) segments.push(...splitShellSegments(parsed.words));
+    if (!parsed) return false;
+    for (let i = 0; i < parsed.words.length; i++) {
+      if (/^(?:\d*(?:>>?|<)[&]?|&>>?)$/.test(parsed.words[i].text) && parsed.words[i].operator) {
+        if (!parsed.words[i + 1] || parsed.words[i + 1].operator) return false;
+        i++;
+      }
+    }
+    segments.push(...splitShellSegments(parsed.words));
     fragment = ''; wordStart = -1;
+    return true;
   };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
@@ -2418,8 +2435,9 @@ function malformedShellPrefix(command) {
     if (ch === '(' || ch === ')' || (ch === '<' && command[i + 1] === '<')) {
       fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
     }
-    if (ch === '&' && command[i + 1] === '>') { fragment += ch; continue; }
-    if (/[;|&\n]/.test(ch)) { emit(); continue; }
+    const redirect = command.slice(i).match(/^(?:\d*(?:>>?|<)[&]?|&>>?)/);
+    if (redirect) { fragment += redirect[0]; i += redirect[0].length - 1; wordStart = -1; continue; }
+    if (/[;|&\n]/.test(ch)) { if (!emit()) return segments; continue; }
     if (/\s/.test(ch) || /[<>]/.test(ch)) wordStart = -1;
     else if (wordStart < 0) wordStart = fragment.length;
     fragment += ch;
