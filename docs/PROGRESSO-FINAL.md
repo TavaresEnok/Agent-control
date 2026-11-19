@@ -267,3 +267,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:40 UTC — Revisão C2-R7 iniciada por Sol high normal somente leitura em a7783fba.
 - 19/11/2026 03:40 UTC — Testes complementares de c2-r7-reverificacao em df6bd1f5: 52 aprovados.
 - 19/11/2026 03:40 UTC — A prova integrada do exame a5ef0b22 passou em 22 testes. A revisão da reverificação informou um alto sobre fechamento sem prova de regressão e um médio sobre falha de publicação depois do commit. Ordem C-REVERIFICAR-R2 sobre a integração atual.
+- 19/11/2026 03:41 UTC — Trabalhador encerrou C-PAINEL em a1500106 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:41 UTC — Trabalho C-REVERIFICAR-R2 iniciado por Sol high normal em final-c-reverificar-r2.
+- 19/11/2026 03:41 UTC — Validação completa de c2-r7-reverificacao em df6bd1f5: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 03:41 UTC — Validação de c2-exame-r3 em a5ef0b22 iniciada no checkout de integração.
+- 19/11/2026 03:42 UTC — Painel a1500106 integrado ao candidato de QA a11377dc. O gerente iniciou a prova de autorização do gateway e a prova de seleção e correção no navegador de teste. A suíte anterior df6bd1f5 completou TypeScript, 253 arquivos, 52 complementares e laboratório.
