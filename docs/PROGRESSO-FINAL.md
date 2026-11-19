@@ -132,3 +132,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:16 UTC — Revisor encerrou C8-R3 em bdcaa6c6 (código 0). Gerente confere a entrega.
 - 19/11/2026 02:16 UTC — Revisão C5-R3 iniciada por Sol high normal somente leitura em 31371fea.
 - 19/11/2026 02:17 UTC — C8-R3 em bdcaa6c6 passou a prova das ferramentas e recebeu apontamentos na revisão Sol high normal para variantes de arestas Mermaid e opções de resolução TypeScript. Aberta C8-R4. O build C9-R2 continua no download de artefatos fixados; o laboratório depende da conclusão da imagem.
+- 19/11/2026 02:18 UTC — Iniciada prova conjunta das seis CLIs que já têm imagens e fixtures disponíveis, na versão 2fdb29c4. A primeira suíte preliminar de C2 também está em execução na trilha isolada bc5fb353.
+- 19/11/2026 02:19 UTC — Revisor encerrou C5-R3 em 31371fea (código 0). Gerente confere a entrega.
+- 19/11/2026 02:19 UTC — Revisão C6 iniciada por Sol high normal somente leitura em bce4196c.
+- 19/11/2026 02:19 UTC — As seis CLIs de QA, arquitetura, dependências, banco, prontidão e documentação passaram em conjunto no checkout de integração, incluindo relatório privado, conversão em tarefa e código de falha verificável. No banco, as nove provas reais passaram usando o Squawk extraído da própria imagem fixada. A revisão de 31371fea encontrou um alto e cinco médios fora das fixtures atuais; distribuída C5-R4.
