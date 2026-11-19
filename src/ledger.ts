@@ -8,7 +8,19 @@ import { workflowFor } from './workflows.ts';
 import { Template } from './templates.ts';
 import {freezeManagedExecution} from './managed-plan.ts';
 
-export type ExamModule = 'design' | 'verify';
+export const VERIFICATION_MODULES = [
+  'qa',
+  'arquitetura',
+  'dependencias',
+  'banco',
+  'prontidao',
+  'desempenho',
+  'documentacao',
+  'conformidade',
+] as const;
+export type VerificationModule = (typeof VERIFICATION_MODULES)[number];
+export type ExamModule = 'design' | 'verify' | VerificationModule;
+const EXAM_MODULES: ReadonlySet<string> = new Set(['design', 'verify', ...VERIFICATION_MODULES]);
 export type ExamContext = {
   contextId: string;
   mainContextId: string;
@@ -66,10 +78,10 @@ export class Ledger {
       return id;
     });
   }
-  /** Creates or reuses the dedicated per-project exam context for `design` or `verify`, keeping the main context untouched. */
+  /** Creates or reuses the dedicated per-project exam context for `design`, `verify`, or a verification module, keeping the main context untouched. */
   async ensureExamContext(principal: string, projectId: string, module: ExamModule): Promise<ExamContext> {
     const parsedProjectId = Id.parse(projectId);
-    if (module !== 'design' && module !== 'verify') throw new Refusal('INVALID_CONTRACT', 400);
+    if (!EXAM_MODULES.has(module)) throw new Refusal('INVALID_CONTRACT', 400);
     const missingCode = module === 'design' ? 'DESIGN_CONTEXT_REQUIRED' : 'VERIFY_CONTEXT_REQUIRED';
     return this.tx(async c => {
       await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE', [parsedProjectId]);
