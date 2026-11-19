@@ -762,3 +762,6 @@ PAUSADO-COTA
 - 19/11/2026 17:48 UTC — revisor-C-EXAME-VINCULO-R2 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:49 UTC — Falha na validação de retomada-c3-atual em suite, código 1. Logs privados do gerente.
 - 19/11/2026 17:49 UTC — Homologação acumulada em ordem de C3 até C6, em 0b02cd90, 8d528ca5, 4f55934c e b4583c3d. O ramo de entrega de QA em cf046090 contém a prova de regressão de amd64/arm64. A revisão de cc2d5127 encontrou dois vínculos errados entre resultado esperado e função. Aberta correção para deixar explícito o limite da matriz.
+- 19/11/2026 17:50 UTC — C-EXAME-VINCULO-R2 encerrado com código 0.
+- 19/11/2026 17:50 UTC — revisor-C7-R10 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:51 UTC — A suíte do candidato anterior de arquitetura c4d49bcb aprovou 261 arquivos e falhou em cinco. Um teste dependia de um caminho temporário externo e o exame excedeu os 180 s do executor. O teste de mascaramento agora usa AC_TEST_DATABASE_URL com as mesmas verificações locais. As provas temporizadas estão sendo repetidas em banco descartável.
