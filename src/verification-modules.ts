@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import type pg from 'pg';
+import {previousPerformanceMeasurements} from './module-performance-history.ts';
 import {z} from 'zod';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
@@ -147,6 +148,7 @@ export const ModuleReportSummary = z.object({
   directoryName: z.string().regex(MODULE_REPORT_DIR),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   image: z.string().optional(),
+  previousPerformanceRunId: Id.optional(),
   createdAt: z.string().min(1).max(40),
   counts: z.object({
     alta: z.number().int().nonnegative(),
@@ -1309,6 +1311,7 @@ export async function writeModuleReport(input: {
   createdAt: Date;
   commit: string;
   image?: string;
+  previousPerformanceRunId?: string;
   deferPublication?: boolean;
   toolCoverage: readonly ModuleToolCoverage[];
   fileCoverage: readonly CoverageRow[];
@@ -1375,6 +1378,7 @@ export async function writeModuleReport(input: {
     directoryName,
     commit: input.commit,
     ...(input.image ? {image: assertPinnedModuleImage(input.image)} : {}),
+    ...(input.previousPerformanceRunId ? {previousPerformanceRunId: Id.parse(input.previousPerformanceRunId)} : {}),
     createdAt: input.createdAt.toISOString(),
     counts,
     toolFailures,
@@ -1385,6 +1389,7 @@ export async function writeModuleReport(input: {
   const discarded = achados.filter(item => item.status === 'descartado').length;
   let mapMarkdown = renderModuleMapMarkdown(input.module, fileCoverage.map(row => row.file), toolCoverage);
   let coverageBody = renderModuleCoverageMarkdown(toolCoverage, fileCoverage);
+  if (summary.previousPerformanceRunId) coverageBody += '\nMedição anterior de desempenho: ' + summary.previousPerformanceRunId + '\n';
   const cell = (value: string) => sanitizeText(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;').replaceAll('|', '&#124;').replace(/[\r\n]+/g, ' ');
   if (input.measuredFiles?.size) {
@@ -1890,6 +1895,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           return validatePassiveTlsEvidence(input.passiveTlsEvidence);
         })()
       : undefined;
+    let previousPerformanceRunId: string | undefined;
+    let performanceMeasurement: Record<string, unknown> | undefined;
     let collectorCode = 0;
     let collectorData: ModuleCollectorOutput;
     try {
@@ -1911,6 +1918,18 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       collectorData = typeof raw === 'string' || Buffer.isBuffer(raw)
         ? parseModuleCollectorOutput(raw, {maxStdoutBytes, module: input.module})
         : validateModuleCollectorObject(raw, input.module);
+    } else if (input.module === 'desempenho') {
+      const {runPerformanceModule, reconcilePerformanceResources} = await import('../deploy/modules/desempenho/orchestrator.mjs');
+      const recoveryDirectory = join(await requireDataDirectory(input.dataDirectory), 'performance-docker');
+      await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
+      const {coverage, findings, measurement, comparedExamId} = await runPerformanceModule({
+        snapshotPath: snapshot, imageDigest: image!, signal: input.signal, timeoutMs, maxStdoutBytes,
+        recoveryDirectory, previousMeasurements: signal => previousPerformanceMeasurements(input, runId, image!, signal),
+      });
+      collectorData = validateModuleCollectorObject({coverage, findings}, input.module);
+      assertNoLiveAccessKey(measurement);
+      performanceMeasurement = measurement;
+      previousPerformanceRunId = comparedExamId;
     } else {
       const executed = await runModuleCollectorContainer({
         image: image!,
@@ -1947,7 +1966,11 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     } catch (error) {
       if (input.signal?.aborted || (error instanceof Refusal && error.code === 'VERIFY_CONTAINER_CLEANUP_PENDING')) throw error;
       sourceCoverage = undefined;
-      const reason = error instanceof Refusal ? error.code : 'VERIFY_TOOLS_FAILED';
+      performanceMeasurement = undefined;
+      previousPerformanceRunId = undefined;
+      const reason = error instanceof Refusal ? error.code
+        : input.module === 'desempenho' && isErrno(error, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') ? 'VERIFY_STDOUT_LIMIT'
+          : 'VERIFY_TOOLS_FAILED';
       collectorCode = 1;
       const detail = reason === 'VERIFY_MODULE_IMAGE_MISSING'
         ? 'Imagem fixada do módulo ausente no Docker local (VERIFY_MODULE_IMAGE_MISSING).'
@@ -2099,7 +2122,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         commit: input.commit,
         image,
         deferPublication: true,
-        exam, measuredFiles: measured,
+        exam, measuredFiles: measured, previousPerformanceRunId,
         toolCoverage: sourceCoverage ?? collectorData.coverage,
         fileCoverage,
         achados,
@@ -2144,9 +2167,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }
       await input.ledger.fence(c, input.authority);
       const updated = await c.query(
-        `UPDATE ac_verify_runs SET status=$2, report_dir=$3, finished_at=clock_timestamp(), collector_image=$5
+        `UPDATE ac_verify_runs SET status=$2, report_dir=$3, finished_at=clock_timestamp(), collector_image=$5, performance_measurement=$6::jsonb
          WHERE id=$1 AND context_id=$4 AND status='running'`,
-        [runId, finalState, prepared.directory, input.authority.contextId, image ?? null],
+        [runId, finalState, prepared.directory, input.authority.contextId, image ?? null,
+          performanceMeasurement && finalState === 'done' ? JSON.stringify({...performanceMeasurement, previousPerformanceRunId}) : null],
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
       if (prepared.examOriginSha256) {
