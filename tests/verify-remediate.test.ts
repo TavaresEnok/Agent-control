@@ -96,6 +96,97 @@ function worker(status: 'descartado' | 'confirmado', seen: {role: string; task: 
   }};
 }
 
+test('recheck retries temporary intent cleanup and reports both persistent failures', async t => {
+  const url = process.env.AC_TEST_DATABASE_URL;
+  assert.ok(url);
+  const database = await isolatedDatabase(url, 'recheckcleanup');
+  const db = new Ledger(database.url);
+  try {
+    await db.migrate();
+    const principal = 'recheck-cleanup-owner';
+    const project = randomUUID();
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Reverificação sintética']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    const context = await db.createContext(principal, project, randomUUID());
+    const authority = await db.acquire(principal, context, randomUUID(), 'recheck-cleanup', 60);
+    const commit = '0'.repeat(40);
+    const original = await acceptSecurityVerification(db, principal, authority, {projectId: project, commit, policyRevision: 1});
+    await db.pool.query("UPDATE ac_intents SET state='done' WHERE id=$1", [original.id]);
+    const runId = randomUUID();
+    const profile = randomUUID();
+    await db.pool.query(
+      `INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir)
+       VALUES($1,$2,$3,$4,$5,$6,'done','synthetic')`,
+      [runId, project, context, original.id, principal, commit],
+    );
+    await db.pool.query(
+      `INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,profile_id,checklist)
+       VALUES($1,$2,'synthetic','synthetic',$3,'[]')`,
+      [runId, file, profile],
+    );
+    await db.pool.query(
+      `INSERT INTO ac_verify_findings(run_id,achado_id,status,severity,file,payload,examiner_profile_id)
+       VALUES($1,'ACH-001','confirmado','media',$2,'{}',$3)`,
+      [runId, file, profile],
+    );
+
+    for (const persistent of [false, true]) {
+      await t.test(persistent ? 'persistent cleanup failure' : 'transient cleanup failure', async subtest => {
+        const operationError = new Refusal('CAPACITY_BUSY');
+        const cleanupError = new Error('synthetic cleanup failure');
+        let temporaryIntent: string | undefined;
+        let attempts = 0;
+        const recheckWorker: VerifyWorker = {async run(call) {
+          temporaryIntent = call.intentId;
+          assert.notEqual(temporaryIntent, original.id);
+          await db.pool.query(
+            `INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,reason)
+             VALUES($1,$2,$3,'specialist','synthetic',$4,'CAPACITY_BUSY')`,
+            [randomUUID(), context, temporaryIntent, authority.epoch],
+          );
+          if (persistent) {
+            const refreshPending = db.refreshPending.bind(db);
+            subtest.mock.method(db, 'refreshPending', async (...args: Parameters<Ledger['refreshPending']>) => {
+              await refreshPending(...args);
+              attempts += 1;
+              throw cleanupError;
+            });
+          } else {
+            const transact = db.tx.bind(db);
+            subtest.mock.method(db, 'tx', async <T>(work: (client: pg.PoolClient) => Promise<T>) => {
+              const result = await transact(work);
+              attempts += 1;
+              // The first commit took effect, but the caller lost its acknowledgment.
+              if (attempts === 1) throw cleanupError;
+              return result;
+            });
+          }
+          throw operationError;
+        }};
+        await assert.rejects(() => recheckFindings(db, principal, authority, {
+          runId, achadoIds: ['ACH-001'], dataDirectory: 'synthetic', projectId: project, worker: recheckWorker,
+        }), error => {
+          if (!persistent) return error === operationError;
+          assert.ok(error instanceof AggregateError);
+          assert.equal(error.message, 'VERIFY_RECHECK_INTENT_CLEANUP_FAILED');
+          assert.deepEqual(error.errors, [operationError, cleanupError]);
+          return true;
+        });
+        assert.equal(attempts, persistent ? 3 : 2);
+        assert.ok(temporaryIntent);
+        const intent = await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [temporaryIntent]);
+        const waits = await db.pool.query('SELECT 1 FROM ac_capacity_waits WHERE intent_id=$1', [temporaryIntent]);
+        assert.equal(intent.rows[0]?.state, persistent ? 'accepted' : 'failed');
+        assert.equal(waits.rowCount, persistent ? 1 : 0);
+      });
+    }
+  } finally {
+    await db.close();
+    await database.close();
+  }
+});
+
 test('correction asks the owner for the write paths and recheck closes or reopens', async () => {
   const url = process.env.AC_TEST_DATABASE_URL;
   assert.ok(url);
