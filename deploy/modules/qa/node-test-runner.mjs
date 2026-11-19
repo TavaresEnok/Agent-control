@@ -1,9 +1,30 @@
 // Processo de ferramentas da imagem. O node:test executa cada arquivo em um filho.
 import {run} from 'node:test';
 import {isAbsolute, join, relative} from 'node:path';
-import {mkdirSync, writeFileSync} from 'node:fs';
+import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
-import {executionAllowed} from './execute-tests.mjs';
+import {instrumentTestAssertions, loadQaSyntax, qaAssertionMethods} from './collect.mjs';
+import {executionAllowed, testIdentity} from './execute-tests.mjs';
+
+async function prepareAssertions(cwd, files) {
+  const instrumented = new Map();
+  const syntax = await loadQaSyntax().catch(() => undefined);
+  if (!syntax) return instrumented;
+  for (const file of files) {
+    const path = join(cwd, file);
+    const content = readFileSync(path, 'utf8');
+    let prepared;
+    try {
+      prepared = instrumentTestAssertions(file, content, syntax);
+    } catch {
+      continue;
+    }
+    if (!prepared.proofs.length) continue;
+    writeFileSync(path, prepared.content);
+    instrumented.set(file, prepared);
+  }
+  return instrumented;
+}
 
 export async function runNodeTests(cwd, files) {
   const coverageProbe = join(cwd, '.qa-v8-probe.mjs');
@@ -15,12 +36,34 @@ export async function runNodeTests(cwd, files) {
   const temp = join(cwd, '.qa-coverage');
   mkdirSync(temp);
   process.env.TMPDIR = temp;
-  writeFileSync(coverageProbe, 'function qaCoverageProbe(value) { return value ? 1 : 0; }\nqaCoverageProbe(true);\n');
+  writeFileSync(coverageProbe, `
+import assert from 'node:assert';
+import strict from 'node:assert/strict';
+function qaCoverageProbe(value) { return value ? 1 : 0; }
+qaCoverageProbe(true);
+const assertionFunctions = new Set([assert, strict]);
+for (const method of ${JSON.stringify(qaAssertionMethods)}) {
+  assertionFunctions.add(assert[method]);
+  assertionFunctions.add(strict[method]);
+}
+const isAssertion = assertionFunctions.has.bind(assertionFunctions);
+const apply = Reflect.apply;
+export function captureAssertion(fn, receiver, probe) {
+  return (...args) => {
+    if (typeof fn === 'function' && isAssertion(fn)) probe();
+    return apply(fn, receiver, args);
+  };
+}
+`);
+  const instrumented = await prepareAssertions(cwd, files);
+  const probes = new Map([...instrumented.values()].flatMap(({proofs}) => proofs.map(site =>
+    [testIdentity({...site, name: site.title.slice(0, 200)}), site.probes])));
   execArgv.push('--allow-inspector', `--allow-fs-write=${temp}`, '--import', coverageProbe);
   const events = run({
     cwd,
     files: files.map(file => join(cwd, file)),
     coverage: true,
+    coverageExcludeGlobs: [],
     concurrency: 1,
     isolation: 'process',
     execArgv,
@@ -59,8 +102,10 @@ export async function runNodeTests(cwd, files) {
       : data.todo !== undefined ? 'todo'
         : type === 'test:pass' ? 'passed'
           : error?.failureType === 'testCodeFailure' && error.exitCode === undefined ? 'failed' : 'error';
+    const line = data.line ?? 1;
+    const column = instrumented.get(file)?.originalColumn(line, data.column ?? 1) ?? data.column ?? 1;
     tests.push({
-      file, name: data.name.slice(0, 200), line: data.line ?? 1, column: data.column ?? 1,
+      file, name: data.name.slice(0, 200), line, column,
       status, error: error?.cause?.code ?? error?.failureType,
     });
     if (tests.length > 1000) throw new Error('QA_TEST_EVENT_LIMIT');
@@ -69,7 +114,15 @@ export async function runNodeTests(cwd, files) {
   if (typeof summary !== 'boolean' || !Array.isArray(measured)) {
     throw new Error('QA_NODE_TEST_REPORT_INCOMPLETE');
   }
-  return {summary, tests, coverage: measured};
+  const counts = new Map(measured.map(file => [file.file, new Map(file.functions.map(fn => [fn.name, fn.count]))]));
+  for (const test of tests) {
+    const names = probes.get(testIdentity(test));
+    const functions = counts.get(test.file);
+    test.assertionStatus = names && functions
+      ? names.some(name => functions.get(name) > 0) ? 'executed' : 'unobserved'
+      : 'unsupported';
+  }
+  return {summary, tests, coverage: measured.filter(file => !files.includes(file.file))};
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

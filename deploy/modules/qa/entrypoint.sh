@@ -18,11 +18,11 @@ for arg in "$@"; do
       printf '%s\n' QA_PATH_FORBIDDEN >&2
       exit 78
       ;;
-    *.sock*)
-      printf '%s\n' QA_SOCKET_FORBIDDEN >&2
-      exit 78
-      ;;
   esac
+  if [ -S "$arg" ]; then
+    printf '%s\n' QA_SOCKET_FORBIDDEN >&2
+    exit 78
+  fi
 done
 
 if [ -n "${QA_TEST_SOCKET_PATH:-}" ] && [ -e "${QA_TEST_SOCKET_PATH}" ]; then
@@ -69,11 +69,15 @@ if [ "${QA_HOST_TEST_MODE:-0}" != "1" ]; then
 fi
 
 case "/$REPO_PATH/" in
-  */../*|*.sock*)
+  */../*)
     printf '%s\n' QA_PATH_FORBIDDEN >&2
     exit 78
     ;;
 esac
+if [ -S "$REPO_PATH" ]; then
+  printf '%s\n' QA_SOCKET_FORBIDDEN >&2
+  exit 78
+fi
 
 if [ ! -d "$REPO_PATH" ] || [ ! -d /tmp ] || [ ! -w /tmp ]; then
   printf '%s\n' QA_PATH_FORBIDDEN >&2
