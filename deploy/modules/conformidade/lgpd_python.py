@@ -32,6 +32,9 @@ class Value:
     fixed_items: bool = False
     opaque_effects: bool = False
     effects: "FunctionSummary | None" = None
+    truth: bool | None = None
+    bound_receiver: "Value | None" = None
+    alternatives: tuple = ()
 
 
 UNKNOWN = Value(unknown=True)
@@ -39,7 +42,46 @@ CAPTURED = Value(unknown=True, invalidated=True)
 
 
 def scalar_operand(value):
-    return value is None or (value.line is not None and not value.unknown)
+    return value is None or value.truth is not None or (value.line is not None and not value.unknown)
+
+
+def literal_truth(node):
+    if isinstance(node, ast.Constant):
+        return bool(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
+        if isinstance(node.op, ast.Not):
+            return not node.operand.value
+        if isinstance(node.op, (ast.UAdd, ast.USub)) and type(node.operand.value) in (int, float, complex):
+            return bool(node.operand.value)
+    return None
+
+
+def needs_right(node, truth):
+    if truth is None:
+        return None
+    return truth if isinstance(node.op, ast.And) else not truth
+
+
+def parameter_defaults(node):
+    positional = node.args.posonlyargs + node.args.args
+    first_default = len(positional) - len(node.args.defaults)
+    for index, expression in enumerate(node.args.defaults, first_default):
+        yield positional[index].arg, index, index >= len(node.args.posonlyargs), expression
+    for arg, expression in zip(node.args.kwonlyargs, node.args.kw_defaults):
+        if expression is not None:
+            yield arg.arg, None, True, expression
+
+
+def alternatives(value, seen=None):
+    seen = set() if seen is None else seen
+    if value is None or value in seen:
+        return
+    seen.add(value)
+    if value.alternatives:
+        for candidate in value.alternatives:
+            yield from alternatives(candidate, seen)
+    else:
+        yield value
 
 
 def namespace(kind, methods):
@@ -99,20 +141,30 @@ class LocalNames(ast.NodeVisitor):
         self.receivers = set()
         self.calls = []
         self.functions = defaultdict(list)
-        self.aliases = defaultdict(set)
+        self.aliases = defaultdict(list)
+        self.effect_writes = set()
+        self.reachable = True
+
+    def mark(self, name):
+        self.names.add(name)
+        if self.reachable:
+            self.effect_writes.add(name)
 
     def visit_Name(self, node):
         if isinstance(node.ctx, (ast.Store, ast.Del)):
-            self.names.add(node.id)
+            self.mark(node.id)
 
     def visit_FunctionDef(self, node):
-        self.names.add(node.name)
-        self.functions[node.name].append(node)
+        self.mark(node.name)
+        if self.reachable:
+            self.functions[node.name].append(node)
+        for _, _, _, expression in parameter_defaults(node):
+            self.visit(expression)
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_ClassDef(self, node):
-        self.names.add(node.name)
+        self.mark(node.name)
 
     def visit_Lambda(self, node):
         pass
@@ -127,20 +179,29 @@ class LocalNames(ast.NodeVisitor):
         self.external.update(node.names)
 
     def visit_Attribute(self, node):
-        if isinstance(node.ctx, (ast.Store, ast.Del)):
+        if self.reachable and isinstance(node.ctx, (ast.Store, ast.Del)):
             self.receivers.update(reference_names(node.value))
         self.generic_visit(node)
 
     visit_Subscript = visit_Attribute
 
     def visit_Call(self, node):
-        self.calls.append(node)
+        if self.reachable:
+            self.calls.append(node)
         self.generic_visit(node)
+
+    def visit_BoolOp(self, node):
+        reachable = self.reachable
+        for value in node.values:
+            self.visit(value)
+            if needs_right(node, literal_truth(value)) is False:
+                self.reachable = False
+        self.reachable = reachable
 
     def assignment(self, node, targets):
         for target in targets:
-            if isinstance(target, ast.Name):
-                self.aliases[target.id].update(reference_names(node.value))
+            if self.reachable and isinstance(target, ast.Name) and node.value is not None:
+                self.aliases[target.id].append(node.value)
                 if isinstance(node.value, ast.Lambda):
                     self.functions[target.id].append(node.value)
         self.generic_visit(node)
@@ -154,34 +215,38 @@ class LocalNames(ast.NodeVisitor):
     visit_NamedExpr = visit_AnnAssign
 
     def visit_Import(self, node):
-        self.names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
+        for alias in node.names:
+            self.mark(alias.asname or alias.name.split(".")[0])
 
     visit_ImportFrom = visit_Import
 
     def visit_ExceptHandler(self, node):
         if node.name is not None:
-            self.names.add(node.name)
+            self.mark(node.name)
         self.generic_visit(node)
 
     def visit_MatchAs(self, node):
         if node.name is not None:
-            self.names.add(node.name)
+            self.mark(node.name)
         self.generic_visit(node)
 
     visit_MatchStar = visit_MatchAs
 
     def visit_MatchMapping(self, node):
         if node.rest is not None:
-            self.names.add(node.rest)
+            self.mark(node.rest)
         self.generic_visit(node)
 
 
 @dataclass
 class FunctionSummary:
+    node: ast.AST
     body: list
     local: LocalNames
     bindings: dict
     owners: dict
+    default_owners: dict
+    defaults: dict
 
 
 class Analyzer(ast.NodeVisitor):
@@ -310,14 +375,14 @@ class Analyzer(ast.NodeVisitor):
         return Value(keys=keys, unknown=unknown, invalidated=unknown)
 
     def value(self, node, used=True):
-        if isinstance(node, ast.Constant):
-            return None
-        if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
-            return None
+        truth = literal_truth(node)
+        if truth is not None:
+            return Value(truth=truth)
         if isinstance(node, ast.Name):
             return self.read(node)
         if isinstance(node, (ast.Attribute, ast.Subscript)):
-            return self.read_property(node, self.property_reference(node))
+            target = self.property_reference(node)
+            return self.member_value(node, target)
         if isinstance(node, (ast.Tuple, ast.List)):
             return self.sequence(node)
         if isinstance(node, ast.Dict):
@@ -331,19 +396,27 @@ class Analyzer(ast.NodeVisitor):
                     source = source or operand or spec
             return Value(source) if source is not None else None
         if isinstance(node, ast.IfExp):
-            self.value(node.test, used=False)
+            condition = self.value(node.test, used=False)
+            if condition and condition.truth is not None:
+                return self.value(node.body if condition.truth else node.orelse, used)
             yes, no = self.branches([node.body], [node.orelse],
-                                    evaluate=lambda choice: self.branch_value(choice[0]))
-            if yes[1] or no[1]:
-                return CAPTURED
-            source = yes[0] or no[0]
-            return Value(source) if source is not None else CAPTURED
+                                    evaluate=lambda choice: self.branch_value(self.value(choice[0], used)))
+            return self.join_values(yes, no)
         if isinstance(node, ast.BoolOp):
-            self.value(node.values[0], used=False)
-            self.branches(node.values[1:])
-            if used:
-                self.gaps[EXPRESSION] += 1
-            return CAPTURED
+            def evaluate(index):
+                left = self.value(node.values[index], used)
+                if index == len(node.values) - 1:
+                    return left
+                needed = needs_right(node, left.truth if left else None)
+                if needed is False:
+                    return left
+                if needed is True:
+                    return evaluate(index + 1)
+                before = self.branch_value(left)
+                after, = self.branches(index + 1, evaluate=lambda start: self.branch_value(evaluate(start)))
+                return self.join_values(before, after)
+
+            return evaluate(0)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             left = self.state(self.value(node.left))
             right = self.state(self.value(node.right))
@@ -370,9 +443,26 @@ class Analyzer(ast.NodeVisitor):
                 self.gaps[EXPRESSION] += 1
         return CAPTURED
 
-    def branch_value(self, node):
-        current = self.state(self.value(node))
-        return self.origin(current), bool(current and current.invalidated)
+    def branch_value(self, reference):
+        return reference, self.state(reference), self.origin(reference)
+
+    def join_values(self, left, right):
+        left_ref, left_state, left_origin = left
+        right_ref, right_state, right_origin = right
+        if left_ref is right_ref:
+            return left_ref
+        if any(value and value.invalidated for value in (left_state, right_state)):
+            return Value(unknown=True, invalidated=True, attrs={}, alternatives=(left_ref, right_ref))
+        if left_state and right_state and left_state.truth is not None and left_state.truth is right_state.truth:
+            return left_ref
+        if any(value and (value.items is not None or value.effects or value.kind or value.bound_receiver or
+                          (not value.unknown and (value.keys is not None or value.attrs is not None)) or
+                          value.keys or value.attrs)
+               for value in (left_state, right_state)):
+            self.gaps[EXPRESSION] += 1
+            return Value(unknown=True, invalidated=True, attrs={}, alternatives=(left_ref, right_ref))
+        source = left_origin or right_origin
+        return Value(source) if source is not None else None
 
     def property_reference(self, target):
         reference = self.value(target.value)
@@ -401,8 +491,21 @@ class Analyzer(ast.NodeVisitor):
             return CAPTURED
         return UNKNOWN if receiver and receiver.unknown else None
 
+    def member_value(self, node, target):
+        result = self.read_property(node, target)
+        receiver, key, attribute = target
+        if attribute:
+            tracked = not isinstance(node.value, ast.Name) or any(node.value.id in scope for scope in self.scopes)
+            if self.receiver_may_change(receiver, key, result, tracked):
+                return Value(unknown=True, bound_receiver=receiver)
+        return result
+
     def mutate(self, target, value, delete=False):
         reference, key, attribute = target
+        if reference and reference.alternatives:
+            seen = set()
+            for alternative in reference.alternatives:
+                self.invalidate_reachable(alternative, seen)
         current = self.state(reference)
         if current and not attribute and current.items is not None:
             index = type(key) is int and -len(current.items) <= key < len(current.items)
@@ -514,10 +617,9 @@ class Analyzer(ast.NodeVisitor):
     def visit_FunctionDef(self, node):
         for decorator in getattr(node, "decorator_list", ()):
             self.visit(decorator)
-        for default in (*node.args.defaults, *node.args.kw_defaults):
-            if default is not None:
-                self.visit(default)
         value = self.function_summary(node, self.owners)
+        defaults = {name: self.value(expression) for name, _, _, expression in parameter_defaults(node)}
+        value = replace(value, effects=replace(value.effects, defaults=defaults))
         captures = self.module_names | self.owners.keys() | value.effects.local.external
         self.bodies.append((node, value.effects, captures))
         if not isinstance(node, ast.Lambda):
@@ -541,13 +643,14 @@ class Analyzer(ast.NodeVisitor):
         opaque = any(not (isinstance(child, (ast.Pass, ast.Constant)) or isinstance(child, ast.Expr) and
                           isinstance(child.value, ast.Constant)) for child in body)
         decorated = bool(getattr(node, "decorator_list", ()))
-        summary = FunctionSummary(body, collector, locals_, owners)
+        summary = FunctionSummary(node, body, collector, locals_, owners, parents, {})
         value = Value(opaque_effects=opaque or decorated, unknown=decorated, effects=summary)
         self.summaries[node] = value
         return value
 
-    def apply_effects(self, callee):
+    def apply_effects(self, callees, call_node):
         visited, writes, receivers = set(), set(), set()
+        contexts = {}
 
         def resolve(name):
             scopes = self.scopes if self.function is None else self.scopes[1:]
@@ -565,72 +668,129 @@ class Analyzer(ast.NodeVisitor):
             # Module writes affect the function's global view, even when it has a local state frame.
             return self.owners.get(name) is owner and (owner is None or owner is self.function)
 
-        # Follow possible alias roots in lexical summaries without replaying local assignments.
-        def visit_root(name, owner, on_reference, on_callable=None, seen=None):
+        # Resolve candidate references and simple member paths without replaying a body.
+        def visit_root(node, owners, accept, fallback, seen=None):
+            seen = set() if seen is None else seen
+            if isinstance(node, ast.IfExp):
+                for choice in (node.body, node.orelse):
+                    visit_root(choice, owners, accept, fallback, seen)
+                return
+            if isinstance(node, ast.BoolOp):
+                for choice in node.values:
+                    needed = needs_right(node, literal_truth(choice))
+                    if choice is node.values[-1] or needed is not True:
+                        visit_root(choice, owners, accept, fallback, seen)
+                    if needed is False:
+                        break
+                return
+            if isinstance(node, (ast.Attribute, ast.Subscript)):
+                attribute = isinstance(node, ast.Attribute)
+                key = node.attr if attribute else item_key(node.slice)
+
+                def visit_member(receiver, tracked):
+                    if key is None:
+                        fallback(receiver, tracked)
+                    else:
+                        for candidate in alternatives(receiver):
+                            accept(self.member_value(node, (candidate, key, attribute)), tracked)
+
+                visit_root(node.value, owners, visit_member, fallback, seen)
+                return
+            if isinstance(node, (ast.Dict, ast.List, ast.Tuple)):
+                for item in node.values if isinstance(node, ast.Dict) else node.elts:
+                    visit_root(item, owners, fallback, fallback, seen)
+                return
+            if isinstance(node, ast.Starred):
+                visit_root(node.value, owners, accept, fallback, seen)
+                return
+            if isinstance(node, ast.Lambda):
+                accept(self.function_summary(node, owners), True)
+                return
+            if not isinstance(node, (ast.Name, str)):
+                return
+            name = node if isinstance(node, str) else node.id
+            owner = owners.get(name)
             if visible(name, owner):
-                on_reference(*resolve(name))
+                accept(*resolve(name))
             elif owner is not None:
-                seen = set() if seen is None else seen
                 if (name, owner) in seen:
                     return
                 seen.add((name, owner))
                 summary = self.summaries[owner].effects
-                if on_callable is not None:
-                    for definition in summary.local.functions.get(name, ()):
-                        on_callable(self.function_summary(definition, summary.owners))
-                for alias in sorted(summary.local.aliases.get(name, ())):
-                    visit_root(alias, summary.owners.get(alias), on_reference, on_callable, seen)
+                for definition in summary.local.functions.get(name, ()):
+                    accept(self.function_summary(definition, summary.owners), True)
+                defaults, missing = contexts.get(owner, ({}, {}))
+                if name in missing:
+                    if name in defaults:
+                        accept(defaults[name], True)
+                    else:
+                        visit_root(missing[name], summary.default_owners, accept, fallback, seen)
+                for alias in summary.local.aliases.get(name, ()):
+                    visit_root(alias, summary.owners, accept, fallback, seen)
+                seen.remove((name, owner))
 
         def affect(reference, _tracked=False):
             receivers.add(reference)
+            if reference and reference.bound_receiver:
+                receivers.add(reference.bound_receiver)
 
-        def collect(value):
-            if not value or not value.effects or value in visited:
+        def collect(value, call=None):
+            if not value or not value.effects:
                 return
-            visited.add(value)
+            args = call.args if call else ()
+            supplied = {keyword.arg for keyword in call.keywords if keyword.arg is not None} if call else set()
+            count = next((index for index, arg in enumerate(args) if isinstance(arg, ast.Starred)), len(args))
+            function = value.effects.node
+            missing = {name: expression for name, index, keyword, expression in parameter_defaults(function)
+                       if (index is None or index >= count) and (not keyword or name not in supplied)}
+            signature = value, tuple(missing)
+            if signature in visited:
+                return
+            visited.add(signature)
+            parent = contexts.get(function)
+            contexts[function] = (value.effects.defaults, missing)
             local, owners = value.effects.local, value.effects.owners
-            writes.update(name for name in local.names & local.external if visible(name, owners.get(name)))
+            writes.update(name for name in local.effect_writes & local.external if visible(name, owners.get(name)))
             for name in sorted(local.receivers):
-                visit_root(name, owners.get(name), affect)
-            for call in local.calls:
-                target = call.func
+                visit_root(name, owners, affect, affect)
+            for inner in local.calls:
                 resolved, opaque = False, False
 
                 def visit_callee(callee, _tracked=False):
                     nonlocal resolved, opaque
-                    collect(callee)
+                    for candidate in alternatives(callee):
+                        if candidate.bound_receiver:
+                            affect(candidate.bound_receiver)
+                        collect(candidate, inner)
                     resolved |= callee is not None
                     opaque |= bool(callee and (callee.unknown or callee.opaque_effects))
 
-                def visit_receiver(receiver, tracked):
-                    data = self.state(receiver)
-                    method = data.attrs.get(target.attr) if data and data.attrs is not None else None
-                    if self.receiver_may_change(receiver, target.attr, method, tracked):
-                        affect(receiver, tracked)
-                    visit_callee(method)
+                possible_callees = set()
 
-                def visit_argument(reference, _tracked):
+                def visit_opaque(reference, _tracked=False):
+                    if reference is None or reference in possible_callees:
+                        return
+                    possible_callees.add(reference)
                     affect(reference)
                     collect(reference)
+                    for alternative in reference.alternatives:
+                        visit_opaque(alternative)
+                    current = self.state(reference)
+                    for values in (current.items, (current.keys or {}).values(), (current.attrs or {}).values()):
+                        for item in values or ():
+                            visit_opaque(item)
 
-                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
-                    name = target.value.id
-                    visit_root(name, owners.get(name), visit_receiver)
-                elif isinstance(target, ast.Attribute):
-                    for name in reference_names(target.value):
-                        visit_root(name, owners.get(name), affect)
-                elif isinstance(target, ast.Name):
-                    visit_root(target.id, owners.get(target.id), visit_callee, visit_callee)
-                elif isinstance(target, ast.Lambda):
-                    visit_callee(self.function_summary(target, owners))
+                visit_root(inner.func, owners, visit_callee, visit_opaque)
                 if not resolved or opaque:
-                    for arg in (*call.args, *(keyword.value for keyword in call.keywords)):
-                        argument = arg.value if isinstance(arg, ast.Starred) else arg
-                        if isinstance(argument, ast.Name):
-                            name = argument.id
-                            visit_root(name, owners.get(name), visit_argument, collect)
+                    for arg in (*inner.args, *(keyword.value for keyword in inner.keywords)):
+                        visit_root(arg, owners, visit_opaque, visit_opaque)
+            if parent is None:
+                contexts.pop(function)
+            else:
+                contexts[function] = parent
 
-        collect(callee)
+        for callee in callees:
+            collect(callee, call_node)
         seen = set()
         for receiver in receivers:
             self.invalidate_reachable(receiver, seen)
@@ -648,9 +808,9 @@ class Analyzer(ast.NodeVisitor):
 
     visit_SetComp = visit_DictComp = visit_GeneratorExp = visit_ListComp
 
-    def branches(self, *branches, loop_target=None, evaluate=None):
+    def branches(self, *branches, loop_target=None, evaluate=None, exhaustive=False):
         names, references = set(), set()
-        values = []
+        values, scopes = [], []
         for branch in branches:
             self.scopes.append({})
             self.mutations.append({})
@@ -661,18 +821,33 @@ class Analyzer(ast.NodeVisitor):
                     self.visit(child)
             else:
                 values.append(evaluate(branch))
-            names.update(self.scopes.pop())
+            scope = self.scopes.pop()
+            scopes.append(scope)
+            names.update(scope)
             references.update(self.mutations.pop())
-        if names or references:
+        uncertain = bool(references)
+        if not exhaustive:
+            scopes.append({})
+        missing = object()
+        for name in sorted(names):
+            start = next((scope[name] for scope in reversed(self.scopes) if name in scope), missing)
+            first, *rest = (scope.get(name, start) for scope in scopes)
+            agreed = first is not missing and all(candidate is first for candidate in rest)
+            self.scopes[-1][name] = first if agreed else CAPTURED
+            uncertain |= not agreed
+        if uncertain:
             self.gaps[BRANCH] += 1
-        self.scopes[-1].update(dict.fromkeys(names, CAPTURED))
         for reference in references:
             self.invalidate(reference)
         return values
 
     def visit_If(self, node):
-        self.visit(node.test)
-        self.branches(node.body, node.orelse)
+        condition = self.value(node.test, used=False)
+        if condition and condition.truth is not None:
+            for child in node.body if condition.truth else node.orelse:
+                self.visit(child)
+        else:
+            self.branches(node.body, node.orelse, exhaustive=True)
 
     def visit_For(self, node):
         self.visit(node.iter)
@@ -680,7 +855,9 @@ class Analyzer(ast.NodeVisitor):
 
     visit_AsyncFor = visit_For
 
-    visit_While = visit_If
+    def visit_While(self, node):
+        self.visit(node.test)
+        self.branches(node.body, node.orelse)
 
     def visit_Try(self, node):
         self.branches(node.body, node.handlers, node.orelse, node.finalbody)
@@ -708,6 +885,9 @@ class Analyzer(ast.NodeVisitor):
         if reference in seen:
             return
         seen.add(reference)
+        if reference:
+            for alternative in reference.alternatives:
+                self.invalidate_reachable(alternative, seen)
         data = self.state(reference)
         if data and (data.keys is not None or (data.attrs is not None and (data.attrs or not data.invalidated)) or
                      (data.items is not None and not data.fixed_items)):
@@ -722,13 +902,14 @@ class Analyzer(ast.NodeVisitor):
         if callee and not callee.unknown:
             return False
         data = self.state(receiver)
-        return data and ((data.attrs is not None and (data.attrs or (tracked and not data.invalidated))) or
+        return data and (receiver.alternatives or
+                         (data.attrs is not None and (data.attrs or (tracked and not data.invalidated))) or
                          (data.items is not None and not data.fixed_items and name in LIST_MUTATORS) or
                          (data.keys is not None and name in DICT_MUTATORS))
 
     def call(self, node, used):
-        property_ = self.property_reference(node.func) if isinstance(node.func, ast.Attribute) else None
-        callee = self.read_property(node.func, property_) if property_ is not None else self.value(node.func)
+        property_ = self.property_reference(node.func) if isinstance(node.func, (ast.Attribute, ast.Subscript)) else None
+        callee = self.member_value(node.func, property_) if property_ is not None else self.value(node.func)
         args = [(self.call_argument(arg.value, "items"), "items") if isinstance(arg, ast.Starred)
                 else (self.call_argument(arg), None) for arg in node.args]
         keywords = [(self.call_argument(keyword.value, "keys"), "keys") if keyword.arg is None
@@ -748,15 +929,28 @@ class Analyzer(ast.NodeVisitor):
             uncertain = used and (source is not None or property_ is not None and self.origin(property_[0]) is not None)
             if uncertain:
                 self.gaps["resultados de chamadas indiretas com possível origem"] += 1
-            if callee and callee.effects:
-                self.apply_effects(callee)
-            affected = set()
+            elif used:
+                self.gaps["resultados de chamadas sem vínculo estático"] += 1
+            candidates = tuple(alternatives(callee))
+            affected = {candidate.bound_receiver for candidate in candidates if candidate.bound_receiver}
+            methods = [candidate for candidate in candidates if candidate.effects]
             if property_ is not None:
-                receiver, method, _ = property_
-                tracked = not isinstance(node.func.value, ast.Name) or any(
-                    node.func.value.id in frame for frame in self.scopes)
-                if self.receiver_may_change(receiver, method, callee, tracked):
-                    affected.add(receiver)
+                reference, key, attribute = property_
+                if key is None or (reference and reference.alternatives):
+                    for candidate in alternatives(reference):
+                        receiver = self.state(candidate)
+                        if key is None:
+                            choices = (*(receiver.items or ()), *(receiver.keys or {}).values())
+                        else:
+                            choices = (self.member_value(node.func, (candidate, key, attribute)),)
+                        for choice in choices:
+                            if choice and choice.effects:
+                                methods.append(choice)
+                            if choice and choice.bound_receiver:
+                                affected.add(choice.bound_receiver)
+                    affected.add(reference)
+            if methods:
+                self.apply_effects(methods, node)
             if callee and (callee.unknown or callee.opaque_effects):
                 for value, expansion in arguments:
                     if expansion == "items":
