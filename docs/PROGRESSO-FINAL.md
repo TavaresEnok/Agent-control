@@ -682,3 +682,5 @@ PAUSADO-COTA
 - 19/11/2026 17:17 UTC — prontidao aprovado em 36/36 testes dirigidos sem saltos, imagem sha256:efbdf7b405c2, fixada em 44f101b3.
 - 19/11/2026 17:17 UTC — dependencias aprovado em 36/36 testes dirigidos sem saltos, imagem sha256:df0a5915eca9, fixada em 985c96b0.
 - 19/11/2026 17:17 UTC — arquitetura aprovado em 21/21 testes dirigidos sem saltos, imagem sha256:0758fd4034df, fixada em f41671be.
+- 19/11/2026 17:17 UTC — C7-R9 encerrado com código 0.
+- 19/11/2026 17:19 UTC — Arquitetura 257a3451 passou em TypeScript, 261 arquivos oficiais e 52 complementares. O laboratório histórico não encontrou mais o digest anterior. A nova versão f41671be tem 21/21 físicos com Hadolint e arquivo privado do digest; continuará o aceite sobre a integração atualizada. C8-R10 registra os achados de atribuição TypeDoc/Mermaid.
