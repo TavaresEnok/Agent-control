@@ -1047,16 +1047,22 @@ test('Compose deixa os serviços indeterminados quando a extensão de raiz cont�
     const restartFinding = 'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE';
     for (const [notes, serviceLine] of [
       [['x-notes:', '  metadata: {enabled: true,', '    labels: [fixture]}'], 5],
-      [['x-notes:', '  metadata: {label: !<tag:example.invalid,2026:note> fixture}'], 4],
+      [['x-notes:', '  metadata: {label: !<tag:example.invalid,2026:note> fixture} # !<>'], 4],
       [['x-notes:', '  - - [fixture]'], 4],
+      [['x-notes:', '  metadata: {label: "!<>", other: \'!<>\'} # !<>'], 4],
+      [['x-notes:', '  metadata: |', '    !<>', '  other: texto !<>'], 6],
     ] as const) {
       const result = audit([...notes, ...services]);
       assert.equal(restart(result)?.status, 'ok');
       assert.deepEqual(result.findings.filter(f => f.rule === restartFinding).map(f => f.line), [serviceLine]);
+      assert.ok(result.coverage.some(c => c.status === 'ok' && c.detail.startsWith('compose.yaml: verificações [compose')));
     }
     const invalid = [
       ['x-notes:', '  - - [fixture'],
       ['x-notes:', '  metadata: !<tag:example.invalid,2026:note fixture'],
+      ['x-notes:', '  metadata: !<> fixture'],
+      ['x-notes:', '  metadata: {label: [!<> fixture]}'],
+      ['x-notes:', '  ? !<> label', '  : fixture'],
     ];
     for (const lines of [
       ['x-notes:', '  metadata: {enabled: true', ...services],
@@ -1066,9 +1072,12 @@ test('Compose deixa os serviços indeterminados quando a extensão de raiz cont�
     ]) {
       const result = audit(lines);
       assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith('compose.yaml:')));
-      assert.equal(restart(result)?.status, 'failed');
+      assert.equal(result.coverage.some(c => c.status === 'ok' && c.detail.startsWith('compose.yaml: verificações [compose')), false);
+      for (const requirement of ['alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo']) {
+        assert.equal(result.coverage.find(c => c.tool === `prontidao:requisito:${requirement}`)?.status, 'failed');
+      }
       assert.equal(result.findings.some(f => f.rule === restartFinding), false);
-      assert.doesNotMatch(JSON.stringify(result), /tag:example\.invalid/);
+      assert.doesNotMatch(JSON.stringify(result), /tag:example\.invalid|!<>/);
     }
   } finally {
     rmSync(dir, {recursive: true, force: true});
