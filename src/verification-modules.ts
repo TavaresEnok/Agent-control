@@ -10,7 +10,6 @@ import {previousPerformanceMeasurements} from './module-performance-history.ts';
 import {z} from 'zod';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
-import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transport.ts';
 import {finishExamIntentTx} from './exam-intent.ts';
 import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
@@ -34,6 +33,10 @@ import {COVERAGE_REVIEW_INSTRUCTION, FUNCTION_COVERAGE_CRITERION, measureRecheck
   type BoundScope, type FunctionalRegression} from './module-recheck-regression.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
 import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
+import {
+  assertNoSymlinkAlongPath, correctionReceipt, groupCorrectionFindings, loadCorrectionRequests, saveCorrectionRequest,
+  type CorrectionReceipt,
+} from './verification-correction-requests.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {
@@ -44,6 +47,7 @@ import {
   VerifyWorkerCall,
   type VerifyWorker,
 } from './verify-types.ts';
+import {lockWorkflowProjectShared} from './workflow-generations.ts';
 
 /** Container runtime binary. Tests compare against this constant and do not quote the name. */
 export {MODULE_RUNTIME_BIN, runBoundedCollectorProcess, type BoundedProcessResult} from './module-container-cleanup.ts';
@@ -1636,33 +1640,6 @@ function escapesRepo(rel: string): boolean {
   return rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel) || rel === '';
 }
 
-async function assertNoSymlinkAlongPath(repo: string, relativeFile: string): Promise<void> {
-  let rootStat;
-  try {
-    rootStat = await lstat(repo);
-  } catch {
-    throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-  }
-  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-  const root = await realpath(repo);
-  const parts = relativeFile.split('/');
-  let current = root;
-  for (const [index, part] of parts.entries()) {
-    if (part === '' || part === '.' || part === '..') throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-    current = join(current, part);
-    if (escapesRepo(relative(root, current))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-    let info;
-    try {
-      info = await lstat(current);
-    } catch (error) {
-      if (isErrno(error, 'ENOENT')) return;
-      throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-    }
-    if (info.isSymbolicLink() || (index < parts.length - 1 && !info.isDirectory())
-      || (index === parts.length - 1 && !info.isFile())) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-  }
-}
-
 async function resolveInsideRepo(repo: string, relativeFile: string): Promise<string> {
   let rootStat;
   try {
@@ -2264,17 +2241,6 @@ type EligibleFinding = {
   snippet: string;
 };
 
-function groupFindingsByFile(findings: readonly EligibleFinding[]): {file: string; items: EligibleFinding[]}[] {
-  const sorted = [...findings].sort((a, b) => a.file.localeCompare(b.file) || a.id.localeCompare(b.id));
-  const groups: {file: string; items: EligibleFinding[]}[] = [];
-  for (const item of sorted) {
-    const last = groups.at(-1);
-    if (last?.file === item.file) last.items.push(item);
-    else groups.push({file: item.file, items: [item]});
-  }
-  return groups;
-}
-
 function renderModuleRemediationTask(input: {
   projectId: string;
   module: string;
@@ -2324,9 +2290,7 @@ export async function requestModuleCorrection(
     projectId: string;
     repoPath?: string;
   },
-): Promise<{
-  messageLocalId: string;
-  writePaths: string[];
+): Promise<CorrectionReceipt & {
   contextId: string;
   regressionTest: string;
   acceptance: string;
@@ -2340,19 +2304,30 @@ export async function requestModuleCorrection(
   const requested = uniqueSortedIds(input.achadoIds);
 
   return ledger.tx(async client => {
+    await lockWorkflowProjectShared(client, authority.contextId);
+    const mainRow = (await client.query<{id: string}>(
+      `SELECT x.id::text AS id
+       FROM ac_contexts x
+       WHERE x.project_id=$1 AND x.project_id=(SELECT project_id FROM ac_contexts WHERE id=$2) AND NOT x.archived
+         AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=x.id)
+       ORDER BY x.created_at, x.id LIMIT 1`,
+      [input.projectId, authority.contextId],
+    )).rows[0];
+    // The main-context foreign key is needed at dispatch. Lock it before the exam context
+    // so a caller using main authority cannot hold it while waiting for this run lock.
+    if (mainRow && mainRow.id !== authority.contextId) {
+      await client.query('SELECT id FROM ac_contexts WHERE id=$1 FOR KEY SHARE', [mainRow.id]);
+    }
     const authContext = await ledger.authorize(client, principal, authority.contextId);
     await ledger.fence(client, authority);
     if (authContext.project_id !== input.projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
 
     const runRow = (await client.query<{
       id: string;
-      project_id: string;
       context_id: string;
       module: string;
-      intent_id: string;
-      commit_id: string;
     }>(
-      "SELECT id::text AS id, project_id::text AS project_id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' FOR UPDATE",
+      "SELECT id::text AS id, context_id::text AS context_id, module FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' FOR UPDATE",
       [input.runId, input.projectId],
     )).rows[0];
     if (!runRow) throw new Refusal('VERIFY_RUN_MISSING', 404);
@@ -2360,39 +2335,9 @@ export async function requestModuleCorrection(
       throw new Refusal('VERIFY_RUN_MISSING', 404);
     }
 
-    const mainRow = (await client.query<{id: string}>(
-      `SELECT x.id::text AS id
-       FROM ac_contexts x
-       WHERE x.project_id=$1 AND NOT x.archived
-         AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=x.id)
-       ORDER BY x.created_at, x.id LIMIT 1`,
-      [input.projectId],
-    )).rows[0];
     const mainContextId = mainRow?.id ?? runRow.context_id;
     if (authority.contextId !== runRow.context_id && authority.contextId !== mainContextId) {
       throw new Refusal('VERIFY_RUN_MISSING', 404);
-    }
-
-    const existingRows = (await client.query<{
-      message_local_id: string; write_paths: string[]; finding_ids: string[]; regression_test: string; acceptance: string;
-    }>(
-      'SELECT message_local_id, write_paths, finding_ids, regression_test, acceptance FROM ac_verify_remediations WHERE run_id=$1 FOR UPDATE',
-      [runRow.id],
-    )).rows;
-    const match = existingRows.find(row => sameIdSet(row.finding_ids ?? [], requested));
-    if (match) {
-      const repoRow = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0];
-      const repo = repoRow?.repo ?? input.repoPath;
-      if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-      for (const path of match.write_paths) await assertNoSymlinkAlongPath(repo, assertModuleRepoRelativePath(String(path)));
-      return {
-        messageLocalId: String(match.message_local_id),
-        writePaths: [...match.write_paths].map(String),
-        contextId: mainContextId,
-        regressionTest: String(match.regression_test),
-        acceptance: String(match.acceptance),
-        projectId: input.projectId,
-      };
     }
 
     const coveredRows = (await client.query<{file: string}>('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runRow.id])).rows;
@@ -2411,7 +2356,7 @@ export async function requestModuleCorrection(
     const byId = new Map(findingRows.map(row => [String(row.achado_id), row]));
     const findings: EligibleFinding[] = requested.map(id => {
       const row = byId.get(id);
-      if (!row || (row.status !== 'confirmado' && row.status !== 'reaberto')) {
+      if (!row || !['confirmado', 'reaberto', 'fechado'].includes(row.status)) {
         throw new Refusal('VERIFY_FINDING_MISSING', 404);
       }
       const candidate = String(row.file);
@@ -2442,49 +2387,52 @@ export async function requestModuleCorrection(
     const repoRow = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0];
     const repo = repoRow?.repo ?? input.repoPath ?? null;
     if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-    for (const finding of findings) {
-      if (!(await locateRepoFile(repo, finding.file))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-    }
 
-    const groups = groupFindingsByFile(findings);
-    const writePaths = [...new Set([...groups.filter(group => !isProtectedLocation(group.file)).map(group => group.file), ...requested.map(id => moduleRegressionPath(runRow.module, id))])];
-    for (const path of writePaths) await assertNoSymlinkAlongPath(repo, path);
-    const ids = findings.map(item => item.id);
-    const regression = moduleRegressionText(runRow.module, ids)
-      + (findings.some(item => isProtectedLocation(item.file))
-        ? '\nUse dados sintéticos e teste um alvo seguro; não leia nem edite arquivos protegidos.' : '');
-
-    const text = renderModuleRemediationTask({
-      projectId: input.projectId,
-      module: runRow.module,
-      runId: runRow.id,
-      groups,
-      writePaths,
-      regression,
+    const findRequest = await loadCorrectionRequests(client, runRow.id, requested);
+    const exact = findRequest(requested);
+    const groups = groupCorrectionFindings(findings, runRow.module === 'dependencias');
+    const plans = exact ? [{groups, ids: requested, existing: exact}] : groups.map(group => {
+      const ids = group.items.map(item => item.id);
+      return {groups: [group], ids, existing: findRequest(ids)};
     });
-    const prefix = runRow.module === 'verify' ? 'verify-fix' : `module-${runRow.module}-fix`;
-    const messageLocalId = `${prefix}-${runRow.id}-${digest(ids).slice(0, 12)}`;
-    await client.query(
-      `INSERT INTO ac_verify_remediations(id,run_id,finding_ids,message_local_id,write_paths,regression_test,acceptance)
-       VALUES($1,$2,$3,$4,$5,$6,$7)`,
-      [randomUUID(), runRow.id, ids, messageLocalId, writePaths, regression, REMEDIATION_ACCEPTANCE],
-    );
-    await enqueuePersonalOwner(client, mainContextId, messageLocalId, text);
-    if ((await readPersonalOwnerText(client, mainContextId, messageLocalId)) !== text) {
-      throw new Refusal('CHAT_MESSAGE_CONFLICT');
+    // A closed finding can replay its receipt. It cannot participate in new dispatch.
+    if (plans.some(plan => !plan.existing) && findings.some(finding => finding.status === 'fechado')) {
+      throw new Refusal('VERIFY_FINDING_MISSING', 404);
     }
-    if (authority.contextId !== mainContextId) {
-      await enqueuePersonalOwner(client, authority.contextId, messageLocalId, text);
-      if ((await readPersonalOwnerText(client, authority.contextId, messageLocalId)) !== text) {
-        throw new Refusal('CHAT_MESSAGE_CONFLICT');
+    const prefix = runRow.module === 'verify' ? 'verify-fix' : `module-${runRow.module}-fix`;
+    const contextIds = mainContextId === authority.contextId ? [mainContextId] : [mainContextId, authority.contextId];
+    const requestsToSave = [];
+    for (const plan of plans) {
+      const sourcePaths = [...new Set(plan.groups.map(group => group.file))];
+      const writableSources = sourcePaths.filter(path => !isProtectedLocation(path));
+      const regressionPaths = plan.ids.map(id => moduleRegressionPath(runRow.module, id));
+      const writePaths = [...new Set([...writableSources, ...regressionPaths])];
+      const existing = plan.existing;
+      if (existing?.writePaths.some(path => !writePaths.includes(path))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+      for (const path of sourcePaths) {
+        if (existing) await assertNoSymlinkAlongPath(repo, path);
+        else if (!(await locateRepoFile(repo, path))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
       }
+      for (const path of regressionPaths) await assertNoSymlinkAlongPath(repo, path);
+      const regressionTest = moduleRegressionText(runRow.module, plan.ids)
+        + (writableSources.length < sourcePaths.length
+          ? '\nUse dados sintéticos e teste um alvo seguro; não leia nem edite arquivos protegidos.' : '');
+      requestsToSave.push({...plan, writePaths, regressionTest});
+    }
+    const requests = [];
+    for (const {groups, ids, existing, writePaths, regressionTest} of requestsToSave) {
+      requests.push(existing ?? await saveCorrectionRequest(client, {
+        runId: runRow.id, prefix, ids, writePaths, regressionTest, contextIds,
+        text: renderModuleRemediationTask({
+          projectId: input.projectId, module: runRow.module, runId: runRow.id, groups, writePaths, regression: regressionTest,
+        }),
+      }));
     }
     return {
-      messageLocalId,
-      writePaths,
+      ...correctionReceipt(requests),
       contextId: mainContextId,
-      regressionTest: regression,
-      acceptance: REMEDIATION_ACCEPTANCE,
+      regressionTest: requests.map(request => request.regressionTest).join('\n'),
+      acceptance: requests[0]!.acceptance,
       projectId: input.projectId,
     };
   });

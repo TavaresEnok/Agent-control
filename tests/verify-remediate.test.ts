@@ -8,6 +8,7 @@ import {join} from 'node:path';
 import {promisify} from 'node:util';
 import pg from 'pg';
 import {digest, Refusal} from '../src/contracts.ts';
+import {enqueuePersonalOwner} from '../src/conversation-transport.ts';
 import {Ledger} from '../src/ledger.ts';
 import {acceptSecurityVerification} from '../src/verify-intent.ts';
 import {
@@ -218,7 +219,9 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     await mkdir(join(repo, 'certs'), {recursive: true});
     await mkdir(join(repo, 'keys'), {recursive: true});
     const sourceBody = `${visible}\n${secret}\n${'b'.repeat(4500)}\n${hidden}\n`;
+    const secondFile = 'src/outra-regressao.ts';
     await writeFile(join(repo, file), sourceBody);
+    await writeFile(join(repo, secondFile), 'export const valor = 1;\n');
     await writeFile(join(repo, 'certs/server.pem'), `PEM_SECRET_BYTES\n${secret}\n`);
     await writeFile(join(repo, 'certs/server.key'), `KEY_SECRET_BYTES\n${secret}\n`);
     await writeFile(join(repo, 'keys/id_ed25519'), `ID_SECRET_BYTES\n${secret}\n`);
@@ -228,7 +231,7 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)', [project, repo]);
     const profile = randomUUID();
     const account = randomUUID();
-    for (const covered of [file, 'src/link-fora.ts', 'src/ausente.ts', 'certs/server.pem', 'certs/server.key', 'keys/id_ed25519']) {
+    for (const covered of [file, secondFile, 'src/link-fora.ts', 'src/ausente.ts', 'certs/server.pem', 'certs/server.key', 'keys/id_ed25519']) {
       await db.pool.query(
         `INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,profile_id,checklist)
          VALUES($1,$2,'bancada','bancada',$3,'["SEM-ITEM"]'::jsonb)`,
@@ -273,6 +276,7 @@ test('correction asks the owner for the write paths and recheck closes or reopen
       ['ACH-023', '.husky/pre-commit', 1],
       ['ACH-024', '.codex/config.toml', 1],
       ['ACH-025', '.grok/hooks.json', 1],
+      ['ACH-026', secondFile, 1],
     ];
     for (const [id, path, line] of extra) {
       await db.pool.query(
@@ -299,6 +303,8 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     for (const id of ['ACH-005', 'ACH-006', 'ACH-007', 'ACH-008', 'ACH-009', 'ACH-010', 'ACH-011', 'ACH-012', 'ACH-013', 'ACH-015', 'ACH-016', 'ACH-019', 'ACH-020', 'ACH-021', 'ACH-022', 'ACH-023', 'ACH-024', 'ACH-025']) {
       await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: [id]}), refusal('VERIFY_PATH_FORBIDDEN'), id);
     }
+    await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: ['ACH-001', 'ACH-003']}), refusal('VERIFY_FINDING_MISSING'));
+    await assert.rejects(() => requestCorrection(db, principal, authority, {...input, achadoIds: ['ACH-001', 'ACH-014']}), refusal('VERIFY_PATH_FORBIDDEN'));
     assert.equal(await readFile(outsideFile, 'utf8'), 'FORA_DO_REPOSITORIO\n');
     assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM ac_personal_messages')).rows[0].n, 0);
     assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM ac_verify_remediations')).rows[0].n, 0);
@@ -352,6 +358,28 @@ test('correction asks the owner for the write paths and recheck closes or reopen
     assert.equal(row.acceptance, REMEDIATION_ACCEPTANCE);
     assert.equal(String(row.regression_test).includes(secret), false);
     assert.equal((await db.pool.query("SELECT payload->>'snippet' AS snippet FROM ac_verify_findings WHERE run_id=$1 AND achado_id='ACH-001'", [runId])).rows[0].snippet, secret);
+
+    const historicalIds = ['ACH-002', 'ACH-026'];
+    const historicalId = `verify-fix-${runId}-${digest(historicalIds).slice(0, 12)}`;
+    await db.pool.query(`INSERT INTO ac_verify_remediations(id,run_id,finding_ids,message_local_id,write_paths,regression_test,acceptance)
+      VALUES($1,$2,$3,$4,$5,'Regressão sintética anterior',$6)`,
+    [randomUUID(), runId, historicalIds, historicalId, [file, secondFile], REMEDIATION_ACCEPTANCE]);
+    await enqueuePersonalOwner(db.pool, context, historicalId, 'Pedido anterior com dois arquivos');
+    const historical = await requestCorrection(db, principal, authority, {...input, achadoIds: [...historicalIds].reverse()});
+    assert.deepEqual(historical, {messageLocalId: historicalId, writePaths: [file, secondFile]});
+    const [split, repeatedSplit] = await Promise.all([
+      requestCorrection(db, principal, authority, {...input, achadoIds: ['ACH-026', 'ACH-002', 'ACH-001']}),
+      requestCorrection(db, principal, authority, {...input, achadoIds: ['ACH-001', 'ACH-002', 'ACH-026']}),
+    ]);
+    const secondId = `verify-fix-${runId}-${digest(['ACH-026']).slice(0, 12)}`;
+    assert.deepEqual(split, {messageLocalId, messageLocalIds: [messageLocalId, secondId], writePaths: [file, secondFile]});
+    assert.deepEqual(repeatedSplit, split);
+    assert.deepEqual((await db.pool.query('SELECT finding_ids, write_paths FROM ac_verify_remediations WHERE message_local_id=$1', [secondId])).rows,
+      [{finding_ids: ['ACH-026'], write_paths: [secondFile]}]);
+    const secondText = (await db.pool.query('SELECT text FROM ac_personal_messages WHERE local_id=$1', [secondId])).rows[0]?.text;
+    assert.match(secondText, /tests\/seguranca\/ach-026\.test\.ts/);
+    assert.doesNotMatch(secondText, /ACH-001|ACH-002|nao-escrever-verify-remediate/);
+    assert.equal((await db.pool.query('SELECT 1 FROM ac_verify_remediations WHERE run_id=$1', [runId])).rowCount, 3);
     const report = join(data, 'verificacoes', project, '20261116-120000-seguranca');
     const other = join(data, 'verificacoes', project, '20261116-120001-seguranca');
     const copy = join(data, 'verificacoes', project, '20261116-120002-seguranca');
