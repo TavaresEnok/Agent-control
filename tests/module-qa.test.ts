@@ -841,10 +841,13 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
       'REQ-86: cálculo histórico (`listada`).',
       'REQ-87: calcular (`primeira` de `ausente.mjs`) em duas operações.',
       'REQ-88: cálculo (`primeira` de `ausente.mjs` e `listada`).',
-      'REQ-89: Calcular com `primeira` de `b.mjs`.',
+      'REQ-89: Calcular com (`primeira` de `b.mjs`).',
       'REQ-140: `zero` e `um` são os dois resultados esperados',
       'REQ-141: `primeira` de `a.mjs` além de `segunda` de `a.mjs`',
-      'REQ-142: Calcular com `primeira` de `a.mjs` e conferir com `segunda` de `b.mjs`.',
+      'REQ-142: Calcular (`primeira` from `a.mjs`) e conferir (`segunda` de `b.mjs`).',
+      'REQ-143: A saída esperada é o texto `OK` de `a.mjs`.',
+      'REQ-144: A saída esperada é o texto `OK` de `a.mjs`.',
+      'REQ-145: `primeira` de `a.mjs` retorna o texto `OK` de `a.mjs`.',
     ], {
       'a.mjs': ["export function primeira() { return 'OK'; }", 'export function segunda() {}',
         'export function OK() { return 2 + 2; }', 'export function zero() { return 0; }', 'export function um() { return 1; }'].join('\n'),
@@ -860,6 +863,7 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
       "test('função exportada por lista', () => assert.equal(listada(), 4));",
       "test('REQ-68 por título', () => assert.equal('OK', 'OK'));",
       "test('função homônima ao valor esperado', () => assert.equal(OK(), 4));",
+      "test('REQ-144 título com função homônima', () => assert.equal(OK(), 4));",
       "test('REQ-86 título insuficiente para referência ambígua', () => assert.equal(listada(), 4));",
       "test('REQ-140 funções homônimas aos dois valores', () => { assert.equal(zero(), 0); assert.equal(um(), 1); });",
     ]);
@@ -896,6 +900,14 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
     }
     assert.doesNotMatch(result.row(84).detail, /OK \(a\.mjs:/);
     assert.doesNotMatch(result.row(140).detail, /(?:zero|um) \(a\.mjs:|funções homônimas/);
+    for (const id of [143, 144, 145]) {
+      for (const row of [result.row(id), result.staticRow(id)]) {
+        assert.equal(row.status, 'skipped', String(id));
+        assert.match(row.detail, /cobertura limitada.*referência ambígua/);
+        assert.doesNotMatch(row.detail, /OK \(a\.mjs:|homônima/);
+      }
+    }
+    assert.match(result.row(145).detail, /primeira \(a\.mjs:1\)/);
     assert.match(result.row(85).detail, /primeira \(ausente\.mjs\) sem resolução/);
     assert.doesNotMatch(result.row(85).detail, /primeira \(a\.mjs:/);
     assert.match(result.row(88).detail, /primeira \(ausente\.mjs\) sem resolução/);
@@ -1034,7 +1046,7 @@ test('matriz associa a conclusão da asserção à invocação na mesma avaliaç
     });
     const identity = (name: string) => JSON.stringify(['aritmetica.mjs', name]);
     assert.deepEqual(measuredFeatures[0], {completed: [], failed: [identity('capturada')], statuses: Array(3).fill('failed')});
-    assert.deepEqual(measuredFeatures[1]?.completed, []);
+    assert.deepEqual(measuredFeatures[1], {completed: [], failed: [identity('capturada')], statuses: Array(3).fill('completed')});
     assert.deepEqual(measuredFeatures[2]?.completed, []);
     assert.deepEqual(measuredFeatures[3]?.completed, [identity('contagem')]);
     assert.deepEqual(measuredFeatures[3]?.failed, [identity('intercalada')]);
@@ -1043,9 +1055,11 @@ test('matriz associa a conclusão da asserção à invocação na mesma avaliaç
     assert.deepEqual(measuredFeatures[6]?.completed, []);
     assert.deepEqual(result.findings.map(finding => finding.line), [1, 2, 3, 4, 8]);
     assert.ok(result.findings.every(finding => finding.rule === 'QA-REQUISITO-SEM-PROVA'));
-    assert.match(result.row(91).detail, /passed,passed,passed.*asserção reprovada/);
+    assert.ok(result.row(91).detail.includes('REQ-91 comparação capturada (passed,passed,passed, asserção reprovada em pelo menos uma passada)'));
     const functionality = result.functionRow('aritmetica.mjs', 'capturada');
-    assert.match(functionality.detail, /outra asserção concluída.*asserção do alvo reprovada/);
+    const targetFailure = '(passed,passed,passed, asserção do alvo reprovada em pelo menos uma passada)';
+    assert.ok(functionality.detail.includes(`REQ-91 comparação capturada ${targetFailure}`));
+    assert.ok(functionality.detail.includes(`mesmo operando com outra asserção concluída ${targetFailure}`));
     assert.doesNotMatch(functionality.detail, /asserção do alvo concluída nas três passadas/);
     for (const id of [91, 92, 93, 94]) {
       assert.equal(result.row(id).status, 'ok');
@@ -1064,17 +1078,19 @@ test('matriz associa a conclusão da asserção à invocação na mesma avaliaç
 test('matriz mantém verificações manuais limitadas e registra reprovações conhecidas', realTools, async () => {
   await withSyntheticRepo('qa-verificacao-manual-', async repo => {
     const file = 'aritmetica.test.mjs';
-    const source = 'export const somar = (x, y) => x + y;\nexport const dobrar = x => x * 2;';
+    const source = 'export const somar = (x, y) => x + y;\nexport const dobrar = x => x * 2;\nexport const ignorada = () => 12;';
     const tests = [
       "import {test} from 'node:test'; import assert from 'node:assert/strict';",
-      "import {somar, dobrar} from './aritmetica.mjs'; import {valor} from './entrada.mjs';",
-      "test('soma manual com controle', () => { if (somar(1, 2) !== 3) throw new Error('soma'); assert.equal(2 + 2, 4); });",
+      "import {somar, dobrar, ignorada} from './aritmetica.mjs'; import {valor} from './entrada.mjs';",
+      "test('soma manual com controle', () => { const obtido = somar(1, 2); if (obtido !== 3) throw new Error('soma'); assert.equal(2 + 2, 4); });",
       "test('REQ-152 REQ-153 dobra manual', () => { if (dobrar(valor) !== 4) { throw new Error('dobro'); } });",
+      "test('variável sombreada na guarda', () => { const obtido = ignorada(); { const obtido = 3; if (obtido !== 3) throw new Error('sombra'); } assert.equal(2 + 2, 4); });",
     ].join('\n');
     writeFileSync(join(repo, 'requisitos.md'), [
       'REQ-151: `somar` de `aritmetica.mjs`',
       'REQ-152: `dobrar` de `aritmetica.mjs`',
       'REQ-153: calcular o dobro',
+      'REQ-154: `ignorada` de `aritmetica.mjs`',
     ].join('\n'));
     const passes = [];
     for (const [index, value] of [2, 3, 2].entries()) {
@@ -1087,6 +1103,8 @@ test('matriz mantém verificações manuais limitadas e registra reprovações c
     }
     const runtimeTests = comparePasses(passes);
     assert.deepEqual(passes.map(pass => pass.summary), [true, false, true]);
+    assert.deepEqual(runtimeTests[0].assertionStatuses, Array(3).fill('completed'));
+    assert.deepEqual(runtimeTests[0].featurePasses, [[], [], []]);
     assert.deepEqual(runtimeTests[1].assertionStatuses, Array(3).fill('unsupported'));
     const syntax = await loadQaSyntax();
     const matrix = buildTraceability({workspace: repo, reqFiles: ['requisitos.md'], runtimeTests,
@@ -1103,7 +1121,7 @@ test('matriz mantém verificações manuais limitadas e registra reprovações c
       assert.match(requirement.detail, /vínculo sem prova.*passed,failed,passed/);
     }
     assert.deepEqual(matrix.findings.map(({line, rule}) => [line, rule]),
-      [2, 3].map(line => [line, 'QA-REQUISITO-SEM-PROVA']));
+      [2, 3, 4].map(line => [line, 'QA-REQUISITO-SEM-PROVA']));
   });
 });
 
