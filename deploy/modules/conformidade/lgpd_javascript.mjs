@@ -8,6 +8,7 @@ const DECLARATION = 'declaradores fora do rastreamento';
 const UNKNOWN_VALUE = 'resultados de chamadas indiretas com possível origem';
 const UNKNOWN_RESULT = 'resultados de chamadas sem vínculo estático';
 const UNKNOWN_DESTINATION = 'chamadas com possível origem e destino sem vínculo estático';
+const DEFAULT_ARGUMENT = 'argumentos padrão JavaScript/TypeScript sem vínculo estático';
 const MUTATION = 'mutações de propriedades sem vínculo estático';
 const BRANCH = 'reatribuições em fluxo condicional ou repetido';
 const CAPTURE = 'vínculos externos a funções sem ordem de chamada estática';
@@ -120,6 +121,29 @@ function analyze(text, suffix, fieldPattern, limit) {
     writeFile: () => { throw new Error('emissão desativada'); },
   });
   const checker = program.getTypeChecker();
+  const factsByExpression = new WeakMap();
+  const isGlobalUndefined = symbol => !symbol || checker.isUndefinedSymbol(symbol);
+
+  // The summaries need the result facts while still visiting operands that have effects.
+  function expressionFacts(input) {
+    const node = unwrap(input);
+    if (factsByExpression.has(node)) return factsByExpression.get(node);
+    let facts = literalFacts(node);
+    if (!facts && ts.isBinaryExpression(node) && isLogical(node.operatorToken.kind)) {
+      const left = expressionFacts(node.left);
+      const needed = needsRight(node.operatorToken.kind, left);
+      if (needed === false) facts = left;
+      if (needed === true) facts = expressionFacts(node.right);
+    } else if (ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node) ||
+      ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
+      facts = primitive(true);
+    } else if (ts.isIdentifier(node) && node.text === 'undefined' && isGlobalUndefined(checker.getSymbolAtLocation(node))) {
+      facts = UNDEFINED;
+    }
+    factsByExpression.set(node, facts);
+    return facts;
+  }
+
   const field = new RegExp(fieldPattern, 'i');
   const line = (node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
   const scalar = (at) => at === null ? null : {line: at};
@@ -214,7 +238,7 @@ function analyze(text, suffix, fieldPattern, limit) {
       gap(CAPTURE);
       return CAPTURED;
     }
-    if (!symbol && name === 'undefined') return UNDEFINED;
+    if (name === 'undefined' && isGlobalUndefined(symbol)) return UNDEFINED;
     if (field.test(name) && !symbol?.valueDeclaration) return scalar(line(node));
     if (external.has(symbol ?? name)) return external.get(symbol ?? name);
     let data = imported(symbol);
@@ -283,7 +307,7 @@ function analyze(text, suffix, fieldPattern, limit) {
     function summarize(child, effects) {
       if (ts.isFunctionLike(child) || ts.isClassLike(child) || ts.isTypeNode(child)) return;
       if (ts.isBinaryExpression(child) && isLogical(child.operatorToken.kind) &&
-        needsRight(child.operatorToken.kind, literalFacts(child.left)) === false) {
+        needsRight(child.operatorToken.kind, expressionFacts(child.left)) === false) {
         summarize(child.left, effects);
         return;
       }
@@ -334,7 +358,7 @@ function analyze(text, suffix, fieldPattern, limit) {
         visitRoot(root.whenTrue, accept, fallback, seen);
         visitRoot(root.whenFalse, accept, fallback, seen);
       } else if (ts.isBinaryExpression(root) && isLogical(root.operatorToken.kind)) {
-        const needed = needsRight(root.operatorToken.kind, literalFacts(root.left));
+        const needed = needsRight(root.operatorToken.kind, expressionFacts(root.left));
         if (needed !== true) visitRoot(root.left, accept, fallback, seen);
         if (needed !== false) visitRoot(root.right, accept, fallback, seen);
       } else if (isProperty(root)) {
@@ -382,22 +406,34 @@ function analyze(text, suffix, fieldPattern, limit) {
       }
     }
     const affect = (reference) => receivers.add(reference);
+    function argumentUndefined({node, data}) {
+      if (data?.undefined !== undefined) return data.undefined;
+      if (data && !data.unknown && (data.keys || data.items || data.effects || data.kind || data.local)) return false;
+      return expressionFacts(node)?.undefined;
+    }
     function collect(data, supplied = [], receiver = null) {
       if (!data?.effects) return;
+      const {node: owner, body, initializers} = data.effects;
       const defined = new Set();
-      for (const [index, arg] of supplied.entries()) {
-        if (arg.spread) break;
-        if (arg.data?.undefined === false || (arg.data && !arg.data.unknown &&
-          (arg.data.keys || arg.data.items || arg.data.effects || arg.data.kind || arg.data.local))) defined.add(index);
+      if (initializers.size) {
+        const spread = supplied.findIndex(arg => arg.spread);
+        for (const index of initializers.keys()) {
+          // Omission selects the default. A spread can obscure its position and a value can be undefined.
+          if (spread !== -1 && index >= spread) gap(DEFAULT_ARGUMENT);
+          else if (index < supplied.length) {
+            const isUndefined = argumentUndefined(supplied[index]);
+            if (isUndefined === false) defined.add(index);
+            else if (isUndefined === undefined) gap(DEFAULT_ARGUMENT);
+          }
+        }
       }
       const previous = visited.get(data) ?? [];
       const signature = [...defined].join(',');
       if (previous.some(context => context.receiver === receiver && context.signature === signature)) return;
       visited.set(data, [...previous, {receiver, signature}]);
-      const owner = data.effects.node;
       const parent = contexts.get(owner);
-      const summaries = [...data.effects.initializers].filter(([index]) => !defined.has(index)).map(([, summary]) => summary);
-      summaries.push(data.effects.body);
+      const summaries = [...initializers].filter(([index]) => !defined.has(index)).map(([, summary]) => summary);
+      summaries.push(body);
       contexts.set(owner, {receiver, defined, summaries});
       for (const summary of summaries) {
         if (summary.unresolved) gap(CAPTURE);
@@ -409,7 +445,7 @@ function analyze(text, suffix, fieldPattern, limit) {
       for (const {target, root, args} of summaries.flatMap(summary => summary.calls)) {
         let resolved = false;
         let opaque = false;
-        const supplied = args.map(arg => ({spread: ts.isSpreadElement(arg), data: literalFacts(arg)}));
+        const supplied = args.map(node => ({node, spread: ts.isSpreadElement(node)}));
         const visitCallee = (value, receiver = null) => {
           for (const candidate of alternatives(value)) collect(candidate, supplied, receiver);
           resolved ||= Boolean(value);
