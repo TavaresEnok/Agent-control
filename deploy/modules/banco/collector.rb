@@ -430,16 +430,16 @@ module Banco
             sources.take(index).each do |prior|
               @report.cover("pg-migrate", "skipped", "pg-migrate:#{name}:#{prior.path}: transação não confirmada (#{evidence})")
             end
-            detection, line = migration_error_location(error, source, statements) if rejected && error.is_a?(PG::Error)
+            detection, line, line_basis = migration_error_location(error, source, statements) if rejected && error.is_a?(PG::Error)
             outcome = "execução interrompida (#{evidence})"
             if detection
               origin = report_batch_rejection(name, sources.take(index + 1), error, detection, writers.origin(error))
               outcome = "lote rejeitado (#{evidence}); #{detection}; #{origin}"
             elsif rejected
               finding_evidence = evidence
-              if error.is_a?(PG::Error) && !line
-                line = Banco.statement_line(source)
-                finding_evidence = "#{evidence}; posição exata indisponível; linha de referência do arquivo"
+              if error.is_a?(PG::Error)
+                line ||= Banco.statement_line(source)
+                finding_evidence = "#{evidence}; #{line_basis || 'posição exata indisponível; linha de referência do arquivo'}"
               end
               @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", source, "alta",
                 "A migração foi rejeitada no cenário #{name}.", finding_evidence, line: line || Banco.error_line(error, source))
@@ -577,11 +577,16 @@ module Banco
 
     INLINE_FRAME = %r{\APL/pgSQL function inline_code_block line \d+ at (?:SQL statement|EXECUTE)\z}
     PLPGSQL_FRAME = %r{\APL/pgSQL function (?:[^"\n]++|"(?:[^"]++|"")*+")++(?=\n|\z)}
-    FRAME_START = %r{(?:SQL (?:statement|expression|function) "|PL/pgSQL (?:assignment "|function ))}
-    # O nome de uma função SQL é interpolado literalmente, até o limite de um identificador.
-    SQL_ROUTINE_FRAME = %r{\ASQL function ".{1,63}?"(?:(?: statement \d+| during (?:startup|inlining))(?=\n|\z)|(?=\n#{FRAME_START}|\z))}m
+    PLPGSQL_COMPILATION_FRAME = %r{\Acompilation of PL/pgSQL function ".{1,63}?" near line \d+(?=\n|\z)}m
+    FRAME_START = %r{(?:SQL (?:statement|expression|function) "|PL/pgSQL (?:assignment "|function )|compilation of PL/pgSQL function ")}
+    SQL_ROUTINE_START = 'SQL function "'
+    SQL_ROUTINE_END = %r{"(?:(?: statement \d+| during (?:startup|inlining))(?=\n|\z)|(?=\n#{FRAME_START}|\z))}
+    IDENTIFIER_BYTES = 63
     QUERY_FRAME = %r{\A(?:SQL statement|SQL expression|PL/pgSQL assignment) "}
     POSSIBLE_CONSTRAINT_CHECK = "detecção durante a execução do arquivo; SET CONSTRAINTS IMMEDIATE pode ter antecipado a checagem de alterações anteriores"
+    UNDECIDABLE_CONTEXT = "detecção durante a execução do arquivo; contexto do PostgreSQL inconclusivo"
+    STATEMENT_START = "linha inicial da instrução; posição exata indisponível"
+    SERVER_CURSOR = "linha indicada pelo cursor do servidor"
 
     def context_frames(context)
       frames = []
@@ -589,11 +594,11 @@ module Banco
         if (label = context[QUERY_FRAME])
           payload = context.delete_prefix(label)
           ending = context_query_end(payload)
-          return frames << :unknown unless ending
+          return unless ending
 
           frames << (label == 'SQL statement "' ? parsed_context_query(payload[0...ending]) : :other)
           context = payload[(ending + 1)..].delete_prefix("\n")
-        elsif (frame = context[PLPGSQL_FRAME] || context[SQL_ROUTINE_FRAME])
+        elsif (frame = context[PLPGSQL_FRAME] || context[PLPGSQL_COMPILATION_FRAME] || sql_routine_frame(context))
           frames << if INLINE_FRAME.match?(frame)
             :inline_sql
           elsif frame.start_with?("PL/pgSQL function inline_code_block line ")
@@ -603,10 +608,36 @@ module Banco
           end
           context = context[frame.length..].delete_prefix("\n")
         else
-          return frames << :unknown
+          return
         end
       end
       frames
+    end
+
+    def sql_routine_frame(context)
+      return unless context.start_with?(SQL_ROUTINE_START)
+
+      name = context.delete_prefix(SQL_ROUTINE_START)
+      endings = name.to_enum(:scan, SQL_ROUTINE_END).lazy.map { Regexp.last_match }
+        .take_while { |match| match.begin(0) <= IDENTIFIER_BYTES }
+        .select { |match| name[0...match.begin(0)].bytesize.between?(1, IDENTIFIER_BYTES) }.to_a
+      first = endings.first
+      return unless first
+
+      # O servidor interpola o nome sem escapar aspas ou quebras de linha.
+      # Um terminador posterior pode transformar um quadro de checagem em nome.
+      if endings.length > 1
+        alternative = name[first.end(0)..endings.last.begin(0)]
+        alternative.to_enum(:scan, /\nSQL statement "/).each do
+          payload = alternative[Regexp.last_match.end(0)..]
+          ending = context_query_end(payload)
+          next unless ending
+
+          return if parsed_context_query(payload[0...ending]).any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
+        end
+      end
+
+      context[0, SQL_ROUTINE_START.length + first.end(0)]
     end
 
     def context_query_end(payload)
@@ -651,11 +682,16 @@ module Banco
       end
     end
 
-    def statement_at_cursor(source, statements, position)
-      return unless position&.between?(1, source.sql.length)
+    def diagnostic_position(diagnostic, field)
+      raw = diagnostic.error_field(field)
+      raw.to_i if raw&.match?(/\A[0-9]+\z/)
+    end
+
+    def statement_at_cursor(sql, statements, position)
+      return unless position&.between?(1, sql.length)
 
       # O cursor do servidor conta caracteres e a árvore usa offsets em bytes.
-      offset = source.sql[0, position - 1].bytesize
+      offset = sql[0, position - 1].bytesize
       statements.find do |entry|
         offset >= entry.stmt_location && (entry.stmt_len.zero? || offset <= entry.stmt_location + entry.stmt_len)
       end
@@ -690,9 +726,24 @@ module Banco
     def migration_error_location(error, source, statements)
       diagnostic = error.result
       frames = context_frames(diagnostic.error_field(PG::Result::PG_DIAG_CONTEXT))
+      position = diagnostic_position(diagnostic, PG::Result::PG_DIAG_STATEMENT_POSITION)
+      cursor_line = source.sql[0, position - 1].count("\n") + 1 if position&.between?(1, source.sql.length + 1)
+      cursor_evidence = "; cursor do servidor na linha #{cursor_line}" if cursor_line
+      # Quadros incompletos podem ocultar quem disparou a checagem. Mesmo
+      # um cursor externo só localiza a execução, sem provar a sua origem.
+      return ["#{UNDECIDABLE_CONTEXT}#{cursor_evidence}"] unless frames
+
+      # SPI pode fornecer o SQL mais interno e seu cursor em campos próprios.
+      # Esse cursor identifica o comando interno, em coordenadas da consulta interna.
+      internal_query = diagnostic.error_field(PG::Result::PG_DIAG_INTERNAL_QUERY)
+      internal_position = diagnostic_position(diagnostic, PG::Result::PG_DIAG_INTERNAL_POSITION)
+      if internal_query && internal_position&.between?(1, internal_query.length)
+        internal_statement = statement_at_cursor(internal_query, parsed_context_query(internal_query), internal_position)
+        frames.unshift([internal_statement]) if internal_statement && frames.first == :inline_sql
+      end
+
       signature = [sqlstate(error), diagnostic.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION)]
-      position = diagnostic.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION)&.to_i
-      cursor_statement = statement_at_cursor(source, statements, position)
+      cursor_statement = statement_at_cursor(source.sql, statements, position)
       executing = cursor_statement
       executing ||= statements.first if statements.one?
       candidates = executing ? [executing] : statements
@@ -700,36 +751,41 @@ module Banco
       blocks = %i[inline_sql inline].include?(frames.last) ? candidates.select { |entry| entry.stmt.do_stmt } : []
       block = blocks.first if blocks.one?
       if !blocks.empty? && inline_constraint_resolution?(frames, signature)
-        return [nil, block && Banco.statement_line(source, offset: block.stmt_location)]
+        return direct_error_location(source, block, cursor_line)
       end
 
-      if frames.empty?
+      if frames.empty? && !internal_query
         resolutions = constraint_resolution_candidates(candidates, signature)
         unless resolutions.empty?
           resolution = resolutions.first if resolutions.one?
-          return [nil, resolution && Banco.statement_line(source, offset: resolution.stmt_location)]
+          return direct_error_location(source, resolution, cursor_line)
         end
       end
 
       if executing&.stmt&.constraints_set_stmt&.deferred == false
-        return ["detecção em SET CONSTRAINTS IMMEDIATE na linha #{Banco.statement_line(source, offset: executing.stmt_location)}"]
+        start_line = Banco.statement_line(source, offset: executing.stmt_location)
+        return ["detecção em SET CONSTRAINTS IMMEDIATE na linha #{start_line} (início da instrução)#{cursor_evidence}"]
       end
 
       queries = frames.grep(Array)
       if queries.any? { |query| query.one? && query.first.stmt.constraints_set_stmt&.deferred == false }
-        return ["detecção em SET CONSTRAINTS chamado pelo arquivo; posição externa indisponível"]
+        return ["detecção em SET CONSTRAINTS chamado pelo arquivo#{cursor_evidence || '; posição externa indisponível'}"]
       end
 
       if queries.flatten(1).any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false } ||
+          internal_statement&.stmt&.constraints_set_stmt&.deferred == false ||
           (!executing && blocks.empty? && statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false })
-        return [POSSIBLE_CONSTRAINT_CHECK]
+        return ["#{POSSIBLE_CONSTRAINT_CHECK}#{cursor_evidence}"]
       end
 
-      if cursor_statement
-        [nil, Banco.error_line(error, source)]
-      elsif (entry = block || executing)
-        [nil, Banco.statement_line(source, offset: entry.stmt_location)]
-      end
+      direct_error_location(source, block || executing, cursor_line)
+    end
+
+    def direct_error_location(source, statement, cursor_line)
+      return [nil, cursor_line, SERVER_CURSOR] if cursor_line
+      return unless statement
+
+      [nil, Banco.statement_line(source, offset: statement.stmt_location), STATEMENT_START]
     end
 
     def report_batch_rejection(name, sources, error, detection, origin)
