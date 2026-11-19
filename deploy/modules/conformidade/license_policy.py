@@ -55,6 +55,7 @@ _UNKNOWN_PATTERNS = (
 )
 _BASE64_SECRET = re.compile(r"[A-Za-z0-9+]{40,}={0,2}")
 _SHORT_FILE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+_SNAKE_IDENTIFIER = re.compile(r"[a-z]+(?:_[a-z]+)+", re.ASCII)
 _MASK_TOKEN = re.compile(r"^\(sha256:[a-f0-9]{64}\)$")
 
 
@@ -66,12 +67,27 @@ def _shannon_entropy(value):
     return -sum((count / total) * math.log2(count / total) for count in counts.values())
 
 
+def _secret_segment(segment):
+    return bool(_BASE64_SECRET.search(segment) or (len(segment) >= 32 and _shannon_entropy(segment) >= 3.5))
+
+
+def _descriptive_identifier(segment):
+    # Only real separators between ordinary words qualify; an opaque word must
+    # still pass the same secret checks as a standalone segment.
+    identifier = _SHORT_FILE_EXTENSION.sub("", segment)
+    return bool(_SNAKE_IDENTIFIER.fullmatch(identifier)) and all(
+        not _secret_segment(word) and not has_known_secret(word)
+        for word in identifier.split("_")
+    )
+
+
 def is_secret_token(token):
     if not token or _MASK_TOKEN.fullmatch(token):
         return False
     return any(
         segment
-        and (_BASE64_SECRET.search(segment) or (len(segment) >= 32 and _shannon_entropy(segment) >= 3.5))
+        and not _descriptive_identifier(segment)
+        and _secret_segment(segment)
         for segment in token.split("/")
     )
 

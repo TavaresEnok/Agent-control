@@ -223,6 +223,8 @@ def add_scancode_results(data, selected, version, report, ok_files=None):
                      f"{file} | detecções de licença={len(detections)}, metadados de pacote={len(packages)}")
         for detection in detections:
             expression = detection.get("license_expression_spdx")
+            if expression is None:
+                continue
             if not isinstance(expression, str) or not SAFE_EXPRESSION.fullmatch(expression) or is_redacted_text(expression):
                 suppressed += 1
                 continue

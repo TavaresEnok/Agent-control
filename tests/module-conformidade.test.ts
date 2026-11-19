@@ -3098,3 +3098,56 @@ print(json.dumps({'out': out, 'partial': partial_out}))
     rmSync(scratch, {recursive: true, force: true});
   }
 });
+
+
+test('R5 mede identificador descritivo e distingue ausência de supressão SPDX', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'conformidade-r5-'));
+  const repo = join(scratch, 'repo');
+  const staging = join(scratch, 'staging');
+  mkdirSync(join(repo, 'src'), {recursive: true});
+  mkdirSync(staging);
+  try {
+    const descriptive = 'src/account_subscription_preferences.ts';
+    writeFileSync(join(repo, descriptive), 'export const example = 1;\n');
+    const raw = python(String.raw`
+import json, sys
+from pathlib import Path
+from collector import Report, snapshot, add_scancode_results
+from license_policy import is_sensitive_path, is_redacted_text
+root, staging = map(Path, sys.argv[2:4])
+good = 'src/account_subscription_preferences.ts'
+opaque = 'a9k2m7z4q8v1b6n3x5c0j9h2f7d4s8p1'
+segmented = 'ordinary_' + opaque + '_name'
+long_word = 'abcdefghijklmnopqrstuvwxyzabcdefghi'
+for name in (opaque, segmented, 'ordinary_' + long_word + '_name', 'password-reset', 'id_generator'):
+    (root / 'src' / (name + '.ts')).touch()
+    assert is_sensitive_path('src/' + name + '.ts')
+assert not is_sensitive_path(good) and not is_redacted_text(good)
+report = Report()
+selected = snapshot(root, staging, report)
+assert set(selected) == {good}
+assert any(row['tool'] == 'conformidade:file' and row['detail'].startswith('5 entradas') for row in report.coverage)
+def scan(detections, packages):
+    result = Report()
+    ok = []
+    add_scancode_results({'files': [{'type': 'file', 'path': good, 'license_detections': detections, 'package_data': packages}]}, selected, '1', result, ok)
+    result.cover('scancode-toolkit', '1', 'ok', 'medido', files=ok)
+    return result.output()
+missing = scan([{}, {'license_expression_spdx': None}], [{}, {'declared_license_expression_spdx': None}])
+assert not any(row['tool'] == 'scancode-toolkit' and row['status'] == 'skipped' for row in missing['coverage'])
+mixed = scan([{}, {'license_expression_spdx': None}, {'license_expression_spdx': 'MIT', 'matches': [{'start_line': 1}]}, {'license_expression_spdx': 42}, {'license_expression_spdx': 'LicenseRef-AKIAIOSFODNN7EXAMPLE'}], [{}, {'declared_license_expression_spdx': None}, {'declared_license_expression_spdx': 'ISC'}, {'declared_license_expression_spdx': ''}])
+assert len(mixed['findings']) == 2
+assert all(row['file'] == good for row in mixed['findings'])
+assert [row['detail'] for row in mixed['coverage'] if row['tool'] == 'scancode-toolkit' and row['status'] == 'skipped'] == ['3 expressões de licença omitidas por segurança ou formato.']
+print(json.dumps({'missing': missing, 'mixed': mixed}))
+`, repo, staging);
+    const results = JSON.parse(raw);
+    for (const output of [results.missing, results.mixed]) {
+      const parsed = parseModuleCollectorOutput(JSON.stringify(output), {module: 'conformidade'});
+      await validateModuleCollectorPublication(repo, parsed);
+      assert.ok(parsed.coverage.some(row => row.tool === 'scancode-toolkit' && row.status === 'ok' && row.files?.includes(descriptive)));
+    }
+  } finally {
+    rmSync(scratch, {recursive: true, force: true});
+  }
+});
