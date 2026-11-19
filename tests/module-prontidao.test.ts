@@ -278,6 +278,38 @@ test('normalizadores e runCollector reportam cobertura, achados, skipped offline
   assert.ok(out.coverage.some(c => c.tool === 'hadolint' && c.status === 'ok'));
 });
 
+test('runCollector extrai versão colorida de testssl e não inventa versão ausente', () => {
+  const cases = [
+    {stdout: '\u001b[1m\n     testssl.sh version \u001b[1m3.2.5\u001b[0m from https://testssl.sh/\n', status: 0, expected: '3.2.5'},
+    {stdout: '\u001b[1m\nversão indisponível\u001b[0m\nOpenSSL 3.0.0\n', status: 0, expected: 'desconhecida'},
+    {stdout: 'testssl.sh version 3.2.5\n', status: 1, expected: 'desconhecida'},
+    {stdout: '', status: 0, expected: 'desconhecida'},
+  ];
+  for (const scenario of cases) {
+    const calls: string[][] = [];
+    const out = runCollector({
+      repoRoot: defectiveDir,
+      evidenceFile: '',
+      runBin(bin, args) {
+        if (bin === 'testssl.sh') {
+          calls.push(args);
+          return {status: scenario.status, stdout: scenario.stdout, stderr: ''};
+        }
+        return {status: 1, stdout: '', stderr: ''};
+      },
+    });
+    const row = out.coverage.find(c => c.tool === 'testssl.sh');
+    assert.equal(row?.version, scenario.expected);
+    assert.equal(row?.status, 'skipped');
+    assert.doesNotMatch(row!.version, /[\u0000-\u001f\u007f-\u009f]/);
+    assert.deepEqual(calls, [['--version']]);
+    const envFinding = out.findings.find(f => f.rule === 'PRONTIDAO-SEGREDO-ARQUIVO-ENV');
+    assert.equal(envFinding?.file, '.env');
+    assert.match(envFinding?.evidence ?? '', /\[REDACTED\]/);
+    assert.equal(JSON.stringify(out).includes('synthetic_db_pass_987654321'), false);
+  }
+});
+
 test('evaluatePassiveTlsEvidence avalia evidência estruturada e recusa arquivo dentro do repo', () => {
   const cleanEval = evaluatePassiveTlsEvidence({
     schemaVersion: 1,

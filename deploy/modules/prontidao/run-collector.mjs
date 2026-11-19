@@ -2,6 +2,7 @@ import {spawnSync} from 'node:child_process';
 import {closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync} from 'node:fs';
 import {join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {stripVTControlCharacters} from 'node:util';
 import {AUDIT_VERSION, auditRepositoryReadiness, redactEvidence} from './audit-readiness.mjs';
 
 const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
@@ -299,11 +300,12 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
 
 function probeVersion(runBin, bin, args, regex) {
   const res = runBin(bin, args, {timeout: 15_000});
-  if (res.error) return null;
-  const text = `${res.stdout ?? ''}\n${res.stderr ?? ''}`.trim();
-  if (!text) return null;
-  const m = regex ? regex.exec(text) : null;
-  return (m?.[1] ?? m?.[0] ?? text.split(/\r?\n/)[0]).trim().slice(0, 80);
+  if (res.error || res.status !== 0) return null;
+  const text = stripVTControlCharacters(`${res.stdout ?? ''}\n${res.stderr ?? ''}`);
+  const match = regex.exec(text);
+  const version = match?.[1]?.trim();
+  if (!version || /[\u0000-\u001f\u007f-\u009f]/.test(version)) return null;
+  return version.slice(0, 80);
 }
 
 function defaultRunBin(bin, args, options = {}) {
@@ -649,7 +651,7 @@ export function runCollector(options = {}) {
     }
 
     // 6. testssl.sh não é executado contra a rede pelo coletor offline (evita varredura ativa e disfarce de cliente)
-    const testsslVer = probeVersion(runBin, bins.testssl, ['--version'], /version\s+([0-9]+\.[0-9]+\.[0-9]+)/i) ?? '3.2.5';
+    const testsslVer = probeVersion(runBin, bins.testssl, ['--version'], /\bversion\s+([0-9]+\.[0-9]+\.[0-9]+)\b/i) ?? 'desconhecida';
     coverage.push(normalizeCoverageRow({
       tool: 'testssl.sh',
       version: testsslVer,
