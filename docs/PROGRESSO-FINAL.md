@@ -1256,3 +1256,8 @@ PAUSADO-COTA
 - 19/11/2026 22:20 UTC — trabalho-C-CONFORMIDADE-VIVA-R4 iniciado em final-c9-publicacao por terra high.
 - 19/11/2026 22:21 UTC — C-CAMINHOS-VIVOS-R5 encerrado com código 0.
 - 19/11/2026 22:21 UTC — Correção caminhos-vivos recebida em 615c1f9f. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:21 UTC — C-ACEITE-DOCUMENTACAO-VIVA-R3 encerrado com código 0.
+- 19/11/2026 22:21 UTC — revisor-C-ACEITE-CAMINHOS-VIVOS-R5 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:21 UTC — arquitetura em 615c1f9f publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 508, 'failed': 0, 'skipped': 1}; código do produto OK.
+- 19/11/2026 22:21 UTC — C-PRONTIDAO-VIVA-R6 encerrado com código 0.
+- 19/11/2026 22:21 UTC — Correção pront-viva recebida em 2bedbd92. Revisão Sol high somente leitura solicitada.
