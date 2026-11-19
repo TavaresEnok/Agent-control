@@ -458,7 +458,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles) {
   const findings = [];
   const fileIssueCounts = new Map();
   const unusedFiles = new Set();
-  const entrySet = new Set(data.entryFiles ?? []);
+  const entrySet = new Set((data.entryFiles ?? []).map(file => normalizeRepoPath(file, repoRoot)));
   let unusedExportsCount = 0;
   let unusedDepsCount = 0;
 
@@ -549,7 +549,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles) {
     }
   }
 
-  const confirmedFiles = [...new Set([...(data.analyzedFiles ?? []), ...unusedFiles])]
+  const confirmedFiles = [...new Set([...(data.analyzedFiles ?? []).map(file => normalizeRepoPath(file, repoRoot)), ...unusedFiles])]
     .filter(isCandidate)
     .sort();
   const perFileCoverage = confirmedFiles.slice(0, MAX_PER_FILE_COVERAGE).map(file => ({

@@ -324,12 +324,14 @@ test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de ac
 
 test('Knip conserva os achados de produção quando a chamada omite o inventário', () => {
   const result = parseKnipReport({
-    analyzedFiles: ['src/billing.ts', 'src/tests/helper.ts'],
+    analyzedFiles: ['./src/billing.ts', '/synthetic/src/billing.ts', 'src/tests/helper.ts'],
+    entryFiles: ['./src/billing.ts'],
     issues: [{file:'src/billing.ts', exports:[{name:'old', line:3}]},
       {file:'src/tests/helper.ts', exports:[{name:'fixture', line:1}]}],
   }, '/synthetic');
   assert.deepEqual(result.findings.map(f => f.file), ['src/billing.ts']);
   assert.equal(result.stats.totalFiles, 1);
+  assert.deepEqual(result.perFileCoverage.map(({file, role, issues}) => [file, role, issues]), [['src/billing.ts', 'entrada', 1]]);
 });
 
 test('Knip aplica a elegibilidade aos achados e mantém problemas por arquivo e manifesto', () => {
