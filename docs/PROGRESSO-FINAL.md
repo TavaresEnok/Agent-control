@@ -1049,3 +1049,4 @@ PAUSADO-COTA
 - 19/11/2026 20:32 UTC — Ordem 00284b4d conferida. O último trabalhador Sol concluiu a ordem já iniciada em a69311d7. O revisor Sol high continua em leitura. Ordens novas de implementação vão para Argon high, até seis worktrees, com retorno aos Sol em caso de 429 do Argon.
 - 19/11/2026 20:34 UTC — C-ACEITE-RECUSA-R2 encerrado com código 0.
 - 19/11/2026 20:35 UTC — O revisor de a69311d7 pediu controles que distingam os vínculos de grant, job e intenção e comprovem a preservação do checkpoint. Distribuída a nova ordem a Gemini 4 Argon High, em worktree próprio.
+- 19/11/2026 20:38 UTC — COTA — Gemini 4 Argon High devolveu RESOURCE_EXHAUSTED 429 na primeira ordem, sem commit. A mensagem indica reposição em cerca de 147 horas. Aplicada a alternativa expressa de 00284b4d: a ordem de fechamento volta para Sol high, sem pausa do Codex.
