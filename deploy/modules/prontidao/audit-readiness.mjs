@@ -1675,6 +1675,32 @@ const BACKUP_CANDIDATE_RE = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|
 
 const SHELL_CONTROL_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', '{', '!']);
 const TIMEOUT_DURATION_RE = /^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/;
+// GNU coreutils on the Linux image: traditional names, aliases and real-time signals.
+const LINUX_SIGNAL_NAMES = new Set('EXIT HUP INT QUIT ILL TRAP ABRT IOT BUS FPE KILL USR1 SEGV USR2 PIPE ALRM TERM STKFLT CHLD CLD CONT STOP TSTP TTIN TTOU URG XCPU XFSZ VTALRM PROF WINCH IO POLL PWR SYS'.split(' '));
+function timeoutSignal(value) {
+  if (/[$`*?\[\]]/.test(value)) return 'dynamic';
+  const signal = value.toUpperCase().replace(/^SIG/, '');
+  if (LINUX_SIGNAL_NAMES.has(signal)) return 'valid';
+  if (/^\d+$/.test(signal)) {
+    const n = Number(signal);
+    return n <= 64 && n !== 32 && n !== 33 ? 'valid' : 'invalid';
+  }
+  const rt = /^RT(MIN|MAX)(?:([+-])(\d+))?$/.exec(signal);
+  if (rt) {
+    const offset = Number(rt[3] ?? 0) * (rt[2] === '-' ? -1 : 1);
+    const n = (rt[1] === 'MIN' ? 34 : 64) + offset;
+    return n >= 34 && n <= 64 ? 'valid' : 'invalid';
+  }
+  return 'invalid';
+}
+function invalidDuration(value) {
+  const dynamic = /[$`*?\[\]]/.test(value);
+  return {words: [], query: !dynamic, ambiguous: dynamic};
+}
+function signalResult(value) {
+  const state = timeoutSignal(value);
+  return state === 'valid' ? null : {words: [], query: state === 'invalid', ambiguous: state === 'dynamic'};
+}
 const WRAPPER_SPECS = Object.assign(Object.create(null), {
   exec: {
     flagChars: new Set(['c', 'l']),
@@ -1733,7 +1759,7 @@ const OPERATIONAL_TARGET_SPECS = Object.assign(Object.create(null), {
       '--http2', '--http2-prior-knowledge', '--http3', '--include', '--insecure', '--ipv4', '--ipv6',
       '--junk-session-cookies', '--list-only', '--location', '--location-trusted', '--netrc', '--netrc-optional',
       '--no-alpn', '--no-buffer', '--no-keepalive', '--no-npn', '--no-progress-meter', '--ntlm', '--parallel',
-      '--path-as-is', '--post301', '--post302', '--post303', '--progress-bar', '--raw', '--remote-name',
+      '--path-as-is', '--retry-connrefused', '--post301', '--post302', '--post303', '--progress-bar', '--raw', '--remote-name',
       '--remote-name-all', '--remote-time', '--show-error', '--silent', '--ssl', '--ssl-reqd', '--tlsv1',
       '--tlsv1.0', '--tlsv1.1', '--tlsv1.2', '--tlsv1.3', '--tr-encoding', '--verbose',
     ]),
@@ -1755,7 +1781,7 @@ const OPERATIONAL_TARGET_SPECS = Object.assign(Object.create(null), {
     flagChars: new Set(['f', 'v']),
     valueChars: new Set(['s', 'm', 'l']),
     nonExecFlagChars: new Set(['d', '?']),
-    longFlags: new Set(['--force', '--verbose', '--skip-state-lock']),
+    longFlags: new Set(['--force', '--verbose', '--skip-state-lock', '--wait-for-state-lock']),
     nonExecLongFlags: new Set(['--debug', '--help', '--usage', '--version']),
     longValues: new Set(['--state', '--mail', '--log']),
     targetLongValues: new Set(),
@@ -1780,7 +1806,11 @@ function skipWrapperOptions(words, spec, binary) {
         if (longValues.has(name) || longOptionalEquals.has(name) || (!strict && longFlags.has(name))) {
           if (strict && opt.slice(eq + 1) === '') return {words: [], query: false, ambiguous: true};
           if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(opt.slice(eq + 1))) {
-            return {words: [], query: false, ambiguous: true};
+            return invalidDuration(opt.slice(eq + 1));
+          }
+          if (binary === 'timeout' && name === '--signal') {
+            const result = signalResult(opt.slice(eq + 1));
+            if (result) return result;
           }
           i++;
           continue;
@@ -1796,7 +1826,11 @@ function skipWrapperOptions(words, spec, binary) {
           return {words: [], query: false, ambiguous: true};
         }
         if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(next?.text ?? '')) {
-          return {words: [], query: false, ambiguous: true};
+          return invalidDuration(next?.text ?? '');
+        }
+        if (binary === 'timeout' && name === '--signal') {
+          const result = signalResult(next?.text ?? '');
+          if (result) return result;
         }
         i += 2;
         continue;
@@ -1826,10 +1860,14 @@ function skipWrapperOptions(words, spec, binary) {
           }
           consumedValue = true;
         }
+        if (binary === 'timeout' && ch === 's') {
+          const result = signalResult(inlineValue ? opt.slice(j + 1) : (next?.text ?? ''));
+          if (result) return result;
+        }
         if (binary === 'timeout' && ch === 'k') {
           const val = inlineValue ? opt.slice(j + 1) : (next?.text ?? '');
           if (!TIMEOUT_DURATION_RE.test(val)) {
-            return {words: [], query: false, ambiguous: true};
+            return invalidDuration(val);
           }
         }
         break;
@@ -1850,7 +1888,7 @@ function skipWrapperOptions(words, spec, binary) {
       return {words: [], query: false, ambiguous: false};
     }
     if (!TIMEOUT_DURATION_RE.test(rest[0].text ?? '')) {
-      return {words: [], query: false, ambiguous: true};
+      return invalidDuration(rest[0].text ?? '');
     }
     return {words: rest.slice(1), query: false, ambiguous: false};
   }
@@ -1926,6 +1964,7 @@ function extractOperationalTargets(args, {
 }) {
   const targets = [];
   let afterDashDash = false;
+  let ambiguous = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (!arg) continue;
@@ -1940,7 +1979,7 @@ function extractOperationalTargets(args, {
     if (arg.startsWith('--')) {
       const eq = arg.indexOf('=');
       const name = eq === -1 ? arg : arg.slice(0, eq);
-      if (nonExecLongFlags.has(name)) return [];
+      if (nonExecLongFlags.has(name)) return {targets: [], ambiguous: false};
       if (targetLongValues.has(name)) {
         if (eq === -1 && args[i + 1] === '--') break;
         const val = eq === -1 ? args[++i] : arg.slice(eq + 1);
@@ -1948,14 +1987,18 @@ function extractOperationalTargets(args, {
         continue;
       }
       if (eq !== -1) {
-        if (longValues.has(name)) continue;
+        if (longValues.has(name)) { if (name === '--config') ambiguous = true; continue; }
+        ambiguous = true;
         break;
       }
       if (longValues.has(name)) {
+        if (i + 1 >= args.length || args[i + 1] === '--') { ambiguous = true; break; }
+        if (name === '--config') ambiguous = true;
         i++;
         continue;
       }
       if (longFlags.has(name)) continue;
+      ambiguous = true;
       break;
     }
     if (arg.startsWith('-') && arg !== '-') {
@@ -1963,8 +2006,9 @@ function extractOperationalTargets(args, {
       let valid = true;
       for (let j = 1; j < arg.length; j++) {
         const ch = arg[j];
-        if (nonExecFlagChars.has(ch)) return [];
+        if (nonExecFlagChars.has(ch)) return {targets: [], ambiguous: false};
         if (valueChars.has(ch)) {
+          if (ch === 'K') ambiguous = true;
           if (j === arg.length - 1) consumedValue = true;
           break;
         }
@@ -1973,13 +2017,13 @@ function extractOperationalTargets(args, {
           break;
         }
       }
-      if (!valid) break;
-      if (consumedValue) i++;
+      if (!valid) { ambiguous = true; break; }
+      if (consumedValue) { if (i + 1 >= args.length || args[i + 1] === '--') { ambiguous = true; break; } i++; }
       continue;
     }
     if (arg !== '-') targets.push(arg);
   }
-  return targets;
+  return {targets, ambiguous};
 }
 
 function splitShellSegments(words) {
@@ -2043,7 +2087,9 @@ function nodeScriptTarget(args) {
 
 function isBackupCandidateSegment(segWords) {
   const {words, ambiguous} = unwrapCommandWords(segWords);
-  if (ambiguous) return segWords.some(word => BACKUP_CANDIDATE_RE.test(word.text ?? ''));
+  if (ambiguous) return segWords.slice(1).some((word, i) =>
+    /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(basename(word.text ?? ''))
+      && isBackupCandidateSegment(segWords.slice(i + 1)));
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return false;
   if (/^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find)$/.test(binary)) return true;
@@ -2063,8 +2109,19 @@ function isBackupCandidateSegment(segWords) {
 }
 
 function evaluateShellSegment(segWords, depth = 0) {
-  const res = {alerting: false, disk: false, logrotate: false, incomplete: false};
-  const {words} = unwrapCommandWords(segWords);
+  const res = {alerting: false, disk: false, logrotate: false, incomplete: false, partialAlert: false, partialDisk: false};
+  const unwrapped = unwrapCommandWords(segWords);
+  if (unwrapped.ambiguous) {
+    // Inspect possible command positions without treating option values as evidence.
+    for (let i = 1; i < segWords.length; i++) {
+      if (!/^(?:alertmanager|npm|pnpm|node|curl|wget|df|docker|logrotate|(?:ba|da|k|z)?sh)$/.test(basename(segWords[i].text ?? ''))) continue;
+      const sub = evaluateShellSegment(segWords.slice(i), depth + 1);
+      res.partialAlert ||= sub.alerting || sub.logrotate || sub.partialAlert;
+      res.partialDisk ||= sub.disk || sub.partialDisk;
+    }
+    return res;
+  }
+  const {words} = unwrapped;
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return res;
   if (depth < 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
@@ -2079,6 +2136,8 @@ function evaluateShellSegment(segWords, depth = 0) {
       res.disk ||= sub.disk;
       res.logrotate ||= sub.logrotate;
       res.incomplete ||= sub.incomplete;
+      res.partialAlert ||= sub.partialAlert;
+      res.partialDisk ||= sub.partialDisk;
     }
     return res;
   }
@@ -2096,9 +2155,15 @@ function evaluateShellSegment(segWords, depth = 0) {
     const script = basename(nodeScriptTarget(args));
     if (/^personal-watch(?:\.[cm]?js)?$/.test(script)) res.alerting = true;
     if (/^personal-maintenance(?:\.[cm]?js)?$/.test(script)) res.disk = true;
-  } else if (binary === 'curl' || binary === 'wget') {
-    const targets = binary === 'curl' ? extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.curl) : args;
-    if (targets.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
+  } else if (binary === 'curl') {
+    const {targets, ambiguous} = extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.curl);
+    res.partialAlert ||= ambiguous;
+    if (targets.some(arg => /[$`]/.test(arg) && !/\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) res.partialAlert = true;
+    if (!res.partialAlert && targets.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
+      res.alerting = true;
+    }
+  } else if (binary === 'wget') {
+    if (args.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
       res.alerting = true;
     }
   } else if (binary === 'df') {
@@ -2114,7 +2179,9 @@ function evaluateShellSegment(segWords, depth = 0) {
       res.disk = true;
     }
   } else if (binary === 'logrotate') {
-    if (extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.logrotate).length > 0) {
+    const {targets, ambiguous} = extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.logrotate);
+    res.partialAlert ||= ambiguous || targets.some(arg => /[$`*?\[\]]/.test(arg));
+    if (!res.partialAlert && targets.length > 0) {
       res.logrotate = true;
     }
   }
@@ -2129,6 +2196,8 @@ function checkShellOperations(commands, onIncomplete) {
     for (const segWords of splitShellSegments(parsed.words)) {
       const seg = evaluateShellSegment(segWords);
       if (seg.incomplete) onIncomplete(line, 'comando de shell embutido com sintaxe não coberta');
+      if (seg.partialAlert) onIncomplete(line, 'argumentos operacionais de alertas ou logs não resolvidos', 'alertas-logs');
+      if (seg.partialDisk) onIncomplete(line, 'argumentos operacionais de disco não resolvidos', 'disco-memoria');
       res.alerting ||= seg.alerting;
       res.disk ||= seg.disk;
       res.logrotate ||= seg.logrotate;
@@ -2162,7 +2231,7 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
     }
     const unwrapped = unwrapCommandWords(parsed.words);
     if (unwrapped.ambiguous) {
-      onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
+      if (isBackupCandidateSegment(parsed.words)) onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
       continue;
     }
     const words = unwrapped.words;
@@ -2469,8 +2538,8 @@ export function auditRepositoryReadiness(repoRoot) {
     }
 
     const protectedEnv = isCommittedEnv(file.rel);
-    const onOperationalIncomplete = (line, reason) =>
-      recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao', 'alertas-logs', 'disco-memoria');
+    const onOperationalIncomplete = (line, reason, ...pillars) =>
+      recordPartial(file.rel, `linha ${line}, ${reason}`, ...(pillars.length ? pillars : ['backup-restauracao', 'alertas-logs', 'disco-memoria']));
     const onBackupIncomplete = (line, reason) =>
       recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao');
     const commands = [...operationalCommands(file, onOperationalIncomplete)];

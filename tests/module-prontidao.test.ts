@@ -2338,3 +2338,73 @@ test('consultas e argumentos de wrappers não se confundem com operações de pr
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+test('R6: argumentos ambíguos afetam apenas a cobertura correspondente', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r7-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'app.service'), '[Service]\nStandardOutput=append:/var/log/app.log\n');
+    const audit = async (line: string) => {
+      writeFileSync(join(dir, 'scripts', 'maintenance.sh'), `#!/bin/sh\n${line}\n`);
+      const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+      await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(out), {module: 'prontidao'}));
+      return out;
+    };
+    const has = (out: ReturnType<typeof runCollector>, rule: string) => out.findings.some(f => f.rule === rule);
+    const status = (out: ReturnType<typeof runCollector>, pillar: string) => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status;
+    for (const option of ['--signal=BOGUS', '--signal BOGUS', '-s BOGUS', '-sBOGUS', '--signal=65', '--signal=32']) {
+      const out = await audit(`timeout ${option} 30s npm run personal:watch`);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), true, option);
+      assert.equal(status(out, 'alertas-logs'), 'ok', option);
+    }
+    for (const option of ['--signal=TERM', '-s SIGTERM', '-s9', '--signal=RTMIN+1', '--signal=64']) {
+      const out = await audit(`timeout ${option} 30s npm run personal:watch`);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), false, option);
+      assert.equal(status(out, 'alertas-logs'), 'ok', option);
+    }
+    for (const suffix of ['', ' && true']) {
+      const disk = await audit(`timeout "$LIMITE" df -P /${suffix}`);
+      assert.equal(status(disk, 'disco-memoria'), 'failed', suffix);
+      assert.equal(has(disk, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'), false, suffix);
+      assert.equal(status(disk, 'backup-restauracao'), 'ok', suffix);
+      assert.equal(status(disk, 'alertas-logs'), 'ok', suffix);
+      assert.equal(has(disk, 'PRONTIDAO-BACKUP-AUSENTE'), true, suffix);
+      const backup = await audit(`timeout "$LIMITE" pg_dump db${suffix}`);
+      assert.equal(status(backup, 'backup-restauracao'), 'failed', suffix);
+      assert.equal(has(backup, 'PRONTIDAO-BACKUP-AUSENTE'), false, suffix);
+      assert.equal(status(backup, 'alertas-logs'), 'ok', suffix);
+      assert.equal(status(backup, 'disco-memoria'), 'ok', suffix);
+      const signal = await audit(`timeout -s "$SINAL" 30s npm run personal:watch${suffix}`);
+      assert.equal(status(signal, 'alertas-logs'), 'failed', suffix);
+      assert.equal(has(signal, 'PRONTIDAO-ALERTA-AUSENTE'), false, suffix);
+      assert.equal(status(signal, 'backup-restauracao'), 'ok', suffix);
+      assert.equal(status(signal, 'disco-memoria'), 'ok', suffix);
+    }
+    for (const line of ['curl -fsS --retry 3 --retry-connrefused "$WEBHOOK_ALERT"', 'curl -fsS "$WEBHOOK_ALERT" --retry-connrefused']) {
+      const out = await audit(line);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), false, line);
+      assert.equal(status(out, 'alertas-logs'), 'ok', line);
+    }
+    for (const line of ['logrotate --wait-for-state-lock /etc/logrotate.conf', 'logrotate /etc/logrotate.conf --wait-for-state-lock']) {
+      const out = await audit(line);
+      assert.equal(has(out, 'PRONTIDAO-LOGROTATE-AUSENTE'), false, line);
+      assert.equal(status(out, 'alertas-logs'), 'ok', line);
+    }
+    for (const line of ['curl --retry 3 --referer "$WEBHOOK_ALERT" https://example.com', 'logrotate --wait-for-state-lock --state /tmp/state']) {
+      const out = await audit(line);
+      assert.equal(has(out, line.startsWith('curl') ? 'PRONTIDAO-ALERTA-AUSENTE' : 'PRONTIDAO-LOGROTATE-AUSENTE'), true, line);
+      assert.equal(status(out, 'alertas-logs'), 'ok', line);
+    }
+    for (const line of ['curl --opcao-desconhecida "$WEBHOOK_ALERT"', 'curl --config "$CONFIG"', 'curl "$WEBHOOK_ALERT" --opcao-desconhecida', 'curl "$DESTINO"', 'logrotate "$CONFIG"', 'logrotate --opcao-desconhecida /etc/logrotate.conf']) {
+      const out = await audit(line);
+      assert.equal(status(out, 'alertas-logs'), 'failed', line);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), false, line);
+      assert.equal(has(out, 'PRONTIDAO-LOGROTATE-AUSENTE'), false, line);
+      assert.equal(status(out, 'backup-restauracao'), 'ok', line);
+      assert.equal(status(out, 'disco-memoria'), 'ok', line);
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
