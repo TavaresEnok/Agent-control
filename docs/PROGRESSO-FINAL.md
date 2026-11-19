@@ -911,3 +911,8 @@ PAUSADO-COTA
 - 19/11/2026 18:49 UTC — revisor-C8-ACEITE-COMENTARIO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:51 UTC — Suíte oficial de entrega-dependencias-1 em 05776a76: 269 arquivos aprovados, 0 falhas, 88 excluídos pelo executor.
 - 19/11/2026 18:51 UTC — A revisão de dec242d9 confirmou o tratamento de aspas curvas aninhadas e encontrou ambiguidade entre dois fragmentos de aspas retas. O contrato da matriz foi delimitado para impedir vínculo entre dois literais, independentemente dos espaços. O próximo aceite completo reunirá suíte e laboratório no mesmo candidato.
+- 19/11/2026 18:51 UTC — trabalho-C2-LIMITE-LITERAIS iniciado em final-qa-matriz-r12 por Sol medium normal.
+- 19/11/2026 18:52 UTC — O pacote anterior às alterações, criado às 17:02, passou também no personal:restore-check do produto: MANIFEST.txt confere (11868 arquivos) e catálogo do dump legível.
+- 19/11/2026 18:52 UTC — Testes complementares de entrega-dependencias-1 em 05776a76: 52 aprovados.
+- 19/11/2026 18:52 UTC — C8-ACEITE-COMENTARIO encerrado com código 0.
+- 19/11/2026 18:53 UTC — O revisor de 23b10b2e confirmou os controles de @property da interface, mapa indexado, @param, @throws e exemplo. Pediu cobrir também @property Api.value de namespace ancestral; sem origem demonstrada o aviso deve ficar sem linha exata.
