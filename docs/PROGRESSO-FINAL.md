@@ -91,3 +91,5 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 01:52 UTC — C3-R5 iniciada em final-c3 por Terra ultra normal.
 - 19/11/2026 01:52 UTC — C7-R2 entregue por Terra em 547eddbc; aguardando a prova do gerente.
 - 19/11/2026 01:52 UTC — C8-R2 passou a prova ponta a ponta de documentação pela CLI, 6/6. Matriz C8 em 662eb1a6: revisão independente por modelo distinto, Sol ultra normal, cinco médios e um baixo no coletor. C8-R3 encomendada. C6-R6 fixada em 030b8543.
+- 19/11/2026 01:52 UTC — C8-R3 iniciada em final-c8 por Terra ultra normal.
+- 19/11/2026 01:54 UTC — A3-R3 em d8460656 recebeu dois médios do Sol ultra: conferência de request presente após rotação e retorno distinto ao consumidor quando a inspeção deixa a retirada pendente. A3-R4 tem prioridade. C2-R4, imagem ed62d721, passou o laboratório real (5/5) e a CLI sintética (6/6). A integração da base com prontidão passou em 10/10 testes focados. C7-R2 foi entregue parcial, com as medições de CPU e SQL ainda desativadas. C7-R3 continua a implementação.
