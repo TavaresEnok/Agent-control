@@ -26,7 +26,7 @@ import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const exec=promisify(execFile);
 
-async function insertDesignExamIntent(db:Ledger,principal:string,contextId:string,epoch:number,projectId:string,commit:string,marked=false){
+async function insertDesignExamIntent(db:Ledger,principal:string,contextId:string,epoch:number,projectId:string,commit:string,marked=false,workflow='design-readonly-v1'){
  const intentId=randomUUID();
  const command={
   schemaVersion:1 as const,
@@ -35,7 +35,7 @@ async function insertDesignExamIntent(db:Ledger,principal:string,contextId:strin
   contextId,
   policyRevision:0,
   action:'plan.start' as const,
-  payload:{workflow:'design-readonly-v1' as const,messageRef:`${marked?'design-exam':'design'}:${projectId}:${commit}`,projectId,commit},
+  payload:{workflow,messageRef:`${marked?'design-exam':'design'}:${projectId}:${commit}`,projectId,commit},
  };
  await db.pool.query(
   `INSERT INTO ac_intents (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
@@ -49,6 +49,7 @@ async function startFakeDockerSocket(socketPath:string,state:{
  containers:Map<string,Record<string,unknown>>;
  networks:Map<string,Record<string,unknown>>;
  images?:Set<string>;
+ malformedNetwork?:boolean;
  onMutate?:(method:string,url:string)=>void;
 }){
  const server=createServer((req:IncomingMessage,res:ServerResponse)=>{
@@ -62,6 +63,7 @@ async function startFakeDockerSocket(socketPath:string,state:{
    res.statusCode=200;res.end(JSON.stringify(found));return;
   }
   if(method==='GET'&&url.startsWith('/v1.44/networks/')){
+   if(state.malformedNetwork){res.statusCode=200;res.end('{');return;}
    const name=decodeURIComponent(url.slice('/v1.44/networks/'.length));
    const found=state.networks.get(name);
    if(!found){res.statusCode=404;res.end(JSON.stringify({message:'network not found'}));return;}
@@ -136,7 +138,7 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   const retiredImage='sha256:'+'c'.repeat(64),currentImage='sha256:'+'0'.repeat(64);
   const sockPath=join(area,'docker.sock');
   const dockerMutations:string[]=[];
-  const dockerState={containers:new Map<string,Record<string,unknown>>(),networks:new Map<string,Record<string,unknown>>(),images:new Set([retiredImage,currentImage]),onMutate:(m:string,u:string)=>dockerMutations.push(`${m} ${u}`)};
+  const dockerState={containers:new Map<string,Record<string,unknown>>(),networks:new Map<string,Record<string,unknown>>(),images:new Set([retiredImage,currentImage]),malformedNetwork:false,onMutate:(m:string,u:string)=>dockerMutations.push(`${m} ${u}`)};
   closeSocket=await startFakeDockerSocket(sockPath,dockerState);
 
   const supervisorConfig={id:'codex-native-execution',provider:'claude' as const,workerImage:retiredImage,toolsImage:retiredImage,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:execPem,providerNetworkId:'d'.repeat(64),socketPath:sockPath,accountSubjects:[{accountId:account,subjectDigest:subject}],workerEnv:[],toolsEnv:[]};
@@ -189,7 +191,7 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   assert.equal(retained.some(r=>r.active),false);
   assert.equal((await db.pool.query('SELECT state FROM ac_native_execution_jobs WHERE id=$1',[histJobId])).rows[0].state,'uncertain');
 
-  // 2) Resource admission reconciler must NOT select, retain or act on another principal's admission.
+  // 2) A normal pre-journal admission remains visible for another authorized principal.
   const admJobId=randomUUID(),admGrantId=randomUUID(),admSessionId=randomUUID();
   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
    VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,[admGrantId,randomUUID(),examIntent.id,mainContext,gatewayAuthority.epoch,account,profile,project,digest({adm:1})]);
@@ -197,10 +199,41 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   resourceDocker.callResource=async()=>{throw Error('FOREIGN_ADMISSION_MUST_NOT_CANCEL');};
   await db.pool.query(`INSERT INTO ac_native_resource_admissions(job_id,grant_id,context_id,manager_epoch,authority_id,names,admission_id,state_root,state,reason)
    VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,'waiting','physical_capacity')`,[admJobId,admGrantId,mainContext,gatewayAuthority.epoch,resourceDocker.authorityId,JSON.stringify(['ac-native-tools-'+admJobId,'ac-native-worker-'+admJobId]),randomUUID(),resourceDocker.stateRoot]);
-  await reconcileNativeResourceAdmissions({docker:resourceDocker,ledger:db,principal:gatewayPrincipal,authority:gatewayAuthority,recoverSource:'ac_native_execution_jobs',recoverJob:async()=>{throw Error('FOREIGN_JOB_MUST_NOT_RECOVER');}});
+  for(const recoverSource of ['ac_native_execution_jobs','ac_native_planning_jobs','ac_native_qa_jobs'] as const){
+   await reconcileNativeResourceAdmissions({docker:resourceDocker,ledger:db,principal:gatewayPrincipal,authority:gatewayAuthority,recoverSource,recoverJob:async()=>{throw Error('FOREIGN_JOB_MUST_NOT_RECOVER');}});
+  }
+  assert.equal(Number((await db.pool.query(`SELECT count(*) n FROM ac_reconciliation_visits v JOIN ac_reconciliation_entries e ON e.seq=v.seq WHERE e.row_id=$1 AND v.active`,[admJobId])).rows[0].n),3);
   assert.equal((await db.pool.query('SELECT state FROM ac_native_resource_admissions WHERE job_id=$1',[admJobId])).rows[0].state,'waiting');
   await db.pool.query('DELETE FROM ac_native_resource_admissions WHERE job_id=$1',[admJobId]);
   await db.pool.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[admGrantId,{state:'not_started',executionStarted:false}]);
+
+  // Existing planning and QA journals for another authorized principal still
+  // reach their own recovery callbacks, not just the pre-journal branch.
+  for(const source of ['ac_native_planning_jobs','ac_native_qa_jobs'] as const){
+   const otherIntent=await insertDesignExamIntent(db,appPrincipal,mainContext,gatewayAuthority.epoch,project,headCommit,false,'baseline-synthetic-v1');
+   await db.pool.query("UPDATE ac_intents SET state='failed' WHERE id=$1",[otherIntent.id]);
+   const job=randomUUID(),grant=randomUUID(),session=randomUUID(),attempt=randomUUID();
+   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'uncertain')`,[grant,attempt,otherIntent.id,mainContext,gatewayAuthority.epoch,account,profile,project,digest({source})]);
+   if(source==='ac_native_planning_jobs'){
+    await db.pool.query(`INSERT INTO ac_semantic_planning_calls(id,context_id,intent_id,principal_id,input_digest,executor_id,executor_digest,expected_revision,attempt_id,session_id,state)
+     VALUES($1,$2,$3,$4,$5,'fixture',$5,0,$6,$7,'uncertain')`,[job,mainContext,otherIntent.id,appPrincipal,'a'.repeat(64),randomUUID(),session]);
+    await db.pool.query(`INSERT INTO ac_native_planning_jobs(id,grant_id,context_id,input_digest,launch_digest,container_name,state) VALUES($1,$2,$3,$4,$4,$5,'uncertain')`,[job,grant,mainContext,'a'.repeat(64),'fixture-'+job]);
+   }else{
+    const artifact=randomUUID();
+    await db.pool.query("INSERT INTO ac_quality_policies(project_id,revision,snapshot,digest) VALUES($1,1,'{}',$2) ON CONFLICT DO NOTHING",[project,'a'.repeat(64)]);
+    await db.pool.query(`INSERT INTO ac_artifacts(id,context_id,intent_id,implementation_grant_id,implementation_session_id,project_id,policy_revision,commit_id,tree_id,base_id,identity_digest,risk)
+     VALUES($1,$2,$3,$4,$5,$6,1,$7,$7,$7,$8,'low')`,[artifact,mainContext,otherIntent.id,grant,randomUUID(),project,headCommit,'a'.repeat(64)]);
+    await db.pool.query(`INSERT INTO ac_stage_operations(id,intent_id,node_id,session_id,attempt_id,grant_id,manager_epoch,state) VALUES($1,$2,'qa',$3,$4,$5,$6,'uncertain')`,[job,otherIntent.id,session,randomUUID(),grant,gatewayAuthority.epoch]);
+    await db.pool.query(`INSERT INTO ac_native_qa_jobs(id,context_id,intent_id,artifact_id,grant_id,session_id,manager_epoch,request_digest,contract_digest,state,deadline_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,'uncertain',clock_timestamp())`,[job,mainContext,otherIntent.id,artifact,grant,session,gatewayAuthority.epoch,'a'.repeat(64)]);
+   }
+   await db.pool.query(`INSERT INTO ac_native_resource_admissions(job_id,grant_id,context_id,manager_epoch,authority_id,names,admission_id,state_root,state,reason)
+    VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,'waiting','physical_capacity')`,[job,grant,mainContext,gatewayAuthority.epoch,resourceDocker.authorityId,JSON.stringify(['fixture-'+job]),randomUUID(),resourceDocker.stateRoot]);
+   const recovered:string[]=[];
+   await reconcileNativeResourceAdmissions({docker:resourceDocker,ledger:db,principal:gatewayPrincipal,authority:gatewayAuthority,recoverSource:source,recoverJob:async id=>{recovered.push(id);}});
+   assert.deepEqual(recovered,[job]);
+  }
 
   // 3) Third co-owner and gateway co-owner are refused on all supervisor methods for app's job.
   for(const nonOwner of [gatewayPrincipal,thirdCoOwner,operatorPrincipal]){
@@ -229,26 +262,28 @@ test('historical interrupted exam in main context is recovered explicitly via pe
 
   // 4) While gateway holds the lease, explicit CLI / maintenance recovery refuses clearly as busy without changing state.
   await assert.rejects(
-   runPersonalMaintenance([installationFile,'--recuperar-exame',histJobId]),
+   runPersonalMaintenance([installationFile,'--abandonar-design',histJobId]),
    (err:unknown)=>err instanceof Refusal&&err.code==='MAINTENANCE_CONTEXT_BUSY',
   );
-  const busyCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--recuperar-exame',histJobId],{encoding:'utf8'});
+  const busyCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design',histJobId],{encoding:'utf8'});
   assert.equal(busyCli.status,1);
   assert.match(busyCli.stderr,/systemctl --user stop/);
   assert.match(busyCli.stderr,/systemctl --user start/);
 
   // Invalid CLI flags / inferred principal / co-owner job are refused via CLI.
-  const badArgCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--recuperar-exame','not-a-uuid'],{encoding:'utf8'});
+  const badArgCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design','not-a-uuid'],{encoding:'utf8'});
   assert.equal(badArgCli.status,1);
   assert.match(badArgCli.stderr,/Uso:/);
-  const coOwnerCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--recuperar-exame',coJobId,'--historico-confirmado'],{encoding:'utf8'});
+  const coOwnerCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design',coJobId],{encoding:'utf8'});
   assert.equal(coOwnerCli.status,1);
   assert.match(coOwnerCli.stderr,/outro principal/);
 
   // 5) Gateway releases lease -> explicit product command recovers historical job idempotently without re-execution.
   await db.releaseLease(gatewayAuthority);
-  await assert.rejects(cli('--recuperar-exame',histJobId),/não distingue exame e criação/);
-  const {stdout}=await cli('--recuperar-exame',histJobId,'--historico-confirmado');
+  const examAuthority=await db.acquire(appPrincipal,mainContext,randomUUID(),'fixture',60);
+  await assert.rejects(supervisor.recoverUnstartedExam(appPrincipal,examAuthority,histJobId),/NATIVE_EXECUTION_HISTORICAL_CONFIRMATION_REQUIRED/);
+  await db.releaseLease(examAuthority);
+  const {stdout}=await cli('--abandonar-design',histJobId);
   assert.ok(stdout.includes(histJobId)&&stdout.includes('failed')&&stdout.includes('removed'));
   assert.deepEqual(dockerMutations,[]);
 
@@ -276,7 +311,7 @@ test('historical interrupted exam in main context is recovered explicitly via pe
 
   // Idempotent second invocation does not duplicate native.terminal_retired audit rows and keeps identical receipt/proof.
   const auditCountBefore=(await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n;
-  await cli('--recuperar-exame',histJobId,'--historico-confirmado');
+  await cli('--abandonar-design',histJobId);
   const auditCountAfter=(await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n;
   assert.equal(auditCountAfter,auditCountBefore);
 
@@ -287,6 +322,16 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   const cleanMaint=await runPersonalMaintenance([installationFile],{docker:async args=>{if(args[0]==='image'&&args[1]==='rm')removedImages.push(args[2]!);return 0;},imageExists:async()=>true,refreshDatabases:async()=>{}});
   assert.ok(cleanMaint.some(line=>line.includes('1 par(es) de execução')));
   assert.deepEqual(removedImages,[retiredImage]);
+  await cli('--abandonar-design',histJobId);
+  assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n,auditCountBefore);
+  // Corrupting a durable proof after image rotation must not yield success.
+  const storedProof=(await db.pool.query('SELECT proof FROM ac_native_terminal_retirements WHERE job_id=$1',[histJobId])).rows[0].proof;
+  // Only this disposable synthetic database is modified to exercise verification.
+  await db.pool.query('ALTER TABLE ac_native_terminal_retirements DISABLE TRIGGER ac_native_terminal_retirement_guard');
+  await db.pool.query("UPDATE ac_native_terminal_retirements SET proof=$2 WHERE job_id=$1",[histJobId,{...storedProof,signature:'0'.repeat(128)}]);
+  await assert.rejects(cli('--abandonar-design',histJobId));
+  await db.pool.query("UPDATE ac_native_terminal_retirements SET proof=$2 WHERE job_id=$1",[histJobId,storedProof]);
+  await db.pool.query('ALTER TABLE ac_native_terminal_retirements ENABLE TRIGGER ac_native_terminal_retirement_guard');
   assert.equal(maintenanceCliFailureText(new Refusal('MAINTENANCE_CONTEXT_BUSY')).includes('systemctl --user stop'),true);
 
   // 6) Forward prevention: failure at releaseBeforeLaunch settles future pre-launch exam jobs when bindings and proof suffice.
@@ -304,15 +349,20 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   homesMock=mock.method(AccountHomes.prototype,'inspectGranted',async()=>({accountId:account,projectId:project,ownerId:appPrincipal,uid:'1',device:'1',inode:'1'}));
   snapshotMock=mock.method(GitArtifacts.prototype,'snapshot',async()=>{throw new Error('UNEXPECTED_SNAPSHOT');});
   const futureSupervisor=new NativeExecutionSupervisor(db,{...supervisorConfig,examLoginRenew:async()=>{throw new Error('EXAM_LOGIN_RENEW_FAILED');}},{assertAdmission:async()=>{}});
+  dockerState.malformedNetwork=true;
   await assert.rejects(futureSupervisor.start(appPrincipal,appAuth,futureInput),(err:unknown)=>err instanceof Refusal&&err.code==='EXAM_LOGIN_STALE');
   const futureJob=(await db.pool.query('SELECT state,receipt FROM ac_native_execution_jobs WHERE id=$1',[futureJobId])).rows[0];
   const futureGrant=(await db.pool.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1',[futureGrantId])).rows[0];
   const futureRet=(await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[futureJobId])).rows[0];
-  assert.equal(futureJob.state,'failed');
-  assert.equal(futureJob.receipt?.payload?.executionStarted,false);
+  assert.equal(futureJob.state,'uncertain');
+  assert.equal(futureJob.receipt,null);
   assert.equal(futureGrant.state,'released');
   assert.equal(futureGrant.physical_receipt?.reason,'exam_login_stale');
-  assert.equal(futureRet.state,'removed');
+  assert.equal(futureRet,undefined);
+  assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[futureIntent.id])).rows[0].state,'accepted');
+  dockerState.malformedNetwork=false;
+  await futureSupervisor.recoverUnstartedExam(appPrincipal,appAuth,futureJobId);
+  assert.equal((await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[futureJobId])).rows[0].state,'removed');
   assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[futureIntent.id])).rows[0].state,'failed');
   await assert.rejects(lstat(join(spool,futureJobId)),(err:NodeJS.ErrnoException)=>err.code==='ENOENT');
  }finally{
@@ -407,10 +457,24 @@ test('recoverUnstartedExam refuses contradictory receipts, swapped grants, non-e
   const createJob=await insertPair({jobIntent:creation.id,task:'Pedido de criação. Fixture'});
   await mkdir(join(spool,createJob.jobId),{mode:0o700});
   await writeFile(join(spool,createJob.jobId,'request.json'),JSON.stringify(createJob.input),{mode:0o600});
-  await assert.rejects(
-   supervisor.recoverUnstartedExam(owner,auth1,createJob.jobId,{projectId:project,repository:repo,confirmedHistoricalExam:true}),
-   /NATIVE_EXECUTION_REPLAY_MISMATCH/,
-  );
+  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,createJob.jobId),/NATIVE_EXECUTION_HISTORICAL_CONFIRMATION_REQUIRED/);
+  await supervisor.recoverUnstartedExam(owner,auth1,createJob.jobId,{projectId:project,repository:repo,explicitDesignWithdrawal:true});
+  assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[creation.id])).rows[0].state,'failed');
+  const otherCreation=await insertPair({task:'Pedido de criação. Sem request'});
+  await supervisor.recoverUnstartedExam(owner,auth1,otherCreation.jobId,{projectId:project,repository:repo,explicitDesignWithdrawal:true});
+  const parentIntent=await insertDesignExamIntent(db,owner,ctx1,auth1.epoch,project,'e'.repeat(40));
+  const parentJob=await insertPair({jobIntent:parentIntent.id});
+  await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,parent_intent_id,parent_unit_id)
+   SELECT $2,context_id,principal_id,$3,command,$4,$5,manager_epoch,plan_revision,id,'fixture-child' FROM ac_intents WHERE id=$1`,[parentIntent.id,randomUUID(),'a'.repeat(64),randomUUID(),randomUUID()]);
+  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,parentJob.jobId,{projectId:project,repository:repo,explicitDesignWithdrawal:true}),/NATIVE_RETIREMENT_UNCONFIRMED/);
+  const multipleIntent=await insertDesignExamIntent(db,owner,ctx1,auth1.epoch,project,'e'.repeat(40));
+  const multipleJob=await insertPair({jobIntent:multipleIntent.id});
+  await insertPair({jobIntent:multipleIntent.id});
+  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,multipleJob.jobId,{projectId:project,repository:repo,explicitDesignWithdrawal:true}),/NATIVE_RETIREMENT_UNCONFIRMED/);
+  const badRequest=await insertPair({task:'Pedido de criação. Original'});
+  await mkdir(join(spool,badRequest.jobId),{mode:0o700});
+  await writeFile(join(spool,badRequest.jobId,'request.json'),JSON.stringify({...badRequest.input,task:'Pedido de criação. Alterado'}),{mode:0o600});
+  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,badRequest.jobId,{projectId:project,repository:repo,explicitDesignWithdrawal:true}),/NATIVE_EXECUTION_REPLAY_MISMATCH/);
 
   // Residual Docker network (even empty with matching labels) must be refused and NOT deleted:
   const netName='ac-native-exec-'+validJob.jobId;

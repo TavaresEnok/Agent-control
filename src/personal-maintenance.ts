@@ -7,7 +7,7 @@ import {Id,Refusal,type Authority} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
-import {readonlyDesignExam,readonlySecurityExam} from './native-execution-supervisor.ts';
+import {readonlyDesignExam} from './native-execution-supervisor.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {refreshVerifyDatabases} from './verify-db.ts';
 
@@ -64,18 +64,17 @@ async function writeInstallationAtomically(file:string,raw:unknown){
 }
 
 function parseMaintenanceArgs(argv:readonly string[]){
- const [installationPath,command,jobId,confirmation]=argv;
+ const [installationPath,command,jobId]=argv;
  if(!installationPath||installationPath.startsWith('-'))throw new Refusal('MAINTENANCE_USAGE');
  if(argv.length===1)return {installationPath};
- if(command!=='--recuperar-exame'||!Id.safeParse(jobId).success||argv.length>4||
-  (confirmation!==undefined&&confirmation!=='--historico-confirmado'))
+ if(command!=='--abandonar-design'||!Id.safeParse(jobId).success||argv.length!==3)
   throw new Refusal('MAINTENANCE_USAGE');
- return {installationPath,recoverExamJobId:jobId,confirmedHistoricalExam:confirmation==='--historico-confirmado'};
+ return {installationPath,recoverExamJobId:jobId};
 }
 
-/** Explicit local owner recovery of a single unstarted interrupted personal read-only exam job.
+/** Explicit local owner withdrawal of a single unstarted personal design attempt.
  * Uses only the installation's configured project owner, context, product lease/fence, and supervisor absence proof. */
-async function recoverInterruptedExamFromInstallation(config:Installation,jobId:string,confirmedHistoricalExam:boolean):Promise<string[]>{
+async function recoverInterruptedExamFromInstallation(config:Installation,jobId:string,explicitDesignWithdrawal:boolean):Promise<string[]>{
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')throw new Refusal('MAINTENANCE_NATIVE_REQUIRED',409);
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
@@ -100,7 +99,7 @@ async function recoverInterruptedExamFromInstallation(config:Installation,jobId:
   if(row.principal_id!==principal||!(await ledger.pool.query(
    "SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,principal],
   )).rowCount)throw new Refusal('MAINTENANCE_EXAM_PRINCIPAL_MISMATCH',403);
-  if(row.parent_intent_id!==null||(!readonlyDesignExam(row.workflow,row.role)&&!readonlySecurityExam(row.workflow,row.role))){
+  if(row.parent_intent_id!==null||!readonlyDesignExam(row.workflow,row.role)){
    throw new Refusal('MAINTENANCE_EXAM_NOT_ELIGIBLE',409);
   }
   if(row.grant_project_id!==project.id||row.grant_context_id!==row.context_id){
@@ -114,9 +113,14 @@ async function recoverInterruptedExamFromInstallation(config:Installation,jobId:
   }
   const supervisors=await composePersonalExecutionSupervisors(config,ledger);
   const supervisor=supervisors.find(item=>item.supportsAccount(row.account_id)&&item.executorDigest===row.executor_digest&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
-  if(!supervisor)throw new Refusal('MAINTENANCE_SUPERVISOR_UNAVAILABLE',409);
-  await supervisor.recoverUnstartedExam(principal,authority,jobId,{projectId:project.id,repository:project.repo,confirmedHistoricalExam});
-  return [`Exame interrompido ${jobId} recuperado e retirado sem reexecução (estado: failed, retirada: removed, intenção: failed).`];
+  const scope={projectId:project.id,repository:project.repo,explicitDesignWithdrawal};
+  if(supervisor)await supervisor.recoverUnstartedExam(principal,authority,jobId,scope);
+  else{
+   const verifier=supervisors.find(item=>item.supportsAccount(row.account_id)&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
+   if(!verifier)throw new Refusal('MAINTENANCE_SUPERVISOR_UNAVAILABLE',409);
+   await verifier.confirmRetiredUnstartedDesign(principal,authority,jobId,scope);
+  }
+  return [`Tentativa de design ${jobId} retirada sem execução (estado: failed, retirada: removed, intenção: failed).`];
  }finally{
   if(authority)await ledger.releaseLease(authority).catch(()=>{});
   await ledger.close();
@@ -130,7 +134,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  const file=resolve(parsed.installationPath);
  const config=await loadInstallation(file);
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
- if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,parsed.confirmedHistoricalExam);
+ if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
  const docker=deps.docker??(args=>run('docker',args,30*60*1000));
  const imageExists=deps.imageExists??(async image=>imageId.test(image)&&await run('docker',['image','inspect',image],30_000)===0);
  const lines:string[]=[];

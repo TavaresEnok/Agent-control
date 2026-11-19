@@ -394,6 +394,18 @@ A cada 2 minutos a vigia também manda um aviso ao celular quando:
 
 A manutenção semanal atualiza as bases de vulnerabilidade em `<dataDirectory>/verify-db/`. Se a busca falha, a base anterior permanece e o aviso diz isso. Em seguida ela apaga o cache de build do Docker com mais de 7 dias e tira da instalação as imagens aposentadas (`retiredImages` e `retiredImageIds`) que nenhum job aberto ainda usa, apagando-as do Docker. Antes de mudar a instalação, ela guarda `installation.json.before-maintenance`. Volumes, contêineres e imagens de outros projetos não são tocados.
 
+### Retirar uma tentativa de design que não iniciou
+
+O dono configurado na instalação pode solicitar a retirada de uma tentativa pessoal de design pelo UUID do job:
+
+```bash
+npm run personal:maintenance -- <instalação.json> --abandonar-design <UUID-do-job>
+```
+
+A opção é um pedido de retirada, não uma confirmação de que a tentativa era exame ou criação. O comando só conclui quando os registros vinculam o job, a intenção, o grant liberado, a conta e o projeto ao dono e contêm um recibo durável de falha antes do launch. Também exige ausência de outros jobs ou intenções filhas afetados e verifica o repositório, a locação do contexto, os arquivos e a ausência de contêineres e rede. Se houver `request.json`, sua identidade é conferida; a falta desse arquivo não substitui o recibo. Uma tentativa histórica ambígua só é elegível no contexto principal, com o formato e motivo de falha históricos reconhecidos. Não serve para outros módulos nem para jobs de terceiros.
+
+Se o gateway estiver usando o contexto, pare-o temporariamente, execute o comando e volte a iniciá-lo. Uma falha de inspeção deixa a retirada pendente: corrija a disponibilidade do Docker e repita. O sucesso informa `failed` para job e intenção e `removed` para a retirada, sem iniciar a tentativa. Depois que uma imagem aposentada sair da instalação, a repetição confere os recibos terminais assinados; não recria a imagem nem inicia o job.
+
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.
