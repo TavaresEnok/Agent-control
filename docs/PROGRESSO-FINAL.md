@@ -939,3 +939,5 @@ PAUSADO-COTA
 - 19/11/2026 19:01 UTC — trabalho-C9-CONSTANTES-E-PRESENCA iniciado em final-c9 por Sol high normal.
 - 19/11/2026 19:03 UTC — C8-ANCESTRAIS-TYPEDOC encerrado com código 0.
 - 19/11/2026 19:03 UTC — No laboratório C9 de fb99a576, o defeito e o controle limpo passaram, mas a fixture R6 retornou cobertura parcial para resultados de chamadas sem vínculo. O teste físico tratava qualquer código 1 como falha. Um trabalhador separado confere as expectativas precisas sem remover as provas de linha nem alterar o coletor.
+- 19/11/2026 19:03 UTC — trabalho-C9-LAB-COBERTURA-PARCIAL iniciado em final-c9-lab-parcial por Sol medium normal.
+- 19/11/2026 19:04 UTC — A integração de documentação 1aa89e4f recebeu 4a47d5ff e a base mais recente de C2 a C4. Revisão e ensaio da imagem pedidos. Na suíte integral do novo QA 53012d07, o arquivo de recuperação que falhou na versão anterior passou em 9/9.
