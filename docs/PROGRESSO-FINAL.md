@@ -499,3 +499,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:49 UTC — Validação completa de c2-chromium-r5 em 1fd88007: TypeScript, suíte, complementares e laboratório aprovados.
 - 19/11/2026 05:49 UTC — Validação de c3-r11 em e66a635f iniciada no checkout de integração.
 - 19/11/2026 05:50 UTC — As oito CLIs em 525f929e passaram nos seis testes sem saltos. Validação oficial de 1fd88007 terminou com 256 arquivos, 52 testes complementares e laboratório verde. Nova integração de documentação f990c92f e conformidade a529fbee segue para nova prova de CLI.
+- 19/11/2026 05:51 UTC — Revisor encerrou C9-R5 em 86ec5e87 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:51 UTC — Revisão C-BASE-R10 iniciada por Sol high normal somente leitura em b01ca7b3.
+- 19/11/2026 05:51 UTC — Revisão independente por modelo distinto de 86ec5e87 identificou erros estáticos de atribuição de campos, argumentos e callbacks na análise de dados pessoais. Aberta C9-R6. A arquitetura em homologação passou nos 20 testes com Hadolint fixado e as ferramentas locais habilitadas. As CLIs de documentação e conformidade passaram nos seis testes após a integração de bd0211ec.
