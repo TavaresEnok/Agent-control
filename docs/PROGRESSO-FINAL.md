@@ -790,3 +790,6 @@ PAUSADO-COTA
 - 19/11/2026 17:58 UTC — revisor-C6-VALIDACAO-COMPOSE iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:59 UTC — Aceite de qa em 0d8198b6 iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
 - 19/11/2026 17:59 UTC — A prova negativa com o toolchain oficial Go 1.22.2 conferiu a versão e a recusa do adaptador. Em C8, o parecer de 3ff8610d identificou divergência entre a posição da assinatura e a definição e ambiguidade em comentários. A correção preserva o aviso quando o TypeDoc não permite localizar a origem.
+- 19/11/2026 17:59 UTC — trabalho-C8-POSICAO-CONFIRMADA iniciado em final-c8 por Sol high normal.
+- 19/11/2026 17:59 UTC — C5-PROVENIENCIA-FINAL encerrado com código 0.
+- 19/11/2026 18:00 UTC — O digest de QA 08e0f5ef foi fixado no candidato 0d8198b6 e arquivado. Os candidatos dos módulos 3 a 6 agora contêm essa revisão. A suíte de arquitetura vai rodar no banco de teste canônico e a de QA no banco exclusivo.
