@@ -1979,7 +1979,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       exam.findings.some(finding => finding.status !== 'provavel');
     const relatedSources = needsGraph ? new Map((await mapModuleSnapshot(snapshot, input.signal)).files
       .map(file => [file.file, file.code] as const)) : undefined;
-    const collectorReview = {collector, intentId, snapshot, relatedSources};
+    const coverage = new Map(exam?.coverage.map(row => [row.file, row] as const));
+    const collectorReview = {collector, intentId, snapshot, relatedSources, coverage};
     const achados: Achado[] = [];
     for (const finding of collectorData.findings) {
       const achadoId = `ACH-${String(achados.length + 1).padStart(3, '0')}`;
