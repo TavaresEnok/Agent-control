@@ -1182,3 +1182,5 @@ PAUSADO-COTA
 - 19/11/2026 21:40 UTC — C-ACEITE-PRONTIDAO-VIVA-R3 encerrado com código 0.
 - 19/11/2026 21:40 UTC — C-CONFORMIDADE-VIVA-R2 encerrado com código 0.
 - 19/11/2026 21:40 UTC — Correção c9-escopo recebida em 8996920c. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 21:40 UTC — revisor-C-ACEITE-CONFORMIDADE-VIVA-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 21:41 UTC — Reconhece argumentos literais multilinha e protege os detalhes de prontidão. Ordem C-PRONTIDAO-VIVA-R4 em worktree separado conforme 43f1c664.
