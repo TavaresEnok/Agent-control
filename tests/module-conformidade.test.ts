@@ -3100,33 +3100,40 @@ print(json.dumps({'out': out, 'partial': partial_out}))
 });
 
 
-test('R5 mede identificador descritivo e distingue ausência de supressão SPDX', async () => {
+test('R6 protege sequências divididas e distingue ausência de supressão SPDX', async () => {
   const scratch = mkdtempSync(join(tmpdir(), 'conformidade-r5-'));
   const repo = join(scratch, 'repo');
   const staging = join(scratch, 'staging');
   mkdirSync(join(repo, 'src'), {recursive: true});
   mkdirSync(staging);
   try {
-    const descriptive = 'src/account_subscription_preferences.ts';
+    const descriptive = 'src/account_preferences.ts';
     writeFileSync(join(repo, descriptive), 'export const example = 1;\n');
     const raw = python(String.raw`
 import json, sys
 from pathlib import Path
 from collector import Report, snapshot, add_scancode_results
-from license_policy import is_sensitive_path, is_redacted_text
+from license_policy import is_sensitive_path, is_redacted_text, _shannon_entropy
 root, staging = map(Path, sys.argv[2:4])
-good = 'src/account_subscription_preferences.ts'
+good = 'src/account_preferences.ts'
 opaque = 'a9k2m7z4q8v1b6n3x5c0j9h2f7d4s8p1'
 segmented = 'ordinary_' + opaque + '_name'
 long_word = 'abcdefghijklmnopqrstuvwxyzabcdefghi'
-for name in (opaque, segmented, 'ordinary_' + long_word + '_name', 'password-reset', 'id_generator'):
+split_opaque = 'abcdefghijkl_mnopqrst_uvwxzyab_cd'
+at_limit = 'account_subscription_preferences'
+above_limit = 'account_subscription_preferences_dashboard'
+assert len(at_limit) == 32 and _shannon_entropy(at_limit) >= 3.5
+assert len(above_limit) > 32 and _shannon_entropy(above_limit) >= 3.5
+assert len(split_opaque) >= 32 and _shannon_entropy(split_opaque) >= 3.5
+for name in (opaque, segmented, 'ordinary_' + long_word + '_name', 'password-reset', 'id_generator', split_opaque, at_limit, above_limit):
     (root / 'src' / (name + '.ts')).touch()
     assert is_sensitive_path('src/' + name + '.ts')
 assert not is_sensitive_path(good) and not is_redacted_text(good)
+assert is_redacted_text(split_opaque) and is_redacted_text(at_limit) and is_redacted_text(above_limit)
 report = Report()
 selected = snapshot(root, staging, report)
 assert set(selected) == {good}
-assert any(row['tool'] == 'conformidade:file' and row['detail'].startswith('5 entradas') for row in report.coverage)
+assert any(row['tool'] == 'conformidade:file' and row['detail'].startswith('8 entradas') for row in report.coverage)
 def scan(detections, packages):
     result = Report()
     ok = []
@@ -3138,6 +3145,12 @@ assert not any(row['tool'] == 'scancode-toolkit' and row['status'] == 'skipped' 
 mixed = scan([{}, {'license_expression_spdx': None}, {'license_expression_spdx': 'MIT', 'matches': [{'start_line': 1}]}, {'license_expression_spdx': 42}, {'license_expression_spdx': 'LicenseRef-AKIAIOSFODNN7EXAMPLE'}], [{}, {'declared_license_expression_spdx': None}, {'declared_license_expression_spdx': 'ISC'}, {'declared_license_expression_spdx': ''}])
 assert len(mixed['findings']) == 2
 assert all(row['file'] == good for row in mixed['findings'])
+for output in (report.output(), missing, mixed):
+    serialized = json.dumps(output)
+    for omitted in (split_opaque, at_limit, above_limit):
+        assert omitted not in serialized
+    assert all(part not in serialized for part in split_opaque.split('_') if len(part) >= 4)
+    assert 'dashboard' not in serialized
 assert [row['detail'] for row in mixed['coverage'] if row['tool'] == 'scancode-toolkit' and row['status'] == 'skipped'] == ['3 expressões de licença omitidas por segurança ou formato.']
 print(json.dumps({'missing': missing, 'mixed': mixed}))
 `, repo, staging);
