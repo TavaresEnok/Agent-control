@@ -876,3 +876,6 @@ PAUSADO-COTA
 - 19/11/2026 18:33 UTC — A imagem de documentação com a revisão lexical passou nos testes físicos e na CLI. Digest fixado no ramo de integração.
 - 19/11/2026 18:33 UTC — C2-BANCO-HERANCA encerrado com código 0.
 - 19/11/2026 18:33 UTC — A imagem de documentação está fixada após o reensaio. Conformidade integrou 0110eab1 e as versões anteriores do conjunto. A rodada tem laboratório físico com dados artificiais e revisão independente.
+- 19/11/2026 18:34 UTC — A3-RECUPERACAO-FECHAMENTO encerrado com código 0.
+- 19/11/2026 18:34 UTC — revisor-C8-ACEITE-LEXICO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:34 UTC — QA consolidou 97ae7a6f, bb09d6b3 e 7fac22bb em 69adc794 para nova imagem e revisão. Em A3, o parecer de 93deefd7 apontou quatro problemas de replay e evidência de retirada; o trabalho de correção foi atribuído sem acessar a instalação.
