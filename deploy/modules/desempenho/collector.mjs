@@ -25,6 +25,8 @@ const REPO_ROOT = '/repo';
 const MAX_HTTP_ROUTES = 8;
 const K6_REQUESTS_PER_ROUTE = 3;
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+// SVG embutido pode abrir um documento XML.
+const RASTER_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const isHtml = path => /\.html?$/i.test(path);
 
 function toolExit(file, args, {timeout, ...options}) {
@@ -342,16 +344,33 @@ function* documentElements(document) {
   }
 }
 
-function embeddedDocument(tag, attrs) {
-  if (tag === 'iframe' && attrs.some(({name}) => name === 'srcdoc')) return 'iframe[srcdoc]';
-  const destination = tag === 'object' ? 'data' : 'src';
-  if (['iframe', 'frame', 'object', 'embed'].includes(tag) &&
-      attrs.some(({name, value}) => name === destination && /[^\t\n\f\r ]/.test(value))) {
-    return `${tag}[${destination}]`;
+async function isStaticRasterImage(reference, base, declaredType) {
+  const url = URL.parse(reference, base);
+  if (url?.protocol !== 'http:' || url.origin !== base.origin || url.username || url.password) return false;
+  try {
+    const response = await fetch(url, {method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(1200)});
+    const type = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+    return response.ok && RASTER_IMAGE_TYPES.has(type) && (!declaredType || declaredType === type);
+  } catch {
+    return false;
   }
 }
 
-function staticDocumentOmission(html, pageUrl, prefix) {
+async function embeddedDocument(tag, attrs, bases, escapesFromPage) {
+  if (tag === 'iframe' && attrs.some(({name}) => name === 'srcdoc')) return 'iframe[srcdoc]';
+  const destination = tag === 'object' ? 'data' : 'src';
+  const reference = attrs.find(({name}) => name === destination)?.value;
+  if (!reference || !/[^\t\n\f\r ]/.test(reference)) return;
+  const element = `${tag}[${destination}]`;
+  if (tag === 'iframe' || tag === 'frame' || escapesFromPage(reference)) return element;
+
+  const declaredType = attrs.find(({name}) => name === 'type')?.value.split(';', 1)[0].trim().toLowerCase();
+  for (const base of bases) {
+    if (!await isStaticRasterImage(reference, base, declaredType)) return element;
+  }
+}
+
+async function staticDocumentOmission(html, pageUrl, prefix) {
   const document = parse(html);
   const documentUrl = new URL(pageUrl);
   let base = documentUrl;
@@ -377,13 +396,14 @@ function staticDocumentOmission(html, pageUrl, prefix) {
   for (const node of documentElements(document)) {
     const {attrs, tagName, namespaceURI} = node;
     if (node === baseElement) beforeBase = false;
-    if (namespaceURI === HTML_NAMESPACE) {
-      if (tagName === 'base') continue;
-      const embedded = embeddedDocument(tagName, attrs);
-      if (embedded) return `escopo parcial: documento embutido em ${embedded} fora da interpretação estática`;
-    }
     // Um recurso anterior à base também pode ser solicitado durante o parsing do documento.
     const escapesFromPage = reference => escapes(reference, base) || (beforeBase && escapes(reference, documentUrl));
+    if (namespaceURI === HTML_NAMESPACE && tagName === 'base') continue;
+    if (namespaceURI === HTML_NAMESPACE && ['iframe', 'frame', 'object', 'embed'].includes(tagName)) {
+      const bases = beforeBase && base.href !== documentUrl.href ? [base, documentUrl] : [base];
+      const embedded = await embeddedDocument(tagName, attrs, bases, escapesFromPage);
+      if (embedded) return `escopo parcial: documento embutido em ${embedded} fora da interpretação estática`;
+    }
     for (const {name, value} of attrs) {
       if (name === 'srcset' || name === 'imagesrcset') {
         for (const candidate of imageCandidates(value)) {
@@ -430,7 +450,7 @@ async function serveStaticPlan(root, plan) {
       const query = queryIndex < 0 ? '' : route.path.slice(queryIndex);
       pageUrl += query;
       const html = readFileSync(join(root, route.file), 'utf8');
-      const lighthouseOmission = staticDocumentOmission(html, pageUrl, prefix);
+      const lighthouseOmission = await staticDocumentOmission(html, pageUrl, prefix);
       targets.push(lighthouseOmission ? {...route, page: false, lighthouseOmission} : {...route, pageUrl});
     }
     return {origin: http.origin, close, targets};

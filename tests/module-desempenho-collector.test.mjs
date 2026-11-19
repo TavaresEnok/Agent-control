@@ -409,6 +409,50 @@ test('Lighthouse registra escopo parcial para formas de documento embutido nas d
     `rota=${routes[i + 1].path}; escopo parcial: documento embutido em ${element} fora da interpretação estática`));
 });
 
+test('Lighthouse mantém imagens raster confirmadas pelo servidor nas duas origens estáticas', async t => {
+  const setup = await fixture(t);
+  const {root, repo} = setup;
+  await mkdir(join(repo, 'site'));
+  const pages = [
+    ['site/imagens.html', '<object data="pixel.png?tema=claro"></object><embed src="pixel.png" type="image/png">'],
+    ['galeria.html', '<base href="site/"><object data="pixel.png" type="image/png"></object>'],
+    ['site/ausente.html', '<object data="ausente.png" type="image/png"></object>'],
+    ['site/documento.html', '<object data="suporte.html" type="image/png"></object>'],
+    ['site/vetor.html', '<object data="vetor.svg" type="image/svg+xml"></object>'],
+  ];
+  const routes = pages.map(([file]) => ({file, path: '/' + file.replace(/^site\//, '')}));
+  for (const [file, html] of pages) await writeFile(join(repo, file), `<!doctype html>${html}`);
+  await writeFile(join(repo, 'site', 'pixel.png'), Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aPrsAAAAASUVORK5CYII=', 'base64'));
+  await writeFile(join(repo, 'site', 'suporte.html'), '<p>Documento sintético de apoio</p>');
+  await writeFile(join(repo, 'site', 'vetor.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+  await writeFile(join(root, 'avulso.css'), '/* fora do snapshot declarado */');
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({staticDir: 'site', routes: [
+    ...routes, {path: '/suporte.html', file: 'site/suporte.html', page: false},
+  ]}));
+
+  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls) => {
+    assert.equal(urls.length, 2);
+    const [canonical, mounted] = urls.map(url => new URL(url));
+    assert.equal(canonical.pathname, '/imagens.html');
+    assert.match(mounted.pathname, /^\/[^/]+\/galeria\.html$/);
+    assert.notEqual(canonical.origin, mounted.origin);
+    for (const [page, assetPath] of [[canonical, 'pixel.png?tema=claro'], [mounted, 'site/pixel.png']]) {
+      assert.equal(page.hostname, '127.0.0.1');
+      assert.equal((await fetch(page)).status, 200);
+      const image = await fetch(new URL(assetPath, page));
+      assert.equal(image.status, 200);
+      assert.equal(image.headers.get('content-type'), 'image/png');
+      assert.equal((await fetch(new URL('/avulso.css', page))).status, 404);
+    }
+  })});
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => ({path: route, file})), routes.slice(0, 2));
+  const omissions = output.coverage.filter(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+    row.detail.includes('documento embutido'));
+  assert.deepEqual(omissions.map(row => row.detail), routes.slice(2).map(({path}) =>
+    `rota=${path}; escopo parcial: documento embutido em object[data] fora da interpretação estática`));
+});
+
 test('identifica declarações excedentes mesmo depois do limite de leitura das rotas', async t => {
   const setup = await fixture(t);
   const routes = Array.from({length: 41}, (_, i) => `/declarada-${i}`);
