@@ -381,57 +381,62 @@ function loadTypeScript(toolsRoot = MODULE_DIR) {
 
 const isDefaultConfig = file => /(^|\/)(?:ts|js)config\.json$/.test(file);
 
-function readManifestShellWord(word) {
-  let dynamic = false;
-  const value = word.replace(/"((?:[^"\\]|\\[\s\S])*)"|'([^']*)'|\\[^\n]|[^"'\\]+|./g, (part, double, single) => {
-    if (single !== undefined) return single;
-    if (double !== undefined) {
-      dynamic ||= /[$`\\]/.test(double);
-      return double;
+function manifestWord(parts, quoted = false) {
+  let value = '';
+  for (const part of parts) {
+    if (part.type === 'SglQuoted' && !part.dollar) {
+      value += part.value;
+    } else if (part.type === 'DblQuoted' && !part.dollar) {
+      const inner = manifestWord(part.parts, true);
+      if (inner === null) return null;
+      value += inner;
+    } else if (part.type === 'Lit') {
+      // Conservative for shell escapes, glob expansion and tilde expansion.
+      if (part.value.includes('\\') || (!quoted && /[*?\[\]{}~]/.test(part.value))) return null;
+      value += part.value;
+    } else {
+      return null;
     }
-    dynamic ||= /[$`\\<>()*?"']/.test(part);
-    return part;
-  });
-  return {value, dynamic};
+  }
+  return value;
 }
 
-function manifestTypeScriptCommands(script) {
-  // A comment begins only at a token boundary outside quotes. Keep the raw
-  // prefix to distinguish an assignment from a quoted command or argument.
-  const commands = [];
-  let words = [];
-  for (const [token] of script.matchAll(/#[^\n]*|[;&|\n]+|(?:[^\s"'\\;&|]+|"(?:[^"\\]|\\[\s\S])*"|'[^']*'|\\[^\n])+|["'\\]/g)) {
-    if (token.startsWith('#')) continue;
-    if (/^[;&|\n]/.test(token)) {
-      if (words.length) commands.push(words);
-      words = [];
-    } else {
-      words.push(token);
-    }
-  }
-  if (words.length) commands.push(words);
-
-  let cwdChanged = false;
+function manifestTypeScriptCommands(script, toolsRoot) {
   const invocations = [];
-  for (const command of commands) {
-    const commandIndex = command.findIndex(word => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
-    if (commandIndex === -1) continue;
-    const words = command.map(readManifestShellWord);
-    let [bin, ...args] = words.slice(commandIndex).map(word => word.value);
-    bin = posix.basename(bin);
-    if (['cd', 'pushd', 'popd'].includes(bin)) cwdChanged = true;
-    if (bin === 'node' && /(?:^|\/)typescript\/(?:bin\/tsc|lib\/tsc\.js)$/.test(args[0] ?? '')) {
-      [bin, ...args] = ['tsc', ...args.slice(1)];
-    } else if (['npx', 'npm', 'pnpm', 'yarn', 'bun'].includes(bin)) {
-      if (bin === 'npm' && args[0] !== 'exec') continue;
-      while (['exec', 'x', 'dlx', '--', '--no-install'].includes(args[0])) args.shift();
-      bin = posix.basename(args.shift() ?? '');
-    }
-    if (bin !== 'tsc') continue;
-    const dynamic = words.some(word => word.dynamic);
-    invocations.push(cwdChanged || dynamic || args.some(arg => arg.startsWith('@')) ? null : args);
+  let cwdChanged = false;
+  try {
+    const {parse, walk, LangVariant} = createRequire(join(toolsRoot, 'package.json'))('sh-syntax/sync');
+    if (Buffer.byteLength(script) > 64 * 1024) return [null];
+    const ast = parse(script, {variant: LangVariant.LangPOSIX});
+    walk(ast, node => {
+      if (node.type !== 'CallExpr' || !node.args.length) return;
+      const words = node.args.map(word => manifestWord(word.parts));
+      if (words[0] === null) {
+        invocations.push(null);
+        return;
+      }
+      let [bin, ...args] = words;
+      bin = posix.basename(bin);
+      if (['cd', 'pushd', 'popd'].includes(bin)) cwdChanged = true;
+      if (bin === 'command' || bin === 'exec') bin = posix.basename(args.shift() ?? '');
+      if (bin === 'node' && /(?:^|\/)typescript\/(?:bin\/tsc|lib\/tsc\.js)$/.test(args[0] ?? '')) {
+        [bin, ...args] = ['tsc', ...args.slice(1)];
+      } else if (['npx', 'npm', 'pnpm', 'yarn', 'bun'].includes(bin)) {
+        if (bin === 'npm' && args[0] !== 'exec') return;
+        while (['exec', 'x', 'dlx', '--', '--no-install'].includes(args[0])) args.shift();
+        const executable = args.shift();
+        if (executable === null) { invocations.push(null); return; }
+        bin = posix.basename(executable ?? '');
+      }
+      if (bin !== 'tsc') return;
+      const dynamicEnv = node.assigns.some(assignment => assignment.array ||
+        (assignment.value && manifestWord(assignment.value.parts) === null));
+      invocations.push(cwdChanged || dynamicEnv || args.some(arg => arg === null || arg.startsWith('@')) ? null : args);
+    });
+    return invocations;
+  } catch {
+    return [null];
   }
-  return invocations;
 }
 
 function measureResolutionCoverage(copiedFiles, skipped, readFile, manifestScripts, toolsRoot) {
@@ -456,7 +461,7 @@ function measureResolutionCoverage(copiedFiles, skipped, readFile, manifestScrip
   for (const [manifest, scripts] of manifestScripts) {
     for (const [name, script] of Object.entries(scripts)) {
       if (typeof script !== 'string') continue;
-      for (const args of manifestTypeScriptCommands(script)) {
+      for (const args of manifestTypeScriptCommands(script, toolsRoot)) {
         const origin = `script ${JSON.stringify(name)} de ${manifest}`;
         if (!args || !ts) return `comando TypeScript não analisado em ${origin}`;
         const build = ['-b', '--build'].includes(args[0]?.toLowerCase());
@@ -725,8 +730,10 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
         const names = typeof name === 'string' ? [name] : [];
         if (name !== 'default' && (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node))
           && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default)) names.push('default');
-        if (names.length && ts.isDeclaration(node)) {
-          for (const line of new Set([lineAt(node.getStart(source)), lineAt((node.name ?? node).getStart(source))])) {
+        const defaultExpression = ts.isExportAssignment(node) && !node.isExportEquals;
+        if (defaultExpression) names.push('default');
+        if (names.length && (ts.isDeclaration(node) || defaultExpression)) {
+          for (const line of new Set([lineAt(node.getStart(source)), lineAt((node.name ?? (defaultExpression ? node.expression : node)).getStart(source))])) {
             for (const declarationName of names) {
               const key = `${line}:${declarationName}`;
               if (!declarations.has(key)) declarations.set(key, []);
@@ -998,7 +1005,20 @@ function matchMermaidSourceLines(source, original) {
   const backward = align(-1);
   // Preprocessing can strip comments, directives and whitespace. Only cite an
   // original source line when both alignments agree on it.
-  return new Map([...forward].filter(([index, rawIndex]) => backward.get(index) === rawIndex));
+  const matches = new Map([...forward].filter(([index, rawIndex]) => backward.get(index) === rawIndex));
+  // An unrelated HTML label may be rewritten by Mermaid. A parser line and
+  // source line that each occur exactly once can still be located directly.
+  const unique = lines => {
+    const indexes = new Map();
+    lines.forEach((line, index) => indexes.set(line, indexes.has(line) ? null : index));
+    return indexes;
+  };
+  const parsedIndex = unique(parsed);
+  for (const [line, rawIndex] of unique(raw)) {
+    const index = parsedIndex.get(line);
+    if (line && rawIndex !== null && Number.isInteger(index)) matches.set(index, rawIndex);
+  }
+  return matches;
 }
 
 const MODULE_LABEL = /^(?:[\p{L}\p{N}\p{M}_.-]+\/)*[\p{L}\p{N}\p{M}_.-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/u;
@@ -1017,13 +1037,14 @@ function extractMermaidModuleReferences(block, parsed, resolveRepoFile) {
   const sourceLines = source.split('\n');
   const originalLines = block.code.split(/\r\n?|\n/);
   const lineMatches = matchMermaidSourceLines(sourceLines, originalLines);
-  const location = (line, evidence) => {
+  const location = line => {
     const index = lineMatches.get(line - 1);
     return index === undefined
-      ? {line: block.startLine, rawLine: evidence}
+      ? null
       : {line: block.startLine + index, rawLine: originalLines[index].trim()};
   };
 
+  let unmeasured = 0;
   const modulesById = new Map();
   for (const [id, vertex] of vertices) {
     if (subgraphIds.has(id)) continue;
@@ -1031,11 +1052,12 @@ function extractMermaidModuleReferences(block, parsed, resolveRepoFile) {
     const text = label?.text;
     if (typeof text !== 'string' || text !== vertex.text || !MODULE_LABEL.test(text) || text.split('/').includes('..')) continue;
     const modulePath = normalizeRepoPath(text);
-    moduleNodes.push({modulePath, ...location(label.line, text)});
+    const source = location(label.line);
+    if (!source) { unmeasured++; continue; }
+    moduleNodes.push({modulePath, ...source});
     modulesById.set(id, resolveRepoFile(modulePath));
   }
 
-  let unmeasured = 0;
   for (const [index, edge] of edges.entries()) {
     const from = modulesById.get(edge.start);
     const to = modulesById.get(edge.end);
@@ -1043,7 +1065,8 @@ function extractMermaidModuleReferences(block, parsed, resolveRepoFile) {
       unmeasured += 1;
       continue;
     }
-    const evidence = location(edgeLines[index], `${from} ${edge.type === 'double_arrow_point' ? '<-->' : '-->'} ${to}`);
+    const evidence = location(edgeLines[index]);
+    if (!evidence) { unmeasured++; continue; }
     moduleEdges.push({from, to, ...evidence});
     if (edge.type === 'double_arrow_point' && from !== to) moduleEdges.push({from: to, to: from, ...evidence});
   }
