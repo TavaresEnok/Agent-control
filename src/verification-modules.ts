@@ -15,7 +15,7 @@ import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
 import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
-  type CollectorProcess,
+  runBoundedCollectorProcess, type CollectorProcess,
 } from './module-container-cleanup.ts';
 import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamResult} from './module-exam.ts';
 import {readModuleExamFile} from './module-exam-map.ts';
@@ -34,9 +34,13 @@ import {
 } from './verify-types.ts';
 
 /** Container runtime binary. Tests compare against this constant and do not quote the name. */
-export {MODULE_RUNTIME_BIN};
+export {MODULE_RUNTIME_BIN, runBoundedCollectorProcess, type BoundedProcessResult} from './module-container-cleanup.ts';
 export const MODULE_CONTAINER_USER = '65532:65532';
 export const MAX_COLLECTOR_STDOUT_BYTES = 8 * 1024 * 1024;
+const MAX_COLLECTOR_STDERR_BYTES = 1024 * 1024;
+// Each json-file record without attrs has less than 74 bytes of framing
+// and at least one payload byte, which can expand to six bytes when escaped.
+const JSON_FILE_BYTES_PER_PAYLOAD_BYTE = 80;
 export const DEFAULT_COLLECTOR_TIMEOUT_MS = 1_200_000;
 const COLLECTOR_DAEMON_TIMEOUT_MS = 10_000;
 export const MODULE_MEMORY_BYTES = 2_147_483_648;
@@ -797,71 +801,6 @@ export async function removeModuleSnapshot(snapshot: string): Promise<void> {
   await rm(parent, {recursive: true, force: true});
 }
 
-export type BoundedProcessResult = {code: number; stdout: Buffer; stderr: string};
-
-export function runBoundedCollectorProcess(
-  args: readonly string[],
-  options: Parameters<CollectorProcess>[1],
-): Promise<BoundedProcessResult> {
-  if (options.signal?.aborted) return Promise.reject(new Refusal('VERIFY_TOOLS_FAILED', 503));
-  return new Promise((resolvePromise, reject) => {
-    let settled = false;
-    let totalBytes = 0;
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let stderrBytes = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const child = spawn(args[0] ?? '', [...args.slice(1)], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent'},
-    });
-    const onAbort = () => fail(new Refusal('VERIFY_TOOLS_FAILED', 503));
-    const fail = (error: Refusal) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      options.signal?.removeEventListener('abort', onAbort);
-      child.once('close', () => reject(error));
-      child.kill('SIGKILL');
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-    };
-    const finish = (code: number) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      options.signal?.removeEventListener('abort', onAbort);
-      resolvePromise({
-        code,
-        stdout: Buffer.concat(stdoutChunks),
-        stderr: Buffer.concat(stderrChunks).toString('utf8').slice(0, 1000),
-      });
-    };
-    timer = setTimeout(() => fail(new Refusal('VERIFY_TOOLS_FAILED', 503)), options.timeoutMs);
-    options.signal?.addEventListener('abort', onAbort, {once: true});
-    if (options.signal?.aborted) onAbort();
-    child.stdout?.on('data', (chunk: Buffer | string) => {
-      if (settled) return;
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
-      totalBytes += buf.byteLength;
-      if (totalBytes > options.maxStdoutBytes) {
-        fail(new Refusal('VERIFY_STDOUT_LIMIT', 400));
-        return;
-      }
-      stdoutChunks.push(buf);
-    });
-    child.stderr?.on('data', (chunk: Buffer | string) => {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
-      if (stderrBytes < 4096) {
-        stderrChunks.push(buf);
-        stderrBytes += buf.byteLength;
-      }
-    });
-    child.once('error', () => fail(new Refusal('VERIFY_TOOLS_FAILED', 503)));
-    child.once('close', code => finish(code === 0 ? 0 : (code ?? 1)));
-  });
-}
-
 export async function runModuleCollectorContainer(input: {
   image: string;
   repoPath: string;
@@ -877,7 +816,9 @@ export async function runModuleCollectorContainer(input: {
   if (!input.journal) throw new Refusal('VERIFY_CONTAINER_JOURNAL_REQUIRED', 503);
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isInteger(maxStdoutBytes) || maxStdoutBytes < 1) {
+  const logFileBytes = (maxStdoutBytes + MAX_COLLECTOR_STDERR_BYTES) * JSON_FILE_BYTES_PER_PAYLOAD_BYTE + 1;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isInteger(maxStdoutBytes)
+    || maxStdoutBytes < 1 || !Number.isSafeInteger(logFileBytes)) {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
   const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
@@ -903,7 +844,9 @@ export async function runModuleCollectorContainer(input: {
     // Make logs readable even when the daemon has a different default driver.
     const createArgs = [MODULE_RUNTIME_BIN, 'create', '--pull', 'never', '--name', moduleContainerName(token),
       '--label', `${MODULE_CONTAINER_LABEL}=${token}`, '--log-driver', 'json-file',
-      '--log-opt', 'mode=blocking', ...baseArgs.slice(3)];
+      '--log-opt', 'mode=blocking', '--log-opt', `max-size=${logFileBytes}`, '--log-opt', 'max-file=2',
+      '--log-opt', 'compress=false', '--log-opt', 'tag=', '--log-opt', 'labels=', '--log-opt', 'labels-regex=',
+      '--log-opt', 'env=', '--log-opt', 'env-regex=', ...baseArgs.slice(3)];
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
     let id: string | undefined;
     let creationRejected = true;
@@ -937,17 +880,19 @@ export async function runModuleCollectorContainer(input: {
         if (remaining < 1) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
         return remaining;
       };
-      const logs = await run([MODULE_RUNTIME_BIN, 'logs', '--follow', candidate],
-        {timeoutMs: remainingTime(), maxStdoutBytes, signal: input.signal});
-      if (logs.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
-      // A successful logs stream alone does not establish the collector's exit status.
       const waited = await run([MODULE_RUNTIME_BIN, 'wait', candidate],
         {timeoutMs: remainingTime(), maxStdoutBytes: 4096, signal: input.signal});
-      remainingTime();
       const exitCode = waited.stdout.toString('utf8').trim();
       if (waited.code !== 0 || !/^(0|[1-9][0-9]{0,2})$/.test(exitCode) || Number(exitCode) > 255) {
         throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       }
+      // Read the complete retained range after termination. If rotation
+      // dropped anything, the previous file is full and necessarily exceeds
+      // at least one stream limit, even if the surviving stdout parses as JSON.
+      const logs = await run([MODULE_RUNTIME_BIN, 'logs', candidate],
+        {timeoutMs: remainingTime(), maxStdoutBytes, maxStderrBytes: MAX_COLLECTOR_STDERR_BYTES, signal: input.signal});
+      remainingTime();
+      if (logs.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       const output = parseModuleCollectorOutput(logs.stdout, {maxStdoutBytes, module: input.module});
       return {code: Number(exitCode), output};
     } finally {

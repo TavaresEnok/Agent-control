@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
+import {ChildProcess, fork} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {createServer} from 'node:http';
 import {test} from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
+import {fileURLToPath} from 'node:url';
 import {Refusal} from '../src/contracts.ts';
 import {MODULE_CONTAINER_LABEL, moduleContainerName, type CollectorProcess} from '../src/module-container-cleanup.ts';
 import type {Ledger} from '../src/ledger.ts';
-import {listModuleReports, runBoundedCollectorProcess, runModuleCollectorContainer, runVerificationModule} from '../src/verification-modules.ts';
+import {MAX_COLLECTOR_STDOUT_BYTES, listModuleReports, runBoundedCollectorProcess, runModuleCollectorContainer, runVerificationModule} from '../src/verification-modules.ts';
 import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
+import type {ModuleRecoveryRequest, ModuleRecoveryResult} from './fixtures/module-recovery-process.ts';
 
 const databaseUrl = process.env.AC_TEST_DATABASE_URL;
 const image = `sha256:${'b'.repeat(64)}`;
@@ -41,6 +45,145 @@ test('a partida exige journal antes de criar snapshot ou chamar o daemon', async
   }), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_CONTAINER_JOURNAL_REQUIRED');
 });
 
+test('o prazo do cliente expira mesmo sem o evento close', {timeout: 3_000}, async t => {
+  const closed = barrier();
+  const script = 'setInterval(() => {}, 1000); // synthetic-close';
+  const emit = ChildProcess.prototype.emit;
+  t.mock.method(ChildProcess.prototype, 'emit', function (this: ChildProcess, event: string | symbol, ...args: unknown[]) {
+    if (event === 'close' && this.spawnargs.includes(script)) {
+      closed.resolve();
+      return false;
+    }
+    return Reflect.apply(emit, this, [event, ...args]);
+  });
+  const timedOut = runBoundedCollectorProcess([process.execPath, '-e', script], {timeoutMs: 80, maxStdoutBytes: 1024});
+  await assert.rejects(timedOut, {code: 'VERIFY_TOOLS_FAILED'});
+  const reaping = new AbortController();
+  try {
+    await Promise.race([closed.promise, delay(1000, undefined, {signal: reaping.signal})
+      .then(() => assert.fail('O cliente sintético não foi encerrado.'))]);
+  } finally {
+    reaping.abort();
+  }
+});
+
+function runRecoveryProcess(request: ModuleRecoveryRequest): Promise<ModuleRecoveryResult> {
+  const child = fork(fileURLToPath(new URL('./fixtures/module-recovery-process.ts', import.meta.url)), {
+    execArgv: ['--import', 'tsx'],
+  });
+  return new Promise((resolve, reject) => {
+    let result: ModuleRecoveryResult | undefined;
+    child.once('message', message => { result = message as ModuleRecoveryResult; });
+    child.once('error', reject);
+    child.once('exit', code => {
+      if (code === 0 && result) resolve(result);
+      else reject(new Error(`Processo sintético de recuperação terminou com código ${code}`));
+    });
+    child.send(request);
+  });
+}
+
+test('a recuperação em outro processo neutraliza a partida tardia antes de transferir a autoridade', {
+  skip: !databaseUrl, timeout: 15_000,
+}, async () => {
+  await withModuleRecoveryFixture(databaseUrl!, async ({ledger, ...input}) => {
+    const {authority, dataDirectory, projectId} = input;
+    const runId = randomUUID();
+    const queued = barrier();
+    let token = '';
+    let state: 'created' | 'queued' | 'running' | 'removed' = 'created';
+    let reachable = true;
+    let foreign = false;
+    let removalAttempts = 0;
+    let daemonError: unknown;
+    const daemon = createServer((req, res) => {
+      const respond = async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const argv = JSON.parse(Buffer.concat(chunks).toString()) as string[];
+        const send = (code: number, stdout = '') => res.end(JSON.stringify({code, stdout, stderr: ''}));
+        if (argv[1] === 'create') {
+          token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
+          send(0, containerId);
+        } else if (argv[1] === 'start') {
+          assert.deepEqual(argv.slice(1), ['start', containerId]);
+          state = 'queued';
+          reachable = false;
+          queued.resolve();
+          // The client times out independently. The daemon retains the request.
+        } else if (argv[2] === 'ls') {
+          assert.ok(argv.includes(`id=${containerId}`));
+          if (!reachable) send(1);
+          else send(0, state === 'removed' ? '' : `${containerId} ${moduleContainerName(token)} ${foreign ? randomUUID() : token}`);
+        } else {
+          assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
+          removalAttempts++;
+          if (state === 'running') state = 'removed';
+          // While start is in flight the simulated daemon is busy. After
+          // removal it loses the ACK, requiring a successful absence check.
+          send(1);
+        }
+      };
+      void respond().catch(error => { daemonError = error; res.destroy(); });
+    });
+    await new Promise<void>((resolve, reject) => {
+      daemon.once('error', reject);
+      daemon.listen(0, '127.0.0.1', resolve);
+    });
+    const address = daemon.address();
+    assert.ok(address && typeof address !== 'string');
+    const request = {databaseUrl: ledger.pool.options.connectionString!, daemonUrl: `http://127.0.0.1:${address.port}`, input};
+    const journal = async () => (await ledger.pool.query(
+      'SELECT status, collector_container_token, collector_container_id, collector_start_pending FROM ac_verify_runs WHERE id=$1', [runId],
+    )).rows[0];
+    const epoch = async () => Number((await ledger.pool.query('SELECT epoch FROM ac_managers WHERE context_id=$1', [authority.contextId])).rows[0].epoch);
+    const launcher = runRecoveryProcess({...request, start: {runId, image}});
+    try {
+      await Promise.race([queued.promise, launcher.then(result => assert.fail(JSON.stringify(result)))]);
+      assert.deepEqual(await journal(), {status: 'running', collector_container_token: token,
+        collector_container_id: containerId, collector_start_pending: true});
+      const timedOut = await launcher;
+      assert.equal(timedOut.error, 'VERIFY_CONTAINER_CLEANUP_PENDING');
+      assert.equal(state, 'queued');
+      assert.deepEqual(await listModuleReports(dataDirectory, projectId), []);
+      await ledger.releaseLease(authority);
+      await assert.rejects(ledger.pool.query('UPDATE ac_managers SET epoch=epoch+1 WHERE context_id=$1', [authority.contextId]),
+        {message: 'VERIFY_CONTAINER_CLEANUP_PENDING'});
+      reachable = true;
+      foreign = true;
+      assert.equal((await runRecoveryProcess(request)).error, 'VERIFY_CONTAINER_CLEANUP_PENDING');
+      assert.equal(removalAttempts, 0);
+      foreign = false;
+      const blocked = await runRecoveryProcess(request);
+      assert.equal(blocked.error, 'VERIFY_CONTAINER_CLEANUP_PENDING');
+      assert.equal(removalAttempts, 1);
+      assert.equal(await epoch(), authority.epoch);
+      assert.deepEqual(await journal(), {status: 'failed', collector_container_token: token,
+        collector_container_id: containerId, collector_start_pending: true});
+
+      state = 'running';
+      const recovered = await runRecoveryProcess(request);
+      assert.equal(recovered.error, undefined);
+      assert.ok(recovered.authority);
+      assert.equal(recovered.authority.epoch, authority.epoch + 1);
+      assert.notEqual(recovered.pid, timedOut.pid);
+      assert.notEqual(recovered.pid, process.pid);
+      assert.equal(state, 'removed');
+      assert.equal(removalAttempts, 2);
+      assert.deepEqual(await journal(), {status: 'failed', collector_container_token: null,
+        collector_container_id: null, collector_start_pending: false});
+      assert.equal(daemonError, undefined);
+      const report = await runVerificationModule({...input, ledger, authority: recovered.authority, collectorOutput: output,
+        executeCollectorProcess: async () => assert.fail('O journal já foi limpo.')});
+      assert.equal(report.hasToolFailure, false);
+    } finally {
+      daemon.closeAllConnections();
+      await new Promise<void>(resolve => daemon.close(() => resolve()));
+      await launcher.catch(() => undefined);
+    }
+  });
+});
+
 test('lease perdido mantém limpeza pendente e retry só remove o contêiner identificado', {skip: !databaseUrl}, async () => {
   await withModuleRecoveryFixture(databaseUrl!, async base => {
     const {ledger, principal, authority, projectId, dataDirectory} = base;
@@ -66,8 +209,8 @@ test('lease perdido mantém limpeza pendente e retry só remove o contêiner ide
         running = true;
         return reply(0, containerId);
       }
-      if (argv[1] === 'logs') {
-        assert.deepEqual(argv.slice(1), ['logs', '--follow', containerId]);
+      if (argv[1] === 'wait') {
+        assert.deepEqual(argv.slice(1), ['wait', containerId]);
         collecting.resolve();
         return new Promise((_, reject) => options.signal!.addEventListener('abort',
           () => reject(new Refusal('VERIFY_TOOLS_FAILED', 503)), {once: true}));
@@ -142,7 +285,7 @@ test('a aquisição aguarda a resposta de partida e prossegue durante a coleta',
         await ack.promise;
         return reply(0, containerId);
       }
-      if (argv[1] === 'logs') {
+      if (argv[1] === 'wait') {
         collecting.resolve();
         return new Promise((_, reject) => options.signal!.addEventListener('abort',
           () => reject(new Refusal('VERIFY_TOOLS_FAILED', 503)), {once: true}));
@@ -231,12 +374,13 @@ test('o sucessor que adquire antes da partida impede a execução antiga de lan�
   });
 });
 
-test('término observado com código do contêiner decide o resultado depois dos logs', {skip: !databaseUrl, timeout: 15_000}, async () => {
+test('logs completos e código de saída só são lidos após o término observado', {skip: !databaseUrl, timeout: 15_000}, async () => {
   await withModuleRecoveryFixture(databaseUrl!, async base => {
     const waiting = barrier();
     const exit = barrier();
     let token = '', removed = false;
-    let logsTimeout = 0;
+    let waitTimeout = 0;
+    let readLogs = false;
     const execute: CollectorProcess = async (argv, options) => {
       if (argv[1] === 'create') {
         token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
@@ -244,13 +388,14 @@ test('término observado com código do contêiner decide o resultado depois dos
       }
       if (argv[1] === 'start') return reply(0, containerId);
       if (argv[1] === 'logs') {
-        logsTimeout = options.timeoutMs;
-        await delay(15);
+        readLogs = true;
+        assert.deepEqual(argv.slice(1), ['logs', containerId]);
+        assert.ok(options.timeoutMs < waitTimeout);
         return reply(0, collectorLogs);
       }
       if (argv[1] === 'wait') {
         assert.deepEqual(argv.slice(1), ['wait', containerId]);
-        assert.ok(options.timeoutMs < logsTimeout);
+        waitTimeout = options.timeoutMs;
         waiting.resolve();
         await exit.promise;
         return reply(0, '7\n');
@@ -265,7 +410,9 @@ test('término observado com código do contêiner decide o resultado depois dos
     try {
       await Promise.race([waiting.promise, task]);
       assert.equal(removed, false);
+      assert.equal(readLogs, false);
       assert.deepEqual(await listModuleReports(base.dataDirectory, base.projectId), []);
+      await delay(15);
       exit.resolve();
       const result = await task;
       assert.equal(removed, true);
@@ -275,50 +422,6 @@ test('término observado com código do contêiner decide o resultado depois dos
       exit.resolve();
       await task.catch(() => undefined);
     }
-  });
-});
-
-test('timeout da partida deixa ID durável para recuperar uma partida sem ACK', {skip: !databaseUrl}, async () => {
-  await withModuleRecoveryFixture(databaseUrl!, async base => {
-    const {ledger, principal, authority} = base;
-    const runId = randomUUID();
-    let token = '', reachable = true, running = false, removed = false;
-    const execute: CollectorProcess = async (argv, options) => {
-      if (argv[1] === 'create') {
-        token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
-        return reply(0, containerId);
-      }
-      if (argv[1] === 'start') {
-        assert.equal(options.timeoutMs, 150);
-        running = true;
-        try {
-          return await runBoundedCollectorProcess([process.execPath, '-e', 'setInterval(() => {}, 1000)'], options);
-        } finally {
-          reachable = false;
-        }
-      }
-      if (argv[2] === 'ls') {
-        assert.ok(argv.includes(`id=${containerId}`));
-        return reachable ? reply(0, removed ? '' : `${containerId} ${moduleContainerName(token)} ${token}`) : reply(1);
-      }
-      assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
-      removed = true;
-      running = false;
-      return reply(0);
-    };
-    const state = async () => (await ledger.pool.query(
-      'SELECT status, collector_container_token, collector_container_id FROM ac_verify_runs WHERE id=$1', [runId],
-    )).rows[0];
-    await assert.rejects(runVerificationModule({...base, runId, image, executeCollectorProcess: execute, timeoutMs: 150}), pending);
-    assert.equal(running, true);
-    assert.deepEqual(await state(), {status: 'failed', collector_container_token: token, collector_container_id: containerId});
-    assert.deepEqual(await listModuleReports(base.dataDirectory, base.projectId), []);
-    await ledger.releaseLease(authority);
-    const next = await ledger.acquire(principal, authority.contextId, randomUUID(), 'next-after-start-timeout', 60);
-    reachable = true;
-    await runVerificationModule({...base, authority: next, collectorOutput: output, executeCollectorProcess: execute});
-    assert.equal(running, false);
-    assert.deepEqual(await state(), {status: 'failed', collector_container_token: null, collector_container_id: null});
   });
 });
 
@@ -353,19 +456,92 @@ test('create sem ACK redescobre o ID pelo token antes de remover', {skip: !datab
   });
 });
 
-for (const scenario of ['timeout', 'stdout'] as const) {
+test('a migração preserva o journal anterior e protege os IDs que já estavam persistidos', {skip: !databaseUrl}, async () => {
+  await withModuleRecoveryFixture(databaseUrl!, async base => {
+    const withId = await runVerificationModule({...base, collectorOutput: output});
+    const withoutId = await runVerificationModule({...base, collectorOutput: output});
+    const withIdToken = randomUUID();
+    const withoutIdToken = randomUUID();
+    await base.ledger.tx(async client => {
+      // Reconstruct just the R7 schema in this isolated database, retaining
+      // the migration records and digests for all published migrations.
+      await client.query(`DROP TRIGGER ac_collector_start_transfer_guard ON ac_managers;
+        DROP FUNCTION ac_guard_collector_start_transfer();
+        ALTER TABLE ac_verify_runs DROP COLUMN collector_start_pending;
+        DELETE FROM ac_schema_migrations WHERE version=113`);
+      await client.query('UPDATE ac_verify_runs SET collector_container_token=$2, collector_container_id=$3 WHERE id=$1',
+        [withId.runId, withIdToken, containerId]);
+      await client.query('UPDATE ac_verify_runs SET collector_container_token=$2 WHERE id=$1', [withoutId.runId, withoutIdToken]);
+    });
+    await base.ledger.migrate();
+    const {rows} = await base.ledger.pool.query(
+      'SELECT id, collector_container_token, collector_container_id, collector_start_pending FROM ac_verify_runs',
+    );
+    assert.deepEqual(rows.find(row => row.id === withId.runId), {id: withId.runId, collector_container_token: withIdToken,
+      collector_container_id: containerId, collector_start_pending: true});
+    assert.deepEqual(rows.find(row => row.id === withoutId.runId), {id: withoutId.runId, collector_container_token: withoutIdToken,
+      collector_container_id: null, collector_start_pending: false});
+  });
+});
+
+test('a retenção acomoda JSON válido até o limite integral de stdout', {skip: !databaseUrl}, async () => {
+  await withModuleRecoveryFixture(databaseUrl!, async base => {
+    let token = '', removed = false;
+    const padding = MAX_COLLECTOR_STDOUT_BYTES - Buffer.byteLength(collectorLogs);
+    const lineSize = Buffer.byteLength(JSON.stringify({log: '\n', stream: 'stdout', time: '2026-11-19T01:02:03.456789000Z'}) + '\n');
+    const execute: CollectorProcess = async (argv, options) => {
+      if (argv[1] === 'create') {
+        token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
+        assert.equal(argv[argv.indexOf('--log-driver') + 1], 'json-file');
+        assert.ok(argv.includes('mode=blocking'));
+        assert.ok(argv.includes('max-file=2'));
+        const maxSize = Number(argv.find(arg => arg.startsWith('max-size='))?.slice('max-size='.length));
+        assert.ok(maxSize > padding * lineSize + Buffer.byteLength(JSON.stringify(collectorLogs)));
+        return reply(0, containerId);
+      }
+      if (argv[1] === 'start') return reply(0, containerId);
+      if (argv[1] === 'wait') return reply(0, '0');
+      if (argv[1] === 'logs') {
+        assert.equal(options.maxStdoutBytes, MAX_COLLECTOR_STDOUT_BYTES);
+        return runBoundedCollectorProcess([process.execPath, '-e',
+          `process.stdout.write(Buffer.alloc(${padding}, 10)); process.stdout.write(${JSON.stringify(collectorLogs)})`], options);
+      }
+      if (argv[2] === 'ls') return reply(0, removed ? '' : `${containerId} ${moduleContainerName(token)} ${token}`);
+      assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
+      removed = true;
+      return reply(0);
+    };
+    const report = await runVerificationModule({...base, image, executeCollectorProcess: execute});
+    assert.equal(report.hasToolFailure, false);
+    assert.deepEqual(report.toolCoverage, output.coverage);
+    assert.equal(removed, true);
+  });
+});
+
+for (const scenario of ['timeout', 'stdout', 'rotated'] as const) {
   test(`${scenario} publica a falha após confirmar a remoção no daemon simulado`, {skip: !databaseUrl}, async () => {
     await withModuleRecoveryFixture(databaseUrl!, async base => {
       let owner = '';
       let removed = false;
+      let maxLogSize = 0;
       const execute: CollectorProcess = async (argv, options) => {
         if (argv[1] === 'create') {
           owner = argv[argv.indexOf('--label') + 1]!.slice(MODULE_CONTAINER_LABEL.length + 1);
+          maxLogSize = Number(argv.find(arg => arg.startsWith('max-size='))?.slice('max-size='.length));
           return reply(0, containerId);
         }
         if (argv[1] === 'start') return reply(0, containerId);
+        if (argv[1] === 'wait') return reply(0, '0');
         if (argv[1] === 'logs') {
-          const script = scenario === 'timeout' ? 'setInterval(() => {}, 1000)' : 'process.stdout.write(Buffer.alloc(8192))';
+          const lineSize = Buffer.byteLength(JSON.stringify({log: '\n', stream: 'stderr', time: '2026-11-19T01:02:03.456789000Z'}) + '\n');
+          const retainedStderrBytes = Math.ceil(maxLogSize / lineSize);
+          const script = {
+            timeout: 'setInterval(() => {}, 1000)',
+            stdout: `process.stdout.write(' '.repeat(1024) + ${JSON.stringify(collectorLogs)})`,
+            // A previous full file remains even after losing earlier stdout.
+            // Its stderr must prevent the intact JSON suffix from being accepted.
+            rotated: `process.stdout.write(${JSON.stringify(collectorLogs)}); process.stderr.write(Buffer.alloc(${retainedStderrBytes}, 10))`,
+          }[scenario];
           return runBoundedCollectorProcess([process.execPath, '-e', script], options);
         }
         if (argv[2] === 'ls') {
@@ -379,7 +555,11 @@ for (const scenario of ['timeout', 'stdout'] as const) {
         timeoutMs: scenario === 'timeout' ? 150 : 3000});
       assert.equal(removed, true);
       assert.equal(report.hasToolFailure, true);
-      assert.match(report.toolCoverage[0]!.detail, scenario === 'timeout' ? /VERIFY_TOOLS_FAILED/ : /VERIFY_STDOUT_LIMIT/);
+      assert.match(report.toolCoverage[0]!.detail, {
+        timeout: /VERIFY_TOOLS_FAILED/,
+        stdout: /VERIFY_STDOUT_LIMIT/,
+        rotated: /VERIFY_COLLECTOR_LOG_LIMIT/,
+      }[scenario]);
       assert.deepEqual((await listModuleReports(base.dataDirectory, base.projectId)).map(item => item.id), [report.runId]);
       assert.deepEqual((await base.ledger.pool.query(
         'SELECT status, collector_container_token FROM ac_verify_runs WHERE id=$1', [report.runId],
