@@ -820,3 +820,6 @@ PAUSADO-COTA
 - 19/11/2026 18:09 UTC — C8-POSICAO-CONFIRMADA encerrado com código 0.
 - 19/11/2026 18:09 UTC — trabalho-C2-BANCO-ACL-EFETIVA iniciado em final-qa-banco-local por Sol high normal.
 - 19/11/2026 18:09 UTC — A prova de arquitetura retornou 20/20. O teste de raízes verificou a abertura de entrada e saída pelos descritores numericamente distintos de cada raiz. TypeScript e a repetição focal aprovaram o teste final.
+- 19/11/2026 18:09 UTC — C2-GO-EXECUCAO encerrado com código 0.
+- 19/11/2026 18:09 UTC — C9-ESCOPO-EFEITOS encerrado com código 0.
+- 19/11/2026 18:10 UTC — Prontidão em b2e62e6b passou em 43/43 com a imagem e a CLI. Documentação incorpora 74c33f3f em 62158ac8. O laboratório do banco acertou a medição; a confirmação ficou provável porque a resposta sintética do examinador não devolvia o vínculo exigido pelo contrato. A revisão 94af07b4 também exige tratar dois sinais ambíguos de posição de erro dentro do SQL.
