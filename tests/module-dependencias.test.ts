@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import {execFile as execFileCb} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {existsSync, readFileSync} from 'node:fs';
 import {chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, truncate, writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
+import {performance} from 'node:perf_hooks';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
@@ -16,6 +18,7 @@ import {
   discoverRepoFiles,
   findLineInPackageJson,
   parseAstGrepJson,
+  resolveRegistrySnapshot,
   runCollection,
   runAstGrepCheck,
   runJscodeshiftCheck,
@@ -32,6 +35,15 @@ const require = createRequire(import.meta.url);
 const moduleDir = fileURLToPath(new URL('../deploy/modules/dependencias/', import.meta.url));
 const fixtureDefect = fileURLToPath(new URL('./fixtures/module-dependencias/com-defeito/', import.meta.url));
 const fixtureClean = fileURLToPath(new URL('./fixtures/module-dependencias/limpo/', import.meta.url));
+const codemodHandshakeFixture = [
+  'function writeReport(file, source, events = [], overrides = {}) {',
+  '  const {AC_JSCODESHIFT_REPORT: report, AC_JSCODESHIFT_NONCE: nonce} = process.env;',
+  '  const sha256 = require("node:crypto").createHash("sha256").update(source).digest("hex");',
+  '  const header = {kind:"source",file,nonce,sha256,...overrides};',
+  '  fs.writeFileSync(report, [header, ...events].map(event => JSON.stringify(event)).join("\\n")+"\\n");',
+  '  return report;',
+  '}',
+].join('\n');
 
 test('Dockerfile e lockfiles do módulo dependencias são imutáveis e sem usuário root final', async () => {
   const dockerfile = await readFile(join(moduleDir, 'Dockerfile'), 'utf8');
@@ -326,6 +338,7 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
       [
         '#!/usr/bin/env node',
         'const fs = require("node:fs");',
+        codemodHandshakeFixture,
         'const args = process.argv.slice(2);',
         'if (!args.includes("--run-in-band") || !args.includes("--fail-on-error") || !args.some(a => a.startsWith("--parser=")) || !args.includes("-t")) {',
         '  process.stderr.write("Invalid jscodeshift CLI args\\n");',
@@ -335,11 +348,9 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
         'for (const f of files) {',
         '  const orig = fs.readFileSync(f, "utf8");',
         '  if (orig.includes("new Buffer(")) {',
+        '    writeReport(f, orig, [{file:f,line:5,column:14,rule:"JSCODESHIFT-NODE-BUFFER-CTOR",severity:"alta",message:"new Buffer obsoleto",before:"new Buffer(payload)",after:"Buffer.from(payload)",review:false}]);',
         '    fs.writeFileSync(f, orig.replace("new Buffer(payload)", "Buffer.from(payload)"));',
-        '    if (process.env.AC_JSCODESHIFT_REPORT) {',
-        '      fs.appendFileSync(process.env.AC_JSCODESHIFT_REPORT, JSON.stringify({file:f,line:5,rule:"JSCODESHIFT-NODE-BUFFER-CTOR",severity:"alta",message:"new Buffer obsoleto",before:"new Buffer(payload)",after:"Buffer.from(payload)",review:false})+"\\n");',
-        '    }',
-        '  }',
+        '  } else writeReport(f, orig);',
         '}',
       ].join('\n'),
       'utf8'
@@ -530,11 +541,11 @@ test('entradas inválidas são isoladas, workspaces e versões de SBOM preservad
     await writeFile(join(root, 'broken/package.json'), 'null');
     await writeFile(join(root, 'other/package.json'), JSON.stringify({dependencies: {foo: '1.0.0'}}));
     await writeFile(join(root, 'other/package-lock.json'), 'null');
-    await writeFile(join(root, 'syft.cdx.json'), JSON.stringify({bomFormat: 'CycloneDX', components: [
-      {name: 'foo', version: '1.0.0', purl: 'pkg:pypi/foo@1.0.0'},
-      {name: 'bad', version: '1.0.0', purl: 'pkg:npm/%ZZ@1.0.0'},
-      {name: 'foo', version: '1.0.0', purl: 'pkg:npm/foo@1.0.0'},
-      {name: 'foo', version: '1.8.0', purl: 'pkg:npm/foo@1.8.0'},
+    await writeFile(join(root, 'syft.cdx.json'), JSON.stringify({bomFormat: 'CycloneDX', specVersion: '1.6', components: [
+      {type: 'library', name: 'foo', version: '1.0.0', purl: 'pkg:pypi/foo@1.0.0'},
+      {type: 'library', name: 'bad', version: '1.0.0', purl: 'pkg:npm/%ZZ@1.0.0'},
+      {type: 'library', name: 'foo', version: '1.0.0', purl: 'pkg:npm/foo@1.0.0'},
+      {type: 'library', name: 'foo', version: '1.8.0', purl: 'pkg:npm/foo@1.8.0'},
     ]}));
     await writeFile(join(root, 'other/sbom.cdx.json'), '{');
     const found = await discoverRepoFiles(root);
@@ -615,6 +626,38 @@ test('processos atribuem a varredura por arquivo e distinguem sintaxe inválida,
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
+test('ast-grep conserva diagnóstico válido quando outro arquivo tem linha inválida ou fora da cópia', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-ast-lines-'));
+  try {
+    const sourceFiles = ['valid.ts', 'negative.ts', 'outside.ts', 'clean.ts']
+      .map(rel => ({rel, fullPath: join(root, rel), ext: '.ts'}));
+    for (const file of sourceFiles) await writeFile(file.fullPath, 'original();\n');
+    const astGrepBin = join(root, 'ast-fixture');
+    await writeFile(astGrepBin, [
+      '#!/usr/bin/env node',
+      'const target = process.argv[6];',
+      'const {join} = require("node:path");',
+      'const files = ["valid.ts", "negative.ts", "outside.ts", "clean.ts"];',
+      'for (const file of files) console.error(`sg: entity|file|${join(target,file)}: language=TypeScript,appliedRuleCount=1`);',
+      'const diagnostic = (name,line) => ({file:join(target,name),ruleId:"synthetic-ts",severity:"error",text:"original()",range:{start:{line}}});',
+      'console.log(JSON.stringify([diagnostic("valid.ts",0),diagnostic("negative.ts",-1),diagnostic("outside.ts",999),diagnostic("unknown.ts",0)]));',
+      'process.exitCode = 1;',
+    ].join('\n'), {mode: 0o755});
+    const result = await runAstGrepCheck({sourceFiles, isoSrcDir: root, astGrepBin,
+      astGrepVersion: 'sintetica', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
+    assert.deepEqual(result.findings.map(f => [f.file, f.line]), [['valid.ts', 1]]);
+    assert.equal(result.coverage[0].status, 'failed');
+    assert.match(result.coverage[0].detail, /falhas=2; diagnosticos_sem_arquivo=1/);
+    assert.ok(result.coverage.some(row => row.status === 'failed' &&
+      row.detail.includes('arquivo=negative.ts; erro=diagnostico_invalido')));
+    assert.ok(result.coverage.some(row => row.status === 'failed' &&
+      row.detail.includes('arquivo=outside.ts; erro=diagnostico_invalido; detalhe=Linha fora')));
+    assert.ok(result.coverage.some(row => row.status === 'ok' && row.detail.includes('arquivo=clean.ts; achados=0')));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('consulta do registro termina em timeout ou limite de bytes com resposta sintética', async () => {
   let destroyed = false;
   const hanging = () => Object.assign(new EventEmitter(), {destroy() { destroyed = true; }});
@@ -653,13 +696,17 @@ test('padrões ambíguos requerem revisão e entrada ausente produz JSON', async
   const root = await mkdtemp(join(tmpdir(), 'dep-semantica-'));
   try {
     const src = join(root, 'src'), dst = join(root, 'dst'); await mkdir(src); await mkdir(dst);
-    const content = "const n = 10; new Buffer(n); url.parse('/rota'); transport.send(200, body);";
+    const content = "const n = 10;\r\n\tnew Buffer(\r\n\t\tn); url.parse('/rota'); transport.send(200, body);";
     await writeFile(join(src, 'app.js'), content); await writeFile(join(dst, 'app.js'), content);
     const files = [{rel: 'app.js', fullPath: join(src, 'app.js'), ext: '.js'}];
     const js = await runJscodeshiftCheck({sourceFiles: files, isoSrcDir: src, isoCodemodDir: dst, workRoot: root, jscodeshiftBin: join(moduleDir, 'node_modules/.bin/jscodeshift'), jscodeshiftVersion: '17.4.0', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')});
     assert.equal(await readFile(join(dst, 'app.js'), 'utf8'), content);
     assert.equal(js.findings.length, 2);
     assert.ok(js.findings.every(f => f.evidence.includes('Revisão necessária')));
+    assert.deepEqual(js.findings.map(f => [f.line, f.evidence]), [
+      [2, 'Revisão necessária: new Buffer(\r\n\t\tn)'],
+      [3, "Revisão necessária: url.parse('/rota')"],
+    ]);
     const ast = await runAstGrepCheck({sourceFiles: files, isoSrcDir: src, astGrepBin: join(moduleDir, 'node_modules/.bin/ast-grep'), astGrepVersion: '0.51.3', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
     assert.ok(ast.findings.every(f => !f.evidence.includes('Reescrita pronta')));
     const entrypoint = join(root, 'entrypoint.sh');
@@ -675,12 +722,13 @@ test('padrões ambíguos requerem revisão e entrada ausente produz JSON', async
 test('lock do workspace prevalece e o achado aponta para a entrada efetivamente resolvida', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-workspace-'));
   try {
-    await mkdir(join(root, 'packages/a'), {recursive: true});
-    await writeFile(join(root, 'package.json'), '{"workspaces":{"packages":["packages/*"]}}');
+    await mkdir(join(root, 'packages/a/plugins/b'), {recursive: true});
+    await writeFile(join(root, 'package.json'), '{"workspaces":{"packages":["packages/*","packages/a/plugins/b"]}}');
     await writeFile(join(root, 'packages/a/package.json'),
-      '{"dependencies":{"foo":"^2.0.0","outdated":"^1.0.0","broken":"^2.0.0","ghost":"^1.0.0"}}');
+      '{"workspaces":["plugins/*"],"dependencies":{"foo":"^2.0.0","outdated":"^1.0.0","broken":"^2.0.0","ghost":"^1.0.0"}}');
     await writeFile(join(root, 'packages/a/package-lock.json'),
-      '{"packages":{"node_modules/foo":{"version":"2.0.0"},"node_modules/broken":{"version":"2.0.0"}}}');
+      '{"packages":{"node_modules/foo":{"version":"2.0.0"},"node_modules/broken":{"version":"2.0.0"},"node_modules/nested":{"version":"3.0.0"}}}');
+    await writeFile(join(root, 'packages/a/plugins/b/package.json'), '{"dependencies":{"nested":"^1.0.0"}}');
 
     const lockText = [
       '{ "lockfileVersion": 2, "packages": {',
@@ -688,13 +736,14 @@ test('lock do workspace prevalece e o achado aponta para a entrada efetivamente 
       '  "packages/a/node_modules/foo": {"version":"1.0.0"},',
       '  "packages/a/node_modules/outdated": {"version":"1.0.0"},',
       '  "packages/a/node_modules/broken": 1,',
-      '  "node_modules/broken": {"version":"2.0.0"}',
+      '  "node_modules/broken": {"version":"2.0.0"},',
+      '  "packages/a/plugins/b/node_modules/nested": {"version":"1.0.0"}',
       '}, "dependencies": {"ghost": {"version":"1.0.0"}} }',
     ].join('\n');
     await writeFile(join(root, 'package-lock.json'), lockText);
     const found = await discoverRepoFiles(root);
     const result = await analyzeLockfileAndSbom({...found, mountedSbomPaths: [], ncuDetectedPackages: new Set(),
-      registry: {path: '', versions: {foo: '2.2.0', outdated: '2.0.0'}}});
+      registry: {path: '', versions: {foo: '2.2.0', outdated: '2.0.0', nested: '1.5.0'}}});
     const mismatch = result.findings.find(finding => finding.rule === 'LOCKFILE-VERSION-MISMATCH');
     assert.equal(mismatch?.file, 'package-lock.json');
     assert.equal(mismatch?.line, 3);
@@ -702,6 +751,9 @@ test('lock do workspace prevalece e o achado aponta para a entrada efetivamente 
     const outdated = result.findings.find(finding => finding.rule === 'LOCKFILE-OUTDATED-RESOLVED');
     assert.equal(outdated?.line, 4);
     assert.match(outdated?.evidence ?? '', /packages\/a\/node_modules\/outdated/);
+    assert.ok(result.findings.some(finding => finding.rule === 'LOCKFILE-OUTDATED-RESOLVED' &&
+      finding.file === 'package-lock.json' && finding.line === 7 &&
+      finding.evidence.includes('packages/a/plugins/b/node_modules/nested')));
     const drift = result.findings.filter(finding => finding.rule === 'LOCKFILE-DRIFT');
     assert.equal(drift.length, 1);
     assert.match(drift[0].evidence, /ghost/);
@@ -714,6 +766,8 @@ test('lock do workspace prevalece e o achado aponta para a entrada efetivamente 
     const missing = await analyzeLockfileAndSbom({...withoutRoot, mountedSbomPaths: [], registry: null, ncuDetectedPackages: new Set()});
     assert.ok(missing.findings.some(finding => finding.rule === 'LOCKFILE-MISSING' &&
       finding.file === 'packages/a/package.json' && finding.evidence.endsWith('diretório raiz.')));
+    assert.ok(missing.findings.some(finding => finding.rule === 'LOCKFILE-MISSING' &&
+      finding.file === 'packages/a/plugins/b/package.json' && finding.evidence.endsWith('diretório raiz.')));
 
     await writeFile(join(root, 'package-lock.json'), '{"packages":{"node_modules/foo":{"version":"2.0.0"}}}');
     await writeFile(join(root, 'npm-shrinkwrap.json'), lockText);
@@ -772,37 +826,187 @@ test('ncu rejeita resultados inválidos por manifesto e aceita o alias confirmad
   }
 });
 
+test('ncu comprova avanço semver por seção e preserva as análises de lock das propostas omitidas', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-ncu-direction-'));
+  try {
+    const manifest = {
+      dependencies: {
+        backward: '3.0.0', reducedFloor: '>=1.6.0 <2', union: '^3.0.0 || ^1.0.0',
+        renamed: 'npm:real@^1.0.0', gitRef: 'github:example/repo#semver:^1.0.0',
+        local: 'file:../local', tagged: 'stable', pin: '1.0.0', range: '^1.0.0',
+        same: '1.0.0+build.1', pre: '2.0.0-beta.1', shared: '^1.0.0',
+      },
+      devDependencies: {shared: '>=1.5.0'},
+    };
+    const releases = {
+      backward: '2.0.0', reducedFloor: '1.9.0', union: '2.0.0', real: '2.0.0',
+      renamed: '6.0.0', local: '9.0.0', pin: '1.0.1', range: '1.2.0',
+      same: '1.0.0+build.2', pre: '2.0.0', shared: '1.7.0',
+    };
+    const targets = {
+      backward: '2.0.0', reducedFloor: '>=1.2.0 <2', union: '^2.0.0',
+      renamed: 'npm:another@^6.0.0', pin: '1.0.1', range: '^1.2.0',
+      same: '1.0.0+build.2', pre: '2.0.0', shared: '^1.5.0',
+    };
+    const manifestText = JSON.stringify(manifest, null, 2);
+    await writeFile(join(root, 'package.json'), manifestText);
+    const versions = {
+      backward: '3.0.0', reducedFloor: '1.7.0', union: '1.0.0', renamed: '1.0.0',
+      gitRef: '1.0.0', local: '1.0.0', tagged: '1.0.0', pin: '1.0.0', range: '1.0.0',
+      same: '1.0.0+build.1', pre: '2.0.0-beta.1', shared: '1.6.0',
+    };
+    const packages = Object.fromEntries(Object.entries(versions).map(([pkg, version]) =>
+      [`node_modules/${pkg}`, {version}]));
+    const lockText = JSON.stringify({lockfileVersion: 3, packages}, null, 2);
+    await writeFile(join(root, 'package-lock.json'), lockText);
+    const registryPath = join(root, 'registry.json');
+    await writeFile(registryPath, JSON.stringify(releases));
+    const ncuBin = join(root, 'ncu-fixture');
+    await writeFile(ncuBin, [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'const file = process.argv[process.argv.indexOf("--packageFile") + 1];',
+      'const {dependencies} = JSON.parse(fs.readFileSync(file));',
+      'if (["gitRef","local","tagged"].some(name => Object.hasOwn(dependencies,name))) process.exit(4);',
+      `process.stdout.write(JSON.stringify(${JSON.stringify(targets)}));`,
+    ].join('\n'), {mode: 0o755});
+    const result = await runCollection({repoRoot: root, registryPath, ncuBin, onlineMode: false,
+      ncuVersion: 'sintetica', astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
+    const ncu = result.findings.filter(f => f.rule.startsWith('NCU-OUTDATED'));
+    assert.deepEqual(ncu.map(f => f.evidence), [
+      'dependencies: "pin": "1.0.0" -> "pin": "1.0.1"',
+      'dependencies: "range": "^1.0.0" -> "range": "^1.2.0"',
+      'dependencies: "pre": "2.0.0-beta.1" -> "pre": "2.0.0"',
+      'dependencies: "shared": "^1.0.0" -> "shared": "^1.5.0"',
+    ]);
+    assert.deepEqual(ncu.map(f => f.rule), ['NCU-OUTDATED-PATCH', 'NCU-OUTDATED-MINOR', 'NCU-OUTDATED-PATCH', 'NCU-OUTDATED-MINOR']);
+    const lock = result.findings.filter(f => f.rule === 'LOCKFILE-OUTDATED-RESOLVED');
+    assert.deepEqual(lock.map(f => /#node_modules\/([^:]+):/.exec(f.evidence)?.[1]), ['reducedFloor', 'union', 'renamed', 'shared']);
+    assert.ok(result.coverage.some(row => row.status === 'skipped' &&
+      row.detail.includes('pacote=backward; secao=dependencies; motivo=direcao_de_atualizacao_nao_comprovada')));
+    assert.ok(result.coverage.some(row => row.status === 'skipped' && row.detail.includes('pacote=renamed; motivo=identidade_alterada')));
+    assert.ok(result.coverage.some(row => row.detail.includes('pacotes=gitRef,local,tagged')));
+    assert.equal(await readFile(join(root, 'package.json'), 'utf8'), manifestText);
+    assert.equal(await readFile(join(root, 'package-lock.json'), 'utf8'), lockText);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('lock npm usa a identidade de aliases modernos e legados e preserva versões fora de semver', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-lock-alias-'));
+  try {
+    await mkdir(join(root, 'legacy'));
+    await writeFile(join(root, 'package.json'), JSON.stringify({dependencies: {
+      local: 'npm:real@^1.0.0', scoped: 'npm:@scope/real@^1.0.0',
+      wrong: 'npm:@scope/real@^1.0.0', opaque: '^1.0.0', mismatch: 'npm:real@^2.0.0',
+    }}));
+    await writeFile(join(root, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
+      'node_modules/local': {name: 'real', version: '1.0.0'},
+      'node_modules/scoped': {name: '@scope/real', version: '1.0.0'},
+      'node_modules/wrong': {name: 'other', version: '1.0.0'},
+      'node_modules/opaque': {version: 'release-1'},
+      'node_modules/mismatch': {name: 'real', version: '1.0.0'},
+    }}, null, 2));
+    await writeFile(join(root, 'legacy/package.json'), '{"dependencies":{"legacy":"npm:@scope/real@^1.0.0"}}');
+    await writeFile(join(root, 'legacy/package-lock.json'),
+      '{\n  "lockfileVersion": 1,\n  "dependencies": {\n    "legacy": {"version":"npm:@scope/real@1.0.0"}\n  }\n}');
+    const found = await discoverRepoFiles(root);
+    const result = await analyzeLockfileAndSbom({...found, mountedSbomPaths: [], ncuDetectedPackages: new Set(),
+      registry: {path: '', versions: {local: '5.0.0', real: '1.0.0', '@scope/real': '1.2.0', opaque: '5.0.0'}}});
+    assert.deepEqual(result.findings.map(f => [f.rule, f.file, f.line]), [
+      ['LOCKFILE-OUTDATED-RESOLVED', 'legacy/package-lock.json', 4],
+      ['LOCKFILE-OUTDATED-RESOLVED', 'package-lock.json', 8],
+      ['LOCKFILE-VERSION-MISMATCH', 'package-lock.json', 19],
+    ]);
+    assert.ok(result.findings.slice(0, 2).every(f => f.evidence.includes('registro="@scope/real"')));
+    assert.ok(result.coverage.some(row => row.status === 'skipped' && row.detail.includes('pacote=wrong;') &&
+      row.detail.includes('motivo=identidade_lockfile_divergente')));
+    assert.ok(result.coverage.some(row => row.status === 'skipped' && row.detail.includes('pacote=opaque;') &&
+      row.detail.includes('motivo=faixa_ou_versao_nao_semver')));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('registro padrão ausente, JSON inválido e fallback válido produzem resultados distintos', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-registry-fallback-'));
+  const configured = process.env.AC_DEPENDENCIAS_REGISTRY;
+  delete process.env.AC_DEPENDENCIAS_REGISTRY;
+  t.after(async () => {
+    if (configured !== undefined) process.env.AC_DEPENDENCIAS_REGISTRY = configured;
+    await rm(root, {recursive: true, force: true});
+  });
+  const [missing, broken, good] = ['missing', 'bad', 'good'].map(name => join(root, name));
+  await writeFile(broken, '{');
+  await writeFile(good, '{"foo":"2.0.0"}');
+  assert.equal(await resolveRegistrySnapshot(undefined, [missing]), null);
+  const registry = await resolveRegistrySnapshot(undefined, [missing, broken]);
+  assert.deepEqual(registry, {path: broken, versions: {}, error: 'registro_invalido'});
+  assert.deepEqual(await resolveRegistrySnapshot(undefined, [broken, good]),
+    {path: good, versions: {foo: '2.0.0'}});
+  assert.deepEqual(await resolveRegistrySnapshot(broken, [good]),
+    {path: broken, versions: {}, error: 'registro_invalido'});
+  const bom = join(root, 'sbom.cdx.json');
+  await writeFile(bom, JSON.stringify({bomFormat: 'CycloneDX', specVersion: '1.6', components: [
+    {type: 'library', name: 'foo', purl: 'pkg:npm/foo@1.0.0'},
+  ]}));
+  const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],
+    sbomFiles: [{rel: 'sbom.cdx.json', fullPath: bom}], registry, ncuDetectedPackages: new Set()});
+  assert.equal(result.coverage[0].status, 'failed');
+  assert.ok(result.coverage.some(row => row.detail === 'registro=offline; erro=registro_invalido'));
+});
+
 test('CycloneDX preserva componentes aninhados e distingue inventário vazio, entradas inválidas e metadados', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-cyclonedx-'));
   try {
     const report = (name: string, doc: unknown) => writeFile(join(root, name), JSON.stringify(doc));
-    await report('bom-empty', {bomFormat: 'CycloneDX'});
-    await report('bom-invalid', {bomFormat: 'CycloneDX', components: [
-      null, {}, 42,
-      {name: 'bad-children', components: {}},
-      {name: 'purl-error', purl: 'pkg:npm/%XX@1.0.0'},
-      {name: 'conflict', version: '2.0.0', purl: 'pkg:npm/conflict@1.0.0'},
-      {name: 'assembly', components: [{name: 'example', purl: 'pkg:npm/%40scope/example@1.0.0?arch=all'}]},
+    const header = {bomFormat: 'CycloneDX', specVersion: '1.6'};
+    await report('bom-empty', header);
+    await report('bom-missing-spec', {bomFormat: 'CycloneDX'});
+    await report('bom-invalid', {...header, components: [
+      null, {}, 42, {name: 'missing-type'}, {type: 'arbitrary', name: 'bad-type'},
+      {type: 'application', name: 'bad-children', components: {}},
+      {type: 'library', name: 'purl-error', purl: 'pkg:npm/%XX@1.0.0'},
+      {type: 'library', name: 'conflict', version: '2.0.0', purl: 'pkg:npm/conflict@1.0.0'},
+      {type: 'application', name: 'assembly', components: [{type: 'library', name: 'example', purl: 'pkg:npm/%40scope/example@1.0.0?arch=all'}]},
     ]});
-    await report('bom-unavailable', {bomFormat: 'CycloneDX', components: [
-      {name: 'invalid', purl: 'pkg:npm/invalid@1.0.0'},
-      {name: 'absent', purl: 'pkg:npm/absent@1.0.0'},
-      {name: 'other', purl: 'pkg:pypi/other@2', version: '2'},
+    await report('bom-unavailable', {...header, components: [
+      {type: 'library', name: 'invalid', purl: 'pkg:npm/invalid@1.0.0'},
+      {type: 'library', name: 'absent', purl: 'pkg:npm/absent@1.0.0'},
+      {type: 'library', name: 'other', purl: 'pkg:pypi/other@2', version: '2'},
+    ]});
+    await report('bom-metadata', {...header, metadata: {
+      component: {type: 'application', name: 'app', components: [
+        {type: 'library', name: 'foo', purl: 'pkg:npm/foo@1.0.0'},
+      ]},
+    }});
+    await report('bom-metadata-invalid', {...header, metadata: {component: null}});
+    await report('bom-opaque', {...header, components: [
+      {type: 'library', name: 'foo', version: 'build-19', purl: 'pkg:npm/foo@build-19'},
     ]});
     const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],
-      sbomFiles: ['bom-empty', 'bom-invalid', 'bom-unavailable'].map(rel => ({rel, fullPath: join(root, rel)})),
-      ncuDetectedPackages: new Set(), registry: {path: '', versions: {'@scope/example': '2.0.0', invalid: 'inválida'}}});
+      sbomFiles: ['bom-empty', 'bom-missing-spec', 'bom-invalid', 'bom-unavailable', 'bom-metadata', 'bom-metadata-invalid', 'bom-opaque']
+        .map(rel => ({rel, fullPath: join(root, rel)})),
+      ncuDetectedPackages: new Set(), registry: {path: '', versions: {'@scope/example': '2.0.0', foo: '2.0.0', invalid: 'inválida'}}});
     const empty = result.coverage.find(row => row.detail.startsWith('sbom=bom-empty;'));
     assert.equal(empty?.status, 'ok');
     assert.match(empty?.detail ?? '', /componentes=0/);
+    assert.ok(result.coverage.some(row => row.status === 'failed' && row.detail === 'sbom=bom-missing-spec; erro=formato_invalido'));
+    assert.ok(result.coverage.some(row => row.status === 'failed' && row.detail.includes('sbom=bom-metadata-invalid;')));
+    assert.ok(result.coverage.some(row => row.status === 'ok' &&
+      row.detail.includes('sbom=bom-metadata; componentes=2;') && row.detail.includes('achados=1')));
+    assert.ok(result.coverage.some(row => row.status === 'skipped' &&
+      row.detail.includes('sbom=bom-opaque;') && row.detail.includes('versao_componente_nao_comparavel=1')));
     const invalid = result.coverage.find(row => row.detail.startsWith('sbom=bom-invalid;'));
     assert.equal(invalid?.status, 'failed');
-    assert.match(invalid?.detail ?? '', /componente_invalido=3/);
+    assert.match(invalid?.detail ?? '', /componente_invalido=5/);
     assert.match(invalid?.detail ?? '', /componentes_aninhados_invalidos=1/);
     assert.match(invalid?.detail ?? '', /purl_npm_invalida=1/);
     assert.match(invalid?.detail ?? '', /versao_componente_invalida=1/);
-    assert.deepEqual(result.findings.map(f => f.file), ['bom-invalid']);
+    assert.deepEqual(result.findings.map(f => f.file), ['bom-invalid', 'bom-metadata']);
     assert.match(result.findings[0].evidence, /@scope\/example@1.0.0 -> 2.0.0/);
+    assert.match(result.findings[1].evidence, /foo@1.0.0 -> 2.0.0/);
     const unavailable = result.coverage.find(row => row.detail.startsWith('sbom=bom-unavailable;'));
     assert.equal(unavailable?.status, 'failed');
     assert.match(unavailable?.detail ?? '', /sem_metadados=2; metadados_invalidos=1/);
@@ -815,11 +1019,11 @@ test('limites de bytes preservam provas de outros SBOMs e distinguem artefatos d
   const root = await mkdtemp(join(tmpdir(), 'dep-sbom-bytes-'));
   try {
     const large = Buffer.alloc(19 * 1024 * 1024, ' ');
-    large.write('{"bomFormat":"CycloneDX"}');
+    large.write('{"bomFormat":"CycloneDX","specVersion":"1.6"}');
     for (const name of ['volume-a', 'volume-b', 'volume-c', 'volume-d']) {
       await writeFile(join(root, name), large);
     }
-    await writeFile(join(root, 'last'), '{"bomFormat":"CycloneDX","components":[{"name":"foo","purl":"pkg:npm/foo@1.0.0"}]}');
+    await writeFile(join(root, 'last'), '{"bomFormat":"CycloneDX","specVersion":"1.6","components":[{"type":"library","name":"foo","purl":"pkg:npm/foo@1.0.0"}]}');
     for (const name of ['oversized-sbom', 'package-lock.json']) {
       const file = join(root, name);
       await writeFile(file, '');
@@ -854,14 +1058,14 @@ test('limites de bytes preservam provas de outros SBOMs e distinguem artefatos d
 test('CycloneDX limita componentes agregados e conserva comparações anteriores ao limite', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-sbom-components-'));
   try {
-    const first = {name: 'foo', purl: 'pkg:npm/foo@1.0.0'};
-    const other = {name: 'non-npm', purl: 'pkg:pypi/non-npm@1.0.0'};
+    const first = {type: 'library', name: 'foo', purl: 'pkg:npm/foo@1.0.0'};
+    const other = {type: 'library', name: 'non-npm', purl: 'pkg:pypi/non-npm@1.0.0'};
     const files = ['first', 'later'].map(rel => ({rel, fullPath: join(root, rel)}));
     await writeFile(files[0].fullPath, JSON.stringify({
-      bomFormat: 'CycloneDX',
+      bomFormat: 'CycloneDX', specVersion: '1.6',
       components: [first, ...Array.from({length: 19_999}, () => other)],
     }));
-    await writeFile(files[1].fullPath, JSON.stringify({bomFormat: 'CycloneDX', components: [first]}));
+    await writeFile(files[1].fullPath, JSON.stringify({bomFormat: 'CycloneDX', specVersion: '1.6', components: [first]}));
     const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],
       sbomFiles: files, ncuDetectedPackages: new Set(), registry: {path: '', versions: {foo: '2.0.0'}}});
     assert.deepEqual(result.findings.map(f => f.file), ['first']);
@@ -880,7 +1084,9 @@ test('jscodeshift distingue eventos incompletos, alterações sem prova, relató
     const isoCodemodDir = join(root, 'dst');
     await mkdir(isoSrcDir);
     await mkdir(isoCodemodDir);
-    const sourceFiles = ['incomplete.js', 'unchanged.js', 'gone.js', 'exit.js', 'hang.js', 'good.js']
+    const sourceFiles = ['incomplete.js', 'unchanged.js', 'gone.js', 'empty.js', 'wrong-nonce.js',
+      'wrong-file.js', 'wrong-hash.js', 'review-line.js', 'review-text.js', 'review-changed.js',
+      'nochange-changed.js', 'exit.js', 'hang.js', 'good.js']
       .map(rel => ({rel, fullPath: join(isoSrcDir, rel), ext: '.js'}));
     for (const source of sourceFiles) {
       await writeFile(source.fullPath, 'original();\n');
@@ -890,14 +1096,27 @@ test('jscodeshift distingue eventos incompletos, alterações sem prova, relató
     await writeFile(jscodeshiftBin, [
       '#!/usr/bin/env node',
       'const fs = require("node:fs");',
+      codemodHandshakeFixture,
       'const file = process.argv.at(-1), report = process.env.AC_JSCODESHIFT_REPORT;',
-      'const event = {file,line:1,rule:"TEST-RULE",severity:"media",message:"synthetic",before:"original()",after:"different()",review:false};',
-      'if (file.endsWith("/incomplete.js")) fs.writeFileSync(report, JSON.stringify({file}));',
-      'if (file.endsWith("/unchanged.js")) fs.writeFileSync(report, JSON.stringify(event));',
-      'if (file.endsWith("/gone.js")) fs.unlinkSync(report);',
-      'if (file.endsWith("/exit.js")) process.exit(7);',
-      'if (file.endsWith("/hang.js")) { fs.writeFileSync(file + ".started", "yes"); setInterval(() => {}, 100); }',
-      'if (file.endsWith("/good.js")) fs.writeFileSync(report, JSON.stringify({...event,review:true}));',
+      'const source = fs.readFileSync(file, "utf8");',
+      'const patch = {file,line:1,column:0,rule:"TEST-RULE",severity:"media",message:"synthetic",before:"original()",after:"different()",review:false};',
+      'const review = {...patch,review:true};',
+      'switch (require("node:path").basename(file)) {',
+      '  case "incomplete.js": writeReport(file, source, [{file}]); break;',
+      '  case "unchanged.js": writeReport(file, source, [patch]); break;',
+      '  case "gone.js": break;',
+      '  case "empty.js": fs.writeFileSync(report, ""); break;',
+      '  case "wrong-nonce.js": writeReport(file, source, [], {nonce:"other-run"}); break;',
+      '  case "wrong-file.js": writeReport(file, source, [review], {file:file+".other"}); break;',
+      '  case "wrong-hash.js": writeReport(file, "other source"); break;',
+      '  case "review-line.js": writeReport(file, source, [{...review,line:999}]); break;',
+      '  case "review-text.js": writeReport(file, source, [{...review,before:"unrelated()"}]); break;',
+      '  case "review-changed.js": writeReport(file, source, [review]); fs.writeFileSync(file, "wrong();"); break;',
+      '  case "nochange-changed.js": writeReport(file, source); fs.writeFileSync(file, "wrong();"); break;',
+      '  case "exit.js": process.exit(7);',
+      '  case "hang.js": fs.writeFileSync(file + ".started", "yes"); setInterval(() => {}, 100); break;',
+      '  case "good.js": writeReport(file, source, [review]); break;',
+      '}',
     ].join('\n'));
     await chmod(jscodeshiftBin, 0o755);
     const options = {sourceFiles, isoSrcDir, isoCodemodDir, workRoot: root, jscodeshiftBin,
@@ -905,7 +1124,9 @@ test('jscodeshift distingue eventos incompletos, alterações sem prova, relató
     const result = await runJscodeshiftCheck({...options, fileTimeoutMs: 1000});
     const details = new Map(result.coverage.slice(1).map(row => [row.detail.split(';')[0], row]));
     for (const [file, reason] of [['incomplete.js', 'relatorio_invalido'], ['unchanged.js', 'relatorio_invalido'],
-      ['gone.js', 'relatorio_ilegivel'], ['exit.js', 'execucao; codigo=7'], ['hang.js', 'timeout; timeout_ms=1000; prazo=arquivo']]) {
+      ['gone.js', 'relatorio_ilegivel'], ['exit.js', 'execucao; codigo=7'], ['hang.js', 'timeout; timeout_ms=1000; prazo=arquivo'],
+      ...['empty.js', 'wrong-nonce.js', 'wrong-file.js', 'wrong-hash.js', 'review-line.js', 'review-text.js', 'review-changed.js', 'nochange-changed.js']
+        .map(file => [file, 'relatorio_invalido'])]) {
       const row = details.get(`arquivo=${file}`);
       assert.equal(row?.status, 'failed', file);
       assert.ok(row?.detail.includes(`erro=${reason}`), row?.detail);
@@ -922,6 +1143,89 @@ test('jscodeshift distingue eventos incompletos, alterações sem prova, relató
   }
 });
 
+test('jscodeshift comprova duas substituições na mesma linha e controle vazio com o binário fixado', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-codemod-same-line-'));
+  try {
+    const isoSrcDir = join(root, 'src');
+    const isoCodemodDir = join(root, 'dst');
+    await mkdir(isoSrcDir);
+    await mkdir(isoCodemodDir);
+    const sourceFiles = Object.entries({'patch.js': 'old(); old();\n', 'clean.js': 'clean();\n'})
+      .map(([rel, content]) => ({rel, fullPath: join(isoSrcDir, rel), ext: '.js', content}));
+    for (const {rel, fullPath, content} of sourceFiles) {
+      await writeFile(fullPath, content);
+      await copyFile(fullPath, join(isoCodemodDir, rel));
+    }
+    const transformPath = join(root, 'transform.cjs');
+    await writeFile(transformPath, [
+      'const fs = require("node:fs");',
+      codemodHandshakeFixture,
+      'module.exports = ({path: file,source}, {jscodeshift: j}) => {',
+      '  const nodes = j(source).find(j.CallExpression, {callee:{name:"old"}}).nodes();',
+      '  const events = nodes.map((node, index) => ({file,line:node.loc.start.line,column:node.loc.start.column,',
+      '    rule:"TEST-REWRITE",severity:"baixa",message:"synthetic",before:"old()",after:`fresh${index}()`,review:false}));',
+      '  writeReport(file, source, events.toReversed());',
+      '  return source.replaceAll("old()", () => events.shift().after);',
+      '};',
+    ].join('\n'));
+    const result = await runJscodeshiftCheck({sourceFiles, isoSrcDir, isoCodemodDir, workRoot: root,
+      jscodeshiftBin: join(moduleDir, 'node_modules/.bin/jscodeshift'), jscodeshiftVersion: '17.4.0', transformPath});
+    assert.deepEqual(result.findings.map(f => [f.file, f.line, f.evidence]), [
+      ['patch.js', 1, 'Patch pronto:\n- old()\n+ fresh1()'],
+      ['patch.js', 1, 'Patch pronto:\n- old()\n+ fresh0()'],
+    ]);
+    assert.equal(await readFile(join(isoCodemodDir, 'patch.js'), 'utf8'), 'fresh0(); fresh1();\n');
+    assert.equal(await readFile(join(isoSrcDir, 'patch.js'), 'utf8'), 'old(); old();\n');
+    assert.equal(await readFile(join(isoCodemodDir, 'clean.js'), 'utf8'), 'clean();\n');
+    assert.ok(result.coverage.some(row => row.status === 'ok' && row.detail === 'arquivo=clean.js; correspondencias=0'));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('jscodeshift aplica o prazo total à validação e limpeza do último arquivo', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-codemod-deadline-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const rel = 'app.js';
+  const fullPath = join(root, rel);
+  const marker = join(root, 'fixture-returned');
+  await writeFile(fullPath, 'original();\n');
+  const jscodeshiftBin = join(root, 'codemod-fixture');
+  await writeFile(jscodeshiftBin, [
+    '#!/usr/bin/env node',
+    'const fs = require("node:fs");',
+    codemodHandshakeFixture,
+    'const file = process.argv.at(-1);',
+    'const report = writeReport(file, fs.readFileSync(file, "utf8"), [',
+    '  {file,line:1,column:0,rule:"TEST-REVIEW",severity:"baixa",message:"synthetic",before:"original()",review:true},',
+    ']);',
+    'fs.writeFileSync(file.replace(/app\.js$/, "fixture-returned"), report);',
+  ].join('\n'), {mode: 0o755});
+  const options = {sourceFiles: [{rel, fullPath, ext: '.js'}], isoSrcDir: root, isoCodemodDir: root,
+    workRoot: root, jscodeshiftBin, jscodeshiftVersion: 'sintetica',
+    transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs'), totalTimeoutMs: 1000};
+  for (const phase of ['relatorio_invalido', 'limpeza_relatorio']) {
+    let checksAfterExit = 0;
+    const clock = t.mock.method(performance, 'now', () => {
+      if (!existsSync(marker)) return 0;
+      const report = readFileSync(marker, 'utf8');
+      checksAfterExit += 1;
+      const expired = phase === 'relatorio_invalido' ? checksAfterExit >= 4 : !existsSync(report);
+      return expired ? 1100 : 0;
+    });
+    try {
+      const result = await runJscodeshiftCheck(options);
+      assert.ok(result.coverage.some(row => row.status === 'failed' &&
+        row.detail.includes(`erro=timeout; timeout_ms=1000; prazo=total; fase=${phase}`)));
+      assert.equal(result.findings.length, 0);
+      assert.ok(!existsSync(readFileSync(marker, 'utf8')));
+    } finally {
+      clock.mock.restore();
+      await rm(marker, {force: true});
+    }
+  }
+});
+
 test('jscodeshift limita achados e bytes agregados mesmo com relatórios individuais dentro do limite', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-codemod-limits-'));
   try {
@@ -930,19 +1234,24 @@ test('jscodeshift limita achados e bytes agregados mesmo com relatórios individ
     const makeReport = [
       '#!/usr/bin/env node',
       'const fs = require("node:fs");',
-      'const event = {file:process.argv.at(-1),line:1,rule:"TEST-RULE",severity:"media",message:"synthetic",before:BEFORE,review:true};',
-      'fs.writeFileSync(process.env.AC_JSCODESHIFT_REPORT, (JSON.stringify(event)+"\\n").repeat(REPEAT));',
+      codemodHandshakeFixture,
+      'const file = process.argv.at(-1);',
+      'const source = fs.readFileSync(file, "utf8");',
+      'const event = {file,column:0,rule:"TEST-RULE",severity:"media",message:"synthetic",before:BEFORE,review:true};',
+      'writeReport(file, source, Array.from({length:REPEAT}, (_, i) => ({...event,line:i+1})));',
     ].join('\n');
     const options = {sourceFiles, isoSrcDir: root, isoCodemodDir: root, workRoot: root, jscodeshiftBin,
       jscodeshiftVersion: 'sintetica', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')};
 
+    for (const file of sourceFiles) await writeFile(file.fullPath, 'short();\n'.repeat(3000));
     await writeFile(jscodeshiftBin, makeReport.replace('BEFORE', '"short"').replace('REPEAT', '3000'), {mode: 0o755});
     const count = await runJscodeshiftCheck(options);
     assert.equal(count.findings.length, 5000);
     assert.equal(count.findings.filter(f => f.file === 'file-1.js').length, 2000);
     assert.ok(count.coverage.some(row => row.status === 'skipped' && row.detail.includes('arquivo=file-2.js; motivo=limite_achados_total')));
 
-    await writeFile(jscodeshiftBin, makeReport.replace('BEFORE', '"x".repeat(2_000_000)').replace('REPEAT', '1'));
+    for (const file of sourceFiles) await writeFile(file.fullPath, 'x'.repeat(2_000_000));
+    await writeFile(jscodeshiftBin, makeReport.replace('BEFORE', 'source').replace('REPEAT', '1'));
     const bytes = await runJscodeshiftCheck(options);
     assert.equal(bytes.findings.length, 8);
     assert.ok(bytes.coverage.some(row => row.status === 'skipped' && row.detail.includes('arquivo=file-8.js; motivo=limite_bytes_total')));

@@ -48,6 +48,12 @@ export interface DiscoveredRepoFiles {
   readErrors: number;
 }
 
+export interface RegistrySnapshot {
+  path: string;
+  versions: Record<string, unknown>;
+  error?: string;
+}
+
 export function toRepoRelPath(rawPath: string, fallback?: string): string;
 export function readSafeRegularFile(filePath: string, maxBytes?: number): Promise<string | null>;
 export function discoverRepoFiles(repoRoot: string): Promise<DiscoveredRepoFiles>;
@@ -60,11 +66,12 @@ export function classifySemverRisk(
 export function satisfiesRange(versionStr: string, rangeSpec: string): boolean;
 export function parseAstGrepJson(rawStdout: string, srcRootDir: string): ModuleFinding[];
 export function verifyToolsAgainstLock(toolsRoot?: string): Promise<Record<string, string>>;
+export function resolveRegistrySnapshot(customPath?: string, defaultPaths?: string[]): Promise<RegistrySnapshot | null>;
 export function analyzeLockfileAndSbom(input: {
   manifests: DiscoveredManifest[];
   lockfiles: Map<string, string>;
   sbomFiles: DiscoveredManifest[];
-  registry: {path: string; versions: Record<string, unknown>} | null;
+  registry: RegistrySnapshot | null;
   ncuDetectedPackages: Set<string>;
   mountedSbomPaths?: string[];
 }): Promise<ModuleCollectorOutput>;

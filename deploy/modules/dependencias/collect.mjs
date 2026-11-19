@@ -1,5 +1,5 @@
 import {execFile as execFileCb} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {constants as fsConstants} from 'node:fs';
 import {
   copyFile,
@@ -62,9 +62,23 @@ const SBOM_CANDIDATE_FILES = [
   '/input/syft.cdx.json',
   '/input/sbom.cdx.json',
 ];
+const DEFAULT_REGISTRY_PATHS = [
+  '/databases/dependencias/registry.json',
+  join(MODULE_DIR, 'offline-registry.json'),
+  '/opt/dependencias-tools/offline-registry.json',
+];
 
 const VALID_STATUS = new Set(['ok', 'failed', 'skipped']);
 const VALID_SEVERITY = new Set(['alta', 'media', 'baixa', 'informativa']);
+const NPM_NAME = /^(?:@[\w.~-]+\/)?[\w.~-]+$/;
+const NPM_ALIAS = /^npm:((?:@[\w.~-]+\/)?[\w.~-]+)@(.+)$/;
+// First CycloneDX JSON version that permits each component type.
+const CYCLONEDX_COMPONENT_TYPE_VERSION = new Map([
+  ['application', 2], ['framework', 2], ['library', 2], ['container', 2],
+  ['operating-system', 2], ['device', 2], ['firmware', 2], ['file', 2],
+  ['platform', 5], ['device-driver', 5], ['machine-learning-model', 5], ['data', 5],
+  ['cryptographic-asset', 6],
+]);
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -377,18 +391,27 @@ export function compareSemver(a, b) {
   return 0;
 }
 
+function semverIntervals(spec) {
+  if (!nonemptyString(spec) || semver.validRange(spec) === null) return [];
+  const intervals = [];
+  for (const comparators of new semver.Range(spec).set) {
+    const range = comparators.map(comparator => comparator.value).join(' ');
+    const minimum = semver.minVersion(range);
+    if (!minimum) continue;
+    const hasFloor = comparators.some(c => c.value && ['', '>', '>='].includes(c.operator));
+    intervals.push({range, minimum, hasFloor});
+  }
+  return intervals;
+}
+
+function minimumOfIntervals(intervals) {
+  return intervals.reduce((min, interval) => !min || semver.lt(interval.minimum, min) ? interval.minimum : min, null);
+}
+
 /** Extracts minimal concrete semver from a range specifier like ^4.17.1 or ~1.2. */
 export function minVersionFromSpec(spec) {
-  if (typeof spec !== 'string') return null;
-  const firstClause = spec.split('||')[0].trim();
-  const match = /(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?/.exec(firstClause);
-  if (!match) return null;
-  return {
-    major: Number(match[1]),
-    minor: match[2] !== undefined ? Number(match[2]) : 0,
-    patch: match[3] !== undefined ? Number(match[3]) : 0,
-    pre: match[4] ? match[4].split('.') : [],
-  };
+  const min = minimumOfIntervals(semverIntervals(spec));
+  return min && {major: min.major, minor: min.minor, patch: min.patch, pre: min.prerelease};
 }
 
 /** Checks if concrete version satisfies a standard npm comparator/range (^, ~, >=, <=, >, <, =, ||). */
@@ -422,33 +445,39 @@ export function classifySemverRisk(currentSpec, targetSpec) {
 }
 
 /** Loads offline/mounted JSON registry snapshot safely. */
-async function resolveRegistrySnapshot(customPath) {
+export async function resolveRegistrySnapshot(customPath, defaultPaths = DEFAULT_REGISTRY_PATHS) {
+  const configuredPath = process.env.AC_DEPENDENCIAS_REGISTRY;
   const candidates = [
     customPath,
-    process.env.AC_DEPENDENCIAS_REGISTRY,
-    '/databases/dependencias/registry.json',
-    join(MODULE_DIR, 'offline-registry.json'),
-    '/opt/dependencias-tools/offline-registry.json',
+    configuredPath,
+    ...defaultPaths,
   ].filter(Boolean);
 
+  let fallbackError = null;
   for (const candidate of candidates) {
-    if (String(candidate).includes('..') || String(candidate).includes('\0')) continue;
-    const content = await readSafeRegularFile(candidate, MAX_REGISTRY_BYTES);
-    if (!content) { if (candidate === customPath || candidate === process.env.AC_DEPENDENCIAS_REGISTRY) return {path: candidate, versions: {}, error: 'registro_ilegivel_ou_acima_do_limite'}; continue; }
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return {path: candidate, versions: parsed};
-      }
-    } catch { /* reported below for explicit input */ }
-    if (candidate === customPath || candidate === process.env.AC_DEPENDENCIAS_REGISTRY) return {path: candidate, versions: {}, error: 'registro_invalido'};
+    const explicit = candidate === customPath || candidate === configuredPath;
+    const result = candidate.includes('..') || candidate.includes('\0')
+      ? {kind: 'unreadable'}
+      : await readArtifact(candidate, MAX_REGISTRY_BYTES);
+    if (result.kind === 'missing' && !explicit) continue;
+    if (result.kind === 'ok') {
+      try {
+        const parsed = JSON.parse(result.content);
+        if (isRecord(parsed)) return {path: candidate, versions: parsed};
+      } catch { /* Record invalid JSON below. */ }
+    }
+    const failure = {path: candidate, versions: {}, error: result.kind === 'ok'
+      ? 'registro_invalido' : 'registro_ilegivel_ou_acima_do_limite'};
+    if (explicit) return failure;
+    fallbackError ??= failure;
   }
-  return null;
+  return fallbackError;
 }
 
 function ncuSpecifier(spec, onlineMode) {
-  const alias = /^npm:((?:@[^/]+\/)?[^@/]+)@(.+)$/.exec(spec);
-  const hash = onlineMode && !alias && spec.indexOf('#');
+  const alias = NPM_ALIAS.exec(spec);
+  const hash = onlineMode && !alias && /^(?:git(?:\+[^:]+)?|github|gitlab|bitbucket|https?):|^[\w.-]+\/[\w.-]+#/.test(spec)
+    ? spec.indexOf('#') : -1;
   let range = alias ? alias[2] : spec;
   let source = alias ? `npm:${alias[1]}` : '';
   if (hash > 0) {
@@ -459,9 +488,19 @@ function ncuSpecifier(spec, onlineMode) {
       return null;
     }
   }
-  return nonemptyString(range) && semver.validRange(range) !== null
-    ? {range, source, registryName: alias?.[1]}
-    : null;
+  const intervals = semverIntervals(range);
+  if (!intervals.length) return null;
+  return {range, source, registryName: alias?.[1], intervals, minimum: minimumOfIntervals(intervals)};
+}
+
+function isForwardUpdate(current, target) {
+  // A disjunction can already offer a newer release than its lowest branch.
+  return current.intervals.every(({range, minimum, hasFloor}) =>
+    hasFloor ? semver.gt(target.minimum, minimum) : semver.gtr(target.minimum, range));
+}
+
+function dependencyKey(manifest, section, pkg) {
+  return JSON.stringify([manifest, section, pkg]);
 }
 
 /** Executes npm-check-updates safely on isolated copies of package.json files. */
@@ -508,6 +547,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
   let totalMatched = 0;
   let totalMissing = 0;
   let totalUnsupported = 0;
+  let totalOmitted = 0;
   let totalOutdated = 0;
   let totalOnlineChecked = 0;
   let toolFailed = Boolean(registry?.error);
@@ -563,6 +603,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     };
     const depLocations = new Map();
     const fileMissingSet = new Set();
+    const fileUnsupportedPackages = new Set();
     let fileDepCount = 0;
     let fileRegistryMatches = 0;
     let fileMissingCount = 0;
@@ -590,9 +631,10 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
           });
         }
         const current = ncuSpecifier(spec, onlineMode);
-        if (!onlineMode && !current) {
+        if (!current || !NPM_NAME.test(pkg)) {
           fileUnsupported += 1;
           totalUnsupported += 1;
+          fileUnsupportedPackages.add(pkg);
           continue;
         }
         sanitized[sec][pkg] = spec;
@@ -668,16 +710,27 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     }
 
     const updates = [];
+    const omissions = [];
     try {
       if (!ncuStdout.trim()) throw new Error('saída vazia');
       const upgraded = JSON.parse(ncuStdout);
       if (!isRecord(upgraded)) throw new Error('raiz inválida');
       for (const [pkg, targetSpec] of Object.entries(upgraded)) {
         const target = typeof targetSpec === 'string' ? ncuSpecifier(targetSpec, onlineMode) : null;
-        const entries = target && depLocations.get(pkg)?.filter(entry => entry.current?.source === target.source &&
-          entry.spec !== targetSpec &&
-          (onlineMode || semver.satisfies(entry.latest, target.range, {includePrerelease: true})));
-        if (!entries?.length) throw new Error(`atualização inválida para ${pkg}`);
+        const declared = depLocations.get(pkg);
+        if (!target || !declared) throw new Error(`atualização inválida para ${pkg}`);
+        const matching = declared.filter(entry => entry.current.source === target.source);
+        if (!matching.length) {
+          omissions.push(`pacote=${pkg}; motivo=identidade_alterada`);
+          continue;
+        }
+        const confirmed = matching.filter(entry => onlineMode || satisfiesRange(entry.latest, target.range));
+        if (!confirmed.length) throw new Error(`atualização inválida para ${pkg}`);
+        const entries = [];
+        for (const entry of confirmed) {
+          if (isForwardUpdate(entry.current, target)) entries.push(entry);
+          else omissions.push(`pacote=${pkg}; secao=${entry.section}; motivo=direcao_de_atualizacao_nao_comprovada`);
+        }
         updates.push({pkg, entries, targetSpec, targetRange: target.range});
       }
     } catch (err) {
@@ -693,7 +746,8 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     }
 
     totalMatched += fileRegistryMatches;
-    if (onlineMode) totalOnlineChecked += fileDepCount;
+    if (onlineMode) totalOnlineChecked += fileDepCount - fileUnsupported;
+    totalOmitted += omissions.length;
     let fileOutdated = 0;
     for (const {pkg, entries, targetSpec, targetRange} of updates) {
       for (const entry of entries) {
@@ -701,7 +755,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
         const line = findLineInPackageJson(raw, pkg, entry.section);
         fileOutdated += 1;
         totalOutdated += 1;
-        ncuDetectedPackages.add(`${manifest.rel}:${pkg}`);
+        ncuDetectedPackages.add(dependencyKey(manifest.rel, entry.section, pkg));
         findings.push({
           tool: 'npm-check-updates',
           rule: risk.rule,
@@ -715,8 +769,14 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     }
 
     if (fileUnsupported > 0) {
+      const names = [...fileUnsupportedPackages].sort();
+      const preview = names.slice(0, 50).join(',') + (names.length > 50 ? `,+${names.length - 50}` : '');
       coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'skipped',
-        detail: `arquivo=${manifest.rel}; faixas_nao_verificadas=${fileUnsupported}; motivo=faixa_nao_semver_offline; prova_parcial=true`});
+        detail: `arquivo=${manifest.rel}; faixas_nao_verificadas=${fileUnsupported}; motivo=${onlineMode ? 'faixa_ou_identidade_nao_comparavel' : 'faixa_nao_semver_offline'}; pacotes=${preview}; prova_parcial=true`});
+    }
+    for (const omission of omissions) {
+      coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'skipped',
+        detail: `arquivo=${manifest.rel}; ${omission}; prova_parcial=true`});
     }
     if (!onlineMode && fileDepCount > 0 && fileRegistryMatches === 0) {
       coverage.push({
@@ -729,8 +789,8 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
       coverage.push({
         tool: 'npm-check-updates',
         version: ncuVersion,
-        status: 'ok',
-        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=${onlineMode ? fileDepCount : fileRegistryMatches}; sem_metadados=${onlineMode ? 0 : fileMissingCount}; desatualizadas=${fileOutdated}`,
+        status: omissions.length ? 'skipped' : 'ok',
+        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=${onlineMode ? fileDepCount - fileUnsupported : fileRegistryMatches}; sem_metadados=${onlineMode ? 0 : fileMissingCount}; desatualizadas=${fileOutdated}; atualizacoes_omitidas=${omissions.length}`,
       });
     }
 
@@ -751,13 +811,15 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
   }
 
   let summaryStatus = 'ok';
-  let summaryDetail = `manifestos=${manifests.length}; dependencias=${totalDeps}; verificadas_registro=${onlineMode ? totalOnlineChecked : totalMatched}; sem_metadados=${onlineMode ? 0 : totalMissing}; desatualizadas=${totalOutdated}; modo=${onlineMode ? 'online' : 'offline-json'}`;
+  let summaryDetail = `manifestos=${manifests.length}; dependencias=${totalDeps}; verificadas_registro=${onlineMode ? totalOnlineChecked : totalMatched}; sem_metadados=${onlineMode ? 0 : totalMissing}; desatualizadas=${totalOutdated}; atualizacoes_omitidas=${totalOmitted}; modo=${onlineMode ? 'online' : 'offline-json'}`;
   if (toolFailed) {
     summaryStatus = 'failed';
     summaryDetail = failMessage;
   } else if (!onlineMode && totalDeps > 0 && totalMatched === 0) {
     summaryStatus = 'skipped';
     summaryDetail = `manifestos=${manifests.length}; dependencias=${totalDeps}; verificadas_registro=0; sem_metadados=${totalMissing}; faixas_nao_verificadas=${totalUnsupported}; desatualizadas=${totalOutdated}; modo=offline-json; motivo=${totalMissing ? 'nenhuma_dependencia_no_registro_offline' : 'faixas_nao_semver_offline'}`;
+  } else if (totalOmitted) {
+    summaryStatus = 'skipped';
   }
 
   coverage.unshift({
@@ -784,45 +846,42 @@ function mapAstGrepSeverity(sev) {
   }
 }
 
+function astGrepDiagnostics(rawStdout) {
+  const parsed = JSON.parse(rawStdout);
+  if (!Array.isArray(parsed)) throw new Error('Saída ast-grep não é um array JSON.');
+  return parsed;
+}
+
+function astGrepFile(item, srcRootDir) {
+  if (!nonemptyString(item?.file) || item.file.includes('\0')) return null;
+  const file = relative(srcRootDir, resolve(srcRootDir, item.file)).split(sep).join('/');
+  return file && !isAbsolute(file) && !file.split('/').includes('..') ? file : null;
+}
+
+function astGrepFinding(item, file) {
+  const zeroLine = item?.range?.start?.line;
+  if (!nonemptyString(item?.ruleId) || !Number.isSafeInteger(zeroLine) ||
+      zeroLine < 0 || zeroLine >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('Diagnóstico ast-grep inválido.');
+  }
+  const rule = `ASTGREP-${item.ruleId.replace(/-(ts|tsx|js|jsx)$/i, '').toUpperCase()}`;
+  const message = nonemptyString(item.message)
+    ? item.message.trim()
+    : `Padrão de API incompatível detectado pela regra ${rule}.`;
+  const before = typeof item.text === 'string' ? item.text.trim() : '';
+  const evidence = `Revisão necessária: ${before || String(item.lines || '').trim()}`;
+  return {tool: 'ast-grep', rule, file, line: zeroLine + 1,
+    severity: mapAstGrepSeverity(item.severity), message, evidence: evidence.slice(0, 600)};
+}
+
 /** Parses ast-grep --json=compact output into normalized findings. */
 export function parseAstGrepJson(rawStdout, srcRootDir) {
-  const trimmed = rawStdout.trim();
-  if (!trimmed) return [];
-  const parsed = JSON.parse(trimmed);
-  if (!Array.isArray(parsed)) throw new Error('Saída ast-grep não é um array JSON.');
-
-  const findings = [];
-  for (const item of parsed) {
-    const zeroLine = item?.range?.start?.line;
-    if (!isRecord(item) || !nonemptyString(item.file) || item.file.includes('\0') ||
-        !nonemptyString(item.ruleId) || !Number.isSafeInteger(zeroLine) || zeroLine < 0) {
-      throw new Error('Diagnóstico ast-grep inválido.');
-    }
-    const file = relative(srcRootDir, resolve(srcRootDir, item.file)).split(sep).join('/');
-    if (!file || isAbsolute(file) || file.split('/').includes('..')) {
-      throw new Error('Diagnóstico ast-grep fora da cópia de análise.');
-    }
-    const ruleId = item.ruleId
-      .replace(/-(ts|tsx|js|jsx)$/i, '')
-      .toUpperCase();
-    const rule = `ASTGREP-${ruleId}`;
-    const severity = mapAstGrepSeverity(item.severity);
-    const message = typeof item.message === 'string' && item.message.trim()
-      ? item.message.trim()
-      : `Padrão de API incompatível detectado pela regra ${rule}.`;
-    const before = typeof item.text === 'string' ? item.text.trim() : '';
-    const evidence = `Revisão necessária: ${before || String(item.lines || '').trim()}`;
-    findings.push({
-      tool: 'ast-grep',
-      rule,
-      file,
-      line: zeroLine + 1,
-      severity,
-      message,
-      evidence: evidence.slice(0, 600),
-    });
-  }
-  return findings;
+  if (!rawStdout.trim()) return [];
+  return astGrepDiagnostics(rawStdout).map(item => {
+    const file = astGrepFile(item, srcRootDir);
+    if (!file) throw new Error('Diagnóstico ast-grep fora da cópia de análise.');
+    return astGrepFinding(item, file);
+  });
 }
 
 function sourceParser(ext) {
@@ -834,7 +893,7 @@ function sourceParser(ext) {
 /** Runs ast-grep scan on isolated copy of JS/TS files. */
 export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGrepVersion, sgConfigPath}) {
   const coverage = [];
-  let findings = [];
+  const findings = [];
 
   if (sourceFiles.length === 0) {
     coverage.push({
@@ -894,12 +953,11 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
     return {coverage, findings: []};
   }
 
-  const expected = new Set(sourceFiles.map(src => src.rel));
+  let diagnostics;
   try {
     if (!stdout.trim()) throw new Error('Saída JSON vazia do ast-grep');
-    findings = parseAstGrepJson(stdout, isoSrcDir);
-    if (exitCode === 1 && findings.length === 0) throw new Error('ast-grep retornou erro sem diagnósticos');
-    if (findings.some(f => !expected.has(f.file))) throw new Error('Diagnóstico ast-grep sem arquivo correspondente.');
+    diagnostics = astGrepDiagnostics(stdout);
+    if (exitCode === 1 && diagnostics.length === 0) throw new Error('ast-grep retornou erro sem diagnósticos');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Saída JSON inválida do ast-grep';
     coverage.push({
@@ -910,28 +968,28 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
     });
     return {coverage, findings: []};
   }
+  const diagnosticsByFile = new Map(sourceFiles.map(src => [src.rel, []]));
+  let unattributed = 0;
+  for (const diagnostic of diagnostics) {
+    const list = diagnosticsByFile.get(astGrepFile(diagnostic, isoSrcDir));
+    if (list) list.push(diagnostic);
+    else unattributed += 1;
+  }
 
   const scanned = new Set();
   for (const entry of stderr.split(/\r?\n/)) {
     const match = /^sg: entity\|file\|(.+): language=[^,]+,appliedRuleCount=(\d+)$/.exec(entry);
     if (match && Number(match[2]) > 0) scanned.add(match[1]);
   }
-  const findingsByFile = new Map();
-  for (const f of findings) {
-    if (!findingsByFile.has(f.file)) findingsByFile.set(f.file, []);
-    findingsByFile.get(f.file).push(f);
-  }
-
   const getParser = require('jscodeshift/src/getParser');
-  const accepted = [];
   let failures = 0;
   let skipped = 0;
   for (const src of sourceFiles) {
     const target = resolve(isoSrcDir, src.rel);
     const row = {tool: 'ast-grep', version: astGrepVersion};
-    const fileFindings = findingsByFile.get(src.rel) ?? [];
+    const fileDiagnostics = diagnosticsByFile.get(src.rel);
     if (!scanned.has(target)) {
-      if (fileFindings.length) {
+      if (fileDiagnostics.length) {
         failures += 1;
         coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=achado_sem_prova_de_varredura`});
       } else {
@@ -950,50 +1008,66 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
       coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=${reason}`});
       continue;
     }
-    for (const finding of fileFindings) accepted.push(finding);
-    coverage.push({...row, status: 'ok', detail: `arquivo=${src.rel}; achados=${fileFindings.length}`});
+    try {
+      const lines = content ? content.split('\n').length - Number(content.endsWith('\n')) : 0;
+      const fileFindings = fileDiagnostics.map(item => astGrepFinding(item, src.rel));
+      if (fileFindings.some(finding => finding.line > lines)) throw new Error('Linha fora da cópia analisada.');
+      for (const finding of fileFindings) findings.push(finding);
+      coverage.push({...row, status: 'ok', detail: `arquivo=${src.rel}; achados=${fileFindings.length}`});
+    } catch (err) {
+      failures += 1;
+      coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=diagnostico_invalido; detalhe=${err.message}`});
+    }
   }
 
   coverage.unshift({tool: 'ast-grep', version: astGrepVersion,
-    status: failures ? 'failed' : skipped ? 'skipped' : 'ok',
-    detail: `arquivos=${sourceFiles.length}; falhas=${failures}; prova_parcial=${skipped}; achados=${accepted.length}`});
-  return {coverage, findings: accepted};
+    status: failures || unattributed ? 'failed' : skipped ? 'skipped' : 'ok',
+    detail: `arquivos=${sourceFiles.length}; falhas=${failures}; diagnosticos_sem_arquivo=${unattributed}; prova_parcial=${skipped}; achados=${findings.length}`});
+  return {coverage, findings};
 }
 
-function parseCodemodReport(raw, target) {
-  return raw.split(/\r?\n/).filter(Boolean).map(line => {
+function parseCodemodReport(raw, target, nonce, original) {
+  const [header, ...lines] = raw.split(/\r?\n/).filter(Boolean);
+  const handshake = header && JSON.parse(header);
+  const digest = createHash('sha256').update(original).digest('hex');
+  if (!isRecord(handshake) || handshake.kind !== 'source' || handshake.file !== target ||
+      handshake.nonce !== nonce || handshake.sha256 !== digest) {
+    throw new Error('Confirmação do codemod ausente ou inválida.');
+  }
+  return lines.map(line => {
     const event = JSON.parse(line);
     if (!isRecord(event) || event.file !== target ||
         !Number.isSafeInteger(event.line) || event.line < 1 ||
+        !Number.isSafeInteger(event.column) || event.column < 0 ||
         !nonemptyString(event.rule) || !VALID_SEVERITY.has(event.severity) ||
         !nonemptyString(event.message) || !nonemptyString(event.before) ||
         (event.review !== true && (event.review !== false ||
-          !nonemptyString(event.after) || event.after === event.before))) {
+          typeof event.after !== 'string' || event.after === event.before))) {
       throw new Error('Evento de codemod inválido.');
     }
     return event;
   });
 }
 
-async function matchesCodemodPatch(events, original, target) {
-  const patches = events.filter(event => event.review === false);
-  if (!patches.length) return true;
-  const [before, after] = await Promise.all([readSafeRegularFile(original), readSafeRegularFile(target)]);
-  if (before === null || after === null || before === after) return false;
+function matchesCodemodEvidence(events, before, after) {
+  if (after === null) return false;
+  if (events.length === 0) return before === after;
 
   const starts = [0];
-  for (let index = before.indexOf('\n'); index !== -1; index = before.indexOf('\n', index + 1)) {
-    starts.push(index + 1);
+  for (const newline of before.matchAll(/\r\n|[\r\n\u2028\u2029]/g)) {
+    starts.push(newline.index + newline[0].length);
   }
   const edits = [];
-  for (const patch of patches) {
-    const start = starts[patch.line - 1];
-    const next = starts[patch.line] ?? before.length;
-    if (start === undefined) return false;
-    const withinLine = before.indexOf(patch.before, start);
-    if (withinLine === -1 || withinLine >= next) return false;
-    edits.push({start: withinLine, end: withinLine + patch.before.length, after: patch.after});
+  for (const event of events) {
+    const lineStart = starts[event.line - 1];
+    const start = lineStart + event.column;
+    const next = starts[event.line] ?? before.length;
+    if (lineStart === undefined || start >= next || /[\r\n\u2028\u2029]/.test(before[start]) ||
+        !before.startsWith(event.before, start)) return false;
+    if (!event.review) edits.push({start, end: start + event.before.length, after: event.after});
   }
+  if (edits.length === 0) return before === after;
+  if (before === after) return false;
   edits.sort((a, b) => a.start - b.start);
   const pieces = [];
   let lastEnd = 0;
@@ -1031,8 +1105,14 @@ export async function runJscodeshiftCheck({
   let skipped = 0;
   let reportBytes = 0;
   const deadline = performance.now() + totalTimeoutMs;
-  for (const [index, src] of sourceFiles.entries()) {
-    const remainingMs = Math.floor(deadline - performance.now());
+  const remainingTime = () => Math.floor(deadline - performance.now());
+  const checkDeadline = () => {
+    const remaining = remainingTime();
+    if (remaining < 1) throw new Error('prazo total esgotado');
+    return remaining;
+  };
+  for (const src of sourceFiles) {
+    const remainingMs = remainingTime();
     const remainingBytes = MAX_CODEMOD_REPORT_BYTES - reportBytes;
     const remainingFindings = MAX_CODEMOD_FINDINGS - findings.length;
     const limit = remainingMs < 1 ? 'limite_tempo_total' :
@@ -1046,66 +1126,88 @@ export async function runJscodeshiftCheck({
 
     const parser = sourceParser(src.ext);
     const target = join(isoCodemodDir, src.rel);
-    const report = join(workRoot, `matches-${index}.ndjson`);
-    const timeoutMs = Math.min(remainingMs, fileTimeoutMs);
-    const signal = AbortSignal.timeout(timeoutMs);
-    let phase = 'inicializacao_relatorio';
+    const nonce = randomUUID();
+    const report = join(workRoot, `matches-${nonce}.ndjson`);
+    let phase = 'leitura_origem';
+    let execution;
+    let reason = '';
+    let failure = '';
+    let accepted = [];
     try {
-      await writeFile(report, '', 'utf8');
+      const original = await readSafeRegularFile(join(isoSrcDir, src.rel));
+      const executionBudget = checkDeadline();
+      if (original === null) throw new Error('cópia de origem ilegível');
+      const timeoutMs = Math.min(executionBudget, fileTimeoutMs);
+      const signal = AbortSignal.timeout(timeoutMs);
+      execution = {signal, timeoutMs, budget: executionBudget <= fileTimeoutMs ? 'total' : 'arquivo'};
       phase = 'execucao';
       await execFile(jscodeshiftBin,
         ['--run-in-band', '--fail-on-error', `--parser=${parser}`, '-t', transformPath, target],
         {signal, killSignal: 'SIGKILL', maxBuffer: 10 * 1024 * 1024,
-          env: {...process.env, HOME: workRoot, TMPDIR: workRoot, AC_JSCODESHIFT_REPORT: report}});
+          env: {...process.env, HOME: workRoot, TMPDIR: workRoot,
+            AC_JSCODESHIFT_REPORT: report, AC_JSCODESHIFT_NONCE: nonce}});
+      checkDeadline();
 
       phase = 'relatorio_ilegivel';
       const result = await readArtifact(report, MAX_FILE_BYTES, remainingBytes);
+      checkDeadline();
       if (result.kind === 'fileLimit' || result.kind === 'totalLimit') {
-        skipped += 1;
-        const reason = result.kind === 'fileLimit' ? 'limite_relatorio' : 'limite_bytes_total';
-        coverage.push({...tool, status: 'skipped', detail: `arquivo=${src.rel}; motivo=${reason}; prova_parcial=true`});
-        continue;
-      }
-      if (result.kind !== 'ok') throw new Error(result.kind === 'missing' ? 'relatório ausente' : 'erro de leitura');
-      reportBytes += result.bytes;
+        reason = result.kind === 'fileLimit' ? 'limite_relatorio' : 'limite_bytes_total';
+      } else {
+        if (result.kind !== 'ok') throw new Error(result.kind === 'missing' ? 'relatório ausente' : 'erro de leitura');
+        reportBytes += result.bytes;
 
-      const marker = await readArtifact(`${report}.limit`, 32);
-      phase = 'relatorio_invalido';
-      if (marker.kind !== 'missing' && (marker.kind !== 'ok' || marker.content !== 'limit')) {
-        throw new Error('marcador de limite inválido');
+        phase = 'relatorio_invalido';
+        const [marker, after] = await Promise.all([
+          readArtifact(`${report}.limit`, 32), readSafeRegularFile(target),
+        ]);
+        checkDeadline();
+        if (marker.kind !== 'missing' && (marker.kind !== 'ok' || marker.content !== 'limit')) {
+          throw new Error('marcador de limite inválido');
+        }
+        const events = parseCodemodReport(result.content, target, nonce, original);
+        if (!matchesCodemodEvidence(events, original, after)) {
+          throw new Error('origem ou alterações reportadas não conferem com as cópias');
+        }
+        reason = events.length > remainingFindings ? 'limite_achados_total' :
+          marker.kind === 'ok' ? 'limite_relatorio' : '';
+        accepted = events.slice(0, remainingFindings).map(event => {
+          const evidence = event.review ? `Revisão necessária: ${event.before}` :
+            `Patch pronto:\n- ${event.before}\n+ ${event.after}`;
+          return {tool: tool.tool, rule: event.rule, file: src.rel, line: event.line,
+            severity: event.severity, message: event.message, evidence: evidence.slice(0, 600)};
+        });
+        checkDeadline();
       }
-      const events = parseCodemodReport(result.content, target);
-      const reason = events.length > remainingFindings ? 'limite_achados_total' :
-        marker.kind === 'ok' ? 'limite_relatorio' : '';
-      if (!(await matchesCodemodPatch(events, join(isoSrcDir, src.rel), target))) {
-        throw new Error('alteração reportada não confere com a cópia');
-      }
-      const accepted = events.slice(0, remainingFindings);
-      for (const event of accepted) {
-        const evidence = event.review ? `Revisão necessária: ${event.before}` :
-          `Patch pronto:\n- ${event.before}\n+ ${event.after}`;
-        findings.push({tool: tool.tool, rule: event.rule, file: src.rel, line: event.line,
-          severity: event.severity, message: event.message, evidence: evidence.slice(0, 600)});
-      }
-      if (reason) skipped += 1;
-      coverage.push({...tool, status: reason ? 'skipped' : 'ok',
-        detail: `arquivo=${src.rel}; correspondencias=${accepted.length}${reason ? `; motivo=${reason}; prova_parcial=true` : ''}`});
     } catch (err) {
-      failures += 1;
-      let reason;
-      if (phase === 'execucao' && err?.code === 'ABORT_ERR' && signal.aborted) {
-        reason = `timeout; timeout_ms=${timeoutMs}; prazo=${remainingMs <= fileTimeoutMs ? 'total' : 'arquivo'}`;
+      if (phase === 'execucao' && err?.code === 'ABORT_ERR' && execution.signal.aborted) {
+        failure = `timeout; timeout_ms=${execution.timeoutMs}; prazo=${execution.budget}; fase=execucao`;
+      } else if (remainingTime() < 1) {
+        failure = `timeout; timeout_ms=${totalTimeoutMs}; prazo=total; fase=${phase}`;
       } else {
         const detail = err?.stderr?.trim() || err?.stdout?.trim() || String(err?.message ?? err);
         const signalDetail = err?.signal ? `sinal=${err.signal}; ` : '';
         const codeDetail = err?.code === undefined ? '' : `codigo=${err.code}; `;
-        reason = `${phase}; ${signalDetail}${codeDetail}detalhe=${detail.slice(0, 200)}`;
+        failure = `${phase}; ${signalDetail}${codeDetail}detalhe=${detail.slice(0, 200)}`;
       }
-      coverage.push({...tool, status: 'failed', detail: `arquivo=${src.rel}; parser=${parser}; erro=${reason}`});
-    } finally {
+    }
+    try {
       await rm(report, {force: true, recursive: true});
       await rm(`${report}.limit`, {force: true, recursive: true});
+    } catch (err) {
+      failure ||= `limpeza_relatorio; detalhe=${err.message.slice(0, 200)}`;
     }
+    if (remainingTime() < 1) failure ||= `timeout; timeout_ms=${totalTimeoutMs}; prazo=total; fase=limpeza_relatorio`;
+    if (failure) {
+      failures += 1;
+      coverage.push({...tool, status: 'failed', detail: `arquivo=${src.rel}; parser=${parser}; erro=${failure}`});
+      continue;
+    }
+    if (reason) skipped += 1;
+    for (const finding of accepted) findings.push(finding);
+    const detail = reason ? `motivo=${reason}; prova_parcial=true; ` : '';
+    coverage.push({...tool, status: reason ? 'skipped' : 'ok',
+      detail: `arquivo=${src.rel}; ${detail}correspondencias=${accepted.length}`});
   }
   coverage.unshift({...tool,
     status: failures ? 'failed' : skipped ? 'skipped' : 'ok',
@@ -1181,11 +1283,10 @@ function lockEntryLines(raw) {
   return sections;
 }
 
-const NPM_NAME = /^(?:@[\w.~-]+\/)?[\w.~-]+$/;
-function npmComponentIdentity(component) {
+function npmComponentIdentity(component, specMinor) {
   if (!isRecord(component) || !nonemptyString(component.name) ||
-      (Object.hasOwn(component, 'type') && !nonemptyString(component.type)) ||
-      (Object.hasOwn(component, 'version') && !nonemptyString(component.version)) ||
+      !(CYCLONEDX_COMPONENT_TYPE_VERSION.get(component.type) <= specMinor) ||
+      ((specMinor <= 3 || Object.hasOwn(component, 'version')) && typeof component.version !== 'string') ||
       (Object.hasOwn(component, 'purl') && !nonemptyString(component.purl))) {
     return {error: 'componente_invalido'};
   }
@@ -1207,9 +1308,10 @@ function npmComponentIdentity(component) {
   }
   if (!NPM_NAME.test(name)) return {error: 'purl_npm_invalida'};
   const version = component.version ?? purlVersion;
-  if (!semver.valid(version) || (purlVersion !== undefined && purlVersion !== version)) {
+  if (purlVersion !== undefined && purlVersion !== version) {
     return {error: 'versao_componente_invalida'};
   }
+  if (!semver.valid(version)) return {omission: 'versao_componente_nao_comparavel'};
   return {name, version};
 }
 
@@ -1246,7 +1348,9 @@ export async function analyzeLockfileAndSbom({
       if (Array.isArray(patterns)) workspaceRoots.push({dir: posix.dirname(root.rel), patterns});
     } catch { /* The manifest itself is reported below and by NCU. */ }
   }
-  workspaceRoots.sort((a, b) => b.dir.length - a.dir.length);
+  // An outer installation owns members that its own workspace declaration includes.
+  const workspaceDepth = ({dir}) => dir === '.' ? 0 : dir.split('/').length;
+  workspaceRoots.sort((a, b) => workspaceDepth(a) - workspaceDepth(b));
 
   let lastLock;
   for (const manifest of manifests) {
@@ -1370,7 +1474,8 @@ export async function analyzeLockfileAndSbom({
         continue;
       }
 
-      if (match.entry?.link === true && !lockEntryIsMalformed(match.entry)) {
+      const linked = match.entry?.link === true;
+      if (linked && !lockEntryIsMalformed(match.entry)) {
         const key = match.entry.resolved;
         if (posix.isAbsolute(key) || key.split('/').includes('..')) {
           fileUnverifiable += 1;
@@ -1385,19 +1490,25 @@ export async function analyzeLockfileAndSbom({
         continue;
       }
 
-      const resolvedVer = match.entry.version;
-      if (!resolvedVer) {
+      const rawVersion = match.entry.version;
+      if (!rawVersion) {
         fileUnverifiable += 1;
         coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; motivo=versao_ausente`});
         continue;
       }
-      componentsScanned += 1;
-      const validSpec = semver.validRange(spec) !== null && Boolean(semver.valid(resolvedVer));
-      if (!validSpec) {
+      const declaration = ncuSpecifier(spec, false);
+      const registryName = declaration?.registryName ?? pkg;
+      const legacyAlias = !parsed.packages && NPM_ALIAS.exec(rawVersion);
+      const resolvedName = legacyAlias ? legacyAlias[1] : match.entry.name ?? registryName;
+      const resolvedVer = legacyAlias ? legacyAlias[2] : rawVersion;
+      if (!declaration || !NPM_NAME.test(registryName) || !semver.valid(resolvedVer) || resolvedName !== registryName) {
         fileUnverifiable += 1;
-        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; motivo=faixa_ou_versao_nao_semver`});
+        const reason = resolvedName !== registryName ? 'identidade_lockfile_divergente' : 'faixa_ou_versao_nao_semver';
+        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; motivo=${reason}`});
+        continue;
       }
-      if (validSpec && !satisfiesRange(resolvedVer, spec)) {
+      componentsScanned += 1;
+      if (!satisfiesRange(resolvedVer, declaration.range)) {
         fileFindings += 1;
         lastLock.lines ??= lockEntryLines(raw.content);
         findings.push({
@@ -1412,13 +1523,19 @@ export async function analyzeLockfileAndSbom({
         continue;
       }
 
-      const meta = registryVersion(registry, pkg);
+      if (linked) {
+        fileUnverifiable += 1;
+        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; motivo=registro_inaplicavel_a_link_local`});
+        continue;
+      }
+      const meta = registryVersion(registry, registryName);
       if (meta.kind !== 'ok') {
         fileMissingMeta += 1;
         if (meta.kind === 'invalid') fileInvalidMeta += 1;
         continue;
       }
-      if (semver.valid(resolvedVer) && semver.lt(resolvedVer, meta.version) &&
+      if (semver.lt(resolvedVer, meta.version) &&
+          !ncuDetectedPackages.has(dependencyKey(manifest.rel, sec, pkg)) &&
           !ncuDetectedPackages.has(`${manifest.rel}:${pkg}`)) {
         const risk = classifySemverRisk(resolvedVer, meta.version);
         fileFindings += 1;
@@ -1430,7 +1547,7 @@ export async function analyzeLockfileAndSbom({
           line: lastLock.lines[match.section].get(match.key) ?? 1,
           severity: risk.severity,
           message: `Versão travada em ${lockRel} para "${pkg}" (${resolvedVer}) está atrás da mais recente (${meta.version}; risco ${risk.riskLabel}).`,
-          evidence: `${lockRel}#${match.key}: "${pkg}"@${resolvedVer} -> ${meta.version}`,
+          evidence: `${lockRel}#${match.key}: "${pkg}"@${resolvedVer} -> ${meta.version}${registryName !== pkg ? `; registro="${registryName}"` : ''}`,
         });
       }
     }
@@ -1469,8 +1586,20 @@ export async function analyzeLockfileAndSbom({
       record('failed', `${scope}; erro=json_invalido`);
       continue;
     }
-    if (!isRecord(bom) || bom.bomFormat !== 'CycloneDX' ||
-        (Object.hasOwn(bom, 'components') && !Array.isArray(bom.components))) {
+    if (!isRecord(bom) || bom.bomFormat !== 'CycloneDX' || !nonemptyString(bom.specVersion) ||
+        (Object.hasOwn(bom, 'components') && !Array.isArray(bom.components)) ||
+        (Object.hasOwn(bom, 'metadata') && !isRecord(bom.metadata))) {
+      record('failed', `${scope}; erro=formato_invalido`);
+      continue;
+    }
+    const supportedSpec = /^1\.([2-7])$/.exec(bom.specVersion);
+    if (!supportedSpec) {
+      record('skipped', `${scope}; motivo=versao_cyclonedx_nao_suportada; prova_parcial=true`);
+      continue;
+    }
+    const specMinor = Number(supportedSpec[1]);
+    if ((specMinor <= 4 || Object.hasOwn(bom, 'version')) &&
+        (!Number.isInteger(bom.version) || bom.version < 1)) {
       record('failed', `${scope}; erro=formato_invalido`);
       continue;
     }
@@ -1480,9 +1609,13 @@ export async function analyzeLockfileAndSbom({
     let sbomFindings = 0;
     let sbomMissingMeta = 0;
     let sbomInvalidMeta = 0;
+    let sbomUnverifiable = 0;
     let componentCount = 0;
     let truncated = false;
     const lists = [(bom.components ?? []).values()];
+    if (bom.metadata && Object.hasOwn(bom.metadata, 'component')) {
+      lists.push([bom.metadata.component].values());
+    }
     while (lists.length) {
       const next = lists.at(-1).next();
       if (next.done) {
@@ -1496,7 +1629,7 @@ export async function analyzeLockfileAndSbom({
       inventoryComponents += 1;
       componentCount += 1;
       const component = next.value;
-      const identity = npmComponentIdentity(component);
+      const identity = npmComponentIdentity(component, specMinor);
       if (isRecord(component) && Object.hasOwn(component, 'components')) {
         if (Array.isArray(component.components)) lists.push(component.components.values());
         else errors.set('componentes_aninhados_invalidos', (errors.get('componentes_aninhados_invalidos') ?? 0) + 1);
@@ -1505,6 +1638,7 @@ export async function analyzeLockfileAndSbom({
         errors.set(identity.error, (errors.get(identity.error) ?? 0) + 1);
         continue;
       }
+      if (identity.omission) sbomUnverifiable += 1;
       if (!identity.name) continue;
       componentsScanned += 1;
       const {name, version} = identity;
@@ -1531,10 +1665,11 @@ export async function analyzeLockfileAndSbom({
     totalMissingMeta += sbomMissingMeta;
     totalInvalidMeta += sbomInvalidMeta;
     const issues = Array.from(errors, ([reason, count]) => `${reason}=${count}`).join('; ');
-    record(errors.size || sbomInvalidMeta ? 'failed' : truncated || sbomMissingMeta ? 'skipped' : 'ok',
-      `${scope}; componentes=${componentCount}; sem_metadados=${sbomMissingMeta}; metadados_invalidos=${sbomInvalidMeta}; achados=${sbomFindings}${issues ? `; ${issues}` : ''}${truncated ? '; motivo=limite_componentes_total; prova_parcial=true' : ''}`);
+    record(errors.size || sbomInvalidMeta ? 'failed' : truncated || sbomMissingMeta || sbomUnverifiable ? 'skipped' : 'ok',
+      `${scope}; componentes=${componentCount}; sem_metadados=${sbomMissingMeta}; metadados_invalidos=${sbomInvalidMeta}; achados=${sbomFindings}${sbomUnverifiable ? `; versao_componente_nao_comparavel=${sbomUnverifiable}` : ''}${issues ? `; ${issues}` : ''}${truncated ? '; motivo=limite_componentes_total; prova_parcial=true' : ''}`);
   }
 
+  if (registry?.error && componentsScanned) record('failed', `registro=offline; erro=${registry.error}`);
   coverage.unshift({...tool,
     status: artifactFailures ? 'failed' : artifactSkips ? 'skipped' : checkedFiles.size || findings.length ? 'ok' : 'skipped',
     detail: checkedFiles.size || findings.length || artifactFailures || artifactSkips

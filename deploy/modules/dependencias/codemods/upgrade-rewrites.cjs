@@ -1,16 +1,25 @@
 'use strict';
 
 const fs = require('node:fs');
+const {createHash} = require('node:crypto');
+const getParser = require('jscodeshift/src/getParser');
 const MAX_REPORT_BYTES = 2 * 1024 * 1024;
 
 // These patterns depend on bindings, argument types or API semantics. Report them
 // for review without changing the source or promising an equivalent rewrite.
-module.exports = function transformer(fileInfo, api) {
-  const j = api.jscodeshift;
-  const root = j(fileInfo.source);
+module.exports = function transformer(fileInfo, api, options) {
+  const {path: file, source} = fileInfo;
   const report = process.env.AC_JSCODESHIFT_REPORT;
-  if (!report) return null;
-  let bytes = fs.statSync(report).size;
+  const nonce = process.env.AC_JSCODESHIFT_NONCE;
+  if (!report || !nonce) return null;
+
+  const j = api.jscodeshift;
+  // Parse the original text directly to keep tabs and CRLF in source offsets.
+  const root = j(getParser(options.parser).parse(source));
+  const sha256 = createHash('sha256').update(source).digest('hex');
+  const header = `${JSON.stringify({kind: 'source', file, nonce, sha256})}\n`;
+  fs.writeFileSync(report, header, {flag: 'wx'});
+  let bytes = Buffer.byteLength(header);
   const checks = [
     [j.NewExpression, {callee: {type: 'Identifier', name: 'Buffer'}}, 'JSCODESHIFT-NODE-BUFFER-CTOR'],
     [j.NewExpression, {callee: {type: 'MemberExpression', object: {type: 'Identifier', name: 'Buffer'}, property: {type: 'Identifier', name: 'SlowBuffer'}}}, 'JSCODESHIFT-NODE-SLOW-BUFFER'],
@@ -20,9 +29,9 @@ module.exports = function transformer(fileInfo, api) {
   for (const [type, pattern, rule] of checks) {
     for (const path of root.find(type, pattern).paths()) {
       const event = `${JSON.stringify({
-        file: fileInfo.path, line: path.value.loc?.start.line || 1, rule,
+        file, line: path.value.loc.start.line, column: path.value.loc.start.column, rule,
         severity: 'media', message: 'Possível API legada; confirme o vínculo e a semântica antes de alterar.',
-        before: j(path).toSource(), review: true,
+        before: source.slice(path.value.start, path.value.end), review: true,
       })}\n`;
       bytes += Buffer.byteLength(event);
       if (bytes > MAX_REPORT_BYTES) {
