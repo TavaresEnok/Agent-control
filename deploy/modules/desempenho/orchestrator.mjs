@@ -11,6 +11,32 @@ import {compareIndependentMeasurement, validatePerformanceMeasurement} from './r
 
 export {reconcilePerformanceResources} from './docker-recovery.mjs';
 
+async function* readHistory(source, signal) {
+  signal.throwIfAborted();
+  const history = typeof source === 'function' ? source(signal) : source;
+  const iterator = history[Symbol.asyncIterator]();
+  try {
+    while (true) {
+      signal.throwIfAborted();
+      const interrupted = Promise.withResolvers();
+      const abort = () => interrupted.reject(signal.reason);
+      signal.addEventListener('abort', abort, {once: true});
+      let entry;
+      try {
+        entry = await Promise.race([iterator.next(), interrupted.promise]);
+      } finally {
+        signal.removeEventListener('abort', abort);
+      }
+      if (entry.done) return;
+      yield entry.value;
+    }
+  } finally {
+    const closed = iterator.return?.();
+    if (signal.aborted) Promise.resolve(closed).catch(() => {});
+    else await closed;
+  }
+}
+
 const imageProtocol = 'org.agent-control.performance.protocol';
 const ignored = new Set(['.git', 'node_modules', '.next', '.nuxt', 'coverage', '.lighthouseci']);
 const sensitive = /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|\.ssh|\.aws|\.kube|.*\.(?:pem|key|p12|pfx))$/i;
@@ -222,7 +248,7 @@ export async function runPerformanceModule({snapshotPath, imageDigest, signal, r
     let comparedExamId = historical.coverage.status === 'ok' ? previousMeasurement.examId : undefined;
     if (previousMeasurements) {
       let latest;
-      for await (const candidate of previousMeasurements) {
+      for await (const candidate of readHistory(previousMeasurements, active)) {
         active.throwIfAborted();
         const comparison = compareIndependentMeasurement(output.measurement, candidate, imageDigest);
         latest ??= comparison;

@@ -48,10 +48,37 @@ const assertionFunctions = new Map(${JSON.stringify(qaAssertionMethods)}.map(met
 }));
 const acceptedMethod = assertionFunctions.get.bind(assertionFunctions);
 const apply = Reflect.apply;
-export function captureAssertion(fn, receiver, method, probe) {
+const callbacks = new WeakMap();
+const rememberCallback = callbacks.set.bind(callbacks);
+const lookupCallback = callbacks.get.bind(callbacks);
+export function captureAssertionCallback(factory) {
+  const evidence = {invoked: false};
+  const callback = factory(() => { evidence.invoked = true; });
+  rememberCallback(callback, evidence);
+  return callback;
+}
+export function captureTarget(fn, receiver, markInvoked) {
   return (...args) => {
-    if (typeof fn === 'function' && acceptedMethod(method)?.(fn)) probe();
+    // This body runs only after all of the target's arguments have been evaluated.
+    if (typeof fn === 'function') markInvoked();
     return apply(fn, receiver, args);
+  };
+}
+export function captureAssertion(fn, receiver, method, completed, failed, targetCompleted, targetFailed) {
+  return (...args) => {
+    if (!acceptedMethod(method)?.(fn)) return apply(fn, receiver, args);
+    const callback = targetCompleted && lookupCallback(args[0]);
+    let value;
+    try {
+      value = apply(fn, receiver, args);
+    } catch (error) {
+      failed();
+      if (callback?.invoked) targetFailed();
+      throw error;
+    }
+    completed();
+    if (callback?.invoked) targetCompleted();
+    return value;
   };
 }
 `);
@@ -114,14 +141,23 @@ export function captureAssertion(fn, receiver, method, probe) {
   if (typeof summary !== 'boolean' || !Array.isArray(measured)) {
     throw new Error('QA_NODE_TEST_REPORT_INCOMPLETE');
   }
-  const counts = new Map(measured.map(file => [file.file, new Map(file.functions.map(fn => [fn.name, fn.count]))]));
+  const counts = new Map(measured.map(file => [file.file, new Set(file.functions.filter(fn => fn.count > 0).map(fn => fn.name))]));
   for (const test of tests) {
-    const names = probes.get(testIdentity(test));
+    const sites = probes.get(testIdentity(test));
     const functions = counts.get(test.file);
-    test.assertionStatus = names && functions
-      ? names.some(probe => functions.get(probe.name) > 0) ? 'executed' : 'unobserved'
-      : 'unsupported';
-    test.features = [...new Set((names ?? []).filter(probe => functions?.get(probe.name) > 0).flatMap(probe => probe.features))];
+    test.assertionStatus = 'unsupported';
+    if (!sites || !functions) continue;
+    const completed = sites.some(site => functions.has(site.completed));
+    const failed = sites.some(site => functions.has(site.failed));
+    test.assertionStatus = completed ? 'completed' : failed ? 'failed' : 'unobserved';
+    // Direct operands must have returned before Node can enter the assertion.
+    // A callback operand must also prove dispatch during that same assertion.
+    const collectFeatures = (outcome, callbackOutcome) => [...new Set(sites.flatMap(site => [
+      ...(functions.has(site[outcome]) ? site.features : []),
+      ...(functions.has(site[callbackOutcome]) ? [site.callback] : []),
+    ]))];
+    test.features = collectFeatures('completed', 'callbackCompleted');
+    test.failedFeatures = collectFeatures('failed', 'callbackFailed');
   }
   return {summary, tests, coverage: measured.filter(file => !files.includes(file.file))};
 }

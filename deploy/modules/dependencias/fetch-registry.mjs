@@ -1,30 +1,34 @@
 import {readFile, writeFile} from 'node:fs/promises';
+import {isUtf8} from 'node:buffer';
 import https from 'node:https';
 import {dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import semver from 'semver';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+export const NPM_REGISTRY = 'https://registry.npmjs.org/';
 
-export function fetchLatestVersion(pkg, {get = https.get, timeoutMs = 10_000, maxBytes = 1024 * 1024} = {}) {
+function fetchRelease(pkg, release, {get = https.get, timeoutMs = 10_000, maxBytes = 1024 * 1024} = {}) {
   return new Promise((resolvePromise, reject) => {
     let settled = false;
     let request;
-    const finish = (err, version) => {
+    const finish = (err, metadata) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err); else resolvePromise(version);
+      if (err) reject(err); else resolvePromise(metadata);
     };
     const timer = setTimeout(() => {
       finish(new Error('timeout'));
       request?.destroy();
     }, timeoutMs);
     try {
-      request = get(`https://registry.npmjs.org/${encodeURIComponent(pkg)}/latest`, res => {
+      request = get(`${NPM_REGISTRY}${encodeURIComponent(pkg)}/${encodeURIComponent(release)}`, res => {
+        res.on('error', err => finish(err));
+        res.on('aborted', () => finish(new Error('resposta interrompida')));
         if (res.statusCode !== 200) {
+          finish(Object.assign(new Error(`HTTP ${res.statusCode}`), {statusCode: res.statusCode}));
           res.resume();
-          finish(new Error(`HTTP ${res.statusCode}`));
           return;
         }
         const chunks = [];
@@ -32,24 +36,39 @@ export function fetchLatestVersion(pkg, {get = https.get, timeoutMs = 10_000, ma
         res.on('data', chunk => {
           size += chunk.length;
           if (size > maxBytes) {
+            finish(new Error('limite de bytes'));
             res.destroy();
             request.destroy();
-            finish(new Error('limite de bytes'));
           } else chunks.push(chunk);
         });
-        res.on('error', err => finish(err));
-        res.on('aborted', () => finish(new Error('resposta interrompida')));
         res.on('end', () => {
           try {
-            const version = JSON.parse(Buffer.concat(chunks).toString('utf8'))?.version;
-            if (!semver.valid(version)) throw new Error('versão inválida');
-            finish(null, version);
+            const body = Buffer.concat(chunks);
+            if (!isUtf8(body)) throw new Error('resposta não é UTF-8');
+            finish(null, JSON.parse(body.toString('utf8')));
           } catch (err) { finish(err); }
         });
       });
       request.on('error', err => finish(err));
     } catch (err) { finish(err); }
   });
+}
+
+export async function fetchLatestVersion(pkg, options) {
+  const version = (await fetchRelease(pkg, 'latest', options))?.version;
+  if (!semver.valid(version)) throw new Error('versão inválida');
+  return version;
+}
+
+/** Confirms the exact published release of the package proposed by NCU. */
+export async function fetchRegistryVersion(pkg, version, options) {
+  try {
+    const metadata = await fetchRelease(pkg, version, options);
+    return metadata?.name === pkg && metadata?.version === version ? version : null;
+  } catch (err) {
+    if (err?.statusCode === 404) return null;
+    throw err;
+  }
 }
 
 async function main() {
