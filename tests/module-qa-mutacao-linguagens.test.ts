@@ -117,7 +117,13 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
   const failure = [...start, logged, event('fail', 'TestTotal')];
   assert.equal(classifyTrial(baseline, run(1, [...failure, summary, event('fail')])).status, 'killed');
   assert.equal(run(1, [...failure, {...summary, OutputType: undefined}, event('fail')]).reason, 'go-test-execution');
-  assert.equal(run(1, [event('build-fail'), event('fail')]).reason, 'go-build-failed');
+  const buildFailure = [event('build-fail'), event('fail')];
+  const compilerDiagnostic = {Action: 'build-output', Output: './arithmetic.go:3:14: invalid operation: division by zero\n'};
+  const busyCompiler = 'go: fork/exec /go/pkg/tool/compile: resource temporarily unavailable\n';
+  assert.equal(run(1, [compilerDiagnostic, ...buildFailure]).reason, 'go-build-failed');
+  assert.equal(run(1, buildFailure).reason, 'go-build-execution');
+  assert.equal(run(1, [compilerDiagnostic, ...buildFailure], busyCompiler).reason, 'go-build-execution');
+  assert.equal(run(1, [{Action: 'build-output', Output: busyCompiler}, ...buildFailure]).reason, 'go-build-execution');
   assert.equal(run(1, []).reason, 'go-test-execution');
   assert.equal(run(0, [...start, event('pass')]).reason, 'go-test-execution');
   assert.equal(run(1, [], 'module lookup disabled by GOPROXY=off').reason, 'offline-dependency');
@@ -144,7 +150,7 @@ test('sondagem sem versão verificável indica ferramenta indisponível', async 
   await assert.rejects(verifyPinnedTool(async () => { throw new Error('QA_TEST_TIMEOUT'); }, matches), /QA_TEST_TIMEOUT/);
 });
 
-test('propriedades sem exemplos e interrupções ficam sem medição', () => {
+test('propriedades já concluídas sobrevivem à interrupção e casos pendentes ficam sem medição', () => {
   const file = 'test_arithmetic.py';
   const tests = [{file, id: 'a'.repeat(64), line: 10, property: true, examples: 0, status: 'skipped'}];
   const decode = (value: object) => decodePythonSuite(report({exitCode: 0, tests, limited: false,
@@ -156,6 +162,13 @@ test('propriedades sem exemplos e interrupções ficam sem medição', () => {
   const measured = summarizeProperties(decode({exitCode: 1, tests: [{...tests[0], status: 'failed', examples: 4}]}));
   assert.equal(measured.status, 'measured');
   assert.equal(measured.outcome, 'failed');
+
+  const completed = [{...tests[0], status: 'failed', examples: 4}, {...tests[0], id: 'b'.repeat(64), status: 'pending', examples: 3}];
+  const interrupted = summarizeProperties(decode({exitCode: 2, tests: completed}));
+  assert.deepEqual(interrupted, {status: 'partial', outcome: 'failed', reason: 'python-test-execution', properties: completed});
+  assert.equal(summarizeProperties(decode({exitCode: 2, tests: completed.slice(1)})).status, 'not-run');
+  assert.deepEqual(decodePythonSuite(report({exitCode: 2, tests: completed, limited: false,
+    unavailable: false}), [file]), {reason: 'python-test-execution'});
 });
 
 function invoke(binary: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
@@ -253,6 +266,21 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
     assert.equal(partial.reason, 'python-test-execution');
     assert.deepEqual(partial.properties.map((property: {status: string}) => property.status), ['failed', 'failed', 'error']);
 
+    const interruptedFile = 'test_interrupted_properties.py';
+    writeFileSync(join(project, interruptedFile), [
+      'from hypothesis import given, strategies as st',
+      '@given(st.just(3))', 'def test_falsified(value):', '    assert value == 4', '',
+      '@given(st.just(3))', 'def test_interrupt(value):', '    raise KeyboardInterrupt("interrupção sintética")', '',
+    ].join('\n'));
+    const interruptedRun = run('properties', String(seed), interruptedFile);
+    assert.equal(JSON.parse(interruptedRun.output).exitCode, 2);
+    const interrupted = summarizeProperties(decodePythonSuite(interruptedRun, [interruptedFile], true));
+    assert.equal(interrupted.status, 'partial');
+    assert.equal(interrupted.reason, 'python-test-execution');
+    assert.equal(interrupted.properties[0].status, 'failed');
+    assert.ok(interrupted.properties[0].examples > 0);
+    assert.equal(interrupted.properties[1].status, 'pending');
+
     // Mirror the runner layout in the image and give unittest only its coverage import path.
     const coveragePath = join(root, 'coverage-runtime');
     mkdirSync(coveragePath);
@@ -260,16 +288,25 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
     const unitRunner = join(root, 'tools', 'python-test-runner.py');
     cpSync(pythonUnitRunner, unitRunner);
     const unitPlan = join(root, 'plan.json');
+    const optionalTest = 'test_optional_hypothesis.py';
+    writeFileSync(join(project, optionalTest), [
+      'import unittest', 'try:', '    import hypothesis', 'except ModuleNotFoundError:', '    hypothesis = None',
+      'class OptionalDependency(unittest.TestCase):', '    @unittest.skipIf(hypothesis is None, "optional")',
+      '    def test_presence(self):', '        self.assertIsNotNone(hypothesis)', '',
+    ].join('\n'));
     writeFileSync(unitPlan, JSON.stringify({
-      files: [...files, 'test_unit.py'], sourceFiles: [file], maxTests: 200, maxProfileBytes: 1024 * 1024,
+      files: [...files, 'test_unit.py', optionalTest], sourceFiles: [file], maxTests: 200, maxProfileBytes: 1024 * 1024,
     }));
     writeFileSync(path, source);
     const unitRun = invoke(python!, ['-P', '-s', '-S', '-B', unitRunner, unitPlan, join(root, 'coverage.json')],
       project, {HOME: root, TMPDIR: root, PYTHONPATH: coveragePath});
     const unitResult = JSON.parse(unitRun.output);
-    assert.equal(unitResult.unavailable, 0);
+    assert.equal(unitResult.unavailable, 1);
     assert.equal(unitResult.errors, 0);
-    assert.deepEqual(unitResult.tests, [{file: 'test_unit.py', name: 'ArithmeticTest.test_total', status: 'passed'}]);
+    assert.deepEqual(unitResult.tests, [
+      {file: 'test_unit.py', name: 'ArithmeticTest.test_total', status: 'passed'},
+      {file: optionalTest, name: 'OptionalDependency.test_presence', status: 'skipped'},
+    ]);
     assert.equal(unitResult.coverage.files, 1);
   } finally {
     rmSync(root, {recursive: true, force: true});
