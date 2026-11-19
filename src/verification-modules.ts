@@ -15,7 +15,7 @@ import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
 import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
-  removeOwnedModuleContainer, type CollectorProcess,
+  type CollectorProcess,
 } from './module-container-cleanup.ts';
 import {moduleCollectorCandidate, type ModuleExamResult} from './module-exam.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
@@ -37,6 +37,7 @@ export {MODULE_RUNTIME_BIN};
 export const MODULE_CONTAINER_USER = '65532:65532';
 export const MAX_COLLECTOR_STDOUT_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_COLLECTOR_TIMEOUT_MS = 1_200_000;
+const COLLECTOR_DAEMON_TIMEOUT_MS = 10_000;
 export const MODULE_MEMORY_BYTES = 2_147_483_648;
 export const MODULE_NANO_CPUS = 2_000_000_000;
 export const MODULE_PIDS_LIMIT = 256;
@@ -815,6 +816,8 @@ export function runBoundedCollectorProcess(
       options.signal?.removeEventListener('abort', onAbort);
       child.once('close', () => reject(error));
       child.kill('SIGKILL');
+      child.stdout?.destroy();
+      child.stderr?.destroy();
     };
     const finish = (code: number) => {
       if (settled) return;
@@ -862,8 +865,9 @@ export async function runModuleCollectorContainer(input: {
   passiveTlsEvidence?: ProntidaoPassiveEvidence;
   signal?: AbortSignal;
   executeProcess?: CollectorProcess;
-  journal?: ReturnType<typeof moduleContainerJournal>;
+  journal: ReturnType<typeof moduleContainerJournal>;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
+  if (!input.journal) throw new Refusal('VERIFY_CONTAINER_JOURNAL_REQUIRED', 503);
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isInteger(maxStdoutBytes) || maxStdoutBytes < 1) {
@@ -889,16 +893,19 @@ export async function runModuleCollectorContainer(input: {
     const run = input.executeProcess ?? runBoundedCollectorProcess;
     // Journal the owner before create, and record the immutable ID before start.
     // Let create return its ID even when cancellation arrives during the call.
+    // Make logs readable even when the daemon has a different default driver.
     const createArgs = [MODULE_RUNTIME_BIN, 'create', '--pull', 'never', '--name', moduleContainerName(token),
-      '--label', `${MODULE_CONTAINER_LABEL}=${token}`, ...baseArgs.slice(3)];
+      '--label', `${MODULE_CONTAINER_LABEL}=${token}`, '--log-driver', 'json-file',
+      '--log-opt', 'mode=blocking', ...baseArgs.slice(3)];
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
     let id: string | undefined;
     let creationRejected = true;
     let startAuthorized = false;
     try {
-      await input.journal?.register(token);
+      await input.journal.register(token);
       creationRejected = false;
-      const created = await run(createArgs, {timeoutMs: Math.min(timeoutMs, 10_000), maxStdoutBytes: 4096});
+      const daemonOptions = {timeoutMs: Math.min(timeoutMs, COLLECTOR_DAEMON_TIMEOUT_MS), maxStdoutBytes: 4096};
+      const created = await run(createArgs, daemonOptions);
       if (created.code !== 0) {
         // A missing image with --pull never is a definitive daemon rejection.
         creationRejected = /(?:^|\n)(?:docker: )?Error response from daemon: No such image:/i.test(created.stderr);
@@ -907,16 +914,37 @@ export async function runModuleCollectorContainer(input: {
       const candidate = createdContainerId(created.stdout);
       await assertOwnedModuleContainer(run, token, candidate);
       id = candidate;
-      await input.journal?.beforeStart(token, id);
-      startAuthorized = true;
-      if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
-      const result = await run([MODULE_RUNTIME_BIN, 'start', '--attach', id],
-        {timeoutMs, maxStdoutBytes, signal: input.signal});
-      const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes, module: input.module});
-      return {code: result.code, output};
+      const deadline = await input.journal.start(token, candidate, async () => {
+        if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+        startAuthorized = true;
+        const deadline = performance.now() + timeoutMs;
+        const started = await run([MODULE_RUNTIME_BIN, 'start', candidate], daemonOptions);
+        if (started.code !== 0 || started.stdout.toString('utf8').trim() !== candidate) {
+          throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+        }
+        return deadline;
+      });
+      const remainingTime = () => {
+        if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+        const remaining = Math.ceil(deadline - performance.now());
+        if (remaining < 1) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+        return remaining;
+      };
+      const logs = await run([MODULE_RUNTIME_BIN, 'logs', '--follow', candidate],
+        {timeoutMs: remainingTime(), maxStdoutBytes, signal: input.signal});
+      if (logs.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+      // A successful logs stream alone does not establish the collector's exit status.
+      const waited = await run([MODULE_RUNTIME_BIN, 'wait', candidate],
+        {timeoutMs: remainingTime(), maxStdoutBytes: 4096, signal: input.signal});
+      remainingTime();
+      const exitCode = waited.stdout.toString('utf8').trim();
+      if (waited.code !== 0 || !/^(0|[1-9][0-9]{0,2})$/.test(exitCode) || Number(exitCode) > 255) {
+        throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+      }
+      const output = parseModuleCollectorOutput(logs.stdout, {maxStdoutBytes, module: input.module});
+      return {code: Number(exitCode), output};
     } finally {
-      if (input.journal) await input.journal.cleanup(token, id, {creationRejected, startAuthorized});
-      else await removeOwnedModuleContainer(run, {token, id: id ?? null}, async () => {}, {creationRejected});
+      await input.journal.cleanup(token, id, {creationRejected, startAuthorized});
     }
   } finally {
     try {

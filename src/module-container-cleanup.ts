@@ -98,16 +98,19 @@ export function moduleContainerJournal(
         if (!result.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
       });
     },
-    async beforeStart(token: string, id: string): Promise<void> {
+    async start<T>(token: string, id: string, launch: () => Promise<T>): Promise<T> {
+      // The ID must survive even if the launch or the fenced transaction loses its response.
       await rememberId(ledger.pool, token, id);
-      await ledger.tx(async client => {
+      return ledger.tx(async client => {
         await ledger.authorize(client, principal, authority.contextId);
         await ledger.fence(client, authority);
         const result = await client.query(
           `SELECT 1 FROM ac_verify_runs WHERE id=$1 AND context_id=$2 AND status='running'
-           AND collector_container_token=$3 AND collector_container_id=$4`, [runId, authority.contextId, token, id],
+           AND collector_container_token=$3 AND collector_container_id=$4 FOR UPDATE`, [runId, authority.contextId, token, id],
         );
         if (!result.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
+        // A successor cannot acquire the context until the bounded daemon call finishes.
+        return launch();
       });
     },
     async cleanup(token: string, knownId?: string, options: CleanupOptions = {}): Promise<void> {
