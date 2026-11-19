@@ -27,7 +27,15 @@ const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_COPY_FILES = 10_000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_COPY_BYTES = 192 * 1024 * 1024;
-const MAX_ARTIFACT_CHARS = 512 * 1024;
+// Contratos de src/verification-modules.ts e module-documentation-artifacts.ts.
+const MAX_DETAIL_CHARS = 2000;
+const MAX_COVERAGE_ROWS = 5000;
+const MAX_FINDINGS = 999;
+const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
+const MAX_ARTIFACT_BYTES = 512 * 1024;
+const ARTIFACT_PART_BYTES = 880;
+const ARTIFACT_ENCODING = 'hex-utf8-v1';
+const FORBIDDEN_REPORT_SEGMENTS = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 const TOOL_TIMEOUT_MS = 180_000;
 
 const SKIP_DIRS = new Set([
@@ -977,21 +985,90 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
 }
 
 function appendArtifact(coverage, tool, version, file, text) {
-  const chunkSize = 2048;
-  if (text.length > MAX_ARTIFACT_CHARS) {
-    coverage.push({tool, version, status: 'skipped', detail: `artefato=${file}; limite de ${MAX_ARTIFACT_CHARS} caracteres excedido`});
+  // Keep envelope tokens short as well as payload tokens: the runtime sanitizes
+  // coverage details before the report can assemble them.
+  const envelope = fields => JSON.stringify(fields, null, 1).replaceAll('\n', '');
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length > MAX_ARTIFACT_BYTES) {
+    coverage.push({
+      tool, version, status: 'skipped',
+      detail: envelope({artifact: file, encoding: ARTIFACT_ENCODING, reason: 'size-limit'}),
+    });
     return;
   }
-  const parts = Math.ceil(text.length / chunkSize);
+  const parts = Math.ceil(bytes.length / ARTIFACT_PART_BYTES);
   for (let part = 0; part < parts; part += 1) {
-    const content = text.slice(part * chunkSize, (part + 1) * chunkSize);
+    const hex = bytes.subarray(part * ARTIFACT_PART_BYTES, (part + 1) * ARTIFACT_PART_BYTES).toString('hex');
+    const data = hex.match(/.{1,16}/g).join(' ');
     coverage.push({
       tool,
       version,
       status: 'ok',
-      detail: JSON.stringify({artifact: file, part: part + 1, parts, content}),
+      detail: envelope({artifact: file, encoding: ARTIFACT_ENCODING, part: part + 1, parts, data}),
     });
   }
+}
+
+function isReportablePath(file) {
+  return file.length <= 400 && !/[^A-Za-z0-9._@+\/-]/.test(file) && file.split('/').every(part =>
+    part !== '' && part !== '.' && part !== '..' && part !== '.git' && part !== '.github'
+    && part !== '.ai' && part !== 'node_modules' && !part.startsWith('.env')
+    && !FORBIDDEN_REPORT_SEGMENTS.has(part.toLowerCase()),
+  );
+}
+
+function boundedText(value, limit = MAX_DETAIL_CHARS) {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ')
+    .trim().slice(0, limit).toWellFormed() || 'sem detalhe';
+}
+
+function boundCollectorOutput(coverage, findings) {
+  // Reserve espaço para pontuação do JSON e para uma linha que sinalize os cortes.
+  let bytesRemaining = MAX_STDOUT_BYTES - 512;
+  const rowBytes = row => Buffer.byteLength(JSON.stringify(row), 'utf8') + 1;
+  const isSummary = row => row.tool.endsWith(':artefato')
+    || !row.tool.includes(':')
+    || (row.tool === 'documentacao:input' && row.status !== 'skipped');
+  const retainedCoverage = coverage.map(row =>
+    row.tool.endsWith(':artefato') ? row : {...row, detail: boundedText(row.detail)},
+  );
+  const summaries = retainedCoverage.filter(isSummary);
+  for (const row of summaries) bytesRemaining -= rowBytes(row);
+  let coverageSlots = MAX_COVERAGE_ROWS - summaries.length - 1;
+
+  const retainedFindings = [];
+  for (const finding of findings) {
+    if (retainedFindings.length === MAX_FINDINGS) break;
+    if (!isReportablePath(finding.file)) continue;
+    const row = {
+      ...finding,
+      line: Math.min(finding.line, 10_000_000),
+      message: boundedText(finding.message),
+      evidence: boundedText(finding.evidence),
+    };
+    const bytes = rowBytes(row);
+    if (bytes > bytesRemaining) break;
+    bytesRemaining -= bytes;
+    retainedFindings.push(row);
+  }
+
+  const selectedCoverage = retainedCoverage.filter(row => {
+    if (isSummary(row)) return true;
+    const bytes = rowBytes(row);
+    if (coverageSlots === 0 || bytes > bytesRemaining) return false;
+    coverageSlots -= 1;
+    bytesRemaining -= bytes;
+    return true;
+  });
+  const omittedCoverage = coverage.length - selectedCoverage.length;
+  const omittedFindings = findings.length - retainedFindings.length;
+  if (omittedCoverage || omittedFindings) {
+    selectedCoverage.push({
+      tool: 'documentacao:limites', version: '1', status: omittedFindings ? 'failed' : 'skipped',
+      detail: `linhas_cobertura_omitidas=${omittedCoverage}; achados_omitidos=${omittedFindings}`,
+    });
+  }
+  return {coverage: selectedCoverage, findings: retainedFindings};
 }
 
 function readToolOutput(label, result, outputFile) {
@@ -1000,7 +1077,7 @@ function readToolOutput(label, result, outputFile) {
     const diagnostic = String(result.stderr || result.stdout || '').trim().slice(0, 200);
     throw new Error(`${label}: status=${result.status ?? result.signal ?? 'desconhecido'}; arquivo_gerado=${existsSync(outputFile)}; ${diagnostic}`);
   }
-  const output = readFileSync(outputFile, 'utf8');
+  const output = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(readFileSync(outputFile));
   if (!output.trim()) throw new Error(`${label}: arquivo gerado vazio`);
   return output;
 }
@@ -1294,15 +1371,15 @@ export async function runCollector(opts = {}) {
       }
     }
 
-    return {coverage, findings};
+    return boundCollectorOutput(coverage, findings);
   } catch (err) {
     coverage.push({
       tool: 'documentacao:input',
       version: '1',
       status: 'failed',
-      detail: (err instanceof Error ? err.message : String(err)).slice(0, 300),
+      detail: boundedText(err instanceof Error ? err.message : String(err), 300),
     });
-    return {coverage, findings};
+    return boundCollectorOutput(coverage, findings);
   } finally {
     rmSync(workRoot, {recursive: true, force: true});
   }
@@ -1324,7 +1401,7 @@ if (launchedAsEntry()) {
       process.stdout.write(`${JSON.stringify(result)}\n`);
     })
     .catch(err => {
-      const detail = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+      const detail = boundedText(err instanceof Error ? err.message : String(err), 300);
       const coverage = [{tool: 'documentacao', version: '1', status: 'failed', detail}];
       process.stdout.write(`${JSON.stringify({coverage, findings: []})}\n`);
     });
