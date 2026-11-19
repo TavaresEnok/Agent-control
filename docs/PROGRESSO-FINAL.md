@@ -1383,3 +1383,7 @@ PAUSADO-COTA
 - 19/11/2026 23:13 UTC — Na prova cruzada, um link antigo de dependências da bancada estava quebrado. As dependências de arquitetura foram repostas da imagem fixada, com comparação do package-lock. Os seis testes de arquitetura que falharam passaram na repetição. As outras duas falhas ficaram na ordem de interoperabilidade.
 - 19/11/2026 23:13 UTC — trabalho-C-INTEROPERABILIDADE-LAB iniciado em final-correcao-instalacao por terra high.
 - 19/11/2026 23:13 UTC — Compartilha a decisão de evidência operacional nos limites da análise estática. Ordem C-PRONTIDAO-VIVA-R14 em worktree separado conforme 43f1c664.
+- 19/11/2026 23:13 UTC — trabalho-C-PRONTIDAO-VIVA-R14 iniciado em final-pront-viva por terra high.
+- 19/11/2026 23:16 UTC — A bancada também tinha links quebrados para dependências locais de QA e dependências. As duas árvores foram repostas das imagens aceitas após confrontar o package-lock. O Go, o planejador e as bibliotecas de mutação de QA estão disponíveis na cópia privada das mesmas imagens.
+- 19/11/2026 23:17 UTC — C-PRONTIDAO-VIVA-R14 encerrado com código 0.
+- 19/11/2026 23:17 UTC — Correção pront-viva recebida em f91c38df. Revisão Sol high somente leitura solicitada.
