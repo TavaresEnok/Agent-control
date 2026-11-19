@@ -3,6 +3,12 @@
 # /repo montado somente leitura, raiz read-only, usuário 65532, sem socket e sem rede por padrão.
 set -eu
 
+fail() {
+  printf '%s\n' "$1" >&2
+  printf '{"coverage":[{"tool":"dependencias-collector","version":"1.0.0","status":"failed","detail":"%s"}],"findings":[]}\n' "$1"
+  exit 78
+}
+
 for name in GH_TOKEN GITHUB_TOKEN GITLAB_TOKEN NPM_TOKEN NODE_AUTH_TOKEN \
   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
   DOCKER_HOST DOCKER_CONFIG DOCKER_CERT_PATH KUBECONFIG \
@@ -13,25 +19,21 @@ done
 for arg in "$@"; do
   case "$arg" in
     *..*)
-      printf '%s\n' DEPENDENCIAS_PATH_FORBIDDEN >&2
-      exit 78
+      fail DEPENDENCIAS_PATH_FORBIDDEN
       ;;
     *.sock*)
-      printf '%s\n' DEPENDENCIAS_SOCKET_FORBIDDEN >&2
-      exit 78
+      fail DEPENDENCIAS_SOCKET_FORBIDDEN
       ;;
   esac
 done
 
 if [ -S /var/run/docker.sock ] || [ -S /run/docker.sock ]; then
-  printf '%s\n' DEPENDENCIAS_SOCKET_FORBIDDEN >&2
-  exit 78
+  fail DEPENDENCIAS_SOCKET_FORBIDDEN
 fi
 
 REPO_TARGET="${AC_MODULE_REPO:-/repo}"
 if [ ! -d "$REPO_TARGET" ]; then
-  printf '%s\n' DEPENDENCIAS_REPO_MISSING >&2
-  exit 78
+  fail DEPENDENCIAS_REPO_MISSING
 fi
 
 export HOME=/tmp

@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import {execFile as execFileCb} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile} from 'node:fs/promises';
+import {chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, truncate, writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
+import {EventEmitter} from 'node:events';
+import {fetchLatestVersion} from '../deploy/modules/dependencias/fetch-registry.mjs';
 import {
   analyzeLockfileAndSbom,
   classifySemverRisk,
@@ -15,6 +17,8 @@ import {
   findLineInPackageJson,
   parseAstGrepJson,
   runCollection,
+  runAstGrepCheck,
+  runJscodeshiftCheck,
   satisfiesRange,
   toRepoRelPath,
   validateModuleOutput,
@@ -40,8 +44,8 @@ test('Dockerfile e lockfiles do módulo dependencias são imutáveis e sem usuá
 
   const lockResult = verifyDependenciasLock(moduleDir);
   assert.equal(lockResult.ok, true);
-  assert.equal(lockResult.toolCount, 4);
-  assert.equal(lockResult.totalLockedPackages, 109);
+  assert.equal(lockResult.toolCount, 6);
+  assert.equal(lockResult.totalLockedPackages, 113);
 
   const lockMeta = JSON.parse(await readFile(join(moduleDir, 'dependencias-tools.lock.json'), 'utf8')) as {
     packageLockSha256: string;
@@ -106,7 +110,7 @@ test('entrypoint endurecido recusa travessia, sockets e limpa tokens do ambiente
 test('regras ast-grep têm IDs únicos e codemod jscodeshift carrega sem erro', async () => {
   const rulesDir = join(moduleDir, 'rules');
   const entries = (await readdir(rulesDir)).filter(name => name.endsWith('.yml')).sort();
-  assert.equal(entries.length, 10);
+  assert.equal(entries.length, 15);
   const ids = new Set<string>();
   for (const name of entries) {
     const content = await readFile(join(rulesDir, name), 'utf8');
@@ -114,9 +118,9 @@ test('regras ast-grep têm IDs únicos e codemod jscodeshift carrega sem erro', 
     assert.ok(idMatch, `Falta id em ${name}`);
     assert.equal(ids.has(idMatch[1]), false, `ID duplicado em ${name}: ${idMatch[1]}`);
     ids.add(idMatch[1]);
-    assert.match(content, /^language:\s+(TypeScript|JavaScript)\s*$/m);
+    assert.match(content, /^language:\s+(TypeScript|JavaScript|Tsx)\s*$/m);
     assert.match(content, /^severity:\s+(error|warning|info|hint)\s*$/m);
-    assert.match(content, /^fix:\s+/m);
+    assert.doesNotMatch(content, /^fix:\s+/m);
   }
   const transform = require(join(moduleDir, 'codemods', 'upgrade-rewrites.cjs'));
   assert.equal(typeof transform, 'function');
@@ -167,7 +171,7 @@ test('helpers de semver, linha em package.json, caminhos e parse do ast-grep', (
   assert.equal(parsed[0].line, 3);
   assert.equal(parsed[0].severity, 'alta');
   assert.equal(parsed[0].rule, 'ASTGREP-EXPRESS5-RES-SEND-STATUS');
-  assert.match(parsed[0].evidence, /Reescrita pronta: res\.status\(200\)\.send\(\{ok: true\}\)/);
+  assert.match(parsed[0].evidence, /Revisão necessária/);
 });
 
 test('descoberta ignora symlinks e análise de lockfile + SBOM detecta defeito sem acusar controle limpo', async () => {
@@ -312,7 +316,7 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
         '#!/usr/bin/env node',
         'const fs = require("node:fs");',
         'const args = process.argv.slice(2);',
-        'if (!args.includes("--run-in-band") || !args.includes("--silent") || !args.some(a => a.startsWith("--parser=")) || !args.includes("-t")) {',
+        'if (!args.includes("--run-in-band") || !args.includes("--fail-on-error") || !args.some(a => a.startsWith("--parser=")) || !args.includes("-t")) {',
         '  process.stderr.write("Invalid jscodeshift CLI args\\n");',
         '  process.exit(2);',
         '}',
@@ -501,4 +505,141 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
     await rm(mixedRepo, {recursive: true, force: true});
     await rm(noMetaRepo, {recursive: true, force: true});
   }
+});
+
+test('entradas inválidas são isoladas, workspaces e versões de SBOM preservados', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-regressoes-'));
+  try {
+    await mkdir(join(root, 'packages/a'), {recursive: true});
+    await mkdir(join(root, 'broken'), {recursive: true});
+    await mkdir(join(root, 'other'), {recursive: true});
+    await writeFile(join(root, 'package.json'), JSON.stringify({workspaces: ['packages/*']}));
+    await writeFile(join(root, 'packages/a/package.json'), JSON.stringify({dependencies: {foo: '~1'}}));
+    await writeFile(join(root, 'package-lock.json'), JSON.stringify({packages: {'': {}, 'node_modules/foo': {version: '1.8.0'}}}));
+    await writeFile(join(root, 'broken/package.json'), 'null');
+    await writeFile(join(root, 'other/package.json'), JSON.stringify({dependencies: {foo: '1.0.0'}}));
+    await writeFile(join(root, 'other/package-lock.json'), 'null');
+    await writeFile(join(root, 'syft.cdx.json'), JSON.stringify({bomFormat: 'CycloneDX', components: [
+      {name: 'foo', version: '1.0.0', purl: 'pkg:pypi/foo@1.0.0'},
+      {name: 'bad', version: '1.0.0', purl: 'pkg:npm/%ZZ@1.0.0'},
+      {name: 'foo', version: '1.0.0', purl: 'pkg:npm/foo@1.0.0'},
+      {name: 'foo', version: '1.8.0', purl: 'pkg:npm/foo@1.8.0'},
+    ]}));
+    await writeFile(join(root, 'other/sbom.cdx.json'), '{');
+    const found = await discoverRepoFiles(root);
+    const result = await analyzeLockfileAndSbom({manifests: found.manifests, lockfiles: found.lockfiles, sbomFiles: found.sbomFiles,
+      registry: {path: '', versions: {foo: '2.0.0'}}, ncuDetectedPackages: new Set(['packages/a/package.json:foo'])});
+    assert.equal(result.findings.some(f => f.rule === 'LOCKFILE-MISSING' || f.rule === 'LOCKFILE-VERSION-MISMATCH'), false);
+    assert.equal(result.findings.some(f => f.rule === 'LOCKFILE-INVALID-JSON'), true);
+    assert.equal(result.findings.filter(f => f.rule === 'SBOM-OUTDATED-COMPONENT').length, 2);
+    for (const label of ['manifesto_invalido', 'lockfile_invalido', 'purl_npm_invalida', 'json_invalido']) {
+      assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.includes(label)), label);
+    }
+    assert.equal(satisfiesRange('1.8.0', '~1'), true);
+    assert.equal(satisfiesRange('1.5.0', '1.2 - 1.6'), true);
+    assert.equal(satisfiesRange('1.5.0-beta.1', '^1.2.0'), false);
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test('limites de descoberta e extensões não medidas são registrados', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-limites-'));
+  try {
+    for (let i = 0; i < 51; i++) {
+      const dir = join(root, `m${String(i).padStart(2, '0')}`);
+      await mkdir(dir); await writeFile(join(dir, 'package.json'), '{}');
+    }
+    await mkdir(join(root, 'src'));
+    await Promise.all(Array.from({length: 2001}, (_, i) => writeFile(join(root, 'src', `${i}.js`), '')));
+    const found = await discoverRepoFiles(root);
+    assert.equal(found.skippedManifestLimit, 1);
+    assert.equal(found.skippedSourceLimit, 1);
+    const bytesDir = join(root, 'bytes'); await mkdir(bytesDir);
+    await Promise.all(Array.from({length: 65}, async (_, i) => { const path = join(bytesDir, `${i}.js`); await writeFile(path, ''); await truncate(path, 2 * 1024 * 1024); }));
+    const bytes = await discoverRepoFiles(bytesDir);
+    assert.equal(bytes.skippedSourceBytes, 1);
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test('processos medem TSX e registram erro de parse, saída não zero e relatório limitado', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-ferramentas-'));
+  try {
+    const src = join(root, 'src'); const codemod = join(root, 'codemod');
+    await mkdir(src); await mkdir(codemod);
+    const files = [{rel: 'view.tsx', fullPath: join(src, 'view.tsx'), ext: '.tsx'}, {rel: 'bad.js', fullPath: join(src, 'bad.js'), ext: '.js'}, {rel: 'extra.mts', fullPath: join(src, 'extra.mts'), ext: '.mts'}];
+    for (const [name, content] of [['view.tsx', 'const x = <div/>; res.send(200, x);'], ['bad.js', 'const = ;'], ['extra.mts', 'export const x = 1;']]) {
+      await writeFile(join(src, name), content); await writeFile(join(codemod, name), content);
+    }
+    const astBin = join(moduleDir, 'node_modules/.bin/ast-grep');
+    const jsBin = join(moduleDir, 'node_modules/.bin/jscodeshift');
+    const ast = await runAstGrepCheck({sourceFiles: files, isoSrcDir: src, astGrepBin: astBin, astGrepVersion: '0.51.3', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
+    assert.ok(ast.findings.some(f => f.file === 'view.tsx' && f.rule.includes('SEND-STATUS')));
+    assert.ok(ast.coverage.some(c => c.detail.includes('extra.mts') && c.status === 'skipped'));
+    const js = await runJscodeshiftCheck({sourceFiles: files, isoSrcDir: src, isoCodemodDir: codemod, workRoot: root, jscodeshiftBin: jsBin, jscodeshiftVersion: '17.4.0', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')});
+    assert.ok(js.coverage.some(c => c.detail.includes('bad.js') && c.status === 'failed'));
+    assert.ok(js.coverage.some(c => c.detail.includes('view.tsx') && c.status === 'ok'));
+    const fake = join(root, 'fake.cjs');
+    await writeFile(fake, '#!/usr/bin/env node\nprocess.stdout.write("[]"); process.exit(2);\n'); await chmod(fake, 0o755);
+    const failed = await runAstGrepCheck({sourceFiles: files, isoSrcDir: src, astGrepBin: fake, astGrepVersion: 'x', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
+    assert.equal(failed.coverage[0].status, 'failed');
+    await writeFile(fake, '#!/usr/bin/env node\nrequire("fs").writeFileSync(process.env.AC_JSCODESHIFT_REPORT, "x".repeat(2097153));\n');
+    const limited = await runJscodeshiftCheck({sourceFiles: [files[0]], isoSrcDir: src, isoCodemodDir: codemod, workRoot: root, jscodeshiftBin: fake, jscodeshiftVersion: 'x', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')});
+    assert.ok(limited.coverage.some(c => c.status === 'skipped' && c.detail.includes('prova_parcial')));
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test('consulta do registro termina em timeout ou limite de bytes com resposta sintética', async () => {
+  let destroyed = false;
+  const hanging = () => Object.assign(new EventEmitter(), {destroy() { destroyed = true; }});
+  await assert.rejects(fetchLatestVersion('synthetic', {get: hanging, timeoutMs: 20}), /timeout/);
+  assert.equal(destroyed, true);
+  const oversized = (_url: string, cb: (response: EventEmitter & {statusCode: number; destroy(): void}) => void) => {
+    const req = Object.assign(new EventEmitter(), {destroy() {}});
+    const res = Object.assign(new EventEmitter(), {statusCode: 200, destroy() {}});
+    queueMicrotask(() => { cb(res); res.emit('data', Buffer.alloc(20)); });
+    return req;
+  };
+  await assert.rejects(fetchLatestVersion('synthetic', {get: oversized, timeoutMs: 1000, maxBytes: 10}), /limite de bytes/);
+});
+
+test('manifestos e registro inválidos não apagam análises de outros arquivos', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-invalidos-'));
+  try {
+    await mkdir(join(root, 'bad')); await mkdir(join(root, 'good'));
+    await writeFile(join(root, 'bad/package.json'), 'null');
+    await writeFile(join(root, 'good/package.json'), JSON.stringify({dependencies: {foo: '1.0.0', broken: '1.0.0'}}));
+    await writeFile(join(root, 'good/package-lock.json'), JSON.stringify({packages: {'node_modules/foo': {version: '1.0.0'}, 'node_modules/broken': {version: '1.0.0'}}}));
+    const registry = join(root, 'registro.json'); await writeFile(registry, JSON.stringify({foo: '2.0.0', broken: 'inválido'}));
+    const ncu = join(root, 'ncu.cjs');
+    await writeFile(ncu, '#!/usr/bin/env node\nconst fs=require("fs"); const a=process.argv; const r=JSON.parse(fs.readFileSync(a[a.indexOf("--registry")+1])); if(r.broken) process.exit(2); process.stdout.write(JSON.stringify({foo:"2.0.0"}));');
+    await chmod(ncu, 0o755);
+    const out = await runCollection({repoRoot: root, registryPath: registry, ncuBin: ncu, ncuVersion: 'x', astGrepVersion: 'x', jscodeshiftVersion: 'x', astGrepBin: join(moduleDir, 'node_modules/.bin/ast-grep'), jscodeshiftBin: join(moduleDir, 'node_modules/.bin/jscodeshift')});
+    assert.ok(out.findings.some(f => f.rule === 'NCU-INVALID-PACKAGE-JSON'));
+    assert.ok(out.findings.some(f => f.rule === 'NCU-OUTDATED-MAJOR' && f.file === 'good/package.json'));
+    assert.ok(out.coverage.some(c => c.detail.includes('sem_metadados=1')));
+    assert.ok(out.coverage.some(c => c.detail.includes('metadados_invalidos=1') && c.status === 'skipped'));
+    assert.ok(out.coverage.some(c => c.status === 'failed' && c.detail.includes('manifesto_invalido')));
+  } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test('padrões ambíguos requerem revisão e entrada ausente produz JSON', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-semantica-'));
+  try {
+    const src = join(root, 'src'), dst = join(root, 'dst'); await mkdir(src); await mkdir(dst);
+    const content = "const n = 10; new Buffer(n); url.parse('/rota'); transport.send(200, body);";
+    await writeFile(join(src, 'app.js'), content); await writeFile(join(dst, 'app.js'), content);
+    const files = [{rel: 'app.js', fullPath: join(src, 'app.js'), ext: '.js'}];
+    const js = await runJscodeshiftCheck({sourceFiles: files, isoSrcDir: src, isoCodemodDir: dst, workRoot: root, jscodeshiftBin: join(moduleDir, 'node_modules/.bin/jscodeshift'), jscodeshiftVersion: '17.4.0', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')});
+    assert.equal(await readFile(join(dst, 'app.js'), 'utf8'), content);
+    assert.equal(js.findings.length, 2);
+    assert.ok(js.findings.every(f => f.evidence.includes('Revisão necessária')));
+    const ast = await runAstGrepCheck({sourceFiles: files, isoSrcDir: src, astGrepBin: join(moduleDir, 'node_modules/.bin/ast-grep'), astGrepVersion: '0.51.3', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
+    assert.ok(ast.findings.every(f => !f.evidence.includes('Reescrita pronta')));
+    const entrypoint = join(root, 'entrypoint.sh');
+    const script = await readFile(join(moduleDir, 'entrypoint.sh'), 'utf8');
+    await writeFile(entrypoint, script.replaceAll('/var/run/docker.sock', join(root, 'socket-a')).replaceAll('/run/docker.sock', join(root, 'socket-b')));
+    await assert.rejects(execFile('sh', [entrypoint], {env: {...process.env, AC_MODULE_REPO: join(root, 'ausente')}}), (err: any) => {
+      assert.equal(err.code, 78); const output = JSON.parse(err.stdout);
+      assert.equal(output.coverage[0].status, 'failed'); assert.match(output.coverage[0].detail, /REPO_MISSING/); return true;
+    });
+  } finally { await rm(root, {recursive: true, force: true}); }
 });

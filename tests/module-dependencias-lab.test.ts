@@ -118,31 +118,31 @@ test('laboratório real do módulo dependencias acha defeitos plantados e aprova
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-APP-DEL' && f.file === 'src/server.ts' && f.evidence.includes('app.delete')),
+    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-APP-DEL' && f.file === 'src/server.ts' && f.evidence.includes('Revisão necessária')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-RES-SEND-STATUS' && f.file === 'src/server.ts' && f.evidence.includes('res.status(200).send')),
+    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-RES-SEND-STATUS' && f.file === 'src/server.ts' && f.evidence.includes('Revisão necessária')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-RES-JSON-STATUS' && f.file === 'src/server.ts' && f.evidence.includes('res.status(404).json')),
+    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-RES-JSON-STATUS' && f.file === 'src/server.ts' && f.evidence.includes('Revisão necessária')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-LODASH4-REMOVED-PLUCK' && f.file === 'src/server.ts' && f.evidence.includes('_.map')),
+    dirty.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-LODASH4-REMOVED-PLUCK' && f.file === 'src/server.ts' && f.evidence.includes('Revisão necessária')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-BUFFER-CTOR' && f.file === 'src/legacy-utils.js' && f.evidence.includes('Buffer.from')),
+    dirty.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-BUFFER-CTOR' && f.file === 'src/legacy-utils.js' && f.evidence.includes('Revisão necessária')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-URL-PARSE' && f.file === 'src/legacy-utils.js' && f.evidence.includes('new URL')),
+    dirty.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-URL-PARSE' && f.file === 'src/legacy-utils.js' && f.evidence.includes('Revisão necessária')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-UTIL-ISARRAY' && f.file === 'src/legacy-utils.js' && f.evidence.includes('Array.isArray')),
+    dirty.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-UTIL-ISARRAY' && f.file === 'src/legacy-utils.js' && f.evidence.includes('Revisão necessária')),
     true
   );
   assert.equal(

@@ -1,0 +1,9 @@
+id: express5-app-del-tsx
+language: Tsx
+severity: error
+message: "app.del() / router.del() pode usar API removida no Express 5; revise antes de substituir por .delete()"
+rule:
+  pattern: $APP.del($PATH, $$$ARGS)
+constraints:
+  APP:
+    regex: "^(app|router)$"

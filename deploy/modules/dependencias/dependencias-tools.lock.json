@@ -8,7 +8,7 @@
   },
   "registry": "https://registry.npmjs.org",
   "lockfileVersion": 3,
-  "packageLockSha256": "516f5036761e13440c2864d9fff220558c8d2d768e34147c2cb9c84c60eca85b",
+  "packageLockSha256": "365ec7c9ec5965113fe2450727cbe4c7293596ee55f1e1ae1f2a3299ca1fa8cc",
   "offlineRegistrySha256": "a65f02a365f847be08ac21436e04847cc02e62699284a7b931dbe54ccbe28a57",
   "dependencies": {
     "npm-check-updates": {
@@ -34,6 +34,18 @@
       "license": "MIT",
       "integrity": "sha512-i3ESKiiTsGynxzTg5BhsZViD0ai72/6SsI1efDZxG6/5KCoElsmquxtyhXK5lpEgoO7MTNpYkjFEdEL97SkBNg==",
       "resolved": "https://registry.npmjs.org/jscodeshift/-/jscodeshift-17.4.0.tgz"
+    },
+    "semver": {
+      "version": "7.7.2",
+      "license": "ISC",
+      "integrity": "sha512-RF0Fw+rO5AMf9MAyaRXI4AV0Ulj5lMHqVxxdSgiVbixSCXoEmmX/jk0CuJw4+3SqroYO9VoUh+HcuJivvtJemA==",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.7.2.tgz"
+    },
+    "minimatch": {
+      "version": "10.0.3",
+      "license": "ISC",
+      "integrity": "sha512-IPZ167aShDZZUMdRk66cyQAW3qr0WzbHkPdMYa8bzZhlHhO3jALbKdxcaak7W9FfT2rZNpQuUu4Od7ILEpXSaw==",
+      "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-10.0.3.tgz"
     }
   }
 }

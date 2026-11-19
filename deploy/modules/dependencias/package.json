@@ -10,6 +10,8 @@
   "dependencies": {
     "@ast-grep/cli": "0.51.3",
     "jscodeshift": "17.4.0",
-    "npm-check-updates": "23.1.1"
+    "minimatch": "10.0.3",
+    "npm-check-updates": "23.1.1",
+    "semver": "7.7.2"
   }
 }

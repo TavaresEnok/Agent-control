@@ -42,6 +42,10 @@ export interface DiscoveredRepoFiles {
   hasJavaProject: boolean;
   skippedSymlinks: number;
   skippedOversized: number;
+  skippedManifestLimit: number;
+  skippedSourceLimit: number;
+  skippedSourceBytes: number;
+  readErrors: number;
 }
 
 export function toRepoRelPath(rawPath: string, fallback?: string): string;
@@ -77,3 +81,6 @@ export function runCollection(options?: {
   sgConfigPath?: string;
   transformPath?: string;
 }): Promise<ModuleCollectorOutput>;
+
+export function runAstGrepCheck(input: {sourceFiles: DiscoveredSourceFile[]; isoSrcDir: string; astGrepBin: string; astGrepVersion: string; sgConfigPath: string}): Promise<ModuleCollectorOutput>;
+export function runJscodeshiftCheck(input: {sourceFiles: DiscoveredSourceFile[]; isoSrcDir: string; isoCodemodDir: string; workRoot: string; jscodeshiftBin: string; jscodeshiftVersion: string; transformPath: string}): Promise<ModuleCollectorOutput>;
