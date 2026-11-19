@@ -692,3 +692,287 @@ test('selectForNew do projeto não é bloqueado por intenção accepted em conte
     await database.close();
   }
 });
+
+test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist usam perfis distintos e nunca criam grant reviewer', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const database = await isolatedDatabase(databaseUrl!, 'designspec');
+  const db = new Ledger(database.url);
+  const root = await mkdtemp(join(tmpdir(), 'ac-design-spec-'));
+  const dataDirectory = join(root, 'data');
+  try {
+    await mkdir(dataDirectory, {recursive: true, mode: 0o700});
+    await db.migrate();
+    const principal = 'design-spec-owner';
+    const projectId = randomUUID();
+    const capacity = new Capacity(db);
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'Design Specialist Chain']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
+    await capacity.registerModel(principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add',
+    });
+    await capacity.registerModel(principal, {
+      provider: 'codex', model: 'gpt-6.1-sol', efforts: ['medium', 'high'], roles: [...roles], source: 'personal://account-add',
+    });
+    const claudeId = randomUUID();
+    const codexId = randomUUID();
+    await capacity.addAccount(principal, projectId, {
+      id: claudeId, provider: 'claude', label: 'claude', resourceIdentity: `claude:${claudeId}`, mode: 'synthetic',
+      eligibility: 'documented_supported', eligibilitySource: 'synthetic://designspec', maxConcurrent: 4,
+    });
+    await capacity.addAccount(principal, projectId, {
+      id: codexId, provider: 'codex', label: 'codex', resourceIdentity: `codex:${codexId}`, mode: 'synthetic',
+      eligibility: 'documented_supported', eligibilitySource: 'synthetic://designspec', maxConcurrent: 4,
+    });
+    await capacity.observeQuota(principal, claudeId, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+    await capacity.observeQuota(principal, codexId, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+
+    // Cadeia reviewer do projeto é Codex; cadeia specialist ganha 3 perfis Claude via preparar (mesma conta, outra sessão para o revisor).
+    const codexReviewerProfile = randomUUID();
+    await capacity.addProfile(principal, projectId, {
+      id: codexReviewerProfile, accountId: codexId, model: 'gpt-6.1-sol', effort: 'high', role: 'reviewer',
+    });
+    await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
+      schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+      roles: {reviewer: {regular: [codexReviewerProfile], emergency: []}},
+    }));
+    const mainContext = await db.createContext(principal, projectId, randomUUID());
+    const prepared = await prepareDesignSpecialist({ledger: db, owner: principal, projectId, apply: true});
+    const createProfileId = prepared.profiles.find(p => p.purpose === 'criar')?.profileId;
+    const examinerProfileId = prepared.profiles.find(p => p.purpose === 'examinador')?.profileId;
+    const reviewerProfileId = prepared.profiles.find(p => p.purpose === 'revisor')?.profileId;
+    assert.ok(createProfileId && examinerProfileId && reviewerProfileId);
+    assert.equal(new Set([createProfileId, examinerProfileId, reviewerProfileId]).size, 3);
+
+    const repo = await initRepo(root);
+    const installationPath = await writeInstallation(root, {databaseUrl: database.url, projectId, repo, owner: principal, dataDirectory});
+    const jobs = new Map<string, {task: string; role: string; grantId: string}>();
+    const visualScores = [
+      'hierarquia', 'tipografia', 'cor', 'ritmo', 'grade', 'densidade', 'componentes', 'marca', 'polimento',
+    ].map(axis => ({axis, score: 9, region: 'topo', suggestion: 'Manter #1b1917 e 16px.'}));
+    const orderedRoles: string[] = [];
+    const supervisor = {
+      active: true,
+      supportsAccount(accountId: string) {
+        return accountId === claudeId;
+      },
+      async start(_principal: string, _authority: unknown, request: {jobId: string; task: string; role: string; grantId: string}) {
+        jobs.set(request.jobId, {task: request.task, role: request.role, grantId: request.grantId});
+        return {state: 'running'};
+      },
+      async reconcile(_principal: string, _authority: unknown, request: {jobId: string}) {
+        const job = jobs.get(request.jobId);
+        const task = job?.task ?? '';
+        assert.equal(job?.role, 'specialist');
+        if (task.startsWith('Pedido de criação.')) {
+          orderedRoles.push('create');
+          return {
+            state: 'completed',
+            output: JSON.stringify({
+              kind: 'criacao',
+              tokens: {color: {bg: {$value: '#f6f4ef', $type: 'color'}, fg: {$value: '#1b1917', $type: 'color'}}},
+              screens: [{name: 'inicio', html: '<!doctype html><html lang="pt-BR"><head><title>Início</title></head><body><main><h1>Início</h1></main></body></html>', css: 'body { color: #1b1917; }\n'}],
+            }),
+          };
+        }
+        if (task.startsWith('Pedido de confirmação.')) {
+          orderedRoles.push('reviewer');
+          return {state: 'completed', output: JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'Baixo contraste.', proof: 'color:#777'})};
+        }
+        if (task.startsWith('Pedido de crítica visual do revisor.')) {
+          orderedRoles.push('reviewer');
+          return {state: 'completed', output: JSON.stringify({kind: 'visual', scores: visualScores})};
+        }
+        if (task.startsWith('Pedido de crítica visual.')) {
+          orderedRoles.push('examiner');
+          return {state: 'completed', output: JSON.stringify({kind: 'visual', scores: visualScores})};
+        }
+        orderedRoles.push('examiner');
+        return {
+          state: 'completed',
+          output: JSON.stringify({
+            kind: 'exame',
+            filesRead: ['inicio.html'],
+            checklist: ['DESIGN-NIELSEN-H1-ESTADO'],
+            findings: [{
+              title: 'Contraste baixo',
+              severity: 'media',
+              file: 'inicio.html',
+              line: 1,
+              scenario: 'Texto cinza.',
+              suggestion: 'Usar #1b1917.',
+              cwe: null,
+              reference: 'WCAG-1-4-3-CONTRASTE',
+              snippet: 'color:#777',
+            }],
+          }),
+        };
+      },
+      async retireTerminal() {
+        return {state: 'removed'};
+      },
+    };
+    const composeRuntime = async () => ({executions: [supervisor]}) as never;
+    const resolved = await resolvePersonalDesign([], {installationPath, projectId, composeRuntime});
+    try {
+      await runDesignCreate({
+        dataDirectory: resolved.dataDirectory,
+        runId: randomUUID(),
+        repository: resolved.repo,
+        briefing: 'Painel claro.',
+        screens: 1,
+        rounds: 1,
+        referenceNote: '',
+        worker: resolved.worker,
+        reserve: () => resolved.reserve('specialist', undefined, {purpose: 'create'}),
+        release: seat => resolved.release(seat),
+        intentId: resolved.intentId,
+        examine: async (_round, files) => {
+          const exam = await runDesignModule({
+            activation: 'personal',
+            projectId: resolved.projectId,
+            repo: resolved.repo,
+            targetUrl: 'http://127.0.0.1:4173',
+            dataDirectory: resolved.dataDirectory,
+            intentId: resolved.intentId,
+            runId: randomUUID(),
+            createdAt: new Date(),
+            commit: resolved.commit,
+            files,
+            worker: resolved.worker,
+            reserve: resolved.reserve,
+            release: resolved.release,
+            scoreVisual: true,
+            tools: {},
+          });
+          assert.ok(exam.achados.length >= 1);
+          assert.ok(exam.achados.some(item => item.verifier?.provider === 'claude'));
+          return {
+            screens: files.filter(f => f.path.endsWith('.html')).map(f => ({
+              name: f.path.slice(0, -'.html'.length),
+              rejected: false,
+              findings: exam.findings,
+              visualNotes: [],
+            })),
+            notes: [],
+          };
+        },
+      });
+      const grants = (await db.pool.query<{role: string; profile_id: string; provider: string}>(
+        `SELECT g.role, g.profile_id::text AS profile_id, a.provider
+         FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
+         WHERE g.intent_id=$1 ORDER BY g.created_at`,
+        [resolved.intentId],
+      )).rows;
+      assert.equal(grants.some(g => g.role === 'reviewer'), false);
+      assert.equal(grants.length, orderedRoles.length);
+      assert.ok(grants.length >= 5);
+      assert.ok(grants.every(g => g.role === 'specialist' && g.provider === 'claude'));
+      const expectedByPurpose = {create: createProfileId, examiner: examinerProfileId, reviewer: reviewerProfileId};
+      orderedRoles.forEach((purpose, index) => {
+        assert.equal(grants[index]?.profile_id, expectedByPurpose[purpose as keyof typeof expectedByPurpose]);
+      });
+      assert.notEqual(examinerProfileId, reviewerProfileId);
+    } finally {
+      await resolved.close();
+    }
+    void mainContext;
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('exame de design sem segundo perfil Claude em specialist recusa com DESIGN_REVIEWER_UNAVAILABLE e nunca reserva reviewer Codex', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const database = await isolatedDatabase(databaseUrl!, 'designnorev');
+  const db = new Ledger(database.url);
+  const root = await mkdtemp(join(tmpdir(), 'ac-design-norev-'));
+  const dataDirectory = join(root, 'data');
+  try {
+    await mkdir(dataDirectory, {recursive: true, mode: 0o700});
+    await db.migrate();
+    const principal = 'design-norev-owner';
+    const projectId = randomUUID();
+    const capacity = new Capacity(db);
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'Design Sem Revisor']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
+    await capacity.registerModel(principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
+    });
+    await capacity.registerModel(principal, {
+      provider: 'codex', model: 'gpt-6.1-sol', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
+    });
+    await capacity.registerModel(principal, {
+      provider: 'grok', model: 'grok-4.7', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
+    });
+    const claudeId = randomUUID();
+    const codexId = randomUUID();
+    const grokId = randomUUID();
+    for (const [id, provider] of [[claudeId, 'claude'], [codexId, 'codex'], [grokId, 'grok']] as const) {
+      await capacity.addAccount(principal, projectId, {
+        id, provider, label: provider, resourceIdentity: `${provider}:${id}`, mode: 'synthetic',
+        eligibility: 'documented_supported', eligibilitySource: 'synthetic://designnorev', maxConcurrent: 4,
+      });
+      await capacity.observeQuota(principal, id, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+    }
+    const specClaude = randomUUID();
+    const specGrok = randomUUID();
+    const codexRev = randomUUID();
+    await capacity.addProfile(principal, projectId, {id: specClaude, accountId: claudeId, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: specGrok, accountId: grokId, model: 'grok-4.7', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: codexRev, accountId: codexId, model: 'gpt-6.1-sol', effort: 'medium', role: 'reviewer'});
+    const rev = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
+      schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+      roles: {
+        specialist: {regular: [specClaude, specGrok], emergency: []},
+        reviewer: {regular: [codexRev], emergency: []},
+      },
+    }));
+    const mainContext = await db.createContext(principal, projectId, randomUUID());
+    await capacity.assignPolicy(principal, mainContext, rev);
+
+    const repo = await initRepo(root);
+    const installationPath = await writeInstallation(root, {databaseUrl: database.url, projectId, repo, owner: principal, dataDirectory});
+    const composeRuntime = async () => ({executions: [benchDesignSupervisor([claudeId])]}) as never;
+    const resolved = await resolvePersonalDesign([], {installationPath, projectId, composeRuntime});
+    try {
+      await assert.rejects(
+        () => runDesignModule({
+          activation: 'personal',
+          projectId: resolved.projectId,
+          repo: resolved.repo,
+          targetUrl: 'http://127.0.0.1:4173',
+          dataDirectory: resolved.dataDirectory,
+          intentId: resolved.intentId,
+          runId: randomUUID(),
+          createdAt: new Date(),
+          commit: resolved.commit,
+          files: [{path: 'src/index.html', text: '<!doctype html><html><body><h1>Painel</h1></body></html>'}],
+          worker: resolved.worker,
+          reserve: resolved.reserve,
+          release: resolved.release,
+          scoreVisual: true,
+          tools: {},
+        }),
+        (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_REVIEWER_UNAVAILABLE',
+      );
+      const grants = (await db.pool.query<{role: string; profile_id: string}>(
+        'SELECT role, profile_id::text AS profile_id FROM ac_capacity_grants WHERE intent_id=$1',
+        [resolved.intentId],
+      )).rows;
+      assert.equal(grants.some(g => g.role === 'reviewer'), false);
+      assert.ok(grants.every(g => g.role === 'specialist' && g.profile_id === specClaude));
+    } finally {
+      await resolved.close();
+    }
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});

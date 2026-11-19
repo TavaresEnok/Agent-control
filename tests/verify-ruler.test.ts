@@ -204,8 +204,8 @@ test('régua confirma falhas plantadas e descarta falsos positivos', async () =>
     await capacity.addAccount(principal, project, {id: claude, provider: 'claude', label: 'claude', resourceIdentity: `claude:${claude}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-ruler', maxConcurrent: 4});
     await capacity.addAccount(principal, project, {id: claudeReviewer, provider: 'claude', label: 'claude-revisor', resourceIdentity: `claude:${claudeReviewer}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-ruler', maxConcurrent: 4});
     await capacity.addProfile(principal, project, {id: specialist, accountId: claude, model: 'claude-opus-5-5', effort: 'high', role: 'specialist'});
-    await capacity.addProfile(principal, project, {id: reviewer, accountId: claudeReviewer, model: 'claude-opus-5-5', effort: 'high', role: 'reviewer'});
-    const revision = await capacity.publish(principal, project, 0, {schemaVersion: 1, maxProgrammersPerContext: 2, maxEvaluatorsPerContext: 4, roles: {specialist: {regular: [specialist], emergency: []}, reviewer: {regular: [reviewer], emergency: []}}});
+    await capacity.addProfile(principal, project, {id: reviewer, accountId: claudeReviewer, model: 'claude-opus-5-5', effort: 'high', role: 'specialist'});
+    const revision = await capacity.publish(principal, project, 0, {schemaVersion: 1, maxProgrammersPerContext: 2, maxEvaluatorsPerContext: 4, roles: {specialist: {regular: [specialist], emergency: [reviewer]}}});
     const context = await db.createContext(principal, project, randomUUID());
     await capacity.assignPolicy(principal, context, revision);
     await capacity.observeQuota(principal, claude, {status: 'available', source: 'synthetic://verify-ruler', ttlSeconds: 3600});

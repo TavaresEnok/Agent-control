@@ -21,12 +21,19 @@ import {
   type DesignWorker,
 } from './design-types.ts';
 
-type DesignSeat = {
+export type DesignReserveOptions = {
+  purpose?: 'create' | 'examiner' | 'reviewer';
+  avoidProfileId?: string;
+  avoidAccountId?: string;
+};
+
+export type DesignSeat = {
   provider: string;
   model: string;
   accountId: string;
   profileId: string;
   grantId: string;
+  grantRole?: 'specialist' | 'reviewer';
 };
 
 /** One PNG the examiner and the reviewer both open. The path is on disk for the call. */
@@ -51,7 +58,7 @@ export type DesignExamineInput = {
   checklist: readonly DesignChecklistItem[];
   rawFindings: readonly DesignRawFinding[];
   worker: DesignWorker;
-  reserve(role: 'specialist' | 'reviewer', avoidProvider?: string): Promise<DesignSeat>;
+  reserve(role: 'specialist' | 'reviewer', avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat>;
   release(seat: DesignSeat): Promise<void>;
   /** Fora dos testes de sequência: a CLI liga a crítica visual. */
   scoreVisual?: boolean;
@@ -382,12 +389,13 @@ async function askVisual(
   input: DesignExamineInput,
   screen: DesignExamineInput['screens'][number],
   role: 'specialist' | 'reviewer',
-): Promise<{scores: VisualScore[] | null; failure: string | null; model: string}> {
-  const seat = await input.reserve(role);
+  avoid?: DesignReserveOptions,
+): Promise<{scores: VisualScore[] | null; failure: string | null; model: string; seat: DesignSeat}> {
+  const seat = await input.reserve(role, undefined, avoid);
   try {
     acceptClaudeExamSeat(seat);
     const call = DesignWorkerCall.parse({
-      role,
+      role: seat.grantRole ?? role,
       provider: seat.provider,
       accountId: seat.accountId,
       profileId: seat.profileId,
@@ -399,8 +407,8 @@ async function askVisual(
       writePaths: [] as const,
     });
     const hit = await runModel(input.worker, call);
-    if (hit.failure) return {scores: null, failure: hit.failure, model: seat.model};
-    return {scores: parseVisualScores(parseJson(hit.output)), failure: null, model: seat.model};
+    if (hit.failure) return {scores: null, failure: hit.failure, model: seat.model, seat};
+    return {scores: parseVisualScores(parseJson(hit.output)), failure: null, model: seat.model, seat};
   } finally {
     await input.release(seat);
   }
@@ -429,7 +437,14 @@ function confirmationTask(
 }
 
 function rethrowReviewer(error: unknown): boolean {
-  return error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'DESIGN_CONFIRMATION_INVALID' || error.code === 'EXAM_PROVIDER_UNSUPPORTED' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED');
+  return error instanceof Refusal && (
+    error.code === 'EXAM_LOGIN_STALE'
+    || error.code === 'DESIGN_CONFIRMATION_INVALID'
+    || error.code === 'EXAM_PROVIDER_UNSUPPORTED'
+    || error.code === 'DESIGN_REVIEWER_UNAVAILABLE'
+    || error.code === 'EXAM_LOGIN_BUSY'
+    || error.code === 'EXAM_LOGIN_RESTORE_FAILED'
+  );
 }
 
 async function confirmFinding(
@@ -438,13 +453,14 @@ async function confirmFinding(
   code: string,
   captures: readonly DesignScreenCapture[] | undefined,
   noteModel: (model: string) => void,
+  avoid?: DesignReserveOptions,
 ): Promise<{seat: DesignSeat; confirm: DesignConfirmResult}> {
-  const seat = await input.reserve('reviewer');
+  const seat = await input.reserve('reviewer', undefined, avoid);
   try {
     acceptClaudeExamSeat(seat);
     noteModel(seat.model);
     const call = DesignWorkerCall.parse({
-      role: 'reviewer',
+      role: seat.grantRole ?? 'reviewer',
       provider: seat.provider,
       accountId: seat.accountId,
       profileId: seat.profileId,
@@ -528,7 +544,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     try {
       acceptClaudeExamSeat(seat);
       const call = DesignWorkerCall.parse({
-        role: 'specialist',
+        role: seat.grantRole ?? 'specialist',
         provider: seat.provider,
         accountId: seat.accountId,
         profileId: seat.profileId,
@@ -606,7 +622,14 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           reviewerAsked = true;
         }
         try {
-          const reviewed = await confirmFinding(input, finding, screen.code, screen.captures, model => remember('reviewer', model));
+          const reviewed = await confirmFinding(
+            input,
+            finding,
+            screen.code,
+            screen.captures,
+            model => remember('reviewer', model),
+            {avoidProfileId: seat.profileId, avoidAccountId: seat.accountId},
+          );
           if (input.scoreVisual !== true && !reviewerJudged) {
             modelCoverage.reviewer.judged += 1;
             reviewerJudged = true;
@@ -626,7 +649,10 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     }
     if (input.scoreVisual === true) {
       const examinerVisual = await askVisual(input, screen, 'specialist');
-      const reviewerVisual = await askVisual(input, screen, 'reviewer');
+      const reviewerVisual = await askVisual(input, screen, 'reviewer', {
+        avoidProfileId: examinerVisual.seat.profileId,
+        avoidAccountId: examinerVisual.seat.accountId,
+      });
       remember('examiner', examinerVisual.model);
       remember('reviewer', reviewerVisual.model);
       if (examinerVisual.failure) noteFailure('examiner', examinerVisual.failure);
@@ -647,7 +673,14 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         if (uncertain.length > 0) notes.push(`Julgamento incerto em ${oneLine(screen.route)}: ${uncertain.join('; ')}.`.slice(0, 500));
         for (const finding of visualExamFindings(screen.file, examinerVisual.scores)) {
           try {
-            const reviewed = await confirmFinding(input, finding, screen.code, screen.captures, model => remember('reviewer', model));
+            const reviewed = await confirmFinding(
+              input,
+              finding,
+              screen.code,
+              screen.captures,
+              model => remember('reviewer', model),
+              {avoidProfileId: examinerVisual.seat.profileId, avoidAccountId: examinerVisual.seat.accountId},
+            );
             findings.push(finding);
             confirmations.push({
               finding,

@@ -3,10 +3,10 @@ import {randomUUID} from 'node:crypto';
 import {lstat, readFile, realpath} from 'node:fs/promises';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {promisify} from 'node:util';
-import {Capacity, type Grant} from './capacity.ts';
+import {Capacity} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
 import {finishExamIntent, finishExamIntentTx} from './exam-intent.ts';
-import {acceptClaudeExamSeat} from './exam-provider.ts';
+import {reserveSpecialistExamSeat, type SpecialistExamSeat} from './exam-provider.ts';
 import {Ledger, type Intent} from './ledger.ts';
 import {readMountedCredentialSecrets} from './native-worker-security.ts';
 import {loadSecurityChecklist} from './verify-checklist.ts';
@@ -61,13 +61,7 @@ function resolveModelCallBudget(value: number | undefined): number {
   return value;
 }
 
-type Seat = {
-  provider: string;
-  model: string;
-  accountId: string;
-  profileId: string;
-  grantId: string;
-};
+type Seat = SpecialistExamSeat;
 
 const execGit = promisify(execFile);
 
@@ -84,6 +78,7 @@ type OpenFinding = {
   sources: string[];
   examinerProvider: string | null;
   examinerAccountId: string | null;
+  examinerProfileId: string | null;
 };
 
 const FILE_TEXT_LIMIT = 20_000;
@@ -165,15 +160,17 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   let map: MapResult = minimalMap(files);
   let mapMarkdown = redactUnknownSecrets(mapToMarkdown(map, files));
   let mapAccountId: string | null = null;
+  let mapProfileId: string | null = null;
   let mapSeat: Seat | null = null;
 
   if (files.length === 0 && rawFindings.length === 0) {
     notes.push('Nenhum arquivo para examinar.');
   } else {
     if (input.onPhase) await input.onPhase('mapa');
-    const mapped = await reserveAndRun(input, capacity, intent.id, 'specialist', mapTask(files), 'verify-map', modelCallBudget, trackedCalls);
+    const mapped = await reserveAndRun(input, capacity, intent.id, 'examiner', mapTask(files), 'verify-map', modelCallBudget, trackedCalls);
     mapSeat = mapped.seat;
     mapAccountId = mapped.seat.accountId;
+    mapProfileId = mapped.seat.profileId;
     const parsed = MapResult.safeParse(coerceMapResult(parseJson(mapped.output)));
     if (parsed.success) map = parsed.data;
     else {
@@ -184,7 +181,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     if (input.onPhase) await input.onPhase('exame');
     for (const slice of slices) {
       if (!slice.files.length) continue;
-      const examined = await reserveAndRun(input, capacity, intent.id, 'specialist', examTask(slice, mapMarkdown, rawFindings, history), 'verify-exam', modelCallBudget, trackedCalls);
+      const examined = await reserveAndRun(input, capacity, intent.id, 'examiner', examTask(slice, mapMarkdown, rawFindings, history), 'verify-exam', modelCallBudget, trackedCalls);
       const exam = ExamResult.safeParse(coerceExamResult(parseJson(examined.output)));
       exams.push(exam.success ? exam.data : {slice: slice.id, invalid: true});
       const read = new Set(exam.success ? exam.data.filesRead : []);
@@ -217,6 +214,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
           sources: [`examinador ${examined.seat.provider}`, `fatia ${slice.id}`, finding.reference].map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
           examinerProvider: examined.seat.provider,
           examinerAccountId: examined.seat.accountId,
+          examinerProfileId: examined.seat.profileId,
         });
       }
     }
@@ -238,6 +236,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       sources: [raw.tool, raw.rule, ...(raw.cwe ? [raw.cwe] : [])].map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
       examinerProvider: null,
       examinerAccountId: null,
+      examinerProfileId: null,
     });
   }
 
@@ -256,6 +255,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   for (const finding of open) {
     if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
     const avoid = finding.examinerAccountId ?? mapAccountId;
+    const avoidProfile = finding.examinerProfileId ?? mapProfileId;
     const content = await readRepoText(input.repoPath, finding.file, finding.line, allowedFiles);
     const reviewed = await reserveAndRun(
       input,
@@ -267,6 +267,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       modelCallBudget,
       trackedCalls,
       avoid ? [avoid] : undefined,
+      avoidProfile ? [avoidProfile] : undefined,
     );
     let confirm;
     try {
@@ -345,28 +346,31 @@ async function reserveAndRun(
   input: SecurityVerificationInput,
   capacity: Capacity,
   intentId: string,
-  role: 'specialist' | 'reviewer',
+  purpose: 'examiner' | 'reviewer',
   task: string,
   processId: string,
   modelCallBudget: number,
   trackedCalls: {count: number},
   avoidAccounts?: readonly string[],
+  avoidProfiles?: readonly string[],
 ): Promise<{seat: Seat; output: string}> {
   if (trackedCalls.count >= modelCallBudget) throw new Error('VERIFY_MODEL_BUDGET');
-  const grant = await capacity.reserve(input.principal, {
-    attemptId: randomUUID(),
+  const seat = await reserveSpecialistExamSeat({
+    capacity,
+    ledger: input.ledger,
+    principal: input.principal,
+    authority: input.authority,
     intentId,
-    contextId: input.authority.contextId,
-    role,
-    ...(avoidAccounts?.length ? {avoidAccounts: [...avoidAccounts].slice(0, 8)} : {}),
-  }, input.authority);
+    purpose,
+    avoidProfileId: avoidProfiles?.[0],
+    avoidAccountId: avoidAccounts?.[0],
+    releaseGrant: grantId => capacity.transition(input.principal, grantId, input.authority, 'released', {processId, state: 'not_started'}),
+  });
   let thrown: unknown;
   try {
-    const seat = await readSeat(input.ledger, grant);
-    acceptClaudeExamSeat(seat);
     const secrets = await reservedAccountSecrets(input.accountRoot, seat.accountId, input.accountSecrets);
     const call = VerifyWorkerCall.parse({
-      role,
+      role: 'specialist',
       provider: seat.provider,
       accountId: seat.accountId,
       profileId: seat.profileId,
@@ -385,20 +389,11 @@ async function reserveAndRun(
     throw error;
   } finally {
     try {
-      await capacity.transition(input.principal, grant.id, input.authority, 'released', {processId, state: 'not_started'});
+      await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId, state: 'not_started'});
     } catch (error) {
       if (!thrown) throw error;
     }
   }
-}
-
-async function readSeat(ledger: Ledger, grant: Grant): Promise<Seat> {
-  const row = (await ledger.pool.query<{provider: string; model: string}>(
-    'SELECT a.provider, p.model FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',
-    [grant.id],
-  )).rows[0];
-  if (!row?.provider || !row.model || !grant.account_id || !grant.profile_id) throw new Refusal('GRANT_FORBIDDEN', 403);
-  return {provider: String(row.provider), model: String(row.model), accountId: grant.account_id, profileId: grant.profile_id, grantId: grant.id};
 }
 
 /** One child of the accounts folder. The parent and every sibling stay unread. */

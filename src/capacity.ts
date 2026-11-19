@@ -51,7 +51,13 @@ export const QuotaInput = z.object({ status: z.enum(['available','exhausted','ra
 export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: Id, role: Role,
   taskLevel: z.enum(['basic','standard']).optional(),
   /** Accounts a verdict retry should not use again. Ignored when no other profile is eligible. */
-  avoidAccounts: z.array(Id).max(8).optional() }).strict();
+  avoidAccounts: z.array(Id).max(8).optional(),
+  /** Specific profile in this role's chain to try first. */
+  preferredProfileId: Id.optional(),
+  /** Profiles excluded for this reservation (never fallen back to). */
+  avoidProfiles: z.array(Id).max(20).optional(),
+  /** Restrict selection to profiles on this provider (never fallen back to another). */
+  provider: z.string().min(1).max(80).optional() }).strict();
 /** Basic tasks use the combo's basic profiles when that list exists. Every other programmer task uses standard. Policies without tiers keep the full chain.
  * A level's reserve list, when present, is the only emergency chain for that level. Older snapshots leave the list out and keep filtering emergency by the regular ids. */
 export function programmerChain(policy:CapacityPolicy,role:string,chain:{regular:string[];emergency:string[]},taskLevel?:'basic'|'standard'){
@@ -307,7 +313,10 @@ export class Capacity {
       const preferred = (await c.query('SELECT profile_id FROM ac_regular_selections WHERE context_id=$1 AND role=$2 AND policy_revision=$3',
         [request.contextId,request.role,context.capacity_policy_revision])).rows[0]?.profile_id;
       const regular = preferred && chain.regular.includes(preferred) ? [preferred,...chain.regular.filter(p=>p!==preferred)] : chain.regular;
-      const ids = [...regular,...chain.emergency];
+      const baseIds = [...regular,...chain.emergency];
+      const ids = request.preferredProfileId && baseIds.includes(request.preferredProfileId)
+        ? [request.preferredProfileId, ...baseIds.filter(p => p !== request.preferredProfileId)]
+        : baseIds;
       const loaded = await this.chainFacts(c, ids, context.project_id);
       // Saturation is a later gate. This path never writes quota and never leaves the chain.
       // Regular is walked first. A titular profile excluded as quota_exhausted (also exhausted_until)
@@ -323,7 +332,11 @@ export class Capacity {
           ORDER BY g.created_at DESC LIMIT 1`,[request.intentId,request.contextId])).rows[0];
         writerProvider=writer?String(writer.provider):null;
       }
-      const usable = (row: LoadedProfile) => classifyProfileExclusion(row,{personal}) === null && !(writerProvider&&row.provider===writerProvider) && row.accountId && row.maxConcurrent != null;
+      const usable = (row: LoadedProfile) => classifyProfileExclusion(row,{personal}) === null
+        && !(writerProvider&&row.provider===writerProvider)
+        && !(request.provider&&row.provider!==request.provider)
+        && !request.avoidProfiles?.includes(row.profileId)
+        && row.accountId && row.maxConcurrent != null;
       const choice = loaded.find(row => usable(row) && !request.avoidAccounts?.includes(row.accountId!)) ?? loaded.find(usable);
       if (!choice?.accountId || choice.maxConcurrent == null) {
         const exclusions = orderedProfileExclusions(loaded,{personal});
@@ -406,17 +419,21 @@ export class Capacity {
           CASE WHEN w.created_at > clock_timestamp()-interval '5 minutes' THEN w.priority ELSE 0 END DESC,w.sequence LIMIT 1`,[selected.account_id,config.programming_limit,config.evaluation_limit,config.original_account_id,config.original_programming_limit,config.original_evaluation_limit])).rows[0];
       if(first?.attempt_id!==request.attemptId){await c.query("UPDATE ac_capacity_waits SET reason='CAPACITY_QUEUED' WHERE attempt_id=$1",[request.attemptId]);return {blockedCode:'CAPACITY_QUEUED'};}
       const emergency = chain.emergency.includes(selected.id);
+      const pos = ids.indexOf(selected.id);
+      const skippedCandidates = orderedProfileExclusions(loaded.slice(0, pos), {personal});
+      const selectionReason = !emergency && preferred === selected.id ? 'sticky' : pos === 0 ? 'first_eligible' : 'fallback';
+      const selection: Record<string, unknown> = {
+        accountId: selected.account_id, profileId: selected.id, policyRevision: context.capacity_policy_revision,
+        configRevision: config.revision, chain: emergency ? 'emergency' : 'regular', position: pos + 1,
+        reason: selectionReason, preferredProfileId: preferred ?? null,
+      };
+      if (skippedCandidates.length === pos) selection.skippedCandidates = skippedCandidates;
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants
         (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,selection)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'reserved',$14::jsonb) RETURNING *`,
         [randomUUID(),request.attemptId,request.intentId,request.contextId,authority.epoch,selected.account_id,selected.id,request.role,
-          context.project_id,context.capacity_policy_revision,config.revision,hash,emergency,JSON.stringify({
-            accountId:selected.account_id,profileId:selected.id,policyRevision:context.capacity_policy_revision,configRevision:config.revision,
-            chain:emergency?'emergency':'regular',position:ids.indexOf(selected.id)+1,
-            reason:preferred===selected.id?'sticky':ids.indexOf(selected.id)===0?'first_eligible':'fallback',
-            preferredProfileId:preferred??null,skippedCandidates:orderedProfileExclusions(loaded.slice(0,ids.indexOf(selected.id)),{personal})
-          })])).rows[0];
-      if (!emergency) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
+          context.project_id,context.capacity_policy_revision,config.revision,hash,emergency,JSON.stringify(selection)])).rows[0];
+      if (!emergency && !request.preferredProfileId && !request.avoidProfiles?.length) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,
         [request.contextId,request.role,selected.id,context.capacity_policy_revision]);
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.reserved',$2)", [request.contextId,{grantId:grant.id,attemptId:request.attemptId,profileId:selected.id,emergency}]);

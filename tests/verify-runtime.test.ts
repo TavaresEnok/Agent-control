@@ -110,28 +110,38 @@ test('verificação somente leitura confirma com revisor Claude em outra conta',
     await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
     await capacity.configure(principal, {programmingLimit: 10, evaluationLimit: 2});
     await capacity.registerModel(principal, {provider: 'claude', model: 'fixture-model', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://verify-runtime'});
+    await capacity.registerModel(principal, {provider: 'codex', model: 'gpt-6.1-sol', efforts: ['medium'], roles: ['reviewer'], source: 'synthetic://verify-runtime'});
     const labels = ['claude-a', 'claude-b'] as const;
     const accounts = labels.map(() => randomUUID());
     const specialistProfiles = labels.map(() => randomUUID());
-    const reviewerProfiles = labels.map(() => randomUUID());
+    const codexAccount = randomUUID();
+    const codexReviewer = randomUUID();
     const adapters = labels.map(label => createSyntheticProviderAdapter({
       id: 'fixture-' + label,
       provider: 'claude',
       version: 'verify-v1',
       runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider: 'claude', accountId: input.accountId, status: 'available', remainingPercent: 75, resetAt: null}),
     }));
-    const collectors = new ProviderCollectors(db, adapters);
+    const codexAdapter = createSyntheticProviderAdapter({
+      id: 'fixture-codex-reviewer',
+      provider: 'codex',
+      version: 'verify-v1',
+      runner: async input => ({protocol: 'ac-synthetic-quota-v1', provider: 'codex', accountId: input.accountId, status: 'available', remainingPercent: 75, resetAt: null}),
+    });
+    const collectors = new ProviderCollectors(db, [...adapters, codexAdapter]);
     for (let i = 0; i < labels.length; i++) {
       await capacity.addAccount(principal, project, {id: accounts[i], provider: 'claude', label: 'Synthetic ' + labels[i], resourceIdentity: 'verify-' + accounts[i], mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-runtime', maxConcurrent: 2});
       await capacity.addProfile(principal, project, {id: specialistProfiles[i], accountId: accounts[i], model: 'fixture-model', effort: 'medium', role: 'specialist'});
-      await capacity.addProfile(principal, project, {id: reviewerProfiles[i], accountId: accounts[i], model: 'fixture-model', effort: 'medium', role: 'reviewer'});
       await collectors.bind(principal, project, {accountId: accounts[i], adapterId: adapters[i].manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});
     }
+    await capacity.addAccount(principal, project, {id: codexAccount, provider: 'codex', label: 'Synthetic codex', resourceIdentity: 'verify-' + codexAccount, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-runtime', maxConcurrent: 2});
+    await capacity.addProfile(principal, project, {id: codexReviewer, accountId: codexAccount, model: 'gpt-6.1-sol', effort: 'medium', role: 'reviewer'});
+    await collectors.bind(principal, project, {accountId: codexAccount, adapterId: codexAdapter.manifest.id, expectedRevision: 0, minimumIntervalSeconds: 1});
     const revision = await capacity.publish(principal, project, 0, {
       schemaVersion: 1,
       maxProgrammersPerContext: 1,
       maxEvaluatorsPerContext: 1,
-      roles: {specialist: {regular: specialistProfiles, emergency: []}, reviewer: {regular: reviewerProfiles, emergency: []}},
+      roles: {specialist: {regular: [specialistProfiles[0]!], emergency: [specialistProfiles[1]!]}, reviewer: {regular: [codexReviewer], emergency: []}},
     });
     const context = await db.createContext(principal, project, randomUUID());
     await capacity.assignPolicy(principal, context, revision);
@@ -156,7 +166,7 @@ test('verificação somente leitura confirma com revisor Claude em outra conta',
     assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_intents')).rows[0].n, 0);
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await db.pool.query("UPDATE ac_provider_bindings SET last_started_at=clock_timestamp()-interval '2 seconds'");
-    for (const accountId of accounts) await collectors.collect(principal, project, accountId, randomUUID());
+    for (const accountId of [...accounts, codexAccount]) await collectors.collect(principal, project, accountId, randomUUID());
     const result = await runSecurityVerification(base);
     assert.equal(result.achados.length, 1);
     assert.equal(result.achados[0].id, 'ACH-001');
@@ -165,8 +175,8 @@ test('verificação somente leitura confirma com revisor Claude em outra conta',
     assert.equal(result.achados[0].suggestion, SUGGESTION);
     assert.equal(result.achados[0].acceptance, REMEDIATION_ACCEPTANCE);
     assert.equal(result.achados[0].secretPreview, null);
-    assert.equal(bench.roles.at(-1), 'reviewer');
-    assert.ok(bench.roles.slice(0, -1).every(role => role === 'specialist'));
+    assert.ok(bench.roles.length >= 2);
+    assert.ok(bench.roles.every(role => role === 'specialist'));
     assert.equal(bench.confirmTask.includes(SENTINEL), false);
     assert.equal(bench.confirmTask.includes(SUGGESTION), false);
     assert.match(bench.confirmTask, /src\/app\.ts/);
@@ -189,24 +199,85 @@ test('verificação somente leitura confirma com revisor Claude em outra conta',
     const covered = (await db.pool.query('SELECT file, examiner_provider FROM ac_verify_coverage WHERE run_id=$1', [result.runId])).rows;
     assert.ok(covered.some(row => String(row.file).replaceAll('\\', '/').endsWith('src/app.ts')));
     const grants = (await db.pool.query(
-      `SELECT g.role, a.provider, g.account_id, g.state FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
+      `SELECT g.role, a.provider, g.account_id, g.profile_id, g.state FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
        WHERE g.intent_id=$1 ORDER BY g.created_at`,
       [stored.intent_id],
     )).rows;
     const specialists = grants.filter(row => row.role === 'specialist');
     const reviewers = grants.filter(row => row.role === 'reviewer');
-    assert.ok(specialists.length >= 1);
-    assert.equal(reviewers.length, 1);
-    assert.equal(reviewers[0].provider, 'claude');
+    assert.ok(specialists.length >= 2);
+    assert.equal(reviewers.length, 0);
     assert.ok(specialists.every(row => row.provider === 'claude'));
-    assert.notEqual(String(reviewers[0].account_id), String(specialists[specialists.length - 1].account_id));
-    assert.equal(result.achados[0].verifier?.provider, reviewers[0].provider);
+    const confirmGrant = specialists.at(-1)!;
+    const examGrant = specialists.at(-2)!;
+    assert.notEqual(String(confirmGrant.profile_id), String(examGrant.profile_id));
+    assert.notEqual(String(confirmGrant.account_id), String(examGrant.account_id));
+    assert.equal(result.achados[0].verifier?.provider, confirmGrant.provider);
     assert.ok(grants.every(row => row.state === 'released'));
     console.log(JSON.stringify({
       specialist: specialists.map(row => row.provider),
       reviewer: reviewers.map(row => row.provider),
       states: grants.map(row => `${row.role}:${row.provider}:${row.state}`),
     }));
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(repo, {recursive: true, force: true});
+    await rm(dataDirectory, {recursive: true, force: true});
+  }
+});
+
+test('validador sem segundo perfil Claude na cadeia specialist recusa com DESIGN_REVIEWER_UNAVAILABLE e ignora reviewer Codex', async () => {
+  const url = process.env.AC_TEST_DATABASE_URL;
+  assert.ok(url);
+  const database = await isolatedDatabase(url, 'verify_no_rev');
+  const db = new Ledger(database.url);
+  const capacity = new Capacity(db);
+  const repo = await mkdtemp(join(tmpdir(), 'ac-verify-repo-'));
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-data-'));
+  const bench = benchWorker();
+  try {
+    await db.migrate();
+    const principal = 'verify-owner';
+    const project = randomUUID();
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Sem Segundo Specialist']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await capacity.configure(principal, {programmingLimit: 10, evaluationLimit: 2});
+    await capacity.registerModel(principal, {provider: 'claude', model: 'fixture-model', efforts: ['medium'], roles: ['specialist'], source: 'synthetic://verify-runtime'});
+    await capacity.registerModel(principal, {provider: 'codex', model: 'gpt-6.1-sol', efforts: ['medium'], roles: ['reviewer'], source: 'synthetic://verify-runtime'});
+    const claudeAccount = randomUUID();
+    const codexAccount = randomUUID();
+    const specProfile = randomUUID();
+    const codexReviewer = randomUUID();
+    await capacity.addAccount(principal, project, {id: claudeAccount, provider: 'claude', label: 'claude-only', resourceIdentity: `claude:${claudeAccount}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-runtime', maxConcurrent: 2});
+    await capacity.addAccount(principal, project, {id: codexAccount, provider: 'codex', label: 'codex-rev', resourceIdentity: `codex:${codexAccount}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://verify-runtime', maxConcurrent: 2});
+    await capacity.addProfile(principal, project, {id: specProfile, accountId: claudeAccount, model: 'fixture-model', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, project, {id: codexReviewer, accountId: codexAccount, model: 'gpt-6.1-sol', effort: 'medium', role: 'reviewer'});
+    await capacity.observeQuota(principal, claudeAccount, {status: 'available', source: 'synthetic://verify-runtime', ttlSeconds: 3600});
+    await capacity.observeQuota(principal, codexAccount, {status: 'available', source: 'synthetic://verify-runtime', ttlSeconds: 3600});
+    const revision = await capacity.publish(principal, project, 0, {
+      schemaVersion: 1,
+      maxProgrammersPerContext: 1,
+      maxEvaluatorsPerContext: 1,
+      roles: {specialist: {regular: [specProfile], emergency: []}, reviewer: {regular: [codexReviewer], emergency: []}},
+    });
+    const context = await db.createContext(principal, project, randomUUID());
+    await capacity.assignPolicy(principal, context, revision);
+    await mkdir(join(repo, 'src'), {recursive: true});
+    await writeFile(join(repo, 'src', 'app.ts'), "export function register(app: {get(path: string, handler: () => string): void}) {\n  app.get('/admin', () => 'painel');\n}\n");
+    const gitEnv = {...process.env, GIT_AUTHOR_NAME: 'verify', GIT_AUTHOR_EMAIL: 'verify@example.com', GIT_COMMITTER_NAME: 'verify', GIT_COMMITTER_EMAIL: 'verify@example.com'};
+    await exec('git', ['init'], {cwd: repo, env: gitEnv});
+    await exec('git', ['add', 'src/app.ts'], {cwd: repo, env: gitEnv});
+    await exec('git', ['-c', 'user.email=verify@example.com', '-c', 'user.name=verify', 'commit', '-m', 'init'], {cwd: repo, env: gitEnv});
+    const commit = (await exec('git', ['rev-parse', 'HEAD'], {cwd: repo})).stdout.trim();
+    const authority = await db.acquire(principal, context, randomUUID(), 'verify-no-rev', 60);
+    await assert.rejects(
+      () => runSecurityVerification({ledger: db, principal, authority, projectId: project, repoPath: repo, dataDirectory, commit, policyRevision: revision, worker: bench.worker}),
+      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_REVIEWER_UNAVAILABLE',
+    );
+    assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM ac_capacity_grants WHERE role='reviewer'")).rows[0].n, 0);
   } finally {
     await db.close();
     await database.close();

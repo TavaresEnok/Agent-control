@@ -32,3 +32,9 @@ test('DESIGN_BUSY dá mensagem clara e não vaza MANAGER_ACTIVE', () => {
   assert.match(text, /andamento/i);
   assert.equal(text.includes('MANAGER_ACTIVE'), false);
 });
+
+test('DESIGN_REVIEWER_UNAVAILABLE orienta rodar preparar --aplicar e não cai em EXAM_PROVIDER_UNSUPPORTED', () => {
+  const text = designCliFailureText(new Refusal('DESIGN_REVIEWER_UNAVAILABLE', 409));
+  assert.match(text, /npm run personal:design -- preparar .*--aplicar/);
+  assert.notEqual(text, designCliFailureText(new Refusal('EXAM_PROVIDER_UNSUPPORTED', 409)));
+});

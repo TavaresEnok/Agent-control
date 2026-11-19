@@ -35,6 +35,7 @@ const messages: Record<string, string> = {
   DESIGN_LOGIN_INVALID: 'O arquivo de login não tem os campos esperados.',
   DESIGN_COMMIT_INVALID: 'Não foi possível ler o commit do repositório.',
   DESIGN_PROVIDER_MUST_DIFFER: 'O revisor tem que ser outro provedor.',
+  DESIGN_REVIEWER_UNAVAILABLE: 'Falta um segundo perfil Claude na cadeia specialist para o revisor; rode `npm run personal:design -- preparar <instalação.json> <projectId> --aplicar`.',
   EXAM_PROVIDER_UNSUPPORTED: 'O exame de leitura só aceita uma conta Claude.',
   DESIGN_EXAM_TIMEOUT: 'O exame passou do tempo.',
   DESIGN_REPO_UNREADABLE: 'Não foi possível ler o repositório do projeto.',
@@ -442,7 +443,7 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
       rounds: invocation.rounds,
       referenceNote: references.length === 0 ? '' : `${references.length} referências visuais.`,
       worker: resolved.worker,
-      reserve: () => resolved.reserve('specialist'),
+      reserve: () => resolved.reserve('specialist', undefined, {purpose: 'create'}),
       release: seat => resolved.release(seat),
       intentId: resolved.intentId,
       examine: async (_round, files) => {
