@@ -14,6 +14,7 @@ DICT_MUTATORS = {"clear", "pop", "popitem", "setdefault", "update"}
 MUTATION = "mutações de propriedades sem vínculo estático"
 EXPANSION = "expansões de argumentos ou valores sem vínculo estático"
 BRANCH = "reatribuições em fluxo condicional ou repetido"
+CAPTURE = "vínculos externos a funções sem ordem de chamada estática"
 EXPANSION_LIMIT = 4096
 
 
@@ -27,9 +28,11 @@ class Value:
     unknown: bool = False
     invalidated: bool = False
     fixed_items: bool = False
+    opaque_effects: bool = False
 
 
 UNKNOWN = Value(unknown=True)
+CAPTURED = Value(unknown=True, invalidated=True)
 
 
 def namespace(kind, methods):
@@ -52,6 +55,8 @@ def external(name):
         result = namespace("SQL", SQL_METHODS)
         result.attrs["executemany"] = Value(kind="SQL_MANY")
         return result
+    if name == "builtins":
+        return Value(attrs={builtin: external(builtin) for builtin in ("print", "str")})
     return Value(unknown=True, attrs={})
 
 
@@ -119,8 +124,13 @@ class Analyzer(ast.NodeVisitor):
         self.scopes = [{}]
         self.mutations = [{}]
         self.externals = {}
+        self.modules = {}
         self.module_names = set()
-        self.function_depth = 0
+        self.bodies = []
+        self.captures = None
+        self.local_names = set()
+        self.calls = {}
+        self.named_values = {}
         self.hits = {}
         self.gaps = Counter()
 
@@ -129,13 +139,26 @@ class Analyzer(ast.NodeVisitor):
         collector.visit(node)
         self.module_names = collector.names
         self.generic_visit(node)
+        # Function bodies have their own analysis state and no assumed call order.
+        for body, locals_, captures in self.bodies:
+            self.captures = captures
+            self.local_names = locals_.keys()
+            self.scopes.append(locals_)
+            self.mutations.append({})
+            for child in body:
+                self.visit(child)
+            self.scopes.pop()
+            self.mutations.pop()
+        self.captures = None
 
     def read(self, node):
-        for binding in reversed(self.scopes):
+        scopes = self.scopes if self.captures is None else self.scopes[1:]
+        for binding in reversed(scopes):
             if node.id in binding:
                 return binding[node.id]
-        if self.function_depth and node.id in self.module_names:
-            return UNKNOWN  # A module binding can take effect before this body is called.
+        if self.captures is not None and node.id in self.captures:
+            self.gaps[CAPTURE] += 1
+            return CAPTURED
         if self.field.fullmatch(node.id):
             return Value(node.lineno)
         if node.id not in self.externals:
@@ -143,9 +166,13 @@ class Analyzer(ast.NodeVisitor):
         return self.externals[node.id]
 
     def state(self, value):
-        for frame in reversed(self.mutations):
+        frames = self.mutations if self.captures is None else self.mutations[1:]
+        for frame in reversed(frames):
             if value in frame:
                 return frame[value]
+        if self.captures is not None and value in self.mutations[0]:
+            self.gaps[CAPTURE] += 1
+            return CAPTURED
         return value
 
     def origin(self, value, seen=None):
@@ -224,6 +251,8 @@ class Analyzer(ast.NodeVisitor):
                 self.gaps["leituras de propriedades sem chave estática"] += 1
             if isinstance(key, str) and self.field.fullmatch(key) and receiver and receiver.unknown and not receiver.invalidated:
                 return Value(node.end_lineno if attribute else node.slice.lineno)
+            if receiver and receiver.invalidated:
+                return CAPTURED
             return UNKNOWN if receiver and receiver.unknown else None
         if isinstance(node, (ast.Tuple, ast.List)):
             return self.sequence(node)
@@ -236,36 +265,15 @@ class Analyzer(ast.NodeVisitor):
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             return Value(self.first(self.value(item) for item in (node.left, node.right)))
         if isinstance(node, ast.Call):
-            callee = self.value(node.func)
-            if callee and callee.kind == "STR" and node.args:
-                return Value(self.origin(self.value(node.args[0])))
-            if callee and callee.kind == "LOGGER_FACTORY":
-                return namespace("LOG", LOG_METHODS)
-            if not (callee and callee.kind) and self.argument_origin(node) is not None:
+            result, indirect_origin = self.calls[node]
+            if indirect_origin is not None:
                 self.gaps["resultados de chamadas indiretas com possível origem"] += 1
-            return Value(unknown=True, attrs={})
+            return result
+        if isinstance(node, ast.NamedExpr):
+            return self.named_values[node]
+        if isinstance(node, ast.Lambda):
+            return Value(opaque_effects=not isinstance(node.body, ast.Constant))
         return None
-
-    def argument_origin(self, node):
-        arguments = []
-        for arg in node.args:
-            if not isinstance(arg, ast.Starred):
-                arguments.append(self.value(arg))
-                continue
-            value = self.value(arg.value)
-            part = self.state(value)
-            if not part or part.items is None:
-                self.gaps[EXPANSION] += 1
-            else:
-                arguments.append(value)
-        for keyword in node.keywords:
-            value = self.value(keyword.value)
-            part = self.state(value)
-            if keyword.arg is None and (not part or part.keys is None):
-                self.gaps[EXPANSION] += 1
-            else:
-                arguments.append(value)
-        return self.first(arguments)
 
     def mutate(self, target, value, delete=False):
         reference = self.value(target.value)
@@ -340,18 +348,25 @@ class Analyzer(ast.NodeVisitor):
 
     def visit_NamedExpr(self, node):
         self.visit(node.value)
-        self.bind(node.target, self.value(node.value))
+        value = self.value(node.value)
+        self.named_values[node] = value
+        self.bind(node.target, value)
 
     def visit_AugAssign(self, node):
-        self.visit(node.value)
+        self.visit(node.target)
         reference = self.value(node.target)
+        self.visit(node.value)
         current = self.state(reference)
         if current and (current.keys is not None or current.items is not None and not current.fixed_items):
             self.invalidate(reference)
             self.gaps[MUTATION] += 1
             return
         data = self.first((reference, self.value(node.value)))
-        self.bind(node.target, Value(data, unknown=True) if isinstance(node.op, ast.Add) else UNKNOWN)
+        value = Value(data, unknown=True) if isinstance(node.op, ast.Add) else UNKNOWN
+        if isinstance(node.target, (ast.Attribute, ast.Subscript)):
+            self.mutate(node.target, value)
+        else:
+            self.bind(node.target, value)
         if isinstance(node.target, (ast.Attribute, ast.Subscript)) or not isinstance(node.op, ast.Add):
             self.gaps["reatribuições fora do rastreamento"] += 1
 
@@ -366,23 +381,23 @@ class Analyzer(ast.NodeVisitor):
     def visit_Import(self, node):
         for alias in node.names:
             module = alias.name.split(".")[0]
-            value = external(module) if module in {"logging", "requests", "httpx"} else UNKNOWN
-            if module == "builtins":
-                value = Value(attrs={name: external(name) for name in ("print", "str")})
-            self.scopes[-1][alias.asname or module] = value
+            self.scopes[-1][alias.asname or module] = self.module(alias.name if alias.asname else module)
+
+    def module(self, name):
+        if name not in {"logging", "requests", "httpx", "builtins"}:
+            return UNKNOWN
+        if name not in self.modules:
+            self.modules[name] = external(name)
+        return self.modules[name]
 
     def visit_ImportFrom(self, node):
-        attrs = {}
-        if node.level == 0:
-            if node.module in {"logging", "requests", "httpx"}:
-                attrs = external(node.module).attrs
-            elif node.module == "builtins":
-                attrs = {name: external(name) for name in ("print", "str")}
+        module = self.state(self.module(node.module)) if node.level == 0 else UNKNOWN
+        attrs = module.attrs or {}
         for alias in node.names:
             if alias.name == "*":
                 self.gaps["importações Python sem vínculo estático"] += 1
             else:
-                self.scopes[-1][alias.asname or alias.name] = attrs.get(alias.name, UNKNOWN)
+                self.scopes[-1][alias.asname or alias.name] = attrs.get(alias.name, CAPTURED if module.invalidated else UNKNOWN)
 
     def visit_FunctionDef(self, node):
         for decorator in getattr(node, "decorator_list", ()):
@@ -391,7 +406,10 @@ class Analyzer(ast.NodeVisitor):
             if default is not None:
                 self.visit(default)
         if not isinstance(node, ast.Lambda):
-            self.scopes[-1][node.name] = None
+            opaque_effects = any(not (isinstance(child, ast.Pass) or isinstance(child, ast.Expr) and
+                                      isinstance(child.value, ast.Constant)) for child in node.body)
+            self.scopes[-1][node.name] = Value(opaque_effects=opaque_effects or bool(node.decorator_list),
+                                               unknown=bool(node.decorator_list))
         body = [node.body] if isinstance(node, ast.Lambda) else node.body
         collector = LocalNames()
         for child in body:
@@ -400,14 +418,8 @@ class Analyzer(ast.NodeVisitor):
                      node.args.vararg, node.args.kwarg]
         locals_ = dict.fromkeys(collector.names - collector.external, UNKNOWN)
         locals_.update({arg.arg: Value(unknown=True, attrs={}) for arg in arguments if arg is not None})
-        self.scopes.append(locals_)
-        self.mutations.append({})
-        self.function_depth += 1
-        for child in body:
-            self.visit(child)
-        self.function_depth -= 1
-        self.scopes.pop()
-        self.mutations.pop()
+        captures = self.module_names if self.captures is None else self.captures | self.local_names
+        self.bodies.append((body, locals_, captures | collector.external))
 
     visit_AsyncFunctionDef = visit_Lambda = visit_FunctionDef
 
@@ -467,35 +479,72 @@ class Analyzer(ast.NodeVisitor):
         self.visit(node.subject)
         self.branches(*([case] for case in node.cases))
 
+    def call_argument(self, node, expand=None):
+        self.visit(node)
+        value = self.value(node)
+        if expand is None:
+            return value
+        current = self.state(value)
+        entries = getattr(current, expand, None)
+        if entries is None:
+            self.gaps[EXPANSION] += 1
+            return UNKNOWN
+        return Value(**{expand: entries.copy()})
+
+    def invalidate_argument(self, reference, seen=None):
+        if seen is None:
+            seen = set()
+        if reference in seen:
+            return
+        seen.add(reference)
+        data = self.state(reference)
+        if data and (data.keys is not None or data.attrs is not None or
+                     data.items is not None and not data.fixed_items):
+            self.gaps[MUTATION] += 1
+            self.invalidate(reference)
+        if data:
+            for values in (data.items, (data.keys or {}).values(), (data.attrs or {}).values()):
+                for item in values or ():
+                    self.invalidate_argument(item, seen)
+
     def visit_Call(self, node):
         self.visit(node.func)
         callee = self.value(node.func)
-        arguments = (*node.args, *(keyword.value for keyword in node.keywords))
-        for argument in arguments:
-            self.visit(argument)
-        if callee is None:
-            if isinstance(node.func, ast.Attribute):
-                reference = self.value(node.func.value)
-                data = self.state(reference)
-                method = node.func.attr
-                if data and (data.items is not None and method in LIST_MUTATORS or
-                             data.keys is not None and method in DICT_MUTATORS):
-                    self.gaps[MUTATION] += 1
-                    self.invalidate(reference)
-            return
-        kind = callee.kind
+        receiver = self.value(node.func.value) if isinstance(node.func, ast.Attribute) else None
+        args = [(self.call_argument(arg.value, "items"), "items") if isinstance(arg, ast.Starred)
+                else (self.call_argument(arg), None) for arg in node.args]
+        keywords = [(self.call_argument(keyword.value, "keys"), "keys") if keyword.arg is None
+                    else (self.call_argument(keyword.value), None) for keyword in node.keywords]
+        kind = callee.kind if callee else None
+        arguments = args + keywords
+        source = self.first(value for value, _ in arguments)
+        result = Value(unknown=True, attrs={})
+        if kind == "STR" and args:
+            result = Value(self.origin(args[0][0]))
+        elif kind == "LOGGER_FACTORY":
+            result = namespace("LOG", LOG_METHODS)
+        self.calls[node] = result, source if kind is None else None
+
+        if callee is None and isinstance(node.func, ast.Attribute):
+            data = self.state(receiver)
+            method = node.func.attr
+            if data and (data.items is not None and method in LIST_MUTATORS or
+                         data.keys is not None and method in DICT_MUTATORS):
+                self.gaps[MUTATION] += 1
+                self.invalidate(receiver)
         if kind is None:
-            if callee.unknown:
-                if self.argument_origin(node) is not None:
-                    self.gaps["chamadas com possível origem e destino sem vínculo estático"] += 1
-                for argument in arguments:
-                    if isinstance(argument, (ast.Name, ast.Attribute, ast.Subscript)):
-                        reference = self.value(argument)
-                        data = self.state(reference)
-                        if data and (data.items is not None and not data.fixed_items or
-                                     data.keys is not None or data.attrs):
-                            self.gaps[MUTATION] += 1
-                            self.invalidate(reference)
+            if callee and callee.unknown and source is not None:
+                self.gaps["chamadas com possível origem e destino sem vínculo estático"] += 1
+            if callee and (callee.unknown or callee.opaque_effects):
+                for value, expansion in arguments:
+                    if expansion == "items":
+                        for item in value.items or ():
+                            self.invalidate_argument(item)
+                    elif expansion == "keys":
+                        for item in (value.keys or {}).values():
+                            self.invalidate_argument(item)
+                    else:
+                        self.invalidate_argument(value)
             return
         if kind in ("STR", "LOGGER_FACTORY"):
             return
@@ -505,7 +554,7 @@ class Analyzer(ast.NodeVisitor):
         if kind == "SQL":
             query = node.args[0] if node.args else None
             command = query.value if isinstance(query, ast.Constant) and isinstance(query.value, str) else None
-            values = self.state(self.value(node.args[1])) if len(node.args) > 1 else None
+            values = self.state(args[1][0]) if len(args) > 1 and args[1][1] is None else None
             parameters = {}
             if values and values.items is not None and not values.unknown:
                 parameters["items"] = [self.origin(value) for value in values.items]
@@ -513,8 +562,6 @@ class Analyzer(ast.NodeVisitor):
                 parameters["keys"] = {key: self.origin(value) for key, value in values.keys.items() if isinstance(key, str)}
             source = sql_origin(command, parameters, self.gaps)
             kind = "STORAGE"
-        else:
-            source = self.argument_origin(node)
         if source is not None:
             self.hits.setdefault(node.lineno, {}).setdefault(kind, source)
 

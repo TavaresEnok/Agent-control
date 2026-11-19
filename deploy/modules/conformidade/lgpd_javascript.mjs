@@ -9,6 +9,7 @@ const UNKNOWN_VALUE = 'resultados de chamadas indiretas com possível origem';
 const UNKNOWN_DESTINATION = 'chamadas com possível origem e destino sem vínculo estático';
 const MUTATION = 'mutações de propriedades sem vínculo estático';
 const BRANCH = 'reatribuições em fluxo condicional ou repetido';
+const CAPTURE = 'vínculos externos a funções sem ordem de chamada estática';
 const LOG_METHODS = new Set(['log', 'info', 'warn', 'error', 'debug', 'exception']);
 const HTTP_METHODS = new Set(['post', 'put', 'patch', 'request']);
 const SQL_METHODS = new Set(['query', 'execute']);
@@ -20,6 +21,7 @@ const RECEIVERS = new Map([
   ['localStorage', ['STORAGE', new Set(['setItem'])]],
 ]);
 const UNKNOWN = {unknown: true};
+const CAPTURED = {unknown: true, invalidated: true};
 const LOCAL = {};
 const KINDS = {'.js': ts.ScriptKind.JS, '.mjs': ts.ScriptKind.JS, '.jsx': ts.ScriptKind.JSX,
   '.ts': ts.ScriptKind.TS, '.tsx': ts.ScriptKind.TSX};
@@ -88,14 +90,25 @@ function analyze(text, suffix, fieldPattern, limit) {
   const newFrame = () => ({bindings: new Map(), objects: new Map(), writes: new Set()});
   const frames = [newFrame()];
   const external = new Map();
+  const modules = new Map();
+  const bodies = [];
+  let inFunction = false;
   const find = (table, key) => {
-    for (let index = frames.length - 1; index >= 0; index--) {
+    for (let index = frames.length - 1; index >= (inFunction ? 1 : 0); index--) {
       if (frames[index][table].has(key)) return frames[index][table].get(key);
     }
     return undefined;
   };
   const active = () => frames[frames.length - 1];
-  const state = (data) => find('objects', data) ?? data;
+  const state = (data) => {
+    const current = find('objects', data);
+    if (current) return current;
+    if (inFunction && frames[0].objects.has(data)) {
+      gap(CAPTURE);
+      return CAPTURED;
+    }
+    return data;
+  };
   function origin(data, seen = new Set()) {
     if (!data || seen.has(data)) return null;
     seen.add(data);
@@ -113,6 +126,15 @@ function analyze(text, suffix, fieldPattern, limit) {
     return {keys: new Map([...methods].map(method => [method, {kind}]))};
   }
 
+  function moduleObject(name, namespaceImport) {
+    if (!modules.has(name)) {
+      const receiver = namespace(RECEIVERS.get(name === 'axios' ? 'axios' : 'console'));
+      modules.set(name, {receiver, namespace: {keys: new Map([...receiver.keys, ['default', receiver]])}});
+    }
+    const entry = modules.get(name);
+    return namespaceImport ? entry.namespace : entry.receiver;
+  }
+
   function imported(symbol) {
     const declaration = symbol?.declarations?.[0];
     if (!declaration) return undefined;
@@ -123,9 +145,10 @@ function analyze(text, suffix, fieldPattern, limit) {
     if (clause.isTypeOnly || declaration.isTypeOnly) return UNKNOWN;
     const module = literal(clause.parent.moduleSpecifier);
     const exported = ts.isImportSpecifier(declaration) ? (declaration.propertyName ?? declaration.name).text : null;
-    if (module === 'axios' && (exported === null || exported === 'default')) return namespace(RECEIVERS.get('axios'));
+    const namespaceImport = ts.isNamespaceImport(declaration);
+    if (module === 'axios' && (exported === null || exported === 'default')) return moduleObject(module, namespaceImport);
     if (module === 'node:console' || module === 'console') {
-      if (exported === null || exported === 'default') return namespace(RECEIVERS.get('console'));
+      if (exported === null || exported === 'default') return moduleObject('console', namespaceImport);
       if (LOG_METHODS.has(exported)) return {kind: 'LOG'};
     }
     return UNKNOWN;
@@ -135,28 +158,44 @@ function analyze(text, suffix, fieldPattern, limit) {
     const name = node.text;
     const binding = find('bindings', symbol ?? name);
     if (binding !== undefined) return binding;
+    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+    const ambient = declaration && (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Ambient);
+    if (inFunction && declaration && ts.isVariableDeclaration(declaration) &&
+      (declaration.parent.flags & ts.NodeFlags.Const) && frames[0].bindings.has(symbol)) {
+      const constant = frames[0].bindings.get(symbol);
+      if (!constant?.keys && !constant?.items && !constant?.unknown) return constant;
+    }
+    if (inFunction && (frames[0].bindings.has(symbol ?? name) ||
+      (declaration && !ambient && ts.findAncestor(declaration.parent, ts.isFunctionLike) !== inFunction))) {
+      gap(CAPTURE);
+      return CAPTURED;
+    }
     if (field.test(name) && !symbol?.valueDeclaration) return scalar(line(node));
     if (external.has(symbol ?? name)) return external.get(symbol ?? name);
-    const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
     let data = imported(symbol);
-    if (data === undefined && (!symbol || (declaration &&
-      (ts.getCombinedModifierFlags(declaration) & ts.ModifierFlags.Ambient)))) {
+    if (data === undefined && (!symbol || ambient)) {
       if (RECEIVERS.has(name)) data = namespace(RECEIVERS.get(name));
       if (name === 'fetch') data = {kind: 'NETWORK'};
       if (name === 'print') data = {kind: 'LOG'};
       if (name === 'String') data = {serialize: true};
       if (name === 'JSON') data = {keys: new Map([['stringify', {serialize: true}]])};
     }
-    data ??= declaration && ts.isFunctionDeclaration(declaration) ? LOCAL : {unknown: true, keys: new Map()};
+    data ??= declaration && ts.isFunctionDeclaration(declaration) ? callable(declaration) : {unknown: true, keys: new Map()};
     external.set(symbol ?? name, data);
     return data;
+  }
+
+  function callable(node) {
+    if (!node.body || (ts.isBlock(node.body) && !node.body.statements.length &&
+      node.parameters.every(parameter => ts.isIdentifier(parameter.name) && !parameter.initializer))) return LOCAL;
+    return {opaqueEffects: true};
   }
 
   function object(node) {
     const keys = new Map();
     let spreadOrigin = null;
     let unknown = false;
-    for (const property of node.properties) {
+    for (const [index, property] of node.properties.entries()) {
       if (ts.isSpreadAssignment(property)) {
         const spread = state(value(property.expression));
         if (spread?.keys) {
@@ -167,6 +206,7 @@ function analyze(text, suffix, fieldPattern, limit) {
           }
           if (keys.size + spread.keys.size > limit) {
             gap(LIMIT_GAP);
+            for (const rest of node.properties.slice(index + 1)) walk(rest);
             return UNKNOWN;
           }
           for (const [name, data] of spread.keys) keys.set(name, data);
@@ -181,6 +221,7 @@ function analyze(text, suffix, fieldPattern, limit) {
       } else if (ts.isShorthandPropertyAssignment(property)) {
         keys.set(property.name.text, read(property.name, checker.getShorthandAssignmentValueSymbol(property)));
       } else if (ts.isPropertyAssignment(property)) {
+        if (ts.isComputedPropertyName(property.name)) value(property.name.expression);
         const name = key(property.name);
         const data = value(property.initializer);
         if (name !== null) {
@@ -193,8 +234,10 @@ function analyze(text, suffix, fieldPattern, limit) {
           unknown = true;
         }
       } else if (ts.isMethodDeclaration(property) || ts.isAccessor(property)) {
+        if (ts.isComputedPropertyName(property.name)) value(property.name.expression);
+        if (property.body) bodies.push(property);
         const name = key(property.name);
-        if (name !== null) keys.set(name, ts.isMethodDeclaration(property) ? LOCAL : UNKNOWN);
+        if (name !== null) keys.set(name, ts.isMethodDeclaration(property) ? callable(property) : UNKNOWN);
         else {
           gap('chaves de objetos sem vínculo estático');
           keys.clear();
@@ -205,41 +248,33 @@ function analyze(text, suffix, fieldPattern, limit) {
     return {keys, line: spreadOrigin, unknown};
   }
 
-  function value(input) {
+  function value(input, used = true) {
     const node = unwrap(input);
     if (!node) return null;
     if (ts.isIdentifier(node)) return read(node);
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
-      const name = member(node);
-      const receiver = state(value(node.expression));
-      if (name === null) {
-        if (receiver?.items || receiver?.keys?.size) gap('leituras de propriedades sem chave estática');
-        return UNKNOWN;
-      }
-      if (receiver?.keys?.has(name)) return receiver.keys.get(name);
-      if (receiver?.items && arrayIndex(name) !== null) return receiver.items[arrayIndex(name)] ?? null;
-      if ((!receiver?.keys || receiver.unknown) && field.test(name) && !receiver?.invalidated) {
-        return scalar(line(ts.isPropertyAccessExpression(node) ? node.name : node.argumentExpression));
-      }
-      return receiver?.unknown ? UNKNOWN : null;
+      return readProperty(node, propertyReference(node));
     }
     if (ts.isTemplateExpression(node)) {
-      return scalar(first(node.templateSpans.map(span => value(span.expression))));
+      const origins = node.templateSpans.map(span => origin(value(span.expression)));
+      return scalar(origins.find(at => at !== null) ?? null);
     }
     if (ts.isObjectLiteralExpression(node)) return object(node);
     if (ts.isArrayLiteralExpression(node)) {
       const items = [];
-      for (const element of node.elements) {
+      for (const [index, element] of node.elements.entries()) {
         const item = value(ts.isSpreadElement(element) ? element.expression : element);
         if (ts.isSpreadElement(element)) {
           const expanded = state(item)?.items;
           if (!expanded) {
             gap('expansões de sequências sem vínculo estático');
+            for (const rest of node.elements.slice(index + 1)) walk(rest);
             return UNKNOWN;
           }
           // Keep alias expansion bounded even if nested spreads multiply the array size.
           if (items.length + expanded.length > limit) {
             gap(LIMIT_GAP);
+            for (const rest of node.elements.slice(index + 1)) walk(rest);
             return UNKNOWN;
           }
           items.push(...expanded);
@@ -250,42 +285,103 @@ function analyze(text, suffix, fieldPattern, limit) {
       return {items};
     }
     if (ts.isConditionalExpression(node)) {
-      return scalar(origin(value(node.whenTrue)) ?? origin(value(node.whenFalse))) ?? UNKNOWN;
+      value(node.condition);
+      const [yes, no] = walkBranches([() => origin(value(node.whenTrue)), () => origin(value(node.whenFalse))]);
+      return scalar(yes ?? no) ?? UNKNOWN;
     }
     if (ts.isBinaryExpression(node)) {
-      if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) return value(node.right);
-      if ([ts.SyntaxKind.PlusToken, ts.SyntaxKind.QuestionQuestionToken,
-        ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken].includes(node.operatorToken.kind)) {
-        return scalar(origin(value(node.left)) ?? origin(value(node.right))) ??
-          (node.operatorToken.kind === ts.SyntaxKind.PlusToken ? null : UNKNOWN);
+      const operator = node.operatorToken.kind;
+      if (operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment) {
+        const target = unwrap(node.left);
+        const reference = isProperty(target) ? propertyReference(target) : null;
+        if (operator === ts.SyntaxKind.EqualsToken) {
+          const data = value(node.right);
+          bind(target, reference, fits(node.right) ? data : UNKNOWN);
+          return data;
+        }
+        gap(MUTATION);
+        const assign = () => {
+          value(node.right);
+          bind(target, reference, UNKNOWN);
+        };
+        if ([ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.BarBarEqualsToken,
+          ts.SyntaxKind.QuestionQuestionEqualsToken].includes(operator)) walkBranches([assign]);
+        else assign();
+        return UNKNOWN;
       }
+      const left = value(node.left);
+      if ([ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken,
+        ts.SyntaxKind.AmpersandAmpersandToken].includes(operator)) {
+        const at = origin(left);
+        const [right] = walkBranches([() => origin(value(node.right))]);
+        return scalar(at ?? right) ?? UNKNOWN;
+      }
+      if (operator === ts.SyntaxKind.PlusToken) {
+        const at = origin(left);
+        const right = origin(value(node.right));
+        return scalar(at ?? right);
+      }
+      const right = value(node.right);
+      return operator === ts.SyntaxKind.CommaToken ? right : null;
     }
-    if (ts.isCallExpression(node)) {
-      const callee = value(node.expression);
-      if (callee?.serialize) return scalar(origin(value(node.arguments[0])));
-      if (!callee?.kind && originFromArguments(node.arguments) !== null) gap(UNKNOWN_VALUE);
-      return {keys: new Map(), unknown: true};
+    if (ts.isCallExpression(node)) return call(node, used);
+    if (ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
+      bodies.push(node);
+      return callable(node);
     }
-    if (ts.isFunctionExpression(node) || ts.isArrowFunction(node) || ts.isClassExpression(node)) return LOCAL;
-    if (ts.isNewExpression(node)) return {keys: new Map(), unknown: true};
+    if (ts.isDeleteExpression(node)) {
+      const target = unwrap(node.expression);
+      if (isProperty(target)) mutate(propertyReference(target), null, true);
+      else value(target);
+      return null;
+    }
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+      [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)) {
+      const target = unwrap(node.operand);
+      gap(MUTATION);
+      bind(target, isProperty(target) ? propertyReference(target) : null, UNKNOWN);
+      return UNKNOWN;
+    }
     if (node.kind === ts.SyntaxKind.ThisKeyword) return UNKNOWN;
+    ts.forEachChild(node, walk);
+    if (ts.isClassExpression(node)) return LOCAL;
+    if (ts.isNewExpression(node)) return {keys: new Map(), unknown: true};
     return null;
   }
 
+  function isProperty(node) {
+    return ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node);
+  }
+
+  function propertyReference(node) {
+    const reference = value(node.expression);
+    if (ts.isElementAccessExpression(node)) value(node.argumentExpression);
+    return {reference, name: member(node)};
+  }
+
+  function readProperty(node, {reference, name}) {
+    const receiver = state(reference);
+    if (name === null) {
+      if (receiver?.items || receiver?.keys?.size) gap('leituras de propriedades sem chave estática');
+      return receiver?.invalidated ? CAPTURED : UNKNOWN;
+    }
+    if (receiver?.keys?.has(name)) return receiver.keys.get(name);
+    if (receiver?.items && arrayIndex(name) !== null) return receiver.items[arrayIndex(name)] ?? null;
+    if ((!receiver?.keys || receiver.unknown) && field.test(name) && !receiver?.invalidated) {
+      return scalar(line(ts.isPropertyAccessExpression(node) ? node.name : node.argumentExpression));
+    }
+    return receiver?.invalidated ? CAPTURED : receiver?.unknown ? UNKNOWN : null;
+  }
+
   function originFromArguments(args) {
-    return first(args.map(arg => {
-      const spread = ts.isSpreadElement(arg);
-      const data = value(spread ? arg.expression : arg);
-      if (spread && !state(data)?.items) {
-        gap('argumentos com expansão sem vínculo estático');
-        return null;
-      }
+    return first(args.map(({spread, data}) => {
+      if (spread && !data) gap('argumentos com expansão sem vínculo estático');
       return data;
     }));
   }
 
   function parameters(argument) {
-    const data = state(value(argument));
+    const data = state(argument);
     const slotLimit = 256;
     if (data?.items) return {
       items: Array.from(data.items.slice(0, slotLimit), item => origin(item)),
@@ -296,27 +392,64 @@ function analyze(text, suffix, fieldPattern, limit) {
     return null;
   }
 
-  function inspectCall(node, callee) {
+  function inspectCall(node, callee, args, indirectOrigin) {
     const kind = callee?.kind;
     if (!kind && !callee?.unknown) return;
-    const cut = node.arguments.pos + limit;
-    const args = node.arguments.filter(argument => argument.end <= cut);
-    if (node.end - 1 > cut) gap(LIMIT_GAP);
     if (!kind) {
-      if (originFromArguments(args) !== null) gap(UNKNOWN_DESTINATION);
+      if (indirectOrigin !== null) gap(UNKNOWN_DESTINATION);
       return;
     }
     const destinationLine = line(node);
     if (kind === 'SQL') {
-      sql.push([destinationLine, literal(args[0]), parameters(args[1])]);
+      sql.push([destinationLine, literal(args[0]?.node), args[1]?.spread ? null : parameters(args[1]?.data)]);
       return;
     }
-    if (kind === 'STORAGE' && args.slice(0, 2).some(ts.isSpreadElement)) {
+    if (kind === 'STORAGE' && args.slice(0, 2).some(argument => argument.spread)) {
       gap('argumentos de armazenamento com expansão');
       return;
     }
-    const at = kind === 'STORAGE' ? origin(value(args[1])) : originFromArguments(args);
+    const at = kind === 'STORAGE' ? origin(args[1]?.data) : originFromArguments(args);
     if (at !== null) hits.push([destinationLine, kind, at]);
+  }
+
+  function call(node, used) {
+    const target = unwrap(node.expression);
+    const property = isProperty(target) ? propertyReference(target) : null;
+    const callee = property ? readProperty(target, property) : value(target);
+    const cut = node.arguments.pos + limit;
+    const args = node.arguments.map(argument => {
+      const spread = ts.isSpreadElement(argument);
+      const reference = value(spread ? argument.expression : argument);
+      // A spread reads the slots immediately. A normal object argument retains its identity.
+      const items = spread ? state(reference)?.items : null;
+      return {node: argument, spread, data: spread ? items && {items: items.slice()} : reference};
+    });
+    const bounded = args.filter(argument => argument.node.end <= cut);
+    if (node.end - 1 > cut && (callee?.kind || callee?.unknown || callee?.serialize)) gap(LIMIT_GAP);
+    const indirectOrigin = !callee?.kind && !callee?.serialize && (used || callee?.unknown) ?
+      originFromArguments(bounded) : null;
+    inspectCall(node, callee, bounded, indirectOrigin);
+
+    if (callee?.serialize) {
+      const firstArg = bounded[0];
+      // With a spread, an empty or unknown sequence makes the first position ambiguous.
+      if (firstArg?.spread && !firstArg.data?.items?.length) gap('argumentos com expansão sem vínculo estático');
+      return scalar(origin(firstArg?.spread ? firstArg.data?.items?.[0] : firstArg?.data));
+    }
+    if (used && indirectOrigin !== null) gap(UNKNOWN_VALUE);
+    if (callee?.unknown || callee?.opaqueEffects) {
+      for (const {spread, data} of args) {
+        if (spread) {
+          for (const item of data?.items ?? []) invalidateArgument(item);
+        } else invalidateArgument(data);
+      }
+      if (property && callee.opaqueEffects) invalidateArgument(property.reference);
+    }
+    if (!callee && property && ARRAY_MUTATORS.has(property.name) && state(property.reference)?.items) {
+      gap(MUTATION);
+      invalidate(property.reference);
+    }
+    return {keys: new Map(), unknown: true};
   }
 
   function arrayIndex(name) {
@@ -327,24 +460,20 @@ function analyze(text, suffix, fieldPattern, limit) {
     active().objects.set(reference, {keys: new Map(), unknown: true, invalidated: true});
   }
 
-  function invalidateCallArguments(args) {
-    for (const node of args) {
-      const argument = unwrap(node);
-      if (ts.isIdentifier(argument) || ts.isPropertyAccessExpression(argument) || ts.isElementAccessExpression(argument)) {
-        const reference = value(argument);
-        const data = state(reference);
-        if (data?.items || data?.keys?.size || (data?.keys && !data.unknown)) {
-          gap(MUTATION);
-          invalidate(reference);
-        }
-      }
+  function invalidateArgument(reference, seen = new Set()) {
+    if (!reference || seen.has(reference)) return;
+    seen.add(reference);
+    const data = state(reference);
+    if (data?.items || data?.keys) {
+      gap(MUTATION);
+      invalidate(reference);
+      for (const item of data.items ?? []) invalidateArgument(item, seen);
+      for (const item of data.keys?.values() ?? []) invalidateArgument(item, seen);
     }
   }
 
-  function mutate(target, data, deleting = false) {
-    const reference = value(target.expression);
+  function mutate({reference, name}, data, deleting = false) {
     const current = state(reference);
-    const name = member(target);
     const index = current?.items && name !== null ? arrayIndex(name) : null;
     if ((!current?.keys && !current?.items) || name === null ||
       (current?.items && (name === 'length' || (index !== null && index >= limit))) || name === '__proto__') {
@@ -367,11 +496,9 @@ function analyze(text, suffix, fieldPattern, limit) {
     }
   }
 
-  function bind(target, expression, declaration = false, assigned = undefined) {
-    target = unwrap(target);
-    let data = assigned !== undefined ? assigned : expression && fits(expression) ? value(expression) : null;
-    if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) {
-      mutate(target, data);
+  function bind(target, property, data, declaration = false, expression = null) {
+    if (property) {
+      mutate(property, data);
       return;
     }
     if (!ts.isIdentifier(target)) {
@@ -391,103 +518,77 @@ function analyze(text, suffix, fieldPattern, limit) {
   function walkBranches(branches) {
     const writes = new Set();
     const objects = new Set();
-    for (const node of branches) {
-      if (!node) continue;
+    const values = branches.map(visit => {
       frames.push(newFrame());
-      walk(node);
+      const data = visit();
       const frame = frames.pop();
       for (const symbol of frame.writes) writes.add(symbol);
       for (const reference of frame.objects.keys()) objects.add(reference);
-    }
+      return data;
+    });
     if (writes.size || objects.size) gap(BRANCH);
     for (const symbol of writes) {
       active().bindings.set(symbol, UNKNOWN);
       active().writes.add(symbol);
     }
     for (const reference of objects) invalidate(reference);
+    return values;
   }
 
   function walk(node) {
-    if (ts.isTypeNode(node)) return;
+    if (!node || ts.isTypeNode(node)) return;
     if (ts.isFunctionLike(node) && node.body) {
-      // Writes from a function body must not mutate the enclosing analysis.
-      frames.push(newFrame());
-      for (const parameter of node.parameters) {
-        if (parameter.initializer) walk(parameter.initializer);
-        // A parameter can override its default. A literal property write still binds within this body.
-        bind(parameter.name, null, true, {keys: new Map(), unknown: true});
-      }
-      walk(node.body);
-      frames.pop();
+      bodies.push(node);
       return;
     }
     if (ts.isVariableDeclaration(node)) {
       if (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient) return;
-      if (node.initializer) walk(node.initializer);
-      bind(node.name, node.initializer, true);
+      const data = value(node.initializer);
+      bind(node.name, null, !node.initializer || fits(node.initializer) ? data : UNKNOWN, true, node.initializer);
       return;
     }
-    if (ts.isIfStatement(node) || ts.isConditionalExpression(node)) {
-      walk(node.expression ?? node.condition);
-      walkBranches(ts.isIfStatement(node) ? [node.thenStatement, node.elseStatement] : [node.whenTrue, node.whenFalse]);
+    if (ts.isIfStatement(node)) {
+      value(node.expression);
+      walkBranches([() => walk(node.thenStatement), () => walk(node.elseStatement)]);
+      return;
+    }
+    if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
+      const iterable = value(node.expression);
+      walkBranches([() => {
+        const target = unwrap(node.initializer);
+        if (ts.isVariableDeclarationList(target)) {
+          const lexical = Boolean(target.flags & ts.NodeFlags.BlockScoped);
+          if (lexical && ts.isForOfStatement(node) && origin(iterable) !== null) gap(BRANCH);
+          for (const declaration of target.declarations) bind(declaration.name, null, UNKNOWN, lexical);
+        } else {
+          bind(target, isProperty(target) ? propertyReference(target) : null, UNKNOWN);
+        }
+        walk(node.statement);
+      }]);
       return;
     }
     if (ts.isIterationStatement(node, false) || ts.isTryStatement(node) || ts.isSwitchStatement(node)) {
-      const children = [];
-      ts.forEachChild(node, child => { children.push(child); });
-      walkBranches(children);
+      const branches = [];
+      ts.forEachChild(node, child => { branches.push(() => walk(child)); });
+      walkBranches(branches);
       return;
     }
-    if (ts.isBinaryExpression(node)) {
-      const operator = node.operatorToken.kind;
-      walk(node.left);
-      if ([ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken,
-        ts.SyntaxKind.QuestionQuestionToken].includes(operator)) {
-        walkBranches([node.right]);
-      } else {
-        walk(node.right);
-        if (operator === ts.SyntaxKind.EqualsToken) bind(node.left, node.right);
-        else if (operator >= ts.SyntaxKind.FirstAssignment && operator <= ts.SyntaxKind.LastAssignment) {
-          gap(MUTATION);
-          bind(node.left, null, false, UNKNOWN);
-        }
-      }
-      return;
-    }
-    if (ts.isDeleteExpression(node)) {
-      walk(node.expression);
-      const target = unwrap(node.expression);
-      if (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) mutate(target, null, true);
-      return;
-    }
-    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
-      [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)) {
-      walk(node.operand);
-      gap(MUTATION);
-      bind(node.operand, null, false, UNKNOWN);
-      return;
-    }
-    if (ts.isCallExpression(node)) {
-      walk(node.expression);
-      const callee = value(node.expression);
-      for (const argument of node.arguments) walk(argument);
-      inspectCall(node, callee);
-      if (callee?.unknown) invalidateCallArguments(node.arguments);
-      const target = unwrap(node.expression);
-      if (!callee && (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) &&
-        ARRAY_MUTATORS.has(member(target))) {
-        const reference = value(target.expression);
-        if (state(reference)?.items) {
-          gap(MUTATION);
-          invalidate(reference);
-        }
-      }
-      return;
-    }
-    ts.forEachChild(node, walk);
+    if (ts.isExpressionNode(node)) value(node, false);
+    else ts.forEachChild(node, walk);
   }
 
   walk(file);
+  // Visit bodies for local findings without applying their writes at declaration or guessing when they run.
+  for (const body of bodies) {
+    inFunction = body;
+    frames.push(newFrame());
+    for (const parameter of body.parameters) {
+      if (parameter.initializer) value(parameter.initializer);
+      bind(parameter.name, null, {keys: new Map(), unknown: true}, true);
+    }
+    walk(body.body);
+    frames.pop();
+  }
   return result();
 }
 
