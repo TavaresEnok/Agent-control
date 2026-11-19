@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 
 const qaModuleDir = fileURLToPath(new URL('../deploy/modules/qa/', import.meta.url));
 const fixtureDir = fileURLToPath(new URL('./fixtures/module-qa/', import.meta.url));
-const cleanFixtureDir = fileURLToPath(new URL('./fixtures/module-qa/clean/', import.meta.url));
+const cleanFixtureDir = fileURLToPath(new URL('./fixtures/module-qa-clean/', import.meta.url));
 const labEnabled = process.env.AC_MODULE_LAB === '1';
 
 function readQaDigestPin(raw: string): string {
@@ -133,7 +133,7 @@ test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobrevivent
   const passes = passRows(defective);
   assert.equal(passes.length, 3);
   for (let pass = 1; pass <= 3; pass++) {
-    assert.match(passes[pass - 1]!.detail, new RegExp(`^execução ${pass}: node:test resultado aprovado; 4 aprovados, 0 reprovados, 1 pulados`));
+    assert.match(passes[pass - 1]!.detail, new RegExp(`^execução ${pass}: node:test resultado aprovado; 8 aprovados, 0 reprovados, 1 pulados`));
   }
   assert.match(row(defective, 'qa-arquivo:src/defective-pricing.ts').detail, /V8 em três passadas: ramos [1-9]\/\d+/);
   assert.match(row(defective, 'qa-requisito:REQ-01').detail, /calcularDescontoFidelidade.*tests\/clean-pricing\.test\.ts:5.*passed,passed,passed/);
@@ -141,10 +141,12 @@ test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobrevivent
   const rules = new Set(defective.findings.map(f => f.rule));
   for (const rule of [
     'QA-COBERTURA-FUNCAO-SEM-TESTE', 'QA-STRYKER-MUTANTE-SOBREVIVENTE', 'QA-REQUISITO-SEM-PROVA',
-    'QA-FASTCHECK-PROPRIEDADE-VIOLADA', 'QA-TESTE-PULADO', 'QA-TESTE-SEM-ASSERCAO',
+    'QA-TESTE-PULADO', 'QA-TESTE-SEM-ASSERCAO',
     'QA-AXE-IMAGE-ALT', 'QA-AXE-BUTTON-NAME', 'QA-CONTRATO-ROTA-SEM-OPENAPI',
   ]) assert.ok(rules.has(rule), rule);
 
+  assert.match(row(defective, 'qa-propriedades-funcionais').detail, /4 de 4 casos.*0 com reprovação/);
+  assert.equal(row(defective, 'qa-fuzz').status, 'skipped');
   assert.ok(hasExpectedKilledMutant(defective));
   assert.ok(defective.findings.some(f => f.rule === 'QA-STRYKER-MUTANTE-SOBREVIVENTE' &&
     f.file === 'src/defective-pricing.ts' && f.line === 2 && f.evidence.includes('valor > 100') && f.evidence.includes('node:test aprovou')));
@@ -152,6 +154,7 @@ test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobrevivent
 
   const clean = collect(pin, cleanFixtureDir);
   assert.equal(row(clean, 'node-test-v8').status, 'ok');
+  assert.match(row(clean, 'qa-propriedades-funcionais').detail, /4 de 4 casos.*0 com reprovação/);
   assert.match(row(clean, 'stryker-mutator').detail, /4 mortos, 0 sobreviventes/);
   assert.deepEqual(clean.findings, []);
 });

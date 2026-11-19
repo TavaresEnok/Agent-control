@@ -20,3 +20,8 @@ test('REQ-01: valida quantidade segura positiva e registra rota documentada', ()
   });
   assert.equal(registered, '/api/desconto');
 });
+
+test('QA-VALIDADOR: quantidade aceita limite inferior', () => assert.strictEqual(parseQuantidadeSegura('1'), 1));
+test('QA-VALIDADOR: quantidade aceita limite superior', () => assert.strictEqual(parseQuantidadeSegura('9999'), 9999));
+test('QA-VALIDADOR: quantidade rejeita zero', () => assert.throws(() => parseQuantidadeSegura('0')));
+test('QA-VALIDADOR: quantidade rejeita valor acima do limite', () => assert.throws(() => parseQuantidadeSegura('10000')));
