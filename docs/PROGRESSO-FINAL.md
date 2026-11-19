@@ -734,3 +734,6 @@ PAUSADO-COTA
 - 19/11/2026 17:38 UTC — revisor-C2-LINGUAGENS-R4 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:38 UTC — QA em 6601eb59 incorpora PostgreSQL 16.15 e isola a confirmação pgTAP. A restauração do arquivo OCI de arquitetura retornou ao Docker o digest original 0758fd40. C5-R10 entregou fdfeb56e e C3 recebeu a prova das duas raízes 86894260.
 - 19/11/2026 17:40 UTC — Banco em 772e0afe passou em 21/21 com SQL medido e CLI; a correção posterior está em fa97e86b. Dependências integra a imagem aprovada em 910c59cb. Duas divergências do TypeDoc voltaram ao trabalhador de documentação.
+- 19/11/2026 17:40 UTC — trabalho-C8-VINCULO-FONTE iniciado em final-c8 por Sol high normal.
+- 19/11/2026 17:40 UTC — C2-CARGA-PLATAFORMAS encerrado com código 0.
+- 19/11/2026 17:41 UTC — Candidato do produto para QA em 99c531d5 reúne os ajustes de PostgreSQL e das duas arquiteturas do empacotamento. A prova física de arm64 depende de executor dessa arquitetura. Documentação em 7355c13c passou em 28/28.
