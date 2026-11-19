@@ -284,6 +284,8 @@ Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes c
 
 ### Prova do módulo 2
 
+O ramo do produto recebeu `53012d07` pelo merge `7902cc97`. TypeScript, 266 arquivos da suíte oficial, 52 testes complementares e 136 testes do laboratório passaram. O laboratório exerceu os binários fixados neste host amd64.
+
 A revisão independente por Sol 6.2 high confirmou no código a gramática de uma mensagem literal em `f3158451`. Se duas mensagens deixam ambígua uma referência textual, a matriz registra cobertura limitada. O candidato de aplicação com esse contrato e os controles reais de Go e PostgreSQL é `53012d07`.
 
 Em `0d8198b6`, passaram a suíte oficial (266 arquivos), os 52 testes complementares e os 130 testes do laboratório. O laboratório da imagem construída de `8642613d` passou em 132/132 no host amd64, incluindo o controle real de versão incompatível de Go. A revisão da matriz e de herança de tabelas PostgreSQL motivou outra rodada antes da aplicação.
@@ -302,6 +304,8 @@ Na versão `e245fca3`, passaram os 94 testes de QA com os adaptadores habilitado
 
 ### Prova do módulo 3
 
+A arquitetura entrou no ramo do produto pelo merge `cd878d0d`. A CLI foi exercida com o digest final de QA e o coletor de arquitetura em uma instalação de bancada.
+
 A suíte oficial de `38e9984c` aprovou 267 arquivos, além dos 52 testes complementares e do laboratório da CLI. Os controles de descritores de `57888e81` passaram em revisão estática independente por Sol 6.2 high.
 
 Em `57888e81`, o teste passou com descritores distintos para as duas raízes e confirmou cada abertura de filho. O revisor Sol high verificou essa discriminação no diff. O gerente executou TypeScript e os 20 testes do coletor.
@@ -313,6 +317,8 @@ A imagem da fonte `56177e90` passou nos 21 testes dirigidos, incluindo Hadolint.
 A prova da arquitetura passou nos 20 testes, com Hadolint e as dependências locais fixadas, e nos seis testes da CLI. A revisão independente por modelo distinto de `70a8c7cc` registrou duas observações baixas. Ao atingir o limite do inventário, a cobertura informa o primeiro caminho interrompido e que as entradas posteriores ficaram fora da medição. O teste de caminho relativo também aceita a âncora anterior.
 
 ### Prova do módulo 4
+
+O módulo entrou no ramo do produto em `ce591992`. As CLIs de QA, arquitetura e dependências passaram juntas nos seis controles em `da2c8bc4`.
 
 Em `05776a76`, passaram a suíte oficial (269 arquivos), os 52 testes complementares e os 42 testes de ferramentas e CLI.
 
@@ -372,6 +378,8 @@ Após a revisão independente por modelo distinto de `e3527238`, a integração 
 
 ### Prova do módulo 8
 
+Em `ba10a9b4`, o laboratório e a CLI passaram em 42/42. O parecer sobre `44ed392a` conferiu a proveniência da reflexão de módulo ambiente e o controle de posição independente.
+
 Em `e02a6f2d`, a CLI e o laboratório passaram em 37/37. O ensaio verifica o símbolo, caminho e linha no relatório. A origem lexical em comentários está sob revisão no candidato seguinte.
 
 Na integração `2c21f573`, os 37 testes aprovaram imagem, ferramentas reais e CLI. O relatório reconheceu a função `src/billing.undocumentedCharge` no arquivo e na linha da fixture. O controle rejeitou o nome de outro módulo e a linha divergente.
@@ -385,6 +393,8 @@ A imagem de documentação fixada em `7e27197e` passou nos 21 testes com as ferr
 A rodada fixada em `bd0211ec` passou nos 25 testes de documentação, incluindo o tratamento de diretórios de comandos e a origem de arestas de Mermaid com frontmatter. As CLIs de documentação e conformidade passaram nos seis testes após essa integração.
 
 ### Prova do módulo 9
+
+A imagem fixada em `72fc96fd` passou em 41/41, incluindo a CLI. Em `696d81a9`, o revisor aceitou as provas da negação composta e do motivo exato da cobertura npm. Na fixture de atribuição, ScanCode e Presidio são aplicáveis. ORT e a política npm registram ausência de manifesto aplicável. O analisador local identifica as chamadas de origem indeterminada como cobertura parcial.
 
 O laboratório e a CLI da integração `30cab4eb` passaram em 36/36 com dados artificiais. A revisão de `52b078d2` identificou casos de perda de origem por efeito de chamada. Uma rodada adicional cobre esses casos.
 
