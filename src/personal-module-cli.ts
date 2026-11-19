@@ -172,14 +172,26 @@ export async function runPersonalModuleCli(
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = resolveProject(config, parsed.projectToken);
 
-  if (parsed.kind === 'discard') {
-    await removeModuleReport(config.dataDirectory, project.id, parsed.runId, module);
-    return ['Relatório descartado.'];
-  }
-
   const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
   let authority: Authority | undefined;
   try {
+    if (parsed.kind === 'discard') {
+      await ledger.tx(async client => {
+        const membership = await client.query(
+          'SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 FOR SHARE',
+          [project.id, project.owner],
+        );
+        if (!membership.rowCount || membership.rows[0].role === 'viewer') throw new Refusal('PROJECT_FORBIDDEN', 403);
+        const run = (await client.query<{context_id: string}>(
+          'SELECT context_id::text FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND module=$3 FOR SHARE',
+          [parsed.runId, project.id, module],
+        )).rows[0];
+        if (!run) throw new Refusal('VERIFY_RUN_MISSING', 404);
+        await ledger.authorize(client, project.owner, run.context_id);
+        await removeModuleReport(config.dataDirectory, project.id, parsed.runId, module);
+      });
+      return ['Relatório descartado.'];
+    }
     const exam = await ledger.ensureExamContext(project.owner, project.id, module);
     authority = await acquirePersonalModule(ledger, project.owner, exam.contextId, module);
     if (exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
@@ -200,6 +212,7 @@ export async function runPersonalModuleCli(
 
     const commit = await readHead(project.repo);
     const runId = randomUUID();
+    const collectorAbort = new AbortController();
     let rejectAbort: (error: unknown) => void = () => {};
     const aborted = new Promise<never>((_, reject) => {
       rejectAbort = reject;
@@ -212,17 +225,18 @@ export async function runPersonalModuleCli(
           stopLease();
         },
         async stopJob() {
+          collectorAbort.abort();
           await deps?.worker?.stop?.();
         },
         rejectAbort,
       });
     });
 
-    let failed: unknown;
+    let runningTask: Promise<VerificationModuleRunResult> | undefined;
     try {
       const result = await withExamSignals(
         async () => {
-          const task = runVerificationModule({
+          const task = runningTask = runVerificationModule({
             module,
             ledger,
             principal: project.owner,
@@ -232,6 +246,7 @@ export async function runPersonalModuleCli(
             dataDirectory: config.dataDirectory,
             commit,
             runId,
+            signal: collectorAbort.signal,
             ...(deps?.image !== undefined ? {image: deps.image} : {}),
             ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
             ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
@@ -244,6 +259,7 @@ export async function runPersonalModuleCli(
           return await Promise.race([task, aborted]);
         },
         () => {
+          collectorAbort.abort();
           void deps?.worker?.stop?.().catch(() => undefined);
         },
       );
@@ -252,29 +268,11 @@ export async function runPersonalModuleCli(
         throw new Refusal('VERIFY_TOOLS_FAILED', 409);
       }
       return [result.runId, result.directory];
-    } catch (error) {
-      failed = error;
-      throw error;
     } finally {
       stopLease();
-      if (failed) {
-        try {
-          const updated = (await ledger.pool.query<{intent_id: string}>(
-            "UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running' RETURNING intent_id::text AS intent_id",
-            [runId],
-          )).rows[0];
-          const intentId = updated?.intent_id ?? (await ledger.pool.query<{intent_id: string}>(
-            'SELECT intent_id::text AS intent_id FROM ac_verify_runs WHERE id=$1',
-            [runId],
-          )).rows[0]?.intent_id;
-          if (intentId) {
-            const {finishExamIntent} = await import('./exam-intent.ts');
-            await finishExamIntent(ledger, {intentId, contextId: authority.contextId}, 'failed');
-          }
-        } catch {
-          /* status cleanup must not replace the original failure */
-        }
-      }
+      // Let the aborted run stop its collector and finish fenced cleanup before
+      // releasing the lease and closing the database pool.
+      if (collectorAbort.signal.aborted && runningTask) await runningTask.catch(() => undefined);
     }
   } finally {
     if (authority) {

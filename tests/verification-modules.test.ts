@@ -19,6 +19,7 @@ import {
   moduleCollectorArguments,
   parseModuleCollectorOutput,
   prepareModuleSnapshot,
+  removeModuleSnapshot,
   readModuleAchadoMarkdown,
   readModuleReport,
   readPinnedModuleImage,
@@ -195,7 +196,7 @@ test('prepareModuleSnapshot extrai commit isolado legível por 65532 sem arquivo
     assert.equal(await readFile(join(snapshot, 'src', 'app.ts'), 'utf8'), 'export function main() {\n  return 42;\n}\n');
     await assert.rejects(() => stat(join(snapshot, 'src', 'untracked.ts')));
   } finally {
-    if (snapshot) await rm(snapshot, {recursive: true, force: true});
+    if (snapshot) await removeModuleSnapshot(snapshot);
     await rm(root, {recursive: true, force: true});
   }
 });
@@ -262,7 +263,6 @@ test('parseModuleCollectorOutput e runBoundedCollectorProcess validam caminhos, 
     'src/../fora.ts',
     'src\\win.ts',
     '.git/config',
-    '.github/workflows/ci.yml',
     '.ai/work',
     'node_modules/pkg/index.js',
     '.env',

@@ -10,12 +10,11 @@ import {z} from 'zod';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
 import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transport.ts';
-import {finishExamIntent, finishExamIntentTx} from './exam-intent.ts';
+import {finishExamIntentTx} from './exam-intent.ts';
 import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
-import {listExamFiles} from './verify-slices.ts';
 import {
   Achado,
   ConfirmResult,
@@ -68,6 +67,7 @@ export const ModuleToolCoverage = z.object({
   version: z.string().min(1).max(120),
   status: ModuleToolStatus,
   detail: z.string().min(1).max(2000),
+  files: z.array(z.string()).max(100000).optional(),
 }).strict();
 export type ModuleToolCoverage = z.infer<typeof ModuleToolCoverage>;
 
@@ -93,6 +93,7 @@ export const ModuleReportSummary = z.object({
   module: z.enum(VERIFICATION_MODULES),
   directoryName: z.string().regex(/^\d{8}-\d{6}-[a-f0-9]{8}-(qa|arquitetura|dependencias|banco|prontidao|desempenho|documentacao|conformidade)$/),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
+  image: z.string().optional(),
   createdAt: z.string().min(1).max(40),
   counts: z.object({
     alta: z.number().int().nonnegative(),
@@ -107,11 +108,12 @@ export type ModuleReportSummary = z.infer<typeof ModuleReportSummary>;
 
 export type CollectorRunnerSpec = {
   module: VerificationModule;
-  image: string;
+  image: string | undefined;
   repoPath: string;
   commit: string;
   timeoutMs: number;
   maxStdoutBytes: number;
+  signal?: AbortSignal;
 };
 
 export type VerificationModuleRunInput = {
@@ -129,6 +131,7 @@ export type VerificationModuleRunInput = {
   createdAt?: Date;
   timeoutMs?: number;
   maxStdoutBytes?: number;
+  signal?: AbortSignal;
   collectorOutput?: unknown;
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
   /** Optional independent reviewer worker. When present, findings are confirmed without passing author conclusions. */
@@ -192,7 +195,6 @@ function forbiddenSegment(part: string): boolean {
     || part === '.'
     || part === '..'
     || part === '.git'
-    || part === '.github'
     || part === '.ai'
     || part === 'node_modules'
     || part.startsWith('.env')
@@ -502,7 +504,8 @@ export function validateModuleCollectorObject(parsed: unknown): ModuleCollectorO
     }
     const itemKeys = Object.keys(item);
     if (
-      itemKeys.length !== 4
+      (itemKeys.length !== 4 && itemKeys.length !== 5)
+      || itemKeys.some(key => !['tool', 'version', 'status', 'detail', 'files'].includes(key))
       || !itemKeys.includes('tool')
       || !itemKeys.includes('version')
       || !itemKeys.includes('status')
@@ -511,6 +514,9 @@ export function validateModuleCollectorObject(parsed: unknown): ModuleCollectorO
       throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
     }
     const row = item as Record<string, unknown>;
+    if (row.files !== undefined && (!Array.isArray(row.files) || row.files.length > 100000)) {
+      throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
+    }
     const statusParsed = ModuleToolStatus.safeParse(row.status);
     if (!statusParsed.success) throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
     return ModuleToolCoverage.parse({
@@ -518,6 +524,7 @@ export function validateModuleCollectorObject(parsed: unknown): ModuleCollectorO
       version: validateSingleLineString(row.version, 1, 120, false),
       status: statusParsed.data,
       detail: validateTextBlock(row.detail, 1, 2000).replace(/\s*\n\s*/g, ' '),
+      ...(Array.isArray(row.files) ? {files: row.files.map(file => assertModuleRepoRelativePath(file))} : {}),
     });
   });
 
@@ -633,11 +640,13 @@ export async function prepareModuleSnapshot(repoPath: string, commit: string): P
     throw new Refusal('VERIFY_COMMIT_INVALID', 400);
   }
   const repo = resolve(repoPath);
-  const snapshot = await mkdtemp(join(tmpdir(), 'ac-module-snapshot-'));
+  const parent = await mkdtemp(join(tmpdir(), 'ac-module-snapshot-'));
+  const snapshot = join(parent, 'repo');
+  await mkdir(snapshot, {mode: 0o700});
   const rel = relative(repo, snapshot);
   const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
   if (!outside) {
-    await rm(snapshot, {recursive: true, force: true});
+    await rm(parent, {recursive: true, force: true});
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   }
   try {
@@ -645,16 +654,25 @@ export async function prepareModuleSnapshot(repoPath: string, commit: string): P
     await widenSnapshotForUnprivilegedContainer(snapshot);
     return snapshot;
   } catch (error) {
-    await rm(snapshot, {recursive: true, force: true});
+    await rm(parent, {recursive: true, force: true});
     throw error;
   }
+}
+
+/** Remove both the snapshot and its private parent. Accept only snapshots created here. */
+export async function removeModuleSnapshot(snapshot: string): Promise<void> {
+  const parent = dirname(snapshot);
+  if (basename(snapshot) !== 'repo' || dirname(parent) !== tmpdir() || !basename(parent).startsWith('ac-module-snapshot-')) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  }
+  await rm(parent, {recursive: true, force: true});
 }
 
 export type BoundedProcessResult = {code: number; stdout: Buffer; stderr: string};
 
 export function runBoundedCollectorProcess(
   args: readonly string[],
-  options: {timeoutMs: number; maxStdoutBytes: number},
+  options: {timeoutMs: number; maxStdoutBytes: number; signal?: AbortSignal; containerName?: string},
 ): Promise<BoundedProcessResult> {
   return new Promise((resolvePromise, reject) => {
     let settled = false;
@@ -667,17 +685,25 @@ export function runBoundedCollectorProcess(
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent'},
     });
+    const onAbort = () => fail(new Refusal('VERIFY_TOOLS_FAILED', 503));
     const fail = (error: Refusal) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
       child.kill('SIGKILL');
-      reject(error);
+      if (!options.containerName) { reject(error); return; }
+      // The Docker client and daemon are separate processes: removing the named
+      // container is necessary even after the client has been killed.
+      execFile(MODULE_RUNTIME_BIN, ['rm', '-f', options.containerName],
+        {timeout: 10000, env: {PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent'}},
+        () => reject(error));
     };
     const finish = (code: number) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
       resolvePromise({
         code,
         stdout: Buffer.concat(stdoutChunks),
@@ -685,6 +711,8 @@ export function runBoundedCollectorProcess(
       });
     };
     timer = setTimeout(() => fail(new Refusal('VERIFY_TOOLS_FAILED', 503)), options.timeoutMs);
+    options.signal?.addEventListener('abort', onAbort, {once: true});
+    if (options.signal?.aborted) onAbort();
     child.stdout?.on('data', (chunk: Buffer | string) => {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
       totalBytes += buf.byteLength;
@@ -712,7 +740,8 @@ export async function runModuleCollectorContainer(input: {
   commit: string;
   timeoutMs?: number;
   maxStdoutBytes?: number;
-  executeProcess?: (args: readonly string[], options: {timeoutMs: number; maxStdoutBytes: number}) => Promise<BoundedProcessResult>;
+  signal?: AbortSignal;
+  executeProcess?: (args: readonly string[], options: {timeoutMs: number; maxStdoutBytes: number; signal?: AbortSignal; containerName?: string}) => Promise<BoundedProcessResult>;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
@@ -721,13 +750,30 @@ export async function runModuleCollectorContainer(input: {
   }
   const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
   try {
-    const args = moduleCollectorArguments({image: input.image, repository: snapshot});
+    const containerName = `ac-module-${randomUUID()}`;
+    const baseArgs = moduleCollectorArguments({image: input.image, repository: snapshot});
     const run = input.executeProcess ?? runBoundedCollectorProcess;
-    const result = await run(args, {timeoutMs, maxStdoutBytes});
-    const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes});
-    return {code: result.code, output};
+    // Create before start: cancellation during creation can leave only a stopped
+    // container, and removal racing with start cannot leave a running container.
+    const createArgs = [baseArgs[0]!, 'create', '--name', containerName, ...baseArgs.slice(2)];
+    try {
+      const created = await run(createArgs, {timeoutMs, maxStdoutBytes: 4096, signal: input.signal, containerName});
+      if (created.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+      const result = await run([MODULE_RUNTIME_BIN, 'start', '--attach', containerName],
+        {timeoutMs, maxStdoutBytes, signal: input.signal, containerName});
+      const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes});
+      return {code: result.code, output};
+    } finally {
+      if (!input.executeProcess) {
+        await new Promise<void>(resolveCleanup => {
+          execFile(MODULE_RUNTIME_BIN, ['rm', '-f', containerName],
+            {timeout: 10000, env: {PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent'}},
+            () => resolveCleanup());
+        });
+      }
+    }
   } finally {
-    await rm(snapshot, {recursive: true, force: true});
+    await removeModuleSnapshot(snapshot);
   }
 }
 
@@ -1060,6 +1106,8 @@ export async function writeModuleReport(input: {
   runId: string;
   createdAt: Date;
   commit: string;
+  image?: string;
+  deferPublication?: boolean;
   toolCoverage: readonly ModuleToolCoverage[];
   fileCoverage: readonly CoverageRow[];
   achados: readonly Achado[];
@@ -1098,6 +1146,7 @@ export async function writeModuleReport(input: {
     module: input.module,
     directoryName,
     commit: input.commit,
+    ...(input.image ? {image: assertPinnedModuleImage(input.image)} : {}),
     createdAt: input.createdAt.toISOString(),
     counts,
     toolFailures,
@@ -1129,7 +1178,7 @@ export async function writeModuleReport(input: {
     {segments: ['achados.json'], body: guardReportText(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guardReportText(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},
-    {segments: ['run.json'], body: guardReportText(`${JSON.stringify(summary, null, 2)}\n`)},
+    ...(!input.deferPublication ? [{segments: ['run.json'], body: guardReportText(`${JSON.stringify(summary, null, 2)}\n`)}] : []),
   ];
   for (const file of planned) {
     for (const segment of file.segments) assertSafeSegment(segment);
@@ -1317,9 +1366,9 @@ export async function removeModuleReport(
   }
 }
 
-function assertReportOutsideRepo(repoPath: string, dataDirectory: string): void {
-  const repo = resolve(repoPath);
-  const data = resolve(dataDirectory);
+async function assertReportOutsideRepo(repoPath: string, dataDirectory: string): Promise<void> {
+  const repo = await realpath(repoPath);
+  const data = await realpath(dataDirectory);
   const rel = relative(repo, data);
   const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel);
   if (rel === '' || !outside) throw new Refusal('VERIFY_REPORT_INSIDE_REPO', 403);
@@ -1348,7 +1397,6 @@ async function assertNoSymlinkAlongPath(repo: string, relativeFile: string): Pro
     try {
       info = await lstat(current);
     } catch (error) {
-      if (isErrno(error, 'ENOENT')) return;
       throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     }
     if (info.isSymbolicLink()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
@@ -1401,14 +1449,20 @@ async function locateRepoFile(repo: string, relativeFile: string): Promise<strin
   }
 }
 
-async function readBoundedExcerpt(repo: string, relativeFile: string): Promise<{text: string; seen: boolean}> {
+async function readBoundedExcerpt(repo: string, relativeFile: string, line: number): Promise<{text: string; seen: boolean}> {
   const located = await locateRepoFile(repo, relativeFile);
   if (!located) return {text: 'codigo-nao-visto', seen: false};
-  if (isSecretClassBasename(relativeFile)) return {text: `nome: ${relativeFile}`, seen: true};
+  if (isSecretClassBasename(relativeFile)) return {text: `nome: ${relativeFile}`, seen: false};
   const handle = await open(located, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    const raw = (await handle.readFile({encoding: 'utf8'})).slice(0, 64_000);
-    return {text: sanitizeText(raw).slice(0, EXCERPT_LIMIT), seen: true};
+    const info = await handle.stat();
+    if (info.size > 1024 * 1024) return {text: 'codigo-nao-visto', seen: false};
+    const lines = (await handle.readFile({encoding: 'utf8'})).split('\n');
+    const target = lines[line - 1];
+    if (target === undefined || target.length > EXCERPT_LIMIT / 2) return {text: 'codigo-nao-visto', seen: false};
+    const selected = sanitizeText(target);
+    if (!selected.trim()) return {text: 'codigo-nao-visto', seen: false};
+    return {text: `Linha ${line}: ${selected}`.slice(0, EXCERPT_LIMIT), seen: true};
   } finally {
     await handle.close();
   }
@@ -1440,7 +1494,7 @@ async function confirmFindingWithReviewer(
   finding: ModuleRawFinding,
   achadoId: string,
 ): Promise<{status: 'confirmado' | 'provavel' | 'descartado'; proof: string; verifier: {model: string; provider: string}}> {
-  const excerpt = await readBoundedExcerpt(input.repoPath, finding.file);
+  const excerpt = await readBoundedExcerpt(input.repoPath, finding.file, finding.line);
   const task = buildModuleReviewPrompt({
     module: input.module,
     achadoId,
@@ -1452,9 +1506,7 @@ async function confirmFindingWithReviewer(
     codeExcerpt: excerpt.text,
   });
   const capacity = new Capacity(input.ledger);
-  let seat: {provider: string; model: string; accountId: string; profileId: string; grantId: string} | undefined;
-  try {
-    seat = await reserveSpecialistExamSeat({
+  const seat = await reserveSpecialistExamSeat({
       capacity,
       ledger: input.ledger,
       principal: input.principal,
@@ -1463,17 +1515,14 @@ async function confirmFindingWithReviewer(
       purpose: 'reviewer',
       releaseGrant: grantId => capacity.transition(input.principal, grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}),
     });
-  } catch {
-    seat = undefined;
-  }
   try {
     const call = VerifyWorkerCall.parse({
       role: 'reviewer',
-      provider: seat?.provider ?? 'claude',
-      accountId: seat?.accountId ?? '00000000-0000-4000-8000-000000000001',
-      profileId: seat?.profileId ?? '00000000-0000-4000-8000-000000000002',
-      model: seat?.model ?? 'claude-sonnet-5-5',
-      grantId: seat?.grantId ?? '00000000-0000-4000-8000-000000000003',
+      provider: seat.provider,
+      accountId: seat.accountId,
+      profileId: seat.profileId,
+      model: seat.model,
+      grantId: seat.grantId,
       intentId,
       task,
       repo: input.repoPath,
@@ -1487,14 +1536,12 @@ async function confirmFindingWithReviewer(
       .join('\n')
       .slice(0, 2000);
     return {
-      status: confirm.status,
+      status: confirm.status === 'descartado' && !excerpt.seen ? 'provavel' : confirm.status,
       proof: combinedProof || finding.evidence,
       verifier: {model: call.model, provider: call.provider},
     };
   } finally {
-    if (seat) {
-      await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}).catch(() => undefined);
-    }
+    await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}).catch(() => undefined);
   }
 }
 
@@ -1506,18 +1553,37 @@ async function beginModuleRunTx(input: {
   module: VerificationModule;
   commit: string;
   runId: string;
+  repoPath: string;
 }): Promise<string> {
   const intentId = randomUUID();
   await input.ledger.tx(async c => {
     const context = await input.ledger.authorize(c, input.principal, input.authority.contextId);
     await input.ledger.fence(c, input.authority);
     if (context.project_id !== input.projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
+    const repoRow = (await c.query<{repo: string}>(
+      'SELECT repo FROM ac_project_repositories WHERE project_id=$1 FOR SHARE', [input.projectId],
+    )).rows[0];
+    if (!repoRow || await realpath(repoRow.repo) !== await realpath(input.repoPath)) {
+      throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
+    }
     const examBinding = await c.query<{module: string}>(
       'SELECT module FROM ac_exam_contexts WHERE project_id=$1 AND context_id=$2',
       [input.projectId, input.authority.contextId],
     );
     if (!examBinding.rowCount || examBinding.rows[0]?.module !== input.module) {
       throw new Refusal('EXAM_CONTEXT_MISMATCH', 403);
+    }
+    await c.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [input.projectId, input.module]);
+    const abandoned = await c.query<{id: string; intent_id: string; context_id: string}>(
+      `SELECT r.id::text, r.intent_id::text, r.context_id::text FROM ac_verify_runs r
+       JOIN ac_intents i ON i.id=r.intent_id
+       LEFT JOIN ac_managers m ON m.context_id=r.context_id AND m.epoch=i.manager_epoch AND m.lease_until>clock_timestamp()
+       WHERE r.project_id=$1 AND r.module=$2 AND r.status='running' AND m.context_id IS NULL FOR UPDATE OF r`,
+      [input.projectId, input.module],
+    );
+    for (const old of abandoned.rows) {
+      await c.query("UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running'", [old.id]);
+      await finishExamIntentTx(c, input.ledger, {intentId: old.intent_id, contextId: old.context_id}, 'failed');
     }
     const alreadyRunning = await c.query(
       "SELECT 1 FROM ac_verify_runs WHERE project_id=$1 AND module=$2 AND status='running' LIMIT 1",
@@ -1573,7 +1639,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     throw new Refusal('VERIFY_COMMIT_INVALID', 400);
   }
   await assertPersonalActivation(input.ledger);
-  assertReportOutsideRepo(input.repoPath, input.dataDirectory);
+  await assertReportOutsideRepo(input.repoPath, input.dataDirectory);
   const runId = input.runId ?? randomUUID();
   if (!Id.safeParse(runId).success) throw new Refusal('INVALID_CONTRACT', 400);
   const createdAt = input.createdAt ?? new Date();
@@ -1584,7 +1650,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     ? assertPinnedModuleImage(input.image)
     : needImage
       ? await readPinnedModuleImage(input.module, input.rootDir)
-      : `sha256:${'0'.repeat(64)}`;
+      : undefined;
 
   const intentId = await beginModuleRunTx({
     ledger: input.ledger,
@@ -1594,11 +1660,18 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     module: input.module,
     commit: input.commit,
     runId,
+    repoPath: input.repoPath,
   });
 
+  let snapshot: string | undefined;
+  let unpublishedReport: string | undefined;
+  let databaseCommitted = false;
   try {
+    if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+    snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
     let collectorCode = 0;
     let collectorData: ModuleCollectorOutput;
+    try {
     if (input.collectorOutput !== undefined) {
       collectorData = typeof input.collectorOutput === 'string' || Buffer.isBuffer(input.collectorOutput)
         ? parseModuleCollectorOutput(input.collectorOutput, {maxStdoutBytes})
@@ -1611,28 +1684,45 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         commit: input.commit,
         timeoutMs,
         maxStdoutBytes,
+        signal: input.signal,
       });
       collectorData = typeof raw === 'string' || Buffer.isBuffer(raw)
         ? parseModuleCollectorOutput(raw, {maxStdoutBytes})
         : validateModuleCollectorObject(raw);
     } else {
       const executed = await runModuleCollectorContainer({
-        image,
+        image: image!,
         repoPath: input.repoPath,
         commit: input.commit,
         timeoutMs,
         maxStdoutBytes,
+        signal: input.signal,
       });
       collectorCode = executed.code;
       collectorData = executed.output;
     }
-
+    if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
     for (const finding of collectorData.findings) {
-      await assertNoSymlinkAlongPath(input.repoPath, finding.file);
+      await resolveInsideRepo(snapshot, finding.file);
+      if (!collectorData.coverage.some(row => row.tool === finding.tool && row.status === 'ok')) {
+        throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
+      }
+    }
+    for (const row of collectorData.coverage) {
+      for (const file of row.files ?? []) await resolveInsideRepo(snapshot, file);
+    }
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      const reason = error instanceof Refusal ? error.code : 'VERIFY_TOOLS_FAILED';
+      collectorCode = 1;
+      collectorData = {coverage: [{tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Falha de processo ou leitura da saída: ${reason}`}], findings: []};
+    }
+    if (collectorCode !== 0 && !collectorData.coverage.some(row => row.status === 'failed')) {
+      collectorData.coverage.push({tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Processo terminou com código ${collectorCode}.`});
     }
 
     const toolVersions = new Map<string, string>();
-    for (const row of collectorData.coverage) {
+    for (const row of collectorData.coverage.filter(row => row.status === 'ok')) {
       if (!toolVersions.has(row.tool)) toolVersions.set(row.tool, row.version);
     }
 
@@ -1644,11 +1734,11 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       let status: 'confirmado' | 'provavel' | 'descartado' = 'confirmado';
       let proof = sanitizeText(finding.evidence).slice(0, 2000);
       let verifier = {
-        model: (toolVersions.get(finding.tool) ?? '1.0.0').slice(0, 100),
+        model: toolVersions.get(finding.tool)!.slice(0, 100),
         provider: finding.tool.slice(0, 80),
       };
       if (input.worker) {
-        const confirmed = await confirmFindingWithReviewer(input, intentId, finding, achadoId);
+        const confirmed = await confirmFindingWithReviewer({...input, repoPath: snapshot}, intentId, finding, achadoId);
         status = confirmed.status;
         proof = confirmed.proof;
         verifier = confirmed.verifier;
@@ -1670,25 +1760,24 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }));
     }
 
-    const repoFiles = await listExamFiles(input.repoPath).catch(() => [] as string[]);
-    const allCoveredFiles = [...new Set([...repoFiles, ...collectorData.findings.map(item => item.file)])].sort();
-    const checklistNames = [...new Set(collectorData.coverage.map(row => row.tool.slice(0, 80)))].slice(0, 80);
-    const effectiveChecklist = checklistNames.length > 0 ? checklistNames : [input.module];
-    const primaryToolVersion = collectorData.coverage[0]
-      ? `${collectorData.coverage[0].tool}@${collectorData.coverage[0].version}`.slice(0, 100)
-      : input.module;
-    const fileCoverage: CoverageRow[] = (allCoveredFiles.length > 0 ? allCoveredFiles : ['README.md']).map(file =>
+    const measured = new Map<string, ModuleToolCoverage[]>();
+    for (const row of collectorData.coverage.filter(row => row.status === 'ok')) {
+      const files = new Set([...(row.files ?? []), ...collectorData.findings.filter(f => f.tool === row.tool).map(f => f.file)]);
+      for (const file of files) measured.set(file, [...(measured.get(file) ?? []), row]);
+    }
+    const fileCoverage: CoverageRow[] = [...measured.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([file, rows]) =>
       CoverageRow.parse({
         file,
         examinerProvider: input.module,
-        examinerModel: primaryToolVersion,
+        examinerModel: `${rows[0]!.tool}@${rows[0]!.version}`.slice(0, 100),
         profileId: DETERMINISTIC_MODULE_PROFILE_ID,
-        checklist: effectiveChecklist,
+        checklist: [...new Set(rows.map(row => row.tool.slice(0, 80)))].slice(0, 80),
       }),
     );
 
     const hasToolFailure = collectorCode !== 0 || collectorData.coverage.some(row => row.status === 'failed');
     const notes: string[] = [...(input.notes ?? [])];
+    notes.push('Cobertura por arquivo limitada aos arquivos informados pelos coletores ou com achados; ausência de registro não comprova exame. O snapshot é gerado por git archive.');
     for (const failed of collectorData.coverage.filter(row => row.status === 'failed')) {
       notes.push(`Falha em ${failed.tool} (${failed.version}): ${failed.detail}`);
     }
@@ -1702,14 +1791,18 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       runId,
       createdAt,
       commit: input.commit,
+      image,
+      deferPublication: true,
       toolCoverage: collectorData.coverage,
       fileCoverage,
       achados,
       raw: collectorData,
       ...(notes.length > 0 ? {note: notes.join(' ')} : {}),
     });
+    unpublishedReport = report.directory;
 
     const finalState: 'done' | 'failed' = hasToolFailure ? 'failed' : 'done';
+    if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
     await input.ledger.tx(async c => {
       await input.ledger.authorize(c, input.principal, input.authority.contextId);
       await input.ledger.fence(c, input.authority);
@@ -1747,13 +1840,16 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         );
       }
       const updated = await c.query(
-        `UPDATE ac_verify_runs SET status=$2, report_dir=$3, finished_at=clock_timestamp()
+        `UPDATE ac_verify_runs SET status=$2, report_dir=$3, finished_at=clock_timestamp(), collector_image=$5
          WHERE id=$1 AND context_id=$4 AND status='running'`,
-        [runId, finalState, report.directory, input.authority.contextId],
+        [runId, finalState, report.directory, input.authority.contextId, image ?? null],
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
       await finishExamIntentTx(c, input.ledger, {intentId, contextId: input.authority.contextId}, finalState);
     });
+    databaseCommitted = true;
+    await writePrivate(join(report.directory, 'run.json'), report.directory, guardReportText(`${JSON.stringify(report.summary, null, 2)}\n`));
+    unpublishedReport = undefined;
 
     return {
       runId,
@@ -1768,16 +1864,18 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       summary: report.summary,
     };
   } catch (error) {
+    if (unpublishedReport && !databaseCommitted) await rm(unpublishedReport, {recursive: true, force: true}).catch(() => undefined);
     try {
-      await input.ledger.pool.query(
-        "UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running'",
-        [runId],
-      );
-    } catch { /* preserve original failure */ }
-    try {
-      await finishExamIntent(input.ledger, {intentId, contextId: input.authority.contextId}, 'failed');
+      await input.ledger.tx(async c => {
+        await input.ledger.authorize(c, input.principal, input.authority.contextId);
+        await input.ledger.fence(c, input.authority);
+        const updated = await c.query("UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running'", [runId]);
+        if (updated.rowCount) await finishExamIntentTx(c, input.ledger, {intentId, contextId: input.authority.contextId}, 'failed');
+      });
     } catch { /* preserve original failure */ }
     throw error;
+  } finally {
+    if (snapshot) await removeModuleSnapshot(snapshot);
   }
 }
 
@@ -1843,7 +1941,7 @@ function renderModuleRemediationTask(input: {
 }): string {
   const body = input.groups.map(group => [
     `Arquivo: ${group.file}`,
-    ...group.items.map(item => `- ${item.id} linha ${item.line ?? 'não informada'}`),
+    ...group.items.map(item => `- ${item.id} linha ${item.line ?? 'não informada'}: ${item.title}\n  Prova: ${item.snippet}`),
   ].join('\n')).join('\n');
   return [
     `Corrija os achados selecionados do módulo ${input.module}.`,
@@ -1897,6 +1995,7 @@ export async function requestModuleCorrection(
 
   return ledger.tx(async client => {
     const authContext = await ledger.authorize(client, principal, authority.contextId);
+    await ledger.fence(client, authority);
     if (authContext.project_id !== input.projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
 
     const runRow = (await client.query<{
@@ -1927,6 +2026,22 @@ export async function requestModuleCorrection(
     if (authority.contextId !== runRow.context_id && authority.contextId !== mainContextId) {
       throw new Refusal('VERIFY_RUN_MISSING', 404);
     }
+
+    const existingRows = (await client.query<{
+      message_local_id: string; write_paths: string[]; finding_ids: string[]; regression_test: string; acceptance: string;
+    }>(
+      'SELECT message_local_id, write_paths, finding_ids, regression_test, acceptance FROM ac_verify_remediations WHERE run_id=$1 FOR UPDATE',
+      [runRow.id],
+    )).rows;
+    const match = existingRows.find(row => sameIdSet(row.finding_ids ?? [], requested));
+    if (match) return {
+      messageLocalId: String(match.message_local_id),
+      writePaths: [...match.write_paths].map(String),
+      contextId: mainContextId,
+      regressionTest: String(match.regression_test),
+      acceptance: String(match.acceptance),
+      projectId: input.projectId,
+    };
 
     const coveredRows = (await client.query<{file: string}>('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runRow.id])).rows;
     const covered = new Set(coveredRows.map(row => String(row.file)));
@@ -1968,31 +2083,9 @@ export async function requestModuleCorrection(
     }
 
     const groups = groupFindingsByFile(findings);
-    const writePaths = groups.map(group => group.file);
+    const writePaths = [...new Set([...groups.map(group => group.file), ...requested.map(id => moduleRegressionPath(runRow.module, id))])];
     const ids = findings.map(item => item.id);
     const regression = moduleRegressionText(runRow.module, ids);
-
-    const existingRows = (await client.query<{
-      message_local_id: string;
-      write_paths: string[];
-      finding_ids: string[];
-      regression_test: string;
-      acceptance: string;
-    }>(
-      'SELECT message_local_id, write_paths, finding_ids, regression_test, acceptance FROM ac_verify_remediations WHERE run_id=$1 FOR UPDATE',
-      [runRow.id],
-    )).rows;
-    const match = existingRows.find(row => sameIdSet(row.finding_ids ?? [], ids));
-    if (match) {
-      return {
-        messageLocalId: String(match.message_local_id),
-        writePaths: [...match.write_paths].map(String),
-        contextId: mainContextId,
-        regressionTest: String(match.regression_test),
-        acceptance: String(match.acceptance),
-        projectId: input.projectId,
-      };
-    }
 
     const text = renderModuleRemediationTask({
       projectId: input.projectId,
@@ -2083,6 +2176,19 @@ async function updateModuleReportFiles(
         return nextStatus ? {...item, status: nextStatus} : item;
       });
       await replacePrivateFile(report.directory, 'achados.json', `${JSON.stringify(parsed, null, 2)}\n`);
+      const findings = parsed.achados.map(item => Achado.parse(item));
+      const raw = JSON.parse(await readTextInside(report.directory, join(report.directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID'));
+      const coverage = ModuleCollectorOutput.parse(raw).coverage;
+      const runText = await readTextInside(report.directory, join(report.directory, 'run.json'), 'VERIFY_REPORT_INVALID');
+      const run = JSON.parse(runText) as Record<string, unknown>;
+      const summary = {...report.summary, counts: failureCounts(findings)};
+      await replacePrivateFile(report.directory, 'README.md', guardReportText(renderModuleReadme({
+        module: summary.module, runId: summary.id, directoryName: summary.directoryName,
+        createdAt: new Date(summary.createdAt), commit: summary.commit, note: summary.note,
+        total: findings.length, counts: summary.counts,
+        discarded: findings.filter(item => item.status === 'descartado').length, toolCoverage: coverage,
+      })));
+      await replacePrivateFile(report.directory, 'run.json', `${JSON.stringify({...run, counts: summary.counts}, null, 2)}\n`);
     }
     const achadosDir = join(report.directory, 'achados');
     for (const update of updates) {
@@ -2123,6 +2229,7 @@ export async function recheckModuleFindings(
   const requested = uniqueSortedIds(input.achadoIds);
   const loaded = await ledger.tx(async client => {
     const authContext = await ledger.authorize(client, principal, authority.contextId);
+    await ledger.fence(client, authority);
     if (authContext.project_id !== input.projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
     const runRow = (await client.query<{
       id: string;
@@ -2161,17 +2268,28 @@ export async function recheckModuleFindings(
       const sources = Array.isArray(payload.sources) ? payload.sources.map(String) : [];
       const tool = (sources[0] ?? runRow.module).slice(0, 120);
       const rule = (sources[1] ?? (typeof payload.reference === 'string' ? payload.reference : id)).slice(0, 200);
-      const evidence = (typeof payload.proof === 'string' && payload.proof.trim().length > 0 ? payload.proof : id).slice(0, 2000);
-      return {id, file, line, tool, rule, evidence};
+      return {id, file, line, tool, rule};
     });
     const repoRow = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0];
     return {run: runRow, items, repo: repoRow?.repo ?? null};
   });
 
+  const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
+  if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+  const report = (await loadModuleReports(projectDir)).find(item => item.summary.id === input.runId);
+  if (!report) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+  const raw = ModuleCollectorOutput.parse(JSON.parse(await readTextInside(report.directory, join(report.directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')));
+  if (!loaded.repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  const {stdout: headOutput} = await execGit('git', ['-C', loaded.repo, 'rev-parse', '--verify', 'HEAD^{commit}']);
+  const head = headOutput.trim();
+  const snapshot = await prepareModuleSnapshot(loaded.repo, head);
   const decided: {id: string; status: 'fechado' | 'reaberto'}[] = [];
   const moduleName = assertVerificationModule(loaded.run.module);
+  try {
   for (const item of loaded.items) {
-    const excerpt = loaded.repo ? await readBoundedExcerpt(loaded.repo, item.file) : {text: 'codigo-nao-visto', seen: false};
+    const original = raw.findings[Number(item.id.slice(4)) - 1];
+    if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    const excerpt = await readBoundedExcerpt(snapshot, item.file, item.line);
     const task = buildModuleReviewPrompt({
       module: moduleName,
       achadoId: item.id,
@@ -2179,27 +2297,37 @@ export async function recheckModuleFindings(
       rule: item.rule,
       file: item.file,
       line: item.line,
-      evidence: item.evidence,
+      evidence: original.evidence,
       codeExcerpt: excerpt.text,
     });
+    const capacity = new Capacity(ledger);
+    const seat = await reserveSpecialistExamSeat({capacity, ledger, principal, authority, intentId: loaded.run.intent_id,
+      purpose: 'reviewer', releaseGrant: grantId => capacity.transition(principal, grantId, authority, 'released', {processId: 'module-recheck', state: 'not_started'})});
+    try {
     const call = VerifyWorkerCall.parse({
       role: 'reviewer',
-      provider: 'recheck',
-      accountId: '00000000-0000-4000-8000-000000000001',
-      profileId: '00000000-0000-4000-8000-000000000002',
-      model: 'recheck',
-      grantId: '00000000-0000-4000-8000-000000000003',
+      provider: seat.provider,
+      accountId: seat.accountId,
+      profileId: seat.profileId,
+      model: seat.model,
+      grantId: seat.grantId,
       intentId: loaded.run.intent_id,
-      task,
-      repo: 'sem-repositorio',
+      task: `${task}\nCommit examinado: ${head}`,
+      repo: snapshot,
       writePaths: [],
     });
     const verdict = parseReviewerConfirm(await input.worker.run(call));
     const status: 'fechado' | 'reaberto' = verdict.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto';
     decided.push({id: item.id, status});
+    } finally {
+      await capacity.transition(principal, seat.grantId, authority, 'released', {processId: 'module-recheck', state: 'not_started'}).catch(() => undefined);
+    }
+  }
+  } finally {
+    await removeModuleSnapshot(snapshot);
   }
 
-  await ledger.tx(async client => {
+  const reportStatuses = await ledger.tx(async client => {
     await ledger.authorize(client, principal, authority.contextId);
     await ledger.fence(client, authority);
     for (const result of decided) {
@@ -2209,7 +2337,9 @@ export async function recheckModuleFindings(
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
     }
+    const rows = await client.query<{achado_id: string; status: string}>('SELECT achado_id, status FROM ac_verify_findings WHERE run_id=$1', [loaded.run.id]);
+    return rows.rows.filter(row => row.status === 'fechado' || row.status === 'reaberto').map(row => ({id: row.achado_id, status: row.status as 'fechado' | 'reaberto'}));
   });
-  await updateModuleReportFiles(input.dataDirectory, input.projectId, loaded.run.id, decided);
+  await updateModuleReportFiles(input.dataDirectory, input.projectId, loaded.run.id, reportStatuses);
   return {results: decided};
 }
