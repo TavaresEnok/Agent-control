@@ -302,7 +302,7 @@ O repositório de exemplo com falhas plantadas, como injeção, segredo no hist�
 
 ### Prova do módulo 7
 
-**Desempenho.** A homologação deste módulo está em andamento. O ramo de integração de desempenho em `f49cb686` reúne a medição HTTP isolada, o perfil de CPU e o coletor de métricas PostgreSQL. A prova conjunta das quatro ferramentas pela CLI depende da integração C7-R4.
+**Desempenho.** Em homologação, a CLI pessoal mediu Lighthouse, k6, CPU e PostgreSQL no mesmo snapshot. A imagem de `f5f9a9ec` passou nos três laboratórios com defeito e controle, backend indisponível e projeto vazio. A prova de `db875596` conferiu a associação de amostras do V8 à função, ao arquivo e à linha. O PostgreSQL de teste registrou as contagens antes e depois do workload. O caso HTTP usou somente tráfego local entre contêineres isolados.
 
 ### Prova do módulo 8
 
