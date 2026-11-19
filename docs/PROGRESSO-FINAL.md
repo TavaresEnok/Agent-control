@@ -344,3 +344,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:19 UTC — Iniciada prova da CLI incremental conformidade em bd23de33.
 - 19/11/2026 04:20 UTC — A CLI incremental de conformidade em bd23de33 passou nas seis provas com a imagem fixada.
 - 19/11/2026 04:20 UTC — A revisão de reverificação em 0e8ad897 encontrou que um teste sempre verde podia satisfazer o requisito e que o número da linha podia passar a outra função. C-REVERIFICAR-R3 exige o mesmo teste com resultado distinto nas duas revisões e origem estável. A ordem será executada depois das mudanças no runtime compartilhado.
+- 19/11/2026 04:21 UTC — Revisor encerrou C-EXAME-ORIGEM em 7b512f4d (código 0). Gerente confere a entrega.
+- 19/11/2026 04:21 UTC — Revisão C-PAINEL-R2 iniciada por Sol high normal somente leitura em 4a3c8407.
+- 19/11/2026 04:21 UTC — Trabalhador encerrou C2-LINGUAGENS em 1af4e0b2 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:21 UTC — Trabalho C2-R10 iniciado por Sol high normal em final-c2.
+- 19/11/2026 04:22 UTC — Revisor encerrou C-PAINEL-R2 em 4a3c8407 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:22 UTC — Revisão C3-R8 iniciada por Sol high normal somente leitura em aed61c1d.
+- 19/11/2026 04:25 UTC — A correção da origem em 30af542f passou em 12/12. A prova incluiu seleção exclusiva do coletor com arquivo de exame removido ou alterado e confirmou zero chamadas ao revisor. O módulo de QA para Python e Go foi recebido em 1af4e0b2 e a imagem está em construção no checkout isolado.
