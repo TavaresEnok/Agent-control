@@ -737,3 +737,6 @@ PAUSADO-COTA
 - 19/11/2026 17:40 UTC — trabalho-C8-VINCULO-FONTE iniciado em final-c8 por Sol high normal.
 - 19/11/2026 17:40 UTC — C2-CARGA-PLATAFORMAS encerrado com código 0.
 - 19/11/2026 17:41 UTC — Candidato do produto para QA em 99c531d5 reúne os ajustes de PostgreSQL e das duas arquiteturas do empacotamento. A prova física de arm64 depende de executor dessa arquitetura. Documentação em 7355c13c passou em 28/28.
+- 19/11/2026 17:41 UTC — C2-LINGUAGENS-R4 encerrado com código 0.
+- 19/11/2026 17:41 UTC — revisor-C2-BANCO-LOCAL-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:41 UTC — A revisão de 11edd142 encontrou diagnósticos Go sem vínculo suficiente ao pacote e uma verificação incompleta da versão do compilador. Aberta correção focada na medição. O ensaio da imagem com PostgreSQL 16.15 prossegue.
