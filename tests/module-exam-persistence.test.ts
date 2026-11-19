@@ -64,3 +64,16 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     assert.match(await readFile(join(result.directory, 'mapa.md'), 'utf8'), /fixture\.txt \| lido/);
   });
 });
+
+test('recusa a troca de evidência entre dois candidatos da mesma regra e linha', {skip: !databaseUrl}, async () => {
+  await withModuleRecoveryFixture(databaseUrl!, async input => {
+    const raw = collectorOutput.findings[0]!;
+    const both = {...collectorOutput, findings: [raw, {...raw, evidence: 'outra observação sintética'}]};
+    await assert.rejects(runVerificationModule({...input, collectorOutput: both, async examinar(req) {
+      const map = await mapModuleSnapshot(req.snapshot);
+      const result = await examineFunctionalModule({...req, map});
+      result.findings.reverse();
+      return result;
+    }}), /MODULE_EXAM_FINDINGS_INVALID/);
+  });
+});

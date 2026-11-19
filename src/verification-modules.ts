@@ -17,7 +17,7 @@ import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
   removeOwnedModuleContainer, type CollectorProcess,
 } from './module-container-cleanup.ts';
-import type {ModuleExamResult} from './module-exam.ts';
+import {moduleCollectorCandidate, type ModuleExamResult} from './module-exam.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
 import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
@@ -1975,8 +1975,9 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       let verifier: Achado['verifier'] = null;
       const audited = exam?.findings[achados.length];
       if (audited) {
-        if (audited.file !== finding.file || audited.line !== finding.line || sanitizeText(audited.source) !== reference ||
-          sanitizeText(audited.evidence) !== proof || sanitizeText(audited.title) !== title || audited.severity !== finding.severity) {
+        const origin = moduleCollectorCandidate(finding);
+        if (audited.file !== origin.file || audited.line !== origin.line || audited.source !== origin.source ||
+          audited.evidence !== origin.evidence || audited.title !== origin.title || audited.severity !== origin.severity) {
           throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
         }
         const measurement = exam!.mode === 'somente_ferramentas' && (input.collectorOutput !== undefined || input.runCollector !== undefined)

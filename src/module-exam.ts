@@ -58,7 +58,7 @@ function parsedJson(raw: string): unknown {
     return null;
   }
 }
-function baseCandidate(f: ModuleRawFinding): ModuleExamCandidate {
+export function moduleCollectorCandidate(f: ModuleRawFinding): ModuleExamCandidate {
   return {file: f.file, line: f.line, title: clean(`${f.rule}: ${f.message}`, 200), severity: f.severity, evidence: clean(f.evidence, 2000), source: redactUnknownSecrets(`${f.tool}:${f.rule}`).slice(0, 200), status: 'provavel', reason: 'Sem confirmação independente.', proof: '', verifier: null, examiner: null, failure: null};
 }
 function unavailableText(code: string) {
@@ -80,7 +80,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   if ([worker, reserve, release].some(Boolean) && !enabled) throw new Refusal('MODULE_EXAM_CONFIGURATION_INVALID');
 
   const unavailable = input.unavailable ? safeFailureCode(input.unavailable, 'MODULE_EXAM_UNAVAILABLE') : null;
-  const findings = input.findings.map(baseCandidate);
+  const findings = input.findings.map(moduleCollectorCandidate);
   const notes = new Set<string>();
   notes.add('O mapa de rotas cobre padrões estáticos reconhecidos. O estado da rota acompanha o exame do arquivo de origem.');
   const coverage: ModuleExamCoverage[] = input.map.files.map(f => ({file: f.file, status: 'nao_julgado',

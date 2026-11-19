@@ -478,7 +478,7 @@ async function verifyModuleEndToEnd(
 
     assert.equal(measuredFinding.verifier, null);
     await assert.rejects(runPersonalCliSubprocess(module, [installationPath, projectId, '--corrigir', runId, measuredFinding.id]),
-      /VERIFY_FINDING_MISSING/);
+      /Achado não encontrado ou não elegível para correção/);
 
     // Isolate the correction contract using an explicitly injected observation of a synthetic fixture line.
     const source = await readFile(join(repo, measuredFinding.where.file), 'utf8');
@@ -488,13 +488,13 @@ async function verifyModuleEndToEnd(
       collectorOutput: {
         coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'Medição determinística de linha da fixture sintética.'}],
         findings: [{tool: 'fixture', rule: 'LAB-LINHA', file: measuredFinding.where.file, line: measuredFinding.where.line,
-          severity: 'baixa', message: 'Linha observada no projeto de laboratório.', evidence: line.slice(0, 200)}],
+          severity: 'baixa', message: 'Linha observada no projeto de laboratório.', evidence: line.slice(0, 12)}],
       },
     });
     assert.ok(correctionRun && correctionRun !== runId);
     const correctionReport = await readModuleReport(dataDirectory, projectId, correctionRun, module);
     const confirmedFinding = correctionReport.achados[0]!;
-    assert.equal(confirmedFinding.status, 'confirmado');
+    assert.equal(confirmedFinding.status, 'confirmado', 'a observação determinística da fixture deve corresponder à linha do snapshot');
     assert.equal(confirmedFinding.verifier?.provider, 'fixture');
     assert.equal(confirmedFinding.where.file, measuredFinding.where.file);
 

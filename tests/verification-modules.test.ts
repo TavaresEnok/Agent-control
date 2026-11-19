@@ -730,7 +730,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         achadoIds: ['ACH-001'], dataDirectory, projectId};
       const closedWorker = {run: async () => JSON.stringify({kind:'confirmacao', status:'descartado', reason:'ok', proof:'ok'})};
       await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput, worker:closedWorker}), /synthetic rollback/);
-      assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, 'confirmado');
+      assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, 'provavel');
       await db.pool.query('DROP TRIGGER synthetic_recheck_failure ON ac_verify_findings');
       await db.pool.query('DROP FUNCTION synthetic_recheck_failure()');
       // Two real requests use the same HEAD, so only the generation can
