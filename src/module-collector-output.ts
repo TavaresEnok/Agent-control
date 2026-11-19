@@ -49,11 +49,12 @@ wait "$collector" || status=$?
 checksum=$(sha256sum < "$capture/stdout") || exit 125
 printf 'ac-collector-v1 %s %s %s %s\\n' ${shellArg(token)} "$status" "$size" "\${checksum%% *}" || exit 125
 cat "$capture/stdout" || exit 125
-exit "$status"
+# A fully delivered frame is a successful transport even when its child failed.
+exit 0
 `;
 }
 
-export function verifyCollectorOutput(bytes: Buffer, token: string, code: number, maxStdoutBytes: number): Buffer {
+export function verifyCollectorOutput(bytes: Buffer, token: string, code: number, maxStdoutBytes: number): {stdout: Buffer; code: number} {
   const headerEnd = bytes.subarray(0, COLLECTOR_HEADER_BYTES).indexOf(0x0a);
   const invalid = () => new Refusal('VERIFY_STDOUT_INCOMPLETE', 503);
   if (headerEnd < 0) throw invalid();
@@ -63,8 +64,10 @@ export function verifyCollectorOutput(bytes: Buffer, token: string, code: number
     throw new Refusal('VERIFY_STDOUT_LIMIT', 400);
   }
   const fields = /^ac-collector-v1 ([a-f0-9-]{36}) (\d{1,3}) (\d{1,16}) ([a-f0-9]{64})$/.exec(header);
-  if (!fields || fields[1] !== token || Number(fields[2]) !== code) throw invalid();
+  if (code !== 0 || !fields || fields[1] !== token) throw invalid();
+  const childCode = Number(fields[2]);
+  if (String(childCode) !== fields[2] || childCode > 255) throw invalid();
   if (payload.length > maxStdoutBytes) throw new Refusal('VERIFY_STDOUT_LIMIT', 400);
   if (Number(fields[3]) !== payload.length || createHash('sha256').update(payload).digest('hex') !== fields[4]) throw invalid();
-  return payload;
+  return {stdout: payload, code: childCode};
 }

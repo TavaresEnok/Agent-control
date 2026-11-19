@@ -935,9 +935,9 @@ export async function runModuleCollectorContainer(input: {
           terminal.stdout.toString('utf8').trim() !== candidate + ' exited ' + captured.code + ' ok') {
         throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       }
-      const stdout = verifyCollectorOutput(captured.stdout, token, captured.code, maxStdoutBytes);
-      const output = parseModuleCollectorOutput(stdout, {maxStdoutBytes, module: input.module});
-      return {code: captured.code, output};
+      const frame = verifyCollectorOutput(captured.stdout, token, captured.code, maxStdoutBytes);
+      const output = parseModuleCollectorOutput(frame.stdout, {maxStdoutBytes, module: input.module});
+      return {code: frame.code, output};
     } finally {
       stream.abort();
       await input.journal.cleanup(token, id, {creationRejected, startAuthorized});
