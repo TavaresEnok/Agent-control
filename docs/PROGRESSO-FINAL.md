@@ -1321,3 +1321,12 @@ PAUSADO-COTA
 - 19/11/2026 22:37 UTC — C-ACEITE-DOCUMENTACAO-VIVA-R6 encerrado com código 0.
 - 19/11/2026 22:37 UTC — C-PRONTIDAO-VIVA-R8 encerrado com código 0.
 - 19/11/2026 22:37 UTC — Correção pront-viva recebida em f8097792. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:37 UTC — conformidade em 3e66f954 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 480, 'failed': 171, 'skipped': 49}; código do produto VERIFY_TOOLS_FAILED.
+- 19/11/2026 22:37 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:38 UTC — C-CONFORMIDADE-VIVA-R6 encerrado com código 1.
+- 19/11/2026 22:38 UTC — Imagem de prontidao construída e arquivada por digest em 8f1fd9f1.
+- 19/11/2026 22:38 UTC — prontidao em 8f1fd9f1 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 183, 'failed': 3, 'skipped': 7}; código do produto VERIFY_TOOLS_FAILED.
+- 19/11/2026 22:38 UTC — Aceite de documentacao na bancada em a9e3aa63, após revisão Sol high sobre a9e3aa63. O revisor confirmou a asserção da aresta e não apontou regressão no diff. Passaram seis casos físicos da CLI. O recibo da prova sobre o IspAgent conferiu commit e digest no relatório, com 333 medições e zero falhas.
+- 19/11/2026 22:38 UTC — Correção aprovada de documentacao em a9e3aa63 integrada à bancada no merge a22936ba.
+- 19/11/2026 22:39 UTC — C-ACEITE-PRONTIDAO-VIVA-R8 encerrado com código 0.
+- 19/11/2026 22:40 UTC — Alinha a leitura estática de timeout ao utilitário usado no laboratório. Ordem C-PRONTIDAO-VIVA-R9 em worktree separado conforme 43f1c664.
