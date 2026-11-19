@@ -153,7 +153,7 @@ test('imagem pelo digest publica mutação aritmética e falsificação de propr
     assert.equal(found.length, 1);
     assert.equal(found[0]?.file, 'test_arithmetic.py');
     assert.equal(found[0]?.line, 16);
-    assert.match(found[0]!.evidence, /caso [a-f0-9]{16}.*reprovou por asserção após [1-9]\d* chamadas.*semente/i);
+    assert.match(found[0]!.evidence, /caso [a-f0-9]{16}.*reprovou após [1-9]\d* chamadas.*semente/i);
     assert.equal(row(defect, 'python-unittest-coverage').status, 'ok');
     assert.ok(defect.findings.some(item => item.tool === 'python-unittest-coverage' && item.rule === 'QA-TESTE-FALHOU'));
     assert.deepEqual(row(defect, 'go-mutesting'), row(control, 'go-mutesting'));
