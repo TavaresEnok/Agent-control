@@ -1112,3 +1112,8 @@ PAUSADO-COTA
 - 19/11/2026 21:03 UTC — trabalho-C-DOCUMENTACAO-VIVA-CAMPO iniciado em final-doc-viva por Sol high normal.
 - 19/11/2026 21:03 UTC — trabalho-C-PRONTIDAO-VIVA-CAMPO iniciado em final-pront-viva por Sol medium normal.
 - 19/11/2026 21:04 UTC — A repetição adicional da suíte em a69311d7 registrou 275 arquivos aprovados e uma falha de temporização na prova de renovação da CLI. Sol medium vai substituir a espera frágil por um sinal observável caso confirme a causa. O aceite das correções vivas repetirá a suíte completa.
+- 19/11/2026 21:04 UTC — trabalho-C-PROVA-LEASE-VIVA iniciado em final-prova-lease-viva por Sol medium normal.
+- 19/11/2026 21:04 UTC — personal:conformidade encerrou com código 1. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 21:05 UTC — As oito CLIs foram executadas na instalação. Quatro terminaram com código zero. Conformidade também registrou recusa de contrato do coletor. A investigação dos quatro relatórios que falharam continua e o fechamento permanece aberto.
+- 19/11/2026 21:07 UTC — C-PRONTIDAO-VIVA-CAMPO encerrado com código 0.
+- 19/11/2026 21:07 UTC — Correção pront-viva recebida em 67770bd9. Revisão Sol high somente leitura solicitada.
