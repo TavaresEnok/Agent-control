@@ -984,3 +984,7 @@ PAUSADO-COTA
 - 19/11/2026 19:22 UTC — C5-ACEITE-MARCADOR encerrado com código 0.
 - 19/11/2026 19:23 UTC — C9 passou na prova física de curto-circuito e da presença das ferramentas por fixture, mais a CLI. A imagem está fixada no ramo acumulado.
 - 19/11/2026 19:23 UTC — A rodada de C9 em 696d81a9 corrigiu a negação no resumo dos dois coletores e acrescentou a prova do motivo da política npm. Reensaio da imagem em 88f4b2b7. O revisor do teste de recovery confirmou os nove pontos e pediu confirmar a causa real da saída do filho após o sinal.
+- 19/11/2026 19:23 UTC — trabalho-C5-SINAL-CONFIRMADO iniciado em final-marcador-recuperacao por Sol medium normal.
+- 19/11/2026 19:23 UTC — revisor-C9-ACEITE-NEGACAO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:24 UTC — C9-ACEITE-NEGACAO encerrado com código 0.
+- 19/11/2026 19:25 UTC — Ordem do titular recebida durante a execução em 5ddf585c: concluir C2 a C9, aplicar via personal:images, verificar o gateway e as oito CLIs vivas, documentar D e encerrar com FIM. NexoISP e as 20 telas ficam suspensos. Vale a pausa imediata se a cota acabar antes. O backup pré-aplicação de 19:19 passou no restore-check do produto.
