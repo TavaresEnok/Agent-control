@@ -350,6 +350,7 @@ export function extractTypedocSymbols(typedocData, repoRoot) {
     if (!node || typeof node !== 'object') return;
     const kind = Number(node.kind ?? 0);
     const name = String(node.name ?? '');
+    if (node.flags?.isPrivate || node.flags?.isProtected) return;
 
     // Project (1) ou Module (2)
     if (kind === 1 || kind === 2) {
@@ -402,6 +403,10 @@ export function extractTypedocSymbols(typedocData, repoRoot) {
         parameterLists,
       });
     }
+    // Only class/interface members are API members; do not descend into signatures or parameters.
+    if ((kind === 128 || kind === 256) && Array.isArray(node.children)) {
+      for (const child of node.children) visit(child, qualifiedName);
+    }
   }
 
   visit(typedocData, '');
@@ -418,14 +423,15 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   }
 
   const symbols = extractTypedocSymbols(data, repoRoot);
-  const symbolByQualified = new Map();
-  const symbolByName = new Map();
-  for (const sym of symbols) {
-    symbolByQualified.set(sym.qualifiedName, sym);
-    if (!symbolByName.has(sym.name)) {
-      symbolByName.set(sym.name, sym);
-    }
-  }
+  const resolveSymbol = rawSymName => {
+    const cleaned = String(rawSymName ?? '').trim().replace(/#/g, '.');
+    const exact = symbols.filter(sym => sym.qualifiedName === cleaned);
+    if (exact.length === 1) return exact[0];
+    const suffix = symbols.filter(sym => sym.qualifiedName.endsWith(`.${cleaned}`));
+    if (suffix.length === 1) return suffix[0];
+    const named = symbols.filter(sym => sym.name === cleaned);
+    return named.length === 1 ? named[0] : null;
+  };
 
   const findings = [];
   const seenKeys = new Set();
@@ -444,12 +450,21 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return content;
   };
 
-  const resolveSymbol = rawSymName => {
-    const cleaned = String(rawSymName ?? '').trim();
-    if (symbolByQualified.has(cleaned)) return symbolByQualified.get(cleaned);
-    const shortName = cleaned.includes('.') ? cleaned.split('.').pop() : cleaned;
-    if (shortName && symbolByName.has(shortName)) return symbolByName.get(shortName);
-    return null;
+  const findInSymbolComment = (sym, matcher) => {
+    const lines = getFileText(sym.file).split(/\r?\n/);
+    // TypeDoc's source line is the declaration. Only its immediately preceding JSDoc
+    // (possibly followed by decorators) can establish a diagnostic location.
+    const prefix = lines.slice(0, clampLine(sym.line)).join('\n');
+    const offset = prefix.lastIndexOf('/**');
+    if (offset < 0) return clampLine(sym.line);
+    const close = prefix.indexOf('*/', offset);
+    if (close < 0) return clampLine(sym.line);
+    const between = prefix.slice(close + 2);
+    if (!/^\s*(?:@[^\n]*\n\s*)*(?:(?:export|declare|public|static|async|abstract|readonly|default)\s+)*[^\n]*$/.test(between)) return clampLine(sym.line);
+    const comment = prefix.slice(offset, close + 2);
+    const commentLines = comment.split('\n');
+    const index = commentLines.findIndex(text => matcher.test(text));
+    return index < 0 ? clampLine(sym.line) : prefix.slice(0, offset).split('\n').length + index;
   };
 
   const cliLines = String(rawCliOutput ?? '')
@@ -468,9 +483,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const sym = resolveSymbol(sigName);
       if (!sym) continue;
       const file = sym.file;
-      const fileText = getFileText(file);
-      const paramLine = findLineInText(fileText, new RegExp(`@param\\s+(?:\\{[^}]+\\}\\s+)?${escapeRegExp(paramName)}\\b`));
-      const line = paramLine > 1 ? paramLine : clampLine(sym?.line ?? 1);
+      const line = findInSymbolComment(sym, new RegExp(`@param\\s+(?:\\{[^}]+\\}\\s+)?${escapeRegExp(paramName)}\\b`));
       const dedupKey = `PARAM:${file}:${sigName}:${paramName}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
@@ -497,9 +510,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const sym = resolveSymbol(symRef);
       if (!sym) continue;
       const file = sym.file;
-      const fileText = getFileText(file);
-      const linkLine = findLineInText(fileText, new RegExp(`@link\\s+${targetLink.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`));
-      const line = linkLine > 1 ? linkLine : clampLine(sym?.line ?? 1);
+      const line = findInSymbolComment(sym, new RegExp(`@link\\s+${escapeRegExp(targetLink)}\\b`));
       const dedupKey = `LINK:${file}:${symRef}:${targetLink}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
@@ -535,7 +546,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       if (file === '.' || !getFileText(file)) continue;
       const line = clampLine(sym?.line ?? 1);
       const shortName = sym?.name ?? (symRef.includes('.') ? symRef.split('.').pop() : symRef);
-      const dedupKey = `NODOC:${file}:${shortName}`;
+      const dedupKey = `NODOC:${file}:${sym?.qualifiedName ?? symRef}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
         findings.push({
@@ -554,7 +565,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   // Fallback a partir do modelo de reflexão JSON para símbolos exportados sem comentário
   for (const sym of symbols) {
     if (!sym.hasDoc) {
-      const dedupKey = `NODOC:${sym.file}:${sym.name}`;
+      const dedupKey = `NODOC:${sym.file}:${sym.qualifiedName}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
         findings.push({
@@ -680,7 +691,17 @@ export function extractMermaidModuleReferences(block) {
   const moduleNodes = [];
   const moduleEdges = [];
 
-  const lines = String(block.code ?? '').split(/\r?\n/);
+  // Mermaid comments begin at %% outside quoted labels and cannot declare nodes.
+  const lines = String(block.code ?? '').split(/\r?\n/).map(line => {
+    let quote = '';
+    for (let i = 0; i < line.length; i += 1) {
+      if (quote && line[i] === '\\') { i += 1; continue; }
+      if (line[i] === quote) quote = '';
+      else if (!quote && (line[i] === '"' || line[i] === "'")) quote = line[i];
+      else if (!quote && line.slice(i, i + 2) === '%%') return line.slice(0, i);
+    }
+    return line;
+  });
   const modulePathRegex = /\b([A-Za-z0-9_./-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs))\b/;
 
   // Primeira passagem: mapeia IDs de nós que declaram caminhos de arquivo, ex: A["src/api.ts"]
@@ -710,21 +731,22 @@ export function extractMermaidModuleReferences(block) {
   for (let i = 0; i < lines.length; i += 1) {
     const lineText = lines[i];
     const lineNo = block.startLine + i;
-    const edgeMatch = lineText.match(
-      /^\s*([A-Za-z0-9_./-]+)(?:\s*(?:\["[^"]+"\]|\['[^']+'\]|\[[^\]]+\]|\("[^"]+"\)|\([^)]+\)))?\s*(?:--+>|==+>|\.-+>|-->)\s*(?:\|[^|]*\|\s*)?([A-Za-z0-9_./-]+)(?:\s*(?:\["[^"]+"\]|\['[^']+'\]|\[[^\]]+\]|\("[^"]+"\)|\([^)]+\)))?/,
-    );
-    if (!edgeMatch) continue;
-    const leftId = edgeMatch[1];
-    const rightId = edgeMatch[2];
-    const leftMod = nodeLabelToModule.get(leftId) ?? (modulePathRegex.test(leftId) ? normalizeRepoPath(leftId) : null);
-    const rightMod = nodeLabelToModule.get(rightId) ?? (modulePathRegex.test(rightId) ? normalizeRepoPath(rightId) : null);
-    if (leftMod && rightMod) {
-      moduleEdges.push({
-        from: leftMod,
-        to: rightMod,
-        line: lineNo,
-        rawLine: lineText.trim(),
-      });
+    const node = String.raw`([A-Za-z0-9_./-]+)(?:\s*(?:\["[^"]+"\]|\['[^']+'\]|\[[^\]]+\]|\("[^"]+"\)|\([^)]+\)))?`;
+    const arrow = String.raw`\s*(?:--+>|==+>|\.-+>)\s*(?:\|[^|]*\|\s*)?`;
+    const first = new RegExp(`^\\s*${node}${arrow}${node}`).exec(lineText);
+    if (!first) continue;
+    let leftId = first[1];
+    let rightId = first[2];
+    let end = first[0].length;
+    while (true) {
+      const leftMod = nodeLabelToModule.get(leftId) ?? (modulePathRegex.test(leftId) ? normalizeRepoPath(leftId) : null);
+      const rightMod = nodeLabelToModule.get(rightId) ?? (modulePathRegex.test(rightId) ? normalizeRepoPath(rightId) : null);
+      if (leftMod && rightMod) moduleEdges.push({from: leftMod, to: rightMod, line: lineNo, rawLine: lineText.trim()});
+      const next = new RegExp(`^${arrow}${node}`).exec(lineText.slice(end));
+      if (!next) break;
+      leftId = rightId;
+      rightId = next[1];
+      end += next[0].length;
     }
   }
 
@@ -735,7 +757,7 @@ export function extractMermaidModuleReferences(block) {
  * Analisa o relatório JSON e o diagrama Mermaid gerados pelo dependency-cruiser e
  * confere o grafo real contra os diagramas de arquitetura documentados no repositório.
  */
-export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermaidBlocks = [], readFileFn = () => '') {
+export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermaidBlocks = [], readFileFn = () => '', resolutionPartial = false) {
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   if (!data || typeof data !== 'object' || !Array.isArray(data.modules)) {
     throw new Error('Saída JSON do dependency-cruiser inválida: campo modules ausente');
@@ -745,6 +767,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
   const perFileCoverage = [];
   const realModules = new Set();
   const realEdges = new Map(); // from -> Set(to)
+  const unresolvedSources = new Set();
   let totalDependencies = 0;
   let unresolvedCount = 0;
   let circularCount = 0;
@@ -794,6 +817,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
         }
       }
 
+      if (dep.couldNotResolve) unresolvedSources.add(srcRel);
       const depSpec = String(dep.module ?? '');
       if (dep.couldNotResolve && depSpec.startsWith('.')) {
         unresolvedCount += 1;
@@ -839,13 +863,21 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
   let checkedEdges = 0;
   const checkedEdgesByFile = new Map();
   let edgeMismatches = 0;
+  let skippedEdges = 0;
+  const skippedEdgesByFile = new Map();
   for (const block of mermaidBlocks) {
     const {moduleEdges} = extractMermaidModuleReferences(block);
-    checkedEdgesByFile.set(block.file, (checkedEdgesByFile.get(block.file) ?? 0) + moduleEdges.length);
+    if (!checkedEdgesByFile.has(block.file)) checkedEdgesByFile.set(block.file, 0);
     for (const edge of moduleEdges) {
-      checkedEdges += 1;
       const resolvedFrom = resolveModuleAlias(edge.from);
       const resolvedTo = resolveModuleAlias(edge.to);
+      if (!resolvedFrom || !resolvedTo || resolutionPartial || unresolvedSources.has(resolvedFrom)) {
+        skippedEdges += 1;
+        skippedEdgesByFile.set(block.file, (skippedEdgesByFile.get(block.file) ?? 0) + 1);
+        continue;
+      }
+      checkedEdges += 1;
+      checkedEdgesByFile.set(block.file, checkedEdgesByFile.get(block.file) + 1);
       const hasEdge =
         resolvedFrom !== null &&
         resolvedTo !== null &&
@@ -872,12 +904,14 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
     findings,
     perFileCoverage,
     checkedEdgesByFile,
+    skippedEdgesByFile,
     stats: {
       totalModules: realModules.size,
       totalDependencies,
       unresolvedCount,
       circularCount,
       checkedEdges,
+      skippedEdges,
       edgeMismatches,
       hasMermaidDiagram,
     },
@@ -1130,6 +1164,28 @@ export async function runCollector(opts = {}) {
     const repoFilesSet = new Set(copiedFiles);
     const readWorkFile = rel => readFileSync(join(workRepoDir, rel), 'utf8');
 
+    // The isolated config deliberately does not consume project configs. A path map,
+    // inheritance, or an unreadable/skipped config can affect resolution anywhere;
+    // conservatively report partial coverage rather than invent missing edges.
+    const isConfigFile = file => /(^|\/)(?:ts|js)config[^/]*\.json$/i.test(file);
+    const configFiles = copiedFiles.filter(isConfigFile);
+    const resolutionPartial = configFiles.some(file => {
+      try {
+        const config = JSON.parse(readWorkFile(file));
+        if (!config || typeof config !== 'object' || Array.isArray(config)) return true;
+        const options = config.compilerOptions;
+        return Object.hasOwn(config, 'extends') ||
+          (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options) || Object.hasOwn(options, 'paths')));
+      } catch {
+        // JSONC, malformed or unsupported configs cannot prove that paths are absent.
+        return true;
+      }
+    }) || skipped.some(file => isConfigFile(file) || file === 'LIMITE_ARQUIVOS' || file.endsWith('/[ilegivel]'));
+    if (resolutionPartial) coverage.push({
+      tool: 'dependency-cruiser:resolucao', version: versions.depcruise, status: 'skipped',
+      detail: 'cobertura parcial: configuração TypeScript/JavaScript com paths/extends, formato não analisado ou configuração omitida não é aplicada ao snapshot isolado; arestas documentadas não são comparadas',
+    });
+
     const codeFiles = copiedFiles.filter(
       f =>
         JS_TS_EXTS.has(extname(f).toLowerCase()) &&
@@ -1282,7 +1338,7 @@ export async function runCollector(opts = {}) {
         );
         const graph = cruise('json', depJsonPath);
         generatedMermaid = cruise('mermaid', depMmdPath);
-        const parsedDep = parseDepcruiseReport(graph, generatedMermaid, workRepoDir, mermaidBlocks, readWorkFile);
+        const parsedDep = parseDepcruiseReport(graph, generatedMermaid, workRepoDir, mermaidBlocks, readWorkFile, resolutionPartial);
         findings.push(...parsedDep.findings.filter(finding => repoFilesSet.has(finding.file)));
         appendArtifact(coverage, 'dependency-cruiser:artefato', versions.depcruise, 'dependencias.mmd', generatedMermaid);
 
@@ -1290,7 +1346,7 @@ export async function runCollector(opts = {}) {
           tool: 'dependency-cruiser',
           version: versions.depcruise,
           status: 'ok',
-          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, diagrama_mermaid_gerado=${parsedDep.stats.hasMermaidDiagram ? 'sim' : 'nao'}, arestas_doc_conferidas=${parsedDep.stats.checkedEdges}, divergencias=${parsedDep.stats.edgeMismatches}`,
+          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, diagrama_mermaid_gerado=${parsedDep.stats.hasMermaidDiagram ? 'sim' : 'nao'}, arestas_doc_conferidas=${parsedDep.stats.checkedEdges}, arestas_doc_nao_conferidas=${parsedDep.stats.skippedEdges}, divergencias=${parsedDep.stats.edgeMismatches}`,
         });
 
         for (const row of parsedDep.perFileCoverage.filter(row => repoFilesSet.has(row.file))) {
@@ -1313,7 +1369,7 @@ export async function runCollector(opts = {}) {
         for (const [file, count] of parsedDep.checkedEdgesByFile) {
           coverage.push({
             tool: 'dependency-cruiser:diagrama', version: versions.depcruise, status: count > 0 ? 'ok' : 'skipped',
-            detail: `arquivo=${file}; arestas_doc_conferidas=${count}`,
+            detail: `arquivo=${file}; arestas_doc_conferidas=${count}; arestas_doc_nao_conferidas=${parsedDep.skippedEdgesByFile.get(file) ?? 0}`,
           });
         }
       } catch (err) {

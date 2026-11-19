@@ -12,7 +12,7 @@ Módulo de cálculo de faturas do assinante.
 ```mermaid
 flowchart LR
   A["src/api.ts"] --> B["src/billing.ts"]
-  A["src/api.ts"] --> C["src/legacy-tax.ts"]
+  B["src/billing.ts"] --> A["src/api.ts"]; A --> C["src/legacy-tax.ts"]
 ```
 
 ## Fluxo com erro de sintaxe Mermaid

@@ -675,3 +675,100 @@ test('mensagens, evidências e stdout são limitados mesmo com diagnósticos mul
   assert.ok(output.findings.length > 0 && output.findings.length < 999);
   assert.equal(output.coverage.find(row => row.tool === 'documentacao:limites')?.status, 'failed');
 });
+
+test('diagramas só comparam pontas cobertas e conferem cada aresta da cadeia, ignorando comentários', async () => {
+  const root = join(FIXTURES, 'coverage-defect');
+  const read = (file: string) => readFileSync(join(root, file), 'utf8');
+  const blocks = extractMermaidBlocks(['README.md'], read);
+  const graph = {modules: [
+    {source: 'src/api.ts', dependencies: [{resolved: 'src/billing.ts'}]},
+    {source: 'src/billing.ts', dependencies: []},
+    {source: 'src/third.ts', dependencies: []},
+  ]};
+  const defect = parseDepcruiseReport(graph, 'flowchart LR', root, blocks, read);
+  assert.deepEqual(defect.findings.map(f => [f.rule, f.line]), [
+    ['DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE', 3],
+  ]);
+  assert.match(defect.findings[0].message, /src\/billing\.ts -> src\/third\.ts/);
+  assert.deepEqual([defect.stats.checkedEdges, defect.stats.skippedEdges, defect.stats.edgeMismatches], [2, 1, 1]);
+  assert.equal(defect.skippedEdgesByFile.get('README.md'), 1);
+  const control = structuredClone(graph);
+  control.modules[1].dependencies.push({resolved: 'src/third.ts'});
+  assert.deepEqual(parseDepcruiseReport(control, 'flowchart LR', root, blocks, read).findings, []);
+  const validation = await validateMermaidDocuments(['README.md'], blocks,
+    new Set(['src/api.ts', 'src/billing.ts', 'src/third.ts', 'src/api.test.ts']), async () => ({}));
+  assert.deepEqual(validation.findings, []);
+  const result = await runCollector({repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B', graph)});
+  assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /cobertura parcial/);
+  assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser')?.detail ?? '', /arestas_doc_conferidas=0, arestas_doc_nao_conferidas=3/);
+  assert.equal(result.findings.some(f => f.rule === 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE'), false);
+  const withoutAlias = join(FIXTURES, 'control-clean');
+  const unresolvedGraph = {modules: [
+    {source: 'src/api.ts', dependencies: [{module: '@app/billing', couldNotResolve: true}]},
+    {source: 'src/billing.ts', dependencies: []},
+  ]};
+  const noClaim = parseDepcruiseReport(unresolvedGraph, 'flowchart LR', withoutAlias,
+    [{file: 'README.md', startLine: 1, code: 'A["src/api.ts"] --> B["src/billing.ts"]'}]);
+  assert.deepEqual(noClaim.findings, []);
+});
+
+test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', () => {
+  const root = join(FIXTURES, 'coverage-defect');
+  const read = (file: string) => readFileSync(join(root, file), 'utf8');
+  const comment = {summary: [{text: 'Documentado.'}]};
+  const member = (name: string, line: number, kind: number) => ({name, kind, sources: [{fileName: 'src/billing.ts', line}], comment});
+  const reflection = {kind: 1, name: 'x', children: [
+    member('first', 4, 64), member('second', 8, 64),
+    {...member('Billing', 10, 128), children: [member('charge', 15, 2048), {...member('hidden', 17, 2048), flags: {isPrivate: true}}]},
+    {...member('Contract', 20, 256), children: [member('submit', 22, 2048)]},
+  ]};
+  const parsed = parseTypedocReport(reflection, [
+    '[warning] The signature second has an @param with name "legacy", which was not used',
+    '[warning] The signature Billing.charge has an @param with name "legacy", which was not used',
+    '[warning] Failed to resolve link to "MissingCharge" in comment for Billing.charge',
+  ].join('\n'), root, read);
+  assert.deepEqual(parsed.findings.map(f => [f.rule, f.line]), [
+    ['DOC-TYPEDOC-PARAM-DESATUALIZADO', 6],
+    ['DOC-TYPEDOC-PARAM-DESATUALIZADO', 12],
+    ['DOC-TYPEDOC-LINK-QUEBRADO', 13],
+  ]);
+  assert.ok(parsed.symbols.some(s => s.qualifiedName === 'Billing.charge'));
+  assert.ok(parsed.symbols.some(s => s.qualifiedName === 'Contract.submit'));
+  assert.equal(parsed.symbols.some(s => s.name === 'hidden'), false);
+});
+
+test('ferramentas fixadas expõem membros e cobertura parcial para aliases herdados', {skip: process.env.C8_TEST_LOCAL_TOOLS !== '1'}, async () => {
+  const root = join(FIXTURES, 'coverage-defect');
+  const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+  assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
+  assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.status, 'skipped');
+  assert.equal(result.findings.some(f => f.rule === 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE'), false);
+  const catalog = assembleDocumentationArtifacts(result.coverage)['api.json'];
+  assert.equal(catalog.status, 'present');
+  if (catalog.status === 'present') {
+    const symbols = JSON.parse(catalog.content) as {qualifiedName: string}[];
+    assert.ok(symbols.some(s => s.qualifiedName.endsWith('Billing.charge')));
+    assert.ok(symbols.some(s => s.qualifiedName.endsWith('Contract.submit')));
+  }
+  const params = result.findings.filter(f => f.rule === 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
+  assert.ok(params.some(f => f.line === 6));
+  assert.ok(params.some(f => f.line === 12));
+  assert.ok(result.findings.some(f => f.rule === 'DOC-TYPEDOC-LINK-QUEBRADO' && f.line === 13));
+  const clean = await runCollector({repoDir: join(FIXTURES, 'coverage-control'), toolsRoot: MODULE_DEPLOY_DIR});
+  assert.equal(clean.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.status, 'skipped');
+  assert.equal(clean.findings.some(f => f.rule === 'DOC-TYPEDOC-PARAM-DESATUALIZADO'), false);
+});
+
+test('configurações não analisáveis e chaves JSON escapadas resultam em cobertura parcial', async () => {
+  for (const config of ['{"compilerOptions":{"\\u0070aths":{"@app/*":["src/*"]}}}', '{ /* JSONC */ "compilerOptions": {} }']) {
+    const root = mkdtempSync(join(tmpdir(), 'doc-config-'));
+    try {
+      writeFileSync(join(root, 'index.ts'), 'export const value = 1;\n');
+      writeFileSync(join(root, 'tsconfig.json'), config);
+      const result = await runCollector({repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B')});
+      assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.status, 'skipped');
+    } finally {
+      rmSync(root, {recursive: true, force: true});
+    }
+  }
+});
