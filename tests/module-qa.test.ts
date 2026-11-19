@@ -546,6 +546,10 @@ test('rotas com constantes lexicais entram no contrato e caminhos variáveis tê
       "// app.get('/comentario', handler);",
       "const [segmento] = '/desestruturado';",
       'app.get(segmento, handler);',
+      "const opcional = '/opcional';",
+      'app?.get(opcional, handler);',
+      "app?.get?.('/" + 'x'.repeat(400) + "a', handler);",
+      "app.get('/" + 'x'.repeat(400) + "b', handler);",
     ].join('\n'));
     writeFileSync(join(repo, 'openapi.json'), JSON.stringify({
       openapi: '3.0.3',
@@ -561,8 +565,11 @@ test('rotas com constantes lexicais entram no contrato e caminhos variáveis tê
     assert.equal(coverageFor(report, 'qa-rota:GET variável (routes.ts:9)').status, 'skipped');
     assert.match(coverageFor(report, "qa-rota:GET getPath('/montado') (routes.ts:10)").detail, /sintaxe.*fora/);
     assert.equal(coverageFor(report, 'qa-rota:GET segmento (routes.ts:13)').status, 'skipped');
-    assert.equal(report.coverage.filter(row => row.tool.startsWith('qa-rota:')).length, 5);
-    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-CONTRATO-ROTA-SEM-OPENAPI').map(f => f.line), [5]);
+    assert.equal(coverageFor(report, 'qa-rota:GET /opcional').status, 'ok');
+    const longKeys = report.coverage.filter(row => row.tool.startsWith('qa-rota:GET /xxxx')).map(row => row.tool);
+    assert.equal(new Set(longKeys).size, 2);
+    assert.equal(report.coverage.filter(row => row.tool.startsWith('qa-rota:')).length, 8);
+    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-CONTRATO-ROTA-SEM-OPENAPI').map(f => f.line), [5, 15, 16, 17]);
   });
 });
 
@@ -766,7 +773,7 @@ test('auditoria estática do Playwright distingue skip condicional de condição
     writeFileSync(join(repo, 'requisitos.md'), 'REQ-01: pedidos\nREQ-02: entregas\nREQ-03: listagem\nREQ-04: exportação');
     writeFileSync(join(repo, 'pedidos.spec.ts'), [
       "import {test as scenario, expect} from '@playwright/test';",
-      "scenario('REQ-01', () => { scenario.skip(true, 'temporário'); expect(1).toBe(1); });",
+      "scenario('REQ-01', () => { scenario['skip'](true, 'temporário'); expect(1).toBe(1); });",
       "scenario('REQ-02', () => { scenario.skip(false, 'controle'); expect(1).toBe(1); });",
       "scenario('REQ-03', ({browserName}) => { scenario.fixme(browserName === 'webkit', 'temporário'); expect(1).toBe(1); });",
       "scenario('REQ-04', () => { expect(1).toBe(1); });",

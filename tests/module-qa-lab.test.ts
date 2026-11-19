@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {appendFileSync, chmodSync, cpSync, mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {appendFileSync, chmodSync, cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -185,4 +185,32 @@ test('prova sintética de desconto incorreto', () => {
   } finally {
     rmSync(repo, {recursive: true, force: true});
   }
+});
+
+test('JSON do coletor vincula a função realmente executada e respeita a resolução ESM', {skip: !labEnabled}, () => {
+  const pin = readQaDigestPin(readFileSync(join(qaModuleDir, 'digest.txt'), 'utf8'));
+  const repo = mkdtempSync(join(tmpdir(), 'qa-link-fixture-'));
+  try {
+    cpSync(cleanFixtureDir, repo, {recursive: true});
+    chmodSync(repo, 0o755);
+    writeFileSync(join(repo, 'src', 'pedido novo.mjs'), 'let total = 0; export function validar(x) { return x + ++total; }');
+    writeFileSync(join(repo, 'src', 'pedido%20novo.mjs'), 'export function validar(x) { return x + 1; }');
+    writeFileSync(join(repo, 'src', 'operacoes.mjs'), 'export function somar(x) { return x + 1; }\nexport function subtrair(x) { return x - 1; }');
+    writeFileSync(join(repo, 'tests', 'vinculos.test.mjs'), [
+      "import {test} from 'node:test'; import assert from 'node:assert/strict';",
+      "import {validar} from '../src/pedido%20novo.mjs';",
+      "import {somar, subtrair} from '../src/operacoes.mjs';",
+      "test('QA-VALIDADOR: contador', () => assert.equal(validar(0), 1));",
+      "test('operação não exercida', () => { if (false) assert.equal(subtrair(1), 0); assert.equal(1 + 1, 2); });",
+      "test('operação exercida', () => assert.equal(somar(1), 2));",
+    ].join('\n'));
+    appendFileSync(join(repo, 'requisitos.md'), '\nREQ-31: `subtrair`\nREQ-32: `somar`\n');
+    const report = collect(pin, repo);
+    assert.equal(row(report, 'node-test-v8').status, 'ok');
+    assert.match(row(report, 'qa-propriedades-funcionais').detail, /4 de 5 casos/);
+    assert.match(row(report, 'qa-requisito:REQ-32').detail, /somar/);
+    const unproved = report.findings.filter(f => f.rule === 'QA-REQUISITO-SEM-PROVA');
+    assert.ok(unproved.some(f => f.message.includes('REQ-31')));
+    assert.ok(!unproved.some(f => f.message.includes('REQ-32')));
+  } finally { rmSync(repo, {recursive:true, force:true}); }
 });

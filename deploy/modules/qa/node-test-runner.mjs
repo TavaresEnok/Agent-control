@@ -119,8 +119,9 @@ export function captureAssertion(fn, receiver, probe) {
     const names = probes.get(testIdentity(test));
     const functions = counts.get(test.file);
     test.assertionStatus = names && functions
-      ? names.some(name => functions.get(name) > 0) ? 'executed' : 'unobserved'
+      ? names.some(probe => functions.get(probe.name) > 0) ? 'executed' : 'unobserved'
       : 'unsupported';
+    test.features = [...new Set((names ?? []).filter(probe => functions?.get(probe.name) > 0).flatMap(probe => probe.features))];
   }
   return {summary, tests, coverage: measured.filter(file => !files.includes(file.file))};
 }
