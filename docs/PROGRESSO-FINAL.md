@@ -308,3 +308,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:02 UTC — Revisão C7-R5 iniciada por Sol high normal somente leitura em 5fbbbb9f.
 - 19/11/2026 04:03 UTC — Conformidade b1ac9e42 passou nos 20 testes e laboratórios com ScanCode, ORT e Presidio. Na prova de QA a5ef0b22, 8 de 52 testes complementares falharam porque as duas simulações da consulta ao banco omitiam o estado da cota; o ajuste está em teste. A revisão de documentação encontrou atribuições de ambiente e subgrafos que podem levar a conclusões equivocadas. Aberta C8-R6.
 - 19/11/2026 04:05 UTC — O painel corrigido passou em sete provas da API e nove do navegador simulado, incluindo cobertura com arquivo protegido sem achado, troca de projeto e links antigos. O build da interface saiu no diretório privado de homologação. Revisão pedida para 4a3c8407 e para a nova reverificação 0e8ad897.
+- 19/11/2026 04:05 UTC — As duas simulações de admissão corrigidas passaram com os 52 testes complementares. Conformidade passou nas seis provas da CLI em 3ede9a43. A política de admissão real continua exigindo estado de cota disponível.
+- 19/11/2026 04:05 UTC — Trabalhador encerrou C-BASE-R8 em 01d258b4 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:05 UTC — Trabalho C8-R6 iniciado por Sol high normal em final-c8.
+- 19/11/2026 04:07 UTC — Base comum recebida em 01d258b4. Foi iniciada a prova com o daemon Docker e a revisão independente. Aberta uma ordem de QA para executar também testes unitários offline Python e Go; a prova até aqui cobria Node.
