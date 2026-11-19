@@ -254,9 +254,9 @@ test('symlink, fifo, and hardlink are refused without blocking or edits',async()
   assert.equal(made.status,0);
   const fifoLink=join(file.dir,'fifo-via');
   await symlink(fifoDir,fifoLink);
-  const fifoRun=gateway(['retention-plan',fifo],2000);
+  const fifoRun=gateway(['retention-plan',fifo]);
   assertClosed(fifoRun,{dir:file.dir,path:fifo},'RETENTION_DESCRIPTOR_INVALID');
-  const ancestorFifo=gateway(['retention-plan',join(fifoLink,'descriptor.json')],2000);
+  const ancestorFifo=gateway(['retention-plan',join(fifoLink,'descriptor.json')]);
   assertClosed(ancestorFifo,{dir:file.dir,path:join(fifoLink,'descriptor.json')},'RETENTION_DESCRIPTOR_INVALID');
   const alias=join(file.dir,'alias.json');
   await link(file.path,alias);

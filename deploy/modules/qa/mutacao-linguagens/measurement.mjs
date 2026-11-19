@@ -12,8 +12,18 @@ const caseStatuses = new Set(['passed', 'failed', 'skipped', 'error', 'pending']
 const positive = value => Number.isSafeInteger(value) && value > 0;
 export const goDependencyMissing = /module lookup disabled by GOPROXY=off|import lookup disabled by -mod=vendor|inconsistent vendoring|no required module provides package|missing go\.sum entry|updates to go\.mod needed|requires go >= .*GOTOOLCHAIN=local/i;
 const goCompilerDiagnostic = /^.+?\.go:\d+(?::\d+)?: (.*)$/;
-const goSourceDependency = /^(?:no required module provides package|missing go\.sum entry|cannot find module providing package) /;
-const goBuildOperational = /fork\/exec|resource temporarily unavailable|cannot allocate memory|out of memory|permission denied|no space left on device|too many open files|read-only file system|input\/output error|signal: (?:killed|terminated)|internal compiler error/i;
+const goSourceDependency = /^(?:(?:no required module provides package|missing go\.sum entry|cannot find module providing package) |module lookup disabled by GOPROXY=off\b|import lookup disabled by -mod=vendor\b)/;
+const goNamedDependency = /^(?:no required module provides package|missing go\.sum entry for module providing package|cannot find module providing package) ([^:\s;]+)/;
+const goSourceErrors = [
+  /^(?:syntax error:|invalid operation:|undefined:|cannot assign to )/,
+  /^(?:expected .+, found |illegal character |(?:string|rune) literal not terminated$)/,
+  /^(?:cannot use .+ as |cannot convert .+ to |constant .+ overflows )/,
+  /^(?:division by zero|missing return)$/,
+  /^(?:assignment mismatch:|(?:not enough|too many) arguments in call to |declared and not used:)/,
+  /^(?:.+ redeclared in this block|".+" imported (?:as .+ and )?not used)$/,
+];
+const goBuildOperational = /fork\/exec|resource temporarily unavailable|cannot allocate memory|out of memory|permission denied|no space left on device|too many open files|read-only file system|input\/output error|signal: (?:killed|terminated)|internal compiler error|no such file or directory|unexpected EOF/i;
+const goDiagnosticNote = /^(?:too many errors$|other declaration of )/;
 export const goListFormat = String.raw`{{range .GoFiles}}{{printf "S\t%s/%s\n" $.Dir .}}{{end}}{{if or .TestGoFiles .XTestGoFiles}}{{printf "P\t%s\n" .ImportPath}}{{end}}`;
 
 export function processJson({code, output}) {
@@ -112,30 +122,41 @@ export function decodePythonSuite(result, files, propertiesOnly = false) {
   return reason ? {reason} : {tests};
 }
 
-function classifyGoBuildOutput(output) {
-  const result = {source: false, operational: false, unavailable: false};
+function readGoBuildDiagnostics(reports, output, importPath) {
+  let pkg = importPath;
   for (const raw of output.split('\n')) {
     const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const located = goCompilerDiagnostic.exec(line);
-    if (located) {
-      // Source diagnostics can quote the same text emitted by system errors.
-      const message = located[1];
-      if (goSourceDependency.test(message) && goDependencyMissing.test(message)) result.unavailable = true;
-      else if (message.startsWith('internal compiler error:')) result.operational = true;
-      else result.source = true;
-    } else if (goDependencyMissing.test(line)) {
-      result.unavailable = true;
-    } else if (goBuildOperational.test(line)) {
-      result.operational = true;
+    if (!line || line === '#' || line.startsWith('# [')) continue;
+    if (line.startsWith('# ')) {
+      pkg = line.slice(2);
+      continue;
     }
+    const located = goCompilerDiagnostic.exec(line);
+    const message = located?.[1] ?? line;
+    if (goDiagnosticNote.test(message)) continue;
+    if (importPath !== undefined && pkg !== importPath) {
+      // Go's loader can print the importing package in the header while
+      // the structured event and the message name the missing dependency.
+      if (goNamedDependency.exec(message)?.[1] === importPath && goDependencyMissing.test(message)) {
+        reports.set(importPath, {...reports.get(importPath), unavailable: true});
+      }
+      continue;
+    }
+    const report = reports.get(pkg || undefined) ?? {};
+    if (located && goSourceErrors.some(pattern => pattern.test(message))) {
+      if (pkg) report.source = true;
+    } else if ((located ? goSourceDependency.test(message) : true) && goDependencyMissing.test(message)) {
+      report.unavailable = true;
+    } else if (located || goBuildOperational.test(message) || (pkg && !/^\s/.test(raw))) {
+      // A source position can also identify the import whose compiled
+      // artifact the tool could not read. Unknown messages are inconclusive.
+      report.operational = true;
+    }
+    reports.set(pkg || undefined, report);
   }
-  return result;
 }
 
 export function decodeGoSuite({code, output, diagnostics}, testPackages) {
-  const stderr = classifyGoBuildOutput(diagnostics);
-  if (stderr.unavailable) return {reason: 'offline-dependency'};
   const tests = new Map();
   const packages = new Map();
   const completedFailures = new Set();
@@ -144,15 +165,17 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
   let executionFailure = false;
   for (const line of output.split('\n').filter(Boolean)) {
     const event = JSON.parse(line);
-    const {Action: action, Package: pkg, Test: name, Output: message, OutputType: outputType} = event ?? {};
+    const {Action: action, Package: pkg, ImportPath: importPath, FailedBuild: failedBuild,
+      Test: name, Output: message, OutputType: outputType} = event ?? {};
     if (typeof action !== 'string') throw new Error('invalid-go-event');
+    const buildPackage = typeof importPath === 'string' ? importPath : '';
     if (action === 'build-output') {
       if (typeof message !== 'string') throw new Error('invalid-go-event');
-      if (!buildOutput.has(event.ImportPath)) buildOutput.set(event.ImportPath, []);
-      buildOutput.get(event.ImportPath).push(message);
+      if (!buildOutput.has(buildPackage)) buildOutput.set(buildPackage, []);
+      buildOutput.get(buildPackage).push(message);
     }
-    if (action === 'build-fail') failedBuilds.add(event.ImportPath);
-    if (action === 'fail' && event.FailedBuild) failedBuilds.add(event.FailedBuild);
+    if (action === 'build-fail') failedBuilds.add(buildPackage);
+    if (action === 'fail' && typeof failedBuild === 'string' && failedBuild) failedBuilds.add(failedBuild);
     // The testing binary emits this frame when it finishes a failing suite. The go command
     // can also report a failed case and package after an abort, with only its FAIL\t... frame.
     if (action === 'output' && !name && outputType === 'frame' && message === 'FAIL\n' && packages.get(pkg) === 'pending') {
@@ -187,14 +210,19 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
       tests.get(id).status = status;
     }
   }
-  const buildDiagnostics = new Map([...buildOutput].map(([pkg, chunks]) => [pkg, classifyGoBuildOutput(chunks.join(''))]));
-  if ([...buildDiagnostics.values()].some(value => value.unavailable)) return {reason: 'offline-dependency'};
+  const buildDiagnostics = new Map();
+  readGoBuildDiagnostics(buildDiagnostics, diagnostics);
+  for (const [pkg, chunks] of buildOutput) readGoBuildDiagnostics(buildDiagnostics, chunks.join(''), pkg);
+  const unscoped = buildDiagnostics.get(undefined);
+  if (unscoped?.unavailable || [...failedBuilds].some(pkg => buildDiagnostics.get(pkg)?.unavailable)) {
+    return {reason: 'offline-dependency'};
+  }
   const observed = [...tests.values()];
   const failedPackages = new Set(observed.filter(test => test.status === 'failed').map(test => test.package));
   if (failedBuilds.size) {
-    const sourceFailures = !stderr.operational && [...failedBuilds].every(pkg => {
+    const sourceFailures = code === 1 && !unscoped?.operational && [...failedBuilds].every(pkg => {
       const diagnostic = buildDiagnostics.get(pkg);
-      return !diagnostic?.operational && (diagnostic?.source || (failedBuilds.size === 1 && stderr.source));
+      return diagnostic?.source && !diagnostic.operational;
     });
     return {reason: sourceFailures ? 'go-build-failed' : 'go-build-execution'};
   }
