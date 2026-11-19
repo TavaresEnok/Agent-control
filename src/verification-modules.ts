@@ -803,6 +803,10 @@ export async function removeModuleSnapshot(snapshot: string): Promise<void> {
   await rm(parent, {recursive: true, force: true});
 }
 
+function moduleImageMissing(diagnostic: string): boolean {
+  return /^(?:docker: )?(?:Error response from daemon|Error): No such image:/im.test(diagnostic);
+}
+
 async function confirmCollectorStarted(run: CollectorProcess, id: string, timeoutMs: number, signal: AbortSignal): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (!signal.aborted) {
@@ -868,7 +872,9 @@ export async function runModuleCollectorContainer(input: {
     const imageCommand = await run([MODULE_RUNTIME_BIN, 'image', 'inspect', '--format',
       '[{{json .Config.Entrypoint}},{{json .Config.Cmd}}]', input.image],
       {timeoutMs: daemonTimeout, maxStdoutBytes: 1024 * 1024, signal: input.signal});
-    if (imageCommand.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+    if (imageCommand.code !== 0) {
+      throw new Refusal(moduleImageMissing(imageCommand.stderr) ? 'VERIFY_MODULE_IMAGE_MISSING' : 'VERIFY_TOOLS_FAILED', 503);
+    }
     const wrapper = assertHostPath(join(dirname(snapshot), 'collector-entrypoint'));
     await writeFile(wrapper, collectorOutputWrapper(imageCommand.stdout, token, maxStdoutBytes), {flag: 'wx', mode: 0o555});
     await chmod(wrapper, 0o555);
@@ -893,8 +899,8 @@ export async function runModuleCollectorContainer(input: {
       const created = await run(createArgs, daemonOptions);
       if (created.code !== 0) {
         // A missing image with --pull never is a definitive daemon rejection.
-        creationRejected = /(?:^|\n)(?:docker: )?Error response from daemon: No such image:/i.test(created.stderr);
-        throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+        creationRejected = moduleImageMissing(created.stderr);
+        throw new Refusal(creationRejected ? 'VERIFY_MODULE_IMAGE_MISSING' : 'VERIFY_TOOLS_FAILED', 503);
       }
       const candidate = createdContainerId(created.stdout);
       await assertOwnedModuleContainer(run, token, candidate);
@@ -1948,7 +1954,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       sourceCoverage = undefined;
       const reason = error instanceof Refusal ? error.code : 'VERIFY_TOOLS_FAILED';
       collectorCode = 1;
-      collectorData = {coverage: [{tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Falha de processo ou leitura da saída: ${reason}`}], findings: []};
+      const detail = reason === 'VERIFY_MODULE_IMAGE_MISSING'
+        ? 'Imagem fixada do módulo ausente no Docker local (VERIFY_MODULE_IMAGE_MISSING).'
+        : `Falha de processo ou leitura da saída: ${reason}`;
+      collectorData = {coverage: [{tool: 'coletor', version: 'indisponível', status: 'failed', detail}], findings: []};
     }
     if (collectorCode !== 0 && !collectorData.coverage.some(row => row.status === 'failed')) {
       const failure: ModuleToolCoverage = {tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Processo terminou com código ${collectorCode}.`};
