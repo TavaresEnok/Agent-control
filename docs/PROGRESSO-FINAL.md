@@ -895,3 +895,5 @@ PAUSADO-COTA
 - 19/11/2026 18:42 UTC — A3-REPLAY-PROVA encerrado com código 0.
 - 19/11/2026 18:42 UTC — trabalho-C9-ATRIBUICAO-CONSERVADORA iniciado em final-c9 por Sol high normal.
 - 19/11/2026 18:43 UTC — O revisor aceitou os dois controles de Go e PostgreSQL no candidato 69adc794. Restou uma atribuição de operação em mensagem com aspas tipográficas aninhadas. A ordem cobre aninhamento, fechamento e os positivos existentes.
+- 19/11/2026 18:43 UTC — trabalho-C2-MATRIZ-ASPAS-ANINHADAS iniciado em final-qa-matriz-r12 por Sol medium normal.
+- 19/11/2026 18:45 UTC — A correção de recuperação 0734673c foi integrada na bancada em df0081bf. O revisor recebe somente o contrato e o código. O gerente repetirá os testes com banco descartável.
