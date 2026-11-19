@@ -42,6 +42,13 @@ const Observation = z.object({
   facts: z.array(z.string().min(1).max(400)).min(1).max(8).optional(),
 }).strict();
 export type ModuleReviewObservation = z.infer<typeof Observation>;
+export function moduleReviewObservationTitle(observation: ModuleReviewObservation | undefined) {
+  switch (observation?.criterion) {
+    case 'test-skip-modifier': return 'Declaração de teste com modificador skip ou todo';
+    case 'math-random-call': return 'Chamada direta a Math.random no código';
+    case 'fixed-wait-call': return 'Chamada direta a waitForTimeout no código';
+  }
+}
 const ReviewDecision = z.enum(['sustenta', 'insuficiente', 'contradiz']);
 export type ModuleReviewDecision = z.infer<typeof ReviewDecision>;
 const ReviewVerdict = ConfirmResult.extend({binding: Binding, observation: Observation.optional(), decision: ReviewDecision.optional()});
@@ -51,6 +58,7 @@ type Verdict = Pick<z.infer<typeof ReviewVerdict>, 'status' | 'proof' | 'reason'
 type CollectorInput = Pick<ReviewEvidence, 'module' | 'tool' | 'file' | 'line' | 'evidence'>;
 type Tokens = NonNullable<ReturnType<typeof scanModuleExamSource>>;
 const testRunners = new Set(['test', 'it']);
+const testGroups = new Set(['describe', 'suite']);
 const skipModifiers = new Set(['skip', 'todo']);
 const normalizeCollectorSnippet = (text: string) => text.replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
 
@@ -65,12 +73,92 @@ function testDeclaration(tokens: Tokens, start: number) {
   return {open, title: title.text.slice(1, -1), skipped: Boolean(skipped)};
 }
 
+function namedCall(tokens: Tokens, open: number) {
+  const title = tokens[open + 1];
+  const call = moduleExamCall(tokens, open);
+  if (!call || title?.kind !== 'literal' || /[\\`]/u.test(title.text)
+    || (call.commas[0] ?? call.close) !== open + 2) return null;
+  return call;
+}
+
 function completeTestCall(tokens: Tokens, start: number) {
   const declaration = testDeclaration(tokens, start);
-  if (!declaration) return null;
-  const call = moduleExamCall(tokens, declaration.open);
-  if (!call || (call.commas[0] ?? call.close) !== declaration.open + 2) return null;
-  return {...declaration, end: call.close};
+  const call = declaration && namedCall(tokens, declaration.open);
+  return call && {...declaration, end: call.close};
+}
+
+function hasOnlyTitleAndCallback(tokens: Tokens, {close, commas}: NonNullable<ReturnType<typeof namedCall>>) {
+  const separators = commas.filter(index => index !== close - 1);
+  if (!separators.length) return true;
+  if (separators.length !== 1) return false;
+  const end = commas.at(-1) === close - 1 ? close - 1 : close;
+  let start = separators[0]! + 1;
+  const token = (index: number) => tokens[index]?.text;
+  if (token(start) === 'async' && token(start + 1) !== '=>') start++;
+  if (token(start) === 'function') {
+    const open = tokens[start + 1]?.kind === 'word' ? start + 2 : start + 1;
+    const parameters = moduleExamCall(tokens, open);
+    if (!parameters || token(parameters.close + 1) !== '{' || token(end - 1) !== '}') return false;
+    const depths = moduleExamDepths(tokens.slice(parameters.close + 1, end));
+    return Boolean(depths && depths.lastIndexOf(0) === 0);
+  }
+  if (token(start) === '(') {
+    const parameters = moduleExamCall(tokens, start);
+    return Boolean(parameters && parameters.close + 2 < end && token(parameters.close + 1) === '=>');
+  }
+  return tokens[start]?.kind === 'word' && start + 2 < end && token(start + 1) === '=>';
+}
+
+function testImportBindings(tokens: Tokens) {
+  const bindings = new Set<number>();
+  for (const [index, token] of tokens.entries()) {
+    const esm = token.text === 'import';
+    if ((!esm && token.text !== 'const') || !isDirectIdentifier(tokens, index)) continue;
+    const localBindings: number[] = [];
+    let at = index + 1;
+    if (tokens[at]?.kind === 'word') localBindings.push(at++);
+    if (esm && tokens[at]?.text === ',') at++;
+    if (tokens[at]?.text === '{') {
+      at++;
+      while (tokens[at]?.kind === 'word') {
+        if (tokens[at + 1]?.text === (esm ? 'as' : ':') && tokens[at + 2]?.kind === 'word') at += 3;
+        else localBindings.push(at++);
+        if (tokens[at]?.text !== ',') break;
+        at++;
+      }
+      if (tokens[at]?.text !== '}') continue;
+      at++;
+    }
+    if (esm) {
+      if (tokens[at]?.text !== 'from' || tokens[at + 1]?.kind !== 'literal') continue;
+    } else {
+      const initializer = tokens.slice(at, at + 5).map(part => part.text);
+      if (initializer[0] !== '=' || initializer[1] !== 'require' || initializer[2] !== '('
+        || !/^['"]node:test['"]$/u.test(initializer[3] ?? '') || initializer[4] !== ')'
+        || (tokens[at + 5] && tokens[at + 5]?.text !== ';')) continue;
+    }
+    for (const binding of localBindings) bindings.add(binding);
+  }
+  return bindings;
+}
+
+function hasUnambiguousTestDeclarations(tokens: Tokens, title: string) {
+  const imports = testImportBindings(tokens);
+  if (tokens.filter(token => token.kind === 'literal' && token.text.slice(1, -1) === title).length !== 1) return false;
+  return tokens.every((token, index) => {
+    if (token.kind === 'literal') return !token.text.includes('\\') && !skipModifiers.has(token.text.slice(1, -1));
+    if (token.kind !== 'word') return true;
+    if (token.text === 'test' && tokens[index + 1]?.text === '.' && tokens[index + 2]?.text === 'describe') {
+      return isDirectIdentifier(tokens, index);
+    }
+    if (testRunners.has(token.text) && !imports.has(index)) return Boolean(completeTestCall(tokens, index));
+    if (testGroups.has(token.text) && !imports.has(index)) {
+      const playwrightGroup = token.text === 'describe' && tokens[index - 1]?.text === '.' && tokens[index - 2]?.text === 'test';
+      const call = (playwrightGroup || isDirectIdentifier(tokens, index)) && namedCall(tokens, index + 1);
+      return Boolean(call && hasOnlyTitleAndCallback(tokens, call));
+    }
+    return !skipModifiers.has(token.text) || Boolean(completeTestCall(tokens, index - 2)?.skipped);
+  });
 }
 
 function wholeTestSource(source: string) {
@@ -104,15 +192,10 @@ function skipRemoval(evidence: ReviewEvidence, material: string) {
   const to = original[index + 2]!.end;
   if (snapshot.original.slice(0, from) + snapshot.original.slice(to) !== snapshot.current) return null;
   const {title} = declaration;
-  // A second literal may name a copy in another group. Escaped literals and
-  // unclassified modifier references can hide the identity of a remaining test.
-  if (current.filter(token => token.kind === 'literal' && token.text.slice(1, -1) === title).length !== 1
-    || current.some((token, at) => {
-      if (token.kind === 'literal' && (token.text.includes('\\') || skipModifiers.has(token.text.slice(1, -1)))) return true;
-      if (token.kind !== 'word' || !skipModifiers.has(token.text)) return false;
-      const other = completeTestCall(current, at - 2);
-      return !other?.skipped || !other.title || other.title === title;
-    })) return null;
+  const active = namedCall(current, index + 1);
+  // A second declaration with a computed title or runner can be a copy. An
+  // options object or unresolved second argument can keep the edited test skipped.
+  if (!active || !hasOnlyTitleAndCallback(current, active) || !hasUnambiguousTestDeclarations(current, title)) return null;
   const leading = currentLine.length - currentLine.trimStart().length;
   const column = token.start - snapshot.current.lastIndexOf('\n', token.start - 1) - leading;
   return {column, expression: snapshot.current.slice(token.start, original[declaration.end]!.end - (to - from)),
@@ -227,6 +310,14 @@ export function moduleReviewTask(evidence: ReviewEvidence): string {
     + ' Para sustenta, preencha reasonTemplate ao pé da letra com os fatos apurados.'
     + ' Os números entre chaves indicam posições de 1 em facts. Use expression em {expressao}, os fatos separados por vírgula e espaço em {lista} e file em {arquivo}.'
     + ' Para contradiz ou insuficiente, explique em reason qual evidência contraria a hipótese ou está faltando.';
+  const {criterion: selected, hypothesis, file, line, tool, rule, commit, code, skipRemoval} = context;
+  const skipReview = selected === 'test-skip-modifier' || (evidence.module === 'qa'
+    && tool === 'qa-auditoria-estatica-testes' && rule === 'QA-TESTE-PULADO');
+  const reviewInput = skipReview ? {
+    criterion: selected, hypothesis, file, line, tool, rule, commit, code,
+    evidence: collectorMaterial(rule, evidence) ?? evidence.evidence,
+    ...(skipRemoval ? {skipRemoval: {column: skipRemoval.column, expression: skipRemoval.expression}} : {}),
+  } : context;
   return JSON.stringify({
     instruction: instruction + (criterion ? collectorInstruction : ' Use a chamada literal completa, sem o ponto e vírgula.')
       + (context.criterion === 'test-skip-modifier' ? ' Use descartado somente para a expressão e a coluna em skipRemoval, quando presente.'
@@ -234,7 +325,7 @@ export function moduleReviewTask(evidence: ReviewEvidence): string {
           ? ' A observação é sintática. Descreva a grafia da chamada e a posição no código.' : ''),
     ...(criterion ? {expectedExpression: collectorAnchors[criterion], factOrder: collectorFactOrder[criterion],
       reasonTemplate: collectorReasonTemplates[criterion]} : {}),
-    ...context, binding: digest(context),
+    ...reviewInput, binding: digest(context),
   });
 }
 
