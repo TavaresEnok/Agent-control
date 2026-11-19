@@ -256,6 +256,8 @@ test('as ferramentas fixadas encontram os defeitos e aprovam o controle limpo no
   const rules = new Set(defectiveResult.findings.map(f => `${f.tool}:${f.rule}:${f.file}`));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-PARAM-DESATUALIZADO:src/billing.ts'));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC:src/billing.ts'));
+  assert.match(defectiveResult.findings.find(item => item.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC')?.evidence ?? '',
+    /^\[warning\].* defined in .*\/src\/billing\.ts, does not have any documentation$/);
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-LINK-QUEBRADO:src/api.ts'));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA:README.md'));
   assert.ok(rules.has('dependency-cruiser:DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE:README.md'));
@@ -900,10 +902,24 @@ test('Mermaid atribui a linha reportada de um diagrama de sequência com origem 
     ['DOC-MERMAID-SINTAXE-INVALIDA', 42, true],
   ]);
 
-  for (const message of ['Parse error on line 3', 'Parse error on line 30', 'Falha interna: Parse error on line 3']) {
+  const syntaxError = "Parse error on line 3:\n...Alice -? Bob\n--------^\nExpecting 'SOLID_ARROW', got 'INVALID'";
+  const lexicalError = 'Lexical error on line 3. Unrecognized text.\n...Alice -? Bob\n--------^';
+  for (const [message, line] of [
+    [syntaxError, 14], [lexicalError, 14], ['Parse error on line 3: Unexpected end of input', 14],
+    ['Parse error on line 3', 12], ['Parse error on line 3 em um exemplo', 12],
+    ['Parse error on line 3: trecho de um exemplo', 12],
+    [syntaxError.replace('line 3', 'line 30'), 12], [`Falha interna: ${syntaxError}`, 12],
+    [`${syntaxError} em um exemplo`, 12], [`${lexicalError}\nComentário adicional`, 12],
+  ] as const) {
     const error = await validateMermaidDocuments([file], [blocks[0]], new Set(), async () => { throw new Error(message); });
-    assert.equal(error.findings[0].line, message === 'Parse error on line 3' ? 14 : 12);
+    assert.equal(error.findings[0].line, line, message);
+    assert.equal(error.findings[0].message.includes('Linha do erro indeterminada'), line === 12, message);
   }
+  const unknownVersion = await validateMermaidDocuments([file], [blocks[0]], new Set(), async () => {
+    throw new Error(syntaxError);
+  }, '', '12.4.0');
+  assert.equal(unknownVersion.findings[0].line, 12);
+  assert.match(unknownVersion.findings[0].message, /Linha do erro indeterminada/);
 });
 
 test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', {skip: skipLocalTools}, () => {
@@ -937,6 +953,19 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => source,
   );
   assert.deepEqual(example.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+  const multilineCode = source.replace(' * ```js', ' * Inline ``example').replace(' * ```', ' * end``');
+  const multiline = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => multilineCode,
+  );
+  assert.deepEqual(multiline.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+  const onlyInline = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    '[warning] The signature sample has an @param with name "legacy", which was not used', root,
+    () => multilineCode.replace('@param legacy obsolete', 'See the example.'),
+  );
+  assert.equal(onlyInline.findings[0].line, 7);
+  assert.match(onlyInline.findings[0].message, /Linha da tag indeterminada/);
   const exampleWithOpener = source.replace(' * @param legacy\n', ' * const text = "/**";\n');
   const literal = parseTypedocReport(
     {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
@@ -965,6 +994,14 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   assert.deepEqual(ambiguous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 5]]);
   assert.match(ambiguous.findings[0].message, /Linha da tag indeterminada/);
 
+  const sameLine = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 4, 64)]},
+    '[warning] Failed to resolve link to "Missing" in comment for sample', root,
+    () => ['/** Public function.', ' * See {@link Missing} and {@linkplain Missing}.', ' */', 'export function sample() {}'].join('\n'),
+  );
+  assert.deepEqual(sameLine.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
+  assert.doesNotMatch(sameLine.findings[0].message, /Linha da tag indeterminada/);
+
   const literalLink = ['/** Public function.', String.raw` * See \{@link Missing \}.`,
     ' * Literal `{@link Missing}`.', ' */', 'export function sample() {}'].join('\n');
   const reflectionWithLiteral = {kind: 1, name: 'x', children: [member('sample', 5, 64)]};
@@ -974,24 +1011,70 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   assert.match(withoutLocation.findings[0].message, /Linha da tag indeterminada/);
   const unrelated = parseTypedocReport(reflectionWithLiteral, `[info] Exemplo: ${diagnostic}`, root, () => literalLink);
   assert.deepEqual(unrelated.findings, []);
+
+  const packageLink = '[warning] Failed to resolve link to "@scope/pkg.Missing" in comment for sample';
+  const suggested = `${packageLink}. You may have wanted "@scope/pkg!Missing"`;
+  const readSuggested = () => ['/** Public function.', ' * See {@link @scope/pkg.Missing}.', ' * Example.', ' */',
+    'export function sample() {}'].join('\n');
+  assert.deepEqual(parseTypedocReport(reflectionWithLiteral, suggested, root, readSuggested).findings
+    .map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
+  for (const message of [`[warning] ${diagnostic}. You may have wanted qualquer coisa`,
+    `${packageLink}. You may have wanted "outro texto"`, `${suggested} em um exemplo`]) {
+    assert.deepEqual(parseTypedocReport(reflectionWithLiteral, message, root, readSuggested).findings, [], message);
+  }
 });
 
 test('TypeDoc exige um arquivo inequívoco quando o aviso aceita um prefixo de pacote', () => {
   const root = FIXTURE_CLEAN_DIR;
   const diagnostic = '[warning] Sample (Interface), defined in pkg/src/api.ts, does not have any documentation';
   const reflection = {kind: 1, name: 'x', children: []};
-  const sources = new Map([['pkg/src/api.ts', 'export interface Sample {}'], ['src/api.ts', 'export interface Sample {}']]);
+  const sources = new Map([
+    ['package.json', '{"name":"pkg"}'], ['pkg/package.json', '{"name":"pkg"}'],
+    ['pkg/src/api.ts', '\n\nexport interface Sample {}'], ['src/api.ts', '\nexport interface Sample {}'],
+  ]);
   const read = (file: string) => sources.get(file) ?? '';
-  assert.deepEqual(parseTypedocReport(reflection, diagnostic, root, read).findings, []);
+  const parse = (report: object, warning = diagnostic) => parseTypedocReport(report, warning, root, read,
+    MODULE_DEPLOY_DIR, new Set(sources.keys())).findings;
+  const sample = (fileName: string, line: number) => ({name: 'Sample', kind: 256, sources: [{fileName, line}],
+    comment: {summary: [{text: 'Documentado.'}]}});
+  const partial = {...reflection, children: [sample('src/api.ts', 2)]};
+  assert.deepEqual(parse(reflection), []);
+  assert.deepEqual(parse(partial), []);
 
-  const withSource = {...reflection, children: [{name: 'Sample', kind: 256, sources: [{fileName: 'pkg/src/api.ts', line: 3}]}]};
-  assert.deepEqual(parseTypedocReport(withSource, diagnostic, root, read).findings.map(finding => [finding.file, finding.line]),
-    [['pkg/src/api.ts', 3]]);
+  sources.set('package.json', '{"name":"root"}');
+  const knownFile = parse(partial);
+  assert.deepEqual(knownFile.map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 1]]);
+  assert.match(knownFile[0].message, /Linha da declaração indeterminada/);
+  const withSource = {...reflection, children: [...partial.children, sample('pkg/src/api.ts', 3)]};
+  assert.deepEqual(parse(withSource).map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 3]]);
 
-  sources.delete('pkg/src/api.ts');
-  const output = parseTypedocReport(reflection, diagnostic, root, read);
-  assert.deepEqual(output.findings.map(finding => [finding.file, finding.line]), [['src/api.ts', 1]]);
-  assert.match(output.findings[0].message, /Linha da declaração indeterminada/);
+  sources.set('pkg/package.json', '{"name":"@scope/pkg"}');
+  assert.deepEqual(parse(withSource, diagnostic.replace('in pkg/', 'in @scope/pkg/'))
+    .map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 3]]);
+  sources.set('package.json', '{"name":"pkg"}');
+  assert.deepEqual(parse(withSource).map(finding => [finding.file, finding.line]), [['src/api.ts', 2]]);
+  assert.deepEqual(parse(withSource, `${diagnostic} em um exemplo`), []);
+
+  sources.delete('package.json');
+  const absolutePath = join(root, 'src/api.ts');
+  assert.deepEqual(parse(partial, diagnostic.replace('pkg/src/api.ts', `<unknown>/${absolutePath}`))
+    .map(finding => [finding.file, finding.line]), [['src/api.ts', 2]]);
+  assert.deepEqual(parse(partial, diagnostic), []);
+});
+
+test('TypeDoc preserva o catálogo sem interpretar mensagens de uma versão desconhecida', () => {
+  const tools = mkdtempSync(join(tmpdir(), 'doc-typedoc-version-'));
+  try {
+    mkdirSync(join(tools, 'node_modules', 'typedoc'), {recursive: true});
+    writeFileSync(join(tools, 'node_modules', 'typedoc', 'package.json'), '{"version":"0.29.0"}');
+    const reflection = {kind: 1, name: 'x', children: [{name: 'sample', kind: 64, sources: [{fileName: 'sample.ts', line: 2}]}]};
+    const output = parseTypedocReport(reflection, '[warning] Failed to resolve link to "Missing" in comment for sample',
+      FIXTURE_CLEAN_DIR, () => '/** See {@link Missing}. */\nexport function sample() {}', tools);
+    assert.equal(output.symbols[0].file, 'sample.ts');
+    assert.deepEqual(output.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-SIMBOLO-SEM-DOC', 2]]);
+  } finally {
+    rmSync(tools, {recursive: true, force: true});
+  }
 });
 
 test('TypeDoc localiza avisos reais de exports default e confere assinaturas documentadas inequívocas', {skip: skipLocalTools}, async () => {
