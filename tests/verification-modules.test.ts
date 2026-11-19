@@ -9,6 +9,7 @@ import {promisify} from 'node:util';
 import {Capacity} from '../src/capacity.ts';
 import {keepPersonalVerifyLease} from '../src/personal-verify-cli.ts';
 import {createModuleExamFixture, moduleExamFixtureAnswer} from './fixtures/module-exam-native.ts';
+import {qaStaticFinding, qaStaticTool, reviewFixtureVerdict} from './fixtures/module-exam-review.ts';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger, VERIFICATION_MODULES, type VerificationModule} from '../src/ledger.ts';
 import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli} from '../src/personal-module-cli.ts';
@@ -38,10 +39,10 @@ const databaseUrl = process.env.AC_TEST_DATABASE_URL;
 const PINNED_IMAGE = `sha256:${'ab'.repeat(32)}`;
 const PINNED_TAGGED = `localhost:5000/ac-module-qa:1.0.0@sha256:${'cd'.repeat(32)}`;
 
-async function initGitRepo(root: string): Promise<{repo: string; commit: string}> {
+async function initGitRepo(root: string, appendedSource = ''): Promise<{repo: string; commit: string}> {
   const repo = join(root, 'repo');
   await mkdir(join(repo, 'src'), {recursive: true});
-  await writeFile(join(repo, 'src', 'app.ts'), 'export function main() {\n  return 42;\n}\n', {mode: 0o644});
+  await writeFile(join(repo, 'src', 'app.ts'), 'export function main() {\n  return 42;\n}\n' + appendedSource, {mode: 0o644});
   await writeFile(join(repo, 'src', 'db.ts'), 'export const query = "SELECT * FROM users";\n', {mode: 0o644});
   await writeFile(join(repo, 'README.md'), '# Projeto Teste\n', {mode: 0o644});
   const env = {
@@ -388,7 +389,8 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     const stranger = 'stranger-modulos';
     const projectId = randomUUID();
     const otherProjectId = randomUUID();
-    const {repo, commit} = await initGitRepo(root);
+    const skipped = 'test.skip("processa pedidos", () => {})';
+    const {repo, commit} = await initGitRepo(root, skipped + ';\n');
     const otherRepo = join(root, 'other-repo');
     await mkdir(otherRepo, {recursive: true});
 
@@ -615,11 +617,11 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       const readBack = await readModuleReport(dataDirectory, projectId, runId, mod);
       assert.equal(readBack.summary.id, runId);
       assert.equal(readBack.summary.module, mod);
-      assert.equal(readBack.summary.counts.alta, 1);
-      assert.equal(readBack.summary.counts.media, 1);
+      assert.equal(readBack.summary.counts.alta, 0);
+      assert.equal(readBack.summary.counts.media, 0);
       assert.equal(readBack.summary.toolFailures, 0);
       assert.equal(readBack.achados.length, 2);
-      assert.ok(readBack.achados.every(finding => finding.status === 'confirmado' && finding.verifier?.provider === 'codex'));
+      assert.ok(readBack.achados.every(finding => finding.status === 'provavel' && finding.verifier === null));
       assert.match(readBack.coverageMarkdown, /arquivo src\/app\.ts: 3 linhas verificadas/);
       assert.match(readBack.coverageMarkdown, /rota GET \/health: requisito R-01 verificado/);
       const achadoMd = await readModuleAchadoMarkdown(dataDirectory, projectId, runId, 'ACH-001', mod);
@@ -627,6 +629,10 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       assert.match(achadoMd, /Prova: return 42;/);
       assert.match(achadoMd, new RegExp(REMEDIATION_ACCEPTANCE));
 
+      // Use a synthetic previously confirmed run for the correction-only assertions.
+      await assert.rejects(runPersonalModuleCli(mod, [installationPath, projectId, '--corrigir', runId, 'ACH-001']),
+        (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_FINDING_MISSING');
+      await db.pool.query("UPDATE ac_verify_findings SET status='confirmado' WHERE run_id=$1", [runId]);
       // Conversão idempotente de achados em tarefas do produto via CLI (--corrigir)
       const fix1 = await runPersonalModuleCli(mod, [
         installationPath,
@@ -703,7 +709,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
             reason: 'A linha retorna diretamente o literal `42`.'});
         }},
       });
-      assert.deepEqual(reviewed.achados.map(finding => finding.status), ['confirmado', 'provavel', 'provavel']);
+      assert.deepEqual(reviewed.achados.map(finding => finding.status), ['provavel', 'provavel', 'provavel']);
     } finally {
       await db.releaseLease(legacyAuthority);
     }
@@ -762,24 +768,27 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     assert.match(failedReport.readmeMarkdown, /## Falhas de ferramentas/);
     assert.equal(failedReport.achados.length, 1);
 
-    // Reverificação sem conclusão do autor e descarte de relatório
+    const [recheckRunId] = await runPersonalQaCli([installationPath, projectId], {collectorOutput: {
+      coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'leitura local'}],
+      findings: [qaStaticFinding('src/app.ts', 4, skipped + ';')],
+    }});
+    const recheckBefore = await readModuleReport(dataDirectory, projectId, recheckRunId!, 'qa');
+    // Reverificação sem conclusão do autor e isolamento da transação.
     const seenTasks: string[] = [];
     let recheckIntent = '';
-    const depAuth = await db.acquire(principal, moduleContexts.get('dependencias')!, randomUUID(), 'recheck-dep', 60);
+    const qaAuth = await db.acquire(principal, moduleContexts.get('qa')!, randomUUID(), 'recheck-qa', 60);
     try {
       // A failed database transaction must not publish its tentative verdict.
       await db.pool.query(`CREATE FUNCTION synthetic_recheck_failure() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$`);
       await db.pool.query('CREATE TRIGGER synthetic_recheck_failure BEFORE UPDATE ON ac_verify_findings FOR EACH ROW EXECUTE FUNCTION synthetic_recheck_failure()');
-      const recheckInput = {module: 'dependencias' as const, runId: failedResultRunId,
+      const recheckInput = {module: 'qa' as const, runId: recheckRunId!,
         achadoIds: ['ACH-001'], dataDirectory, projectId};
       const reviewer = {provider: 'claude', model: 'fixture-model', profileId, accountId, grantId: randomUUID()};
-      const response = (status: 'confirmado' | 'descartado', task: string) => ({reviewer, output: JSON.stringify({kind: 'confirmacao',
-        status, binding: JSON.parse(task).binding, reason: 'A declaração local de `main` não contém uma dependência.',
-        proof: 'export function main() {'})});
-      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput,
-        review: async ({task}) => response('descartado', task)}), /synthetic rollback/);
-      assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, failedReport.achados[0]?.status);
+      const response = (task: string) => ({reviewer, output: JSON.stringify(reviewFixtureVerdict(JSON.parse(task), skipped))});
+      await assert.rejects(recheckModuleFindings(db, principal, qaAuth, {...recheckInput,
+        review: async ({task}) => response(task)}), /synthetic rollback/);
+      assert.equal((await readModuleReport(dataDirectory, projectId, recheckRunId!)).achados[0]?.status, recheckBefore.achados[0]?.status);
       await db.pool.query('DROP TRIGGER synthetic_recheck_failure ON ac_verify_findings');
       await db.pool.query('DROP FUNCTION synthetic_recheck_failure()');
       // Two real requests use the same HEAD, so only the generation can
@@ -789,11 +798,11 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       const olderStarted = new Promise<void>(resolve => {markOlderStarted = resolve;});
       const olderMayFinish = new Promise<void>(resolve => {finishOlder = resolve;});
       let olderIntent = '';
-      const older = recheckModuleFindings(db, principal, depAuth, {...recheckInput, async review(call) {
+      const older = recheckModuleFindings(db, principal, qaAuth, {...recheckInput, async review(call) {
         olderIntent = call.intentId;
         markOlderStarted();
         await olderMayFinish;
-        return response('confirmado', call.task);
+        return response(call.task);
       }});
       const olderRejected = assert.rejects(older,
         (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_RUN_CONFLICT');
@@ -801,30 +810,29 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       let rechecked: Awaited<ReturnType<typeof recheckModuleFindings>>;
       try {
         await Promise.race([olderStarted, older]);
-        rechecked = await recheckModuleFindings(db, principal, depAuth, {
+        rechecked = await recheckModuleFindings(db, principal, qaAuth, {
           ...recheckInput,
           async review(call) {
             seenTasks.push(call.task);
             recheckIntent = call.intentId;
             assert.equal(call.examiner, null);
-            return response('descartado', call.task);
+            return response(call.task);
           },
         });
       } finally {
         finishOlder();
         await olderRejected;
       }
-      assert.deepEqual(rechecked.results, [{id: 'ACH-001', status: 'fechado'}]);
+      assert.deepEqual(rechecked.results, [{id: 'ACH-001', status: 'reaberto'}]);
       assert.equal(seenTasks.length, 1);
-      assert.equal(seenTasks[0]?.includes('Atualização disponível.'), false);
+      assert.doesNotMatch(seenTasks[0]!, /CONCLUSAO_DO_AUTOR/);
       assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [recheckIntent])).rows[0]?.state, 'done');
       assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [olderIntent])).rows[0]?.state, 'failed');
-      const updated = await readModuleReport(dataDirectory, projectId, failedResultRunId, 'dependencias');
-      assert.equal(updated.summary.counts.baixa, 0);
-      assert.equal(updated.achados[0]?.status, 'fechado');
-      assert.equal((await db.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [failedResultRunId])).rows[0]?.status, 'fechado');
+      const updated = await readModuleReport(dataDirectory, projectId, recheckRunId!, 'qa');
+      assert.equal(updated.achados[0]?.status, 'reaberto');
+      assert.equal((await db.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [recheckRunId])).rows[0]?.status, 'reaberto');
     } finally {
-      await db.releaseLease(depAuth);
+      await db.releaseLease(qaAuth);
     }
 
     // Arquivo fora do snapshot não gera achado: o relatório registra falha do coletor.

@@ -20,6 +20,7 @@ import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli, typ
 import {runPersonalQaCli} from '../src/personal-qa-cli.ts';
 import {readModuleReport, type ModuleCollectorOutput, type VerificationModuleRunResult} from '../src/verification-modules.ts';
 import {createModuleExamFixture, moduleExamFixtureAnswer} from './fixtures/module-exam-native.ts';
+import {qaStaticFinding, qaStaticTool, reviewFixtureVerdict, type ReviewTaskFixture} from './fixtures/module-exam-review.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('provedores recebem apenas HTTPS fixo e o Claude inicia sem ferramentas nem configuração externa', () => {
@@ -106,6 +107,9 @@ test('o fechamento do relay encerra a autorização de inferência do worker', a
 });
 
 const base = process.env.AC_TEST_DATABASE_URL;
+const skippedIndex = 'test.skip("valida pedidos", () => {});';
+const skippedOther = 'test.todo("valida estoque", () => {});';
+const activeIndex = 'test("valida pedidos", () => {});';
 test('status 429 prevalece com corpo vazio, excessivo ou sem fim', async () => {
   for (const body of [null, Buffer.alloc(1024 * 1024 + 1), undefined]) {
     const response = new IncomingMessage(new Socket());
@@ -136,15 +140,15 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
     const ledger = new Ledger(database.url);
     const root = await mkdtemp(join(tmpdir(), 'ac-module-native-test-'));
     let exhaust = false;
-    let recheckAnswer: ((task: {code: string; binding: string}) => string) | undefined;
+    let recheckAnswer: ((task: ReviewTaskFixture) => string) | undefined;
     let fixture: Awaited<ReturnType<typeof createModuleExamFixture>> | undefined;
     try {
       await ledger.migrate();
       const dataDirectory = join(root, 'data'), repo = join(root, 'repo');
       for (const path of [dataDirectory, repo]) await mkdir(path, {mode: 0o700});
       const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-C', repo, ...args], {stdio: 'pipe'});
-      await writeFile(join(repo, 'index.ts'), 'return 42;\nconst password = "SEGREDO_SINTETICO_OMITIDO";\n');
-      await writeFile(join(repo, 'other.ts'), 'return 7;\n');
+      await writeFile(join(repo, 'index.ts'), skippedIndex + '\nconst password = "SEGREDO_SINTETICO_OMITIDO";\n');
+      await writeFile(join(repo, 'other.ts'), skippedOther + '\n');
       await writeFile(join(repo, '.env'), 'CONTEUDO_SINTETICO_PROTEGIDO\n');
       git('init'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic');
 
@@ -176,9 +180,8 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         projects: [{id: otherProject, label: 'Outro projeto', repo: join(root, 'other-repo'), owner}],
         http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
         happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'}}), {mode: 0o600});
-      const collectorOutput: ModuleCollectorOutput = {coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'leitura local'}],
-        findings: ['index.ts', 'other.ts'].map(file => ({tool: 'fixture', rule: 'FIXTURE-01', file, line: 1,
-          severity: 'baixa', message: 'Conclusão sintética do autor', evidence: file === 'index.ts' ? 'return 42;' : 'return 7;'}))};
+      const collectorOutput: ModuleCollectorOutput = {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'leitura local'}],
+        findings: [qaStaticFinding('index.ts', 1, skippedIndex), qaStaticFinding('other.ts', 1, skippedOther)]};
       let result: VerificationModuleRunResult | undefined;
       const run = (moduleExamRuntime: NonNullable<PersonalModuleCliDeps['moduleExamRuntime']>) =>
         runPersonalModuleCli('qa', [installation, project], {collectorOutput, moduleExamRuntime,
@@ -238,7 +241,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         assert.equal(launch.moduleExam, true);
         assert.equal(launch.role, 'specialist');
         assert.deepEqual(launch.writePaths, []);
-        assert.doesNotMatch(launch.task, /SEGREDO_SINTETICO_OMITIDO|CONTEUDO_SINTETICO_PROTEGIDO|Conclusão sintética do autor|\/tmp\//);
+        assert.doesNotMatch(launch.task, /SEGREDO_SINTETICO_OMITIDO|CONTEUDO_SINTETICO_PROTEGIDO|CONCLUSAO_DO_AUTOR|\/tmp\//);
       }
 
       exhaust = true;
@@ -319,11 +322,10 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(await findingStatus(), 'confirmado');
       assert.equal(docker.logs.length, count);
 
-      await writeFile(join(repo, 'index.ts'), 'return 43;\nconst password = "NOVA_CREDENCIAL_SINTETICA";\n');
+      await writeFile(join(repo, 'index.ts'), activeIndex + '\nconst password = "NOVA_CREDENCIAL_SINTETICA";\n');
       git('add', 'index.ts');
       git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic correction');
-      const verdict = ({code, binding}: {code: string; binding: string}) => JSON.stringify({kind: 'confirmacao', status: 'descartado',
-        proof: code, binding, reason: 'O retorno apresenta `43` após a alteração.'});
+      const verdict = (task: ReviewTaskFixture) => JSON.stringify(reviewFixtureVerdict(task, activeIndex.slice(0, -1), 'descartado'));
       recheckAnswer = task => verdict({...task, code: 'prova sem vínculo com o trecho'});
       assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
       assert.equal(await findingStatus(), 'confirmado');
@@ -354,12 +356,12 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(launch.provider, 'codex');
       assert.equal(launch.moduleExam, true);
       assert.deepEqual(launch.writePaths, []);
-      assert.deepEqual(JSON.parse(launch.task).code, 'return 43;');
-      assert.doesNotMatch(launch.task, /NOVA_CREDENCIAL_SINTETICA|Conclusão sintética do autor|\/tmp\//);
+      assert.deepEqual(JSON.parse(launch.task).code, activeIndex);
+      assert.doesNotMatch(launch.task, /NOVA_CREDENCIAL_SINTETICA|CONCLUSAO_DO_AUTOR|\/tmp\//);
       const {rows: [closed]} = await ledger.pool.query(`SELECT detail FROM ac_audit
         WHERE kind='module.finding_rechecked' AND detail->>'status'='fechado' AND context_id=$1`, [contextId]);
       assert.equal(closed.detail.commit, correctedHead);
-      assert.equal(closed.detail.proofDigest, digest('return 43;'));
+      assert.equal(closed.detail.proofDigest, digest(activeIndex));
       assert.deepEqual(closed.detail.examiner, {provider: 'claude', model: 'claude-module-fixture',
         accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0]});
       assert.deepEqual(closed.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',

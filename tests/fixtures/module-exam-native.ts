@@ -10,6 +10,7 @@ import {digest} from '../../src/contracts.ts';
 import type {Ledger} from '../../src/ledger.ts';
 import type {ModuleExamProvider} from '../../src/module-exam-egress.ts';
 import type {ModuleExamRuntime} from '../../src/module-exam-native.ts';
+import {reviewFixtureVerdict} from './module-exam-review.ts';
 import {NativeExecutionSupervisor} from '../../src/native-execution-supervisor.ts';
 
 type Mount = {Type: 'bind'; Source: string; Destination: string; RW: boolean};
@@ -110,8 +111,9 @@ export function moduleExamFixtureAnswer(launch: Launch): ReturnType<Answer> {
     return {failureCode: null, output: JSON.stringify({kind: 'exame', filesRead: [task.file],
       checklist: [task.module], routesReviewed: [], findings: []})};
   }
-  return {failureCode: null, output: JSON.stringify({kind: 'confirmacao', status: 'confirmado',
-    binding: task.binding, proof: task.code, reason: 'A fixture registra `' + task.code + '` na linha indicada pela regra.'})};
+  if (!task.criterion) return {failureCode: null, output: JSON.stringify({kind: 'confirmacao', status: 'provavel',
+    binding: task.binding, proof: '', reason: 'A evidência disponível não identifica uma condição verificável.'})};
+  return {failureCode: null, output: JSON.stringify(reviewFixtureVerdict(task, task.code.replace(/;$/, '')))};
 }
 
 /** Simulates only the Docker socket and inference output. Capacity and the native supervisor stay real. */
