@@ -111,3 +111,5 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:00 UTC — A3-R4 entregue por Terra em 48d5d041; aguardando a prova do gerente.
 - 19/11/2026 02:01 UTC — C7-R3 entregue por Terra em 4555dd20; aguardando a prova do gerente.
 - 19/11/2026 02:01 UTC — Matriz C5 em 16742752: o revisor Sol ultra encontrou um alto e três médios no tratamento de timeout, constraints adiadas, seed histórico e consulta inválida. C5-R3 encomendada. C8-R3 passou no TypeScript e em 16/16 testes, incluindo as ferramentas locais e o laboratório da imagem. A suíte do candidato A3-R4 em 93deefd7 está em execução.
+- 19/11/2026 02:01 UTC — C5-R3 iniciada em final-c5 por Terra ultra normal.
+- 19/11/2026 02:02 UTC — C7-R3 em 4555dd20 entregou parte de HTTP; seu relatório identificou CPU e PostgreSQL ainda sem execução real. As duas medições agora têm ordens e arquivos próprios. O gerente vai validar a imagem e a integração HTTP separadamente.
