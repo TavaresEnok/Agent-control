@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {readFile, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {test} from 'node:test';
+import {digest} from '../src/contracts.ts';
 import {mapModuleSnapshot} from '../src/module-exam-map.ts';
 import {examineFunctionalModule, type ModuleExamResult, type ModuleExamSeat} from '../src/module-exam.ts';
 import {recheckModuleFindings, runVerificationModule, type VerificationModuleRunInput} from '../src/verification-modules.ts';
@@ -158,14 +159,17 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
   });
 });
 
-test('runner revalida o vínculo e a prova antes da publicação', {skip: !databaseUrl}, async () => {
+test('runner revalida o vínculo e a prova antes da publicação', {skip: !databaseUrl}, async t => {
   await withExamFixture(async input => {
     const examiner: ModuleExamSeat = {provider: 'claude', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
     const reviewer: ModuleExamSeat = {provider: 'codex', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
-    const run = (alter: (result: ModuleExamResult) => void) => runVerificationModule({...input,
+    const run = (alter: (result: ModuleExamResult, snapshotSource: string) => void, changedSource = false) => runVerificationModule({...input,
       collectorOutput: observedOutput,
       async examinar(req) {
         const map = await mapModuleSnapshot(req.snapshot);
+        const file = map.files.find(row => row.file === testFile)!;
+        const snapshotSource = file.code!;
+        if (changedSource) file.code = snapshotSource + '\nexport const subtotal = 5;\n';
         const result = await examineFunctionalModule({...req, commit: input.commit, map,
           reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
           worker: {async run(call) {
@@ -176,27 +180,61 @@ test('runner revalida o vínculo e a prova antes da publicação', {skip: !datab
           }},
         });
         assert.ok(result.findings.every(finding => finding.status === 'confirmado'));
-        alter(result);
+        alter(result, snapshotSource);
         return result;
       },
     });
-    const result = await run(exam => {
-      exam.findings[1]!.decision = 'contradiz';
-      exam.findings[2]!.reviewReason = 'A chamada registrada contradiz a hipótese.';
+    const assertPublished = async (result: Awaited<ReturnType<typeof run>>, expected: string[]) => {
+      assert.deepEqual(result.achados.map(finding => finding.status), expected);
+      const persisted = await input.ledger.pool.query('SELECT status, payload FROM ac_verify_findings WHERE run_id=$1 ORDER BY achado_id', [result.runId]);
+      assert.deepEqual(persisted.rows.map(row => [row.status, row.payload.verifier?.provider]),
+        expected.map(status => [status, status === 'confirmado' ? 'codex' : undefined]));
+      for (const [index, status] of expected.entries()) {
+        if (status !== 'provavel') continue;
+        const {rule, message, evidence} = observedOutput.findings[index]!;
+        const finding = result.achados[index]!;
+        assert.equal(finding.title, `${rule}: ${message}`);
+        assert.equal(finding.verifier, null);
+        assert.equal(finding.proof, evidence);
+        assert.equal(persisted.rows[index]?.payload.proof, evidence);
+      }
+    };
+    await t.test('publica somente o veredito com decisão e motivo compatíveis', async () => {
+      const result = await run(exam => {
+        exam.findings[1]!.decision = 'contradiz';
+        Object.assign(exam.findings[2]!, {kind: 'confirmacao', reviewReason: 'A chamada registrada contradiz a hipótese.'});
+      });
+      await assertPublished(result, ['confirmado', 'provavel', 'provavel']);
     });
-    assert.deepEqual(result.achados.map(finding => [finding.status, finding.verifier?.provider]),
-      [['confirmado', 'codex'], ['provavel', undefined], ['provavel', undefined]]);
-    assert.deepEqual(result.achados.slice(1).map(finding => finding.title),
-      observedOutput.findings.slice(1).map(({rule, message}) => `${rule}: ${message}`));
-    const persisted = await input.ledger.pool.query('SELECT status, payload FROM ac_verify_findings WHERE run_id=$1 ORDER BY achado_id', [result.runId]);
-    assert.deepEqual(persisted.rows.map(row => [row.status, row.payload.verifier?.provider]),
-      [['confirmado', 'codex'], ['provavel', undefined], ['provavel', undefined]]);
-    const differentRead = await run(exam => {
-      const coverage = exam.coverage.find(row => row.file === testFile)!;
-      coverage.read!.binding = 'b'.repeat(64);
+    await t.test('recusa o vínculo de outro conteúdo com digest do snapshot atual', async () => {
+      const result = await run((exam, snapshotSource) => {
+        const read = exam.coverage.find(row => row.file === testFile)!.read!;
+        assert.notEqual(read.sourceDigest, digest(snapshotSource));
+        read.sourceDigest = digest(snapshotSource);
+      }, true);
+      await assertPublished(result, ['provavel', 'provavel', 'provavel']);
     });
-    assert.deepEqual(differentRead.achados.map(finding => [finding.status, finding.verifier]),
-      [['provavel', null], ['provavel', null], ['provavel', null]]);
+    await t.test('recusa um vínculo de leitura diferente do que foi revisado', async () => {
+      const result = await run(exam => {
+        const coverage = exam.coverage.find(row => row.file === testFile)!;
+        coverage.read!.binding = 'b'.repeat(64);
+      });
+      await assertPublished(result, ['provavel', 'provavel', 'provavel']);
+    });
+    await t.test('conserva registros incompletos como histórico sem nova confirmação', async () => {
+      const oldRead = await run(exam => {
+        const read = exam.coverage.find(row => row.file === testFile)!.read!;
+        delete read.requestId;
+        delete read.promptDigest;
+      });
+      await assertPublished(oldRead, ['provavel', 'provavel', 'provavel']);
+      assert.match(await readFile(join(oldRead.directory, 'mapa.md'), 'utf8'), /checkout\.test\.ts \| lido/);
+
+      const oldVerdict = await run(exam => {
+        delete exam.findings[2]!.reviewReason;
+      });
+      await assertPublished(oldVerdict, ['confirmado', 'confirmado', 'provavel']);
+    });
   });
 });
 
