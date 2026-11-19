@@ -770,17 +770,18 @@ test('matriz exige uma asserção executada e atribuída a cada teste nas três 
 
 test('auditoria estática do Playwright distingue skip condicional de condição falsa', realTools, async () => {
   await withSyntheticRepo('qa-playwright-estatico-', async repo => {
-    writeFileSync(join(repo, 'requisitos.md'), 'REQ-01: pedidos\nREQ-02: entregas\nREQ-03: listagem\nREQ-04: exportação');
+    writeFileSync(join(repo, 'requisitos.md'), 'REQ-01: pedidos\nREQ-02: entregas\nREQ-03: listagem\nREQ-04: exportação\nREQ-05: cancelamento');
     writeFileSync(join(repo, 'pedidos.spec.ts'), [
       "import {test as scenario, expect} from '@playwright/test';",
       "scenario('REQ-01', () => { scenario['skip'](true, 'temporário'); expect(1).toBe(1); });",
       "scenario('REQ-02', () => { scenario.skip(false, 'controle'); expect(1).toBe(1); });",
       "scenario('REQ-03', ({browserName}) => { scenario.fixme(browserName === 'webkit', 'temporário'); expect(1).toBe(1); });",
       "scenario('REQ-04', () => { expect(1).toBe(1); });",
+      "scenario['skip']?.('REQ-05', () => expect(1).toBe(1));",
     ].join('\n'));
     const report = await collectQaModule({repoDir: repo});
-    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-TESTE-PULADO').map(f => f.line), [2, 4]);
-    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-REQUISITO-SEM-PROVA').map(f => f.line), [1, 3]);
+    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-TESTE-PULADO').map(f => f.line), [2, 4, 6]);
+    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-REQUISITO-SEM-PROVA').map(f => f.line), [1, 3, 5]);
     assert.match(coverageFor(report, 'qa-requisito:REQ-01').detail, /skip\/todo possível/);
     assert.doesNotMatch(coverageFor(report, 'qa-requisito:REQ-02').detail, /skip\/todo possível/);
   });

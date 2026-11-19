@@ -194,23 +194,27 @@ test('JSON do coletor vincula a função realmente executada e respeita a resolu
     cpSync(cleanFixtureDir, repo, {recursive: true});
     chmodSync(repo, 0o755);
     writeFileSync(join(repo, 'src', 'pedido novo.mjs'), 'let total = 0; export function validar(x) { return x + ++total; }');
-    writeFileSync(join(repo, 'src', 'pedido%20novo.mjs'), 'export function validar(x) { return x + 1; }');
-    writeFileSync(join(repo, 'src', 'operacoes.mjs'), 'export function somar(x) { return x + 1; }\nexport function subtrair(x) { return x - 1; }');
+    writeFileSync(join(repo, 'src', 'pedido%20novo.mjs'), 'export function identidadeLiteral(x) { return x + 1; }');
+    writeFileSync(join(repo, 'src', 'operacoes.mjs'), 'export function somar(x) { return x + 1; }\nexport function subtrair(x) { return x - 1; }\nexport async function buscar() { return 42; }');
     writeFileSync(join(repo, 'tests', 'vinculos.test.mjs'), [
       "import {test} from 'node:test'; import assert from 'node:assert/strict';",
       "import {validar} from '../src/pedido%20novo.mjs';",
-      "import {somar, subtrair} from '../src/operacoes.mjs';",
+      "import {identidadeLiteral} from '../src/pedido%2520novo.mjs';",
+      "import {somar, subtrair, buscar} from '../src/operacoes.mjs';",
       "test('QA-VALIDADOR: contador', () => assert.equal(validar(0), 1));",
-      "test('operação não exercida', () => { if (false) assert.equal(subtrair(1), 0); assert.equal(1 + 1, 2); });",
+      "test('REQ-31 operação não exercida', () => { if (false) assert.equal(subtrair(1), 0); assert.equal(1 + 1, 2); });",
+      "test('importa o nome com percentual', () => assert.equal(identidadeLiteral(1), 2));",
+      "test('função assíncrona', async () => assert.equal(await buscar(), 42));",
       "test('operação exercida', () => assert.equal(somar(1), 2));",
     ].join('\n'));
-    appendFileSync(join(repo, 'requisitos.md'), '\nREQ-31: `subtrair`\nREQ-32: `somar`\n');
+    appendFileSync(join(repo, 'requisitos.md'), '\nREQ-31: `subtrair`\nREQ-32: `somar`\nREQ-33: `buscar`\nREQ-34: `identidadeLiteral`\nREQ-35: `somar` e `subtrair`\n');
     const report = collect(pin, repo);
     assert.equal(row(report, 'node-test-v8').status, 'ok');
     assert.match(row(report, 'qa-propriedades-funcionais').detail, /4 de 5 casos/);
     assert.match(row(report, 'qa-requisito:REQ-32').detail, /somar/);
     const unproved = report.findings.filter(f => f.rule === 'QA-REQUISITO-SEM-PROVA');
     assert.ok(unproved.some(f => f.message.includes('REQ-31')));
-    assert.ok(!unproved.some(f => f.message.includes('REQ-32')));
+    for (const id of ['REQ-32', 'REQ-33', 'REQ-34']) assert.ok(!unproved.some(f => f.message.includes(id)), id);
+    assert.ok(unproved.some(f => f.message.includes('REQ-35')));
   } finally { rmSync(repo, {recursive:true, force:true}); }
 });
