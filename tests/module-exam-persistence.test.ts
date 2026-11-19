@@ -99,6 +99,13 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     assert.deepEqual((await recheck('A linha atual ainda sustenta a observação original?')).results, [{id: 'ACH-002', status: 'reaberto'}]);
     await unlink(originFile);
     assert.deepEqual((await recheck('A linha atual ainda sustenta a observação original?')).results, [{id: 'ACH-002', status: 'reaberto'}]);
+    const {rows: [legacyAudit]} = await input.ledger.pool.query(
+      `SELECT detail FROM ac_audit WHERE kind='module.finding_rechecked' AND detail->>'runId'=$1
+       ORDER BY id DESC LIMIT 1`, [result.runId],
+    );
+    assert.equal(legacyAudit.detail.source.origin, 'legacy-git');
+    assert.equal(legacyAudit.detail.source.commit, input.commit);
+    assert.equal(legacyAudit.detail.regressionProof, null);
   });
 });
 
