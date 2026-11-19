@@ -10,7 +10,7 @@ const collector = join(root, 'deploy/modules/banco/collector.rb');
 const fixtures = join(root, 'tests/fixtures/module-banco');
 
 type Report = {
-  coverage: Array<{tool: string; version: string; status: 'ok' | 'failed' | 'skipped'; detail: string}>;
+  coverage: Array<{tool: string; version: string; status: 'ok' | 'failed' | 'skipped'; detail: string; files?: string[]}>;
   findings: Array<{
     tool: string; rule: string; file: string; line: number; severity: string; message: string; evidence: string;
   }>;
@@ -208,9 +208,22 @@ test('C5 laboratório por digest prova a migração, restauração e os três de
     assert.equal(clean.findings.some(row => row.rule === rule), false, rule);
   }
   const query = 'banco/queries/latency.sql';
-  const queryDigest = createHash('sha256').update(readFileSync(join(fixtures, 'defective', query))).digest('hex');
-  const slow = defective.findings.find(row => row.rule === 'BANCO-CONSULTA-LENTA' && row.file === query)!;
-  assert.ok(defective.coverage.some(row => row.tool === 'pg_stat_statements' && row.status === 'ok'
-    && row.detail === `pg_stat_statements:query:${query}: linha ${slow.line}; ${slow.evidence} | SQL medido (sha256:${queryDigest})`));
+  const metrics = /^(queryid=-?[1-9]\d*; amostras=3; média=(\d+\.\d{3}) ms; blocos hit\/read=\d+\/\d+) \| SQL medido \(sha256:([0-9a-f]{64})\)$/;
+  for (const [variant, report] of [['defective', defective], ['clean', clean]] as const) {
+    const prefix = `pg_stat_statements:query:${query}: linha 2; `;
+    const rows = report.coverage.filter(row => row.tool === 'pg_stat_statements' && row.detail.startsWith(prefix));
+    assert.equal(rows.length, 1, variant);
+    const [row] = rows;
+    assert.equal(row.status, 'ok', variant);
+    assert.deepEqual(row.files, [query], variant);
+    const measurement = metrics.exec(row.detail.slice(prefix.length));
+    assert.ok(measurement, variant);
+    const queryDigest = createHash('sha256').update(readFileSync(join(fixtures, variant, query))).digest('hex');
+    assert.equal(measurement[3], queryDigest, variant);
+    assert.equal(Number(measurement[2]) >= 100, variant === 'defective', variant);
+    const findings = report.findings.filter(item => item.rule === 'BANCO-CONSULTA-LENTA' && item.file === query);
+    assert.deepEqual(findings.map(item => [item.tool, item.line, item.evidence]),
+      variant === 'defective' ? [['pg_stat_statements', 2, measurement[1]]] : [], variant);
+  }
   assert.ok(defective.coverage.some(row => row.tool === 'dexter' && row.status === 'ok' && row.detail.includes('planos hipotéticos comparados')));
 });
