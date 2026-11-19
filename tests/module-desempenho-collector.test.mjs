@@ -312,6 +312,103 @@ test('Lighthouse conserva recursos das páginas externas e omite referências qu
   }
 });
 
+function syntheticLighthouse(check) {
+  return `const assert = require('node:assert/strict');
+    const fs = require('node:fs');
+    if (process.argv[2] === 'collect') (async () => {
+      const {ci} = JSON.parse(fs.readFileSync(process.argv[3].slice(9)));
+      const urls = ci.collect.url;
+      await (${check.toString()})(assert, urls);
+      fs.mkdirSync('.lighthouseci');
+      for (const [i, url] of urls.entries()) {
+        fs.writeFileSync('.lighthouseci/lhr-' + i + '.json', JSON.stringify({requestedUrl: url, finalUrl: url,
+          categories: {performance: {score: 1}}, audits: {
+            'largest-contentful-paint': {numericValue: 100}, 'cumulative-layout-shift': {numericValue: 0},
+            'total-blocking-time': {numericValue: 0}}}));
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });`;
+}
+
+test('Lighthouse seleciona a primeira base HTML com href e serve somente os arquivos do snapshot', async t => {
+  const setup = await fixture(t);
+  const {root, repo} = setup;
+  await mkdir(join(repo, 'recursos', 'tema'), {recursive: true});
+  await mkdir(join(repo, 'guias'));
+  const bases = {
+    relativa: '<base target="_self"><base href="../recursos/tema/">',
+    ausente: '<base target="_self">',
+    invalida: '<base href="http://["><base href="about:blank">',
+    data: '<base href="data:text/plain,base"><base href="about:blank">',
+    javascript: '<base href="javascript:"><base href="about:blank">',
+    vazia: '<base href=""><base href="about:blank">',
+    inerte: '<template><base href="about:blank"></template>',
+    semOrigem: '<base href="about:blank">',
+  };
+  const routes = Object.entries(bases).map(([name]) => ({path: `/${name}?modo=teste`, file: `guias/${name}.html`}));
+  for (const [name, base] of Object.entries(bases)) {
+    await writeFile(join(repo, `guias/${name}.html`), `<!doctype html>${base}<link rel="stylesheet" href="estilo.css"><h1>${name}</h1>`);
+  }
+  await writeFile(join(repo, 'guias', 'estilo.css'), '/* estilo do documento */');
+  await writeFile(join(repo, 'recursos', 'tema', 'estilo.css'), '/* estilo da base */');
+  await writeFile(join(root, 'avulso.css'), '/* fora do snapshot declarado */');
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({staticDir: 'recursos', routes}));
+
+  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls) => {
+    assert.equal(urls.length, 7);
+    for (const url of urls) {
+      const page = new URL(url);
+      assert.equal(page.hostname, '127.0.0.1');
+      assert.equal(page.search, '?modo=teste');
+      const name = page.pathname.split('/').at(-1).replace('.html', '');
+      const response = await fetch(page);
+      assert.equal(response.status, 200);
+      assert.match(await response.text(), new RegExp(`<h1>${name}</h1>`));
+      const assetBase = name === 'relativa' ? new URL('../recursos/tema/', page) : page;
+      const asset = await fetch(new URL('estilo.css', assetBase));
+      assert.equal(asset.status, 200);
+      assert.equal(await asset.text(), name === 'relativa' ? '/* estilo da base */' : '/* estilo do documento */');
+      assert.equal((await fetch(new URL('/avulso.css', page))).status, 404);
+      const segment = page.pathname.split('/')[1];
+      assert.equal((await fetch(new URL(`/${segment}/avulso.css`, page))).status, 404);
+    }
+  })});
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => ({path: route, file})), routes.slice(0, -1));
+  assert.ok(output.coverage.some(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+    row.detail === 'rota=/semOrigem?modo=teste; escopo parcial: base HTML fora da origem do servidor estático'));
+});
+
+test('Lighthouse registra escopo parcial para formas de documento embutido nas duas raízes estáticas', async t => {
+  const setup = await fixture(t);
+  const {repo} = setup;
+  const pages = [
+    ['public/controle.html', '<template><iframe srcdoc="<p>Inerte</p>"></iframe></template><iframe title="Vazio"></iframe>'],
+    ['public/inline.html', '<iframe srcdoc="&lt;p&gt;Documento&lt;/p&gt;" src="suporte.html"></iframe>', 'iframe[srcdoc]'],
+    ['public/vazio.html', '<iframe srcdoc=""></iframe>', 'iframe[srcdoc]'],
+    ['public/frame.html', '<!doctype html><frameset><frame src="suporte.html"></frameset>', 'frame[src]'],
+    ['externo.html', '<iframe src="public/suporte.html"></iframe>', 'iframe[src]'],
+    ['public/objeto.html', '<object data="suporte.html" type="text/html"></object>', 'object[data]'],
+    ['public/embed.html', '<embed src="suporte.html" type="text/html">', 'embed[src]'],
+  ];
+  const routes = pages.map(([file], i) => ({file, path: `/declarada-${i}`}));
+  for (const [file, html] of pages) await writeFile(join(repo, file), html);
+  await writeFile(join(repo, 'public', 'suporte.html'), '<p>Documento sintético de apoio</p>');
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({routes: [
+    ...routes, {path: '/suporte', file: 'public/suporte.html', page: false},
+  ]}));
+
+  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls) => {
+    assert.deepEqual(urls.map(url => new URL(url).pathname), ['/controle.html']);
+    const response = await fetch(urls[0]);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Inerte/);
+  })});
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => ({path: route, file})), routes.slice(0, 1));
+  const omissions = output.coverage.filter(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+    row.detail.includes('documento embutido'));
+  assert.deepEqual(omissions.map(row => row.detail), pages.slice(1).map(([, , element], i) =>
+    `rota=${routes[i + 1].path}; escopo parcial: documento embutido em ${element} fora da interpretação estática`));
+});
+
 test('identifica declarações excedentes mesmo depois do limite de leitura das rotas', async t => {
   const setup = await fixture(t);
   const routes = Array.from({length: 41}, (_, i) => `/declarada-${i}`);

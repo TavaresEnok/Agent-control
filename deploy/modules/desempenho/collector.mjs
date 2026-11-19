@@ -24,6 +24,7 @@ import {
 const REPO_ROOT = '/repo';
 const MAX_HTTP_ROUTES = 8;
 const K6_REQUESTS_PER_ROUTE = 3;
+const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
 const isHtml = path => /\.html?$/i.test(path);
 
 function toolExit(file, args, {timeout, ...options}) {
@@ -332,36 +333,65 @@ function* imageCandidates(value) {
   }
 }
 
-function hasEscapingHtmlReference(html, pageUrl, prefix) {
-  const pending = [parse(html)];
+function* documentElements(document) {
+  const pending = [document];
+  while (pending.length) {
+    const node = pending.pop();
+    for (let i = (node.childNodes?.length ?? 0) - 1; i >= 0; i--) pending.push(node.childNodes[i]);
+    if (node.tagName) yield node;
+  }
+}
+
+function embeddedDocument(tag, attrs) {
+  if (tag === 'iframe' && attrs.some(({name}) => name === 'srcdoc')) return 'iframe[srcdoc]';
+  const destination = tag === 'object' ? 'data' : 'src';
+  if (['iframe', 'frame', 'object', 'embed'].includes(tag) &&
+      attrs.some(({name, value}) => name === destination && /[^\t\n\f\r ]/.test(value))) {
+    return `${tag}[${destination}]`;
+  }
+}
+
+function staticDocumentOmission(html, pageUrl, prefix) {
+  const document = parse(html);
   const documentUrl = new URL(pageUrl);
   let base = documentUrl;
-  let seenBase = false;
-  while (pending.length) {
-    const {attrs, childNodes, tagName} = pending.pop();
-    if (childNodes) {
-      for (let i = childNodes.length - 1; i >= 0; i--) pending.push(childNodes[i]);
+  let baseElement;
+  const escapes = (reference, url) => prefix && escapesSnapshot(reference, url, prefix);
+  const outsideSnapshot = 'referência relativa sai da raiz do snapshot';
+  for (const node of documentElements(document)) {
+    if (node.namespaceURI !== HTML_NAMESPACE || node.tagName !== 'base') continue;
+    const href = node.attrs.find(attribute => attribute.name === 'href');
+    if (!href) continue;
+    // O primeiro href ocupa a posição mesmo quando a URL congela no endereço do documento.
+    baseElement = node;
+    const destination = URL.parse(href.value, documentUrl);
+    if (destination && !['data:', 'javascript:'].includes(destination.protocol)) {
+      if (escapes(href.value, documentUrl)) return outsideSnapshot;
+      if (destination.origin !== documentUrl.origin) return 'escopo parcial: base HTML fora da origem do servidor estático';
+      base = destination;
     }
-    if (tagName === 'base') {
-      const href = attrs.find(attribute => attribute.name === 'href');
-      if (!seenBase && href) {
-        seenBase = true;
-        if (escapesSnapshot(href.value, documentUrl, prefix)) return true;
-        base = URL.parse(href.value, documentUrl) ?? documentUrl;
-      }
-      continue;
+    break;
+  }
+
+  let beforeBase = Boolean(baseElement);
+  for (const node of documentElements(document)) {
+    const {attrs, tagName, namespaceURI} = node;
+    if (node === baseElement) beforeBase = false;
+    if (namespaceURI === HTML_NAMESPACE) {
+      if (tagName === 'base') continue;
+      const embedded = embeddedDocument(tagName, attrs);
+      if (embedded) return `escopo parcial: documento embutido em ${embedded} fora da interpretação estática`;
     }
-    if (base.origin !== documentUrl.origin) continue;
-    for (const {name, value} of attrs ?? []) {
+    // Um recurso anterior à base também pode ser solicitado durante o parsing do documento.
+    const escapesFromPage = reference => escapes(reference, base) || (beforeBase && escapes(reference, documentUrl));
+    for (const {name, value} of attrs) {
       if (name === 'srcset' || name === 'imagesrcset') {
         for (const candidate of imageCandidates(value)) {
-          if (escapesSnapshot(candidate, base, prefix)) return true;
+          if (escapesFromPage(candidate)) return outsideSnapshot;
         }
-      } else if ((name === 'src' || name === 'poster' || name === 'href' || (name === 'data' && tagName === 'object')) &&
-          escapesSnapshot(value, base, prefix)) return true;
+      } else if (['src', 'poster', 'href'].includes(name) && escapesFromPage(value)) return outsideSnapshot;
     }
   }
-  return false;
 }
 
 async function serveStaticPlan(root, plan) {
@@ -380,7 +410,7 @@ async function serveStaticPlan(root, plan) {
     for (const route of plan.targets) {
       if (!route.page) { targets.push(route); continue; }
       const fromStaticRoot = relative(plan.rootDir, join(root, route.file));
-      let pageUrl;
+      let pageUrl, prefix;
       if (fromStaticRoot.startsWith('../') || isAbsolute(fromStaticRoot)) {
         if (!external) {
           // O prefixo conserva a árvore do snapshot para URLs relativas. A raiz
@@ -390,19 +420,18 @@ async function serveStaticPlan(root, plan) {
           while (entries.has(segment)) segment += '-';
           external = await serve(plan.rootDir, {mount: {segment, root}});
         }
-        pageUrl = external.origin + '/' + segment + pagePath(route.file);
-        const html = readFileSync(join(root, route.file), 'utf8');
-        if (hasEscapingHtmlReference(html, pageUrl, '/' + segment + '/')) {
-          targets.push({...route, page: false, lighthouseOmission: 'referência relativa sai da raiz do snapshot'});
-          continue;
-        }
+        prefix = '/' + segment + '/';
+        pageUrl = external.origin + prefix.slice(0, -1) + pagePath(route.file);
       } else {
         canonical ??= await serve(plan.rootDir);
         pageUrl = canonical.origin + pagePath(fromStaticRoot);
       }
       const queryIndex = route.path.indexOf('?');
       const query = queryIndex < 0 ? '' : route.path.slice(queryIndex);
-      targets.push({...route, pageUrl: pageUrl + query});
+      pageUrl += query;
+      const html = readFileSync(join(root, route.file), 'utf8');
+      const lighthouseOmission = staticDocumentOmission(html, pageUrl, prefix);
+      targets.push(lighthouseOmission ? {...route, page: false, lighthouseOmission} : {...route, pageUrl});
     }
     return {origin: http.origin, close, targets};
   } catch (error) {
