@@ -1,0 +1,13 @@
+{
+  "k6": {
+    "version": "2.4.0",
+    "linuxAmd64": {
+      "url": "https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-linux-amd64.tar.gz",
+      "sha256": "5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87",
+      "member": "k6-v2.4.0-linux-amd64/k6"
+    }
+  },
+  "toxiproxy-server": {
+    "version": "2.12.0"
+  }
+}
