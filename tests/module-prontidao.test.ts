@@ -16,7 +16,7 @@ import {
   runCollector,
   validateTargetUrl,
 } from '../deploy/modules/prontidao/run-collector.mjs';
-import {parseModuleCollectorOutput, validateModuleCollectorPublication} from '../src/verification-modules.ts';
+import {parseModuleCollectorOutput, validateModuleCollectorPublication, writeModuleReport} from '../src/verification-modules.ts';
 import {hasKnownSecret} from '../src/verify-redact.ts';
 
 const moduleDir = fileURLToPath(new URL('../deploy/modules/prontidao/', import.meta.url));
@@ -2404,6 +2404,70 @@ test('R6: argumentos ambíguos afetam apenas a cobertura correspondente', async 
       assert.equal(status(out, 'backup-restauracao'), 'ok', line);
       assert.equal(status(out, 'disco-memoria'), 'ok', line);
     }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('R8: validade do timeout, posição do executável e array HTTP genérico', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r8-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'app.service'), '[Service]\nStandardOutput=append:/var/log/app.log\n');
+    const audit = async (script: string) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/bash\n${script}\n`);
+      const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+      await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(out), {module: 'prontidao'}));
+      return out;
+    };
+    const has = (out: ReturnType<typeof runCollector>, rule: string) => out.findings.some(f => f.rule === rule);
+    const status = (out: ReturnType<typeof runCollector>, pillar: string) => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status;
+    for (const args of ['--signal=143 30s', '1e1s', '-k 1e-2s 0x1p2s', '+1s', '.1s']) {
+      const out = await audit(`timeout ${args} npm run personal:watch`);
+      assert.equal(status(out, 'alertas-logs'), 'ok', args);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), false, args);
+    }
+    const empty = await audit('timeout --signal= 30s npm run personal:watch');
+    assert.equal(status(empty, 'alertas-logs'), 'ok');
+    assert.equal(has(empty, 'PRONTIDAO-ALERTA-AUSENTE'), true);
+    const uncertain = await audit('timeout --signal=160 30s npm run personal:watch');
+    assert.equal(status(uncertain, 'alertas-logs'), 'failed');
+    assert.equal(status(uncertain, 'backup-restauracao'), 'ok');
+    assert.equal(has(uncertain, 'PRONTIDAO-ALERTA-AUSENTE'), false);
+    for (const line of [
+      `timeout "$LIMITE" /usr/bin/printf '%s\\n' pg_dump npm run personal:watch`,
+      `timeout --signal="$SINAL" 30s /usr/bin/printf '%s\\n' pg_dump npm run personal:watch && true`,
+    ]) {
+      const out = await audit(line);
+      for (const pillar of ['alertas-logs', 'backup-restauracao', 'disco-memoria']) assert.equal(status(out, pillar), 'ok', line);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), true, line);
+      assert.equal(has(out, 'PRONTIDAO-BACKUP-AUSENTE'), true, line);
+    }
+    const generic = await audit([
+      'request() {',
+      '  local destination="$1"',
+      '  local args=(-sS -X POST "$destination" -H "Content-Type: application/json")',
+      '  if [ -n "$2" ]; then args+=(-d "$2"); fi',
+      '  curl "${args[@]}"',
+      '}',
+    ].join('\n'));
+    assert.equal(status(generic, 'alertas-logs'), 'failed');
+    assert.equal(status(generic, 'backup-restauracao'), 'ok');
+    assert.equal(status(generic, 'disco-memoria'), 'ok');
+    assert.equal(has(generic, 'PRONTIDAO-ALERTA-AUSENTE'), false);
+    assert.equal(has(generic, 'PRONTIDAO-LOGROTATE-AUSENTE'), false);
+    assert.equal(has(generic, 'PRONTIDAO-BACKUP-AUSENTE'), true);
+    assert.ok(generic.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed' && c.detail.includes('argumentos operacionais de alertas')));
+    // The report receives no reviewed findings here, isolating the coverage contribution to its note.
+    const raw = parseModuleCollectorOutput(JSON.stringify(generic), {module: 'prontidao'});
+    mkdirSync(join(dir, 'reports'));
+    const report = await writeModuleReport({dataDirectory: join(dir, 'reports'), projectId: '11111111-1111-4111-8111-111111111111',
+      module: 'prontidao', runId: '33333333-3333-4333-8333-333333333333', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: raw.coverage, fileCoverage: [], achados: [], raw});
+    assert.equal(report.summary.toolFailures, raw.coverage.filter(c => c.status === 'failed').length);
+    assert.ok(report.summary.toolFailures > 0);
+    assert.match(readFileSync(join(report.directory, 'README.md'), 'utf8'), /Nota de falha: execução com .*falha/);
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }

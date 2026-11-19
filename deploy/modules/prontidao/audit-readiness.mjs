@@ -1674,7 +1674,7 @@ function resticCommand(args) {
 const BACKUP_CANDIDATE_RE = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
 
 const SHELL_CONTROL_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', '{', '!']);
-const TIMEOUT_DURATION_RE = /^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/;
+const TIMEOUT_DURATION_RE = /^[ \t]*\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|0x(?:[\da-f]+(?:\.[\da-f]*)?|\.[\da-f]+)(?:p[+-]?\d+)?|inf(?:inity)?)[smhd]?$/i;
 // GNU coreutils on the Linux image: traditional names, aliases and real-time signals.
 const LINUX_SIGNAL_NAMES = new Set('EXIT HUP INT QUIT ILL TRAP ABRT IOT BUS FPE KILL USR1 SEGV USR2 PIPE ALRM TERM STKFLT CHLD CLD CONT STOP TSTP TTIN TTOU URG XCPU XFSZ VTALRM PROF WINCH IO POLL PWR SYS'.split(' '));
 function timeoutSignal(value) {
@@ -1683,7 +1683,10 @@ function timeoutSignal(value) {
   if (LINUX_SIGNAL_NAMES.has(signal)) return 'valid';
   if (/^\d+$/.test(signal)) {
     const n = Number(signal);
-    return n <= 64 && n !== 32 && n !== 33 ? 'valid' : 'invalid';
+    if (n <= 64) return n !== 32 && n !== 33 ? 'valid' : 'invalid';
+    if (n < 128) return 'invalid';
+    if (n >= 128 && n <= 159) return 'valid';
+    return 'dynamic'; // Other numeric encodings depend on the utility/platform.
   }
   const rt = /^RT(MIN|MAX)(?:([+-])(\d+))?$/.exec(signal);
   if (rt) {
@@ -1694,7 +1697,8 @@ function timeoutSignal(value) {
   return 'invalid';
 }
 function invalidDuration(value) {
-  const dynamic = /[$`*?\[\]]/.test(value);
+  // Numeric-looking forms outside our recognized grammar may be accepted by strtod.
+  const dynamic = /[$`*?\[\]]/.test(value) || /^[ \t]*\+?(?:\d|\.)/.test(value);
   return {words: [], query: !dynamic, ambiguous: dynamic};
 }
 function signalResult(value) {
@@ -1792,6 +1796,13 @@ function skipWrapperOptions(words, spec, binary) {
   const {flagChars, valueChars, nonExecFlagChars, longFlags, nonExecLongFlags, longValues, longOptionalEquals} = spec;
   const strict = binary === 'sudo' || binary === 'timeout';
   let i = 0;
+  let uncertain = false;
+  const acceptUncertain = result => {
+    if (!result) return true;
+    if (!result.ambiguous) return false;
+    uncertain = true;
+    return true;
+  };
   while (i < words.length && !words[i].operator) {
     const opt = words[i].text ?? '';
     if (opt === '--') {
@@ -1804,13 +1815,14 @@ function skipWrapperOptions(words, spec, binary) {
       const name = eq === -1 ? opt : opt.slice(0, eq);
       if (eq !== -1) {
         if (longValues.has(name) || longOptionalEquals.has(name) || (!strict && longFlags.has(name))) {
-          if (strict && opt.slice(eq + 1) === '') return {words: [], query: false, ambiguous: true};
+          if (strict && opt.slice(eq + 1) === '') return {words: [], query: binary === 'timeout', ambiguous: binary !== 'timeout'};
           if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(opt.slice(eq + 1))) {
-            return invalidDuration(opt.slice(eq + 1));
+            const result = invalidDuration(opt.slice(eq + 1));
+            if (!acceptUncertain(result)) return result;
           }
           if (binary === 'timeout' && name === '--signal') {
             const result = signalResult(opt.slice(eq + 1));
-            if (result) return result;
+            if (!acceptUncertain(result)) return result;
           }
           i++;
           continue;
@@ -1826,11 +1838,12 @@ function skipWrapperOptions(words, spec, binary) {
           return {words: [], query: false, ambiguous: true};
         }
         if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(next?.text ?? '')) {
-          return invalidDuration(next?.text ?? '');
+          const result = invalidDuration(next?.text ?? '');
+          if (!acceptUncertain(result)) return result;
         }
         if (binary === 'timeout' && name === '--signal') {
           const result = signalResult(next?.text ?? '');
-          if (result) return result;
+          if (!acceptUncertain(result)) return result;
         }
         i += 2;
         continue;
@@ -1862,12 +1875,13 @@ function skipWrapperOptions(words, spec, binary) {
         }
         if (binary === 'timeout' && ch === 's') {
           const result = signalResult(inlineValue ? opt.slice(j + 1) : (next?.text ?? ''));
-          if (result) return result;
+          if (!acceptUncertain(result)) return result;
         }
         if (binary === 'timeout' && ch === 'k') {
           const val = inlineValue ? opt.slice(j + 1) : (next?.text ?? '');
           if (!TIMEOUT_DURATION_RE.test(val)) {
-            return invalidDuration(val);
+            const result = invalidDuration(val);
+            if (!acceptUncertain(result)) return result;
           }
         }
         break;
@@ -1888,9 +1902,10 @@ function skipWrapperOptions(words, spec, binary) {
       return {words: [], query: false, ambiguous: false};
     }
     if (!TIMEOUT_DURATION_RE.test(rest[0].text ?? '')) {
-      return invalidDuration(rest[0].text ?? '');
+      const result = invalidDuration(rest[0].text ?? '');
+      if (!acceptUncertain(result)) return result;
     }
-    return {words: rest.slice(1), query: false, ambiguous: false};
+    return {words: rest.slice(1), query: false, ambiguous: uncertain, knownPosition: uncertain};
   }
   return {words: rest, query: false, ambiguous: false};
 }
@@ -1898,6 +1913,7 @@ function skipWrapperOptions(words, spec, binary) {
 function unwrapCommandWords(segWords) {
   let words = segWords.map(word => ({...word}));
   let openedCommandSub = false;
+  let uncertain = false;
   while (words.length > 0) {
     const first = words[0];
     if (first.operator) break;
@@ -1937,7 +1953,8 @@ function unwrapCommandWords(segWords) {
     if (spec) {
       words.shift();
       const unwrapped = skipWrapperOptions(words, spec, binary);
-      if (unwrapped.query || unwrapped.ambiguous) return unwrapped;
+      if (unwrapped.query || (unwrapped.ambiguous && !unwrapped.knownPosition)) return unwrapped;
+      uncertain ||= unwrapped.ambiguous;
       words = unwrapped.words;
       continue;
     }
@@ -1950,7 +1967,7 @@ function unwrapCommandWords(segWords) {
       words[words.length - 1] = {...last, text: last.text.slice(0, -1)};
     }
   }
-  return {words, query: false, ambiguous: false};
+  return {words, query: false, ambiguous: uncertain, knownPosition: uncertain};
 }
 
 function extractOperationalTargets(args, {
@@ -2086,7 +2103,8 @@ function nodeScriptTarget(args) {
 }
 
 function isBackupCandidateSegment(segWords) {
-  const {words, ambiguous} = unwrapCommandWords(segWords);
+  const {words, ambiguous, knownPosition} = unwrapCommandWords(segWords);
+  if (ambiguous && knownPosition) return isBackupCandidateSegment(words);
   if (ambiguous) return segWords.slice(1).some((word, i) =>
     /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(basename(word.text ?? ''))
       && isBackupCandidateSegment(segWords.slice(i + 1)));
@@ -2112,6 +2130,12 @@ function evaluateShellSegment(segWords, depth = 0) {
   const res = {alerting: false, disk: false, logrotate: false, incomplete: false, partialAlert: false, partialDisk: false};
   const unwrapped = unwrapCommandWords(segWords);
   if (unwrapped.ambiguous) {
+    if (unwrapped.knownPosition) {
+      const sub = evaluateShellSegment(unwrapped.words, depth + 1);
+      res.partialAlert = sub.alerting || sub.logrotate || sub.partialAlert;
+      res.partialDisk = sub.disk || sub.partialDisk;
+      return res;
+    }
     // Inspect possible command positions without treating option values as evidence.
     for (let i = 1; i < segWords.length; i++) {
       if (!/^(?:alertmanager|npm|pnpm|node|curl|wget|df|docker|logrotate|(?:ba|da|k|z)?sh)$/.test(basename(segWords[i].text ?? ''))) continue;
