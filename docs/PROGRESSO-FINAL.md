@@ -335,3 +335,12 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:16 UTC — Documentação 96a7a766 passou em 21/21 com ferramentas fixadas locais e no contêiner. A primeira passagem correu sem a opção das ferramentas locais e pulou nove testes; a repetição executou todos. A CLI está em prova em 43378796.
 - 19/11/2026 04:16 UTC — Banco incremental 3961ea53 passou nas seis provas pela CLI. Prontidão em candidato 8e4cb444 com a renovação da reserva durante a sondagem passiva, evidência de cabeçalho saneada e conferência do projeto.
 - 19/11/2026 04:18 UTC — A primeira CLI incremental de prontidão encontrou a diretiva de TLS no arquivo esperado, mas a asserção esperava a representação antiga da evidência. Aplicada a conferência de arquivo, linha e mensagem fixa já comprovada na homologação. A revisão de c7beedd2 localizou dois casos de integridade ou compatibilidade envolvendo retenção do log e stderr. C-BASE-R9 aberta. A CLI de documentação 96a7a766 passou 6/6.
+- 19/11/2026 04:18 UTC — Prontidão incremental 64d39b74 passou em 9/9, incluindo a CLI e o servidor HTTPS local autorizado. A aplicação incremental de desempenho já reúne o registro de medições e a recuperação. A prova da próxima correção de recursos Docker aguarda C7-R6.
+- 19/11/2026 04:19 UTC — Revisor encerrou C-REVERIFICAR-R2 em 0e8ad897 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:19 UTC — Revisão C-EXAME-ORIGEM iniciada por Sol high normal somente leitura em 7b512f4d.
+- 19/11/2026 04:19 UTC — As migrações passaram em PostgreSQL descartável partindo do esquema A2 com um projeto cadastrado. QA aplicou até 113 com a lacuna 111, a etapa de desempenho aplicou 111 e uma repetição preservou o mesmo projeto e as versões sem duplicação. O TypeScript de 023d7625 também passou.
+- 19/11/2026 04:19 UTC — Iniciada prova da CLI incremental documentacao em e53a5ed0.
+- 19/11/2026 04:19 UTC — A CLI incremental de documentacao em e53a5ed0 passou nas seis provas com a imagem fixada.
+- 19/11/2026 04:19 UTC — Iniciada prova da CLI incremental conformidade em bd23de33.
+- 19/11/2026 04:20 UTC — A CLI incremental de conformidade em bd23de33 passou nas seis provas com a imagem fixada.
+- 19/11/2026 04:20 UTC — A revisão de reverificação em 0e8ad897 encontrou que um teste sempre verde podia satisfazer o requisito e que o número da linha podia passar a outra função. C-REVERIFICAR-R3 exige o mesmo teste com resultado distinto nas duas revisões e origem estável. A ordem será executada depois das mudanças no runtime compartilhado.
