@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -47,6 +47,29 @@ test('entrypoint publica ferramentas novas e preserva linhas das suítes no modo
   assert.deepEqual(fault.coverage.filter(item => item.status === 'failed').map(item => item.tool), ['hypothesis']);
   assert.deepEqual(healthy.findings, []);
   assert.deepEqual(fault.findings, []);
+});
+
+test('snapshot copia o manifesto de vendor Go dentro dos limites de arquivos', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'qa-vendored-snapshot-'));
+  try {
+    const module = join(temp, 'go');
+    mkdirSync(join(module, 'vendor'), {recursive: true});
+    writeFileSync(join(module, 'go.mod'), 'module qa.local/snapshot\n\ngo 1.27\n');
+    writeFileSync(join(module, 'vendor/modules.txt'), '');
+    writeFileSync(join(module, 'vendor/readme.txt'), 'fixture\n');
+    writeFileSync(join(module, 'modules.txt'), 'fixture\n');
+    const execution = spawnSync('/bin/sh', [join(moduleDir, 'entrypoint.sh')], {
+      env: {PATH: process.env.PATH, QA_HOST_TEST_MODE: '1', QA_REPO_DIR: temp},
+      encoding: 'utf8', timeout: 10_000,
+    });
+    assert.equal(execution.status, 0, execution.error?.message ?? execution.stderr);
+    const output: Output = JSON.parse(execution.stdout);
+    assert.match(output.coverage.find(item => item.tool === 'qa-snapshot')?.detail ?? '', /^2 arquivos copiados/);
+    assert.ok(output.coverage.some(item => item.tool === 'qa-snapshot-exclusao' &&
+      item.detail === '2 arquivos de extensões fora da coleta'));
+  } finally {
+    rmSync(temp, {recursive: true, force: true});
+  }
 });
 
 test('publica mutações medidas e separa compilação do mutante, referência reprovada e falha operacional', () => {
@@ -110,7 +133,7 @@ test('propriedades publicam evidência limitada e preservam falsificação duran
   assert.match(output.extraRows[0].detail, /falha operacional/);
   assert.equal(output.findings.length, 50);
   assert.equal(output.findings[0].rule, 'QA-PROPRIEDADE-FALSIFICADA');
-  assert.match(output.findings[0].evidence, /test_arithmetic\.py:10.*reprovou por asserção após 4 chamadas.*42/);
+  assert.match(output.findings[0].evidence, /test_arithmetic\.py:10.*reprovou após 4 chamadas.*42/);
   assert.doesNotMatch(JSON.stringify(output), /dados sintéticos/);
   const terminal = publishProperties({...report, status: 'not-run', properties: []}, row, pathLabel);
   assert.equal(terminal.coverageRow.status, 'failed');

@@ -813,8 +813,9 @@ export async function removeModuleSnapshot(snapshot: string): Promise<void> {
   await rm(parent, {recursive: true, force: true});
 }
 
-function moduleImageMissing(diagnostic: string): boolean {
-  return /^(?:docker: )?(?:Error response from daemon|Error): No such image:/im.test(diagnostic);
+function moduleImageMissing(diagnostic: string, image: string): boolean {
+  const message = diagnostic.replace(/\r?\n$/, '').replace(/^docker: /, '');
+  return message === 'Error response from daemon: No such image: ' + image || message === 'Error: No such image: ' + image;
 }
 
 async function confirmCollectorStarted(run: CollectorProcess, id: string, timeoutMs: number, signal: AbortSignal): Promise<void> {
@@ -883,7 +884,7 @@ export async function runModuleCollectorContainer(input: {
       '[{{json .Config.Entrypoint}},{{json .Config.Cmd}}]', input.image],
       {timeoutMs: daemonTimeout, maxStdoutBytes: 1024 * 1024, signal: input.signal});
     if (imageCommand.code !== 0) {
-      throw new Refusal(moduleImageMissing(imageCommand.stderr) ? 'VERIFY_MODULE_IMAGE_MISSING' : 'VERIFY_TOOLS_FAILED', 503);
+      throw new Refusal(moduleImageMissing(imageCommand.stderr, input.image) ? 'VERIFY_MODULE_IMAGE_MISSING' : 'VERIFY_TOOLS_FAILED', 503);
     }
     const wrapper = assertHostPath(join(dirname(snapshot), 'collector-entrypoint'));
     await writeFile(wrapper, collectorOutputWrapper(imageCommand.stdout, token, maxStdoutBytes), {flag: 'wx', mode: 0o555});
@@ -909,7 +910,7 @@ export async function runModuleCollectorContainer(input: {
       const created = await run(createArgs, daemonOptions);
       if (created.code !== 0) {
         // A missing image with --pull never is a definitive daemon rejection.
-        creationRejected = moduleImageMissing(created.stderr);
+        creationRejected = moduleImageMissing(created.stderr, input.image);
         throw new Refusal(creationRejected ? 'VERIFY_MODULE_IMAGE_MISSING' : 'VERIFY_TOOLS_FAILED', 503);
       }
       const candidate = createdContainerId(created.stdout);

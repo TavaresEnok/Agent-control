@@ -696,13 +696,13 @@ test('rejeição de imagem ausente registra falha sem deixar uma reserva de cont
   await withModuleRecoveryFixture(databaseUrl!, async base => {
     const execute: CollectorProcess = async argv => {
       if (argv[1] === 'image') return imageCommand();
-      if (argv[1] === 'create') return {...reply(1), stderr: 'Error response from daemon: No such image: fixture'};
+      if (argv[1] === 'create') return {...reply(1), stderr: 'Error response from daemon: No such image: ' + image};
       assert.equal(argv[2], 'ls');
       return reply(0);
     };
     const result = await runVerificationModule({...base, image, executeCollectorProcess: execute});
     assert.equal(result.hasToolFailure, true);
-    assert.match(result.toolCoverage[0]!.detail, /VERIFY_MODULE_IMAGE_MISSING/);
+    assert.equal(result.toolCoverage[0]!.detail, 'Imagem fixada do módulo ausente no Docker local (VERIFY_MODULE_IMAGE_MISSING).');
     const {rows: [row]} = await base.ledger.pool.query('SELECT collector_container_token FROM ac_verify_runs WHERE id=$1', [result.runId]);
     assert.equal(row.collector_container_token, null);
     assert.equal((await runVerificationModule({...base, collectorOutput: output})).hasToolFailure, false);
@@ -718,7 +718,7 @@ test('recuperação conserva o token de criação incerta sem impedir o sucessor
       if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {
         token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
-        return reply(1);
+        return {...reply(1), stderr: 'Error response from daemon: context deadline exceeded\nError: No such image: ' + image};
       }
       if (argv[2] === 'ls') return reply(0, exists ? `${containerId} ${moduleContainerName(token)} ${token}` : '');
       assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);

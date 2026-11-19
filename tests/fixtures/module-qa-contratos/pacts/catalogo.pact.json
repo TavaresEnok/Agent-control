@@ -1,0 +1,33 @@
+{
+  "consumer": {"name": "Consumidor Sintético"},
+  "provider": {"name": "Provedor Sintético"},
+  "interactions": [
+    {
+      "description": "leitura nominal de catálogo",
+      "request": {
+        "method": "GET",
+        "path": "/catalogo",
+        "query": {"categoria": ["papel"]}
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "application/json"},
+        "body": {"itens": [{"codigo": "lapis", "preco": 2}]}
+      }
+    },
+    {
+      "description": "soma nominal de dois números",
+      "request": {
+        "method": "POST",
+        "path": "/soma",
+        "headers": {"Content-Type": "application/json"},
+        "body": {"a": 2, "b": 3}
+      },
+      "response": {
+        "status": 200,
+        "body": {"total": 5}
+      }
+    }
+  ],
+  "metadata": {"pactSpecification": {"version": "3.0.0"}}
+}

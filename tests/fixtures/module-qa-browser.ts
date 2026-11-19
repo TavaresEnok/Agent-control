@@ -21,7 +21,7 @@ export const hostRenderer = `host/${process.platform}/${process.arch}`;
 export function referenceMetadata(renderer: string) {
   return {
     schema: 1, width: 800, height: 600, deviceScaleFactor: 1, playwright: '1.65.1', chromium: '159.0.8154.6', renderer,
-    presentation: 'chromium-headless-css-light-reduced-motion-pt-BR-UTC-v1',
+    presentation: 'chromium-headless-css-light-reduced-motion-pt-BR-UTC-v2',
   };
 }
 
@@ -42,7 +42,7 @@ export type BrowserOutput = {
   findings: {tool: string; rule: string; file: string; line: number; evidence: string}[];
 };
 
-export function assertBrowserFixture(report: BrowserOutput) {
+export function assertBrowserFixture(report: BrowserOutput, {compareVisual = true} = {}) {
   const row = (tool: string) => {
     const result = report.coverage.find(item => item.tool === tool);
     assert.ok(result, tool);
@@ -61,13 +61,22 @@ export function assertBrowserFixture(report: BrowserOutput) {
   assert.match(row('qa-contraste:public/controle.html').detail, /0 violações/);
   assert.equal(row('qa-contraste:public/defeito.html').status, 'ok');
   assert.match(row('qa-regressao-visual:public/defeito.html').detail, /sem referência versionada/);
+  const visual = report.findings.filter(finding => finding.rule === 'QA-REGRESSAO-VISUAL');
+  assert.deepEqual(report.findings.filter(finding => /controle\.html$/.test(finding.file)), []);
+  if (!compareVisual) {
+    for (const file of ['visual-controle.html', 'visual-defeito.html']) {
+      const coverage = row(`qa-regressao-visual:public/${file}`);
+      assert.equal(coverage.status, 'skipped');
+      assert.match(coverage.detail, /exige o perfil da imagem OCI fixada/);
+    }
+    assert.deepEqual(visual, []);
+    return;
+  }
   assert.equal(row('qa-regressao-visual:public/visual-controle.html').status, 'ok');
   assert.match(row('qa-regressao-visual:public/visual-controle.html').detail, /0\/480000 pixels/);
   assert.equal(row('qa-regressao-visual:public/visual-defeito.html').status, 'ok');
   assert.match(row('qa-regressao-visual:public/visual-defeito.html').detail, /200\/480000 pixels/);
-  const visual = report.findings.filter(finding => finding.rule === 'QA-REGRESSAO-VISUAL');
   assert.equal(visual.length, 1);
   assert.equal(visual[0]?.file, 'public/visual-defeito.html');
   assert.match(visual[0]?.evidence ?? '', /200\/480000 pixels.*30,40–39,59/);
-  assert.deepEqual(report.findings.filter(finding => /controle\.html$/.test(finding.file)), []);
 }
