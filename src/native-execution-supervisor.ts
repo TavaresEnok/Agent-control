@@ -40,6 +40,9 @@ import {finishExamIntentTx} from './exam-intent.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
 const PreLaunchExamReason=z.enum(['exam_login_stale','exam_login_busy','exam_login_restore_failed']);
 const PreLaunchExamPhysicalReceipt=z.object({executionStarted:z.literal(false),jobId:Id,containerId:z.null(),networkId:z.null(),synthetic:z.boolean(),modelInference:z.literal(false),reason:PreLaunchExamReason}).strict();
+export class UnstartedExamRetirementPending extends Refusal {
+ constructor(readonly jobId:string){super('NATIVE_PRELAUNCH_SETTLEMENT_PENDING',409);Id.parse(jobId);}
+}
 /** Specialist or reviewer of the readonly design exam. Programmer, qa and judge never match. */
 export function readonlyDesignExam(workflow: unknown, role: unknown): boolean {
   return workflow === 'design-readonly-v1' && (role === 'specialist' || role === 'reviewer');
@@ -216,6 +219,7 @@ export class NativeExecutionSupervisor{
   const synthetic=Boolean(this.config.syntheticFixture);
   const releaseBeforeLaunch=async(reason:string)=>{
    const receipt={executionStarted:false,jobId:input.jobId,containerId:null,networkId:null,synthetic,modelInference:false,reason};
+   let pending=false;
    await this.ledger.tx(async c=>{
     const context=await this.scope(c,principal,authority,input,true);
     const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[input.grantId])).rows[0];
@@ -239,7 +243,7 @@ export class NativeExecutionSupervisor{
      const row=await this.loadUnstartedExam(c,authority,input.jobId);
      try{
       this.validateUnstartedExam(row,context,principal,authority,false);
-      if(row.input_digest!==hash||row.grant_id!==input.grantId)return;
+      if(row.input_digest!==hash||row.grant_id!==input.grantId)throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
       await this.jobRepository(c,String(context.project_id));
       await this.confirmUnstartedAbsence(input.jobId);
      }catch(error){
@@ -247,11 +251,13 @@ export class NativeExecutionSupervisor{
       // every inspection failure, including malformed Docker responses.
       const code=safeFailureCode(error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code,'NATIVE_PRELAUNCH_INSPECTION_FAILED');
       console.error(JSON.stringify({event:'NATIVE_PRELAUNCH_SETTLEMENT_PENDING',jobId:input.jobId,code}));
+      pending=true;
       return;
      }
      await this.settleUnstartedExam(c,authority,row);
     }
    });
+   if(pending)throw new UnstartedExamRetirementPending(input.jobId);
   };
   const p=this.paths(input.jobId);
   let jobDirCreated=false;
@@ -259,6 +265,7 @@ export class NativeExecutionSupervisor{
    try{
     await releaseBeforeLaunch(reason);
    }catch(releaseError){
+    if(releaseError instanceof UnstartedExamRetirementPending)throw releaseError;
     const code=safeFailureCode(releaseError instanceof Refusal?releaseError.code:(releaseError as NodeJS.ErrnoException)?.code,'NATIVE_RELEASE_BEFORE_LAUNCH_FAILED');
     console.error(JSON.stringify({event:'NATIVE_RELEASE_BEFORE_LAUNCH_FAILED',jobId:input.jobId,reason,code}));
     throw releaseError;
@@ -611,6 +618,26 @@ export class NativeExecutionSupervisor{
   await finishExamIntentTx(c,this.ledger,{intentId:row.intent_id,contextId:authority.contextId},'failed');
   return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const,receipt};
  }
+ private async validateOptionalUnstartedRequest(jobId:string,row:Record<string,any>,allowExplicitDesign:boolean){
+  await this.directory(this.config.hostRoot);
+  const p=this.paths(jobId);
+  if(!await lstat(p.root).catch(error=>{
+   if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+   throw error;
+  }))return;
+  await this.directory(p.root);
+  const bytes=await readPrivateWorkerFile(join(p.root,'request.json'),512*1024).catch(error=>{
+   if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+   throw error;
+  });
+  if(bytes)try{
+   const request=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));
+   if(digest(request)!==row.input_digest||request.jobId!==jobId||request.intentId!==row.intent_id||request.grantId!==row.grant_id||
+    request.sessionId!==row.session_id||request.role!==row.role||request.base!==row.base_id||
+    (!allowExplicitDesign&&(request.model||request.effort||request.task.startsWith('Pedido de criação.'))))
+    throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+  }finally{bytes.fill(0);}
+ }
  /** Settle a single personal exam with a durable pre-launch refusal and no physical resources. */
  async recoverUnstartedExam(principal:string,authority:Authority,jobId:string,localOwnerScope?:PersonalExamRecoveryScope){
   Id.parse(jobId);
@@ -624,24 +651,7 @@ export class NativeExecutionSupervisor{
     throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    const row=await this.loadUnstartedExam(c,authority,jobId);
    this.validateUnstartedExam(row,context,principal,authority,localOwnerScope?.explicitDesignWithdrawal===true);
-   const p=this.paths(jobId);
-   if(await lstat(p.root).catch(error=>{
-    if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
-    throw error;
-   })){
-    await this.directory(p.root);
-    const bytes=await readPrivateWorkerFile(join(p.root,'request.json'),512*1024).catch(error=>{
-     if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
-     throw error;
-    });
-    if(bytes)try{
-     const request=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));
-     if(digest(request)!==row.input_digest||request.jobId!==jobId||request.intentId!==row.intent_id||request.grantId!==row.grant_id||
-      request.sessionId!==row.session_id||request.role!==row.role||request.base!==row.base_id||
-      (!localOwnerScope?.explicitDesignWithdrawal&&(request.model||request.effort||request.task.startsWith('Pedido de criação.'))))
-      throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
-    }finally{bytes.fill(0);}
-   }
+   await this.validateOptionalUnstartedRequest(jobId,row,localOwnerScope?.explicitDesignWithdrawal===true);
    await this.confirmUnstartedAbsence(jobId);
    return this.settleUnstartedExam(c,authority,row);
   }));
@@ -664,6 +674,7 @@ export class NativeExecutionSupervisor{
     typeof saved.proof.signature!=='string'||!/^[a-f0-9]{128}$/.test(saved.proof.signature)||
     !verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(saved.proof.payload)),createPublicKey(this.key),Buffer.from(saved.proof.signature,'hex')))
     throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   await this.validateOptionalUnstartedRequest(jobId,row,scope.explicitDesignWithdrawal);
    return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const};
   });
  }

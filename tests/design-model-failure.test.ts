@@ -10,10 +10,28 @@ import {DesignCreateModelFailure, runDesignCreate} from '../src/design-create.ts
 import {runDesignModule} from '../src/design-module.ts';
 import {designCliFailureText, designExamStatus} from '../src/personal-design-cli.ts';
 import {EXAM_LOGIN_STALE_TEXT} from '../src/exam-login.ts';
+import {UnstartedExamRetirementPending} from '../src/native-execution-supervisor.ts';
 
 const SECRET = 'sk-SUPERSECRETTOKENVALUE';
 const AUTH = `Failed to authenticate: OAuth session expired ${SECRET}`;
 const VISUAL_LINE = 'A crítica visual foi pedida e nenhuma tela foi julgada.';
+
+test('pendência da retirada chega ao consumidor do exame com o job para retry', async () => {
+  const data = await mkdtemp(join(tmpdir(), 'design-pending-'));
+  const repo = await mkdtemp(join(tmpdir(), 'design-pending-repo-'));
+  const pending = new UnstartedExamRetirementPending(randomUUID());
+  try {
+    await assert.rejects(runDesignModule({
+      activation:'personal', projectId:randomUUID(), repo, targetUrl:'http://127.0.0.1:4173', dataDirectory:data,
+      intentId:randomUUID(), runId:randomUUID(), createdAt:new Date(), commit:'abc123',
+      files:[{path:'index.html',text:'<html><body><h1>Oi</h1></body></html>'}], scoreVisual:true,
+      worker:{async run(){throw pending;}}, reserve:async()=>seat(), release:async()=>{},
+    }), error=>error===pending && designCliFailureText(error).includes(`--abandonar-design ${pending.jobId}`));
+  } finally {
+    await rm(data,{recursive:true,force:true});
+    await rm(repo,{recursive:true,force:true});
+  }
+});
 
 function seat() {
   return {provider: 'claude', model: 'modelo', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};

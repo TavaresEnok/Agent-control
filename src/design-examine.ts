@@ -372,7 +372,7 @@ async function runModel(worker: DesignWorker, call: DesignWorkerCall): Promise<M
     }
     return {output, failure: null};
   } catch (error) {
-    if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_PROVIDER_UNSUPPORTED' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED')) throw error;
+    if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_PROVIDER_UNSUPPORTED' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED' || error.code === 'NATIVE_PRELAUNCH_SETTLEMENT_PENDING')) throw error;
     return {
       output: '',
       failure: error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED',
@@ -439,6 +439,7 @@ function confirmationTask(
 function rethrowReviewer(error: unknown): boolean {
   return error instanceof Refusal && (
     error.code === 'EXAM_LOGIN_STALE'
+    || error.code === 'NATIVE_PRELAUNCH_SETTLEMENT_PENDING'
     || error.code === 'DESIGN_CONFIRMATION_INVALID'
     || error.code === 'EXAM_PROVIDER_UNSUPPORTED'
     || error.code === 'DESIGN_REVIEWER_UNAVAILABLE'
