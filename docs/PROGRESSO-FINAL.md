@@ -857,3 +857,8 @@ PAUSADO-COTA
 - 19/11/2026 18:25 UTC — Validação completa de entrega-arquitetura-1 em 38e9984c: TypeScript, suíte, complementares e laboratório aprovados.
 - 19/11/2026 18:25 UTC — Validação de entrega-dependencias-1 em 05776a76 iniciada no checkout de integração.
 - 19/11/2026 18:27 UTC — O banco passou no ensaio acumulado da imagem, no exame real da consulta SQL e na CLI. O digest está fixado no ramo de integração do módulo 5.
+- 19/11/2026 18:27 UTC — C2-ACEITE-CONSOLIDADO encerrado com código 0.
+- 19/11/2026 18:27 UTC — revisor-C5-ACEITE-POSICAO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:29 UTC — C5-ACEITE-POSICAO encerrado com código 0.
+- 19/11/2026 18:30 UTC — C8-ORIGEM-LEXICA encerrado com código 0.
+- 19/11/2026 18:30 UTC — Nova rodada de QA para citação literal, herança PostgreSQL e diagnóstico isolado de Go. Banco recebeu aceite estático de posição, e arquitetura passou na suíte oficial, nos 52 testes complementares e no laboratório. Revisão de recuperação A3 encomendada para o fechamento.
