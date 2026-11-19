@@ -1915,6 +1915,19 @@ async function beginModuleRunTx(input: {
   return intentId;
 }
 
+export async function validateModuleCollectorPublication(snapshot: string, collector: ModuleCollectorOutput): Promise<void> {
+  for (const finding of collector.findings) {
+    await resolveInsideRepo(snapshot, finding.file);
+    if (!collector.coverage.some(row => row.tool === finding.tool && row.status === 'ok'
+      && (row.files === undefined || row.files.includes(finding.file)))) {
+      throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
+    }
+  }
+  for (const row of collector.coverage) {
+    for (const file of row.files ?? []) await resolveInsideRepo(snapshot, file);
+  }
+}
+
 /**
  * Full execution path for verification modules 2 to 9 (`qa`, `arquitetura`, `dependencias`,
  * `banco`, `prontidao`, `desempenho`, `documentacao`, `conformidade`).
@@ -2027,15 +2040,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       throw new Refusal('VERIFY_REPORT_INVALID', 400);
     }
     assertNoLiveAccessKey(collectorData);
-    for (const finding of collectorData.findings) {
-      await resolveInsideRepo(snapshot, finding.file);
-      if (!collectorData.coverage.some(row => row.tool === finding.tool && row.status === 'ok')) {
-        throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
-      }
-    }
-    for (const row of collectorData.coverage) {
-      for (const file of row.files ?? []) await resolveInsideRepo(snapshot, file);
-    }
+    await validateModuleCollectorPublication(snapshot, collectorData);
     } catch (error) {
       if (input.signal?.aborted || (error instanceof Refusal && error.code === 'VERIFY_CONTAINER_CLEANUP_PENDING')) throw error;
       sourceCoverage = undefined;
