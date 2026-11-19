@@ -143,3 +143,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:24 UTC — Trabalhador encerrou C2-R5 em 211dc9aa (código 0). Gerente confere a entrega.
 - 19/11/2026 02:24 UTC — Trabalho C7-R4 iniciado por Sol high normal em final-c7.
 - 19/11/2026 02:25 UTC — Matriz C6 em bce4196c, Sol high normal: quatro altos e cinco médios. Além das regras operacionais, uma atribuição em Compose ou systemd com valor de duas palavras ainda podia vazar um fragmento. C6-R7 exige localização e texto fixo na origem para os detectores de segredos. O trabalho de prontidão segue em laboratório isolado.
+- 19/11/2026 02:25 UTC — Revisor encerrou C3-FINAL em c72431cc (código 0). Gerente confere a entrega.
+- 19/11/2026 02:25 UTC — Revisão C2-R5 iniciada por Sol high normal somente leitura em 211dc9aa.
+- 19/11/2026 02:26 UTC — Trabalhador encerrou C4-R4 em cbf83ce3 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:26 UTC — Trabalho C6-R7 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 02:27 UTC — Trabalhador encerrou C-BASE-R5 em b4668d56 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:27 UTC — Trabalho C8-R4 iniciado por Sol high normal em final-c8.
+- 19/11/2026 02:29 UTC — C-BASE-R5 entregue em b4668d56. A preparação do exame incorporou a recuperação de relatórios antes da nova ordem. C4-R4 entregue em cbf83ce3, em construção e laboratório. As duas revisões independentes estão na fila. C3-FINAL identificou um achado baixo de contagem por arquivo para caminhos equivalentes.
