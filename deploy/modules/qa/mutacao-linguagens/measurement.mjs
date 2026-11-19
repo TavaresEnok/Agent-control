@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {StringDecoder} from 'node:string_decoder';
 
 export const seed = 21398117;
 export const limits = Object.freeze({
@@ -9,12 +10,32 @@ export const limits = Object.freeze({
 const arithmetic = new Set(['+', '-', '*', '/', '//', '%', '**']);
 const caseStatuses = new Set(['passed', 'failed', 'skipped', 'error', 'pending']);
 const positive = value => Number.isSafeInteger(value) && value > 0;
-export const goDependencyMissing = /module lookup disabled by GOPROXY=off|no required module provides package|missing go\.sum entry|updates to go\.mod needed|requires go >= .*GOTOOLCHAIN=local/i;
+export const goDependencyMissing = /module lookup disabled by GOPROXY=off|import lookup disabled by -mod=vendor|inconsistent vendoring|no required module provides package|missing go\.sum entry|updates to go\.mod needed|requires go >= .*GOTOOLCHAIN=local/i;
 export const goListFormat = String.raw`{{range .GoFiles}}{{printf "S\t%s/%s\n" $.Dir .}}{{end}}{{if or .TestGoFiles .XTestGoFiles}}{{printf "P\t%s\n" .ImportPath}}{{end}}`;
 
 export function processJson({code, output}) {
   if (code !== 0) throw new Error('tool-process-failed');
   return JSON.parse(output);
+}
+
+export function stopGoAtTestLimit() {
+  const decoder = new StringDecoder('utf8');
+  let pending = '';
+  let started = 0;
+  return chunk => {
+    const lines = (pending + decoder.write(chunk)).split('\n');
+    pending = lines.pop();
+    for (const line of lines) {
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        // The complete report is validated by decodeGoSuite if the process finishes.
+        continue;
+      }
+      if (event?.Action === 'run' && ++started > limits.tests) return 'QA_TEST_GO_CASE_LIMIT';
+    }
+  };
 }
 
 export function decodePlan(result, files, readSource) {
@@ -91,14 +112,20 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
   if (goDependencyMissing.test(diagnostics)) return {reason: 'offline-dependency'};
   const tests = new Map();
   const packages = new Map();
+  const completedFailures = new Set();
   let buildFailure = false;
   let executionFailure = false;
   for (const line of output.split('\n').filter(Boolean)) {
     const event = JSON.parse(line);
-    const {Action: action, Package: pkg, Test: name, Output: message} = event ?? {};
+    const {Action: action, Package: pkg, Test: name, Output: message, OutputType: outputType} = event ?? {};
+    if (typeof action !== 'string') throw new Error('invalid-go-event');
     if (action === 'build-output' && goDependencyMissing.test(message)) return {reason: 'offline-dependency'};
     if (action === 'build-fail' || (action === 'fail' && event.FailedBuild)) buildFailure = true;
-    if (action === 'output' && /^(?:panic:|fatal error:)/m.test(message)) executionFailure = true;
+    // The testing binary emits this frame when it finishes a failing suite. The go command
+    // can also report a failed case and package after an abort, with only its FAIL\t... frame.
+    if (action === 'output' && !name && outputType === 'frame' && message === 'FAIL\n' && packages.get(pkg) === 'pending') {
+      completedFailures.add(pkg);
+    }
     if (!['start', 'run', 'pass', 'fail', 'skip'].includes(action)) continue;
     if (typeof pkg !== 'string' || (name !== undefined && typeof name !== 'string')) {
       throw new Error('invalid-go-event');
@@ -133,7 +160,8 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
   if (buildFailure) return {reason: 'go-build-failed'};
   if (executionFailure || !packages.size || observed.some(test => test.status === 'pending') ||
       [...testPackages].some(pkg => !packages.has(pkg)) ||
-      [...packages].some(([pkg, status]) => status === 'pending' || (status === 'fail') !== failedPackages.has(pkg)) ||
+      [...packages].some(([pkg, status]) => status === 'pending' ||
+        (status === 'fail') !== failedPackages.has(pkg) || (status === 'fail' && !completedFailures.has(pkg))) ||
       code !== Number(failedPackages.size > 0)) return {reason: 'go-test-execution'};
   return {tests: observed};
 }

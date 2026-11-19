@@ -1,12 +1,12 @@
 import {constants, accessSync, cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
-import {isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {basename, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {fileURLToPath} from 'node:url';
 import {executionAllowed, runBoundedProcess} from '../execute-tests.mjs';
 import {selectLanguageSuite} from '../language-tests.mjs';
 import {
   decodeGoSuite, decodePlan, decodePythonSuite, goDependencyMissing, goListFormat, limits, measurePlan,
-  patchSource, processJson, seed, summarizeProperties,
+  patchSource, processJson, seed, stopGoAtTestLimit, summarizeProperties,
 } from './measurement.mjs';
 
 const python = '/usr/local/bin/python3.12';
@@ -59,10 +59,10 @@ async function copySession(context, task) {
 }
 
 function bounded(deadline) {
-  return (binary, args, cwd, env, maxMs) => {
+  return (binary, args, cwd, env, maxMs, stopOnStdout) => {
     const timeoutMs = Math.min(maxMs, Math.floor(deadline - performance.now()));
     if (timeoutMs <= 0) throw new MeasurementError('time-budget');
-    return runBoundedProcess(binary, args, cwd, {env, timeoutMs, maxBytes: limits.outputBytes});
+    return runBoundedProcess(binary, args, cwd, {env, timeoutMs, maxBytes: limits.outputBytes, stopOnStdout});
   };
 }
 
@@ -74,6 +74,17 @@ function requireTool(path, mode = constants.X_OK) {
   }
 }
 
+export async function verifyPinnedTool(probe, matches) {
+  let installed;
+  try {
+    installed = processJson(await probe());
+  } catch (error) {
+    if (errorReason(error) !== 'tool-execution') throw error;
+    throw new MeasurementError('tool-unavailable', 'unavailable');
+  }
+  if (!matches(installed)) throw new MeasurementError('tool-unavailable', 'unavailable');
+}
+
 function pythonCommand(run, args, cwd, home) {
   return run(python, ['-P', '-s', '-S', '-B', pythonRunner, ...args], cwd,
     {HOME: home, TMPDIR: home, PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1', PYTHONHASHSEED: String(seed)},
@@ -83,11 +94,9 @@ function pythonCommand(run, args, cwd, home) {
 async function checkPython(run, scratch, mode) {
   requireTool(python);
   requireTool(pythonRunner, constants.R_OK);
-  const installed = processJson(await pythonCommand(run, ['probe', mode], scratch, scratch));
   const required = mode === 'plan' ? Object.keys(pythonVersions) : ['pytest', 'hypothesis'];
-  if (required.some(tool => installed?.[tool] !== pythonVersions[tool])) {
-    throw new MeasurementError('tool-unavailable', 'unavailable');
-  }
+  await verifyPinnedTool(() => pythonCommand(run, ['probe', mode], scratch, scratch),
+    installed => required.every(tool => installed?.[tool] === pythonVersions[tool]));
 }
 
 function goEnvironment(home, cache) {
@@ -99,14 +108,17 @@ function goEnvironment(home, cache) {
   };
 }
 
-async function goScope(run, project, home, cache, selection) {
+export async function goScope(run, project, home, cache, selection) {
   const cwd = join(project, selection.moduleDir);
   const env = goEnvironment(home, cache);
   const {Replace} = processJson(await run(go, ['mod', 'edit', '-json'], cwd, env, limits.goMs));
   if (Replace?.some(item => !item.New?.Version)) throw new MeasurementError('go-local-replace', 'unavailable');
-  const result = await run(go, ['list', '-mod=readonly', '-f', goListFormat, './...'], cwd, env, limits.goMs);
-  if (goDependencyMissing.test(result.diagnostics)) throw new MeasurementError('offline-dependency', 'unavailable');
-  if (result.code !== 0) throw new MeasurementError('go-package-selection');
+  const mode = lstatSync(join(cwd, 'vendor', 'modules.txt'), {throwIfNoEntry: false})?.isFile() ? '-mod=vendor' : '-mod=readonly';
+  const result = await run(go, ['list', mode, '-f', goListFormat, './...'], cwd, env, limits.goMs);
+  if (result.code !== 0) {
+    if (goDependencyMissing.test(result.diagnostics)) throw new MeasurementError('offline-dependency', 'unavailable');
+    throw new MeasurementError('go-package-selection');
+  }
   const sources = new Set();
   const packages = new Set();
   for (const line of result.output.split('\n').filter(Boolean)) {
@@ -116,7 +128,20 @@ async function goScope(run, project, home, cache, selection) {
     else if (kind === 'P') packages.add(value);
     else throw new MeasurementError('go-package-selection');
   }
-  return {sources: selection.sourceFiles.filter(file => sources.has(file)), packages};
+  return {sources: selection.sourceFiles.filter(file => sources.has(file)), packages, mode};
+}
+
+export async function runGoSuite(run, project, home, cache, selection, {mode, packages}) {
+  try {
+    const result = await run(go, [
+      'test', '-json', mode, '-count=1', '-p=2', '-parallel=1', '-vet=off',
+      '-timeout=8s', '-run', '^(Test|Example)', '-shuffle=' + seed, './...',
+    ], join(project, selection.moduleDir), goEnvironment(home, cache), limits.goMs, stopGoAtTestLimit());
+    return decodeGoSuite(result, packages);
+  } catch (error) {
+    if (error.message === 'QA_TEST_GO_CASE_LIMIT') return {reason: 'test-limit'};
+    throw error;
+  }
 }
 
 function errorReason(error) {
@@ -132,28 +157,22 @@ async function measure(language, context, selection) {
   const root = mkdtempSync(join(context.workRoot, 'qa-mutation-'));
   try {
     const cache = join(root, 'cache');
-    let packages;
     if (language === 'python') await checkPython(run, root, 'plan');
     else {
       requireTool(go);
       requireTool(goPlanner);
       mkdirSync(cache);
-      const version = processJson(await run(goPlanner, ['--version'], root, {}, limits.goMs));
-      if (version !== pins.go.version) throw new MeasurementError('tool-unavailable', 'unavailable');
+      await verifyPinnedTool(() => run(goPlanner, ['--version'], root, {}, limits.goMs),
+        version => version === pins.go.version);
     }
 
-    const plan = await copySession(context, async (project, scratch) => {
-      let sources = selection.sourceFiles;
-      if (language === 'go') {
-        const scope = await goScope(run, project, scratch, cache, selection);
-        sources = scope.sources;
-        packages = scope.packages;
-      }
-      sources = sources.toSorted();
+    const {plan, scope} = await copySession(context, async (project, scratch) => {
+      const scope = language === 'go' ? await goScope(run, project, scratch, cache, selection) : undefined;
+      const sources = (scope?.sources ?? selection.sourceFiles.filter(file => basename(file) !== 'conftest.py')).toSorted();
       const result = language === 'python'
         ? await pythonCommand(run, ['plan', ...sources], project, scratch)
         : await run(goPlanner, sources, project, goEnvironment(scratch, cache), limits.goMs);
-      return decodePlan(result, sources, file => readFileSync(join(project, file), 'utf8'));
+      return {plan: decodePlan(result, sources, file => readFileSync(join(project, file), 'utf8')), scope};
     });
 
     return await measurePlan(plan, async edit => {
@@ -169,11 +188,7 @@ async function measure(language, context, selection) {
             const result = await pythonCommand(run, ['suite', String(seed), ...selection.files], project, scratch);
             return decodePythonSuite(result, selection.files);
           }
-          const result = await run(go, [
-            'test', '-json', '-mod=readonly', '-count=1', '-p=2', '-parallel=1', '-vet=off',
-            '-timeout=8s', '-run', '^(Test|Example)', '-shuffle=' + seed, './...',
-          ], join(project, selection.moduleDir), goEnvironment(scratch, cache), limits.goMs);
-          return decodeGoSuite(result, packages);
+          return await runGoSuite(run, project, scratch, cache, selection, scope);
         });
       } catch (error) {
         return {reason: errorReason(error)};
