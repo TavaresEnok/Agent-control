@@ -389,8 +389,8 @@ function proofAssertion(path) {
   const binding = name && importedBinding(path, name);
   if (!binding || !assertionModules.has(binding.module)) return;
   const root = !binding.name || binding.name === 'strict' || binding.name === 'default';
-  if (receiver && root && assertionMethods.has(callee.property.name)) return {receiver};
-  if (callee.type === 'Identifier' && !binding.namespace && (root || assertionMethods.has(binding.name))) return {receiver: 'void 0'};
+  if (receiver && root && assertionMethods.has(callee.property.name)) return {receiver, method: callee.property.name};
+  if (callee.type === 'Identifier' && !binding.namespace && (root || assertionMethods.has(binding.name))) return {receiver: 'void 0', method: root ? 'ok' : binding.name};
 }
 
 /** Instrumenta chamadas diretas no callback registrado com node:test, preservando as linhas. */
@@ -421,12 +421,17 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
       const probe = `${prefix}${index++}`;
       const site = sites.get(registration.node) ?? {title: test.title, probes: []};
       const features = [];
-      for (const argument of path.get('arguments')) {
+      // Only operands tested by the assertion can establish a functional link.
+      const operands = /equal$/i.test(accepted.method) ? 2 : 1;
+      for (const argument of path.get('arguments').slice(0, operands)) {
         const called = argument.isAwaitExpression() ? argument.get('argument') : argument;
-        if (!called.isCallExpression() || !called.get('callee').isIdentifier()) continue;
-        const binding = importedBinding(called, called.node.callee.name);
+        if (!called.isCallExpression()) continue;
+        const fn = called.node.callee;
+        const binding = importedBinding(called, fn.type === 'Identifier' ? fn.name : fn.object?.name);
+        const name = fn.type === 'Identifier' ? binding?.name
+          : fn.type === 'MemberExpression' && binding?.namespace ? (fn.computed ? staticString(fn.property) : fn.property.name) : undefined;
         const source = localImportSource(file, binding?.module);
-        if (source && binding.name) features.push(JSON.stringify([source, binding.name]));
+        if (source && name) features.push(JSON.stringify([source, name]));
       }
       site.probes.push({name: probe, features});
       sites.set(registration.node, site);
@@ -520,6 +525,7 @@ export function analyzeTestFile(relFile, content, parse) {
   const validators = [];
   let validatorDeclarations = 0;
   const importedFunctions = new Map();
+  const importedNamespaces = new Map();
   const aliases = new Map();
   const runnerBindings = new Set();
   const assertBindings = new Set();
@@ -548,6 +554,7 @@ export function analyzeTestFile(relFile, content, parse) {
       }
       const source = localImportSource(relFile, path);
       if (source && name) importedFunctions.set(local, {source, name});
+      if (source && spec.type === 'ImportNamespaceSpecifier') importedNamespaces.set(local, source);
     }
   }
 
@@ -591,6 +598,10 @@ export function analyzeTestFile(relFile, content, parse) {
             member(call, 'fc', 'assert')))) hasAssertion = true;
       const imported = importedFunctions.get(call.name);
       if (imported) calls.push(imported);
+      if (call.type === 'MemberExpression' && importedNamespaces.has(receiver)) {
+        const name = call.computed ? staticString(call.property) : call.property.name;
+        if (name) calls.push({source: importedNamespaces.get(receiver), name});
+      }
       if (member(call, 'Math', 'random') || call.name === 'waitForTimeout' || call.property?.name === 'waitForTimeout') {
         flakyPatterns.push({...item, line: child.loc.start.line, snippet: content.slice(child.start, child.end)});
       }
@@ -667,13 +678,14 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       const id = /\bREQ-\d+\b/.exec(text)?.[0];
       if (!id) continue;
       requirements++;
-      const mentioned = [...text.matchAll(/`([A-Za-z_]\w*)`/g)].map(match => match[1]);
-      const features = functions.filter(fn => mentioned.includes(fn.name));
+      const spans = [...text.matchAll(/`([^`]+)`/g)].map(match => match[1]);
+      const qualifiedFiles = spans.filter(token => sourceAnalyses.some(src => src.file === token.replace(/^\.\//, '')));
+      const mentioned = spans.filter(token => functions.some(fn => fn.name === token));
+      const features = functions.filter(fn => mentioned.includes(fn.name) &&
+        (!qualifiedFiles.length || qualifiedFiles.some(path => path.replace(/^\.\//, '') === fn.file)));
       const identifiers = features.map(fn => `${fn.name} (${displayPath(fn.file)}:${fn.line})`).join(', ');
       const matches = [...new Set([...tests.filter(t => t.requirements.includes(id)), ...features.flatMap(fn => fn.matches)])];
       const line = idx + 1;
-      rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
-        `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`));
       const eligible = matches.filter(providesEvidence);
       const proved = mentioned.length === 0 ? eligible.some(test => test.requirements.includes(id))
         : mentioned.every(name => {
@@ -684,6 +696,9 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
             return everyPass(runtimeOf(test)?.featurePasses, pass => pass.includes(identity));
           }));
         });
+      const verification = runtimeTests ? (proved ? 'vínculo comprovado nas três passadas' : 'vínculo sem prova') : 'somente análise estática';
+      rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
+        `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${verification} → ${describe(matches)}`));
       if (!proved && !incomplete) {
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
           message: `Requisito ${id} sem ${runtimeTests ? 'teste vinculado aprovado com asserção executada nas três passadas' : 'vínculo estático com teste ativo que contenha asserção'}`,
