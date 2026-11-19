@@ -146,19 +146,12 @@ def snapshot(root, staging, report):
             if sensitive or path.is_symlink() or not SAFE_PATH.fullmatch(file):
                 directories.remove(name)
                 omitted_protected += 1
-                if sensitive or not SAFE_PATH.fullmatch(file):
-                    report.cover("conformidade:file", "1", "skipped",
-                                 "Diretório excluído, protegido ou com nome incompatível.")
-                else:
-                    report.cover("conformidade:file", "1", "skipped",
-                                 f"{file} | diretório excluído, link ou caminho incompatível")
         directories.sort()
         for name in sorted(files):
             source = Path(parent, name)
             file = source.relative_to(root).as_posix()
             if not SAFE_PATH.fullmatch(file) or is_protected_component(name) or is_sensitive_path(file):
                 omitted_protected += 1
-                report.cover("conformidade:file", "1", "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
                 continue
             if len(selected) >= MAX_FILES:
                 omitted += 1
@@ -189,6 +182,8 @@ def snapshot(root, staging, report):
                 report.cover("conformidade:file", "1", "failed", f"{file} | leitura ou cópia falhou")
     if omitted:
         report.cover("conformidade:snapshot", "1", "skipped", f"{omitted} arquivos fora do limite de {MAX_FILES}.")
+    if omitted_protected:
+        report.cover("conformidade:file", "1", "skipped", f"{omitted_protected} entradas excluídas ou protegidas omitidas.")
     snapshot_detail = f"{len(selected)} arquivos regulares copiados para /tmp; {total} bytes."
     if omitted_protected:
         snapshot_detail += f" {omitted_protected} entradas excluídas ou protegidas omitidas."
@@ -208,6 +203,7 @@ def add_scancode_results(data, selected, version, report, ok_files=None):
             raise ValueError("arquivo inesperado na saída ScanCode")
         measured.add(file)
     scan_errors = False
+    suppressed = 0
     for row in data["files"]:
         if row.get("type") != "file":
             continue
@@ -228,6 +224,7 @@ def add_scancode_results(data, selected, version, report, ok_files=None):
         for detection in detections:
             expression = detection.get("license_expression_spdx")
             if not isinstance(expression, str) or not SAFE_EXPRESSION.fullmatch(expression) or is_redacted_text(expression):
+                suppressed += 1
                 continue
             lines = {match["start_line"] for match in detection.get("matches", [])
                      if type(match.get("start_line")) is int and 1 <= match["start_line"] <= 10_000_000}
@@ -239,11 +236,15 @@ def add_scancode_results(data, selected, version, report, ok_files=None):
             if isinstance(expression, str) and SAFE_EXPRESSION.fullmatch(expression) and not is_redacted_text(expression):
                 report.find(SCANCODE, "LICENSE_DECLARED", file, 1, "informativa",
                             "Licença declarada em metadados de pacote.", f"Expressão SPDX: {expression}.")
+            elif expression is not None:
+                suppressed += 1
     for file in sorted(selected.keys() - measured):
         if is_sensitive_path(file):
             report.cover(SCANCODE + ":file", version, "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
         else:
             report.cover(SCANCODE + ":file", version, "skipped", f"{file} | sem registro de arquivo na saída")
+    if suppressed:
+        report.cover(SCANCODE, version, "skipped", f"{suppressed} expressões de licença omitidas por segurança ou formato.")
     return len(measured), scan_errors or any(header.get("errors") for header in data.get("headers", []))
 
 

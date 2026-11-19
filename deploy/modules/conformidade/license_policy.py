@@ -54,9 +54,6 @@ _UNKNOWN_PATTERNS = (
     re.compile(rf"(?:{_ASSIGN_NAME})\w*[\"']?\s*[:=]\s*{_NOT_A_MASK}(?!(?:null|true|false)\b){_SECRET_VALUE}", re.IGNORECASE),
 )
 _BASE64_SECRET = re.compile(r"[A-Za-z0-9+]{40,}={0,2}")
-_SNAKE_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{31,}$")
-_READABLE_SLUG = re.compile(r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)+(?:\.[a-z0-9]{1,8})?$")
-_SNAKE_PIECE = re.compile(r"^[a-z][a-z0-9_]*$")
 _SHORT_FILE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
 _MASK_TOKEN = re.compile(r"^\(sha256:[a-f0-9]{64}\)$")
 
@@ -69,36 +66,11 @@ def _shannon_entropy(value):
     return -sum((count / total) * math.log2(count / total) for count in counts.values())
 
 
-def _is_snake_token(token):
-    if _SNAKE_IDENTIFIER.fullmatch(token):
-        return True
-    pieces = [piece for piece in re.split(r"[^A-Za-z0-9_]+", token) if piece]
-    if not pieces or any(not _SNAKE_PIECE.fullmatch(piece) for piece in pieces):
-        return False
-    return any(_SNAKE_IDENTIFIER.fullmatch(piece) for piece in pieces)
-
-
-def _is_path_token(token):
-    if token.startswith(("/", "./", "../")):
-        return True
-    segments = token.split("/")
-    if len(segments) <= 1:
-        return False
-    if not all(len(segment) < 32 for segment in segments):
-        return False
-    return any(_SHORT_FILE_EXTENSION.search(segment) for segment in segments)
-
-
 def is_secret_token(token):
-    if not token or _MASK_TOKEN.fullmatch(token) or _is_path_token(token) or _is_snake_token(token):
+    if not token or _MASK_TOKEN.fullmatch(token):
         return False
-    if "/" not in token:
-        if _BASE64_SECRET.search(token):
-            return True
-        return len(token) >= 32 and _shannon_entropy(token) >= 3.5
     return any(
         segment
-        and not _SNAKE_IDENTIFIER.fullmatch(segment)
         and (_BASE64_SECRET.search(segment) or (len(segment) >= 32 and _shannon_entropy(segment) >= 3.5))
         for segment in token.split("/")
     )
@@ -116,13 +88,6 @@ def is_redacted_text(text):
     return any(is_secret_token(token) for token in text.split())
 
 
-def _is_readable_path_or_slug(token):
-    if _BASE64_SECRET.search(token):
-        return False
-    parts = token.split("/")
-    return all(_READABLE_SLUG.fullmatch(part) or _SNAKE_IDENTIFIER.fullmatch(part) or len(part) < 32 for part in parts)
-
-
 def sanitize_report_text(text):
     if not isinstance(text, str):
         return ""
@@ -132,7 +97,7 @@ def sanitize_report_text(text):
     return re.sub(
         r"\S+",
         lambda m: "[removido: alta entropia]"
-        if not _is_readable_path_or_slug(m.group(0)) and is_secret_token(m.group(0))
+        if is_secret_token(m.group(0))
         else m.group(0),
         out,
     )
@@ -169,7 +134,7 @@ def is_sensitive_path(file):
         return True
     if has_known_secret(file) or any(has_known_secret(part) for part in parts):
         return True
-    if any(not _READABLE_SLUG.fullmatch(part) and is_secret_token(part) for part in parts):
+    if any(is_secret_token(_SHORT_FILE_EXTENSION.sub("", part)) for part in parts):
         return True
     return False
 

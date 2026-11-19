@@ -3010,3 +3010,91 @@ print(json.dumps({
     rmSync(scratch, {recursive: true, force: true});
   }
 });
+
+test('R4 preserva medições sob exclusões e suprime expressões e nomes opacos', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'conformidade-r4-'));
+  const repo = join(scratch, 'repo');
+  const staging = join(scratch, 'staging');
+  mkdirSync(repo);
+  mkdirSync(staging);
+  try {
+    mkdirSync(join(repo, 'src'));
+    writeFileSync(join(repo, 'src', 'app.ts'), 'export const value = 1;\n');
+    writeFileSync(join(repo, 'src', 'password-reset.ts'), 'export const reset = true;\n');
+    writeFileSync(join(repo, 'src', 'id_generator.py'), 'value = 1\n');
+    const raw = python(String.raw`
+import json, sys
+from pathlib import Path
+from collector import Report, snapshot, add_scancode_results, MAX_COVERAGE, MAX_FINDINGS
+from license_policy import is_sensitive_path, is_redacted_text, sanitize_report_text, is_protected_component
+root, staging = map(Path, sys.argv[2:4])
+for n in range(MAX_COVERAGE):
+    (root / ('.env.' + str(n))).touch()
+opaque = 'a9k2m7z4q8v1b6n3x5c0j9h2f7d4s8p1w6y3r5t0u9e2l7g4'
+(root / (opaque + '.txt')).touch()
+assert is_sensitive_path(opaque + '.txt')
+assert is_redacted_text(opaque) and opaque not in sanitize_report_text(opaque)
+assert is_redacted_text('path/' + opaque + '.txt')
+snake = 'a9k2m7z4q8v1b6n3_x5c0j9h2f7d4s8p1_w6y3r5t0u9e2l7g4'
+assert is_redacted_text(snake) and snake not in sanitize_report_text(snake)
+assert not is_redacted_text('src/app.ts')
+assert is_protected_component('id_generator.py') and is_protected_component('ID_RSA')
+assert not is_protected_component('identity.ts')
+assert is_protected_component('password-reset.ts')
+assert not is_sensitive_path('src/app.ts')
+report = Report()
+selected = snapshot(root, staging, report)
+assert list(selected) == ['src/app.ts']
+assert any(str(MAX_COVERAGE + 3) in row['detail'] for row in report.coverage)
+data = {'files': [{'type': 'file', 'path': 'src/app.ts', 'license_detections': [
+    {'license_expression_spdx': 'LicenseRef-AKIAIOSFODNN7EXAMPLE', 'matches': [{'start_line': 1}]},
+    {'license_expression_spdx': 'MIT', 'matches': [{'start_line': 1}]},
+], 'package_data': []}]}
+ok = []
+add_scancode_results(data, selected, '1', report, ok)
+report.cover('scancode-toolkit', '1', 'ok', 'medido', files=ok)
+out = report.output()
+assert len(out['findings']) == 1 and out['findings'][0]['file'] == 'src/app.ts'
+assert any(row['tool'] == 'scancode-toolkit' and row['status'] == 'skipped' and '1 expressões' in row['detail'] for row in out['coverage'])
+assert opaque not in json.dumps(out) and 'AKIAIOSFODNN7EXAMPLE' not in json.dumps(out)
+only = Report()
+add_scancode_results({'files': [{'type': 'file', 'path': 'src/app.ts', 'license_detections': [
+    {'license_expression_spdx': 'LicenseRef-AKIAIOSFODNN7EXAMPLE', 'matches': [{'start_line': 1}]}]}]}, selected, '1', only)
+only.cover('scancode-toolkit', '1', 'ok', 'medido', files=['src/app.ts'])
+assert not only.output()['findings']
+assert any(row['status'] == 'skipped' and '1 expressões' in row['detail'] for row in only.output()['coverage'])
+# Global coverage is valid; failed coverage alone is not. The output warning counts
+# findings over the publication limit even when all measured files are eligible.
+partial = Report()
+partial._enforce_tool_coverage = True
+partial.cover('good', '1', 'ok', 'global')
+partial.cover('bad', '1', 'failed', 'falha')
+for n in range(MAX_FINDINGS + 2):
+    partial.find('good', 'RULE', 'src/app.ts', 1, 'informativa', 'Mensagem.', 'Evidência.')
+partial.find('bad', 'RULE', 'src/app.ts', 1, 'media', 'Mensagem.', 'Evidência.')
+partial_out = partial.output()
+assert len(partial_out['findings']) == MAX_FINDINGS
+assert any('3 achados omitidos' in row['detail'] for row in partial_out['coverage'])
+print(json.dumps({'out': out, 'partial': partial_out}))
+`, repo, staging);
+    const payload = JSON.parse(raw);
+    for (const output of [payload.out, payload.partial]) {
+      const parsed = parseModuleCollectorOutput(JSON.stringify(output), {module: 'conformidade'});
+      await validateModuleCollectorPublication(repo, parsed);
+    }
+    const {isSecretClassBasename} = await import('../src/verify-redact.ts');
+    const {assertModuleRepoRelativePath} = await import('../src/verification-modules.ts');
+    assert.equal(isSecretClassBasename('src/id_generator.py'), true);
+    assert.equal(isSecretClassBasename('src/ID_RSA'), true);
+    assert.equal(isSecretClassBasename('src/identity.ts'), false);
+    assert.throws(() => assertModuleRepoRelativePath('src/id_generator.py'));
+    assert.equal(assertModuleRepoRelativePath('src/password-reset.ts'), 'src/password-reset.ts');
+    const passwordOutput = parseModuleCollectorOutput(JSON.stringify({
+      coverage: [{tool: 'example', version: '1', status: 'ok', detail: 'medido', files: ['src/password-reset.ts']}],
+      findings: [{tool: 'example', rule: 'RULE', file: 'src/password-reset.ts', line: 1, severity: 'informativa', message: 'Mensagem.', evidence: 'Evidência.'}],
+    }), {module: 'conformidade'});
+    await validateModuleCollectorPublication(repo, passwordOutput);
+  } finally {
+    rmSync(scratch, {recursive: true, force: true});
+  }
+});
