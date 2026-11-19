@@ -1,0 +1,15 @@
+{
+  "name": "dependencias-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ferramentas fixadas do Módulo 4 (dependencias). Não faz parte do pacote da raiz.",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@ast-grep/cli": "0.51.3",
+    "jscodeshift": "17.4.0",
+    "npm-check-updates": "23.1.1"
+  }
+}

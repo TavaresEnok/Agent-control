@@ -1,0 +1,39 @@
+{
+  "purpose": "Pin das ferramentas do Módulo 4 (dependencias). Lockfile npm completo em package-lock.json.",
+  "baseImage": {
+    "name": "node",
+    "version": "22.23.4",
+    "digest": "sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d",
+    "note": "Imagem base Debian/glibc já fixada em deploy/Dockerfile.native-execution."
+  },
+  "registry": "https://registry.npmjs.org",
+  "lockfileVersion": 3,
+  "packageLockSha256": "516f5036761e13440c2864d9fff220558c8d2d768e34147c2cb9c84c60eca85b",
+  "offlineRegistrySha256": "a65f02a365f847be08ac21436e04847cc02e62699284a7b931dbe54ccbe28a57",
+  "dependencies": {
+    "npm-check-updates": {
+      "version": "23.1.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-UzYDvvsQRkmXR59g9SqsQxygYp7AhFpfEcOOGOJaB/P7pF/XlaqIYLK3UjUGfMHH1+aS2nZvJRaIsk2nk0z5ag==",
+      "resolved": "https://registry.npmjs.org/npm-check-updates/-/npm-check-updates-23.1.1.tgz"
+    },
+    "@ast-grep/cli": {
+      "version": "0.51.3",
+      "license": "MIT",
+      "integrity": "sha512-fjdWDDZcTCiUYt0yrHoZNmCRAP8QHKp++xKSLr0PrMqvk/m3v+543IWVvnJ5IcY9Lp0Z7bKSjP2/APZeypT/1g==",
+      "resolved": "https://registry.npmjs.org/@ast-grep/cli/-/cli-0.51.3.tgz"
+    },
+    "@ast-grep/cli-linux-x64-gnu": {
+      "version": "0.51.3",
+      "license": "MIT",
+      "integrity": "sha512-7mKLyI664ntH+/U/a0KVopsSKxUFwz6YT80FW0kMt5reMoBqeEJdkO3p1Ub1p25Usv2EWHz6FbCxipHO2MZerg==",
+      "resolved": "https://registry.npmjs.org/@ast-grep/cli-linux-x64-gnu/-/cli-linux-x64-gnu-0.51.3.tgz"
+    },
+    "jscodeshift": {
+      "version": "17.4.0",
+      "license": "MIT",
+      "integrity": "sha512-i3ESKiiTsGynxzTg5BhsZViD0ai72/6SsI1efDZxG6/5KCoElsmquxtyhXK5lpEgoO7MTNpYkjFEdEL97SkBNg==",
+      "resolved": "https://registry.npmjs.org/jscodeshift/-/jscodeshift-17.4.0.tgz"
+    }
+  }
+}

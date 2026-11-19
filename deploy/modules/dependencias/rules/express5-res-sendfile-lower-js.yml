@@ -1,0 +1,10 @@
+id: express5-res-sendfile-lower-js
+language: JavaScript
+severity: warning
+message: "res.sendfile() (minúsculo) foi removido no Express 5; use res.sendFile()"
+rule:
+  pattern: $RES.sendfile($$$ARGS)
+constraints:
+  RES:
+    regex: "^(res|response)$"
+fix: $RES.sendFile($$$ARGS)

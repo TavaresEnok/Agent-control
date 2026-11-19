@@ -1,0 +1,10 @@
+id: express5-app-del-ts
+language: TypeScript
+severity: error
+message: "app.del() / router.del() foi removido no Express 5; use .delete()"
+rule:
+  pattern: $APP.del($PATH, $$$ARGS)
+constraints:
+  APP:
+    regex: "^(app|router)$"
+fix: $APP.delete($PATH, $$$ARGS)

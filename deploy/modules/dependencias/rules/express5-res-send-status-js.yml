@@ -1,0 +1,10 @@
+id: express5-res-send-status-js
+language: JavaScript
+severity: error
+message: "res.send(status, body) foi removido no Express 5; use res.status(status).send(body)"
+rule:
+  pattern: $RES.send($STATUS, $BODY)
+constraints:
+  STATUS:
+    regex: "^[1-5][0-9]{2}$"
+fix: $RES.status($STATUS).send($BODY)

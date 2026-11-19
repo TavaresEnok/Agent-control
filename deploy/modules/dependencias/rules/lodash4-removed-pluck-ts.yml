@@ -1,0 +1,10 @@
+id: lodash4-removed-pluck-ts
+language: TypeScript
+severity: error
+message: "_.pluck() foi removido no Lodash 4+; use _.map()"
+rule:
+  pattern: $LODASH.pluck($COL, $PROP)
+constraints:
+  LODASH:
+    regex: "^(_|lodash)$"
+fix: $LODASH.map($COL, $PROP)
