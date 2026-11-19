@@ -22,15 +22,15 @@ RUN groupadd --system --gid 65532 qa \
 
 WORKDIR /opt/qa-tools
 COPY package.json package-lock.json qa-tools.lock.json verify-lock.mjs ./
-RUN echo "8b333b48f0bc1266b4fc26585c2766f7ccc80e03c58426c5019a427a9dcf59ab  package-lock.json" | sha256sum -c - \
+RUN echo "28a00f552a3041e5e95492ce8913012ac5e75d197cab41b741b0790e691a9083  package-lock.json" | sha256sum -c - \
     && node /opt/qa-tools/verify-lock.mjs \
     && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force \
     && chown -R 65532:65532 /opt/qa-tools
 
 COPY entrypoint.sh /usr/local/bin/qa-entrypoint.sh
-COPY collect.mjs /opt/qa-tools/collect.mjs
-RUN chmod 0555 /usr/local/bin/qa-entrypoint.sh /opt/qa-tools/collect.mjs /opt/qa-tools/verify-lock.mjs \
+COPY collect.mjs execute-tests.mjs node-test-runner.mjs /opt/qa-tools/
+RUN chmod 0555 /usr/local/bin/qa-entrypoint.sh /opt/qa-tools/*.mjs \
     && chmod 0444 /opt/qa-tools/package.json /opt/qa-tools/package-lock.json /opt/qa-tools/qa-tools.lock.json
 
 USER 65532:65532

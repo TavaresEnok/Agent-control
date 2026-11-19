@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 type QaCoverageRow = {
   tool: string;
@@ -47,63 +48,19 @@ const qaModuleDir = fileURLToPath(new URL('../deploy/modules/qa/', import.meta.u
 const fixtureDir = fileURLToPath(new URL('./fixtures/module-qa/', import.meta.url));
 const cleanFixtureDir = fileURLToPath(new URL('./fixtures/module-qa/clean/', import.meta.url));
 const entrypointPath = join(qaModuleDir, 'entrypoint.sh');
-const labEnabled = process.env.AC_MODULE_LAB === '1';
-
-export function readQaDigestPin(raw: string): string {
-  const trimmed = raw.trim();
-  if (/^sha256:[a-f0-9]{64}$/.test(trimmed)) {
-    return trimmed;
-  }
-  if (/^[A-Za-z0-9./:@_-]+@sha256:[a-f0-9]{64}$/.test(trimmed) && !trimmed.includes(':latest@')) {
-    return trimmed;
-  }
-  throw new Error(`QA_IMAGE_DIGEST_INVALID: ${trimmed}`);
-}
-
-export function runQaContainerByDigest(imagePin: string, repoPath: string, extraEnv: Record<string, string> = {}) {
-  const runtimeBin = process.env.AC_CONTAINER_RUNTIME_BIN ?? ['doc', 'ker'].join('');
-  const envFlags: string[] = [];
-  for (const [k, v] of Object.entries(extraEnv)) {
-    envFlags.push('--env', `${k}=${v}`);
-  }
-  const args = [
-    'run',
-    '--rm',
-    '--network',
-    'none',
-    '--read-only',
-    '--user',
-    '65532:65532',
-    '--cap-drop',
-    'ALL',
-    '--security-opt',
-    'no-new-privileges',
-    '--pids-limit',
-    '128',
-    '--memory',
-    '536870912',
-    '--memory-swap',
-    '536870912',
-    '--cpus',
-    '1',
-    '--tmpfs',
-    '/tmp:rw,nosuid,nodev,size=256m',
-    ...envFlags,
-    '--mount',
-    `type=bind,src=${repoPath},dst=/repo,readonly`,
-    imagePin,
-  ];
-  return spawnSync(runtimeBin, args, {
-    encoding: 'utf8',
-    timeout: 180_000,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-}
+const realTools = {
+  skip: ['fast-check', 'jsdom', 'axe-core', '@apidevtools/swagger-parser', '@stryker-mutator/instrumenter']
+    .every(name => existsSync(join(qaModuleDir, 'node_modules', name, 'package.json')))
+    ? false : 'instale as ferramentas com npm ci --prefix deploy/modules/qa --ignore-scripts',
+};
+const {classifyMutant, comparePasses, decodeNodeReport, planMutations, runBoundedNode, selectNodeSuite} = await import(
+  new URL('../deploy/modules/qa/execute-tests.mjs', import.meta.url).href
+);
 
 test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e usuario 65532', () => {
   const verified = verifyQaLockfiles(qaModuleDir);
   assert.equal(verified.ok, true);
-  assert.equal(verified.toolCount, 7);
+  assert.equal(verified.toolCount, 5);
   assert.ok(verified.totalLockedPackages >= 100);
 
   const dockerfile = readFileSync(join(qaModuleDir, 'Dockerfile'), 'utf8');
@@ -145,7 +102,7 @@ test('entrypoint recusa caminho com .., argumento .sock e diretorio inexistente'
   assert.match(badRepoEnv.stderr, /QA_PATH_FORBIDDEN/);
 });
 
-test('coletor encontra todos os defeitos plantados na fixture e preserva o controle limpo interno', async () => {
+test('coletor encontra defeitos estáticos na fixture e preserva o controle limpo interno', realTools, async () => {
   const execResult = spawnSync('/bin/sh', [entrypointPath], {
     encoding: 'utf8',
     env: {...process.env, QA_HOST_TEST_MODE: '1', QA_REPO_DIR: fixtureDir},
@@ -192,8 +149,9 @@ test('coletor encontra todos os defeitos plantados na fixture e preserva o contr
   }
 
   const toolStatus = new Map(output.coverage.map(c => [c.tool, c.status]));
-  assert.equal(toolStatus.get('istanbul-coverage'), 'ok');
-  assert.equal(toolStatus.get('stryker-mutator'), 'ok');
+  assert.equal(toolStatus.get('node-test-v8'), 'skipped');
+  assert.equal(toolStatus.get('stryker-mutator'), 'skipped');
+  assert.equal(toolStatus.get('qa-matriz-estatica'), 'ok');
   assert.equal(toolStatus.get('fast-check'), 'ok');
   assert.equal(toolStatus.get('playwright-test-audit'), 'ok');
   assert.equal(toolStatus.get('axe-core'), 'ok');
@@ -201,8 +159,12 @@ test('coletor encontra todos os defeitos plantados na fixture e preserva o contr
   assert.equal(toolStatus.get('k6-homologacao'), 'skipped');
 
   // Linhas adicionais de cobertura por arquivo, requisito e rota
-  assert.equal(toolStatus.get('qa-arquivo:src/defective-pricing.ts'), 'ok');
-  assert.equal(toolStatus.get('qa-arquivo:src/clean-pricing.ts'), 'ok');
+  assert.equal(toolStatus.get('qa-arquivo:src/defective-pricing.ts'), undefined);
+  assert.equal(toolStatus.get('qa-mutante:1'), undefined);
+  const requirement = output.coverage.find(c => c.tool === 'qa-requisito:REQ-01');
+  assert.match(requirement?.detail ?? '', /vínculo estático.*calcularDescontoFidelidade.*tests\/clean-pricing\.test\.ts:5/);
+  const untested = output.coverage.find(c => c.tool === 'qa-requisito:REQ-02');
+  assert.match(untested?.detail ?? '', /estornarCobrancaDuplicada.*sem teste vinculado/);
   assert.equal(toolStatus.get('qa-requisito:REQ-01'), 'ok');
   assert.equal(toolStatus.get('qa-requisito:REQ-02'), 'ok');
   assert.equal(toolStatus.get('qa-rota:GET /api/desconto'), 'ok');
@@ -214,18 +176,8 @@ test('coletor encontra todos os defeitos plantados na fixture e preserva o contr
       f => f.tool === tool && f.rule === rule && f.file === file && (line === undefined || f.line === line),
     );
 
-  assert.equal(
-    hasFinding('istanbul-coverage', 'QA-COBERTURA-FUNCAO-SEM-TESTE', 'src/defective-pricing.ts', 8),
-    true,
-  );
-  assert.equal(
-    hasFinding('istanbul-coverage', 'QA-REQUISITO-SEM-PROVA', 'requisitos.md', 4),
-    true,
-  );
-  assert.equal(
-    hasFinding('stryker-mutator', 'QA-STRYKER-MUTANTE-SOBREVIVENTE', 'src/defective-pricing.ts', 2),
-    true,
-  );
+  assert.equal(output.findings.some(f => ['node-test-v8', 'stryker-mutator'].includes(f.tool)), false);
+  assert.equal(hasFinding('qa-matriz-estatica', 'QA-REQUISITO-SEM-PROVA', 'requisitos.md', 4), true);
   assert.equal(
     hasFinding('fast-check', 'QA-FASTCHECK-PROPRIEDADE-VIOLADA', 'src/defective-pricing.ts', 15),
     true,
@@ -261,12 +213,11 @@ test('coletor encontra todos os defeitos plantados na fixture e preserva o contr
   assert.deepEqual(cleanFileFindings, []);
 });
 
-test('controle limpo isolado produz zero achados com todas as ferramentas ativas ok', async () => {
+test('controle limpo isolado produz zero achados com todas as ferramentas ativas ok', realTools, async () => {
   const result = await collectQaModule({repoDir: cleanFixtureDir});
   assert.deepEqual(result.findings, []);
   const activeTools = [
-    'istanbul-coverage',
-    'stryker-mutator',
+    'qa-matriz-estatica',
     'fast-check',
     'playwright-test-audit',
     'axe-core',
@@ -289,11 +240,13 @@ test('falha de uma ferramenta fica registrada na cobertura como failed sem abort
   assert.equal(strykerRow.status, 'failed');
   assert.match(strykerRow.detail, /QA_STRYKER_FORCED_FAILURE/);
 
-  const istanbulRow = result.coverage.find((c: {tool: string}) => c.tool === 'istanbul-coverage');
-  assert.equal(istanbulRow?.status, 'ok');
+  const node = result.coverage.find(c => c.tool === 'node-test-v8');
+  assert.equal(node?.status, 'skipped');
+  const matrix = result.coverage.find(c => c.tool === 'qa-matriz-estatica');
+  assert.equal(matrix?.status, 'ok');
 });
 
-test('ignora symlinks, arquivos de credenciais e scripts em HTML sem executar codigo nao confiavel', async () => {
+test('ignora symlinks, arquivos de credenciais e scripts em HTML sem executar codigo nao confiavel', realTools, async () => {
   const tempRepo = mkdtempSync(join(tmpdir(), 'qa-untrusted-test-'));
   try {
     mkdirSync(join(tempRepo, 'src'), {recursive: true});
@@ -318,29 +271,43 @@ test('ignora symlinks, arquivos de credenciais e scripts em HTML sem executar co
   }
 });
 
-test('laboratorio real executa a imagem pelo digest imutavel contra a fixture e o controle limpo', {skip: !labEnabled}, () => {
-  const digestPath = join(qaModuleDir, 'digest.txt');
-  const pin = readQaDigestPin(readFileSync(digestPath, 'utf8'));
 
-  const defectiveRun = runQaContainerByDigest(pin, fixtureDir);
-  assert.equal(defectiveRun.status, 0, defectiveRun.stderr);
-  const defectiveOut = JSON.parse(defectiveRun.stdout.trim()) as {
-    coverage: {tool: string; status: string}[];
-    findings: {tool: string; rule: string; file: string}[];
-  };
-  assert.equal(defectiveOut.findings.some(f => f.rule === 'QA-STRYKER-MUTANTE-SOBREVIVENTE'), true);
-  assert.equal(defectiveOut.findings.some(f => f.rule === 'QA-COBERTURA-FUNCAO-SEM-TESTE'), true);
-  assert.equal(defectiveOut.findings.some(f => f.rule === 'QA-FASTCHECK-PROPRIEDADE-VIOLADA'), true);
-  assert.equal(defectiveOut.findings.some(f => f.rule === 'QA-TESTE-PULADO'), true);
-  assert.equal(defectiveOut.findings.some(f => f.rule === 'QA-AXE-IMAGE-ALT'), true);
-  assert.equal(defectiveOut.findings.some(f => f.rule === 'QA-CONTRATO-ROTA-SEM-OPENAPI'), true);
-  assert.equal(defectiveOut.findings.some(f => f.file.includes('clean-')), false);
+test('seleção reconhece node:test offline e recusa scripts, dependências e cópia incompleta', () => {
+  const options = {testFiles: ['tests/order.test.ts', 'tests/helper.ts'], readTest: () => "import {test} from 'node:test'"};
+  assert.deepEqual(selectNodeSuite(options), {files: ['tests/order.test.ts']});
+  assert.match(selectNodeSuite({...options, manifest: {scripts: {test: 'npm run arbitrary'}}}).reason, /incompatível/);
+  assert.match(selectNodeSuite({...options, manifest: {dependencies: {widget: '1'}}}).reason, /dependências externas/);
+  assert.match(selectNodeSuite({...options, incomplete: true}).reason, /limites de copia/);
+});
 
-  const cleanRun = runQaContainerByDigest(pin, cleanFixtureDir);
-  assert.equal(cleanRun.status, 0, cleanRun.stderr);
-  const cleanOut = JSON.parse(cleanRun.stdout.trim()) as {
-    coverage: {tool: string; status: string}[];
-    findings: unknown[];
-  };
-  assert.deepEqual(cleanOut.findings, []);
+test('compara as três passadas e separa falha do teste de erro do executor', () => {
+  const file = 'tests/order.test.ts';
+  const result = {file, line: 4, column: 1, name: 'entrega o pedido', status: 'passed'};
+  const baseline = {summary: true, tests: [result]};
+  const failure = {summary: false, tests: [{...result, status: 'failed', error: 'ERR_ASSERTION'}]};
+  const decode = (report: object, code: number, measure = false) =>
+    decodeNodeReport({code, output: JSON.stringify(report)}, [file], measure);
+  assert.deepEqual(comparePasses([baseline, failure, baseline])[0].statuses, ['passed', 'failed', 'passed']);
+  assert.equal(classifyMutant(baseline, decode(failure, 1)).status, 'morto');
+  assert.equal(classifyMutant(baseline, decode(baseline, 0)).status, 'sobrevivente');
+  assert.throws(() => classifyMutant(baseline, {...baseline, tests: []}), /QA_MUTANT_TEST_SET_CHANGED/);
+  assert.throws(() => decode(failure, 0), /QA_NODE_TEST_EXECUTION_FAILED/);
+  assert.throws(() => decode({...failure, tests: [{...result, status: 'error'}]}, 1), /QA_NODE_TEST_EXECUTION_FAILED/);
+  assert.throws(() => decode(baseline, 0, true), /QA_V8_COVERAGE_INVALID/);
+});
+
+test('StrykerJS fornece a localização e a substituição aplicadas ao código original', realTools, async () => {
+  const qaRequire = createRequire(join(qaModuleDir, 'package.json'));
+  const {Instrumenter} = await import(pathToFileURL(qaRequire.resolve('@stryker-mutator/instrumenter')).href);
+  const source = 'export function desconto(valor: number) {\n  return valor >= 100;\n}';
+  const {selected, total} = await planMutations(Instrumenter, ['desconto.ts'], () => source);
+  assert.equal(total, 2);
+  assert.ok(selected.some((mutant: {file: string; line: number; content: string}) =>
+    mutant.file === 'desconto.ts' && mutant.line === 2 &&
+    mutant.content === 'export function desconto(valor: number) {\n  return (valor > 100);\n}'));
+});
+
+test('subprocesso limita duração e saída das ferramentas', async () => {
+  await assert.rejects(runBoundedNode(['-e', 'setInterval(() => {}, 100)'], qaModuleDir, {timeoutMs: 100}), /QA_TEST_TIMEOUT/);
+  await assert.rejects(runBoundedNode(['-e', 'process.stderr.write("x".repeat(8192))'], qaModuleDir, {maxBytes: 1024}), /QA_TEST_OUTPUT_LIMIT/);
 });

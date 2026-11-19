@@ -61,8 +61,11 @@ if [ "${QA_HOST_TEST_MODE:-0}" != "1" ]; then
 fi
 
 REPO_PATH="${QA_REPO_DIR:-/repo}"
-if [ ! -d "$REPO_PATH" ] && [ -d /repository ]; then
-  REPO_PATH="/repository"
+if [ "${QA_HOST_TEST_MODE:-0}" != "1" ]; then
+  unset NODE_OPTIONS NODE_PATH NODE_V8_COVERAGE QA_TOOLS_NODE_MODULES
+  if [ -z "${QA_REPO_DIR:-}" ] && ! awk '$5 == "/repo" { mounted=1 } END { exit !mounted }' /proc/self/mountinfo; then
+    REPO_PATH="/repository"
+  fi
 fi
 
 case "$REPO_PATH" in
@@ -78,8 +81,14 @@ if [ ! -d "$REPO_PATH" ] || [ ! -d /tmp ] || [ ! -w /tmp ]; then
 fi
 
 if [ "${QA_HOST_TEST_MODE:-0}" != "1" ]; then
-  if (touch "$REPO_PATH/.qa-ro-check" 2>/dev/null); then
-    rm -f "$REPO_PATH/.qa-ro-check" 2>/dev/null || true
+  case "$REPO_PATH" in
+    /repo|/repository) ;;
+    *)
+      printf '%s\n' QA_PATH_FORBIDDEN >&2
+      exit 78
+      ;;
+  esac
+  if ! awk -v path="$REPO_PATH" '$5 == path && $6 ~ /(^|,)ro(,|$)/ { mounted=1 } END { exit !mounted }' /proc/self/mountinfo; then
     printf '%s\n' QA_REPO_WRITABLE_FORBIDDEN >&2
     exit 78
   fi

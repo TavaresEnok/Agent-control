@@ -3,7 +3,7 @@
   "module": "qa",
   "registry": "https://registry.npmjs.org",
   "lockfileVersion": 3,
-  "packageLockSha256": "8b333b48f0bc1266b4fc26585c2766f7ccc80e03c58426c5019a427a9dcf59ab",
+  "packageLockSha256": "28a00f552a3041e5e95492ce8913012ac5e75d197cab41b741b0790e691a9083",
   "baseImage": {
     "name": "mcr.microsoft.com/playwright",
     "tag": "v1.65.1-noble",
@@ -12,18 +12,6 @@
     "linuxArm64Digest": "sha256:56be08aca06bf736a928da2e3235a3b63ef71ee97313beb18c6019fea791aba4"
   },
   "dependencies": {
-    "istanbul-lib-instrument": {
-      "version": "6.0.3",
-      "license": "BSD-3-Clause",
-      "integrity": "sha512-Vtgk7L/R2JHyyGW07spoFlB8/lpjiOLTjMdms6AFMraYt3BaJauod/NGrfnVG/y4Ix1JEuMRPDPEj2ua+zz1/Q==",
-      "resolved": "https://registry.npmjs.org/istanbul-lib-instrument/-/istanbul-lib-instrument-6.0.3.tgz"
-    },
-    "istanbul-lib-coverage": {
-      "version": "3.2.2",
-      "license": "BSD-3-Clause",
-      "integrity": "sha512-O8dpsF+r0WV/8MNRKfnmrtCWhuKjxrq2w+jpzBL5UZKTi2LeVWnWOmWRxFlesJONmc+wLAGvKQZEOanko0LFTg==",
-      "resolved": "https://registry.npmjs.org/istanbul-lib-coverage/-/istanbul-lib-coverage-3.2.2.tgz"
-    },
     "@stryker-mutator/instrumenter": {
       "version": "10.1.1",
       "license": "Apache-2.0",

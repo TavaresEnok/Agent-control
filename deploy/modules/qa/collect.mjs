@@ -2,7 +2,7 @@
  * Coletor real do Módulo 2 — QA pesado (deploy/modules/qa/collect.mjs).
  *
  * Regras de segurança:
- * - Nunca importa nem executa código do repositório analisado (/repo).
+ * - Executa testes do projeto somente em subprocessos no contêiner isolado.
  * - Copia apenas arquivos regulares necessários para um diretório isolado em /tmp.
  * - Redireciona logs de bibliotecas para stderr e emite na stdout um único JSON UTF-8:
  *   {
@@ -10,7 +10,6 @@
  *     findings: [{ tool, rule, file, line, severity, message, evidence }]
  *   }
  */
-import {createHash} from 'node:crypto';
 import {
   chmodSync,
   cpSync,
@@ -26,10 +25,14 @@ import {
 import {tmpdir} from 'node:os';
 import {dirname, extname, join, posix, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {
+  classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool,
+} from './execute-tests.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
 const MAX_FILE_BYTES = 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 const SKIP_DIRS = new Set([
   '.git',
   'node_modules',
@@ -42,6 +45,8 @@ const SKIP_DIRS = new Set([
 ]);
 const ALLOWED_EXTS = new Set([
   '.ts',
+  '.mts',
+  '.cts',
   '.tsx',
   '.js',
   '.mjs',
@@ -90,16 +95,13 @@ function loadLockedVersions() {
       if (existsSync(candidate)) {
         const parsed = JSON.parse(readFileSync(candidate, 'utf8'));
         const deps = parsed.dependencies ?? {};
-        const trans = parsed.transitive ?? {};
         return {
-          istanbul: deps['istanbul-lib-instrument']?.version ?? '6.0.3',
-          istanbulCoverage: deps['istanbul-lib-coverage']?.version ?? '3.2.2',
           stryker: deps['@stryker-mutator/instrumenter']?.version ?? '10.1.1',
           fastCheck: deps['fast-check']?.version ?? '4.10.3',
           axe: deps['axe-core']?.version ?? '4.14.1',
           jsdom: deps.jsdom?.version ?? '31.0.1',
           swagger: deps['@apidevtools/swagger-parser']?.version ?? '13.1.0',
-          playwright: trans.playwright ?? '1.65.1',
+          playwrightAudit: '1',
         };
       }
     } catch {
@@ -107,14 +109,12 @@ function loadLockedVersions() {
     }
   }
   return {
-    istanbul: '6.0.3',
-    istanbulCoverage: '3.2.2',
     stryker: '10.1.1',
     fastCheck: '4.10.3',
     axe: '4.14.1',
     jsdom: '31.0.1',
     swagger: '13.1.0',
-    playwright: '1.65.1',
+    playwrightAudit: '1',
   };
 }
 
@@ -157,18 +157,27 @@ function copyRepoToIsolatedTmp(repoDir) {
   mkdirSync(workspace, {recursive: true, mode: 0o700});
 
   const copiedFiles = [];
+  let incomplete = false;
+  let copiedBytes = 0;
 
   function walk(currentDir, depth) {
-    if (depth > 10 || copiedFiles.length >= MAX_FILES) return;
+    if (depth > 10 || copiedFiles.length >= MAX_FILES) {
+      incomplete = true;
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(currentDir, {withFileTypes: true});
     } catch {
+      incomplete = true;
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (copiedFiles.length >= MAX_FILES) break;
+      if (copiedFiles.length >= MAX_FILES) {
+        incomplete = true;
+        break;
+      }
       if (entry.name.startsWith('.') && entry.name !== '.eslintrc.json') continue;
       if (FORBIDDEN_FILENAMES.has(entry.name)) continue;
 
@@ -190,18 +199,27 @@ function copyRepoToIsolatedTmp(repoDir) {
       } else if (stat.isFile()) {
         const ext = extname(entry.name).toLowerCase();
         if (!ALLOWED_EXTS.has(ext)) continue;
-        if (stat.size > MAX_FILE_BYTES) continue;
+        if (stat.size > MAX_FILE_BYTES || copiedBytes + stat.size > MAX_SNAPSHOT_BYTES) {
+          incomplete = true;
+          continue;
+        }
         const destPath = join(workspace, rel);
         mkdirSync(dirname(destPath), {recursive: true, mode: 0o700});
         cpSync(fullPath, destPath, {dereference: false});
         chmodSync(destPath, 0o600);
         copiedFiles.push(rel);
+        copiedBytes += stat.size;
       }
     }
   }
 
-  walk(resolvedRepo, 0);
-  return {workRoot, workspace, copiedFiles};
+  try {
+    walk(resolvedRepo, 0);
+    return {workRoot, workspace, copiedFiles, incomplete};
+  } catch (error) {
+    rmSync(workRoot, {recursive: true, force: true});
+    throw error;
+  }
 }
 
 function lineOfOffset(content, offset) {
@@ -235,14 +253,12 @@ function analyzeSourceFile(relFile, content) {
   let match;
   while ((match = fnRegex.exec(content)) !== null) {
     const name = match[1];
-    const params = match[2];
     const startLine = lineOfOffset(content, match.index);
     const isExported = /export\s+(?:async\s+)?function/.test(match[0]);
 
     // Encontra o bloco da função contando chaves
     const braceStart = content.indexOf('{', match.index + match[0].length);
     let body = '';
-    let endLine = startLine;
     if (braceStart !== -1) {
       let depth = 0;
       let i = braceStart;
@@ -253,32 +269,9 @@ function analyzeSourceFile(relFile, content) {
           depth -= 1;
           if (depth === 0) {
             body = content.slice(braceStart, i + 1);
-            endLine = lineOfOffset(content, i);
             break;
           }
         }
-      }
-    }
-
-    // Descobre ramos (if / ternário / switch) e comparações de fronteira dentro da função
-    const branches = [];
-    const boundaryComparisons = [];
-    const bodyStartOffset = braceStart !== -1 ? braceStart : match.index;
-    const ifRegex = /if\s*\(([^)]+)\)/g;
-    let ifMatch;
-    while ((ifMatch = ifRegex.exec(body)) !== null) {
-      const cond = ifMatch[1].trim();
-      const condLine = lineOfOffset(content, bodyStartOffset + ifMatch.index);
-      branches.push({condition: cond, line: condLine});
-      const cmp = /([A-Za-z0-9_]+)\s*(>=|<=|>|<|===|==)\s*(-?\d+(?:\.\d+)?)/.exec(cond);
-      if (cmp) {
-        boundaryComparisons.push({
-          variable: cmp[1],
-          operator: cmp[2],
-          boundary: Number(cmp[3]),
-          raw: cmp[0],
-          line: condLine,
-        });
       }
     }
 
@@ -292,14 +285,8 @@ function analyzeSourceFile(relFile, content) {
 
     functions.push({
       name,
-      params,
-      file: relFile,
       startLine,
-      endLine,
       isExported,
-      body,
-      branches,
-      boundaryComparisons,
       parserModel: (usesParseInt || usesJsonParse)
         ? {
             usesParseInt,
@@ -330,21 +317,20 @@ function analyzeSourceFile(relFile, content) {
 }
 
 /**
- * Analisa arquivos de teste para mapear chamadas, argumentos testados, asserções, testes pulados e oscilação.
+ * Levanta candidatos estáticos para a matriz e a auditoria de testes.
  */
 function analyzeTestFile(relFile, content) {
   const skippedTests = [];
   const assertionFreeTests = [];
   const flakyPatterns = [];
   const activeTests = [];
-  const calledFunctions = new Map(); // fnName -> Set<number | string>
-  const referencedReqs = new Set();
-
-  // Requisitos citados no arquivo de teste (REQ-01, etc.)
-  const reqRegex = /\b(REQ-\d+)\b/g;
-  let reqMatch;
-  while ((reqMatch = reqRegex.exec(content)) !== null) {
-    referencedReqs.add(reqMatch[1]);
+  const importedFunctions = new Map();
+  for (const [, names, path] of content.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"](\.[^'"]+)['"]/g)) {
+    const source = posix.normalize(posix.join(posix.dirname(relFile), path));
+    for (const item of names.split(',')) {
+      const match = /^(\w+)(?:\s+as\s+(\w+))?$/.exec(item.trim());
+      if (match) importedFunctions.set(match[2] ?? match[1], {source, name: match[1]});
+    }
   }
 
   // Detecta test.skip / it.skip / describe.skip / test.fixme / xit / xtest / { skip: true } / t.skip
@@ -398,7 +384,6 @@ function analyzeTestFile(relFile, content) {
     }
     if (isSkipped) continue;
 
-    activeTests.push({title, file: relFile, line: startLine, body});
     const hasAssertion = /\b(?:assert\b|expect\s*\(|fc\.assert\s*\()/.test(body);
     if (!hasAssertion) {
       assertionFreeTests.push({
@@ -419,377 +404,170 @@ function analyzeTestFile(relFile, content) {
       });
     }
 
-    // Extrai chamadas de função dentro de testes ativos, inclusive aninhadas em assert.equal(fn(arg), ...)
-    const callHeaderRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
-    let cm;
-    while ((cm = callHeaderRegex.exec(body)) !== null) {
-      const fnName = cm[1];
-      if (['test', 'it', 'describe', 'assert', 'expect', 'equal', 'strictEqual', 'deepEqual', 'ok', 'throws', 'if', 'for', 'while', 'switch', 'catch'].includes(fnName)) {
-        continue;
-      }
-      const openParenIdx = cm.index + cm[0].length - 1;
-      let depth = 0;
-      let argText = '';
-      for (let i = openParenIdx; i < body.length; i += 1) {
-        const ch = body[i];
-        if (ch === '(') depth += 1;
-        else if (ch === ')') {
-          depth -= 1;
-          if (depth === 0) {
-            argText = body.slice(openParenIdx + 1, i).trim();
-            break;
-          }
-        }
-      }
-      if (!calledFunctions.has(fnName)) {
-        calledFunctions.set(fnName, new Set());
-      }
-      if (argText.length > 0) {
-        for (const rawArg of argText.split(',')) {
-          const trimmed = rawArg.trim();
-          if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
-            calledFunctions.get(fnName).add(Number(trimmed));
-          } else if (/^['"`].*['"`]$/.test(trimmed)) {
-            calledFunctions.get(fnName).add(trimmed.slice(1, -1));
-          } else {
-            calledFunctions.get(fnName).add(trimmed);
-          }
-        }
-      }
-    }
+    const calls = [...body.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)]
+      .map(match => importedFunctions.get(match[1])).filter(Boolean);
+    const requirements = [...title.matchAll(/\bREQ-\d+\b/g)].map(match => match[0]);
+    activeTests.push({title, file: relFile, line: startLine, hasAssertion, calls, requirements});
   }
 
-  return {
-    file: relFile,
-    activeTests,
-    skippedTests,
-    assertionFreeTests,
-    flakyPatterns,
-    calledFunctions,
-    referencedReqs,
-  };
+  return {file: relFile, activeTests, skippedTests, assertionFreeTests, flakyPatterns};
 }
 
-/**
- * 1. Cobertura de ramos (Istanbul), verificação em 3 passadas e matriz requisito-teste.
- */
-async function runIstanbulCoverageTool({workspace, sourceAnalyses, testAnalyses, reqFiles, versions, failTool}) {
-  const toolName = 'istanbul-coverage';
-  const version = versions.istanbul;
-  if (failTool === toolName) {
-    throw new Error('QA_ISTANBUL_FORCED_FAILURE');
-  }
+function coverageRow(tool, version, status, detail) {
+  return {tool, version, status, detail: cleanSingleLine(detail)};
+}
 
-  let createInstrumenter = null;
-  let createCoverageMap = null;
-  try {
-    const instMod = await tryImportTool('istanbul-lib-instrument', 'index.js');
-    const covMod = await tryImportTool('istanbul-lib-coverage', 'index.js');
-    createInstrumenter = instMod.createInstrumenter ?? instMod.default?.createInstrumenter;
-    createCoverageMap = covMod.createCoverageMap ?? covMod.default?.createCoverageMap;
-  } catch {
-    /* fallback estático compatível */
-  }
-
-  const allCalledFunctions = new Map();
-  const allReferencedReqs = new Set();
-  for (const t of testAnalyses) {
-    for (const [fn, args] of t.calledFunctions.entries()) {
-      if (!allCalledFunctions.has(fn)) allCalledFunctions.set(fn, {args: new Set(), testFiles: new Set()});
-      const entry = allCalledFunctions.get(fn);
-      entry.testFiles.add(t.file);
-      for (const a of args) entry.args.add(a);
-    }
-    for (const r of t.referencedReqs) allReferencedReqs.add(r);
-  }
-
-  // Executa 3 passadas determinísticas de instrumentação e verificação de estabilidade
-  const passHashes = [];
-  let totalFunctions = 0;
-  let coveredFunctions = 0;
-  let totalBranches = 0;
-  let coveredBranches = 0;
-  const perFileRows = [];
+function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests}) {
+  const tool = 'qa-matriz-estatica';
+  const version = '1';
+  const rows = [];
   const findings = [];
-
-  for (let pass = 1; pass <= 3; pass += 1) {
-    const coverageMapData = {};
-    for (const src of sourceAnalyses) {
-      const fullPath = join(workspace, src.file);
-      const code = readFileSync(fullPath, 'utf8');
-      if (createInstrumenter) {
-        try {
-          const instrumenter = createInstrumenter({
-            esModules: true,
-            compact: false,
-            parserPlugins: ['typescript', 'jsx'],
-          });
-          instrumenter.instrumentSync(code, src.file);
-          const fileCov = instrumenter.lastFileCoverage();
-          if (fileCov) {
-            for (const [fnId, fnMeta] of Object.entries(fileCov.fnMap ?? {})) {
-              const fnName = fnMeta.name;
-              if (allCalledFunctions.has(fnName)) {
-                fileCov.f[fnId] = 1;
-              }
-            }
-            coverageMapData[src.file] = fileCov;
-          }
-        } catch {
-          /* continua com modelo AST */
-        }
-      }
-    }
-    if (createCoverageMap && Object.keys(coverageMapData).length > 0) {
-      const cmap = createCoverageMap(coverageMapData);
-      passHashes.push(createHash('sha256').update(JSON.stringify(cmap.toJSON())).digest('hex'));
-    } else {
-      passHashes.push(createHash('sha256').update(JSON.stringify(sourceAnalyses.map(s => s.file))).digest('hex'));
-    }
+  const observed = new Map(runtimeTests.map(t => [JSON.stringify([t.file, t.line, t.name]), t.statuses.join(',')]));
+  const tests = testAnalyses.flatMap(t => t.activeTests).filter(t => t.hasAssertion);
+  const linked = (file, fn) => tests.filter(t => t.calls.some(call =>
+    call.name === fn.name && (call.source === file || call.source === file.slice(0, -extname(file).length))));
+  const describe = matches => matches.map(t => {
+    const statuses = observed.get(JSON.stringify([t.file, t.line, t.title]));
+    return `${t.file}:${t.line} ${t.title} (${statuses ?? 'execução sem vínculo confirmado'})`;
+  }).join('; ') || 'sem teste vinculado';
+  const functions = sourceAnalyses.flatMap(src => src.functions.filter(fn => fn.isExported).map(fn => ({
+    file: src.file, name: fn.name, line: fn.startLine, matches: linked(src.file, fn),
+  })));
+  for (const fn of functions) {
+    rows.push(coverageRow(`qa-funcionalidade:${fn.file}:${fn.name}`, version, 'ok',
+      `vínculo estático ${fn.file}:${fn.line} ${fn.name} → ${describe(fn.matches)}`));
   }
-
-  const stableAcrossThreePasses = passHashes.length === 3 && passHashes[0] === passHashes[1] && passHashes[1] === passHashes[2];
-
-  for (const src of sourceAnalyses) {
-    let fileFnTotal = 0;
-    let fileFnCovered = 0;
-    let fileBranchTotal = 0;
-    let fileBranchCovered = 0;
-
-    for (const fn of src.functions) {
-      if (!fn.isExported) continue;
-      fileFnTotal += 1;
-      totalFunctions += 1;
-      const callInfo = allCalledFunctions.get(fn.name);
-      const isCovered = Boolean(callInfo && callInfo.testFiles.size > 0);
-      if (isCovered) {
-        fileFnCovered += 1;
-        coveredFunctions += 1;
-      } else {
-        findings.push({
-          tool: toolName,
-          rule: 'QA-COBERTURA-FUNCAO-SEM-TESTE',
-          file: src.file,
-          line: fn.startLine,
-          severity: 'alta',
-          message: `Funcao exportada '${fn.name}' nao possui nenhum teste cobrindo sua execucao nas 3 passadas`,
-          evidence: `cobertura Istanbul 0/1 para funcao '${fn.name}' em ${src.file}:${fn.startLine}`,
-        });
-      }
-
-      // Contabiliza cobertura dos ramos da função
-      const branchCount = Math.max(1, fn.branches.length * 2);
-      fileBranchTotal += branchCount;
-      totalBranches += branchCount;
-      if (isCovered) {
-        let coveredForFn = branchCount;
-        for (const cmp of fn.boundaryComparisons) {
-          const nums = [...(callInfo?.args ?? [])].filter(v => typeof v === 'number');
-          const hasTrue = nums.some(v => (cmp.operator.includes('>') ? v > cmp.boundary : v < cmp.boundary));
-          const hasFalse = nums.some(v => (cmp.operator.includes('>') ? v < cmp.boundary : v > cmp.boundary));
-          if (!hasTrue || !hasFalse) {
-            coveredForFn = Math.max(0, coveredForFn - 1);
-          }
-        }
-        fileBranchCovered += coveredForFn;
-        coveredBranches += coveredForFn;
-      }
-    }
-
-    perFileRows.push({
-      tool: `qa-arquivo:${src.file}`,
-      version,
-      status: 'ok',
-      detail: cleanSingleLine(
-        `arquivo ${src.file}: 3/3 passadas estaveis, funcoes ${fileFnCovered}/${fileFnTotal}, ramos ${fileBranchCovered}/${fileBranchTotal}`,
-      ),
-    });
-  }
-
-  // Matriz de requisitos (requisitos.md / requirements.md)
-  const perReqRows = [];
-  let totalReqs = 0;
+  let requirements = 0;
   for (const reqFile of reqFiles) {
-    const content = readFileSync(join(workspace, reqFile), 'utf8');
-    const lines = content.split(/\r?\n/);
-    for (let idx = 0; idx < lines.length; idx += 1) {
-      const lineText = lines[idx];
-      const m = /\b(REQ-\d+)\b[:\s-]*([^\n]*)/.exec(lineText);
-      if (!m) continue;
-      totalReqs += 1;
-      const reqId = m[1];
-      const reqDesc = m[2].trim();
-      const lineNum = idx + 1;
-
-      // Verifica se o requisito está ligado a algum teste ativo ou função testada citada na linha
-      const fnMention = /`([A-Za-z0-9_]+)`/.exec(lineText)?.[1];
-      const linkedByReqId = allReferencedReqs.has(reqId);
-      const linkedByFn = Boolean(fnMention && allCalledFunctions.has(fnMention));
-      const proven = linkedByReqId || linkedByFn;
-
-      if (!proven) {
-        findings.push({
-          tool: toolName,
-          rule: 'QA-REQUISITO-SEM-PROVA',
-          file: reqFile,
-          line: lineNum,
-          severity: 'alta',
-          message: `Requisito ${reqId} nao possui teste ativo que prove seu funcionamento na matriz de QA`,
-          evidence: cleanSingleLine(`requisito '${reqId}: ${reqDesc}' (${reqFile}:${lineNum}) sem vinculo com testes ativos`),
-        });
+    for (const [idx, text] of readFileSync(join(workspace, reqFile), 'utf8').split(/\r?\n/).entries()) {
+      const id = /\bREQ-\d+\b/.exec(text)?.[0];
+      if (!id) continue;
+      requirements++;
+      const mentioned = [...text.matchAll(/`([A-Za-z_]\w*)`/g)].map(match => match[1]);
+      const features = functions.filter(fn => mentioned.includes(fn.name));
+      const identifiers = features.map(fn => `${fn.name} (${fn.file}:${fn.line})`).join(', ');
+      const matches = [...new Set([...tests.filter(t => t.requirements.includes(id)), ...features.flatMap(fn => fn.matches)])];
+      const line = idx + 1;
+      rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
+        `vínculo estático ${reqFile}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`));
+      if (matches.length === 0) {
+        findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
+          message: `Requisito ${id} sem vínculo estático com teste que contenha asserção`,
+          evidence: `${reqFile}:${line} → ${identifiers || 'sem funcionalidade identificada'} → sem teste vinculado`});
       }
-
-      const provingTests = linkedByFn && fnMention
-        ? [...(allCalledFunctions.get(fnMention)?.testFiles ?? [])].join(', ')
-        : linkedByReqId
-          ? testAnalyses.filter(t => t.referencedReqs.has(reqId)).map(t => t.file).join(', ')
-          : 'sem prova ativa';
-
-      perReqRows.push({
-        tool: `qa-requisito:${reqId}`,
-        version,
-        status: 'ok',
-        detail: cleanSingleLine(`requisito ${reqId} (${reqFile}:${lineNum}): ${proven ? `provado por ${provingTests}` : 'sem teste vinculado'}`),
-      });
     }
   }
-
-  const fnPct = totalFunctions > 0 ? ((coveredFunctions / totalFunctions) * 100).toFixed(1) : '100.0';
-  const brPct = totalBranches > 0 ? ((coveredBranches / totalBranches) * 100).toFixed(1) : '100.0';
-
   return {
-    coverageRow: {
-      tool: toolName,
-      version,
-      status: 'ok',
-      detail: cleanSingleLine(
-        `3 passadas ${stableAcrossThreePasses ? 'estaveis' : 'com oscilacao'}; ${sourceAnalyses.length} arquivos, ${coveredFunctions}/${totalFunctions} funcoes (${fnPct}%), ${coveredBranches}/${totalBranches} ramos (${brPct}%), ${totalReqs} requisitos`,
-      ),
-    },
-    extraRows: [...perFileRows, ...perReqRows],
+    coverageRow: coverageRow(tool, version, 'ok', `análise estática de ${requirements} requisitos e ${functions.length} funções exportadas`),
+    extraRows: rows,
     findings,
   };
 }
 
-/**
- * 2. Força dos testes por mutação real com StrykerJS (@stryker-mutator/instrumenter).
- */
-async function runStrykerMutationTool({workspace, sourceAnalyses, testAnalyses, versions, failTool}) {
-  const toolName = 'stryker-mutator';
-  const version = versions.stryker;
-  if (failTool === toolName) {
-    throw new Error('QA_STRYKER_FORCED_FAILURE');
-  }
-
-  let strykerMod = null;
-  try {
-    strykerMod = await tryImportTool('@stryker-mutator/instrumenter', 'dist/src/index.js');
-  } catch {
-    /* fallback AST */
-  }
-
-  const allCalledFunctions = new Map();
-  for (const t of testAnalyses) {
-    for (const [fn, args] of t.calledFunctions.entries()) {
-      if (!allCalledFunctions.has(fn)) allCalledFunctions.set(fn, new Set());
-      for (const a of args) allCalledFunctions.get(fn).add(a);
-    }
-  }
-
-  const noopLogger = {
-    info() {},
-    debug() {},
-    warn() {},
-    error() {},
-    trace() {},
-    isDebugEnabled() { return false; },
-    isTraceEnabled() { return false; },
-  };
-
-  let totalMutants = 0;
-  let survivedMutants = 0;
+function summarizeNodePasses(passes, sourceAnalyses, version) {
+  const tests = comparePasses(passes);
+  const extraRows = [];
   const findings = [];
-
-  for (const src of sourceAnalyses) {
-    const content = readFileSync(join(workspace, src.file), 'utf8');
-    let fileMutants = [];
-
-    if (strykerMod?.Instrumenter) {
-      const instrumenter = new strykerMod.Instrumenter(noopLogger);
-      const result = await instrumenter.instrument(
-        [{name: src.file, content, mutate: true}],
-        {plugins: null, excludedMutations: [], ignorers: []},
-      );
-      fileMutants = (result.mutants ?? []).map(m => ({
-        id: m.id,
-        mutatorName: m.mutatorName,
-        replacement: m.replacement,
-        line: (m.location?.start?.line ?? 0) + 1,
-      }));
-    } else {
-      // Fallback que gera os mesmos mutantes EqualityOperator e ArithmeticOperator a partir da AST
-      for (const fn of src.functions) {
-        for (const cmp of fn.boundaryComparisons) {
-          if (cmp.operator === '>=') {
-            fileMutants.push({id: 'eq-gt', mutatorName: 'EqualityOperator', replacement: `${cmp.variable} > ${cmp.boundary}`, line: cmp.line});
-            fileMutants.push({id: 'eq-lt', mutatorName: 'EqualityOperator', replacement: `${cmp.variable} < ${cmp.boundary}`, line: cmp.line});
-          } else if (cmp.operator === '<=') {
-            fileMutants.push({id: 'eq-lt', mutatorName: 'EqualityOperator', replacement: `${cmp.variable} < ${cmp.boundary}`, line: cmp.line});
-            fileMutants.push({id: 'eq-gt', mutatorName: 'EqualityOperator', replacement: `${cmp.variable} > ${cmp.boundary}`, line: cmp.line});
-          }
-        }
-      }
+  const measured = passes.map(pass => new Map(pass.coverage.map(c => [c.file, c])));
+  for (const [index, pass] of passes.entries()) {
+    const counts = status => pass.tests.filter(t => t.status === status).length;
+    extraRows.push(coverageRow(`qa-passada:${index + 1}`, version, 'ok',
+      `node:test ${pass.summary ? 'passou' : 'falhou'}: ${counts('passed')} aprovados, ${counts('failed')} reprovados, ${counts('skipped')} pulados, ${counts('todo')} todo`));
+  }
+  for (const test of tests) {
+    const oscillates = new Set(test.statuses).size > 1;
+    if (!oscillates && test.statuses.every(status => status === 'skipped' || status === 'todo')) {
+      findings.push({tool: suiteTool, rule: 'QA-TESTE-PULADO-EXECUCAO', file: test.file, line: test.line,
+        severity: 'alta', message: `Teste '${test.name}' marcado como pulado ou pendente pelo node:test`,
+        evidence: `node:test nas passadas 1, 2 e 3: ${test.statuses.join(', ')}`});
     }
-
-    totalMutants += fileMutants.length;
-
-    // Avalia sobrevivência dos mutantes de fronteira (EqualityOperator) nas funções testadas
-    for (const fn of src.functions) {
-      if (!allCalledFunctions.has(fn.name)) continue;
-      const numericArgs = [...(allCalledFunctions.get(fn.name) ?? [])].filter(v => typeof v === 'number');
-
-      for (const cmp of fn.boundaryComparisons) {
-        if (cmp.operator !== '>=' && cmp.operator !== '<=') continue;
-        const mutatedOp = cmp.operator === '>=' ? '>' : '<';
-        const expectedReplacement = `${cmp.variable} ${mutatedOp} ${cmp.boundary}`;
-        const matchingMutant = fileMutants.find(
-          m => m.mutatorName === 'EqualityOperator' && m.line === cmp.line && m.replacement.includes(mutatedOp),
-        ) ?? {
-          mutatorName: 'EqualityOperator',
-          replacement: expectedReplacement,
-          line: cmp.line,
-        };
-
-        // O mutante `>= B` -> `> B` (ou `<= B` -> `< B`) só morre se o valor de fronteira `B` for exercitado
-        const killedByBoundaryArg = numericArgs.some(arg => arg === cmp.boundary);
-        if (!killedByBoundaryArg) {
-          survivedMutants += 1;
-          findings.push({
-            tool: toolName,
-            rule: 'QA-STRYKER-MUTANTE-SOBREVIVENTE',
-            file: src.file,
-            line: matchingMutant.line,
-            severity: 'alta',
-            message: `Mutante StrykerJS EqualityOperator sobreviveu em '${fn.name}': fronteira ${cmp.boundary} nao exercitada pelos testes`,
-            evidence: cleanSingleLine(
-              `mutante '${matchingMutant.replacement}' (original '${cmp.raw}') sobrevive para entradas testadas [${numericArgs.join(', ')}]`,
-            ),
-          });
-        }
-      }
+    if (!oscillates && !test.statuses.includes('failed')) continue;
+    findings.push({
+      tool: suiteTool, rule: oscillates ? 'QA-TESTE-OSCILANTE' : 'QA-TESTE-FALHOU', file: test.file,
+      line: test.line, severity: 'alta', message: `Teste '${test.name}' ${oscillates ? 'mudou de resultado' : 'falhou'} em três execuções`,
+      evidence: `node:test nas passadas 1, 2 e 3: ${test.statuses.join(', ')}; ${test.error ?? 'eventos do runner'}`,
+    });
+  }
+  for (const src of sourceAnalyses) {
+    const coverage = measured.map(files => files.get(src.file));
+    const describe = c => c ? `ramos ${c.coveredBranchCount}/${c.totalBranchCount}, funções ${c.coveredFunctionCount}/${c.totalFunctionCount}` : 'arquivo sem medição';
+    extraRows.push(coverageRow(`qa-arquivo:${src.file}`, version, coverage.some(Boolean) ? 'ok' : 'skipped',
+      `V8 em três passadas: ${coverage.map(describe).join('; ')}`));
+    for (const fn of src.functions.filter(fn => fn.isExported)) {
+      const measurements = coverage.map(c => c?.functions.find(f => f.name === fn.name && f.line === fn.startLine));
+      if (!measurements.every(f => f?.count === 0)) continue;
+      findings.push({tool: suiteTool, rule: 'QA-COBERTURA-FUNCAO-SEM-TESTE', file: src.file, line: fn.startLine,
+        severity: 'alta', message: `Função exportada '${fn.name}' sem execução medida pelo V8`,
+        evidence: 'contagem V8 da função nas passadas 1, 2 e 3: 0, 0, 0'});
     }
   }
+  const stable = tests.every(t => new Set(t.statuses).size === 1);
+  return {tests, stable, findings, extraRows};
+}
 
-  const killedMutants = Math.max(0, totalMutants - survivedMutants);
+async function runNodeCoverage({context, sourceAnalyses, version, failTool, runtime}) {
+  if (failTool === suiteTool) throw new Error('QA_NODE_TEST_FORCED_FAILURE');
+  if (context.reason) return {coverageRow: coverageRow(suiteTool, version, 'skipped', context.reason)};
+  const passes = [];
+  for (let index = 0; index < 3; index++) {
+    passes.push(await executeNodeSuite({...context, measure: true}));
+  }
+  const result = summarizeNodePasses(passes, sourceAnalyses, version);
+  runtime.tests = result.tests;
+  if (result.stable && passes.every(p => p.summary && p.tests.some(t => t.status === 'passed'))) runtime.baseline = passes[0];
   return {
-    coverageRow: {
-      tool: toolName,
-      version,
-      status: 'ok',
-      detail: cleanSingleLine(
-        `${totalMutants} mutantes StrykerJS gerados em ${sourceAnalyses.length} arquivos; ${killedMutants} mortos, ${survivedMutants} sobreviventes`,
-      ),
-    },
+    coverageRow: coverageRow(suiteTool, version, 'ok',
+      `três execuções de node:test, resultados ${result.stable ? 'iguais' : 'diferentes'}, ${result.tests.length} testes observados, cobertura de ramos V8 por arquivo`),
+    ...result,
+  };
+}
+
+async function runStrykerMutationTool({context, sourceFiles, version, failTool, runtime}) {
+  if (failTool === mutationTool) throw new Error('QA_STRYKER_FORCED_FAILURE');
+  if (context.reason) return {coverageRow: coverageRow(mutationTool, version, 'skipped', context.reason)};
+  const {Instrumenter} = await tryImportTool('@stryker-mutator/instrumenter', 'dist/src/index.js');
+  if (typeof Instrumenter !== 'function') throw new Error('QA_STRYKER_INSTRUMENTER_MISSING');
+  if (!runtime.baseline) return {coverageRow: coverageRow(mutationTool, version, 'skipped',
+    'mutação requer três passadas estáveis com testes aprovados e sem falhas')};
+
+  const measuredFiles = new Set(runtime.baseline.coverage.map(item => item.file));
+  const measuredSources = sourceFiles.filter(file => measuredFiles.has(file));
+  const {selected, total} = await planMutations(Instrumenter, measuredSources, file =>
+    readFileSync(join(context.workspace, file), 'utf8'));
+
+  if (total === 0) return {coverageRow: coverageRow(mutationTool, version, 'skipped', 'StrykerJS não retornou mutantes EqualityOperator')};
+  const extraRows = [];
+  const findings = [];
+  let killed = 0;
+  let survived = 0;
+  let errors = 0;
+  for (const [index, mutation] of selected.entries()) {
+    const tool = `qa-mutante:${index + 1}`;
+    const patch = `${mutation.file}:${mutation.line} EqualityOperator → ${cleanSingleLine(mutation.replacement, 90)}`;
+    try {
+      const mutated = await executeNodeSuite({...context, mutation});
+      const {status, killedBy} = classifyMutant(runtime.baseline, mutated);
+      const evidence = killedBy
+        ? `node:test reprovou ${killedBy.file}:${killedBy.line} '${killedBy.name}' (${killedBy.error ?? 'falha do teste'}) após o patch`
+        : `node:test aprovou após o patch com os mesmos resultados da referência (${mutated.tests.filter(t => t.status === 'passed').length} testes aprovados)`;
+      extraRows.push(coverageRow(tool, version, 'ok', `${status} | ${patch} | ${evidence}`));
+      if (killedBy) {
+        killed++;
+      } else {
+        survived++;
+        findings.push({tool: mutationTool, rule: 'QA-STRYKER-MUTANTE-SOBREVIVENTE', file: mutation.file,
+          line: mutation.line, severity: 'alta', message: 'Mutante de igualdade do StrykerJS sobreviveu à suíte executada',
+          evidence: `${patch}: ${evidence}`});
+      }
+    } catch (error) {
+      errors++;
+      extraRows.push(coverageRow(tool, version, 'failed', `${patch}: ${error.message}`));
+    }
+  }
+  return {
+    coverageRow: coverageRow(mutationTool, version, errors ? 'failed' : 'ok',
+      `${selected.length}/${total} mutantes EqualityOperator executados: ${killed} mortos, ${survived} sobreviventes, ${errors} sem classificação por erro`),
+    extraRows,
     findings,
   };
 }
@@ -804,13 +582,8 @@ async function runFastCheckTool({sourceAnalyses, versions, failTool}) {
     throw new Error('QA_FASTCHECK_FORCED_FAILURE');
   }
 
-  let fc = null;
-  try {
-    const fcMod = await tryImportTool('fast-check', 'lib/esm/fast-check.js');
-    fc = fcMod.default ?? fcMod;
-  } catch {
-    /* fallback determinístico */
-  }
+  const fcMod = await tryImportTool('fast-check', 'lib/fast-check.js');
+  const fc = fcMod.default ?? fcMod;
 
   const findings = [];
   let checkedValidators = 0;
@@ -849,44 +622,19 @@ async function runFastCheckTool({sourceAnalyses, versions, failTool}) {
         return true;
       };
 
-      let failed = false;
-      let counterexample = '""';
-
-      if (fc?.check && fc?.property && fc?.oneof) {
-        const arb = fc.oneof(
-          fc.string(),
-          fc.constant(''),
-          fc.constant('-1'),
-          fc.constant('0'),
-          fc.constant('NaN'),
-          fc.constant('15abc'),
-        );
-        const prop = fc.property(arb, raw => checkGuardForInput(raw));
-        const details = fc.check(prop, {seed, numRuns});
-        if (details.failed) {
-          failed = true;
-          counterexample = JSON.stringify(details.counterexample?.[0] ?? '');
-        }
-      } else {
-        for (const sample of ['', '-1', '0', 'NaN', '15abc']) {
-          if (!checkGuardForInput(sample)) {
-            failed = true;
-            counterexample = JSON.stringify(sample);
-            break;
-          }
-        }
-      }
-
-      if (failed) {
+      const arb = fc.oneof(fc.string(), fc.constantFrom('', '-1', '0', 'NaN', '15abc'));
+      const details = fc.check(fc.property(arb, raw => checkGuardForInput(raw)), {seed, numRuns});
+      if (details.failed) {
+        const counterexample = JSON.stringify(details.counterexample?.[0] ?? '');
         findings.push({
           tool: toolName,
           rule: 'QA-FASTCHECK-PROPRIEDADE-VIOLADA',
           file: src.file,
           line: fn.startLine,
           severity: 'alta',
-          message: `Propriedade fast-check falhou em '${fn.name}': parser/validador nao rejeita entrada externa malformada ou fora de faixa`,
+          message: `Modelo estático da guarda de '${fn.name}' viola propriedade fast-check`,
           evidence: cleanSingleLine(
-            `contraexemplo encolhido pelo fast-check (seed=${seed}, ${numRuns} entradas): input=${counterexample} viola invariante de validacao`,
+            `contraexemplo para o modelo estático encolhido pelo fast-check (seed=${seed}, ${numRuns} entradas): input=${counterexample} viola invariante de validacao`,
           ),
         });
       }
@@ -899,7 +647,7 @@ async function runFastCheckTool({sourceAnalyses, versions, failTool}) {
       version,
       status: 'ok',
       detail: cleanSingleLine(
-        `${checkedValidators} validadores/parsers verificados com ${numRuns} entradas geradas por propriedade (seed=${seed}); ${findings.length} violacoes`,
+        `${checkedValidators} modelos estáticos de validadores/parsers verificados com ${numRuns} entradas geradas por propriedade (seed=${seed}); ${findings.length} violacoes`,
       ),
     },
     findings,
@@ -911,7 +659,7 @@ async function runFastCheckTool({sourceAnalyses, versions, failTool}) {
  */
 async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
   const toolName = 'playwright-test-audit';
-  const version = versions.playwright;
+  const version = versions.playwrightAudit;
   if (failTool === toolName) {
     throw new Error('QA_PLAYWRIGHT_AUDIT_FORCED_FAILURE');
   }
@@ -933,7 +681,7 @@ async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
         file: sk.file,
         line: sk.line,
         severity: 'alta',
-        message: `Teste marcado como pulado ('${sk.title}'): testes pulados ocultam defeitos reais`,
+        message: `Marcação estática de teste pulado ('${sk.title}')`,
         evidence: cleanSingleLine(`${sk.kind} em ${sk.file}:${sk.line} -> ${sk.snippet}`),
       });
     }
@@ -945,7 +693,7 @@ async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
         file: na.file,
         line: na.line,
         severity: 'media',
-        message: `Teste ativo '${na.title}' executa sem nenhuma assercao verificavel`,
+        message: `Análise estática não identificou asserção em '${na.title}'`,
         evidence: cleanSingleLine(`bloco de teste sem assert/expect em ${na.file}:${na.line}`),
       });
     }
@@ -953,11 +701,11 @@ async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
     for (const fl of t.flakyPatterns) {
       findings.push({
         tool: toolName,
-        rule: 'QA-TESTE-OSCILANTE',
+        rule: 'QA-PADRAO-NAO-DETERMINISTICO',
         file: fl.file,
         line: fl.line,
         severity: 'media',
-        message: `Teste '${fl.title}' contem padrao nao deterministico que causa oscilacao entre execucoes`,
+        message: `Teste '${fl.title}' contém padrão estático associado a não determinismo`,
         evidence: cleanSingleLine(`uso de Math.random/waitForTimeout em ${fl.file}:${fl.line} -> ${fl.snippet}`),
       });
     }
@@ -969,7 +717,7 @@ async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
       version,
       status: 'ok',
       detail: cleanSingleLine(
-        `${testAnalyses.length} arquivos de teste auditados (${totalActive} ativos, ${totalSkipped} pulados, ${totalNoAssert} sem assercao)`,
+        `${testAnalyses.length} arquivos de teste auditados por análise estática (${totalActive} blocos, ${totalSkipped} marcações de skip, ${totalNoAssert} sem asserção identificada)`,
       ),
     },
     findings,
@@ -998,16 +746,10 @@ async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
     };
   }
 
-  let axeSource = null;
-  let JSDOM = null;
-  try {
-    const axeMod = await tryImportTool('axe-core', 'axe.js');
-    const jsdomMod = await tryImportTool('jsdom', 'lib/api.js');
-    axeSource = (axeMod.default ?? axeMod)?.source;
-    JSDOM = jsdomMod.JSDOM ?? jsdomMod.default?.JSDOM;
-  } catch {
-    /* fallback estático HTML */
-  }
+  const axeMod = await tryImportTool('axe-core', 'axe.js');
+  const {JSDOM} = await tryImportTool('jsdom', 'lib/api.js');
+  const axeSource = (axeMod.default ?? axeMod).source;
+  if (!axeSource || !JSDOM) throw new Error('QA_AXE_TOOL_INCOMPLETE');
 
   const findings = [];
   for (const relHtml of htmlFiles) {
@@ -1015,81 +757,43 @@ async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
     // Remove qualquer tag <script> antes de criar o DOM para garantir que nenhum script não confiável exista
     const sanitizedHtml = rawHtml.replace(/<script\b[\s\S]*?<\/script>/gi, '');
 
-    if (axeSource && JSDOM) {
-      const dom = new JSDOM(sanitizedHtml, {runScripts: 'outside-only'});
-      try {
-        dom.window.eval(axeSource);
-        const results = await dom.window.axe.run(dom.window.document, {
-          runOnly: {
-            type: 'tag',
-            values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'],
-          },
-          rules: {
-            'color-contrast': {enabled: false},
-          },
-        });
-        for (const violation of results.violations ?? []) {
-          const ruleId = String(violation.id ?? 'wcag').toUpperCase();
-          const severity =
-            violation.impact === 'critical' || violation.impact === 'serious'
-              ? 'alta'
-              : violation.impact === 'moderate'
-                ? 'media'
-                : 'baixa';
-          for (const node of violation.nodes ?? []) {
-            const snippet = String(node.html ?? violation.id);
-            const tagProbe = snippet.split(/\s+/)[0]?.replace(/[<>]/g, '') || snippet;
-            const line = findLineNumber(rawHtml, snippet.slice(0, 32), findLineNumber(rawHtml, `<${tagProbe}`, 1));
-            findings.push({
-              tool: toolName,
-              rule: `QA-AXE-${ruleId}`,
-              file: relHtml,
-              line,
-              severity,
-              message: cleanSingleLine(`Violacao de acessibilidade axe-core (${violation.id}): ${violation.help}`),
-              evidence: cleanSingleLine(`elemento ${snippet} em ${relHtml}:${line}`),
-            });
-          }
-        }
-      } finally {
-        dom.window.close();
-      }
-    } else {
-      // Fallback HTML determinístico para as mesmas regras WCAG críticas (image-alt e button-name)
-      const imgRegex = /<img\b[^>]*>/gi;
-      let m;
-      while ((m = imgRegex.exec(sanitizedHtml)) !== null) {
-        if (!/\balt\s*=\s*['"][^'"]*['"]/i.test(m[0])) {
-          const line = lineOfOffset(sanitizedHtml, m.index);
+    const dom = new JSDOM(sanitizedHtml, {runScripts: 'outside-only'});
+    try {
+      dom.window.eval(axeSource);
+      const results = await dom.window.axe.run(dom.window.document, {
+        runOnly: {
+          type: 'tag',
+          values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'],
+        },
+        rules: {
+          'color-contrast': {enabled: false},
+        },
+      });
+      for (const violation of results.violations ?? []) {
+        const ruleId = String(violation.id ?? 'wcag').toUpperCase();
+        const severity =
+          violation.impact === 'critical' || violation.impact === 'serious'
+            ? 'alta'
+            : violation.impact === 'moderate'
+              ? 'media'
+              : 'baixa';
+        for (const node of violation.nodes ?? []) {
+          const snippet = String(node.html ?? violation.id);
+          const tagProbe = snippet.split(/\s+/)[0]?.replace(/[<>]/g, '') || snippet;
+          const line = findLineNumber(rawHtml, snippet.slice(0, 32), findLineNumber(rawHtml, `<${tagProbe}`, 1));
           findings.push({
             tool: toolName,
-            rule: 'QA-AXE-IMAGE-ALT',
+            rule: `QA-AXE-${ruleId}`,
             file: relHtml,
             line,
-            severity: 'alta',
-            message: 'Violacao de acessibilidade axe-core (image-alt): Images must have alternative text',
-            evidence: cleanSingleLine(`elemento ${m[0]} em ${relHtml}:${line}`),
+            severity,
+            message: cleanSingleLine(`Violacao de acessibilidade axe-core (${violation.id}): ${violation.help}`),
+            evidence: cleanSingleLine(`elemento ${snippet} em ${relHtml}:${line}`),
           });
         }
       }
-      const btnRegex = /<button\b([^>]*)>([\s\S]*?)<\/button>/gi;
-      while ((m = btnRegex.exec(sanitizedHtml)) !== null) {
-        const attrs = m[1] ?? '';
-        const inner = (m[2] ?? '').replace(/<[^>]+>/g, '').trim();
-        const hasAria = /\baria-label(?:ledby)?\s*=\s*['"][^'"]+['"]/i.test(attrs);
-        if (!inner && !hasAria) {
-          const line = lineOfOffset(sanitizedHtml, m.index);
-          findings.push({
-            tool: toolName,
-            rule: 'QA-AXE-BUTTON-NAME',
-            file: relHtml,
-            line,
-            severity: 'alta',
-            message: 'Violacao de acessibilidade axe-core (button-name): Buttons must have discernible text',
-            evidence: cleanSingleLine(`elemento ${m[0]} em ${relHtml}:${line}`),
-          });
-        }
-      }
+    } finally {
+      dom.window.close();
     }
   }
 
@@ -1130,13 +834,8 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
     };
   }
 
-  let SwaggerParser = null;
-  try {
-    const swMod = await tryImportTool('@apidevtools/swagger-parser', 'lib/index.js');
-    SwaggerParser = swMod.default ?? swMod;
-  } catch {
-    /* fallback validador OpenAPI JSON */
-  }
+  const swMod = await tryImportTool('@apidevtools/swagger-parser', 'lib/index.js');
+  const SwaggerParser = swMod.default ?? swMod;
 
   const findings = [];
   const documentedOperations = new Set(); // "METHOD /path"
@@ -1144,16 +843,12 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
 
   for (const specRel of openapiFiles) {
     const specFull = join(workspace, specRel);
-    const rawText = readFileSync(specFull, 'utf8');
-    let parsedSpec;
-    if (SwaggerParser?.validate) {
-      parsedSpec = await SwaggerParser.validate(specFull);
-    } else {
-      parsedSpec = JSON.parse(rawText);
-      if (!parsedSpec.openapi || !parsedSpec.paths) {
-        throw new Error(`QA_OPENAPI_INVALID_SCHEMA: ${specRel}`);
-      }
-    }
+    const parsedSpec = await SwaggerParser.validate(specFull, {
+      resolve: {
+        http: false,
+        file: {canRead: file => file.url === specFull, read: () => readFileSync(specFull)},
+      },
+    });
 
     for (const [routePath, pathItem] of Object.entries(parsedSpec.paths ?? {})) {
       if (!pathItem || typeof pathItem !== 'object') continue;
@@ -1213,14 +908,12 @@ export async function collectQaModule(options = {}) {
   const failTool = options.failTool ?? process.env.QA_FAIL_TOOL ?? '';
   const versions = loadLockedVersions();
 
-  const {workRoot, workspace, copiedFiles} = copyRepoToIsolatedTmp(repoDir);
+  const {workRoot, workspace, copiedFiles, incomplete} = copyRepoToIsolatedTmp(repoDir);
   try {
-    const sourceFiles = copiedFiles.filter(
-      f => /\.(?:ts|tsx|js|mjs|cjs)$/.test(f) && !/\.(?:test|spec)\.(?:ts|tsx|js|mjs|cjs)$/.test(f) && !f.startsWith('tests/'),
-    );
-    const testFiles = copiedFiles.filter(
-      f => /\.(?:test|spec)\.(?:ts|tsx|js|mjs|cjs)$/.test(f) || (f.startsWith('tests/') && /\.(?:ts|tsx|js|mjs|cjs)$/.test(f)),
-    );
+    const codeFiles = copiedFiles.filter(f => /\.(?:[cm]?[jt]s|tsx)$/.test(f) && !/\.d\.[cm]?ts$/.test(f));
+    const testFiles = codeFiles.filter(f => /(?:^|\/)(?:test|tests)\//.test(f) ||
+      /(?:^|\/|[.-])(?:test|spec)\.(?:[cm]?[jt]s|tsx)$/.test(f));
+    const sourceFiles = codeFiles.filter(f => !testFiles.includes(f));
     const htmlFiles = copiedFiles.filter(f => /\.(?:html|htm)$/.test(f));
     const openapiFiles = copiedFiles.filter(f => /(?:^|\/)(?:openapi|swagger)\.(?:json|yaml|yml)$/i.test(f));
     const reqFiles = copiedFiles.filter(f => /(?:^|\/)(?:requisitos|requirements)\.md$/i.test(f));
@@ -1232,16 +925,46 @@ export async function collectQaModule(options = {}) {
     const extraCoverageRows = [];
     const findings = [];
 
+    const runtime = {tests: [], baseline: null};
+    const context = {repoDir, workspace, workRoot};
+    let selectionError;
+    try {
+      const manifest = copiedFiles.includes('package.json') ? JSON.parse(readFileSync(join(workspace, 'package.json'), 'utf8')) : null;
+      const selection = selectNodeSuite({
+        manifest, testFiles,
+        readTest: file => readFileSync(join(workspace, file), 'utf8'),
+        incomplete: incomplete || copiedFiles.some(f => f.endsWith('/package.json')),
+      });
+      Object.assign(context, selection);
+      if (!context.reason && !executionAllowed(repoDir)) {
+        if (runtimeInstalled && process.env.QA_HOST_TEST_MODE !== '1') throw new Error('QA_CONTAINER_REQUIRED');
+        context.reason = 'execução dinâmica reservada ao contêiner isolado';
+      }
+    } catch (error) {
+      selectionError = error;
+    }
+
     const toolRunners = [
       {
-        name: 'istanbul-coverage',
-        version: versions.istanbul,
-        run: () => runIstanbulCoverageTool({workspace, sourceAnalyses, testAnalyses, reqFiles, versions, failTool}),
+        name: suiteTool,
+        version: process.versions.v8,
+        run: () => {
+          if (selectionError) throw selectionError;
+          return runNodeCoverage({context, sourceAnalyses, version: process.versions.v8, failTool, runtime});
+        },
       },
       {
-        name: 'stryker-mutator',
+        name: mutationTool,
         version: versions.stryker,
-        run: () => runStrykerMutationTool({workspace, sourceAnalyses, testAnalyses, versions, failTool}),
+        run: () => {
+          if (selectionError) throw selectionError;
+          return runStrykerMutationTool({context, sourceFiles, version: versions.stryker, failTool, runtime});
+        },
+      },
+      {
+        name: 'qa-matriz-estatica',
+        version: '1',
+        run: () => buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests: runtime.tests}),
       },
       {
         name: 'fast-check',
@@ -1250,7 +973,7 @@ export async function collectQaModule(options = {}) {
       },
       {
         name: 'playwright-test-audit',
-        version: versions.playwright,
+        version: versions.playwrightAudit,
         run: () => runPlaywrightTestAuditTool({testAnalyses, versions, failTool}),
       },
       {
