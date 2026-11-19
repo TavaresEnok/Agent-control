@@ -1380,3 +1380,6 @@ PAUSADO-COTA
 - 19/11/2026 23:10 UTC — prontidao em 8801d96e publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 183, 'failed': 3, 'skipped': 7}; código do produto VERIFY_TOOLS_FAILED.
 - 19/11/2026 23:12 UTC — C-ACEITE-PRONTIDAO-VIVA-R13 encerrado com código 0.
 - 19/11/2026 23:13 UTC — Confere as asserções de documentação e conformidade na árvore integrada. Ordem C-INTEROPERABILIDADE-LAB em worktree separado conforme 43f1c664.
+- 19/11/2026 23:13 UTC — Na prova cruzada, um link antigo de dependências da bancada estava quebrado. As dependências de arquitetura foram repostas da imagem fixada, com comparação do package-lock. Os seis testes de arquitetura que falharam passaram na repetição. As outras duas falhas ficaram na ordem de interoperabilidade.
+- 19/11/2026 23:13 UTC — trabalho-C-INTEROPERABILIDADE-LAB iniciado em final-correcao-instalacao por terra high.
+- 19/11/2026 23:13 UTC — Compartilha a decisão de evidência operacional nos limites da análise estática. Ordem C-PRONTIDAO-VIVA-R14 em worktree separado conforme 43f1c664.
