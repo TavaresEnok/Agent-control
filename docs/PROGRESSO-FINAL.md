@@ -520,3 +520,11 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:02 UTC — Revisor encerrou C-PAINEL-R4 em b809469f (código 0). Gerente confere a entrega.
 - 19/11/2026 06:02 UTC — Revisão C2-MUTACAO-LINGUAGENS iniciada por Sol high normal somente leitura em 195c8cd8.
 - 19/11/2026 06:03 UTC — Captura 7bf5c1e5: 28/28 com PostgreSQL e Docker. O cliente R7 original removeu o contêiner exato enquanto a troca de época permaneceu bloqueada. Os testes separam erro de transporte e falha legítima do filho. Exame: após ligar os recibos de leitura à publicação, os 43 testes passaram, incluindo confirmação e pedido de correção nos oito módulos. Registrada segunda rodada de fidelidade do Chromium.
+- 19/11/2026 06:05 UTC — Homologação incremental em c87a21ab reuniu o transporte íntegro do coletor, o vínculo do SQL executado, a revisão com recibo de leitura, a reverificação funcional e a imagem de prontidão. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:06 UTC — Falha na validação de c3-r11 em suite, código 1. Logs privados do gerente.
+- 19/11/2026 06:06 UTC — Validação de c4-aceite-r7 em 8203f2f9 iniciada no checkout de integração.
+- 19/11/2026 06:06 UTC — Revisor encerrou C2-MUTACAO-LINGUAGENS em 195c8cd8 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:06 UTC — Revisão C-EXAME-R5 iniciada por Sol high normal somente leitura em 6ec910f0.
+- 19/11/2026 06:08 UTC — Trabalhador encerrou C2-PROPRIEDADES-JS em b991995f (código 0). Gerente confere a entrega.
+- 19/11/2026 06:08 UTC — Trabalho C-CORRECAO-ESCOPO iniciado por Sol high normal em final-correcao-por-arquivo.
+- 19/11/2026 06:09 UTC — A suíte de C3 em e66a635f passou em 256 arquivos e falhou em module-arquitetura.test.ts. O checkout de aceite carregava o pacote de versão do TypeScript 7 raiz, sem a API de AST. Com a dependência 5.9.3 do lock do coletor, o arquivo passou nos 18 casos executáveis nesse host; o ensaio de permissão é condicionado ao usuário. A suíte completa será repetida. Revisão de mutação Python/Go encaminhada aos trabalhadores.
