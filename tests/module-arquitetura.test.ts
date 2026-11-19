@@ -1861,7 +1861,11 @@ test('publicação preserva rotas de interceptação longas em Markdown sem exim
     'app/(...)[identificadorInternacionalDaTransacao]/page.ts',
     'app/(.)detalhesDoPagamentoInternacionalDaConta/page.ts',
     'src/app/(.)[[...identificadorInternacionalDaTransacao]]/page.tsx',
+    'packages/checkout/app/(.)[identificadorInternacionalDaTransacao]/page.ts',
+    'app/(.)[identificadorInternacionalDaTransacaoV2]/page.tsx',
   ];
+  const lowercaseBase64Opaque = 'bcdefghijklmnopqrsbcdefghijklmnopqrsbcdefg'; // 42 chars, entropy ~4.06
+  const lowercaseShortOpaque = 'bcdefghijklmnopqrstuvwxyzbcdefgh'; // 32 chars, 1 word
   const negativeCases = [
     'app/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/page.ts',
     'app/[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]/page.ts',
@@ -1870,6 +1874,17 @@ test('publicação preserva rotas de interceptação longas em Markdown sem exim
     'app/(.)[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]/page.ts',
     'app/(.)[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]]/page.ts',
     'app/(AbCdEfGhIjKlMnOpQrStUvWxYz0123456789)/page.ts',
+    `app/(.)[${lowercaseBase64Opaque}]/page.ts`,
+    `app/(${lowercaseBase64Opaque})/page.ts`,
+    `app/(.)${lowercaseBase64Opaque}/page.ts`,
+    `packages/${lowercaseBase64Opaque}/app/(.)[identificadorInternacionalDaTransacao]/page.ts`,
+    lowercaseBase64Opaque,
+    `app/(.)[${lowercaseShortOpaque}]/page.ts`,
+    'identificadorInternacionalDaTransacaoV2',
+    'app/(.)[identificadorInternacionalDaTransacao]/[id]]/page.tsx:12',
+    'app/(.)[identificadorInternacionalDaTransacao]/(grupo))/page.ts',
+    'packages/checkout/app/(.)[identificadorInternacionalDaTransacao]/[id]]/page.tsx',
+    'packages/checkout/app/(.)[identificadorInternacionalDaTransacao]/x.ts',
     'src/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/x.ts',
     'src/(.)AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/x.ts',
     'src/(.)[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]/x.ts',
@@ -1975,7 +1990,11 @@ test('publicação preserva rotas de interceptação longas em Markdown sem exim
     assert.equal(mapa.includes('[removido: alta entropia]'), false);
     for (const artifact of [mapa, cobertura, achadosJson, rawJson, ...achadosMd]) {
       assert.equal(artifact.includes('AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'), false);
+      assert.equal(artifact.includes(lowercaseBase64Opaque), false);
+      assert.equal(artifact.includes(lowercaseShortOpaque), false);
       assert.equal(artifact.includes('[identificadorInternacionalDaTransacao]]'), false);
+      assert.equal(artifact.includes('[identificadorInternacionalDaTransacao]/[id]]'), false);
+      assert.equal(artifact.includes('packages/checkout/app/(.)[identificadorInternacionalDaTransacao]/x.ts'), false);
       assert.equal(artifact.includes('src/(.)detalhesDoPagamentoInternacionalDaConta/x.ts'), false);
     }
     const unresolvedAchados = published.achados.filter(item => item.reference === 'knip:KNIP-UNRESOLVED-IMPORT');

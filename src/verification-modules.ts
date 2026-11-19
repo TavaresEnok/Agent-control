@@ -503,19 +503,23 @@ function shannonEntropy(value: string): number {
 
 const REMOVED_HIGH_ENTROPY = '[removido: alta entropia]';
 const BASE64_SECRET = /[A-Za-z0-9+]{40,}={0,2}/;
-const SNAKE_IDENTIFIER = /^[a-z][a-z0-9_]{31,}$/;
+const SNAKE_IDENTIFIER = /^(?=.*_)[a-z][a-z0-9_]{31,}$/;
 const SHORT_FILE_EXTENSION = /\.[A-Za-z0-9]{1,5}$/;
+const ROUTE_DELIMITER = /[\[\]()]/;
+const STATIC_ROUTE_SEGMENT = /^[A-Za-z0-9@._-]+$/;
 const INTERCEPT_PREFIX = /^(?:\(\.\)|\(\.\.\)(?:\(\.\.\))?|\(\.\.\.\))(.+)$/u;
 const ROUTE_IDENTIFIER = /^[\p{L}][\p{L}\p{N}_-]*$/u;
+const ROUTE_VERSION_SUFFIX = /(?:[-_]?[Vv]\d{1,2})$/;
 const APP_ROUTE_LEAF = /^(?:page|layout|template|loading|error|not-found|global-error|default|route)\.(?:[cm]?[jt]sx?)$/;
 
 function isDescriptiveRouteIdentifier(name: string): boolean {
   if (!ROUTE_IDENTIFIER.test(name) || shannonEntropy(name) >= 4.3) return false;
-  const words = name
+  const stem = name.replace(ROUTE_VERSION_SUFFIX, '');
+  const words = stem
     .split(/[-_]+/)
     .flatMap(part => part.split(/(?=\p{Lu}\p{Ll})/u))
     .filter(Boolean);
-  if (words.length === 0 || words.some(word => !/^\p{Lu}?\p{Ll}+$/u.test(word))) return false;
+  if (words.length < 2 || words.some(word => !/^\p{Lu}?\p{Ll}+$/u.test(word))) return false;
   const longWordChars = words
     .filter(word => /^\p{Lu}?\p{Ll}{3,}$/u.test(word))
     .reduce((sum, word) => sum + word.length, 0);
@@ -544,16 +548,29 @@ function extractFrameworkRouteName(segment: string): string | null {
     inner = body;
   }
 
-  return inner && isDescriptiveRouteIdentifier(inner) ? inner : null;
+  return inner && ROUTE_IDENTIFIER.test(inner) ? inner : null;
 }
 
-function isAppRouteContext(segments: readonly string[], cleanLeaf: string): boolean {
-  const appIndex = segments[0] === 'app' ? 0 : (segments[0] === 'src' && segments[1] === 'app' ? 1 : -1);
-  if (appIndex < 0 || segments.length <= appIndex + 2) return false;
-  return APP_ROUTE_LEAF.test(cleanLeaf);
+function isValidAppRoutePath(segments: readonly string[], cleanLeaf: string): boolean {
+  if (cleanLeaf.length >= 32 || !APP_ROUTE_LEAF.test(cleanLeaf)) return false;
+  const dirSegments = segments.slice(0, -1);
+  const appIndex = dirSegments.indexOf('app');
+  if (appIndex < 0 || appIndex >= dirSegments.length - 1) return false;
+  if (dirSegments.slice(0, appIndex).some(seg => seg.length >= 32 || seg === '.' || seg === '..' || !STATIC_ROUTE_SEGMENT.test(seg))) {
+    return false;
+  }
+  return dirSegments.slice(appIndex + 1).every(segment => {
+    if (segment === '.' || segment === '..') return false;
+    if (ROUTE_DELIMITER.test(segment) || segment.length >= 32) {
+      const routeName = extractFrameworkRouteName(segment);
+      return routeName !== null && (segment.length < 32 || isDescriptiveRouteIdentifier(routeName));
+    }
+    return STATIC_ROUTE_SEGMENT.test(segment);
+  });
 }
 
 function isSnakeToken(token: string): boolean {
+  if (token.includes('/') && ROUTE_DELIMITER.test(token)) return false;
   if (SNAKE_IDENTIFIER.test(token)) return true;
   const pieces = token.split(/[^A-Za-z0-9_]+/).filter(piece => piece.length > 0);
   if (pieces.length === 0 || pieces.some(piece => !/^[a-z][a-z0-9_]*$/.test(piece))) return false;
@@ -569,8 +586,7 @@ function isPathToken(token: string): boolean {
   if (segments.every(segment => segment.length < 32)) {
     return segments.slice(0, -1).some(segment => SHORT_FILE_EXTENSION.test(segment)) || SHORT_FILE_EXTENSION.test(cleanLeaf);
   }
-  if (!isAppRouteContext(segments, cleanLeaf) || cleanLeaf.length >= 32) return false;
-  return segments.slice(0, -1).every(segment => segment.length < 32 || extractFrameworkRouteName(segment) !== null);
+  return isValidAppRoutePath(segments, cleanLeaf);
 }
 
 function isMaskToken(token: string): boolean {
@@ -578,14 +594,14 @@ function isMaskToken(token: string): boolean {
 }
 
 function isSecretToken(token: string): boolean {
-  if (!token || isMaskToken(token) || isPathToken(token) || isSnakeToken(token)) return false;
+  if (!token || isMaskToken(token)) return false;
+  if (BASE64_SECRET.test(token)) return true;
+  if (isPathToken(token) || isSnakeToken(token)) return false;
   if (!token.includes('/')) {
-    if (BASE64_SECRET.test(token)) return true;
     return token.length >= 32 && shannonEntropy(token) >= 3.5;
   }
   return token.split('/').some(segment => {
     if (!segment || SNAKE_IDENTIFIER.test(segment)) return false;
-    if (BASE64_SECRET.test(segment)) return true;
     return segment.length >= 32 && shannonEntropy(segment) >= 3.5;
   });
 }
