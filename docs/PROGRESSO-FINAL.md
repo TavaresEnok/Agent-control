@@ -396,3 +396,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:49 UTC — Revisão C-EXAME-R4 iniciada por Sol high normal somente leitura em 3ec5a0fe.
 - 19/11/2026 04:49 UTC — QA visual recebeu ordem para medir contraste com Chromium e comparar somente referências versionadas no snapshot. A suíte de QA aceita a medição de requisitos sem esconder os defeitos funcionais; a verificação das oito CLIs foi concluída em homologação.
 - 19/11/2026 04:51 UTC — Banco de dados R6, imagem fixada em b39683af, passou nos 12 testes e laboratório com PostgreSQL, Dexter e Squawk. A rejeição do lote original é preservada nos casos ambíguos. Integração incremental C5 a8113f92, C6 d7f37795, C7 f154d09a, C8 20e1dce5, C9 b53f2fb4. Em QA, o teste nativo com TAP explícito passou em 8/8, incluindo antes e depois da correção funcional.
+- 19/11/2026 04:52 UTC — Revisor encerrou C-EXAME-R4 em 3ec5a0fe (código 0). Gerente confere a entrega.
+- 19/11/2026 04:52 UTC — Revisão C-BASE-R9 iniciada por Sol high normal somente leitura em 66fa91b5.
+- 19/11/2026 04:55 UTC — Trabalhador encerrou C6-R9 em 2cafe62b (código 0). Gerente confere a entrega.
+- 19/11/2026 04:55 UTC — Trabalho C9-R5 iniciado por Sol high normal em final-c9.
+- 19/11/2026 04:55 UTC — Comparados os dez arquivos de licença e esquemas CycloneDX com o commit oficial 4b3f59453366e27c8073fd24e98bf21ef8892c8e: dez SHA-256 iguais. A CLI de banco R6 e os controles passivos de prontidão passaram em 9/9. Sol fará C-EXAME-R5 sobre a identidade de testes e rotas após a ordem de medições. Em documentação, o parser POSIX real já passou nos casos de continuação, comentário e redirecionamento.
