@@ -854,3 +854,6 @@ PAUSADO-COTA
 - 19/11/2026 18:23 UTC — trabalho-C9-ORIGEM-POSITIVA iniciado em final-c9 por Sol high normal.
 - 19/11/2026 18:25 UTC — Testes complementares de entrega-arquitetura-1 em 38e9984c: 52 aprovados.
 - 19/11/2026 18:25 UTC — A imagem revisada de QA passou na homologação física e no laboratório da CLI: pass 132, fail 0, skipped 0.
+- 19/11/2026 18:25 UTC — Validação completa de entrega-arquitetura-1 em 38e9984c: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 18:25 UTC — Validação de entrega-dependencias-1 em 05776a76 iniciada no checkout de integração.
+- 19/11/2026 18:27 UTC — O banco passou no ensaio acumulado da imagem, no exame real da consulta SQL e na CLI. O digest está fixado no ramo de integração do módulo 5.
