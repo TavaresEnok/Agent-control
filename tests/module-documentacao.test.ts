@@ -1024,42 +1024,124 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   }
 });
 
-test('TypeDoc exige um arquivo inequívoco quando o aviso aceita um prefixo de pacote', () => {
+test('TypeDoc exige declaração inequívoca com o nome, o tipo e o identificador do aviso', () => {
   const root = FIXTURE_CLEAN_DIR;
-  const diagnostic = '[warning] Sample (Interface), defined in pkg/src/api.ts, does not have any documentation';
-  const reflection = {kind: 1, name: 'x', children: []};
-  const sources = new Map([
-    ['package.json', '{"name":"pkg"}'], ['pkg/package.json', '{"name":"pkg"}'],
-    ['pkg/src/api.ts', '\n\nexport interface Sample {}'], ['src/api.ts', '\nexport interface Sample {}'],
-  ]);
-  const read = (file: string) => sources.get(file) ?? '';
-  const parse = (report: object, warning = diagnostic) => parseTypedocReport(report, warning, root, read,
-    MODULE_DEPLOY_DIR, new Set(sources.keys())).findings;
-  const sample = (fileName: string, line: number) => ({name: 'Sample', kind: 256, sources: [{fileName, line}],
-    comment: {summary: [{text: 'Documentado.'}]}});
-  const partial = {...reflection, children: [sample('src/api.ts', 2)]};
-  assert.deepEqual(parse(reflection), []);
-  assert.deepEqual(parse(partial), []);
+  const diagnostic = '[warning] sample (CallSignature), defined in @scope/pkg/src/api.ts, does not have any documentation';
+  const fileName = 'src/api.ts';
+  const first = {id: 2, name: 'sample', kind: 4096, sources: [{fileName, line: 2}],
+    comment: {summary: [{kind: 'text', text: 'Documentado.'}]}};
+  const second = {id: 3, name: 'sample', kind: 4096, sources: [{fileName, line: 3}]};
+  const symbolId = {packageName: '@scope/pkg', packagePath: fileName, qualifiedName: 'sample'};
+  const report = {
+    kind: 1, name: 'x', symbolIdMap: {1: symbolId, 2: symbolId, 3: symbolId},
+    children: [{id: 1, name: 'sample', kind: 64, sources: [...first.sources, ...second.sources],
+      signatures: [first, second]}],
+  };
+  const parse = (data: object, warning = diagnostic) =>
+    parseTypedocReport(data, warning, root, undefined, MODULE_DEPLOY_DIR, new Set([fileName]));
+  const confirmed = parse(report);
+  assert.deepEqual(confirmed.findings.map(finding => [finding.file, finding.line]), [[fileName, 3]]);
+  assert.equal(confirmed.unlocated, 0);
 
-  sources.set('package.json', '{"name":"root"}');
-  const knownFile = parse(partial);
-  assert.deepEqual(knownFile.map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 1]]);
-  assert.match(knownFile[0].message, /Linha da declaração indeterminada/);
-  const withSource = {...reflection, children: [...partial.children, sample('pkg/src/api.ts', 3)]};
-  assert.deepEqual(parse(withSource).map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 3]]);
+  for (const signatures of [[{...first, comment: undefined}, second], [first, {...second, sources: []}],
+    [first, {...second, sources: [...first.sources, ...second.sources]}]]) {
+    const ambiguous = parse({...report, children: [{...report.children[0], signatures}]});
+    assert.deepEqual(ambiguous.findings, []);
+    assert.equal(ambiguous.unlocated, 1);
+  }
+  const unconfirmed = parse({...report, symbolIdMap: {1: symbolId}});
+  assert.deepEqual(unconfirmed.findings, []);
+  assert.equal(unconfirmed.unlocated, 1);
+  const collision = parse({
+    ...report,
+    symbolIdMap: {...report.symbolIdMap, 4: symbolId},
+    children: [...report.children, {name: 'sample', kind: 64,
+      signatures: [{...second, id: 4, sources: [{fileName: 'nested/src/api.ts', line: 3}]}]}],
+  });
+  assert.deepEqual(collision.findings, []);
+  assert.equal(collision.unlocated, 1);
+  const wrongKind = parse(report, diagnostic.replace('(CallSignature)', '(Interface)'));
+  assert.deepEqual(wrongKind.findings, []);
+  assert.equal(wrongKind.unlocated, 1);
+  assert.equal(parse(report, `${diagnostic} em um exemplo`).unlocated, 0);
+});
 
-  sources.set('pkg/package.json', '{"name":"@scope/pkg"}');
-  assert.deepEqual(parse(withSource, diagnostic.replace('in pkg/', 'in @scope/pkg/'))
-    .map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 3]]);
-  sources.set('package.json', '{"name":"pkg"}');
-  assert.deepEqual(parse(withSource).map(finding => [finding.file, finding.line]), [['src/api.ts', 2]]);
-  assert.deepEqual(parse(withSource, `${diagnostic} em um exemplo`), []);
+test('TypeDoc usa a declaração de avisos reais com mapas de declaração inequívocos', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-declaration-map-'));
+  try {
+    const files = {
+      'package.json': '{"name":"fixture"}',
+      'index.ts': ['Confirmed', 'Multiple', 'Missing', 'Direct']
+        .map(name => `export {${name}} from "./types/${name.toLowerCase()}";`).join('\n'),
+      'types/confirmed.d.ts': '\nexport interface Confirmed {}',
+      'types/multiple.d.ts': '\n\nexport interface Multiple {}',
+      'types/missing.d.ts': 'export interface Missing {}',
+      'types/direct.d.ts': '\n\n\nexport interface Direct {}',
+      'original/confirmed.ts': 'export {};',
+      'original/other.ts': 'export {};',
+    };
+    for (const [file, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, file)), {recursive: true});
+      writeFileSync(join(root, file), body);
+    }
+    for (const [name, sources] of Object.entries({
+      confirmed: ['confirmed.ts'], multiple: ['confirmed.ts', 'other.ts'], missing: ['missing.ts'],
+    })) {
+      writeFileSync(join(root, `types/${name}.d.ts.map`), JSON.stringify({
+        version: 3, file: `${name}.d.ts`, sourceRoot: '../original', sources, names: [], mappings: '',
+      }));
+    }
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    const coverage = result.coverage.find(row => row.tool === 'typedoc');
+    assert.equal(coverage?.status, 'ok', coverage?.detail);
+    assert.match(coverage.detail, /avisos_sem_origem=2$/);
+    const findings = result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC');
+    assert.deepEqual(findings.map(finding => [finding.file, finding.line]).sort(),
+      [['types/confirmed.d.ts', 2], ['types/direct.d.ts', 4]]);
+    assert.match(findings.find(finding => finding.file === 'types/confirmed.d.ts')?.evidence ?? '',
+      /defined in fixture\/original\/confirmed\.ts,/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
 
-  sources.delete('package.json');
-  const absolutePath = join(root, 'src/api.ts');
-  assert.deepEqual(parse(partial, diagnostic.replace('pkg/src/api.ts', `<unknown>/${absolutePath}`))
-    .map(finding => [finding.file, finding.line]), [['src/api.ts', 2]]);
-  assert.deepEqual(parse(partial, diagnostic), []);
+test('TypeDoc localiza a sobrecarga comentada e segue os escapes de chaves do lexer real', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-overload-comments-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), [
+      '/** Primeira sobrecarga. */',
+      'export function format(value: string): string;',
+      '/** Segunda sobrecarga.',
+      String.raw` * Exemplo \\{@link Missing}.`,
+      ' * Consulte {@link',
+      ' * Missing}.',
+      String.raw` * Consulte {@link Missing\}Brace}.`,
+      ' * @param old Parâmetro antigo.',
+      ' */',
+      'export function format(value: number): number;',
+      'export function format(value: string | number) { return value; }',
+      '/** Consulte {@link Again}. */',
+      'export function repeated(value: string): string;',
+      '/** Compare {@link Again}. */',
+      'export function repeated(value: number): number;',
+      'export function repeated(value: string | number) { return value; }',
+      'export function withoutDoc(value: string): string;',
+      'export function withoutDoc(value: number): number;',
+      'export function withoutDoc(value: string | number) { return value; }',
+    ].join('\n'));
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    const coverage = result.coverage.find(row => row.tool === 'typedoc');
+    assert.equal(coverage?.status, 'ok', coverage?.detail);
+    assert.match(coverage.detail, /avisos_sem_origem=4$/);
+    assert.deepEqual(result.findings.filter(finding => finding.tool === 'typedoc')
+      .map(finding => [finding.rule, finding.file, finding.line]).sort(), [
+      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 5],
+      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 7],
+      ['DOC-TYPEDOC-PARAM-DESATUALIZADO', 'api.ts', 8],
+    ]);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
 });
 
 test('TypeDoc preserva o catálogo sem interpretar mensagens de uma versão desconhecida', () => {
