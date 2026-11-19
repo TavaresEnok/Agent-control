@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   truncateSync,
   writeFileSync,
@@ -317,6 +318,26 @@ test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de ac
   assert.equal(depOut.stats.cycles, 2);
   assert.equal(depOut.findings.filter(f => f.rule === 'DEPCRUISE-NO-CIRCULAR' && f.file === 'src/domain/order.ts').length, 1);
   assert.equal(depOut.stats.layerViolations, 2);
+});
+
+test('Knip aplica a elegibilidade aos achados e mantém problemas por arquivo e manifesto', () => {
+  const result = parseKnipReport({
+    analyzedFiles: ['src/main.ts', 'src/tests/ignored.ts', 'src/fixtures/ignored.ts'],
+    entryFiles: ['src/main.ts'],
+    issues: [
+      {file: 'src/main.ts', exports: [{name: 'unused', line: 3}], unresolved: [{name: 'missing', line: 4}]},
+      {file: 'src/dead.ts', files: [{name: 'src/dead.ts'}, {name: 'src/tests/dead.ts'}, {name: 'src/fixtures/dead.ts'}]},
+      {file: 'src/tests/ignored.ts', exports: [{name: 'ignored', line: 1}], unresolved: [{name: 'ignored', line: 1}]},
+      {file: 'src/fixtures/ignored.ts', exports: [{name: 'ignored', line: 1}]},
+      {file: 'package.json', dependencies: [{name: 'unused-package', line: 1}]},
+      {file: 'src/fixtures/package.json', dependencies: [{name: 'ignored-package', line: 1}]},
+    ],
+  }, '/synthetic', new Set(['src/main.ts', 'src/dead.ts']));
+  assert.deepEqual(result.findings.map(item => item.file), ['src/main.ts', 'src/main.ts', 'src/dead.ts', 'package.json']);
+  assert.deepEqual(result.perFileCoverage.map(({file, role, issues}) => [file, role, issues]), [
+    ['src/dead.ts', 'nao_alcancado', 1], ['src/main.ts', 'entrada', 2],
+  ]);
+  assert.deepEqual(result.stats, {totalFiles: 2, entries: 1, unusedFiles: 1, unusedExports: 1, unusedDeps: 2});
 });
 
 test('complexidade e buildKnipConfig distinguem a fixture com defeito da fixture limpa', () => {
@@ -651,10 +672,12 @@ test('configuração do grafo preserva extends locais com e sem extensão dentro
     writeFileSync(join(temp, 'outside.json'), '{}');
     writeFileSync(join(repo, 'index.ts'), 'export const synthetic = 1;\n');
     writeFileSync(join(repo, 'tsconfig.json'), JSON.stringify({
-      extends: ['./config/base', './config/other.json', '../outside', 'outside-package'],
+      extends: ['.\\config\\base', './config/other.json', '..\\outside', 'outside-package', '.\\config\\link'],
     }));
-    writeFileSync(join(repo, 'config', 'base.json'), JSON.stringify({extends: '../outside'}));
+    writeFileSync(join(repo, 'config', 'base.json'), JSON.stringify({extends: '..\\shared'}));
+    writeFileSync(join(repo, 'shared.json'), JSON.stringify({extends: '..\\outside'}));
     writeFileSync(join(repo, 'config', 'other.json'), '{}');
+    symlinkSync(join(temp, 'outside.json'), join(repo, 'config', 'link.json'));
     const output = runCollector({
       repoDir: repo,
       toolsRoot: moduleDir,
@@ -665,7 +688,9 @@ test('configuração do grafo preserva extends locais com e sem extensão dentro
         const root = JSON.parse(readFileSync(join(cwd, 'tsconfig.json'), 'utf8'));
         assert.deepEqual(root.extends, ['./config/base', './config/other.json']);
         const base = JSON.parse(readFileSync(join(cwd, 'config', 'base.json'), 'utf8'));
-        assert.equal(base.extends, undefined);
+        assert.equal(base.extends, '../shared');
+        const shared = JSON.parse(readFileSync(join(cwd, 'shared.json'), 'utf8'));
+        assert.equal(shared.extends, undefined);
         const config = JSON.parse(readFileSync(argv[argv.indexOf('--config') + 1], 'utf8'));
         assert.equal(config.options.tsConfig.fileName, 'tsconfig.json');
         writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({modules: [{source: 'index.ts'}]}));
@@ -687,10 +712,22 @@ test('binários fixados medem .mts e .cts no Knip e resolvem alias TS herdado no
     cpSync(defectiveFixture, repo, {recursive: true});
     const tsconfigPath = join(repo, 'tsconfig.json');
     const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));
-    writeFileSync(tsconfigPath, JSON.stringify({...tsconfig, extends: './tsconfig.base'}));
+    writeFileSync(tsconfigPath, JSON.stringify({...tsconfig, extends: '.\\tsconfig.base'}));
     writeFileSync(join(repo, 'tsconfig.base.json'), JSON.stringify({
       compilerOptions: {paths: {'@storage': ['./src/infra/memory-store.ts']}},
     }));
+    const packagePath = join(repo, 'package.json');
+    const manifest = JSON.parse(readFileSync(packagePath, 'utf8'));
+    writeFileSync(packagePath, JSON.stringify({...manifest, knip: {entry: ['ignored.ts']}}));
+    const pnpmPath = join(repo, 'pnpm-workspace.yaml');
+    writeFileSync(pnpmPath, 'packages: []\ninclude: synthetic.yaml\n');
+    const originals = [tsconfigPath, join(repo, 'tsconfig.base.json'), packagePath, pnpmPath]
+      .map(path => ({path, content: readFileSync(path, 'utf8')}));
+    for (const {path} of originals) chmodSync(path, 0o444);
+    mkdirSync(join(repo, 'src/tests'), {recursive: true});
+    mkdirSync(join(repo, 'src/fixtures'), {recursive: true});
+    writeFileSync(join(repo, 'src/tests/ignored.ts'), 'export const ignoredTest = 1;\n');
+    writeFileSync(join(repo, 'src/fixtures/ignored.ts'), 'export const ignoredFixture = 1;\n');
     const orderPath = join(repo, 'src/domain/order.ts');
     const order = readFileSync(orderPath, 'utf8').replace('../infra/memory-store.js', '@storage');
     writeFileSync(orderPath, order);
@@ -704,6 +741,12 @@ test('binários fixados medem .mts e .cts no Knip e resolvem alias TS herdado no
     }
     assert.ok(out.findings.some(f => f.rule === 'DEPCRUISE-LAYER-DOMAIN-TO-INFRA' &&
       f.evidence.includes('src/infra/memory-store.ts') && f.evidence.includes('@storage')));
+    assert.equal(out.findings.some(f => /src\/(tests|fixtures)\//.test(f.file)), false);
+    assert.equal(out.coverage.some(row => row.tool === 'knip:file' && /src\/(tests|fixtures)\//.test(row.detail)), false);
+    for (const {path, content} of originals) {
+      assert.equal(readFileSync(path, 'utf8'), content);
+      assert.equal(statSync(path).mode & 0o777, 0o444);
+    }
   } finally {
     rmSync(repo, {recursive: true, force: true});
   }

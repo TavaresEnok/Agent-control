@@ -7,15 +7,19 @@ import {spawnSync} from 'node:child_process';
 import {
   accessSync,
   constants as fsConstants,
-  copyFileSync,
+  closeSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
+  readSync,
   readFileSync,
   rmSync,
   statSync,
+  writeSync,
   writeFileSync,
 } from 'node:fs';
 import {dirname, extname, join, posix, resolve} from 'node:path';
@@ -119,6 +123,40 @@ function resolveBin(name, toolsRoot) {
   return name;
 }
 
+// Abre o arquivo de origem sem seguir um link trocado após o lstat. A cópia é
+// privada e gravável pelo coletor, independentemente do modo da origem.
+function copyPrivateFile(srcPath, destPath, maxFileBytes) {
+  const source = openSync(srcPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    const st = fstatSync(source);
+    if (!st.isFile() || st.size > maxFileBytes) {
+      const err = new Error('arquivo alterado durante a cópia');
+      err.code = 'EINVAL';
+      throw err;
+    }
+    const dest = openSync(destPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW, 0o600);
+    try {
+      const buffer = Buffer.allocUnsafe(64 * 1024);
+      let total = 0;
+      let bytes;
+      while ((bytes = readSync(source, buffer, 0, buffer.length, null)) > 0) {
+        total += bytes;
+        if (total > maxFileBytes) {
+          const err = new Error('arquivo cresceu durante a cópia');
+          err.code = 'EFBIG';
+          throw err;
+        }
+        let offset = 0;
+        while (offset < bytes) offset += writeSync(dest, buffer, offset, bytes - offset);
+      }
+    } finally {
+      closeSync(dest);
+    }
+  } finally {
+    closeSync(source);
+  }
+}
+
 /**
  * Copia apenas arquivos regulares e diretórios seguros de sourceRoot para destRoot,
  * ignorando symlinks, sockets, dispositivos, diretórios de build/vendor e arquivos > 2 MiB.
@@ -181,7 +219,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
         const destPath = join(destRoot, relPath);
         try {
           mkdirSync(dirname(destPath), {recursive: true});
-          copyFileSync(srcPath, destPath);
+          copyPrivateFile(srcPath, destPath, maxFileBytes);
         } catch (err) {
           failure = {file: relPath, code: err.code ?? 'ERR'};
           return;
@@ -279,9 +317,11 @@ export function buildKnipConfig(workRepoDir, repoFiles) {
       '**/build/**',
       '**/coverage/**',
       '**/.next/**',
-      'tests/**',
-      'test/**',
-      '__tests__/**',
+      '**/tests/**',
+      '**/test/**',
+      '**/__tests__/**',
+      '**/fixtures/**',
+      '**/fixture/**',
       '**/*.test.*',
       '**/*.spec.*',
       '**/*.d.{ts,mts,cts}',
@@ -297,7 +337,7 @@ export function buildKnipConfig(workRepoDir, repoFiles) {
 function isIgnoredByKnipConfig(relFile) {
   return (
     /(^|\/)(node_modules|dist|build|coverage|\.next)\//i.test(relFile) ||
-    /^(tests?|__tests__)\//i.test(relFile) ||
+    /(^|\/)(tests?|__tests__|fixtures?)\//i.test(relFile) ||
     /\.(test|spec)\./i.test(relFile) ||
     /\.d\.(?:ts|mts|cts)$/i.test(relFile) ||
     /^[^/]+\.config\.(?:js|ts|mjs|cjs|mts|cts)$/i.test(relFile) ||
@@ -319,20 +359,24 @@ function sanitizeTsConfigInWork(workRepoDir, copiedFiles) {
     configs.set(file, valid);
     if (!valid) return false;
 
-    function keepLocalExtends(specifier) {
-      if (typeof specifier !== 'string' || !/^\.\.?\//.test(specifier)) return false;
-      const path = resolve(dirname(file), specifier);
+    function localExtends(specifier) {
+      if (typeof specifier !== 'string') return undefined;
+      const normalized = toPosix(specifier);
+      if (!/^\.\.?\//.test(normalized)) return undefined;
+      const path = resolve(dirname(file), normalized);
       const target = snapshotFiles.has(path) ? path
         : !path.endsWith('.json') && snapshotFiles.has(path + '.json') ? path + '.json'
         : undefined;
-      return target !== undefined && sanitize(target);
+      return target !== undefined && sanitize(target) ? normalized : undefined;
     }
 
     if (Array.isArray(config.extends)) {
-      config.extends = config.extends.filter(keepLocalExtends);
+      config.extends = config.extends.map(localExtends).filter(value => value !== undefined);
       if (config.extends.length === 0) delete config.extends;
-    } else if ('extends' in config && !keepLocalExtends(config.extends)) {
-      delete config.extends;
+    } else if ('extends' in config) {
+      const local = localExtends(config.extends);
+      if (local === undefined) delete config.extends;
+      else config.extends = local;
     }
     writeFileSync(file, JSON.stringify(config, null, 2));
     return true;
@@ -410,6 +454,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
     if (Array.isArray(issue.files)) {
       for (const f of issue.files) {
         const target = normalizeRepoPath(f?.name ?? relFile, repoRoot);
+        if (!candidateFiles.has(target)) continue;
         unusedFiles.add(target);
         bumpFile(target);
         findings.push({
@@ -435,6 +480,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
     ];
 
     for (const [key, rule, label] of exportBuckets) {
+      if (!candidateFiles.has(relFile)) continue;
       if (!Array.isArray(issue[key])) continue;
       for (const item of issue[key]) {
         const name = String(item?.name ?? 'desconhecido');
@@ -462,6 +508,9 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
     ];
 
     for (const [key, rule, label, severity] of depBuckets) {
+      // Problemas de dependências também podem pertencer a um manifesto.
+      if (!candidateFiles.has(relFile) && !/(^|\/)package\.json$/i.test(relFile)) continue;
+      if (isIgnoredByKnipConfig(relFile)) continue;
       if (!Array.isArray(issue[key])) continue;
       for (const item of issue[key]) {
         const name = String(item?.name ?? 'desconhecido');
