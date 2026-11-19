@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {test} from 'node:test';
-import {Refusal} from '../src/contracts.ts';
+import {digest, Refusal} from '../src/contracts.ts';
 import type {CollectorCriterion, ModuleExamCollectorContext} from '../src/module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewObservation} from '../src/module-exam-proof.ts';
-import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamSeat} from '../src/module-exam.ts';
+import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamCoverage, type ModuleExamSeat} from '../src/module-exam.ts';
 import {validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
 
 const commit = 'a'.repeat(40);
@@ -29,6 +29,13 @@ function example(module: Example['module'], criterion: CollectorCriterion, raw: 
 const mutantPatch = 'src/precos.ts:2 EqualityOperator → valor > 100';
 const mutantResult = 'node:test aprovou após o patch com os mesmos resultados da referência (3 testes aprovados)';
 const cpuDetails = 'arquivo=server.mjs:2; função=calcular; tempo próprio amostral=109.0ms; amostras próprias=10/20; limiar=80ms';
+const measuredSql = '-- Consulta de relatório\nSELECT total FROM public.items;';
+const measuredSqlDetails = 'queryid=-42; amostras=3; média=141.006 ms; blocos hit/read=0/0';
+const measuredSqlPrefix = 'pg_stat_statements:query:banco/queries/latency.sql: linha 2; ';
+const measuredSqlDigest = createHash('sha256').update(measuredSql, 'utf8').digest('hex');
+const restoredInvariantPrefix = 'pg_restore:upgraded:banco/assert.sql: ';
+const invariantBaseline = restoredInvariantPrefix + 'antes da atualização, invariante preservado';
+const invariantFailure = restoredInvariantPrefix + 'após atualização, invariante falhou';
 const k6RouteLine = '    {"path": "/relatorio", "file": "server.mjs"}';
 const expressCall = "app.del('/items/:id', (req: Request, res: Response) => {\n    res.end();\n  })";
 const k6Summary = '1 rota(s) testada(s) com limites (p95<120ms, falhas<1.0%); 1 achado(s)';
@@ -57,15 +64,16 @@ const examples = [
   '-- ALTER TABLE public.items DROP COLUMN nota_antiga;'),
   example('banco', 'sql-historical-invariant', {file: 'banco/assert.sql', tool: 'pg_restore', line: 1,
     rule: 'BANCO-INVARIANTE-HISTORICO', evidence: 'O SELECT de verificação não retornou true (após atualização).'},
-  'SELECT count(*) = 10\nFROM public.items;', 'SELECT count(*) = 10', ['restored', 'após atualização', 'falhou'],
-  [coverage('pg_restore', 'pg_restore:restored:banco/assert.sql: após atualização, invariante falhou')],
-  'VALUES (false); -- verificação', 'O invariante dos dados antigos falhou em restored.'),
+  'SELECT count(*) = 10\nFROM public.items;', 'SELECT count(*) = 10',
+  ['upgraded', 'antes da atualização', 'preservado', 'após atualização', 'falhou'],
+  [coverage('pg_restore', invariantBaseline), coverage('pg_restore', invariantFailure)],
+  'VALUES (false); -- verificação', 'O invariante dos dados antigos falhou em upgraded.'),
   example('banco', 'sql-query-mean-exceeded', {file: 'banco/queries/latency.sql', tool: 'pg_stat_statements', line: 2,
-    rule: 'BANCO-CONSULTA-LENTA', evidence: 'queryid=-42; amostras=3; média=141.006 ms; blocos hit/read=0/0'},
-  '-- Consulta de relatório\nSELECT total FROM public.items;', 'SELECT total FROM public.items;', ['-42', '3', '141.006', '100'],
-  [coverage('pg_stat_statements', 'pg_stat_statements:query:banco/queries/latency.sql: linha 2; queryid=-42; amostras=3; média=141.006 ms; blocos hit/read=0/0',
+    rule: 'BANCO-CONSULTA-LENTA', evidence: measuredSqlDetails},
+  measuredSql, 'SELECT total FROM public.items;', ['-42', '3', '141.006', '100'],
+  [coverage('pg_stat_statements', `${measuredSqlPrefix}${measuredSqlDetails} | SQL medido (sha256:${measuredSqlDigest})`,
     ['banco/queries/latency.sql'])],
-  '/* SELECT total FROM public.items; */', 'A consulta atingiu a média de 100 ms na carga ensaiada.'),
+  'SELECT 1;', 'A consulta atingiu a média de 100 ms na carga ensaiada.'),
   example('banco', 'sql-hypothetical-index-savings', {file: 'banco/queries/by-code.sql', tool: 'dexter', line: 2,
     rule: 'BANCO-INDICE-CANDIDATO', evidence: 'redução estimada de 1880.00 para 8.06 unidades de custo; candidatos: public.items / item_code'},
   '-- Busca seletiva\nSELECT payload FROM public.items WHERE item_code = 31001;',
@@ -103,19 +111,34 @@ function context(row: Example, partial?: Partial<ModuleExamCollectorContext>): M
 }
 
 const candidate = (row: Example) => ({...moduleCollectorCandidate(row.raw), reviewCommit: commit});
+function examined(files: ReadonlyMap<string, string | null>, module: Example['module']) {
+  const rows = new Map<string, ModuleExamCoverage>();
+  for (const [file, code] of files) {
+    if (code === null) continue;
+    rows.set(file, {file, status: 'lido', examiner: seat('primeiro'), reason: null, checklist: [module],
+      read: {commit, sourceDigest: digest(code)}});
+  }
+  return rows;
+}
+
 function review(row: Example, collector?: ModuleExamCollectorContext, source = row.source) {
-  return moduleExamReviewEvidence(row.module, candidate(row), source, row.raw, collector && {collector, intentId, snapshot});
+  return moduleExamReviewEvidence(row.module, candidate(row), source, row.raw, collector && {
+    collector, intentId, snapshot, coverage: examined(new Map([[row.raw.file, source]]), row.module),
+  });
 }
 
 type Task = Pick<ModuleReviewObservation, 'criterion' | 'file' | 'line' | 'tool' | 'rule' | 'commit'> & {
-  code: string; binding: string; expectedExpression?: string; factOrder?: string[];
+  code: string; binding: string; expectedExpression?: string; factOrder?: string[]; reasonTemplate?: string;
   collector?: {commit: string; intentId: string; records: ModuleToolCoverage[];
     sourceContext: {firstLine: number; excerpt: string}; relatedSources?: {file: string; line: number; code: string}[]};
 };
 
 function response(task: Task, example: Example) {
   const {binding, code, criterion, file, line, tool, rule, commit} = task;
-  return {kind: 'confirmacao' as const, status: 'confirmado' as const, binding, proof: code, reason: 'observação localizada',
+  const values: Record<string, string> = {expressao: example.expression, lista: example.facts.join(', '), arquivo: file};
+  example.facts.forEach((fact, index) => { values[String(index + 1)] = fact; });
+  const reason = task.reasonTemplate?.replace(/\{(\w+)\}/gu, (_, field: string) => values[field]!) ?? 'evidência insuficiente';
+  return {kind: 'confirmacao' as const, status: 'confirmado' as const, decision: 'sustenta' as const, binding, proof: code, reason,
     observation: {criterion, file, line, tool, rule, commit, expression: example.expression,
       column: code.indexOf(example.expression) + 1, facts: example.facts}};
 }
@@ -140,8 +163,15 @@ for (const row of examples) {
     assert.ok(readModuleReviewVerdict(verdict));
     const reason = moduleReviewProofReason(evidence, verdict);
     assert.ok(reason);
-    assert.ok(hasModuleReviewProof(evidence, {...verdict, reason}));
+    assert.ok(hasModuleReviewProof(evidence, verdict));
+    assert.ok(hasModuleReviewProof(evidence, {...verdict, kind: undefined, reviewReason: verdict.reason}));
+    assert.equal(hasModuleReviewProof(evidence, {...verdict, kind: undefined, reviewReason: 'Os fatos contradizem a hipótese.'}), false);
     assert.equal(hasModuleReviewProof(evidence, {...verdict, kind: undefined}), false);
+    assert.equal(moduleReviewProofReason(evidence, {...verdict, reason: 'A prova não sustenta a hipótese.'}), null);
+    assert.equal(moduleReviewProofReason(evidence, {...verdict, reason: verdict.reason + ' Os fatos a contradizem.'}), null);
+    assert.equal(moduleReviewProofReason(evidence, {...verdict, decision: 'contradiz'}), null);
+    assert.equal(moduleReviewProofReason(evidence, {...verdict, decision: 'insuficiente'}), null);
+    assert.equal(moduleReviewProofReason(evidence, {...verdict, decision: undefined}), null);
     assert.equal(moduleReviewProofReason(evidence, {...verdict, status: 'descartado'}), null);
     assert.equal(moduleReviewProofReason(evidence, {...verdict, observation: undefined}), null);
     assert.equal(moduleReviewProofReason(evidence, {...verdict, observation: {...verdict.observation, facts: ['texto genérico']}}), null);
@@ -180,8 +210,10 @@ test('rejeita troca de critério, de origem, de arquivo e de prova entre exames'
   }
   assert.equal(review(second)?.collectorCase, undefined);
   const otherIntent = randomUUID();
-  const otherEvidence = moduleExamReviewEvidence(second.module, candidate(second), second.source, second.raw,
-    {intentId: otherIntent, snapshot, collector: context(second, {intentId: otherIntent})})!;
+  const otherEvidence = moduleExamReviewEvidence(second.module, candidate(second), second.source, second.raw, {
+    intentId: otherIntent, snapshot, collector: context(second, {intentId: otherIntent}),
+    coverage: examined(new Map([[second.raw.file, second.source]]), second.module),
+  })!;
   assert.ok(otherEvidence.collectorCase);
   assert.equal(moduleReviewProofReason(otherEvidence, measured), null);
   assert.equal(review(second, context(second), second.source + '\n' + ' '.repeat(16000)), null);
@@ -191,6 +223,45 @@ test('rejeita troca de critério, de origem, de arquivo e de prova entre exames'
   const updatedEvidence = review(second, updated)!;
   assert.ok(updatedEvidence.collectorCase);
   assert.equal(moduleReviewProofReason(updatedEvidence, measured), null);
+});
+
+test('a latência exige o hash do SQL executado no mesmo registro que identifica a série', () => {
+  const row = examples.find(row => row.criterion === 'sql-query-mean-exceeded')!;
+  const [summary, record] = row.coverage as [ModuleToolCoverage, ModuleToolCoverage];
+  const legacy = {...record, detail: measuredSqlPrefix + measuredSqlDetails};
+  const mismatchedRecords = [
+    [legacy],
+    [legacy, {...record, detail: `SQL medido (sha256:${measuredSqlDigest})`}],
+    [{...record, detail: record.detail.replace(measuredSqlDigest, 'a'.repeat(64))}],
+    [{...record, detail: record.detail.replace('queryid=-42', 'queryid=-43')}],
+    [{...record, files: ['banco/queries/other.sql']}],
+  ];
+  for (const records of mismatchedRecords) {
+    assert.equal(review(row, context(row, {coverage: [summary, ...records]}))?.collectorCase, undefined);
+  }
+  for (const source of [measuredSql.replace('total', 'subtotal'), measuredSql + '\n', '\uFEFF' + measuredSql]) {
+    assert.equal(review(row, context(row), source)?.collectorCase, undefined);
+  }
+  const task = JSON.parse(moduleReviewTask(review(row, context(row))!)) as Task;
+  assert.equal(task.collector?.records[0]?.detail, record.detail);
+});
+
+test('o invariante exige resultados distintos nos dois momentos do mesmo banco e arquivo', () => {
+  const row = examples.find(row => row.criterion === 'sql-historical-invariant')!;
+  const [summary, baseline, failure] = row.coverage as [ModuleToolCoverage, ModuleToolCoverage, ModuleToolCoverage];
+  for (const records of [
+    [failure],
+    [baseline, {...failure, detail: invariantFailure.replace('falhou', 'preservado')}],
+    [{...baseline, detail: invariantBaseline.replace('preservado', 'falhou')}, failure],
+    [{...baseline, detail: invariantBaseline.replace('upgraded', 'previous')}, failure],
+    [{...baseline, detail: invariantBaseline.replace('assert.sql', 'other.sql')}, failure],
+    [{...baseline, version: '2.0'}, failure],
+    [baseline, {...baseline, detail: invariantBaseline.replace('preservado', 'falhou')}, failure],
+  ]) {
+    assert.equal(review(row, context(row, {coverage: [summary, ...records]}))?.collectorCase, undefined);
+  }
+  const task = JSON.parse(moduleReviewTask(review(row, context(row))!)) as Task;
+  assert.deepEqual(task.collector?.records.map(row => row.detail), [invariantBaseline, invariantFailure]);
 });
 
 test('localização e semântica básica excluem alternativas contraditórias', () => {
@@ -205,21 +276,31 @@ test('localização e semântica básica excluem alternativas contraditórias', 
   const k6 = examples.find(row => row.criterion === 'k6-route-p95-exceeded')!;
   assert.equal(review(k6, context(k6), k6.source.replace('server.mjs', 'outro.mjs'))?.collectorCase, undefined);
   assert.equal(review(k6, context(k6, {coverage: [coverage('k6', k6Summary.replace('120ms', '190ms')), k6.coverage[1]!]}))?.collectorCase, undefined);
+  for (const [row, unsupported] of [
+    [tls, 'A opção foi usada em uma conexão TLS efetiva.'],
+    [ort, 'A licença conflita com a política do projeto.'],
+  ] as const) {
+    const evidence = review(row, context(row))!;
+    const verdict = response(JSON.parse(moduleReviewTask(evidence)), row);
+    assert.equal(moduleReviewProofReason(evidence, {...verdict, reason: unsupported}), null);
+  }
 });
 
-test('um ciclo exige o import de retorno e resolução única no mesmo snapshot', () => {
-  const alpha = 'src/alpha.ts';
-  const beta = 'src/beta.ts';
-  const alphaSource = "import {seguir} from './beta.js';\nexport function iniciar() { return seguir(); }";
-  const betaSource = "import {iniciar} from './alpha.js';\nexport function seguir() { return iniciar(); }";
-  const row = example('arquitetura', 'relative-import-cycle', {file: alpha, tool: 'dependency-cruiser', line: 1,
-    rule: 'DEPCRUISE-NO-CIRCULAR', evidence: `ciclo: ${alpha} -> ${beta} -> ${alpha}`},
+const alpha = 'src/alpha.ts';
+const beta = 'src/beta.ts';
+const alphaSource = "import {seguir} from './beta.js';\nexport function iniciar() { return seguir(); }";
+const betaSource = "import {iniciar} from './alpha.js';\nexport function seguir() { return iniciar(); }";
+const cycle = example('arquitetura', 'relative-import-cycle', {file: alpha, tool: 'dependency-cruiser', line: 1,
+  rule: 'DEPCRUISE-NO-CIRCULAR', evidence: `ciclo: ${alpha} -> ${beta} -> ${alpha}`},
   alphaSource, "import {seguir} from './beta.js'", ['./beta.js', './alpha.js'],
   [alpha, beta].map(file => coverage('dependency-cruiser:file',
     `arquivo=${file}; deps=1; dependentes=1; instabilidade=0.50; ciclo=sim; violacao_camada=nao`)), '// sem import');
+
+test('um ciclo exige o import de retorno, resolução única e leitura de cada arquivo no commit', () => {
+  const row = cycle;
   const canonical = context(row);
-  const read = (sources: ReadonlyMap<string, string | null>, collector = canonical) =>
-    moduleExamReviewEvidence(row.module, candidate(row), row.source, row.raw, {collector, snapshot, intentId, relatedSources: sources});
+  const read = (sources: ReadonlyMap<string, string | null>, collector = canonical, coverage = examined(sources, row.module)) =>
+    moduleExamReviewEvidence(row.module, candidate(row), row.source, row.raw, {collector, snapshot, intentId, relatedSources: sources, coverage});
   const files = new Map([[alpha, alphaSource], [beta, betaSource]]);
   const evidence = read(files)!;
   assert.ok(evidence.collectorCase);
@@ -232,18 +313,89 @@ test('um ciclo exige o import de retorno e resolução única no mesmo snapshot'
   assert.equal(read(new Map([[alpha, alphaSource], [beta, betaSource.replace('./alpha.js', './outro.js')]]))?.collectorCase, undefined);
   assert.equal(read(new Map<string, string | null>([...files, ['src/beta.js', null]]))?.collectorCase, undefined);
   assert.equal(read(files, context(row, {coverage: row.coverage.slice(0, -1)}))?.collectorCase, undefined);
+  const attested = examined(files, row.module);
+  const support = attested.get(beta)!;
+  for (const incomplete of [
+    {...support, status: 'nao_julgado' as const},
+    {...support, examiner: null},
+    {...support, checklist: ['qa']},
+    {...support, read: undefined},
+    {...support, read: {...support.read!, commit: 'b'.repeat(40)}},
+    {...support, read: {...support.read!, sourceDigest: digest(betaSource + '\n')}},
+  ]) {
+    assert.equal(read(files, canonical, new Map([...attested, [beta, incomplete]]))?.collectorCase, undefined);
+  }
+  attested.delete(beta);
+  assert.equal(read(files, canonical, attested)?.collectorCase, undefined);
   const modifiedRelated = read(new Map([[alpha, alphaSource], [beta, betaSource + '\nexport const limite = 3;']]))!;
   assert.ok(modifiedRelated.collectorCase);
   assert.equal(moduleReviewProofReason(modifiedRelated, verdict), null);
   const normalized = validateModuleCollectorObject({coverage: row.coverage, findings: [row.raw]}, row.module);
   const normalizedRow = {...row, raw: normalized.findings[0]!, coverage: normalized.coverage};
   assert.ok(moduleExamReviewEvidence(row.module, candidate(normalizedRow), row.source, normalizedRow.raw,
-    {collector: context(normalizedRow), snapshot, intentId, relatedSources: files})?.collectorCase);
+    {collector: context(normalizedRow), snapshot, intentId, relatedSources: files, coverage: examined(files, row.module)})?.collectorCase);
 });
 
 function seat(provider: string): ModuleExamSeat {
   return {provider, model: 'modelo-sintetico', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
 }
+
+test('o exame só confirma a latência com a identidade SQL emitida durante a medição', async () => {
+  const row = examples.find(row => row.criterion === 'sql-query-mean-exceeded')!;
+  const examiner = seat('primeiro'), reviewer = seat('segundo');
+  const run = async (collector: ModuleExamCollectorContext, code = row.source) =>
+    examineFunctionalModule({module: row.module, intentId, commit, findings: collector.findings,
+      collectorReview: {collector, intentId, snapshot},
+      map: {files: [{file: row.raw.file, code, reason: null}], routes: []},
+      reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
+      worker: {async run(call) {
+        const task = JSON.parse(call.task);
+        return JSON.stringify(task.checklist ? {kind: 'exame', filesRead: [task.file], checklist: [row.module], findings: []}
+          : response(task, row));
+      }},
+    });
+  const canonical = context(row);
+  const measured = await run(canonical);
+  assert.equal(measured.findings[0]?.status, 'confirmado');
+  const legacy = context(row, {coverage: [row.coverage[0]!, {...row.coverage[1]!, detail: measuredSqlPrefix + measuredSqlDetails}]});
+  for (const rejected of [await run(legacy), await run(canonical, row.source.replace(row.expression, 'SELECT 1;'))]) {
+    assert.equal(rejected.findings[0]?.status, 'provavel');
+    assert.equal(rejected.findings[0]?.verifier, null);
+  }
+});
+
+test('código disponível de apoio exige resposta de leitura completa do examinador', async () => {
+  const canonical = context(cycle);
+  const examiner = seat('primeiro'), reviewer = seat('segundo');
+  const run = async (betaRead: boolean, betaCode = betaSource) => {
+    const reviewed: Task[] = [];
+    const result = await examineFunctionalModule({module: cycle.module, intentId, commit, findings: canonical.findings,
+      collectorReview: {collector: canonical, intentId, snapshot},
+      map: {files: [{file: alpha, code: alphaSource, reason: null}, {file: beta, code: betaCode, reason: null}], routes: []},
+      reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
+      worker: {async run(call) {
+        const task = JSON.parse(call.task);
+        if (task.checklist) {
+          assert.equal(task.commit, commit);
+          return JSON.stringify({kind: 'exame', filesRead: [task.file === beta && !betaRead ? alpha : task.file],
+            checklist: [cycle.module], findings: []});
+        }
+        reviewed.push(task);
+        return JSON.stringify(response(task, cycle));
+      }},
+    });
+    return {result, reviewed};
+  };
+  const accepted = await run(true);
+  assert.equal(accepted.result.findings[0]?.status, 'confirmado');
+  assert.equal(accepted.reviewed[0]?.collector?.relatedSources?.[0]?.file, beta);
+  for (const rejected of [await run(false), await run(true, betaSource + '\n' + ' '.repeat(16000))]) {
+    assert.equal(rejected.result.findings[0]?.status, 'provavel');
+    assert.equal(rejected.result.findings[0]?.verifier, null);
+    assert.equal(rejected.result.coverage[1]?.read, undefined);
+    assert.equal(rejected.reviewed[0]?.collector, undefined);
+  }
+});
 
 test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru', async () => {
   const row = examples.find(row => row.criterion === 'cpu-own-time-exceeded')!;
@@ -251,6 +403,7 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
   const canonical = context(row);
   const original = structuredClone(canonical);
   let reviewCall: Task | undefined;
+  let reviewReason: string | undefined;
   const base = {
     module: row.module, intentId, commit, findings: canonical.findings,
     collectorReview: {collector: canonical, intentId, snapshot},
@@ -261,7 +414,8 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
       const task = JSON.parse(call.task);
       if (task.checklist) return JSON.stringify({kind: 'exame', filesRead: [row.raw.file], checklist: [row.module], findings: []});
       reviewCall = task;
-      return JSON.stringify(response(task, row));
+      const result = response(task, row);
+      return JSON.stringify(reviewReason ? {...result, reason: reviewReason} : result);
     }},
   };
 
@@ -269,8 +423,17 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
   assert.ok(reviewCall?.collector?.records.length);
   assert.equal(result.findings[0]?.status, 'confirmado');
   assert.equal(result.findings[0]?.verifier?.provider, reviewer.provider);
+  assert.equal(result.findings[0]?.decision, 'sustenta');
+  assert.equal(result.findings[0]?.reviewReason, result.findings[0]?.reason);
   assert.ok(hasModuleReviewProof(review(row, canonical)!, result.findings[0]!));
   assert.deepEqual(canonical, original);
+
+  reviewReason = 'A medição contradiz a hipótese. password=ardosia';
+  const contradicted = await examineFunctionalModule({...base, reserve: async purpose => purpose === 'examiner' ? examiner : reviewer});
+  assert.equal(contradicted.findings[0]?.status, 'provavel');
+  assert.equal(contradicted.findings[0]?.verifier, null);
+  assert.equal(contradicted.findings[0]?.reviewReason, 'A medição contradiz a hipótese. …');
+  assert.equal(contradicted.findings[0]?.decision, 'sustenta');
 
   const pending = await examineFunctionalModule({...base, reserve: async purpose => {
     if (purpose === 'reviewer') throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
