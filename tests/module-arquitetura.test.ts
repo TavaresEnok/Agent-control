@@ -159,6 +159,9 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
   assert.equal(normalizeRepoPath('/tmp/work/repo/src/a.ts', '/tmp/work/repo'), 'src/a.ts');
   assert.equal(normalizeRepoPath('./src/../src/b.ts', '/tmp/work/repo'), 'src/b.ts');
   assert.equal(normalizeRepoPath('../../etc/passwd', '/tmp/work/repo'), '.');
+  assert.equal(normalizeRepoPath('/src/main.ts', '/tmp/work/repo'), '.');
+  assert.equal(normalizeRepoPath(' draft.ts', '/tmp/work/repo'), ' draft.ts');
+  assert.equal(normalizeRepoPath('./..draft.ts', '/tmp/work/repo'), '..draft.ts');
   assert.equal(clampLine(0), 1);
   assert.equal(clampLine(-5), 1);
   assert.equal(clampLine(14.9), 14);
@@ -182,6 +185,8 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
       {file: 'node_modules', reason: 'diretorio_excluido'},
       {file: 'src/escape.ts', reason: 'symlink'},
     ]);
+    symlinkSync(src, join(dst, 'alias'));
+    assert.throws(() => copyRepoSafely(join(dst, 'alias', 'src'), dst), /ARQUITETURA_REPO_UNREADABLE/);
     const limited = copyRepoSafely(src, dst, {maxFiles: 0});
     assert.equal(limited.stoppedAt, 'node_modules');
     assert.equal(existsSync(join(dst, 'src', 'escape.ts')), false);

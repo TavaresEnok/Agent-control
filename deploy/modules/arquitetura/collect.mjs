@@ -18,7 +18,6 @@ import {
   readSync,
   readFileSync,
   rmSync,
-  statSync,
   writeSync,
   writeFileSync,
 } from 'node:fs';
@@ -71,22 +70,13 @@ function toPosix(value) {
 }
 
 export function normalizeRepoPath(filePath, repoRoot) {
-  let rel = String(filePath ?? '').trim();
-  if (!rel) return '.';
-  if (repoRoot) {
-    const posixRoot = toPosix(resolve(repoRoot)).replace(/\/+$/, '');
-    const posixVal = toPosix(rel);
-    if (posixVal === posixRoot) return '.';
-    if (posixVal.startsWith(posixRoot + '/')) {
-      rel = posixVal.slice(posixRoot.length + 1);
-    }
-  }
-  rel = toPosix(rel).replace(/^\.\/+/, '').replace(/^\/+/, '');
-  const normalized = posix.normalize(rel);
-  if (!normalized || normalized === '.' || normalized.startsWith('..')) {
-    return '.';
-  }
-  return normalized;
+  const spelling = toPosix(filePath);
+  if (!spelling) return '.';
+  const full = posix.normalize(spelling);
+  const root = repoRoot ? toPosix(resolve(repoRoot)) : undefined;
+  if (posix.isAbsolute(full) && !root) return '.';
+  const normalized = posix.isAbsolute(full) ? posix.relative(root, full) : full;
+  return !normalized || normalized === '..' || normalized.startsWith('../') ? '.' : normalized;
 }
 
 export function clampLine(value) {
@@ -162,15 +152,6 @@ function copyPrivateFile(srcPath, destPath, maxFileBytes) {
  * ignorando symlinks, sockets, dispositivos, diretórios de build/vendor e arquivos > 2 MiB.
  */
 export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
-  if (!existsSync(sourceRoot) || !statSync(sourceRoot).isDirectory()) {
-    throw new Error(`Diretório do repositório inválido: ${sourceRoot}`);
-  }
-  try {
-    accessSync(sourceRoot, fsConstants.R_OK | fsConstants.X_OK);
-  } catch (err) {
-    const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : 'ERR';
-    throw new Error(`ARQUITETURA_REPO_UNREADABLE: raiz do repositório presente porém ilegível (${code}): ${sourceRoot}`);
-  }
   const maxFiles = opts.maxFiles ?? MAX_COPY_FILES;
   const maxFileBytes = opts.maxFileBytes ?? MAX_FILE_BYTES;
   const copiedFiles = [];
@@ -250,7 +231,21 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   } catch (err) {
     return {copiedFiles, skipped, failure: {file: '.', code: err.code ?? 'ERR'}};
   }
-  walk(sourceRoot, '');
+  const flags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
+  let rootFd = openSync('/', flags);
+  try {
+    for (const component of resolve(sourceRoot).split('/').filter(Boolean)) {
+      const next = openSync(join('/proc/self/fd', String(rootFd), component), flags);
+      closeSync(rootFd);
+      rootFd = next;
+    }
+    const anchor = '/proc/self/fd/' + rootFd;
+    accessSync(anchor, fsConstants.R_OK | fsConstants.X_OK);
+    walkOpened(anchor, '');
+  } catch (error) {
+    if (!error.code) throw error;
+    throw new Error('ARQUITETURA_REPO_UNREADABLE: raiz não acessível (' + error.code + ')', {cause: error});
+  } finally { closeSync(rootFd); }
   return {copiedFiles, skipped, stoppedAt, failure};
 }
 
