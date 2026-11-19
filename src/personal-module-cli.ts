@@ -80,10 +80,10 @@ const recheckGuidance: Record<string, string> = {
   MODULE_RECHECK_FUNCTIONAL_ORIGIN_UNPROVEN: 'A medição original do módulo não comprova a condição funcional desta regra.',
   MODULE_RECHECK_FUNCTION_IDENTITY_UNPROVEN: 'A declaração original e a atual precisam identificar inequivocamente a mesma função exportada.',
   MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE: 'Confira o caminho da regressão e a asserção exigida para o objeto e a regra.',
-  MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE: 'A execução isolada não produziu um resultado válido para a asserção nas duas revisões.',
+  MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE: 'A execução isolada não produziu um resultado válido para a asserção no commit atual.',
   MODULE_RECHECK_ORIGINAL_TEST_PASSED: 'O teste de regressão já passou na revisão original.',
   MODULE_RECHECK_CORRECTED_TEST_FAILED: 'A mesma asserção ainda falhou na revisão corrigida.',
-  MODULE_RECHECK_CORRECTION_UNEXPLAINED: 'A revisão precisa vincular a regra, a asserção exata e os resultados medidos nas duas revisões.',
+  MODULE_RECHECK_CORRECTION_UNEXPLAINED: 'A revisão precisa vincular a regra, o mesmo alvo e os resultados medidos nas duas revisões.',
 };
 
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {

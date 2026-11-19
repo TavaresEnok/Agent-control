@@ -3,7 +3,7 @@ import {digest} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {readRecheckBlob} from './module-recheck-git.ts';
 import {moduleMeasurementCriterion} from './module-recheck-criteria.ts';
-import {readModuleMeasurements} from './module-recheck-measurement.ts';
+import {readModuleMeasurements, RECHECK_PROOF_VERSION} from './module-recheck-measurement.ts';
 import type {BoundScope} from './module-recheck-regression.ts';
 import type {ModuleRawFinding, ModuleToolCoverage} from './verification-modules.ts';
 
@@ -87,7 +87,8 @@ export async function measureLocalRegression(ledger: Ledger, scope: BoundScope, 
     record: {tool: side.record.tool, version: side.record.version, detail: side.record.detail},
   });
   const receipt = {
-    moduleProofRunId: measurement.runId, scope: {...item, rule: criterion.rules[0]!, runId, evidenceDigest: digest(scope.evidence)},
+    proofVersion: RECHECK_PROOF_VERSION, moduleProofRunId: measurement.runId,
+    scope: {...item, rule: criterion.rules[0]!, runId, evidenceDigest: digest(scope.evidence)},
     ...(item.rule !== criterion.rules[0] && {recordedRule: item.rule}),
     criterion: criterion.id, object, observations,
     original: describe(beforeBlob.oid, before), corrected: describe(afterBlob.oid, after),
