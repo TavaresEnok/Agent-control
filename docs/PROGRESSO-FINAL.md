@@ -851,3 +851,6 @@ PAUSADO-COTA
 - 19/11/2026 18:23 UTC — revisor-C2-ACEITE-CONSOLIDADO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:23 UTC — Suíte oficial de entrega-arquitetura-1 em 38e9984c: 267 arquivos aprovados, 0 falhas, 87 excluídos pelo executor.
 - 19/11/2026 18:23 UTC — C9 em 30cab4eb passou nos 36 testes físicos e de CLI. A revisão de 52b078d2 identificou perda de origem em chamadas locais e uniões de estados. A ordem exige manter origem invalidada como indeterminada e informar o limite do rastreamento.
+- 19/11/2026 18:23 UTC — trabalho-C9-ORIGEM-POSITIVA iniciado em final-c9 por Sol high normal.
+- 19/11/2026 18:25 UTC — Testes complementares de entrega-arquitetura-1 em 38e9984c: 52 aprovados.
+- 19/11/2026 18:25 UTC — A imagem revisada de QA passou na homologação física e no laboratório da CLI: pass 132, fail 0, skipped 0.
