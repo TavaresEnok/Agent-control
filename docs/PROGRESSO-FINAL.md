@@ -872,3 +872,7 @@ PAUSADO-COTA
 - 19/11/2026 18:32 UTC — C2-GO-CABECALHOS encerrado com código 0.
 - 19/11/2026 18:33 UTC — C9-ORIGEM-POSITIVA encerrado com código 0.
 - 19/11/2026 18:33 UTC — A matriz dos oito módulos registra as versões e contagens de homologação, com ressalvas por plataforma e revisões pendentes. C5, C6 e C7 entraram na fila das suítes cumulativas com PostgreSQL de bancada.
+- 19/11/2026 18:33 UTC — C2-MATRIZ-CITACAO encerrado com código 0.
+- 19/11/2026 18:33 UTC — A imagem de documentação com a revisão lexical passou nos testes físicos e na CLI. Digest fixado no ramo de integração.
+- 19/11/2026 18:33 UTC — C2-BANCO-HERANCA encerrado com código 0.
+- 19/11/2026 18:33 UTC — A imagem de documentação está fixada após o reensaio. Conformidade integrou 0110eab1 e as versões anteriores do conjunto. A rodada tem laboratório físico com dados artificiais e revisão independente.
