@@ -8,6 +8,9 @@ vi.mock('./settings/agent-control-fetch', () => ({ agentControlFetch: fetcher })
 import { VerificacoesRoute } from './verificacoes'
 
 const RUN = '11111111-1111-4111-8111-111111111111'
+const OTHER_RUN = '11111111-1111-4111-8111-111111111112'
+const PROJECT = '11111111-1111-4111-8111-111111111113'
+const FUNCTIONAL = '/api/v1/ac/personal/verificacoes-funcionais'
 const summary = {
   id: '22222222-2222-4222-8222-222222222222',
   directoryName: '20261117-1200-seguranca',
@@ -26,6 +29,8 @@ function renderAt(path: string) {
       <Routes>
         <Route path="/verificacoes" element={<VerificacoesRoute />} />
         <Route path="/verificacoes/:runId" element={<VerificacoesRoute />} />
+        <Route path="/p/:projectId/verificacoes" element={<VerificacoesRoute />} />
+        <Route path="/p/:projectId/verificacoes/:runId" element={<VerificacoesRoute />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -42,6 +47,7 @@ afterEach(() => {
 
 it('posta uma verificação nova e mostra a fase', async () => {
   fetcher.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === FUNCTIONAL) return json({ verificacoes: [] })
     if (path === '/api/v1/ac/personal/verificacoes' && (init?.method ?? 'GET') === 'GET') return json({ verificacoes: [] })
     if (path === '/api/v1/ac/personal/verificacoes' && init?.method === 'POST') {
       return json({ id: RUN, status: 'running', phase: 'confirmacao' }, 202)
@@ -61,6 +67,7 @@ it('posta uma verificação nova e mostra a fase', async () => {
 
 it('avisa quando o início falha e não deixa a falha sem tratamento', async () => {
   fetcher.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === FUNCTIONAL) return json({ verificacoes: [] })
     if ((init?.method ?? 'GET') === 'GET' && path === '/api/v1/ac/personal/verificacoes') return json({ verificacoes: [] })
     if (init?.method === 'POST') return json({ error: 'indisponivel' }, 500)
     throw new Error('rede')
@@ -87,6 +94,7 @@ it('consulta o andamento enquanto corre e recarrega a lista ao concluir', async 
   const polls: string[] = []
   fetcher.mockImplementation(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
+    if (path === FUNCTIONAL) return json({ verificacoes: [] })
     if (path === '/api/v1/ac/personal/verificacoes' && method === 'GET') {
       listReads += 1
       return json({ verificacoes: listReads > 1 ? [summary] : [] })
@@ -120,4 +128,69 @@ it('consulta o andamento enquanto corre e recarrega a lista ao concluir', async 
   await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
   expect(polls.length).toBe(pollsAtDone)
   expect((screen.getByRole('button', { name: 'Nova verificação' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+it('filtra módulos, abre cobertura e prova e reenvia só achados elegíveis', async () => {
+  const qa = { id: RUN, module: 'qa', createdAt: summary.createdAt, counts: summary.counts, toolFailures: 1 }
+  const arquitetura = { ...qa, id: OTHER_RUN, module: 'arquitetura' }
+  const verified = { id: 'ACH-001', title: 'Regressão confirmada', severity: 'alta', status: 'confirmado',
+    where: { file: 'src/app.ts', line: 12 }, proof: 'Falha reproduzida em teste sintético. <em>texto</em>' }
+  const likely = { ...verified, id: 'ACH-002', title: 'Possível desvio', status: 'provavel', proof: 'Sem verificação independente.' }
+  const reopened = { ...verified, id: 'ACH-003', title: 'Regressão reaberta', status: 'reaberto' }
+  const posts: unknown[] = []
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === '/api/v1/ac/personal/verificacoes') return json({ verificacoes: [] })
+    if (url === FUNCTIONAL) return json({ verificacoes: [qa, arquitetura] })
+    if (url === `${FUNCTIONAL}?modulo=qa`) return json({ verificacoes: [qa] })
+    if (url === `${FUNCTIONAL}/qa/${RUN}`) return json({ resumo: qa, cobertura: 'fixture · teste executado',
+      achados: [{ ...verified, secretPreview: 'omitir-campo-sintetico' }, likely, reopened] })
+    if (url === `${FUNCTIONAL}/qa/${RUN}/corrigir` && init?.method === 'POST') {
+      posts.push(JSON.parse(String(init.body)))
+      if (posts.length === 1) return json({ error: 'VERIFY_ALREADY_RUNNING', detail: 'omitir-erro-sintetico' }, 409)
+      return json({ messageLocalId: 'module-qa-fix-synthetic' })
+    }
+    throw new Error('REQUEST_UNEXPECTED')
+  })
+  const view = renderAt(`/p/${PROJECT}/verificacoes`)
+  await screen.findByRole('link', { name: /Arquitetura/ })
+  fireEvent.change(screen.getByRole('combobox', { name: 'Módulo' }), { target: { value: 'qa' } })
+  const link = await screen.findByRole('link', { name: /QA/ })
+  expect(link.getAttribute('href')).toBe(`/p/${PROJECT}/verificacoes/${RUN}?modulo=qa`)
+  expect(screen.queryByRole('link', { name: /Arquitetura/ })).toBeNull()
+  fireEvent.click(link)
+  await screen.findByRole('heading', { name: 'Verificações · QA' })
+  fireEvent.click(screen.getByText('Cobertura'))
+  expect(screen.getByText('fixture · teste executado')).toBeTruthy()
+  fireEvent.click(screen.getByText(/Prova de ACH-001/))
+  expect(screen.getAllByText('Falha reproduzida em teste sintético. <em>texto</em>')).toHaveLength(2)
+  expect(view.container.querySelector('em')).toBeNull()
+  expect(view.container.innerHTML).not.toContain('omitir-campo-sintetico')
+  expect(screen.getByRole('checkbox', { name: /Possível desvio/ })).toHaveProperty('disabled', true)
+  const button = screen.getByRole('button', { name: 'Corrigir' })
+  expect(button).toHaveProperty('disabled', true)
+  function selectFindings() {
+    fireEvent.click(screen.getByRole('checkbox', { name: /Regressão confirmada/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /Regressão reaberta/ }))
+  }
+  selectFindings()
+  fireEvent.click(button)
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'O contexto de exame está ocupado. Tente novamente quando estiver disponível.')
+  expect(view.container.innerHTML).not.toContain('omitir-erro-sintetico')
+  fireEvent.click(button)
+  expect(await screen.findByRole('status')).toHaveProperty('textContent', 'Pedido de correção enviado ao gerente.')
+  selectFindings()
+  fireEvent.click(button)
+  await screen.findByRole('status')
+  expect(posts).toEqual(Array.from({ length: 3 }, () => ({ achadoIds: ['ACH-001', 'ACH-003'] })))
+  expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([path]) => path))
+    .toEqual(Array(3).fill(`${FUNCTIONAL}/qa/${RUN}/corrigir`))
+})
+
+it('mostra mensagem fixa para relatório inacessível no projeto selecionado', async () => {
+  fetcher.mockResolvedValue(json({ error: 'erro-sintetico-com-conteudo-protegido' }, 404))
+  const view = renderAt(`/p/${PROJECT}/verificacoes/${OTHER_RUN}?modulo=qa`)
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Não foi possível ler este relatório funcional.')
+  expect(fetcher).toHaveBeenCalledWith(`${FUNCTIONAL}/qa/${OTHER_RUN}`, expect.objectContaining({ cache: 'no-store' }))
+  expect(view.container.innerHTML).not.toContain('erro-sintetico-com-conteudo-protegido')
+  expect(screen.queryByRole('button', { name: 'Corrigir' })).toBeNull()
 })

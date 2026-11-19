@@ -401,7 +401,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     return c.json({released:true});
   });
   registerVerificationRoutes(app,{
-    ledger,requireInstallationOwner,personalPanel,manager,
+    ledger,requireInstallationOwner,personalPanel,selectedProjectId:runtime.projectId,manager,
     listSecurityReports,readSecurityReport,readAchadoMarkdown,
     requestCorrection,recheckFindings,
     start:personalVerification?.start,recheck:personalVerification?.recheck,

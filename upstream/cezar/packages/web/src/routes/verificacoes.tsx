@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams } from 'react-router'
+import { useParams, useSearchParams } from 'react-router'
 import { z } from 'zod'
 
 import { Link } from '@/lib/project-router'
@@ -19,6 +19,18 @@ const summarySchema = z.object({
   note: z.string(),
 })
 const listSchema = z.object({ verificacoes: z.array(summarySchema) })
+const functionalReportsUrl = '/api/v1/ac/personal/verificacoes-funcionais'
+const moduleLabels = {
+  qa: 'QA', arquitetura: 'Arquitetura', dependencias: 'Dependências', banco: 'Banco de dados',
+  prontidao: 'Prontidão', desempenho: 'Desempenho', documentacao: 'Documentação', conformidade: 'Conformidade',
+}
+const moduleKeys = Object.keys(moduleLabels) as (keyof typeof moduleLabels)[]
+const functionalSummarySchema = summarySchema.pick({ id: true, counts: true }).extend({
+  module: z.enum(moduleKeys),
+  createdAt: z.iso.datetime().nullable(),
+  toolFailures: z.number().int().nonnegative(),
+})
+const functionalListSchema = z.object({ verificacoes: z.array(functionalSummarySchema) })
 const achadoSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -33,6 +45,10 @@ const detailSchema = z.object({
   resumo: summarySchema,
   achados: z.array(achadoSchema),
   cobertura: z.string(),
+})
+const functionalDetailSchema = detailSchema.extend({
+  resumo: functionalSummarySchema,
+  achados: z.array(achadoSchema.extend({ proof: z.string() })),
 })
 const progressSchema = z.object({
   id: z.string().min(1),
@@ -86,6 +102,107 @@ function when(createdAt: string, directoryName: string): string {
 
 function fileOf(achado: Achado): string {
   return achado.where.line ? `${achado.where.file}:${achado.where.line}` : achado.where.file
+}
+
+function FunctionalReports() {
+  const [module, setModule] = useState('')
+  return (
+    <section className="flex flex-col gap-2" aria-labelledby="functional-reports-heading">
+      <h2 id="functional-reports-heading" className="font-semibold">Relatórios funcionais</h2>
+      <label className="flex items-center gap-2 self-start">
+        Módulo
+        <select className="rounded-md border border-input px-2 py-1" value={module} onChange={(event) => setModule(event.target.value)}>
+          <option value="">Todos</option>
+          {Object.entries(moduleLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
+      </label>
+      <FunctionalReportList key={module} module={module} />
+    </section>
+  )
+}
+
+function FunctionalReportList({ module }: { module: string }) {
+  const [items, setItems] = useState<z.infer<typeof functionalSummarySchema>[] | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const request = new AbortController()
+    const url = module ? `${functionalReportsUrl}?modulo=${encodeURIComponent(module)}` : functionalReportsUrl
+    agentControlFetch(url, { cache: 'no-store', signal: request.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('UNAVAILABLE')
+        const body = functionalListSchema.parse(await response.json())
+        if (!request.signal.aborted) setItems(body.verificacoes)
+      })
+      .catch(() => { if (!request.signal.aborted) setFailed(true) })
+    return () => { request.abort() }
+  }, [module])
+
+  if (failed) return <p role="alert">Não foi possível ler os relatórios funcionais.</p>
+  if (items === null) return <p>Carregando relatórios funcionais…</p>
+  if (!items.length) return <p>Nenhum relatório funcional.</p>
+  return (
+    <ul className="flex flex-col gap-2">
+      {items.map((item) => (
+        <li key={`${item.module}/${item.id}`}>
+          <Link to={`/verificacoes/${item.id}?modulo=${item.module}`} className="flex flex-col gap-1 rounded-md border border-input p-2">
+            <strong>{moduleLabels[item.module]}</strong>
+            {item.createdAt ? <time dateTime={item.createdAt}>{when(item.createdAt, '')}</time> : null}
+            <span>Achados altos: {item.counts.alta} · Falhas de ferramentas: {item.toolFailures}</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function FunctionalReportDetail({ module, runId }: { module: string; runId: string }) {
+  const url = `${functionalReportsUrl}/${encodeURIComponent(module)}/${encodeURIComponent(runId)}`
+  const [report, setReport] = useState<z.infer<typeof functionalDetailSchema> | null>(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    const request = new AbortController()
+    agentControlFetch(url, { cache: 'no-store', signal: request.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('UNAVAILABLE')
+        const detail = functionalDetailSchema.parse(await response.json())
+        if (detail.resumo.id !== runId || detail.resumo.module !== module) throw new Error('REPORT_MISMATCH')
+        if (!request.signal.aborted) setReport(detail)
+      })
+      .catch(() => { if (!request.signal.aborted) setFailed(true) })
+    return () => { request.abort() }
+  }, [module, runId, url])
+
+  return (
+    <div data-route="verificacoes" className="flex flex-col gap-4 px-3 py-4 text-sm">
+      <h1 className="text-lg font-medium">{report ? `Verificações · ${moduleLabels[report.resumo.module]}` : 'Verificações'}</h1>
+      <Link to="/verificacoes">Voltar</Link>
+      {failed ? <p role="alert">Não foi possível ler este relatório funcional.</p> : null}
+      {report === null && !failed ? <p>Carregando relatório funcional…</p> : null}
+      {report ? (
+        <>
+          <details>
+            <summary className="cursor-pointer font-semibold">Cobertura</summary>
+            <pre className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{report.cobertura}</pre>
+          </details>
+          <AchadoCorrecao
+            runId={runId}
+            correctionUrl={`${url}/corrigir`}
+            achados={report.achados.map((achado) => ({
+              id: achado.id, title: achado.title, status: achado.status, file: fileOf(achado),
+              details: (
+                <details className="ml-5">
+                  <summary className="cursor-pointer">Prova de {achado.id} · {severityLabel[achado.severity]}</summary>
+                  <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{achado.proof || 'Sem prova registrada.'}</p>
+                </details>
+              ),
+            }))}
+          />
+        </>
+      ) : null}
+    </div>
+  )
 }
 
 function VerificacoesLista() {
@@ -161,6 +278,7 @@ function VerificacoesLista() {
   return (
     <div data-route="verificacoes" className="flex flex-col gap-4 px-3 py-4 text-sm">
       <h1 className="text-lg font-medium">Verificações</h1>
+      <h2 className="font-semibold">Segurança da instalação</h2>
       <button
         type="button"
         className="self-start rounded-md border border-input px-2 py-1"
@@ -185,6 +303,7 @@ function VerificacoesLista() {
           </li>
         ))}
       </ul>
+      <FunctionalReports />
     </div>
   )
 }
@@ -244,5 +363,8 @@ function VerificacaoDetalhe({ runId }: { runId: string }) {
 
 export function VerificacoesRoute() {
   const { runId } = useParams()
+  const [search] = useSearchParams()
+  const module = search.get('modulo')
+  if (runId && module !== null) return <FunctionalReportDetail key={`${module}/${runId}`} module={module} runId={runId} />
   return runId ? <VerificacaoDetalhe runId={runId} /> : <VerificacoesLista />
 }
