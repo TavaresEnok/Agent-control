@@ -7,6 +7,7 @@ import type {Ledger} from './ledger.ts';
 import {safeFailureCode} from './exam-login.ts';
 import {readPrivateFile, type Installation} from './installation.ts';
 import {type ModuleExamProvider, moduleExamProviders} from './module-exam-egress.ts';
+import type {ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {examineFunctionalModule, type ModuleExamInput, type ModuleExamResult, type ModuleExamSeat, type ModuleExamWorker} from './module-exam.ts';
 import {mapModuleSnapshot} from './module-exam-map.ts';
 import {NativeExecutionRequest, NativeExecutionSupervisor} from './native-execution-supervisor.ts';
@@ -231,12 +232,13 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
   };
 }
 
-export type ModuleExamCallback = NonNullable<VerificationModuleRunInput['examinar']>;
+export type ModuleExamCallback = (request: Parameters<NonNullable<VerificationModuleRunInput['examinar']>>[0]
+  & {collector?: ModuleExamCollectorContext}) => Promise<ModuleExamResult>;
 
 export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | 'runtime' | 'signal'> & {
   loadRuntime: () => Promise<ModuleExamRuntime>;
 }): ModuleExamCallback {
-  return async ({intentId, snapshot, module, findings, signal}): Promise<ModuleExamResult> => {
+  return async ({intentId, snapshot, module, findings, collector, signal}): Promise<ModuleExamResult> => {
     const map = await mapModuleSnapshot(snapshot, signal);
     let runtime: ModuleExamRuntime;
     try { runtime = await input.loadRuntime(); }
@@ -245,6 +247,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE'});
     }
     return examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal,
+      ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
       worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
       ...createModuleExamReservations({...input, intentId, supportedSeats: new Map(runtime.map(seat => [seat.provider, seat.accountIds]))}),
     });
