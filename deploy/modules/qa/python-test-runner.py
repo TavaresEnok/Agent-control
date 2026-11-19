@@ -108,7 +108,8 @@ def has_pytest_cases(module):
 
 def run(plan, report_path):
     root = Path.cwd()
-    sys.path.extend([str(root), str(root / "src")])
+    deps = Path(__file__).resolve().parent / "mutacao-linguagens" / "python-deps"
+    sys.path.extend([str(root), str(root / "src"), str(deps)])
     result = Result({})
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
