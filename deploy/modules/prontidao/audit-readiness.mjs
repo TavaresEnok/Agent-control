@@ -103,12 +103,18 @@ export function collectRepoFiles(repoRoot, onSkip = () => {}) {
   return files;
 }
 
-const YAML_PROPERTY = /^("(?:\\.|[^"\\])+"|'(?:''|[^'])+'|[A-Za-z0-9_.-]+|<<)\s*:\s*(.*)$/s;
+const YAML_PROPERTY = /^(?:("(?:\\.|[^"\\])*"|'(?:''|[^'])*')\s*:|([A-Za-z0-9_.-]+|<<)\s*:(?=\s|$))\s*(.*)$/s;
+const YAML_FLOW_PROPERTY = /^(?:("(?:\\.|[^"\\])*"|'(?:''|[^'])*')\s*:|([A-Za-z0-9_.-]+|<<)\s*:(?=\s|[{}\[\]]|$))\s*(.*)$/s;
 const YAML_BLOCK = /^[|>](?:[+-]?[1-9]?|[1-9][+-])$/;
 const YAML_ANCHOR = /^&[\w.-]+(?:\s+|$)/;
 
 function withoutYamlAnchor(value) {
   return value.replace(YAML_ANCHOR, '');
+}
+
+function yamlProperty(text, flow) {
+  const match = (flow ? YAML_FLOW_PROPERTY : YAML_PROPERTY).exec(text);
+  return match && {key: match[1] ?? match[2], value: match[3]};
 }
 
 function stripYamlComment(line) {
@@ -185,17 +191,19 @@ function flowEntries(value, nextLine) {
 
 function* composeLines(content, onIncomplete) {
   const lines = content.split(/\r?\n/);
-  function* expand(text, indent, line) {
-    const property = YAML_PROPERTY.exec(text);
-    const value = property && withoutYamlAnchor(property[2]);
+  const endedWithNewline = lines.at(-1) === '';
+  if (endedWithNewline) lines.pop();
+  function* expand(text, indent, line, inFlow = false) {
+    const property = yamlProperty(text, inFlow);
+    const value = property && withoutYamlAnchor(property.value);
     if (value?.startsWith('{') && value !== '{}') {
       if (indent > 128) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
-      yield {text: `${property[1]}:`, indent, line};
+      yield {key: property.key, value: '', text, indent, line};
       const flow = flowEntries(value);
       if (!flow) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
-      for (const [index, entry] of flow.entries.entries()) yield* expand(entry, indent + 2, line + flow.offsets[index]);
+      for (const [index, entry] of flow.entries.entries()) yield* expand(entry, indent + 2, line + flow.offsets[index], true);
     } else {
-      yield {text, indent, line};
+      yield {key: property?.key, value, text, indent, line};
     }
   }
   for (let i = 0; i < lines.length; i++) {
@@ -212,22 +220,36 @@ function* composeLines(content, onIncomplete) {
     }
     if (/^(?:---|%|\?\s)/.test(text)) onIncomplete();
     if (text.startsWith('{')) raw = `__root__: ${text}`;
-    const prop = YAML_PROPERTY.exec(raw.trim());
+    const prop = yamlProperty(raw.trim());
     const sequence = /^-\s+(.*)$/.exec(text);
-    const value = withoutYamlAnchor(prop?.[2] ?? sequence?.[1] ?? '');
+    const value = withoutYamlAnchor(prop?.value ?? sequence?.[1] ?? '');
     if (prop && /^[{\[]/.test(value)) {
       const flow = flowEntries(value, () => i + 1 < lines.length ? stripYamlComment(lines[++i]) : undefined);
       if (!flow) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
-      raw = `${prop[1]}: ${flow.value}`;
+      raw = `${prop.key}: ${flow.value}`;
     }
     if (YAML_BLOCK.test(value)) {
-      const scalar = [];
+      let scalar = '';
+      let scalarIndent = Number(/\d/.exec(value)?.[0]) + indent;
+      let written = false;
+      let unresolved = false;
       while (i + 1 < lines.length) {
         const next = lines[i + 1];
-        if (next.trim() && next.search(/\S/) <= indent) break;
-        scalar.push(lines[++i].trimStart());
+        const nextIndent = next.search(/[^ ]/);
+        if (nextIndent >= 0 && nextIndent <= indent) break;
+        i++;
+        if (nextIndent >= 0) {
+          if (Number.isNaN(scalarIndent)) scalarIndent = nextIndent;
+          if (nextIndent < scalarIndent || (value.startsWith('>') && written)) unresolved = true;
+          written = true;
+        }
+        if (nextIndent >= 0 || Number.isFinite(scalarIndent)) scalar += next.slice(scalarIndent);
+        if (i < lines.length - 1 || endedWithNewline) scalar += '\n';
       }
-      yield {text, indent, line, scalarBlock: scalar.join('\n')};
+      if (unresolved) onIncomplete();
+      if (value.includes('-')) scalar = scalar.replace(/\n+$/, '');
+      else if (!value.includes('+')) scalar = written ? scalar.replace(/\n+$/, '\n') : '';
+      yield {key: prop?.key, value, text, indent, line, scalarBlock: scalar};
     } else {
       // Multiline quoted/plain scalars and YAML tags need a full YAML parser.
       if (/^[!&|>]/.test(value)
@@ -240,9 +262,9 @@ function* composeLines(content, onIncomplete) {
         }
       }
       if (text.startsWith('{')) {
-        const flow = flowEntries(YAML_PROPERTY.exec(raw.trim())?.[2] ?? '');
+        const flow = flowEntries(yamlProperty(raw.trim())?.value ?? '');
         if (!flow) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
-        for (const [index, entry] of flow.entries.entries()) yield* expand(entry, indent, line + flow.offsets[index]);
+        for (const [index, entry] of flow.entries.entries()) yield* expand(entry, indent, line + flow.offsets[index], true);
       } else {
         yield* expand(raw.trim(), indent, line);
       }
@@ -279,10 +301,9 @@ export function parseComposeServices(content, onIncomplete = () => {}) {
     if (eq > 0) addEnvironment(assignment.slice(0, eq).trim(), assignment.slice(eq + 1), line);
   };
 
-  for (const {text, indent, line, scalarBlock} of composeLines(content, onIncomplete)) {
-    const property = YAML_PROPERTY.exec(text);
-    const key = property ? unquote(property[1]) : null;
-    const value = withoutYamlAnchor(property?.[2] ?? '');
+  for (const {key: rawKey, value: rawValue, text, indent, line, scalarBlock} of composeLines(content, onIncomplete)) {
+    const key = rawKey === undefined ? null : unquote(rawKey);
+    const value = rawValue ?? '';
     rootIndent ??= indent;
     if (servicesIndent === null || indent <= servicesIndent) {
       if (indent !== rootIndent) continue;
@@ -352,7 +373,8 @@ export function parseComposeServices(content, onIncomplete = () => {}) {
       if (seenSettings.has(setting)) onIncomplete();
       seenSettings.add(setting);
     }
-    const scalar = scalarBlock?.trim() ?? unquote(value);
+    const literal = scalarBlock ?? unquote(value);
+    const scalar = scalarBlock?.trim() ?? literal;
     if (/^(?:deploy|deploy\.resources|deploy\.resources\.limits|deploy\.restart_policy|logging|logging\.options|healthcheck)$/.test(setting)
       && value && value !== '{}' && !/^(?:null|~)$/i.test(value)) onIncomplete();
     if (parent === 'deploy.restart_policy') current.hasDeployRestart = true;
@@ -383,9 +405,11 @@ export function parseComposeServices(content, onIncomplete = () => {}) {
       case 'volumes': current.hasVolumes = true; break;
       case 'env_file': current.hasEnvFile = true; break;
       case 'secrets': current.hasSecrets = true; break;
-      case 'logging.driver': current.logDriver = /^(?:null|~)?$/i.test(value) ? null : scalar; break;
-      case 'logging.options.max-size': current.hasLogMaxSize = byteLimit(scalar) > 0; break;
-      case 'logging.options.max-file': current.hasLogMaxFile = positiveInteger(scalar); break;
+      case 'logging.driver': current.logDriver = /^(?:null|~)?$/i.test(value) ? null : literal; break;
+      case 'logging.options.max-size':
+        current.hasLogMaxSize = !/[\t\r\n]| {2}/.test(literal) && byteLimit(literal.replace(/([kmgtp])ib$/i, '$1b')) > 0;
+        break;
+      case 'logging.options.max-file': current.hasLogMaxFile = positiveInteger(literal.replace(/^\+/, '')); break;
       case 'environment':
         if (value.startsWith('[')) {
           const flow = flowEntries(value);
@@ -523,6 +547,12 @@ function addFinding(findings, pillarCounts, pillar, item) {
 const PROTECTION_HEADERS = new Set([
   'strict-transport-security', 'x-content-type-options', 'x-frame-options', 'content-security-policy',
 ]);
+const HTTPS_REDIRECT_STATUSES = /^(?:301|302|303|307|308)$/;
+const NGINX_HEADER_STATUSES = new Set([200, 201, 204, 206, 301, 302, 303, 304, 307, 308]);
+
+function isHttpsDestination(value) {
+  return /^https:\/\/[^\s/?#]+[^\s]*$/i.test(value ?? '');
+}
 
 function checkProxyHeaders(file, line, proxy, headers, findings, pillarCounts) {
   const facts = passiveHeaderFacts(Object.fromEntries(headers));
@@ -532,6 +562,13 @@ function checkProxyHeaders(file, line, proxy, headers, findings, pillarCounts) {
       file: file.rel, line, severity: 'media',
       message: 'Bloco ' + proxy + ' sem diretiva HSTS válida identificada.',
       evidence: 'Declaração estática de Strict-Transport-Security ausente ou inválida.',
+    });
+  } else if (facts.hsts === 'insufficient') {
+    addFinding(findings, pillarCounts, 'tls-cabecalhos', {
+      rule: 'PRONTIDAO-HSTS-FRACO',
+      file: file.rel, line, severity: 'media',
+      message: 'Bloco ' + proxy + ' declara HSTS com duração inferior a 180 dias.',
+      evidence: 'max-age abaixo do mínimo da auditoria. O valor zero desativa HSTS.',
     });
   }
   if (!facts.noSniff || !facts.antiFrame) {
@@ -601,9 +638,10 @@ function caddyAddress(raw) {
   if (!address) return null;
   const [, scheme, host, port] = address;
   if (!host && !port) return null;
+  if (port && (Number(port) < 1 || Number(port) > 65535)) return null;
+  if (!scheme && host && port && ![80, 443].includes(Number(port))) return null;
   const local = /^(?:localhost\.?|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(host);
-  const http = scheme?.toLowerCase() === 'http' || (!scheme && port === '80');
-  if (!scheme && port && port !== '80' && port !== '443') return null;
+  const http = scheme ? scheme.toLowerCase() === 'http' : Number(port) === 80 || (!host && Number(port) !== 443);
   return {http, local};
 }
 
@@ -643,28 +681,22 @@ function checkCaddy(file, findings, pillarCounts, onIncomplete) {
     }
     let redirect = false;
     let otherRedirect = false;
-    let tlsOff = false;
     let routingUnknown = false;
     let headersUnknown = false;
     const headers = new Map();
+    const deferred = new Map();
     for (const directive of children) {
       const [name, ...args] = directive.words;
-      if (name === 'tls' && args[0] === 'off') {
-        tlsOff = true;
-        addFinding(findings, pillarCounts, 'tls-cabecalhos', {
-          rule: 'PRONTIDAO-TLS-DESATIVADO',
-          file: file.rel, line: directive.line, severity: 'alta',
-          message: 'Configuração Caddy declara tls off no site.',
-          evidence: 'Diretiva tls off.',
-        });
-      }
+      if (name === 'tls' && args[0] === 'off') routingUnknown = true;
       if (name === 'redir') {
         const conditional = /^[@/]/.test(args[0] ?? '');
-        const [destination = '', status = ''] = conditional || args[0] === '*' ? args.slice(1) : args;
-        const https = /^https:\/\/[^\s/?#]+/i.test(destination) && /^(?:30[1278]|permanent|temporary)?$/.test(status);
+        const [destination = '', status = '', ...extra] = conditional || args[0] === '*' ? args.slice(1) : args;
+        const supportedStatus = !status || HTTPS_REDIRECT_STATUSES.test(status) || /^(?:permanent|temporary)$/.test(status);
+        const https = isHttpsDestination(destination) && supportedStatus && !extra.length;
         redirect ||= https && !conditional;
         otherRedirect ||= !https;
-        if (!conditional && !https && /^\{/.test(destination)) routingUnknown = true;
+        if (extra.length || !destination || /^\{/.test(destination) || directive.children
+          || (!supportedStatus && !/^\d{3}$|^html$/.test(status))) routingUnknown = true;
       }
       if (name === 'import' || /^(?:route|handle(?:_path|_errors)?|invoke)$/.test(name)) {
         routingUnknown = true;
@@ -677,31 +709,41 @@ function checkCaddy(file, findings, pillarCounts, onIncomplete) {
         headersUnknown = true;
         continue;
       }
+      const deferRules = rules.some(rule => /^(?:defer$|[->?])/.test(rule.words[0] ?? ''));
       for (const rule of rules) {
         const [field = '', ...values] = rule.words;
         const key = field.replace(/^[-+>?]/, '').toLowerCase();
         if (!PROTECTION_HEADERS.has(key)) {
-          if (field === '-*' || field === 'match') headersUnknown = true;
+          if ((field.startsWith('-') && field.includes('*')) || field === 'match') headersUnknown = true;
           continue;
         }
-        if (field.startsWith('-')) headers.delete(key);
-        else if (/^[+?]/.test(field) || values.length !== 1 || /[{}]/.test(values[0])) headersUnknown = true;
-        else headers.set(key, values[0]);
+        const deletion = field.startsWith('-');
+        if (/^[+?]/.test(field) || (deletion ? values.length !== 0 : values.length !== 1 || /[{}]/.test(values[0]))) {
+          headersUnknown = true;
+          continue;
+        }
+        const mutations = deferRules ? deferred : headers;
+        if (mutations.has(key) && mutations.get(key) !== values[0]) headersUnknown = true;
+        mutations.set(key, values[0]);
       }
+    }
+    for (const [key, value] of deferred) {
+      if (value === undefined) headers.delete(key);
+      else headers.set(key, value);
     }
     routingUnknown ||= redirect && otherRedirect;
     if (routingUnknown) onIncomplete(line, 'rotas ou imports Caddy exigem avaliação adicional');
     if (headersUnknown) onIncomplete(line, 'política Caddy de cabeçalhos condicional ou dinâmica');
     const publicHttp = addresses.some(address => address.http && !address.local);
-    if (publicHttp && !tlsOff && !redirect && !routingUnknown) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
-    if ((!redirect || addresses.some(address => !address.http)) && !routingUnknown && !headersUnknown) {
+    if (publicHttp && !redirect && !routingUnknown) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
+    if (addresses.some(address => !address.http) && !routingUnknown && !headersUnknown) {
       checkProxyHeaders(file, line, 'Caddy', headers, findings, pillarCounts);
     }
   }
 }
 
 function parseNginx(content) {
-  const root = {name: '', args: [], line: 1, children: [], directives: []};
+  const root = {name: '', args: [], line: 1, children: [], directives: [], sequence: []};
   const stack = [root];
   const tokens = /#[^\r\n]*|"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\$\{[^}\s]+\}|\\[\s\S]|[^\s;{}#'"\\$]+|[;{}$]|\s+/g;
   let directive = [];
@@ -725,13 +767,16 @@ function parseNginx(content) {
       const [name, ...args] = directive;
       const parent = stack.at(-1);
       if (token === '{' && name) {
-        const block = {name, args, line: directiveLine, children: [], directives: []};
+        const block = {name, args, line: directiveLine, children: [], directives: [], sequence: []};
         parent.children.push(block);
+        parent.sequence.push(block);
         stack.push(block);
       } else if (token === '}' && !name && stack.length > 1) {
         stack.pop();
       } else if (token === ';' && name) {
-        parent.directives.push({name, args, line: directiveLine});
+        const item = {name, args, line: directiveLine};
+        parent.directives.push(item);
+        parent.sequence.push(item);
       } else {
         throw new Error('NGINX_INCOMPLETO');
       }
@@ -752,6 +797,7 @@ function nginxHeaderPolicy(block, inherited, onIncomplete) {
   let mode = inherited.mode;
   let unknown = inherited.unknown;
   let external = inherited.external;
+  let errorPage = inherited.errorPage;
   for (const {name, args, line} of block.directives) {
     const [field, value] = args;
     if (name === 'include' || /^more_(?:set|clear)_headers$/.test(name)) {
@@ -764,59 +810,113 @@ function nginxHeaderPolicy(block, inherited, onIncomplete) {
         onIncomplete(line, 'modo de herança Nginx não reconhecido');
         unknown = true;
       }
+    } else if (name === 'error_page') {
+      errorPage = true;
     } else if (name === 'add_header') {
       replaces = true;
       const key = field?.toLowerCase();
-      if (PROTECTION_HEADERS.has(key)) {
-        if (value === undefined || /\$/.test(value)) {
-          onIncomplete(line, 'valor dinâmico ou inválido em add_header Nginx');
-          unknown = true;
-        } else {
-          local.set(key, [...(local.get(key) ?? []), value]);
-        }
+      if (!field || args.length < 2 || args.length > 3 || (args.length === 3 && args[2] !== 'always')
+        || (PROTECTION_HEADERS.has(key) && /\$/.test(value))) {
+        onIncomplete(line, 'valor dinâmico ou inválido em add_header Nginx');
+        unknown = true;
+      } else if (PROTECTION_HEADERS.has(key)) {
+        local.set(key, [...(local.get(key) ?? []), {value, always: args[2] === 'always'}]);
       }
     }
   }
   const headers = new Map(mode === 'merge' || (mode === 'on' && !replaces) ? inherited.headers : []);
   for (const [key, values] of local) headers.set(key, [...values, ...(headers.get(key) ?? [])]);
-  return {headers, mode, unknown, external};
+  return {headers, mode, unknown, external, errorPage};
+}
+
+function nginxResponse(block) {
+  for (const {name, args} of block.sequence) {
+    if (name === 'if' || name === 'rewrite') return {unknown: true};
+    if (name === 'break') return args.length ? {unknown: true} : {};
+    if (name !== 'return') continue;
+    const [first, destination, ...extra] = args;
+    if (extra.length || !first) return {unknown: true};
+    if (/^[1-5]\d\d$/.test(first)) {
+      const redirect = HTTPS_REDIRECT_STATUSES.test(first);
+      return {
+        status: Number(first),
+        redirectsHttps: redirect && isHttpsDestination(destination),
+        unknown: redirect && /^\$/.test(destination ?? ''),
+      };
+    }
+    if (destination === undefined && /^(?:https?:\/\/|\$scheme\b|\$\{scheme\})/i.test(first)) {
+      return {status: 302, redirectsHttps: isHttpsDestination(first), unknown: first.startsWith('$')};
+    }
+    return {unknown: true};
+  }
+  return {};
+}
+
+function nginxPort(address = '') {
+  const port = /^(?:(?:\[[^\]]+\]|[\w.*-]+):)?(\d+)$/.exec(address)?.[1];
+  if (port !== undefined) return Number(port) > 0 && Number(port) <= 65535 ? Number(port) : null;
+  if (/^(?:\*|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-f:]+\])$/i.test(address)) return 80;
+  return null;
+}
+
+function nginxHeadersForStatus(headers, status) {
+  const active = new Map();
+  for (const [key, declarations] of headers) {
+    const values = declarations.filter(({always}) => always || status === undefined || NGINX_HEADER_STATUSES.has(status))
+      .map(({value}) => value).filter(Boolean);
+    if (values.length) active.set(key, values);
+  }
+  return active;
 }
 
 function checkNginx(file, findings, pillarCounts, onIncomplete) {
   const root = parseNginx(file.content);
-  const initial = {headers: new Map(), mode: 'on', unknown: false, external: false};
+  const initial = {headers: new Map(), mode: 'on', unknown: false, external: false, errorPage: false};
   const protocolAt = (block, inherited) => block.directives.find(item => item.name === 'ssl_protocols') ?? inherited;
-  const checkHeaders = (block, policy, server, parentHeaders) => {
+  const checkHeaders = (block, policy, parentHeaders) => {
+    const response = nginxResponse(block);
     if (!policy.unknown) {
-      // Identical effective declarations need only one finding, at the enclosing block.
-      const headers = JSON.stringify([...policy.headers]);
-      if (server || headers !== parentHeaders) checkProxyHeaders(file, block.line, 'Nginx', policy.headers, findings, pillarCounts);
-      parentHeaders = headers;
+      if (response.unknown && response.status === undefined) {
+        onIncomplete(block.line, 'fluxo da resposta Nginx depende de condição ou reescrita');
+      }
+      const headers = nginxHeadersForStatus(policy.headers, response.status);
+      const signature = JSON.stringify([...headers]);
+      if (policy.errorPage && (response.status === undefined || response.status >= 300)) {
+        onIncomplete(block.line, 'página de erro pode trocar o contexto dos cabeçalhos Nginx');
+      } else if (response.status !== 444) {
+        if (signature !== parentHeaders) checkProxyHeaders(file, block.line, 'Nginx', headers, findings, pillarCounts);
+        parentHeaders = signature;
+      }
+      const facts = passiveHeaderFacts(Object.fromEntries(headers));
+      if (response.status === undefined && policy.headers.size
+        && JSON.stringify(facts) !== JSON.stringify(passiveHeaderFacts(Object.fromEntries(nginxHeadersForStatus(policy.headers, 404))))) {
+        onIncomplete(block.line, 'cabeçalhos Nginx sem always dependem do status da resposta');
+      }
     }
+    if (response.status !== undefined && !response.unknown && !policy.external && !policy.errorPage) return;
     for (const child of block.children) {
       if (child.name === 'location' || child.name === 'if') {
-        checkHeaders(child, nginxHeaderPolicy(child, policy, onIncomplete), false, parentHeaders);
+        checkHeaders(child, nginxHeaderPolicy(child, policy, onIncomplete), parentHeaders);
       }
     }
   };
-  const checkServer = (server, parentPolicy, parentProtocol) => {
+  const checkServer = (server, parentPolicy, parentProtocol, tlsPorts, contextUsesLegacySsl) => {
     const policy = nginxHeaderPolicy(server, parentPolicy, onIncomplete);
     const protocol = protocolAt(server, parentProtocol);
     const listeners = server.directives.filter(item => item.name === 'listen');
-    const rewriteDirectives = server.directives.filter(item => /^(?:rewrite|return)$/.test(item.name));
-    const redirect = rewriteDirectives.find(item => item.name === 'return');
-    const redirectsHttps = /^30[1278]$/.test(redirect?.args[0] ?? '') && /^https:\/\/.+/i.test(redirect?.args[1] ?? '');
-    const routingUnknown = policy.external || rewriteDirectives[0]?.name === 'rewrite'
-      || (redirect && server.children.some(child => child.name === 'if'));
+    const response = nginxResponse(server);
+    const routingUnknown = policy.external || response.unknown || (policy.errorPage && response.status >= 300);
+    const legacySsl = contextUsesLegacySsl || server.directives.some(item => item.name === 'ssl');
     let https = false;
     if (!listeners.length) onIncomplete(server.line, 'endereço Nginx implícito, depende da instalação');
     for (const {args, line} of listeners) {
-      const port = /^(?:(?:\[[^\]]+\]|[^:\s]+):)?(\d+)$/.exec(args[0] ?? '')?.[1];
-      if (args.includes('ssl') && !args.includes('quic')) https = true;
-      else if (!port || port === '443' || args.includes('quic')) onIncomplete(line, 'tipo de listener Nginx não inferido com segurança');
-      else if (port === '80') {
+      const port = nginxPort(args[0]);
+      if (port === null || args.includes('quic') || legacySsl) onIncomplete(line, 'tipo de listener Nginx não inferido com segurança');
+      else if (args.includes('ssl')) https = true;
+      else if (tlsPorts.has(port)) onIncomplete(line, 'listener Nginx pode compartilhar a configuração TLS da porta');
+      else {
         if (routingUnknown) onIncomplete(line, 'redirecionamento Nginx depende de reescrita ou configuração adicional');
-        else if (!redirectsHttps) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
+        else if (!response.redirectsHttps) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
       }
     }
     const localProtocol = server.directives.includes(protocol);
@@ -829,24 +929,24 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
         evidence: 'Diretiva ssl_protocols com protocolo legado.',
       });
     }
-    if (https) checkHeaders(server, policy, true);
+    if (https) checkHeaders(server, policy);
   };
-  const rootPolicy = nginxHeaderPolicy(root, initial, onIncomplete);
+  const contexts = [root, ...root.children.filter(block => block.name === 'http')];
   let foundServer = false;
-  for (const block of root.children) {
-    if (block.name === 'server') {
-      foundServer = true;
-      checkServer(block, rootPolicy, protocolAt(root));
-    }
-    if (block.name === 'http') {
-      const policy = nginxHeaderPolicy(block, rootPolicy, onIncomplete);
-      for (const server of block.children.filter(child => child.name === 'server')) {
-        foundServer = true;
-        checkServer(server, policy, protocolAt(block));
+  for (const context of contexts) {
+    const policy = nginxHeaderPolicy(context, initial, onIncomplete);
+    const servers = context.children.filter(child => child.name === 'server');
+    const contextUsesLegacySsl = context.directives.some(item => item.name === 'ssl');
+    const tlsPorts = new Set();
+    for (const server of servers) {
+      for (const {name, args} of server.directives) {
+        if (name === 'listen' && args.includes('ssl')) tlsPorts.add(nginxPort(args[0]));
       }
     }
+    foundServer ||= servers.length > 0;
+    for (const server of servers) checkServer(server, policy, protocolAt(context), tlsPorts, contextUsesLegacySsl);
   }
-  if (!foundServer && (root.children.length || root.directives.length) && !rootPolicy.external) {
+  if (!foundServer && root.sequence.length && !root.directives.some(item => item.name === 'include')) {
     onIncomplete(1, 'contexto HTTP dos blocos Nginx não encontrado no arquivo');
   }
 }
@@ -1003,16 +1103,17 @@ function* operationalCommands(file, onIncomplete) {
   const systemCron = /(?:^|\/)cron\.d\/[^/]+$/.test(file.rel) || /(?:^|\/)etc\/crontab$/.test(file.rel);
   const userCron = /(?:^|\/)(?:crontab|[^/]+\.crontab|(?:crontabs|spool\/cron)\/[^/]+)$/.test(file.rel);
   if (!shell && !systemCron && !userCron) return;
-  let heredoc;
+  const heredocs = [];
   let pending = '';
   let start = 1;
   for (const [index, raw] of file.lines.entries()) {
-    if (heredoc) {
-      if (raw.trimStart() === heredoc) heredoc = undefined;
+    if (heredocs.length) {
+      const {delimiter, stripTabs} = heredocs[0];
+      if ((stripTabs ? raw.replace(/^\t+/, '') : raw) === delimiter) heredocs.shift();
       continue;
     }
     const text = raw.trim();
-    if (!text || text.startsWith('#')) continue;
+    if (!pending && (!text || text.startsWith('#'))) continue;
     if (systemCron || userCron) {
       if (/^\w+\s*=/.test(text)) continue;
       const command = cronCommand(text, systemCron);
@@ -1021,22 +1122,40 @@ function* operationalCommands(file, onIncomplete) {
       continue;
     }
     if (!pending) start = index + 1;
-    if (/(?<!\\)(?:\\\\)*\\$/.test(text)) {
-      pending += text.slice(0, -1) + ' ';
+    if (/(?<!\\)(?:\\\\)*\\$/.test(raw)) {
+      pending += raw.slice(0, -1);
       continue;
     }
-    const command = pending + text;
+    const command = (pending + raw).trim();
     pending = '';
-    heredoc = /(?:^|\s)<<-?\s*(['"]?)([\w-]+)\1(?:\s|$)/.exec(command)?.[2];
+    if (command.includes('<<')) {
+      const parsed = shellWords(command);
+      if (!parsed) {
+        onIncomplete(start, 'delimitador de here-doc não interpretado');
+        return;
+      }
+      for (const [position, word] of parsed.words.entries()) {
+        if (!word.operator || !/^\d*<<-?$/.test(word.text)) continue;
+        const next = parsed.words[position + 1];
+        if (!next || next.operator || /\$'/.test(next.raw)) {
+          onIncomplete(start, 'delimitador de here-doc não interpretado');
+          return;
+        }
+        const delimiter = next.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, part =>
+          part.startsWith('"') ? part.slice(1, -1).replace(/\\([$"\\\x60])/g, '$1')
+            : part.startsWith("'") ? part.slice(1, -1) : part.slice(1));
+        heredocs.push({delimiter, stripTabs: word.text.endsWith('-')});
+      }
+    }
     yield {command, line: start};
   }
-  if (pending || heredoc) onIncomplete(start, 'declaração de shell incompleta');
+  if (pending || heredocs.length) onIncomplete(start, 'declaração de shell incompleta');
 }
 
 // Literal command words and redirections. Expansion, shell control flow and scripts invoked
 // indirectly stay outside the static proof.
 function shellWords(command) {
-  const tokens = /#[^\r\n]*|(?:\d*>>?|[|;&<>])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^\s"'\\|;&<>])+|\s+/gy;
+  const tokens = /#[^\r\n]*|\d*(?:<<<|<<-?)|(?:\d*>>?|[|;&<>])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^\s"'\\|;&<>])+|\s+/gy;
   const words = [];
   let operator = false;
   while (tokens.lastIndex < command.length) {
@@ -1044,15 +1163,78 @@ function shellWords(command) {
     if (!token) return null;
     if (token.startsWith('#')) break;
     if (/^\s/.test(token)) continue;
-    if (/[|;&<>]/.test(token[0]) || /^\d+>/.test(token)) {
+    if (/^\d*[|;&<>]/.test(token)) {
       operator ||= !/^1?>>?$/.test(token) && !/^2>>?$/.test(token);
       words.push({text: token, operator: true});
     } else {
-      words.push({text: token.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, part =>
+      words.push({raw: token, text: token.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, part =>
         part.startsWith('\\') ? part.slice(1) : part.slice(1, -1))});
     }
   }
   return {words, operator};
+}
+
+const RESTIC_SHARED_VALUE_OPTIONS = /^(?:-r|--repo|--repository-file|-p|--password-file|-H|--host|--path|--tag)$/;
+const RESTIC_RESTORE_VALUE_OPTIONS = /^--(?:include|exclude|target)$/;
+const RESTIC_RETENTION_COUNT = /^--keep-(?:last|hourly|daily|weekly|monthly|yearly)$/;
+const RESTIC_RETENTION_WINDOW = /^--keep-within(?:-(?:hourly|daily|weekly|monthly|yearly))?$/;
+
+function resticRoutine(subcommand, args, onIncomplete) {
+  const options = new Map();
+  const positionals = [];
+  let positionalOnly = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (positionalOnly || !arg.startsWith('-')) {
+      positionals.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      positionalOnly = true;
+      continue;
+    }
+    if (/^(?:--no-lock|--quiet|-q)$/.test(arg)
+      || (subcommand === 'restore' ? arg === '--verify' : arg === '--prune')) continue;
+    const equals = arg.indexOf('=');
+    const name = equals === -1 ? arg : arg.slice(0, equals);
+    const allowed = subcommand === 'restore' ? RESTIC_RESTORE_VALUE_OPTIONS.test(name)
+      : name === '--group-by' || name === '--keep-tag' || RESTIC_RETENTION_COUNT.test(name) || RESTIC_RETENTION_WINDOW.test(name);
+    if (!allowed && !RESTIC_SHARED_VALUE_OPTIONS.test(name)) {
+      onIncomplete();
+      return false;
+    }
+    const value = equals === -1 ? args[++i] : arg.slice(equals + 1);
+    if (!value || (equals === -1 && value.startsWith('-'))) return false;
+    options.set(name, value);
+  }
+  const snapshotId = /^[\da-f]{1,64}$/i;
+  if (subcommand === 'restore') {
+    const [snapshot] = positionals;
+    if (positionals.length !== 1 || !options.has('--target')) return false;
+    const target = options.get('--target');
+    if (!target.trim()) return false;
+    if (/^[$~]/.test(target)) {
+      onIncomplete();
+      return false;
+    }
+    if (snapshot === 'latest' || snapshotId.test(snapshot)) return true;
+    onIncomplete();
+    return false;
+  }
+  if (positionals.length) {
+    if (positionals.every(snapshot => snapshotId.test(snapshot))) return true;
+    onIncomplete();
+    return false;
+  }
+  if ([...options].some(([name, value]) => name.startsWith('--keep-') && value.includes('$'))) {
+    onIncomplete();
+    return false;
+  }
+  return [...options].some(([name, value]) => {
+    if (RESTIC_RETENTION_COUNT.test(name)) return positiveInteger(value);
+    if (RESTIC_RETENTION_WINDOW.test(name)) return /^(?=\d)(?:\d+y)?(?:\d+m)?(?:\d+d)?(?:\d+h)?$/.test(value) && /[1-9]/.test(value);
+    return name === '--keep-tag' && value.split(',').every(tag => tag.trim());
+  });
 }
 
 function dumpDestination(binary, words) {
@@ -1138,12 +1320,14 @@ function checkBackup(file, findings, pillarCounts, onIncomplete) {
       || (/^(?:-d|--dbname)$/.test(arg) && args[index + 1] && !args[index + 1].startsWith('-')));
     const dryRun = args.includes('--dry-run') || (binary === 'borg' && args.includes('-n'));
     if (routine === 'restore-check') onIncomplete(line, 'nome da rotina não distingue catálogo de restauração');
+    const resticDeclared = binary === 'restic' && !dryRun && /^(?:restore|forget)$/.test(subcommand ?? '')
+      && resticRoutine(subcommand, parameters, () => onIncomplete(line, 'argumentos de restauração ou retenção Restic não resolvidos'));
     restore ||= routine === 'restore-proof' || restoresDb
-      || (!dryRun && ((binary === 'restic' && subcommand === 'restore' && parameters.some(arg => /^--target(?:=|$)/.test(arg)))
-        || (binary === 'borg' && subcommand === 'extract')));
+      || (subcommand === 'restore' && resticDeclared)
+      || (!dryRun && binary === 'borg' && subcommand === 'extract');
     rotation ||= routine === 'backup-rotate'
-      || (!dryRun && ((binary === 'restic' && subcommand === 'forget' && parameters.length > 0)
-        || (binary === 'borg' && subcommand === 'prune')))
+      || (subcommand === 'forget' && resticDeclared)
+      || (!dryRun && binary === 'borg' && subcommand === 'prune')
       || (binary === 'find' && /-mtime\s+\+\d+\s+.*-delete|-mtime\s+\+\d+\s+-delete/.test(invocation));
   }
   return {backup, restore, catalog, rotation};
@@ -1152,11 +1336,15 @@ function checkBackup(file, findings, pillarCounts, onIncomplete) {
 /** Runs all passive production-readiness checks across a repository directory. */
 export function auditRepositoryReadiness(repoRoot) {
   const skipCoverage = [];
+  const partialFiles = new Set();
+  const partialPillars = new Set();
   let skipped = 0;
   let failed = 0;
   const recordSkip = (status, rel, reason) => {
-    if (status === 'failed') failed++;
-    else skipped++;
+    if (status === 'failed') {
+      failed++;
+      partialFiles.add(rel);
+    } else skipped++;
     if (skipCoverage.length < MAX_SKIP_ROWS) {
       skipCoverage.push({tool: 'prontidao:arquivo', version: AUDIT_VERSION, status, detail: `${rel}: ${reason}.`});
     }
@@ -1172,11 +1360,18 @@ export function auditRepositoryReadiness(repoRoot) {
     'segredos-fora-codigo': 0,
   };
   const fileCoverage = [];
+  if (failed) {
+    for (const pillar of Object.keys(pillarCounts)) partialPillars.add(pillar);
+  }
+  const recordPartial = (file, reason, ...pillars) => {
+    for (const pillar of pillars) partialPillars.add(pillar);
+    recordSkip('failed', file, reason);
+  };
 
   let hasDeployable = false;
   let hasStateful = false;
   let hasBackup = false;
-  let hasRestoreProof = false;
+  let hasRestoreRoutine = false;
   let hasCatalogCheck = false;
   let hasBackupRotation = false;
   let hasLogrotate = false;
@@ -1206,7 +1401,8 @@ export function auditRepositoryReadiness(repoRoot) {
       }
       if (incomplete) {
         checksApplied.pop();
-        recordSkip('failed', file.rel, 'estrutura Compose inválida ou referência YAML não resolvida');
+        recordPartial(file.rel, 'estrutura Compose inválida ou referência YAML não resolvida',
+          'alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo');
       }
       for (const svc of services) {
         for (const {line} of svc.environment) {
@@ -1241,17 +1437,21 @@ export function auditRepositoryReadiness(repoRoot) {
             evidence: 'Healthcheck ausente ou desativado.',
           });
         }
-        const driver = svc.logDriver?.toLowerCase() ?? 'json-file';
-        if (!['json-file', 'local'].includes(driver) && !COMPOSE_EXTERNAL_LOG_DRIVERS.has(driver)) {
-          recordSkip('failed', file.rel, `linha ${svc.line}, política de rotação de driver Compose não reconhecida`);
-        } else if (!COMPOSE_EXTERNAL_LOG_DRIVERS.has(driver) && (!svc.hasLogMaxSize || !svc.hasLogMaxFile)) {
+        const driver = svc.logDriver;
+        if (driver === 'none') {
+          recordSkip('skipped', file.rel, `linha ${svc.line}, logs desativados para este serviço Compose`);
+        } else if (COMPOSE_EXTERNAL_LOG_DRIVERS.has(driver)) {
+          recordSkip('skipped', file.rel, `linha ${svc.line}, retenção de logs depende do driver externo ou do host`);
+        } else if (driver !== null && driver !== 'json-file' && driver !== 'local') {
+          recordPartial(file.rel, `linha ${svc.line}, política de rotação de driver Compose não reconhecida`, 'alertas-logs');
+        } else if (!svc.hasLogMaxSize || !svc.hasLogMaxFile) {
           addFinding(findings, pillarCounts, 'alertas-logs', {
             rule: 'PRONTIDAO-LOG-SEM-ROTACAO',
             file: file.rel,
             line: svc.line,
             severity: 'media',
-            message: 'Serviço Compose sem rotação de logs (logging.options.max-size e max-file).',
-            evidence: 'Serviço Compose sem logging com max-size/max-file',
+            message: 'Serviço Compose sem limites explícitos válidos para a rotação local de logs.',
+            evidence: 'Confira logging.options.max-size e max-file. Padrões do driver e do host ficam fora da análise estática.',
           });
         }
         if (!svc.hasMemLimit) {
@@ -1284,7 +1484,7 @@ export function auditRepositoryReadiness(repoRoot) {
       let incomplete = false;
       const onIncomplete = (line, reason) => {
         incomplete = true;
-        recordSkip('failed', file.rel, `linha ${line}, ${reason}`);
+        recordPartial(file.rel, `linha ${line}, ${reason}`, 'tls-cabecalhos');
       };
       try {
         const check = proxy === 'Caddy' ? checkCaddy : checkNginx;
@@ -1310,7 +1510,7 @@ export function auditRepositoryReadiness(repoRoot) {
     if (isCommittedEnv(file.rel)) {
       let incomplete = false;
       checkDotenv(file, findings, pillarCounts, () => { incomplete = true; });
-      if (incomplete) recordSkip('failed', file.rel, 'sintaxe dotenv inválida ou não coberta');
+      if (incomplete) recordPartial(file.rel, 'sintaxe dotenv inválida ou não coberta', 'segredos-fora-codigo');
       else checksApplied.push('env-secrets');
     }
 
@@ -1347,12 +1547,13 @@ export function auditRepositoryReadiness(repoRoot) {
       checksApplied.push('logrotate');
     }
     const routines = checkBackup(file, findings, pillarCounts,
-      (line, reason) => recordSkip('failed', file.rel, `linha ${line}, ${reason}`));
+      (line, reason) => recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao'));
     if (routines.backup) checksApplied.push('backup');
     if (routines.restore) checksApplied.push('restore-declaration');
     if (routines.catalog) checksApplied.push('backup-catalog-check');
+    if (routines.rotation) checksApplied.push('backup-retention');
     hasBackup ||= routines.backup;
-    hasRestoreProof ||= routines.restore;
+    hasRestoreRoutine ||= routines.restore;
     hasCatalogCheck ||= routines.catalog;
     hasBackupRotation ||= routines.rotation;
     if (!protectedEnv && /(?:personal:watch|alertmanager|OnFailure=|deliverPersonalPush|sendAlert|alert_webhook|WEBHOOK_ALERT|SLACK_WEBHOOK|DISK_ALERT)/i.test(file.content)) {
@@ -1369,7 +1570,7 @@ export function auditRepositoryReadiness(repoRoot) {
       fileCoverage.push({
         tool: 'prontidao:arquivo',
         version: AUDIT_VERSION,
-        status: 'ok',
+        status: partialFiles.has(file.rel) ? 'failed' : 'ok',
         detail: `${file.rel}: verificações [${[...new Set(checksApplied)].join(', ')}], ${fileCount} achado(s).`,
       });
     }
@@ -1387,7 +1588,7 @@ export function auditRepositoryReadiness(repoRoot) {
         evidence: 'Nenhum script/comando de backup (pg_dump, restic, borg, personal:backup) encontrado.',
       });
     }
-    if (!hasRestoreProof) {
+    if (!hasRestoreRoutine) {
       addFinding(findings, pillarCounts, 'backup-restauracao', {
         rule: 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
         file: fallbackFile,
@@ -1452,31 +1653,31 @@ export function auditRepositoryReadiness(repoRoot) {
       tool: 'prontidao:requisito:tls-cabecalhos',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `TLS e cabeçalhos (configuração estática no repositório): ${pillarCounts['tls-cabecalhos']} achado(s).`,
+      detail: `Análise estática de TLS e cabeçalhos com ${pillarCounts['tls-cabecalhos']} achado(s). Certificados e respostas efetivas exigem evidência em execução.`,
     },
     {
       tool: 'prontidao:requisito:backup-restauracao',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Backup e restauração (configuração estática no repositório): scriptBackup=${hasBackup ? 'declarado' : 'ausente'}, checagemCatalogo=${hasCatalogCheck ? 'declarada' : 'ausente'}, rotinaRestauracao=${hasRestoreProof ? 'declarada' : 'ausente'}; restauração real não comprovada por configuração; ${pillarCounts['backup-restauracao']} achado(s).`,
+      detail: `Análise estática com ${pillarCounts['backup-restauracao']} achado(s). Backup ${hasBackup ? 'identificado' : 'não identificado'}, checagem de catálogo ${hasCatalogCheck ? 'identificada' : 'não identificada'}, rotina de restauração ${hasRestoreRoutine ? 'identificada' : 'não identificada'} e retenção de backup ${hasBackupRotation ? 'identificada' : 'não identificada'}. A prova de restauração requer execução e verificação dos dados restaurados.`,
     },
     {
       tool: 'prontidao:requisito:alertas-logs',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Alertas e rotação de logs (configuração estática no repositório): diretivaAlerta=${hasAlerting ? 'declarada' : 'ausente'}, logrotate=${hasLogrotate ? 'declarado' : 'ausente'}; entrega real de alertas não comprovada por configuração; ${pillarCounts['alertas-logs']} achado(s).`,
+      detail: `Análise estática de alertas e rotação de logs com ${pillarCounts['alertas-logs']} achado(s). Diretiva de alerta ${hasAlerting ? 'identificada' : 'não identificada'} e logrotate ${hasLogrotate ? 'identificado' : 'não identificado'}. A entrega de alertas exige verificação em execução.`,
     },
     {
       tool: 'prontidao:requisito:reinicio-automatico',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Reinício automático e healthcheck (configuração estática no repositório): disponibilidade real não comprovada por configuração; ${pillarCounts['reinicio-automatico']} achado(s).`,
+      detail: `Análise estática de reinício automático e healthcheck com ${pillarCounts['reinicio-automatico']} achado(s). A disponibilidade exige observação do serviço em execução.`,
     },
     {
       tool: 'prontidao:requisito:disco-memoria',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Disco e memória (configuração estática no repositório): rotinaDisco=${hasDiskMonitoring ? 'declarada' : 'ausente'}; uso real no host não medido; ${pillarCounts['disco-memoria']} achado(s).`,
+      detail: `Análise estática de disco e memória com ${pillarCounts['disco-memoria']} achado(s). Rotina de disco ${hasDiskMonitoring ? 'identificada' : 'não identificada'}. O uso de recursos exige medição no host.`,
     },
     {
       tool: 'prontidao:requisito:segredos-fora-codigo',
@@ -1484,7 +1685,9 @@ export function auditRepositoryReadiness(repoRoot) {
       status: 'ok',
       detail: `Segredos fora do código (análise estática): ${pillarCounts['segredos-fora-codigo']} achado(s).`,
     },
-  ];
+  ].map(row => partialPillars.has(row.tool.slice('prontidao:requisito:'.length))
+    ? {...row, status: 'failed', detail: `${row.detail} Cobertura parcial. Consulte os avisos por arquivo.`}
+    : row);
 
   return {
     filesAnalyzed: files.length,
