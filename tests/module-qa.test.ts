@@ -26,6 +26,11 @@ type QaFinding = {
   evidence: string;
 };
 
+type QaTestAnalysis = {
+  validators: {line: number}[];
+  activeTests: {title: string; features: string[]; limitedFeatures: string[]}[];
+};
+
 const {collectQaModule, summarizeNodePasses, analyzeSourceFile, loadQaSyntax, analyzeTestFile, buildTraceability, measureValidatorCases} = (await import(
   new URL('../deploy/modules/qa/collect.mjs', import.meta.url).href
 )) as {
@@ -33,7 +38,7 @@ const {collectQaModule, summarizeNodePasses, analyzeSourceFile, loadQaSyntax, an
     coverage: QaCoverageRow[];
     findings: QaFinding[];
   }>;
-  analyzeTestFile: (file: string, source: string, parse: unknown) => {validators: {line: number}[]};
+  analyzeTestFile: (file: string, source: string, syntax: unknown) => QaTestAnalysis;
   analyzeSourceFile: (file: string, source: string, syntax: unknown) => unknown;
   loadQaSyntax: () => Promise<unknown>;
   buildTraceability: (options: Record<string, unknown>) => {extraRows: QaCoverageRow[]; findings: QaFinding[]};
@@ -179,8 +184,8 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
   assert.match(requirement?.detail ?? '', /vínculo estático.*calcularDescontoFidelidade.*tests\/clean-pricing\.test\.ts:5/);
   const untested = output.coverage.find(c => c.tool === 'qa-requisito:REQ-02');
   assert.match(untested?.detail ?? '', /estornarCobrancaDuplicada.*sem teste vinculado/);
-  assert.equal(toolStatus.get('qa-requisito:REQ-01'), 'ok');
-  assert.equal(toolStatus.get('qa-requisito:REQ-02'), 'ok');
+  assert.equal(toolStatus.get('qa-requisito:REQ-01'), 'skipped');
+  assert.equal(toolStatus.get('qa-requisito:REQ-02'), 'skipped');
   assert.equal(toolStatus.get('qa-rota:GET /api/desconto'), 'ok');
   assert.equal(toolStatus.get('qa-rota:POST /api/estorno'), 'ok');
 
@@ -705,9 +710,7 @@ async function runSyntheticPass(repo: string, files: string[]) {
 }
 
 async function readTestAst(file: string, content: string) {
-  const qaRequire = createRequire(join(qaModuleDir, 'package.json'));
-  const {parse} = await import(pathToFileURL(qaRequire.resolve('@babel/parser')).href);
-  return analyzeTestFile(file, content, parse);
+  return analyzeTestFile(file, content, await loadQaSyntax());
 }
 
 test('matriz lê o callback após opções, exige execução aprovada e reconhece skip e todo', realTools, async () => {
@@ -771,12 +774,152 @@ test('matriz exige uma asserção executada e atribuída a cada teste nas três 
       [['unobserved'], ['executed'], ['unobserved'], ['unsupported'], ['unsupported'], ['executed']]);
     const matrix = buildTraceability({workspace: repo, sourceAnalyses: [], reqFiles: ['requisitos.md'],
       testAnalyses: [await readTestAst(file, source)], runtimeTests, incomplete: false});
-    assert.deepEqual(matrix.findings.map(f => f.line), [1, 3, 4, 5]);
+    assert.deepEqual(matrix.findings.map(f => f.line), [1, 3]);
     assert.match(matrix.findings[0]!.evidence, /passed,passed,passed.*asserção não observada/);
-    assert.match(matrix.findings[2]!.evidence, /passed,passed,passed.*cobertura limitada/);
+    for (const id of ['REQ-14', 'REQ-15']) {
+      const coverage = coverageFor({coverage: matrix.extraRows}, `qa-requisito:${id}`);
+      assert.equal(coverage.status, 'skipped');
+      assert.match(coverage.detail, /passed,passed,passed.*cobertura limitada/);
+    }
     for (const id of ['REQ-12', 'REQ-16']) {
       assert.match(coverageFor({coverage: matrix.extraRows}, `qa-requisito:${id}`).detail, /asserção executada nas três passadas/);
     }
+  });
+});
+
+async function measureSyntheticRequirements(repo: string, requirements: string[], sources: Record<string, string>, tests: string[]) {
+  const file = 'trace.test.mjs';
+  writeFileSync(join(repo, 'requisitos.md'), requirements.join('\n'));
+  const syntax = await loadQaSyntax();
+  const testSource = tests.join('\n');
+  const testAnalysis = analyzeTestFile(file, testSource, syntax);
+  const options = {workspace: repo, reqFiles: ['requisitos.md'], incomplete: false, testAnalyses: [testAnalysis],
+    sourceAnalyses: Object.entries(sources).map(([path, source]) => analyzeSourceFile(path, source, syntax))};
+  const passes = [];
+  for (let index = 0; index < 3; index++) {
+    const scratch = join(repo, `run-${index}`);
+    mkdirSync(scratch);
+    for (const [path, source] of Object.entries({...sources, [file]: testSource})) writeFileSync(join(scratch, path), source);
+    passes.push(await runSyntheticPass(scratch, [file]));
+  }
+  assert.ok(passes.every(pass => pass.summary));
+  const runtimeTests = comparePasses(passes);
+  const matrix = buildTraceability({...options, runtimeTests});
+  const staticMatrix = buildTraceability(options);
+  return {runtimeTests, testAnalysis, findings: matrix.findings, staticFindings: staticMatrix.findings,
+    row: (id: number) => coverageFor({coverage: matrix.extraRows}, `qa-requisito:REQ-${id}`),
+    staticRow: (id: number) => coverageFor({coverage: staticMatrix.extraRows}, `qa-requisito:REQ-${id}`)};
+}
+
+test('matriz preserva o caminho de cada referência, aliases exportados e valores esperados como contexto', realTools, async () => {
+  await withSyntheticRepo('qa-referencias-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      'REQ-61: `primeira` de `./a.mjs` e `segunda` de `b.mjs`',
+      'REQ-62: `primeira` de `b.mjs` e `segunda` de `a.mjs`',
+      'REQ-63: `primeira` de `ausente.mjs`',
+      'REQ-64: `primeira` de `a.mjs` retorna `OK`',
+      'REQ-65: `cálculo$` de `aliases.mjs`',
+      'REQ-66: `interna` de `aliases.mjs`',
+      'REQ-67: `primeira`',
+      'REQ-68: retorna `OK`',
+      '- REQ-69: operação antiga (`listada`)',
+      'REQ-70: `primeira` de `a.mjs` e `2inválido`',
+    ], {
+      'a.mjs': "export function primeira() { return 'OK'; }\nexport function segunda() {}\nexport function OK() {}",
+      'b.mjs': 'export function segunda() { return 2; }\nexport function primeira() {}',
+      'aliases.mjs': 'export {interna as cálculo$, listada};\nfunction interna() { return 3; }\nfunction listada() { return 4; }',
+    }, [
+      "import {test} from 'node:test'; import assert from 'node:assert/strict';",
+      "import {primeira} from './a.mjs'; import {segunda} from './b.mjs';",
+      "import {cálculo$ as alias, listada} from './aliases.mjs';",
+      "test('REQ-63 caminho real diferente', () => assert.equal(primeira(), 'OK'));",
+      "test('segunda no caminho correto', () => assert.equal(segunda(), 2));",
+      "test('alias exportado', () => assert.equal(alias(), 3));",
+      "test('função exportada por lista', () => assert.equal(listada(), 4));",
+      "test('REQ-68 por título', () => assert.equal('OK', 'OK'));",
+    ]);
+    for (const id of [61, 64, 65, 68, 69]) {
+      assert.equal(result.row(id).status, 'ok', String(id));
+      assert.match(result.row(id).detail, /vínculo comprovado nas três passadas/);
+      assert.equal(result.staticRow(id).status, 'skipped', String(id));
+      assert.match(result.staticRow(id).detail, /prova não medida: somente análise estática/);
+    }
+    assert.match(result.row(61).detail, /primeira \(a\.mjs:1\), segunda \(b\.mjs:1\)/);
+    assert.match(result.row(62).detail, /primeira \(b\.mjs:2\), segunda \(a\.mjs:2\)/);
+    assert.match(result.row(64).detail, /contexto: .*retorna `OK`/);
+    assert.doesNotMatch(result.row(64).detail, /OK \(a\.mjs:/);
+    assert.match(result.row(65).detail, /cálculo\$ \(aliases\.mjs:2\)/);
+    for (const id of [63, 66, 70]) {
+      assert.equal(result.row(id).status, 'skipped', String(id));
+      assert.match(result.row(id).detail, /referência não resolvida/);
+    }
+    assert.match(result.row(63).detail, /primeira \(ausente\.mjs\) sem resolução/);
+    assert.doesNotMatch(result.row(63).detail, /primeira \(a\.mjs:/);
+    assert.deepEqual(result.findings.map(finding => finding.line), [2, 7]);
+    assert.equal(result.row(62).status, 'failed');
+    assert.equal(result.row(67).status, 'failed');
+  });
+});
+
+test('matriz e V8 concordam sobre operandos, spreads, chamadas opcionais e sombreamento', realTools, async () => {
+  await withSyntheticRepo('qa-operandos-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      'REQ-71: `texto` e `padrão`',
+      'REQ-72: `outroTexto` e `outroPadrão`',
+      'REQ-73: `mensagem`',
+      'REQ-74: `depoisDoSpread`',
+      'REQ-75: `antesDaMensagem`',
+      'REQ-76: `opcional`',
+      'REQ-77: `emAssertOpcional`',
+      'REQ-78: `sombreada`',
+      'REQ-79: `emAssertSombreado`',
+      'REQ-80: `somenteFora`',
+      'REQ-81: `emRegistroOpcional`',
+      'REQ-82: `trocaDeMetodo`',
+      'REQ-83: `dentroDoSpread`',
+    ], {
+      'features.mjs': [
+        "export function texto() { return 'sim'; }", 'export function padrão() { return /sim/; }',
+        "export function outroTexto() { return 'sim'; }", 'export function outroPadrão() { return /não/; }',
+        "export function mensagem() { return 'mensagem'; }", "export function depoisDoSpread() { return 'mensagem'; }",
+        ...['antesDaMensagem', 'opcional', 'emAssertOpcional', 'sombreada', 'emAssertSombreado', 'somenteFora',
+          'emRegistroOpcional', 'trocaDeMetodo', 'dentroDoSpread'].map(name => `export function ${name}() { return 1; }`),
+      ].join('\n'),
+    }, [
+      "import {test} from 'node:test'; import assert, {doesNotMatch as diferente} from 'node:assert/strict';",
+      "import * as features from './features.mjs'; import {sombreada} from './features.mjs';",
+      "test('REQ-71 ambos em match', () => assert['match'](features.texto(), features.padrão()));",
+      "test('REQ-72 ambos em doesNotMatch', () => diferente(features.outroTexto(), features['outroPadrão']()));",
+      "test('REQ-73 terceiro argumento em match', () => assert.match('sim', /sim/, features.mensagem()));",
+      "test('REQ-74 mensagem após spread', () => { const args = [1, 1]; assert.equal(...args, features.depoisDoSpread()); });",
+      "test('REQ-75 spread após os operandos', () => assert.equal(features.antesDaMensagem(), 1, ...['mensagem']));",
+      "test('REQ-76 função opcional', () => assert.equal(features?.opcional(), 1));",
+      "test('REQ-77 asserção opcional', () => assert.equal?.(features.emAssertOpcional(), 1));",
+      "test('REQ-78 função sombreada', () => { const sombreada = () => 1; assert.equal(sombreada(), 1); });",
+      "test('REQ-79 assert sombreado', () => { const assert = {equal() {}}; assert.equal(features.emAssertSombreado(), 1); });",
+      "test('REQ-80 chamada fora da asserção', () => { features.somenteFora(); assert.equal(1, 1); });",
+      "test?.('REQ-81 registro opcional', () => assert.equal(features.emRegistroOpcional(), 1));",
+      "test('REQ-82 método trocado', () => { const equal = assert.equal; assert.equal = assert.ok; try { assert.equal(1, features.trocaDeMetodo()); } finally { assert.equal = equal; } });",
+      "test('REQ-83 função em spread', () => { const args = [features.dentroDoSpread(), 1]; assert.equal(...args); });",
+    ]);
+    const names = [
+      ['texto', 'padrão'], ['outroTexto', 'outroPadrão'], [], [], ['antesDaMensagem'], [], [], [], [], [], [], ['trocaDeMetodo'], [],
+    ];
+    const identities = (names: string[]) => names.map(name => JSON.stringify(['features.mjs', name]));
+    assert.deepEqual(result.testAnalysis.activeTests.map(test => test.features), names.map(identities));
+    assert.deepEqual(result.testAnalysis.activeTests.flatMap(test => test.limitedFeatures),
+      identities(['depoisDoSpread', 'opcional', 'emAssertOpcional', 'emRegistroOpcional']));
+    assert.deepEqual(result.runtimeTests.map((test: {featurePasses: string[][]}) => test.featurePasses),
+      names.map(names => Array.from({length: 3}, () => identities(names.filter(name => name !== 'trocaDeMetodo')))));
+    for (const id of [71, 72, 75]) assert.equal(result.row(id).status, 'ok', String(id));
+    for (const id of [74, 76, 77, 79, 81, 83]) {
+      assert.equal(result.row(id).status, 'skipped', String(id));
+      assert.match(result.row(id).detail, /prova não medida: cobertura limitada/);
+    }
+    for (const id of [73, 78, 80, 82]) assert.equal(result.row(id).status, 'failed', String(id));
+    assert.deepEqual(result.findings.map(finding => finding.line), [3, 8, 10, 12]);
+    assert.ok(result.staticFindings.some(finding => finding.line === 3 && /execução não medida/.test(finding.message)));
+    assert.equal(result.staticRow(73).status, 'skipped');
   });
 });
 
