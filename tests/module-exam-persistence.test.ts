@@ -83,6 +83,7 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
       }}});
     }});
     assert.deepEqual(result.achados.map(a => [a.status, a.verifier?.provider]), [['confirmado','revisor'],['confirmado','revisor']]);
+    assert.ok(result.achados.every(a => a.title === 'Declaração de teste com modificador skip ou todo'));
     assert.deepEqual(result.achados[1]?.sources, ['examinador', 'exame-de-arquivo']);
     const row = (await input.ledger.pool.query('select provenance,profile_id,collector_measurements from ac_verify_coverage where run_id=$1 and file=$2', [result.runId, testFile])).rows[0];
     assert.equal(row.provenance, 'examiner');
@@ -182,6 +183,8 @@ test('runner revalida o vínculo e a prova antes da publicação', {skip: !datab
     });
     assert.deepEqual(result.achados.map(finding => [finding.status, finding.verifier?.provider]),
       [['confirmado', 'codex'], ['provavel', undefined], ['provavel', undefined]]);
+    assert.deepEqual(result.achados.slice(1).map(finding => finding.title),
+      observedOutput.findings.slice(1).map(({rule, message}) => `${rule}: ${message}`));
   });
 });
 
