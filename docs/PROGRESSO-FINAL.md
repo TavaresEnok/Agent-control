@@ -1071,3 +1071,17 @@ PAUSADO-COTA
 - 19/11/2026 20:47 UTC — Aceite final de 5f8a8789. TypeScript e os 53 testes à parte passaram no novo checkout. Os insumos dos 276 arquivos da suíte oficial e das 51 provas do laboratório conjunto são idênticos aos executados em 6587e792. As oito CLIs passaram no laboratório.
 - 19/11/2026 20:47 UTC — Conformidade integrada no merge cf3f5010 após o aceite conjunto de 5f8a8789.
 - 19/11/2026 20:47 UTC — A árvore do produto no merge e467c36b é idêntica ao candidato 5f8a8789 aprovado na suíte, complementares e laboratórios. Segue a aplicação viva com backup.
+- 19/11/2026 20:47 UTC — Iniciado backup imediatamente anterior a personal:images, com os oito módulos no checkout.
+- 19/11/2026 20:48 UTC — Backup final validado em /home/app/backups-agent-control/ispagent-antes-aplicacao-final-20261119-204733/agent-control-ispagent-20261119-2047. MANIFEST.txt confere (11870 arquivos) e 152 entradas TABLE DATA no catálogo do dump.
+- 19/11/2026 20:48 UTC — Modos anteriores preservados e escrita de grupo retirada apenas da raiz de projetos e dos diretórios IspAgent e IspAgent/.git.
+- 19/11/2026 20:48 UTC — Iniciada personal:images para as imagens nativas e as migrações no fluxo de setup da instalação.
+- 19/11/2026 20:52 UTC — personal:images terminou com sucesso no checkout de fechamento.
+- 19/11/2026 20:52 UTC — Gateway reiniciado e ativo. O painel utiliza o bundle verificado com Vite. A conferência do journal, da retirada de design e da saúde ainda está em curso.
+- 19/11/2026 20:52 UTC — Iniciada a retirada explícita da tentativa antiga de design, pelo comando de manutenção do produto.
+- 19/11/2026 20:52 UTC — O comando personal:maintenance confirmou a retirada sem execução do job a11f65ab-b216-4b5e-958c-47d4eda81e3d, com intenção failed e retirada removed.
+- 19/11/2026 20:53 UTC — Aplicação viva concluída. O inspect aprovou oito verificações, o HTTP local respondeu 200 e o gateway permaneceu ativo. A janela posterior à retirada do job não registrou nova divergência de escopo.
+- 19/11/2026 20:53 UTC — Iniciada personal:qa na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 20:53 UTC — personal:qa encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 20:53 UTC — Iniciada personal:arquitetura na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 20:54 UTC — personal:arquitetura encerrou com código 1. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 20:55 UTC — Na instalação, personal:qa publicou relatório, com 123 medições ok. A primeira arquitetura publicou apenas o diagnóstico VERIFY_PATH_FORBIDDEN e saiu com código 1. Sol high investiga a compatibilidade entre coletor e publicação em fixtures sintéticas. Os demais comandos seguem um por vez.
