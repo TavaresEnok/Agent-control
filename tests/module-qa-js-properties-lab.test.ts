@@ -3,7 +3,7 @@ import {execFile} from 'node:child_process';
 import {rm} from 'node:fs/promises';
 import {test} from 'node:test';
 import {promisify} from 'node:util';
-import {moduleCollectorArguments, parseModuleCollectorOutput, readPinnedModuleImage} from '../src/verification-modules.ts';
+import {moduleCollectorArguments, parseModuleCollectorOutput, readPinnedModuleImage, validateModuleCollectorObject} from '../src/verification-modules.ts';
 import {arithmetic, arithmeticTestFile, defectiveArithmetic, stageJsPropertiesFixture} from './fixtures/module-qa-js-properties.ts';
 
 test('a imagem de QA mede propriedades locais e reproduz a falsificação aritmética offline', {
@@ -55,4 +55,16 @@ test('a imagem de QA mede propriedades locais e reproduz a falsificação aritm�
   assert.deepEqual(example.properties, []);
   assert.deepEqual(example.findings, []);
   assert.equal(example.coverage.find(row => row.tool === 'node-test-v8')?.status, 'ok');
+});
+
+test('somente a combinação pública de módulo, ferramenta e regra conserva seu identificador longo', () => {
+  const rule = 'QA-FASTCHECK-PROPRIEDADE-VIOLADA';
+  const result = (module: 'qa' | 'banco', tool: string, identifier: string) => validateModuleCollectorObject({
+    coverage: [{tool, version: '1', status: 'ok', detail: 'Fixture local.'}],
+    findings: [{tool, rule: identifier, file: 'src/demo.ts', line: 1, severity: 'media', message: 'Fixture local.', evidence: 'Linha 1.'}],
+  }, module).findings[0]!.rule;
+  assert.equal(result('qa', 'fast-check', rule), rule);
+  for (const altered of [result('banco', 'fast-check', rule), result('qa', 'outro', rule), result('qa', 'fast-check', rule + '-PRIVADO')]) {
+    assert.equal(altered, '[removido: alta entropia]');
+  }
 });
