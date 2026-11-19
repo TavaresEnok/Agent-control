@@ -38,3 +38,16 @@ test('DESIGN_REVIEWER_UNAVAILABLE orienta rodar preparar --aplicar e não cai em
   assert.match(text, /npm run personal:design -- preparar .*--aplicar/);
   assert.notEqual(text, designCliFailureText(new Refusal('EXAM_PROVIDER_UNSUPPORTED', 409)));
 });
+
+test('DESIGN_CREATE_PROMPT_TOO_LARGE explica o limite de 100000 caracteres e orienta reduzir briefing ou retrabalho sem vazar o prompt', () => {
+  const refusal = new Refusal('DESIGN_CREATE_PROMPT_TOO_LARGE', 400);
+  refusal.message = `O prompt de criação excedeu o limite: ${leaked}`;
+  const text = designCliFailureText(refusal);
+  assert.match(text, /100000/);
+  assert.match(text, /briefing/i);
+  assert.match(text, /retrabalho/i);
+  assert.match(text, /reduza/i);
+  assert.equal(text.includes('secret-token-xyz'), false);
+  assert.equal(text.includes('/home/app/private'), false);
+  assert.equal(designCliFailureText(new Error('DESIGN_CREATE_PROMPT_TOO_LARGE')), text);
+});

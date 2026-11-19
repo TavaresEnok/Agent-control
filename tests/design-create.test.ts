@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {existsSync, readFileSync} from 'node:fs';
 import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -8,8 +7,6 @@ import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import {createTask, MAX_CREATE_TASK_CHARS, runDesignCreate} from '../src/design-create.ts';
 import type {DesignWorker, DesignWorkerCall} from '../src/design-types.ts';
-
-const BRIEFING_FILE = '/home/app/design-briefings/tela-inicial-assinante.md';
 
 function seat() {
   return {
@@ -33,10 +30,19 @@ async function withDirs(run: (paths: {data: string; repo: string}) => Promise<vo
 }
 
 test('briefing longo completo é enviado sem corte em todas as rodadas com a instrução condicional genérica', async () => {
-  const baseBriefing = existsSync(BRIEFING_FILE)
-    ? readFileSync(BRIEFING_FILE, 'utf8')
-    : `# Briefing longo\n${'Contexto detalhado da tela inicial. '.repeat(240)}\n## Variedade entre as telas\nConceitos diferentes da mesma tela.`;
-  const briefing = `${baseBriefing}\n\n### Direções deste lote\n- Conceito A (editorial-claro): fundo #FAF8F5 e tipografia serifada.\n- Conceito B (noturno-mineral): fundo #0D131A e contraste alto.`;
+  const baseBriefing = [
+    '# Briefing longo',
+    'Contexto detalhado da tela inicial. '.repeat(260),
+    '## Variedade entre as telas',
+    'Conceitos diferentes da mesma tela.',
+  ].join('\n');
+  const directions = [
+    '### Direções deste lote',
+    '- Conceito A (editorial-claro): fundo #FAF8F5 e tipografia serifada.',
+    '- Conceito B (noturno-mineral): fundo #0D131A e contraste alto.',
+  ].join('\n');
+  const briefing = `${baseBriefing}\n\n${directions}`;
+  assert.ok(baseBriefing.length > 8000);
   assert.ok(briefing.length > 8000);
 
   await withDirs(async ({data, repo}) => {
@@ -108,6 +114,7 @@ test('briefing longo completo é enviado sem corte em todas as rodadas com a ins
       assert.equal(call.forcedModel, 'claude-opus-5-5');
       assert.equal(call.forcedEffort, 'medium');
       assert.equal(call.task.includes(briefing), true);
+      assert.equal(call.task.includes(directions), true);
       assert.equal(call.task.includes(briefing.slice(8000)), true);
       assert.match(
         call.task,
