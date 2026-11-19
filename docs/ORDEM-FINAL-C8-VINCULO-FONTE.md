@@ -1,0 +1,5 @@
+# Documentação e origem de avisos TypeDoc
+
+A revisão de 7355c13c identificou dois casos no vínculo do aviso com a linha. Use a origem que a própria versão fixada do TypeDoc confirma, deixando o aviso sem arquivo quando a declaração ou o mapa não permitem atribuí-lo com certeza. Trate também os escapes de uma chave pelo lexer real no comentário multilinha. Limite a mudança ao coletor de documentação, seus testes dirigidos e ao relatório. Use fixtures locais mínimas e cubra origem correta e origem ambígua.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C8-VINCULO-FONTE.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
