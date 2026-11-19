@@ -558,3 +558,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:27 UTC — Trabalhador encerrou C9-R6 em df297d9b (código 0). Gerente confere a entrega.
 - 19/11/2026 06:27 UTC — Trabalho C2-MUTACAO-R2 iniciado por Sol high normal em final-qa-mutacao-linguagens.
 - 19/11/2026 06:29 UTC — C9-R6 entregou a atribuição estática de destinos de dados por AST em df297d9b; a imagem está em reconstrução. C2-LINGUAGENS-R3 cobrirá escopo da cópia e atribuição de falhas após a ordem de mutação Python/Go em curso.
+- 19/11/2026 06:30 UTC — Revisor encerrou C4-R7 em 49841c60 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:30 UTC — Revisão C2-MUTACAO-INTEGRACAO iniciada por Sol high normal somente leitura em 9373c088.
+- 19/11/2026 06:32 UTC — Trabalhador encerrou C2-CONTRATOS em 4af18f19 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:32 UTC — Trabalho C-EXAME-R6 iniciado por Sol high normal em final-exame-r6.
+- 19/11/2026 06:32 UTC — Revisor encerrou C2-MUTACAO-INTEGRACAO em 9373c088 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:32 UTC — Revisão C-BASE-IMAGEM iniciada por Sol high normal somente leitura em 53a37821.
+- 19/11/2026 06:33 UTC — C9 362efd58: 25/25 incluindo a fixture de atribuição de operações por AST, ScanCode, Presidio e controle sem identificação pessoal. Integração de homologação em b6229e11. As oito CLIs de 674c2dce passaram nos dez ensaios com banco e pedidos por escopo. A instalação viva segue em A2.
