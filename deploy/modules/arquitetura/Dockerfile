@@ -21,7 +21,7 @@ RUN npm ci --omit=dev --no-audit --no-fund \
     && chown -R root:root /opt/arquitetura-tools \
     && chmod -R a+rX /opt/arquitetura-tools
 
-COPY depcruise.config.json tools.lock.json collect.mjs ./
+COPY depcruise.config.json tools.lock.json collect.mjs knip-worker.mjs ./
 COPY entrypoint.sh /usr/local/bin/arquitetura-entrypoint.sh
 RUN chmod 0444 /opt/arquitetura-tools/depcruise.config.json /opt/arquitetura-tools/tools.lock.json \
     && chmod 0555 /opt/arquitetura-tools/collect.mjs /usr/local/bin/arquitetura-entrypoint.sh

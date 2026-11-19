@@ -29,18 +29,21 @@ export function copyRepoSafely(
   sourceRoot: string,
   destRoot: string,
   opts?: {maxFiles?: number; maxFileBytes?: number},
-): {copiedFiles: string[]; skipped: string[]};
+): {
+  copiedFiles: string[];
+  skipped: {file: string; reason: string}[];
+  stoppedAt?: string;
+  failure?: {file: string; code: string};
+};
 export function buildKnipConfig(
   workRepoDir: string,
   repoFiles: string[],
-  toolsRoot?: string,
 ): Record<string, unknown> & {entry: string[]; project: string[]; ignore: string[]};
 export function findImportLine(fileText: string, moduleSpecifier: string): number;
 export function parseKnipReport(
   rawJson: unknown,
   repoRoot: string,
-  jsTsFiles?: string[],
-  entrySet?: Set<string>,
+  candidateFiles?: Set<string>,
 ): {
   findings: FindingItem[];
   perFileCoverage: {tool: string; role: string; issues: number; file: string}[];

@@ -10,6 +10,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -139,6 +140,7 @@ test('entrypoint recusa rede ativa, socket, path traversal e raiz ilegível', ()
   assert.match(entrypoint, /\/sys\/class\/net\/\*/);
   assert.match(entrypoint, /\/var\/run\/docker\.sock/);
   assert.match(entrypoint, /unset\s+"\$name"/);
+  assert.match(entrypoint, /^export AC_REPO_DIR=\/repo$/m);
 
   const shSyntax = spawnSync('/bin/sh', ['-n', join(moduleDir, 'entrypoint.sh')], {encoding: 'utf8'});
   assert.equal(shSyntax.status, 0, shSyntax.stderr ?? '');
@@ -167,11 +169,18 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
     mkdirSync(join(src, 'node_modules', 'evil'), {recursive: true});
     writeFileSync(join(src, 'src', 'ok.ts'), 'export const ok = 1;\n');
     writeFileSync(join(src, 'node_modules', 'evil', 'bad.js'), 'console.log(1);\n');
-    symlinkSync('/etc/passwd', join(src, 'src', 'escape.ts'));
+    const outside = join(dst, 'outside.txt');
+    writeFileSync(outside, 'outside synthetic content');
+    symlinkSync(outside, join(src, 'src', 'escape.ts'));
 
     const res = copyRepoSafely(src, dst);
     assert.deepEqual(res.copiedFiles, ['src/ok.ts']);
-    assert.equal(res.skipped.includes('src/escape.ts'), true);
+    assert.deepEqual(res.skipped, [
+      {file: 'node_modules', reason: 'diretorio_excluido'},
+      {file: 'src/escape.ts', reason: 'symlink'},
+    ]);
+    const limited = copyRepoSafely(src, dst, {maxFiles: 0});
+    assert.equal(limited.stoppedAt, 'node_modules');
     assert.equal(existsSync(join(dst, 'src', 'escape.ts')), false);
     assert.equal(existsSync(join(dst, 'node_modules', 'evil', 'bad.js')), false);
   } finally {
@@ -183,6 +192,8 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
 test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de achado com evidência e linha >= 1', () => {
   const knipOut = parseKnipReport(
     {
+      analyzedFiles: ['src/index.ts', 'src/shared/format.ts'],
+      entryFiles: ['src/index.ts'],
       issues: [
         {
           file: 'src/legacy-dead.ts',
@@ -199,13 +210,16 @@ test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de ac
       ],
     },
     '/tmp/repo',
-    ['src/index.ts', 'src/legacy-dead.ts', 'src/shared/format.ts'],
-    new Set(['src/index.ts']),
+    new Set(['src/index.ts', 'src/legacy-dead.ts', 'src/shared/format.ts', 'src/unmeasured.mts']),
   );
   assert.equal(knipOut.findings.some(f => f.rule === 'KNIP-UNUSED-FILE' && f.file === 'src/legacy-dead.ts' && f.line === 1), true);
   assert.equal(knipOut.findings.some(f => f.rule === 'KNIP-UNUSED-EXPORT' && f.file === 'src/shared/format.ts' && f.line === 5), true);
   assert.equal(knipOut.findings.some(f => f.rule === 'KNIP-UNUSED-DEPENDENCY' && f.line === 9), true);
-  assert.equal(knipOut.perFileCoverage.length, 3);
+  assert.deepEqual(knipOut.perFileCoverage.map(({file, role}) => [file, role]), [
+    ['src/index.ts', 'entrada'],
+    ['src/legacy-dead.ts', 'nao_alcancado'],
+    ['src/shared/format.ts', 'modulo'],
+  ]);
 
   const dupOut = parseJscpdReport(
     {
@@ -249,11 +263,12 @@ test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de ac
   assert.equal(compOut.findings[0]?.file, 'scripts/heavy.py');
 
   const sourceMap: Record<string, string> = {
-    'src/domain/order.ts': "import {buildRoutePrefix} from '../routes/orders.js';\nimport {readStoredFactor} from '../infra/memory-store.js';\n",
+    'src/domain/order.ts': "// import '../routes/orders.js'\nconst ref = '../routes/orders.js';\nimport {buildRoutePrefix} from\n  '../routes/orders.js';\nimport {readStoredFactor} from '../infra/memory-store.js';\n",
     'src/services/cycle-alpha.ts': "// comentario\nimport {continueCycleChain} from './cycle-beta.js';\n",
   };
   assert.equal(findImportLine(sourceMap['src/services/cycle-alpha.ts'], './cycle-beta.js'), 2);
-  assert.equal(findImportLine(sourceMap['src/domain/order.ts'], '../infra/memory-store.js'), 2);
+  assert.equal(findImportLine(sourceMap['src/domain/order.ts'], '../infra/memory-store.js'), 5);
+  assert.equal(findImportLine(sourceMap['src/domain/order.ts'], '../routes/orders.js'), 4);
 
   const depOut = parseDepcruiseReport(
     {
@@ -266,8 +281,8 @@ test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de ac
             {
               module: '../routes/orders.js',
               resolved: 'src/routes/orders.ts',
-              circular: false,
-              rules: [{name: 'layer-domain-to-presentation', severity: 'error'}],
+              circular: true,
+              rules: [{name: 'layer-domain-to-presentation'}, {name: 'no-circular'}],
             },
             {
               module: '../infra/memory-store.js',
@@ -296,9 +311,12 @@ test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de ac
     '/tmp/repo',
     rel => sourceMap[rel] ?? '',
   );
-  assert.equal(depOut.findings.some(f => f.rule === 'DEPCRUISE-LAYER-DOMAIN-TO-PRESENTATION' && f.line === 1 && f.severity === 'alta'), true);
-  assert.equal(depOut.findings.some(f => f.rule === 'DEPCRUISE-LAYER-DOMAIN-TO-INFRA' && f.line === 2 && f.severity === 'alta'), true);
+  assert.equal(depOut.findings.some(f => f.rule === 'DEPCRUISE-LAYER-DOMAIN-TO-PRESENTATION' && f.line === 4 && f.severity === 'alta'), true);
+  assert.equal(depOut.findings.some(f => f.rule === 'DEPCRUISE-LAYER-DOMAIN-TO-INFRA' && f.line === 5 && f.severity === 'alta'), true);
   assert.equal(depOut.findings.some(f => f.rule === 'DEPCRUISE-NO-CIRCULAR' && f.line === 2 && f.severity === 'alta'), true);
+  assert.equal(depOut.stats.cycles, 2);
+  assert.equal(depOut.findings.filter(f => f.rule === 'DEPCRUISE-NO-CIRCULAR' && f.file === 'src/domain/order.ts').length, 1);
+  assert.equal(depOut.stats.layerViolations, 2);
 });
 
 test('complexidade e buildKnipConfig distinguem a fixture com defeito da fixture limpa', () => {
@@ -321,30 +339,9 @@ test('complexidade e buildKnipConfig distinguem a fixture com defeito da fixture
   assert.equal(cleanAst.findings.length, 0);
   assert.equal(cleanAst.perFile.length, 6);
 
-  const knipCfg = buildKnipConfig(
-    cleanFixture,
-    ['package.json', 'src/index.ts', 'src/routes/orders.ts'],
-    moduleDir,
-  );
+  const knipCfg = buildKnipConfig(cleanFixture, ['package.json', 'src/index.ts', 'src/routes/orders.ts']);
   assert.deepEqual(knipCfg.entry, ['src/index.ts']);
-
-  const fakeTools = mkdtempSync(join(tmpdir(), 'arch-tools-'));
-  try {
-    for (const plugin of ['vite', 'vitest', 'eslint', '_internal']) {
-      mkdirSync(join(fakeTools, 'node_modules', 'knip', 'dist', 'plugins', plugin), {recursive: true});
-    }
-    const disabledCfg = buildKnipConfig(
-      cleanFixture,
-      ['package.json', 'src/index.ts', 'vite.config.ts'],
-      fakeTools,
-    );
-    assert.equal(disabledCfg.vite, false);
-    assert.equal(disabledCfg.vitest, false);
-    assert.equal(disabledCfg.eslint, false);
-    assert.equal('_internal' in disabledCfg, false);
-  } finally {
-    rmSync(fakeTools, {recursive: true, force: true});
-  }
+  assert.deepEqual(knipCfg.project, ['**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}']);
 });
 
 test('falha de ferramenta aparece na cobertura como failed sem abortar o JSON e repositório vazio vira skipped', () => {
@@ -357,7 +354,7 @@ test('falha de ferramenta aparece na cobertura como failed sem abortar o JSON e 
     assertValidOutputContract(emptyRes);
     assert.equal(emptyRes.findings.length, 0);
     for (const row of emptyRes.coverage) {
-      assert.equal(row.status, 'skipped');
+      assert.equal(row.status, row.tool === 'snapshot' ? 'ok' : 'skipped');
     }
   } finally {
     rmSync(emptyRepo, {recursive: true, force: true});
@@ -393,6 +390,13 @@ test('raiz presente porém ilegível falha explicitamente, enquanto projeto aces
     const docsRes = runCollector({
       repoDir: noJsTsRepo,
       toolsRoot: moduleDir,
+      spawnSync: (_cmd, args) => {
+        const argv = args as string[];
+        const outDir = argv[argv.indexOf('--output') + 1];
+        writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+        writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({summary: {files: []}}));
+        return {status: 0, stdout: '', stderr: ''};
+      },
     });
     assertValidOutputContract(docsRes);
     assert.equal(docsRes.findings.length, 0);
@@ -464,8 +468,9 @@ test('cobertura por arquivo reflete apenas os arquivos efetivamente medidos sem 
       spawnSync: (cmd, args) => {
         const argList = Array.isArray(args) ? args.map(String) : [];
         const bin = String(cmd);
-        if (bin.endsWith('knip') || argList.includes('--reporter')) {
-          return {status: 0, stdout: JSON.stringify({issues: []}), stderr: '', error: undefined};
+        if (argList[0]?.endsWith('/knip-worker.mjs')) {
+          const stdout = JSON.stringify({issues: [], analyzedFiles: cleanSrcFiles, entryFiles: ['src/index.ts']});
+          return {status: 0, stdout, stderr: ''};
         }
         if (bin.endsWith('jscpd') || argList.includes('--reporters')) {
           const outIdx = argList.indexOf('--output');
@@ -531,6 +536,200 @@ test('cobertura por arquivo reflete apenas os arquivos efetivamente medidos sem 
     assert.match(out.coverage.find(c => c.tool === 'knip')?.detail ?? '', /arquivos=6,/);
     assert.match(out.coverage.find(c => c.tool === 'dependency-cruiser')?.detail ?? '', /modulos=6,/);
     assert.match(out.coverage.find(c => c.tool === 'jscpd')?.detail ?? '', /arquivos_medidos=3,/);
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('arquivo ilegível com raiz acessível mantém o JSON da falha na cobertura', {skip: process.getuid?.() === 0}, () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-copy-failure-'));
+  try {
+    const file = join(repo, 'unreadable.ts');
+    writeFileSync(file, 'export const synthetic = 1;\n', {mode: 0o000});
+    const child = spawnSync(process.execPath, [join(moduleDir, 'collect.mjs')], {
+      encoding: 'utf8',
+      env: {...process.env, AC_REPO_DIR: repo},
+    });
+    assert.equal(child.status, 0, child.stderr);
+    const result = JSON.parse(child.stdout) as ReturnType<typeof runCollector>;
+    assertValidOutputContract(result);
+    assert.deepEqual(result.findings, []);
+    assert.equal(result.coverage.length, 1);
+    assert.equal(result.coverage[0]?.tool, 'snapshot');
+    assert.equal(result.coverage[0]?.status, 'failed');
+    assert.match(result.coverage[0]?.detail ?? '', /falha_copia=EACCES; arquivo="unreadable.ts"/);
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('snapshot registra omissões e cobertura sinaliza o corte de 500 linhas em cada ferramenta', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-coverage-limit-'));
+  try {
+    const files = Array.from({length: 501}, (_, index) => `module-${index}.ts`);
+    for (const file of files) {
+      writeFileSync(join(repo, file), 'export const synthetic = 1;\n');
+    }
+    writeFileSync(join(repo, 'large.ts'), '');
+    truncateSync(join(repo, 'large.ts'), 2 * 1024 * 1024 + 1);
+    const out = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: (_cmd, args) => {
+        const argv = args as string[];
+        if (argv[0]?.endsWith('/knip-worker.mjs')) {
+          return {status: 0, stderr: '', stdout: JSON.stringify({issues: [], analyzedFiles: files, entryFiles: []})};
+        }
+        if (argv.includes('--output-to')) {
+          writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({modules: files.map(source => ({source}))}));
+        } else {
+          const outDir = argv[argv.indexOf('--output') + 1];
+          writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+          writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({summary: {files: files.map(path => ({path}))}}));
+        }
+        return {status: 0, stderr: '', stdout: ''};
+      },
+    });
+    const snapshot = out.coverage.find(row => row.tool === 'snapshot');
+    assert.equal(snapshot?.status, 'skipped');
+    assert.match(snapshot?.detail ?? '', /limite_arquivos=10000; limite_bytes_por_arquivo=2097152; cobertura_parcial=sim/);
+    assert.equal(out.coverage.find(row => row.tool === 'snapshot:omitted')?.detail, 'arquivo="large.ts"; motivo=limite_bytes');
+    for (const tool of ['knip', 'ast-complexity', 'jscpd', 'dependency-cruiser']) {
+      assert.match(out.coverage.find(row => row.tool === tool)?.detail ?? '', /linhas_por_arquivo=500\/501; limite_linhas=500; cobertura_truncada=sim/);
+      assert.equal(out.coverage.filter(row => row.tool === `${tool}:file`).length, 500);
+    }
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('dependency-cruiser mantém a falha quando o processo deixa um JSON válido', () => {
+  const out = runCollector({
+    repoDir: cleanFixture,
+    toolsRoot: moduleDir,
+    spawnSync: (_cmd, args) => {
+      const argv = args as string[];
+      if (argv.includes('--output-to')) {
+        writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({modules: [{source: 'src/index.ts'}]}));
+      }
+      return {status: 2, stdout: '', stderr: 'falha sintética'};
+    },
+  });
+  const row = out.coverage.find(item => item.tool === 'dependency-cruiser');
+  assert.equal(row?.status, 'failed');
+  assert.match(row?.detail ?? '', /status 2: falha sintética/);
+  assert.equal(out.coverage.some(item => item.tool === 'dependency-cruiser:file'), false);
+});
+
+test('AST mede getters, setters e decisões nos parâmetros sem contar funções aninhadas duas vezes', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-accessors-'));
+  try {
+    const file = 'accessors.ts';
+    writeFileSync(join(repo, file), [
+      'class Example {',
+      '  get value() { return a && b && c; }',
+      '  set value(next) { if (next) this.target = next ?? other; }',
+      '}',
+      'function defaults(x = a ? b : c, y = () => d && e && f) { if (x) return y(); }',
+    ].join('\n'));
+    const result = analyzeAstComplexity(repo, [file], {fnCyclomaticMedia: 3});
+    assert.equal(result.perFile[0]?.functions, 4);
+    assert.equal(result.perFile[0]?.fileCyclomatic, 9);
+    const findings = result.findings.filter(f => f.rule === 'COMPLEXITY-CYCLOMATIC-HIGH');
+    assert.deepEqual(findings.map(({line}) => line).sort(), [2, 3, 5, 5]);
+    assert.equal(findings.every(({evidence}) => evidence.includes('complexidade_ciclomatica=3;')), true);
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('configuração do grafo preserva extends locais com e sem extensão dentro da cópia', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'arch-tsconfig-'));
+  const repo = join(temp, 'repo');
+  try {
+    mkdirSync(join(repo, 'config'), {recursive: true});
+    writeFileSync(join(temp, 'outside.json'), '{}');
+    writeFileSync(join(repo, 'index.ts'), 'export const synthetic = 1;\n');
+    writeFileSync(join(repo, 'tsconfig.json'), JSON.stringify({
+      extends: ['./config/base', './config/other.json', '../outside', 'outside-package'],
+    }));
+    writeFileSync(join(repo, 'config', 'base.json'), JSON.stringify({extends: '../outside'}));
+    writeFileSync(join(repo, 'config', 'other.json'), '{}');
+    const output = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: (_cmd, args, options) => {
+        const argv = args as string[];
+        if (!argv.includes('--output-to')) return {status: 2, stdout: '', stderr: ''};
+        const {cwd} = options as {cwd: string};
+        const root = JSON.parse(readFileSync(join(cwd, 'tsconfig.json'), 'utf8'));
+        assert.deepEqual(root.extends, ['./config/base', './config/other.json']);
+        const base = JSON.parse(readFileSync(join(cwd, 'config', 'base.json'), 'utf8'));
+        assert.equal(base.extends, undefined);
+        const config = JSON.parse(readFileSync(argv[argv.indexOf('--config') + 1], 'utf8'));
+        assert.equal(config.options.tsConfig.fileName, 'tsconfig.json');
+        writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({modules: [{source: 'index.ts'}]}));
+        return {status: 0, stdout: '', stderr: ''};
+      },
+    });
+    assert.equal(output.coverage.find(row => row.tool === 'dependency-cruiser')?.status, 'ok', JSON.stringify(output.coverage));
+  } finally {
+    rmSync(temp, {recursive: true, force: true});
+  }
+});
+
+test('binários fixados medem .mts e .cts no Knip e resolvem alias TS herdado no grafo', {
+  skip: !existsSync(join(moduleDir, 'node_modules', '.bin', 'depcruise')) ||
+    !existsSync(join(moduleDir, 'node_modules', 'knip', 'package.json')),
+}, () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-pinned-tools-'));
+  try {
+    cpSync(defectiveFixture, repo, {recursive: true});
+    const tsconfigPath = join(repo, 'tsconfig.json');
+    const tsconfig = JSON.parse(readFileSync(tsconfigPath, 'utf8'));
+    writeFileSync(tsconfigPath, JSON.stringify({...tsconfig, extends: './tsconfig.base'}));
+    writeFileSync(join(repo, 'tsconfig.base.json'), JSON.stringify({
+      compilerOptions: {paths: {'@storage': ['./src/infra/memory-store.ts']}},
+    }));
+    const orderPath = join(repo, 'src/domain/order.ts');
+    const order = readFileSync(orderPath, 'utf8').replace('../infra/memory-store.js', '@storage');
+    writeFileSync(orderPath, order);
+
+    const out = runCollector({repoDir: repo, toolsRoot: moduleDir});
+    assert.equal(out.coverage.find(row => row.tool === 'knip')?.status, 'ok');
+    for (const file of ['src/unused.mts', 'src/unused.cts']) {
+      assert.ok(out.findings.some(f => f.rule === 'KNIP-UNUSED-FILE' && f.file === file));
+      assert.ok(out.coverage.some(row => row.tool === 'knip:file' &&
+        row.detail === `arquivo=${file}; papel=nao_alcancado; problemas=1`));
+    }
+    assert.ok(out.findings.some(f => f.rule === 'DEPCRUISE-LAYER-DOMAIN-TO-INFRA' &&
+      f.evidence.includes('src/infra/memory-store.ts') && f.evidence.includes('@storage')));
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('jscpd mede SQL em um projeto que contém apenas SQL', {
+  skip: !existsSync(join(moduleDir, 'node_modules', '.bin', 'jscpd')),
+}, () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-sql-only-'));
+  try {
+    writeFileSync(join(repo, 'schema.sql'), [
+      'CREATE TABLE synthetic_orders (',
+      '  id INTEGER PRIMARY KEY,',
+      '  account_id INTEGER NOT NULL,',
+      '  city VARCHAR(40) NOT NULL,',
+      '  created_at TIMESTAMP NOT NULL,',
+      '  status VARCHAR(12) NOT NULL,',
+      '  delivery_address VARCHAR(80),',
+      '  CONSTRAINT valid_status CHECK (status IN (\'sent\', \'pending\'))',
+      ');',
+      'CREATE INDEX synthetic_orders_status ON synthetic_orders (account_id, status);',
+    ].join('\n'));
+    const out = runCollector({repoDir: repo, toolsRoot: moduleDir});
+    assert.equal(out.coverage.find(row => row.tool === 'jscpd')?.status, 'ok', JSON.stringify(out.coverage));
+    assert.ok(out.coverage.some(row => row.tool === 'jscpd:file' && row.detail.startsWith('arquivo=schema.sql;')));
+    assert.equal(out.coverage.find(row => row.tool === 'knip')?.status, 'skipped');
   } finally {
     rmSync(repo, {recursive: true, force: true});
   }

@@ -18,9 +18,10 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import {dirname, extname, join, posix, relative, resolve} from 'node:path';
+import {dirname, extname, join, posix, resolve} from 'node:path';
+import {tmpdir} from 'node:os';
 import {createRequire} from 'node:module';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 
 const require = createRequire(import.meta.url);
 
@@ -46,27 +47,6 @@ const SKIP_DIRS = new Set([
 ]);
 
 const JS_TS_EXTS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
-const CODE_EXTS = new Set([
-  ...JS_TS_EXTS,
-  '.py',
-  '.go',
-  '.rs',
-  '.java',
-  '.kt',
-  '.cs',
-  '.rb',
-  '.php',
-  '.c',
-  '.cpp',
-  '.h',
-  '.hpp',
-  '.vue',
-  '.svelte',
-  '.astro',
-  '.css',
-  '.scss',
-]);
-
 const DEFAULT_THRESHOLDS = Object.freeze({
   jscpdMinLines: 8,
   jscpdMinTokens: 40,
@@ -139,23 +119,6 @@ function resolveBin(name, toolsRoot) {
   return name;
 }
 
-function listDisabledKnipPlugins(toolsRoot) {
-  const roots = [toolsRoot, '/opt/arquitetura-tools'].filter(Boolean);
-  for (const base of roots) {
-    const pluginsDir = join(base, 'node_modules', 'knip', 'dist', 'plugins');
-    if (!existsSync(pluginsDir)) continue;
-    try {
-      return readdirSync(pluginsDir, {withFileTypes: true})
-        .filter(entry => entry.isDirectory() && !entry.name.startsWith('_'))
-        .map(entry => entry.name)
-        .sort();
-    } catch {
-      /* próximo */
-    }
-  }
-  return [];
-}
-
 /**
  * Copia apenas arquivos regulares e diretórios seguros de sourceRoot para destRoot,
  * ignorando symlinks, sockets, dispositivos, diretórios de build/vendor e arquivos > 2 MiB.
@@ -174,64 +137,67 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? MAX_FILE_BYTES;
   const copiedFiles = [];
   const skipped = [];
-
-  mkdirSync(destRoot, {recursive: true});
+  let stoppedAt;
+  let failure;
 
   function walk(currentSrc, currentRel) {
-    if (copiedFiles.length >= maxFiles) return;
     let entries;
     try {
       entries = readdirSync(currentSrc, {withFileTypes: true});
     } catch (err) {
       if (currentRel === '') {
-        const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : 'ERR';
-        throw new Error(`ARQUITETURA_REPO_UNREADABLE: falha ao ler raiz do repositório (${code}): ${sourceRoot}`);
+        throw new Error(`ARQUITETURA_REPO_UNREADABLE: falha ao ler raiz do repositório (${err.code ?? 'ERR'}): ${sourceRoot}`);
       }
-      skipped.push(`${currentRel}/[ilegivel]`);
+      skipped.push({file: currentRel, reason: 'diretorio_ilegivel'});
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (copiedFiles.length >= maxFiles) {
-        skipped.push('LIMITE_ARQUIVOS');
-        return;
-      }
-      if (entry.name === '.' || entry.name === '..') continue;
-      if (entry.isSymbolicLink()) {
-        skipped.push(currentRel ? `${currentRel}/${entry.name}` : entry.name);
-        continue;
-      }
       const srcPath = join(currentSrc, entry.name);
       const relPath = currentRel ? `${currentRel}/${entry.name}` : entry.name;
+      if (copiedFiles.length >= maxFiles) {
+        stoppedAt = relPath;
+        return;
+      }
       let st;
       try {
         st = lstatSync(srcPath);
       } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) {
-        skipped.push(relPath);
+        skipped.push({file: relPath, reason: 'metadados_ilegiveis'});
         continue;
       }
       if (st.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
-        mkdirSync(join(destRoot, relPath), {recursive: true});
-        walk(srcPath, relPath);
-      } else if (st.isFile()) {
-        if (st.size > maxFileBytes) {
-          skipped.push(relPath);
-          continue;
+        if (SKIP_DIRS.has(entry.name)) {
+          skipped.push({file: relPath, reason: 'diretorio_excluido'});
+        } else {
+          walk(srcPath, relPath);
+          if (stoppedAt || failure) return;
         }
+      } else if (!st.isFile()) {
+        skipped.push({file: relPath, reason: st.isSymbolicLink() ? 'symlink' : 'arquivo_nao_regular'});
+      } else if (st.size > maxFileBytes) {
+        skipped.push({file: relPath, reason: 'limite_bytes'});
+      } else {
         const destPath = join(destRoot, relPath);
-        mkdirSync(dirname(destPath), {recursive: true});
-        copyFileSync(srcPath, destPath);
+        try {
+          mkdirSync(dirname(destPath), {recursive: true});
+          copyFileSync(srcPath, destPath);
+        } catch (err) {
+          failure = {file: relPath, code: err.code ?? 'ERR'};
+          return;
+        }
         copiedFiles.push(relPath);
       }
     }
   }
 
+  try {
+    mkdirSync(destRoot, {recursive: true});
+  } catch (err) {
+    return {copiedFiles, skipped, failure: {file: '.', code: err.code ?? 'ERR'}};
+  }
   walk(sourceRoot, '');
-  return {copiedFiles, skipped};
+  return {copiedFiles, skipped, stoppedAt, failure};
 }
 
 function collectPackageEntries(pkg) {
@@ -242,7 +208,7 @@ function collectPackageEntries(pkg) {
     if (typeof val !== 'string') return;
     const cleaned = val.trim().replace(/^\.\//, '');
     if (!cleaned || cleaned.includes('..') || cleaned.startsWith('/')) return;
-    if (/\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(cleaned)) entries.add(cleaned);
+    if (JS_TS_EXTS.has(extname(cleaned).toLowerCase())) entries.add(cleaned);
   };
 
   addEntry(pkg.main);
@@ -264,7 +230,7 @@ function collectPackageEntries(pkg) {
   if (pkg.scripts && typeof pkg.scripts === 'object') {
     for (const scriptVal of Object.values(pkg.scripts)) {
       if (typeof scriptVal !== 'string') continue;
-      const matches = scriptVal.match(/(?:\.\/)?[A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|mjs|cjs)\b/g);
+      const matches = scriptVal.match(/(?:\.\/)?[A-Za-z0-9_./-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)\b/g);
       if (matches) {
         for (const match of matches) addEntry(match);
       }
@@ -273,7 +239,7 @@ function collectPackageEntries(pkg) {
   return entries;
 }
 
-export function buildKnipConfig(workRepoDir, repoFiles, toolsRoot) {
+export function buildKnipConfig(workRepoDir, repoFiles) {
   const fileSet = new Set(repoFiles);
   const entrySet = new Set();
 
@@ -289,9 +255,9 @@ export function buildKnipConfig(workRepoDir, repoFiles, toolsRoot) {
     }
   }
 
-  const standardEntryRegex = /^(?:src\/)?(?:index|main|server|app|cli|worker)\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
+  const standardEntryRegex = /^(?:src\/)?(?:index|main|server|app|cli|worker)\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
   for (const rel of repoFiles) {
-    if (standardEntryRegex.test(rel) || /^bin\/[^/]+\.(?:ts|js|mjs|cjs)$/.test(rel)) {
+    if (standardEntryRegex.test(rel) || /^bin\/[^/]+\.(?:ts|mts|cts|js|mjs|cjs)$/.test(rel)) {
       entrySet.add(rel);
     }
   }
@@ -306,7 +272,7 @@ export function buildKnipConfig(workRepoDir, repoFiles, toolsRoot) {
 
   const config = {
     entry: [...entrySet].sort(),
-    project: ['**/*.{js,jsx,ts,tsx,mjs,cjs}'],
+    project: ['**/*.{js,jsx,ts,tsx,mjs,cjs,mts,cts}'],
     ignore: [
       '**/node_modules/**',
       '**/dist/**',
@@ -318,16 +284,12 @@ export function buildKnipConfig(workRepoDir, repoFiles, toolsRoot) {
       '__tests__/**',
       '**/*.test.*',
       '**/*.spec.*',
-      '**/*.d.ts',
-      '*.config.{js,ts,mjs,cjs}',
+      '**/*.d.{ts,mts,cts}',
+      '*.config.{js,ts,mjs,cjs,mts,cts}',
       '.dependency-cruiser.{js,cjs,mjs}',
-      'knip.{js,ts,mjs,cjs}',
+      'knip.{js,ts,mjs,cjs,mts,cts}',
     ],
   };
-
-  for (const pluginName of listDisabledKnipPlugins(toolsRoot)) {
-    config[pluginName] = false;
-  }
 
   return config;
 }
@@ -337,65 +299,94 @@ function isIgnoredByKnipConfig(relFile) {
     /(^|\/)(node_modules|dist|build|coverage|\.next)\//i.test(relFile) ||
     /^(tests?|__tests__)\//i.test(relFile) ||
     /\.(test|spec)\./i.test(relFile) ||
-    /\.d\.ts$/i.test(relFile) ||
-    /^[^/]+\.config\.(?:js|ts|mjs|cjs)$/i.test(relFile) ||
+    /\.d\.(?:ts|mts|cts)$/i.test(relFile) ||
+    /^[^/]+\.config\.(?:js|ts|mjs|cjs|mts|cts)$/i.test(relFile) ||
     /^\.dependency-cruiser\.(?:js|cjs|mjs)$/i.test(relFile) ||
-    /^knip\.(?:js|ts|mjs|cjs)$/i.test(relFile)
+    /^knip\.(?:js|ts|mjs|cjs|mts|cts)$/i.test(relFile)
   );
 }
 
-function sanitizeTsConfigInWork(workRepoDir) {
-  const tsConfigPath = join(workRepoDir, 'tsconfig.json');
-  if (!existsSync(tsConfigPath)) return false;
-  try {
-    const ts = require('typescript');
-    const raw = readFileSync(tsConfigPath, 'utf8');
-    let parsedConfig;
-    if (typeof ts?.parseConfigFileTextToJson === 'function') {
-      const parsed = ts.parseConfigFileTextToJson(tsConfigPath, raw);
-      parsedConfig = parsed.config;
-    } else {
-      parsedConfig = JSON.parse(raw);
+function sanitizeTsConfigInWork(workRepoDir, copiedFiles) {
+  const snapshotFiles = new Set(copiedFiles.map(file => join(workRepoDir, file)));
+  const configs = new Map();
+  const ts = require('typescript');
+
+  function sanitize(file) {
+    if (configs.has(file)) return configs.get(file);
+
+    const {config, error} = ts.parseConfigFileTextToJson(file, readFileSync(file, 'utf8'));
+    const valid = !error && Boolean(config) && typeof config === 'object' && !Array.isArray(config);
+    configs.set(file, valid);
+    if (!valid) return false;
+
+    function keepLocalExtends(specifier) {
+      if (typeof specifier !== 'string' || !/^\.\.?\//.test(specifier)) return false;
+      const path = resolve(dirname(file), specifier);
+      const target = snapshotFiles.has(path) ? path
+        : !path.endsWith('.json') && snapshotFiles.has(path + '.json') ? path + '.json'
+        : undefined;
+      return target !== undefined && sanitize(target);
     }
-    if (!parsedConfig || typeof parsedConfig !== 'object') return false;
-    const cfg = {...parsedConfig};
-    if (typeof cfg.extends === 'string') {
-      const target = resolve(workRepoDir, cfg.extends);
-      if (!cfg.extends.startsWith('.') || !existsSync(target)) {
-        delete cfg.extends;
-      }
-    } else if (Array.isArray(cfg.extends)) {
-      cfg.extends = cfg.extends.filter(item => typeof item === 'string' && item.startsWith('.') && existsSync(resolve(workRepoDir, item)));
-      if (cfg.extends.length === 0) delete cfg.extends;
+
+    if (Array.isArray(config.extends)) {
+      config.extends = config.extends.filter(keepLocalExtends);
+      if (config.extends.length === 0) delete config.extends;
+    } else if ('extends' in config && !keepLocalExtends(config.extends)) {
+      delete config.extends;
     }
-    writeFileSync(tsConfigPath, JSON.stringify(cfg, null, 2));
+    writeFileSync(file, JSON.stringify(config, null, 2));
     return true;
-  } catch {
-    return false;
   }
+
+  const tsConfigPath = join(workRepoDir, 'tsconfig.json');
+  return snapshotFiles.has(tsConfigPath) && sanitize(tsConfigPath);
+}
+
+function createSourceFile(ts, file, content) {
+  const ext = extname(file).toLowerCase();
+  const kind = ext === '.tsx' ? ts.ScriptKind.TSX
+    : ext === '.jsx' ? ts.ScriptKind.JSX
+    : ['.ts', '.mts', '.cts'].includes(ext) ? ts.ScriptKind.TS
+    : ts.ScriptKind.JS;
+  return ts.createSourceFile(file, content, ts.ScriptTarget.Latest, true, kind);
+}
+
+function getImportLines(fileText, file) {
+  const lines = new Map();
+  if (!fileText) return lines;
+  const ts = require('typescript');
+  const source = createSourceFile(ts, file, fileText);
+  function visit(node) {
+    let specifier;
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      specifier = node.moduleSpecifier;
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      specifier = node.moduleReference.expression;
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      specifier = node.argument.literal;
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (callee.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(callee) && callee.text === 'require') ||
+          (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) &&
+            callee.expression.text === 'require' && callee.name.text === 'resolve')) {
+        specifier = node.arguments[0];
+      }
+    }
+    if (specifier && ts.isStringLiteralLike(specifier) && !lines.has(specifier.text)) {
+      lines.set(specifier.text, source.getLineAndCharacterOfPosition(specifier.getStart(source)).line + 1);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  return lines;
 }
 
 export function findImportLine(fileText, moduleSpecifier) {
-  if (!fileText || !moduleSpecifier) return 1;
-  const lines = fileText.split(/\r?\n/);
-  const escaped = moduleSpecifier.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const quoted = new RegExp(`(['"\`])${escaped}\\1`);
-  for (let i = 0; i < lines.length; i += 1) {
-    if (quoted.test(lines[i])) return i + 1;
-  }
-  const baseName = posix.basename(moduleSpecifier).replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/i, '');
-  if (baseName) {
-    const baseRegex = new RegExp(`(['"\`])[^'"\`]*${baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\.[a-z]+)?\\1`);
-    for (let i = 0; i < lines.length; i += 1) {
-      if (/\b(?:import|export|require)\b/.test(lines[i]) && baseRegex.test(lines[i])) {
-        return i + 1;
-      }
-    }
-  }
-  return 1;
+  return getImportLines(fileText, 'source.tsx').get(moduleSpecifier) ?? 1;
 }
 
-export function parseKnipReport(rawJson, repoRoot, jsTsFiles = [], entrySet = new Set()) {
+export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   if (!data || typeof data !== 'object' || !Array.isArray(data.issues)) {
     throw new Error('Saída JSON do knip inválida: campo issues ausente');
@@ -403,7 +394,8 @@ export function parseKnipReport(rawJson, repoRoot, jsTsFiles = [], entrySet = ne
 
   const findings = [];
   const fileIssueCounts = new Map();
-  let unusedFilesCount = 0;
+  const unusedFiles = new Set();
+  const entrySet = new Set(data.entryFiles ?? []);
   let unusedExportsCount = 0;
   let unusedDepsCount = 0;
 
@@ -418,7 +410,7 @@ export function parseKnipReport(rawJson, repoRoot, jsTsFiles = [], entrySet = ne
     if (Array.isArray(issue.files)) {
       for (const f of issue.files) {
         const target = normalizeRepoPath(f?.name ?? relFile, repoRoot);
-        unusedFilesCount += 1;
+        unusedFiles.add(target);
         bumpFile(target);
         findings.push({
           tool: 'knip',
@@ -489,9 +481,12 @@ export function parseKnipReport(rawJson, repoRoot, jsTsFiles = [], entrySet = ne
     }
   }
 
-  const perFileCoverage = jsTsFiles.slice(0, MAX_PER_FILE_COVERAGE).map(file => ({
+  const confirmedFiles = [...new Set([...(data.analyzedFiles ?? []), ...unusedFiles])]
+    .filter(file => candidateFiles.has(file))
+    .sort();
+  const perFileCoverage = confirmedFiles.slice(0, MAX_PER_FILE_COVERAGE).map(file => ({
     tool: 'knip:file',
-    role: entrySet.has(file) ? 'entrada' : 'modulo',
+    role: unusedFiles.has(file) ? 'nao_alcancado' : entrySet.has(file) ? 'entrada' : 'modulo',
     issues: fileIssueCounts.get(file) ?? 0,
     file,
   }));
@@ -500,9 +495,9 @@ export function parseKnipReport(rawJson, repoRoot, jsTsFiles = [], entrySet = ne
     findings,
     perFileCoverage,
     stats: {
-      totalFiles: jsTsFiles.length,
-      entries: entrySet.size,
-      unusedFiles: unusedFilesCount,
+      totalFiles: confirmedFiles.length,
+      entries: confirmedFiles.filter(file => entrySet.has(file)).length,
+      unusedFiles: unusedFiles.size,
       unusedExports: unusedExportsCount,
       unusedDeps: unusedDepsCount,
     },
@@ -626,9 +621,9 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
   let totalDependencies = 0;
   let measuredModules = 0;
 
-  const sourceCache = new Map();
-  const getSource = relFile => {
-    if (sourceCache.has(relFile)) return sourceCache.get(relFile);
+  const importCache = new Map();
+  const getLines = relFile => {
+    if (importCache.has(relFile)) return importCache.get(relFile);
     let text = '';
     if (typeof readSourceFile === 'function') {
       try {
@@ -637,8 +632,9 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
         text = '';
       }
     }
-    sourceCache.set(relFile, text);
-    return text;
+    const lines = getImportLines(text, relFile);
+    importCache.set(relFile, lines);
+    return lines;
   };
 
   for (const mod of data.modules) {
@@ -655,10 +651,10 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
       for (const ruleObj of mod.rules) {
         const ruleName = String(ruleObj?.name ?? '');
         if (ruleName === 'no-orphans') {
-          orphansCount += 1;
           const key = `orphan:${sourceFile}`;
           if (!seenKeys.has(key)) {
             seenKeys.add(key);
+            orphansCount += 1;
             findings.push({
               tool: 'dependency-cruiser',
               rule: 'DEPCRUISE-NO-ORPHANS',
@@ -674,53 +670,52 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
     }
 
     for (const dep of deps) {
-      if (!dep || typeof dep !== 'object' || !Array.isArray(dep.rules)) continue;
+      if (!dep || typeof dep !== 'object') continue;
+      const rules = Array.isArray(dep.rules) ? dep.rules : [];
+      const isCircular = dep.circular || rules.some(rule => rule?.name === 'no-circular');
+      const layerRules = rules.filter(rule => typeof rule?.name === 'string' && rule.name.startsWith('layer-'));
+      if (!isCircular && layerRules.length === 0) continue;
+
       const spec = String(dep.module ?? '');
       const resolved = normalizeRepoPath(dep.resolved || spec, repoRoot);
-      const line = findImportLine(getSource(sourceFile), spec);
-
-      for (const ruleObj of dep.rules) {
-        const ruleName = String(ruleObj?.name ?? '');
-        if (!ruleName) continue;
-
-        if (ruleName === 'no-circular' || dep.circular) {
-          fileHasCycle = true;
+      const line = getLines(sourceFile).get(spec) ?? 1;
+      if (isCircular) {
+        fileHasCycle = true;
+        const key = JSON.stringify(['cycle', sourceFile, resolved === '.' ? spec : resolved]);
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
           cyclesCount += 1;
           const chain = Array.isArray(dep.cycle)
             ? [sourceFile, ...dep.cycle.map(c => normalizeRepoPath(c?.name ?? '', repoRoot))].join(' -> ')
             : `${sourceFile} -> ${resolved}`;
-          const key = `cycle:${sourceFile}:${resolved}:${ruleName}`;
-          if (!seenKeys.has(key)) {
-            seenKeys.add(key);
-            findings.push({
-              tool: 'dependency-cruiser',
-              rule: 'DEPCRUISE-NO-CIRCULAR',
-              file: sourceFile,
-              line,
-              severity: 'alta',
-              message: `Dependência circular detectada a partir de ${sourceFile} para ${resolved}`,
-              evidence: `ciclo: ${chain}`,
-            });
-          }
+          findings.push({
+            tool: 'dependency-cruiser',
+            rule: 'DEPCRUISE-NO-CIRCULAR',
+            file: sourceFile,
+            line,
+            severity: 'alta',
+            message: `Dependência circular detectada a partir de ${sourceFile} para ${resolved}`,
+            evidence: `ciclo: ${chain}`,
+          });
         }
+      }
 
-        if (ruleName.startsWith('layer-')) {
-          fileHasLayer = true;
+      for (const {name: ruleName} of layerRules) {
+        fileHasLayer = true;
+        const ruleId = `DEPCRUISE-${ruleName.toUpperCase()}`;
+        const key = JSON.stringify(['layer', sourceFile, resolved, ruleId]);
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
           layerViolationsCount += 1;
-          const ruleId = `DEPCRUISE-${ruleName.toUpperCase()}`;
-          const key = `layer:${sourceFile}:${resolved}:${ruleId}`;
-          if (!seenKeys.has(key)) {
-            seenKeys.add(key);
-            findings.push({
-              tool: 'dependency-cruiser',
-              rule: ruleId,
-              file: sourceFile,
-              line,
-              severity: 'alta',
-              message: `Violação de camada (${ruleName}): ${sourceFile} importa ${resolved}`,
-              evidence: `${sourceFile}:${line} -> ${resolved} (especificador="${spec}", regra=${ruleName})`,
-            });
-          }
+          findings.push({
+            tool: 'dependency-cruiser',
+            rule: ruleId,
+            file: sourceFile,
+            line,
+            severity: 'alta',
+            message: `Violação de camada (${ruleName}): ${sourceFile} importa ${resolved}`,
+            evidence: `${sourceFile}:${line} -> ${resolved} (especificador="${spec}", regra=${ruleName})`,
+          });
         }
       }
     }
@@ -921,6 +916,8 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
   const isFunctionLike = node =>
     ts.isFunctionDeclaration(node) ||
     ts.isMethodDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node) ||
     ts.isArrowFunction(node) ||
     ts.isFunctionExpression(node) ||
     ts.isConstructorDeclaration(node);
@@ -951,14 +948,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
 
     const lines = content.split(/\r?\n/);
     const loc = lines.filter(l => l.trim().length > 0).length;
-    const ext = extname(relFile).toLowerCase();
-    const scriptKind =
-      ext === '.tsx' ? ts.ScriptKind.TSX :
-      ext === '.jsx' ? ts.ScriptKind.JSX :
-      ext === '.ts' || ext === '.mts' || ext === '.cts' ? ts.ScriptKind.TS :
-      ts.ScriptKind.JS;
-
-    const sourceFile = ts.createSourceFile(relFile, content, ts.ScriptTarget.Latest, true, scriptKind);
+    const sourceFile = createSourceFile(ts, relFile, content);
 
     let fileTotalDecisions = 0;
     let fileMaxNesting = 0;
@@ -995,6 +985,9 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
         ts.forEachChild(node, child => visitBody(child, nextDepth));
       }
 
+      for (const parameter of fnNode.parameters) {
+        visitBody(parameter, 0);
+      }
       if (fnNode.body) {
         visitBody(fnNode.body, 0);
       }
@@ -1102,6 +1095,40 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
   };
 }
 
+function coverageLimit(total, listed) {
+  return `linhas_por_arquivo=${listed}/${total}; limite_linhas=${MAX_PER_FILE_COVERAGE}; cobertura_truncada=${total > listed ? 'sim' : 'nao'}`;
+}
+
+function snapshotCoverage({copiedFiles, skipped, stoppedAt, failure}) {
+  const listed = skipped.slice(0, MAX_PER_FILE_COVERAGE);
+  const incomplete = Boolean(failure || stoppedAt || skipped.length);
+  return [
+    {
+      tool: 'snapshot',
+      version: '1',
+      status: failure ? 'failed' : incomplete ? 'skipped' : 'ok',
+      detail: `copiados=${copiedFiles.length}; entradas_omitidas_conhecidas=${skipped.length}; ` +
+        `limite_arquivos=${MAX_COPY_FILES}; limite_bytes_por_arquivo=${MAX_FILE_BYTES}; ` +
+        `cobertura_parcial=${incomplete ? 'sim' : 'nao'}; ${coverageLimit(skipped.length, listed.length)}` +
+        (stoppedAt ? `; limite_arquivos_atingido_em=${JSON.stringify(stoppedAt)}; restante_nao_inventariado=sim` : '') +
+        (failure ? `; falha_copia=${failure.code}; arquivo=${JSON.stringify(failure.file)}; analise_interrompida=sim; restante_nao_inventariado=sim` : ''),
+    },
+    ...listed.map(({file, reason}) => ({
+      tool: 'snapshot:omitted',
+      version: '1',
+      status: 'skipped',
+      detail: `arquivo=${JSON.stringify(file)}; motivo=${reason}`,
+    })),
+  ];
+}
+
+function snapshotSetupFailure(err) {
+  const coverage = snapshotCoverage({
+    copiedFiles: [], skipped: [], failure: {file: '.', code: err.code ?? 'ERR'},
+  });
+  return {coverage, findings: []};
+}
+
 export function runCollector(options = {}) {
   const repoDir = options.repoDir ?? process.env.AC_REPO_DIR ?? '/repo';
   const toolsRoot = options.toolsRoot ?? '/opt/arquitetura-tools';
@@ -1114,82 +1141,34 @@ export function runCollector(options = {}) {
     ast: readPackageVersion('typescript', toolsRoot),
   };
 
-  const workRoot = mkdtempSync(join('/tmp', 'arch-work-'));
+  let workRoot;
+  try {
+    workRoot = mkdtempSync(join(tmpdir(), 'arch-work-'));
+  } catch (err) {
+    return snapshotSetupFailure(err);
+  }
   const workRepoDir = join(workRoot, 'repo');
   const workOutDir = join(workRoot, 'out');
   const workCfgDir = join(workRoot, 'cfg');
-  mkdirSync(workOutDir, {recursive: true});
-  mkdirSync(workCfgDir, {recursive: true});
-
   try {
-    const {copiedFiles, skipped} = copyRepoSafely(repoDir, workRepoDir);
-    const codeFiles = copiedFiles.filter(f => CODE_EXTS.has(extname(f).toLowerCase()));
+    try {
+      mkdirSync(workOutDir, {recursive: true});
+      mkdirSync(workCfgDir, {recursive: true});
+    } catch (err) {
+      return snapshotSetupFailure(err);
+    }
+    const snapshot = copyRepoSafely(repoDir, workRepoDir);
+    const coverage = snapshotCoverage(snapshot);
+    const findings = [];
+    if (snapshot.failure) return {coverage, findings};
+
+    const {copiedFiles} = snapshot;
     const jsTsFiles = copiedFiles.filter(f => JS_TS_EXTS.has(extname(f).toLowerCase()));
     const nonTestJsTsFiles = jsTsFiles.filter(
       f => !/(^|\/)(tests?|__tests__|fixtures?)\//i.test(f) && !/\.(test|spec|d)\./i.test(f),
     );
 
-    const coverage = [];
-    const findings = [];
-
-    // 1. KNIP (código morto)
-    const knipAnalyzedFiles = nonTestJsTsFiles.filter(f => !isIgnoredByKnipConfig(f));
-    if (jsTsFiles.length === 0 || knipAnalyzedFiles.length === 0) {
-      coverage.push({
-        tool: 'knip',
-        version: versions.knip,
-        status: 'skipped',
-        detail:
-          jsTsFiles.length === 0
-            ? `nenhum arquivo JS/TS encontrado (arquivos copiados=${copiedFiles.length})`
-            : `nenhum arquivo JS/TS de produção elegível para knip (arquivos copiados=${copiedFiles.length})`,
-      });
-    } else {
-      try {
-        if (!existsSync(join(workRepoDir, 'package.json'))) {
-          writeFileSync(join(workRepoDir, 'package.json'), JSON.stringify({name: 'repo-scan', private: true}, null, 2));
-        }
-        const knipConfig = buildKnipConfig(workRepoDir, copiedFiles, toolsRoot);
-        const knipConfigPath = join(workCfgDir, 'knip.json');
-        writeFileSync(knipConfigPath, JSON.stringify(knipConfig, null, 2));
-
-        const knipBin = resolveBin('knip', toolsRoot);
-        const knipRes = execFn(
-          knipBin,
-          ['--config', knipConfigPath, '--reporter', 'json', '--no-exit-code', '--no-progress'],
-          {cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024},
-        );
-        if (knipRes.error) throw knipRes.error;
-        if (knipRes.status !== 0) {
-          throw new Error(`knip retornou status ${knipRes.status}: ${(knipRes.stderr || knipRes.stdout || '').slice(0, 300)}`);
-        }
-        const parsedKnip = parseKnipReport(knipRes.stdout, workRepoDir, knipAnalyzedFiles, new Set(knipConfig.entry));
-        findings.push(...parsedKnip.findings);
-        coverage.push({
-          tool: 'knip',
-          version: versions.knip,
-          status: 'ok',
-          detail: `arquivos=${parsedKnip.stats.totalFiles}, entradas=${parsedKnip.stats.entries}, arquivos_nao_usados=${parsedKnip.stats.unusedFiles}, exportacoes_nao_usadas=${parsedKnip.stats.unusedExports}, deps_nao_usadas=${parsedKnip.stats.unusedDeps}`,
-        });
-        for (const row of parsedKnip.perFileCoverage) {
-          coverage.push({
-            tool: 'knip:file',
-            version: versions.knip,
-            status: 'ok',
-            detail: `arquivo=${row.file}; papel=${row.role}; problemas=${row.issues}`,
-          });
-        }
-      } catch (err) {
-        coverage.push({
-          tool: 'knip',
-          version: versions.knip,
-          status: 'failed',
-          detail: `falha ao executar knip: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-        });
-      }
-    }
-
-    // 2. AST Complexity (arquivos e funções complexas demais em JS/TS)
+    // 1. AST Complexity (arquivos e funções complexas demais em JS/TS)
     let astAnalyzedSet = new Set();
     if (nonTestJsTsFiles.length === 0) {
       coverage.push({
@@ -1204,13 +1183,14 @@ export function runCollector(options = {}) {
         const astResult = analyzeAstComplexity(workRepoDir, nonTestJsTsFiles, DEFAULT_THRESHOLDS, {requireAstApi});
         astAnalyzedSet = new Set(astResult.perFile.map(item => item.file));
         findings.push(...astResult.findings);
+        const rows = astResult.perFile.slice(0, MAX_PER_FILE_COVERAGE);
         coverage.push({
           tool: 'ast-complexity',
           version: versions.ast,
           status: 'ok',
-          detail: `arquivos=${astResult.stats.analyzedFiles}, max_ciclomatica_arquivo=${astResult.stats.maxFileCyclomatic}, max_ciclomatica_funcao=${astResult.stats.maxFunctionCyclomatic}, max_aninhamento=${astResult.stats.maxNesting}, funcoes_complexas=${astResult.stats.complexFunctions}, arquivos_grandes=${astResult.stats.largeFiles}`,
+          detail: `arquivos=${astResult.stats.analyzedFiles}, max_ciclomatica_arquivo=${astResult.stats.maxFileCyclomatic}, max_ciclomatica_funcao=${astResult.stats.maxFunctionCyclomatic}, max_aninhamento=${astResult.stats.maxNesting}, funcoes_complexas=${astResult.stats.complexFunctions}, arquivos_grandes=${astResult.stats.largeFiles}; ${coverageLimit(astResult.perFile.length, rows.length)}`,
         });
-        for (const row of astResult.perFile.slice(0, MAX_PER_FILE_COVERAGE)) {
+        for (const row of rows) {
           coverage.push({
             tool: 'ast-complexity:file',
             version: versions.ast,
@@ -1228,16 +1208,13 @@ export function runCollector(options = {}) {
       }
     }
 
-    // 3. JSCPD (duplicação e complexidade multi-linguagem)
-    const nonTestCodeFiles = codeFiles.filter(
-      f => !/(^|\/)(tests?|__tests__|fixtures?)\//i.test(f) && !/\.(test|spec|d)\./i.test(f),
-    );
-    if (nonTestCodeFiles.length === 0) {
+    // 2. JSCPD (duplicação e complexidade multi-linguagem)
+    if (copiedFiles.length === 0) {
       coverage.push({
         tool: 'jscpd',
         version: versions.jscpd,
         status: 'skipped',
-        detail: `nenhum arquivo de código suportado para duplicação (ignorados=${skipped.length})`,
+        detail: 'nenhum arquivo no snapshot',
       });
     } else {
       try {
@@ -1248,7 +1225,7 @@ export function runCollector(options = {}) {
             threshold: 100,
             minLines: DEFAULT_THRESHOLDS.jscpdMinLines,
             minTokens: DEFAULT_THRESHOLDS.jscpdMinTokens,
-            ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/.next/**', '**/tests/**', '**/test/**', '**/*.test.*', '**/*.spec.*'],
+            ignore: ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/.next/**', '**/tests/**', '**/test/**', '**/__tests__/**', '**/fixtures/**', '**/fixture/**', '**/*.test.*', '**/*.spec.*', '**/*.d.{ts,mts,cts}'],
           }),
         );
         const jscpdBin = resolveBin('jscpd', toolsRoot);
@@ -1264,6 +1241,8 @@ export function runCollector(options = {}) {
             '--silent',
             '--no-tips',
             '--no-gitignore',
+            '--max-size',
+            String(MAX_FILE_BYTES),
             workRepoDir,
           ],
           {cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024},
@@ -1290,6 +1269,8 @@ export function runCollector(options = {}) {
             '--silent',
             '--no-tips',
             '--no-gitignore',
+            '--max-size',
+            String(MAX_FILE_BYTES),
             workRepoDir,
           ],
           {cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024},
@@ -1307,14 +1288,18 @@ export function runCollector(options = {}) {
         );
         findings.push(...parsedComp.findings);
 
+        const rows = parsedComp.fileMetrics.slice(0, MAX_PER_FILE_COVERAGE);
+        const measured = parsedComp.totalFiles > 0 || parsedDup.stats.sources > 0;
         coverage.push({
           tool: 'jscpd',
           version: versions.jscpd,
-          status: 'ok',
-          detail: `arquivos_medidos=${parsedComp.totalFiles}, clones=${parsedDup.stats.clones}, linhas_duplicadas=${parsedDup.stats.duplicatedLines}, percentual=${parsedDup.stats.percentage.toFixed(2)}%`,
+          status: measured ? 'ok' : 'skipped',
+          detail: `arquivos_medidos=${parsedComp.totalFiles}, clones=${parsedDup.stats.clones}, linhas_duplicadas=${parsedDup.stats.duplicatedLines}, percentual=${parsedDup.stats.percentage.toFixed(2)}%; ` +
+            `fontes_duplicacao=${parsedDup.stats.sources}; min_linhas=${DEFAULT_THRESHOLDS.jscpdMinLines}; min_tokens=${DEFAULT_THRESHOLDS.jscpdMinTokens}; ` +
+            coverageLimit(parsedComp.totalFiles, rows.length),
         });
 
-        for (const row of parsedComp.fileMetrics.slice(0, MAX_PER_FILE_COVERAGE)) {
+        for (const row of rows) {
           coverage.push({
             tool: 'jscpd:file',
             version: versions.jscpd,
@@ -1332,7 +1317,7 @@ export function runCollector(options = {}) {
       }
     }
 
-    // 4. dependency-cruiser (ciclos e violações de camada)
+    // 3. dependency-cruiser (ciclos e violações de camada)
     if (nonTestJsTsFiles.length === 0) {
       coverage.push({
         tool: 'dependency-cruiser',
@@ -1342,7 +1327,7 @@ export function runCollector(options = {}) {
       });
     } else {
       try {
-        const hasTsConfig = sanitizeTsConfigInWork(workRepoDir);
+        const hasTsConfig = sanitizeTsConfigInWork(workRepoDir, copiedFiles);
         const baseCfgPath = existsSync(join(toolsRoot, 'depcruise.config.json'))
           ? join(toolsRoot, 'depcruise.config.json')
           : '/opt/arquitetura-tools/depcruise.config.json';
@@ -1370,7 +1355,7 @@ export function runCollector(options = {}) {
           {cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024},
         );
         if (depRes.error) throw depRes.error;
-        if (depRes.status !== 0 && !existsSync(depOutPath)) {
+        if (depRes.status !== 0) {
           throw new Error(`depcruise retornou status ${depRes.status}: ${(depRes.stderr || depRes.stdout || '').slice(0, 300)}`);
         }
         const parsedDep = parseDepcruiseReport(
@@ -1383,7 +1368,7 @@ export function runCollector(options = {}) {
           tool: 'dependency-cruiser',
           version: versions.depcruise,
           status: 'ok',
-          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, ciclos=${parsedDep.stats.cycles}, violacoes_camada=${parsedDep.stats.layerViolations}, orfaos=${parsedDep.stats.orphans}`,
+          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, ciclos=${parsedDep.stats.cycles}, violacoes_camada=${parsedDep.stats.layerViolations}, orfaos=${parsedDep.stats.orphans}; ${coverageLimit(parsedDep.stats.totalModules, parsedDep.perFileCoverage.length)}`,
         });
         for (const row of parsedDep.perFileCoverage) {
           coverage.push({
@@ -1399,6 +1384,63 @@ export function runCollector(options = {}) {
           version: versions.depcruise,
           status: 'failed',
           detail: `falha ao executar dependency-cruiser: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+        });
+      }
+    }
+
+    // 4. KNIP (código morto). Por último, pois prepara os manifestos do snapshot.
+    const knipCandidates = new Set(nonTestJsTsFiles.filter(f => !isIgnoredByKnipConfig(f)));
+    if (knipCandidates.size === 0) {
+      coverage.push({
+        tool: 'knip',
+        version: versions.knip,
+        status: 'skipped',
+        detail:
+          jsTsFiles.length === 0
+            ? `nenhum arquivo JS/TS encontrado (arquivos copiados=${copiedFiles.length})`
+            : `nenhum arquivo JS/TS de produção elegível para knip (arquivos copiados=${copiedFiles.length})`,
+      });
+    } else {
+      try {
+        if (!existsSync(join(workRepoDir, 'package.json'))) {
+          writeFileSync(join(workRepoDir, 'package.json'), JSON.stringify({name: 'repo-scan', private: true}, null, 2));
+        }
+        const knipConfig = buildKnipConfig(workRepoDir, copiedFiles);
+        const knipConfigPath = join(workCfgDir, 'knip.json');
+        writeFileSync(knipConfigPath, JSON.stringify(knipConfig, null, 2));
+
+        const worker = fileURLToPath(new URL('./knip-worker.mjs', import.meta.url));
+        const knipRes = execFn(process.execPath, [worker, toolsRoot, knipConfigPath], {
+          cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
+        });
+        if (knipRes.error) throw knipRes.error;
+        if (knipRes.status !== 0) {
+          throw new Error(`knip retornou status ${knipRes.status}: ${(knipRes.stderr || knipRes.stdout || '').slice(0, 300)}`);
+        }
+        const parsedKnip = parseKnipReport(knipRes.stdout, workRepoDir, knipCandidates);
+        findings.push(...parsedKnip.findings);
+        const {stats} = parsedKnip;
+        coverage.push({
+          tool: 'knip',
+          version: versions.knip,
+          status: stats.totalFiles > 0 ? 'ok' : 'skipped',
+          detail: `arquivos=${stats.totalFiles}, entradas=${stats.entries}, arquivos_nao_usados=${stats.unusedFiles}, exportacoes_nao_usadas=${stats.unusedExports}, deps_nao_usadas=${stats.unusedDeps}; ` +
+            `elegiveis_sem_medicao_comprovada=${knipCandidates.size - stats.totalFiles}; ${coverageLimit(stats.totalFiles, parsedKnip.perFileCoverage.length)}`,
+        });
+        for (const row of parsedKnip.perFileCoverage) {
+          coverage.push({
+            tool: 'knip:file',
+            version: versions.knip,
+            status: 'ok',
+            detail: `arquivo=${row.file}; papel=${row.role}; problemas=${row.issues}`,
+          });
+        }
+      } catch (err) {
+        coverage.push({
+          tool: 'knip',
+          version: versions.knip,
+          status: 'failed',
+          detail: `falha ao executar knip: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
         });
       }
     }

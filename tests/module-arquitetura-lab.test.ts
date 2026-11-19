@@ -52,6 +52,7 @@ function runInContainer(
   const args = [
     'run',
     '--rm',
+    '--pull=never',
     '--network',
     network,
     '--read-only',
@@ -213,11 +214,19 @@ test('laboratório módulo 3 encontra os defeitos plantados e não acusa o contr
     defectiveOut.findings.some(f => f.rule === rule && (!filePart || f.file.includes(filePart)));
 
   assert.equal(has('KNIP-UNUSED-FILE', 'src/legacy-dead.ts'), true);
+  for (const file of ['src/unused.mts', 'src/unused.cts']) {
+    assert.equal(has('KNIP-UNUSED-FILE', file), true);
+    assert.ok(defectiveOut.coverage.some(c =>
+      c.tool === 'knip:file' && c.detail === `arquivo=${file}; papel=nao_alcancado; problemas=1`));
+  }
   assert.equal(has('KNIP-UNUSED-EXPORT', 'src/shared/format.ts'), true);
   assert.equal(has('JSCPD-DUPLICATION', 'billing-'), true);
   assert.equal(has('DEPCRUISE-NO-CIRCULAR', 'cycle-'), true);
   assert.equal(has('DEPCRUISE-LAYER-DOMAIN-TO-PRESENTATION', 'src/domain/order.ts'), true);
   assert.equal(has('DEPCRUISE-LAYER-DOMAIN-TO-INFRA', 'src/domain/order.ts'), true);
+  const domainFindings = defectiveOut.findings.filter(f => f.file === 'src/domain/order.ts');
+  assert.equal(domainFindings.filter(f => f.rule === 'DEPCRUISE-NO-CIRCULAR').length, 1);
+  assert.ok(domainFindings.some(f => f.rule === 'DEPCRUISE-LAYER-DOMAIN-TO-PRESENTATION' && f.line === 2));
   assert.equal(has('COMPLEXITY-CYCLOMATIC-HIGH', 'src/services/complex-engine.ts'), true);
   assert.equal(has('COMPLEXITY-NESTING-DEEP', 'src/services/complex-engine.ts'), true);
 

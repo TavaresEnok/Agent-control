@@ -1,3 +1,4 @@
+// A rota é importada como '../routes/orders.js' abaixo.
 import {buildRoutePrefix} from '../routes/orders.js';
 import {readStoredFactor} from '../infra/memory-store.js';
 

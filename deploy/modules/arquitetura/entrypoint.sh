@@ -51,6 +51,7 @@ if [ ! -r /repo ] || [ ! -x /repo ]; then
   exit 78
 fi
 
+export AC_REPO_DIR=/repo
 export HOME=/tmp
 export TMPDIR=/tmp
 export NPM_CONFIG_UPDATE_NOTIFIER=false
