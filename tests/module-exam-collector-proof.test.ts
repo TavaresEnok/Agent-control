@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {mkdir, writeFile} from 'node:fs/promises';
+import {dirname, join} from 'node:path';
+import {mapModuleSnapshot} from '../src/module-exam-map.ts';
+import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import type {CollectorCriterion, ModuleExamCollectorContext} from '../src/module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewObservation} from '../src/module-exam-proof.ts';
 import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamSeat} from '../src/module-exam.ts';
-import {validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
+import {runVerificationModule, validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
 
 const commit = 'a'.repeat(40);
 const intentId = randomUUID();
@@ -284,4 +289,47 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
     worker: {run: async () => JSON.stringify({kind: 'exame', filesRead: ['outro.mjs'], checklist: [row.module], findings: []})},
     reserve: async purpose => { assert.equal(purpose, 'examiner'); return examiner; }});
   assert.equal(uncovered.findings[0]?.status, 'provavel');
+});
+
+test('a publicação confirma uma medição funcional de cada módulo usando o snapshot e o histórico do host', {
+  skip: !process.env.AC_TEST_DATABASE_URL, timeout: 120_000,
+}, async () => {
+  await withModuleRecoveryFixture(process.env.AC_TEST_DATABASE_URL!, async input => {
+    const tested = new Set<Example['module']>();
+    const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-C', input.repoPath, ...args], {encoding: 'utf8'}).trim();
+    for (const row of examples) {
+      if (tested.has(row.module)) continue;
+      const file = join(input.repoPath, row.raw.file);
+      await mkdir(dirname(file), {recursive: true});
+      await writeFile(file, row.source);
+      git('add', '--', row.raw.file);
+      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Medição ' + row.module);
+      const commitId = git('rev-parse', 'HEAD');
+      const {contextId} = await input.ledger.ensureExamContext(input.principal, input.projectId, row.module);
+      const authority = row.module === 'qa' ? input.authority :
+        await input.ledger.acquire(input.principal, contextId, randomUUID(), 'fixture-exame', 60);
+      const examiner = seat('primeiro'), reviewer = seat('segundo');
+      const run = await runVerificationModule({...input, authority, module: row.module, commit: commitId,
+        collectorOutput: {coverage: row.coverage, findings: [row.raw]}, async examinar(req) {
+          assert.equal(req.collector?.commit, commitId);
+          const map = await mapModuleSnapshot(req.snapshot);
+          return examineFunctionalModule({...req, map, commit: commitId,
+            collectorReview: {collector: req.collector!, intentId: req.intentId, snapshot: req.snapshot},
+            reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
+            worker: {run: async call => {
+              const task = JSON.parse(call.task);
+              return task.checklist ? JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: [row.module], findings: []})
+                : JSON.stringify(response(task, row));
+            }},
+          });
+        },
+      });
+      assert.equal(run.achados[0]?.status, 'confirmado', row.module);
+      assert.equal(run.achados[0]?.verifier?.provider, 'segundo', row.module);
+      const saved = await input.ledger.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [run.runId]);
+      assert.equal(saved.rows[0]?.status, 'confirmado', row.module);
+      tested.add(row.module);
+    }
+    assert.equal(tested.size, 8);
+  });
 });

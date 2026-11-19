@@ -21,8 +21,9 @@ import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
   runBoundedCollectorProcess, type CollectorProcess,
 } from './module-container-cleanup.ts';
-import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamResult} from './module-exam.ts';
-import {readModuleExamFile} from './module-exam-map.ts';
+import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
+import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
+import type {ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
 import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
@@ -181,7 +182,7 @@ export type VerificationModuleRunInput = {
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
   executeCollectorProcess?: CollectorProcess;
   examinar?: (request: {intentId: string; snapshot: string; module: VerificationModule;
-    findings: readonly ModuleRawFinding[]; signal?: AbortSignal}) => Promise<ModuleExamResult>;
+    findings: readonly ModuleRawFinding[]; collector?: ModuleExamCollectorContext; signal?: AbortSignal}) => Promise<ModuleExamResult>;
   /** Optional independent reviewer worker. When present, findings are confirmed without passing author conclusions. */
   worker?: VerifyWorker;
   notes?: readonly string[];
@@ -522,7 +523,7 @@ function isSecretToken(token: string): boolean {
 }
 
 async function independentVerifier(snapshot: string, module: VerificationModule, exam: ModuleExamResult,
-  finding: ModuleExamResult['findings'][number], raw?: ModuleRawFinding): Promise<Achado['verifier']> {
+  finding: ModuleExamResult['findings'][number], raw?: ModuleRawFinding, collectorReview?: ModuleExamCollectorReview): Promise<Achado['verifier']> {
   if (exam.mode !== 'exame' || finding.status === 'provavel' || !finding.verifier || !finding.binding || isProtectedLocation(finding.file)) return null;
   const examiner = exam.coverage.find(row => row.file === finding.file && row.status === 'lido')?.examiner;
   const verifier = finding.verifier;
@@ -533,7 +534,7 @@ async function independentVerifier(snapshot: string, module: VerificationModule,
   const located = await locateRepoFile(snapshot, finding.file);
   if (!located) return null;
   const {code} = await readModuleExamFile(located, finding.file);
-  const evidence = code === null ? null : moduleExamReviewEvidence(module, finding, code, raw);
+  const evidence = code === null ? null : moduleExamReviewEvidence(module, finding, code, raw, collectorReview);
   if (!evidence || !hasModuleReviewProof(evidence, finding)) return null;
   return {provider: verifier.provider, model: verifier.model};
 }
@@ -1951,11 +1952,21 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       sourceCoverage?.push(failure);
     }
 
-    const exam = await input.examinar?.({intentId, snapshot, module: input.module, findings: collectorData.findings, signal: input.signal});
+    const collector = {module: input.module, intentId, snapshot, commit: input.commit, exitCode: collectorCode,
+      coverage: sourceCoverage ?? collectorData.coverage, findings: collectorData.findings};
+    const exam = await input.examinar?.({intentId, snapshot, module: input.module,
+      findings: structuredClone(collectorData.findings), collector: structuredClone(collector), signal: input.signal});
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
     if (exam && (exam.findings.length < collectorData.findings.length || exam.findings.length > 999)) {
       throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
     }
+    // Rebuild the source inventory from the host snapshot for graph proofs.
+    // A reviewer response never supplies the file map or the collector records.
+    const needsGraph = input.module === 'arquitetura' && exam?.mode === 'exame' &&
+      exam.findings.some(finding => finding.status !== 'provavel');
+    const relatedSources = needsGraph ? new Map((await mapModuleSnapshot(snapshot, input.signal)).files
+      .map(file => [file.file, file.code] as const)) : undefined;
+    const collectorReview = {collector, intentId, snapshot, relatedSources};
     const achados: Achado[] = [];
     for (const finding of collectorData.findings) {
       const achadoId = `ACH-${String(achados.length + 1).padStart(3, '0')}`;
@@ -1971,7 +1982,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           audited.evidence !== origin.evidence || audited.title !== origin.title || audited.severity !== origin.severity) {
           throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
         }
-        verifier = await independentVerifier(snapshot, input.module, exam!, audited, finding);
+        verifier = await independentVerifier(snapshot, input.module, exam!, audited, finding, collectorReview);
         status = verifier ? audited.status : 'provavel';
         if (verifier) proof = localizedProof(audited.proof, audited.reason);
       } else if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))) {
