@@ -1014,3 +1014,4 @@ PAUSADO-COTA
 - 19/11/2026 19:45 UTC — Testes complementares de entrega-banco-marcador em 35db707f: 52 aprovados.
 - 19/11/2026 19:46 UTC — Validação completa de entrega-banco-marcador em 35db707f: TypeScript, suíte, complementares e laboratório aprovados.
 - 19/11/2026 19:46 UTC — Validação de entrega-desempenho-1 em dab29e0d iniciada no checkout de integração.
+- 19/11/2026 19:46 UTC — Integração C5 em task/personal-activation concluída no merge d7f7a189 do candidato 97938e35. O checkout de homologação 35db707f passou em TypeScript, suíte oficial, complementares e laboratório. A instalação aguarda a aplicação conjunta.
