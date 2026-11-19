@@ -960,3 +960,9 @@ PAUSADO-COTA
 - 19/11/2026 19:12 UTC — C8-PROVENIENCIA-AMBIENTE encerrado com código 0.
 - 19/11/2026 19:13 UTC — C9-LAB-FERRAMENTAS encerrado com código 0.
 - 19/11/2026 19:13 UTC — C8 integrou 44ed392a em a348fcb6 para verificar a origem em módulos ambientes com a AST e TypeDoc real. A fila de revisão recebeu somente o delta desta rodada.
+- 19/11/2026 19:13 UTC — revisor-C8-ACEITE-AMBIENTE iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:13 UTC — A imagem de conformidade com constantes propagadas e contrato físico da fixture passou nos ensaios e na CLI. Digest fixado na integração.
+- 19/11/2026 19:15 UTC — C8 passou na prova física de módulo ambiente com imagem, TypeDoc e CLI, e o digest foi fixado no ramo de integração.
+- 19/11/2026 19:16 UTC — C8-ACEITE-AMBIENTE encerrado com código 0.
+- 19/11/2026 19:16 UTC — C9-JUNCAO-LOGICA encerrado com código 0.
+- 19/11/2026 19:17 UTC — O revisor aceitou a proveniência de módulo ambiente em 44ed392a e a imagem de C8 passou em 42/42. C9 integrou os quatro arquivos revisáveis da junção lógica e dos estados de ferramentas em 59201d15, com a base de C8 aceita.
