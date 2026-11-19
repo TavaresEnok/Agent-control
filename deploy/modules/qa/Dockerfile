@@ -11,17 +11,23 @@ COPY mutacao-linguagens/install.sh /tmp/qa-mutation/
 COPY mutacao-linguagens/go-mutesting/ /tmp/qa-mutation/go-mutesting/
 RUN /tmp/qa-mutation/install.sh go /opt/go-mutesting-plan
 
+FROM qa-python AS qa-carga-amd64
+ADD --checksum=sha256:5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87 https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-linux-amd64.tar.gz /tmp/k6.tar.gz
+ADD --checksum=sha256:556d891134a3c582dc1e1a3f7335fd55142e5965769855a00b944e13e48302fc https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-linux-amd64 /opt/qa-carga/toxiproxy-server
+
+FROM qa-python AS qa-carga-arm64
+ADD --checksum=sha256:7bb415f59d81ad649a86f6da6b3e1bd2e4e64e84909deef13e9bca70608abccb https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-linux-arm64.tar.gz /tmp/k6.tar.gz
+ADD --checksum=sha256:53e770c1c3035b5a9f1bc629fce537db1f95f62b26f4ebe6e756afd701cf077c https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-linux-arm64 /opt/qa-carga/toxiproxy-server
+
+FROM qa-carga-${TARGETARCH} AS qa-carga
+ARG TARGETARCH
+RUN tar -xzOf /tmp/k6.tar.gz "k6-v2.4.0-linux-${TARGETARCH}/k6" > /opt/qa-carga/k6 \
+    && chmod 0555 /opt/qa-carga/k6 /opt/qa-carga/toxiproxy-server
+
 # Tag fixa v1.65.1-noble com digest OCI imutável conferido no registro MCR:
 # sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
 # linux/amd64: sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9
 # linux/arm64: sha256:56be08aca06bf736a928da2e3235a3b63ef71ee97313beb18c6019fea791aba4
-FROM qa-python AS qa-carga
-ADD --checksum=sha256:5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87 https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-linux-amd64.tar.gz /tmp/k6.tar.gz
-ADD --checksum=sha256:556d891134a3c582dc1e1a3f7335fd55142e5965769855a00b944e13e48302fc https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-linux-amd64 /opt/qa-carga/toxiproxy-server
-RUN test "$(dpkg --print-architecture)" = amd64 \
-    && tar -xzOf /tmp/k6.tar.gz k6-v2.4.0-linux-amd64/k6 > /opt/qa-carga/k6 \
-    && chmod 0555 /opt/qa-carga/k6 /opt/qa-carga/toxiproxy-server
-
 FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
