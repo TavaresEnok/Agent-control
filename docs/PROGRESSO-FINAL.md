@@ -886,3 +886,8 @@ PAUSADO-COTA
 - 19/11/2026 18:38 UTC — C8-ACEITE-LEXICO encerrado com código 0.
 - 19/11/2026 18:38 UTC — revisor-C9-ACEITE-ORIGEM iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:39 UTC — O revisor da documentação confirmou o tratamento parcial dos casos anteriores e apontou três casos do TypeDoc: comentário transferido para membro, mapa indexado e perda de linha em comentário simples. A correção segue no worktree C8. O painel passou em 10/10 e o catálogo de migrações 103→114 permaneceu estável na repetição.
+- 19/11/2026 18:39 UTC — trabalho-C8-ORIGEM-COMENTARIO-EFETIVO iniciado em final-c8 por Sol high normal.
+- 19/11/2026 18:40 UTC — A imagem de conformidade passou no reensaio de origem, testes das ferramentas e CLI. Digest fixado no ramo de integração.
+- 19/11/2026 18:40 UTC — C9-ACEITE-ORIGEM encerrado com código 0.
+- 19/11/2026 18:40 UTC — revisor-C2-ACEITE-TRES-CONTROLES iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:41 UTC — Conformidade passou em 37/37 com CLI e ferramentas reais. A revisão indicou casos de alias, parâmetro padrão e junção nos quais a origem podia ficar incorreta. O próximo candidato deve indicar lacuna onde não demonstrar o fluxo. A suíte de prontidão foi reordenada para que o último QA tenha prioridade no banco de bancada.
