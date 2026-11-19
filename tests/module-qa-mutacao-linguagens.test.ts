@@ -146,6 +146,23 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
   assert.equal(run(1, [], 'module lookup disabled by GOPROXY=off').reason, 'offline-dependency');
 });
 
+test('Go reconhece falha operacional global sem prefixo após cabeçalho de outro pacote', () => {
+  const pkg = 'qa.local/arithmetic';
+  const buildId = `${pkg} [${pkg}.test]`;
+  const events = [
+    {Action: 'build-fail', ImportPath: buildId},
+    {Action: 'fail', Package: pkg, FailedBuild: buildId},
+  ];
+  const output = events.map(event => JSON.stringify(event)).join('\n');
+  const run = (diagnostics: string) => decodeGoSuite({code: 1, output, diagnostics}, new Set([pkg]));
+  const source = `# ${buildId}\n./arithmetic.go:3:14: undefined: amount\n`;
+  const foreignHeader = `# ${pkg}/other\n`;
+
+  assert.deepEqual(run(source + foreignHeader), {reason: 'go-build-failed'});
+  assert.deepEqual(run(source + foreignHeader + 'compile: writing output: no space left on device\n'),
+    {reason: 'go-build-execution'});
+});
+
 test('Go exige diagnóstico de código atribuído ao FailedBuild exato', async () => {
   const pkg = 'qa.local/arithmetic';
   const buildId = `${pkg} [${pkg}.test]`;

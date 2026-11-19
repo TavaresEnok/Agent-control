@@ -6,7 +6,9 @@ const SYNTAX = 'arquivos com sintaxe não analisável';
 const LIMIT_GAP = 'leituras de expressão incompletas (limite)';
 const DECLARATION = 'declaradores fora do rastreamento';
 const UNKNOWN_VALUE = 'resultados de chamadas indiretas com possível origem';
+const UNKNOWN_RESULT = 'resultados de chamadas sem vínculo estático';
 const UNKNOWN_DESTINATION = 'chamadas com possível origem e destino sem vínculo estático';
+const DEFAULT_ARGUMENT = 'argumentos padrão JavaScript/TypeScript sem vínculo estático';
 const MUTATION = 'mutações de propriedades sem vínculo estático';
 const BRANCH = 'reatribuições em fluxo condicional ou repetido';
 const CAPTURE = 'vínculos externos a funções sem ordem de chamada estática';
@@ -22,7 +24,7 @@ const RECEIVERS = new Map([
 ]);
 const UNKNOWN = {unknown: true};
 const CAPTURED = {unknown: true, invalidated: true};
-const LOCAL = {};
+const LOCAL = {local: true};
 const KINDS = {'.js': ts.ScriptKind.JS, '.mjs': ts.ScriptKind.JS, '.jsx': ts.ScriptKind.JSX,
   '.ts': ts.ScriptKind.TS, '.tsx': ts.ScriptKind.TSX};
 
@@ -56,6 +58,62 @@ function isLogical(operator) {
     operator === ts.SyntaxKind.AmpersandAmpersandToken;
 }
 
+const LOGICAL_ASSIGNMENTS = new Map([
+  [ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.AmpersandAmpersandToken],
+  [ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.BarBarToken],
+  [ts.SyntaxKind.QuestionQuestionEqualsToken, ts.SyntaxKind.QuestionQuestionToken],
+]);
+
+const UNDEFINED = {truthy: false, nullish: true, undefined: true};
+
+function primitive(value) {
+  return {truthy: Boolean(value), nullish: value === null, undefined: false};
+}
+
+function literalFacts(input) {
+  const node = unwrap(input);
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return primitive(true);
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return primitive(false);
+  if (node.kind === ts.SyntaxKind.NullKeyword) return primitive(null);
+  if (ts.isVoidExpression(node)) return UNDEFINED;
+  if (ts.isStringLiteralLike(node) && !node.containsInvalidEscape) return primitive(node.text);
+  if (ts.isNumericLiteral(node)) return primitive(Number(node.text));
+  if (ts.isBigIntLiteral(node)) return primitive(!/^(?:0[xob])?[0_]+n$/i.test(node.text));
+  if (ts.isPrefixUnaryExpression(node) && ts.isNumericLiteral(unwrap(node.operand)) &&
+    [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator)) return literalFacts(node.operand);
+  return null;
+}
+
+function needsRight(operator, data) {
+  if (operator === ts.SyntaxKind.QuestionQuestionToken) return data?.nullish;
+  const truth = data?.truthy;
+  return operator === ts.SyntaxKind.AmpersandAmpersandToken || truth === undefined ? truth : !truth;
+}
+
+function shortCircuitFacts(operator, left) {
+  // The test that skips the right operand narrows the left operand's returned value.
+  if (operator === ts.SyntaxKind.BarBarToken) return primitive(true);
+  if (operator === ts.SyntaxKind.QuestionQuestionToken) {
+    return {truthy: left?.truthy, nullish: false, undefined: false};
+  }
+  return {truthy: false, nullish: left?.nullish, undefined: left?.undefined};
+}
+
+function commonFacts(left, right) {
+  const facts = {};
+  for (const key of ['truthy', 'nullish', 'undefined']) {
+    if (left?.[key] !== undefined && left[key] === right?.[key]) facts[key] = left[key];
+  }
+  return facts;
+}
+
+function valueFacts(data) {
+  if (data && !data.unknown && (data.keys || data.items || data.effects || data.kind || data.local || data.serialize)) {
+    return primitive(true);
+  }
+  return data;
+}
+
 function analyze(text, suffix, fieldPattern, limit) {
   const gaps = new Map();
   const hits = [];
@@ -82,6 +140,36 @@ function analyze(text, suffix, fieldPattern, limit) {
     writeFile: () => { throw new Error('emissão desativada'); },
   });
   const checker = program.getTypeChecker();
+  const factsByExpression = new WeakMap();
+  const isGlobalUndefined = symbol => !symbol || checker.isUndefinedSymbol(symbol);
+
+  // The summaries need the result facts while still visiting operands that have effects.
+  function expressionFacts(input) {
+    const node = unwrap(input);
+    if (factsByExpression.has(node)) return factsByExpression.get(node);
+    let facts = literalFacts(node);
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+      const truth = expressionFacts(node.operand)?.truthy;
+      if (truth !== undefined) facts = primitive(!truth);
+    } else if (!facts && ts.isBinaryExpression(node) && isLogical(node.operatorToken.kind)) {
+      const operator = node.operatorToken.kind;
+      const left = expressionFacts(node.left);
+      const needed = needsRight(operator, left);
+      if (needed === false) facts = left;
+      else {
+        const right = expressionFacts(node.right);
+        facts = needed === true ? right : commonFacts(shortCircuitFacts(operator, left), right);
+      }
+    } else if (ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node) ||
+      ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
+      facts = primitive(true);
+    } else if (ts.isIdentifier(node) && node.text === 'undefined' && isGlobalUndefined(checker.getSymbolAtLocation(node))) {
+      facts = UNDEFINED;
+    }
+    factsByExpression.set(node, facts);
+    return facts;
+  }
+
   const field = new RegExp(fieldPattern, 'i');
   const line = (node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
   const scalar = (at) => at === null ? null : {line: at};
@@ -176,6 +264,7 @@ function analyze(text, suffix, fieldPattern, limit) {
       gap(CAPTURE);
       return CAPTURED;
     }
+    if (name === 'undefined' && isGlobalUndefined(symbol)) return UNDEFINED;
     if (field.test(name) && !symbol?.valueDeclaration) return scalar(line(node));
     if (external.has(symbol ?? name)) return external.get(symbol ?? name);
     let data = imported(symbol);
@@ -215,140 +304,216 @@ function analyze(text, suffix, fieldPattern, limit) {
       node.parameters.every(parameter => ts.isIdentifier(parameter.name) && !parameter.initializer))) return LOCAL;
     if (callables.has(node)) return callables.get(node);
 
-    const writes = new Set();
-    const receivers = new Set();
-    const calls = [];
-    const aliases = new Map();
-    let unresolved = false;
-    function recordAlias(target, expression) {
+    const effects = () => ({writes: new Set(), receivers: new Set(), calls: [], aliases: new Map(), unresolved: false});
+    const body = effects();
+    const defaults = new Map();
+    const initializers = new Map();
+    function recordAlias({aliases}, target, expression) {
       const symbol = ts.isIdentifier(target) && checker.getSymbolAtLocation(target);
       if (!symbol || functionOwner(symbol) !== node) return;
       if (!aliases.has(symbol)) aliases.set(symbol, []);
       aliases.get(symbol).push(expression);
     }
-    function record(input) {
+    function record(summary, input) {
       for (const target of assignmentTargets(input)) {
         let root = target;
         while (isProperty(root)) root = unwrap(root.expression);
         if (!ts.isIdentifier(root)) {
-          if (root.kind !== ts.SyntaxKind.ThisKeyword) unresolved = true;
+          summary.receivers.add(root);
+          if (root.kind !== ts.SyntaxKind.ThisKeyword) summary.unresolved = true;
           continue;
         }
         const symbol = ts.isShorthandPropertyAssignment(root.parent) ?
           checker.getShorthandAssignmentValueSymbol(root.parent) : checker.getSymbolAtLocation(root);
         if (root === target) {
-          if (functionOwner(symbol) !== node) writes.add(symbol ?? root.text);
-        } else receivers.add(root);
+          if (functionOwner(symbol) !== node) summary.writes.add(symbol ?? root.text);
+        } else summary.receivers.add(root);
       }
     }
-    function summarize(child) {
+    function summarize(child, effects) {
       if (ts.isFunctionLike(child) || ts.isClassLike(child) || ts.isTypeNode(child)) return;
-      if (ts.isVariableDeclaration(child) && child.initializer) recordAlias(child.name, child.initializer);
+      if (ts.isBinaryExpression(child) && isLogical(child.operatorToken.kind) &&
+        needsRight(child.operatorToken.kind, expressionFacts(child.left)) === false) {
+        summarize(child.left, effects);
+        return;
+      }
+      if (ts.isVariableDeclaration(child) && child.initializer) recordAlias(effects, child.name, child.initializer);
       if (ts.isBinaryExpression(child) && child.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
         child.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-        record(child.left);
-        if (child.operatorToken.kind === ts.SyntaxKind.EqualsToken) recordAlias(unwrap(child.left), child.right);
+        record(effects, child.left);
+        if (child.operatorToken.kind === ts.SyntaxKind.EqualsToken) recordAlias(effects, unwrap(child.left), child.right);
       }
-      if (ts.isDeleteExpression(child)) record(child.expression);
+      if (ts.isDeleteExpression(child)) record(effects, child.expression);
       if ((ts.isPrefixUnaryExpression(child) || ts.isPostfixUnaryExpression(child)) &&
-        [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(child.operator)) record(child.operand);
+        [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(child.operator)) record(effects, child.operand);
       if ((ts.isForOfStatement(child) || ts.isForInStatement(child)) &&
-        !ts.isVariableDeclarationList(child.initializer)) record(child.initializer);
+        !ts.isVariableDeclarationList(child.initializer)) record(effects, child.initializer);
       if (ts.isCallExpression(child)) {
         const target = unwrap(child.expression);
         const root = isProperty(target) ? unwrap(target.expression) : target;
-        calls.push({target, root, args: child.arguments});
+        effects.calls.push({target, root, args: child.arguments});
       }
-      ts.forEachChild(child, summarize);
+      ts.forEachChild(child, node => summarize(node, effects));
     }
-    for (const parameter of node.parameters) {
-      if (parameter.initializer) summarize(parameter.initializer);
+    for (const [index, parameter] of node.parameters.entries()) {
+      if (!parameter.initializer) continue;
+      for (const target of assignmentTargets(parameter.name)) defaults.set(checker.getSymbolAtLocation(target), index);
+      const initializer = effects();
+      summarize(parameter.initializer, initializer);
+      initializers.set(index, initializer);
     }
-    summarize(node.body);
-    const data = {opaqueEffects: true, effects: {writes, receivers, calls, aliases, unresolved}};
+    summarize(node.body, body);
+    const data = {opaqueEffects: true, effects: {node, body, initializers, defaults}};
     callables.set(node, data);
     return data;
   }
 
-  function applyEffects(callee) {
-    const visited = new Set();
+  function applyEffects(callees, args) {
+    const visited = new Map();
+    const contexts = new Map();
     const writes = new Set();
     const receivers = new Set();
     const visible = (symbol) => {
       const owner = functionOwner(symbol);
       return !owner || owner === inFunction;
     };
-    // Follow possible local aliases without replaying assignments or picking a branch.
-    function visitRoot(input, onReference, onCallable, seen = new Set()) {
+    // Resolve candidate references and simple member paths without replaying the body.
+    function visitRoot(input, accept, fallback = accept, seen = new Set()) {
       const root = unwrap(input);
       if (ts.isConditionalExpression(root)) {
-        visitRoot(root.whenTrue, onReference, onCallable, seen);
-        visitRoot(root.whenFalse, onReference, onCallable, seen);
+        visitRoot(root.whenTrue, accept, fallback, seen);
+        visitRoot(root.whenFalse, accept, fallback, seen);
       } else if (ts.isBinaryExpression(root) && isLogical(root.operatorToken.kind)) {
-        visitRoot(root.left, onReference, onCallable, seen);
-        visitRoot(root.right, onReference, onCallable, seen);
+        const needed = needsRight(root.operatorToken.kind, expressionFacts(root.left));
+        if (needed !== true) visitRoot(root.left, accept, fallback, seen);
+        if (needed !== false) visitRoot(root.right, accept, fallback, seen);
       } else if (isProperty(root)) {
-        visitRoot(root.expression, onReference, undefined, seen);
+        visitRoot(root.expression, reference => {
+          const property = {reference, name: member(root)};
+          if (property.name === null) fallback(reference);
+          else accept(readProperty(root, property));
+        }, fallback, seen);
+      } else if (root.kind === ts.SyntaxKind.ThisKeyword) {
+        const context = contexts.get(ts.findAncestor(root.parent, node => ts.isFunctionLike(node) && !ts.isArrowFunction(node)));
+        if (context?.receiver) accept(context.receiver);
       } else if (ts.isIdentifier(root)) {
-        const symbol = checker.getSymbolAtLocation(root) ?? root.text;
+        const symbol = (ts.isShorthandPropertyAssignment(root.parent) ?
+          checker.getShorthandAssignmentValueSymbol(root.parent) : checker.getSymbolAtLocation(root)) ?? root.text;
         if (visible(symbol)) {
-          onReference(read(root), root);
+          accept(read(root, typeof symbol === 'string' ? undefined : symbol));
         } else if (!seen.has(symbol)) {
           seen.add(symbol);
           const declaration = symbol.valueDeclaration;
-          if (onCallable && declaration && ts.isFunctionDeclaration(declaration)) onCallable(callable(declaration));
-          const aliases = callable(functionOwner(symbol)).effects?.aliases.get(symbol) ?? [];
-          for (const alias of aliases) visitRoot(alias, onReference, onCallable, seen);
+          if (declaration && ts.isFunctionDeclaration(declaration)) accept(callable(declaration));
+          const owner = functionOwner(symbol);
+          const effects = callable(owner).effects;
+          const index = effects?.defaults.get(symbol);
+          const context = contexts.get(owner);
+          if (index !== undefined && !context?.defined.has(index)) {
+            visitRoot(owner.parameters[index].initializer, accept, fallback, seen);
+          }
+          for (const summary of context?.summaries ?? [effects?.body]) {
+            for (const alias of summary?.aliases.get(symbol) ?? []) visitRoot(alias, accept, fallback, seen);
+          }
+          seen.delete(symbol);
         }
-      } else if (onCallable && (ts.isFunctionExpression(root) || ts.isArrowFunction(root))) {
-        onCallable(callable(root));
+      } else if (ts.isFunctionExpression(root) || ts.isArrowFunction(root)) {
+        accept(callable(root));
+      } else if (ts.isObjectLiteralExpression(root) || ts.isArrayLiteralExpression(root)) {
+        // Literal containers in a body have no runtime identity here. Their members can still escape.
+        const slots = ts.isObjectLiteralExpression(root) ? root.properties : root.elements;
+        for (const slot of slots) {
+          if (ts.isMethodDeclaration(slot)) fallback(callable(slot));
+          else if (ts.isShorthandPropertyAssignment(slot)) visitRoot(slot.name, fallback, fallback, seen);
+          else if (ts.isPropertyAssignment(slot)) visitRoot(slot.initializer, fallback, fallback, seen);
+          else if (ts.isSpreadAssignment(slot) || ts.isSpreadElement(slot)) visitRoot(slot.expression, fallback, fallback, seen);
+          else if (ts.isExpressionNode(slot)) visitRoot(slot, fallback, fallback, seen);
+        }
       }
     }
     const affect = (reference) => receivers.add(reference);
-    function collect(data) {
-      if (!data?.effects || visited.has(data)) return;
-      visited.add(data);
-      if (data.effects.unresolved) gap(CAPTURE);
-      for (const symbol of data.effects.writes) {
-        if (visible(symbol)) writes.add(symbol);
-      }
-      for (const root of data.effects.receivers) visitRoot(root, affect);
-      for (const {target, root, args} of data.effects.calls) {
-        let resolved = false;
-        let opaque = false;
-        const visitCallee = (value) => {
-          collect(value);
-          resolved ||= Boolean(value);
-          opaque ||= Boolean(value?.unknown || value?.opaqueEffects);
-        };
-        if (isProperty(target)) {
-          // A local alias can point to any of its candidate receivers.
-          visitRoot(root, (reference, identifier) => {
-            if (identifier !== root) {
-              affect(reference);
-              return;
-            }
-            const property = {reference, name: member(target)};
-            const method = readProperty(target, property);
-            if (receiverMayChange(identifier, property, method)) affect(reference);
-            visitCallee(method);
-          });
-        } else {
-          visitRoot(root, visitCallee, visitCallee);
-        }
-        if (!resolved || opaque) {
-          const visitArgument = (reference) => {
-            affect(reference);
-            collect(reference);
-          };
-          for (const arg of args) {
-            const input = unwrap(ts.isSpreadElement(arg) ? arg.expression : arg);
-            if (ts.isIdentifier(input)) visitRoot(input, visitArgument, collect);
+    function argumentUndefined({node, data}) {
+      return valueFacts(data)?.undefined ?? expressionFacts(node)?.undefined;
+    }
+    function collect(data, supplied = [], receiver = null) {
+      if (!data?.effects) return;
+      const {node: owner, body, initializers} = data.effects;
+      const defined = new Set();
+      if (initializers.size) {
+        const spread = supplied.findIndex(arg => arg.spread);
+        for (const index of initializers.keys()) {
+          // Omission selects the default. A spread can obscure its position and a value can be undefined.
+          if (spread !== -1 && index >= spread) gap(DEFAULT_ARGUMENT);
+          else if (index < supplied.length) {
+            const isUndefined = argumentUndefined(supplied[index]);
+            if (isUndefined === false) defined.add(index);
+            else if (isUndefined === undefined) gap(DEFAULT_ARGUMENT);
           }
         }
       }
+      const previous = visited.get(data) ?? [];
+      const signature = [...defined].join(',');
+      if (previous.some(context => context.receiver === receiver && context.signature === signature)) return;
+      visited.set(data, [...previous, {receiver, signature}]);
+      const parent = contexts.get(owner);
+      const summaries = [...initializers].filter(([index]) => !defined.has(index)).map(([, summary]) => summary);
+      summaries.push(body);
+      contexts.set(owner, {receiver, defined, summaries});
+      for (const summary of summaries) {
+        if (summary.unresolved) gap(CAPTURE);
+        for (const symbol of summary.writes) {
+          if (visible(symbol)) writes.add(symbol);
+        }
+        for (const root of summary.receivers) visitRoot(root, affect);
+      }
+      for (const {target, root, args} of summaries.flatMap(summary => summary.calls)) {
+        let resolved = false;
+        let opaque = false;
+        const supplied = args.map(node => ({node, spread: ts.isSpreadElement(node)}));
+        const visitCallee = (value, receiver = null) => {
+          for (const candidate of alternatives(value)) collect(candidate, supplied, receiver);
+          resolved ||= Boolean(value);
+          opaque ||= Boolean(value?.unknown || value?.opaqueEffects);
+        };
+        const possibleCallees = new Set();
+        function visitOpaque(reference, seen = possibleCallees) {
+          if (!reference || seen.has(reference)) return;
+          seen.add(reference);
+          affect(reference);
+          collect(reference);
+          for (const alternative of reference.alternatives ?? []) visitOpaque(alternative, seen);
+          const current = state(reference);
+          for (const item of current?.items ?? []) visitOpaque(item, seen);
+          for (const item of current?.keys?.values() ?? []) visitOpaque(item, seen);
+        }
+        if (isProperty(target)) {
+          visitRoot(root, reference => {
+            const name = member(target);
+            if (name === null) {
+              visitOpaque(reference);
+              return;
+            }
+            for (const candidate of alternatives(reference)) {
+              const property = {reference: candidate, name};
+              const method = readProperty(target, property);
+              if (receiverMayChange(root, property, method)) affect(candidate);
+              visitCallee(method, candidate);
+            }
+          }, visitOpaque);
+        } else {
+          visitRoot(root, visitCallee, visitOpaque);
+        }
+        if (!resolved || opaque) {
+          for (const arg of args) {
+            const input = unwrap(ts.isSpreadElement(arg) ? arg.expression : arg);
+            visitRoot(input, visitOpaque);
+          }
+        }
+      }
+      if (parent) contexts.set(owner, parent);
+      else contexts.delete(owner);
     }
-    collect(callee);
+    for (const [callee, receiver] of callees) collect(callee, args, receiver);
     const seen = new Set();
     for (const reference of receivers) invalidateArgument(reference, seen);
     for (const symbol of writes) {
@@ -418,6 +583,16 @@ function analyze(text, suffix, fieldPattern, limit) {
   function value(input, used = true) {
     const node = unwrap(input);
     if (!node) return null;
+    if (ts.isVoidExpression(node)) walk(node.expression);
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+      const facts = expressionFacts(node);
+      if (facts) {
+        value(node.operand);
+        return facts;
+      }
+    }
+    const facts = literalFacts(node);
+    if (facts) return facts;
     if (ts.isIdentifier(node)) return read(node);
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       return readProperty(node, propertyReference(node));
@@ -452,8 +627,10 @@ function analyze(text, suffix, fieldPattern, limit) {
       return {items};
     }
     if (ts.isConditionalExpression(node)) {
-      value(node.condition);
-      const [yes, no] = walkBranches([() => branchValue(value(node.whenTrue)), () => branchValue(value(node.whenFalse))]);
+      const condition = value(node.condition);
+      if (condition?.truthy !== undefined) return value(condition.truthy ? node.whenTrue : node.whenFalse, used);
+      const [yes, no] = walkBranches([() => branchValue(value(node.whenTrue, used)),
+        () => branchValue(value(node.whenFalse, used))]);
       return joinValues(yes, no);
     }
     if (ts.isBinaryExpression(node)) {
@@ -466,21 +643,23 @@ function analyze(text, suffix, fieldPattern, limit) {
           bind(target, reference, fits(node.right) ? data : CAPTURED);
           return data;
         }
+        const logical = LOGICAL_ASSIGNMENTS.get(operator);
+        if (logical !== undefined) {
+          const left = reference ? readProperty(target, reference) : value(target);
+          return evaluateLogical(logical, left, () => {
+            const right = value(node.right, used);
+            bind(target, reference, right);
+            return right;
+          });
+        }
         gap(MUTATION);
-        const assign = () => {
-          value(node.right);
-          bind(target, reference, CAPTURED);
-        };
-        if ([ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.BarBarEqualsToken,
-          ts.SyntaxKind.QuestionQuestionEqualsToken].includes(operator)) walkBranches([assign]);
-        else assign();
+        value(node.right);
+        bind(target, reference, CAPTURED);
         return CAPTURED;
       }
       const left = value(node.left);
       if (isLogical(operator)) {
-        const before = branchValue(left);
-        const [right] = walkBranches([() => branchValue(value(node.right))]);
-        return joinValues(before, right);
+        return evaluateLogical(operator, left, () => value(node.right, used));
       }
       if (operator === ts.SyntaxKind.PlusToken) {
         const at = origin(left);
@@ -515,10 +694,6 @@ function analyze(text, suffix, fieldPattern, limit) {
     if (ts.isLiteralExpression(node) || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword,
       ts.SyntaxKind.NullKeyword, ts.SyntaxKind.OmittedExpression].includes(node.kind)) return null;
     if (ts.isPrefixUnaryExpression(node) && ts.isLiteralExpression(unwrap(node.operand))) return null;
-    if (ts.isVoidExpression(node)) {
-      walk(node.expression);
-      return null;
-    }
     // An untracked expression can contain writes, but their execution order is unknown here.
     walkBranches([() => ts.forEachChild(node, walk)]);
     if (ts.isClassExpression(node)) return LOCAL;
@@ -532,12 +707,33 @@ function analyze(text, suffix, fieldPattern, limit) {
 
   function branchValue(reference) {
     const data = state(reference);
-    return {at: origin(data), invalidated: data?.invalidated};
+    return {reference, data, at: origin(reference)};
   }
 
-  function joinValues(left, right) {
-    if (left.invalidated || right.invalidated) return CAPTURED;
-    return scalar(left.at ?? right.at) ?? CAPTURED;
+  function evaluateLogical(operator, left, evaluateRight) {
+    const facts = valueFacts(left);
+    const needed = needsRight(operator, facts);
+    if (needed === false) return left;
+    if (needed === true) return evaluateRight();
+    const before = branchValue(left);
+    const [right] = walkBranches([() => branchValue(evaluateRight())]);
+    return joinValues(before, right, shortCircuitFacts(operator, facts));
+  }
+
+  function joinValues(left, right, leftFacts = valueFacts(left.reference)) {
+    if (left.reference === right.reference) return left.reference;
+    const facts = commonFacts(leftFacts, valueFacts(right.reference));
+    const opaque = () => ({...CAPTURED, ...facts, keys: new Map(), alternatives: [left.reference, right.reference]});
+    if (left.data?.invalidated || right.data?.invalidated) return opaque();
+    const structured = data => data &&
+      (data.items || data.kind || data.effects || data.local || data.serialize ||
+        (data.keys && (!data.unknown || data.keys.size)));
+    if (structured(left.data) || structured(right.data)) {
+      gap(EXPRESSION);
+      return opaque();
+    }
+    const source = scalar(left.at ?? right.at);
+    return Object.keys(facts).length ? {...source, ...facts} : source;
   }
 
   function propertyReference(node) {
@@ -602,15 +798,24 @@ function analyze(text, suffix, fieldPattern, limit) {
 
   function receiverMayChange(node, {reference, name}, callee, args = []) {
     if (callee && !callee.unknown && !callee.opaqueEffects) return false;
+    if (reference?.alternatives) return true;
     const receiver = state(reference);
     if (receiver?.items) {
       // A plain array of untracked literals has no callbacks during join with a literal separator.
-      const simpleJoin = !callee && name === 'join' && !receiver.items.some(item => item != null) &&
+      const simpleJoin = !callee && name === 'join' &&
+        receiver.items.every(item => item == null || (!item.unknown && item.truthy !== undefined)) &&
         args.every(({node, spread}) => !spread && literal(node) !== null);
       return !simpleJoin;
     }
     const tracked = !ts.isIdentifier(node) || find('bindings', checker.getSymbolAtLocation(node) ?? node.text) !== undefined;
     return receiver?.keys && (receiver.keys.size || (tracked && !receiver.invalidated));
+  }
+
+  function* alternatives(reference, seen = new Set()) {
+    if (!reference || seen.has(reference)) return;
+    seen.add(reference);
+    if (!reference.alternatives) yield reference;
+    else for (const candidate of reference.alternatives) yield* alternatives(candidate, seen);
   }
 
   function call(node, used) {
@@ -640,7 +845,25 @@ function analyze(text, suffix, fieldPattern, limit) {
     const uncertain = used && !callee?.kind && (indirectOrigin !== null ||
       (property !== null && origin(property.reference) !== null));
     if (uncertain) gap(UNKNOWN_VALUE);
-    if (callee?.effects) applyEffects(callee);
+    else if (used && !callee?.kind) gap(UNKNOWN_RESULT);
+    const effects = callee?.effects ? [[callee, property?.reference]] : [];
+    if (callee?.alternatives) {
+      for (const candidate of alternatives(callee)) {
+        if (candidate.effects) effects.push([candidate, null]);
+      }
+    }
+    if (property && (property.name === null || property.reference?.alternatives)) {
+      for (const reference of alternatives(property.reference)) {
+        const receiver = state(reference);
+        const methods = property.name === null ?
+          new Set([...(receiver.keys?.values() ?? []), ...(receiver.items ?? [])]) :
+          [readProperty(target, {...property, reference})];
+        for (const method of methods) {
+          if (method?.effects) effects.push([method, reference]);
+        }
+      }
+    }
+    if (effects.length) applyEffects(effects, args);
     const seen = new Set();
     if (callee?.unknown || callee?.opaqueEffects) {
       for (const {spread, data} of args) {
@@ -667,6 +890,7 @@ function analyze(text, suffix, fieldPattern, limit) {
   function invalidateArgument(reference, seen = new Set()) {
     if (!reference || seen.has(reference)) return;
     seen.add(reference);
+    for (const alternative of reference.alternatives ?? []) invalidateArgument(alternative, seen);
     const data = state(reference);
     if (data?.items || (data?.keys && (data.keys.size || !data.invalidated))) {
       gap(MUTATION);
@@ -677,6 +901,8 @@ function analyze(text, suffix, fieldPattern, limit) {
   }
 
   function mutate({reference, name}, data, deleting = false) {
+    const seen = new Set();
+    for (const alternative of reference?.alternatives ?? []) invalidateArgument(alternative, seen);
     const current = state(reference);
     const index = current?.items && name !== null ? arrayIndex(name) : null;
     if ((!current?.keys && !current?.items) || name === null ||
@@ -715,7 +941,7 @@ function analyze(text, suffix, fieldPattern, limit) {
     const symbol = (ts.isShorthandPropertyAssignment(target.parent) ?
       checker.getShorthandAssignmentValueSymbol(target.parent) : checker.getSymbolAtLocation(target)) ?? target.text;
     // A named field initialized with a literal remains a field clue, including synthetic CPF fixtures.
-    if (declaration && data === null && expression && field.test(target.text) &&
+    if (declaration && expression && field.test(target.text) &&
         (ts.isStringLiteralLike(unwrap(expression)) || ts.isNumericLiteral(unwrap(expression)))) {
       data = scalar(line(target));
     }
@@ -723,24 +949,31 @@ function analyze(text, suffix, fieldPattern, limit) {
     if (!declaration) active().writes.add(symbol);
   }
 
-  function walkBranches(branches) {
+  function walkBranches(branches, exhaustive = false) {
     const writes = new Set();
     const objects = new Set();
-    const values = branches.map(visit => {
+    const outcomes = branches.map(visit => {
       frames.push(newFrame());
       const data = visit();
       const frame = frames.pop();
       for (const symbol of frame.writes) writes.add(symbol);
       for (const reference of frame.objects.keys()) objects.add(reference);
-      return data;
+      return {data, frame};
     });
-    if (writes.size || objects.size) gap(BRANCH);
+    let uncertain = objects.size > 0;
     for (const symbol of writes) {
-      active().bindings.set(symbol, CAPTURED);
+      const previous = find('bindings', symbol);
+      const candidates = outcomes.map(({frame}) => frame.writes.has(symbol) ? frame.bindings.get(symbol) : previous);
+      if (!exhaustive) candidates.push(previous);
+      const [first] = candidates;
+      const agreed = first !== undefined && candidates.every(candidate => candidate === first);
+      active().bindings.set(symbol, agreed ? first : CAPTURED);
       active().writes.add(symbol);
+      uncertain ||= !agreed;
     }
+    if (uncertain) gap(BRANCH);
     for (const reference of objects) invalidate(reference);
-    return values;
+    return outcomes.map(({data}) => data);
   }
 
   function walk(node) {
@@ -761,8 +994,12 @@ function analyze(text, suffix, fieldPattern, limit) {
       return;
     }
     if (ts.isIfStatement(node)) {
-      value(node.expression);
-      walkBranches([() => walk(node.thenStatement), () => walk(node.elseStatement)]);
+      const condition = value(node.expression);
+      if (condition?.truthy !== undefined) {
+        walk(condition.truthy ? node.thenStatement : node.elseStatement);
+        return;
+      }
+      walkBranches([() => walk(node.thenStatement), () => walk(node.elseStatement)], true);
       return;
     }
     if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
