@@ -178,3 +178,17 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:44 UTC — C4-R4 em cbf83ce3 voltou da revisão independente com defeitos de comparação semver, resolução de workspaces, validade de inventário e evidência de codemod. A R5 deve cobrir os cenários apontados mantendo o registro de pacotes offline.
 - 19/11/2026 02:44 UTC — C7-R4: a primeira execução pela CLI mediu Lighthouse, k6, CPU e PostgreSQL. O teste ainda esperava um segundo dois-pontos no nome da linha de CPU e falhou. A asserção agora exige o nome real, estado ok, arquivo, função e amostras não vazias. Em curso a repetição nas oito CLIs.
 - 19/11/2026 02:46 UTC — Prova conjunta em db875596, 8 de 8 módulos pela CLI pessoal, com snapshot Git, imagem real fixada, cobertura, relatório privado, contexto dedicado e tarefa idempotente. Os 6 testes do arquivo passaram. O laboratório específico de desempenho passou 3/3 em f5f9a9ec, cobrindo defeito e controle, backend ausente e snapshot vazio. Na prova dirigida de interoperabilidade, 29 testes passaram e 1 ficou pulado pela ausência de PostgreSQL 16 nativo; o PostgreSQL 16.2 da imagem foi exercitado pelo laboratório real. O exame com contas e a aplicação viva continuam pendentes.
+- 19/11/2026 02:47 UTC — Trabalhador encerrou C6-R7 em 757eced2 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:47 UTC — Trabalho C5-R4 iniciado por Sol high normal em final-c5.
+- 19/11/2026 02:48 UTC — Revisor encerrou C-BASE-R5 em b4668d56 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:48 UTC — Revisão C-EXAME-PERSISTENCIA iniciada por Sol high normal somente leitura em 6453511c.
+- 19/11/2026 02:48 UTC — Suíte oficial de c2-base-exame em 6453511c: 252 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 02:48 UTC — C6-R7 entregue em 757eced2. A sondagem HTTPS passiva passa a receber o cancelamento desde a primeira requisição e a manter a renovação da reserva. Em andamento a verificação via HTTPS sintético e o laboratório dos detectores.
+- 19/11/2026 02:49 UTC — Testes complementares de c2-base-exame em 6453511c: 52 aprovados.
+- 19/11/2026 02:50 UTC — Validação completa de c2-base-exame em 6453511c: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 02:50 UTC — Revisor encerrou C-EXAME-PERSISTENCIA em 6453511c (código 0). Gerente confere a entrega.
+- 19/11/2026 02:50 UTC — Revisão C8-R4 iniciada por Sol high normal somente leitura em 9c2782fd.
+- 19/11/2026 02:51 UTC — C6 em a2c2a68f passou nos 19 testes do coletor e da sondagem, e a CLI integrada passou nos 5 testes HTTPS locais. A base em 6453511c passou em 252 arquivos da suíte oficial, 52 complementares e no laboratório da QA. Os pareceres independentes abriram novas correções para recuperação de contêiner sem ID e confirmação de achados sem examinador.
+- 19/11/2026 02:54 UTC — Revisor encerrou C8-R4 em 9c2782fd (código 0). Gerente confere a entrega.
+- 19/11/2026 02:54 UTC — Revisão C7-R4 iniciada por Sol high normal somente leitura em 9a7018c4.
+- 19/11/2026 02:55 UTC — C8-R4 retornou com três altos e dois médios sobre a origem das arestas e a interpretação da configuração e de JSDoc. Aberta C8-R5. Na prontidão, o detector passou a usar mensagem constante que o parser comum ainda recusava. Corrigido o contrato estrito e a prova de TLS por arquivo, linha e texto fixo; C6-R7 voltou a passar 6/6 na CLI em 8bff52b5.
