@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import {readdirSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {readFileSync, readdirSync} from 'node:fs';
+import {moduleCollectorArguments, parseModuleCollectorOutput} from '../src/verification-modules.ts';
 import {join} from 'node:path';
 import test from 'node:test';
 // @ts-expect-error Os coletores usam JavaScript nativo.
@@ -126,4 +128,25 @@ test('coletor e driver recusam execução fora do isolamento QA', async () => {
   assert.match(result.coverageRow.detail, /contêiner QA offline/);
   assert.deepEqual(result.extraRows, []);
   assert.deepEqual(result.findings, []);
+});
+
+test('o entrypoint de QA mede a restauração e atribui a regressão ao arquivo de invariante', {
+  skip: process.env.AC_MODULE_LAB !== '1',
+  timeout: 180_000,
+}, () => {
+  const image = readFileSync(join(import.meta.dirname, '../deploy/modules/qa/digest.txt'), 'utf8').trim();
+  for (const variant of ['controle', 'defeito']) {
+    const [runtime, ...args] = moduleCollectorArguments({image, repository: snapshot(variant).workspace});
+    const stdout = execFileSync(runtime!, args, {encoding: 'utf8', timeout: 80_000, maxBuffer: 16 * 1024 * 1024});
+    const report = parseModuleCollectorOutput(stdout, {module: 'qa'});
+    const status = (phase: string) => report.coverage.find(row => row.tool === 'qa-banco-local:' + phase)?.status;
+    for (const phase of ['do-zero-assertiva', 'historico-antes-do-dump', 'historico-dump',
+      'historico-restauracao', 'historico-restaurado', 'atualizacao-migracao-1', 'limpeza']) {
+      assert.equal(status(phase), 'ok', variant + ' ' + phase);
+    }
+    assert.equal(status('historico-atualizado'), variant === 'controle' ? 'ok' : 'failed');
+    const findings = report.findings.filter(finding => finding.tool === 'qa-banco-local');
+    assert.deepEqual(findings.map(finding => [finding.rule, finding.file, finding.line]),
+      variant === 'controle' ? [] : [['QA-BANCO-PGTAP', 'banco/assert.sql', 2]]);
+  }
 });
