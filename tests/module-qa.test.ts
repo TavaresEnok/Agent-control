@@ -1390,6 +1390,10 @@ const goFiles = ['go/go.mod', 'go/arithmetic.go', 'go/arithmetic_test.go'];
 const pythonSelection = selectLanguageSuite('python', pythonFiles, false);
 const goSelection = selectLanguageSuite('go', goFiles, false);
 const goModule = 'example.invalid/qa/arithmetic';
+const goFixtureLocations = new Map([
+  [`${goModule}\0TestControl`, {file: 'go/arithmetic_test.go', line: 5}],
+  [`${goModule}\0TestDefect`, {file: 'go/arithmetic_test.go', line: 11}],
+]);
 const goProfile = `mode: set\n${goModule}/arithmetic.go:3.10,4.15 2 1\n${goModule}/arithmetic.go:4.15,5.15 1 0\n`;
 const pythonReport = {
   tests: [
@@ -1486,7 +1490,7 @@ test('Go conserva a reprovação e o controle por passada e pondera statements s
     {Action: 'fail', Package: goModule},
   ]);
   const result = await measureLanguageSuite('go', goSelection, async () =>
-    decodeGoPass({code: 1, output, diagnostics: ''}, goProfile, goSelection, goModule));
+    decodeGoPass({code: 1, output, diagnostics: ''}, goProfile, goSelection, goModule, goFixtureLocations));
   assert.equal(result.coverageRow.status, 'ok');
   for (let index = 0; index < 3; index++) assert.match(result.extraRows[index].detail, /1 aprovados, 1 reprovados/);
   assert.match(result.extraRows[3].detail, /statements 2\/3/);
@@ -1501,7 +1505,7 @@ test('Go conserva a reprovação e o controle por passada e pondera statements s
 test('Go distingue ausência de casos, erro de compilação, dependência offline e cobertura parcial', async () => {
   const run = (code: number, events: object[], profile: string | null = null, selection = goSelection) =>
     measureLanguageSuite('go', selection, async () =>
-      decodeGoPass({code, output: goEvents(events), diagnostics: ''}, profile, selection, goModule));
+      decodeGoPass({code, output: goEvents(events), diagnostics: ''}, profile, selection, goModule, goFixtureLocations));
   const absent = await run(0, [{Action: 'skip', Package: goModule}], goProfile);
   assert.equal(absent.coverageRow.status, 'skipped');
   assert.match(absent.extraRows[0].detail, /nenhum teste executável/);
