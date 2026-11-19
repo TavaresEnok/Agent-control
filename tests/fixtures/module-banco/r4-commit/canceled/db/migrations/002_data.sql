@@ -1,0 +1,1 @@
+INSERT INTO items VALUES (424242);
