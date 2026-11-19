@@ -75,7 +75,8 @@ const DIGEST = /(?:^|@)sha256:[a-f0-9]{64}$/;
 const MUTABLE_LATEST = /(^|[/:])latest($|@)/i;
 const CONTROL_CHAR = /[\u0000-\u001F\u007F-\u009F]/;
 const MULTILINE_CONTROL_CHAR = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
-const REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/-]+$/u;
+const REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/()[\]-]+$/u;
+const PROTECTED_REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/-]+$/u;
 const LOWER_FORBIDDEN = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 const ACHADO_ID = z.string().regex(/^ACH-\d{3}$/);
 const ACHADO_FILE = /^ACH-\d{3}\.md$/;
@@ -288,7 +289,7 @@ export function assertModuleRepoRelativePath(file: string): string {
 // for a structured readiness secret finding. All parent segments remain strict.
 function protectedLocation(file: string): string {
   if (typeof file !== 'string' || file !== file.trim() || file.includes('\\') || CONTROL_CHAR.test(file)
-    || file.length > 400 || !REPO_PATH.test(file) || file.startsWith('/') || file.startsWith('~')) {
+    || file.length > 400 || !PROTECTED_REPO_PATH.test(file) || file.startsWith('/') || file.startsWith('~')) {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
   const parts = file.split('/');

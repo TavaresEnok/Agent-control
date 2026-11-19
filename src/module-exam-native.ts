@@ -239,7 +239,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
   loadRuntime: () => Promise<ModuleExamRuntime>;
 }): ModuleExamCallback {
   return async ({intentId, snapshot, module, findings, collector, signal}): Promise<ModuleExamResult> => {
-    const map = await mapModuleSnapshot(snapshot, signal);
+    const map = await mapModuleSnapshot(snapshot, signal, {aggregateOmissions: module === 'arquitetura'});
     let runtime: ModuleExamRuntime;
     try { runtime = await input.loadRuntime(); }
     catch { return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'}); }
