@@ -29,7 +29,7 @@ if [ -S /var/run/docker.sock ] || [ -S /run/docker.sock ]; then
   exit 78
 fi
 
-if [ "${PERF_ALLOW_HOMOLOGATION_NETWORK:-0}" != "1" ] || [ -z "${PERF_TARGET_URL:-}" ]; then
+if :; then
   extra=0
   for iface in /sys/class/net/*; do
     base=${iface##*/}

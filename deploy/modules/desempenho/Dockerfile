@@ -15,8 +15,7 @@ RUN apt-get update \
        ca-certificates \
        curl \
        python3 \
-       postgresql \
-       postgresql-contrib \
+       postgresql-16=16.2-1ubuntu4 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY desempenho-tools.lock.json /tmp/desempenho-tools.lock.json

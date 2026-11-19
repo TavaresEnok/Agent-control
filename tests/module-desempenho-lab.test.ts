@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {chmod, mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -86,7 +86,7 @@ test('laboratório real: imagem detecta defeitos plantados na fixture defeituosa
   assert.ok(defectiveOut.coverage.some(c => c.tool.startsWith('pg_stat_statements:consulta:')));
 
   assert.ok(
-    defectiveOut.findings.some(f => f.tool === 'lighthouse-ci' && (f.rule === 'LH-CLS-SHIFT' || f.rule === 'LH-TBT-BLOCKING' || f.rule === 'LH-PERFORMANCE-SCORE')),
+    defectiveOut.findings.some(f => f.tool === 'lighthouse-ci' && (f.rule === 'LH-CLS-SHIFT' || f.rule === 'LH-TBT-BLOCKING') && f.file === 'public/index.html'),
     JSON.stringify(defectiveOut.findings, null, 2),
   );
   assert.ok(
@@ -98,7 +98,7 @@ test('laboratório real: imagem detecta defeitos plantados na fixture defeituosa
     JSON.stringify(defectiveOut.findings, null, 2),
   );
   assert.ok(
-    defectiveOut.findings.some(f => f.tool === 'pg_stat_statements' && (f.rule === 'PG-QUERY-SLOW-MEAN' || f.rule === 'PG-QUERY-SLOW-MAX' || f.rule === 'PG-SEQ-SCAN-COST') && f.file === 'queries/lenta.sql'),
+    defectiveOut.findings.some(f => f.tool === 'pg_stat_statements' && (f.rule === 'PG-QUERY-SLOW-MEAN' || f.rule === 'PG-QUERY-SLOW-MAX') && f.file === 'queries/lenta.sql'),
     JSON.stringify(defectiveOut.findings, null, 2),
   );
 
@@ -112,6 +112,7 @@ test('laboratório real: imagem detecta defeitos plantados na fixture defeituosa
 
   const emptyRepo = await mkdtemp(join(tmpdir(), 'perf-empty-repo-'));
   try {
+    await chmod(emptyRepo, 0o755);
     const emptyOut = runCollectorContainer(image, emptyRepo);
     for (const tool of ['lighthouse-ci', 'k6', 'node-cpu-prof', 'pg_stat_statements']) {
       const row = emptyOut.coverage.find(c => c.tool === tool);

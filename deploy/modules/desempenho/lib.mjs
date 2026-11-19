@@ -131,7 +131,7 @@ export function validateThresholds(raw) {
 function safeRoutePath(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
-  if (!trimmed.startsWith('/') || trimmed.length > 200 || trimmed.includes('..') || trimmed.includes('\\') || /[\s\u0000-\u001f\u007f]/.test(trimmed)) {
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('#') || /[{},]/.test(trimmed) || trimmed.length > 200 || trimmed.includes('..') || trimmed.includes('\\') || /[\s\u0000-\u001f\u007f]/.test(trimmed)) {
     return null;
   }
   return trimmed;
@@ -329,17 +329,17 @@ export function evaluateK6Summary(summary, exitCode, routeTargets, thresholds) {
     const route = target.path;
     const file = normalizeRepoRelativePath(target.file) ?? 'server.mjs';
     const line = normalizePositiveLine(target.line ?? 1);
-    const taggedKey = Object.keys(metrics).find(k => k === `http_req_duration{route:${route}}` || k.startsWith(`http_req_duration{`) && k.includes(`route:${route}`));
-    const durationValues = readK6Values(taggedKey ? metrics[taggedKey] : metrics.http_req_duration);
+    const taggedKey = Object.keys(metrics).find(k => k === `http_req_duration{route:${route}}`);
+    const durationValues = readK6Values(taggedKey ? metrics[taggedKey] : null);
     const p95 = typeof durationValues?.['p(95)'] === 'number' ? durationValues['p(95)'] : null;
     const avg = typeof durationValues?.avg === 'number' ? durationValues.avg : null;
     const max = typeof durationValues?.max === 'number' ? durationValues.max : null;
 
-    const failKey = Object.keys(metrics).find(k => k === `http_req_failed{route:${route}}` || k.startsWith(`http_req_failed{`) && k.includes(`route:${route}`));
-    const failValues = readK6Values(failKey ? metrics[failKey] : metrics.http_req_failed);
+    const failKey = Object.keys(metrics).find(k => k === `http_req_failed{route:${route}}`);
+    const failValues = readK6Values(failKey ? metrics[failKey] : null);
     const failRate = typeof failValues?.rate === 'number'
       ? failValues.rate
-      : (typeof failValues?.value === 'number' ? failValues.value : 0);
+      : (typeof failValues?.value === 'number' ? failValues.value : null);
 
     routeMetrics.push({route, file, line, p95, avg, max, failRate});
 
@@ -354,7 +354,7 @@ export function evaluateK6Summary(summary, exitCode, routeTargets, thresholds) {
         evidence: `rota=${route} p95=${p95.toFixed(1)}ms avg=${avg !== null ? avg.toFixed(1) : 'n/a'}ms max=${max !== null ? max.toFixed(1) : 'n/a'}ms exit=${exitCode}`,
       }));
     }
-    if (failRate > thresholds.k6FailRate) {
+    if (failRate !== null && failRate > thresholds.k6FailRate) {
       findings.push(normalizeFinding({
         tool: 'k6',
         rule: 'K6-THRESHOLD-ERROR-RATE',
@@ -468,14 +468,8 @@ export function normalizeSqlFingerprint(sql) {
 
 function findSqlLocation(queryText, sqlSources) {
   const normQuery = normalizeSqlFingerprint(queryText);
-  const firstTokens = normQuery.split(' ').slice(0, 6).join(' ');
-  for (const src of sqlSources) {
-    const normSrc = normalizeSqlFingerprint(src.sql);
-    if (normSrc === normQuery || (firstTokens.length >= 12 && normSrc.includes(firstTokens))) {
-      return {file: src.file, line: src.line};
-    }
-  }
-  return sqlSources[0] ? {file: sqlSources[0].file, line: sqlSources[0].line} : {file: 'queries.sql', line: 1};
+  const matches = sqlSources.filter(src => normalizeSqlFingerprint(src.sql) === normQuery);
+  return matches.length === 1 ? {file: matches[0].file, line: matches[0].line} : null;
 }
 
 function hasHighCostSeqScan(planNode, minCost) {
@@ -516,7 +510,9 @@ export function evaluatePgStatStatements(rows, explainPlans, sqlSources, thresho
     const maxMs = Number(row?.max_exec_time ?? 0);
     const totalMs = Number(row?.total_exec_time ?? 0);
     const loc = row?.file ? {file: row.file, line: row.line ?? 1} : findSqlLocation(query, sqlSources);
-    const file = normalizeRepoRelativePath(loc.file) ?? 'queries.sql';
+    if (!loc) continue;
+    const file = normalizeRepoRelativePath(loc.file);
+    if (!file) continue;
     const line = normalizePositiveLine(loc.line);
 
     analyzedQueries.push({file, line, calls, meanMs, maxMs, totalMs, query: cleanText(query, '', 160)});

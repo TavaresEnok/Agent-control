@@ -16,14 +16,13 @@ import {
 } from 'node:fs';
 import {createServer} from 'node:net';
 import {basename, dirname, extname, join, relative, sep} from 'node:path';
-import {startStaticServer} from './static-server.mjs';
+import {fileURLToPath} from 'node:url';
 import {
   analyzeCpuProfile,
   DEFAULT_THRESHOLDS,
   evaluateBaselineRegression,
   evaluateK6Summary,
   evaluateLighthouseLhr,
-  evaluatePgStatStatements,
   normalizeCoverageRow,
   normalizeRepoRelativePath,
   validateConfig,
@@ -36,29 +35,31 @@ const MAX_COPY_FILES = 2500;
 const MAX_COPY_BYTES = 10 * 1024 * 1024;
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', '.nuxt', 'coverage', '.lighthouseci']);
 
-function copyRepoSafe(srcDir, dstDir, state = {files: 0}) {
+function copyRepoSafe(srcDir, dstDir, state = {files: 0, omissions: []}) {
   mkdirSync(dstDir, {recursive: true});
   let entries;
   try {
     entries = readdirSync(srcDir, {withFileTypes: true});
   } catch {
-    return;
+    state.omissions.push(`diretório ilegível: ${relative(REPO_ROOT, srcDir) || '.'}`);
+    return state;
   }
   for (const entry of entries) {
-    if (state.files >= MAX_COPY_FILES) break;
+    if (state.files >= MAX_COPY_FILES) { state.omissions.push('limite de 2500 arquivos'); break; }
     if (entry.isSymbolicLink()) continue;
     if (SKIP_DIRS.has(entry.name)) continue;
     const srcPath = join(srcDir, entry.name);
     const dstPath = join(dstDir, entry.name);
-    const info = lstatSync(srcPath);
+    let info;
+    try { info = lstatSync(srcPath); } catch { state.omissions.push(`entrada ilegível: ${relative(REPO_ROOT, srcPath)}`); continue; }
     if (info.isSymbolicLink()) continue;
     if (info.isDirectory()) {
       copyRepoSafe(srcPath, dstPath, state);
     } else if (info.isFile() && info.size <= MAX_COPY_BYTES) {
-      copyFileSync(srcPath, dstPath);
-      state.files += 1;
-    }
+      try { copyFileSync(srcPath, dstPath); state.files += 1; } catch { state.omissions.push(`arquivo ilegível: ${relative(REPO_ROOT, srcPath)}`); }
+    } else if (info.isFile()) { state.omissions.push(`arquivo maior que 10 MiB: ${relative(REPO_ROOT, srcPath)}`); }
   }
+  return state;
 }
 
 function readJsonLimited(filePath, maxBytes = 512 * 1024) {
@@ -225,35 +226,6 @@ async function stopChildGracefully(child) {
   });
 }
 
-function splitSqlStatements(sqlText, file) {
-  const statements = [];
-  const lines = sqlText.split(/\r?\n/);
-  let current = [];
-  let startLine = 1;
-  for (let idx = 0; idx < lines.length; idx += 1) {
-    const rawLine = lines[idx];
-    const trimmed = rawLine.trim();
-    if (current.length === 0 && (trimmed === '' || trimmed.startsWith('--'))) {
-      continue;
-    }
-    if (current.length === 0) startLine = idx + 1;
-    current.push(rawLine);
-    if (trimmed.endsWith(';')) {
-      const joined = current.join('\n').trim();
-      if (joined.length > 1) {
-        statements.push({file, line: startLine, sql: joined.replace(/;\s*$/, '')});
-      }
-      current = [];
-    }
-  }
-  if (current.length > 0) {
-    const joined = current.join('\n').trim();
-    if (joined.length > 0) {
-      statements.push({file, line: startLine, sql: joined});
-    }
-  }
-  return statements;
-}
 
 function discoverStaticWeb(workRoot, config) {
   if (config?.staticDir) {
@@ -382,7 +354,7 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
 
   const lhciDir = '/tmp/lhci';
   mkdirSync(lhciDir, {recursive: true});
-  const urls = routes.map(r => new URL(r.path, origin).href);
+  const urls = routes.map(r => { const url = new URL(r.path, origin); if (url.origin !== origin) throw new Error('origem de rota inválida'); return url.href; });
   const configPath = join(lhciDir, 'lighthouserc.json');
   const rc = {
     ci: {
@@ -452,7 +424,7 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   }
 
   // Também executa `lhci assert` para validar as asserções nativas do Lighthouse CI
-  spawnSync('lhci', ['assert', `--config=${configPath}`], {
+  const assertRes = spawnSync('lhci', ['assert', `--config=${configPath}`], {
     cwd: lhciDir,
     env,
     encoding: 'utf8',
@@ -461,34 +433,32 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   });
 
   for (const fileName of lhrFiles) {
-    const lhr = JSON.parse(readFileSync(join(outDataDir, fileName), 'utf8'));
-    const reqPathname = (() => {
-      try {
-        return new URL(lhr.requestedUrl ?? lhr.finalDisplayedUrl ?? origin).pathname;
-      } catch {
-        return '/';
-      }
-    })();
-    const routeInfo = routes.find(r => r.path === reqPathname) ?? routes[0];
+    let lhr, requested;
+    try {
+      lhr = readJsonLimited(join(outDataDir, fileName), 16 * 1024 * 1024);
+      requested = new URL(lhr.requestedUrl);
+    } catch { continue; }
+    const routeInfo = routes.find(r => requested.href === new URL(r.path, origin).href);
+    if (!routeInfo || requested.origin !== origin || measuredMetrics.some(m => m.route === routeInfo.path)) continue;
+    try { if (new URL(lhr.finalDisplayedUrl ?? lhr.finalUrl).href !== requested.href) continue; } catch { continue; }
     const evaluated = evaluateLighthouseLhr(lhr, routeInfo, thresholds);
-    measuredMetrics.push(evaluated.metrics);
-    findings.push(...evaluated.findings);
-
     const m = evaluated.metrics;
-    extraCoverage.push(normalizeCoverageRow({
-      tool: `lighthouse-ci:rota:${m.route}`,
-      version,
-      status: 'ok',
-      detail: `arquivo=${m.file}; score=${m.score !== null ? (m.score * 100).toFixed(0) : 'n/a'}/100; LCP=${m.lcp !== null ? Math.round(m.lcp) : 'n/a'}ms; CLS=${m.cls !== null ? m.cls.toFixed(3) : 'n/a'}; TBT=${m.tbt !== null ? Math.round(m.tbt) : 'n/a'}ms`,
-    }));
+    if (![m.score, m.lcp, m.cls, m.tbt].every(Number.isFinite)) continue;
+    measuredMetrics.push(m);
+    findings.push(...evaluated.findings);
+  }
+  for (const route of routes) {
+    const m = measuredMetrics.find(item => item.route === route.path);
+    extraCoverage.push(normalizeCoverageRow({tool: `lighthouse-ci:rota:${route.path}`, version,
+      status: m ? 'ok' : 'failed', detail: m ? `arquivo=${m.file}; score=${m.score}; LCP=${m.lcp}ms; CLS=${m.cls}; TBT=${m.tbt}ms` : 'LHR correspondente com métricas completas ausente'}));
   }
 
   return {
     summary: normalizeCoverageRow({
       tool: 'lighthouse-ci',
       version,
-      status: 'ok',
-      detail: `${measuredMetrics.length} tela(s) medida(s) (LCP, CLS, TBT, desempenho); ${findings.length} achado(s)`,
+      status: measuredMetrics.length === routes.length && assertRes.status === 0 ? 'ok' : 'failed',
+      detail: `assert exit=${assertRes.status}; ${measuredMetrics.length} tela(s) medida(s) (LCP, CLS, TBT, desempenho); ${findings.length} achado(s)`,
     }),
     extraCoverage,
     findings,
@@ -521,11 +491,11 @@ function runK6LoadTest({origin, routeTargets, thresholds, version}) {
   const summaryPath = join(k6Dir, 'summary.json');
 
   const routeThresholdLines = {};
-  routeThresholdLines.http_req_failed = [`rate<${thresholds.k6FailRate}`];
-  routeThresholdLines.http_req_duration = [`p(95)<${thresholds.k6P95Ms}`];
+  routeThresholdLines.http_req_failed = [`rate<=${thresholds.k6FailRate}`];
+  routeThresholdLines.http_req_duration = [`p(95)<=${thresholds.k6P95Ms}`];
   for (const r of routeTargets) {
-    routeThresholdLines[`http_req_duration{route:${r.path}}`] = [`p(95)<${thresholds.k6P95Ms}`];
-    routeThresholdLines[`http_req_failed{route:${r.path}}`] = [`rate<${thresholds.k6FailRate}`];
+    routeThresholdLines[`http_req_duration{route:${r.path}}`] = [`p(95)<=${thresholds.k6P95Ms}`];
+    routeThresholdLines[`http_req_failed{route:${r.path}}`] = [`rate<=${thresholds.k6FailRate}`];
   }
 
   const script = `import http from 'k6/http';
@@ -533,7 +503,8 @@ import { check } from 'k6';
 
 export const options = {
   vus: 2,
-  iterations: ${Math.max(12, routeTargets.length * 6)},
+  iterations: 2,
+  maxDuration: '45s',
   thresholds: ${JSON.stringify(routeThresholdLines)},
 };
 
@@ -542,7 +513,7 @@ const ROUTES = ${JSON.stringify(routeTargets.map(r => r.path))};
 
 export default function () {
   for (const route of ROUTES) {
-    const res = http.get(ORIGIN + route, { tags: { route } });
+    const res = http.get(ORIGIN + route, { tags: { route }, timeout: '1s', redirects: 0 });
     check(res, { 'status < 500': (r) => r.status < 500 });
   }
 }
@@ -585,8 +556,8 @@ export default function () {
     extraCoverage.push(normalizeCoverageRow({
       tool: `k6:rota:${rm.route}`,
       version,
-      status: 'ok',
-      detail: `arquivo=${rm.file}; p95=${rm.p95 !== null ? rm.p95.toFixed(1) : 'n/a'}ms; avg=${rm.avg !== null ? rm.avg.toFixed(1) : 'n/a'}ms; max=${rm.max !== null ? rm.max.toFixed(1) : 'n/a'}ms; falhas=${(rm.failRate * 100).toFixed(2)}%`,
+      status: rm.p95 !== null && rm.failRate !== null ? 'ok' : 'failed',
+      detail: `arquivo=${rm.file}; p95=${rm.p95 !== null ? rm.p95.toFixed(1) : 'n/a'}ms; avg=${rm.avg !== null ? rm.avg.toFixed(1) : 'n/a'}ms; max=${rm.max !== null ? rm.max.toFixed(1) : 'n/a'}ms; falhas=${rm.failRate === null ? 'n/a' : (rm.failRate * 100).toFixed(2) + '%'}`,
     }));
   }
 
@@ -594,7 +565,7 @@ export default function () {
     summary: normalizeCoverageRow({
       tool: 'k6',
       version,
-      status: 'ok',
+      status: routeMetrics.every(r => r.p95 !== null && r.failRate !== null) ? 'ok' : 'failed',
       detail: `${routeMetrics.length} rota(s) testada(s) com limites (p95<${thresholds.k6P95Ms}ms, falhas<${(thresholds.k6FailRate * 100).toFixed(1)}%); ${findings.length} achado(s)`,
     }),
     extraCoverage,
@@ -729,256 +700,32 @@ function runCpuProfiling({cpuProfDir, workRoot, config, thresholds, version}) {
   };
 }
 
-async function runPgStatStatements({workRoot, sqlInfo, pgBinDir, thresholds, version}) {
+async function runPgStatStatements({workRoot, sqlInfo, version}) {
   const extraCoverage = [];
-  const findings = [];
-  const analyzedQueries = [];
-
-  const hasLiveSql = sqlInfo.migrations.length > 0 || sqlInfo.queries.length > 0;
-  if (!hasLiveSql && !sqlInfo.snapshotFile) {
-    return {
-      summary: normalizeCoverageRow({
-        tool: 'pg_stat_statements',
-        version,
-        status: 'skipped',
-        detail: 'Nenhuma migração SQL, consulta ou snapshot pg_stat_statements encontrado no repositório',
-      }),
-      extraCoverage,
-      findings,
-      analyzedQueries,
-    };
-  }
-
-  const sqlSources = [];
-  const rowsToEvaluate = [];
-  const explainPlans = [];
-
   if (sqlInfo.snapshotFile) {
     try {
-      const snap = readJsonLimited(join(workRoot, sqlInfo.snapshotFile), 5 * 1024 * 1024);
-      const list = Array.isArray(snap) ? snap : (Array.isArray(snap.rows) ? snap.rows : []);
-      for (const item of list) rowsToEvaluate.push(item);
-      extraCoverage.push(normalizeCoverageRow({
-        tool: `pg_stat_statements:snapshot:${sqlInfo.snapshotFile}`,
-        version,
-        status: 'ok',
-        detail: `${list.length} registro(s) carregado(s) do snapshot`,
-      }));
+      const snapshot = readJsonLimited(join(workRoot, sqlInfo.snapshotFile), 5 * 1024 * 1024);
+      const rows = Array.isArray(snapshot) ? snapshot : snapshot?.rows;
+      if (!Array.isArray(rows)) throw new Error('snapshot deve conter array de registros');
+      extraCoverage.push(normalizeCoverageRow({tool: `pg_stat_statements:snapshot:${sqlInfo.snapshotFile}`, version, status: 'skipped', detail: `${rows.length} registro(s) externos, sem proveniência de medição local`}));
     } catch (error) {
-      return {
-        summary: normalizeCoverageRow({
-          tool: 'pg_stat_statements',
-          version,
-          status: 'failed',
-          detail: `Falha ao ler snapshot ${sqlInfo.snapshotFile}: ${error instanceof Error ? error.message : 'erro'}`,
-        }),
-        extraCoverage,
-        findings,
-        analyzedQueries,
-      };
+      extraCoverage.push(normalizeCoverageRow({tool: `pg_stat_statements:snapshot:${sqlInfo.snapshotFile}`, version, status: 'failed', detail: `Snapshot inválido: ${error instanceof Error ? error.message : String(error)}`}));
     }
   }
-
-  let migrationsApplied = 0;
-  let migrationsFailed = 0;
-  let queriesExecuted = 0;
-
-  if (hasLiveSql) {
-    if (!pgBinDir) {
-      return {
-        summary: normalizeCoverageRow({
-          tool: 'pg_stat_statements',
-          version,
-          status: 'failed',
-          detail: 'Binários PostgreSQL não encontrados em /usr/lib/postgresql/*/bin',
-        }),
-        extraCoverage,
-        findings,
-        analyzedQueries,
-      };
-    }
-
-    const pgData = '/tmp/pgdata';
-    const pgSock = '/tmp/pgsock';
-    mkdirSync(pgSock, {recursive: true});
-    const pgPort = await allocatePort();
-
-    const initRes = spawnSync(
-      join(pgBinDir, 'initdb'),
-      ['-D', pgData, '-U', 'postgres', '--encoding=UTF8', '--locale=C.UTF-8', '--auth=trust', '--nosync'],
-      {encoding: 'utf8', timeout: 30_000},
-    );
-    if (initRes.status !== 0) {
-      return {
-        summary: normalizeCoverageRow({
-          tool: 'pg_stat_statements',
-          version,
-          status: 'failed',
-          detail: `initdb falhou: ${(initRes.stderr || initRes.stdout || '').trim().slice(0, 260)}`,
-        }),
-        extraCoverage,
-        findings,
-        analyzedQueries,
-      };
-    }
-
-    const confAppend = [
-      "listen_addresses = '127.0.0.1'",
-      `port = ${pgPort}`,
-      `unix_socket_directories = '${pgSock}'`,
-      "shared_preload_libraries = 'pg_stat_statements'",
-      "pg_stat_statements.track = 'all'",
-      'track_io_timing = on',
-      'shared_buffers = 16MB',
-      'dynamic_shared_memory_type = mmap',
-      'max_connections = 20',
-      'fsync = off',
-    ].join('\n');
-    writeFileSync(join(pgData, 'postgresql.conf'), `${readFileSync(join(pgData, 'postgresql.conf'), 'utf8')}\n${confAppend}\n`);
-
-    const startRes = spawnSync(
-      join(pgBinDir, 'pg_ctl'),
-      ['-D', pgData, '-l', '/tmp/pg.log', 'start', '-w'],
-      {encoding: 'utf8', timeout: 30_000},
-    );
-    if (startRes.status !== 0) {
-      const logTail = existsSync('/tmp/pg.log') ? readFileSync('/tmp/pg.log', 'utf8').slice(-300) : '';
-      return {
-        summary: normalizeCoverageRow({
-          tool: 'pg_stat_statements',
-          version,
-          status: 'failed',
-          detail: `pg_ctl start falhou: ${(startRes.stderr || logTail).trim().slice(0, 260)}`,
-        }),
-        extraCoverage,
-        findings,
-        analyzedQueries,
-      };
-    }
-
-    const pgMod = await import('pg');
-    const Client = pgMod.default?.Client ?? pgMod.Client;
-    const client = new Client({host: '127.0.0.1', port: pgPort, user: 'postgres', database: 'postgres'});
-    try {
-      await client.connect();
-      await client.query('CREATE EXTENSION IF NOT EXISTS pg_stat_statements');
-
-      for (const migRel of sqlInfo.migrations) {
-        const sqlText = readFileSync(join(workRoot, migRel), 'utf8');
-        try {
-          await client.query(sqlText);
-          migrationsApplied += 1;
-          extraCoverage.push(normalizeCoverageRow({
-            tool: `pg_stat_statements:migracao:${migRel}`,
-            version,
-            status: 'ok',
-            detail: 'migração aplicada com sucesso no PostgreSQL isolado',
-          }));
-        } catch (err) {
-          migrationsFailed += 1;
-          extraCoverage.push(normalizeCoverageRow({
-            tool: `pg_stat_statements:migracao:${migRel}`,
-            version,
-            status: 'skipped',
-            detail: `migração não aplicada: ${err instanceof Error ? err.message.slice(0, 180) : 'erro'}`,
-          }));
-        }
-      }
-
-      const parsedStatements = [];
-      for (const qRel of sqlInfo.queries) {
-        const sqlText = readFileSync(join(workRoot, qRel), 'utf8');
-        const statements = splitSqlStatements(sqlText, qRel);
-        for (const stmt of statements) {
-          sqlSources.push(stmt);
-          parsedStatements.push(stmt);
-          const upper = stmt.sql.trim().toUpperCase();
-          if (upper.startsWith('SELECT') || upper.startsWith('WITH')) {
-            try {
-              const expRes = await client.query(`EXPLAIN (FORMAT JSON) ${stmt.sql}`);
-              const plan = expRes.rows?.[0]?.['QUERY PLAN']?.[0];
-              if (plan) explainPlans.push({file: stmt.file, line: stmt.line, plan});
-            } catch {
-              /* erro de execução será tratado abaixo */
-            }
-          }
-        }
-      }
-
-      await client.query('SELECT pg_stat_statements_reset()');
-
-      for (const stmt of parsedStatements) {
-        const upper = stmt.sql.trim().toUpperCase();
-        const isSelect = upper.startsWith('SELECT') || upper.startsWith('WITH');
-        try {
-          for (let i = 0; i < 5; i += 1) {
-            if (isSelect) {
-              await client.query(stmt.sql);
-            } else {
-              await client.query('BEGIN');
-              await client.query(stmt.sql);
-              await client.query('ROLLBACK');
-            }
-          }
-          queriesExecuted += 1;
-        } catch (err) {
-          extraCoverage.push(normalizeCoverageRow({
-            tool: `pg_stat_statements:consulta:${stmt.file}:${stmt.line}`,
-            version,
-            status: 'skipped',
-            detail: `erro ao executar consulta: ${err instanceof Error ? err.message.slice(0, 180) : 'erro'}`,
-          }));
-        }
-      }
-
-      const statsRes = await client.query(`
-        SELECT query, calls, total_exec_time, mean_exec_time, max_exec_time, rows,
-               shared_blks_hit, shared_blks_read, temp_blks_written
-        FROM pg_stat_statements
-        WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
-        ORDER BY mean_exec_time DESC
-        LIMIT 100
-      `);
-      for (const row of statsRes.rows) {
-        rowsToEvaluate.push(row);
-      }
-    } finally {
-      await client.end().catch(() => undefined);
-      spawnSync(join(pgBinDir, 'pg_ctl'), ['-D', pgData, 'stop', '-m', 'fast'], {encoding: 'utf8', timeout: 10_000});
-    }
-  }
-
-  const evaluated = evaluatePgStatStatements(rowsToEvaluate, explainPlans, sqlSources, thresholds);
-  findings.push(...evaluated.findings);
-  analyzedQueries.push(...evaluated.analyzedQueries);
-
-  for (const aq of evaluated.analyzedQueries) {
-    extraCoverage.push(normalizeCoverageRow({
-      tool: `pg_stat_statements:consulta:${aq.file}:${aq.line}`,
-      version,
-      status: 'ok',
-      detail: `calls=${aq.calls}; mean=${aq.meanMs.toFixed(2)}ms; max=${aq.maxMs.toFixed(2)}ms; total=${aq.totalMs.toFixed(2)}ms`,
-    }));
-  }
-
+  const hasSql = sqlInfo.migrations.length || sqlInfo.queries.length;
   return {
-    summary: normalizeCoverageRow({
-      tool: 'pg_stat_statements',
-      version,
-      status: 'ok',
-      detail: `${migrationsApplied} migração(ões) aplicada(s) (${migrationsFailed} pulada(s)); ${queriesExecuted} consulta(s) executada(s); ${evaluated.analyzedQueries.length} estatística(s) analisada(s); ${findings.length} achado(s)`,
-    }),
-    extraCoverage,
-    findings,
-    analyzedQueries,
+    summary: normalizeCoverageRow({tool: 'pg_stat_statements', version, status: extraCoverage.some(row => row.status === 'failed') ? 'failed' : 'skipped',
+      detail: hasSql ? 'SQL não executado: PostgreSQL compartilha UID e privilégios com o coletor; isolamento de evidências indisponível' : 'Nenhuma medição SQL local disponível'}),
+    extraCoverage, findings: [], analyzedQueries: [],
   };
 }
 
+const retained = {coverage: [], findings: []};
 async function main() {
   if (!existsSync(REPO_ROOT)) {
     throw new Error('Diretório /repo ausente');
   }
-  copyRepoSafe(REPO_ROOT, WORK_ROOT);
+  const copyState = copyRepoSafe(REPO_ROOT, WORK_ROOT);
 
   let config = null;
   const configPath = join(WORK_ROOT, 'desempenho.config.json');
@@ -996,6 +743,7 @@ async function main() {
   let origin = null;
   let webRoutes = [];
   let httpRouteTargets = [];
+  const unmappedRoutes = [];
   let serverStartFailure = null;
 
   const cpuProfDir = '/tmp/cpuprof';
@@ -1003,64 +751,20 @@ async function main() {
 
   try {
     if (config?.server) {
-      const port = await allocatePort();
-      const entryAbs = join(WORK_ROOT, config.server.entry);
-      if (!existsSync(entryAbs)) {
-        serverStartFailure = `Entrypoint de servidor ausente: ${config.server.entry}`;
-      } else {
-        const serverArgs = config.server.cpuProfile
-          ? ['--cpu-prof', `--cpu-prof-dir=${cpuProfDir}`, '--cpu-prof-interval=1000', entryAbs]
-          : [entryAbs];
-        serverChild = spawn(process.execPath, serverArgs, {
-          cwd: WORK_ROOT,
-          env: {
-            PATH: process.env.PATH,
-            HOME: '/tmp',
-            TMPDIR: '/tmp',
-            NODE_ENV: 'test',
-            HOST: '127.0.0.1',
-            [config.server.portEnv]: String(port),
-          },
-          stdio: ['ignore', 'ignore', 'pipe'],
-        });
-        let serverStderr = '';
-        serverChild.stderr?.on('data', chunk => {
-          if (serverStderr.length < 1000) serverStderr += String(chunk);
-        });
-        const candidateOrigin = `http://127.0.0.1:${port}`;
-        const ready = await waitForHttpReady(`${candidateOrigin}${config.server.readyPath}`, 10_000);
-        if (!ready) {
-          serverStartFailure = `Servidor ${config.server.entry} não respondeu em ${config.server.readyPath}: ${serverStderr.trim().slice(0, 200)}`;
-          await stopChildGracefully(serverChild);
-          serverChild = null;
-        } else {
-          origin = candidateOrigin;
-          const declaredRoutes = config.routes.length > 0
-            ? config.routes
-            : config.server.routes.map(p => ({path: p, file: config.server.entry}));
-          httpRouteTargets = declaredRoutes.map(r => ({
-            path: r.path,
-            file: r.file ?? config.server.entry,
-            line: 1,
-          }));
-          // Para Lighthouse CI, prioriza rotas HTML declaradas ou '/'
-          const htmlCandidates = declaredRoutes.filter(r => !r.path.startsWith('/api/'));
-          webRoutes = htmlCandidates.length > 0 ? htmlCandidates : [{path: '/', file: config.server.entry}];
-        }
-      }
+      serverStartFailure = 'Servidor do repositório não executado: UID compartilhado permite alterar evidências';
     } else if (process.env.PERF_TARGET_URL) {
-      const parsedUrl = new URL(process.env.PERF_TARGET_URL);
-      origin = parsedUrl.origin;
-      const declared = config?.routes?.length ? config.routes : [{path: parsedUrl.pathname || '/', file: 'desempenho.config.json'}];
-      webRoutes = declared;
-      httpRouteTargets = declared.map(r => ({path: r.path, file: r.file ?? 'desempenho.config.json', line: 1}));
+      serverStartFailure = 'Alvo externo não permitido nesta coleta local';
     } else {
       const staticWeb = discoverStaticWeb(WORK_ROOT, config);
       if (staticWeb) {
-        staticServer = await startStaticServer(staticWeb.rootDir);
-        origin = staticServer.origin;
+        staticServer = spawn(process.execPath, [fileURLToPath(new URL('./static-server.mjs', import.meta.url)), staticWeb.rootDir], {stdio: ['ignore', 'pipe', 'ignore']});
+        origin = await new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error('servidor estático não iniciou')), 5000);
+          staticServer.stdout.once('data', data => { clearTimeout(timer); resolve(String(data).trim()); });
+          staticServer.once('exit', () => { clearTimeout(timer); reject(new Error('servidor estático terminou')); });
+        });
         webRoutes = config?.routes?.length
-          ? config.routes.map(r => ({path: r.path, file: r.file ?? staticWeb.routes[0]?.file ?? 'index.html'}))
+          ? config.routes.map(r => ({path: r.path, file: r.file ?? staticWeb.routes.find(candidate => candidate.path === new URL(r.path, origin).pathname)?.file})).filter(r => { if (!r.file) { unmappedRoutes.push(r.path); return false; } return true; })
           : staticWeb.routes;
         httpRouteTargets = webRoutes.map(r => ({path: r.path, file: r.file ?? 'index.html', line: 1}));
       }
@@ -1074,6 +778,8 @@ async function main() {
       version: versions.lhci,
     });
 
+    retained.coverage.push(lhResult.summary, ...lhResult.extraCoverage);
+    retained.findings.push(...lhResult.findings);
     const k6Result = runK6LoadTest({
       origin,
       routeTargets: httpRouteTargets,
@@ -1081,13 +787,16 @@ async function main() {
       version: versions.k6,
     });
 
+    retained.coverage.push(k6Result.summary, ...k6Result.extraCoverage);
+    retained.findings.push(...k6Result.findings);
+
     // Encerra o servidor antes de analisar o .cpuprofile para garantir flush completo do V8.
     if (serverChild) {
       await stopChildGracefully(serverChild);
       serverChild = null;
     }
     if (staticServer) {
-      await staticServer.close();
+      await stopChildGracefully(staticServer);
       staticServer = null;
     }
 
@@ -1103,6 +812,8 @@ async function main() {
         extraCoverage: [],
         findings: [],
       };
+    } else if (config?.cpuWorkloads?.length || existsSync(join(WORK_ROOT, 'perf')) || existsSync(join(WORK_ROOT, 'benchmarks'))) {
+      cpuResult = {summary: normalizeCoverageRow({tool: 'node-cpu-prof', version: versions.node, status: 'skipped', detail: 'Workloads não executados: UID compartilhado permite alterar evidências'}), extraCoverage: [], findings: []};
     } else {
       cpuResult = runCpuProfiling({
         cpuProfDir,
@@ -1113,6 +824,8 @@ async function main() {
       });
     }
 
+    retained.coverage.push(cpuResult.summary, ...cpuResult.extraCoverage);
+    retained.findings.push(...cpuResult.findings);
     const sqlInfo = discoverSqlFiles(WORK_ROOT, config);
     const pgResult = await runPgStatStatements({
       workRoot: WORK_ROOT,
@@ -1122,6 +835,8 @@ async function main() {
       version: versions.pg,
     });
 
+    retained.coverage.push(pgResult.summary, ...pgResult.extraCoverage);
+    retained.findings.push(...pgResult.findings);
     const allFindings = [
       ...lhResult.findings,
       ...k6Result.findings,
@@ -1133,27 +848,26 @@ async function main() {
       ? join(WORK_ROOT, config.baselineFile)
       : (existsSync(join(WORK_ROOT, 'desempenho.baseline.json')) ? join(WORK_ROOT, 'desempenho.baseline.json') : null);
     const extraBaselineCoverage = [];
-    if (baselinePath && existsSync(baselinePath)) {
-      const baseline = readJsonLimited(baselinePath, 2 * 1024 * 1024);
-      const regressions = evaluateBaselineRegression(
-        {
-          lighthouse: lhResult.measuredMetrics,
-          k6Routes: k6Result.routeMetrics,
-          sqlQueries: pgResult.analyzedQueries,
-        },
-        baseline,
-        thresholds,
-      );
-      allFindings.push(...regressions);
-      extraBaselineCoverage.push(normalizeCoverageRow({
-        tool: `baseline:${normalizeRepoRelativePath(baselinePath) ?? 'desempenho.baseline.json'}`,
-        version: '1.0',
-        status: 'ok',
-        detail: `comparação com baseline executada; ${regressions.length} regressão(ões) detectada(s)`,
-      }));
+    if (baselinePath) {
+      const baselineName = config?.baselineFile ?? 'desempenho.baseline.json';
+      try {
+        const baseline = readJsonLimited(baselinePath, 2 * 1024 * 1024);
+        if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) throw new Error('baseline inválido');
+        const current = {lighthouse: lhResult.measuredMetrics, k6Routes: k6Result.routeMetrics, sqlQueries: pgResult.analyzedQueries};
+        const pairs = (current.k6Routes || []).filter(c => Number.isFinite(c.p95) && baseline.k6Routes?.some(b => b.route === c.route && Number.isFinite(b.p95) && b.p95 > 0)).length
+          + (current.lighthouse || []).filter(c => Number.isFinite(c.lcp) && baseline.lighthouse?.some(b => b.route === c.route && b.formFactor === c.formFactor && Number.isFinite(b.lcp) && b.lcp > 0)).length
+          + (current.sqlQueries || []).filter(c => Number.isFinite(c.meanMs) && baseline.sqlQueries?.some(b => b.file === c.file && b.line === c.line && Number.isFinite(b.meanMs) && b.meanMs > 0)).length;
+        const regressions = evaluateBaselineRegression(current, baseline, thresholds);
+        allFindings.push(...regressions);
+        extraBaselineCoverage.push(normalizeCoverageRow({tool: `baseline:${baselineName}`, version: '1.0', status: pairs ? 'ok' : 'skipped', detail: `${pairs} par(es) comparáveis; ${regressions.length} regressão(ões); comparação limitada aos pares presentes e valores anteriores positivos`}));
+      } catch (error) {
+        extraBaselineCoverage.push(normalizeCoverageRow({tool: `baseline:${baselineName}`, version: '1.0', status: 'failed', detail: `Baseline indisponível ou inválido: ${error instanceof Error ? error.message : String(error)}`}));
+      }
     }
 
     const coverage = [
+      normalizeCoverageRow({tool: 'copia-repositorio', version: '1', status: copyState.omissions.length ? 'failed' : 'ok', detail: `${copyState.files} arquivo(s); limites: 2500 arquivos, 10 MiB por arquivo; exclusões: .git, dependências, builds e symlinks; ${copyState.omissions.slice(0, 4).join('; ') || 'sem omissões adicionais'}`}),
+      ...unmappedRoutes.map(route => normalizeCoverageRow({tool: `rota:${route}`, version: '1', status: 'skipped', detail: 'Arquivo da rota não identificado; informe routes[].file'})),
       lhResult.summary,
       ...lhResult.extraCoverage,
       k6Result.summary,
@@ -1169,11 +883,11 @@ async function main() {
     process.stdout.write(`${JSON.stringify(validated)}\n`);
   } finally {
     if (serverChild) await stopChildGracefully(serverChild);
-    if (staticServer) await staticServer.close().catch(() => undefined);
+    if (staticServer) await stopChildGracefully(staticServer);
   }
 }
 
 main().catch(error => {
-  process.stderr.write(`PERF_COLLECTOR_FATAL: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
+  retained.coverage.push(normalizeCoverageRow({tool: 'coletor', version: '1', status: 'failed', detail: error instanceof Error ? error.message : String(error)}));
+  process.stdout.write(`${JSON.stringify(validateModuleOutput(retained))}\n`);
 });

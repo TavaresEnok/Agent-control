@@ -128,3 +128,10 @@ export async function startStaticServer(rootDir) {
     close: () => new Promise(resolveClose => server.close(() => resolveClose())),
   };
 }
+
+// CLI separado: o processo do coletor pode aguardar ferramentas síncronas sem bloquear HTTP.
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
+  const server = await startStaticServer(process.argv[2]);
+  process.stdout.write(`${server.origin}\n`);
+  process.on('SIGTERM', async () => { await server.close(); process.exit(0); });
+}

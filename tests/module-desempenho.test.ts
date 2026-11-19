@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {spawn, spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -43,7 +45,7 @@ type LibModule = {
     routeTargets: {path: string; file?: string; line?: number}[],
     thresholds: Record<string, number>,
   ) => {
-    routeMetrics: {route: string; file: string; line: number; p95: number | null; avg: number | null; max: number | null; failRate: number}[];
+    routeMetrics: {route: string; file: string; line: number; p95: number | null; avg: number | null; max: number | null; failRate: number | null}[];
     findings: Finding[];
   };
   analyzeCpuProfile: (profileJson: unknown, workRoot: string, thresholds: Record<string, number>) => {
@@ -267,7 +269,7 @@ test('avaliadores de Lighthouse, k6, node --cpu-prof e pg_stat_statements detect
     [
       {file: 'queries/lenta.sql', line: 1, plan: {Plan: {'Node Type': 'Seq Scan', 'Relation Name': 'pedidos_audit', 'Total Cost': 1420, 'Actual Rows': 2941}}},
     ],
-    [{file: 'queries/lenta.sql', line: 1, sql: "SELECT count(*), max(md5(observacao)) FROM pedidos_audit WHERE observacao LIKE '%urgente%'"}],
+    [{file: 'queries/lenta.sql', line: 1, sql: 'SELECT count(*), max(md5(observacao)) FROM pedidos_audit WHERE observacao LIKE $1'}],
     thresholds,
   );
   assert.equal(pgBad.analyzedQueries.length, 1);
@@ -277,7 +279,7 @@ test('avaliadores de Lighthouse, k6, node --cpu-prof e pg_stat_statements detect
   const pgClean = lib.evaluatePgStatStatements(
     [{query: 'SELECT id, codigo, valor FROM pedidos_audit WHERE codigo = $1 LIMIT $2', calls: 5, mean_exec_time: 0.4, max_exec_time: 0.7, total_exec_time: 2.0}],
     [{file: 'queries/rapida.sql', line: 1, plan: {Plan: {'Node Type': 'Index Scan', 'Relation Name': 'pedidos_audit', 'Total Cost': 8.4, 'Actual Rows': 1}}}],
-    [{file: 'queries/rapida.sql', line: 1, sql: "SELECT id, codigo, valor FROM pedidos_audit WHERE codigo = 'COD-00042' LIMIT 1"}],
+    [{file: 'queries/rapida.sql', line: 1, sql: 'SELECT id, codigo, valor FROM pedidos_audit WHERE codigo = $1 LIMIT $2'}],
     thresholds,
   );
   assert.equal(pgClean.findings.length, 0);
@@ -345,4 +347,56 @@ test('fixtures defeituosa e controle limpo têm configuração válida e simétr
   )));
   assert.deepEqual(defectiveCfg.thresholds, cleanCfg.thresholds);
   assert.deepEqual(defectiveCfg.routes, cleanCfg.routes);
+});
+
+
+test('rotas e séries exigem correspondência exata e limites incluem a igualdade', async () => {
+  const lib = await import(libUrl) as LibModule;
+  const cfg = lib.validateConfig({routes: ['//outra-origem/a', '/pagina?modo=mobile', '/']});
+  assert.deepEqual(cfg.routes.map(r => r.path), ['/pagina?modo=mobile', '/']);
+  const targets = [{path: '/', file: 'index.html'}, {path: '/produtos', file: 'produtos.html'}, {path: '/pagina?modo=mobile', file: 'pagina.html'}];
+  const thresholds = {...lib.DEFAULT_THRESHOLDS, k6P95Ms: 100, k6FailRate: 0};
+  const result = lib.evaluateK6Summary({metrics: {
+    'http_req_duration{route:/produtos}': {values: {'p(95)': 101}},
+    'http_req_failed{route:/produtos}': {values: {rate: 0}},
+    'http_req_duration{route:/pagina?modo=mobile}': {values: {'p(95)': 100}},
+    'http_req_failed{route:/pagina?modo=mobile}': {values: {rate: 0}},
+    http_req_duration: {values: {'p(95)': 10}}, http_req_failed: {values: {rate: 0}},
+  }}, 0, targets, thresholds);
+  assert.equal(result.routeMetrics[0]?.p95, null);
+  assert.equal(result.routeMetrics[0]?.failRate, null);
+  assert.equal(result.routeMetrics[1]?.p95, 101);
+  assert.equal(result.routeMetrics[2]?.p95, 100);
+  assert.deepEqual(result.findings.map(f => f.file), ['produtos.html']);
+});
+
+test('estatísticas SQL sem origem exata e única não recebem arquivo arbitrário', async () => {
+  const lib = await import(libUrl) as LibModule;
+  const rows = [{query: 'select a, b, c, d, e, f from segunda', calls: 5, mean_exec_time: 100, max_exec_time: 100, total_exec_time: 500}];
+  const sources = [
+    {file: 'primeira.sql', line: 1, sql: 'select a, b, c, d, e, f from primeira'},
+    {file: 'segunda.sql', line: 3, sql: 'select a, b, c, d, e, f from segunda'},
+  ];
+  assert.equal(lib.evaluatePgStatStatements(rows, [], sources, lib.DEFAULT_THRESHOLDS).findings[0]?.file, 'segunda.sql');
+  assert.equal(lib.evaluatePgStatStatements(rows, [], sources.slice(0, 1), lib.DEFAULT_THRESHOLDS).findings.length, 0);
+  assert.equal(lib.evaluatePgStatStatements(rows, [], [...sources, sources[1]!], lib.DEFAULT_THRESHOLDS).findings.length, 0);
+});
+
+
+test('servidor estático responde enquanto o coletor aguarda processo síncrono', async () => {
+  const script = fileURLToPath(new URL('../deploy/modules/desempenho/static-server.mjs', import.meta.url));
+  const fixture = fileURLToPath(new URL('./fixtures/module-desempenho/clean/public/', import.meta.url));
+  const child = spawn(process.execPath, [script, fixture], {stdio: ['ignore', 'pipe', 'pipe']});
+  try {
+    const origin = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('servidor não iniciou')), 5000);
+      child.stdout.once('data', data => { clearTimeout(timer); resolve(String(data).trim()); });
+      child.once('exit', () => { clearTimeout(timer); reject(new Error('servidor terminou')); });
+    });
+    const request = spawnSync(process.execPath, ['-e', 'fetch(process.argv[1]).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))', origin], {timeout: 5000});
+    assert.equal(request.status, 0, String(request.stderr));
+  } finally {
+    child.kill('SIGTERM');
+    await new Promise<void>(resolve => child.once('exit', () => resolve()));
+  }
 });
