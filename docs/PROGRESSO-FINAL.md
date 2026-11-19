@@ -951,3 +951,6 @@ PAUSADO-COTA
 - 19/11/2026 19:07 UTC — revisor-C9-ACEITE-CONTRATO-FISICO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 19:07 UTC — C9-ACEITE-CONTRATO-FISICO encerrado com código 1.
 - 19/11/2026 19:08 UTC — O primeiro envio da revisão C9 incluiu por engano o histórico cumulativo de outros módulos e a CLI recusou a entrada por tamanho, antes do parecer. Reenviei o contrato com o diff exclusivo dos quatro arquivos do módulo em 8cfc03d5.
+- 19/11/2026 19:08 UTC — revisor-C9-ACEITE-CONTRATO-RESTRITO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:09 UTC — C9-ACEITE-CONTRATO-RESTRITO encerrado com código 0.
+- 19/11/2026 19:10 UTC — O parecer conjunto C9 confirmou os casos literais e o contrato da lacuna. A nova rodada verifica a regra geral de junção lógica e a presença das ferramentas aplicáveis. A fixture sem manifesto deve registrar a ausência de aplicabilidade de ORT e da política npm, além do sucesso real de ScanCode e Presidio.
