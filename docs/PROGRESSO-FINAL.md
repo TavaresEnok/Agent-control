@@ -1303,3 +1303,9 @@ PAUSADO-COTA
 - 19/11/2026 22:33 UTC — Laboratório físico de personal:documentacao aprovado em c2a38c1a, com imagem fixada e PostgreSQL descartável.
 - 19/11/2026 22:33 UTC — documentacao em c2a38c1a publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 333, 'failed': 0, 'skipped': 62}; código do produto OK.
 - 19/11/2026 22:34 UTC — Separa validade do wrapper e identidade do comando medido. Ordem C-PRONTIDAO-VIVA-R8 em worktree separado conforme 43f1c664.
+- 19/11/2026 22:34 UTC — trabalho-C-PRONTIDAO-VIVA-R8 iniciado em final-pront-viva por terra high.
+- 19/11/2026 22:34 UTC — C-ACEITE-CONFORMIDADE-VIVA-R5 encerrado com código 0.
+- 19/11/2026 22:34 UTC — revisor-C-ACEITE-DOCUMENTACAO-VIVA-R5 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:35 UTC — Imagem de conformidade construída e arquivada por digest em 3e66f954.
+- 19/11/2026 22:35 UTC — C-ACEITE-DOCUMENTACAO-VIVA-R5 encerrado com código 0.
+- 19/11/2026 22:35 UTC — Mantém a proteção de nomes opacos com separadores no coletor. Ordem C-CONFORMIDADE-VIVA-R6 em worktree separado conforme 43f1c664.
