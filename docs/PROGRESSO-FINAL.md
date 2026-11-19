@@ -633,3 +633,8 @@ PAUSADO-COTA
 - 19/11/2026 16:58 UTC — C8-R9 encerrado com código 0.
 - 19/11/2026 16:58 UTC — C3-R10 encerrado com código 0.
 - 19/11/2026 16:59 UTC — Banco 99817b08 passou 6/6 após a revisão do limiar arredondado e da unicidade. O QA já mede a execução poliglota, a mutação, o navegador e os contratos nominais; abertas as provas complementares de migrações num banco descartável e de recuperação de latência em homologação local.
+- 19/11/2026 16:59 UTC — trabalho-C2-BANCO-LOCAL iniciado em final-qa-banco-local por Sol medium normal.
+- 19/11/2026 17:00 UTC — QA em 0ce813a1: 96/96 no laboratório da matriz, com a CLI e sem pulos. Digest conferido e fixado. A prova de linguagens da nova rodada será feita sobre esta base.
+- 19/11/2026 17:00 UTC — Homologação de a correção do escopo Python e Go preparada no worktree final-integracao-c2 em a46061b8.
+- 19/11/2026 17:00 UTC — Homologação de a atribuição de falhas das migrações preparada no worktree final-aceite-c5-r7 em 840a02a6.
+- 19/11/2026 17:00 UTC — Homologação de a reconciliação do desempenho preparada no worktree final-integracao-c7 em beca2aca.
