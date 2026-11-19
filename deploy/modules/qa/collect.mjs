@@ -865,15 +865,21 @@ const completedAssertions = test => everyPass(test?.assertionStatuses, status =>
 const identifier = /^[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*$/u;
 const codeSpan = /^`([^`]+)`(?!`)/;
 const fileQualifier = /^\s+(?:de|from)\s+(?=`)/i;
-const referenceSeparator = /^(?:\s*,\s*(?:(?:e|and|além de|bem como|as well as)\s+)?|\s+(?:e|and|além de|bem como|as well as)\s+)(?=`)/i;
-const clauseBoundary = /;|[.!?](?=\s|$)|(?:,\s*(?:(?:e|mas|ou)\s+)?|\s+(?:e|mas|ou)\s+)(?=(?:calcular|conferir|retornar?|devolver?)\b)/i;
-const expectedBefore = /\b(?:saídas?|resultados?|valores?|textos?)\s+esperad[oa]s?\b|\b(?:retornar?|devolver?)(?:\s+(?:o\s+(?:texto|valor|resultado)|a\s+saída))?$/i;
-const expectedAfter = /^\s+(?:é|são)\s+(?:(?:[oa]s?|um|uma|dois|duas)\s+)*(?:saídas?|resultados?|valores?|textos?)\s+esperad[oa]s?\b/i;
-const roleQualifier = /^\s*,?\s*como\b/i;
-const returnPredicate = /^\s+(?:retorna|devolve)\b/i;
-const operationWith = /^(?:calcular|conferir)\s+com$/i;
-const parenthesizedOperation = /^(?:calcular|conferir)\b/i;
-const takesComplement = /(?:^|\s)(?:a|com|de|em|para|por|sobre)$/i;
+const listConjunction = /(?:e|and|além de|bem como|as well as)/.source;
+const referenceSeparator = new RegExp('^(?:\\s*,\\s*(?:' + listConjunction + '\\s+)?|\\s+' + listConjunction + '\\s+)(?=`)', 'i');
+const operationStart = String.raw`(?:deve-se\s+)?(?:calcular|conferir)`;
+const operationObject = String.raw`(?:\s+(?:o|a|os|as)\s+[^\x60()[\],;.!?]+?)?`;
+const operationWith = new RegExp('^' + operationStart + operationObject + String.raw`\s+com\s+(?=[\x60(])`, 'i');
+const operationInParens = new RegExp('^' + operationStart + String.raw`(?:\s+(?:o|a|os|as)\s+[\p{L}\p{M}-]+)?\s*(?=\()`, 'iu');
+const operationAnnotation = /^(?:operação(?:\s+[\p{L}\p{M}-]+)?|cálculo)\s+(?=\()/iu;
+const operationCount = /^em\s+(?:\d+|duas)\s+operações$/i;
+const returnStart = /^(?:retornar?|devolver?)\s+/i;
+const returnPredicate = /^\s+(?:retorna|devolve)\s+/i;
+const returnValue = /^(?:[^`()[\]]*\s+)?`[^`]+`$/;
+const qualifiedSubject = /^`[^`]+`\s+(?:de|from)\s+`[^`]+`\s+(?:retorna|devolve)\s+/i;
+const clauseConjunction = '(?:' + listConjunction + '|mas|ou)';
+const clauseTokens = new RegExp(/`[^`]*`|[()[\]]|;|[.!?](?=\s|$)/.source +
+  '|,\\s*(?:' + clauseConjunction + '\\s+)?|\\s+' + clauseConjunction + '\\s+', 'gi');
 
 function readTargetList(text) {
   const targets = [];
@@ -898,40 +904,83 @@ function readTargetList(text) {
   }
 }
 
-function requirementTargets(body) {
-  const spans = /`[^`]+`(?!`)/g;
-  // A pontuação dentro de símbolos e caminhos não delimita orações.
-  const prose = body.replace(spans, span => '_'.repeat(span.length));
-  const references = [];
-  let ambiguousQualified = false;
-  for (let span; (span = spans.exec(body));) {
-    const {targets, rest} = readTargetList(body.slice(span.index));
-    spans.lastIndex = body.length - rest.length;
-    if (span.index === 0 && /^[.!?]?$/.test(rest.trim())) return {kind: 'symbols', targets};
-    if (!targets.some(target => target.source !== undefined)) continue;
-    const prefix = prose.slice(0, span.index).split(clauseBoundary).at(-1).trim();
-    const suffix = prose.slice(spans.lastIndex);
-    const parenthesized = prefix.endsWith('(') && /^\s*\)/.test(suffix);
-    const before = parenthesized ? prefix.slice(0, -1).trimEnd() : prefix;
-    const after = parenthesized ? suffix.replace(/^\s*\)/, '') : suffix;
-    const endsClause = !after.split(clauseBoundary, 1)[0].trim();
-    const direct = !before && (endsClause || returnPredicate.test(after));
-    const explicitOperation = operationWith.test(before) || (parenthesized && parenthesizedOperation.test(before));
-    const annotation = parenthesized && endsClause && !takesComplement.test(before);
-    // Um papel declarado no contexto prevalece sobre os marcadores de referência.
-    if (expectedBefore.test(before) || expectedAfter.test(after) || roleQualifier.test(after) ||
-        !(direct || explicitOperation || annotation)) {
-      ambiguousQualified = true;
+function* requirementClauses(body) {
+  const brackets = [];
+  let start = 0;
+  for (const {0: token, index} of body.matchAll(clauseTokens)) {
+    if (token.startsWith('`')) continue;
+    if (token === '(' || token === '[') {
+      brackets.push(token);
       continue;
     }
-    references.push(...targets.map(target => target.source === undefined ? {ambiguous: true} : target));
+    if (token === ')' || token === ']') {
+      if (brackets.at(-1) === (token === ')' ? '(' : '[')) brackets.pop();
+      continue;
+    }
+    if (brackets.length) continue;
+    const end = index + token.length;
+    if (!/^[;.!?]$/.test(token)) {
+      const next = body.slice(end);
+      const startsClause = operationWith.test(next) || operationInParens.test(next) ||
+        operationAnnotation.test(next) || returnStart.test(next) || qualifiedSubject.test(next);
+      if (!startsClause) continue;
+    }
+    yield body.slice(start, index).trim();
+    start = end;
   }
-  if (references.length) {
-    if (ambiguousQualified) references.push({ambiguous: true});
-    return {kind: 'symbols', targets: references};
+  yield body.slice(start).trim();
+}
+
+function operationTargets(clause) {
+  const withMarker = operationWith.exec(clause);
+  const inParens = withMarker ? null : operationInParens.exec(clause);
+  const marker = withMarker ?? inParens ?? operationAnnotation.exec(clause);
+  if (!marker) return;
+  const operand = clause.slice(marker[0].length);
+  const parenthesized = operand.startsWith('(');
+  const list = parenthesized ? operand.slice(1).trimStart() : operand;
+  if (!codeSpan.test(list)) return;
+  const {targets, rest} = readTargetList(list);
+  const tail = rest.trim();
+  if (parenthesized) {
+    if (!tail.startsWith(')')) return;
+    const suffix = tail.slice(1).trim();
+    if (suffix && !(inParens && operationCount.test(suffix))) return;
+  } else if (tail) return;
+  return targets.map(target => target.source === undefined ? {ambiguous: true} : target);
+}
+
+function requirementTargets(body) {
+  const references = [];
+  let first = true;
+  for (const clause of requirementClauses(body)) {
+    const declared = first;
+    first = false;
+    if (!clause.includes('`')) continue;
+    const returnMarker = returnStart.exec(clause);
+    if (returnMarker && returnValue.test(clause.slice(returnMarker[0].length))) continue;
+    const operation = operationTargets(clause);
+    if (operation) {
+      references.push(...operation);
+      continue;
+    }
+    if (codeSpan.test(clause)) {
+      const {targets, rest} = readTargetList(clause);
+      if (declared && !rest.trim()) {
+        references.push(...targets);
+        continue;
+      }
+      const predicate = returnPredicate.exec(rest);
+      if (predicate && targets.length === 1 && targets[0].source !== undefined) {
+        references.push(targets[0]);
+        const value = rest.slice(predicate[0].length);
+        if (value.includes('`') && !returnValue.test(value)) references.push({ambiguous: true});
+        continue;
+      }
+    }
+    references.push({ambiguous: true});
   }
-  const ambiguous = ambiguousQualified || body.startsWith('`') || /\(\s*`/.test(body);
-  return {kind: ambiguous ? 'ambiguous' : 'title'};
+  return references.length ? {kind: 'symbols', targets: references} : {kind: 'title'};
 }
 
 function displayTarget({name, source}) {
@@ -1029,7 +1078,6 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
         return {status: evaluateTarget(feature.matches, feature, ref.source !== undefined),
           label: `${feature.name} (${displayPath(feature.file)}:${feature.line})`};
       });
-      if (requirement.kind === 'ambiguous') outcomes.push({status: 'ambiguous'});
       const linked = resolved.flatMap(target => target.functions);
       const matches = byTitle ? titled : linked.flatMap(fn => [...fn.matches, ...fn.limited]);
       const missing = outcomes.filter(outcome => outcome.status === 'missing');

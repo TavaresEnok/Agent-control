@@ -19,7 +19,7 @@ function snapshot(name = 'controle') {
   return {workspace, copiedFiles, incomplete: false};
 }
 
-function syntheticDatabase(options: {fail?: string, changed?: boolean} = {}) {
+function syntheticDatabase(options: {fail?: string, changed?: boolean, unconfirmedScope?: string} = {}) {
   const events: string[] = [];
   const command = async (event: string) => {
     events.push(event);
@@ -41,6 +41,7 @@ function syntheticDatabase(options: {fail?: string, changed?: boolean} = {}) {
     async assert(db: string, predicate: string) {
       assert.match(predicate, db === 'fresh' ? /information_schema\.columns/ : /dado-sintetico/);
       await command(`${db}:assert`);
+      if (options.unconfirmedScope === db) return 'scope-unconfirmed';
       const changed = options.changed && db === 'upgraded' && events.includes('upgraded:tail');
       return parseTap(`1..1\n${changed ? 'not ok' : 'ok'} 1 - invariante funcional\n`);
     },
@@ -80,6 +81,19 @@ test('defeito em dados históricos aparece somente após a migração final', as
     [{name: 'historico-atualizado', status: 'failed', detail: 'banco/assert.sql; pgTAP reprovou 1/1'}]);
   assert.deepEqual(report.findings.map(({rule, file, line}: {rule: string, file: string, line: number}) => [rule, file, line]),
     [['QA-BANCO-PGTAP', 'banco/assert.sql', 2]]);
+});
+
+test('escopo efetivo inconclusivo omite a cobertura sem registrar reprovação pgTAP', async () => {
+  const driver = syntheticDatabase({unconfirmedScope: 'previous'});
+  const report = await measureBancoPlan(planBancoLocal(snapshot()), driver);
+  assert.deepEqual(driver.events.slice(-2), ['previous:assert', 'stop']);
+  assert.deepEqual(report.steps.filter(({status}: {status: string}) => status === 'skipped'), [
+    {name: 'historico-antes-do-dump', status: 'skipped',
+      detail: 'banco/assert.sql; cobertura inconclusiva por falta de confirmação do escopo dos privilégios efetivos'},
+    {name: 'historico-atualizado', status: 'skipped', detail: 'pré-requisito da atualização histórica interrompido'},
+  ]);
+  assert.ok(report.steps.every(({status}: {status: string}) => status !== 'failed'));
+  assert.deepEqual(report.findings, []);
 });
 
 test('explica entradas ausentes e mantém a prova do zero independente', async () => {
@@ -155,6 +169,13 @@ test('só encaminha ao pgTAP um booleano escalar validado na sessão de leitura'
           assert.match(commands[4]!, /SELECT result_types::pg_catalog\.oid\[\] FROM pg_catalog\.pg_prepared_statements/);
           assert.deepEqual(commands.slice(5), ['EXECUTE qa_scalar', 'ROLLBACK']);
           return scalar;
+        } else if (commands[0] === 'BEGIN READ ONLY') {
+          phases.push('scope');
+          assert.equal(user, 'qa_admin');
+          assert.ok(commands[2]!.includes(`has_schema_privilege('${reader}'::regrole::oid, c.relnamespace, 'USAGE')`));
+          assert.match(commands[2]!, /has_any_column_privilege/);
+          assert.ok(commands.every(sql => !sql.includes(predicate)));
+          return 't\n';
         } else {
           phases.push('revoke');
           assert.equal(user, 'qa_admin');
@@ -174,12 +195,33 @@ test('só encaminha ao pgTAP um booleano escalar validado na sessão de leitura'
       return `1..1\n${expected === 'passed' ? 'ok' : 'not ok'} 1 - invariante funcional\n`;
     };
     assert.equal(await attestPostgres(psql, 'fresh', predicate), expected);
-    assert.deepEqual(phases, expected === 'invalid' ? ['grant', 'read', 'revoke'] : ['grant', 'read', 'revoke', 'tap']);
+    const order = ['grant', 'scope', 'read', 'revoke'];
+    assert.deepEqual(phases, expected === 'invalid' ? order : [...order, 'tap']);
   }
 
-  const incompleteTap = async (db: string, _commands: string[], user: string) =>
-    user.startsWith('qa_reader_') ? '{16}\nt\n' : db === 'qa_attestation' ? '1..1\n' : '';
+  const incompleteTap = async (db: string, commands: string[], user: string) =>
+    user.startsWith('qa_reader_') ? '{16}\nt\n' : db === 'qa_attestation' ? '1..1\n' :
+      commands[0] === 'BEGIN READ ONLY' ? 't\n' : '';
   assert.equal(await attestPostgres(incompleteTap, 'fresh', predicate), 'invalid');
+});
+
+test('omite preparação, execução e pgTAP quando a verificação de privilégios não confirma o escopo', async () => {
+  for (const result of ['f\n', '', new Error('verificação interrompida')]) {
+    const phases: string[] = [];
+    const psql = async (db: string, commands: string[], user: string) => {
+      assert.equal(db, 'fresh');
+      assert.equal(user, 'qa_admin');
+      if (commands[0] === 'BEGIN READ ONLY') {
+        phases.push('scope');
+        if (result instanceof Error) throw result;
+        return result;
+      }
+      phases.push(commands.some(sql => sql.includes('DROP ROLE')) ? 'revoke' : 'grant');
+      return '';
+    };
+    assert.equal(await attestPostgres(psql, 'fresh', 'SELECT TRUE'), 'scope-unconfirmed');
+    assert.deepEqual(phases, ['grant', 'scope', 'revoke']);
+  }
 });
 
 test('revoga o escopo de leitura quando a execução da assertiva falha', async () => {
@@ -190,10 +232,14 @@ test('revoga o escopo de leitura quando a execução da assertiva falha', async 
       phases.push('read');
       throw new Error('leitura interrompida');
     }
+    if (commands[0] === 'BEGIN READ ONLY') {
+      phases.push('scope');
+      return 't\n';
+    }
     phases.push(commands.some(sql => sql.includes('DROP ROLE')) ? 'revoke' : 'grant');
     return '';
   }, 'fresh', 'SELECT TRUE'), /leitura interrompida/);
-  assert.deepEqual(phases, ['grant', 'read', 'revoke']);
+  assert.deepEqual(phases, ['grant', 'scope', 'read', 'revoke']);
 });
 
 const testPgBin = process.env.QA_BANCO_TEST_PG_BIN;
@@ -249,6 +295,8 @@ test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados po
            AND c.relowner = 'qa_project'::regrole AND c.relkind IN ('r', 'p', 'v', 'm')
            THEN coalesce(c.relacl, acldefault('r', c.relowner)) ELSE c.relacl END
        FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace ORDER BY 1, 2`,
+      `SELECT attrelid::regclass, attnum, attacl FROM pg_catalog.pg_attribute
+       WHERE attacl IS NOT NULL ORDER BY 1, 2`,
       'SELECT datname, datacl FROM pg_catalog.pg_database ORDER BY 1',
       "SELECT rolname FROM pg_catalog.pg_roles WHERE rolname LIKE 'qa\\_reader\\_%' ORDER BY 1",
     ], 'qa_admin');
@@ -296,6 +344,49 @@ test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados po
       assert.equal(await acl(), originalAcl);
     }
 
+    async function checkPublicAcl(relation: string, privileges: string, expected: 'passed' | 'scope-unconfirmed') {
+      const before = await acl();
+      const calls: string[] = [];
+      let observed: {metadata: string, scope: string} | undefined;
+      const checkedPsql = async (db: string, commands: string[], user: string) => {
+        if (db === 'qa_attestation') calls.push('tap');
+        else if (user.startsWith('qa_reader_')) calls.push('read');
+        else if (commands[0] === 'BEGIN READ ONLY') {
+          calls.push('scope');
+          const reader = /'(qa_reader_[a-f0-9]{24})'::regrole/.exec(commands.join('\n'))![1]!;
+          const metadata = await psql(db, [
+            `SELECT has_schema_privilege('${reader}', relnamespace, 'USAGE'),
+               has_table_privilege('${reader}', oid, 'SELECT'),
+               has_column_privilege('${reader}', oid, 'id', 'SELECT')
+             FROM pg_catalog.pg_class WHERE oid = '${relation}'::regclass`,
+            `SELECT has_database_privilege('${reader}', 'qa_attestation', 'CONNECT')`,
+          ], 'qa_admin');
+          const scope = await psql(db, commands, user);
+          observed = {metadata, scope};
+          return scope;
+        }
+        return psql(db, commands, user);
+      };
+      assert.equal(await attestPostgres(checkedPsql, 'fresh', 'SELECT TRUE'), expected);
+      assert.deepEqual(observed, {metadata: `${privileges}\nf\n`, scope: expected === 'passed' ? 't\n' : 'f\n'});
+      assert.deepEqual(calls, expected === 'passed' ? ['scope', 'read', 'tap'] : ['scope']);
+      assert.equal(await acl(), before);
+    }
+
+    await psql('fresh', ['GRANT SELECT ON TABLE public.tabela_admin TO PUBLIC'], 'qa_admin');
+    await checkPublicAcl('public.tabela_admin', 't|t|t', 'scope-unconfirmed');
+    await psql('fresh', ['REVOKE SELECT ON TABLE public.tabela_admin FROM PUBLIC'], 'qa_admin');
+
+    await psql('fresh', ['GRANT SELECT (id) ON TABLE qa_interno.tabela_projeto TO PUBLIC'], 'qa_admin');
+    await checkPublicAcl('qa_interno.tabela_projeto', 'f|f|t', 'passed');
+    await psql('fresh', ['GRANT USAGE ON SCHEMA qa_interno TO PUBLIC'], 'qa_admin');
+    await checkPublicAcl('qa_interno.tabela_projeto', 't|f|t', 'scope-unconfirmed');
+    await psql('fresh', [
+      'REVOKE SELECT (id) ON TABLE qa_interno.tabela_projeto FROM PUBLIC',
+      'REVOKE USAGE ON SCHEMA qa_interno FROM PUBLIC',
+    ], 'qa_admin');
+    const postPublicAcl = await acl();
+
     const dump = join(directory, 'previous.dump');
     const projectConnection = ['--host', directory, '--port', '5432', '--username', 'qa_project', '--no-password'];
     await psql('previous', [plan.migrations[0].sql, plan.history.seed], 'qa_project');
@@ -306,7 +397,7 @@ test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados po
     assert.equal(await attestPostgres(psql, 'upgraded', plan.history.invariant.sql), 'passed');
     await psql('upgraded', [plan.migrations[1].sql], 'qa_project');
     assert.equal(await attestPostgres(psql, 'upgraded', plan.history.invariant.sql), 'passed');
-    assert.equal(await acl(), originalAcl);
+    assert.equal(await acl(), postPublicAcl);
   } finally {
     try {
       if (existsSync(join(data, 'postmaster.pid'))) run('pg_ctl', ['-D', data, '-m', 'fast', '-w', '-t', '8', 'stop']);

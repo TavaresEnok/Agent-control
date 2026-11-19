@@ -725,15 +725,6 @@ module Banco
       sql.byteslice(statement.stmt_location, length).strip
     end
 
-    def corroborates_internal_statement?(frame, sql, statements, selected)
-      return true if frame.sql.strip == sql.strip
-      return false unless frame.statements.one?
-
-      text = statement_text(sql, selected)
-      text == statement_text(frame.sql, frame.statements.first) &&
-        statements.count { |entry| statement_text(sql, entry) == text } == 1
-    end
-
     # Essas assinaturas podem vir de outras instruções. Sem cursor, aceite
     # apenas comandos cujos vizinhos não possam produzir o mesmo diagnóstico.
     def constraint_resolution_candidates(statements, signature)
@@ -748,87 +739,92 @@ module Banco
       competing ? [] : matches
     end
 
-    def inline_constraint_resolution?(frames, signature)
-      query, caller, *outer = frames
-      return false unless caller == :inline_sql && query.is_a?(Array) &&
-        !constraint_resolution_candidates(query, signature).empty?
-
-      # Um DO pode executar outro DO por EXECUTE. Uma rotina nomeada na
-      # pilha pode ser um gatilho, inclusive se ela própria executar SET.
-      outer.each_slice(2).all? do |body, frame|
-        frame == :inline_sql && body.is_a?(Array) && body.one? && body.first.stmt.do_stmt
-      end
-    end
-
     def migration_error_location(error, source, statements)
       diagnostic = error.result
       frames = context_frames(diagnostic.error_field(PG::Result::PG_DIAG_CONTEXT))
-      position = diagnostic_position(diagnostic.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION))
+      raw_position = diagnostic.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION)
+      position = diagnostic_position(raw_position)
       cursor_line = source.sql[0, position - 1].count("\n") + 1 if position&.between?(1, source.sql.length + 1)
       cursor_evidence = "; cursor do servidor na linha #{cursor_line}" if cursor_line
-      # SPI pode fornecer o SQL mais interno e seu cursor em campos próprios.
-      # Só o cursor pode selecionar um comando dentro dessa consulta.
+      cursor_statement = statement_at_cursor(source.sql, statements, position)
+      executing = cursor_statement || (statements.first if statements.one?)
+      signature = [sqlstate(error), diagnostic.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION)]
+
       internal_query = diagnostic.error_field(PG::Result::PG_DIAG_INTERNAL_QUERY)
       raw_internal_position = diagnostic.error_field(PG::Result::PG_DIAG_INTERNAL_POSITION)
       internal_statements = internal_query ? parsed_context_query(internal_query) : []
       internal_statement = statement_at_cursor(internal_query, internal_statements, diagnostic_position(raw_internal_position)) if internal_query
+      internal_present = internal_query || raw_internal_position
+      sql_frames = frames&.grep(SqlFrame) || []
+      textual = sql_frames.first if sql_frames.one?
+      textual_statement = textual.statements.first if textual&.statements&.one?
 
-      cursor_statement = statement_at_cursor(source.sql, statements, position)
-      inline = frames && %i[inline_sql inline].include?(frames.last)
-      textual = frames&.find { |frame| frame.is_a?(SqlFrame) }
-      internal_conflict = internal_statement && textual &&
-        !corroborates_internal_statement?(textual, internal_query, internal_statements, internal_statement)
-      cursor_conflict = inline && cursor_line && !cursor_statement&.stmt&.do_stmt
+      candidates = executing ? [executing] : statements
+      blocks = candidates.select { |entry| entry.stmt.do_stmt }
+      inline = !blocks.empty? || (frames && %i[inline_sql inline].include?(frames.last))
+      if !frames || !frames.empty? || internal_present || inline
+        internal_verified = internal_statement && internal_statements.one?
+        internal_conflict = internal_verified && sql_frames.any? do |frame|
+          frame.statements.one? &&
+            statement_text(frame.sql, frame.statements.first) != statement_text(internal_query, internal_statement)
+        end
+        internal_consistent = !internal_present || (internal_verified && !internal_conflict)
 
-      if !frames || internal_conflict || cursor_conflict || ((internal_query || raw_internal_position) && !internal_statement)
+        # Somente o quadro imediato de um único bloco pode demonstrar a
+        # resolução direta. Um cursor externo localiza o bloco, cujo corpo é
+        # um literal para o parser SQL, sem localizar a instrução interna.
+        inline_stack = frames == [:inline_sql] || (textual_statement && frames == [textual, :inline_sql])
+        inner = internal_statement || textual_statement
+        if inline_stack && blocks.one? && !raw_position && internal_consistent &&
+            constraint_resolution?(inner&.stmt&.constraints_set_stmt, signature)
+          return direct_error_location(source, blocks.first, nil)
+        end
+
         evidence = []
         evidence << UNDECIDABLE_CONTEXT unless frames
-        evidence << "consulta ou posição interna diverge do quadro textual de SQL" if internal_conflict
-        evidence << "cursor externo sem correspondência com o bloco inline" if cursor_conflict
-        if internal_query || raw_internal_position
-          query_status = internal_query ? "presente" : "ausente"
-          position_status = if internal_statement
-            "identificou uma instrução na consulta interna"
-          elsif raw_internal_position
-            "presente, sem instrução identificável"
-          else
-            "ausente"
+        evidence << "pilha com vários quadros de SQL" if sql_frames.size > 1
+        evidence << "quadro de SQL sem instrução única verificável" if sql_frames.any? { |frame| !frame.statements.one? }
+
+        if internal_present
+          if !internal_verified
+            query_status = internal_query ? "presente" : "ausente"
+            position_status = if internal_statement
+              "selecionou uma instrução entre várias na consulta interna"
+            elsif raw_internal_position
+              "presente, sem instrução identificável"
+            else
+              "ausente"
+            end
+            evidence << "diagnóstico interno parcial (consulta interna #{query_status}; posição interna #{position_status})"
+          elsif internal_conflict
+            evidence << "consulta ou posição interna diverge do quadro textual de SQL"
           end
-          evidence << "diagnóstico interno parcial (consulta interna #{query_status}; posição interna #{position_status})"
         end
-        possible_statements = internal_statement ? [internal_statement] : internal_statements
-        possible_statements += frames.grep(SqlFrame).flat_map(&:statements) if frames
-        if possible_statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
+
+        if inline && raw_position
+          evidence << if cursor_statement&.stmt&.do_stmt
+            "cursor externo identifica o bloco inline; posição do comando interno sem correspondência verificável"
+          else
+            "cursor externo sem correspondência com o bloco inline"
+          end
+        elsif raw_position && !cursor_statement
+          evidence << "cursor externo sem instrução verificável"
+        end
+
+        evidence << "origem do comando interno inconclusiva" if evidence.empty?
+        possible_statements = internal_statements + sql_frames.flat_map(&:statements)
+        if textual_statement&.stmt&.constraints_set_stmt&.deferred == false && internal_consistent
+          evidence << "detecção em SET CONSTRAINTS chamado pelo arquivo"
+        elsif possible_statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
           evidence << POSSIBLE_CONSTRAINT_CHECK
         end
         return ["cobertura parcial da origem; #{evidence.join('; ')}#{cursor_evidence}", nil, nil, true]
       end
-      frames.map! do |frame|
-        if frame.is_a?(SqlFrame)
-          frame.equal?(textual) && internal_statement ? [internal_statement] : frame.statements
-        else
-          frame
-        end
-      end
-      frames.unshift([internal_statement]) if internal_statement && frames.first == :inline_sql
 
-      signature = [sqlstate(error), diagnostic.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION)]
-      executing = cursor_statement
-      executing ||= statements.first if statements.one?
-      candidates = executing ? [executing] : statements
-
-      blocks = inline ? candidates.select { |entry| entry.stmt.do_stmt } : []
-      block = blocks.first if blocks.one?
-      if !blocks.empty? && inline_constraint_resolution?(frames, signature)
-        return direct_error_location(source, block, cursor_line)
-      end
-
-      if frames.empty? && !internal_query
-        resolutions = constraint_resolution_candidates(candidates, signature)
-        unless resolutions.empty?
-          resolution = resolutions.first if resolutions.one?
-          return direct_error_location(source, resolution, cursor_line)
-        end
+      resolutions = constraint_resolution_candidates(candidates, signature)
+      unless resolutions.empty?
+        resolution = resolutions.first if resolutions.one?
+        return direct_error_location(source, resolution, cursor_statement && cursor_line)
       end
 
       if executing&.stmt&.constraints_set_stmt&.deferred == false
@@ -836,18 +832,11 @@ module Banco
         return ["detecção em SET CONSTRAINTS IMMEDIATE na linha #{start_line} (início da instrução)#{cursor_evidence}"]
       end
 
-      queries = frames.grep(Array)
-      if queries.any? { |query| query.one? && query.first.stmt.constraints_set_stmt&.deferred == false }
-        return ["detecção em SET CONSTRAINTS chamado pelo arquivo#{cursor_evidence || '; posição externa indisponível'}"]
-      end
-
-      if queries.flatten(1).any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false } ||
-          internal_statement&.stmt&.constraints_set_stmt&.deferred == false ||
-          (!executing && blocks.empty? && statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false })
+      if !executing && statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
         return ["#{POSSIBLE_CONSTRAINT_CHECK}#{cursor_evidence}"]
       end
 
-      direct_error_location(source, block || executing, cursor_line)
+      direct_error_location(source, executing, cursor_statement && cursor_line)
     end
 
     def direct_error_location(source, statement, cursor_line)
