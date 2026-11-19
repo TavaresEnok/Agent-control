@@ -17,7 +17,11 @@ TOKEN = re.compile(
 IDENTIFIER = re.compile(r"[A-Z_][A-Z_0-9]*", re.ASCII)
 UPDATE_END = {"WHERE", "RETURNING", "ORDER", "LIMIT", "FROM"}
 INSERT_END = {"RETURNING", "ON"}
-READ_ONLY = {"SELECT", "VALUES", "SHOW", "EXPLAIN"}
+READ_ONLY = {"SELECT", "VALUES", "SHOW"}
+EXPLAIN_STATEMENTS = {"SELECT", "INSERT", "UPDATE", "DELETE", "MERGE", "VALUES", "EXECUTE",
+                      "DECLARE", "CREATE", "WITH"}
+EXPLAIN_BOOLS = {"ANALYZE", "VERBOSE", "COSTS", "SETTINGS", "GENERIC_PLAN", "BUFFERS",
+                 "WAL", "TIMING", "SUMMARY", "MEMORY", "IO"}
 
 
 class Unmeasured(ValueError):
@@ -157,8 +161,48 @@ def cte(parts):
     return rest, parts[1], {name: [row[index] for row in rows] for index, name in enumerate(names)}
 
 
+def explain(parts):
+    execute = False
+    if parts[:1] == ["("]:
+        options, parts = group(parts)
+        seen = set()
+        for option, _ in segments(options, {","}):
+            if not option:
+                raise Unmeasured
+            name, *value = option
+            if name == "ANALYSE":
+                name = "ANALYZE"
+            if name in seen:
+                raise Unmeasured
+            seen.add(name)
+            if name in EXPLAIN_BOOLS:
+                if value and (len(value) != 1 or value[0] not in {"TRUE", "ON", "1", "FALSE", "OFF", "0"}):
+                    raise Unmeasured
+                if name == "ANALYZE":
+                    execute = not value or value[0] in {"TRUE", "ON", "1"}
+            elif name == "FORMAT" and len(value) == 1 and value[0] in {"TEXT", "XML", "JSON", "YAML"}:
+                continue
+            elif name == "SERIALIZE" and (not value or (len(value) == 1 and value[0] in {"NONE", "TEXT", "BINARY"})):
+                continue
+            else:
+                raise Unmeasured
+    else:
+        if parts and parts[0] in {"ANALYZE", "ANALYSE"}:
+            execute = True
+            parts = parts[1:]
+        if parts[:1] == ["VERBOSE"]:
+            parts = parts[1:]
+    if not parts or parts[0] not in EXPLAIN_STATEMENTS:
+        raise Unmeasured
+    return parts if execute else None
+
+
 def stored_parameters(command):
     statement = tokens(command)
+    if statement[0] == "EXPLAIN":
+        statement = explain(statement[1:])
+        if statement is None:
+            return set()
     name = columns = None
     if statement[:1] == ["WITH"]:
         statement, name, columns = cte(statement)
