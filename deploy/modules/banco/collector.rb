@@ -789,7 +789,10 @@ module Banco
         after.fetch(key).to_i - before.fetch(key, "0").to_i
       end
       evidence = format("queryid=%d; amostras=%d; média=%.3f ms; blocos hit/read=%d/%d", identifier, calls, mean, *blocks)
-      @report.cover("pg_stat_statements", "ok", "pg_stat_statements:query:#{source.path}: linha #{line}; #{evidence}", files: [source.path])
+      measured_sql = Digest::SHA256.hexdigest(source.sql)
+      @report.cover("pg_stat_statements", "ok",
+                    "pg_stat_statements:query:#{source.path}: linha #{line}; #{evidence} | SQL medido (sha256:#{measured_sql})",
+                    files: [source.path])
       if mean >= SLOW_MS
         @report.find("pg_stat_statements", "BANCO-CONSULTA-LENTA", source, "media",
           "A consulta atingiu a média de #{SLOW_MS} ms na carga ensaiada.", evidence, line: line)

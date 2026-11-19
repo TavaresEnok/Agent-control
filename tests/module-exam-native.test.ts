@@ -527,10 +527,14 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         const originalHead = await commitSource('synthetic untested total', source('42'));
         const uncovered = {...opaqueFinding, file: sourceFile, rule: FUNCTION_COVERAGE_RULE, severity: 'alta' as const,
           message: "Função exportada 'total' sem execução medida pelo V8"};
-        const recordCoverage = async (findings: ModuleCollectorOutput['findings'] = [], version = v8Coverage.version) => {
-          const [id] = await runPersonalQaCli([installation, project], {collectorOutput: {
+        const image = `sha256:${'b'.repeat(64)}`;
+        const recordCoverage = async (findings: ModuleCollectorOutput['findings'] = [], version = v8Coverage.version,
+          pin = image, partial = false) => {
+          const pass = findings.length ? 'ramos 0/0, funções 1/2' : 'ramos 0/0, funções 2/2';
+          const [id] = await runPersonalQaCli([installation, project], {image: pin, collectorOutput: {
             coverage: [{...v8Coverage, version, detail: 'Medição sintética da ferramenta'},
-              {tool: `qa-arquivo:${sourceFile}`, status: 'ok', version, detail: 'Arquivo medido na fixture'}],
+              {tool: `qa-arquivo:${sourceFile}`, status: 'ok', version,
+                detail: `V8 em três passadas: ${pass}; ${pass}; ${partial ? 'arquivo sem medição' : pass}`}],
             findings,
           }});
           assert.ok(id);
@@ -577,11 +581,18 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         await expectPending('MODULE_RECHECK_CORRECTED_TEST_FAILED');
 
         const correctedHead = await commitSource('synthetic correction with moved target', moved);
+        await recordCoverage([], v8Coverage.version, `sha256:${'c'.repeat(64)}`);
+        await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
+        await recordCoverage([], v8Coverage.version, image, true);
+        await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
         await recordCoverage([], 'other-version');
         await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
         await recordCoverage([{...uncovered, line: 3}]);
         await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
         const proofRun = await recordCoverage([{...uncovered, line: 1, message: "Função exportada 'other' sem execução medida pelo V8"}]);
+        await ledger.pool.query('UPDATE ac_verify_runs SET collector_image=NULL WHERE id=$1', [originRun]);
+        await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
+        await ledger.pool.query('UPDATE ac_verify_runs SET collector_image=$2 WHERE id=$1', [originRun, image]);
         assert.equal(docker.logs.length, unlaunched);
 
         type FunctionalTask = {

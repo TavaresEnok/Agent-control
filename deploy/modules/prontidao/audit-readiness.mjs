@@ -240,16 +240,16 @@ function* composeLines(content, onIncomplete) {
         i++;
         if (nextIndent >= 0) {
           if (Number.isNaN(scalarIndent)) scalarIndent = nextIndent;
-          if (nextIndent < scalarIndent || (value.startsWith('>') && written)) unresolved = true;
+          if (nextIndent < scalarIndent) onIncomplete();
+          if (value.startsWith('>') && written) unresolved = true;
           written = true;
         }
         if (nextIndent >= 0 || Number.isFinite(scalarIndent)) scalar += next.slice(scalarIndent);
         if (i < lines.length - 1 || endedWithNewline) scalar += '\n';
       }
-      if (unresolved) onIncomplete();
       if (value.includes('-')) scalar = scalar.replace(/\n+$/, '');
       else if (!value.includes('+')) scalar = written ? scalar.replace(/\n+$/, '\n') : '';
-      yield {key: prop?.key, value, text, indent, line, scalarBlock: scalar};
+      yield {key: prop?.key, value, text, indent, line, scalarBlock: scalar, scalarUnresolved: unresolved};
     } else {
       // Multiline quoted/plain scalars and YAML tags need a full YAML parser.
       if (/^[!&|>]/.test(value)
@@ -301,7 +301,7 @@ export function parseComposeServices(content, onIncomplete = () => {}) {
     if (eq > 0) addEnvironment(assignment.slice(0, eq).trim(), assignment.slice(eq + 1), line);
   };
 
-  for (const {key: rawKey, value: rawValue, text, indent, line, scalarBlock} of composeLines(content, onIncomplete)) {
+  for (const {key: rawKey, value: rawValue, text, indent, line, scalarBlock, scalarUnresolved} of composeLines(content, onIncomplete)) {
     const key = rawKey === undefined ? null : unquote(rawKey);
     const value = rawValue ?? '';
     rootIndent ??= indent;
@@ -355,11 +355,13 @@ export function parseComposeServices(content, onIncomplete = () => {}) {
     while (path.length && (path.at(-1).indent > indent || (path.at(-1).indent === indent && !isListItem))) path.pop();
     const parent = path.map(part => part.key.replaceAll('.', '\0')).join('.');
     if (parent === 'environment' && isListItem) {
-      addAssignment(scalarBlock ?? text.slice(1), line);
+      if (scalarUnresolved) onIncomplete();
+      else addAssignment(scalarBlock ?? text.slice(1), line);
       continue;
     }
     if (parent === 'healthcheck.test' && isListItem) {
-      healthcheckList.push(unquote(text.slice(1)));
+      if (scalarUnresolved) onIncomplete();
+      healthcheckList.push(scalarBlock ?? unquote(text.slice(1)));
       current.hasHealthcheck = ['CMD', 'CMD-SHELL'].includes(healthcheckList[0]) && healthcheckList.length > 1;
       continue;
     }
@@ -370,7 +372,8 @@ export function parseComposeServices(content, onIncomplete = () => {}) {
 
     const setting = parent ? `${parent}.${key.replaceAll('.', '\0')}` : key.replaceAll('.', '\0');
     if (/^(?:(?:deploy|logging|healthcheck|environment)(?:\.|$)|image$|restart$|mem_limit$|pids_limit$)/.test(setting)) {
-      if (seenSettings.has(setting)) onIncomplete();
+      const extension = key.startsWith('x-') && parent !== 'environment';
+      if (seenSettings.has(setting) || (scalarUnresolved && !extension)) onIncomplete();
       seenSettings.add(setting);
     }
     const literal = scalarBlock ?? unquote(value);
@@ -550,8 +553,29 @@ const PROTECTION_HEADERS = new Set([
 const HTTPS_REDIRECT_STATUSES = /^(?:301|302|303|307|308)$/;
 const NGINX_HEADER_STATUSES = new Set([200, 201, 204, 206, 301, 302, 303, 304, 307, 308]);
 
-function isHttpsDestination(value) {
-  return /^https:\/\/[^\s/?#]+[^\s]*$/i.test(value ?? '');
+function httpsDestination(value, proxy) {
+  if (!/^https:\/\//i.test(value ?? '') || /[\s\\\x00-\x1f\x7f<>"\x60]|%(?![\da-f]{2})/i.test(value)) return false;
+  const substitutions = proxy === 'Caddy'
+    ? {
+        host: 'fixture.invalid', 'http.request.host': 'fixture.invalid',
+        hostport: 'fixture.invalid:443', 'http.request.hostport': 'fixture.invalid:443',
+        uri: '/path', 'http.request.uri': '/path',
+      }
+    : {host: 'fixture.invalid', request_uri: '/path', uri: '/path', server_port: '443'};
+  const placeholder = proxy === 'Caddy' ? /\{([\w.]+)\}/g : /\$(?:\{(\w+)\}|(\w+))/g;
+  let unresolved = false;
+  const candidate = value.replace(placeholder, (_, first, second) => {
+    const name = first ?? second;
+    if (Object.hasOwn(substitutions, name)) return substitutions[name];
+    unresolved = true;
+    return 'fixture.invalid';
+  });
+  // URL normalizes forms such as empty ports and extra slashes. Require an explicit authority first.
+  const authority = /^https:\/\/([^/?#]+)/i.exec(candidate)?.[1];
+  if (!authority || /[{}]/.test(candidate)) return false;
+  if (!/^(?:[^:[\]@]*(?::[^:[\]@]*)?@)?(?:\[[^\]]+\]|[^:[\]@]+)(?::\d+)?$/.test(authority)
+    || !URL.canParse(candidate)) return unresolved ? null : false;
+  return unresolved ? null : true;
 }
 
 function checkProxyHeaders(file, line, proxy, headers, findings, pillarCounts) {
@@ -689,13 +713,15 @@ function checkCaddy(file, findings, pillarCounts, onIncomplete) {
       const [name, ...args] = directive.words;
       if (name === 'tls' && args[0] === 'off') routingUnknown = true;
       if (name === 'redir') {
-        const conditional = /^[@/]/.test(args[0] ?? '');
-        const [destination = '', status = '', ...extra] = conditional || args[0] === '*' ? args.slice(1) : args;
+        const matcher = args[0] === '*' || /^[@/]/.test(args[0] ?? '');
+        const conditional = matcher && args[0] !== '*' && args[0] !== '/*';
+        const [destination = '', status = '', ...extra] = matcher ? args.slice(1) : args;
         const supportedStatus = !status || HTTPS_REDIRECT_STATUSES.test(status) || /^(?:permanent|temporary)$/.test(status);
-        const https = isHttpsDestination(destination) && supportedStatus && !extra.length;
+        const target = httpsDestination(destination, 'Caddy');
+        const https = target === true && supportedStatus && !extra.length;
         redirect ||= https && !conditional;
         otherRedirect ||= !https;
-        if (extra.length || !destination || /^\{/.test(destination) || directive.children
+        if (extra.length || !destination || target === null || /^\{/.test(destination) || directive.children
           || (!supportedStatus && !/^\d{3}$|^html$/.test(status))) routingUnknown = true;
       }
       if (name === 'import' || /^(?:route|handle(?:_path|_errors)?|invoke)$/.test(name)) {
@@ -791,13 +817,38 @@ function parseNginx(content) {
   return root;
 }
 
+function nginxErrorPages(block, inherited, onIncomplete) {
+  const declarations = block.directives.filter(item => item.name === 'error_page');
+  if (!declarations.length) return inherited;
+  const statuses = new Set();
+  for (const {args, line} of declarations) {
+    const codes = args.slice(0, -1);
+    if (codes.at(-1)?.startsWith('=')) {
+      if (!/^=(?:[1-5]\d\d)?$/.test(codes.pop())) {
+        onIncomplete(line, 'status de substituição Nginx não reconhecido');
+        return null;
+      }
+    }
+    if (!codes.length || !args.at(-1) || !codes.every(code => /^[3-5]\d\d$/.test(code))) {
+      onIncomplete(line, 'status de error_page Nginx não reconhecido');
+      return null;
+    }
+    for (const code of codes) statuses.add(Number(code));
+  }
+  return statuses;
+}
+
+function nginxErrorPageAffects(statuses, status) {
+  if (status === undefined) return statuses === null || statuses.size > 0;
+  return status >= 300 && status !== 444 && (statuses === null || statuses.has(status));
+}
+
 function nginxHeaderPolicy(block, inherited, onIncomplete) {
   const local = new Map();
   let replaces = false;
   let mode = inherited.mode;
   let unknown = inherited.unknown;
   let external = inherited.external;
-  let errorPage = inherited.errorPage;
   for (const {name, args, line} of block.directives) {
     const [field, value] = args;
     if (name === 'include' || /^more_(?:set|clear)_headers$/.test(name)) {
@@ -810,8 +861,6 @@ function nginxHeaderPolicy(block, inherited, onIncomplete) {
         onIncomplete(line, 'modo de herança Nginx não reconhecido');
         unknown = true;
       }
-    } else if (name === 'error_page') {
-      errorPage = true;
     } else if (name === 'add_header') {
       replaces = true;
       const key = field?.toLowerCase();
@@ -826,7 +875,7 @@ function nginxHeaderPolicy(block, inherited, onIncomplete) {
   }
   const headers = new Map(mode === 'merge' || (mode === 'on' && !replaces) ? inherited.headers : []);
   for (const [key, values] of local) headers.set(key, [...values, ...(headers.get(key) ?? [])]);
-  return {headers, mode, unknown, external, errorPage};
+  return {headers, mode, unknown, external, errorPages: nginxErrorPages(block, inherited.errorPages, onIncomplete)};
 }
 
 function nginxResponse(block) {
@@ -838,18 +887,53 @@ function nginxResponse(block) {
     if (extra.length || !first) return {unknown: true};
     if (/^[1-5]\d\d$/.test(first)) {
       const redirect = HTTPS_REDIRECT_STATUSES.test(first);
+      const target = redirect ? httpsDestination(destination, 'Nginx') : false;
       return {
         status: Number(first),
-        redirectsHttps: redirect && isHttpsDestination(destination),
-        unknown: redirect && /^\$/.test(destination ?? ''),
+        redirectsHttps: target === true,
+        unknown: target === null || (redirect && /^\$/.test(destination ?? '')),
       };
     }
     if (destination === undefined && /^(?:https?:\/\/|\$scheme\b|\$\{scheme\})/i.test(first)) {
-      return {status: 302, redirectsHttps: isHttpsDestination(first), unknown: first.startsWith('$')};
+      const target = httpsDestination(first, 'Nginx');
+      return {status: 302, redirectsHttps: target === true, unknown: target === null || first.startsWith('$')};
     }
     return {unknown: true};
   }
   return {};
+}
+
+function nginxHttpRedirect(server, policy, onIncomplete) {
+  const response = nginxResponse(server);
+  if (policy.external || response.unknown) return null;
+  if (response.status !== undefined) {
+    return nginxErrorPageAffects(policy.errorPages, response.status) ? null : response.redirectsHttps;
+  }
+
+  // Assess literal path locations. Regex and nested locations may change which block handles a request.
+  const locations = server.children.filter(child => child.name === 'location');
+  const paths = locations.map(({args}) => {
+    if (args.length === 1 && args[0].startsWith('/')) return args[0];
+    if (args.length === 2 && args[1].startsWith('/')) {
+      if (args[0] === '^~') return args[1];
+      if (args[0] === '=') return args.join(' ');
+    }
+    return null;
+  });
+  if (paths.includes(null) || new Set(paths).size !== paths.length) return null;
+  if (!paths.includes('/')) {
+    return nginxErrorPageAffects(policy.errorPages, 404) ? null : false;
+  }
+  const redirects = locations.map(location => {
+    if (location.children.some(child => child.name === 'location')
+      || location.directives.some(item => item.name === 'include')) return null;
+    const response = nginxResponse(location);
+    const errorPages = nginxErrorPages(location, policy.errorPages, onIncomplete);
+    const internal = location.directives.some(item => item.name === 'internal');
+    if (response.unknown || nginxErrorPageAffects(errorPages, internal ? 404 : response.status)) return null;
+    return !internal && response.redirectsHttps === true;
+  });
+  return redirects.includes(null) ? null : redirects.every(Boolean);
 }
 
 function nginxPort(address = '') {
@@ -871,17 +955,18 @@ function nginxHeadersForStatus(headers, status) {
 
 function checkNginx(file, findings, pillarCounts, onIncomplete) {
   const root = parseNginx(file.content);
-  const initial = {headers: new Map(), mode: 'on', unknown: false, external: false, errorPage: false};
+  const initial = {headers: new Map(), mode: 'on', unknown: false, external: false, errorPages: new Set()};
   const protocolAt = (block, inherited) => block.directives.find(item => item.name === 'ssl_protocols') ?? inherited;
   const checkHeaders = (block, policy, parentHeaders) => {
     const response = nginxResponse(block);
+    const errorPage = nginxErrorPageAffects(policy.errorPages, response.status);
     if (!policy.unknown) {
       if (response.unknown && response.status === undefined) {
         onIncomplete(block.line, 'fluxo da resposta Nginx depende de condição ou reescrita');
       }
       const headers = nginxHeadersForStatus(policy.headers, response.status);
       const signature = JSON.stringify([...headers]);
-      if (policy.errorPage && (response.status === undefined || response.status >= 300)) {
+      if (errorPage) {
         onIncomplete(block.line, 'página de erro pode trocar o contexto dos cabeçalhos Nginx');
       } else if (response.status !== 444) {
         if (signature !== parentHeaders) checkProxyHeaders(file, block.line, 'Nginx', headers, findings, pillarCounts);
@@ -893,7 +978,7 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
         onIncomplete(block.line, 'cabeçalhos Nginx sem always dependem do status da resposta');
       }
     }
-    if (response.status !== undefined && !response.unknown && !policy.external && !policy.errorPage) return;
+    if (response.status !== undefined && !response.unknown && !policy.external && !errorPage) return;
     for (const child of block.children) {
       if (child.name === 'location' || child.name === 'if') {
         checkHeaders(child, nginxHeaderPolicy(child, policy, onIncomplete), parentHeaders);
@@ -904,8 +989,6 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
     const policy = nginxHeaderPolicy(server, parentPolicy, onIncomplete);
     const protocol = protocolAt(server, parentProtocol);
     const listeners = server.directives.filter(item => item.name === 'listen');
-    const response = nginxResponse(server);
-    const routingUnknown = policy.external || response.unknown || (policy.errorPage && response.status >= 300);
     const legacySsl = contextUsesLegacySsl || server.directives.some(item => item.name === 'ssl');
     let https = false;
     if (!listeners.length) onIncomplete(server.line, 'endereço Nginx implícito, depende da instalação');
@@ -915,8 +998,9 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
       else if (args.includes('ssl')) https = true;
       else if (tlsPorts.has(port)) onIncomplete(line, 'listener Nginx pode compartilhar a configuração TLS da porta');
       else {
-        if (routingUnknown) onIncomplete(line, 'redirecionamento Nginx depende de reescrita ou configuração adicional');
-        else if (!response.redirectsHttps) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
+        const redirect = nginxHttpRedirect(server, policy, onIncomplete);
+        if (redirect === null) onIncomplete(line, 'redirecionamento Nginx depende de reescrita ou configuração adicional');
+        else if (!redirect) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
       }
     }
     const localProtocol = server.directives.includes(protocol);
@@ -1072,6 +1156,25 @@ function cronCommand(text, systemCron) {
   return systemCron ? /^\w[\w.-]*\s+(.+)$/.exec(command ?? '')?.[1] : command;
 }
 
+const SHELL_CONTINUATION = /(?<!\\)(?:\\\\)*\\$/;
+
+function shellHeredocs(parsed) {
+  const docs = [];
+  for (const [position, word] of parsed.words.entries()) {
+    if (!word.operator || !/^\d*<<-?$/.test(word.text)) continue;
+    const next = parsed.words[position + 1];
+    if (!next?.raw || /\$['"]/.test(next.raw)) return null;
+    const delimiter = next.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, part =>
+      part.startsWith('"') ? part.slice(1, -1).replace(/\\([$"\\\x60])/g, '$1')
+        : part.startsWith("'") ? part.slice(1, -1) : part.slice(1));
+    docs.push({delimiter, quoted: /['"\\]/.test(next.raw), stripTabs: word.text.endsWith('-')});
+  }
+  if (docs.length && parsed.words.some(word =>
+    word.operator ? !/^\d*(?:<<-?|>>?|<)$/.test(word.text)
+      : /[\x60]|\$\(/.test(word.raw) || /[()]/.test(word.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, '')))) return null;
+  return docs;
+}
+
 // Count executable declarations only. Documentation and command arguments alone are not evidence of a routine.
 function* operationalCommands(file, onIncomplete) {
   const base = basename(file.rel);
@@ -1102,67 +1205,76 @@ function* operationalCommands(file, onIncomplete) {
   const shell = /\.(?:sh|bash)$/i.test(base) || /^#![^\n]*\b(?:ba|da|k|z)?sh\b/.test(file.content);
   const systemCron = /(?:^|\/)cron\.d\/[^/]+$/.test(file.rel) || /(?:^|\/)etc\/crontab$/.test(file.rel);
   const userCron = /(?:^|\/)(?:crontab|[^/]+\.crontab|(?:crontabs|spool\/cron)\/[^/]+)$/.test(file.rel);
-  if (!shell && !systemCron && !userCron) return;
-  const heredocs = [];
-  let pending = '';
-  let start = 1;
-  for (const [index, raw] of file.lines.entries()) {
-    if (heredocs.length) {
-      const {delimiter, stripTabs} = heredocs[0];
-      if ((stripTabs ? raw.replace(/^\t+/, '') : raw) === delimiter) heredocs.shift();
-      continue;
-    }
-    const text = raw.trim();
-    if (!pending && (!text || text.startsWith('#'))) continue;
-    if (systemCron || userCron) {
-      if (/^\w+\s*=/.test(text)) continue;
+  if (systemCron || userCron) {
+    for (const [index, raw] of file.lines.entries()) {
+      const text = raw.trim();
+      if (!text || text.startsWith('#') || /^\w+\s*=/.test(text)) continue;
       const command = cronCommand(text, systemCron);
       if (command) yield {command: command.split(/(?<!\\)%/, 1)[0], line: index + 1};
       else onIncomplete(index + 1, 'declaração cron não reconhecida');
+    }
+    return;
+  }
+  if (!shell) return;
+  let heredocs = [];
+  let docIndex = 0;
+  let bodyLine = '';
+  let pending;
+  let start = 1;
+  // Shell delimiters must preserve literal carriage returns and physical line boundaries.
+  const lines = file.content.split('\n');
+  if (lines.at(-1) === '') lines.pop();
+  for (const [index, raw] of lines.entries()) {
+    const doc = heredocs[docIndex];
+    if (doc) {
+      const {delimiter, quoted, stripTabs} = doc;
+      if (!quoted && SHELL_CONTINUATION.test(raw)) {
+        bodyLine += raw.slice(0, -1);
+        continue;
+      }
+      bodyLine += raw;
+      if (bodyLine === delimiter || (stripTabs && bodyLine.replace(/^\t+/, '') === delimiter)) docIndex++;
+      bodyLine = '';
       continue;
     }
-    if (!pending) start = index + 1;
-    if (/(?<!\\)(?:\\\\)*\\$/.test(raw)) {
-      pending += raw.slice(0, -1);
+    if (pending === undefined) start = index + 1;
+    const continued = SHELL_CONTINUATION.test(raw);
+    const command = (pending ?? '') + raw;
+    const parsed = shellWords(continued ? command.slice(0, -1) : command);
+    if (!parsed || command.includes('\r')) {
+      onIncomplete(start, 'delimitação de shell não interpretada');
+      return;
+    }
+    if (continued && !parsed.comment) {
+      pending = command.slice(0, -1);
       continue;
     }
-    const command = (pending + raw).trim();
-    pending = '';
+    pending = undefined;
     if (command.includes('<<')) {
-      const parsed = shellWords(command);
-      if (!parsed) {
+      const docs = shellHeredocs(parsed);
+      if (!docs) {
         onIncomplete(start, 'delimitador de here-doc não interpretado');
         return;
       }
-      for (const [position, word] of parsed.words.entries()) {
-        if (!word.operator || !/^\d*<<-?$/.test(word.text)) continue;
-        const next = parsed.words[position + 1];
-        if (!next || next.operator || /\$'/.test(next.raw)) {
-          onIncomplete(start, 'delimitador de here-doc não interpretado');
-          return;
-        }
-        const delimiter = next.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, part =>
-          part.startsWith('"') ? part.slice(1, -1).replace(/\\([$"\\\x60])/g, '$1')
-            : part.startsWith("'") ? part.slice(1, -1) : part.slice(1));
-        heredocs.push({delimiter, stripTabs: word.text.endsWith('-')});
-      }
+      heredocs = docs;
+      docIndex = 0;
     }
-    yield {command, line: start};
+    if (parsed.words.length) yield {command: command.replace(/^[ \t]+/, ''), line: start};
   }
-  if (pending || heredocs.length) onIncomplete(start, 'declaração de shell incompleta');
+  if (pending !== undefined || heredocs[docIndex]) onIncomplete(start, 'declaração de shell incompleta');
 }
 
 // Literal command words and redirections. Expansion, shell control flow and scripts invoked
 // indirectly stay outside the static proof.
 function shellWords(command) {
-  const tokens = /#[^\r\n]*|\d*(?:<<<|<<-?)|(?:\d*>>?|[|;&<>])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^\s"'\\|;&<>])+|\s+/gy;
+  const tokens = /#[^\r\n]*|\d*(?:<<<|<<-?)|(?:\d*>>?|[|;&<>])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^ \t\n"'\\|;&<>])+|[ \t\n]+/gy;
   const words = [];
   let operator = false;
   while (tokens.lastIndex < command.length) {
     const token = tokens.exec(command)?.[0];
     if (!token) return null;
-    if (token.startsWith('#')) break;
-    if (/^\s/.test(token)) continue;
+    if (token.startsWith('#')) return {words, operator, comment: true};
+    if (/^[ \t\n]/.test(token)) continue;
     if (/^\d*[|;&<>]/.test(token)) {
       operator ||= !/^1?>>?$/.test(token) && !/^2>>?$/.test(token);
       words.push({text: token, operator: true});
@@ -1179,8 +1291,20 @@ const RESTIC_RESTORE_VALUE_OPTIONS = /^--(?:include|exclude|target)$/;
 const RESTIC_RETENTION_COUNT = /^--keep-(?:last|hourly|daily|weekly|monthly|yearly)$/;
 const RESTIC_RETENTION_WINDOW = /^--keep-within(?:-(?:hourly|daily|weekly|monthly|yearly))?$/;
 
+// Undefined means invalid. Zero disables an individual policy and contributes no retention.
+function resticRetention(name, value) {
+  if (RESTIC_RETENTION_COUNT.test(name)) {
+    return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) > 0 : undefined;
+  }
+  if (RESTIC_RETENTION_WINDOW.test(name)) {
+    return /^(?=\d)(?:\d+y)?(?:\d+m)?(?:\d+d)?(?:\d+h)?$/.test(value) ? /[1-9]/.test(value) : undefined;
+  }
+  if (name === '--keep-tag') return value.split(',').every(tag => tag.trim()) ? true : undefined;
+}
+
 function resticRoutine(subcommand, args, onIncomplete) {
   const options = new Map();
+  const retention = new Map();
   const positionals = [];
   let positionalOnly = false;
   for (let i = 0; i < args.length; i++) {
@@ -1205,6 +1329,15 @@ function resticRoutine(subcommand, args, onIncomplete) {
     }
     const value = equals === -1 ? args[++i] : arg.slice(equals + 1);
     if (!value || (equals === -1 && value.startsWith('-'))) return false;
+    if (subcommand === 'forget' && name.startsWith('--keep-')) {
+      if (value.includes('$')) {
+        onIncomplete();
+        return false;
+      }
+      const enabled = resticRetention(name, value);
+      if (enabled === undefined) return false;
+      retention.set(name, enabled);
+    }
     options.set(name, value);
   }
   const snapshotId = /^[\da-f]{1,64}$/i;
@@ -1226,15 +1359,7 @@ function resticRoutine(subcommand, args, onIncomplete) {
     onIncomplete();
     return false;
   }
-  if ([...options].some(([name, value]) => name.startsWith('--keep-') && value.includes('$'))) {
-    onIncomplete();
-    return false;
-  }
-  return [...options].some(([name, value]) => {
-    if (RESTIC_RETENTION_COUNT.test(name)) return positiveInteger(value);
-    if (RESTIC_RETENTION_WINDOW.test(name)) return /^(?=\d)(?:\d+y)?(?:\d+m)?(?:\d+d)?(?:\d+h)?$/.test(value) && /[1-9]/.test(value);
-    return name === '--keep-tag' && value.split(',').every(tag => tag.trim());
-  });
+  return [...retention.values()].includes(true);
 }
 
 function dumpDestination(binary, words) {
