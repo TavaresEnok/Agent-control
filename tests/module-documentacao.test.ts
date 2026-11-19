@@ -1412,6 +1412,50 @@ test('TypeDoc verifica comentários de arquivo nas reflexões de projeto e módu
   }
 });
 
+test('TypeDoc preserva a origem incerta de @property em módulo ambiente após outra instrução', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-ambient-module-comment-'));
+  try {
+    const ambientModule = [
+      '/** @packageDocumentation',
+      ' * @property Api.value Consulte {@link MissingFromModule}.',
+      ' */',
+      'declare module "api" {',
+      '  /** Contrato da API. */',
+      '  export interface Api {',
+      '    /** Descrição local para {@link MissingFromModule}. */',
+      '    value: string;',
+      '    /** Consulte {@link MissingDirect}. */',
+      '    direct: string;',
+      '  }',
+      '}',
+    ];
+
+    for (const [prefix, newline] of [[';', '\n'], ["declare module 'api' {}", '\r\n']]) {
+      writeFileSync(join(root, 'api.ts'), [prefix, ...ambientModule].join(newline));
+
+      const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+      const coverage = result.coverage.find(row => row.tool === 'typedoc');
+      assert.equal(coverage?.status, 'ok', coverage?.detail);
+      assert.equal(coverage.version, '0.28.20');
+      const catalog = assembleDocumentationArtifacts(result.coverage)['api.json'];
+      assert.equal(catalog.status, 'present');
+      const symbols = JSON.parse(catalog.content) as {qualifiedName: string; summaryText: string}[];
+      assert.equal(symbols.find(symbol => symbol.qualifiedName === 'Api.value')?.summaryText, 'Consulte MissingFromModule.');
+      assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
+        .map(finding => [finding.file, finding.line, finding.evidence]), [
+        ['api.ts', 10, '[warning] Failed to resolve link to "MissingDirect" in comment for Api.direct'],
+      ]);
+      const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+      assert.deepEqual(pending.map(row => [row.status, row.detail]), [[
+        'skipped', 'DOC-TYPEDOC-LINK-QUEBRADO. Linha indeterminada. '
+          + 'Comentário JSDoc de "Api.value" contém referência {@link MissingFromModule} para símbolo inexistente.',
+      ]]);
+    }
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
 test('TypeDoc localiza a sobrecarga canônica e preserva avisos com escapes ou tags multilinha', {skip: skipLocalTools}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'doc-overload-comments-'));
   try {
