@@ -332,6 +332,18 @@ export function buildKnipConfig(workRepoDir, repoFiles, toolsRoot) {
   return config;
 }
 
+function isIgnoredByKnipConfig(relFile) {
+  return (
+    /(^|\/)(node_modules|dist|build|coverage|\.next)\//i.test(relFile) ||
+    /^(tests?|__tests__)\//i.test(relFile) ||
+    /\.(test|spec)\./i.test(relFile) ||
+    /\.d\.ts$/i.test(relFile) ||
+    /^[^/]+\.config\.(?:js|ts|mjs|cjs)$/i.test(relFile) ||
+    /^\.dependency-cruiser\.(?:js|cjs|mjs)$/i.test(relFile) ||
+    /^knip\.(?:js|ts|mjs|cjs)$/i.test(relFile)
+  );
+}
+
 function sanitizeTsConfigInWork(workRepoDir) {
   const tsConfigPath = join(workRepoDir, 'tsconfig.json');
   if (!existsSync(tsConfigPath)) return false;
@@ -612,6 +624,7 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
   let layerViolationsCount = 0;
   let orphansCount = 0;
   let totalDependencies = 0;
+  let measuredModules = 0;
 
   const sourceCache = new Map();
   const getSource = relFile => {
@@ -712,16 +725,20 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
       }
     }
 
-    if (perFileCoverage.length < MAX_PER_FILE_COVERAGE) {
-      const instability = typeof mod.instability === 'number' ? mod.instability.toFixed(2) : 'n/a';
-      perFileCoverage.push({
-        file: sourceFile,
-        deps: deps.length,
-        dependents: dependents.length,
-        instability,
-        cycle: fileHasCycle,
-        layerViolation: fileHasLayer,
-      });
+    const isRepoModule = !mod.coreModule && !mod.couldNotResolve && !mod.matchesDoNotFollow;
+    if (isRepoModule) {
+      measuredModules += 1;
+      if (perFileCoverage.length < MAX_PER_FILE_COVERAGE) {
+        const instability = typeof mod.instability === 'number' ? mod.instability.toFixed(2) : 'n/a';
+        perFileCoverage.push({
+          file: sourceFile,
+          deps: deps.length,
+          dependents: dependents.length,
+          instability,
+          cycle: fileHasCycle,
+          layerViolation: fileHasLayer,
+        });
+      }
     }
   }
 
@@ -729,7 +746,7 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
     findings,
     perFileCoverage,
     stats: {
-      totalModules: data.modules.length,
+      totalModules: measuredModules,
       totalDependencies,
       cycles: cyclesCount,
       layerViolations: layerViolationsCount,
@@ -1116,12 +1133,16 @@ export function runCollector(options = {}) {
     const findings = [];
 
     // 1. KNIP (código morto)
-    if (jsTsFiles.length === 0) {
+    const knipAnalyzedFiles = nonTestJsTsFiles.filter(f => !isIgnoredByKnipConfig(f));
+    if (jsTsFiles.length === 0 || knipAnalyzedFiles.length === 0) {
       coverage.push({
         tool: 'knip',
         version: versions.knip,
         status: 'skipped',
-        detail: `nenhum arquivo JS/TS encontrado (arquivos copiados=${copiedFiles.length})`,
+        detail:
+          jsTsFiles.length === 0
+            ? `nenhum arquivo JS/TS encontrado (arquivos copiados=${copiedFiles.length})`
+            : `nenhum arquivo JS/TS de produção elegível para knip (arquivos copiados=${copiedFiles.length})`,
       });
     } else {
       try {
@@ -1142,7 +1163,7 @@ export function runCollector(options = {}) {
         if (knipRes.status !== 0) {
           throw new Error(`knip retornou status ${knipRes.status}: ${(knipRes.stderr || knipRes.stdout || '').slice(0, 300)}`);
         }
-        const parsedKnip = parseKnipReport(knipRes.stdout, workRepoDir, nonTestJsTsFiles, new Set(knipConfig.entry));
+        const parsedKnip = parseKnipReport(knipRes.stdout, workRepoDir, knipAnalyzedFiles, new Set(knipConfig.entry));
         findings.push(...parsedKnip.findings);
         coverage.push({
           tool: 'knip',

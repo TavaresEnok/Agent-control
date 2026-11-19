@@ -3,6 +3,7 @@ import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -436,5 +437,101 @@ test('raiz presente porém ilegível falha explicitamente, enquanto projeto aces
       rmSync(unreadableRepo, {recursive: true, force: true});
       rmSync(copyDst, {recursive: true, force: true});
     }
+  }
+});
+
+test('cobertura por arquivo reflete apenas os arquivos efetivamente medidos sem atribuir métricas aos ignorados ou não medidos', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-coverage-exact-'));
+  try {
+    cpSync(cleanFixture, repo, {recursive: true});
+    writeFileSync(join(repo, 'vite.config.ts'), "import {writeFileSync} from 'node:fs';\nexport default {};\n");
+    writeFileSync(join(repo, 'knip.ts'), "import {writeFileSync} from 'node:fs';\nexport default {};\n");
+    writeFileSync(join(repo, '.dependency-cruiser.js'), "const fs = require('node:fs');\nmodule.exports = {};\n");
+
+    const measuredByJscpd = ['src/domain/order.ts', 'src/infra/memory-store.ts', 'src/services/order-service.ts'];
+    const cleanSrcFiles = [
+      'src/domain/order.ts',
+      'src/index.ts',
+      'src/infra/memory-store.ts',
+      'src/routes/orders.ts',
+      'src/services/order-service.ts',
+      'src/shared/format.ts',
+    ];
+
+    const out = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: (cmd, args) => {
+        const argList = Array.isArray(args) ? args.map(String) : [];
+        const bin = String(cmd);
+        if (bin.endsWith('knip') || argList.includes('--reporter')) {
+          return {status: 0, stdout: JSON.stringify({issues: []}), stderr: '', error: undefined};
+        }
+        if (bin.endsWith('jscpd') || argList.includes('--reporters')) {
+          const outIdx = argList.indexOf('--output');
+          const outDir = outIdx >= 0 ? argList[outIdx + 1] : '';
+          if (argList.includes('--complexity')) {
+            writeFileSync(
+              join(outDir, 'jscpd-complexity.json'),
+              JSON.stringify({
+                summary: {
+                  totalFiles: measuredByJscpd.length,
+                  files: measuredByJscpd.map(file => ({
+                    path: file,
+                    complexity: 2,
+                    lines: 10,
+                    tokens: 45,
+                    format: 'typescript',
+                  })),
+                },
+              }),
+            );
+          } else {
+            writeFileSync(
+              join(outDir, 'jscpd-report.json'),
+              JSON.stringify({
+                duplicates: [],
+                statistics: {total: {clones: 0, sources: measuredByJscpd.length, lines: 32, duplicatedLines: 0, percentage: 0}},
+              }),
+            );
+          }
+          return {status: 0, stdout: '', stderr: '', error: undefined};
+        }
+        const depOutIdx = argList.indexOf('--output-to');
+        const depOutPath = depOutIdx >= 0 ? argList[depOutIdx + 1] : '';
+        if (depOutPath) {
+          writeFileSync(
+            depOutPath,
+            JSON.stringify({
+              modules: [
+                ...cleanSrcFiles.map(source => ({source, instability: 0.5, dependencies: [], dependents: []})),
+                {source: 'node:fs', coreModule: true, instability: 0, dependencies: [], dependents: ['vite.config.ts']},
+                {source: 'pkg-externo', couldNotResolve: true, instability: 0, dependencies: [], dependents: []},
+                {source: 'node_modules/x/index.js', matchesDoNotFollow: true, instability: 0, dependencies: [], dependents: []},
+              ],
+            }),
+          );
+        }
+        return {status: 0, stdout: '', stderr: '', error: undefined};
+      },
+    });
+
+    assertValidOutputContract(out);
+    const filesFor = (tool: string) =>
+      out.coverage
+        .filter(c => c.tool === tool)
+        .map(c => /^arquivo=([^;]+);/.exec(c.detail)?.[1] ?? '')
+        .filter(Boolean)
+        .sort();
+
+    assert.deepEqual(filesFor('knip:file'), [...cleanSrcFiles].sort());
+    assert.deepEqual(filesFor('jscpd:file'), [...measuredByJscpd].sort());
+    assert.deepEqual(filesFor('dependency-cruiser:file'), [...cleanSrcFiles].sort());
+    assert.equal(filesFor('ast-complexity:file').includes('src/index.ts'), true);
+    assert.match(out.coverage.find(c => c.tool === 'knip')?.detail ?? '', /arquivos=6,/);
+    assert.match(out.coverage.find(c => c.tool === 'dependency-cruiser')?.detail ?? '', /modulos=6,/);
+    assert.match(out.coverage.find(c => c.tool === 'jscpd')?.detail ?? '', /arquivos_medidos=3,/);
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
   }
 });

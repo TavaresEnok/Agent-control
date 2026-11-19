@@ -84,6 +84,105 @@ type CollectorOutput = {
   findings: {tool: string; rule: string; file: string; line: number; severity: string; message: string; evidence: string}[];
 };
 
+const CLEAN_ALL_SOURCE_FILES = [
+  'src/domain/order.ts',
+  'src/index.ts',
+  'src/infra/memory-store.ts',
+  'src/routes/orders.ts',
+  'src/services/order-service.ts',
+  'src/shared/format.ts',
+];
+
+const CLEAN_JSCPD_MEASURED_FILES = [
+  'src/domain/order.ts',
+  'src/infra/memory-store.ts',
+  'src/services/order-service.ts',
+];
+
+const CLEAN_JSCPD_UNMEASURED_FILES = [
+  'src/index.ts',
+  'src/routes/orders.ts',
+  'src/shared/format.ts',
+];
+
+function extractCoveredFiles(out: CollectorOutput, perFileTool: string): string[] {
+  return out.coverage
+    .filter(c => c.tool === perFileTool)
+    .map(c => /^arquivo=([^;]+);/.exec(c.detail)?.[1] ?? '')
+    .filter(Boolean);
+}
+
+function assertCleanPerFileCoverage(
+  out: CollectorOutput,
+  label: string,
+  hasUntrustedConfigs: boolean,
+): void {
+  for (const perFileTool of ['knip:file', 'ast-complexity:file', 'jscpd:file', 'dependency-cruiser:file']) {
+    const covered = extractCoveredFiles(out, perFileTool);
+    for (const file of CLEAN_JSCPD_MEASURED_FILES) {
+      assert.equal(
+        covered.includes(file),
+        true,
+        `cobertura por arquivo ausente para ${perFileTool} (${file}) em ${label}`,
+      );
+    }
+  }
+
+  assert.deepEqual(
+    extractCoveredFiles(out, 'knip:file').sort(),
+    [...CLEAN_ALL_SOURCE_FILES].sort(),
+    `knip:file deve cobrir apenas os arquivos analisados em ${label}`,
+  );
+  assert.deepEqual(
+    extractCoveredFiles(out, 'jscpd:file').sort(),
+    [...CLEAN_JSCPD_MEASURED_FILES].sort(),
+    `jscpd:file deve refletir apenas os arquivos efetivamente medidos em ${label}`,
+  );
+  for (const shortFile of CLEAN_JSCPD_UNMEASURED_FILES) {
+    assert.equal(
+      extractCoveredFiles(out, 'jscpd:file').includes(shortFile),
+      false,
+      `jscpd:file não deve atribuir métricas ao arquivo não medido ${shortFile} em ${label}`,
+    );
+  }
+
+  const astCovered = extractCoveredFiles(out, 'ast-complexity:file');
+  for (const file of CLEAN_ALL_SOURCE_FILES) {
+    assert.equal(
+      astCovered.includes(file),
+      true,
+      `ast-complexity:file ausente para ${file} em ${label}`,
+    );
+  }
+
+  const depCovered = extractCoveredFiles(out, 'dependency-cruiser:file');
+  for (const file of CLEAN_ALL_SOURCE_FILES) {
+    assert.equal(
+      depCovered.includes(file),
+      true,
+      `dependency-cruiser:file ausente para ${file} em ${label}`,
+    );
+  }
+  assert.equal(
+    depCovered.includes('node:fs'),
+    false,
+    `dependency-cruiser:file não deve listar módulo nativo node:fs em ${label}`,
+  );
+
+  if (!hasUntrustedConfigs) {
+    assert.deepEqual(
+      astCovered.sort(),
+      [...CLEAN_ALL_SOURCE_FILES].sort(),
+      `ast-complexity:file inesperado em ${label}`,
+    );
+    assert.deepEqual(
+      depCovered.sort(),
+      [...CLEAN_ALL_SOURCE_FILES].sort(),
+      `dependency-cruiser:file inesperado em ${label}`,
+    );
+  }
+}
+
 function assertSchema(out: CollectorOutput): void {
   assert.equal(Array.isArray(out.coverage), true);
   assert.equal(Array.isArray(out.findings), true);
@@ -132,6 +231,7 @@ test('laboratório módulo 3 encontra os defeitos plantados e não acusa o contr
   const cleanOut = JSON.parse(cleanRun.stdout.trim()) as CollectorOutput;
   assertSchema(cleanOut);
   assert.equal(cleanOut.findings.length, 0, `controle limpo acusou achados: ${JSON.stringify(cleanOut.findings)}`);
+  assertCleanPerFileCoverage(cleanOut, 'cleanFixture', false);
 
   // Prova de segurança: rede ativa é recusada, raiz ilegível falha explicitamente,
   // projeto acessível sem JS/TS declara skipped e configs maliciosas não executam.
@@ -217,13 +317,7 @@ test('laboratório módulo 3 encontra os defeitos plantados e não acusa o contr
 
     const untrustedOut = JSON.parse(untrustedRun.stdout.trim()) as CollectorOutput;
     assertSchema(untrustedOut);
-    for (const perFileTool of ['knip:file', 'ast-complexity:file', 'jscpd:file', 'dependency-cruiser:file']) {
-      assert.equal(
-        untrustedOut.coverage.some(c => c.tool === perFileTool && c.detail.includes('src/index.ts')),
-        true,
-        `cobertura por arquivo ausente para ${perFileTool} em untrustedRepo`,
-      );
-    }
+    assertCleanPerFileCoverage(untrustedOut, 'untrustedRepo', true);
   } finally {
     rmSync(untrustedRepo, {recursive: true, force: true});
     rmSync(canaryDir, {recursive: true, force: true});
