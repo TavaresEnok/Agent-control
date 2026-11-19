@@ -11,6 +11,7 @@ import {Ledger, VERIFICATION_MODULES, type VerificationModule} from '../src/ledg
 import {runPersonalModuleCli} from '../src/personal-module-cli.ts';
 import {
   assertVerificationModule,
+  parseModuleCollectorOutput,
   readModuleAchadoMarkdown,
   readModuleReport,
   readPinnedModuleImage,
@@ -38,6 +39,7 @@ type ModuleLabExpectation = {
     status: string;
     where: {file: string; line: number | null};
     sources: string[];
+    proof: string;
   }) => boolean;
   /** Optional extra check on `cobertura.md` (e.g. per-file / per-route / per-requirement rows). */
   coverageDetailPattern?: RegExp;
@@ -85,7 +87,9 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
     fixtureCandidates: ['tests/fixtures/module-prontidao/defective'],
     expectedOkTools: ['prontidao-audit', 'gitleaks', 'hadolint', 'trivy'],
     matchFinding: f =>
-      f.where.file === 'src/tls-client.ts' && f.title.startsWith('PRONTIDAO-TLS-VERIFICACAO-DESABILITADA'),
+      f.where.file === 'src/tls-client.ts'
+      && f.sources.includes('prontidao-audit')
+      && /^rejectUnauthorized\s*:\s*false\b/.test(f.proof),
     coverageDetailPattern: /prontidao:requisito:/,
   },
   desempenho: {
@@ -100,7 +104,9 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
     fixtureCandidates: ['tests/fixtures/module-documentacao/defective'],
     expectedOkTools: ['typedoc', 'dependency-cruiser', 'mermaid'],
     matchFinding: f =>
-      f.where.file === 'src/billing.ts' && f.title.startsWith('DOC-TYPEDOC-PARAM-DESATUALIZADO'),
+      f.where.file === 'src/billing.ts'
+      && f.sources.includes('DOC-TYPEDOC-SIMBOLO-SEM-DOC')
+      && f.title.includes('\"undocumentedCharge\"'),
     coverageDetailPattern: /typedoc:file/,
   },
   conformidade: {
@@ -555,6 +561,38 @@ async function verifyModuleEndToEnd(
     }
   }
 }
+
+test('seletores de documentação e prontidão exigem o defeito específico após proteção de segredos', () => {
+  const rawFindings = [
+    {
+      tool: 'typedoc', rule: 'DOC-TYPEDOC-SIMBOLO-SEM-DOC', file: 'src/billing.ts', line: 12,
+      severity: 'media',
+      message: 'Símbolo público exportado "undocumentedCharge" em src/billing.ts não possui documentação JSDoc/TSDoc.',
+      evidence: 'TypeDoc reflection kind=64 name=undocumentedCharge (src/billing.ts:12) sem summary/blockTags',
+    },
+    {
+      tool: 'prontidao-audit', rule: 'PRONTIDAO-TLS-VERIFICACAO-DESABILITADA', file: 'src/tls-client.ts', line: 3,
+      severity: 'alta', message: 'Verificação de certificado TLS desabilitada.',
+      evidence: 'rejectUnauthorized: false,',
+    },
+  ];
+  const parsed = parseModuleCollectorOutput(JSON.stringify({coverage: [{tool: 'typedoc', version: '1', status: 'ok', detail: 'sintético'}], findings: rawFindings}));
+  const findings = parsed.findings.map(f => ({
+    id: 'ACH-001', title: `${f.rule}: ${f.message}`, reference: `${f.tool}:${f.rule}`,
+    status: 'confirmado', where: {file: f.file, line: f.line}, sources: [f.tool, f.rule], proof: f.evidence,
+  }));
+  const doc = findings[0]!;
+  const tls = findings[1]!;
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding(doc), true);
+  assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding(tls), true);
+  assert.equal(tls.sources[1], '[removido: alta entropia]');
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, where: {...doc.where, file: 'src/api.ts'}}), false);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, title: doc.title.replace('undocumentedCharge', 'otherCharge')}), false);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, sources: ['typedoc', 'outra-regra']}), false);
+  assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding({...tls, where: {...tls.where, file: '.env'}}), false);
+  assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding({...tls, sources: ['gitleaks']}), false);
+  assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding({...tls, proof: 'rejectUnauthorized: true,'}), false);
+});
 
 test('seletor de módulos aceita um módulo, lista ou all e recusa nome inválido', () => {
   assert.deepEqual(resolveSelectedLabModules({}), [...VERIFICATION_MODULES]);
