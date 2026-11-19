@@ -100,3 +100,14 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 01:55 UTC — C3-R5 entregue por Terra em 44f2d517; aguardando a prova do gerente.
 - 19/11/2026 01:55 UTC — C7-R3 iniciada em final-c7 por Terra ultra normal.
 - 19/11/2026 01:58 UTC — Matriz C-BASE-R3 em 685fca91: o revisor Sol ultra encontrou três altos e cinco médios em publicação, história de descarte, concorrência, cancelamento e evidência de cobertura. C-BASE-R4 segue C-INTEROP no mesmo worktree. A comparação da CLI com a especificação identificou que a execução normal ainda não aciona a confirmação independente presente nos testes; C-EXAME implementará o caminho do produto. C3-R5 passou o laboratório real (1/1), imagem fixada em 64d8211c. C4-R3 passou a prova pela CLI (6/6). Ao chegar a 91%, a limpeza do cache de build com mais de seis horas recuperou 2,255 GB.
+- 19/11/2026 01:58 UTC — A2: personal:images terminou, o gateway reiniciou, is-active confirmou active no reinício e dez segundos depois. O resumo do journal foi preservado para a verificação do job A3.
+- 19/11/2026 01:59 UTC — C8-R3 entregue por Terra em 3ea2dccb; aguardando a prova do gerente.
+- 19/11/2026 01:59 UTC — C-EXAME iniciada em final-c-exame por Terra ultra normal.
+- 19/11/2026 01:59 UTC — C-INTEROP entregue por Terra em 5809c465; aguardando a prova do gerente.
+- 19/11/2026 01:59 UTC — C-BASE-R4 iniciada em final-c-interop por Terra ultra normal.
+- 19/11/2026 02:00 UTC — A2 concluída. Gateway ativo após o reinício. Nas primeiras dez segundos o journal registrou duas ocorrências de NATIVE_EXECUTION_SCOPE_MISMATCH do job conhecido, a resolver em A3. O disco ficou em 89%. A prova dos módulos já inclui a publicação documentada e as tarefas de prontidão em 694b2cac, a arquitetura em a42d0136 e o laboratório da CLI em 7f8a929a.
+- 19/11/2026 02:00 UTC — A3-R4 integrada no checkout de validação em 93deefd7. Ordem, código e contexto enviados à fila de revisão independente. A prova oficial será feita nesta versão.
+- 19/11/2026 02:00 UTC — Validação de a3-r4 em 93deefd7 iniciada no checkout de integração.
+- 19/11/2026 02:00 UTC — A3-R4 entregue por Terra em 48d5d041; aguardando a prova do gerente.
+- 19/11/2026 02:01 UTC — C7-R3 entregue por Terra em 4555dd20; aguardando a prova do gerente.
+- 19/11/2026 02:01 UTC — Matriz C5 em 16742752: o revisor Sol ultra encontrou um alto e três médios no tratamento de timeout, constraints adiadas, seed histórico e consulta inválida. C5-R3 encomendada. C8-R3 passou no TypeScript e em 16/16 testes, incluindo as ferramentas locais e o laboratório da imagem. A suíte do candidato A3-R4 em 93deefd7 está em execução.
