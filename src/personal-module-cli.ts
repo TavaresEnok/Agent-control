@@ -288,7 +288,7 @@ export async function runPersonalModuleCli(
         projectId: project.id,
         repoPath: project.repo,
       });
-      return [corrected.messageLocalId, ...corrected.writePaths];
+      return [...(corrected.messageLocalIds ?? [corrected.messageLocalId]), ...corrected.writePaths];
     }
 
     const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =

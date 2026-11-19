@@ -273,10 +273,10 @@ function registerFunctionalReports(app: Hono<ApiEnv>, deps: VerificationRouteDep
         throw error;
       });
     try {
-      const {messageLocalId} = await requestModuleCorrection(ledger, principal, authority, {
+      const {messageLocalId, messageLocalIds} = await requestModuleCorrection(ledger, principal, authority, {
         module, runId, achadoIds, projectId, dataDirectory,
       });
-      return c.json({messageLocalId});
+      return c.json({messageLocalId, ...(messageLocalIds ? {messageLocalIds} : {})});
     } finally {
       await ledger.releaseLease(authority);
     }
@@ -376,8 +376,26 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
 
   app.post('/api/v1/ac/personal/verificacoes/:runId/corrigir', async c => {
     c.header('Cache-Control', 'no-store');
-    const {principal, panel, runId, achadoIds, authority} = await correctionRequest(c, deps);
-    const result = await correct(deps.ledger, principal, authority, {
+    const {principal, panel} = await ownerPanel(c, deps);
+    const runId = Id.parse(c.req.param('runId'));
+    const {achadoIds} = achadoIdsBody.parse(await c.req.json());
+    const target = (await deps.ledger.pool.query<{context_id: string}>(
+      `SELECT COALESCE(main.id, r.context_id)::text AS context_id
+       FROM ac_verify_runs r
+       LEFT JOIN ac_exam_contexts e ON e.context_id=r.context_id
+       LEFT JOIN LATERAL (
+         SELECT x.id FROM ac_contexts x
+         WHERE x.project_id=r.project_id AND NOT x.archived
+           AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts exam WHERE exam.context_id=x.id)
+         ORDER BY x.created_at, x.id LIMIT 1
+       ) main ON e.context_id IS NOT NULL
+       WHERE r.id=$1 AND r.project_id=$2 AND r.module='verify'`,
+      [runId, panel.projectId],
+    )).rows[0];
+    if (!target) throw new Refusal('NOT_FOUND', 404);
+    const authority = Authority.safeParse(deps.manager(target.context_id));
+    if (!authority.success) throw new Refusal('AUTHORITY_REQUIRED', 409);
+    const result = await correct(deps.ledger, principal, authority.data, {
       runId, achadoIds, dataDirectory: panel.dataDirectory, projectId: panel.projectId,
     });
     return c.json(result);
