@@ -259,8 +259,11 @@ test('as ferramentas fixadas encontram os defeitos e aprovam o controle limpo no
   const rules = new Set(defectiveResult.findings.map(f => `${f.tool}:${f.rule}:${f.file}`));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-PARAM-DESATUALIZADO:src/billing.ts'));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC:src/billing.ts'));
-  assert.match(defectiveResult.findings.find(item => item.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC')?.evidence ?? '',
-    /^\[warning\].* defined in .*\/src\/billing\.ts, does not have any documentation$/);
+  const undocumentedCharge = defectiveResult.findings.find(item => item.tool === 'typedoc'
+    && item.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC' && item.file === 'src/billing.ts');
+  assert.equal(undocumentedCharge?.line, 12);
+  assert.match(undocumentedCharge?.evidence ?? '',
+    /^\[warning\].*undocumentedCharge.* defined in .*\/src\/billing\.ts, does not have any documentation$/);
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-LINK-QUEBRADO:src/api.ts'));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA:README.md'));
   assert.ok(rules.has('dependency-cruiser:DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE:README.md'));

@@ -2878,8 +2878,16 @@ sys.exit(code)
       commit,
       collectorOutput: secretLeakOutput,
     });
+    assert.throws(
+      () => parseModuleCollectorOutput(JSON.stringify(secretLeakOutput), {module: 'conformidade'}),
+      (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_PATH_FORBIDDEN',
+    );
     assert.ok(hostBlocked.toolCoverage.some(row => row.tool === 'coletor' && row.status === 'failed'
-      && row.detail.includes('VERIFY_SECRET_IN_REPORT')));
+      && row.detail.includes('VERIFY_PATH_FORBIDDEN')));
+    const secretTextOutput = {
+      coverage: [{...secretLeakOutput.coverage[0], files: ['src/clean.ts'], detail: `sintetico ${akiaName}`}],
+      findings: [],
+    };
     await assert.rejects(
       writeModuleReport({
         dataDirectory,
@@ -2888,10 +2896,10 @@ sys.exit(code)
         runId: randomUUID(),
         createdAt: new Date('2026-11-19T21:41:00.000Z'),
         commit,
-        toolCoverage: secretLeakOutput.coverage,
+        toolCoverage: secretTextOutput.coverage,
         fileCoverage: [],
         achados: [],
-        raw: secretLeakOutput,
+        raw: secretTextOutput,
       }),
       (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_SECRET_IN_REPORT',
     );
@@ -3133,7 +3141,7 @@ assert is_redacted_text(split_opaque) and is_redacted_text(at_limit) and is_reda
 report = Report()
 selected = snapshot(root, staging, report)
 assert set(selected) == {good}
-assert any(row['tool'] == 'conformidade:file' and row['detail'].startswith('8 entradas') for row in report.coverage)
+assert any(row['tool'] == 'conformidade:file' and row['detail'] == '8 entradas excluídas ou protegidas omitidas.' for row in report.coverage)
 def scan(detections, packages):
     result = Report()
     ok = []
@@ -3147,7 +3155,7 @@ assert len(mixed['findings']) == 2
 assert all(row['file'] == good for row in mixed['findings'])
 for output in (report.output(), missing, mixed):
     serialized = json.dumps(output)
-    for omitted in (split_opaque, at_limit, above_limit):
+    for omitted in (opaque, segmented, 'ordinary_' + long_word + '_name', 'password-reset', 'id_generator', split_opaque, at_limit, above_limit):
         assert omitted not in serialized
     assert all(part not in serialized for part in split_opaque.split('_') if len(part) >= 4)
     assert 'dashboard' not in serialized
