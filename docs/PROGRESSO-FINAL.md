@@ -449,3 +449,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:23 UTC — Revisor encerrou C7-HISTORICO-R2 em e4680e65 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:23 UTC — Revisão C5-R6 iniciada por Sol high normal somente leitura em dc0dff58.
 - 19/11/2026 05:24 UTC — Matriz dos módulos atualizada com os commits, números das provas físicas e resultados de revisão por módulo. A prova de prontidão distingue uma observação provável de um achado autorizado para correção.
+- 19/11/2026 05:24 UTC — Exame R5 integrado em 1fd88007. A prova com dois perfis sintéticos e PostgreSQL criou oito tarefas, uma para cada módulo, com o arquivo e o teste de regressão corretos. As verificações da CLI nativa e de cancelamento passaram. Tipo e persistência validados.
