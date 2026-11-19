@@ -723,3 +723,8 @@ PAUSADO-COTA
 - 19/11/2026 17:34 UTC — trabalho-C5-R10 iniciado em final-c5 por Sol medium normal.
 - 19/11/2026 17:34 UTC — C7-R10 encerrado com código 0.
 - 19/11/2026 17:34 UTC — QA recebeu revalidação de prova 324e4407 e matriz cc2d5127. Imagens estáticas no desempenho em 00bc71dd e C9-R8 enfileirada para ordem de avaliação. A homologação da imagem de C9 em ee77a916 passou em 27/27 sem pulos.
+- 19/11/2026 17:34 UTC — trabalho-C9-R8 iniciado em final-c9 por Sol high normal.
+- 19/11/2026 17:36 UTC — C2-CARGA-LOCAL encerrado com código 0.
+- 19/11/2026 17:36 UTC — revisor-C8-R10 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:37 UTC — C5-R10 encerrado com código 0.
+- 19/11/2026 17:38 UTC — Desempenho em 26aa6baf passou em 67/67, incluindo a CLI e a procura da medição anterior. C7 segue para a prova de b5efe37c. A revisão de carga abriu uma correção de empacotamento para arm64.

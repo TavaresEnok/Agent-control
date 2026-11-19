@@ -1,0 +1,5 @@
+# Módulo de QA nas duas plataformas da imagem
+
+O revisor identificou que a etapa de carga local instala somente binários amd64 e interrompe a compilação do QA em arm64. Preserve as plataformas oferecidas pela base Playwright, os SHAs da distribuição oficial e os testes do contrato. Trabalhe exclusivamente no Dockerfile de QA, carga-local/tools.lock.json e respectivos testes de integridade. Preserve o comportamento isolado e limitado do ensaio. O gerente já executou a prova com os binários oficiais em amd64.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-CARGA-PLATAFORMAS.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
