@@ -2587,3 +2587,46 @@ test('R11: incerteza de timeout preserva somente os requisitos possíveis', () =
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+test('R12: posições possíveis de timeout e rotinas condicionais por pilar', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r12-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'app.service'), '[Service]\nStandardOutput=append:/var/log/app.log\n');
+    const pillars = ['alertas-logs', 'disco-memoria', 'backup-restauracao'];
+    const rules = ['PRONTIDAO-ALERTA-AUSENTE', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO', 'PRONTIDAO-BACKUP-AUSENTE'];
+    const cases: [string, number | null, boolean][] = [
+      ['timeout "$OPCAO" TERM 30s npm run personal:watch', 0, false],
+      ['timeout --signal=$OPCAO npm run personal:watch', 0, false],
+      ['timeout -- "$@" 30s df -P /', 1, false],
+      ['timeout -- "${itens[@]}" 30s df -P /', 1, false],
+      [`timeout -- 1,5s sh -c 'sh -c "df -P /"'`, 1, false],
+      [`timeout -- 1,5s sh -c 'sh -c "npm run personal:watch"'`, 0, false],
+      ['timeout -- 1,5s pg_dump -h db.example app', 2, false],
+      [`timeout -- 1,5s sh -c 'pg_dump db' --help | cat`, 2, false],
+      ['timeout 1,5s 30s npm run personal:watch', null, false],
+      ['timeout -- -0x0d npm run personal:watch', null, false],
+      [`timeout -- 1,5s sh -c 'find . -print'`, null, false],
+      ['timeout -- 1,5s restic snapshots', null, false],
+      ['timeout -- 1,5s sqlite3 db "select 1"', null, false],
+      ['timeout -- 1,5s pg_restore arquivo.dump', null, false],
+      ['timeout --signal="$OPCAO" 30s printf npm run personal:watch', null, false],
+      [`timeout -- 1,5s sh -c 'find . -mtime +7 -delete'`, 2, false],
+      ['timeout -- -0x0p0 npm run personal:watch', null, true],
+      ['timeout -- -0x0s npm run personal:watch', null, true],
+      ['timeout -- 30s pg_dump -h db.example app', null, true],
+    ];
+    for (const [line, partial, positive] of cases) {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
+      const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+      for (const [i, pillar] of pillars.entries()) {
+        assert.equal(out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status, i === partial ? 'failed' : 'ok', `${line}: ${pillar}`);
+        const positivePillar = positive && (line.includes('pg_dump') ? i === 2 : i === 0);
+        assert.equal(out.findings.some(f => f.rule === rules[i]), i !== partial && !positivePillar, `${line}: ${rules[i]}`);
+      }
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});

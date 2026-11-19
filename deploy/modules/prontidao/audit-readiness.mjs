@@ -1701,8 +1701,8 @@ function timeoutDuration(value) {
   const unsigned = normalized.startsWith('-') ? normalized.slice(1) : normalized;
   if (!TIMEOUT_DURATION_RE.test(unsigned)) return 'invalid';
   if (normalized.startsWith('-')) {
-    const numeric = unsigned.replace(/[smhd]$/, '');
-    const mantissa = (/^0[xX]/.test(numeric) ? numeric.replace(/[pP][+-]?\d+$/, '').slice(2) : numeric.replace(/[eE][+-]?\d+$/, ''));
+    const hex = /^0[xX]([\da-fA-F]+(?:\.[\da-fA-F]*)?|\.[\da-fA-F]+)(?:[pP][+-]?\d+)?[smhd]?$/.exec(unsigned);
+    const mantissa = hex ? hex[1] : unsigned.replace(/[smhd]$/, '').replace(/[eE][+-]?\d+$/, '');
     if (!/^[0.]+$/.test(mantissa)) return 'invalid';
   }
   return value.includes(',') ? 'dynamic' : 'valid';
@@ -1720,7 +1720,7 @@ function mayChangeWordCount(word) {
     if (ch === "'" && quote !== '"') { quote = quote === "'" ? '' : "'"; continue; }
     if (ch === '"' && quote !== "'") { quote = quote === '"' ? '' : '"'; continue; }
     if (ch === '\\' && quote !== "'") { i++; continue; }
-    if (!quote && /[$`*?\[\]]/.test(ch)) return true;
+    if (quote !== "'" && (raw.slice(i).match(/^\$(?:@|\{[^}]*\[@\]\})/) || (!quote && /[$`*?\[\]]/.test(ch)))) return true;
   }
   return false;
 }
@@ -1815,7 +1815,92 @@ const OPERATIONAL_TARGET_SPECS = Object.assign(Object.create(null), {
   },
 });
 
+// Model argv until the executable: options, an option value, duration, command.
+// A variable-width expansion may supply any number of these words, while a
+// quoted scalar supplies exactly one. Once command is reached, its arguments
+// cannot become executable positions.
+function timeoutDynamicPositions(words, spec) {
+  let states = new Set(['options']);
+  const positions = new Set();
+  let encountered = false;
+  for (const [index, word] of words.entries()) {
+    if (word.operator) break;
+    const value = word.text ?? '';
+    const dynamic = /[$`*?\[\]]/.test(value);
+    const variable = dynamic && mayChangeWordCount(word);
+    const next = new Set();
+    for (const state of states) {
+      if (dynamic) {
+        encountered = true;
+        if (state === 'command') {
+          if (variable) next.add('command');
+        } else if (state === 'options') {
+          // A literal option prefix constrains the first expanded word.
+          if (/^--(?:signal|kill-after)=/.test(value)) {
+            next.add('options');
+            if (variable) next.add('command');
+          } else {
+            next.add('options'); // flag
+            next.add('duration'); // terminator
+            next.add('signal');  // option requiring an argument
+            next.add('kill-after');
+            next.add('command'); // duration
+          }
+        } else if (state === 'signal' || state === 'kill-after') {
+          next.add('options');
+          if (variable) { next.add(state); next.add('command'); }
+        } else if (state === 'duration') {
+          next.add('command');
+          if (variable) next.add('duration');
+        }
+        continue;
+      }
+      if (state === 'command') {
+        positions.add(index);
+      } else if (state === 'signal' || state === 'kill-after') {
+        if (value !== '--' && (state === 'signal' ? timeoutSignal(value) : timeoutDuration(value)) !== 'invalid') next.add('options');
+      } else if (state === 'duration') {
+        if (timeoutDuration(value) !== 'invalid') next.add('command');
+      } else if (value === '--') {
+        next.add('duration');
+      } else if (value.startsWith('--')) {
+        const eq = value.indexOf('=');
+        const name = eq < 0 ? value : value.slice(0, eq);
+        if (spec.longFlags.has(name) && eq < 0) next.add('options');
+        else if (spec.longValues.has(name)) {
+          if (eq < 0) next.add(name.slice(2));
+          else if ((name === '--signal' ? timeoutSignal(value.slice(eq + 1)) : timeoutDuration(value.slice(eq + 1))) !== 'invalid') next.add('options');
+        }
+      } else if (value.startsWith('-') && value !== '-') {
+        let valid = true;
+        let needsValue = '';
+        for (let i = 1; i < value.length; i++) {
+          if (spec.valueChars.has(value[i])) {
+            const inline = value.slice(i + 1);
+            if (!inline) needsValue = value[i] === 's' ? 'signal' : 'kill-after';
+            else if ((value[i] === 's' ? timeoutSignal(inline) : timeoutDuration(inline)) === 'invalid') valid = false;
+            break;
+          }
+          if (!spec.flagChars.has(value[i])) { valid = false; break; }
+        }
+        if (valid) next.add(needsValue || 'options');
+      } else if (timeoutDuration(value) !== 'invalid') {
+        next.add('command');
+      }
+    }
+    states = next;
+    if (!states.size) break;
+  }
+  return encountered ? [...positions] : null;
+}
+
 function skipWrapperOptions(words, spec, binary) {
+  if (binary === 'timeout') {
+    const positions = timeoutDynamicPositions(words, spec);
+    if (positions !== null) {
+      return {words: [], query: false, ambiguous: true, candidates: positions.map(position => words.slice(position))};
+    }
+  }
   const {flagChars, valueChars, nonExecFlagChars, longFlags, nonExecLongFlags, longValues, longOptionalEquals} = spec;
   const strict = binary === 'sudo' || binary === 'timeout';
   let i = 0;
@@ -1928,7 +2013,7 @@ function skipWrapperOptions(words, spec, binary) {
     if (duration !== 'valid') {
       // An unquoted expansion can vanish or split, even after --. Before --,
       // a quoted expansion can also be an option preceding the duration.
-      if (duration === 'dynamic' && (mayChangeWordCount(rest[0])
+      if (duration === 'dynamic' && /[$`*?\[\]]/.test(rest[0].text ?? '') && (mayChangeWordCount(rest[0])
         || (!optionsEnded && rest[1] && !rest[1].operator
           && (timeoutDuration(rest[1].text ?? '') !== 'invalid' || (rest[1].text ?? '').startsWith('-'))))) {
         return {words: [], query: false, ambiguous: true};
@@ -2133,8 +2218,50 @@ function nodeScriptTarget(args) {
   return '';
 }
 
+function backupQuery(binary, args) {
+  return args.some(arg => arg === '--help' || arg === '--version' || (arg === '-h' && !/^(?:pg_dump|pg_restore)$/.test(binary)));
+}
+
+function isFindRetention(args) {
+  return args.some((arg, i) => arg === '-mtime' && /^\+\d+$/.test(args[i + 1] ?? '') && args.slice(i + 2).includes('-delete'));
+}
+
+function classifyBackupOperation(binary, args, onIncomplete) {
+  const [subcommand, ...parameters] = binary === 'restic' ? resticCommand(args) : args;
+  const npmTarget = npmScriptTarget(binary, args);
+  const routine = npmTarget
+    ? /^personal:(backup(?:-rotate)?|restore-(?:check|proof))$/.exec(npmTarget)?.[1]
+    : binary === 'node'
+      ? /^personal-(backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.exec(basename(nodeScriptTarget(args)))?.[1]
+      : undefined;
+  if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
+    onIncomplete();
+    return {};
+  }
+  if (backupQuery(binary, args)) return {};
+  const dump = /^(?:pg_dump|mysqldump|mongodump)$/.test(binary);
+  const backup = dump || routine === 'backup' || (binary === 'restic' && subcommand === 'backup')
+    || (binary === 'borg' && subcommand === 'create')
+    || (binary === 'sqlite3' && args.some(arg => /^\.backup(?:\s|$)/.test(arg)));
+  const listOnly = binary === 'pg_restore' && args.some(arg => arg === '--list' || /^-[vl]*l[vl]*$/.test(arg));
+  const catalog = listOnly || ((binary === 'restic' || binary === 'borg') && subcommand === 'check');
+  const restoresDb = binary === 'pg_restore' && !listOnly && args.some((arg, index) =>
+    /^(?:-d|--dbname=).+$/.test(arg)
+    || (/^(?:-d|--dbname)$/.test(arg) && args[index + 1] && !args[index + 1].startsWith('-')));
+  const dryRun = args.includes('--dry-run') || (binary === 'borg' && args.includes('-n'));
+  if (routine === 'restore-check') onIncomplete();
+  const resticDeclared = binary === 'restic' && !dryRun && /^(?:restore|forget)$/.test(subcommand ?? '')
+    && resticRoutine(subcommand, parameters, onIncomplete);
+  const restore = routine === 'restore-proof' || restoresDb || (subcommand === 'restore' && resticDeclared)
+    || (!dryRun && binary === 'borg' && subcommand === 'extract');
+  const rotation = routine === 'backup-rotate' || (subcommand === 'forget' && resticDeclared)
+    || (!dryRun && binary === 'borg' && subcommand === 'prune') || (binary === 'find' && isFindRetention(args));
+  return {dump, backup, catalog, restore, rotation};
+}
+
 function isBackupCandidateSegment(segWords) {
-  const {words, ambiguous, knownPosition} = unwrapCommandWords(segWords);
+  const {words, ambiguous, knownPosition, candidates} = unwrapCommandWords(segWords);
+  if (candidates) return candidates.some(isBackupCandidateSegment);
   if (ambiguous && knownPosition) return isBackupCandidateSegment(words);
   if (ambiguous) return segWords.slice(1).some((word, i) =>
     /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(basename(word.text ?? ''))
@@ -2142,28 +2269,30 @@ function isBackupCandidateSegment(segWords) {
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return false;
   const args = words.map(word => word.text);
-  if (args.some(arg => /^(?:--help|--version|-h)$/.test(arg))) return false;
-  if (/^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find)$/.test(binary)) return true;
-  const npmTarget = npmScriptTarget(binary, args);
-  if (npmTarget) return /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(npmTarget);
-  if (binary === 'node') {
-    const script = nodeScriptTarget(args);
-    return /^personal-(?:backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.test(basename(script));
-  }
   if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(args[0] ?? '') && args[1]) {
     const inner = shellWords(args[1]);
     if (!inner) return BACKUP_CANDIDATE_RE.test(args[1]);
     return splitShellSegments(inner.words).some(isBackupCandidateSegment);
   }
-  return false;
+  let incomplete = false;
+  const operation = classifyBackupOperation(binary, args, () => { incomplete = true; });
+  return incomplete || Boolean(operation.backup || operation.catalog || operation.restore || operation.rotation);
 }
 
 function evaluateShellSegment(segWords, depth = 0) {
   const res = {alerting: false, disk: false, logrotate: false, incomplete: false, partialAlert: false, partialDisk: false};
   const unwrapped = unwrapCommandWords(segWords);
   if (unwrapped.ambiguous) {
+    if (unwrapped.candidates) {
+      for (const candidate of unwrapped.candidates) {
+        const sub = evaluateShellSegment(candidate, depth);
+        res.partialAlert ||= sub.alerting || sub.logrotate || sub.partialAlert;
+        res.partialDisk ||= sub.disk || sub.partialDisk;
+      }
+      return res;
+    }
     if (unwrapped.knownPosition) {
-      const sub = evaluateShellSegment(unwrapped.words, depth + 1);
+      const sub = evaluateShellSegment(unwrapped.words, depth);
       res.partialAlert = sub.alerting || sub.logrotate || sub.partialAlert;
       res.partialDisk = sub.disk || sub.partialDisk;
       return res;
@@ -2171,7 +2300,7 @@ function evaluateShellSegment(segWords, depth = 0) {
     // Inspect possible command positions without treating option values as evidence.
     for (let i = 1; i < segWords.length; i++) {
       if (!/^(?:alertmanager|npm|pnpm|node|curl|wget|df|docker|logrotate|(?:ba|da|k|z)?sh)$/.test(basename(segWords[i].text ?? ''))) continue;
-      const sub = evaluateShellSegment(segWords.slice(i), depth + 1);
+      const sub = evaluateShellSegment(segWords.slice(i), depth);
       res.partialAlert ||= sub.alerting || sub.logrotate || sub.partialAlert;
       res.partialDisk ||= sub.disk || sub.partialDisk;
     }
@@ -2299,27 +2428,12 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
     const words = unwrapped.words;
     const binary = basename(words.shift()?.text ?? '');
     const args = words.filter(word => !word.operator).map(word => word.text);
-    const [subcommand, ...parameters] = binary === 'restic' ? resticCommand(args) : args;
-    const npmTarget = npmScriptTarget(binary, args);
-    const routine = npmTarget
-      ? /^personal:(backup(?:-rotate)?|restore-(?:check|proof))$/.exec(npmTarget)?.[1]
-      : binary === 'node'
-        ? /^personal-(backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.exec(basename(nodeScriptTarget(args)))?.[1]
-        : undefined;
-    if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
-      onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
-      continue;
-    }
-    if (args.some(arg => /^(?:--help|--version|-h)$/.test(arg))) continue;
-
-    const dump = /^(?:pg_dump|mysqldump|mongodump)$/.test(binary);
-    if (dump || routine === 'backup'
-      || (binary === 'restic' && subcommand === 'backup')
-      || (binary === 'borg' && subcommand === 'create')
-      || (binary === 'sqlite3' && args.some(arg => /^\.backup(?:\s|$)/.test(arg)))) {
-      backup = true;
-    }
-    if (dump) {
+    const operation = classifyBackupOperation(binary, args, () => onIncomplete(line, 'argumentos de backup, restauração ou retenção não resolvidos'));
+    backup ||= Boolean(operation.backup);
+    catalog ||= Boolean(operation.catalog);
+    restore ||= Boolean(operation.restore);
+    rotation ||= Boolean(operation.rotation);
+    if (operation.dump) {
       const destination = dumpDestination(binary, words);
       if (destination && /^(?:\$|~)/.test(destination)) {
         onIncomplete(line, 'destino de dump depende de expansão');
@@ -2332,22 +2446,7 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
         });
       }
     }
-    const listOnly = binary === 'pg_restore' && args.some(arg => arg === '--list' || /^-[vl]*l[vl]*$/.test(arg));
-    catalog ||= listOnly || ((binary === 'restic' || binary === 'borg') && subcommand === 'check');
-    const restoresDb = binary === 'pg_restore' && !listOnly && args.some((arg, index) =>
-      /^(?:-d|--dbname=).+$/.test(arg)
-      || (/^(?:-d|--dbname)$/.test(arg) && args[index + 1] && !args[index + 1].startsWith('-')));
-    const dryRun = args.includes('--dry-run') || (binary === 'borg' && args.includes('-n'));
-    if (routine === 'restore-check') onIncomplete(line, 'nome da rotina não distingue catálogo de restauração');
-    const resticDeclared = binary === 'restic' && !dryRun && /^(?:restore|forget)$/.test(subcommand ?? '')
-      && resticRoutine(subcommand, parameters, () => onIncomplete(line, 'argumentos de restauração ou retenção Restic não resolvidos'));
-    restore ||= routine === 'restore-proof' || restoresDb
-      || (subcommand === 'restore' && resticDeclared)
-      || (!dryRun && binary === 'borg' && subcommand === 'extract');
-    rotation ||= routine === 'backup-rotate'
-      || (subcommand === 'forget' && resticDeclared)
-      || (!dryRun && binary === 'borg' && subcommand === 'prune')
-      || (binary === 'find' && /-mtime\s+\+\d+\s+.*-delete|-mtime\s+\+\d+\s+-delete/.test(invocation));
+
   }
   return {backup, restore, catalog, rotation};
 }
