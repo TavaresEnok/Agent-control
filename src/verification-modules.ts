@@ -1,11 +1,10 @@
-import {execFile, spawn} from 'node:child_process';
+import {spawn} from 'node:child_process';
 import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {promisify} from 'node:util';
 import type pg from 'pg';
 import {z} from 'zod';
 import {Capacity} from './capacity.ts';
@@ -25,6 +24,9 @@ import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamColle
 import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
 import type {ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
+import {readRecheckBlob, recheckHead, sameRecheckHistory} from './module-recheck-git.ts';
+import {measureRecheckRegression, readFunctionalRecheckVerdict, recheckCorrectionMatches, supportsFunctionalRecheck,
+  type FunctionalRegression} from './module-recheck-regression.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
 import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
@@ -71,7 +73,6 @@ const ACHADO_FILE = /^ACH-\d{3}\.md$/;
 const MODULE_REPORT_DIR = /^\d{8}-\d{6}-(?:[a-f0-9]{8}|[a-f0-9]{32})-(qa|arquitetura|dependencias|banco|prontidao|desempenho|documentacao|conformidade)$/;
 const EXCERPT_LIMIT = 4000;
 const ARCHIVE_TIMEOUT_MS = 60_000;
-const execGit = promisify(execFile);
 
 export const ModuleToolStatus = z.enum(['ok', 'failed', 'skipped']);
 export type ModuleToolStatus = z.infer<typeof ModuleToolStatus>;
@@ -2834,38 +2835,10 @@ type ModuleRecheckOutcome = {
   results: ModuleRecheckResult[];
   publication: 'published' | 'pending';
 };
-type RecheckScope = {id: string; file: string; line: number; tool: string; rule: string};
-type RecheckProof = {
-  runId: string; tool: string; version: string; origin: 'collector' | 'examiner'; collectorImage: string | null;
-};
-type RecheckRegression = {
-  runId: string; tool: string; version: string; executionVersion: string;
-  testFile: string; testLine: number; assertionDigest: string; receiptDigest: string;
-};
 type RecheckCoverage = {
   file: string; examiner_provider: string; examiner_model: string; profile_id: string | null;
   account_id: string | null; provenance: string; checklist: string[];
 };
-
-function recheckGit(repo: string, args: string[], signal?: AbortSignal) {
-  return execGit('/usr/bin/git', ['--no-replace-objects', '--literal-pathspecs', '-C', repo, ...args], {
-    env: {...GIT_ARCHIVE_ENV, GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: ''},
-    timeout: 10_000,
-    maxBuffer: 1024 * 1024,
-    signal,
-  });
-}
-
-async function recheckHead(repo: string, signal?: AbortSignal): Promise<string> {
-  try {
-    const {stdout} = await recheckGit(repo, ['rev-parse', '--verify', 'HEAD^{commit}'], signal);
-    const commit = stdout.trim();
-    if (/^[a-f0-9]{40}$/.test(commit)) return commit;
-  } catch {
-    signal?.throwIfAborted();
-  }
-  throw new Refusal('VERIFY_COMMIT_INVALID', 400);
-}
 
 function protectedRecheckFile(file: string): boolean {
   return isProtectedLocation(file) || /(?:^|\/)(?:logs?|\.ssh|\.aws|\.config)(?:\/|$)/i.test(file)
@@ -2880,148 +2853,16 @@ function sanitizeRecheckText(text: string): string {
   ).join('\n');
 }
 
-async function readRecheckLines(
-  repo: string, head: string, file: string, line: number, signal?: AbortSignal, lineCount = 1,
-): Promise<string> {
-  if (!Number.isSafeInteger(line) || line < 1) return '';
-  try {
-    const {stdout: entry} = await recheckGit(repo, ['ls-tree', '--full-tree', '-z', head, '--', file], signal);
-    const match = /^100(?:644|755) blob ([a-f0-9]{40})\t([^\0]+)\0$/.exec(entry);
-    if (!match || match[2] !== file) return '';
-    const {stdout: code} = await recheckGit(repo, ['cat-file', 'blob', match[1]!], signal);
-    if (code.includes('\0') || code.includes('\uFFFD')) return '';
-    const target = sanitizeRecheckText(code).split('\n').slice(line - 1, line - 1 + lineCount).join('\n').trim();
-    if (!target || target === '[trecho omitido]' || target.length > EXCERPT_LIMIT / 2 || MULTILINE_CONTROL_CHAR.test(target)) return '';
-    return target;
-  } catch {
-    signal?.throwIfAborted();
-    return '';
-  }
-}
-
-async function sameRecheckHistory(repo: string, original: string, head: string, signal?: AbortSignal): Promise<boolean> {
-  if (!/^[a-f0-9]{40}$/.test(original)) return false;
-  try {
-    await recheckGit(repo, ['merge-base', '--is-ancestor', original, head], signal);
-    return true;
-  } catch {
-    signal?.throwIfAborted();
-    return false;
-  }
-}
-
-function qaRecheckFile(file: string): string {
-  return file.replace(/[%|~\s\u0000-\u001f\u007f]/g, char => char === '~' ? '%7E' : encodeURIComponent(char));
-}
-
-async function readModuleCorrectionProof(
-  ledger: Ledger, projectId: string, contextId: string, originalRunId: string, head: string, item: RecheckScope,
-  source: RecheckCoverage | undefined,
-): Promise<RecheckProof | undefined> {
-  const {rows: [proof]} = await ledger.pool.query<RecheckProof>(
-    `WITH latest AS (
-       SELECT id, module, status, collector_image FROM ac_verify_runs
-       WHERE project_id=$1 AND context_id=$2 AND commit_id=$3 AND status IN ('done','failed')
-         AND report_dir=report_prepared_dir AND NOT report_legacy_missing
-       ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1
-     )
-     SELECT r.id AS "runId", $5::text AS tool, COALESCE(original.version, coverage.examiner_model) AS version,
-       CASE WHEN $8::text IS NULL THEN 'collector' ELSE 'examiner' END AS origin, r.collector_image AS "collectorImage"
-     FROM latest r LEFT JOIN ac_verify_coverage coverage ON coverage.run_id=r.id AND coverage.file=$4
-     LEFT JOIN ac_verify_tool_coverage original ON original.run_id=$7 AND original.tool=$5 AND original.status='ok'
-     WHERE r.status='done' AND NOT EXISTS (
-       SELECT 1 FROM ac_verify_findings f WHERE f.run_id=r.id AND f.file=$4
-         AND f.payload->'sources'->>0=$5 AND f.payload->'sources'->>1=$6
-     ) AND (
-       ($8::text IS NOT NULL AND coverage.provenance='examiner' AND coverage.profile_id IS NOT NULL
-         AND coverage.examiner_provider=$8 AND coverage.checklist @> $9::jsonb
-         AND jsonb_array_length($9::jsonb)>0)
-       OR ($8 IS NULL AND original.version IS NOT NULL
-         AND EXISTS (SELECT 1 FROM ac_verify_tool_coverage t
-           WHERE t.run_id=r.id AND t.tool=$5 AND t.version=original.version AND t.status='ok')
-         AND (coverage.collector_measurements @> jsonb_build_array(jsonb_build_object('tool',$5,'version',original.version))
-           OR (r.module='qa' AND $5='node-test-v8' AND $6='QA-COBERTURA-FUNCAO-SEM-TESTE'
-             AND EXISTS (SELECT 1 FROM ac_verify_tool_coverage t WHERE t.run_id=r.id AND t.tool=$10
-               AND t.version=original.version AND t.status='ok' AND t.detail ~ $11))))
-     )
-     ORDER BY original.seq LIMIT 1`,
-    [projectId, contextId, head, item.file, item.tool, item.rule, originalRunId,
-      source?.examiner_provider ?? null, JSON.stringify(source?.checklist ?? []), `qa-arquivo:${qaRecheckFile(item.file)}`,
-      // The collector sanitizer can mask "passadas: ramos" as a credential label.
-      '^V8 em três (passadas: ramos|pass…) [0-9]+/[0-9]+, funções [1-9][0-9]*/[1-9][0-9]*(; ramos [0-9]+/[0-9]+, funções [1-9][0-9]*/[1-9][0-9]*){2}$'],
-  );
-  return proof;
-}
-
-async function readModuleRegressionProof(
-  ledger: Ledger, projectId: string, repo: string, head: string, module: VerificationModule, item: RecheckScope,
-  signal?: AbortSignal,
-): Promise<{receipt: RecheckRegression; assertion: string} | undefined> {
-  const testFile = moduleRegressionPath(module, item.id);
-  // The QA collector writes both per-pass outcomes and the file/line of each
-  // traced function and test. Aggregate passes and static-only links lack either binding.
-  const file = qaRecheckFile(item.file);
-  const tracePrefix = `qa-funcionalidade:${file}:`;
-  const scope = `vínculo estático ${file}:${item.line} `;
-  const {rows} = await ledger.pool.query<ModuleToolCoverage & {runId: string; seq: number}>(
-    `WITH latest AS (
-       SELECT r.id, r.status FROM ac_verify_runs r JOIN ac_exam_contexts e
-         ON (e.project_id,e.context_id,e.module)=(r.project_id,r.context_id,r.module)
-       WHERE r.project_id=$1 AND r.module='qa' AND r.commit_id=$2 AND r.status IN ('done','failed')
-         AND r.report_dir=r.report_prepared_dir AND NOT r.report_legacy_missing
-       ORDER BY r.finished_at DESC NULLS LAST, r.id DESC LIMIT 1
-     )
-     SELECT r.id AS "runId", t.seq, t.tool, t.version, t.status, t.detail
-     FROM latest r JOIN ac_verify_tool_coverage t ON t.run_id=r.id
-     WHERE r.status='done' AND (
-       t.tool IN ('node-test-v8','node-test-v8-execucao','qa-matriz-estatica')
-       OR (starts_with(t.tool,$3) AND starts_with(t.detail,$4))
-     ) ORDER BY t.seq`,
-    [projectId, head, tracePrefix, scope],
-  );
-  const execution = rows.find(row => row.tool === 'node-test-v8' && row.status === 'ok');
-  const matrix = rows.find(row => row.tool === 'qa-matriz-estatica' && row.status === 'ok');
-  const passes = rows.filter(row => row.tool === 'node-test-v8-execucao');
-  if (!execution || !matrix || passes.length !== 3 || !passes.every((pass, index) => pass.status === 'ok'
-    && pass.version === execution.version && pass.detail.startsWith(`execução ${index + 1}: node:test resultado aprovado; `))) return;
-  for (const row of rows.filter(row => row.status === 'ok' && row.version === matrix.version && row.tool.startsWith(tracePrefix))) {
-    const fn = row.tool.slice(tracePrefix.length);
-    if (!/^[A-Za-z_$][\w$]*$/.test(fn)) continue;
-    const prefix = scope + fn + ' → ' + testFile;
-    if (!row.detail.startsWith(prefix + ':')) continue;
-    // Consume the collector's complete evidence for a test. A title with
-    // delimiters, a truncated row or a static relationship cannot authorize closure.
-    const test = /^:([1-9]\d{0,6}) ([\p{L}\p{N} _.-]+) \(passed,passed,passed, asserção executada nas três passadas\)$/u.exec(row.detail.slice(prefix.length));
-    if (!test) continue;
-    const testLine = Number(test[1]);
-    const code = await readRecheckLines(repo, head, testFile, testLine, signal, 8);
-    const title = test[2]!.replaceAll('.', '\\.');
-    const name = fn.replaceAll('$', '\\$');
-    // The trace alone also accepts calls outside the asserted expression.
-    // Match a single direct assertion so the observed probe tests the traced function.
-    const start = String.raw`^(?:test|it)\(\s*(['"])${title}\1\s*,\s*\(\s*\)\s*=>\s*`;
-    const call = String.raw`(assert\.(?:equal|strictEqual|deepEqual|deepStrictEqual)\(\s*${name}\([^();{}\r\n]*\)\s*,\s*[^();{}\r\n]+\))`;
-    const inline = new RegExp(start + call + String.raw`\s*\);?(?:\n|$)`).exec(code);
-    const block = new RegExp(start + String.raw`\{\s*` + call + String.raw`;?\s*\}\s*\);?(?:\n|$)`).exec(code);
-    const assertion = (inline ?? block)?.[2];
-    if (assertion && !assertion.includes('[trecho omitido]')) return {
-      receipt: {runId: row.runId, tool: row.tool, version: row.version, executionVersion: execution.version,
-        testFile, testLine, assertionDigest: digest(assertion), receiptDigest: digest({trace: row, execution, matrix, passes})},
-      assertion,
-    };
-  }
+async function readRecheckLine(repo: string, commit: string, file: string, line: number, signal?: AbortSignal) {
+  const blob = await readRecheckBlob(repo, commit, file, signal);
+  const target = blob && sanitizeRecheckText(blob.text).split('\n')[line - 1]?.trim();
+  return target && target !== '[trecho omitido]' && target.length <= EXCERPT_LIMIT / 2
+    && !MULTILINE_CONTROL_CHAR.test(target) ? target : '';
 }
 
 function sanitizedRecheckReason(reason: string): string {
   const safe = sanitizeRecheckText(reason).replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim();
   return hasKnownSecret(safe) ? '[trecho omitido]' : safe;
-}
-
-function citesRecheckCorrection(reason: string, original: string, current: string, test: string): boolean {
-  const cited = [...reason.matchAll(/`([^`\r\n]+)`/g)].map(([, expression]) => expression!);
-  return cited.includes(test)
-    && cited.some(expression => original.includes(expression) && !current.includes(expression))
-    && cited.some(expression => current.includes(expression) && !original.includes(expression));
 }
 
 async function authorizeModuleRecheck(
@@ -3082,20 +2923,25 @@ export async function recheckModuleFindings(
       if (!row) throw new Refusal('VERIFY_FINDING_MISSING', 404);
       const file = run.module === 'prontidao' && isProtectedLocation(row.file)
         ? protectedLocation(row.file) : assertModuleRepoRelativePath(row.file);
-      const {sources, reference, scenario} = row.payload;
-      return {id, file, line: row.line ?? 1, tool: sources?.[0] ?? run.module,
-        rule: sources?.[1] ?? reference ?? id, scenario};
+      const {sources, reference, scenario, proof} = row.payload;
+      return {id, file, line: row.line ?? 1, hasOriginalLine: row.line !== null, tool: sources?.[0] ?? run.module,
+        rule: sources?.[1] ?? reference ?? id, scenario, proof};
     });
     const repo = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0]?.repo;
-    const pending = (await client.query<{detail: unknown}>(
-      `SELECT a.detail FROM ac_audit a WHERE a.context_id=$1 AND a.kind='module.recheck_report_pending'
-       AND a.detail->>'runId'=$2 AND NOT EXISTS (
+    const latest = (await client.query<{detail: unknown; published: boolean}>(
+      `SELECT a.detail, EXISTS (
          SELECT 1 FROM ac_audit p WHERE p.context_id=a.context_id AND p.kind='module.recheck_report_published'
          AND p.detail->>'runId'=$2 AND p.detail->>'intentId'=a.detail->>'intentId'
-       ) ORDER BY a.id DESC LIMIT 1`, [authority.contextId, run.id],
+       ) AS published FROM ac_audit a WHERE a.context_id=$1 AND a.kind='module.recheck_report_pending'
+       AND a.detail->>'runId'=$2 ORDER BY a.id DESC LIMIT 1`, [authority.contextId, run.id],
     )).rows[0];
-    const journal = pending && ModuleRecheckPublication.parse(pending.detail);
-    if (journal && sameIdSet(requested, journal.results.map(result => result.id))) return {run, journal, replay: true as const};
+    const previous = latest && ModuleRecheckPublication.parse(latest.detail);
+    const legacyExamOrigin = !run.exam_origin_sha256 && items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo');
+    if (previous && sameIdSet(requested, previous.results.map(result => result.id))
+      && (!latest!.published || (!legacyExamOrigin && repo && await recheckHead(repo, signal) === previous.commit))) {
+      return {run, journal: previous, replay: true as const, previousPublished: latest!.published};
+    }
+    const journal = latest?.published ? undefined : previous;
     if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     const generation = await client.query<{recheck_generation: string}>(
       'UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1 WHERE id=$1 RETURNING recheck_generation::text',
@@ -3115,7 +2961,7 @@ export async function recheckModuleFindings(
       verifiedOrigin = await readTextInside(projectDir, sourceFile, 'VERIFY_REPORT_INVALID', loaded.run.exam_origin_sha256);
     } catch (error) {
       // A committed verdict remains in the publication journal until the archive is restored.
-      if (loaded.replay) return {results: loaded.journal.results, publication: 'pending'};
+      if (loaded.replay && !loaded.previousPublished) return {results: loaded.journal.results, publication: 'pending'};
       throw error;
     }
   }
@@ -3174,8 +3020,9 @@ export async function recheckModuleFindings(
     const audit: (ModuleRecheckResult & {
       examiner: ModuleRecheckExaminer | null; reviewer: ModuleRecheckReviewer | null; proofDigest: string | null;
       reviewerReason: string | null;
+      reviewerBinding: string | null;
       source: {file: string; line: number; tool: string; rule: string; commit: string; origin: string; evidenceDigest: string} | null;
-      moduleProof: RecheckProof | null; regressionProof: RecheckRegression | null;
+      moduleProof: FunctionalRegression['moduleProof'] | null; regressionProof: FunctionalRegression['receipt'] | null;
     })[] = [];
     const hasExamFindings = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo');
     const archived = verifiedOrigin !== undefined || (hasExamFindings && await lstat(sourceFile).then(() => true, error => {
@@ -3204,7 +3051,7 @@ export async function recheckModuleFindings(
       const fromExaminer = item.tool === 'examinador' && item.rule === 'exame-de-arquivo';
       const observed = fromExaminer ? reviewedSources.get(item.id) : undefined;
       const historicalLine = !logOrProtected && (sameHistory || (fromExaminer && !archived)) && /^[0-9a-f]{40}$/.test(originalCommit)
-        ? await readRecheckLines(loaded.repo, originalCommit, item.file, item.line, signal) : '';
+        ? await readRecheckLine(loaded.repo, originalCommit, item.file, item.line, signal) : '';
       const legacyEvidence = historicalLine && item.scenario.trim() && historicalLine.trim() === item.scenario.trim();
       const original = fromExaminer
         ? (archived ? observed : legacyEvidence ? {file: item.file, line: item.line, evidence: item.scenario} : undefined)
@@ -3215,82 +3062,111 @@ export async function recheckModuleFindings(
       }
       const sourceKnown = original && (examiner || (row?.provenance === 'collector' && !fromExaminer));
       const evidence = !original || logOrProtected ? '' : sanitizeRecheckText(original.evidence);
-      const line = !logOrProtected && sourceKnown ? await readRecheckLines(loaded.repo, head, item.file, item.line, signal) : '';
-      let result: ModuleRecheckResult;
+      const functional = supportsFunctionalRecheck(moduleName, item);
+      let line = !functional && !logOrProtected && sourceKnown
+        ? await readRecheckLine(loaded.repo, head, item.file, item.line, signal) : '';
+      let result: ModuleRecheckResult | undefined;
       let reviewer: ModuleRecheckReviewer | undefined;
       let proofDigest: string | undefined;
       let reviewerReason: string | undefined;
-      let moduleProof: RecheckProof | undefined;
-      let regressionProof: RecheckRegression | undefined;
+      let reviewerBinding: string | undefined;
+      let regression: FunctionalRegression | undefined;
       const pending = (reason: string): ModuleRecheckResult => ({id: item.id, status: 'pendente', reason});
       if (logOrProtected) {
         result = pending('MODULE_RECHECK_PROTECTED');
       } else if (!sourceKnown) {
         result = pending('MODULE_RECHECK_ORIGINAL_UNKNOWN');
-      } else if (!line || !evidence.replaceAll('[trecho omitido]', '').trim()) {
+      } else if (!evidence.replaceAll('[trecho omitido]', '').trim()) {
         result = pending('MODULE_RECHECK_EVIDENCE_UNAVAILABLE');
-      } else {
+      } else if (functional) {
+        if (!item.hasOriginalLine || !original || !('message' in original)
+          || item.scenario !== sanitizeText(original.message) || item.proof !== evidence) {
+          result = pending('MODULE_RECHECK_FUNCTIONAL_ORIGIN_UNPROVEN');
+        } else if (!sameHistory) {
+          result = pending(head === originalCommit ? 'MODULE_RECHECK_SAME_COMMIT' : 'MODULE_RECHECK_CHANGE_UNPROVEN');
+        } else {
+          const measured = await measureRecheckRegression(ledger, {
+            projectId: input.projectId, contextId: authority.contextId, repo: loaded.repo, runId: loaded.run.id,
+            originalCommit, head, item: {id: item.id, file: item.file, line: item.line, tool: item.tool, rule: item.rule},
+            evidence, originalMessage: item.scenario, testFile: moduleRegressionPath(moduleName, item.id), signal,
+          });
+          if (measured.reason !== undefined) result = pending(measured.reason);
+          else if ([measured.before.code, measured.after.code, measured.receipt.testTitle, measured.assertion]
+            .some(value => sanitizeRecheckText(value) !== value)) result = pending('MODULE_RECHECK_EVIDENCE_UNAVAILABLE');
+          else {
+            regression = measured;
+            line = measured.after.code;
+          }
+        }
+      } else if (!line) {
+        result = pending('MODULE_RECHECK_EVIDENCE_UNAVAILABLE');
+      }
+
+      if (!result) {
         const rule = sanitizeRecheckText(item.rule);
         const hypothesis = observed?.hypothesis ? sanitizeRecheckText(observed.hypothesis)
           : fromExaminer ? 'A linha atual ainda sustenta a observação original?' : moduleCollectorHypothesis(rule);
-        const canProveChange = sameHistory && historicalLine && historicalLine !== line;
-        let regressionAssertion: string | null = null;
-        if (canProveChange) {
-          moduleProof = await readModuleCorrectionProof(ledger, input.projectId, authority.contextId, loaded.run.id,
-            head, item, fromExaminer ? row : undefined);
-          if (moduleProof) {
-            const regression = await readModuleRegressionProof(ledger, input.projectId, loaded.repo, head, moduleName, item, signal);
-            regressionProof = regression?.receipt;
-            regressionAssertion = regression?.assertion ?? null;
-          }
-        }
         const reviewEvidence = {
-          module: moduleName, file: item.file, line: item.line, code: line, commit: head,
+          module: moduleName, file: item.file, line: regression?.after.line ?? item.line, code: line, commit: head,
           tool: sanitizeRecheckText(item.tool), rule, hypothesis, evidence,
-          originalCommit, originalCode: historicalLine || null, moduleProof: moduleProof ?? null, regressionProof: regressionProof ?? null,
-          regressionAssertion,
+          originalCommit, originalCode: regression?.before.code ?? (historicalLine || null),
+          moduleProof: regression?.moduleProof ?? null, regressionProof: regression?.receipt ?? null,
+          regressionAssertion: regression?.assertion ?? null,
         };
         const task = JSON.parse(moduleReviewTask(reviewEvidence));
-        task.instruction += ' Ao descartar a hipótese com prova de correção, cite entre crases o trecho original substituído, o trecho atual e o caminho do teste atestado. Explique como a asserção de regressão verifica a correção para esta regra.';
-        const reviewed = await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, signal});
+        if (regression) {
+          task.instruction = 'Examine passivamente a identidade da função e as duas observações da mesma asserção. '
+            + 'Sem ferramentas, rede ou escrita. Responda JSON com kind confirmacao, o binding do pedido, status provavel ou descartado, reason e proof. '
+            + 'Se a prova refutar a hipótese, copie code integralmente em proof e inclua correction com rule, assertion (regressionAssertion), '
+            + 'original e corrected (de regressionProof.observations) e criterion direct-call-meets-expected-value. '
+            + 'Explique em reason como a chamada direta exerce a função apontada pela regra e verifica o resultado esperado. '
+            + 'Cite entre crases a regra, a asserção exata e os valores obtidos nas duas revisões.';
+        }
+        const reviewed = !regression && task.criterion === null && head !== originalCommit
+          ? {reason: 'MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED'}
+          : await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, signal});
         signal?.throwIfAborted();
-        reviewer = reviewed.reviewer;
+        reviewer = 'reviewer' in reviewed ? reviewed.reviewer : undefined;
         if ('reason' in reviewed) {
           result = pending(/^[A-Z][A-Z0-9_]{0,79}$/.test(reviewed.reason) ? reviewed.reason : 'MODULE_RECHECK_PROOF_UNAVAILABLE');
         } else if (examiner && (reviewed.reviewer.provider === examiner.provider || reviewed.reviewer.profileId === examiner.profileId
           || reviewed.reviewer.accountId === examiner.accountId)) {
           throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
         } else {
-          const verdict = parseModuleReviewOutput(reviewed.output);
+          const parsed = parseModuleReviewJson(reviewed.output);
+          const verdict = regression ? readFunctionalRecheckVerdict(parsed) : readModuleReviewVerdict(parsed);
           if (verdict) reviewerReason = sanitizedRecheckReason(verdict.reason);
-          if (!verdict || verdict.status === 'provavel' || !hasModuleReviewProof(reviewEvidence, verdict)) {
+          if (regression) {
+            if (!verdict || verdict.status !== 'descartado' || verdict.binding !== task.binding || verdict.proof.trim() !== line) {
+              result = pending('MODULE_RECHECK_PROOF_UNAVAILABLE');
+            } else if (!recheckCorrectionMatches(parsed, reviewerReason ?? '', regression)) {
+              result = pending('MODULE_RECHECK_CORRECTION_UNEXPLAINED');
+            } else {
+              result = {id: item.id, status: 'fechado'};
+              proofDigest = digest(line);
+              reviewerBinding = verdict.binding;
+            }
+          } else if (!verdict || verdict.status === 'provavel' || !hasModuleReviewProof(reviewEvidence, verdict)) {
             result = pending('MODULE_RECHECK_PROOF_UNAVAILABLE');
           } else if (verdict.status === 'confirmado') {
             result = {id: item.id, status: 'reaberto'};
             proofDigest = digest(line);
           } else if (head === originalCommit) {
             result = pending('MODULE_RECHECK_SAME_COMMIT');
-          } else if (!canProveChange) {
+          } else if (!sameHistory || !historicalLine || historicalLine === line) {
             result = pending('MODULE_RECHECK_CHANGE_UNPROVEN');
-          } else if (!moduleProof) {
-            result = pending('MODULE_RECHECK_MODULE_PROOF_MISSING');
-          } else if (!regressionProof) {
-            result = pending('MODULE_RECHECK_REGRESSION_PROOF_MISSING');
-          } else if (!citesRecheckCorrection(reviewerReason ?? '', historicalLine, line, regressionProof.testFile)) {
-            result = pending('MODULE_RECHECK_CORRECTION_UNEXPLAINED');
           } else {
-            result = {id: item.id, status: 'fechado'};
-            proofDigest = digest(line);
+            result = pending('MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED');
           }
         }
       }
       results.push(result);
       audit.push({...result, examiner, reviewer: reviewer ?? null, proofDigest: proofDigest ?? null,
-        reviewerReason: reviewerReason ?? null,
+        reviewerReason: reviewerReason ?? null, reviewerBinding: reviewerBinding ?? null,
         source: sourceKnown && evidence ? {file: item.file, line: item.line, tool: sanitizeRecheckText(item.tool),
           rule: sanitizeRecheckText(item.rule), commit: originalCommit,
           origin: fromExaminer ? (archived ? 'examiner' : 'legacy-git') : 'collector', evidenceDigest: digest(evidence)} : null,
-        moduleProof: moduleProof ?? null, regressionProof: regressionProof ?? null,
+        moduleProof: regression?.moduleProof ?? null, regressionProof: regression?.receipt ?? null,
       });
     }
 
@@ -3308,12 +3184,15 @@ export async function recheckModuleFindings(
         || await recheckHead(loaded.repo, signal) !== head) {
         throw new Refusal('VERIFY_RUN_CONFLICT', 409);
       }
-      const proofRuns = [...new Set(audit.flatMap(item => item.status === 'fechado'
-        ? [item.moduleProof!.runId, item.regressionProof!.runId] : []))];
+      const proofRuns = [...new Set(audit.flatMap(item => item.status === 'fechado' ? [item.moduleProof!.runId] : []))];
       if (proofRuns.length) {
         const liveProofs = await client.query(
-          `SELECT id FROM ac_verify_runs WHERE id=ANY($1::uuid[]) AND project_id=$2 AND commit_id=$3 AND status='done'
-           AND report_dir=report_prepared_dir AND NOT report_legacy_missing ORDER BY id FOR SHARE`, [proofRuns, input.projectId, head],
+          `SELECT id FROM ac_verify_runs WHERE id=ANY($1::uuid[]) AND project_id=$2 AND context_id=$4
+           AND module='qa' AND commit_id=$3 AND status='done' AND report_dir=report_prepared_dir AND NOT report_legacy_missing
+           AND id=(SELECT id FROM ac_verify_runs WHERE project_id=$2 AND context_id=$4 AND module='qa'
+             AND commit_id=$3 AND status IN ('done','failed') AND report_dir=report_prepared_dir AND NOT report_legacy_missing
+             ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1)
+           ORDER BY id FOR SHARE`, [proofRuns, input.projectId, head, authority.contextId],
         );
         if (liveProofs.rowCount !== proofRuns.length) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
       }
@@ -3350,10 +3229,14 @@ export async function recheckModuleFindings(
   }
 }
 
-function parseModuleReviewOutput(output: string) {
+function parseModuleReviewJson(output: string): unknown {
   try {
-    return readModuleReviewVerdict(JSON.parse(output.trim().replace(/^\uFEFF/, '')));
+    return JSON.parse(output.trim().replace(/^\uFEFF/, ''));
   } catch {
     return undefined;
   }
+}
+
+function parseModuleReviewOutput(output: string) {
+  return readModuleReviewVerdict(parseModuleReviewJson(output));
 }
