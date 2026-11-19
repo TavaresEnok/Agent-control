@@ -21,6 +21,7 @@ import {promisify} from 'node:util';
 import semver from 'semver';
 import {minimatch} from 'minimatch';
 import {validateCycloneDx} from './cyclonedx.mjs';
+import {fetchRegistryVersion, NPM_REGISTRY} from './fetch-registry.mjs';
 
 const execFile = promisify(execFileCb);
 const require = createRequire(import.meta.url);
@@ -454,39 +455,29 @@ export async function resolveRegistrySnapshot(customPath, defaultPaths = DEFAULT
     const explicit = candidate === customPath || candidate === configuredPath;
     const result = candidate.includes('..') || candidate.includes('\0')
       ? {kind: 'unreadable'}
-      : await readArtifact(candidate, MAX_REGISTRY_BYTES);
+      : await readArtifact(candidate, MAX_REGISTRY_BYTES, MAX_REGISTRY_BYTES, true);
     if (result.kind === 'missing' && !explicit) continue;
-    if (result.kind === 'ok') {
+    if (result.kind === 'ok' && isUtf8(result.content)) {
       try {
-        const parsed = JSON.parse(result.content);
+        const parsed = JSON.parse(result.content.toString('utf8'));
         if (isRecord(parsed)) return {path: candidate, versions: parsed};
       } catch { /* Record invalid JSON below. */ }
     }
-    const failure = {path: candidate, versions: {}, error: result.kind === 'ok'
-      ? 'registro_invalido' : 'registro_ilegivel_ou_acima_do_limite'};
+    const error = result.kind === 'missing' ? 'registro_ausente' :
+      result.kind === 'ok' ? 'registro_invalido' : 'registro_ilegivel_ou_acima_do_limite';
+    const failure = {path: candidate, versions: {}, error};
     if (explicit) return failure;
     fallbackError ??= failure;
   }
   return fallbackError;
 }
 
-function ncuSpecifier(spec, onlineMode) {
+function ncuSpecifier(spec) {
   const alias = NPM_ALIAS.exec(spec);
-  const hash = onlineMode && !alias && /^(?:git(?:\+[^:]+)?|github|gitlab|bitbucket|https?):|^[\w.-]+\/[\w.-]+#/.test(spec)
-    ? spec.indexOf('#') : -1;
-  let range = alias ? alias[2] : spec;
-  let source = alias ? `npm:${alias[1]}` : '';
-  if (hash > 0) {
-    try {
-      range = decodeURIComponent(spec.slice(hash + 1)).replace(/^semver:/, '');
-      source = spec.slice(0, hash + 1);
-    } catch {
-      return null;
-    }
-  }
+  const range = alias ? alias[2] : spec;
   const intervals = semverIntervals(range);
   if (!intervals.length) return null;
-  return {range, source, registryName: alias?.[1], intervals, minimum: minimumOfIntervals(intervals)};
+  return {range, registryName: alias?.[1], intervals, minimum: minimumOfIntervals(intervals)};
 }
 
 function isForwardUpdate(current, target) {
@@ -495,34 +486,43 @@ function isForwardUpdate(current, target) {
     hasFloor ? semver.gt(target.minimum, minimum) : semver.gtr(target.minimum, range));
 }
 
-function checkNcuProposal(entry, target, pkg, installation, onlineMode) {
+function inspectNcuProposal(current, target, pkg, installation) {
   if (!target) return {reason: 'alvo_nao_comparavel'};
-  if (entry.current.source !== target.source) return {reason: 'identidade_alterada'};
-  if (!isForwardUpdate(entry.current, target)) return {reason: 'direcao_de_atualizacao_nao_comprovada'};
-
-  const alias = entry.current.registryName;
-  const lock = installation?.lock;
-  if (alias || installation?.path) {
-    if (!lock?.parsed) {
-      return {reason: alias ? 'identidade_alias_nao_comprovada' : 'lockfile_nao_verificavel'};
-    }
-    const match = inspectNpmLockEntry(lock.parsed, installation.workspacePath, pkg, entry.current);
-    if (!match.version || match.linked) return {reason: match.reason ?? 'registro_inaplicavel_a_link_local'};
-    if (!entry.latest || !satisfiesRange(entry.latest, target.range)) return {reason: 'alvo_nao_confirmado_no_registro'};
-    if (!semver.gt(entry.latest, match.version)) return {reason: 'registro_nao_supera_versao_travada'};
-    if (semver.lt(target.minimum, match.version)) return {reason: 'alvo_admite_versao_inferior_ao_lock'};
-    return {version: match.version, key: match.key};
-  }
-
-  return onlineMode || satisfiesRange(entry.latest, target.range) ? {} : {reason: 'alvo_nao_confirmado_no_registro'};
+  if (current.registryName !== target.registryName) return {reason: 'identidade_alterada'};
+  if (!isForwardUpdate(current, target)) return {reason: 'direcao_de_atualizacao_nao_comprovada'};
+  if (!installation?.path) return {reason: 'lockfile_ausente'};
+  if (!installation.lock?.parsed) return {reason: 'lockfile_nao_verificavel'};
+  const match = inspectNpmLockEntry(installation.lock.parsed, installation.workspacePath, pkg, current);
+  if (!match.version || match.linked) return {reason: match.reason ?? 'registro_inaplicavel_a_link_local'};
+  if (!satisfiesRange(match.version, current.range)) return {reason: 'versao_travada_incompativel_com_declaracao'};
+  return match;
 }
 
 function dependencyKey(manifest, section, pkg) {
   return JSON.stringify([manifest, section, pkg]);
 }
 
+function createOnlineReleaseLookup(get) {
+  const confirmations = new Map();
+  let timeLeft = TOOL_TIMEOUT_MS;
+
+  return async (pkg, version) => {
+    const release = `${pkg}@${version}`;
+    if (confirmations.has(release)) return confirmations.get(release);
+    if (timeLeft <= 0) return {reason: 'limite_de_tempo_do_registro_online'};
+
+    const start = performance.now();
+    const timeoutMs = Math.min(10_000, Math.ceil(timeLeft));
+    const confirmation = await fetchRegistryVersion(pkg, version, {get, timeoutMs})
+      .then(result => ({version: result}), err => ({error: String(err?.message ?? err).slice(0, 150)}));
+    timeLeft -= performance.now() - start;
+    confirmations.set(release, confirmation);
+    return confirmation;
+  };
+}
+
 /** Executes npm-check-updates safely on isolated copies of package.json files. */
-export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVersion, onlineMode, lookupLock}) {
+export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVersion, onlineMode, lookupLock, registryGet}) {
   const coverage = [];
   const findings = [];
   const ncuDetectedPackages = new Set();
@@ -537,29 +537,30 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     return {coverage, findings, ncuDetectedPackages};
   }
 
-  if (!onlineMode && !registry) {
+  if (!onlineMode && (!registry || registry.error)) {
     coverage.push({
       tool: 'npm-check-updates',
       version: ncuVersion,
-      status: 'failed',
-      detail: 'Registro offline JSON ausente e rede desabilitada.',
+      status: 'skipped',
+      detail: `modo=offline-json; motivo=${registry?.error ?? 'registro_ausente'}; prova_parcial=true`,
     });
     return {coverage, findings, ncuDetectedPackages};
   }
 
-  let ncuRegistryPath = registry?.path;
-  if (!onlineMode && registry) {
+  let ncuRegistryPath;
+  if (!onlineMode) {
     const validVersions = Object.fromEntries(Object.entries(registry.versions).filter(([, version]) => typeof version === 'string' && semver.valid(version)));
     ncuRegistryPath = join(workRoot, 'valid-registry.json');
     await writeFile(ncuRegistryPath, JSON.stringify(validVersions), 'utf8');
   }
 
-  if (registry?.error) coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'failed', detail: `erro=${registry.error}`});
-
   const ncuCfgDir = join(workRoot, 'ncu-cfg');
   await mkdir(ncuCfgDir, {recursive: true});
   const ncuCfgName = '.ncurc.json';
   await writeFile(join(ncuCfgDir, ncuCfgName), '{}\n', 'utf8');
+  const ncuEnv = onlineMode
+    ? Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^npm_config_/i.test(name)))
+    : process.env;
 
   let totalDeps = 0;
   let totalMatched = 0;
@@ -567,9 +568,9 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
   let totalUnsupported = 0;
   let totalOmitted = 0;
   let totalOutdated = 0;
-  let totalOnlineChecked = 0;
-  let toolFailed = Boolean(registry?.error);
-  let failMessage = registry?.error || '';
+  let toolFailed = false;
+  let failMessage = '';
+  const lookupRelease = onlineMode ? createOnlineReleaseLookup(registryGet) : null;
 
   for (let idx = 0; idx < manifests.length; idx += 1) {
     const manifest = manifests[idx];
@@ -620,9 +621,10 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
       version: typeof parsed.version === 'string' ? parsed.version : '0.0.0',
     };
     const depLocations = new Map();
+    const registryScopes = new Set();
     const fileMissingSet = new Set();
     let fileOmitted = 0;
-    let invalidProposals = false;
+    let fileFailed = false;
     let fileDepCount = 0;
     let fileRegistryMatches = 0;
     let fileMissingCount = 0;
@@ -655,7 +657,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
             evidence: `${sec}: "${pkg}": "${spec}"`,
           });
         }
-        const current = NPM_NAME.test(pkg) ? ncuSpecifier(spec, onlineMode) : null;
+        const current = NPM_NAME.test(pkg) ? ncuSpecifier(spec) : null;
         if (!depLocations.has(pkg)) depLocations.set(pkg, []);
         const entry = {section: sec, spec, current};
         depLocations.get(pkg).push(entry);
@@ -666,15 +668,16 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
           continue;
         }
         sanitized[sec][pkg] = spec;
-        const meta = registryVersion(registry, current.registryName ?? pkg);
-        if (meta.kind === 'ok') entry.latest = meta.version;
-        if (!onlineMode) {
+        const registryName = current.registryName ?? pkg;
+        if (onlineMode) {
+          if (registryName.startsWith('@')) registryScopes.add(registryName.split('/')[0]);
+        } else {
+          const meta = registryVersion(registry, registryName);
           if (meta.kind === 'ok') {
             fileRegistryMatches += 1;
           } else {
             fileMissingCount += 1;
             if (meta.kind === 'invalid') fileInvalidMeta += 1;
-            totalMissing += 1;
             fileMissingSet.add(pkg);
           }
         }
@@ -697,7 +700,11 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
       '--packageFile',
       isoPkgPath,
     ];
-    if (!onlineMode) {
+    if (onlineMode) {
+      args.push('--registryType', 'npm', '--registry', NPM_REGISTRY, '--removeRange');
+      const scopeConfig = Array.from(registryScopes, scope => `${scope}:registry=${NPM_REGISTRY}\n`);
+      await writeFile(join(isoDir, '.npmrc'), scopeConfig.join(''), 'utf8');
+    } else {
       args.push('--registryType', 'json', '--registry', ncuRegistryPath);
     }
 
@@ -708,12 +715,14 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
         timeout: TOOL_TIMEOUT_MS,
         maxBuffer: 10 * 1024 * 1024,
         env: {
-          ...process.env,
+          ...ncuEnv,
           HOME: workRoot,
           TMPDIR: workRoot,
           NO_UPDATE_NOTIFIER: '1',
           NPM_CONFIG_UPDATE_NOTIFIER: 'false',
-          ...(!onlineMode && {NPM_CONFIG_OFFLINE: 'true'}),
+          ...(onlineMode
+            ? {NPM_CONFIG_USERCONFIG: join(isoDir, '.npmrc')}
+            : {NPM_CONFIG_OFFLINE: 'true'}),
         },
       });
       ncuStdout = res.stdout;
@@ -751,33 +760,67 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
       continue;
     }
 
-    totalMatched += fileRegistryMatches;
-    if (onlineMode) totalOnlineChecked += fileDepCount - fileUnsupported;
     let fileOutdated = 0;
     let installation;
     for (const [pkg, targetSpec] of Object.entries(upgraded)) {
       const entries = depLocations.get(pkg);
       if (!entries || typeof targetSpec !== 'string') {
-        invalidProposals = true;
+        fileFailed = true;
         failMessage = `Proposta inválida de npm-check-updates em ${manifest.rel}`;
         toolFailed = true;
         coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'failed',
           detail: `arquivo=${manifest.rel}; pacote=${pkg}; erro=${entries ? 'tipo_alvo_invalido' : 'pacote_nao_declarado'}`});
         continue;
       }
-      const target = ncuSpecifier(targetSpec, onlineMode);
+      const target = ncuSpecifier(targetSpec);
       for (const entry of entries) {
         if (!entry.current) continue;
-        const registryDependency = !entry.current.source || entry.current.registryName;
-        if (target && registryDependency && installation === undefined) {
+        if (target && installation === undefined) {
           installation = await lookupLock?.(manifest) ?? null;
         }
-        const {version, key, reason} = checkNcuProposal(entry, target, pkg, registryDependency ? installation : null, onlineMode);
+        const {version, key, registryName, reason} = inspectNcuProposal(entry.current, target, pkg, installation);
         if (reason) {
           omit(pkg, entry.section, reason);
           continue;
         }
-        const risk = classifySemverRisk(version ?? entry.current.range, version ? entry.latest : target.range);
+
+        let publishedVersion;
+        if (onlineMode) {
+          if (!semver.valid(target.range)) {
+            omit(pkg, entry.section, 'alvo_online_sem_versao_exata');
+            continue;
+          }
+          const confirmation = await lookupRelease(registryName, target.range);
+          if (confirmation.reason) {
+            omit(pkg, entry.section, confirmation.reason);
+            continue;
+          }
+          if (Object.hasOwn(confirmation, 'error')) {
+            toolFailed = fileFailed = true;
+            failMessage = `Falha na confirmação online de ${registryName}@${target.range}: ${confirmation.error}`;
+            coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'failed',
+              detail: `arquivo=${manifest.rel}; pacote=${pkg}; secao=${entry.section}; erro=consulta_registro_online; detalhe=${confirmation.error}`});
+            continue;
+          }
+          publishedVersion = confirmation.version;
+          if (publishedVersion) fileRegistryMatches += 1;
+          else fileMissingCount += 1;
+        } else {
+          publishedVersion = registryVersion(registry, registryName).version;
+        }
+        if (!publishedVersion || !satisfiesRange(publishedVersion, target.range)) {
+          omit(pkg, entry.section, 'alvo_nao_confirmado_no_registro');
+          continue;
+        }
+        if (!semver.gt(publishedVersion, version)) {
+          omit(pkg, entry.section, 'registro_nao_supera_versao_travada');
+          continue;
+        }
+        if (semver.lt(target.minimum, version)) {
+          omit(pkg, entry.section, 'alvo_admite_versao_inferior_ao_lock');
+          continue;
+        }
+        const risk = classifySemverRisk(version, publishedVersion);
         const line = findLineInPackageJson(raw, pkg, entry.section);
         fileOutdated += 1;
         totalOutdated += 1;
@@ -789,25 +832,27 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
           line,
           severity: risk.severity,
           message: `Dependência "${pkg}" desatualizada (${entry.spec} -> ${targetSpec}; risco ${risk.riskLabel}).`,
-          evidence: `${entry.section}: "${pkg}": "${entry.spec}" -> "${pkg}": "${targetSpec}"` +
-            (version ? `; ${installation.path}#${key}="${version}"; registro="${entry.latest}"` : ''),
+          evidence: `${entry.section}: "${pkg}": "${entry.spec}" -> "${pkg}": "${targetSpec}"; ${installation.path}#${key}="${version}"; registro="${publishedVersion}"` +
+            (onlineMode ? `; origem=${NPM_REGISTRY}` : ''),
         });
       }
     }
 
+    totalMatched += fileRegistryMatches;
+    totalMissing += fileMissingCount;
     if (!onlineMode && fileDepCount > 0 && fileRegistryMatches === 0) {
       coverage.push({
         tool: 'npm-check-updates',
         version: ncuVersion,
-        status: invalidProposals ? 'failed' : 'skipped',
+        status: fileFailed ? 'failed' : 'skipped',
         detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=0; sem_metadados=${fileMissingCount}; faixas_nao_verificadas=${fileUnsupported}; desatualizadas=0; atualizacoes_omitidas=${fileOmitted}; motivo=${fileMissingCount ? 'nenhuma_dependencia_no_registro_offline' : 'faixas_nao_semver_offline'}`,
       });
     } else {
       coverage.push({
         tool: 'npm-check-updates',
         version: ncuVersion,
-        status: invalidProposals ? 'failed' : fileOmitted ? 'skipped' : 'ok',
-        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=${onlineMode ? fileDepCount - fileUnsupported : fileRegistryMatches}; sem_metadados=${onlineMode ? 0 : fileMissingCount}; desatualizadas=${fileOutdated}; atualizacoes_omitidas=${fileOmitted}`,
+        status: fileFailed ? 'failed' : fileOmitted ? 'skipped' : 'ok',
+        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=${fileRegistryMatches}; sem_metadados=${fileMissingCount}; desatualizadas=${fileOutdated}; atualizacoes_omitidas=${fileOmitted}`,
       });
     }
 
@@ -828,7 +873,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
   }
 
   let summaryStatus = 'ok';
-  let summaryDetail = `manifestos=${manifests.length}; dependencias=${totalDeps}; verificadas_registro=${onlineMode ? totalOnlineChecked : totalMatched}; sem_metadados=${onlineMode ? 0 : totalMissing}; desatualizadas=${totalOutdated}; atualizacoes_omitidas=${totalOmitted}; modo=${onlineMode ? 'online' : 'offline-json'}`;
+  let summaryDetail = `manifestos=${manifests.length}; dependencias=${totalDeps}; verificadas_registro=${totalMatched}; sem_metadados=${totalMissing}; desatualizadas=${totalOutdated}; atualizacoes_omitidas=${totalOmitted}; modo=${onlineMode ? 'online' : 'offline-json'}`;
   if (toolFailed) {
     summaryStatus = 'failed';
     summaryDetail = failMessage;
@@ -980,41 +1025,22 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
     }
   }
 
-  if (spawnError) {
-    coverage.push({
-      tool: 'ast-grep',
-      version: astGrepVersion,
-      status: 'failed',
-      detail: spawnError.slice(0, 240),
-    });
-    return {coverage, findings};
-  }
-
-  if (exitCode !== 0 && exitCode !== 1) {
+  let toolError = spawnError?.slice(0, 240);
+  let diagnostics = [];
+  if (!toolError && exitCode !== 0 && exitCode !== 1) {
     const errText = stderr.trim() || 'ast-grep retornou erro sem saída JSON.';
-    coverage.push({
-      tool: 'ast-grep',
-      version: astGrepVersion,
-      status: 'failed',
-      detail: `exit=${exitCode}; erro=${errText.slice(0, 200)}`,
-    });
-    return {coverage, findings: []};
+    toolError = `exit=${exitCode}; erro=${errText.slice(0, 200)}`;
   }
 
-  let diagnostics;
-  try {
-    if (!stdout.trim()) throw new Error('Saída JSON vazia do ast-grep');
-    diagnostics = astGrepDiagnostics(stdout);
-    if (exitCode === 1 && diagnostics.length === 0) throw new Error('ast-grep retornou erro sem diagnósticos');
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Saída JSON inválida do ast-grep';
-    coverage.push({
-      tool: 'ast-grep',
-      version: astGrepVersion,
-      status: 'failed',
-      detail: `exit=${exitCode}; erro=${msg.slice(0, 200)}`,
-    });
-    return {coverage, findings: []};
+  if (!toolError) {
+    try {
+      if (!stdout.trim()) throw new Error('Saída JSON vazia do ast-grep');
+      diagnostics = astGrepDiagnostics(stdout);
+      if (exitCode === 1 && diagnostics.length === 0) throw new Error('ast-grep retornou erro sem diagnósticos');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Saída JSON inválida do ast-grep';
+      toolError = `exit=${exitCode}; erro=${msg.slice(0, 200)}`;
+    }
   }
   const diagnosticsByFile = new Map(sourceFiles.map(src => [src.rel, []]));
   let unattributed = 0;
@@ -1029,12 +1055,21 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
     const match = /^sg: entity\|file\|(.+): language=[^,]+,appliedRuleCount=(\d+)$/.exec(entry);
     if (match && Number(match[2]) > 0) scanned.add(match[1]);
   }
-  const getParser = require('jscodeshift/src/getParser');
+  const getParser = toolError ? null : require('jscodeshift/src/getParser');
   let failures = 0;
   let skipped = 0;
   for (const src of sourceFiles) {
     const target = resolve(isoSrcDir, src.rel);
     const row = {tool: 'ast-grep', version: astGrepVersion};
+    const artifact = await readArtifact(target, MAX_FILE_BYTES, MAX_FILE_BYTES, true);
+    const source = artifact.kind === 'ok' ? artifact.content : null;
+    if (source !== null && !isUtf8(source)) {
+      failures += 1;
+      coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=fonte_nao_utf8`});
+      continue;
+    }
+    if (toolError) continue;
+
     const fileDiagnostics = diagnosticsByFile.get(src.rel);
     if (!scanned.has(target)) {
       if (fileDiagnostics.length) {
@@ -1046,16 +1081,12 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
       }
       continue;
     }
-    const artifact = await readArtifact(target, MAX_FILE_BYTES, MAX_FILE_BYTES, true);
-    const source = artifact.kind === 'ok' ? artifact.content : null;
     try {
       if (source === null) throw new Error('fonte_ilegivel');
-      if (!isUtf8(source)) throw new Error('fonte_nao_utf8');
       getParser(sourceParser(src.ext)).parse(source.toString('utf8'));
     } catch (err) {
       failures += 1;
-      const reason = source === null || err.message === 'fonte_nao_utf8'
-        ? err.message : `sintaxe_invalida; detalhe=${err.message.slice(0, 150)}`;
+      const reason = source === null ? err.message : `sintaxe_invalida; detalhe=${err.message.slice(0, 150)}`;
       coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=${reason}`});
       continue;
     }
@@ -1076,8 +1107,8 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
   }
 
   coverage.unshift({tool: 'ast-grep', version: astGrepVersion,
-    status: failures || unattributed ? 'failed' : skipped ? 'skipped' : 'ok',
-    detail: `arquivos=${sourceFiles.length}; falhas=${failures}; diagnosticos_sem_arquivo=${unattributed}; prova_parcial=${skipped}; achados=${findings.length}`});
+    status: toolError || failures || unattributed ? 'failed' : skipped ? 'skipped' : 'ok',
+    detail: toolError ?? `arquivos=${sourceFiles.length}; falhas=${failures}; diagnosticos_sem_arquivo=${unattributed}; prova_parcial=${skipped}; achados=${findings.length}`});
   return {coverage, findings};
 }
 
@@ -1366,9 +1397,14 @@ async function createNpmLockLookup(manifests, lockfiles) {
     }
 
     if (lastLock?.path !== lockRel) {
-      const raw = await readArtifact(lockfiles.get(lockRel), MAX_REGISTRY_BYTES);
+      const raw = await readArtifact(lockfiles.get(lockRel), MAX_REGISTRY_BYTES, MAX_REGISTRY_BYTES, true);
       lastLock = {path: lockRel, raw};
       if (raw.kind === 'ok') {
+        if (!isUtf8(raw.content)) {
+          lastLock.error = 'lockfile_nao_utf8';
+          return {path: lockRel, lock: lastLock, lockDir, workspacePath};
+        }
+        raw.content = raw.content.toString('utf8');
         try {
           const parsed = JSON.parse(raw.content);
           if (!isRecord(parsed) ||
@@ -1539,7 +1575,9 @@ export async function analyzeLockfileAndSbom({
         file: lockRel,
         line: 1,
         severity: 'alta',
-        message: `Arquivo ${lockRel} contém JSON ou estrutura de lock npm inválida.`,
+        message: error === 'lockfile_nao_utf8'
+          ? `Arquivo ${lockRel} contém bytes inválidos em UTF-8.`
+          : `Arquivo ${lockRel} contém JSON ou estrutura de lock npm inválida.`,
         evidence: `${lockRel}: ${error}`,
       });
       continue;
@@ -1552,7 +1590,7 @@ export async function analyzeLockfileAndSbom({
     let fileUnverifiable = 0;
     let invalidResolutions = 0;
     for (const {sec, pkg, spec} of declaredEntries) {
-      const declaration = ncuSpecifier(spec, false);
+      const declaration = ncuSpecifier(spec);
       const match = inspectNpmLockEntry(parsed, workspacePath, pkg, declaration);
       if (match.reason === 'entrada_lockfile_ausente') {
         fileFindings += 1;
@@ -1838,6 +1876,7 @@ export async function runCollection(options = {}) {
       ncuBin,
       ncuVersion,
       onlineMode,
+      registryGet: options.registryGet,
     });
 
     const astGrepRes = await runAstGrepCheck({

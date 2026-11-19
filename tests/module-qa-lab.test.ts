@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {assertBrowserFixture, imageRenderer, stageBrowserFixture} from './fixtures/module-qa-browser.ts';
 
 const qaModuleDir = fileURLToPath(new URL('../deploy/modules/qa/', import.meta.url));
 const fixtureDir = fileURLToPath(new URL('./fixtures/module-qa/', import.meta.url));
@@ -124,6 +125,19 @@ const row = (out: Output, tool: string) => {
 };
 
 const passRows = (out: Output) => out.coverage.filter(row => row.tool === 'node-test-v8-execucao');
+
+test('imagem pelo digest mede Chromium offline, contraste e regressão visual objetiva', {skip: !labEnabled}, () => {
+  const pin = readQaDigestPin(readFileSync(join(qaModuleDir, 'digest.txt'), 'utf8'));
+  const repo = stageBrowserFixture(imageRenderer);
+  try {
+    const report = collect(pin, repo);
+    assert.equal(row(report, 'qa-navegador').status, 'ok');
+    assert.match(row(report, 'qa-navegador').detail, /4\/4 páginas.*Playwright 1\.65\.1, axe-core 4\.14\.1, Chromium offline/);
+    assertBrowserFixture(report);
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
 
 test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobreviventes por execução', {skip: !labEnabled}, () => {
   const pin = readQaDigestPin(readFileSync(join(qaModuleDir, 'digest.txt'), 'utf8'));

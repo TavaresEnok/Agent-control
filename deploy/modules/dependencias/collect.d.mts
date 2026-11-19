@@ -1,3 +1,5 @@
+import type {RegistryRequestOptions} from './fetch-registry.mjs';
+
 export type ModuleCoverageStatus = 'ok' | 'failed' | 'skipped';
 export type ModuleFindingSeverity = 'alta' | 'media' | 'baixa' | 'informativa';
 
@@ -79,6 +81,7 @@ export function validateModuleOutput(doc: unknown): ModuleCollectorOutput;
 export function runCollection(options?: {
   repoRoot?: string;
   onlineMode?: boolean;
+  registryGet?: RegistryRequestOptions['get'];
   registryPath?: string;
   ncuBin?: string;
   astGrepBin?: string;

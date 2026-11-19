@@ -198,10 +198,11 @@ async function functionalCoverage(ledger: Ledger, runId: string, report: Awaited
   const protectedNames = [...new Set(Array.from(protectedFiles, file => basename(file)))];
   const references = protectedNames.filter(Boolean).map(name => {
     const literal = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`(?<![\\p{L}\\p{N}_-])${literal}(?![\\p{L}\\p{N}_-])`, 'u');
+    return new RegExp(`(?<![.\\p{L}\\p{N}_-])${literal}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}_-])`, 'u');
   });
   function mentionsProtected(text: string): boolean {
-    return references.some(pattern => pattern.test(text)) ||
+    const referencesText = text.replaceAll('->', ' ');
+    return references.some(pattern => pattern.test(referencesText)) ||
       (text.match(/[\p{L}\p{N}._@/+-]+/gu) ?? []).some(isSecretClassBasename);
   }
   const files = rows.filter(row => ![row.file, row.examinerProvider, row.examinerModel, ...row.checklist].some(mentionsProtected));

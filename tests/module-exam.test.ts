@@ -5,27 +5,29 @@ import {mkdir, mkdtemp, rm, symlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {Refusal} from '../src/contracts.ts';
 import {findModuleExamRoutes, mapModuleSnapshot} from '../src/module-exam-map.ts';
-import {hasModuleReviewProof, moduleReviewTask} from '../src/module-exam-proof.ts';
+import {hasModuleReviewProof, moduleReviewTask, readModuleReviewVerdict} from '../src/module-exam-proof.ts';
 import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamSeat} from '../src/module-exam.ts';
 import {qaStaticFinding, reviewFixtureVerdict, skipQuestion} from './fixtures/module-exam-review.ts';
 
 const seat = (provider: string): ModuleExamSeat => ({provider, model: `${provider}-model`, accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()});
 const intentId = randomUUID();
 const skipped = 'test.skip("valida pedidos", () => {})';
+const expressApp = "import express from 'express'; const app = express(); ";
+const mainCode = expressApp + 'app.get("/pedidos", handler);\n' + skipped + ';';
 const finding = qaStaticFinding('src/routes.ts', 2, skipped + ';');
-const map = {files:[{file:'src/routes.ts', code:'app.get("/pedidos", handler);\n' + skipped + ';', reason:null}, {file:'bin.dat', code:null, reason:'binário'}], routes:[{file:'src/routes.ts', line:1, method:'GET', path:'/pedidos'}, {file:'bin.dat', line:1, method:'GET', path:'/ignorada'}]};
+const map = {files:[{file:'src/routes.ts', code:mainCode, reason:null}, {file:'bin.dat', code:null, reason:'binário'}], routes:[{file:'src/routes.ts', line:1, method:'GET', path:'/pedidos'}, {file:'bin.dat', line:1, method:'GET', path:'/ignorada'}]};
 
 test('mapa inventaria fontes e rotas, omitindo credenciais, links e arquivos grandes', async () => {
   const dir = await mkdtemp(join(process.cwd(), '.module-exam-test-'));
   try {
     await mkdir(join(dir, 'src'));
-    await writeFile(join(dir, 'src', 'routes.ts'), 'app.get("/pedidos", handler);\nconst token = "sintetico-privado";');
+    await writeFile(join(dir, 'src', 'routes.ts'), expressApp + 'app.get("/pedidos", handler);\nconst token = "sintetico-privado";');
     await writeFile(join(dir, '.env'), 'DADO_SINTETICO_NAO_LER');
     await writeFile(join(dir, 'pem-in-code.txt'), '-----BEGIN PRIVATE KEY-----\nsynthetic-pem-only\n-----END PRIVATE KEY-----\napp.get("/depois", handler);');
     await writeFile(join(dir, 'huge.ts'), 'x'.repeat(17000));
     await symlink('.env', join(dir, 'link'));
     const mapped = await mapModuleSnapshot(dir);
-    assert.deepEqual(mapped.routes, [{file:'src/routes.ts', line:1, method:'GET', path:'/pedidos'}]);
+    assert.deepEqual(mapped.routes, [{file:'src/routes.ts', line:1, column:expressApp.length + 1, method:'GET', path:'/pedidos'}]);
     assert.doesNotMatch(mapped.files.find(f=>f.file==='pem-in-code.txt')!.code!, /synthetic-pem-only/);
     assert.equal(mapped.files.find(f=>f.file==='.env')?.code, null);
     assert.equal(mapped.files.find(f=>f.file==='link')?.code, null);
@@ -154,8 +156,8 @@ test('somente atestados da declaração enviada contam mesmo quando o arquivo ex
   const methods = Array.from({length: 22}, (_, index) => ({file, line: index + 1, method: 'GET', path: `/route-${index}`}));
   const result = await examineFunctionalModule({module: 'qa', intentId, findings: [],
     map: {
-      files: [{file, code: methods.map(route => `app.get("${route.path}", handler);`).join('\n'), reason: null},
-        {file: 'other.ts', code: 'app.get("/foreign", handler);', reason: null}],
+      files: [{file, code: expressApp + methods.map(route => `app.get("${route.path}", handler);`).join('\n'), reason: null},
+        {file: 'other.ts', code: expressApp + 'app.get("/foreign", handler);', reason: null}],
       routes: [methods[0]!, {file, line: 1, method: 'POST', path: '/route-0'}, ...methods.slice(1),
         {file: 'other.ts', line: 1, method: 'GET', path: '/foreign'}],
     },
@@ -168,7 +170,8 @@ test('somente atestados da declaração enviada contam mesmo quando o arquivo ex
         methods[20], methods[21], {file: 'other.ts', line: 1, method: 'GET', path: '/foreign'},
         ...Array.from({length: 20}, (_, index) => ({...methods[index], line: 0})),
       ] : [];
-      if (task.file === file) assert.deepEqual(task.routes, methods.slice(0, 20));
+      if (task.file === file) assert.deepEqual(task.routes, methods.slice(0, 20).map((route, index) =>
+        ({...route, column: index === 0 ? expressApp.length + 1 : 1})));
       return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], routesReviewed, findings: []});
     }},
   });
@@ -176,6 +179,33 @@ test('somente atestados da declaração enviada contam mesmo quando o arquivo ex
   assert.deepEqual(result.routes.filter(row => row.status === 'lido').map(({file, line}) => [file, line]), [[file, 1], [file, 20]]);
   assert.equal(result.routes.length, 23);
   assert.match(result.notes.join(' '), /Rotas fora dos limites de envio ao examinador: 2/);
+});
+
+test('atesta a coluna exata e só aceita o formato antigo quando a identidade é única no arquivo', async () => {
+  const examiner = seat('a');
+  const file = 'checkout.ts';
+  const expressRouter = 'const router = express.Router(); /* 🧾 */ ';
+  const first = 'app.get("/checkout", first); ';
+  const code = expressApp + expressRouter + first + 'router.get("/checkout", second); app.post("/pagamento", handler); '
+    + 'const cache = new Map(); cache.get("/cupom", handler); router.get("/cupom", handler);';
+  const [one, two, unique, withUnknownDuplicate] = findModuleExamRoutes(file, code);
+  const older = ({column: _column, ...route}: typeof one) => route;
+  assert.equal(one!.column, expressApp.length + expressRouter.length + 1);
+  assert.equal(two!.column, one!.column + first.length);
+  const run = (routes: typeof map.routes, routesReviewed: unknown[]) => examineFunctionalModule({
+    module: 'qa', intentId, findings: [], map: {files: [{file, code, reason: null}], routes},
+    reserve: async () => examiner, release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], routesReviewed, findings: []});
+    }},
+  });
+  const exact = await run([one!, two!, older(unique!), withUnknownDuplicate!],
+    [one, older(two!), older(unique!), older(withUnknownDuplicate!)]);
+  assert.deepEqual(exact.routes.map(route => [route.column, route.status]),
+    [[one!.column, 'lido'], [two!.column, 'nao_julgado'], [unique!.column, 'lido'], [withUnknownDuplicate!.column, 'nao_julgado']]);
+  const ambiguous = await run([one!, older(two!)], [older(one!)]);
+  assert.deepEqual(ambiguous.routes, [{...one, status: 'nao_julgado'}]);
 });
 
 test('confirma três condições distintas na mesma linha e rejeita observações transplantadas com binding válido', async () => {
@@ -224,28 +254,91 @@ test('confirma três condições distintas na mesma linha e rejeita observaçõe
   assert.ok(result.findings.slice(0, 3).every(candidate => candidate.verifier?.accountId === reviewer.accountId));
   assert.ok(result.findings.slice(3).every(candidate => candidate.verifier === null));
   assert.match(result.findings[0]!.reason, /usa skip/);
-  assert.match(result.findings[1]!.reason, /valor aleatório/);
-  assert.match(result.findings[2]!.reason, /espera de duração fixa/);
+  assert.match(result.findings[1]!.reason, /chamada direta no código/);
+  assert.match(result.findings[2]!.reason, /chamada direta no código/);
   const [verified, second] = result.findings;
   const evidence = moduleExamReviewEvidence('qa', verified!, code, disabled)!;
   assert.equal(hasModuleReviewProof(evidence, verified!), true);
   assert.equal(hasModuleReviewProof(evidence, {...verified!, reason: second!.reason}), false);
 });
 
-test('o descarte da hipótese exige declaração direta do mesmo teste e origem no commit atual', () => {
-  const raw = qaStaticFinding('pricing.test.ts', 1, skipped);
+test('nomes sombreados comprovam a grafia da chamada e deixam a hipótese funcional provável', async () => {
+  const examiner = seat('a'), reviewer = seat('b');
+  const file = 'pricing.test.ts';
+  const examples = [
+    {expression: 'Math.random()', code: 'const Math = {random: () => 7}; Math.random();',
+      hypothesis: 'A chamada retorna um valor aleatório?'},
+    {expression: 'page.waitForTimeout(250)', code: 'const page = {waitForTimeout: () => undefined}; page.waitForTimeout(250);',
+      hypothesis: 'A chamada espera 250 milissegundos?'},
+  ];
+  for (const {expression, code, hypothesis} of examples) {
+    const raw = qaStaticFinding(file, 1, expression, 'nondeterminism');
+    const evidence = moduleExamReviewEvidence('qa', moduleCollectorCandidate(raw), code, raw)!;
+    const task = JSON.parse(moduleReviewTask(evidence));
+    const observed = reviewFixtureVerdict(task, expression);
+    const reason = `A expressão na coluna ${observed.observation.column} é uma chamada direta no código.`;
+    assert.equal(hasModuleReviewProof(evidence, {...observed, reason}), true);
+    assert.equal(hasModuleReviewProof(evidence, {...observed, reason: hypothesis}), false);
+    const reread = readModuleReviewVerdict({...observed, reason: hypothesis});
+    assert.equal(reread?.reason, reason);
+    assert.equal(hasModuleReviewProof(evidence, reread!), true);
+    for (const unproved of [hypothesis, 'A linha atual ainda sustenta a observação original?']) {
+      const functional = {...evidence, hypothesis: unproved, rule: 'exame-de-arquivo', tool: 'examinador', evidence: expression};
+      const pending = JSON.parse(moduleReviewTask(functional));
+      assert.equal(pending.criterion, null);
+      assert.equal(hasModuleReviewProof(functional, {...observed, binding: pending.binding, reason}), false);
+    }
+    const result = await examineFunctionalModule({module: 'qa', intentId, findings: [],
+      map: {files: [{file, code, reason: null}], routes: []},
+      reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
+      worker: {async run(call) {
+        const request = JSON.parse(call.task);
+        if (!request.checklist) return JSON.stringify(reviewFixtureVerdict(request, expression));
+        return JSON.stringify({kind: 'exame', filesRead: [file], checklist: ['qa'], findings: [
+          {line: 1, snippet: expression, title: hypothesis, hypothesis: task.hypothesis, severity: 'baixa'},
+          {line: 1, snippet: expression, title: hypothesis, hypothesis, severity: 'baixa'},
+        ]});
+      }},
+    });
+    assert.deepEqual(result.findings.map(finding => finding.status), ['confirmado', 'provavel']);
+    assert.match(result.findings[0]!.title, /^Chamada direta /);
+    assert.equal(result.findings[0]!.reason, reason);
+  }
+});
+
+test('o descarte exige o mesmo teste e grupo, comparados nos dois arquivos completos', () => {
+  const raw = qaStaticFinding('pricing.test.ts', 2, skipped);
   const active = 'test("valida pedidos", () => {})';
   const {message: _message, severity: _severity, ...origin} = raw;
-  const evidence = {module: 'qa' as const, ...origin, code: active + ';', commit: 'c'.repeat(40), hypothesis: skipQuestion};
-  const verdict = reviewFixtureVerdict(JSON.parse(moduleReviewTask(evidence)), active, 'descartado');
-  assert.equal(hasModuleReviewProof(evidence, verdict), true);
-  for (const code of [skipped + ';', active + '; ' + skipped + ';', active.replace('pedidos', 'preços') + ';']) {
-    const updated = {...evidence, code};
-    const task = JSON.parse(moduleReviewTask(updated));
-    assert.equal(hasModuleReviewProof(updated, reviewFixtureVerdict(task, code.split(';')[0]!, 'descartado')), false);
+  const evidence = {module: 'qa' as const, ...origin, code: active + ';', commit: 'c'.repeat(40), hypothesis: skipQuestion,
+    skipSnapshot: {originalCommit: 'b'.repeat(40), original: `describe("preços", () => {\n  ${skipped};\n});`,
+      current: `describe("preços", () => {\n  ${active};\n});`}};
+  const prove = (input: typeof evidence | Omit<typeof evidence, 'skipSnapshot'>) => {
+    const task = JSON.parse(moduleReviewTask(input));
+    return hasModuleReviewProof(input, reviewFixtureVerdict(task, active, 'descartado'));
+  };
+  assert.equal(prove(evidence), true);
+  const {skipSnapshot, ...lineOnly} = evidence;
+  assert.equal(prove(lineOnly), false);
+  const task = JSON.parse(moduleReviewTask(evidence));
+  assert.equal(task.skipSnapshot, undefined);
+  assert.equal(task.skipRemoval.column, 1);
+  assert.match(task.skipRemoval.originalDigest, /^[a-f0-9]{64}$/);
+  for (const current of [skipSnapshot.original, skipSnapshot.current.replace('preços', 'outro grupo'),
+    skipSnapshot.current.replace('() => {}', 'outroHandler'), skipSnapshot.current + '\n' + skipped]) {
+    assert.equal(prove({...evidence, code: current.split('\n')[1]!.trim(), skipSnapshot: {...skipSnapshot, current}}), false);
   }
+  for (const copy of [skipped, skipped.replace('skip("', 'skip(\n  "'), active, 'test.skip(title, handler)', 'test["skip"](title, handler)']) {
+    const tail = `\ndescribe("outro grupo", () => { ${copy}; });`;
+    assert.equal(prove({...evidence, skipSnapshot: {...skipSnapshot,
+      original: skipSnapshot.original + tail, current: skipSnapshot.current + tail}}), false);
+  }
+  const split = active + '; }); describe("original", () => { test.skip(\n"valida pedidos", () => {}); });';
+  assert.equal(prove({...evidence, code: split.split('\n')[0]!, skipSnapshot: {...skipSnapshot,
+    current: 'describe("cópia", () => {\n  ' + split}}), false);
   const moved = {...evidence, commit: 'd'.repeat(40)};
-  assert.equal(hasModuleReviewProof(moved, {...verdict, binding: JSON.parse(moduleReviewTask(moved)).binding}), false);
+  assert.equal(hasModuleReviewProof(moved, {...reviewFixtureVerdict(task, active, 'descartado'),
+    binding: JSON.parse(moduleReviewTask(moved)).binding}), false);
 });
 
 test('linhas cortadas no limite não chegam à revisão nem viram rotas julgadas', async () => {
@@ -254,7 +347,7 @@ test('linhas cortadas no limite não chegam à revisão nem viram rotas julgadas
   const line = skipped + '; app.get("/cortada", handler);';
   const target = qaStaticFinding(file, 2, line);
   const route = {file, line: 2, method: 'GET', path: '/cortada'};
-  const head = '//'.padEnd(15950, 'x') + '\n';
+  const head = expressApp + '//'.padEnd(15950 - expressApp.length, 'x') + '\n';
   const code = head + line + ' //' + 'x'.repeat(120);
   assert.equal(moduleExamReviewEvidence('qa', moduleCollectorCandidate(target), code, target), null);
   const exact = '//'.padEnd(15999 - line.length, 'x') + '\n' + line;
@@ -276,7 +369,7 @@ test('linhas cortadas no limite não chegam à revisão nem viram rotas julgadas
         findings: [{line: 2, snippet: skipped, hypothesis: skipQuestion, title: 'Trecho incompleto', severity: 'media'}]});
     }},
   });
-  assert.deepEqual(result.routes, [{...route, status: 'nao_julgado'}]);
+  assert.deepEqual(result.routes, [{...route, column: skipped.length + 3, status: 'nao_julgado'}]);
   assert.equal(result.findings.length, 1);
   assert.equal(result.findings[0]?.status, 'provavel');
   assert.match(result.notes.join(' '), /Rotas fora dos limites de envio ao examinador: 1/);
@@ -288,7 +381,7 @@ test('o leitor de rotas ignora texto literal e registra arquivos com sintaxe nã
   try {
     const file = 'real.ts';
     const code = [
-      'const quoted = "app.get(\'/texto\', handler)";',
+      expressApp + 'const router = express.Router(); const quoted = "app.get(\'/texto\', handler)";',
       'const template = `',
       'app.get("/template", handler);',
       '`;',
@@ -304,24 +397,30 @@ test('o leitor de rotas ignora texto literal e registra arquivos com sintaxe nã
       ');',
       'router.post(`/literal`, handler);',
     ].join('\n');
-    const masked = 'app.get("/segura", handler);\nconst token = "sintetico-privado";';
+    const masked = expressApp + 'app.get("/segura", handler);\nconst token = "sintetico-privado";';
     await writeFile(join(dir, file), code);
     await writeFile(join(dir, 'masked.ts'), masked);
     await writeFile(join(dir, 'regex.js'), 'const regex = /app.get("\\/regex", fn)/;\napp.get("/omitida", handler);');
-    await writeFile(join(dir, 'jsx.tsx'), '<p>app.get("/jsx", handler)</p>');
+    await writeFile(join(dir, 'pages.tsx'), expressApp + 'app.get("/jsx", handler);');
+    await writeFile(join(dir, 'jsx.jsx'), '<p>app.get("/jsx", handler)</p>');
+    await writeFile(join(dir, 'pricing.py'), 'app.get("/python", handler)');
     await writeFile(join(dir, 'interpolation.ts'), 'const value = `texto ${`app.get("/interpolada", fn)`}`;');
     await writeFile(join(dir, 'docs.md'), 'app.get("/exemplo", handler);');
     const mapped = await mapModuleSnapshot(dir);
     assert.deepEqual(mapped.routes, [
-      {file: 'masked.ts', line: 1, method: 'GET', path: '/segura'},
-      {file, line: 12, method: 'GET', path: '/multilinha'},
-      {file, line: 15, method: 'POST', path: '/literal'},
+      {file: 'masked.ts', line: 1, column: expressApp.length + 1, method: 'GET', path: '/segura'},
+      {file, line: 12, column: 1, method: 'GET', path: '/multilinha'},
+      {file, line: 15, column: 1, method: 'POST', path: '/literal'},
     ]);
     assert.deepEqual(findModuleExamRoutes(file, code.replaceAll('\n', '\r\n')), mapped.routes.slice(1));
     const suggested = {file, line: 8, method: 'GET', path: '/comentario'};
     const result = await examineFunctionalModule({module: 'qa', intentId, findings: [], map: {...mapped, routes: [suggested, ...mapped.routes]}});
     assert.equal(result.routes.length, 3);
-    assert.match(result.notes.join(' '), /sintaxe não reconhecida: 2/);
+    assert.match(result.notes.join(' '), /inventário de rotas parcial ou omitido: 6/);
+    for (const unsupported of ['pages.tsx', 'jsx.jsx', 'pricing.py']) {
+      assert.ok(result.notes.includes(`Inventário de rotas em ${unsupported} com omissão por linguagem não inventariada.`));
+    }
+    assert.match(result.notes.join(' '), /regex\.js com omissão por sintaxe não reconhecida/);
     assert.match(result.notes.join(' '), /sem declaração verificável omitidas: 1/);
     const insideLiteral = qaStaticFinding(file, 2, skipped);
     assert.equal(moduleExamReviewEvidence('qa', moduleCollectorCandidate(insideLiteral),
@@ -329,6 +428,37 @@ test('o leitor de rotas ignora texto literal e registra arquivos com sintaxe nã
   } finally {
     await rm(dir, {recursive: true, force: true});
   }
+});
+
+test('o mapa exige inicialização HTTP reconhecida e deixa chamadas com receptores sombreados fora do julgamento', async () => {
+  const examiner = seat('a');
+  const file = 'checkout.ts';
+  const code = [
+    "import {Hono as Web} from 'hono';",
+    "import {Router as makeRouter} from 'express';",
+    "import fastify from 'fastify';",
+    'const routes = new Web(); const router = makeRouter(); const http = fastify();',
+    'const app = new Map(); app.get("/cache", handler);',
+    'unknown.get("/desconhecida", handler);',
+    'function checkout(routes: unknown) { routes.get("/sombreada", handler); };',
+    'routes.get("/pedidos", handler); router.get("/precos", handler); http.get("/faturas", handler);',
+  ].join('\n');
+  const declarations = findModuleExamRoutes(file, code);
+  assert.deepEqual(declarations.map(route => route.path), ['/pedidos', '/precos', '/faturas']);
+  const falseEntries = ['/cache', '/desconhecida', '/sombreada'].map((path, index) =>
+    ({file, path, method: 'GET', line: 5 + index}));
+  const result = await examineFunctionalModule({module: 'qa', intentId, findings: [],
+    map: {files: [{file, code, reason: null}], routes: [...falseEntries, ...declarations]},
+    reserve: async () => examiner, release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      assert.deepEqual(task.routes, declarations);
+      return JSON.stringify({kind: 'exame', filesRead: [file], checklist: ['qa'],
+        routesReviewed: [...falseEntries, ...task.routes], findings: []});
+    }},
+  });
+  assert.deepEqual(result.routes, declarations.map(route => ({...route, status: 'lido'})));
+  assert.match(result.notes.join(' '), /sem declaração verificável omitidas: 3/);
 });
 
 test('cota devolvida por revisor reservado conserva os achados e não presume término', async () => {
