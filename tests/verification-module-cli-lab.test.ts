@@ -26,7 +26,7 @@ const CLEAN_SUBDIR_NAMES = new Set(['clean', 'limpo', 'control-clean', 'controle
 const MAIN_MANAGER_HEARTBEAT_MS = 5_000;
 
 type ModuleLabExpectation = {
-  /** Known defective fixture subpath relative to repo root, or candidates for modules still in flight. */
+  /** Known defective fixture subpath relative to repo root. */
   fixtureCandidates: readonly string[];
   /** Active tools expected to report `ok` in coverage when running offline against the defective fixture. */
   expectedOkTools: readonly string[];
@@ -47,7 +47,7 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
   qa: {
     fixtureCandidates: ['tests/fixtures/module-qa'],
     expectedOkTools: [
-      'istanbul-coverage',
+      'node-test-v8',
       'stryker-mutator',
       'fast-check',
       'playwright-test-audit',
@@ -75,22 +75,17 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
       f.where.file === 'src/server.ts' && f.title.startsWith('ASTGREP-EXPRESS5-APP-DEL'),
   },
   banco: {
-    fixtureCandidates: [
-      'tests/fixtures/module-banco/defective',
-      'tests/fixtures/module-banco/com-defeito',
-      'tests/fixtures/module-banco/defeito',
-      'tests/fixtures/module-banco',
-    ],
-    expectedOkTools: [],
-    matchFinding: () => true,
+    fixtureCandidates: ['tests/fixtures/module-banco/defective'],
+    expectedOkTools: ['squawk', 'pg-migrate', 'pg_restore', 'pg_stat_statements', 'EXPLAIN', 'dexter'],
+    matchFinding: f =>
+      f.where.file === 'db/migrations/002_revision.sql' && f.title.startsWith('SQUAWK-BAN-DROP-COLUMN'),
+    coverageDetailPattern: /pg-migrate:fresh:/,
   },
   prontidao: {
     fixtureCandidates: ['tests/fixtures/module-prontidao/defective'],
     expectedOkTools: ['prontidao-audit', 'gitleaks', 'hadolint', 'trivy'],
     matchFinding: f =>
-      (f.where.file === 'src/tls-client.ts' && f.title.startsWith('PRONTIDAO-TLS-VERIFICACAO-DESABILITADA'))
-      || f.where.file === 'Dockerfile'
-      || f.where.file === 'compose.yml',
+      f.where.file === 'src/tls-client.ts' && f.title.startsWith('PRONTIDAO-TLS-VERIFICACAO-DESABILITADA'),
     coverageDetailPattern: /prontidao:requisito:/,
   },
   desempenho: {
@@ -102,21 +97,18 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
     coverageDetailPattern: /node-cpu-prof:arquivo:/,
   },
   documentacao: {
-    fixtureCandidates: ['tests/fixtures/module-documentacao'],
+    fixtureCandidates: ['tests/fixtures/module-documentacao/defective'],
     expectedOkTools: ['typedoc', 'dependency-cruiser', 'mermaid'],
     matchFinding: f =>
       f.where.file === 'src/billing.ts' && f.title.startsWith('DOC-TYPEDOC-PARAM-DESATUALIZADO'),
     coverageDetailPattern: /typedoc:file/,
   },
   conformidade: {
-    fixtureCandidates: [
-      'tests/fixtures/module-conformidade/defective',
-      'tests/fixtures/module-conformidade/com-defeito',
-      'tests/fixtures/module-conformidade/defeito',
-      'tests/fixtures/module-conformidade',
-    ],
-    expectedOkTools: [],
-    matchFinding: () => true,
+    fixtureCandidates: ['tests/fixtures/module-conformidade/com-defeito'],
+    expectedOkTools: ['scancode-toolkit', 'presidio-analyzer', 'npm-license-policy', 'lgpd-static', 'ort'],
+    matchFinding: f =>
+      f.where.file === 'package-lock.json' && f.title.startsWith('ORT_STRONG_COPYLEFT_DECLARED'),
+    coverageDetailPattern: /ort:file/,
   },
 };
 
@@ -454,9 +446,9 @@ async function verifyModuleEndToEnd(
     assert.equal(toolCovRows.some(r => r.status === 'ok'), true, `nenhuma ferramenta ok em ${module}`);
 
     for (const expectedTool of spec.expectedOkTools) {
-      const row = toolCovRows.find(r => r.tool === expectedTool);
-      assert.ok(row, `ferramenta esperada ausente na cobertura de ${module}: ${expectedTool}`);
-      assert.equal(row.status, 'ok', `ferramenta ${expectedTool} deveria estar ok em ${module}: ${row.detail}`);
+      const rows = toolCovRows.filter(r => r.tool === expectedTool);
+      assert.ok(rows.length, `ferramenta esperada ausente na cobertura de ${module}: ${expectedTool}`);
+      assert.ok(rows.some(r => r.status === 'ok'), `ferramenta ${expectedTool} deveria estar ok em ${module}: ${JSON.stringify(rows)}`);
       assert.equal(report.coverageMarkdown.includes(`| ${expectedTool} |`), true);
     }
     if (spec.coverageDetailPattern) {
