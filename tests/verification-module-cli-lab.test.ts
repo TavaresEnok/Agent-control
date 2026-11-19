@@ -362,7 +362,13 @@ async function verifyModuleEndToEnd(
     });
 
     // 1. Disparo real via entrada normal `npm run personal:<modulo>` sem injeção nem mock de Docker
-    const runLines = await runPersonalCliSubprocess(module, [installationPath, projectLabel]);
+    const runLines = await runPersonalCliSubprocess(module, [installationPath, projectLabel]).catch(async error => {
+      const failed = await db.pool.query(
+        `SELECT c.tool, c.detail FROM ac_verify_tool_coverage c JOIN ac_verify_runs r ON r.id=c.run_id
+         WHERE r.project_id=$1 AND r.module=$2 AND c.status='failed' ORDER BY c.seq`, [projectId, module],
+      );
+      throw new Error(`Falhas na fixture sintética de ${module}: ${JSON.stringify(failed.rows)}`, {cause: error});
+    });
     assert.ok(runLines.length >= 2, `saída inesperada de personal:${module}: ${JSON.stringify(runLines)}`);
     const runId = runLines.at(-2)!;
     const reportDir = runLines.at(-1)!;

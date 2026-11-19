@@ -244,7 +244,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
     if (!runtime.some(seat => seat.provider === 'claude')) {
       return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE'});
     }
-    return examineFunctionalModule({intentId, module, map, findings, signal,
+    return examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal,
       worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
       ...createModuleExamReservations({...input, intentId, supportedSeats: new Map(runtime.map(seat => [seat.provider, seat.accountIds]))}),
     });

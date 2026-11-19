@@ -33,12 +33,17 @@ for (const scenario of ['lease', 'timeout', 'stdout'] as const) {
         ? 'sleep 3; while :; do printf "%01024d\\n" 0; done'
         : 'exec sleep 60';
       const execute: CollectorProcess = async (args, options) => {
+        if (args[1] === 'image' && args[2] === 'inspect') {
+          // Only the workload is synthetic. Keep the production capture entrypoint and all daemon operations.
+          const inspected = await runBoundedCollectorProcess(args, options);
+          if (inspected.code !== 0) return inspected;
+          assert.equal(args.at(-1), image);
+          return {...inspected, stdout: Buffer.from(JSON.stringify([['/bin/sh', '-c'], [script]]))};
+        }
         if (args[1] === 'create') {
           assert.equal(args[args.indexOf('--pull') + 1], 'never');
           owner = args[args.indexOf('--label') + 1]!.slice(MODULE_CONTAINER_LABEL.length + 1);
-          const created = await runBoundedCollectorProcess(
-            [...args.slice(0, -1), '--entrypoint', '/bin/sh', image, '-c', script], options,
-          );
+          const created = await runBoundedCollectorProcess(args, options);
           if (created.code === 0) containerId = createdContainerId(created.stdout);
           return created;
         }

@@ -1,4 +1,11 @@
 # Imagem do Módulo 2 (QA pesado). Contexto de build: deploy/modules/qa/.
+FROM docker.io/library/python:3.12.16-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df AS qa-python
+ADD --checksum=sha256:34b02417cf070e173989b3db962f7ed56d2f644307b2cf9d5a0f258e13084a61 https://files.pythonhosted.org/packages/9e/ee/a4cf96b8ce1e566ed238f0659ac2d3f007ed1d14b181bcb684e19561a69a/coverage-7.13.5-py3-none-any.whl /tmp/coverage-7.13.5-py3-none-any.whl
+RUN python3.12 -I -m pip install --disable-pip-version-check --no-index --no-deps \
+    --target /opt/qa-coverage /tmp/coverage-7.13.5-py3-none-any.whl
+
+FROM docker.io/library/golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS qa-go
+
 # Tag fixa v1.65.1-noble com digest OCI imutável conferido no registro MCR:
 # sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
 # linux/amd64: sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9
@@ -29,9 +36,16 @@ RUN echo "28a00f552a3041e5e95492ce8913012ac5e75d197cab41b741b0790e691a9083  pack
     && chown -R 65532:65532 /opt/qa-tools
 
 COPY entrypoint.sh /usr/local/bin/qa-entrypoint.sh
-COPY collect.mjs execute-tests.mjs node-test-runner.mjs /opt/qa-tools/
+COPY collect.mjs execute-tests.mjs language-tests.mjs node-test-runner.mjs python-test-runner.py /opt/qa-tools/
+COPY --from=qa-python /usr/local/bin/python3.12 /usr/local/bin/
+COPY --from=qa-python /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/
+COPY --from=qa-python /usr/local/lib/python3.12 /usr/local/lib/python3.12
+COPY --from=qa-python /opt/qa-coverage /opt/qa-coverage
+COPY --from=qa-go /usr/local/go /usr/local/go
 RUN chmod 0555 /usr/local/bin/qa-entrypoint.sh /opt/qa-tools/*.mjs \
-    && chmod 0444 /opt/qa-tools/package.json /opt/qa-tools/package-lock.json /opt/qa-tools/qa-tools.lock.json
+    && chmod 0444 /opt/qa-tools/package.json /opt/qa-tools/package-lock.json /opt/qa-tools/qa-tools.lock.json /opt/qa-tools/python-test-runner.py \
+    && /usr/local/bin/python3.12 -I -S -c 'import sqlite3, sys; sys.path.append("/opt/qa-coverage"); import coverage; assert sys.version_info[:3] == (3, 12, 16) and coverage.__version__ == "7.13.5"' \
+    && test "$(GOTOOLCHAIN=local /usr/local/go/bin/go env GOVERSION)" = "go1.27.4"
 
 USER 65532:65532
 WORKDIR /tmp
