@@ -19,6 +19,7 @@ const goSourceErrors = [
   /^(?:expected .+, found |illegal character |(?:string|rune) literal not terminated$)/,
   /^(?:cannot use .+ as |cannot convert .+ to |constant .+ overflows )/,
   /^(?:division by zero|missing return)$/,
+  /^invalid argument: index .+ \(constant(?: -\d+)? of type .+\) must not be negative$/,
   /^(?:assignment mismatch:|(?:not enough|too many) arguments in call to |declared and not used:)/,
   /^(?:.+ redeclared in this block|".+" imported (?:as .+ and )?not used)$/,
 ];
@@ -131,6 +132,8 @@ function readGoBuildDiagnostics(reports, output, importPath) {
       pkg = line.slice(2);
       continue;
     }
+    // The go driver can report a global failure after a package header in stderr.
+    if (importPath === undefined && line.startsWith('go: ') && goBuildOperational.test(line)) return true;
     const located = goCompilerDiagnostic.exec(line);
     const message = located?.[1] ?? line;
     if (goDiagnosticNote.test(message)) continue;
@@ -154,6 +157,7 @@ function readGoBuildDiagnostics(reports, output, importPath) {
     }
     reports.set(pkg || undefined, report);
   }
+  return false;
 }
 
 export function decodeGoSuite({code, output, diagnostics}, testPackages) {
@@ -211,7 +215,9 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
     }
   }
   const buildDiagnostics = new Map();
-  readGoBuildDiagnostics(buildDiagnostics, diagnostics);
+  if (readGoBuildDiagnostics(buildDiagnostics, diagnostics)) {
+    return {reason: failedBuilds.size ? 'go-build-execution' : 'go-test-execution'};
+  }
   for (const [pkg, chunks] of buildOutput) readGoBuildDiagnostics(buildDiagnostics, chunks.join(''), pkg);
   const unscoped = buildDiagnostics.get(undefined);
   if (unscoped?.unavailable || [...failedBuilds].some(pkg => buildDiagnostics.get(pkg)?.unavailable)) {
