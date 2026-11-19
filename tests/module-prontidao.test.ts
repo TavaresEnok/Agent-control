@@ -2933,3 +2933,44 @@ test('R19: retenção demonstrável e recuperação lexical de redirecionamentos
     }
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
+
+
+test('R20: fronteiras conservadoras em redirecionamentos e substituições', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r20-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const audit = (body: string) => {
+      const escaped = body.replace(/'/g, "'\\''");
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\nsh -c '${escaped}'\n`);
+      return runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+    };
+    const status = (out: ReturnType<typeof audit>, pillar: string) => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status;
+    const backup = 'backup-restauracao', disk = 'disco-memoria', alert = 'alertas-logs';
+    const check = (body: string, expected: string | null) => {
+      const out = audit(body);
+      for (const pillar of [backup, disk, alert]) assert.equal(status(out, pillar), pillar === expected ? 'failed' : 'ok', `${body}: ${pillar}`);
+    };
+    for (const op of ['<>', '>|', '0<>', '2>|']) {
+      check(`df -P / ${op}/dev/null; echo "`, disk);
+      check(`echo ${op}df; echo "`, null);
+      check(`echo ${op}; df -P /; echo "`, null);
+    }
+    check('echo $(case x in y) :; df -P /;; esac); echo "', null);
+    check('npm run personal:backup; echo $(case x in y) :; df -P /;; esac); echo "', backup);
+    for (const inner of ['alertmanager', 'logrotate /tmp/log.conf', 'npm run personal:backup']) {
+      check(`echo $(case x in y) :; ${inner};; esac); echo "`, null);
+    }
+    check(`df -P / <>/dev/null\necho "`, disk);
+    check(`echo <>\ndf -P /; echo "`, null);
+    for (const inner of ['cat <<EOF', 'if true; then df -P /; fi', 'echo (df -P /)', 'echo ${x:-df -P /}', 'echo "${x:-df -P /}"']) {
+      check(`echo $(${inner}); df -P /; echo "`, null);
+    }
+    for (const space of ['\u00a0', '\u2003', '\\ ']) {
+      check(`echo "$(printf '%s' x${space}#)"; df -P /; echo "`, disk);
+    }
+    check(`echo "$(printf '%s' x # comment\n)"; df -P /; echo "`, disk);
+    check(`echo "$(printf '%s' x # df -P /)"; echo "`, null);
+    check(`echo ok # comment\ndf -P /; echo "`, disk);
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});

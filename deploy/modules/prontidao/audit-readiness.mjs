@@ -1546,17 +1546,27 @@ function* operationalCommands(file, onIncomplete) {
   if (pending !== undefined || heredocs[docIndex]) onIncomplete(start, 'declaração de shell incompleta');
 }
 
+// Longest first, shared by tokenization, operand consumption and recovery.
+const SHELL_REDIRECTS = ['<<<', '<<-', '&>>', '<<', '>>', '<>', '>|', '<&', '>&', '&>', '<', '>'];
+const SHELL_REDIRECT_PATTERN = `(?:\\d*(?:${SHELL_REDIRECTS.filter(op => !op.startsWith('&')).map(op => op.replace(/[|]/g, '\\$&')).join('|')})|${SHELL_REDIRECTS.filter(op => op.startsWith('&')).join('|')})`;
+const SHELL_REDIRECT_AT_START = new RegExp(`^${SHELL_REDIRECT_PATTERN}`);
+const SHELL_REDIRECT_TOKEN = new RegExp(`^${SHELL_REDIRECT_PATTERN}$`);
+
 // Literal command words and redirections. Expansion, shell control flow and scripts invoked
 // indirectly stay outside the static proof.
 function shellWords(command) {
-  const tokens = /#[^\r\n]*|\d*(?:<<<|<<-?)|(?:\d*(?:>>?|<)|&>>?|[|;&])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^ \t\n"'\\|;&<>])+|[ \t\n]+/gy;
+  const tokens = new RegExp(`#[^\\r\\n]*|${SHELL_REDIRECT_PATTERN}|[|;&][&|]?|(?:"(?:\\\\.|[^"\\\\])*"|'[^']*'|\\\\.|[^ \t\n"'\\\\|;&<>])+|[ \t]+|\n`, 'gy');
   const words = [];
   let operator = false;
   while (tokens.lastIndex < command.length) {
     const token = tokens.exec(command)?.[0];
     if (!token) return null;
-    if (token.startsWith('#')) return {words, operator, comment: true};
-    if (/^[ \t\n]/.test(token)) continue;
+    if (token.startsWith('#')) {
+      if (tokens.lastIndex === command.length) return {words, operator, comment: true};
+      continue;
+    }
+    if (token === '\n') { words.push({text: token, operator: true}); operator = true; continue; }
+    if (/^[ \t]/.test(token)) continue;
     if (/^\d*[|;&<>]/.test(token)) {
       operator ||= !/^1?>>?$/.test(token) && !/^2>>?$/.test(token);
       words.push({text: token, operator: true});
@@ -2175,7 +2185,7 @@ function splitShellSegments(words) {
       current.push(word);
       continue;
     }
-    if (/^(?:\d*(?:<<-?|<<<|>>?|<)[&]?|&>>?)$/.test(word.text)) {
+    if (SHELL_REDIRECT_TOKEN.test(word.text)) {
       if (words[i + 1]?.operator && words[i + 1].text === '&') i++;
       if (words[i + 1] && !words[i + 1].operator) i++;
       continue;
@@ -2264,6 +2274,10 @@ function postgresOperands(args) {
   return {valid: true, db, options, destination};
 }
 
+// Positive retention proof: a single -mtime +N and terminal -delete, at most one
+// simple ASCII basename -name/-iname and one -type, joined implicitly or by
+// -a/-and; -depth, -xdev and -mount are allowed. Other predicates/actions cannot
+// prove retention; a relevant unsupported deletion makes coverage partial.
 function isFindRetention(args, onIncomplete) {
   const patterns = new Set(['-name', '-iname', '-path', '-ipath']);
   const ages = new Set(['-mtime', '-atime', '-ctime', '-mmin', '-amin', '-cmin']);
@@ -2373,7 +2387,10 @@ function classifyBackupOperation(binary, args, onIncomplete) {
 }
 
 // Recover only lexical top-level segments. Substitutions are opaque data: their
-// contents must never introduce commands or close an enclosing quote.
+// contents must never introduce commands or close an enclosing quote. A substitution
+// is skipped only when its interior consists of simple words, quotes, escapes,
+// comments and nested substitutions; shell operators and compound syntax stop recovery.
+// Completed outer segments and an unambiguous prefix before the affected word remain.
 function malformedShellPrefix(command) {
   const segments = [];
   let fragment = '', quote = '', escaped = false, wordStart = -1;
@@ -2388,7 +2405,11 @@ function malformedShellPrefix(command) {
       }
       if (frame.quote === "'") { if (ch === "'") frame.quote = ''; continue; }
       if (ch === '$' && command[i + 1] === '(') { frame.wordStart = false; stack.push({quote: '', parens: 1, wordStart: true}); i++; continue; }
-      if (frame.quote === '"') { if (ch === '"') frame.quote = ''; continue; }
+      if (frame.quote === '"') {
+        if (ch === '`' || ch === '$') return -1; // Only nested $(...) is supported.
+        if (ch === '"') frame.quote = '';
+        continue;
+      }
       if (ch === "'" || ch === '"') { frame.quote = ch; frame.wordStart = false; continue; }
       if (ch === '`' || (ch === '$' && command[i + 1] === '{')) return -1; // Unsupported nesting.
       if (ch === '#' && frame.wordStart) {
@@ -2396,9 +2417,10 @@ function malformedShellPrefix(command) {
         if (newline < 0) return -1;
         frame.wordStart = true; i = newline; continue;
       }
-      if (ch === '<' && command[i + 1] === '<') return -1;
-      frame.wordStart = /[\s;|&()<>]/.test(ch);
-      if (ch === '(') frame.parens++;
+      // Compound commands and shell operators require a grammar, not parenthesis counting.
+      if (frame.wordStart && /^(?:case|esac|if|then|elif|else|fi|for|while|until|do|done|in|select|function|time|coproc|\{|\})(?=$|[ \t\n;|&()<>])/.test(command.slice(i))) return -1;
+      if (/[();|&<>${}]/.test(ch) && ch !== ')') return -1;
+      frame.wordStart = /[ \t\n]/.test(ch);
       if (ch === ')' && --frame.parens === 0) { stack.pop(); if (!stack.length) return i; }
     }
     return -1;
@@ -2407,7 +2429,7 @@ function malformedShellPrefix(command) {
     const parsed = shellWords(fragment);
     if (!parsed) return false;
     for (let i = 0; i < parsed.words.length; i++) {
-      if (/^(?:\d*(?:>>?|<)[&]?|&>>?)$/.test(parsed.words[i].text) && parsed.words[i].operator) {
+      if (SHELL_REDIRECT_TOKEN.test(parsed.words[i].text) && parsed.words[i].operator) {
         if (!parsed.words[i + 1] || parsed.words[i + 1].operator) return false;
         i++;
       }
@@ -2431,14 +2453,19 @@ function malformedShellPrefix(command) {
     }
     if (quote) { fragment += ch; if (ch === quote) quote = ''; continue; }
     if (ch === "'" || ch === '"') { if (wordStart < 0) wordStart = fragment.length; quote = ch; fragment += ch; continue; }
-    if (ch === '#' && wordStart < 0) { emit(); return segments; }
+    if (ch === '#' && wordStart < 0) {
+      if (!emit()) return segments;
+      const newline = command.indexOf('\n', i);
+      if (newline < 0) return segments;
+      i = newline; continue;
+    }
     if (ch === '(' || ch === ')' || (ch === '<' && command[i + 1] === '<')) {
       fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
     }
-    const redirect = command.slice(i).match(/^(?:\d*(?:>>?|<)[&]?|&>>?)/);
+    const redirect = command.slice(i).match(SHELL_REDIRECT_AT_START);
     if (redirect) { fragment += redirect[0]; i += redirect[0].length - 1; wordStart = -1; continue; }
     if (/[;|&\n]/.test(ch)) { if (!emit()) return segments; continue; }
-    if (/\s/.test(ch) || /[<>]/.test(ch)) wordStart = -1;
+    if (/[ \t\n]/.test(ch)) wordStart = -1;
     else if (wordStart < 0) wordStart = fragment.length;
     fragment += ch;
   }
