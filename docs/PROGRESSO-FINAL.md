@@ -162,3 +162,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:36 UTC — Revisor encerrou C9 em a1e4ec28 (código 0). Gerente confere a entrega.
 - 19/11/2026 02:36 UTC — Revisão C4-R4 iniciada por Sol high normal somente leitura em cbf83ce3.
 - 19/11/2026 02:36 UTC — Atualizadas as oito seções de MODULOS-DE-VERIFICACAO com o que foi demonstrado em homologação, os limites medidos e as ordens abertas. A aplicação desses módulos na instalação viva segue pendente.
+- 19/11/2026 02:37 UTC — Revisão C9 em a1e4ec28: os dois lockfiles indicados como ausentes foram confirmados no commit por git cat-file (330 e 321 bytes) e utilizados no laboratório real. Os seis médios e o baixo sobre cobertura LGPD, licenças, cache e linha da prova seguem para C9-R3.
