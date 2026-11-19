@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFile, execFileSync} from 'node:child_process';
-import {randomBytes, randomUUID} from 'node:crypto';
+import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {writeFileSync} from 'node:fs';
 import {chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {createServer as createHttpsServer, type Server as HttpsServer} from 'node:https';
@@ -350,6 +350,9 @@ test('Installation, parsePersonalModuleArgs e moduleCollectorArguments validam o
     let removed = false;
     let registeredToken = '';
     const executeProcess: CollectorProcess = async runArgs => {
+      if (runArgs[1] === 'image') {
+        return {code: 0, stdout: Buffer.from('[["/usr/local/bin/prontidao-entrypoint.sh"],null]'), stderr: ''};
+      }
       if (runArgs[1] === 'create') {
         containerName = runArgs[runArgs.indexOf('--name') + 1]!;
         containerOwner = runArgs[runArgs.indexOf('--label') + 1]!.split('=')[1]!;
@@ -364,6 +367,10 @@ test('Installation, parsePersonalModuleArgs e moduleCollectorArguments validam o
         return {code: 0, stdout: Buffer.from(containerId), stderr: ''};
       }
       if (runArgs[1] === 'container') {
+        if (runArgs[2] === 'inspect') {
+          assert.equal(runArgs.at(-1), containerId);
+          return {code: 0, stdout: Buffer.from(`${containerId} running`), stderr: ''};
+        }
         if (runArgs[2] === 'ls') {
           assert.ok(runArgs.includes(`id=${containerId}`));
           return {code: 0, stdout: Buffer.from(removed ? '' : `${containerId} ${containerName} ${containerOwner}`), stderr: ''};
@@ -372,16 +379,11 @@ test('Installation, parsePersonalModuleArgs e moduleCollectorArguments validam o
         removed = true;
         return {code: 0, stdout: Buffer.from(containerId), stderr: ''};
       }
-      if (runArgs[1] === 'start') {
-        assert.deepEqual(runArgs.slice(1), ['start', containerId]);
-        return {code: 0, stdout: Buffer.from(containerId), stderr: ''};
-      }
       if (runArgs[1] === 'wait') {
         assert.deepEqual(runArgs.slice(1), ['wait', containerId]);
         return {code: 0, stdout: Buffer.from('0\n'), stderr: ''};
       }
-      if (runArgs[1] === 'logs' && runArgs[2] === '--follow') return {code: 0, stdout: Buffer.alloc(0), stderr: ''};
-      assert.deepEqual(runArgs.slice(1), ['logs', containerId]);
+      assert.deepEqual(runArgs.slice(1), ['start', '--attach', containerId]);
       const collectorRes = runCollector({
         repoRoot: snapshotPath,
         evidenceFile: seenEvidencePath,
@@ -400,7 +402,10 @@ test('Installation, parsePersonalModuleArgs e moduleCollectorArguments validam o
           return {status: 0, stdout: '', stderr: ''};
         },
       });
-      return {code: 0, stdout: Buffer.from(`${JSON.stringify(collectorRes)}\n`, 'utf8'), stderr: ''};
+      const payload = Buffer.from(`${JSON.stringify(collectorRes)}\n`, 'utf8');
+      const hash = createHash('sha256').update(payload).digest('hex');
+      const header = Buffer.from(`ac-collector-v1 ${containerOwner} 0 ${payload.length} ${hash}\n`);
+      return {code: 0, stdout: Buffer.concat([header, payload]), stderr: ''};
     };
     const contOut = await runModuleCollectorContainer({
       image: pinned,
