@@ -460,3 +460,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:27 UTC — Revisor encerrou C5-R6 em dc0dff58 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:27 UTC — Revisão C8-R7 iniciada por Sol high normal somente leitura em c1d36024.
 - 19/11/2026 05:29 UTC — Histórico de desempenho corrigido em 004271d0. Os 23 testes do orquestrador passaram e uma conexão PostgreSQL bloqueada foi cancelada antes de soltar o bloqueio. A revisão independente de dc0dff58 achou casos adicionais de diagnóstico PostgreSQL; o refinamento está em C5-R7. Na suíte anterior 5805da0d passaram 255 arquivos e 52 complementares, e o laboratório confirmou a ausência do digest antigo. A suíte seguinte usa imagem etiquetada.
+- 19/11/2026 05:29 UTC — Trabalhador encerrou C2-LINGUAGENS-R2 em 3757031b (código 0). Gerente confere a entrega.
+- 19/11/2026 05:29 UTC — Trabalho C7-R7 iniciado por Sol high normal em final-c7.
+- 19/11/2026 05:30 UTC — Trabalhador encerrou C4-R7 em 49841c60 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:30 UTC — Trabalho C5-R7 iniciado por Sol high normal em final-c5.
+- 19/11/2026 05:31 UTC — Revisor encerrou C8-R7 em c1d36024 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:31 UTC — Revisão C6-R9 iniciada por Sol high normal somente leitura em 2cafe62b.
+- 19/11/2026 05:32 UTC — QA R11 em 2abce48d passou nos 52 testes ativos e na prova privada histórica direcionada, completando 53 casos. Em 004271d0, duas medições de desempenho pela CLI passaram em seis testes. QA integrou 3757031b com a descoberta de Python e Go; a imagem de dependências de 49841c60 também está em nova prova. Documentação c1d36024 recebeu correções de atribuição de comando e linha Mermaid na ordem C8-R8.
