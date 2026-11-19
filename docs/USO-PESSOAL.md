@@ -110,6 +110,19 @@ No painel, Configurações → QA do projeto mostra e grava o mesmo arquivo, par
 
 Sempre que reconstruir uma imagem ou mudar o QA, rode `npm run personal:images -- <instalação.json>` de novo e reinicie o gateway com o comando impresso. O setup atualiza os IDs das imagens, a política de qualidade e os modelos de plano das conversas.
 
+#### Referências na matriz de QA
+
+Escreva um requisito `REQ-<número>` por linha em `requisitos.md` ou `requirements.md`. Use crases simples para o nome exportado e o caminho do arquivo. O caminho é relativo à raiz do snapshot, com `./` opcional. Tanto `de` quanto `from` qualificam o nome que os precede.
+
+- **Lista declarada no começo da linha.** Em `` REQ-01: `somar` de `src/preco.mjs` e `validar` de `src/pedido.mjs`; regras do pedido ``, a matriz exige as duas operações e exibe a descrição como contexto. A lista aceita vírgula e as conjunções `e`, `and`, `além de`, `bem como` e `as well as`. Um nome sem caminho nessa lista precisa identificar uma única exportação.
+- **Operação explícita.** Use `calcular com` ou `conferir com`, seguidos por uma referência qualificada ou lista de referências qualificadas, com parênteses opcionais. Pode incluir `deve-se` antes do verbo e um objeto introduzido por `o`, `a`, `os` ou `as` antes de `com`. Por exemplo, `` Para obter o resultado esperado, deve-se calcular a saída esperada com (`somar` de `src/preco.mjs`) ``.
+- **Formas parentetizadas legadas.** São reconhecidos `calcular` e `conferir` seguidos diretamente da lista entre parênteses, com objeto opcional de artigo e uma palavra. Essa forma admite a indicação final `em duas operações` ou `em <número> operações`. Também são reconhecidos `cálculo` e `operação` antes da lista entre parênteses. O rótulo `operação` admite um modificador de uma palavra, como `operação antiga`. Qualifique com caminho cada referência dessas formas.
+- **Sujeito de retorno.** Em `` `somar` de `src/preco.mjs` retorna o texto `OK` ``, a referência antes de `retorna` ou `devolve` identifica a operação. O retorno pode ser descrito em prosa ou terminar com um único literal em crases simples. Uma oração iniciada por `retorna`, `retornar`, `devolve` ou `devolver` também pode usar esse formato de literal como contexto.
+
+Ponto final, interrogação, exclamação e ponto e vírgula separam orações fora de crases, parênteses e colchetes. Vírgula ou conjunção separa quando introduz uma operação ou uma oração de retorno. Em `` O resultado esperado é `OK` de `a.mjs`, e `primeira` de `a.mjs` retorna esse texto ``, a matriz mantém o vínculo com `primeira` e indica cobertura limitada pela menção qualificada a `OK`. Qualificadores junto à referência, como `(resultado esperado)` ou `como resultado esperado`, impedem que a construção inteira seja aceita como operação.
+
+Referências em crases fora dessas formas ficam no contexto da linha e deixam a cobertura limitada. Incluem-se anotações parentetizadas em prosa, como `` A mensagem de sucesso deve ser (`OK` de `a.mjs`) ``. Um caminho explícito que não existe no snapshot fica como referência sem resolução. Requisitos em prosa sem referência, inclusive a forma legada `` retorna `OK` ``, podem ser vinculados pelo código `REQ-<número>` no título do teste. O vínculo estático só vira prova quando a asserção correspondente é observada e o teste passa nas três execuções.
+
 ### Combos de equipe
 
 Cada projeto usa um combo. O combo diz, para cada papel, o provedor, o modelo, o esforço, a quantidade e a reserva. A reserva assume quando a conta titular está esgotada ou sem login. Três já vêm prontos.

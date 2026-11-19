@@ -16,6 +16,49 @@ const attestation = 'qa_attestation';
 const databases = ['fresh', 'previous', 'upgraded'];
 const tapLabel = 'invariante funcional';
 const booleanColumn = '{16}'; // OID do tipo boolean nativo em pg_catalog.pg_type.
+const firstNormalObjectOid = 16384; // OIDs reservados ao initdb ficam abaixo desse limite no PostgreSQL 16.
+// O schema public padrão pertence implicitamente ao dono do banco.
+const fixtureScope = `
+  fixture_schemas AS (
+    SELECT oid, nspname FROM pg_namespace
+    WHERE nspowner = '${project}'::regrole
+       OR (nspname = 'public' AND nspowner = 'pg_database_owner'::regrole AND EXISTS (
+         SELECT 1 FROM pg_database WHERE datname = current_database() AND datdba = '${project}'::regrole
+       ))
+  ),
+  fixture_relations AS (
+    SELECT c.oid, n.nspname, c.relname FROM pg_class c JOIN fixture_schemas n ON n.oid = c.relnamespace
+    WHERE c.relowner = '${project}'::regrole AND c.relkind IN ('r', 'p', 'v', 'm')
+  )`;
+
+async function readerScopeConfirmed(psql, db, reader) {
+  try {
+    const result = await psql(db, [
+      'BEGIN READ ONLY',
+      'SET LOCAL search_path TO pg_catalog, pg_temp',
+      `WITH ${fixtureScope}
+      SELECT NOT EXISTS (
+        SELECT 1 FROM pg_class c
+        WHERE c.oid >= ${firstNormalObjectOid}
+          AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+          AND NOT EXISTS (SELECT 1 FROM fixture_relations f WHERE f.oid = c.oid)
+          AND (
+            has_schema_privilege('${reader}'::regrole::oid, c.relnamespace, 'USAGE')
+            AND CASE WHEN c.relkind = 'S' THEN
+              has_sequence_privilege('${reader}'::regrole::oid, c.oid, 'SELECT')
+            ELSE
+              has_table_privilege('${reader}'::regrole::oid, c.oid, 'SELECT')
+              OR has_any_column_privilege('${reader}'::regrole::oid, c.oid, 'SELECT')
+            END
+          ) IS NOT FALSE
+      )`,
+      'ROLLBACK',
+    ], admin);
+    return result === 't\n';
+  } catch {
+    return false;
+  }
+}
 
 export function parseTap(output) {
   const [plan, result, ...diagnostics] = output.trim().split('\n');
@@ -52,24 +95,16 @@ export async function attestPostgres(psql, db, predicate) {
       'SET LOCAL search_path TO pg_catalog, pg_temp',
       `CREATE ROLE ${reader} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
       `GRANT CONNECT ON DATABASE ${db} TO ${reader}`,
-      // O schema public padrão pertence implicitamente ao dono do banco.
       `DO $scope$
       DECLARE grant_sql text;
       BEGIN
         FOR grant_sql IN
-          WITH fixture_schemas AS (
-            SELECT oid, nspname FROM pg_namespace
-            WHERE nspowner = '${project}'::regrole
-               OR (nspname = 'public' AND nspowner = 'pg_database_owner'::regrole AND EXISTS (
-                 SELECT 1 FROM pg_database WHERE datname = current_database() AND datdba = '${project}'::regrole
-               ))
-          )
+          WITH ${fixtureScope}
           SELECT format('GRANT USAGE ON SCHEMA %I TO %I', nspname, '${reader}')
           FROM fixture_schemas
           UNION ALL
-          SELECT format('GRANT SELECT ON TABLE %I.%I TO %I', n.nspname, c.relname, '${reader}')
-          FROM pg_class c JOIN fixture_schemas n ON n.oid = c.relnamespace
-          WHERE c.relowner = '${project}'::regrole AND c.relkind IN ('r', 'p', 'v', 'm')
+          SELECT format('GRANT SELECT ON TABLE %I.%I TO %I', nspname, relname, '${reader}')
+          FROM fixture_relations
         LOOP
           EXECUTE grant_sql;
         END LOOP;
@@ -77,6 +112,8 @@ export async function attestPostgres(psql, db, predicate) {
       $scope$`,
       'COMMIT',
     ], admin);
+    if (!await readerScopeConfirmed(psql, db, reader)) return 'scope-unconfirmed';
+
     scalar = await psql(db, [
       'BEGIN READ ONLY',
       'SET LOCAL search_path TO pg_catalog, public',
