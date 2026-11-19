@@ -75,6 +75,11 @@ test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e
   const lock = JSON.parse(readFileSync(join(qaModuleDir, 'qa-tools.lock.json'), 'utf8')) as {
     packageLockSha256: string;
     baseImage: {digest: string; tag: string};
+    languageRuntimes: {
+      python: {version: string; image: string};
+      go: {version: string; image: string};
+      coverage: {version: string; url: string; sha256: string};
+    };
   };
   assert.match(lock.baseImage.digest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(dockerfile.includes(lock.baseImage.digest), true);
@@ -83,6 +88,13 @@ test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e
   assert.match(dockerfile, /sha256sum -c/);
   assert.match(dockerfile, /verify-lock\.mjs/);
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
+  const {python, go, coverage} = lock.languageRuntimes;
+  assert.ok(dockerfile.includes(`FROM ${python.image} AS qa-python`));
+  assert.ok(dockerfile.includes(`FROM ${go.image} AS qa-go`));
+  assert.ok(dockerfile.includes(`ADD --checksum=sha256:${coverage.sha256} ${coverage.url} `));
+  assert.ok(dockerfile.includes(`sys.version_info[:3] == (${python.version.split('.').join(', ')})`));
+  assert.ok(dockerfile.includes(`"go${go.version}"`));
+  assert.ok(dockerfile.includes(`coverage.__version__ == "${coverage.version}"`));
   assert.match(dockerfile, /USER 65532:65532/);
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/qa-entrypoint\.sh"\]/);
 });
@@ -905,4 +917,166 @@ test('referência e mutantes executam com o mesmo preload e permissões V8', rea
     assert.equal(result.killedBy.name, 'fronteira do desconto');
     assert.throws(() => classifyMutant(changed, inocuous), /QA_MUTANT_BASELINE_INELIGIBLE/);
   });
+});
+
+const {decodePythonPass, decodeGoPass, decodeGoProfile, measureLanguageSuite, selectLanguageSuite} = await import(
+  new URL('../deploy/modules/qa/language-tests.mjs', import.meta.url).href
+);
+const languageFixtureDir = fileURLToPath(new URL('./fixtures/module-qa-languages/', import.meta.url));
+const pythonFiles = ['arithmetic.py', 'test_arithmetic.py'];
+const goFiles = ['go/go.mod', 'go/arithmetic.go', 'go/arithmetic_test.go'];
+const pythonSelection = selectLanguageSuite('python', pythonFiles, false);
+const goSelection = selectLanguageSuite('go', goFiles, false);
+const goModule = 'example.invalid/qa/arithmetic';
+const goProfile = `mode: set\n${goModule}/arithmetic.go:3.10,4.15 2 1\n${goModule}/arithmetic.go:4.15,5.15 1 0\n`;
+const pythonReport = {
+  tests: [
+    {file: 'test_arithmetic.py', name: 'ArithmeticTest.test_control', status: 'passed'},
+    {file: 'test_arithmetic.py', name: 'ArithmeticTest.test_defect', status: 'failed'},
+  ],
+  errors: 0, unavailable: 0, fixtureSkips: 0, coverage: {files: 1, statements: [3, 4], branches: [1, 2]},
+};
+
+test('entrypoint descobre Python e Go no snapshot sintético e reserva a execução à imagem', async () => {
+  const result = spawnSync('/bin/sh', [entrypointPath], {
+    encoding: 'utf8',
+    env: {PATH: process.env.PATH, QA_HOST_TEST_MODE: '1', QA_REPO_DIR: languageFixtureDir},
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+  const report = JSON.parse(result.stdout) as Awaited<ReturnType<typeof collectQaModule>>;
+  assert.match(coverageFor(report, 'qa-snapshot').detail, /^5 arquivos copiados/);
+  for (const tool of ['python-unittest-coverage', 'go-test-cover']) {
+    assert.equal(coverageFor(report, tool).status, 'skipped');
+    assert.match(coverageFor(report, tool).detail, /contêiner isolado/);
+    assert.ok(report.coverage.every(row => row.tool !== `${tool}-execucao`));
+    assert.ok(report.findings.every(finding => finding.tool !== tool));
+  }
+  const withoutLanguages = await collectQaModule({repoDir: cleanFixtureDir});
+  for (const tool of ['python-unittest-coverage', 'go-test-cover']) {
+    assert.match(coverageFor(withoutLanguages, tool).detail, /nenhum arquivo candidato/);
+  }
+  assert.match(coverageFor(withoutLanguages, 'qa-requisito:REQ-01').detail, /vínculo estático/);
+});
+
+test('seleção offline distingue snapshot parcial, nome Python inválido e módulos Go fora de escopo', () => {
+  assert.deepEqual(pythonSelection, {files: ['test_arithmetic.py'], sourceFiles: ['arithmetic.py'], omitted: 0});
+  assert.deepEqual(goSelection, {
+    files: ['go/arithmetic_test.go'], sourceFiles: ['go/arithmetic.go'], moduleFile: 'go/go.mod', moduleDir: 'go', omitted: 0,
+  });
+  assert.match(selectLanguageSuite('python', pythonFiles, true).reason, /escopo parcial/);
+  assert.match(selectLanguageSuite('python', ['test-arithmetic.py'], false).reason, /sem nome importável/);
+  assert.match(selectLanguageSuite('go', ['arithmetic_test.go'], false).reason, /módulo Go indisponível/);
+  assert.match(selectLanguageSuite('go', [...goFiles, 'second/go.mod'], false).reason, /vários módulos/);
+  assert.match(selectLanguageSuite('go', ['vendor/pkg/arithmetic_test.go'], false).reason, /nenhum arquivo candidato/);
+  const root = selectLanguageSuite('go', ['go.mod', 'arithmetic_test.go', ...goFiles, 'vendor/tool_test.go'], false);
+  assert.deepEqual(root.files, ['arithmetic_test.go']);
+  assert.equal(root.omitted, 1);
+});
+
+test('três passadas Python com controle, reprovação da fixture e cobertura de ramos', async () => {
+  let executed = 0;
+  const result = await measureLanguageSuite('python', pythonSelection, async () => {
+    executed++;
+    return decodePythonPass({code: 0, output: JSON.stringify(pythonReport)}, pythonSelection);
+  });
+  assert.equal(executed, 3);
+  assert.equal(result.coverageRow.status, 'ok');
+  for (let index = 0; index < 3; index++) {
+    assert.match(result.extraRows[index].detail, new RegExp(`execução ${index + 1}: reprovado; 1 aprovados, 1 reprovados`));
+  }
+  assert.equal(result.extraRows[3].status, 'ok');
+  assert.match(result.extraRows[3].detail, /abaixo de 100%.*statements 3\/4, ramos 1\/2/);
+  assert.deepEqual(result.findings.map(({file, rule, message}: QaFinding) => [file, rule, message]), [
+    ['test_arithmetic.py', 'QA-TESTE-FALHOU', "Teste 'ArithmeticTest.test_defect' falhou"],
+  ]);
+  assert.throws(() => decodePythonPass({code: 0, output: '{"limited":true}'}, pythonSelection), /QA_LANGUAGE_TEST_LIMIT/);
+  assert.throws(() => decodePythonPass({code: 1, output: JSON.stringify(pythonReport)}, pythonSelection), /QA_PYTHON_EXECUTION_FAILED/);
+});
+
+test('ausência, dependência indisponível e interrupção Python geram estados próprios sem inventar cobertura', async () => {
+  const execute = (report: Partial<typeof pythonReport>) => async () =>
+    decodePythonPass({code: 0, output: JSON.stringify({...pythonReport, tests: [], coverage: null, ...report})}, pythonSelection);
+  const empty = await measureLanguageSuite('python', pythonSelection, execute({}));
+  assert.equal(empty.coverageRow.status, 'skipped');
+  assert.match(empty.extraRows[0].detail, /nenhum teste executável/);
+  assert.match(empty.extraRows[3].detail, /sem medição/);
+  const missing = await measureLanguageSuite('python', pythonSelection, execute({unavailable: 1}));
+  assert.equal(missing.coverageRow.status, 'skipped');
+  assert.match(missing.coverageRow.detail, /dependência indisponível/);
+  const skipped = await measureLanguageSuite('python', pythonSelection, execute({fixtureSkips: 1}));
+  assert.match(skipped.extraRows[0].detail, /todos os casos pulados/);
+  const interrupted = await measureLanguageSuite('python', pythonSelection, async () => { throw new Error('QA_TEST_TIMEOUT'); });
+  assert.equal(interrupted.coverageRow.status, 'failed');
+  assert.match(interrupted.extraRows[2].detail, /QA_TEST_TIMEOUT/);
+  assert.deepEqual(interrupted.findings, []);
+});
+
+function goEvents(events: object[]): string {
+  return events.map(event => JSON.stringify(event)).join('\n');
+}
+
+test('Go conserva a reprovação e o controle por passada e pondera statements sem declarar ramos', async () => {
+  const output = goEvents([
+    {Action: 'pass', Package: goModule, Test: 'TestControl'},
+    {Action: 'fail', Package: goModule, Test: 'TestDefect'},
+    {Action: 'output', Package: goModule, Test: 'TestDefect', Output: 'mensagem sintética não publicada'},
+    {Action: 'fail', Package: goModule},
+  ]);
+  const result = await measureLanguageSuite('go', goSelection, async () =>
+    decodeGoPass({code: 1, output, diagnostics: ''}, goProfile, goSelection, goModule));
+  assert.equal(result.coverageRow.status, 'ok');
+  for (let index = 0; index < 3; index++) assert.match(result.extraRows[index].detail, /1 aprovados, 1 reprovados/);
+  assert.match(result.extraRows[3].detail, /statements 2\/3/);
+  assert.doesNotMatch(result.extraRows[3].detail, /ramos/);
+  assert.equal(result.findings[0].file, 'go/arithmetic_test.go');
+  assert.match(result.findings[0].message, /TestDefect/);
+  assert.doesNotMatch(JSON.stringify(result), /mensagem sintética/);
+  assert.deepEqual(decodeGoProfile(goProfile + `${goModule}/arithmetic.go:3.10,4.15 2 0\n`,
+    new Set([`${goModule}/arithmetic.go`])), {files: 1, statements: [2, 3]});
+});
+
+test('Go distingue ausência de casos, erro de compilação, dependência offline e cobertura parcial', async () => {
+  const run = (code: number, events: object[], profile: string | null = null, selection = goSelection) =>
+    measureLanguageSuite('go', selection, async () =>
+      decodeGoPass({code, output: goEvents(events), diagnostics: ''}, profile, selection, goModule));
+  const absent = await run(0, [{Action: 'skip', Package: goModule}], goProfile);
+  assert.equal(absent.coverageRow.status, 'skipped');
+  assert.match(absent.extraRows[0].detail, /nenhum teste executável/);
+  assert.match(absent.extraRows[3].detail, /sem medição/);
+  const failure = await run(1, [{Action: 'build-fail', ImportPath: goModule},
+    {Action: 'fail', Package: goModule, FailedBuild: goModule}]);
+  assert.equal(failure.coverageRow.status, 'failed');
+  assert.deepEqual(failure.findings, []);
+  const missing = await run(1, [
+    {Action: 'build-output', ImportPath: goModule, Output: 'module lookup disabled by GOPROXY=off'},
+    {Action: 'build-fail', ImportPath: goModule},
+    {Action: 'fail', Package: goModule, FailedBuild: goModule},
+  ]);
+  assert.equal(missing.coverageRow.status, 'skipped');
+  assert.match(missing.coverageRow.detail, /dependência indisponível/);
+  const mixed = await run(1, [
+    {Action: 'build-output', ImportPath: goModule, Output: 'no required module provides package'},
+    {Action: 'fail', Package: goModule, FailedBuild: goModule},
+    {Action: 'build-fail', ImportPath: `${goModule}/other`},
+    {Action: 'fail', Package: `${goModule}/other`, FailedBuild: `${goModule}/other`},
+  ]);
+  assert.equal(mixed.coverageRow.status, 'failed');
+  const interrupted = await run(1, [
+    {Action: 'fail', Package: goModule, Test: 'TestDefect'},
+    {Action: 'run', Package: goModule, Test: 'TestInterrupted'},
+    {Action: 'fail', Package: goModule},
+  ]);
+  assert.equal(interrupted.coverageRow.status, 'failed');
+  assert.equal(interrupted.findings.length, 1);
+  assert.match(interrupted.findings[0].message, /TestDefect/);
+  const passed = [{Action: 'pass', Package: goModule, Test: 'TestControl'}, {Action: 'pass', Package: goModule}];
+  const partial = await run(0, passed, goProfile,
+    selectLanguageSuite('go', [...goFiles, 'go/unmeasured.go'], false));
+  assert.equal(partial.coverageRow.status, 'ok');
+  assert.equal(partial.extraRows[3].status, 'skipped');
+  assert.match(partial.extraRows[3].detail, /escopo parcial.*statements 2\/3/);
+  const malformed = await run(0, passed, 'malformed');
+  assert.equal(malformed.coverageRow.status, 'ok');
+  assert.match(malformed.extraRows[3].detail, /sem medição/);
 });
