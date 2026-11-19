@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import {execFile as execFileCb} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile} from 'node:fs/promises';
+import {chmod, copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile} from 'node:fs/promises';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join, resolve} from 'node:path';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
@@ -18,7 +18,9 @@ import {
   satisfiesRange,
   toRepoRelPath,
   validateModuleOutput,
+  verifyToolsAgainstLock,
 } from '../deploy/modules/dependencias/collect.mjs';
+import {verifyDependenciasLock} from '../deploy/modules/dependencias/verify-lock.mjs';
 
 const execFile = promisify(execFileCb);
 const require = createRequire(import.meta.url);
@@ -36,6 +38,11 @@ test('Dockerfile e lockfiles do módulo dependencias são imutáveis e sem usuá
   assert.match(dockerfile, /verify-lock\.mjs/);
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
 
+  const lockResult = verifyDependenciasLock(moduleDir);
+  assert.equal(lockResult.ok, true);
+  assert.equal(lockResult.toolCount, 4);
+  assert.equal(lockResult.totalLockedPackages, 109);
+
   const lockMeta = JSON.parse(await readFile(join(moduleDir, 'dependencias-tools.lock.json'), 'utf8')) as {
     packageLockSha256: string;
     offlineRegistrySha256: string;
@@ -46,15 +53,28 @@ test('Dockerfile e lockfiles do módulo dependencias são imutáveis e sem usuá
   assert.equal(createHash('sha256').update(npmLockBytes).digest('hex'), lockMeta.packageLockSha256);
   assert.equal(createHash('sha256').update(regBytes).digest('hex'), lockMeta.offlineRegistrySha256);
 
-  const npmLock = JSON.parse(npmLockBytes.toString('utf8')) as {
-    packages: Record<string, {version: string; integrity: string; resolved: string}>;
-  };
-  for (const [name, expected] of Object.entries(lockMeta.dependencies)) {
-    const actual = npmLock.packages[`node_modules/${name}`];
-    assert.ok(actual, `Falta entrada em package-lock.json para ${name}`);
-    assert.equal(actual.version, expected.version);
-    assert.equal(actual.integrity, expected.integrity);
-    assert.equal(actual.resolved, expected.resolved);
+  const synthToolsDir = await mkdtemp(join(tmpdir(), 'dep-lock-check-'));
+  try {
+    await copyFile(join(moduleDir, 'dependencias-tools.lock.json'), join(synthToolsDir, 'dependencias-tools.lock.json'));
+    for (const [name, expected] of Object.entries(lockMeta.dependencies)) {
+      const pkgDir = join(synthToolsDir, 'node_modules', name);
+      await mkdir(pkgDir, {recursive: true});
+      await writeFile(join(pkgDir, 'package.json'), JSON.stringify({name, version: expected.version}), 'utf8');
+    }
+    const verified = await verifyToolsAgainstLock(synthToolsDir);
+    assert.equal(verified['npm-check-updates'], '23.1.1');
+    assert.equal(verified['@ast-grep/cli'], '0.51.3');
+    assert.equal(verified['@ast-grep/cli-linux-x64-gnu'], '0.51.3');
+    assert.equal(verified.jscodeshift, '17.4.0');
+
+    await writeFile(
+      join(synthToolsDir, 'node_modules', 'jscodeshift', 'package.json'),
+      JSON.stringify({name: 'jscodeshift', version: '0.0.1'}),
+      'utf8'
+    );
+    await assert.rejects(() => verifyToolsAgainstLock(synthToolsDir), /Versão divergente para jscodeshift/);
+  } finally {
+    await rm(synthToolsDir, {recursive: true, force: true});
   }
 });
 
@@ -192,35 +212,86 @@ test('descoberta ignora symlinks e análise de lockfile + SBOM detecta defeito s
   assert.equal(cleanSbom.findings.length, 0);
 });
 
-test('runCollection entrega contrato válido com cobertura detalhada e registra falha de ferramenta', async () => {
+test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isolamento de config e dependências sem metadados', async () => {
   const binDir = await mkdtemp(join(tmpdir(), 'dep-bins-'));
+  const mixedRepo = await mkdtemp(join(tmpdir(), 'dep-mixed-'));
+  const noMetaRepo = await mkdtemp(join(tmpdir(), 'dep-nometa-'));
   try {
-    const fakeNcu = join(binDir, 'fake-ncu.cjs');
+    // Harness que reproduz exatamente o contrato CLI e lilconfig do npm-check-updates@23.1.1
+    const contractNcu = join(binDir, 'contract-ncu.cjs');
     await writeFile(
-      fakeNcu,
+      contractNcu,
       [
         '#!/usr/bin/env node',
+        'const fs = require("node:fs");',
+        'const path = require("node:path");',
         'const args = process.argv.slice(2);',
-        'const pkgIdx = args.indexOf("--packageFile");',
-        'const pkg = JSON.parse(require("node:fs").readFileSync(args[pkgIdx + 1], "utf8"));',
-        'if (pkg.dependencies && pkg.dependencies.express) {',
-        '  process.stdout.write(JSON.stringify({express: "^5.3.0", lodash: "^4.18.1", "socket.io-client": "^4.8.4"}));',
-        '} else {',
-        '  process.stdout.write("{}");',
+        'const getArg = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : null; };',
+        'if (!args.includes("--jsonUpgraded")) { process.stderr.write("Missing --jsonUpgraded\\n"); process.exit(1); }',
+        'const depArg = getArg("--dep");',
+        'if (depArg !== "prod,dev,optional,peer") { process.stderr.write("Invalid --dep\\n"); process.exit(1); }',
+        'const cfgPath = getArg("--configFilePath");',
+        'const cfgName = getArg("--configFileName");',
+        'if (!cfgPath || !cfgName) { process.stderr.write("Missing configFilePath/configFileName\\n"); process.exit(1); }',
+        'const validRcNames = new Set([".ncurc", ".ncurc.json", ".ncurc.yaml", ".ncurc.yml", ".ncurc.mjs", ".ncurc.cjs", ".ncurc.js"]);',
+        'if (!validRcNames.has(cfgName)) {',
+        '  const ext = path.extname(cfgName) || cfgName;',
+        '  process.stderr.write(`Config file error: No loader specified for extension ${ext}\\n`);',
+        '  process.exit(1);',
         '}',
+        'const fullCfg = path.join(cfgPath, cfgName);',
+        'if (!fs.existsSync(fullCfg)) { process.stderr.write(`Config file ${cfgName} not found in ${cfgPath}\\n`); process.exit(1); }',
+        'if (cfgName.endsWith(".json")) JSON.parse(fs.readFileSync(fullCfg, "utf8"));',
+        'const forbiddenRoots = JSON.parse(process.env.AC_TEST_FORBIDDEN_ROOTS || "[]");',
+        'for (const r of forbiddenRoots) {',
+        '  if (path.resolve(cfgPath).startsWith(path.resolve(r))) { process.stderr.write("Config not isolated from repo\\n"); process.exit(1); }',
+        '}',
+        'const pkgFile = getArg("--packageFile");',
+        'if (!pkgFile || !fs.existsSync(pkgFile)) { process.stderr.write("Missing --packageFile\\n"); process.exit(1); }',
+        'for (const r of forbiddenRoots) {',
+        '  if (path.resolve(pkgFile).startsWith(path.resolve(r))) { process.stderr.write("PackageFile not isolated from repo\\n"); process.exit(1); }',
+        '}',
+        'const regType = getArg("--registryType");',
+        'const regPath = getArg("--registry");',
+        'if (regType !== "json" || !regPath || !fs.existsSync(regPath)) { process.stderr.write("Missing json registry\\n"); process.exit(1); }',
+        'const reg = JSON.parse(fs.readFileSync(regPath, "utf8"));',
+        'const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));',
+        'const out = {};',
+        'for (const sec of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {',
+        '  const block = pkg[sec] || {};',
+        '  for (const [name, spec] of Object.entries(block)) {',
+        '    const latest = reg[name];',
+        '    if (typeof latest !== "string") continue;',
+        '    const clean = String(spec).replace(/^[\\^~>=<\\s]+/, "");',
+        '    if (/^\\d+\\.\\d+\\.\\d+$/.test(clean) && clean !== latest) {',
+        '      const prefix = String(spec).startsWith("^") ? "^" : String(spec).startsWith("~") ? "~" : "";',
+        '      out[name] = `${prefix}${latest}`;',
+        '    }',
+        '  }',
+        '}',
+        'process.stdout.write(`${JSON.stringify(out)}\\n`);',
       ].join('\n'),
       'utf8'
     );
-    await chmod(fakeNcu, 0o755);
+    await chmod(contractNcu, 0o755);
 
-    const fakeAstGrep = join(binDir, 'fake-ast-grep.cjs');
+    const contractAstGrep = join(binDir, 'contract-ast-grep.cjs');
     await writeFile(
-      fakeAstGrep,
+      contractAstGrep,
       [
         '#!/usr/bin/env node',
-        'const target = process.argv[process.argv.length - 1];',
         'const fs = require("node:fs");',
         'const path = require("node:path");',
+        'const args = process.argv.slice(2);',
+        'if (args[0] !== "scan" || args[1] !== "--config" || !fs.existsSync(args[2]) || args[3] !== "--json=compact") {',
+        '  process.stderr.write("Invalid ast-grep CLI args\\n");',
+        '  process.exit(2);',
+        '}',
+        'if (process.env.AC_TEST_FORCE_ASTGREP_EMPTY_FAIL === "1") {',
+        '  process.stderr.write("error: forced ast-grep config failure\\n");',
+        '  process.exit(2);',
+        '}',
+        'const target = args[4];',
         'const serverFile = path.join(target, "src", "server.ts");',
         'const text = fs.existsSync(serverFile) ? fs.readFileSync(serverFile, "utf8") : "";',
         'if (text.includes("app.del(")) {',
@@ -232,15 +303,20 @@ test('runCollection entrega contrato válido com cobertura detalhada e registra 
       ].join('\n'),
       'utf8'
     );
-    await chmod(fakeAstGrep, 0o755);
+    await chmod(contractAstGrep, 0o755);
 
-    const fakeJscodeshift = join(binDir, 'fake-jscodeshift.cjs');
+    const contractJscodeshift = join(binDir, 'contract-jscodeshift.cjs');
     await writeFile(
-      fakeJscodeshift,
+      contractJscodeshift,
       [
         '#!/usr/bin/env node',
         'const fs = require("node:fs");',
-        'const files = process.argv.filter(a => a.endsWith(".js") || a.endsWith(".ts"));',
+        'const args = process.argv.slice(2);',
+        'if (!args.includes("--run-in-band") || !args.includes("--silent") || !args.some(a => a.startsWith("--parser=")) || !args.includes("-t")) {',
+        '  process.stderr.write("Invalid jscodeshift CLI args\\n");',
+        '  process.exit(2);',
+        '}',
+        'const files = args.filter(a => a.endsWith(".js") || a.endsWith(".ts"));',
         'for (const f of files) {',
         '  const orig = fs.readFileSync(f, "utf8");',
         '  if (orig.includes("new Buffer(")) {',
@@ -253,31 +329,39 @@ test('runCollection entrega contrato válido com cobertura detalhada e registra 
       ].join('\n'),
       'utf8'
     );
-    await chmod(fakeJscodeshift, 0o755);
+    await chmod(contractJscodeshift, 0o755);
+
+    process.env.AC_TEST_FORBIDDEN_ROOTS = JSON.stringify([
+      resolve(fixtureDefect),
+      resolve(fixtureClean),
+      resolve(mixedRepo),
+      resolve(noMetaRepo),
+    ]);
 
     const dirtyResult = await runCollection({
       repoRoot: fixtureDefect,
-      ncuBin: fakeNcu,
-      astGrepBin: fakeAstGrep,
-      jscodeshiftBin: fakeJscodeshift,
+      ncuBin: contractNcu,
+      astGrepBin: contractAstGrep,
+      jscodeshiftBin: contractJscodeshift,
       ncuVersion: '23.1.1',
       astGrepVersion: '0.51.3',
       jscodeshiftVersion: '17.4.0',
     });
     validateModuleOutput(dirtyResult);
     assert.equal(dirtyResult.coverage.some(c => c.status === 'failed'), false);
-    assert.equal(dirtyResult.coverage.some(c => c.detail.includes('arquivo=package.json')), true);
-    assert.equal(dirtyResult.coverage.some(c => c.detail.includes('arquivo=src/server.ts')), true);
-    assert.equal(dirtyResult.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MAJOR'), true);
+    assert.equal(dirtyResult.coverage.some(c => c.tool === 'npm-check-updates' && c.detail.includes('sem_metadados=0')), true);
+    assert.equal(dirtyResult.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MAJOR' && f.evidence.includes('^5.3.0')), true);
+    assert.equal(dirtyResult.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MINOR' && f.evidence.includes('^4.18.1')), true);
+    assert.equal(dirtyResult.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-PATCH' && f.evidence.includes('^4.8.4')), true);
     assert.equal(dirtyResult.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-APP-DEL'), true);
     assert.equal(dirtyResult.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-BUFFER-CTOR'), true);
     assert.equal(dirtyResult.findings.some(f => f.tool === 'sbom-lockfile' && f.rule === 'LOCKFILE-DRIFT'), true);
 
     const cleanResult = await runCollection({
       repoRoot: fixtureClean,
-      ncuBin: fakeNcu,
-      astGrepBin: fakeAstGrep,
-      jscodeshiftBin: fakeJscodeshift,
+      ncuBin: contractNcu,
+      astGrepBin: contractAstGrep,
+      jscodeshiftBin: contractJscodeshift,
       ncuVersion: '23.1.1',
       astGrepVersion: '0.51.3',
       jscodeshiftVersion: '17.4.0',
@@ -286,18 +370,135 @@ test('runCollection entrega contrato válido com cobertura detalhada e registra 
     assert.equal(cleanResult.coverage.some(c => c.status === 'failed'), false);
     assert.equal(cleanResult.findings.length, 0);
 
-    const failedResult = await runCollection({
-      repoRoot: fixtureClean,
-      ncuBin: join(binDir, 'nao-existe-ncu'),
-      astGrepBin: fakeAstGrep,
-      jscodeshiftBin: fakeJscodeshift,
+    // Repositório misto com config hostil no repo + dependência real + dependência sem metadados no registro offline
+    await writeFile(
+      join(mixedRepo, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'mixed-meta-repo',
+          version: '1.0.0',
+          dependencies: {
+            express: '^4.17.1',
+            'pacote-privado-sem-metadados': '^1.2.3',
+          },
+        },
+        null,
+        2
+      )
+    );
+    await writeFile(
+      join(mixedRepo, 'package-lock.json'),
+      JSON.stringify(
+        {
+          name: 'mixed-meta-repo',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          packages: {
+            '': {name: 'mixed-meta-repo', version: '1.0.0'},
+            'node_modules/express': {version: '4.17.1'},
+            'node_modules/pacote-privado-sem-metadados': {version: '1.2.3'},
+          },
+        },
+        null,
+        2
+      )
+    );
+    await writeFile(join(mixedRepo, '.ncurc.js'), 'throw new Error("Config do repositório não pode rodar");\n');
+    await writeFile(join(mixedRepo, '.ncurc.json'), '{"reject":["express"]}\n');
+
+    const mixedResult = await runCollection({
+      repoRoot: mixedRepo,
+      ncuBin: contractNcu,
+      astGrepBin: contractAstGrep,
+      jscodeshiftBin: contractJscodeshift,
       ncuVersion: '23.1.1',
       astGrepVersion: '0.51.3',
       jscodeshiftVersion: '17.4.0',
     });
-    validateModuleOutput(failedResult);
-    assert.equal(failedResult.coverage.some(c => c.tool === 'npm-check-updates' && c.status === 'failed'), true);
+    validateModuleOutput(mixedResult);
+    assert.equal(mixedResult.coverage.some(c => c.status === 'failed'), false);
+    assert.equal(
+      mixedResult.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MAJOR' && f.evidence.includes('express')),
+      true
+    );
+    assert.equal(
+      mixedResult.coverage.some(
+        c =>
+          c.tool === 'npm-check-updates' &&
+          c.status === 'skipped' &&
+          c.detail.includes('pacotes=pacote-privado-sem-metadados') &&
+          c.detail.includes('motivo=ausente_no_registro_offline')
+      ),
+      true
+    );
+    assert.equal(
+      mixedResult.coverage.some(c => c.tool === 'sbom-lockfile' && c.detail.includes('sem_metadados=1')),
+      true
+    );
+
+    // Repositório em que NENHUMA dependência tem metadados no registro offline
+    await writeFile(
+      join(noMetaRepo, 'package.json'),
+      JSON.stringify(
+        {
+          name: 'only-missing-meta',
+          version: '1.0.0',
+          dependencies: {
+            'pacote-sem-metadados-a': '^1.0.0',
+          },
+        },
+        null,
+        2
+      )
+    );
+    const noMetaResult = await runCollection({
+      repoRoot: noMetaRepo,
+      ncuBin: contractNcu,
+      astGrepBin: contractAstGrep,
+      jscodeshiftBin: contractJscodeshift,
+      ncuVersion: '23.1.1',
+      astGrepVersion: '0.51.3',
+      jscodeshiftVersion: '17.4.0',
+    });
+    validateModuleOutput(noMetaResult);
+    assert.equal(noMetaResult.coverage.some(c => c.status === 'failed'), false);
+    const noMetaSummary = noMetaResult.coverage.find(c => c.tool === 'npm-check-updates');
+    assert.ok(noMetaSummary);
+    assert.equal(noMetaSummary.status, 'skipped');
+    assert.equal(noMetaSummary.detail.includes('verificadas_registro=0; sem_metadados=1'), true);
+    assert.equal(noMetaSummary.detail.includes('nenhuma_dependencia_no_registro_offline'), true);
+
+    // Falha de ferramenta (ncu inexistente)
+    const failedNcu = await runCollection({
+      repoRoot: fixtureClean,
+      ncuBin: join(binDir, 'nao-existe-ncu'),
+      astGrepBin: contractAstGrep,
+      jscodeshiftBin: contractJscodeshift,
+      ncuVersion: '23.1.1',
+      astGrepVersion: '0.51.3',
+      jscodeshiftVersion: '17.4.0',
+    });
+    validateModuleOutput(failedNcu);
+    assert.equal(failedNcu.coverage.some(c => c.tool === 'npm-check-updates' && c.status === 'failed'), true);
+
+    // Falha de ast-grep sem JSON (exit != 0 e stdout vazio)
+    process.env.AC_TEST_FORCE_ASTGREP_EMPTY_FAIL = '1';
+    const failedAstGrep = await runCollection({
+      repoRoot: fixtureClean,
+      ncuBin: contractNcu,
+      astGrepBin: contractAstGrep,
+      jscodeshiftBin: contractJscodeshift,
+      ncuVersion: '23.1.1',
+      astGrepVersion: '0.51.3',
+      jscodeshiftVersion: '17.4.0',
+    });
+    validateModuleOutput(failedAstGrep);
+    assert.equal(failedAstGrep.coverage.some(c => c.tool === 'ast-grep' && c.status === 'failed'), true);
   } finally {
+    delete process.env.AC_TEST_FORBIDDEN_ROOTS;
+    delete process.env.AC_TEST_FORCE_ASTGREP_EMPTY_FAIL;
     await rm(binDir, {recursive: true, force: true});
+    await rm(mixedRepo, {recursive: true, force: true});
+    await rm(noMetaRepo, {recursive: true, force: true});
   }
 });

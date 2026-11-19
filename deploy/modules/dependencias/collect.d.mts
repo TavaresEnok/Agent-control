@@ -55,6 +55,7 @@ export function classifySemverRisk(
 ): {diff: string; severity: ModuleFindingSeverity; rule: string; riskLabel: string};
 export function satisfiesRange(versionStr: string, rangeSpec: string): boolean;
 export function parseAstGrepJson(rawStdout: string, srcRootDir: string): ModuleFinding[];
+export function verifyToolsAgainstLock(toolsRoot?: string): Promise<Record<string, string>>;
 export function analyzeLockfileAndSbom(input: {
   manifests: DiscoveredManifest[];
   lockfiles: Map<string, string>;
