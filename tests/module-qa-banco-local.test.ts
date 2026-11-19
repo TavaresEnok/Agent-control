@@ -134,21 +134,38 @@ test('só encaminha ao pgTAP um booleano escalar validado na sessão de leitura'
   assert.match(predicate, /; -- Fim da assertiva do zero\.\n$/);
 
   for (const [scalar, expected] of [
-    ['t\nt\n', 'passed'], ['t\nf\n', 'failed'], ['t\nt\nf\n', 'invalid'], ['f\nt|f\n', 'invalid'],
-    ['t\n', 'invalid'], ['t\n\n', 'invalid'], ['f\nt\n', 'invalid'],
+    ['{16}\nt\n', 'passed'], ['{16}\nf\n', 'failed'],
+    ['{16}\nt\nf\n', 'invalid'], ['{16,16}\nt|f\n', 'invalid'],
+    ['{16}\n', 'invalid'], ['{16}\n\n', 'invalid'], ['{25}\nt\n', 'invalid'],
   ]) {
-    const roles: string[] = [];
+    const phases: string[] = [];
+    let reader: string;
     const psql = async (db: string, commands: string[], user: string) => {
-      roles.push(user);
-      if (user === 'qa_reader') {
-        assert.equal(db, 'fresh');
-        assert.equal(commands[0], 'BEGIN READ ONLY');
-        assert.equal(commands[1], 'SET LOCAL ROLE pg_read_all_data');
-        assert.ok(commands.includes(`PREPARE qa_scalar AS\n${predicate}`));
-        assert.equal(commands.at(-1), 'ROLLBACK');
-        return scalar;
+      if (db === 'fresh') {
+        if (phases.length === 0) {
+          phases.push('grant');
+          assert.equal(user, 'qa_admin');
+          reader = /CREATE ROLE (qa_reader_[a-f0-9]{24}) LOGIN NOINHERIT/.exec(commands.join('\n'))![1]!;
+          assert.equal(commands.at(-1), 'COMMIT');
+        } else if (user === reader) {
+          phases.push('read');
+          assert.deepEqual(commands.slice(0, 4), [
+            'BEGIN READ ONLY', 'SET LOCAL search_path TO pg_catalog, public', '\\bind', `PREPARE qa_scalar AS\n${predicate}`,
+          ]);
+          assert.match(commands[4]!, /SELECT result_types::pg_catalog\.oid\[\] FROM pg_catalog\.pg_prepared_statements/);
+          assert.deepEqual(commands.slice(5), ['EXECUTE qa_scalar', 'ROLLBACK']);
+          return scalar;
+        } else {
+          phases.push('revoke');
+          assert.equal(user, 'qa_admin');
+          assert.ok(commands.some(sql => sql.includes(`DROP OWNED BY ${reader};`) && sql.includes(`DROP ROLE ${reader};`)));
+          assert.equal(commands.at(-1), 'COMMIT');
+        }
+        return '';
       }
+      phases.push('tap');
       assert.equal(db, 'qa_attestation');
+      assert.equal(user, 'qa_admin');
       assert.deepEqual(commands, [
         'BEGIN', 'SET LOCAL search_path TO pg_catalog, qa_tap, pg_temp', 'SELECT qa_tap.plan(1)',
         `SELECT qa_tap.ok(${expected === 'passed' ? 'TRUE' : 'FALSE'}, 'invariante funcional')`,
@@ -157,17 +174,31 @@ test('só encaminha ao pgTAP um booleano escalar validado na sessão de leitura'
       return `1..1\n${expected === 'passed' ? 'ok' : 'not ok'} 1 - invariante funcional\n`;
     };
     assert.equal(await attestPostgres(psql, 'fresh', predicate), expected);
-    assert.deepEqual(roles, expected === 'invalid' ? ['qa_reader'] : ['qa_reader', 'qa_admin']);
+    assert.deepEqual(phases, expected === 'invalid' ? ['grant', 'read', 'revoke'] : ['grant', 'read', 'revoke', 'tap']);
   }
 
-  const incompleteTap = async (_db: string, _commands: string[], user: string) =>
-    user === 'qa_reader' ? 't\nt\n' : '1..1\n';
+  const incompleteTap = async (db: string, _commands: string[], user: string) =>
+    user.startsWith('qa_reader_') ? '{16}\nt\n' : db === 'qa_attestation' ? '1..1\n' : '';
   assert.equal(await attestPostgres(incompleteTap, 'fresh', predicate), 'invalid');
+});
+
+test('revoga o escopo de leitura quando a execução da assertiva falha', async () => {
+  const phases: string[] = [];
+  await assert.rejects(attestPostgres(async (db: string, commands: string[], user: string) => {
+    assert.equal(db, 'fresh');
+    if (user.startsWith('qa_reader_')) {
+      phases.push('read');
+      throw new Error('leitura interrompida');
+    }
+    phases.push(commands.some(sql => sql.includes('DROP ROLE')) ? 'revoke' : 'grant');
+    return '';
+  }, 'fresh', 'SELECT TRUE'), /leitura interrompida/);
+  assert.deepEqual(phases, ['grant', 'read', 'revoke']);
 });
 
 const testPgBin = process.env.QA_BANCO_TEST_PG_BIN;
 
-test('PostgreSQL e pgTAP medem dados sintéticos e preservam os privilégios da sessão e do catálogo', {
+test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados por proprietário e banco', {
   skip: !testPgBin,
   timeout: 30_000,
 }, async () => {
@@ -190,35 +221,71 @@ test('PostgreSQL e pgTAP medem dados sintéticos e preservam os privilégios da 
     assert.equal(await psql('postgres', ['SHOW server_version_num'], 'qa_admin'), '160015\n');
     await setupPostgres(psql);
     assert.equal(await psql('postgres', [
-      "SELECT has_database_privilege('qa_project', 'qa_attestation', 'CONNECT'), " +
-      "has_database_privilege('qa_reader', 'qa_attestation', 'CONNECT')",
-    ], 'qa_admin'), 'f|f\n');
+      "SELECT has_database_privilege('qa_project', 'qa_attestation', 'CONNECT')",
+    ], 'qa_admin'), 'f\n');
+    assert.equal(await psql('fresh', ["\\bind 'dado-sintetico'", "SELECT $1::text = 'dado-sintetico'"], 'qa_project'), 't\n');
 
     const plan = planBancoLocal(snapshot());
     for (const {sql} of plan.migrations) {
       await psql('fresh', [`SET client_min_messages = warning;\n${sql}`], 'qa_project');
     }
+    await psql('fresh', [
+      'CREATE SCHEMA "fixture QA"',
+      'CREATE VIEW "fixture QA"."Items revisados" AS SELECT revision FROM public.items',
+      'CREATE MATERIALIZED VIEW "fixture QA".resumo AS SELECT count(*) AS total FROM public.items',
+      'CREATE SEQUENCE "fixture QA".sequencia',
+    ], 'qa_project');
+    await psql('fresh', [
+      'CREATE SCHEMA qa_interno',
+      'CREATE TABLE public.tabela_admin (id integer)',
+      'CREATE TABLE qa_interno.tabela_projeto (id integer)',
+      'ALTER TABLE qa_interno.tabela_projeto OWNER TO qa_project',
+    ], 'qa_admin');
     const acl = () => psql('fresh', [
-      "SELECT nspname, nspacl FROM pg_catalog.pg_namespace WHERE nspname IN ('pg_catalog', 'information_schema', 'public') ORDER BY nspname",
-      "SELECT n.nspname, c.relname, c.relacl FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace " +
-      "WHERE n.nspname IN ('pg_catalog', 'information_schema', 'public') ORDER BY 1, 2",
+      `SELECT nspname, CASE WHEN nspowner = 'qa_project'::regrole THEN coalesce(nspacl, acldefault('n', nspowner)) ELSE nspacl END
+       FROM pg_catalog.pg_namespace ORDER BY 1`,
+      `SELECT n.nspname, c.relname,
+         CASE WHEN (n.nspname = 'public' OR n.nspowner = 'qa_project'::regrole)
+           AND c.relowner = 'qa_project'::regrole AND c.relkind IN ('r', 'p', 'v', 'm')
+           THEN coalesce(c.relacl, acldefault('r', c.relowner)) ELSE c.relacl END
+       FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace ORDER BY 1, 2`,
+      'SELECT datname, datacl FROM pg_catalog.pg_database ORDER BY 1',
+      "SELECT rolname FROM pg_catalog.pg_roles WHERE rolname LIKE 'qa\\_reader\\_%' ORDER BY 1",
     ], 'qa_admin');
     const originalAcl = await acl();
-    const readerPrivileges = "SELECT current_user, has_table_privilege('public.items', 'SELECT'), has_table_privilege('public.items', 'INSERT')";
-    const baseline = 'qa_reader|f|f\n';
-    assert.equal(await psql('fresh', [readerPrivileges], 'qa_reader'), baseline);
-
     const psqlWithPrivilegeCheck = async (db: string, commands: string[], user: string) => {
-      if (user !== 'qa_reader') return psql(db, commands, user);
-      const output = await psql(db, [...commands, readerPrivileges], user);
-      assert.ok(output.endsWith(baseline));
-      return output.slice(0, -baseline.length);
+      if (!user.startsWith('qa_reader_')) return psql(db, commands, user);
+      assert.match(user, /^qa_reader_[a-f0-9]{24}$/);
+      assert.equal(await psql(db, [
+        `SELECT rolcanlogin, rolsuper, rolcreaterole, rolcreatedb, rolinherit, rolbypassrls
+         FROM pg_catalog.pg_roles WHERE rolname = '${user}'`,
+        `SELECT count(*) FROM pg_catalog.pg_auth_members WHERE member = '${user}'::regrole`,
+        `SELECT datname, has_database_privilege('${user}', oid, 'CONNECT'), has_database_privilege('${user}', oid, 'TEMP')
+         FROM pg_catalog.pg_database ORDER BY 1`,
+        `SELECT nspname, a.privilege_type, a.is_grantable
+         FROM pg_catalog.pg_namespace CROSS JOIN LATERAL pg_catalog.aclexplode(nspacl) a
+         WHERE a.grantee = '${user}'::regrole ORDER BY 1`,
+        `SELECT n.nspname, c.relname, a.privilege_type, a.is_grantable FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+         WHERE a.grantee = '${user}'::regrole ORDER BY 1, 2`,
+      ], 'qa_admin'), 't|f|f|f|f|f\n0\nfresh|t|f\npostgres|f|f\nprevious|f|f\nqa_attestation|f|f\n' +
+        'template0|f|f\ntemplate1|f|f\nupgraded|f|f\n' +
+        'fixture QA|USAGE|f\npublic|USAGE|f\nfixture QA|Items revisados|SELECT|f\nfixture QA|resumo|SELECT|f\npublic|items|SELECT|f\n');
+      assert.equal(await psql(db, [
+        `SELECT session_user = current_user, has_schema_privilege('qa_interno', 'USAGE'),
+         has_table_privilege('public.tabela_admin', 'SELECT'), has_table_privilege('public.items', 'INSERT'),
+         has_sequence_privilege('"fixture QA".sequencia', 'SELECT')`,
+      ], user), 't|f|f|f|f\n');
+      return psql(db, commands, user);
     };
     for (const [predicate, expected] of [
       [plan.fresh.sql, 'passed'],
       ['SELECT TRUE', 'passed'],
       ['SELECT TRUE; /* Fim da assertiva. */', 'passed'],
+      ["SELECT 'item; sintético' = 'item; sintético';", 'passed'],
       ['SELECT EXISTS (SELECT 1 FROM public.items);', 'failed'],
+      [`SELECT total = 0 AND NOT EXISTS (SELECT 1 FROM "fixture QA"."Items revisados")
+       AND current_setting('transaction_read_only') = 'on' FROM "fixture QA".resumo;`, 'passed'],
       ['SELECT value FROM (VALUES (TRUE), (FALSE)) AS fixture(value);', 'invalid'],
       ['SELECT TRUE, FALSE;', 'invalid'],
       ['SELECT TRUE WHERE FALSE;', 'invalid'],
@@ -226,7 +293,19 @@ test('PostgreSQL e pgTAP medem dados sintéticos e preservam os privilégios da 
       ["SELECT 't'::text;", 'invalid'],
     ]) {
       assert.equal(await attestPostgres(psqlWithPrivilegeCheck, 'fresh', predicate), expected);
+      assert.equal(await acl(), originalAcl);
     }
+
+    const dump = join(directory, 'previous.dump');
+    const projectConnection = ['--host', directory, '--port', '5432', '--username', 'qa_project', '--no-password'];
+    await psql('previous', [plan.migrations[0].sql, plan.history.seed], 'qa_project');
+    assert.equal(await attestPostgres(psql, 'previous', plan.history.invariant.sql), 'passed');
+    run('pg_dump', [...projectConnection, '--format=custom', '--no-owner', '--no-privileges', '--file', dump, 'previous']);
+    run('pg_restore', [...projectConnection, '--dbname', 'upgraded', '--no-owner', '--no-privileges',
+      '--exit-on-error', '--single-transaction', dump]);
+    assert.equal(await attestPostgres(psql, 'upgraded', plan.history.invariant.sql), 'passed');
+    await psql('upgraded', [plan.migrations[1].sql], 'qa_project');
+    assert.equal(await attestPostgres(psql, 'upgraded', plan.history.invariant.sql), 'passed');
     assert.equal(await acl(), originalAcl);
   } finally {
     try {
