@@ -30,6 +30,10 @@ type Symbol = {
 type Block = {file: string; startLine: number; code: string};
 type ReadFile = (file: string) => string;
 type MermaidParse = (code: string) => Promise<unknown>;
+type DocumentReferences = ReadonlyMap<Block, {
+  moduleEdges: {from: string; to: string; line: number; rawLine: string}[];
+  unmeasured: number;
+}>;
 type CopyLimits = {maxFileBytes?: number; maxFiles?: number; maxCopyBytes?: number};
 type ToolResult = {status: number | null; stdout?: string; stderr?: string; error?: Error; signal?: string | null};
 type ToolOptions = {
@@ -48,14 +52,15 @@ export function copyRepoSafely(source: string, destination: string, options?: Co
 };
 export function sanitizeTsConfigInWork(workRepoDir: string, codeFiles?: string[]): string;
 export function extractMermaidBlocks(files: string[], readFile?: ReadFile): Block[];
-export function parseTypedocReport(json: unknown, diagnostics: string, root: string, readFile?: ReadFile): {
+export function createDefaultMermaidParser(toolsRoot?: string): Promise<MermaidParse>;
+export function parseTypedocReport(json: unknown, diagnostics: string, root: string, readFile?: ReadFile, toolsRoot?: string): {
   findings: Finding[];
   symbols: Symbol[];
 };
 export function crossCheckMarkdownAgainstTypedoc(files: string[], symbols: Symbol[], readFile?: ReadFile): Finding[];
 export function parseDepcruiseReport(
   json: unknown, diagram: string, root: string, blocks?: Block[], readFile?: ReadFile, resolutionPartial?: boolean,
-  validDocumentBlocks?: ReadonlySet<Block>,
+  documentReferences?: DocumentReferences,
 ): {
   findings: Finding[];
   checkedEdgesByFile: Map<string, number>;
@@ -65,7 +70,7 @@ export function parseDepcruiseReport(
 };
 export function validateMermaidDocuments(
   files: string[], blocks: Block[], repositoryFiles: ReadonlySet<string>, parse: MermaidParse, generated?: string,
-): Promise<{findings: Finding[]}>;
+): Promise<{findings: Finding[]; documentReferences: DocumentReferences}>;
 export function runCollector(options?: CopyLimits & {
   repoDir?: string;
   tmpBase?: string;

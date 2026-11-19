@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {test} from 'node:test';
@@ -10,6 +9,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {
   clampLine,
   copyRepoSafely,
+  createDefaultMermaidParser,
   crossCheckMarkdownAgainstTypedoc,
   extractMermaidBlocks,
   normalizeRepoPath,
@@ -28,6 +28,7 @@ const FIXTURE_DEFECTIVE_DIR = join(FIXTURES, 'defective');
 const FIXTURE_CLEAN_DIR = join(FIXTURES, 'control-clean');
 const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
 const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
+const skipLocalTools = process.env.C8_TEST_LOCAL_TOOLS !== '1';
 
 type CoverageItem = {
   tool: string;
@@ -230,7 +231,7 @@ test('copyRepoSafely e sanitizeTsConfigInWork descartam symlinks, configs execut
 });
 
 test('as ferramentas fixadas encontram os defeitos e aprovam o controle limpo no teste local', {
-  skip: process.env.C8_TEST_LOCAL_TOOLS !== '1',
+  skip: skipLocalTools,
 }, async () => {
   const defectiveResult = (await runCollector({
     repoDir: FIXTURE_DEFECTIVE_DIR,
@@ -392,6 +393,11 @@ test('os analisadores distinguem a documentação com defeitos do controle limpo
     FIXTURE_DEFECTIVE_DIR,
     defectiveBlocks,
     readDefective,
+    false,
+    new Map([[defectiveBlocks[0], {unmeasured: 0, moduleEdges: [
+      {from: 'src/api.ts', to: 'src/billing.ts', line: 14, rawLine: 'A --> B'},
+      {from: 'src/billing.ts', to: 'src/api.ts', line: 15, rawLine: 'B --> A'},
+    ]}]]),
   );
   assert.equal(depDefective.findings.length, 1);
   assert.equal(depDefective.findings[0]?.rule, 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE');
@@ -420,7 +426,7 @@ test('os analisadores distinguem a documentação com defeitos do controle limpo
     'flowchart LR\n  A-->B',
   );
   assert.equal(mmDefective.findings.some(f => f.rule === 'DOC-MERMAID-SINTAXE-INVALIDA'), true);
-  assert.equal(mmDefective.findings.some(f => f.rule === 'DOC-MERMAID-MODULO-INEXISTENTE'), true);
+  assert.equal(mmDefective.findings.some(f => f.rule === 'DOC-MERMAID-MODULO-INEXISTENTE'), false);
 
   const mmClean = await validateMermaidDocuments(
     ['README.md'],
@@ -475,7 +481,7 @@ test('um arquivo de saída deixado por ferramenta que falhou não vira cobertura
   assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser')?.status, 'failed');
   const diagram = result.coverage.find(row => row.tool === 'dependency-cruiser:diagrama' && row.detail.includes('arquivo=README.md'));
   assert.equal(diagram?.status, 'skipped');
-  assert.match(diagram.detail, /arestas_doc_conferidas=0; arestas_doc_nao_conferidas=1/);
+  assert.match(diagram.detail, /arestas_doc_conferidas=0; arestas_doc_nao_conferidas=0; trechos_doc_nao_medidos=2/);
   assert.equal(result.coverage.find(row => row.tool.endsWith(':artefato')), undefined);
   assert.deepEqual(result.findings, []);
 });
@@ -680,7 +686,7 @@ test('mensagens, evidências e stdout são limitados mesmo com diagnósticos mul
   assert.equal(output.coverage.find(row => row.tool === 'documentacao:limites')?.status, 'failed');
 });
 
-test('diagramas só comparam pontas cobertas e conferem cada aresta da cadeia, ignorando comentários', async () => {
+test('diagramas só comparam pontas cobertas e conferem cada aresta da cadeia, ignorando comentários', {skip: skipLocalTools}, async () => {
   const root = join(FIXTURES, 'coverage-defect');
   const read = (file: string) => readFileSync(join(root, file), 'utf8');
   const blocks = extractMermaidBlocks(['README.md'], read);
@@ -689,28 +695,33 @@ test('diagramas só comparam pontas cobertas e conferem cada aresta da cadeia, i
     {source: 'src/billing.ts', dependencies: []},
     {source: 'src/third.ts', dependencies: []},
   ]};
-  const defect = parseDepcruiseReport(graph, 'flowchart LR', root, blocks, read);
-  assert.deepEqual(defect.findings.map(f => f.line), [6, 7, 8]);
+  const parse = await createDefaultMermaidParser();
+  const repoFiles = new Set(['src/api.ts', 'src/billing.ts', 'src/third.ts', 'src/api.test.ts']);
+  const validate = (input: typeof blocks) => validateMermaidDocuments(['README.md'], input, repoFiles, parse);
+  const validation = await validate(blocks);
+  assert.deepEqual(validation.findings, []);
+  const defect = parseDepcruiseReport(graph, 'flowchart LR', root, blocks, read, false, validation.documentReferences);
+  assert.deepEqual(defect.findings.map(f => f.line), [6, 7, 8, 10]);
   for (const finding of defect.findings) {
     assert.equal(finding.rule, 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE');
-    assert.match(finding.message, /src\/billing\.ts -> src\/third\.ts/);
+    assert.match(finding.message, /src\/(?:api|billing)\.ts -> src\/third\.ts/);
   }
   const {checkedEdges, skippedEdges, unmeasured, edgeMismatches} = defect.stats;
   assert.deepEqual({checkedEdges, skippedEdges, unmeasured, edgeMismatches}, {
-    checkedEdges: 7, skippedEdges: 1, unmeasured: 1, edgeMismatches: 3,
+    checkedEdges: 9, skippedEdges: 1, unmeasured: 0, edgeMismatches: 4,
   });
   assert.equal(defect.skippedEdgesByFile.get('README.md'), 1);
-  assert.equal(defect.unmeasuredByFile.get('README.md'), 1);
+  assert.equal(defect.unmeasuredByFile.get('README.md'), 0);
   const control = structuredClone(graph);
+  control.modules[0].dependencies.push({resolved: 'src/third.ts'});
   control.modules[1].dependencies.push({resolved: 'src/third.ts'});
-  assert.deepEqual(parseDepcruiseReport(control, 'flowchart LR', root, blocks, read).findings, []);
-  const validation = await validateMermaidDocuments(['README.md'], blocks,
-    new Set(['src/api.ts', 'src/billing.ts', 'src/third.ts', 'src/api.test.ts']), async () => ({}));
-  assert.deepEqual(validation.findings, []);
+  assert.deepEqual(parseDepcruiseReport(control, 'flowchart LR', root, blocks, read, false, validation.documentReferences).findings, []);
 
   for (const link of ['A -. chama .-> B', 'A == chama ==> B', 'A -- chama & grava = sim --> B', 'A -- "chama -->" --> B']) {
     const code = `flowchart LR\nA["src/api.ts"]; B["src/billing.ts"]\n${link}`;
-    const result = parseDepcruiseReport(graph, 'flowchart LR', root, [{file: 'README.md', startLine: 1, code}], read);
+    const input = [{file: 'README.md', startLine: 1, code}];
+    const {documentReferences} = await validate(input);
+    const result = parseDepcruiseReport(graph, 'flowchart LR', root, input, read, false, documentReferences);
     assert.equal(result.stats.checkedEdges, 1, link);
     assert.equal(result.stats.unmeasured, 0, link);
     assert.deepEqual(result.findings, [], link);
@@ -720,13 +731,16 @@ test('diagramas só comparam pontas cobertas e conferem cada aresta da cadeia, i
 test('origens e diagramas sem medição confiável não geram divergência', async () => {
   const blocks = [{file: 'README.md', startLine: 1, code: 'flowchart LR\nA["src/api.ts"] --> B["src/billing.ts"]'}];
   const target = {source: 'src/billing.ts', dependencies: []};
+  const references = new Map([[blocks[0], {unmeasured: 0, moduleEdges: [
+    {from: 'src/api.ts', to: 'src/billing.ts', line: 2, rawLine: 'A --> B'},
+  ]}]]);
   for (const source of [
     {source: 'src/api.ts', dependencies: [{module: '@app/billing', couldNotResolve: true}]},
     {source: 'src/api.ts'},
     {source: 'src/api.ts', dependencies: [null]},
     {source: 'src/api.ts', dependencies: [], followable: false},
   ]) {
-    const result = parseDepcruiseReport({modules: [source, target]}, 'flowchart LR', FIXTURE_CLEAN_DIR, blocks);
+    const result = parseDepcruiseReport({modules: [source, target]}, 'flowchart LR', FIXTURE_CLEAN_DIR, blocks, undefined, false, references);
     assert.deepEqual(result.findings, []);
     assert.equal(result.stats.skippedEdges, 1);
   }
@@ -741,10 +755,57 @@ test('origens e diagramas sem medição confiável não geram divergência', asy
   assert.deepEqual(output.findings.map(finding => finding.rule), ['DOC-MERMAID-SINTAXE-INVALIDA']);
   const diagram = output.coverage.find(row => row.tool === 'dependency-cruiser:diagrama');
   assert.equal(diagram?.status, 'skipped');
-  assert.match(diagram.detail, /arestas_doc_conferidas=0; arestas_doc_nao_conferidas=1; trechos_doc_nao_medidos=2/);
+  assert.match(diagram.detail, /arestas_doc_conferidas=0; arestas_doc_nao_conferidas=0; trechos_doc_nao_medidos=2/);
 });
 
-test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', () => {
+test('Mermaid compara o grafo efetivo de descrições, rótulos redefinidos e cadeias compactas', {skip: skipLocalTools}, async () => {
+  const parse = await createDefaultMermaidParser();
+  const files = new Set(['a.ts', 'b.ts', 'c.ts']);
+  const graph = {modules: [...files].map(source => ({source, dependencies: []}))};
+  const compare = async (body: string) => {
+    const file = 'arch.mmd';
+    const blocks = [{file, startLine: 10, code: 'flowchart LR\n' + body}];
+    const validated = await validateMermaidDocuments([file], blocks, files, parse);
+    assert.deepEqual(validated.findings, []);
+    return parseDepcruiseReport(graph, '', FIXTURE_CLEAN_DIR, blocks, undefined, false, validated.documentReferences);
+  };
+  const nodes = 'A["a.ts"]; B["b.ts"]; C["c.ts"]\n';
+  const description = 'accDescr {\nA --> B\nX["ausente.ts"]\n}\n';
+  const accessibility = await compare(nodes + description);
+  assert.deepEqual(accessibility.stats, {
+    totalModules: 3, totalDependencies: 0, unresolvedCount: 0, circularCount: 0,
+    checkedEdges: 0, skippedEdges: 0, unmeasured: 0, edgeMismatches: 0, hasMermaidDiagram: false,
+  });
+  const actualEdge = await compare(nodes + description + '%% Comentário\nA --> B');
+  assert.deepEqual(actualEdge.findings.map(finding => finding.line), [17]);
+  assert.equal(actualEdge.stats.checkedEdges, 1);
+
+  for (const prefix of ['A["a.ts"]\n', 'A["ausente.ts"]\n', '']) {
+    const relabeled = await compare(prefix + 'A["Operador"]\nB["b.ts"]\nA --> B');
+    assert.equal(relabeled.stats.checkedEdges, 0);
+    assert.equal(relabeled.stats.unmeasured, 1);
+    assert.deepEqual(relabeled.findings, []);
+  }
+  for (const nonPath of ['a.ts --> B', 'A["Importa a.ts"] --> B', 'A["a.ts / outro.ts"] --> B']) {
+    const partial = await compare('B["b.ts"]\n' + nonPath);
+    assert.equal(partial.stats.unmeasured, 1, nonPath);
+    assert.deepEqual(partial.findings, [], nonPath);
+  }
+  const relabeledPath = await compare(nodes + 'A["c.ts"]\nA --> B');
+  assert.equal(relabeledPath.stats.checkedEdges, 1);
+  assert.match(relabeledPath.findings[0]?.message ?? '', /c\.ts -> b\.ts/);
+
+  for (const chain of ['A-->B==chama==>C', 'A-->B==chama ==>C']) {
+    const result = await compare(nodes + chain);
+    assert.equal(result.stats.checkedEdges, 2, chain);
+    assert.equal(result.stats.unmeasured, 0, chain);
+    assert.deepEqual(result.findings.map(finding => finding.line), [12, 12], chain);
+    assert.match(result.findings[0]?.message ?? '', /a\.ts -> b\.ts/);
+    assert.match(result.findings[1]?.message ?? '', /b\.ts -> c\.ts/);
+  }
+});
+
+test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', {skip: skipLocalTools}, () => {
   const root = join(FIXTURES, 'coverage-defect');
   const read = (file: string) => readFileSync(join(root, file), 'utf8');
   const comment = {summary: [{text: 'Documentado.'}]};
@@ -775,15 +836,21 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => source,
   );
   assert.deepEqual(example.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+  const exampleWithOpener = source.replace(' * @param legacy\n', ' * const text = "/**";\n');
+  const literal = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => exampleWithOpener,
+  );
+  assert.deepEqual(literal.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
 });
 
-test('ferramentas fixadas encontram as três segundas arestas ausentes e conferem o controle real', {skip: process.env.C8_TEST_LOCAL_TOOLS !== '1'}, async () => {
+test('ferramentas fixadas encontram as quatro arestas ausentes e conferem o controle real', {skip: skipLocalTools}, async () => {
   const root = join(FIXTURES, 'coverage-defect');
   const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
   assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
   assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined);
-  assert.deepEqual(result.findings.filter(f => f.rule === 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE').map(f => f.line), [6, 7, 8]);
-  const measured = /arestas_doc_conferidas=7, arestas_doc_nao_conferidas=1, trechos_doc_nao_medidos=1/;
+  assert.deepEqual(result.findings.filter(f => f.rule === 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE').map(f => f.line), [6, 7, 8, 10]);
+  const measured = /arestas_doc_conferidas=9, arestas_doc_nao_conferidas=1, trechos_doc_nao_medidos=0/;
   assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser')?.detail ?? '', measured);
   const catalog = assembleDocumentationArtifacts(result.coverage)['api.json'];
   assert.equal(catalog.status, 'present');
@@ -795,6 +862,7 @@ test('ferramentas fixadas encontram as três segundas arestas ausentes e confere
   const params = result.findings.filter(f => f.rule === 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
   assert.ok(params.some(f => f.line === 6));
   assert.ok(params.some(f => f.line === 12));
+  assert.ok(params.some(f => f.line === 31 && f.message.includes('"sample"')));
   assert.ok(result.findings.some(f => f.rule === 'DOC-TYPEDOC-LINK-QUEBRADO' && f.line === 13));
   const clean = await runCollector({repoDir: join(FIXTURES, 'coverage-control'), toolsRoot: MODULE_DEPLOY_DIR});
   assert.equal(clean.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined);
@@ -802,14 +870,15 @@ test('ferramentas fixadas encontram as três segundas arestas ausentes e confere
   assert.deepEqual(clean.findings, []);
 });
 
-test('configurações divergentes ou não analisáveis suspendem a comparação do grafo', async () => {
+test('configurações divergentes ou não analisáveis suspendem a comparação do grafo', {skip: skipLocalTools}, async () => {
+  const mermaidParseFn = await createDefaultMermaidParser();
   for (const [config, reason] of [
     ['{"compilerOptions":{"\\u0070aths":{"@app/*":["src/*"]}}}', /paths/],
-    ['{"extends":"./base.json"}', /extends/],
+    ['{"extends":"./base.json"}', /baseUrl/],
     ['{"compilerOptions":{"module":"NodeNext","moduleResolution":"NodeNext"}}', /module/],
     ['{"compilerOptions":{"module":"ESNext","moduleResolution":"bundler","customConditions":["development"]}}', /customConditions/],
     ['{"compilerOptions":{"skipLibCheck":true}}', /modo de resolução implícito/],
-    ['{ /* JSONC */ "compilerOptions": {} }', /configuração não analisada/],
+    ['{ /* JSONC */ "compilerOptions": {}', /configuração não analisada/],
   ] as const) {
     const root = mkdtempSync(join(tmpdir(), 'doc-config-'));
     try {
@@ -819,7 +888,9 @@ test('configurações divergentes ou não analisáveis suspendem a comparação 
       writeFileSync(join(root, 'base.json'), '{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["*"]}}}');
       writeFileSync(join(root, 'arch.mmd'), 'flowchart LR\nA["index.ts"] --> B["billing.ts"]\n');
       const graph = {modules: [{source: 'index.ts', dependencies: []}, {source: 'billing.ts', dependencies: []}]};
-      const result = await runCollector({repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B', graph)});
+      const result = await runCollector({
+        repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B', graph), mermaidParseFn,
+      });
       const resolution = result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao');
       assert.equal(resolution?.status, 'skipped');
       assert.match(resolution.detail, reason);
@@ -831,7 +902,7 @@ test('configurações divergentes ou não analisáveis suspendem a comparação 
   }
 });
 
-test('moduleSuffixes muda o destino no TypeScript e impede falso positivo do grafo isolado', {skip: process.env.C8_TEST_LOCAL_TOOLS !== '1'}, async () => {
+test('tsc -p seleciona build.json e moduleSuffixes impede falso positivo do grafo isolado', {skip: skipLocalTools}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'doc-module-suffixes-'));
   try {
     writeFileSync(join(root, 'api.ts'), '/** API. */\nexport {billing} from "./billing";\n');
@@ -840,25 +911,81 @@ test('moduleSuffixes muda o destino no TypeScript e impede falso positivo do gra
     }
     writeFileSync(join(root, 'arch.mmd'), 'flowchart LR\nA["api.ts"] --> B["billing.native.ts"]\n');
     const config = {module: 'ESNext', moduleResolution: 'bundler'};
-    writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({compilerOptions: {...config, moduleSuffixes: ['.native', '']}}));
-    const load = createRequire(join(MODULE_DEPLOY_DIR, 'package.json'));
-    const ts = load('typescript');
-    const resolved = ts.resolveModuleName('./billing', join(root, 'api.ts'), {
-      moduleResolution: ts.ModuleResolutionKind.Bundler, moduleSuffixes: ['.native', ''],
-    }, ts.sys);
-    assert.equal(resolved.resolvedModule?.resolvedFileName, join(root, 'billing.native.ts'));
+    const manifest = (command: string) => writeFileSync(join(root, 'package.json'), JSON.stringify({scripts: {build: command}}));
+    const project = (file: string, suffixes: boolean) => writeFileSync(join(root, file), JSON.stringify({
+      compilerOptions: suffixes ? {...config, moduleSuffixes: ['.native', '']} : config,
+    }));
+    for (const file of ['build.json', 'tsconfig.build.json']) {
+      project(file, true);
+      const tsc = spawnSync(join(MODULE_DEPLOY_DIR, 'node_modules', '.bin', 'tsc'),
+        ['-p', file, '--noEmit', '--traceResolution'], {cwd: root, encoding: 'utf8'});
+      assert.equal(tsc.status, 0, tsc.stderr || tsc.stdout);
+      assert.match(tsc.stdout, /Module name '\.\/billing' was successfully resolved to '.*\/billing\.native\.ts'/);
+    }
+    manifest('tsc -p build.json && node -e "require(\'node:fs\').writeFileSync(\'script-ran\', \'yes\')"');
 
     const partial = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
-    assert.match(partial.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /moduleSuffixes/);
+    assert.match(partial.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /moduleSuffixes.* em build\.json/);
     assert.match(partial.coverage.find(row => row.tool === 'dependency-cruiser')?.detail ?? '', /arestas_doc_conferidas=0, arestas_doc_nao_conferidas=1/);
     assert.deepEqual(partial.findings.filter(finding => finding.tool === 'dependency-cruiser'), []);
+    assert.equal(existsSync(join(root, 'script-ran')), false);
 
-    writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({compilerOptions: config}));
+    project('build.json', false);
     const measured = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
     assert.equal(measured.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined);
     const [mismatch] = measured.findings.filter(finding => finding.tool === 'dependency-cruiser');
     assert.equal(mismatch?.rule, 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE');
     assert.match(mismatch.evidence, /módulos reais de api\.ts: \[billing\.ts\]/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('seleção estática segue manifesto aninhado, references e extends JSONC dentro do snapshot', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-ts-projects-'));
+  try {
+    const graph = {modules: [{source: 'index.ts', dependencies: []}, {source: 'billing.ts', dependencies: []}]};
+    const mermaidParseFn = await createDefaultMermaidParser();
+    const collect = () => runCollector({
+      repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B', graph), mermaidParseFn,
+    });
+    const write = (file: string, content: string) => writeFileSync(join(root, file), content);
+    const options = '{"compilerOptions":{"module":"ESNext","moduleResolution":"bundler"}}';
+    mkdirSync(join(root, 'app', 'build config'), {recursive: true});
+    write('index.ts', 'export const value = 1;\n');
+    write('billing.ts', 'export const billing = 1;\n');
+    write('arch.mmd', 'flowchart LR\nA["index.ts"] --> B["billing.ts"]\n');
+    write('base.json', options);
+    write('app/package.json', JSON.stringify({scripts: {
+      build: "npm exec -- tsc -b 'build config/project.json'",
+      description: 'echo tsc -p example.json',
+    }}));
+    write('app/build config/project.json', '{ /* JSONC */ "extends": "../../base", }');
+    const measured = await collect();
+    assert.equal(measured.coverage.some(row => row.tool === 'dependency-cruiser:resolucao'), false);
+    assert.equal(measured.findings[0]?.rule, 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE');
+
+    write('app/build config/project.json', '{"extends":"../../base","references":[{"path":"./reference.json"}]}');
+    write('app/build config/reference.json', '{"extends":["../../base","./suffixes"]}');
+    write('app/build config/suffixes.json', '{"compilerOptions":{"moduleSuffixes":[".native",""]}}');
+    const partial = await collect();
+    assert.match(partial.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /moduleSuffixes.*reference\.json/);
+    assert.deepEqual(partial.findings, []);
+
+    write('app/build config/suffixes.json', '{}');
+    const boundaries = await collect();
+    assert.match(boundaries.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /limites entre projetos com references/);
+    assert.deepEqual(boundaries.findings, []);
+
+    write('app/build config/reference.json', '{"extends":"@synthetic/config"}');
+    const outside = await collect();
+    assert.match(outside.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /extends não local/);
+    assert.deepEqual(outside.findings, []);
+
+    write('app/package.json', JSON.stringify({scripts: {build: 'tsc --project "$CONFIG"'}}));
+    const dynamic = await collect();
+    assert.match(dynamic.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /comando TypeScript não analisado.*app\/package\.json/);
+    assert.deepEqual(dynamic.findings, []);
   } finally {
     rmSync(root, {recursive: true, force: true});
   }

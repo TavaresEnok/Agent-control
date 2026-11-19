@@ -23,3 +23,11 @@ export interface Contract {
 }
 /** Billing value. */
 export const billing = 1;
+
+/** Example with a comment opener.
+ * ```js
+ * const text = "/**";
+ * ```
+ * @param legacy no longer accepted
+ */
+export function sample(current: string) { return current; }
