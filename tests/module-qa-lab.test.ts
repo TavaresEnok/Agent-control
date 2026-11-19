@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {moduleCollectorArguments} from '../src/verification-modules.ts';
 import {assertBrowserFixture, imageRenderer, stageBrowserFixture} from './fixtures/module-qa-browser.ts';
 
 const qaModuleDir = fileURLToPath(new URL('../deploy/modules/qa/', import.meta.url));
@@ -25,34 +26,8 @@ function readQaDigestPin(raw: string): string {
 }
 
 function runQaContainerByDigest(imagePin: string, repoPath: string) {
-  const runtimeBin = process.env.AC_CONTAINER_RUNTIME_BIN ?? ['doc', 'ker'].join('');
-  const args = [
-    'run',
-    '--rm',
-    '--network',
-    'none',
-    '--read-only',
-    '--user',
-    '65532:65532',
-    '--cap-drop',
-    'ALL',
-    '--security-opt',
-    'no-new-privileges',
-    '--pids-limit',
-    '128',
-    '--memory',
-    '536870912',
-    '--memory-swap',
-    '536870912',
-    '--cpus',
-    '1',
-    '--tmpfs',
-    '/tmp:rw,nosuid,nodev,size=256m',
-    '--mount',
-    `type=bind,src=${repoPath},dst=/repo,readonly`,
-    imagePin,
-  ];
-  return spawnSync(runtimeBin, args, {
+  const [runtime, ...args] = moduleCollectorArguments({image: imagePin, repository: repoPath});
+  return spawnSync(process.env.AC_CONTAINER_RUNTIME_BIN ?? runtime!, args, {
     encoding: 'utf8',
     timeout: 180_000,
     maxBuffer: 16 * 1024 * 1024,
