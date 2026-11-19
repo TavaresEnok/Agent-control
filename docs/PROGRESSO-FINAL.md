@@ -970,3 +970,7 @@ PAUSADO-COTA
 - 19/11/2026 19:17 UTC — Falha na validação de entrega-banco-1 em suite, código 1. Logs privados do gerente.
 - 19/11/2026 19:18 UTC — C9-ACEITE-FATOS encerrado com código 0.
 - 19/11/2026 19:18 UTC — Na suíte do banco em e3df1125, 269 arquivos passaram e completed-node-recovery falhou no prazo anterior ao SIGKILL nos cenários integrate-before-cas e integrate-registered. Como o mesmo mecanismo falhou em outra suíte e passou isolado, a ordem corrige a espera do marcador na bancada antes da repetição integral. A produção não participou desses testes.
+- 19/11/2026 19:18 UTC — trabalho-C5-MARCADOR-RECUPERACAO iniciado em final-marcador-recuperacao por Sol medium normal.
+- 19/11/2026 19:19 UTC — Suíte de entrega-qa-publicacao em 53012d07 passou: 266 arquivos, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 19:19 UTC — Iniciado backup pelo produto antes da primeira promoção ao checkout da instalação. Origem em 3d6cb612, serviço active.
+- 19/11/2026 19:19 UTC — O revisor confirmou a presença garantida do objeto e os efeitos de desconhecido && false. Solicitou uma prova explícita da negação composta nos dois idiomas e comparação integral do motivo de skipped da política npm. Ambos os controles estão em uma ordem isolada.
