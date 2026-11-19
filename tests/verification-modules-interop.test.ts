@@ -152,25 +152,42 @@ test('fluxo completo sintético publica, rejeita dados inválidos e cria correç
     await readModuleReport(data,projectId,ready.runId);
     const correctionInput = {module:'prontidao' as const,runId:ready.runId,achadoIds:['ACH-001'],dataDirectory:data,projectId};
     assert.equal(ready.achados[0]?.status,'provavel');
+    const symlinkFinding = {...finding,file:'.env.link',evidence:'generic-api-key: match em .env.link:3 [REDACTED]'};
+    const symlinkRun = await runVerificationModule({...common,module:'prontidao',authority:readyAuth,collectorOutput:{coverage:[{...other,tool:'gitleaks'}],findings:[symlinkFinding]}});
+    assert.equal(symlinkRun.hasToolFailure,true);
+    assert.deepEqual(symlinkRun.achados,[]);
     await assert.rejects(requestModuleCorrection(db,principal,readyAuth,correctionInput), /VERIFY_FINDING_MISSING/);
     // A previously confirmed protected finding remains actionable without exposing its contents.
     await db.pool.query("UPDATE ac_verify_findings SET status='confirmado' WHERE run_id=$1 AND achado_id='ACH-001'", [ready.runId]);
+    await db.pool.query(`INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,checklist)
+      VALUES($1,'src.ts','fixture','fixture','[]')`, [ready.runId]);
+    await db.pool.query(`INSERT INTO ac_verify_findings(run_id,achado_id,status,severity,file,line,payload)
+      VALUES($1,'ACH-002','confirmado','baixa','src.ts',1,'{"title":"Configuração sintética"}')`, [ready.runId]);
+    const mixedInput = {...correctionInput, achadoIds: ['ACH-002', 'ACH-001']};
     const outside = join(root,'fora'); await mkdir(outside);
     await symlink(outside, join(repo,'tests'));
-    await assert.rejects(requestModuleCorrection(db,principal,readyAuth,correctionInput), /VERIFY_PATH_FORBIDDEN/);
+    await assert.rejects(requestModuleCorrection(db,principal,readyAuth,mixedInput), /VERIFY_PATH_FORBIDDEN/);
+    assert.equal((await db.pool.query('SELECT 1 FROM ac_verify_remediations WHERE run_id=$1', [ready.runId])).rowCount, 0);
     await rm(join(repo,'tests'));
     const task = await requestModuleCorrection(db,principal,readyAuth,correctionInput);
     assert.deepEqual(task,await requestModuleCorrection(db,principal,readyAuth,correctionInput));
     await symlink(outside, join(repo,'tests'));
     await assert.rejects(requestModuleCorrection(db,principal,readyAuth,correctionInput), /VERIFY_PATH_FORBIDDEN/);
     await rm(join(repo,'tests'));
-    assert.ok(!task.writePaths.includes('.env'));
+    assert.deepEqual(task.writePaths, ['tests/prontidao/ach-001.test.ts']);
+    const mixed = await requestModuleCorrection(db,principal,readyAuth,mixedInput);
+    assert.equal(mixed.messageLocalIds?.length, 2);
+    assert.equal(mixed.messageLocalId, task.messageLocalId);
+    const scopes = await db.pool.query('SELECT write_paths FROM ac_verify_remediations WHERE run_id=$1 ORDER BY finding_ids', [ready.runId]);
+    assert.deepEqual(scopes.rows.map(row => row.write_paths), [
+      ['tests/prontidao/ach-001.test.ts'], ['src.ts', 'tests/prontidao/ach-002.test.ts'],
+    ]);
     const text = await db.pool.query('SELECT text FROM ac_personal_messages WHERE local_id=$1',[task.messageLocalId]);
     assert.match(JSON.stringify(text.rows),/Ação manual/);
+    assert.doesNotMatch(JSON.stringify(text.rows),/src\.ts|ACH-002/);
     assert.doesNotMatch(JSON.stringify(text.rows),/CONTEUDO_SINTETICO|Detected API key/);
-    const symlinkFinding = {...finding,file:'.env.link',evidence:'generic-api-key: match em .env.link:3 [REDACTED]'};
-    const symlinkRun = await runVerificationModule({...common,module:'prontidao',authority:readyAuth,collectorOutput:{coverage:[{...other,tool:'gitleaks'}],findings:[symlinkFinding]}});
-    assert.equal(symlinkRun.hasToolFailure,true);
-    assert.deepEqual(symlinkRun.achados,[]);
+    await rm(join(repo,'.env'));
+    await symlink(join(repo,'src.ts'), join(repo,'.env'));
+    await assert.rejects(requestModuleCorrection(db,principal,readyAuth,mixedInput), /VERIFY_PATH_FORBIDDEN/);
   } finally { await db.pool.end(); await database.close(); await rm(root,{recursive:true,force:true}); }
 });
