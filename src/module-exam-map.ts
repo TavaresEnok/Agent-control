@@ -122,7 +122,8 @@ export async function readModuleExamFile(absolute: string, file: string, include
     if (!info.isFile() || info.size > MAX_FILE_BYTES) return {file, code: null, reason: 'arquivo excede limite ou não é regular'};
     const buffer = await handle.readFile();
     if (buffer.length > MAX_FILE_BYTES || buffer.includes(0)) return {file, code: null, reason: 'arquivo binário ou excede limite'};
-    const decoded = new TextDecoder('utf-8', {fatal: true}).decode(buffer);
+    // Keep the BOM so collectors can bind evidence to the exact UTF-8 bytes.
+    const decoded = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(buffer);
     const code = redactModuleExamText(decoded);
     if (!includeRoutes) return {file, code, reason: null};
     const declarations = scanRoutes(file, decoded);
