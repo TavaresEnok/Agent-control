@@ -541,3 +541,5 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:19 UTC — Revisor encerrou C2-R11 em 2a440fd9 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:19 UTC — Revisão C7-HISTORICO-R3 iniciada por Sol high normal somente leitura em 004271d0.
 - 19/11/2026 06:19 UTC — C4 3e0bd99f: 36/36 com OpenRewrite, testes de atribuição do JDK e laboratório da imagem. A receita mediu a chamada de charset no arquivo Java e o controle corrigido; a fonte do projeto permaneceu íntegra.
+- 19/11/2026 06:19 UTC — Homologação incremental em 48db830a reuniu as imagens de fast-check e OpenRewrite, a prova da medição PostgreSQL e o pedido de correção persistido na conversa. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:21 UTC — A revisão da matriz de QA apontou atribuições indevidas entre requisitos, funções e asserções. Foi aberta C2-MATRIZ-R12 com controles positivos e negativos. R4 da reverificação está em homologação após a integração de ced1deaf.
