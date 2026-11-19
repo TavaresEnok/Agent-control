@@ -95,6 +95,30 @@ function needsRight(operator, data) {
   return operator === ts.SyntaxKind.AmpersandAmpersandToken || truth === undefined ? truth : !truth;
 }
 
+function shortCircuitFacts(operator, left) {
+  // The test that skips the right operand narrows the left operand's returned value.
+  if (operator === ts.SyntaxKind.BarBarToken) return primitive(true);
+  if (operator === ts.SyntaxKind.QuestionQuestionToken) {
+    return {truthy: left?.truthy, nullish: false, undefined: false};
+  }
+  return {truthy: false, nullish: left?.nullish, undefined: left?.undefined};
+}
+
+function commonFacts(left, right) {
+  const facts = {};
+  for (const key of ['truthy', 'nullish', 'undefined']) {
+    if (left?.[key] !== undefined && left[key] === right?.[key]) facts[key] = left[key];
+  }
+  return facts;
+}
+
+function valueFacts(data) {
+  if (data && !data.unknown && (data.keys || data.items || data.effects || data.kind || data.local || data.serialize)) {
+    return primitive(true);
+  }
+  return data;
+}
+
 function analyze(text, suffix, fieldPattern, limit) {
   const gaps = new Map();
   const hits = [];
@@ -130,10 +154,14 @@ function analyze(text, suffix, fieldPattern, limit) {
     if (factsByExpression.has(node)) return factsByExpression.get(node);
     let facts = literalFacts(node);
     if (!facts && ts.isBinaryExpression(node) && isLogical(node.operatorToken.kind)) {
+      const operator = node.operatorToken.kind;
       const left = expressionFacts(node.left);
-      const needed = needsRight(node.operatorToken.kind, left);
+      const needed = needsRight(operator, left);
       if (needed === false) facts = left;
-      if (needed === true) facts = expressionFacts(node.right);
+      else {
+        const right = expressionFacts(node.right);
+        facts = needed === true ? right : commonFacts(shortCircuitFacts(operator, left), right);
+      }
     } else if (ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node) ||
       ts.isFunctionExpression(node) || ts.isArrowFunction(node)) {
       facts = primitive(true);
@@ -407,9 +435,7 @@ function analyze(text, suffix, fieldPattern, limit) {
     }
     const affect = (reference) => receivers.add(reference);
     function argumentUndefined({node, data}) {
-      if (data?.undefined !== undefined) return data.undefined;
-      if (data && !data.unknown && (data.keys || data.items || data.effects || data.kind || data.local)) return false;
-      return expressionFacts(node)?.undefined;
+      return valueFacts(data)?.undefined ?? expressionFacts(node)?.undefined;
     }
     function collect(data, supplied = [], receiver = null) {
       if (!data?.effects) return;
@@ -615,17 +641,11 @@ function analyze(text, suffix, fieldPattern, limit) {
         const logical = LOGICAL_ASSIGNMENTS.get(operator);
         if (logical !== undefined) {
           const left = reference ? readProperty(target, reference) : value(target);
-          const rightIsNeeded = needsRight(logical, left);
-          if (rightIsNeeded === false) return left;
-          const assign = () => {
+          return evaluateLogical(logical, left, () => {
             const right = value(node.right, used);
             bind(target, reference, right);
             return right;
-          };
-          if (rightIsNeeded === true) return assign();
-          const before = branchValue(left);
-          const [right] = walkBranches([() => branchValue(assign())]);
-          return joinValues(before, right);
+          });
         }
         gap(MUTATION);
         value(node.right);
@@ -634,12 +654,7 @@ function analyze(text, suffix, fieldPattern, limit) {
       }
       const left = value(node.left);
       if (isLogical(operator)) {
-        const rightIsNeeded = needsRight(operator, left);
-        if (rightIsNeeded === false) return left;
-        if (rightIsNeeded === true) return value(node.right, used);
-        const before = branchValue(left);
-        const [right] = walkBranches([() => branchValue(value(node.right, used))]);
-        return joinValues(before, right);
+        return evaluateLogical(operator, left, () => value(node.right, used));
       }
       if (operator === ts.SyntaxKind.PlusToken) {
         const at = origin(left);
@@ -690,12 +705,21 @@ function analyze(text, suffix, fieldPattern, limit) {
     return {reference, data, at: origin(reference)};
   }
 
-  function joinValues(left, right) {
+  function evaluateLogical(operator, left, evaluateRight) {
+    const facts = valueFacts(left);
+    const needed = needsRight(operator, facts);
+    if (needed === false) return left;
+    if (needed === true) return evaluateRight();
+    const before = branchValue(left);
+    const [right] = walkBranches([() => branchValue(evaluateRight())]);
+    return joinValues(before, right, shortCircuitFacts(operator, facts));
+  }
+
+  function joinValues(left, right, leftFacts = valueFacts(left.reference)) {
     if (left.reference === right.reference) return left.reference;
-    const opaque = () => ({...CAPTURED, keys: new Map(), alternatives: [left.reference, right.reference]});
+    const facts = commonFacts(leftFacts, valueFacts(right.reference));
+    const opaque = () => ({...CAPTURED, ...facts, keys: new Map(), alternatives: [left.reference, right.reference]});
     if (left.data?.invalidated || right.data?.invalidated) return opaque();
-    if (left.data?.truthy !== undefined && left.data.truthy === right.data?.truthy &&
-      left.data.nullish === right.data.nullish && left.data.undefined === right.data.undefined) return left.reference;
     const structured = data => data &&
       (data.items || data.kind || data.effects || data.local || data.serialize ||
         (data.keys && (!data.unknown || data.keys.size)));
@@ -703,7 +727,8 @@ function analyze(text, suffix, fieldPattern, limit) {
       gap(EXPRESSION);
       return opaque();
     }
-    return scalar(left.at ?? right.at);
+    const source = scalar(left.at ?? right.at);
+    return Object.keys(facts).length ? {...source, ...facts} : source;
   }
 
   function propertyReference(node) {
@@ -772,7 +797,8 @@ function analyze(text, suffix, fieldPattern, limit) {
     const receiver = state(reference);
     if (receiver?.items) {
       // A plain array of untracked literals has no callbacks during join with a literal separator.
-      const simpleJoin = !callee && name === 'join' && receiver.items.every(item => item == null || item.truthy !== undefined) &&
+      const simpleJoin = !callee && name === 'join' &&
+        receiver.items.every(item => item == null || (!item.unknown && item.truthy !== undefined)) &&
         args.every(({node, spread}) => !spread && literal(node) !== null);
       return !simpleJoin;
     }
