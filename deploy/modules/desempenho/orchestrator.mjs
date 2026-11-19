@@ -11,29 +11,36 @@ import {compareIndependentMeasurement, validatePerformanceMeasurement} from './r
 
 export {reconcilePerformanceResources} from './docker-recovery.mjs';
 
+async function awaitHistoryStep(signal, step) {
+  const interrupted = Promise.withResolvers();
+  const abort = () => interrupted.reject(signal.reason);
+  signal.addEventListener('abort', abort, {once: true});
+  if (signal.aborted) abort();
+  try {
+    return await Promise.race([interrupted.promise, Promise.resolve().then(step)]);
+  } finally {
+    signal.removeEventListener('abort', abort);
+  }
+}
+
 async function* readHistory(source, signal) {
   signal.throwIfAborted();
   const history = typeof source === 'function' ? source(signal) : source;
   const iterator = history[Symbol.asyncIterator]();
+  let exhausted = false;
   try {
-    while (true) {
-      signal.throwIfAborted();
-      const interrupted = Promise.withResolvers();
-      const abort = () => interrupted.reject(signal.reason);
-      signal.addEventListener('abort', abort, {once: true});
-      let entry;
-      try {
-        entry = await Promise.race([iterator.next(), interrupted.promise]);
-      } finally {
-        signal.removeEventListener('abort', abort);
+    while (!exhausted) {
+      const entry = await awaitHistoryStep(signal, () => {
+        signal.throwIfAborted();
+        return iterator.next();
+      });
+      exhausted = entry.done;
+      if (!exhausted) {
+        yield entry.value;
       }
-      if (entry.done) return;
-      yield entry.value;
     }
   } finally {
-    const closed = iterator.return?.();
-    if (signal.aborted) Promise.resolve(closed).catch(() => {});
-    else await closed;
+    if (!exhausted) await awaitHistoryStep(signal, () => iterator.return?.());
   }
 }
 

@@ -8,7 +8,7 @@ import {VerifyWorkerCall} from './verify-types.ts';
 import type {ModuleRawFinding} from './verification-modules.ts';
 import {findModuleExamRoutes, moduleExamRouteKey, moduleExamRouteMatcher, redactModuleExamText, type ModuleExamMap} from './module-exam-map.ts';
 import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
-import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewDecision, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
+import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewObservationTitle, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewDecision, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 
 const checklist: Record<VerificationModule, string> = {
@@ -140,7 +140,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   const unavailable = input.unavailable ? safeFailureCode(input.unavailable, 'MODULE_EXAM_UNAVAILABLE') : null;
   const findings = input.findings.map(raw => ({...moduleCollectorCandidate(raw), ...(input.commit ? {reviewCommit: input.commit} : {})}));
   const notes = new Set<string>();
-  notes.add('O mapa inventaria chamadas diretas no nível do módulo em JS/TS, com caminho literal e argumento de handler. O receptor precisa ser uma constante local inicializada por uma importação HTTP reconhecida de Express, Hono ou Fastify. O subconjunto exige ponto e vírgula entre instruções e omite outras linguagens, JSX/TSX, sintaxe não reconhecida e declarações dinâmicas, indiretas ou aninhadas. Cada rota julgada exige atestado da declaração enviada. Limite de 20 rotas por arquivo.');
+  notes.add('O mapa inventaria chamadas diretas no nível do módulo em JS/TS, com caminho literal e argumento de handler. O receptor precisa ser uma constante local inicializada por uma importação HTTP reconhecida de Express, Hono ou Fastify. O subconjunto exige ponto e vírgula entre instruções e omite outras linguagens, JSX/TSX, sintaxe não reconhecida, declarações indexadas, dinâmicas, indiretas ou aninhadas e métodos com sobrescrita detectada no arquivo. Cada rota julgada exige atestado da declaração enviada. Limite de 20 rotas por arquivo.');
   if (input.map.routeOmissions) notes.add(`Arquivos com inventário de rotas parcial ou omitido: ${input.map.routeOmissions}.`);
   const omissions = input.map.routeOmissionDetails ?? [];
   for (const {file, reason} of omissions.slice(0, 20)) {
@@ -310,9 +310,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         if (result.decision) finding.decision = result.decision;
         const reason = moduleReviewProofReason(evidence, result);
         if (reason) {
-          if (evidence.tool === 'examinador') {
-            if (result.observation?.criterion === 'math-random-call') finding.title = 'Chamada direta a Math.random no código';
-            if (result.observation?.criterion === 'fixed-wait-call') finding.title = 'Chamada direta a waitForTimeout no código';
+          if (evidence.tool === 'examinador' && result.status === 'confirmado') {
+            finding.title = moduleReviewObservationTitle(result.observation) ?? finding.title;
           }
           finding.status = result.status;
           finding.reason = reason;
