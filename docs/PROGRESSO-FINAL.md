@@ -594,3 +594,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:47 UTC — Trabalhador encerrou C-EXAME-R6 em e033b649 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:47 UTC — Trabalho C5-R8 iniciado por Sol high normal em final-c5.
 - 19/11/2026 06:47 UTC — QA e245fca3: 94/94 sem pulos na repetição integral. Os checkouts de aceite de C2 e C4 passam a apontar para e245fca3 e 66f4f4e0; os nomes dos processos em fila preservam os rótulos anteriores, e cada validação registra o SHA que efetivamente executa. C7 recebeu a correção de cancelamento do histórico 19413541 para a prova com PostgreSQL.
+- 19/11/2026 06:47 UTC — Revisor encerrou C8-R8 em 79d499e8 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:47 UTC — Revisão C5-SQL-MEDIDO iniciada por Sol high normal somente leitura em 2e18a141.
+- 19/11/2026 06:49 UTC — Revisor encerrou C5-SQL-MEDIDO em 2e18a141 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:49 UTC — Revisão C6-R10 iniciada por Sol high normal somente leitura em 049b33c9.
+- 19/11/2026 06:49 UTC — C5 6bc34d08: 20/20 com a imagem reconstruída, banco real, origem do SQL e CLI. Em 03ee7abb passaram TypeScript, 261 arquivos e 52 complementares; o laboratório desse commit antigo encontrou um digest ausente, e o rebuild da mesma fonte não conferiu com aquele identificador. Exame R6 integrado em ffcd9ea5; C8 recebeu nova ordem de atribuição de avisos TypeDoc/Mermaid.
