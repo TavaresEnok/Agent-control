@@ -66,3 +66,4 @@
   - **Gerente:** `gpt-6.2-astra`, esforço `high`.
   - **Revisor:** 1 `gpt-6.2-sol`, esforço `high`, só leitura.
   - **Trabalhadores:** até 4 `gpt-6.2-sol`, sendo 2 com esforço `high` e 2 com esforço `medium`. Os itens mais difíceis vão para os `high`.
+- **Trabalhadores a partir de 19/11/2026 ~20:30 UTC (titular):** a cota do Gemini 4 Argon voltou. Os trabalhadores passam a ser até **6** `agy` com `gemini-4-argon-high`, cada um no seu worktree. Trailer: `Co-Authored-By: Gemini 4 Argon <noreply@google.com>`. Acionamento: `setsid nohup agy -p "<ordem>" --model gemini-4-argon-high --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Os trabalhadores Sol que estão rodando terminam a ordem atual. O gerente (Astra high) e o revisor (1 Sol high) continuam. Se o Argon devolver 429, volte para os trabalhadores Sol (2 high e 2 medium), sem parar o trabalho.
