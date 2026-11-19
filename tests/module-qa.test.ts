@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {writeSecurityReport} from '../src/verify-report.ts';
 
 type QaCoverageRow = {
   tool: string;
@@ -24,13 +25,14 @@ type QaFinding = {
   evidence: string;
 };
 
-const {collectQaModule} = (await import(
+const {collectQaModule, summarizeNodePasses} = (await import(
   new URL('../deploy/modules/qa/collect.mjs', import.meta.url).href
 )) as {
   collectQaModule: (options?: {repoDir?: string; failTool?: string}) => Promise<{
     coverage: QaCoverageRow[];
     findings: QaFinding[];
   }>;
+  summarizeNodePasses: (passes: {summary: boolean; tests: {file: string; line: number; column: number; name: string; status: string}[]; coverage: never[]}[], sources: never[], version: string) => {extraRows: QaCoverageRow[]};
 };
 
 const {verifyQaLockfiles} = (await import(
@@ -294,6 +296,67 @@ test('compara as três passadas e separa falha do teste de erro do executor', ()
   assert.throws(() => decode(failure, 0), /QA_NODE_TEST_EXECUTION_FAILED/);
   assert.throws(() => decode({...failure, tests: [{...result, status: 'error'}]}, 1), /QA_NODE_TEST_EXECUTION_FAILED/);
   assert.throws(() => decode(baseline, 0, true), /QA_V8_COVERAGE_INVALID/);
+});
+
+test('as três execuções têm identificador de ferramenta e número próprio, sem ocultar falhas', async () => {
+  const item = {file: 'tests/sintetico.test.ts', line: 1, column: 1, name: 'prova', status: 'passed'};
+  const pass = {summary: true, tests: [item], coverage: [] as never[]};
+  const failure = {summary: false, tests: [{...item, status: 'failed'}], coverage: [] as never[]};
+  const rows = summarizeNodePasses([pass, failure, pass], [], '1').extraRows;
+  assert.deepEqual(rows.map(row => [row.tool, row.status, row.detail]), [
+    ['node-test-v8-execucao', 'ok', 'execução 1: node:test resultado aprovado; 1 aprovados, 0 reprovados, 0 pulados, 0 todo'],
+    ['node-test-v8-execucao', 'ok', 'execução 2: node:test resultado reprovado; 0 aprovados, 1 reprovados, 0 pulados, 0 todo'],
+    ['node-test-v8-execucao', 'ok', 'execução 3: node:test resultado aprovado; 1 aprovados, 0 reprovados, 0 pulados, 0 todo'],
+  ]);
+  const data = mkdtempSync(join(tmpdir(), 'qa-rows-report-'));
+  try {
+    await writeSecurityReport({dataDirectory: data, projectId: '11111111-1111-4111-8111-111111111111',
+      runId: '33333333-3333-4333-8333-333333333333', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', mapMarkdown: '# Mapa', coverage: [], achados: [], note: '', raw: {coverage: rows, findings: []}});
+  } finally {
+    rmSync(data, {recursive: true, force: true});
+  }
+});
+
+test('saída sintética real passa pelo parser e pela proteção do relatório', {
+  skip: !process.env.QA_SYNTHETIC_PROOF || !process.env.QA_MODULE_RUNTIME
+    ? 'defina QA_SYNTHETIC_PROOF e QA_MODULE_RUNTIME para a prova privada e a base comum' : false,
+}, async () => {
+  const raw = JSON.parse(readFileSync(process.env.QA_SYNTHETIC_PROOF!, 'utf8')) as {coverage: QaCoverageRow[]; findings: QaFinding[]};
+  const original = structuredClone(raw);
+  const item = {file: 'tests/sintetico.test.ts', line: 1, column: 1, name: 'prova', status: 'passed'};
+  const pass = {summary: true, tests: [item, item, item, item, {...item, status: 'skipped'}], coverage: [] as never[]};
+  const rows = summarizeNodePasses([pass, pass, pass], [], raw.coverage[8]!.version).extraRows;
+  for (let i = 0; i < 3; i++) {
+    assert.equal(original.coverage[8 + i]!.tool, `qa-passada:${i + 1}`);
+    assert.equal(original.coverage[8 + i]!.detail, 'node:test passou: 4 aprovados, 0 reprovados, 1 pulados, 0 todo');
+    raw.coverage[8 + i] = rows[i]!;
+  }
+  const {parseModuleCollectorOutput, writeModuleReport} = await import(pathToFileURL(process.env.QA_MODULE_RUNTIME!).href);
+  const parsed = parseModuleCollectorOutput(JSON.stringify(raw));
+  const parsedOriginal = parseModuleCollectorOutput(JSON.stringify(original));
+  assert.deepEqual(parsed.coverage.slice(8, 11), rows);
+  const failed = summarizeNodePasses([pass, {...pass, summary: false, tests: [{...item, status: 'failed'}]}, pass], [], raw.coverage[8]!.version).extraRows;
+  assert.deepEqual(parseModuleCollectorOutput(JSON.stringify({coverage: failed, findings: []})).coverage, failed);
+  assert.deepEqual(parsed.coverage.slice(0, 8), parsedOriginal.coverage.slice(0, 8));
+  assert.deepEqual(parsed.coverage.slice(11), parsedOriginal.coverage.slice(11));
+  assert.deepEqual(parsed.findings, parsedOriginal.findings);
+  const data = mkdtempSync(join(tmpdir(), 'qa-report-test-'));
+  const common = {dataDirectory: data, projectId: '11111111-1111-4111-8111-111111111111',
+    runId: '33333333-3333-4333-8333-333333333333', createdAt: new Date('2026-11-19T00:00:00Z'),
+    commit: '0123456789abcdef0123456789abcdef01234567'};
+  try {
+    await assert.rejects(writeModuleReport({...common, module: 'qa', toolCoverage: parsedOriginal.coverage, fileCoverage: [], achados: [], raw: parsedOriginal}), /VERIFY_SECRET_IN_REPORT/);
+    const written = await writeModuleReport({...common, module: 'qa', toolCoverage: parsed.coverage, fileCoverage: [], achados: [], raw: parsed});
+    assert.deepEqual(JSON.parse(readFileSync(join(written.directory, 'bruto', 'achados-brutos.json'), 'utf8')), parsed);
+    await assert.rejects(writeSecurityReport({...common, mapMarkdown: '# Mapa', coverage: [], achados: [], note: '', raw: parsedOriginal}), /VERIFY_SECRET_IN_REPORT/);
+    await writeSecurityReport({...common, mapMarkdown: '# Mapa', coverage: [], achados: [], note: '', raw: parsed});
+    const leaked = structuredClone(parsed);
+    leaked.coverage[8].detail += ' password=syntheticSecretValue123';
+    await assert.rejects(writeModuleReport({...common, module: 'qa', toolCoverage: leaked.coverage, fileCoverage: [], achados: [], raw: leaked}), /VERIFY_SECRET_IN_REPORT/);
+  } finally {
+    rmSync(data, {recursive: true, force: true});
+  }
 });
 
 test('StrykerJS fornece a localização e a substituição aplicadas ao código original', realTools, async () => {

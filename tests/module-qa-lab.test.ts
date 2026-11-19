@@ -123,13 +123,17 @@ const row = (out: Output, tool: string) => {
   return result;
 };
 
+const passRows = (out: Output) => out.coverage.filter(row => row.tool === 'node-test-v8-execucao');
+
 test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobreviventes por execução', {skip: !labEnabled}, () => {
   const pin = readQaDigestPin(readFileSync(join(qaModuleDir, 'digest.txt'), 'utf8'));
   const defective = collect(pin, fixtureDir);
   assert.equal(row(defective, 'node-test-v8').status, 'ok');
   assert.equal(row(defective, 'stryker-mutator').status, 'ok');
+  const passes = passRows(defective);
+  assert.equal(passes.length, 3);
   for (let pass = 1; pass <= 3; pass++) {
-    assert.match(row(defective, `qa-passada:${pass}`).detail, /passou.*4 aprovados, 0 reprovados, 1 pulados/);
+    assert.match(passes[pass - 1]!.detail, new RegExp(`^execução ${pass}: node:test resultado aprovado; 4 aprovados, 0 reprovados, 1 pulados`));
   }
   assert.match(row(defective, 'qa-arquivo:src/defective-pricing.ts').detail, /V8 em três passadas: ramos [1-9]\/\d+/);
   assert.match(row(defective, 'qa-requisito:REQ-01').detail, /calcularDescontoFidelidade.*tests\/clean-pricing\.test\.ts:5.*passed,passed,passed/);
@@ -168,7 +172,9 @@ test('prova sintética de desconto incorreto', () => {
 });
 `);
     const output = collect(pin, repo);
-    for (let pass = 1; pass <= 3; pass++) assert.match(row(output, `qa-passada:${pass}`).detail, /falhou.*1 reprovados/);
+    const passes = passRows(output);
+    assert.equal(passes.length, 3);
+    for (let pass = 1; pass <= 3; pass++) assert.match(passes[pass - 1]!.detail, new RegExp(`^execução ${pass}: node:test resultado reprovado;.*1 reprovados`));
     assert.equal(row(output, 'stryker-mutator').status, 'skipped');
     assert.ok(output.findings.some(f => f.rule === 'QA-TESTE-FALHOU' && f.file === 'tests/clean-pricing.test.ts' &&
       f.line === failureLine && f.message.includes('prova sintética de desconto incorreto') &&

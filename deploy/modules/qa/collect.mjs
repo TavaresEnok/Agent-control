@@ -464,15 +464,15 @@ function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, r
   };
 }
 
-function summarizeNodePasses(passes, sourceAnalyses, version) {
+export function summarizeNodePasses(passes, sourceAnalyses, version) {
   const tests = comparePasses(passes);
   const extraRows = [];
   const findings = [];
   const measured = passes.map(pass => new Map(pass.coverage.map(c => [c.file, c])));
   for (const [index, pass] of passes.entries()) {
     const counts = status => pass.tests.filter(t => t.status === status).length;
-    extraRows.push(coverageRow(`qa-passada:${index + 1}`, version, 'ok',
-      `node:test ${pass.summary ? 'passou' : 'falhou'}: ${counts('passed')} aprovados, ${counts('failed')} reprovados, ${counts('skipped')} pulados, ${counts('todo')} todo`));
+    extraRows.push(coverageRow('node-test-v8-execucao', version, 'ok',
+      `execução ${index + 1}: node:test resultado ${pass.summary ? 'aprovado' : 'reprovado'}; ${counts('passed')} aprovados, ${counts('failed')} reprovados, ${counts('skipped')} pulados, ${counts('todo')} todo`));
   }
   for (const test of tests) {
     const oscillates = new Set(test.statuses).size > 1;
