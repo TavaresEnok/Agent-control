@@ -272,3 +272,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:41 UTC — Validação completa de c2-r7-reverificacao em df6bd1f5: TypeScript, suíte, complementares e laboratório aprovados.
 - 19/11/2026 03:41 UTC — Validação de c2-exame-r3 em a5ef0b22 iniciada no checkout de integração.
 - 19/11/2026 03:42 UTC — Painel a1500106 integrado ao candidato de QA a11377dc. O gerente iniciou a prova de autorização do gateway e a prova de seleção e correção no navegador de teste. A suíte anterior df6bd1f5 completou TypeScript, 253 arquivos, 52 complementares e laboratório.
+- 19/11/2026 03:43 UTC — Revisor encerrou C2-R7 em a7783fba (código 0). Gerente confere a entrega.
+- 19/11/2026 03:43 UTC — Revisão C-BASE-R7 iniciada por Sol high normal somente leitura em e372b57a.
+- 19/11/2026 03:46 UTC — Trabalhador encerrou C5-R5 em d58c8e69 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:46 UTC — Revisor encerrou C-BASE-R7 em e372b57a (código 0). Gerente confere a entrega.
+- 19/11/2026 03:46 UTC — Revisão C-EXAME-LEGADO iniciada por Sol high normal somente leitura em 8576fe97.
+- 19/11/2026 03:46 UTC — Trabalho C9-R4 iniciado por Sol high normal em final-c9.
+- 19/11/2026 03:46 UTC — Painel passou nas sete provas de gateway e nas seis de interface. A integração revelou que o fixture de relatório legado precisava da ficha física do quarto achado e que o relatório danificado conhecido precisava resposta de erro própria. A aplicação web compilou em diretório temporário. C2-R8 trata o alto de vínculo por ID e os dois médios da revisão de QA. C7-HISTORICO liga a medição à execução anterior pela CLI.
