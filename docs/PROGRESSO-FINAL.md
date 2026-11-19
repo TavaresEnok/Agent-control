@@ -246,3 +246,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:25 UTC — Revisão C9-R3 iniciada por Sol high normal somente leitura em b433235e.
 - 19/11/2026 03:25 UTC — Arquitetura 7fb2f861 passou nas 18 provas habilitadas, incluindo o laboratório. Na primeira tentativa a raiz apenas legível passou sem permissão de travessia; o teste identificou a regressão e a versão final confere leitura e travessia no descritor ancorado. O módulo banco recebeu um alto e dois médios sobre rejeições SQL e atribuição de lote; C5-R5 aberta. As oito CLIs passaram novamente 6/6 depois da mudança de autoridade.
 - 19/11/2026 03:28 UTC — Prontidão agora guarda somente os resultados de HSTS, nosniff e proteção de frame, sem valores brutos de cabeçalhos. A prova HTTPS local confirmou a retirada do nonce e preservou a conclusão. A CLI de arquitetura com a nova imagem passou 6/6; a suíte de QA segue no commit df6bd1f5.
+- 19/11/2026 03:29 UTC — Trabalhador encerrou C8-R5 em fafc14d3 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:29 UTC — Trabalho C-PAINEL iniciado por Sol high normal em final-c-painel.
+- 19/11/2026 03:29 UTC — Revisor encerrou C9-R3 em b433235e (código 0). Gerente confere a entrega.
+- 19/11/2026 03:29 UTC — Revisão C4-R5 iniciada por Sol high normal somente leitura em 8669f900.
+- 19/11/2026 03:32 UTC — Documentação fafc14d3 passou nos 20 testes com ferramentas reais e entrou na homologação 6737130b. Revisão de conformidade b433235e encontrou três médios e um baixo relativos a fluxos de campos e pares SPDX. Ordem C9-R4 registrada.
