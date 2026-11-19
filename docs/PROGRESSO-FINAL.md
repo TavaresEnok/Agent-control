@@ -1133,3 +1133,7 @@ PAUSADO-COTA
 - 19/11/2026 21:10 UTC — No reparo de arquitetura, a revisão encontrou quatro divergências entre host, mapa e cópia de análise. Sol high recebeu as correções de proteção e do escopo das métricas.
 - 19/11/2026 21:10 UTC — C-ACEITE-PROVA-LEASE encerrado com código 0.
 - 19/11/2026 21:11 UTC — A revisão da prova de locação identificou callback tardio após encerramento e renovações sobrepostas. O helper compartilhado pelas oito CLIs entrou em correção com teste de cada cenário.
+- 19/11/2026 21:11 UTC — trabalho-C-PROVA-LEASE-R2 iniciado em final-prova-lease-viva por Sol medium normal.
+- 19/11/2026 21:14 UTC — Conferidos c34b33f1 e 43f1c664. Ordens novas usam até quatro Gemini 4 Hydrogen High. O primeiro 429 do Hydrogen transfere o trabalho para Terra high normal. Sol fica como reserva após Terra e continua como revisor. Para conformidade, o corpo real tem 736 coberturas e 999 achados, com um achado lgpd-static sem cobertura ok.
+- 19/11/2026 21:14 UTC — C-DOCUMENTACAO-VIVA-CAMPO encerrado com código 0.
+- 19/11/2026 21:14 UTC — Correção doc-viva recebida em 04b7b1f5. Revisão Sol high somente leitura solicitada.
