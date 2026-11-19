@@ -501,7 +501,7 @@ async function verifyModuleEndToEnd(
       const page = diagram.match(/^subgraph [A-Z0-9]+\["\[id_0\]"\]\n([A-Z0-9]+)\["page\.tsx"\]$/m)?.[1];
       const target = diagram.match(/^subgraph [A-Z0-9]+\["ação \(v2\)"\]\n([A-Z0-9]+)\["\[param\]\.ts"\]$/m)?.[1];
       assert.ok(page && target, diagram);
-      assert.ok(diagram.includes(`${page}-->${target}`), diagram);
+      assert.match(diagram, new RegExp(`^${page}-->${target}$`, 'm'), diagram);
       for (const label of ['(portal)', '[id_0]', 'page.tsx', 'ação (v2)', '[param].ts']) {
         assert.ok(diagram.includes(label), `rótulo ausente: ${label}`);
       }
