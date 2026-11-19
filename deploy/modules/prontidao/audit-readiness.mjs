@@ -1345,6 +1345,101 @@ function shellHeredocs(parsed) {
   return docs;
 }
 
+function isShellScript(file) {
+  const base = basename(file.rel);
+  return /\.(?:sh|bash)$/i.test(base) || /^#![^\n]*\b(?:ba|da|k|z)?sh\b/.test(file.content);
+}
+
+function scanShellLine(line, state) {
+  let {inSingleQuote, atWordStart} = state;
+  let inDoubleQuote = false;
+  let inComment = false;
+  let escaped = false;
+  let atWordStartBeforeEscape = atWordStart;
+  let prevDollar = false;
+  let indeterminate = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inComment) continue;
+    if (inSingleQuote) {
+      if (ch === "'") {
+        inSingleQuote = false;
+        atWordStart = false;
+      }
+      prevDollar = false;
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (inDoubleQuote) {
+      if (ch === '\\') escaped = true;
+      else if (ch === '"') {
+        inDoubleQuote = false;
+        atWordStart = false;
+      }
+      prevDollar = false;
+      continue;
+    }
+    if (ch === '\\') {
+      atWordStartBeforeEscape = atWordStart;
+      escaped = true;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (ch === '"') {
+      inDoubleQuote = true;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (ch === "'") {
+      if (prevDollar) {
+        // ANSI-C quoting ($'...') supports backslash escapes; keep multiline $'...' indeterminate.
+        let j = i + 1;
+        while (j < line.length && line[j] !== "'") {
+          if (line[j] === '\\') j++;
+          j++;
+        }
+        if (j >= line.length) {
+          indeterminate = true;
+          break;
+        }
+        i = j;
+        atWordStart = false;
+        prevDollar = false;
+        continue;
+      }
+      inSingleQuote = true;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (ch === '#' && atWordStart) {
+      inComment = true;
+      prevDollar = false;
+      continue;
+    }
+    prevDollar = ch === '$';
+    if (ch === ' ' || ch === '\t' || ch === '\n' || '|;&<>'.includes(ch)) atWordStart = true;
+    else atWordStart = false;
+  }
+
+  return {
+    inSingleQuote,
+    inDoubleQuote,
+    inComment,
+    escaped,
+    atWordStartBeforeEscape,
+    indeterminate,
+  };
+}
+
 // Count executable declarations only. Documentation and command arguments alone are not evidence of a routine.
 function* operationalCommands(file, onIncomplete) {
   const base = basename(file.rel);
@@ -1372,7 +1467,7 @@ function* operationalCommands(file, onIncomplete) {
     return;
   }
 
-  const shell = /\.(?:sh|bash)$/i.test(base) || /^#![^\n]*\b(?:ba|da|k|z)?sh\b/.test(file.content);
+  const shell = isShellScript(file);
   const systemCron = /(?:^|\/)cron\.d\/[^/]+$/.test(file.rel) || /(?:^|\/)etc\/crontab$/.test(file.rel);
   const userCron = /(?:^|\/)(?:crontab|[^/]+\.crontab|(?:crontabs|spool\/cron)\/[^/]+)$/.test(file.rel);
   if (systemCron || userCron) {
@@ -1391,6 +1486,7 @@ function* operationalCommands(file, onIncomplete) {
   let bodyLine = '';
   let pending;
   let start = 1;
+  let shellState = {inSingleQuote: false, atWordStart: true};
   // Shell delimiters must preserve literal carriage returns and physical line boundaries.
   const lines = file.content.split('\n');
   if (lines.at(-1) === '') lines.pop();
@@ -1408,18 +1504,34 @@ function* operationalCommands(file, onIncomplete) {
       continue;
     }
     if (pending === undefined) start = index + 1;
-    const continued = SHELL_CONTINUATION.test(raw);
+    if (raw.includes('\r')) {
+      onIncomplete(start, 'delimitação de shell não interpretada');
+      return;
+    }
+    const scan = scanShellLine(raw, shellState);
+    if (scan.indeterminate || scan.inDoubleQuote) {
+      onIncomplete(start, 'delimitação de shell não interpretada');
+      return;
+    }
+    if (scan.inSingleQuote) {
+      pending = (pending ?? '') + raw + '\n';
+      shellState = {inSingleQuote: true, atWordStart: false};
+      continue;
+    }
+    const continued = scan.escaped && !scan.inComment;
     const command = (pending ?? '') + raw;
     const parsed = shellWords(continued ? command.slice(0, -1) : command);
-    if (!parsed || command.includes('\r')) {
+    if (!parsed) {
       onIncomplete(start, 'delimitação de shell não interpretada');
       return;
     }
     if (continued && !parsed.comment) {
       pending = command.slice(0, -1);
+      shellState = {inSingleQuote: false, atWordStart: scan.atWordStartBeforeEscape};
       continue;
     }
     pending = undefined;
+    shellState = {inSingleQuote: false, atWordStart: true};
     if (command.includes('<<')) {
       const docs = shellHeredocs(parsed);
       if (!docs) {
@@ -1559,19 +1671,96 @@ function resticCommand(args) {
   return args.slice(first);
 }
 
-function checkBackup(file, findings, pillarCounts, onIncomplete) {
+const BACKUP_CANDIDATE_RE = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
+
+function unwrapShellDashC(parsed) {
+  if (!parsed || parsed.operator) return null;
+  const words = [...parsed.words];
+  while (!words[0]?.operator && /^(?:exec|command|(?:\S*\/)?env|[\w]+=.*)$/.test(words[0]?.text ?? '')) words.shift();
+  const binary = basename(words[0]?.text ?? '');
+  if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[1]?.text ?? '') && words[2]) {
+    return words[2].text;
+  }
+  return null;
+}
+
+function isBackupCandidateSegment(segWords) {
+  const words = [...segWords];
+  while (words[0] && /^(?:exec|command|(?:\S*\/)?env|[\w]+=.*)$/.test(words[0].text)) words.shift();
+  const binary = basename(words.shift()?.text ?? '');
+  if (!binary) return false;
+  if (/^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find)$/.test(binary)) return true;
+  const subcommand = words[0]?.text ?? '';
+  if (['npm', 'pnpm'].includes(binary) && /^run(?:-script)?$/.test(subcommand)) {
+    return /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(words[1]?.text ?? '');
+  }
+  if (binary === 'node') {
+    return /^personal-(?:backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.test(basename(subcommand));
+  }
+  if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(subcommand)) {
+    return BACKUP_CANDIDATE_RE.test(words[1]?.text ?? '');
+  }
+  return false;
+}
+
+function shellWordsUnquotedSurface(words) {
+  return words.map(word => {
+    if (word.operator) return word.text;
+    return word.raw
+      .replace(/'[^']*'/g, ' ')
+      .replace(/"(?:\\.|[^"\\])*"/g, quoted => (quoted.match(/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/g) ?? []).join(' ') || ' ');
+  }).join(' ');
+}
+
+function shellCommandSurface(commands) {
+  const parts = [];
+  for (const {command} of commands) {
+    const parsed = shellWords(command);
+    if (!parsed) continue;
+    const dashC = unwrapShellDashC(parsed);
+    if (dashC !== null) {
+      const inner = shellWords(dashC);
+      if (inner) {
+        parts.push(shellWordsUnquotedSurface(inner.words));
+        continue;
+      }
+    }
+    parts.push(shellWordsUnquotedSurface(parsed.words));
+  }
+  return parts.join('\n');
+}
+
+function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
   let backup = false;
   let restore = false;
   let catalog = false;
   let rotation = false;
-  for (const {command, line} of operationalCommands(file, onIncomplete)) {
-    const shell = /^(?:\S*\/)?(?:ba|da|k|z)?sh\s+-[a-z]*c\s+(.+)$/i.exec(command);
-    const invocation = shell ? unquote(shell[1]) : command;
-    const candidates = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
-    if (!candidates.test(invocation)) continue;
-    const parsed = shellWords(invocation);
+  for (const {command, line} of commands) {
+    if (!BACKUP_CANDIDATE_RE.test(command)) continue;
+    const outerParsed = shellWords(command);
+    const dashC = outerParsed ? unwrapShellDashC(outerParsed) : null;
+    const invocation = dashC ?? command;
+    if (dashC !== null && !BACKUP_CANDIDATE_RE.test(invocation)) continue;
+    const parsed = dashC !== null ? shellWords(invocation) : outerParsed;
     if (!parsed) {
       onIncomplete(line, 'comando de backup ou restauração com sintaxe não coberta');
+      continue;
+    }
+    if (parsed.operator) {
+      const segments = [];
+      let current = [];
+      for (const word of parsed.words) {
+        if (word.operator) {
+          if (current.length) segments.push(current);
+          current = [];
+        } else {
+          current.push(word);
+        }
+      }
+      if (current.length) segments.push(current);
+      if (segments.some(isBackupCandidateSegment)) {
+        onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
+      }
       continue;
     }
     const words = [...parsed.words];
@@ -1582,7 +1771,7 @@ function checkBackup(file, findings, pillarCounts, onIncomplete) {
     const routine = ['npm', 'pnpm'].includes(binary) && /^run(?:-script)?$/.test(subcommand ?? '')
       ? /^personal:(backup(?:-rotate)?|restore-(?:check|proof))$/.exec(parameters[0] ?? '')?.[1]
       : binary === 'node' ? /^personal-(backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.exec(basename(subcommand ?? ''))?.[1] : undefined;
-    if (parsed.operator || (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-'))) {
+    if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
       onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
       continue;
     }
@@ -1637,7 +1826,7 @@ export function auditRepositoryReadiness(repoRoot) {
   let skipFailed = 0;
   let omittedProtectedSkipRows = 0;
   let omittedProtectedSkipFailed = 0;
-  let omittedInventoryPaths = 0;
+  const omittedPaths = new Set();
   let omittedFindings = 0;
   const recordSkip = (status, rel, reason) => {
     if (status === 'failed') {
@@ -1647,6 +1836,7 @@ export function auditRepositoryReadiness(repoRoot) {
     const detail = `${rel}: ${reason}.`;
     if (!isPublicReportPath(rel) || hasKnownSecret(detail)) {
       omittedProtectedSkipRows++;
+      omittedPaths.add(rel);
       if (status === 'failed') omittedProtectedSkipFailed++;
       return;
     }
@@ -1875,12 +2065,16 @@ export function auditRepositoryReadiness(repoRoot) {
     }
 
     const protectedEnv = isCommittedEnv(file.rel);
-    if (!protectedEnv && (/logrotate/i.test(file.rel) || (/\brotate\s+\d+\b/.test(lowerContent) && /\b(?:daily|weekly|maxsize|size)\b/.test(lowerContent)))) {
+    const onCommandIncomplete = (line, reason) => recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao');
+    const commands = [...operationalCommands(file, onCommandIncomplete)];
+    const shell = isShellScript(file);
+    const operationalText = shell ? shellCommandSurface(commands) : file.content;
+    const lowerOperationalText = shell ? operationalText.toLowerCase() : lowerContent;
+    if (!protectedEnv && (/logrotate/i.test(file.rel) || (/\brotate\s+\d+\b/.test(lowerOperationalText) && /\b(?:daily|weekly|maxsize|size)\b/.test(lowerOperationalText)))) {
       hasLogrotate = true;
       checksApplied.push('logrotate');
     }
-    const routines = checkBackup(file, findings, pillarCounts,
-      (line, reason) => recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao'));
+    const routines = checkBackup(file, commands, findings, pillarCounts, onCommandIncomplete);
     if (routines.backup) checksApplied.push('backup');
     if (routines.restore) checksApplied.push('restore-declaration');
     if (routines.catalog) checksApplied.push('backup-catalog-check');
@@ -1889,11 +2083,11 @@ export function auditRepositoryReadiness(repoRoot) {
     hasRestoreRoutine ||= routines.restore;
     hasCatalogCheck ||= routines.catalog;
     hasBackupRotation ||= routines.rotation;
-    if (!protectedEnv && /(?:personal:watch|alertmanager|OnFailure=|deliverPersonalPush|sendAlert|alert_webhook|WEBHOOK_ALERT|SLACK_WEBHOOK|DISK_ALERT)/i.test(file.content)) {
+    if (!protectedEnv && /(?:personal:watch|alertmanager|OnFailure=|deliverPersonalPush|sendAlert|alert_webhook|WEBHOOK_ALERT|SLACK_WEBHOOK|DISK_ALERT)/i.test(operationalText)) {
       hasAlerting = true;
       checksApplied.push('alerting');
     }
-    if (!protectedEnv && /(?:statfs|DISK_ALERT|diskUsedPercent|df\s+-[Ph]|docker\s+(?:system|builder)\s+prune|personal:maintenance)/i.test(file.content)) {
+    if (!protectedEnv && /(?:statfs|DISK_ALERT|diskUsedPercent|df\s+-[Ph]|docker\s+(?:system|builder)\s+prune|personal:maintenance)/i.test(operationalText)) {
       hasDiskMonitoring = true;
       checksApplied.push('disk-monitor');
     }
@@ -1905,9 +2099,8 @@ export function auditRepositoryReadiness(repoRoot) {
       const isPublic = isPublicReportPath(file.rel);
       const hasProtectedFinding = fileCount > 0 && isProtectedReportPath(file.rel)
         && findings.slice(findingsBeforeFile).every(f => canEmitReadinessFinding(f.rule, f.file));
-      if (isPublic) measuredFiles.add(file.rel);
-      if ((isPublic && !hasKnownSecret(detail)) || hasProtectedFinding) {
-        if (hasProtectedFinding) measuredFiles.add(file.rel);
+      if (isPublic || hasProtectedFinding) measuredFiles.add(file.rel);
+      if (!hasKnownSecret(detail) && (isPublic || hasProtectedFinding)) {
         fileCoverage.push({
           tool: 'prontidao:arquivo',
           version: AUDIT_VERSION,
@@ -1915,7 +2108,7 @@ export function auditRepositoryReadiness(repoRoot) {
           detail,
         });
       } else {
-        omittedInventoryPaths++;
+        omittedPaths.add(file.rel);
       }
     }
   }
@@ -2019,7 +2212,7 @@ export function auditRepositoryReadiness(repoRoot) {
       detail: `${omittedSkipRows} registro(s) de entrada(s) omitida(s) sem linha de cobertura individual pelo limite de ${MAX_SKIP_ROWS}.`,
     });
   }
-  const omittedPathCount = omittedInventoryPaths + omittedProtectedSkipRows;
+  const omittedPathCount = omittedPaths.size;
   if (omittedPathCount > 0) {
     skipCoverage.push({
       tool: 'prontidao:limites',

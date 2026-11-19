@@ -1672,7 +1672,7 @@ test('caminhos detectados por hasKnownSecret são omitidos dos relatórios com d
     writeFileSync(join(dir, 'deploy', 'logrotate'), '/var/log/app.log {\n  rotate 7\n  daily\n}\n');
     writeFileSync(join(dir, 'scripts', 'backup.sh'), '#!/bin/sh\nrestic backup /var/lib/app\nrestic forget --keep-daily 7\n');
     writeFileSync(join(dir, 'scripts', 'restore.sh'), '#!/bin/sh\nrestic restore latest --target /var/tmp/restore\n');
-    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\n# personal:watch df -P\n');
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\ndf -P /\nnpm run personal:watch\n');
     writeFileSync(join(dir, secretPath), '{"synthetic":true}\n');
     writeFileSync(join(dir, tokenPath), 'export const ok = true;\n');
 
@@ -1779,7 +1779,7 @@ test('Caddy local válido aciona verificações globais e mantém controle limpo
     mkdirSync(join(dir, 'scripts'), {recursive: true});
     writeFileSync(join(dir, 'scripts', 'backup.sh'), '#!/bin/sh\nrestic backup /var/lib/app\nrestic forget --keep-daily 7\n');
     writeFileSync(join(dir, 'scripts', 'restore.sh'), '#!/bin/sh\nrestic restore latest --target /var/tmp/restore\n');
-    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\n# personal:watch df -P\n');
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\ndf -P /\nnpm run personal:watch\n');
     const clean = runCollector({
       repoRoot: dir,
       evidenceFile: '',
@@ -1822,7 +1822,7 @@ test('artefato de implantação com segmento recusado não invalida a publicaç�
     mkdirSync(join(dir, 'scripts'), {recursive: true});
     writeFileSync(join(dir, 'scripts', 'backup.sh'), '#!/bin/sh\nrestic backup /var/lib/app\nrestic forget --keep-daily 7\n');
     writeFileSync(join(dir, 'scripts', 'restore.sh'), '#!/bin/sh\nrestic restore latest --target /var/tmp/restore\n');
-    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\n# personal:watch df -P\n');
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\ndf -P /\nnpm run personal:watch\n');
     const clean = runCollector({
       repoRoot: dir,
       evidenceFile: '',
@@ -1847,4 +1847,185 @@ test('controle limpo oficial passa na publicação com zero achados', async () =
   assert.equal(clean.coverage.some(c => c.status === 'failed'), false);
   assertNoHostSecretLeak(clean);
   await validateModuleCollectorPublication(cleanDir, parseModuleCollectorOutput(JSON.stringify(clean), {module: 'prontidao'}));
+});
+
+test('script operacional com argumento em aspas simples multilinha preserva análise posterior sem reinterpretar corpo citado', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-shell-multiline-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      '# personal:watch df -P',
+      "node -e '",
+      '  // pg_dump -f /tmp/quoted.dump',
+      '  // pg_restore -d synthetic /var/backups/quoted.dump',
+      '  // restic forget --keep-daily 7',
+      '  // personal:watch df -P',
+      '  const shift = 1 << 2;',
+      '  const tail = "line \\',
+      '    still inside single quotes";',
+      '  console.log(shift, tail);',
+      "' # comentário com pg_dump e df -P",
+      'echo "somente texto"',
+      '',
+    ].join('\n'));
+
+    const quotedOnly = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.equal(quotedOnly.coverage.some(c => c.status === 'failed'), false);
+    assert.equal(quotedOnly.coverage.find(c => c.tool === 'prontidao-audit')?.status, 'ok');
+    for (const rule of [
+      'PRONTIDAO-BACKUP-AUSENTE',
+      'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+      'PRONTIDAO-ALERTA-AUSENTE',
+      'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+    ]) {
+      assert.ok(quotedOnly.findings.some(f => f.rule === rule), `ausência esperada sem fatos executáveis: ${rule}`);
+    }
+    assert.equal(quotedOnly.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(quotedOnly), {module: 'prontidao'}));
+
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      'set -eu',
+      "node --input-type=module -e '",
+      '  // pg_dump -f /tmp/ignored.dump',
+      "  const text = \"it'\\''s literal \\\\\";",
+      '  const mask = 1 << 3;',
+      '  if (text && mask > 0) console.log(text);',
+      "' && echo ok",
+      'df -P /',
+      'npm run personal:watch',
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'scripts', 'backup.sh'), [
+      '#!/bin/sh',
+      "node -e '",
+      '  // pg_dump -f /tmp/ignored.dump',
+      '  console.log("pre-check");',
+      "'",
+      'pg_dump -Fc -f /var/backups/app.dump "$DATABASE_URL"',
+      'restic forget --keep-daily 7',
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'scripts', 'restore.sh'), [
+      '#!/bin/sh',
+      'pg_restore --exit-on-error -d "$RESTORE_DB" /var/backups/app.dump',
+      '',
+    ].join('\n'));
+
+    const clean = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.deepEqual(clean.findings, []);
+    assert.equal(clean.coverage.some(c => c.status === 'failed'), false);
+    assert.equal(clean.coverage.find(c => c.tool === 'prontidao-audit')?.status, 'ok');
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(clean), {module: 'prontidao'}));
+
+    writeFileSync(join(dir, 'scripts', 'backup.sh'), [
+      '#!/bin/sh',
+      "node -e '",
+      '  console.log("pre-check");',
+      "'",
+      'pg_dump -Fc -f /tmp/unsafe.dump "$DATABASE_URL"',
+      '',
+    ].join('\n'));
+    const afterClose = auditRepositoryReadiness(dir);
+    assert.equal(afterClose.coverage.some(c => c.status === 'failed'), false);
+    assert.deepEqual(
+      afterClose.findings.filter(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO').map(f => ({file: f.file, line: f.line})),
+      [{file: 'scripts/backup.sh', line: 5}],
+    );
+
+    for (const [label, script] of [
+      ['aspas simples abertas', "#!/bin/sh\nnode -e '\nconsole.log(1);\n"],
+      ['aspas duplas multilinha', '#!/bin/sh\nnode -e "\nconsole.log(1);\n"\n'],
+      ['ansi-c multilinha', "#!/bin/sh\nprintf '%s' $'\nhello\n'\n"],
+      ['cr em script shell', "#!/bin/sh\nnode -e '\r\nconsole.log(1);\n'\n"],
+    ] as const) {
+      writeFileSync(join(dir, 'scripts', 'backup.sh'), script);
+      const incomplete = auditRepositoryReadiness(dir);
+      assert.equal(incomplete.coverage.find(c => c.tool === 'prontidao-audit')?.status, 'failed', label);
+      assert.equal(incomplete.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed', label);
+      assert.ok(
+        incomplete.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed' && c.detail.startsWith('scripts/backup.sh:')),
+        label,
+      );
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('linhas de cobertura com nomes protegidos ou segredos em texto livre são omitidas sem dupla contagem', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-coverage-secret-'));
+  try {
+    mkdirSync(join(dir, 'deploy'), {recursive: true});
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, '.env.token'), 'APP_SECRET=synthetic-token-value-12345\n');
+    writeFileSync(join(dir, 'deploy', 'logrotate-token'), '/var/log/app.log {\n  rotate 7\n  daily\n}\n');
+    writeFileSync(join(dir, 'scripts', 'backup.sh'), '#!/bin/sh\nrestic backup /var/lib/app\nrestic forget --keep-daily 7\n');
+    writeFileSync(join(dir, 'scripts', 'restore.sh'), '#!/bin/sh\nrestic restore latest --target /var/tmp/restore\n');
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\ndf -P /\nnpm run personal:watch\n');
+
+    const withToken = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.ok(withToken.findings.some(f => f.rule === 'PRONTIDAO-SEGREDO-ARQUIVO-ENV' && f.file === '.env.token'));
+    assert.equal(withToken.coverage.some(c => c.detail.includes('.env.token')), false);
+    assert.equal(withToken.coverage.some(c => c.detail.includes('logrotate-token')), false);
+    assertNoHostSecretLeak(withToken);
+    const limits = withToken.coverage.find(c => c.tool === 'prontidao:limites');
+    assert.equal(limits?.status, 'skipped');
+    assert.match(limits?.detail ?? '', /^2 caminho\(s\) omitido\(s\)/);
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(withToken), {module: 'prontidao'}));
+
+    writeFileSync(join(dir, 'compose.extra.yaml'), 'services:\n  worker:\n    <<: *unresolved\n');
+    const partialWithToken = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    const scoped = partialWithToken.coverage.find(c => c.tool === 'prontidao-audit' && c.status === 'ok')?.files ?? [];
+    assert.equal(scoped.includes('.env.token'), true);
+    assert.equal(partialWithToken.coverage.some(c => c.detail.includes('.env.token')), false);
+    assertNoHostSecretLeak(partialWithToken);
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(partialWithToken), {module: 'prontidao'}));
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+
+  const dedupDir = mkdtempSync(join(tmpdir(), 'prontidao-omitted-dedup-'));
+  try {
+    mkdirSync(join(dedupDir, 'infra '), {recursive: true});
+    writeFileSync(join(dedupDir, 'infra ', 'compose.yaml'), [
+      'services:',
+      '  api:',
+      '    <<: *unresolved',
+      '    environment:',
+      '      APP_MODE: production',
+      '',
+    ].join('\n'));
+    const out = runCollector({
+      repoRoot: dedupDir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    const limits = out.coverage.find(c => c.tool === 'prontidao:limites');
+    assert.equal(limits?.status, 'failed');
+    assert.match(limits?.detail ?? '', /^1 caminho\(s\) omitido\(s\)/);
+    assert.equal(JSON.stringify(out).includes('infra '), false);
+    await validateModuleCollectorPublication(dedupDir, parseModuleCollectorOutput(JSON.stringify(out), {module: 'prontidao'}));
+  } finally {
+    rmSync(dedupDir, {recursive: true, force: true});
+  }
 });
