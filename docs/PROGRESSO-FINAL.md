@@ -374,3 +374,9 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:37 UTC — QA R10 passou nos 43 testes do coletor e laboratório sem saltos. A prova usa a imagem 80c3c6ab, reconstruiu os casos de mutação e conferiu a relação entre requisito e arquivo.
 - 19/11/2026 04:38 UTC — Aberta a ordem de exame independente para estender aos demais módulos a validação da condição exata registrada pelo coletor. Um achado sem evidência suficiente continua provável.
 - 19/11/2026 04:38 UTC — Desempenho integrado em e4680e65 com imagem a0bd77af. Os três laboratórios físicos passaram (quatro ferramentas, backend ausente, snapshot vazio). Após ligar a dependência Acorn do checkout, os 30 testes do coletor e orquestrador passaram, assim como TypeScript. A comparação busca o exame anterior compatível e ignora séries intermediárias diferentes.
+- 19/11/2026 04:39 UTC — Trabalhador encerrou C-BASE-R9 em 66fa91b5 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:39 UTC — Trabalho C-EXAME-MEDICOES iniciado por Sol high normal em final-exame-medicoes.
+- 19/11/2026 04:39 UTC — Revisor encerrou C6-R8 em 8ff87772 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:39 UTC — Revisão C9-R4 iniciada por Sol high normal somente leitura em b1ac9e42.
+- 19/11/2026 04:40 UTC — Trabalhador encerrou C-EXAME-INTEGRAR em 552b30cb (código 0). Gerente confere a entrega.
+- 19/11/2026 04:42 UTC — CLI do desempenho e4680e65 aprovada em 6/6 com duas medições reais. A prova poliglota do QA R10 passou; a CLI registrou uma ferramenta com falha e estamos identificando qual na base sintética. Aberta C6-R9 para tratar a avaliação passiva de configurações apontada pelo revisor.
