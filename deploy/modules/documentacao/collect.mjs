@@ -22,13 +22,20 @@ import {createRequire} from 'node:module';
 import {dirname, extname, join, posix, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
-import {catalogHasProtectedContent, hasProtectedReportText} from './report-privacy.mjs';
+import {
+  catalogHasProtectedContent,
+  hasForbiddenReportSegment,
+  hasProtectedReportText,
+  isProtectedReportPath,
+} from './report-privacy.mjs';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
 const MAX_COPY_FILES = 10_000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_COPY_BYTES = 192 * 1024 * 1024;
+const MAX_MERMAID_EDGES = 5000;
+const MAX_MERMAID_TEXT_SIZE = MAX_FILE_BYTES;
 // Contratos de src/verification-modules.ts e module-documentation-artifacts.ts.
 const MAX_DETAIL_CHARS = 2000;
 const MAX_COVERAGE_ROWS = 5000;
@@ -40,7 +47,6 @@ const ARTIFACT_ENCODING = 'hex-utf8-v1';
 const REPORT_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u;
 const REPORT_CONTROL_GLOBAL = new RegExp(REPORT_CONTROL, 'gu');
 const OMITTED_DETAIL = 'Detalhe omitido por proteção de conteúdo.';
-const FORBIDDEN_REPORT_SEGMENTS = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 const TOOL_TIMEOUT_MS = 180_000;
 const TYPEDOC_DIAGNOSTIC_VERSION = '0.28.20';
 const MERMAID_DIAGNOSTIC_VERSION = '12.3.0';
@@ -181,7 +187,13 @@ async function loadMermaidParser(toolsRoot) {
   globalThis.window = window;
   try {
     const {default: mermaid} = await import(pathToFileURL(load.resolve('mermaid')).href);
-    mermaid.initialize({startOnLoad: false, securityLevel: 'strict', logLevel: 'fatal'});
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      logLevel: 'fatal',
+      maxEdges: MAX_MERMAID_EDGES,
+      maxTextSize: MAX_MERMAID_TEXT_SIZE,
+    });
     const probe = await mermaid.mermaidAPI.getDiagramFromText('flowchart LR\n  A["módulo"] --> B');
     const parser = probe.getParser()?.parser;
     return code => enqueueMermaidParse(async () => {
@@ -1707,25 +1719,41 @@ function appendArtifact(coverage, privacy, tool, version, file, text, protectedS
 
 function isReportablePath(file) {
   return file.length <= 400 && !/[^A-Za-z0-9._@+\/-]/.test(file) && file.split('/').every(part =>
-    part !== '' && part !== '.' && part !== '..' && part !== '.git' && part !== '.github'
-    && part !== '.ai' && part !== 'node_modules' && !part.startsWith('.env')
-    && !FORBIDDEN_REPORT_SEGMENTS.has(part.toLowerCase()),
+    part !== '' && part !== '.' && part !== '..' && !hasForbiddenReportSegment(part),
   );
 }
 
 function boundedReportText(value, limit = MAX_DETAIL_CHARS) {
   const clean = value.replaceAll(REPORT_CONTROL_GLOBAL, ' ').trim();
+  const normalized = clean.replace(/\r\n?/g, '\n').trim();
   const bounded = clean.slice(0, limit).toWellFormed() || 'sem detalhe';
-  // Coverage details and finding messages are flattened again by the host.
-  const flattened = clean.replace(/\s*[\r\n]\s*/g, ' ');
-  if (hasProtectedReportText(value) || (clean !== value && hasProtectedReportText(clean))
-    || (bounded !== clean && hasProtectedReportText(bounded)) || (flattened !== clean && hasProtectedReportText(flattened))) return null;
+  const boundedNormalized = bounded.replace(/\r\n?/g, '\n').trim();
+  // Coverage details and finding messages are flattened again by the host after slicing.
+  const variants = [
+    value,
+    clean,
+    normalized,
+    clean.replace(/\s*[\r\n]\s*/g, ' '),
+    bounded,
+    boundedNormalized,
+    boundedNormalized.replace(/\s*\n\s*/g, ' '),
+  ];
+  if (variants.some(hasProtectedReportText)) return null;
   return bounded;
 }
 
 function isCoverageSummary(row) {
   return row.tool.endsWith(':artefato') || !row.tool.includes(':') || row.tool === 'documentacao:privacidade'
     || (row.tool === 'documentacao:input' && row.status !== 'skipped');
+}
+
+function formatPrivacyCoverageRow(protectedFindings, privacyCoverage, omittedArtifacts) {
+  return {
+    tool: 'documentacao:privacidade',
+    version: '1',
+    status: 'skipped',
+    detail: `Proteção de conteúdo. achados_omitidos=${protectedFindings}; detalhes_cobertura_omitidos=${privacyCoverage}; artefatos_omitidos=${omittedArtifacts.join(', ') || 'nenhum'}`,
+  };
 }
 
 function boundCollectorOutput(coverage, findings, privacy) {
@@ -1735,17 +1763,14 @@ function boundCollectorOutput(coverage, findings, privacy) {
     const evidenceLimit = finding.rule === 'DOC-MERMAID-SINTAXE-INVALIDA' ? 240 : MAX_DETAIL_CHARS;
     const message = boundedReportText(finding.message);
     const evidence = boundedReportText(finding.evidence, evidenceLimit);
-    if (hasProtectedReportText(finding.file) || message === null || evidence === null) {
+    if (isProtectedReportPath(finding.file) || message === null || evidence === null) {
       protectedFindings += 1;
     } else if (isReportablePath(finding.file)) {
       publishableFindings.push({...finding, line: Math.min(finding.line, 10_000_000), message, evidence});
     }
   }
   if (privacy.coverage || protectedFindings || privacy.artifacts.length) {
-    coverage.push({
-      tool: 'documentacao:privacidade', version: '1', status: 'skipped',
-      detail: `Proteção de conteúdo. achados_omitidos=${protectedFindings}; detalhes_cobertura_omitidos=${privacy.coverage}; artefatos_omitidos=${privacy.artifacts.join(', ') || 'nenhum'}`,
-    });
+    coverage.push(formatPrivacyCoverageRow(protectedFindings, privacy.coverage, privacy.artifacts));
   }
 
   // Reserve espaço para pontuação do JSON e para uma linha que sinalize os cortes.
@@ -1828,7 +1853,9 @@ export async function runCollector(opts = {}) {
     return OMITTED_DETAIL;
   };
   const addCoverage = (row, {file, limit} = {}) => {
-    const detail = file !== undefined && hasProtectedReportText(file) ? null : boundedReportText(row.detail, limit);
+    const fileProtected = file !== undefined
+      && (row.tool === 'documentacao:input' ? hasProtectedReportText(file) : isProtectedReportPath(file));
+    const detail = fileProtected ? null : boundedReportText(row.detail, limit);
     if (detail === null) {
       privacy.coverage += 1;
       if (!isCoverageSummary(row)) return;
@@ -2039,6 +2066,26 @@ export async function runCollector(opts = {}) {
       }
     }
 
+    let graphData;
+    let graphParseError = null;
+    if (graph !== undefined) {
+      try {
+        graphData = JSON.parse(graph);
+      } catch (err) {
+        graphParseError = err;
+      }
+    }
+    // The renderer splits paths into folder and file labels. Check its source
+    // paths as well as the rendered text before emitting diagnostics or artifact parts.
+    const graphHasProtectedPaths = Boolean(
+      graphParseError
+      || (Array.isArray(graphData?.modules) && graphData.modules.some(mod =>
+        (typeof mod?.source === 'string' && hasProtectedReportText(mod.source))
+        || (Array.isArray(mod?.dependencies) && mod.dependencies.some(dep =>
+          typeof dep?.resolved === 'string' && hasProtectedReportText(dep.resolved))),
+      )),
+    );
+
     let documentReferences = new Map();
     // 3. Mermaid (validação sintática e estrutural dos diagramas documentados e do diagrama gerado)
     if (mermaidBlocks.length === 0 && !generatedMermaid) {
@@ -2062,7 +2109,15 @@ export async function runCollector(opts = {}) {
         documentReferences = parsedMermaid.documentReferences;
         findings.push(...parsedMermaid.findings);
 
-        const error = coverageDetail(parsedMermaid.stats.generatedDiagramError, 200);
+        let error = '';
+        if (parsedMermaid.stats.generatedDiagramError) {
+          if (graphHasProtectedPaths) {
+            privacy.coverage += 1;
+            error = OMITTED_DETAIL;
+          } else {
+            error = coverageDetail(parsedMermaid.stats.generatedDiagramError, 200);
+          }
+        }
         addCoverage({
           tool: 'mermaid',
           version: versions.mermaid,
@@ -2091,15 +2146,12 @@ export async function runCollector(opts = {}) {
     let comparison;
     if (graph !== undefined) {
       try {
-        const graphData = JSON.parse(graph);
+        if (graphParseError) throw graphParseError;
         const parsedDep = parseDepcruiseReport(
           graphData, generatedMermaid, workRepoDir, mermaidBlocks, readWorkFile, Boolean(resolutionGap), documentReferences,
         );
         comparison = parsedDep;
         findings.push(...parsedDep.findings.filter(finding => repoFilesSet.has(finding.file)));
-        // The renderer splits paths into folder and file labels. Check its source
-        // paths as well as the rendered text before emitting any artifact parts.
-        const graphHasProtectedPaths = graphData.modules.some(mod => typeof mod?.source === 'string' && hasProtectedReportText(mod.source));
         appendArtifact(coverage, privacy, 'dependency-cruiser:artefato', versions.depcruise, 'dependencias.mmd',
           generatedMermaid, graphHasProtectedPaths);
 
@@ -2182,8 +2234,9 @@ if (launchedAsEntry()) {
       process.stdout.write(`${JSON.stringify(result)}\n`);
     })
     .catch(err => {
-      const detail = boundedReportText(err instanceof Error ? err.message : String(err), 300) ?? OMITTED_DETAIL;
-      const coverage = [{tool: 'documentacao', version: '1', status: 'failed', detail}];
+      const detail = boundedReportText(err instanceof Error ? err.message : String(err), 300);
+      const coverage = [{tool: 'documentacao', version: '1', status: 'failed', detail: detail ?? OMITTED_DETAIL}];
+      if (detail === null) coverage.push(formatPrivacyCoverageRow(0, 1, []));
       process.stdout.write(`${JSON.stringify({coverage, findings: []})}\n`);
     });
 }

@@ -606,11 +606,18 @@ function syntheticTools(reflection: unknown, diagram: string, graph: unknown = {
   return {execFn, mermaidParseFn: async () => ({diagramType: 'flowchart-v2'})};
 }
 
-test('as regras de conteúdo protegido do coletor usam os mesmos padrões da publicação', () => {
+test('as regras de conteúdo protegido do coletor usam os mesmos padrões da publicação', async () => {
   const definitions = (source: string) => source.match(/^const NOT_A_MASK = [\s\S]*?^\];$/m)?.[0];
   const canonical = definitions(readFileSync(join(ROOT_DIR, 'src', 'verify-redact.ts'), 'utf8'));
   assert.ok(canonical);
   assert.equal(definitions(readFileSync(join(MODULE_DEPLOY_DIR, 'report-privacy.mjs'), 'utf8')), canonical);
+  const {isSecretClassBasename: hostSecretBasename} = await import('../src/verify-redact.ts');
+  const {isSecretClassBasename: collectorSecretBasename} = await import(
+    pathToFileURL(join(MODULE_DEPLOY_DIR, 'report-privacy.mjs')).href
+  ) as {isSecretClassBasename: (file: string) => boolean};
+  for (const sample of ['src/identity.ts', 'src/credentials.ts', 'src/id_rsa.ts', 'src/key.pem', '.env.local', 'kubeconfig.json', 'service-account-dev.json']) {
+    assert.equal(collectorSecretBasename(sample), hostSecretBasename(sample), sample);
+  }
 });
 
 test('o host recusa o caminho no achado normalizado e publica a coleta com omissões', async () => {
@@ -1929,5 +1936,279 @@ test('AST do manifesto isola o diretório de subshells e registra executáveis c
     }
   } finally {
     rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('Mermaid valida grafo gerado acima de 500 arestas dentro da faixa suportada e mantém segurança e teto', {skip: skipLocalTools}, async () => {
+  const {parseModuleCollectorOutput, writeModuleReport} = await import('../src/verification-modules.ts');
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-mermaid-edges-'));
+  const repoDir = join(tmp, 'repo');
+  const dataDirectory = join(tmp, 'data');
+  try {
+    mkdirSync(join(repoDir, 'src'), {recursive: true});
+    mkdirSync(dataDirectory, {mode: 0o700});
+    writeFileSync(join(repoDir, 'src', 'index.ts'), '/** Modulo sintético. */\nexport const ok = 1;\n');
+    const reflection = {kind: 1, name: 'sintético', children: [
+      {kind: 64, name: 'ok', sources: [{fileName: 'src/index.ts', line: 1}], comment: {summary: [{text: 'Modulo sintético.'}]}},
+    ]};
+    const graph = {modules: [{source: 'src/index.ts', dependencies: []}]};
+    const edgeDiagram = (count: number, directive = '') => [
+      ...(directive ? [directive] : []),
+      'flowchart LR',
+      ...Array.from({length: count}, (_, i) => `  N${i}["src/n${i}.ts"] --> N${i + 1}["src/n${i + 1}.ts"]`),
+    ].join('\n') + '\n';
+
+    const mermaidParseFn = await createDefaultMermaidParser();
+    const diagram520 = edgeDiagram(520);
+    const okOut = await validateWithBase(await runCollector({
+      repoDir,
+      ...syntheticTools(reflection, diagram520, graph),
+      mermaidParseFn,
+    }));
+    const mermaidOk = okOut.coverage.find(row => row.tool === 'mermaid');
+    assert.equal(mermaidOk?.status, 'ok');
+    assert.match(mermaidOk?.detail ?? '', /diagrama_codigo_valido=true; erro_diagrama_gerado=$/);
+    assert.deepEqual(assembleDocumentationArtifacts(okOut.coverage)['dependencias.mmd'], {
+      status: 'present', content: diagram520,
+    });
+    await writeModuleReport({
+      dataDirectory, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+      runId: '55555555-5555-4555-8555-555555555555', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: okOut.coverage, fileCoverage: [],
+      achados: [], raw: okOut,
+    });
+
+    // Diretiva não relaxa maxEdges nem securityLevel; acima do teto (5000) o erro permanece.
+    const overLimitDiagram = edgeDiagram(5001, '%%{init: {"maxEdges": 99999, "securityLevel": "loose"}}%%');
+    const overOut = parseModuleCollectorOutput(JSON.stringify(await runCollector({
+      repoDir,
+      ...syntheticTools(reflection, overLimitDiagram, graph),
+      mermaidParseFn,
+    })), {module: 'documentacao'});
+    const mermaidOver = overOut.coverage.find(row => row.tool === 'mermaid');
+    assert.equal(mermaidOver?.status, 'failed');
+    assert.match(mermaidOver?.detail ?? '', /diagrama_codigo_valido=false; erro_diagrama_gerado=Edge limit exceeded/);
+
+    // Frontmatter também não relaxa o teto nem o nível de segurança.
+    const frontmatterOver = edgeDiagram(5001, '---\nconfig:\n  maxEdges: 99999\n  securityLevel: loose\n---');
+    const frontOut = parseModuleCollectorOutput(JSON.stringify(await runCollector({
+      repoDir,
+      ...syntheticTools(reflection, frontmatterOver, graph),
+      mermaidParseFn,
+    })), {module: 'documentacao'});
+    assert.equal(frontOut.coverage.find(row => row.tool === 'mermaid')?.status, 'failed');
+    assert.match(frontOut.coverage.find(row => row.tool === 'mermaid')?.detail ?? '', /Edge limit exceeded/);
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('omissões de privacidade não viram documentacao:limites e estouro real preserva a falha', async () => {
+  const {isProtectedReportPath} = await import(pathToFileURL(join(MODULE_DEPLOY_DIR, 'report-privacy.mjs')).href) as {
+    isProtectedReportPath: (file: string) => boolean;
+  };
+  assert.equal(isProtectedReportPath('src/.env.ts'), true);
+  assert.equal(isProtectedReportPath('.github/workflows/ci.yml'), true);
+  assert.equal(isProtectedReportPath('src/credentials.ts'), true);
+  assert.equal(isProtectedReportPath('src/components/authentication/authorizations/index.ts'), false);
+  assert.equal(isProtectedReportPath('src/ação.ts'), false);
+
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-privacy-vs-limits-'));
+  try {
+    mkdirSync(join(tmp, 'src'), {recursive: true});
+    const secretPatternFile = `src/${'Z'.repeat(36)}.ts`;
+    const secretClassFile = 'src/credentials.ts';
+    const secondSecretClassFile = 'src/id_token.ts';
+    writeFileSync(join(tmp, 'src', 'index.ts'), 'export const ok = 1;\n');
+    writeFileSync(join(tmp, secretPatternFile), 'export const a = 1;\n');
+    writeFileSync(join(tmp, secretClassFile), 'export const b = 1;\n');
+    writeFileSync(join(tmp, secondSecretClassFile), 'export const c = 1;\n');
+
+    const missing = {module: './ausente', couldNotResolve: true};
+    const privacyOnlyGraph = {modules: [
+      {source: secretPatternFile, dependencies: [missing]},
+      {source: secretClassFile, dependencies: [missing]},
+      {source: secondSecretClassFile, dependencies: [missing]},
+      {source: 'src/index.ts', dependencies: []},
+    ]};
+    const reflection = {kind: 1, name: 'sintético', children: [
+      {kind: 64, name: 'ok', sources: [{fileName: 'src/index.ts', line: 1}], comment: {summary: [{text: 'Ok.'}]}},
+      {kind: 64, name: 'a', sources: [{fileName: secretPatternFile, line: 1}]},
+      {kind: 64, name: 'b', sources: [{fileName: secretClassFile, line: 1}]},
+      {kind: 64, name: 'c', sources: [{fileName: secondSecretClassFile, line: 1}]},
+    ]};
+    const cleanDiagram = 'flowchart LR\nA["src"] --> B["index.ts"]\n';
+    const privacyOnly = await validateWithBase(await runCollector({
+      repoDir: tmp, ...syntheticTools(reflection, cleanDiagram, privacyOnlyGraph),
+    }));
+    assert.equal(privacyOnly.coverage.find(row => row.tool === 'documentacao:limites'), undefined);
+    const privacyRow = privacyOnly.coverage.find(row => row.tool === 'documentacao:privacidade');
+    assert.equal(privacyRow?.status, 'skipped');
+    assert.match(privacyRow?.detail ?? '', /achados_omitidos=6;/);
+
+    // Mistura omissões de privacidade com estouro legítimo (>999 achados): apenas o estouro vai para documentacao:limites.
+    const overflowGraph = {modules: [
+      ...privacyOnlyGraph.modules.slice(0, 3),
+      {source: 'src/index.ts', dependencies: Array.from({length: 1004}, () => missing)},
+    ]};
+    const overflow = await validateWithBase(await runCollector({
+      repoDir: tmp, ...syntheticTools(reflection, cleanDiagram, overflowGraph),
+    }));
+    assert.equal(overflow.findings.length, 999);
+    const overflowPrivacy = overflow.coverage.find(row => row.tool === 'documentacao:privacidade');
+    assert.match(overflowPrivacy?.detail ?? '', /achados_omitidos=6;/);
+    const overflowLimits = overflow.coverage.find(row => row.tool === 'documentacao:limites');
+    assert.equal(overflowLimits?.status, 'failed');
+    assert.equal(overflowLimits?.detail, 'linhas_cobertura_omitidas=0; achados_omitidos=5');
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('erro_diagrama_gerado omite rótulos divididos de caminho protegido e o caminho de authorizations é preservado', async () => {
+  const {parseModuleCollectorOutput, writeModuleReport} = await import('../src/verification-modules.ts');
+  const {hasProtectedReportText} = await import(pathToFileURL(join(MODULE_DEPLOY_DIR, 'report-privacy.mjs')).href) as {
+    hasProtectedReportText: (text: string) => boolean;
+  };
+  const authPath = 'src/components/authentication/authorizations/index.ts';
+  assert.equal(hasKnownSecret(authPath), false);
+  assert.equal(hasProtectedReportText(authPath), false);
+
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-p2-fixes-'));
+  const repoDir = join(tmp, 'repo');
+  const dataDirectory = join(tmp, 'data');
+  try {
+    mkdirSync(join(repoDir, 'src', 'components', 'authentication', 'authorizations'), {recursive: true});
+    mkdirSync(dataDirectory, {mode: 0o700});
+    writeFileSync(join(repoDir, authPath), 'export function authorize() {}\n');
+    const authReflection = {kind: 1, name: 'sintético', children: [
+      {kind: 64, name: 'authorize', sources: [{fileName: authPath, line: 1}]},
+    ]};
+    const authGraph = {modules: [{source: authPath, dependencies: []}]};
+    const authDiagram = 'flowchart LR\nA["src"] --> B["components/authentication/authorizations/index.ts"]\n';
+    const authOut = await validateWithBase(await runCollector({
+      repoDir, ...syntheticTools(authReflection, authDiagram, authGraph),
+    }));
+    assert.equal(authOut.coverage.find(row => row.tool === 'documentacao:privacidade'), undefined);
+    assert.ok(authOut.findings.some(f => f.file === authPath));
+    assert.ok(authOut.coverage.some(r => r.tool === 'typedoc:file' && r.detail.startsWith(`arquivo=${authPath};`)));
+    assert.ok(authOut.coverage.some(r => r.tool === 'dependency-cruiser:file' && r.detail.startsWith(`arquivo=${authPath};`)));
+    assert.deepEqual(assembleDocumentationArtifacts(authOut.coverage), {
+      'api.json': {status: 'present', content: JSON.stringify(parseTypedocReport(authReflection, '', repoDir).symbols, null, 2)},
+      'dependencias.mmd': {status: 'present', content: authDiagram},
+    });
+
+    // Agora inclui um caminho protegido dividido no diagrama gerado que falha no parser.
+    const splitToken = 'Z'.repeat(36);
+    const protectedPath = `src/${splitToken}.ts`;
+    writeFileSync(join(repoDir, protectedPath), 'export const hidden = 1;\n');
+    const splitDiagram = `flowchart LR\nA["src"] --> B["${splitToken}.ts"]\n`;
+    const splitGraph = {modules: [{source: authPath, dependencies: []}, {source: protectedPath, dependencies: []}]};
+    const rawSplit = await runCollector({
+      repoDir,
+      ...syntheticTools(authReflection, splitDiagram, splitGraph),
+      mermaidParseFn: async () => {
+        throw new Error(`Parse error on line 2:\nA["src"] --> B["${splitToken}.ts"]\n---^`);
+      },
+    });
+    assert.match(rawSplit.coverage.find(row => row.tool === 'documentacao:privacidade')?.detail ?? '', /artefatos_omitidos=dependencias\.mmd/);
+    const splitOut = parseModuleCollectorOutput(JSON.stringify(rawSplit), {module: 'documentacao'});
+    const mermaidRow = splitOut.coverage.find(row => row.tool === 'mermaid');
+    assert.equal(mermaidRow?.status, 'failed');
+    assert.match(mermaidRow?.detail ?? '', /diagrama_codigo_valido=false; erro_diagrama_gerado=Detalhe omitido por proteção de conteúdo\.$/);
+    assert.equal(JSON.stringify(splitOut).includes(splitToken), false);
+    const report = await writeModuleReport({
+      dataDirectory, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+      runId: '66666666-6666-4666-8666-666666666666', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: splitOut.coverage, fileCoverage: [],
+      achados: [], raw: splitOut,
+    });
+    assert.equal(existsSync(join(report.directory, 'dependencias.mmd')), false);
+    assert.equal(readFileSync(join(report.directory, 'cobertura.md'), 'utf8').includes(splitToken), false);
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('diagnóstico multilinhas truncado antes da reticência é omitido no coletor e continua recusado se injetado na base', async () => {
+  const {parseModuleCollectorOutput, writeModuleReport} = await import('../src/verification-modules.ts');
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-multiline-mask-'));
+  const dataDirectory = join(tmp, 'data');
+  mkdirSync(dataDirectory, {mode: 0o700});
+  const maskedMultiline = `--password\n${'A'.repeat(2005)}…`;
+  assert.equal(hasKnownSecret(maskedMultiline), false);
+  assert.equal(hasKnownSecret(maskedMultiline.replace(/\s*\n\s*/g, ' ')), false);
+  assert.equal(hasKnownSecret(maskedMultiline.slice(0, 2000)), false);
+  assert.equal(hasKnownSecret(maskedMultiline.slice(0, 2000).replace(/\s*\n\s*/g, ' ')), true);
+
+  try {
+    const tools = syntheticTools({kind: 1, name: 'sintético'}, 'flowchart LR\nA-->B\n', {modules: [{source: 'src/billing.ts', dependencies: []}]});
+    const out = parseModuleCollectorOutput(JSON.stringify(await runCollector({
+      repoDir: FIXTURE_CLEAN_DIR,
+      execFn: (bin, args, options) => bin.endsWith('/typedoc')
+        ? {status: 1, stderr: maskedMultiline}
+        : tools.execFn(bin, args, options),
+      mermaidParseFn: async code => {
+        if (code !== 'flowchart LR\nA-->B\n') throw new Error(maskedMultiline);
+        return tools.mermaidParseFn();
+      },
+    })), {module: 'documentacao'});
+    assert.equal(out.coverage.find(row => row.tool === 'typedoc')?.detail, 'Detalhe omitido por proteção de conteúdo.');
+    assert.match(out.coverage.find(row => row.tool === 'documentacao:privacidade')?.detail ?? '', /achados_omitidos=2; detalhes_cobertura_omitidos=1;/);
+    await writeModuleReport({
+      dataDirectory, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+      runId: '77777777-7777-4777-8777-777777777777', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: out.coverage, fileCoverage: [],
+      achados: [], raw: out,
+    });
+
+    // O consumidor mantém a recusa caso o texto truncado antes da reticência chegue sem filtro.
+    const injected = parseModuleCollectorOutput(JSON.stringify({
+      coverage: [{tool: 'typedoc', version: '1', status: 'failed', detail: maskedMultiline.slice(0, 2000)}],
+      findings: [],
+    }), {module: 'documentacao'});
+    await assert.rejects(writeModuleReport({
+      dataDirectory, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+      runId: '88888888-8888-4888-8888-888888888888', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: injected.coverage, fileCoverage: [],
+      achados: [], raw: injected,
+    }), {code: 'VERIFY_SECRET_IN_REPORT'});
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('falha final da CLI com caminho protegido preserva documentacao:privacidade', async () => {
+  const {parseModuleCollectorOutput, writeModuleReport} = await import('../src/verification-modules.ts');
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-cli-catch-'));
+  const dataDirectory = join(tmp, 'data');
+  mkdirSync(dataDirectory, {mode: 0o700});
+  const secretDir = 'W'.repeat(40);
+  try {
+    const cli = spawnSync(process.execPath, [join(MODULE_DEPLOY_DIR, 'collect.mjs')], {
+      env: {...process.env, TMPDIR: join(tmp, secretDir, 'ausente')},
+      encoding: 'utf8',
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(cli.stdout.includes(secretDir), false);
+    const parsed = parseModuleCollectorOutput(cli.stdout, {module: 'documentacao'});
+    assert.deepEqual(parsed.findings, []);
+    assert.deepEqual(parsed.coverage, [
+      {tool: 'documentacao', version: '1', status: 'failed', detail: 'Detalhe omitido por proteção de conteúdo.'},
+      {
+        tool: 'documentacao:privacidade',
+        version: '1',
+        status: 'skipped',
+        detail: 'Proteção de conteúdo. achados_omitidos=0; detalhes_cobertura_omitidos=1; artefatos_omitidos=nenhum',
+      },
+    ]);
+    await writeModuleReport({
+      dataDirectory, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+      runId: '99999999-9999-4999-8999-999999999999', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: parsed.coverage, fileCoverage: [],
+      achados: [], raw: parsed,
+    });
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
   }
 });

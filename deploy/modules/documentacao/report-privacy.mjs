@@ -37,11 +37,34 @@ const UNKNOWN_PATTERNS = [
 
 const REPORT_PATTERNS = UNKNOWN_PATTERNS.map(pattern => new RegExp(pattern.source, pattern.flags.replace('g', '')));
 // A tool may print an absolute path or a longer path. The host's 40-character
-// pattern also accepts slashes, so an added parent can mask a relative match.
-const PATH_CANDIDATE = /[/\\](?=([A-Za-z0-9+/]{40})(?![A-Za-z0-9+]))/g;
+// pattern also accepts slashes, so an added parent can mask a relative match,
+// but a slash immediately after 40 chars means the run is longer and not a match.
+const PATH_CANDIDATE = /[/\\](?=([A-Za-z0-9+/]{40})(?![A-Za-z0-9+/]))/g;
+const FORBIDDEN_REPORT_SEGMENTS = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 
 function hasKnownSecret(text) {
   return REPORT_PATTERNS.some(pattern => pattern.test(text));
+}
+
+export function isSecretClassBasename(file) {
+  const base = file.split(/[/\\]/).pop().toLowerCase();
+  if (base === '.env' || base.startsWith('.env') || base.endsWith('.pem') || base.endsWith('.key') || base.startsWith('id_')) return true;
+  if (base === '.npmrc' || base === '.netrc' || base === '.pgpass') return true;
+  if (base.endsWith('.p12') || base.endsWith('.pfx') || base.endsWith('.jks')) return true;
+  if (base.endsWith('.tfstate') || base.endsWith('.tfvars')) return true;
+  if (base.startsWith('credentials')) return true;
+  if (base.startsWith('service-account') && base.endsWith('.json')) return true;
+  return base.includes('kubeconfig');
+}
+
+export function hasForbiddenReportSegment(part) {
+  return part === '.git' || part === '.github' || part === '.ai' || part === 'node_modules'
+    || part.startsWith('.env') || FORBIDDEN_REPORT_SEGMENTS.has(part.toLowerCase());
+}
+
+export function isProtectedReportPath(file) {
+  if (hasProtectedReportText(file) || isSecretClassBasename(file)) return true;
+  return file.split(/[/\\]/).some(hasForbiddenReportSegment);
 }
 
 export function hasProtectedReportText(text) {
