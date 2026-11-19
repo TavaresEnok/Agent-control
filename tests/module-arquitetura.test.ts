@@ -162,6 +162,8 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
   assert.equal(normalizeRepoPath('/src/main.ts', '/tmp/work/repo'), '.');
   assert.equal(normalizeRepoPath(' draft.ts', '/tmp/work/repo'), ' draft.ts');
   assert.equal(normalizeRepoPath('./..draft.ts', '/tmp/work/repo'), '..draft.ts');
+  assert.equal(normalizeRepoPath('/tmp/work\\repo/src/a.ts', '/tmp/work/repo'), '.');
+  assert.equal(normalizeRepoPath('src/a\\b.ts', '/tmp/work/repo'), '.');
   assert.equal(clampLine(0), 1);
   assert.equal(clampLine(-5), 1);
   assert.equal(clampLine(14.9), 14);
@@ -187,6 +189,19 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
     ]);
     symlinkSync(src, join(dst, 'alias'));
     assert.throws(() => copyRepoSafely(join(dst, 'alias', 'src'), dst), /ARQUITETURA_REPO_UNREADABLE/);
+    assert.throws(() => copyRepoSafely(dst + '/alias/../src', dst), /ARQUITETURA_REPO_UNREADABLE/);
+    const refusedDestination = copyRepoSafely(src, join(dst, 'alias', 'uncreated'));
+    assert.ok(refusedDestination.failure);
+    assert.equal(existsSync(join(src, 'uncreated')), false);
+    const target = join(dst, 'busca');
+    mkdirSync(target);
+    const nested = join(target, 'legivel');
+    mkdirSync(nested);
+    writeFileSync(join(nested, 'controle.ts'), 'export const controle = 1;');
+    chmodSync(target, 0o111);
+    try {
+      assert.deepEqual(copyRepoSafely(nested, join(dst, 'novo')).copiedFiles, ['controle.ts']);
+    } finally { chmodSync(target, 0o700); }
     const limited = copyRepoSafely(src, dst, {maxFiles: 0});
     assert.equal(limited.stoppedAt, 'node_modules');
     assert.equal(existsSync(join(dst, 'src', 'escape.ts')), false);

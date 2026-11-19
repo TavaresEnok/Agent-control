@@ -70,10 +70,12 @@ function toPosix(value) {
 }
 
 export function normalizeRepoPath(filePath, repoRoot) {
-  const spelling = toPosix(filePath);
+  const spelling = String(filePath ?? '');
+  // The collector and its tools run on Linux. A backslash is part of the name.
+  if (spelling.includes('\\') || repoRoot?.includes('\\')) return '.';
   if (!spelling) return '.';
   const full = posix.normalize(spelling);
-  const root = repoRoot ? toPosix(resolve(repoRoot)) : undefined;
+  const root = repoRoot ? resolve(repoRoot) : undefined;
   if (posix.isAbsolute(full) && !root) return '.';
   const normalized = posix.isAbsolute(full) ? posix.relative(root, full) : full;
   return !normalized || normalized === '..' || normalized.startsWith('../') ? '.' : normalized;
@@ -147,6 +149,30 @@ function copyPrivateFile(srcPath, destPath, maxFileBytes) {
   }
 }
 
+// O_PATH lets the Linux collector traverse ancestors that grant search alone.
+// Each next component is opened relative to an already held directory.
+const searchDirectory = 0o10000000 | fsConstants.O_DIRECTORY;
+function openDirectoryChain(root, path, create = false) {
+  if (path.split('/').includes('..')) throw Object.assign(new Error('travessia de diretório'), {code: 'EINVAL'});
+  let fd = openSync(root, searchDirectory);
+  try {
+    for (const part of path.split('/').filter(part => part && part !== '.')) {
+      const next = join('/proc/self/fd', String(fd), part);
+      if (create) {
+        try { mkdirSync(next, {mode: 0o700}); }
+        catch (error) { if (error.code !== 'EEXIST') throw error; }
+      }
+      const child = openSync(next, searchDirectory | fsConstants.O_NOFOLLOW);
+      closeSync(fd);
+      fd = child;
+    }
+    return fd;
+  } catch (error) {
+    closeSync(fd);
+    throw error;
+  }
+}
+
 /**
  * Copia apenas arquivos regulares e diretórios seguros de sourceRoot para destRoot,
  * ignorando symlinks, sockets, dispositivos, diretórios de build/vendor e arquivos > 2 MiB.
@@ -158,6 +184,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   const skipped = [];
   let stoppedAt;
   let failure;
+  let destinationFd;
 
   function walk(directoryPath, currentRel) {
     let directory;
@@ -194,6 +221,10 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
         stoppedAt = relPath;
         return;
       }
+      if (entry.name.includes('\\')) {
+        skipped.push({file: relPath, reason: 'nome_nao_suportado'});
+        continue;
+      }
       let st;
       try {
         st = lstatSync(srcPath);
@@ -213,10 +244,10 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
       } else if (st.size > maxFileBytes) {
         skipped.push({file: relPath, reason: 'limite_bytes'});
       } else {
-        const destPath = join(destRoot, relPath);
         try {
-          mkdirSync(dirname(destPath), {recursive: true});
-          copyPrivateFile(srcPath, destPath, maxFileBytes);
+          const parent = openDirectoryChain('/proc/self/fd/' + destinationFd, currentRel, true);
+          try { copyPrivateFile(srcPath, join('/proc/self/fd', String(parent), entry.name), maxFileBytes); }
+          finally { closeSync(parent); }
         } catch (err) {
           failure = {file: relPath, code: err.code ?? 'ERR'};
           return;
@@ -226,26 +257,20 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
     }
   }
 
+  const initial = path => posix.isAbsolute(path) ? '/' : process.cwd();
+  let rootFd;
   try {
-    mkdirSync(destRoot, {recursive: true});
-  } catch (err) {
-    return {copiedFiles, skipped, failure: {file: '.', code: err.code ?? 'ERR'}};
-  }
-  const flags = fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW;
-  let rootFd = openSync('/', flags);
-  try {
-    for (const component of resolve(sourceRoot).split('/').filter(Boolean)) {
-      const next = openSync(join('/proc/self/fd', String(rootFd), component), flags);
-      closeSync(rootFd);
-      rootFd = next;
-    }
+    rootFd = openDirectoryChain(initial(sourceRoot), sourceRoot);
     const anchor = '/proc/self/fd/' + rootFd;
     accessSync(anchor, fsConstants.R_OK | fsConstants.X_OK);
-    walkOpened(anchor, '');
+    try { destinationFd = openDirectoryChain(initial(destRoot), destRoot, true); }
+    catch (error) { return {copiedFiles, skipped, failure: {file: '.', code: error.code ?? 'ERR'}}; }
+    try { walkOpened(anchor, ''); }
+    finally { closeSync(destinationFd); }
   } catch (error) {
     if (!error.code) throw error;
     throw new Error('ARQUITETURA_REPO_UNREADABLE: raiz não acessível (' + error.code + ')', {cause: error});
-  } finally { closeSync(rootFd); }
+  } finally { if (rootFd !== undefined) closeSync(rootFd); }
   return {copiedFiles, skipped, stoppedAt, failure};
 }
 
