@@ -993,3 +993,4 @@ PAUSADO-COTA
 - 19/11/2026 19:28 UTC — revisor-C5-ACEITE-SINAL iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 19:28 UTC — Aceite de entrega-qa-publicacao em 53012d07 passou em TypeScript, suíte oficial, complementares e laboratório.
 - 19/11/2026 19:28 UTC — Aceite de prontidao em 0976b46a iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
+- 19/11/2026 19:28 UTC — Integração C2 em task/personal-activation concluída no merge 7902cc97 do candidato 53012d07; 266 arquivos da suíte, complementares e laboratório com imagem e CLI no mesmo candidato. O backup anterior foi conferido. A aplicação conjunta com migrações e reinício fica para o fechamento dos oito módulos.
