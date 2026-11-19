@@ -1838,11 +1838,12 @@ function timeoutDynamicPositions(words, spec) {
           // A literal option prefix constrains the first expanded word.
           if (/^(?:--(?:signal|kill-after)=|-[sk])/.test(value)) {
             next.add('options');
+            if (/^-[sk]/.test(value)) next.add(value[1] === 's' ? 'signal' : 'kill-after');
             if (variable) { next.add('command'); next.add('signal'); next.add('kill-after'); next.add('duration'); }
           } else if (/^[^$`*?\[\]-]/.test(value)) {
             // A concatenated literal prefix cannot disappear or become an option.
             const prefix = value.split(/[$`*?\[\]]/, 1)[0];
-            if (/^[+0-9.]/.test(prefix)) next.add('command');
+            if (/^[+0-9.iI]/.test(prefix)) next.add('command');
           } else {
             next.add('options'); // flag
             next.add('duration'); // terminator
@@ -2228,29 +2229,44 @@ function backupQuery(binary, args) {
 
 // Options with operands in the supported PostgreSQL command subset.
 function postgresOperands(args) {
-  const values = new Set(['-h', '--host', '-p', '--port', '-U', '--username', '-d', '--dbname', '-f', '--file', '-F', '--format', '-n', '--schema', '-t', '--table', '-j', '--jobs']);
-  const operands = [];
+  const values = new Set(['h', 'p', 'U', 'd', 'f', 'F', 'n', 't', 'j']);
+  const longValues = new Set(['--host', '--port', '--username', '--dbname', '--file', '--format', '--schema', '--table', '--jobs']);
+  const options = [];
   let db = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--') { operands.push(...args.slice(i + 1)); break; }
-    const name = arg.startsWith('--') ? arg.split('=', 1)[0] : arg.slice(0, 2);
-    if (values.has(name)) {
-      const inline = arg.startsWith('--') ? (arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : null) : (arg.length > 2 ? arg.slice(2) : null);
-      const value = inline === null ? args[++i] : inline;
-      if (!value || (inline === null && value.startsWith('-'))) return {valid: false, db: false};
-      if (name === '-d' || name === '--dbname') db = true;
-    } else operands.push(arg);
+    if (arg === '--') break;
+    if (arg.startsWith('--')) {
+      const name = arg.split('=', 1)[0];
+      if (longValues.has(name)) {
+        const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++i];
+        if (value === undefined || value === '') return {valid: false, db: false};
+        if (name === '--dbname') db = true;
+      } else options.push(arg);
+    } else if (arg.startsWith('-') && arg !== '-') {
+      for (let j = 1; j < arg.length; j++) {
+        const ch = arg[j];
+        if (values.has(ch)) {
+          const value = arg.slice(j + 1) || args[++i];
+          if (value === undefined || value === '') return {valid: false, db: false};
+          if (ch === 'd') db = true;
+          break;
+        }
+        options.push(`-${ch}`);
+      }
+    }
   }
-  return {valid: true, db, operands};
+  return {valid: true, db, options};
 }
 
 function isFindRetention(args) {
   let age = false;
   for (let i = 0; i < args.length; i++) {
     if (/^-(?:exec|execdir|ok|okdir)$/.test(args[i])) {
-      while (++i < args.length && args[i] !== ';' && args[i] !== '+') {}
-    } else if (/^-(?:name|iname|path|ipath|regex|iregex|type|user|group|perm|size|newer|mmin|atime|ctime|amin|cmin|maxdepth|mindepth)$/.test(args[i])) { i++; }
+      while (++i < args.length && args[i] !== ';' && !(args[i] === '+' && args[i - 1] === '{}')) {}
+    } else if (args[i] === '-fprintf') { i += 2; }
+    else if (/^-(?:name|iname|path|ipath|regex|iregex|type|user|group|perm|size|newer|mmin|atime|ctime|amin|cmin|maxdepth|mindepth|fprint|fprint0|fls)$/.test(args[i])) { i++; }
+    else if (args[i] === '-o' || args[i] === '-or' || args[i] === '(' || args[i] === ')') { age = false; }
     else if (args[i] === '-mtime' && /^\+\d+$/.test(args[i + 1] ?? '')) { age = true; i++; }
     else if (args[i] === '-delete' && age) return true;
   }
@@ -2267,7 +2283,8 @@ function classifyBackupOperation(binary, args, onIncomplete) {
       : undefined;
   const pg = /^(?:pg_dump|pg_restore)$/.test(binary) ? postgresOperands(args) : null;
   if (pg && !pg.valid) return {};
-  if (backupQuery(binary, pg?.operands ?? args)) return {};
+  const optionArgs = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--'));
+  if (backupQuery(binary, pg?.options ?? optionArgs)) return {};
   if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
     onIncomplete();
     return {};
@@ -2276,10 +2293,10 @@ function classifyBackupOperation(binary, args, onIncomplete) {
   const backup = dump || routine === 'backup' || (binary === 'restic' && subcommand === 'backup')
     || (binary === 'borg' && subcommand === 'create')
     || (binary === 'sqlite3' && args.some(arg => /^\.backup(?:\s|$)/.test(arg)));
-  const listOnly = binary === 'pg_restore' && args.some(arg => arg === '--list' || /^-[vl]*l[vl]*$/.test(arg));
+  const listOnly = binary === 'pg_restore' && pg.options.some(arg => arg === '--list' || arg === '-l');
   const catalog = listOnly || ((binary === 'restic' || binary === 'borg') && subcommand === 'check');
   const restoresDb = binary === 'pg_restore' && !listOnly && pg.db;
-  const dryRun = args.includes('--dry-run') || (binary === 'borg' && args.includes('-n'));
+  const dryRun = optionArgs.includes('--dry-run') || (binary === 'borg' && optionArgs.includes('-n'));
   if (routine === 'restore-check') onIncomplete();
   const resticDeclared = binary === 'restic' && !dryRun && /^(?:restore|forget)$/.test(subcommand ?? '')
     && resticRoutine(subcommand, parameters, onIncomplete);
@@ -2302,17 +2319,6 @@ function isBackupCandidateSegment(segWords, depth = 0) {
   const args = words.map(word => word.text);
   if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(args[0] ?? '') && args[1]) {
     const inner = shellWords(args[1]);
-    if (depth >= 2) {
-      if (!inner) return BACKUP_CANDIDATE_RE.test(args[1]);
-      return splitShellSegments(inner.words).some(segment => {
-        const unwrapped = unwrapCommandWords(segment);
-        const binary = basename(unwrapped.words[0]?.text ?? '');
-        if (unwrapped.ambiguous || /^(?:ba|da|k|z)?sh$/.test(binary)) return BACKUP_CANDIDATE_RE.test(args[1]);
-        let incomplete = false;
-        const operation = classifyBackupOperation(binary, unwrapped.words.slice(1).map(word => word.text), () => { incomplete = true; });
-        return incomplete || Boolean(operation.backup || operation.catalog || operation.restore || operation.rotation);
-      });
-    }
     if (!inner) return BACKUP_CANDIDATE_RE.test(args[1]);
     return splitShellSegments(inner.words).some(segment => isBackupCandidateSegment(segment, depth + 1));
   }
@@ -2352,15 +2358,24 @@ function evaluateShellSegment(segWords, depth = 0) {
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return res;
   if (depth >= 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
-    const candidate = words[1].text;
-    res.partialAlert = /\b(?:alertmanager|npm|pnpm|node|curl|wget|logrotate)\b/.test(candidate);
-    res.partialDisk = /\b(?:df|docker|npm|pnpm|node)\b/.test(candidate);
+    const inner = shellWords(words[1].text);
+    if (!inner) {
+      res.partialAlert = /\b(?:alertmanager|npm|pnpm|node|curl|wget|logrotate)\b/.test(words[1].text);
+      res.partialDisk = /\b(?:df|docker|npm|pnpm|node)\b/.test(words[1].text);
+    } else {
+      for (const segment of splitShellSegments(inner.words)) {
+        const sub = evaluateShellSegment(segment, depth + 1);
+        res.partialAlert ||= sub.alerting || sub.logrotate || sub.partialAlert;
+        res.partialDisk ||= sub.disk || sub.partialDisk;
+      }
+    }
     return res;
   }
   if (depth < 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
     const inner = shellWords(words[1].text);
     if (!inner) {
-      res.incomplete = true;
+      res.partialAlert = /\b(?:alertmanager|npm|pnpm|node|curl|wget|logrotate)\b/.test(words[1].text);
+      res.partialDisk = /\b(?:df|docker|npm|pnpm|node)\b/.test(words[1].text);
       return res;
     }
     for (const innerSeg of splitShellSegments(inner.words)) {
@@ -2461,7 +2476,7 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
           return;
         }
         const inner = shellWords(args[1]);
-        if (!inner) { onIncomplete(line, 'comando de backup ou restauração com sintaxe não coberta'); return; }
+        if (!inner) { if (isBackupCandidateSegment(segment, depth)) onIncomplete(line, 'comando de backup ou restauração com sintaxe não coberta'); return; }
         if (inner.operator) {
           if (splitShellSegments(inner.words).some(part => isBackupCandidateSegment(part, depth + 1))) onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
           return;

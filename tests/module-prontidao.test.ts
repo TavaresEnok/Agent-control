@@ -2596,6 +2596,8 @@ test('R12: posições possíveis de timeout e rotinas condicionais por pilar', (
     writeFileSync(join(dir, 'app.service'), '[Service]\nStandardOutput=append:/var/log/app.log\n');
     const pillars = ['alertas-logs', 'disco-memoria', 'backup-restauracao'];
     const rules = ['PRONTIDAO-ALERTA-AUSENTE', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO', 'PRONTIDAO-BACKUP-AUSENTE'];
+    const quoteShell = (body: string) => `'${body.replace(/'/g, `'\\''`)}'`;
+    const nestShell = (body: string) => `sh -c ${quoteShell(body)}`;
     const cases: [string, number | null, boolean][] = [
       ['timeout "$OPCAO" TERM 30s npm run personal:watch', 0, false],
       ['timeout --signal=$OPCAO npm run personal:watch', 0, false],
@@ -2616,6 +2618,16 @@ test('R12: posições possíveis de timeout e rotinas condicionais por pilar', (
       ['timeout -- -0x0p0 npm run personal:watch', null, true],
       ['timeout -- -0x0s npm run personal:watch', null, true],
       ['timeout -- 30s pg_dump -h db.example app', null, true],
+      ['pg_dump -vh', null, false],
+      ['timeout -- 1,5s pg_dump -vh', null, false],
+      ["pg_dump -n '-tenant' app", null, true],
+      ['restic backup -- --help', null, true],
+      ['timeout -s"$SINAL" TERM 30s df -P /', 1, false],
+      ['timeout i"$RESTO" df -P /', 1, false],
+      [nestShell(nestShell(nestShell('timeout -- 1,5s echo pg_dump'))), null, false],
+      [nestShell(nestShell(nestShell('echo df'))), null, false],
+      [nestShell(nestShell(nestShell('df -P /'))), 1, false],
+      [nestShell(nestShell(nestShell('pg_dump db'))), 2, false],
       ['pg_dump -h', null, false],
       ['pg_restore -d app -h', null, false],
       ['timeout -- 1,5s pg_dump -h', null, false],
@@ -2636,6 +2648,12 @@ test('R12: posições possíveis de timeout e rotinas condicionais por pilar', (
 
     ];
     for (const [line, rule, present] of [
+      ['pg_restore -d app -vh', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', true],
+      ['pg_restore -d app -- --list', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', false],
+      ["pg_dump db\nfind . -exec echo + '-mtime' '+7' '-delete' '{}' ';'", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
+      ["pg_dump db\nfind . -mtime +7 -fprint '-delete'", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
+      ['pg_dump db\nfind . -mtime +7 -o -delete', 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
+      ["pg_dump db\nfind . -exec echo '{}' + -mtime +7 -delete", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', false],
       ['pg_restore -d app -h', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', true],
       ['pg_restore -d app -h db.example', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', false],
       ["pg_dump db; find . -exec echo '-mtime' '+7' '-delete' '{}' +", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
@@ -2646,12 +2664,19 @@ test('R12: posições possíveis de timeout e rotinas condicionais por pilar', (
       const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
       assert.equal(out.findings.some(f => f.rule === rule), present, line);
     }
+    for (const duration of ['30s', '1,5s']) {
+      const line = `timeout -- ${duration} sh -c 'echo "sem fechamento' pg_dump`;
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
+      const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+      assert.equal(out.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'ok', line);
+      assert.ok(out.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-AUSENTE'), line);
+    }
     for (const [line, partial, positive] of cases) {
       writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
       const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
       for (const [i, pillar] of pillars.entries()) {
         assert.equal(out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status, i === partial ? 'failed' : 'ok', `${line}: ${pillar}`);
-        const positivePillar = positive && (line.includes('pg_dump') ? i === 2 : i === 0);
+        const positivePillar = positive && (line.includes('pg_dump') || line.startsWith('restic') ? i === 2 : i === 0);
         assert.equal(out.findings.some(f => f.rule === rules[i]), i !== partial && !positivePillar, `${line}: ${rules[i]}`);
       }
     }
