@@ -1,0 +1,660 @@
+import assert from 'node:assert/strict';
+import {execFileSync, spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import {join} from 'node:path';
+import test from 'node:test';
+import {fileURLToPath} from 'node:url';
+
+const moduleDir = fileURLToPath(new URL('../deploy/modules/conformidade/', import.meta.url));
+const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
+
+function python(code: string) {
+  return execFileSync('python3', ['-B', '-c', code, fixtures], {
+    cwd: moduleDir,
+    encoding: 'utf8',
+  });
+}
+
+test('C9 fixa a base, os wheels e o lock que a imagem instala', () => {
+  const lock = JSON.parse(readFileSync(join(moduleDir, 'tools.lock.json'), 'utf8'));
+  const dockerfile = readFileSync(join(moduleDir, 'Dockerfile'), 'utf8');
+  const requirements = readFileSync(join(moduleDir, 'requirements.lock'), 'utf8');
+  assert.match(lock.baseImage.platformDigest, /^sha256:[a-f0-9]{64}$/);
+  assert.ok(dockerfile.includes('python@' + lock.baseImage.platformDigest));
+  assert.ok(dockerfile.includes('eclipse-temurin@' + lock.jreImage.platformDigest));
+  for (const aptPackage of lock.aptPackages) assert.ok(dockerfile.includes(aptPackage.sha256));
+  assert.ok(dockerfile.includes('--no-deps --require-hashes --only-binary=:all:'));
+  assert.equal(createHash('sha256').update(requirements).digest('hex'), lock.requirementsLockSha256);
+  for (const tool of lock.tools) {
+    assert.match(tool.sha256, /^[a-f0-9]{64}$/);
+    if (tool.name === 'ort') {
+      assert.ok(dockerfile.includes(`--checksum=sha256:${tool.sha256} ${tool.url}`));
+    } else {
+      assert.ok(requirements.split('\n').some(line =>
+        line.includes(tool.version) && line.includes('--hash=sha256:' + tool.sha256)));
+    }
+  }
+});
+
+test('C9 mantém a versão de pluggy compatível com os hooks de classe do plugincode', () => {
+  const requirements = readFileSync(join(moduleDir, 'requirements.lock'), 'utf8');
+  assert.match(requirements, /^plugincode==32\.0\.0 --hash=sha256:344bb9943fcf4d6d05669c3c61efd4093fffa6a290fba7c5c11db15f2b51305e$/m);
+  assert.match(requirements, /^pluggy==1\.6\.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746$/m);
+});
+
+test('C9 valida dígitos de CPF e indica destino local sem copiar a linha ou os valores', () => {
+  const result = JSON.parse(python(String.raw`
+from pathlib import Path
+import json, re, sys
+from collector import Report
+from lgpd_analyzer import CPF_PATTERN, inspect_fields, valid_cpf
+assert valid_cpf("123.456.789-09")
+assert valid_cpf("12345678909")
+assert not valid_cpf("123.456.789-08")
+assert not valid_cpf("111.111.111-11")
+assert re.search(CPF_PATTERN, " CPF: 123.456.789-09\n")
+assert not re.search(CPF_PATTERN, "ticket123456789090")
+assert not re.search(CPF_PATTERN, "123.456.789-090")
+reports = []
+for scenario in ("com-defeito", "limpo"):
+    original = Path(sys.argv[1], scenario, "src", "telemetry.ts").read_text()
+    report = Report()
+    inspect_fields(original, "src/telemetry.ts", report)
+    reports.append(report.output())
+print(json.dumps(reports))
+`));
+  const [dirty, clean] = result;
+  assert.ok(dirty.findings.some((row: {rule: string; line: number}) =>
+    row.rule === 'PII_POSSIBLE_LOG' && row.line === 3));
+  assert.deepEqual(clean.findings, []);
+  assert.doesNotMatch(JSON.stringify(result), /123\.456\.789|console\.log/);
+});
+
+test('C9 relaciona campos e destinos em linhas distintas por argumentos e variáveis locais', () => {
+  const cases = JSON.parse(python(String.raw`
+import json
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+sources = {
+    "binding": """const body = JSON.stringify({ cpf: cliente.cpf, marker: "SYNTHETIC_VALUE" })
+fetch(url, { method: "POST", body })""",
+    "inline": """fetch(
+    url,
+    { body: JSON.stringify({cpf: cliente.cpf}) },
+)""",
+    "alias": """const body = JSON.stringify({ cpf: cliente.cpf })
+const payload = body;
+axios.post(url, payload);""",
+    "unrelated": """const body = JSON.stringify({ cpf: cliente.cpf })
+fetch(url, { body: fixture.body })""",
+    "reassigned": """let body = JSON.stringify({ cpf: cliente.cpf })
+body = "SYNTHETIC_VALUE"
+fetch(url, { body })""",
+    "different_scope": """{
+  const body = JSON.stringify({ cpf: cliente.cpf })
+}
+fetch(url, { body })""",
+    "literal": """const body = "fake cpf SYNTHETIC_VALUE"
+fetch(url, { body })""",
+}
+reports = {}
+for name, source in sources.items():
+    report = Report()
+    inspect_fields(source, "sample.ts", report)
+    reports[name] = report.output()
+print(json.dumps(reports))
+`));
+  for (const [name, line, source] of [
+    ['binding', 2, 1], ['inline', 1, 3], ['alias', 3, 1],
+  ] as const) {
+    const findings = cases[name].findings.filter((row: {rule: string}) => row.rule === 'PII_POSSIBLE_NETWORK');
+    assert.equal(findings.length, 1, name);
+    assert.equal(findings[0].line, line, name);
+    assert.ok(findings[0].evidence.includes(`linha ${source}.`), name);
+  }
+  for (const name of ['unrelated', 'reassigned', 'different_scope', 'literal']) {
+    assert.ok(cases[name].findings.every((row: {rule: string}) => row.rule !== 'PII_POSSIBLE_NETWORK'), name);
+    assert.ok(cases[name].findings.some((row: {rule: string}) => row.rule === 'PII_FIELD'), name);
+  }
+  assert.doesNotMatch(JSON.stringify(cases), /SYNTHETIC_VALUE|cliente\.cpf|JSON\.stringify|axios\.post/);
+});
+
+test('C9 distingue tipos, interpolações executáveis e texto estático em JavaScript e TypeScript', () => {
+  const cases = JSON.parse(python(String.raw`
+import json
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+typed = """const payload: Record<string, { cpf?: string }> = { cpf: request.cpf };
+fetch(url, payload);
+const neutral: { cpf?: string; tag?: string } = { tag: "SYNTHETIC_VALUE" };
+fetch(url, neutral);
+const alias:
+    string = payload.cpf;
+logger.info(alias);"""
+templates = r"""const alias = request.email;
+const message = ~literal cpf SYNTHETIC_VALUE #{choose("}", ~nested #{alias}~)}~;
+logger.info(message);
+logger.debug(~live #{request.cpf}~);
+logger.log(~escaped cpf \#{request.cpf} SYNTHETIC_VALUE~);
+logger.log("example cpf SYNTHETIC_VALUE");
+// logger.log(request.cpf, "SYNTHETIC_VALUE");
+logger.log(ready ? "cpf" : "SYNTHETIC_VALUE");
+fetch(url, {"cpf": candidate});
+logger.log(~first line
+#{({item: alias}).item}
+last line~);
+localStorage.setItem("key", ~#{ready ? alias : "public"}~);
+fetch(url, {alias: "SYNTHETIC_VALUE"});
+fetch(url, {...alias});
+const example = 'logger.warn(request.cpf, "SYNTHETIC_VALUE")';
+/* logger.warn(request.cpf, "SYNTHETIC_VALUE"); */""".replace("~", chr(96)).replace("#{", chr(36) + "{")
+
+reports = []
+for source, file in ((typed, "sample.ts"), (templates, "sample.js")):
+    report = Report()
+    inspect_fields(source, file, report)
+    reports.append(report.output())
+print(json.dumps(reports))
+`));
+  const destinations = (report: {findings: {rule: string; line: number; evidence: string}[]}) =>
+    report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_')).map(row =>
+      [row.rule, row.line, row.evidence.match(/linha (\d+)/)?.[1]]);
+  assert.deepEqual(destinations(cases[0]), [
+    ['PII_POSSIBLE_NETWORK', 2, '1'], ['PII_POSSIBLE_LOG', 7, '6'],
+  ]);
+  assert.deepEqual(destinations(cases[1]), [
+    ['PII_POSSIBLE_LOG', 3, '1'], ['PII_POSSIBLE_LOG', 4, '4'],
+    ['PII_POSSIBLE_NETWORK', 9, '9'], ['PII_POSSIBLE_LOG', 10, '1'],
+    ['PII_POSSIBLE_STORAGE', 13, '1'], ['PII_POSSIBLE_NETWORK', 15, '1'],
+  ]);
+  assert.ok(cases.every((row: {coverage: {status: string}[]}) => row.coverage[0].status === 'ok'));
+  assert.doesNotMatch(JSON.stringify(cases), /SYNTHETIC_VALUE|request\.(cpf|email)|logger\.log/);
+});
+
+test('C9 lê blocos ascendentes e reatribui a variável visível respeitando o sombreamento', () => {
+  const report = JSON.parse(python(String.raw`
+import json
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+source = """let payload = request.cpf;
+{
+  { fetch(url, {body: payload}); }
+  payload = "SYNTHETIC_VALUE";
+}
+fetch(url, payload);
+{ payload = request.email; }
+fetch(url, payload);
+{
+  fetch(url, payload);
+  let payload: string;
+  fetch(url, payload);
+  { payload = request.phone; }
+  fetch(url, payload);
+  payload = "SYNTHETIC_VALUE";
+  fetch(url, payload);
+}
+other. /* synthetic member assignment */ payload = "SYNTHETIC_VALUE";
+fetch(url, payload);"""
+report = Report()
+inspect_fields(source, "sample.ts", report)
+print(json.dumps(report.output()))
+`));
+  const flows = report.findings.filter((row: {rule: string}) => row.rule === 'PII_POSSIBLE_NETWORK');
+  assert.deepEqual(flows.map((row: {line: number; evidence: string}) =>
+    [row.line, row.evidence.match(/linha (\d+)/)?.[1]]), [[3, '1'], [8, '7'], [14, '13'], [19, '7']]);
+  assert.equal(report.coverage[0].status, 'ok');
+  assert.doesNotMatch(JSON.stringify(report), /SYNTHETIC_VALUE|request\.(cpf|email|phone)/);
+});
+
+test('C9 preserva a origem já lida e informa cobertura parcial em chamadas acima do limite', () => {
+  python(String.raw`
+import json
+from collector import Report
+from lgpd_analyzer import JS_EXPRESSION_LIMIT, inspect_fields
+
+prefix = 'const payload = request.cpf;\nlogger.info('
+long_literal = '"' + 'SYNTHETIC_VALUE' * JS_EXPRESSION_LIMIT + '"'
+boundary = 'payload'.ljust(JS_EXPRESSION_LIMIT)
+cases = (
+    (prefix + 'payload, ' + long_literal + ');', 'failed', 1),
+    (prefix + 'request.email, ' + long_literal + ');', 'failed', 2),
+    (prefix + long_literal + ', payload);', 'failed', None),
+    (prefix + ' ' * (JS_EXPRESSION_LIMIT - 3) + 'cpfSuffix);', 'failed', None),
+    (prefix + boundary + ');', 'ok', 1),
+    (prefix + boundary + ' );', 'failed', 1),
+)
+for text, status, origin in cases:
+    report = Report()
+    inspect_fields(text, "sample.ts", report)
+    result = report.output()
+    warnings = [row for row in result["findings"] if row["rule"] == "PII_POSSIBLE_LOG"]
+    assert len(warnings) == int(origin is not None), warnings
+    if origin is not None:
+        assert warnings[0]["line"] == 2 and f"linha {origin}." in warnings[0]["evidence"]
+    assert result["coverage"][0]["status"] == status
+    assert report.has_errors == (status == "failed")
+    if status == "failed":
+        assert "Cobertura parcial: 1" in result["coverage"][0]["detail"]
+    assert "SYNTHETIC_VALUE" not in json.dumps(result)
+`);
+});
+
+test('C9 aceita o piso do telefone e preserva o piso das demais entidades', () => {
+  const result = JSON.parse(python(String.raw`
+import json
+import sys
+from types import SimpleNamespace as Namespace
+from unittest.mock import Mock, patch
+from collector import Report
+from lgpd_analyzer import create_presidio, inspect_entities, presidio_diagnostics
+
+class PhoneRecognizer:
+    SCORE = 0.4
+    score_thresholds = {}
+
+class PatternRecognizer:
+    def __init__(self, **_options):
+        pass
+
+phone = PhoneRecognizer()
+person = Namespace(score_thresholds={})
+
+class SyntheticAnalyzer:
+    def __init__(self, *, default_score_threshold, **_options):
+        self.default = default_score_threshold
+        self.registry = Mock()
+
+    def get_recognizers(self, *, language):
+        assert language == "en"
+        return [phone, person]
+
+    def analyze(self, *, text, language, entities):
+        scores = (("PERSON", 0.59), ("BR_CPF", 0.59), ("EMAIL_ADDRESS", 0.59),
+                  ("PHONE_NUMBER", 0.4 if text == "+1 202-555-0100" else 0.39))
+        limits = {**person.score_thresholds, **phone.score_thresholds}
+        return [Namespace(entity_type=entity, score=score, start=0, end=len(text))
+                for entity, score in scores if entity in entities and score >= limits.get(entity, self.default)]
+
+packages = {
+    "spacy": Namespace(util=Namespace(is_package=lambda _name: True)),
+    "tldextract": Namespace(TLDExtract=Mock()),
+    "presidio_analyzer": Namespace(AnalyzerEngine=SyntheticAnalyzer, Pattern=Mock(), PatternRecognizer=PatternRecognizer),
+    "presidio_analyzer.nlp_engine": Namespace(NerModelConfiguration=Mock(), SpacyNlpEngine=Mock()),
+    "presidio_analyzer.predefined_recognizers": Namespace(EmailRecognizer=object, PhoneRecognizer=PhoneRecognizer),
+}
+with patch.dict(sys.modules, packages):
+    analyzer = create_presidio()
+
+report = Report()
+with presidio_diagnostics() as diagnostics:
+    assert inspect_entities(analyzer, "+1 202-555-0100", "phone.txt", "2.2.366", report, diagnostics)
+    assert inspect_entities(analyzer, "000", "control.txt", "2.2.366", report, diagnostics)
+print(json.dumps(report.output()))
+`));
+  assert.deepEqual(result.findings.map((row: {rule: string; file: string; line: number}) =>
+    [row.rule, row.file, row.line]), [['PII_PHONE_NUMBER', 'phone.txt', 1]]);
+  assert.ok(result.coverage.every((row: {status: string}) => row.status === 'ok'));
+  assert.doesNotMatch(JSON.stringify(result), /202-555-0100/);
+});
+
+test('C9 marca timeout interno como falha parcial e suprime diagnósticos nas duas saídas', () => {
+  const run = spawnSync('python3', ['-B', '-c', String.raw`
+import logging, sys, warnings
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+from collector import inspect_privacy, main
+
+class SyntheticAnalyzer:
+    def analyze(self, *, text, language, **_options):
+        if language == "pt":
+            return []
+        if text.startswith("interrompido"):
+            try:
+                raise TimeoutError(text)
+            except TimeoutError:
+                logging.getLogger("presidio-analyzer").warning(
+                    "Regex pattern '%s' timed out after %s seconds, skipping.", text, 60, exc_info=True)
+            return [SimpleNamespace(entity_type="EMAIL_ADDRESS", score=1, start=0, end=len(text))]
+        if text.startswith("excecao"):
+            raise TimeoutError(text)
+        warnings.warn(text)
+        print(text)
+        print(text, file=sys.stderr)
+        logging.getLogger("presidio-analyzer").warning("%s", text)
+        logging.getLogger("fixture").warning("%s", text)
+        return []
+
+def privacy_only(root, report):
+    selected = {path.name: path for path in sorted(root.iterdir())}
+    inspect_privacy(selected, "2.2.366", report)
+
+with TemporaryDirectory() as scratch:
+    root = Path(scratch)
+    for name, prefix in (("a-interrompido.txt", "interrompido"), ("b-controle.txt", "controle"),
+                         ("c-excecao.txt", "excecao")):
+        (root / name).write_text(prefix + " private-fixture@example.invalid SYNTHETIC_SECRET")
+    presidio_logger = logging.getLogger("presidio-analyzer")
+    original_handler = Mock(spec=logging.Handler, level=logging.WARNING)
+    presidio_logger.addHandler(original_handler)
+    sys.argv = ["collector.py", "--repo", scratch]
+    with patch("collector.collect", side_effect=privacy_only), patch("lgpd_analyzer.create_presidio", return_value=SyntheticAnalyzer()):
+        code = main()
+    assert presidio_logger.handlers == [original_handler]
+    original_handler.handle.assert_not_called()
+    sys.exit(code)
+`], {cwd: moduleDir, encoding: 'utf8'});
+  assert.equal(run.status, 1);
+  assert.equal(run.stderr, '');
+  const result = JSON.parse(run.stdout);
+  assert.doesNotMatch(run.stdout, /private-fixture|SYNTHETIC_SECRET|Traceback/);
+  const coverage = new Map<string, string>(result.coverage.map((row: {detail: string; status: string}) =>
+    [row.detail.split(' | ')[0], row.status]));
+  assert.equal(coverage.get('a-interrompido.txt'), 'failed');
+  assert.equal(coverage.get('b-controle.txt'), 'ok');
+  assert.equal(coverage.get('c-excecao.txt'), 'failed');
+  assert.equal(result.coverage.find((row: {tool: string}) => row.tool === 'presidio-analyzer').status, 'failed');
+  assert.deepEqual(result.findings.map((row: {rule: string; file: string}) => [row.rule, row.file]),
+    [['PII_EMAIL_ADDRESS', 'a-interrompido.txt']]);
+});
+
+test('C9 registra a cobertura individual mesmo quando um arquivo deixou de ser examinado', () => {
+  const reports = JSON.parse(python(String.raw`
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
+import json
+from collector import Report, inspect_privacy
+from lgpd_analyzer import MAX_TEXT_BYTES
+
+with TemporaryDirectory() as scratch:
+    root = Path(scratch)
+    for name, data in {
+        "Dockerfile": b"FROM scratch",
+        "config.cjs": b"module.exports = true",
+        "binary.txt": b"\x00\xff",
+        "oversize.txt": b"x" * (MAX_TEXT_BYTES + 1),
+        "eligible.txt": b"SYNTHETIC_TEXT",
+    }.items():
+        (root / name).write_bytes(data)
+    files = {name: root / name for name in ("Dockerfile", "config.cjs", "binary.txt", "oversize.txt", "eligible.txt", "missing.txt")}
+    analyzer = Mock()
+    analyzer.analyze.return_value = []
+    report, unavailable = Report(), Report()
+    with patch("lgpd_analyzer.create_presidio", return_value=analyzer):
+        inspect_privacy(files, "2.2.366", report)
+    with patch("lgpd_analyzer.create_presidio", side_effect=RuntimeError("SYNTHETIC_TEXT")):
+        inspect_privacy(files, "2.2.366", unavailable)
+    assert [call.kwargs["text"] for call in analyzer.analyze.call_args_list] == ["SYNTHETIC_TEXT"] * 2
+print(json.dumps([report.output(), unavailable.output()]))
+`));
+  for (const report of reports) {
+    for (const file of ['Dockerfile', 'config.cjs', 'binary.txt', 'oversize.txt']) {
+      assert.ok(report.coverage.some((row: {tool: string; status: string; detail: string}) =>
+        row.tool === 'lgpd:file' && row.status === 'skipped' && row.detail.startsWith(`${file} |`)), file);
+    }
+    assert.ok(report.coverage.some((row: {tool: string; status: string; detail: string}) =>
+      row.tool === 'lgpd:file' && row.status === 'failed' && row.detail.startsWith('missing.txt |')));
+  }
+  for (const [index, status] of ['ok', 'failed'].entries()) {
+    assert.ok(reports[index].coverage.some((row: {tool: string; status: string; detail: string}) =>
+      row.tool === 'presidio-analyzer:file' && row.status === status && row.detail.startsWith('eligible.txt |')));
+  }
+  assert.doesNotMatch(JSON.stringify(reports), /SYNTHETIC_TEXT/);
+});
+
+test('C9 mantém locais do ScanCode, sinaliza erros parciais e limita o relatório', () => {
+  const result = JSON.parse(python(String.raw`
+import json
+from collector import Report, add_scancode_results, MAX_FINDINGS, MAX_COVERAGE
+report = Report()
+data = {
+    "headers": [{"errors": []}],
+    "files": [
+        {"type": "directory", "path": ""},
+        {"type": "file", "path": "vendor/widget.js", "license_detections": [
+            {"license_expression_spdx": "GPL-3.0-only", "matches": [{"start_line": 2}, {"start_line": 2}]},
+        ]},
+        {"type": "file", "path": "broken.js", "scan_errors": ["untrusted-content"]},
+    ],
+}
+assert add_scancode_results(data, {"vendor/widget.js": "", "broken.js": "", "missing.ts": ""}, "32.5.0", report) == (2, True)
+sample = report.output()
+assert report.has_errors
+limited = Report()
+for n in range(MAX_COVERAGE + 5):
+    limited.cover("test", "1", "ok", "synthetic")
+for n in range(MAX_FINDINGS + 1):
+    limited.find("test", "R", "test.ts", 1, "informativa", "m", "e")
+limited.find("test", "PRIORITY", "test.ts", 1, "media", "m", "e")
+output = limited.output()
+assert limited.has_errors
+assert len(output["coverage"]) == 5000
+assert len(output["findings"]) == 999
+assert output["findings"][0]["rule"] == "PRIORITY"
+assert output["coverage"][-1]["status"] == "failed"
+print(json.dumps(sample))
+`));
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0].line, 2);
+  assert.match(result.findings[0].evidence, /GPL-3\.0-only/);
+  assert.ok(result.coverage.some((row: {status: string; detail: string}) =>
+    row.status === 'skipped' && row.detail.startsWith('missing.ts')));
+  assert.doesNotMatch(JSON.stringify(result), /untrusted-content/);
+});
+
+test('C9 devolve JSON e código de falha quando o repositório não pode ser aberto', () => {
+  const run = spawnSync('python3', ['-B', 'collector.py', '--repo', join(fixtures, 'sintetico-inexistente')], {
+    cwd: moduleDir,
+    env: {...process.env, TMPDIR: moduleDir},
+    encoding: 'utf8',
+  });
+  assert.equal(run.status, 1, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.ok(result.coverage.some((row: {tool: string; status: string}) =>
+    row.tool === 'conformidade' && row.status === 'failed'));
+  assert.deepEqual(result.findings, []);
+});
+
+test('C9 entrega ao ORT apenas SPDX gerado e mede os pacotes devolvidos pelo analisador', () => {
+  const result = JSON.parse(python(String.raw`
+from pathlib import Path
+import json
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+from collector import Report
+from ort_inventory import read_results, write_documents
+report = Report()
+locks = [("package-lock.json", [("node_modules/fixture-widget", "GPL-3.0-only", 7)])]
+with TemporaryDirectory(dir=Path.cwd()) as scratch:
+    picked = write_documents(locks, Path(scratch), "97.2.0", report)
+    document = json.loads((Path(scratch) / "lock-1.spdx.json").read_text())
+    assert document["documentDescribes"] == ["SPDXRef-lock-1"]
+    assert document["relationships"][0]["relatedSpdxElement"] == "SPDXRef-component-1-1"
+    assert document["packages"][1]["licenseDeclared"] == "GPL-3.0-only"
+    assert document["packages"][1]["downloadLocation"] == "NOASSERTION"
+    assert "fixture-widget" not in json.dumps(document)
+    mock_result = {"packages": [{
+        "id": "SpdxDocumentFile::component-1-1:1",
+        "declared_licenses_processed": {"spdx_expression": "GPL-3.0-only"},
+    }]}
+    with patch("ort_inventory.classify", return_value=("copyleft forte", "GPL-3.0-only")):
+        assert read_results(mock_result, picked, "97.2.0", report) == (1, 1)
+    missing = Report()
+    assert read_results({"packages": []}, picked, "97.2.0", missing) == (0, 0)
+    assert missing.has_errors
+print(json.dumps(report.output()))
+`));
+  assert.equal(result.coverage[0].status, 'ok');
+  assert.equal(result.findings[0].rule, 'ORT_STRONG_COPYLEFT_DECLARED');
+  assert.equal(result.findings[0].line, 7);
+  assert.doesNotMatch(JSON.stringify(result), /fixture-widget/);
+});
+
+test('C9 inventaria o lockfile npm, mede ausências e preserva a diferença do controle limpo', () => {
+  const result = JSON.parse(python(String.raw`
+from pathlib import Path
+from unittest.mock import patch
+import json, sys
+from collector import Report
+from license_policy import inspect_lock
+categories = {"MIT": "permissiva", "GPL-3.0-only": "copyleft forte"}
+reports = []
+for scenario in ("com-defeito", "limpo"):
+    source = Path(sys.argv[1], scenario, "package-lock.json").read_text()
+    report = Report()
+    with patch("license_policy.classify", side_effect=lambda value: (categories[value], value)):
+        declarations = inspect_lock(source, "MIT", "package-lock.json", report)
+        assert len(declarations) == 1
+        assert declarations[0][0] == "node_modules/fixture-widget"
+        assert declarations[0][2] == 7
+    reports.append(report.output())
+print(json.dumps(reports))
+`));
+  assert.ok(result[0].findings.some((row: {rule: string}) => row.rule === 'LICENSE_OBLIGATION_REVIEW'));
+  assert.deepEqual(result[1].findings.map((row: {rule: string}) => row.rule), ['LICENSE_DEPENDENCY_DECLARED']);
+});
+
+test('C9 registra triagem entre projeto e dependência e entre declarações distintas do lockfile', () => {
+  const reports = JSON.parse(python(String.raw`
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+from collector import Report, inspect_npm
+from license_policy import inspect_lock
+
+categories = {"MIT": "permissiva", "GPL-2.0-only": "copyleft forte",
+              "GPL-3.0-only": "copyleft forte", "UNLICENSED": "proprietária"}
+def classify(value):
+    return (categories[value], value) if value in categories else ("desconhecida", None)
+
+source = """{
+  "lockfileVersion": 3,
+  "packages": {
+    "": {"license": "UNLICENSED"},
+    "node_modules/synthetic-gpl3": {"version": "SYNTHETIC_SECRET", "license": "GPL-3.0-only"},
+    "node_modules/synthetic-gpl2": {"license": "GPL-2.0-only"},
+    "node_modules/synthetic-closed": {"license": "UNLICENSED"}
+  }
+}"""
+control = source.replace("GPL-2.0-only", "GPL-3.0-only").replace(
+    '"node_modules/synthetic-closed": {"license": "UNLICENSED"}',
+    '"node_modules/synthetic-closed": {"license": "MIT"}')
+with patch("license_policy.classify", side_effect=classify):
+    dirty, clean, from_manifest = Report(), Report(), Report()
+    inspect_lock(source, None, "package-lock.json", dirty)
+    inspect_lock(control, "UNKNOWN", "package-lock.json", clean)
+    with TemporaryDirectory() as scratch:
+        path = Path(scratch)
+        (path / "package.json").write_text('{\n  "license": "UNLICENSED"\n}')
+        (path / "npm-shrinkwrap.json").write_text(source.replace('"license": "UNLICENSED"', '"license": "MIT"'))
+        inspect_npm({"demo/npm-shrinkwrap.json": path / "npm-shrinkwrap.json"}, [], from_manifest)
+print(json.dumps([report.output() for report in (dirty, clean, from_manifest)]))
+`));
+  const [dirty, clean, manifest] = reports;
+  const review = (row: {rule: string}) => row.rule === 'LICENSE_OBLIGATION_REVIEW';
+  const dependencies = (row: {rule: string}) => row.rule === 'LICENSE_DEPENDENCY_OBLIGATION_REVIEW';
+  assert.deepEqual(dirty.findings.filter(review).map((row: {line: number}) => row.line), [5, 6]);
+  assert.ok(dirty.findings.filter(review).every((row: {evidence: string}) =>
+    row.evidence.includes('UNLICENSED em package-lock.json linha 4')));
+  assert.deepEqual(dirty.findings.filter(dependencies).map((row: {line: number; evidence: string}) =>
+    [row.line, row.evidence.match(/linha (\d+)/)?.[1]]).sort(), [[6, '5'], [7, '5'], [7, '6']]);
+  assert.ok(clean.findings.every((row: {rule: string}) => !review(row) && !dependencies(row)));
+  assert.equal(manifest.findings.find(review).file, 'demo/npm-shrinkwrap.json');
+  assert.match(manifest.findings.find(review).evidence, /UNLICENSED em demo\/package\.json linha 2/);
+  assert.doesNotMatch(JSON.stringify(reports), /synthetic-gpl|synthetic-closed|SYNTHETIC_SECRET/);
+});
+
+test('C9 conserva pares SPDX em todas as permutações e declara a cobertura limitada', () => {
+  python(String.raw`
+from itertools import permutations, combinations
+from unittest.mock import patch
+from collector import Report
+from license_policy import inspect_lock
+import json
+import re
+
+classes = ("GPL-2.0-or-later", "GPL-2.0-only", "GPL-3.0-only")
+wanted = {tuple(sorted(pair)) for pair in combinations(classes, 2)}
+def inspect(items):
+    lock = {"lockfileVersion": 3, "packages": {
+        "node_modules/p" + str(i): {"license": value} for i, value in enumerate(items)
+    }}
+    report = Report()
+    with patch("license_policy.classify", side_effect=lambda value: ("copyleft forte", value)):
+        inspect_lock(json.dumps(lock), None, "package-lock.json", report)
+    return report.output()
+for ordering in permutations(classes):
+    result = inspect((*ordering, ordering[0]))
+    pairs = [tuple(sorted(re.findall(r"declara (GPL-[^.]+\.0-[a-z-]+)", row["evidence"])))
+             for row in result["findings"] if row["rule"] == "LICENSE_DEPENDENCY_OBLIGATION_REVIEW"]
+    assert len(pairs) == len(wanted) and set(pairs) == wanted
+with patch("license_policy.MAX_LICENSE_PAIRS", 1):
+    for ordering in permutations(classes):
+        result = inspect(ordering)
+        assert result["coverage"][0]["status"] == "failed"
+        assert "pares fora do limite=2" in result["coverage"][0]["detail"]
+        emitted = [row for row in result["findings"] if row["rule"] == "LICENSE_DEPENDENCY_OBLIGATION_REVIEW"]
+        assert len(emitted) == 1 and all(term in emitted[0]["evidence"] for term in sorted(classes)[:2])
+`);
+});
+
+test('C9 localiza chaves reais de packages em JSON compacto, inclusive escapadas', () => {
+  const result = JSON.parse(python(String.raw`
+import json
+from unittest.mock import patch
+from collector import Report
+from license_policy import inspect_lock
+
+source = r"""{
+"lockfileVersion":2,
+"packages":{"":{},"node_modules\/compact":{"license":"GPL-3.0-only"},
+  "node_modules/fixture": {"license":"MIT"}},
+"other":{
+  "node_modules/compact":{"license":"MIT"}
+}}"""
+report = Report()
+with patch("license_policy.classify", side_effect=lambda value: ("permissiva", value)):
+    assert inspect_lock(source, "MIT", "package-lock.json", report) == [
+        ("node_modules/compact", "GPL-3.0-only", 3), ("node_modules/fixture", "MIT", 4)]
+print(json.dumps(report.output()))
+`));
+  assert.deepEqual(result.findings.map((row: {line: number}) => row.line), [3, 4]);
+  assert.ok(result.findings.every((row: {line: number}) => row.line !== 1 && row.line !== 6));
+});
+
+test('C9 copia apenas entradas regulares elegíveis para o recorte de análise', () => {
+  const result = JSON.parse(python(String.raw`
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import json
+from collector import Report, snapshot
+
+with TemporaryDirectory(dir=Path.cwd()) as scratch:
+    root = Path(scratch, "repo")
+    staging = Path(scratch, "staging")
+    root.mkdir()
+    staging.mkdir()
+    (root / "source.ts").write_text("const fixture = true;")
+    (root / ".env.synthetic").write_text("outside-scope")
+    outside = Path(scratch, "outside.txt")
+    outside.write_text("synthetic-outside")
+    (root / "redirect.ts").symlink_to(outside)
+    (root / "redirect-dir").symlink_to(Path(scratch))
+    report = Report()
+    picked = snapshot(root, staging, report)
+    assert list(picked) == ["source.ts"]
+    assert picked["source.ts"].read_text() == "const fixture = true;"
+    assert len(list(staging.iterdir())) == 1
+print(json.dumps(report.output()))
+`));
+  assert.ok(result.coverage.some((row: {status: string; detail: string}) =>
+    row.status === 'skipped' && row.detail.startsWith('redirect.ts')));
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-outside/);
+});
