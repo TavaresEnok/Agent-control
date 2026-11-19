@@ -1,0 +1,12 @@
+@import './temas/contraste.css';
+
+body { color: #102030; background: #fff; }
+.amostra { margin: 0; background: #2468ac; }
+.retangulo {
+  position: absolute;
+  top: 40px;
+  left: 30px;
+  width: 10px;
+  height: 20px;
+  background: #c02020;
+}

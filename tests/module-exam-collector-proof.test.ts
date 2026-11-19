@@ -10,7 +10,7 @@ import {Refusal} from '../src/contracts.ts';
 import type {CollectorCriterion, ModuleExamCollectorContext} from '../src/module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewObservation} from '../src/module-exam-proof.ts';
 import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamSeat} from '../src/module-exam.ts';
-import {runVerificationModule, validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
+import {requestModuleCorrection, runVerificationModule, validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
 
 const commit = 'a'.repeat(40);
 const intentId = randomUUID();
@@ -328,6 +328,14 @@ test('a publicação confirma uma medição funcional de cada módulo usando o s
       assert.equal(run.achados[0]?.verifier?.provider, 'segundo', row.module);
       const saved = await input.ledger.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [run.runId]);
       assert.equal(saved.rows[0]?.status, 'confirmado', row.module);
+      const correction = await requestModuleCorrection(input.ledger, input.principal, authority, {
+        module: row.module, runId: run.runId, achadoIds: [run.achados[0]!.id], dataDirectory: input.dataDirectory,
+        projectId: input.projectId, repoPath: input.repoPath,
+      });
+      assert.ok(correction.writePaths.includes(row.raw.file), row.module);
+      const regressionFile = 'tests/' + row.module + '/' + run.achados[0]!.id.toLowerCase() + '.test.ts';
+      assert.ok(correction.writePaths.includes(regressionFile), row.module);
+      assert.ok(correction.regressionTest.includes(regressionFile), row.module);
       tested.add(row.module);
     }
     assert.equal(tested.size, 8);
