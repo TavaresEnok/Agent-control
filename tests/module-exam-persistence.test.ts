@@ -96,9 +96,11 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     assert.match(inventory, /checkout\.test\.ts \| lido/);
     assert.match(inventory, /GET \| \/item\/&lt;slug&gt; \| checkout\.test\.ts#3 \| lido/);
     assert.match(inventory, /GET \| \/item\/slug \| checkout\.test\.ts#4 \| lido/);
+    let examReviews = 0;
     const recheck = (hypothesis: string) => recheckModuleFindings(input.ledger, input.principal, input.authority, {
       dataDirectory: input.dataDirectory, projectId: input.projectId, runId: result.runId, achadoIds: ['ACH-002'],
       async review(request) {
+        examReviews++;
         const task = JSON.parse(request.task);
         assert.equal(task.hypothesis, hypothesis);
         assert.equal(task.evidence, skipped + ';');
@@ -116,6 +118,13 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     const generation = async () => (await input.ledger.pool.query(
       'SELECT recheck_generation::text FROM ac_verify_runs WHERE id=$1', [result.runId],
     )).rows[0].recheck_generation;
+    const verdicts = async () => (await input.ledger.pool.query(
+      `SELECT id, detail FROM ac_audit WHERE kind='module.finding_rechecked' AND detail->>'runId'=$1 ORDER BY id`,
+      [result.runId],
+    )).rows;
+    const validVerdicts = await verdicts();
+    assert.ok(validVerdicts.length > 0);
+    const validExamReviews = examReviews;
     const validGeneration = await generation();
     await unlink(originFile);
     await assert.rejects(recheck(recorded[0].hypothesis), /VERIFY_REPORT_INVALID/);
@@ -124,6 +133,8 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     await assert.rejects(recheck(recorded[0].hypothesis), /VERIFY_REPORT_INVALID/);
     await assert.rejects(collectorOnly(), /VERIFY_REPORT_INVALID/);
     assert.equal(await generation(), validGeneration);
+    assert.deepEqual(await verdicts(), validVerdicts);
+    assert.equal(examReviews, validExamReviews);
     assert.equal(collectorReviews, 0);
     // Um run anterior à migração não tem o hash de origem.
     await input.ledger.pool.query('UPDATE ac_verify_runs SET exam_origin_sha256=NULL WHERE id=$1', [result.runId]);
