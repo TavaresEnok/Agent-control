@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import {ChildProcess, fork} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
+import {stat} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {test} from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 import {Refusal} from '../src/contracts.ts';
+import {COLLECTOR_CAPTURE_DIR, COLLECTOR_HEADER_BYTES, COLLECTOR_WRAPPER_PATH} from '../src/module-collector-output.ts';
 import {MODULE_CONTAINER_LABEL, moduleContainerName, type CollectorProcess} from '../src/module-container-cleanup.ts';
 import type {Ledger} from '../src/ledger.ts';
 import {MAX_COLLECTOR_STDOUT_BYTES, listModuleReports, runBoundedCollectorProcess, runModuleCollectorContainer, runVerificationModule} from '../src/verification-modules.ts';
@@ -19,6 +21,12 @@ const pending = (error: unknown) => error instanceof Refusal && error.code === '
 const output = {coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'synthetic'}], findings: []};
 const reply = (code: number, stdout = '') => ({code, stdout: Buffer.from(stdout), stderr: ''});
 const collectorLogs = JSON.stringify(output);
+const imageCommand = (script = '', args: string[] = []) => reply(0, JSON.stringify([[process.execPath, '-e', script, '--'], args]));
+
+function framedOutput(token: string, code: number, payload: string) {
+  const hash = createHash('sha256').update(payload).digest('hex');
+  return reply(code, `ac-collector-v1 ${token} ${code} ${Buffer.byteLength(payload)} ${hash}\n${payload}`);
+}
 
 function barrier() {
   let resolve!: () => void;
@@ -102,15 +110,19 @@ test('a recuperação em outro processo neutraliza a partida tardia antes de tra
         for await (const chunk of req) chunks.push(chunk);
         const argv = JSON.parse(Buffer.concat(chunks).toString()) as string[];
         const send = (code: number, stdout = '') => res.end(JSON.stringify({code, stdout, stderr: ''}));
-        if (argv[1] === 'create') {
+        if (argv[1] === 'image') {
+          send(0, imageCommand().stdout.toString());
+        } else if (argv[1] === 'create') {
           token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
           send(0, containerId);
         } else if (argv[1] === 'start') {
-          assert.deepEqual(argv.slice(1), ['start', containerId]);
+          assert.deepEqual(argv.slice(1), ['start', '--attach', containerId]);
           state = 'queued';
           reachable = false;
           queued.resolve();
           // The client times out independently. The daemon retains the request.
+        } else if (argv[2] === 'inspect') {
+          send(0, `${containerId} created`);
         } else if (argv[2] === 'ls') {
           assert.ok(argv.includes(`id=${containerId}`));
           if (!reachable) send(1);
@@ -189,6 +201,7 @@ test('lease perdido mantém limpeza pendente e retry só remove o contêiner ide
     const {ledger, principal, authority, projectId, dataDirectory} = base;
     const runId = randomUUID();
     const controller = new AbortController();
+    const launched = barrier();
     const collecting = barrier();
     let owner = '';
     let running = false;
@@ -196,6 +209,7 @@ test('lease perdido mantém limpeza pendente e retry só remove o contêiner ide
     let removalAttempts = 0;
     let daemon: 'ok' | 'offline' | 'foreign' | 'rm-fails' | 'recheck-fails' = 'ok';
     const execute: CollectorProcess = async (argv, options) => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {
         owner = argv[argv.indexOf('--label') + 1]!.slice(MODULE_CONTAINER_LABEL.length + 1);
         assert.equal(argv[argv.indexOf('--name') + 1], moduleContainerName(owner));
@@ -204,16 +218,17 @@ test('lease perdido mantém limpeza pendente e retry só remove o contêiner ide
         return reply(0, containerId);
       }
       if (argv[1] === 'start') {
-        assert.deepEqual(argv.slice(1), ['start', containerId]);
+        assert.deepEqual(argv.slice(1), ['start', '--attach', containerId]);
         assert.equal((await ledger.pool.query('SELECT collector_container_id FROM ac_verify_runs WHERE id=$1', [runId])).rows[0].collector_container_id, containerId);
         running = true;
-        return reply(0, containerId);
-      }
-      if (argv[1] === 'logs') {
-        assert.deepEqual(argv.slice(1), ['logs', '--follow', containerId]);
-        collecting.resolve();
+        launched.resolve();
         return new Promise((_, reject) => options.signal!.addEventListener('abort',
           () => reject(new Refusal('VERIFY_TOOLS_FAILED', 503)), {once: true}));
+      }
+      if (argv[2] === 'inspect') {
+        await launched.promise;
+        collecting.resolve();
+        return reply(0, `${containerId} running`);
       }
       if (argv[2] === 'ls') {
         assert.ok(argv.includes(`id=${containerId}`));
@@ -274,21 +289,22 @@ test('a aquisição aguarda a resposta de partida e prossegue durante a coleta',
     const controller = new AbortController();
     let token = '', removed = false;
     const execute: CollectorProcess = async (argv, options) => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {
         token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
         return reply(0, containerId);
       }
       if (argv[1] === 'start') {
-        assert.deepEqual(argv.slice(1), ['start', containerId]);
-        assert.deepEqual(options, {timeoutMs: 10_000, maxStdoutBytes: 4096});
+        assert.deepEqual(argv.slice(1), ['start', '--attach', containerId]);
         started.resolve();
-        await ack.promise;
-        return reply(0, containerId);
-      }
-      if (argv[1] === 'logs' && argv[2] === '--follow') {
-        collecting.resolve();
         return new Promise((_, reject) => options.signal!.addEventListener('abort',
           () => reject(new Refusal('VERIFY_TOOLS_FAILED', 503)), {once: true}));
+      }
+      if (argv[2] === 'inspect') {
+        assert.equal(argv.at(-1), containerId);
+        await ack.promise;
+        collecting.resolve();
+        return reply(0, `${containerId} running`);
       }
       if (argv[2] === 'ls') return reply(0, removed ? '' : `${containerId} ${moduleContainerName(token)} ${token}`);
       assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
@@ -335,12 +351,13 @@ test('o sucessor que adquire antes da partida impede a execução antiga de lan�
     let token = '', firstList = true, removed = false;
     const starts: string[] = [];
     const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {
         token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
         return reply(0, containerId);
       }
       if (argv[1] === 'start') {
-        starts.push(argv[2]!);
+        starts.push(argv.at(-1)!);
         return reply(1);
       }
       if (argv[2] === 'ls') {
@@ -374,29 +391,21 @@ test('o sucessor que adquire antes da partida impede a execução antiga de lan�
   });
 });
 
-test('logs completos e código de saída só são lidos após o término observado', {skip: !databaseUrl, timeout: 15_000}, async () => {
+test('stdout completo preserva o código do coletor e aguarda confirmação independente antes de publicar', {skip: !databaseUrl, timeout: 15_000}, async () => {
   await withModuleRecoveryFixture(databaseUrl!, async base => {
     const waiting = barrier();
     const exit = barrier();
     let token = '', removed = false;
-    let waitTimeout = 0;
-    let readLogs = false;
-    const execute: CollectorProcess = async (argv, options) => {
+    const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {
         token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
         return reply(0, containerId);
       }
-      if (argv[1] === 'start') return reply(0, containerId);
-      if (argv[1] === 'logs') {
-        if (argv[2] === '--follow') return reply(0, '');
-        readLogs = true;
-        assert.deepEqual(argv.slice(1), ['logs', containerId]);
-        assert.ok(options.timeoutMs < waitTimeout);
-        return reply(0, collectorLogs);
-      }
+      if (argv[1] === 'start') return framedOutput(token, 7, collectorLogs);
+      if (argv[2] === 'inspect') return reply(0, `${containerId} exited`);
       if (argv[1] === 'wait') {
         assert.deepEqual(argv.slice(1), ['wait', containerId]);
-        waitTimeout = options.timeoutMs;
         waiting.resolve();
         await exit.promise;
         return reply(0, '7\n');
@@ -411,7 +420,6 @@ test('logs completos e código de saída só são lidos após o término observa
     try {
       await Promise.race([waiting.promise, task]);
       assert.equal(removed, false);
-      assert.equal(readLogs, false);
       assert.deepEqual(await listModuleReports(base.dataDirectory, base.projectId), []);
       await delay(15);
       exit.resolve();
@@ -434,6 +442,7 @@ test('create sem ACK redescobre o ID pelo token antes de remover', {skip: !datab
     let failList = true;
     let removed = false;
     const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {
         owner = argv[argv.indexOf('--label') + 1]!.slice(MODULE_CONTAINER_LABEL.length + 1);
         return reply(1);
@@ -466,10 +475,12 @@ test('a migração preserva o journal anterior e protege os IDs que já estavam 
     await base.ledger.tx(async client => {
       // Reconstruct just the R7 schema in this isolated database, retaining
       // the migration records and digests for all published migrations.
-      await client.query(`DROP TRIGGER ac_collector_start_transfer_guard ON ac_managers;
+      await client.query(`DROP TRIGGER ac_collector_start_identity_sync ON ac_verify_runs;
+        DROP FUNCTION ac_sync_collector_start_identity();
+        DROP TRIGGER ac_collector_start_transfer_guard ON ac_managers;
         DROP FUNCTION ac_guard_collector_start_transfer();
         ALTER TABLE ac_verify_runs DROP COLUMN collector_start_pending;
-        DELETE FROM ac_schema_migrations WHERE version=113`);
+        DELETE FROM ac_schema_migrations WHERE version IN (113, 114)`);
       await client.query('UPDATE ac_verify_runs SET collector_container_token=$2, collector_container_id=$3 WHERE id=$1',
         [withId.runId, withIdToken, containerId]);
       await client.query('UPDATE ac_verify_runs SET collector_container_token=$2 WHERE id=$1', [withoutId.runId, withoutIdToken]);
@@ -485,86 +496,165 @@ test('a migração preserva o journal anterior e protege os IDs que já estavam 
   });
 });
 
-test('a retenção acomoda JSON válido até o limite integral de stdout', {skip: !databaseUrl}, async () => {
+test('um cliente R7 grava e limpa IDs durante a adoção das migrações 113 e 114', {skip: !databaseUrl}, async () => {
   await withModuleRecoveryFixture(databaseUrl!, async base => {
-    let token = '', removed = false;
-    const padding = MAX_COLLECTOR_STDOUT_BYTES - Buffer.byteLength(collectorLogs);
-    const lineSize = Buffer.byteLength(JSON.stringify({log: '\n', stream: 'stdout', time: '2026-11-19T01:02:03.456789000Z'}) + '\n');
-    const execute: CollectorProcess = async (argv, options) => {
-      if (argv[1] === 'create') {
-        token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
-        assert.equal(argv[argv.indexOf('--log-driver') + 1], 'json-file');
-        assert.ok(argv.includes('mode=blocking'));
-        assert.ok(argv.includes('max-file=2'));
-        const maxSize = Number(argv.find(arg => arg.startsWith('max-size='))?.slice('max-size='.length));
-        assert.ok(maxSize > padding * lineSize + Buffer.byteLength(JSON.stringify(collectorLogs)));
-        return reply(0, containerId);
-      }
-      if (argv[1] === 'start') return reply(0, containerId);
-      if (argv[1] === 'wait') return reply(0, '0');
-      if (argv[1] === 'logs') {
-        assert.equal(options.maxStdoutBytes, MAX_COLLECTOR_STDOUT_BYTES);
-        return runBoundedCollectorProcess([process.execPath, '-e',
-          `process.stdout.write(Buffer.alloc(${padding}, 10)); process.stdout.write(${JSON.stringify(collectorLogs)})`], options);
-      }
-      if (argv[2] === 'ls') return reply(0, removed ? '' : `${containerId} ${moduleContainerName(token)} ${token}`);
-      assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
-      removed = true;
-      return reply(0);
-    };
-    const report = await runVerificationModule({...base, image, executeCollectorProcess: execute});
-    assert.equal(report.hasToolFailure, false);
-    assert.deepEqual(report.toolCoverage, output.coverage);
-    assert.equal(removed, true);
+    const {ledger, authority} = base;
+    const {runId} = await runVerificationModule({...base, collectorOutput: output});
+    const token = randomUUID();
+    const old = await ledger.pool.connect();
+    try {
+      await old.query(`DROP TRIGGER ac_collector_start_identity_sync ON ac_verify_runs;
+        DROP FUNCTION ac_sync_collector_start_identity();
+        DELETE FROM ac_schema_migrations WHERE version=114`);
+      const state = async () => (await ledger.pool.query(
+        'SELECT collector_container_token, collector_container_id, collector_start_pending FROM ac_verify_runs WHERE id=$1', [runId],
+      )).rows[0];
+      const oldRememberId = async () => {
+        await old.query('UPDATE ac_verify_runs SET collector_container_token=$2 WHERE id=$1', [runId, token]);
+        await old.query(`UPDATE ac_verify_runs SET collector_container_id=$3 WHERE id=$1 AND collector_container_token=$2
+          AND (collector_container_id IS NULL OR collector_container_id=$3)`, [runId, token, containerId]);
+      };
+      const oldClear = () => old.query(
+        'UPDATE ac_verify_runs SET collector_container_token=NULL, collector_container_id=NULL WHERE id=$1 AND collector_container_token=$2',
+        [runId, token],
+      );
+      const transfer = () => ledger.pool.query('UPDATE ac_managers SET epoch=epoch+1 WHERE context_id=$1', [authority.contextId]);
+      const journal = {collector_container_token: token, collector_container_id: containerId};
+      await oldRememberId();
+      assert.deepEqual(await state(), {...journal, collector_start_pending: false});
+      await ledger.migrate();
+      assert.deepEqual(await state(), {...journal, collector_start_pending: true});
+      await assert.rejects(transfer(), {message: 'VERIFY_CONTAINER_CLEANUP_PENDING'});
+      assert.equal((await oldClear()).rowCount, 1);
+
+      await oldRememberId();
+      assert.deepEqual(await state(), {...journal, collector_start_pending: true});
+      await assert.rejects(transfer(), {message: 'VERIFY_CONTAINER_CLEANUP_PENDING'});
+      assert.equal((await oldClear()).rowCount, 1);
+      assert.deepEqual(await state(), {collector_container_token: null, collector_container_id: null, collector_start_pending: false});
+      assert.equal((await transfer()).rowCount, 1);
+    } finally {
+      old.release();
+    }
   });
 });
 
-for (const scenario of ['timeout', 'stdout', 'rotated'] as const) {
-  test(`${scenario} publica a falha após confirmar a remoção no daemon simulado`, {skip: !databaseUrl}, async () => {
+for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout'] as const) {
+  test({
+    stderr: 'stdout no limite e stderr longo preservam o JSON e os argumentos da imagem',
+    prefix: 'perda do prefixo recusa um sufixo que ainda é JSON válido',
+    hash: 'checksum recusa JSON alterado com o mesmo tamanho',
+    wait: 'falha no transporte final recusa stdout completo após acompanhamento normal',
+    timeout: 'timeout confirma remoção antes de publicar a falha',
+    stdout: 'excesso de stdout interrompe um coletor contínuo antes do prazo',
+  }[scenario], {skip: !databaseUrl, timeout: 15_000}, async () => {
     await withModuleRecoveryFixture(databaseUrl!, async base => {
       let owner = '';
+      let wrapper = '';
       let removed = false;
-      let maxLogSize = 0;
+      let observedStart = false;
+      let completedCapture = false;
+      let finalTransport = false;
+      const maxStdoutBytes = scenario === 'stderr' ? MAX_COLLECTOR_STDOUT_BYTES : 1024;
+      const imageArgs = ["um argumento com espaço, 'aspas', $ e \\", ''];
+      const script = {
+        stderr: `if (JSON.stringify(process.argv.slice(1)) !== ${JSON.stringify(JSON.stringify(imageArgs))}) process.exit(19);
+          process.stderr.write(Buffer.alloc(12 * 1024 * 1024, 10));
+          process.stdout.write(Buffer.alloc(${MAX_COLLECTOR_STDOUT_BYTES - Buffer.byteLength(collectorLogs)}, 10));
+          process.stdout.write(${JSON.stringify(collectorLogs)});`,
+        prefix: `process.stdout.write('  ' + ${JSON.stringify(collectorLogs)})`,
+        hash: `process.stdout.write(${JSON.stringify(collectorLogs)})`,
+        wait: `process.stdout.write(${JSON.stringify(collectorLogs)})`,
+        timeout: '',
+        stdout: `process.stdout.on('error', error => { if (error.code === 'EPIPE') process.exit(0); throw error; });
+          setInterval(() => process.stdout.write(Buffer.alloc(4096, 32)), 10);`,
+      }[scenario];
       const execute: CollectorProcess = async (argv, options) => {
+        if (argv[1] === 'image') {
+          assert.equal(argv.at(-1), image);
+          return imageCommand(script, imageArgs);
+        }
         if (argv[1] === 'create') {
           owner = argv[argv.indexOf('--label') + 1]!.slice(MODULE_CONTAINER_LABEL.length + 1);
-          maxLogSize = Number(argv.find(arg => arg.startsWith('max-size='))?.slice('max-size='.length));
+          assert.equal(argv.at(-1), image);
+          assert.equal(argv[argv.indexOf('--pull') + 1], 'never');
+          assert.equal(argv[argv.indexOf('--log-driver') + 1], 'none');
+          assert.equal(argv[argv.indexOf('--entrypoint') + 1], COLLECTOR_WRAPPER_PATH);
+          assert.ok(argv.includes(`${COLLECTOR_CAPTURE_DIR}:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=${maxStdoutBytes + 4096}`));
+          const mount = argv.find(arg => arg.endsWith(`,dst=${COLLECTOR_WRAPPER_PATH},readonly`));
+          assert.ok(mount);
+          wrapper = mount.split(',')[1]!.slice('src='.length);
+          assert.equal((await stat(wrapper)).mode & 0o777, 0o555);
           return reply(0, containerId);
         }
-        if (argv[1] === 'start') return reply(0, containerId);
-        if (argv[1] === 'wait') return reply(0, '0');
-        if (argv[1] === 'logs') {
-          const lineSize = Buffer.byteLength(JSON.stringify({log: '\n', stream: 'stderr', time: '2026-11-19T01:02:03.456789000Z'}) + '\n');
-          const retainedStderrBytes = Math.ceil(maxLogSize / lineSize);
-          const script = {
-            timeout: 'setInterval(() => {}, 1000)',
-            stdout: `process.stdout.write(' '.repeat(1024) + ${JSON.stringify(collectorLogs)})`,
-            // A previous full file remains even after losing earlier stdout.
-            // Its stderr must prevent the intact JSON suffix from being accepted.
-            rotated: `process.stdout.write(${JSON.stringify(collectorLogs)}); process.stderr.write(Buffer.alloc(${retainedStderrBytes}, 10))`,
-          }[scenario];
-          return runBoundedCollectorProcess([process.execPath, '-e', script], options);
+        if (argv[1] === 'start') {
+          assert.deepEqual(argv.slice(1), ['start', '--attach', containerId]);
+          assert.equal(options.maxStdoutBytes, maxStdoutBytes + COLLECTOR_HEADER_BYTES);
+          if (scenario === 'timeout') {
+            return runBoundedCollectorProcess([process.execPath, '-e', 'setInterval(() => {}, 1000)'], options);
+          }
+          const result = await runBoundedCollectorProcess(['/bin/sh', wrapper], options);
+          if (scenario === 'stderr') assert.equal(result.stderr.length, 1000);
+          if (scenario === 'prefix') {
+            const headerEnd = result.stdout.indexOf(0x0a) + 1;
+            const suffix = result.stdout.subarray(headerEnd + 2);
+            assert.deepEqual(JSON.parse(suffix.toString()), output);
+            result.stdout = Buffer.concat([result.stdout.subarray(0, headerEnd), suffix]);
+          }
+          if (scenario === 'hash') {
+            const marker = result.stdout.indexOf('synthetic');
+            assert.ok(marker > 0);
+            result.stdout[marker] = 'S'.charCodeAt(0);
+          }
+          if (scenario === 'wait') {
+            assert.equal(result.code, 0);
+            assert.deepEqual(result.stdout, framedOutput(owner, 0, collectorLogs).stdout);
+          }
+          if (scenario === 'stdout') assert.equal(result.code, 125);
+          completedCapture = true;
+          return result;
         }
-        if (argv[2] === 'ls') {
-          return reply(0, removed ? '' : `${containerId} ${moduleContainerName(owner)} ${owner}`);
+        if (argv[2] === 'inspect') {
+          assert.equal(argv.at(-1), containerId);
+          observedStart = true;
+          return reply(0, `${containerId} running`);
         }
+        if (argv[1] === 'wait') {
+          assert.deepEqual(argv.slice(1), ['wait', containerId]);
+          assert.ok(observedStart && completedCapture);
+          finalTransport = true;
+          if (scenario === 'wait') return reply(1, '0\n');
+          return reply(0, scenario === 'stdout' ? '125\n' : '0\n');
+        }
+        if (argv[2] === 'ls') return reply(0, removed ? '' : `${containerId} ${moduleContainerName(owner)} ${owner}`);
         assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
         removed = true;
-        return reply(0, containerId);
+        return reply(0);
       };
-      const report = await runVerificationModule({...base, image, executeCollectorProcess: execute, maxStdoutBytes: 1024,
-        timeoutMs: scenario === 'timeout' ? 150 : 3000});
+      const report = await runVerificationModule({...base, image, executeCollectorProcess: execute, maxStdoutBytes,
+        timeoutMs: scenario === 'timeout' ? 150 : 5000});
       assert.equal(removed, true);
-      assert.equal(report.hasToolFailure, true);
-      assert.match(report.toolCoverage[0]!.detail, {
-        timeout: /VERIFY_TOOLS_FAILED/,
-        stdout: /VERIFY_STDOUT_LIMIT/,
-        rotated: /VERIFY_COLLECTOR_LOG_LIMIT/,
-      }[scenario]);
+      await assert.rejects(stat(wrapper), {code: 'ENOENT'});
+      assert.equal(finalTransport, scenario !== 'timeout');
+      assert.equal(report.hasToolFailure, scenario !== 'stderr');
+      if (scenario === 'stderr') {
+        assert.deepEqual(report.toolCoverage, output.coverage);
+      } else {
+        assert.equal(report.toolCoverage.length, 1);
+        assert.equal(report.toolCoverage[0]!.tool, 'coletor');
+        assert.match(report.toolCoverage[0]!.detail, {
+          prefix: /VERIFY_STDOUT_INCOMPLETE/,
+          hash: /VERIFY_STDOUT_INCOMPLETE/,
+          wait: /VERIFY_TOOLS_FAILED/,
+          timeout: /VERIFY_TOOLS_FAILED/,
+          stdout: /VERIFY_STDOUT_LIMIT/,
+        }[scenario]);
+      }
       assert.deepEqual((await listModuleReports(base.dataDirectory, base.projectId)).map(item => item.id), [report.runId]);
       assert.deepEqual((await base.ledger.pool.query(
-        'SELECT status, collector_container_token FROM ac_verify_runs WHERE id=$1', [report.runId],
-      )).rows[0], {status: 'failed', collector_container_token: null});
+        'SELECT status, collector_container_token, collector_container_id, collector_start_pending FROM ac_verify_runs WHERE id=$1', [report.runId],
+      )).rows[0], {status: scenario === 'stderr' ? 'done' : 'failed', collector_container_token: null,
+        collector_container_id: null, collector_start_pending: false});
     });
   });
 }
@@ -572,6 +662,7 @@ for (const scenario of ['timeout', 'stdout', 'rotated'] as const) {
 test('rejeição de imagem ausente registra falha sem deixar uma reserva de contêiner', {skip: !databaseUrl}, async () => {
   await withModuleRecoveryFixture(databaseUrl!, async base => {
     const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') return {...reply(1), stderr: 'Error response from daemon: No such image: fixture'};
       assert.equal(argv[2], 'ls');
       return reply(0);
@@ -590,6 +681,7 @@ test('recuperação conserva o token de criação incerta sem impedir o sucessor
     let token = '';
     let exists = false;
     const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {
         token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
         return reply(1);
@@ -619,6 +711,7 @@ test('um ID ainda não persistido sobrevive à indisponibilidade do banco até a
       FOR EACH ROW WHEN (NEW.collector_container_id IS NOT NULL) EXECUTE FUNCTION refuse_id()`);
     let token = '', exists = true;
     const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'image') return imageCommand();
       if (argv[1] === 'create') {token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!; return reply(0, containerId);}
       if (argv[2] === 'ls') return reply(0, exists ? `${containerId} ${moduleContainerName(token)} ${token}` : '');
       assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);

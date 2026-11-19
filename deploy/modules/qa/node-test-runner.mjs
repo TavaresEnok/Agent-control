@@ -41,16 +41,16 @@ import assert from 'node:assert';
 import strict from 'node:assert/strict';
 function qaCoverageProbe(value) { return value ? 1 : 0; }
 qaCoverageProbe(true);
-const assertionFunctions = new Set([assert, strict]);
-for (const method of ${JSON.stringify(qaAssertionMethods)}) {
-  assertionFunctions.add(assert[method]);
-  assertionFunctions.add(strict[method]);
-}
-const isAssertion = assertionFunctions.has.bind(assertionFunctions);
+const assertionFunctions = new Map(${JSON.stringify(qaAssertionMethods)}.map(method => {
+  const originals = new Set([assert[method], strict[method]]);
+  if (method === 'ok') { originals.add(assert); originals.add(strict); }
+  return [method, originals.has.bind(originals)];
+}));
+const acceptedMethod = assertionFunctions.get.bind(assertionFunctions);
 const apply = Reflect.apply;
-export function captureAssertion(fn, receiver, probe) {
+export function captureAssertion(fn, receiver, method, probe) {
   return (...args) => {
-    if (typeof fn === 'function' && isAssertion(fn)) probe();
+    if (typeof fn === 'function' && acceptedMethod(method)?.(fn)) probe();
     return apply(fn, receiver, args);
   };
 }
