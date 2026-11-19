@@ -2,6 +2,7 @@ import {mock, test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash, createHmac, generateKeyPairSync, randomUUID, verify} from 'node:crypto';
 import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile} from 'node:fs/promises';
+import {createServer} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
@@ -11,7 +12,7 @@ import {createSyntheticProviderAdapter} from '../src/synthetic-provider-adapter.
 import {AccountHomes} from '../src/account-homes.ts';
 import {Authority, Refusal, canonical, digest} from '../src/contracts.ts';
 import {GitArtifacts} from '../src/git.ts';
-import {NativeExecutionRequest, NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
+import {NativeExecutionRequest, NativeExecutionSupervisor, UnstartedExamRetirementPending} from '../src/native-execution-supervisor.ts';
 import {createClaudeWorkerRunner, isClaudeExamWorker, prepareClaudeExamWorkerEnv} from '../src/native-execution-worker.ts';
 import {EXAM_CLAUDE_WRAPPER_BIN, examClaudeWrapperSource, installExamClaudeWrapper} from '../src/verify-exam-isolation.ts';
 import {ClaudeExecutionAdapter, ClaudeExecutionFailure} from '../src/claude-execution-adapter.ts';
@@ -31,6 +32,8 @@ type Row = Record<string, unknown>;
 
 class MountMemory {
   tables: Record<string, Row[]> = {};
+  // Os contratos sem banco usam uma transação por vez.
+  private beforeTransaction?: Record<string, Row[]>;
   lockTimeoutOnNextLock = false;
   lockErrorOnNextLock: Error | null = null;
   insert(table: string, row: Row) { (this.tables[table] ??= []).push({...row}); }
@@ -39,16 +42,72 @@ class MountMemory {
     if (!row) throw new Error(`MISSING_ROW ${table}`);
     return row;
   }
+  private unstartedExamRows(jobId: unknown, contextId: unknown): Row[] {
+    const job = this.tables.ac_native_execution_jobs?.find(row => row.id === jobId && row.context_id === contextId);
+    if (!job) return [];
+    const grant = this.tables.ac_capacity_grants?.find(row => row.id === job.grant_id);
+    const intent = this.tables.ac_intents?.find(row => row.id === job.intent_id && row.context_id === job.context_id);
+    const account = this.tables.ac_accounts?.find(row => row.id === job.account_id);
+    const profile = this.tables.ac_profiles?.find(row => row.id === job.profile_id && row.account_id === account?.id);
+    if (!grant || !intent || !account || !profile) return [];
+
+    const dedicatedContexts = new Set(this.tables.ac_exam_contexts?.map(row => row.context_id));
+    const mainContext = this.tables.ac_contexts
+      ?.filter(row => row.project_id === grant.project_id && !row.archived && !dedicatedContexts.has(row.id))
+      .sort((a, b) => Number(a.created_at ?? 0) - Number(b.created_at ?? 0) || String(a.id).localeCompare(String(b.id)))[0];
+    const otherExecutionJobs = this.tables.ac_native_execution_jobs.filter(row => row.intent_id === intent.id && row.id !== job.id);
+    const qaJobs = (this.tables.ac_native_qa_jobs ?? []).filter(row => row.intent_id === intent.id);
+    const planningCalls = new Set(this.tables.ac_semantic_planning_calls?.filter(row => row.intent_id === intent.id).map(row => row.id));
+    const planningJobs = (this.tables.ac_native_planning_jobs ?? []).filter(row => planningCalls.has(row.id));
+    const operationExists = (table: string) => (this.tables[table] ?? []).some(row => row.id === job.id || row.intent_id === intent.id);
+    return [{
+      ...job,
+      grant_state: grant.state, grant_resource_kind: grant.resource_kind, grant_project_id: grant.project_id,
+      grant_context_id: grant.context_id, grant_intent_id: grant.intent_id, grant_epoch: grant.manager_epoch,
+      grant_account_id: grant.account_id, grant_profile_id: grant.profile_id, grant_role: grant.role,
+      physical_receipt: grant.physical_receipt ?? null,
+      principal_id: intent.principal_id, parent_intent_id: intent.parent_intent_id ?? null,
+      intent_state: intent.state, intent_command: intent.command, intent_digest: intent.digest, intent_epoch: intent.manager_epoch,
+      account_provider: account.provider, account_mode: account.mode, account_resource_identity: account.resource_identity,
+      profile_model: profile.model, profile_effort: profile.effort, profile_role: profile.role,
+      personal: this.personalActivation(), dedicated_context: dedicatedContexts.has(contextId), main_context_id: mainContext?.id ?? null,
+      cancellation_requested: (this.tables.ac_plan_cancellations ?? []).some(row => row.intent_id === intent.id),
+      has_operation: operationExists('ac_operations'), has_stage_operation: operationExists('ac_stage_operations'),
+      has_active_admission: (this.tables.ac_native_resource_admissions ?? []).some(row =>
+        (row.job_id === job.id || row.grant_id === grant.id) && row.state !== 'canceled'),
+      has_other_job: otherExecutionJobs.length > 0 || qaJobs.length > 0 || planningJobs.length > 0,
+      has_child_intent: this.tables.ac_intents.some(row => row.parent_intent_id === intent.id),
+      has_unresolved_job: [...otherExecutionJobs, ...qaJobs].some(row => row.state === 'uncertain' || row.state === 'running')
+        || planningJobs.some(row => row.state === 'prepared' || row.state === 'uncertain' || row.state === 'running'),
+      has_open_grant: this.tables.ac_capacity_grants.some(row => row.intent_id === intent.id && row.id !== grant.id && row.state !== 'released'),
+    }];
+  }
+  private personalActivation() {
+    return (this.tables.ac_installation_activation ?? []).some(row => row.id === 1 && row.mode === 'personal');
+  }
   query(sql: string, params: unknown[] = []) {
     const text = sql.replace(/\s+/g, ' ').trim();
     const selected = (rows: Row[]) => ({rows, rowCount: rows.length});
     const wrote = (count: number) => ({rows: [] as Row[], rowCount: count});
-    if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') return selected([]);
+    if (text === 'BEGIN') {
+      assert.equal(this.beforeTransaction, undefined);
+      this.beforeTransaction = structuredClone(this.tables);
+      return selected([]);
+    }
+    if (text === 'COMMIT' || text === 'ROLLBACK') {
+      assert.ok(this.beforeTransaction);
+      if (text === 'ROLLBACK') this.tables = this.beforeTransaction;
+      this.beforeTransaction = undefined;
+      return selected([]);
+    }
     if (/^SET LOCAL lock_timeout = /.test(text)) return selected([]);
     if (text.startsWith('SELECT * FROM ac_recovery_inventory_policy')) return selected([{singleton: true, required: false}]);
-    if (text.includes('ac_native_resource_admissions')) return selected([]);
-    if (text.startsWith('DELETE FROM ac_native_resource_admissions')) return wrote(0);
-    if (text.includes('ac_installation_activation')) return selected([{present: 1}]);
+    if (text.startsWith('SELECT j.*, g.state grant_state,g.resource_kind grant_resource_kind,')) {
+      return selected(this.unstartedExamRows(params[0], params[1]));
+    }
+    if (text === "SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'") {
+      return selected(this.personalActivation() ? [{present: 1}] : []);
+    }
     if (text.startsWith('SELECT command FROM ac_intents WHERE id=$1')) {
       const intent = this.tables.ac_intents?.find(row => row.id === params[0]);
       return selected(intent ? [{command: intent.command}] : []);
@@ -64,7 +123,14 @@ class MountMemory {
         session_id: params[5], executor_digest: params[6], key_fingerprint: params[7], input_digest: params[8],
         base_id: params[9], role: params[10], account_id: params[11], profile_id: params[12], profile_digest: params[13],
         eligibility_revision: params[14], state: 'uncertain', worker_id: null, tools_id: null, network_id: null,
+        launch_digest: null, receipt: null,
       });
+      return wrote(1);
+    }
+    if (text === "UPDATE ac_native_execution_jobs SET state='failed',receipt=$2 WHERE id=$1") {
+      const job = this.one('ac_native_execution_jobs', String(params[0]));
+      job.state = 'failed';
+      job.receipt = params[1];
       return wrote(1);
     }
     if (text.startsWith("UPDATE ac_native_execution_jobs SET state='running'")) {
@@ -191,6 +257,19 @@ class MountMemory {
       const grant = this.tables.ac_capacity_grants?.find(row => row.id === params[0]);
       return selected(grant ? [{id: grant.account_id}] : []);
     }
+    if (text.startsWith('SELECT g.*,a.provider,a.mode,a.enabled account_enabled,')) {
+      const grant = this.tables.ac_capacity_grants?.find(row => row.id === params[0]);
+      const account = this.tables.ac_accounts?.find(row => row.id === grant?.account_id);
+      const profile = this.tables.ac_profiles?.find(row => row.id === grant?.profile_id && row.account_id === account?.id);
+      const access = this.tables.ac_account_access?.find(row => row.account_id === account?.id && row.project_id === grant?.project_id);
+      const quota = this.tables.ac_quota_observations?.find(row => row.account_id === account?.id);
+      if (!grant || !account || !profile || !access || !quota) return selected([]);
+      return selected([{
+        ...grant, provider: account.provider, mode: account.mode, eligibility: account.eligibility,
+        resource_identity: account.resource_identity, account_enabled: account.enabled, profile_enabled: profile.enabled,
+        model: profile.model, effort: profile.effort, profile_role: profile.role, quota_status: quota.status,
+      }]);
+    }
     if (text.includes('ac_provider_eligibility_assessments')) {
       const grant = this.tables.ac_capacity_grants?.find(row => row.id === params[0] && row.state === 'uncertain');
       return selected(grant ? [{...grant, model: grant.model, effort: grant.effort, quota_status: 'available', quota_exhausted: false}] : []);
@@ -214,6 +293,24 @@ class MountMemory {
     if (text.startsWith('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2')) {
       const intent = this.tables.ac_intents?.find(row => row.id === params[0] && row.context_id === params[1]);
       return selected(intent ? [{one: 1}] : []);
+    }
+    if (text === "UPDATE ac_intents SET state=$3 WHERE id=$1 AND context_id=$2 AND state='accepted'") {
+      const intent = this.tables.ac_intents?.find(row => row.id === params[0] && row.context_id === params[1] && row.state === 'accepted');
+      if (!intent) return wrote(0);
+      intent.state = params[2];
+      return wrote(1);
+    }
+    if (text === "SELECT id FROM ac_intents WHERE context_id=$1 AND parent_intent_id IS NULL AND state NOT IN ('done','review','failed','canceled') ORDER BY created_at,id") {
+      const pending = (this.tables.ac_intents ?? []).filter(row => row.context_id === params[0] && row.parent_intent_id == null
+        && !['done', 'review', 'failed', 'canceled'].includes(String(row.state)));
+      return selected(pending.sort((a, b) => Number(a.created_at ?? 0) - Number(b.created_at ?? 0) || String(a.id).localeCompare(String(b.id)))
+        .map(row => ({id: row.id})));
+    }
+    if (text === "UPDATE ac_checkpoints SET snapshot=jsonb_set(snapshot,'{pendingIntentIds}',$2::jsonb),updated_at=now() WHERE context_id=$1") {
+      const checkpoint = this.tables.ac_checkpoints?.find(row => row.context_id === params[0]);
+      if (!checkpoint) return wrote(0);
+      checkpoint.snapshot = {...(checkpoint.snapshot as Row), pendingIntentIds: JSON.parse(String(params[1]))};
+      return wrote(1);
     }
     if (text.startsWith('SELECT 1 FROM ac_plan_cancellations')) return selected([]);
     if (text.startsWith('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2')) {
@@ -254,6 +351,7 @@ class MountMemory {
 
 function substituteLedger() {
   const memory = new MountMemory();
+  memory.insert('ac_installation_activation', {id: 1, mode: 'personal'});
   const client = {query: async (sql: string, params?: unknown[]) => memory.query(sql, params ?? []), release() {}};
   const ledger = Object.create(Ledger.prototype) as Ledger;
   Object.assign(ledger, {pool: {query: async (sql: string, params?: unknown[]) => memory.query(sql, params ?? []), connect: async () => client, end: async () => {}}});
@@ -392,11 +490,12 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
   const accounts = join(area, 'accounts');
   const project = randomUUID();
   const principal = 'exam-oauth-' + randomUUID();
+  const coOwner = 'exam-co-owner-' + randomUUID();
   const account = randomUUID();
   const profile = randomUUID();
   const context = randomUUID();
   const instance = randomUUID();
-  const intent = randomUUID();
+  const base = 'e'.repeat(40);
   const homes = mock.method(AccountHomes.prototype, 'inspectGranted', async () => ({accountId: account, projectId: project, ownerId: principal, uid: '1', device: '1', inode: '1'}));
   const snaps = mock.method(GitArtifacts.prototype, 'snapshot', async (_candidate: string, _base: string, destination: string) => {
     await mkdir(destination, {recursive: true, mode: 0o700});
@@ -518,21 +617,56 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
     await chmod(credential, 0o600);
     memory.insert('ac_projects', {id: project});
     memory.insert('ac_memberships', {project_id: project, principal_id: principal, role: 'owner'});
+    memory.insert('ac_memberships', {project_id: project, principal_id: coOwner, role: 'owner'});
     memory.insert('ac_project_repositories', {project_id: project, repo});
     memory.insert('ac_contexts', {id: context, project_id: project, paused: false, archived: false});
     memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
     memory.insert('ac_admission_control', {id: 1, enabled: true});
-    memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'security-verify-readonly-v1'}}});
+    memory.insert('ac_accounts', {
+      id: account, provider: 'claude', mode: 'subscription_cli', resource_identity: 'claude:' + 'a'.repeat(64),
+      enabled: true, eligibility: 'documented_supported',
+    });
+    memory.insert('ac_account_access', {account_id: account, project_id: project});
+    memory.insert('ac_quota_observations', {account_id: account, status: 'available'});
+    memory.insert('ac_profiles', {id: profile, account_id: account, role: 'specialist', model: 'fixture-model', effort: 'medium', enabled: true});
+    const reviewerProfile = randomUUID();
+    memory.insert('ac_profiles', {id: reviewerProfile, account_id: account, role: 'reviewer', model: 'fixture-model', effort: 'medium', enabled: true});
     const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
+    function reserveAttempt(role: 'specialist' | 'reviewer', task: string, intentId = randomUUID()) {
+      const grantId = randomUUID();
+      const command = {
+        schemaVersion: 1, intentId, deliveryAttemptId: randomUUID(), contextId: context, policyRevision: 1, action: 'plan.start',
+        payload: {workflow: 'security-verify-readonly-v1', messageRef: `verify:${project}:${base}`, projectId: project, commit: base},
+      };
+      memory.insert('ac_intents', {
+        id: intentId, context_id: context, principal_id: principal, manager_epoch: authority.epoch,
+        command, digest: digest(command), state: 'accepted', parent_intent_id: null,
+        created_at: Date.UTC(2026, 0, 1) + 1000 * (memory.tables.ac_intents?.length ?? 0),
+      });
+      memory.insert('ac_capacity_grants', {
+        id: grantId, intent_id: intentId, context_id: context, project_id: project, manager_epoch: authority.epoch,
+        account_id: account, profile_id: role === 'specialist' ? profile : reviewerProfile, role, model: 'fixture-model', effort: 'medium',
+        resource_kind: 'model', state: 'reserved',
+      });
+      return NativeExecutionRequest.parse({
+        jobId: randomUUID(), intentId, grantId, sessionId: randomUUID(), base, role, task,
+        writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      });
+    }
     const keys = generateKeyPairSync('ed25519');
     const image = 'sha256:' + 'c'.repeat(64);
     const created: {name: string; env: string[]; binds: string[]}[] = [];
     let renews = 0;
     let sawExpiresZero = false;
     let sequence = 0;
+    let networkInspectionUncertain = false;
     const makeDaemon = () => ({
       imagePresent: async () => true,
       inspect: async () => null,
+      inspectNamedPrivateNetwork: async () => {
+        if (networkInspectionUncertain) throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+        return null;
+      },
       inspectPrivateNetwork: async () => ({
         Id: networkContainerId,
         Internal: true,
@@ -591,23 +725,12 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
         await chmod(credential, 0o644);
       },
     }, {assertAdmission: async () => {}});
-    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
     Object.defineProperty(supervisor, 'doc' + 'ker', {value: makeDaemon()});
 
     // 1) Token perto de vencer: grava expiresAt 0, renova no lugar, NÃO monta /account, e grava oauthAccessToken no launch.json assinado.
-    const grant1 = randomUUID();
-    const job1 = randomUUID();
-    memory.insert('ac_capacity_grants', {
-      id: grant1, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
-      resource_kind: 'model', state: 'reserved',
-    });
-    const input1 = NativeExecutionRequest.parse({
-      jobId: job1, intentId: intent, grantId: grant1, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Leia o repositório.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
-    });
+    const input1 = reserveAttempt('specialist', 'Leia o repositório.', 'f0000000-0000-4000-8000-000000000001');
+    const job1 = input1.jobId;
     lastJobId = job1;
-    const {digest} = await import('../src/contracts.ts');
     lastLaunchHash = digest(input1);
 
     const started1 = await supervisor.start(principal, authority, input1);
@@ -648,17 +771,8 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
     assert.equal(redactedStream.includes(Buffer.from('[REDACTED]')), true);
 
     // 2) Token com 3h de validade (já renovado acima): não chama renovador e usa o accessToken atual no launch.
-    const grant2 = randomUUID();
-    const job2 = randomUUID();
-    memory.insert('ac_capacity_grants', {
-      id: grant2, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'reviewer', model: 'fixture-model', effort: 'medium',
-      resource_kind: 'model', state: 'reserved',
-    });
-    const input2 = NativeExecutionRequest.parse({
-      jobId: job2, intentId: intent, grantId: grant2, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'reviewer', task: 'Revise o repositório.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
-    });
+    const input2 = reserveAttempt('reviewer', 'Revise o repositório.', '10000000-0000-4000-8000-000000000002');
+    const job2 = input2.jobId;
     lastJobId = job2;
     lastLaunchHash = digest(input2);
     await supervisor.start(principal, authority, input2);
@@ -673,6 +787,7 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
     const staleBefore = {...nearExpiry, claudeAiOauth: {...nearExpiry.claudeAiOauth, expiresAt: Date.now() - 10_000}};
     await writeFile(credential, JSON.stringify(staleBefore), {mode: 0o600});
     const createdBeforeFailures = created.length;
+    const sequenceBeforeFailures = sequence;
     const staleSupervisor = new NativeExecutionSupervisor(ledger, {
       id: 'claude-native-execution',
       workerImage: image,
@@ -692,20 +807,13 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
         throw new Error('EXAM_LOGIN_RENEW_FAILED');
       },
     }, {assertAdmission: async () => {}});
-    (staleSupervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
     Object.defineProperty(staleSupervisor, 'doc' + 'ker', {value: makeDaemon()});
 
-    const staleGrant = randomUUID();
-    const staleJob = randomUUID();
-    memory.insert('ac_capacity_grants', {
-      id: staleGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
-      resource_kind: 'model', state: 'reserved',
-    });
-    const staleInput = NativeExecutionRequest.parse({
-      jobId: staleJob, intentId: intent, grantId: staleGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Exame stale.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
-    });
+    const staleInput = reserveAttempt('specialist', 'Exame stale.');
+    const {jobId: staleJob, grantId: staleGrant} = staleInput;
+    const pendingIntents = [input1.intentId, input2.intentId];
+    const checkpoint = {context_id: context, snapshot: {pendingIntentIds: [...pendingIntents, staleInput.intentId]}};
+    memory.insert('ac_checkpoints', checkpoint);
     await assert.rejects(
       () => staleSupervisor.start(principal, authority, staleInput),
       (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
@@ -722,23 +830,25 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
       modelInference: false,
       reason: 'exam_login_stale',
     });
-    // recover() após job ter virado uncertain e sido liberado antes do launch preserva grant: 'released'.
+    assert.equal(memory.one('ac_native_execution_jobs', staleJob).state, 'failed');
+    assert.equal(memory.one('ac_intents', staleInput.intentId).state, 'failed');
+    assert.deepEqual(memory.tables.ac_checkpoints[0]?.snapshot, {pendingIntentIds: pendingIntents});
+    await assert.rejects(() => lstat(join(spool, staleJob)), {code: 'ENOENT'});
+    await assert.rejects(
+      () => staleSupervisor.recoverUnstartedExam(coOwner, authority, staleJob),
+      (error: unknown) => error instanceof Refusal && error.code === 'NATIVE_EXECUTION_SCOPE_MISMATCH',
+    );
+    assert.deepEqual(await staleSupervisor.recoverUnstartedExam(principal, authority, staleJob), {
+      state: 'failed', retirement: 'removed', intentState: 'failed', receipt: memory.one('ac_native_execution_jobs', staleJob).receipt,
+    });
+    // A recuperação genérica mantém a liberação mesmo sem request.json para reproduzir o resultado.
     const rec = await staleSupervisor.recover(principal, authority, staleJob);
     assert.equal(rec.grant, 'released');
-    assert.equal(rec.interval, 'network_unproven');
+    assert.equal(rec.interval, 'terminal_evidence_missing');
 
     // 3b) EXAM_LOGIN_BUSY libera o grant depois de o job virar uncertain.
-    const busyGrant = randomUUID();
-    const busyJob = randomUUID();
-    memory.insert('ac_capacity_grants', {
-      id: busyGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
-      resource_kind: 'model', state: 'reserved',
-    });
-    const busyInput = NativeExecutionRequest.parse({
-      jobId: busyJob, intentId: intent, grantId: busyGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Exame busy.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
-    });
+    const busyInput = reserveAttempt('specialist', 'Exame busy.');
+    const {jobId: busyJob, grantId: busyGrant} = busyInput;
     memory.lockTimeoutOnNextLock = true;
     await assert.rejects(
       () => staleSupervisor.start(principal, authority, busyInput),
@@ -761,27 +871,236 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
     await writeFile(targetOutside, JSON.stringify(staleBefore), {mode: 0o600});
     await rm(credential);
     await symlink(targetOutside, credential);
-    const missingTokenGrant = randomUUID();
-    const missingTokenJob = randomUUID();
-    memory.insert('ac_capacity_grants', {
-      id: missingTokenGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
-      resource_kind: 'model', state: 'reserved',
-    });
-    const missingTokenInput = NativeExecutionRequest.parse({
-      jobId: missingTokenJob, intentId: intent, grantId: missingTokenGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Exame symlink.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
-    });
+    const missingTokenInput = reserveAttempt('specialist', 'Exame symlink.');
     await assert.rejects(
       () => staleSupervisor.start(principal, authority, missingTokenInput),
       (error: unknown) => error instanceof Refusal && error.code === 'EXAM_LOGIN_STALE',
     );
     assert.equal(created.length, createdBeforeFailures);
-    assert.equal(memory.one('ac_capacity_grants', missingTokenGrant).state, 'released');
+    assert.equal(memory.one('ac_capacity_grants', missingTokenInput.grantId).state, 'released');
+
+    // 3d) Inspeção inconclusiva preserva a liberação e deixa a liquidação disponível para recuperação.
+    await rm(credential);
+    await writeFile(credential, JSON.stringify(staleBefore), {mode: 0o600});
+    const pendingInput = reserveAttempt('specialist', 'Exame com inspeção de rede indisponível.');
+    const pendingSnapshot = {pendingIntentIds: [...pendingIntents, pendingInput.intentId]};
+    memory.tables.ac_checkpoints[0]!.snapshot = structuredClone(pendingSnapshot);
+    const pendingPhysical = {
+      executionStarted: false, jobId: pendingInput.jobId, containerId: null, networkId: null,
+      synthetic: false, modelInference: false, reason: 'exam_login_stale',
+    };
+    networkInspectionUncertain = true;
+    await assert.rejects(
+      () => staleSupervisor.start(principal, authority, pendingInput),
+      (error: unknown) => error instanceof UnstartedExamRetirementPending && error.jobId === pendingInput.jobId,
+    );
+    const pendingGrant = memory.one('ac_capacity_grants', pendingInput.grantId);
+    assert.equal(pendingGrant.state, 'released');
+    assert.deepEqual(pendingGrant.physical_receipt, pendingPhysical);
+    const pendingJob = memory.one('ac_native_execution_jobs', pendingInput.jobId);
+    assert.equal(pendingJob.state, 'uncertain');
+    assert.equal(pendingJob.receipt, null);
+    assert.equal(memory.one('ac_intents', pendingInput.intentId).state, 'accepted');
+    assert.deepEqual(memory.tables.ac_checkpoints[0]?.snapshot, pendingSnapshot);
+    const pendingRecovery = await staleSupervisor.recover(principal, authority, pendingInput.jobId);
+    assert.equal(pendingRecovery.grant, 'released');
+    assert.equal(pendingRecovery.interval, 'network_unproven');
+    networkInspectionUncertain = false;
+    const settled = await staleSupervisor.recoverUnstartedExam(principal, authority, pendingInput.jobId);
+    const {state, receipt} = memory.one('ac_native_execution_jobs', pendingInput.jobId);
+    assert.equal(state, 'failed');
+    assert.ok(receipt && typeof receipt === 'object' && 'payload' in receipt && 'signature' in receipt);
+    assert.equal(verify(null, Buffer.from('agent-control:native-execution-receipt:v1\n' + canonical(receipt.payload)),
+      keys.publicKey, Buffer.from(String(receipt.signature), 'hex')), true);
+    assert.deepEqual(settled, {state: 'failed', retirement: 'removed', intentState: 'failed', receipt});
+    assert.equal(memory.one('ac_intents', pendingInput.intentId).state, 'failed');
+    assert.equal(memory.tables.ac_native_terminal_retirements.find(row => row.job_id === pendingInput.jobId)?.state, 'removed');
+    assert.deepEqual(memory.tables.ac_checkpoints[0]?.snapshot, {pendingIntentIds: pendingIntents});
+    await assert.rejects(() => lstat(join(spool, pendingInput.jobId)), {code: 'ENOENT'});
+    assert.equal(created.length, createdBeforeFailures);
+    assert.equal(sequence, sequenceBeforeFailures);
   } finally {
     server.close();
     homes.mock.restore();
     snaps.mock.restore();
+    await rm(area, {recursive: true, force: true});
+  }
+});
+
+test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser retomada', {skip: !process.env.AC_TEST_DATABASE_URL}, async () => {
+  const fixture = await isolatedDatabase(process.env.AC_TEST_DATABASE_URL!, 'examsettle');
+  const db = new Ledger(fixture.url);
+  const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-settle-')));
+  const repo = join(area, 'repo');
+  const spool = join(area, 'spool');
+  const accounts = join(area, 'accounts');
+  const socketPath = join(area, 'docker.sock');
+  const image = 'sha256:' + 'c'.repeat(64);
+  const dockerRequests: string[] = [];
+  const server = createServer((req, res) => {
+    dockerRequests.push(`${req.method} ${req.url}`);
+    res.statusCode = req.method === 'GET' && req.url === `/v1.44/images/${image}/json` ? 200 : 404;
+    res.end('{}');
+  });
+  try {
+    await new Promise<void>((resolve, reject) => server.once('error', reject).listen(socketPath, resolve));
+    for (const path of [repo, spool, accounts]) await mkdir(path, {mode: 0o700});
+    await db.migrate();
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    const project = randomUUID(), account = randomUUID(), profile = randomUUID();
+    const principal = 'exam-owner', coOwner = 'exam-co-owner';
+    const subject = 'a'.repeat(64), base = 'e'.repeat(40), model = 'claude-sonnet-5-5';
+    await db.pool.query('INSERT INTO ac_projects(id,label) VALUES($1,$2)', [project, 'Synthetic exam']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner'),($1,$3,'owner')", [project, principal, coOwner]);
+    await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)', [project, repo]);
+    await db.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)",
+      [project, digest({}), principal]);
+    const capacity = new Capacity(db);
+    await capacity.addAccount(principal, project, {
+      id: account, provider: 'claude', label: 'Synthetic exam', resourceIdentity: 'claude:' + subject,
+      mode: 'subscription_cli', eligibility: 'documented_supported', eligibilitySource: 'https://example.invalid/fixture', maxConcurrent: 1,
+    });
+    await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role) VALUES($1,$2,$3,'medium','specialist')", [profile, account, model]);
+    await capacity.observeQuota(principal, account, {status: 'available', source: 'https://example.invalid/fixture', ttlSeconds: 3600});
+    await new AccountHomes(db, accounts, [repo]).initialize(principal, project, account);
+    const credential = join(accounts, account, '.credentials.json');
+    await writeFile(credential, JSON.stringify({
+      claudeAiOauth: {accessToken: 'fixture-access-only', refreshToken: 'fixture-refresh-only', expiresAt: Date.now() - 10_000},
+    }), {mode: 0o600});
+    const context = await db.createContext(principal, project, randomUUID());
+    const authority = await db.acquire(principal, context, randomUUID(), 'exam-fixture', 60);
+    const keys = generateKeyPairSync('ed25519');
+    const supervisor = new NativeExecutionSupervisor(db, {
+      id: 'claude-native-execution', provider: 'claude', repository: repo, protectedRepositories: [],
+      workerImage: image, toolsImage: image, hostRoot: spool, accountRoot: accounts, socketPath,
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64), accountSubjects: [{accountId: account, subjectDigest: subject}],
+      workerEnv: [], toolsEnv: [],
+      examLoginRenew: async () => { throw new Error('EXAM_LOGIN_RENEW_FAILED'); },
+    }, {assertAdmission: async () => {}});
+
+    async function insertIntent(intentId: string, createdAt: string) {
+      const command = {
+        schemaVersion: 1, intentId, deliveryAttemptId: randomUUID(), contextId: context, policyRevision: 1, action: 'plan.start',
+        payload: {workflow: 'security-verify-readonly-v1', messageRef: `verify:${project}:${base}`, projectId: project, commit: base},
+      };
+      await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision,created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,0,$9)`,
+      [intentId, context, principal, digest(command), command, randomUUID(), randomUUID(), authority.epoch, createdAt]);
+    }
+    const earlyLowerId = '90000000-0000-4000-8000-000000000001';
+    const earlyHigherId = 'f0000000-0000-4000-8000-000000000002';
+    const lateLowerId = '10000000-0000-4000-8000-000000000003';
+    const intentId = randomUUID(), grantId = randomUUID(), jobId = randomUUID();
+    await insertIntent(lateLowerId, '2026-01-02T00:00:00Z');
+    await insertIntent(earlyHigherId, '2026-01-01T00:00:00Z');
+    await insertIntent(earlyLowerId, '2026-01-01T00:00:00Z');
+    await insertIntent(intentId, '2026-01-03T00:00:00Z');
+    const remaining = [earlyLowerId, earlyHigherId, lateLowerId];
+    // The ledger contains a pending intent absent from this out-of-order checkpoint.
+    const snapshot = {planRevision: 0, pendingIntentIds: [earlyHigherId, intentId, earlyLowerId]};
+    await db.pool.query('INSERT INTO ac_checkpoints(context_id,epoch,snapshot) VALUES($1,$2,$3)', [context, authority.epoch, snapshot]);
+    const input = NativeExecutionRequest.parse({
+      jobId, intentId, grantId, sessionId: randomUUID(), base, role: 'specialist', task: 'Exame sintético',
+      writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+    });
+    const insertGrant = (request: typeof input, grantedIntentId: string) =>
+      db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+        VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,
+      [request.grantId, randomUUID(), grantedIntentId, context, authority.epoch, account, profile, project, digest(request)]);
+    await insertGrant(input, intentId);
+    const readGrant = async (id: string = grantId) => (await db.pool.query(
+      'SELECT state,physical_receipt,intent_id,request_digest FROM ac_capacity_grants WHERE id=$1', [id])).rows[0];
+    const readJob = async () => (await db.pool.query(
+      'SELECT state,receipt,grant_id,intent_id FROM ac_native_execution_jobs WHERE id=$1', [jobId])).rows[0];
+    const readIntent = async () => (await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [intentId])).rows[0].state;
+    const readCheckpoint = async () => (await db.pool.query('SELECT * FROM ac_checkpoints WHERE context_id=$1', [context])).rows[0];
+    const readRetirement = async () => (await db.pool.query('SELECT state,proof FROM ac_native_terminal_retirements WHERE job_id=$1', [jobId])).rows[0];
+    const refuses = (code: string) => (error: unknown) => error instanceof Refusal && error.code === code;
+
+    await assert.rejects(() => supervisor.start(coOwner, authority, input), refuses('NATIVE_EXECUTION_SCOPE_MISMATCH'));
+    await assert.rejects(() => supervisor.start(principal, {...authority, instanceId: randomUUID()}, input), refuses('STALE_MANAGER'));
+    const mismatchedInput = NativeExecutionRequest.parse({...input, grantId: randomUUID(), intentId: earlyLowerId});
+    // Match the request digest at insertion, keeping the grant bound to a different accepted intent.
+    await insertGrant(mismatchedInput, earlyHigherId);
+    const mismatchedGrant = {
+      state: 'reserved', physical_receipt: null, intent_id: earlyHigherId, request_digest: digest(mismatchedInput),
+    };
+    assert.deepEqual(await readGrant(mismatchedInput.grantId), mismatchedGrant);
+    const savedCheckpoint = await readCheckpoint();
+    assert.deepEqual(savedCheckpoint.snapshot, snapshot);
+    await assert.rejects(() => supervisor.start(principal, authority, mismatchedInput), refuses('NATIVE_EXECUTION_NOT_ELIGIBLE'));
+    assert.deepEqual(await readCheckpoint(), savedCheckpoint);
+    assert.deepEqual(await readGrant(mismatchedInput.grantId), mismatchedGrant);
+    assert.equal(await readJob(), undefined);
+    const grantBinding = {intent_id: intentId, request_digest: digest(input)};
+    assert.deepEqual(await readGrant(), {...grantBinding, state: 'reserved', physical_receipt: null});
+    assert.equal(dockerRequests.length, 0);
+
+    // The checkpoint is written after the job receipt, retirement and intent state.
+    await db.pool.query(`CREATE FUNCTION fixture_fail_exam_checkpoint() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'fixture checkpoint write failed'; END $$;
+      CREATE TRIGGER fixture_fail_exam_checkpoint AFTER UPDATE ON ac_checkpoints
+      FOR EACH ROW EXECUTE FUNCTION fixture_fail_exam_checkpoint()`);
+    await assert.rejects(() => supervisor.start(principal, authority, input),
+      (error: unknown) => error instanceof UnstartedExamRetirementPending && error.jobId === jobId);
+    const physical = {
+      executionStarted: false, jobId, containerId: null, networkId: null,
+      synthetic: false, modelInference: false, reason: 'exam_login_stale',
+    };
+    const releasedGrant = {...grantBinding, state: 'released', physical_receipt: physical};
+    const jobBinding = {grant_id: grantId, intent_id: intentId};
+    const assertUnsettled = async () => {
+      assert.deepEqual(await readGrant(), releasedGrant);
+      assert.deepEqual(await readJob(), {...jobBinding, state: 'uncertain', receipt: null});
+      assert.equal(await readIntent(), 'accepted');
+      assert.equal(await readRetirement(), undefined);
+      assert.deepEqual(await readCheckpoint(), savedCheckpoint);
+    };
+    await assertUnsettled();
+    await assert.rejects(() => supervisor.recoverUnstartedExam(principal, authority, jobId), /fixture checkpoint write failed/);
+    await assertUnsettled();
+    await db.pool.query('DROP TRIGGER fixture_fail_exam_checkpoint ON ac_checkpoints');
+
+    // An admission can precede its own job row and still block recovery through the grant.
+    const admissionJobId = randomUUID();
+    assert.notEqual(admissionJobId, jobId);
+    await db.pool.query(`INSERT INTO ac_native_resource_admissions(job_id,grant_id,context_id,manager_epoch,authority_id,names,admission_id,state_root,state,reason)
+      VALUES($1,$2,$3,$4,'fixture',$5,$6,$7,'admitted','admitted')`,
+    [admissionJobId, grantId, context, authority.epoch,
+      JSON.stringify([`ac-native-tools-${admissionJobId}`, `ac-native-worker-${admissionJobId}`]), randomUUID(), area]);
+    const readAdmission = async () => (await db.pool.query(
+      'SELECT * FROM ac_native_resource_admissions WHERE grant_id=$1', [grantId])).rows[0];
+    const savedAdmission = await readAdmission();
+    assert.equal(savedAdmission?.job_id, admissionJobId);
+    assert.equal(savedAdmission.state, 'admitted');
+    assert.equal(savedAdmission.reason, 'admitted');
+    await assert.rejects(() => supervisor.recoverUnstartedExam(principal, authority, jobId), refuses('NATIVE_RETIREMENT_UNCONFIRMED'));
+    assert.deepEqual(await readAdmission(), savedAdmission);
+    await assertUnsettled();
+    assert.deepEqual((await db.pool.query('DELETE FROM ac_native_resource_admissions WHERE job_id=$1 RETURNING job_id',
+      [admissionJobId])).rows, [{job_id: admissionJobId}]);
+    assert.equal(await readAdmission(), undefined);
+
+    const settled = await supervisor.recoverUnstartedExam(principal, authority, jobId);
+    const {state, receipt, grant_id, intent_id} = await readJob();
+    assert.equal(state, 'failed');
+    assert.deepEqual({grant_id, intent_id}, jobBinding);
+    assert.equal(receipt.payload.executionStarted, false);
+    assert.equal(receipt.payload.physicalDigest, digest(physical));
+    assert.equal(verify(null, Buffer.from('agent-control:native-execution-receipt:v1\n' + canonical(receipt.payload)),
+      keys.publicKey, Buffer.from(receipt.signature, 'hex')), true);
+    assert.deepEqual(settled, {state: 'failed', retirement: 'removed', intentState: 'failed', receipt});
+    assert.equal(await readIntent(), 'failed');
+    assert.equal((await readRetirement()).state, 'removed');
+    assert.deepEqual((await readCheckpoint()).snapshot, {...snapshot, pendingIntentIds: remaining});
+    assert.deepEqual(await readGrant(), releasedGrant);
+    await assert.rejects(() => lstat(join(spool, jobId)), {code: 'ENOENT'});
+    assert.deepEqual(dockerRequests.filter(request => !request.startsWith('GET ')), []);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await db.close();
+    await fixture.close();
     await rm(area, {recursive: true, force: true});
   }
 });

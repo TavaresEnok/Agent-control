@@ -3,9 +3,12 @@ import {randomUUID} from 'node:crypto';
 import {chmod,copyFile,readFile,rename,writeFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import pg from 'pg';
-import {Refusal} from './contracts.ts';
-import {loadInstallation} from './installation.ts';
+import {Id,Refusal,type Authority} from './contracts.ts';
+import {loadInstallation,type Installation} from './installation.ts';
+import {Ledger} from './ledger.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
+import {readonlyDesignExam} from './native-execution-supervisor.ts';
+import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {refreshVerifyDatabases} from './verify-db.ts';
 
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -60,14 +63,78 @@ async function writeInstallationAtomically(file:string,raw:unknown){
  await rename(temporary,file);
 }
 
+function parseMaintenanceArgs(argv:readonly string[]){
+ const [installationPath,command,jobId]=argv;
+ if(!installationPath||installationPath.startsWith('-'))throw new Refusal('MAINTENANCE_USAGE');
+ if(argv.length===1)return {installationPath};
+ if(command!=='--abandonar-design'||!Id.safeParse(jobId).success||argv.length!==3)
+  throw new Refusal('MAINTENANCE_USAGE');
+ return {installationPath,recoverExamJobId:jobId};
+}
+
+/** Explicit local owner withdrawal of a single unstarted personal design attempt.
+ * Uses only the installation's configured project owner, context, product lease/fence, and supervisor absence proof. */
+async function recoverInterruptedExamFromInstallation(config:Installation,jobId:string,explicitDesignWithdrawal:boolean):Promise<string[]>{
+ const boot=config.nativeBootstrap;
+ if(!boot||boot.state!=='active')throw new Refusal('MAINTENANCE_NATIVE_REQUIRED',409);
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+ let authority:Authority|undefined;
+ try{
+  const row=(await ledger.pool.query<{
+   id:string;context_id:string;project_id:string;archived:boolean;principal_id:string;
+   parent_intent_id:string|null;workflow:unknown;role:string;account_id:string;
+   executor_digest:string;key_fingerprint:string;grant_project_id:string;grant_context_id:string;
+  }>(`SELECT j.id::text,j.context_id::text,x.project_id::text,x.archived,i.principal_id,
+    i.parent_intent_id::text,i.command->'payload'->>'workflow' AS workflow,j.role,j.account_id::text,
+    j.executor_digest,j.key_fingerprint,g.project_id::text AS grant_project_id,g.context_id::text AS grant_context_id
+    FROM ac_native_execution_jobs j
+    JOIN ac_contexts x ON x.id=j.context_id
+    JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
+    JOIN ac_capacity_grants g ON g.id=j.grant_id
+    WHERE j.id=$1`,[jobId])).rows[0];
+  if(!row||row.archived)throw new Refusal('MAINTENANCE_EXAM_NOT_FOUND',404);
+  const project=[config.project,...config.projects].find(item=>item.id===row.project_id);
+  if(!project)throw new Refusal('MAINTENANCE_EXAM_NOT_FOUND',404);
+  const principal=project.owner;
+  if(row.principal_id!==principal||!(await ledger.pool.query(
+   "SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,principal],
+  )).rowCount)throw new Refusal('MAINTENANCE_EXAM_PRINCIPAL_MISMATCH',403);
+  if(row.parent_intent_id!==null||!readonlyDesignExam(row.workflow,row.role)){
+   throw new Refusal('MAINTENANCE_EXAM_NOT_ELIGIBLE',409);
+  }
+  if(row.grant_project_id!==project.id||row.grant_context_id!==row.context_id){
+   throw new Refusal('NATIVE_EXECUTION_GRANT_MISMATCH',409);
+  }
+  try{
+   authority=await ledger.acquire(principal,row.context_id,randomUUID(),'personal-maintenance',60);
+  }catch(error){
+   if(error instanceof Refusal&&error.code==='MANAGER_ACTIVE')throw new Refusal('MAINTENANCE_CONTEXT_BUSY',409);
+   throw error;
+  }
+  const supervisors=await composePersonalExecutionSupervisors(config,ledger);
+  const supervisor=supervisors.find(item=>item.supportsAccount(row.account_id)&&item.executorDigest===row.executor_digest&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
+  const scope={projectId:project.id,repository:project.repo,explicitDesignWithdrawal};
+  if(supervisor)await supervisor.recoverUnstartedExam(principal,authority,jobId,scope);
+  else{
+   const verifier=supervisors.find(item=>item.supportsAccount(row.account_id)&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
+   if(!verifier)throw new Refusal('MAINTENANCE_SUPERVISOR_UNAVAILABLE',409);
+   await verifier.confirmRetiredUnstartedDesign(principal,authority,jobId,scope);
+  }
+  return [`Tentativa de design ${jobId} retirada sem execução (estado: failed, retirada: removed, intenção: failed).`];
+ }finally{
+  if(authority)await ledger.releaseLease(authority).catch(()=>{});
+  await ledger.close();
+ }
+}
+
 /** Weekly: old Docker build cache goes, and retired images no job still needs leave the installation and Docker.
  * Volumes, containers and images of other projects are never touched. The gateway keeps running. */
 export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps={}){
- const [installationArg]=argv;
- if(!installationArg||installationArg.startsWith('--')||argv.length!==1)throw new Refusal('MAINTENANCE_USAGE');
- const file=resolve(installationArg);
+ const parsed=parseMaintenanceArgs(argv);
+ const file=resolve(parsed.installationPath);
  const config=await loadInstallation(file);
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
+ if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
  const docker=deps.docker??(args=>run('docker',args,30*60*1000));
  const imageExists=deps.imageExists??(async image=>imageId.test(image)&&await run('docker',['image','inspect',image],30_000)===0);
  const lines:string[]=[];
