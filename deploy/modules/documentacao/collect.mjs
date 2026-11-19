@@ -22,6 +22,7 @@ import {createRequire} from 'node:module';
 import {dirname, extname, join, posix, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {isDeepStrictEqual} from 'node:util';
+import {catalogHasProtectedContent, hasProtectedReportText} from './report-privacy.mjs';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -36,6 +37,9 @@ const MAX_STDOUT_BYTES = 8 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 512 * 1024;
 const ARTIFACT_PART_BYTES = 880;
 const ARTIFACT_ENCODING = 'hex-utf8-v1';
+const REPORT_CONTROL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/u;
+const REPORT_CONTROL_GLOBAL = new RegExp(REPORT_CONTROL, 'gu');
+const OMITTED_DETAIL = 'Detalhe omitido por proteção de conteúdo.';
 const FORBIDDEN_REPORT_SEGMENTS = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 const TOOL_TIMEOUT_MS = 180_000;
 const TYPEDOC_DIAGNOSTIC_VERSION = '0.28.20';
@@ -1629,7 +1633,7 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
         line,
         severity: 'media',
         message: `Bloco Mermaid ${originalIndex == null ? 'iniciado ' : ''}em ${block.file}:${line} foi rejeitado pelo parser.${originalIndex == null ? ' Linha do erro indeterminada.' : ''}`,
-        evidence: errMsg.replace(/\s+/g, ' ').trim().slice(0, 240),
+        evidence: errMsg.replace(/\s+/g, ' '),
       });
       continue;
     }
@@ -1672,7 +1676,11 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
   };
 }
 
-function appendArtifact(coverage, tool, version, file, text) {
+function appendArtifact(coverage, privacy, tool, version, file, text, protectedSource) {
+  if (protectedSource || hasProtectedReportText(text) || REPORT_CONTROL.test(text)) {
+    privacy.artifacts.push(file);
+    return;
+  }
   // Keep envelope tokens short as well as payload tokens: the runtime sanitizes
   // coverage details before the report can assemble them.
   const envelope = fields => JSON.stringify(fields, null, 1).replaceAll('\n', '');
@@ -1705,43 +1713,59 @@ function isReportablePath(file) {
   );
 }
 
-function boundedText(value, limit = MAX_DETAIL_CHARS) {
-  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ')
-    .trim().slice(0, limit).toWellFormed() || 'sem detalhe';
+function boundedReportText(value, limit = MAX_DETAIL_CHARS) {
+  const clean = value.replaceAll(REPORT_CONTROL_GLOBAL, ' ').trim();
+  const bounded = clean.slice(0, limit).toWellFormed() || 'sem detalhe';
+  // Coverage details and finding messages are flattened again by the host.
+  const flattened = clean.replace(/\s*[\r\n]\s*/g, ' ');
+  if (hasProtectedReportText(value) || (clean !== value && hasProtectedReportText(clean))
+    || (bounded !== clean && hasProtectedReportText(bounded)) || (flattened !== clean && hasProtectedReportText(flattened))) return null;
+  return bounded;
 }
 
-function boundCollectorOutput(coverage, findings) {
+function isCoverageSummary(row) {
+  return row.tool.endsWith(':artefato') || !row.tool.includes(':') || row.tool === 'documentacao:privacidade'
+    || (row.tool === 'documentacao:input' && row.status !== 'skipped');
+}
+
+function boundCollectorOutput(coverage, findings, privacy) {
+  const publishableFindings = [];
+  let protectedFindings = 0;
+  for (const finding of findings) {
+    const evidenceLimit = finding.rule === 'DOC-MERMAID-SINTAXE-INVALIDA' ? 240 : MAX_DETAIL_CHARS;
+    const message = boundedReportText(finding.message);
+    const evidence = boundedReportText(finding.evidence, evidenceLimit);
+    if (hasProtectedReportText(finding.file) || message === null || evidence === null) {
+      protectedFindings += 1;
+    } else if (isReportablePath(finding.file)) {
+      publishableFindings.push({...finding, line: Math.min(finding.line, 10_000_000), message, evidence});
+    }
+  }
+  if (privacy.coverage || protectedFindings || privacy.artifacts.length) {
+    coverage.push({
+      tool: 'documentacao:privacidade', version: '1', status: 'skipped',
+      detail: `Proteção de conteúdo. achados_omitidos=${protectedFindings}; detalhes_cobertura_omitidos=${privacy.coverage}; artefatos_omitidos=${privacy.artifacts.join(', ') || 'nenhum'}`,
+    });
+  }
+
   // Reserve espaço para pontuação do JSON e para uma linha que sinalize os cortes.
   let bytesRemaining = MAX_STDOUT_BYTES - 512;
   const rowBytes = row => Buffer.byteLength(JSON.stringify(row), 'utf8') + 1;
-  const isSummary = row => row.tool.endsWith(':artefato')
-    || !row.tool.includes(':')
-    || (row.tool === 'documentacao:input' && row.status !== 'skipped');
-  const retainedCoverage = coverage.map(row =>
-    row.tool.endsWith(':artefato') ? row : {...row, detail: boundedText(row.detail)},
-  );
-  const summaries = retainedCoverage.filter(isSummary);
+  const summaries = coverage.filter(isCoverageSummary);
   for (const row of summaries) bytesRemaining -= rowBytes(row);
   let coverageSlots = MAX_COVERAGE_ROWS - summaries.length - 1;
 
   const retainedFindings = [];
-  for (const finding of findings) {
+  for (const row of publishableFindings) {
     if (retainedFindings.length === MAX_FINDINGS) break;
-    if (!isReportablePath(finding.file)) continue;
-    const row = {
-      ...finding,
-      line: Math.min(finding.line, 10_000_000),
-      message: boundedText(finding.message),
-      evidence: boundedText(finding.evidence),
-    };
     const bytes = rowBytes(row);
     if (bytes > bytesRemaining) break;
     bytesRemaining -= bytes;
     retainedFindings.push(row);
   }
 
-  const selectedCoverage = retainedCoverage.filter(row => {
-    if (isSummary(row)) return true;
+  const selectedCoverage = coverage.filter(row => {
+    if (isCoverageSummary(row)) return true;
     const bytes = rowBytes(row);
     if (coverageSlots === 0 || bytes > bytesRemaining) return false;
     coverageSlots -= 1;
@@ -1749,7 +1773,7 @@ function boundCollectorOutput(coverage, findings) {
     return true;
   });
   const omittedCoverage = coverage.length - selectedCoverage.length;
-  const omittedFindings = findings.length - retainedFindings.length;
+  const omittedFindings = findings.length - protectedFindings - retainedFindings.length;
   if (omittedCoverage || omittedFindings) {
     selectedCoverage.push({
       tool: 'documentacao:limites', version: '1', status: omittedFindings ? 'failed' : 'skipped',
@@ -1762,7 +1786,7 @@ function boundCollectorOutput(coverage, findings) {
 function readToolOutput(label, result, outputFile) {
   if (result.error) throw result.error;
   if (result.status !== 0 || !existsSync(outputFile)) {
-    const diagnostic = String(result.stderr || result.stdout || '').trim().slice(0, 200);
+    const diagnostic = String(result.stderr || result.stdout || '').trim();
     throw new Error(`${label}: status=${result.status ?? result.signal ?? 'desconhecido'}; arquivo_gerado=${existsSync(outputFile)}; ${diagnostic}`);
   }
   const output = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(readFileSync(outputFile));
@@ -1796,18 +1820,33 @@ export async function runCollector(opts = {}) {
 
   const coverage = [];
   const findings = [];
+  const privacy = {coverage: 0, artifacts: []};
+  const coverageDetail = (value, limit) => {
+    const detail = value ? boundedReportText(value, limit) : '';
+    if (detail !== null) return detail;
+    privacy.coverage += 1;
+    return OMITTED_DETAIL;
+  };
+  const addCoverage = (row, {file, limit} = {}) => {
+    const detail = file !== undefined && hasProtectedReportText(file) ? null : boundedReportText(row.detail, limit);
+    if (detail === null) {
+      privacy.coverage += 1;
+      if (!isCoverageSummary(row)) return;
+    }
+    coverage.push({...row, detail: detail ?? OMITTED_DETAIL});
+  };
 
   try {
     const manifestScripts = new Map();
     const {copiedFiles, skipped} = copyRepoSafely(repoDir, workRepoDir, opts, manifestScripts);
-    coverage.push({
+    addCoverage({
       tool: 'documentacao:input',
       version: '1',
       status: 'ok',
       detail: `arquivos_copiados=${copiedFiles.length}; entradas_omitidas=${skipped.length}`,
     });
     for (const file of skipped) {
-      coverage.push({tool: 'documentacao:input', version: '1', status: 'skipped', detail: `entrada=${JSON.stringify(file)}`});
+      addCoverage({tool: 'documentacao:input', version: '1', status: 'skipped', detail: `entrada=${JSON.stringify(file)}`}, {file});
     }
     const toolOptions = {
       cwd: workRepoDir,
@@ -1820,9 +1859,9 @@ export async function runCollector(opts = {}) {
     const readWorkFile = rel => readFileSync(join(workRepoDir, rel), 'utf8');
 
     const resolutionGap = measureResolutionCoverage(copiedFiles, skipped, readWorkFile, manifestScripts, toolsRoot);
-    if (resolutionGap) coverage.push({
+    if (resolutionGap) addCoverage({
       tool: 'dependency-cruiser:resolucao', version: versions.depcruise, status: 'skipped',
-      detail: `cobertura parcial: ${resolutionGap}; arestas documentadas não são comparadas`,
+      detail: `cobertura parcial: ${coverageDetail(resolutionGap)}; arestas documentadas não são comparadas`,
     });
 
     const codeFiles = copiedFiles.filter(
@@ -1842,7 +1881,7 @@ export async function runCollector(opts = {}) {
 
     // 1. TypeDoc
     if (codeFiles.length === 0) {
-      coverage.push({
+      addCoverage({
         tool: 'typedoc',
         version: versions.typedoc,
         status: 'skipped',
@@ -1899,27 +1938,28 @@ export async function runCollector(opts = {}) {
         const checkedByFile = new Map();
         const mdFindings = crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readWorkFile, checkedByFile);
         for (const [file, checked] of checkedByFile) {
-          coverage.push({
+          addCoverage({
             tool: 'typedoc:markdown',
             version: versions.typedoc,
             status: checked ? 'ok' : 'skipped',
             detail: `arquivo=${file}; assinaturas_conferidas=${checked}`,
-          });
+          }, {file});
         }
         findings.push(...tdFindings, ...mdFindings);
-        appendArtifact(coverage, 'typedoc:artefato', versions.typedoc, 'api.json', JSON.stringify(symbols, null, 2));
+        appendArtifact(coverage, privacy, 'typedoc:artefato', versions.typedoc, 'api.json',
+          JSON.stringify(symbols, null, 2), catalogHasProtectedContent(symbols));
 
         const documentedCount = symbols.filter(s => s.hasDoc).length;
         const undocumentedCount = symbols.length - documentedCount;
 
-        coverage.push({
+        addCoverage({
           tool: 'typedoc',
           version: versions.typedoc,
           status: 'ok',
           detail: `arquivos_codigo=${codeFiles.length}, simbolos_exportados=${symbols.length}, documentados=${documentedCount}, sem_doc=${undocumentedCount}, achados_typedoc=${tdFindings.length + mdFindings.length}, avisos_sem_origem=${parsedTd.unlocated}`,
         });
         for (const {rule, message} of parsedTd.unlocatedWarnings) {
-          coverage.push({
+          addCoverage({
             tool: 'typedoc:aviso',
             version: versions.typedoc,
             status: 'skipped',
@@ -1936,20 +1976,20 @@ export async function runCollector(opts = {}) {
           const fileSyms = symbolsByFile.get(codeFile) ?? [];
           const fileDocSyms = fileSyms.filter(s => s.hasDoc);
           const exportNames = fileSyms.map(s => s.name).join(',') || 'nenhum';
-          coverage.push({
+          addCoverage({
             tool: 'typedoc:file',
             version: versions.typedoc,
             status: 'ok',
             detail: `arquivo=${codeFile}; simbolos=${fileSyms.length}; documentados=${fileDocSyms.length}; exports=${exportNames}`,
-          });
+          }, {file: codeFile});
         }
       } catch (err) {
-        coverage.push({
+        addCoverage({
           tool: 'typedoc',
           version: versions.typedoc,
           status: 'failed',
-          detail: `falha ao executar typedoc: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-        });
+          detail: `falha ao executar typedoc: ${err instanceof Error ? err.message : String(err)}`,
+        }, {limit: 300});
       }
     }
 
@@ -1957,7 +1997,7 @@ export async function runCollector(opts = {}) {
     let generatedMermaid = '';
     let graph;
     if (codeFiles.length === 0) {
-      coverage.push({
+      addCoverage({
         tool: 'dependency-cruiser',
         version: versions.depcruise,
         status: 'skipped',
@@ -1990,19 +2030,19 @@ export async function runCollector(opts = {}) {
         generatedMermaid = cruise('mermaid', depMmdPath);
         graph = json;
       } catch (err) {
-        coverage.push({
+        addCoverage({
           tool: 'dependency-cruiser',
           version: versions.depcruise,
           status: 'failed',
-          detail: `falha ao executar dependency-cruiser: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-        });
+          detail: `falha ao executar dependency-cruiser: ${err instanceof Error ? err.message : String(err)}`,
+        }, {limit: 300});
       }
     }
 
     let documentReferences = new Map();
     // 3. Mermaid (validação sintática e estrutural dos diagramas documentados e do diagrama gerado)
     if (mermaidBlocks.length === 0 && !generatedMermaid) {
-      coverage.push({
+      addCoverage({
         tool: 'mermaid',
         version: versions.mermaid,
         status: 'skipped',
@@ -2022,42 +2062,48 @@ export async function runCollector(opts = {}) {
         documentReferences = parsedMermaid.documentReferences;
         findings.push(...parsedMermaid.findings);
 
-        coverage.push({
+        const error = coverageDetail(parsedMermaid.stats.generatedDiagramError, 200);
+        addCoverage({
           tool: 'mermaid',
           version: versions.mermaid,
           status: parsedMermaid.stats.generatedDiagramValid === false ? 'failed' : 'ok',
-          detail: `arquivos_doc=${parsedMermaid.stats.totalDocFiles}, blocos_mermaid=${parsedMermaid.stats.totalBlocks}, validos=${parsedMermaid.stats.validBlocks}, invalidos=${parsedMermaid.stats.invalidBlocks}, diagrama_codigo_valido=${parsedMermaid.stats.generatedDiagramValid ?? 'nao_gerado'}; erro_diagrama_gerado=${parsedMermaid.stats.generatedDiagramError.slice(0, 200)}`,
+          detail: `arquivos_doc=${parsedMermaid.stats.totalDocFiles}, blocos_mermaid=${parsedMermaid.stats.totalBlocks}, validos=${parsedMermaid.stats.validBlocks}, invalidos=${parsedMermaid.stats.invalidBlocks}, diagrama_codigo_valido=${parsedMermaid.stats.generatedDiagramValid ?? 'nao_gerado'}; erro_diagrama_gerado=${error}`,
         });
 
         for (const [docFile, st] of parsedMermaid.perFileStats) {
-          coverage.push({
+          addCoverage({
             tool: 'mermaid:file',
             version: versions.mermaid,
             status: st.blocks > 0 ? 'ok' : 'skipped',
             detail: `arquivo=${docFile}; blocos_mermaid=${st.blocks}; validos=${st.valid}; invalidos=${st.invalid}; referencias_modulos=${st.moduleRefsChecked}`,
-          });
+          }, {file: docFile});
         }
       } catch (err) {
-        coverage.push({
+        addCoverage({
           tool: 'mermaid',
           version: versions.mermaid,
           status: 'failed',
-          detail: `falha ao executar mermaid: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-        });
+          detail: `falha ao executar mermaid: ${err instanceof Error ? err.message : String(err)}`,
+        }, {limit: 300});
       }
     }
 
     let comparison;
     if (graph !== undefined) {
       try {
+        const graphData = JSON.parse(graph);
         const parsedDep = parseDepcruiseReport(
-          graph, generatedMermaid, workRepoDir, mermaidBlocks, readWorkFile, Boolean(resolutionGap), documentReferences,
+          graphData, generatedMermaid, workRepoDir, mermaidBlocks, readWorkFile, Boolean(resolutionGap), documentReferences,
         );
         comparison = parsedDep;
         findings.push(...parsedDep.findings.filter(finding => repoFilesSet.has(finding.file)));
-        appendArtifact(coverage, 'dependency-cruiser:artefato', versions.depcruise, 'dependencias.mmd', generatedMermaid);
+        // The renderer splits paths into folder and file labels. Check its source
+        // paths as well as the rendered text before emitting any artifact parts.
+        const graphHasProtectedPaths = graphData.modules.some(mod => typeof mod?.source === 'string' && hasProtectedReportText(mod.source));
+        appendArtifact(coverage, privacy, 'dependency-cruiser:artefato', versions.depcruise, 'dependencias.mmd',
+          generatedMermaid, graphHasProtectedPaths);
 
-        coverage.push({
+        addCoverage({
           tool: 'dependency-cruiser',
           version: versions.depcruise,
           status: 'ok',
@@ -2065,29 +2111,29 @@ export async function runCollector(opts = {}) {
         });
 
         for (const row of parsedDep.perFileCoverage.filter(row => repoFilesSet.has(row.file))) {
-          coverage.push({
+          addCoverage({
             tool: 'dependency-cruiser:file',
             version: versions.depcruise,
             status: 'ok',
             detail: `arquivo=${row.file}; deps=${row.deps}; dependentes=${row.dependents}; orfao=${row.orphan ? 'sim' : 'nao'}`,
-          });
+          }, {file: row.file});
         }
         const graphedFiles = new Set(parsedDep.perFileCoverage.map(row => row.file));
         for (const file of codeFiles) {
           if (!graphedFiles.has(file)) {
-            coverage.push({
+            addCoverage({
               tool: 'dependency-cruiser:file', version: versions.depcruise, status: 'skipped',
               detail: `arquivo=${file}; ausente no grafo gerado`,
-            });
+            }, {file});
           }
         }
       } catch (err) {
-        coverage.push({
+        addCoverage({
           tool: 'dependency-cruiser',
           version: versions.depcruise,
           status: 'failed',
-          detail: `falha ao ler o grafo do dependency-cruiser: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-        });
+          detail: `falha ao ler o grafo do dependency-cruiser: ${err instanceof Error ? err.message : String(err)}`,
+        }, {limit: 300});
       }
     }
     if (mermaidBlocks.length) {
@@ -2097,24 +2143,24 @@ export async function runCollector(opts = {}) {
       for (const [file, checked] of comparison.checkedEdgesByFile) {
         const skipped = comparison.skippedEdgesByFile.get(file) ?? 0;
         const unmeasured = comparison.unmeasuredByFile.get(file) ?? 0;
-        coverage.push({
+        addCoverage({
           tool: 'dependency-cruiser:diagrama',
           version: versions.depcruise,
           status: checked > 0 ? 'ok' : 'skipped',
           detail: `arquivo=${file}; arestas_doc_conferidas=${checked}; arestas_doc_nao_conferidas=${skipped}; trechos_doc_nao_medidos=${unmeasured}${skipped || unmeasured ? '; cobertura parcial' : ''}`,
-        });
+        }, {file});
       }
     }
 
-    return boundCollectorOutput(coverage, findings);
+    return boundCollectorOutput(coverage, findings, privacy);
   } catch (err) {
-    coverage.push({
+    addCoverage({
       tool: 'documentacao:input',
       version: '1',
       status: 'failed',
-      detail: boundedText(err instanceof Error ? err.message : String(err), 300),
-    });
-    return boundCollectorOutput(coverage, findings);
+      detail: err instanceof Error ? err.message : String(err),
+    }, {limit: 300});
+    return boundCollectorOutput(coverage, findings, privacy);
   } finally {
     rmSync(workRoot, {recursive: true, force: true});
   }
@@ -2136,7 +2182,7 @@ if (launchedAsEntry()) {
       process.stdout.write(`${JSON.stringify(result)}\n`);
     })
     .catch(err => {
-      const detail = boundedText(err instanceof Error ? err.message : String(err), 300);
+      const detail = boundedReportText(err instanceof Error ? err.message : String(err), 300) ?? OMITTED_DETAIL;
       const coverage = [{tool: 'documentacao', version: '1', status: 'failed', detail}];
       process.stdout.write(`${JSON.stringify({coverage, findings: []})}\n`);
     });

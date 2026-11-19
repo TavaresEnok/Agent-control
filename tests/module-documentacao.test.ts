@@ -20,6 +20,7 @@ import {
   validateMermaidDocuments,
 } from '../deploy/modules/documentacao/collect.mjs';
 import {assembleDocumentationArtifacts} from '../src/module-documentation-artifacts.ts';
+import {hasKnownSecret} from '../src/verify-redact.ts';
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const MODULE_DEPLOY_DIR = join(ROOT_DIR, 'deploy', 'modules', 'documentacao');
@@ -148,6 +149,7 @@ test('lockfiles, Dockerfile e entrypoint do módulo 8 fixam versões, integridad
   assert.ok(dockerfile.includes(lockSha256));
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /USER 65532:65532/);
+  assert.match(dockerfile, /COPY depcruise\.config\.json collect\.mjs report-privacy\.mjs \/opt\/documentacao-tools\//);
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/documentacao-entrypoint\.sh"\]/);
 
   assert.match(entrypoint, /DOCUMENTACAO_PATH_FORBIDDEN/);
@@ -603,6 +605,170 @@ function syntheticTools(reflection: unknown, diagram: string, graph: unknown = {
   };
   return {execFn, mermaidParseFn: async () => ({diagramType: 'flowchart-v2'})};
 }
+
+test('as regras de conteúdo protegido do coletor usam os mesmos padrões da publicação', () => {
+  const definitions = (source: string) => source.match(/^const NOT_A_MASK = [\s\S]*?^\];$/m)?.[0];
+  const canonical = definitions(readFileSync(join(ROOT_DIR, 'src', 'verify-redact.ts'), 'utf8'));
+  assert.ok(canonical);
+  assert.equal(definitions(readFileSync(join(MODULE_DEPLOY_DIR, 'report-privacy.mjs'), 'utf8')), canonical);
+});
+
+test('o host recusa o caminho no achado normalizado e publica a coleta com omissões', async () => {
+  const {parseModuleCollectorOutput, writeModuleReport} = await import('../src/verification-modules.ts');
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-private-paths-'));
+  const repoDir = join(tmp, 'repo');
+  const dataDirectory = join(tmp, 'data');
+  const similar = 'Z'.repeat(35);
+  const ordinaryFile = `src/${similar}.ts`;
+  const protectedFile = `src/${similar}Z.ts`;
+  const protectedSegment = `${'Y'.repeat(40)}.ts`;
+  const referencedFile = `src/${protectedSegment}`;
+  const skippedFile = `src/${'X'.repeat(36)}.txt`;
+  const protectedDoc = `doc/${'W'.repeat(36)}.md`;
+  const diagram = `flowchart LR\nA["src"] --> B["${similar}Z.ts"]\n`;
+  const absolutePath = '/tmp/ac-doc-work-example/repo/' + protectedFile;
+  const reflection = {kind: 1, name: 'sintético', children: [
+    {kind: 64, name: 'regular', sources: [{fileName: ordinaryFile, line: 1}]},
+    {kind: 64, name: 'internal', sources: [{fileName: protectedFile, line: 1}]},
+    {kind: 64, name: 'reviewed', sources: [{fileName: referencedFile, line: 1}],
+      comment: {summary: [{text: 'Função de teste.'}]}, signatures: [{parameters: [{name: 'current'}]}]},
+  ]};
+  const graph = {modules: [ordinaryFile, protectedFile, referencedFile].map(source => ({source, dependencies: []}))};
+  const common = {dataDirectory, module: 'documentacao' as const, fileCoverage: [], achados: [],
+    projectId: '11111111-1111-4111-8111-111111111111', runId: '33333333-3333-4333-8333-333333333333',
+    createdAt: new Date('2026-11-19T00:00:00Z'), commit: '0123456789abcdef0123456789abcdef01234567'};
+  try {
+    mkdirSync(join(repoDir, 'src'), {recursive: true});
+    mkdirSync(join(repoDir, 'doc'));
+    mkdirSync(dataDirectory, {mode: 0o700});
+    writeFileSync(join(repoDir, ordinaryFile), 'export function regular() {}\n');
+    writeFileSync(join(repoDir, protectedFile), 'export function internal() {}\n');
+    writeFileSync(join(repoDir, referencedFile), 'export function reviewed(current: number) {}\n');
+    writeFileSync(join(repoDir, skippedFile), 'Fixture nominal.\n');
+    writeFileSync(join(repoDir, protectedDoc), '```mermaid\nflowchart LR\nA --> B\n```\n');
+    writeFileSync(join(repoDir, 'README.md'), 'Confira `reviewed(old)` no exemplo.\n');
+
+    assert.equal(hasKnownSecret(protectedFile), true);
+    assert.equal(hasKnownSecret(ordinaryFile), false);
+    assert.equal(hasKnownSecret(referencedFile), false);
+    assert.equal(hasKnownSecret(protectedSegment), true);
+    assert.equal(hasKnownSecret(diagram), false);
+    assert.equal(hasKnownSecret(absolutePath), false);
+    const tools = syntheticTools(reflection, diagram, graph);
+    const raw = await runCollector({
+      ...tools, repoDir,
+      execFn: (bin, args, options) => {
+        const result = tools.execFn(bin, args, options);
+        return bin.endsWith('/typedoc')
+          ? {...result, stderr: `[warning] Failed to resolve link to "${absolutePath}" in comment for internal`}
+          : result;
+      },
+    });
+    assertValidCollectorContract(raw);
+    const normalized = parseModuleCollectorOutput(JSON.stringify(raw), {module: 'documentacao'});
+    assert.deepEqual(normalized.findings.map(finding => finding.file), [ordinaryFile]);
+    const legacy = parseModuleCollectorOutput(JSON.stringify({
+      coverage: normalized.coverage,
+      findings: [{...normalized.findings[0], file: protectedFile}],
+    }), {module: 'documentacao'});
+    assert.equal(legacy.findings[0]?.file, protectedFile);
+    assert.equal(hasKnownSecret(legacy.findings[0]!.message), false);
+    assert.equal(hasKnownSecret(legacy.findings[0]!.evidence), false);
+    await assert.rejects(writeModuleReport({...common, raw: legacy, toolCoverage: legacy.coverage}),
+      {code: 'VERIFY_SECRET_IN_REPORT'});
+    assert.equal(existsSync(join(dataDirectory, 'verificacoes')), false);
+
+    assert.deepEqual(assembleDocumentationArtifacts(normalized.coverage), {
+      'api.json': {status: 'absent'}, 'dependencias.mmd': {status: 'absent'},
+    });
+    const rows = normalized.coverage;
+    assert.ok(rows.some(row => row.tool === 'typedoc:markdown' && row.detail === 'arquivo=README.md; assinaturas_conferidas=1'));
+    assert.ok(rows.some(row => row.tool === 'typedoc:file' && row.detail.startsWith(`arquivo=${ordinaryFile};`)));
+    assert.ok(rows.some(row => row.tool === 'dependency-cruiser:file' && row.detail.startsWith(`arquivo=${ordinaryFile};`)));
+    assert.match(rows.find(row => row.tool === 'typedoc')!.detail, /simbolos_exportados=3/);
+    assert.match(rows.find(row => row.tool === 'typedoc')!.detail, /avisos_sem_origem=1/);
+    assert.equal(rows.some(row => row.tool === 'typedoc:aviso'), false);
+    assert.match(rows.find(row => row.tool === 'dependency-cruiser')!.detail, /modulos=3/);
+    assert.match(rows.find(row => row.tool === 'mermaid')!.detail, /blocos_mermaid=1, validos=1/);
+    assert.deepEqual(rows.filter(row => row.status === 'failed'), []);
+    assert.deepEqual(rows.find(row => row.tool === 'documentacao:privacidade'), {
+      tool: 'documentacao:privacidade', version: '1', status: 'skipped',
+      detail: 'Proteção de conteúdo. achados_omitidos=2; detalhes_cobertura_omitidos=9; artefatos_omitidos=api.json, dependencias.mmd',
+    });
+    const report = await writeModuleReport({...common, raw: normalized, toolCoverage: rows});
+    assert.equal(existsSync(join(report.directory, 'api.json')), false);
+    assert.equal(existsSync(join(report.directory, 'dependencias.mmd')), false);
+    const persisted = readFileSync(join(report.directory, 'bruto', 'achados-brutos.json'), 'utf8');
+    const rendered = readFileSync(join(report.directory, 'cobertura.md'), 'utf8');
+    assert.ok(persisted.includes(ordinaryFile));
+    assert.match(rendered, /artefatos_omitidos=api\.json, dependencias\.mmd/);
+    for (const protectedName of [protectedFile, protectedSegment, skippedFile, protectedDoc]) {
+      assert.equal(JSON.stringify(raw).includes(protectedName), false);
+      assert.equal(persisted.includes(protectedName), false);
+      assert.equal(rendered.includes(protectedName), false);
+    }
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('omissões no catálogo, no grafo e em diagnósticos preservam os produtos independentes', async () => {
+  const cleanDiagram = 'flowchart LR\nA-->B\n';
+  const safeCatalog = {kind: 1, name: 'sintético', children: [
+    {kind: 64, name: 'calculateInvoice', sources: [{fileName: 'src/billing.ts', line: 8}]},
+  ]};
+  const signaturePart = `ghp_${'Q'.repeat(20)}`;
+  const protectedDescription = '"client_secret": "fixture de documentação"';
+  const graph = {modules: [{source: 'src/billing.ts', dependencies: []}]};
+  const descriptionCatalog = {...safeCatalog, children: [{...safeCatalog.children[0], comment: {summary: [{text: protectedDescription}]}}]};
+  const signatureCatalog = {...safeCatalog, children: [{...safeCatalog.children[0], signatures: [{parameters: [{name: signaturePart}]}]}]};
+  assert.equal(hasKnownSecret(protectedDescription), true);
+  assert.equal(hasKnownSecret(JSON.stringify(descriptionCatalog)), false);
+  const withDescription = await runCollector({repoDir: FIXTURE_CLEAN_DIR, ...syntheticTools(descriptionCatalog, cleanDiagram, graph)});
+  const withSignature = await runCollector({repoDir: FIXTURE_CLEAN_DIR, ...syntheticTools(signatureCatalog, cleanDiagram, graph)});
+  const withGraph = await runCollector({repoDir: FIXTURE_CLEAN_DIR, ...syntheticTools(safeCatalog, `${cleanDiagram}%% ${protectedDescription}\n`, graph)});
+  const validateArtifacts = async (output: CollectorOutput) => assembleDocumentationArtifacts((await validateWithBase(output)).coverage);
+  for (const output of [withDescription, withSignature]) {
+    assert.deepEqual(await validateArtifacts(output), {
+      'api.json': {status: 'absent'}, 'dependencias.mmd': {status: 'present', content: cleanDiagram},
+    });
+    assert.match(output.coverage.find(row => row.tool === 'documentacao:privacidade')!.detail, /artefatos_omitidos=api\.json$/);
+  }
+  const artifacts = await validateArtifacts(withGraph);
+  assert.equal(artifacts['api.json'].status, 'present');
+  assert.equal(artifacts['dependencias.mmd'].status, 'absent');
+  assert.equal(withGraph.findings.some(finding => finding.file === 'src/billing.ts'), true);
+  assert.equal(JSON.stringify(withSignature).includes(signaturePart), false);
+  assert.equal(JSON.stringify(withDescription).includes('fixture de documentação'), false);
+  assert.equal(JSON.stringify(withGraph).includes('fixture de documentação'), false);
+  for (const output of [withDescription, withSignature, withGraph]) {
+    for (const tool of ['typedoc', 'dependency-cruiser', 'mermaid']) {
+      assert.equal(output.coverage.find(row => row.tool === tool)?.status, 'ok');
+    }
+  }
+
+  const testTools = syntheticTools(safeCatalog, cleanDiagram, graph);
+  const diagnostic = 'aviso sintético '.repeat(14) + signaturePart;
+  const withDiagnostics = await runCollector({
+    repoDir: FIXTURE_CLEAN_DIR,
+    execFn: (bin, args, options) => bin.endsWith('/typedoc')
+      ? {status: 1, stderr: diagnostic} : testTools.execFn(bin, args, options),
+    mermaidParseFn: async code => {
+      if (code !== cleanDiagram) throw new Error(diagnostic);
+      return testTools.mermaidParseFn();
+    },
+  });
+  const diagnostics = await validateWithBase(withDiagnostics);
+  const typedoc = diagnostics.coverage.find(row => row.tool === 'typedoc');
+  assert.equal(typedoc?.status, 'failed');
+  assert.equal(typedoc.detail, 'Detalhe omitido por proteção de conteúdo.');
+  assert.match(diagnostics.coverage.find(row => row.tool === 'mermaid')!.detail, /invalidos=2/);
+  assert.match(diagnostics.coverage.find(row => row.tool === 'documentacao:privacidade')!.detail,
+    /achados_omitidos=2; detalhes_cobertura_omitidos=1; artefatos_omitidos=nenhum/);
+  assert.equal(JSON.stringify(withDiagnostics).includes(signaturePart), false);
+  assert.deepEqual(assembleDocumentationArtifacts(diagnostics.coverage)['dependencias.mmd'],
+    {status: 'present', content: cleanDiagram});
+});
 
 test('a base recebe as partes e os produtos completos preservam aspas, escapes, Unicode e quebras de linha', async () => {
   const summary = 'Exemplo "sintético" \\ com acentuação e emoji 🧪\r\n\ttrecho\n'.repeat(150) + 'fim.';
