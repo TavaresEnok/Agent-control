@@ -531,3 +531,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:10 UTC — Revisor encerrou C-EXAME-R5 em 6ec910f0 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:10 UTC — Revisão C-EXAME-R5-INTEGRACAO iniciada por Sol high normal somente leitura em 1fd88007.
 - 19/11/2026 06:11 UTC — Em c87a21ab passaram 26/26 na rodada das oito CLIs e da reverificação. C5 a22546c0: prova física verde com pg_stat_statements, Docker, Git e PostgreSQL; a medição confirma a fonte correta e a substituição por SELECT 1 recebe provável. C-PAINEL 58690bb2: sete testes passaram na API. C2 fast-check integrado em f4cb3216; imagem será reconstruída.
+- 19/11/2026 06:11 UTC — Trabalhador encerrou C4-JAVA em 1924a13c (código 0). Gerente confere a entrega.
+- 19/11/2026 06:11 UTC — Trabalho C9-R6 iniciado por Sol high normal em final-c9.
+- 19/11/2026 06:14 UTC — Revisor encerrou C-EXAME-R5-INTEGRACAO em 1fd88007 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:14 UTC — Revisão C2-R11 iniciada por Sol high normal somente leitura em 2a440fd9.
+- 19/11/2026 06:17 UTC — Trabalhador encerrou C-REVERIFICAR-R4 em ced1deaf (código 0). Gerente confere a entrega.
+- 19/11/2026 06:17 UTC — Trabalho C2-CONTRATOS iniciado por Sol high normal em final-qa-contratos.
+- 19/11/2026 06:18 UTC — QA 1d357911: o fast-check executou 32 casos no controle e reproduziu a falsificação na imagem. A regra fixa agora preserva sua identidade no relatório; os três controles fora do catálogo continuaram saneados. Em 9b8f9850, passaram 26/26 exames e provas de persistência; a ordem de correção dos oito módulos foi lida na conversa principal do projeto correspondente. Faltam a rodada de fidelidade das rotas e o aceite.
