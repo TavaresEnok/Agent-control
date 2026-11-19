@@ -1674,7 +1674,7 @@ function resticCommand(args) {
 const BACKUP_CANDIDATE_RE = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
 
 const SHELL_CONTROL_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', '{', '!']);
-const TIMEOUT_DURATION_RE = /^[ \t]*\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?|0x(?:[\da-f]+(?:\.[\da-f]*)?|\.[\da-f]+)(?:p[+-]?\d+)?|inf(?:inity)?)[smhd]?$/i;
+const TIMEOUT_DURATION_RE = /^[ \t]*\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|0[xX](?:[\da-fA-F]+(?:\.[\da-fA-F]*)?|\.[\da-fA-F]+)(?:[pP][+-]?\d+)?|[iI][nN][fF](?:[iI][nN][iI][tT][yY])?)[smhd]?$/;
 // GNU coreutils on the Linux image: traditional names, aliases and real-time signals.
 const LINUX_SIGNAL_NAMES = new Set('EXIT HUP INT QUIT ILL TRAP ABRT IOT BUS FPE KILL USR1 SEGV USR2 PIPE ALRM TERM STKFLT CHLD CLD CONT STOP TSTP TTIN TTOU URG XCPU XFSZ VTALRM PROF WINCH IO POLL PWR SYS'.split(' '));
 function timeoutSignal(value) {
@@ -1683,10 +1683,9 @@ function timeoutSignal(value) {
   if (LINUX_SIGNAL_NAMES.has(signal)) return 'valid';
   if (/^\d+$/.test(signal)) {
     const n = Number(signal);
-    if (n <= 64) return n !== 32 && n !== 33 ? 'valid' : 'invalid';
-    if (n < 128) return 'invalid';
-    if (n >= 128 && n <= 159) return 'valid';
-    return 'dynamic'; // Other numeric encodings depend on the utility/platform.
+    if (!Number.isSafeInteger(n) || n > 2147483647) return 'invalid';
+    const normalized = n & (n >= 255 ? 255 : 127);
+    return normalized <= 64 && normalized !== 32 && normalized !== 33 ? 'valid' : 'invalid';
   }
   const rt = /^RT(MIN|MAX)(?:([+-])(\d+))?$/.exec(signal);
   if (rt) {
@@ -1697,8 +1696,7 @@ function timeoutSignal(value) {
   return 'invalid';
 }
 function invalidDuration(value) {
-  // Numeric-looking forms outside our recognized grammar may be accepted by strtod.
-  const dynamic = /[$`*?\[\]]/.test(value) || /^[ \t]*\+?(?:\d|\.)/.test(value);
+  const dynamic = /[$`*?\[\]]/.test(value);
   return {words: [], query: !dynamic, ambiguous: dynamic};
 }
 function signalResult(value) {
@@ -1902,6 +1900,12 @@ function skipWrapperOptions(words, spec, binary) {
       return {words: [], query: false, ambiguous: false};
     }
     if (!TIMEOUT_DURATION_RE.test(rest[0].text ?? '')) {
+      // A dynamic word before a possible duration can instead be an option.
+      if (/[$`*?\[\]]/.test(rest[0].text ?? '') && rest[1] && !rest[1].operator
+        && (TIMEOUT_DURATION_RE.test(rest[1].text ?? '') || (rest[1].text ?? '').startsWith('-')
+          || /[$`*?\[\]]/.test(rest[1].text ?? ''))) {
+        return {words: [], query: false, ambiguous: true};
+      }
       const result = invalidDuration(rest[0].text ?? '');
       if (!acceptUncertain(result)) return result;
     }

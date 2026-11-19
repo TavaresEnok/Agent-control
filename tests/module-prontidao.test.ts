@@ -2428,13 +2428,47 @@ test('R8: validade do timeout, posição do executável e array HTTP genérico',
       assert.equal(status(out, 'alertas-logs'), 'ok', args);
       assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), false, args);
     }
+    // Fixed inputs only: invoke the local utility directly with an inert executable.
+    const durationCases: [string, boolean][] = [
+      ['1s', true], ['30S', false], ['30ss', false], ['1e1s', true], ['0x1P2s', true],
+      ['+1s', true], ['.1s', true], ['INF', true], ['1e', false], ['1s ', false],
+    ];
+    for (const [value, accepted] of durationCases) {
+      for (const killAfter of [false, true]) {
+        const options = killAfter ? [`--kill-after=${value}`, '1s'] : ['--', value];
+        const actual = childProcess.spawnSync('/usr/bin/timeout', [...options, '/usr/bin/true'], {encoding: 'utf8', timeout: 3000});
+        assert.equal(actual.status === 0, accepted, JSON.stringify(options));
+        // Quote whitespace as a single shell word in the static fixture.
+        const literal = `'${value}'`;
+        const out = await audit(killAfter
+          ? `timeout --kill-after=${literal} 1s npm run personal:watch`
+          : `timeout -- ${literal} npm run personal:watch`);
+        assert.equal(status(out, 'alertas-logs'), 'ok', JSON.stringify(options));
+        assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), !accepted, JSON.stringify(options));
+      }
+    }
+    for (const [value, accepted] of [['32', false], ['64', true], ['65', false], ['128', true],
+      ['143', true], ['159', true], ['160', false], ['191', true], ['192', true], ['255', false],
+      ['256', true], ['271', true], ['288', false], ['320', true], ['384', false], ['2147483648', false]] as [string, boolean][]) {
+      const actual = childProcess.spawnSync('/usr/bin/timeout', [`--signal=${value}`, '1s', '/usr/bin/true'], {encoding: 'utf8', timeout: 3000});
+      assert.equal(actual.status === 0, accepted, value);
+      const out = await audit(`timeout --signal=${value} 1s npm run personal:watch`);
+      assert.equal(status(out, 'alertas-logs'), 'ok', value);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), !accepted, value);
+    }
+    for (const command of ['npm run personal:watch', 'df -P /', 'pg_dump db']) {
+      for (const options of ['30s', '--foreground 30s', '-- 30s']) {
+        const out = await audit(`timeout "$OPCAO" ${options} ${command}`);
+        const pillar = command.startsWith('npm') ? 'alertas-logs' : command.startsWith('df') ? 'disco-memoria' : 'backup-restauracao';
+        assert.equal(status(out, pillar), 'failed', `${options}: ${command}`);
+      }
+    }
     const empty = await audit('timeout --signal= 30s npm run personal:watch');
     assert.equal(status(empty, 'alertas-logs'), 'ok');
     assert.equal(has(empty, 'PRONTIDAO-ALERTA-AUSENTE'), true);
-    const uncertain = await audit('timeout --signal=160 30s npm run personal:watch');
-    assert.equal(status(uncertain, 'alertas-logs'), 'failed');
-    assert.equal(status(uncertain, 'backup-restauracao'), 'ok');
-    assert.equal(has(uncertain, 'PRONTIDAO-ALERTA-AUSENTE'), false);
+    const invalidSignal = await audit('timeout --signal=160 30s npm run personal:watch');
+    assert.equal(status(invalidSignal, 'alertas-logs'), 'ok');
+    assert.equal(has(invalidSignal, 'PRONTIDAO-ALERTA-AUSENTE'), true);
     for (const line of [
       `timeout "$LIMITE" /usr/bin/printf '%s\\n' pg_dump npm run personal:watch`,
       `timeout --signal="$SINAL" 30s /usr/bin/printf '%s\\n' pg_dump npm run personal:watch && true`,
