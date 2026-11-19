@@ -55,7 +55,7 @@ export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,se
  if(v.role!=='programmer'&&(!v.artifactId||!v.outputSchema||v.writePaths.length))c.addIssue({code:'custom',message:'READONLY_ARTIFACT_REQUIRED'});
 });
 type Input=z.infer<typeof NativeExecutionRequest>;
-type PersonalExamRecoveryScope={projectId:string;repository:string;confirmedHistoricalExam:boolean};
+type PersonalExamRecoveryScope={projectId:string;repository:string;explicitDesignWithdrawal:boolean};
 export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;provider?:'codex'|'claude'|'grok';socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
  workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture;
@@ -235,7 +235,7 @@ export class NativeExecutionSupervisor{
     await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
     // The live call has the original request. Limit automatic settlement to
     // exam login refusals that immediately terminate the caller's exam.
-    if(grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model){
+    if(grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model&&!input.effort&&!input.task.startsWith('Pedido de criação.')){
      const row=await this.loadUnstartedExam(c,authority,input.jobId);
      try{
       this.validateUnstartedExam(row,context,principal,authority,false);
@@ -243,8 +243,11 @@ export class NativeExecutionSupervisor{
       await this.jobRepository(c,String(context.project_id));
       await this.confirmUnstartedAbsence(input.jobId);
      }catch(error){
-      if(error instanceof Refusal||error instanceof z.ZodError||(error as NodeJS.ErrnoException).code==='ENOENT')return;
-      throw error;
+      // Inspection is best effort here: the durable physical receipt must survive
+      // every inspection failure, including malformed Docker responses.
+      const code=safeFailureCode(error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code,'NATIVE_PRELAUNCH_INSPECTION_FAILED');
+      console.error(JSON.stringify({event:'NATIVE_PRELAUNCH_SETTLEMENT_PENDING',jobId:input.jobId,code}));
+      return;
      }
      await this.settleUnstartedExam(c,authority,row);
     }
@@ -459,7 +462,7 @@ export class NativeExecutionSupervisor{
    !verify(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(receipt.signature,'hex'))||
    payload.schemaVersion!==1||payload.jobId!==job.id||payload.intentId!==job.intent_id||payload.contextId!==contextId||payload.grantId!==job.grant_id||payload.sessionId!==job.session_id||
    payload.epoch!==Number(job.manager_epoch)||payload.accountId!==job.account_id||payload.profileId!==job.profile_id||payload.profileDigest!==job.profile_digest||
-   payload.inputDigest!==job.input_digest||payload.executorDigest!==this.executorDigest||payload.outputDigest!==digest('')||
+   payload.inputDigest!==job.input_digest||payload.executorDigest!==job.executor_digest||payload.outputDigest!==digest('')||
    payload.executionStarted!==false||payload.exitCode!==1||payload.workerExitCode!==1||payload.artifact!==null||
    grant?.state!=='released'||!grant.physical_receipt||payload.physicalDigest!==digest(grant.physical_receipt)||
    job.state!=='failed'||job.worker_id||job.tools_id||job.network_id||job.launch_digest)
@@ -542,7 +545,10 @@ export class NativeExecutionSupervisor{
    EXISTS(SELECT 1 FROM ac_operations o WHERE o.id=j.id OR o.intent_id=i.id) has_operation,
    EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id OR s.intent_id=i.id) has_stage_operation,
    EXISTS(SELECT 1 FROM ac_native_resource_admissions r WHERE (r.job_id=j.id OR r.grant_id=g.id) AND r.state<>'canceled') has_active_admission,
-   EXISTS(SELECT 1 FROM ac_native_execution_jobs other WHERE other.intent_id=i.id AND other.id<>j.id) has_other_job,
+   (EXISTS(SELECT 1 FROM ac_native_execution_jobs other WHERE other.intent_id=i.id AND other.id<>j.id)
+    OR EXISTS(SELECT 1 FROM ac_native_qa_jobs q WHERE q.intent_id=i.id)
+    OR EXISTS(SELECT 1 FROM ac_native_planning_jobs pj JOIN ac_semantic_planning_calls pc ON pc.id=pj.id WHERE pc.intent_id=i.id)) has_other_job,
+   EXISTS(SELECT 1 FROM ac_intents child WHERE child.parent_intent_id=i.id) has_child_intent,
    EXISTS(SELECT 1 FROM ac_native_execution_jobs other WHERE other.intent_id=i.id AND other.id<>j.id AND other.state IN ('uncertain','running')) has_unresolved_job,
    EXISTS(SELECT 1 FROM ac_capacity_grants other WHERE other.intent_id=i.id AND other.id<>g.id AND other.state<>'released') has_open_grant
    FROM ac_native_execution_jobs j
@@ -552,7 +558,7 @@ export class NativeExecutionSupervisor{
    JOIN ac_profiles p ON p.id=j.profile_id AND p.account_id=a.id
    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g,i FOR SHARE OF a,p`,[jobId,authority.contextId])).rows[0];
  }
- private validateUnstartedExam(row:Record<string,any>|undefined,context:Record<string,any>,principal:string,authority:Authority,allowHistorical:boolean):asserts row is Record<string,any>{
+ private validateUnstartedExam(row:Record<string,any>|undefined,context:Record<string,any>,principal:string,authority:Authority,allowHistorical:boolean,allowRetiredExecutor=false):asserts row is Record<string,any>{
   if(!row)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
   if(!row.personal)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
   const command=row.intent_command,payload=command?.payload,workflow=payload?.workflow;
@@ -564,10 +570,10 @@ export class NativeExecutionSupervisor{
    Number(row.intent_epoch)!==Number(row.manager_epoch))
    throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
   if(row.cancellation_requested)throw new Refusal('PLAN_CANCELLATION_REQUESTED');
-  if(row.executor_digest!==this.executorDigest||row.key_fingerprint!==this.fingerprint||Number(row.manager_epoch)>authority.epoch)
+  if((!allowRetiredExecutor&&row.executor_digest!==this.executorDigest)||row.key_fingerprint!==this.fingerprint||Number(row.manager_epoch)>authority.epoch)
    throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
   if(!['uncertain','failed'].includes(row.state)||row.worker_id!==null||row.tools_id!==null||row.network_id!==null||row.launch_digest!==null||
-   row.has_active_admission||row.has_open_grant||row.has_unresolved_job||(row.state==='uncertain'&&row.receipt!==null))
+   row.has_active_admission||row.has_open_grant||row.has_unresolved_job||row.has_child_intent||(allowHistorical&&row.has_other_job)||(row.state==='uncertain'&&row.receipt!==null))
    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   if(row.grant_state!=='released'||row.grant_resource_kind!=='model'||row.grant_project_id!==context.project_id||
    row.grant_context_id!==row.context_id||row.grant_intent_id!==row.intent_id||Number(row.grant_epoch)!==Number(row.manager_epoch)||
@@ -588,6 +594,7 @@ export class NativeExecutionSupervisor{
   const historical=design&&row.role==='specialist'&&
    !row.dedicated_context&&row.context_id===row.main_context_id&&!row.has_other_job&&
    physical.reason==='exam_login_stale'&&payload.messageRef==='design:'+target;
+  if(allowHistorical&&!design)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
   if(!markedExam){
    if(!historical)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    if(!allowHistorical)throw new Refusal('NATIVE_EXECUTION_HISTORICAL_CONFIRMATION_REQUIRED');
@@ -616,7 +623,7 @@ export class NativeExecutionSupervisor{
     repository!==await realpath(localOwnerScope.repository)))
     throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    const row=await this.loadUnstartedExam(c,authority,jobId);
-   this.validateUnstartedExam(row,context,principal,authority,localOwnerScope?.confirmedHistoricalExam===true);
+   this.validateUnstartedExam(row,context,principal,authority,localOwnerScope?.explicitDesignWithdrawal===true);
    const p=this.paths(jobId);
    if(await lstat(p.root).catch(error=>{
     if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
@@ -630,13 +637,35 @@ export class NativeExecutionSupervisor{
     if(bytes)try{
      const request=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));
      if(digest(request)!==row.input_digest||request.jobId!==jobId||request.intentId!==row.intent_id||request.grantId!==row.grant_id||
-      request.sessionId!==row.session_id||request.role!==row.role||request.base!==row.base_id||request.model||request.task.startsWith('Pedido de criação.'))
+      request.sessionId!==row.session_id||request.role!==row.role||request.base!==row.base_id||
+      (!localOwnerScope?.explicitDesignWithdrawal&&(request.model||request.effort||request.task.startsWith('Pedido de criação.'))))
       throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
     }finally{bytes.fill(0);}
    }
    await this.confirmUnstartedAbsence(jobId);
    return this.settleUnstartedExam(c,authority,row);
   }));
+ }
+ /** Verify an already retired design attempt using its signed durable records,
+  * even when its old image pair is no longer configured. Never mutates state. */
+ async confirmRetiredUnstartedDesign(principal:string,authority:Authority,jobId:string,scope:PersonalExamRecoveryScope){
+  Id.parse(jobId);
+  return this.ledger.tx(async c=>{
+   const context=await this.ledger.authorize(c,principal,authority.contextId);
+   await this.ledger.fence(c,authority,true);
+   const repository=await this.jobRepository(c,String(context.project_id));
+   if(context.role!=='owner'||context.project_id!==scope.projectId||repository!==await realpath(scope.repository))throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+   const row=await this.loadUnstartedExam(c,authority,jobId);
+   this.validateUnstartedExam(row,context,principal,authority,scope.explicitDesignWithdrawal,true);
+   if(row.state!=='failed'||row.intent_state!=='failed')throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1',[jobId])).rows[0];
+   const binding=this.unstartedRetirementBinding(row,row.receipt);
+   if(saved?.state!=='removed'||digest(saved.binding)!==digest(binding)||!saved.proof?.payload||digest(saved.proof.payload)!==digest(binding)||
+    typeof saved.proof.signature!=='string'||!/^[a-f0-9]{128}$/.test(saved.proof.signature)||
+    !verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(saved.proof.payload)),createPublicKey(this.key),Buffer.from(saved.proof.signature,'hex')))
+    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const};
+  });
  }
  async reconcileRegistered(principal:string,authority:Authority,jobId:string){
   try{return await this.reconcile(principal,authority,await this.registeredInput(principal,authority,jobId));}
