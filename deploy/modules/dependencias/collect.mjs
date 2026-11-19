@@ -20,6 +20,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import semver from 'semver';
 import {minimatch} from 'minimatch';
+import {JAVA_SOURCE_LIMITS, runOpenRewriteCheck} from './collect-java.mjs';
 import {validateCycloneDx} from './cyclonedx.mjs';
 import {fetchRegistryVersion, NPM_REGISTRY} from './fetch-registry.mjs';
 
@@ -200,8 +201,11 @@ export async function discoverRepoFiles(repoRoot) {
   const manifests = [];
   const lockfiles = new Map();
   const sourceFiles = [];
+  const javaFiles = [];
   const sbomFiles = [];
   let hasJavaProject = false;
+  let skippedJavaSources = 0;
+  let javaBytes = 0;
   let skippedSymlinks = 0;
   let skippedOversized = 0;
   let skippedManifestLimit = 0;
@@ -221,16 +225,25 @@ export async function discoverRepoFiles(repoRoot) {
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       if (entry.name.includes('\0')) continue;
+      const javaSource = entry.name.endsWith('.java');
       const fullPath = join(currentDir, entry.name);
       let info;
       try {
         info = await lstat(fullPath);
       } catch {
         readErrors += 1;
+        if (javaSource) {
+          hasJavaProject = true;
+          skippedJavaSources += 1;
+        }
         continue;
       }
       if (info.isSymbolicLink()) {
         skippedSymlinks += 1;
+        if (javaSource) {
+          hasJavaProject = true;
+          skippedJavaSources += 1;
+        }
         continue;
       }
       if (info.isDirectory()) {
@@ -239,10 +252,22 @@ export async function discoverRepoFiles(repoRoot) {
         continue;
       }
       if (!info.isFile()) continue;
-      const rel = toRepoRelPath(relative(repoRoot, fullPath).split(sep).join(posix.sep), '');
+      const rawRel = relative(repoRoot, fullPath).split(sep).join(posix.sep);
+      if (javaSource) {
+        hasJavaProject = true;
+        if (/[\\\u0000-\u001f\u007f]/.test(rawRel) || info.size > JAVA_SOURCE_LIMITS.fileBytes
+          || javaFiles.length >= JAVA_SOURCE_LIMITS.files || javaBytes + info.size > JAVA_SOURCE_LIMITS.totalBytes) {
+          skippedJavaSources += 1;
+        } else {
+          javaFiles.push({rel: rawRel, fullPath});
+          javaBytes += info.size;
+        }
+        continue;
+      }
+      const rel = toRepoRelPath(rawRel, '');
       if (!rel) continue;
 
-      if (entry.name === 'pom.xml' || entry.name === 'build.gradle' || entry.name === 'build.gradle.kts' || entry.name.endsWith('.java')) {
+      if (entry.name === 'pom.xml' || entry.name === 'build.gradle' || entry.name === 'build.gradle.kts') {
         hasJavaProject = true;
       }
 
@@ -290,8 +315,10 @@ export async function discoverRepoFiles(repoRoot) {
     manifests,
     lockfiles,
     sourceFiles,
+    javaFiles,
     sbomFiles,
     hasJavaProject,
+    skippedJavaSources,
     skippedSymlinks,
     skippedOversized, skippedManifestLimit, skippedSourceLimit, skippedSourceBytes, readErrors,
   };
@@ -1906,15 +1933,17 @@ export async function runCollection(options = {}) {
       lookupLock,
     });
 
+    const javaRes = await runOpenRewriteCheck({
+      repoRoot,
+      workRoot,
+      runtime: options.openRewriteHome ?? join(MODULE_DIR, 'openrewrite', 'runtime'),
+      detected: discovered.hasJavaProject,
+      files: discovered.javaFiles,
+      skipped: discovered.skippedJavaSources,
+      readArtifact,
+    });
+
     const optionalCoverage = [
-      {
-        tool: 'openrewrite',
-        version: 'nao-instalada',
-        status: 'skipped',
-        detail: discovered.hasJavaProject
-          ? 'Projeto Java detectado (pom.xml/build.gradle), mas OpenRewrite não está disponível no modo offline sem cache Maven.'
-          : 'Nenhum projeto Java (pom.xml/build.gradle) detectado; OpenRewrite ignorado.',
-      },
       {
         tool: 'renovate',
         version: 'nao-instalada',
@@ -1938,6 +1967,7 @@ export async function runCollection(options = {}) {
         ...astGrepRes.coverage,
         ...jscodeshiftRes.coverage,
         ...sbomLockRes.coverage,
+        ...javaRes.coverage,
         ...optionalCoverage,
         ...copyCoverage,
       ],
@@ -1946,6 +1976,7 @@ export async function runCollection(options = {}) {
         ...astGrepRes.findings,
         ...jscodeshiftRes.findings,
         ...sbomLockRes.findings,
+        ...javaRes.findings,
       ],
     };
 

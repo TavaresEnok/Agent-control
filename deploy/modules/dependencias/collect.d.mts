@@ -40,8 +40,10 @@ export interface DiscoveredRepoFiles {
   manifests: DiscoveredManifest[];
   lockfiles: Map<string, string>;
   sourceFiles: DiscoveredSourceFile[];
+  javaFiles: DiscoveredManifest[];
   sbomFiles: DiscoveredManifest[];
   hasJavaProject: boolean;
+  skippedJavaSources: number;
   skippedSymlinks: number;
   skippedOversized: number;
   skippedManifestLimit: number;
@@ -91,6 +93,7 @@ export function runCollection(options?: {
   jscodeshiftVersion?: string;
   sgConfigPath?: string;
   transformPath?: string;
+  openRewriteHome?: string;
 }): Promise<ModuleCollectorOutput>;
 
 export function runAstGrepCheck(input: {sourceFiles: DiscoveredSourceFile[]; isoSrcDir: string; astGrepBin: string; astGrepVersion: string; sgConfigPath: string}): Promise<ModuleCollectorOutput>;
