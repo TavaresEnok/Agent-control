@@ -73,13 +73,14 @@ const {classifyMutant, comparePasses, decodeNodeReport, planMutations, runBounde
 test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e usuario 65532', () => {
   const verified = verifyQaLockfiles(qaModuleDir);
   assert.equal(verified.ok, true);
-  assert.equal(verified.toolCount, 5);
+  assert.equal(verified.toolCount, 8);
   assert.ok(verified.totalLockedPackages >= 100);
 
   const dockerfile = readFileSync(join(qaModuleDir, 'Dockerfile'), 'utf8');
   const lock = JSON.parse(readFileSync(join(qaModuleDir, 'qa-tools.lock.json'), 'utf8')) as {
     packageLockSha256: string;
     baseImage: {digest: string; tag: string};
+    dependencies: {'playwright-core': {version: string}};
     languageRuntimes: {
       python: {version: string; image: string};
       go: {version: string; image: string};
@@ -88,6 +89,8 @@ test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e
   };
   assert.match(lock.baseImage.digest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(dockerfile.includes(lock.baseImage.digest), true);
+  assert.ok(dockerfile.includes(`:${lock.baseImage.tag}@${lock.baseImage.digest}`));
+  assert.ok(lock.baseImage.tag.startsWith(`v${lock.dependencies['playwright-core'].version}-`));
   assert.equal(dockerfile.includes(lock.packageLockSha256), true);
   assert.equal(/latest/i.test(dockerfile), false);
   assert.match(dockerfile, /sha256sum -c/);
@@ -196,7 +199,7 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
     );
 
   assert.equal(output.findings.some(f => ['node-test-v8', 'stryker-mutator'].includes(f.tool)), false);
-  assert.equal(hasFinding('qa-matriz-estatica', 'QA-REQUISITO-SEM-PROVA', 'requisitos.md', 4), true);
+  assert.equal(hasFinding('qa-matriz-estatica', 'QA-REQUISITO-SEM-CANDIDATO', 'requisitos.md', 4), true);
   assert.ok(output.coverage.every(row => !/fast-check|playwright|k6/.test(row.tool)));
   assert.match(output.coverage.find(row => row.tool === 'qa-propriedades-funcionais')?.detail ?? '',
     /0 de 4 casos/);
@@ -425,6 +428,8 @@ test('nomes válidos com dois pontos e subárvore clean têm análise e JSON', r
     mkdirSync(join(repo, 'docs'));
     mkdirSync(join(repo, 'src'));
     cpSync(cleanFixtureDir, join(repo, 'clean'), {recursive: true});
+    const requirements = join(repo, 'clean', 'requisitos.md');
+    writeFileSync(requirements, readFileSync(requirements, 'utf8').replace('src/clean-pricing.ts', 'clean/src/clean-pricing.ts'));
     writeFileSync(join(repo, 'docs', 'versao..md'), '# versão');
     writeFileSync(join(repo, 'docs', 'revisão com espaço.md'), '# revisão');
     writeFileSync(join(repo, 'clean', 'tests', 'segundo..test.ts'), "test('sintético sem asserção', () => {});");
@@ -471,7 +476,7 @@ test('limites de cópia tornam as análises parciais e impedem acusar contrato o
     assert.match(coverageFor(report, 'node-test-v8').detail, /snapshot parcial/);
     assert.match(coverageFor(report, 'stryker-mutator').detail, /snapshot parcial/);
     assert.match(coverageFor(report, 'qa-rota:GET /pedidos/:id').detail, /contrato não confirmado/);
-    assert.ok(!report.findings.some(f => ['QA-CONTRATO-ROTA-SEM-OPENAPI', 'QA-REQUISITO-SEM-PROVA'].includes(f.rule)));
+    assert.ok(!report.findings.some(f => ['QA-CONTRATO-ROTA-SEM-OPENAPI', 'QA-REQUISITO-SEM-CANDIDATO'].includes(f.rule)));
     assert.ok(report.findings.some(f => f.rule === 'QA-TESTE-SEM-ASSERCAO'));
   });
 });
@@ -493,7 +498,7 @@ test('o limite de 400 contabiliza somente arquivos elegíveis', realTools, async
     for (const tool of ['node-test-v8', 'stryker-mutator']) {
       assert.match(coverageFor(complete, tool).detail, /reservada ao contêiner isolado/);
     }
-    assert.ok(complete.findings.some(finding => finding.rule === 'QA-REQUISITO-SEM-PROVA'));
+    assert.ok(complete.findings.some(finding => finding.rule === 'QA-REQUISITO-SEM-CANDIDATO'));
 
     writeFileSync(join(repo, 'zzzz.md'), '# Elegível');
     const partial = await collectQaModule({repoDir: repo});
@@ -502,7 +507,7 @@ test('o limite de 400 contabiliza somente arquivos elegíveis', realTools, async
     for (const tool of ['node-test-v8', 'stryker-mutator']) {
       assert.match(coverageFor(partial, tool).detail, /snapshot parcial/);
     }
-    assert.ok(!partial.findings.some(finding => finding.rule === 'QA-REQUISITO-SEM-PROVA'));
+    assert.ok(!partial.findings.some(finding => finding.rule === 'QA-REQUISITO-SEM-CANDIDATO'));
   });
 });
 
@@ -617,7 +622,7 @@ test('contrato preserva especificação válida e rotas quando outra especifica�
   });
 });
 
-test('axe registra que baixo contraste ficou sem medição e informa a versão instalada', realTools, async () => {
+test('axe estático mantém a versão instalada e declara o escopo sem layout', realTools, async () => {
   await withSyntheticRepo('qa-contraste-', async repo => {
     writeFileSync(join(repo, 'contraste.html'), '<!doctype html><html lang="pt"><head><title>Controle</title></head>' +
       '<body><main><p style="color:#aaa;background-color:#aaa">Texto sintético</p></main></body></html>');
@@ -627,7 +632,8 @@ test('axe registra que baixo contraste ficou sem medição e informa a versão i
     assert.equal(axe.version, installed.version);
     assert.match(axe.detail, /regra color-contrast desativada/);
     assert.match(axe.detail, /sem scripts nem layout/);
-    assert.ok(!report.findings.some(f => f.rule === 'QA-AXE-COLOR-CONTRAST'));
+    const contrast = coverageFor(report, 'qa-contraste:contraste.html');
+    if (contrast.status === 'skipped') assert.ok(!report.findings.some(f => f.rule === 'QA-AXE-COLOR-CONTRAST'));
   });
 });
 
@@ -724,12 +730,15 @@ test('matriz lê o callback após opções, exige execução aprovada e reconhec
     "describe.skip('grupo inativo', () => { test('REQ-04 teste do grupo', () => assert.equal(42, 42)); });",
     "test('REQ-05 todo', {timeout: 1000, todo: true}, () => assert.equal(42, 42));",
     "test('REQ-06 status todo em execução', {timeout: 1000}, context => { context.todo(); assert.equal(42, 42); });",
+    "test('REQ-07 parâmetro sombreado', context => { { const context = {skip() {}, todo() {}}; context.skip(); context.todo(); } assert.equal(2 + 2, 4); });",
   ].join('\n');
   await withSyntheticRepo('qa-status-', async repo => {
     writeFileSync(join(repo, file), source);
-    writeFileSync(join(repo, 'requisitos.md'), Array.from({length: 6}, (_, index) => `REQ-0${index + 1}: sintético`).join('\n'));
+    writeFileSync(join(repo, 'requisitos.md'), Array.from({length: 7}, (_, index) => `REQ-0${index + 1}: sintético`).join('\n'));
     const staticReport = await collectQaModule({repoDir: repo});
     assert.ok(!staticReport.findings.some(f => f.rule === 'QA-TESTE-SEM-ASSERCAO'));
+    assert.ok(!staticReport.findings.some(f => f.rule === 'QA-TESTE-PULADO' && f.line === 9));
+    assert.doesNotMatch(coverageFor(staticReport, 'qa-requisito:REQ-07').detail, /skip\/todo possível/);
     const passes = [];
     for (let index = 0; index < 3; index++) {
       const scratch = join(repo, `run-${index}`);
@@ -741,13 +750,14 @@ test('matriz lê o callback após opções, exige execução aprovada e reconhec
     const matrix = buildTraceability({workspace: repo, sourceAnalyses: [], reqFiles: ['requisitos.md'],
       testAnalyses: [await readTestAst(file, source)], runtimeTests, incomplete: false});
     assert.deepEqual(matrix.findings.map(f => f.line), process.platform === 'linux' ? [2, 3, 4, 5, 6] : [3, 4, 5, 6]);
-    assert.match(matrix.extraRows.find(row => row.tool === 'qa-requisito:REQ-01')?.detail ?? '', /passed,passed,passed.*asserção executada/);
+    assert.match(matrix.extraRows.find(row => row.tool === 'qa-requisito:REQ-01')?.detail ?? '', /passed,passed,passed.*asserção concluída/);
     if (process.platform === 'linux') assert.match(matrix.findings[0]!.evidence, /skipped,skipped,skipped/);
     assert.match(matrix.findings.at(-1)!.evidence, /todo,todo,todo/);
+    assert.match(coverageFor({coverage: matrix.extraRows}, 'qa-requisito:REQ-07').detail, /vínculo comprovado/);
   });
 });
 
-test('matriz exige uma asserção executada e atribuída a cada teste nas três passadas', realTools, async () => {
+test('matriz exige uma asserção concluída e atribuída a cada teste nas três passadas', realTools, async () => {
   const file = 'assertions.test.mjs';
   const source = [
     "import {before, test as scenario} from 'node:test';",
@@ -771,18 +781,18 @@ test('matriz exige uma asserção executada e atribuída a cada teste nas três 
     const runtimeTests = comparePasses(passes);
     assert.ok(runtimeTests.every((test: {statuses: string[]}) => test.statuses.every(status => status === 'passed')));
     assert.deepEqual(runtimeTests.map((test: {assertionStatuses: string[]}) => [...new Set(test.assertionStatuses)]),
-      [['unobserved'], ['executed'], ['unobserved'], ['unsupported'], ['unsupported'], ['executed']]);
+      [['unobserved'], ['completed'], ['unobserved'], ['unsupported'], ['unsupported'], ['completed']]);
     const matrix = buildTraceability({workspace: repo, sourceAnalyses: [], reqFiles: ['requisitos.md'],
       testAnalyses: [await readTestAst(file, source)], runtimeTests, incomplete: false});
     assert.deepEqual(matrix.findings.map(f => f.line), [1, 3]);
-    assert.match(matrix.findings[0]!.evidence, /passed,passed,passed.*asserção não observada/);
+    assert.match(matrix.findings[0]!.evidence, /passed,passed,passed.*conclusão da asserção não observada/);
     for (const id of ['REQ-14', 'REQ-15']) {
       const coverage = coverageFor({coverage: matrix.extraRows}, `qa-requisito:${id}`);
       assert.equal(coverage.status, 'skipped');
       assert.match(coverage.detail, /passed,passed,passed.*cobertura limitada/);
     }
     for (const id of ['REQ-12', 'REQ-16']) {
-      assert.match(coverageFor({coverage: matrix.extraRows}, `qa-requisito:${id}`).detail, /asserção executada nas três passadas/);
+      assert.match(coverageFor({coverage: matrix.extraRows}, `qa-requisito:${id}`).detail, /asserção concluída nas três passadas/);
     }
   });
 });
@@ -822,21 +832,28 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
       'REQ-66: `interna` de `aliases.mjs`',
       'REQ-67: `primeira`',
       'REQ-68: retorna `OK`',
-      '- REQ-69: operação antiga (`listada`)',
+      '- REQ-69: operação antiga (`listada` de `aliases.mjs`)',
       'REQ-70: `primeira` de `a.mjs` e `2inválido`',
+      'REQ-84: a soma deve devolver o valor esperado (`OK`).',
+      'REQ-85: calcular o total (`primeira` de `ausente.mjs`).',
+      'REQ-86: cálculo histórico (`listada`).',
+      'REQ-87: calcular (`primeira` de `ausente.mjs`) em duas operações.',
+      'REQ-88: cálculo (`primeira` de `ausente.mjs` e `listada`).',
     ], {
-      'a.mjs': "export function primeira() { return 'OK'; }\nexport function segunda() {}\nexport function OK() {}",
+      'a.mjs': "export function primeira() { return 'OK'; }\nexport function segunda() {}\nexport function OK() { return 2 + 2; }",
       'b.mjs': 'export function segunda() { return 2; }\nexport function primeira() {}',
-      'aliases.mjs': 'export {interna as cálculo$, listada};\nfunction interna() { return 3; }\nfunction listada() { return 4; }',
+      'aliases.mjs': 'export {interna as cálculo$, listada};\nconst interna = () => 3;\nfunction listada() { return 4; }',
     }, [
       "import {test} from 'node:test'; import assert from 'node:assert/strict';",
-      "import {primeira} from './a.mjs'; import {segunda} from './b.mjs';",
+      "import {primeira, OK} from './a.mjs'; import {segunda} from './b.mjs';",
       "import {cálculo$ as alias, listada} from './aliases.mjs';",
-      "test('REQ-63 caminho real diferente', () => assert.equal(primeira(), 'OK'));",
+      "test('REQ-63 REQ-85 REQ-87 caminho divergente', () => assert.equal(primeira(), 'OK'));",
       "test('segunda no caminho correto', () => assert.equal(segunda(), 2));",
       "test('alias exportado', () => assert.equal(alias(), 3));",
       "test('função exportada por lista', () => assert.equal(listada(), 4));",
       "test('REQ-68 por título', () => assert.equal('OK', 'OK'));",
+      "test('função homônima ao valor esperado', () => assert.equal(OK(), 4));",
+      "test('REQ-86 título insuficiente para referência ambígua', () => assert.equal(listada(), 4));",
     ]);
     for (const id of [61, 64, 65, 68, 69]) {
       assert.equal(result.row(id).status, 'ok', String(id));
@@ -855,11 +872,20 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
     }
     assert.match(result.row(63).detail, /primeira \(ausente\.mjs\) sem resolução/);
     assert.doesNotMatch(result.row(63).detail, /primeira \(a\.mjs:/);
-    assert.deepEqual(result.findings.map(finding => finding.line), [2, 7]);
+    assert.deepEqual(result.findings.map(finding => finding.line), [2]);
     assert.equal(result.row(62).status, 'ok');
     assert.match(result.row(62).detail, /vínculo sem prova nas três passadas/);
-    assert.equal(result.row(67).status, 'ok');
-    assert.match(result.row(67).detail, /vínculo sem prova nas três passadas/);
+    assert.equal(result.row(67).status, 'skipped');
+    assert.match(result.row(67).detail, /referência ambígua.*informe/);
+    for (const id of [84, 86, 87, 88]) {
+      assert.equal(result.row(id).status, 'skipped');
+      assert.match(result.row(id).detail, /referência ambígua.*informe/);
+    }
+    assert.doesNotMatch(result.row(84).detail, /OK \(a\.mjs:/);
+    assert.equal(result.row(85).status, 'skipped');
+    assert.match(result.row(85).detail, /primeira \(ausente\.mjs\) sem resolução/);
+    assert.doesNotMatch(result.row(85).detail, /primeira \(a\.mjs:/);
+    assert.match(result.row(88).detail, /primeira \(ausente\.mjs\) sem resolução/);
   });
 });
 
@@ -902,7 +928,7 @@ test('matriz e V8 concordam sobre operandos, spreads, chamadas opcionais e sombr
       "test('REQ-80 chamada fora da asserção', () => { features.somenteFora(); assert.equal(1, 1); });",
       "test?.('REQ-81 registro opcional', () => assert.equal(features.emRegistroOpcional(), 1));",
       "test('REQ-82 método trocado', () => { const equal = assert.equal; assert.equal = assert.ok; try { assert.equal(1, features.trocaDeMetodo()); } finally { assert.equal = equal; } });",
-      "test('REQ-83 função em spread', () => { const args = [features.dentroDoSpread(), 1]; assert.equal(...args); });",
+      "test('função em spread', () => { const args = [features.dentroDoSpread(), 1]; assert.equal(...args); });",
     ]);
     const names = [
       ['texto', 'padrão'], ['outroTexto', 'outroPadrão'], [], [], ['antesDaMensagem'], [], [], [], [], [], [], ['trocaDeMetodo'], [],
@@ -910,21 +936,166 @@ test('matriz e V8 concordam sobre operandos, spreads, chamadas opcionais e sombr
     const identities = (names: string[]) => names.map(name => JSON.stringify(['features.mjs', name]));
     assert.deepEqual(result.testAnalysis.activeTests.map(test => test.features), names.map(identities));
     assert.deepEqual(result.testAnalysis.activeTests.flatMap(test => test.limitedFeatures),
-      identities(['depoisDoSpread', 'opcional', 'emAssertOpcional', 'emRegistroOpcional']));
+      identities(['depoisDoSpread', 'opcional', 'emAssertOpcional', 'emRegistroOpcional', 'dentroDoSpread']));
     assert.deepEqual(result.runtimeTests.map((test: {featurePasses: string[][]}) => test.featurePasses),
       names.map(names => Array.from({length: 3}, () => identities(names.filter(name => name !== 'trocaDeMetodo')))));
     for (const id of [71, 72, 75]) assert.equal(result.row(id).status, 'ok', String(id));
-    for (const id of [74, 76, 77, 79, 81, 83]) {
+    for (const id of [74, 76, 77, 81, 83]) {
       assert.equal(result.row(id).status, 'skipped', String(id));
       assert.match(result.row(id).detail, /prova não medida: cobertura limitada/);
     }
-    for (const id of [73, 78, 80, 82]) {
+    for (const id of [73, 78, 79, 80, 82]) {
       assert.equal(result.row(id).status, 'ok', String(id));
       assert.match(result.row(id).detail, /vínculo sem prova nas três passadas/);
     }
-    assert.deepEqual(result.findings.map(finding => finding.line), [3, 8, 10, 12]);
+    assert.deepEqual(result.findings.map(finding => finding.line), [3, 8, 9, 10, 12]);
     assert.ok(result.staticFindings.some(finding => finding.line === 3 && /execução não medida/.test(finding.message)));
     assert.equal(result.staticRow(73).status, 'skipped');
+  });
+});
+
+test('matriz associa a conclusão da asserção à invocação na mesma avaliação', realTools, async () => {
+  await withSyntheticRepo('qa-conclusao-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      'REQ-91: soma sintética',
+      'REQ-92: `capturada`',
+      'REQ-93: `bloqueada`',
+      'REQ-94: `intercalada`',
+      'REQ-95: `falha`',
+      'REQ-96: `controle`',
+      'REQ-97: `espalhada`',
+      'REQ-98: `inativa` e `opcional`',
+      'REQ-99: `substituida`',
+    ], {
+      'aritmetica.mjs': [
+        'export function capturada() { return 1 + 1; }',
+        'export function bloqueada() { throw new RangeError(); }',
+        'let chamadas = 0;',
+        'export function intercalada(x) { chamadas++; return x + 1; }',
+        'export function contagem() { return chamadas; }',
+        'export function falha(x) { if (x < 0) throw new RangeError(); }',
+        'export function controle(a, b) { if (this.controle !== controle || a + b !== 3) throw new RangeError(); }',
+        'export function espalhada() { throw new RangeError(); }',
+        'export function inativa() { return 1; }',
+        'export function opcional() { return 1; }',
+        'export function substituida() { return 0; }',
+        'export function substituir() { substituida = () => 1; }',
+      ].join('\n'),
+    }, [
+      "import {test} from 'node:test'; import assert, {throws as deveLancar} from 'node:assert/strict';",
+      "import * as arit from './aritmetica.mjs';",
+      'function entrada(valor) { if (valor < 0) throw new RangeError(); return valor; }',
+      "test('REQ-91 comparação capturada', () => { try { assert.equal(arit.capturada(), 3); } catch {} });",
+      "test('mesmo operando com outra asserção concluída', () => { try { assert.equal(arit.capturada(), 3); } catch {} assert.equal(1 + 1, 2); });",
+      "test('exceção durante a avaliação do argumento', () => assert.throws(() => arit.bloqueada(entrada(-1)), RangeError));",
+      "test('mesmo ponto com resultados intercalados', () => {",
+      '  for (const x of [1, -1]) {',
+      '    try { assert.throws(() => arit.intercalada(entrada(x)), RangeError); } catch {}',
+      '  }',
+      '  assert.equal(arit.contagem(), 1);',
+      '});',
+      "test('callback com matcher', () => deveLancar(() => { return arit.falha(-1); }, RangeError));",
+      "test('callback com mensagem preserva ordem, receptor e quantidade de avaliações', () => {",
+      '  const ordem = [];',
+      "  assert.doesNotThrow(() => arit.controle(...[ordem.push(1), ordem.push(2)]), 'soma de 1 e 2');",
+      '  assert.deepEqual(ordem, [1, 2]);',
+      '});',
+      "test('callback em spread com título genérico', () => { const args = [() => arit.espalhada(), RangeError]; assert.throws(...args); });",
+      "test('prova direta em ramo inativo', () => { if (false) assert.equal(arit.inativa(), 1); assert.equal(2 + 2, 4); });",
+      "test('prova de alcance limitado', () => assert.equal(arit.opcional?.(), 1));",
+      "test('vínculo importado foi substituído', () => { arit.substituir(); assert.equal(arit.substituida(), 1); });",
+    ]);
+    const measuredFeatures = result.runtimeTests.map((test: {
+      assertionStatuses: string[]; featurePasses: string[][]; failedFeaturePasses: string[][];
+    }) => {
+      const [completed] = test.featurePasses;
+      const [failed] = test.failedFeaturePasses;
+      assert.ok(test.featurePasses.every(pass => JSON.stringify(pass) === JSON.stringify(completed)));
+      assert.ok(test.failedFeaturePasses.every(pass => JSON.stringify(pass) === JSON.stringify(failed)));
+      return {completed, failed, statuses: test.assertionStatuses};
+    });
+    const identity = (name: string) => JSON.stringify(['aritmetica.mjs', name]);
+    assert.deepEqual(measuredFeatures[0], {completed: [], failed: [identity('capturada')], statuses: Array(3).fill('failed')});
+    assert.deepEqual(measuredFeatures[1]?.completed, []);
+    assert.deepEqual(measuredFeatures[2]?.completed, []);
+    assert.deepEqual(measuredFeatures[3]?.completed, [identity('contagem')]);
+    assert.deepEqual(measuredFeatures[3]?.failed, [identity('intercalada')]);
+    assert.deepEqual(measuredFeatures[4]?.completed, [identity('falha')]);
+    assert.deepEqual(measuredFeatures[5]?.completed, [identity('controle')]);
+    assert.deepEqual(measuredFeatures[6]?.completed, []);
+    assert.deepEqual(result.findings.map(finding => finding.line), [1, 2, 3, 4, 8]);
+    assert.ok(result.findings.every(finding => finding.rule === 'QA-REQUISITO-SEM-PROVA'));
+    assert.match(result.row(91).detail, /passed,passed,passed.*asserção reprovada/);
+    for (const id of [91, 92, 93, 94]) {
+      assert.equal(result.row(id).status, 'ok');
+      assert.match(result.row(id).detail, /vínculo sem prova nas três passadas/);
+    }
+    for (const id of [95, 96]) assert.match(result.row(id).detail, /vínculo comprovado nas três passadas/);
+    for (const id of [97, 98, 99]) {
+      assert.equal(result.row(id).status, 'skipped');
+      assert.match(result.row(id).detail, /cobertura limitada/);
+    }
+    assert.match(result.row(98).detail, /lacuna medida/);
+    assert.match(result.findings.at(-1)!.message, /para inativa \(aritmetica\.mjs:9\)$/);
+  });
+});
+
+test('matriz distingue inventário vazio, execução indisponível e alcance parcial', realTools, async () => {
+  await withSyntheticRepo('qa-inventario-vazio-', async repo => {
+    const file = 'requisitos.md';
+    const source = 'export const somar = (x, y) => x + y;\n';
+    writeFileSync(join(repo, file), 'REQ-101: `somar` de `aritmetica.mjs`\nREQ-102: calcular uma soma\n');
+    writeFileSync(join(repo, 'aritmetica.mjs'), source);
+    const syntax = await loadQaSyntax();
+    const options = {workspace: repo, reqFiles: [file], incomplete: false, testAnalyses: [],
+      sourceAnalyses: [analyzeSourceFile('aritmetica.mjs', source, syntax)]};
+    const empty = buildTraceability({...options, runtimeTests: []});
+    assert.ok(empty.extraRows.filter(row => row.tool.startsWith('qa-requisito:')).every(row =>
+      row.status === 'ok' && /inventário completo: nenhum teste encontrado/.test(row.detail)));
+    assert.deepEqual(empty.findings.map(finding => finding.rule), Array(2).fill('QA-REQUISITO-SEM-PROVA'));
+    const unavailable = buildTraceability(options);
+    assert.deepEqual(unavailable.findings.map(finding => finding.rule), Array(2).fill('QA-REQUISITO-SEM-CANDIDATO'));
+    for (const partial of [{incomplete: true}, {executionPartial: true}]) {
+      const report = buildTraceability({...options, runtimeTests: [], ...partial});
+      assert.equal(coverageFor({coverage: report.extraRows}, 'qa-requisito:REQ-101').status, 'skipped');
+      assert.deepEqual(report.findings, []);
+    }
+    const report = await collectQaModule({repoDir: repo});
+    assert.equal(coverageFor(report, 'node-test-v8').status, 'skipped');
+    assert.equal(coverageFor(report, 'qa-matriz-estatica').status, 'ok');
+    assert.equal(coverageFor(report, 'qa-requisito:REQ-101').status, 'ok');
+    assert.deepEqual(report.findings.map(finding => finding.rule), Array(2).fill('QA-REQUISITO-SEM-PROVA'));
+    const failedTool = await collectQaModule({repoDir: repo, failTool: 'node-test-v8'});
+    assert.equal(coverageFor(failedTool, 'node-test-v8').status, 'failed');
+    assert.equal(coverageFor(failedTool, 'qa-requisito:REQ-101').status, 'skipped');
+    assert.ok(failedTool.findings.every(finding => finding.rule !== 'QA-REQUISITO-SEM-PROVA'));
+
+    const testFile = 'aritmetica.test.mjs';
+    const testSource = "import {test} from 'node:test'; import assert from 'node:assert/strict'; import {somar} from './aritmetica.mjs'; test('REQ-102 soma', () => assert.equal(somar(1, 2), 3));";
+    const withCandidate = {...options, testAnalyses: [analyzeTestFile(testFile, testSource, syntax)]};
+    const staticCandidate = buildTraceability(withCandidate);
+    assert.deepEqual(staticCandidate.findings, []);
+    for (const matrix of [unavailable, staticCandidate]) {
+      const row = coverageFor({coverage: matrix.extraRows}, 'qa-requisito:REQ-101');
+      assert.equal(row.status, 'skipped');
+      assert.match(row.detail, /somente análise estática/);
+    }
+    const missingEvents = buildTraceability({...withCandidate, runtimeTests: []});
+    assert.equal(coverageFor({coverage: missingEvents.extraRows}, 'qa-requisito:REQ-101').status, 'skipped');
+    assert.deepEqual(missingEvents.findings, []);
+
+    const manifest = join(repo, 'package.json');
+    writeFileSync(manifest, JSON.stringify({scripts: {test: 'npm run outro-teste'}}));
+    const unsupportedRunner = await collectQaModule({repoDir: repo});
+    assert.match(coverageFor(unsupportedRunner, 'node-test-v8').detail, /incompatível/);
+    assert.equal(coverageFor(unsupportedRunner, 'qa-requisito:REQ-102').status, 'skipped');
+    assert.ok(unsupportedRunner.findings.every(finding => finding.rule !== 'QA-REQUISITO-SEM-PROVA'));
+    rmSync(manifest);
+
+    writeFileSync(join(repo, 'test_aritmetica.py'), 'def test_soma():\n    assert 1 + 2 == 3\n');
+    const otherLanguage = await collectQaModule({repoDir: repo});
+    assert.equal(coverageFor(otherLanguage, 'qa-requisito:REQ-102').status, 'skipped');
+    assert.deepEqual(otherLanguage.findings, []);
   });
 });
 
@@ -941,7 +1112,7 @@ test('auditoria estática do Playwright distingue skip condicional de condição
     ].join('\n'));
     const report = await collectQaModule({repoDir: repo});
     assert.deepEqual(report.findings.filter(f => f.rule === 'QA-TESTE-PULADO').map(f => f.line), [2, 4, 6]);
-    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-REQUISITO-SEM-PROVA').map(f => f.line), [1, 3, 5]);
+    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-REQUISITO-SEM-CANDIDATO').map(f => f.line), [1, 3, 5]);
     assert.match(coverageFor(report, 'qa-requisito:REQ-01').detail, /skip\/todo possível/);
     assert.doesNotMatch(coverageFor(report, 'qa-requisito:REQ-02').detail, /skip\/todo possível/);
   });

@@ -5,7 +5,7 @@ export function runPerformanceModule(input: {
   imageDigest: string;
   recoveryDirectory: string;
   previousMeasurement?: PreviousPerformanceMeasurement;
-  previousMeasurements?: AsyncIterable<PreviousPerformanceMeasurement>;
+  previousMeasurements?: AsyncIterable<PreviousPerformanceMeasurement> | ((signal: AbortSignal) => AsyncIterable<PreviousPerformanceMeasurement>);
   signal?: AbortSignal;
   timeoutMs?: number;
   maxStdoutBytes?: number;

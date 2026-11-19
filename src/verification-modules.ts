@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import type pg from 'pg';
-import type {PreviousPerformanceMeasurement} from '../deploy/modules/desempenho/orchestrator.mjs';
+import {previousPerformanceMeasurements} from './module-performance-history.ts';
 import {z} from 'zod';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
@@ -1847,34 +1847,6 @@ async function beginModuleRunTx(input: {
  * Full execution path for verification modules 2 to 9 (`qa`, `arquitetura`, `dependencias`,
  * `banco`, `prontidao`, `desempenho`, `documentacao`, `conformidade`).
  */
-async function* previousPerformanceMeasurements(input: VerificationModuleRunInput, runId: string, image: string) {
-  type HistoricalRow = PreviousPerformanceMeasurement & {finishedAt: string};
-  let cursor: HistoricalRow | undefined;
-  const pageSize = 8;
-  while (true) {
-    input.signal?.throwIfAborted();
-    const page: HistoricalRow[] = await input.ledger.tx(async client => {
-      await input.ledger.authorize(client, input.principal, input.authority.contextId);
-      await input.ledger.fence(client, input.authority);
-      return (await client.query<HistoricalRow>(
-        `SELECT p.id AS "examId", p.performance_measurement AS measurement, p.finished_at::text AS "finishedAt"
-         FROM ac_verify_runs p JOIN ac_verify_runs current_run ON current_run.id=$1
-         WHERE current_run.context_id=$2 AND current_run.project_id=$3 AND current_run.module='desempenho'
-           AND p.project_id=current_run.project_id AND p.context_id=current_run.context_id
-           AND p.module='desempenho' AND p.status='done' AND p.collector_image=$4
-           AND p.report_dir=p.report_prepared_dir AND NOT p.report_legacy_missing
-           AND p.performance_measurement IS NOT NULL AND p.finished_at < current_run.created_at
-           AND ($5::timestamptz IS NULL OR (p.finished_at, p.id) < ($5::timestamptz, $6::uuid))
-         ORDER BY p.finished_at DESC, p.id DESC LIMIT $7`,
-        [runId, input.authority.contextId, input.projectId, image, cursor?.finishedAt ?? null, cursor?.examId ?? null, pageSize],
-      )).rows;
-    });
-    yield* page;
-    if (page.length < pageSize) return;
-    cursor = page[page.length - 1];
-  }
-}
-
 export async function runVerificationModule(input: VerificationModuleRunInput): Promise<VerificationModuleRunResult> {
   assertVerificationModule(input.module);
   if (!Id.safeParse(input.projectId).success) throw new Refusal('NOT_FOUND', 404);
@@ -1953,7 +1925,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
       const {coverage, findings, measurement, comparedExamId} = await runPerformanceModule({
         snapshotPath: snapshot, imageDigest: image!, signal: input.signal, timeoutMs, maxStdoutBytes,
-        recoveryDirectory, previousMeasurements: previousPerformanceMeasurements(input, runId, image!),
+        recoveryDirectory, previousMeasurements: signal => previousPerformanceMeasurements(input, runId, image!, signal),
       });
       collectorData = validateModuleCollectorObject({coverage, findings}, input.module);
       assertNoLiveAccessKey(measurement);
@@ -2994,34 +2966,31 @@ export async function recheckModuleFindings(
     )).rows[0];
     const previous = latest && ModuleRecheckPublication.parse(latest.detail);
     const legacyExamOrigin = !run.exam_origin_sha256 && items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo');
-    if (previous && sameIdSet(requested, previous.results.map(result => result.id))
-      && (!latest!.published || (!legacyExamOrigin && repo && await recheckHead(repo, signal) === previous.commit))) {
-      return {run, journal: previous, replay: true as const, previousPublished: latest!.published};
+    const replay = previous && sameIdSet(requested, previous.results.map(result => result.id))
+      && (!latest!.published || (!legacyExamOrigin && repo && await recheckHead(repo, signal) === previous.commit));
+    let verifiedOrigin: string | undefined;
+    if (run.exam_origin_sha256) {
+      try {
+        const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
+        if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+        assertInside(projectDir, run.report_dir);
+        verifiedOrigin = await readTextInside(projectDir, join(run.report_dir, 'bruto', 'exame.json'),
+          'VERIFY_REPORT_INVALID', run.exam_origin_sha256);
+      } catch (error) {
+        // Preserve a committed verdict until its original archive can be restored.
+        if (replay && !latest!.published) return {journal: previous, replay: true as const, archivePending: true};
+        throw error;
+      }
     }
+    if (replay) return {journal: previous, replay: true as const, archivePending: false};
     const journal = latest?.published ? undefined : previous;
     if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     const generation = await client.query<{recheck_generation: string}>(
       'UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1 WHERE id=$1 RETURNING recheck_generation::text',
       [run.id],
     );
-    return {run, items, repo, journal, generation: generation.rows[0]!.recheck_generation, replay: false as const};
+    return {run, items, repo, journal, verifiedOrigin, generation: generation.rows[0]!.recheck_generation, replay: false as const};
   });
-
-  const directory = loaded.run.report_dir;
-  const sourceFile = join(directory, 'bruto', 'exame.json');
-  let verifiedOrigin: string | undefined;
-  if (loaded.run.exam_origin_sha256) {
-    try {
-      const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
-      if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-      assertInside(projectDir, directory);
-      verifiedOrigin = await readTextInside(projectDir, sourceFile, 'VERIFY_REPORT_INVALID', loaded.run.exam_origin_sha256);
-    } catch (error) {
-      // A committed verdict remains in the publication journal until the archive is restored.
-      if (loaded.replay && !loaded.previousPublished) return {results: loaded.journal.results, publication: 'pending'};
-      throw error;
-    }
-  }
 
   const publish = async (journal: ModuleRecheckPublication): Promise<ModuleRecheckOutcome> => {
     try {
@@ -3032,7 +3001,13 @@ export async function recheckModuleFindings(
       return {results: journal.results, publication: 'pending'};
     }
   };
-  if (loaded.replay) return publish(loaded.journal);
+  if (loaded.replay) {
+    if (loaded.archivePending) return {results: loaded.journal.results, publication: 'pending'};
+    return publish(loaded.journal);
+  }
+  const directory = loaded.run.report_dir;
+  const sourceFile = join(directory, 'bruto', 'exame.json');
+  const {verifiedOrigin} = loaded;
   if (loaded.journal) {
     const recovered = await publish(loaded.journal);
     if (recovered.publication === 'pending') {
@@ -3163,10 +3138,19 @@ export async function recheckModuleFindings(
         const rule = sanitizeRecheckText(item.rule);
         const hypothesis = observed?.hypothesis ? sanitizeRecheckText(observed.hypothesis)
           : fromExaminer ? 'A linha atual ainda sustenta a observação original?' : moduleCollectorHypothesis(rule);
+        let skipSnapshot: {originalCommit: string; original: string; current: string} | undefined;
+        if (sameHistory && moduleName === 'qa' && !regression && (fromExaminer || rule === 'QA-TESTE-PULADO')) {
+          const [original, current] = await Promise.all([originalCommit, head].map(commit =>
+            readRecheckBlob(loaded.repo, commit, item.file, signal)));
+          if (original && current && [original.text, current.text].every(text =>
+            Buffer.byteLength(text) <= 16000 && sanitizeRecheckText(text) === text)) {
+            skipSnapshot = {originalCommit, original: original.text, current: current.text};
+          }
+        }
         const reviewEvidence = {
           module: moduleName, file: item.file, line: regression?.after.line ?? item.line, code: line, commit: head,
           tool: sanitizeRecheckText(item.tool), rule, hypothesis, evidence,
-          originalCommit, originalCode: regression?.before.code ?? (historicalLine || null),
+          skipSnapshot, originalCommit, originalCode: regression?.before.code ?? (historicalLine || null),
           moduleProof: regression?.moduleProof ?? null, regressionProof: regression?.receipt ?? null,
           regressionAssertion: regression?.assertion ?? null,
         };

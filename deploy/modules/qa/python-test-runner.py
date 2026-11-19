@@ -1,6 +1,7 @@
 """Execute unittest and measure project code with the coverage.py pinned in the image."""
 
 import importlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ class Result(unittest.TestResult):
         self.unavailable = 0
         self.errors = 0
         self.fixture_skips = 0
+        self.unsupported = 0
 
     def record(self, test, status):
         test = getattr(test, "test_case", test)
@@ -40,10 +42,7 @@ class Result(unittest.TestResult):
         self.record(test, "failed")
 
     def addError(self, test, err):
-        if isinstance(err[1], ModuleNotFoundError):
-            self.unavailable += 1
-            self.record(test, "unavailable")
-        elif not self.record(test, "failed"):
+        if not self.record(test, "failed"):
             self.errors += 1
 
     def addSkip(self, test, reason):
@@ -84,6 +83,29 @@ def measure(cov, sources, report_path, max_profile_bytes):
     }
 
 
+def discovery_dependency(error, root):
+    if not error.name:
+        return False
+    package = error.name.partition(".")[0]
+    return package not in sys.stdlib_module_names and not any(
+        (base / package).is_dir() or (base / f"{package}.py").is_file()
+        for base in (root, root / "src")
+    )
+
+
+def has_pytest_cases(module):
+    for name, value in vars(module).items():
+        if name.startswith("test") and inspect.isfunction(value) and value.__module__ == module.__name__:
+            return True
+        if (name.startswith("Test") and inspect.isclass(value) and value.__module__ == module.__name__
+                and not issubclass(value, unittest.TestCase)
+                and any(method.startswith("test") and (inspect.isfunction(function)
+                                                        or isinstance(function, (staticmethod, classmethod)))
+                        for base in value.__mro__ for method, function in vars(base).items())):
+            return True
+    return False
+
+
 def run(plan, report_path):
     root = Path.cwd()
     sys.path.extend([str(root), str(root / "src")])
@@ -102,6 +124,8 @@ def run(plan, report_path):
                     result.errors += 1
                     continue
                 result.files[name] = file
+                if has_pytest_cases(module):
+                    result.unsupported += 1
                 # Select TestCase classes directly. unittest discovery would call load_tests.
                 for cls in vars(module).values():
                     if isinstance(cls, type) and issubclass(cls, unittest.TestCase) and cls.__module__ == name:
@@ -111,9 +135,17 @@ def run(plan, report_path):
                             return {"limited": True}
                         suite.addTests(tests)
             except unittest.SkipTest:
+                test_count += 1
+                if test_count > plan["maxTests"]:
+                    return {"limited": True}
                 result.cases[file, "módulo"] = "skipped"
-            except ModuleNotFoundError:
-                result.unavailable += 1
+            except ModuleNotFoundError as error:
+                if not discovery_dependency(error, root):
+                    result.errors += 1
+                elif error.name == "pytest":
+                    result.unsupported += 1
+                else:
+                    result.unavailable += 1
             except Exception:
                 result.errors += 1
         suite.run(result)
@@ -121,6 +153,7 @@ def run(plan, report_path):
         "tests": [{"file": file, "name": name, "status": status} for (file, name), status in result.cases.items()],
         "fixtureSkips": result.fixture_skips,
         "unavailable": result.unavailable,
+        "unsupported": result.unsupported,
         "errors": result.errors,
         "coverage": measure(cov, plan["sourceFiles"], report_path, plan["maxProfileBytes"])
         if {"passed", "failed"}.intersection(result.cases.values()) else None,

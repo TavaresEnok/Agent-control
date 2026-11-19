@@ -629,18 +629,14 @@ test('fluxo completo da CLI personal:prontidao com servidor HTTPS sintético (TL
       assert.equal(hdrRules.has('PRONTIDAO-NOSNIFF-AUSENTE'), true);
       assert.equal(hdrRules.has('PRONTIDAO-FRAME-AUSENTE'), true);
 
-      // Converte achado em tarefa normalmente pelo fluxo do produto
+      // A medição sem revisão independente permanece provável.
       const prontidaoAuth = await db.acquire(principal, (await db.ensureExamContext(principal, projectId, 'prontidao')).contextId, randomUUID(), 'test-fix', 60);
       try {
-        const remediation = await requestModuleCorrection(db, principal, prontidaoAuth, {
-          module: 'prontidao',
-          runId: hdrRunId!,
-          achadoIds: ['ACH-001'],
-          dataDirectory,
-          projectId,
-          repoPath: repo,
-        });
-        assert.deepEqual(remediation.writePaths, ['deploy/caddy/site.caddy', 'tests/prontidao/ach-001.test.ts']);
+        const hsts = hdrReport.achados.find(finding => finding.sources[1] === 'PRONTIDAO-HSTS-AUSENTE')!;
+        assert.equal(hsts.status, 'provavel');
+        await assert.rejects(requestModuleCorrection(db, principal, prontidaoAuth, {
+          module: 'prontidao', runId: hdrRunId!, achadoIds: [hsts.id], dataDirectory, projectId, repoPath: repo,
+        }), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_FINDING_MISSING');
       } finally {
         await db.releaseLease(prontidaoAuth);
       }
