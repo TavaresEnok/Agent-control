@@ -26,6 +26,7 @@ import {nativeReviewVerifierDigest} from '../src/native-review-contract.ts';
 import {Authority,Refusal,canonical,digest} from '../src/contracts.ts';
 import {AccountHomes} from '../src/account-homes.ts';
 import {GitArtifacts} from '../src/git.ts';
+import {DockerDaemon} from '../src/sandbox-broker.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const exec=promisify(execFile);
@@ -53,13 +54,17 @@ async function startFakeDockerSocket(socketPath:string,state:{
  containers:Map<string,Record<string,unknown>>;
  networks:Map<string,Record<string,unknown>>;
  images?:Set<string>;
- malformedNetwork?:boolean;
+ networkBody?:string;
+ unavailable?:boolean;
+ onRequest?:()=>void;
  onMutate?:(method:string,url:string)=>void;
 }){
  const server=createServer((req:IncomingMessage,res:ServerResponse)=>{
   const url=req.url??'';
   const method=req.method??'GET';
+  state.onRequest?.();
   res.setHeader('content-type','application/json');
+  if(state.unavailable){res.statusCode=503;res.end();return;}
   if(method==='GET'&&url.startsWith('/v1.44/containers/')&&url.endsWith('/json')){
    const name=decodeURIComponent(url.slice('/v1.44/containers/'.length,-'/json'.length));
    const found=state.containers.get(name);
@@ -67,7 +72,7 @@ async function startFakeDockerSocket(socketPath:string,state:{
    res.statusCode=200;res.end(JSON.stringify(found));return;
   }
   if(method==='GET'&&url.startsWith('/v1.44/networks/')){
-   if(state.malformedNetwork){res.statusCode=200;res.end('{');return;}
+   if(state.networkBody!==undefined){res.statusCode=200;res.end(state.networkBody);return;}
    const name=decodeURIComponent(url.slice('/v1.44/networks/'.length));
    const found=state.networks.get(name);
    if(!found){res.statusCode=404;res.end(JSON.stringify({message:'network not found'}));return;}
@@ -84,6 +89,30 @@ async function startFakeDockerSocket(socketPath:string,state:{
  await new Promise<void>(resolve=>server.listen(socketPath,resolve));
  return ()=>new Promise<void>(resolve=>server.close(()=>resolve()));
 }
+
+test('private network inspection accepts absence only on HTTP 404',async()=>{
+ const area=await mkdtemp(join(tmpdir(),'ac-network-inspect-'));
+ const socket=join(area,'docker.sock'),id='a'.repeat(64),name='ac-native-exec-'+randomUUID();
+ const network={Id:id,Name:name,Internal:true,Labels:{},Containers:{}};
+ const state={containers:new Map(),networks:new Map(),networkBody:undefined as string|undefined};
+ const close=await startFakeDockerSocket(socket,state);
+ try{
+  const docker=new DockerDaemon(socket);
+  for(const [reference,inspect] of [[id,()=>docker.inspectPrivateNetwork(id)],[name,()=>docker.inspectNamedPrivateNetwork(name)]] as const){
+   assert.equal(await inspect(),null);
+   state.networks.set(reference,network);
+   assert.deepEqual(await inspect(),network);
+   for(const body of ['{','null','{}']){
+    state.networkBody=body;
+    await assert.rejects(inspect(),(error:unknown)=>error instanceof Refusal&&error.code==='DOCKER_NETWORK_UNCERTAIN');
+   }
+   state.networkBody=undefined;
+  }
+ }finally{
+  await close();
+  await rm(area,{recursive:true,force:true});
+ }
+});
 
 test('historical interrupted exam in main context is recovered explicitly via personal:maintenance without co-owner bypass or re-execution',{skip:!process.env.AC_TEST_DATABASE_URL},async()=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
@@ -142,7 +171,8 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   const retiredImage='sha256:'+'c'.repeat(64),currentImage='sha256:'+'0'.repeat(64);
   const sockPath=join(area,'docker.sock');
   const dockerMutations:string[]=[];
-  const dockerState={containers:new Map<string,Record<string,unknown>>(),networks:new Map<string,Record<string,unknown>>(),images:new Set([retiredImage,currentImage]),malformedNetwork:false,onMutate:(m:string,u:string)=>dockerMutations.push(`${m} ${u}`)};
+  let dockerRequests=0;
+  const dockerState={containers:new Map<string,Record<string,unknown>>(),networks:new Map<string,Record<string,unknown>>(),images:new Set([retiredImage,currentImage]),networkBody:undefined as string|undefined,unavailable:false,onRequest:()=>{dockerRequests++;},onMutate:(m:string,u:string)=>dockerMutations.push(`${m} ${u}`)};
   closeSocket=await startFakeDockerSocket(sockPath,dockerState);
 
   const supervisorConfig={id:'codex-native-execution',provider:'claude' as const,workerImage:retiredImage,toolsImage:retiredImage,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:execPem,providerNetworkId:'d'.repeat(64),socketPath:sockPath,accountSubjects:[{accountId:account,subjectDigest:subject}],workerEnv:[],toolsEnv:[]};
@@ -260,25 +290,24 @@ test('historical interrupted exam in main context is recovered explicitly via pe
    );
    require('node:module').syncBuiltinESMExports();
   `);
-  const cli=(...args:string[])=>exec(process.execPath,['scripts/personal-maintenance.mjs',installationFile,...args],{
-   env:{...process.env,NODE_OPTIONS:'--require='+dockerPreload},
-  });
+  const cliEnv={...process.env,NODE_OPTIONS:'--require='+dockerPreload};
+  const cli=(...args:string[])=>exec(process.execPath,['scripts/personal-maintenance.mjs',installationFile,...args],{env:cliEnv});
 
   // 4) While gateway holds the lease, explicit CLI / maintenance recovery refuses clearly as busy without changing state.
   await assert.rejects(
    runPersonalMaintenance([installationFile,'--abandonar-design',histJobId]),
    (err:unknown)=>err instanceof Refusal&&err.code==='MAINTENANCE_CONTEXT_BUSY',
   );
-  const busyCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design',histJobId],{encoding:'utf8'});
+  const busyCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design',histJobId],{encoding:'utf8',env:cliEnv});
   assert.equal(busyCli.status,1);
   assert.match(busyCli.stderr,/systemctl --user stop/);
   assert.match(busyCli.stderr,/systemctl --user start/);
 
   // Invalid CLI flags / inferred principal / co-owner job are refused via CLI.
-  const badArgCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design','not-a-uuid'],{encoding:'utf8'});
+  const badArgCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design','not-a-uuid'],{encoding:'utf8',env:cliEnv});
   assert.equal(badArgCli.status,1);
   assert.match(badArgCli.stderr,/Uso:/);
-  const coOwnerCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design',coJobId],{encoding:'utf8'});
+  const coOwnerCli=spawnSync(process.execPath,['scripts/personal-maintenance.mjs',installationFile,'--abandonar-design',coJobId],{encoding:'utf8',env:cliEnv});
   assert.equal(coOwnerCli.status,1);
   assert.match(coOwnerCli.stderr,/outro principal/);
 
@@ -315,6 +344,8 @@ test('historical interrupted exam in main context is recovered explicitly via pe
 
   // Idempotent second invocation does not duplicate native.terminal_retired audit rows and keeps identical receipt/proof.
   const auditCountBefore=(await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n;
+  const replayDockerRequests=dockerRequests;
+  dockerState.unavailable=true;
   await cli('--abandonar-design',histJobId);
   const auditCountAfter=(await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n;
   assert.equal(auditCountAfter,auditCountBefore);
@@ -331,6 +362,8 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   assert.ok(cleanMaint.some(line=>line.includes('1 par(es) de execução')));
   assert.deepEqual(removedImages,[retiredImage]);
   await cli('--abandonar-design',histJobId);
+  assert.equal(dockerRequests,replayDockerRequests);
+  dockerState.unavailable=false;
   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n,auditCountBefore);
   const histRoot=join(spool,histJobId),histRequest=join(histRoot,'request.json');
   await mkdir(histRoot,{mode:0o700});
@@ -367,56 +400,78 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   // 6) Forward prevention: failure at releaseBeforeLaunch settles future pre-launch exam jobs when bindings and proof suffice.
   await db.pool.query('UPDATE ac_accounts SET enabled=true WHERE id=$1',[account]);
   await capacity.observeQuota(appPrincipal,account,{status:'available',source:'https://example.invalid/fixture',ttlSeconds:3600});
-  const appAuth=await db.acquire(appPrincipal,mainContext,randomUUID(),'personal-design',60);
-  const futureIntent=await insertDesignExamIntent(db,appPrincipal,mainContext,appAuth.epoch,project,headCommit,true);
-  const futureGrantId=randomUUID();
-  await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
-   VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,[futureGrantId,randomUUID(),futureIntent.id,mainContext,appAuth.epoch,account,profile,project,digest({fixture:true})]);
   const claudeAccountRoot=join(accounts,account);
   await mkdir(claudeAccountRoot,{recursive:true,mode:0o700});await chmod(claudeAccountRoot,0o700);
   await writeFile(join(claudeAccountRoot,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'old-tok-secret-123',refreshToken:'ref-tok-secret-123',expiresAt:Date.now()-10_000}}),{mode:0o600});
   homesMock=mock.method(AccountHomes.prototype,'inspectGranted',async()=>({accountId:account,projectId:project,ownerId:appPrincipal,uid:'1',device:'1',inode:'1'}));
   snapshotMock=mock.method(GitArtifacts.prototype,'snapshot',async()=>{throw new Error('UNEXPECTED_SNAPSHOT');});
   const futureSupervisor=new NativeExecutionSupervisor(db,{...supervisorConfig,workerImage:currentImage,toolsImage:currentImage,examLoginRenew:async()=>{throw new Error('EXAM_LOGIN_RENEW_FAILED');}},{assertAdmission:async()=>{}});
-  dockerState.malformedNetwork=true;
-  let futureJobId='';
-  const worker=createDesignNativeWorker({supervisors:[{active:true,supportsAccount:id=>id===account,
-   start:async(principal,authority,request)=>{futureJobId=request.jobId;return futureSupervisor.start(principal,authority,request);},
-   reconcile:(principal,authority,request)=>futureSupervisor.reconcile(principal,authority,request),
-   retireTerminal:(principal,authority,id)=>futureSupervisor.retireTerminal(principal,authority,id)}],principal:appPrincipal,authority:appAuth,ledger:db,base:headCommit,
-   releaseGrant:(grantId,how)=>releaseDesignGrant(db,appPrincipal,appAuth,grantId,how)});
-  await assert.rejects(worker.run({role:'specialist',provider:'claude',accountId:account,profileId:profile,model:'claude-sonnet-5-5',grantId:futureGrantId,intentId:futureIntent.id,task:'future prelaunch exam failure',repo,writePaths:[]}),(err:unknown)=>{
-   assert.ok(err instanceof UnstartedExamRetirementPending);
-   assert.equal(err.jobId,futureJobId);
-   assert.equal(isProviderLimit(err.code),false);
-   assert.match(designCliFailureText(err),new RegExp(`--abandonar-design ${futureJobId}`));
-   return true;
-  });
-  const futureJob=(await db.pool.query('SELECT state,receipt FROM ac_native_execution_jobs WHERE id=$1',[futureJobId])).rows[0];
-  const futureGrant=(await db.pool.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1',[futureGrantId])).rows[0];
-  const futureRet=(await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[futureJobId])).rows[0];
-  assert.equal(futureJob.state,'uncertain');
-  assert.equal(futureJob.receipt,null);
-  assert.equal(futureGrant.state,'released');
-  assert.equal(futureGrant.physical_receipt?.reason,'exam_login_stale');
-  assert.equal(futureRet,undefined);
-  assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[futureIntent.id])).rows[0].state,'accepted');
-  dockerState.malformedNetwork=false;
-  await db.releaseLease(appAuth);
-  await cli('--abandonar-design',futureJobId);
-  assert.equal((await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[futureJobId])).rows[0].state,'removed');
-  assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[futureIntent.id])).rows[0].state,'failed');
-  await assert.rejects(lstat(join(spool,futureJobId)),(err:NodeJS.ErrnoException)=>err.code==='ENOENT');
-  const settledAuthority=await db.acquire(appPrincipal,mainContext,randomUUID(),'fixture-settled',60);
-  const settledIntent=await insertDesignExamIntent(db,appPrincipal,mainContext,settledAuthority.epoch,project,headCommit,true);
-  const settledJobId=randomUUID(),settledGrantId=randomUUID();
-  const settledInput=NativeExecutionRequest.parse({jobId:settledJobId,intentId:settledIntent.id,grantId:settledGrantId,sessionId:randomUUID(),base:headCommit,role:'specialist',task:'settled exam',artifactId:randomUUID(),outputSchema:{type:'object'},writePaths:[]});
-  await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
-   VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,[settledGrantId,randomUUID(),settledIntent.id,mainContext,settledAuthority.epoch,account,profile,project,digest(settledInput)]);
-  await assert.rejects(futureSupervisor.start(appPrincipal,settledAuthority,settledInput),(err:unknown)=>err instanceof Refusal&&err.code==='EXAM_LOGIN_STALE');
-  assert.equal((await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[settledJobId])).rows[0].state,'removed');
+  await db.pool.query(`CREATE FUNCTION fixture_fail_exam_settlement() RETURNS trigger LANGUAGE plpgsql AS $$
+   BEGIN RAISE EXCEPTION 'fixture settlement write failed'; END $$`);
+  for(const failure of ['network','proof','intent',null] as const){
+   const appAuth=await db.acquire(appPrincipal,mainContext,randomUUID(),'personal-design',60);
+   const {id:intentId}=await insertDesignExamIntent(db,appPrincipal,mainContext,appAuth.epoch,project,headCommit,true);
+   const grantId=randomUUID(),siblingJobId=randomUUID(),siblingGrantId=randomUUID();
+   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+    VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved'),($10,$11,$3,$4,$5,$6,$7,'specialist',$8,1,1,$12,false,'released')`,
+    [grantId,randomUUID(),intentId,mainContext,appAuth.epoch,account,profile,project,digest({fixture:true}),siblingGrantId,randomUUID(),digest({siblingJobId})]);
+   const siblingReceipt={payload:{jobId:siblingJobId,exitCode:0,executionStarted:true}};
+   await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,receipt)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'specialist','completed',$14)`,
+    [siblingJobId,siblingGrantId,intentId,mainContext,appAuth.epoch,randomUUID(),account,profile,profileDigest,futureSupervisor.executorDigest,execFingerprint,digest({siblingJobId}),headCommit,siblingReceipt]);
+
+   const failureTable=failure==='proof'?'ac_native_terminal_retirements':failure==='intent'?'ac_intents':null;
+   if(failureTable)await db.pool.query(`CREATE TRIGGER fixture_fail_settlement BEFORE UPDATE ON ${failureTable} FOR EACH ROW EXECUTE FUNCTION fixture_fail_exam_settlement()`);
+   dockerState.networkBody=failure==='network'?'null':undefined;
+   let jobId='';
+   const worker=createDesignNativeWorker({supervisors:[{active:true,supportsAccount:id=>id===account,
+    start:async(principal,authority,request)=>{jobId=request.jobId;return futureSupervisor.start(principal,authority,request);},
+    reconcile:(principal,authority,request)=>futureSupervisor.reconcile(principal,authority,request),
+    retireTerminal:(principal,authority,id)=>futureSupervisor.retireTerminal(principal,authority,id)}],principal:appPrincipal,authority:appAuth,ledger:db,base:headCommit,
+    releaseGrant:(id,how)=>releaseDesignGrant(db,appPrincipal,appAuth,id,how)});
+   try{
+    await assert.rejects(worker.run({role:'specialist',provider:'claude',accountId:account,profileId:profile,model:'claude-sonnet-5-5',grantId,intentId,task:'future prelaunch exam failure',repo,writePaths:[]}),(err:unknown)=>{
+     if(!failure)return err instanceof Refusal&&err.code==='EXAM_LOGIN_STALE';
+     assert.ok(err instanceof UnstartedExamRetirementPending);
+     assert.equal(err.jobId,jobId);
+     assert.equal(isProviderLimit(err.code),false);
+     assert.match(designCliFailureText(err),new RegExp(`--abandonar-design ${jobId}`));
+     return true;
+    });
+   }finally{
+    if(failureTable)await db.pool.query(`DROP TRIGGER fixture_fail_settlement ON ${failureTable}`);
+    await db.releaseLease(appAuth);
+   }
+   const readRetirement=async()=>(await db.pool.query('SELECT state,proof FROM ac_native_terminal_retirements WHERE job_id=$1',[jobId])).rows[0];
+   const readIntent=async()=>(await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[intentId])).rows[0].state;
+   if(failure){
+    assert.deepEqual((await db.pool.query('SELECT state,receipt FROM ac_native_execution_jobs WHERE id=$1',[jobId])).rows[0],{state:'uncertain',receipt:null});
+    const grant=(await db.pool.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1',[grantId])).rows[0];
+    assert.equal(grant.state,'released');
+    assert.deepEqual(grant.physical_receipt,{...histPhysical,jobId});
+    assert.equal(await readRetirement(),undefined);
+    assert.equal(await readIntent(),'accepted');
+    if(failure==='network'){
+     await assert.rejects(cli('--abandonar-design',jobId),/Docker não confirmou a ausência física da rede/);
+     assert.equal(await readRetirement(),undefined);
+     dockerState.networkBody=undefined;
+    }
+    await cli('--abandonar-design',jobId);
+   }
+   const retirement=await readRetirement();
+   assert.equal(retirement.state,'removed');
+   assert.equal(await readIntent(),'failed');
+   assert.deepEqual((await db.pool.query('SELECT state,receipt FROM ac_native_execution_jobs WHERE id=$1',[siblingJobId])).rows[0],{state:'completed',receipt:siblingReceipt});
+   await assert.rejects(lstat(join(spool,jobId)),(err:NodeJS.ErrnoException)=>err.code==='ENOENT');
+   const requests=dockerRequests;
+   dockerState.unavailable=true;
+   await cli('--abandonar-design',jobId);
+   assert.equal(dockerRequests,requests);
+   assert.deepEqual(await readRetirement(),retirement);
+   dockerState.unavailable=false;
+  }
+  assert.deepEqual(dockerMutations,[]);
   assert.equal(isProviderLimit('PROVIDER_USAGE_LIMIT'),true);
-  await db.releaseLease(settledAuthority);
  }finally{
   homesMock?.mock.restore();
   snapshotMock?.mock.restore();
@@ -463,7 +518,7 @@ test('recoverUnstartedExam refuses contradictory receipts, swapped grants, non-e
   const supervisor=new NativeExecutionSupervisor(db,{id:'codex-native-execution',provider:'claude',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'d'.repeat(64),socketPath:sockPath,accountSubjects:[{accountId:account,subjectDigest:subject},{accountId:otherAccount,subjectDigest:otherSubject}],workerEnv:[],toolsEnv:[]},{assertAdmission:async()=>{}});
   const profDigest=digest({accountId:account,profileId:profile,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
 
-  const insertPair=async(opts:{physical?: (jobId:string)=>unknown;grantIntent?:string;grantAccount?:string;grantProfile?:string;grantRole?:string;grantState?:string;jobRole?:string;jobIntent?:string;jobProfDigest?:string;context?:typeof auth1;task?:string;jobReceipt?:unknown})=>{
+  const insertPair=async(opts:{physical?: (jobId:string)=>unknown;grantIntent?:string;grantAccount?:string;grantProfile?:string;grantRole?:string;grantState?:string;jobRole?:string;jobIntent?:string;jobProfDigest?:string;context?:typeof auth1;task?:string;jobReceipt?:unknown;jobState?:'running'|'completed'})=>{
    const jobId=randomUUID(),grantId=randomUUID(),sessionId=randomUUID();
    const scope=opts.context??auth1;
    const intentId=opts.jobIntent??(await insertDesignExamIntent(db,owner,scope.contextId,scope.epoch,project,'e'.repeat(40),true)).id;
@@ -472,8 +527,8 @@ test('recoverUnstartedExam refuses contradictory receipts, swapped grants, non-e
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,1,$10,false,$11,$12)`,
     [grantId,randomUUID(),opts.grantIntent??intentId,scope.contextId,scope.epoch,opts.grantAccount??account,opts.grantProfile??profile,opts.grantRole??'specialist',project,digest(input),opts.grantState??'released',opts.physical?opts.physical(jobId):validShape(jobId)]);
    await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,receipt)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,$14,'uncertain',$15)`,
-    [jobId,grantId,intentId,scope.contextId,scope.epoch,sessionId,account,profile,opts.jobProfDigest??profDigest,supervisor.executorDigest,execFingerprint,digest(input),'e'.repeat(40),opts.jobRole??'specialist',opts.jobReceipt??null]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,$14,$15,$16)`,
+    [jobId,grantId,intentId,scope.contextId,scope.epoch,sessionId,account,profile,opts.jobProfDigest??profDigest,supervisor.executorDigest,execFingerprint,digest(input),'e'.repeat(40),opts.jobRole??'specialist',opts.jobState??'uncertain',opts.jobReceipt??null]);
    return {jobId,grantId,input};
   };
 
@@ -521,8 +576,14 @@ test('recoverUnstartedExam refuses contradictory receipts, swapped grants, non-e
   await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,parentJob.jobId,{projectId:project,repository:repo,explicitDesignWithdrawal:true}),/NATIVE_RETIREMENT_UNCONFIRMED/);
   const multipleIntent=await insertDesignExamIntent(db,owner,ctx1,auth1.epoch,project,'e'.repeat(40));
   const multipleJob=await insertPair({jobIntent:multipleIntent.id});
-  await insertPair({jobIntent:multipleIntent.id});
-  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,multipleJob.jobId,{projectId:project,repository:repo,explicitDesignWithdrawal:true}),/NATIVE_RETIREMENT_UNCONFIRMED/);
+  await insertPair({jobIntent:multipleIntent.id,jobState:'completed'});
+  const withdrawal={projectId:project,repository:repo,explicitDesignWithdrawal:true};
+  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,multipleJob.jobId,withdrawal),/NATIVE_RETIREMENT_UNCONFIRMED/);
+  const markedIntent=await insertDesignExamIntent(db,owner,ctx1,auth1.epoch,project,'e'.repeat(40),true);
+  const markedJob=await insertPair({jobIntent:markedIntent.id});
+  const activeSibling=await insertPair({jobIntent:markedIntent.id,jobState:'running'});
+  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,markedJob.jobId,withdrawal),/NATIVE_RETIREMENT_UNCONFIRMED/);
+  await assert.rejects(supervisor.recoverUnstartedExam(owner,auth1,activeSibling.jobId,withdrawal),/NATIVE_RETIREMENT_UNCONFIRMED/);
   const badRequest=await insertPair({task:'Pedido de criação. Original'});
   await mkdir(join(spool,badRequest.jobId),{mode:0o700});
   await writeFile(join(spool,badRequest.jobId,'request.json'),JSON.stringify({...badRequest.input,task:'Pedido de criação. Alterado'}),{mode:0o600});

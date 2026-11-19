@@ -219,8 +219,7 @@ export class NativeExecutionSupervisor{
   const synthetic=Boolean(this.config.syntheticFixture);
   const releaseBeforeLaunch=async(reason:string)=>{
    const receipt={executionStarted:false,jobId:input.jobId,containerId:null,networkId:null,synthetic,modelInference:false,reason};
-   let pending=false;
-   await this.ledger.tx(async c=>{
+   const shouldSettle=await this.ledger.tx(async c=>{
     const context=await this.scope(c,principal,authority,input,true);
     const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[input.grantId])).rows[0];
     if(!grant||grant.context_id!==authority.contextId||grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||!['reserved','uncertain'].includes(grant.state))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
@@ -239,25 +238,26 @@ export class NativeExecutionSupervisor{
     await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
     // The live call has the original request. Limit automatic settlement to
     // exam login refusals that immediately terminate the caller's exam.
-    if(grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model&&!input.effort&&!input.task.startsWith('Pedido de criação.')){
-     const row=await this.loadUnstartedExam(c,authority,input.jobId);
-     try{
-      this.validateUnstartedExam(row,context,principal,authority,false);
-      if(row.input_digest!==hash||row.grant_id!==input.grantId)throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
-      await this.jobRepository(c,String(context.project_id));
-      await this.confirmUnstartedAbsence(input.jobId);
-     }catch(error){
-      // Inspection is best effort here: the durable physical receipt must survive
-      // every inspection failure, including malformed Docker responses.
-      const code=safeFailureCode(error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code,'NATIVE_PRELAUNCH_INSPECTION_FAILED');
-      console.error(JSON.stringify({event:'NATIVE_PRELAUNCH_SETTLEMENT_PENDING',jobId:input.jobId,code}));
-      pending=true;
-      return;
-     }
-     await this.settleUnstartedExam(c,authority,row);
-    }
+    return grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model&&!input.effort&&!input.task.startsWith('Pedido de criação.');
    });
-   if(pending)throw new UnstartedExamRetirementPending(input.jobId);
+   if(!shouldSettle)return;
+   // Commit the physical receipt before settlement so maintenance can retry
+   // even if inspection, a settlement write or its commit fails.
+   try{
+    await this.ledger.tx(async c=>{
+     const context=await this.scope(c,principal,authority,input,true);
+     const row=await this.loadUnstartedExam(c,authority,input.jobId);
+     this.validateUnstartedExam(row,context,principal,authority,false);
+     if(row.input_digest!==hash||row.grant_id!==input.grantId)throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+     await this.jobRepository(c,String(context.project_id));
+     await this.confirmUnstartedAbsence(input.jobId);
+     await this.settleUnstartedExam(c,authority,row);
+    });
+   }catch(error){
+    const code=safeFailureCode(error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code,'NATIVE_PRELAUNCH_SETTLEMENT_FAILED');
+    console.error(JSON.stringify({event:'NATIVE_PRELAUNCH_SETTLEMENT_PENDING',jobId:input.jobId,code}));
+    throw new UnstartedExamRetirementPending(input.jobId);
+   }
   };
   const p=this.paths(input.jobId);
   let jobDirCreated=false;
@@ -482,21 +482,20 @@ export class NativeExecutionSupervisor{
  private async recordUnstartedRetirement(c:pg.PoolClient,authority:Authority,row:Record<string,any>,receipt:unknown){
   const binding=this.unstartedRetirementBinding(row,receipt);
   const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1 FOR UPDATE',[row.id])).rows[0];
+  if(saved?.state==='removed')return this.verifyUnstartedRetirement(saved,binding);
   if(!saved){
    await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[row.id,binding]);
-  }else if(digest(saved.binding)!==digest(binding)){
+  }else if(saved.state!=='prepared'||digest(saved.binding)!==digest(binding)){
    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   }
-  const current=saved??{state:'prepared',binding};
-  if(current.state==='prepared'){
-   const proof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),this.key).toString('hex')};
-   await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[row.id,proof]);
-   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.terminal_retired',$2)",[authority.contextId,{jobId:row.id,proofDigest:digest(proof)}]);
-   return;
-  }
-  if(current.state!=='removed'||!current.proof?.payload||digest(current.proof.payload)!==digest(binding)||
-   typeof current.proof.signature!=='string'||!/^[a-f0-9]{128}$/.test(current.proof.signature)||
-   !verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(current.proof.payload)),createPublicKey(this.key),Buffer.from(current.proof.signature,'hex')))
+  const proof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),this.key).toString('hex')};
+  await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[row.id,proof]);
+  await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.terminal_retired',$2)",[authority.contextId,{jobId:row.id,proofDigest:digest(proof)}]);
+ }
+ private verifyUnstartedRetirement(saved:Record<string,any>,binding:ReturnType<NativeExecutionSupervisor['unstartedRetirementBinding']>){
+  if(saved.state!=='removed'||digest(saved.binding)!==digest(binding)||!saved.proof?.payload||digest(saved.proof.payload)!==digest(binding)||
+   typeof saved.proof.signature!=='string'||!/^[a-f0-9]{128}$/.test(saved.proof.signature)||
+   !verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(saved.proof.payload)),createPublicKey(this.key),Buffer.from(saved.proof.signature,'hex')))
    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
  }
  private async launchPendingExists(jobId:string){
@@ -556,7 +555,10 @@ export class NativeExecutionSupervisor{
     OR EXISTS(SELECT 1 FROM ac_native_qa_jobs q WHERE q.intent_id=i.id)
     OR EXISTS(SELECT 1 FROM ac_native_planning_jobs pj JOIN ac_semantic_planning_calls pc ON pc.id=pj.id WHERE pc.intent_id=i.id)) has_other_job,
    EXISTS(SELECT 1 FROM ac_intents child WHERE child.parent_intent_id=i.id) has_child_intent,
-   EXISTS(SELECT 1 FROM ac_native_execution_jobs other WHERE other.intent_id=i.id AND other.id<>j.id AND other.state IN ('uncertain','running')) has_unresolved_job,
+   (EXISTS(SELECT 1 FROM ac_native_execution_jobs other WHERE other.intent_id=i.id AND other.id<>j.id AND other.state IN ('uncertain','running'))
+    OR EXISTS(SELECT 1 FROM ac_native_qa_jobs q WHERE q.intent_id=i.id AND q.state IN ('uncertain','running'))
+    OR EXISTS(SELECT 1 FROM ac_native_planning_jobs pj JOIN ac_semantic_planning_calls pc ON pc.id=pj.id
+      WHERE pc.intent_id=i.id AND pj.state IN ('prepared','uncertain','running'))) has_unresolved_job,
    EXISTS(SELECT 1 FROM ac_capacity_grants other WHERE other.intent_id=i.id AND other.id<>g.id AND other.state<>'released') has_open_grant
    FROM ac_native_execution_jobs j
    JOIN ac_capacity_grants g ON g.id=j.grant_id
@@ -580,7 +582,7 @@ export class NativeExecutionSupervisor{
   if((!allowRetiredExecutor&&row.executor_digest!==this.executorDigest)||row.key_fingerprint!==this.fingerprint||Number(row.manager_epoch)>authority.epoch)
    throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
   if(!['uncertain','failed'].includes(row.state)||row.worker_id!==null||row.tools_id!==null||row.network_id!==null||row.launch_digest!==null||
-   row.has_active_admission||row.has_open_grant||row.has_unresolved_job||row.has_child_intent||(allowHistorical&&row.has_other_job)||(row.state==='uncertain'&&row.receipt!==null))
+   row.has_active_admission||row.has_open_grant||row.has_unresolved_job||row.has_child_intent||(row.state==='uncertain'&&row.receipt!==null))
    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   if(row.grant_state!=='released'||row.grant_resource_kind!=='model'||row.grant_project_id!==context.project_id||
    row.grant_context_id!==row.context_id||row.grant_intent_id!==row.intent_id||Number(row.grant_epoch)!==Number(row.manager_epoch)||
@@ -603,6 +605,7 @@ export class NativeExecutionSupervisor{
    physical.reason==='exam_login_stale'&&payload.messageRef==='design:'+target;
   if(allowHistorical&&!design)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
   if(!markedExam){
+   if(allowHistorical&&row.has_other_job)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
    if(!historical)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    if(!allowHistorical)throw new Refusal('NATIVE_EXECUTION_HISTORICAL_CONFIRMATION_REQUIRED');
   }
@@ -640,6 +643,14 @@ export class NativeExecutionSupervisor{
  }
  /** Settle a single personal exam with a durable pre-launch refusal and no physical resources. */
  async recoverUnstartedExam(principal:string,authority:Authority,jobId:string,localOwnerScope?:PersonalExamRecoveryScope){
+  return this.recoverUnstartedExamWithProof(principal,authority,jobId,localOwnerScope,false);
+ }
+ /** Verify an already retired design attempt even when its old image pair is no longer configured. */
+ async confirmRetiredUnstartedDesign(principal:string,authority:Authority,jobId:string,scope:PersonalExamRecoveryScope){
+  const {state,retirement,intentState}=await this.recoverUnstartedExamWithProof(principal,authority,jobId,scope,true);
+  return {state,retirement,intentState};
+ }
+ private async recoverUnstartedExamWithProof(principal:string,authority:Authority,jobId:string,localOwnerScope:PersonalExamRecoveryScope|undefined,requireRetirementProof:boolean){
   Id.parse(jobId);
   return this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
    const context=await this.ledger.authorize(c,principal,authority.contextId);
@@ -650,33 +661,20 @@ export class NativeExecutionSupervisor{
     repository!==await realpath(localOwnerScope.repository)))
     throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    const row=await this.loadUnstartedExam(c,authority,jobId);
-   this.validateUnstartedExam(row,context,principal,authority,localOwnerScope?.explicitDesignWithdrawal===true);
-   await this.validateOptionalUnstartedRequest(jobId,row,localOwnerScope?.explicitDesignWithdrawal===true);
+   const explicitDesignWithdrawal=localOwnerScope?.explicitDesignWithdrawal===true;
+   this.validateUnstartedExam(row,context,principal,authority,explicitDesignWithdrawal,requireRetirementProof);
+   await this.validateOptionalUnstartedRequest(jobId,row,explicitDesignWithdrawal);
+   if(row.state==='failed'&&row.intent_state==='failed'){
+    const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1',[jobId])).rows[0];
+    if(saved?.state==='removed'){
+     this.verifyUnstartedRetirement(saved,this.unstartedRetirementBinding(row,row.receipt));
+     return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const,receipt:row.receipt};
+    }
+   }
+   if(requireRetirementProof)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
    await this.confirmUnstartedAbsence(jobId);
    return this.settleUnstartedExam(c,authority,row);
   }));
- }
- /** Verify an already retired design attempt using its signed durable records,
-  * even when its old image pair is no longer configured. Never mutates state. */
- async confirmRetiredUnstartedDesign(principal:string,authority:Authority,jobId:string,scope:PersonalExamRecoveryScope){
-  Id.parse(jobId);
-  return this.ledger.tx(async c=>{
-   const context=await this.ledger.authorize(c,principal,authority.contextId);
-   await this.ledger.fence(c,authority,true);
-   const repository=await this.jobRepository(c,String(context.project_id));
-   if(context.role!=='owner'||context.project_id!==scope.projectId||repository!==await realpath(scope.repository))throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
-   const row=await this.loadUnstartedExam(c,authority,jobId);
-   this.validateUnstartedExam(row,context,principal,authority,scope.explicitDesignWithdrawal,true);
-   if(row.state!=='failed'||row.intent_state!=='failed')throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
-   const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1',[jobId])).rows[0];
-   const binding=this.unstartedRetirementBinding(row,row.receipt);
-   if(saved?.state!=='removed'||digest(saved.binding)!==digest(binding)||!saved.proof?.payload||digest(saved.proof.payload)!==digest(binding)||
-    typeof saved.proof.signature!=='string'||!/^[a-f0-9]{128}$/.test(saved.proof.signature)||
-    !verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(saved.proof.payload)),createPublicKey(this.key),Buffer.from(saved.proof.signature,'hex')))
-    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
-   await this.validateOptionalUnstartedRequest(jobId,row,scope.explicitDesignWithdrawal);
-   return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const};
-  });
  }
  async reconcileRegistered(principal:string,authority:Authority,jobId:string){
   try{return await this.reconcile(principal,authority,await this.registeredInput(principal,authority,jobId));}
