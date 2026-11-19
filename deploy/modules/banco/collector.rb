@@ -575,7 +575,9 @@ module Banco
       error.result&.error_field(PG::Result::PG_DIAG_SQLSTATE)
     end
 
-    INLINE_FRAME = %r{\APL/pgSQL function inline_code_block line \d+ at (?:SQL statement|EXECUTE)\z}
+    INLINE_SQL_FRAME = %r{\Aline [1-9][0-9]* at (?:SQL statement|EXECUTE)\z}
+    INLINE_FRAME = %r{\Aline [1-9][0-9]* (?:at|during|while) \S}
+    INLINE_FRAME_PREFIX = "PL/pgSQL function inline_code_block"
     PLPGSQL_FRAME = %r{\APL/pgSQL function (?:[^"\n]++|"(?:[^"]++|"")*+")++(?=\n|\z)}
     PLPGSQL_COMPILATION_FRAME = %r{\Acompilation of PL/pgSQL function ".{1,63}?" near line \d+(?=\n|\z)}m
     FRAME_START = %r{(?:SQL (?:statement|expression|function) "|PL/pgSQL (?:assignment "|function )|compilation of PL/pgSQL function ")}
@@ -599,12 +601,13 @@ module Banco
           frames << (label == 'SQL statement "' ? parsed_context_query(payload[0...ending]) : :other)
           context = payload[(ending + 1)..].delete_prefix("\n")
         elsif (frame = context[PLPGSQL_FRAME] || context[PLPGSQL_COMPILATION_FRAME] || sql_routine_frame(context))
-          frames << if INLINE_FRAME.match?(frame)
-            :inline_sql
-          elsif frame.start_with?("PL/pgSQL function inline_code_block line ")
-            :inline
+          if frame == INLINE_FRAME_PREFIX || frame.start_with?(INLINE_FRAME_PREFIX + " ")
+            location = frame.delete_prefix(INLINE_FRAME_PREFIX).delete_prefix(" ")
+            return unless INLINE_FRAME.match?(location)
+
+            frames << (INLINE_SQL_FRAME.match?(location) ? :inline_sql : :inline)
           else
-            :other
+            frames << :other
           end
           context = context[frame.length..].delete_prefix("\n")
         else
@@ -682,8 +685,7 @@ module Banco
       end
     end
 
-    def diagnostic_position(diagnostic, field)
-      raw = diagnostic.error_field(field)
+    def diagnostic_position(raw)
       raw.to_i if raw&.match?(/\A[0-9]+\z/)
     end
 
@@ -726,21 +728,38 @@ module Banco
     def migration_error_location(error, source, statements)
       diagnostic = error.result
       frames = context_frames(diagnostic.error_field(PG::Result::PG_DIAG_CONTEXT))
-      position = diagnostic_position(diagnostic, PG::Result::PG_DIAG_STATEMENT_POSITION)
+      position = diagnostic_position(diagnostic.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION))
       cursor_line = source.sql[0, position - 1].count("\n") + 1 if position&.between?(1, source.sql.length + 1)
       cursor_evidence = "; cursor do servidor na linha #{cursor_line}" if cursor_line
-      # Quadros incompletos podem ocultar quem disparou a checagem. Mesmo
-      # um cursor externo só localiza a execução, sem provar a sua origem.
-      return ["#{UNDECIDABLE_CONTEXT}#{cursor_evidence}"] unless frames
-
       # SPI pode fornecer o SQL mais interno e seu cursor em campos próprios.
-      # Esse cursor identifica o comando interno, em coordenadas da consulta interna.
+      # Só o cursor pode selecionar um comando dentro dessa consulta.
       internal_query = diagnostic.error_field(PG::Result::PG_DIAG_INTERNAL_QUERY)
-      internal_position = diagnostic_position(diagnostic, PG::Result::PG_DIAG_INTERNAL_POSITION)
-      if internal_query && internal_position&.between?(1, internal_query.length)
-        internal_statement = statement_at_cursor(internal_query, parsed_context_query(internal_query), internal_position)
-        frames.unshift([internal_statement]) if internal_statement && frames.first == :inline_sql
+      raw_internal_position = diagnostic.error_field(PG::Result::PG_DIAG_INTERNAL_POSITION)
+      internal_statements = internal_query ? parsed_context_query(internal_query) : []
+      internal_statement = statement_at_cursor(internal_query, internal_statements, diagnostic_position(raw_internal_position)) if internal_query
+
+      # Quadros inválidos e campos internos incompletos só indicam o ponto de detecção.
+      if !frames || ((internal_query || raw_internal_position) && !internal_statement)
+        evidence = []
+        evidence << UNDECIDABLE_CONTEXT unless frames
+        if internal_query || raw_internal_position
+          query_status = internal_query ? "presente" : "ausente"
+          position_status = if internal_statement
+            "identificou uma instrução na consulta interna"
+          elsif raw_internal_position
+            "presente, sem instrução identificável"
+          else
+            "ausente"
+          end
+          evidence << "diagnóstico interno parcial (consulta interna #{query_status}; posição interna #{position_status})"
+          possible_statements = internal_statement ? [internal_statement] : internal_statements
+          if possible_statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
+            evidence << POSSIBLE_CONSTRAINT_CHECK
+          end
+        end
+        return ["#{evidence.join('; ')}#{cursor_evidence}"]
       end
+      frames.unshift([internal_statement]) if internal_statement && frames.first == :inline_sql
 
       signature = [sqlstate(error), diagnostic.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION)]
       cursor_statement = statement_at_cursor(source.sql, statements, position)
@@ -800,7 +819,7 @@ module Banco
       else
         @report.find("pg-migrate", "BANCO-LOTE-MIGRACAO-REJEITADO", sources.last, "alta",
           "O lote de migrações foi rejeitado no cenário #{name}.",
-          "#{evidence}; origem entre arquivos indeterminada; arquivo e linha referenciam o último arquivo alcançado pela execução.",
+          "#{evidence}; origem entre arquivos indeterminada; arquivo e linha referenciam o início do último arquivo alcançado pela execução.",
           line: Banco.statement_line(sources.last))
         "origem entre arquivos indeterminada"
       end

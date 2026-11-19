@@ -106,6 +106,13 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
     internal_fields = {
       context: inline, internal_position: (internal_sql.index('falta') + 1).to_s, internal_query: internal_sql
     }
+    deferred_check = {
+      context: inline, sqlstate: '23503', source_function: nil, internal_query: 'SET CONSTRAINTS ALL IMMEDIATE'
+    }
+    malformed_frame = {
+      context: 'PL/pgSQL function inline_code_block line x at EXECUTE',
+      sqlstate: '42703', source_function: nil, statement_position: cursor
+    }
     cases = {
       start: {context: [set_frame, inline].join("\n")},
       cursor: {context: [set_frame, inline].join("\n"), statement_position: cursor},
@@ -114,6 +121,13 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
       internal_cursor: internal_fields,
       internal_missing_routine: internal_fields.merge(source_function: nil),
       internal_without_context: internal_fields.merge(context: nil),
+      internal_query_only: deferred_check,
+      internal_malformed_position: deferred_check.merge(internal_position: '2x', statement_position: cursor),
+      internal_out_of_range: deferred_check.merge(internal_position: (deferred_check[:internal_query].length + 1).to_s),
+      internal_position_only: internal_fields.merge(internal_query: nil),
+      internal_unparseable: internal_fields.merge(internal_query: 'SELECT FROM (', internal_position: '8'),
+      malformed_frame: malformed_frame,
+      malformed_frame_with_internal: internal_fields.merge(malformed_frame),
       missing_routine: {context: [set_frame, inline].join("\n"), source_function: nil},
       missing_routine_cursor: {context: [set_frame, inline].join("\n"), source_function: nil, statement_position: cursor},
       partial: {context: [set_frame, inline, 'contexto externo desconhecido'].join("\n")},
@@ -165,8 +179,12 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
   }
 
   for (const [names, detection] of [
-    [['partial', 'unterminated', 'ambiguous_name'], /contexto do PostgreSQL inconclusivo/],
+    [['partial', 'unterminated', 'ambiguous_name', 'malformed_frame', 'malformed_frame_with_internal'],
+      /contexto do PostgreSQL inconclusivo/],
     [['competing', 'internal_without_context'], /SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
+    [['internal_query_only', 'internal_malformed_position', 'internal_out_of_range'],
+      /diagnóstico interno parcial.*SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
+    [['internal_position_only', 'internal_unparseable'], /diagnóstico interno parcial/],
     [['missing_routine', 'missing_routine_cursor', 'internal_missing_routine', 'sql_statement', 'sql_startup', 'sql_inlining', 'sql_bare', 'compilation'],
       /detecção em SET CONSTRAINTS chamado pelo arquivo/],
   ] as const) {
@@ -176,10 +194,20 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
       assert.equal(finding.line, 1, name);
       assert.match(finding.evidence, detection, name);
       assert.match(finding.evidence, /origem entre arquivos indeterminada/, name);
+      assert.match(finding.evidence, /arquivo e linha referenciam o início do último arquivo alcançado/, name);
     }
   }
-  assert.match(reports.unterminated.findings[0].evidence, /cursor do servidor na linha 4/);
-  assert.match(reports.missing_routine_cursor.findings[0].evidence, /cursor do servidor na linha 4/);
+  for (const name of ['unterminated', 'missing_routine_cursor', 'malformed_frame', 'malformed_frame_with_internal',
+    'internal_malformed_position']) {
+    assert.match(reports[name].findings[0].evidence, /cursor do servidor na linha 4/, name);
+  }
+  assert.match(reports.internal_query_only.findings[0].evidence, /consulta interna presente; posição interna ausente/);
+  assert.match(reports.internal_malformed_position.findings[0].evidence,
+    /consulta interna presente; posição interna presente, sem instrução identificável/);
+  assert.match(reports.internal_position_only.findings[0].evidence,
+    /consulta interna ausente; posição interna presente, sem instrução identificável/);
+  assert.match(reports.malformed_frame_with_internal.findings[0].evidence,
+    /consulta interna presente; posição interna identificou uma instrução na consulta interna/);
   assert.doesNotMatch(JSON.stringify(reports), /mensagem sintética privada|inline_code_block|falta\.child_fk/);
 });
 
@@ -299,6 +327,16 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         db.instance_variable_set(:@report, rejected)
         db.migrate('upgraded', [source('db/migrations/001_ok.sql', 'CREATE TABLE t(id integer);'), source('db/migrations/002_bad.sql', "SELECT 1;\\nSELECT missing FROM t;"), source('db/migrations/003_next.sql', 'SELECT 1;')])
         reports[:rejected] = JSON.parse(rejected.to_json)
+        internal_column = Banco::Report.new
+        db.instance_variable_set(:@report, internal_column)
+        db.migrate('upgraded', [source('db/migrations/001_table.sql', 'CREATE TABLE task(id integer);'),
+          source('db/migrations/002_internal_column.sql', <<~'SQL')])
+            SELECT 1;
+            DO $$ BEGIN
+              PERFORM missing_task_column FROM task;
+            END $$;
+          SQL
+        reports[:internal_column] = JSON.parse(internal_column.to_json)
         app = Banco::Report.new
         db.instance_variable_set(:@report, app)
         db.migrate('fresh', [source('db/migrations/001_raise.sql', "DO $$ BEGIN RAISE EXCEPTION 'synthetic-private'; END $$;")])
@@ -375,6 +413,9 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
   assert.ok(rejected.findings.some(f => f.file.endsWith('002_bad.sql') && f.line === 2 && /SQLSTATE 42703/.test(f.evidence)));
   assert.ok(rejected.coverage.some(row => row.status === 'skipped' && /001_ok.sql.*não confirmada/.test(row.detail)));
   assert.ok(rejected.coverage.some(row => row.status === 'skipped' && row.detail.includes('003_next.sql')));
+  assert.deepEqual(result.internal_column.findings, [{tool: 'pg-migrate', rule: 'BANCO-MIGRACAO-REJEITADA', severity: 'alta',
+    file: 'db/migrations/002_internal_column.sql', line: 2, message: 'A migração foi rejeitada no cenário upgraded.',
+    evidence: 'SQLSTATE 42703; linha inicial da instrução; posição exata indisponível'}]);
   assert.ok(app.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && /SQLSTATE P0001/.test(f.evidence)));
   assert.ok(app.findings.some(f => f.rule === 'BANCO-INVARIANTE-HISTORICO' && /SQLSTATE P0001/.test(f.evidence)));
   assert.ok(app.coverage.every(row => row.status !== 'failed'));
@@ -394,7 +435,7 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
   assert.ok(workload.coverage.some(row => row.tool === 'pg_stat_statements' && row.status === 'ok' && row.detail.includes('valida.sql')));
   assert.ok(workload.coverage.some(row => row.tool === 'EXPLAIN' && /missing.sql.*SQLSTATE 42P01; linha 2/.test(row.detail)));
   assert.ok(workload.coverage.some(row => row.tool === 'EXPLAIN' && /invalid.sql.*linha 2/.test(row.detail)));
-  assert.doesNotMatch(JSON.stringify(result), /INSERT INTO|synthetic-private|424242|inline_code_block/);
+  assert.doesNotMatch(JSON.stringify(result), /INSERT INTO|synthetic-private|424242|inline_code_block|missing_task_column/);
 });
 
 test('coleta integrada separa seed histórico da carga final e mantém consultas individuais', {
