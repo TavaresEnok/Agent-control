@@ -58,6 +58,7 @@ const messages: Record<string, string> = {
   VERIFY_RUN_MISSING: 'Execução do módulo não encontrada neste projeto.',
   VERIFY_RUN_CONFLICT: 'A execução ou o commit mudou durante a reverificação.',
   VERIFY_RECHECK_FAILED: 'A reverificação falhou. Consulte o registro da execução.',
+  VERIFY_RECHECK_PREVIOUS_PUBLICATION_PENDING: 'Há vereditos gravados com publicação pendente. Repita a seleção anterior de --reverificar para publicar o relatório.',
   STALE_MANAGER: 'A autoridade sobre o contexto do módulo expirou.',
   VERIFY_REPORT_INSIDE_REPO: 'O diretório de dados não pode ficar dentro do repositório.',
   VERIFY_SECRET_IN_REPORT: 'Um segredo vivo apareceria no relatório.',
@@ -65,6 +66,15 @@ const messages: Record<string, string> = {
   PRONTIDAO_ORIGIN_UNAUTHORIZED: 'A origem HTTPS informada não está declarada e autorizada na instalação ou no projeto.',
   PROVIDER_USAGE_LIMIT: 'PROVIDER_USAGE_LIMIT. A cota do provedor foi atingida. Consulte as pendências no relatório.',
   EXAM_INTERRUPTED: 'A execução do módulo foi interrompida.',
+};
+
+const recheckGuidance: Record<string, string> = {
+  MODULE_RECHECK_ORIGINAL_UNKNOWN: 'Recupere o relatório e a cobertura originais para identificar a origem do achado.',
+  MODULE_RECHECK_SAME_COMMIT: 'Integre a correção e rode o módulo e o QA no novo commit.',
+  MODULE_RECHECK_CHANGE_UNPROVEN: 'Confira a linhagem do commit e a alteração no ponto original do achado.',
+  MODULE_RECHECK_MODULE_PROOF_MISSING: 'Rode novamente o módulo no commit atual com a mesma origem e cobertura do ponto original.',
+  MODULE_RECHECK_REGRESSION_PROOF_MISSING: 'Rode o QA no commit atual com o teste de regressão do achado vinculado ao ponto original.',
+  MODULE_RECHECK_CORRECTION_UNEXPLAINED: 'Repita a revisão com uma justificativa que cite a mudança e o teste de regressão.',
 };
 
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
@@ -245,13 +255,21 @@ export async function runPersonalModuleCli(
     }
 
     if (parsed.kind === 'recheck') {
-      const {results} = await recheckModuleFindings(ledger, project.owner, authority, {
+      const {results, publication} = await recheckModuleFindings(ledger, project.owner, authority, {
         module, runId: parsed.runId, achadoIds: parsed.achadoIds, dataDirectory: config.dataDirectory, projectId: project.id,
         signal: recheckAbort?.signal,
         review: createPersonalModuleRecheck({ledger, principal: project.owner, authority,
           loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger))}),
       });
-      return results.map(result => `${result.id} ${result.status}${result.status === 'pendente' ? ` ${result.reason}` : ''}`);
+      const lines = results.map(result => {
+        if (result.status !== 'pendente') return `${result.id} ${result.status}`;
+        const guidance = recheckGuidance[result.reason];
+        return `${result.id} pendente ${result.reason}${guidance ? ` (${guidance})` : ''}`;
+      });
+      if (publication === 'pending') {
+        lines.push('Vereditos gravados. Publicação do relatório pendente (VERIFY_RECHECK_PUBLICATION_PENDING). Repita o mesmo comando para publicar.');
+      }
+      return lines;
     }
 
     if (parsed.kind === 'remediate') {

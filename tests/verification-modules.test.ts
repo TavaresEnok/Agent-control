@@ -774,11 +774,11 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       const recheckInput = {module: 'dependencias' as const, runId: failedResultRunId,
         achadoIds: ['ACH-001'], dataDirectory, projectId};
       const reviewer = {provider: 'claude', model: 'fixture-model', profileId, accountId, grantId: randomUUID()};
-      const response = (status: 'confirmado' | 'descartado', task: string) => ({reviewer, output: JSON.stringify({kind: 'confirmacao',
-        status, binding: JSON.parse(task).binding, reason: 'A declaração local de `main` não contém uma dependência.',
+      const response = (task: string) => ({reviewer, output: JSON.stringify({kind: 'confirmacao',
+        status: 'confirmado', binding: JSON.parse(task).binding, reason: 'A declaração local de `main` ainda sustenta a observação.',
         proof: 'export function main() {'})});
       await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput,
-        review: async ({task}) => response('descartado', task)}), /synthetic rollback/);
+        review: async ({task}) => response(task)}), /synthetic rollback/);
       assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, failedReport.achados[0]?.status);
       await db.pool.query('DROP TRIGGER synthetic_recheck_failure ON ac_verify_findings');
       await db.pool.query('DROP FUNCTION synthetic_recheck_failure()');
@@ -793,7 +793,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         olderIntent = call.intentId;
         markOlderStarted();
         await olderMayFinish;
-        return response('confirmado', call.task);
+        return response(call.task);
       }});
       const olderRejected = assert.rejects(older,
         (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_RUN_CONFLICT');
@@ -807,22 +807,21 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
             seenTasks.push(call.task);
             recheckIntent = call.intentId;
             assert.equal(call.examiner, null);
-            return response('descartado', call.task);
+            return response(call.task);
           },
         });
       } finally {
         finishOlder();
         await olderRejected;
       }
-      assert.deepEqual(rechecked.results, [{id: 'ACH-001', status: 'fechado'}]);
+      assert.deepEqual(rechecked, {results: [{id: 'ACH-001', status: 'reaberto'}], publication: 'published'});
       assert.equal(seenTasks.length, 1);
       assert.equal(seenTasks[0]?.includes('Atualização disponível.'), false);
       assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [recheckIntent])).rows[0]?.state, 'done');
       assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [olderIntent])).rows[0]?.state, 'failed');
       const updated = await readModuleReport(dataDirectory, projectId, failedResultRunId, 'dependencias');
-      assert.equal(updated.summary.counts.baixa, 0);
-      assert.equal(updated.achados[0]?.status, 'fechado');
-      assert.equal((await db.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [failedResultRunId])).rows[0]?.status, 'fechado');
+      assert.equal(updated.achados[0]?.status, 'reaberto');
+      assert.equal((await db.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [failedResultRunId])).rows[0]?.status, 'reaberto');
     } finally {
       await db.releaseLease(depAuth);
     }
