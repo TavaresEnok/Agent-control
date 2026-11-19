@@ -823,3 +823,5 @@ PAUSADO-COTA
 - 19/11/2026 18:09 UTC — C2-GO-EXECUCAO encerrado com código 0.
 - 19/11/2026 18:09 UTC — C9-ESCOPO-EFEITOS encerrado com código 0.
 - 19/11/2026 18:10 UTC — Prontidão em b2e62e6b passou em 43/43 com a imagem e a CLI. Documentação incorpora 74c33f3f em 62158ac8. O laboratório do banco acertou a medição; a confirmação ficou provável porque a resposta sintética do examinador não devolvia o vínculo exigido pelo contrato. A revisão 94af07b4 também exige tratar dois sinais ambíguos de posição de erro dentro do SQL.
+- 19/11/2026 18:10 UTC — trabalho-C5-POSICAO-AMBIGUA iniciado em final-c5 por Sol medium normal.
+- 19/11/2026 18:10 UTC — O laboratório de pg_stat_statements voltou a confirmar no commit original e deixou a consulta alterada como provável após atualizar a resposta da fixture para o contrato de leitura. A medição veio do PostgreSQL da imagem.
