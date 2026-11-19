@@ -11,6 +11,7 @@ const enabled = process.env.AC_MODULE_LAB === '1';
 const root = new URL('../deploy/modules/conformidade/', import.meta.url);
 const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
 const attributionFixture = 'atribuicao/repo';
+const npmLicenseSkipDetail = 'Lockfiles npm v2/v3 classificados: 0; erros: 0. Licenças ausentes permanecem desconhecidas.';
 const isolated = [
   'run', '--pull=never', '--rm', '--network', 'none', '--read-only',
   '--user', '65532:65532', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
@@ -46,13 +47,13 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
   assert.equal(code, attribution ? 1 : 0, `Código de saída de ${fixture}`);
   const report = JSON.parse(stdout) as Output;
   assert.deepEqual(Object.keys(report).sort(), ['coverage', 'findings']);
-  const expectedCoverage: [tool: string, status: string, skipDetail?: RegExp][] = [
+  const expectedCoverage: [tool: string, status: string, skipDetail?: string][] = [
     ['conformidade:snapshot', 'ok'],
     ['scancode-toolkit', 'ok'],
     ['presidio-analyzer', 'ok'],
-    attribution ? ['npm-license-policy', 'skipped', /^Lockfiles npm v2\/v3 classificados: 0; erros: 0\./] :
+    attribution ? ['npm-license-policy', 'skipped', npmLicenseSkipDetail] :
       ['npm-license-policy', 'ok'],
-    attribution ? ['ort', 'skipped', /^Nenhuma declaração SPDX elegível em lockfile npm\.$/] : ['ort', 'ok'],
+    attribution ? ['ort', 'skipped', 'Nenhuma declaração SPDX elegível em lockfile npm.'] : ['ort', 'ok'],
     ['lgpd-static', attribution ? 'failed' : 'ok'],
   ];
   for (const [tool, status, skipDetail] of expectedCoverage) {
@@ -60,7 +61,7 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
     assert.equal(rows.length, 1, `Cobertura agregada de ${tool} em ${fixture}`);
     const [row] = rows;
     assert.equal(row.status, status, `Estado de ${tool} em ${fixture}: ${row.detail}`);
-    if (skipDetail) assert.match(row.detail, skipDetail, `Motivo do salto de ${tool} em ${fixture}`);
+    if (skipDetail !== undefined) assert.equal(row.detail, skipDetail, `Motivo do salto de ${tool} em ${fixture}`);
   }
   for (const row of report.coverage) {
     assert.match(row.status, /^(ok|failed|skipped)$/);
@@ -97,7 +98,7 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
     {tool: 'scancode-toolkit', version: '1', status: 'ok', detail: '3/3 registros de arquivo.'},
     {tool: 'presidio-analyzer', version: '1', status: 'ok', detail: '3/3 textos examinados.'},
     {tool: 'npm-license-policy', version: '1', status: 'skipped',
-      detail: 'Lockfiles npm v2/v3 classificados: 0; erros: 0. Licenças ausentes permanecem desconhecidas.'},
+      detail: npmLicenseSkipDetail},
     {tool: 'ort', version: '1', status: 'skipped', detail: 'Nenhuma declaração SPDX elegível em lockfile npm.'},
     {tool: 'lgpd-static', version: '1', status: 'failed',
       detail: '3 arquivos JS/TS/Python examinados, 2 com cobertura parcial. AST: vínculos simples.'},
@@ -133,6 +134,9 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
         new RegExp(`Motivo do salto de ${entry.tool} em ${attributionFixture}`));
     }
   }
+  assert.throws(() => parseCollectorOutput(attributionFixture, {
+    stdout: stdout.replace(npmLicenseSkipDetail, `${npmLicenseSkipDetail} Limite sintético atingido.`), code: 1,
+  }), /Motivo do salto de npm-license-policy em atribuicao\/repo/);
   assert.throws(() => parseCollectorOutput(attributionFixture, {
     stdout: stdout.replace('operations.js', 'unexpected.js'), code: 1,
   }), assert.AssertionError);

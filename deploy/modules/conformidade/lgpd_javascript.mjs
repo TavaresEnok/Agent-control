@@ -79,13 +79,8 @@ function literalFacts(input) {
   if (ts.isStringLiteralLike(node) && !node.containsInvalidEscape) return primitive(node.text);
   if (ts.isNumericLiteral(node)) return primitive(Number(node.text));
   if (ts.isBigIntLiteral(node)) return primitive(!/^(?:0[xob])?[0_]+n$/i.test(node.text));
-  if (ts.isPrefixUnaryExpression(node)) {
-    const operand = literalFacts(node.operand);
-    if (operand && operand !== UNDEFINED &&
-      node.operator === ts.SyntaxKind.ExclamationToken) return primitive(!operand.truthy);
-    if (ts.isNumericLiteral(unwrap(node.operand)) &&
-      [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator)) return operand;
-  }
+  if (ts.isPrefixUnaryExpression(node) && ts.isNumericLiteral(unwrap(node.operand)) &&
+    [ts.SyntaxKind.PlusToken, ts.SyntaxKind.MinusToken].includes(node.operator)) return literalFacts(node.operand);
   return null;
 }
 
@@ -153,7 +148,10 @@ function analyze(text, suffix, fieldPattern, limit) {
     const node = unwrap(input);
     if (factsByExpression.has(node)) return factsByExpression.get(node);
     let facts = literalFacts(node);
-    if (!facts && ts.isBinaryExpression(node) && isLogical(node.operatorToken.kind)) {
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+      const truth = expressionFacts(node.operand)?.truthy;
+      if (truth !== undefined) facts = primitive(!truth);
+    } else if (!facts && ts.isBinaryExpression(node) && isLogical(node.operatorToken.kind)) {
       const operator = node.operatorToken.kind;
       const left = expressionFacts(node.left);
       const needed = needsRight(operator, left);
@@ -586,6 +584,13 @@ function analyze(text, suffix, fieldPattern, limit) {
     const node = unwrap(input);
     if (!node) return null;
     if (ts.isVoidExpression(node)) walk(node.expression);
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+      const facts = expressionFacts(node);
+      if (facts) {
+        value(node.operand);
+        return facts;
+      }
+    }
     const facts = literalFacts(node);
     if (facts) return facts;
     if (ts.isIdentifier(node)) return read(node);

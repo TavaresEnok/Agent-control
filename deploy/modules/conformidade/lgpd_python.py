@@ -49,8 +49,6 @@ def literal_truth(node):
     if isinstance(node, ast.Constant):
         return bool(node.value)
     if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
-        if isinstance(node.op, ast.Not):
-            return not node.operand.value
         if isinstance(node.op, (ast.UAdd, ast.USub)) and type(node.operand.value) in (int, float, complex):
             return bool(node.operand.value)
     return None
@@ -63,6 +61,9 @@ def needs_right(node, truth):
 
 
 def expression_truth(node, logical_truths):
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        operand = expression_truth(node.operand, logical_truths)
+        return None if operand is None else not operand
     if not isinstance(node, ast.BoolOp):
         return literal_truth(node)
     if node not in logical_truths:
@@ -408,6 +409,11 @@ class Analyzer(ast.NodeVisitor):
         truth = literal_truth(node)
         if truth is not None:
             return Value(truth=truth)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            truth = expression_truth(node, self.logical_truths)
+            if truth is not None:
+                self.value(node.operand)
+                return Value(truth=truth)
         if isinstance(node, ast.Name):
             return self.read(node)
         if isinstance(node, (ast.Attribute, ast.Subscript)):
