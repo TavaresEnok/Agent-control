@@ -103,6 +103,11 @@ export class DockerDaemon{
   const r=await this.call('GET',`/v1.44/networks/${id}`);if(r.status===404)return null;
   if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');return JSON.parse(r.body.toString('utf8'));
  }
+ async inspectNamedPrivateNetwork(name:string):Promise<Record<string,any>|null>{
+  if(!/^ac-native-exec-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');
+  const r=await this.call('GET',`/v1.44/networks/${encodeURIComponent(name)}`);if(r.status===404)return null;
+  if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');return JSON.parse(r.body.toString('utf8'));
+ }
  /** QA-only internal network. Execution networks keep their own name check. */
  async createQaNetwork(name:string,labels:Record<string,string>){
   if(!/^ac-native-qa-net-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');

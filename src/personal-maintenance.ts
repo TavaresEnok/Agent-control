@@ -26,7 +26,7 @@ export type MaintenanceDeps={
 
 /** A retired execution pair is kept while any job under it is unfinished, or a reviewer, judge or QA job has not had its containers removed. */
 export const OPEN_EXECUTION_JOBS_SQL=`SELECT count(*)::int n FROM ac_native_execution_jobs j WHERE j.executor_digest=$1 AND (j.state NOT IN ('completed','failed')
- OR (j.role IN ('reviewer','judge','qa') AND NOT EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed')))`;
+ OR (j.role IN ('reviewer','judge','qa','specialist') AND NOT EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed')))`;
 export const OPEN_PLANNING_JOBS_SQL=`SELECT count(*)::int n FROM ac_native_planning_jobs WHERE state NOT IN ('completed','failed')`;
 
 function run(command:string,args:string[],timeout:number){
