@@ -105,7 +105,7 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
     matchFinding: f =>
       f.where.file === 'src/billing.ts'
       && f.sources.includes('DOC-TYPEDOC-SIMBOLO-SEM-DOC')
-      && f.title.includes('\"undocumentedCharge\"'),
+      && f.where.line === 12 && /"(?:src\/billing\.)?undocumentedCharge"/.test(f.title),
     coverageDetailPattern: /typedoc:file/,
   },
   conformidade: {
@@ -584,6 +584,10 @@ test('seletores de documentação e prontidão exigem o defeito específico apó
   const doc = findings[0]!;
   const tls = findings[1]!;
   assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding(doc), true);
+  const qualified = {...doc, title: doc.title.replace('"undocumentedCharge"', '"src/billing.undocumentedCharge"')};
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding(qualified), true);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...qualified, where: {...doc.where, line: 8}}), false);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...qualified, title: qualified.title.replace('src/billing.', 'src/api.')}), false);
   assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding(tls), true);
   assert.equal(tls.sources[1], '[removido: alta entropia]');
   assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, where: {...doc.where, file: 'src/api.ts'}}), false);
