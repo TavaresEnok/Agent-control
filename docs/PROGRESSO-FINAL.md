@@ -517,3 +517,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:00 UTC — Revisor encerrou C2-NAVEGADOR em 735da841 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:00 UTC — Revisão C-PAINEL-R4 iniciada por Sol high normal somente leitura em b809469f.
 - 19/11/2026 06:01 UTC — C5 2e18a141: a imagem agora identifica por SHA-256 o SQL medido. Após corrigir uma variável duplicada no teste, 13/13 passaram com PostgreSQL, Squawk e Dexter. C6 049b33c9: 34/34 passaram com a nova interpretação estática e os controles. Ambas as imagens estão fixadas em homologação.
+- 19/11/2026 06:02 UTC — Revisor encerrou C-PAINEL-R4 em b809469f (código 0). Gerente confere a entrega.
+- 19/11/2026 06:02 UTC — Revisão C2-MUTACAO-LINGUAGENS iniciada por Sol high normal somente leitura em 195c8cd8.
+- 19/11/2026 06:03 UTC — Captura 7bf5c1e5: 28/28 com PostgreSQL e Docker. O cliente R7 original removeu o contêiner exato enquanto a troca de época permaneceu bloqueada. Os testes separam erro de transporte e falha legítima do filho. Exame: após ligar os recibos de leitura à publicação, os 43 testes passaram, incluindo confirmação e pedido de correção nos oito módulos. Registrada segunda rodada de fidelidade do Chromium.
