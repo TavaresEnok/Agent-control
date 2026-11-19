@@ -56,7 +56,7 @@ def write_documents(locks, input_dir, version, report):
     return picked
 
 
-def read_results(result, picked, version, report):
+def read_results(result, picked, version, report, measured_files=None):
     observed = Counter(file for file, _ in picked.values())
     classified = Counter()
     seen = set()
@@ -65,13 +65,16 @@ def read_results(result, picked, version, report):
         if coordinate not in picked or coordinate in seen:
             raise ValueError("pacote inesperado na saída ORT")
         seen.add(coordinate)
-        file, line = picked[coordinate]
+    finding_files = set()
+    for package in result["packages"]:
+        file, line = picked[package["id"]]
         expression = (package.get("declared_licenses_processed") or {}).get("spdx_expression")
         category, normalized = classify(expression)
         if not normalized:
             continue
         classified[file] += 1
         if category == "copyleft forte":
+            finding_files.add(file)
             report.find(
                 TOOL, "ORT_STRONG_COPYLEFT_DECLARED", file, line, "informativa",
                 "ORT classificou declaração SPDX de copyleft forte no inventário.",
@@ -80,6 +83,10 @@ def read_results(result, picked, version, report):
     for file, count in observed.items():
         report.cover(TOOL + ":file", version, "ok" if classified[file] == count else "failed",
                      f"{file} | {classified[file]}/{count} declarações SPDX processadas no ORT.")
+    if measured_files is not None:
+        for file, count in observed.items():
+            if classified[file] == count or (classified[file] > 0 and file in finding_files):
+                measured_files.append(file)
     return len(seen), sum(classified.values())
 
 
@@ -110,7 +117,20 @@ def scan(locks, scratch, version, report):
         report.cover(TOOL, version, "failed", f"Sem saída JSON ORT; código {process.returncode}.")
         return
     result = json.loads(result_file.read_text(encoding="utf-8"))["analyzer"]["result"]
-    seen, classified = read_results(result, picked, version, report)
+    measured_files = []
+    seen, classified = read_results(result, picked, version, report, measured_files=measured_files)
     status = "failed" if process.returncode or classified != len(picked) else "ok"
-    report.cover(TOOL, version, status, f"{seen} pacotes importados; {classified}/{len(picked)} licenças processadas; "
-                 f"código {process.returncode}. Inventário SPDX gerado dos lockfiles, sem resolução de dependências.")
+    detail = (
+        f"{seen} pacotes importados; {classified}/{len(picked)} licenças processadas; "
+        f"código {process.returncode}. Inventário SPDX gerado dos lockfiles, sem resolução de dependências."
+    )
+    if status == "ok":
+        report.cover(TOOL, version, "ok", detail, files=measured_files)
+    else:
+        report.cover(TOOL, version, "failed", detail)
+        if measured_files:
+            report.cover(
+                TOOL, version, "ok",
+                f"Declarações SPDX processadas pelo ORT em {len(measured_files)}/{len({file for file, _ in picked.values()})} lockfile(s); falhas ou declarações não processadas permanecem registradas.",
+                files=measured_files,
+            )

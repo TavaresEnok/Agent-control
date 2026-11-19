@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
 import {execFileSync, spawnSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
-import {readFileSync} from 'node:fs';
+import {createHash, randomUUID} from 'node:crypto';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
+import {Refusal} from '../src/contracts.ts';
+import {parseModuleCollectorOutput, writeModuleReport, type ModuleCollectorOutput, type ModuleToolCoverage} from '../src/verification-modules.ts';
+import {Achado, CoverageRow, REMEDIATION_ACCEPTANCE} from '../src/verify-types.ts';
 
 const moduleDir = fileURLToPath(new URL('../deploy/modules/conformidade/', import.meta.url));
 const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
@@ -1862,4 +1866,326 @@ print(json.dumps(report.output()))
   assert.ok(result.coverage.some((row: {status: string; detail: string}) =>
     row.status === 'skipped' && row.detail.startsWith('redirect.ts')));
   assert.doesNotMatch(JSON.stringify(result), /synthetic-outside/);
+});
+
+function assertFindingsCoveredByFiles(output: ModuleCollectorOutput) {
+  for (const finding of output.findings) {
+    const covered = output.coverage.some(row =>
+      row.tool === finding.tool
+      && row.status === 'ok'
+      && (row.files ? row.files.includes(finding.file) : true));
+    if (!covered) throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
+  }
+}
+
+test('C9 preserva achado sustentado em escopo parcial de lgpd-static sem inventar ok para trechos não medidos', async () => {
+  const run = spawnSync('python3', ['-B', '-c', String.raw`
+from pathlib import Path
+from shutil import copytree
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+import json, subprocess, sys
+import collector
+
+fixtures = Path(sys.argv[1], "escopo-parcial")
+with TemporaryDirectory(dir=Path.cwd()) as scratch:
+    repo = Path(scratch, "repo")
+    copytree(fixtures, repo)
+    (repo / "src" / "unmeasured-syntax.ts").write_text("const broken = (\n", encoding="utf-8")
+    (repo / ".env.synthetic").write_text("SYNTHETIC_SECRET=hidden\n", encoding="utf-8")
+
+    real_run = subprocess.run
+
+    def fake_scancode(command, **kwargs):
+        if Path(command[0]).name != "scancode":
+            return real_run(command, **kwargs)
+        out = Path(command[command.index("--json-pp") + 1])
+        out.write_text(json.dumps({
+            "headers": [{"errors": []}],
+            "files": [
+                {"type": "file", "path": "src/clean-ast.ts", "license_detections": []},
+                {"type": "file", "path": "src/sustained-partial.ts", "license_detections": [
+                    {"license_expression_spdx": "MIT", "matches": [{"start_line": 1}]},
+                ]},
+                {"type": "file", "path": "src/unmeasured-syntax.ts", "scan_errors": ["untrusted-error"]},
+            ],
+        }), encoding="utf-8")
+        return SimpleNamespace(returncode=1)
+
+    analyzer = Mock()
+    analyzer.analyze.return_value = []
+    sys.argv = ["collector.py", "--repo", str(repo)]
+    with patch("collector.subprocess.run", side_effect=fake_scancode), \
+         patch("lgpd_analyzer.create_presidio", return_value=analyzer):
+        sys.exit(collector.main())
+`, fixtures], {cwd: moduleDir, env: {...process.env, TMPDIR: moduleDir}, encoding: 'utf8'});
+
+  assert.equal(run.status, 1, run.stderr);
+  assert.equal(run.stderr, '');
+  const parsed = parseModuleCollectorOutput(run.stdout, {module: 'conformidade'});
+  assertFindingsCoveredByFiles(parsed);
+  assert.doesNotMatch(run.stdout, /SYNTHETIC_TEXT|SYNTHETIC_LABEL|SYNTHETIC_SECRET|untrusted-error|syntheticRow|db\.query|fetch/);
+
+  const lgpdSummary = parsed.coverage.find(row => row.tool === 'lgpd-static' && row.status === 'failed');
+  assert.ok(lgpdSummary);
+  assert.match(lgpdSummary.detail, /4 arquivos JS\/TS\/Python examinados, 3 com cobertura parcial/);
+
+  const partialFileRow = parsed.coverage.find(row =>
+    row.tool === 'lgpd-static:file' && row.detail.startsWith('src/sustained-partial.ts | '));
+  assert.equal(partialFileRow?.status, 'failed');
+  assert.match(partialFileRow?.detail ?? '', /1 chamadas SQL sem comando literal analisável/);
+  assert.match(partialFileRow?.detail ?? '', /1 declaradores fora do rastreamento/);
+
+  const lgpdOkFiles = new Set(parsed.coverage
+    .filter(row => row.tool === 'lgpd-static' && row.status === 'ok')
+    .flatMap(row => row.files ?? []));
+  assert.deepEqual([...lgpdOkFiles].sort(), ['src/clean-ast.ts', 'src/sustained-partial.ts']);
+  for (const unmeasured of ['src/unmeasured-syntax.ts', 'src/unmeasured-sql.ts', 'docs/notes.txt', '.env.synthetic']) {
+    assert.equal(lgpdOkFiles.has(unmeasured), false, unmeasured);
+  }
+
+  const sustained = parsed.findings.find(row =>
+    row.tool === 'lgpd-static' && row.file === 'src/sustained-partial.ts' && row.rule === 'PII_POSSIBLE_NETWORK');
+  assert.equal(sustained?.line, 15);
+  assert.match(sustained?.evidence ?? '', /linha 9\./);
+
+  const scancodeOk = parsed.coverage.find(row => row.tool === 'scancode-toolkit' && row.status === 'ok');
+  assert.deepEqual(scancodeOk?.files, ['src/clean-ast.ts', 'src/sustained-partial.ts']);
+  assert.ok(parsed.coverage.some(row => row.tool === 'scancode-toolkit' && row.status === 'failed'));
+
+  // Publica o relatório sintético pelo caminho real de writeModuleReport sem perder falhas nem medir entradas fora de ok.
+  const dataDirectory = mkdtempSync(join(tmpdir(), 'conformidade-report-'));
+  try {
+    const measured = new Map<string, ModuleToolCoverage[]>();
+    for (const row of parsed.coverage.filter(row => row.status === 'ok')) {
+      for (const file of row.files ?? []) {
+        measured.set(file, [...(measured.get(file) ?? []), row]);
+      }
+    }
+    const fileCoverage = [...measured.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([file, rows]) =>
+      CoverageRow.parse({
+        file,
+        examinerProvider: 'ferramenta',
+        examinerModel: `${rows[0]!.tool}@${rows[0]!.version}`,
+        profileId: null,
+        checklist: [...new Set(rows.map(row => row.tool))],
+      }));
+    const achados = parsed.findings.map((finding, index) => Achado.parse({
+      id: `ACH-${String(index + 1).padStart(3, '0')}`,
+      title: `${finding.rule}: ${finding.message}`,
+      severity: finding.severity,
+      status: 'provavel',
+      verifier: null,
+      reference: `${finding.tool}:${finding.rule}`,
+      where: {file: finding.file, line: finding.line},
+      scenario: finding.message,
+      proof: finding.evidence,
+      suggestion: 'Revisar no snapshot.',
+      acceptance: REMEDIATION_ACCEPTANCE,
+      sources: [finding.tool, finding.rule],
+      secretPreview: null,
+    }));
+    const written = await writeModuleReport({
+      dataDirectory,
+      projectId: 'proj-conformidade-sintetico',
+      module: 'conformidade',
+      runId: randomUUID(),
+      createdAt: new Date('2026-11-19T21:20:00.000Z'),
+      commit: 'a'.repeat(40),
+      toolCoverage: parsed.coverage,
+      fileCoverage,
+      achados,
+      raw: parsed,
+      measuredFiles: measured,
+    });
+    assert.ok(written.summary.toolFailures > 0);
+    const coberturaMd = readFileSync(join(written.directory, 'cobertura.md'), 'utf8');
+    const mapaMd = readFileSync(join(written.directory, 'mapa.md'), 'utf8');
+    assert.match(coberturaMd, /\| src\/sustained-partial\.ts \|[^|\n]*lgpd-static@1/);
+    assert.match(coberturaMd, /\| src\/clean-ast\.ts \|[^|\n]*lgpd-static@1/);
+    assert.doesNotMatch(coberturaMd, /\| src\/unmeasured-sql\.ts \|[^|\n]*lgpd-static@1/);
+    assert.doesNotMatch(coberturaMd, /\| src\/unmeasured-syntax\.ts \|[^|\n]*lgpd-static@1/);
+    assert.match(mapaMd, /src\/sustained-partial\.ts/);
+  } finally {
+    rmSync(dataDirectory, {recursive: true, force: true});
+  }
+});
+
+test('C9 vincula files e preserva falhas parciais em ScanCode, npm-license-policy, ORT e Presidio sem inventar ok', () => {
+  const stdout = python(String.raw`
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+import json, subprocess
+from collector import Report, inspect_npm, inspect_privacy, scan_licenses
+import ort_inventory
+
+with TemporaryDirectory(dir=Path.cwd()) as scratch:
+    root = Path(scratch)
+    (root / "valid").mkdir()
+    (root / "broken").mkdir()
+    (root / "v1").mkdir()
+    valid_lock = {
+        "lockfileVersion": 3,
+        "packages": {
+            "": {"license": "MIT"},
+            "node_modules/synthetic-gpl": {"license": "GPL-3.0-only"},
+        },
+    }
+    (root / "valid" / "package-lock.json").write_text(json.dumps(valid_lock, indent=2), encoding="utf-8")
+    (root / "broken" / "package-lock.json").write_text("{invalid", encoding="utf-8")
+    (root / "v1" / "package-lock.json").write_text(json.dumps({"lockfileVersion": 1}), encoding="utf-8")
+    (root / "a-interrompido.txt").write_text("interrompido synthetic@example.invalid", encoding="utf-8")
+    (root / "b-controle.txt").write_text("controle", encoding="utf-8")
+    (root / "c-excecao.txt").write_text("excecao synthetic@example.invalid", encoding="utf-8")
+
+    selected = {
+        "valid/package-lock.json": root / "valid" / "package-lock.json",
+        "broken/package-lock.json": root / "broken" / "package-lock.json",
+        "v1/package-lock.json": root / "v1" / "package-lock.json",
+        "a-interrompido.txt": root / "a-interrompido.txt",
+        "b-controle.txt": root / "b-controle.txt",
+        "c-excecao.txt": root / "c-excecao.txt",
+    }
+
+    report = Report()
+    declarations = []
+    categories = {"MIT": "permissiva", "GPL-3.0-only": "copyleft forte"}
+    with patch("license_policy.classify", side_effect=lambda value: (categories.get(value, "desconhecida"), value if value in categories else None)):
+        inspect_npm(selected, declarations, report)
+
+    real_run = subprocess.run
+
+    def fake_scancode(command, **kwargs):
+        if Path(command[0]).name != "scancode":
+            return real_run(command, **kwargs)
+        out = Path(command[command.index("--json-pp") + 1])
+        out.write_text(json.dumps({
+            "headers": [{"errors": []}],
+            "files": [
+                {"type": "file", "path": "valid/package-lock.json", "license_detections": [
+                    {"license_expression_spdx": "GPL-3.0-only", "matches": [{"start_line": 4}]},
+                ]},
+                {"type": "file", "path": "broken/package-lock.json", "scan_errors": ["parse"]},
+            ],
+        }), encoding="utf-8")
+        return SimpleNamespace(returncode=1)
+
+    staging = root / "staging"
+    staging.mkdir()
+    with patch("collector.subprocess.run", side_effect=fake_scancode):
+        scan_licenses(staging, selected, "32.5.0", report)
+
+    ort_locks = declarations + [("broken/package-lock.json", [("node_modules/synthetic-other", "GPL-3.0-only", 2)])]
+    ort_scratch = root / "ort-scratch"
+    ort_scratch.mkdir()
+
+    def fake_ort(command, **_kwargs):
+        out_dir = Path(command[command.index("--output-dir") + 1])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "analyzer-result.json").write_text(json.dumps({
+            "analyzer": {"result": {"packages": [
+                {"id": "SpdxDocumentFile::component-1-1:1", "declared_licenses_processed": {"spdx_expression": "GPL-3.0-only"}},
+            ]}},
+        }), encoding="utf-8")
+        return SimpleNamespace(returncode=1)
+
+    with patch("ort_inventory.subprocess.run", side_effect=fake_ort), \
+         patch("ort_inventory.classify", side_effect=lambda value: (categories.get(value, "desconhecida"), value if value in categories else None)):
+        ort_inventory.scan(ort_locks, ort_scratch, "97.2.0", report)
+
+    import logging
+    class PartialPresidio:
+        def analyze(self, *, text, language, **_options):
+            if text.startswith("interrompido"):
+                if language == "en":
+                    logging.getLogger("presidio-analyzer").warning(
+                        "Regex pattern '%s' timed out after %s seconds, skipping.", text, 60)
+                    return [SimpleNamespace(entity_type="EMAIL_ADDRESS", score=1, start=13, end=len(text))]
+                return []
+            if text.startswith("excecao"):
+                raise TimeoutError(text)
+            return []
+
+    with patch("lgpd_analyzer.create_presidio", return_value=PartialPresidio()):
+        inspect_privacy(selected, "2.2.366", report)
+
+    # Caso negativo: quando todas as ferramentas falham sem nenhuma medição, nenhum status ok é inventado.
+    total_fail = Report()
+    (root / "only-broken.ts").write_text("const broken = (\n", encoding="utf-8")
+    with patch("lgpd_analyzer.create_presidio", side_effect=RuntimeError("offline")):
+        inspect_privacy({"only-broken.ts": root / "only-broken.ts"}, "2.2.366", total_fail)
+
+print(json.dumps({"partial": report.output(), "total_fail": total_fail.output()}))
+`);
+  const payload = JSON.parse(stdout);
+  const partial = parseModuleCollectorOutput(JSON.stringify(payload.partial), {module: 'conformidade'});
+  assertFindingsCoveredByFiles(partial);
+
+  const okFilesFor = (tool: string) => new Set(partial.coverage
+    .filter(row => row.tool === tool && row.status === 'ok')
+    .flatMap(row => row.files ?? []));
+
+  assert.deepEqual([...okFilesFor('npm-license-policy')], ['valid/package-lock.json']);
+  assert.deepEqual([...okFilesFor('scancode-toolkit')], ['valid/package-lock.json']);
+  assert.deepEqual([...okFilesFor('ort')], ['valid/package-lock.json']);
+  assert.deepEqual([...okFilesFor('presidio-analyzer')].sort(), [
+    'a-interrompido.txt',
+    'b-controle.txt',
+    'broken/package-lock.json',
+    'v1/package-lock.json',
+    'valid/package-lock.json',
+  ]);
+  for (const tool of ['npm-license-policy', 'scancode-toolkit', 'ort', 'presidio-analyzer']) {
+    assert.ok(partial.coverage.some(row => row.tool === tool && row.status === 'failed'), tool);
+  }
+  assert.equal(okFilesFor('presidio-analyzer').has('c-excecao.txt'), false);
+
+  const totalFail = parseModuleCollectorOutput(JSON.stringify(payload.total_fail), {module: 'conformidade'});
+  assert.equal(totalFail.findings.length, 0);
+  assert.equal(totalFail.coverage.some(row => row.status === 'ok'), false);
+
+  // Recusa quando um achado aponta para arquivo fora do escopo medido em files.
+  assert.throws(() => assertFindingsCoveredByFiles({
+    coverage: [{tool: 'lgpd-static', version: '1', status: 'ok', detail: 'parcial', files: ['src/clean-ast.ts']}],
+    findings: [{tool: 'lgpd-static', rule: 'PII_POSSIBLE_NETWORK', file: 'src/unmeasured-sql.ts', line: 1,
+      severity: 'media', message: 'm', evidence: 'e'}],
+  }), (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_COLLECTOR_INVALID');
+});
+
+test('C9 preserva limites de achados e cobertura sem suprimir a linha ok da ferramenta medida', () => {
+  const stdout = python(String.raw`
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
+from collector import MAX_COVERAGE, MAX_FINDINGS, Report, inspect_privacy
+
+report = Report()
+for i in range(MAX_COVERAGE + 5):
+    report.cover("conformidade:file", "1", "skipped", f"skip-{i}.bin | fora")
+
+with TemporaryDirectory(dir=Path.cwd()) as scratch:
+    root = Path(scratch)
+    (root / "a.ts").write_text("\n".join(["fetch(url, row.cpf);"] * 500) + "\ndb.query(cmd, [row.cpf]);\n", encoding="utf-8")
+    (root / "b.json").write_text("{\n" + ",\n".join(f'  "cpf {i}": "SYNTHETIC"' for i in range(600)) + "\n}", encoding="utf-8")
+    analyzer = Mock()
+    analyzer.analyze.return_value = []
+    with patch("lgpd_analyzer.create_presidio", return_value=analyzer):
+        inspect_privacy({"a.ts": root / "a.ts", "b.json": root / "b.json"}, "2.2.366", report)
+
+output = report.output()
+assert report.has_errors
+assert len(output["coverage"]) <= MAX_COVERAGE + 1
+assert len(output["findings"]) == MAX_FINDINGS
+print(json.dumps(output))
+`);
+  const parsed = parseModuleCollectorOutput(stdout, {module: 'conformidade'});
+  assertFindingsCoveredByFiles(parsed);
+  assert.equal(parsed.findings.length, 999);
+  assert.ok(parsed.coverage.some(row => row.tool === 'conformidade:output' && row.status === 'failed'));
+  assert.ok(parsed.coverage.some(row => row.tool === 'lgpd-static' && row.status === 'ok' && row.files?.includes('a.ts')));
+  assert.ok(parsed.coverage.some(row => row.tool === 'lgpd-static' && row.status === 'ok' && row.files?.includes('b.json')));
 });
