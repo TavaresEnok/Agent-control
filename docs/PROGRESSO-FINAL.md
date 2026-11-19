@@ -1102,3 +1102,10 @@ PAUSADO-COTA
 - 19/11/2026 21:00 UTC — Desempenho publicou relatório com código zero. O coletor de documentação produziu uma falha que será confrontada com o contrato usando apenas metadados. Conformidade segue na fila.
 - 19/11/2026 21:00 UTC — Iniciada personal:conformidade na instalação viva, pelo fluxo normal do projeto IspAgent.
 - 19/11/2026 21:01 UTC — Distribuídos o diagnóstico de privacidade da documentação e o de coerência entre achados e cobertura da prontidão. Cada Sol tem um coletor e worktree próprios.
+- 19/11/2026 21:01 UTC — trabalho-C-DOCUMENTACAO-VIVA iniciado em final-doc-viva por Sol high normal.
+- 19/11/2026 21:01 UTC — trabalho-C-PRONTIDAO-VIVA iniciado em final-pront-viva por Sol medium normal.
+- 19/11/2026 21:01 UTC — Suíte de entrega-fechamento-11 em a69311d7 registrou falha. Resultado privado preservado.
+- 19/11/2026 21:01 UTC — O aceite do fechamento a69311d7 parou com código 1. Logs da etapa preservados para diagnóstico.
+- 19/11/2026 21:03 UTC — C-DOCUMENTACAO-VIVA encerrado com código -15.
+- 19/11/2026 21:03 UTC — A arquitetura teve 35 achados em caminhos de framework com parênteses ou colchetes. Em prontidão, 29 achados dependiam da única cobertura agregada prontidao-audit, marcada failed. Documentação teve cinco campos de caminho bloqueados pela proteção de segredo. As ordens agora incluem esses diagnósticos; os valores sensíveis ficaram fora dos registros.
+- 19/11/2026 21:03 UTC — C-PRONTIDAO-VIVA encerrado com código -15.
