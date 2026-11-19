@@ -52,7 +52,8 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
  };
  const likely: Achado = {...fixed, id: 'ACH-002', status: 'provavel'};
  const reopened: Achado = {...fixed, id: 'ACH-003', status: 'reaberto'};
- const findings = [fixed, likely, reopened];
+ const fourth: Achado = {...likely, id: 'ACH-004'};
+ const findings = [fixed, likely, reopened, fourth];
  const toolCoverage = [{tool: 'fixture', version: '1', status: 'ok' as const, detail: 'Medição sintética.'}];
  const fileCoverage = [{file, examinerProvider: 'ferramenta', examinerModel: 'fixture', profileId: null, checklist: ['FIXTURE']}];
 
@@ -109,7 +110,7 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   await writeFile(coverageFile, (await readFile(coverageFile, 'utf8')) + `\npassword=${fakePassword}\n| ${protectedFile} | ${protectedMarker} |\n`);
   await writeFile(join(selected.directory, 'achados.json'), JSON.stringify({achados: [
    {...fixed, proof: `${fixed.proof} token=${fakePassword}`}, likely, reopened,
-   {...likely, id: 'ACH-004', where: {file: protectedFile, line: 1}, title: protectedMarker, proof: protectedMarker, secretPreview: preview},
+   {...fourth, where: {file: protectedFile, line: 1}, title: protectedMarker, proof: protectedMarker, secretPreview: preview},
   ]}));
 
   const authenticate = async (request: Request) => {

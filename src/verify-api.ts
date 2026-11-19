@@ -198,7 +198,10 @@ function functionalCoverage(markdown: string, findings: readonly z.infer<typeof 
 async function publishedFunctionalReport(ledger: Ledger, dataDirectory: string, projectId: string, module: VerificationModule, runId: string) {
   const {rows: [run]} = await publishedModuleRuns(ledger, projectId, module, runId);
   if (!run) throw new Refusal('NOT_FOUND', 404);
-  const report = await readModuleReport(dataDirectory, projectId, runId, module);
+  const report = await readModuleReport(dataDirectory, projectId, runId, module).catch(error => {
+    if (error instanceof Refusal && error.code === 'VERIFY_REPORT_NOT_FOUND') throw new Refusal('INVALID_CONTRACT', 400);
+    throw error;
+  });
   if (run.commit_id !== report.summary.commit
     || run.report_dir !== join(await realpath(dataDirectory), 'verificacoes', projectId, report.summary.directoryName)) {
     throw new Refusal('NOT_FOUND', 404);
