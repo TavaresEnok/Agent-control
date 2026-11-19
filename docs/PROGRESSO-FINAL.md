@@ -782,3 +782,5 @@ PAUSADO-COTA
 - 19/11/2026 17:54 UTC — C9-R8 encerrado com código 0.
 - 19/11/2026 17:54 UTC — revisor-C8-VINCULO-FONTE iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:55 UTC — O conjunto de exame e reverificação passou em 67/67 no banco exclusivo. Na repetição dos cinco arquivos da suíte, o processo da CLI excedeu o limite especial de 2 s antes de verificar a recusa de FIFO. O teste passou com o mesmo prazo de 15 s usado pela CLI no restante do arquivo e com todas as asserções de recusa e integridade.
+- 19/11/2026 17:55 UTC — C2-MATRIZ-PAPEIS encerrado com código 0.
+- 19/11/2026 17:56 UTC — No laboratório da QA anterior, 120/124 passaram e duas fixtures de Go omitiram a localização exigida pelo coletor. Os dois testes corrigidos usam os pontos reais do arquivo sintético e passaram. Dois testes opcionais ficaram sem ferramenta nessa execução; a prova física do PostgreSQL passou à parte. O reparo de escopo SQL cd21c54e entrou no candidato de entrega.
