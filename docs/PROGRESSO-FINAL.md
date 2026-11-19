@@ -793,3 +793,7 @@ PAUSADO-COTA
 - 19/11/2026 17:59 UTC — trabalho-C8-POSICAO-CONFIRMADA iniciado em final-c8 por Sol high normal.
 - 19/11/2026 17:59 UTC — C5-PROVENIENCIA-FINAL encerrado com código 0.
 - 19/11/2026 18:00 UTC — O digest de QA 08e0f5ef foi fixado no candidato 0d8198b6 e arquivado. Os candidatos dos módulos 3 a 6 agora contêm essa revisão. A suíte de arquitetura vai rodar no banco de teste canônico e a de QA no banco exclusivo.
+- 19/11/2026 18:00 UTC — Validação de entrega-arquitetura-1 em 38e9984c iniciada no checkout de integração.
+- 19/11/2026 18:00 UTC — C6-VALIDACAO-COMPOSE encerrado com código 0.
+- 19/11/2026 18:00 UTC — revisor-C2-GO-DIAGNOSTICOS iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:01 UTC — O controle do PNG de desempenho em ac495948 passou nos 12 testes do coletor. A revisão de 7233fe29 identificou um caso de tag YAML vazia aceito pelo parser. Aberto teste dirigido, incluindo o texto literal em strings ou comentários. Os reparos finais específicos de arquitetura e dependências foram encaminhados ao revisor.
