@@ -15,7 +15,7 @@ const fixtureOutput = {coverage: [{tool: 'fixture', version: '1', status: 'ok', 
 const docker = (args: string[]) => runBoundedCollectorProcess([MODULE_RUNTIME_BIN, ...args],
   {timeoutMs: 3_000, maxStdoutBytes: 4096});
 
-for (const scenario of ['lease', 'timeout', 'stdout'] as const) {
+for (const scenario of ['lease', 'timeout', 'stdout', 'stderr'] as const) {
   test(`laboratório de limpeza física do coletor (${scenario})`, {skip: !enabled, timeout: 45_000}, async () => {
     const databaseUrl = process.env.AC_TEST_DATABASE_URL;
     const image = process.env.AC_MODULE_CLEANUP_LAB_IMAGE;
@@ -31,14 +31,17 @@ for (const scenario of ['lease', 'timeout', 'stdout'] as const) {
       const starting = new Promise<void>(resolve => {enteredStart = resolve;});
       const script = scenario === 'stdout'
         ? 'sleep 3; while :; do printf "%01024d\\n" 0; done'
-        : 'exec sleep 60';
+        : scenario === 'stderr'
+          ? 'sleep 1; dd if=/dev/zero bs=1048576 count=12 >&2; printf "%s" ' + "'" + JSON.stringify(fixtureOutput) + "'"
+          : 'exec sleep 60';
       const execute: CollectorProcess = async (args, options) => {
         if (args[1] === 'image' && args[2] === 'inspect') {
           // Only the workload is synthetic. Keep the production capture entrypoint and all daemon operations.
           const inspected = await runBoundedCollectorProcess(args, options);
           if (inspected.code !== 0) return inspected;
           assert.equal(args.at(-1), image);
-          return {...inspected, stdout: Buffer.from(JSON.stringify([['/bin/sh', '-c'], [script]]))};
+          const command = scenario === 'stderr' ? [[''], ['/bin/sh', '-c', script]] : [['/bin/sh', '-c'], [script]];
+          return {...inspected, stdout: Buffer.from(JSON.stringify(command))};
         }
         if (args[1] === 'create') {
           assert.equal(args[args.indexOf('--pull') + 1], 'never');
@@ -79,15 +82,20 @@ for (const scenario of ['lease', 'timeout', 'stdout'] as const) {
           assert.deepEqual((await listModuleReports(dataDirectory, projectId)).map(summary => summary.id), [result.runId]);
         } else {
           const result = await task;
-          assert.equal(result.hasToolFailure, true);
-          assert.match(result.toolCoverage[0]!.detail, scenario === 'stdout' ? /VERIFY_STDOUT_LIMIT/ : /VERIFY_TOOLS_FAILED/);
+          if (scenario === 'stderr') {
+            assert.equal(result.hasToolFailure, false);
+            assert.deepEqual(result.toolCoverage, fixtureOutput.coverage);
+          } else {
+            assert.equal(result.hasToolFailure, true);
+            assert.match(result.toolCoverage[0]!.detail, scenario === 'stdout' ? /VERIFY_STDOUT_LIMIT/ : /VERIFY_TOOLS_FAILED/);
+          }
           assert.deepEqual((await listModuleReports(dataDirectory, projectId)).map(summary => summary.id), [runId]);
         }
         const absent = await docker(['container', 'ls', '--all', '--quiet', '--no-trunc', '--filter', `id=${containerId}`]);
         assert.equal(absent.code, 0);
         assert.equal(absent.stdout.toString().trim(), '');
         const state = await ledger.pool.query('SELECT status, collector_container_token FROM ac_verify_runs WHERE id=$1', [runId]);
-        assert.deepEqual(state.rows[0], {status: 'failed', collector_container_token: null});
+        assert.deepEqual(state.rows[0], {status: scenario === 'stderr' ? 'done' : 'failed', collector_container_token: null});
       } finally {
         controller.abort();
         await task.catch(() => undefined);
