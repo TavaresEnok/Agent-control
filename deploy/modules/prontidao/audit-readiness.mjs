@@ -1,5 +1,6 @@
 import {constants, openSync, readSync, closeSync, fstatSync, readdirSync} from 'node:fs';
 import {basename, join, relative, sep} from 'node:path';
+import {CST, Parser, parseDocument} from 'yaml';
 import {passiveHeaderFacts} from './header-facts.mjs';
 
 export const AUDIT_VERSION = '1.0.0';
@@ -287,8 +288,33 @@ function* composeLines(content, onIncomplete) {
   }
 }
 
+function hasEmptyVerbatimTag(content) {
+  if (!content.includes('!<>')) return false;
+
+  const isEmptyTag = token => token.type === 'tag' && token.source === '!<>';
+  for (const token of new Parser().parse(content)) {
+    if (token.type !== 'document') continue;
+    let found = false;
+    CST.visit(token, ({start, sep}) => {
+      if (!start.some(isEmptyTag) && !sep?.some(isEmptyTag)) return;
+      found = true;
+      return CST.visit.BREAK;
+    });
+    if (found) return true;
+  }
+  return false;
+}
+
 /** Reads declaration lines without executing Compose, resolving external files or interpolating variables. */
 export function parseComposeServices(content, onIncomplete = () => {}) {
+  // Validate the whole document, including opaque extensions, without converting nodes to JS or resolving aliases.
+  const document = parseDocument(content, {schema: 'failsafe', prettyErrors: false});
+  // yaml 2.9.1 accepts an empty verbatim tag without reporting a document error.
+  if (document.errors.length || hasEmptyVerbatimTag(content)) {
+    onIncomplete();
+    return [];
+  }
+
   const services = [];
   let servicesIndent = null;
   let current = null;
