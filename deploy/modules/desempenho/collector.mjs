@@ -10,6 +10,7 @@ import {extname, isAbsolute, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tokenizer, tokTypes} from './cpu-parser/node_modules/acorn/dist/acorn.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
+import {parse} from 'parse5';
 import {collectCpuMetrics} from './cpu-metrics.mjs';
 import {startObserverHttpLink, watchObserverHttpLink} from './http-link.mjs';
 import {runPostgresMetrics} from './postgres-metrics.mjs';
@@ -299,6 +300,70 @@ export function planStaticRoutes(root, config, declarations = readRouteDeclarati
   return {rootDir: slice?.rootDir ?? root, aliases: selectedAliases, targets: selected, coverage};
 }
 
+function escapesSnapshot(reference, base, prefix) {
+  if (!base.pathname.startsWith(prefix)) return false;
+  // URLs HTTP aceitam barras invertidas e removem tabulações e quebras de linha.
+  let value = reference.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '').replace(/[\t\r\n]/g, '');
+  const scheme = /^[a-z][a-z\d+.-]*:/i.exec(value)?.[0];
+  if (scheme) {
+    if (scheme.toLowerCase() !== base.protocol) return false;
+    value = value.slice(scheme.length);
+  }
+  if (/^[/\\]/.test(value)) return false;
+  const path = value.split(/[?#]/, 1)[0].replaceAll('\\', '/');
+  let depth = base.pathname.slice(prefix.length).split('/').length - 1;
+  for (const part of path.split('/')) {
+    const segment = part.replace(/%2e/gi, '.');
+    if (segment === '..') {
+      if (depth === 0) return true;
+      depth--;
+    } else if (segment !== '.') depth++;
+  }
+  return false;
+}
+
+function* imageCandidates(value) {
+  // Uma vírgula dentro do token da URL (por exemplo data:) integra a URL.
+  while ((value = value.replace(/^[,\t\n\f\r ]+/, ''))) {
+    const url = /^[^\t\n\f\r ]+/.exec(value)[0];
+    yield url.replace(/,+$/, '');
+    value = value.slice(url.length);
+    if (!url.endsWith(',')) value = value.replace(/^(?:\([^)]*\)|[^,(])*[,]?/, '');
+  }
+}
+
+function hasEscapingHtmlReference(html, pageUrl, prefix) {
+  const pending = [parse(html)];
+  const documentUrl = new URL(pageUrl);
+  let base = documentUrl;
+  let seenBase = false;
+  while (pending.length) {
+    const {attrs, childNodes, tagName} = pending.pop();
+    if (childNodes) {
+      for (let i = childNodes.length - 1; i >= 0; i--) pending.push(childNodes[i]);
+    }
+    if (tagName === 'base') {
+      const href = attrs.find(attribute => attribute.name === 'href');
+      if (!seenBase && href) {
+        seenBase = true;
+        if (escapesSnapshot(href.value, documentUrl, prefix)) return true;
+        base = URL.parse(href.value, documentUrl) ?? documentUrl;
+      }
+      continue;
+    }
+    if (base.origin !== documentUrl.origin) continue;
+    for (const {name, value} of attrs ?? []) {
+      if (name === 'srcset' || name === 'imagesrcset') {
+        for (const candidate of imageCandidates(value)) {
+          if (escapesSnapshot(candidate, base, prefix)) return true;
+        }
+      } else if ((name === 'src' || name === 'poster' || name === 'href' || (name === 'data' && tagName === 'object')) &&
+          escapesSnapshot(value, base, prefix)) return true;
+    }
+  }
+  return false;
+}
+
 async function serveStaticPlan(root, plan) {
   const servers = [];
   async function serve(rootDir, options) {
@@ -326,6 +391,11 @@ async function serveStaticPlan(root, plan) {
           external = await serve(plan.rootDir, {mount: {segment, root}});
         }
         pageUrl = external.origin + '/' + segment + pagePath(route.file);
+        const html = readFileSync(join(root, route.file), 'utf8');
+        if (hasEscapingHtmlReference(html, pageUrl, '/' + segment + '/')) {
+          targets.push({...route, page: false, lighthouseOmission: 'referência relativa sai da raiz do snapshot'});
+          continue;
+        }
       } else {
         canonical ??= await serve(plan.rootDir);
         pageUrl = canonical.origin + pagePath(fromStaticRoot);
@@ -753,7 +823,7 @@ export async function collectPerformance(root = REPO_ROOT, mode = process.env.PE
     }
     try {
       for (const route of http.targets.filter(route => !route.page)) {
-        coverage.push(routeCoverage(route.path, 'fora da seleção de páginas do Lighthouse CI'));
+        coverage.push(routeCoverage(route.path, route.lighthouseOmission ?? 'fora da seleção de páginas do Lighthouse CI'));
       }
       const lighthouse = await runLighthouseCi({origin: http.origin, routes: http.targets.filter(route => route.page),
         chromePath: findChrome(), thresholds, version: versions.lhci});

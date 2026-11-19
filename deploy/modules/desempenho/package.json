@@ -9,6 +9,7 @@
   "dependencies": {
     "@lhci/cli": "0.16.1",
     "lighthouse": "13.6.0",
+    "parse5": "7.3.0",
     "pg": "8.23.1"
   }
 }
