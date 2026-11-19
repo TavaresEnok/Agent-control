@@ -62,7 +62,10 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
   /** Profiles excluded for this reservation (never fallen back to). */
   avoidProfiles: z.array(Id).max(20).optional(),
   /** Restrict selection to profiles on this provider (never fallen back to another). */
-  provider: z.string().min(1).max(80).optional() }).strict();
+  provider: z.string().min(1).max(80).optional() }).strict().refine(
+    request => !request.examReviewer || (request.role === 'specialist' && request.provider === 'claude'),
+    {path: ['examReviewer'], message: 'EXAM_REVIEWER_REQUIRES_CLAUDE_SPECIALIST'},
+  );
 /** Basic tasks use the combo's basic profiles when that list exists. Every other programmer task uses standard. Policies without tiers keep the full chain.
  * A level's reserve list, when present, is the only emergency chain for that level. Older snapshots leave the list out and keep filtering emergency by the regular ids. */
 export function programmerChain(policy:CapacityPolicy,role:string,chain:{regular:string[];emergency:string[]},taskLevel?:'basic'|'standard'){
@@ -367,15 +370,28 @@ export class Capacity {
         const preparedSet = new Set(request.examReviewer.preparedProfiles);
         const examinerAccounts = request.examReviewer.avoidExaminerAccounts;
         const notExaminerAccount = (row: LoadedProfile) => !examinerAccounts?.includes(row.accountId!);
-        choice =
-          loaded.find(row => usable(row) && notAvoidedAccount(row) && preparedSet.has(row.profileId) && notExaminerAccount(row))
-          ?? loaded.find(row => usable(row) && notAvoidedAccount(row) && preparedSet.has(row.profileId))
-          ?? loaded.find(row => usable(row) && notAvoidedAccount(row) && notExaminerAccount(row))
-          ?? loaded.find(row => usable(row) && notAvoidedAccount(row))
-          ?? loaded.find(row => usable(row) && preparedSet.has(row.profileId) && notExaminerAccount(row))
-          ?? loaded.find(row => usable(row) && preparedSet.has(row.profileId))
-          ?? loaded.find(row => usable(row) && notExaminerAccount(row))
-          ?? loaded.find(usable);
+        const eligible = loaded.filter(usable);
+        const pick = (candidates: LoadedProfile[]) =>
+          candidates.find(row => notAvoidedAccount(row) && preparedSet.has(row.profileId) && notExaminerAccount(row))
+          ?? candidates.find(row => notAvoidedAccount(row) && preparedSet.has(row.profileId))
+          ?? candidates.find(row => notAvoidedAccount(row) && notExaminerAccount(row))
+          ?? candidates.find(notAvoidedAccount)
+          ?? candidates.find(row => preparedSet.has(row.profileId) && notExaminerAccount(row))
+          ?? candidates.find(row => preparedSet.has(row.profileId))
+          ?? candidates.find(notExaminerAccount)
+          ?? candidates[0];
+        choice = pick(eligible);
+        if (choice && request.avoidAccounts?.length) {
+          // The config lock also serializes grant transitions. Keep the original
+          // choice for the wait when all eligible accounts are full.
+          const {rows} = await c.query<{account_id: string; occupied: string}>(
+            `SELECT account_id, count(*) AS occupied FROM ac_capacity_grants
+             WHERE state<>'released' AND account_id=ANY($1::uuid[]) GROUP BY account_id`,
+            [eligible.map(row => row.accountId)],
+          );
+          const occupied = new Map(rows.map(row => [row.account_id, Number(row.occupied)]));
+          choice = pick(eligible.filter(row => (occupied.get(row.accountId!) ?? 0) < row.maxConcurrent!)) ?? choice;
+        }
       } else {
         choice =
           loaded.find(row => usable(row) && notAvoidedAccount(row))

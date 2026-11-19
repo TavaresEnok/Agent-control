@@ -9,7 +9,7 @@ import {z} from 'zod';
 import {digest, Refusal, type Authority} from './contracts.ts';
 import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transport.ts';
 import type {Ledger} from './ledger.ts';
-import {finishExamIntent} from './exam-intent.ts';
+import {finishExamIntentTx, type ExamIntentTarget} from './exam-intent.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
 import {isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {REMEDIATION_ACCEPTANCE, VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
@@ -701,6 +701,22 @@ export async function requestCorrection(ledger: Ledger, principal: string, autho
   });
 }
 
+async function finishRecheckIntent(ledger: Ledger, target: ExamIntentTarget, state: 'done' | 'failed') {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await ledger.tx(async client => {
+        await finishExamIntentTx(client, ledger, target, state);
+        await client.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1 AND context_id=$2', [target.intentId, target.contextId]);
+      });
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts) throw error;
+      await new Promise(resolve => setTimeout(resolve, 15 * attempt));
+    }
+  }
+}
+
 export async function recheckFindings(ledger: Ledger, principal: string, authority: Authority, input: {
   runId: string; achadoIds: string[]; dataDirectory: string; projectId: string; worker: VerifyWorker;
 }): Promise<{results: {id: string; status: 'fechado' | 'reaberto'}[]}> {
@@ -743,6 +759,7 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
   }
   const decided: ReportUpdate[] = [];
   let succeeded = false;
+  let operationError: unknown;
   try {
     // Provedor, conta e sessão vêm da reserva, não do texto do modelo.
     for (const finding of loaded.findings) {
@@ -773,12 +790,16 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
     });
     await updateReports(input.dataDirectory, input.projectId, loaded.run.id, decided);
     succeeded = true;
+  } catch (error) {
+    operationError = error;
+    throw error;
   } finally {
     if (ownIntentId) {
       try {
-        await finishExamIntent(ledger, {intentId: ownIntentId, contextId: authority.contextId}, succeeded ? 'done' : 'failed');
+        await finishRecheckIntent(ledger, {intentId: ownIntentId, contextId: authority.contextId}, succeeded ? 'done' : 'failed');
       } catch (error) {
-        if (succeeded) throw error;
+        if (!succeeded) throw new AggregateError([operationError, error], 'VERIFY_RECHECK_INTENT_CLEANUP_FAILED');
+        throw error;
       }
     }
   }

@@ -4,7 +4,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import {Capacity,CapacityPolicy,programmerChain} from '../src/capacity.ts';
+import {Capacity,CapacityPolicy,GrantRequest,programmerChain} from '../src/capacity.ts';
 import {reserveYieldReason} from '../src/capacity-exclusions.ts';
 import {projectCapacitySelection} from '../src/control.ts';
 import {Refusal, type Command} from '../src/contracts.ts';
@@ -195,6 +195,16 @@ test('preferredProfileId, avoidProfiles e provider selecionam perfil específico
  }finally{await db.close();await database.close();}
 });
 
+test('examReviewer exige papel specialist e provedor Claude explícito',()=>{
+ const request={attemptId:randomUUID(),intentId:randomUUID(),contextId:randomUUID(),examReviewer:{preparedProfiles:[]}};
+ assert.equal(GrantRequest.safeParse({...request,role:'specialist',provider:'claude'}).success,true);
+ for(const scope of [{role:'reviewer',provider:'claude'},{role:'specialist',provider:'codex'},{role:'specialist'}]){
+  const parsed=GrantRequest.safeParse({...request,...scope});
+  assert.equal(parsed.success,false);
+  assert.deepEqual(parsed.error?.issues[0]?.path,['examReviewer']);
+ }
+});
+
 test('perfil revisor preparado vence preferência por outra conta e preserva alternativa legítima',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
  const database=await isolatedDatabase(databaseUrl!,'revpref'),db=new Ledger(database.url);
  try{
@@ -209,7 +219,7 @@ test('perfil revisor preparado vence preferência por outra conta e preserva alt
   await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://revpref'});
   const claudeA=randomUUID(),claudeB=randomUUID();
   for(const [id,label] of [[claudeA,'claude-a'],[claudeB,'claude-b']] as const){
-   await capacity.addAccount(principal,project,{id,provider:'claude',label,resourceIdentity:`claude:${id}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://revpref',maxConcurrent:4});
+   await capacity.addAccount(principal,project,{id,provider:'claude',label,resourceIdentity:`claude:${id}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://revpref',maxConcurrent:id===claudeA?2:1});
    await capacity.observeQuota(principal,id,{status:'available',source:'synthetic://revpref',ttlSeconds:3600});
   }
   const pCreateB=randomUUID(),pExaminerA=randomUUID(),pReviewerA=randomUUID(),pReviewerB=randomUUID();
@@ -239,7 +249,7 @@ test('perfil revisor preparado vence preferência por outra conta e preserva alt
 
   // 2) Havendo dois revisores preparados, escolhe o revisor preparado em outra conta (pReviewerB).
   const rev2=await capacity.publish(principal,project,rev1,{
-   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:4,
    roles:{specialist:{regular:[pCreateB,pExaminerA],emergency:[pReviewerA,pReviewerB]}},
   });
   await capacity.assignPolicy(principal,context,rev2);
@@ -279,6 +289,46 @@ test('perfil revisor preparado vence preferência por outra conta e preserva alt
   assert.equal(secondReviewerOtherAccount.profileId,pCreateB);
   assert.equal(secondReviewerOtherAccount.accountId,claudeB);
   await release(secondReviewerOtherAccount.grantId);
+
+  // B está ocupada e A tem só uma vaga. Duas tentativas disputam essa vaga.
+  const basicRequest={intentId,contextId:context,role:'specialist',provider:'claude'} as const;
+  const holdB=await capacity.reserve(principal,{...basicRequest,attemptId:randomUUID(),preferredProfileId:pCreateB},authority);
+  const holdA=await capacity.reserve(principal,{...basicRequest,attemptId:randomUUID(),preferredProfileId:pReviewerA},authority);
+  assert.equal(holdB.account_id,claudeB);
+  assert.equal(holdA.account_id,claudeA);
+  const secondRequest={...basicRequest,avoidAccounts:[claudeA],avoidProfiles:[pExaminerA],examReviewer:{preparedProfiles:[pReviewerA]}};
+  const otherContext=await db.createContext(principal,project,randomUUID());
+  await capacity.assignPolicy(principal,otherContext,rev2);
+  const otherAuthority=await db.acquire(principal,otherContext,randomUUID(),'revpref-other',60);
+  const otherIntent=(await db.accept(principal,{
+   ...command,contextId:otherContext,intentId:randomUUID(),deliveryAttemptId:randomUUID(),
+  },otherAuthority,'api')).id;
+  const requests=[
+   {request:{...secondRequest,attemptId:randomUUID()},authority},
+   {request:{...secondRequest,attemptId:randomUUID(),contextId:otherContext,intentId:otherIntent},authority:otherAuthority},
+  ];
+  const reserveSecond=(entry:(typeof requests)[number])=>capacity.reserveWithSeat(principal,entry.request,entry.authority);
+  const outcomes=await Promise.allSettled(requests.map(reserveSecond));
+  const granted=outcomes.find(outcome=>outcome.status==='fulfilled');
+  assert.ok(granted);
+  assert.equal(granted.value.grant.account_id,claudeA);
+  assert.equal(granted.value.grant.profile_id,pReviewerA);
+  const blockedIndex=outcomes.findIndex(outcome=>outcome.status==='rejected');
+  const blocked=outcomes[blockedIndex];
+  assert.ok(blocked?.status==='rejected'&&blocked.reason instanceof Refusal);
+  assert.equal(blocked.reason.code,'CAPACITY_BUSY');
+  const wait=()=>db.pool.query('SELECT attempt_id,desired_profile,reason FROM ac_capacity_waits WHERE context_id=ANY($1::uuid[])',[[context,otherContext]]);
+  assert.deepEqual((await wait()).rows,[{attempt_id:requests[blockedIndex].request.attemptId,desired_profile:pCreateB,reason:'CAPACITY_BUSY'}]);
+
+  await release(holdB.id);
+  const retried=await reserveSecond(requests[blockedIndex]);
+  assert.equal(retried.grant.account_id,claudeB);
+  assert.deepEqual((await wait()).rows,[]);
+  for(const grant of [retried.grant,granted.value.grant]){
+   const manager=grant.context_id===context?authority:otherAuthority;
+   await capacity.transition(principal,grant.id,manager,'released',{processId:'revpref',state:'not_started'});
+  }
+  await release(holdA.id);
 
   const revSingleAccount=await capacity.publish(principal,project,rev2,{
    schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
