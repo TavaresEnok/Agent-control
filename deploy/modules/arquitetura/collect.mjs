@@ -49,6 +49,51 @@ const SKIP_DIRS = new Set([
   'target',
 ]);
 
+// The image is built from this directory. Keep this policy aligned with
+// assertModuleRepoRelativePath, isSecretClassBasename and hasKnownSecret on the host.
+const REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/()[\]-]+$/u;
+const RESERVED_NAMES = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok', '.npmrc', '.netrc', '.pgpass']);
+const NOT_A_MASK = String.raw`(?![^\s\u2026]*\u2026)`;
+const SECRET_VALUE = String.raw`(?:"[^"\r\n]*"|'[^'\r\n]*'|\S+)`;
+const ASSIGN_NAME = String.raw`pass|passwd|password|secret|token|(?<![A-Za-z])key(?!board)|auth|credential`;
+const KNOWN_SECRET_PATTERNS = [
+  /-----BEGIN(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----[\s\S]*?-----END(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----/,
+  /(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Z0-9])ASIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,400}(?![A-Za-z0-9_])/,
+  /(?<![A-Za-z0-9_])ghp_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])ghs_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])gho_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,400}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9])xox[a-z]-[A-Za-z0-9-]{10,400}(?![A-Za-z0-9-])/,
+  /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@\u2026]{1,200}:[^\s/@\u2026]{1,200}@/,
+  /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,255}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_])sk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])rk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*(?:bearer|basic)[ \t]+${NOT_A_MASK}${SECRET_VALUE}`, 'i'),
+  /(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]{0,39}[G-Zg-z+/])[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])/,
+  /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,128}\.[A-Za-z0-9_-]{16,128}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])--(?:${ASSIGN_NAME})\w*(?:["']?\s*[:=]\s*|[ \t]+)${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+  new RegExp(String.raw`(?:${ASSIGN_NAME})\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+];
+
+function hasKnownSecret(text) {
+  return KNOWN_SECRET_PATTERNS.some(pattern => pattern.test(text));
+}
+
+function excludedName(name) {
+  const lower = name.toLowerCase();
+  return name === '.ai' || name === '.git' || name === 'node_modules'
+    || RESERVED_NAMES.has(lower) || lower.startsWith('.env') || lower.startsWith('id_')
+    || lower.startsWith('credentials') || lower.includes('kubeconfig')
+    || (lower.startsWith('service-account') && lower.endsWith('.json'))
+    || /\.(?:pem|key|p12|pfx|jks|tfstate|tfvars)$/.test(lower)
+    || hasKnownSecret(name);
+}
+
 const JS_TS_EXTS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 const DEFAULT_THRESHOLDS = Object.freeze({
   jscpdMinLines: 8,
@@ -173,6 +218,8 @@ function openDirectoryChain(root, path, create = false) {
   }
 }
 
+const skippedDirectories = new WeakMap();
+
 /**
  * Copia apenas arquivos regulares e diretórios seguros de sourceRoot para destRoot,
  * ignorando symlinks, sockets, dispositivos, diretórios de build/vendor e arquivos > 2 MiB.
@@ -183,6 +230,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? MAX_FILE_BYTES;
   const copiedFiles = [];
   const skipped = [];
+  const excludedDirs = new Set();
   let stoppedAt;
   let failure;
   let destinationFd;
@@ -218,7 +266,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
     for (const entry of entries) {
       const srcPath = join(currentSrc, entry.name);
       const relPath = currentRel ? `${currentRel}/${entry.name}` : entry.name;
-      if (entry.name.includes('\\')) {
+      if (relPath.length > 400 || entry.name !== entry.name.trim() || !REPO_PATH.test(relPath)) {
         skipped.push({file: relPath, reason: 'nome_nao_suportado'});
         continue;
       }
@@ -233,13 +281,14 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
         skipped.push({file: relPath, reason: 'metadados_ilegiveis'});
         continue;
       }
-      if (st.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) {
-          skipped.push({file: relPath, reason: 'diretorio_excluido'});
-        } else {
-          walk(srcPath, relPath);
-          if (stoppedAt || failure) return;
-        }
+      if (st.isDirectory() && SKIP_DIRS.has(entry.name)) {
+        skipped.push({file: relPath, reason: 'diretorio_excluido'});
+      } else if (excludedName(entry.name) || hasKnownSecret(relPath)) {
+        if (st.isDirectory()) excludedDirs.add(relPath);
+        skipped.push({file: relPath, reason: 'caminho_excluido'});
+      } else if (st.isDirectory()) {
+        walk(srcPath, relPath);
+        if (stoppedAt || failure) return;
       } else if (!st.isFile()) {
         skipped.push({file: relPath, reason: st.isSymbolicLink() ? 'symlink' : 'arquivo_nao_regular'});
       } else if (st.size > maxFileBytes) {
@@ -275,6 +324,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
     if (!error.code) throw error;
     throw new Error('ARQUITETURA_REPO_UNREADABLE: raiz não acessível (' + error.code + ')', {cause: error});
   } finally { if (rootFd !== undefined) closeSync(rootFd); }
+  skippedDirectories.set(skipped, excludedDirs);
   return {copiedFiles, skipped, stoppedAt, failure};
 }
 
@@ -470,10 +520,33 @@ export function findImportLine(fileText, moduleSpecifier) {
   return getImportLines(fileText, 'source.tsx').get(moduleSpecifier) ?? 1;
 }
 
-export function parseKnipReport(rawJson, repoRoot, candidateFiles) {
+const KNIP_CANDIDATE_EXTS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.d.ts', '.d.mts', '.d.cts', '.json'];
+const KNIP_TS_MAPPINGS = {
+  '.js': ['.ts', '.tsx', '.d.ts'],
+  '.jsx': ['.tsx', '.ts', '.d.ts'],
+  '.mjs': ['.mts', '.d.mts'],
+  '.cjs': ['.cts', '.d.cts'],
+};
+
+function relativeImportCandidates(target) {
+  const clean = target.replace(/\/+$/, '');
+  if (!clean) return [];
+  if (clean === '.') return KNIP_CANDIDATE_EXTS.map(suffix => `index${suffix}`);
+  const candidates = [clean];
+  const ext = posix.extname(clean).toLowerCase();
+  const stem = ext ? clean.slice(0, -ext.length) : '';
+  for (const mapped of KNIP_TS_MAPPINGS[ext] ?? []) {
+    candidates.push(`${stem}${mapped}`);
+  }
+  for (const suffix of KNIP_CANDIDATE_EXTS) candidates.push(`${clean}${suffix}`);
+  for (const suffix of KNIP_CANDIDATE_EXTS) candidates.push(`${clean}/index${suffix}`);
+  return candidates;
+}
+
+export function parseKnipReport(rawJson, repoRoot, candidateFiles, includesFile = () => true, wasOmitted = () => false) {
   const isCandidate = candidateFiles === undefined
-    ? file => /\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file) && !isIgnoredByKnipConfig(file)
-    : file => candidateFiles.has(file);
+    ? file => includesFile(file) && /\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file) && !isIgnoredByKnipConfig(file)
+    : file => includesFile(file) && candidateFiles.has(file);
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   if (!data || typeof data !== 'object' || !Array.isArray(data.issues)) {
     throw new Error('Saída JSON do knip inválida: campo issues ausente');
@@ -552,11 +625,24 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles) {
 
     for (const [key, rule, label, severity] of depBuckets) {
       // Problemas de dependências também podem pertencer a um manifesto.
-      if (!isCandidate(relFile) && !/(^|\/)package\.json$/i.test(relFile)) continue;
+      if (!isCandidate(relFile) && (!/(^|\/)package\.json$/i.test(relFile) || !includesFile(relFile))) continue;
       if (isIgnoredByKnipConfig(relFile)) continue;
       if (!Array.isArray(issue[key])) continue;
       for (const item of issue[key]) {
         const name = String(item?.name ?? 'desconhecido');
+        const spec = name.split(/[?#]/, 1)[0];
+        if (key === 'unresolved' && /^\.\.?(?:\/|$)/.test(spec)) {
+          const resolvedPosix = posix.normalize(posix.join(posix.dirname(relFile), spec));
+          if (resolvedPosix !== '..' && !resolvedPosix.startsWith('../')) {
+            const target = normalizeRepoPath(resolvedPosix, repoRoot);
+            const omittedTarget = relativeImportCandidates(target).find(candidate => wasOmitted(candidate));
+            // A dependency removed from the analysis copy is not an unresolved import in the source.
+            if (omittedTarget) {
+              includesFile(omittedTarget);
+              continue;
+            }
+          }
+        }
         const line = clampLine(item?.line);
         unusedDepsCount += 1;
         bumpFile(relFile);
@@ -596,7 +682,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles) {
   };
 }
 
-export function parseJscpdReport(rawJson, repoRoot, scannedBaseDir) {
+export function parseJscpdReport(rawJson, repoRoot, scannedBaseDir, includesFile = () => true) {
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   if (!data || typeof data !== 'object' || !Array.isArray(data.duplicates)) {
     throw new Error('Saída JSON do jscpd inválida: campo duplicates ausente');
@@ -617,6 +703,9 @@ export function parseJscpdReport(rawJson, repoRoot, scannedBaseDir) {
       scannedBaseDir ? join(scannedBaseDir, secondRaw) : secondRaw,
       repoRoot,
     );
+    const firstCovered = includesFile(firstFile);
+    const secondCovered = includesFile(secondFile);
+    if (!firstCovered || !secondCovered) continue;
     const startA = clampLine(dup.firstFile?.startLoc?.line ?? dup.firstFile?.start);
     const endA = clampLine(dup.firstFile?.endLoc?.line ?? dup.firstFile?.end);
     const startB = clampLine(dup.secondFile?.startLoc?.line ?? dup.secondFile?.start);
@@ -656,7 +745,7 @@ export function parseJscpdReport(rawJson, repoRoot, scannedBaseDir) {
   };
 }
 
-export function parseJscpdComplexityReport(rawJson, repoRoot, scannedBaseDir, coveredAstFiles = new Set()) {
+export function parseJscpdComplexityReport(rawJson, repoRoot, scannedBaseDir, coveredAstFiles = new Set(), includesFile) {
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   const files = data?.summary?.files;
   if (!Array.isArray(files)) {
@@ -672,6 +761,7 @@ export function parseJscpdComplexityReport(rawJson, repoRoot, scannedBaseDir, co
       scannedBaseDir ? join(scannedBaseDir, String(item.path ?? '')) : String(item.path ?? ''),
       repoRoot,
     );
+    if (includesFile && !includesFile(rel)) continue;
     const complexity = Number(item.complexity) || 0;
     const lines = Number(item.lines) || 0;
     const tokens = Number(item.tokens) || 0;
@@ -686,7 +776,7 @@ export function parseJscpdComplexityReport(rawJson, repoRoot, scannedBaseDir, co
         line: 1,
         severity,
         message: `Arquivo com complexidade estrutural elevada (${complexity}) em ${rel}`,
-        evidence: `arquivo=${rel}; complexidade=${complexity}; linhas=${lines}; tokens=${tokens}`,
+        evidence: `arquivo=${rel}; complexidade=${complexity}; linhas=${lines}; tokens medidos ${tokens}`,
       });
     }
   }
@@ -694,11 +784,11 @@ export function parseJscpdComplexityReport(rawJson, repoRoot, scannedBaseDir, co
   return {
     findings,
     fileMetrics,
-    totalFiles: Number(data?.summary?.totalFiles ?? files.length) || files.length,
+    totalFiles: includesFile ? fileMetrics.length : Number(data?.summary?.totalFiles ?? files.length) || files.length,
   };
 }
 
-export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
+export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile, includesFile = () => true) {
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   if (!data || typeof data !== 'object' || !Array.isArray(data.modules)) {
     throw new Error('Saída JSON do dependency-cruiser inválida: campo modules ausente');
@@ -712,6 +802,7 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
   let orphansCount = 0;
   let totalDependencies = 0;
   let measuredModules = 0;
+  let omittedEdges = 0;
 
   const importCache = new Map();
   const getLines = relFile => {
@@ -731,10 +822,47 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
 
   for (const mod of data.modules) {
     if (!mod || typeof mod !== 'object') continue;
+    if (mod.coreModule || mod.couldNotResolve || mod.matchesDoNotFollow) continue;
     const sourceFile = normalizeRepoPath(mod.source, repoRoot);
-    const deps = Array.isArray(mod.dependencies) ? mod.dependencies : [];
-    const dependents = Array.isArray(mod.dependents) ? mod.dependents : [];
-    totalDependencies += deps.length;
+    if (!includesFile(sourceFile)) continue;
+    const rawDeps = Array.isArray(mod.dependencies) ? mod.dependencies : [];
+    const rawDependents = Array.isArray(mod.dependents) ? mod.dependents : [];
+    const copiedDeps = [];
+    const copiedDependents = [];
+    let modPartial = false;
+
+    for (const dep of rawDeps) {
+      if (!dep || typeof dep !== 'object') continue;
+      if (dep.coreModule || dep.matchesDoNotFollow) continue;
+      const spec = String(dep.module ?? '');
+      const resolved = normalizeRepoPath(dep.resolved || spec, repoRoot);
+      if (dep.couldNotResolve) {
+        if (/^\.\.?\//.test(spec)) {
+          modPartial = true;
+          omittedEdges += 1;
+        }
+        continue;
+      }
+      if (!includesFile(resolved)) {
+        modPartial = true;
+        omittedEdges += 1;
+        continue;
+      }
+      copiedDeps.push({dep, spec, resolved});
+    }
+
+    for (const dependent of rawDependents) {
+      const rawName = typeof dependent === 'string' ? dependent : dependent?.name ?? '';
+      const depFile = normalizeRepoPath(rawName, repoRoot);
+      if (!includesFile(depFile)) {
+        modPartial = true;
+        omittedEdges += 1;
+        continue;
+      }
+      copiedDependents.push(depFile);
+    }
+
+    totalDependencies += copiedDeps.length;
 
     let fileHasCycle = false;
     let fileHasLayer = false;
@@ -761,34 +889,38 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
       }
     }
 
-    for (const dep of deps) {
-      if (!dep || typeof dep !== 'object') continue;
+    for (const {dep, spec, resolved} of copiedDeps) {
       const rules = Array.isArray(dep.rules) ? dep.rules : [];
       const isCircular = dep.circular || rules.some(rule => rule?.name === 'no-circular');
       const layerRules = rules.filter(rule => typeof rule?.name === 'string' && rule.name.startsWith('layer-'));
       if (!isCircular && layerRules.length === 0) continue;
 
-      const spec = String(dep.module ?? '');
-      const resolved = normalizeRepoPath(dep.resolved || spec, repoRoot);
+      const cycle = Array.isArray(dep.cycle) ? dep.cycle.map(c => normalizeRepoPath(c?.name ?? '', repoRoot)) : undefined;
       const line = getLines(sourceFile).get(spec) ?? 1;
       if (isCircular) {
-        fileHasCycle = true;
-        const key = JSON.stringify(['cycle', sourceFile, resolved === '.' ? spec : resolved]);
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          cyclesCount += 1;
-          const chain = Array.isArray(dep.cycle)
-            ? [sourceFile, ...dep.cycle.map(c => normalizeRepoPath(c?.name ?? '', repoRoot))].join(' -> ')
-            : `${sourceFile} -> ${resolved}`;
-          findings.push({
-            tool: 'dependency-cruiser',
-            rule: 'DEPCRUISE-NO-CIRCULAR',
-            file: sourceFile,
-            line,
-            severity: 'alta',
-            message: `Dependência circular detectada a partir de ${sourceFile} para ${resolved}`,
-            evidence: `ciclo: ${chain}`,
-          });
+        const cycleInCopy = !cycle || cycle.map(includesFile).every(Boolean);
+        if (!cycleInCopy) {
+          modPartial = true;
+          omittedEdges += 1;
+        } else {
+          fileHasCycle = true;
+          const key = JSON.stringify(['cycle', sourceFile, resolved === '.' ? spec : resolved]);
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            cyclesCount += 1;
+            const chain = cycle
+              ? [sourceFile, ...cycle].join(' -> ')
+              : `${sourceFile} -> ${resolved}`;
+            findings.push({
+              tool: 'dependency-cruiser',
+              rule: 'DEPCRUISE-NO-CIRCULAR',
+              file: sourceFile,
+              line,
+              severity: 'alta',
+              message: `Dependência circular detectada a partir de ${sourceFile} para ${resolved}`,
+              evidence: `ciclo: ${chain}`,
+            });
+          }
         }
       }
 
@@ -812,20 +944,24 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
       }
     }
 
-    const isRepoModule = !mod.coreModule && !mod.couldNotResolve && !mod.matchesDoNotFollow;
-    if (isRepoModule) {
-      measuredModules += 1;
-      if (perFileCoverage.length < MAX_PER_FILE_COVERAGE) {
-        const instability = typeof mod.instability === 'number' ? mod.instability.toFixed(2) : 'n/a';
-        perFileCoverage.push({
-          file: sourceFile,
-          deps: deps.length,
-          dependents: dependents.length,
-          instability,
-          cycle: fileHasCycle,
-          layerViolation: fileHasLayer,
-        });
-      }
+    measuredModules += 1;
+    if (perFileCoverage.length < MAX_PER_FILE_COVERAGE) {
+      const hasMetrics = typeof mod.instability === 'number';
+      const edgeTotal = copiedDeps.length + copiedDependents.length;
+      const instability = modPartial || !hasMetrics
+        ? 'n/a'
+        : edgeTotal > 0
+          ? (copiedDeps.length / edgeTotal).toFixed(2)
+          : '0.00';
+      perFileCoverage.push({
+        file: sourceFile,
+        deps: copiedDeps.length,
+        dependents: copiedDependents.length,
+        instability,
+        cycle: fileHasCycle,
+        layerViolation: fileHasLayer,
+        partial: modPartial,
+      });
     }
   }
 
@@ -838,6 +974,8 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile) {
       cycles: cyclesCount,
       layerViolations: layerViolationsCount,
       orphans: orphansCount,
+      omittedEdges,
+      partial: omittedEdges > 0,
     },
   };
 }
@@ -1192,26 +1330,24 @@ function coverageLimit(total, listed) {
 }
 
 function snapshotCoverage({copiedFiles, skipped, stoppedAt, failure}) {
-  const listed = skipped.slice(0, MAX_PER_FILE_COVERAGE);
+  const reasons = new Map();
+  for (const {reason} of skipped) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+  const totals = [...reasons].sort(([left], [right]) => left.localeCompare(right))
+    .map(([reason, count]) => `${reason}=${count}`);
   const incomplete = Boolean(failure || stoppedAt || skipped.length);
   return [
     {
       tool: 'snapshot',
       version: '1',
       status: failure ? 'failed' : incomplete ? 'skipped' : 'ok',
-      detail: `copiados=${copiedFiles.length}; entradas_omitidas_conhecidas=${skipped.length}; ` +
+      detail: `copiados=${copiedFiles.length}; omissoes_conhecidas=${skipped.length}; ` +
         `limite_arquivos=${MAX_COPY_FILES}; limite_bytes_por_arquivo=${MAX_FILE_BYTES}; ` +
-        `cobertura_parcial=${incomplete ? 'sim' : 'nao'}; ${coverageLimit(skipped.length, listed.length)}` +
-        (stoppedAt ? `; limite_arquivos_atingido_em=${JSON.stringify(stoppedAt)}; restante_nao_inventariado=sim; ` +
+        `cobertura_parcial=${incomplete ? 'sim' : 'nao'}` +
+        (totals.length ? `; omissoes_por_motivo: ${totals.join(', ')}` : '') +
+        (stoppedAt ? '; limite_arquivos_atingido=sim; restante_nao_inventariado=sim; ' +
           'fora_do_inventario=entrada_do_corte_e_restante_da_travessia' : '') +
-        (failure ? `; falha_copia=${failure.code}; arquivo=${JSON.stringify(failure.file)}; analise_interrompida=sim; restante_nao_inventariado=sim` : ''),
+        (failure ? `; falha_copia=${failure.code}; analise_interrompida=sim; restante_nao_inventariado=sim` : ''),
     },
-    ...listed.map(({file, reason}) => ({
-      tool: 'snapshot:omitted',
-      version: '1',
-      status: 'skipped',
-      detail: `arquivo=${JSON.stringify(file)}; motivo=${reason}`,
-    })),
   ];
 }
 
@@ -1220,6 +1356,39 @@ function snapshotSetupFailure(err) {
     copiedFiles: [], skipped: [], failure: {file: '.', code: err.code ?? 'ERR'},
   });
   return {coverage, findings: []};
+}
+
+class ToolProcessFailure extends Error {}
+
+function checkToolProcess(result) {
+  if (result.error) {
+    const code = ['ENOENT', 'EACCES', 'ETIMEDOUT', 'ENOBUFS'].includes(result.error.code) ? result.error.code : 'ERR';
+    throw new ToolProcessFailure(`falha de processo (${code})`);
+  }
+  if (result.status !== 0) {
+    const detail = Number.isInteger(result.status) ? `status ${result.status}` : 'processo interrompido';
+    throw new ToolProcessFailure(detail);
+  }
+}
+
+function toolFailureDetail(error) {
+  if (error instanceof ToolProcessFailure) return error.message;
+  return error instanceof SyntaxError ? 'JSON inválido' : 'preparação ou leitura da análise falhou';
+}
+
+function toolInventory(copied) {
+  // Tool paths can include generated files or references absent from the copy.
+  const omitted = new Set();
+  return {
+    includesFile(file) {
+      if (copied.has(file)) return true;
+      omitted.add(file);
+      return false;
+    },
+    omissionDetail() {
+      return omitted.size ? `; fora_do_snapshot=${omitted.size}; cobertura_parcial=sim` : '';
+    },
+  };
 }
 
 export function runCollector(options = {}) {
@@ -1256,6 +1425,14 @@ export function runCollector(options = {}) {
     if (snapshot.failure) return {coverage, findings};
 
     const {copiedFiles} = snapshot;
+    const copied = new Set(copiedFiles);
+    const omittedFromCopy = new Set(snapshot.skipped.map(({file}) => file));
+    const wasOmitted = file => {
+      for (let path = file; path !== '.'; path = posix.dirname(path)) {
+        if (omittedFromCopy.has(path)) return true;
+      }
+      return false;
+    };
     const jsTsFiles = copiedFiles.filter(f => JS_TS_EXTS.has(extname(f).toLowerCase()));
     const nonTestJsTsFiles = jsTsFiles.filter(
       f => !/(^|\/)(tests?|__tests__|fixtures?)\//i.test(f) && !/\.(test|spec|d)\./i.test(f),
@@ -1288,6 +1465,7 @@ export function runCollector(options = {}) {
             tool: 'ast-complexity:file',
             version: versions.ast,
             status: 'ok',
+            files: [row.file],
             detail: `arquivo=${row.file}; loc=${row.loc}; funcoes=${row.functions}; ciclom_arquivo=${row.fileCyclomatic}; max_ciclom_fn=${row.maxFnCyclomatic}; max_aninh=${row.maxNesting}`,
           });
         }
@@ -1296,7 +1474,7 @@ export function runCollector(options = {}) {
           tool: 'ast-complexity',
           version: versions.ast,
           status: 'failed',
-          detail: `falha na análise AST: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+          detail: `falha na análise AST: ${toolFailureDetail(err)}`,
         });
       }
     }
@@ -1310,6 +1488,7 @@ export function runCollector(options = {}) {
         detail: 'nenhum arquivo no snapshot',
       });
     } else {
+      const inventory = toolInventory(copied);
       try {
         const jscpdCfgPath = join(workCfgDir, 'jscpd.json');
         writeFileSync(
@@ -1340,13 +1519,10 @@ export function runCollector(options = {}) {
           ],
           {cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024},
         );
-        if (dupRes.error) throw dupRes.error;
-        if (dupRes.status !== 0) {
-          throw new Error(`jscpd retornou status ${dupRes.status}: ${(dupRes.stderr || dupRes.stdout || '').slice(0, 300)}`);
-        }
+        checkToolProcess(dupRes);
         const dupReportPath = join(workOutDir, 'jscpd-report.json');
-        const parsedDup = parseJscpdReport(readFileSync(dupReportPath, 'utf8'), workRepoDir, null);
-        findings.push(...parsedDup.findings);
+        const parsedDup = parseJscpdReport(readFileSync(dupReportPath, 'utf8'), workRepoDir, null, inventory.includesFile);
+        const partialDuplication = Boolean(inventory.omissionDetail());
 
         // Complexidade via jscpd --complexity
         const compRes = execFn(
@@ -1368,28 +1544,31 @@ export function runCollector(options = {}) {
           ],
           {cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024},
         );
-        if (compRes.error) throw compRes.error;
-        if (compRes.status !== 0) {
-          throw new Error(`jscpd --complexity retornou status ${compRes.status}: ${(compRes.stderr || compRes.stdout || '').slice(0, 300)}`);
-        }
+        checkToolProcess(compRes);
         const compReportPath = join(workOutDir, 'jscpd-complexity.json');
         const parsedComp = parseJscpdComplexityReport(
           readFileSync(compReportPath, 'utf8'),
           workRepoDir,
           null,
           astAnalyzedSet,
+          inventory.includesFile,
         );
-        findings.push(...parsedComp.findings);
+        findings.push(...parsedDup.findings, ...parsedComp.findings);
 
         const rows = parsedComp.fileMetrics.slice(0, MAX_PER_FILE_COVERAGE);
-        const measured = parsedComp.totalFiles > 0 || parsedDup.stats.sources > 0;
+        const measured = parsedComp.totalFiles > 0 || parsedDup.findings.length > 0 ||
+          (parsedDup.stats.sources > 0 && !partialDuplication);
+        const totals = partialDuplication
+          ? `clones=${parsedDup.findings.length}; totais de duplicação indisponíveis`
+          : `clones=${parsedDup.stats.clones}, linhas_duplicadas=${parsedDup.stats.duplicatedLines}, ` +
+            `percentual=${parsedDup.stats.percentage.toFixed(2)}%; fontes_duplicacao=${parsedDup.stats.sources}`;
         coverage.push({
           tool: 'jscpd',
           version: versions.jscpd,
           status: measured ? 'ok' : 'skipped',
-          detail: `arquivos_medidos=${parsedComp.totalFiles}, clones=${parsedDup.stats.clones}, linhas_duplicadas=${parsedDup.stats.duplicatedLines}, percentual=${parsedDup.stats.percentage.toFixed(2)}%; ` +
-            `fontes_duplicacao=${parsedDup.stats.sources}; min_linhas=${DEFAULT_THRESHOLDS.jscpdMinLines}; min_tokens=${DEFAULT_THRESHOLDS.jscpdMinTokens}; ` +
-            coverageLimit(parsedComp.totalFiles, rows.length),
+          detail: `arquivos_medidos=${parsedComp.totalFiles}, ${totals}; ` +
+            `min_linhas=${DEFAULT_THRESHOLDS.jscpdMinLines}; mínimo de tokens ${DEFAULT_THRESHOLDS.jscpdMinTokens}; ` +
+            coverageLimit(parsedComp.totalFiles, rows.length) + inventory.omissionDetail(),
         });
 
         for (const row of rows) {
@@ -1397,7 +1576,8 @@ export function runCollector(options = {}) {
             tool: 'jscpd:file',
             version: versions.jscpd,
             status: 'ok',
-            detail: `arquivo=${row.file}; linhas=${row.lines}; tokens=${row.tokens}; complexidade_jscpd=${row.complexity}; duplicado=${parsedDup.duplicatedFiles.has(row.file) ? 'sim' : 'nao'}`,
+            files: [row.file],
+            detail: `arquivo=${row.file}; linhas=${row.lines}; tokens medidos ${row.tokens}; complexidade_jscpd=${row.complexity}; duplicado=${parsedDup.duplicatedFiles.has(row.file) ? 'sim' : 'nao'}`,
           });
         }
       } catch (err) {
@@ -1405,7 +1585,7 @@ export function runCollector(options = {}) {
           tool: 'jscpd',
           version: versions.jscpd,
           status: 'failed',
-          detail: `falha ao executar jscpd: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+          detail: `falha ao executar jscpd: ${toolFailureDetail(err)}${inventory.omissionDetail()}`,
         });
       }
     }
@@ -1419,6 +1599,7 @@ export function runCollector(options = {}) {
         detail: 'nenhum arquivo JS/TS de produção para análise de dependências',
       });
     } else {
+      const inventory = toolInventory(copied);
       try {
         const hasTsConfig = sanitizeTsConfigInWork(workRepoDir, copiedFiles);
         const baseCfgPath = existsSync(join(toolsRoot, 'depcruise.config.json'))
@@ -1447,28 +1628,41 @@ export function runCollector(options = {}) {
           ],
           {cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024},
         );
-        if (depRes.error) throw depRes.error;
-        if (depRes.status !== 0) {
-          throw new Error(`depcruise retornou status ${depRes.status}: ${(depRes.stderr || depRes.stdout || '').slice(0, 300)}`);
-        }
+        checkToolProcess(depRes);
         const parsedDep = parseDepcruiseReport(
           readFileSync(depOutPath, 'utf8'),
           workRepoDir,
           rel => readFileSync(join(workRepoDir, rel), 'utf8'),
+          inventory.includesFile,
         );
         findings.push(...parsedDep.findings);
+        const omittedDirs = skippedDirectories.get(snapshot.skipped);
+        const snapshotOmittedSources = Boolean(snapshot.stoppedAt) || snapshot.skipped.some(
+          item => item.reason === 'diretorio_ilegivel' || item.reason === 'symlink'
+            || JS_TS_EXTS.has(extname(item.file).toLowerCase())
+            || (item.reason === 'caminho_excluido' && (omittedDirs ? omittedDirs.has(item.file) : !extname(item.file))),
+        );
+        const omissionSuffix = inventory.omissionDetail();
+        const graphPartial = parsedDep.stats.partial || Boolean(omissionSuffix) || snapshotOmittedSources;
+        const partialSummary = graphPartial
+          ? `; metricas_grafo=parciais${omissionSuffix ? '' : '; cobertura_parcial=sim'}`
+          : '';
         coverage.push({
           tool: 'dependency-cruiser',
           version: versions.depcruise,
-          status: 'ok',
-          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, ciclos=${parsedDep.stats.cycles}, violacoes_camada=${parsedDep.stats.layerViolations}, orfaos=${parsedDep.stats.orphans}; ${coverageLimit(parsedDep.stats.totalModules, parsedDep.perFileCoverage.length)}`,
+          status: parsedDep.stats.totalModules > 0 ? 'ok' : 'skipped',
+          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, ciclos=${parsedDep.stats.cycles}, violacoes_camada=${parsedDep.stats.layerViolations}, orfaos=${parsedDep.stats.orphans}; ${coverageLimit(parsedDep.stats.totalModules, parsedDep.perFileCoverage.length)}${omissionSuffix}${partialSummary}`,
         });
         for (const row of parsedDep.perFileCoverage) {
+          const rowPartial = row.partial || snapshotOmittedSources;
+          const instability = rowPartial ? 'n/a' : row.instability;
+          const rowPartialSuffix = rowPartial ? '; metricas_parciais=sim' : '';
           coverage.push({
             tool: 'dependency-cruiser:file',
             version: versions.depcruise,
             status: 'ok',
-            detail: `arquivo=${row.file}; deps=${row.deps}; dependentes=${row.dependents}; instabilidade=${row.instability}; ciclo=${row.cycle ? 'sim' : 'nao'}; violacao_camada=${row.layerViolation ? 'sim' : 'nao'}`,
+            files: [row.file],
+            detail: `arquivo=${row.file}; deps=${row.deps}; dependentes=${row.dependents}; instabilidade=${instability}; ciclo=${row.cycle ? 'sim' : 'nao'}; violacao_camada=${row.layerViolation ? 'sim' : 'nao'}${rowPartialSuffix}`,
           });
         }
       } catch (err) {
@@ -1476,7 +1670,7 @@ export function runCollector(options = {}) {
           tool: 'dependency-cruiser',
           version: versions.depcruise,
           status: 'failed',
-          detail: `falha ao executar dependency-cruiser: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+          detail: `falha ao executar dependency-cruiser: ${toolFailureDetail(err)}${inventory.omissionDetail()}`,
         });
       }
     }
@@ -1494,6 +1688,7 @@ export function runCollector(options = {}) {
             : `nenhum arquivo JS/TS de produção elegível para knip (arquivos copiados=${copiedFiles.length})`,
       });
     } else {
+      const inventory = toolInventory(copied);
       try {
         if (!existsSync(join(workRepoDir, 'package.json'))) {
           writeFileSync(join(workRepoDir, 'package.json'), JSON.stringify({name: 'repo-scan', private: true}, null, 2));
@@ -1506,25 +1701,23 @@ export function runCollector(options = {}) {
         const knipRes = execFn(process.execPath, [worker, toolsRoot, knipConfigPath], {
           cwd: workRepoDir, encoding: 'utf8', timeout: TOOL_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024,
         });
-        if (knipRes.error) throw knipRes.error;
-        if (knipRes.status !== 0) {
-          throw new Error(`knip retornou status ${knipRes.status}: ${(knipRes.stderr || knipRes.stdout || '').slice(0, 300)}`);
-        }
-        const parsedKnip = parseKnipReport(knipRes.stdout, workRepoDir, knipCandidates);
+        checkToolProcess(knipRes);
+        const parsedKnip = parseKnipReport(knipRes.stdout, workRepoDir, knipCandidates, inventory.includesFile, wasOmitted);
         findings.push(...parsedKnip.findings);
         const {stats} = parsedKnip;
         coverage.push({
           tool: 'knip',
           version: versions.knip,
-          status: stats.totalFiles > 0 ? 'ok' : 'skipped',
+          status: stats.totalFiles > 0 || parsedKnip.findings.length > 0 ? 'ok' : 'skipped',
           detail: `arquivos=${stats.totalFiles}, entradas=${stats.entries}, arquivos_nao_usados=${stats.unusedFiles}, exportacoes_nao_usadas=${stats.unusedExports}, deps_nao_usadas=${stats.unusedDeps}; ` +
-            `elegiveis_sem_medicao_comprovada=${knipCandidates.size - stats.totalFiles}; ${coverageLimit(stats.totalFiles, parsedKnip.perFileCoverage.length)}`,
+            `elegiveis_sem_medicao_comprovada=${knipCandidates.size - stats.totalFiles}; ${coverageLimit(stats.totalFiles, parsedKnip.perFileCoverage.length)}${inventory.omissionDetail()}`,
         });
         for (const row of parsedKnip.perFileCoverage) {
           coverage.push({
             tool: 'knip:file',
             version: versions.knip,
             status: 'ok',
+            files: [row.file],
             detail: `arquivo=${row.file}; papel=${row.role}; problemas=${row.issues}`,
           });
         }
@@ -1533,7 +1726,7 @@ export function runCollector(options = {}) {
           tool: 'knip',
           version: versions.knip,
           status: 'failed',
-          detail: `falha ao executar knip: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+          detail: `falha ao executar knip: ${toolFailureDetail(err)}${inventory.omissionDetail()}`,
         });
       }
     }
