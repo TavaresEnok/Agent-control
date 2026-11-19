@@ -284,6 +284,8 @@ Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes c
 
 ### Prova do módulo 2
 
+A revisão independente por Sol 6.2 high confirmou no código a gramática de uma mensagem literal em `f3158451`. Se duas mensagens deixam ambígua uma referência textual, a matriz registra cobertura limitada. O candidato de aplicação com esse contrato e os controles reais de Go e PostgreSQL é `53012d07`.
+
 Em `0d8198b6`, passaram a suíte oficial (266 arquivos), os 52 testes complementares e os 130 testes do laboratório. O laboratório da imagem construída de `8642613d` passou em 132/132 no host amd64, incluindo o controle real de versão incompatível de Go. A revisão da matriz e de herança de tabelas PostgreSQL motivou outra rodada antes da aplicação.
 
 O candidato `0d8198b6` contém o PostgreSQL 16.15 e o empacotamento de carga para amd64 e arm64. Os checksums das duas distribuições foram conferidos. O laboratório físico deste host exerce amd64. O candidato de revisão `8642613d` inclui o teste de privilégios efetivos, a classificação do Go e a gramática documentada da matriz.
@@ -311,6 +313,8 @@ A imagem da fonte `56177e90` passou nos 21 testes dirigidos, incluindo Hadolint.
 A prova da arquitetura passou nos 20 testes, com Hadolint e as dependências locais fixadas, e nos seis testes da CLI. A revisão independente por modelo distinto de `70a8c7cc` registrou duas observações baixas. Ao atingir o limite do inventário, a cobertura informa o primeiro caminho interrompido e que as entradas posteriores ficaram fora da medição. O teste de caminho relativo também aceita a âncora anterior.
 
 ### Prova do módulo 4
+
+Em `05776a76`, passaram a suíte oficial (269 arquivos), os 52 testes complementares e os 42 testes de ferramentas e CLI.
 
 O laboratório de `910c59cb` passou em 42/42, incluindo a CLI e o OpenRewrite. A revisão independente por Sol 6.2 high examinou o tratamento de metadados inválidos e indisponibilidade em `985c96b0`.
 

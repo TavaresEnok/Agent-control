@@ -929,3 +929,5 @@ PAUSADO-COTA
 - 19/11/2026 18:56 UTC — Na combinação dos oito módulos e A3, o TypeScript e o laboratório de design com imagem passaram em 15 testes, com 0 pulados.
 - 19/11/2026 18:56 UTC — O teste de retomada de nó no ponto integrate passou isoladamente em 9a0b9fd6 após exceder o tempo de espera do marcador na suíte desse candidato. O resultado da suíte anterior segue registrado como falha.
 - 19/11/2026 18:56 UTC — O revisor aprovou o contrato da matriz de uma mensagem em f3158451. A suíte do candidato anterior 9a0b9fd6 aprovou 265 arquivos e falhou em completed-node-recovery, na espera do marcador do nó integrate. A repetição no mesmo código usa banco descartável. C9 integrou fb99a576 em 11e28851 e entrou em revisão e ensaio da imagem.
+- 19/11/2026 18:56 UTC — revisor-C9-ACEITE-ATRIBUICAO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:58 UTC — Arquitetura e2a84a88 e dependências da2c8bc4 já incluem o candidato de QA 53012d07. A matriz registra o aceite da gramática de uma mensagem e as três provas completas de dependências. O laboratório do fechamento com design teve 15/15.
