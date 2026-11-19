@@ -1085,3 +1085,20 @@ PAUSADO-COTA
 - 19/11/2026 20:53 UTC — Iniciada personal:arquitetura na instalação viva, pelo fluxo normal do projeto IspAgent.
 - 19/11/2026 20:54 UTC — personal:arquitetura encerrou com código 1. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
 - 19/11/2026 20:55 UTC — Na instalação, personal:qa publicou relatório, com 123 medições ok. A primeira arquitetura publicou apenas o diagnóstico VERIFY_PATH_FORBIDDEN e saiu com código 1. Sol high investiga a compatibilidade entre coletor e publicação em fixtures sintéticas. Os demais comandos seguem um por vez.
+- 19/11/2026 20:55 UTC — trabalho-C-CAMINHOS-VIVOS iniciado em final-caminhos-vivos por Sol high normal.
+- 19/11/2026 20:55 UTC — Iniciada personal:dependencias na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 20:57 UTC — Com os commits preservados no ramo integrado, foram liberadas três cópias temporárias da prova de recusa. Contabilizados 1.65 GiB líquidos durante a limpeza, com os digests aceitos preservados.
+- 19/11/2026 20:57 UTC — personal:dependencias encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 20:57 UTC — Iniciada personal:banco na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 20:58 UTC — personal:banco encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 20:58 UTC — Iniciada personal:prontidao na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 20:58 UTC — Nos recibos vivos de QA e arquitetura, o grant de Claude foi liberado por exam_login_stale. As ferramentas rodaram e os relatórios registraram os arquivos sem julgamento por modelo. O login requer nova autenticação do titular pelo fluxo do produto. Dependências passou com 432 medições ok, 29 puladas e nenhuma falha.
+- 19/11/2026 20:58 UTC — personal:prontidao encerrou com código 1. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 20:59 UTC — Banco publicou com código zero e seis ferramentas puladas para este repositório. Prontidão registrou VERIFY_COLLECTOR_INVALID. Iniciado o diagnóstico das formas de saída no snapshot local, sem registrar o conteúdo do repositório.
+- 19/11/2026 20:59 UTC — Iniciada personal:desempenho na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 20:59 UTC — personal:desempenho encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 20:59 UTC — Iniciada personal:documentacao na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 20:59 UTC — personal:documentacao encerrou com código 1. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 19/11/2026 21:00 UTC — Desempenho publicou relatório com código zero. O coletor de documentação produziu uma falha que será confrontada com o contrato usando apenas metadados. Conformidade segue na fila.
+- 19/11/2026 21:00 UTC — Iniciada personal:conformidade na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 19/11/2026 21:01 UTC — Distribuídos o diagnóstico de privacidade da documentação e o de coerência entre achados e cobertura da prontidão. Cada Sol tem um coletor e worktree próprios.
