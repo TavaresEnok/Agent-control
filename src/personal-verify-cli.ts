@@ -6,6 +6,7 @@ import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_RESTORE_FAILED_TEXT,EXAM_LOGIN_STALE_TEX
 import {loadInstallation} from './installation.ts';
 import {beginPersonalVerification,resolvePersonalVerification} from './verify-command.ts';
 import {removeSecurityReport} from './verify-report.ts';
+import {VERIFY_RECHECK_NEW_EXAM_GUIDANCE,VERIFY_RECHECK_NEW_EXAM_REQUIRED} from './verify-remediate.ts';
 
 const messages:Record<string,string>={
  VERIFY_USAGE:'Uso: npm run personal:verify -- <instalação.json> <projectId> [--url <homologação>] [--descartar <runId>]',
@@ -25,6 +26,7 @@ const messages:Record<string,string>={
  VERIFY_LEASE_LOST:'A locação da verificação falhou.',
  VERIFY_TOO_MANY:'A reverificação aceita no máximo 20 achados.',
  DESIGN_REVIEWER_UNAVAILABLE:'Falta um segundo perfil Claude na cadeia specialist para o revisor; rode `npm run personal:design -- preparar <instalação.json> <projectId> --aplicar`.',
+ [VERIFY_RECHECK_NEW_EXAM_REQUIRED]:VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
  EXAM_PROVIDER_UNSUPPORTED:'O exame de leitura só aceita uma conta Claude.',
  EXAM_LOGIN_STALE:EXAM_LOGIN_STALE_TEXT,
  EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,
