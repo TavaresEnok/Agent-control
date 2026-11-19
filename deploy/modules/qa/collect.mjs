@@ -29,7 +29,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {
   classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool, testIdentity,
 } from './execute-tests.mjs';
-import {collectLanguageSuite, languageSuites} from './language-tests.mjs';
+import {collectLanguageSuite, hasLanguageTestCandidates, languageSuites} from './language-tests.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
@@ -313,8 +313,10 @@ export function analyzeSourceFile(relFile, content, {parse, traverse}) {
   const exportNames = new Map();
   const routes = [];
   let directEval = false;
-  function addExport(declaration, name) {
-    if (!declaration?.isFunctionDeclaration()) return;
+  function addExport(path, name) {
+    const declaration = path.isVariableDeclarator() ? path.get('init') : path;
+    if (!declaration?.isFunctionDeclaration() && !declaration?.isFunctionExpression() &&
+        !declaration?.isArrowFunctionExpression()) return;
     if (!exportNames.has(declaration.node)) exportNames.set(declaration.node, new Set());
     exportNames.get(declaration.node).add(name);
   }
@@ -322,15 +324,25 @@ export function analyzeSourceFile(relFile, content, {parse, traverse}) {
     FunctionDeclaration(path) {
       const {node} = path;
       if (!node.id) return;
-      declarations.set(node, path);
+      declarations.set(node, {path, binding: path.parentPath.scope.getBinding(node.id.name), name: node.id.name});
       if (path.parentPath.isExportNamedDeclaration()) addExport(path, node.id.name);
       if (path.parentPath.isExportDefaultDeclaration()) addExport(path, 'default');
+    },
+    VariableDeclarator(path) {
+      const id = path.get('id');
+      const init = path.get('init');
+      if (!path.parentPath.isVariableDeclaration({kind: 'const'}) || !id.isIdentifier() ||
+          (!init.isArrowFunctionExpression() && !init.isFunctionExpression())) return;
+      const {name} = id.node;
+      declarations.set(init.node, {path: init, binding: path.scope.getBinding(name), name: init.node.id?.name ?? name});
+      if (path.parentPath.parentPath.isExportNamedDeclaration()) addExport(path, name);
     },
     ExportSpecifier(path) {
       const {local, exported, exportKind} = path.node;
       const parent = path.parentPath.node;
       if (parent.source || parent.exportKind === 'type' || exportKind === 'type') return;
-      addExport(path.scope.getBinding(local.name)?.path, exported.name ?? exported.value);
+      const binding = path.scope.getBinding(local.name);
+      if (binding?.path.isFunctionDeclaration() || binding?.kind === 'const') addExport(binding.path, exported.name ?? exported.value);
     },
     'CallExpression|OptionalCallExpression'(path) {
       const callee = path.node.callee;
@@ -350,11 +362,11 @@ export function analyzeSourceFile(relFile, content, {parse, traverse}) {
     },
   });
 
-  const functions = [...declarations].map(([node, path]) => {
+  const functions = [...declarations].map(([node, {path, binding, name}]) => {
     const names = [...(exportNames.get(node) ?? [])];
-    const binding = path.parentPath.scope.getBinding(node.id.name);
-    return {name: node.id.name, startLine: node.loc.start.line, isExported: names.length > 0,
-      exportNames: names, pure: names.length > 0 && !directEval && binding?.constant === true && pureValidator(path)};
+    const stable = !directEval && binding?.constant === true;
+    return {name, startLine: node.loc.start.line, isExported: names.length > 0, exportNames: names, stable,
+      pure: path.isFunctionDeclaration() && names.length > 0 && stable && pureValidator(path)};
   });
   return {file: relFile, functions, routes};
 }
@@ -369,6 +381,7 @@ export const qaAssertionMethods = ['ok', 'equal', 'notEqual', 'strictEqual', 'no
 const assertionMethods = new Set(qaAssertionMethods);
 const binaryAssertions = new Set(qaAssertionMethods.filter(method => /equal$/i.test(method) ||
   method === 'match' || method === 'doesNotMatch'));
+const callbackAssertions = new Set(['throws', 'doesNotThrow']);
 
 // Node resolves ESM specifiers as URLs, including percent-encoding and dot segments.
 function localImportSource(file, specifier) {
@@ -412,33 +425,55 @@ function importedCall(path, file) {
   const {receiver, property, binding, optional} = callTarget(path);
   const name = receiver ? binding?.namespace && property : binding?.name;
   const source = localImportSource(file, binding?.module);
-  if (source && name) return {source, name, optional};
+  if (source && name) return {source, name, receiver, optional};
 }
 
 function featureIdentity({source, name}) {
   return JSON.stringify([source, name]);
 }
 
+function spreadElements(path) {
+  const operand = path.get('argument');
+  if (operand.isArrayExpression()) return operand.get('elements');
+  if (!operand.isIdentifier()) return;
+  const binding = operand.scope.getBinding(operand.node.name);
+  if (binding?.kind !== 'const' || !binding.constant || !binding.path.isVariableDeclarator() ||
+      binding.path.node.end > operand.node.start || binding.referencePaths.some(ref => ref.node !== operand.node) ||
+      !binding.path.get('id').isIdentifier() || !binding.path.get('init').isArrayExpression()) return;
+  return binding.path.get('init').get('elements');
+}
+
 function assertionFeatures(path, file, {method, optional}) {
   const features = [];
   const limited = [];
+  let callback;
+  let unknownSpread = false;
   const args = path.get('arguments');
-  const arity = binaryAssertions.has(method) ? 2 : ['ok', 'ifError'].includes(method) ? 1 : 0;
+  const takesCallback = callbackAssertions.has(method);
+  const arity = binaryAssertions.has(method) ? 2 : takesCallback || ['ok', 'ifError'].includes(method) ? 1 : 0;
   const spread = args.findIndex(arg => arg.isSpreadElement());
   const variableArity = spread >= 0 && spread < arity;
+  function inspect(arg, uncertain) {
+    if (arg.isSpreadElement()) {
+      const elements = spreadElements(arg);
+      if (elements) elements.forEach(element => inspect(element, true));
+      else unknownSpread = true;
+      return;
+    }
+    const callPath = takesCallback ? onlyExpression(arg) : arg.isAwaitExpression() ? arg.get('argument') : arg;
+    const call = importedCall(callPath, file);
+    if (!call) return;
+    const identity = featureIdentity(call);
+    if (uncertain || optional || call.optional) limited.push(identity);
+    else if (takesCallback) callback = {arg, callPath, receiver: call.receiver, identity};
+    else features.push(identity);
+  }
   for (const [index, arg] of args.entries()) {
     const uncertain = variableArity && index >= spread;
     if (index >= arity && !uncertain) break;
-    const operand = arg.isAwaitExpression() || arg.isSpreadElement() ? arg.get('argument') : arg;
-    const call = importedCall(operand, file);
-    if (call) (uncertain || optional || call.optional ? limited : features).push(featureIdentity(call));
+    inspect(arg, uncertain);
   }
-  // With a single thunk argument Node executes the callback itself. The matcher and message are not operands.
-  if (['throws', 'doesNotThrow'].includes(method) && args.length === 1) {
-    const call = importedCall(onlyExpression(args[0]), file);
-    if (call) (optional || call.optional ? limited : features).push(featureIdentity(call));
-  }
-  return {features, limited, variableArity};
+  return {features, callback, limited, unknownSpread};
 }
 
 /** Instrumenta chamadas diretas no callback registrado com node:test, preservando as linhas. */
@@ -448,7 +483,14 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
   const edits = [];
   let prefix = '__qaAssertion';
   while (content.includes(prefix)) prefix += '_';
+  const wrapCallback = `${prefix}Callback`;
+  const wrapTarget = `${prefix}Target`;
+  const markTarget = `${prefix}Invoked`;
   let index = 0;
+  function wrap(node, before, after) {
+    edits.push({offset: node.start, loc: node.loc.start, text: before},
+      {offset: node.end, loc: node.loc.end, text: after});
+  }
   traverse(ast, {
     CallExpression(path) {
       const owner = path.getFunctionParent();
@@ -458,14 +500,21 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
       if (!test?.nodeRunner || test.optional || test.suite || test.skipped || test.callback !== owner.node) return;
       const accepted = proofAssertion(callTarget(path));
       if (!accepted || accepted.optional) return;
-      const {callee} = path.node;
       const probe = `${prefix}${index++}`;
       const site = sites.get(registration.node) ?? {title: test.title, probes: []};
-      const {features} = assertionFeatures(path, file, accepted);
-      site.probes.push({name: probe, features});
+      const {features, callback} = assertionFeatures(path, file, accepted);
+      const completed = `${probe}Completed`;
+      const failed = `${probe}Failed`;
+      const callbackCompleted = callback ? `${probe}TargetCompleted` : undefined;
+      const callbackFailed = callback ? `${probe}TargetFailed` : undefined;
+      site.probes.push({completed, failed, features, callback: callback?.identity, callbackCompleted, callbackFailed});
       sites.set(registration.node, site);
-      edits.push({offset: callee.start, loc: callee.loc.start, text: `${prefix}(`},
-        {offset: callee.end, loc: callee.loc.end, text: `, ${accepted.receiver}, ${JSON.stringify(accepted.method)}, function ${probe}() {})`});
+      const markers = [completed, failed, callbackCompleted, callbackFailed].filter(Boolean).map(name => `function ${name}() {}`);
+      wrap(path.node.callee, `${prefix}(`, `, ${accepted.receiver}, ${JSON.stringify(accepted.method)}, ${markers.join(', ')})`);
+      if (callback) {
+        wrap(callback.arg.node, `${wrapCallback}(${markTarget} => (`, '))');
+        wrap(callback.callPath.node.callee, `${wrapTarget}(`, `, ${callback.receiver ?? 'void 0'}, ${markTarget})`);
+      }
     },
   });
   const proofs = [...sites].map(([node, site]) => {
@@ -485,7 +534,7 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
   }
   const preload = posix.relative(posix.dirname(file), '.qa-v8-probe.mjs');
   const specifier = preload.startsWith('../') ? preload : `./${preload}`;
-  chunks.push(content.slice(cursor), `\nimport {captureAssertion as ${prefix}} from ${JSON.stringify(specifier)};\n`);
+  chunks.push(content.slice(cursor), `\nimport {captureAssertion as ${prefix}, captureAssertionCallback as ${wrapCallback}, captureTarget as ${wrapTarget}} from ${JSON.stringify(specifier)};\n`);
   return {content: chunks.join(''), proofs, originalColumn(line, column) {
     let shift = 0;
     for (const edit of editLines.get(line) ?? []) {
@@ -523,6 +572,7 @@ function onlyExpression(callback) {
   if (!body.isBlockStatement()) return body;
   const statements = body.get('body');
   if (statements.length === 1 && statements[0].isExpressionStatement()) return statements[0].get('expression');
+  if (statements.length === 1 && statements[0].isReturnStatement()) return statements[0].get('argument');
 }
 
 function literal(node) {
@@ -579,7 +629,7 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
         const item = {title, file: relFile, line, column: column + 1};
         const requirements = [...title.matchAll(/\bREQ-\d+\b/g)].map(match => match[0]);
         const candidate = {...item, hasAssertion: false, conditionalSkip: false, features: [], limitedFeatures: [],
-          variableArity: false, requirements};
+          unknownSpread: false, requirements};
         if (callback) byCallback.set(callback, {test, candidate, suppressed});
         if (suite || suppressed) return;
         activeTests.push(candidate);
@@ -592,10 +642,12 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
       const {candidate} = enclosing;
       const {local, receiver, property, binding} = target;
       const context = owner.node.params[0]?.name;
+      const isTestContext = enclosing.test.nodeRunner && context && receiver === context &&
+        path.scope.getBinding(receiver)?.path.node === owner.node.params[0];
       const firstArg = node.arguments[0];
       const playwrightSkip = (binding?.module === '@playwright/test' || (receiver === 'test' && !path.scope.getBinding(receiver))) &&
         ['skip', 'fixme'].includes(property) && !(firstArg?.type === 'BooleanLiteral' && !firstArg.value);
-      if (playwrightSkip || (context && receiver === context && ['skip', 'todo'].includes(property))) {
+      if (playwrightSkip || (isTestContext && ['skip', 'todo'].includes(property))) {
         candidate.conditionalSkip = true;
         record(candidate, node, 'skip/todo no callback');
       }
@@ -604,9 +656,10 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
         (!path.scope.getBinding(local) || (binding && !assertionModules.has(binding.module)));
       if (accepted || otherAssertion) candidate.hasAssertion = true;
       if (accepted) {
-        const {features, limited, variableArity} = assertionFeatures(path, relFile, accepted);
+        const {features, callback, limited, unknownSpread} = assertionFeatures(path, relFile, accepted);
+        if (callback) features.push(callback.identity);
         const direct = enclosing.test.nodeRunner && !enclosing.test.optional && path.getFunctionParent() === owner;
-        candidate.variableArity ||= variableArity;
+        candidate.unknownSpread ||= unknownSpread;
         candidate.limitedFeatures.push(...limited, ...(direct ? [] : features));
         if (direct) candidate.features.push(...features);
       }
@@ -635,43 +688,56 @@ function indexRuntimeTests(tests = []) {
 }
 
 const everyPass = (values, accepts) => values?.length === 3 && values.every(accepts);
-const observedAssertions = test => everyPass(test?.assertionStatuses, status => status === 'executed');
+const completedAssertions = test => everyPass(test?.assertionStatuses, status => status === 'completed');
 
 const identifier = /^[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*$/u;
 const codeSpan = /^`([^`]+)`(?!`)/;
 const fileQualifier = /^\s+(?:de|from)\s+(?=`)/;
 const referenceSeparator = /^(?:\s*,\s*(?:(?:e|and)\s+)?|\s+(?:e|and)\s+)(?=`)/;
 
-function requirementReferences(body) {
-  let rest = body.trim();
-  const references = [];
-  // A leading list binds each optional path to the immediately preceding symbol.
+function readTargetList(text) {
+  const targets = [];
+  let rest = text;
   for (;;) {
     const symbol = codeSpan.exec(rest);
-    if (!symbol || !identifier.test(symbol[1])) {
-      if (references.length) references.push({name: symbol?.[1] ?? rest, invalid: true});
-      break;
-    }
-    rest = rest.slice(symbol[0].length);
-    const ref = {name: symbol[1]};
+    const target = {name: symbol?.[1] ?? rest, source: undefined, invalid: !symbol || !identifier.test(symbol[1])};
+    rest = symbol ? rest.slice(symbol[0].length) : '';
     const qualifier = fileQualifier.exec(rest);
     if (qualifier) {
       rest = rest.slice(qualifier[0].length);
       const file = codeSpan.exec(rest);
-      ref.source = file?.[1].replace(/^\.\//, '') ?? rest;
-      ref.invalid = !file || ref.source.includes('\\') ||
-        ref.source.split('/').some(part => !part || part === '.' || part === '..');
+      target.source = (file?.[1] ?? rest).replace(/^\.\//, '');
+      target.invalid ||= !file || target.source.includes('\\') ||
+        target.source.split('/').some(part => !part || part === '.' || part === '..');
       rest = file ? rest.slice(file[0].length) : '';
     }
-    references.push(ref);
+    targets.push(target);
     const separator = referenceSeparator.exec(rest);
-    if (!separator) break;
+    if (!separator) return {targets, rest: rest.trim()};
     rest = rest.slice(separator[0].length);
   }
-  if (references.length) return references;
-  // Existing requirements also use prose followed by a single parenthesized symbol.
-  const legacy = /\(\s*`([^`]+)`\s*\)\s*[.!?]?\s*$/.exec(body);
-  return legacy && identifier.test(legacy[1]) ? [{name: legacy[1]}] : [];
+}
+
+function requirementTargets(body) {
+  if (body.startsWith('`')) {
+    const {targets, rest} = readTargetList(body);
+    if (targets.length > 1 || targets[0].source !== undefined || targets[0].invalid || /^[.!?]?$/.test(rest)) {
+      return {kind: 'symbols', targets};
+    }
+    return {kind: 'ambiguous'};
+  }
+  // A bare code span in historical prose could be an expected value.
+  const historical = /\(((?:`[^`]+`|[^`()])+)\)\s*[.!?]?$/.exec(body);
+  if (!historical?.[1].trimStart().startsWith('`')) {
+    return {kind: /\(\s*`/.test(body) ? 'ambiguous' : 'title'};
+  }
+  const {targets, rest} = readTargetList(historical[1].trim());
+  if (rest || !targets.some(target => target.source !== undefined)) return {kind: 'ambiguous'};
+  return {kind: 'symbols', targets: targets.map(target => target.source === undefined ? {ambiguous: true} : target)};
+}
+
+function displayTarget({name, source}) {
+  return source === undefined ? name : `${name} (${displayPath(source)})`;
 }
 
 export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests, incomplete, executionPartial}) {
@@ -681,32 +747,55 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
   const findings = [];
   const tests = testAnalyses.flatMap(t => t.activeTests);
   const runtimeOf = indexRuntimeTests(runtimeTests);
+  const hasRuntime = Array.isArray(runtimeTests);
+  const complete = !incomplete && !executionPartial;
+  const unknownSpreads = tests.filter(t => t.unknownSpread);
   const providesEvidence = (t, feature) => {
     const result = runtimeOf(t);
-    return everyPass(result?.statuses, status => status === 'passed') && observedAssertions(result) &&
+    return everyPass(result?.statuses, status => status === 'passed') && completedAssertions(result) &&
       (!feature || everyPass(result.featurePasses, pass => pass.includes(feature.identity)));
+  };
+  const mightPass = test => !everyPass(runtimeOf(test)?.statuses, status => ['failed', 'skipped', 'todo'].includes(status));
+  const runtimeLimited = test => {
+    const result = runtimeOf(test);
+    return !everyPass(result?.statuses, status => status !== 'absent') ||
+      (mightPass(test) && !everyPass(result.assertionStatuses, status => status !== 'unsupported'));
   };
   const describe = matches => matches.map(t => {
     const result = runtimeOf(t);
     let detail = t.conditionalSkip ? 'skip/todo possível'
       : t.hasAssertion ? 'asserção candidata; execução não medida' : 'asserção estática não identificada';
     if (result) {
-      const assertions = observedAssertions(result) ? 'asserção executada nas três passadas'
+      const assertions = completedAssertions(result) ? 'asserção concluída nas três passadas'
         : result.assertionStatuses?.includes('unsupported') ? 'cobertura limitada de asserções'
-          : 'asserção não observada em todas as passadas';
+          : result.assertionStatuses?.includes('failed') ? 'asserção reprovada em pelo menos uma passada'
+            : 'conclusão da asserção não observada em todas as passadas';
       detail = `${result.statuses.join(',')}, ${assertions}`;
     }
     return `${displayPath(t.file)}:${t.line} ${t.title} (${detail})`;
   }).join('; ') || 'sem teste vinculado';
   const functions = sourceAnalyses.flatMap(src => src.functions.flatMap(fn => fn.exportNames.map(name => {
     const identity = featureIdentity({source: src.file, name});
-    return {file: src.file, name, line: fn.startLine, identity,
+    return {file: src.file, name, line: fn.startLine, stable: fn.stable, identity,
       matches: tests.filter(t => t.features.includes(identity)), limited: tests.filter(t => t.limitedFeatures.includes(identity))};
   })));
   for (const fn of functions) {
     rows.push(coverageRow(fileCoverageKey('qa-funcionalidade', fn.file, `:${fn.name}`), version, 'ok',
       `vínculo estático ${abbreviateIdentity(displayPath(fn.file), 240)}:${fn.line} ${fn.name} → ${describe(fn.matches)}`));
   }
+
+  function evaluateTarget(candidates, feature, qualified) {
+    const limited = feature ? [...feature.limited, ...unknownSpreads] : [];
+    const supported = !feature || (feature.stable && (qualified || !incomplete));
+    if (supported && candidates.some(test => providesEvidence(test, feature))) return 'proved';
+    if (!complete || !supported || limited.some(mightPass)) return 'limited';
+    if (!hasRuntime) {
+      return candidates.some(test => test.hasAssertion && !test.conditionalSkip) ? 'unavailable' : 'no-candidate';
+    }
+    if ((!runtimeTests.length && tests.length) || candidates.some(runtimeLimited)) return 'limited';
+    return 'missing';
+  }
+
   let requirements = 0;
   for (const reqFile of reqFiles) {
     for (const [idx, text] of readFileSync(join(workspace, reqFile), 'utf8').split(/\r?\n/).entries()) {
@@ -715,44 +804,55 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       requirements++;
       const [id] = marker;
       const body = text.slice(marker.index + id.length).replace(/^\s*:\s*/, '').trim();
-      const references = requirementReferences(body);
-      const targets = references.map(ref => ({ref, features: ref.invalid ? [] : functions.filter(fn =>
-        fn.name === ref.name && (ref.source === undefined || fn.file === ref.source))}));
-      const unresolved = targets.filter(target => !target.features.length);
-      const features = [...new Set(targets.flatMap(target => target.features))];
-      const identifiers = [...features.map(fn => `${fn.name} (${displayPath(fn.file)}:${fn.line})`),
-        ...unresolved.map(({ref}) => `${ref.name}${ref.source === undefined ? '' : ` (${displayPath(ref.source)})`} sem resolução`)].join(', ');
-      const titled = tests.filter(t => t.requirements.includes(id));
-      const matches = [...new Set([...features.flatMap(fn => fn.matches), ...titled])];
-      const line = idx + 1;
-      const gaps = (references.length ? features : [null]).map(feature => ({
-        feature, candidates: feature ? [...new Set([...feature.matches, ...titled])] : titled,
-      })).filter(({feature, candidates}) => !candidates.some(test => providesEvidence(test, feature)));
-      const proved = !unresolved.length && !gaps.length &&
-        (!incomplete || references.every(ref => ref.source !== undefined));
-      const limited = gaps.some(({feature, candidates}) => feature?.limited.length || candidates.some(test => {
-        if (feature && test.variableArity) return true;
-        const result = runtimeOf(test);
-        if (!everyPass(result?.statuses, status => status !== 'absent')) return true;
-        return result.statuses.includes('passed') && !everyPass(result.assertionStatuses, status => status !== 'unsupported');
+      const requirement = requirementTargets(body);
+      const resolved = (requirement.targets ?? []).map(ref => ({
+        ref, functions: ref.invalid || ref.ambiguous ? [] : functions.filter(fn =>
+          fn.name === ref.name && (ref.source === undefined || fn.file === ref.source)),
       }));
-      const unmeasured = incomplete || executionPartial || unresolved.length > 0 || !runtimeTests?.length || limited;
-      // Coverage records whether the matrix was measured. A measured gap is a finding.
-      const measuredGap = !proved && !unmeasured;
-      const status = proved || measuredGap ? 'ok' : 'skipped';
-      const verification = proved ? 'vínculo comprovado nas três passadas' : !unmeasured ? 'vínculo sem prova nas três passadas'
-        : unresolved.length ? 'prova não medida: referência não resolvida' : !runtimeTests?.length ? 'prova não medida: somente análise estática'
-          : 'prova não medida: cobertura limitada';
+      const titled = tests.filter(t => t.requirements.includes(id));
+      const byTitle = requirement.kind === 'title';
+      const outcomes = byTitle ? [{status: evaluateTarget(titled)}] : resolved.map(({ref, functions}) => {
+        const [feature] = functions;
+        if (ref.ambiguous) return {status: 'ambiguous'};
+        if (functions.length > 1) return {status: 'ambiguous', label: displayTarget(ref)};
+        if (!feature) return {status: 'unresolved', label: displayTarget(ref)};
+        return {status: evaluateTarget(feature.matches, feature, ref.source !== undefined),
+          label: `${feature.name} (${displayPath(feature.file)}:${feature.line})`};
+      });
+      if (requirement.kind === 'ambiguous') outcomes.push({status: 'ambiguous'});
+      const matches = byTitle ? titled : [...new Set(resolved.flatMap(target =>
+        target.functions.flatMap(fn => [...fn.matches, ...fn.limited])))];
+      const missing = outcomes.filter(outcome => outcome.status === 'missing');
+      const noCandidate = outcomes.filter(outcome => outcome.status === 'no-candidate');
+      const unresolved = outcomes.filter(outcome => outcome.status === 'unresolved');
+      const proved = outcomes.every(outcome => outcome.status === 'proved');
+      const measured = outcomes.every(outcome => ['proved', 'missing'].includes(outcome.status));
+      const status = measured ? 'ok' : 'skipped';
+      let verification = 'prova não medida: cobertura limitada';
+      if (proved) verification = 'vínculo comprovado nas três passadas';
+      else if (measured) verification = runtimeTests.length ? 'vínculo sem prova nas três passadas' : 'inventário completo: nenhum teste encontrado';
+      else if (outcomes.some(outcome => outcome.status === 'ambiguous')) verification = 'prova não medida: referência ambígua; informe `símbolo` de `arquivo`';
+      else if (unresolved.length) verification = 'prova não medida: referência não resolvida';
+      else if (noCandidate.length || outcomes.some(outcome => outcome.status === 'unavailable')) verification = 'prova não medida: somente análise estática';
+      if (!measured && missing.length) verification += ', com lacuna medida';
+      const identifiers = outcomes.map(({label, status}) => status === 'unresolved' ? `${label} sem resolução` : label).filter(Boolean).join(', ');
+      const line = idx + 1;
       const context = body ? ` → contexto: ${body}` : '';
-      const detail = `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${verification} → ${describe([...new Set([...matches, ...features.flatMap(fn => fn.limited)])])}`;
-      rows.push(coverageRow(`qa-requisito:${id}`, version, status, detail + context));
-      const staticGap = !runtimeTests && !incomplete && !unresolved.length && gaps.some(({feature, candidates}) =>
-        !feature?.limited.length && !(feature && candidates.some(test => test.variableArity)) &&
-        !(feature?.matches ?? candidates).some(test => test.hasAssertion && !test.conditionalSkip));
-      if (measuredGap || staticGap) {
+      const detail = `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${verification} → ${describe(matches)}${context}`;
+      rows.push(coverageRow(`qa-requisito:${id}`, version, status, detail));
+      if (missing.length) {
+        const labels = missing.map(outcome => outcome.label).filter(Boolean);
+        const targetDetail = labels.length ? ` para ${labels.join(', ')}` : '';
+        const cause = runtimeTests.length ? 'sem teste vinculado aprovado com asserção concluída nas três passadas'
+          : 'sem testes no inventário completo';
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
-          message: `Requisito ${id} sem ${staticGap ? 'candidato estático ativo; execução não medida' : 'teste vinculado aprovado com asserção executada nas três passadas'}`,
-          evidence: detail + context});
+          message: `Requisito ${id} ${cause}${targetDetail}`, evidence: detail});
+      }
+      if (noCandidate.length) {
+        const labels = noCandidate.map(outcome => outcome.label).filter(Boolean);
+        const targetDetail = labels.length ? ` para ${labels.join(', ')}` : '';
+        findings.push({tool, rule: 'QA-REQUISITO-SEM-CANDIDATO', file: reqFile, line, severity: 'alta',
+          message: `Requisito ${id} sem candidato estático ativo${targetDetail}; execução não medida`, evidence: detail});
       }
     }
   }
@@ -806,6 +906,7 @@ export function summarizeNodePasses(passes, sourceAnalyses, version) {
 
 async function runNodeCoverage({context, sourceAnalyses, version, failTool, runtime}) {
   if (failTool === suiteTool) throw new Error('QA_NODE_TEST_FORCED_FAILURE');
+  if (context.emptyInventory) runtime.tests = [];
   if (context.reason) return {coverageRow: coverageRow(suiteTool, unmeasured, 'skipped', context.reason)};
   const passes = [];
   for (let index = 0; index < 3; index++) {
@@ -813,10 +914,10 @@ async function runNodeCoverage({context, sourceAnalyses, version, failTool, runt
   }
   const result = summarizeNodePasses(passes, sourceAnalyses, version);
   runtime.tests = result.tests;
-  const proved = result.tests.filter(observedAssertions).length;
+  const proved = result.tests.filter(completedAssertions).length;
   const unsupported = result.tests.filter(test => test.assertionStatuses.includes('unsupported')).length;
   result.extraRows.push(coverageRow('qa-assercoes-node-test', version, unsupported === result.tests.length ? 'skipped' : 'ok',
-    `${proved} testes com chamada de node:assert observada nas três passadas, ${result.tests.length - proved - unsupported} sem observação em todas, ${unsupported} com cobertura limitada; somente chamadas síncronas diretas no callback reconhecido`));
+    `${proved} testes com node:assert concluído nas três passadas, ${result.tests.length - proved - unsupported} sem conclusão em todas, ${unsupported} com cobertura limitada; somente chamadas síncronas diretas no callback reconhecido`));
   if (result.stable && passes.every(p => p.summary && p.tests.some(t => t.status === 'passed'))) runtime.baseline = passes[0];
   return {
     coverageRow: coverageRow(suiteTool, version, 'ok',
@@ -890,7 +991,11 @@ export function measureValidatorCases({sourceAnalyses, testAnalyses, runtimeTest
     pureCases++;
     const result = runtimeOf(candidate);
     const statuses = result?.statuses;
-    if (!everyPass(statuses, status => status === 'passed' || status === 'failed') || !observedAssertions(result)) continue;
+    const identity = featureIdentity(validator);
+    if (!everyPass(statuses, (status, index) => {
+      const passes = status === 'passed' ? result.featurePasses : status === 'failed' ? result.failedFeaturePasses : undefined;
+      return passes?.[index]?.includes(identity);
+    })) continue;
     measured++;
     if (statuses.includes('failed')) {
       findings.push({tool, rule: 'QA-VALIDADOR-CASO-REPROVADO', file, line, severity: 'alta',
@@ -1257,6 +1362,9 @@ export async function collectQaModule(options = {}) {
     }
     const sourcePartial = incomplete || omittedSourceFiles > 0;
     const matrixPartial = sourcePartial || !!parserError || omittedTestFiles > 0;
+    const languageCandidates = hasLanguageTestCandidates(copiedFiles);
+    context.emptyInventory &&= !matrixPartial && !languageCandidates;
+    const executionPartial = context.files?.length < testFiles.length || (!testFiles.length && languageCandidates);
     const toolRunners = [
       {
         name: suiteTool,
@@ -1277,7 +1385,7 @@ export async function collectQaModule(options = {}) {
         name: 'qa-matriz-estatica',
         partial: matrixPartial,
         run: () => buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles,
-          runtimeTests: runtime.tests, incomplete: matrixPartial, executionPartial: context.files?.length < testFiles.length}),
+          runtimeTests: runtime.tests, incomplete: matrixPartial, executionPartial}),
       },
       {
         name: 'qa-propriedades-funcionais',

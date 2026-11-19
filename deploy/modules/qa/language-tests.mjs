@@ -26,10 +26,16 @@ const goExcluded = /(?:^|\/)(?:vendor|testdata|_[^/]*)(?:\/|$)/;
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const metric = value => Array.isArray(value) && value.length === 2 && value.every(count) && value[0] <= value[1];
 
+function isLanguageTest(file, language) {
+  return language === 'python' ? pythonCandidate.test(file) : goCandidate.test(file) && !goExcluded.test(file);
+}
+
+export function hasLanguageTestCandidates(copiedFiles) {
+  return copiedFiles.some(file => isLanguageTest(file, 'python') || isLanguageTest(file, 'go'));
+}
+
 export function selectLanguageSuite(language, copiedFiles, incomplete) {
-  const candidates = language === 'python'
-    ? copiedFiles.filter(file => pythonCandidate.test(file))
-    : copiedFiles.filter(file => goCandidate.test(file) && !goExcluded.test(file));
+  const candidates = copiedFiles.filter(file => isLanguageTest(file, language));
   if (incomplete) return {reason: 'escopo parcial por limites ou arquivos indisponíveis no snapshot'};
   if (!candidates.length) return {reason: 'nenhum arquivo candidato a teste unitário'};
   if (language === 'python') {
