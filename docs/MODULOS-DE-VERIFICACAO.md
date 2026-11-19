@@ -336,6 +336,8 @@ Em `3e0bd99f`, 36 testes passaram com OpenRewrite offline e sua imagem fixada. A
 
 ### Prova do módulo 5
 
+O módulo de banco entrou em `d7f7a189`. Em `35db707f`, passaram TypeScript, 270 arquivos da suíte oficial, 52 testes complementares e 21 testes do laboratório. Em `97938e35`, a confirmação de SIGKILL recebeu três controles adicionais de prazo e passou nos nove pontos de interrupção, com revisão independente.
+
 A imagem fixada em `2b2a0a5e` passou em 21/21 com a CLI, banco de teste e exames sobre SQL original e substituído. A revisão de `77d9a1d4` aceitou a distinção entre uma linha demonstrada e a posição parcial de um bloco SQL.
 
 A CLI e as ferramentas passaram na integração de diagnóstico. No aceite acumulado, a prova de `pg_stat_statements` voltou a confirmar o SQL original e a deixar provável o SQL substituído depois que a fixture do examinador devolveu o vínculo de leitura em `994e6ba8`. A revisão do posicionamento em blocos continua em homologação.
@@ -349,6 +351,8 @@ Na amostra sintética de `a382ae45`, os 13 testes de banco passaram com PostgreS
 Em `a22546c0`, o laboratório mediu uma consulta com PostgreSQL real e vinculou o resultado aos bytes da fonte pelo SHA-256. O achado confirmado ficou persistido. A troca da consulta no Git com reapresentação da mesma medição produziu um achado provável. Os revisores deste ensaio são sintéticos.
 
 ### Prova do módulo 6
+
+Prontidão entrou em `ff7e75b0`. Em `0976b46a`, passaram a suíte oficial em 273 arquivos, os 52 testes complementares e o laboratório com a CLI em 43/43. A análise de configuração e a coleta de evidências de prontidão são passivas.
 
 A imagem fixada em `85f4c410` passou em 43/43 com CLI. A revisão independente de `3b9e0115` examinou a leitura de tags e literais YAML no Compose.
 
