@@ -173,9 +173,13 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       const context = await ledger.createContext(owner, project, randomUUID());
       const capacity = new Capacity(ledger);
       await capacity.configure(owner, {programmingLimit: 2, evaluationLimit: 2});
+      const random = 'Math.random()';
+      const wait = 'page.waitForTimeout(250)';
       fixture = await createModuleExamFixture({root, repo, ledger, owner, project, answer(launch) {
         const task = JSON.parse(launch.task);
-        if (task.originalCommit && recheckAnswer) return {failureCode: null, output: recheckAnswer(task)};
+        if (recheckAnswer && (task.originalCommit || task.criterion === 'test-skip-modifier')) {
+          return {failureCode: null, output: recheckAnswer(task)};
+        }
         if (launch.provider === 'codex' && exhaust) return {output: 'diagnóstico privado descartado', failureCode: 'PROVIDER_USAGE_LIMIT'};
         if (task.file === 'index.ts' && task.checklist && examineFunctionalFinding) {
           return {failureCode: null, output: JSON.stringify({kind: 'exame', filesRead: [task.file],
@@ -184,6 +188,9 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         }
         if (task.file === 'index.ts' && task.criterion) {
           return {failureCode: null, output: JSON.stringify(reviewFixtureVerdict(task, skippedIndex))};
+        }
+        if (task.file === 'syntactic.ts' && task.criterion) {
+          return {failureCode: null, output: JSON.stringify(reviewFixtureVerdict(task, task.line === 1 ? random : wait))};
         }
         return moduleExamFixtureAnswer(launch);
       }});
@@ -251,6 +258,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(docker.logs.length, 6);
       assert.equal(checkedRelease, 2);
       assert.deepEqual(result?.achados.map(f => [f.status, f.verifier?.provider]), [['confirmado', 'codex'], ['confirmado', 'codex']]);
+      const todoRun = result!.runId;
       assert.deepEqual((await ledger.pool.query('SELECT DISTINCT provenance FROM ac_verify_coverage WHERE run_id=$1', [result!.runId])).rows,
         [{provenance: 'examiner'}]);
       for (const launch of docker.logs) {
@@ -419,6 +427,23 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(receipt.state, 'released');
       assert.ok(receipt.physical_receipt.containerId);
 
+      const activeTodo = skippedOther.replace('test.todo', 'test').slice(0, -1);
+      await writeFile(join(repo, 'other.ts'), activeTodo + ';\n' + staleTest + ';\n');
+      git('add', 'other.ts');
+      commitChanges('synthetic modifier removal only');
+      recheckAnswer = task => JSON.stringify(reviewFixtureVerdict(task, activeTodo, 'descartado'));
+      assert.deepEqual(await runPersonalQaCli([installation, project, '--reverificar', todoRun, 'ACH-002'], {
+        moduleExamRuntime: async () => runtime,
+      }), ['ACH-002 pendente MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED (A regra ainda não dispõe de prova funcional de antes e depois.)']);
+      const skipTask = JSON.parse(docker.logs.at(-1)!.task);
+      assert.equal(skipTask.code, activeTodo + ';');
+      assert.deepEqual(skipTask.skipRemoval, {column: 1, expression: activeTodo});
+      assert.equal(skipTask.originalCommit, undefined);
+      assert.equal(skipTask.originalCode, undefined);
+      assert.equal(skipTask.skipSnapshot, undefined);
+      assert.equal((await readModuleReport(dataDirectory, project, todoRun, 'qa')).achados[1]?.status, 'confirmado');
+      recheckAnswer = verdict;
+
       await writeFile(join(repo, 'runtime.log'), 'REGISTRO_SINTETICO_PROTEGIDO\n');
       git('add', 'runtime.log');
       git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic log');
@@ -505,6 +530,24 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(await findingStatus(), 'reaberto');
       assert.deepEqual(await recheck([]), ['ACH-001 reaberto']);
       assert.equal(docker.logs.length, beforeRetry);
+
+      await t.test('CLI publica títulos sintáticos para observações confirmadas do coletor', async () => {
+        const file = 'syntactic.ts';
+        await writeFile(join(repo, file), `const Math = {random: () => 7}; ${random};\n`
+          + `const page = {waitForTimeout: () => undefined}; ${wait};\n`);
+        git('add', file);
+        commitChanges('synthetic static calls');
+        const [syntaxRun] = await runPersonalQaCli([installation, project], {moduleExamRuntime: async () => runtime,
+          collectorOutput: {coverage: collectorOutput.coverage, findings: [
+            {...qaStaticFinding(file, 1, random, 'nondeterminism'), message: 'A chamada retorna resultado aleatório'},
+            {...qaStaticFinding(file, 2, wait, 'nondeterminism'), message: 'A chamada aguarda 250 milissegundos'},
+          ]}});
+        const report = await readModuleReport(dataDirectory, project, syntaxRun!, 'qa');
+        assert.deepEqual(report.achados.map(({status, title}) => [status, title]), [
+          ['confirmado', 'Chamada direta a Math.random no código'],
+          ['confirmado', 'Chamada direta a waitForTimeout no código'],
+        ]);
+      });
 
       await t.test('CLI reverifica a mesma asserção no código original e corrigido e publica uma vez', async () => {
         // The coverage rows are synthetic. The two regression results come from
