@@ -941,3 +941,9 @@ PAUSADO-COTA
 - 19/11/2026 19:03 UTC — No laboratório C9 de fb99a576, o defeito e o controle limpo passaram, mas a fixture R6 retornou cobertura parcial para resultados de chamadas sem vínculo. O teste físico tratava qualquer código 1 como falha. Um trabalhador separado confere as expectativas precisas sem remover as provas de linha nem alterar o coletor.
 - 19/11/2026 19:03 UTC — trabalho-C9-LAB-COBERTURA-PARCIAL iniciado em final-c9-lab-parcial por Sol medium normal.
 - 19/11/2026 19:04 UTC — A integração de documentação 1aa89e4f recebeu 4a47d5ff e a base mais recente de C2 a C4. Revisão e ensaio da imagem pedidos. Na suíte integral do novo QA 53012d07, o arquivo de recuperação que falhou na versão anterior passou em 9/9.
+- 19/11/2026 19:04 UTC — revisor-C8-ACEITE-ANCESTRAIS iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:05 UTC — C8 concluiu a homologação física das declarações ancestrais, com o TypeDoc real e a CLI. Digest fixado no ramo de integração.
+- 19/11/2026 19:06 UTC — C8-ACEITE-ANCESTRAIS encerrado com código 0.
+- 19/11/2026 19:06 UTC — C9-LAB-COBERTURA-PARCIAL encerrado com código 0.
+- 19/11/2026 19:07 UTC — C9-CONSTANTES-E-PRESENCA encerrado com código 0.
+- 19/11/2026 19:07 UTC — C9 reuniu 0ab3a69a e f4a9d5d0 em 6392b44f para revisão e reensaio. A fixture deve demonstrar os 16 achados e as lacunas específicas. C8 passou em 41/41; resta comprovar que um comentário de módulo ambiente depois de outra declaração não fornece uma linha local indevida.
