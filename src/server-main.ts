@@ -6,7 +6,6 @@ import {z} from 'zod';
 import {join} from 'node:path';
 import {Installation,readPrivateFile,loadInstallation,sessionKey,initializeInstallation,prepareInstallationOperator,privateDirectory,syncInstallationActivation} from './installation.ts';
 import {Refusal} from './contracts.ts';
-import {classifyExamReservation} from './exam-provider.ts';
 import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
 import {createProjectGateway} from './projects-api.ts';
@@ -292,42 +291,10 @@ async function main(){
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);
      if(!project)throw new Refusal('NOT_FOUND',404);
      const commit=await gitHead(project.repo);
-     const {createRecheckNativeWorker}=await import('./verify-native-launch.ts');
+     const {createRecheckNativeWorker,reservePersonalRecheckReviewer}=await import('./verify-native-launch.ts');
      const {recheckFindings}=await import('./verify-remediate.ts');
-     const {randomUUID}=await import('node:crypto');
-     const {Capacity}=await import('./capacity.ts');
-     const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:async(intentId,avoidProviders)=>{
-      const capacity=new Capacity(ledger);
-      const avoided:string[]=[];
-       let fallback:{grantId:string;accountId:string;provider:string;role:'specialist'}|undefined;
-       try{
-       for(let attempt=0;attempt<4;attempt++){
-        const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:authority.contextId,role:'specialist',provider:'claude',...(avoided.length?{avoidAccounts:[...avoided]}:{})},authority);
-        const found=await ledger.pool.query('SELECT a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.id=$1',[grant.id]);
-        const row=found.rows[0] as {provider?:unknown}|undefined;
-        const provider=typeof row?.provider==='string'?row.provider:'';
-        const choice=classifyExamReservation({grantId:grant.id,accountId:grant.account_id,provider},avoidProviders,attempt);
-        if(choice.kind==='skip'){
-         await releaseGrant(principal,authority,grant.id,'not_started');
-         avoided.push(choice.accountId);
-         continue;
-        }
-        if(choice.kind==='hold'){
-         if(fallback)await releaseGrant(principal,authority,fallback.grantId,'not_started');
-         fallback={...choice.seat,role:'specialist'};
-         avoided.push(choice.accountId);
-         continue;
-        }
-        if(fallback&&fallback.grantId!==choice.seat.grantId)await releaseGrant(principal,authority,fallback.grantId,'not_started');
-        return {...choice.seat,role:'specialist' as const};
-       }
-      }catch(error){
-       if(fallback)await releaseGrant(principal,authority,fallback.grantId,'not_started');
-       throw error;
-      }
-      if(fallback)return fallback;
-      throw new Refusal('EXAM_PROVIDER_UNSUPPORTED',409);
-     },releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
+     const release=(grantId:string,how:'not_started'|'exited')=>releaseGrant(principal,authority,grantId,how);
+     const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:(intentId,avoidProviders,exclusion)=>reservePersonalRecheckReviewer({ledger,principal,authority,intentId,avoidProviders,exclusion,releaseGrant:release}),releaseGrant:release});
      return recheckFindings(ledger,principal,authority,{...input,worker});
     },
    };

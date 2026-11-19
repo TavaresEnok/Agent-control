@@ -7,15 +7,24 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
 import {Capacity, CapacityPolicy} from '../src/capacity.ts';
+import type {CezarRuntime} from '../src/cezar.ts';
+import {createApi} from '../src/api.ts';
+import {Control} from '../src/control.ts';
 import {Refusal} from '../src/contracts.ts';
+import {loadDesignChecklist} from '../src/design-checklist.ts';
 import {resolvePersonalDesign} from '../src/design-command.ts';
 import {runDesignCreate} from '../src/design-create.ts';
+import {examineDesignScreens} from '../src/design-examine.ts';
+import {reserveSpecialistExamSeat} from '../src/exam-provider.ts';
 import {runDesignModule} from '../src/design-module.ts';
 import {prepareDesignSpecialist} from '../src/design-prepare.ts';
 import {Ledger} from '../src/ledger.ts';
 import {designCliFailureText, runDesignSession} from '../src/personal-design-cli.ts';
 import {runPersonalVerifySession} from '../src/personal-verify-cli.ts';
 import {beginPersonalVerification, resolvePersonalVerification} from '../src/verify-command.ts';
+import {acceptSecurityVerification} from '../src/verify-intent.ts';
+import {createRecheckNativeWorker, reservePersonalRecheckReviewer} from '../src/verify-native-launch.ts';
+import {recheckFindings} from '../src/verify-remediate.ts';
 import {runSecurityVerification} from '../src/verify-runtime.ts';
 import {WorkflowGenerations} from '../src/workflow-generations.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -974,5 +983,290 @@ test('exame de design sem segundo perfil Claude em specialist recusa com DESIGN_
     await db.close();
     await database.close();
     await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('reverificação pela API vincula exclusão ao achado original, recusa perfil único e trata histórico sem inventar identidade', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const database = await isolatedDatabase(databaseUrl!, 'recheckapi');
+  const db = new Ledger(database.url);
+  const root = await mkdtemp(join(tmpdir(), 'ac-recheck-api-'));
+  const dataDirectory = join(root, 'data');
+  try {
+    await mkdir(dataDirectory, {recursive: true, mode: 0o700});
+    await db.migrate();
+    const principal = 'recheck-api-owner';
+    const projectId = randomUUID();
+    const capacity = new Capacity(db);
+    const repo = await initRepo(root);
+    const commit = (await exec('git', ['rev-parse', 'HEAD'], {cwd: repo})).stdout.trim();
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'Recheck API']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
+    await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)', [projectId, repo]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
+    await capacity.registerModel(principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'synthetic://recheckapi',
+    });
+    const claudeA = randomUUID();
+    const claudeB = randomUUID();
+    for (const id of [claudeA, claudeB]) {
+      await capacity.addAccount(principal, projectId, {
+        id, provider: 'claude', label: id, resourceIdentity: `claude:${id}`, mode: 'synthetic',
+        eligibility: 'documented_supported', eligibilitySource: 'synthetic://recheckapi', maxConcurrent: 4,
+      });
+      await capacity.observeQuota(principal, id, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+    }
+    const pExaminerA = randomUUID();
+    const pReviewerB = randomUUID();
+    await capacity.addProfile(principal, projectId, {id: pExaminerA, accountId: claudeA, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: pReviewerB, accountId: claudeB, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+
+    // Política inicial com UM único perfil Claude em specialist.
+    const rev1 = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
+      schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+      roles: {specialist: {regular: [pExaminerA], emergency: []}},
+    }));
+    const mainContext = await db.createContext(principal, projectId, randomUUID());
+    await capacity.assignPolicy(principal, mainContext, rev1);
+    const authority = await db.acquire(principal, mainContext, randomUUID(), 'recheck-api', 60);
+    const intent = await acceptSecurityVerification(db, principal, authority, {projectId, commit, policyRevision: rev1});
+    const runId = randomUUID();
+    await db.pool.query(
+      `INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir)
+       VALUES($1,$2,$3,$4,$5,$6,'done',$7)`,
+      [runId, projectId, mainContext, intent.id, principal, commit, '20261119-000000-seguranca'],
+    );
+    await db.pool.query(
+      `INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,profile_id,checklist)
+       VALUES($1,'src/app.ts','claude','claude-sonnet-5-5',$2,'["ASVS-5-V1"]'::jsonb)`,
+      [runId, pExaminerA],
+    );
+    // ACH-001 foi examinado por pExaminerA; ACH-002 por pReviewerB; ACH-003 é histórico (sem identidade).
+    await db.pool.query(
+      `INSERT INTO ac_verify_findings(run_id,achado_id,status,severity,file,line,payload,examiner_profile_id,examiner_account_id) VALUES
+       ($1,'ACH-001','confirmado','media','src/app.ts',1,'{"title":"Ponto 1","snippet":"route"}'::jsonb,$2,$3),
+       ($1,'ACH-002','confirmado','media','src/app.ts',1,'{"title":"Ponto 2","snippet":"route"}'::jsonb,$4,$5),
+       ($1,'ACH-003','confirmado','media','src/app.ts',1,'{"title":"Ponto histórico","snippet":"route"}'::jsonb,NULL,NULL)`,
+      [runId, pExaminerA, claudeA, pReviewerB, claudeB],
+    );
+
+    const reservedGrants: {grantId: string; accountId: string; profileId: string}[] = [];
+    const releaseGrant = async (grantId: string, _how: 'not_started' | 'exited') => {
+      await capacity.transition(principal, grantId, authority, 'released', {processId: grantId, state: 'not_started'});
+    };
+    const supervisorFor = (accountId: string) => ({
+      active: true,
+      supportsAccount: (candidate: string) => candidate === accountId,
+      async start(_principal: string, _authority: unknown, request: {grantId: string}) {
+        const row = (await db.pool.query<{account_id: string; profile_id: string}>(
+          'SELECT account_id::text AS account_id, profile_id::text AS profile_id FROM ac_capacity_grants WHERE id=$1',
+          [request.grantId],
+        )).rows[0]!;
+        reservedGrants.push({grantId: request.grantId, accountId: row.account_id, profileId: row.profile_id});
+        return {state: 'running'};
+      },
+      async reconcile(_principal: string, _authority: unknown, request: {grantId: string}) {
+        await releaseGrant(request.grantId, 'exited');
+        return {state: 'completed', output: JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'Corrigido.', proof: 'src/app.ts'})};
+      },
+      async retireTerminal() {
+        return {state: 'removed'};
+      },
+    });
+    const supervisors = [supervisorFor(claudeA), supervisorFor(claudeB)];
+    const app = createApi(
+      db,
+      {projectId, nativeExecutionReady: false} as CezarRuntime,
+      async request => request.headers.get('authorization') === 'Bearer owner' ? principal : null,
+      contextId => contextId === mainContext ? authority : undefined,
+      {
+        configurationControl: new Control(db, [], projectId),
+        personalPanel: {roots: [], projectRepos: [], installationPath: root, dataDirectory, projectId, scheduleRestart() {}},
+        personalVerification: {
+          recheck: async (reqPrincipal, reqAuthority, recheckInput) => {
+            const release = (grantId: string, how: 'not_started' | 'exited') => releaseGrant(grantId, how);
+            const worker = createRecheckNativeWorker({
+              supervisors,
+              principal: reqPrincipal,
+              authority: reqAuthority,
+              base: commit,
+              reserveReviewer: (intentId, avoidProviders, exclusion) => reservePersonalRecheckReviewer({
+                ledger: db,
+                principal: reqPrincipal,
+                authority: reqAuthority,
+                intentId,
+                avoidProviders,
+                exclusion,
+                releaseGrant: release,
+              }),
+              releaseGrant: release,
+            });
+            return recheckFindings(db, reqPrincipal, reqAuthority, {...recheckInput, worker});
+          },
+        },
+      },
+    );
+
+    const headers = {authorization: 'Bearer owner', 'content-type': 'application/json'};
+    const url = `/api/v1/ac/personal/verificacoes/${runId}/reverificar`;
+
+    // 1) Com único perfil (pExaminerA), reverificar ACH-001 recusa com 409 DESIGN_REVIEWER_UNAVAILABLE (nunca re-seleciona pExaminerA).
+    const singleBlocked = await app.request(url, {method: 'POST', headers, body: JSON.stringify({achadoIds: ['ACH-001']})});
+    assert.equal(singleBlocked.status, 409);
+    assert.deepEqual(await singleBlocked.json(), {error: 'DESIGN_REVIEWER_UNAVAILABLE'});
+    assert.equal(reservedGrants.length, 0);
+
+    // 2) Dado histórico (ACH-003 sem identidade) com único perfil não inventa exclusão nem quebra.
+    const historicalSingle = await app.request(url, {method: 'POST', headers, body: JSON.stringify({achadoIds: ['ACH-003']})});
+    assert.equal(historicalSingle.status, 200);
+    assert.deepEqual(await historicalSingle.json(), {results: [{id: 'ACH-003', status: 'fechado'}]});
+    assert.equal(reservedGrants.at(-1)?.profileId, pExaminerA);
+
+    // 3) Com dois perfis em specialist, cada achado exclui apenas o seu examinador original.
+    const rev2 = await capacity.publish(principal, projectId, rev1, CapacityPolicy.parse({
+      schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+      roles: {specialist: {regular: [pExaminerA], emergency: [pReviewerB]}},
+    }));
+    await capacity.assignPolicy(principal, mainContext, rev2);
+    const perFinding = await app.request(url, {method: 'POST', headers, body: JSON.stringify({achadoIds: ['ACH-001', 'ACH-002']})});
+    assert.equal(perFinding.status, 200);
+    assert.deepEqual(await perFinding.json(), {results: [{id: 'ACH-001', status: 'fechado'}, {id: 'ACH-002', status: 'fechado'}]});
+    assert.equal(reservedGrants.at(-2)?.profileId, pReviewerB);
+    assert.equal(reservedGrants.at(-1)?.profileId, pExaminerA);
+
+    // 4) runSecurityVerification persiste examiner_profile_id para achados de modelo e NULL para achado bruto.
+    const verifyRes = await runSecurityVerification({
+      ledger: db,
+      principal,
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      policyRevision: 1,
+      rawFindings: [{
+        tool: 'opengrep', rule: 'regra-bruta', cwe: 'CWE-79', file: 'src/app.ts', line: 1,
+        severity: 'media', snippet: 'route', fingerprint: '11'.repeat(32),
+      }],
+      worker: {
+        async run(call) {
+          if (call.task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
+          if (call.task.startsWith('Pedido de exame.')) {
+            const items = (call.task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+            return JSON.stringify({
+              kind: 'exame', filesRead: ['src/app.ts'], checklist: items.length ? items : ['SEM-ITEM'],
+              findings: [{title: 'Achado modelo', severity: 'media', file: 'src/app.ts', line: 1, scenario: 's', suggestion: 'g', cwe: null, reference: 'ASVS-5-V1', snippet: 'route'}],
+            });
+          }
+          return JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'ok', proof: 'src/app.ts'});
+        },
+      },
+    });
+    const storedFindings = (await db.pool.query<{title: string; examiner_profile_id: string | null; examiner_account_id: string | null}>(
+      "SELECT payload->>'title' AS title, examiner_profile_id::text AS examiner_profile_id, examiner_account_id::text AS examiner_account_id FROM ac_verify_findings WHERE run_id=$1 ORDER BY achado_id",
+      [verifyRes.runId],
+    )).rows;
+    const modelFinding = storedFindings.find(row => row.title === 'Achado modelo');
+    const rawFinding = storedFindings.find(row => row.title === 'regra-bruta');
+    assert.equal(modelFinding?.examiner_profile_id, pExaminerA);
+    assert.equal(modelFinding?.examiner_account_id, claudeA);
+    assert.equal(rawFinding?.examiner_profile_id, null);
+    assert.equal(rawFinding?.examiner_account_id, null);
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('exame de design recusa revisão quando os únicos perfis disponíveis examinaram código e visual da tela', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const database = await isolatedDatabase(databaseUrl!, 'desexboth');
+  const db = new Ledger(database.url);
+  try {
+    await db.migrate();
+    const principal = 'design-both-owner';
+    const projectId = randomUUID();
+    const capacity = new Capacity(db);
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'Design Both Examiners']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
+    await capacity.registerModel(principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: ['specialist'], source: 'synthetic://desexboth',
+    });
+    const claudeA = randomUUID();
+    await capacity.addAccount(principal, projectId, {
+      id: claudeA, provider: 'claude', label: 'claude-a', resourceIdentity: `claude:${claudeA}`, mode: 'synthetic',
+      eligibility: 'documented_supported', eligibilitySource: 'synthetic://desexboth', maxConcurrent: 4,
+    });
+    await capacity.observeQuota(principal, claudeA, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+    const pCode = randomUUID();
+    const pVisual = randomUUID();
+    await capacity.addProfile(principal, projectId, {id: pCode, accountId: claudeA, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: pVisual, accountId: claudeA, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    const rev = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
+      schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+      roles: {specialist: {regular: [pCode, pVisual], emergency: []}},
+    }));
+    const contextId = await db.createContext(principal, projectId, randomUUID());
+    await capacity.assignPolicy(principal, contextId, rev);
+    const authority = await db.acquire(principal, contextId, randomUUID(), 'desexboth', 60);
+    const intent = await acceptSecurityVerification(db, principal, authority, {projectId, commit: 'a'.repeat(40), policyRevision: rev});
+    const release = (grantId: string) => capacity.transition(principal, grantId, authority, 'released', {processId: grantId, state: 'not_started'});
+    const visualScores = [
+      'hierarquia', 'tipografia', 'cor', 'ritmo', 'grade', 'densidade', 'componentes', 'marca', 'polimento',
+    ].map(axis => ({axis, score: 8, region: 'topo', suggestion: 'Manter #1b1917.'}));
+    let specialistCalls = 0;
+
+    await assert.rejects(
+      () => examineDesignScreens({
+        repo: '/tmp/repo-design',
+        intentId: intent.id,
+        screens: [{file: 'index.html', route: '/', code: '<html><body><h1>Oi</h1></body></html>', captureNote: 'ok'}],
+        checklist: loadDesignChecklist().slice(0, 1),
+        rawFindings: [],
+        scoreVisual: true,
+        worker: {
+          async run(call) {
+            if (call.task.startsWith('Pedido de exame.')) {
+              return JSON.stringify({kind: 'exame', filesRead: ['index.html'], checklist: ['DESIGN-WCAG-143-CONTRASTE'], findings: []});
+            }
+            if (call.task.startsWith('Pedido de crítica visual.')) {
+              return JSON.stringify({kind: 'visual', scores: visualScores});
+            }
+            throw new Error('reviewer should not run');
+          },
+        },
+        reserve: async (role, _avoidProvider, options) => {
+          if (role === 'specialist') {
+            specialistCalls += 1;
+            const avoidProfileIds = specialistCalls === 2 ? [pCode] : undefined;
+            const seat = await reserveSpecialistExamSeat({
+              capacity, ledger: db, principal, authority, intentId: intent.id, purpose: 'reviewer',
+              avoidProfileIds, releaseGrant: release,
+            }).catch(async () => reserveSpecialistExamSeat({
+              capacity, ledger: db, principal, authority, intentId: intent.id, purpose: 'examiner', releaseGrant: release,
+            }));
+            return {...seat, grantRole: 'specialist'};
+          }
+          const seat = await reserveSpecialistExamSeat({
+            capacity, ledger: db, principal, authority, intentId: intent.id, purpose: 'reviewer',
+            avoidProfileId: options?.avoidProfileId,
+            avoidProfileIds: options?.avoidProfileIds,
+            avoidAccountId: options?.avoidAccountId,
+            avoidAccountIds: options?.avoidAccountIds,
+            releaseGrant: release,
+          });
+          return {...seat, grantRole: 'specialist'};
+        },
+        release: async seat => release(seat.grantId),
+      }),
+      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_REVIEWER_UNAVAILABLE',
+    );
+  } finally {
+    await db.close();
+    await database.close();
   }
 });

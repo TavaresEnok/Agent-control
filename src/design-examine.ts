@@ -24,7 +24,9 @@ import {
 export type DesignReserveOptions = {
   purpose?: 'create' | 'examiner' | 'reviewer';
   avoidProfileId?: string;
+  avoidProfileIds?: readonly string[];
   avoidAccountId?: string;
+  avoidAccountIds?: readonly string[];
 };
 
 export type DesignSeat = {
@@ -578,6 +580,27 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       profileId: seat.profileId,
       checklist: applied,
     }));
+    const examinerProfileIds = [seat.profileId];
+    const examinerAccountIds = [seat.accountId];
+    const addExaminerSeat = (used: DesignSeat) => {
+      if (!examinerProfileIds.includes(used.profileId)) examinerProfileIds.push(used.profileId);
+      if (!examinerAccountIds.includes(used.accountId)) examinerAccountIds.push(used.accountId);
+    };
+    const examinerVisual = input.scoreVisual === true
+      ? await askVisual(input, screen, 'specialist')
+      : undefined;
+    if (examinerVisual) {
+      addExaminerSeat(examinerVisual.seat);
+      remember('examiner', examinerVisual.model);
+      if (examinerVisual.failure) noteFailure('examiner', examinerVisual.failure);
+      if (examinerVisual.scores) modelCoverage.examiner.judged += 1;
+    }
+    const reviewAvoid: DesignReserveOptions = {
+      avoidProfileId: examinerProfileIds[0],
+      avoidProfileIds: [...examinerProfileIds],
+      avoidAccountId: examinerAccountIds[0],
+      avoidAccountIds: [...examinerAccountIds],
+    };
     if (hit.failure) {
       /* The provider code is already on the coverage row. Visual scoring still runs when it was requested. */
     } else if (!exam?.success) {
@@ -628,7 +651,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
             screen.code,
             screen.captures,
             model => remember('reviewer', model),
-            {avoidProfileId: seat.profileId, avoidAccountId: seat.accountId},
+            reviewAvoid,
           );
           if (input.scoreVisual !== true && !reviewerJudged) {
             modelCoverage.reviewer.judged += 1;
@@ -647,17 +670,10 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         }
       }
     }
-    if (input.scoreVisual === true) {
-      const examinerVisual = await askVisual(input, screen, 'specialist');
-      const reviewerVisual = await askVisual(input, screen, 'reviewer', {
-        avoidProfileId: examinerVisual.seat.profileId,
-        avoidAccountId: examinerVisual.seat.accountId,
-      });
-      remember('examiner', examinerVisual.model);
+    if (examinerVisual) {
+      const reviewerVisual = await askVisual(input, screen, 'reviewer', reviewAvoid);
       remember('reviewer', reviewerVisual.model);
-      if (examinerVisual.failure) noteFailure('examiner', examinerVisual.failure);
       if (reviewerVisual.failure) noteFailure('reviewer', reviewerVisual.failure);
-      if (examinerVisual.scores) modelCoverage.examiner.judged += 1;
       if (reviewerVisual.scores) modelCoverage.reviewer.judged += 1;
       if (!examinerVisual.scores || !reviewerVisual.scores) {
         const missingRoles = !examinerVisual.scores && !reviewerVisual.scores
@@ -679,7 +695,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
               screen.code,
               screen.captures,
               model => remember('reviewer', model),
-              {avoidProfileId: examinerVisual.seat.profileId, avoidAccountId: examinerVisual.seat.accountId},
+              reviewAvoid,
             );
             findings.push(finding);
             confirmations.push({
