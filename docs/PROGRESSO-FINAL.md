@@ -720,3 +720,6 @@ PAUSADO-COTA
 - 19/11/2026 17:33 UTC — C9-R7 encerrado com código 0.
 - 19/11/2026 17:33 UTC — revisor-C2-CARGA-LOCAL iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:34 UTC — Conformidade ee77a916 passou no laboratório dirigido de origem de dados e no controle. C6-R12 entregou f485490c para a prova passiva e C5-R10 recebeu a última revisão da localização de diagnósticos. Os arquivos de imagens desta gestão passaram a ser guardados também por camada para reduzir a duplicação.
+- 19/11/2026 17:34 UTC — trabalho-C5-R10 iniciado em final-c5 por Sol medium normal.
+- 19/11/2026 17:34 UTC — C7-R10 encerrado com código 0.
+- 19/11/2026 17:34 UTC — QA recebeu revalidação de prova 324e4407 e matriz cc2d5127. Imagens estáticas no desempenho em 00bc71dd e C9-R8 enfileirada para ordem de avaliação. A homologação da imagem de C9 em ee77a916 passou em 27/27 sem pulos.
