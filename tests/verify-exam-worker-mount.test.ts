@@ -1014,7 +1014,7 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
     const readJob = async () => (await db.pool.query(
       'SELECT state,receipt,grant_id,intent_id FROM ac_native_execution_jobs WHERE id=$1', [jobId])).rows[0];
     const readIntent = async () => (await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [intentId])).rows[0].state;
-    const readCheckpoint = async () => (await db.pool.query('SELECT snapshot,updated_at FROM ac_checkpoints WHERE context_id=$1', [context])).rows[0];
+    const readCheckpoint = async () => (await db.pool.query('SELECT * FROM ac_checkpoints WHERE context_id=$1', [context])).rows[0];
     const readRetirement = async () => (await db.pool.query('SELECT state,proof FROM ac_native_terminal_retirements WHERE job_id=$1', [jobId])).rows[0];
     const refuses = (code: string) => (error: unknown) => error instanceof Refusal && error.code === code;
 
@@ -1027,7 +1027,10 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
       state: 'reserved', physical_receipt: null, intent_id: earlyHigherId, request_digest: digest(mismatchedInput),
     };
     assert.deepEqual(await readGrant(mismatchedInput.grantId), mismatchedGrant);
+    const savedCheckpoint = await readCheckpoint();
+    assert.deepEqual(savedCheckpoint.snapshot, snapshot);
     await assert.rejects(() => supervisor.start(principal, authority, mismatchedInput), refuses('NATIVE_EXECUTION_NOT_ELIGIBLE'));
+    assert.deepEqual(await readCheckpoint(), savedCheckpoint);
     assert.deepEqual(await readGrant(mismatchedInput.grantId), mismatchedGrant);
     assert.equal(await readJob(), undefined);
     const grantBinding = {intent_id: intentId, request_digest: digest(input)};
@@ -1035,7 +1038,6 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
     assert.equal(dockerRequests.length, 0);
 
     // The checkpoint is written after the job receipt, retirement and intent state.
-    const savedCheckpoint = await readCheckpoint();
     await db.pool.query(`CREATE FUNCTION fixture_fail_exam_checkpoint() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN RAISE EXCEPTION 'fixture checkpoint write failed'; END $$;
       CREATE TRIGGER fixture_fail_exam_checkpoint AFTER UPDATE ON ac_checkpoints
@@ -1067,13 +1069,18 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
       VALUES($1,$2,$3,$4,'fixture',$5,$6,$7,'admitted','admitted')`,
     [admissionJobId, grantId, context, authority.epoch,
       JSON.stringify([`ac-native-tools-${admissionJobId}`, `ac-native-worker-${admissionJobId}`]), randomUUID(), area]);
-    const activeAdmission = "SELECT job_id FROM ac_native_resource_admissions WHERE grant_id=$1 AND state<>'canceled'";
-    assert.deepEqual((await db.pool.query(activeAdmission, [grantId])).rows, [{job_id: admissionJobId}]);
+    const readAdmission = async () => (await db.pool.query(
+      'SELECT * FROM ac_native_resource_admissions WHERE grant_id=$1', [grantId])).rows[0];
+    const savedAdmission = await readAdmission();
+    assert.equal(savedAdmission?.job_id, admissionJobId);
+    assert.equal(savedAdmission.state, 'admitted');
+    assert.equal(savedAdmission.reason, 'admitted');
     await assert.rejects(() => supervisor.recoverUnstartedExam(principal, authority, jobId), refuses('NATIVE_RETIREMENT_UNCONFIRMED'));
+    assert.deepEqual(await readAdmission(), savedAdmission);
     await assertUnsettled();
     assert.deepEqual((await db.pool.query('DELETE FROM ac_native_resource_admissions WHERE job_id=$1 RETURNING job_id',
       [admissionJobId])).rows, [{job_id: admissionJobId}]);
-    assert.deepEqual((await db.pool.query(activeAdmission, [grantId])).rows, []);
+    assert.equal(await readAdmission(), undefined);
 
     const settled = await supervisor.recoverUnstartedExam(principal, authority, jobId);
     const {state, receipt, grant_id, intent_id} = await readJob();
