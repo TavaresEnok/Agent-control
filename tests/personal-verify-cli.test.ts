@@ -17,14 +17,27 @@ async function until(done: () => boolean) {
 
 test('a locação do comando é renovada enquanto o exame corre e um erro de renovação não derruba o processo', async () => {
   let beats = 0;
+  let markSecondHeartbeat!: () => void;
+  const secondHeartbeat = new Promise<void>(resolve => { markSecondHeartbeat = resolve; });
   const stop = keepPersonalVerifyLease({
     async heartbeat() {
       beats += 1;
       if (beats === 1) throw new Error('lease ocupada');
+      if (beats === 2) markSecondHeartbeat();
     },
   }, {contextId: 'contexto'}, 20);
-  await new Promise(resolve => setTimeout(resolve, 70));
-  stop();
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      secondHeartbeat,
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('a segunda renovação não aconteceu a tempo')), 1000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
+    stop();
+  }
   const settled = beats;
   await new Promise(resolve => setTimeout(resolve, 40));
   assert.ok(settled >= 2);
