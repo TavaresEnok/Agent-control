@@ -1,0 +1,4 @@
+CREATE TABLE parent (id integer PRIMARY KEY);
+CREATE TABLE child (
+  id integer REFERENCES parent (id) DEFERRABLE INITIALLY DEFERRED
+);
