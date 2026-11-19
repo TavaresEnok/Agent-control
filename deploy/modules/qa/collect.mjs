@@ -29,6 +29,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {
   classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool, testIdentity,
 } from './execute-tests.mjs';
+import {collectLanguageSuite, languageSuites} from './language-tests.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
@@ -59,7 +60,10 @@ const ALLOWED_EXTS = new Set([
   '.htm',
   '.md',
   '.sql',
+  '.py',
+  '.go',
 ]);
+const ALLOWED_FILENAMES = new Set(['go.mod', 'go.sum']);
 const FORBIDDEN_FILENAMES = new Set([
   '.env',
   '.credentials.json',
@@ -182,7 +186,7 @@ function copyRepoToIsolatedTmp(repoDir) {
         exclude('links simbólicos ou arquivos especiais');
         continue;
       }
-      if (!ALLOWED_EXTS.has(extname(entry.name).toLowerCase())) {
+      if (!ALLOWED_EXTS.has(extname(entry.name).toLowerCase()) && !ALLOWED_FILENAMES.has(entry.name)) {
         exclude('arquivos de extensões fora da coleta');
         continue;
       }
@@ -303,17 +307,28 @@ function pureValidator(fn) {
 
 /** Lê a estrutura das fontes sem carregar seus módulos. */
 export function analyzeSourceFile(relFile, content, {parse, traverse}) {
-  const functions = [];
+  const declarations = new Map();
+  const exportNames = new Map();
   const routes = [];
   let directEval = false;
+  function addExport(declaration, name) {
+    if (!declaration?.isFunctionDeclaration()) return;
+    if (!exportNames.has(declaration.node)) exportNames.set(declaration.node, new Set());
+    exportNames.get(declaration.node).add(name);
+  }
   traverse(parseFile(relFile, content, parse), {
     FunctionDeclaration(path) {
       const {node} = path;
       if (!node.id) return;
-      const isExported = path.parentPath.isExportNamedDeclaration();
-      const binding = path.parentPath.scope.getBinding(node.id.name);
-      functions.push({name: node.id.name, startLine: node.loc.start.line, isExported,
-        pure: isExported && binding?.constant === true && pureValidator(path)});
+      declarations.set(node, path);
+      if (path.parentPath.isExportNamedDeclaration()) addExport(path, node.id.name);
+      if (path.parentPath.isExportDefaultDeclaration()) addExport(path, 'default');
+    },
+    ExportSpecifier(path) {
+      const {local, exported, exportKind} = path.node;
+      const parent = path.parentPath.node;
+      if (parent.source || parent.exportKind === 'type' || exportKind === 'type') return;
+      addExport(path.scope.getBinding(local.name)?.path, exported.name ?? exported.value);
     },
     'CallExpression|OptionalCallExpression'(path) {
       const callee = path.node.callee;
@@ -333,7 +348,12 @@ export function analyzeSourceFile(relFile, content, {parse, traverse}) {
     },
   });
 
-  if (directEval) for (const fn of functions) fn.pure = false;
+  const functions = [...declarations].map(([node, path]) => {
+    const names = [...(exportNames.get(node) ?? [])];
+    const binding = path.parentPath.scope.getBinding(node.id.name);
+    return {name: node.id.name, startLine: node.loc.start.line, isExported: names.length > 0,
+      exportNames: names, pure: names.length > 0 && !directEval && binding?.constant === true && pureValidator(path)};
+  });
   return {file: relFile, functions, routes};
 }
 
@@ -345,22 +365,8 @@ export const qaAssertionMethods = ['ok', 'equal', 'notEqual', 'strictEqual', 'no
   'notDeepEqual', 'deepStrictEqual', 'notDeepStrictEqual', 'partialDeepStrictEqual', 'throws',
   'doesNotThrow', 'match', 'doesNotMatch', 'ifError', 'fail'];
 const assertionMethods = new Set(qaAssertionMethods);
-
-function visitAst(node, visitor) {
-  if (!node?.type || visitor(node) === false) return;
-  for (const value of Object.values(node)) {
-    if (Array.isArray(value)) {
-      for (const child of value) visitAst(child, visitor);
-    } else {
-      visitAst(value, visitor);
-    }
-  }
-}
-
-function member(node, object, property) {
-  return ['MemberExpression', 'OptionalMemberExpression'].includes(node?.type) && node.object.name === object &&
-    (node.computed ? staticString(node.property) : node.property.name) === property;
-}
+const binaryAssertions = new Set(qaAssertionMethods.filter(method => /equal$/i.test(method) ||
+  method === 'match' || method === 'doesNotMatch'));
 
 // Node resolves ESM specifiers as URLs, including percent-encoding and dot segments.
 function localImportSource(file, specifier) {
@@ -378,29 +384,64 @@ function importedBinding(path, name) {
   const specifier = binding.path.node;
   const declaration = binding.path.parentPath.node;
   if (declaration.importKind === 'type' || specifier.importKind === 'type') return;
-  return {module: declaration.source.value, name: specifier.imported?.name ?? specifier.imported?.value,
+  return {module: declaration.source.value, name: binding.path.isImportDefaultSpecifier() ? 'default'
+    : specifier.imported?.name ?? specifier.imported?.value,
     namespace: binding.path.isImportNamespaceSpecifier()};
 }
 
-function proofAssertion(path) {
+function callTarget(path) {
   const {callee} = path.node;
-  const receiver = callee.type === 'MemberExpression' && !callee.computed ? callee.object.name : undefined;
-  const name = receiver ?? callee.name;
-  const binding = name && importedBinding(path, name);
+  const member = ['MemberExpression', 'OptionalMemberExpression'].includes(callee.type);
+  const receiver = member && callee.object.type === 'Identifier' ? callee.object.name : undefined;
+  const local = callee.type === 'Identifier' ? callee.name : receiver;
+  return {local, receiver, property: receiver && (callee.computed ? staticString(callee.property) : callee.property.name),
+    binding: local && importedBinding(path, local), optional: path.isOptionalCallExpression() || callee.type === 'OptionalMemberExpression'};
+}
+
+function proofAssertion({receiver, property, binding, optional}) {
   if (!binding || !assertionModules.has(binding.module)) return;
-  const root = !binding.name || binding.name === 'strict' || binding.name === 'default';
-  if (receiver && root && assertionMethods.has(callee.property.name)) return {receiver, method: callee.property.name};
-  if (callee.type === 'Identifier' && !binding.namespace && (root || assertionMethods.has(binding.name))) return {receiver: 'void 0', method: root ? 'ok' : binding.name};
+  const root = binding.name === 'strict' || binding.name === 'default';
+  if (receiver && (root || binding.namespace) && assertionMethods.has(property)) return {receiver, method: property, optional};
+  if (!receiver && (root || assertionMethods.has(binding.name))) return {receiver: 'void 0', method: root ? 'ok' : binding.name, optional};
+}
+
+function importedCall(path, file) {
+  if (!path?.isCallExpression() && !path?.isOptionalCallExpression()) return;
+  const {receiver, property, binding, optional} = callTarget(path);
+  const name = receiver ? binding?.namespace && property : binding?.name;
+  const source = localImportSource(file, binding?.module);
+  if (source && name) return {source, name, optional};
+}
+
+function featureIdentity({source, name}) {
+  return JSON.stringify([source, name]);
+}
+
+function assertionFeatures(path, file, {method, optional}) {
+  const features = [];
+  const limited = [];
+  const args = path.get('arguments');
+  const arity = binaryAssertions.has(method) ? 2 : ['ok', 'ifError'].includes(method) ? 1 : 0;
+  const spread = args.findIndex(arg => arg.isSpreadElement());
+  const variableArity = spread >= 0 && spread < arity;
+  for (const [index, arg] of args.entries()) {
+    const uncertain = variableArity && index >= spread;
+    if (index >= arity && !uncertain) break;
+    const operand = arg.isAwaitExpression() || arg.isSpreadElement() ? arg.get('argument') : arg;
+    const call = importedCall(operand, file);
+    if (call) (uncertain || optional || call.optional ? limited : features).push(featureIdentity(call));
+  }
+  // With a single thunk argument Node executes the callback itself. The matcher and message are not operands.
+  if (['throws', 'doesNotThrow'].includes(method) && args.length === 1) {
+    const call = importedCall(onlyExpression(args[0]), file);
+    if (call) (optional || call.optional ? limited : features).push(featureIdentity(call));
+  }
+  return {features, limited, variableArity};
 }
 
 /** Instrumenta chamadas diretas no callback registrado com node:test, preservando as linhas. */
 export function instrumentTestAssertions(file, content, {parse, traverse}) {
   const ast = parseFile(file, content, parse);
-  const aliases = new Map();
-  for (const declaration of ast.program.body) {
-    if (declaration.type !== 'ImportDeclaration' || declaration.source.value !== 'node:test') continue;
-    for (const spec of declaration.specifiers) aliases.set(spec.local.name, spec.imported?.name ?? 'test');
-  }
   const sites = new Map();
   const edits = [];
   let prefix = '__qaAssertion';
@@ -411,32 +452,18 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
       const owner = path.getFunctionParent();
       const registration = owner?.parentPath;
       if (!registration?.isCallExpression()) return;
-      const test = testCall(registration.node, aliases);
-      if (!test || test.suite || test.skipped || test.callback !== owner.node) return;
-      const runner = importedBinding(registration, test.localName);
-      if (runner?.module !== 'node:test' || runner.namespace || (runner.name && !['test', 'it', 'default'].includes(runner.name))) return;
-      const accepted = proofAssertion(path);
-      if (!accepted) return;
+      const test = testCall(registration);
+      if (!test?.nodeRunner || test.optional || test.suite || test.skipped || test.callback !== owner.node) return;
+      const accepted = proofAssertion(callTarget(path));
+      if (!accepted || accepted.optional) return;
       const {callee} = path.node;
       const probe = `${prefix}${index++}`;
       const site = sites.get(registration.node) ?? {title: test.title, probes: []};
-      const features = [];
-      // Only operands tested by the assertion can establish a functional link.
-      const operands = /equal$/i.test(accepted.method) ? 2 : 1;
-      for (const argument of path.get('arguments').slice(0, operands)) {
-        const called = argument.isAwaitExpression() ? argument.get('argument') : argument;
-        if (!called.isCallExpression()) continue;
-        const fn = called.node.callee;
-        const binding = importedBinding(called, fn.type === 'Identifier' ? fn.name : fn.object?.name);
-        const name = fn.type === 'Identifier' ? binding?.name
-          : fn.type === 'MemberExpression' && binding?.namespace ? (fn.computed ? staticString(fn.property) : fn.property.name) : undefined;
-        const source = localImportSource(file, binding?.module);
-        if (source && name) features.push(JSON.stringify([source, name]));
-      }
+      const {features} = assertionFeatures(path, file, accepted);
       site.probes.push({name: probe, features});
       sites.set(registration.node, site);
       edits.push({offset: callee.start, loc: callee.loc.start, text: `${prefix}(`},
-        {offset: callee.end, loc: callee.loc.end, text: `, ${accepted.receiver}, function ${probe}() {})`});
+        {offset: callee.end, loc: callee.loc.end, text: `, ${accepted.receiver}, ${JSON.stringify(accepted.method)}, function ${probe}() {})`});
     },
   });
   const proofs = [...sites].map(([node, site]) => {
@@ -467,14 +494,13 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
   }};
 }
 
-function testCall(node, aliases) {
-  if (!['CallExpression', 'OptionalCallExpression'].includes(node.type)) return;
-  const {callee, arguments: args} = node;
-  const isMember = ['MemberExpression', 'OptionalMemberExpression'].includes(callee.type);
-  const localName = callee.type === 'Identifier' ? callee.name : isMember ? callee.object.name : undefined;
-  const name = aliases.get(localName) ?? localName;
-  const method = isMember ? (callee.computed ? staticString(callee.property) : callee.property.name) : undefined;
-  if (!testNames.has(name) || (isMember && !skipMethods.has(method) && method !== 'only')) return;
+function testCall(path, {local, receiver, property, binding, optional} = callTarget(path)) {
+  const {arguments: args} = path.node;
+  const nodeRunner = binding?.module === 'node:test' && ['test', 'it', 'describe', 'default'].includes(binding.name);
+  const playwright = binding?.module === '@playwright/test' && binding.name === 'test';
+  if (!nodeRunner && !playwright && local && path.scope.getBinding(local) && !binding) return;
+  const name = nodeRunner ? (binding.name === 'default' ? 'test' : binding.name) : playwright ? 'test' : local;
+  if (!testNames.has(name) || (receiver && !skipMethods.has(property) && property !== 'only')) return;
   const title = args[0]?.type === 'StringLiteral' ? args[0].value
     : args[0]?.type === 'TemplateLiteral' && !args[0].expressions.length ? args[0].quasis[0].value.cooked : undefined;
   if (title === undefined) return;
@@ -484,16 +510,17 @@ function testCall(node, aliases) {
     ['skip', 'todo'].includes(prop.key.name ?? prop.key.value) &&
     ((prop.value.type === 'BooleanLiteral' && prop.value.value) ||
       (prop.value.type === 'StringLiteral' && prop.value.value.length > 0)));
-  const skipped = name.startsWith('x') || skipMethods.has(method) || skipOption;
-  return {title, callback, skipped, suite: name === 'describe' || name === 'xdescribe', localName};
+  const skipped = name.startsWith('x') || skipMethods.has(property) || skipOption;
+  return {title, callback, skipped, suite: name === 'describe' || name === 'xdescribe', nodeRunner, optional};
 }
 
 function onlyExpression(callback) {
-  if (!['ArrowFunctionExpression', 'FunctionExpression'].includes(callback?.type) ||
-      callback.async || callback.generator || callback.params.length) return;
-  const {body} = callback;
-  if (body.type !== 'BlockStatement') return body;
-  if (body.body.length === 1 && body.body[0].type === 'ExpressionStatement') return body.body[0].expression;
+  if (!callback?.isFunctionExpression() && !callback?.isArrowFunctionExpression()) return;
+  if (callback.node.async || callback.node.generator || callback.node.params.length) return;
+  const body = callback.get('body');
+  if (!body.isBlockStatement()) return body;
+  const statements = body.get('body');
+  if (statements.length === 1 && statements[0].isExpressionStatement()) return statements[0].get('expression');
 }
 
 function literal(node) {
@@ -502,21 +529,23 @@ function literal(node) {
 }
 
 // Declaração de caso de borda como uma asserção direta de node:test sobre uma importação local.
-function declaredValidator(test, runnerBindings, assertBindings, importedFunctions) {
-  if (!test.title.startsWith(validatorPrefix) || !runnerBindings.has(test.localName)) return;
-  const assertion = onlyExpression(test.callback);
-  if (assertion?.type !== 'CallExpression') return;
-  const {callee, arguments: args} = assertion;
-  if (callee.type !== 'MemberExpression' || callee.computed || !assertBindings.has(callee.object.name)) return;
-  const method = callee.property.name;
+function declaredValidator(registration, test, file) {
+  if (!test.title.startsWith(validatorPrefix) || !test.nodeRunner || test.optional ||
+      !registration.parentPath.isExpressionStatement() || !registration.parentPath.parentPath.isProgram()) return;
+  const assertion = onlyExpression(registration.get('arguments').find(arg => arg.node === test.callback));
+  if (!assertion?.isCallExpression()) return;
+  const accepted = proofAssertion(callTarget(assertion));
+  if (!accepted || accepted.optional) return;
+  const args = assertion.get('arguments');
+  const {method} = accepted;
   const call = method === 'throws' && args.length === 1 ? onlyExpression(args[0])
-    : ['equal', 'strictEqual'].includes(method) && args.length === 2 && literal(args[1]) ? args[0] : undefined;
-  if (call?.type !== 'CallExpression' || call.callee.type !== 'Identifier' || !call.arguments.every(literal)) return;
-  return importedFunctions.get(call.callee.name);
+    : ['equal', 'strictEqual'].includes(method) && args.length === 2 && literal(args[1].node) ? args[0] : undefined;
+  const imported = importedCall(call, file);
+  if (imported && !imported.optional && call.node.arguments.every(literal)) return imported;
 }
 
 /** Levanta candidatos estáticos sem confundir opções do teste com seu callback. */
-export function analyzeTestFile(relFile, content, parse) {
+export function analyzeTestFile(relFile, content, {parse, traverse}) {
   const ast = parseFile(relFile, content, parse);
   const skippedTests = [];
   const assertionFreeTests = [];
@@ -524,39 +553,7 @@ export function analyzeTestFile(relFile, content, parse) {
   const activeTests = [];
   const validators = [];
   let validatorDeclarations = 0;
-  const importedFunctions = new Map();
-  const importedNamespaces = new Map();
-  const aliases = new Map();
-  const runnerBindings = new Set();
-  const assertBindings = new Set();
-  const assertFunctions = new Set();
-  const playwrightBindings = new Set();
-  const topLevelCalls = new Set(ast.program.body.map(node => node.expression));
-
-  for (const declaration of ast.program.body) {
-    if (declaration.type !== 'ImportDeclaration' || declaration.importKind === 'type') continue;
-    const path = declaration.source.value;
-    for (const spec of declaration.specifiers) {
-      if (spec.importKind === 'type') continue;
-      const local = spec.local.name;
-      const name = spec.imported?.name ?? spec.imported?.value;
-      if (path === 'node:test' && (name ? ['test', 'it', 'describe'].includes(name) : spec.type === 'ImportDefaultSpecifier')) {
-        runnerBindings.add(local);
-        aliases.set(local, name ?? 'test');
-      }
-      if (assertionModules.has(path) && (!name || name === 'strict' || name === 'default')) {
-        assertBindings.add(local);
-      }
-      if (assertionModules.has(path) && (assertionMethods.has(name) || assertBindings.has(local))) assertFunctions.add(local);
-      if (path === '@playwright/test' && name === 'test') {
-        playwrightBindings.add(local);
-        aliases.set(local, 'test');
-      }
-      const source = localImportSource(relFile, path);
-      if (source && name) importedFunctions.set(local, {source, name});
-      if (source && spec.type === 'ImportNamespaceSpecifier') importedNamespaces.set(local, source);
-    }
-  }
+  const byCallback = new Map();
 
   function record(test, node, kind) {
     const line = node.loc.start.line;
@@ -564,58 +561,61 @@ export function analyzeTestFile(relFile, content, parse) {
     skippedTests.push({title: test.title, kind, file: relFile, line, snippet});
   }
 
-  function analyze(node, suppressed) {
-    const test = testCall(node, aliases);
-    if (!test) return;
-    const {title, callback, skipped, suite} = test;
-    if (!suite && title.startsWith(validatorPrefix)) validatorDeclarations++;
-    if (skipped) record(test, node, 'skip/todo explícito');
-    if (suite || skipped || suppressed) {
-      if (callback) visitAst(callback.body, child => analyze(child, skipped || suppressed));
-      return false;
-    }
+  traverse(ast, {
+    'CallExpression|OptionalCallExpression'(path) {
+      const {node} = path;
+      const owner = path.findParent(parent => byCallback.has(parent.node));
+      const enclosing = byCallback.get(owner?.node);
+      const target = callTarget(path);
+      const test = testCall(path, target);
+      if (test) {
+        const {title, callback, skipped, suite} = test;
+        if (!suite && title.startsWith(validatorPrefix)) validatorDeclarations++;
+        if (skipped) record(test, node, 'skip/todo explícito');
+        const suppressed = skipped || enclosing?.suppressed;
+        const {line, column} = node.loc.start;
+        const item = {title, file: relFile, line, column: column + 1};
+        const requirements = [...title.matchAll(/\bREQ-\d+\b/g)].map(match => match[0]);
+        const candidate = {...item, hasAssertion: false, conditionalSkip: false, features: [], limitedFeatures: [],
+          variableArity: false, requirements};
+        if (callback) byCallback.set(callback, {test, candidate, suppressed});
+        if (suite || suppressed) return;
+        activeTests.push(candidate);
+        const validator = declaredValidator(path, test, relFile);
+        if (validator) validators.push({...item, validator});
+        return;
+      }
+      if (!enclosing || enclosing.suppressed || enclosing.test.suite) return;
 
-    const {line, column} = node.loc.start;
-    const item = {title, file: relFile, line, column: column + 1};
-    const calls = [];
-    let hasAssertion = false;
-    let conditionalSkip = false;
-    if (callback) visitAst(callback.body, child => {
-      if (testCall(child, aliases)) return analyze(child, false);
-      if (!['CallExpression', 'OptionalCallExpression'].includes(child.type)) return;
-      const call = child.callee;
-      const context = callback.params[0]?.name;
-      const receiver = call.object?.name;
-      const playwrightSkip = (playwrightBindings.has(receiver) || (receiver === 'test' && !runnerBindings.has(receiver))) &&
-        (member(call, receiver, 'skip') || member(call, receiver, 'fixme')) &&
-        !(child.arguments[0]?.type === 'BooleanLiteral' && !child.arguments[0].value);
-      if (playwrightSkip || (context && (member(call, context, 'skip') || member(call, context, 'todo')))) {
-        conditionalSkip = true;
-        record(test, child, 'skip/todo no callback');
+      const {candidate} = enclosing;
+      const {local, receiver, property, binding} = target;
+      const context = owner.node.params[0]?.name;
+      const firstArg = node.arguments[0];
+      const playwrightSkip = (binding?.module === '@playwright/test' || (receiver === 'test' && !path.scope.getBinding(receiver))) &&
+        ['skip', 'fixme'].includes(property) && !(firstArg?.type === 'BooleanLiteral' && !firstArg.value);
+      if (playwrightSkip || (context && receiver === context && ['skip', 'todo'].includes(property))) {
+        candidate.conditionalSkip = true;
+        record(candidate, node, 'skip/todo no callback');
       }
-      if (assertFunctions.has(call.name) || call.name === 'assert' || call.name === 'expect' ||
-          (call.type === 'MemberExpression' && (assertBindings.has(call.object.name) || call.object.name === 'assert' ||
-            member(call, 'fc', 'assert')))) hasAssertion = true;
-      const imported = importedFunctions.get(call.name);
-      if (imported) calls.push(imported);
-      if (call.type === 'MemberExpression' && importedNamespaces.has(receiver)) {
-        const name = call.computed ? staticString(call.property) : call.property.name;
-        if (name) calls.push({source: importedNamespaces.get(receiver), name});
+      const accepted = proofAssertion(target);
+      const otherAssertion = (local === 'assert' || (!receiver && local === 'expect') || (receiver === 'fc' && property === 'assert')) &&
+        (!path.scope.getBinding(local) || (binding && !assertionModules.has(binding.module)));
+      if (accepted || otherAssertion) candidate.hasAssertion = true;
+      if (accepted) {
+        const {features, limited, variableArity} = assertionFeatures(path, relFile, accepted);
+        const direct = enclosing.test.nodeRunner && !enclosing.test.optional && path.getFunctionParent() === owner;
+        candidate.variableArity ||= variableArity;
+        candidate.limitedFeatures.push(...limited, ...(direct ? [] : features));
+        if (direct) candidate.features.push(...features);
       }
-      if (member(call, 'Math', 'random') || call.name === 'waitForTimeout' || call.property?.name === 'waitForTimeout') {
-        flakyPatterns.push({...item, line: child.loc.start.line, snippet: content.slice(child.start, child.end)});
+      if ((receiver === 'Math' && property === 'random') || local === 'waitForTimeout' || property === 'waitForTimeout') {
+        flakyPatterns.push({title: candidate.title, file: relFile, line: node.loc.start.line, snippet: content.slice(node.start, node.end)});
       }
-    });
-
-    if (!hasAssertion) assertionFreeTests.push({...item, snippet: title});
-    const requirements = [...title.matchAll(/\bREQ-\d+\b/g)].map(match => match[0]);
-    activeTests.push({...item, hasAssertion, conditionalSkip, calls, requirements});
-    const validator = topLevelCalls.has(node) && declaredValidator(test, runnerBindings, assertBindings, importedFunctions);
-    if (validator) validators.push({...item, validator});
-    return false;
+    },
+  });
+  for (const {title, file, line, column, hasAssertion} of activeTests) {
+    if (!hasAssertion) assertionFreeTests.push({title, file, line, column, snippet: title});
   }
-
-  visitAst(ast.program, node => analyze(node, false));
   return {activeTests, skippedTests, assertionFreeTests, flakyPatterns, validators, validatorDeclarations};
 }
 
@@ -635,28 +635,59 @@ function indexRuntimeTests(tests = []) {
 const everyPass = (values, accepts) => values?.length === 3 && values.every(accepts);
 const observedAssertions = test => everyPass(test?.assertionStatuses, status => status === 'executed');
 
-function referencesFunction(calls, file, fn) {
-  return calls.some(call => call.name === fn.name &&
-    (call.source === file || call.source === file.slice(0, -extname(file).length)));
+const identifier = /^[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*$/u;
+const codeSpan = /^`([^`]+)`(?!`)/;
+const fileQualifier = /^\s+(?:de|from)\s+(?=`)/;
+const referenceSeparator = /^(?:\s*,\s*(?:(?:e|and)\s+)?|\s+(?:e|and)\s+)(?=`)/;
+
+function requirementReferences(body) {
+  let rest = body.trim();
+  const references = [];
+  // A leading list binds each optional path to the immediately preceding symbol.
+  for (;;) {
+    const symbol = codeSpan.exec(rest);
+    if (!symbol || !identifier.test(symbol[1])) {
+      if (references.length) references.push({name: symbol?.[1] ?? rest, invalid: true});
+      break;
+    }
+    rest = rest.slice(symbol[0].length);
+    const ref = {name: symbol[1]};
+    const qualifier = fileQualifier.exec(rest);
+    if (qualifier) {
+      rest = rest.slice(qualifier[0].length);
+      const file = codeSpan.exec(rest);
+      ref.source = file?.[1].replace(/^\.\//, '') ?? rest;
+      ref.invalid = !file || ref.source.includes('\\') ||
+        ref.source.split('/').some(part => !part || part === '.' || part === '..');
+      rest = file ? rest.slice(file[0].length) : '';
+    }
+    references.push(ref);
+    const separator = referenceSeparator.exec(rest);
+    if (!separator) break;
+    rest = rest.slice(separator[0].length);
+  }
+  if (references.length) return references;
+  // Existing requirements also use prose followed by a single parenthesized symbol.
+  const legacy = /\(\s*`([^`]+)`\s*\)\s*[.!?]?\s*$/.exec(body);
+  return legacy && identifier.test(legacy[1]) ? [{name: legacy[1]}] : [];
 }
 
-export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests, incomplete}) {
+export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests, incomplete, executionPartial}) {
   const tool = 'qa-matriz-estatica';
   const version = internal;
   const rows = [];
   const findings = [];
   const tests = testAnalyses.flatMap(t => t.activeTests);
-  const linked = (file, fn) => tests.filter(t => t.hasAssertion && referencesFunction(t.calls, file, fn));
   const runtimeOf = indexRuntimeTests(runtimeTests);
-  const providesEvidence = t => {
-    if (!runtimeTests) return t.hasAssertion && !t.conditionalSkip;
+  const providesEvidence = (t, feature) => {
     const result = runtimeOf(t);
-    return everyPass(result?.statuses, status => status === 'passed') && observedAssertions(result);
+    return everyPass(result?.statuses, status => status === 'passed') && observedAssertions(result) &&
+      (!feature || everyPass(result.featurePasses, pass => pass.includes(feature.identity)));
   };
   const describe = matches => matches.map(t => {
     const result = runtimeOf(t);
     let detail = t.conditionalSkip ? 'skip/todo possível'
-      : t.hasAssertion ? 'execução sem vínculo confirmado' : 'asserção estática não identificada';
+      : t.hasAssertion ? 'asserção candidata; execução não medida' : 'asserção estática não identificada';
     if (result) {
       const assertions = observedAssertions(result) ? 'asserção executada nas três passadas'
         : result.assertionStatuses?.includes('unsupported') ? 'cobertura limitada de asserções'
@@ -665,8 +696,10 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
     }
     return `${displayPath(t.file)}:${t.line} ${t.title} (${detail})`;
   }).join('; ') || 'sem teste vinculado';
-  const functions = sourceAnalyses.flatMap(src => src.functions.filter(fn => fn.isExported).map(fn => ({
-    file: src.file, name: fn.name, line: fn.startLine, matches: linked(src.file, fn),
+  const functions = sourceAnalyses.flatMap(src => src.functions.flatMap(fn => fn.exportNames.map(name => {
+    const identity = featureIdentity({source: src.file, name});
+    return {file: src.file, name, line: fn.startLine, identity,
+      matches: tests.filter(t => t.features.includes(identity)), limited: tests.filter(t => t.limitedFeatures.includes(identity))};
   })));
   for (const fn of functions) {
     rows.push(coverageRow(fileCoverageKey('qa-funcionalidade', fn.file, `:${fn.name}`), version, 'ok',
@@ -675,39 +708,54 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
   let requirements = 0;
   for (const reqFile of reqFiles) {
     for (const [idx, text] of readFileSync(join(workspace, reqFile), 'utf8').split(/\r?\n/).entries()) {
-      const id = /\bREQ-\d+\b/.exec(text)?.[0];
-      if (!id) continue;
+      const marker = /\bREQ-\d+\b/.exec(text);
+      if (!marker) continue;
       requirements++;
-      const spans = [...text.matchAll(/`([^`]+)`/g)].map(match => match[1]);
-      const qualifiedFiles = spans.filter(token => sourceAnalyses.some(src => src.file === token.replace(/^\.\//, '')));
-      const mentioned = spans.filter(token => functions.some(fn => fn.name === token));
-      const features = functions.filter(fn => mentioned.includes(fn.name) &&
-        (!qualifiedFiles.length || qualifiedFiles.some(path => path.replace(/^\.\//, '') === fn.file)));
-      const identifiers = features.map(fn => `${fn.name} (${displayPath(fn.file)}:${fn.line})`).join(', ');
-      const matches = [...new Set([...tests.filter(t => t.requirements.includes(id)), ...features.flatMap(fn => fn.matches)])];
+      const [id] = marker;
+      const body = text.slice(marker.index + id.length).replace(/^\s*:\s*/, '').trim();
+      const references = requirementReferences(body);
+      const targets = references.map(ref => ({ref, features: ref.invalid ? [] : functions.filter(fn =>
+        fn.name === ref.name && (ref.source === undefined || fn.file === ref.source))}));
+      const unresolved = targets.filter(target => !target.features.length);
+      const features = [...new Set(targets.flatMap(target => target.features))];
+      const identifiers = [...features.map(fn => `${fn.name} (${displayPath(fn.file)}:${fn.line})`),
+        ...unresolved.map(({ref}) => `${ref.name}${ref.source === undefined ? '' : ` (${displayPath(ref.source)})`} sem resolução`)].join(', ');
+      const titled = tests.filter(t => t.requirements.includes(id));
+      const matches = [...new Set([...features.flatMap(fn => fn.matches), ...titled])];
       const line = idx + 1;
-      const eligible = matches.filter(providesEvidence);
-      const proved = mentioned.length === 0 ? eligible.some(test => test.requirements.includes(id))
-        : mentioned.every(name => {
-          const candidates = features.filter(feature => feature.name === name);
-          return candidates.length > 0 && candidates.every(feature => eligible.some(test => {
-            if (!runtimeTests) return feature.matches.includes(test);
-            const identity = JSON.stringify([feature.file, feature.name]);
-            return everyPass(runtimeOf(test)?.featurePasses, pass => pass.includes(identity));
-          }));
-        });
-      const verification = runtimeTests ? (proved ? 'vínculo comprovado nas três passadas' : 'vínculo sem prova') : 'somente análise estática';
-      rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
-        `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${verification} → ${describe(matches)}`));
-      if (!proved && !incomplete) {
+      const gaps = (references.length ? features : [null]).map(feature => ({
+        feature, candidates: feature ? [...new Set([...feature.matches, ...titled])] : titled,
+      })).filter(({feature, candidates}) => !candidates.some(test => providesEvidence(test, feature)));
+      const proved = !unresolved.length && !gaps.length &&
+        (!incomplete || references.every(ref => ref.source !== undefined));
+      const limited = gaps.some(({feature, candidates}) => feature?.limited.length || candidates.some(test => {
+        if (feature && test.variableArity) return true;
+        const result = runtimeOf(test);
+        if (!everyPass(result?.statuses, status => status !== 'absent')) return true;
+        return result.statuses.includes('passed') && !everyPass(result.assertionStatuses, status => status !== 'unsupported');
+      }));
+      const unmeasured = incomplete || executionPartial || unresolved.length > 0 || !runtimeTests?.length || limited;
+      // Coverage records whether the matrix was measured. A measured gap is a finding.
+      const measuredGap = !proved && !unmeasured;
+      const status = proved || measuredGap ? 'ok' : 'skipped';
+      const verification = proved ? 'vínculo comprovado nas três passadas' : !unmeasured ? 'vínculo sem prova nas três passadas'
+        : unresolved.length ? 'prova não medida: referência não resolvida' : !runtimeTests?.length ? 'prova não medida: somente análise estática'
+          : 'prova não medida: cobertura limitada';
+      const context = body ? ` → contexto: ${body}` : '';
+      const detail = `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${verification} → ${describe([...new Set([...matches, ...features.flatMap(fn => fn.limited)])])}`;
+      rows.push(coverageRow(`qa-requisito:${id}`, version, status, detail + context));
+      const staticGap = !runtimeTests && !incomplete && !unresolved.length && gaps.some(({feature, candidates}) =>
+        !feature?.limited.length && !(feature && candidates.some(test => test.variableArity)) &&
+        !(feature?.matches ?? candidates).some(test => test.hasAssertion && !test.conditionalSkip));
+      if (measuredGap || staticGap) {
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
-          message: `Requisito ${id} sem ${runtimeTests ? 'teste vinculado aprovado com asserção executada nas três passadas' : 'vínculo estático com teste ativo que contenha asserção'}`,
-          evidence: `${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`});
+          message: `Requisito ${id} sem ${staticGap ? 'candidato estático ativo; execução não medida' : 'teste vinculado aprovado com asserção executada nas três passadas'}`,
+          evidence: detail + context});
       }
     }
   }
   return {
-    coverageRow: coverageRow(tool, version, 'ok', `análise estática de ${requirements} requisitos e ${functions.length} funções exportadas`),
+    coverageRow: coverageRow(tool, version, 'ok', `análise estática de ${requirements} requisitos e ${functions.length} identidades de funções exportadas`),
     extraRows: rows,
     findings,
   };
@@ -746,7 +794,7 @@ export function summarizeNodePasses(passes, sourceAnalyses, version) {
       const measurements = coverage.map(c => c?.functions.find(f => f.name === fn.name && f.line === fn.startLine));
       if (!measurements.every(f => f?.count === 0)) continue;
       findings.push({tool: suiteTool, rule: 'QA-COBERTURA-FUNCAO-SEM-TESTE', file: src.file, line: fn.startLine,
-        severity: 'alta', message: `Função exportada '${fn.name}' sem execução medida pelo V8`,
+        severity: 'alta', message: `Função exportada '${fn.exportNames.join(', ')}' sem execução medida pelo V8`,
         evidence: 'contagem V8 da função nas passadas 1, 2 e 3: 0, 0, 0'});
     }
   }
@@ -836,7 +884,7 @@ export function measureValidatorCases({sourceAnalyses, testAnalyses, runtimeTest
   for (const candidate of testAnalyses.flatMap(t => t.validators)) {
     const {validator, file, line, title} = candidate;
     if (!sourceAnalyses.some(src => src.file === validator.source &&
-      src.functions.some(fn => fn.isExported && fn.pure && fn.name === validator.name))) continue;
+      src.functions.some(fn => fn.pure && fn.exportNames.includes(validator.name)))) continue;
     pureCases++;
     const result = runtimeOf(candidate);
     const statuses = result?.statuses;
@@ -1154,7 +1202,7 @@ export async function collectQaModule(options = {}) {
         }
         for (const file of testFiles) {
           try {
-            testAnalyses.push(analyzeTestFile(file, readFileSync(join(workspace, file), 'utf8'), syntax.parse));
+            testAnalyses.push(analyzeTestFile(file, readFileSync(join(workspace, file), 'utf8'), syntax));
           } catch {
             omittedTestFiles++;
           }
@@ -1227,7 +1275,7 @@ export async function collectQaModule(options = {}) {
         name: 'qa-matriz-estatica',
         partial: matrixPartial,
         run: () => buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles,
-          runtimeTests: runtime.tests, incomplete: matrixPartial}),
+          runtimeTests: runtime.tests, incomplete: matrixPartial, executionPartial: context.files?.length < testFiles.length}),
       },
       {
         name: 'qa-propriedades-funcionais',
@@ -1254,6 +1302,14 @@ export async function collectQaModule(options = {}) {
         partial: sourcePartial,
         run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete: sourcePartial, failTool}),
       },
+      ...Object.entries(languageSuites).map(([language, {tool, version}]) => ({
+        name: tool,
+        version,
+        run: () => {
+          if (failTool === tool) throw new Error('QA_LANGUAGE_TEST_FORCED_FAILURE');
+          return collectLanguageSuite(language, context, copiedFiles, incomplete);
+        },
+      })),
     ];
 
     for (const runner of toolRunners) {

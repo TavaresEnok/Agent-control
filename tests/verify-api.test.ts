@@ -54,7 +54,10 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
  const reopened: Achado = {...fixed, id: 'ACH-003', status: 'reaberto'};
  const fourth: Achado = {...likely, id: 'ACH-004'};
  const findings = [fixed, likely, reopened, fourth];
- const toolCoverage = [{tool: 'fixture', version: '1', status: 'ok' as const, detail: 'Medição sintética.'}];
+ const toolCoverage = [
+  {tool: 'fixture', version: '1', status: 'ok' as const, detail: 'Medição sintética.'},
+  {tool: 'fixture-nome', version: '1', status: 'ok' as const, detail: 'Arquivo notes.txt citado sem diretório.'},
+ ];
  const fileCoverage = [{file, examinerProvider: 'ferramenta', examinerModel: 'fixture', profileId: null, checklist: ['FIXTURE']}];
 
  async function publish(project: string, module: VerificationModule, achados: Achado[] = []) {
@@ -102,13 +105,15 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   }
 
   // Simula campos históricos sensíveis no relatório lido, sem credenciais reais.
-  const protectedFile = 'fixtures/.env';
+  const protectedFile = 'data/notes.txt';
   const protectedMarker = 'conteudo-protegido-sintetico';
   const preview = 'previa-protegida-sintetica';
   const fakePassword = 'valor-sintetico-para-redigir';
   const onlyInCoverage = 'data/.env.historico';
   await ledger.pool.query(`INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,checklist)
     VALUES($1,$2,'fixture','fixture',$3::jsonb)`, [selected.id, onlyInCoverage, JSON.stringify(['marcador-privado-da-cobertura'])]);
+  await ledger.pool.query(`INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,checklist)
+    VALUES($1,'docs/publico.md','fixture','fixture',$2::jsonb)`, [selected.id, JSON.stringify(['revisar notes.txt'])]);
   const coverageFile = join(selected.directory, 'cobertura.md');
   await writeFile(coverageFile, (await readFile(coverageFile, 'utf8')) + `\npassword=${fakePassword}\n| ${protectedFile} | ${protectedMarker} |\n`);
   await writeFile(join(selected.directory, 'achados.json'), JSON.stringify({achados: [
@@ -163,6 +168,7 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   }
   const parsed = JSON.parse(body);
   assert.match(parsed.cobertura, /Medição sintética\./);
+  assert.doesNotMatch(parsed.cobertura, /notes\.txt|fixture-nome|docs\/publico\.md/);
   assert.match(parsed.cobertura, /Registro de arquivo protegido omitido/);
   assert.equal(parsed.achados[0].proof, `${fixed.proof} [redigido]`);
   assert.equal(parsed.achados[3].proof, 'Conteúdo protegido. Consulte a localização indicada.');

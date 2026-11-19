@@ -225,3 +225,29 @@ it.each(['seguranca', ''])('abre um relatório de segurança com o filtro %s', a
   expect(await screen.findByText('Nenhum achado.')).toBeTruthy()
   expect(fetcher.mock.calls.some(([url]) => String(url).startsWith(FUNCTIONAL))).toBe(false)
 })
+
+it('mantém a operação da instalação e descarta a resposta funcional tardia do projeto anterior', async () => {
+  let reads = 0
+  let older!: (response: Response) => void
+  let started!: (response: Response) => void
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === FUNCTIONAL) {
+      if (++reads === 1) return new Promise<Response>(resolve => { older = resolve })
+      return json({ verificacoes: [] })
+    }
+    if (init?.method === 'POST') return new Promise<Response>(resolve => { started = resolve })
+    return json({ verificacoes: [] })
+  })
+  renderAt(`/p/${PROJECT}/verificacoes`, `/p/${OTHER_RUN}/verificacoes`)
+  fireEvent.click(await screen.findByRole('button', { name: 'Nova verificação' }))
+  fireEvent.click(screen.getByRole('link', { name: 'Trocar de projeto' }))
+  expect(screen.getByRole('button', { name: 'Nova verificação' })).toHaveProperty('disabled', true)
+  await act(async () => {
+    older(json({ verificacoes: [{ id: RUN, module: 'qa', createdAt: summary.createdAt, counts: summary.counts, toolFailures: 0 }] }))
+    started(json({ id: RUN, phase: 'confirmacao', status: 'running' }, 202))
+  })
+  expect(reads).toBe(2)
+  expect(screen.queryByRole('link', { name: /QA/ })).toBeNull()
+  expect(screen.getByText('Fase: confirmação. Status: running')).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Nova verificação' })).toHaveProperty('disabled', true)
+})

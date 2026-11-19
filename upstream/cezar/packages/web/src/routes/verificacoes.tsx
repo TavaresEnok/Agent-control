@@ -205,7 +205,7 @@ function FunctionalReportDetail({ module, runId }: { module: string; runId: stri
   )
 }
 
-function VerificacoesLista() {
+function VerificacoesLista({ projectId }: { projectId?: string }) {
   const [items, setItems] = useState<Summary[] | null>(null)
   const [error, setError] = useState('')
   const [startError, setStartError] = useState('')
@@ -303,7 +303,7 @@ function VerificacoesLista() {
           </li>
         ))}
       </ul>
-      <FunctionalReports />
+      <FunctionalReports key={projectId} />
     </div>
   )
 }
@@ -366,5 +366,5 @@ export function VerificacoesRoute() {
   const [search] = useSearchParams()
   const module = search.get('modulo')
   if (runId && module && Object.hasOwn(moduleLabels, module)) return <FunctionalReportDetail key={`${projectId}/${module}/${runId}`} module={module} runId={runId} />
-  return runId ? <VerificacaoDetalhe key={`${projectId}/${runId}`} runId={runId} /> : <VerificacoesLista key={projectId} />
+  return runId ? <VerificacaoDetalhe key={`${projectId}/${runId}`} runId={runId} /> : <VerificacoesLista projectId={projectId} />
 }

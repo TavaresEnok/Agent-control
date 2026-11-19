@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {lstat, realpath} from 'node:fs/promises';
-import {join} from 'node:path';
+import {basename, join} from 'node:path';
 import {Hono} from 'hono';
 import {z} from 'zod';
 import {Authority, Id, Refusal} from './contracts.ts';
@@ -195,8 +195,13 @@ async function functionalCoverage(ledger: Ledger, runId: string, report: Awaited
        profile_id AS "profileId", checklist FROM ac_verify_coverage WHERE run_id=$1 ORDER BY file`, [runId]);
   const rows = CoverageRow.array().parse(result.rows);
   for (const row of rows) if (isSecretClassBasename(row.file)) protectedFiles.add(row.file);
+  const protectedNames = [...new Set(Array.from(protectedFiles, file => basename(file)))];
+  const references = protectedNames.filter(Boolean).map(name => {
+    const literal = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\p{L}\\p{N}_-])${literal}(?![\\p{L}\\p{N}_-])`, 'u');
+  });
   function mentionsProtected(text: string): boolean {
-    return [...protectedFiles].some(file => text.includes(file)) ||
+    return references.some(pattern => pattern.test(text)) ||
       (text.match(/[\p{L}\p{N}._@/+-]+/gu) ?? []).some(isSecretClassBasename);
   }
   const files = rows.filter(row => ![row.file, row.examinerProvider, row.examinerModel, ...row.checklist].some(mentionsProtected));
