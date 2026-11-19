@@ -401,3 +401,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:55 UTC — Trabalhador encerrou C6-R9 em 2cafe62b (código 0). Gerente confere a entrega.
 - 19/11/2026 04:55 UTC — Trabalho C9-R5 iniciado por Sol high normal em final-c9.
 - 19/11/2026 04:55 UTC — Comparados os dez arquivos de licença e esquemas CycloneDX com o commit oficial 4b3f59453366e27c8073fd24e98bf21ef8892c8e: dez SHA-256 iguais. A CLI de banco R6 e os controles passivos de prontidão passaram em 9/9. Sol fará C-EXAME-R5 sobre a identidade de testes e rotas após a ordem de medições. Em documentação, o parser POSIX real já passou nos casos de continuação, comentário e redirecionamento.
+- 19/11/2026 04:56 UTC — Documentação R7 em c1d36024 passou em 21 testes, com TypeDoc, dependency-cruiser e Mermaid reais. A imagem fixa o parser POSIX sh-syntax 0.8.7 e inclui controles de HTML em rótulos Mermaid e função seta default. Prontidão R9 2cafe62b recebida para laboratório.
