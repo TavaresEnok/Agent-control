@@ -14,3 +14,5 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 — Backup do produto concluído antes da aplicação, saída 0, 548 MiB em /home/app/backups-agent-control/ispagent-antes-final-a-20261119-001813. Gateway em serviço.
 - 19/11/2026 — Os cinco arquivos adicionais da rodada 12 passaram: 49 testes, zero falhas ou pulos, 84,3 s no PostgreSQL sintético.
 - 19/11/2026 — C3 entregue para prova em cac62f7c. Imagem de arquitetura construída (0ac155173ad0), disco 85%. Laboratório encontrou os defeitos e aceitou o controle limpo. Falhou o cenário com fixture privada, cuja raiz ilegível foi tratada como vazia pelo coletor. Correção na ordem C3-R2. C6 em desenvolvimento.
+- 19/11/2026 — Laboratório de design da rodada 12 passou com a imagem real, 1/1, 416,8 s. A repetição da suíte encontrou falha em completed-node-recovery durante execução concorrente; a validação final será sequencial.
+- 19/11/2026 — C4 recebido em 6e17dbcf. Imagem construída (1cef3a62805c), disco 85%. O laboratório real reproduziu a falha do npm-check-updates com extensão de configuração desconhecida; ordem C4-R2 preparada.
