@@ -904,3 +904,5 @@ PAUSADO-COTA
 - 19/11/2026 18:47 UTC — C8-ORIGEM-COMENTARIO-EFETIVO encerrado com código 0.
 - 19/11/2026 18:48 UTC — QA passou nos testes de imagem e CLI com a matriz sem texto citado, diagnóstico operacional do Go e tabelas herdadas. Digest fixado no ramo de entrega.
 - 19/11/2026 18:48 UTC — O controle de aspas aninhadas dec242d9 entrou no candidato 4470ef01. O digest anterior do worktree foi preservado no ramo task/preservacao-digest-c2-r6. Revisão, imagem e provas do mesmo candidato em andamento.
+- 19/11/2026 18:48 UTC — revisor-C2-ACEITE-ASPAS iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:48 UTC — Recuperação A3 em 0734673c recebeu aceite estático dos quatro critérios após nove testes dirigidos. A nova origem de comentários TypeDoc 23b10b2e foi integrada em de70e99c para prova física e revisão das três regressões.
