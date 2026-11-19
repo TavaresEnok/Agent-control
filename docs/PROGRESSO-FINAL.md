@@ -230,3 +230,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:17 UTC — Trabalhador encerrou C-REVERIFICAR em 7c27cb7b (código 0). Gerente confere a entrega.
 - 19/11/2026 03:17 UTC — Trabalho C7-R5 iniciado por Sol high normal em final-c7.
 - 19/11/2026 03:18 UTC — Revisão c8fe44e5 solicitou vincular a hipótese e o trecho na confirmação, retirar a confirmação por substring, tratar limites do provedor e exigir atestado da rota. C-EXAME-R3 aberta com dados sintéticos. A CLI de reverificação de 7c27cb7b entrou em 86799c06 preservando a comparação com o documento privado de origem.
+- 19/11/2026 03:19 UTC — A imagem C4-R5 por digest passou nos 26 testes de ferramenta e laboratório, incluindo seleção por workspace, direção de mudança de versão, SBOM e aplicação de codemod em cópia. Iniciada a prova da CLI em b16408a1.
