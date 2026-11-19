@@ -1050,3 +1050,6 @@ PAUSADO-COTA
 - 19/11/2026 20:34 UTC — C-ACEITE-RECUSA-R2 encerrado com código 0.
 - 19/11/2026 20:35 UTC — O revisor de a69311d7 pediu controles que distingam os vínculos de grant, job e intenção e comprovem a preservação do checkpoint. Distribuída a nova ordem a Gemini 4 Argon High, em worktree próprio.
 - 19/11/2026 20:38 UTC — COTA — Gemini 4 Argon High devolveu RESOURCE_EXHAUSTED 429 na primeira ordem, sem commit. A mensagem indica reposição em cerca de 147 horas. Aplicada a alternativa expressa de 00284b4d: a ordem de fechamento volta para Sol high, sem pausa do Codex.
+- 19/11/2026 20:38 UTC — trabalho-C-FECHAMENTO-RECUSA-R3-SOL iniciado em final-argon-recusa por Sol high normal.
+- 19/11/2026 20:41 UTC — C-FECHAMENTO-RECUSA-R3-SOL encerrado com código 0.
+- 19/11/2026 20:41 UTC — O Sol entregou c67a4f46. Iniciados o exame estático independente e a prova do checkout em PostgreSQL, com comparação dos insumos da suíte e do laboratório já executados.
