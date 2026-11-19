@@ -26,6 +26,23 @@
       "sha256": "34b02417cf070e173989b3db962f7ed56d2f644307b2cf9d5a0f258e13084a61"
     }
   },
+  "languageMeasurements": {
+    "python": {
+      "requirementsSha256": "6413c0ff09119354d2666e766a3f552a00d4576f5d83f8ecd316a6ee6f307a51",
+      "versions": {
+        "mutmut": "3.5.0",
+        "pytest": "8.4.2",
+        "hypothesis": "6.140.2",
+        "libcst": "1.9.0"
+      }
+    },
+    "go": {
+      "module": "github.com/avito-tech/go-mutesting",
+      "version": "v0.0.0-20261002081621-9ce5f731e321",
+      "modSha256": "b68cf4cb9fb5438dc243f014d86d47edfc105ad15a9f821b94792234ddd0c0aa",
+      "sumSha256": "04084e195f9730fd576ba0d0db5d64e2c8bc3bea728265745abc9c4041d9ed9e"
+    }
+  },
   "dependencies": {
     "@stryker-mutator/instrumenter": {
       "version": "10.1.1",

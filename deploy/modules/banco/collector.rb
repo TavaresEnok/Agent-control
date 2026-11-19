@@ -22,6 +22,7 @@ module Banco
   MAX_QUERY_ISSUES = 40
   SAMPLES = 3
   SLOW_MS = 100
+  SIMPLE_SELECT = {limit_option: :LIMIT_OPTION_DEFAULT, op: :SETOP_NONE}.freeze
   MIGRATION_NAME = /\A\d+_[a-zA-Z0-9_.-]+\.sql\z/
   QUERY_NAME = /\A[a-zA-Z0-9_][a-zA-Z0-9_.-]*\.sql\z/
   SEED = "banco/seed.sql"
@@ -198,6 +199,11 @@ module Banco
     token ? source.sql.byteslice(0, token.start).count("\n") + 1 : source.line
   end
 
+  def self.literal_select?(select)
+    select && select == PgQuery::SelectStmt.new(**SIMPLE_SELECT,
+      target_list: select.target_list.to_a) && select.target_list.all? { |node| node.res_target&.val&.a_const }
+  end
+
   def self.lint(migrations, report, executable: "/usr/local/bin/squawk")
     report.measure("squawk", "Versão do executável") do
       output, _, status = Open3.capture3("timeout", "15s", executable, "--version", chdir: "/tmp")
@@ -240,9 +246,9 @@ module Banco
   # Comandos fora deste subconjunto invalidam a prova para o lote inteiro.
   class DeclarativeWriters
     PLAIN_TYPES = %w[int2 int4 int8 bool text uuid].freeze
+    UNQUALIFIED_TYPES = %w[text uuid].freeze
     SIMPLE_CONSTRAINTS = %i[CONSTR_NULL CONSTR_NOTNULL CONSTR_PRIMARY CONSTR_UNIQUE
       CONSTR_ATTR_DEFERRABLE CONSTR_ATTR_NOT_DEFERRABLE CONSTR_ATTR_DEFERRED CONSTR_ATTR_IMMEDIATE].freeze
-    SIMPLE_SELECT = {limit_option: :LIMIT_OPTION_DEFAULT, op: :SETOP_NONE}.freeze
 
     def initialize
       @tables = {}
@@ -281,8 +287,7 @@ module Banco
         writers << source unless writers.last.equal?(source)
         true
       elsif (select = statement.select_stmt)
-        select == PgQuery::SelectStmt.new(**SIMPLE_SELECT, target_list: select.target_list.to_a) &&
-          select.target_list.all? { |node| node.res_target&.val&.a_const }
+        Banco.literal_select?(select)
       else
         statement.constraints_set_stmt || timeout_setting?(statement.variable_set_stmt)
       end
@@ -307,11 +312,20 @@ module Banco
     def plain_column?(column, table)
       type = column.type_name
       names = type&.names&.map { |node| node.string&.sval }
-      names && names.size == 2 && names.first == "pg_catalog" && PLAIN_TYPES.include?(names.last) &&
+      builtin_type?(names) &&
         type.array_bounds.empty? && type.typmods.empty? && !type.pct_type && !type.setof &&
         column == PgQuery::ColumnDef.new(colname: column.colname, type_name: type, is_local: true,
           constraints: column.constraints.to_a, location: column.location) &&
         column.constraints.all? { |node| plain_constraint?(node.constraint, table) }
+    end
+
+    def builtin_type?(names)
+      return false unless names
+
+      # A conexão começa com search_path=public e pg_catalog implícito. A prova
+      # exclui tabelas temporárias, mudanças do caminho e DDL de tipos.
+      (names.size == 1 && UNQUALIFIED_TYPES.include?(names.first)) ||
+        (names.size == 2 && names.first == "pg_catalog" && PLAIN_TYPES.include?(names.last))
     end
 
     def plain_constraint?(constraint, table)
@@ -416,14 +430,14 @@ module Banco
             sources.take(index).each do |prior|
               @report.cover("pg-migrate", "skipped", "pg-migrate:#{name}:#{prior.path}: transação não confirmada (#{evidence})")
             end
-            detection = deferred_check_detection(error, source, statements) if rejected && error.is_a?(PG::Error)
+            detection, line = migration_error_location(error, source, statements) if rejected && error.is_a?(PG::Error)
             outcome = "execução interrompida (#{evidence})"
             if detection
               origin = report_batch_rejection(name, sources.take(index + 1), error, detection, writers.origin(error))
               outcome = "lote rejeitado (#{evidence}); #{detection}; #{origin}"
             elsif rejected
               @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", source, "alta",
-                "A migração foi rejeitada no cenário #{name}.", evidence, line: migration_error_line(error, source, statements))
+                "A migração foi rejeitada no cenário #{name}.", evidence, line: line || Banco.error_line(error, source))
               outcome = "rejeitada (#{evidence})"
             end
             @report.cover("pg-migrate", rejected ? "ok" : "failed", "pg-migrate:#{name}:#{source.path}: #{outcome}; transação não confirmada")
@@ -556,64 +570,129 @@ module Banco
       error.result&.error_field(PG::Result::PG_DIAG_SQLSTATE)
     end
 
-    def inline_constraint_command(context)
-      # O comando pode ocupar várias linhas. Um segundo frame indica uma chamada indireta.
-      match = context&.match(/\ASQL statement "(.*?)"\nPL\/pgSQL function inline_code_block line \d+ at SQL statement\z/m)
-      return unless match && !match[1].match?(/^(?:PL\/pgSQL function|SQL function|SQL statement) /)
+    INLINE_FRAME = %r{\APL/pgSQL function inline_code_block line \d+ at (?:SQL statement|EXECUTE)\z}
+    ROUTINE_FRAME = %r{\A(?:PL/pgSQL function (?:[^"\n]++|"(?:[^"]++|"")*+")++|SQL function "[^"\n]+"(?: statement \d+| during startup)?)(?=\n|\z)}
+    QUERY_FRAME = %r{\A(?:SQL statement|SQL expression|PL/pgSQL assignment) "}
+    POSSIBLE_CONSTRAINT_CHECK = "detecção durante a execução do arquivo; SET CONSTRAINTS IMMEDIATE pode ter antecipado a checagem de alterações anteriores"
 
-      statements = PgQuery.parse(match[1]).tree.stmts
-      statements.first.stmt.constraints_set_stmt if statements.one?
+    def context_frames(context)
+      frames = []
+      while context && !context.empty?
+        if (label = context[QUERY_FRAME])
+          payload = context.delete_prefix(label)
+          ending = context_query_end(payload)
+          return frames << :unknown unless ending
+
+          frames << (label == 'SQL statement "' ? parsed_context_query(payload[0...ending]) : :other)
+          context = payload[(ending + 1)..].delete_prefix("\n")
+        elsif (frame = context[ROUTINE_FRAME])
+          frames << if INLINE_FRAME.match?(frame)
+            :inline_sql
+          elsif frame.start_with?("PL/pgSQL function inline_code_block line ")
+            :inline
+          else
+            :other
+          end
+          context = context[frame.length..].delete_prefix("\n")
+        else
+          return frames << :unknown
+        end
+      end
+      frames
+    end
+
+    def context_query_end(payload)
+      # O servidor interpola o SQL sem escapar aspas. O lexer descarta
+      # terminadores aparentes dentro de identificadores, strings e comentários.
+      offset = 0
+      while (ending = payload.index(/"(?=\n|\z)/, offset))
+        begin
+          PgQuery.scan(payload[0...ending])
+          return ending
+        rescue PgQuery::ScanError
+          offset = ending + 1
+        end
+      end
+    end
+
+    def parsed_context_query(query)
+      PgQuery.parse(query).tree.stmts.map { |entry| entry.stmt.constraints_set_stmt }
     rescue PgQuery::ParseError
-      nil
+      []
     end
 
-    def direct_constraint_error?(error, statements)
-      return false unless error.is_a?(PG::Error) && %w[42704 42809].include?(sqlstate(error)) &&
-        error.result&.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION) == "AfterTriggerSetState"
+    def constraint_resolution?(command, signature)
+      return false unless command
 
-      # Um gatilho de um arquivo anterior também pode chamar SET CONSTRAINTS.
-      context = error.result.error_field(PG::Result::PG_DIAG_CONTEXT)
-      if context
-        statements.any? { |entry| entry.stmt.do_stmt } && inline_constraint_command(context)
-      else
-        statements.any? { |entry| entry.stmt.constraints_set_stmt }
+      case signature
+      when ["42704", "AfterTriggerSetState"]
+        !command.constraints.empty?
+      when ["42809", "AfterTriggerSetState"]
+        command.deferred && !command.constraints.empty?
+      when ["0A000", "AfterTriggerSetState"]
+        command.constraints.any? { |name| !name.range_var.catalogname.empty? }
+      when ["3F000", "get_namespace_oid"], ["42501", "aclcheck_error"]
+        command.constraints.any? { |name| !name.range_var.schemaname.empty? }
       end
     end
 
-    def migration_error_line(error, source, statements)
-      if direct_constraint_error?(error, statements) && !error.result.error_field(PG::Result::PG_DIAG_CONTEXT)
-        commands = statements.select { |entry| entry.stmt.constraints_set_stmt }
-        return Banco.statement_line(source, offset: commands.first.stmt_location) if commands.one?
-      end
-      Banco.error_line(error, source)
-    end
+    def statement_at_cursor(source, statements, position)
+      return unless position&.positive?
 
-    def deferred_check_detection(error, source, statements)
-      return if direct_constraint_error?(error, statements)
-
-      # A checagem também pode ser disparada por PL/pgSQL. O contexto bruto fica fora da saída.
-      context = error.result&.error_field(PG::Result::PG_DIAG_CONTEXT)
-      if context&.match?(/^SQL statement "[[:space:]]*SET[[:space:]]+CONSTRAINTS\b/i)
-        return "detecção em SET CONSTRAINTS chamado pelo arquivo; posição externa indisponível"
-      end
-
-      immediate = statements.select { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
-      return if immediate.empty?
-
-      if statements.one?
-        return "detecção em SET CONSTRAINTS IMMEDIATE na linha #{Banco.statement_line(source)}"
-      end
-
-      position = error.result&.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION)&.to_i
-      unless position&.positive?
-        return "detecção durante a execução do arquivo; SET CONSTRAINTS IMMEDIATE pode ter antecipado a checagem de alterações anteriores"
-      end
-
-      # Os limites dos comandos na árvore são offsets em bytes.
+      # O cursor do servidor conta caracteres e a árvore usa offsets em bytes.
       offset = source.sql[0, position - 1].bytesize
-      if immediate.any? { |entry| offset >= entry.stmt_location && (entry.stmt_len.zero? || offset <= entry.stmt_location + entry.stmt_len) }
-        "detecção em SET CONSTRAINTS IMMEDIATE na linha #{Banco.error_line(error, source)}"
+      statements.find do |entry|
+        offset >= entry.stmt_location && (entry.stmt_len.zero? || offset <= entry.stmt_location + entry.stmt_len)
       end
+    end
+
+    def migration_error_location(error, source, statements)
+      diagnostic = error.result
+      frames = context_frames(diagnostic.error_field(PG::Result::PG_DIAG_CONTEXT))
+      routine = diagnostic.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION)
+      signature = [sqlstate(error), routine]
+      position = diagnostic.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION)&.to_i
+      executing = statement_at_cursor(source, statements, position)
+      executing ||= statements.first if statements.one?
+      candidates = executing ? [executing] : statements
+
+      blocks = %i[inline_sql inline].include?(frames.last) ? candidates.select { |entry| entry.stmt.do_stmt } : []
+      block = blocks.first if blocks.one?
+      if !blocks.empty? && frames.size == 2 && frames.last == :inline_sql && frames.first.is_a?(Array) &&
+          frames.first.any? { |command| constraint_resolution?(command, signature) }
+        return [nil, Banco.statement_line(source, offset: block.stmt_location)] if block
+
+        return
+      end
+
+      if frames.empty?
+        resolutions = candidates.select { |entry| constraint_resolution?(entry.stmt.constraints_set_stmt, signature) }
+        unless resolutions.empty?
+          # A rotina de namespace também atende outros comandos. Sem cursor,
+          # a linha do SET só é comprovável quando os demais comandos não competem.
+          if resolutions.one? && (executing || routine == "AfterTriggerSetState" ||
+              statements.all? { |entry| entry.stmt.constraints_set_stmt || Banco.literal_select?(entry.stmt.select_stmt) })
+            return [nil, Banco.statement_line(source, offset: resolutions.first.stmt_location)]
+          end
+          return
+        end
+      end
+
+      if executing&.stmt&.constraints_set_stmt&.deferred == false
+        return ["detecção em SET CONSTRAINTS IMMEDIATE na linha #{Banco.statement_line(source, offset: executing.stmt_location)}"]
+      end
+
+      queries = frames.grep(Array)
+      if queries.any? { |commands| commands.one? && commands.first }
+        return ["detecção em SET CONSTRAINTS chamado pelo arquivo; posição externa indisponível"]
+      end
+
+      if queries.any? { |commands| commands.any? { |command| command&.deferred == false } } ||
+          (!executing && blocks.empty? && statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false })
+        return [POSSIBLE_CONSTRAINT_CHECK]
+      end
+
+      [nil, Banco.statement_line(source, offset: block.stmt_location)] if block && !position&.positive?
     end
 
     def report_batch_rejection(name, sources, error, detection, origin)
