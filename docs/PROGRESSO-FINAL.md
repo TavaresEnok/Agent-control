@@ -422,3 +422,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:07 UTC — Revisor encerrou C2-R10-INTEGRACAO em 3eead086 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:07 UTC — Revisão C-EXAME-ORIGEM-R2 iniciada por Sol high normal somente leitura em 30af542f.
 - 19/11/2026 05:07 UTC — Base comum R10 b01ca7b3 passou em 26 testes sem saltos. Em Docker real, 12 MiB em stderr não impediram a publicação do JSON, e foram verificados cancelamento, prazo e excesso em stdout. Em PostgreSQL a troca concorrente de epoch foi bloqueada durante a partida do cliente anterior e a transferência só avançou após a limpeza.
+- 19/11/2026 05:08 UTC — Validação de c2-medicoes-r3-base-r10 em 5805da0d iniciada no checkout de integração.
+- 19/11/2026 05:09 UTC — Revisor encerrou C-EXAME-ORIGEM-R2 em 30af542f (código 0). Gerente confere a entrega.
+- 19/11/2026 05:09 UTC — Revisão C-PAINEL-R3 iniciada por Sol high normal somente leitura em 7efe20f0.
+- 19/11/2026 05:09 UTC — Conformidade R5 com imagem fixada em e1798884 passou nos 22 testes, incluindo a imagem real com licença e identificador artificiais. A entrega incremental f38ad8f4 reúne o novo QA, a confirmação terminal e os módulos 3 a 9 em ordem. O revisor confirmou a correção da classificação de REQ-02. O teste da CLI passa a exigir também o achado na linha do requisito e falhas operacionais iguais a zero.
