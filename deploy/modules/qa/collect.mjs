@@ -862,7 +862,14 @@ const identifier = /^[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*$/u;
 const codeSpan = /^`([^`]+)`(?!`)/;
 const fileQualifier = /^\s+(?:de|from)\s+(?=`)/i;
 const referenceSeparator = /^(?:\s*,\s*(?:(?:e|and|além de|bem como|as well as)\s+)?|\s+(?:e|and|além de|bem como|as well as)\s+)(?=`)/i;
-const expectedResult = /\b(?:saída|resultado|valor|texto)\s+esperad[oa]\b[^.!?;]*$|\b(?:retornar?|devolver?)(?:\s+(?:o\s+(?:texto|valor|resultado)|a\s+saída))?\s*$/i;
+const clauseBoundary = /;|[.!?](?=\s|$)|(?:,\s*(?:(?:e|mas|ou)\s+)?|\s+(?:e|mas|ou)\s+)(?=(?:calcular|conferir|retornar?|devolver?)\b)/i;
+const expectedBefore = /\b(?:saídas?|resultados?|valores?|textos?)\s+esperad[oa]s?\b|\b(?:retornar?|devolver?)(?:\s+(?:o\s+(?:texto|valor|resultado)|a\s+saída))?$/i;
+const expectedAfter = /^\s+(?:é|são)\s+(?:(?:[oa]s?|um|uma|dois|duas)\s+)*(?:saídas?|resultados?|valores?|textos?)\s+esperad[oa]s?\b/i;
+const roleQualifier = /^\s*,?\s*como\b/i;
+const returnPredicate = /^\s+(?:retorna|devolve)\b/i;
+const operationWith = /^(?:calcular|conferir)\s+com$/i;
+const parenthesizedOperation = /^(?:calcular|conferir)\b/i;
+const takesComplement = /(?:^|\s)(?:a|com|de|em|para|por|sobre)$/i;
 
 function readTargetList(text) {
   const targets = [];
@@ -889,23 +896,27 @@ function readTargetList(text) {
 
 function requirementTargets(body) {
   const spans = /`[^`]+`(?!`)/g;
+  // A pontuação dentro de símbolos e caminhos não delimita orações.
+  const prose = body.replace(spans, span => '_'.repeat(span.length));
   const references = [];
   let ambiguousQualified = false;
-  let calculationEnd;
   for (let span; (span = spans.exec(body));) {
     const {targets, rest} = readTargetList(body.slice(span.index));
     spans.lastIndex = body.length - rest.length;
-    const leading = span.index === 0;
-    if (leading && /^[.!?]?$/.test(rest.trim())) return {kind: 'symbols', targets};
+    if (span.index === 0 && /^[.!?]?$/.test(rest.trim())) return {kind: 'symbols', targets};
     if (!targets.some(target => target.source !== undefined)) continue;
-    const prefix = body.slice(0, span.index);
-    const startsCalculation = /^calcular\s+com\s+$/i.test(prefix);
-    const continuesCalculation = calculationEnd !== undefined &&
-      /^\s+e\s+conferir\s+com\s+$/i.test(body.slice(calculationEnd, span.index));
-    if (startsCalculation) calculationEnd = spans.lastIndex;
-    const parenthesized = prefix.trimEnd().endsWith('(') && rest.trimStart().startsWith(')');
-    const expected = parenthesized && expectedResult.test(prefix.trimEnd().slice(0, -1));
-    if (!leading && !startsCalculation && !continuesCalculation && (!parenthesized || expected)) {
+    const prefix = prose.slice(0, span.index).split(clauseBoundary).at(-1).trim();
+    const suffix = prose.slice(spans.lastIndex);
+    const parenthesized = prefix.endsWith('(') && /^\s*\)/.test(suffix);
+    const before = parenthesized ? prefix.slice(0, -1).trimEnd() : prefix;
+    const after = parenthesized ? suffix.replace(/^\s*\)/, '') : suffix;
+    const endsClause = !after.split(clauseBoundary, 1)[0].trim();
+    const direct = !before && (endsClause || returnPredicate.test(after));
+    const explicitOperation = operationWith.test(before) || (parenthesized && parenthesizedOperation.test(before));
+    const annotation = parenthesized && endsClause && !takesComplement.test(before);
+    // Um papel declarado no contexto prevalece sobre os marcadores de referência.
+    if (expectedBefore.test(before) || expectedAfter.test(after) || roleQualifier.test(after) ||
+        !(direct || explicitOperation || annotation)) {
       ambiguousQualified = true;
       continue;
     }
