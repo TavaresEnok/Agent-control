@@ -1551,6 +1551,7 @@ export function auditRepositoryReadiness(repoRoot) {
     }
   };
   const files = collectRepoFiles(repoRoot, recordSkip);
+  const collectionIncomplete = failed > 0;
   const findings = [];
   const pillarCounts = {
     'tls-cabecalhos': 0,
@@ -1561,7 +1562,7 @@ export function auditRepositoryReadiness(repoRoot) {
     'segredos-fora-codigo': 0,
   };
   const fileCoverage = [];
-  if (failed) {
+  if (collectionIncomplete) {
     for (const pillar of Object.keys(pillarCounts)) partialPillars.add(pillar);
   }
   const recordPartial = (file, reason, ...pillars) => {
@@ -1591,7 +1592,6 @@ export function auditRepositoryReadiness(repoRoot) {
     const findingsBeforeFile = findings.length;
 
     if (isComposeFile(file.rel)) {
-      hasDeployable = true;
       checksApplied.push('compose');
       let services = [];
       let incomplete = false;
@@ -1604,6 +1604,8 @@ export function auditRepositoryReadiness(repoRoot) {
         checksApplied.pop();
         recordPartial(file.rel, 'estrutura Compose inválida ou referência YAML não resolvida',
           'alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo');
+      } else if (services.length > 0) {
+        hasDeployable = true;
       }
       for (const svc of services) {
         for (const {line} of svc.environment) {
@@ -1779,7 +1781,8 @@ export function auditRepositoryReadiness(repoRoot) {
 
   const fallbackFile = anchorFile ?? files[0]?.rel ?? 'package.json';
   if (hasDeployable || hasStateful) {
-    if (!hasBackup) {
+    const backupMeasured = !partialPillars.has('backup-restauracao');
+    if (backupMeasured && !hasBackup) {
       addFinding(findings, pillarCounts, 'backup-restauracao', {
         rule: 'PRONTIDAO-BACKUP-AUSENTE',
         file: fallbackFile,
@@ -1789,7 +1792,7 @@ export function auditRepositoryReadiness(repoRoot) {
         evidence: 'Nenhum script/comando de backup (pg_dump, restic, borg, personal:backup) encontrado.',
       });
     }
-    if (!hasRestoreRoutine) {
+    if (backupMeasured && !hasRestoreRoutine) {
       addFinding(findings, pillarCounts, 'backup-restauracao', {
         rule: 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
         file: fallbackFile,
@@ -1799,7 +1802,7 @@ export function auditRepositoryReadiness(repoRoot) {
         evidence: 'Verificações de catálogo ou de integridade não demonstram restauração dos dados.',
       });
     }
-    if (hasBackup && !hasBackupRotation) {
+    if (backupMeasured && hasBackup && !hasBackupRotation) {
       addFinding(findings, pillarCounts, 'backup-restauracao', {
         rule: 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE',
         file: fallbackFile,
@@ -1809,7 +1812,7 @@ export function auditRepositoryReadiness(repoRoot) {
         evidence: 'Nenhuma diretiva de retenção/rotação de backups identificada.',
       });
     }
-    if (systemdWritesFileLogs && !hasLogrotate) {
+    if (!collectionIncomplete && systemdWritesFileLogs && !hasLogrotate) {
       addFinding(findings, pillarCounts, 'alertas-logs', {
         rule: 'PRONTIDAO-LOGROTATE-AUSENTE',
         file: fallbackFile,
@@ -1819,7 +1822,7 @@ export function auditRepositoryReadiness(repoRoot) {
         evidence: 'StandardOutput ou StandardError com file:, append: ou truncate: sem configuração logrotate.',
       });
     }
-    if (!hasAlerting) {
+    if (!collectionIncomplete && !hasAlerting) {
       addFinding(findings, pillarCounts, 'alertas-logs', {
         rule: 'PRONTIDAO-ALERTA-AUSENTE',
         file: fallbackFile,
@@ -1829,7 +1832,7 @@ export function auditRepositoryReadiness(repoRoot) {
         evidence: 'Nenhuma rotina de alerta/vigia (watch, alert, OnFailure, webhook/push) identificada.',
       });
     }
-    if (!hasDiskMonitoring) {
+    if (!collectionIncomplete && !hasDiskMonitoring) {
       addFinding(findings, pillarCounts, 'disco-memoria', {
         rule: 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
         file: fallbackFile,
@@ -1902,6 +1905,13 @@ export function auditRepositoryReadiness(repoRoot) {
         status: failed ? 'failed' : 'ok',
         detail: `Analisados ${files.length} arquivo(s) nos 6 requisitos estáticos de prontidão; ${findings.length} achado(s); ${failed} omissão(ões) por falha ou limite e ${skipped} exclusão(ões) de escopo.`,
       },
+      ...(failed && findings.length > 0 ? [{
+        tool: 'prontidao-audit',
+        version: AUDIT_VERSION,
+        status: 'ok',
+        detail: 'Medição concluída no escopo restrito aos achados sustentados. A cobertura estática geral permanece parcial.',
+        files: [...new Set(findings.map(finding => finding.file))],
+      }] : []),
       ...requirementCoverage,
       ...fileCoverage,
       ...skipCoverage,

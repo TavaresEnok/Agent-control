@@ -74,6 +74,7 @@ function normalizeCoverageRow(row) {
     version: String(row.version || 'desconhecida').slice(0, 80),
     status,
     detail: String(row.detail || '').slice(0, 500),
+    ...(row.files === undefined ? {} : {files: row.files}),
   };
 }
 

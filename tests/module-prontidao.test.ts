@@ -16,6 +16,7 @@ import {
   runCollector,
   validateTargetUrl,
 } from '../deploy/modules/prontidao/run-collector.mjs';
+import {parseModuleCollectorOutput} from '../src/verification-modules.ts';
 
 const moduleDir = fileURLToPath(new URL('../deploy/modules/prontidao/', import.meta.url));
 const defectiveDir = fileURLToPath(new URL('./fixtures/module-prontidao/defective', import.meta.url));
@@ -644,7 +645,7 @@ test('Here-docs distinguem delimitadores físicos, continuados e citados de coma
       ['cat <<EOF | wc -l', 'pg_dump -f fixture.dump', 'EOF'],
     ]) {
       const result = audit(lines);
-      assert.equal(backupMissing(result), true);
+      assert.equal(backupMissing(result), false);
       assert.equal(requirement(result)?.status, 'failed');
       assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith('backup.sh: linha 2,')));
       assert.equal(result.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
@@ -697,6 +698,87 @@ test('a cobertura estática aponta subárvores, arquivos e cotas com análise pa
     assert.ok(out.coverage.some(c => c.status === 'skipped' && c.detail.startsWith('link.yml:')));
     assert.ok(out.coverage.some(c => c.status === 'failed' && c.detail.includes('src-3999.ts') && c.detail.includes('4000 arquivos')));
     assert.equal(out.coverage.filter(c => c.tool === 'prontidao:arquivo' && c.status === 'ok').length, 3999);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('publicação de prontidão mantém achados medidos em auditoria parcial e conserva as lacunas', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-publicacao-parcial-'));
+  const compose = join(dir, 'compose.yaml');
+  const collect = () => runCollector({
+    repoRoot: dir,
+    evidenceFile: '',
+    runBin(bin, args) {
+      if (args[0] === 'version' || args[0] === '--version') {
+        return {status: 0, stdout: 'Version: 1.0.0', stderr: ''};
+      }
+      if (bin === 'gitleaks') writeFileSync(args[args.indexOf('--report-path') + 1]!, '[]');
+      if (bin === 'trivy') writeFileSync(args[args.indexOf('--output') + 1]!, '{"Results":[]}');
+      return {status: 0, stdout: '[]', stderr: ''};
+    },
+  });
+  const restartRule = 'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE';
+  try {
+    writeFileSync(compose, [
+      'services:', '  api:', '    image: scratch',
+      '    logging:', '      driver: fixture-local', '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'backup.sh'), '#!/bin/sh\ncat <<$\'EOF\'\npg_dump -f ignored.dump\nEOF\n');
+    symlinkSync('compose.yaml', join(dir, 'ignored.yaml'));
+    const partial = collect();
+    assert.ok(partial.findings.some(f => f.tool === 'prontidao-audit' && f.rule === restartRule
+      && f.file === 'compose.yaml' && f.line === 2));
+    const publication = parseModuleCollectorOutput(JSON.stringify(partial), {module: 'prontidao'});
+    // A publicação exige pelo menos uma medição ok da mesma ferramenta para cada achado.
+    assert.deepEqual(publication.findings.filter(f => !publication.coverage.some(
+      c => c.tool === f.tool && c.status === 'ok',
+    )), []);
+    const auditRows = publication.coverage.filter(c => c.tool === 'prontidao-audit');
+    assert.deepEqual(auditRows.map(c => c.status), ['failed', 'ok']);
+    assert.equal(auditRows[0]?.files, undefined);
+    assert.deepEqual(auditRows[1]?.files, ['compose.yaml']);
+    assert.match(auditRows[1]!.detail, /escopo.*achados/i);
+    assert.equal(partial.coverage.find(c => c.tool === 'prontidao:requisito:alertas-logs')?.status, 'failed');
+    assert.equal(partial.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed');
+    assert.ok(partial.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed'
+      && c.detail.startsWith('compose.yaml:')));
+    assert.ok(partial.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'skipped'
+      && c.detail.startsWith('ignored.yaml:')));
+    assert.equal(partial.findings.some(f => [
+      'PRONTIDAO-LOG-SEM-ROTACAO', 'PRONTIDAO-BACKUP-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+    ].includes(f.rule)), false);
+
+    writeFileSync(compose, 'services:\n  api:\n    <<: *unresolved\n');
+    const unresolved = collect();
+    assert.deepEqual(unresolved.findings, []);
+    assert.deepEqual(unresolved.coverage.filter(c => c.tool === 'prontidao-audit').map(c => c.status), ['failed']);
+
+    rmSync(compose);
+    const failureOnly = collect();
+    assert.deepEqual(failureOnly.findings, []);
+    assert.deepEqual(failureOnly.coverage.filter(c => c.tool === 'prontidao-audit').map(c => c.status), ['failed']);
+
+    rmSync(join(dir, 'backup.sh'));
+    rmSync(join(dir, 'ignored.yaml'));
+    writeFileSync(compose, 'services:\n  api:\n    image: scratch\n');
+    const complete = collect();
+    assert.ok(complete.findings.some(f => f.rule === restartRule));
+    assert.ok(complete.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-AUSENTE'));
+    assert.deepEqual(complete.coverage.filter(c => c.tool === 'prontidao-audit').map(c => c.status), ['ok']);
+    assert.equal(complete.coverage.some(c => c.status === 'failed'), false);
+
+    const unread = join(dir, 'oversized.sh');
+    writeFileSync(unread, '');
+    truncateSync(unread, 1024 * 1024 + 1);
+    const omitted = collect();
+    assert.ok(omitted.findings.some(f => f.rule === restartRule));
+    assert.equal(omitted.findings.some(f => [
+      'PRONTIDAO-BACKUP-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+      'PRONTIDAO-ALERTA-AUSENTE', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+    ].includes(f.rule)), false);
+    assert.ok(omitted.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed'
+      && c.detail.startsWith('oversized.sh:')));
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }
@@ -1381,9 +1463,9 @@ test('Restic exige snapshot e destino na restauração, ou snapshot ou política
     }
     assert.equal(absent(audit('restic forget --keep-daily 2 --keep-weekly 0')).includes('PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), false);
     const unresolved = audit('restic forget --keep-last="$KEEP"');
-    assert.equal(absent(unresolved).length, 2);
+    assert.deepEqual(absent(unresolved), []);
     assert.equal(unresolved.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed');
-    assert.equal(absent(audit('restic restore --target /var/tmp/fixture "$SNAPSHOT"')).length, 2);
+    assert.deepEqual(absent(audit('restic restore --target /var/tmp/fixture "$SNAPSHOT"')), []);
     assert.doesNotMatch(JSON.stringify(unresolved), /SNAPSHOT|KEEP|\/var\/tmp\/fixture/);
   } finally {
     rmSync(dir, {recursive: true, force: true});
