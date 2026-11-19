@@ -14,6 +14,20 @@ const ALLOWED_DATA_IMAGE = /^data:image\/(?:png|jpeg|webp)(?:;base64)?,/i;
 const DROPPED_TAGS = new Set(['script', 'iframe', 'object', 'embed', 'base', 'noscript']);
 const URL_ATTRIBUTES = new Set(['href', 'src', 'action', 'formaction', 'poster', 'cite', 'background', 'data', 'ping']);
 const HTML_NS = parse5Html.NS.HTML;
+export const MAX_CREATE_TASK_CHARS = 100_000;
+const MAX_CREATE_FILE_BYTES = 200_000;
+const MAX_REWORK_HTML_CHARS = 8_000;
+
+const FALLBACK_BATCH_DIRECTIONS: readonly string[] = [
+  'Direção 1 — Editorial claro de alto contraste: superfície clara aquecida, hierarquia tipográfica com contraste forte de peso e escala no valor da fatura, cartões com borda fina de 1px e ação primária sólida acima da dobra.',
+  'Direção 2 — Noturno técnico preciso: superfície escura profunda com contraste WCAG AA rigoroso, tipografia geométrica limpa, faixa compacta de status da conexão no topo e bloco principal de fatura com ação primária única.',
+  'Direção 3 — Grade suíça modular: fundo claro neutro com divisores estruturais de 1px, alinhamento tabular apenas nas métricas numéricas, bloco de fatura e status organizados em grade modular e atalhos em linha única.',
+  'Direção 4 — Herói de fatura e status integrado: cabeçalho enxuto com status online e plano, cartão herói centralizado na fatura em aberto com ações rápidas de PIX e código de barras em linha única e avisos abaixo.',
+  'Direção 5 — Superfície tonal em camadas: fundo suave em dois níveis de superfície sem excesso de sombras, tipografia humanista legível, destaque para fatura e diagnóstico de velocidade com cartões de raio consistente.',
+  'Direção 6 — Painel compacto orientado a tarefas: densidade equilibrada acima da dobra com fatura, conexão, aviso de manutenção e chamado visíveis sem corte e botões de ação com rótulos inteiros em uma linha.',
+  'Direção 7 — Contraste escuro mineral: paleta mineral escura com acento semântico único para a ação principal de pagamento e indicador de estabilidade da conexão, ícones lineares 24x24 consistentes.',
+  'Direção 8 — Minimalismo utilitário de alta legibilidade: fundo claro puro, foco tipográfico para leitura rápida de valor, vencimento e estado da internet, controles táteis >= 44x44px e rótulos sem quebra de linha.',
+];
 
 type DocumentNode = DefaultTreeAdapterTypes.Document;
 type ElementNode = DefaultTreeAdapterTypes.Element;
@@ -662,9 +676,18 @@ function readCreateBundle(value: unknown, maxScreens: number): CreateBundle | nu
   for (const item of row.screens) {
     if (!item || typeof item !== 'object') return null;
     const screen = item as {name?: unknown; html?: unknown; css?: unknown};
-    const name = text(screen.name, 40).toLowerCase();
-    const html = sanitizeGeneratedHtml(text(screen.html, 200_000));
-    const css = sanitizeCss(text(screen.css, 200_000));
+    if (typeof screen.name !== 'string' || typeof screen.html !== 'string' || typeof screen.css !== 'string') return null;
+    if (
+      screen.html.length > MAX_CREATE_FILE_BYTES ||
+      screen.css.length > MAX_CREATE_FILE_BYTES ||
+      Buffer.byteLength(screen.html, 'utf8') > MAX_CREATE_FILE_BYTES ||
+      Buffer.byteLength(screen.css, 'utf8') > MAX_CREATE_FILE_BYTES
+    ) {
+      return null;
+    }
+    const name = text(screen.name, 41).toLowerCase();
+    const html = sanitizeGeneratedHtml(screen.html);
+    const css = sanitizeCss(screen.css);
     if (!SCREEN_NAME.test(name) || !html.includes('<') || css.length === 0) return null;
     screens.push({name, html, css});
     if (screens.length >= maxScreens) break;
@@ -683,23 +706,392 @@ function measuredFindings(findings: readonly DesignRawFinding[]): DesignRawFindi
   return findings.filter(finding => finding.measure !== undefined && finding.measure !== null).slice(0, 40);
 }
 
-function createTask(input: {briefing: string; screens: number; round: number; referenceNote: string; rework: readonly ReworkScreen[]}): string {
+function foldPlain(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[*_`~]+/g, '')
+    .toLowerCase();
+}
+
+function cleanMarkdownLine(raw: string, max = 500): string {
+  return raw
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+export function isSameScreenVarietyBriefing(briefing: string): boolean {
+  const folded = foldPlain(briefing);
+  if (folded.includes('variedade entre as telas') || folded.includes('variedade da mesma tela')) return true;
+  if (folded.includes('nao telas diferentes') || folded.includes('nao telas distintas') || folded.includes('nao outra tela')) return true;
+  if (/\b(?:conceitos?|variac(?:ao|oes)|variedade|direc(?:ao|oes)|vers(?:ao|oes)|alternativas?|lotes?)\b[\s\S]{0,160}\bmesma tela\b/.test(folded)) {
+    return true;
+  }
+  if (/\bmesma tela\b[\s\S]{0,160}\b(?:conceitos?|variac(?:ao|oes)|variedade|direc(?:ao|oes)|vers(?:ao|oes)|alternativas?|lotes?)\b/.test(folded)) {
+    return true;
+  }
+  return false;
+}
+
+export type VarietyBriefingContext = {
+  intent: string[];
+  actions: string[];
+  labels: string[];
+  directions: string[];
+};
+
+type BriefingMajorSection = {
+  heading: string;
+  foldedHeading: string;
+  lines: string[];
+};
+
+function isVarietySectionHeading(foldedHeading: string): boolean {
+  if (!foldedHeading) return false;
+  if (/\b(?:contexto do produto|dados canonicos|regras tecnicas|nivel esperado)\b/.test(foldedHeading)) return false;
+  return /\b(?:variedade|direc(?:ao|oes)|conceitos?|lotes?|variac(?:ao|oes))\b/.test(foldedHeading);
+}
+
+function parseMajorSections(briefing: string): BriefingMajorSection[] {
+  const sections: BriefingMajorSection[] = [{heading: '', foldedHeading: '', lines: []}];
+  for (const rawLine of briefing.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    const majorMd = /^(#{1,2})\s+(.+)$/.exec(trimmed);
+    if (majorMd) {
+      const heading = cleanMarkdownLine(majorMd[2]!, 200);
+      sections.push({heading, foldedHeading: foldPlain(heading), lines: []});
+      continue;
+    }
+    const labelHeading = /^((?:variedade|direc(?:ao|oes)|conceitos?|lotes?|variac(?:ao|oes)|intenc(?:ao|oes)|objetivos?|acoes|acao|tarefas|atalhos|rotulos|botoes)[^:]{0,80}):\s*$/i.exec(
+      foldPlain(trimmed),
+    );
+    if (labelHeading) {
+      const heading = cleanMarkdownLine(trimmed.slice(0, -1), 200);
+      sections.push({heading, foldedHeading: foldPlain(heading), lines: []});
+      continue;
+    }
+    sections[sections.length - 1]!.lines.push(rawLine);
+  }
+  return sections;
+}
+
+function pushUnique(target: string[], item: string, maxItems: number): void {
+  const cleaned = item.trim();
+  if (!cleaned || target.length >= maxItems) return;
+  const key = foldPlain(cleaned);
+  if (target.some(existing => foldPlain(existing) === key)) return;
+  target.push(cleaned);
+}
+
+function extractDirectionsFromSectionLines(rawLines: readonly string[]): string[] {
+  const nonTable = rawLines.map(line => line.trimEnd()).filter(line => !line.trim().startsWith('|'));
+  const nonEmpty = nonTable.filter(line => line.trim().length > 0);
+  if (nonEmpty.length === 0) return [];
+  const hasSubheadings = nonEmpty.some(line => /^#{3,6}\s+\S/.test(line.trim()));
+  const out: string[] = [];
+  if (hasSubheadings) {
+    let current = '';
+    for (const raw of nonEmpty) {
+      const trimmed = raw.trim();
+      if (/^#{3,6}\s+\S/.test(trimmed)) {
+        if (current) pushUnique(out, current.slice(0, 500), 24);
+        current = cleanMarkdownLine(trimmed, 300);
+      } else if (current) {
+        const piece = cleanMarkdownLine(trimmed.replace(/^[-*•]\s+/, ''), 300);
+        if (piece) current = `${current} — ${piece}`;
+      } else if (/^(?:[-*•]\s+|\d+[.)]\s+)/.test(trimmed)) {
+        pushUnique(out, cleanMarkdownLine(trimmed.replace(/^[-*•]\s+/, ''), 500), 24);
+      }
+    }
+    if (current) pushUnique(out, current.slice(0, 500), 24);
+    if (out.length > 0) return out;
+  }
+
+  const starterPattern = /^(?:\d+[.)]\s+|(?:[-*•]\s+)?(?:conceito|direc(?:ao|oes)|variac(?:ao|oes)|lote|tela)\s*(?:\d+|[a-z]|#[0-9]+|[ivx]+)\b[:\s—–(-])/i;
+  const hasNumberedOrNamed = nonEmpty.some(line => starterPattern.test(foldPlain(line.trim())));
+  if (hasNumberedOrNamed) {
+    let current = '';
+    let startedWithBullet = false;
+    let sawBlank = false;
+    for (const raw of nonTable) {
+      const trimmed = raw.trim();
+      if (!trimmed) {
+        sawBlank = true;
+        continue;
+      }
+      const folded = foldPlain(trimmed);
+      if (starterPattern.test(folded)) {
+        if (current) pushUnique(out, current.slice(0, 500), 24);
+        startedWithBullet = /^[-*•]\s+/.test(trimmed);
+        current = cleanMarkdownLine(trimmed.replace(/^[-*•]\s+/, ''), 500);
+        sawBlank = false;
+      } else if (current && !sawBlank && (/^\s+/.test(raw) || (!startedWithBullet && /^[-*•]\s+/.test(trimmed)))) {
+        const piece = cleanMarkdownLine(trimmed.replace(/^[-*•]\s+/, ''), 300);
+        if (piece) current = `${current} — ${piece}`;
+      }
+    }
+    if (current) pushUnique(out, current.slice(0, 500), 24);
+    if (out.length > 0) return out;
+  }
+
+  let currentBullet = '';
+  let sawBlank = false;
+  for (const raw of nonTable) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      sawBlank = true;
+      continue;
+    }
+    if (/^[-*•]\s+\S/.test(trimmed)) {
+      if (currentBullet) pushUnique(out, currentBullet.slice(0, 500), 24);
+      currentBullet = cleanMarkdownLine(trimmed.replace(/^[-*•]\s+/, ''), 500);
+      sawBlank = false;
+    } else if (currentBullet && !sawBlank && /^\s+/.test(raw)) {
+      const piece = cleanMarkdownLine(trimmed, 300);
+      if (piece) currentBullet = `${currentBullet} ${piece}`;
+    }
+  }
+  if (currentBullet) pushUnique(out, currentBullet.slice(0, 500), 24);
+  return out;
+}
+
+function collectActionLabelsFromLine(rawLine: string, labels: string[]): void {
+  for (const match of rawLine.matchAll(/\*\*([^*]{2,50})\*\*/g)) {
+    const term = cleanMarkdownLine(match[1]!, 60).replace(/[:.;,]+$/, '').trim();
+    const folded = foldPlain(term);
+    if (!term || /^(?:proibido|hierarquia|tipografia|acessibilidade|icones|acabamento|estrutura|tokens|uma|um)$/i.test(folded)) continue;
+    pushUnique(labels, term, 30);
+  }
+  const withoutBold = cleanMarkdownLine(rawLine, 500);
+  const colonAt = withoutBold.indexOf(':');
+  if (colonAt > 0) {
+    const tail = withoutBold.slice(colonAt + 1);
+    if (!tail.includes('?')) {
+      for (const part of tail.split(/[,;·]/)) {
+        const stripped = part.replace(/\([^)]*\)/g, '').replace(/[.]+$/, '').trim();
+        const words = stripped.split(/\s+/).filter(Boolean);
+        const folded = foldPlain(stripped);
+        if (
+          stripped.length >= 2 &&
+          stripped.length <= 32 &&
+          words.length <= 5 &&
+          !/^\d+$/.test(stripped) &&
+          !/^(?:quando|o cliente|no geral|as outras|em ordem)\b/.test(folded)
+        ) {
+          const normalized = /^codigo de barras$/i.test(folded) ? 'Código de barras' : stripped;
+          pushUnique(labels, normalized, 30);
+        }
+      }
+    }
+  }
+}
+
+export function extractSameScreenVarietyContext(briefing: string, totalScreens: number): VarietyBriefingContext {
+  const sections = parseMajorSections(briefing);
+  const intent: string[] = [];
+  const actions: string[] = [];
+  const labels: string[] = [];
+  const directions: string[] = [];
+
+  for (const section of sections) {
+    if (section.heading && !isVarietySectionHeading(section.foldedHeading) && intent.length === 0 && !/^[abc]\./i.test(section.foldedHeading)) {
+      pushUnique(intent, section.heading, 4);
+    }
+    if (isVarietySectionHeading(section.foldedHeading)) {
+      for (const dir of extractDirectionsFromSectionLines(section.lines)) {
+        pushUnique(directions, dir, 24);
+      }
+      continue;
+    }
+
+    const isActionSection = /\b(?:acoes|acao|tarefas|atalhos|rotulos|botoes)\b/.test(section.foldedHeading);
+    const isTechnicalOrData = /\b(?:dados canonicos|regras tecnicas)\b/.test(section.foldedHeading);
+    let inActionList = isActionSection;
+
+    for (const rawLine of section.lines) {
+      const trimmed = rawLine.trim();
+      if (!trimmed || trimmed.startsWith('|')) continue;
+      const folded = foldPlain(trimmed);
+
+      if (/^(?:[-*•]\s+|\d+[.)]\s+|#{3,6}\s+)?(?:conceito|direc(?:ao|oes)|variac(?:ao|oes)|lote)\s*(?:\d+|[a-z])\b[:\s—–(-]/i.test(folded)) {
+        pushUnique(directions, cleanMarkdownLine(trimmed.replace(/^[-*•]\s+/, ''), 500), 24);
+        continue;
+      }
+
+      if (/^(?:direc(?:ao|oes)(?:\s+(?:por|do|deste|de|para\s+o|visuais(?:\s+do)?))?\s*lotes?|direc(?:ao|oes)\s+visuais|lotes?(?:\s+\d+)?\s*[-—–:]?\s*direc(?:ao|oes))\s*:/i.test(folded)) {
+        const afterColon = trimmed.slice(trimmed.indexOf(':') + 1).trim();
+        if (afterColon.length > 0) {
+          for (const part of afterColon.split(/[;|]/)) {
+            const cleaned = cleanMarkdownLine(part.replace(/^[-*•]\s+/, ''), 500);
+            if (cleaned) pushUnique(directions, cleaned, 24);
+          }
+        }
+        continue;
+      }
+
+      if (
+        /^intenc(?:ao|oes)\s*:/i.test(folded) ||
+        /^objetivos?\s*:/i.test(folded) ||
+        (!isTechnicalOrData && /\b(?:desenhe a|voce vai desenhar|quem usa:|primeira tela depois do login)\b/.test(folded))
+      ) {
+        pushUnique(intent, cleanMarkdownLine(trimmed, 400), 4);
+      }
+
+      if (/^rotulos?\b/i.test(folded)) {
+        inActionList = true;
+        if (trimmed.includes(':')) {
+          collectActionLabelsFromLine(trimmed, labels);
+        }
+        continue;
+      }
+
+      if (/^(?:tarefas|acoes|acao|atalhos|botoes)\b/i.test(folded)) {
+        inActionList = true;
+        if (trimmed.includes(':')) {
+          const afterColon = trimmed.slice(trimmed.indexOf(':') + 1).trim();
+          if (afterColon.length > 0) {
+            pushUnique(actions, cleanMarkdownLine(trimmed, 320), 12);
+            collectActionLabelsFromLine(trimmed, labels);
+          }
+        }
+        continue;
+      }
+
+      if (/^(?:tambem existem|hierarquia:|\d+\.\s+\*\*hierarquia)/i.test(folded)) {
+        pushUnique(actions, cleanMarkdownLine(trimmed, 320), 12);
+        collectActionLabelsFromLine(trimmed, labels);
+        continue;
+      }
+
+      if (!isTechnicalOrData && (inActionList || (!section.foldedHeading && /^(?:\d+[.)]|[-*•])\s+/.test(trimmed)))) {
+        if (/^(?:\d+[.)]|[-*•])\s+/.test(trimmed)) {
+          pushUnique(actions, cleanMarkdownLine(trimmed, 320), 12);
+          collectActionLabelsFromLine(trimmed, labels);
+          continue;
+        }
+        inActionList = false;
+      }
+    }
+  }
+
+  if (intent.length === 0) {
+    for (const rawLine of briefing.split(/\r?\n/)) {
+      const cleaned = cleanMarkdownLine(rawLine, 400);
+      if (cleaned) {
+        pushUnique(intent, cleaned, 2);
+        if (intent.length >= 2) break;
+      }
+    }
+  }
+
+  if (actions.length === 0) {
+    pushUnique(
+      actions,
+      'Preservar a ação primária única acima da dobra e todas as ações e atalhos secundários definidos no briefing na própria tela.',
+      12,
+    );
+  }
+
+  const targetDirectionCount = Math.max(1, Math.min(8, totalScreens));
+  for (let index = 0; directions.length < targetDirectionCount && index < FALLBACK_BATCH_DIRECTIONS.length; index += 1) {
+    pushUnique(directions, FALLBACK_BATCH_DIRECTIONS[index]!, 24);
+  }
+
+  return {intent, actions, labels, directions};
+}
+
+function directionForScreen(screenName: string, slotIndex: number, directions: readonly string[]): string {
+  if (directions.length === 0) return '';
+  if (screenName.length >= 3) {
+    const escaped = screenName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`(^|[^a-z0-9-])${escaped}([^a-z0-9-]|$)`, 'i');
+    const matched = directions.find(direction => regex.test(foldPlain(direction)));
+    if (matched) return matched;
+  }
+  const index = slotIndex >= 0 ? slotIndex : 0;
+  return directions[index] ?? directions[index % directions.length] ?? directions[0]!;
+}
+
+export type CreateTaskInput = {
+  briefing: string;
+  screens: number;
+  totalScreens?: number;
+  round: number;
+  referenceNote: string;
+  rework: readonly ReworkScreen[];
+  batchOrder?: readonly string[];
+};
+
+function buildCreateTaskLines(
+  input: CreateTaskInput,
+  variety: VarietyBriefingContext | null,
+  totalScreens: number,
+  compactVariety: boolean,
+): string[] {
+  const maxItem = compactVariety ? 140 : 500;
   const lines = [
     'Pedido de criação.',
     'Responda só um JSON com kind "criacao", tokens (DTCG) e screens.',
     `screens tem ${input.screens} itens. Cada item tem name, html e css.`,
     'O HTML é autossuficiente, com fonte por <link>, sem base64 e sem JavaScript externo.',
     `Rodada: ${input.round}`,
-    'Briefing:',
-    input.briefing.slice(0, 8000),
   ];
-  if (input.referenceNote.trim().length > 0) lines.push(input.referenceNote.slice(0, 2000));
+
+  if (variety) {
+    lines.push(
+      `Modo variedade da mesma tela: os ${totalScreens} conceitos do lote são conceitos visuais diferentes da mesma tela (direções distintas de layout, tipografia e cor), nunca telas diferentes do app nem etapas secundárias como uma tela separada de "Pagar fatura" ou detalhe.`,
+      'Use em name identificadores kebab-case do conceito visual da mesma tela, nunca nomes de outras telas do fluxo.',
+    );
+    const intentItems = compactVariety ? variety.intent.slice(0, 1) : variety.intent;
+    if (intentItems.length > 0) {
+      lines.push('Intenção da mesma tela a preservar em todos os conceitos:');
+      for (const item of intentItems) lines.push(`- ${item.slice(0, maxItem)}`);
+    }
+    lines.push(
+      'Ações da mesma tela a preservar em todos os conceitos (uma única ação primária preenchida acima da dobra e as demais ações secundárias na própria tela, sem transformar uma ação em outra tela):',
+    );
+    const actionItems = compactVariety ? variety.actions.slice(0, 2) : variety.actions;
+    for (const action of actionItems) lines.push(`- ${action.slice(0, maxItem)}`);
+    lines.push(
+      'Rótulos a preservar inteiros em linha única: todo botão, ação, atalho, chip e item de navegação deve manter seu rótulo completo em uma única linha (use white-space: nowrap e espaço suficiente em 390px; proibido quebrar rótulos como "Código de barras" ou "PIX copia e cola" em 2 linhas, hifenizar ou truncar texto).',
+    );
+    if (variety.labels.length > 0) {
+      const labelText = variety.labels.join(', ');
+      lines.push(`Rótulos do briefing: ${compactVariety ? labelText.slice(0, 200) : labelText}.`);
+    }
+    if (variety.directions.length > 0) {
+      lines.push(`Direções por lote (${variety.directions.length} direções preservadas em todas as rodadas):`);
+      variety.directions.forEach((direction, index) => {
+        lines.push(`- Lote direção ${index + 1}: ${direction.slice(0, maxItem)}`);
+      });
+    }
+  }
+
+  lines.push('Briefing:', input.briefing);
+  if (input.referenceNote.trim().length > 0) lines.push(input.referenceNote);
   if (input.rework.length > 0) {
     lines.push('Devolva só as telas rejeitadas, com o mesmo name.');
-    for (const screen of input.rework) {
+    if (variety) {
+      lines.push(
+        'Retrabalho de variedade da mesma tela: mantenha cada tela rejeitada como conceito da mesma tela, preservando a intenção, as ações, os rótulos inteiros em linha única e todas as direções por lote.',
+      );
+    }
+    const batchOrder = input.batchOrder && input.batchOrder.length > 0 ? input.batchOrder : input.rework.map(item => item.name);
+    for (let reworkIndex = 0; reworkIndex < input.rework.length; reworkIndex += 1) {
+      const screen = input.rework[reworkIndex]!;
       lines.push(`Tela rejeitada ${screen.name}.`);
+      if (variety && variety.directions.length > 0) {
+        const orderIndex = batchOrder.indexOf(screen.name);
+        const slotIndex = orderIndex >= 0 ? orderIndex : reworkIndex;
+        const assignedDirection = directionForScreen(screen.name, slotIndex, variety.directions);
+        lines.push(`Direção deste conceito no lote (${slotIndex + 1} de ${totalScreens}): ${assignedDirection.slice(0, maxItem)}`);
+      }
       lines.push('HTML anterior:');
-      lines.push(screen.html.slice(0, 8000));
+      lines.push(screen.html.slice(0, MAX_REWORK_HTML_CHARS));
       const measured = measuredFindings(screen.findings);
       if (measured.length > 0) {
         lines.push('Achados para corrigir:');
@@ -714,7 +1106,26 @@ function createTask(input: {briefing: string; screens: number; round: number; re
       }
     }
   }
-  return lines.join('\n').slice(0, 100000);
+  return lines;
+}
+
+export function createTask(input: CreateTaskInput): string {
+  if (typeof input.briefing !== 'string' || input.briefing.trim().length === 0) {
+    throw new Refusal('DESIGN_CREATE_INVALID', 400);
+  }
+  const combinedSource = input.referenceNote.trim().length > 0 ? `${input.briefing}\n${input.referenceNote}` : input.briefing;
+  const sameScreenVariety = isSameScreenVarietyBriefing(combinedSource);
+  const totalScreens = Math.max(input.totalScreens ?? input.screens, input.screens, input.batchOrder?.length ?? 0, input.rework.length);
+  const variety = sameScreenVariety ? extractSameScreenVarietyContext(combinedSource, totalScreens) : null;
+
+  let task = buildCreateTaskLines(input, variety, totalScreens, false).join('\n');
+  if (variety && task.length > MAX_CREATE_TASK_CHARS) {
+    task = buildCreateTaskLines(input, variety, totalScreens, true).join('\n');
+  }
+  if (task.length === 0 || task.length > MAX_CREATE_TASK_CHARS) {
+    throw new Refusal('DESIGN_CREATE_INVALID', 400);
+  }
+  return task;
 }
 
 async function writePrivate(path: string, body: string): Promise<void> {
@@ -789,7 +1200,27 @@ export async function runDesignCreate(input: {
   intentId: string;
   examine(round: number, files: readonly {path: string; text: string}[]): Promise<CreateExam>;
 }): Promise<{directory: string; rounds: CreateRound[]; indexPath: string}> {
-  if (input.screens < 1 || input.screens > 8 || input.rounds < 1 || input.rounds > 5) throw new Refusal('DESIGN_CREATE_INVALID', 400);
+  if (
+    !Number.isInteger(input.screens) ||
+    input.screens < 1 ||
+    input.screens > 8 ||
+    !Number.isInteger(input.rounds) ||
+    input.rounds < 1 ||
+    input.rounds > 5 ||
+    typeof input.briefing !== 'string' ||
+    input.briefing.trim().length === 0
+  ) {
+    throw new Refusal('DESIGN_CREATE_INVALID', 400);
+  }
+  const initialTask = createTask({
+    briefing: input.briefing,
+    screens: input.screens,
+    totalScreens: input.screens,
+    round: 1,
+    referenceNote: input.referenceNote,
+    rework: [],
+    batchOrder: [],
+  });
   const root = join(input.dataDirectory, 'design-criacoes', input.runId);
   outsideRepository(root, input.repository);
   await mkdir(root, {recursive: true, mode: 0o700});
@@ -800,27 +1231,41 @@ export async function runDesignCreate(input: {
   let rework: ReworkScreen[] = [];
   for (let round = 1; round <= input.rounds; round += 1) {
     const expect = rework.length > 0 ? rework.length : input.screens;
+    const task = round === 1
+      ? initialTask
+      : createTask({
+          briefing: input.briefing,
+          screens: expect,
+          totalScreens: input.screens,
+          round,
+          referenceNote: input.referenceNote,
+          rework,
+          batchOrder: order,
+        });
     const seat = await input.reserve();
-    const call = DesignWorkerCall.parse({
-      role: 'specialist',
-      provider: seat.provider,
-      accountId: seat.accountId,
-      profileId: seat.profileId,
-      model: seat.model,
-      grantId: seat.grantId,
-      intentId: input.intentId,
-      task: createTask({briefing: input.briefing, screens: expect, round, referenceNote: input.referenceNote, rework}),
-      repo: input.repository,
-      writePaths: [],
-      forcedModel: 'claude-opus-5-5',
-      forcedEffort: 'medium',
-    });
     let output = '';
     try {
-      output = await input.worker.run(call);
-    } catch (error) {
-      if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
-      throw new DesignCreateModelFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
+      const parsedCall = DesignWorkerCall.safeParse({
+        role: 'specialist',
+        provider: seat.provider,
+        accountId: seat.accountId,
+        profileId: seat.profileId,
+        model: seat.model,
+        grantId: seat.grantId,
+        intentId: input.intentId,
+        task,
+        repo: input.repository,
+        writePaths: [],
+        forcedModel: 'claude-opus-5-5',
+        forcedEffort: 'medium',
+      });
+      if (!parsedCall.success) throw new Refusal('DESIGN_CREATE_INVALID', 400);
+      try {
+        output = await input.worker.run(parsedCall.data);
+      } catch (error) {
+        if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
+        throw new DesignCreateModelFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
+      }
     } finally {
       await input.release(seat);
     }
@@ -848,7 +1293,13 @@ export async function runDesignCreate(input: {
       const selected = bundle.screens.slice(0, input.screens);
       if (new Set(selected.map(screen => screen.name)).size !== selected.length) throw new Refusal('DESIGN_CREATE_INVALID', 400);
       order = selected.map(screen => screen.name);
-      for (const screen of selected) ready.push({name: screen.name, css: screen.css, fileHtml: renderScreenHtml(screen.html, `${screen.name}.css`)});
+      for (const screen of selected) {
+        const fileHtml = renderScreenHtml(screen.html, `${screen.name}.css`);
+        if (Buffer.byteLength(fileHtml, 'utf8') > MAX_CREATE_FILE_BYTES || Buffer.byteLength(screen.css, 'utf8') > MAX_CREATE_FILE_BYTES) {
+          throw new Refusal('DESIGN_CREATE_INVALID', 400);
+        }
+        ready.push({name: screen.name, css: screen.css, fileHtml});
+      }
     } else {
       for (const screen of rework) {
         if (!byName.has(screen.name)) throw new Refusal('DESIGN_CREATE_INVALID', 400);
@@ -863,7 +1314,11 @@ export async function runDesignCreate(input: {
         }
         const screen = byName.get(name);
         if (!screen) throw new Refusal('DESIGN_CREATE_INVALID', 400);
-        ready.push({name, css: screen.css, fileHtml: renderScreenHtml(screen.html, `${name}.css`)});
+        const fileHtml = renderScreenHtml(screen.html, `${name}.css`);
+        if (Buffer.byteLength(fileHtml, 'utf8') > MAX_CREATE_FILE_BYTES || Buffer.byteLength(screen.css, 'utf8') > MAX_CREATE_FILE_BYTES) {
+          throw new Refusal('DESIGN_CREATE_INVALID', 400);
+        }
+        ready.push({name, css: screen.css, fileHtml});
       }
     }
     const roundDir = join(root, `rodada-${round}`);
