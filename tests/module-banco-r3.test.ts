@@ -11,7 +11,22 @@ type Row = {tool: string; status: string; detail: string; files?: string[]};
 type Finding = {rule: string; file: string; line: number; evidence: string};
 type Report = {coverage: Row[]; findings: Finding[]};
 
-function runIsolated<T>(rubyArgs: string[], repo?: string): T {
+const native = process.env.AC_BANCO_NATIVE === '1';
+const skipPostgres = !native && !process.env.AC_BANCO_IMAGE && 'AC_BANCO_NATIVE=1 usa o PostgreSQL efêmero local';
+const collect = 'puts collect_fixture.to_json';
+
+function runIsolated<T>(program: string, repo?: string, args: string[] = []): T {
+  const script = 'def collect_fixture(name = ""); Banco.collect(File.join(ENV.fetch("AC_BANCO_TEST_REPO"), name),'
+    + ' squawk: ENV.fetch("AC_BANCO_SQUAWK", "/usr/local/bin/squawk")); end; ' + program;
+  const options = {encoding: 'utf8', timeout: 80_000, maxBuffer: 1024 * 1024} as const;
+  if (native) {
+    const squawk = process.env.AC_BANCO_SQUAWK;
+    assert.ok(squawk, 'AC_BANCO_SQUAWK aponta para o executável pinado');
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('PG')));
+    return JSON.parse(execFileSync('ruby', ['--disable=rubyopt', '-r', collector, '-e', script, '--', ...args], {
+      ...options, env: {...env, AC_BANCO_SQUAWK: resolve(squawk), AC_BANCO_TEST_REPO: repo},
+    }));
+  }
   const image = process.env.AC_BANCO_IMAGE!;
   assert.match(image, /^sha256:[a-f0-9]{64}$/);
   const output = execFileSync('docker', [
@@ -20,9 +35,9 @@ function runIsolated<T>(rubyArgs: string[], repo?: string): T {
     '--memory', '2g', '--memory-swap', '2g', '--cpus', '2',
     '--tmpfs', '/tmp:rw,exec,nosuid,nodev,mode=1777,size=512m', '--env', 'HOME=/tmp', '--env', 'TMPDIR=/tmp',
     '--workdir', '/tmp', '--mount', `type=bind,src=${collector},dst=/collector.rb,readonly`,
-    ...(repo ? ['--mount', `type=bind,src=${repo},dst=/repo,readonly`] : []),
-    '--entrypoint', '/usr/bin/ruby', image, '--disable=rubyopt', ...rubyArgs,
-  ], {encoding: 'utf8', timeout: 80_000, maxBuffer: 1024 * 1024});
+    ...(repo ? ['--env', 'AC_BANCO_TEST_REPO=/repo', '--mount', `type=bind,src=${repo},dst=/repo,readonly`] : []),
+    '--entrypoint', '/usr/bin/ruby', image, '--disable=rubyopt', '-r', '/collector.rb', '-e', script, '--', ...args,
+  ], options);
   return JSON.parse(output);
 }
 
@@ -65,11 +80,10 @@ test('inventário conserva consultas válidas ao lado de entradas inválidas', (
 });
 
 test('PostgreSQL isolado preserva atribuição e medições após falhas sintéticas', {
-  skip: !process.env.AC_BANCO_IMAGE && 'AC_BANCO_IMAGE aponta para imagem já disponível', timeout: 90_000,
+  skip: skipPostgres, timeout: 90_000,
 }, () => {
   const script = `
     require 'dexter'
-    require '/collector.rb'
     def source(path, sql); Banco::Source.new(path, sql); end
     reports = {}
     Dir.mktmpdir('c5-r3-', '/tmp') do |dir|
@@ -87,7 +101,7 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         raise "unexpected commit" if db.migrate('fresh', prefix + [
           source('db/migrations/003_check.sql', "/* ação */\\nSET CONSTRAINTS ALL IMMEDIATE;"),
           source('db/migrations/004_next.sql', 'SELECT 1;')
-        ])
+        ], replay: true)
         db.connect('fresh') do |connection|
           raise "unconfirmed batch persisted data" unless connection.exec("SELECT to_regclass('public.parent') IS NULL").getvalue(0, 0) == 't'
         end
@@ -104,6 +118,44 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         db.instance_variable_set(:@report, positioned)
         db.migrate('fresh', prefix + [source('db/migrations/003_direct.sql', "-- ação\\nSELECT missing;\\nSET CONSTRAINTS ALL IMMEDIATE;")])
         reports[:positioned] = JSON.parse(positioned.to_json)
+        missing_constraint = Banco::Report.new
+        db.instance_variable_set(:@report, missing_constraint)
+        db.migrate('fresh', prefix + [
+          source('db/migrations/003_missing.sql', "SELECT 1;\\n/* ação */\\nSET CONSTRAINTS missing IMMEDIATE;")
+        ], replay: true)
+        reports[:missing_constraint] = JSON.parse(missing_constraint.to_json)
+        missing_nested = Banco::Report.new
+        db.instance_variable_set(:@report, missing_nested)
+        db.migrate('fresh', prefix + [
+          source('db/migrations/003_missing_nested.sql', "-- ação\\nDO $$ BEGIN SET CONSTRAINTS missing IMMEDIATE; END $$;")
+        ], replay: true)
+        reports[:missing_nested] = JSON.parse(missing_nested.to_json)
+        missing_in_trigger = Banco::Report.new
+        db.instance_variable_set(:@report, missing_in_trigger)
+        db.migrate('fresh', [
+          source('db/migrations/001_trigger.sql', <<~SQL),
+            CREATE TABLE task (id integer);
+            CREATE FUNCTION check_task() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+              SET CONSTRAINTS missing IMMEDIATE;
+              RETURN NEW;
+            END;
+            $$;
+            CREATE CONSTRAINT TRIGGER deferred_task AFTER INSERT ON task
+              DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_task();
+          SQL
+          source('db/migrations/002_data.sql', 'INSERT INTO task VALUES (1);'),
+          source('db/migrations/003_check.sql', 'SET CONSTRAINTS ALL IMMEDIATE;')
+        ], replay: true)
+        reports[:missing_in_trigger] = JSON.parse(missing_in_trigger.to_json)
+        different = Banco::Report.new
+        db.instance_variable_set(:@report, different)
+        db.migrate('fresh', [
+          source('db/migrations/001_first.sql', ddl + ' INSERT INTO child VALUES (19);'),
+          source('db/migrations/002_second.sql', 'INSERT INTO parent VALUES (19); INSERT INTO child VALUES (424242);'),
+          source('db/migrations/003_tail.sql', 'SELECT 1;')
+        ], replay: true)
+        reports[:different] = JSON.parse(different.to_json)
         single = Banco::Report.new
         db.instance_variable_set(:@report, single)
         db.migrate('previous', [source('db/migrations/001_single.sql', ddl + ' INSERT INTO child VALUES (42);')])
@@ -112,6 +164,12 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         db.instance_variable_set(:@report, timeout)
         db.migrate('upgraded', [source('db/migrations/001_slow.sql', 'SELECT pg_sleep(6);'), source('db/migrations/002_next.sql', 'SELECT 1;')])
         reports[:timeout] = JSON.parse(timeout.to_json)
+        unavailable = Banco::Report.new
+        db.instance_variable_set(:@report, unavailable)
+        unavailable.measure('pg-migrate', 'Cenário indisponível') do
+          db.migrate('absent_test_database', [source('db/migrations/001_unused.sql', 'SELECT 1;')])
+        end
+        reports[:unavailable] = JSON.parse(unavailable.to_json)
         rejected = Banco::Report.new
         db.instance_variable_set(:@report, rejected)
         db.migrate('upgraded', [source('db/migrations/001_ok.sql', 'CREATE TABLE t(id integer);'), source('db/migrations/002_bad.sql', "SELECT 1;\\nSELECT missing FROM t;"), source('db/migrations/003_next.sql', 'SELECT 1;')])
@@ -124,6 +182,16 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
           source('db/migrations/002_new.sql', 'CREATE TABLE extra(id integer);')
         ], nil, source('banco/assert.sql', 'SELECT app_check();'))
         reports[:app] = JSON.parse(app.to_json)
+        [0, 2].each do |rows|
+          strict = Banco::Report.new
+          db.instance_variable_set(:@report, strict)
+          ddl_strict = "CREATE FUNCTION strict_check() RETURNS boolean LANGUAGE plpgsql AS $$ DECLARE n integer; BEGIN SELECT i INTO STRICT n FROM generate_series(1, #{rows}) AS i; RETURN true; END $$;"
+          db.migrate('fresh', [
+            source('db/migrations/001_strict_function.sql', ddl_strict),
+            source('db/migrations/002_strict.sql', "-- ação\\nSELECT strict_check();")
+          ])
+          reports["strict_#{rows}"] = JSON.parse(strict.to_json)
+        end
         syntax = Banco::Report.new
         db.instance_variable_set(:@report, syntax)
         db.migrate('fresh', [source('db/migrations/001_syntax.sql', "-- ação\\n@")])
@@ -143,29 +211,48 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
     end
     puts JSON.generate(reports)
   `;
-  const result = runIsolated<Record<string, Report>>(['-e', script]);
-  const {early, mixed, nested, positioned, single, timeout, rejected, app, syntax, workload} = result;
-  assert.deepEqual(early.findings, []);
-  assert.ok(early.coverage.some(row => row.status === 'ok' && /003_check.sql.*lote rejeitado.*SQLSTATE 23503.*SET CONSTRAINTS IMMEDIATE na linha 2.*indeterminada/.test(row.detail)));
+  const result = runIsolated<Record<string, Report>>(script);
+  const {early, mixed, nested, positioned, missing_constraint, missing_nested, different, single, timeout, unavailable, rejected, app, syntax, workload} = result;
+  assert.ok(early.coverage.some(row => row.status === 'ok' && /003_check.sql.*lote rejeitado.*SQLSTATE 23503.*SET CONSTRAINTS IMMEDIATE na linha 2.*002_data.sql/.test(row.detail)));
+  assert.ok(early.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && f.file.endsWith('002_data.sql')
+    && /prefixo anterior confirmou/.test(f.evidence)));
   for (const name of ['001_schema.sql', '002_data.sql', '004_next.sql']) {
     assert.ok(early.coverage.some(row => row.status === 'skipped' && row.detail.includes(name)));
   }
-  assert.deepEqual(mixed.findings, []);
+  assert.ok(mixed.findings.some(f => f.rule === 'BANCO-LOTE-MIGRACAO-REJEITADO' && f.file.endsWith('003_mix.sql')));
   assert.ok(mixed.coverage.some(row => row.status === 'ok' && /003_mix.sql.*detecção durante a execução.*pode ter antecipado.*indeterminada/.test(row.detail)));
-  assert.deepEqual(nested.findings, []);
+  assert.ok(nested.findings.some(f => f.rule === 'BANCO-LOTE-MIGRACAO-REJEITADO' && f.file.endsWith('003_nested.sql')));
   assert.ok(nested.coverage.some(row => row.status === 'ok' && /003_nested.sql.*SET CONSTRAINTS chamado pelo arquivo.*indeterminada/.test(row.detail)));
   assert.ok(positioned.findings.some(f => f.file.endsWith('003_direct.sql') && f.line === 2 && /SQLSTATE 42703/.test(f.evidence)));
+  for (const [report, file, line] of [[missing_constraint, '003_missing.sql', 3], [missing_nested, '003_missing_nested.sql', 2]] as const) {
+    assert.deepEqual(report.findings, [{rule: 'BANCO-MIGRACAO-REJEITADA', tool: 'pg-migrate', severity: 'alta',
+      file: `db/migrations/${file}`, line, message: 'A migração foi rejeitada no cenário fresh.', evidence: 'SQLSTATE 42704'}]);
+  }
+  assert.equal(result.missing_in_trigger.findings.length, 1);
+  assert.ok(result.missing_in_trigger.findings.some(f => f.rule === 'BANCO-LOTE-MIGRACAO-REJEITADO'
+    && /SQLSTATE 42704.*001_trigger.sql.*origem entre arquivos indeterminada/.test(f.evidence)));
+  assert.equal(different.findings.length, 1);
+  assert.ok(different.findings.some(f => f.rule === 'BANCO-LOTE-MIGRACAO-REJEITADO' && f.file.endsWith('003_tail.sql')
+    && /SQLSTATE 23503.*lote de 3 arquivos.*001_first.sql.*003_tail.sql.*origem entre arquivos indeterminada.*referenciam/.test(f.evidence)));
+  assert.doesNotMatch(JSON.stringify(different), /424242|INSERT INTO/);
   assert.ok(single.findings.some(f => f.file.endsWith('001_single.sql') && /SQLSTATE 23503.*linha exata não informada/.test(f.evidence)));
   assert.ok(single.coverage.some(row => row.status === 'ok' && /lote rejeitado no commit.*SQLSTATE 23503/.test(row.detail)));
   assert.ok(timeout.coverage.some(row => row.status === 'failed' && /001_slow.sql.*SQLSTATE 57014/.test(row.detail)));
   assert.ok(timeout.coverage.some(row => row.status === 'skipped' && row.detail.includes('002_next.sql')));
   assert.equal(timeout.findings.length, 0);
+  assert.deepEqual(unavailable.findings, []);
+  assert.ok(unavailable.coverage.some(row => row.status === 'failed' && /Cenário indisponível.*PG::ConnectionBad/.test(row.detail)));
   assert.ok(rejected.findings.some(f => f.file.endsWith('002_bad.sql') && f.line === 2 && /SQLSTATE 42703/.test(f.evidence)));
   assert.ok(rejected.coverage.some(row => row.status === 'skipped' && /001_ok.sql.*não confirmada/.test(row.detail)));
   assert.ok(rejected.coverage.some(row => row.status === 'skipped' && row.detail.includes('003_next.sql')));
   assert.ok(app.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && /SQLSTATE P0001/.test(f.evidence)));
   assert.ok(app.findings.some(f => f.rule === 'BANCO-INVARIANTE-HISTORICO' && /SQLSTATE P0001/.test(f.evidence)));
   assert.ok(app.coverage.every(row => row.status !== 'failed'));
+  for (const [report, code] of [[result.strict_0, 'P0002'], [result.strict_2, 'P0003']] as const) {
+    assert.ok(report.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && f.file.endsWith('002_strict.sql')
+      && f.line === 2 && f.evidence === `SQLSTATE ${code}`));
+    assert.ok(report.coverage.every(row => row.status !== 'failed'));
+  }
   assert.ok(syntax.findings.some(f => f.file.endsWith('001_syntax.sql') && f.line === 2 && /PgQuery::ParseError/.test(f.evidence)));
   assert.ok(workload.coverage.some(row => row.status === 'failed' && /banco\/seed.sql.*SQLSTATE 42703/.test(row.detail)));
   for (const tool of ['pg_stat_statements', 'EXPLAIN', 'dexter']) {
@@ -181,7 +268,7 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
 });
 
 test('coleta integrada separa seed histórico da carga final e mantém consultas individuais', {
-  skip: !process.env.AC_BANCO_IMAGE && 'AC_BANCO_IMAGE aponta para imagem já disponível', timeout: 90_000,
+  skip: skipPostgres, timeout: 90_000,
 }, () => {
   const dir = mkdtempSync(join(root, '.c5-r3-collect-'));
   try {
@@ -201,7 +288,7 @@ test('coleta integrada separa seed histórico da carga final e mantém consultas
         const sql = variant === 'empty' ? '' : variant === 'syntax' ? '-- ação\n@' : 'INSERT INTO items(new_name) VALUES (1);';
         writeFileSync(workload, sql, {mode: variant === 'unreadable' ? 0o000 : 0o644});
       }
-      writeFileSync(join(base, 'banco/queries/good.sql'), 'SELECT new_name FROM items;');
+      writeFileSync(join(base, 'banco/queries/good.sql'), '/* ação\n   consulta */\n-- origem\nSELECT new_name FROM items;');
       writeFileSync(join(base, 'banco/queries/empty.sql'), '');
       writeFileSync(join(base, 'banco/queries/bad.sql'), '-- ação\n@');
       writeFileSync(join(base, 'banco/queries/out.sql'), 'DELETE FROM items;');
@@ -213,8 +300,8 @@ test('coleta integrada separa seed histórico da carga final e mantém consultas
         writeFileSync(join(base, 'banco/queries/zz-excedente.sql'), 'SELECT new_name FROM items;');
       }
     }
-    const script = `require '/collector.rb'; puts JSON.generate(ARGV.to_h { |name| [name, JSON.parse(Banco.collect('/repo/' + name).to_json)] })`;
-    const reports = runIsolated<Record<string, Report>>(['-e', script, ...variants], dir);
+    const script = 'puts JSON.generate(ARGV.to_h { |name| [name, JSON.parse(collect_fixture(name).to_json)] })';
+    const reports = runIsolated<Record<string, Report>>(script, dir, variants);
     for (const report of Object.values(reports)) {
       assert.ok(report.coverage.some(row => row.tool === 'pg_restore' && row.status === 'ok' && /após atualização, invariante preservado/.test(row.detail)));
       for (const tool of ['pg_stat_statements', 'EXPLAIN', 'dexter']) {
@@ -222,7 +309,10 @@ test('coleta integrada separa seed histórico da carga final e mantém consultas
           assert.ok(report.coverage.some(row => row.tool === tool && row.detail.includes(file)), `${tool}: ${file}`);
         }
       }
-      assert.ok(report.coverage.some(row => row.tool === 'pg_stat_statements' && row.status === 'ok' && row.detail.includes('good.sql')));
+      for (const tool of ['pg_stat_statements', 'EXPLAIN']) {
+        assert.ok(report.coverage.some(row => row.tool === tool && row.status === 'ok'
+          && row.files?.includes('banco/queries/good.sql') && /good.sql: linha 4;/.test(row.detail)));
+      }
     }
     assert.ok(reports.legacy.coverage.some(row => row.status === 'failed' && /seed.sql.*SQLSTATE 42703/.test(row.detail)));
     assert.ok(reports.explicit.coverage.some(row => row.status === 'ok' && /workload.sql confirmada/.test(row.detail)));
@@ -251,22 +341,24 @@ test('coleta integrada separa seed histórico da carga final e mantém consultas
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
 
-test('saída do coletor distingue rejeição e cancelamento no commit e preserva o controle limpo', {
-  skip: !process.env.AC_BANCO_IMAGE && 'AC_BANCO_IMAGE aponta para imagem já disponível', timeout: 90_000,
+test('saída do coletor distingue rejeição no lote de três arquivos e cancelamento no commit', {
+  skip: skipPostgres, timeout: 90_000,
 }, () => {
-  const rejected = runIsolated<Report>(['/collector.rb'], join(fixtures, 'r4-commit/rejected'));
+  const rejected = runIsolated<Report>(collect, join(fixtures, 'r5-commit/rejected'));
   assert.ok(rejected.coverage.some(row => row.status === 'ok'
-    && /pg-migrate:fresh: lote rejeitado no commit.*origem entre arquivos indeterminada.*SQLSTATE 23503/.test(row.detail)));
+    && /pg-migrate:fresh: lote rejeitado no commit.*rejeição reproduzida com a inclusão de db\/migrations\/002_data.sql.*SQLSTATE 23503/.test(row.detail)));
   assert.ok(rejected.coverage.every(row => row.status !== 'failed'));
-  assert.ok(rejected.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA'
-    && f.file.endsWith('002_data.sql') && /SQLSTATE 23503/.test(f.evidence)));
+  assert.ok(rejected.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && f.file.endsWith('002_data.sql')
+    && /SQLSTATE 23503.*lote de 3 arquivos.*003_tail.sql.*prefixo anterior confirmou.*reproduziu/.test(f.evidence)));
   assert.ok(rejected.findings.every(f => f.rule !== 'BANCO-MIGRACAO-REJEITADA' || f.file.endsWith('002_data.sql')));
-  const canceled = runIsolated<Report>(['/collector.rb'], join(fixtures, 'r4-commit/canceled'));
+  const canceled = runIsolated<Report>(collect, join(fixtures, 'r4-commit/canceled'));
   assert.ok(canceled.coverage.some(row => row.status === 'failed'
     && /pg-migrate:fresh: medição interrompida no commit.*SQLSTATE 57014/.test(row.detail)));
-  assert.ok(canceled.findings.every(f => f.rule !== 'BANCO-MIGRACAO-REJEITADA'));
+  assert.ok(canceled.findings.every(f => !['BANCO-MIGRACAO-REJEITADA', 'BANCO-LOTE-MIGRACAO-REJEITADO'].includes(f.rule)));
   for (const report of [rejected, canceled]) {
-    for (const name of ['001_schema.sql', '002_data.sql']) {
+    const files = ['001_schema.sql', '002_data.sql'];
+    if (report === rejected) files.push('003_tail.sql');
+    for (const name of files) {
       assert.ok(report.coverage.some(row => row.status === 'skipped'
         && row.detail.startsWith(`pg-migrate:fresh:db/migrations/${name}:`)));
       assert.ok(report.coverage.every(row => !row.detail.startsWith(`pg-migrate:fresh:db/migrations/${name}:`)
@@ -274,9 +366,33 @@ test('saída do coletor distingue rejeição e cancelamento no commit e preserva
     }
   }
   assert.doesNotMatch(JSON.stringify([rejected, canceled]), /424242|INSERT INTO/);
-  const clean = runIsolated<Report>(['/collector.rb'], join(fixtures, 'clean'));
+});
+
+test('coletor atribui as medições e o candidato Dexter e valida o controle limpo com Squawk', {
+  skip: skipPostgres, timeout: 90_000,
+}, () => {
+  const clean = runIsolated<Report>(collect, join(fixtures, 'clean'));
+  const defective = runIsolated<Report>(collect, join(fixtures, 'defective'));
   assert.ok(clean.coverage.every(row => row.status !== 'failed'));
   assert.ok(clean.coverage.some(row => row.status === 'ok' && /pg_restore:upgraded:.*após atualização, invariante preservado/.test(row.detail)));
-  assert.ok(clean.coverage.some(row => row.tool === 'EXPLAIN' && row.files?.includes('banco/queries/by-code.sql')));
-  assert.ok(clean.findings.every(f => !['BANCO-MIGRACAO-REJEITADA', 'BANCO-INVARIANTE-HISTORICO', 'BANCO-INDICE-CANDIDATO', 'BANCO-CONSULTA-LENTA'].includes(f.rule)));
+  assert.deepEqual(clean.findings, []);
+  const lint = clean.coverage.filter(row => row.tool === 'squawk');
+  assert.equal(lint.length, 2);
+  assert.ok(lint.every(row => row.status === 'ok' && row.files?.length === 1 && /: 0 alertas$/.test(row.detail)));
+  for (const report of [defective, clean]) {
+    for (const file of ['banco/queries/by-code.sql', 'banco/queries/latency.sql']) {
+      for (const tool of ['pg_stat_statements', 'EXPLAIN']) {
+        assert.ok(report.coverage.some(row => row.tool === tool && row.status === 'ok'
+          && row.files?.includes(file) && row.detail.includes(file + ': linha 2;')), tool + ' / ' + file);
+      }
+    }
+  }
+  assert.ok(defective.coverage.some(row => row.tool === 'dexter' && row.status === 'ok'
+    && row.files?.includes('banco/queries/by-code.sql') && /by-code.sql: linha 2; planos hipotéticos comparados/.test(row.detail)));
+  const finding = defective.findings.find(f => f.rule === 'BANCO-INDICE-CANDIDATO');
+  assert.equal(finding?.file, 'banco/queries/by-code.sql');
+  assert.equal(finding.line, 2);
+  const costs = /redução estimada de ([\d.]+) para ([\d.]+).*public\.items \/ item_code/.exec(finding.evidence);
+  assert.ok(costs, finding.evidence);
+  assert.ok(Number(costs[2]) < Number(costs[1]) * 0.5);
 });

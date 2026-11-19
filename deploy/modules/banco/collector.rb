@@ -22,6 +22,8 @@ module Banco
   MAX_QUERY_ISSUES = 40
   SAMPLES = 3
   SLOW_MS = 100
+  REPLAY_ATTEMPTS = 10
+  REPLAY_SECONDS = 8
   MIGRATION_NAME = /\A\d+_[a-zA-Z0-9_.-]+\.sql\z/
   QUERY_NAME = /\A[a-zA-Z0-9_][a-zA-Z0-9_.-]*\.sql\z/
   SEED = "banco/seed.sql"
@@ -191,6 +193,13 @@ module Banco
     raise ToolError, "SELECT inválido para o parser PostgreSQL; linha #{error_line(error, source)}"
   end
 
+  def self.statement_line(source, offset: 0)
+    token = PgQuery.scan(source.sql).first.tokens.find do |entry|
+      entry.start >= offset && !%i[SQL_COMMENT C_COMMENT ASCII_59].include?(entry.token)
+    end
+    token ? source.sql.byteslice(0, token.start).count("\n") + 1 : source.line
+  end
+
   def self.lint(migrations, report, executable: "/usr/local/bin/squawk")
     report.measure("squawk", "Versão do executável") do
       output, _, status = Open3.capture3("timeout", "15s", executable, "--version", chdir: "/tmp")
@@ -277,7 +286,7 @@ module Banco
       end
     end
 
-    def migrate(name, sources)
+    def migrate(name, sources, replay: false)
       connect(name) do |db|
         db.exec("BEGIN")
         sources.each_with_index do |source, index|
@@ -298,10 +307,11 @@ module Banco
             detection = deferred_check_detection(error, source, statements) if index.positive? && rejected && error.is_a?(PG::Error)
             outcome = "execução interrompida (#{evidence})"
             if detection
-              outcome = "lote rejeitado (#{evidence}); #{detection}; origem entre arquivos indeterminada"
+              origin = report_batch_rejection(name, sources.take(index + 1), error, detection, replay: replay, during_file: true)
+              outcome = "lote rejeitado (#{evidence}); #{detection}; #{origin}"
             elsif rejected
               @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", source, "alta",
-                "A migração foi rejeitada no cenário #{name}.", evidence, line: Banco.error_line(error, source))
+                "A migração foi rejeitada no cenário #{name}.", evidence, line: migration_error_line(error, source, statements))
               outcome = "rejeitada (#{evidence})"
             end
             @report.cover("pg-migrate", rejected ? "ok" : "failed", "pg-migrate:#{name}:#{source.path}: #{outcome}; transação não confirmada")
@@ -319,7 +329,8 @@ module Banco
           rejected = rejection?(error)
           outcome = rejected ? "lote rejeitado no commit" : "medição interrompida no commit; confirmação indisponível"
           if rejected && sources.size > 1
-            outcome += "; origem entre arquivos indeterminada"
+            origin = report_batch_rejection(name, sources, error, "detecção no commit", replay: replay)
+            outcome += "; #{origin}"
           elsif rejected && sources.size == 1
             @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", sources.first, "alta",
               "A transação da migração foi rejeitada no commit em #{name}.", "#{evidence}; linha exata não informada no commit.")
@@ -345,7 +356,7 @@ module Banco
         @report.cover("pg_restore", "skipped", "São necessárias duas migrações para repartir histórico e atualização.")
         return
       end
-      return @report.cover("pg_restore", "skipped", "A transação do prefixo histórico não foi confirmada.") unless migrate("previous", migrations[0...-1])
+      return @report.cover("pg_restore", "skipped", "A transação do prefixo histórico não foi confirmada.") unless migrate("previous", migrations[0...-1], replay: true)
 
       if seed
         connect("previous") { |db| db.exec(seed.sql) }
@@ -402,13 +413,14 @@ module Banco
     def workload(source)
       @report.measure("EXPLAIN", source.path) do
         Banco.select_only!(source)
+        line = Banco.statement_line(source)
         template = "EXPLAIN (VERBOSE, FORMAT JSON) "
         identifier = connect("fresh", readonly: true) do |db|
           JSON.parse(db.exec_params(template + source.sql, []).getvalue(0, 0)).first.fetch("Query Identifier")
         end
-        @report.measure("pg_stat_statements", source.path) { observe(source, identifier) }
-        @report.measure("EXPLAIN", source.path) { explain(source) }
-        @report.measure("dexter", source.path) { advise(source) }
+        @report.measure("pg_stat_statements", source.path) { observe(source, identifier, line: line) }
+        @report.measure("EXPLAIN", source.path) { explain(source, line: line) }
+        @report.measure("dexter", source.path) { advise(source, line: line) }
       rescue PG::Error => error
         %w[pg_stat_statements dexter].each do |tool|
           @report.cover(tool, "skipped", "#{source.path}: plano inicial indisponível")
@@ -424,13 +436,36 @@ module Banco
 
     private
 
-    # Inclui a exceção padrão da aplicação e exclui interrupções como 57014.
+    # Inclui RAISE EXCEPTION e os desvios de cardinalidade do SELECT INTO STRICT.
     def rejection?(error)
-      code = error.result&.error_field(PG::Result::PG_DIAG_SQLSTATE)
-      code && (code == "P0001" || %w[0A 21 22 23 25 2B 2D 3D 3F 42 44].include?(code[0, 2]))
+      code = sqlstate(error)
+      code && (%w[P0001 P0002 P0003].include?(code) || %w[0A 21 22 23 25 2B 2D 3D 3F 42 44].include?(code[0, 2]))
+    end
+
+    def sqlstate(error)
+      error.result&.error_field(PG::Result::PG_DIAG_SQLSTATE)
+    end
+
+    def direct_constraint_error?(error)
+      return false unless error.is_a?(PG::Error) && %w[42704 42809].include?(sqlstate(error)) &&
+        error.result&.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION) == "AfterTriggerSetState"
+
+      # Um gatilho de um arquivo anterior também pode chamar SET CONSTRAINTS.
+      context = error.result.error_field(PG::Result::PG_DIAG_CONTEXT)
+      !context || context.match?(/\ASQL statement "[^\n]*"\nPL\/pgSQL function inline_code_block line \d+ at SQL statement\z/)
+    end
+
+    def migration_error_line(error, source, statements)
+      if direct_constraint_error?(error) && !error.result.error_field(PG::Result::PG_DIAG_CONTEXT)
+        commands = statements.select { |entry| entry.stmt.constraints_set_stmt }
+        return Banco.statement_line(source, offset: commands.first.stmt_location) if commands.one?
+      end
+      Banco.error_line(error, source)
     end
 
     def deferred_check_detection(error, source, statements)
+      return if direct_constraint_error?(error)
+
       # A checagem também pode ser disparada por PL/pgSQL. O contexto bruto fica fora da saída.
       context = error.result&.error_field(PG::Result::PG_DIAG_CONTEXT)
       if context&.match?(/^SQL statement "[[:space:]]*SET[[:space:]]+CONSTRAINTS\b/i)
@@ -441,9 +476,7 @@ module Banco
       return if immediate.empty?
 
       if statements.one?
-        token = PgQuery.scan(source.sql).first.tokens.find { |entry| entry.token == :SET }
-        line = source.sql.byteslice(0, token.start).count("\n") + 1
-        return "detecção em SET CONSTRAINTS IMMEDIATE na linha #{line}"
+        return "detecção em SET CONSTRAINTS IMMEDIATE na linha #{Banco.statement_line(source)}"
       end
 
       position = error.result&.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION)&.to_i
@@ -455,6 +488,95 @@ module Banco
       offset = source.sql[0, position - 1].bytesize
       if immediate.any? { |entry| offset >= entry.stmt_location && (entry.stmt_len.zero? || offset <= entry.stmt_location + entry.stmt_len) }
         "detecção em SET CONSTRAINTS IMMEDIATE na linha #{Banco.error_line(error, source)}"
+      end
+    end
+
+    def report_batch_rejection(name, sources, error, detection, replay:, during_file: false)
+      origin = locate_batch_rejection(sources, error, during_file: during_file) if replay
+      evidence = "#{sql_diagnostic(error)}; #{detection}; lote de #{sources.size} arquivos " \
+        "(#{sources.first.path} até #{sources.last.path}, inclusive, em ordem lexicográfica)"
+      if origin
+        @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", origin, "alta",
+          "A inclusão desta migração reproduziu a rejeição do lote no cenário #{name}.",
+          "#{evidence}; em cópias descartáveis, o prefixo anterior confirmou e o prefixo com este arquivo reproduziu a mesma violação; linha exata indisponível.",
+          line: Banco.statement_line(origin))
+        "rejeição reproduzida com a inclusão de #{origin.path}"
+      else
+        @report.find("pg-migrate", "BANCO-LOTE-MIGRACAO-REJEITADO", sources.last, "alta",
+          "O lote de migrações foi rejeitado no cenário #{name}.",
+          "#{evidence}; origem entre arquivos indeterminada; arquivo e linha referenciam o último arquivo alcançado pela execução.",
+          line: Banco.statement_line(sources.last))
+        "origem entre arquivos indeterminada"
+      end
+    end
+
+    def violation_signature(error)
+      return unless sqlstate(error)&.start_with?("23") && error.result.error_field(PG::Result::PG_DIAG_CONSTRAINT_NAME)
+
+      # Campos do servidor ajudam a distinguir violações com o mesmo SQLSTATE.
+      # Os valores e as mensagens usados na comparação ficam fora do relatório.
+      %i[SQLSTATE SCHEMA_NAME TABLE_NAME CONSTRAINT_NAME MESSAGE_PRIMARY MESSAGE_DETAIL].map do |field|
+        error.result.error_field(PG::Result.const_get("PG_DIAG_#{field}"))
+      end
+    end
+
+    def locate_batch_rejection(sources, error, during_file:)
+      signature = violation_signature(error)
+      return unless signature
+
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + REPLAY_SECONDS
+      confirmed = 0
+      rejected = sources.size
+      return unless replay_prefix(sources, signature, deadline, during_file: during_file) == :rejected
+
+      # Uma rejeição não é monotônica entre prefixos: um arquivo posterior pode
+      # corrigir dados. Só atribua quando os dois prefixos adjacentes forem provados.
+      (REPLAY_ATTEMPTS - 1).times do
+        return sources[rejected - 1] if rejected == confirmed + 1
+
+        length = (confirmed + rejected) / 2
+        case replay_prefix(sources.take(length), signature, deadline)
+        when :confirmed then confirmed = length
+        when :rejected then rejected = length
+        else return
+        end
+      end
+      sources[rejected - 1] if rejected == confirmed + 1
+    rescue PG::Error
+      nil # A falha da repetição preserva a rejeição comprovada do lote original.
+    end
+
+    def replay_prefix(sources, signature, deadline, during_file: false)
+      remaining_ms = -> { ((deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)) * 1000).floor }
+      return if remaining_ms.call <= 0
+
+      # fresh e previous começam vazios a partir de template1. Cada prova usa
+      # outra cópia do mesmo template, sem reutilizar o estado da transação rejeitada.
+      connect("postgres", admin: true) { |db| db.exec("CREATE DATABASE banco_replay OWNER projeto") }
+      begin
+        connect("banco_replay") do |db|
+          budget = remaining_ms.call
+          return if budget <= 0
+
+          db.exec("BEGIN")
+          db.exec("SET LOCAL transaction_timeout = #{budget}")
+          index = 0
+          begin
+            sources.each do |source|
+              return if remaining_ms.call <= 0
+
+              db.exec(source.sql)
+              index += 1
+            end
+            db.exec("COMMIT")
+            :confirmed unless during_file
+          rescue PG::Error => error
+            expected_index = during_file ? sources.size - 1 : sources.size
+            :rejected if index == expected_index && violation_signature(error) == signature
+          end
+        end
+      ensure
+        connect("postgres", admin: true) { |db| db.exec("DROP DATABASE banco_replay WITH (FORCE)") }
       end
     end
 
@@ -473,7 +595,7 @@ module Banco
     end
 
     def sql_diagnostic(error)
-      code = error.respond_to?(:result) && error.result&.error_field(PG::Result::PG_DIAG_SQLSTATE)
+      code = error.is_a?(PG::Error) && sqlstate(error)
       code ? "SQLSTATE #{code}" : error.class.name
     end
 
@@ -513,7 +635,7 @@ module Banco
       end
     end
 
-    def observe(source, identifier)
+    def observe(source, identifier, line:)
       before = stats(identifier) || {}
       connect("fresh", readonly: true) do |db|
         SAMPLES.times do
@@ -534,16 +656,16 @@ module Banco
         after.fetch(key).to_i - before.fetch(key, "0").to_i
       end
       evidence = format("queryid=%d; amostras=%d; média=%.3f ms; blocos hit/read=%d/%d", identifier, calls, mean, *blocks)
-      @report.cover("pg_stat_statements", "ok", "pg_stat_statements:query:#{source.path}: #{evidence}", files: [source.path])
+      @report.cover("pg_stat_statements", "ok", "pg_stat_statements:query:#{source.path}: linha #{line}; #{evidence}", files: [source.path])
       if mean >= SLOW_MS
         @report.find("pg_stat_statements", "BANCO-CONSULTA-LENTA", source, "media",
-          "A consulta atingiu a média de #{SLOW_MS} ms na carga ensaiada.", evidence)
+          "A consulta atingiu a média de #{SLOW_MS} ms na carga ensaiada.", evidence, line: line)
       end
     rescue PG::Error => error
       raise ToolError, "#{sql_diagnostic(error)}; linha #{Banco.error_line(error, source)} (linha inicial se posição indisponível)"
     end
 
-    def explain(source)
+    def explain(source, line:)
       document = connect("fresh", readonly: true) do |db|
         sql = "EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) #{source.sql}"
         JSON.parse(db.exec_params(sql, []).getvalue(0, 0)).first
@@ -555,7 +677,7 @@ module Banco
       evidence = format("nó=%s; custo=%.2f; linhas reais=%d; execução=%.3f ms; blocos hit/read=%d/%d",
         node, plan.fetch("Total Cost"), plan.fetch("Actual Rows"), document.fetch("Execution Time"),
         plan.fetch("Shared Hit Blocks"), plan.fetch("Shared Read Blocks"))
-      @report.cover("EXPLAIN", "ok", "EXPLAIN:query:#{source.path}: #{evidence}", files: [source.path])
+      @report.cover("EXPLAIN", "ok", "EXPLAIN:query:#{source.path}: linha #{line}; #{evidence}", files: [source.path])
     rescue PG::Error => error
       raise ToolError, "#{sql_diagnostic(error)}; linha #{Banco.error_line(error, source, prefix: 'EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) ')} (linha inicial se posição indisponível)"
     end
@@ -576,12 +698,12 @@ module Banco
       end
     end
 
-    def advise(source)
+    def advise(source, line:)
       $log_level = "error"
       query = Dexter::Query.new(source.sql, PgQuery.fingerprint(source.sql))
       advisor.process_queries([query])
       if query.fully_analyzed?
-        @report.cover("dexter", "ok", "dexter:query:#{source.path}: planos hipotéticos comparados", files: [source.path])
+        @report.cover("dexter", "ok", "dexter:query:#{source.path}: linha #{line}; planos hipotéticos comparados", files: [source.path])
         if query.suggest_index
           index = query.indexes.map do |candidate|
             [candidate.fetch(:table), *candidate.fetch(:columns)].map do |identifier|
@@ -591,11 +713,11 @@ module Banco
           evidence = format("redução estimada de %.2f para %.2f unidades de custo; candidatos: %s",
             query.initial_cost, query.new_cost, index[0, 900])
           @report.find("dexter", "BANCO-INDICE-CANDIDATO", source, "media",
-            "Dexter encontrou um índice hipotético que reduz o custo do plano.", evidence)
+            "Dexter encontrou um índice hipotético que reduz o custo do plano.", evidence, line: line)
         end
       elsif query.missing_tables || query.candidate_tables.empty? || (query.initial_cost && query.initial_cost < 100) ||
           (query.initial_cost && query.candidate_columns.empty?)
-        @report.cover("dexter", "skipped", "dexter:query:#{source.path}: sem tabela/coluna elegível ou custo inicial abaixo de 100")
+        @report.cover("dexter", "skipped", "dexter:query:#{source.path}: linha #{line}; sem tabela/coluna elegível ou custo inicial abaixo de 100")
       else
         raise ToolError, "Dexter não obteve os planos necessários"
       end
@@ -604,7 +726,7 @@ module Banco
     end
   end
 
-  def self.collect(root)
+  def self.collect(root, squawk: "/usr/local/bin/squawk")
     report = Report.new
     inventory = Inventory.new(root)
     migrations = report.measure("squawk", "Inventário de migrações") { inventory.list("db/migrations", MIGRATION_NAME, 400) }
@@ -632,7 +754,7 @@ module Banco
       return report
     end
 
-    lint(migrations, report)
+    lint(migrations, report, executable: squawk)
     restore_inputs = report.measure("pg_restore", "Inventário de dados antigos") { [inventory.load(SEED), inventory.load(ASSERTION)] }
     workload_seed = report.measure("EXPLAIN", "Inventário da carga final") do
       inventory.load(WORKLOAD_SEED) || restore_inputs&.first
@@ -648,7 +770,7 @@ module Banco
         queries&.each { |source| query_tools.each { |tool| report.cover(tool, "skipped", "#{source.path}: banco isolado indisponível") } }
         next
       end
-      fresh = report.measure("pg-migrate", "Cenário do zero") { db.migrate("fresh", migrations) }
+      fresh = report.measure("pg-migrate", "Cenário do zero") { db.migrate("fresh", migrations, replay: true) }
       if restore_inputs
         report.measure("pg_restore", "Restauração histórica") { db.exercise_restore(migrations, *restore_inputs) }
       end

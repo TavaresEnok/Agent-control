@@ -74,7 +74,7 @@ test('C5 registra exceção do Dexter sem expor a mensagem', () => {
     def advisor.process_queries(*); raise "detalhe privado"; end
     db.define_singleton_method(:advisor) { advisor }
     source = Banco::Source.new("banco/queries/test.sql", "SELECT 1;")
-    report.measure("dexter", source.path) { db.send(:advise, source) }
+    report.measure("dexter", source.path) { db.send(:advise, source, line: 1) }
     puts report.to_json
   `);
   assert.deepEqual(report.findings, []);
@@ -102,7 +102,7 @@ test('C5 Dexter real compara índice hipotético com o controle indexado', {
         raise "migration failed" unless db.migrate("fresh", inventory.list("db/migrations", Banco::MIGRATION_NAME, 400))
         db.prepare_workload(inventory.load(Banco::SEED))
         source = inventory.load("banco/queries/by-code.sql")
-        report.measure("dexter", source.path) { db.send(:advise, source) }
+        report.measure("dexter", source.path) { db.send(:advise, source, line: Banco.statement_line(source)) }
         connection = db.send(:advisor).instance_variable_get(:@connection)
         raise "session is not read-only" unless connection.execute("SHOW default_transaction_read_only").first.values.first == "on"
         hypothetical = connection.execute("SELECT count(*) AS n FROM banco_tools.hypopg()").first.fetch("n").to_i

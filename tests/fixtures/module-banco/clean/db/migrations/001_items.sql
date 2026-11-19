@@ -1,3 +1,6 @@
+SET LOCAL lock_timeout = '1s';
+SET LOCAL statement_timeout = '5s';
+
 CREATE TABLE public.items (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   item_code bigint NOT NULL,
