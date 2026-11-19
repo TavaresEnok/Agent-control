@@ -422,8 +422,9 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
       const site = sites.get(registration.node) ?? {title: test.title, probes: []};
       const features = [];
       for (const argument of path.get('arguments')) {
-        if (!argument.isCallExpression() || !argument.get('callee').isIdentifier()) continue;
-        const binding = importedBinding(argument, argument.node.callee.name);
+        const called = argument.isAwaitExpression() ? argument.get('argument') : argument;
+        if (!called.isCallExpression() || !called.get('callee').isIdentifier()) continue;
+        const binding = importedBinding(called, called.node.callee.name);
         const source = localImportSource(file, binding?.module);
         if (source && binding.name) features.push(JSON.stringify([source, binding.name]));
       }
@@ -462,13 +463,13 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
 }
 
 function testCall(node, aliases) {
-  if (node.type !== 'CallExpression') return;
+  if (!['CallExpression', 'OptionalCallExpression'].includes(node.type)) return;
   const {callee, arguments: args} = node;
-  const localName = callee.type === 'Identifier' ? callee.name
-    : callee.type === 'MemberExpression' ? callee.object.name : undefined;
+  const isMember = ['MemberExpression', 'OptionalMemberExpression'].includes(callee.type);
+  const localName = callee.type === 'Identifier' ? callee.name : isMember ? callee.object.name : undefined;
   const name = aliases.get(localName) ?? localName;
-  const method = callee.type === 'MemberExpression' ? (callee.computed ? staticString(callee.property) : callee.property.name) : undefined;
-  if (!testNames.has(name) || (callee.type === 'MemberExpression' && !skipMethods.has(method) && method !== 'only')) return;
+  const method = isMember ? (callee.computed ? staticString(callee.property) : callee.property.name) : undefined;
+  if (!testNames.has(name) || (isMember && !skipMethods.has(method) && method !== 'only')) return;
   const title = args[0]?.type === 'StringLiteral' ? args[0].value
     : args[0]?.type === 'TemplateLiteral' && !args[0].expressions.length ? args[0].quasis[0].value.cooked : undefined;
   if (title === undefined) return;
@@ -574,7 +575,7 @@ export function analyzeTestFile(relFile, content, parse) {
     let conditionalSkip = false;
     if (callback) visitAst(callback.body, child => {
       if (testCall(child, aliases)) return analyze(child, false);
-      if (child.type !== 'CallExpression') return;
+      if (!['CallExpression', 'OptionalCallExpression'].includes(child.type)) return;
       const call = child.callee;
       const context = callback.params[0]?.name;
       const receiver = call.object?.name;
@@ -673,12 +674,16 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       const line = idx + 1;
       rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
         `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`));
-      const proved = matches.some(test => {
-        if (!providesEvidence(test)) return false;
-        if (!runtimeTests || test.requirements.includes(id)) return true;
-        const observed = runtimeOf(test)?.featurePasses;
-        return features.some(feature => everyPass(observed, pass => pass.includes(JSON.stringify([feature.file, feature.name]))));
-      });
+      const eligible = matches.filter(providesEvidence);
+      const proved = mentioned.length === 0 ? eligible.some(test => test.requirements.includes(id))
+        : mentioned.every(name => {
+          const candidates = features.filter(feature => feature.name === name);
+          return candidates.length > 0 && candidates.every(feature => eligible.some(test => {
+            if (!runtimeTests) return feature.matches.includes(test);
+            const identity = JSON.stringify([feature.file, feature.name]);
+            return everyPass(runtimeOf(test)?.featurePasses, pass => pass.includes(identity));
+          }));
+        });
       if (!proved && !incomplete) {
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
           message: `Requisito ${id} sem ${runtimeTests ? 'teste vinculado aprovado com asserção executada nas três passadas' : 'vínculo estático com teste ativo que contenha asserção'}`,
