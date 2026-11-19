@@ -175,3 +175,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:43 UTC — Revisor encerrou C4-R4 em cbf83ce3 (código 0). Gerente confere a entrega.
 - 19/11/2026 02:43 UTC — Revisão C-BASE-R5 iniciada por Sol high normal somente leitura em b4668d56.
 - 19/11/2026 02:43 UTC — O comando público dos módulos já executa a correção. A reverificação por achado ainda estava acessível apenas pelo helper interno. Registrada a ordem para expor --reverificar com a mesma autoridade do exame e confirmação em provedor distinto, depois da ligação da CLI ao transporte de texto.
+- 19/11/2026 02:44 UTC — C4-R4 em cbf83ce3 voltou da revisão independente com defeitos de comparação semver, resolução de workspaces, validade de inventário e evidência de codemod. A R5 deve cobrir os cenários apontados mantendo o registro de pacotes offline.
