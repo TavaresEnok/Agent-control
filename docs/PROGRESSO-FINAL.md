@@ -1288,3 +1288,7 @@ PAUSADO-COTA
 - 19/11/2026 22:31 UTC — C-ACEITE-DOCUMENTACAO-VIVA-R4 encerrado com código 0.
 - 19/11/2026 22:31 UTC — C-PRONTIDAO-VIVA-R7 encerrado com código 0.
 - 19/11/2026 22:31 UTC — Correção pront-viva recebida em 78f8796c. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:31 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA-R7 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:31 UTC — Imagem de prontidao construída e arquivada por digest em 563be97a.
+- 19/11/2026 22:31 UTC — C-CONFORMIDADE-VIVA-R5 encerrado com código 0.
+- 19/11/2026 22:31 UTC — Confere a proveniência dos achados de rota pela CLI no laboratório. Ordem C-DOCUMENTACAO-VIVA-R5 em worktree separado conforme 43f1c664.
