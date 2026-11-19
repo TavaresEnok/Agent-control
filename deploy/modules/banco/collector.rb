@@ -430,7 +430,7 @@ module Banco
         connection = Dexter::Connection.new(dbname: "fresh", host: @directory, port: 5432, username: "projeto", log_sql: false)
         connection.setup(false)
         @advisor = Dexter::Indexer.new(connection: connection, create: false, analyze: false, log_level: "error",
-          min_cost: 100, min_cost_savings_pct: 50)
+          exclude: [], min_cost: 100, min_cost_savings_pct: 50)
       ensure
         ENV["PGOPTIONS"] = previous
       end

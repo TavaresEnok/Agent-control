@@ -54,6 +54,96 @@ test('C5 registra falha da ferramenta e mantém stdout como um JSON', () => {
   assert.deepEqual(report.coverage.map(row => [row.tool, row.status]), [['squawk', 'failed']]);
 });
 
+test('C5 registra exceção do Dexter sem expor a mensagem', () => {
+  const report = rubyReport(`
+    module PG
+      class Error < StandardError; end
+    end
+    module Dexter
+      class Error < StandardError; end
+      class Query
+        def initialize(*); end
+      end
+    end
+    module PgQuery
+      def self.fingerprint(*); "synthetic"; end
+    end
+    report = Banco::Report.new
+    db = Banco::Database.new("/tmp", report)
+    advisor = Object.new
+    def advisor.process_queries(*); raise "detalhe privado"; end
+    db.define_singleton_method(:advisor) { advisor }
+    source = Banco::Source.new("banco/queries/test.sql", "SELECT 1;")
+    report.measure("dexter", source.path) { db.send(:advise, source) }
+    puts report.to_json
+  `);
+  assert.deepEqual(report.findings, []);
+  assert.deepEqual(report.coverage.map(row => [row.tool, row.status, row.detail]), [
+    ['dexter', 'failed', 'banco/queries/test.sql: RuntimeError'],
+  ]);
+});
+
+test('C5 Dexter real compara índice hipotético com o controle indexado', {
+  skip: !process.env.AC_BANCO_IMAGE && 'AC_BANCO_IMAGE aponta para a imagem PostgreSQL fixada já disponível',
+  timeout: 120_000,
+}, () => {
+  const image = process.env.AC_BANCO_IMAGE!;
+  assert.match(image, /^sha256:[a-f0-9]{64}$/);
+  const program = `
+    require "dexter"
+    require "/collector.rb"
+    report = Banco::Report.new
+    inventory = Banco::Inventory.new("/repo")
+    hypothetical = real = nil
+    Dir.mktmpdir("c5-contract-", "/tmp") do |dir|
+      db = Banco::Database.new(dir, report)
+      begin
+        db.start
+        raise "migration failed" unless db.migrate("fresh", inventory.list("db/migrations", Banco::MIGRATION_NAME, 400))
+        db.prepare_workload(inventory.load(Banco::SEED))
+        source = inventory.load("banco/queries/by-code.sql")
+        report.measure("dexter", source.path) { db.send(:advise, source) }
+        connection = db.send(:advisor).instance_variable_get(:@connection)
+        raise "session is not read-only" unless connection.execute("SHOW default_transaction_read_only").first.values.first == "on"
+        hypothetical = connection.execute("SELECT count(*) AS n FROM banco_tools.hypopg()").first.fetch("n").to_i
+        real = connection.execute("SELECT count(*) AS n FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'items_item_code_idx'").first.fetch("n").to_i
+      ensure
+        db.stop
+      end
+    end
+    puts JSON.generate({report: JSON.parse(report.to_json), hypothetical: hypothetical, real: real})
+  `;
+  const run = (variant: string): {report: Report; hypothetical: number; real: number} => JSON.parse(execFileSync('docker', [
+    'run', '--rm', '--pull=never', '--network', 'none', '--read-only', '--user', '65532:65532',
+    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '256',
+    '--memory', '2g', '--memory-swap', '2g', '--cpus', '2',
+    '--tmpfs', '/tmp:rw,exec,nosuid,nodev,mode=1777,size=512m', '--env', 'HOME=/tmp', '--env', 'TMPDIR=/tmp',
+    '--workdir', '/tmp', '--mount', `type=bind,src=${join(fixtures, variant)},dst=/repo,readonly`,
+    '--mount', `type=bind,src=${collector},dst=/collector.rb,readonly`, '--entrypoint', '/usr/bin/ruby',
+    image, '--disable=rubyopt', '-e', program,
+  ], {encoding: 'utf8', timeout: 55_000, maxBuffer: 1024 * 1024}));
+
+  const defectiveResult = run('defective');
+  const cleanResult = run('clean');
+  assert.ok(defectiveResult.hypothetical > 0);
+  assert.equal(defectiveResult.real, 0);
+  assert.equal(cleanResult.real, 1);
+  const defective = defectiveResult.report;
+  const clean = cleanResult.report;
+  for (const report of [defective, clean]) {
+    assert.deepEqual(report.coverage.filter(row => row.status === 'failed'), []);
+  }
+  assert.ok(defective.coverage.some(row => row.tool === 'dexter' && row.status === 'ok' && row.detail.includes('planos hipotéticos comparados')));
+  const finding = defective.findings.find(row => row.rule === 'BANCO-INDICE-CANDIDATO');
+  assert.equal(finding?.file, 'banco/queries/by-code.sql');
+  assert.equal(finding.line, 2);
+  const costs = /redução estimada de ([\d.]+) para ([\d.]+).*public\.items \/ item_code/.exec(finding.evidence);
+  assert.ok(costs, finding.evidence);
+  assert.ok(Number(costs[2]) < Number(costs[1]) * 0.5);
+  assert.equal(clean.findings.some(row => row.rule === 'BANCO-INDICE-CANDIDATO'), false);
+  assert.ok(clean.coverage.some(row => row.tool === 'dexter' && ['ok', 'skipped'].includes(row.status) && row.detail.includes('banco/queries/by-code.sql')));
+});
+
 test('C5 Squawk real localiza a remoção na linha 2 e distingue o controle', {
   skip: !process.env.AC_BANCO_SQUAWK && 'AC_BANCO_SQUAWK aponta para o executável pinado',
 }, () => {
