@@ -207,3 +207,9 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:04 UTC — Revisor encerrou C6-R7 em 757eced2 (código 0). Gerente confere a entrega.
 - 19/11/2026 03:04 UTC — Revisão C-BASE-R6 iniciada por Sol high normal somente leitura em 57471e2c.
 - 19/11/2026 03:05 UTC — Revisão de prontidão 757eced2 identificou quatro defeitos altos e seis médios em parsing, limites e privacidade. Aberta C6-R8. O primeiro teste da recusa de correção pela CLI obteve a mensagem pública prevista em português. Ajustada a asserção que procurava o código interno.
+- 19/11/2026 03:07 UTC — Validação de c2-r6-exame-nativo em 91a6c71a iniciada no checkout de integração.
+- 19/11/2026 03:08 UTC — Revisor encerrou C-BASE-R6 em 57471e2c (código 0). Gerente confere a entrega.
+- 19/11/2026 03:08 UTC — Revisão C5-R4 iniciada por Sol high normal somente leitura em 5d494800.
+- 19/11/2026 03:08 UTC — Revisor encerrou C5-R4 em 5d494800 (código 1). Gerente confere a entrega.
+- 19/11/2026 03:08 UTC — Revisão C2-R6 iniciada por Sol high normal somente leitura em 9b8959dc.
+- 19/11/2026 03:09 UTC — Homologação de QA 91a6c71a: seis provas ponta a ponta aprovadas, incluindo a recusa de correção sem verificador e criação idempotente na medição sintética explícita. Nove testes de fluxo e persistência passaram. A revisão da base encontrou uma janela entre autorização e partida Docker e três defeitos médios. A primeira entrada da revisão C5 excedeu o limite de tamanho; reenviada com o diff contra o pai direto.
