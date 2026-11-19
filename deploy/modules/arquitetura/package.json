@@ -1,0 +1,15 @@
+{
+  "name": "arquitetura-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ferramentas fixadas com integridade do módulo 3 (arquitetura e dívida técnica).",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "dependency-cruiser": "18.8.0",
+    "jscpd": "5.4.3",
+    "knip": "6.46.1",
+    "typescript": "5.9.3"
+  }
+}

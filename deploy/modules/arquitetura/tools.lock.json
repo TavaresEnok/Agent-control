@@ -1,0 +1,39 @@
+{
+  "purpose": "Pin das ferramentas da imagem do módulo 3 (arquitetura e dívida técnica). O lockfile npm completo está em deploy/modules/arquitetura/package-lock.json.",
+  "baseImage": {
+    "name": "node",
+    "version": "22-bookworm-slim",
+    "digest": "sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d",
+    "platform": "linux/amd64",
+    "platformDigest": "sha256:aaa4b5baf1ecff3b283486bb1f90405cdda225a3e6f79660d2c559fa510a7292"
+  },
+  "registry": "https://registry.npmjs.org",
+  "lockfileVersion": 3,
+  "packageLockSha256": "5b5fa142bf1eca90105b2482f2d1e9d3398e067ca886508adacfc829a7864cfa",
+  "dependencies": {
+    "knip": {
+      "version": "6.46.1",
+      "license": "ISC",
+      "integrity": "sha512-5/ajqjZfmuv8O74+McrKBOSArKG6tsUgy6yJird36VZh9HiUq75qY4U39uqf9wjchEUOLrStuOZpFP057CZFRw==",
+      "resolved": "https://registry.npmjs.org/knip/-/knip-6.46.1.tgz"
+    },
+    "jscpd": {
+      "version": "5.4.3",
+      "license": "MIT",
+      "integrity": "sha512-2Ult/j407sgAx4Z8kW4nOB3wfGwvtyKyPN9XE+tbvNEP/QemBN8pijKtG6zC+8nfMuIiiWjNcez7VZo5ZjJRtA==",
+      "resolved": "https://registry.npmjs.org/jscpd/-/jscpd-5.4.3.tgz"
+    },
+    "dependency-cruiser": {
+      "version": "18.8.0",
+      "license": "MIT",
+      "integrity": "sha512-GNrm+vy8qSM0X3l3n6616iDdWDIvhnQzimd4q/csyusz8ZYrniFzIIOP1uixXXVkt9mVMcRE6vM5f6juKV5etQ==",
+      "resolved": "https://registry.npmjs.org/dependency-cruiser/-/dependency-cruiser-18.8.0.tgz"
+    },
+    "typescript": {
+      "version": "5.9.3",
+      "license": "Apache-2.0",
+      "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==",
+      "resolved": "https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz"
+    }
+  }
+}
