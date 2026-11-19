@@ -17,6 +17,7 @@ import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
   removeOwnedModuleContainer, type CollectorProcess,
 } from './module-container-cleanup.ts';
+import type {ModuleExamResult} from './module-exam.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
 import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
@@ -173,6 +174,8 @@ export type VerificationModuleRunInput = {
   collectorOutput?: unknown;
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
   executeCollectorProcess?: CollectorProcess;
+  examinar?: (request: {intentId: string; snapshot: string; module: VerificationModule;
+    findings: readonly ModuleRawFinding[]; signal?: AbortSignal}) => Promise<ModuleExamResult>;
   /** Optional independent reviewer worker. When present, findings are confirmed without passing author conclusions. */
   worker?: VerifyWorker;
   notes?: readonly string[];
@@ -1259,6 +1262,7 @@ export async function writeModuleReport(input: {
   fileCoverage: readonly CoverageRow[];
   achados: readonly Achado[];
   raw: ModuleCollectorOutput;
+  exam?: Pick<ModuleExamResult, 'mode' | 'coverage' | 'routes' | 'notes'>;
   note?: string;
   directoryName?: string;
 }): Promise<{directory: string; directoryName: string; summary: ModuleReportSummary}> {
@@ -1326,8 +1330,19 @@ export async function writeModuleReport(input: {
   if (!summaryParsed.success) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   const summary = summaryParsed.data;
   const discarded = achados.filter(item => item.status === 'descartado').length;
-  const mapMarkdown = renderModuleMapMarkdown(input.module, fileCoverage.map(row => row.file), toolCoverage);
-  const coverageBody = renderModuleCoverageMarkdown(toolCoverage, fileCoverage);
+  let mapMarkdown = renderModuleMapMarkdown(input.module, fileCoverage.map(row => row.file), toolCoverage);
+  let coverageBody = renderModuleCoverageMarkdown(toolCoverage, fileCoverage);
+  if (input.exam) {
+    const cell = (s: string) => tableCell(sanitizeText(s)).replace(/[<>]/g, '');
+    const files = input.exam.coverage.map(row =>
+      `| ${cell(row.file)} | ${cell(row.status)} | ${cell(row.reason ?? row.examiner?.model ?? '')} |`);
+    const routes = input.exam.routes.map(row =>
+      `| ${cell(row.method)} | ${cell(row.path)} | ${cell(row.file)}#${row.line} | ${cell(row.status)} |`);
+    mapMarkdown += ['','## Inventário de arquivos','','| Arquivo | Exame | Motivo ou modelo |','|---|---|---|', ...files,
+      '', '## Rotas identificadas', '', '| Método | Rota | Origem | Exame |', '|---|---|---|---|', ...routes, ''].join('\n');
+    coverageBody += ['', '## Exame independente', '', `Modo: ${cell(input.exam.mode)}`, '',
+      '| Arquivo | Estado | Motivo ou modelo |','|---|---|---|', ...files, '', ...input.exam.notes.map(n => `- ${cell(n)}`), ''].join('\n');
+  }
   const planned: {segments: string[]; body: string}[] = [
     {
       segments: ['README.md'],
@@ -1903,6 +1918,11 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       if (!toolVersions.has(row.tool)) toolVersions.set(row.tool, row.version);
     }
 
+    const exam = await input.examinar?.({intentId, snapshot, module: input.module, findings: collectorData.findings, signal: input.signal});
+    if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+    if (exam && (exam.findings.length < collectorData.findings.length || exam.findings.length > 999)) {
+      throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
+    }
     const achados: Achado[] = [];
     for (const finding of collectorData.findings) {
       const achadoId = `ACH-${String(achados.length + 1).padStart(3, '0')}`;
@@ -1910,11 +1930,19 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       const reference = sanitizeText(`${finding.tool}:${finding.rule}`).slice(0, 200);
       let status: 'confirmado' | 'provavel' | 'descartado' = 'confirmado';
       let proof = sanitizeText(finding.evidence).slice(0, 2000);
-      let verifier = {
+      let verifier: Achado['verifier'] = {
         model: toolVersions.get(finding.tool)!.slice(0, 100),
         provider: finding.tool.slice(0, 80),
       };
-      if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))) {
+      const audited = exam?.findings[achados.length];
+      if (audited) {
+        if (audited.file !== finding.file || audited.line !== finding.line || audited.source !== reference) {
+          throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
+        }
+        verifier = audited.verifier ? {model: audited.verifier.model, provider: audited.verifier.provider} : null;
+        status = verifier ? audited.status : 'provavel';
+        if (!isProtectedLocation(finding.file) && audited.proof) proof = sanitizeText(audited.proof).slice(0, 2000);
+      } else if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))) {
         const confirmed = await confirmFindingWithReviewer({...input, repoPath: snapshot}, intentId, finding, achadoId);
         status = confirmed.status;
         proof = confirmed.proof;
@@ -1939,6 +1967,21 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }));
     }
 
+    for (const judged of exam?.findings.slice(collectorData.findings.length) ?? []) {
+      if (judged.source !== 'examinador' || isProtectedLocation(judged.file) ||
+        !exam?.coverage.some(row => row.file === judged.file && row.status === 'lido' && row.examiner)) {
+        throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
+      }
+      await resolveInsideRepo(snapshot, judged.file);
+      achados.push(Achado.parse({
+        id: `ACH-${String(achados.length + 1).padStart(3, '0')}`, title: sanitizeText(judged.title), severity: judged.severity,
+        status: judged.verifier ? judged.status : 'provavel',
+        verifier: judged.verifier ? {model: judged.verifier.model, provider: judged.verifier.provider} : null,
+        reference: 'exame-de-arquivo', where: {file: judged.file, line: judged.line}, scenario: sanitizeText(judged.evidence),
+        proof: sanitizeText(judged.proof), suggestion: 'Revisar o trecho indicado e verificar a correção.',
+        acceptance: REMEDIATION_ACCEPTANCE, sources: ['examinador', 'exame-de-arquivo'], secretPreview: null,
+      }));
+    }
     const measured = new Map<string, ModuleToolCoverage[]>();
     for (const row of collectorData.coverage.filter(row => row.status === 'ok')) {
       const files = new Set([...(row.files ?? []), ...collectorData.findings.filter(f => f.tool === row.tool).map(f => f.file)]);
@@ -1959,9 +2002,21 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }),
     );
 
+    if (exam) {
+      const byFile = new Map(fileCoverage.map(row => [row.file, row]));
+      for (const row of exam.coverage) {
+        if (row.status !== 'lido' || !row.examiner) continue;
+        await resolveInsideRepo(snapshot, assertModuleRepoRelativePath(row.file));
+        byFile.set(row.file, CoverageRow.parse({file: row.file, examinerProvider: row.examiner.provider,
+          examinerModel: row.examiner.model, profileId: row.examiner.profileId, checklist: row.checklist}));
+      }
+      fileCoverage.length = 0;
+      for (const row of byFile.values()) fileCoverage.push(row);
+    }
     const hasToolFailure = collectorCode !== 0 || collectorData.coverage.some(row => row.status === 'failed');
     const notes: string[] = [...(input.notes ?? [])];
-    notes.push('Cobertura por arquivo limitada aos arquivos informados pelos coletores ou com achados; ausência de registro não comprova exame. O snapshot é gerado por git archive.');
+    if (exam) notes.push(...exam.notes);
+    else notes.push('Cobertura por arquivo limitada aos arquivos informados pelos coletores ou com achados; ausência de registro não comprova exame. O snapshot é gerado por git archive.');
     for (const failed of collectorData.coverage.filter(row => row.status === 'failed')) {
       notes.push(`Falha em ${failed.tool} (${failed.version}): ${failed.detail}`);
     }
@@ -1987,6 +2042,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         commit: input.commit,
         image,
         deferPublication: true,
+        exam,
         toolCoverage: sourceCoverage ?? collectorData.coverage,
         fileCoverage,
         achados,
@@ -2016,8 +2072,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       for (const row of fileCoverage) {
         await c.query(
           `INSERT INTO ac_verify_coverage (run_id, file, examiner_provider, examiner_model, profile_id, checklist, provenance)
-           VALUES ($1,$2,$3,$4,$5,$6::jsonb,'collector')`,
-          [runId, row.file, row.examinerProvider, row.examinerModel, row.profileId, JSON.stringify(row.checklist)],
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+          [runId, row.file, row.examinerProvider, row.examinerModel, row.profileId, JSON.stringify(row.checklist), row.profileId === null ? 'collector' : 'examiner'],
         );
       }
       for (let index = 0; index < collectorData.coverage.length; index += 1) {
@@ -2733,7 +2789,7 @@ export async function recheckModuleFindings(
       const sources = Array.isArray(payload.sources) ? payload.sources.map(String) : [];
       const tool = (sources[0] ?? runRow.module).slice(0, 120);
       const rule = (sources[1] ?? (typeof payload.reference === 'string' ? payload.reference : id)).slice(0, 200);
-      return {id, file, line, tool, rule};
+      return {id, file, line, tool, rule, excerpt: typeof payload.scenario === 'string' ? payload.scenario : ''};
     });
     const repoRow = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0];
     return {run: runRow, items, repo: repoRow?.repo ?? null};
@@ -2771,7 +2827,9 @@ export async function recheckModuleFindings(
     );
   });
   for (const item of loaded.items) {
-    const original = raw.findings[Number(item.id.slice(4)) - 1];
+    const original = item.tool === 'examinador' && item.rule === 'exame-de-arquivo' && !isProtectedLocation(item.file)
+      ? {file: item.file, line: item.line, tool: item.tool, rule: item.rule, evidence: item.excerpt}
+      : raw.findings[Number(item.id.slice(4)) - 1];
     if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) throw new Refusal('VERIFY_REPORT_INVALID', 400);
     if (moduleName === 'prontidao' && isProtectedLocation(item.file)) {
       decided.push({id: item.id, status: 'reaberto'});
