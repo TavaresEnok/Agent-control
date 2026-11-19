@@ -547,3 +547,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:22 UTC — Revisão C2-LINGUAGENS-R2 iniciada por Sol high normal somente leitura em 3757031b.
 - 19/11/2026 06:22 UTC — Homologação incremental em d973118d reuniu a repetição da medição funcional vinculada ao alvo e ao recibo persistido. Iniciada nova passagem pelas oito CLIs.
 - 19/11/2026 06:23 UTC — A revisão de C7 pediu uma prova mais forte do cancelamento no servidor PostgreSQL, sob bloqueio e saturação do pool. C7-HISTORICO-R4 prepara essa correção na homologação. A revisão da versão de dependências de C4 identificou a ausência de semver no checkout oficial anterior; o pacote do lock já foi ligado aos checkouts de aceite.
+- 19/11/2026 06:24 UTC — Trabalhador encerrou C-CORRECAO-ESCOPO em 576375cd (código 0). Gerente confere a entrega.
+- 19/11/2026 06:24 UTC — Trabalho C2-NAVEGADOR-R2 iniciado por Sol high normal em final-navegador-r2.
+- 19/11/2026 06:25 UTC — Falha na validação de c4-aceite-r7 em suite, código 1. Logs privados do gerente.
+- 19/11/2026 06:25 UTC — Validação de c5-aceite-r7 em 03ee7abb iniciada no checkout de integração.
+- 19/11/2026 06:26 UTC — Revisor encerrou C2-LINGUAGENS-R2 em 3757031b (código 0). Gerente confere a entrega.
+- 19/11/2026 06:26 UTC — Revisão C4-R7 iniciada por Sol high normal somente leitura em 49841c60.
+- 19/11/2026 06:27 UTC — QA: 82/82 com Chromium fixado, Go, Python, fast-check e a CLI. A reverificação R4 passou em 42/42, e a rodada d973118d passou nos 18 testes das oito CLIs, banco e prontidão. O escopo de correções em 48c071e7 passou em 43 testes de backend e em 10 testes da interface. C4: 29/29 no arquivo da suíte depois de repor semver do lock; a suíte de 8203f2f9 havia passado em 258 arquivos e falhado nesse arquivo.

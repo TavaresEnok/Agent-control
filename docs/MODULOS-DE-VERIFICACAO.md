@@ -288,7 +288,7 @@ Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes c
 
 Em `fcbffe1e`, os 69 testes de QA passaram sem saltos. A imagem mediu contraste e pixels com Chromium, três passadas de Python e Go, mutantes mortos e sobreviventes com mutmut e go-mutesting e uma propriedade falsificada com Hypothesis. A prova de entradas nominais de contrato e as propriedades JavaScript por fast-check estão em desenvolvimento.
 
-Em `1d357911`, a imagem de QA executou fast-check 4.10.3 em um projeto sintético, mediu 32 chamadas no controle e reproduziu a propriedade falsificada. A prova distingue regras de catálogo e texto sensível.
+No laboratório integrado de QA, 82 de 82 testes passaram com todos os adaptadores habilitados. Em `1d357911`, a imagem de QA executou fast-check 4.10.3 em um projeto sintético, mediu 32 chamadas no controle e reproduziu a propriedade falsificada. A prova distingue regras de catálogo e texto sensível.
 
 ### Prova do módulo 3
 
