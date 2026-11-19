@@ -931,3 +931,8 @@ PAUSADO-COTA
 - 19/11/2026 18:56 UTC — O revisor aprovou o contrato da matriz de uma mensagem em f3158451. A suíte do candidato anterior 9a0b9fd6 aprovou 265 arquivos e falhou em completed-node-recovery, na espera do marcador do nó integrate. A repetição no mesmo código usa banco descartável. C9 integrou fb99a576 em 11e28851 e entrou em revisão e ensaio da imagem.
 - 19/11/2026 18:56 UTC — revisor-C9-ACEITE-ATRIBUICAO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:58 UTC — Arquitetura e2a84a88 e dependências da2c8bc4 já incluem o candidato de QA 53012d07. A matriz registra o aceite da gramática de uma mensagem e as três provas completas de dependências. O laboratório do fechamento com design teve 15/15.
+- 19/11/2026 18:58 UTC — QA passou no laboratório físico e na CLI com o controle de citação aninhada. O digest foi fixado em 40b5f293.
+- 19/11/2026 18:59 UTC — O candidato de documentação com comentário efetivo e rejeição de mapa indexado passou no laboratório da imagem e na CLI. Digest fixado no ramo de integração.
+- 19/11/2026 19:00 UTC — C9-ACEITE-ATRIBUICAO encerrado com código 0.
+- 19/11/2026 19:00 UTC — As CLIs de QA, arquitetura e dependências passaram na mesma instalação de bancada sobre da2c8bc4, incluindo o digest de QA aprovado na revisão da gramática.
+- 19/11/2026 19:01 UTC — Na revisão de fb99a576, os quatro controles contratados de C9 foram conferidos. A revisão apontou duas perdas de achado em chamadas indiretas com constantes e argumento presente; foi aberta a correção. As três CLIs C2 a C4 também passaram em 6/6 no candidato cumulativo.
