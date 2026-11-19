@@ -405,3 +405,12 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:56 UTC — Revisor encerrou C-BASE-R9 em 66fa91b5 (código 0). Gerente confere a entrega.
 - 19/11/2026 04:56 UTC — Revisão C2-R10 iniciada por Sol high normal somente leitura em 69fe35e3.
 - 19/11/2026 04:57 UTC — Prontidão R9 com imagem cdef90eb aprovada nos 32 testes, incluindo laboratório de configuração e HTTPS local. Entrega incremental C9 em e1086065 incorpora também documentação R7. A suíte em 18a73502 revelou uma corrida no teste de armazenamento: liberar 1 MiB no host entre duas leituras mudava o resultado. O teste passou a solicitar mais que a capacidade total do sistema de arquivos, mantendo o código de admissão intacto.
+- 19/11/2026 04:58 UTC — Trabalhador encerrou C-EXAME-MEDICOES em 1b42a859 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:58 UTC — Trabalho C2-NAVEGADOR iniciado por Sol high normal em final-c2.
+- 19/11/2026 05:00 UTC — Falha na validação de c2-r10-base-r9 em suite, código 1. Logs privados do gerente.
+- 19/11/2026 05:02 UTC — Trabalhador encerrou C-REVERIFICAR-R3 em 6e5edfd1 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:02 UTC — Trabalho C-EXAME-R5 iniciado por Sol high normal em final-exame-medicoes.
+- 19/11/2026 05:02 UTC — Revisor encerrou C2-R10 em 69fe35e3 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:02 UTC — Revisão C2-LINGUAGENS iniciada por Sol high normal somente leitura em 1af4e0b2.
+- 19/11/2026 05:03 UTC — Trabalhador encerrou C9-R5 em 86ec5e87 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:04 UTC — Publicação das medições em bfab53bd: PostgreSQL descartável gravou um achado confirmado em cada um dos oito módulos com dados de coletor e respostas independentes sintéticos e snapshots Git reais. Os 14 critérios não cobrem todas as regras. R3 da reverificação e C9-R5 recebidas. Aberta C2-R11 para asserções capturadas e chamadas que não chegam a executar a função.
