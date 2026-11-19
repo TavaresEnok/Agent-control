@@ -744,3 +744,10 @@ PAUSADO-COTA
 - 19/11/2026 17:43 UTC — C2-BANCO-LOCAL-R2 encerrado com código 0.
 - 19/11/2026 17:43 UTC — revisor-C2-CARGA-PLATAFORMAS iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:44 UTC — O revisor confirmou a versão PostgreSQL corrigida e a separação do pgTAP. A revisão pede que o protocolo imponha uma instrução e que o papel de consulta tenha acesso apenas aos objetos da fixture. A primeira tentativa de registrar a imagem de QA multiplataforma foi interrompida por uma alteração no script de homologação. A imagem foi construída e a validação será repetida com um script estável.
+- 19/11/2026 17:45 UTC — Dependências passou nas provas dirigidas e na CLI da integração 910c59cb com o OpenRewrite da imagem fixada.
+- 19/11/2026 17:46 UTC — C2-CARGA-PLATAFORMAS encerrado com código 0.
+- 19/11/2026 17:46 UTC — revisor-C6-R12 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:46 UTC — trabalho-C2-GO-DIAGNOSTICOS iniciado em final-qa-mutacao-linguagens por Sol medium normal.
+- 19/11/2026 17:46 UTC — C9-R8 encerrado com código 0.
+- 19/11/2026 17:46 UTC — trabalho-C2-BANCO-ESCOPO iniciado em final-qa-banco-local por Sol high normal.
+- 19/11/2026 17:46 UTC — O laboratório de desempenho da fonte b5efe37c aprovou 66/68. Nas duas falhas, o V8 entregou um perfil rejeitado pelo coletor. Iniciada repetição isolada do controle. Dependências em 910c59cb passou em 42/42 com o OpenRewrite real. A seleção das duas arquiteturas de QA foi confirmada pelo revisor, que pediu reforço do teste.
