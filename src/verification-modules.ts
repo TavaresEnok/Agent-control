@@ -4,6 +4,7 @@ import {constants} from 'node:fs';
 import {chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
 import {promisify} from 'node:util';
 import type pg from 'pg';
 import type {PreviousPerformanceMeasurement} from '../deploy/modules/desempenho/orchestrator.mjs';
@@ -14,6 +15,9 @@ import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transp
 import {finishExamIntentTx} from './exam-intent.ts';
 import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
+import {
+  COLLECTOR_CAPTURE_DIR, COLLECTOR_HEADER_BYTES, COLLECTOR_WRAPPER_PATH, collectorOutputWrapper, verifyCollectorOutput,
+} from './module-collector-output.ts';
 import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
   runBoundedCollectorProcess, type CollectorProcess,
@@ -38,10 +42,6 @@ import {
 export {MODULE_RUNTIME_BIN, runBoundedCollectorProcess, type BoundedProcessResult} from './module-container-cleanup.ts';
 export const MODULE_CONTAINER_USER = '65532:65532';
 export const MAX_COLLECTOR_STDOUT_BYTES = 8 * 1024 * 1024;
-const MAX_COLLECTOR_STDERR_BYTES = 1024 * 1024;
-// Each json-file record without attrs has less than 74 bytes of framing
-// and at least one payload byte, which can expand to six bytes when escaped.
-const JSON_FILE_BYTES_PER_PAYLOAD_BYTE = 80;
 export const DEFAULT_COLLECTOR_TIMEOUT_MS = 1_200_000;
 const COLLECTOR_DAEMON_TIMEOUT_MS = 10_000;
 export const MODULE_MEMORY_BYTES = 2_147_483_648;
@@ -805,6 +805,26 @@ export async function removeModuleSnapshot(snapshot: string): Promise<void> {
   await rm(parent, {recursive: true, force: true});
 }
 
+async function confirmCollectorStarted(run: CollectorProcess, id: string, timeoutMs: number, signal: AbortSignal): Promise<void> {
+  const deadline = performance.now() + timeoutMs;
+  while (!signal.aborted) {
+    const remaining = Math.ceil(deadline - performance.now());
+    if (remaining < 1) break;
+    const inspected = await run([MODULE_RUNTIME_BIN, 'container', 'inspect', '--format', '{{.Id}} {{.State.Status}}', id],
+      {timeoutMs: remaining, maxStdoutBytes: 4096, signal});
+    const state = inspected.stdout.toString('utf8').trim();
+    if (inspected.code !== 0) break;
+    if (state === `${id} running` || state === `${id} exited`) return;
+    if (state !== `${id} created`) break;
+    try {
+      await delay(Math.min(50, remaining), undefined, {signal});
+    } catch {
+      break;
+    }
+  }
+  throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+}
+
 export async function runModuleCollectorContainer(input: {
   image: string;
   repoPath: string;
@@ -820,9 +840,10 @@ export async function runModuleCollectorContainer(input: {
   if (!input.journal) throw new Refusal('VERIFY_CONTAINER_JOURNAL_REQUIRED', 503);
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
-  const logFileBytes = (maxStdoutBytes + MAX_COLLECTOR_STDERR_BYTES) * JSON_FILE_BYTES_PER_PAYLOAD_BYTE + 1;
-  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isInteger(maxStdoutBytes)
-    || maxStdoutBytes < 1 || !Number.isSafeInteger(logFileBytes)) {
+  const maxTransportBytes = maxStdoutBytes + COLLECTOR_HEADER_BYTES;
+  const captureBytes = maxStdoutBytes + 4096;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isSafeInteger(maxStdoutBytes)
+    || maxStdoutBytes < 1 || !Number.isSafeInteger(captureBytes)) {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
   const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
@@ -843,22 +864,34 @@ export async function runModuleCollectorContainer(input: {
       ...(evidenceFile !== undefined ? {evidenceFile} : {}),
     });
     const run = input.executeProcess ?? runBoundedCollectorProcess;
+    if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+    const daemonTimeout = Math.min(timeoutMs, COLLECTOR_DAEMON_TIMEOUT_MS);
+    const daemonOptions = {timeoutMs: daemonTimeout, maxStdoutBytes: 4096};
+    const imageCommand = await run([MODULE_RUNTIME_BIN, 'image', 'inspect', '--format',
+      '[{{json .Config.Entrypoint}},{{json .Config.Cmd}}]', input.image],
+      {timeoutMs: daemonTimeout, maxStdoutBytes: 1024 * 1024, signal: input.signal});
+    if (imageCommand.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+    const wrapper = assertHostPath(join(dirname(snapshot), 'collector-entrypoint'));
+    await writeFile(wrapper, collectorOutputWrapper(imageCommand.stdout, token, maxStdoutBytes), {flag: 'wx', mode: 0o555});
+    await chmod(wrapper, 0o555);
     // Journal the owner before create, and record the immutable ID before start.
     // Let create return its ID even when cancellation arrives during the call.
-    // Make logs readable even when the daemon has a different default driver.
+    // Drain the attached streams without persisting either one in the daemon.
     const createArgs = [MODULE_RUNTIME_BIN, 'create', '--pull', 'never', '--name', moduleContainerName(token),
-      '--label', `${MODULE_CONTAINER_LABEL}=${token}`, '--log-driver', 'json-file',
-      '--log-opt', 'mode=blocking', '--log-opt', `max-size=${logFileBytes}`, '--log-opt', 'max-file=2',
-      '--log-opt', 'compress=false', '--log-opt', 'tag=', '--log-opt', 'labels=', '--log-opt', 'labels-regex=',
-      '--log-opt', 'env=', '--log-opt', 'env-regex=', ...baseArgs.slice(3)];
+      '--label', `${MODULE_CONTAINER_LABEL}=${token}`, '--log-driver', 'none',
+      '--mount', `type=bind,src=${wrapper},dst=${COLLECTOR_WRAPPER_PATH},readonly`,
+      '--tmpfs', `${COLLECTOR_CAPTURE_DIR}:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=${captureBytes}`,
+      '--env', `AC_COLLECTOR_CAPTURE_DIR=${COLLECTOR_CAPTURE_DIR}`,
+      '--entrypoint', COLLECTOR_WRAPPER_PATH, ...baseArgs.slice(3)];
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+    const stream = new AbortController();
+    const signal = input.signal ? AbortSignal.any([input.signal, stream.signal]) : stream.signal;
     let id: string | undefined;
     let creationRejected = true;
     let startAuthorized = false;
     try {
       await input.journal.register(token);
       creationRejected = false;
-      const daemonOptions = {timeoutMs: Math.min(timeoutMs, COLLECTOR_DAEMON_TIMEOUT_MS), maxStdoutBytes: 4096};
       const created = await run(createArgs, daemonOptions);
       if (created.code !== 0) {
         // A missing image with --pull never is a definitive daemon rejection.
@@ -868,15 +901,17 @@ export async function runModuleCollectorContainer(input: {
       const candidate = createdContainerId(created.stdout);
       await assertOwnedModuleContainer(run, token, candidate);
       id = candidate;
-      const deadline = await input.journal.start(token, candidate, async () => {
+      const {deadline, attached} = await input.journal.start(token, candidate, async () => {
         if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
         startAuthorized = true;
         const deadline = performance.now() + timeoutMs;
-        const started = await run([MODULE_RUNTIME_BIN, 'start', candidate], daemonOptions);
-        if (started.code !== 0 || started.stdout.toString('utf8').trim() !== candidate) {
-          throw new Refusal('VERIFY_TOOLS_FAILED', 503);
-        }
-        return deadline;
+        // Docker attaches before sending start. Observe the start separately
+        // so the authority lock covers the startup, not the whole collection.
+        const attached = run([MODULE_RUNTIME_BIN, 'start', '--attach', candidate],
+          {timeoutMs, maxStdoutBytes: maxTransportBytes, signal});
+        const started = confirmCollectorStarted(run, candidate, daemonTimeout, signal);
+        await Promise.race([started, attached.then(() => started)]);
+        return {deadline, attached};
       });
       const remainingTime = () => {
         if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
@@ -884,28 +919,20 @@ export async function runModuleCollectorContainer(input: {
         if (remaining < 1) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
         return remaining;
       };
-      // Stop a continuously noisy collector as soon as it crosses a stream limit.
-      // The final read below is authoritative even if this subscription ends early.
-      const logLimits = {maxStdoutBytes, maxStderrBytes: MAX_COLLECTOR_STDERR_BYTES, signal: input.signal};
-      const follow = await run([MODULE_RUNTIME_BIN, 'logs', '--follow', candidate],
-        {...logLimits, timeoutMs: remainingTime()});
-      if (follow.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+      const captured = await attached;
       const waited = await run([MODULE_RUNTIME_BIN, 'wait', candidate],
-        {timeoutMs: remainingTime(), maxStdoutBytes: 4096, signal: input.signal});
+        {timeoutMs: remainingTime(), maxStdoutBytes: 4096, signal});
+      remainingTime();
       const exitCode = waited.stdout.toString('utf8').trim();
-      if (waited.code !== 0 || !/^(0|[1-9][0-9]{0,2})$/.test(exitCode) || Number(exitCode) > 255) {
+      if (waited.code !== 0 || !/^(0|[1-9][0-9]{0,2})$/.test(exitCode) || Number(exitCode) > 255
+        || Number(exitCode) !== captured.code) {
         throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       }
-      // Read the complete retained range after termination. If rotation
-      // dropped anything, the previous file is full and necessarily exceeds
-      // at least one stream limit, even if the surviving stdout parses as JSON.
-      const logs = await run([MODULE_RUNTIME_BIN, 'logs', candidate],
-        {...logLimits, timeoutMs: remainingTime()});
-      remainingTime();
-      if (logs.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
-      const output = parseModuleCollectorOutput(logs.stdout, {maxStdoutBytes, module: input.module});
+      const stdout = verifyCollectorOutput(captured.stdout, token, captured.code, maxStdoutBytes);
+      const output = parseModuleCollectorOutput(stdout, {maxStdoutBytes, module: input.module});
       return {code: Number(exitCode), output};
     } finally {
+      stream.abort();
       await input.journal.cleanup(token, id, {creationRejected, startAuthorized});
     }
   } finally {
@@ -1446,7 +1473,7 @@ async function resolveProjectVerificationsDir(dataDirectory: string, projectId: 
   return real;
 }
 
-async function readTextInside(root: string, path: string, missingCode: 'VERIFY_ACHADO_NOT_FOUND' | 'VERIFY_REPORT_INVALID'): Promise<string> {
+async function readTextInside(root: string, path: string, missingCode: 'VERIFY_ACHADO_NOT_FOUND' | 'VERIFY_REPORT_INVALID', expectedSha256?: string): Promise<string> {
   const lexical = resolve(path);
   assertInside(root, lexical);
   let info;
@@ -1464,7 +1491,10 @@ async function readTextInside(root: string, path: string, missingCode: 'VERIFY_A
   assertInside(root, real);
   const handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    return await handle.readFile('utf8');
+    if (!expectedSha256) return await handle.readFile('utf8');
+    const bytes = await handle.readFile();
+    if (createHash('sha256').update(bytes).digest('hex') !== expectedSha256) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    return bytes.toString('utf8');
   } finally {
     await handle.close();
   }
@@ -1812,6 +1842,34 @@ async function beginModuleRunTx(input: {
  * Full execution path for verification modules 2 to 9 (`qa`, `arquitetura`, `dependencias`,
  * `banco`, `prontidao`, `desempenho`, `documentacao`, `conformidade`).
  */
+async function* previousPerformanceMeasurements(input: VerificationModuleRunInput, runId: string, image: string) {
+  type HistoricalRow = PreviousPerformanceMeasurement & {finishedAt: string};
+  let cursor: HistoricalRow | undefined;
+  const pageSize = 8;
+  while (true) {
+    input.signal?.throwIfAborted();
+    const page: HistoricalRow[] = await input.ledger.tx(async client => {
+      await input.ledger.authorize(client, input.principal, input.authority.contextId);
+      await input.ledger.fence(client, input.authority);
+      return (await client.query<HistoricalRow>(
+        `SELECT p.id AS "examId", p.performance_measurement AS measurement, p.finished_at::text AS "finishedAt"
+         FROM ac_verify_runs p JOIN ac_verify_runs current_run ON current_run.id=$1
+         WHERE current_run.context_id=$2 AND current_run.project_id=$3 AND current_run.module='desempenho'
+           AND p.project_id=current_run.project_id AND p.context_id=current_run.context_id
+           AND p.module='desempenho' AND p.status='done' AND p.collector_image=$4
+           AND p.report_dir=p.report_prepared_dir AND NOT p.report_legacy_missing
+           AND p.performance_measurement IS NOT NULL AND p.finished_at < current_run.created_at
+           AND ($5::timestamptz IS NULL OR (p.finished_at, p.id) < ($5::timestamptz, $6::uuid))
+         ORDER BY p.finished_at DESC, p.id DESC LIMIT $7`,
+        [runId, input.authority.contextId, input.projectId, image, cursor?.finishedAt ?? null, cursor?.examId ?? null, pageSize],
+      )).rows;
+    });
+    yield* page;
+    if (page.length < pageSize) return;
+    cursor = page[page.length - 1];
+  }
+}
+
 export async function runVerificationModule(input: VerificationModuleRunInput): Promise<VerificationModuleRunResult> {
   assertVerificationModule(input.module);
   if (!Id.safeParse(input.projectId).success) throw new Refusal('NOT_FOUND', 404);
@@ -1888,31 +1946,14 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       const {runPerformanceModule, reconcilePerformanceResources} = await import('../deploy/modules/desempenho/orchestrator.mjs');
       const recoveryDirectory = join(await requireDataDirectory(input.dataDirectory), 'performance-docker');
       await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
-      const previousMeasurement = await input.ledger.tx(async client => {
-        await input.ledger.authorize(client, input.principal, input.authority.contextId);
-        await input.ledger.fence(client, input.authority);
-        return (await client.query<PreviousPerformanceMeasurement>(
-          `SELECT p.id AS "examId", p.performance_measurement AS measurement
-           FROM ac_verify_runs p JOIN ac_verify_runs current_run ON current_run.id=$1
-           WHERE current_run.context_id=$2 AND current_run.project_id=$3 AND current_run.module='desempenho'
-             AND p.project_id=current_run.project_id AND p.context_id=current_run.context_id
-             AND p.module='desempenho' AND p.status='done' AND p.collector_image=$4
-             AND p.report_dir=p.report_prepared_dir AND NOT p.report_legacy_missing
-             AND p.performance_measurement IS NOT NULL AND p.finished_at <= current_run.created_at
-           ORDER BY p.finished_at DESC, p.id DESC LIMIT 1`,
-          [runId, input.authority.contextId, input.projectId, image],
-        )).rows[0];
-      });
-      const {coverage, findings, measurement} = await runPerformanceModule({
+      const {coverage, findings, measurement, comparedExamId} = await runPerformanceModule({
         snapshotPath: snapshot, imageDigest: image!, signal: input.signal, timeoutMs, maxStdoutBytes,
-        recoveryDirectory, previousMeasurement,
+        recoveryDirectory, previousMeasurements: previousPerformanceMeasurements(input, runId, image!),
       });
       collectorData = validateModuleCollectorObject({coverage, findings}, input.module);
       assertNoLiveAccessKey(measurement);
       performanceMeasurement = measurement;
-      if (previousMeasurement && collectorData.coverage.some(row => row.tool === 'medicao-anterior-independente' && row.status === 'ok')) {
-        previousPerformanceRunId = previousMeasurement.examId;
-      }
+      previousPerformanceRunId = comparedExamId;
     } else {
       const executed = await runModuleCollectorContainer({
         image: image!,
@@ -3106,6 +3147,22 @@ export async function recheckModuleFindings(
     return {run, items, repo, journal, generation: generation.rows[0]!.recheck_generation, replay: false as const};
   });
 
+  const directory = loaded.run.report_dir;
+  const sourceFile = join(directory, 'bruto', 'exame.json');
+  let verifiedOrigin: string | undefined;
+  if (loaded.run.exam_origin_sha256) {
+    try {
+      const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
+      if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+      assertInside(projectDir, directory);
+      verifiedOrigin = await readTextInside(projectDir, sourceFile, 'VERIFY_REPORT_INVALID', loaded.run.exam_origin_sha256);
+    } catch (error) {
+      // A committed verdict remains in the publication journal until the archive is restored.
+      if (loaded.replay) return {results: loaded.journal.results, publication: 'pending'};
+      throw error;
+    }
+  }
+
   const publish = async (journal: ModuleRecheckPublication): Promise<ModuleRecheckOutcome> => {
     try {
       await reconcileReports(ledger, principal, authority, input.dataDirectory, input.projectId, undefined,
@@ -3126,7 +3183,6 @@ export async function recheckModuleFindings(
   }
   const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
   if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-  const directory = loaded.run.report_dir;
   assertInside(projectDir, directory);
   const raw = ModuleCollectorOutput.parse(JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')));
   const coverage = await ledger.pool.query<RecheckCoverage>(
@@ -3164,18 +3220,12 @@ export async function recheckModuleFindings(
       source: {file: string; line: number; tool: string; rule: string; commit: string; origin: string; evidenceDigest: string} | null;
       moduleProof: RecheckProof | null; regressionProof: RecheckRegression | null;
     })[] = [];
-    const sourceFile = join(directory, 'bruto', 'exame.json');
     const hasExamFindings = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo');
-    const archived = hasExamFindings && await lstat(sourceFile).then(() => true, error => {
+    const archived = verifiedOrigin !== undefined || (hasExamFindings && await lstat(sourceFile).then(() => true, error => {
       if (isErrno(error, 'ENOENT')) return false;
       throw error;
-    });
-    if (hasExamFindings && loaded.run.exam_origin_sha256 && !archived) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-    const originText = archived ? await readTextInside(directory, sourceFile, 'VERIFY_REPORT_INVALID') : undefined;
-    if (originText !== undefined && loaded.run.exam_origin_sha256 &&
-      createHash('sha256').update(originText).digest('hex') !== loaded.run.exam_origin_sha256) {
-      throw new Refusal('VERIFY_REPORT_INVALID', 400);
-    }
+    }));
+    const originText = verifiedOrigin ?? (archived ? await readTextInside(directory, sourceFile, 'VERIFY_REPORT_INVALID') : undefined);
     const origin = z.object({id: ACHADO_ID, file: z.string(), line: z.number().int().positive(),
       evidence: z.string(), hypothesis: z.string().max(300).optional()});
     const reviewedSources = new Map<string, z.infer<typeof origin>>();

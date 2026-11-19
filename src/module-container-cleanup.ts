@@ -10,7 +10,7 @@ const FULL_CONTAINER_ID = /^[a-f0-9]{64}$/;
 export type BoundedProcessResult = {code: number; stdout: Buffer; stderr: string};
 export type CollectorProcess = (
   args: readonly string[],
-  options: {timeoutMs: number; maxStdoutBytes: number; maxStderrBytes?: number; signal?: AbortSignal},
+  options: {timeoutMs: number; maxStdoutBytes: number; signal?: AbortSignal},
 ) => Promise<BoundedProcessResult>;
 
 type CleanupOptions = {creationRejected?: boolean; startAuthorized?: boolean; recovering?: boolean};
@@ -58,8 +58,12 @@ export const runBoundedCollectorProcess: CollectorProcess = (args, options) => {
     const timer = setTimeout(onAbort, options.timeoutMs);
     child.once('error', onAbort);
     child.once('close', code => {
+      if (code === null) {
+        onAbort();
+        return;
+      }
       if (settle()) resolve({
-        code: code ?? 1,
+        code,
         stdout: Buffer.concat(stdoutChunks),
         stderr: Buffer.concat(stderrChunks).toString('utf8').slice(0, 1000),
       });
@@ -73,13 +77,13 @@ export const runBoundedCollectorProcess: CollectorProcess = (args, options) => {
     child.stderr?.on('data', (chunk: Buffer) => {
       if (settled) return;
       const sampleRemaining = 4096 - stderrBytes;
-      stderrBytes += chunk.byteLength;
-      if (options.maxStderrBytes !== undefined && stderrBytes > options.maxStderrBytes) {
-        fail(new Refusal('VERIFY_COLLECTOR_LOG_LIMIT', 400));
-      } else if (sampleRemaining > 0) {
-        stderrChunks.push(chunk.subarray(0, sampleRemaining));
-      }
+      if (sampleRemaining <= 0) return;
+      const sample = chunk.subarray(0, sampleRemaining);
+      stderrBytes += sample.byteLength;
+      stderrChunks.push(sample);
     });
+    child.stdout?.once('error', onAbort);
+    child.stderr?.once('error', onAbort);
     options.signal?.addEventListener('abort', onAbort, {once: true});
     if (options.signal?.aborted) onAbort();
   });

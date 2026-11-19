@@ -64,6 +64,36 @@ test('descoberta conserva a página servível quando a declaração associa a ro
   assert.match(plan.coverage[0].detail, /rota=\/page-0.html.*arquivo da declaração indisponível/);
 });
 
+test('localiza a declaração servível e segue os últimos campos do JSON com chaves repetidas', async t => {
+  const {repo} = await fixture(t);
+  await writeFile(join(repo, 'desempenho.config.json'), [
+    '{',
+    ' "__proto__": {"path": "/fora"}, "__proto__": null,',
+    ' "routes": ["/descartada"],',
+    ' "rout\\u0065s": [',
+    '  {"path": "/escolhida", "file": "ausente.html"},',
+    '  {"path": "/escolhida", "file": "../invalido.html"},',
+    '  {"path": "/antiga", "__proto__": {}, "__proto__": [],',
+    '   "file": "ausente.html", "file": "public/page-0.html",',
+    '   "p\\u0061th": "/escolhida"},',
+    '  {"path": "/escolhida", "file": "public/page-1.html"},',
+    '  {"path": "/page-2.html", "file": "../invalido.html"},',
+    '  {"path": "/alternativa", "file": "public/page-3.html", "path": null}',
+    ' ]',
+    '}',
+  ].join('\r\n'));
+  const config = loadConfig(repo);
+  assert.equal(config.routeOmissions, 1);
+  const plan = planStaticRoutes(repo, config);
+  assert.deepEqual(plan.targets.filter(route => route.path === '/escolhida'), [{
+    path: '/escolhida', file: 'public/page-0.html', page: true,
+    source: {file: 'desempenho.config.json', line: 9, kind: 'declaration'},
+  }]);
+  assert.ok(!plan.targets.some(route => ['/antiga', '/descartada', '/alternativa'].includes(route.path)));
+  assert.equal(plan.targets.find(route => route.path === '/page-2.html')?.source.kind, 'document');
+  assert.equal(plan.coverage.filter(row => row.detail.startsWith('rota=/escolhida; arquivo da declaração')).length, 2);
+});
+
 async function collectSynthetic({root, repo, bin, browsers}, scripts) {
   for (const [tool, source] of Object.entries(scripts)) {
     await writeFile(join(bin, tool), '#!' + process.execPath + '\n' + source, {mode: 0o700});
@@ -127,6 +157,62 @@ test('nomeia rotas selecionadas mesmo quando as ferramentas não produzem relat�
     assert.ok(routes.some(row => row.detail.startsWith('rota=/especial?modo=teste;')));
   }
   assert.deepEqual(output.findings, []);
+});
+
+test('Lighthouse carrega recursos no caminho canônico e k6 mede o alias HTTP declarado', async t => {
+  const setup = await fixture(t);
+  const {repo} = setup;
+  await mkdir(join(repo, 'public', 'artigos'));
+  await writeFile(join(repo, 'public', 'artigos', 'index.html'),
+    '<link href="local.css"><script src="/global.js"></script><h1>Artigos</h1>');
+  await writeFile(join(repo, 'public', 'artigos', 'local.css'), 'h1 {}');
+  await writeFile(join(repo, 'public', 'global.js'), '/* asset global */');
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({
+    routes: [{path: '/alias?modo=teste', file: 'public/artigos/index.html'},
+      {path: '/artigos/', file: 'public/page-0.html'}],
+  }));
+  const output = await collectSynthetic(setup, {
+    lhci: `const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      if (process.argv[2] === 'collect') (async () => {
+        const config = JSON.parse(fs.readFileSync(process.argv[3].slice(9)));
+        const url = config.ci.collect.url[0];
+        assert.equal(new URL(url).pathname, '/artigos/');
+        assert.equal(new URL(url).search, '?modo=teste');
+        const html = await (await fetch(url)).text();
+        assert.match(html, /Artigos/);
+        for (const match of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
+          const res = await fetch(new URL(match[1], url));
+          assert.equal(res.status, 200);
+          assert.match(await res.text(), /h1|asset global/);
+        }
+        fs.mkdirSync('.lighthouseci');
+        fs.writeFileSync('.lighthouseci/lhr-0.json', JSON.stringify({requestedUrl: url, finalUrl: url,
+          categories: {performance: {score: 1}}, audits: {
+            'largest-contentful-paint': {numericValue: 100}, 'cumulative-layout-shift': {numericValue: 0},
+            'total-blocking-time': {numericValue: 0}}}));
+      })().catch(error => { console.error(error); process.exitCode = 1; });`,
+    k6: `const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      if (process.argv[2] === 'version') console.log('k6 v2.4.0');
+      else (async () => {
+        const script = fs.readFileSync(process.argv.at(-1), 'utf8');
+        const origin = JSON.parse(/const ORIGIN = (.*);/.exec(script)[1]);
+        const [route] = JSON.parse(/const ROUTES = (.*);/.exec(script)[1]);
+        assert.equal(route, '/alias?modo=teste');
+        const res = await fetch(origin + route);
+        assert.equal(res.status, 200);
+        assert.match(await res.text(), /Artigos/);
+        fs.writeFileSync(process.argv.find(v => v.startsWith('--summary-export=')).slice(17), JSON.stringify({metrics: {
+          ['http_reqs{route:' + route + '}']: {count: 3}, ['http_req_duration{route:' + route + '}']: {'p(95)': 20},
+          ['http_req_failed{route:' + route + '}']: {rate: 0}}}));
+      })().catch(error => { console.error(error); process.exitCode = 1; });`,
+  });
+  assert.deepEqual(output.findings, []);
+  assert.equal(output.measurement.lighthouse[0]?.route, '/alias?modo=teste');
+  assert.equal(output.measurement.lighthouse[0]?.file, 'public/artigos/index.html');
+  assert.equal(output.measurement.k6Routes[0]?.route, '/alias?modo=teste');
+  assert.equal(output.measurement.k6Routes[0]?.p95, 20);
 });
 
 test('identifica declarações excedentes mesmo depois do limite de leitura das rotas', async t => {
