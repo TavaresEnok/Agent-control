@@ -699,3 +699,6 @@ PAUSADO-COTA
 - 19/11/2026 17:24 UTC — Homologação de a classificação de documentos estáticos em 26aa6baf.
 - 19/11/2026 17:24 UTC — Homologação de a qualificação da origem do diagnóstico SQL em 772e0afe.
 - 19/11/2026 17:24 UTC — A revisão do exame solicitou a revalidação da prova ao publicar; a de prontidão identificou três estados indeterminados. As duas correções estão encomendadas. C9 entregou a atualização de origem de dados em ee77a916.
+- 19/11/2026 17:24 UTC — trabalho-C-EXAME-VINCULO-R2 iniciado em final-exame-vinculo por Sol high normal.
+- 19/11/2026 17:24 UTC — trabalho-C6-R12 iniciado em final-c6-r2 por Sol medium normal.
+- 19/11/2026 17:25 UTC — Carga nominal e recuperação por rota passaram em 11/11 com k6 e Toxiproxy reais. Em 166659e9 o entrypoint confirmou duas rotas estáticas, com 250 ms de atraso induzido e recuperação medida. A integração anterior do QA passou 107/108, com falha na CLI por digest ausente. Em andamento a integração das duas funcionalidades na mesma imagem.
