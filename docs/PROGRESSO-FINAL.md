@@ -897,3 +897,10 @@ PAUSADO-COTA
 - 19/11/2026 18:43 UTC — O revisor aceitou os dois controles de Go e PostgreSQL no candidato 69adc794. Restou uma atribuição de operação em mensagem com aspas tipográficas aninhadas. A ordem cobre aninhamento, fechamento e os positivos existentes.
 - 19/11/2026 18:43 UTC — trabalho-C2-MATRIZ-ASPAS-ANINHADAS iniciado em final-qa-matriz-r12 por Sol medium normal.
 - 19/11/2026 18:45 UTC — A correção de recuperação 0734673c foi integrada na bancada em df0081bf. O revisor recebe somente o contrato e o código. O gerente repetirá os testes com banco descartável.
+- 19/11/2026 18:45 UTC — revisor-A3-ACEITE-RETIRADA iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:46 UTC — A3 após a correção 0734673c passou em TypeScript e nos 9 testes de retirada e falha de design com PostgreSQL 16 descartável.
+- 19/11/2026 18:47 UTC — C2-MATRIZ-ASPAS-ANINHADAS encerrado com código 0.
+- 19/11/2026 18:47 UTC — A3-ACEITE-RETIRADA encerrado com código 0.
+- 19/11/2026 18:47 UTC — C8-ORIGEM-COMENTARIO-EFETIVO encerrado com código 0.
+- 19/11/2026 18:48 UTC — QA passou nos testes de imagem e CLI com a matriz sem texto citado, diagnóstico operacional do Go e tabelas herdadas. Digest fixado no ramo de entrega.
+- 19/11/2026 18:48 UTC — O controle de aspas aninhadas dec242d9 entrou no candidato 4470ef01. O digest anterior do worktree foi preservado no ramo task/preservacao-digest-c2-r6. Revisão, imagem e provas do mesmo candidato em andamento.
