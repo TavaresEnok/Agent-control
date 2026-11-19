@@ -222,3 +222,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:12 UTC — Revisão C-EXAME-R2 iniciada por Sol high normal somente leitura em c8fe44e5.
 - 19/11/2026 03:14 UTC — A revisão de QA R6 apontou duas atribuições incorretas de prova e três defeitos médios na detecção de rotas, skip e teste pela entrada pública. Aberta C2-R7, executada pelo gerente enquanto as três vagas de trabalhador estão ocupadas.
 - 19/11/2026 03:15 UTC — Conformidade b433235e passou nos 16 testes, incluindo o laboratório por digest com licença e CPF sintéticos, controle limpo e leitura do índice ScanCode com HOME sem escrita. Integração de homologação em ffe86c74.
+- 19/11/2026 03:16 UTC — Trabalhador encerrou C4-R5 em 8669f900 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:16 UTC — Trabalho C8-R5 iniciado por Sol high normal em final-c8.
+- 19/11/2026 03:16 UTC — A CLI de conformidade na nova imagem passou 6/6 em ffe86c74. C4-R5 entregue em 8669f900 entrou em reconstrução, laboratório e fila de revisão independente.
