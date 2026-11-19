@@ -1,0 +1,434 @@
+import {execFile} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
+import {resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {Capacity} from './capacity.ts';
+import {Id, Refusal, type Authority} from './contracts.ts';
+import {withExamSignals} from './exam-intent.ts';
+import {loadInstallation, type Installation} from './installation.ts';
+import {Ledger, type VerificationModule} from './ledger.ts';
+import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease} from './personal-verify-cli.ts';
+import {
+  authorizeProjectHttpsOrigin,
+  probePublishedHttpsOrigins,
+  type PassiveHttpsProbeOptions,
+  type ProntidaoPassiveEvidence,
+} from './prontidao-target.ts';
+import {
+  assertVerificationModule,
+  discardModuleReport,
+  moduleRemeasurementTarget,
+  recheckModuleFindings,
+  reconcileModuleReports,
+  requestModuleCorrection,
+  runVerificationModule,
+  type CollectorRunnerSpec,
+  type ModuleCollectorOutput,
+  type VerificationModuleRunResult,
+} from './verification-modules.ts';
+import {composePersonalModuleExamRuntime, createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamRuntime} from './module-exam-native.ts';
+import {assertPersonalActivation} from './verify-intent.ts';
+
+const moduleActions = '[--corrigir <runId> <ACH-001...> | --medir-correcao <runId> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
+const messages: Record<string, string> = {
+  VERIFY_USAGE: `Uso: npm run personal:<modulo> -- <instalação.json> <projeto> ${moduleActions}`,
+  PERSONAL_ACTIVATION_REQUIRED: 'O módulo de verificação só roda numa instalação pessoal.',
+  NOT_FOUND: 'Projeto não encontrado.',
+  VERIFY_PROJECT_AMBIGUOUS: 'Há mais de um projeto com esse label.',
+  VERIFY_CONTEXT_REQUIRED: 'O projeto não tem um contexto para verificar.',
+  EXAM_CONTEXT_MISMATCH: 'O contexto do exame não corresponde ao módulo solicitado.',
+  PROJECT_SCOPE_MISMATCH: 'O contexto não pertence ao projeto solicitado.',
+  PROJECT_FORBIDDEN: 'Acesso negado ao projeto.',
+  CONTEXT_FORBIDDEN: 'Acesso negado ao contexto.',
+  VERIFY_REPORT_INTEGRITY: 'O relatório confirmado está ausente ou não corresponde ao registro da execução.',
+  VERIFY_CONTAINER_CLEANUP_PENDING: 'A remoção do contêiner ainda não pôde ser confirmada. A limpeza permanece pendente.',
+  VERIFY_TOOLS_FAILED: 'Uma ou mais ferramentas do módulo falharam (registrado na cobertura do relatório).',
+  VERIFY_COLLECTOR_INVALID: 'A saída do coletor é inválida.',
+  VERIFY_STDOUT_LIMIT: 'A saída stdout do coletor excedeu o limite permitido.',
+  VERIFY_PATH_FORBIDDEN: 'Caminho inválido ou proibido no repositório ou relatório.',
+  VERIFY_SOCKET_FORBIDDEN: 'Montagem de socket proibida no coletor.',
+  VERIFY_NETWORK_FORBIDDEN: 'Configuração de rede proibida no coletor.',
+  VERIFY_LIMITS_INVALID: 'Limites de execução do coletor são inválidos.',
+  VERIFY_COMMIT_INVALID: 'Não foi possível ler o commit do repositório.',
+  VERIFY_IMAGE_UNPINNED: 'A imagem do módulo não está fixada por digest.',
+  VERIFY_ALREADY_RUNNING: 'Já existe uma execução deste módulo em andamento neste projeto.',
+  VERIFY_LEASE_LOST: 'A locação da execução do módulo falhou.',
+  VERIFY_NOTHING_TO_FIX: 'Selecione ao menos um achado para converter em tarefa.',
+  VERIFY_TOO_MANY: 'A operação aceita no máximo 20 achados por vez.',
+  VERIFY_FINDING_MISSING: 'Achado não encontrado ou não elegível para correção.',
+  VERIFY_RUN_MISSING: 'Execução do módulo não encontrada neste projeto.',
+  VERIFY_RUN_CONFLICT: 'A execução ou o commit mudou durante a reverificação.',
+  VERIFY_RECHECK_CHANGE_UNPROVEN: 'A medição requer um commit posterior ao commit da execução original.',
+  VERIFY_RECHECK_FAILED: 'A reverificação falhou. Consulte o registro da execução.',
+  VERIFY_RECHECK_PREVIOUS_PUBLICATION_PENDING: 'Há vereditos gravados com publicação pendente. Repita a seleção anterior de --reverificar para publicar o relatório.',
+  STALE_MANAGER: 'A autoridade sobre o contexto do módulo expirou.',
+  VERIFY_REPORT_INSIDE_REPO: 'O diretório de dados não pode ficar dentro do repositório.',
+  VERIFY_SECRET_IN_REPORT: 'Um segredo vivo apareceria no relatório.',
+  PRONTIDAO_ORIGIN_INVALID: 'Origem HTTPS inválida; informe apenas esquema https:// sem usuário, caminho ou parâmetros.',
+  PRONTIDAO_ORIGIN_UNAUTHORIZED: 'A origem HTTPS informada não está declarada e autorizada na instalação ou no projeto.',
+  PROVIDER_USAGE_LIMIT: 'PROVIDER_USAGE_LIMIT. A cota do provedor foi atingida. Consulte as pendências no relatório.',
+  EXAM_INTERRUPTED: 'A execução do módulo foi interrompida.',
+};
+
+const recheckGuidance: Record<string, string> = {
+  MODULE_RECHECK_ORIGINAL_UNKNOWN: 'Recupere o relatório e a cobertura originais para identificar a origem do achado.',
+  MODULE_RECHECK_SAME_COMMIT: 'Integre a correção e rode o módulo no novo commit.',
+  MODULE_RECHECK_CHANGE_UNPROVEN: 'Confira a linhagem do commit e a alteração no ponto original do achado.',
+  MODULE_RECHECK_MODULE_PROOF_MISSING: 'Use --medir-correcao com o ID original e confira a cobertura da ferramenta no commit atual.',
+  MODULE_RECHECK_MEASUREMENT_UNPROVEN: 'Confira a identidade do objeto, os registros por arquivo e o critério da regra nas duas revisões.',
+  MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED: 'A regra ainda não dispõe de prova funcional de antes e depois.',
+  MODULE_RECHECK_FUNCTIONAL_ORIGIN_UNPROVEN: 'A medição original do módulo não comprova a condição funcional desta regra.',
+  MODULE_RECHECK_FUNCTION_IDENTITY_UNPROVEN: 'A declaração original e a atual precisam identificar inequivocamente a mesma função exportada.',
+  MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE: 'Confira o caminho da regressão e a asserção exigida para o objeto e a regra.',
+  MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE: 'A execução isolada não produziu um resultado válido para a asserção no commit atual.',
+  MODULE_RECHECK_ORIGINAL_TEST_PASSED: 'O teste de regressão já passou na revisão original.',
+  MODULE_RECHECK_CORRECTED_TEST_FAILED: 'A mesma asserção ainda falhou na revisão corrigida.',
+  MODULE_RECHECK_CORRECTION_UNEXPLAINED: 'A revisão precisa vincular a regra, o mesmo alvo e os resultados medidos nas duas revisões.',
+};
+
+export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
+  const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
+  if (code === 'VERIFY_USAGE' && module) {
+    const origin = module === 'prontidao' ? ' [--origem <https://...>]' : '';
+    return `Uso: npm run personal:${module} -- <instalação.json> <projeto>${origin} ${moduleActions}`;
+  }
+  return messages[code] ?? (code || 'A execução do módulo falhou.');
+}
+
+export type ParsedPersonalModuleInvocation =
+  | {kind: 'run'; module: VerificationModule; installationPath: string; projectToken: string; origin?: string}
+  | {kind: 'discard'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
+  | {kind: 'measure'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
+  | {kind: 'remediate' | 'recheck'; module: VerificationModule; installationPath: string; projectToken: string; runId: string; achadoIds: string[]};
+
+export function parsePersonalModuleArgs(
+  module: VerificationModule,
+  argv: readonly string[],
+): ParsedPersonalModuleInvocation {
+  assertVerificationModule(module);
+  const installationPath = argv[0];
+  const projectToken = argv[1];
+  if (
+    !installationPath
+    || !projectToken
+    || installationPath.startsWith('--')
+    || projectToken.startsWith('--')
+  ) {
+    throw new Refusal('VERIFY_USAGE', 400);
+  }
+  const rest = argv.slice(2);
+  if (rest.length === 0) {
+    return {kind: 'run', module, installationPath, projectToken};
+  }
+  if (module === 'prontidao' && (rest[0] === '--origem' || rest[0]?.startsWith('--origem='))) {
+    let origin: string | undefined;
+    if (rest[0] === '--origem') {
+      if (rest.length !== 2 || !rest[1] || rest[1].startsWith('--')) {
+        throw new Refusal('VERIFY_USAGE', 400);
+      }
+      origin = rest[1];
+    } else {
+      if (rest.length !== 1) throw new Refusal('VERIFY_USAGE', 400);
+      origin = rest[0].slice('--origem='.length);
+      if (!origin || origin.startsWith('--')) throw new Refusal('VERIFY_USAGE', 400);
+    }
+    return {kind: 'run', module, installationPath, projectToken, origin};
+  }
+  if (rest[0] === '--descartar' || rest[0] === '--medir-correcao') {
+    const runId = rest[1];
+    if (rest.length !== 2 || !runId || runId.startsWith('--') || !Id.safeParse(runId).success) {
+      throw new Refusal('VERIFY_USAGE', 400);
+    }
+    return {kind: rest[0] === '--descartar' ? 'discard' : 'measure', module, installationPath, projectToken, runId};
+  }
+  if (rest[0] === '--corrigir' || rest[0] === '--reverificar') {
+    const runId = rest[1];
+    const achadoIds = rest.slice(2);
+    if (!runId || runId.startsWith('--') || !Id.safeParse(runId).success || achadoIds.length === 0) {
+      throw new Refusal('VERIFY_USAGE', 400);
+    }
+    const recheck = rest[0] === '--reverificar';
+    if (achadoIds.some(id => recheck ? !/^ACH-\d{3}$/.test(id) : id.startsWith('--'))) {
+      throw new Refusal('VERIFY_USAGE', 400);
+    }
+    return {kind: recheck ? 'recheck' : 'remediate', module, installationPath, projectToken, runId, achadoIds};
+  }
+  throw new Refusal('VERIFY_USAGE', 400);
+}
+
+function resolveProject(config: Installation, token: string) {
+  const hits = [config.project, ...config.projects].filter(item => item.id === token || item.label === token);
+  if (hits.length === 0) throw new Refusal('NOT_FOUND', 404);
+  if (hits.length > 1) throw new Refusal('VERIFY_PROJECT_AMBIGUOUS', 409);
+  return hits[0]!;
+}
+
+function readHead(repoPath: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    execFile('/usr/bin/git', ['-C', repoPath, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: {
+        PATH: '/usr/bin:/bin',
+        HOME: '/nonexistent',
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+    }, (error, stdout) => {
+      const commit = (stdout ?? '').trim();
+      if (error || !/^[a-f0-9]{40}$/.test(commit)) reject(new Refusal('VERIFY_COMMIT_INVALID', 400));
+      else resolvePromise(commit);
+    });
+  });
+}
+
+async function acquirePersonalModule(
+  ledger: Ledger,
+  principal: string,
+  contextId: string,
+  module: VerificationModule,
+): Promise<Authority> {
+  const instanceId = randomUUID();
+  try {
+    try {
+      return await ledger.acquire(principal, contextId, instanceId, `personal-${module}`, 3600);
+    } catch (error) {
+      if (!(error instanceof Refusal) || error.code !== 'INVALID_LEASE') throw error;
+      return await ledger.acquire(principal, contextId, instanceId, `personal-${module}`, 60);
+    }
+  } catch (error) {
+    if (error instanceof Refusal && error.code === 'MANAGER_ACTIVE') {
+      throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
+    }
+    throw error;
+  }
+}
+
+export type PersonalModuleCliDeps = {
+  image?: string;
+  rootDir?: string;
+  timeoutMs?: number;
+  maxStdoutBytes?: number;
+  prontidaoProbeOptions?: PassiveHttpsProbeOptions;
+  collectorOutput?: unknown;
+  runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
+  /** Tests supply a synthetic native supervisor and an isolated collector. */
+  moduleExamRuntime?: () => Promise<ModuleExamRuntime>;
+  onResult?: (result: VerificationModuleRunResult) => void;
+};
+
+export async function runPersonalModuleCli(
+  module: VerificationModule,
+  argv: readonly string[],
+  deps?: PersonalModuleCliDeps,
+): Promise<string[]> {
+  const parsed = parsePersonalModuleArgs(module, argv);
+  const config = await loadInstallation(resolve(parsed.installationPath));
+  if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
+  const project = resolveProject(config, parsed.projectToken);
+
+  const authorizedOrigins = parsed.kind === 'run' && module === 'prontidao'
+    ? authorizeProjectHttpsOrigin(config, project.id, parsed.origin)
+    : [];
+
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  let authority: Authority | undefined;
+  let stopRecheckLease: (() => void) | undefined;
+  const recheckAbort = parsed.kind === 'recheck' ? new AbortController() : undefined;
+  const interruptRecheck = () => recheckAbort?.abort(new Refusal('EXAM_INTERRUPTED'));
+  if (recheckAbort) {
+    process.on('SIGINT', interruptRecheck);
+    process.on('SIGTERM', interruptRecheck);
+  }
+  try {
+    if (parsed.kind === 'discard') {
+      await discardModuleReport(ledger, project.owner, config.dataDirectory, project.id, module, parsed.runId);
+      return ['Relatório descartado.'];
+    }
+    if (recheckAbort) {
+      await assertPersonalActivation(ledger);
+      const membership = await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",
+        [project.id, project.owner]);
+      if (!membership.rowCount) throw new Refusal('PROJECT_FORBIDDEN', 403);
+      recheckAbort.signal.throwIfAborted();
+    }
+    const exam = await ledger.ensureExamContext(project.owner, project.id, module);
+    authority = await acquirePersonalModule(ledger, project.owner, exam.contextId, module);
+    if (recheckAbort) {
+      stopRecheckLease = keepPersonalVerifyLease(ledger, authority, 5000,
+        () => recheckAbort.abort(new Refusal('VERIFY_LEASE_LOST')));
+      recheckAbort.signal.throwIfAborted();
+    }
+    if (parsed.kind !== 'measure' && exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
+      await new Capacity(ledger).assignPolicy(project.owner, exam.contextId, exam.mainCapacityPolicyRevision);
+    }
+
+    if (parsed.kind === 'recheck') {
+      const {results, publication} = await recheckModuleFindings(ledger, project.owner, authority, {
+        module, runId: parsed.runId, achadoIds: parsed.achadoIds, dataDirectory: config.dataDirectory, projectId: project.id,
+        signal: recheckAbort?.signal,
+        review: createPersonalModuleRecheck({ledger, principal: project.owner, authority,
+          loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger))}),
+      });
+      const lines = results.map(result => {
+        if (result.status !== 'pendente') return `${result.id} ${result.status}`;
+        const guidance = recheckGuidance[result.reason];
+        return `${result.id} pendente ${result.reason}${guidance ? ` (${guidance})` : ''}`;
+      });
+      if (publication === 'pending') {
+        lines.push('Vereditos gravados. Publicação do relatório pendente (VERIFY_RECHECK_PUBLICATION_PENDING). Repita o mesmo comando para publicar.');
+      }
+      return lines;
+    }
+
+    if (parsed.kind === 'remediate') {
+      await reconcileModuleReports(ledger, project.owner, authority, config.dataDirectory, project.id);
+      const corrected = await requestModuleCorrection(ledger, project.owner, authority, {
+        module,
+        runId: parsed.runId,
+        achadoIds: parsed.achadoIds,
+        dataDirectory: config.dataDirectory,
+        projectId: project.id,
+        repoPath: project.repo,
+      });
+      return [...(corrected.messageLocalIds ?? [corrected.messageLocalId]), ...corrected.writePaths];
+    }
+
+    const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
+      module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
+        ? await probePublishedHttpsOrigins(authorizedOrigins, deps?.prontidaoProbeOptions)
+        : undefined;
+
+    let providerLimited = false;
+    const runId = randomUUID();
+    const collectorAbort = new AbortController();
+    let rejectAbort: (error: unknown) => void = () => {};
+    const aborted = new Promise<never>((_, reject) => {
+      rejectAbort = reject;
+    });
+    void aborted.catch(() => undefined);
+    let stopLease: () => void = () => {};
+    stopLease = keepPersonalVerifyLease(ledger, authority, 5000, () => {
+      void abortPersonalVerifyForLeaseLoss({
+        stopLease() {
+          stopLease();
+        },
+        async stopJob() {
+          collectorAbort.abort();
+        },
+        rejectAbort,
+      });
+    });
+
+    let runningTask: Promise<VerificationModuleRunResult> | undefined;
+    try {
+      const result = await withExamSignals(
+        async () => {
+          const task = runningTask = (async () => {
+            const measurement = parsed.kind === 'measure' ? await moduleRemeasurementTarget(ledger, project.owner, authority!, {
+              projectId: project.id, module, runId: parsed.runId, repo: project.repo, signal: collectorAbort.signal,
+            }) : undefined;
+            const commit = measurement?.commit ?? await readHead(project.repo);
+            collectorAbort.signal.throwIfAborted();
+            const runExam = measurement ? undefined : createPersonalModuleExam({
+              ledger, principal: project.owner, authority: authority!, commit,
+              loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
+            });
+            return runVerificationModule({
+              module,
+              ledger,
+              principal: project.owner,
+              authority: authority!,
+              projectId: project.id,
+              repoPath: project.repo,
+              dataDirectory: config.dataDirectory,
+              commit,
+              runId,
+              signal: collectorAbort.signal,
+              image: measurement?.image ?? deps?.image,
+              rootDir: deps?.rootDir,
+              timeoutMs: deps?.timeoutMs,
+              maxStdoutBytes: deps?.maxStdoutBytes,
+              passiveTlsEvidence,
+              collectorOutput: deps?.collectorOutput,
+              runCollector: deps?.runCollector,
+              examinar: runExam && (async request => {
+                const examined = await runExam(request);
+                providerLimited = examined.coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT')
+                  || examined.findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT');
+                return examined;
+              }),
+            });
+          })();
+          void task.catch(() => undefined);
+          return await Promise.race([task, aborted]);
+        },
+        () => {
+          collectorAbort.abort();
+        },
+      );
+      deps?.onResult?.(result);
+      if (providerLimited) throw new Refusal('PROVIDER_USAGE_LIMIT', 409);
+      if (result.hasToolFailure) {
+        throw new Refusal('VERIFY_TOOLS_FAILED', 409);
+      }
+      return [result.runId, result.directory];
+    } finally {
+      stopLease();
+      // Let the aborted run stop its collector and finish fenced cleanup before
+      // releasing the lease and closing the database pool.
+      if (collectorAbort.signal.aborted && runningTask) {
+        await runningTask.catch(error => {
+          if (error instanceof Refusal && error.code === 'VERIFY_CONTAINER_CLEANUP_PENDING') throw error;
+        });
+      }
+    }
+  } catch (error) {
+    if (recheckAbort && !(error instanceof Refusal)) throw new Refusal('VERIFY_RECHECK_FAILED', 503);
+    throw error;
+  } finally {
+    stopRecheckLease?.();
+    try {
+      if (authority) {
+        await releasePersonalVerifyLease(
+          {pool: {query: (sql, params) => ledger.pool.query(sql, (params ?? []) as never[])}},
+          authority,
+        ).catch(() => undefined);
+      }
+      await ledger.close();
+    } finally {
+      if (recheckAbort) {
+        process.off('SIGINT', interruptRecheck);
+        process.off('SIGTERM', interruptRecheck);
+      }
+    }
+  }
+}
+
+async function main(): Promise<void> {
+  const rawModule = process.argv[2];
+  let module: VerificationModule | undefined;
+  try {
+    module = assertVerificationModule(rawModule);
+    const printed: string[] = [];
+    const lines = await runPersonalModuleCli(module, process.argv.slice(3), {
+      onResult(result) {
+        printed.push(result.runId, result.directory);
+        console.log(result.runId);
+        console.log(result.directory);
+      },
+    });
+    if (printed.length === 0) {
+      for (const line of lines) console.log(line);
+    }
+    process.exit(0);
+  } catch (error) {
+    console.error(moduleCliFailureText(error, module));
+    process.exit(1);
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  void main();
+}

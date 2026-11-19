@@ -1,0 +1,100 @@
+{
+  "purpose": "Pin das ferramentas da imagem do Módulo 2 (QA pesado). O lockfile npm completo está em deploy/modules/qa/package-lock.json.",
+  "module": "qa",
+  "registry": "https://registry.npmjs.org",
+  "lockfileVersion": 3,
+  "packageLockSha256": "fd08d53610a4d9e3cba811b3dbb94a25470d1def52728ac9d6521f579e3cabfd",
+  "baseImage": {
+    "name": "mcr.microsoft.com/playwright",
+    "tag": "v1.65.1-noble",
+    "digest": "sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579",
+    "linuxAmd64Digest": "sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9",
+    "linuxArm64Digest": "sha256:56be08aca06bf736a928da2e3235a3b63ef71ee97313beb18c6019fea791aba4"
+  },
+  "languageRuntimes": {
+    "python": {
+      "version": "3.12.16",
+      "image": "docker.io/library/python:3.12.16-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df"
+    },
+    "go": {
+      "version": "1.27.4",
+      "image": "docker.io/library/golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea"
+    },
+    "coverage": {
+      "version": "7.13.5",
+      "url": "https://files.pythonhosted.org/packages/9e/ee/a4cf96b8ce1e566ed238f0659ac2d3f007ed1d14b181bcb684e19561a69a/coverage-7.13.5-py3-none-any.whl",
+      "sha256": "34b02417cf070e173989b3db962f7ed56d2f644307b2cf9d5a0f258e13084a61"
+    }
+  },
+  "languageMeasurements": {
+    "python": {
+      "requirementsSha256": "6413c0ff09119354d2666e766a3f552a00d4576f5d83f8ecd316a6ee6f307a51",
+      "versions": {
+        "mutmut": "3.5.0",
+        "pytest": "8.4.2",
+        "hypothesis": "6.140.2",
+        "libcst": "1.9.0"
+      }
+    },
+    "go": {
+      "module": "github.com/avito-tech/go-mutesting",
+      "version": "v0.0.0-20261002081621-9ce5f731e321",
+      "modSha256": "b68cf4cb9fb5438dc243f014d86d47edfc105ad15a9f821b94792234ddd0c0aa",
+      "sumSha256": "04084e195f9730fd576ba0d0db5d64e2c8bc3bea728265745abc9c4041d9ed9e"
+    }
+  },
+  "dependencies": {
+    "@stryker-mutator/instrumenter": {
+      "version": "10.1.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-Vyude2i8LhDciLV1q6J55KtdA7gZpRuMfZcBcmWV6hLHAvWocoPKnCKc5BlZt1mwGWkX3Olc0457I7Ue6F1WEg==",
+      "resolved": "https://registry.npmjs.org/@stryker-mutator/instrumenter/-/instrumenter-10.1.1.tgz"
+    },
+    "fast-check": {
+      "version": "4.10.3",
+      "license": "MIT",
+      "integrity": "sha512-SBaU6nhh+sXxb05r2IHAKfxnR/1Pu6MqtHYaewM1BY6V5xzOxOk+4yoWO7WfeeyZG1iArFE6/DO/7iLYMUuOJg==",
+      "resolved": "https://registry.npmjs.org/fast-check/-/fast-check-4.10.3.tgz"
+    },
+    "axe-core": {
+      "version": "4.14.1",
+      "license": "MPL-2.0",
+      "integrity": "sha512-FHfa+lmNjQZfJz1q8wKqIDwC6DExcHt/pkjNQb09a3NPjCKg2rhu5qb2S4r76ASyFNNtuFooJpZe37OgudVGtQ==",
+      "resolved": "https://registry.npmjs.org/axe-core/-/axe-core-4.14.1.tgz"
+    },
+    "jsdom": {
+      "version": "31.0.1",
+      "license": "MIT",
+      "integrity": "sha512-CbhJL8ZQg3eKswxSZth4QO9tW0jPIhmR0vtSXQSbKSfWbwIT6hoRc17wdHIVTQ43KI0mdV5iTJr3281IDgVZ5g==",
+      "resolved": "https://registry.npmjs.org/jsdom/-/jsdom-31.0.1.tgz"
+    },
+    "@apidevtools/swagger-parser": {
+      "version": "13.1.0",
+      "license": "MIT",
+      "integrity": "sha512-dkCuqCWh5U7u0aurmmc/qvel2KeKDxHTwVtUdYonndIpD7mXV6AVaWNdvaja2HAy628z7FT/Qdz8sCgzwhgwKg==",
+      "resolved": "https://registry.npmjs.org/@apidevtools/swagger-parser/-/swagger-parser-13.1.0.tgz"
+    },
+    "parse5": {
+      "version": "8.1.1",
+      "license": "MIT",
+      "integrity": "sha512-EcR/6WDcU7b2N3vQSxKALCk9lXGtUMQxXio008OEMBE0kavu/7JLfBEeFPzi43nMqVDSbEn3QCK+BMCc9zO//w==",
+      "resolved": "https://registry.npmjs.org/parse5/-/parse5-8.1.1.tgz"
+    },
+    "playwright-core": {
+      "version": "1.65.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-hqPpz7blSMPxWVdoeE1yiBSzXsKiVOd2k+kjCvmUywD2GPO2Dd9HfcWnq9NN0GHbNZDFgZ9JfBFr+X5/BLo0qw==",
+      "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.65.1.tgz"
+    },
+    "pngjs": {
+      "version": "7.0.0",
+      "license": "MIT",
+      "integrity": "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==",
+      "resolved": "https://registry.npmjs.org/pngjs/-/pngjs-7.0.0.tgz"
+    }
+  },
+  "transitive": {
+    "@babel/parser": "8.0.10",
+    "@babel/traverse": "8.0.10"
+  }
+}

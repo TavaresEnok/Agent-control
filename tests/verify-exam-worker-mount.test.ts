@@ -193,7 +193,7 @@ class MountMemory {
     }
     if (text.includes('ac_provider_eligibility_assessments')) {
       const grant = this.tables.ac_capacity_grants?.find(row => row.id === params[0] && row.state === 'uncertain');
-      return selected(grant ? [{...grant, model: grant.model, effort: grant.effort}] : []);
+      return selected(grant ? [{...grant, model: grant.model, effort: grant.effort, quota_status: 'available', quota_exhausted: false}] : []);
     }
     if (text.startsWith('SELECT x.*,m.role FROM ac_contexts')) {
       const context = this.tables.ac_contexts?.find(row => row.id === params[0] && !row.archived);

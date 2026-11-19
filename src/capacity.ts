@@ -59,6 +59,8 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
     preparedProfiles: z.array(Id).max(20),
     avoidExaminerAccounts: z.array(Id).max(20).optional(),
   }).strict().optional(),
+  /** Restrict runtime seats and surface quota exhaustion when none of them can be reserved. */
+  allowedAccounts: z.array(Id).min(1).max(8).optional(),
   /** Profiles excluded for this reservation (never fallen back to). */
   avoidProfiles: z.array(Id).max(20).optional(),
   /** Restrict selection to profiles on this provider (never fallen back to another). */
@@ -359,11 +361,12 @@ export class Capacity {
           ORDER BY g.created_at DESC LIMIT 1`,[request.intentId,request.contextId])).rows[0];
         writerProvider=writer?String(writer.provider):null;
       }
-      const usable = (row: LoadedProfile) => classifyProfileExclusion(row,{personal}) === null
-        && !(writerProvider&&row.provider===writerProvider)
+      const matchesRequest = (row: LoadedProfile) => !(writerProvider&&row.provider===writerProvider)
         && !(request.provider&&row.provider!==request.provider)
         && !request.avoidProfiles?.includes(row.profileId)
-        && row.accountId && row.maxConcurrent != null;
+        && (!request.allowedAccounts || (row.accountId !== null && request.allowedAccounts.includes(row.accountId)));
+      const usable = (row: LoadedProfile) => matchesRequest(row)
+        && classifyProfileExclusion(row,{personal}) === null && row.accountId && row.maxConcurrent != null;
       const notAvoidedAccount = (row: LoadedProfile) => !request.avoidAccounts?.includes(row.accountId!);
       let choice: LoadedProfile | undefined;
       if (request.examReviewer) {
@@ -402,8 +405,13 @@ export class Capacity {
       }
       if (!choice?.accountId || choice.maxConcurrent == null) {
         const exclusions = orderedProfileExclusions(loaded,{personal});
+        const hasLimitedRuntimeSeat = request.allowedAccounts && loaded.some(row => {
+          if (!matchesRequest(row)) return false;
+          const reason = classifyProfileExclusion(row,{personal});
+          return reason === 'quota_exhausted' || reason === 'quota_rate_limited';
+        });
         await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY',exclusions=$2::jsonb WHERE attempt_id=$1",[request.attemptId, JSON.stringify(exclusions)]);
-        return {blockedCode:'NO_ELIGIBLE_CAPACITY'};
+        return {blockedCode: hasLimitedRuntimeSeat ? 'PROVIDER_USAGE_LIMIT' : 'NO_ELIGIBLE_CAPACITY'};
       }
       const selected = { id: choice.profileId, account_id: choice.accountId, max_concurrent: choice.maxConcurrent };
       await c.query('UPDATE ac_capacity_waits SET desired_profile=$2,exclusions=NULL WHERE attempt_id=$1',[request.attemptId,selected.id]);

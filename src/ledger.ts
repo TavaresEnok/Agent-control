@@ -7,8 +7,21 @@ import { Authority, Checkpoint, Command, digest, Id, Refusal, Projection } from 
 import { workflowFor } from './workflows.ts';
 import { Template } from './templates.ts';
 import {freezeManagedExecution} from './managed-plan.ts';
+import {cleanupModuleContainer, runBoundedCollectorProcess, type CollectorProcess} from './module-container-cleanup.ts';
 
-export type ExamModule = 'design' | 'verify';
+export const VERIFICATION_MODULES = [
+  'qa',
+  'arquitetura',
+  'dependencias',
+  'banco',
+  'prontidao',
+  'desempenho',
+  'documentacao',
+  'conformidade',
+] as const;
+export type VerificationModule = (typeof VERIFICATION_MODULES)[number];
+export type ExamModule = 'design' | 'verify' | VerificationModule;
+const EXAM_MODULES: ReadonlySet<string> = new Set(['design', 'verify', ...VERIFICATION_MODULES]);
 export type ExamContext = {
   contextId: string;
   mainContextId: string;
@@ -66,10 +79,10 @@ export class Ledger {
       return id;
     });
   }
-  /** Creates or reuses the dedicated per-project exam context for `design` or `verify`, keeping the main context untouched. */
+  /** Creates or reuses the dedicated per-project exam context for `design`, `verify`, or a verification module, keeping the main context untouched. */
   async ensureExamContext(principal: string, projectId: string, module: ExamModule): Promise<ExamContext> {
     const parsedProjectId = Id.parse(projectId);
-    if (module !== 'design' && module !== 'verify') throw new Refusal('INVALID_CONTRACT', 400);
+    if (!EXAM_MODULES.has(module)) throw new Refusal('INVALID_CONTRACT', 400);
     const missingCode = module === 'design' ? 'DESIGN_CONTEXT_REQUIRED' : 'VERIFY_CONTEXT_REQUIRED';
     return this.tx(async c => {
       await c.query('SELECT id FROM ac_projects WHERE id=$1 FOR SHARE', [parsedProjectId]);
@@ -114,20 +127,42 @@ export class Ledger {
       };
     });
   }
-  async acquire(principal: string, contextId: string, instanceId: string, profileId: string, leaseSeconds = 15): Promise<Authority> {
+  async acquire(
+    principal: string, contextId: string, instanceId: string, profileId: string, leaseSeconds = 15,
+    executeContainerCleanup: CollectorProcess = runBoundedCollectorProcess,
+  ): Promise<Authority> {
     if (!Number.isInteger(leaseSeconds) || leaseSeconds < 1 || leaseSeconds > 60) throw new Refusal('INVALID_LEASE', 400);
-    return this.tx(async c => {
-      await this.authorize(c, principal, contextId);
-      await fenceInstallationContext(c,contextId,this.installationAuthority);
-      const r = await c.query(`INSERT INTO ac_managers VALUES($1,$2,$3,1,clock_timestamp()+$4*interval '1 second')
-        ON CONFLICT(context_id) DO UPDATE SET instance_id=excluded.instance_id,profile_id=excluded.profile_id,
-        epoch=ac_managers.epoch+1,lease_until=excluded.lease_until
-        WHERE ac_managers.lease_until<=clock_timestamp() RETURNING epoch`, [contextId, instanceId, profileId, leaseSeconds]);
-      if (!r.rowCount) throw new Refusal('MANAGER_ACTIVE');
-      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.acquired',$2)",
-        [contextId, { instanceId, profileId, epoch: Number(r.rows[0].epoch) }]);
-      return Authority.parse({ contextId, instanceId, epoch: Number(r.rows[0].epoch) });
-    });
+    for (;;) {
+      const attempt = await this.tx(async c => {
+        await this.authorize(c, principal, contextId);
+        await fenceInstallationContext(c,contextId,this.installationAuthority);
+        const {rows: pending} = await c.query<{id: string; collector_container_token: string; collector_container_id: string}>(
+          `SELECT id, collector_container_token, collector_container_id FROM ac_verify_runs
+           WHERE context_id=$1 AND collector_start_pending ORDER BY id`, [contextId],
+        );
+        if (pending.length) {
+          const active = await c.query(
+            'SELECT 1 FROM ac_managers WHERE context_id=$1 AND lease_until>clock_timestamp()', [contextId],
+          );
+          if (active.rowCount) throw new Refusal('MANAGER_ACTIVE');
+          return pending;
+        }
+        const r = await c.query(`INSERT INTO ac_managers VALUES($1,$2,$3,1,clock_timestamp()+$4*interval '1 second')
+          ON CONFLICT(context_id) DO UPDATE SET instance_id=excluded.instance_id,profile_id=excluded.profile_id,
+          epoch=ac_managers.epoch+1,lease_until=excluded.lease_until
+          WHERE ac_managers.lease_until<=clock_timestamp() RETURNING epoch`, [contextId, instanceId, profileId, leaseSeconds]);
+        if (!r.rowCount) throw new Refusal('MANAGER_ACTIVE');
+        await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.acquired',$2)",
+          [contextId, { instanceId, profileId, epoch: Number(r.rows[0].epoch) }]);
+        return Authority.parse({ contextId, instanceId, epoch: Number(r.rows[0].epoch) });
+      });
+      if (!Array.isArray(attempt)) return attempt;
+      // Only cleanup is allowed during this gap. Recheck authorization and
+      // authority under the context lock once the old start is neutralized.
+      for (const row of attempt) {
+        await cleanupModuleContainer(this, contextId, row.id, executeContainerCleanup, row.collector_container_token, row.collector_container_id);
+      }
+    }
   }
   async fence(c: pg.PoolClient, authority: Authority, allowPaused = false) {
     const a = Authority.parse(authority);

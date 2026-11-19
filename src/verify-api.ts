@@ -1,9 +1,12 @@
-import {lstat} from 'node:fs/promises';
-import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {lstat, realpath} from 'node:fs/promises';
+import {basename, join} from 'node:path';
 import {Hono} from 'hono';
 import {z} from 'zod';
 import {Authority, Id, Refusal} from './contracts.ts';
-import type {Ledger} from './ledger.ts';
+import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
+import {listModuleReports, readModuleReport, renderModuleCoverageMarkdown, requestModuleCorrection, type ModuleReportSummary} from './verification-modules.ts';
+import {isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
 import {listSecurityReports, readAchadoMarkdown, readSecurityReport, removeSecurityReport} from './verify-report.ts';
 import {
@@ -33,6 +36,7 @@ export type VerificationRouteDeps = {
   ledger: Ledger;
   requireInstallationOwner: (principal: string) => Promise<void>;
   personalPanel: Panel | undefined;
+  selectedProjectId: string;
   manager: (contextId: string) => ManagerAuthority | undefined;
   listSecurityReports: typeof listSecurityReports;
   readSecurityReport: typeof readSecurityReport;
@@ -130,6 +134,154 @@ async function correctionRequest(c: {get(key: 'principal'): string; req: {param(
   return {principal, panel, runId, achadoIds: body.achadoIds, authority};
 }
 
+const functionalReportsPath = '/api/v1/ac/personal/verificacoes-funcionais';
+const functionalModule = z.enum(VERIFICATION_MODULES);
+const functionalCorrectionBody = achadoIdsBody.extend({achadoIds: z.array(achadoIdParam).min(1).max(20)});
+const reportDate = z.iso.datetime();
+
+async function functionalProject(c: {get(key: 'principal'): string}, deps: VerificationRouteDeps, write = false) {
+  const {principal, panel} = await ownerPanel(c, deps);
+  const projectId = deps.selectedProjectId;
+  if (projectId !== panel.projectId) {
+    const membership = await deps.ledger.pool.query<{role: string}>(
+      'SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [projectId, principal],
+    );
+    const role = membership.rows[0]?.role;
+    if (!role || (write && role === 'viewer')) throw new Refusal('PROJECT_FORBIDDEN', 403);
+  }
+  return {principal, projectId, dataDirectory: panel.dataDirectory};
+}
+
+function publishedModuleRuns(ledger: Ledger, projectId: string, module?: VerificationModule, runId?: string) {
+  // A correção usa somente o contexto de exame registrado para o projeto e o módulo.
+  return ledger.pool.query<{id: string; module: VerificationModule; context_id: string; report_dir: string; commit_id: string}>(
+    `SELECT r.id, r.module, r.context_id, r.report_dir, r.commit_id
+     FROM ac_verify_runs r JOIN ac_exam_contexts e USING (project_id, module, context_id)
+     WHERE r.project_id=$1 AND r.module=ANY($2::text[]) AND ($3::uuid IS NULL OR r.id=$3)
+       AND r.status IN ('done','failed') AND r.report_dir NOT IN ('pending','discarded')
+       AND r.report_dir NOT LIKE 'discarded:%'`,
+    [projectId, module ? [module] : [...VERIFICATION_MODULES], runId ?? null],
+  );
+}
+
+function functionalSummary(report: ModuleReportSummary) {
+  return {
+    id: report.id, module: report.module, counts: report.counts, toolFailures: report.toolFailures,
+    createdAt: reportDate.safeParse(report.createdAt).data ?? null,
+  };
+}
+
+function reportText(text: string): string {
+  return redactUnknownSecrets(text, () => '[redigido]')
+    .replace(/[^\s…]{1,4}… \(sha256:[a-f0-9]{64}\)/g, '[redigido]');
+}
+
+function functionalFinding(achado: z.infer<typeof Achado>) {
+  const {id, severity, status, where} = achado;
+  const protectedFinding = isSecretClassBasename(where.file) || achado.secretPreview !== null;
+  return {
+    id, severity, status,
+    where: {file: reportText(where.file), line: where.line},
+    title: protectedFinding ? 'Achado em conteúdo protegido' : reportText(achado.title),
+    proof: protectedFinding ? 'Conteúdo protegido. Consulte a localização indicada.' : reportText(achado.proof),
+  };
+}
+
+async function functionalCoverage(ledger: Ledger, runId: string, report: Awaited<ReturnType<typeof readModuleReport>>) {
+  const protectedFiles = new Set(report.achados.filter(item => item.secretPreview !== null || isSecretClassBasename(item.where.file))
+    .map(item => item.where.file));
+  const result = await ledger.pool.query(
+    `SELECT file, examiner_provider AS "examinerProvider", examiner_model AS "examinerModel",
+       profile_id AS "profileId", checklist FROM ac_verify_coverage WHERE run_id=$1 ORDER BY file`, [runId]);
+  const rows = CoverageRow.array().parse(result.rows);
+  for (const row of rows) if (isSecretClassBasename(row.file)) protectedFiles.add(row.file);
+  const protectedNames = [...new Set(Array.from(protectedFiles, file => basename(file)))];
+  const references = protectedNames.filter(Boolean).map(name => {
+    const literal = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:(?<![.\\p{L}\\p{N}_-])|(?<=\\.\\.\\.))${literal}(?=->|(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}_+@-]))`, 'u');
+  });
+  function mentionsProtected(text: string): boolean {
+    return references.some(pattern => pattern.test(text)) ||
+      (text.match(/[\p{L}\p{N}._@/+-]+/gu) ?? []).some(isSecretClassBasename);
+  }
+  const files = rows.filter(row => ![row.file, row.examinerProvider, row.examinerModel, ...row.checklist].some(mentionsProtected));
+  const tools = report.toolCoverage.filter(row => ![row.tool, row.version, row.detail, ...(row.files ?? [])].some(mentionsProtected));
+  const protectedCount = rows.length - files.length + report.toolCoverage.length - tools.length;
+  let markdown = renderModuleCoverageMarkdown(tools, files);
+  if (protectedCount) markdown += '\n[Registro de arquivo protegido omitido]\n';
+  return reportText(markdown);
+}
+
+async function publishedFunctionalReport(ledger: Ledger, dataDirectory: string, projectId: string, module: VerificationModule, runId: string) {
+  const {rows: [run]} = await publishedModuleRuns(ledger, projectId, module, runId);
+  if (!run) throw new Refusal('NOT_FOUND', 404);
+  const report = await readModuleReport(dataDirectory, projectId, runId, module).catch(error => {
+    if (error instanceof Refusal && error.code === 'VERIFY_REPORT_NOT_FOUND') throw new Refusal('INVALID_CONTRACT', 400);
+    throw error;
+  });
+  if (run.commit_id !== report.summary.commit
+    || run.report_dir !== join(await realpath(dataDirectory), 'verificacoes', projectId, report.summary.directoryName)) {
+    throw new Refusal('NOT_FOUND', 404);
+  }
+  return {run, report};
+}
+
+function registerFunctionalReports(app: Hono<ApiEnv>, deps: VerificationRouteDeps) {
+  app.get(functionalReportsPath, async c => {
+    c.header('Cache-Control', 'no-store');
+    const {projectId, dataDirectory} = await functionalProject(c, deps);
+    const module = functionalModule.optional().parse(c.req.query('modulo'));
+    const {rows} = await publishedModuleRuns(deps.ledger, projectId, module);
+    const runs = new Map(rows.map(run => [run.id, run]));
+    const reports = rows.length ? await listModuleReports(dataDirectory, projectId, module) : [];
+    const directory = reports.length ? join(await realpath(dataDirectory), 'verificacoes', projectId) : '';
+    const verificacoes = reports.filter(report => {
+      const run = runs.get(report.id);
+      return run?.module === report.module && run.commit_id === report.commit
+        && run.report_dir === join(directory, report.directoryName);
+    }).reverse().map(functionalSummary);
+    return c.json({verificacoes});
+  });
+
+  const reportPath = `${functionalReportsPath}/:module/:runId`;
+  app.get(reportPath, async c => {
+    c.header('Cache-Control', 'no-store');
+    const {projectId, dataDirectory} = await functionalProject(c, deps);
+    const module = functionalModule.parse(c.req.param('module'));
+    const runId = Id.parse(c.req.param('runId'));
+    const {report} = await publishedFunctionalReport(deps.ledger, dataDirectory, projectId, module, runId);
+    return c.json({resumo: functionalSummary(report.summary), achados: report.achados.map(functionalFinding),
+      cobertura: await functionalCoverage(deps.ledger, runId, report)});
+  });
+
+  app.post(`${reportPath}/corrigir`, async c => {
+    c.header('Cache-Control', 'no-store');
+    const {principal, projectId, dataDirectory} = await functionalProject(c, deps, true);
+    const module = functionalModule.parse(c.req.param('module'));
+    const runId = Id.parse(c.req.param('runId'));
+    const {achadoIds} = functionalCorrectionBody.parse(await c.req.json());
+    const {ledger} = deps;
+    const {run, report} = await publishedFunctionalReport(ledger, dataDirectory, projectId, module, runId);
+    // O produto volta a verificar os achados persistidos ao criar uma tarefa.
+    const eligible = new Set(report.achados.filter(item => item.status === 'confirmado' || item.status === 'reaberto').map(item => item.id));
+    if (achadoIds.some(id => !eligible.has(id))) throw new Refusal('VERIFY_FINDING_MISSING', 404);
+
+    const authority = await ledger.acquire(principal, run.context_id, randomUUID(), 'personal-panel-correction', 60)
+      .catch((error: unknown) => {
+        if (error instanceof Refusal && error.code === 'MANAGER_ACTIVE') throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
+        throw error;
+      });
+    try {
+      const {messageLocalId, messageLocalIds} = await requestModuleCorrection(ledger, principal, authority, {
+        module, runId, achadoIds, projectId, dataDirectory,
+      });
+      return c.json({messageLocalId, ...(messageLocalIds ? {messageLocalIds} : {})});
+    } finally {
+      await ledger.releaseLease(authority);
+    }
+  });
+}
+
 export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: VerificationRouteDeps) {
   const listReports = deps.listSecurityReports ?? listSecurityReports;
   const readReport = deps.readSecurityReport ?? readSecurityReport;
@@ -138,6 +290,7 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
   if (typeof deps.recheckFindings !== 'function' || typeof recheckFindings !== 'function') {
     throw new Error('VERIFY_REMEDIATE_UNAVAILABLE');
   }
+  registerFunctionalReports(app, deps);
 
   app.post('/api/v1/ac/personal/verificacoes', async c => {
     c.header('Cache-Control', 'no-store');
@@ -222,8 +375,26 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
 
   app.post('/api/v1/ac/personal/verificacoes/:runId/corrigir', async c => {
     c.header('Cache-Control', 'no-store');
-    const {principal, panel, runId, achadoIds, authority} = await correctionRequest(c, deps);
-    const result = await correct(deps.ledger, principal, authority, {
+    const {principal, panel} = await ownerPanel(c, deps);
+    const runId = Id.parse(c.req.param('runId'));
+    const {achadoIds} = achadoIdsBody.parse(await c.req.json());
+    const target = (await deps.ledger.pool.query<{context_id: string}>(
+      `SELECT COALESCE(main.id, r.context_id)::text AS context_id
+       FROM ac_verify_runs r
+       LEFT JOIN ac_exam_contexts e ON e.context_id=r.context_id
+       LEFT JOIN LATERAL (
+         SELECT x.id FROM ac_contexts x
+         WHERE x.project_id=r.project_id AND NOT x.archived
+           AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts exam WHERE exam.context_id=x.id)
+         ORDER BY x.created_at, x.id LIMIT 1
+       ) main ON e.context_id IS NOT NULL
+       WHERE r.id=$1 AND r.project_id=$2 AND r.module='verify'`,
+      [runId, panel.projectId],
+    )).rows[0];
+    if (!target) throw new Refusal('NOT_FOUND', 404);
+    const authority = Authority.safeParse(deps.manager(target.context_id));
+    if (!authority.success) throw new Refusal('AUTHORITY_REQUIRED', 409);
+    const result = await correct(deps.ledger, principal, authority.data, {
       runId, achadoIds, dataDirectory: panel.dataDirectory, projectId: panel.projectId,
     });
     return c.json(result);
