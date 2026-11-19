@@ -16,7 +16,7 @@ type SnapshotModule = {
   removeModuleSnapshot(snapshot: string): Promise<void>;
 };
 type PerformanceModule = {
-  runPerformanceModule(input: {snapshotPath: string; imageDigest: string}): Promise<CollectorOutput>;
+  runPerformanceModule(input: {snapshotPath: string; imageDigest: string; recoveryDirectory: string}): Promise<CollectorOutput>;
 };
 
 // A rotina de produção aciona 'docker' indiretamente. O laboratório exige opt-in.
@@ -52,7 +52,7 @@ async function measure(fixture?: 'defective' | 'clean', staticOnly = false) {
     await git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@localhost',
       '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Fixture sintética', '--allow-empty']);
     const snapshotPath = await prepareModuleSnapshot(repo, await git(['rev-parse', 'HEAD']));
-    try { return await runPerformanceModule({snapshotPath, imageDigest}); }
+    try { return await runPerformanceModule({snapshotPath, imageDigest, recoveryDirectory: join(temp, 'recuperacao')}); }
     finally { await removeModuleSnapshot(snapshotPath); }
   } finally { await rm(temp, {recursive: true, force: true}); }
 }
@@ -64,7 +64,7 @@ async function sourceLine(fixture: string, file: string, marker: RegExp) {
   return index + 1;
 }
 
-function expectStatus(output: CollectorOutput, tool: string, status: 'ok' | 'skipped') {
+function expectStatus(output: CollectorOutput, tool: string, status: 'ok' | 'failed' | 'skipped') {
   const row = output.coverage.find(entry => entry.tool === tool);
   assert.equal(row?.status, status, `${tool}: ${JSON.stringify(output.coverage)}`);
 }
@@ -95,8 +95,9 @@ test('laboratório real: rotina local mede as quatro ferramentas no defeito e no
   assert.ok(defect.findings.some(f => f.tool === 'lighthouse-ci'
     && ['LH-CLS-SHIFT', 'LH-TBT-BLOCKING'].includes(f.rule) && f.file === 'public/index.html' && f.evidence.includes('rota=/ ')),
   JSON.stringify(defect.findings));
+  const declaredRoute = await sourceLine('defective', 'desempenho.config.json', /"path": "\/api\/relatorio"/);
   assert.ok(defect.findings.some(f => f.tool === 'k6' && f.rule === 'K6-THRESHOLD-LATENCY-P95'
-    && f.file === 'server.mjs' && f.evidence.includes('rota=/api/relatorio ')), JSON.stringify(defect.findings));
+    && f.file === 'desempenho.config.json' && f.line === declaredRoute && f.evidence.includes('rota=/api/relatorio ')), JSON.stringify(defect.findings));
   const cpuLine = await sourceLine('defective', 'server.mjs', /^function computeHeavyReport\(/);
   assert.ok(defect.findings.some(f => f.rule === 'CPU-PROF-HOTSPOT' && f.file === 'server.mjs' && f.line === cpuLine));
   const sqlLine = await sourceLine('defective', 'queries/lenta.sql', /^SELECT\b/);
@@ -107,7 +108,8 @@ test('laboratório real: rotina local mede as quatro ferramentas no defeito e no
 
 test('laboratório real: sem backend, mede somente o recorte HTTP estático e preserva CPU e SQL', {skip: !enabled}, async () => {
   const output = await measure('clean', true);
-  expectStatus(output, 'isolamento-http', 'skipped');
+  expectStatus(output, 'isolamento-http', 'failed');
+  expectStatus(output, 'servidor-isolado', 'failed');
   expectStatus(output, 'recorte-http-estatico', 'ok');
   for (const tool of toolNames) expectStatus(output, tool, 'ok');
   expectMeasurement(output, 'lighthouse-ci:rota:/', 'public/index.html', /LCP=/);
