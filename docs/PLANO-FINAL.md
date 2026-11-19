@@ -39,7 +39,13 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
   - Nunca compre créditos.
   - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
 
-## Ordem do titular (19/11/2026 ~02:05 UTC): substitui a ordem e as equipes abaixo
+## Retomada (titular, 19/11/2026 ~11:10 UTC)
+
+A cota do Codex voltou. Retome a partir de `docs/RELATORIO-PAUSA.md`, com a mesma ordem de trabalho e a mesma regra de cota da seção seguinte. Muda só a equipe de trabalhadores: até 4 Sol 6.2, sendo 2 `high` e 2 `medium`, todos em modo normal. Os itens mais difíceis vão para os `high`. O gerente continua Astra `high` e o revisor continua 1 Sol `high`, só leitura.
+
+O disco está em 95%. Antes de criar imagens novas, remova as imagens candidatas antigas que você mesmo criou e que não guardam um digest aceito. Mantenha sempre a última aceita de cada módulo.
+
+## Ordem do titular (19/11/2026 ~02:05 UTC): ordem de trabalho e regra de cota em vigor
 
 **Equipe**, toda em modo normal, sem `service_tier`:
 

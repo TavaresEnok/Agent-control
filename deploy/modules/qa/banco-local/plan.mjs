@@ -25,7 +25,7 @@ function readSource(workspace, file) {
 
 function predicate(source) {
   const leading = /^(?:\s|--[^\r\n]*)*/.exec(source)[0];
-  const sql = source.slice(leading.length).trimEnd().replace(/;$/, '');
+  const sql = source.slice(leading.length);
   if (!/^SELECT\s/i.test(sql)) throw new Error('expected scalar SELECT');
   return {sql, line: leading.split('\n').length};
 }

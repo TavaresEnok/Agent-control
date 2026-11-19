@@ -1,0 +1,5 @@
+# Arquitetura — identidade do snapshot e dos caminhos do inventário
+
+O gerente corrige as origens da cobertura: rejeitar caminho absoluto fora da raiz e preservar nomes com espaços ou prefixo de dois pontos literais em componente normal. Abrir cada diretório ancestral e de destino sem seguir links, com descritores ancorados, preservando o limite de cópia e o relatório de diretório inacessível. Testar o contrato com arquivos sintéticos e a ferramenta por digest. Sem execução de código ou configuração do projeto.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C3-R7.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

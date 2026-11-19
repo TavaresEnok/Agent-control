@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "routes": [
+    {"path": "/", "file": "public/index.html"},
+    {"path": "/catalogo", "file": "public/catalogo.json"}
+  ]
+}

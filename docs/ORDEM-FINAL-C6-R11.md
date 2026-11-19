@@ -1,0 +1,5 @@
+# C6 — leitura passiva de Nginx, scripts e Compose
+
+Corrija os quatro itens da revisão C6-R10 de 049b33c9 (/tmp/ac-final-3aDgqp8I/parecer-high-C6-R10.txt). Sua responsabilidade é o coletor estático de prontidão e os testes nominais sobre configurações locais. Respeite configurações indeterminadas, diferencie dados e comandos nos scripts e limite cada conclusão ao trecho analisado. Use apenas arquivos de configuração sintéticos e testes de leitura. Preserve a imagem fixada para o gerente validar. Não acione redes ou ferramentas de intrusão.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C6-R11.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

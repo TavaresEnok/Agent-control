@@ -34,6 +34,7 @@ import {collectLanguageMutation, collectPythonProperties, languageMeasurementToo
 import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
 import {collectJsProperties, propertyLimits, propertyTool} from './js-properties.mjs';
 import {bancoLocalTool, collectQaBancoLocal} from './banco-local/index.mjs';
+import {localLoadTool, runLocalLoadQa} from './carga-local/index.mjs';
 import {functionalContractTools, maxContractDocuments, runFunctionalContract} from './contratos/index.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -748,8 +749,9 @@ function isThrowingGuard(path) {
 
 function hasManualCheck(path) {
   if (isThrowingGuard(path)) return true;
-  const declaration = path.parentPath;
-  if (path.key !== 'init' || !declaration.isVariableDeclarator() || !declaration.get('id').isIdentifier()) return false;
+  const initializer = path.parentPath.isAwaitExpression() ? path.parentPath : path;
+  const declaration = initializer.parentPath;
+  if (initializer.key !== 'init' || !declaration.isVariableDeclarator() || !declaration.get('id').isIdentifier()) return false;
   const binding = declaration.scope.getBinding(declaration.node.id.name);
   if (binding?.path !== declaration || !binding.constant) return false;
   const owner = path.getFunctionParent();
@@ -864,6 +866,7 @@ const identifier = /^[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*$/u;
 const codeSpan = /^`([^`]+)`(?!`)/;
 const fileQualifier = /^\s+(?:de|from)\s+(?=`)/i;
 const referenceSeparator = /^(?:\s*,\s*(?:(?:e|and|além de|bem como|as well as)\s+)?|\s+(?:e|and|além de|bem como|as well as)\s+)(?=`)/i;
+const expectedResult = /\b(?:saída|resultado|valor|texto)\s+esperad[oa]\b[^.!?;]*$|\b(?:retornar?|devolver?)(?:\s+(?:o\s+(?:texto|valor|resultado)|a\s+saída))?\s*$/i;
 
 function readTargetList(text) {
   const targets = [];
@@ -892,15 +895,21 @@ function requirementTargets(body) {
   const spans = /`[^`]+`(?!`)/g;
   const references = [];
   let ambiguousQualified = false;
+  let calculationEnd;
   for (let span; (span = spans.exec(body));) {
     const {targets, rest} = readTargetList(body.slice(span.index));
     spans.lastIndex = body.length - rest.length;
     const leading = span.index === 0;
     if (leading && /^[.!?]?$/.test(rest.trim())) return {kind: 'symbols', targets};
     if (!targets.some(target => target.source !== undefined)) continue;
-    const parenthesized = body.slice(0, span.index).trimEnd().endsWith('(') && rest.trimStart().startsWith(')');
-    // Em texto livre, a mesma qualificação pode indicar a origem de um valor esperado.
-    if (!leading && !parenthesized) {
+    const prefix = body.slice(0, span.index);
+    const startsCalculation = /^calcular\s+com\s+$/i.test(prefix);
+    const continuesCalculation = calculationEnd !== undefined &&
+      /^\s+e\s+conferir\s+com\s+$/i.test(body.slice(calculationEnd, span.index));
+    if (startsCalculation) calculationEnd = spans.lastIndex;
+    const parenthesized = prefix.trimEnd().endsWith('(') && rest.trimStart().startsWith(')');
+    const expected = parenthesized && expectedResult.test(prefix.trimEnd().slice(0, -1));
+    if (!leading && !startsCalculation && !continuesCalculation && (!parenthesized || expected)) {
       ambiguousQualified = true;
       continue;
     }
@@ -1629,6 +1638,12 @@ export async function collectQaModule(options = {}) {
         partial: incomplete,
         run: () => collectQaBancoLocal({repoDir, workspace, copiedFiles, incomplete, row: coverageRow}),
       },
+      {
+        name: localLoadTool,
+        partial: incomplete,
+        run: () => runLocalLoadQa({workspace, workRoot, copiedFiles, enabled: executionAllowed(repoDir),
+          row: coverageRow, key: fileCoverageKey}),
+      },
       ...Object.entries(functionalContractTools).map(([kind, name]) => ({
         name,
         partial: incomplete,
@@ -1695,7 +1710,6 @@ export async function collectQaModule(options = {}) {
 
     coverage.push(
       coverageRow('qa-fuzz', unmeasured, 'skipped', 'geração aleatória de entradas não executada'),
-      coverageRow('qa-carga', unmeasured, 'skipped', 'carga ativa não executada no coletor offline'),
     );
 
     coverage.push(...extraCoverageRows);

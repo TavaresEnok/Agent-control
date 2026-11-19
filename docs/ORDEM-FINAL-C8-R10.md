@@ -1,0 +1,5 @@
+# Documentação — associação inequívoca de arquivos e mensagens
+
+Trate os achados de /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C8-R9.txt. Resolva caminhos TypeDoc respeitando a origem exata; agregue repetições da mesma linha sem atribuir a outro arquivo. Restrinja a interpretação de diagnósticos Mermaid/TypeDoc às mensagens reconhecidas por versão, preservando origem indeterminada nas demais. Seu escopo são o coletor de documentação e os testes correspondentes. Preserve a versão fixada de imagem para a homologação do gerente.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C8-R10.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
