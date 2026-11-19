@@ -740,3 +740,4 @@ PAUSADO-COTA
 - 19/11/2026 17:41 UTC — C2-LINGUAGENS-R4 encerrado com código 0.
 - 19/11/2026 17:41 UTC — revisor-C2-BANCO-LOCAL-R2 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:41 UTC — A revisão de 11edd142 encontrou diagnósticos Go sem vínculo suficiente ao pacote e uma verificação incompleta da versão do compilador. Aberta correção focada na medição. O ensaio da imagem com PostgreSQL 16.15 prossegue.
+- 19/11/2026 17:42 UTC — O PostgreSQL 16.15 extraído da imagem refeita passou na prova real de privilégios, ACLs e resultado pgTAP. Digests de prontidão em f485490c e documentação em 7355c13c integrados nos seus ramos de aceite.
