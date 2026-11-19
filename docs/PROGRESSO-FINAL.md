@@ -1004,3 +1004,13 @@ PAUSADO-COTA
 - 19/11/2026 19:30 UTC — A matriz registra os merges efetivos de C2 a C4 e as provas finais das imagens de C8 e C9. O checkout de fechamento 5f81a3e5 já reúne C2 a C9 e a retirada A3; a instalação ainda aguarda a aplicação conjunta.
 - 19/11/2026 19:32 UTC — C5-ESPERA-INDEPENDENTE encerrado com código 0.
 - 19/11/2026 19:33 UTC — Em 97938e35 passaram três controles determinísticos de prazo e os nove cenários reais de SIGKILL. A mudança é exclusiva ao teste. O candidato de C8 virou 160dba62 e o de fechamento 6587e792. A suíte privada de C8 está autorizada a iniciar no mesmo código.
+- 19/11/2026 19:33 UTC — revisor-C5-ACEITE-ESPERA iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:33 UTC — Aceite de documentacao em 160dba62 iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
+- 19/11/2026 19:34 UTC — C5-ACEITE-ESPERA encerrado com código 0.
+- 19/11/2026 19:37 UTC — O titular confirmou diretamente 5ddf585c e a mesma equipe. O teste de recuperação em 97938e35 recebeu aceite independente do prazo durante a leitura, da saída antecipada e da confirmação de SIGKILL. As suítes de C5, C6 e C8 seguem em bancos e checkouts isolados.
+- 19/11/2026 19:38 UTC — As três suítes em andamento foram conferidas no sistema. A supervisão das promoções e das duas suítes seguintes foi vinculada aos seus comprovantes de conclusão, para preservar a sequência mesmo após atualização da sessão.
+- 19/11/2026 19:44 UTC — Suíte oficial de entrega-banco-marcador em 35db707f: 270 arquivos aprovados, 0 falhas, 90 excluídos pelo executor.
+- 19/11/2026 19:44 UTC — Antes da aplicação, gateway inspect registrou 5 verificações ok e 3 bloqueadas: migrações, raízes e identidade do repositório. A raiz de projetos, IspAgent e sua pasta .git estão em 0775, pertencem a app:app, sem ACL adicional, e app é o único integrante do grupo. A correção operacional após o backup retirará apenas g+w desses três diretórios.
+- 19/11/2026 19:45 UTC — Testes complementares de entrega-banco-marcador em 35db707f: 52 aprovados.
+- 19/11/2026 19:46 UTC — Validação completa de entrega-banco-marcador em 35db707f: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 19:46 UTC — Validação de entrega-desempenho-1 em dab29e0d iniciada no checkout de integração.
