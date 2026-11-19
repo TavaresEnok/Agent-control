@@ -56,3 +56,9 @@
   - **Revisores:** até **2** `gpt-6.2-sol`, esforço `ultra`, modo normal, só leitura.
   - **Trabalhadores:** até **4** `gpt-6.1-terra`, esforço `ultra`, modo normal. Trailer: `Co-Authored-By: GPT-6.1 Terra <noreply@openai.com>`.
   - Trabalhadores Sol que já estão rodando terminam a ordem atual. Não lance outro Sol. Ordens novas só para Terra, e no máximo 4 trabalhadores ativos depois que os Sol terminarem.
+- **Equipe a partir de 19/11/2026 ~02:05 UTC (titular), substitui a anterior.** Todos em modo **normal**, sem `service_tier`:
+  - **Gerente:** `gpt-6.2-astra`, esforço `high`.
+  - **Revisor:** 1 `gpt-6.2-sol`, esforço `high`, só leitura.
+  - **Trabalhadores:** até 3 `gpt-6.2-sol`, esforço `high`. Trailer `Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>`.
+  - Os Terra que já estão rodando terminam a ordem atual. Não lance outros Terra.
+- **Cota do Codex:** quando a cota acabar para os modelos da equipe (erro de limite de uso ou 429), pare todo o trabalho, escreva o relatório e encerre. Não volte a trabalhar até o titular pedir.

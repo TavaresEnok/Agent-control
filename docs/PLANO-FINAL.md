@@ -39,7 +39,84 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
   - Nunca compre créditos.
   - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
 
-## Equipe atual (titular, 19/11/2026 ~01:20 UTC, substitui as seções de equipe abaixo)
+## Ordem do titular (19/11/2026 ~02:05 UTC): substitui a ordem e as equipes abaixo
+
+**Equipe**, toda em modo normal, sem `service_tier`:
+
+- **Gerente:** Astra 6.2, esforço `high`.
+- **Revisor:** 1 Sol 6.2, esforço `high`, `--sandbox read-only`.
+- **Trabalhadores:** até 3 Sol 6.2, esforço `high`, com `--dangerously-bypass-approvals-and-sandbox`, cada um no seu worktree.
+
+Os Terra que já estão rodando terminam a ordem atual; não lance outros Terra.
+
+**Ordem do trabalho:**
+
+1. **Termine a implementação dos módulos 2 a 9 (parte C).** Cada módulo tem que ter:
+   - prova real;
+   - laboratório verde;
+   - revisão;
+   - integração em `task/personal-activation`;
+   - aplicação na instalação viva, com backup antes.
+
+   Depois, o fechamento da parte D só para os módulos.
+2. **Parte E, NexoISP:** feita só depois do passo 1.
+3. **Parte B, as 20 telas:** só se ainda houver cota depois da parte E.
+
+**Regra de cota:** quando a cota do Codex acabar (erro de limite de uso ou 429 do Astra, do revisor ou dos trabalhadores):
+
+1. Pare todos os processos da equipe.
+2. Escreva `docs/RELATORIO-PAUSA.md`, com:
+   - o que foi feito desde o início deste plano;
+   - os commits;
+   - o que ficou pela metade e onde;
+   - como retomar.
+3. Commite.
+4. Escreva `PAUSADO-COTA` como última linha de `docs/PROGRESSO-FINAL.md`.
+5. Encerre.
+
+Não espere a cota voltar e não retome sozinho.
+
+### Parte E: revisão completa do NexoISP
+
+O projeto do titular fica num computador remoto:
+
+- **Pasta:** `/home/enok/Documentos/projetos/NexoISP/`
+- **Host:** `177.104.156.25`, porta `22026`, usuário `enok`.
+- **Acesso:** só pela chave `/home/app/.ssh/nexoisp_ed25519`:
+
+  ```
+  ssh -i /home/app/.ssh/nexoisp_ed25519 -p 22026 enok@177.104.156.25
+  ```
+
+  Nunca use nem peça senha.
+
+1. **Cópia central.**
+   - Traga o projeto para `/home/app/projetos-externos/NexoISP` com `rsync -a` pela chave, ou com `git clone` se for um repositório git.
+   - **Não altere nada na máquina remota**, exceto o push do ramo do passo 5.
+   - Registre o estado inicial no relatório: commit, `git status` e tamanho.
+2. **Cadastro na instalação viva.**
+   - Cadastre a cópia como projeto pelo caminho do produto (`npm run personal:project`).
+   - Rode `personal:design -- preparar … --aplicar` e o que mais cada módulo pedir.
+3. **Exame com todos os módulos**, de 1 a 10, pelas CLIs do produto:
+   - Exames dinâmicos e de carga só contra uma cópia local em homologação: contêineres na rede de homologação, nunca contra servidores de produção do titular nem hosts externos.
+   - O módulo 6 (prontidão) é passivo.
+   - O módulo 10 examina as telas do NexoISP servidas localmente (`--servir` ou a aplicação local).
+4. **Correção.**
+   - Cada achado confirmado vira ordem para os trabalhadores, num ramo `agent-control/revisao-20261119` da cópia central.
+   - A prova é a suíte do próprio NexoISP mais a nova verificação do módulo que achou o problema.
+   - O revisor Sol revisa cada rodada.
+   - A ordem de prioridade é: segurança alta, bugs que quebram uso, dados e banco, design ruim e o resto.
+5. **Entrega.**
+   - Se o NexoISP for um repositório git, empurre o ramo `agent-control/revisao-20261119` para o repositório remoto, pela chave. Nunca para `main` ou `master`, nunca force. Assim o titular revisa e junta.
+   - Se não for git, gere um `.patch` e um `.tar.gz` em `/home/app/projetos-externos/entregas/`.
+6. **Relatório** em `docs/RELATORIO-NEXOISP.md`:
+   - achados por módulo, com gravidade;
+   - o que foi corrigido, com commits;
+   - o que não foi corrigido e por quê.
+
+**Segredos:** segredos do NexoISP (`.env`, chaves, senhas) nunca aparecem em relatório, ordem ou log, só como arquivo:linha.
+
+## Equipe anterior (19/11/2026 ~01:20 UTC, substitui as seções de equipe abaixo)
 
 - Gerente: `gpt-6.2-astra`, esforço `ultra`, fast.
 - Revisores: até 2 `gpt-6.2-sol`, esforço `ultra`, modo normal, só leitura:
