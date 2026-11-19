@@ -1685,7 +1685,7 @@ function timeoutSignal(value) {
     const n = Number(signal);
     if (!Number.isSafeInteger(n) || n > 2147483647) return 'invalid';
     const normalized = n & (n >= 255 ? 255 : 127);
-    return normalized <= 64 && normalized !== 32 && normalized !== 33 ? 'valid' : 'invalid';
+    return normalized <= 64 ? 'valid' : 'invalid';
   }
   const rt = /^RT(MIN|MAX)(?:([+-])(\d+))?$/.exec(signal);
   if (rt) {
@@ -1696,7 +1696,9 @@ function timeoutSignal(value) {
   return 'invalid';
 }
 function invalidDuration(value) {
-  const dynamic = /[$`*?\[\]]/.test(value);
+  // A decimal comma can be valid under the installation's numeric locale.
+  const dynamic = /[$`*?\[\]]/.test(value)
+    || (value.includes(',') && TIMEOUT_DURATION_RE.test(value.replace(',', '.')));
   return {words: [], query: !dynamic, ambiguous: dynamic};
 }
 function signalResult(value) {
@@ -1795,6 +1797,7 @@ function skipWrapperOptions(words, spec, binary) {
   const strict = binary === 'sudo' || binary === 'timeout';
   let i = 0;
   let uncertain = false;
+  let optionsEnded = false;
   const acceptUncertain = result => {
     if (!result) return true;
     if (!result.ambiguous) return false;
@@ -1804,6 +1807,7 @@ function skipWrapperOptions(words, spec, binary) {
   while (i < words.length && !words[i].operator) {
     const opt = words[i].text ?? '';
     if (opt === '--') {
+      optionsEnded = true;
       i++;
       break;
     }
@@ -1901,7 +1905,7 @@ function skipWrapperOptions(words, spec, binary) {
     }
     if (!TIMEOUT_DURATION_RE.test(rest[0].text ?? '')) {
       // A dynamic word before a possible duration can instead be an option.
-      if (/[$`*?\[\]]/.test(rest[0].text ?? '') && rest[1] && !rest[1].operator
+      if (!optionsEnded && /[$`*?\[\]]/.test(rest[0].text ?? '') && rest[1] && !rest[1].operator
         && (TIMEOUT_DURATION_RE.test(rest[1].text ?? '') || (rest[1].text ?? '').startsWith('-')
           || /[$`*?\[\]]/.test(rest[1].text ?? ''))) {
         return {words: [], query: false, ambiguous: true};
