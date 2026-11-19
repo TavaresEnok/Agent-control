@@ -1,9 +1,10 @@
 import {spawnSync} from 'node:child_process';
 import {closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, opendirSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync, writeSync} from 'node:fs';
 import {basename, join, relative, resolve, sep} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {fileURLToPath, pathToFileURL} from 'node:url';
 import {stripVTControlCharacters} from 'node:util';
 import {AUDIT_VERSION, auditRepositoryReadiness, redactEvidence} from './audit-readiness.mjs';
+import {passiveHeaderFacts} from './header-facts.mjs';
 
 const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
 const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
@@ -16,7 +17,14 @@ const GITLEAKS_MAX_FILE_BYTES = 8 * 1024 * 1024;
 const GITLEAKS_MAX_BYTES = 64 * 1024 * 1024;
 const GITLEAKS_MAX_DEPTH = 10;
 const GITLEAKS_PREPARE_MS = 5000;
-import {passiveHeaderFacts} from './header-facts.mjs';
+const GITLEAKS_PREPARE_ARG = '--prepare-gitleaks-source';
+const GITLEAKS_LIMIT_DETAILS = new Map([
+  ['files', '4000 arquivos'],
+  ['entries', '16000 entradas'],
+  ['file-size', '8 MiB por arquivo'],
+  ['total-size', '64 MiB no total'],
+  ['depth', 'profundidade 10'],
+]);
 const EXPIRING_CERT_DAYS = 14;
 
 function mapSeverity(raw) {
@@ -507,36 +515,29 @@ function prepareGitleaksSource(repoRoot, workDir) {
   // Gitleaks reads .gitleaksignore at its scan root. Keep every checkout one level below.
   const source = join(workDir, 'source');
   const checkout = join(source, 'checkout');
-  const deadline = performance.now() + GITLEAKS_PREPARE_MS;
   const buffer = Buffer.allocUnsafe(64 * 1024);
   const tempRoot = resolve(workDir);
   let files = 0;
   let entries = 0;
   let bytes = 0;
-  const limit = detail => new Error(`Preparação do gitleaks excedeu o limite de ${detail}.`);
-  const checkTime = () => {
-    if (performance.now() >= deadline) throw limit('5 s');
-  };
   const copyFile = (from, to) => {
-    if (++files > GITLEAKS_MAX_FILES) throw limit('4000 arquivos');
+    if (++files > GITLEAKS_MAX_FILES) throw new Error('files');
     const input = openSync(from, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       const original = fstatSync(input);
       if (!original.isFile()) throw new Error('GITLEAKS_SOURCE_CHANGED');
-      if (original.size > GITLEAKS_MAX_FILE_BYTES) throw limit('8 MiB por arquivo');
-      if (bytes + original.size > GITLEAKS_MAX_BYTES) throw limit('64 MiB no total');
+      if (original.size > GITLEAKS_MAX_FILE_BYTES) throw new Error('file-size');
+      if (bytes + original.size > GITLEAKS_MAX_BYTES) throw new Error('total-size');
       const output = openSync(to, 'wx', 0o600);
       try {
         let offset = 0;
         while (offset < original.size) {
-          checkTime();
           const count = readSync(input, buffer, 0, Math.min(buffer.length, original.size - offset), offset);
           if (!count) throw new Error('GITLEAKS_SOURCE_CHANGED');
           offset += count;
           bytes += count;
           let written = 0;
           while (written < count) {
-            checkTime();
             const size = writeSync(output, buffer, written, count - written);
             if (!size) throw new Error('GITLEAKS_WRITE_FAILED');
             written += size;
@@ -552,17 +553,15 @@ function prepareGitleaksSource(repoRoot, workDir) {
     }
   };
   const walk = (from, to, depth) => {
-    checkTime();
-    if (depth > GITLEAKS_MAX_DEPTH) throw limit('profundidade 10');
+    if (depth > GITLEAKS_MAX_DEPTH) throw new Error('depth');
     if (!lstatSync(from).isDirectory()) throw new Error('GITLEAKS_SOURCE_CHANGED');
     mkdirSync(to, {mode: 0o700});
     const dir = opendirSync(from, {bufferSize: 32});
     try {
       while (true) {
-        checkTime();
         const entry = dir.readSync();
         if (!entry) break;
-        if (++entries > GITLEAKS_MAX_ENTRIES) throw limit('16000 entradas');
+        if (++entries > GITLEAKS_MAX_ENTRIES) throw new Error('entries');
         const src = join(from, entry.name);
         if (entry.name === '.git' || src === tempRoot) continue;
         const dst = join(to, entry.name);
@@ -575,30 +574,32 @@ function prepareGitleaksSource(repoRoot, workDir) {
   };
   mkdirSync(source, {mode: 0o700});
   walk(repoRoot, checkout, 0);
-  checkTime();
-  return {source, checkout};
 }
 
 function runGitleaks(runBin, bin, repoRoot, workDir, anchorFile) {
   const config = join(workDir, 'gitleaks.toml');
   const report = join(workDir, 'gitleaks.json');
   writeFileSync(config, '[extend]\nuseDefault = true\n', {mode: 0o600});
-  let staged;
-  try {
-    staged = prepareGitleaksSource(repoRoot, workDir);
-  } catch (error) {
-    return {detail: error.message?.startsWith('Preparação do gitleaks excedeu o limite de ')
-      ? error.message : 'Falha ao preparar a cópia limitada do snapshot para gitleaks.'};
+  // The parent enforces the deadline even while the child is in a synchronous filesystem call.
+  const staged = spawnSync(process.execPath, [fileURLToPath(import.meta.url), GITLEAKS_PREPARE_ARG, repoRoot, workDir], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    env: {}, timeout: GITLEAKS_PREPARE_MS, killSignal: 'SIGKILL', maxBuffer: 1024,
+  });
+  if (staged.error || staged.status !== 0) {
+    const limit = staged.error?.code === 'ETIMEDOUT' ? '5 s' : GITLEAKS_LIMIT_DETAILS.get(staged.stdout);
+    return {detail: limit ? `Preparação do gitleaks excedeu o limite de ${limit}.`
+      : 'Falha ao preparar a cópia limitada do snapshot para gitleaks.'};
   }
+  const source = join(workDir, 'source');
   const res = runBin(bin, [
     'dir', '--config', config, '--gitleaks-ignore-path', workDir, '--ignore-gitleaks-allow',
     '--report-format', 'json', '--report-path', report, '--exit-code', '0',
-    '--no-banner', '--redact=100', '--log-level', 'error', staged.source,
+    '--no-banner', '--redact=100', '--log-level', 'error', source,
   ], {cwd: workDir, timeout: 60_000});
   if (res.error || res.status !== 0) return {detail: `Falha ao executar gitleaks (${toolExit(res)}).`};
   if (!existsSync(report)) return {detail: 'Relatório JSON do gitleaks ausente.'};
   try {
-    return {findings: parseGitleaksJson(readFileSync(report, 'utf8'), staged.checkout, anchorFile)};
+    return {findings: parseGitleaksJson(readFileSync(report, 'utf8'), join(source, 'checkout'), anchorFile)};
   } catch {
     return {detail: 'Saída JSON inválida do gitleaks.'};
   }
@@ -867,11 +868,20 @@ function launchedAsEntry() {
 }
 
 if (launchedAsEntry()) {
-  const repoRoot = defaultRepoRoot();
-  if (!existsSync(repoRoot) || !lstatSync(repoRoot).isDirectory()) {
-    console.error('PRONTIDAO_REPO_MISSING');
-    process.exit(78);
+  if (process.argv[2] === GITLEAKS_PREPARE_ARG) {
+    try {
+      prepareGitleaksSource(process.argv[3], process.argv[4]);
+    } catch (error) {
+      if (GITLEAKS_LIMIT_DETAILS.has(error.message)) process.stdout.write(error.message);
+      process.exitCode = 1;
+    }
+  } else {
+    const repoRoot = defaultRepoRoot();
+    if (!existsSync(repoRoot) || !lstatSync(repoRoot).isDirectory()) {
+      console.error('PRONTIDAO_REPO_MISSING');
+      process.exit(78);
+    }
+    const result = runCollector({repoRoot});
+    process.stdout.write(`${JSON.stringify(result)}\n`, 'utf8');
   }
-  const result = runCollector({repoRoot});
-  process.stdout.write(`${JSON.stringify(result)}\n`, 'utf8');
 }

@@ -9,7 +9,7 @@
   },
   "registry": "https://registry.npmjs.org",
   "lockfileVersion": 3,
-  "packageLockSha256": "d0d379ecad5842644a7cc6892d724923b049aa684ff436882ef39a5a6c910eb6",
+  "packageLockSha256": "2acd6ab4a2f4f9c414ddcdc14b1e0289f39f1f82e4e4d9697c0c4047fb6ae279",
   "dependencies": {
     "typedoc": {
       "version": "0.28.20",
@@ -40,6 +40,12 @@
       "license": "MIT",
       "integrity": "sha512-CbhJL8ZQg3eKswxSZth4QO9tW0jPIhmR0vtSXQSbKSfWbwIT6hoRc17wdHIVTQ43KI0mdV5iTJr3281IDgVZ5g==",
       "resolved": "https://registry.npmjs.org/jsdom/-/jsdom-31.0.1.tgz"
+    },
+    "sh-syntax": {
+      "version": "0.8.7",
+      "license": "MIT",
+      "integrity": "sha512-zaJUdXFCbDFgtREm3KiqvX3dBlngGY0tumPzHvC5RqX67UuaBLIIZqb16MCbYLGyk5rPYrM+5FlghF+w6WdVUw==",
+      "resolved": "https://registry.npmjs.org/sh-syntax/-/sh-syntax-0.8.7.tgz"
     }
   }
 }

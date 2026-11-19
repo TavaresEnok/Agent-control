@@ -118,7 +118,7 @@ test('lockfiles, Dockerfile e entrypoint do módulo 8 fixam versões, integridad
   assert.equal(pkgLock.lockfileVersion, 3);
   assert.match(toolsLock.baseImage.digest, /^sha256:[a-f0-9]{64}$/);
 
-  const expectedTools = ['typedoc', 'dependency-cruiser', 'mermaid', 'typescript', 'jsdom'];
+  const expectedTools = ['typedoc', 'dependency-cruiser', 'mermaid', 'typescript', 'jsdom', 'sh-syntax'];
   assert.deepEqual(Object.keys(toolsLock.dependencies).sort(), expectedTools.slice().sort());
 
   for (const name of expectedTools) {
@@ -820,7 +820,7 @@ test('subgrafos e nomes de arquivos ambíguos ficam sem medição e entidades pr
       '---', 'title: Arquitetura', '---', 'flowchart LR',
       'G["ghost.ts"]', 'subgraph G["Camada"]', 'B["source.ts"]', 'end',
       'E["existing.ts"]', 'subgraph E["Camada 2"]', 'U["unique.ts"]', 'end',
-      'T["target.ts"]', 'N["#quot; #9829;"]', 'style B fill:#abc;',
+      'T["target.ts"]', 'N["<span title="x">#quot; #9829;</span>"]', 'style B fill:#abc;',
       'G --> T', 'T --> E', 'D["dup.ts"] --> T', 'M["missing.ts"] --> T', 'N ~~~ T',
       'F["tests/offgraph.ts"] --> T', 'U --> T',
       '%% Comentário com #quot;', 'B -->|chama #43;| T',
@@ -888,6 +888,12 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     () => ['/** Public class.', ' * See {@link Missing}.', ' */', 'export default', 'class {}'].join('\n'),
   );
   assert.deepEqual(anonymous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
+  const arrow = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('default', 4, 64)]},
+    '[warning] Failed to resolve link to "Missing" in comment for default', root,
+    () => ['/** Public arrow.', ' * See {@link Missing}.', ' */', 'export default (current: string) => current'].join('\n'),
+  );
+  assert.deepEqual(arrow.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
 });
 
 test('ferramentas fixadas encontram as quatro arestas ausentes e conferem o controle real', {skip: skipLocalTools}, async () => {
@@ -971,7 +977,8 @@ test('tsc -p seleciona build.json e moduleSuffixes impede falso positivo do graf
     }
     manifest([
       '# Build de exemplo; cd ignored && tsc -p tsconfig.build.json',
-      "NODE_ENV=production BUILD_LABEL='literal # $ ;' npx --no-install tsc -p build.json # ; tsc -p tsconfig.build.json",
+      '(true)# comentário; tsc -p tsconfig.ignorado.json',
+      "NODE_ENV=production BUILD_LABEL='literal # $ ;'  >/dev/null npx --no-install tsc \\\n-p build.json # ; tsc -p tsconfig.build.json",
       'node -e "require(\'node:fs\').writeFileSync(\'script-ran\', \'yes\')"',
     ].join('\n'));
 
@@ -1033,7 +1040,7 @@ test('seleção estática segue manifesto aninhado, references e extends JSONC d
     assert.match(outside.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /extends não local/);
     assert.deepEqual(outside.findings, []);
 
-    for (const build of ['tsc --project "$CONFIG"', 'MODE="$PROFILE" tsc -p build.json']) {
+    for (const build of ['tsc --project "$CONFIG"', 'MODE="$PROFILE" tsc -p build.json', 'MODE=$(printf prod) tsc -p build.json']) {
       write('app/package.json', JSON.stringify({scripts: {build}}));
       const dynamic = await collect();
       assert.match(dynamic.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /comando TypeScript não analisado.*app\/package\.json/);

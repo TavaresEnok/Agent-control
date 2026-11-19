@@ -8,6 +8,7 @@
 # - mermaid 12.3.0 (MIT)
 # - jsdom 31.0.1 (MIT)
 # - typescript 5.9.3 (Apache-2.0)
+# - sh-syntax 0.8.7 (MIT)
 FROM node@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
 
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false \
@@ -22,7 +23,7 @@ RUN groupadd --system --gid 65532 documentacao \
 
 WORKDIR /opt/documentacao-tools
 COPY package.json package-lock.json tools.lock.json ./
-RUN sha256sum package-lock.json | grep -q "^d0d379ecad5842644a7cc6892d724923b049aa684ff436882ef39a5a6c910eb6 " \
+RUN sha256sum package-lock.json | grep -q "^2acd6ab4a2f4f9c414ddcdc14b1e0289f39f1f82e4e4d9697c0c4047fb6ae279 " \
     && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force
 
