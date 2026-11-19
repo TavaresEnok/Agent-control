@@ -89,7 +89,7 @@ test('auditRepositoryReadiness detecta todos os defeitos plantados e mascara seg
   for (const secret of [
     'lab-defective-db-pass-98765',
     'lab-defective-systemd-secret-12345',
-    'synthetic-lab-key-9f8e7d6c5b4a3210fedcba9876543210',
+    '-----BEGIN PRIVATE KEY-----' + '!'.repeat(64) + 'KEY-----',
     'synthetic_db_pass_987654321',
   ]) {
     assert.equal(serialized.includes(secret), false, 'segredo bruto vazou na saída');

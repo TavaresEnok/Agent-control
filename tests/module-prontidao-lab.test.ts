@@ -47,13 +47,21 @@ test('laboratório do módulo 6 (prontidao) detecta defeitos plantados e aprova 
     assert.equal(row?.status, 'ok', `ferramenta ${tool} não ficou ok: ${JSON.stringify(row)}`);
   }
   assert.equal(defectiveOut.coverage.find(c => c.tool === 'testssl.sh')?.status, 'skipped');
-  assert.ok(defectiveOut.findings.some(f => f.tool === 'gitleaks' && f.file === '.env'));
+  assert.ok(defectiveOut.findings.some(f => f.tool === 'gitleaks' && f.rule === 'private-key' && f.file === '.env'));
   assert.ok(defectiveOut.findings.some(f => f.tool === 'hadolint' && f.file === 'Dockerfile'));
   assert.ok(defectiveOut.findings.some(f => f.tool === 'trivy' && f.file === 'Dockerfile'));
   assert.ok(defectiveOut.findings.some(f => f.tool === 'prontidao-audit' && f.rule === 'PRONTIDAO-TLS-DESATIVADO'));
   assert.ok(defectiveOut.findings.some(f => f.tool === 'prontidao-audit' && f.rule === 'PRONTIDAO-BACKUP-AUSENTE'));
   assert.ok(defectiveOut.findings.some(f => f.tool === 'prontidao-audit' && f.rule === 'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE'));
-  assert.equal(defectiveRun.stdout.includes('synthetic-lab-key-9f8e7d6c5b4a3210fedcba9876543210'), false);
+  for (const secret of [
+    '-----BEGIN PRIVATE KEY-----' + '!'.repeat(64) + 'KEY-----',
+    'synthetic_db_pass_987654321',
+    'lab-defective-db-pass-98765',
+    'lab-defective-systemd-secret-12345',
+  ]) {
+    assert.equal(defectiveRun.stdout.includes(secret), false, 'valor bruto vazou no stdout');
+    assert.equal(defectiveRun.stderr.includes(secret), false, 'valor bruto vazou no stderr');
+  }
 
   for (const f of defectiveOut.findings) {
     assert.equal(Number.isInteger(f.line) && f.line >= 1, true);
