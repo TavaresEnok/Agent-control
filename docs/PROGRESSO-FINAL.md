@@ -712,3 +712,11 @@ PAUSADO-COTA
 - 19/11/2026 17:29 UTC — trabalho-C2-BANCO-LOCAL-R2 iniciado em final-qa-banco-local por Sol high normal.
 - 19/11/2026 17:29 UTC — trabalho-C2-MATRIZ-R14 iniciado em final-qa-matriz-r12 por Sol medium normal.
 - 19/11/2026 17:30 UTC — A carga local ficou integrada em e5bc77dc; f83ce11a inclui também a origem de casos Python e Go. A fila da imagem anterior foi retirada enquanto o trabalhador atualiza o PostgreSQL. C7-R10 corrige a classificação de imagens estáticas; documentação 7355c13c pronta para o laboratório.
+- 19/11/2026 17:30 UTC — trabalho-C7-R10 iniciado em final-c7 por Sol medium normal.
+- 19/11/2026 17:31 UTC — C5-R9 encerrado com código 0.
+- 19/11/2026 17:31 UTC — revisor-C9-R7 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:32 UTC — C-EXAME-VINCULO-R2 encerrado com código 0.
+- 19/11/2026 17:32 UTC — C2-MATRIZ-R14 encerrado com código 0.
+- 19/11/2026 17:33 UTC — C9-R7 encerrado com código 0.
+- 19/11/2026 17:33 UTC — revisor-C2-CARGA-LOCAL iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:34 UTC — Conformidade ee77a916 passou no laboratório dirigido de origem de dados e no controle. C6-R12 entregou f485490c para a prova passiva e C5-R10 recebeu a última revisão da localização de diagnósticos. Os arquivos de imagens desta gestão passaram a ser guardados também por camada para reduzir a duplicação.
