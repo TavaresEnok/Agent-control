@@ -84,10 +84,18 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
       },
     });
     assert.deepEqual((await recheck(recorded[0].hypothesis)).results, [{id: 'ACH-002', status: 'reaberto'}]);
+    let collectorReviews = 0;
+    const collectorOnly = () => recheckModuleFindings(input.ledger, input.principal, input.authority, {
+      dataDirectory: input.dataDirectory, projectId: input.projectId, runId: result.runId, achadoIds: ['ACH-001'],
+      async review() { collectorReviews++; throw new Error('Origem inválida precede a chamada ao revisor'); },
+    });
     await unlink(originFile);
     await assert.rejects(recheck(recorded[0].hypothesis), /VERIFY_REPORT_INVALID/);
+    await assert.rejects(collectorOnly(), /VERIFY_REPORT_INVALID/);
     await writeFile(originFile, JSON.stringify([{...recorded[0], hypothesis: 'alterada'}]));
     await assert.rejects(recheck(recorded[0].hypothesis), /VERIFY_REPORT_INVALID/);
+    await assert.rejects(collectorOnly(), /VERIFY_REPORT_INVALID/);
+    assert.equal(collectorReviews, 0);
     // Um run anterior à migração não tem o hash de origem.
     await input.ledger.pool.query('UPDATE ac_verify_runs SET exam_origin_sha256=NULL WHERE id=$1', [result.runId]);
     for (const entries of [[recorded[0], {...recorded[0], evidence: 'outra'}], [{...recorded[0], evidence: 'outra'}, recorded[0]]]) {

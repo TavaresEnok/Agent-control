@@ -1439,7 +1439,7 @@ async function resolveProjectVerificationsDir(dataDirectory: string, projectId: 
   return real;
 }
 
-async function readTextInside(root: string, path: string, missingCode: 'VERIFY_ACHADO_NOT_FOUND' | 'VERIFY_REPORT_INVALID'): Promise<string> {
+async function readTextInside(root: string, path: string, missingCode: 'VERIFY_ACHADO_NOT_FOUND' | 'VERIFY_REPORT_INVALID', expectedSha256?: string): Promise<string> {
   const lexical = resolve(path);
   assertInside(root, lexical);
   let info;
@@ -1457,7 +1457,10 @@ async function readTextInside(root: string, path: string, missingCode: 'VERIFY_A
   assertInside(root, real);
   const handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    return await handle.readFile('utf8');
+    if (!expectedSha256) return await handle.readFile('utf8');
+    const bytes = await handle.readFile();
+    if (createHash('sha256').update(bytes).digest('hex') !== expectedSha256) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    return bytes.toString('utf8');
   } finally {
     await handle.close();
   }
@@ -3063,6 +3066,22 @@ export async function recheckModuleFindings(
     return {run, items, repo, journal, generation: generation.rows[0]!.recheck_generation, replay: false as const};
   });
 
+  const directory = loaded.run.report_dir;
+  const sourceFile = join(directory, 'bruto', 'exame.json');
+  let verifiedOrigin: string | undefined;
+  if (loaded.run.exam_origin_sha256) {
+    try {
+      const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
+      if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+      assertInside(projectDir, directory);
+      verifiedOrigin = await readTextInside(projectDir, sourceFile, 'VERIFY_REPORT_INVALID', loaded.run.exam_origin_sha256);
+    } catch (error) {
+      // A committed verdict remains in the publication journal until the archive is restored.
+      if (loaded.replay) return {results: loaded.journal.results, publication: 'pending'};
+      throw error;
+    }
+  }
+
   const publish = async (journal: ModuleRecheckPublication): Promise<ModuleRecheckOutcome> => {
     try {
       await reconcileReports(ledger, principal, authority, input.dataDirectory, input.projectId, undefined,
@@ -3083,7 +3102,6 @@ export async function recheckModuleFindings(
   }
   const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
   if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-  const directory = loaded.run.report_dir;
   assertInside(projectDir, directory);
   const raw = ModuleCollectorOutput.parse(JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')));
   const coverage = await ledger.pool.query<RecheckCoverage>(
@@ -3121,18 +3139,12 @@ export async function recheckModuleFindings(
       source: {file: string; line: number; tool: string; rule: string; commit: string; origin: string; evidenceDigest: string} | null;
       moduleProof: RecheckProof | null; regressionProof: RecheckRegression | null;
     })[] = [];
-    const sourceFile = join(directory, 'bruto', 'exame.json');
     const hasExamFindings = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo');
-    const archived = hasExamFindings && await lstat(sourceFile).then(() => true, error => {
+    const archived = verifiedOrigin !== undefined || (hasExamFindings && await lstat(sourceFile).then(() => true, error => {
       if (isErrno(error, 'ENOENT')) return false;
       throw error;
-    });
-    if (hasExamFindings && loaded.run.exam_origin_sha256 && !archived) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-    const originText = archived ? await readTextInside(directory, sourceFile, 'VERIFY_REPORT_INVALID') : undefined;
-    if (originText !== undefined && loaded.run.exam_origin_sha256 &&
-      createHash('sha256').update(originText).digest('hex') !== loaded.run.exam_origin_sha256) {
-      throw new Refusal('VERIFY_REPORT_INVALID', 400);
-    }
+    }));
+    const originText = verifiedOrigin ?? (archived ? await readTextInside(directory, sourceFile, 'VERIFY_REPORT_INVALID') : undefined);
     const origin = z.object({id: ACHADO_ID, file: z.string(), line: z.number().int().positive(),
       evidence: z.string(), hypothesis: z.string().max(300).optional()});
     const reviewedSources = new Map<string, z.infer<typeof origin>>();
