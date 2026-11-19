@@ -355,7 +355,7 @@ export function moduleReviewProofReason(evidence: ReviewEvidence, verdict: Verdi
   const observation = verdict.observation;
   if (!context.criterion || !observation
     || verdict.status === 'provavel' || verdict.decision !== decisionByStatus[verdict.status] || verdict.binding !== digest(context)
-    || verdict.proof.trim() !== evidence.code || !evidence.code || evidence.code.length > 2000 || /[\r\n…]/u.test(evidence.code)
+    || typeof verdict.proof !== 'string' || verdict.proof.trim() !== evidence.code || !evidence.code || evidence.code.length > 2000 || /[\r\n…]/u.test(evidence.code)
     || observation.criterion !== context.criterion || observation.file !== evidence.file || observation.line !== evidence.line
     || observation.tool !== evidence.tool || observation.rule !== evidence.rule || observation.commit !== evidence.commit) return null;
   const measured = evidence.collectorCase;
