@@ -426,3 +426,11 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:09 UTC — Revisor encerrou C-EXAME-ORIGEM-R2 em 30af542f (código 0). Gerente confere a entrega.
 - 19/11/2026 05:09 UTC — Revisão C-PAINEL-R3 iniciada por Sol high normal somente leitura em 7efe20f0.
 - 19/11/2026 05:09 UTC — Conformidade R5 com imagem fixada em e1798884 passou nos 22 testes, incluindo a imagem real com licença e identificador artificiais. A entrega incremental f38ad8f4 reúne o novo QA, a confirmação terminal e os módulos 3 a 9 em ordem. O revisor confirmou a correção da classificação de REQ-02. O teste da CLI passa a exigir também o achado na linha do requisito e falhas operacionais iguais a zero.
+- 19/11/2026 05:10 UTC — Revisor encerrou C-PAINEL-R3 em 7efe20f0 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:10 UTC — Revisão C3-R9 iniciada por Sol high normal somente leitura em 70a8c7cc.
+- 19/11/2026 05:11 UTC — Revisor encerrou C3-R9 em 70a8c7cc (código 0). Gerente confere a entrega.
+- 19/11/2026 05:11 UTC — Revisão C4-R6-REVISAO iniciada por Sol high normal somente leitura em db55280f.
+- 19/11/2026 05:12 UTC — Trabalhador encerrou C2-NAVEGADOR em 735da841 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:12 UTC — Trabalho C2-R11 iniciado por Sol high normal em final-c2.
+- 19/11/2026 05:13 UTC — Diagnóstico da CLI em homologação confirmou imagem ausente antes do start. Na entrega f38ad8f4, QA, banco, prontidão e documentação perderam as referências locais aos digests. Iniciada restauração com etiquetas próprias de homologação e verificação do ID completo antes de repetir as oito CLIs.
+- 19/11/2026 05:15 UTC — Origem do exame corrigida em 15fa0960. TypeScript aprovado e seis testes passaram em PostgreSQL. A origem ausente ou alterada preserva a geração da última reverificação válida. Chromium offline recebido em 735da841 para prova física.
