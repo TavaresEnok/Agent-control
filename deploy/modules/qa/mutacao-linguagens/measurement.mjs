@@ -132,11 +132,11 @@ function readGoBuildDiagnostics(reports, output, importPath) {
       pkg = line.slice(2);
       continue;
     }
-    // The go driver can report a global failure after a package header in stderr.
-    if (importPath === undefined && line.startsWith('go: ') && goBuildOperational.test(line)) return true;
     const located = goCompilerDiagnostic.exec(line);
     const message = located?.[1] ?? line;
     if (goDiagnosticNote.test(message)) continue;
+    // A toolchain failure without a source position can appear in stderr after any package header.
+    if (importPath === undefined && !located && goBuildOperational.test(message)) return true;
     if (importPath !== undefined && pkg !== importPath) {
       // Go's loader can print the importing package in the header while
       // the structured event and the message name the missing dependency.
