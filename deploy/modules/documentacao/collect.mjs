@@ -139,6 +139,7 @@ function readPackageVersion(pkgName, toolsRoot) {
 }
 
 const mermaidParsers = new Map();
+const mermaidErrorLines = new WeakMap();
 let mermaidParseQueue = Promise.resolve();
 
 function enqueueMermaidParse(work) {
@@ -170,11 +171,13 @@ async function loadMermaidParser(toolsRoot) {
     return code => enqueueMermaidParse(async () => {
       if (typeof parser?.parse !== 'function') return mermaid.parse(code);
       const parse = parser.parse;
+      let parserInput;
       let graph;
       parser.parse = function (source, ...args) {
         const db = this.yy;
         if (typeof db?.getVertices !== 'function' || typeof db?.getEdges !== 'function' || typeof db?.getSubGraphs !== 'function'
           || typeof this.performAction !== 'function') return parse.call(this, source, ...args);
+        parserInput = source;
         const observed = Object.create(this);
         const positions = trackFlowchartPositions(observed, db);
         const parsed = parse.call(observed, source, ...args);
@@ -184,6 +187,16 @@ async function loadMermaidParser(toolsRoot) {
       };
       try {
         return {...await mermaid.parse(code), graph};
+      } catch (err) {
+        if (err instanceof Error) {
+          const matches = parserInput ? matchMermaidSourceLines(parserInput, code.split(/\r\n?|\n/)) : null;
+          const {line, loc, text} = err.hash ?? {};
+          const lastMappedLine = matches && [...matches.keys()].at(-1);
+          // An EOF after a single-line token can point to the added newline.
+          const finalTokenLine = text === '' && lastMappedLine === loc?.first_line - 1 ? lastMappedLine : undefined;
+          mermaidErrorLines.set(err, matches?.get(line) ?? matches?.get(finalTokenLine) ?? null);
+        }
+        throw err;
       } finally {
         parser.parse = parse;
       }
@@ -404,11 +417,14 @@ function manifestWord(parts, quoted = false) {
 function manifestTypeScriptCommands(script, toolsRoot) {
   const invocations = [];
   let cwdChanged = false;
+  const outerDirectoryChanges = [];
+  const isolatesDirectory = node => node.type === 'Subshell' || node.type === 'CmdSubst';
   try {
     const {parse, walk, LangVariant} = createRequire(join(toolsRoot, 'package.json'))('sh-syntax/sync');
     if (Buffer.byteLength(script) > 64 * 1024) return [null];
     const ast = parse(script, {variant: LangVariant.LangPOSIX});
-    walk(ast, node => {
+    const inspect = node => {
+      if (isolatesDirectory(node)) outerDirectoryChanges.push(cwdChanged);
       if (node.type !== 'CallExpr' || !node.args.length) return;
       const words = node.args.map(word => manifestWord(word.parts));
       if (words[0] === null) {
@@ -417,8 +433,20 @@ function manifestTypeScriptCommands(script, toolsRoot) {
       }
       let [bin, ...args] = words;
       bin = posix.basename(bin);
+      while (bin === 'command' || bin === 'exec') {
+        if (bin === 'command') {
+          while (args[0] === '-p') args.shift();
+          if (/^-[pvV]*[vV][pvV]*$/.test(args[0] ?? '')) return;
+        }
+        if (args[0] === '--') args.shift();
+        const executable = args.shift();
+        if (executable === null || executable?.startsWith('-')) {
+          invocations.push(null);
+          return;
+        }
+        bin = posix.basename(executable ?? '');
+      }
       if (['cd', 'pushd', 'popd'].includes(bin)) cwdChanged = true;
-      if (bin === 'command' || bin === 'exec') bin = posix.basename(args.shift() ?? '');
       if (bin === 'node' && /(?:^|\/)typescript\/(?:bin\/tsc|lib\/tsc\.js)$/.test(args[0] ?? '')) {
         [bin, ...args] = ['tsc', ...args.slice(1)];
       } else if (['npx', 'npm', 'pnpm', 'yarn', 'bun'].includes(bin)) {
@@ -432,6 +460,12 @@ function manifestTypeScriptCommands(script, toolsRoot) {
       const dynamicEnv = node.assigns.some(assignment => assignment.array ||
         (assignment.value && manifestWord(assignment.value.parts) === null));
       invocations.push(cwdChanged || dynamicEnv || args.some(arg => arg === null || arg.startsWith('@')) ? null : args);
+    };
+    walk(ast, {
+      enter: inspect,
+      exit(node) {
+        if (isolatesDirectory(node)) cwdChanged = outerDirectoryChanges.pop();
+      },
     });
     return invocations;
   } catch {
@@ -669,8 +703,8 @@ export function extractTypedocSymbols(typedocData, repoRoot) {
         parameterLists,
       });
     }
-    // Only class/interface members are API members; do not descend into signatures or parameters.
-    if ((kind === 128 || kind === 256) && Array.isArray(node.children)) {
+    // Public enum, class and interface members have their own source locations.
+    if ([8, 128, 256].includes(kind) && Array.isArray(node.children)) {
       for (const child of node.children) visit(child, qualifiedName);
     }
   }
@@ -692,9 +726,9 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   const resolveSymbol = rawSymName => {
     const cleaned = String(rawSymName ?? '').trim().replace(/#/g, '.');
     const exact = symbols.filter(sym => sym.qualifiedName === cleaned);
-    if (exact.length === 1) return exact[0];
+    if (exact.length) return exact.length === 1 ? exact[0] : null;
     const suffix = symbols.filter(sym => sym.qualifiedName.endsWith(`.${cleaned}`));
-    if (suffix.length === 1) return suffix[0];
+    if (suffix.length) return suffix.length === 1 ? suffix[0] : null;
     const named = symbols.filter(sym => sym.name === cleaned);
     return named.length === 1 ? named[0] : null;
   };
@@ -724,12 +758,29 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     if (!syntaxByFile.has(sym.file)) {
       const source = ts.createSourceFile(sym.file, getFileText(sym.file), ts.ScriptTarget.Latest, true);
       const lineAt = offset => source.getLineAndCharacterOfPosition(offset).line + 1;
+      const localDefaultNames = [];
+      for (const statement of source.statements) {
+        if (ts.isExportAssignment(statement) && !statement.isExportEquals && ts.isIdentifier(statement.expression)) {
+          localDefaultNames.push(statement.expression.text);
+        } else if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier
+          && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
+          for (const specifier of statement.exportClause.elements) {
+            if (specifier.name.text === 'default' && specifier.propertyName) localDefaultNames.push(specifier.propertyName.text);
+          }
+        }
+      }
+      const localDefaultDeclarations = localDefaultNames.length === 1
+        ? source.statements.filter(node => node.name?.text === localDefaultNames[0]) : [];
+      const localDefault = localDefaultDeclarations.length === 1 ? localDefaultDeclarations[0] : null;
       const declarations = new Map();
       const visit = node => {
         const name = node.name?.text ?? (ts.isConstructorDeclaration(node) ? 'constructor' : null);
         const names = typeof name === 'string' ? [name] : [];
-        if (name !== 'default' && (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node))
-          && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default)) names.push('default');
+        const declarationWithDefault = ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node);
+        const defaultModifier = declarationWithDefault && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default);
+        const defaultEnumOrInterface = localDefault === node
+          && (ts.isEnumDeclaration(node) || ts.isInterfaceDeclaration(node));
+        if (name !== 'default' && (defaultModifier || defaultEnumOrInterface)) names.push('default');
         const defaultExpression = ts.isExportAssignment(node) && !node.isExportEquals;
         if (defaultExpression) names.push('default');
         if (names.length && (ts.isDeclaration(node) || defaultExpression)) {
@@ -749,20 +800,21 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     const {source, lineAt, declarations} = syntaxByFile.get(sym.file);
     const matching = declarations.get(`${declarationLine}:${sym.name}`);
     if (matching?.length !== 1) return declarationLine;
+    const commentLines = [];
     for (const comment of ts.getJSDocCommentsAndTags(matching[0]).filter(ts.isJSDoc)) {
       let fence = null;
-      const index = comment.getText(source).split(/\r?\n/).findIndex(text => {
+      const startLine = lineAt(comment.getStart(source));
+      for (const [index, text] of comment.getText(source).split(/\r?\n/).entries()) {
         const content = text.replace(/^\s*(?:\/\*\*|\*)[ \t]?/, '');
         if (fence) {
           if (closesFence(content, fence)) fence = null;
-          return false;
+          continue;
         }
         fence = openingFence(content);
-        return !fence && matcher.test(text);
-      });
-      if (index >= 0) return lineAt(comment.getStart(source)) + index;
+        if (!fence && matcher.test(text)) commentLines.push(startLine + index);
+      }
     }
-    return declarationLine;
+    return commentLines.length === 1 ? commentLines[0] : declarationLine;
   };
 
   const cliLines = String(rawCliOutput ?? '')
@@ -809,7 +861,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const sym = resolveSymbol(symRef);
       if (!sym) continue;
       const file = sym.file;
-      const line = findInSymbolComment(sym, new RegExp(`@link\\s+${escapeRegExp(targetLink)}\\b`));
+      const line = findInSymbolComment(sym, new RegExp(String.raw`\{@link(?:code|plain)?\s+${escapeRegExp(targetLink)}(?=[\s|}])`));
       const dedupKey = `LINK:${file}:${symRef}:${targetLink}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
@@ -913,11 +965,12 @@ export function crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readFileFn = 
         const matches = functions.get(name);
         if (matches?.length !== 1) continue;
         const [symbol] = matches;
+        const signatures = symbol.parameterLists ?? [symbol.parameters];
+        if (!signatures.length) continue;
         const documented = args.trim() ? args.split(',').map(arg => arg.trim()) : [];
         if (!documented.every(arg => /^[A-Za-z_$][\w$]*$/.test(arg))) continue;
         checked += 1;
         const actual = symbol.parameters.map(param => param.name);
-        const signatures = symbol.parameterLists ?? [symbol.parameters];
         if (signatures.some(parameters =>
           documented.length >= parameters.filter(param => !param.optional && !param.rest).length &&
           (documented.length <= parameters.length || parameters.at(-1)?.rest) &&
@@ -982,43 +1035,38 @@ export function extractMermaidBlocks(docFiles, readFileFn = () => '') {
 }
 
 function matchMermaidSourceLines(source, original) {
-  const parsed = source.map(line => line.trim());
-  // Match the pinned parser's entity encoding and retain the original line for evidence.
-  const raw = original.map(line => line.trim()
-    .replace(/style.*:\S*#.*;/g, style => style.slice(0, -1))
-    .replace(/classDef.*:\S*#.*;/g, style => style.slice(0, -1))
-    .replace(/#(\w+);/g, (_, entity) => `ﬂ°${/^\d+$/.test(entity) ? '°' : ''}${entity}¶ß`));
-  const align = step => {
-    const matches = new Map();
-    let cursor = step === 1 ? 0 : raw.length - 1;
-    for (let index = step === 1 ? 0 : parsed.length - 1; index >= 0 && index < parsed.length; index += step) {
-      if (!parsed[index]) continue;
-      while (cursor >= 0 && cursor < raw.length && raw[cursor] !== parsed[index]) cursor += step;
-      if (cursor < 0 || cursor >= raw.length) return new Map();
-      matches.set(index, cursor);
-      cursor += step;
-    }
-    return matches;
-  };
-
-  const forward = align(1);
-  const backward = align(-1);
-  // Preprocessing can strip comments, directives and whitespace. Only cite an
-  // original source line when both alignments agree on it.
-  const matches = new Map([...forward].filter(([index, rawIndex]) => backward.get(index) === rawIndex));
-  // An unrelated HTML label may be rewritten by Mermaid. A parser line and
-  // source line that each occur exactly once can still be located directly.
-  const unique = lines => {
-    const indexes = new Map();
-    lines.forEach((line, index) => indexes.set(line, indexes.has(line) ? null : index));
-    return indexes;
-  };
-  const parsedIndex = unique(parsed);
-  for (const [line, rawIndex] of unique(raw)) {
-    const index = parsedIndex.get(line);
-    if (line && rawIndex !== null && Number.isInteger(index)) matches.set(index, rawIndex);
+  let firstCodeIndex = 0;
+  const opening = original[0].match(/^(\s*)---\s*$/);
+  if (opening) {
+    const closing = new RegExp(`^${escapeRegExp(opening[1])}---\\s*$`);
+    const end = original.findIndex((line, index) => index > 1 && closing.test(line));
+    if (end === -1) return new Map();
+    firstCodeIndex = end + 1;
   }
-  return matches;
+  // Mirror the pinned parser's HTML and entity normalization outside the
+  // frontmatter while retaining the untouched lines for evidence.
+  const raw = original.slice(firstCodeIndex).join('\n')
+    .replace(/<(\w+)([^>]*)>/g, (_, tag, attributes) => `<${tag}${attributes.replace(/="([^"]*)"/g, "='$1'")}>`)
+    .split('\n')
+    .map(line => line
+      .replace(/style.*:\S*#.*;/g, style => style.slice(0, -1))
+      .replace(/classDef.*:\S*#.*;/g, style => style.slice(0, -1))
+      .replace(/#(\w+);/g, (_, entity) => `ﬂ°${/^\d+$/.test(entity) ? '°' : ''}${entity}¶ß`).trim());
+  // Removing an inline or multiline directive can splice source lines. Only
+  // attribute locations when the remaining lines correspond in order.
+  if (raw.some(line => line.includes('%%{') && !/^%%\{.*\}%%$/.test(line))) return new Map();
+  const isCode = line => line && !line.startsWith('%%');
+  const candidates = raw.flatMap((line, index) => isCode(line) ? [{line, index}] : []);
+  const matches = new Map();
+  let cursor = 0;
+  for (const [index, text] of source.split('\n').entries()) {
+    const line = text.trim();
+    if (!isCode(line)) continue;
+    const candidate = candidates[cursor++];
+    if (candidate?.line !== line) return new Map();
+    matches.set(index, candidate.index + firstCodeIndex);
+  }
+  return cursor === candidates.length ? matches : new Map();
 }
 
 const MODULE_LABEL = /^(?:[\p{L}\p{N}\p{M}_.-]+\/)*[\p{L}\p{N}\p{M}_.-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/u;
@@ -1034,9 +1082,8 @@ function extractMermaidModuleReferences(block, parsed, resolveRepoFile) {
   if (!graph) return {moduleNodes, moduleEdges, unmeasured: 1};
 
   const {source, vertices, edges, subgraphIds, labels, edgeLines} = graph;
-  const sourceLines = source.split('\n');
   const originalLines = block.code.split(/\r\n?|\n/);
-  const lineMatches = matchMermaidSourceLines(sourceLines, originalLines);
+  const lineMatches = matchMermaidSourceLines(source, originalLines);
   const location = line => {
     const index = lineMatches.get(line - 1);
     return index === undefined
@@ -1285,16 +1332,19 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
       invalidBlocks += 1;
       fileStat.invalid += 1;
       const errMsg = err instanceof Error ? err.message : String(err);
-      const lineMatch = errMsg.match(/Parse error on line (\d+)/i);
-      const relLine = lineMatch ? Math.max(1, Number(lineMatch[1])) : 1;
-      const exactLine = block.startLine + Math.min(relLine, block.code.split(/\r?\n/).length) - 1;
+      const errorLine = mermaidErrorLines.get(err);
+      const reportedLine = errMsg.match(/Parse error on line (\d+)/i);
+      const lineCount = block.code.split(/\r\n?|\n/).length;
+      const originalIndex = errorLine === undefined && reportedLine
+        ? Math.min(clampLine(reportedLine[1]), lineCount) - 1 : errorLine;
+      const line = block.startLine + (originalIndex ?? 0);
       findings.push({
         tool: 'mermaid',
         rule: 'DOC-MERMAID-SINTAXE-INVALIDA',
         file: block.file,
-        line: exactLine,
+        line,
         severity: 'media',
-        message: `Bloco Mermaid em ${block.file}:${exactLine} foi rejeitado pelo parser.`,
+        message: `Bloco Mermaid ${originalIndex == null ? 'iniciado ' : ''}em ${block.file}:${line} foi rejeitado pelo parser.`,
         evidence: errMsg.replace(/\s+/g, ' ').trim().slice(0, 240),
       });
       continue;
