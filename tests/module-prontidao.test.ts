@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -134,7 +134,7 @@ test('collectRepoFiles ignora symlinks e parseComposeServices preserva linhas', 
   try {
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src', 'ok.ts'), 'export const ok = true;\n');
-    symlinkSync('/etc/passwd', join(dir, 'src', 'leak.txt'));
+    symlinkSync(join(cleanDir, 'package.json'), join(dir, 'src', 'leak.txt'));
     const files = collectRepoFiles(dir);
     assert.deepEqual(files.map(f => f.rel), ['src/ok.ts']);
   } finally {
@@ -208,10 +208,10 @@ test('normalizadores e runCollector reportam cobertura, achados, skipped offline
   assert.equal(ts[0]?.severity, 'alta');
   assert.equal(ts[1]?.severity, 'media');
 
-  // Simula execução completa offline com stubs determinísticos (e uma ferramenta falhando)
-  const out = runCollector({
+  const collectWithTrivyStatus = (trivyStatus: number) => runCollector({
     repoRoot: defectiveDir,
-    runBin(bin, args) {
+    evidenceFile: '',
+    runBin(bin, args, options) {
       if (args[0] === 'version') return {status: 0, stdout: '8.30.1\n', stderr: ''};
       if (args[0] === '--version') {
         if (bin === 'hadolint') return {status: 0, stdout: 'Haskell Dockerfile Linter 2.15.1\n', stderr: ''};
@@ -227,12 +227,33 @@ test('normalizadores e runCollector reportam cobertura, achados, skipped offline
         return {status: 0, stdout: JSON.stringify([{line: 4, code: 'DL3002', message: 'Last USER should not be root', file: join(defectiveDir, 'Dockerfile'), level: 'warning'}]), stderr: ''};
       }
       if (bin === 'trivy') {
-        return {status: 1, stdout: '', stderr: 'trivy crash simulated'};
+        const cwd = options?.cwd;
+        assert.ok(cwd);
+        assert.equal(statSync(cwd).mode & 0o077, 0);
+        const reportPath = join(cwd, 'trivy-config.json');
+        assert.deepEqual(args, [
+          'config', '--skip-check-update', '--skip-version-check', '--disable-telemetry', '--quiet',
+          '--cache-dir', join(cwd, 'trivy-cache'), '--format', 'json', '--output', reportPath, defectiveDir,
+        ]);
+        writeFileSync(reportPath, JSON.stringify({
+          Results: [{
+            Target: 'Dockerfile',
+            Misconfigurations: [{AVDID: 'AVD-DS-0026', Status: 'FAIL', Severity: 'LOW'}],
+          }],
+        }));
+        return {status: trivyStatus, stdout: '', stderr: ''};
       }
       return {status: 0, stdout: '', stderr: ''};
     },
   });
 
+  const success = collectWithTrivyStatus(0);
+  const trivySuccess = success.coverage.find(c => c.tool === 'trivy');
+  assert.equal(trivySuccess?.version, '0.76.2');
+  assert.equal(trivySuccess?.status, 'ok');
+  assert.ok(success.findings.some(f => f.tool === 'trivy' && f.rule === 'AVD-DS-0026' && f.file === 'Dockerfile'));
+
+  const out = collectWithTrivyStatus(1);
   for (const row of out.coverage) {
     assert.equal(VALID_STATUSES.has(row.status), true);
     assert.ok(row.version.length > 0);
@@ -240,6 +261,8 @@ test('normalizadores e runCollector reportam cobertura, achados, skipped offline
   }
   const trivyRow = out.coverage.find(c => c.tool === 'trivy');
   assert.equal(trivyRow?.status, 'failed');
+  assert.match(trivyRow.detail, /exit=1/);
+  assert.equal(out.findings.some(f => f.tool === 'trivy'), false);
   const passiveTlsRow = out.coverage.find(c => c.tool === 'prontidao-tls-passivo');
   assert.equal(passiveTlsRow?.status, 'skipped');
   const testsslRow = out.coverage.find(c => c.tool === 'testssl.sh');

@@ -576,12 +576,12 @@ export function runCollector(options = {}) {
       }
     }
 
-    // 4. trivy config (IaC / Dockerfile / Compose offline)
+    // 4. trivy config (IaC / Dockerfile / Compose no contêiner sem rede)
     const trivyVer = probeVersion(runBin, bins.trivy, ['--version'], /Version:\s*([^\s]+)/i) ?? 'desconhecida';
     const trivyOut = join(workDir, 'trivy-config.json');
     const trivyCache = join(workDir, 'trivy-cache');
     mkdirSync(trivyCache, {recursive: true});
-    const trivyArgs = ['config', '--offline-scan', '--skip-check-update', '--skip-version-check', '--disable-telemetry', '--quiet', '--cache-dir', trivyCache, '--format', 'json', '--output', trivyOut, repoRoot];
+    const trivyArgs = ['config', '--skip-check-update', '--skip-version-check', '--disable-telemetry', '--quiet', '--cache-dir', trivyCache, '--format', 'json', '--output', trivyOut, repoRoot];
     const trRes = runBin(bins.trivy, trivyArgs, {cwd: workDir});
     if (trRes.error || trRes.status !== 0 || !existsSync(trivyOut)) {
       coverage.push(normalizeCoverageRow({
