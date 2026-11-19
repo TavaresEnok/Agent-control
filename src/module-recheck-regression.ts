@@ -5,9 +5,13 @@ import {dirname, join, posix} from 'node:path';
 import {promisify} from 'node:util';
 import {z} from 'zod';
 import {digest} from './contracts.ts';
-import type {Ledger} from './ledger.ts';
+import type {Ledger, VerificationModule} from './ledger.ts';
 import {readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob} from './module-recheck-git.ts';
+import type {LocalRegression} from './module-recheck-local.ts';
+import {readModuleMeasurements} from './module-recheck-measurement.ts';
+import {redactUnknownSecrets} from './verify-redact.ts';
+import type {ModuleToolCoverage} from './verification-modules.ts';
 
 export const FUNCTION_COVERAGE_RULE = 'QA-COBERTURA-FUNCAO-SEM-TESTE';
 const NODE_TEST_TOOL = 'node-test-v8';
@@ -22,7 +26,7 @@ const SCRIPT_PATH = /^[\p{L}\p{M}\p{N} _@.+/-]+\.(?:[m]?[jt]s)$/u;
 export type RecheckScope = {id: string; file: string; line: number; tool: string; rule: string};
 type Target = {name: string; line: number; endLine: number; code: string; signature: string};
 type Blob = NonNullable<Awaited<ReturnType<typeof readRecheckBlob>>>;
-type RecheckProof = {runId: string; tool: string; version: string; origin: 'collector'; collectorImage: string | null};
+type RecheckProof = {runId: string; tool: string; version: string; origin: 'collector'; collectorImage: string};
 
 export function supportsFunctionalRecheck(module: string, item: RecheckScope) {
   return module === 'qa' && item.tool === NODE_TEST_TOOL && item.rule === FUNCTION_COVERAGE_RULE;
@@ -139,32 +143,41 @@ async function runTest(source: Blob, sourceFile: string, test: Blob, testFile: s
 
 async function readCorrectionProof(ledger: Ledger, scope: BoundScope, current: Target): Promise<RecheckProof | undefined> {
   const fileKey = scope.item.file.replace(/[%|~\s\u0000-\u001f\u007f]/g, char => char === '~' ? '%7E' : encodeURIComponent(char));
-  const {rows: [proof]} = await ledger.pool.query<RecheckProof>(
-    `WITH latest AS (
-       SELECT id, status, collector_image FROM ac_verify_runs
-       WHERE project_id=$1 AND context_id=$2 AND module='qa' AND commit_id=$3 AND status IN ('done','failed')
-         AND report_dir=report_prepared_dir AND NOT report_legacy_missing
-       ORDER BY finished_at DESC NULLS LAST, id DESC LIMIT 1
-     )
-     SELECT r.id AS "runId", original.tool, original.version, 'collector' AS origin, r.collector_image AS "collectorImage"
-     FROM latest r JOIN ac_verify_tool_coverage original ON original.run_id=$4 AND original.tool=$5 AND original.status='ok'
-     WHERE r.status='done'
-       AND EXISTS (SELECT 1 FROM ac_verify_tool_coverage t
-         WHERE t.run_id=r.id AND t.tool=$5 AND t.version=original.version AND t.status='ok')
-       AND EXISTS (SELECT 1 FROM ac_verify_tool_coverage t
-         WHERE t.run_id=r.id AND t.tool=$6 AND t.version=original.version AND t.status='ok')
-       AND NOT EXISTS (SELECT 1 FROM ac_verify_findings f WHERE f.run_id=r.id AND f.file=$7
-         AND f.payload->'sources'->>0=$5 AND f.payload->'sources'->>1=$8
-         AND (f.line IS NULL OR f.line BETWEEN $9 AND $10))
-     ORDER BY original.seq LIMIT 1`,
-    [scope.projectId, scope.contextId, scope.head, scope.runId, scope.item.tool,
-      `qa-arquivo:${fileKey}`, scope.item.file, scope.item.rule, current.line, current.endLine],
-  );
-  return proof;
+  const {item, measurement} = scope;
+  if (!measurement?.collectorImage) return;
+  const coverage = await readModuleMeasurements(ledger.pool, scope.runId, measurement.runId, item.file);
+  if (coverage.findings.some(({tool, rule, line}) => tool === item.tool && rule === item.rule
+    && (line === null || line >= current.line && line <= current.endLine))) return;
+  const find = (rows: ModuleToolCoverage[], tool: string) => {
+    const hits = rows.filter(row => row.tool === tool);
+    return hits.length === 1 && hits[0]!.status === 'ok' ? hits[0] : undefined;
+  };
+  const base = find(coverage.original, item.tool);
+  if (!base || find(coverage.corrected, item.tool)?.version !== base.version) return;
+  const before = find(coverage.original, `qa-arquivo:${fileKey}`);
+  const after = find(coverage.corrected, `qa-arquivo:${fileKey}`);
+  if (!before || !after || [before, after].some(row => row.version !== base.version)
+    || !completeV8Coverage(before.detail, true) || !completeV8Coverage(after.detail, false)) return;
+  return {runId: measurement.runId, tool: item.tool, version: base.version, origin: 'collector', collectorImage: measurement.collectorImage};
 }
 
-type BoundScope = {
-  projectId: string; contextId: string; repo: string; runId: string; originalCommit: string; head: string;
+function completeV8Coverage(detail: string, original: boolean): boolean {
+  const header = 'V8 em três passadas: ramos';
+  const prefix = detail.startsWith(header) ? header : redactUnknownSecrets(header);
+  if (!detail.startsWith(prefix + ' ')) return false;
+  const passes = detail.slice(prefix.length + 1).split('; ramos ');
+  return passes.length === 3 && passes.every(pass => {
+    const parsed = /^(\d+)\/(\d+), funções (\d+)\/(\d+)$/.exec(pass);
+    if (!parsed) return false;
+    const [branches, allBranches, covered, allFunctions] = parsed.slice(1).map(Number) as [number, number, number, number];
+    return [branches, allBranches, covered, allFunctions].every(Number.isSafeInteger) && branches <= allBranches
+      && (original ? covered < allFunctions : covered > 0 && covered <= allFunctions);
+  });
+}
+
+export type BoundScope = {
+  module: VerificationModule; repo: string; runId: string; originalCommit: string; head: string;
+  measurement?: {runId: string; collectorImage: string};
   item: RecheckScope; evidence: string; originalMessage: string; testFile: string; signal?: AbortSignal;
 };
 
@@ -212,19 +225,26 @@ export async function measureRecheckRegression(ledger: Ledger, scope: BoundScope
     testFile, testBlob: testBlob.oid, testLine: test.line, testColumn: test.column, testTitle: test.title,
     assertionDigest: digest(test.assertion),
   };
-  return {before, after, moduleProof, assertion: test.assertion, receipt: {...receipt, receiptDigest: digest(receipt)}};
+  return {criterion: 'direct-call-meets-expected-value' as const,
+    before, after, moduleProof, assertion: test.assertion, receipt: {...receipt, receiptDigest: digest(receipt)}};
 }
 
 function overlappingDeclaration(functions: Target[], target: Target) {
   return functions.some(fn => fn !== target && fn.line <= target.endLine && fn.endLine >= target.line);
 }
 
-export type FunctionalRegression = Exclude<Awaited<ReturnType<typeof measureRecheckRegression>>, {reason: string}>;
+type QaRegression = Exclude<Awaited<ReturnType<typeof measureRecheckRegression>>, {reason: string}>;
+export type FunctionalRegression = QaRegression | LocalRegression;
 
 const Observation = TestExecution.omit({node: true}).extend({commit: z.string().regex(/^[a-f0-9]{40}$/)});
 const Correction = z.object({
   rule: z.literal(FUNCTION_COVERAGE_RULE), assertion: z.string().max(MAX_EXPRESSION_LENGTH),
   original: Observation, corrected: Observation, criterion: z.literal('direct-call-meets-expected-value'),
+}).strict();
+const LocalObservation = Observation.extend({actual: z.string().min(1).max(400), expected: z.string().min(1).max(400)});
+const LocalCorrection = z.object({
+  rule: z.string().min(1).max(200), criterion: z.string().min(1).max(120), object: z.string().min(1).max(400),
+  original: LocalObservation, corrected: LocalObservation,
 }).strict();
 
 export function readFunctionalRecheckVerdict(value: unknown) {
@@ -235,9 +255,16 @@ export function readFunctionalRecheckVerdict(value: unknown) {
 
 export function recheckCorrectionMatches(value: unknown, reason: string, proof: FunctionalRegression): boolean {
   if (typeof value !== 'object' || value === null || !('correction' in value)) return false;
-  const parsed = Correction.safeParse(value.correction);
   const {original, corrected} = proof.receipt.observations;
   const cites = (item: string) => reason.includes('`' + item + '`');
+  if ('object' in proof.receipt) {
+    const parsed = LocalCorrection.safeParse(value.correction);
+    const expected = {rule: proof.receipt.scope.rule, criterion: proof.criterion, object: proof.receipt.object,
+      ...proof.receipt.observations};
+    return parsed.success && digest(parsed.data) === digest(expected)
+      && [proof.receipt.object, original.actual, corrected.actual].every(cites);
+  }
+  const parsed = Correction.safeParse(value.correction);
   return parsed.success && digest(parsed.data) === digest({
     rule: proof.receipt.scope.rule, assertion: proof.assertion, criterion: 'direct-call-meets-expected-value',
     ...proof.receipt.observations,
