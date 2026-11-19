@@ -200,3 +200,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:00 UTC — Trabalhador encerrou C2-R6 em 9b8959dc (código 0). Gerente confere a entrega.
 - 19/11/2026 03:00 UTC — Trabalho C4-R5 iniciado por Sol high normal em final-c4.
 - 19/11/2026 03:01 UTC — C5-R4 entregue em 5d494800; reconstrução da imagem e laboratório iniciados. Revisão independente de desempenho identificou um risco de contêiner ou volume órfão após timeout e três defeitos médios em rotas, baseline e falha de backend. Ordem C7-R5 aberta.
+- 19/11/2026 03:01 UTC — C5 em 5d494800 passou no laboratório de migração, classificação de falhas e plano de consultas em PostgreSQL isolado. C2-R6 entregue em 9b8959dc entrou em reconstrução e revisão.
