@@ -4,13 +4,17 @@ import {createHash,createPublicKey,generateKeyPairSync,randomUUID,verify} from '
 import {execFile,spawnSync} from 'node:child_process';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {promisify} from 'node:util';
-import {chmod,lstat,mkdir,mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,mkdtemp,readFile,rename,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {Capacity} from '../src/capacity.ts';
-import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
+import {NativeExecutionSupervisor,NativeExecutionRequest,UnstartedExamRetirementPending} from '../src/native-execution-supervisor.ts';
+import {createDesignNativeWorker} from '../src/design-native-launch.ts';
+import {designCliFailureText} from '../src/personal-design-cli.ts';
+import {releaseDesignGrant} from '../src/design-command.ts';
+import {isProviderLimit} from '../src/quota-exhaustion.ts';
 import {authorizeNativeSyntheticFixture} from '../src/native-synthetic-fixture.ts';
 import {reconcileNativeResourceAdmissions,NativeResourceDockerDaemon} from '../src/native-resource-envelope.ts';
 import {OPEN_EXECUTION_JOBS_SQL,runPersonalMaintenance} from '../src/personal-maintenance.ts';
@@ -314,6 +318,10 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   await cli('--abandonar-design',histJobId);
   const auditCountAfter=(await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n;
   assert.equal(auditCountAfter,auditCountBefore);
+  await mkdir(join(spool,histJobId),{mode:0o700});
+  await writeFile(join(spool,histJobId,'request.json'),JSON.stringify({...histInput,task:'divergente'}),{mode:0o600});
+  await assert.rejects(cli('--abandonar-design',histJobId));
+  await rm(join(spool,histJobId),{recursive:true});
 
   // Clean up coJobId so OPEN_EXECUTION_JOBS_SQL reflects only retired status and retiredImages can be dropped cleanly.
   await db.pool.query("DELETE FROM ac_native_execution_jobs WHERE id=$1",[coJobId]);
@@ -324,6 +332,28 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   assert.deepEqual(removedImages,[retiredImage]);
   await cli('--abandonar-design',histJobId);
   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE context_id=$1 AND kind='native.terminal_retired'",[mainContext])).rows[0].n,auditCountBefore);
+  const histRoot=join(spool,histJobId),histRequest=join(histRoot,'request.json');
+  await mkdir(histRoot,{mode:0o700});
+  await writeFile(histRequest,JSON.stringify(histInput),{mode:0o600});
+  await cli('--abandonar-design',histJobId);
+  await writeFile(histRequest,JSON.stringify({...histInput,task:'divergente'}),{mode:0o600});
+  await assert.rejects(cli('--abandonar-design',histJobId));
+  await writeFile(histRequest,JSON.stringify({...histInput,sessionId:randomUUID()}),{mode:0o600});
+  await assert.rejects(cli('--abandonar-design',histJobId));
+  await writeFile(histRequest,'{invalid',{mode:0o600});
+  await assert.rejects(cli('--abandonar-design',histJobId));
+  await rm(histRequest);
+  await symlink(join(area,'missing-target'),histRequest);
+  await assert.rejects(cli('--abandonar-design',histJobId));
+  await rm(histRequest);
+  await cli('--abandonar-design',histJobId);
+  await chmod(histRoot,0o755);
+  await assert.rejects(cli('--abandonar-design',histJobId));
+  await chmod(histRoot,0o700);
+  await rm(histRoot,{recursive:true});
+  await rename(spool,spool+'-unavailable');
+  try{await assert.rejects(cli('--abandonar-design',histJobId));}
+  finally{await rename(spool+'-unavailable',spool);}
   // Corrupting a durable proof after image rotation must not yield success.
   const storedProof=(await db.pool.query('SELECT proof FROM ac_native_terminal_retirements WHERE job_id=$1',[histJobId])).rows[0].proof;
   // Only this disposable synthetic database is modified to exercise verification.
@@ -339,18 +369,29 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   await capacity.observeQuota(appPrincipal,account,{status:'available',source:'https://example.invalid/fixture',ttlSeconds:3600});
   const appAuth=await db.acquire(appPrincipal,mainContext,randomUUID(),'personal-design',60);
   const futureIntent=await insertDesignExamIntent(db,appPrincipal,mainContext,appAuth.epoch,project,headCommit,true);
-  const futureJobId=randomUUID(),futureSessionId=randomUUID(),futureGrantId=randomUUID();
-  const futureInput=NativeExecutionRequest.parse({jobId:futureJobId,intentId:futureIntent.id,grantId:futureGrantId,sessionId:futureSessionId,base:headCommit,role:'specialist',task:'future prelaunch exam failure',artifactId:randomUUID(),outputSchema:{type:'object'},writePaths:[]});
+  const futureGrantId=randomUUID();
   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
-   VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,[futureGrantId,randomUUID(),futureIntent.id,mainContext,appAuth.epoch,account,profile,project,digest(futureInput)]);
+   VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,[futureGrantId,randomUUID(),futureIntent.id,mainContext,appAuth.epoch,account,profile,project,digest({fixture:true})]);
   const claudeAccountRoot=join(accounts,account);
   await mkdir(claudeAccountRoot,{recursive:true,mode:0o700});await chmod(claudeAccountRoot,0o700);
   await writeFile(join(claudeAccountRoot,'.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'old-tok-secret-123',refreshToken:'ref-tok-secret-123',expiresAt:Date.now()-10_000}}),{mode:0o600});
   homesMock=mock.method(AccountHomes.prototype,'inspectGranted',async()=>({accountId:account,projectId:project,ownerId:appPrincipal,uid:'1',device:'1',inode:'1'}));
   snapshotMock=mock.method(GitArtifacts.prototype,'snapshot',async()=>{throw new Error('UNEXPECTED_SNAPSHOT');});
-  const futureSupervisor=new NativeExecutionSupervisor(db,{...supervisorConfig,examLoginRenew:async()=>{throw new Error('EXAM_LOGIN_RENEW_FAILED');}},{assertAdmission:async()=>{}});
+  const futureSupervisor=new NativeExecutionSupervisor(db,{...supervisorConfig,workerImage:currentImage,toolsImage:currentImage,examLoginRenew:async()=>{throw new Error('EXAM_LOGIN_RENEW_FAILED');}},{assertAdmission:async()=>{}});
   dockerState.malformedNetwork=true;
-  await assert.rejects(futureSupervisor.start(appPrincipal,appAuth,futureInput),(err:unknown)=>err instanceof Refusal&&err.code==='EXAM_LOGIN_STALE');
+  let futureJobId='';
+  const worker=createDesignNativeWorker({supervisors:[{active:true,supportsAccount:id=>id===account,
+   start:async(principal,authority,request)=>{futureJobId=request.jobId;return futureSupervisor.start(principal,authority,request);},
+   reconcile:(principal,authority,request)=>futureSupervisor.reconcile(principal,authority,request),
+   retireTerminal:(principal,authority,id)=>futureSupervisor.retireTerminal(principal,authority,id)}],principal:appPrincipal,authority:appAuth,ledger:db,base:headCommit,
+   releaseGrant:(grantId,how)=>releaseDesignGrant(db,appPrincipal,appAuth,grantId,how)});
+  await assert.rejects(worker.run({role:'specialist',provider:'claude',accountId:account,profileId:profile,model:'claude-sonnet-5-5',grantId:futureGrantId,intentId:futureIntent.id,task:'future prelaunch exam failure',repo,writePaths:[]}),(err:unknown)=>{
+   assert.ok(err instanceof UnstartedExamRetirementPending);
+   assert.equal(err.jobId,futureJobId);
+   assert.equal(isProviderLimit(err.code),false);
+   assert.match(designCliFailureText(err),new RegExp(`--abandonar-design ${futureJobId}`));
+   return true;
+  });
   const futureJob=(await db.pool.query('SELECT state,receipt FROM ac_native_execution_jobs WHERE id=$1',[futureJobId])).rows[0];
   const futureGrant=(await db.pool.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1',[futureGrantId])).rows[0];
   const futureRet=(await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[futureJobId])).rows[0];
@@ -361,10 +402,21 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   assert.equal(futureRet,undefined);
   assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[futureIntent.id])).rows[0].state,'accepted');
   dockerState.malformedNetwork=false;
-  await futureSupervisor.recoverUnstartedExam(appPrincipal,appAuth,futureJobId);
+  await db.releaseLease(appAuth);
+  await cli('--abandonar-design',futureJobId);
   assert.equal((await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[futureJobId])).rows[0].state,'removed');
   assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[futureIntent.id])).rows[0].state,'failed');
   await assert.rejects(lstat(join(spool,futureJobId)),(err:NodeJS.ErrnoException)=>err.code==='ENOENT');
+  const settledAuthority=await db.acquire(appPrincipal,mainContext,randomUUID(),'fixture-settled',60);
+  const settledIntent=await insertDesignExamIntent(db,appPrincipal,mainContext,settledAuthority.epoch,project,headCommit,true);
+  const settledJobId=randomUUID(),settledGrantId=randomUUID();
+  const settledInput=NativeExecutionRequest.parse({jobId:settledJobId,intentId:settledIntent.id,grantId:settledGrantId,sessionId:randomUUID(),base:headCommit,role:'specialist',task:'settled exam',artifactId:randomUUID(),outputSchema:{type:'object'},writePaths:[]});
+  await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+   VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,[settledGrantId,randomUUID(),settledIntent.id,mainContext,settledAuthority.epoch,account,profile,project,digest(settledInput)]);
+  await assert.rejects(futureSupervisor.start(appPrincipal,settledAuthority,settledInput),(err:unknown)=>err instanceof Refusal&&err.code==='EXAM_LOGIN_STALE');
+  assert.equal((await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[settledJobId])).rows[0].state,'removed');
+  assert.equal(isProviderLimit('PROVIDER_USAGE_LIMIT'),true);
+  await db.releaseLease(settledAuthority);
  }finally{
   homesMock?.mock.restore();
   snapshotMock?.mock.restore();
