@@ -16,6 +16,7 @@ export type SpecialistExamPlan = {
   createProfileId?: string;
   examinerProfileId?: string;
   reviewerProfileIds: string[];
+  accountByProfileId: Record<string, string>;
 };
 
 export type ExamReservationChoice =
@@ -47,7 +48,7 @@ export function classifyExamReservation(
 }
 
 type PolicySnapshotRow = {snapshot?: {roles?: {specialist?: {regular?: unknown; emergency?: unknown}}}};
-type SpecialistProfileRow = {id: string; model: string; provider: string};
+type SpecialistProfileRow = {id: string; model: string; provider: string; account_id?: string};
 
 /** Inspects the active policy's `roles.specialist` chain so exams pick the prepared seats without touching `roles.reviewer`. */
 export async function loadSpecialistExamPlan(
@@ -65,9 +66,9 @@ export async function loadSpecialistExamPlan(
   const regular = Array.isArray(specialist?.regular) ? specialist.regular.filter((id): id is string => typeof id === 'string') : [];
   const emergency = Array.isArray(specialist?.emergency) ? specialist.emergency.filter((id): id is string => typeof id === 'string') : [];
   const all = [...regular, ...emergency];
-  if (all.length === 0) return {hasClaude: false, reviewerProfileIds: []};
+  if (all.length === 0) return {hasClaude: false, reviewerProfileIds: [], accountByProfileId: {}};
   const profiles = (await pool.query(
-    `SELECT p.id::text AS id, p.model, a.provider
+    `SELECT p.id::text AS id, p.model, a.provider, p.account_id::text AS account_id
      FROM ac_profiles p
      JOIN ac_accounts a ON a.id=p.account_id
      WHERE p.id = ANY($1::uuid[])`,
@@ -77,12 +78,32 @@ export async function loadSpecialistExamPlan(
   const isClaude = (id: string) => byId.get(id)?.provider === 'claude';
   const claudeRegular = regular.filter(isClaude);
   const claudeEmergency = emergency.filter(isClaude);
+  const accountByProfileId: Record<string, string> = {};
+  for (const item of profiles) {
+    if (typeof item.account_id === 'string' && item.account_id.length > 0) accountByProfileId[item.id] = item.account_id;
+  }
   return {
     hasClaude: claudeRegular.length > 0 || claudeEmergency.length > 0,
     createProfileId: claudeRegular.find(id => byId.get(id)?.model === 'claude-opus-5-5'),
     examinerProfileId: claudeRegular.find(id => byId.get(id)?.model !== 'claude-opus-5-5'),
     reviewerProfileIds: claudeEmergency,
+    accountByProfileId,
   };
+}
+
+function uniqueReservationIds(...groups: (string | readonly string[] | undefined)[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const group of groups) {
+    if (!group) continue;
+    const list = typeof group === 'string' ? [group] : group;
+    for (const id of list) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
 }
 
 async function readSpecialistExamSeat(ledger: Ledger, grant: Grant): Promise<SpecialistExamSeat> {
@@ -100,6 +121,29 @@ async function readSpecialistExamSeat(ledger: Ledger, grant: Grant): Promise<Spe
   };
 }
 
+async function acceptReservedSeat(input: {
+  ledger: Ledger;
+  grant: Grant;
+  purpose: 'create' | 'examiner' | 'reviewer';
+  releaseGrant: (grantId: string) => Promise<void>;
+}): Promise<SpecialistExamSeat> {
+  try {
+    const seat = await readSpecialistExamSeat(input.ledger, input.grant);
+    if (input.purpose === 'reviewer') {
+      if (seat.provider !== 'claude') throw new Refusal('DESIGN_REVIEWER_UNAVAILABLE', 409);
+      return seat;
+    }
+    return acceptClaudeExamSeat(seat);
+  } catch (error) {
+    try {
+      await input.releaseGrant(input.grant.id);
+    } catch {
+      // Preserve the original validation or lookup failure after attempting cleanup.
+    }
+    throw error;
+  }
+}
+
 /** Reserves a Claude `specialist` profile for read-only exams (and create), keeping the reviewer on a distinct profile. */
 export async function reserveSpecialistExamSeat(input: {
   capacity: Capacity;
@@ -109,12 +153,30 @@ export async function reserveSpecialistExamSeat(input: {
   intentId: string;
   purpose: 'create' | 'examiner' | 'reviewer';
   avoidProfileId?: string;
+  avoidProfileIds?: readonly string[];
   avoidAccountId?: string;
+  avoidAccountIds?: readonly string[];
   releaseGrant: (grantId: string) => Promise<void>;
 }): Promise<SpecialistExamSeat> {
   const plan = await loadSpecialistExamPlan(input.ledger.pool, input.authority.contextId);
   if (input.purpose === 'reviewer') {
-    const preferredProfileId = plan.reviewerProfileIds.find(id => id !== input.avoidProfileId);
+    const avoidProfiles = uniqueReservationIds(input.avoidProfileId, input.avoidProfileIds).slice(0, 20);
+    const avoidAccounts = uniqueReservationIds(input.avoidAccountId, input.avoidAccountIds).slice(0, 8);
+    const avoidProfileSet = new Set(avoidProfiles);
+    const avoidAccountSet = new Set(avoidAccounts);
+    const candidateReviewers = plan.reviewerProfileIds.filter(id => !avoidProfileSet.has(id));
+    const orderedReviewers = [
+      ...candidateReviewers.filter(id => {
+        const accountId = plan.accountByProfileId[id];
+        return accountId !== undefined && !avoidAccountSet.has(accountId);
+      }),
+      ...candidateReviewers.filter(id => {
+        const accountId = plan.accountByProfileId[id];
+        return accountId === undefined || avoidAccountSet.has(accountId);
+      }),
+    ];
+    const preferredProfileId = orderedReviewers[0];
+    const preferredProfiles = orderedReviewers.length > 1 ? orderedReviewers.slice(0, 20) : undefined;
     let grant: Grant;
     try {
       grant = await input.capacity.reserve(input.principal, {
@@ -124,8 +186,9 @@ export async function reserveSpecialistExamSeat(input: {
         role: 'specialist',
         provider: 'claude',
         ...(preferredProfileId ? {preferredProfileId} : {}),
-        ...(input.avoidProfileId ? {avoidProfiles: [input.avoidProfileId]} : {}),
-        ...(input.avoidAccountId ? {avoidAccounts: [input.avoidAccountId]} : {}),
+        ...(preferredProfiles ? {preferredProfiles} : {}),
+        ...(avoidProfiles.length ? {avoidProfiles} : {}),
+        ...(avoidAccounts.length ? {avoidAccounts} : {}),
       }, input.authority);
     } catch (error) {
       if (error instanceof Refusal && (error.code === 'NO_ELIGIBLE_CAPACITY' || error.code === 'ROLE_NOT_CONFIGURED')) {
@@ -133,12 +196,7 @@ export async function reserveSpecialistExamSeat(input: {
       }
       throw error;
     }
-    const seat = await readSpecialistExamSeat(input.ledger, grant);
-    if (seat.provider !== 'claude') {
-      await input.releaseGrant(seat.grantId);
-      throw new Refusal('DESIGN_REVIEWER_UNAVAILABLE', 409);
-    }
-    return seat;
+    return acceptReservedSeat({ledger: input.ledger, grant, purpose: 'reviewer', releaseGrant: input.releaseGrant});
   }
   const preferredProfileId = input.purpose === 'create' ? plan.createProfileId : plan.examinerProfileId;
   const grant = await input.capacity.reserve(input.principal, {
@@ -149,9 +207,5 @@ export async function reserveSpecialistExamSeat(input: {
     ...(plan.hasClaude ? {provider: 'claude'} : {}),
     ...(preferredProfileId ? {preferredProfileId} : {}),
   }, input.authority);
-  const seat = await readSpecialistExamSeat(input.ledger, grant);
-  if (seat.provider !== 'claude') {
-    await input.releaseGrant(seat.grantId);
-  }
-  return acceptClaudeExamSeat(seat);
+  return acceptReservedSeat({ledger: input.ledger, grant, purpose: input.purpose, releaseGrant: input.releaseGrant});
 }

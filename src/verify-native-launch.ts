@@ -1,5 +1,7 @@
 import {randomUUID} from 'node:crypto';
-import {Refusal, type Authority} from './contracts.ts';
+import {Capacity} from './capacity.ts';
+import {Id, Refusal, type Authority} from './contracts.ts';
+import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import type {Ledger} from './ledger.ts';
 import {buildReadonlyExamRequest} from './verify-personal-worker.ts';
 import {VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
@@ -157,12 +159,49 @@ export function createCapacityNativeWorker(input: {
   };
 }
 
+export type RecheckReserveExclusion = {
+  avoidProfiles?: readonly string[];
+  avoidAccounts?: readonly string[];
+};
+
+/** Reserves a Claude `specialist` seat for recheck while strictly excluding the finding's original examiner profile. */
+export async function reservePersonalRecheckReviewer(input: {
+  ledger: Ledger;
+  principal: string;
+  authority: Authority;
+  intentId: string;
+  avoidProviders?: readonly string[];
+  exclusion?: RecheckReserveExclusion;
+  releaseGrant: (grantId: string, how: 'not_started' | 'exited') => Promise<void>;
+}): Promise<{grantId: string; accountId: string; provider: string; role: 'specialist'}> {
+  const avoidAccountIds = [
+    ...(input.exclusion?.avoidAccounts ?? []),
+    ...(input.avoidProviders ?? []).filter(id => Id.safeParse(id).success),
+  ];
+  const seat = await reserveSpecialistExamSeat({
+    capacity: new Capacity(input.ledger),
+    ledger: input.ledger,
+    principal: input.principal,
+    authority: input.authority,
+    intentId: input.intentId,
+    purpose: 'reviewer',
+    avoidProfileIds: input.exclusion?.avoidProfiles,
+    avoidAccountIds,
+    releaseGrant: grantId => input.releaseGrant(grantId, 'not_started'),
+  });
+  return {grantId: seat.grantId, accountId: seat.accountId, provider: seat.provider, role: 'specialist'};
+}
+
 export function createRecheckNativeWorker(input: {
   supervisors: readonly SecurityExamSupervisor[];
   principal: string;
   authority: Authority;
   base: string;
-  reserveReviewer(intentId: string, avoidProviders?: readonly string[]): Promise<{grantId: string; accountId: string; provider: string; role?: 'specialist' | 'reviewer'}>;
+  reserveReviewer(
+    intentId: string,
+    avoidProviders?: readonly string[],
+    exclusion?: RecheckReserveExclusion,
+  ): Promise<{grantId: string; accountId: string; provider: string; role?: 'specialist' | 'reviewer'}>;
   releaseGrant?: ReleaseGrant;
   wait?: Wait;
 }): VerifyWorker {
@@ -170,7 +209,13 @@ export function createRecheckNativeWorker(input: {
   return {
     async run(call) {
       const parsed = VerifyWorkerCall.parse(call);
-      const reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders);
+      const exclusion = parsed.avoidProfiles?.length || parsed.avoidAccounts?.length
+        ? {
+            ...(parsed.avoidProfiles?.length ? {avoidProfiles: parsed.avoidProfiles} : {}),
+            ...(parsed.avoidAccounts?.length ? {avoidAccounts: parsed.avoidAccounts} : {}),
+          }
+        : undefined;
+      const reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders, exclusion);
       const marked = call as {reviewerProvider?: string; reviewerAccountId?: string; reviewerSessionId?: string};
       marked.reviewerProvider = typeof reserved.provider === 'string' ? reserved.provider : '';
       marked.reviewerAccountId = typeof reserved.accountId === 'string' ? reserved.accountId : '';

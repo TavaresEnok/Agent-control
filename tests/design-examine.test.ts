@@ -4,7 +4,7 @@ import {test} from 'node:test';
 import {designBenchWorker} from '../src/design-bench.ts';
 import {loadDesignChecklist} from '../src/design-checklist.ts';
 import {Refusal} from '../src/contracts.ts';
-import {examineDesignScreens} from '../src/design-examine.ts';
+import {examineDesignScreens, type DesignReserveOptions} from '../src/design-examine.ts';
 import {
   DESIGN_PLANTED_RULES,
   DesignConfirmResult,
@@ -595,4 +595,79 @@ test('alta sem medida estruturada vira media e a razao medida permanece alta', (
   });
   assert.equal(bare.severity, 'media');
   assert.equal(bare.measure, undefined);
+});
+
+test('crítica visual e confirmações excluem todos os perfis que examinaram a tela na execução', async () => {
+  const codeExaminer = {provider: 'claude', model: 'modelo-codigo', accountId: randomUUID(), profileId: randomUUID()};
+  const visualExaminer = {provider: 'claude', model: 'modelo-visual', accountId: randomUUID(), profileId: randomUUID()};
+  const reviewerSeat = {provider: 'claude', model: 'modelo-revisor', accountId: randomUUID(), profileId: randomUUID()};
+  const visualScores = [
+    'hierarquia', 'tipografia', 'cor', 'ritmo', 'grade', 'densidade', 'componentes', 'marca', 'polimento',
+  ].map(axis => ({axis, score: axis === 'marca' ? 3 : 9, region: 'topo', suggestion: 'Trocar gradiente por #1b1917.'}));
+  const reviewOptions: (DesignReserveOptions | undefined)[] = [];
+  let specialistCalls = 0;
+
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [screen],
+    checklist: loadDesignChecklist().slice(0, 1),
+    rawFindings: [],
+    scoreVisual: true,
+    worker: {
+      async run(workerCall) {
+        if (workerCall.task.startsWith('Pedido de exame.')) {
+          assert.equal(workerCall.profileId, codeExaminer.profileId);
+          return JSON.stringify({
+            kind: 'exame',
+            filesRead: [screen.file],
+            checklist: ['DESIGN-WCAG-143-CONTRASTE'],
+            findings: [{
+              title: 'Contraste baixo',
+              severity: 'media',
+              file: screen.file,
+              line: 2,
+              scenario: 'Texto claro',
+              suggestion: 'Usar #1b1b1b',
+              cwe: null,
+              reference: 'WCAG-1-4-3',
+              snippet: 'color:#777',
+            }],
+          });
+        }
+        if (workerCall.task.startsWith('Pedido de crítica visual do revisor.')) {
+          assert.equal(workerCall.profileId, reviewerSeat.profileId);
+          return JSON.stringify({kind: 'visual', scores: visualScores});
+        }
+        if (workerCall.task.startsWith('Pedido de crítica visual.')) {
+          assert.equal(workerCall.profileId, visualExaminer.profileId);
+          return JSON.stringify({kind: 'visual', scores: visualScores});
+        }
+        if (workerCall.task.startsWith('Pedido de confirmação.')) {
+          assert.equal(workerCall.profileId, reviewerSeat.profileId);
+          return JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'Confirmado.', proof: 'trecho'});
+        }
+        throw new Error(`unexpected task: ${workerCall.task}`);
+      },
+    },
+    reserve: async (role, _avoidProvider, options) => {
+      if (role === 'specialist') {
+        specialistCalls += 1;
+        const base = specialistCalls === 1 ? codeExaminer : visualExaminer;
+        return {...base, grantId: randomUUID()};
+      }
+      reviewOptions.push(options);
+      assert.equal(options?.avoidProfileIds?.includes(codeExaminer.profileId), true);
+      assert.equal(options?.avoidProfileIds?.includes(visualExaminer.profileId), true);
+      assert.equal(options?.avoidAccountIds?.includes(codeExaminer.accountId), true);
+      assert.equal(options?.avoidAccountIds?.includes(visualExaminer.accountId), true);
+      return {...reviewerSeat, grantId: randomUUID()};
+    },
+    release: async () => {},
+  });
+
+  // 1) confirmação do achado de código, 2) crítica visual do revisor, 3) confirmação do achado visual
+  assert.equal(reviewOptions.length, 3);
+  assert.equal(result.confirmations.length, 2);
+  assert.equal(result.visual.length, 1);
 });

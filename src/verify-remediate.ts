@@ -27,7 +27,18 @@ const CweToken = /^CWE-\d{1,5}$/;
 const AsvsToken = /^ASVS(?:-\d+){1,4}$/;
 const EXCERPT_LIMIT = 4000;
 
-type OpenFinding = {id: string; status: string; file: string; line: number | null; title: string; reference: string | null; severity: string; snippet: string};
+type OpenFinding = {
+  id: string;
+  status: string;
+  file: string;
+  line: number | null;
+  title: string;
+  reference: string | null;
+  severity: string;
+  snippet: string;
+  examinerProfileId: string | null;
+  examinerAccountId: string | null;
+};
 type ReviewerCall = VerifyWorkerCall & {reviewerProvider?: unknown; reviewerAccountId?: unknown; reviewerSessionId?: unknown};
 export type HighReview = {
   status: 'descartado' | 'confirmado';
@@ -187,13 +198,23 @@ async function projectRepo(client: pg.PoolClient, projectId: string): Promise<st
   return row ? String(row.repo) : null;
 }
 
+function optionalUuid(value: unknown): string | null {
+  return typeof value === 'string' && Uuid.safeParse(value).success ? value : null;
+}
+
 async function loadFindings(client: pg.PoolClient, runId: string, ids: readonly string[], eligibleOnly: boolean): Promise<OpenFinding[]> {
   const coveredRows = (await client.query('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runId])).rows as {file: string}[];
   const covered = new Set(coveredRows.map(row => String(row.file)));
   const rows = (await client.query(
-    'SELECT achado_id, status, file, line, severity, payload FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])',
+    `SELECT achado_id, status, file, line, severity, payload,
+      examiner_profile_id::text AS examiner_profile_id,
+      examiner_account_id::text AS examiner_account_id
+     FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])`,
     [runId, ids],
-  )).rows as {achado_id: string; status: string; file: string; line: number | null; severity?: unknown; payload: unknown}[];
+  )).rows as {
+    achado_id: string; status: string; file: string; line: number | null; severity?: unknown; payload: unknown;
+    examiner_profile_id?: unknown; examiner_account_id?: unknown;
+  }[];
   const byId = new Map(rows.map(row => [String(row.achado_id), row]));
   return ids.map(id => {
     const row = byId.get(id);
@@ -209,6 +230,8 @@ async function loadFindings(client: pg.PoolClient, runId: string, ids: readonly 
       reference: closedReference(row.payload),
       severity: severityOf(row.severity, row.payload),
       snippet: textField(row.payload, 'snippet'),
+      examinerProfileId: optionalUuid(row.examiner_profile_id),
+      examinerAccountId: optionalUuid(row.examiner_account_id),
     };
   });
 }
@@ -332,7 +355,19 @@ export function highFindingCloses(input: {
   return proof || agreed;
 }
 
-async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt: string, intentId: string, avoid?: readonly string[]): Promise<HighReview> {
+async function reviewFinding(
+  worker: VerifyWorker,
+  finding: OpenFinding,
+  excerpt: string,
+  intentId: string,
+  avoid?: {avoidProviders?: readonly string[]; avoidAccounts?: readonly string[]},
+): Promise<HighReview> {
+  const avoidProfiles = finding.examinerProfileId ? [finding.examinerProfileId] : [];
+  const avoidAccounts = uniqueIds([
+    ...(finding.examinerAccountId ? [finding.examinerAccountId] : []),
+    ...(avoid?.avoidAccounts ?? []),
+    ...(avoid?.avoidProviders ?? []),
+  ].filter(id => Uuid.safeParse(id).success)).slice(0, 8);
   const call: ReviewerCall = VerifyWorkerCall.parse({
     role: 'reviewer',
     provider: 'recheck',
@@ -344,7 +379,9 @@ async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt
     task: recheckTask(finding, excerpt),
     repo: 'sem-repositorio',
     writePaths: [],
-    ...(avoid && avoid.length ? {avoidProviders: [...avoid]} : {}),
+    ...(avoid?.avoidProviders?.length ? {avoidProviders: [...avoid.avoidProviders]} : {}),
+    ...(avoidProfiles.length ? {avoidProfiles} : {}),
+    ...(avoidAccounts.length ? {avoidAccounts} : {}),
   });
   const verdict = parseVerdict(await worker.run(call));
   return {
@@ -667,7 +704,8 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
     if (finding.severity !== 'alta') {
       status = first.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto';
     } else {
-      const second = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId, avoidAccount(first.accountId));
+      const avoid = avoidAccount(first.accountId);
+      const second = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId, avoid ? {avoidProviders: avoid, avoidAccounts: avoid} : undefined);
       const discarded = first.status === 'descartado' || second.status === 'descartado';
       const gone = excerpt.seen && discarded ? await snippetGone(loaded.repo, finding, loaded.run.commitId) : false;
       status = highFindingCloses({seen: excerpt.seen, snippetGone: gone, first, second}) ? 'fechado' : 'reaberto';

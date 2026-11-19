@@ -54,6 +54,8 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
   avoidAccounts: z.array(Id).max(8).optional(),
   /** Specific profile in this role's chain to try first. */
   preferredProfileId: Id.optional(),
+  /** Ordered prepared profiles prioritized over avoidAccounts fallback while still preferring non-avoided accounts among them. */
+  preferredProfiles: z.array(Id).max(20).optional(),
   /** Profiles excluded for this reservation (never fallen back to). */
   avoidProfiles: z.array(Id).max(20).optional(),
   /** Restrict selection to profiles on this provider (never fallen back to another). */
@@ -314,8 +316,13 @@ export class Capacity {
         [request.contextId,request.role,context.capacity_policy_revision])).rows[0]?.profile_id;
       const regular = preferred && chain.regular.includes(preferred) ? [preferred,...chain.regular.filter(p=>p!==preferred)] : chain.regular;
       const baseIds = [...regular,...chain.emergency];
-      const ids = request.preferredProfileId && baseIds.includes(request.preferredProfileId)
-        ? [request.preferredProfileId, ...baseIds.filter(p => p !== request.preferredProfileId)]
+      const preferredOrder = [
+        ...(request.preferredProfileId ? [request.preferredProfileId] : []),
+        ...(request.preferredProfiles ?? []),
+      ].filter((id, index, all) => baseIds.includes(id) && all.indexOf(id) === index);
+      const preferredSet = new Set(preferredOrder);
+      const ids = preferredOrder.length > 0
+        ? [...preferredOrder, ...baseIds.filter(p => !preferredSet.has(p))]
         : baseIds;
       const loaded = await this.chainFacts(c, ids, context.project_id);
       // Saturation is a later gate. This path never writes quota and never leaves the chain.
@@ -337,7 +344,13 @@ export class Capacity {
         && !(request.provider&&row.provider!==request.provider)
         && !request.avoidProfiles?.includes(row.profileId)
         && row.accountId && row.maxConcurrent != null;
-      const choice = loaded.find(row => usable(row) && !request.avoidAccounts?.includes(row.accountId!)) ?? loaded.find(usable);
+      const preferredChoice = preferredSet.size > 0
+        ? (loaded.find(row => preferredSet.has(row.profileId) && usable(row) && !request.avoidAccounts?.includes(row.accountId!))
+          ?? loaded.find(row => preferredSet.has(row.profileId) && usable(row)))
+        : undefined;
+      const choice = preferredChoice
+        ?? loaded.find(row => usable(row) && !request.avoidAccounts?.includes(row.accountId!))
+        ?? loaded.find(usable);
       if (!choice?.accountId || choice.maxConcurrent == null) {
         const exclusions = orderedProfileExclusions(loaded,{personal});
         await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY',exclusions=$2::jsonb WHERE attempt_id=$1",[request.attemptId, JSON.stringify(exclusions)]);
@@ -433,7 +446,7 @@ export class Capacity {
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'reserved',$14::jsonb) RETURNING *`,
         [randomUUID(),request.attemptId,request.intentId,request.contextId,authority.epoch,selected.account_id,selected.id,request.role,
           context.project_id,context.capacity_policy_revision,config.revision,hash,emergency,JSON.stringify(selection)])).rows[0];
-      if (!emergency && !request.preferredProfileId && !request.avoidProfiles?.length) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
+      if (!emergency && !request.preferredProfileId && !request.preferredProfiles?.length && !request.avoidProfiles?.length) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,
         [request.contextId,request.role,selected.id,context.capacity_policy_revision]);
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.reserved',$2)", [request.contextId,{grantId:grant.id,attemptId:request.attemptId,profileId:selected.id,emergency}]);
