@@ -70,6 +70,16 @@ test('publicação interrompida e atualizações concorrentes reconciliam com o 
     const corrected = JSON.parse(await readFile(file, 'utf8')).achados[0];
     assert.equal(corrected.severity, 'alta');
     assert.equal(corrected.proof, achado.proof);
+    await rename(file, file + '.original');
+    await writeFile(file, '{"achados":');
+    await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
+    assert.deepEqual(await listModuleReports(join(root,'data'), projectId), []);
+    await rm(file);
+    await mkdir(file);
+    await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
+    assert.deepEqual(await listModuleReports(join(root,'data'), projectId), []);
+    await rm(file, {recursive:true});
+    await rename(file + '.original', file);
     const coverageFile = join(report.directory, 'cobertura.md');
     await rename(coverageFile, coverageFile + '.saved');
     await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
@@ -107,6 +117,10 @@ test('descarte de diretório legado incompleto com prefixo ambíguo preserva os 
     await ledger.pool.query("UPDATE ac_verify_runs SET report_prepared_dir=NULL, report_dir='pending' WHERE id=$1", [secondId]);
     await assert.rejects(discardModuleReport(ledger, principal, dataDirectory, projectId, 'qa', firstId), /VERIFY_REPORT_INTEGRITY/);
     assert.match(await readFile(join(old, 'mapa.md'), 'utf8'), /Mapa/);
+    assert.match(await readFile(join(second.directory, 'run.json'), 'utf8'), new RegExp(secondId));
+    await ledger.pool.query('UPDATE ac_verify_runs SET report_dir=$2 WHERE id=$1', [secondId, second.directory]);
+    await discardModuleReport(ledger, principal, dataDirectory, projectId, 'qa', firstId);
+    await assert.rejects(readFile(join(old, 'mapa.md')), {code:'ENOENT'});
     assert.match(await readFile(join(second.directory, 'run.json'), 'utf8'), new RegExp(secondId));
   });
 });

@@ -1468,6 +1468,7 @@ async function readTextInside(root: string, path: string, missingCode: 'VERIFY_A
     if (isErrno(error, 'ELOOP') || isErrno(error, 'ENOTDIR')) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
     throw error;
   }
+  if (info.isDirectory() && await realpath(lexical) === lexical) throw new Refusal(missingCode, missingCode === 'VERIFY_ACHADO_NOT_FOUND' ? 404 : 400);
   if (info.isSymbolicLink() || !info.isFile()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   const real = await realpath(lexical);
   if (real !== lexical) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
@@ -1506,16 +1507,17 @@ async function loadModuleReports(
       const parsed = ModuleReportSummary.safeParse(JSON.parse(text));
       if (!parsed.success || parsed.data.directoryName !== name) continue;
       if (module !== undefined && parsed.data.module !== module) continue;
-      const required = ['mapa.md', 'cobertura.md', 'achados.json', 'bruto/achados-brutos.json'];
-      if (parsed.data.module === 'documentacao') {
-        const rawText = await readTextInside(path, join(path, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID');
-        const raw = validateModuleCollectorObject(JSON.parse(rawText), 'documentacao');
-        required.push(...requiredModuleArtifacts(raw.coverage));
-      }
+      const rawText = await readTextInside(path, join(path, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID');
+      const raw = validateModuleCollectorObject(JSON.parse(rawText), parsed.data.module);
+      const findingsText = await readTextInside(path, join(path, 'achados.json'), 'VERIFY_REPORT_INVALID');
+      const findings = z.object({achados: z.array(Achado).max(999)}).parse(JSON.parse(findingsText));
+      const required = ['README.md', 'mapa.md', 'cobertura.md', ...requiredModuleArtifacts(raw.coverage),
+        ...findings.achados.map(item => join('achados', item.id + '.md'))];
       for (const file of required) {
         const fullPath = join(path, file);
         const info = await lstat(fullPath);
-        if (info.isSymbolicLink() || !info.isFile() || await realpath(fullPath) !== fullPath) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+        if (info.isSymbolicLink() || await realpath(fullPath) !== fullPath) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+        if (!info.isFile()) throw new Refusal('VERIFY_REPORT_INVALID', 400);
       }
       found.push({directory: path, summary: parsed.data});
     } catch (error) {
@@ -2550,7 +2552,8 @@ async function removePersistedModuleReport(client: pg.PoolClient, projectDir: st
         const collision = await client.query(
           `SELECT 1 FROM ac_verify_runs own JOIN ac_verify_runs other ON other.project_id=own.project_id
            AND other.module=own.module AND left(other.id::text,8)=left(own.id::text,8)
-           WHERE own.id=$1 AND other.id<>own.id AND other.report_prepared_dir IS NULL LIMIT 1`, [row.id],
+           WHERE own.id=$1 AND other.id<>own.id AND other.report_prepared_dir IS NULL
+           AND other.report_dir='pending' LIMIT 1`, [row.id],
         );
         if (collision.rowCount) throw reportIntegrity();
       }
