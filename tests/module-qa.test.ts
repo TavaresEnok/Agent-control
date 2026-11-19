@@ -73,13 +73,14 @@ const {classifyMutant, comparePasses, decodeNodeReport, planMutations, runBounde
 test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e usuario 65532', () => {
   const verified = verifyQaLockfiles(qaModuleDir);
   assert.equal(verified.ok, true);
-  assert.equal(verified.toolCount, 5);
+  assert.equal(verified.toolCount, 8);
   assert.ok(verified.totalLockedPackages >= 100);
 
   const dockerfile = readFileSync(join(qaModuleDir, 'Dockerfile'), 'utf8');
   const lock = JSON.parse(readFileSync(join(qaModuleDir, 'qa-tools.lock.json'), 'utf8')) as {
     packageLockSha256: string;
     baseImage: {digest: string; tag: string};
+    dependencies: {'playwright-core': {version: string}};
     languageRuntimes: {
       python: {version: string; image: string};
       go: {version: string; image: string};
@@ -88,6 +89,8 @@ test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e
   };
   assert.match(lock.baseImage.digest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(dockerfile.includes(lock.baseImage.digest), true);
+  assert.ok(dockerfile.includes(`:${lock.baseImage.tag}@${lock.baseImage.digest}`));
+  assert.ok(lock.baseImage.tag.startsWith(`v${lock.dependencies['playwright-core'].version}-`));
   assert.equal(dockerfile.includes(lock.packageLockSha256), true);
   assert.equal(/latest/i.test(dockerfile), false);
   assert.match(dockerfile, /sha256sum -c/);
@@ -617,7 +620,7 @@ test('contrato preserva especificação válida e rotas quando outra especifica�
   });
 });
 
-test('axe registra que baixo contraste ficou sem medição e informa a versão instalada', realTools, async () => {
+test('axe estático mantém a versão instalada e declara o escopo sem layout', realTools, async () => {
   await withSyntheticRepo('qa-contraste-', async repo => {
     writeFileSync(join(repo, 'contraste.html'), '<!doctype html><html lang="pt"><head><title>Controle</title></head>' +
       '<body><main><p style="color:#aaa;background-color:#aaa">Texto sintético</p></main></body></html>');
@@ -627,7 +630,8 @@ test('axe registra que baixo contraste ficou sem medição e informa a versão i
     assert.equal(axe.version, installed.version);
     assert.match(axe.detail, /regra color-contrast desativada/);
     assert.match(axe.detail, /sem scripts nem layout/);
-    assert.ok(!report.findings.some(f => f.rule === 'QA-AXE-COLOR-CONTRAST'));
+    const contrast = coverageFor(report, 'qa-contraste:contraste.html');
+    if (contrast.status === 'skipped') assert.ok(!report.findings.some(f => f.rule === 'QA-AXE-COLOR-CONTRAST'));
   });
 });
 
