@@ -76,3 +76,12 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 01:44 UTC — C2-R4 iniciada em final-c2 por Terra ultra normal.
 - 19/11/2026 01:44 UTC — Matriz A1-R16 em b6c9cfa0: revisão independente por modelo distinto (Terra no código, Sol ultra normal em leitura). Nenhum defeito demonstrável no fallback ou na remoção da espera. A3-R3 recebida em 1869c6e3, com TypeScript e 3 testes focados do trabalhador; integração isolada d8460656 contém a R16 e está na fila de revisão ultra. A retirada solicitada usa um UUID explícito e valida o recibo de não execução.
 - 19/11/2026 01:45 UTC — Matriz C7 em dd977612, revisão independente por modelo distinto sobre a entrega Gemini. O Sol ultra identificou seis altos, onze médios e um baixo. O caminho de site estático pode bloquear o próprio servidor, e consultas, rotas e artefatos podem perder sua proveniência. C7-R2 preserva o laboratório local com rede externa desabilitada e exige medições atribuídas ao alvo certo.
+- 19/11/2026 01:45 UTC — C5-R2 entregue por Terra em 7a710656; aguardando a prova do gerente.
+- 19/11/2026 01:45 UTC — C6-R6 iniciada em final-c6-r2 por Terra ultra normal.
+- 19/11/2026 01:45 UTC — C-BASE-R3 entregue por Terra em 547676fd; aguardando a prova do gerente.
+- 19/11/2026 01:45 UTC — C-CLI-LAB-R4 iniciada em final-c-cli-lab por Terra ultra normal.
+- 19/11/2026 01:47 UTC — C6-R6 entregue por Terra em b639801d; aguardando a prova do gerente.
+- 19/11/2026 01:47 UTC — C7-R2 iniciada em final-c7 por Terra ultra normal.
+- 19/11/2026 01:47 UTC — C-CLI-LAB-R4 entregue por Terra em 73465026; aguardando a prova do gerente.
+- 19/11/2026 01:48 UTC — C2-R4 entregue por Terra em 66a637d6; aguardando a prova do gerente.
+- 19/11/2026 01:51 UTC — A1-R16 em b6c9cfa0 passou no TypeScript, em 237 arquivos da suíte oficial (86 excluídos pelo executor) e em 52 testes complementares. O backup A2 terminou em ispagent-antes-A2-20261119-014606, 525852508 bytes. Laboratório de design em andamento. C5-R2 passou a prova ponta a ponta pela CLI, 5/5, e o laboratório da imagem, 4 aprovados e 2 verificações avulsas opcionais omitidas. C6-R6 passou o laboratório da imagem, 1/1. C3-R4 recebeu três apontamentos médios do revisor Sol ultra. O build C9 encontrou uma incompatibilidade de plugin do ScanCode. Novas ordens abertas para C3, C9 e integração dos artefatos de documentação e dos caminhos protegidos.
