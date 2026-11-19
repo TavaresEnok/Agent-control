@@ -856,8 +856,10 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
     assert.match(result.row(63).detail, /primeira \(ausente\.mjs\) sem resolução/);
     assert.doesNotMatch(result.row(63).detail, /primeira \(a\.mjs:/);
     assert.deepEqual(result.findings.map(finding => finding.line), [2, 7]);
-    assert.equal(result.row(62).status, 'failed');
-    assert.equal(result.row(67).status, 'failed');
+    assert.equal(result.row(62).status, 'ok');
+    assert.match(result.row(62).detail, /vínculo sem prova nas três passadas/);
+    assert.equal(result.row(67).status, 'ok');
+    assert.match(result.row(67).detail, /vínculo sem prova nas três passadas/);
   });
 });
 
@@ -916,7 +918,10 @@ test('matriz e V8 concordam sobre operandos, spreads, chamadas opcionais e sombr
       assert.equal(result.row(id).status, 'skipped', String(id));
       assert.match(result.row(id).detail, /prova não medida: cobertura limitada/);
     }
-    for (const id of [73, 78, 80, 82]) assert.equal(result.row(id).status, 'failed', String(id));
+    for (const id of [73, 78, 80, 82]) {
+      assert.equal(result.row(id).status, 'ok', String(id));
+      assert.match(result.row(id).detail, /vínculo sem prova nas três passadas/);
+    }
     assert.deepEqual(result.findings.map(finding => finding.line), [3, 8, 10, 12]);
     assert.ok(result.staticFindings.some(finding => finding.line === 3 && /execução não medida/.test(finding.message)));
     assert.equal(result.staticRow(73).status, 'skipped');
