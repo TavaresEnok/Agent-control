@@ -368,6 +368,8 @@ Em `049b33c9`, os 34 testes passaram com a imagem de prontidão e as regras atua
 
 ### Prova do módulo 7
 
+Desempenho entrou no produto em `35417201`. No candidato `dab29e0d`, passaram 275 arquivos da suíte oficial, 52 testes complementares e 70 testes do laboratório, incluindo a CLI e o histórico das medições.
+
 A imagem fixada em `51d9a17b` passou em 68/68, incluindo o perfil de CPU e a CLI. Os controles de PNG e HTTP 404 em `ac495948` passaram na revisão estática por Sol 6.2 high.
 
 A imagem da fonte `b5efe37c` passou em 68/68 na repetição completa e foi fixada em `51d9a17b`. A primeira passagem perdeu duas medições de CPU e ficou registrada. As 12 provas do coletor com o PNG corrigido em `ac495948` também passaram.
@@ -381,6 +383,8 @@ Na integração `e4680e65`, passaram os três laboratórios físicos de desempen
 Após a revisão independente por modelo distinto de `e3527238`, a integração `4e90e9c5` passou nos 62 testes com ferramentas físicas, na comparação entre execuções da CLI e na interrupção de conexão PostgreSQL bloqueada.
 
 ### Prova do módulo 8
+
+Documentação entrou em `cfb05729`. O candidato `160dba62` passou nos 275 arquivos da suíte, nos 52 testes complementares e em 46 testes de ferramentas, integridade de artefatos e CLI.
 
 Em `ba10a9b4`, o laboratório e a CLI passaram em 42/42. O parecer sobre `44ed392a` conferiu a proveniência da reflexão de módulo ambiente e o controle de posição independente.
 
