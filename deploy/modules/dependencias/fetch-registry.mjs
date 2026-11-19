@@ -66,7 +66,7 @@ export async function fetchRegistryVersion(pkg, version, options) {
   try {
     const metadata = await fetchRelease(pkg, version, options);
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
-      || typeof metadata.name !== 'string' || !semver.valid(metadata.version)) throw new Error('metadados de versão inválidos');
+      || typeof metadata.name !== 'string' || !metadata.name.trim() || !semver.valid(metadata.version)) throw new Error('metadados de versão inválidos');
     return metadata.name === pkg && metadata.version === version ? version : null;
   } catch (err) {
     if (err?.statusCode === 404) return null;
