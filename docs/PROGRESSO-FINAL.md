@@ -477,3 +477,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:38 UTC — Revisor encerrou C6-R9 em 2cafe62b (código 0). Gerente confere a entrega.
 - 19/11/2026 05:38 UTC — Revisão C-EXAME-MEDICOES iniciada por Sol high normal somente leitura em 1b42a859.
 - 19/11/2026 05:39 UTC — Revisão independente por modelo distinto de 2cafe62b encontrou possível falso positivo de backup em here-doc e falhas de cobertura de configuração local. C6-R10 trata os casos em análise passiva de arquivos.
+- 19/11/2026 05:40 UTC — Em 53a37821 a cobertura identifica explicitamente quando o daemon não tem a imagem fixada. Dois testes aprovaram a falha antes e durante a criação, um deles com Docker real e PostgreSQL. A imagem de desempenho com as correções do revisor em 9f22e01e entrou em reconstrução.
