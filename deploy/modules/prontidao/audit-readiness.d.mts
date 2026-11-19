@@ -8,6 +8,7 @@ export type CoverageRow = {
   version: string;
   status: ReadinessStatus;
   detail: string;
+  files?: string[];
 };
 
 export type FindingRow = {
