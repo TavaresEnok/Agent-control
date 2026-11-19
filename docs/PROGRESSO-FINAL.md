@@ -171,3 +171,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:40 UTC — Trabalho C2-R6 iniciado por Sol high normal em final-c2.
 - 19/11/2026 02:40 UTC — C7-R4 chegou em 9a7018c4. Iniciei a construção da imagem e a ligação do coletor de desempenho à CLI no checkout de integração. C8-R4 passou novamente pela CLI pessoal da documentação, 6/6.
 - 19/11/2026 02:42 UTC — A hipótese da revisão C9 sobre reconstrução do índice do ScanCode foi conferida na imagem como UID 65532, com raiz somente leitura e /tmp novo: o pacote contém o cache de licença, get_index() carregou LicenseIndex e o cache do usuário ficou com zero bytes. C9-R3 foi atualizada com a prova. A integração de desempenho em 9fa35748 compilou no TypeScript e iniciou o laboratório Docker da imagem R4.
+- 19/11/2026 02:42 UTC — C7-R4 passou no laboratório das quatro ferramentas em conjunto sobre a imagem fixada. Iniciada a prova pela CLI pessoal de desempenho.
+- 19/11/2026 02:43 UTC — Revisor encerrou C4-R4 em cbf83ce3 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:43 UTC — Revisão C-BASE-R5 iniciada por Sol high normal somente leitura em b4668d56.
+- 19/11/2026 02:43 UTC — O comando público dos módulos já executa a correção. A reverificação por achado ainda estava acessível apenas pelo helper interno. Registrada a ordem para expor --reverificar com a mesma autoridade do exame e confirmação em provedor distinto, depois da ligação da CLI ao transporte de texto.
