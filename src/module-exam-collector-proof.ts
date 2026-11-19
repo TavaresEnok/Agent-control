@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {posix} from 'node:path';
 import {digest} from './contracts.ts';
 import type {VerificationModule} from './ledger.ts';
@@ -23,7 +24,7 @@ export const collectorQuestions = {
   'relative-import-cycle': 'Quais imports relativos dos arquivos do mesmo snapshot fecham o ciclo apontado pelo Dependency Cruiser?',
   'ast-grep-express-del': 'Qual chamada direta de app.del ou router.del corresponde ao padrão de migração medido?',
   'sql-drop-column': 'Qual tabela e coluna aparecem no comando DROP COLUMN sinalizado pelo Squawk?',
-  'sql-historical-invariant': 'Qual SELECT inicia a verificação cujo resultado deixou de ser verdadeiro na restauração após a atualização?',
+  'sql-historical-invariant': 'Qual SELECT retornou true antes da atualização e deixou de retornar true depois, no mesmo banco restaurado?',
   'sql-query-mean-exceeded': 'Qual SELECT tem média acima do limiar de latência nas amostras do banco descartável?',
   'sql-hypothetical-index-savings': 'Qual tabela e coluna da consulta correspondem ao índice hipotético que reduziu o custo estimado?',
   'tls-certificate-option-false': 'Qual propriedade de objeto declara false para a validação de certificado TLS?',
@@ -36,10 +37,28 @@ export const collectorQuestions = {
 export type CollectorCriterion = keyof typeof collectorQuestions;
 export const collectorCriteria = Object.keys(collectorQuestions) as [CollectorCriterion, ...CollectorCriterion[]];
 
-type ExamCase = {criterion: CollectorCriterion; anchor: SourceAnchor; facts: string[]; reason: string;
+export const collectorReasonTemplates: Record<CollectorCriterion, string> = {
+  'qa-mutant-survived': 'A comparação {expressao} recebeu {1}. A medição registrou {2} testes aprovados com o mutante.',
+  'qa-v8-unexecuted-function': 'O V8 registrou zero execuções de {1} em cada uma das três passadas deste exame.',
+  'knip-unreached-export': 'O arquivo declara a função exportada {1}. O Knip o classificou como não alcançado a partir das entradas analisadas neste exame.',
+  'relative-import-cycle': 'Os imports {lista} fecham o ciclo que parte de {arquivo} no snapshot.',
+  'ast-grep-express-del': 'A chamada direta {1}.{2} corresponde ao padrão de migração do coletor.',
+  'sql-drop-column': 'A migração declara DROP COLUMN para {1}.{2} no comando localizado pelo Squawk.',
+  'sql-historical-invariant': 'No mesmo banco restaurado {1}, o SELECT retornou true antes da atualização e deixou de retornar true após a atualização.',
+  'sql-query-mean-exceeded': 'O SELECT localizado teve média de {3} ms em {2} amostras da consulta {1}. O limiar foi de {4} ms.',
+  'sql-hypothetical-index-savings': 'O índice hipotético em {1} ({2}) reduziu o custo estimado de {3} para {4} nas condições do ensaio.',
+  'tls-certificate-option-false': 'O objeto declara {1} com valor literal {2}.',
+  'cpu-own-time-exceeded': '{1} teve {2} ms de tempo próprio ({3}/{4} amostras) em uma chamada isolada. O limiar foi de {5} ms.',
+  'k6-route-p95-exceeded': 'A rota declarada {1} teve p95 de {3} ms em {5} requisições, acima do limiar de {4} ms.',
+  'typedoc-undocumented-export': 'A declaração exportada {1} consta do inventário TypeDoc e está sem JSDoc adjacente.',
+  'ort-declared-strong-copyleft': 'A dependência {1} declara {2} na entrada do lockfile processada pelo ORT.',
+};
+
+type ExamCase = {criterion: CollectorCriterion; anchor: SourceAnchor; facts: string[];
   rows: readonly ModuleToolCoverage[]; firstContextLine?: number; lastContextLine?: number;
   related?: {file: string; line: number; code: string; sourceDigest: string}[]};
 type CaseInput = {raw: ModuleRawFinding; context: ModuleExamCollectorContext; source: string;
+  wasExamined: (file: string, source: string) => boolean;
   relatedSources?: ReadonlyMap<string, string | null>};
 type CaseBuilder = (input: CaseInput) => ExamCase | null | undefined;
 
@@ -82,8 +101,7 @@ function qaMutant(input: CaseInput): ExamCase | undefined {
       && tokens[actual]?.text === rhs && tokens[actual + 1]?.text === ')' ? actual : null;
   });
   if (!anchor) return;
-  return {criterion: 'qa-mutant-survived', anchor, facts: [replacement, passed], rows: [row],
-    reason: `A comparação ${anchor.expression} recebeu ${replacement}. A medição registrou ${passed} testes aprovados com o mutante.`};
+  return {criterion: 'qa-mutant-survived', anchor, facts: [replacement, passed], rows: [row]};
 }
 
 function qaFunction(input: CaseInput): ExamCase | undefined {
@@ -112,8 +130,7 @@ function qaFunction(input: CaseInput): ExamCase | undefined {
   }
   const passes = [0, 4, 8].map(index => `ramos ${totals[index]}/${totals[index + 1]}, funções ${totals[index + 2]}/${totals[index + 3]}`);
   const publicRow = {...row, detail: 'V8 nas três passadas — ' + passes.join('; ')};
-  return {criterion: 'qa-v8-unexecuted-function', anchor: found.anchor, facts: [found.name, '0', '0', '0'], rows: [publicRow],
-    reason: `O V8 registrou zero execuções de ${found.name} em cada uma das três passadas deste exame.`};
+  return {criterion: 'qa-v8-unexecuted-function', anchor: found.anchor, facts: [found.name, '0', '0', '0'], rows: [publicRow]};
 }
 
 function knipFile(input: CaseInput): ExamCase | undefined {
@@ -123,8 +140,7 @@ function knipFile(input: CaseInput): ExamCase | undefined {
   const row = scopedRow(input, 'knip:file', row => row.detail.startsWith(prefix));
   const found = functionAnchor(source, raw.line, true);
   if (!row || !found || !/^nao_alcancado; problemas=[1-9]\d*$/.test(row.detail.slice(prefix.length))) return;
-  return {criterion: 'knip-unreached-export', anchor: found.anchor, facts: [found.name, 'nao_alcancado'], rows: [row],
-    reason: `O arquivo declara a função exportada ${found.name}. O Knip o classificou como não alcançado a partir das entradas analisadas neste exame.`};
+  return {criterion: 'knip-unreached-export', anchor: found.anchor, facts: [found.name, 'nao_alcancado'], rows: [row]};
 }
 
 function staticImport(source: string, line: number) {
@@ -155,7 +171,7 @@ function importCycle(input: CaseInput): ExamCase | undefined {
     const code = index === 0 ? source : relatedSources.get(file);
     const prefix = `arquivo=${file}; `;
     const row = scopedRow(input, 'dependency-cruiser:file', row => row.detail.startsWith(prefix));
-    if (!code || code.length > 16000 || !safeText(code) || !row
+    if (!code || code.length > 16000 || !safeText(code) || (index > 0 && !input.wasExamined(file, code)) || !row
       || !/^deps=[1-9]\d*; dependentes=[1-9]\d*; instabilidade=(?:n\/a|[01]\.\d\d); ciclo=sim; violacao_camada=(?:sim|nao)$/
         .test(row.detail.slice(prefix.length))) return;
     const candidates = code.split('\n').slice(0, 40).flatMap((_, position) => {
@@ -179,8 +195,7 @@ function importCycle(input: CaseInput): ExamCase | undefined {
     else related.push({file, line: edge.line, code: edge.anchor.expression, sourceDigest: digest(code)});
   }
   if (!firstAnchor) return;
-  return {criterion: 'relative-import-cycle', anchor: firstAnchor, facts: specifiers, rows, related,
-    reason: `Os imports relativos do snapshot fecham o ciclo ${chain.join(' → ')}.`};
+  return {criterion: 'relative-import-cycle', anchor: firstAnchor, facts: specifiers, rows, related};
 }
 
 function expressDel(input: CaseInput): ExamCase | undefined {
@@ -196,8 +211,7 @@ function expressDel(input: CaseInput): ExamCase | undefined {
   if (!found || raw.evidence !== `Revisão necessária: ${found.expression}`) return;
   const {anchor} = found;
   return {criterion: 'ast-grep-express-del', anchor, facts: [anchor.expression.split('.')[0]!, 'del'], rows: [row],
-    lastContextLine: found.lastLine,
-    reason: `A chamada direta ${anchor.expression.split('(')[0]} corresponde ao padrão de migração do coletor.`};
+    lastContextLine: found.lastLine};
 }
 
 function dropColumn(input: CaseInput): ExamCase | undefined {
@@ -221,8 +235,7 @@ function dropColumn(input: CaseInput): ExamCase | undefined {
     && diagnosticColumn !== sourceIndent + anchor.column + anchor.expression.search(/\bDROP\b/iu)) return;
   const table = names[1]!.replaceAll(' ', '');
   const column = names[2]!;
-  return {criterion: 'sql-drop-column', anchor, facts: [table, column], rows: [row],
-    reason: `A migração declara DROP COLUMN para ${table}.${column} no comando localizado pelo Squawk.`};
+  return {criterion: 'sql-drop-column', anchor, facts: [table, column], rows: [row]};
 }
 
 function historicalInvariant(input: CaseInput): ExamCase | undefined {
@@ -232,16 +245,18 @@ function historicalInvariant(input: CaseInput): ExamCase | undefined {
   if (!result) return;
   const database = result[1]!;
   const prefix = `pg_restore:${database}:${raw.file}: `;
-  const phase = 'após atualização';
-  const row = scopedRow(input, 'pg_restore', row => row.detail.startsWith(prefix + phase + ','));
+  const before = 'antes da atualização';
+  const after = 'após atualização';
+  const baseline = scopedRow(input, 'pg_restore', row => row.detail.startsWith(prefix + before + ','));
+  const updated = scopedRow(input, 'pg_restore', row => row.detail.startsWith(prefix + after + ','));
   const statement = sqlStatement(source, raw.line);
   const anchor = statement?.anchor(true);
-  if (!row || row.detail !== prefix + phase + ', invariante falhou' || !statement
+  if (!baseline || baseline.detail !== prefix + before + ', invariante preservado'
+    || !updated || updated.detail !== prefix + after + ', invariante falhou' || baseline.version !== updated.version || !statement
     || statement.count !== 1 || statement.tokens[0]?.toUpperCase() !== 'SELECT' || statement.tokens.length < 3
     || !anchor || !/^SELECT\s+\S/iu.test(anchor.expression)) return;
-  return {criterion: 'sql-historical-invariant', anchor, facts: [database, phase, 'falhou'], rows: [row],
-    lastContextLine: statement.lastLine,
-    reason: `O SELECT único da origem teve resultado diferente de true na verificação após a atualização de ${database}.`};
+  return {criterion: 'sql-historical-invariant', anchor, facts: [database, before, 'preservado', after, 'falhou'],
+    rows: [baseline, updated], lastContextLine: statement.lastLine};
 }
 
 function sqlMean(input: CaseInput): ExamCase | undefined {
@@ -252,12 +267,14 @@ function sqlMean(input: CaseInput): ExamCase | undefined {
   const row = scopedRow(input, 'pg_stat_statements', row => row.detail.startsWith(prefix));
   const statement = sqlStatement(source, raw.line);
   const anchor = statement?.anchor(true);
-  if (!row?.files?.includes(raw.file) || row.detail !== prefix + raw.evidence || !result || !anchor
+  // The collector hashes the exact SQL bytes it passes to PostgreSQL in this
+  // measurement. The server queryid is an opaque identifier from that run.
+  const sourceSha256 = createHash('sha256').update(source, 'utf8').digest('hex');
+  if (!row?.files?.includes(raw.file) || row.detail !== `${prefix}${raw.evidence} | SQL medido (sha256:${sourceSha256})` || !result || !anchor
     || !/^SELECT\s+\S/iu.test(anchor.expression) || statement?.count !== 1
     || !numeric(result[2]!) || Number(result[2]) <= 100) return;
   return {criterion: 'sql-query-mean-exceeded', anchor, facts: [result[1]!, '3', result[2]!, '100'], rows: [row],
-    lastContextLine: statement.lastLine,
-    reason: `O SELECT localizado teve média de ${result[2]} ms em três amostras da consulta ${result[1]}. O limiar foi de 100 ms.`};
+    lastContextLine: statement.lastLine};
 }
 
 function hypotheticalIndex(input: CaseInput): ExamCase | undefined {
@@ -281,8 +298,7 @@ function hypotheticalIndex(input: CaseInput): ExamCase | undefined {
   const column = result[4]!;
   if (query[1]!.replaceAll(' ', '') !== table || query[2] !== column || !numeric(before) || !numeric(after)
     || Number(before) < 100 || Number(after) >= Number(before) / 2) return;
-  return {criterion: 'sql-hypothetical-index-savings', anchor, facts: [table, column, before, after], rows: [row],
-    reason: `O índice hipotético em ${table} (${column}) reduziu o custo estimado de ${before} para ${after} nas condições do ensaio.`};
+  return {criterion: 'sql-hypothetical-index-savings', anchor, facts: [table, column, before, after], rows: [row]};
 }
 
 function tlsOption(input: CaseInput): ExamCase | undefined {
@@ -316,8 +332,7 @@ function tlsOption(input: CaseInput): ExamCase | undefined {
     return start + 2;
   }, true);
   if (!anchor) return;
-  return {criterion: 'tls-certificate-option-false', anchor, facts: ['rejectUnauthorized', 'false'], rows: [row],
-    reason: 'O objeto declara rejectUnauthorized com valor literal false.'};
+  return {criterion: 'tls-certificate-option-false', anchor, facts: ['rejectUnauthorized', 'false'], rows: [row]};
 }
 
 function cpuProfile(input: CaseInput): ExamCase | undefined {
@@ -337,8 +352,7 @@ function cpuProfile(input: CaseInput): ExamCase | undefined {
   const [, own, samples, total, limit] = evidence as unknown as [string, string, string, string, string];
   if (!numeric(own) || !numeric(limit) || Number(own) <= Number(limit) || Number(limit) <= 0
     || ![samples, total].every(value => Number.isSafeInteger(Number(value))) || Number(samples) > Number(total)) return;
-  return {criterion: 'cpu-own-time-exceeded', anchor: found.anchor, facts: [found.name, own, samples, total, limit], rows: [row],
-    reason: `${found.name} teve ${own} ms de tempo próprio (${samples}/${total} amostras) em uma chamada isolada. O limiar foi de ${limit} ms.`};
+  return {criterion: 'cpu-own-time-exceeded', anchor: found.anchor, facts: [found.name, own, samples, total, limit], rows: [row]};
 }
 
 function k6Latency(input: CaseInput): ExamCase | undefined {
@@ -370,8 +384,7 @@ function k6Latency(input: CaseInput): ExamCase | undefined {
   const anchor = key && json.anchor(key);
   if (!anchor || !associatedKey) return;
   return {criterion: 'k6-route-p95-exceeded', anchor, facts: [route, associated, p95, limit, measured[1]!], rows: [row, summary],
-    firstContextLine: Math.min(associatedKey.line, raw.line), lastContextLine: Math.max(associatedKey.line, raw.line),
-    reason: `A rota declarada ${route} teve p95 de ${p95} ms em ${measured[1]} requisições, acima do limiar de ${limit} ms.`};
+    firstContextLine: Math.min(associatedKey.line, raw.line), lastContextLine: Math.max(associatedKey.line, raw.line)};
 }
 
 function undocumentedFunction(input: CaseInput): ExamCase | undefined {
@@ -384,8 +397,7 @@ function undocumentedFunction(input: CaseInput): ExamCase | undefined {
   if (!details || Number(details[2]) >= Number(details[1]) || details[3]!.split(',').filter(name => name === found.name).length !== 1
     || raw.message !== `Símbolo público exportado "${found.name}" em ${raw.file} não possui documentação JSDoc/TSDoc.`) return;
   return {criterion: 'typedoc-undocumented-export', anchor: found.anchor, facts: [found.name, 'sem JSDoc'], rows: [row],
-    firstContextLine: Math.max(1, raw.line - 4),
-    reason: `A declaração exportada ${found.name} consta do inventário TypeDoc e está sem JSDoc adjacente.`};
+    firstContextLine: Math.max(1, raw.line - 4)};
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -414,8 +426,7 @@ function ortLicense(input: CaseInput): ExamCase | undefined {
     && candidate.path[1] === member.path[1] && candidate.path[2] === 'license');
   if (!anchor || !license || license.line > raw.line + 10 || !json.anchor(license)) return;
   return {criterion: 'ort-declared-strong-copyleft', anchor, facts: [member.path[1]!, expression], rows: [row],
-    lastContextLine: license.line,
-    reason: `A dependência ${member.path[1]} declara ${expression} na entrada do lockfile processada pelo ORT.`};
+    lastContextLine: license.line};
 }
 
 const rules: Record<VerificationModule, Record<string, CaseBuilder>> = {
@@ -451,7 +462,7 @@ export function buildCollectorReviewCase(input: CaseInput & {
   if (!tools.some(row => row.status === 'ok') || tools.some(row => row.status === 'failed')) return null;
   if (['qa', 'arquitetura', 'dependencias', 'prontidao', 'documentacao'].includes(input.module)
     && !isModuleExamScript(raw.file)) return null;
-  if (raw.file.length > 400 || !safeText(raw.file) || !sourceLine(source, raw.line)) return null;
+  if (raw.file.length > 400 || !safeText(raw.file) || !sourceLine(source, raw.line) || !input.wasExamined(raw.file, source)) return null;
   const built = rule(input);
   if (!built || built.facts.some(fact => fact.length > 400 || !safeText(fact))
     || !built.rows.every(row => tools.some(tool => tool.status === 'ok' && tool.version === row.version)
@@ -461,7 +472,14 @@ export function buildCollectorReviewCase(input: CaseInput & {
   const lastLine = lastContextLine ?? raw.line;
   const excerpt = source.split('\n').slice(firstLine - 1, lastLine).join('\n');
   if (excerpt.length > 4000) return null;
-  return {...validated, material: {
+  const {criterion, anchor, facts} = validated;
+  const reason = collectorReasonTemplates[criterion].replace(/\{(\d+|expressao|lista|arquivo)\}/gu, (_, field: string) => {
+    if (field === 'expressao') return anchor.expression;
+    if (field === 'lista') return facts.join(', ');
+    if (field === 'arquivo') return raw.file;
+    return facts[Number(field) - 1]!;
+  });
+  return {...validated, reason, material: {
     intentId: input.intentId, commit: context.commit, sourceDigest: digest(source), findingDigest: digest(raw),
     sourceContext: {firstLine, excerpt}, ...(related ? {relatedSources: related} : {}),
     records: rows.map(({tool, version, detail}) => ({tool, version, detail})),

@@ -17,6 +17,7 @@ import {
 import {
   assertVerificationModule,
   discardModuleReport,
+  moduleRemeasurementTarget,
   recheckModuleFindings,
   reconcileModuleReports,
   requestModuleCorrection,
@@ -28,7 +29,7 @@ import {
 import {composePersonalModuleExamRuntime, createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamRuntime} from './module-exam-native.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 
-const moduleActions = '[--corrigir <runId> <ACH-001...> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
+const moduleActions = '[--corrigir <runId> <ACH-001...> | --medir-correcao <runId> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
 const messages: Record<string, string> = {
   VERIFY_USAGE: `Uso: npm run personal:<modulo> -- <instalação.json> <projeto> ${moduleActions}`,
   PERSONAL_ACTIVATION_REQUIRED: 'O módulo de verificação só roda numa instalação pessoal.',
@@ -57,6 +58,7 @@ const messages: Record<string, string> = {
   VERIFY_FINDING_MISSING: 'Achado não encontrado ou não elegível para correção.',
   VERIFY_RUN_MISSING: 'Execução do módulo não encontrada neste projeto.',
   VERIFY_RUN_CONFLICT: 'A execução ou o commit mudou durante a reverificação.',
+  VERIFY_RECHECK_CHANGE_UNPROVEN: 'A medição requer um commit posterior ao commit da execução original.',
   VERIFY_RECHECK_FAILED: 'A reverificação falhou. Consulte o registro da execução.',
   VERIFY_RECHECK_PREVIOUS_PUBLICATION_PENDING: 'Há vereditos gravados com publicação pendente. Repita a seleção anterior de --reverificar para publicar o relatório.',
   STALE_MANAGER: 'A autoridade sobre o contexto do módulo expirou.',
@@ -72,11 +74,12 @@ const recheckGuidance: Record<string, string> = {
   MODULE_RECHECK_ORIGINAL_UNKNOWN: 'Recupere o relatório e a cobertura originais para identificar a origem do achado.',
   MODULE_RECHECK_SAME_COMMIT: 'Integre a correção e rode o módulo no novo commit.',
   MODULE_RECHECK_CHANGE_UNPROVEN: 'Confira a linhagem do commit e a alteração no ponto original do achado.',
-  MODULE_RECHECK_MODULE_PROOF_MISSING: 'Rode novamente o módulo no commit atual com a mesma origem e cobertura do ponto original.',
+  MODULE_RECHECK_MODULE_PROOF_MISSING: 'Use --medir-correcao com o ID original e confira a cobertura da ferramenta no commit atual.',
+  MODULE_RECHECK_MEASUREMENT_UNPROVEN: 'Confira a identidade do objeto, os registros por arquivo e o critério da regra nas duas revisões.',
   MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED: 'A regra ainda não dispõe de prova funcional de antes e depois.',
   MODULE_RECHECK_FUNCTIONAL_ORIGIN_UNPROVEN: 'A medição original do módulo não comprova a condição funcional desta regra.',
   MODULE_RECHECK_FUNCTION_IDENTITY_UNPROVEN: 'A declaração original e a atual precisam identificar inequivocamente a mesma função exportada.',
-  MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE: 'O teste versionado precisa conter uma asserção numérica direta sobre a mesma função exportada.',
+  MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE: 'Confira o caminho da regressão e a asserção exigida para o objeto e a regra.',
   MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE: 'A execução isolada não produziu um resultado válido para a asserção nas duas revisões.',
   MODULE_RECHECK_ORIGINAL_TEST_PASSED: 'O teste de regressão já passou na revisão original.',
   MODULE_RECHECK_CORRECTED_TEST_FAILED: 'A mesma asserção ainda falhou na revisão corrigida.',
@@ -95,6 +98,7 @@ export function moduleCliFailureText(error: unknown, module?: VerificationModule
 export type ParsedPersonalModuleInvocation =
   | {kind: 'run'; module: VerificationModule; installationPath: string; projectToken: string; origin?: string}
   | {kind: 'discard'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
+  | {kind: 'measure'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
   | {kind: 'remediate' | 'recheck'; module: VerificationModule; installationPath: string; projectToken: string; runId: string; achadoIds: string[]};
 
 export function parsePersonalModuleArgs(
@@ -130,12 +134,12 @@ export function parsePersonalModuleArgs(
     }
     return {kind: 'run', module, installationPath, projectToken, origin};
   }
-  if (rest[0] === '--descartar') {
+  if (rest[0] === '--descartar' || rest[0] === '--medir-correcao') {
     const runId = rest[1];
     if (rest.length !== 2 || !runId || runId.startsWith('--') || !Id.safeParse(runId).success) {
       throw new Refusal('VERIFY_USAGE', 400);
     }
-    return {kind: 'discard', module, installationPath, projectToken, runId};
+    return {kind: rest[0] === '--descartar' ? 'discard' : 'measure', module, installationPath, projectToken, runId};
   }
   if (rest[0] === '--corrigir' || rest[0] === '--reverificar') {
     const runId = rest[1];
@@ -256,7 +260,7 @@ export async function runPersonalModuleCli(
         () => recheckAbort.abort(new Refusal('VERIFY_LEASE_LOST')));
       recheckAbort.signal.throwIfAborted();
     }
-    if (exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
+    if (parsed.kind !== 'measure' && exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
       await new Capacity(ledger).assignPolicy(project.owner, exam.contextId, exam.mainCapacityPolicyRevision);
     }
 
@@ -319,9 +323,12 @@ export async function runPersonalModuleCli(
           ? await probePublishedHttpsOrigins(authorizedOrigins, {...deps?.prontidaoProbeOptions, signal})
           : undefined;
       signal.throwIfAborted();
-      const commit = await readHead(project.repo);
+      const measurement = parsed.kind === 'measure' ? await moduleRemeasurementTarget(ledger, project.owner, authority!, {
+        projectId: project.id, module, runId: parsed.runId, repo: project.repo, signal,
+      }) : undefined;
+      const commit = measurement?.commit ?? await readHead(project.repo);
       signal.throwIfAborted();
-      const runExam = createPersonalModuleExam({
+      const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
         loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
       });
@@ -336,19 +343,19 @@ export async function runPersonalModuleCli(
         commit,
         runId,
         signal,
-        ...(deps?.image !== undefined ? {image: deps.image} : {}),
+        image: measurement?.image ?? deps?.image,
         ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
         ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
         ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),
         ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
         ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
         ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
-        async examinar(request) {
+        examinar: runExam && (async request => {
           const examined = await runExam(request);
           providerLimited = examined.coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT')
             || examined.findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT');
           return examined;
-        },
+        }),
       });
     };
     try {
