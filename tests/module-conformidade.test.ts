@@ -210,6 +210,91 @@ print(json.dumps(report.output()))
   assert.doesNotMatch(JSON.stringify(report), /SYNTHETIC_VALUE|request\.(cpf|email|phone)/);
 });
 
+test('C9 conserva origens nas uniões multilinha, nos declaradores e nas interpolações com regex', () => {
+  python(String.raw`
+import json
+import re
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+typed = """const payload: | string
+    | number = syntheticRow.cpf;
+{
+    fetch(url, payload);
+    const tag = [1, 2].join(","),
+          payload: string |
+              number = "SYNTHETIC_MARKER",
+          copy = payload;
+    fetch(url, copy);
+}
+fetch(url, payload);
+let neutral: string, first = syntheticRow.email
+    , second = first;
+logger.info(second);
+logger.info(neutral);"""
+lexical = r"""const payload = syntheticRow.email;
+logger.info(~#{/[}]/.test("}") ? payload : "SYNTHETIC_MARKER"}~);
+logger.info(~#{/[\]}/]/.test("}") ? syntheticRow["cpf"] : "public"}~);
+logger.info(syntheticRow?.[/* synthetic */ 'cpf']);
+logger.info(["cpf"], "syntheticRow.cpf");
+logger.info("syntheticRow['cpf']");
+logger.info(/logger.info(syntheticRow.cpf)/);
+// logger.info(syntheticRow["cpf"]);
+/* db.query("INSERT INTO synthetic (cpf) VALUES (?)", [syntheticRow.cpf]); */
+logger.info(~escaped \#{syntheticRow.cpf} and logger.info(syntheticRow.cpf)~);
+logger.info(6 / 2, syntheticRow[dynamicKey]);""".replace("~", chr(96)).replace("#{", chr(36) + "{")
+
+for text, file, expected in (
+    (typed, "synthetic.ts", [("NETWORK", 11, 2), ("LOG", 14, 12)]),
+    (lexical, "synthetic.js", [("LOG", 2, 1), ("LOG", 3, 3), ("LOG", 4, 4)]),
+):
+    report = Report()
+    inspect_fields(text, file, report)
+    output = report.output()
+    locations = [(row["rule"].removeprefix("PII_POSSIBLE_"), row["line"],
+                  int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+                 for row in output["findings"] if row["rule"].startswith("PII_POSSIBLE_")]
+    assert locations == expected, locations
+    assert output["coverage"][0]["status"] == "ok", output["coverage"]
+    assert not re.search(r"SYNTHETIC_MARKER|syntheticRow|logger\.info", json.dumps(output))
+`);
+});
+
+test('C9 reconhece parâmetros de escrita SQL e mantém exemplos, colunas e leituras sem aviso de destino', () => {
+  python(String.raw`
+import json
+import re
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+text = """const payload = syntheticRow['cpf'];
+db.query(
+    "INSERT INTO synthetic (cpf) VALUES (?)",
+    [payload],
+);
+pool.execute(~UPDATE synthetic SET email = ?~, [syntheticRow.email]);
+db.query("INSERT INTO synthetic (cpf) VALUES (?)", [syntheticRow.cpf]);
+db.query("INSERT INTO synthetic (cpf) VALUES (?)", ["SYNTHETIC_MARKER", "cpf"]);
+db.query("UPDATE synthetic SET cpf = 'SYNTHETIC_MARKER'");
+db.query("SELECT cpf FROM synthetic WHERE cpf = ?", [syntheticRow.cpf]);
+db.query("example INSERT INTO synthetic (cpf) VALUES (?)", [syntheticRow.cpf]);
+logger.info("db.query('INSERT INTO synthetic (cpf) VALUES (?)', [syntheticRow.cpf])");
+/* db.query("INSERT INTO synthetic (cpf) VALUES (?)", [syntheticRow.cpf]); */
+db.query("SELECT 'INSERT INTO synthetic' FROM synthetic", [payload]);
+db.query("INSERT INTO synthetic (cpf) VALUES (?)", ["SYNTHETIC_MARKER"], () => syntheticRow.cpf);""".replace("~", chr(96))
+report = Report()
+inspect_fields(text, "synthetic.ts", report)
+result = report.output()
+locations = [(row["rule"], row["line"], int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+             for row in result["findings"] if row["rule"].startswith("PII_POSSIBLE_")]
+assert locations == [("PII_POSSIBLE_STORAGE", 2, 1),
+                     ("PII_POSSIBLE_STORAGE", 6, 6),
+                     ("PII_POSSIBLE_STORAGE", 7, 7)], locations
+assert result["coverage"][0]["status"] == "ok", result["coverage"]
+assert not re.search(r"SYNTHETIC_MARKER|syntheticRow|INSERT INTO|UPDATE synthetic", json.dumps(result))
+`);
+});
+
 test('C9 preserva a origem já lida e informa cobertura parcial em chamadas acima do limite', () => {
   python(String.raw`
 import json
@@ -374,15 +459,24 @@ from lgpd_analyzer import MAX_TEXT_BYTES
 
 with TemporaryDirectory() as scratch:
     root = Path(scratch)
-    for name, data in {
+    samples = {
         "Dockerfile": b"FROM scratch",
         "config.cjs": b"module.exports = true",
         "binary.txt": b"\x00\xff",
         "oversize.txt": b"x" * (MAX_TEXT_BYTES + 1),
         "eligible.txt": b"SYNTHETIC_TEXT",
-    }.items():
+        "complete.ts": b"const payload = syntheticRow.cpf; fetch(url, payload);",
+        "partial.ts": b"""let payload = syntheticRow.cpf;
+{
+  const { tag } = fixture, payload = "SYNTHETIC_TEXT";
+  logger.info(payload);
+}
+db.query(command, [payload]);
+fetch(url, payload);""",
+    }
+    for name, data in samples.items():
         (root / name).write_bytes(data)
-    files = {name: root / name for name in ("Dockerfile", "config.cjs", "binary.txt", "oversize.txt", "eligible.txt", "missing.txt")}
+    files = {name: root / name for name in (*samples, "missing.txt")}
     analyzer = Mock()
     analyzer.analyze.return_value = []
     report, unavailable = Report(), Report()
@@ -390,7 +484,9 @@ with TemporaryDirectory() as scratch:
         inspect_privacy(files, "2.2.366", report)
     with patch("lgpd_analyzer.create_presidio", side_effect=RuntimeError("SYNTHETIC_TEXT")):
         inspect_privacy(files, "2.2.366", unavailable)
-    assert [call.kwargs["text"] for call in analyzer.analyze.call_args_list] == ["SYNTHETIC_TEXT"] * 2
+    assert [call.kwargs["text"] for call in analyzer.analyze.call_args_list] == [
+        samples[name].decode() for name in ("eligible.txt", "complete.ts", "partial.ts") for _ in range(2)
+    ]
 print(json.dumps([report.output(), unavailable.output()]))
 `));
   for (const report of reports) {
@@ -400,6 +496,21 @@ print(json.dumps([report.output(), unavailable.output()]))
     }
     assert.ok(report.coverage.some((row: {tool: string; status: string; detail: string}) =>
       row.tool === 'lgpd:file' && row.status === 'failed' && row.detail.startsWith('missing.txt |')));
+    const staticFiles = new Map<string, {status: string; detail: string}>(report.coverage
+      .filter((row: {tool: string}) => row.tool === 'lgpd-static:file')
+      .map((row: {status: string; detail: string}) => [row.detail.split(' | ')[0], row]));
+    assert.equal(staticFiles.get('eligible.txt')?.status, 'skipped');
+    assert.equal(staticFiles.get('complete.ts')?.status, 'ok');
+    assert.equal(staticFiles.get('partial.ts')?.status, 'failed');
+    assert.match(staticFiles.get('partial.ts')?.detail ?? '', /1 chamadas SQL sem comando literal analisável/);
+    assert.match(staticFiles.get('partial.ts')?.detail ?? '', /1 declaradores fora do rastreamento/);
+    const summary = report.coverage.find((row: {tool: string}) => row.tool === 'lgpd-static');
+    assert.equal(summary.status, 'failed');
+    assert.match(summary.detail, /2 arquivos.+1 com cobertura parcial/);
+    assert.match(summary.detail, /fluxo entre funções, análise de ramos ou chaves dinâmicas/);
+    assert.deepEqual(report.findings
+      .filter((row: {file: string; rule: string}) => row.file === 'partial.ts' && row.rule.startsWith('PII_POSSIBLE_'))
+      .map((row: {rule: string; line: number}) => [row.rule, row.line]), [['PII_POSSIBLE_NETWORK', 7]]);
   }
   for (const [index, status] of ['ok', 'failed'].entries()) {
     assert.ok(reports[index].coverage.some((row: {tool: string; status: string; detail: string}) =>

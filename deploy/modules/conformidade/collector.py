@@ -219,7 +219,7 @@ def inspect_npm(selected, declarations, report):
 
 def inspect_privacy(selected, version, report):
     texts = []
-    static_count = 0
+    static_count = static_errors = 0
     for file, path in selected.items():
         if path.suffix.lower() not in lgpd.TEXT_SUFFIXES:
             report.cover("lgpd:file", "1", "skipped", f"{file} | extensão fora do recorte de privacidade")
@@ -239,10 +239,18 @@ def inspect_privacy(selected, version, report):
             continue
         texts.append((file, text))
         if path.suffix.lower() in lgpd.CODE_SUFFIXES:
-            lgpd.inspect_fields(text, file, report)
+            static_errors += not lgpd.inspect_fields(text, file, report)
             static_count += 1
-    report.cover("lgpd-static", "1", "ok" if static_count else "skipped",
-                 f"{static_count} arquivos de código/config examinados por indícios sintáticos de origem e destino.")
+        else:
+            report.cover("lgpd-static:file", "1", "skipped", f"{file} | texto fora do recorte estático de código/config")
+    static_status = "failed" if static_errors else ("ok" if static_count else "skipped")
+    report.cover(
+        "lgpd-static", "1", static_status,
+        f"{static_count} arquivos de código/config examinados, {static_errors} com cobertura parcial. "
+        "JS/TS: vínculos simples, sem fluxo entre funções, análise de ramos ou chaves dinâmicas. "
+        "SQL: parâmetros em chamadas diretas com INSERT/UPDATE literal. "
+        "Outras extensões: heurística por linha.",
+    )
 
     if not texts:
         report.cover(PRESIDIO, version, "skipped", "Nenhum texto com extensão, codificação e tamanho elegíveis.")
