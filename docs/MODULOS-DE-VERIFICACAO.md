@@ -284,6 +284,8 @@ Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes c
 
 ### Prova do módulo 2
 
+Em `0d8198b6`, passaram a suíte oficial (266 arquivos), os 52 testes complementares e os 130 testes do laboratório. O laboratório da imagem construída de `8642613d` passou em 132/132 no host amd64, incluindo o controle real de versão incompatível de Go. A revisão da matriz e de herança de tabelas PostgreSQL motivou outra rodada antes da aplicação.
+
 O candidato `0d8198b6` contém o PostgreSQL 16.15 e o empacotamento de carga para amd64 e arm64. Os checksums das duas distribuições foram conferidos. O laboratório físico deste host exerce amd64. O candidato de revisão `8642613d` inclui o teste de privilégios efetivos, a classificação do Go e a gramática documentada da matriz.
 
 Na retomada de 19/11, a carga em `166659e9` passou em 11/11 com os binários fixados. Duas rotas sintéticas passaram de cerca de 252 ms com atraso para menos de 4 ms na recuperação. O banco em `786e6f0e` passou em 9/9 com pgTAP, dump e restauração. A revisão Sol 6.2 high identificou a versão vulnerável de PostgreSQL e uma limitação de arquitetura no empacotamento da carga. A promoção depende da correção e de novo laboratório conjunto.
@@ -298,6 +300,8 @@ Na versão `e245fca3`, passaram os 94 testes de QA com os adaptadores habilitado
 
 ### Prova do módulo 3
 
+A suíte oficial de `38e9984c` aprovou 267 arquivos, além dos 52 testes complementares e do laboratório da CLI. Os controles de descritores de `57888e81` passaram em revisão estática independente por Sol 6.2 high.
+
 Em `57888e81`, o teste passou com descritores distintos para as duas raízes e confirmou cada abertura de filho. O revisor Sol high verificou essa discriminação no diff. O gerente executou TypeScript e os 20 testes do coletor.
 
 A imagem da fonte `56177e90` passou nos 21 testes dirigidos, incluindo Hadolint. Em `86894260` o teste da travessia verifica cada raiz aberta. O aceite conjunto com QA continua em homologação.
@@ -307,6 +311,8 @@ A imagem da fonte `56177e90` passou nos 21 testes dirigidos, incluindo Hadolint.
 A prova da arquitetura passou nos 20 testes, com Hadolint e as dependências locais fixadas, e nos seis testes da CLI. A revisão independente por modelo distinto de `70a8c7cc` registrou duas observações baixas. Ao atingir o limite do inventário, a cobertura informa o primeiro caminho interrompido e que as entradas posteriores ficaram fora da medição. O teste de caminho relativo também aceita a âncora anterior.
 
 ### Prova do módulo 4
+
+O laboratório de `910c59cb` passou em 42/42, incluindo a CLI e o OpenRewrite. A revisão independente por Sol 6.2 high examinou o tratamento de metadados inválidos e indisponibilidade em `985c96b0`.
 
 Na integração `910c59cb`, 42/42 passaram sem pulos, incluindo os laboratórios, o runtime OpenRewrite e a CLI. A revisão Sol high de `985c96b0` encerrou sem achado no diff de registro npm.
 
@@ -320,6 +326,8 @@ Em `3e0bd99f`, 36 testes passaram com OpenRewrite offline e sua imagem fixada. A
 
 ### Prova do módulo 5
 
+A imagem fixada em `2b2a0a5e` passou em 21/21 com a CLI, banco de teste e exames sobre SQL original e substituído. A revisão de `77d9a1d4` aceitou a distinção entre uma linha demonstrada e a posição parcial de um bloco SQL.
+
 A CLI e as ferramentas passaram na integração de diagnóstico. No aceite acumulado, a prova de `pg_stat_statements` voltou a confirmar o SQL original e a deixar provável o SQL substituído depois que a fixture do examinador devolveu o vínculo de leitura em `994e6ba8`. A revisão do posicionamento em blocos continua em homologação.
 
 Na retomada, a imagem da fonte `840a02a6` passou nos 20 testes dirigidos. O controle SQL em `99817b08` verificou a identidade da consulta medida e três amostras de execução. A atribuição de diagnósticos às linhas de origem está em revisão.
@@ -331,6 +339,8 @@ Na amostra sintética de `a382ae45`, os 13 testes de banco passaram com PostgreS
 Em `a22546c0`, o laboratório mediu uma consulta com PostgreSQL real e vinculou o resultado aos bytes da fonte pelo SHA-256. O achado confirmado ficou persistido. A troca da consulta no Git com reapresentação da mesma medição produziu um achado provável. Os revisores deste ensaio são sintéticos.
 
 ### Prova do módulo 6
+
+A imagem fixada em `85f4c410` passou em 43/43 com CLI. A revisão independente de `3b9e0115` examinou a leitura de tags e literais YAML no Compose.
 
 O candidato `b2e62e6b`, fixado em `85f4c410`, passou em 43/43, incluindo imagem e CLI. A revisão de `3b9e0115` confirmou que uma tag YAML vazia impede conclusão sobre reinício e que o mesmo texto em uma string preserva o controle válido.
 
@@ -344,6 +354,8 @@ Em `049b33c9`, os 34 testes passaram com a imagem de prontidão e as regras atua
 
 ### Prova do módulo 7
 
+A imagem fixada em `51d9a17b` passou em 68/68, incluindo o perfil de CPU e a CLI. Os controles de PNG e HTTP 404 em `ac495948` passaram na revisão estática por Sol 6.2 high.
+
 A imagem da fonte `b5efe37c` passou em 68/68 na repetição completa e foi fixada em `51d9a17b`. A primeira passagem perdeu duas medições de CPU e ficou registrada. As 12 provas do coletor com o PNG corrigido em `ac495948` também passaram.
 
 A integração `26aa6baf` passou em 67/67, inclusive o laboratório e a CLI do histórico de medições com PostgreSQL. Os dispositivos sob teste são locais. A mudança posterior de recursos estáticos em `00bc71dd` segue em homologação.
@@ -356,6 +368,8 @@ Após a revisão independente por modelo distinto de `e3527238`, a integração 
 
 ### Prova do módulo 8
 
+Em `e02a6f2d`, a CLI e o laboratório passaram em 37/37. O ensaio verifica o símbolo, caminho e linha no relatório. A origem lexical em comentários está sob revisão no candidato seguinte.
+
 Na integração `2c21f573`, os 37 testes aprovaram imagem, ferramentas reais e CLI. O relatório reconheceu a função `src/billing.undocumentedCharge` no arquivo e na linha da fixture. O controle rejeitou o nome de outro módulo e a linha divergente.
 
 A fonte `782385cd` passou no laboratório da imagem. Em `7355c13c`, a atribuição de avisos documentais passou a distinguir caminhos ambíguos. Essa versão está em revisão independente por Sol 6.2 high.
@@ -367,6 +381,8 @@ A imagem de documentação fixada em `7e27197e` passou nos 21 testes com as ferr
 A rodada fixada em `bd0211ec` passou nos 25 testes de documentação, incluindo o tratamento de diretórios de comandos e a origem de arestas de Mermaid com frontmatter. As CLIs de documentação e conformidade passaram nos seis testes após essa integração.
 
 ### Prova do módulo 9
+
+O laboratório e a CLI da integração `30cab4eb` passaram em 36/36 com dados artificiais. A revisão de `52b078d2` identificou casos de perda de origem por efeito de chamada. Uma rodada adicional cobre esses casos.
 
 A integração `30cab4eb` contém a revisão de efeitos locais `52b078d2`. O rastreamento continua limitado à origem estática demonstrável; a homologação física da integração está em andamento.
 
