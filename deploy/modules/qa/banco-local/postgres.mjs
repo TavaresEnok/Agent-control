@@ -6,11 +6,13 @@ import {executionAllowed, runBoundedProcess} from '../execute-tests.mjs';
 
 const port = '5432';
 const binaries = '/usr/lib/postgresql/16/bin';
-const pgVersion = '160014';
+const pgVersion = '160015';
 const pgTapVersion = '1.3.2';
-export const bancoLocalVersion = 'PostgreSQL 16.14 / pgTAP 1.3.2';
+export const bancoLocalVersion = 'PostgreSQL 16.15 / pgTAP 1.3.2';
 const admin = 'qa_admin';
 const project = 'qa_project';
+const reader = 'qa_reader';
+const attestation = 'qa_attestation';
 const databases = ['fresh', 'previous', 'upgraded'];
 const tapLabel = 'invariante funcional';
 
@@ -20,6 +22,48 @@ export function parseTap(output) {
   if (result === `ok 1 - ${tapLabel}` && diagnostics.length === 0) return 'passed';
   if (result === `not ok 1 - ${tapLabel}` && diagnostics.every(line => line.startsWith('#'))) return 'failed';
   return 'invalid';
+}
+
+export async function setupPostgres(psql) {
+  await psql('postgres', [
+    `CREATE ROLE ${project} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
+    `CREATE ROLE ${reader} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
+    `GRANT pg_read_all_data TO ${reader} WITH INHERIT FALSE, SET TRUE`,
+    ...databases.map(db => `CREATE DATABASE ${db} OWNER ${project}`),
+    `CREATE DATABASE ${attestation} WITH TEMPLATE template0`,
+    `REVOKE ALL ON DATABASE ${attestation} FROM PUBLIC`,
+  ], admin);
+  const installed = await psql(attestation, [
+    'CREATE SCHEMA qa_tap',
+    'CREATE EXTENSION pgtap WITH SCHEMA qa_tap',
+    "SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pgtap'",
+  ], admin);
+  if (installed.trim() !== pgTapVersion) throw new Error('unexpected pgTAP version');
+}
+
+export async function attestPostgres(psql, db, predicate) {
+  const scalar = await psql(db, [
+    'BEGIN READ ONLY',
+    // A leitura termina com a transação, sem alterar ACLs de schemas ou tabelas.
+    'SET LOCAL ROLE pg_read_all_data',
+    'SET LOCAL search_path TO pg_catalog, public',
+    `PREPARE qa_scalar AS\n${predicate}`,
+    "SELECT result_types = ARRAY['pg_catalog.bool'::pg_catalog.regtype] " +
+      "FROM pg_catalog.pg_prepared_statements WHERE name = 'qa_scalar'",
+    'EXECUTE qa_scalar',
+    'ROLLBACK',
+  ], reader);
+  // Com uma única coluna booleana confirmada, exige exatamente uma linha não nula.
+  if (scalar !== 't\nt\n' && scalar !== 't\nf\n') return 'invalid';
+
+  return parseTap(await psql(attestation, [
+    'BEGIN',
+    'SET LOCAL search_path TO pg_catalog, qa_tap, pg_temp',
+    'SELECT qa_tap.plan(1)',
+    `SELECT qa_tap.ok(${scalar === 't\nt\n' ? 'TRUE' : 'FALSE'}, '${tapLabel}')`,
+    'SELECT * FROM qa_tap.finish()',
+    'ROLLBACK',
+  ], admin));
 }
 
 export function createLocalPostgres(repoDir) {
@@ -47,7 +91,9 @@ export function createLocalPostgres(repoDir) {
   }
 
   function connection(db, user = project) {
-    if (db !== 'postgres' && !databases.includes(db)) throw new Error('invalid database');
+    if (!databases.includes(db) && !(user === admin && (db === 'postgres' || db === attestation))) {
+      throw new Error('invalid database');
+    }
     return ['--host', directory, '--port', port, '--username', user, '--dbname', db];
   }
 
@@ -80,10 +126,7 @@ export function createLocalPostgres(repoDir) {
         continue;
       }
       if (version.trim() !== pgVersion) throw new Error('unexpected PostgreSQL version');
-      await psql('postgres', [
-        `CREATE ROLE ${project} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`,
-        ...databases.map(db => `CREATE DATABASE ${db} OWNER ${project}`),
-      ], admin);
+      await setupPostgres(psql);
       return;
     }
     throw new Error('local postgres unavailable');
@@ -109,36 +152,12 @@ export function createLocalPostgres(repoDir) {
     }
   }
 
-  async function assert(db, predicate) {
-    const installed = await psql(db, [
-      'BEGIN',
-      'CREATE SCHEMA qa_tap',
-      'CREATE EXTENSION pgtap WITH SCHEMA qa_tap',
-      `GRANT USAGE ON SCHEMA qa_tap TO ${project}`,
-      "SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pgtap'",
-      'COMMIT',
-    ], admin);
-    try {
-      if (installed.trim() !== pgTapVersion) throw new Error('unexpected pgTAP version');
-      return parseTap(await psql(db, [
-        'BEGIN',
-        'SET LOCAL search_path TO qa_tap, public',
-        'SELECT qa_tap.plan(1)',
-        `SELECT qa_tap.ok((\n${predicate}\n), '${tapLabel}')`,
-        'SELECT * FROM qa_tap.finish()',
-        'ROLLBACK',
-      ]));
-    } finally {
-      await psql(db, ['BEGIN', 'DROP EXTENSION pgtap', 'DROP SCHEMA qa_tap', 'COMMIT'], admin);
-    }
-  }
-
   return {
     start,
     stop,
     // O prefixo fixo torna -c uma consulta SQL, inclusive quando a fixture começa por barra invertida.
     sql: (db, sql) => psql(db, [`SET client_min_messages = warning;\n${sql}`]),
-    assert,
+    assert: (db, predicate) => attestPostgres(psql, db, predicate),
     async dump() {
       await run('pg_dump', [...connection('previous'), '--format=custom',
         '--no-owner', '--no-privileges', '--file', archive]);

@@ -117,13 +117,24 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
   const failure = [...start, logged, event('fail', 'TestTotal')];
   assert.equal(classifyTrial(baseline, run(1, [...failure, summary, event('fail')])).status, 'killed');
   assert.equal(run(1, [...failure, {...summary, OutputType: undefined}, event('fail')]).reason, 'go-test-execution');
-  const buildFailure = [event('build-fail'), event('fail')];
-  const compilerDiagnostic = {Action: 'build-output', Output: './arithmetic.go:3:14: invalid operation: division by zero\n'};
+  const buildId = `${pkg} [${pkg}.test]`;
+  const buildFailure = [{Action: 'build-fail', ImportPath: buildId}, {...event('fail'), FailedBuild: buildId}];
+  const buildOutput = (Output: string) => ({Action: 'build-output', ImportPath: buildId, Output});
+  const compilerDiagnostic = buildOutput('./arithmetic.go:3:14: invalid operation: division by zero\n');
+  const sourceWithLiteral = './arithmetic.go:3:14: cannot use "permission denied" as int value\n';
   const busyCompiler = 'go: fork/exec /go/pkg/tool/compile: resource temporarily unavailable\n';
   assert.equal(run(1, [compilerDiagnostic, ...buildFailure]).reason, 'go-build-failed');
+  assert.equal(run(1, [buildOutput(sourceWithLiteral), ...buildFailure]).reason, 'go-build-failed');
+  assert.equal(run(1, buildFailure, sourceWithLiteral).reason, 'go-build-failed');
+  assert.equal(run(1, [buildOutput('./arithmetic.go:3:14: cannot use "no required module provides package example.invalid" as int value\n'),
+    ...buildFailure]).reason, 'go-build-failed');
   assert.equal(run(1, buildFailure).reason, 'go-build-execution');
   assert.equal(run(1, [compilerDiagnostic, ...buildFailure], busyCompiler).reason, 'go-build-execution');
-  assert.equal(run(1, [{Action: 'build-output', Output: busyCompiler}, ...buildFailure]).reason, 'go-build-execution');
+  assert.equal(run(1, [compilerDiagnostic, buildOutput(busyCompiler), ...buildFailure]).reason, 'go-build-execution');
+  assert.equal(run(1, [buildOutput('./arithmetic.go:3:14: internal compiler error: synthetic\n'),
+    ...buildFailure]).reason, 'go-build-execution');
+  assert.equal(run(1, [compilerDiagnostic, ...buildFailure, {Action: 'build-fail', ImportPath: `${pkg}/other`}]).reason,
+    'go-build-execution');
   assert.equal(run(1, []).reason, 'go-test-execution');
   assert.equal(run(0, [...start, event('pass')]).reason, 'go-test-execution');
   assert.equal(run(1, [], 'module lookup disabled by GOPROXY=off').reason, 'offline-dependency');
@@ -281,33 +292,41 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
     assert.ok(interrupted.properties[0].examples > 0);
     assert.equal(interrupted.properties[1].status, 'pending');
 
-    // Mirror the runner layout in the image and give unittest only its coverage import path.
+    // Relocate the fixed image paths into the disposable fixture.
     const coveragePath = join(root, 'coverage-runtime');
     mkdirSync(coveragePath);
     cpSync(join(pythonDeps!, 'coverage'), join(coveragePath, 'coverage'), {recursive: true});
     const unitRunner = join(root, 'tools', 'python-test-runner.py');
-    cpSync(pythonUnitRunner, unitRunner);
+    const unitSource = readFileSync(pythonUnitRunner, 'utf8');
+    const imageDeps = '"/opt/qa-tools/mutacao-linguagens/python-deps"';
+    assert.ok(unitSource.includes(imageDeps));
+    writeFileSync(unitRunner, unitSource.replace(imageDeps, JSON.stringify(join(tools, 'python-deps')))
+      .replace('"/opt/qa-coverage"', JSON.stringify(coveragePath)));
     const unitPlan = join(root, 'plan.json');
-    const optionalTest = 'test_optional_hypothesis.py';
-    writeFileSync(join(project, optionalTest), [
-      'import unittest', 'try:', '    import hypothesis', 'except ModuleNotFoundError:', '    hypothesis = None',
-      'class OptionalDependency(unittest.TestCase):', '    @unittest.skipIf(hypothesis is None, "optional")',
-      '    def test_presence(self):', '        self.assertIsNotNone(hypothesis)', '',
+    const mixedTest = 'test_mixed.py';
+    writeFileSync(join(project, mixedTest), [
+      'import unittest', 'from hypothesis import given, strategies as st', 'from pytest import raises',
+      'from arithmetic import unused', 'class Mixed(unittest.TestCase):',
+      '    def test_uses_helper(self):', '        with raises(ValueError):', '            int("fixture")',
+      '@given(st.just(2))', 'def test_property(value):', '    assert unused(value, 2) == 4', '',
     ].join('\n'));
     writeFileSync(unitPlan, JSON.stringify({
-      files: [...files, 'test_unit.py', optionalTest], sourceFiles: [file], maxTests: 200, maxProfileBytes: 1024 * 1024,
+      files: [...files, 'test_unit.py', mixedTest], sourceFiles: [file], maxTests: 200, maxProfileBytes: 1024 * 1024,
     }));
     writeFileSync(path, source);
-    const unitRun = invoke(python!, ['-P', '-s', '-S', '-B', unitRunner, unitPlan, join(root, 'coverage.json')],
-      project, {HOME: root, TMPDIR: root, PYTHONPATH: coveragePath});
+    const coverageReport = join(root, 'coverage.json');
+    const unitRun = invoke(python!, ['-I', '-S', '-B', unitRunner, unitPlan, coverageReport],
+      project, {HOME: root, TMPDIR: root});
     const unitResult = JSON.parse(unitRun.output);
-    assert.equal(unitResult.unavailable, 1);
+    assert.equal(unitResult.unavailable, 0);
     assert.equal(unitResult.errors, 0);
+    assert.equal(unitResult.unsupported, 2);
     assert.deepEqual(unitResult.tests, [
       {file: 'test_unit.py', name: 'ArithmeticTest.test_total', status: 'passed'},
-      {file: optionalTest, name: 'OptionalDependency.test_presence', status: 'skipped'},
+      {file: mixedTest, name: 'Mixed.test_uses_helper', status: 'passed'},
     ]);
     assert.equal(unitResult.coverage.files, 1);
+    assert.ok(JSON.parse(readFileSync(coverageReport, 'utf8')).files[file].missing_lines.includes(7));
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
@@ -349,6 +368,9 @@ test('go-mutesting e go test reais em cópia temporária da fixture', {skip: !go
     const scope = await discover();
     assert.deepEqual(scope, {...readonly, mode: '-mod=vendor'});
     const runSuite = () => runGoSuite(run, project, root, cache, selection, scope);
+    const baselineEvents = await runSuite();
+    assert.deepEqual(baselineEvents.tests.map(({name, status}: {name: string; status: string}) => [name, status]),
+      [['TestTotal', 'passed']]);
     const plan = decodePlan(invoke(planner!, [file], project, {}), [file], () => source);
     assert.deepEqual(plan.edits.map((edit: Edit) => [edit.line, edit.before, edit.after]),
       [[3, '+', '-'], [4, '*', '/'], [5, '*', '/']]);
@@ -361,6 +383,8 @@ test('go-mutesting e go test reais em cópia temporária da fixture', {skip: !go
       ['killed', 'survived', 'not-run']);
     assert.equal(result.mutants.find(mutant => mutant.line === 5)?.reason, 'go-build-failed');
 
+    writeFileSync(path, source + '\nvar _ int = "permission denied"\n');
+    assert.deepEqual(await runSuite(), {reason: 'go-build-failed'});
     writeFileSync(path, source);
     writeFileSync(testPath, 'package arithmetic\nimport "testing"\nfunc TestAbort(t *testing.T) { panic("erro sintético") }\n');
     assert.deepEqual(await runSuite(), {reason: 'go-test-execution'});

@@ -531,10 +531,14 @@ function isSecretToken(token: string): boolean {
   });
 }
 
-async function independentVerifier(snapshot: string, module: VerificationModule, commit: string, exam: ModuleExamResult,
-  finding: ModuleExamResult['findings'][number], raw?: ModuleRawFinding, collectorReview?: ModuleExamCollectorReview): Promise<Achado['verifier']> {
+async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamResult['findings'][number],
+  collectorReview: ModuleExamCollectorReview, raw?: ModuleRawFinding): Promise<Achado['verifier']> {
+  const {snapshot, collector} = collectorReview;
+  const {module, commit} = collector;
   if (exam.mode !== 'exame' || finding.reviewCommit !== commit || finding.status === 'provavel'
     || !finding.verifier || !finding.binding || isProtectedLocation(finding.file)) return null;
+  const {binding: reviewBinding, decision, observation, proof, reviewReason, status} = finding;
+  if (!reviewReason || reviewReason !== finding.reason) return null;
   const coverage = exam.coverage.find(row => row.file === finding.file && row.status === 'lido');
   const examiner = coverage?.examiner;
   const verifier = finding.verifier;
@@ -546,9 +550,9 @@ async function independentVerifier(snapshot: string, module: VerificationModule,
   if (!located) return null;
   const {code} = await readModuleExamFile(located, finding.file);
   if (code === null) return null;
-  const binding = moduleExamReadBinding(coverage, module, finding.file, code, commit);
-  const evidence = binding ? moduleExamReviewEvidence(module, finding, code, raw, collectorReview, binding) : null;
-  if (!evidence || !hasModuleReviewProof(evidence, finding)) return null;
+  const binding = moduleExamReadBinding(coverage, collector, finding.file, code);
+  const evidence = binding ? moduleExamReviewEvidence(module, finding, code, raw, raw ? collectorReview : undefined, binding) : null;
+  if (!evidence || !hasModuleReviewProof(evidence, {binding: reviewBinding, decision, observation, proof, reason: reviewReason, status})) return null;
   return {provider: verifier.provider, model: verifier.model};
 }
 
@@ -1986,7 +1990,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           audited.evidence !== origin.evidence || audited.title !== origin.title || audited.severity !== origin.severity) {
           throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
         }
-        verifier = await independentVerifier(snapshot, input.module, input.commit, exam!, audited, finding, collectorReview);
+        verifier = await independentVerifier(exam!, audited, collectorReview, finding);
         status = verifier ? audited.status : 'provavel';
         if (verifier) {
           proof = localizedProof(audited.proof, audited.reason);
@@ -2024,7 +2028,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
       }
       await resolveInsideRepo(snapshot, judged.file);
-      const verifier = await independentVerifier(snapshot, input.module, input.commit, exam!, judged);
+      const verifier = await independentVerifier(exam!, judged, collectorReview);
       achados.push(Achado.parse({
         id: `ACH-${String(achados.length + 1).padStart(3, '0')}`, title: sanitizeText(judged.title), severity: judged.severity,
         status: verifier ? judged.status : 'provavel', verifier,
