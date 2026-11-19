@@ -251,3 +251,25 @@ test('laboratório real do módulo dependencias acha defeitos plantados e aprova
     await rm(noMetaScratch, {recursive: true, force: true});
   }
 });
+
+test('imagem de dependências aplica a receita de charset do OpenRewrite e mede o controle corrigido', {skip: !enabled}, async t => {
+  const image = await readPinnedModuleImage();
+  const dir = await mkdtemp(join(tmpdir(), 'ac-dependencias-java-'));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  await chmod(dir, 0o755);
+  const file = 'Demo.java';
+  const oldCall = 'java.nio.charset.Charset.forName("UTF-8")';
+  const newValue = 'java.nio.charset.StandardCharsets.UTF_8';
+  const source = 'class Demo {\n  java.nio.charset.Charset encoding() { return ' + oldCall + '; }\n}\n';
+  await writeFile(join(dir, file), source, {mode: 0o644});
+  const first = await runCollectorContainer(image, dir);
+  const finding = first.findings.find(row => row.tool === 'openrewrite' && row.file === file);
+  assert.equal(finding?.rule, 'charset-standard-utf8');
+  assert.equal(finding.line, 2);
+  assert.ok(first.coverage.some(row => row.tool === 'openrewrite' && row.status === 'ok' && row.detail.includes('achados=1')));
+  assert.equal(await readFile(join(dir, file), 'utf8'), source);
+  await writeFile(join(dir, file), source.replace(oldCall, newValue));
+  const control = await runCollectorContainer(image, dir);
+  assert.equal(control.findings.some(row => row.tool === 'openrewrite'), false);
+  assert.ok(control.coverage.some(row => row.tool === 'openrewrite' && row.status === 'ok' && row.detail.includes('achados=0')));
+});
