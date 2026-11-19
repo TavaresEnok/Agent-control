@@ -1263,3 +1263,7 @@ PAUSADO-COTA
 - 19/11/2026 22:21 UTC — Correção pront-viva recebida em 2bedbd92. Revisão Sol high somente leitura solicitada.
 - 19/11/2026 22:21 UTC — Imagem de prontidao construída e arquivada por digest em f2505040.
 - 19/11/2026 22:22 UTC — Valida a publicação quando o único arquivo está numa rota dinâmica. Ordem C-DOCUMENTACAO-VIVA-R4 em worktree separado conforme 43f1c664.
+- 19/11/2026 22:22 UTC — trabalho-C-DOCUMENTACAO-VIVA-R4 iniciado em final-doc-viva por terra high.
+- 19/11/2026 22:22 UTC — prontidao em f2505040 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 184, 'failed': 0, 'skipped': 7}; código do produto OK.
+- 19/11/2026 22:23 UTC — C-CONFORMIDADE-VIVA-R4 encerrado com código 0.
+- 19/11/2026 22:23 UTC — Correção c9-publicacao recebida em 8582cee2. Revisão Sol high somente leitura solicitada.
