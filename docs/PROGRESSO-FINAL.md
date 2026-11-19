@@ -494,3 +494,5 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:46 UTC — Trabalhador encerrou C8-R8 em 79d499e8 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:46 UTC — Trabalho C-EXAME-MEDICOES-R2 iniciado por Sol high normal em final-exame-medicoes.
 - 19/11/2026 05:47 UTC — O revisor de 6e5edfd1 identificou que uma diferença numérica pode ter causa diferente de falta de cobertura V8 e que uma decisão legada pode ser reutilizada sem o novo recibo. C-REVERIFICAR-R4 fica no mesmo ramo da ampliação, para corrigir os cinco achados depois da ordem em andamento. Documentação 79d499e8 recebida para reconstrução.
+- 19/11/2026 05:47 UTC — Testes complementares de c2-chromium-r5 em 1fd88007: 52 aprovados.
+- 19/11/2026 05:48 UTC — Bateria de QA em fcbffe1e passou em 69/69 sem saltos, incluindo os adaptadores reais, Chromium, mutação e CLI. Documentação com correções de manifesto e Mermaid passou nos 25 testes sem saltos. A inspeção do fluxo de correção mostrou que seleções de arquivos distintos ainda compartilhavam um pedido. Aberta C-CORRECAO-ESCOPO para o contrato por arquivo e por atualização de dependência.
