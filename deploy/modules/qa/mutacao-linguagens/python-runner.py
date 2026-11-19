@@ -69,6 +69,7 @@ def suite(mode, seed, files):
     import random
     import hypothesis
     import pytest
+    from hypothesis.errors import HypothesisException
 
     root = Path.cwd()
     allowed_files = set(files)
@@ -77,10 +78,12 @@ def suite(mode, seed, files):
     class PropertyLimit(Exception):
         pass
 
-    def assertion_failure(error):
+    def test_failure(error):
+        if isinstance(error, (ImportError, HypothesisException, PropertyLimit, pytest.UsageError)):
+            return False
         if isinstance(error, BaseExceptionGroup):
-            return all(assertion_failure(child) for child in error.exceptions)
-        return isinstance(error, (AssertionError, pytest.fail.Exception))
+            return all(test_failure(child) for child in error.exceptions)
+        return isinstance(error, (Exception, pytest.fail.Exception))
 
     class Report:
         def __init__(self):
@@ -159,8 +162,12 @@ def suite(mode, seed, files):
             report = (yield).get_result()
             record = self.tests[item.nodeid]
             if report.failed:
-                failure = call.excinfo and assertion_failure(call.excinfo.value)
-                record["status"] = "failed" if report.when == "call" and failure else "error"
+                observed_failure = (
+                    report.when == "call" and call.excinfo
+                    and (not record["property"] or record["examples"] > 0)
+                    and test_failure(call.excinfo.value)
+                )
+                record["status"] = "failed" if observed_failure else "error"
             elif report.skipped and record["status"] in ("pending", "passed"):
                 record["status"] = "skipped"
             elif report.when == "call" and report.passed:
@@ -170,12 +177,12 @@ def suite(mode, seed, files):
             if call.excinfo and isinstance(call.excinfo.value, ModuleNotFoundError):
                 self.unavailable = True
 
-    # The tool dependencies come first. Pytest receives no repository config or plugins.
+    # The tool dependencies come first. Load local conftest files within the copied root.
     sys.path.append(str(root))
     random.seed(seed)
     reporter = Report()
     args = [
-        "-c", "/dev/null", "--rootdir=.", "--noconftest", "--import-mode=importlib",
+        "-c", "/dev/null", "--rootdir=.", "--confcutdir=.", "--import-mode=importlib",
         "-p", "no:cacheprovider", "-p", "_hypothesis_pytestplugin",
         "--hypothesis-seed=" + str(seed), "-q", "-s", "--tb=no", "--",
         *("./" + file for file in files),

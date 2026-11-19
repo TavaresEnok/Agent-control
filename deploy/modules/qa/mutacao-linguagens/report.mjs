@@ -123,8 +123,8 @@ export function publishProperties(report, row, pathLabel) {
       ? [row(`${tool}-execucao`, version, 'failed', `falha operacional. ${reason}`)] : [],
     findings: falsified.slice(0, maxPropertyFindings).map(test => ({
       tool, rule: 'QA-PROPRIEDADE-FALSIFICADA', file: test.file, line: test.line, severity: 'alta',
-      message: 'Asserção de propriedade Hypothesis falsificada',
-      evidence: `Teste ${testIdentity(test, pathLabel)} reprovou por asserção após ${test.examples} chamadas à propriedade. Semente ${seed}`,
+      message: 'Propriedade Hypothesis falsificada',
+      evidence: `Teste ${testIdentity(test, pathLabel)} reprovou após ${test.examples} chamadas à propriedade. Semente ${seed}`,
     })),
   };
 }
