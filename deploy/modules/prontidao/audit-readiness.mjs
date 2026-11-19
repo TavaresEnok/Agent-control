@@ -664,8 +664,8 @@ export function auditRepositoryReadiness(repoRoot) {
         file: file.rel,
         line: idx >= 0 ? idx + 1 : 1,
         severity: 'alta',
-        message: 'Chave privada encontrada dentro do repositório.',
-        evidence: file.lines[idx] ?? 'BEGIN PRIVATE KEY',
+        message: 'Possível segredo em arquivo protegido.',
+        evidence: 'Localização informada pelo coletor; conteúdo protegido.',
       });
     }
 

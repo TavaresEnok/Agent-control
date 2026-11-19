@@ -360,8 +360,8 @@ export function parseGitleaksJson(text, repoRoot, fallbackFile) {
     file: row.File ?? row.file,
     line: row.StartLine ?? row.startLine ?? row.Line ?? row.line ?? 1,
     severity: 'alta',
-    message: row.Description ?? row.description ?? 'Possível segredo ou credencial exposta no repositório.',
-    evidence: `${row.RuleID ?? 'gitleaks'}: match em ${row.File ?? 'arquivo'}:${row.StartLine ?? 1} [REDACTED]`,
+    message: 'Possível segredo em arquivo protegido.',
+    evidence: 'Localização informada pelo coletor; conteúdo protegido.',
   }, repoRoot, fallbackFile));
 }
 
@@ -415,8 +415,8 @@ export function parseTrivyConfigJson(text, repoRoot, fallbackFile) {
         file: target,
         line: s.StartLine ?? 1,
         severity: mapSeverity(s.Severity ?? 'HIGH'),
-        message: s.Title ?? 'Segredo detectado pelo Trivy.',
-        evidence: `${s.RuleID ?? 'secret'} em ${target}:${s.StartLine ?? 1} [REDACTED]`,
+        message: 'Possível segredo em arquivo protegido.',
+        evidence: 'Localização informada pelo coletor; conteúdo protegido.',
       }, repoRoot, fallbackFile));
     }
   }
