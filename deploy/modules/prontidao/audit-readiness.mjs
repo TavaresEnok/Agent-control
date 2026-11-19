@@ -2265,11 +2265,15 @@ function postgresOperands(args) {
 }
 
 function isFindRetention(args, onIncomplete) {
-  const unary = new Set(['-name', '-iname', '-path', '-ipath', '-regex', '-iregex', '-type', '-user', '-group', '-perm', '-size', '-newer', '-mmin', '-atime', '-ctime', '-amin', '-cmin', '-maxdepth', '-mindepth', '-fprint', '-fprint0', '-fls', '-mtime']);
+  const patterns = new Set(['-name', '-iname', '-path', '-ipath']);
+  const ages = new Set(['-mtime', '-atime', '-ctime', '-mmin', '-amin', '-cmin']);
+  const otherOperands = new Set(['-regex', '-iregex', '-user', '-group', '-perm', '-size', '-newer', '-maxdepth', '-mindepth']);
+  const printOperands = new Set(['-printf', '-fprint', '-fprint0', '-fls', '-fprintf']);
   const flags = new Set(['-print', '-print0', '-depth', '-xdev', '-mount']);
   let i = 0;
   while (i < args.length && !/^(?:-|!|\()/.test(args[i])) i++;
   let age = false, action = false, valid = true, needTerm = true, relevant = false;
+  let ageCount = 0, typeCount = 0;
   while (i < args.length) {
     const token = args[i++];
     if (token === '-a' || token === '-and') {
@@ -2281,12 +2285,20 @@ function isFindRetention(args, onIncomplete) {
       relevant = true;
       if (age) action = true;
       else valid = false;
-    } else if (unary.has(token) || token === '-fprintf') {
+    } else if (patterns.has(token) || ages.has(token) || token === '-type' || otherOperands.has(token) || printOperands.has(token)) {
       const count = token === '-fprintf' ? 2 : 1;
       if (i + count > args.length) { valid = false; break; }
       const operand = args[i];
       i += count;
-      if (token === '-mtime' && /^\+\d+$/.test(operand)) age = true;
+      if (ages.has(token)) {
+        if (++ageCount > 1 || !/^[+-]?\d+$/.test(operand) || Number(operand) > 365000 || Number(operand) < -365000 || token !== '-mtime') valid = false;
+        if (token === '-mtime' && /^\+\d+$/.test(operand)) age = true;
+      } else if (token === '-type') {
+        if (++typeCount > 1 || !/^[bcdflps]$/.test(operand)) valid = false;
+      } else if (otherOperands.has(token) || printOperands.has(token)) {
+        // These predicates need operand semantics beyond the positive grammar.
+        valid = false;
+      }
     } else if (/^-(?:exec|execdir|ok|okdir)$/.test(token)) {
       const command = args[i];
       let terminated = false;
@@ -2353,21 +2365,36 @@ function classifyBackupOperation(binary, args, onIncomplete) {
   return {dump, backup, catalog, restore, rotation, pg};
 }
 
+// Keep only complete words and separators before an unfinished shell word.
+function malformedShellPrefix(command) {
+  let quote = '', escaped = false, wordStart = -1;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\" && quote !== "'") { if (wordStart < 0) wordStart = i; escaped = true; continue; }
+    if (quote) { if (ch === quote) quote = ''; continue; }
+    if (ch === "'" || ch === '"') { if (wordStart < 0) wordStart = i; quote = ch; continue; }
+    if (ch === '#' && wordStart < 0) break;
+    if (/[\s;|&<>]/.test(ch)) wordStart = -1;
+    else if (wordStart < 0) wordStart = i;
+  }
+  const prefix = quote || escaped ? command.slice(0, Math.max(0, wordStart)) : command;
+  return splitShellSegments(shellWords(prefix)?.words ?? []);
+}
+
 function malformedShellCandidate(command, kind) {
-  const first = /^\s*([^\s'"\\;|&<>]+)/.exec(command)?.[1];
-  if (!first) return false;
-  const binary = basename(first);
-  if (binary === 'npm' || binary === 'pnpm') {
-    const prefix = /^\s*[^\s]+\s+(?:run(?:-script)?\s+)?(personal:[\w-]+)(?=\s|$)/.exec(command);
-    if (prefix) {
-      const target = prefix[1];
-      return kind === 'backup' ? /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(target)
+  return malformedShellPrefix(command).some(segment => {
+    const binary = basename(segment[0]?.text ?? '');
+    const args = segment.slice(1).map(word => word.text);
+    if (binary === 'npm' || binary === 'pnpm') {
+      const target = npmScriptTarget(binary, args);
+      if (target) return kind === 'backup' ? /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(target)
         : kind === 'disk' ? target === 'personal:maintenance' : target === 'personal:watch';
     }
-  }
-  if (kind === 'backup') return /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
-  if (kind === 'disk') return /^(?:df|docker|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
-  return /^(?:alertmanager|npm|pnpm|node|curl|wget|logrotate|(?:ba|da|k|z)?sh)$/.test(binary);
+    if (kind === 'backup') return /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
+    if (kind === 'disk') return /^(?:df|docker|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
+    return /^(?:alertmanager|npm|pnpm|node|curl|wget|logrotate|(?:ba|da|k|z)?sh)$/.test(binary);
+  });
 }
 
 function isBackupCandidateSegment(segWords, depth = 0) {

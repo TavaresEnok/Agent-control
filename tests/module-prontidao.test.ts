@@ -2764,3 +2764,63 @@ test('R15: expressões completas e posições de opções e operandos', () => {
     for (const pillar of ['disco-memoria', 'alertas-logs']) assert.equal(coverage(shell, pillar)?.status, 'ok', pillar);
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
+
+
+test('R16: retenção conservadora e segmentos recuperáveis de shell malformado', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r16-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const audit = (line: string) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
+      return runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+    };
+    const coverage = (out: ReturnType<typeof audit>, pillar = 'backup-restauracao') => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`);
+    const has = (out: ReturnType<typeof audit>, rule: string) => out.findings.some(f => f.rule === rule);
+    for (const expr of ['-mtime +7 -delete -mtime invalido', '-mtime 0 -mtime +7 -delete', '-type invalido -mtime +7 -delete', '-mtime +7 -delete -type invalido', '-type f -type d -mtime +7 -delete', '-mtime +7 -delete -atime errado', '-size errado -mtime +7 -delete', '-mtime +999999999999999999999999 -delete']) {
+      const out = audit(`pg_dump db\nfind . ${expr}`);
+      assert.equal(coverage(out)?.status, 'failed', expr);
+      assert.doesNotMatch(coverage(out)?.detail ?? '', /retenção de backup identificada/, expr);
+    }
+    for (const expr of ['-mtime +7 -delete', '-type f -mtime +7 -delete', '-mtime +7 -delete -type d', '-name --help -mtime +7 -delete']) {
+      const out = audit(`pg_dump db\nfind . ${expr}`);
+      assert.equal(coverage(out)?.status, 'ok', expr);
+      assert.match(coverage(out)?.detail ?? '', /retenção de backup identificada/, expr);
+    }
+    for (const expr of ["-printf '-delete'", "-fprint '-delete'", "-fprintf '-delete' '-mtime'", "-exec echo '-delete' '{}' +"]) {
+      const out = audit(`pg_dump db\nfind . ${expr}`);
+      assert.equal(coverage(out)?.status, 'ok', expr);
+      assert.ok(has(out, 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), expr);
+    }
+    for (const body of ['npm --silent run personal:backup "', 'npm run "personal:backup" "']) {
+      const out = audit(`timeout -- 30s sh -c '${body}'`);
+      assert.equal(coverage(out)?.status, 'failed', body);
+      for (const pillar of ['disco-memoria', 'alertas-logs']) assert.equal(coverage(out, pillar)?.status, 'ok', body);
+    }
+    const mixed = audit(`timeout -- 30s sh -c 'npm run personal:backup ; df -P / "'`);
+    assert.equal(coverage(mixed)?.status, 'failed');
+    assert.equal(coverage(mixed, 'disco-memoria')?.status, 'failed');
+    assert.equal(coverage(mixed, 'alertas-logs')?.status, 'ok');
+    const raw = parseModuleCollectorOutput(JSON.stringify(mixed), {module: 'prontidao'});
+    mkdirSync(join(dir, 'reports'));
+    const report = await writeModuleReport({dataDirectory: join(dir, 'reports'), projectId: '11111111-1111-4111-8111-111111111111',
+      module: 'prontidao', runId: '33333333-3333-4333-8333-333333333333', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: raw.coverage, fileCoverage: [], achados: [], raw});
+    assert.equal(report.summary.toolFailures, raw.coverage.filter(c => c.status === 'failed').length);
+    assert.ok(report.summary.toolFailures >= 2);
+    const quoted = audit(`timeout -- 30s sh -c 'echo "texto ; df -P /'`);
+    assert.equal(coverage(quoted, 'disco-memoria')?.status, 'ok');
+    assert.ok(has(quoted, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'));
+    for (const [destination, unsafe] of [['/seguro/real.sql', false], ['/tmp/real.sql', true]] as const) {
+      const out = audit(`pg_dump -N '-falso' app > ${destination}`);
+      assert.equal(coverage(out)?.status, 'ok');
+      assert.match(coverage(out)?.detail ?? '', /Backup identificado/);
+      assert.equal(has(out, 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), unsafe);
+    }
+    const timeout = audit('timeout -vsTERM 30s df -P /');
+    assert.equal(coverage(timeout, 'disco-memoria')?.status, 'ok');
+    assert.match(coverage(timeout, 'disco-memoria')?.detail ?? '', /Rotina de disco identificada/);
+    assert.ok(has(audit("pg_dump '-?'"), 'PRONTIDAO-BACKUP-AUSENTE'));
+    assert.equal(coverage(audit('restic -r --help --verbose backup /srv'))?.status, 'failed');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
