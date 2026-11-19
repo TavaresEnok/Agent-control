@@ -652,8 +652,12 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         'ACH-002',
       ]);
       assert.deepEqual(fix1, fix2);
-      assert.deepEqual(fix1.slice(1), ['src/app.ts', 'src/db.ts', `tests/${mod}/ach-001.test.ts`, `tests/${mod}/ach-002.test.ts`]);
+      const firstPaths = ['src/app.ts', `tests/${mod}/ach-001.test.ts`];
+      const secondPaths = ['src/db.ts', `tests/${mod}/ach-002.test.ts`];
+      assert.deepEqual(fix1.slice(2), [...firstPaths, ...secondPaths]);
       if (mod === 'qa') {
+        assert.deepEqual(await runPersonalModuleCli(mod, [installationPath, projectId, '--corrigir', runId!, 'ACH-001']),
+          [fix1[0], ...firstPaths]);
         await db.pool.query("UPDATE ac_verify_findings SET status='fechado' WHERE run_id=$1 AND achado_id='ACH-001'", [runId]);
         assert.deepEqual(await runPersonalModuleCli(mod, [installationPath, projectId, '--corrigir', runId!, 'ACH-001', 'ACH-002']), fix1);
         await db.pool.query("UPDATE ac_verify_findings SET status='confirmado' WHERE run_id=$1 AND achado_id='ACH-001'", [runId]);
@@ -666,12 +670,13 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         regression_test: string;
         acceptance: string;
       }>(
-        'SELECT finding_ids, message_local_id, write_paths, regression_test, acceptance FROM ac_verify_remediations WHERE run_id=$1',
+        'SELECT finding_ids, message_local_id, write_paths, regression_test, acceptance FROM ac_verify_remediations WHERE run_id=$1 ORDER BY finding_ids',
         [runId],
       )).rows;
-      assert.equal(remRows.length, 1);
-      assert.deepEqual(remRows[0]?.finding_ids, ['ACH-001', 'ACH-002']);
-      assert.deepEqual(remRows[0]?.write_paths, ['src/app.ts', 'src/db.ts', `tests/${mod}/ach-001.test.ts`, `tests/${mod}/ach-002.test.ts`]);
+      assert.equal(remRows.length, 2);
+      assert.deepEqual(remRows.map(row => row.message_local_id), fix1.slice(0, 2));
+      assert.deepEqual(remRows.map(row => row.finding_ids), [['ACH-001'], ['ACH-002']]);
+      assert.deepEqual(remRows.map(row => row.write_paths), [firstPaths, secondPaths]);
       assert.match(remRows[0]?.regression_test ?? '', new RegExp(`tests/${mod}/ach-001\\.test\\.ts`));
       assert.equal(remRows[0]?.acceptance, REMEDIATION_ACCEPTANCE);
 
@@ -682,7 +687,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       assert.equal(mainMsg?.role, 'owner');
       assert.match(mainMsg?.text ?? '', new RegExp(`Projeto: ${projectId}`));
       assert.match(mainMsg?.text ?? '', /- src\/app\.ts/);
-      assert.match(mainMsg?.text ?? '', /- src\/db\.ts/);
+      assert.doesNotMatch(mainMsg?.text ?? '', /src\/db\.ts/);
       assert.match(mainMsg?.text ?? '', new RegExp(REMEDIATION_ACCEPTANCE));
       // A tarefa de correção inclui a descrição; prompts de revisão omitem conclusões.
       assert.match(mainMsg?.text ?? '', /Defeito detectado pelo módulo/);
