@@ -212,7 +212,7 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
   }
 });
 
-test('caminhos relativos usam o diretório atual e uma raiz vazia não inicia cópia', () => {
+test('origem e destino relativos usam a âncora local mesmo sem process.cwd()', t => {
   const root = mkdtempSync(join(tmpdir(), 'ac-arq-rel-'));
   const previous = process.cwd();
   try {
@@ -222,12 +222,17 @@ test('caminhos relativos usam o diretório atual e uma raiz vazia não inicia c�
     assert.equal(copyRepoSafely('entrada', '').failure?.code, 'ENOENT');
     assert.equal(existsSync('controle.ts'), false);
     assert.throws(() => copyRepoSafely('', 'saida'), /ARQUITETURA_REPO_UNREADABLE/);
-    assert.deepEqual(copyRepoSafely('entrada', 'saida').copiedFiles, ['controle.ts']);
-    assert.equal(readFileSync('saida/controle.ts', 'utf8'), 'export const ok = 1;');
-    writeFileSync('entrada/a\\b.ts', 'nome literal');
-    const limited = copyRepoSafely('entrada', 'limitada', {maxFiles: 0});
-    assert.deepEqual(limited.skipped, [{file: 'a\\b.ts', reason: 'nome_nao_suportado'}]);
-    assert.equal(limited.stoppedAt, 'controle.ts');
+    const cwd = t.mock.method(process, 'cwd', () => {
+      throw new Error('a cópia relativa deve abrir o diretório atual diretamente');
+    });
+    try {
+      const snapshot = copyRepoSafely('entrada', 'saida');
+      assert.equal(snapshot.failure, undefined);
+      assert.deepEqual(snapshot.copiedFiles, ['controle.ts']);
+      assert.equal(readFileSync('saida/controle.ts', 'utf8'), 'export const ok = 1;');
+    } finally {
+      cwd.mock.restore();
+    }
   } finally {
     process.chdir(previous);
     rmSync(root, {recursive: true, force: true});
@@ -675,6 +680,38 @@ test('snapshot registra omissões e cobertura sinaliza o corte de 500 linhas em 
       assert.match(out.coverage.find(row => row.tool === tool)?.detail ?? '', /linhas_por_arquivo=500\/501; limite_linhas=500; cobertura_truncada=sim/);
       assert.equal(out.coverage.filter(row => row.tool === `${tool}:file`).length, 500);
     }
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('snapshot delimita as omissões conhecidas quando a travessia atinge o limite de arquivos', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-snapshot-limit-'));
+  try {
+    const scanned = join(repo, 'src');
+    mkdirSync(join(scanned, 'tail'), {recursive: true});
+    for (let index = 0; index < 10_000; index++) {
+      writeFileSync(join(scanned, `file-${index}.txt`), '');
+    }
+    writeFileSync(join(scanned, 'm\\q.ts'), '');
+    writeFileSync(join(scanned, 'tail', 'a\\q.ts'), '');
+    writeFileSync(join(scanned, 'tail', 'controle.txt'), '');
+    writeFileSync(join(scanned, 'z\\q.ts'), '');
+    writeFileSync(join(repo, 'z\\q.ts'), '');
+
+    const out = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: () => ({status: 1, stdout: '', stderr: 'ferramenta simulada'}),
+    });
+    const snapshot = out.coverage.find(row => row.tool === 'snapshot');
+    assert.equal(snapshot?.status, 'skipped');
+    assert.match(snapshot.detail, /^copiados=10000; entradas_omitidas_conhecidas=1;/);
+    assert.match(snapshot.detail, /cobertura_parcial=sim; linhas_por_arquivo=1\/1;/);
+    assert.match(snapshot.detail, /limite_arquivos_atingido_em="src\/tail"; restante_nao_inventariado=sim; fora_do_inventario=entrada_do_corte_e_restante_da_travessia$/);
+    assert.deepEqual(out.coverage.filter(row => row.tool === 'snapshot:omitted').map(row => row.detail), [
+      `arquivo=${JSON.stringify('src/m\\q.ts')}; motivo=nome_nao_suportado`,
+    ]);
   } finally {
     rmSync(repo, {recursive: true, force: true});
   }
