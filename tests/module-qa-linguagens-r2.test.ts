@@ -254,6 +254,15 @@ const incompatibleGo = process.env.QA_R3_TEST_GO_INCOMPATIBLE ?? '/usr/lib/go-1.
 const lock = JSON.parse(readFileSync(new URL('../deploy/modules/qa/qa-tools.lock.json', import.meta.url), 'utf8'));
 const expectedGoVersion = `go${lock.languageRuntimes.go.version}`;
 
+async function assertGoVersion(t: TestContext, binary: string, expected: string) {
+  const cwd = fixture(t, {});
+  const result = await runLanguageProcess(binary, ['env', 'GOVERSION'], cwd, {
+    timeoutMs: 10_000, env: {HOME: cwd, GOENV: 'off', GOTOOLCHAIN: 'local'},
+  });
+  assert.equal(result.code, 0, result.diagnostics);
+  assert.equal(result.output.trim(), expected);
+}
+
 async function assertRejectedGoVersion(binary: string) {
   const snapshot = {copyTo() { assert.fail('a versão incompatível deve parar antes da cópia'); }};
   const selection = selectLanguageSuite('go', ['go.mod', 'total_test.go'], false);
@@ -268,18 +277,30 @@ test('o adaptador exige a versão Go fixada por inteiro', async t => {
   });
   const binary = join(root, 'go');
   chmodSync(binary, 0o700);
+  await assertGoVersion(t, binary, `${expectedGoVersion}0`);
+  await assertRejectedGoVersion(binary);
+});
+
+test('o adaptador exige que a consulta de GOVERSION termine com sucesso', async t => {
+  const root = fixture(t, {
+    'go': `#!/bin/sh\nprintf '%s\\n' '${expectedGoVersion}'\nexit 1\n`,
+  });
+  const binary = join(root, 'go');
+  chmodSync(binary, 0o700);
   await assertRejectedGoVersion(binary);
 });
 
 test('o adaptador recusa um executável Go real de versão incompatível', {
   skip: !existsSync(incompatibleGo),
-}, async () => {
+}, async t => {
+  await assertGoVersion(t, incompatibleGo, 'go1.22.2');
   await assertRejectedGoVersion(incompatibleGo);
 });
 
 test('o Go fixado mede por pacote um subteste sem recibo de arquivo de teste', {
   skip: !existsSync(go), timeout: 45_000,
 }, async t => {
+  await assertGoVersion(t, go, expectedGoVersion);
   const repo = fixture(t, {
     'go.mod': `module ${moduleName}\n\ngo 1.27\n`,
     'quantity.go': `package total
@@ -311,6 +332,7 @@ func TestQuantity(t *testing.T) { t.Run("valor", checkQuantity) }
 test('Go fixado usa o dado de embed, atribui arquivos e nega a entrada ao 201º caso', {
   skip: !existsSync(go), timeout: 100_000,
 }, async t => {
+  await assertGoVersion(t, go, expectedGoVersion);
   const scratch = fixture(t, {});
   const original = fixture(t, {
     'go.mod': `module ${moduleName}\n\ngo 1.27\n`,
