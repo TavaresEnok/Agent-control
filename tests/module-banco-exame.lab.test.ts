@@ -44,7 +44,7 @@ test('a medição real de pg_stat_statements só confirma os bytes da consulta e
           reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
           worker: {run: async call => {
             const task = JSON.parse(call.task);
-            if (task.checklist) return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['banco'], findings: []});
+            if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['banco'], findings: []});
             if (task.criterion !== 'sql-query-mean-exceeded' || task.file !== target) {
               return JSON.stringify({kind: 'confirmacao', status: 'provavel', proof: '', reason: 'Sem avaliação neste ensaio.'});
             }
