@@ -1,0 +1,3 @@
+# Revisão do fechamento em instalação pessoal
+
+Sobre o diff de78eb375c7d88203f69f6f88b607ba5d8e57db6..b6726dfd, Confira os três casos específicos R19 e os testes, com o escopo declarado de recuperação estática parcial em entradas malformadas. Verifique se houve regressão real na publicação do relatório de instalação e se existe comportamento demonstrável em desacordo com a gramática restrita documentada. Registre separadamente entradas fora do suporte; o módulo não se propõe a interpretar Bash geral nem a provar execução. Informe defeitos concretos com cenário, gravidade e arquivo. A execução de testes físicos cabe ao gerente.
