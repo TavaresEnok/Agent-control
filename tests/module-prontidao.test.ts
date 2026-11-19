@@ -2652,7 +2652,7 @@ test('R12: posições possíveis de timeout e rotinas condicionais por pilar', (
       ['pg_restore -d app -- --list', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', false],
       ["pg_dump db\nfind . -exec echo + '-mtime' '+7' '-delete' '{}' ';'", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
       ["pg_dump db\nfind . -mtime +7 -fprint '-delete'", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
-      ['pg_dump db\nfind . -mtime +7 -o -delete', 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
+      ['pg_dump db\nfind . -mtime +7 -o -delete', 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', false],
       ["pg_dump db\nfind . -exec echo '{}' + -mtime +7 -delete", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', false],
       ['pg_restore -d app -h', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', true],
       ['pg_restore -d app -h db.example', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', false],
@@ -2683,4 +2683,38 @@ test('R12: posições possíveis de timeout e rotinas condicionais por pilar', (
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }
+});
+
+test('R14: prova positiva de retenção e posições de operandos', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r14-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const audit = (line: string) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
+      return runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+    };
+    const has = (out: ReturnType<typeof audit>, rule: string) => out.findings.some(f => f.rule === rule);
+    for (const expression of ['! -mtime +7 -delete', '-mtime +7 -o -delete', '-delete -mtime +7', '-mtime +7 -delete -o -delete']) {
+      const out = audit(`pg_dump db\nfind . ${expression}`);
+      assert.ok(has(out, 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE') || out.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status === 'failed', expression);
+    }
+    assert.equal(has(audit('pg_dump db\nfind . -mtime +7 -delete'), 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), false);
+    assert.equal(has(audit('pg_dump -V'), 'PRONTIDAO-BACKUP-AUSENTE'), true);
+    assert.equal(has(audit('pg_dump -vV'), 'PRONTIDAO-BACKUP-AUSENTE'), true);
+    assert.equal(has(audit("pg_dump -n '-falso' -f /seguro/real.sql app"), 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
+    assert.equal(has(audit('pg_dump -vfbackup.sql app'), 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), true);
+    assert.equal(has(audit('pg_dump -vf /seguro/backup.sql app'), 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
+    assert.equal(has(audit('restic -r --help backup /srv'), 'PRONTIDAO-BACKUP-AUSENTE'), false);
+    assert.equal(has(audit('restic backup -r --help /srv'), 'PRONTIDAO-BACKUP-AUSENTE'), false);
+    assert.equal(has(audit('restic --help'), 'PRONTIDAO-BACKUP-AUSENTE'), true);
+    for (const duration of ['30s', '1,5s']) {
+      const out = audit(`timeout -- ${duration} sh -c 'echo "pg_dump df'`);
+      for (const pillar of ['backup-restauracao', 'disco-memoria']) assert.equal(out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status, 'ok');
+    }
+    const out = audit('timeout -sT"$SINAL" TERM 30s df -P /');
+    assert.equal(out.coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.status, 'ok');
+    assert.ok(has(out, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'));
+    assert.equal(audit('timeout -s"$SINAL" TERM 30s df -P /').coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.status, 'failed');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
 });

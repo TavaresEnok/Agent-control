@@ -1644,7 +1644,8 @@ function resticRoutine(subcommand, args, onIncomplete) {
   return [...retention.values()].includes(true);
 }
 
-function dumpDestination(binary, words) {
+function dumpDestination(binary, words, pg) {
+  if (binary === 'pg_dump' && pg?.destination !== undefined) return pg.destination;
   for (const [index, word] of words.entries()) {
     if (word.operator && /^1?>>?$/.test(word.text)) return words[index + 1]?.text;
     const pattern = {
@@ -1652,7 +1653,7 @@ function dumpDestination(binary, words) {
       mysqldump: /^(?:-r(.*)|--result-file(?:=(.*))?)$/,
       mongodump: /^(?:--out(?:=(.*))?|--archive=(.*))$/,
     }[binary];
-    const option = !word.operator && pattern.exec(word.text);
+    const option = binary !== 'pg_dump' && !word.operator && pattern.exec(word.text);
     if (option) return option[1] || option[2] || words[index + 1]?.text;
   }
 }
@@ -1838,7 +1839,8 @@ function timeoutDynamicPositions(words, spec) {
           // A literal option prefix constrains the first expanded word.
           if (/^(?:--(?:signal|kill-after)=|-[sk])/.test(value)) {
             next.add('options');
-            if (/^-[sk]/.test(value)) next.add(value[1] === 's' ? 'signal' : 'kill-after');
+            const mayNeedOperand = /^-[sk][$`*?\[]/.test(value);
+            if (mayNeedOperand) next.add(value[1] === 's' ? 'signal' : 'kill-after');
             if (variable) { next.add('command'); next.add('signal'); next.add('kill-after'); next.add('duration'); }
           } else if (/^[^$`*?\[\]-]/.test(value)) {
             // A concatenated literal prefix cannot disappear or become an option.
@@ -2224,7 +2226,7 @@ function nodeScriptTarget(args) {
 }
 
 function backupQuery(binary, args) {
-  return args.some(arg => arg === '--help' || arg === '--version' || (arg === '-h' && !/^(?:pg_dump|pg_restore)$/.test(binary)));
+  return args.some(arg => arg === '--help' || arg === '--version' || (/^(?:pg_dump|pg_restore)$/.test(binary) && arg === '-V') || (arg === '-h' && !/^(?:pg_dump|pg_restore)$/.test(binary)));
 }
 
 // Options with operands in the supported PostgreSQL command subset.
@@ -2233,6 +2235,7 @@ function postgresOperands(args) {
   const longValues = new Set(['--host', '--port', '--username', '--dbname', '--file', '--format', '--schema', '--table', '--jobs']);
   const options = [];
   let db = false;
+  let destination;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--') break;
@@ -2242,6 +2245,7 @@ function postgresOperands(args) {
         const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++i];
         if (value === undefined || value === '') return {valid: false, db: false};
         if (name === '--dbname') db = true;
+        if (name === '--file') destination = value;
       } else options.push(arg);
     } else if (arg.startsWith('-') && arg !== '-') {
       for (let j = 1; j < arg.length; j++) {
@@ -2250,25 +2254,42 @@ function postgresOperands(args) {
           const value = arg.slice(j + 1) || args[++i];
           if (value === undefined || value === '') return {valid: false, db: false};
           if (ch === 'd') db = true;
+          if (ch === 'f') destination = value;
           break;
         }
         options.push(`-${ch}`);
       }
     }
   }
-  return {valid: true, db, options};
+  return {valid: true, db, options, destination};
 }
 
-function isFindRetention(args) {
+function isFindRetention(args, onIncomplete) {
   let age = false;
+  let action = false;
+  let expression = false;
   for (let i = 0; i < args.length; i++) {
+    if (/^(?:-|!|\()/.test(args[i])) expression = true;
+    else if (expression) { onIncomplete(); return false; }
     if (/^-(?:exec|execdir|ok|okdir)$/.test(args[i])) {
       while (++i < args.length && args[i] !== ';' && !(args[i] === '+' && args[i - 1] === '{}')) {}
     } else if (args[i] === '-fprintf') { i += 2; }
     else if (/^-(?:name|iname|path|ipath|regex|iregex|type|user|group|perm|size|newer|mmin|atime|ctime|amin|cmin|maxdepth|mindepth|fprint|fprint0|fls)$/.test(args[i])) { i++; }
-    else if (args[i] === '-o' || args[i] === '-or' || args[i] === '(' || args[i] === ')') { age = false; }
+    else if (/^(?:!|-not|-o|-or|\(|\))$/.test(args[i])) { onIncomplete(); return false; }
     else if (args[i] === '-mtime' && /^\+\d+$/.test(args[i + 1] ?? '')) { age = true; i++; }
-    else if (args[i] === '-delete' && age) return true;
+    else if (args[i] === '-delete') { action = true; if (!age) return false; }
+    else if (args[i].startsWith('-') && !/^(?:-a|-and|-print|-print0|-depth|-xdev|-mount)$/.test(args[i])) { onIncomplete(); return false; }
+  }
+  return action;
+}
+
+function resticQuery(subcommand, parameters) {
+  if (backupQuery('restic', [subcommand])) return true;
+  for (let i = 0; i < parameters.length; i++) {
+    const arg = parameters[i];
+    if (arg === '--') break;
+    if (RESTIC_SHARED_VALUE_OPTIONS.test(arg) || RESTIC_RESTORE_VALUE_OPTIONS.test(arg)) { i++; continue; }
+    if (backupQuery('restic', [arg])) return true;
   }
   return false;
 }
@@ -2284,7 +2305,7 @@ function classifyBackupOperation(binary, args, onIncomplete) {
   const pg = /^(?:pg_dump|pg_restore)$/.test(binary) ? postgresOperands(args) : null;
   if (pg && !pg.valid) return {};
   const optionArgs = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--'));
-  if (backupQuery(binary, pg?.options ?? optionArgs)) return {};
+  if (binary === 'restic' ? resticQuery(subcommand, parameters) : backupQuery(binary, pg?.options ?? optionArgs)) return {};
   if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
     onIncomplete();
     return {};
@@ -2303,8 +2324,17 @@ function classifyBackupOperation(binary, args, onIncomplete) {
   const restore = routine === 'restore-proof' || restoresDb || (subcommand === 'restore' && resticDeclared)
     || (!dryRun && binary === 'borg' && subcommand === 'extract');
   const rotation = routine === 'backup-rotate' || (subcommand === 'forget' && resticDeclared)
-    || (!dryRun && binary === 'borg' && subcommand === 'prune') || (binary === 'find' && isFindRetention(args));
-  return {dump, backup, catalog, restore, rotation};
+    || (!dryRun && binary === 'borg' && subcommand === 'prune') || (binary === 'find' && isFindRetention(args, onIncomplete));
+  return {dump, backup, catalog, restore, rotation, pg};
+}
+
+function malformedShellCandidate(command, kind) {
+  const first = /^\s*([^\s'"\\;|&<>]+)/.exec(command)?.[1];
+  if (!first) return false;
+  const binary = basename(first);
+  if (kind === 'backup') return /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
+  if (kind === 'disk') return /^(?:df|docker|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
+  return /^(?:alertmanager|npm|pnpm|node|curl|wget|logrotate|(?:ba|da|k|z)?sh)$/.test(binary);
 }
 
 function isBackupCandidateSegment(segWords, depth = 0) {
@@ -2319,7 +2349,7 @@ function isBackupCandidateSegment(segWords, depth = 0) {
   const args = words.map(word => word.text);
   if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(args[0] ?? '') && args[1]) {
     const inner = shellWords(args[1]);
-    if (!inner) return BACKUP_CANDIDATE_RE.test(args[1]);
+    if (!inner) return malformedShellCandidate(args[1], 'backup');
     return splitShellSegments(inner.words).some(segment => isBackupCandidateSegment(segment, depth + 1));
   }
   let incomplete = false;
@@ -2360,8 +2390,8 @@ function evaluateShellSegment(segWords, depth = 0) {
   if (depth >= 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
     const inner = shellWords(words[1].text);
     if (!inner) {
-      res.partialAlert = /\b(?:alertmanager|npm|pnpm|node|curl|wget|logrotate)\b/.test(words[1].text);
-      res.partialDisk = /\b(?:df|docker|npm|pnpm|node)\b/.test(words[1].text);
+      res.partialAlert = malformedShellCandidate(words[1].text, 'alert');
+      res.partialDisk = malformedShellCandidate(words[1].text, 'disk');
     } else {
       for (const segment of splitShellSegments(inner.words)) {
         const sub = evaluateShellSegment(segment, depth + 1);
@@ -2374,8 +2404,8 @@ function evaluateShellSegment(segWords, depth = 0) {
   if (depth < 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
     const inner = shellWords(words[1].text);
     if (!inner) {
-      res.partialAlert = /\b(?:alertmanager|npm|pnpm|node|curl|wget|logrotate)\b/.test(words[1].text);
-      res.partialDisk = /\b(?:df|docker|npm|pnpm|node)\b/.test(words[1].text);
+      res.partialAlert = malformedShellCandidate(words[1].text, 'alert');
+      res.partialDisk = malformedShellCandidate(words[1].text, 'disk');
       return res;
     }
     for (const innerSeg of splitShellSegments(inner.words)) {
@@ -2490,7 +2520,7 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
       restore ||= Boolean(operation.restore);
       rotation ||= Boolean(operation.rotation);
       if (operation.dump) {
-        const destination = dumpDestination(binary, words);
+        const destination = dumpDestination(binary, words, operation.pg);
         if (destination && /^(?:\$|~)/.test(destination)) {
           onIncomplete(line, 'destino de dump depende de expansão');
         } else if (destination && destination !== '-' && (!destination.startsWith('/') || /^\/tmp(?:\/|$)/.test(destination))) {
