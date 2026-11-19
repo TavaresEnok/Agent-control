@@ -251,3 +251,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:29 UTC — Revisor encerrou C9-R3 em b433235e (código 0). Gerente confere a entrega.
 - 19/11/2026 03:29 UTC — Revisão C4-R5 iniciada por Sol high normal somente leitura em 8669f900.
 - 19/11/2026 03:32 UTC — Documentação fafc14d3 passou nos 20 testes com ferramentas reais e entrou na homologação 6737130b. Revisão de conformidade b433235e encontrou três médios e um baixo relativos a fluxos de campos e pares SPDX. Ordem C9-R4 registrada.
+- 19/11/2026 03:32 UTC — Trabalhador encerrou C7-R5 em 5fbbbb9f (código 0). Gerente confere a entrega.
+- 19/11/2026 03:32 UTC — Trabalho C5-R5 iniciado por Sol high normal em final-c5.
+- 19/11/2026 03:34 UTC — A CLI de documentação passou 6/6 em 6737130b. A triagem SPDX passou nos 15 testes locais, incluindo as seis permutações das três classes e o limite de pares; a análise de fluxos pessoais continua em C9-R4. Matriz de provas atualizada.

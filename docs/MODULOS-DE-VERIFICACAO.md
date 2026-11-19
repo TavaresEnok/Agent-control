@@ -282,23 +282,23 @@ O repositório de exemplo com falhas plantadas, como injeção, segredo no hist�
 
 ### Prova do módulo 2
 
-**QA pesado.** Em homologação, a CLI `personal:qa` executou os testes Node três vezes, registrou os mutantes medidos pelo Stryker e analisou acessibilidade de HTML estático com axe. A imagem de `b1b254f3` passou no laboratório. A revisão de `211dc9aa` encontrou casos de asserção inalcançável e função impura contados como prova. Na rodada C2-R6, a imagem fixada em `b688989e` passou em 33 testes e um caso opcional ficou sem execução. Em `91a6c71a`, a CLI encontrou o defeito plantado e recusou a correção sem confirmação. A prova de idempotência usou uma medição sintética identificada no mesmo banco de teste. Contraste visual, testes Python e Go e varreduras de entradas externas ficam fora dessa prova.
+**QA pesado.** Em homologação, a CLI `personal:qa` executou os testes Node três vezes, registrou os mutantes medidos pelo Stryker e analisou acessibilidade de HTML estático com axe. A imagem de `b1b254f3` passou no laboratório. A revisão de `211dc9aa` encontrou casos de asserção inalcançável e função impura contados como prova. Na rodada C2-R6, a imagem fixada em `b688989e` passou em 33 testes e um caso opcional ficou sem execução. Em `91a6c71a`, a CLI encontrou o defeito plantado e recusou a correção sem confirmação. A prova de idempotência usou uma medição sintética identificada no mesmo banco de teste. A rodada C2-R7, fixada em `6c4023fd`, passou em 35 testes, incluindo a prova de asserção e função no processo real. Contraste visual, testes Python e Go e varreduras de entradas externas ficam fora dessa prova.
 
 ### Prova do módulo 3
 
-**Arquitetura e dívida técnica.** Em homologação, a CLI `personal:arquitetura` mediu código JavaScript e TypeScript com Knip, complexidade no AST, duplicação com jscpd e dependências com dependency-cruiser. O laboratório da imagem fixada em `303b1b36` passou após conferir a contagem por arquivo com caminhos equivalentes e o controle limpo.
+**Arquitetura e dívida técnica.** Em homologação, a CLI `personal:arquitetura` mediu código JavaScript e TypeScript com Knip, complexidade no AST, duplicação com jscpd e dependências com dependency-cruiser. O laboratório da imagem fixada em `303b1b36` passou após conferir a contagem por arquivo com caminhos equivalentes e o controle limpo. A imagem de C3-R7 em `88229a82` passou nas 18 provas habilitadas e na CLI com a conferência de travessia de diretório.
 
 ### Prova do módulo 4
 
-**Dependências e atualizações.** Em homologação, `personal:dependencias` comparou versões com o registro de teste offline, identificou chamadas a migrar, exercitou o codemod em uma cópia e comparou inventários de dependências. Os 20 testes dirigidos, incluindo o laboratório da imagem fixada em `ec1122ff`, passaram. Atualizações disponíveis dependem da data do inventário fornecido.
+**Dependências e atualizações.** Em homologação, `personal:dependencias` comparou versões com o registro de teste offline, identificou chamadas a migrar, exercitou o codemod em uma cópia e comparou inventários de dependências. Os 20 testes dirigidos, incluindo o laboratório da imagem fixada em `ec1122ff`, passaram. A rodada C4-R5, fixada em `ea172fa4`, passou nas 26 provas dirigidas e nas seis da CLI. Atualizações disponíveis dependem da data do inventário fornecido.
 
 ### Prova do módulo 5
 
-**Banco de dados.** Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A imagem de C5-R4, fixada em `a3d02361`, passou nos dez testes de banco, incluindo falha no commit do lote, migração e restauração. A revisão independente está pendente.
+**Banco de dados.** Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A imagem de C5-R4, fixada em `a3d02361`, passou nos dez testes de banco, incluindo falha no commit do lote, migração e restauração. A revisão independente de `5d494800` abriu C5-R5 para atribuição de falhas de transação e identificação de rejeições SQL.
 
 ### Prova do módulo 6
 
-**Prontidão para produção.** Em homologação, `personal:prontidao` registrou evidências locais de configuração, Gitleaks, Hadolint e Trivy em execução offline. O laboratório exerceu também a conversão de um achado em tarefa. A imagem fixada em `a2c2a68f` passou em 19 testes de prontidão e sondagem local. A revisão de `757eced2` identificou omissões na análise de Compose, dotenv e configuração por site, além de valores de cabeçalho que precisam ser removidos da evidência. A ordem C6-R8 cobre esses pontos.
+**Prontidão para produção.** Em homologação, `personal:prontidao` registrou evidências locais de configuração, Gitleaks, Hadolint e Trivy em execução offline. O laboratório exerceu também a conversão de um achado em tarefa. A imagem fixada em `a2c2a68f` passou em 19 testes de prontidão e sondagem local. A revisão de `757eced2` identificou omissões na análise de Compose, dotenv e configuração por site, além de valores de cabeçalho que precisam ser removidos da evidência. O commit `01101716` guarda apenas as classes de proteção dos cabeçalhos e passou em 18 testes locais. A ordem C6-R8 reúne as correções de prontidão.
 
 ### Prova do módulo 7
 
@@ -306,8 +306,8 @@ O repositório de exemplo com falhas plantadas, como injeção, segredo no hist�
 
 ### Prova do módulo 8
 
-**Documentação viva.** Em homologação, `personal:documentacao` produziu `api.json` e `dependencias.mmd`, com verificação de conteúdo antes da publicação no relatório privado. Os 18 testes da imagem fixada em `da58dca6` passaram. A revisão de `9c2782fd` identificou problemas de atribuição de arestas, precedência de configuração TypeScript e leitura de JSDoc. A rodada C8-R5 está aberta.
+**Documentação viva.** Em homologação, `personal:documentacao` produziu `api.json` e `dependencias.mmd`, com verificação de conteúdo antes da publicação no relatório privado. Os 18 testes da imagem fixada em `da58dca6` passaram. A revisão de `9c2782fd` identificou problemas de atribuição de arestas, precedência de configuração TypeScript e leitura de JSDoc. A imagem de C8-R5 em `5c92b552` passou nos 20 testes dirigidos e nas seis provas da CLI de homologação. O revisor ainda precisa avaliar a correção.
 
 ### Prova do módulo 9
 
-**Conformidade (LGPD e licenças).** Em homologação, `personal:conformidade` analisou licenças e dados pessoais com ScanCode, ORT e Presidio em um projeto sintético. A imagem fixada em `6c3cddbf` passou nos nove testes, inclusive o laboratório que exige detectar o CPF artificial e a licença plantada e aprovar um controle limpo. A prova cobrindo a CLI passou em `7585aa9c`.
+**Conformidade (LGPD e licenças).** Em homologação, `personal:conformidade` analisou licenças e dados pessoais com ScanCode, ORT e Presidio em um projeto sintético. A imagem fixada em `6c3cddbf` passou nos nove testes, inclusive o laboratório que exige detectar o CPF artificial e a licença plantada e aprovar um controle limpo. Na rodada C9-R3 a imagem fixada em `381f577b` passou nos 16 testes e nas seis provas da CLI em `ffe86c74`. A revisão independente de `b433235e` apontou falhas de rastreamento de campos e de triagem entre licenças. A rodada C9-R4 está aberta.
