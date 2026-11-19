@@ -1,0 +1,16 @@
+# Distingue identificadores usuais de conteúdo protegido e corrige o total SPDX
+
+Feche os dois pontos concretos R4. Preserve um identificador descritivo em snake_case com separadores reais e segmentos usuais, como account_subscription_preferences.ts, sem abrir exceção para sequências opacas sem separadores ou segmentos que por si já atinjam os padrões secretos do controle. Reutilize os limites e regras do host quando aplicável. Se um identificador for indistinguível de material protegido, a omissão conservadora deve continuar contabilizada. Separe o caso de ScanCode não fornecer expressão SPDX (ausência) do caso de uma expressão fornecida ser suprimida por privacidade. Use controles diretos da coleta e das contagens com nomes e dados artificiais. Preserve as cotas de saída, a recusa de campos protegidos e o contrato de arquivos medidos; não amplie a ordem para rastreamento geral de fluxos de dados.
+
+O diff `5a9fcd94..8582cee2` ainda perde medições de arquivos elegíveis e pode registrar como omitida uma expressão SPDX que o ScanCode nunca forneceu.
+
+| Gravidade | Defeito e cenário | Arquivo |
+|---|---|---|
+| Média | **O filtro de entropia exclui código legítimo antes da medição.** Em `src/account_subscription_preferences.ts`, o nome sem extensão tem 32 caracteres e entropia de 3,68, acima do limiar de 3,5. A regra anterior aceitava esse identificador `snake_case`. A nova o contabiliza entre as entradas excluídas ou protegidas, e o arquivo fica fora do snapshot e dos resultados dos scanners. | [license_policy.py](/home/app/projects/agent-control/deploy/modules/conformidade/license_policy.py:137) |
+| Baixa | **O contador de SPDX mistura ausência com supressão.** Uma detecção com `license_expression_spdx` ausente ou `null` incrementa `suppressed` e gera uma linha `skipped` dizendo que uma expressão foi omitida por segurança ou formato. Em metadados de pacote, a mesma ausência fica fora da contagem. Um arquivo medido pode, assim, receber um aviso de supressão sem que houvesse uma expressão para publicar. | [collector.py](/home/app/projects/agent-control/deploy/modules/conformidade/collector.py:224) |
+
+A exclusão de `src/password-reset.ts` é deliberada no coletor. O cenário de contrato fornecido aceita esse caminho. Já `src/id_generator.py` é excluído pelo coletor e, se chegar a `coverage.files` ou a `findings[].file`, o consumidor recusa o relatório inteiro com `VERIFY_PATH_FORBIDDEN`. A linha agregada `skipped` carrega a contagem em `detail` e pode coexistir com a cobertura `ok` no parser. [verification-modules.ts](/home/app/projects/agent-control/src/verification-modules.ts:635)
+
+A revisão foi estática. O sandbox impediu a leitura do checkout, então a conclusão se limita ao diff e aos trechos do contrato fornecidos. Os testes físicos ficaram com o gerente.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C-CONFORMIDADE-VIVA-R5.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.1 Terra <noreply@openai.com>.
