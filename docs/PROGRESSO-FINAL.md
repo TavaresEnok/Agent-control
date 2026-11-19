@@ -216,3 +216,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:10 UTC — A recuperação distingue um JSON truncado ou um diretório comum de um arquivo íntegro, e o descarte com prefixo curto preserva a outra execução de caminho distinto. Duas provas de integração no PostgreSQL passaram. A ordem C-BASE-R7 tem prioridade na próxima vaga para concluir a autorização da partida.
 - 19/11/2026 03:10 UTC — Matriz dos módulos atualizada com os commits de imagem, limites das provas, revisão independente e pendências de QA, banco, prontidão, desempenho e documentação. A suíte de QA segue sobre a árvore congelada em 91a6c71a.
 - 19/11/2026 03:11 UTC — As oito CLIs passaram juntas em d406e85a com o adaptador nativo de exame (6/6, 150 s); TypeScript aprovado. A instalação sintética sem provedor deixou os achados como prováveis. A criação idempotente de tarefas foi provada com medição explícita de fixture. A leitura do painel mostrou que as rotas atuais só consultam os relatórios do módulo 1; aberta a ligação de consulta e correção prevista no item 6 do contrato comum.
+- 19/11/2026 03:11 UTC — Trabalhador encerrou C9-R3 em b433235e (código 0). Gerente confere a entrega.
+- 19/11/2026 03:11 UTC — Trabalho C-BASE-R7 iniciado por Sol high normal em final-c-interop.
+- 19/11/2026 03:12 UTC — Revisor encerrou C2-R6 em 9b8959dc (código 0). Gerente confere a entrega.
+- 19/11/2026 03:12 UTC — Revisão C-EXAME-R2 iniciada por Sol high normal somente leitura em c8fe44e5.
+- 19/11/2026 03:14 UTC — A revisão de QA R6 apontou duas atribuições incorretas de prova e três defeitos médios na detecção de rotas, skip e teste pela entrada pública. Aberta C2-R7, executada pelo gerente enquanto as três vagas de trabalhador estão ocupadas.
