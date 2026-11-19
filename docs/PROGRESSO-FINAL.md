@@ -1026,3 +1026,4 @@ PAUSADO-COTA
 - 19/11/2026 20:08 UTC — Testes complementares de entrega-desempenho-1 em dab29e0d: 52 aprovados.
 - 19/11/2026 20:12 UTC — Validação completa de entrega-desempenho-1 em dab29e0d: TypeScript, suíte, complementares e laboratório aprovados.
 - 19/11/2026 20:12 UTC — Integração C7 em task/personal-activation concluída no merge 35417201 do candidato dab29e0d. O checkout de homologação dab29e0d passou em TypeScript, suíte oficial, complementares e laboratório. A instalação aguarda a aplicação conjunta.
+- 19/11/2026 20:12 UTC — Integração C8 em task/personal-activation concluída no merge cfb05729 do candidato 160dba62. O checkout de homologação 160dba62 passou em TypeScript, suíte oficial, complementares e laboratório. A instalação aguarda a aplicação conjunta.
