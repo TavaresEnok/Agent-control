@@ -33,24 +33,30 @@ MAX_FINDINGS = 999
 class Report:
     def __init__(self):
         self.coverage = []
+        self._evidence_rows = {}
         self.dropped_coverage = 0
         self.has_errors = False
         self.findings = {level: [] for level in ("alta", "media", "baixa", "informativa")}
         self.finding_count = 0
 
-    def cover(self, tool, version, status, detail, files=None):
+    def cover(self, tool, version, status, detail, files=None, require_findings=False):
         self.has_errors |= status == "failed"
         limit = MAX_FILE_COVERAGE if tool.endswith(":file") else MAX_COVERAGE
         if len(self.coverage) >= limit:
             self.dropped_coverage += 1
+            self.has_errors = True
             return
         row = dict(tool=tool, version=version, status=status, detail=detail)
         if files is not None:
             row["files"] = sorted(dict.fromkeys(files))
+        if require_findings:
+            self._evidence_rows[len(self.coverage)] = detail
         self.coverage.append(row)
 
     def find(self, tool, rule, file, line, severity, message, evidence):
         self.finding_count += 1
+        if self.finding_count > MAX_FINDINGS:
+            self.has_errors = True
         bucket = self.findings[severity]
         if len(bucket) < MAX_FINDINGS:
             bucket.append(dict(tool=tool, rule=rule, file=file, line=line, severity=severity,
@@ -58,7 +64,17 @@ class Report:
 
     def output(self):
         findings = [item for bucket in self.findings.values() for item in bucket][:MAX_FINDINGS]
-        coverage = list(self.coverage)
+        published_files = {(item["tool"], item["file"]) for item in findings}
+        coverage = []
+        for index, row in enumerate(self.coverage):
+            template = self._evidence_rows.get(index)
+            if template is not None:
+                kept = [file for file in row.get("files", ()) if (row["tool"], file) in published_files]
+                if not kept:
+                    continue
+                coverage.append({**row, "detail": template.replace("{count}", str(len(kept))), "files": kept})
+            else:
+                coverage.append(row)
         if self.dropped_coverage or self.finding_count > len(findings):
             self.has_errors = True
             coverage.append(dict(tool="conformidade:output", version="1", status="failed", detail=(
@@ -307,8 +323,9 @@ def inspect_privacy(selected, version, report):
     if static_partial_finding_files:
         report.cover(
             "lgpd-static", "1", "ok",
-            f"Evidências locais (vínculos AST comprovados ou inventário textual de campos) confirmadas em {len(static_partial_finding_files)} arquivo(s) com escopo parcial; trechos sem vínculo ou sem parser permanecem em falha ou pulados.",
+            "Evidências locais (vínculos AST comprovados ou inventário textual de campos) confirmadas em {count} arquivo(s) com escopo parcial; trechos sem vínculo ou sem parser permanecem em falha ou pulados.",
             files=static_partial_finding_files,
+            require_findings=True,
         )
 
     if not texts:
@@ -351,8 +368,9 @@ def inspect_privacy(selected, version, report):
         if presidio_partial_finding_files:
             report.cover(
                 PRESIDIO, version, "ok",
-                f"Entidades reconhecidas em {len(presidio_partial_finding_files)} texto(s) com tempo limite parcial em outro padrão; o padrão interrompido permanece em falha.",
+                "Entidades reconhecidas em {count} texto(s) com tempo limite parcial em outro padrão; o padrão interrompido permanece em falha.",
                 files=presidio_partial_finding_files,
+                require_findings=True,
             )
 
 

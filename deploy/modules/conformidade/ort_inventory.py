@@ -56,7 +56,7 @@ def write_documents(locks, input_dir, version, report):
     return picked
 
 
-def read_results(result, picked, version, report, measured_files=None):
+def read_results(result, picked, version, report, measured_files=None, partial_finding_files=None):
     observed = Counter(file for file, _ in picked.values())
     classified = Counter()
     seen = set()
@@ -85,8 +85,13 @@ def read_results(result, picked, version, report, measured_files=None):
                      f"{file} | {classified[file]}/{count} declarações SPDX processadas no ORT.")
     if measured_files is not None:
         for file, count in observed.items():
-            if classified[file] == count or (classified[file] > 0 and file in finding_files):
+            if classified[file] == count:
                 measured_files.append(file)
+            elif classified[file] > 0 and file in finding_files:
+                if partial_finding_files is not None:
+                    partial_finding_files.append(file)
+                else:
+                    measured_files.append(file)
     return len(seen), sum(classified.values())
 
 
@@ -118,12 +123,17 @@ def scan(locks, scratch, version, report):
         return
     result = json.loads(result_file.read_text(encoding="utf-8"))["analyzer"]["result"]
     measured_files = []
-    seen, classified = read_results(result, picked, version, report, measured_files=measured_files)
+    partial_finding_files = []
+    seen, classified = read_results(
+        result, picked, version, report,
+        measured_files=measured_files, partial_finding_files=partial_finding_files,
+    )
     status = "failed" if process.returncode or classified != len(picked) else "ok"
     detail = (
         f"{seen} pacotes importados; {classified}/{len(picked)} licenças processadas; "
         f"código {process.returncode}. Inventário SPDX gerado dos lockfiles, sem resolução de dependências."
     )
+    total_lockfiles = len({file for file, _ in picked.values()})
     if status == "ok":
         report.cover(TOOL, version, "ok", detail, files=measured_files)
     else:
@@ -131,6 +141,13 @@ def scan(locks, scratch, version, report):
         if measured_files:
             report.cover(
                 TOOL, version, "ok",
-                f"Declarações SPDX processadas pelo ORT em {len(measured_files)}/{len({file for file, _ in picked.values()})} lockfile(s); falhas ou declarações não processadas permanecem registradas.",
+                f"Declarações SPDX processadas pelo ORT em {len(measured_files)}/{total_lockfiles} lockfile(s); falhas ou declarações não processadas permanecem registradas.",
                 files=measured_files,
+            )
+        if partial_finding_files:
+            report.cover(
+                TOOL, version, "ok",
+                f"Declarações SPDX com achado publicado pelo ORT em {{count}}/{total_lockfiles} lockfile(s); falhas ou declarações não processadas permanecem registradas.",
+                files=partial_finding_files,
+                require_findings=True,
             )
