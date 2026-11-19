@@ -833,3 +833,6 @@ PAUSADO-COTA
 - 19/11/2026 18:14 UTC — O ramo de entrega revisado de QA em e1ac3d05 inclui as concessões efetivas da rodada f96e9a22. A suíte oficial da revisão anterior continua. A revisão de C3 confirmou que o teste atualizado distingue a troca de descritor, e o gerente executou a prova e o TypeScript.
 - 19/11/2026 18:14 UTC — C2-MATRIZ-GRAMATICA encerrado com código 0.
 - 19/11/2026 18:15 UTC — O candidato 8642613d reúne as últimas três correções de QA. As provas de privilégios passaram em 14/14 no host com o PostgreSQL da imagem; o teste de entrypoint segue para o novo digest. A gramática documentada da matriz entrou em 3096142a.
+- 19/11/2026 18:15 UTC — C6-ACEITE-TAG encerrado com código 0.
+- 19/11/2026 18:15 UTC — revisor-C7-ACEITE-IMAGEM iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:15 UTC — C6 teve aceite independente estático em 3b9e0115 e 43 testes de imagem e CLI aprovados na integração. A revisão consolidada de QA recebe o diff 0d8198b6..8642613d e os contratos de matriz, seleção de evidência Go e escopo do PostgreSQL.
