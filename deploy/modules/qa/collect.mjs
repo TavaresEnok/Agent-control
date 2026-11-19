@@ -29,6 +29,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {
   classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool, testIdentity,
 } from './execute-tests.mjs';
+import {collectLanguageSuite, languageSuites} from './language-tests.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
@@ -59,7 +60,10 @@ const ALLOWED_EXTS = new Set([
   '.htm',
   '.md',
   '.sql',
+  '.py',
+  '.go',
 ]);
+const ALLOWED_FILENAMES = new Set(['go.mod', 'go.sum']);
 const FORBIDDEN_FILENAMES = new Set([
   '.env',
   '.credentials.json',
@@ -182,7 +186,7 @@ function copyRepoToIsolatedTmp(repoDir) {
         exclude('links simbólicos ou arquivos especiais');
         continue;
       }
-      if (!ALLOWED_EXTS.has(extname(entry.name).toLowerCase())) {
+      if (!ALLOWED_EXTS.has(extname(entry.name).toLowerCase()) && !ALLOWED_FILENAMES.has(entry.name)) {
         exclude('arquivos de extensões fora da coleta');
         continue;
       }
@@ -1254,6 +1258,14 @@ export async function collectQaModule(options = {}) {
         partial: sourcePartial,
         run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete: sourcePartial, failTool}),
       },
+      ...Object.entries(languageSuites).map(([language, {tool, version}]) => ({
+        name: tool,
+        version,
+        run: () => {
+          if (failTool === tool) throw new Error('QA_LANGUAGE_TEST_FORCED_FAILURE');
+          return collectLanguageSuite(language, context, copiedFiles, incomplete);
+        },
+      })),
     ];
 
     for (const runner of toolRunners) {
