@@ -225,3 +225,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:16 UTC — Trabalhador encerrou C4-R5 em 8669f900 (código 0). Gerente confere a entrega.
 - 19/11/2026 03:16 UTC — Trabalho C8-R5 iniciado por Sol high normal em final-c8.
 - 19/11/2026 03:16 UTC — A CLI de conformidade na nova imagem passou 6/6 em ffe86c74. C4-R5 entregue em 8669f900 entrou em reconstrução, laboratório e fila de revisão independente.
+- 19/11/2026 03:17 UTC — Revisor encerrou C-EXAME-R2 em c8fe44e5 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:17 UTC — Revisão C-EXAME-PERSISTENCIA-R2 iniciada por Sol high normal somente leitura em db4b5c40.
+- 19/11/2026 03:17 UTC — Trabalhador encerrou C-REVERIFICAR em 7c27cb7b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:17 UTC — Trabalho C7-R5 iniciado por Sol high normal em final-c7.
+- 19/11/2026 03:18 UTC — Revisão c8fe44e5 solicitou vincular a hipótese e o trecho na confirmação, retirar a confirmação por substring, tratar limites do provedor e exigir atestado da rota. C-EXAME-R3 aberta com dados sintéticos. A CLI de reverificação de 7c27cb7b entrou em 86799c06 preservando a comparação com o documento privado de origem.
