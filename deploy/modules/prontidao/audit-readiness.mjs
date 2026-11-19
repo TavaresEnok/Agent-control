@@ -1666,7 +1666,7 @@ function resticCommand(args) {
     if (/^(?:-r|--repo|--repository-file|-p|--password-file)(?:=.+)?$/.test(option)) {
       if (!option.includes('=')) first++;
     } else {
-      return args;
+      return args.slice(first - 1);
     }
   }
   return args.slice(first);
@@ -1837,10 +1837,10 @@ function timeoutDynamicPositions(words, spec) {
           if (variable) next.add('command');
         } else if (state === 'options') {
           // A literal option prefix constrains the first expanded word.
-          if (/^(?:--(?:signal|kill-after)=|-[sk])/.test(value)) {
+          if (/^(?:--(?:signal|kill-after)=|-[fpv]*[sk])/.test(value)) {
             next.add('options');
-            const mayNeedOperand = /^-[sk][$`*?\[]/.test(value);
-            if (mayNeedOperand) next.add(value[1] === 's' ? 'signal' : 'kill-after');
+            const mayNeedOperand = /^-[fpv]*([sk])[$`*?\[]/.exec(value);
+            if (mayNeedOperand) next.add(mayNeedOperand[1] === 's' ? 'signal' : 'kill-after');
             if (variable) { next.add('command'); next.add('signal'); next.add('kill-after'); next.add('duration'); }
           } else if (/^[^$`*?\[\]-]/.test(value)) {
             // A concatenated literal prefix cannot disappear or become an option.
@@ -2226,13 +2226,13 @@ function nodeScriptTarget(args) {
 }
 
 function backupQuery(binary, args) {
-  return args.some(arg => arg === '--help' || arg === '--version' || (/^(?:pg_dump|pg_restore)$/.test(binary) && arg === '-V') || (arg === '-h' && !/^(?:pg_dump|pg_restore)$/.test(binary)));
+  return args.some(arg => arg === '--help' || arg === '--version' || (/^(?:pg_dump|pg_restore)$/.test(binary) && (arg === '-V' || arg === '-?')) || (arg === '-h' && !/^(?:pg_dump|pg_restore)$/.test(binary)));
 }
 
 // Options with operands in the supported PostgreSQL command subset.
 function postgresOperands(args) {
-  const values = new Set(['h', 'p', 'U', 'd', 'f', 'F', 'n', 't', 'j']);
-  const longValues = new Set(['--host', '--port', '--username', '--dbname', '--file', '--format', '--schema', '--table', '--jobs']);
+  const values = new Set(['h', 'p', 'U', 'd', 'f', 'F', 'n', 'N', 't', 'T', 'j']);
+  const longValues = new Set(['--host', '--port', '--username', '--dbname', '--file', '--format', '--schema', '--exclude-schema', '--table', '--exclude-table', '--jobs']);
   const options = [];
   let db = false;
   let destination;
@@ -2265,22 +2265,47 @@ function postgresOperands(args) {
 }
 
 function isFindRetention(args, onIncomplete) {
-  let age = false;
-  let action = false;
-  let expression = false;
-  for (let i = 0; i < args.length; i++) {
-    if (/^(?:-|!|\()/.test(args[i])) expression = true;
-    else if (expression) { onIncomplete(); return false; }
-    if (/^-(?:exec|execdir|ok|okdir)$/.test(args[i])) {
-      while (++i < args.length && args[i] !== ';' && !(args[i] === '+' && args[i - 1] === '{}')) {}
-    } else if (args[i] === '-fprintf') { i += 2; }
-    else if (/^-(?:name|iname|path|ipath|regex|iregex|type|user|group|perm|size|newer|mmin|atime|ctime|amin|cmin|maxdepth|mindepth|fprint|fprint0|fls)$/.test(args[i])) { i++; }
-    else if (/^(?:!|-not|-o|-or|\(|\))$/.test(args[i])) { onIncomplete(); return false; }
-    else if (args[i] === '-mtime' && /^\+\d+$/.test(args[i + 1] ?? '')) { age = true; i++; }
-    else if (args[i] === '-delete') { action = true; if (!age) return false; }
-    else if (args[i].startsWith('-') && !/^(?:-a|-and|-print|-print0|-depth|-xdev|-mount)$/.test(args[i])) { onIncomplete(); return false; }
+  const unary = new Set(['-name', '-iname', '-path', '-ipath', '-regex', '-iregex', '-type', '-user', '-group', '-perm', '-size', '-newer', '-mmin', '-atime', '-ctime', '-amin', '-cmin', '-maxdepth', '-mindepth', '-fprint', '-fprint0', '-fls', '-mtime']);
+  const flags = new Set(['-print', '-print0', '-depth', '-xdev', '-mount']);
+  let i = 0;
+  while (i < args.length && !/^(?:-|!|\()/.test(args[i])) i++;
+  let age = false, action = false, valid = true, needTerm = true, relevant = false;
+  while (i < args.length) {
+    const token = args[i++];
+    if (token === '-a' || token === '-and') {
+      if (needTerm) valid = false;
+      needTerm = true;
+      continue;
+    }
+    if (token === '-delete') {
+      relevant = true;
+      if (age) action = true;
+      else valid = false;
+    } else if (unary.has(token) || token === '-fprintf') {
+      const count = token === '-fprintf' ? 2 : 1;
+      if (i + count > args.length) { valid = false; break; }
+      const operand = args[i];
+      i += count;
+      if (token === '-mtime' && /^\+\d+$/.test(operand)) age = true;
+    } else if (/^-(?:exec|execdir|ok|okdir)$/.test(token)) {
+      const command = args[i];
+      let terminated = false;
+      while (i < args.length) {
+        const part = args[i++];
+        if (part === ';' || (part === '+' && args[i - 2] === '{}')) { terminated = true; break; }
+      }
+      if (!/^(?:echo|printf)$/.test(basename(command ?? ''))) relevant = true;
+      if (!terminated) valid = false;
+      // Other actions are not part of the positive grammar.
+      valid = false;
+    } else if (!flags.has(token)) {
+      valid = false;
+    }
+    needTerm = false;
   }
-  return action;
+  if (needTerm && args.length) valid = false;
+  if (!valid && relevant) onIncomplete();
+  return valid && action;
 }
 
 function resticQuery(subcommand, parameters) {
@@ -2305,7 +2330,7 @@ function classifyBackupOperation(binary, args, onIncomplete) {
   const pg = /^(?:pg_dump|pg_restore)$/.test(binary) ? postgresOperands(args) : null;
   if (pg && !pg.valid) return {};
   const optionArgs = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--'));
-  if (binary === 'restic' ? resticQuery(subcommand, parameters) : backupQuery(binary, pg?.options ?? optionArgs)) return {};
+  if (binary === 'restic' ? resticQuery(subcommand, parameters) : binary !== 'find' && backupQuery(binary, pg?.options ?? optionArgs)) return {};
   if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
     onIncomplete();
     return {};
@@ -2332,6 +2357,14 @@ function malformedShellCandidate(command, kind) {
   const first = /^\s*([^\s'"\\;|&<>]+)/.exec(command)?.[1];
   if (!first) return false;
   const binary = basename(first);
+  if (binary === 'npm' || binary === 'pnpm') {
+    const prefix = /^\s*[^\s]+\s+(?:run(?:-script)?\s+)?(personal:[\w-]+)(?=\s|$)/.exec(command);
+    if (prefix) {
+      const target = prefix[1];
+      return kind === 'backup' ? /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(target)
+        : kind === 'disk' ? target === 'personal:maintenance' : target === 'personal:watch';
+    }
+  }
   if (kind === 'backup') return /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
   if (kind === 'disk') return /^(?:df|docker|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
   return /^(?:alertmanager|npm|pnpm|node|curl|wget|logrotate|(?:ba|da|k|z)?sh)$/.test(binary);

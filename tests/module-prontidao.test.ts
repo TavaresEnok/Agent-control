@@ -2699,7 +2699,11 @@ test('R14: prova positiva de retenção e posições de operandos', () => {
       const out = audit(`pg_dump db\nfind . ${expression}`);
       assert.ok(has(out, 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE') || out.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status === 'failed', expression);
     }
-    assert.equal(has(audit('pg_dump db\nfind . -mtime +7 -delete'), 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), false);
+    const clean = audit('pg_dump db\nfind . -mtime +7 -delete');
+    assert.equal(has(clean, 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), false);
+    const coverage = clean.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao');
+    assert.equal(coverage?.status, 'ok');
+    assert.match(coverage?.detail ?? '', /retenção de backup identificada/);
     assert.equal(has(audit('pg_dump -V'), 'PRONTIDAO-BACKUP-AUSENTE'), true);
     assert.equal(has(audit('pg_dump -vV'), 'PRONTIDAO-BACKUP-AUSENTE'), true);
     assert.equal(has(audit("pg_dump -n '-falso' -f /seguro/real.sql app"), 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
@@ -2716,5 +2720,47 @@ test('R14: prova positiva de retenção e posições de operandos', () => {
     assert.equal(out.coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.status, 'ok');
     assert.ok(has(out, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'));
     assert.equal(audit('timeout -s"$SINAL" TERM 30s df -P /').coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.status, 'failed');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
+
+
+test('R15: expressões completas e posições de opções e operandos', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r15-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const audit = (line: string) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
+      return runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+    };
+    const coverage = (out: ReturnType<typeof audit>, pillar = 'backup-restauracao') => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`);
+    const has = (out: ReturnType<typeof audit>, rule: string) => out.findings.some(f => f.rule === rule);
+    for (const expression of ['-mtime +7 -delete -and', '-mtime +7 -delete -name', '-mtime +7 -delete -o -print', '-mtime +7 -delete -unknown']) {
+      const out = audit(`pg_dump db\nfind . ${expression}`);
+      assert.equal(coverage(out)?.status, 'failed', expression);
+      assert.doesNotMatch(coverage(out)?.detail ?? '', /retenção de backup identificada/, expression);
+    }
+    for (const expression of ['-name --help -mtime +7 -delete', '-mtime +7 -and -name -delete -delete']) {
+      const out = audit(`pg_dump db\nfind . ${expression}`);
+      assert.equal(coverage(out)?.status, 'ok', expression);
+      assert.match(coverage(out)?.detail ?? '', /retenção de backup identificada/, expression);
+    }
+    const print = audit('pg_dump db\nfind . -print -o -print0');
+    assert.equal(coverage(print)?.status, 'ok');
+    assert.ok(has(print, 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'));
+    for (const option of ["'-?'", '-V', '-vV']) assert.ok(has(audit(`pg_dump ${option}`), 'PRONTIDAO-BACKUP-AUSENTE'), option);
+    const pg = audit("pg_dump -N '-falso' app > /seguro/real.sql");
+    assert.equal(has(pg, 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
+    assert.equal(has(pg, 'PRONTIDAO-BACKUP-AUSENTE'), false);
+    const restic = audit('restic -r --help --verbose backup /srv');
+    assert.equal(coverage(restic)?.status, 'failed');
+    for (const option of ['-vsT', '-fpvsT']) {
+      const timeout = audit(`timeout ${option}"$SINAL" TERM 30s df -P /`);
+      assert.equal(coverage(timeout, 'disco-memoria')?.status, 'ok', option);
+      assert.ok(has(timeout, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'), option);
+    }
+    const shell = audit(`timeout -- 30s sh -c 'npm run personal:backup "'`);
+    assert.equal(coverage(shell)?.status, 'failed');
+    for (const pillar of ['disco-memoria', 'alertas-logs']) assert.equal(coverage(shell, pillar)?.status, 'ok', pillar);
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
