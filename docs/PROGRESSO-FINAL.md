@@ -879,3 +879,10 @@ PAUSADO-COTA
 - 19/11/2026 18:34 UTC — A3-RECUPERACAO-FECHAMENTO encerrado com código 0.
 - 19/11/2026 18:34 UTC — revisor-C8-ACEITE-LEXICO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:34 UTC — QA consolidou 97ae7a6f, bb09d6b3 e 7fac22bb em 69adc794 para nova imagem e revisão. Em A3, o parecer de 93deefd7 apontou quatro problemas de replay e evidência de retirada; o trabalho de correção foi atribuído sem acessar a instalação.
+- 19/11/2026 18:34 UTC — trabalho-A3-REPLAY-PROVA iniciado em final-a3 por Sol high normal.
+- 19/11/2026 18:34 UTC — Recuperação de design A3 em 93deefd7 passou em 8 testes dirigidos de interrupção, replay e falha de modelo com PostgreSQL descartável.
+- 19/11/2026 18:37 UTC — Prova de atualização de esquema: um PostgreSQL 16 descartável passou do esquema 103 do ramo instalado ao 114 dos oito módulos usando Ledger.migrate. Os digests já aplicados foram preservados e a repetição manteve o mesmo catálogo.
+- 19/11/2026 18:38 UTC — O painel de verificações passou nos testes das rotas alteradas e gerou os assets de produção do Vite em pasta privada. A cópia servida na instalação só será substituída após o backup e o aceite.
+- 19/11/2026 18:38 UTC — C8-ACEITE-LEXICO encerrado com código 0.
+- 19/11/2026 18:38 UTC — revisor-C9-ACEITE-ORIGEM iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:39 UTC — O revisor da documentação confirmou o tratamento parcial dos casos anteriores e apontou três casos do TypeDoc: comentário transferido para membro, mapa indexado e perda de linha em comentário simples. A correção segue no worktree C8. O painel passou em 10/10 e o catálogo de migrações 103→114 permaneceu estável na repetição.
