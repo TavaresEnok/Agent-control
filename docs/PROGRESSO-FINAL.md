@@ -193,3 +193,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:54 UTC — Revisão C7-R4 iniciada por Sol high normal somente leitura em 9a7018c4.
 - 19/11/2026 02:55 UTC — C8-R4 retornou com três altos e dois médios sobre a origem das arestas e a interpretação da configuração e de JSDoc. Aberta C8-R5. Na prontidão, o detector passou a usar mensagem constante que o parser comum ainda recusava. Corrigido o contrato estrito e a prova de TLS por arquivo, linha e texto fixo; C6-R7 voltou a passar 6/6 na CLI em 8bff52b5.
 - 19/11/2026 02:56 UTC — Recuperação R6 em 57471e2c: 10/10 testes de recuperação de contêiner, incluindo Docker real, e 2/2 provas finais de restauro e de colisão de diretório legado no PostgreSQL. A rejeição por imagem ausente obteve falha de ferramenta sem bloquear o sucessor. Um create de resultado desconhecido conserva o token para remover uma entrega tardia, e o ID sem gravação confirmada permanece recuperável. Na bateria de persistência, 24 aprovados e três laboratórios pulados que foram executados à parte.
+- 19/11/2026 02:58 UTC — Revisor encerrou C7-R4 em 9a7018c4 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:58 UTC — Revisão C6-R7 iniciada por Sol high normal somente leitura em 757eced2.
+- 19/11/2026 02:59 UTC — Trabalhador encerrou C5-R4 em 5d494800 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:59 UTC — Trabalho C9-R3 iniciado por Sol high normal em final-c9.
+- 19/11/2026 03:00 UTC — Trabalhador encerrou C2-R6 em 9b8959dc (código 0). Gerente confere a entrega.
+- 19/11/2026 03:00 UTC — Trabalho C4-R5 iniciado por Sol high normal em final-c4.
+- 19/11/2026 03:01 UTC — C5-R4 entregue em 5d494800; reconstrução da imagem e laboratório iniciados. Revisão independente de desempenho identificou um risco de contêiner ou volume órfão após timeout e três defeitos médios em rotas, baseline e falha de backend. Ordem C7-R5 aberta.
