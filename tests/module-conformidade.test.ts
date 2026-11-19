@@ -26,6 +26,15 @@ test('C9 fixa a base, os wheels e o lock que a imagem instala', () => {
   for (const aptPackage of lock.aptPackages) assert.ok(dockerfile.includes(aptPackage.sha256));
   assert.ok(dockerfile.includes('--no-deps --require-hashes --only-binary=:all:'));
   assert.equal(createHash('sha256').update(requirements).digest('hex'), lock.requirementsLockSha256);
+  const {runtime, compiler} = lock.javascriptParser;
+  for (const component of [runtime, compiler]) {
+    assert.match(component.sha256, /^[a-f0-9]{64}$/);
+    assert.ok(dockerfile.includes('--checksum=sha256:' + component.sha256 + ' ' + component.url));
+  }
+  const npmLock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  const parserPackage = npmLock.packages['deploy/modules/conformidade/node_modules/typescript'];
+  assert.equal(parserPackage.version, compiler.version);
+  assert.equal(parserPackage.integrity, compiler.integrity);
   for (const tool of lock.tools) {
     assert.match(tool.sha256, /^[a-f0-9]{64}$/);
     if (tool.name === 'ort') {
@@ -135,7 +144,7 @@ const alias:
     string = payload.cpf;
 logger.info(alias);"""
 templates = r"""const alias = request.email;
-const message = ~literal cpf SYNTHETIC_VALUE #{choose("}", ~nested #{alias}~)}~;
+const message = ~literal cpf SYNTHETIC_VALUE #{~nested #{alias}~}~;
 logger.info(message);
 logger.debug(~live #{request.cpf}~);
 logger.log(~escaped cpf \#{request.cpf} SYNTHETIC_VALUE~);
@@ -163,7 +172,7 @@ print(json.dumps(reports))
     report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_')).map(row =>
       [row.rule, row.line, row.evidence.match(/linha (\d+)/)?.[1]]);
   assert.deepEqual(destinations(cases[0]), [
-    ['PII_POSSIBLE_NETWORK', 2, '1'], ['PII_POSSIBLE_LOG', 7, '6'],
+    ['PII_POSSIBLE_NETWORK', 2, '1'], ['PII_POSSIBLE_LOG', 7, '1'],
   ]);
   assert.deepEqual(destinations(cases[1]), [
     ['PII_POSSIBLE_LOG', 3, '1'], ['PII_POSSIBLE_LOG', 4, '4'],
@@ -277,7 +286,7 @@ db.query("INSERT INTO synthetic (cpf) VALUES (?)", [syntheticRow.cpf]);
 db.query("INSERT INTO synthetic (cpf) VALUES (?)", ["SYNTHETIC_MARKER", "cpf"]);
 db.query("UPDATE synthetic SET cpf = 'SYNTHETIC_MARKER'");
 db.query("SELECT cpf FROM synthetic WHERE cpf = ?", [syntheticRow.cpf]);
-db.query("example INSERT INTO synthetic (cpf) VALUES (?)", [syntheticRow.cpf]);
+db.query("SELECT 'example INSERT INTO synthetic (cpf) VALUES (?)'", [syntheticRow.cpf]);
 logger.info("db.query('INSERT INTO synthetic (cpf) VALUES (?)', [syntheticRow.cpf])");
 /* db.query("INSERT INTO synthetic (cpf) VALUES (?)", [syntheticRow.cpf]); */
 db.query("SELECT 'INSERT INTO synthetic' FROM synthetic", [payload]);
@@ -292,6 +301,79 @@ assert locations == [("PII_POSSIBLE_STORAGE", 2, 1),
                      ("PII_POSSIBLE_STORAGE", 7, 7)], locations
 assert result["coverage"][0]["status"] == "ok", result["coverage"]
 assert not re.search(r"SYNTHETIC_MARKER|syntheticRow|INSERT INTO|UPDATE synthetic", json.dumps(result))
+`);
+});
+
+test('C9 atribui destinos da fixture R6 e preserva os controles negativos em JS, TS e Python', () => {
+  python(String.raw`
+from pathlib import Path
+import json
+import re
+import sys
+from collector import Report, inspect_privacy
+from unittest.mock import Mock, patch
+
+root = Path(sys.argv[1], "atribuicao")
+expected = json.loads((root / "expected.json").read_text())
+selected = {name: root / "repo" / name for name in expected}
+recognizer = Mock()
+recognizer.analyze.return_value = []
+report = Report()
+with patch("lgpd_analyzer.create_presidio", return_value=recognizer):
+    inspect_privacy(selected, "2.2.366", report)
+output = report.output()
+assert not report.has_errors, output["coverage"]
+for file, locations in expected.items():
+    destinations = [
+        [row["rule"].removeprefix("PII_POSSIBLE_"), row["line"],
+         int(re.search(r"linha (\d+)\.", row["evidence"])[1])]
+        for row in output["findings"]
+        if row["file"] == file and row["rule"].startswith("PII_POSSIBLE_")
+    ]
+    assert destinations == locations, (file, destinations)
+assert not re.search(r"SYNTHETIC_|syntheticRow|logger\.info|INSERT INTO", json.dumps(output))
+`);
+});
+
+test('C9 mede sintaxe, SQL e transformações fora do rastreamento sem inventar destinos', () => {
+  python(String.raw`
+import json
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+cases = [
+    ("s.ts", 'logger.info(syntheticRow.cpf', "failed", "sintaxe não analisável"),
+    ("s.py", 'logger.info(synthetic_row.cpf', "failed", "sintaxe não analisável"),
+    ("s.php", '// logger.info(syntheticRow.cpf);', "skipped", "Sem parser de destinos"),
+    ("s.ts", 'db.query(command, [syntheticRow.cpf]);', "failed", "sem comando literal"),
+    ("s.ts", 'db.query("example INSERT INTO synthetic (tag) VALUES (?)", [syntheticRow.cpf]);',
+     "failed", "fora do recorte de escrita"),
+    ("s.ts", 'db.query("WITH src(v) AS (SELECT ?) INSERT INTO synthetic (tag) SELECT v FROM src", [syntheticRow.cpf]);',
+     "failed", "fora do recorte de escrita"),
+    ("s.ts", 'db.query("UPDATE synthetic SET tag = lower($1)", [syntheticRow.cpf]);',
+     "failed", "fora do recorte de escrita"),
+    ("s.ts", 'db.query("INSERT INTO synthetic (tag) VALUES ($1)", () => syntheticRow.cpf);',
+     "failed", "parâmetros SQL sem vínculo"),
+    ("s.ts", 'db.query("INSERT INTO synthetic (tag) VALUES ($2)", [syntheticRow.cpf]);',
+     "failed", "parâmetros SQL sem vínculo"),
+    ("s.ts", 'localStorage.setItem("synthetic-key", transform(syntheticRow.cpf));',
+     "failed", "resultados de chamadas indiretas"),
+]
+for file, text, status, detail in cases:
+    report = Report()
+    inspect_fields(text, file, report)
+    output = report.output()
+    assert output["coverage"][0]["status"] == status, output["coverage"]
+    assert detail in output["coverage"][0]["detail"], output["coverage"]
+    assert not any(row["rule"].startswith("PII_POSSIBLE_") for row in output["findings"]), output
+    assert "syntheticRow" not in json.dumps(output)
+
+report = Report()
+with patch("lgpd_analyzer.which", return_value=None):
+    inspect_fields('logger.info(syntheticRow.cpf)', 'synthetic.ts', report)
+assert report.has_errors and "parser JavaScript/TypeScript indisponível" in report.coverage[0]["detail"]
+assert not any(row["rule"].startswith("PII_POSSIBLE_") for row in report.output()["findings"])
 `);
 });
 

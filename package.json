@@ -59,5 +59,8 @@
     "@types/web-push": "3.6.4",
     "tsx": "4.21.0",
     "typescript": "7.0.2"
-  }
+  },
+  "workspaces": [
+    "deploy/modules/conformidade"
+  ]
 }

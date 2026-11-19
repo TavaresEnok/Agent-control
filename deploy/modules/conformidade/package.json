@@ -1,0 +1,7 @@
+{
+  "name": "@agent-control/conformidade-parser",
+  "private": true,
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
