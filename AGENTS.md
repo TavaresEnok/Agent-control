@@ -51,3 +51,8 @@
   - **Revisores:** até **2** `gpt-6.2-sol`, esforço `high`, modo **normal**, só leitura; recebem a ordem e o diff, nunca a conclusão do autor.
   - Os Gemini (Argon e Hydrogen) deixam de ser acionados; o trabalho parcial deles nos worktrees é aproveitado pelos trabalhadores Sol.
   - Erro de cota de qualquer modelo é registrado na hora em `docs/PROGRESSO-FINAL.md` com a palavra `COTA`.
+- **Equipe a partir de 19/11/2026, 01:2x UTC (titular), substitui a anterior:**
+  - **Gerente:** `gpt-6.2-astra`, esforço `ultra`, modo fast.
+  - **Revisores:** até **2** `gpt-6.2-sol`, esforço `ultra`, modo normal, só leitura.
+  - **Trabalhadores:** até **4** `gpt-6.1-terra`, esforço `ultra`, modo normal. Trailer: `Co-Authored-By: GPT-6.1 Terra <noreply@openai.com>`.
+  - Trabalhadores Sol que já estão rodando terminam a ordem atual. Não lance outro Sol. Ordens novas só para Terra, e no máximo 4 trabalhadores ativos depois que os Sol terminarem.

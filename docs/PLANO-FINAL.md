@@ -39,7 +39,24 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
   - Nunca compre créditos.
   - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
 
-## Equipe atual (titular, 19/11/2026, substitui a seção seguinte e a parte de trabalhadores Gemini)
+## Equipe atual (titular, 19/11/2026 ~01:20 UTC, substitui as seções de equipe abaixo)
+
+- Gerente: `gpt-6.2-astra`, esforço `ultra`, fast.
+- Revisores: até 2 `gpt-6.2-sol`, esforço `ultra`, modo normal, só leitura:
+
+  ```
+  codex exec --skip-git-repo-check --sandbox read-only -m gpt-6.2-sol -c model_reasoning_effort=ultra ...
+  ```
+
+- Trabalhadores: até 4 `gpt-6.1-terra`, esforço `ultra`, modo normal:
+
+  ```
+  codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -m gpt-6.1-terra -c model_reasoning_effort=ultra -C <worktree> "..."
+  ```
+
+- Os trabalhadores Sol que já estão rodando terminam a ordem atual. Não lance outro Sol.
+
+## Equipe anterior (histórico)
 
 - Gerente: `gpt-6.2-astra`, esforço `high`, fast.
 - Trabalhadores: até 8 Codex `gpt-6.2-sol`, esforço `medium`, modo normal, sem `service_tier`. Acione cada um no seu worktree assim (o bubblewrap do sandbox não funciona neste host):

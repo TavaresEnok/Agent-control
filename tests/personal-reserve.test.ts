@@ -217,16 +217,17 @@ test('perfil revisor preparado vence preferência por outra conta e preserva alt
   await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
   await capacity.registerModel(principal,{provider:'claude',model:'claude-opus-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://revpref'});
   await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://revpref'});
-  const claudeA=randomUUID(),claudeB=randomUUID();
-  for(const [id,label] of [[claudeA,'claude-a'],[claudeB,'claude-b']] as const){
+  const claudeA=randomUUID(),claudeB=randomUUID(),claudeC=randomUUID();
+  for(const [id,label] of [[claudeA,'claude-a'],[claudeB,'claude-b'],[claudeC,'claude-c']] as const){
    await capacity.addAccount(principal,project,{id,provider:'claude',label,resourceIdentity:`claude:${id}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://revpref',maxConcurrent:id===claudeA?2:1});
    await capacity.observeQuota(principal,id,{status:'available',source:'synthetic://revpref',ttlSeconds:3600});
   }
-  const pCreateB=randomUUID(),pExaminerA=randomUUID(),pReviewerA=randomUUID(),pReviewerB=randomUUID();
+  const pCreateB=randomUUID(),pExaminerA=randomUUID(),pReviewerA=randomUUID(),pReviewerB=randomUUID(),pCreateC=randomUUID();
   await capacity.addProfile(principal,project,{id:pCreateB,accountId:claudeB,model:'claude-opus-5-5',effort:'medium',role:'specialist'});
   await capacity.addProfile(principal,project,{id:pExaminerA,accountId:claudeA,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
   await capacity.addProfile(principal,project,{id:pReviewerA,accountId:claudeA,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
   await capacity.addProfile(principal,project,{id:pReviewerB,accountId:claudeB,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pCreateC,accountId:claudeC,model:'claude-opus-5-5',effort:'medium',role:'specialist'});
   const rev1=await capacity.publish(principal,project,0,{
    schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
    roles:{specialist:{regular:[pCreateB,pExaminerA],emergency:[pReviewerA]}},
@@ -250,7 +251,7 @@ test('perfil revisor preparado vence preferência por outra conta e preserva alt
   // 2) Havendo dois revisores preparados, escolhe o revisor preparado em outra conta (pReviewerB).
   const rev2=await capacity.publish(principal,project,rev1,{
    schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:4,
-   roles:{specialist:{regular:[pCreateB,pExaminerA],emergency:[pReviewerA,pReviewerB]}},
+   roles:{specialist:{regular:[pCreateB,pExaminerA,pCreateC],emergency:[pReviewerA,pReviewerB]}},
   });
   await capacity.assignPolicy(principal,context,rev2);
   const preparedB=await reserveSpecialistExamSeat({
@@ -290,13 +291,32 @@ test('perfil revisor preparado vence preferência por outra conta e preserva alt
   assert.equal(secondReviewerOtherAccount.accountId,claudeB);
   await release(secondReviewerOtherAccount.grantId);
 
-  // B está ocupada e A tem só uma vaga. Duas tentativas disputam essa vaga.
+  await capacity.setEnabled(principal,project,'profile',{id:pReviewerB,enabled:true,expectedRevision:2});
+  const preferredWhenFree=await capacity.reserve(principal,{
+   intentId,contextId:context,role:'specialist',provider:'claude',attemptId:randomUUID(),
+   avoidAccounts:[claudeA],avoidProfiles:[pExaminerA],examReviewer:{preparedProfiles:[pReviewerB,pReviewerA]},
+  },authority);
+  assert.equal(preferredWhenFree.profile_id,pReviewerB);
+  await release(preferredWhenFree.id);
+  // B está ocupada, C está livre e A não tem perfil permitido: espera em B.
   const basicRequest={intentId,contextId:context,role:'specialist',provider:'claude'} as const;
   const holdB=await capacity.reserve(principal,{...basicRequest,attemptId:randomUUID(),preferredProfileId:pCreateB},authority);
+  const noA={...basicRequest,attemptId:randomUUID(),avoidAccounts:[claudeA],avoidProfiles:[pExaminerA,pReviewerA],examReviewer:{preparedProfiles:[pReviewerB]}};
+  await assert.rejects(()=>capacity.reserve(principal,noA,authority),(error:unknown)=>error instanceof Refusal&&error.code==='CAPACITY_BUSY');
+  assert.deepEqual((await db.pool.query('SELECT desired_profile,reason FROM ac_capacity_waits WHERE attempt_id=$1',[noA.attemptId])).rows,
+   [{desired_profile:pReviewerB,reason:'CAPACITY_BUSY'}]);
+  await capacity.cancelWait(principal,noA.attemptId,authority);
+  const ordinary={...basicRequest,attemptId:randomUUID(),avoidAccounts:[claudeA],preferredProfileId:pCreateB};
+  await assert.rejects(()=>capacity.reserve(principal,ordinary,authority),(error:unknown)=>error instanceof Refusal&&error.code==='CAPACITY_BUSY');
+  assert.deepEqual((await db.pool.query('SELECT desired_profile,reason FROM ac_capacity_waits WHERE attempt_id=$1',[ordinary.attemptId])).rows,
+   [{desired_profile:pCreateB,reason:'CAPACITY_BUSY'}]);
+  await capacity.cancelWait(principal,ordinary.attemptId,authority);
+
+  // B continua cheia e A tem só uma vaga. Duas tentativas disputam essa vaga, com C livre.
   const holdA=await capacity.reserve(principal,{...basicRequest,attemptId:randomUUID(),preferredProfileId:pReviewerA},authority);
   assert.equal(holdB.account_id,claudeB);
   assert.equal(holdA.account_id,claudeA);
-  const secondRequest={...basicRequest,avoidAccounts:[claudeA],avoidProfiles:[pExaminerA],examReviewer:{preparedProfiles:[pReviewerA]}};
+  const secondRequest={...basicRequest,avoidAccounts:[claudeA],avoidProfiles:[pExaminerA],examReviewer:{preparedProfiles:[pReviewerB,pReviewerA]}};
   const otherContext=await db.createContext(principal,project,randomUUID());
   await capacity.assignPolicy(principal,otherContext,rev2);
   const otherAuthority=await db.acquire(principal,otherContext,randomUUID(),'revpref-other',60);
@@ -318,17 +338,19 @@ test('perfil revisor preparado vence preferência por outra conta e preserva alt
   assert.ok(blocked?.status==='rejected'&&blocked.reason instanceof Refusal);
   assert.equal(blocked.reason.code,'CAPACITY_BUSY');
   const wait=()=>db.pool.query('SELECT attempt_id,desired_profile,reason FROM ac_capacity_waits WHERE context_id=ANY($1::uuid[])',[[context,otherContext]]);
-  assert.deepEqual((await wait()).rows,[{attempt_id:requests[blockedIndex].request.attemptId,desired_profile:pCreateB,reason:'CAPACITY_BUSY'}]);
+  assert.deepEqual((await wait()).rows,[{attempt_id:requests[blockedIndex].request.attemptId,desired_profile:pReviewerB,reason:'CAPACITY_BUSY'}]);
 
-  await release(holdB.id);
+  // A mesma tentativa troca de B para A quando abre vaga em A, mantendo B cheia.
+  await release(holdA.id);
   const retried=await reserveSecond(requests[blockedIndex]);
-  assert.equal(retried.grant.account_id,claudeB);
+  assert.equal(retried.grant.account_id,claudeA);
+  assert.equal(retried.grant.profile_id,pReviewerA);
   assert.deepEqual((await wait()).rows,[]);
   for(const grant of [retried.grant,granted.value.grant]){
    const manager=grant.context_id===context?authority:otherAuthority;
    await capacity.transition(principal,grant.id,manager,'released',{processId:'revpref',state:'not_started'});
   }
-  await release(holdA.id);
+  await release(holdB.id);
 
   const revSingleAccount=await capacity.publish(principal,project,rev2,{
    schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
