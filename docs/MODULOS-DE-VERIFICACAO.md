@@ -116,7 +116,7 @@ Primeiro alvo: o próprio Agent Control. O resultado serve de pré-revisão para
 
 ### 2. QA pesado
 
-Em homologação, a CLI `personal:qa` executou os testes Node três vezes, registrou os mutantes medidos pelo Stryker e analisou acessibilidade de HTML estático com axe. A imagem de `b1b254f3` passou no laboratório. A revisão de `211dc9aa` encontrou casos de asserção inalcançável e função impura contados como prova. A rodada C2-R6 cobre esses casos. Contraste visual, testes Python e Go e varreduras de entradas externas ficam fora dessa prova.
+[Prova do módulo 2 em homologação](#prova-do-módulo-2)
 
 Entrega uma matriz que liga cada requisito e cada funcionalidade aos testes que a provam. Mostra também o que não tem teste e quão fortes são os testes que existem. Os testes novos entram como tarefas no fluxo normal, para passar por revisão.
 
@@ -137,7 +137,7 @@ Ficam de fora: Dredd (arquivado), Qodo Cover (sem manutenção), Chaos Mesh (exi
 
 ### 3. Arquitetura e dívida técnica
 
-Em homologação, a CLI `personal:arquitetura` mediu código JavaScript e TypeScript com Knip, complexidade no AST, duplicação com jscpd e dependências com dependency-cruiser. O laboratório da imagem fixada em `303b1b36` passou após conferir a contagem por arquivo com caminhos equivalentes e o controle limpo.
+[Prova do módulo 3 em homologação](#prova-do-módulo-3)
 
 Entrega:
 
@@ -157,7 +157,7 @@ SonarQube fica de fora: é pesado demais para poucos sistemas.
 
 ### 4. Dependências e atualizações
 
-Em homologação, `personal:dependencias` comparou versões com o registro de teste offline, identificou chamadas a migrar, exercitou o codemod em uma cópia e comparou inventários de dependências. Os 20 testes dirigidos, incluindo o laboratório da imagem fixada em `ec1122ff`, passaram. Atualizações disponíveis dependem da data do inventário fornecido.
+[Prova do módulo 4 em homologação](#prova-do-módulo-4)
 
 Entrega o que está velho, o risco de cada atualização e as mudanças de código prontas. Ferramentas:
 
@@ -170,7 +170,7 @@ O SBOM do módulo 1 é reaproveitado. Cada atualização vira um pedido separado
 
 ### 5. Banco de dados
 
-Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A revisão abriu C5-R4 para atribuição de erros e cobertura do workload.
+[Prova do módulo 5 em homologação](#prova-do-módulo-5)
 
 Entrega:
 
@@ -188,7 +188,7 @@ Ferramentas:
 
 ### 6. Prontidão para produção
 
-Em homologação, `personal:prontidao` registrou evidências locais de configuração, Gitleaks, Hadolint e Trivy em execução offline. O laboratório exerceu também a conversão de um achado em tarefa. A revisão da versão `bce4196c` abriu C6-R7 para corrigir a cobertura operacional e manter só a localização de segredos nos achados.
+[Prova do módulo 6 em homologação](#prova-do-módulo-6)
 
 Entrega uma lista de verificação do sistema publicado:
 
@@ -203,7 +203,7 @@ Tudo é passivo, então pode rodar contra produção. Reaproveita o vigia e o ba
 
 ### 7. Desempenho
 
-A homologação deste módulo está em andamento. O ramo de integração de desempenho em `f49cb686` reúne a medição HTTP isolada, o perfil de CPU e o coletor de métricas PostgreSQL. A prova conjunta das quatro ferramentas pela CLI depende da integração C7-R4.
+[Prova do módulo 7 em homologação](#prova-do-módulo-7)
 
 Entrega as telas, rotas e consultas lentas e se pioraram desde a última vez. Ferramentas:
 
@@ -216,13 +216,13 @@ clinic.js e 0x ficam de fora: estão parados.
 
 ### 8. Documentação viva
 
-Em homologação, `personal:documentacao` produziu `api.json` e `dependencias.mmd`, com verificação de conteúdo antes da publicação no relatório privado. Os 16 testes da imagem de `bdcaa6c6` passaram. A revisão abriu C8-R4 para variantes de arestas Mermaid e resolução de caminhos TypeScript.
+[Prova do módulo 8 em homologação](#prova-do-módulo-8)
 
 Entrega a documentação e os diagramas gerados do código, mais a lista do que está desatualizado. Ferramentas: TypeDoc (Apache-2.0), dependency-cruiser e Mermaid. O revisor confere cada afirmação contra o código, porque texto escrito por IA pode inventar detalhes.
 
 ### 9. Conformidade (LGPD e licenças)
 
-Em homologação, `personal:conformidade` analisou licenças e dados pessoais com ScanCode, ORT e Presidio em um projeto sintético. A imagem fixada em `6c3cddbf` passou nos nove testes, inclusive o laboratório que exige detectar o CPF artificial e a licença plantada e aprovar um controle limpo. A prova cobrindo a CLI passou em `7585aa9c`.
+[Prova do módulo 9 em homologação](#prova-do-módulo-9)
 
 Entrega:
 
@@ -235,7 +235,7 @@ Ferramentas:
 - ORT (Apache-2.0; pesado, precisa de cerca de 8 GB);
 - Presidio (MIT), com regras próprias para CPF.
 
-O coletor acrescenta ao Presidio um reconhecedor de CPF que verifica os dígitos. A prova acima usa somente dados artificiais.
+A homologação deve conferir o reconhecedor de CPF com dados artificiais e validação dos dígitos.
 
 ### 10. Design e experiência de uso
 
@@ -277,3 +277,37 @@ O exame de leitura continua só com Claude. Achado `alta` sem medida estruturada
 | 1.8 | Rodar no próprio Agent Control e entregar o relatório | relatório real, achados altos corrigidos pelo fluxo normal |
 
 O repositório de exemplo com falhas plantadas, como injeção, segredo no histórico, rota sem autorização e dependência vulnerável, é a régua do módulo. A taxa de acerto do validador é medida nele antes de usá-lo em sistema real.
+
+## Provas da parte C em homologação
+
+### Prova do módulo 2
+
+**QA pesado.** Em homologação, a CLI `personal:qa` executou os testes Node três vezes, registrou os mutantes medidos pelo Stryker e analisou acessibilidade de HTML estático com axe. A imagem de `b1b254f3` passou no laboratório. A revisão de `211dc9aa` encontrou casos de asserção inalcançável e função impura contados como prova. A rodada C2-R6 cobre esses casos. Contraste visual, testes Python e Go e varreduras de entradas externas ficam fora dessa prova.
+
+### Prova do módulo 3
+
+**Arquitetura e dívida técnica.** Em homologação, a CLI `personal:arquitetura` mediu código JavaScript e TypeScript com Knip, complexidade no AST, duplicação com jscpd e dependências com dependency-cruiser. O laboratório da imagem fixada em `303b1b36` passou após conferir a contagem por arquivo com caminhos equivalentes e o controle limpo.
+
+### Prova do módulo 4
+
+**Dependências e atualizações.** Em homologação, `personal:dependencias` comparou versões com o registro de teste offline, identificou chamadas a migrar, exercitou o codemod em uma cópia e comparou inventários de dependências. Os 20 testes dirigidos, incluindo o laboratório da imagem fixada em `ec1122ff`, passaram. Atualizações disponíveis dependem da data do inventário fornecido.
+
+### Prova do módulo 5
+
+**Banco de dados.** Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A revisão abriu C5-R4 para atribuição de erros e cobertura do workload.
+
+### Prova do módulo 6
+
+**Prontidão para produção.** Em homologação, `personal:prontidao` registrou evidências locais de configuração, Gitleaks, Hadolint e Trivy em execução offline. O laboratório exerceu também a conversão de um achado em tarefa. A revisão da versão `bce4196c` abriu C6-R7 para corrigir a cobertura operacional e manter só a localização de segredos nos achados.
+
+### Prova do módulo 7
+
+**Desempenho.** A homologação deste módulo está em andamento. O ramo de integração de desempenho em `f49cb686` reúne a medição HTTP isolada, o perfil de CPU e o coletor de métricas PostgreSQL. A prova conjunta das quatro ferramentas pela CLI depende da integração C7-R4.
+
+### Prova do módulo 8
+
+**Documentação viva.** Em homologação, `personal:documentacao` produziu `api.json` e `dependencias.mmd`, com verificação de conteúdo antes da publicação no relatório privado. Os 16 testes da imagem de `bdcaa6c6` passaram. A revisão abriu C8-R4 para variantes de arestas Mermaid e resolução de caminhos TypeScript.
+
+### Prova do módulo 9
+
+**Conformidade (LGPD e licenças).** Em homologação, `personal:conformidade` analisou licenças e dados pessoais com ScanCode, ORT e Presidio em um projeto sintético. A imagem fixada em `6c3cddbf` passou nos nove testes, inclusive o laboratório que exige detectar o CPF artificial e a licença plantada e aprovar um controle limpo. A prova cobrindo a CLI passou em `7585aa9c`.
