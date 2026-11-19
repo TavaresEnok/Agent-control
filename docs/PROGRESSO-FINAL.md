@@ -1120,3 +1120,5 @@ PAUSADO-COTA
 - 19/11/2026 21:07 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 21:07 UTC — C-CAMINHOS-VIVOS encerrado com código 0.
 - 19/11/2026 21:07 UTC — Correção caminhos-vivos recebida em c95fd3cd. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 21:07 UTC — C-PROVA-LEASE-VIVA encerrado com código 0.
+- 19/11/2026 21:07 UTC — Correção prova-lease-viva recebida em 4f599841. Revisão Sol high somente leitura solicitada.
