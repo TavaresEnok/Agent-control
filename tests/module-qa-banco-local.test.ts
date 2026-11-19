@@ -244,7 +244,7 @@ test('revoga o escopo de leitura quando a execução da assertiva falha', async 
 
 const testPgBin = process.env.QA_BANCO_TEST_PG_BIN;
 
-test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados por proprietário e banco', {
+test('PostgreSQL e pgTAP avaliam dados sintéticos com escopo de ACL, herança e partições', {
   skip: !testPgBin,
   timeout: 30_000,
 }, async () => {
@@ -344,7 +344,9 @@ test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados po
       assert.equal(await acl(), originalAcl);
     }
 
-    async function checkPublicAcl(relation: string, privileges: string, expected: 'passed' | 'scope-unconfirmed') {
+    async function checkReaderScope(
+      relation: string, privileges: string, expected: 'passed' | 'scope-unconfirmed', predicate = 'SELECT TRUE',
+    ) {
       const before = await acl();
       const calls: string[] = [];
       let observed: {metadata: string, scope: string} | undefined;
@@ -367,25 +369,58 @@ test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados po
         }
         return psql(db, commands, user);
       };
-      assert.equal(await attestPostgres(checkedPsql, 'fresh', 'SELECT TRUE'), expected);
+      assert.equal(await attestPostgres(checkedPsql, 'fresh', predicate), expected);
       assert.deepEqual(observed, {metadata: `${privileges}\nf\n`, scope: expected === 'passed' ? 't\n' : 'f\n'});
       assert.deepEqual(calls, expected === 'passed' ? ['scope', 'read', 'tap'] : ['scope']);
       assert.equal(await acl(), before);
     }
 
     await psql('fresh', ['GRANT SELECT ON TABLE public.tabela_admin TO PUBLIC'], 'qa_admin');
-    await checkPublicAcl('public.tabela_admin', 't|t|t', 'scope-unconfirmed');
+    await checkReaderScope('public.tabela_admin', 't|t|t', 'scope-unconfirmed');
     await psql('fresh', ['REVOKE SELECT ON TABLE public.tabela_admin FROM PUBLIC'], 'qa_admin');
 
     await psql('fresh', ['GRANT SELECT (id) ON TABLE qa_interno.tabela_projeto TO PUBLIC'], 'qa_admin');
-    await checkPublicAcl('qa_interno.tabela_projeto', 'f|f|t', 'passed');
+    await checkReaderScope('qa_interno.tabela_projeto', 'f|f|t', 'passed');
     await psql('fresh', ['GRANT USAGE ON SCHEMA qa_interno TO PUBLIC'], 'qa_admin');
-    await checkPublicAcl('qa_interno.tabela_projeto', 't|f|t', 'scope-unconfirmed');
+    await checkReaderScope('qa_interno.tabela_projeto', 't|f|t', 'scope-unconfirmed');
     await psql('fresh', [
       'REVOKE SELECT (id) ON TABLE qa_interno.tabela_projeto FROM PUBLIC',
       'REVOKE USAGE ON SCHEMA qa_interno FROM PUBLIC',
     ], 'qa_admin');
-    const postPublicAcl = await acl();
+
+    await psql('fresh', [
+      'CREATE TABLE public.itens_herdados (id integer)',
+      'CREATE TABLE "fixture QA".itens_filho () INHERITS (public.itens_herdados)',
+      'INSERT INTO public.itens_herdados VALUES (1)',
+      'INSERT INTO "fixture QA".itens_filho VALUES (2)',
+      'CREATE TABLE public.itens_particionados (id integer) PARTITION BY RANGE (id)',
+      'CREATE TABLE "fixture QA".itens_particao PARTITION OF public.itens_particionados FOR VALUES FROM (1) TO (10)',
+      'INSERT INTO public.itens_particionados VALUES (1), (2)',
+    ], 'qa_project');
+
+    const inheritedCount = 'SELECT count(*) = 2 FROM public.itens_herdados';
+    const partitionedCount = 'SELECT count(*) = 2 FROM public.itens_particionados';
+    // O mesmo predicado passa quando toda a hierarquia pertence à fixture.
+    await checkReaderScope('"fixture QA".itens_filho', 't|t|t', 'passed', inheritedCount);
+    await checkReaderScope('"fixture QA".itens_particao', 't|t|t', 'passed', partitionedCount);
+
+    await psql('fresh', [
+      'CREATE TABLE qa_interno.itens_neto () INHERITS ("fixture QA".itens_filho)',
+      'INSERT INTO qa_interno.itens_neto VALUES (3)',
+    ], 'qa_admin');
+    await checkReaderScope('qa_interno.itens_neto', 'f|f|f', 'scope-unconfirmed', inheritedCount);
+    await psql('fresh', ['ALTER TABLE qa_interno.itens_neto NO INHERIT "fixture QA".itens_filho'], 'qa_admin');
+    await checkReaderScope('qa_interno.itens_neto', 'f|f|f', 'passed', inheritedCount);
+
+    await psql('fresh', [
+      'CREATE TABLE qa_interno.itens_particao PARTITION OF public.itens_particionados FOR VALUES FROM (10) TO (20)',
+      'INSERT INTO qa_interno.itens_particao VALUES (10)',
+    ], 'qa_admin');
+    await checkReaderScope('qa_interno.itens_particao', 'f|f|f', 'scope-unconfirmed', partitionedCount);
+    await psql('fresh', ['ALTER TABLE public.itens_particionados DETACH PARTITION qa_interno.itens_particao'], 'qa_admin');
+    await checkReaderScope('qa_interno.itens_particao', 'f|f|f', 'passed', partitionedCount);
+
+    const finalFreshAcl = await acl();
 
     const dump = join(directory, 'previous.dump');
     const projectConnection = ['--host', directory, '--port', '5432', '--username', 'qa_project', '--no-password'];
@@ -397,7 +432,7 @@ test('PostgreSQL e pgTAP avaliam dados sintéticos com privilégios limitados po
     assert.equal(await attestPostgres(psql, 'upgraded', plan.history.invariant.sql), 'passed');
     await psql('upgraded', [plan.migrations[1].sql], 'qa_project');
     assert.equal(await attestPostgres(psql, 'upgraded', plan.history.invariant.sql), 'passed');
-    assert.equal(await acl(), postPublicAcl);
+    assert.equal(await acl(), finalFreshAcl);
   } finally {
     try {
       if (existsSync(join(data, 'postmaster.pid'))) run('pg_ctl', ['-D', data, '-m', 'fast', '-w', '-t', '8', 'stop']);
