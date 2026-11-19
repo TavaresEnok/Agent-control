@@ -1,3 +1,4 @@
+import {isUtf8} from 'node:buffer';
 import {execFile as execFileCb} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {constants as fsConstants} from 'node:fs';
@@ -19,6 +20,7 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import semver from 'semver';
 import {minimatch} from 'minimatch';
+import {validateCycloneDx} from './cyclonedx.mjs';
 
 const execFile = promisify(execFileCb);
 const require = createRequire(import.meta.url);
@@ -72,13 +74,6 @@ const VALID_STATUS = new Set(['ok', 'failed', 'skipped']);
 const VALID_SEVERITY = new Set(['alta', 'media', 'baixa', 'informativa']);
 const NPM_NAME = /^(?:@[\w.~-]+\/)?[\w.~-]+$/;
 const NPM_ALIAS = /^npm:((?:@[\w.~-]+\/)?[\w.~-]+)@(.+)$/;
-// First CycloneDX JSON version that permits each component type.
-const CYCLONEDX_COMPONENT_TYPE_VERSION = new Map([
-  ['application', 2], ['framework', 2], ['library', 2], ['container', 2],
-  ['operating-system', 2], ['device', 2], ['firmware', 2], ['file', 2],
-  ['platform', 5], ['device-driver', 5], ['machine-learning-model', 5], ['data', 5],
-  ['cryptographic-asset', 6],
-]);
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -102,7 +97,7 @@ export function toRepoRelPath(rawPath, fallback = 'package.json') {
 }
 
 /** Reads from the validated descriptor and keeps limits distinct from absence and I/O failure. */
-async function readArtifact(filePath, maxBytes, remainingBytes = maxBytes) {
+async function readArtifact(filePath, maxBytes, remainingBytes = maxBytes, binary = false) {
   try {
     const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
     try {
@@ -120,7 +115,8 @@ async function readArtifact(filePath, maxBytes, remainingBytes = maxBytes) {
       if (bytes > maxBytes) return {kind: 'fileLimit'};
       if (bytes > remainingBytes) return {kind: 'totalLimit'};
       if (bytes !== info.size) return {kind: 'unreadable'};
-      return {kind: 'ok', content: buffer.toString('utf8', 0, bytes), bytes};
+      const content = binary ? buffer.subarray(0, bytes) : buffer.toString('utf8', 0, bytes);
+      return {kind: 'ok', content, bytes};
     } finally {
       await handle.close();
     }
@@ -499,12 +495,34 @@ function isForwardUpdate(current, target) {
     hasFloor ? semver.gt(target.minimum, minimum) : semver.gtr(target.minimum, range));
 }
 
+function checkNcuProposal(entry, target, pkg, installation, onlineMode) {
+  if (!target) return {reason: 'alvo_nao_comparavel'};
+  if (entry.current.source !== target.source) return {reason: 'identidade_alterada'};
+  if (!isForwardUpdate(entry.current, target)) return {reason: 'direcao_de_atualizacao_nao_comprovada'};
+
+  const alias = entry.current.registryName;
+  const lock = installation?.lock;
+  if (alias || installation?.path) {
+    if (!lock?.parsed) {
+      return {reason: alias ? 'identidade_alias_nao_comprovada' : 'lockfile_nao_verificavel'};
+    }
+    const match = inspectNpmLockEntry(lock.parsed, installation.workspacePath, pkg, entry.current);
+    if (!match.version || match.linked) return {reason: match.reason ?? 'registro_inaplicavel_a_link_local'};
+    if (!entry.latest || !satisfiesRange(entry.latest, target.range)) return {reason: 'alvo_nao_confirmado_no_registro'};
+    if (!semver.gt(entry.latest, match.version)) return {reason: 'registro_nao_supera_versao_travada'};
+    if (semver.lt(target.minimum, match.version)) return {reason: 'alvo_admite_versao_inferior_ao_lock'};
+    return {version: match.version, key: match.key};
+  }
+
+  return onlineMode || satisfiesRange(entry.latest, target.range) ? {} : {reason: 'alvo_nao_confirmado_no_registro'};
+}
+
 function dependencyKey(manifest, section, pkg) {
   return JSON.stringify([manifest, section, pkg]);
 }
 
 /** Executes npm-check-updates safely on isolated copies of package.json files. */
-export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVersion, onlineMode}) {
+export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVersion, onlineMode, lookupLock}) {
   const coverage = [];
   const findings = [];
   const ncuDetectedPackages = new Set();
@@ -603,12 +621,19 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     };
     const depLocations = new Map();
     const fileMissingSet = new Set();
-    const fileUnsupportedPackages = new Set();
+    let fileOmitted = 0;
+    let invalidProposals = false;
     let fileDepCount = 0;
     let fileRegistryMatches = 0;
     let fileMissingCount = 0;
     let fileInvalidMeta = 0;
     let fileUnsupported = 0;
+    function omit(pkg, section, reason) {
+      fileOmitted += 1;
+      totalOmitted += 1;
+      coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'skipped',
+        detail: `arquivo=${manifest.rel}; pacote=${pkg}; secao=${section}; motivo=${reason}; prova_parcial=true`});
+    }
 
     for (const sec of sections) {
       const block = parsed[sec];
@@ -630,22 +655,22 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
             evidence: `${sec}: "${pkg}": "${spec}"`,
           });
         }
-        const current = ncuSpecifier(spec, onlineMode);
-        if (!current || !NPM_NAME.test(pkg)) {
-          fileUnsupported += 1;
-          totalUnsupported += 1;
-          fileUnsupportedPackages.add(pkg);
-          continue;
-        }
-        sanitized[sec][pkg] = spec;
+        const current = NPM_NAME.test(pkg) ? ncuSpecifier(spec, onlineMode) : null;
         if (!depLocations.has(pkg)) depLocations.set(pkg, []);
         const entry = {section: sec, spec, current};
         depLocations.get(pkg).push(entry);
+        if (!current) {
+          fileUnsupported += 1;
+          totalUnsupported += 1;
+          omit(pkg, sec, 'declaracao_nao_comparavel');
+          continue;
+        }
+        sanitized[sec][pkg] = spec;
+        const meta = registryVersion(registry, current.registryName ?? pkg);
+        if (meta.kind === 'ok') entry.latest = meta.version;
         if (!onlineMode) {
-          const meta = registryVersion(registry, current.registryName ?? pkg);
           if (meta.kind === 'ok') {
             fileRegistryMatches += 1;
-            entry.latest = meta.version;
           } else {
             fileMissingCount += 1;
             if (meta.kind === 'invalid') fileInvalidMeta += 1;
@@ -709,30 +734,11 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
       continue;
     }
 
-    const updates = [];
-    const omissions = [];
+    let upgraded;
     try {
       if (!ncuStdout.trim()) throw new Error('saída vazia');
-      const upgraded = JSON.parse(ncuStdout);
+      upgraded = JSON.parse(ncuStdout);
       if (!isRecord(upgraded)) throw new Error('raiz inválida');
-      for (const [pkg, targetSpec] of Object.entries(upgraded)) {
-        const target = typeof targetSpec === 'string' ? ncuSpecifier(targetSpec, onlineMode) : null;
-        const declared = depLocations.get(pkg);
-        if (!target || !declared) throw new Error(`atualização inválida para ${pkg}`);
-        const matching = declared.filter(entry => entry.current.source === target.source);
-        if (!matching.length) {
-          omissions.push(`pacote=${pkg}; motivo=identidade_alterada`);
-          continue;
-        }
-        const confirmed = matching.filter(entry => onlineMode || satisfiesRange(entry.latest, target.range));
-        if (!confirmed.length) throw new Error(`atualização inválida para ${pkg}`);
-        const entries = [];
-        for (const entry of confirmed) {
-          if (isForwardUpdate(entry.current, target)) entries.push(entry);
-          else omissions.push(`pacote=${pkg}; secao=${entry.section}; motivo=direcao_de_atualizacao_nao_comprovada`);
-        }
-        updates.push({pkg, entries, targetSpec, targetRange: target.range});
-      }
     } catch (err) {
       toolFailed = true;
       failMessage = `Saída JSON inválida de npm-check-updates: ${err.message.slice(0, 150)}`;
@@ -747,11 +753,31 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
 
     totalMatched += fileRegistryMatches;
     if (onlineMode) totalOnlineChecked += fileDepCount - fileUnsupported;
-    totalOmitted += omissions.length;
     let fileOutdated = 0;
-    for (const {pkg, entries, targetSpec, targetRange} of updates) {
+    let installation;
+    for (const [pkg, targetSpec] of Object.entries(upgraded)) {
+      const entries = depLocations.get(pkg);
+      if (!entries || typeof targetSpec !== 'string') {
+        invalidProposals = true;
+        failMessage = `Proposta inválida de npm-check-updates em ${manifest.rel}`;
+        toolFailed = true;
+        coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'failed',
+          detail: `arquivo=${manifest.rel}; pacote=${pkg}; erro=${entries ? 'tipo_alvo_invalido' : 'pacote_nao_declarado'}`});
+        continue;
+      }
+      const target = ncuSpecifier(targetSpec, onlineMode);
       for (const entry of entries) {
-        const risk = classifySemverRisk(entry.current.range, targetRange);
+        if (!entry.current) continue;
+        const registryDependency = !entry.current.source || entry.current.registryName;
+        if (target && registryDependency && installation === undefined) {
+          installation = await lookupLock?.(manifest) ?? null;
+        }
+        const {version, key, reason} = checkNcuProposal(entry, target, pkg, registryDependency ? installation : null, onlineMode);
+        if (reason) {
+          omit(pkg, entry.section, reason);
+          continue;
+        }
+        const risk = classifySemverRisk(version ?? entry.current.range, version ? entry.latest : target.range);
         const line = findLineInPackageJson(raw, pkg, entry.section);
         fileOutdated += 1;
         totalOutdated += 1;
@@ -763,34 +789,25 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
           line,
           severity: risk.severity,
           message: `Dependência "${pkg}" desatualizada (${entry.spec} -> ${targetSpec}; risco ${risk.riskLabel}).`,
-          evidence: `${entry.section}: "${pkg}": "${entry.spec}" -> "${pkg}": "${targetSpec}"`,
+          evidence: `${entry.section}: "${pkg}": "${entry.spec}" -> "${pkg}": "${targetSpec}"` +
+            (version ? `; ${installation.path}#${key}="${version}"; registro="${entry.latest}"` : ''),
         });
       }
     }
 
-    if (fileUnsupported > 0) {
-      const names = [...fileUnsupportedPackages].sort();
-      const preview = names.slice(0, 50).join(',') + (names.length > 50 ? `,+${names.length - 50}` : '');
-      coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'skipped',
-        detail: `arquivo=${manifest.rel}; faixas_nao_verificadas=${fileUnsupported}; motivo=${onlineMode ? 'faixa_ou_identidade_nao_comparavel' : 'faixa_nao_semver_offline'}; pacotes=${preview}; prova_parcial=true`});
-    }
-    for (const omission of omissions) {
-      coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'skipped',
-        detail: `arquivo=${manifest.rel}; ${omission}; prova_parcial=true`});
-    }
     if (!onlineMode && fileDepCount > 0 && fileRegistryMatches === 0) {
       coverage.push({
         tool: 'npm-check-updates',
         version: ncuVersion,
-        status: 'skipped',
-        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=0; sem_metadados=${fileMissingCount}; faixas_nao_verificadas=${fileUnsupported}; desatualizadas=0; motivo=${fileMissingCount ? 'nenhuma_dependencia_no_registro_offline' : 'faixas_nao_semver_offline'}`,
+        status: invalidProposals ? 'failed' : 'skipped',
+        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=0; sem_metadados=${fileMissingCount}; faixas_nao_verificadas=${fileUnsupported}; desatualizadas=0; atualizacoes_omitidas=${fileOmitted}; motivo=${fileMissingCount ? 'nenhuma_dependencia_no_registro_offline' : 'faixas_nao_semver_offline'}`,
       });
     } else {
       coverage.push({
         tool: 'npm-check-updates',
         version: ncuVersion,
-        status: omissions.length ? 'skipped' : 'ok',
-        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=${onlineMode ? fileDepCount - fileUnsupported : fileRegistryMatches}; sem_metadados=${onlineMode ? 0 : fileMissingCount}; desatualizadas=${fileOutdated}; atualizacoes_omitidas=${omissions.length}`,
+        status: invalidProposals ? 'failed' : fileOmitted ? 'skipped' : 'ok',
+        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=${onlineMode ? fileDepCount - fileUnsupported : fileRegistryMatches}; sem_metadados=${onlineMode ? 0 : fileMissingCount}; desatualizadas=${fileOutdated}; atualizacoes_omitidas=${fileOmitted}`,
       });
     }
 
@@ -868,10 +885,41 @@ function astGrepFinding(item, file) {
   const message = nonemptyString(item.message)
     ? item.message.trim()
     : `Padrão de API incompatível detectado pela regra ${rule}.`;
-  const before = typeof item.text === 'string' ? item.text.trim() : '';
+  const before = nonemptyString(item.text) ? item.text : '';
   const evidence = `Revisão necessária: ${before || String(item.lines || '').trim()}`;
   return {tool: 'ast-grep', rule, file, line: zeroLine + 1,
     severity: mapAstGrepSeverity(item.severity), message, evidence: evidence.slice(0, 600)};
+}
+
+function astGrepSourcePositions(source) {
+  const lineStarts = [0];
+  const columns = new Uint32Array(source.length + 1);
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === 0x0a) {
+      lineStarts.push(i + 1);
+    } else {
+      // UTF-8 continuation bytes don't advance the Unicode column.
+      columns[i + 1] = columns[i] + Number((source[i] & 0xc0) !== 0x80);
+    }
+  }
+  return {lineStarts, columns};
+}
+
+function matchesAstGrepRange(item, source, {lineStarts, columns}) {
+  const {byteOffset, start, end} = item?.range ?? {};
+  const first = byteOffset?.start;
+  const last = byteOffset?.end;
+  if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) ||
+      first < 0 || last <= first || last > source.length || !nonemptyString(item.text)) return false;
+
+  function matchesPosition(offset, position) {
+    const {line, column} = position ?? {};
+    return Number.isSafeInteger(line) && line >= 0 && line < lineStarts.length &&
+      offset >= lineStarts[line] && offset < (lineStarts[line + 1] ?? source.length + 1) &&
+      (source[offset] & 0xc0) !== 0x80 && column === columns[offset];
+  }
+  return matchesPosition(first, start) && matchesPosition(last, end) &&
+    source.toString('utf8', first, last) === item.text;
 }
 
 /** Parses ast-grep --json=compact output into normalized findings. */
@@ -998,20 +1046,27 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
       }
       continue;
     }
-    const content = await readSafeRegularFile(target);
+    const artifact = await readArtifact(target, MAX_FILE_BYTES, MAX_FILE_BYTES, true);
+    const source = artifact.kind === 'ok' ? artifact.content : null;
     try {
-      if (content === null) throw new Error('fonte_ilegivel');
-      getParser(sourceParser(src.ext)).parse(content);
+      if (source === null) throw new Error('fonte_ilegivel');
+      if (!isUtf8(source)) throw new Error('fonte_nao_utf8');
+      getParser(sourceParser(src.ext)).parse(source.toString('utf8'));
     } catch (err) {
       failures += 1;
-      const reason = content === null ? 'fonte_ilegivel' : `sintaxe_invalida; detalhe=${err.message.slice(0, 150)}`;
+      const reason = source === null || err.message === 'fonte_nao_utf8'
+        ? err.message : `sintaxe_invalida; detalhe=${err.message.slice(0, 150)}`;
       coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=${reason}`});
       continue;
     }
     try {
-      const lines = content ? content.split('\n').length - Number(content.endsWith('\n')) : 0;
+      if (fileDiagnostics.length) {
+        const positions = astGrepSourcePositions(source);
+        if (fileDiagnostics.some(item => !matchesAstGrepRange(item, source, positions))) {
+          throw new Error('Trecho ou intervalo divergente da cópia analisada.');
+        }
+      }
       const fileFindings = fileDiagnostics.map(item => astGrepFinding(item, src.rel));
-      if (fileFindings.some(finding => finding.line > lines)) throw new Error('Linha fora da cópia analisada.');
       for (const finding of fileFindings) findings.push(finding);
       coverage.push({...row, status: 'ok', detail: `arquivo=${src.rel}; achados=${fileFindings.length}`});
     } catch (err) {
@@ -1142,7 +1197,8 @@ export async function runJscodeshiftCheck({
       execution = {signal, timeoutMs, budget: executionBudget <= fileTimeoutMs ? 'total' : 'arquivo'};
       phase = 'execucao';
       await execFile(jscodeshiftBin,
-        ['--run-in-band', '--fail-on-error', `--parser=${parser}`, '-t', transformPath, target],
+        ['--run-in-band', '--fail-on-error', `--parser=${parser}`,
+          `--extensions=${extname(target).slice(1)}`, '-t', transformPath, target],
         {signal, killSignal: 'SIGKILL', maxBuffer: 10 * 1024 * 1024,
           env: {...process.env, HOME: workRoot, TMPDIR: workRoot,
             AC_JSCODESHIFT_REPORT: report, AC_JSCODESHIFT_NONCE: nonce}});
@@ -1283,14 +1339,92 @@ function lockEntryLines(raw) {
   return sections;
 }
 
-function npmComponentIdentity(component, specMinor) {
-  if (!isRecord(component) || !nonemptyString(component.name) ||
-      !(CYCLONEDX_COMPONENT_TYPE_VERSION.get(component.type) <= specMinor) ||
-      ((specMinor <= 3 || Object.hasOwn(component, 'version')) && typeof component.version !== 'string') ||
-      (Object.hasOwn(component, 'purl') && !nonemptyString(component.purl))) {
-    return {error: 'componente_invalido'};
+async function createNpmLockLookup(manifests, lockfiles) {
+  const workspaceRoots = [];
+  for (const root of manifests) {
+    try {
+      const obj = JSON.parse(await readSafeRegularFile(root.fullPath, MAX_FILE_BYTES));
+      const patterns = Array.isArray(obj?.workspaces) ? obj.workspaces : obj?.workspaces?.packages;
+      if (Array.isArray(patterns)) workspaceRoots.push({dir: posix.dirname(root.rel), patterns});
+    } catch { /* The manifest itself is reported below and by NCU. */ }
   }
-  if (!component.purl) return {};
+  // An outer installation owns members that its own workspace declaration includes.
+  const workspaceDepth = ({dir}) => dir === '.' ? 0 : dir.split('/').length;
+  workspaceRoots.sort((a, b) => workspaceDepth(a) - workspaceDepth(b));
+
+  let lastLock;
+  return async manifest => {
+    const dir = posix.dirname(manifest.rel);
+    const workspace = workspaceRoots.find(root => root.dir !== dir &&
+      (root.dir === '.' || dir.startsWith(`${root.dir}/`)) &&
+      workspaceMatches(root.patterns, posix.relative(root.dir, dir)));
+    const lockDir = workspace?.dir ?? dir;
+    const lockRel = LOCKFILE_NAMES.map(name => posix.join(lockDir, name)).find(path => lockfiles.has(path));
+    const workspacePath = lockDir === dir ? '' : posix.relative(lockDir, dir);
+    if (!lockRel || !NPM_LOCKFILE_NAMES.includes(posix.basename(lockRel))) {
+      return {lockDir, workspacePath, path: lockRel};
+    }
+
+    if (lastLock?.path !== lockRel) {
+      const raw = await readArtifact(lockfiles.get(lockRel), MAX_REGISTRY_BYTES);
+      lastLock = {path: lockRel, raw};
+      if (raw.kind === 'ok') {
+        try {
+          const parsed = JSON.parse(raw.content);
+          if (!isRecord(parsed) ||
+              (!Object.hasOwn(parsed, 'packages') && !Object.hasOwn(parsed, 'dependencies')) ||
+              (Object.hasOwn(parsed, 'packages') && !isRecord(parsed.packages)) ||
+              (Object.hasOwn(parsed, 'dependencies') && !isRecord(parsed.dependencies)) ||
+              (parsed.lockfileVersion >= 2 && !parsed.packages)) {
+            throw new Error('estrutura inválida');
+          }
+          lastLock.parsed = parsed;
+          const entries = parsed.packages ?? parsed.dependencies;
+          lastLock.invalidEntries = Object.values(entries).filter(lockEntryIsMalformed).length;
+        } catch (err) {
+          lastLock.error = err instanceof SyntaxError ? 'json_invalido' : 'estrutura_invalida';
+        }
+      }
+    }
+    return {path: lockRel, lock: lastLock, lockDir, workspacePath};
+  };
+}
+
+function inspectNpmLockEntry(lock, workspacePath, pkg, declaration) {
+  if (workspacePath && !lock.packages) return {reason: 'lock_legado_sem_entrada_workspace'};
+  let match = resolveLockedEntry(lock, workspacePath, pkg);
+  if (!match) return {reason: 'entrada_lockfile_ausente'};
+
+  const linked = match.entry?.link === true;
+  if (linked && !lockEntryIsMalformed(match.entry)) {
+    const key = match.entry.resolved;
+    if (posix.isAbsolute(key) || key.split('/').includes('..')) return {reason: 'link_externo'};
+    match = {section: 'packages', key, entry: lock.packages?.[key]};
+  }
+  const {key, section, entry} = match;
+  if (lockEntryIsMalformed(entry) || entry.link === true) return {key, reason: 'entrada_lockfile_invalida'};
+  if (!entry.version) return {key, reason: 'versao_ausente'};
+
+  const legacyAlias = !lock.packages && NPM_ALIAS.exec(entry.version);
+  const alias = declaration?.registryName;
+  const registryName = alias ?? pkg;
+  const lockName = Object.hasOwn(entry, 'name') ? entry.name : undefined;
+  const resolvedName = legacyAlias ? legacyAlias[1] : lockName;
+  if (alias && resolvedName === undefined) return {key, reason: 'identidade_alias_nao_comprovada'};
+  if ((resolvedName !== undefined && resolvedName !== registryName) ||
+      (lockName !== undefined && lockName !== registryName) ||
+      (legacyAlias && !alias)) {
+    return {key, reason: 'identidade_lockfile_divergente'};
+  }
+  const version = legacyAlias ? legacyAlias[2] : entry.version;
+  if (!declaration || !NPM_NAME.test(registryName) || !semver.valid(version)) {
+    return {key, reason: 'faixa_ou_versao_nao_semver'};
+  }
+  return {key, section, linked, registryName, version};
+}
+
+function npmComponentIdentity(component) {
+  if (component.purl === undefined) return {};
   if (!/^pkg:[a-z][a-z0-9.+-]*\/[^\s?#]+(?:[?#]\S*)?$/.test(component.purl)) {
     return {error: component.purl.startsWith('pkg:npm') ? 'purl_npm_invalida' : 'purl_invalida'};
   }
@@ -1323,6 +1457,7 @@ export async function analyzeLockfileAndSbom({
   registry,
   ncuDetectedPackages,
   mountedSbomPaths = SBOM_CANDIDATE_FILES,
+  lookupLock,
 }) {
   const coverage = [];
   const findings = [];
@@ -1340,19 +1475,8 @@ export async function analyzeLockfileAndSbom({
     coverage.push({...tool, status, detail});
   }
 
-  const workspaceRoots = [];
-  for (const root of manifests) {
-    try {
-      const obj = JSON.parse(await readSafeRegularFile(root.fullPath, MAX_FILE_BYTES));
-      const patterns = Array.isArray(obj?.workspaces) ? obj.workspaces : obj?.workspaces?.packages;
-      if (Array.isArray(patterns)) workspaceRoots.push({dir: posix.dirname(root.rel), patterns});
-    } catch { /* The manifest itself is reported below and by NCU. */ }
-  }
-  // An outer installation owns members that its own workspace declaration includes.
-  const workspaceDepth = ({dir}) => dir === '.' ? 0 : dir.split('/').length;
-  workspaceRoots.sort((a, b) => workspaceDepth(a) - workspaceDepth(b));
+  lookupLock ??= await createNpmLockLookup(manifests, lockfiles);
 
-  let lastLock;
   for (const manifest of manifests) {
     const rawPkg = await readArtifact(manifest.fullPath, MAX_FILE_BYTES);
     if (rawPkg.kind !== 'ok') {
@@ -1370,12 +1494,6 @@ export async function analyzeLockfileAndSbom({
       continue;
     }
 
-    const dir = posix.dirname(manifest.rel);
-    const workspace = workspaceRoots.find(root => root.dir !== dir &&
-      (root.dir === '.' || dir.startsWith(`${root.dir}/`)) &&
-      workspaceMatches(root.patterns, posix.relative(root.dir, dir)));
-    const lockDir = workspace?.dir ?? dir;
-    const lockRel = LOCKFILE_NAMES.map(name => posix.join(lockDir, name)).find(path => lockfiles.has(path));
     const declaredEntries = [];
     for (const sec of ['dependencies', 'devDependencies', 'optionalDependencies']) {
       if (!isRecord(parsedPkg[sec])) continue;
@@ -1384,6 +1502,8 @@ export async function analyzeLockfileAndSbom({
       }
     }
 
+    const installation = await lookupLock(manifest);
+    const {path: lockRel, lockDir, workspacePath, lock} = installation;
     if (!lockRel) {
       if (declaredEntries.length === 0) continue;
       findings.push({
@@ -1405,28 +1525,7 @@ export async function analyzeLockfileAndSbom({
       continue;
     }
 
-    if (lastLock?.path !== lockRel) {
-      const raw = await readArtifact(lockfiles.get(lockRel), MAX_REGISTRY_BYTES);
-      lastLock = {path: lockRel, raw};
-      if (raw.kind === 'ok') {
-        try {
-          const parsed = JSON.parse(raw.content);
-          if (!isRecord(parsed) ||
-              (!Object.hasOwn(parsed, 'packages') && !Object.hasOwn(parsed, 'dependencies')) ||
-              (Object.hasOwn(parsed, 'packages') && !isRecord(parsed.packages)) ||
-              (Object.hasOwn(parsed, 'dependencies') && !isRecord(parsed.dependencies)) ||
-              (parsed.lockfileVersion >= 2 && !parsed.packages)) {
-            throw new Error('estrutura inválida');
-          }
-          lastLock.parsed = parsed;
-          const entries = parsed.packages ?? parsed.dependencies;
-          lastLock.invalidEntries = Object.values(entries).filter(lockEntryIsMalformed).length;
-        } catch (err) {
-          lastLock.error = err instanceof SyntaxError ? 'json_invalido' : 'estrutura_invalida';
-        }
-      }
-    }
-    const {raw, parsed, error, invalidEntries} = lastLock;
+    const {raw, parsed, error, invalidEntries} = lock;
     if (raw.kind !== 'ok') {
       if (raw.kind === 'fileLimit') record('skipped', `${fileScope}; motivo=limite_bytes; prova_parcial=true`);
       else record('failed', `${fileScope}; erro=${raw.kind === 'missing' ? 'arquivo_ausente' : 'ilegivel'}`);
@@ -1452,15 +1551,10 @@ export async function analyzeLockfileAndSbom({
     let fileInvalidMeta = 0;
     let fileUnverifiable = 0;
     let invalidResolutions = 0;
-    const workspacePath = lockDir === dir ? '' : posix.relative(lockDir, dir);
     for (const {sec, pkg, spec} of declaredEntries) {
-      if (workspacePath && !parsed.packages) {
-        fileUnverifiable += 1;
-        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; motivo=lock_legado_sem_entrada_workspace`});
-        continue;
-      }
-      let match = resolveLockedEntry(parsed, workspacePath, pkg);
-      if (!match) {
+      const declaration = ncuSpecifier(spec, false);
+      const match = inspectNpmLockEntry(parsed, workspacePath, pkg, declaration);
+      if (match.reason === 'entrada_lockfile_ausente') {
         fileFindings += 1;
         findings.push({
           tool: tool.tool,
@@ -1473,49 +1567,27 @@ export async function analyzeLockfileAndSbom({
         });
         continue;
       }
-
-      const linked = match.entry?.link === true;
-      if (linked && !lockEntryIsMalformed(match.entry)) {
-        const key = match.entry.resolved;
-        if (posix.isAbsolute(key) || key.split('/').includes('..')) {
+      if (match.reason) {
+        const scope = `${fileScope}; pacote=${pkg}${match.key ? `; entrada=${match.key}` : ''}`;
+        if (match.reason === 'entrada_lockfile_invalida') {
+          invalidResolutions += 1;
+          coverage.push({...tool, status: 'failed', detail: `${scope}; erro=${match.reason}`});
+        } else {
           fileUnverifiable += 1;
-          coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; motivo=link_externo`});
-          continue;
+          coverage.push({...tool, status: 'skipped', detail: `${scope}; motivo=${match.reason}`});
         }
-        match = {section: 'packages', key, entry: parsed.packages?.[key]};
-      }
-      if (lockEntryIsMalformed(match.entry) || match.entry.link === true) {
-        invalidResolutions += 1;
-        coverage.push({...tool, status: 'failed', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; erro=entrada_lockfile_invalida`});
         continue;
       }
-
-      const rawVersion = match.entry.version;
-      if (!rawVersion) {
-        fileUnverifiable += 1;
-        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; motivo=versao_ausente`});
-        continue;
-      }
-      const declaration = ncuSpecifier(spec, false);
-      const registryName = declaration?.registryName ?? pkg;
-      const legacyAlias = !parsed.packages && NPM_ALIAS.exec(rawVersion);
-      const resolvedName = legacyAlias ? legacyAlias[1] : match.entry.name ?? registryName;
-      const resolvedVer = legacyAlias ? legacyAlias[2] : rawVersion;
-      if (!declaration || !NPM_NAME.test(registryName) || !semver.valid(resolvedVer) || resolvedName !== registryName) {
-        fileUnverifiable += 1;
-        const reason = resolvedName !== registryName ? 'identidade_lockfile_divergente' : 'faixa_ou_versao_nao_semver';
-        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; motivo=${reason}`});
-        continue;
-      }
+      const {version: resolvedVer, registryName, linked} = match;
       componentsScanned += 1;
       if (!satisfiesRange(resolvedVer, declaration.range)) {
         fileFindings += 1;
-        lastLock.lines ??= lockEntryLines(raw.content);
+        lock.lines ??= lockEntryLines(raw.content);
         findings.push({
           tool: tool.tool,
           rule: 'LOCKFILE-VERSION-MISMATCH',
           file: lockRel,
-          line: lastLock.lines[match.section].get(match.key) ?? 1,
+          line: lock.lines[match.section].get(match.key) ?? 1,
           severity: 'alta',
           message: `Versão travada de "${pkg}" (${resolvedVer}) em ${lockRel} não satisfaz a faixa "${spec}" de ${manifest.rel}.`,
           evidence: `${manifest.rel}="${spec}" vs ${lockRel}#${match.key}="${resolvedVer}"`,
@@ -1539,12 +1611,12 @@ export async function analyzeLockfileAndSbom({
           !ncuDetectedPackages.has(`${manifest.rel}:${pkg}`)) {
         const risk = classifySemverRisk(resolvedVer, meta.version);
         fileFindings += 1;
-        lastLock.lines ??= lockEntryLines(raw.content);
+        lock.lines ??= lockEntryLines(raw.content);
         findings.push({
           tool: tool.tool,
           rule: 'LOCKFILE-OUTDATED-RESOLVED',
           file: lockRel,
-          line: lastLock.lines[match.section].get(match.key) ?? 1,
+          line: lock.lines[match.section].get(match.key) ?? 1,
           severity: risk.severity,
           message: `Versão travada em ${lockRel} para "${pkg}" (${resolvedVer}) está atrás da mais recente (${meta.version}; risco ${risk.riskLabel}).`,
           evidence: `${lockRel}#${match.key}: "${pkg}"@${resolvedVer} -> ${meta.version}${registryName !== pkg ? `; registro="${registryName}"` : ''}`,
@@ -1567,7 +1639,7 @@ export async function analyzeLockfileAndSbom({
   ];
   for (const sb of sbomCandidates) {
     const scope = `sbom=${sb.rel}`;
-    const raw = await readArtifact(sb.fullPath, MAX_REGISTRY_BYTES, MAX_SBOM_BYTES - sbomBytes);
+    const raw = await readArtifact(sb.fullPath, MAX_REGISTRY_BYTES, MAX_SBOM_BYTES - sbomBytes, true);
     if (raw.kind !== 'ok') {
       if (sb.optional && raw.kind === 'missing') continue;
       if (raw.kind === 'fileLimit' || raw.kind === 'totalLimit') {
@@ -1578,29 +1650,21 @@ export async function analyzeLockfileAndSbom({
       continue;
     }
     sbomBytes += raw.bytes;
+    if (!isUtf8(raw.content)) {
+      record('failed', `${scope}; erro=sbom_nao_utf8`);
+      continue;
+    }
 
     let bom;
     try {
-      bom = JSON.parse(raw.content);
+      bom = JSON.parse(raw.content.toString('utf8'));
     } catch {
       record('failed', `${scope}; erro=json_invalido`);
       continue;
     }
-    if (!isRecord(bom) || bom.bomFormat !== 'CycloneDX' || !nonemptyString(bom.specVersion) ||
-        (Object.hasOwn(bom, 'components') && !Array.isArray(bom.components)) ||
-        (Object.hasOwn(bom, 'metadata') && !isRecord(bom.metadata))) {
-      record('failed', `${scope}; erro=formato_invalido`);
-      continue;
-    }
-    const supportedSpec = /^1\.([2-7])$/.exec(bom.specVersion);
-    if (!supportedSpec) {
-      record('skipped', `${scope}; motivo=versao_cyclonedx_nao_suportada; prova_parcial=true`);
-      continue;
-    }
-    const specMinor = Number(supportedSpec[1]);
-    if ((specMinor <= 4 || Object.hasOwn(bom, 'version')) &&
-        (!Number.isInteger(bom.version) || bom.version < 1)) {
-      record('failed', `${scope}; erro=formato_invalido`);
+    const schemaError = validateCycloneDx(bom);
+    if (schemaError) {
+      record('failed', `${scope}; ${schemaError}`);
       continue;
     }
 
@@ -1629,11 +1693,8 @@ export async function analyzeLockfileAndSbom({
       inventoryComponents += 1;
       componentCount += 1;
       const component = next.value;
-      const identity = npmComponentIdentity(component, specMinor);
-      if (isRecord(component) && Object.hasOwn(component, 'components')) {
-        if (Array.isArray(component.components)) lists.push(component.components.values());
-        else errors.set('componentes_aninhados_invalidos', (errors.get('componentes_aninhados_invalidos') ?? 0) + 1);
-      }
+      const identity = npmComponentIdentity(component);
+      if (component.components) lists.push(component.components.values());
       if (identity.error) {
         errors.set(identity.error, (errors.get(identity.error) ?? 0) + 1);
         continue;
@@ -1768,7 +1829,9 @@ export async function runCollection(options = {}) {
       }
     }
 
+    const lookupLock = await createNpmLockLookup(discovered.manifests, discovered.lockfiles);
     const ncuRes = await runNcuCheck({
+      lookupLock,
       manifests: discovered.manifests,
       workRoot,
       registry,
@@ -1801,6 +1864,7 @@ export async function runCollection(options = {}) {
       sbomFiles: discovered.sbomFiles,
       registry,
       ncuDetectedPackages: ncuRes.ncuDetectedPackages,
+      lookupLock,
     });
 
     const optionalCoverage = [

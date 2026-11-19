@@ -56,8 +56,9 @@ test('Dockerfile e lockfiles do módulo dependencias são imutáveis e sem usuá
 
   const lockResult = verifyDependenciasLock(moduleDir);
   assert.equal(lockResult.ok, true);
-  assert.equal(lockResult.toolCount, 6);
-  assert.equal(lockResult.totalLockedPackages, 113);
+  assert.equal(lockResult.toolCount, 9);
+  assert.equal(lockResult.totalLockedPackages, 132);
+  assert.match(dockerfile, /^COPY schemas\/ \.\/schemas\//m);
 
   const lockMeta = JSON.parse(await readFile(join(moduleDir, 'dependencias-tools.lock.json'), 'utf8')) as {
     packageLockSha256: string;
@@ -322,7 +323,10 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
         'const serverFile = path.join(target, "src", "server.ts");',
         'const text = fs.existsSync(serverFile) ? fs.readFileSync(serverFile, "utf8") : "";',
         'if (text.includes("app.del(")) {',
-        '  process.stdout.write(JSON.stringify([{ruleId:"express5-app-del-ts",severity:"error",message:"app.del removido",file:serverFile,range:{start:{line:1,column:2}},text:"app.del(\'/items/:id\', ...)",replacement:"app.delete(\'/items/:id\', ...)"}]));',
+        '  const before = "app.del(\'/items/:id\', (_req: any, res: any) => {";',
+        '  const start = Buffer.byteLength(text.slice(0, text.indexOf(before)));',
+        '  const range = {byteOffset:{start,end:start+Buffer.byteLength(before)},start:{line:1,column:2},end:{line:1,column:2+before.length}};',
+        '  process.stdout.write(JSON.stringify([{ruleId:"express5-app-del-ts",severity:"error",message:"app.del removido",file:serverFile,range,text:before}]));',
         '  process.exit(1);',
         '} else {',
         '  process.stdout.write("[]");',
@@ -592,7 +596,7 @@ test('processos atribuem a varredura por arquivo e distinguem sintaxe inválida,
       'view.tsx': 'const x = <div/>; res.send(200, x);',
       'bad.js': 'const = ; res.send(200, x);',
       'bad-missing.ts': 'const x = (1;',
-      'extra.mts': 'export const x = 1; res.send(200, x);',
+      'extra.mts': '// comentário\r\nconst í = "🐱"; res.send(\r\n  200, í\r\n);\r\n',
       'extra.cts': 'export const x = 1;',
       'extra.cjs': 'module.exports = () => res.send(200, x);',
       'extra.mjs': 'export const x = 1;',
@@ -606,6 +610,8 @@ test('processos atribuem a varredura por arquivo e distinguem sintaxe inválida,
     const ast = await runAstGrepCheck({sourceFiles: files, isoSrcDir: src, astGrepBin: astBin, astGrepVersion: '0.51.3', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
     assert.deepEqual(ast.findings.map(f => f.file).sort(), ['extra.cjs', 'extra.mts', 'view.tsx']);
     assert.ok(ast.findings.every(f => f.rule.includes('SEND-STATUS')));
+    assert.deepEqual(ast.findings.filter(f => f.file === 'extra.mts').map(f => [f.line, f.evidence]),
+      [[2, 'Revisão necessária: res.send(\r\n  200, í\r\n)']]);
     for (const file of ['view.tsx', 'extra.mts', 'extra.cts', 'extra.cjs', 'extra.mjs']) {
       assert.ok(ast.coverage.some(c => c.detail.startsWith(`arquivo=${file};`) && c.status === 'ok'), file);
     }
@@ -626,32 +632,50 @@ test('processos atribuem a varredura por arquivo e distinguem sintaxe inválida,
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
-test('ast-grep conserva diagnóstico válido quando outro arquivo tem linha inválida ou fora da cópia', async () => {
+test('ast-grep atribui somente diagnósticos com trecho, bytes e posições Unicode confirmados', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-ast-lines-'));
   try {
-    const sourceFiles = ['valid.ts', 'negative.ts', 'outside.ts', 'clean.ts']
+    const invalidFiles = ['start-byte.ts', 'end-byte.ts', 'start-line.ts', 'end-line.ts',
+      'start-column.ts', 'end-column.ts', 'text.ts', 'unicode.ts', 'invalid-utf8.ts'];
+    const sourceFiles = ['valid.ts', ...invalidFiles, 'clean.ts']
       .map(rel => ({rel, fullPath: join(root, rel), ext: '.ts'}));
-    for (const file of sourceFiles) await writeFile(file.fullPath, 'original();\n');
+    const content = '// comentário\r\nconst í = "🐱"; res.send(\r\n  200, í\r\n);\r\n';
+    for (const {rel, fullPath} of sourceFiles) {
+      await writeFile(fullPath, rel === 'invalid-utf8.ts' ? Buffer.from([0xff]) : content);
+    }
     const astGrepBin = join(root, 'ast-fixture');
     await writeFile(astGrepBin, [
       '#!/usr/bin/env node',
       'const target = process.argv[6];',
       'const {join} = require("node:path");',
-      'const files = ["valid.ts", "negative.ts", "outside.ts", "clean.ts"];',
+      `const files = ${JSON.stringify(sourceFiles.map(src => src.rel))};`,
       'for (const file of files) console.error(`sg: entity|file|${join(target,file)}: language=TypeScript,appliedRuleCount=1`);',
-      'const diagnostic = (name,line) => ({file:join(target,name),ruleId:"synthetic-ts",severity:"error",text:"original()",range:{start:{line}}});',
-      'console.log(JSON.stringify([diagnostic("valid.ts",0),diagnostic("negative.ts",-1),diagnostic("outside.ts",999),diagnostic("unknown.ts",0)]));',
+      'const diagnostic = name => ({file:join(target,name),ruleId:"synthetic-ts",severity:"error",',
+      '  text:"res.send(\\r\\n  200, í\\r\\n)",range:{byteOffset:{start:35,end:58},start:{line:1,column:15},end:{line:3,column:1}}});',
+      'const rows = [...files.filter(file => file !== "clean.ts"), "unknown.ts"].map(diagnostic);',
+      'rows[1].range.byteOffset.start++;',
+      'rows[2].range.byteOffset.end = 1000;',
+      'rows[3].range.start.line = 0;',
+      'rows[4].range.end.line = 2;',
+      'rows[5].range.start.column++;',
+      'rows[6].range.end.column++;',
+      'rows[7].text = rows[7].text.replace("200", "201");',
+      'rows[8].range = {byteOffset:{start:29,end:32},start:{line:1,column:12},end:{line:1,column:12}};',
+      'rows[8].text = "���";',
+      'console.log(JSON.stringify(rows));',
       'process.exitCode = 1;',
     ].join('\n'), {mode: 0o755});
     const result = await runAstGrepCheck({sourceFiles, isoSrcDir: root, astGrepBin,
       astGrepVersion: 'sintetica', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
-    assert.deepEqual(result.findings.map(f => [f.file, f.line]), [['valid.ts', 1]]);
+    assert.deepEqual(result.findings.map(f => [f.file, f.line, f.evidence]),
+      [['valid.ts', 2, 'Revisão necessária: res.send(\r\n  200, í\r\n)']]);
     assert.equal(result.coverage[0].status, 'failed');
-    assert.match(result.coverage[0].detail, /falhas=2; diagnosticos_sem_arquivo=1/);
-    assert.ok(result.coverage.some(row => row.status === 'failed' &&
-      row.detail.includes('arquivo=negative.ts; erro=diagnostico_invalido')));
-    assert.ok(result.coverage.some(row => row.status === 'failed' &&
-      row.detail.includes('arquivo=outside.ts; erro=diagnostico_invalido; detalhe=Linha fora')));
+    assert.match(result.coverage[0].detail, /falhas=9; diagnosticos_sem_arquivo=1/);
+    for (const file of invalidFiles) {
+      const error = file === 'invalid-utf8.ts' ? 'fonte_nao_utf8' : 'diagnostico_invalido';
+      assert.ok(result.coverage.some(row => row.status === 'failed' &&
+        row.detail.includes(`arquivo=${file}; erro=${error}`)), file);
+    }
     assert.ok(result.coverage.some(row => row.status === 'ok' && row.detail.includes('arquivo=clean.ts; achados=0')));
   } finally {
     await rm(root, {recursive: true, force: true});
@@ -719,6 +743,53 @@ test('padrões ambíguos requerem revisão e entrada ausente produz JSON', async
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
+test('jscodeshift 17.4.0 executa o transformador real em .mts e .cts sem alterar as cópias', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-codemod-typescript-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const isoSrcDir = join(root, 'src');
+  const isoCodemodDir = join(root, 'codemod');
+  await mkdir(isoSrcDir);
+  await mkdir(isoCodemodDir);
+  const samples = {
+    'legacy.mts': "export const n: number = 8;\r\n\tnew Buffer(n);\r\n",
+    'legacy.cts': "const path: string = '/test';\nurl.parse(path);\n",
+    'modern.cts': "const data: string = '🐈';\r\nBuffer.from(data);\r\n",
+  };
+  const sourceFiles = [];
+  for (const [rel, content] of Object.entries(samples)) {
+    const fullPath = join(isoSrcDir, rel);
+    await writeFile(fullPath, content);
+    await writeFile(join(isoCodemodDir, rel), content);
+    sourceFiles.push({rel, fullPath, ext: rel.slice(-4)});
+  }
+  const jscodeshiftBin = join(moduleDir, 'node_modules/.bin/jscodeshift');
+  const transformPath = join(moduleDir, 'codemods/upgrade-rewrites.cjs');
+  assert.match((await execFile(jscodeshiftBin, ['--version'])).stdout, /jscodeshift: 17\.4\.0/);
+  const target = join(isoCodemodDir, 'modern.cts');
+  const report = join(root, 'clean.ndjson');
+  const nonce = 'clean-synthetic';
+  const clean = await execFile(jscodeshiftBin,
+    ['--run-in-band', '--fail-on-error', '--parser=ts', '--extensions=cts', '-t', transformPath, target],
+    {env: {...process.env, AC_JSCODESHIFT_REPORT: report, AC_JSCODESHIFT_NONCE: nonce}});
+  assert.match(clean.stdout, /0 errors[\s\S]+1 skipped[\s\S]+0 ok/);
+  assert.deepEqual((await readFile(report, 'utf8')).trimEnd().split('\n').map(line => JSON.parse(line)), [{
+    file: target, nonce, kind: 'source', sha256: createHash('sha256').update(samples['modern.cts']).digest('hex'),
+  }]);
+
+  const result = await runJscodeshiftCheck({sourceFiles, isoSrcDir, isoCodemodDir, workRoot: root,
+    jscodeshiftBin, jscodeshiftVersion: '17.4.0', transformPath});
+  assert.ok(result.coverage.every(row => row.status === 'ok'));
+  assert.ok(result.coverage.some(row => row.detail === 'arquivo=modern.cts; correspondencias=0'));
+  assert.deepEqual(result.findings.map(f => [f.file, f.line, f.evidence]), [
+    ['legacy.mts', 2, 'Revisão necessária: new Buffer(n)'],
+    ['legacy.cts', 2, 'Revisão necessária: url.parse(path)'],
+  ]);
+  for (const [rel, content] of Object.entries(samples)) {
+    assert.deepEqual(await readFile(join(isoCodemodDir, rel)), Buffer.from(content));
+    assert.deepEqual(await readFile(join(isoSrcDir, rel)), Buffer.from(content));
+  }
+});
+
 test('lock do workspace prevalece e o achado aponta para a entrada efetivamente resolvida', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-workspace-'));
   try {
@@ -775,21 +846,31 @@ test('lock do workspace prevalece e o achado aponta para a entrada efetivamente 
     const byShrinkwrap = await analyzeLockfileAndSbom({...withShrinkwrap, mountedSbomPaths: [], registry: null, ncuDetectedPackages: new Set()});
     assert.ok(byShrinkwrap.findings.some(finding => finding.rule === 'LOCKFILE-VERSION-MISMATCH' &&
       finding.file === 'npm-shrinkwrap.json' && finding.line === 3));
+
+    const registryPath = join(root, 'registry.json');
+    await writeFile(registryPath, '{"outdated":"2.0.0","nested":"1.5.0"}');
+    const collected = await runCollection({repoRoot: root, registryPath,
+      ncuBin: join(moduleDir, 'node_modules/.bin/ncu'), ncuVersion: '23.1.1',
+      astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
+    const updates = collected.findings.filter(f => f.rule.startsWith('NCU-OUTDATED'));
+    assert.deepEqual(updates.map(f => f.file), ['packages/a/package.json', 'packages/a/plugins/b/package.json']);
+    assert.match(updates[0].evidence, /npm-shrinkwrap\.json#packages\/a\/node_modules\/outdated="1.0.0"; registro="2.0.0"/);
+    assert.match(updates[1].evidence, /npm-shrinkwrap\.json#packages\/a\/plugins\/b\/node_modules\/nested="1.0.0"; registro="1.5.0"/);
   } finally {
     await rm(root, {recursive: true, force: true});
   }
 });
 
-test('ncu rejeita resultados inválidos por manifesto e aceita o alias confirmado pelo registro offline', async () => {
+test('ncu isola propostas inválidas, preserva propostas válidas e exige identidade travada do alias', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-ncu-output-'));
   try {
-    for (const name of ['bad-type', 'bad-name', 'bad-range', 'bad-registry', 'valid']) {
+    for (const name of ['bad-type', 'bad-name', 'bad-range', 'bad-registry', 'bad-json', 'valid']) {
       await mkdir(join(root, name));
       await writeFile(join(root, name, 'package.json'),
-        JSON.stringify({name, dependencies: {foo: '^1.0.0', repo: 'github:example/test#semver:^1.0.0'}}));
+        JSON.stringify({name, dependencies: {foo: '^1.0.0', bar: '^1.0.0', repo: 'github:example/test#semver:^1.0.0'}}));
     }
     const registryPath = join(root, 'registry.json');
-    await writeFile(registryPath, '{"foo":"2.0.0","repo":"2.0.0"}');
+    await writeFile(registryPath, '{"foo":"2.0.0","bar":"2.0.0","repo":"2.0.0"}');
     const fake = join(root, 'ncu-fixture');
     await writeFile(fake, [
       '#!/usr/bin/env node',
@@ -797,30 +878,52 @@ test('ncu rejeita resultados inválidos por manifesto e aceita o alias confirmad
       'const file = process.argv[process.argv.indexOf("--packageFile") + 1];',
       'const {name, dependencies} = JSON.parse(fs.readFileSync(file));',
       'if (dependencies.repo || process.env.NPM_CONFIG_OFFLINE !== "true") process.exit(4);',
-      'const messages = {"bad-type":{foo:{version:"2.0.0"},other:"2.0.0"},"bad-name":{foo:"^2.0.0",other:"2.0.0"},',
-      '  "bad-range":{foo:"nonsense"},"bad-registry":{foo:"^999.0.0"},valid:{foo:"^2.0.0"}};',
-      'process.stdout.write(JSON.stringify(messages[name]));',
+      'const messages = {"bad-type":{foo:{version:"2.0.0"}},"bad-name":{other:"2.0.0"},',
+      '  "bad-range":{foo:"stable"},"bad-registry":{foo:"^999.0.0"},valid:{}};',
+      'process.stdout.write(name === "bad-json" ? "{" : JSON.stringify({...messages[name],bar:"^2.0.0"}));',
     ].join('\n'));
     await chmod(fake, 0o755);
     const output = await runCollection({repoRoot: root, registryPath, ncuBin: fake,
       ncuVersion: 'sintetica', astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
-    for (const name of ['bad-type', 'bad-name', 'bad-range', 'bad-registry']) {
-      const rows = output.coverage.filter(row => row.tool === 'npm-check-updates' && row.detail.startsWith(`arquivo=${name}/package.json;`));
-      assert.equal(rows.length, 1);
-      assert.equal(rows[0].status, 'failed');
-      assert.match(rows[0].detail, /Saída JSON inválida/);
+    for (const [name, detail, status] of [
+      ['bad-type', 'pacote=foo; erro=tipo_alvo_invalido', 'failed'],
+      ['bad-name', 'pacote=other; erro=pacote_nao_declarado', 'failed'],
+      ['bad-range', 'pacote=foo; secao=dependencies; motivo=alvo_nao_comparavel', 'skipped'],
+      ['bad-registry', 'pacote=foo; secao=dependencies; motivo=alvo_nao_confirmado_no_registro', 'skipped'],
+      ['bad-json', 'Saída JSON inválida', 'failed'],
+    ]) {
+      assert.ok(output.coverage.some(row => row.tool === 'npm-check-updates' && row.status === status &&
+        row.detail.startsWith(`arquivo=${name}/package.json;`) && row.detail.includes(detail)), name);
     }
-    assert.equal(output.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'ok' &&
-      row.detail.includes('arquivo=valid/package.json')), true);
-    assert.deepEqual(output.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => f.file), ['valid/package.json']);
+    assert.deepEqual(output.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => f.file),
+      ['bad-name/package.json', 'bad-range/package.json', 'bad-registry/package.json', 'bad-type/package.json', 'valid/package.json']);
 
     const aliasRepo = join(root, 'alias');
     await mkdir(aliasRepo);
-    await writeFile(join(aliasRepo, 'package.json'), '{"dependencies":{"local-name":"npm:foo@^1.0.0"}}');
-    const real = await runCollection({repoRoot: aliasRepo, registryPath,
+    await writeFile(join(aliasRepo, 'package.json'), JSON.stringify({dependencies: {
+      'local-name': 'npm:foo@^1.0.0', 'unverified': 'npm:foo@^1.0.0', 'different': 'npm:foo@^1.0.0',
+    }}));
+    const options = {repoRoot: aliasRepo, registryPath,
       ncuBin: join(moduleDir, 'node_modules/.bin/ncu'), ncuVersion: '23.1.1',
-      astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
-    assert.ok(real.findings.some(f => f.rule === 'NCU-OUTDATED-MAJOR' && f.evidence.includes('npm:foo@^2.0.0')));
+      astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'};
+    const noLock = await runCollection(options);
+    assert.ok(noLock.coverage.some(row => row.tool === 'npm-check-updates' &&
+      row.detail.includes('pacote=local-name; secao=dependencies; motivo=identidade_alias_nao_comprovada')));
+    assert.ok(!noLock.findings.some(f => f.rule.startsWith('NCU-OUTDATED')));
+    await writeFile(join(aliasRepo, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
+      'node_modules/local-name': {name: 'foo', version: '1.0.0'},
+      'node_modules/unverified': {version: '1.0.0'},
+      'node_modules/different': {name: 'bar', version: '1.0.0'},
+    }}));
+    const real = await runCollection(options);
+    assert.deepEqual(real.findings.filter(f => f.rule.includes('OUTDATED')).map(f => f.evidence),
+      ['dependencies: "local-name": "npm:foo@^1.0.0" -> "local-name": "npm:foo@^2.0.0"; package-lock.json#node_modules/local-name="1.0.0"; registro="2.0.0"']);
+    for (const tool of ['npm-check-updates', 'sbom-lockfile']) {
+      for (const [pkg, reason] of [['unverified', 'identidade_alias_nao_comprovada'], ['different', 'identidade_lockfile_divergente']]) {
+        assert.ok(real.coverage.some(row => row.tool === tool && row.status === 'skipped' &&
+          row.detail.includes(`pacote=${pkg};`) && row.detail.includes(`motivo=${reason}`)), `${tool}/${pkg}`);
+      }
+    }
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -835,6 +938,8 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
         renamed: 'npm:real@^1.0.0', gitRef: 'github:example/repo#semver:^1.0.0',
         local: 'file:../local', tagged: 'stable', pin: '1.0.0', range: '^1.0.0',
         same: '1.0.0+build.1', pre: '2.0.0-beta.1', shared: '^1.0.0',
+        installedAhead: '^1.0.0', installedEqual: '^1.0.0', lowerBranch: '^1.0.0',
+        actualRisk: '>=1.0.0',
       },
       devDependencies: {shared: '>=1.5.0'},
     };
@@ -842,11 +947,15 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
       backward: '2.0.0', reducedFloor: '1.9.0', union: '2.0.0', real: '2.0.0',
       renamed: '6.0.0', local: '9.0.0', pin: '1.0.1', range: '1.2.0',
       same: '1.0.0+build.2', pre: '2.0.0', shared: '1.7.0',
+      installedAhead: '1.6.0', installedEqual: '1.6.0', lowerBranch: '2.1.0',
+      actualRisk: '2.5.0',
     };
     const targets = {
       backward: '2.0.0', reducedFloor: '>=1.2.0 <2', union: '^2.0.0',
       renamed: 'npm:another@^6.0.0', pin: '1.0.1', range: '^1.2.0',
       same: '1.0.0+build.2', pre: '2.0.0', shared: '^1.5.0',
+      installedAhead: '^1.6.0', installedEqual: '^1.6.0', lowerBranch: '^2.0.0 || ^1.5.0',
+      actualRisk: '^2.5.0',
     };
     const manifestText = JSON.stringify(manifest, null, 2);
     await writeFile(join(root, 'package.json'), manifestText);
@@ -854,6 +963,8 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
       backward: '3.0.0', reducedFloor: '1.7.0', union: '1.0.0', renamed: '1.0.0',
       gitRef: '1.0.0', local: '1.0.0', tagged: '1.0.0', pin: '1.0.0', range: '1.0.0',
       same: '1.0.0+build.1', pre: '2.0.0-beta.1', shared: '1.6.0',
+      installedAhead: '1.8.0', installedEqual: '1.6.0', lowerBranch: '1.6.0',
+      actualRisk: '2.4.0',
     };
     const packages = Object.fromEntries(Object.entries(versions).map(([pkg, version]) =>
       [`node_modules/${pkg}`, {version}]));
@@ -874,18 +985,25 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
       ncuVersion: 'sintetica', astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
     const ncu = result.findings.filter(f => f.rule.startsWith('NCU-OUTDATED'));
     assert.deepEqual(ncu.map(f => f.evidence), [
-      'dependencies: "pin": "1.0.0" -> "pin": "1.0.1"',
-      'dependencies: "range": "^1.0.0" -> "range": "^1.2.0"',
-      'dependencies: "pre": "2.0.0-beta.1" -> "pre": "2.0.0"',
-      'dependencies: "shared": "^1.0.0" -> "shared": "^1.5.0"',
+      'dependencies: "pin": "1.0.0" -> "pin": "1.0.1"; package-lock.json#node_modules/pin="1.0.0"; registro="1.0.1"',
+      'dependencies: "range": "^1.0.0" -> "range": "^1.2.0"; package-lock.json#node_modules/range="1.0.0"; registro="1.2.0"',
+      'dependencies: "pre": "2.0.0-beta.1" -> "pre": "2.0.0"; package-lock.json#node_modules/pre="2.0.0-beta.1"; registro="2.0.0"',
+      'dependencies: "actualRisk": ">=1.0.0" -> "actualRisk": "^2.5.0"; package-lock.json#node_modules/actualRisk="2.4.0"; registro="2.5.0"',
     ]);
     assert.deepEqual(ncu.map(f => f.rule), ['NCU-OUTDATED-PATCH', 'NCU-OUTDATED-MINOR', 'NCU-OUTDATED-PATCH', 'NCU-OUTDATED-MINOR']);
     const lock = result.findings.filter(f => f.rule === 'LOCKFILE-OUTDATED-RESOLVED');
-    assert.deepEqual(lock.map(f => /#node_modules\/([^:]+):/.exec(f.evidence)?.[1]), ['reducedFloor', 'union', 'renamed', 'shared']);
+    assert.deepEqual(lock.map(f => /#node_modules\/([^:]+):/.exec(f.evidence)?.[1]), ['reducedFloor', 'union', 'shared', 'lowerBranch', 'shared']);
     assert.ok(result.coverage.some(row => row.status === 'skipped' &&
       row.detail.includes('pacote=backward; secao=dependencies; motivo=direcao_de_atualizacao_nao_comprovada')));
-    assert.ok(result.coverage.some(row => row.status === 'skipped' && row.detail.includes('pacote=renamed; motivo=identidade_alterada')));
-    assert.ok(result.coverage.some(row => row.detail.includes('pacotes=gitRef,local,tagged')));
+    for (const [pkg, reason] of [
+      ['renamed', 'identidade_alterada'],
+      ['gitRef', 'declaracao_nao_comparavel'], ['local', 'declaracao_nao_comparavel'], ['tagged', 'declaracao_nao_comparavel'],
+      ['installedAhead', 'registro_nao_supera_versao_travada'], ['installedEqual', 'registro_nao_supera_versao_travada'],
+      ['lowerBranch', 'alvo_admite_versao_inferior_ao_lock'], ['shared', 'alvo_admite_versao_inferior_ao_lock'],
+    ]) {
+      assert.ok(result.coverage.some(row => row.status === 'skipped' &&
+        row.detail.includes(`pacote=${pkg}; secao=dependencies; motivo=${reason}`)), pkg);
+    }
     assert.equal(await readFile(join(root, 'package.json'), 'utf8'), manifestText);
     assert.equal(await readFile(join(root, 'package-lock.json'), 'utf8'), lockText);
   } finally {
@@ -908,9 +1026,10 @@ test('lock npm usa a identidade de aliases modernos e legados e preserva versõe
       'node_modules/opaque': {version: 'release-1'},
       'node_modules/mismatch': {name: 'real', version: '1.0.0'},
     }}, null, 2));
-    await writeFile(join(root, 'legacy/package.json'), '{"dependencies":{"legacy":"npm:@scope/real@^1.0.0"}}');
+    await writeFile(join(root, 'legacy/package.json'),
+      '{"dependencies":{"legacy":"npm:@scope/real@^1.0.0","unverified":"npm:@scope/real@^1.0.0"}}');
     await writeFile(join(root, 'legacy/package-lock.json'),
-      '{\n  "lockfileVersion": 1,\n  "dependencies": {\n    "legacy": {"version":"npm:@scope/real@1.0.0"}\n  }\n}');
+      '{\n  "lockfileVersion": 1,\n  "dependencies": {\n    "legacy": {"version":"npm:@scope/real@1.0.0"},\n    "unverified": {"version":"1.0.0"}\n  }\n}');
     const found = await discoverRepoFiles(root);
     const result = await analyzeLockfileAndSbom({...found, mountedSbomPaths: [], ncuDetectedPackages: new Set(),
       registry: {path: '', versions: {local: '5.0.0', real: '1.0.0', '@scope/real': '1.2.0', opaque: '5.0.0'}}});
@@ -924,6 +1043,8 @@ test('lock npm usa a identidade de aliases modernos e legados e preserva versõe
       row.detail.includes('motivo=identidade_lockfile_divergente')));
     assert.ok(result.coverage.some(row => row.status === 'skipped' && row.detail.includes('pacote=opaque;') &&
       row.detail.includes('motivo=faixa_ou_versao_nao_semver')));
+    assert.ok(result.coverage.some(row => row.status === 'skipped' && row.detail.includes('pacote=unverified;') &&
+      row.detail.includes('motivo=identidade_alias_nao_comprovada')));
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -967,6 +1088,9 @@ test('CycloneDX preserva componentes aninhados e distingue inventário vazio, en
     await report('bom-invalid', {...header, components: [
       null, {}, 42, {name: 'missing-type'}, {type: 'arbitrary', name: 'bad-type'},
       {type: 'application', name: 'bad-children', components: {}},
+      {type: 'library', name: 'example', purl: 'pkg:npm/%40scope/example@1.0.0'},
+    ]});
+    await report('bom-identities', {...header, components: [
       {type: 'library', name: 'purl-error', purl: 'pkg:npm/%XX@1.0.0'},
       {type: 'library', name: 'conflict', version: '2.0.0', purl: 'pkg:npm/conflict@1.0.0'},
       {type: 'application', name: 'assembly', components: [{type: 'library', name: 'example', purl: 'pkg:npm/%40scope/example@1.0.0?arch=all'}]},
@@ -986,7 +1110,7 @@ test('CycloneDX preserva componentes aninhados e distingue inventário vazio, en
       {type: 'library', name: 'foo', version: 'build-19', purl: 'pkg:npm/foo@build-19'},
     ]});
     const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],
-      sbomFiles: ['bom-empty', 'bom-missing-spec', 'bom-invalid', 'bom-unavailable', 'bom-metadata', 'bom-metadata-invalid', 'bom-opaque']
+      sbomFiles: ['bom-empty', 'bom-missing-spec', 'bom-invalid', 'bom-identities', 'bom-unavailable', 'bom-metadata', 'bom-metadata-invalid', 'bom-opaque']
         .map(rel => ({rel, fullPath: join(root, rel)})),
       ncuDetectedPackages: new Set(), registry: {path: '', versions: {'@scope/example': '2.0.0', foo: '2.0.0', invalid: 'inválida'}}});
     const empty = result.coverage.find(row => row.detail.startsWith('sbom=bom-empty;'));
@@ -1000,11 +1124,12 @@ test('CycloneDX preserva componentes aninhados e distingue inventário vazio, en
       row.detail.includes('sbom=bom-opaque;') && row.detail.includes('versao_componente_nao_comparavel=1')));
     const invalid = result.coverage.find(row => row.detail.startsWith('sbom=bom-invalid;'));
     assert.equal(invalid?.status, 'failed');
-    assert.match(invalid?.detail ?? '', /componente_invalido=5/);
-    assert.match(invalid?.detail ?? '', /componentes_aninhados_invalidos=1/);
-    assert.match(invalid?.detail ?? '', /purl_npm_invalida=1/);
-    assert.match(invalid?.detail ?? '', /versao_componente_invalida=1/);
-    assert.deepEqual(result.findings.map(f => f.file), ['bom-invalid', 'bom-metadata']);
+    assert.match(invalid?.detail ?? '', /erro=esquema_cyclonedx_invalido; versao=1.6; campo="\/components\/0"; regra=type/);
+    const invalidIdentity = result.coverage.find(row => row.detail.startsWith('sbom=bom-identities;'));
+    assert.equal(invalidIdentity?.status, 'failed');
+    assert.match(invalidIdentity?.detail ?? '', /purl_npm_invalida=1/);
+    assert.match(invalidIdentity?.detail ?? '', /versao_componente_invalida=1/);
+    assert.deepEqual(result.findings.map(f => f.file), ['bom-identities', 'bom-metadata']);
     assert.match(result.findings[0].evidence, /@scope\/example@1.0.0 -> 2.0.0/);
     assert.match(result.findings[1].evidence, /foo@1.0.0 -> 2.0.0/);
     const unavailable = result.coverage.find(row => row.detail.startsWith('sbom=bom-unavailable;'));
@@ -1012,6 +1137,45 @@ test('CycloneDX preserva componentes aninhados e distingue inventário vazio, en
     assert.match(unavailable?.detail ?? '', /sem_metadados=2; metadados_invalidos=1/);
   } finally {
     await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('CycloneDX valida campos e referências conforme a versão declarada', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-cyclonedx-version-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const component = {type: 'library', name: 'foo', version: '1.0.0', purl: 'pkg:npm/foo@1.0.0'};
+  const cases: {rel: string; specVersion: string; data: object; error?: RegExp}[] = [
+    ...Array.from({length: 6}, (_, i) => ({
+      rel: `valid-1.${i + 2}`, specVersion: `1.${i + 2}`, data: {version: 1, components: [component]},
+    })),
+    {rel: 'old-missing-version', specVersion: '1.4', data: {components: [component]}, error: /regra=required/},
+    {rel: 'new-type-in-old-version', specVersion: '1.5', data: {
+      components: [{...component, type: 'cryptographic-asset'}],
+    }, error: /campo="\/components\/0\/type"; regra=enum/},
+    {rel: 'bad-license', specVersion: '1.6', data: {
+      components: [{...component, licenses: [{license: {id: 'not-a-license-list-value'}}]}],
+    }, error: /campo="\/components\/0\/licenses\/0\/license\/id"; regra=enum/},
+    {rel: 'bad-timestamp', specVersion: '1.7', data: {
+      components: [component], metadata: {timestamp: 'yesterday'},
+    }, error: /campo="\/metadata\/timestamp"; regra=format/},
+    {rel: 'duplicated', specVersion: '1.6', data: {components: [
+      component, {name: component.name, purl: component.purl, version: component.version, type: component.type},
+    ]}, error: /campo="\/components"; regra=uniqueItems/},
+    {rel: 'unsupported', specVersion: '9.9', data: {components: [component]},
+      error: /erro=versao_cyclonedx_nao_suportada; versao="9.9"/},
+  ];
+  const sbomFiles = cases.map(({rel}) => ({rel, fullPath: join(root, rel)}));
+  for (const {rel, specVersion, data} of cases) {
+    await writeFile(join(root, rel), JSON.stringify({bomFormat: 'CycloneDX', specVersion, ...data}));
+  }
+  const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],
+    sbomFiles, ncuDetectedPackages: new Set(), registry: {path: '', versions: {foo: '2.0.0'}}});
+  assert.equal(result.coverage[0].status, 'failed');
+  assert.deepEqual(result.findings.map(f => f.file), cases.filter(row => !row.error).map(row => row.rel));
+  for (const {rel, error} of cases) {
+    const row = result.coverage.find(c => c.detail.startsWith(`sbom=${rel};`));
+    assert.equal(row?.status, error ? 'failed' : 'ok', rel);
+    if (error) assert.match(row?.detail ?? '', error);
   }
 });
 
@@ -1063,7 +1227,7 @@ test('CycloneDX limita componentes agregados e conserva comparações anteriores
     const files = ['first', 'later'].map(rel => ({rel, fullPath: join(root, rel)}));
     await writeFile(files[0].fullPath, JSON.stringify({
       bomFormat: 'CycloneDX', specVersion: '1.6',
-      components: [first, ...Array.from({length: 19_999}, () => other)],
+      components: [first, ...Array.from({length: 19_999}, (_, i) => ({...other, 'bom-ref': `other-${i}`}))],
     }));
     await writeFile(files[1].fullPath, JSON.stringify({bomFormat: 'CycloneDX', specVersion: '1.6', components: [first]}));
     const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],

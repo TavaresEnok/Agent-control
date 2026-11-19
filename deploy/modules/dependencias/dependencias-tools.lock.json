@@ -8,7 +8,7 @@
   },
   "registry": "https://registry.npmjs.org",
   "lockfileVersion": 3,
-  "packageLockSha256": "365ec7c9ec5965113fe2450727cbe4c7293596ee55f1e1ae1f2a3299ca1fa8cc",
+  "packageLockSha256": "a0a2dc2022806f9404b55f61bdb9f61b4a34132fe8c099b61f35d1b4c7d88d09",
   "offlineRegistrySha256": "a65f02a365f847be08ac21436e04847cc02e62699284a7b931dbe54ccbe28a57",
   "dependencies": {
     "npm-check-updates": {
@@ -46,6 +46,24 @@
       "license": "ISC",
       "integrity": "sha512-IPZ167aShDZZUMdRk66cyQAW3qr0WzbHkPdMYa8bzZhlHhO3jALbKdxcaak7W9FfT2rZNpQuUu4Od7ILEpXSaw==",
       "resolved": "https://registry.npmjs.org/minimatch/-/minimatch-10.0.3.tgz"
+    },
+    "ajv": {
+      "version": "8.20.0",
+      "license": "MIT",
+      "integrity": "sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==",
+      "resolved": "https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz"
+    },
+    "ajv-formats": {
+      "version": "3.0.1",
+      "license": "MIT",
+      "integrity": "sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==",
+      "resolved": "https://registry.npmjs.org/ajv-formats/-/ajv-formats-3.0.1.tgz"
+    },
+    "ajv-formats-draft2019": {
+      "version": "1.6.1",
+      "license": "MIT",
+      "integrity": "sha512-JQPvavpkWDvIsBp2Z33UkYCtXCSpW4HD3tAZ+oL4iEFOk9obQZffx0yANwECt6vzr6ET+7HN5czRyqXbnq/u0Q==",
+      "resolved": "https://registry.npmjs.org/ajv-formats-draft2019/-/ajv-formats-draft2019-1.6.1.tgz"
     }
   }
 }

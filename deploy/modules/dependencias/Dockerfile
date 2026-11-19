@@ -19,9 +19,10 @@ RUN node /opt/dependencias-tools/verify-lock.mjs /opt/dependencias-tools \
     && npm cache clean --force \
     && rm -rf /root/.npm /tmp/*
 
-COPY sgconfig.yml collect.mjs fetch-registry.mjs ./
+COPY sgconfig.yml collect.mjs cyclonedx.mjs fetch-registry.mjs ./
 COPY rules/ ./rules/
 COPY codemods/ ./codemods/
+COPY schemas/ ./schemas/
 COPY entrypoint.sh /usr/local/bin/dependencias-entrypoint.sh
 
 RUN chmod 0555 /usr/local/bin/dependencias-entrypoint.sh \
@@ -31,10 +32,12 @@ RUN chmod 0555 /usr/local/bin/dependencias-entrypoint.sh \
       /opt/dependencias-tools/offline-registry.json \
       /opt/dependencias-tools/sgconfig.yml \
       /opt/dependencias-tools/collect.mjs \
+      /opt/dependencias-tools/cyclonedx.mjs \
       /opt/dependencias-tools/fetch-registry.mjs \
       /opt/dependencias-tools/verify-lock.mjs \
       /opt/dependencias-tools/rules/*.yml \
       /opt/dependencias-tools/codemods/*.cjs \
+      /opt/dependencias-tools/schemas/* \
     && chown -R root:root /opt/dependencias-tools
 
 USER 65532:65532
