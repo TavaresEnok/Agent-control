@@ -46,7 +46,7 @@ COPY --from=tools /opt/testssl/ /opt/testssl/
 RUN ln -sf /opt/testssl/testssl.sh /usr/local/bin/testssl.sh
 COPY tools.lock.json /opt/prontidao/tools.lock.json
 COPY audit-readiness.mjs /opt/prontidao/audit-readiness.mjs
-COPY run-collector.mjs /opt/prontidao/run-collector.mjs
+COPY run-collector.mjs header-facts.mjs /opt/prontidao/
 COPY entrypoint.sh /usr/local/bin/prontidao-entrypoint.sh
 RUN chmod 0555 /usr/local/bin/gitleaks /usr/local/bin/hadolint /usr/local/bin/trivy \
       /usr/local/bin/prontidao-entrypoint.sh /opt/prontidao/audit-readiness.mjs /opt/prontidao/run-collector.mjs \

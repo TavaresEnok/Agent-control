@@ -1,6 +1,7 @@
 import {request as httpsRequest, type RequestOptions} from 'node:https';
 import type {TLSSocket} from 'node:tls';
 import {z} from 'zod';
+import {passiveHeaderFacts} from '../deploy/modules/prontidao/header-facts.mjs';
 import {Refusal} from './contracts.ts';
 import type {Installation} from './installation.ts';
 
@@ -9,18 +10,6 @@ export const DEFAULT_PRONTIDAO_TIMEOUT_MS = 10_000;
 export const DEFAULT_PRONTIDAO_MAX_BYTES = 65_536;
 export const MAX_PRONTIDAO_ORIGINS = 16;
 const MAX_DECLARED_ORIGINS = 49; // publishedOrigin + 16 do projeto + 32 da instalação
-
-const ALLOWED_SECURITY_HEADERS = new Set([
-  'strict-transport-security',
-  'x-content-type-options',
-  'x-frame-options',
-  'content-security-policy',
-  'referrer-policy',
-  'permissions-policy',
-  'cross-origin-opener-policy',
-  'cross-origin-resource-policy',
-  'cache-control',
-]);
 
 const TLS_ERROR_CODES = new Set([
   'DEPTH_ZERO_SELF_SIGNED_CERT',
@@ -68,6 +57,7 @@ export const PassiveTlsTargetObservation = z.object({
   errorCode: z.string().max(120).nullable(),
   errorMessage: z.string().max(500).nullable(),
   certificate: PassiveTlsCertificate.nullable(),
+  headerFacts: z.object({hsts: z.enum(['absent','invalid','insufficient','adequate']), noSniff: z.boolean(), antiFrame: z.boolean()}).strict().optional(),
   headers: z.record(z.string().max(80), z.string().max(1000)),
   redirectTargetOrigin: z.string().max(2048).nullable(),
   redirectCrossOrigin: z.boolean(),
@@ -165,18 +155,6 @@ export function authorizeProjectHttpsOrigin(
     return [normalized];
   }
   return authorized;
-}
-
-function sanitizeHeaders(rawHeaders: Record<string, string | string[] | undefined>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(rawHeaders)) {
-    const lower = key.toLowerCase();
-    if (!ALLOWED_SECURITY_HEADERS.has(lower) || value === undefined) continue;
-    const joined = Array.isArray(value) ? value.join(', ') : value;
-    const cleaned = joined.length > 1000 ? '[valor excede o limite]' : joined.trim();
-    if (cleaned.length > 0) out[lower] = cleaned;
-  }
-  return out;
 }
 
 function inspectRedirect(origin: string, statusCode: number | undefined, locationHeader: string | string[] | undefined): {
@@ -311,7 +289,7 @@ export function probePublishedHttpsOrigin(
         };
       }
 
-      const headers = sanitizeHeaders(res.headers);
+      const headerFacts = passiveHeaderFacts(res.headers);
       const redirect = inspectRedirect(origin, res.statusCode, res.headers.location);
       let bytesRead = 0;
       let truncated = false;
@@ -329,7 +307,8 @@ export function probePublishedHttpsOrigin(
           errorCode: null,
           errorMessage: null,
           certificate,
-          headers,
+          headers: {},
+          headerFacts,
           redirectTargetOrigin: redirect.redirectTargetOrigin,
           redirectCrossOrigin: redirect.redirectCrossOrigin,
           redirectDowngradeHttp: redirect.redirectDowngradeHttp,
@@ -426,5 +405,8 @@ export async function probePublishedHttpsOrigins(
 }
 
 export function validatePassiveTlsEvidence(raw: unknown): ProntidaoPassiveEvidence {
-  return ProntidaoPassiveEvidence.parse(raw);
+  const evidence = ProntidaoPassiveEvidence.parse(raw);
+  return {...evidence, targets: evidence.targets.map(target => ({
+    ...target, headerFacts: target.headerFacts ?? passiveHeaderFacts(target.headers), headers: {},
+  }))};
 }

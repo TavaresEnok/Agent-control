@@ -10,7 +10,7 @@ const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
 const MAX_EVIDENCE_BYTES = 512 * 1024;
 const MAX_PASSIVE_TARGETS = 16;
 const MAX_UNMEASURED_ORIGINS = 33;
-const MIN_HSTS_MAX_AGE_SECONDS = 15_552_000;
+import {passiveHeaderFacts} from './header-facts.mjs';
 const EXPIRING_CERT_DAYS = 14;
 
 function mapSeverity(raw) {
@@ -137,38 +137,7 @@ function readRedirectOrigin(value) {
   }
 }
 
-function hstsMaxAge(value) {
-  const seen = new Set();
-  let maxAge = null;
-  for (const directive of value.split(';').map(part => part.trim()).filter(Boolean)) {
-    const match = /^([!#$%&'*+.^_`|~\w-]+)(?:[\t ]*=[\t ]*("[^"\r\n]*"|[!#$%&'*+.^_`|~\w-]+))?$/.exec(directive);
-    if (!match) return null;
-    const [, key, arg] = match;
-    const lower = key.toLowerCase();
-    if (seen.has(lower)) return null;
-    seen.add(lower);
-    if (lower === 'includesubdomains' && arg !== undefined) return null;
-    if (lower !== 'max-age') continue;
-    if (!/^(?:\d+|"\d+")$/.test(arg ?? '')) return null;
-    maxAge = Number(arg.replaceAll('"', ''));
-  }
-  return Number.isFinite(maxAge) ? maxAge : null;
-}
 
-function hasFrameAncestors(value) {
-  return value.split(',').some(policy => {
-    // Browsers use the first directive of a given name within each policy.
-    const directive = policy.split(';').find(part => /^\s*frame-ancestors(?:\s|$)/i.test(part));
-    if (!directive) return false;
-    const sources = directive.trim().split(/\s+/).slice(1);
-    if (sources.length === 1 && sources[0].toLowerCase() === "'none'") return true;
-    return sources.length > 0 && !sources.includes('*') && sources.every(source =>
-      /^'self'$/i.test(source)
-      || /^[a-z][a-z0-9+.-]*:$/i.test(source)
-      || /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::(?:\d+|\*))?(?:\/[^\s;,]*)?$/i.test(source),
-    );
-  });
-}
 
 export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
@@ -281,9 +250,8 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
       }, repoRoot, tlsAnchorFile));
     }
 
-    const headers = target.headers && typeof target.headers === 'object' ? target.headers : {};
-    const hsts = typeof headers['strict-transport-security'] === 'string' ? headers['strict-transport-security'] : '';
-    if (!hsts) {
+    const facts = target.headerFacts ?? passiveHeaderFacts(target.headers ?? {});
+    if (facts.hsts === 'absent') {
       targetFindings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
         rule: 'PRONTIDAO-HSTS-AUSENTE',
@@ -294,8 +262,7 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         evidence: `${origin} HTTP ${target.httpStatus ?? 200}: Strict-Transport-Security ausente`,
       }, repoRoot, tlsAnchorFile));
     } else {
-      const maxAge = hstsMaxAge(hsts);
-      if (maxAge === null || maxAge < MIN_HSTS_MAX_AGE_SECONDS) {
+      if (facts.hsts !== 'adequate') {
         targetFindings.push(normalizeFinding({
           tool: 'prontidao-tls-passivo',
           rule: 'PRONTIDAO-HSTS-FRACO',
@@ -303,13 +270,12 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
           line: 1,
           severity: 'media',
           message: `Cabeçalho Strict-Transport-Security de ${origin} possui max-age inválido ou insuficiente.`,
-          evidence: `${origin}: max-age ${maxAge === null ? 'inválido ou ausente' : 'abaixo do mínimo'}.`,
+          evidence: `${origin}: max-age ${facts.hsts === 'invalid' ? 'inválido ou ausente' : 'abaixo do mínimo'}.`,
         }, repoRoot, tlsAnchorFile));
       }
     }
 
-    const noSniff = typeof headers['x-content-type-options'] === 'string' ? headers['x-content-type-options'] : '';
-    if (noSniff.trim().toLowerCase() !== 'nosniff') {
+    if (!facts.noSniff) {
       targetFindings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
         rule: 'PRONTIDAO-NOSNIFF-AUSENTE',
@@ -321,9 +287,7 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
       }, repoRoot, tlsAnchorFile));
     }
 
-    const xfo = typeof headers['x-frame-options'] === 'string' ? headers['x-frame-options'].trim() : '';
-    const csp = typeof headers['content-security-policy'] === 'string' ? headers['content-security-policy'] : '';
-    if (!/^(?:DENY|SAMEORIGIN)$/i.test(xfo) && !hasFrameAncestors(csp)) {
+    if (!facts.antiFrame) {
       targetFindings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
         rule: 'PRONTIDAO-FRAME-AUSENTE',

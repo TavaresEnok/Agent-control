@@ -76,6 +76,9 @@ test('HTTPS local mede cada origem uma vez e cancela a requisição ativa e a fi
       res.writeHead(302, {
         Location: `${second}/redirect-nao-seguido`,
         'Set-Cookie': 'session=fixture-cookie',
+        'Content-Security-Policy': "script-src 'nonce-dado-sintetico'; frame-ancestors 'self'",
+        'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+        'X-Content-Type-Options': 'nosniff',
       });
       res.end('a'.repeat(4096));
     });
@@ -91,6 +94,9 @@ test('HTTPS local mede cada origem uma vez e cancela a requisição ativa e a fi
     assert.equal(evidence.targets[0]?.bytesRead, 64);
     assert.equal(evidence.targets[0]?.truncated, true);
     assert.equal(JSON.stringify(evidence).includes('fixture-cookie'), false);
+    assert.equal(JSON.stringify(evidence).includes('nonce-dado-sintetico'), false);
+    assert.deepEqual(evidence.targets[0]?.headers, {});
+    assert.deepEqual(evidence.targets[0]?.headerFacts, {hsts:'adequate', noSniff:true, antiFrame:true});
 
     const limited = await probePublishedHttpsOrigins([
       ...Array<string>(MAX_PRONTIDAO_ORIGINS).fill(second), 'https://fora-da-cota.example.invalid',
