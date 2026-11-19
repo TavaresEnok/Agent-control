@@ -212,6 +212,28 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
   }
 });
 
+test('caminhos relativos usam o diretório atual e uma raiz vazia não inicia cópia', () => {
+  const root = mkdtempSync(join(tmpdir(), 'ac-arq-rel-'));
+  const previous = process.cwd();
+  try {
+    process.chdir(root);
+    mkdirSync('entrada');
+    writeFileSync('entrada/controle.ts', 'export const ok = 1;');
+    assert.equal(copyRepoSafely('entrada', '').failure?.code, 'ENOENT');
+    assert.equal(existsSync('controle.ts'), false);
+    assert.throws(() => copyRepoSafely('', 'saida'), /ARQUITETURA_REPO_UNREADABLE/);
+    assert.deepEqual(copyRepoSafely('entrada', 'saida').copiedFiles, ['controle.ts']);
+    assert.equal(readFileSync('saida/controle.ts', 'utf8'), 'export const ok = 1;');
+    writeFileSync('entrada/a\\b.ts', 'nome literal');
+    const limited = copyRepoSafely('entrada', 'limitada', {maxFiles: 0});
+    assert.deepEqual(limited.skipped, [{file: 'a\\b.ts', reason: 'nome_nao_suportado'}]);
+    assert.equal(limited.stoppedAt, 'controle.ts');
+  } finally {
+    process.chdir(previous);
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
 test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de achado com evidência e linha >= 1', () => {
   const knipOut = parseKnipReport(
     {
