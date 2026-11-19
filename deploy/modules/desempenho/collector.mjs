@@ -4,15 +4,19 @@
  * Emite um único JSON UTF-8 em stdout: { coverage: [...], findings: [...] }.
  */
 import {spawn, spawnSync} from 'node:child_process';
-import {existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
-import {extname, join} from 'node:path';
+import {existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {extname, join, resolve} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {parseExpressionAt} from './cpu-parser/node_modules/acorn/dist/acorn.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
 import {collectCpuMetrics} from './cpu-metrics.mjs';
 import {startObserverHttpLink} from './http-link.mjs';
 import {runPostgresMetrics} from './postgres-metrics.mjs';
 import {startStaticServer} from './static-server.mjs';
+import {compareDeclaredBudget, validatePerformanceMeasurement} from './references.mjs';
 import {
-  DEFAULT_THRESHOLDS, evaluateBaselineRegression, evaluateK6Summary, evaluateLighthouseLhr, loadConfig,
+  DEFAULT_THRESHOLDS, MAX_DECLARED_ROUTES, evaluateK6Summary, evaluateLighthouseLhr, loadConfig,
   normalizeCoverageRow, normalizeFinding, readJsonLimited, safeRoutePath, validateModuleOutput,
 } from './lib.mjs';
 
@@ -165,49 +169,134 @@ function discoverStaticWeb(root, config) {
   return null;
 }
 
-async function openHttp(config) {
-  const coverage = [];
-  if (config?.server && process.env.PERF_HTTP_MODE === 'isolated') {
-    const bridge = await startObserverHttpLink();
-    if (await waitForHttpReady(new URL(config.server.readyPath, bridge.origin))) {
-      const targets = [];
-      for (const route of config.routes) {
-        if (targets.some(target => target.path === route.path)) continue;
-        if (!route.file || !fileExists(REPO_ROOT, route.file)) {
-          coverage.push(normalizeCoverageRow({tool: 'rota-http', version: '4', status: 'skipped',
-            detail: `rota=${route.path}; arquivo da rota ausente no snapshot`}));
-          continue;
-        }
-        targets.push({...route, page: route.page ?? isHtml(route.file)});
-      }
-      if (targets.length) return {...bridge, targets, coverage};
+function readRouteDeclarations(root) {
+  const file = 'desempenho.config.json';
+  const path = join(root, file);
+  if (!fileExists(root, file) || lstatSync(path).size > 256 * 1024) return new Map();
+  try {
+    const ast = parseExpressionAt(readFileSync(path, 'utf8'), 0, {ecmaVersion: 2022, locations: true});
+    const array = ast.properties?.findLast(property => property.key?.value === 'routes')?.value;
+    const declarations = new Map();
+    for (const node of array?.elements?.slice(0, MAX_DECLARED_ROUTES) ?? []) {
+      const literal = node.type === 'ObjectExpression'
+        ? node.properties.findLast(property => property.key?.value === 'path')?.value : node;
+      const route = safeRoutePath(literal?.value);
+      if (route && !declarations.has(route)) declarations.set(route, {kind: 'declaration', file, line: literal.loc.start.line});
     }
-    await bridge.close();
-    coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '4', status: 'failed',
-      detail: 'Backend isolado sem resposta válida ou sem rotas associadas a arquivos do snapshot'}));
-  } else if (config?.server) {
-    coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '4', status: 'skipped',
-      detail: 'Backend local indisponível para coleta isolada'}));
+    return declarations;
+  } catch {
+    // A coleta continua quando a declaração não pode ser localizada sem ambiguidade.
+    return new Map();
   }
+}
 
-  const slice = discoverStaticWeb(REPO_ROOT, config);
-  if (!slice) return {targets: [], coverage};
-  const server = await startStaticServer(slice.rootDir);
-  const aliases = new Map();
-  for (const route of slice.routes) {
-    aliases.set(route.path, route.file);
-    if (route.path.endsWith('/')) aliases.set(`${route.path}index.html`, route.file);
+function documentSource(root, file) {
+  const source = readFileSync(join(root, file), 'utf8');
+  const firstContent = /\S/.exec(source);
+  return firstContent && {kind: 'document', file, line: source.slice(0, firstContent.index).split(/\r\n|[\r\n]/).length};
+}
+
+function routeCoverage(route, detail) {
+  return normalizeCoverageRow({tool: 'rota-http', version: '5', status: 'skipped', detail: `rota=${route}; ${detail}`});
+}
+
+function declaredRouteOmissions(config) {
+  const coverage = [];
+  if (!config) return coverage;
+  if (config.routeOmissions) coverage.push(normalizeCoverageRow({tool: 'rota-http', version: '5', status: 'skipped',
+    detail: `${config.routeOmissions} declaração(ões) de rota inválida(s)`}));
+  const prefix = `Declarações após o limite de ${MAX_DECLARED_ROUTES} rotas`;
+  let detail = prefix;
+  for (const path of config.routesBeyondLimit) {
+    if (detail.length + path.length + 2 > 500) {
+      coverage.push(normalizeCoverageRow({tool: 'rota-http', version: '5', status: 'skipped', detail}));
+      detail = prefix;
+    }
+    detail += `; ${path}`;
   }
-  const extraRoutes = (config?.routes ?? []).flatMap(route => {
-    const file = aliases.get(new URL(route.path, server.origin).pathname);
-    return file && (!route.file || route.file === file) ? [{path: route.path, file, page: true}] : [];
-  });
-  const routes = [...new Map([...slice.routes, ...extraRoutes].map(route => [route.path, route])).values()];
+  if (detail !== prefix) coverage.push(normalizeCoverageRow({tool: 'rota-http', version: '5', status: 'skipped', detail}));
+  return coverage;
+}
+
+function selectTargets(candidates, coverage) {
+  for (const route of candidates.slice(MAX_HTTP_ROUTES)) {
+    coverage.push(routeCoverage(route.path, `fora do limite de ${MAX_HTTP_ROUTES} rotas por coleta`));
+  }
+  return candidates.slice(0, MAX_HTTP_ROUTES);
+}
+
+export function planStaticRoutes(root, config, declarations = readRouteDeclarations(root)) {
+  const slice = discoverStaticWeb(root, config);
+  const filesByUrl = new Map();
+  for (const route of slice?.routes ?? []) {
+    filesByUrl.set(route.path, route.file);
+    if (route.path.endsWith('/')) {
+      filesByUrl.set(`${route.path}index.html`, route.file);
+      if (route.path !== '/') filesByUrl.set(route.path.slice(0, -1), route.file);
+    }
+  }
+  const coverage = [];
+  const targets = new Map();
+  const declared = new Set();
+  const configured = new Set();
+  for (const route of config?.routes ?? []) {
+    if (declared.has(route.path)) continue;
+    declared.add(route.path);
+    const pathname = new URL(route.path, 'http://127.0.0.1').pathname;
+    const file = route.file ?? filesByUrl.get(pathname);
+    if (!file || !isHtml(file) || !fileExists(root, file)) {
+      coverage.push(routeCoverage(route.path, 'arquivo da declaração indisponível no recorte estático'));
+      continue;
+    }
+    configured.add(route.path);
+    targets.set(route.path, {path: route.path, file, page: route.page ?? true,
+      source: declarations.get(route.path)});
+  }
+  for (const route of slice?.routes ?? []) {
+    if (!configured.has(route.path)) targets.set(route.path, route);
+  }
+  const selected = selectTargets([...targets.values()], coverage).map(route =>
+    route.source ? route : {...route, source: documentSource(root, route.file)});
+  const selectedAliases = new Map(selected.filter(route => configured.has(route.path)).map(route => [route.path, route.file]));
+  return {rootDir: slice?.rootDir ?? root, aliases: selectedAliases, targets: selected, coverage};
+}
+
+async function openHttp(root, config, mode) {
+  const coverage = [];
+  const declarations = readRouteDeclarations(root);
+  if (config?.server && mode === 'isolated') {
+    let bridge;
+    try {
+      bridge = await startObserverHttpLink();
+      if (await waitForHttpReady(new URL(config.server.readyPath, bridge.origin))) {
+        const targets = [];
+        const seen = new Set();
+        for (const route of config.routes) {
+          if (seen.has(route.path)) continue;
+          seen.add(route.path);
+          if (!route.file || !fileExists(root, route.file)) {
+            coverage.push(routeCoverage(route.path, 'arquivo da rota ausente no snapshot'));
+            continue;
+          }
+          targets.push({...route, page: route.page ?? isHtml(route.file), source: declarations.get(route.path)});
+        }
+        if (targets.length) return {...bridge, mode, targets: selectTargets(targets, coverage), coverage};
+      }
+    } catch {
+      // A preparação do canal também pode falhar antes de uma resposta HTTP.
+    }
+    await bridge?.close();
+  }
+  if (config?.server) coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '5', status: 'failed',
+    detail: 'Backend isolado indisponível, sem resposta válida ou sem rotas associadas ao snapshot'}));
+  const plan = planStaticRoutes(root, config, declarations);
+  coverage.push(...plan.coverage);
   if (config?.server) {
-    coverage.push(normalizeCoverageRow({tool: 'recorte-http-estatico', version: '4', status: 'ok',
-      detail: `${routes.length} página(s) estática(s) disponível(is); rotas dinâmicas e APIs fora deste recorte`}));
+    coverage.push(normalizeCoverageRow({tool: 'recorte-http-estatico', version: '5', status: plan.targets.length ? 'ok' : 'skipped',
+      detail: `${plan.targets.length} rota(s) estática(s) selecionada(s); rotas dinâmicas e APIs fora deste recorte`}));
   }
-  return {...server, targets: routes, coverage};
+  const server = plan.targets.length ? await startStaticServer(plan.rootDir, {aliasRoot: root, aliases: plan.aliases}) : {};
+  return {...server, mode: 'static', targets: plan.targets, coverage};
 }
 
 function discoverSqlFiles(workRoot, config) {
@@ -268,6 +357,8 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   const extraCoverage = [];
   const findings = [];
   const measuredMetrics = [];
+  const unmeasured = detail => routes.map(route =>
+    normalizeCoverageRow({tool: `lighthouse-ci:rota:${route.path}`, version, status: 'failed', detail: `rota=${route.path}; ${detail}`}));
 
   if (!routes || routes.length === 0 || !origin) {
     return {
@@ -290,14 +381,13 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
         status: 'failed',
         detail: 'Binário Chromium não encontrado em /ms-playwright para execução do Lighthouse CI',
       }),
-      extraCoverage,
+      extraCoverage: unmeasured('nenhuma medição Lighthouse disponível'),
       findings,
       measuredMetrics,
     };
   }
 
-  const lhciDir = '/tmp/lhci';
-  mkdirSync(lhciDir, {recursive: true});
+  const lhciDir = mkdtempSync(join(tmpdir(), 'ac-perf-lhci-'));
   const urls = routes.map(r => { const url = new URL(r.path, origin); if (url.origin !== origin) throw new Error('origem de rota inválida'); return url.href; });
   const configPath = join(lhciDir, 'lighthouserc.json');
   const rc = {
@@ -350,7 +440,7 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
     lhrFiles = [];
   }
 
-  if (collectExit !== 0 || lhrFiles.length === 0) {
+  if (lhrFiles.length === 0) {
     return {
       summary: normalizeCoverageRow({
         tool: 'lighthouse-ci',
@@ -358,12 +448,14 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
         status: 'failed',
         detail: `lhci collect sem relatório válido (exit=${collectExit ?? 'indisponível'})`,
       }),
-      extraCoverage,
+      extraCoverage: unmeasured('nenhuma medição Lighthouse disponível'),
       findings,
       measuredMetrics,
     };
   }
 
+  if (collectExit !== 0) extraCoverage.push(normalizeCoverageRow({tool: 'lighthouse-ci:collect', version,
+    status: 'failed', detail: `lhci collect exit=${collectExit ?? 'indisponível'}; relatórios completos aproveitados`}));
   // Também executa `lhci assert` para validar as asserções nativas do Lighthouse CI
   const assertExit = await toolExit('lhci', ['assert', `--config=${configPath}`], {
     cwd: lhciDir,
@@ -390,7 +482,7 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   for (const route of routes) {
     const m = measuredMetrics.find(item => item.route === route.path);
     extraCoverage.push(normalizeCoverageRow({tool: `lighthouse-ci:rota:${route.path}`, version,
-      status: m ? 'ok' : 'failed', files: m ? [m.file] : [], detail: m ? `arquivo=${m.file}; score=${m.score}; LCP=${m.lcp}ms; CLS=${m.cls}; TBT=${m.tbt}ms` : 'LHR correspondente com métricas completas ausente'}));
+      status: m ? 'ok' : 'failed', files: m ? [m.file] : [], detail: m ? `arquivo=${m.file}; rota=${route.path}; score=${m.score}; LCP=${m.lcp}ms; CLS=${m.cls}; TBT=${m.tbt}ms` : `rota=${route.path}; LHR correspondente com métricas completas ausente`}));
   }
 
   if (assertExit !== 0) extraCoverage.push(normalizeCoverageRow({tool: 'lighthouse-ci:assert', version,
@@ -427,8 +519,7 @@ async function runK6LoadTest({origin, routeTargets, thresholds, version}) {
     };
   }
 
-  const k6Dir = '/tmp/k6';
-  mkdirSync(k6Dir, {recursive: true});
+  const k6Dir = mkdtempSync(join(tmpdir(), 'ac-perf-k6-'));
   const scriptPath = join(k6Dir, 'script.js');
   const summaryPath = join(k6Dir, 'summary.json');
 
@@ -476,7 +567,9 @@ export default function () {
   if (!summary) return {
     summary: normalizeCoverageRow({tool: 'k6', version, status: 'failed',
       detail: `k6 sem relatório válido (exit=${exit ?? 'indisponível'})`}),
-    extraCoverage, findings, routeMetrics,
+    extraCoverage: routeTargets.map(route => normalizeCoverageRow({tool: `k6:rota:${route.path}`, version, status: 'failed',
+      detail: `rota=${route.path}; nenhum relatório válido do k6`})),
+    findings, routeMetrics,
   };
   const completed = routeTargets.filter(route => {
     const metric = summary.metrics?.[`http_reqs{route:${route.path}}`];
@@ -486,11 +579,12 @@ export default function () {
   for (const route of routeTargets) {
     const metric = evaluated.routeMetrics.find(item => item.route === route.path);
     const measured = metric && Number.isFinite(metric.p95) && Number.isFinite(metric.failRate);
+    const missingSource = measured && !metric.source && (metric.p95 > thresholds.k6P95Ms || metric.failRate > thresholds.k6FailRate);
     extraCoverage.push(normalizeCoverageRow({
       tool: `k6:rota:${route.path}`,
       version, status: measured ? 'ok' : 'failed', files: measured ? [route.file] : [],
-      detail: measured ? `arquivo=${route.file}; requisições=${K6_REQUESTS_PER_ROUTE}; p95=${metric.p95.toFixed(1)}ms; falhas=${(metric.failRate * 100).toFixed(2)}%`
-        : 'Série ou contagem de requisições da rota incompleta',
+      detail: measured ? `arquivo=${route.file}; rota=${route.path}; requisições=${K6_REQUESTS_PER_ROUTE}; p95=${metric.p95.toFixed(1)}ms; falhas=${(metric.failRate * 100).toFixed(2)}%${missingSource ? '; limite excedido sem origem localizável' : ''}`
+        : `rota=${route.path}; série ou contagem de requisições da rota incompleta`,
     }));
     if (measured) routeMetrics.push(metric);
   }
@@ -509,12 +603,12 @@ export default function () {
   };
 }
 
-async function runCpuFunctions(config, thresholds, version) {
+async function runCpuFunctions(root, config, thresholds, version) {
   const extraCoverage = [];
   const findings = [];
   let measured = 0;
   for (const {file, functionName} of config?.cpuFunctions ?? []) {
-    const result = await collectCpuMetrics({snapshotRoot: REPO_ROOT, file, functionName, thresholdMs: thresholds.cpuSelfMs});
+    const result = await collectCpuMetrics({snapshotRoot: root, file, functionName, thresholdMs: thresholds.cpuSelfMs});
     const tool = 'node-cpu-prof:arquivo';
     if (result.status !== 'measured') {
       extraCoverage.push(normalizeCoverageRow({tool, version, status: 'skipped',
@@ -541,73 +635,66 @@ async function runCpuFunctions(config, thresholds, version) {
       : 'Nenhum recorte de função medido; informe cpuFunctions com arquivo e função autônoma no snapshot'})};
 }
 
-function compareBaseline(config, thresholds, coverage, findings, current) {
+function declaredBudget(root, config, measurement) {
   const file = config?.baselineFile ?? 'desempenho.baseline.json';
-  if (!config?.baselineFile && !fileExists(REPO_ROOT, file)) return;
-  let row;
+  if (!config?.baselineFile && !fileExists(root, file)) return;
+  let reference;
+  try { reference = readJsonLimited(join(root, file), 2 * 1024 * 1024); } catch { /* orçamento inválido */ }
+  const current = config?.server && measurement.httpMode === 'static'
+    ? {...measurement, lighthouse: [], k6Routes: []} : measurement;
+  return compareDeclaredBudget(current, reference, file);
+}
+
+export async function collectPerformance(root = REPO_ROOT, mode = process.env.PERF_HTTP_MODE) {
+  const coverage = [];
+  const findings = [];
+  const measurement = {httpMode: 'static', versions: {'lighthouse-ci': 'desconhecida', k6: 'desconhecida',
+    pg_stat_statements: 'desconhecida'}, lighthouse: [], k6Routes: [], sqlQueries: []};
+  function record(result) {
+    coverage.push(result.summary, ...result.extraCoverage);
+    if (result.summary.status === 'ok') findings.push(...result.findings);
+  }
   try {
-    const baseline = readJsonLimited(join(REPO_ROOT, file), 2 * 1024 * 1024);
-    if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) throw new Error('baseline inválido');
-    const pairs = (kind, key, match) => current[kind].filter(cur => Number.isFinite(cur[key]) &&
-      Array.isArray(baseline[kind]) && baseline[kind].some(prev => prev && Number.isFinite(prev[key]) && prev[key] > 0 && match(cur, prev))).length;
-    const compared = pairs('k6Routes', 'p95', (cur, prev) => cur.route === prev.route)
-      + pairs('lighthouse', 'lcp', (cur, prev) => cur.route === prev.route && cur.formFactor === prev.formFactor)
-      + pairs('sqlQueries', 'meanMs', (cur, prev) => cur.file === prev.file && cur.line === prev.line);
-    const regressions = evaluateBaselineRegression(current, baseline, thresholds);
-    findings.push(...regressions);
-    row = {status: compared ? 'ok' : 'skipped', detail: `${compared} par(es) comparáveis; ${regressions.length} regressão(ões); referência declarada no snapshot`};
+    const config = loadConfig(root);
+    const thresholds = config?.thresholds ?? DEFAULT_THRESHOLDS;
+    coverage.push(...declaredRouteOmissions(config));
+    const pgBinDir = findPostgresBinDir();
+    const versions = getToolVersions(pgBinDir);
+    const http = await openHttp(root, config, mode);
+    measurement.httpMode = http.mode;
+    measurement.versions = {'lighthouse-ci': versions.lhci, k6: versions.k6, pg_stat_statements: versions.pg};
+    coverage.push(...http.coverage);
+    try {
+      for (const route of http.targets.filter(route => !route.page)) {
+        coverage.push(routeCoverage(route.path, 'fora da seleção de páginas do Lighthouse CI'));
+      }
+      const lighthouse = await runLighthouseCi({origin: http.origin, routes: http.targets.filter(route => route.page),
+        chromePath: findChrome(), thresholds, version: versions.lhci});
+      record(lighthouse);
+      measurement.lighthouse = lighthouse.measuredMetrics;
+      const k6 = await runK6LoadTest({origin: http.origin, routeTargets: http.targets, thresholds, version: versions.k6});
+      record(k6);
+      measurement.k6Routes = k6.routeMetrics;
+    } finally {
+      await http.close?.();
+    }
+
+    record(await runCpuFunctions(root, config, thresholds, versions.node));
+    const postgres = await runPostgresMetrics({workRoot: root, sqlInfo: discoverSqlFiles(root, config),
+      pgBinDir, thresholds, version: versions.pg});
+    record(postgres);
+    measurement.sqlQueries = postgres.summary.status === 'ok' ? postgres.analyzedQueries : [];
+    const budget = declaredBudget(root, config, measurement);
+    if (budget) {
+      coverage.push(budget.coverage);
+      findings.push(...budget.findings);
+    }
   } catch {
-    row = {status: 'failed', detail: 'Baseline indisponível ou inválido'};
+    coverage.push(normalizeCoverageRow({tool: 'coletor', version: '5', status: 'failed', detail: 'Coleta interrompida antes de concluir todas as etapas'}));
   }
-  coverage.push(normalizeCoverageRow({tool: `baseline:${file}`, version: '1', ...row}));
+  return {...validateModuleOutput({coverage, findings}), measurement: validatePerformanceMeasurement(measurement)};
 }
 
-const coverage = [];
-const findings = [];
-function record(result) {
-  coverage.push(result.summary, ...result.extraCoverage);
-  if (result.summary.status === 'ok') findings.push(...result.findings);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.stdout.write(`${JSON.stringify(await collectPerformance())}\n`);
 }
-
-async function main() {
-  const config = loadConfig(REPO_ROOT);
-  const thresholds = config?.thresholds ?? DEFAULT_THRESHOLDS;
-  const pgBinDir = findPostgresBinDir();
-  const versions = getToolVersions(pgBinDir);
-  const http = await openHttp(config);
-  coverage.push(...http.coverage);
-  if (http.targets.length > MAX_HTTP_ROUTES) {
-    coverage.push(normalizeCoverageRow({tool: 'rota-http', version: '4', status: 'skipped',
-      detail: `${http.targets.length - MAX_HTTP_ROUTES} rota(s) além do limite de ${MAX_HTTP_ROUTES}`}));
-  }
-  const routeTargets = http.targets.slice(0, MAX_HTTP_ROUTES);
-  let lighthouse, k6;
-  try {
-    lighthouse = await runLighthouseCi({origin: http.origin, routes: routeTargets.filter(route => route.page),
-      chromePath: findChrome(), thresholds, version: versions.lhci});
-    record(lighthouse);
-    k6 = await runK6LoadTest({origin: http.origin, routeTargets, thresholds, version: versions.k6});
-    record(k6);
-  } finally {
-    await http.close?.();
-  }
-
-  record(await runCpuFunctions(config, thresholds, versions.node));
-  const postgres = await runPostgresMetrics({workRoot: REPO_ROOT, sqlInfo: discoverSqlFiles(REPO_ROOT, config),
-    pgBinDir, thresholds, version: versions.pg});
-  record(postgres);
-
-  const staticFallback = http.coverage.some(row => row.tool === 'recorte-http-estatico');
-  compareBaseline(config, thresholds, coverage, findings, {
-    lighthouse: staticFallback ? [] : lighthouse.measuredMetrics,
-    k6Routes: staticFallback ? [] : k6.routeMetrics,
-    sqlQueries: postgres.summary.status === 'ok' ? postgres.analyzedQueries : [],
-  });
-}
-
-try {
-  await main();
-} catch {
-  coverage.push(normalizeCoverageRow({tool: 'coletor', version: '4', status: 'failed', detail: 'Coleta interrompida antes de concluir todas as etapas'}));
-}
-process.stdout.write(`${JSON.stringify(validateModuleOutput({coverage, findings}))}\n`);

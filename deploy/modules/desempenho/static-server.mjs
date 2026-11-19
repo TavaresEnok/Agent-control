@@ -70,8 +70,9 @@ async function resolveTarget(rootReal, parts) {
   return {real, size: info.size};
 }
 
-export async function startStaticServer(rootDir) {
+export async function startStaticServer(rootDir, {aliasRoot = rootDir, aliases = new Map()} = {}) {
   const rootReal = await realpath(rootDir);
+  const aliasRootReal = aliases.size ? await realpath(aliasRoot) : rootReal;
   const server = createServer((req, res) => {
     const method = String(req.method ?? 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD') {
@@ -85,7 +86,9 @@ export async function startStaticServer(rootDir) {
       res.end('ausente');
       return;
     }
-    resolveTarget(rootReal, parts)
+    const alias = aliases.get(req.url);
+    const target = alias ? resolveTarget(aliasRootReal, alias.split('/')) : resolveTarget(rootReal, parts);
+    target
       .then(async found => {
         if (!found) {
           res.writeHead(404, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});

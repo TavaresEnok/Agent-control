@@ -207,7 +207,7 @@ export async function runPostgresMetrics({workRoot, sqlInfo, pgBinDir, threshold
           const hash = createHash('sha256').update(statement.sql).digest('hex').slice(0, 16);
           const evidence = `arquivo=${location}; sha256=${hash}; queryid=${identifier}`;
           const details = `${evidence}; antes=${Number(before.calls)} chamadas/${Number(before.total_exec_time).toFixed(3)}ms; depois=${Number(after.calls)} chamadas/${Number(after.total_exec_time).toFixed(3)}ms; média=${measurement.meanMs.toFixed(3)}ms; máximo=${measurement.maxMs.toFixed(3)}ms`;
-          analyzedQueries.push({file: file.file, line: statement.line, ...measurement});
+          analyzedQueries.push({file: file.file, line: statement.line, statementHash: hash, ...measurement});
           cover('ok', details, file.file);
           if (measurement.meanMs > thresholds.sqlMeanMs || measurement.maxMs > thresholds.sqlMaxMs) findings.push(normalizeFinding({tool: TOOL, rule: measurement.meanMs > thresholds.sqlMeanMs ? 'PG-QUERY-SLOW-MEAN' : 'PG-QUERY-SLOW-MAX', file: file.file, line: statement.line, severity: measurement.meanMs > thresholds.sqlMeanMs * 2 || measurement.maxMs > thresholds.sqlMaxMs * 2 ? 'alta' : 'media', message: 'Consulta SQL lenta na medição local descartável.', evidence: details}));
         } catch (error) { cover('failed', `${location}: medição indisponível (${code(error)}).`, file.file); }

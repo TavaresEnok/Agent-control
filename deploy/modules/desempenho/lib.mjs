@@ -3,6 +3,7 @@ import {join} from 'node:path';
 
 /** Validação, avaliação de limites e normalização de saída do módulo 7. */
 
+export const MAX_DECLARED_ROUTES = 40;
 export const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
 export const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
 
@@ -164,6 +165,8 @@ export function validateConfig(raw) {
   const out = {
     staticDir: undefined,
     routes: [],
+    routeOmissions: 0,
+    routesBeyondLimit: [],
     server: undefined,
     cpuFunctions: [],
     cpuOmissions: 0,
@@ -182,7 +185,7 @@ export function validateConfig(raw) {
     out.staticDir = rel;
   }
   if (Array.isArray(raw.routes)) {
-    for (const entry of raw.routes.slice(0, 40)) {
+    for (const entry of raw.routes.slice(0, MAX_DECLARED_ROUTES)) {
       if (typeof entry === 'string') {
         const route = safeRoutePath(entry);
         if (route) out.routes.push({path: route, file: undefined});
@@ -191,6 +194,16 @@ export function validateConfig(raw) {
         const file = entry.file !== undefined ? normalizeRepoRelativePath(entry.file) : undefined;
         if (route) out.routes.push({path: route, file: file ?? undefined,
           ...(typeof entry.page === 'boolean' ? {page: entry.page} : {})});
+      }
+    }
+    out.routeOmissions = Math.min(raw.routes.length, MAX_DECLARED_ROUTES) - out.routes.length;
+    const seen = new Set(out.routes.map(route => route.path));
+    for (const entry of raw.routes.slice(MAX_DECLARED_ROUTES)) {
+      const path = safeRoutePath(typeof entry === 'string' ? entry : entry?.path);
+      if (!path) out.routeOmissions++;
+      else if (!seen.has(path)) {
+        seen.add(path);
+        out.routesBeyondLimit.push(path);
       }
     }
   }
@@ -345,42 +358,41 @@ export function evaluateK6Summary(summary, exitCode, routeTargets, thresholds) {
 
   for (const target of routeTargets) {
     const route = target.path;
-    const file = normalizeRepoRelativePath(target.file) ?? 'server.mjs';
-    const line = normalizePositiveLine(target.line ?? 1);
-    const taggedKey = Object.keys(metrics).find(k => k === `http_req_duration{route:${route}}`);
-    const durationValues = readK6Values(taggedKey ? metrics[taggedKey] : null);
+    const file = normalizeRepoRelativePath(target.file);
+    const source = k6Source(target.source);
+    const durationValues = readK6Values(metrics[`http_req_duration{route:${route}}`]);
     const p95 = Number.isFinite(durationValues?.['p(95)']) && durationValues['p(95)'] >= 0 ? durationValues['p(95)'] : null;
     const avg = typeof durationValues?.avg === 'number' ? durationValues.avg : null;
     const max = typeof durationValues?.max === 'number' ? durationValues.max : null;
 
-    const failKey = Object.keys(metrics).find(k => k === `http_req_failed{route:${route}}`);
-    const failValues = readK6Values(failKey ? metrics[failKey] : null);
+    const failValues = readK6Values(metrics[`http_req_failed{route:${route}}`]);
     const rate = failValues?.rate ?? failValues?.value;
     const failRate = Number.isFinite(rate) && rate >= 0 && rate <= 1 ? rate : null;
 
-    routeMetrics.push({route, file, line, p95, avg, max, failRate});
-    if (p95 === null || failRate === null) continue;
+    routeMetrics.push({route, file, source, p95, avg, max, failRate});
+    if (p95 === null || failRate === null || !source) continue;
+    const origin = describeK6Source(source, file);
 
     if (p95 > thresholds.k6P95Ms) {
       findings.push(normalizeFinding({
         tool: 'k6',
         rule: 'K6-THRESHOLD-LATENCY-P95',
-        file,
-        line,
+        file: source.file,
+        line: source.line,
         severity: p95 > thresholds.k6P95Ms * 2 ? 'alta' : 'media',
         message: `Rota ${route} violou limite de latência k6: p95=${p95.toFixed(1)}ms (limite ${thresholds.k6P95Ms}ms)`,
-        evidence: `rota=${route} p95=${p95.toFixed(1)}ms avg=${avg !== null ? avg.toFixed(1) : 'n/a'}ms max=${max !== null ? max.toFixed(1) : 'n/a'}ms exit=${exitCode}`,
+        evidence: `${origin}; rota=${route} p95=${p95.toFixed(1)}ms avg=${avg !== null ? avg.toFixed(1) : 'n/a'}ms max=${max !== null ? max.toFixed(1) : 'n/a'}ms exit=${exitCode}`,
       }));
     }
     if (failRate > thresholds.k6FailRate) {
       findings.push(normalizeFinding({
         tool: 'k6',
         rule: 'K6-THRESHOLD-ERROR-RATE',
-        file,
-        line,
+        file: source.file,
+        line: source.line,
         severity: 'alta',
         message: `Rota ${route} violou limite de erro HTTP no k6: taxa=${(failRate * 100).toFixed(2)}% (limite ${(thresholds.k6FailRate * 100).toFixed(2)}%)`,
-        evidence: `rota=${route} http_req_failed=${failRate.toFixed(4)} exit=${exitCode}`,
+        evidence: `${origin}; rota=${route} http_req_failed=${failRate.toFixed(4)} exit=${exitCode}`,
       }));
     }
   }
@@ -388,71 +400,16 @@ export function evaluateK6Summary(summary, exitCode, routeTargets, thresholds) {
   return {routeMetrics, findings};
 }
 
-/** Compara métricas atuais contra baseline anterior para detectar piora (regressão). */
-export function evaluateBaselineRegression(current, baseline, thresholds) {
-  if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) return [];
-  const findings = [];
-  const limitFactor = 1 + thresholds.regressionPct / 100;
+export function k6Source(source) {
+  const file = normalizeRepoRelativePath(source?.file, []);
+  if (!file || !Number.isSafeInteger(source.line) || source.line < 1 ||
+      !['declaration', 'document'].includes(source.kind)) return null;
+  return {file, line: source.line, kind: source.kind};
+}
 
-  if (Array.isArray(baseline.k6Routes) && Array.isArray(current.k6Routes)) {
-    for (const cur of current.k6Routes) {
-      const prev = baseline.k6Routes.find(item => item?.route === cur.route);
-      if (prev && typeof prev.p95 === 'number' && prev.p95 > 0 && typeof cur.p95 === 'number') {
-        if (cur.p95 > prev.p95 * limitFactor && cur.p95 - prev.p95 > 10) {
-          const pct = ((cur.p95 - prev.p95) / prev.p95) * 100;
-          findings.push(normalizeFinding({
-            tool: 'k6',
-            rule: 'DESEMPENHO-REGRESSAO-ROTA',
-            file: cur.file,
-            line: cur.line,
-            severity: pct >= thresholds.regressionPct * 2 ? 'alta' : 'media',
-            message: `Rota ${cur.route} piorou ${pct.toFixed(1)}% em relação ao baseline (p95: ${prev.p95.toFixed(1)}ms -> ${cur.p95.toFixed(1)}ms)`,
-            evidence: `rota=${cur.route} baseline_p95=${prev.p95.toFixed(1)}ms atual_p95=${cur.p95.toFixed(1)}ms delta=+${pct.toFixed(1)}%`,
-          }));
-        }
-      }
-    }
+export function describeK6Source(source, file) {
+  if (source.kind === 'declaration') {
+    return `declaração da rota em ${source.file}:${source.line}; arquivo associado=${file}; métrica da resposta HTTP`;
   }
-
-  if (Array.isArray(baseline.lighthouse) && Array.isArray(current.lighthouse)) {
-    for (const cur of current.lighthouse) {
-      const prev = baseline.lighthouse.find(item => item?.route === cur.route && item?.formFactor === cur.formFactor);
-      if (prev && typeof prev.lcp === 'number' && prev.lcp > 0 && typeof cur.lcp === 'number') {
-        if (cur.lcp > prev.lcp * limitFactor && cur.lcp - prev.lcp > 100) {
-          const pct = ((cur.lcp - prev.lcp) / prev.lcp) * 100;
-          findings.push(normalizeFinding({
-            tool: 'lighthouse-ci',
-            rule: 'DESEMPENHO-REGRESSAO-LCP',
-            file: cur.file,
-            line: 1,
-            severity: pct >= thresholds.regressionPct * 2 ? 'alta' : 'media',
-            message: `Tela ${cur.route} (${cur.formFactor}) piorou LCP em ${pct.toFixed(1)}% (${Math.round(prev.lcp)}ms -> ${Math.round(cur.lcp)}ms)`,
-            evidence: `rota=${cur.route} baseline_lcp=${Math.round(prev.lcp)}ms atual_lcp=${Math.round(cur.lcp)}ms delta=+${pct.toFixed(1)}%`,
-          }));
-        }
-      }
-    }
-  }
-
-  if (Array.isArray(baseline.sqlQueries) && Array.isArray(current.sqlQueries)) {
-    for (const cur of current.sqlQueries) {
-      const prev = baseline.sqlQueries.find(item => item?.file === cur.file && item?.line === cur.line);
-      if (prev && typeof prev.meanMs === 'number' && prev.meanMs > 0 && typeof cur.meanMs === 'number') {
-        if (cur.meanMs > prev.meanMs * limitFactor && cur.meanMs - prev.meanMs > 5) {
-          const pct = ((cur.meanMs - prev.meanMs) / prev.meanMs) * 100;
-          findings.push(normalizeFinding({
-            tool: 'pg_stat_statements',
-            rule: 'DESEMPENHO-REGRESSAO-SQL',
-            file: cur.file,
-            line: cur.line,
-            severity: pct >= thresholds.regressionPct * 2 ? 'alta' : 'media',
-            message: `Consulta SQL em ${cur.file}:${cur.line} piorou ${pct.toFixed(1)}% (${prev.meanMs.toFixed(2)}ms -> ${cur.meanMs.toFixed(2)}ms)`,
-            evidence: `arquivo=${cur.file}:${cur.line} baseline_mean=${prev.meanMs.toFixed(2)}ms atual_mean=${cur.meanMs.toFixed(2)}ms delta=+${pct.toFixed(1)}%`,
-          }));
-        }
-      }
-    }
-  }
-
-  return findings;
+  return `documento servido=${source.file}:${source.line} (primeiro conteúdo); métrica da resposta HTTP`;
 }

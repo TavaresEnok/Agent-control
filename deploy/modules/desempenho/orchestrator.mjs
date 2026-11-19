@@ -1,12 +1,14 @@
 /** Executa o módulo de desempenho a partir do snapshot oficial do exame. */
-import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {basename, dirname, isAbsolute, join, resolve} from 'node:path';
-import {setTimeout as delay} from 'node:timers/promises';
+import {basename, dirname, join, resolve} from 'node:path';
+import {openPerformanceRecoveryRun, performanceDocker} from './docker-recovery.mjs';
 import {loadConfig, normalizeCoverageRow, validateModuleOutput} from './lib.mjs';
+import {compareIndependentMeasurement, validatePerformanceMeasurement} from './references.mjs';
+
+export {reconcilePerformanceResources} from './docker-recovery.mjs';
 
 const imageProtocol = 'org.agent-control.performance.protocol';
 const ignored = new Set(['.git', 'node_modules', '.next', '.nuxt', 'coverage', '.lighthouseci']);
@@ -92,16 +94,11 @@ async function isSnapshotFile(snapshot, file) {
   }
 }
 
-function absent(error) {
-  return error?.code === 1 && /no such (?:container|object|volume)\b/i.test(error.stderr ?? '');
-}
-
 /** O chamador mantém vivo o snapshot de prepareModuleSnapshot e repassa o sinal do heartbeat. */
-export async function runPerformanceModule({snapshotPath, imageDigest, signal, timeoutMs = 480_000, maxStdoutBytes = 16 * 1024 * 1024},
-  {dockerBinary = 'docker'} = {}) {
+export async function runPerformanceModule({snapshotPath, imageDigest, signal, recoveryDirectory, previousMeasurement,
+  timeoutMs = 480_000, maxStdoutBytes = 16 * 1024 * 1024}, {dockerBinary = 'docker'} = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 ||
       !Number.isSafeInteger(maxStdoutBytes) || maxStdoutBytes < 1) throw new Error('limites de desempenho inválidos');
-  if (dockerBinary !== 'docker' && !isAbsolute(dockerBinary)) throw new Error('caminho local do Docker inválido');
   const deadline = AbortSignal.timeout(timeoutMs);
   const active = signal ? AbortSignal.any([signal, deadline]) : deadline;
   active.throwIfAborted();
@@ -110,128 +107,114 @@ export async function runPerformanceModule({snapshotPath, imageDigest, signal, t
   const official = await officialSnapshot(snapshotPath);
   const temp = await mkdtemp(join(tmpdir(), 'ac-perf-'));
   const snapshot = join(temp, 'repo');
-  const resources = [];
   const name = `ac-perf-${randomUUID()}`;
-  const env = {PATH: '/usr/local/bin:/usr/bin:/bin',
-    HOME: temp, DOCKER_CONFIG: join(temp, 'docker-config'), DOCKER_HOST: 'unix:///var/run/docker.sock', LC_ALL: 'C'};
-
-  function docker(args, {timeout = 15_000, limit = 8192, cancellable = true} = {}) {
-    if (cancellable) active.throwIfAborted();
-    return new Promise((ok, fail) => {
-      execFile(dockerBinary, args, {cwd: temp, env, encoding: 'utf8', timeout, maxBuffer: limit, killSignal: 'SIGKILL',
-        signal: cancellable ? active : undefined}, (error, stdout, stderr) => {
-        if (!error) return ok(stdout.trim());
-        error.stderr = stderr;
-        fail(error);
-      });
-    });
-  }
-
-  // O daemon pode continuar depois da saída do cliente. A criação é separada
-  // da partida, limitada no tempo e aguardada mesmo na perda da autoridade.
-  async function create(kind, resourceName, args) {
-    active.throwIfAborted();
-    const resource = {kind, name: resourceName, uncertain: true};
-    resources.push(resource);
-    try {
-      await docker(args, {cancellable: false});
-      resource.uncertain = false;
-    } catch (error) {
-      resource.uncertain = error.code !== 1 || !/error response from daemon:/i.test(error.stderr ?? '');
-      throw error;
-    }
-    active.throwIfAborted();
-    return resource;
-  }
-
-  async function remove(resource) {
-    const {kind, name: resourceName} = resource;
-    const removeArgs = kind === 'container' ? ['container', 'rm', '-f', resourceName] : ['volume', 'rm', resourceName];
-    const options = {cancellable: false, timeout: 5000};
-    for (let attempt = 0; attempt < 3; attempt++) {
-      let acknowledged = false;
-      try { await docker(removeArgs, options); acknowledged = true; } catch { /* confirme por inspeção */ }
-      try { await docker([kind, 'inspect', resourceName], {...options, limit: 64 * 1024}); }
-      catch (error) {
-        if (absent(error) && (acknowledged || !resource.uncertain)) {
-          resources.splice(resources.indexOf(resource), 1);
-          return;
-        }
-      }
-      if (attempt < 2) await delay(200);
-    }
-    throw new Error(`remoção Docker sem confirmação: ${kind} ${resourceName}`);
-  }
-
-  async function state(resource) {
-    return await docker(['container', 'inspect', '--format', '{{.State.Running}} {{.Image}} {{.State.ExitCode}}', resource.name]);
-  }
-
+  const coverage = [];
+  let docker, journal, result, fallback = false;
   try {
+    docker = performanceDocker(dockerBinary, temp);
     const stats = await copySnapshot(official, snapshot, active);
     if (/[\r\n,]/.test(snapshot)) throw new Error('caminho do snapshot incompatível com Docker');
     const mountRepo = ['--mount', `type=bind,src=${snapshot},dst=/repo,readonly`];
     const config = loadConfig(snapshot);
-    const identity = await docker(['image', 'inspect', '--format', `{{.Id}} {{index .Config.Labels "${imageProtocol}"}}`, imageDigest]);
-    if (identity !== `${imageDigest} 4`) throw new Error('imagem de desempenho incompatível com o coletor integrado R4');
-    const coverage = [normalizeCoverageRow({tool: 'copia-repositorio', version: '4', status: 'ok',
-      detail: `${stats.files} arquivo(s), ${stats.bytes} bytes; ${stats.omitted} entrada(s) excluída(s) por tipo ou nome`})];
+    const identity = await docker(['image', 'inspect', '--format', `{{.Id}} {{index .Config.Labels "${imageProtocol}"}}`, imageDigest], {signal: active});
+    if (identity !== `${imageDigest} 5`) throw new Error('imagem de desempenho incompatível com o coletor integrado R5');
+    coverage.push(normalizeCoverageRow({tool: 'copia-repositorio', version: '5', status: 'ok',
+      detail: `${stats.files} arquivo(s), ${stats.bytes} bytes; ${stats.omitted} entrada(s) excluída(s) por tipo ou nome`}));
+    journal = await openPerformanceRecoveryRun(name, recoveryDirectory);
+
+    // O daemon pode concluir a criação depois da saída do cliente. Persista
+    // a intenção antes do envio e confira a propriedade antes de usar o recurso.
+    async function create(kind, resourceName, args, command = []) {
+      active.throwIfAborted();
+      const label = await journal.reserve(kind, resourceName);
+      if (active.aborted) {
+        await journal.discardUnsent(resourceName);
+        active.throwIfAborted();
+      }
+      await docker([...args, ...label, ...(kind === 'volume' ? [resourceName] : [imageDigest, ...command])]);
+      active.throwIfAborted();
+      const id = await journal.confirmCreation(docker, kind, resourceName);
+      active.throwIfAborted();
+      return id;
+    }
+
+    async function state(id) {
+      return await docker(['container', 'inspect', '--format', '{{.State.Running}} {{.Image}} {{.State.ExitCode}}', id], {signal: active});
+    }
 
     async function observe(mode, observer, mounts = []) {
-      const resource = await create('container', observer, ['create', '--name', observer, ...limits,
-        '--log-driver', 'none', ...mountRepo, ...mounts, '--env', `PERF_HTTP_MODE=${mode}`, imageDigest]);
-      const raw = await docker(['start', '--attach', observer], {timeout: timeoutMs, limit: maxStdoutBytes});
-      if (await state(resource) !== `false ${imageDigest} 0`) throw new Error('estado ou imagem do observador divergente');
+      const id = await create('container', observer, ['create', '--name', observer, ...limits,
+        '--log-driver', 'none', ...mountRepo, ...mounts, '--env', `PERF_HTTP_MODE=${mode}`]);
+      const raw = await docker(['start', '--attach', id], {timeout: timeoutMs, limit: maxStdoutBytes, signal: active});
+      if (await state(id) !== `false ${imageDigest} 0`) throw new Error('estado ou imagem do observador divergente');
       active.throwIfAborted();
-      return {resource, output: validateModuleOutput(JSON.parse(raw))};
+      const parsed = JSON.parse(raw);
+      return {...validateModuleOutput(parsed), measurement: validatePerformanceMeasurement(parsed.measurement)};
     }
 
     let output;
     if (config?.server) {
-      const {entry, portEnv} = config.server;
-      const routes = await Promise.all(config.routes.map(route => route.file && isSnapshotFile(snapshot, route.file)));
-      if (routes.some(Boolean) && /\.(?:cjs|mjs|js)$/i.test(entry) && await isSnapshotFile(snapshot, entry)) {
-        const volume = `${name}-link`;
-        const link = `type=volume,src=${volume},dst=/perf-link,volume-nocopy`;
-        const socket = await create('volume', volume, ['volume', 'create', '--driver', 'local',
-          '--opt', 'type=tmpfs', '--opt', 'device=tmpfs', '--opt', 'o=size=1m,nr_inodes=64,nosuid,nodev,noexec,mode=0733', volume]);
-        const target = await create('container', name, ['create', '--name', name, ...limits,
-          '--log-driver', 'none', ...mountRepo, '--mount', link, '--workdir', '/repo', '--entrypoint', 'node', imageDigest,
-          '/opt/desempenho-tools/http-link.mjs', `/repo/${entry}`, portEnv]);
-        const started = await docker(['start', name]).then(() => true, error => {
-          active.throwIfAborted();
-          if (error.code !== 1) throw error;
-          return false;
-        });
-        if (started && await state(target) === `true ${imageDigest} 0`) {
-          const observerName = `${name}-obs`;
-          const observed = await observe('isolated', observerName, ['--mount', `${link},readonly`]);
-          output = observed.output;
-          if (await state(target) !== `true ${imageDigest} 0` && !output.coverage.some(row => row.tool === 'recorte-http-estatico')) {
-            output = undefined;
-            await remove(observed.resource);
+      let stage = 'entrada do backend ou associação de rota ausente no snapshot';
+      try {
+        const {entry, portEnv} = config.server;
+        const routes = await Promise.all(config.routes.map(route => route.file && isSnapshotFile(snapshot, route.file)));
+        if (routes.some(Boolean) && /\.(?:cjs|mjs|js)$/i.test(entry) && await isSnapshotFile(snapshot, entry)) {
+          const volume = `${name}-link`;
+          const link = `type=volume,src=${volume},dst=/perf-link,volume-nocopy`;
+          stage = 'volume do canal local indisponível';
+          await create('volume', volume, ['volume', 'create', '--driver', 'local',
+            '--opt', 'type=tmpfs', '--opt', 'device=tmpfs', '--opt', 'o=size=1m,nr_inodes=64,nosuid,nodev,noexec,mode=0733']);
+          stage = 'preparação do contêiner do backend falhou';
+          const target = await create('container', name, ['create', '--name', name, ...limits,
+            '--log-driver', 'none', ...mountRepo, '--mount', link, '--workdir', '/repo', '--entrypoint', 'node'],
+          ['/opt/desempenho-tools/http-link.mjs', `/repo/${entry}`, portEnv]);
+          stage = 'partida ou permanência do backend isolado falhou';
+          await docker(['start', target], {signal: active});
+          if (await state(target) === `true ${imageDigest} 0`) {
+            stage = 'coleta do backend isolado falhou';
+            const observed = await observe('isolated', `${name}-obs`, ['--mount', `${link},readonly`]);
+            if (observed.measurement.httpMode === 'static') {
+              output = observed;
+              stage = 'backend isolado sem resposta válida';
+            } else if (await state(target) === `true ${imageDigest} 0`) {
+              output = observed;
+              stage = null;
+            } else {
+              stage = 'backend isolado terminou durante a coleta';
+            }
           }
         }
-        // Sem backend ativo, libere o alvo antes de servir a cópia estática.
-        if (!output) {
-          await remove(target);
-          await remove(socket);
-        }
+      } catch {
+        active.throwIfAborted();
       }
-      const measuredOnTarget = output && !output.coverage.some(row => row.tool === 'servidor-isolado');
-      coverage.push(normalizeCoverageRow({tool: 'isolamento-http', version: '4', status: measuredOnTarget ? 'ok' : 'skipped',
-        detail: measuredOnTarget ? 'Imagem conferida; namespaces PID e rede separados; canal local limitado ao socket do alvo'
-          : 'Backend local indisponível para coleta; uso de recorte estático quando disponível'}));
+      fallback = stage !== null;
+      coverage.push(normalizeCoverageRow({tool: 'isolamento-http', version: '5', status: fallback ? 'failed' : 'ok',
+        detail: stage ?? 'Imagem conferida, namespaces PID e rede separados e canal limitado ao socket do alvo'}));
+      if (!output) await journal.clean(docker);
     }
-    output ??= (await observe('static', `${name}-obs-static`)).output;
-    return validateModuleOutput({coverage: [...coverage, ...output.coverage], findings: output.findings});
+    output ??= await observe('static', `${name}-obs-static`);
+    if (fallback && !output.coverage.some(row => row.tool === 'servidor-isolado' && row.status === 'failed')) {
+      coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '5', status: 'failed',
+        detail: 'Backend indisponível para medição; consulte isolamento-http e o recorte estático'}));
+    }
+    const historical = compareIndependentMeasurement(output.measurement, previousMeasurement, imageDigest);
+    coverage.push(...output.coverage, historical.coverage);
+    result = {...validateModuleOutput({coverage, findings: [...output.findings, ...historical.findings]}),
+      measurement: {...output.measurement, imageDigest}};
   } finally {
-    const errors = [];
-    for (const resource of [...resources].reverse()) {
-      try { await remove(resource); } catch (error) { errors.push(error); }
+    let pending = 0;
+    try {
+      if (journal) pending = await journal.clean(docker, {attempts: 3});
+    } finally {
+      try { await journal?.close(); }
+      finally { await rm(temp, {recursive: true, force: true}); }
     }
-    try { await rm(temp, {recursive: true, force: true}); } catch (error) { errors.push(error); }
-    if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join(', '));
     active.throwIfAborted();
+    if (pending) {
+      const detail = `remoção Docker sem confirmação para ${pending} recurso(s); registro preservado para reconciliação`;
+      if (!fallback || !result) throw new Error(detail);
+      result.coverage.push(normalizeCoverageRow({tool: 'limpeza-docker', version: '5', status: 'failed', detail}));
+    }
   }
+  return result;
 }

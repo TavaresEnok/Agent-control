@@ -18,6 +18,8 @@ type Finding = {
   evidence: string;
 };
 
+type K6Source = {file: string; line: number; kind: 'declaration' | 'document'};
+
 type LibModule = {
   DEFAULT_THRESHOLDS: Record<string, number>;
   normalizeRepoRelativePath: (rawPath: string, prefixes?: string[]) => string | null;
@@ -43,17 +45,13 @@ type LibModule = {
   evaluateK6Summary: (
     summary: unknown,
     exitCode: number,
-    routeTargets: {path: string; file?: string; line?: number}[],
+    routeTargets: {path: string; file?: string; source?: K6Source}[],
     thresholds: Record<string, number>,
   ) => {
-    routeMetrics: {route: string; file: string; line: number; p95: number | null; avg: number | null; max: number | null; failRate: number | null}[];
+    routeMetrics: {route: string; file: string; source: K6Source | null; p95: number | null; avg: number | null; max: number | null; failRate: number | null}[];
     findings: Finding[];
   };
-  evaluateBaselineRegression: (
-    current: {lighthouse?: unknown[]; k6Routes?: unknown[]; sqlQueries?: unknown[]},
-    baseline: unknown,
-    thresholds: Record<string, number>,
-  ) => Finding[];
+
 };
 
 const libUrl = new URL('../deploy/modules/desempenho/lib.mjs', import.meta.url).href;
@@ -78,7 +76,7 @@ test('Dockerfile e lockfiles de desempenho fixam base por digest, usuário 65532
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/desempenho-entrypoint\.sh"\]/);
   assert.match(dockerfile, /sha256sum -c checksums\.txt/);
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
-  assert.match(dockerfile, /LABEL org.agent-control.performance.protocol="4"/);
+  assert.match(dockerfile, /LABEL org.agent-control.performance.protocol="5"/);
   assert.match(dockerfile, /npm ci --prefix cpu-parser --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /^COPY .*http-link\.mjs .*cpu-metrics\.mjs postgres-metrics\.mjs /m);
 
@@ -170,7 +168,7 @@ test('validateConfig recusa caminhos fora do repositório e preserva limites vá
   assert.equal(cpu.cpuOmissions, 3);
 });
 
-test('avaliadores HTTP identificam limites e o baseline aponta regressões comparáveis', async () => {
+test('avaliadores HTTP identificam limites e credenciam achados k6 à origem localizada', async () => {
   const lib = await import(libUrl) as LibModule;
   const thresholds = {...lib.DEFAULT_THRESHOLDS, performanceScore: 0.85, k6P95Ms: 120};
 
@@ -207,12 +205,15 @@ test('avaliadores HTTP identificam limites e o baseline aponta regressões compa
       'http_req_failed{route:/api/relatorio}': {rate: 0},
     },
   }, 99, [
-    {path: '/', file: 'public/index.html', line: 1},
-    {path: '/api/relatorio', file: 'server.mjs', line: 1},
+    {path: '/', file: 'public/index.html'},
+    {path: '/api/relatorio', file: 'server.mjs',
+      source: {file: 'desempenho.config.json', line: 12, kind: 'declaration'}},
   ], thresholds);
   assert.equal(k6Bad.findings.length, 1);
   assert.equal(k6Bad.findings[0]?.rule, 'K6-THRESHOLD-LATENCY-P95');
-  assert.equal(k6Bad.findings[0]?.file, 'server.mjs');
+  assert.equal(k6Bad.findings[0]?.file, 'desempenho.config.json');
+  assert.equal(k6Bad.findings[0]?.line, 12);
+  assert.match(k6Bad.findings[0]!.evidence, /declaração da rota.*arquivo associado=server.mjs/);
 
   const k6Clean = lib.evaluateK6Summary({
     metrics: {
@@ -222,29 +223,13 @@ test('avaliadores HTTP identificam limites e o baseline aponta regressões compa
       'http_req_failed{route:/api/relatorio}': {rate: 0},
     },
   }, 0, [
-    {path: '/', file: 'public/index.html', line: 1},
-    {path: '/api/relatorio', file: 'server.mjs', line: 1},
+    {path: '/', file: 'public/index.html'},
+    {path: '/api/relatorio', file: 'server.mjs',
+      source: {file: 'desempenho.config.json', line: 12, kind: 'declaration'}},
   ], thresholds);
   assert.equal(k6Clean.findings.length, 0);
 
-  // Baseline regression ("se pioraram desde a última vez")
-  const regressions = lib.evaluateBaselineRegression(
-    {
-      k6Routes: [{route: '/api/relatorio', file: 'server.mjs', line: 1, p95: 240}],
-      lighthouse: [{route: '/', formFactor: 'desktop', file: 'public/index.html', lcp: 2800}],
-      sqlQueries: [{file: 'queries/lenta.sql', line: 1, meanMs: 65}],
-    },
-    {
-      k6Routes: [{route: '/api/relatorio', p95: 20}],
-      lighthouse: [{route: '/', formFactor: 'desktop', lcp: 400}],
-      sqlQueries: [{file: 'queries/lenta.sql', line: 1, meanMs: 2}],
-    },
-    thresholds,
-  );
-  assert.equal(regressions.length, 3);
-  assert.ok(regressions.some(r => r.rule === 'DESEMPENHO-REGRESSAO-ROTA'));
-  assert.ok(regressions.some(r => r.rule === 'DESEMPENHO-REGRESSAO-LCP'));
-  assert.ok(regressions.some(r => r.rule === 'DESEMPENHO-REGRESSAO-SQL'));
+
 });
 
 test('servidor estático local serve arquivos válidos e recusa escapes ou symlinks externos', async () => {
@@ -299,7 +284,8 @@ test('rotas e séries exigem correspondência exata e limites incluem a igualdad
   const lib = await import(libUrl) as LibModule;
   const cfg = lib.validateConfig({routes: ['//outra-origem/a', '/%2e%2e/pagina', '/pagina?modo=mobile', '/']});
   assert.deepEqual(cfg.routes.map(r => r.path), ['/pagina?modo=mobile', '/']);
-  const targets = [{path: '/', file: 'index.html'}, {path: '/produtos', file: 'produtos.html'}, {path: '/pagina?modo=mobile', file: 'pagina.html'}];
+  const targets = [{path: '/', file: 'index.html'}, {path: '/produtos', file: 'produtos.html',
+    source: {file: 'produtos.html', line: 5, kind: 'document' as const}}, {path: '/pagina?modo=mobile', file: 'pagina.html'}];
   const thresholds = {...lib.DEFAULT_THRESHOLDS, k6P95Ms: 100, k6FailRate: 0};
   const result = lib.evaluateK6Summary({metrics: {
     'http_req_duration{route:/produtos}': {values: {'p(95)': 101}},
@@ -312,7 +298,14 @@ test('rotas e séries exigem correspondência exata e limites incluem a igualdad
   assert.equal(result.routeMetrics[0]?.failRate, null);
   assert.equal(result.routeMetrics[1]?.p95, 101);
   assert.equal(result.routeMetrics[2]?.p95, 100);
-  assert.deepEqual(result.findings.map(f => f.file), ['produtos.html']);
+  assert.deepEqual(result.findings.map(f => [f.file, f.line]), [['produtos.html', 5]]);
+  assert.match(result.findings[0]!.evidence, /primeiro conteúdo/);
+  const unlocated = lib.evaluateK6Summary({metrics: {
+    'http_req_duration{route:/}': {values: {'p(95)': 200}},
+    'http_req_failed{route:/}': {values: {rate: 0.5}},
+  }}, 99, [targets[0]!], thresholds);
+  assert.equal(unlocated.routeMetrics[0]?.p95, 200);
+  assert.deepEqual(unlocated.findings, []);
 });
 
 test('servidor estático responde enquanto o coletor aguarda processo síncrono', async () => {
