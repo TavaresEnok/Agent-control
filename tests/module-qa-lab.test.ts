@@ -66,8 +66,46 @@ test('digest pin valida formato sha256 imutavel e recusa tags soltas', () => {
 
 type Output = {
   coverage: {tool: string; status: string; detail: string}[];
-  findings: {tool: string; rule: string; file: string; line: number; evidence: string}[];
+  findings: {tool: string; rule: string; file: string; line: number; message: string; evidence: string}[];
 };
+
+const {classifyMutant, decodeNodeReport} = await import(
+  new URL('../deploy/modules/qa/execute-tests.mjs', import.meta.url).href
+);
+
+function hasExpectedKilledMutant(output: Output): boolean {
+  return output.coverage.some(c => c.tool.startsWith('qa-mutante:') && c.status === 'ok' &&
+    /\bmorto\b.*src\/clean-pricing\.ts:2\b.*EqualityOperator.*valor > 100.*node:test reprovou tests\/clean-pricing\.test\.ts:5 'REQ-01: calcula desconto de fidelidade incluindo a fronteira exata de 100'.*após o patch/.test(c.detail));
+}
+
+test('prova do mutante exige patch e teste reprovado identificados, sem depender do código interno', () => {
+  const detail = "morto / src/clean-pricing.ts:2 EqualityOperator → valor > 100 / node:test reprovou tests/clean-pricing.test.ts:5 'REQ-01: calcula desconto de fidelidade incluindo a fronteira exata de 100' (falha do teste) após o patch";
+  const report: Output = {coverage: [{tool: 'qa-mutante:1', status: 'ok', detail}], findings: []};
+  assert.equal(hasExpectedKilledMutant(report), true);
+  for (const altered of [detail.replace('morto', 'sobrevivente'), detail.replace('valor > 100', 'valor < 100'),
+    detail.replace('tests/clean-pricing.test.ts:5', 'tests/clean-pricing.test.ts:6'),
+    detail.replace('node:test reprovou', 'node:test aprovou')]) {
+    assert.equal(hasExpectedKilledMutant({...report, coverage: [{...report.coverage[0]!, detail: altered}]}), false);
+  }
+  assert.equal(hasExpectedKilledMutant({...report, coverage: [{...report.coverage[0]!, status: 'failed'}]}), false);
+});
+
+test('erros do executor e ausência de teste não classificam mutante como morto', () => {
+  const file = 'tests/sintetico.test.ts';
+  const testResult = {file, line: 5, column: 1, name: 'prova sintética', status: 'passed'};
+  const baseline = {summary: true, tests: [testResult]};
+  const decode = (report: object, code: number) => decodeNodeReport({code, output: JSON.stringify(report)}, [file], false);
+  const failed = {summary: false, tests: [{...testResult, status: 'failed'}]};
+  assert.equal(classifyMutant(baseline, decode(failed, 1)).status, 'morto');
+  assert.equal(classifyMutant(baseline, decode(baseline, 0)).status, 'sobrevivente');
+  for (const error of ['testTimeoutFailure', 'testCodeFailure', 'ERR_MODULE_NOT_FOUND', 'ERR_ACCESS_DENIED']) {
+    const status = error.startsWith('ERR_') ? 'failed' : 'error';
+    assert.throws(() => decode({summary: false, tests: [{...testResult, status, error}]}, 1), /QA_NODE_TEST_EXECUTION_FAILED/);
+  }
+  assert.throws(() => decode({summary: false, tests: []}, 1), /QA_NODE_TEST_EXECUTION_FAILED/);
+  assert.throws(() => classifyMutant(baseline, {summary: true, tests: []}), /QA_MUTANT_TEST_SET_CHANGED/);
+  assert.throws(() => decode(failed, 0), /QA_NODE_TEST_EXECUTION_FAILED/);
+});
 
 function collect(pin: string, directory: string): Output {
   const run = runQaContainerByDigest(pin, directory);
@@ -103,8 +141,7 @@ test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobrevivent
     'QA-AXE-IMAGE-ALT', 'QA-AXE-BUTTON-NAME', 'QA-CONTRATO-ROTA-SEM-OPENAPI',
   ]) assert.ok(rules.has(rule), rule);
 
-  const mutantRows = defective.coverage.filter(c => c.tool.startsWith('qa-mutante:'));
-  assert.ok(mutantRows.some(c => /morto .*src\/clean-pricing\.ts:2 .*node:test reprovou .*ERR_ASSERTION/.test(c.detail)));
+  assert.ok(hasExpectedKilledMutant(defective));
   assert.ok(defective.findings.some(f => f.rule === 'QA-STRYKER-MUTANTE-SOBREVIVENTE' &&
     f.file === 'src/defective-pricing.ts' && f.line === 2 && f.evidence.includes('valor > 100') && f.evidence.includes('node:test aprovou')));
   assert.equal(defective.findings.some(f => f.file.includes('clean-')), false);
@@ -121,7 +158,9 @@ test('imagem pelo digest registra teste realmente reprovado nas três passadas',
   try {
     cpSync(cleanFixtureDir, repo, {recursive: true});
     chmodSync(repo, 0o755);
-    appendFileSync(join(repo, 'tests/clean-pricing.test.ts'), `
+    const testFile = join(repo, 'tests/clean-pricing.test.ts');
+    const failureLine = readFileSync(testFile, 'utf8').split('\n').length + 1;
+    appendFileSync(testFile, `
 test('prova sintética de desconto incorreto', () => {
   const valores = [100, 101];
   const descontos = valores.map(calcularDescontoFidelidade);
@@ -132,7 +171,8 @@ test('prova sintética de desconto incorreto', () => {
     for (let pass = 1; pass <= 3; pass++) assert.match(row(output, `qa-passada:${pass}`).detail, /falhou.*1 reprovados/);
     assert.equal(row(output, 'stryker-mutator').status, 'skipped');
     assert.ok(output.findings.some(f => f.rule === 'QA-TESTE-FALHOU' && f.file === 'tests/clean-pricing.test.ts' &&
-      f.evidence.includes('failed, failed, failed') && f.evidence.includes('ERR_ASSERTION')));
+      f.line === failureLine && f.message.includes('prova sintética de desconto incorreto') &&
+      f.evidence.includes('failed, failed, failed')));
   } finally {
     rmSync(repo, {recursive: true, force: true});
   }
