@@ -151,6 +151,10 @@ test('fluxo completo sintético publica, rejeita dados inválidos e cria correç
     assert.doesNotMatch(JSON.stringify(ready),/CONTEUDO_SINTETICO|Detected API key/);
     await readModuleReport(data,projectId,ready.runId);
     const correctionInput = {module:'prontidao' as const,runId:ready.runId,achadoIds:['ACH-001'],dataDirectory:data,projectId};
+    assert.equal(ready.achados[0]?.status,'provavel');
+    await assert.rejects(requestModuleCorrection(db,principal,readyAuth,correctionInput), /VERIFY_FINDING_MISSING/);
+    // A previously confirmed protected finding remains actionable without exposing its contents.
+    await db.pool.query("UPDATE ac_verify_findings SET status='confirmado' WHERE run_id=$1 AND achado_id='ACH-001'", [ready.runId]);
     const outside = join(root,'fora'); await mkdir(outside);
     await symlink(outside, join(repo,'tests'));
     await assert.rejects(requestModuleCorrection(db,principal,readyAuth,correctionInput), /VERIFY_PATH_FORBIDDEN/);

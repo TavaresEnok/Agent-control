@@ -31,7 +31,7 @@ type ModuleLabExpectation = {
   fixtureCandidates: readonly string[];
   /** Active tools expected to report `ok` in coverage when running offline against the defective fixture. */
   expectedOkTools: readonly string[];
-  /** Predicate selecting the confirmed finding to verify and convert via `--corrigir`. */
+  /** Predicate selecting the planted defect used when testing `--corrigir`. */
   matchFinding: (finding: {
     id: string;
     title: string;
@@ -460,35 +460,56 @@ async function verifyModuleEndToEnd(
       assert.match(report.coverageMarkdown, spec.coverageDetailPattern);
     }
 
-    const confirmedFinding = report.achados.find(item => item.status === 'confirmado' && spec.matchFinding(item));
+    const measuredFinding = report.achados.find(item => item.status === 'provavel' && spec.matchFinding(item));
     assert.ok(
-      confirmedFinding,
-      `achado comprovado esperado não encontrado em ${module}. Achados: ${JSON.stringify(report.achados.map(a => ({id: a.id, title: a.title, file: a.where.file, status: a.status})))}`,
+      measuredFinding,
+      `achado medido esperado não encontrado em ${module}. Achados: ${JSON.stringify(report.achados.map(a => ({id: a.id, title: a.title, file: a.where.file, status: a.status})))}`,
     );
-    assert.ok(confirmedFinding.where.line !== null && confirmedFinding.where.line >= 1);
-    assert.ok(confirmedFinding.proof.length > 0);
-    assert.equal(confirmedFinding.acceptance, REMEDIATION_ACCEPTANCE);
+    assert.ok(measuredFinding.where.line !== null && measuredFinding.where.line >= 1);
+    assert.ok(measuredFinding.proof.length > 0);
+    assert.equal(measuredFinding.acceptance, REMEDIATION_ACCEPTANCE);
 
-    const achadoPath = join(reportDir, 'achados', `${confirmedFinding.id}.md`);
+    const achadoPath = join(reportDir, 'achados', `${measuredFinding.id}.md`);
     await assertPrivateMode(achadoPath, 0o600);
-    const achadoMd = await readModuleAchadoMarkdown(dataDirectory, projectId, runId, confirmedFinding.id, module);
-    assert.equal(achadoMd.includes(`Onde: ${confirmedFinding.where.file}:${confirmedFinding.where.line}`), true);
+    const achadoMd = await readModuleAchadoMarkdown(dataDirectory, projectId, runId, measuredFinding.id, module);
+    assert.equal(achadoMd.includes(`Onde: ${measuredFinding.where.file}:${measuredFinding.where.line}`), true);
     assert.equal(achadoMd.includes('Prova:'), true);
     assert.equal(achadoMd.includes(REMEDIATION_ACCEPTANCE), true);
 
-    // 5. Envio de `--corrigir` em duplicata pela entrada normal da CLI e conferência de tarefa idempotente ligada ao projeto
+    assert.equal(measuredFinding.verifier, null);
+    await assert.rejects(runPersonalCliSubprocess(module, [installationPath, projectId, '--corrigir', runId, measuredFinding.id]),
+      /VERIFY_FINDING_MISSING/);
+
+    // Isolate the correction contract using an explicitly injected observation of a synthetic fixture line.
+    const source = await readFile(join(repo, measuredFinding.where.file), 'utf8');
+    const line = source.split('\n')[measuredFinding.where.line - 1]?.trim();
+    assert.ok(line, 'a medição sintética precisa de uma linha real do defeito plantado');
+    const [correctionRun] = await runPersonalModuleCli(module, [installationPath, projectId], {
+      collectorOutput: {
+        coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'Medição determinística de linha da fixture sintética.'}],
+        findings: [{tool: 'fixture', rule: 'LAB-LINHA', file: measuredFinding.where.file, line: measuredFinding.where.line,
+          severity: 'baixa', message: 'Linha observada no projeto de laboratório.', evidence: line.slice(0, 200)}],
+      },
+    });
+    assert.ok(correctionRun && correctionRun !== runId);
+    const correctionReport = await readModuleReport(dataDirectory, projectId, correctionRun, module);
+    const confirmedFinding = correctionReport.achados[0]!;
+    assert.equal(confirmedFinding.status, 'confirmado');
+    assert.equal(confirmedFinding.verifier?.provider, 'fixture');
+    assert.equal(confirmedFinding.where.file, measuredFinding.where.file);
+
     const fix1 = await runPersonalCliSubprocess(module, [
       installationPath,
       projectId,
       '--corrigir',
-      runId,
+      correctionRun,
       confirmedFinding.id,
     ]);
     const fix2 = await runPersonalCliSubprocess(module, [
       installationPath,
       projectId,
       '--corrigir',
-      runId,
+      correctionRun,
       confirmedFinding.id,
     ]);
     assert.deepEqual(fix1, fix2);
@@ -508,7 +529,7 @@ async function verifyModuleEndToEnd(
               m.regression_test, m.acceptance
        FROM ac_verify_remediations m JOIN ac_verify_runs r ON r.id=m.run_id
        WHERE m.run_id=$1`,
-      [runId],
+      [correctionRun],
     )).rows;
     assert.equal(remRows.length, 1);
     assert.equal(remRows[0]?.project_id, projectId);
@@ -532,7 +553,7 @@ async function verifyModuleEndToEnd(
     assert.equal(mainMsgs[0]?.local_id, messageLocalId);
     assert.equal(mainMsgs[0]?.role, 'owner');
     assert.equal((mainMsgs[0]?.text ?? '').includes(`Projeto: ${projectId}`), true);
-    assert.equal((mainMsgs[0]?.text ?? '').includes(`Execução: ${runId}`), true);
+    assert.equal((mainMsgs[0]?.text ?? '').includes(`Execução: ${correctionRun}`), true);
     assert.equal((mainMsgs[0]?.text ?? '').includes(`- ${confirmedFinding.where.file}`), true);
     assert.equal((mainMsgs[0]?.text ?? '').includes(REMEDIATION_ACCEPTANCE), true);
 

@@ -17,6 +17,9 @@ const collectorOutput = {
 
 test('exame indisponível conserva a evidência do coletor sem atribuir confirmação', {skip: !databaseUrl}, async () => {
   await withModuleRecoveryFixture(databaseUrl!, async input => {
+    const withoutExam = await runVerificationModule({...input, collectorOutput});
+    assert.equal(withoutExam.achados[0]?.status, 'provavel');
+    assert.equal(withoutExam.achados[0]?.verifier, null);
     const result = await runVerificationModule({...input, collectorOutput, async examinar(req) {
       const map = await mapModuleSnapshot(req.snapshot);
       return examineFunctionalModule({...req, repo: req.snapshot, map});
@@ -51,9 +54,13 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     }});
     assert.deepEqual(result.achados.map(a => [a.status, a.verifier?.provider]), [['confirmado','revisor'],['confirmado','revisor']]);
     assert.deepEqual(result.achados[1]?.sources, ['examinador', 'exame-de-arquivo']);
-    const row = (await input.ledger.pool.query('select provenance,profile_id from ac_verify_coverage where run_id=$1 and file=$2', [result.runId, 'fixture.txt'])).rows[0];
+    const row = (await input.ledger.pool.query('select provenance,profile_id,collector_measurements from ac_verify_coverage where run_id=$1 and file=$2', [result.runId, 'fixture.txt'])).rows[0];
     assert.equal(row.provenance, 'examiner');
     assert.equal(row.profile_id, author.profileId);
+    assert.deepEqual(row.collector_measurements, [{tool:'fixture', version:'1'}]);
+    assert.match(await readFile(join(result.directory,'cobertura.md'),'utf8'), /fixture@1/);
+    const recorded = JSON.parse(await readFile(join(result.directory,'bruto','exame.json'),'utf8'));
+    assert.deepEqual(recorded, [{id:'ACH-002',file:'fixture.txt',line:1,evidence:'synthetic'}]);
     assert.match(await readFile(join(result.directory, 'mapa.md'), 'utf8'), /fixture\.txt \| lido/);
   });
 });
