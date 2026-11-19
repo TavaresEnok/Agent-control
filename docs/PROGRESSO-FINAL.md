@@ -479,3 +479,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:39 UTC — Revisão independente por modelo distinto de 2cafe62b encontrou possível falso positivo de backup em here-doc e falhas de cobertura de configuração local. C6-R10 trata os casos em análise passiva de arquivos.
 - 19/11/2026 05:40 UTC — Em 53a37821 a cobertura identifica explicitamente quando o daemon não tem a imagem fixada. Dois testes aprovaram a falha antes e durante a criação, um deles com Docker real e PostgreSQL. A imagem de desempenho com as correções do revisor em 9f22e01e entrou em reconstrução.
 - 19/11/2026 05:42 UTC — Desempenho R7 e leitura de histórico cancelável reunidos em 4e90e9c5. O conflito de digest foi resolvido com o ID físico de 5e91abad e a bateria foi relançada sobre o commit fixado. No QA, a montagem noexec do laboratório anterior foi observada no Docker; a prova de mutação agora usa os argumentos reais do produto.
+- 19/11/2026 05:42 UTC — Trabalhador encerrou C5-R7 em 1cd11ad5 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:42 UTC — Trabalho C6-R10 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 05:42 UTC — Revisor encerrou C-EXAME-MEDICOES em 1b42a859 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:42 UTC — Revisão C-REVERIFICAR-R3 iniciada por Sol high normal somente leitura em 6e5edfd1.
+- 19/11/2026 05:43 UTC — Próximas ordens cobrem dois itens da especificação que ainda dependiam de execução real, OpenRewrite para fontes Java e fast-check para propriedades funcionais de JavaScript. A revisão das medições 1b42a859 encontrou problemas na identidade de uma consulta, no motivo do verificador e na cobertura do material de apoio; essas correções têm prioridade na fila.
