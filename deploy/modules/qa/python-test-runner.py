@@ -9,6 +9,7 @@ import sys
 import unittest
 
 sys.path.append("/opt/qa-coverage")
+sys.path.append("/opt/qa-tools/mutacao-linguagens/python-deps")
 from coverage import Coverage
 from coverage.exceptions import CoverageException
 
