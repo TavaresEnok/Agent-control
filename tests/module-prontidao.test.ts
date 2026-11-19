@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import childProcess, {type SpawnSyncOptionsWithStringEncoding} from 'node:child_process';
 import {mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync} from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -117,15 +119,15 @@ test('auditRepositoryReadiness não acusa defeitos no controle limpo', () => {
   }
   assert.match(
     reqRows.find(r => r.tool === 'prontidao:requisito:backup-restauracao')?.detail ?? '',
-    /restauração real não comprovada/,
+    /prova de restauração requer execução/,
   );
   assert.match(
     reqRows.find(r => r.tool === 'prontidao:requisito:alertas-logs')?.detail ?? '',
-    /entrega real de alertas não comprovada/,
+    /entrega de alertas exige verificação/,
   );
   assert.match(
     reqRows.find(r => r.tool === 'prontidao:requisito:reinicio-automatico')?.detail ?? '',
-    /disponibilidade real não comprovada/,
+    /disponibilidade exige observação/,
   );
 });
 
@@ -574,6 +576,14 @@ test('documentação, comentários e texto de shell não contam como rotinas de 
     writeFileSync(join(dir, 'notes.sh'), [
       '#!/bin/sh', '# pg_dump -f /var/backups/example.dump', 'echo "pg_dump e pg_restore"',
       "cat <<'NOTES'", 'pg_dump', 'pg_restore', 'NOTES',
+      'cat <<EOF>/dev/null', 'pg_dump -f fixture.dump', ' EOF',
+      'pg_restore -d synthetic_db fixture.dump', 'EOF',
+      "cat 3<<-'FIRST' 4<<SEC\"OND\" >/dev/null",
+      'pg_dump -f fixture.dump', '\tFIRST',
+      '\tSECOND', 'pg_restore -d synthetic_db fixture.dump', 'SECOND',
+      'cat <<CO\\', 'NTINUED>/dev/null',
+      'CO', 'pg_dump -f fixture.dump', 'CONTINUED',
+      'cat <<"EN\\"D">/dev/null', 'pg_dump -f fixture.dump', 'EN"D',
     ].join('\n'));
     writeFileSync(join(dir, 'package.json'), JSON.stringify({description: 'pg_dump', scripts: {notes: 'echo pg_restore'}}));
     const absent = ['PRONTIDAO-BACKUP-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE'];
@@ -807,6 +817,79 @@ test('Compose exige valores positivos e válidos para memória, PIDs e rotação
   }
 });
 
+test('Compose respeita chaves de fluxo YAML e os valores literais do driver de logs', () => {
+  let incomplete = false;
+  const [ambiguous] = parseComposeServices('services: {app: {mem_limit:64m, pids_limit:64}}', () => { incomplete = true; });
+  assert.equal(incomplete, true);
+  assert.equal(ambiguous?.hasMemLimit, false);
+  assert.equal(ambiguous?.hasPidsLimit, false);
+  const [compact] = parseComposeServices('{services:{app:{"mem_limit":64m,"pids_limit":64}}}');
+  assert.equal(compact?.hasMemLimit, true);
+  assert.equal(compact?.hasPidsLimit, true);
+  assert.deepEqual(parseComposeServices('services:{app: {mem_limit: 64m}}'), []);
+  const [tabSize, binarySize] = parseComposeServices(
+    'services: {tab: {logging: {options: {max-size: "8\\tm"}}}, binary: {logging: {options: {max-size: 8KiB}}}}',
+  );
+  assert.equal(tabSize?.hasLogMaxSize, false);
+  assert.equal(binarySize?.hasLogMaxSize, true);
+
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-compose-literais-'));
+  try {
+    writeFileSync(join(dir, 'compose.yml'), [
+      'services:',
+      '  clipped:',
+      '    logging: {driver: json-file, options: {max-size: 8m, max-file: "2\\n"}}',
+      '  block:',
+      '    logging:',
+      '      driver: local',
+      '      options:',
+      '        max-size: 8m',
+      '        max-file: |',
+      '          2',
+      '  sized:',
+      '    logging:',
+      '      options:',
+      '        max-size: |+',
+      '          8m',
+      '        max-file: "3"',
+      '  stripped:',
+      '    logging:',
+      '      driver: |-',
+      '        json-file',
+      '      options:',
+      '        max-size: >-',
+      '          8m',
+      '        max-file: |2-',
+      '          +2',
+      '  indented:',
+      '    logging:',
+      '      options:',
+      '        max-size: 8m',
+      '        max-file: |2-',
+      '           2',
+      '  driver: {logging: {driver: " JSON-FILE "}}',
+      '  external: {logging: {driver: journald}}',
+      '  disabled: {logging: {driver: none}}',
+      '  final:',
+      '    logging:',
+      '      options:',
+      '        max-size: 8m',
+      '        max-file: |',
+      '          2',
+    ].join('\n'));
+    const result = auditRepositoryReadiness(dir);
+    assert.deepEqual(result.findings.filter(f => f.rule === 'PRONTIDAO-LOG-SEM-ROTACAO').map(f => f.line), [2, 4, 11, 26]);
+    assert.ok(result.coverage.some(c => c.status === 'failed' && /linha 32,/.test(c.detail)));
+    assert.ok(result.coverage.some(c => c.status === 'skipped' && /linha 33,/.test(c.detail)));
+    assert.ok(result.coverage.some(c => c.status === 'skipped' && /linha 34,/.test(c.detail)));
+    assert.equal(result.coverage.find(c => c.tool === 'prontidao:requisito:alertas-logs')?.status, 'failed');
+    assert.equal(result.coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.status, 'ok');
+    assert.doesNotMatch(JSON.stringify(result), /JSON-FILE/);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
 test('Caddy e Nginx auditam o bloco efetivo e declaram imports ou rotas não resolvidos', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-proxy-'));
   try {
@@ -851,12 +934,74 @@ test('Caddy e Nginx auditam o bloco efetivo e declaram imports ou rotas não res
     assert.deepEqual(locations('PRONTIDAO-TLS-DESATIVADO'), [['Caddyfile', 4]]);
     assert.deepEqual(locations('PRONTIDAO-TLS-PROTOCOLO-FRACO'), [['nginx.conf', 6], ['nginx.conf', 15]]);
     for (const rule of ['PRONTIDAO-CABECALHO-HSTS-AUSENTE', 'PRONTIDAO-CABECALHO-SEGURANCA-AUSENTE']) {
-      assert.deepEqual(locations(rule), [['Caddyfile', 4], ['nginx.conf', 10], ['nginx.conf', 12], ['nginx.conf', 15]]);
+      assert.deepEqual(locations(rule), [['nginx.conf', 10], ['nginx.conf', 12], ['nginx.conf', 15]]);
     }
     for (const [file, line] of [['Caddyfile', 13], ['nginx.conf', 13], ['nginx.conf', 16]]) {
       assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith(file + ': linha ' + line)));
     }
     assert.doesNotMatch(JSON.stringify(result), /synthetic-text|synthetic\.conf/);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Proxies avaliam porta, ordem de reescrita e aplicação dos cabeçalhos por resposta', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-proxy-resposta-'));
+  try {
+    writeFileSync(join(dir, 'Caddyfile'), [
+      ':8080 {',
+      '  respond "fixture"',
+      '}',
+      'http://fixture.example.invalid:8081 {',
+      '  redir https://fixture.example.invalid 303',
+      '}',
+      'https://fixture.example.invalid {',
+      '  header -Strict-Transport-Security',
+      '  header Strict-Transport-Security "max-age=31536000"',
+      '  header X-Content-Type-Options nosniff',
+      '  header X-Frame-Options DENY',
+      '}',
+      'https://fixture-zero.example.invalid {',
+      '  header >Strict-Transport-Security "max-age=0"',
+      '  header X-Content-Type-Options nosniff',
+      '  header X-Frame-Options DENY',
+      '}',
+      'https://fixture-conditional.example.invalid {',
+      '  header @fixture Strict-Transport-Security "max-age=0"',
+      '}',
+    ].join('\n'));
+    writeFileSync(join(dir, 'nginx.conf'), [
+      'http {',
+      '  add_header Strict-Transport-Security "max-age=31536000";',
+      '  add_header X-Content-Type-Options nosniff;',
+      '  add_header X-Frame-Options DENY;',
+      '  server { listen 80; break; return 301 https://fixture.example.invalid; }',
+      '  server { listen 8080; return 200; }',
+      '  server { listen 443; return 200; }',
+      '  server { listen 8081; return 303 https://fixture.example.invalid; }',
+      '  server { listen 8082; return https://fixture.example.invalid; }',
+      '  server { listen 8083; return 308 https://fixture.example.invalid; if ($host) { return 200; } }',
+      '  server { listen 8084; rewrite ^ /elsewhere last; return 301 https://fixture.example.invalid; }',
+      '  server { listen 8085; if ($host) { return 404; } return 302 https://fixture.example.invalid; }',
+      '  server { listen 8443 ssl;',
+      '    location /absent { return 404; }',
+      '    location /zero { add_header Strict-Transport-Security "max-age=0" always; return 404; }',
+      '    location /ok { return 303 https://fixture.example.invalid; }',
+      '    location /rewritten { error_page 404 /ok; return 404; }',
+      '  }',
+      '  server { listen 8443; }',
+      '}',
+    ].join('\n'));
+    const result = auditRepositoryReadiness(dir);
+    const locations = (rule: string) => result.findings.filter(f => f.rule === rule).map(f => [f.file, f.line]);
+    assert.deepEqual(locations('PRONTIDAO-TLS-DESATIVADO'), [['Caddyfile', 1], ['nginx.conf', 5], ['nginx.conf', 6], ['nginx.conf', 7]]);
+    assert.deepEqual(locations('PRONTIDAO-CABECALHO-HSTS-AUSENTE'), [['Caddyfile', 7], ['nginx.conf', 14]]);
+    assert.deepEqual(locations('PRONTIDAO-HSTS-FRACO'), [['Caddyfile', 13], ['nginx.conf', 15]]);
+    for (const [file, line] of [['Caddyfile', 18], ...[11, 12, 13, 17, 19].map(line => ['nginx.conf', line])]) {
+      assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith(file + ': linha ' + line + ',')));
+    }
+    assert.equal(result.coverage.find(c => c.tool === 'prontidao:requisito:tls-cabecalhos')?.status, 'failed');
+    assert.doesNotMatch(JSON.stringify(result), /fixture\.example\.invalid|@fixture|\/elsewhere/);
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }
@@ -870,7 +1015,7 @@ test('cron de usuário e sistema, truncate e catálogo têm evidências distinta
     writeFileSync(join(dir, 'app.service'), '[Service]\nType=oneshot\nStandardError=truncate:/var/log/fixture.log\n');
     writeFileSync(join(dir, 'etc', 'crontab'), '15 2 * * mon root pg_dump --file "fixture local.dump"\n');
     writeFileSync(join(dir, 'etc', 'cron.d', 'fixture'), [
-      '@daily backup restic -r /var/backups/fixture forget synthetic-snapshot',
+      '@daily backup restic -r /var/backups/fixture forget a4e9b26c',
       '@weekly backup mysql --not-a-dump',
     ].join('\n'));
     writeFileSync(join(dir, 'var', 'spool', 'cron', 'crontabs', 'fixture'), [
@@ -888,14 +1033,51 @@ test('cron de usuário e sistema, truncate e catálogo têm evidências distinta
     assert.ok(result.findings.some(f => f.rule === 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE'));
     assert.equal(result.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), false);
     const requirement = (out: typeof result) => out.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.detail ?? '';
-    assert.match(requirement(result), /checagemCatalogo=declarada, rotinaRestauracao=ausente/);
-    assert.doesNotMatch(JSON.stringify(result), /fixture local\.dump|relative\.sql|synthetic-snapshot/);
+    assert.match(requirement(result), /checagem de catálogo identificada, rotina de restauração não identificada/);
+    assert.doesNotMatch(JSON.stringify(result), /fixture local\.dump|relative\.sql|a4e9b26c/);
 
     writeFileSync(join(dir, 'etc', 'cron.d', 'fixture'), '@daily backup pg_restore -d synthetic_db /var/backups/fixture.dump\n');
     const withRestore = auditRepositoryReadiness(dir);
-    assert.match(requirement(withRestore), /checagemCatalogo=declarada, rotinaRestauracao=declarada.*restauração real não comprovada/);
+    assert.match(requirement(withRestore), /checagem de catálogo identificada, rotina de restauração identificada.*prova de restauração requer execução/);
     assert.equal(withRestore.findings.some(f => f.rule === 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE'), false);
     assert.ok(withRestore.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'));
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Restic exige snapshot e destino na restauração, ou snapshot ou política na retenção', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-restic-sintaxe-'));
+  try {
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const script = join(dir, 'backup.sh');
+    const audit = (...commands: string[]) => {
+      writeFileSync(script, ['#!/bin/sh', 'restic backup /var/lib/fixture', ...commands].join('\n'));
+      return auditRepositoryReadiness(dir);
+    };
+    const absent = (out: ReturnType<typeof audit>) => out.findings.filter(f =>
+      ['PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'].includes(f.rule)).map(f => f.rule);
+    assert.deepEqual(absent(audit(
+      'restic restore --target /var/tmp/fixture',
+      'restic restore latest --target=',
+      'restic restore --target latest',
+      'restic forget --prune',
+      'restic forget --keep-last=0 --prune',
+      'restic forget --keep-weekly 2 --dry-run',
+    )), ['PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE']);
+    const literal = audit(
+      'restic -r /var/backups/fixture restore --include /fixture latest --target=/var/tmp/fixture',
+      'restic forget --prune --keep-daily 2',
+    );
+    assert.deepEqual(absent(literal), []);
+    assert.match(literal.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.detail ?? '',
+      /rotina de restauração identificada e retenção de backup identificada.*prova de restauração requer execução/);
+    assert.deepEqual(absent(audit('restic restore --target /var/tmp/fixture 2d63c1a5', 'restic forget --keep-within 1m7d')), []);
+    const unresolved = audit('restic forget --keep-last="$KEEP"');
+    assert.equal(absent(unresolved).length, 2);
+    assert.equal(unresolved.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed');
+    assert.equal(absent(audit('restic restore --target /var/tmp/fixture "$SNAPSHOT"')).length, 2);
+    assert.doesNotMatch(JSON.stringify(unresolved), /SNAPSHOT|KEEP|\/var\/tmp\/fixture/);
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }
@@ -921,28 +1103,21 @@ test('Gitleaks limita o preparo de snapshots sem metadados Git', async t => {
     ['profundidade', (dir: string) => {
       mkdirSync(join(dir, ...Array<string>(11).fill('nested')), {recursive: true});
     }, /profundidade 10/],
-    ['prazo', (dir: string) => {
-      writeFileSync(join(dir, 'small'), 'fixture\n');
-    }, /5 s/],
   ] as const;
 
   for (const [name, prepare, expected] of limitCases) {
-    await t.test(name, sub => {
+    await t.test(name, () => {
       const root = mkdtempSync(join(tmpdir(), 'prontidao-gitleaks-limites-'));
       const repoRoot = join(root, 'fixture');
       mkdirSync(repoRoot);
       let scans = 0;
       try {
         prepare(repoRoot);
-        let ticks = 0;
         const out = runCollector({
           repoRoot,
           tmpDir: root,
           evidenceFile: '',
           runBin(bin, args) {
-            if (bin === 'gitleaks' && args[0] === 'version' && name === 'prazo') {
-              sub.mock.method(performance, 'now', () => ticks++ < 4 ? 0 : 5_001);
-            }
             if (bin === 'gitleaks' && args[0] === 'dir') scans++;
             return {status: 1, stdout: '', stderr: ''};
           },
@@ -952,9 +1127,63 @@ test('Gitleaks limita o preparo de snapshots sem metadados Git', async t => {
         assert.equal(gitleaks?.status, 'failed');
         assert.match(gitleaks.detail, expected);
       } finally {
-        sub.mock.restoreAll();
         rmSync(root, {recursive: true, force: true});
       }
     });
+  }
+});
+
+test('Gitleaks interrompe uma chamada síncrona bloqueada no processo de cópia', t => {
+  const root = mkdtempSync(join(tmpdir(), 'prontidao-gitleaks-prazo-'));
+  const repoRoot = join(root, 'fixture');
+  mkdirSync(repoRoot);
+  const source = join(repoRoot, 'small');
+  const marker = join(root, 'copy-entered');
+  writeFileSync(source, 'fixture\n');
+  const preload = 'data:text/javascript,' + encodeURIComponent(`
+    import fs from 'node:fs';
+    import {syncBuiltinESMExports} from 'node:module';
+    const open = fs.openSync;
+    fs.openSync = function (path, ...args) {
+      if (path === ${JSON.stringify(source)}) {
+        fs.writeFileSync(${JSON.stringify(marker)}, 'chamada síncrona iniciada');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      }
+      return open.call(fs, path, ...args);
+    };
+    syncBuiltinESMExports();
+  `);
+  const spawn = childProcess.spawnSync;
+  let copyInterruption;
+  let scans = 0;
+  try {
+    t.mock.method(childProcess, 'spawnSync', (bin: string, args: string[], options: SpawnSyncOptionsWithStringEncoding) => {
+      assert.equal(args[1], '--prepare-gitleaks-source');
+      assert.equal(options.timeout, 5000);
+      assert.equal(options.killSignal, 'SIGKILL');
+      const result = spawn(bin, ['--import', preload, ...args], options);
+      copyInterruption = {signal: result.signal, error: result.error && 'code' in result.error ? result.error.code : undefined};
+      return result;
+    });
+    syncBuiltinESMExports();
+    const out = runCollector({
+      repoRoot,
+      tmpDir: root,
+      evidenceFile: '',
+      runBin(bin, args) {
+        if (bin === 'gitleaks' && args[0] === 'dir') scans++;
+        return {status: 1, stdout: '', stderr: ''};
+      },
+    });
+    assert.equal(readFileSync(marker, 'utf8'), 'chamada síncrona iniciada');
+    assert.deepEqual(copyInterruption, {signal: 'SIGKILL', error: 'ETIMEDOUT'});
+    assert.equal(scans, 0);
+    const row = out.coverage.find(c => c.tool === 'gitleaks');
+    assert.equal(row?.status, 'failed');
+    assert.match(row.detail, /5 s/);
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    rmSync(root, {recursive: true, force: true});
   }
 });
