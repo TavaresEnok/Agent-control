@@ -741,3 +741,6 @@ PAUSADO-COTA
 - 19/11/2026 17:41 UTC — revisor-C2-BANCO-LOCAL-R2 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:41 UTC — A revisão de 11edd142 encontrou diagnósticos Go sem vínculo suficiente ao pacote e uma verificação incompleta da versão do compilador. Aberta correção focada na medição. O ensaio da imagem com PostgreSQL 16.15 prossegue.
 - 19/11/2026 17:42 UTC — O PostgreSQL 16.15 extraído da imagem refeita passou na prova real de privilégios, ACLs e resultado pgTAP. Digests de prontidão em f485490c e documentação em 7355c13c integrados nos seus ramos de aceite.
+- 19/11/2026 17:43 UTC — C2-BANCO-LOCAL-R2 encerrado com código 0.
+- 19/11/2026 17:43 UTC — revisor-C2-CARGA-PLATAFORMAS iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:44 UTC — O revisor confirmou a versão PostgreSQL corrigida e a separação do pgTAP. A revisão pede que o protocolo imponha uma instrução e que o papel de consulta tenha acesso apenas aos objetos da fixture. A primeira tentativa de registrar a imagem de QA multiplataforma foi interrompida por uma alteração no script de homologação. A imagem foi construída e a validação será repetida com um script estável.
