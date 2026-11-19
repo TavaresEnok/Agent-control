@@ -22,8 +22,6 @@ module Banco
   MAX_QUERY_ISSUES = 40
   SAMPLES = 3
   SLOW_MS = 100
-  REPLAY_ATTEMPTS = 10
-  REPLAY_SECONDS = 8
   MIGRATION_NAME = /\A\d+_[a-zA-Z0-9_.-]+\.sql\z/
   QUERY_NAME = /\A[a-zA-Z0-9_][a-zA-Z0-9_.-]*\.sql\z/
   SEED = "banco/seed.sql"
@@ -238,6 +236,118 @@ module Banco
     end
   end
 
+  # Prova suficiente de escritor único, limitada a tabelas criadas neste lote.
+  # Comandos fora deste subconjunto invalidam a prova para o lote inteiro.
+  class DeclarativeWriters
+    PLAIN_TYPES = %w[int2 int4 int8 bool text uuid].freeze
+    SIMPLE_CONSTRAINTS = %i[CONSTR_NULL CONSTR_NOTNULL CONSTR_PRIMARY CONSTR_UNIQUE
+      CONSTR_ATTR_DEFERRABLE CONSTR_ATTR_NOT_DEFERRABLE CONSTR_ATTR_DEFERRED CONSTR_ATTR_IMMEDIATE].freeze
+    SIMPLE_SELECT = {limit_option: :LIMIT_OPTION_DEFAULT, op: :SETOP_NONE}.freeze
+
+    def initialize
+      @tables = {}
+    end
+
+    def observe(source, statements)
+      return unless @tables
+
+      @tables = nil unless statements.all? { |entry| declarative?(source, entry.stmt) }
+    end
+
+    def origin(error)
+      diagnostic = error.result
+      return unless @tables && diagnostic &&
+        diagnostic.error_field(PG::Result::PG_DIAG_SQLSTATE) == "23503" &&
+        diagnostic.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION) == "ri_ReportViolation" &&
+        diagnostic.error_field(PG::Result::PG_DIAG_SCHEMA_NAME) == "public" &&
+        diagnostic.error_field(PG::Result::PG_DIAG_CONSTRAINT_NAME)
+
+      writers = @tables[diagnostic.error_field(PG::Result::PG_DIAG_TABLE_NAME)]
+      writers.first if writers&.one?
+    end
+
+    private
+
+    def declarative?(source, statement)
+      if (create = statement.create_stmt)
+        table = public_table(create.relation)
+        return false unless table && !@tables.key?(table) && plain_create?(create, table)
+
+        @tables[table] = []
+      elsif (insert = statement.insert_stmt)
+        writers = @tables[public_table(insert.relation)]
+        return false unless writers && literal_insert?(insert)
+
+        writers << source unless writers.last.equal?(source)
+        true
+      elsif (select = statement.select_stmt)
+        select == PgQuery::SelectStmt.new(**SIMPLE_SELECT, target_list: select.target_list.to_a) &&
+          select.target_list.all? { |node| node.res_target&.val&.a_const }
+      else
+        statement.constraints_set_stmt || timeout_setting?(statement.variable_set_stmt)
+      end
+    end
+
+    def public_table(relation)
+      if relation && ["", "public"].include?(relation.schemaname) &&
+          relation.catalogname.empty? && relation.relpersistence == "p" && !relation.alias
+        relation.relname
+      end
+    end
+
+    def plain_create?(create, table)
+      return false unless create == PgQuery::CreateStmt.new(relation: create.relation,
+        table_elts: create.table_elts.to_a, oncommit: :ONCOMMIT_NOOP)
+
+      create.table_elts.all? do |entry|
+        entry.column_def ? plain_column?(entry.column_def, table) : plain_constraint?(entry.constraint, table)
+      end
+    end
+
+    def plain_column?(column, table)
+      type = column.type_name
+      names = type&.names&.map { |node| node.string&.sval }
+      names && names.size == 2 && names.first == "pg_catalog" && PLAIN_TYPES.include?(names.last) &&
+        type.array_bounds.empty? && type.typmods.empty? && !type.pct_type && !type.setof &&
+        column == PgQuery::ColumnDef.new(colname: column.colname, type_name: type, is_local: true,
+          constraints: column.constraints.to_a, location: column.location) &&
+        column.constraints.all? { |node| plain_constraint?(node.constraint, table) }
+    end
+
+    def plain_constraint?(constraint, table)
+      return false unless constraint
+
+      attributes = {contype: constraint.contype, conname: constraint.conname, location: constraint.location,
+                    deferrable: constraint.deferrable, initdeferred: constraint.initdeferred}
+      if SIMPLE_CONSTRAINTS.include?(constraint.contype)
+        return constraint == PgQuery::Constraint.new(**attributes, keys: constraint.keys.to_a)
+      end
+      return false unless constraint.contype == :CONSTR_FOREIGN &&
+        constraint == PgQuery::Constraint.new(**attributes, initially_valid: true, pktable: constraint.pktable,
+          fk_attrs: constraint.fk_attrs.to_a, pk_attrs: constraint.pk_attrs.to_a,
+          fk_matchtype: "s", fk_upd_action: "a", fk_del_action: "a")
+
+      parent = public_table(constraint.pktable)
+      parent == table || @tables.key?(parent)
+    end
+
+    def literal_insert?(insert)
+      return false unless insert == PgQuery::InsertStmt.new(relation: insert.relation,
+        cols: insert.cols.to_a, select_stmt: insert.select_stmt, override: :OVERRIDING_NOT_SET)
+      return false unless insert.cols.all? { |node| node.res_target&.indirection&.empty? }
+
+      values = insert.select_stmt&.select_stmt
+      values && !values.values_lists.empty? &&
+        values == PgQuery::SelectStmt.new(**SIMPLE_SELECT, values_lists: values.values_lists.to_a) &&
+        values.values_lists.all? { |row| row.list&.items&.all? { |node| node.a_const } }
+    end
+
+    def timeout_setting?(setting)
+      setting && %w[lock_timeout statement_timeout].include?(setting.name) &&
+        setting.kind == :VAR_SET_VALUE && setting.args.one? && setting.args.first.a_const
+    end
+  end
+
   class Database
     def initialize(directory, report)
       @directory = directory
@@ -286,9 +396,10 @@ module Banco
       end
     end
 
-    def migrate(name, sources, replay: false)
+    def migrate(name, sources)
       connect(name) do |db|
         db.exec("BEGIN")
+        writers = DeclarativeWriters.new
         sources.each_with_index do |source, index|
           begin
             statements = PgQuery.parse(source.sql).tree.stmts
@@ -296,6 +407,7 @@ module Banco
               raise ToolError, "esperado SQL de migração sem controle explícito de transação"
             end
 
+            writers.observe(source, statements)
             db.exec(source.sql)
           rescue PG::Error, PgQuery::ParseError, ToolError => error
             evidence = error.is_a?(ToolError) ? error.message : sql_diagnostic(error)
@@ -304,10 +416,10 @@ module Banco
             sources.take(index).each do |prior|
               @report.cover("pg-migrate", "skipped", "pg-migrate:#{name}:#{prior.path}: transação não confirmada (#{evidence})")
             end
-            detection = deferred_check_detection(error, source, statements) if index.positive? && rejected && error.is_a?(PG::Error)
+            detection = deferred_check_detection(error, source, statements) if rejected && error.is_a?(PG::Error)
             outcome = "execução interrompida (#{evidence})"
             if detection
-              origin = report_batch_rejection(name, sources.take(index + 1), error, detection, replay: replay, during_file: true)
+              origin = report_batch_rejection(name, sources.take(index + 1), error, detection, writers.origin(error))
               outcome = "lote rejeitado (#{evidence}); #{detection}; #{origin}"
             elsif rejected
               @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", source, "alta",
@@ -328,12 +440,9 @@ module Banco
           rollback(db)
           rejected = rejection?(error)
           outcome = rejected ? "lote rejeitado no commit" : "medição interrompida no commit; confirmação indisponível"
-          if rejected && sources.size > 1
-            origin = report_batch_rejection(name, sources, error, "detecção no commit", replay: replay)
+          if rejected && !sources.empty?
+            origin = report_batch_rejection(name, sources, error, "detecção no commit", writers.origin(error))
             outcome += "; #{origin}"
-          elsif rejected && sources.size == 1
-            @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", sources.first, "alta",
-              "A transação da migração foi rejeitada no commit em #{name}.", "#{evidence}; linha exata não informada no commit.")
           end
           @report.cover("pg-migrate", rejected ? "ok" : "failed", "pg-migrate:#{name}: #{outcome} (#{evidence})")
           sources.each do |source|
@@ -356,7 +465,7 @@ module Banco
         @report.cover("pg_restore", "skipped", "São necessárias duas migrações para repartir histórico e atualização.")
         return
       end
-      return @report.cover("pg_restore", "skipped", "A transação do prefixo histórico não foi confirmada.") unless migrate("previous", migrations[0...-1], replay: true)
+      return @report.cover("pg_restore", "skipped", "A transação do prefixo histórico não foi confirmada.") unless migrate("previous", migrations[0...-1])
 
       if seed
         connect("previous") { |db| db.exec(seed.sql) }
@@ -439,24 +548,40 @@ module Banco
     # Inclui RAISE EXCEPTION e os desvios de cardinalidade do SELECT INTO STRICT.
     def rejection?(error)
       code = sqlstate(error)
-      code && (%w[P0001 P0002 P0003].include?(code) || %w[0A 21 22 23 25 2B 2D 3D 3F 42 44].include?(code[0, 2]))
+      code && code != "25P04" &&
+        (%w[P0001 P0002 P0003].include?(code) || %w[0A 21 22 23 25 2B 2D 3D 3F 42 44].include?(code[0, 2]))
     end
 
     def sqlstate(error)
       error.result&.error_field(PG::Result::PG_DIAG_SQLSTATE)
     end
 
-    def direct_constraint_error?(error)
+    def inline_constraint_command(context)
+      # O comando pode ocupar várias linhas. Um segundo frame indica uma chamada indireta.
+      match = context&.match(/\ASQL statement "(.*?)"\nPL\/pgSQL function inline_code_block line \d+ at SQL statement\z/m)
+      return unless match && !match[1].match?(/^(?:PL\/pgSQL function|SQL function|SQL statement) /)
+
+      statements = PgQuery.parse(match[1]).tree.stmts
+      statements.first.stmt.constraints_set_stmt if statements.one?
+    rescue PgQuery::ParseError
+      nil
+    end
+
+    def direct_constraint_error?(error, statements)
       return false unless error.is_a?(PG::Error) && %w[42704 42809].include?(sqlstate(error)) &&
         error.result&.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION) == "AfterTriggerSetState"
 
       # Um gatilho de um arquivo anterior também pode chamar SET CONSTRAINTS.
       context = error.result.error_field(PG::Result::PG_DIAG_CONTEXT)
-      !context || context.match?(/\ASQL statement "[^\n]*"\nPL\/pgSQL function inline_code_block line \d+ at SQL statement\z/)
+      if context
+        statements.any? { |entry| entry.stmt.do_stmt } && inline_constraint_command(context)
+      else
+        statements.any? { |entry| entry.stmt.constraints_set_stmt }
+      end
     end
 
     def migration_error_line(error, source, statements)
-      if direct_constraint_error?(error) && !error.result.error_field(PG::Result::PG_DIAG_CONTEXT)
+      if direct_constraint_error?(error, statements) && !error.result.error_field(PG::Result::PG_DIAG_CONTEXT)
         commands = statements.select { |entry| entry.stmt.constraints_set_stmt }
         return Banco.statement_line(source, offset: commands.first.stmt_location) if commands.one?
       end
@@ -464,7 +589,7 @@ module Banco
     end
 
     def deferred_check_detection(error, source, statements)
-      return if direct_constraint_error?(error)
+      return if direct_constraint_error?(error, statements)
 
       # A checagem também pode ser disparada por PL/pgSQL. O contexto bruto fica fora da saída.
       context = error.result&.error_field(PG::Result::PG_DIAG_CONTEXT)
@@ -491,92 +616,21 @@ module Banco
       end
     end
 
-    def report_batch_rejection(name, sources, error, detection, replay:, during_file: false)
-      origin = locate_batch_rejection(sources, error, during_file: during_file) if replay
+    def report_batch_rejection(name, sources, error, detection, origin)
       evidence = "#{sql_diagnostic(error)}; #{detection}; lote de #{sources.size} arquivos " \
         "(#{sources.first.path} até #{sources.last.path}, inclusive, em ordem lexicográfica)"
       if origin
         @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", origin, "alta",
-          "A inclusão desta migração reproduziu a rejeição do lote no cenário #{name}.",
-          "#{evidence}; em cópias descartáveis, o prefixo anterior confirmou e o prefixo com este arquivo reproduziu a mesma violação; linha exata indisponível.",
+          "A violação de chave estrangeira do lote foi atribuída a esta migração no cenário #{name}.",
+          "#{evidence}; diagnóstico da execução original e único arquivo com inserções na tabela indicada; linha exata não informada.",
           line: Banco.statement_line(origin))
-        "rejeição reproduzida com a inclusão de #{origin.path}"
+        "origem atribuída a #{origin.path}"
       else
         @report.find("pg-migrate", "BANCO-LOTE-MIGRACAO-REJEITADO", sources.last, "alta",
           "O lote de migrações foi rejeitado no cenário #{name}.",
           "#{evidence}; origem entre arquivos indeterminada; arquivo e linha referenciam o último arquivo alcançado pela execução.",
           line: Banco.statement_line(sources.last))
         "origem entre arquivos indeterminada"
-      end
-    end
-
-    def violation_signature(error)
-      return unless sqlstate(error)&.start_with?("23") && error.result.error_field(PG::Result::PG_DIAG_CONSTRAINT_NAME)
-
-      # Campos do servidor ajudam a distinguir violações com o mesmo SQLSTATE.
-      # Os valores e as mensagens usados na comparação ficam fora do relatório.
-      %i[SQLSTATE SCHEMA_NAME TABLE_NAME CONSTRAINT_NAME MESSAGE_PRIMARY MESSAGE_DETAIL].map do |field|
-        error.result.error_field(PG::Result.const_get("PG_DIAG_#{field}"))
-      end
-    end
-
-    def locate_batch_rejection(sources, error, during_file:)
-      signature = violation_signature(error)
-      return unless signature
-
-      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + REPLAY_SECONDS
-      confirmed = 0
-      rejected = sources.size
-      return unless replay_prefix(sources, signature, deadline, during_file: during_file) == :rejected
-
-      # Uma rejeição não é monotônica entre prefixos: um arquivo posterior pode
-      # corrigir dados. Só atribua quando os dois prefixos adjacentes forem provados.
-      (REPLAY_ATTEMPTS - 1).times do
-        return sources[rejected - 1] if rejected == confirmed + 1
-
-        length = (confirmed + rejected) / 2
-        case replay_prefix(sources.take(length), signature, deadline)
-        when :confirmed then confirmed = length
-        when :rejected then rejected = length
-        else return
-        end
-      end
-      sources[rejected - 1] if rejected == confirmed + 1
-    rescue PG::Error
-      nil # A falha da repetição preserva a rejeição comprovada do lote original.
-    end
-
-    def replay_prefix(sources, signature, deadline, during_file: false)
-      remaining_ms = -> { ((deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)) * 1000).floor }
-      return if remaining_ms.call <= 0
-
-      # fresh e previous começam vazios a partir de template1. Cada prova usa
-      # outra cópia do mesmo template, sem reutilizar o estado da transação rejeitada.
-      connect("postgres", admin: true) { |db| db.exec("CREATE DATABASE banco_replay OWNER projeto") }
-      begin
-        connect("banco_replay") do |db|
-          budget = remaining_ms.call
-          return if budget <= 0
-
-          db.exec("BEGIN")
-          db.exec("SET LOCAL transaction_timeout = #{budget}")
-          index = 0
-          begin
-            sources.each do |source|
-              return if remaining_ms.call <= 0
-
-              db.exec(source.sql)
-              index += 1
-            end
-            db.exec("COMMIT")
-            :confirmed unless during_file
-          rescue PG::Error => error
-            expected_index = during_file ? sources.size - 1 : sources.size
-            :rejected if index == expected_index && violation_signature(error) == signature
-          end
-        end
-      ensure
-        connect("postgres", admin: true) { |db| db.exec("DROP DATABASE banco_replay WITH (FORCE)") }
       end
     end
 
@@ -770,7 +824,7 @@ module Banco
         queries&.each { |source| query_tools.each { |tool| report.cover(tool, "skipped", "#{source.path}: banco isolado indisponível") } }
         next
       end
-      fresh = report.measure("pg-migrate", "Cenário do zero") { db.migrate("fresh", migrations, replay: true) }
+      fresh = report.measure("pg-migrate", "Cenário do zero") { db.migrate("fresh", migrations) }
       if restore_inputs
         report.measure("pg_restore", "Restauração histórica") { db.exercise_restore(migrations, *restore_inputs) }
       end
