@@ -10,6 +10,7 @@ import {extname, isAbsolute, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tokenizer, tokTypes} from './cpu-parser/node_modules/acorn/dist/acorn.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
+import {parse} from 'parse5';
 import {collectCpuMetrics} from './cpu-metrics.mjs';
 import {startObserverHttpLink, watchObserverHttpLink} from './http-link.mjs';
 import {runPostgresMetrics} from './postgres-metrics.mjs';
@@ -23,6 +24,9 @@ import {
 const REPO_ROOT = '/repo';
 const MAX_HTTP_ROUTES = 8;
 const K6_REQUESTS_PER_ROUTE = 3;
+const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+// SVG embutido pode abrir um documento XML.
+const RASTER_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const isHtml = path => /\.html?$/i.test(path);
 
 function toolExit(file, args, {timeout, ...options}) {
@@ -299,6 +303,117 @@ export function planStaticRoutes(root, config, declarations = readRouteDeclarati
   return {rootDir: slice?.rootDir ?? root, aliases: selectedAliases, targets: selected, coverage};
 }
 
+function escapesSnapshot(reference, base, prefix) {
+  if (!base.pathname.startsWith(prefix)) return false;
+  // URLs HTTP aceitam barras invertidas e removem tabulações e quebras de linha.
+  let value = reference.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, '').replace(/[\t\r\n]/g, '');
+  const scheme = /^[a-z][a-z\d+.-]*:/i.exec(value)?.[0];
+  if (scheme) {
+    if (scheme.toLowerCase() !== base.protocol) return false;
+    value = value.slice(scheme.length);
+  }
+  if (/^[/\\]/.test(value)) return false;
+  const path = value.split(/[?#]/, 1)[0].replaceAll('\\', '/');
+  let depth = base.pathname.slice(prefix.length).split('/').length - 1;
+  for (const part of path.split('/')) {
+    const segment = part.replace(/%2e/gi, '.');
+    if (segment === '..') {
+      if (depth === 0) return true;
+      depth--;
+    } else if (segment !== '.') depth++;
+  }
+  return false;
+}
+
+function* imageCandidates(value) {
+  // Uma vírgula dentro do token da URL (por exemplo data:) integra a URL.
+  while ((value = value.replace(/^[,\t\n\f\r ]+/, ''))) {
+    const url = /^[^\t\n\f\r ]+/.exec(value)[0];
+    yield url.replace(/,+$/, '');
+    value = value.slice(url.length);
+    if (!url.endsWith(',')) value = value.replace(/^(?:\([^)]*\)|[^,(])*[,]?/, '');
+  }
+}
+
+function* documentElements(document) {
+  const pending = [document];
+  while (pending.length) {
+    const node = pending.pop();
+    for (let i = (node.childNodes?.length ?? 0) - 1; i >= 0; i--) pending.push(node.childNodes[i]);
+    if (node.tagName) yield node;
+  }
+}
+
+async function isStaticRasterImage(reference, base, declaredType) {
+  const url = URL.parse(reference, base);
+  if (url?.protocol !== 'http:' || url.origin !== base.origin || url.username || url.password) return false;
+  try {
+    const response = await fetch(url, {method: 'HEAD', redirect: 'error', signal: AbortSignal.timeout(1200)});
+    const type = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+    return response.ok && RASTER_IMAGE_TYPES.has(type) && (!declaredType || declaredType === type);
+  } catch {
+    return false;
+  }
+}
+
+async function embeddedDocument(tag, attrs, bases, escapesFromPage) {
+  if (tag === 'iframe' && attrs.some(({name}) => name === 'srcdoc')) return 'iframe[srcdoc]';
+  const destination = tag === 'object' ? 'data' : 'src';
+  const reference = attrs.find(({name}) => name === destination)?.value;
+  if (!reference || !/[^\t\n\f\r ]/.test(reference)) return;
+  const element = `${tag}[${destination}]`;
+  if (tag === 'iframe' || tag === 'frame' || escapesFromPage(reference)) return element;
+
+  const declaredType = attrs.find(({name}) => name === 'type')?.value.split(';', 1)[0].trim().toLowerCase();
+  for (const base of bases) {
+    if (!await isStaticRasterImage(reference, base, declaredType)) return element;
+  }
+}
+
+async function staticDocumentOmission(html, pageUrl, prefix) {
+  const document = parse(html);
+  const documentUrl = new URL(pageUrl);
+  let base = documentUrl;
+  let baseElement;
+  const escapes = (reference, url) => prefix && escapesSnapshot(reference, url, prefix);
+  const outsideSnapshot = 'referência relativa sai da raiz do snapshot';
+  for (const node of documentElements(document)) {
+    if (node.namespaceURI !== HTML_NAMESPACE || node.tagName !== 'base') continue;
+    const href = node.attrs.find(attribute => attribute.name === 'href');
+    if (!href) continue;
+    // O primeiro href ocupa a posição mesmo quando a URL congela no endereço do documento.
+    baseElement = node;
+    const destination = URL.parse(href.value, documentUrl);
+    if (destination && !['data:', 'javascript:'].includes(destination.protocol)) {
+      if (escapes(href.value, documentUrl)) return outsideSnapshot;
+      if (destination.origin !== documentUrl.origin) return 'escopo parcial: base HTML fora da origem do servidor estático';
+      base = destination;
+    }
+    break;
+  }
+
+  let beforeBase = Boolean(baseElement);
+  for (const node of documentElements(document)) {
+    const {attrs, tagName, namespaceURI} = node;
+    if (node === baseElement) beforeBase = false;
+    // Um recurso anterior à base também pode ser solicitado durante o parsing do documento.
+    const escapesFromPage = reference => escapes(reference, base) || (beforeBase && escapes(reference, documentUrl));
+    if (namespaceURI === HTML_NAMESPACE && tagName === 'base') continue;
+    if (namespaceURI === HTML_NAMESPACE && ['iframe', 'frame', 'object', 'embed'].includes(tagName)) {
+      const bases = beforeBase && base.href !== documentUrl.href ? [base, documentUrl] : [base];
+      const embedded = await embeddedDocument(tagName, attrs, bases, escapesFromPage);
+      if (embedded) return `escopo parcial: documento embutido em ${embedded} fora da interpretação estática`;
+    }
+    for (const {name, value} of attrs) {
+      if (name === 'srcset' || name === 'imagesrcset') {
+        for (const candidate of imageCandidates(value)) {
+          if (escapesFromPage(candidate)) return outsideSnapshot;
+        }
+      } else if (['src', 'poster', 'href'].includes(name) && escapesFromPage(value)) return outsideSnapshot;
+    }
+  }
+}
+
 async function serveStaticPlan(root, plan) {
   const servers = [];
   async function serve(rootDir, options) {
@@ -315,7 +430,7 @@ async function serveStaticPlan(root, plan) {
     for (const route of plan.targets) {
       if (!route.page) { targets.push(route); continue; }
       const fromStaticRoot = relative(plan.rootDir, join(root, route.file));
-      let pageUrl;
+      let pageUrl, prefix;
       if (fromStaticRoot.startsWith('../') || isAbsolute(fromStaticRoot)) {
         if (!external) {
           // O prefixo conserva a árvore do snapshot para URLs relativas. A raiz
@@ -325,14 +440,18 @@ async function serveStaticPlan(root, plan) {
           while (entries.has(segment)) segment += '-';
           external = await serve(plan.rootDir, {mount: {segment, root}});
         }
-        pageUrl = external.origin + '/' + segment + pagePath(route.file);
+        prefix = '/' + segment + '/';
+        pageUrl = external.origin + prefix.slice(0, -1) + pagePath(route.file);
       } else {
         canonical ??= await serve(plan.rootDir);
         pageUrl = canonical.origin + pagePath(fromStaticRoot);
       }
       const queryIndex = route.path.indexOf('?');
       const query = queryIndex < 0 ? '' : route.path.slice(queryIndex);
-      targets.push({...route, pageUrl: pageUrl + query});
+      pageUrl += query;
+      const html = readFileSync(join(root, route.file), 'utf8');
+      const lighthouseOmission = await staticDocumentOmission(html, pageUrl, prefix);
+      targets.push(lighthouseOmission ? {...route, page: false, lighthouseOmission} : {...route, pageUrl});
     }
     return {origin: http.origin, close, targets};
   } catch (error) {
@@ -753,7 +872,7 @@ export async function collectPerformance(root = REPO_ROOT, mode = process.env.PE
     }
     try {
       for (const route of http.targets.filter(route => !route.page)) {
-        coverage.push(routeCoverage(route.path, 'fora da seleção de páginas do Lighthouse CI'));
+        coverage.push(routeCoverage(route.path, route.lighthouseOmission ?? 'fora da seleção de páginas do Lighthouse CI'));
       }
       const lighthouse = await runLighthouseCi({origin: http.origin, routes: http.targets.filter(route => route.page),
         chromePath: findChrome(), thresholds, version: versions.lhci});

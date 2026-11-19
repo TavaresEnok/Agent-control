@@ -8,6 +8,8 @@ import {fileURLToPath} from 'node:url';
 // @ts-expect-error The collector modules are native JavaScript.
 import {publishMutation, publishProperties} from '../deploy/modules/qa/mutacao-linguagens/report.mjs';
 // @ts-expect-error The collector modules are native JavaScript.
+import {decodeGoSuite, decodePythonSuite, summarizeProperties} from '../deploy/modules/qa/mutacao-linguagens/measurement.mjs';
+// @ts-expect-error The collector modules are native JavaScript.
 import {verifyQaLockfiles} from '../deploy/modules/qa/verify-lock.mjs';
 
 type Row = {tool: string; version: string; status: string; detail: string};
@@ -113,6 +115,20 @@ test('publica mutações medidas e separa compilação do mutante, referência r
   assert.equal(interrupted.coverageRow.status, 'failed');
   assert.match(interrupted.coverageRow.detail, /falha operacional/);
   assert.deepEqual(interrupted.findings, []);
+
+  const packageName = 'qa.local/arithmetic';
+  const operationalBuild = decodeGoSuite({code: 1, diagnostics: '', output: [
+    {Action: 'build-output', ImportPath: packageName, Output: 'go: fork/exec compile: resource temporarily unavailable\n'},
+    {Action: 'build-fail', ImportPath: packageName},
+    {Action: 'fail', Package: packageName, FailedBuild: packageName},
+  ].map(event => JSON.stringify(event)).join('\n')}, new Set([packageName]));
+  const operational = publishMutation({
+    ...report, status: 'not-run', killed: 0, survived: 0, notRun: 1, candidates: 1,
+    mutants: [{...edit, status: 'not-run', ...operationalBuild}],
+  }, row, pathLabel);
+  assert.equal(operational.coverageRow.status, 'failed');
+  assert.equal(operational.extraRows[0].status, 'failed');
+  assert.match(operational.extraRows[0].detail, /falha operacional na compilação Go/);
 });
 
 test('propriedades publicam evidência limitada e preservam falsificação durante falha operacional', () => {
@@ -138,6 +154,19 @@ test('propriedades publicam evidência limitada e preservam falsificação duran
   const terminal = publishProperties({...report, status: 'not-run', properties: []}, row, pathLabel);
   assert.equal(terminal.coverageRow.status, 'failed');
   assert.deepEqual(terminal.findings, []);
+
+  const interrupted = summarizeProperties(decodePythonSuite({code: 0, output: JSON.stringify({
+    exitCode: 2, limited: false, unavailable: false, tests: [
+      {...property, property: true, status: 'failed'},
+      {...property, property: true, status: 'pending', id: 'b'.repeat(64), examples: 3},
+    ],
+  })}, [property.file], true));
+  const preserved = publishProperties({...interrupted, tool: report.tool, version: report.version, seed: report.seed}, row, pathLabel);
+  assert.equal(preserved.coverageRow.status, 'ok');
+  assert.match(preserved.coverageRow.detail, /medição parcial.*1\/2 propriedades medidas.*4 chamadas/);
+  assert.equal(preserved.extraRows[0].status, 'failed');
+  assert.equal(preserved.findings.length, 1);
+  assert.equal(preserved.findings[0].rule, 'QA-PROPRIEDADE-FALSIFICADA');
 });
 
 test('lock novo verifica integridade Python e Go e o Dockerfile usa os três estágios', () => {

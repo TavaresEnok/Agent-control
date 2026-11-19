@@ -13,6 +13,9 @@ RUN python3 /tmp/fetch-tools.py
 WORKDIR /tmp/tools
 RUN sha256sum -c checksums.txt \
  && python3 /tmp/install-tools.py
+WORKDIR /opt/prontidao
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
 
 # hadolint ignore=DL3029
 FROM --platform=linux/amd64 node@sha256:68c76cfad89921b927eae28ba21407475e29d0ce450afcdbe70c1532db042b64
@@ -43,6 +46,7 @@ RUN apt-get update \
  && chmod 0755 /repo /opt/prontidao /opt/testssl
 COPY --from=tools /usr/local/bin/gitleaks /usr/local/bin/hadolint /usr/local/bin/trivy /usr/local/bin/
 COPY --from=tools /opt/testssl/ /opt/testssl/
+COPY --from=tools /opt/prontidao/node_modules/ /opt/prontidao/node_modules/
 RUN ln -sf /opt/testssl/testssl.sh /usr/local/bin/testssl.sh
 COPY tools.lock.json /opt/prontidao/tools.lock.json
 COPY audit-readiness.mjs /opt/prontidao/audit-readiness.mjs

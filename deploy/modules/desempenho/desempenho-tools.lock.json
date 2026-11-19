@@ -6,7 +6,7 @@
     "sourceUrl": "https://mcr.microsoft.com/v2/playwright/manifests/v1.65.1-noble",
     "note": "Mesma imagem base fixada por digest usada em deploy/Dockerfile.design (Ubuntu 24.04 Noble com Node.js e Chromium em /ms-playwright)."
   },
-  "packageLockSha256": "0b0098a015db926313cc9fa16e81631e73ba3bed72e14248eddff57797a5217c",
+  "packageLockSha256": "29fcab906eeb566fb1d869f472d0eb5b9ac561fd64d4eb3233a56fefe5f1898e",
   "npmDependencies": {
     "@lhci/cli": {
       "version": "0.16.1",
@@ -17,6 +17,10 @@
       "version": "13.6.0",
       "integrity": "sha512-2/HUPUpQyGm01VEgYCUjSlNZY7Zkhk1v3QI4c7UTbnaoRB7HF0qYMPzzaiidNf5iqw5wnmtm9LpGawKKqCfLmg==",
       "resolved": "https://registry.npmjs.org/lighthouse/-/lighthouse-13.6.0.tgz"
+    },
+    "parse5": {
+      "version": "7.3.0",
+      "integrity": "sha512-IInvU7fabl34qmi9gY8XOVxhYyMyuH2xUNpb2q8/Y+7552KlejkRvqvD19nMoUW/uQGGbqNpA6Tufu5FL5BZgw=="
     },
     "pg": {
       "version": "8.23.1",

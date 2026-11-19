@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {PassThrough} from 'node:stream';
@@ -8,7 +8,7 @@ import {test, type TestContext} from 'node:test';
 import {fileURLToPath} from 'node:url';
 
 const {
-  collectLanguageSuite, decodeGoPass, decodePythonPass, loadLanguageSnapshot, measureLanguageSuite,
+  collectLanguageSuite, decodeGoPass, decodePythonPass, executeLanguagePass, loadLanguageSnapshot, measureLanguageSuite,
   prepareGoTestBudget, readGoCaseLocations, runLanguageProcess, selectLanguageSuite,
 } = await import(new URL('../deploy/modules/qa/language-tests.mjs', import.meta.url).href);
 
@@ -33,7 +33,7 @@ test('cada área de trabalho restaura os mesmos fontes e dados Git', t => {
     'test_arithmetic.py': 'from arithmetic import TOTAL\n',
     'testdata/total.txt': '20\n',
     'testdata/.empty': '',
-    '.env': 'placeholder',
+    '.git/HEAD': 'metadado sintético',
   });
   const parent = fixture(t, {});
   const snapshot = loadLanguageSnapshot(repo);
@@ -53,6 +53,23 @@ test('cada área de trabalho restaura os mesmos fontes e dados Git', t => {
 
   writeFileSync(join(repo, 'testdata/unsized.txt'), Buffer.alloc(1024 * 1024 + 1));
   assert.match(loadLanguageSnapshot(repo).reason, /escopo parcial/);
+});
+
+test('insumos protegidos na árvore tornam o snapshot parcial e impedem materialização', t => {
+  for (const protectedFile of [
+    'tests/fixtures/auth.json', 'testdata/build/quantity.txt', '.env.test', 'testdata/signing.PEM', '.docker/config.json',
+    '.envrc', 'fixtures/SERVICE-ACCOUNT.json', 'config/service-account-build.json',
+  ]) {
+    const repo = fixture(t, {
+      'test_arithmetic.py': 'import unittest\n',
+      'go.mod': 'module example.invalid/qa\n',
+      'total_test.go': 'package total\n',
+      [protectedFile]: 'placeholder sintético',
+    });
+    assert.deepEqual(loadLanguageSnapshot(repo), {
+      reason: 'escopo parcial por insumos omitidos pela proteção do snapshot',
+    });
+  }
 });
 
 test('a chamada atual do coletor ainda respeita o bloqueio de execução no host', async t => {
@@ -110,7 +127,13 @@ class GrossTests(unittest.TestCase):
     'local_package/__init__.py': '',
     'test_style.py': 'def testControl():\n    assert 2 + 2 == 4\n',
     'test_style_class.py': 'class TestArithmetic:\n    def test_control(self):\n        assert 2 + 2 == 4\n',
-    'test_style_missing.py': 'import pytest\n',
+    'test_pytest_helper.py': `import unittest
+from pytest import raises
+class UnitWithHelper(unittest.TestCase):
+    def test_value(self):
+        with raises(ValueError):
+            int("fixture")
+`,
   });
   const profile = join(root, 'coverage.json');
   const plan = join(root, 'plan.json');
@@ -131,16 +154,27 @@ class GrossTests(unittest.TestCase):
   ]);
   assert.deepEqual(measured.coverage, {files: 1, statements: [2, 2], branches: [0, 0]});
 
-  const pytestFiles = ['test_style.py', 'test_style_class.py', 'test_style_missing.py'];
+  const helperFiles = ['test_pytest_helper.py'];
+  const missingHelper = await execute(helperFiles);
+  assert.equal(missingHelper.unavailable, 1);
+  assert.equal(missingHelper.unsupported, 0);
+  assert.equal(missingHelper.errors, 0);
+  assert.deepEqual(missingHelper.tests, []);
+  const helperSuite = await measureLanguageSuite('python', selectLanguageSuite('python', helperFiles, false), async () => missingHelper);
+  assert.equal(helperSuite.coverageRow.status, 'skipped');
+  assert.match(helperSuite.coverageRow.detail, /dependência indisponível/);
+  assert.doesNotMatch(helperSuite.coverageRow.detail, /formato pytest/);
+
+  const pytestFiles = ['test_style.py', 'test_style_class.py'];
   const pytest = await execute(pytestFiles);
-  assert.equal(pytest.unsupported, 3);
+  assert.equal(pytest.unsupported, 2);
   assert.equal(pytest.unavailable, 0);
   assert.deepEqual(pytest.tests, []);
   assert.equal(pytest.coverage, null);
   const suite = await measureLanguageSuite('python', selectLanguageSuite('python', pytestFiles, false), async () => pytest);
   assert.equal(suite.coverageRow.status, 'skipped');
   assert.match(suite.coverageRow.detail, /formato pytest não suportado/);
-  assert.match(suite.extraRows[0].detail, /3 arquivos com formato pytest não suportado/);
+  assert.match(suite.extraRows[0].detail, /2 arquivos com formato pytest não suportado/);
 
   const mixedFiles = ['test_arithmetic.py', 'test_style.py'];
   const mixed = await execute(mixedFiles);
@@ -155,7 +189,8 @@ const moduleName = 'example.invalid/qa/total';
 
 test('Go identifica a oscilação de subtestes mesmo com o pai sempre reprovado', async () => {
   const selection = selectLanguageSuite('go', ['go.mod', 'one_test.go', 'two_test.go'], false);
-  const locations = new Map([[`${moduleName}\0TestΣ_1`, {file: 'two_test.go', line: 7}]]);
+  const locations = new Map(['TestΣ_1', 'TestΣ_1/A::10/mínimo#01', 'TestΣ_1/B+10'].map(name =>
+    [`${moduleName}\0${name}`, {file: 'two_test.go', line: 7}]));
   let pass = 0;
   const result = await measureLanguageSuite('go', selection, async () => {
     const events = [
@@ -174,11 +209,131 @@ test('Go identifica a oscilação de subtestes mesmo com o pai sempre reprovado'
   assert.match(oscillating[1].message, /B\+10/);
 });
 
-const go = process.env.QA_R2_TEST_GO ?? '/usr/local/go/bin/go';
+test('Go mantém resultados do pacote e a cobertura quando falta a origem do caso', async () => {
+  const selection = selectLanguageSuite('go', ['go.mod', 'total.go', 'one_test.go'], false);
+  const profile = `mode: set\n${moduleName}/total.go:1.1,2.1 2 1\n`;
+  const decode = (code: number, events: {Action: string; Test?: string}[], locations = new Map()) => decodeGoPass({
+    code, output: events.map(event => JSON.stringify({Package: moduleName, ...event})).join('\n'), diagnostics: '',
+  }, profile, selection, moduleName, locations);
+  const failed = decode(1, [{Action: 'fail', Test: 'TestBusiness'}, {Action: 'fail'}]);
+  assert.equal(failed.tests[0].file, null);
+  assert.equal(failed.tests[0].line, null);
+  assert.deepEqual(failed.coverage, {files: 1, statements: [2, 2]});
+  const complete = await measureLanguageSuite('go', selection, async () => failed);
+  assert.equal(complete.coverageRow.status, 'ok');
+  assert.match(complete.coverageRow.detail, /1 caso com falha ou oscilação/);
+  assert.deepEqual(complete.findings, []);
+  assert.match(complete.extraRows[4].detail,
+    /pacote Go "example\.invalid\/qa\/total"; 1 caso com falha ou oscilação sem arquivo identificado; reprovações por execução \(1: 1, 2: 1, 3: 1\)/);
 
-test('Go 1.27.4 usa o dado de embed, atribui arquivos e nega a entrada ao 201º caso', {
+  const approved = decode(0, [{Action: 'pass', Test: 'TestBusiness'}, {Action: 'pass'}]);
+  const interrupted = decode(1, [
+    {Action: 'fail', Test: 'TestPartial'}, {Action: 'run', Test: 'TestInterrupted'}, {Action: 'fail'},
+  ]);
+  const passes = [failed, approved, interrupted];
+  const partial = await measureLanguageSuite('go', selection, async () => passes.shift());
+  assert.equal(partial.coverageRow.status, 'failed');
+  assert.match(partial.coverageRow.detail, /erro na execução; 2 casos com falha ou oscilação/);
+  assert.deepEqual(partial.findings, []);
+  assert.equal(partial.extraRows[3].status, 'skipped');
+  assert.match(partial.extraRows[3].detail, /escopo parcial.*3: statements 2\/2/);
+  assert.equal(partial.extraRows[4].tool, complete.extraRows[4].tool);
+  assert.match(partial.extraRows[4].detail, /2 casos.*reprovações por execução \(1: 1, 2: 0, 3: 1 \(parcial\)\)/);
+
+  const located = decode(0, [{Action: 'pass', Test: 'TestBusiness'}, {Action: 'pass'}],
+    new Map([[`${moduleName}\0TestBusiness`, {file: 'one_test.go', line: 7}]]));
+  const mixed = [located, failed, located];
+  const inconsistent = await measureLanguageSuite('go', selection, async () => mixed.shift());
+  assert.match(inconsistent.coverageRow.detail, /1 caso com falha ou oscilação; atribuição parcial/);
+  assert.deepEqual(inconsistent.findings, []);
+  assert.match(inconsistent.extraRows[4].detail, /1 caso.*reprovações por execução \(1: 0, 2: 1, 3: 0\)/);
+});
+
+const go = process.env.QA_R2_TEST_GO ?? '/usr/local/go/bin/go';
+const incompatibleGo = process.env.QA_R3_TEST_GO_INCOMPATIBLE ?? '/usr/lib/go-1.22/bin/go';
+const lock = JSON.parse(readFileSync(new URL('../deploy/modules/qa/qa-tools.lock.json', import.meta.url), 'utf8'));
+const expectedGoVersion = `go${lock.languageRuntimes.go.version}`;
+
+async function assertGoVersion(t: TestContext, binary: string, expected: string) {
+  const cwd = fixture(t, {});
+  const result = await runLanguageProcess(binary, ['env', 'GOVERSION'], cwd, {
+    timeoutMs: 10_000, env: {HOME: cwd, GOENV: 'off', GOTOOLCHAIN: 'local'},
+  });
+  assert.equal(result.code, 0, result.diagnostics);
+  assert.equal(result.output.trim(), expected);
+}
+
+async function assertRejectedGoVersion(binary: string) {
+  const snapshot = {copyTo() { assert.fail('a versão incompatível deve parar antes da cópia'); }};
+  const selection = selectLanguageSuite('go', ['go.mod', 'total_test.go'], false);
+  const pass = await executeLanguagePass('go', snapshot, selection, binary);
+  assert.deepEqual(pass, {tests: [], unavailable: 1, errors: 0, coverage: null, fixtureSkips: 0,
+    reason: 'versão Go fixada indisponível'});
+}
+
+test('o adaptador exige a versão Go fixada por inteiro', async t => {
+  const root = fixture(t, {
+    'go': `#!/bin/sh\nprintf '%s\\n' '${expectedGoVersion}0'\n`,
+  });
+  const binary = join(root, 'go');
+  chmodSync(binary, 0o700);
+  await assertGoVersion(t, binary, `${expectedGoVersion}0`);
+  await assertRejectedGoVersion(binary);
+});
+
+test('o adaptador exige que a consulta de GOVERSION termine com sucesso', async t => {
+  const root = fixture(t, {
+    'go': `#!/bin/sh\nprintf '%s\\n' '${expectedGoVersion}'\nexit 1\n`,
+  });
+  const binary = join(root, 'go');
+  chmodSync(binary, 0o700);
+  await assertRejectedGoVersion(binary);
+});
+
+test('o adaptador recusa um executável Go real de versão incompatível', {
+  skip: !existsSync(incompatibleGo),
+}, async t => {
+  await assertGoVersion(t, incompatibleGo, 'go1.22.2');
+  await assertRejectedGoVersion(incompatibleGo);
+});
+
+test('o Go fixado mede por pacote um subteste sem recibo de arquivo de teste', {
+  skip: !existsSync(go), timeout: 45_000,
+}, async t => {
+  await assertGoVersion(t, go, expectedGoVersion);
+  const repo = fixture(t, {
+    'go.mod': `module ${moduleName}\n\ngo 1.27\n`,
+    'quantity.go': `package total
+import "testing"
+func checkQuantity(t *testing.T) { t.Error("quantidade diferente") }
+`,
+    'quantity_test.go': `package total
+import "testing"
+func TestQuantity(t *testing.T) { t.Run("valor", checkQuantity) }
+`,
+  });
+  const snapshot = loadLanguageSnapshot(repo);
+  const selection = selectLanguageSuite('go', snapshot.files, false);
+  const pass = await executeLanguagePass('go', snapshot, selection, go);
+  assert.equal(pass.errors, 0);
+  assert.equal(pass.unavailable, 0);
+  assert.deepEqual(pass.tests.map(({file, line, name, status}: {file: string | null; line: number | null; name: string; status: string}) =>
+    [file, line, name, status]), [
+    [null, null, `${moduleName}.TestQuantity/valor`, 'failed'],
+    ['quantity_test.go', 3, `${moduleName}.TestQuantity`, 'failed'],
+  ]);
+  assert.deepEqual(pass.coverage, {files: 1, statements: [1, 1]});
+  const suite = await measureLanguageSuite('go', selection, async () => pass);
+  assert.equal(suite.findings.length, 1);
+  assert.match(suite.findings[0].message, /Teste '.*\.TestQuantity' falhou/);
+  assert.match(suite.extraRows[4].detail, /1 caso com falha ou oscilação sem arquivo identificado.*\(1: 1, 2: 1, 3: 1\)/);
+});
+
+test('Go fixado usa o dado de embed, atribui arquivos e nega a entrada ao 201º caso', {
   skip: !existsSync(go), timeout: 100_000,
 }, async t => {
+  await assertGoVersion(t, go, expectedGoVersion);
+  const scratch = fixture(t, {});
   const original = fixture(t, {
     'go.mod': `module ${moduleName}\n\ngo 1.27\n`,
     'total.go': `package total
@@ -198,6 +353,9 @@ func TestΣ(t *testing.T) {
 func ExampleQuantity() {
     fmt.Print(Quantity())
     // Output: 20
+}
+func TestWrongQuantity(t *testing.T) {
+    if Quantity() != "21\\n" { t.Fatal("quantidade diferente") }
 }
 `,
     'two_test.go': `package total
@@ -220,12 +378,9 @@ func TestAnotherPackage(t *testing.T) {
 }
 `,
   });
-  const scratch = fixture(t, {});
   const snapshot = loadLanguageSnapshot(original);
   const cwd = join(scratch, 'project');
   snapshot.copyTo(cwd);
-  const version = await runLanguageProcess(go, ['version'], cwd, {env: {GOTOOLCHAIN: 'local'}});
-  assert.match(version.output, /go1\.27\.4\b/);
   const selection = selectLanguageSuite('go', snapshot.files, false);
   const cache = join(scratch, 'go-cache');
 
@@ -254,6 +409,14 @@ func TestAnotherPackage(t *testing.T) {
   ]);
   assert.equal(report.unattributed, 0);
   assert.deepEqual(report.coverage, {files: 1, statements: [1, 1]});
+
+  const failed = await execute('failed', '^TestWrongQuantity$');
+  assert.equal(failed.result.code, 1, failed.result.diagnostics || failed.result.output);
+  const noLocation = decodeGoPass(failed.result, null, selection, moduleName);
+  assert.equal(noLocation.errors, 0);
+  assert.equal(noLocation.tests[0].file, null);
+  assert.equal(noLocation.tests[0].package, moduleName);
+  assert.equal(noLocation.tests[0].status, 'failed');
 
   const full = await execute('full', '^TestCap$');
   assert.equal(full.result.code, 0, full.result.diagnostics || full.result.output);

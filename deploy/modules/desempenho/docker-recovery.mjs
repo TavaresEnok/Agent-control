@@ -128,8 +128,7 @@ class RecoveryRun {
       await file.writeFile(JSON.stringify(this.state));
       await file.sync();
     } finally { await file.close(); }
-    await rename(next, anchored(this.directory, 'state.json'));
-    await this.directory.sync();
+    await publishState(this.directory);
     this.dirty = false;
   }
 
@@ -146,7 +145,9 @@ class RecoveryRun {
       throw new Error('reserva Docker inválida');
     }
     try {
-      await this.record(name, false);
+      // Se o cliente parar antes de gravar sua resposta, o nome sozinho
+      // não distingue a criação original de um substituto.
+      await this.record(name, null);
     } catch (error) {
       // A reserva pode estar visível após o rename, mas nenhum comando saiu.
       try { await this.record(name); }
@@ -169,13 +170,15 @@ class RecoveryRun {
     let inspected;
     try { inspected = await docker(['container', 'inspect', '--format', format, reference], options); }
     catch (error) {
-      if (error?.code === 1 && /no such (?:container|object)\b/i.test(error.stderr ?? '')) return null;
+      if (error?.code === 1 && !error.stdout?.trim() && /no such (?:container|object)\b/i.test(error.stderr ?? '')) return null;
       throw error;
     }
     const [id, owner, extra] = inspected.split(' ');
     if (owner !== this.state.owner || extra !== undefined || !containerId.test(id) ||
         (containerId.test(reference) && reference !== id)) {
-      throw new Error('propriedade Docker sem confirmação');
+      const error = new Error('propriedade Docker sem confirmação');
+      if (containerId.test(id)) error.containerId = id;
+      throw error;
     }
     return id;
   }
@@ -193,6 +196,27 @@ class RecoveryRun {
     const id = error?.stdout?.trim();
     if (id && containerId.test(id)) await this.record(name, {id});
     else if (creationRefused(error)) await this.record(name);
+    else if (!id || /^[a-f0-9]{1,63}$/.test(id)) await this.record(name, false);
+  }
+
+  async inspectByName(docker, name, recorded, options) {
+    // A resolução por nome também pode produzir um ID que precisa sobreviver
+    // a uma interrupção da gravação. Arme a mesma proteção antes da consulta.
+    try { await this.record(name, null); }
+    catch (error) {
+      // A consulta não saiu. Uma nova tentativa ainda pode usar o nome.
+      this.state.resources[name] = recorded;
+      throw error;
+    }
+    let id;
+    try { id = await this.ownedContainer(docker, name, options); }
+    catch (error) {
+      const candidate = error.containerId ?? error.stdout?.trim().split(' ', 1)[0];
+      await this.record(name, containerId.test(candidate) ? {id: candidate} : recorded);
+      throw error;
+    }
+    if (!id && recorded === false) await this.record(name, false);
+    return id;
   }
 
   async clean(docker, {attempts = 1, signal} = {}) {
@@ -207,9 +231,10 @@ class RecoveryRun {
         signal?.throwIfAborted();
         try {
           const recorded = this.state.resources[name];
-          if (recorded === undefined) break;
-          const reference = typeof recorded === 'string' ? recorded : recorded?.id ?? name;
-          const id = await this.ownedContainer(docker, reference, options);
+          if (recorded === undefined || recorded === null) break;
+          const id = typeof recorded === 'boolean'
+            ? await this.inspectByName(docker, name, recorded, options)
+            : await this.ownedContainer(docker, typeof recorded === 'string' ? recorded : recorded.id, options);
           if (id) {
             if (id !== recorded) await this.record(name, id);
             else if (this.dirty) await this.save();
@@ -278,8 +303,13 @@ export async function openPerformanceRecoveryRun(name, recoveryDirectory) {
   }
 }
 
-async function readState(directory, name) {
-  const file = await open(anchored(directory, 'state.json'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+async function publishState(directory) {
+  await rename(anchored(directory, 'state.next'), anchored(directory, 'state.json'));
+  await directory.sync();
+}
+
+async function readState(directory, name, filename) {
+  const file = await open(anchored(directory, filename), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await file.stat();
     if (!info.isFile() || info.size > 4096) throw new Error('registro Docker inválido');
@@ -288,7 +318,7 @@ async function readState(directory, name) {
         Array.isArray(state.resources) ||
         Object.entries(state.resources).some(([key, value]) => {
           if (key === legacyVolume(name)) return typeof value !== 'boolean';
-          return !isContainerName(name, key) || !(typeof value === 'boolean' ||
+          return !isContainerName(name, key) || !(value === null || typeof value === 'boolean' ||
             (typeof value === 'string' && containerId.test(value)) ||
             (value && typeof value === 'object' && Object.keys(value).length === 1 &&
               typeof value.id === 'string' && containerId.test(value.id)));
@@ -297,6 +327,40 @@ async function readState(directory, name) {
     }
     return state;
   } finally { await file.close(); }
+}
+
+async function readRecoveryRun(registry, directory, name) {
+  const state = await readState(directory, name, 'state.json');
+  const run = new RecoveryRun(registry, directory, name, state);
+  let staged;
+  try { staged = await readState(directory, name, 'state.next'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return run;
+    // Um diário antigo pode ter sido interrompido antes de salvar um ID.
+    // Com uma escrita ilegível, suspenda a busca por nome dessas entradas.
+    for (const [key, value] of Object.entries(state.resources)) {
+      if (isContainerName(name, key) && typeof value === 'boolean') {
+        state.resources[key] = null;
+        run.dirty = true;
+      }
+    }
+    return run;
+  }
+  if (staged.owner !== state.owner) throw new Error('proprietário divergente no registro Docker pendente');
+  for (const [key, value] of Object.entries(state.resources)) {
+    const candidate = staged.resources[key];
+    if (!isContainerName(name, key) || candidate === undefined) continue;
+    const id = typeof value === 'string' ? value : value?.id;
+    const stagedId = typeof candidate === 'string' ? candidate : candidate?.id;
+    if (id && id !== stagedId) {
+      throw new Error('identidade divergente no registro Docker pendente');
+    }
+  }
+  // Complete a publicação sem truncar a única cópia de uma identidade nova.
+  const file = await open(anchored(directory, 'state.next'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try { await file.sync(); } finally { await file.close(); }
+  await publishState(directory);
+  return new RecoveryRun(registry, directory, name, staged);
 }
 
 /** Uma passagem no registro local. Use o mesmo diretório privado de runPerformanceModule. */
@@ -316,8 +380,7 @@ export async function reconcilePerformanceResources({recoveryDirectory, signal} 
         directory = await privateDirectory(anchored(registry, name));
         if (!await tryLock(directory)) { result.active++; continue; }
         // Outro reconciliador pode ter apagado o diretório antes da aquisição.
-        const state = await readState(directory, name);
-        const run = new RecoveryRun(registry, directory, name, state);
+        const run = await readRecoveryRun(registry, directory, name);
         await run.clean(docker, {signal});
         await run.finish();
         if (run.pending) result.pending++;

@@ -176,6 +176,7 @@ function openDirectoryChain(root, path, create = false) {
 /**
  * Copia apenas arquivos regulares e diretórios seguros de sourceRoot para destRoot,
  * ignorando symlinks, sockets, dispositivos, diretórios de build/vendor e arquivos > 2 MiB.
+ * Se houver stoppedAt, skipped descreve apenas as omissões conhecidas antes dessa entrada.
  */
 export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   const maxFiles = opts.maxFiles ?? MAX_COPY_FILES;
@@ -1201,7 +1202,8 @@ function snapshotCoverage({copiedFiles, skipped, stoppedAt, failure}) {
       detail: `copiados=${copiedFiles.length}; entradas_omitidas_conhecidas=${skipped.length}; ` +
         `limite_arquivos=${MAX_COPY_FILES}; limite_bytes_por_arquivo=${MAX_FILE_BYTES}; ` +
         `cobertura_parcial=${incomplete ? 'sim' : 'nao'}; ${coverageLimit(skipped.length, listed.length)}` +
-        (stoppedAt ? `; limite_arquivos_atingido_em=${JSON.stringify(stoppedAt)}; restante_nao_inventariado=sim` : '') +
+        (stoppedAt ? `; limite_arquivos_atingido_em=${JSON.stringify(stoppedAt)}; restante_nao_inventariado=sim; ` +
+          'fora_do_inventario=entrada_do_corte_e_restante_da_travessia' : '') +
         (failure ? `; falha_copia=${failure.code}; arquivo=${JSON.stringify(failure.file)}; analise_interrompida=sim; restante_nao_inventariado=sim` : ''),
     },
     ...listed.map(({file, reason}) => ({
