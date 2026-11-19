@@ -1,0 +1,5 @@
+# QA, símbolos JavaScript e origem das funções
+
+Corrija a identificação de funções exportadas com nomes JavaScript válidos, incluindo $ e Unicode. Reconheça importações por namespace e a distinção entre nome da função, valor literal e arquivo qualificado no requisito. Não conte um argumento de mensagem de assert como medição de função. Cada controle positivo deve indicar caminho e execução em três passadas na saída pública, inclusive os nomes com espaço e com percentual literal. Verifique os controles negativos.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-R9.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

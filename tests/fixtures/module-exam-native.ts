@@ -108,7 +108,7 @@ type Answer = Parameters<typeof fakeDocker>[1];
 export function moduleExamFixtureAnswer(launch: Launch): ReturnType<Answer> {
   const task = JSON.parse(launch.task);
   if (launch.provider === 'claude') {
-    return {failureCode: null, output: JSON.stringify({kind: 'exame', filesRead: [task.file],
+    return {failureCode: null, output: JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file],
       checklist: [task.module], routesReviewed: [], findings: []})};
   }
   if (!task.criterion) return {failureCode: null, output: JSON.stringify({kind: 'confirmacao', status: 'provavel',

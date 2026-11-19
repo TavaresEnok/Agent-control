@@ -9,6 +9,7 @@ import sys
 import unittest
 
 sys.path.append("/opt/qa-coverage")
+sys.path.append("/opt/qa-tools/mutacao-linguagens/python-deps")
 from coverage import Coverage
 from coverage.exceptions import CoverageException
 
@@ -108,8 +109,7 @@ def has_pytest_cases(module):
 
 def run(plan, report_path):
     root = Path.cwd()
-    deps = Path(__file__).resolve().parent / "mutacao-linguagens" / "python-deps"
-    sys.path.extend([str(root), str(root / "src"), str(deps)])
+    sys.path.extend([str(root), str(root / "src")])
     result = Result({})
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
@@ -141,12 +141,10 @@ def run(plan, report_path):
                     return {"limited": True}
                 result.cases[file, "módulo"] = "skipped"
             except ModuleNotFoundError as error:
-                if not discovery_dependency(error, root):
-                    result.errors += 1
-                elif error.name == "pytest":
-                    result.unsupported += 1
-                else:
+                if discovery_dependency(error, root):
                     result.unavailable += 1
+                else:
+                    result.errors += 1
             except Exception:
                 result.errors += 1
         suite.run(result)
