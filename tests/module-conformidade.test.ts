@@ -264,7 +264,8 @@ for text, file, expected in (
                   int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
                  for row in output["findings"] if row["rule"].startswith("PII_POSSIBLE_")]
     assert locations == expected, locations
-    assert output["coverage"][0]["status"] == "ok", output["coverage"]
+    assert output["coverage"][0]["status"] == "failed", output["coverage"]
+    assert "resultados de chamadas sem vínculo estático" in output["coverage"][0]["detail"]
     assert not re.search(r"SYNTHETIC_MARKER|syntheticRow|logger\.info", json.dumps(output))
 `);
 });
@@ -322,7 +323,12 @@ report = Report()
 with patch("lgpd_analyzer.create_presidio", return_value=recognizer):
     inspect_privacy(selected, "2.2.366", report)
 output = report.output()
-assert not report.has_errors, output["coverage"]
+coverage = {row["detail"].split(" | ")[0]: row for row in output["coverage"]
+            if row["tool"] == "lgpd-static:file"}
+for file in ("operations.js", "operations.py"):
+    assert coverage[file]["status"] == "failed", coverage[file]
+    assert "resultados de chamadas sem vínculo estático" in coverage[file]["detail"], coverage[file]
+assert coverage["writes.ts"]["status"] == "ok", coverage["writes.ts"]
 for file, locations in expected.items():
     destinations = [
         [row["rule"].removeprefix("PII_POSSIBLE_"), row["line"],
@@ -892,6 +898,196 @@ with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b"
         assert coverage["status"] == "failed", (file, coverage)
         assert all(reason in coverage["detail"] for reason in reasons), (file, coverage)
         assert not re.search(r"C9_NEUTRAL|quartzSignal|amberSignal|mockRow|mock_row", json.dumps(output)), file
+`);
+});
+
+test('C9 atribui origens após aliases de método, argumentos padrão, junções e curto-circuito', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields, javascript_destinations
+
+cases = [
+    ("methods.ts", '''let emit = logger.info;
+let store = localStorage.setItem;
+const hooks = {stopLog() { emit = () => {}; }, stopStore() { store = () => {}; }};
+function run() {
+  const receiver = hooks;
+  receiver.stopLog();
+  const detached = receiver.stopStore;
+  detached();
+}
+run();
+emit(mockRow.quartzSignal);
+store("C9_NEUTRAL", mockRow.quartzSignal);
+logger.info(mockRow.amberSignal);''',
+     [("LOG", 13, 13)], ("vínculos externos a funções",)),
+    ("methods.py", '''emit = print
+store = cursor.execute
+def stop_log():
+    global emit
+    emit = lambda *items: None
+def stop_store():
+    global store
+    store = lambda *items: None
+hooks = {"stop_log": stop_log, "stop_store": stop_store}
+def run():
+    receiver = hooks
+    receiver["stop_log"]()
+    detached = receiver["stop_store"]
+    detached()
+run()
+emit(mock_row.quartzSignal)
+store("INSERT INTO sample VALUES (?)", [mock_row.quartzSignal])
+print(mock_row.amberSignal)''',
+     [("LOG", 18, 18)], ("vínculos externos a funções",)),
+    ("bound.py", '''receiver = [mock_row.quartzSignal]
+saved = receiver[0]
+reset = receiver.clear
+reset()
+print(receiver[0])
+print(saved)''',
+     [("LOG", 6, 1)], ("mutações de propriedades",)),
+    ("dynamic.ts", '''let emit = logger.info;
+const callbacks = {reset() { emit = () => {}; }};
+callbacks[selector]();
+emit(mockRow.quartzSignal);
+logger.info(mockRow.amberSignal);''',
+     [("LOG", 5, 5)], ("leituras de propriedades sem chave estática", "vínculos externos a funções")),
+    ("dynamic.py", '''emit = print
+def reset():
+    global emit
+    emit = lambda *items: None
+callbacks = {"reset": reset}
+callbacks[selector]()
+emit(mock_row.quartzSignal)
+print(mock_row.amberSignal)''',
+     [("LOG", 8, 8)], ("leituras de propriedades sem chave estática", "vínculos externos a funções")),
+    ("defaults.ts", '''let tray = {slot: mockRow.quartzSignal};
+const before = tray;
+function clear(target = tray) { const alias = target; alias.slot = "C9_NEUTRAL"; }
+clear({slot: "C9_NEUTRAL"});
+logger.info(before.slot);
+tray = {slot: mockRow.amberSignal};
+const saved = tray.slot;
+function run() { clear(); }
+run();
+logger.info(tray.slot);
+logger.info(before.slot);
+localStorage.setItem("C9_NEUTRAL", saved);''',
+     [("LOG", 5, 1), ("LOG", 11, 1), ("STORAGE", 12, 6)], ("mutações de propriedades",)),
+    ("defaults.py", '''tray = {"slot": mock_row.quartzSignal}
+before = tray
+def clear(*, target=tray):
+    alias = target
+    alias["slot"] = "C9_NEUTRAL"
+clear(target={"slot": "C9_NEUTRAL"})
+print(before["slot"])
+tray = {"slot": mock_row.amberSignal}
+saved = before["slot"]
+def run(): clear()
+run()
+print(before["slot"])
+print(tray["slot"])
+cursor.execute("INSERT INTO sample VALUES (?)", [saved])''',
+     [("LOG", 7, 1), ("LOG", 13, 8), ("STORAGE", 14, 1)], ("mutações de propriedades",)),
+    ("default-initializer.ts", '''let emit = logger.info;
+function configure(value = (emit = () => {})) {}
+configure(null);
+emit(mockRow.quartzSignal);
+configure(undefined);
+emit(mockRow.amberSignal);''',
+     [("LOG", 4, 4)], ("vínculos externos a funções",)),
+    ("join-identity.ts", '''const tray = {slot: mockRow.quartzSignal};
+const chosen = flag ? tray : tray;
+logger.info(chosen.slot);
+let alias;
+if (flag) { alias = chosen; } else { alias = tray; }
+localStorage.setItem("C9_NEUTRAL", alias.slot);
+chosen.slot = "C9_NEUTRAL";
+logger.info(alias.slot);''',
+     [("LOG", 3, 1), ("STORAGE", 6, 1)], ()),
+    ("join-identity.py", '''tray = {"slot": mock_row.quartzSignal}
+chosen = tray if flag else tray
+print(chosen["slot"])
+if flag: alias = chosen
+else: alias = tray
+cursor.execute("INSERT INTO sample VALUES (?)", [alias["slot"]])
+chosen["slot"] = "C9_NEUTRAL"
+print(alias["slot"])''',
+     [("LOG", 3, 1), ("STORAGE", 6, 1)], ()),
+    ("join-opaque.ts", '''const tray = {slot: mockRow.quartzSignal};
+const other = {slot: mockRow.amberSignal};
+const choice = flag ? tray : other;
+logger.info(choice.slot);
+logger.info(tray.slot);
+choice.slot = "C9_NEUTRAL";
+logger.info(tray.slot);
+logger.info(other.slot);''',
+     [("LOG", 5, 1)], ("expressões JavaScript/TypeScript fora do rastreamento", "mutações de propriedades")),
+    ("join-opaque.py", '''tray = {"slot": mock_row.quartzSignal}
+other = {"slot": mock_row.amberSignal}
+choice = tray if flag else other
+print(choice["slot"])
+print(tray["slot"])
+choice["slot"] = "C9_NEUTRAL"
+print(tray["slot"])
+print(other["slot"])''',
+     [("LOG", 5, 1)], ("expressões Python fora do rastreamento", "mutações de propriedades")),
+    ("logical.ts", '''let reading = mockRow.quartzSignal;
+let emit = logger.info;
+function stop() { emit = () => {}; }
+function run() { false && stop(); }
+run();
+false && logger.info(mockRow.amberSignal);
+true || (reading = "C9_NEUTRAL");
+0 ?? (reading = "C9_NEUTRAL");
+const gate = false;
+let off = false;
+off &&= logger.info(mockRow.amberSignal);
+logger.info(gate && mockRow.amberSignal);
+emit(reading);
+localStorage.setItem("C9_NEUTRAL", null ?? mockRow.amberSignal);''',
+     [("LOG", 13, 1), ("STORAGE", 14, 14)], ()),
+    ("logical.py", '''reading = mock_row.quartzSignal
+emit = print
+def stop():
+    global emit
+    emit = lambda *items: None
+def run(): False and stop()
+run()
+False and print(mock_row.amberSignal)
+True or (reading := "C9_NEUTRAL")
+gate = False
+print(gate and mock_row.amberSignal)
+emit(reading)
+cursor.execute("INSERT INTO sample VALUES (?)", [False or mock_row.amberSignal])''',
+     [("LOG", 12, 1), ("STORAGE", 13, 13)], ()),
+    ("opaque.ts", '''logger.info(readFixture());
+localStorage.setItem("C9_NEUTRAL", readFixture(mockRow.amberSignal));
+logger.info(mockRow.quartzSignal);''',
+     [("LOG", 3, 3)], ("resultados de chamadas sem vínculo", "resultados de chamadas indiretas")),
+    ("opaque.py", '''print(read_fixture())
+cursor.execute("INSERT INTO sample VALUES (?)", [read_fixture(mock_row.amberSignal)])
+print(mock_row.quartzSignal)''',
+     [("LOG", 3, 3)], ("resultados de chamadas sem vínculo", "resultados de chamadas indiretas")),
+]
+with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
+    parsed = javascript_destinations((file, source) for file, source, _, _ in cases)
+    for file, source, expected, reasons in cases:
+        report = Report()
+        inspect_fields(source, file, report, parsed.get(file))
+        output = report.output()
+        hits = [(row["rule"].removeprefix("PII_POSSIBLE_"), row["line"],
+                 int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+                for row in output["findings"] if row["rule"].startswith("PII_POSSIBLE_")]
+        assert hits == expected, (file, hits)
+        coverage, = output["coverage"]
+        assert coverage["status"] == ("failed" if reasons else "ok"), (file, coverage)
+        assert all(reason in coverage["detail"] for reason in reasons), (file, coverage)
+        assert not re.search(r"C9_NEUTRAL|quartzSignal|amberSignal|mockRow|mock_row|INSERT INTO", json.dumps(output)), file
 `);
 });
 
