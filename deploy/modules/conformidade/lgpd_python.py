@@ -62,6 +62,27 @@ def needs_right(node, truth):
     return truth if isinstance(node.op, ast.And) else not truth
 
 
+def expression_truth(node, logical_truths):
+    if not isinstance(node, ast.BoolOp):
+        return literal_truth(node)
+    if node not in logical_truths:
+        for value in node.values:
+            truth = expression_truth(value, logical_truths)
+            if needs_right(node, truth) is not True:
+                break
+        logical_truths[node] = truth
+    return logical_truths[node]
+
+
+def logical_results(node, logical_truths):
+    for value in node.values:
+        needed = needs_right(node, expression_truth(value, logical_truths))
+        if value is node.values[-1] or needed is not True:
+            yield value
+        if needed is False:
+            break
+
+
 def parameter_defaults(node):
     positional = node.args.posonlyargs + node.args.args
     first_default = len(positional) - len(node.args.defaults)
@@ -118,23 +139,23 @@ def item_key(node):
     return None
 
 
-def reference_names(node):
+def reference_names(node, logical_truths):
     if isinstance(node, ast.Name):
         yield node.id
     elif isinstance(node, (ast.Attribute, ast.Subscript, ast.Starred)):
-        yield from reference_names(node.value)
+        yield from reference_names(node.value, logical_truths)
     elif isinstance(node, ast.IfExp):
-        yield from reference_names(node.body)
-        yield from reference_names(node.orelse)
+        yield from reference_names(node.body, logical_truths)
+        yield from reference_names(node.orelse, logical_truths)
     elif isinstance(node, ast.BoolOp):
-        for value in node.values:
-            yield from reference_names(value)
+        for value in logical_results(node, logical_truths):
+            yield from reference_names(value, logical_truths)
 
 
 class LocalNames(ast.NodeVisitor):
     """Find lexical locals without including bindings from inner scopes."""
 
-    def __init__(self):
+    def __init__(self, logical_truths):
         self.names = set()
         self.external = set()
         self.globals = set()
@@ -144,6 +165,7 @@ class LocalNames(ast.NodeVisitor):
         self.aliases = defaultdict(list)
         self.effect_writes = set()
         self.reachable = True
+        self.logical_truths = logical_truths
 
     def mark(self, name):
         self.names.add(name)
@@ -180,7 +202,7 @@ class LocalNames(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         if self.reachable and isinstance(node.ctx, (ast.Store, ast.Del)):
-            self.receivers.update(reference_names(node.value))
+            self.receivers.update(reference_names(node.value, self.logical_truths))
         self.generic_visit(node)
 
     visit_Subscript = visit_Attribute
@@ -193,8 +215,9 @@ class LocalNames(ast.NodeVisitor):
     def visit_BoolOp(self, node):
         reachable = self.reachable
         for value in node.values:
+            # Even an unreachable assignment determines which names are local.
             self.visit(value)
-            if needs_right(node, literal_truth(value)) is False:
+            if self.reachable and needs_right(node, expression_truth(value, self.logical_truths)) is False:
                 self.reachable = False
         self.reachable = reachable
 
@@ -262,6 +285,7 @@ class Analyzer(ast.NodeVisitor):
         self.function = None
         self.owners = {}
         self.summaries = {}
+        self.logical_truths = {}
         self.hits = {}
         self.gaps = Counter()
 
@@ -271,7 +295,7 @@ class Analyzer(ast.NodeVisitor):
         return super().visit(node)
 
     def visit_Module(self, node):
-        collector = LocalNames()
+        collector = LocalNames(self.logical_truths)
         collector.visit(node)
         self.module_names = collector.names
         self.generic_visit(node)
@@ -632,7 +656,7 @@ class Analyzer(ast.NodeVisitor):
         if node in self.summaries:
             return self.summaries[node]
         body = [node.body] if isinstance(node, ast.Lambda) else node.body
-        collector = LocalNames()
+        collector = LocalNames(self.logical_truths)
         for child in body:
             collector.visit(child)
         arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
@@ -676,12 +700,8 @@ class Analyzer(ast.NodeVisitor):
                     visit_root(choice, owners, accept, fallback, seen)
                 return
             if isinstance(node, ast.BoolOp):
-                for choice in node.values:
-                    needed = needs_right(node, literal_truth(choice))
-                    if choice is node.values[-1] or needed is not True:
-                        visit_root(choice, owners, accept, fallback, seen)
-                    if needed is False:
-                        break
+                for choice in logical_results(node, self.logical_truths):
+                    visit_root(choice, owners, accept, fallback, seen)
                 return
             if isinstance(node, (ast.Attribute, ast.Subscript)):
                 attribute = isinstance(node, ast.Attribute)

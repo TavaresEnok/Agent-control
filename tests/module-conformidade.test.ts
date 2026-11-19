@@ -1091,6 +1091,95 @@ with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b"
 `);
 });
 
+test('C9 propaga curto-circuito composto e presença de argumento nos efeitos de funções locais', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields, javascript_destinations
+
+cases = []
+capture = "vínculos externos a funções"
+for gate, js, py, reaches_stop in (
+    ("false", "false", "False", False),
+    ("true", "true", "True", True),
+    ("unknown", "fixtureGate", "fixture_gate", True),
+):
+    reasons = (capture,) if reaches_stop else ()
+    cases.extend([
+        (f"logical-{gate}.js", f'''const reading = mockRow.quartzSignal;
+let emit = logger.info;
+function stop() {{ emit = () => {{}}; }}
+function run() {{ ({js} && true) && stop(); }}
+run();
+emit(reading);
+logger.info(mockRow.amberSignal);''',
+         ([] if reaches_stop else [(6, 1)]) + [(7, 7)], reasons),
+        (f"logical-{gate}.py", f'''reading = mock_row.quartzSignal
+emit = print
+def stop():
+    global emit
+    emit = lambda *items: None
+def run(): ({py} and True) and stop()
+run()
+emit(reading)
+print(mock_row.amberSignal)''',
+         ([] if reaches_stop else [(8, 1)]) + [(9, 9)], reasons),
+    ])
+
+uncertain_default = "argumentos padrão JavaScript/TypeScript sem vínculo estático"
+mutation = "mutações de propriedades"
+for name, argument, invalidates_tray, reasons in (
+    ("object", "{}", False, (capture, mutation)),
+    ("compound", "(false && fixtureTarget) || {}", False, (capture, mutation)),
+    ("omitted", "", True, (capture, mutation)),
+    ("undefined", "undefined", True, (capture, mutation)),
+    ("unknown", "fixtureTarget", True, (capture, mutation, uncertain_default)),
+    ("spread", "...fixtureTargets", True, (capture, mutation, uncertain_default)),
+):
+    cases.append((f"default-{name}.js", f'''const tray = {{slot: mockRow.quartzSignal}};
+function clear(target = tray) {{ const alias = target; alias.slot = "C9_NEUTRAL"; }}
+function run() {{ clear({argument}); }}
+run();
+logger.info(tray.slot);
+logger.info(mockRow.amberSignal);''',
+                  ([] if invalidates_tray else [(5, 1)]) + [(6, 6)], reasons))
+
+for name, argument, expected, reasons in (
+    ("null", "null", [(8, 1), (9, 9)], ()),
+    ("omitted", "", [(9, 9)], (capture,)),
+    ("shadowed", "undefined", [(9, 9)], (capture, uncertain_default)),
+):
+    parameter = "undefined" if name == "shadowed" else ""
+    cases.append((f"initializer-{name}.js", f'''const reading = mockRow.quartzSignal;
+let emit = logger.info;
+function run({parameter}) {{
+  function clear(target = (emit = () => {{}})) {{}}
+  clear({argument});
+}}
+run();
+emit(reading);
+logger.info(mockRow.amberSignal);''', expected, reasons))
+
+with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
+    parsed = javascript_destinations((file, source) for file, source, _, _ in cases)
+    for file, source, expected, reasons in cases:
+        report = Report()
+        inspect_fields(source, file, report, parsed.get(file))
+        output = report.output()
+        hits = [(row["rule"], row["line"], int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+                for row in output["findings"] if row["rule"].startswith("PII_POSSIBLE_")]
+        assert hits == [("PII_POSSIBLE_LOG", *hit) for hit in expected], (file, hits)
+        coverage, = output["coverage"]
+        assert coverage["status"] == ("failed" if reasons else "ok"), (file, coverage)
+        assert all(reason in coverage["detail"] for reason in reasons), (file, coverage)
+        if uncertain_default not in reasons:
+            assert uncertain_default not in coverage["detail"], (file, coverage)
+        assert not re.search(r"C9_NEUTRAL|quartzSignal|amberSignal|mockRow|mock_row", json.dumps(output)), file
+`);
+});
+
 test('C9 captura operandos Python no ponto da leitura e conserva o alvo da atribuição aumentada', () => {
   python(String.raw`
 import json
