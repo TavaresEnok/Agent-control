@@ -99,8 +99,14 @@ export function collectorMeasuredDetailFile(row: ModuleToolCoverage): string | n
   };
   const allowed = metrics[row.tool] ?? [];
   let file: string | undefined;
-  const match = /^arquivo=([^;]+); ([a-z_]+)=/.exec(row.detail);
-  if (match && allowed.includes(match[2]!)) file = match[1];
+  const match = /^arquivo=([^;]+); ([a-z_]+)=([^;]*)(?:;|$)/.exec(row.detail);
+  if (match && allowed.includes(match[2]!)) {
+    const [, candidate, metric, value] = match;
+    const valid = metric === 'papel' ? ['entrada', 'modulo', 'nao_alcancado'].includes(value!)
+      : metric === 'manifesto_invalido' ? value === 'true'
+        : /^(?:0|[1-9]\d*)$/.test(value!) && Number.isSafeInteger(Number(value));
+    if (valid) file = candidate;
+  }
   if (row.tool === 'hadolint:arquivo') file = /^(.+): \d+ achado\(s\)\.$/.exec(row.detail)?.[1];
   if (row.tool === 'trivy:arquivo') file = /^(.+): \d+ achado\(s\) de configuração\.$/.exec(row.detail)?.[1];
   if (!file) return null;
@@ -1536,7 +1542,7 @@ async function assertNoSymlinkAlongPath(repo: string, relativeFile: string): Pro
   const root = await realpath(repo);
   const parts = relativeFile.split('/');
   let current = root;
-  for (const part of parts) {
+  for (const [index, part] of parts.entries()) {
     if (part === '' || part === '.' || part === '..') throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     current = join(current, part);
     if (escapesRepo(relative(root, current))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
@@ -1544,9 +1550,11 @@ async function assertNoSymlinkAlongPath(repo: string, relativeFile: string): Pro
     try {
       info = await lstat(current);
     } catch (error) {
+      if (isErrno(error, 'ENOENT')) return;
       throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     }
-    if (info.isSymbolicLink()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+    if (info.isSymbolicLink() || (index < parts.length - 1 && !info.isDirectory())
+      || (index === parts.length - 1 && !info.isFile())) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
 }
 
@@ -2001,8 +2009,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }
       for (const row of fileCoverage) {
         await c.query(
-          `INSERT INTO ac_verify_coverage (run_id, file, examiner_provider, examiner_model, profile_id, checklist)
-           VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
+          `INSERT INTO ac_verify_coverage (run_id, file, examiner_provider, examiner_model, profile_id, checklist, provenance)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb,'collector')`,
           [runId, row.file, row.examinerProvider, row.examinerModel, row.profileId, JSON.stringify(row.checklist)],
         );
       }
@@ -2039,15 +2047,20 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       summary: report.summary,
     };
   } catch (error) {
-    if (unpublishedReport && !databaseCommitted) await rm(unpublishedReport, {recursive: true, force: true}).catch(() => undefined);
+    let rolledBackRun = false;
     try {
-      await input.ledger.tx(async c => {
+      rolledBackRun = await input.ledger.tx(async c => {
         await input.ledger.authorize(c, input.principal, input.authority.contextId);
         await input.ledger.fence(c, input.authority);
         const updated = await c.query("UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running'", [runId]);
         if (updated.rowCount) await finishExamIntentTx(c, input.ledger, {intentId, contextId: input.authority.contextId}, 'failed');
+        return Boolean(updated.rowCount);
       });
     } catch { /* preserve original failure */ }
+    // Never delete on an ambiguous commit: the final transaction may have
+    // committed despite a lost acknowledgement. A confirmed transition from
+    // running proves that the final transaction did not commit.
+    if (unpublishedReport && !databaseCommitted && rolledBackRun) await rm(unpublishedReport, {recursive: true, force: true}).catch(() => undefined);
     throw error;
   } finally {
     if (snapshot) await removeModuleSnapshot(snapshot);
@@ -2211,14 +2224,20 @@ export async function requestModuleCorrection(
       [runRow.id],
     )).rows;
     const match = existingRows.find(row => sameIdSet(row.finding_ids ?? [], requested));
-    if (match) return {
-      messageLocalId: String(match.message_local_id),
-      writePaths: [...match.write_paths].map(String),
-      contextId: mainContextId,
-      regressionTest: String(match.regression_test),
-      acceptance: String(match.acceptance),
-      projectId: input.projectId,
-    };
+    if (match) {
+      const repoRow = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0];
+      const repo = repoRow?.repo ?? input.repoPath;
+      if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+      for (const path of match.write_paths) await assertNoSymlinkAlongPath(repo, assertModuleRepoRelativePath(String(path)));
+      return {
+        messageLocalId: String(match.message_local_id),
+        writePaths: [...match.write_paths].map(String),
+        contextId: mainContextId,
+        regressionTest: String(match.regression_test),
+        acceptance: String(match.acceptance),
+        projectId: input.projectId,
+      };
+    }
 
     const coveredRows = (await client.query<{file: string}>('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runRow.id])).rows;
     const covered = new Set(coveredRows.map(row => String(row.file)));
@@ -2273,6 +2292,7 @@ export async function requestModuleCorrection(
 
     const groups = groupFindingsByFile(findings);
     const writePaths = [...new Set([...groups.filter(group => !isProtectedLocation(group.file)).map(group => group.file), ...requested.map(id => moduleRegressionPath(runRow.module, id))])];
+    for (const path of writePaths) await assertNoSymlinkAlongPath(repo, path);
     const ids = findings.map(item => item.id);
     const regression = moduleRegressionText(runRow.module, ids)
       + (findings.some(item => isProtectedLocation(item.file))
@@ -2463,8 +2483,9 @@ export async function recheckModuleFindings(
       module: string;
       intent_id: string;
       commit_id: string;
+      recheck_generation: string;
     }>(
-      "SELECT id::text AS id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%'",
+      "UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1 WHERE id=$1 AND project_id=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' RETURNING id::text AS id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id, recheck_generation::text",
       [input.runId, input.projectId],
     )).rows[0];
     if (!runRow) throw new Refusal('VERIFY_RUN_MISSING', 404);
@@ -2577,8 +2598,10 @@ export async function recheckModuleFindings(
   await ledger.tx(async client => {
     await ledger.authorize(client, principal, authority.contextId);
     await ledger.fence(client, authority);
-    const liveRun = await client.query("SELECT id FROM ac_verify_runs WHERE id=$1 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' FOR UPDATE", [loaded.run.id]);
+    const liveRun = await client.query("SELECT id FROM ac_verify_runs WHERE id=$1 AND recheck_generation=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' FOR UPDATE", [loaded.run.id, loaded.run.recheck_generation]);
     if (!liveRun.rowCount) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    const {stdout: currentHead} = await execGit('git', ['-C', loaded.repo!, 'rev-parse', '--verify', 'HEAD^{commit}']);
+    if (currentHead.trim() !== head) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
     for (const result of decided) {
       const updated = await client.query(
         'UPDATE ac_verify_findings SET status=$3 WHERE run_id=$1 AND achado_id=$2',
@@ -2586,13 +2609,10 @@ export async function recheckModuleFindings(
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
     }
-    const rows = await client.query<{achado_id: string; status: string}>('SELECT achado_id, status FROM ac_verify_findings WHERE run_id=$1', [loaded.run.id]);
-    const statuses = rows.rows.filter(row => row.status === 'fechado' || row.status === 'reaberto').map(row => ({id: row.achado_id, status: row.status as 'fechado' | 'reaberto'}));
-    await updateModuleReportFiles(input.dataDirectory, input.projectId, loaded.run.id, statuses);
     await finishExamIntentTx(client, ledger, {intentId: recheckIntentId!, contextId: authority.contextId}, 'done');
-    return statuses;
   });
   completed = true;
+  await reconcileModuleReports(ledger, principal, authority, input.dataDirectory, input.projectId);
   return {results: decided};
   } finally {
     if (recheckIntentId && !completed) {

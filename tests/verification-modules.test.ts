@@ -712,6 +712,23 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     let recheckIntent = '';
     const depAuth = await db.acquire(principal, moduleContexts.get('dependencias')!, randomUUID(), 'recheck-dep', 60);
     try {
+      // A failed database transaction must not publish its tentative verdict.
+      await db.pool.query(`CREATE FUNCTION synthetic_recheck_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'synthetic rollback'; END $$`);
+      await db.pool.query('CREATE TRIGGER synthetic_recheck_failure BEFORE UPDATE ON ac_verify_findings FOR EACH ROW EXECUTE FUNCTION synthetic_recheck_failure()');
+      const recheckInput = {module: 'dependencias' as const, runId: failedResultRunId,
+        achadoIds: ['ACH-001'], dataDirectory, projectId};
+      const closedWorker = {run: async () => JSON.stringify({kind:'confirmacao', status:'descartado', reason:'ok', proof:'ok'})};
+      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput, worker:closedWorker}), /synthetic rollback/);
+      assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, 'confirmado');
+      await db.pool.query('DROP TRIGGER synthetic_recheck_failure ON ac_verify_findings');
+      await db.pool.query('DROP FUNCTION synthetic_recheck_failure()');
+      // A later recheck's generation fences a reviewer that returns late.
+      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput, worker: {run: async () => {
+        await db.pool.query('UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1 WHERE id=$1', [failedResultRunId]);
+        return closedWorker.run();
+      }}}));
+      assert.equal((await db.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [failedResultRunId])).rows[0]?.status, 'confirmado');
       const rechecked = await recheckModuleFindings(db, principal, depAuth, {
         module: 'dependencias',
         runId: failedResultRunId,

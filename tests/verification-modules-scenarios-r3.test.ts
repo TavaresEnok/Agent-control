@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import test from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
-import {runVerificationModule} from '../src/verification-modules.ts';
+import {listModuleReports, reconcileModuleReports, runVerificationModule} from '../src/verification-modules.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const url = process.env.AC_TEST_DATABASE_URL;
@@ -63,6 +63,25 @@ test('cenários sintéticos: isolamento, caminhos, processo e identidade do exam
     const recorded = await db.pool.query('SELECT status FROM ac_verify_runs WHERE id=$1', [failed.runId]);
     assert.equal(recorded.rows[0]?.status, 'failed');
     assert.match(await readFile(join(failed.directory, 'README.md'), 'utf8'), /falha/i);
+
+    // The server commits, but the client observes a lost COMMIT acknowledgement.
+    const ackRun = randomUUID();
+    const originalTx = db.tx.bind(db);
+    let txCount = 0;
+    db.tx = (async fn => {
+      const value = await originalTx(fn);
+      if (++txCount === 3) throw Error('synthetic lost commit ACK');
+      return value;
+    }) as typeof db.tx;
+    try {
+      await assert.rejects(runVerificationModule({...base, runId:ackRun,
+        collectorOutput:{coverage:[{tool:'synthetic', version:'1', status:'ok', detail:'ok', files:['app.ts']}], findings:[]}}), /synthetic lost commit ACK/);
+    } finally { db.tx = originalTx; }
+    const ackRow = (await db.pool.query('SELECT status,report_dir FROM ac_verify_runs WHERE id=$1', [ackRun])).rows[0];
+    assert.equal(ackRow.status, 'done');
+    assert.ok(await readFile(join(ackRow.report_dir, '.run-pending.json'), 'utf8'));
+    await reconcileModuleReports(db, principal, authority, data, projectId);
+    assert.ok((await listModuleReports(data, projectId)).some(item => item.id === ackRun));
 
     let workerCalls = 0;
     await assert.rejects(() => runVerificationModule({...base, collectorOutput: output('app.ts'), worker: {run: async () => {workerCalls++; return '{}';}}}));
