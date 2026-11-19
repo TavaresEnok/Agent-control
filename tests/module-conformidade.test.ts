@@ -121,6 +121,128 @@ print(json.dumps(reports))
   assert.doesNotMatch(JSON.stringify(cases), /SYNTHETIC_VALUE|cliente\.cpf|JSON\.stringify|axios\.post/);
 });
 
+test('C9 distingue tipos, interpolações executáveis e texto estático em JavaScript e TypeScript', () => {
+  const cases = JSON.parse(python(String.raw`
+import json
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+typed = """const payload: Record<string, { cpf?: string }> = { cpf: request.cpf };
+fetch(url, payload);
+const neutral: { cpf?: string; tag?: string } = { tag: "SYNTHETIC_VALUE" };
+fetch(url, neutral);
+const alias:
+    string = payload.cpf;
+logger.info(alias);"""
+templates = r"""const alias = request.email;
+const message = ~literal cpf SYNTHETIC_VALUE #{choose("}", ~nested #{alias}~)}~;
+logger.info(message);
+logger.debug(~live #{request.cpf}~);
+logger.log(~escaped cpf \#{request.cpf} SYNTHETIC_VALUE~);
+logger.log("example cpf SYNTHETIC_VALUE");
+// logger.log(request.cpf, "SYNTHETIC_VALUE");
+logger.log(ready ? "cpf" : "SYNTHETIC_VALUE");
+fetch(url, {"cpf": candidate});
+logger.log(~first line
+#{({item: alias}).item}
+last line~);
+localStorage.setItem("key", ~#{ready ? alias : "public"}~);
+fetch(url, {alias: "SYNTHETIC_VALUE"});
+fetch(url, {...alias});
+const example = 'logger.warn(request.cpf, "SYNTHETIC_VALUE")';
+/* logger.warn(request.cpf, "SYNTHETIC_VALUE"); */""".replace("~", chr(96)).replace("#{", chr(36) + "{")
+
+reports = []
+for source, file in ((typed, "sample.ts"), (templates, "sample.js")):
+    report = Report()
+    inspect_fields(source, file, report)
+    reports.append(report.output())
+print(json.dumps(reports))
+`));
+  const destinations = (report: {findings: {rule: string; line: number; evidence: string}[]}) =>
+    report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_')).map(row =>
+      [row.rule, row.line, row.evidence.match(/linha (\d+)/)?.[1]]);
+  assert.deepEqual(destinations(cases[0]), [
+    ['PII_POSSIBLE_NETWORK', 2, '1'], ['PII_POSSIBLE_LOG', 7, '6'],
+  ]);
+  assert.deepEqual(destinations(cases[1]), [
+    ['PII_POSSIBLE_LOG', 3, '1'], ['PII_POSSIBLE_LOG', 4, '4'],
+    ['PII_POSSIBLE_NETWORK', 9, '9'], ['PII_POSSIBLE_LOG', 10, '1'],
+    ['PII_POSSIBLE_STORAGE', 13, '1'], ['PII_POSSIBLE_NETWORK', 15, '1'],
+  ]);
+  assert.ok(cases.every((row: {coverage: {status: string}[]}) => row.coverage[0].status === 'ok'));
+  assert.doesNotMatch(JSON.stringify(cases), /SYNTHETIC_VALUE|request\.(cpf|email)|logger\.log/);
+});
+
+test('C9 lê blocos ascendentes e reatribui a variável visível respeitando o sombreamento', () => {
+  const report = JSON.parse(python(String.raw`
+import json
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+source = """let payload = request.cpf;
+{
+  { fetch(url, {body: payload}); }
+  payload = "SYNTHETIC_VALUE";
+}
+fetch(url, payload);
+{ payload = request.email; }
+fetch(url, payload);
+{
+  fetch(url, payload);
+  let payload: string;
+  fetch(url, payload);
+  { payload = request.phone; }
+  fetch(url, payload);
+  payload = "SYNTHETIC_VALUE";
+  fetch(url, payload);
+}
+other. /* synthetic member assignment */ payload = "SYNTHETIC_VALUE";
+fetch(url, payload);"""
+report = Report()
+inspect_fields(source, "sample.ts", report)
+print(json.dumps(report.output()))
+`));
+  const flows = report.findings.filter((row: {rule: string}) => row.rule === 'PII_POSSIBLE_NETWORK');
+  assert.deepEqual(flows.map((row: {line: number; evidence: string}) =>
+    [row.line, row.evidence.match(/linha (\d+)/)?.[1]]), [[3, '1'], [8, '7'], [14, '13'], [19, '7']]);
+  assert.equal(report.coverage[0].status, 'ok');
+  assert.doesNotMatch(JSON.stringify(report), /SYNTHETIC_VALUE|request\.(cpf|email|phone)/);
+});
+
+test('C9 preserva a origem já lida e informa cobertura parcial em chamadas acima do limite', () => {
+  python(String.raw`
+import json
+from collector import Report
+from lgpd_analyzer import JS_EXPRESSION_LIMIT, inspect_fields
+
+prefix = 'const payload = request.cpf;\nlogger.info('
+long_literal = '"' + 'SYNTHETIC_VALUE' * JS_EXPRESSION_LIMIT + '"'
+boundary = 'payload'.ljust(JS_EXPRESSION_LIMIT)
+cases = (
+    (prefix + 'payload, ' + long_literal + ');', 'failed', 1),
+    (prefix + 'request.email, ' + long_literal + ');', 'failed', 2),
+    (prefix + long_literal + ', payload);', 'failed', None),
+    (prefix + ' ' * (JS_EXPRESSION_LIMIT - 3) + 'cpfSuffix);', 'failed', None),
+    (prefix + boundary + ');', 'ok', 1),
+    (prefix + boundary + ' );', 'failed', 1),
+)
+for text, status, origin in cases:
+    report = Report()
+    inspect_fields(text, "sample.ts", report)
+    result = report.output()
+    warnings = [row for row in result["findings"] if row["rule"] == "PII_POSSIBLE_LOG"]
+    assert len(warnings) == int(origin is not None), warnings
+    if origin is not None:
+        assert warnings[0]["line"] == 2 and f"linha {origin}." in warnings[0]["evidence"]
+    assert result["coverage"][0]["status"] == status
+    assert report.has_errors == (status == "failed")
+    if status == "failed":
+        assert "Cobertura parcial: 1" in result["coverage"][0]["detail"]
+    assert "SYNTHETIC_VALUE" not in json.dumps(result)
+`);
+});
+
 test('C9 aceita o piso do telefone e preserva o piso das demais entidades', () => {
   const result = JSON.parse(python(String.raw`
 import json
