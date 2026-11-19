@@ -990,3 +990,6 @@ PAUSADO-COTA
 - 19/11/2026 19:25 UTC — Ordem do titular recebida durante a execução em 5ddf585c: concluir C2 a C9, aplicar via personal:images, verificar o gateway e as oito CLIs vivas, documentar D e encerrar com FIM. NexoISP e as 20 telas ficam suspensos. Vale a pausa imediata se a cota acabar antes. O backup pré-aplicação de 19:19 passou no restore-check do produto.
 - 19/11/2026 19:26 UTC — C5-SINAL-CONFIRMADO encerrado com código 0.
 - 19/11/2026 19:28 UTC — O revisor aprovou as duas correções finais da negação e da política npm em 696d81a9. Na bancada de recuperação, d577cacf passou nos nove cenários e foi propagado aos candidatos C6/C7 (0976b46a, 3c0f48c8). Solicitei o parecer final do sinal. Para a prova viva das CLIs será usado o projeto ispagent já cadastrado: Git 12140ec, 268 arquivos versionados e cerca de 2 MiB.
+- 19/11/2026 19:28 UTC — revisor-C5-ACEITE-SINAL iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:28 UTC — Aceite de entrega-qa-publicacao em 53012d07 passou em TypeScript, suíte oficial, complementares e laboratório.
+- 19/11/2026 19:28 UTC — Aceite de prontidao em 0976b46a iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
