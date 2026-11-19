@@ -98,6 +98,44 @@ function assertProof(report: Report) {
   assert.doesNotMatch(JSON.stringify(report), /FIXTURE-CARGA|127\.0\.0\.1|qa-carga-teste-/);
 }
 
+test('a imagem de QA seleciona os artefatos fixados para linux/amd64 e linux/arm64', () => {
+  const qaDir = new URL('../deploy/modules/qa/', import.meta.url);
+  const dockerfile = readFileSync(new URL('Dockerfile', qaDir), 'utf8');
+  const stages = dockerfile.split(/^FROM /m);
+  const selection = stages.find(stage => stage.startsWith('qa-carga-${TARGETARCH} AS qa-carga\n'));
+  const image = stages.find(stage => stage.startsWith('mcr.microsoft.com/playwright:'));
+  assert.ok(selection);
+  assert.ok(image);
+  assert.match(selection, /^ARG TARGETARCH$/m);
+  assert.match(selection, /chmod 0555 \/opt\/qa-carga\/k6 \/opt\/qa-carga\/toxiproxy-server/);
+  assert.match(image, /^COPY --from=qa-carga \/opt\/qa-carga\/ \/usr\/local\/bin\/$/m);
+
+  type Artifact = {url: string; sha256: string};
+  type Pin<T> = {version: string; linuxAmd64: T; linuxArm64: T};
+  const lock = JSON.parse(readFileSync(new URL('carga-local/tools.lock.json', qaDir), 'utf8')) as {
+    k6: Pin<Artifact & {member: string}>;
+    'toxiproxy-server': Pin<Artifact>;
+  };
+  for (const [arch, key] of [['amd64', 'linuxAmd64'], ['arm64', 'linuxArm64']] as const) {
+    const stage = stages.find(candidate => candidate.startsWith(`qa-python AS qa-carga-${arch}\n`));
+    assert.ok(stage, arch);
+    const k6 = lock.k6[key];
+    const proxy = lock['toxiproxy-server'][key];
+    const k6Name = `k6-v${lock.k6.version}-linux-${arch}`;
+    assert.equal(k6.url, `https://github.com/grafana/k6/releases/download/v${lock.k6.version}/${k6Name}.tar.gz`);
+    assert.equal(k6.member, `${k6Name}/k6`);
+    assert.equal(proxy.url, `https://github.com/Shopify/toxiproxy/releases/download/v${lock['toxiproxy-server'].version}/toxiproxy-server-linux-${arch}`);
+    assert.match(k6.sha256, /^[a-f0-9]{64}$/);
+    assert.match(proxy.sha256, /^[a-f0-9]{64}$/);
+    assert.deepEqual(stage.split('\n').filter(line => line.startsWith('ADD ')), [
+      `ADD --checksum=sha256:${k6.sha256} ${k6.url} /tmp/k6.tar.gz`,
+      `ADD --checksum=sha256:${proxy.sha256} ${proxy.url} /opt/qa-carga/toxiproxy-server`,
+    ], arch);
+    assert.ok(selection.replaceAll('${TARGETARCH}', arch)
+      .includes(`tar -xzOf /tmp/k6.tar.gz "${k6.member}" > /opt/qa-carga/k6`), arch);
+  }
+});
+
 test('prova as três fases por rota com trocas HTTP locais e ferramentas sintéticas', async t => {
   await withFixture(async ({run, configureTools}) => {
     configureTools();
