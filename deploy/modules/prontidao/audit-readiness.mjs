@@ -532,7 +532,7 @@ function isSecretValueExposed(key, parsedValue, interpolate = true) {
   return SECRET_KEY_RE.test(key);
 }
 
-function checkDotenv(file, findings, pillarCounts, onIncomplete) {
+function checkDotenv(file, findings, pillarCounts, onIncomplete, onMeasured) {
   for (let i = 0; i < file.lines.length; i++) {
     const first = file.lines[i].trim();
     if (!first || first.startsWith('#')) continue;
@@ -568,6 +568,7 @@ function checkDotenv(file, findings, pillarCounts, onIncomplete) {
     } else {
       value = rawValue.split(/[ \t]+#/, 1)[0].trim();
     }
+    onMeasured();
     if (isSecretValueExposed(key, value, quote !== "'" && quote !== '`')) {
       addSecretFinding(findings, pillarCounts, 'PRONTIDAO-SEGREDO-ARQUIVO-ENV', file.rel, line,
         'Possível segredo em arquivo protegido.');
@@ -712,7 +713,7 @@ function caddyAddress(raw) {
   return {http, local};
 }
 
-function checkCaddy(file, findings, pillarCounts, onIncomplete) {
+function checkCaddy(file, findings, pillarCounts, onIncomplete, onMeasured) {
   const entries = parseCaddy(file.content);
   const declarations = [];
   let globalUnknown = false;
@@ -804,8 +805,12 @@ function checkCaddy(file, findings, pillarCounts, onIncomplete) {
     if (routingUnknown) onIncomplete(line, 'rotas ou imports Caddy exigem avaliação adicional');
     if (headersUnknown) onIncomplete(line, 'política Caddy de cabeçalhos condicional ou dinâmica');
     const publicHttp = addresses.some(address => address.http && !address.local);
-    if (publicHttp && !redirect && !routingUnknown) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
+    if (publicHttp && !routingUnknown) {
+      onMeasured();
+      if (!redirect) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
+    }
     if (addresses.some(address => !address.http) && !routingUnknown && !headersUnknown) {
+      onMeasured();
       checkProxyHeaders(file, line, 'Caddy', headers, findings, pillarCounts);
     }
   }
@@ -1014,7 +1019,7 @@ function nginxHeadersForStatus(headers, status) {
   return active;
 }
 
-function checkNginx(file, findings, pillarCounts, onIncomplete) {
+function checkNginx(file, findings, pillarCounts, onIncomplete, onMeasured) {
   const root = parseNginx(file.content);
   const initial = {headers: new Map(), mode: 'on', unknown: false, external: false, errorPages: new Set()};
   const protocolAt = (block, inherited) => block.directives.find(item => item.name === 'ssl_protocols') ?? inherited;
@@ -1030,6 +1035,7 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
       if (errorPage) {
         onIncomplete(block.line, 'página de erro pode trocar o contexto dos cabeçalhos Nginx');
       } else if (response.status !== 444) {
+        onMeasured();
         if (signature !== parentHeaders) checkProxyHeaders(file, block.line, 'Nginx', headers, findings, pillarCounts);
         parentHeaders = signature;
       }
@@ -1064,18 +1070,23 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
         const mergeSlashes = slashModes.size === 1 ? slashModes.values().next().value : null;
         const redirect = nginxHttpRedirect(server, policy, mergeSlashes, onIncomplete);
         if (redirect === null) onIncomplete(line, 'redirecionamento Nginx depende de reescrita ou configuração adicional');
-        else if (!redirect) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
+        else {
+          onMeasured();
+          if (!redirect) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
+        }
       }
     }
     const localProtocol = server.directives.includes(protocol);
-    if (https && (localProtocol || !policy.external)
-      && protocol?.args.some(arg => /^(?:SSLv2|SSLv3|TLSv1(?:\.0|\.1)?)$/i.test(arg))) {
-      addFinding(findings, pillarCounts, 'tls-cabecalhos', {
-        rule: 'PRONTIDAO-TLS-PROTOCOLO-FRACO',
-        file: file.rel, line: localProtocol ? protocol.line : server.line, severity: 'alta',
-        message: 'Bloco HTTPS Nginx declara ou herda protocolo TLS/SSL legado.',
-        evidence: 'Diretiva ssl_protocols com protocolo legado.',
-      });
+    if (https && protocol && (localProtocol || !policy.external)) {
+      onMeasured();
+      if (protocol.args.some(arg => /^(?:SSLv2|SSLv3|TLSv1(?:\.0|\.1)?)$/i.test(arg))) {
+        addFinding(findings, pillarCounts, 'tls-cabecalhos', {
+          rule: 'PRONTIDAO-TLS-PROTOCOLO-FRACO',
+          file: file.rel, line: localProtocol ? protocol.line : server.line, severity: 'alta',
+          message: 'Bloco HTTPS Nginx declara ou herda protocolo TLS/SSL legado.',
+          evidence: 'Diretiva ssl_protocols com protocolo legado.',
+        });
+      }
     }
     if (https) checkHeaders(server, policy);
   };
@@ -1534,6 +1545,17 @@ function checkBackup(file, findings, pillarCounts, onIncomplete) {
   return {backup, restore, catalog, rotation};
 }
 
+// Coverage-only paths use the ordinary report contract. Protected names may
+// cross that boundary only with a corresponding structured finding.
+function isPublicCoveragePath(file) {
+  if (file.length > 400 || !/^[\p{L}\p{M}\p{N} ._@+/-]+$/u.test(file)) return false;
+  if (file.split('/').some(part => !part || part !== part.trim()
+    || /^(?:\.{1,2}|\.git|\.ai|node_modules)$/.test(part)
+    || /^\.env/.test(part) || /^(?:\.mcp\.json|\.claude|\.husky|\.codex|\.grok)$/i.test(part))) return false;
+  const name = basename(file).toLowerCase();
+  return !/^(?:\.env|id_|credentials)|^(?:\.npmrc|\.netrc|\.pgpass)$|\.(?:pem|key|p12|pfx|jks|tfstate|tfvars)$|^service-account.*\.json$|kubeconfig/.test(name);
+}
+
 /** Runs all passive production-readiness checks across a repository directory. */
 export function auditRepositoryReadiness(repoRoot) {
   const skipCoverage = [];
@@ -1562,6 +1584,7 @@ export function auditRepositoryReadiness(repoRoot) {
     'segredos-fora-codigo': 0,
   };
   const fileCoverage = [];
+  const measuredFiles = new Set();
   if (collectionIncomplete) {
     for (const pillar of Object.keys(pillarCounts)) partialPillars.add(pillar);
   }
@@ -1570,8 +1593,7 @@ export function auditRepositoryReadiness(repoRoot) {
     recordSkip('failed', file, reason);
   };
 
-  let hasDeployable = false;
-  let hasStateful = false;
+  let deploymentFile = null;
   let hasBackup = false;
   let hasRestoreRoutine = false;
   let hasCatalogCheck = false;
@@ -1579,7 +1601,7 @@ export function auditRepositoryReadiness(repoRoot) {
   let hasLogrotate = false;
   let hasAlerting = false;
   let hasDiskMonitoring = false;
-  let systemdWritesFileLogs = false;
+  let fileLogService = null;
   let anchorFile = null;
   let tlsAnchorFile = null;
 
@@ -1590,9 +1612,9 @@ export function auditRepositoryReadiness(repoRoot) {
     const lowerContent = file.content.toLowerCase();
     const checksApplied = [];
     const findingsBeforeFile = findings.length;
+    let structuredIncomplete = false;
 
     if (isComposeFile(file.rel)) {
-      checksApplied.push('compose');
       let services = [];
       let incomplete = false;
       try {
@@ -1601,11 +1623,13 @@ export function auditRepositoryReadiness(repoRoot) {
         incomplete = true;
       }
       if (incomplete) {
-        checksApplied.pop();
+        structuredIncomplete = true;
         recordPartial(file.rel, 'estrutura Compose inválida ou referência YAML não resolvida',
           'alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo');
-      } else if (services.length > 0) {
-        hasDeployable = true;
+        if (services.some(service => service.environment.length > 0)) checksApplied.push('compose-environment-local');
+      } else {
+        checksApplied.push('compose');
+        if (services.length > 0) deploymentFile ??= file.rel;
       }
       for (const svc of services) {
         for (const {line} of svc.environment) {
@@ -1613,9 +1637,6 @@ export function auditRepositoryReadiness(repoRoot) {
             'Possível segredo literal no environment do Compose.');
         }
         if (incomplete) continue;
-        if (svc.hasVolumes || /postgres|mysql|mariadb|mongo|redis|minio/i.test(svc.image)) {
-          hasStateful = true;
-        }
         const restartVal = (svc.restart ?? '').toLowerCase();
         const restarts = svc.hasDeployRestart
           ? /^(?:any|on-failure)$/.test(svc.deployRestartCondition ?? 'any')
@@ -1682,43 +1703,49 @@ export function auditRepositoryReadiness(repoRoot) {
 
     const proxy = isCaddyFile(file.rel) ? 'Caddy' : isNginxFile(file.rel) ? 'Nginx' : null;
     if (proxy) {
-      hasDeployable = true;
       if (tlsAnchorFile === null) tlsAnchorFile = file.rel;
       let incomplete = false;
+      let measured = false;
       const onIncomplete = (line, reason) => {
         incomplete = true;
         recordPartial(file.rel, `linha ${line}, ${reason}`, 'tls-cabecalhos');
       };
       try {
         const check = proxy === 'Caddy' ? checkCaddy : checkNginx;
-        check(file, findings, pillarCounts, onIncomplete);
+        check(file, findings, pillarCounts, onIncomplete, () => { measured = true; });
       } catch {
         onIncomplete(1, `sintaxe ${proxy} inválida ou não coberta`);
       }
+      structuredIncomplete ||= incomplete;
+      if (measured) deploymentFile ??= file.rel;
       if (!incomplete) checksApplied.push(`${proxy.toLowerCase()}-tls-headers`);
+      else if (measured) checksApplied.push(`${proxy.toLowerCase()}-tls-headers-local`);
     }
 
     if (isSystemdService(file.rel)) {
-      hasDeployable = true;
+      deploymentFile ??= file.rel;
       checksApplied.push('systemd');
       const res = checkSystemd(file, findings, pillarCounts);
-      if (res.writesFileLog) systemdWritesFileLogs = true;
+      if (res.writesFileLog) fileLogService ??= file.rel;
     }
 
     if (basename(file.rel) === 'Dockerfile' || basename(file.rel).startsWith('Dockerfile.') || file.rel.endsWith('.Dockerfile')) {
-      hasDeployable = true;
+      deploymentFile ??= file.rel;
       checksApplied.push('dockerfile');
     }
 
     if (isCommittedEnv(file.rel)) {
       let incomplete = false;
-      checkDotenv(file, findings, pillarCounts, () => { incomplete = true; });
-      if (incomplete) recordPartial(file.rel, 'sintaxe dotenv inválida ou não coberta', 'segredos-fora-codigo');
-      else checksApplied.push('env-secrets');
+      let measured = false;
+      checkDotenv(file, findings, pillarCounts, () => { incomplete = true; }, () => { measured = true; });
+      if (incomplete) {
+        recordPartial(file.rel, 'sintaxe dotenv inválida ou não coberta', 'segredos-fora-codigo');
+        if (measured) checksApplied.push('env-secrets-local');
+      } else checksApplied.push('env-secrets');
     }
 
     if (!isCommittedEnv(file.rel) && isCodeOrConfig(file.rel)) {
-      checksApplied.push('tls-verify');
+      if (!structuredIncomplete) checksApplied.push('tls-verify');
       for (let i = 0; i < file.lines.length; i++) {
         const line = file.lines[i];
         if (
@@ -1726,6 +1753,7 @@ export function auditRepositoryReadiness(repoRoot) {
           || /rejectUnauthorized\s*:\s*false\b/.test(line)
           || /InsecureSkipVerify\s*:\s*true\b/.test(line)
         ) {
+          if (structuredIncomplete) checksApplied.push('tls-verify-literal');
           addFinding(findings, pillarCounts, 'tls-cabecalhos', {
             rule: 'PRONTIDAO-TLS-VERIFICACAO-DESABILITADA',
             file: file.rel,
@@ -1740,6 +1768,7 @@ export function auditRepositoryReadiness(repoRoot) {
 
     const privateKeyLine = file.lines.findIndex(line => /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(line));
     if (privateKeyLine >= 0) {
+      checksApplied.push('private-key-marker');
       addSecretFinding(findings, pillarCounts, 'PRONTIDAO-CHAVE-PRIVADA-NO-REPOSITORIO', file.rel, privateKeyLine + 1,
         'Possível chave privada em arquivo protegido.');
     }
@@ -1769,6 +1798,8 @@ export function auditRepositoryReadiness(repoRoot) {
     }
 
     if (checksApplied.length > 0) {
+      // A local check can complete even when a different check leaves this file partial.
+      measuredFiles.add(file.rel);
       const fileCount = findings.length - findingsBeforeFile;
       fileCoverage.push({
         tool: 'prontidao:arquivo',
@@ -1780,12 +1811,14 @@ export function auditRepositoryReadiness(repoRoot) {
   }
 
   const fallbackFile = anchorFile ?? files[0]?.rel ?? 'package.json';
-  if (hasDeployable || hasStateful) {
+  if (deploymentFile !== null) {
     const backupMeasured = !partialPillars.has('backup-restauracao');
+    const alertingMeasured = !partialPillars.has('alertas-logs');
+    const diskMeasured = !partialPillars.has('disco-memoria');
     if (backupMeasured && !hasBackup) {
       addFinding(findings, pillarCounts, 'backup-restauracao', {
         rule: 'PRONTIDAO-BACKUP-AUSENTE',
-        file: fallbackFile,
+        file: deploymentFile,
         line: 1,
         severity: 'alta',
         message: 'Sistema publicável ou com estado persistente sem script, rotina ou agendamento de backup identificado.',
@@ -1795,7 +1828,7 @@ export function auditRepositoryReadiness(repoRoot) {
     if (backupMeasured && !hasRestoreRoutine) {
       addFinding(findings, pillarCounts, 'backup-restauracao', {
         rule: 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
-        file: fallbackFile,
+        file: deploymentFile,
         line: 1,
         severity: 'media',
         message: 'Nenhuma rotina que restaure dados em um destino foi identificada no repositório.',
@@ -1805,37 +1838,37 @@ export function auditRepositoryReadiness(repoRoot) {
     if (backupMeasured && hasBackup && !hasBackupRotation) {
       addFinding(findings, pillarCounts, 'backup-restauracao', {
         rule: 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE',
-        file: fallbackFile,
+        file: deploymentFile,
         line: 1,
         severity: 'baixa',
         message: 'Backup identificado sem política explícita de rotação/retenção.',
         evidence: 'Nenhuma diretiva de retenção/rotação de backups identificada.',
       });
     }
-    if (!collectionIncomplete && systemdWritesFileLogs && !hasLogrotate) {
+    if (alertingMeasured && fileLogService !== null && !hasLogrotate) {
       addFinding(findings, pillarCounts, 'alertas-logs', {
         rule: 'PRONTIDAO-LOGROTATE-AUSENTE',
-        file: fallbackFile,
+        file: fileLogService,
         line: 1,
         severity: 'baixa',
         message: 'Serviço grava logs em arquivo sem configuração de logrotate no repositório.',
         evidence: 'StandardOutput ou StandardError com file:, append: ou truncate: sem configuração logrotate.',
       });
     }
-    if (!collectionIncomplete && !hasAlerting) {
+    if (alertingMeasured && !hasAlerting) {
       addFinding(findings, pillarCounts, 'alertas-logs', {
         rule: 'PRONTIDAO-ALERTA-AUSENTE',
-        file: fallbackFile,
+        file: deploymentFile,
         line: 1,
         severity: 'media',
         message: 'Não há configuração de alertas operacionais ou vigia de falhas no repositório.',
         evidence: 'Nenhuma rotina de alerta/vigia (watch, alert, OnFailure, webhook/push) identificada.',
       });
     }
-    if (!collectionIncomplete && !hasDiskMonitoring) {
+    if (diskMeasured && !hasDiskMonitoring) {
       addFinding(findings, pillarCounts, 'disco-memoria', {
         rule: 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
-        file: fallbackFile,
+        file: deploymentFile,
         line: 1,
         severity: 'media',
         message: 'Não há verificação de uso de disco ou limpeza periódica configurada.',
@@ -1893,6 +1926,8 @@ export function auditRepositoryReadiness(repoRoot) {
     ? {...row, status: 'failed', detail: `${row.detail} Cobertura parcial. Consulte os avisos por arquivo.`}
     : row);
 
+  const findingFiles = new Set(findings.map(finding => finding.file));
+  const scopedFiles = [...measuredFiles].filter(file => isPublicCoveragePath(file) || findingFiles.has(file));
   return {
     filesAnalyzed: files.length,
     anchorFile: fallbackFile,
@@ -1905,12 +1940,12 @@ export function auditRepositoryReadiness(repoRoot) {
         status: failed ? 'failed' : 'ok',
         detail: `Analisados ${files.length} arquivo(s) nos 6 requisitos estáticos de prontidão; ${findings.length} achado(s); ${failed} omissão(ões) por falha ou limite e ${skipped} exclusão(ões) de escopo.`,
       },
-      ...(failed && findings.length > 0 ? [{
+      ...(failed && scopedFiles.length > 0 ? [{
         tool: 'prontidao-audit',
         version: AUDIT_VERSION,
         status: 'ok',
-        detail: 'Medição concluída no escopo restrito aos achados sustentados. A cobertura estática geral permanece parcial.',
-        files: [...new Set(findings.map(finding => finding.file))],
+        detail: 'Verificações locais concluídas nos arquivos do escopo declarado. A cobertura estática geral permanece parcial.',
+        files: scopedFiles,
       }] : []),
       ...requirementCoverage,
       ...fileCoverage,

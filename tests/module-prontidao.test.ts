@@ -16,7 +16,7 @@ import {
   runCollector,
   validateTargetUrl,
 } from '../deploy/modules/prontidao/run-collector.mjs';
-import {parseModuleCollectorOutput} from '../src/verification-modules.ts';
+import {parseModuleCollectorOutput, validateModuleCollectorPublication} from '../src/verification-modules.ts';
 
 const moduleDir = fileURLToPath(new URL('../deploy/modules/prontidao/', import.meta.url));
 const defectiveDir = fileURLToPath(new URL('./fixtures/module-prontidao/defective', import.meta.url));
@@ -703,7 +703,7 @@ test('a cobertura estática aponta subárvores, arquivos e cotas com análise pa
   }
 });
 
-test('publicação de prontidão mantém achados medidos em auditoria parcial e conserva as lacunas', () => {
+test('publicação de prontidão mantém achados no escopo medido e conserva as lacunas', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-publicacao-parcial-'));
   const compose = join(dir, 'compose.yaml');
   const collect = () => runCollector({
@@ -719,26 +719,48 @@ test('publicação de prontidão mantém achados medidos em auditoria parcial e 
     },
   });
   const restartRule = 'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE';
+  const globalAbsences = [
+    'PRONTIDAO-ALERTA-AUSENTE', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO', 'PRONTIDAO-LOGROTATE-AUSENTE',
+  ];
+  const parse = (out: ReturnType<typeof collect>) => parseModuleCollectorOutput(JSON.stringify(out), {module: 'prontidao'});
+  const worker = join(dir, 'worker.service');
+  const workerUnit = '[Service]\nType=oneshot\nStandardOutput=append:/var/log/fixture.log\n';
   try {
     writeFileSync(compose, [
       'services:', '  api:', '    image: scratch',
       '    logging:', '      driver: fixture-local', '',
     ].join('\n'));
     writeFileSync(join(dir, 'backup.sh'), '#!/bin/sh\ncat <<$\'EOF\'\npg_dump -f ignored.dump\nEOF\n');
+    writeFileSync(worker, workerUnit);
+    writeFileSync(join(dir, '.env'), 'FIXTURE_MODE=example\n');
+    writeFileSync(join(dir, 'fixture(notes).ts'), 'export const enabled = true;\n');
     symlinkSync('compose.yaml', join(dir, 'ignored.yaml'));
     const partial = collect();
-    assert.ok(partial.findings.some(f => f.tool === 'prontidao-audit' && f.rule === restartRule
-      && f.file === 'compose.yaml' && f.line === 2));
-    const publication = parseModuleCollectorOutput(JSON.stringify(partial), {module: 'prontidao'});
-    // A publicação exige pelo menos uma medição ok da mesma ferramenta para cada achado.
-    assert.deepEqual(publication.findings.filter(f => !publication.coverage.some(
-      c => c.tool === f.tool && c.status === 'ok',
-    )), []);
+    const publication = parse(partial);
+    await validateModuleCollectorPublication(dir, publication);
+    const restart = partial.findings.find(f => f.tool === 'prontidao-audit' && f.rule === restartRule
+      && f.file === 'compose.yaml' && f.line === 2);
+    assert.ok(restart);
+    assert.equal(publication.findings.some(f => f.file === 'worker.service'), false);
     const auditRows = publication.coverage.filter(c => c.tool === 'prontidao-audit');
     assert.deepEqual(auditRows.map(c => c.status), ['failed', 'ok']);
     assert.equal(auditRows[0]?.files, undefined);
-    assert.deepEqual(auditRows[1]?.files, ['compose.yaml']);
-    assert.match(auditRows[1]!.detail, /escopo.*achados/i);
+    assert.deepEqual(auditRows[1]?.files, ['compose.yaml', 'worker.service']);
+
+    const scoped = {...auditRows[1]!, files: ['compose.yaml']};
+    const outside = {...restart, rule: 'PRONTIDAO-SYSTEMD-REINICIO-AUSENTE', file: 'worker.service', line: 1};
+    const failedForWorker = {...auditRows[0]!, files: ['worker.service']};
+    const otherTool = {...scoped, tool: 'gitleaks', files: ['worker.service']};
+    for (const rows of [[scoped], [scoped, failedForWorker, otherTool], [{...scoped, files: []}]]) {
+      await assert.rejects(validateModuleCollectorPublication(dir, {coverage: rows, findings: [outside]}),
+        {code: 'VERIFY_COLLECTOR_INVALID'});
+    }
+    await validateModuleCollectorPublication(dir, {coverage: [scoped], findings: [restart]});
+    await validateModuleCollectorPublication(dir, {
+      coverage: [{...otherTool, files: undefined}],
+      findings: [{...outside, tool: otherTool.tool}],
+    });
+
     assert.equal(partial.coverage.find(c => c.tool === 'prontidao:requisito:alertas-logs')?.status, 'failed');
     assert.equal(partial.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed');
     assert.ok(partial.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed'
@@ -747,8 +769,10 @@ test('publicação de prontidão mantém achados medidos em auditoria parcial e 
       && c.detail.startsWith('ignored.yaml:')));
     assert.equal(partial.findings.some(f => [
       'PRONTIDAO-LOG-SEM-ROTACAO', 'PRONTIDAO-BACKUP-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+      'PRONTIDAO-LOGROTATE-AUSENTE', 'PRONTIDAO-ALERTA-AUSENTE',
     ].includes(f.rule)), false);
 
+    rmSync(worker);
     writeFileSync(compose, 'services:\n  api:\n    <<: *unresolved\n');
     const unresolved = collect();
     assert.deepEqual(unresolved.findings, []);
@@ -761,12 +785,29 @@ test('publicação de prontidão mantém achados medidos em auditoria parcial e 
 
     rmSync(join(dir, 'backup.sh'));
     rmSync(join(dir, 'ignored.yaml'));
+    writeFileSync(worker, workerUnit);
     writeFileSync(compose, 'services:\n  api:\n    image: scratch\n');
     const complete = collect();
     assert.ok(complete.findings.some(f => f.rule === restartRule));
     assert.ok(complete.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-AUSENTE'));
+    assert.ok(globalAbsences.every(rule => complete.findings.some(f => f.rule === rule)));
     assert.deepEqual(complete.coverage.filter(c => c.tool === 'prontidao-audit').map(c => c.status), ['ok']);
     assert.equal(complete.coverage.some(c => c.status === 'failed'), false);
+    await validateModuleCollectorPublication(dir, parse(complete));
+
+    const unparsed = join(dir, 'compose.extra.yaml');
+    writeFileSync(unparsed, 'services:\n  worker:\n    <<: *unresolved\n');
+    const mixed = collect();
+    await validateModuleCollectorPublication(dir, parse(mixed));
+    assert.equal(mixed.findings.some(f => globalAbsences.includes(f.rule)), false);
+    assert.ok(mixed.findings.some(f => f.rule === restartRule && f.file === 'compose.yaml'));
+    assert.ok(mixed.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-AUSENTE' && f.file === 'compose.yaml'));
+    assert.deepEqual(mixed.coverage.find(c => c.tool === 'prontidao-audit' && c.status === 'ok')?.files,
+      ['compose.yaml', 'worker.service']);
+    for (const requirement of ['alertas-logs', 'disco-memoria']) {
+      assert.equal(mixed.coverage.find(c => c.tool === `prontidao:requisito:${requirement}`)?.status, 'failed');
+    }
+    rmSync(unparsed);
 
     const unread = join(dir, 'oversized.sh');
     writeFileSync(unread, '');
@@ -775,7 +816,7 @@ test('publicação de prontidão mantém achados medidos em auditoria parcial e 
     assert.ok(omitted.findings.some(f => f.rule === restartRule));
     assert.equal(omitted.findings.some(f => [
       'PRONTIDAO-BACKUP-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
-      'PRONTIDAO-ALERTA-AUSENTE', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+      ...globalAbsences,
     ].includes(f.rule)), false);
     assert.ok(omitted.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed'
       && c.detail.startsWith('oversized.sh:')));
@@ -881,7 +922,7 @@ test('HTTPS passivo distingue cabeçalhos inválidos e registra origens que exce
   assert.deepEqual(evaluate('max-age=31536000', 'inválido', "default-src 'self' frame-ancestors").findings.map(f => f.rule), ['PRONTIDAO-FRAME-AUSENTE']);
 });
 
-test('dotenv multilinha e âncoras inline do Compose preservam apenas as localizações', () => {
+test('dotenv multilinha e âncoras inline do Compose preservam apenas as localizações', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-inline-'));
   try {
     const compose = [
@@ -934,6 +975,11 @@ test('dotenv multilinha e âncoras inline do Compose preservam apenas as localiz
     assert.ok(partial.findings.some(f => f.rule === 'PRONTIDAO-SEGREDO-COMPOSE-INLINE' && f.line === 6));
     assert.equal(partial.findings.some(f => f.rule === 'PRONTIDAO-LIMITE-MEMORIA-AUSENTE'), false);
     assert.doesNotMatch(JSON.stringify(partial), /synthetic-value-block/);
+    assert.deepEqual(partial.coverage.find(c => c.tool === 'prontidao-audit' && c.status === 'ok')?.files,
+      ['.env', 'compose.yml']);
+    const publication = parseModuleCollectorOutput(JSON.stringify({coverage: partial.coverage, findings: partial.findings}),
+      {module: 'prontidao'});
+    await validateModuleCollectorPublication(dir, publication);
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }
