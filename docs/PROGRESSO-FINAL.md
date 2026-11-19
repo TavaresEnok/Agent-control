@@ -286,3 +286,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:49 UTC — Revisor encerrou C3-R7 em 7fb2f861 (código 0). Gerente confere a entrega.
 - 19/11/2026 03:49 UTC — Revisão C2-R8 iniciada por Sol high normal somente leitura em ca4b1171.
 - 19/11/2026 03:51 UTC — Exame 7b512f4d passou nos quatro testes de persistência. Exclusão ou adulteração da origem agora falha nos relatórios novos, e IDs duplicados são rejeitados inclusive no formato antigo. O parecer de arquitetura indicou um alto e três médios nos caminhos do snapshot. A hipótese separada sobre walkOpened foi descartada pela definição presente e pela execução real. C3-R8 aberta.
+- 19/11/2026 03:52 UTC — Arquitetura aed61c1d passou em 18 testes habilitados, incluindo as ferramentas reais na nova imagem, com um caso opcional pulado. O laboratório das oito CLIs em 8bf6ed47 passou 6/6, incluindo as duas execuções comparáveis de desempenho.
