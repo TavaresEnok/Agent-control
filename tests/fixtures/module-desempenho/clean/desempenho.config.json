@@ -1,0 +1,35 @@
+{
+  "server": {
+    "entry": "server.mjs",
+    "readyPath": "/health"
+  },
+  "routes": [
+    {
+      "path": "/",
+      "file": "public/index.html"
+    },
+    {
+      "path": "/api/relatorio",
+      "file": "server.mjs"
+    }
+  ],
+  "migrationsDir": "migrations",
+  "sqlDir": "queries",
+  "thresholds": {
+    "performanceScore": 0.85,
+    "lcpMs": 2500,
+    "cls": 0.1,
+    "tbtMs": 200,
+    "k6P95Ms": 120,
+    "k6FailRate": 0.01,
+    "cpuSelfMs": 80,
+    "sqlMeanMs": 25,
+    "sqlMaxMs": 60
+  },
+  "cpuFunctions": [
+    {
+      "file": "server.mjs",
+      "functionName": "computeCachedReport"
+    }
+  ]
+}
