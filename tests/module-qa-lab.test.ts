@@ -113,7 +113,7 @@ function collect(pin: string, directory: string): Output {
   const lines = run.stdout.trim().split('\n');
   assert.equal(lines.length, 1);
   const report = JSON.parse(lines[0]!) as Output;
-  assert.deepEqual(report.coverage.filter(row => row.status === 'failed'), []);
+  assert.deepEqual(report.coverage.filter(row => row.status === 'failed' && !row.tool.startsWith('qa-requisito:')), []);
   return report;
 }
 
@@ -137,6 +137,7 @@ test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobrevivent
   }
   assert.match(row(defective, 'qa-arquivo:src/defective-pricing.ts').detail, /V8 em três passadas: ramos [1-9]\/\d+/);
   assert.match(row(defective, 'qa-requisito:REQ-01').detail, /calcularDescontoFidelidade.*tests\/clean-pricing\.test\.ts:5.*passed,passed,passed/);
+  assert.equal(row(defective, 'qa-requisito:REQ-02').status, 'failed');
 
   const rules = new Set(defective.findings.map(f => f.rule));
   for (const rule of [
@@ -195,22 +196,42 @@ test('JSON do coletor vincula a função realmente executada e respeita a resolu
     chmodSync(repo, 0o755);
     writeFileSync(join(repo, 'src', 'pedido novo.mjs'), 'let total = 0; export function validar(x) { return x + ++total; }');
     writeFileSync(join(repo, 'src', 'pedido%20novo.mjs'), 'export function identidadeLiteral(x) { return x + 1; }');
-    writeFileSync(join(repo, 'src', 'operacoes.mjs'), 'export function somar(x) { return x + 1; }\nexport function subtrair(x) { return x - 1; }\nexport async function buscar() { return 42; }\nexport function validar$(x) { return x; }');
-    writeFileSync(join(repo, 'src', 'outras.mjs'), 'export function buscar() { return -1; }');
+    writeFileSync(join(repo, 'src', 'operacoes.mjs'), [
+      'export function somar(x) { return x + 1; }', 'export function subtrair(x) { return x - 1; }',
+      'export async function buscar() { return 42; }', 'export function validar$(x) { return x; }',
+      'export function OK() { return 0; }', 'export function cálculo$() { return 0; }',
+    ].join('\n'));
+    writeFileSync(join(repo, 'src', 'outras.mjs'), [
+      'export function buscar() { return -1; }', 'export function somar(x) { return x; }',
+      'function local() { return 9; }', 'export {local as cálculo$};',
+      "export function mensagemSpread() { return 'mensagem'; }",
+    ].join('\n'));
     writeFileSync(join(repo, 'tests', 'vinculos.test.mjs'), [
       "import {test} from 'node:test'; import assert from 'node:assert/strict';",
       "import {validar} from '../src/pedido%20novo.mjs';",
       "import {identidadeLiteral} from '../src/pedido%2520novo.mjs';",
       "import * as ops from '../src/operacoes.mjs';",
-      "import {somar, subtrair, buscar, validar$} from '../src/operacoes.mjs';",
+      "import {somar, subtrair, validar$} from '../src/operacoes.mjs';",
+      "import {cálculo$ as calcular, mensagemSpread} from '../src/outras.mjs';",
       "test('QA-VALIDADOR: contador', () => assert.equal(validar(0), 1));",
       "test('REQ-31 operação não exercida', () => { if (false) assert.equal(subtrair(1), 0); assert.equal(1 + 1, 2); });",
       "test('importa o nome com percentual', () => assert.equal(identidadeLiteral(1), 2));",
       "test('função assíncrona', async () => assert.equal(await ops.buscar(), 42));",
       "test('REQ-36 argumento de mensagem', () => assert.equal(1, 1, validar$(1)));",
       "test('operação exercida', () => assert.equal(somar(1), 2));",
+      "test('alias exportado', () => assert.equal(calcular(), 9));",
+      "test('REQ-40 arquivo divergente', () => assert.equal(somar(1), 2));",
+      "test('REQ-41 mensagem com spread anterior', () => { const args = [1, 1]; assert.equal(...args, mensagemSpread()); });",
     ].join('\n'));
-    appendFileSync(join(repo, 'requisitos.md'), '\nREQ-31: `subtrair`\nREQ-32: `somar`\nREQ-33: `buscar` de `src/operacoes.mjs` retorna `OK`\nREQ-34: `identidadeLiteral`\nREQ-35: `somar` e `subtrair`\nREQ-36: `validar$`\nREQ-37: `validar` de `src/pedido novo.mjs`\n');
+    appendFileSync(join(repo, 'requisitos.md'), ['',
+      'REQ-31: `subtrair`', 'REQ-32: `somar` de `src/operacoes.mjs`',
+      'REQ-33: `buscar` de `src/operacoes.mjs` retorna `OK`', 'REQ-34: `identidadeLiteral`',
+      'REQ-35: `somar` de `src/operacoes.mjs` e `subtrair`', 'REQ-36: `validar$`',
+      'REQ-37: `validar` de `src/pedido novo.mjs`',
+      'REQ-38: `somar` de `src/operacoes.mjs` e `cálculo$` de `src/outras.mjs`',
+      'REQ-39: `somar` de `src/outras.mjs` e `cálculo$` de `src/operacoes.mjs`',
+      'REQ-40: `somar` de `src/ausente.mjs`', 'REQ-41: `mensagemSpread`', '',
+    ].join('\n'));
     const report = collect(pin, repo);
     assert.equal(row(report, 'node-test-v8').status, 'ok');
     assert.match(row(report, 'qa-propriedades-funcionais').detail, /4 de 5 casos/);
@@ -219,11 +240,21 @@ test('JSON do coletor vincula a função realmente executada e respeita a resolu
     assert.ok(unproved.some(f => f.message.includes('REQ-31')));
     for (const [id, file] of [['REQ-32', 'src/operacoes.mjs'], ['REQ-33', 'src/operacoes.mjs'], ['REQ-34', 'src/pedido%2520novo.mjs'], ['REQ-37', 'src/pedido%20novo.mjs']]) {
       const requirement = row(report, 'qa-requisito:' + id);
+      assert.equal(requirement.status, 'ok', id);
       assert.ok(requirement.detail.includes(file), id);
       assert.match(requirement.detail, /vínculo comprovado nas três passadas/, id);
       assert.ok(!unproved.some(f => f.message.includes(id)), id);
     }
-    assert.ok(unproved.some(f => f.message.includes('REQ-36')));
-    assert.ok(unproved.some(f => f.message.includes('REQ-35')));
+    assert.doesNotMatch(row(report, 'qa-requisito:REQ-33').detail, /OK \(src\/operacoes/);
+    assert.equal(row(report, 'qa-requisito:REQ-38').status, 'ok');
+    assert.match(row(report, 'qa-requisito:REQ-38').detail, /somar \(src\/operacoes\.mjs:1\), cálculo\$ \(src\/outras\.mjs:3\).*comprovado nas três passadas/);
+    for (const id of ['REQ-35', 'REQ-36', 'REQ-39']) {
+      assert.equal(row(report, 'qa-requisito:' + id).status, 'failed', id);
+      assert.ok(unproved.some(f => f.message.includes(id)), id);
+    }
+    assert.equal(row(report, 'qa-requisito:REQ-40').status, 'skipped');
+    assert.match(row(report, 'qa-requisito:REQ-40').detail, /src\/ausente\.mjs.*referência não resolvida/);
+    assert.equal(row(report, 'qa-requisito:REQ-41').status, 'skipped');
+    assert.match(row(report, 'qa-requisito:REQ-41').detail, /prova não medida: cobertura limitada/);
   } finally { rmSync(repo, {recursive:true, force:true}); }
 });
