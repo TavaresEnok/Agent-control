@@ -162,6 +162,7 @@ export function createCapacityNativeWorker(input: {
 export type RecheckReserveExclusion = {
   avoidProfiles?: readonly string[];
   avoidAccounts?: readonly string[];
+  avoidExaminerAccounts?: readonly string[];
 };
 
 /** Reserves a Claude `specialist` seat for recheck while strictly excluding the finding's original examiner profile. */
@@ -174,7 +175,7 @@ export async function reservePersonalRecheckReviewer(input: {
   exclusion?: RecheckReserveExclusion;
   releaseGrant: (grantId: string, how: 'not_started' | 'exited') => Promise<void>;
 }): Promise<{grantId: string; accountId: string; provider: string; role: 'specialist'}> {
-  const avoidAccountIds = [
+  const avoidReviewerAccountIds = [
     ...(input.exclusion?.avoidAccounts ?? []),
     ...(input.avoidProviders ?? []).filter(id => Id.safeParse(id).success),
   ];
@@ -186,7 +187,8 @@ export async function reservePersonalRecheckReviewer(input: {
     intentId: input.intentId,
     purpose: 'reviewer',
     avoidProfileIds: input.exclusion?.avoidProfiles,
-    avoidAccountIds,
+    avoidAccountIds: input.exclusion?.avoidExaminerAccounts,
+    avoidReviewerAccountIds,
     releaseGrant: grantId => input.releaseGrant(grantId, 'not_started'),
   });
   return {grantId: seat.grantId, accountId: seat.accountId, provider: seat.provider, role: 'specialist'};
@@ -209,10 +211,11 @@ export function createRecheckNativeWorker(input: {
   return {
     async run(call) {
       const parsed = VerifyWorkerCall.parse(call);
-      const exclusion = parsed.avoidProfiles?.length || parsed.avoidAccounts?.length
+      const exclusion = parsed.avoidProfiles?.length || parsed.avoidAccounts?.length || parsed.avoidExaminerAccounts?.length
         ? {
             ...(parsed.avoidProfiles?.length ? {avoidProfiles: parsed.avoidProfiles} : {}),
             ...(parsed.avoidAccounts?.length ? {avoidAccounts: parsed.avoidAccounts} : {}),
+            ...(parsed.avoidExaminerAccounts?.length ? {avoidExaminerAccounts: parsed.avoidExaminerAccounts} : {}),
           }
         : undefined;
       const reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders, exclusion);

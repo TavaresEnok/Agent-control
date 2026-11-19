@@ -10,7 +10,7 @@ import {finishExamIntent, withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT, EXAM_LOGIN_RESTORE_FAILED_TEXT, EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign, type ResolvedPersonalDesign} from './design-command.ts';
-import {DesignCreateModelFailure, runDesignCreate, type CreateExam} from './design-create.ts';
+import {DesignCreateModelFailure, MAX_CREATE_TASK_CHARS, runDesignCreate, type CreateExam} from './design-create.ts';
 import {readRebuildImagePin} from './design-image-run.ts';
 import {runDesignModule} from './design-module.ts';
 import {formatDesignPrepare, prepareDesignSpecialist} from './design-prepare.ts';
@@ -49,6 +49,7 @@ const messages: Record<string, string> = {
   CONTROL_ADMIN_REQUIRED: 'Falta o administrador de controle para registrar claude-opus-5-5 no catálogo.',
   PROJECT_OWNER_REQUIRED: 'Só o dono do projeto prepara o exame.',
   DESIGN_CREATE_INVALID: 'O pedido de criação não tem telas ou rodadas válidas.',
+  DESIGN_CREATE_PROMPT_TOO_LARGE: `O prompt de criação excedeu o limite de ${MAX_CREATE_TASK_CHARS} caracteres; reduza o briefing ou o retrabalho.`,
   DESIGN_CREATE_MODEL_FAILED: 'O modelo não devolveu as telas.',
   DESIGN_VISUAL_UNJUDGED: 'A crítica visual foi pedida e nenhuma tela foi julgada.',
   DESIGN_VISUAL_NO_SCREENS: 'A crítica visual foi pedida, mas nenhuma tela entrou no exame.',

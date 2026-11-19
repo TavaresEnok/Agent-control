@@ -24,7 +24,11 @@ import {runPersonalVerifySession} from '../src/personal-verify-cli.ts';
 import {beginPersonalVerification, resolvePersonalVerification} from '../src/verify-command.ts';
 import {acceptSecurityVerification} from '../src/verify-intent.ts';
 import {createRecheckNativeWorker, reservePersonalRecheckReviewer} from '../src/verify-native-launch.ts';
-import {recheckFindings} from '../src/verify-remediate.ts';
+import {
+  recheckFindings,
+  VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
+  VERIFY_RECHECK_NEW_EXAM_REQUIRED,
+} from '../src/verify-remediate.ts';
 import {runSecurityVerification} from '../src/verify-runtime.ts';
 import {WorkflowGenerations} from '../src/workflow-generations.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -1117,25 +1121,43 @@ test('reverificação pela API vincula exclusão ao achado original, recusa perf
     assert.deepEqual(await singleBlocked.json(), {error: 'DESIGN_REVIEWER_UNAVAILABLE'});
     assert.equal(reservedGrants.length, 0);
 
-    // 2) Dado histórico (ACH-003 sem identidade) com único perfil não inventa exclusão nem quebra.
+    // 2) Dado histórico (ACH-003 sem identidade) preserva o achado e orienta explicitamente novo exame (sem inventar identidade, com 1 ou 2 perfis).
     const historicalSingle = await app.request(url, {method: 'POST', headers, body: JSON.stringify({achadoIds: ['ACH-003']})});
-    assert.equal(historicalSingle.status, 200);
-    assert.deepEqual(await historicalSingle.json(), {results: [{id: 'ACH-003', status: 'fechado'}]});
-    assert.equal(reservedGrants.at(-1)?.profileId, pExaminerA);
+    assert.equal(historicalSingle.status, 409);
+    assert.deepEqual(await historicalSingle.json(), {
+      error: VERIFY_RECHECK_NEW_EXAM_REQUIRED,
+      guidance: VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
+    });
+    assert.equal(reservedGrants.length, 0);
+    const preservedSingle = (await db.pool.query<{status: string; examiner_profile_id: string | null}>(
+      "SELECT status, examiner_profile_id::text AS examiner_profile_id FROM ac_verify_findings WHERE run_id=$1 AND achado_id='ACH-003'",
+      [runId],
+    )).rows[0];
+    assert.equal(preservedSingle?.status, 'confirmado');
+    assert.equal(preservedSingle?.examiner_profile_id, null);
 
-    // 3) Com dois perfis em specialist, cada achado exclui apenas o seu examinador original.
+    // 3) Com dois perfis em specialist, cada achado exclui apenas o seu examinador original; dado histórico segue preservado com orientação de novo exame.
     const rev2 = await capacity.publish(principal, projectId, rev1, CapacityPolicy.parse({
       schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
       roles: {specialist: {regular: [pExaminerA], emergency: [pReviewerB]}},
     }));
     await capacity.assignPolicy(principal, mainContext, rev2);
+    const historicalTwoProfiles = await app.request(url, {method: 'POST', headers, body: JSON.stringify({achadoIds: ['ACH-003']})});
+    assert.equal(historicalTwoProfiles.status, 409);
+    assert.deepEqual(await historicalTwoProfiles.json(), {
+      error: VERIFY_RECHECK_NEW_EXAM_REQUIRED,
+      guidance: VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
+    });
+    assert.equal(reservedGrants.length, 0);
     const perFinding = await app.request(url, {method: 'POST', headers, body: JSON.stringify({achadoIds: ['ACH-001', 'ACH-002']})});
     assert.equal(perFinding.status, 200);
     assert.deepEqual(await perFinding.json(), {results: [{id: 'ACH-001', status: 'fechado'}, {id: 'ACH-002', status: 'fechado'}]});
     assert.equal(reservedGrants.at(-2)?.profileId, pReviewerB);
     assert.equal(reservedGrants.at(-1)?.profileId, pExaminerA);
 
-    // 4) runSecurityVerification persiste examiner_profile_id para achados de modelo e NULL para achado bruto.
+    // 4) runSecurityVerification persiste examiner_profile_id/examiner_account_id coerentes com a exclusão usada na confirmação inicial, inclusive para achado de ferramenta, tornando-o reverificável.
+    const confirmationCalls: {title: string; profileId: string; accountId: string}[] = [];
+    let mapSeatSeen: {profileId: string; accountId: string} | undefined;
     const verifyRes = await runSecurityVerification({
       ledger: db,
       principal,
@@ -1151,7 +1173,10 @@ test('reverificação pela API vincula exclusão ao achado original, recusa perf
       }],
       worker: {
         async run(call) {
-          if (call.task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
+          if (call.task.startsWith('Pedido de mapa.')) {
+            mapSeatSeen = {profileId: call.profileId, accountId: call.accountId};
+            return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
+          }
           if (call.task.startsWith('Pedido de exame.')) {
             const items = (call.task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
             return JSON.stringify({
@@ -1159,20 +1184,40 @@ test('reverificação pela API vincula exclusão ao achado original, recusa perf
               findings: [{title: 'Achado modelo', severity: 'media', file: 'src/app.ts', line: 1, scenario: 's', suggestion: 'g', cwe: null, reference: 'ASVS-5-V1', snippet: 'route'}],
             });
           }
+          const title = call.task.includes('regra-bruta') ? 'regra-bruta' : 'Achado modelo';
+          confirmationCalls.push({title, profileId: call.profileId, accountId: call.accountId});
           return JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'ok', proof: 'src/app.ts'});
         },
       },
     });
-    const storedFindings = (await db.pool.query<{title: string; examiner_profile_id: string | null; examiner_account_id: string | null}>(
-      "SELECT payload->>'title' AS title, examiner_profile_id::text AS examiner_profile_id, examiner_account_id::text AS examiner_account_id FROM ac_verify_findings WHERE run_id=$1 ORDER BY achado_id",
+    const storedFindings = (await db.pool.query<{achado_id: string; title: string; examiner_profile_id: string | null; examiner_account_id: string | null}>(
+      "SELECT achado_id, payload->>'title' AS title, examiner_profile_id::text AS examiner_profile_id, examiner_account_id::text AS examiner_account_id FROM ac_verify_findings WHERE run_id=$1 ORDER BY achado_id",
       [verifyRes.runId],
     )).rows;
     const modelFinding = storedFindings.find(row => row.title === 'Achado modelo');
     const rawFinding = storedFindings.find(row => row.title === 'regra-bruta');
+    assert.deepEqual(mapSeatSeen, {profileId: pExaminerA, accountId: claudeA});
     assert.equal(modelFinding?.examiner_profile_id, pExaminerA);
     assert.equal(modelFinding?.examiner_account_id, claudeA);
-    assert.equal(rawFinding?.examiner_profile_id, null);
-    assert.equal(rawFinding?.examiner_account_id, null);
+    assert.equal(rawFinding?.examiner_profile_id, pExaminerA);
+    assert.equal(rawFinding?.examiner_account_id, claudeA);
+    const rawConfirmCall = confirmationCalls.find(item => item.title === 'regra-bruta');
+    assert.equal(rawConfirmCall?.profileId, pReviewerB);
+    assert.equal(rawConfirmCall?.accountId, claudeB);
+
+    // Fluxo real de reverificação do achado de ferramenta recém-persistido:
+    // - com 1 perfil (rev1), recusa DESIGN_REVIEWER_UNAVAILABLE;
+    // - com 2 perfis (rev2), exclui pExaminerA, reserva pReviewerB e fecha o achado de ferramenta.
+    const rawRecheckUrl = `/api/v1/ac/personal/verificacoes/${verifyRes.runId}/reverificar`;
+    await capacity.assignPolicy(principal, mainContext, rev1);
+    const rawSingleBlocked = await app.request(rawRecheckUrl, {method: 'POST', headers, body: JSON.stringify({achadoIds: [rawFinding!.achado_id]})});
+    assert.equal(rawSingleBlocked.status, 409);
+    assert.deepEqual(await rawSingleBlocked.json(), {error: 'DESIGN_REVIEWER_UNAVAILABLE'});
+    await capacity.assignPolicy(principal, mainContext, rev2);
+    const rawRechecked = await app.request(rawRecheckUrl, {method: 'POST', headers, body: JSON.stringify({achadoIds: [rawFinding!.achado_id]})});
+    assert.equal(rawRechecked.status, 200);
+    assert.deepEqual(await rawRechecked.json(), {results: [{id: rawFinding!.achado_id, status: 'fechado'}]});
+    assert.equal(reservedGrants.at(-1)?.profileId, pReviewerB);
   } finally {
     await db.close();
     await database.close();
@@ -1268,5 +1313,146 @@ test('exame de design recusa revisão quando os únicos perfis disponíveis exam
   } finally {
     await db.close();
     await database.close();
+  }
+});
+
+test('segundo revisor de achado alto prefere outra conta disponível e usa sessões distintas na mesma conta sem alternativa', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const database = await isolatedDatabase(databaseUrl!, 'highsecond');
+  const db = new Ledger(database.url);
+  const root = await mkdtemp(join(tmpdir(), 'ac-high-second-'));
+  const dataDirectory = join(root, 'data');
+  try {
+    await mkdir(dataDirectory, {recursive: true, mode: 0o700});
+    await db.migrate();
+    const principal = 'high-second-owner';
+    const projectId = randomUUID();
+    const capacity = new Capacity(db);
+    const repo = await initRepo(root);
+    const commit = (await exec('git', ['rev-parse', 'HEAD'], {cwd: repo})).stdout.trim();
+    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'High Second Reviewer']);
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
+    await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)', [projectId, repo]);
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
+    await capacity.registerModel(principal, {
+      provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium'], roles: [...roles], source: 'synthetic://highsecond',
+    });
+    await capacity.registerModel(principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'synthetic://highsecond',
+    });
+    const claudeA = randomUUID();
+    const claudeB = randomUUID();
+    for (const id of [claudeA, claudeB]) {
+      await capacity.addAccount(principal, projectId, {
+        id, provider: 'claude', label: id, resourceIdentity: `claude:${id}`, mode: 'synthetic',
+        eligibility: 'documented_supported', eligibilitySource: 'synthetic://highsecond', maxConcurrent: 4,
+      });
+      await capacity.observeQuota(principal, id, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+    }
+    const pExaminerA = randomUUID();
+    const pReviewerA = randomUUID();
+    const pCreateB = randomUUID();
+    await capacity.addProfile(principal, projectId, {id: pExaminerA, accountId: claudeA, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: pReviewerA, accountId: claudeA, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: pCreateB, accountId: claudeB, model: 'claude-opus-5-5', effort: 'medium', role: 'specialist'});
+
+    const rev1 = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
+      schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+      roles: {specialist: {regular: [pCreateB, pExaminerA], emergency: [pReviewerA]}},
+    }));
+    const mainContext = await db.createContext(principal, projectId, randomUUID());
+    await capacity.assignPolicy(principal, mainContext, rev1);
+    const authority = await db.acquire(principal, mainContext, randomUUID(), 'high-second', 60);
+    const intent = await acceptSecurityVerification(db, principal, authority, {projectId, commit, policyRevision: rev1});
+    const runId = randomUUID();
+    await db.pool.query(
+      `INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir)
+       VALUES($1,$2,$3,$4,$5,$6,'done',$7)`,
+      [runId, projectId, mainContext, intent.id, principal, commit, '20261119-000001-seguranca'],
+    );
+    await db.pool.query(
+      `INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,profile_id,checklist)
+       VALUES($1,'src/app.ts','claude','claude-sonnet-5-5',$2,'["ASVS-5-V1"]'::jsonb)`,
+      [runId, pExaminerA],
+    );
+    await db.pool.query(
+      `INSERT INTO ac_verify_findings(run_id,achado_id,status,severity,file,line,payload,examiner_profile_id,examiner_account_id) VALUES
+       ($1,'ACH-001','confirmado','alta','src/app.ts',1,'{"title":"Alto 1","snippet":"route"}'::jsonb,$2,$3),
+       ($1,'ACH-002','confirmado','alta','src/app.ts',1,'{"title":"Alto 2","snippet":"route"}'::jsonb,$2,$3)`,
+      [runId, pExaminerA, claudeA],
+    );
+
+    const reserved: {accountId: string; profileId: string}[] = [];
+    const sessions: string[] = [];
+    const release = async (grantId: string, _how: 'not_started' | 'exited') => {
+      await capacity.transition(principal, grantId, authority, 'released', {processId: grantId, state: 'not_started'});
+    };
+    const supervisorFor = (accountId: string) => ({
+      active: true,
+      supportsAccount: (candidate: string) => candidate === accountId,
+      async start(_principal: string, _authority: unknown, request: {grantId: string; sessionId: string}) {
+        const row = (await db.pool.query<{account_id: string; profile_id: string}>(
+          'SELECT account_id::text AS account_id, profile_id::text AS profile_id FROM ac_capacity_grants WHERE id=$1',
+          [request.grantId],
+        )).rows[0]!;
+        reserved.push({accountId: row.account_id, profileId: row.profile_id});
+        sessions.push(request.sessionId);
+        return {state: 'running'};
+      },
+      async reconcile(_principal: string, _authority: unknown, request: {grantId: string}) {
+        await release(request.grantId, 'exited');
+        return {state: 'completed', output: JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'Corrigido.', proof: 'src/app.ts'})};
+      },
+      async retireTerminal() {
+        return {state: 'removed'};
+      },
+    });
+    const worker = createRecheckNativeWorker({
+      supervisors: [supervisorFor(claudeA), supervisorFor(claudeB)],
+      principal,
+      authority,
+      base: commit,
+      reserveReviewer: (intentId, avoidProviders, exclusion) => reservePersonalRecheckReviewer({
+        ledger: db,
+        principal,
+        authority,
+        intentId,
+        avoidProviders,
+        exclusion,
+        releaseGrant: release,
+      }),
+      releaseGrant: release,
+    });
+
+    // 1) Primeiro revisor usa pReviewerA (revisor preparado em claudeA); segundo revisor prefere claudeB (pCreateB) sobre repetir claudeA.
+    const twoAccounts = await recheckFindings(db, principal, authority, {
+      runId, achadoIds: ['ACH-001'], dataDirectory, projectId, worker,
+    });
+    assert.deepEqual(twoAccounts.results, [{id: 'ACH-001', status: 'fechado'}]);
+    assert.deepEqual(reserved.slice(-2), [
+      {accountId: claudeA, profileId: pReviewerA},
+      {accountId: claudeB, profileId: pCreateB},
+    ]);
+
+    // 2) Sem outra conta disponível (só claudeA com pExaminerA + pReviewerA), segundo revisor usa pReviewerA em sessão distinta.
+    const revSingleAccount = await capacity.publish(principal, projectId, rev1, CapacityPolicy.parse({
+      schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+      roles: {specialist: {regular: [pExaminerA], emergency: [pReviewerA]}},
+    }));
+    await capacity.assignPolicy(principal, mainContext, revSingleAccount);
+    const sameAccount = await recheckFindings(db, principal, authority, {
+      runId, achadoIds: ['ACH-002'], dataDirectory, projectId, worker,
+    });
+    assert.deepEqual(sameAccount.results, [{id: 'ACH-002', status: 'fechado'}]);
+    assert.deepEqual(reserved.slice(-2), [
+      {accountId: claudeA, profileId: pReviewerA},
+      {accountId: claudeA, profileId: pReviewerA},
+    ]);
+    assert.notEqual(sessions.at(-2), sessions.at(-1));
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(root, {recursive: true, force: true});
   }
 });
