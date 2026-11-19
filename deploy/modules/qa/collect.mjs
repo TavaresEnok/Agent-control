@@ -24,7 +24,7 @@ import {
 } from 'node:fs';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
-import {dirname, extname, isAbsolute, join, posix, relative, resolve, sep} from 'node:path';
+import {basename, dirname, extname, isAbsolute, join, posix, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {
   classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool, testIdentity,
@@ -192,7 +192,8 @@ function copyRepoToIsolatedTmp(repoDir) {
         exclude('links simbólicos ou arquivos especiais');
         continue;
       }
-      if (!ALLOWED_EXTS.has(extname(entry.name).toLowerCase()) && !ALLOWED_FILENAMES.has(entry.name)) {
+      const goVendorManifest = entry.name === 'modules.txt' && basename(currentDir) === 'vendor';
+      if (!ALLOWED_EXTS.has(extname(entry.name).toLowerCase()) && !ALLOWED_FILENAMES.has(entry.name) && !goVendorManifest) {
         exclude('arquivos de extensões fora da coleta');
         continue;
       }
