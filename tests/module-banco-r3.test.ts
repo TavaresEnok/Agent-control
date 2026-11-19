@@ -97,11 +97,14 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
           raise "unexpected statement timeout" unless connection.exec("SHOW statement_timeout").getvalue(0, 0) == '5s'
         end
         ddl = 'CREATE TABLE parent(id integer PRIMARY KEY); CREATE TABLE child(id integer REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);'
-        prefix = [source('db/migrations/001_schema.sql', ddl), source('db/migrations/002_data.sql', 'INSERT INTO child VALUES (424242);')]
+        prefix = [
+          source('db/migrations/001_schema.sql', ddl + ' INSERT INTO public.parent VALUES (1);'),
+          source('db/migrations/002_data.sql', 'INSERT INTO child VALUES (424242);')
+        ]
         raise "unexpected commit" if db.migrate('fresh', prefix + [
           source('db/migrations/003_check.sql', "/* ação */\\nSET CONSTRAINTS ALL IMMEDIATE;"),
           source('db/migrations/004_next.sql', 'SELECT 1;')
-        ], replay: true)
+        ])
         db.connect('fresh') do |connection|
           raise "unconfirmed batch persisted data" unless connection.exec("SELECT to_regclass('public.parent') IS NULL").getvalue(0, 0) == 't'
         end
@@ -112,7 +115,7 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         reports[:mixed] = JSON.parse(mixed.to_json)
         nested = Banco::Report.new
         db.instance_variable_set(:@report, nested)
-        db.migrate('fresh', prefix + [source('db/migrations/003_nested.sql', "DO $$ BEGIN SET CONSTRAINTS ALL IMMEDIATE; END $$;")])
+        db.migrate('fresh', prefix + [source('db/migrations/003_nested.sql', "DO $$ BEGIN SET\\nCONSTRAINTS ALL\\nIMMEDIATE; END $$;")])
         reports[:nested] = JSON.parse(nested.to_json)
         positioned = Banco::Report.new
         db.instance_variable_set(:@report, positioned)
@@ -122,13 +125,20 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         db.instance_variable_set(:@report, missing_constraint)
         db.migrate('fresh', prefix + [
           source('db/migrations/003_missing.sql', "SELECT 1;\\n/* ação */\\nSET CONSTRAINTS missing IMMEDIATE;")
-        ], replay: true)
+        ])
         reports[:missing_constraint] = JSON.parse(missing_constraint.to_json)
         missing_nested = Banco::Report.new
         db.instance_variable_set(:@report, missing_nested)
         db.migrate('fresh', prefix + [
-          source('db/migrations/003_missing_nested.sql', "-- ação\\nDO $$ BEGIN SET CONSTRAINTS missing IMMEDIATE; END $$;")
-        ], replay: true)
+          source('db/migrations/003_missing_nested.sql', <<~SQL)
+            -- ação
+            DO $$ BEGIN
+              SET
+              CONSTRAINTS missing
+              IMMEDIATE;
+            END $$;
+          SQL
+        ])
         reports[:missing_nested] = JSON.parse(missing_nested.to_json)
         missing_in_trigger = Banco::Report.new
         db.instance_variable_set(:@report, missing_in_trigger)
@@ -137,7 +147,8 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
             CREATE TABLE task (id integer);
             CREATE FUNCTION check_task() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
-              SET CONSTRAINTS missing IMMEDIATE;
+              SET CONSTRAINTS
+                missing IMMEDIATE;
               RETURN NEW;
             END;
             $$;
@@ -145,8 +156,8 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
               DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_task();
           SQL
           source('db/migrations/002_data.sql', 'INSERT INTO task VALUES (1);'),
-          source('db/migrations/003_check.sql', 'SET CONSTRAINTS ALL IMMEDIATE;')
-        ], replay: true)
+          source('db/migrations/003_check.sql', 'DO $$ BEGIN SET CONSTRAINTS ALL IMMEDIATE; END $$;')
+        ])
         reports[:missing_in_trigger] = JSON.parse(missing_in_trigger.to_json)
         different = Banco::Report.new
         db.instance_variable_set(:@report, different)
@@ -154,7 +165,7 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
           source('db/migrations/001_first.sql', ddl + ' INSERT INTO child VALUES (19);'),
           source('db/migrations/002_second.sql', 'INSERT INTO parent VALUES (19); INSERT INTO child VALUES (424242);'),
           source('db/migrations/003_tail.sql', 'SELECT 1;')
-        ], replay: true)
+        ])
         reports[:different] = JSON.parse(different.to_json)
         single = Banco::Report.new
         db.instance_variable_set(:@report, single)
@@ -164,6 +175,16 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         db.instance_variable_set(:@report, timeout)
         db.migrate('upgraded', [source('db/migrations/001_slow.sql', 'SELECT pg_sleep(6);'), source('db/migrations/002_next.sql', 'SELECT 1;')])
         reports[:timeout] = JSON.parse(timeout.to_json)
+        transaction_timeout = Banco::Report.new
+        db.instance_variable_set(:@report, transaction_timeout)
+        # A desconexão do timeout real pode fazer libpq entregar apenas PG::ConnectionBad.
+        # O erro sintético exercita a classificação quando o SQLSTATE está disponível.
+        db.migrate('upgraded', [
+          source('db/migrations/001_ok.sql', 'CREATE TABLE pending(id integer);'),
+          source('db/migrations/002_deadline.sql', "DO $$ BEGIN RAISE SQLSTATE '25P04'; END $$;"),
+          source('db/migrations/003_next.sql', 'SELECT 1;')
+        ])
+        reports[:transaction_timeout] = JSON.parse(transaction_timeout.to_json)
         unavailable = Banco::Report.new
         db.instance_variable_set(:@report, unavailable)
         unavailable.measure('pg-migrate', 'Cenário indisponível') do
@@ -215,12 +236,12 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
   const {early, mixed, nested, positioned, missing_constraint, missing_nested, different, single, timeout, unavailable, rejected, app, syntax, workload} = result;
   assert.ok(early.coverage.some(row => row.status === 'ok' && /003_check.sql.*lote rejeitado.*SQLSTATE 23503.*SET CONSTRAINTS IMMEDIATE na linha 2.*002_data.sql/.test(row.detail)));
   assert.ok(early.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && f.file.endsWith('002_data.sql')
-    && /prefixo anterior confirmou/.test(f.evidence)));
+    && /diagnóstico da execução original e único arquivo com inserções/.test(f.evidence)));
   for (const name of ['001_schema.sql', '002_data.sql', '004_next.sql']) {
     assert.ok(early.coverage.some(row => row.status === 'skipped' && row.detail.includes(name)));
   }
-  assert.ok(mixed.findings.some(f => f.rule === 'BANCO-LOTE-MIGRACAO-REJEITADO' && f.file.endsWith('003_mix.sql')));
-  assert.ok(mixed.coverage.some(row => row.status === 'ok' && /003_mix.sql.*detecção durante a execução.*pode ter antecipado.*indeterminada/.test(row.detail)));
+  assert.ok(mixed.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && f.file.endsWith('002_data.sql')));
+  assert.ok(mixed.coverage.some(row => row.status === 'ok' && /003_mix.sql.*detecção durante a execução.*pode ter antecipado.*origem atribuída a .*002_data.sql/.test(row.detail)));
   assert.ok(nested.findings.some(f => f.rule === 'BANCO-LOTE-MIGRACAO-REJEITADO' && f.file.endsWith('003_nested.sql')));
   assert.ok(nested.coverage.some(row => row.status === 'ok' && /003_nested.sql.*SET CONSTRAINTS chamado pelo arquivo.*indeterminada/.test(row.detail)));
   assert.ok(positioned.findings.some(f => f.file.endsWith('003_direct.sql') && f.line === 2 && /SQLSTATE 42703/.test(f.evidence)));
@@ -240,6 +261,10 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
   assert.ok(timeout.coverage.some(row => row.status === 'failed' && /001_slow.sql.*SQLSTATE 57014/.test(row.detail)));
   assert.ok(timeout.coverage.some(row => row.status === 'skipped' && row.detail.includes('002_next.sql')));
   assert.equal(timeout.findings.length, 0);
+  assert.ok(result.transaction_timeout.coverage.some(row => row.status === 'failed' && /002_deadline.sql.*SQLSTATE 25P04/.test(row.detail)));
+  assert.ok(result.transaction_timeout.coverage.some(row => row.status === 'skipped' && /001_ok.sql.*transação não confirmada/.test(row.detail)));
+  assert.ok(result.transaction_timeout.coverage.some(row => row.status === 'skipped' && row.detail.includes('003_next.sql')));
+  assert.deepEqual(result.transaction_timeout.findings, []);
   assert.deepEqual(unavailable.findings, []);
   assert.ok(unavailable.coverage.some(row => row.status === 'failed' && /Cenário indisponível.*PG::ConnectionBad/.test(row.detail)));
   assert.ok(rejected.findings.some(f => f.file.endsWith('002_bad.sql') && f.line === 2 && /SQLSTATE 42703/.test(f.evidence)));
@@ -346,10 +371,10 @@ test('saída do coletor distingue rejeição no lote de três arquivos e cancela
 }, () => {
   const rejected = runIsolated<Report>(collect, join(fixtures, 'r5-commit/rejected'));
   assert.ok(rejected.coverage.some(row => row.status === 'ok'
-    && /pg-migrate:fresh: lote rejeitado no commit.*rejeição reproduzida com a inclusão de db\/migrations\/002_data.sql.*SQLSTATE 23503/.test(row.detail)));
+    && /pg-migrate:fresh: lote rejeitado no commit.*origem atribuída a db\/migrations\/002_data.sql.*SQLSTATE 23503/.test(row.detail)));
   assert.ok(rejected.coverage.every(row => row.status !== 'failed'));
   assert.ok(rejected.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && f.file.endsWith('002_data.sql')
-    && /SQLSTATE 23503.*lote de 3 arquivos.*003_tail.sql.*prefixo anterior confirmou.*reproduziu/.test(f.evidence)));
+    && /SQLSTATE 23503.*lote de 3 arquivos.*003_tail.sql.*diagnóstico da execução original e único arquivo com inserções/.test(f.evidence)));
   assert.ok(rejected.findings.every(f => f.rule !== 'BANCO-MIGRACAO-REJEITADA' || f.file.endsWith('002_data.sql')));
   const canceled = runIsolated<Report>(collect, join(fixtures, 'r4-commit/canceled'));
   assert.ok(canceled.coverage.some(row => row.status === 'failed'
@@ -366,6 +391,92 @@ test('saída do coletor distingue rejeição no lote de três arquivos e cancela
     }
   }
   assert.doesNotMatch(JSON.stringify([rejected, canceled]), /424242|INSERT INTO/);
+});
+
+test('rejeições ambíguas preservam o ponto de detecção e usam uma única execução do lote', {
+  skip: skipPostgres, timeout: 90_000,
+}, () => {
+  const result = runIsolated<Record<string, Report>>(String.raw`
+    require 'dexter'
+    schema = <<~SQL
+      CREATE TABLE parent (id integer PRIMARY KEY);
+      CREATE TABLE child (id integer REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);
+    SQL
+    cases = {
+      replacement: [
+        'INSERT INTO child VALUES (42);',
+        'DELETE FROM child WHERE id = 42;',
+        'INSERT INTO child VALUES (42);',
+        'SELECT 1;'
+      ],
+      parent_removal: [
+        'INSERT INTO parent VALUES (42);',
+        'INSERT INTO child VALUES (42);',
+        'DELETE FROM parent WHERE id = 42;',
+        'SET CONSTRAINTS ALL IMMEDIATE;'
+      ],
+      conditional: [
+        "DO $$ BEGIN IF current_database() <> 'fresh' THEN INSERT INTO child VALUES (42); END IF; END $$;",
+        'SELECT 1;',
+        "DO $$ BEGIN IF current_database() = 'fresh' THEN INSERT INTO child VALUES (42); END IF; END $$;",
+        'SELECT 1;'
+      ]
+    }
+    reports = {}
+    Dir.mktmpdir('c5-r6-', '/tmp') do |dir|
+      db = Banco::Database.new(dir, Banco::Report.new)
+      begin
+        db.start
+        connections = []
+        executed = []
+        db.define_singleton_method(:connect) do |name, **options, &block|
+          connections << name
+          super(name, **options) do |connection|
+            connection.define_singleton_method(:exec) do |sql|
+              executed << sql
+              super(sql)
+            end
+            block.call(connection)
+          end
+        end
+        cases.each do |name, commands|
+          report = Banco::Report.new
+          db.instance_variable_set(:@report, report)
+          sources = [schema, *commands].map.with_index(1) do |sql, index|
+            Banco::Source.new(format('db/migrations/%03d_%s.sql', index, name), sql)
+          end
+          connections.clear
+          executed.clear
+          raise "unexpected commit for #{name}" if db.migrate('fresh', sources)
+          raise "unexpected connections for #{name}: #{connections}" unless connections == ['fresh']
+          expected = ['BEGIN', *sources.map(&:sql)]
+          expected << 'COMMIT' unless name == :parent_removal
+          expected << 'ROLLBACK'
+          raise "unexpected SQL execution sequence for #{name}" unless executed == expected
+          reports[name] = JSON.parse(report.to_json)
+        end
+      ensure
+        db.stop
+      end
+    end
+    puts JSON.generate(reports)
+  `);
+  for (const [scenario, detection] of [
+    ['replacement', 'detecção no commit'],
+    ['parent_removal', 'detecção em SET CONSTRAINTS IMMEDIATE na linha 1'],
+    ['conditional', 'detecção no commit'],
+  ] as const) {
+    const report = result[scenario];
+    assert.equal(report.findings.length, 1, scenario);
+    const [finding] = report.findings;
+    assert.equal(finding.rule, 'BANCO-LOTE-MIGRACAO-REJEITADO', scenario);
+    assert.equal(finding.file, `db/migrations/005_${scenario}.sql`, scenario);
+    assert.ok(finding.evidence.includes(`SQLSTATE 23503; ${detection}`), scenario);
+    assert.match(finding.evidence, /lote de 5 arquivos.*origem entre arquivos indeterminada.*último arquivo alcançado/);
+    assert.ok(report.coverage.some(row => row.status === 'ok' && /lote rejeitado.*origem entre arquivos indeterminada/.test(row.detail)), scenario);
+    assert.ok(report.coverage.every(row => row.status !== 'failed' && !row.files?.length), scenario);
+  }
+  assert.doesNotMatch(JSON.stringify(result), /INSERT INTO|DELETE FROM|current_database|inline_code_block/);
 });
 
 test('coletor atribui as medições e o candidato Dexter e valida o controle limpo com Squawk', {
