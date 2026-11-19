@@ -606,3 +606,12 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:54 UTC — COTA do Codex registrada em high-C5-R8.jsonl. Encerramento dos processos da equipe e preparação do relatório de pausa.
 - 19/11/2026 06:54 UTC — COTA do Codex. Equipe e execuções do plano interrompidas. Relatório de pausa commitado em 1ff24599. A retomada depende do titular.
 PAUSADO-COTA
+- 19/11/2026 16:50 UTC — Retomada autorizada pelo titular em 8f5dddf3. Confirmados os worktrees da pausa, o histórico de homologação e o espaço de 19 GB. Iniciada a conferência das imagens e dos digests antes de novos builds.
+- 19/11/2026 16:51 UTC — trabalho-C7-RECONCILIACAO-R8 iniciado em final-c7 por Sol high normal.
+- 19/11/2026 16:51 UTC — trabalho-C2-LINGUAGENS-R3 iniciado em final-qa-mutacao-linguagens por Sol high normal.
+- 19/11/2026 16:51 UTC — trabalho-C5-R8 iniciado em final-c5 por Sol medium normal.
+- 19/11/2026 16:51 UTC — trabalho-C8-R9 iniciado em final-c8 por Sol medium normal.
+- 19/11/2026 16:51 UTC — revisor-C-EXAME-MEDICOES-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:52 UTC — Validação de retomada-c3-257a em 257a3451 iniciada no checkout de integração.
+- 19/11/2026 16:53 UTC — C-EXAME-MEDICOES-R2 encerrado com código 0.
+- 19/11/2026 16:53 UTC — Removidas 11 candidatas próprias substituídas e conferidos os oito digests da homologação db0ea342. A imagem aceita de QA foi recuperada do arquivo privado e verificada pelo SHA. O controle de latência de banco passou 6/6 em 8d7bfc94, com as duas consultas medidas. C6-R11 encomendada para as lacunas de leitura estática.
