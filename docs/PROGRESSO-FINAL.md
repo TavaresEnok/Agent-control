@@ -415,3 +415,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:03 UTC — Trabalhador encerrou C9-R5 em 86ec5e87 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:04 UTC — Publicação das medições em bfab53bd: PostgreSQL descartável gravou um achado confirmado em cada um dos oito módulos com dados de coletor e respostas independentes sintéticos e snapshots Git reais. Os 14 critérios não cobrem todas as regras. R3 da reverificação e C9-R5 recebidas. Aberta C2-R11 para asserções capturadas e chamadas que não chegam a executar a função.
 - 19/11/2026 05:05 UTC — Disponibilizada uma ordem independente de QA para medir a força dos testes Python e Go e propriedades Python, em arquivos próprios. A reverificação funcional 6e5edfd1 já foi incorporada à base de homologação d6aaf1c9 para a prova com o exame de medições.
+- 19/11/2026 05:05 UTC — Trabalho C2-MUTACAO-LINGUAGENS iniciado por Sol high normal em final-qa-mutacao-linguagens.
+- 19/11/2026 05:06 UTC — Revisor encerrou C2-LINGUAGENS em 1af4e0b2 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:06 UTC — Revisão C2-R10-INTEGRACAO iniciada por Sol high normal somente leitura em 3eead086.
+- 19/11/2026 05:07 UTC — Exame com reverificação R3 em d6aaf1c9 passou nos 31 testes dirigidos, incluindo publicação no Ledger para os oito módulos. O revisor identificou limites de execução e descoberta no coletor poliglota. C2-LINGUAGENS-R2 recebeu esses pontos e a prova já feita com os runtimes reais.
