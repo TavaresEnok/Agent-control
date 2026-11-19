@@ -430,10 +430,10 @@ module Banco
             sources.take(index).each do |prior|
               @report.cover("pg-migrate", "skipped", "pg-migrate:#{name}:#{prior.path}: transação não confirmada (#{evidence})")
             end
-            detection, line, line_basis = migration_error_location(error, source, statements) if rejected && error.is_a?(PG::Error)
+            detection, line, line_basis, partial = migration_error_location(error, source, statements) if rejected && error.is_a?(PG::Error)
             outcome = "execução interrompida (#{evidence})"
             if detection
-              origin = report_batch_rejection(name, sources.take(index + 1), error, detection, writers.origin(error))
+              origin = report_batch_rejection(name, sources.take(index + 1), error, detection, partial ? nil : writers.origin(error))
               outcome = "lote rejeitado (#{evidence}); #{detection}; #{origin}"
             elsif rejected
               finding_evidence = evidence
@@ -576,7 +576,18 @@ module Banco
     end
 
     INLINE_SQL_FRAME = %r{\Aline [1-9][0-9]* at (?:SQL statement|EXECUTE)\z}
-    INLINE_FRAME = %r{\Aline [1-9][0-9]* (?:at|during|while) \S}
+    # Sufixos de plpgsql_exec_error_callback e plpgsql_stmt_typename no PostgreSQL 17.
+    INLINE_FRAME = %r{
+      \Aline\ [1-9][0-9]*\ (?:
+        at\ (?:SQL\ statement|EXECUTE|statement\ block|assignment|IF|CASE|LOOP|WHILE|
+          FOR\ (?:with\ integer\ loop\ variable|over\ (?:SELECT\ rows|cursor|EXECUTE\ statement))|
+          FOREACH\ over\ array|EXIT|CONTINUE|RETURN(?:\ NEXT|\ QUERY)?|RAISE|ASSERT|
+          GET\ (?:STACKED\ )?DIAGNOSTICS|OPEN|FETCH|MOVE|CLOSE|PERFORM|CALL|DO|COMMIT|ROLLBACK)|
+        during\ (?:statement\ block\ (?:local\ variable\ initialization|entry|exit)|exception\ cleanup|
+          initialization\ of\ execution\ state|function\ (?:entry|exit))|
+        while\ (?:storing\ call\ arguments\ into\ local\ variables|casting\ return\ value\ to\ function's\ return\ type)
+      )\z
+    }x
     INLINE_FRAME_PREFIX = "PL/pgSQL function inline_code_block"
     PLPGSQL_FRAME = %r{\APL/pgSQL function (?:[^"\n]++|"(?:[^"]++|"")*+")++(?=\n|\z)}
     PLPGSQL_COMPILATION_FRAME = %r{\Acompilation of PL/pgSQL function ".{1,63}?" near line \d+(?=\n|\z)}m
@@ -589,6 +600,7 @@ module Banco
     UNDECIDABLE_CONTEXT = "detecção durante a execução do arquivo; contexto do PostgreSQL inconclusivo"
     STATEMENT_START = "linha inicial da instrução; posição exata indisponível"
     SERVER_CURSOR = "linha indicada pelo cursor do servidor"
+    SqlFrame = Struct.new(:sql, :statements)
 
     def context_frames(context)
       frames = []
@@ -598,7 +610,12 @@ module Banco
           ending = context_query_end(payload)
           return unless ending
 
-          frames << (label == 'SQL statement "' ? parsed_context_query(payload[0...ending]) : :other)
+          if label == 'SQL statement "'
+            sql = payload[0...ending]
+            frames << SqlFrame.new(sql, parsed_context_query(sql))
+          else
+            frames << :other
+          end
           context = payload[(ending + 1)..].delete_prefix("\n")
         elsif (frame = context[PLPGSQL_FRAME] || context[PLPGSQL_COMPILATION_FRAME] || sql_routine_frame(context))
           if frame == INLINE_FRAME_PREFIX || frame.start_with?(INLINE_FRAME_PREFIX + " ")
@@ -690,13 +707,31 @@ module Banco
     end
 
     def statement_at_cursor(sql, statements, position)
-      return unless position&.between?(1, sql.length)
+      return if statements.empty? || !position&.between?(1, sql.length)
 
       # O cursor do servidor conta caracteres e a árvore usa offsets em bytes.
       offset = sql[0, position - 1].bytesize
-      statements.find do |entry|
-        offset >= entry.stmt_location && (entry.stmt_len.zero? || offset <= entry.stmt_location + entry.stmt_len)
+      return unless PgQuery.scan(sql).first.tokens.any? do |token|
+        token.start <= offset && offset < token.end && !%i[SQL_COMMENT C_COMMENT ASCII_59].include?(token.token)
       end
+
+      statements.find do |entry|
+        offset >= entry.stmt_location && (entry.stmt_len.zero? || offset < entry.stmt_location + entry.stmt_len)
+      end
+    end
+
+    def statement_text(sql, statement)
+      length = statement.stmt_len.zero? ? sql.bytesize - statement.stmt_location : statement.stmt_len
+      sql.byteslice(statement.stmt_location, length).strip
+    end
+
+    def corroborates_internal_statement?(frame, sql, statements, selected)
+      return true if frame.sql.strip == sql.strip
+      return false unless frame.statements.one?
+
+      text = statement_text(sql, selected)
+      text == statement_text(frame.sql, frame.statements.first) &&
+        statements.count { |entry| statement_text(sql, entry) == text } == 1
     end
 
     # Essas assinaturas podem vir de outras instruções. Sem cursor, aceite
@@ -738,10 +773,18 @@ module Banco
       internal_statements = internal_query ? parsed_context_query(internal_query) : []
       internal_statement = statement_at_cursor(internal_query, internal_statements, diagnostic_position(raw_internal_position)) if internal_query
 
-      # Quadros inválidos e campos internos incompletos só indicam o ponto de detecção.
-      if !frames || ((internal_query || raw_internal_position) && !internal_statement)
+      cursor_statement = statement_at_cursor(source.sql, statements, position)
+      inline = frames && %i[inline_sql inline].include?(frames.last)
+      textual = frames&.find { |frame| frame.is_a?(SqlFrame) }
+      internal_conflict = internal_statement && textual &&
+        !corroborates_internal_statement?(textual, internal_query, internal_statements, internal_statement)
+      cursor_conflict = inline && cursor_line && !cursor_statement&.stmt&.do_stmt
+
+      if !frames || internal_conflict || cursor_conflict || ((internal_query || raw_internal_position) && !internal_statement)
         evidence = []
         evidence << UNDECIDABLE_CONTEXT unless frames
+        evidence << "consulta ou posição interna diverge do quadro textual de SQL" if internal_conflict
+        evidence << "cursor externo sem correspondência com o bloco inline" if cursor_conflict
         if internal_query || raw_internal_position
           query_status = internal_query ? "presente" : "ausente"
           position_status = if internal_statement
@@ -752,22 +795,29 @@ module Banco
             "ausente"
           end
           evidence << "diagnóstico interno parcial (consulta interna #{query_status}; posição interna #{position_status})"
-          possible_statements = internal_statement ? [internal_statement] : internal_statements
-          if possible_statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
-            evidence << POSSIBLE_CONSTRAINT_CHECK
-          end
         end
-        return ["#{evidence.join('; ')}#{cursor_evidence}"]
+        possible_statements = internal_statement ? [internal_statement] : internal_statements
+        possible_statements += frames.grep(SqlFrame).flat_map(&:statements) if frames
+        if possible_statements.any? { |entry| entry.stmt.constraints_set_stmt&.deferred == false }
+          evidence << POSSIBLE_CONSTRAINT_CHECK
+        end
+        return ["cobertura parcial da origem; #{evidence.join('; ')}#{cursor_evidence}", nil, nil, true]
+      end
+      frames.map! do |frame|
+        if frame.is_a?(SqlFrame)
+          frame.equal?(textual) && internal_statement ? [internal_statement] : frame.statements
+        else
+          frame
+        end
       end
       frames.unshift([internal_statement]) if internal_statement && frames.first == :inline_sql
 
       signature = [sqlstate(error), diagnostic.error_field(PG::Result::PG_DIAG_SOURCE_FUNCTION)]
-      cursor_statement = statement_at_cursor(source.sql, statements, position)
       executing = cursor_statement
       executing ||= statements.first if statements.one?
       candidates = executing ? [executing] : statements
 
-      blocks = %i[inline_sql inline].include?(frames.last) ? candidates.select { |entry| entry.stmt.do_stmt } : []
+      blocks = inline ? candidates.select { |entry| entry.stmt.do_stmt } : []
       block = blocks.first if blocks.one?
       if !blocks.empty? && inline_constraint_resolution?(frames, signature)
         return direct_error_location(source, block, cursor_line)

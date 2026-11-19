@@ -102,7 +102,10 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
     set_frame = %Q(SQL statement "#{set_sql}")
     inline = 'PL/pgSQL function inline_code_block line 42 at SQL statement'
     cursor = (source_sql.index('falta') + 1).to_s
-    internal_sql = "SELECT check_task();\n#{set_sql}"
+    other_cursor = (source_sql.index('ação') + 1).to_s
+    select_sql = 'SELECT check_task()'
+    select_frame = %Q(SQL statement "#{select_sql}")
+    internal_sql = "SELECT check_task();\nSELECT 'ação 🌱';\n#{set_sql}"
     internal_fields = {
       context: inline, internal_position: (internal_sql.index('falta') + 1).to_s, internal_query: internal_sql
     }
@@ -113,12 +116,27 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
       context: 'PL/pgSQL function inline_code_block line x at EXECUTE',
       sqlstate: '42703', source_function: nil, statement_position: cursor
     }
+    writer_fields = {
+      sqlstate: '23503', source_function: 'ri_ReportViolation',
+      schema_name: 'public', table_name: 'child', constraint_name: 'child_fk'
+    }
     cases = {
       start: {context: [set_frame, inline].join("\n")},
       cursor: {context: [set_frame, inline].join("\n"), statement_position: cursor},
       eof_cursor: {context: [set_frame, inline].join("\n"), statement_position: (source_sql.length + 1).to_s},
       malformed_cursor: {context: [set_frame, inline].join("\n"), statement_position: "#{cursor}x"},
+      different_command_cursor: {context: [set_frame, inline].join("\n"), statement_position: other_cursor},
+      between_commands_cursor: {context: [set_frame, inline].join("\n"), statement_position: source_sql.index('DO').to_s},
       internal_cursor: internal_fields,
+      corroborated_frame: internal_fields.merge(context: [set_frame, inline].join("\n"), statement_position: cursor),
+      corroborated_query: internal_fields.merge(context: [%Q(SQL statement "#{internal_sql}"), inline].join("\n")),
+      different_internal_query: internal_fields.merge(
+        context: [set_frame, inline].join("\n"), internal_query: select_sql, internal_position: '8', statement_position: cursor
+      ),
+      different_internal_position: internal_fields.merge(
+        context: [set_frame, inline].join("\n"), internal_position: '8', statement_position: cursor
+      ),
+      different_textual_frame: internal_fields.merge(context: [select_frame, inline].join("\n")),
       internal_missing_routine: internal_fields.merge(source_function: nil),
       internal_without_context: internal_fields.merge(context: nil),
       internal_query_only: deferred_check,
@@ -126,8 +144,11 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
       internal_out_of_range: deferred_check.merge(internal_position: (deferred_check[:internal_query].length + 1).to_s),
       internal_position_only: internal_fields.merge(internal_query: nil),
       internal_unparseable: internal_fields.merge(internal_query: 'SELECT FROM (', internal_position: '8'),
+      internal_unterminated_literal: internal_fields.merge(internal_query: "SELECT 'aberto", internal_position: '9'),
       malformed_frame: malformed_frame,
       malformed_frame_with_internal: internal_fields.merge(malformed_frame),
+      malformed_sql_suffix: {context: [set_frame, "#{inline} inesperado"].join("\n"), statement_position: cursor},
+      malformed_execute_suffix: {context: inline.sub(/SQL statement$/, 'EXECUTE inesperado'), statement_position: cursor},
       missing_routine: {context: [set_frame, inline].join("\n"), source_function: nil},
       missing_routine_cursor: {context: [set_frame, inline].join("\n"), source_function: nil, statement_position: cursor},
       partial: {context: [set_frame, inline, 'contexto externo desconhecido'].join("\n")},
@@ -140,7 +161,11 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
       sql_bare: {context: [%q(SQL function "a_long_but_ordinary_name_for_check_task"), set_frame, inline].join("\n")},
       compilation: {context: [%q(compilation of PL/pgSQL function "check_task" near line 2), set_frame, inline].join("\n")},
       expression: {context: [%q(SQL expression "'SET CONSTRAINTS ALL IMMEDIATE'"), inline].join("\n")},
-      assignment: {context: [%q(PL/pgSQL assignment "label := 'SET CONSTRAINTS ALL IMMEDIATE'"), inline].join("\n")}
+      assignment: {context: [%q(PL/pgSQL assignment "label := 'SET CONSTRAINTS ALL IMMEDIATE'"), inline].join("\n")},
+      writer_consistent: writer_fields,
+      writer_conflict: writer_fields.merge(
+        context: 'SQL statement "SET CONSTRAINTS ALL IMMEDIATE"', internal_query: select_sql, internal_position: '8'
+      )
     }
     reports = cases.to_h do |name, fields|
       report = Banco::Report.new
@@ -149,56 +174,79 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
       fields = fields.to_h { |key, value| [PG::Result.const_get("PG_DIAG_#{key.upcase}"), value] }
       error = failure.new('mensagem sintética privada')
       error.result = diagnostic.new(fields)
+      prior_sql = 'SELECT 1;'
+      migration_sql = source_sql
+      if name.to_s.start_with?('writer_')
+        prior_sql = 'CREATE TABLE parent(id integer PRIMARY KEY); ' \
+          'CREATE TABLE child(id integer CONSTRAINT child_fk REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED); ' \
+          'INSERT INTO child VALUES (42);'
+        migration_sql = 'SET CONSTRAINTS ALL IMMEDIATE;'
+      end
       applied = []
       connection = Object.new
       connection.define_singleton_method(:exec) do |sql|
         applied << sql
-        raise error if sql == source_sql
+        raise error if sql == migration_sql
       end
       db.define_singleton_method(:connect) { |_name, &block| block.call(connection) }
-      prior = Banco::Source.new('db/migrations/001_prior.sql', 'SELECT 1;')
-      source = Banco::Source.new('db/migrations/002_diagnostic.sql', source_sql)
-      raise 'migração deveria ser rejeitada' if db.migrate('fresh', [prior, source])
+      prior = Banco::Source.new('db/migrations/001_prior.sql', prior_sql)
+      source = Banco::Source.new('db/migrations/002_diagnostic.sql', migration_sql)
+      next_source = Banco::Source.new('db/migrations/003_not_reached.sql', 'SELECT 3;')
+      raise 'migração deveria ser rejeitada' if db.migrate('fresh', [prior, source, next_source])
       raise 'sequência inesperada' unless applied == ['BEGIN', prior.sql, source.sql, 'ROLLBACK']
       [name, JSON.parse(report.to_json)]
     end
     puts JSON.generate(reports)
   `);
 
-  for (const name of ['start', 'malformed_cursor', 'internal_cursor', 'expression', 'assignment']) {
+  for (const name of ['start', 'malformed_cursor', 'internal_cursor', 'corroborated_query', 'expression', 'assignment']) {
     const [finding] = reports[name].findings;
     assert.equal(finding.rule, 'BANCO-MIGRACAO-REJEITADA', name);
     assert.equal(finding.line, 2, name);
     assert.match(finding.evidence, /linha inicial da instrução; posição exata indisponível/, name);
   }
-  for (const [name, line] of [['cursor', 4], ['eof_cursor', 6]] as const) {
+  for (const name of ['cursor', 'corroborated_frame']) {
     const [finding] = reports[name].findings;
     assert.equal(finding.rule, 'BANCO-MIGRACAO-REJEITADA', name);
-    assert.equal(finding.line, line, name);
+    assert.equal(finding.line, 4, name);
     assert.match(finding.evidence, /linha indicada pelo cursor do servidor/, name);
   }
 
   for (const [names, detection] of [
-    [['partial', 'unterminated', 'ambiguous_name', 'malformed_frame', 'malformed_frame_with_internal'],
+    [['partial', 'unterminated', 'ambiguous_name', 'malformed_frame', 'malformed_frame_with_internal',
+      'malformed_sql_suffix', 'malformed_execute_suffix'],
       /contexto do PostgreSQL inconclusivo/],
+    [['eof_cursor', 'different_command_cursor', 'between_commands_cursor'], /cursor externo sem correspondência com o bloco inline/],
+    [['different_internal_query', 'different_internal_position', 'different_textual_frame', 'writer_conflict'],
+      /consulta ou posição interna diverge do quadro textual de SQL.*SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
     [['competing', 'internal_without_context'], /SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
     [['internal_query_only', 'internal_malformed_position', 'internal_out_of_range'],
       /diagnóstico interno parcial.*SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
-    [['internal_position_only', 'internal_unparseable'], /diagnóstico interno parcial/],
+    [['internal_position_only', 'internal_unparseable', 'internal_unterminated_literal'], /diagnóstico interno parcial/],
     [['missing_routine', 'missing_routine_cursor', 'internal_missing_routine', 'sql_statement', 'sql_startup', 'sql_inlining', 'sql_bare', 'compilation'],
       /detecção em SET CONSTRAINTS chamado pelo arquivo/],
   ] as const) {
     for (const name of names) {
       const [finding] = reports[name].findings;
       assert.equal(finding.rule, 'BANCO-LOTE-MIGRACAO-REJEITADO', name);
+      assert.equal(finding.file, 'db/migrations/002_diagnostic.sql', name);
       assert.equal(finding.line, 1, name);
       assert.match(finding.evidence, detection, name);
       assert.match(finding.evidence, /origem entre arquivos indeterminada/, name);
       assert.match(finding.evidence, /arquivo e linha referenciam o início do último arquivo alcançado/, name);
     }
   }
+  for (const name of ['different_internal_query', 'different_internal_position', 'different_textual_frame',
+    'different_command_cursor', 'between_commands_cursor', 'eof_cursor', 'malformed_sql_suffix', 'malformed_execute_suffix']) {
+    const {coverage, findings: [finding]} = reports[name];
+    assert.match(finding.evidence, /cobertura parcial da origem/, name);
+    assert.doesNotMatch(finding.evidence, /linha indicada pelo cursor do servidor/, name);
+    assert.ok(coverage.some(row => row.status === 'ok' && /002_diagnostic.sql.*cobertura parcial da origem/.test(row.detail)), name);
+    assert.ok(coverage.some(row => row.status === 'skipped' && row.detail.includes('003_not_reached.sql')), name);
+  }
   for (const name of ['unterminated', 'missing_routine_cursor', 'malformed_frame', 'malformed_frame_with_internal',
-    'internal_malformed_position']) {
+    'internal_malformed_position', 'different_internal_query', 'different_internal_position',
+    'malformed_sql_suffix', 'malformed_execute_suffix']) {
     assert.match(reports[name].findings[0].evidence, /cursor do servidor na linha 4/, name);
   }
   assert.match(reports.internal_query_only.findings[0].evidence, /consulta interna presente; posição interna ausente/);
@@ -208,7 +256,9 @@ test('diagnóstico de migração separa contexto, início da instrução e curso
     /consulta interna ausente; posição interna presente, sem instrução identificável/);
   assert.match(reports.malformed_frame_with_internal.findings[0].evidence,
     /consulta interna presente; posição interna identificou uma instrução na consulta interna/);
-  assert.doesNotMatch(JSON.stringify(reports), /mensagem sintética privada|inline_code_block|falta\.child_fk/);
+  assert.equal(reports.writer_consistent.findings[0].file, 'db/migrations/001_prior.sql');
+  assert.match(reports.writer_consistent.findings[0].evidence, /único arquivo com inserções/);
+  assert.doesNotMatch(JSON.stringify(reports), /mensagem sintética privada|inline_code_block|falta\.child_fk|check_task\(\)|inesperado/);
 });
 
 test('PostgreSQL isolado preserva atribuição e medições após falhas sintéticas', {
