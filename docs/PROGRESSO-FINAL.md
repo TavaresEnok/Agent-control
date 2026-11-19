@@ -966,3 +966,7 @@ PAUSADO-COTA
 - 19/11/2026 19:16 UTC — C8-ACEITE-AMBIENTE encerrado com código 0.
 - 19/11/2026 19:16 UTC — C9-JUNCAO-LOGICA encerrado com código 0.
 - 19/11/2026 19:17 UTC — O revisor aceitou a proveniência de módulo ambiente em 44ed392a e a imagem de C8 passou em 42/42. C9 integrou os quatro arquivos revisáveis da junção lógica e dos estados de ferramentas em 59201d15, com a base de C8 aceita.
+- 19/11/2026 19:17 UTC — revisor-C9-ACEITE-FATOS iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:17 UTC — Falha na validação de entrega-banco-1 em suite, código 1. Logs privados do gerente.
+- 19/11/2026 19:18 UTC — C9-ACEITE-FATOS encerrado com código 0.
+- 19/11/2026 19:18 UTC — Na suíte do banco em e3df1125, 269 arquivos passaram e completed-node-recovery falhou no prazo anterior ao SIGKILL nos cenários integrate-before-cas e integrate-registered. Como o mesmo mecanismo falhou em outra suíte e passou isolado, a ordem corrige a espera do marcador na bancada antes da repetição integral. A produção não participou desses testes.
