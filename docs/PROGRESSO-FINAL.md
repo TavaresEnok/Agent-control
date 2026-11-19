@@ -1261,3 +1261,5 @@ PAUSADO-COTA
 - 19/11/2026 22:21 UTC — arquitetura em 615c1f9f publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 508, 'failed': 0, 'skipped': 1}; código do produto OK.
 - 19/11/2026 22:21 UTC — C-PRONTIDAO-VIVA-R6 encerrado com código 0.
 - 19/11/2026 22:21 UTC — Correção pront-viva recebida em 2bedbd92. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:21 UTC — Imagem de prontidao construída e arquivada por digest em f2505040.
+- 19/11/2026 22:22 UTC — Valida a publicação quando o único arquivo está numa rota dinâmica. Ordem C-DOCUMENTACAO-VIVA-R4 em worktree separado conforme 43f1c664.
