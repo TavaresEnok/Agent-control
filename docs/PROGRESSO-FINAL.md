@@ -1417,3 +1417,6 @@ PAUSADO-COTA
 - 19/11/2026 23:31 UTC — prontidao em 9c057413 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 183, 'failed': 3, 'skipped': 7}; código do produto VERIFY_TOOLS_FAILED.
 - 19/11/2026 23:33 UTC — C-ACEITE-PRONTIDAO-VIVA-R16 encerrado com código 0.
 - 19/11/2026 23:35 UTC — Limita a prova de retenção a predicados integralmente demonstrados. Ordem C-PRONTIDAO-VIVA-R17 em worktree separado conforme 43f1c664.
+- 19/11/2026 23:35 UTC — trabalho-C-PRONTIDAO-VIVA-R17 iniciado em final-pront-viva por terra high.
+- 19/11/2026 23:38 UTC — C-PRONTIDAO-VIVA-R17 encerrado com código 0.
+- 19/11/2026 23:38 UTC — Correção pront-viva recebida em 6981cae4. Revisão Sol high somente leitura solicitada.
