@@ -20,6 +20,7 @@ import {probePublishedHttpsOrigin} from '../src/prontidao-target.ts';
 import {
   moduleCollectorArguments,
   readModuleReport,
+  requestModuleCorrection,
   runModuleCollectorContainer,
 } from '../src/verification-modules.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -379,9 +380,10 @@ test('Installation, parsePersonalModuleArgs e moduleCollectorArguments validam o
         removed = true;
         return {code: 0, stdout: Buffer.from(containerId), stderr: ''};
       }
-      if (runArgs[1] === 'wait') {
-        assert.deepEqual(runArgs.slice(1), ['wait', containerId]);
-        return {code: 0, stdout: Buffer.from('0\n'), stderr: ''};
+      if (runArgs[1] === 'inspect') {
+        assert.deepEqual(runArgs.slice(1, 5), ['inspect', '--type', 'container', '--format']);
+        assert.equal(runArgs.at(-1), containerId);
+        return {code: 0, stdout: Buffer.from(containerId + ' exited 0 ok'), stderr: ''};
       }
       assert.deepEqual(runArgs.slice(1), ['start', '--attach', containerId]);
       const collectorRes = runCollector({
@@ -627,10 +629,21 @@ test('fluxo completo da CLI personal:prontidao com servidor HTTPS sintético (TL
       assert.equal(hdrRules.has('PRONTIDAO-NOSNIFF-AUSENTE'), true);
       assert.equal(hdrRules.has('PRONTIDAO-FRAME-AUSENTE'), true);
 
-      assert.ok(hdrReport.achados.every(item => item.status === 'provavel' && item.verifier === null));
-      await assert.rejects(runPersonalModuleCli('prontidao', [instHeaders, projectId, '--corrigir', hdrRunId!, 'ACH-001']),
-        (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_FINDING_MISSING');
-      assert.equal((await db.pool.query('SELECT 1 FROM ac_verify_remediations WHERE run_id=$1', [hdrRunId])).rowCount, 0);
+      // Converte achado em tarefa normalmente pelo fluxo do produto
+      const prontidaoAuth = await db.acquire(principal, (await db.ensureExamContext(principal, projectId, 'prontidao')).contextId, randomUUID(), 'test-fix', 60);
+      try {
+        const remediation = await requestModuleCorrection(db, principal, prontidaoAuth, {
+          module: 'prontidao',
+          runId: hdrRunId!,
+          achadoIds: ['ACH-001'],
+          dataDirectory,
+          projectId,
+          repoPath: repo,
+        });
+        assert.deepEqual(remediation.writePaths, ['deploy/caddy/site.caddy', 'tests/prontidao/ach-001.test.ts']);
+      } finally {
+        await db.releaseLease(prontidaoAuth);
+      }
     } finally {
       await weakHeadersServer.close();
       await new Promise<void>(resolve => redirectTarget.close(() => resolve()));

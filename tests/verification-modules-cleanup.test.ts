@@ -404,11 +404,12 @@ test('stdout completo preserva o código do coletor e aguarda confirmação inde
       }
       if (argv[1] === 'start') return framedOutput(token, 7, collectorLogs);
       if (argv[2] === 'inspect') return reply(0, `${containerId} exited`);
-      if (argv[1] === 'wait') {
-        assert.deepEqual(argv.slice(1), ['wait', containerId]);
+      if (argv[1] === 'inspect') {
+        assert.deepEqual(argv.slice(1, 5), ['inspect', '--type', 'container', '--format']);
+        assert.equal(argv.at(-1), containerId);
         waiting.resolve();
         await exit.promise;
-        return reply(0, '7\n');
+        return reply(0, containerId + ' exited 7 ok');
       }
       if (argv[2] === 'ls') return reply(0, removed ? '' : `${containerId} ${moduleContainerName(token)} ${token}`);
       assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
@@ -529,7 +530,25 @@ test('um cliente R7 grava e limpa IDs durante a adoção das migrações 113 e 1
 
       await oldRememberId();
       assert.deepEqual(await state(), {...journal, collector_start_pending: true});
-      await assert.rejects(transfer(), {message: 'VERIFY_CONTAINER_CLEANUP_PENDING'});
+      const successor = await ledger.pool.connect();
+      try {
+        // R7 starts the container inside this fenced transaction; the new
+        // manager uses another PostgreSQL session during its start window.
+        await old.query('BEGIN');
+        await ledger.fence(old, authority);
+        await old.query('SELECT id FROM ac_verify_runs WHERE id=$1 FOR UPDATE', [runId]);
+        await successor.query('BEGIN');
+        await successor.query("SET LOCAL lock_timeout = '200ms'");
+        await assert.rejects(successor.query('UPDATE ac_managers SET epoch=epoch+1 WHERE context_id=$1',
+          [authority.contextId]), {code: '55P03'});
+        await successor.query('ROLLBACK');
+        await old.query('COMMIT');
+        await assert.rejects(transfer(), {message: 'VERIFY_CONTAINER_CLEANUP_PENDING'});
+      } finally {
+        await old.query('ROLLBACK');
+        await successor.query('ROLLBACK');
+        successor.release();
+      }
       assert.equal((await oldClear()).rowCount, 1);
       assert.deepEqual(await state(), {collector_container_token: null, collector_container_id: null, collector_start_pending: false});
       assert.equal((await transfer()).rowCount, 1);
@@ -576,10 +595,10 @@ for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout']
         }
         if (argv[1] === 'create') {
           owner = argv[argv.indexOf('--label') + 1]!.slice(MODULE_CONTAINER_LABEL.length + 1);
-          assert.equal(argv.at(-1), image);
+          assert.deepEqual(argv.slice(-2), [image, COLLECTOR_WRAPPER_PATH]);
           assert.equal(argv[argv.indexOf('--pull') + 1], 'never');
           assert.equal(argv[argv.indexOf('--log-driver') + 1], 'none');
-          assert.equal(argv[argv.indexOf('--entrypoint') + 1], COLLECTOR_WRAPPER_PATH);
+          assert.equal(argv[argv.indexOf('--entrypoint') + 1], '/bin/sh');
           assert.ok(argv.includes(`${COLLECTOR_CAPTURE_DIR}:rw,noexec,nosuid,nodev,uid=65532,gid=65532,mode=0700,size=${maxStdoutBytes + 4096}`));
           const mount = argv.find(arg => arg.endsWith(`,dst=${COLLECTOR_WRAPPER_PATH},readonly`));
           assert.ok(mount);
@@ -594,7 +613,7 @@ for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout']
             return runBoundedCollectorProcess([process.execPath, '-e', 'setInterval(() => {}, 1000)'], options);
           }
           const result = await runBoundedCollectorProcess(['/bin/sh', wrapper], options);
-          if (scenario === 'stderr') assert.equal(result.stderr.length, 1000);
+          if (scenario === 'stderr') assert.equal(result.stderr, '');
           if (scenario === 'prefix') {
             const headerEnd = result.stdout.indexOf(0x0a) + 1;
             const suffix = result.stdout.subarray(headerEnd + 2);
@@ -619,12 +638,13 @@ for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout']
           observedStart = true;
           return reply(0, `${containerId} running`);
         }
-        if (argv[1] === 'wait') {
-          assert.deepEqual(argv.slice(1), ['wait', containerId]);
+        if (argv[1] === 'inspect') {
+          assert.deepEqual(argv.slice(1, 5), ['inspect', '--type', 'container', '--format']);
+          assert.equal(argv.at(-1), containerId);
           assert.ok(observedStart && completedCapture);
           finalTransport = true;
-          if (scenario === 'wait') return reply(1, '0\n');
-          return reply(0, scenario === 'stdout' ? '125\n' : '0\n');
+          if (scenario === 'wait') return reply(0, containerId + ' exited 0 invalid');
+          return reply(0, containerId + (scenario === 'stdout' ? ' exited 125 ok' : ' exited 0 ok'));
         }
         if (argv[2] === 'ls') return reply(0, removed ? '' : `${containerId} ${moduleContainerName(owner)} ${owner}`);
         assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);

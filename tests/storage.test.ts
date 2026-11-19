@@ -28,8 +28,8 @@ test('storage pool refuses low-space admission and preserves active, changed, he
   const intent=await ledger.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:storage'}},authority,'api');
   const grant=await capacity.reserve(principal,{attemptId:randomUUID(),intentId:intent.id,contextId:context,role:'programmer'},authority);
   const input={id:randomUUID(),grantId:grant.id,category:'disposable_cache' as const,bytes:16,retainSeconds:0};
-  const measured=await statfs(path,{bigint:true}),available=Number(measured.bavail*measured.bsize);
-  await storage.configure(principal,{minFreeBytes:available+1024*1024,budgetBytes:32,maxObjectBytes:16},0);
+  const measured=await statfs(path,{bigint:true}),filesystemBytes=Number(measured.blocks*measured.bsize);
+  await storage.configure(principal,{minFreeBytes:filesystemBytes+1,budgetBytes:32,maxObjectBytes:16},0);
   await assert.rejects(storage.reserve(principal,authority,input),/STORAGE_LOW_SPACE/);
   assert.equal((await ledger.pool.query('SELECT count(*)::int count FROM ac_storage_allocations')).rows[0].count,0);
   await storage.configure(principal,{minFreeBytes:0,budgetBytes:32,maxObjectBytes:16},1);
