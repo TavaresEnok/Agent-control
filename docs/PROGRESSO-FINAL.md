@@ -380,3 +380,5 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:39 UTC — Revisão C9-R4 iniciada por Sol high normal somente leitura em b1ac9e42.
 - 19/11/2026 04:40 UTC — Trabalhador encerrou C-EXAME-INTEGRAR em 552b30cb (código 0). Gerente confere a entrega.
 - 19/11/2026 04:42 UTC — CLI do desempenho e4680e65 aprovada em 6/6 com duas medições reais. A prova poliglota do QA R10 passou; a CLI registrou uma ferramenta com falha e estamos identificando qual na base sintética. Aberta C6-R9 para tratar a avaliação passiva de configurações apontada pelo revisor.
+- 19/11/2026 04:42 UTC — Trabalho C6-R9 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 04:43 UTC — Base compartilhada 66fa91b5 passou nos 25 testes com PostgreSQL, incluindo os três casos de limpeza física em Docker e a migração 114. Diagnóstico da CLI de QA: a matriz completou a medição e encontrou REQ-02 sem teste; o registro usou o estado de falha operacional para esse achado de projeto. Correção em curso.
