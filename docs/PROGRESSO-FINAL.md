@@ -363,3 +363,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:30 UTC — Revisor encerrou C5-R5 em d58c8e69 (código 0). Gerente confere a entrega.
 - 19/11/2026 04:30 UTC — Revisão C7-HISTORICO iniciada por Sol high normal somente leitura em 1156ed12.
 - 19/11/2026 04:31 UTC — Arquitetura 70a8c7cc passou em 19 testes de coletor e laboratório com um caso opcional pulado. A raiz relativa usa o diretório mantido pelo kernel, a raiz vazia é recusada e a omissão de nomes não suportados fica registrada mesmo no limite. Desempenho e3527238 recebido para prova física.
+- 19/11/2026 04:32 UTC — Suíte oficial de c2-r9-reverif-r2 em ace07a61: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 04:32 UTC — Revisor encerrou C7-HISTORICO em 1156ed12 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:32 UTC — Revisão C6-R8 iniciada por Sol high normal somente leitura em 8ff87772.
+- 19/11/2026 04:33 UTC — Testes complementares de c2-r9-reverif-r2 em ace07a61: 52 aprovados.
+- 19/11/2026 04:33 UTC — Validação completa de c2-r9-reverif-r2 em ace07a61: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 04:34 UTC — Trabalhador encerrou C2-R10 em 69fe35e3 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:35 UTC — Suíte oficial em ace07a61 aprovada com TypeScript, 253 arquivos, 52 complementares e laboratório. CLI incremental de arquitetura em 84f5e90b aprovada em 6/6. Nova ordem C5-R6 para impedir atribuição de uma rejeição de banco ao arquivo errado. QA 69fe35e3 recebido para reconstrução da imagem.
