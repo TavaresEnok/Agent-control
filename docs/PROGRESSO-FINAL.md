@@ -643,3 +643,12 @@ PAUSADO-COTA
 - 19/11/2026 17:01 UTC — C4-REGISTRO-R8 encerrado com código 0.
 - 19/11/2026 17:01 UTC — revisor-C9-DESTINOS-R6 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:01 UTC — As entregas de QA poliglota 1bbf6c41, arquitetura 56177e90, banco fbe3acb8, desempenho 956c2314 e documentação 782385cd entraram na fila de validação por digest. A revisão da matriz pediu ajustes para não dar prova a uma função homônima ou declarar lacuna numa guarda manual.
+- 19/11/2026 17:01 UTC — trabalho-C2-MATRIZ-R13 iniciado em final-qa-matriz-r12 por Sol medium normal.
+- 19/11/2026 17:01 UTC — C6-R11 encerrado com código 0.
+- 19/11/2026 17:01 UTC — trabalho-C2-CARGA-LOCAL iniciado em final-qa-carga-local por Sol high normal.
+- 19/11/2026 17:03 UTC — Backup da instalação viva criado pelo personal:backup em /home/app/backups-agent-control/ispagent-antes-modulos-20261119-170208/agent-control-ispagent-20261119-1702. Diretório privado e catálogo do database.dump conferidos com pg_restore -l. Gateway ativo. A rodada de módulos segue em homologação.
+- 19/11/2026 17:04 UTC — Prontidão 060b8269 entrou em revisão independente e no laboratório passivo. A revisão de dependências encontrou nome vazio em metadados HTTP e uma lacuna na verificação de encerramento do transporte; ambos já têm teste focado em andamento.
+- 19/11/2026 17:04 UTC — C9-DESTINOS-R6 encerrado com código 0.
+- 19/11/2026 17:04 UTC — revisor-C2-LINGUAGENS-R3 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:05 UTC — C2-MATRIZ-R13 encerrado com código 0.
+- 19/11/2026 17:05 UTC — Revisão de conformidade em df297d9b encontrou perdas e falsos destinos em reatribuições e nomes homônimos. C9-R7 encomendada. Em C4, a primeira execução complementar usou um runtime Java antigo da área temporária; a repetição usa o runtime extraído do digest ensaiado.
