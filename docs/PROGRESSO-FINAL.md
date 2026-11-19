@@ -300,3 +300,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:57 UTC — Revisor encerrou C-PAINEL em a1500106 (código 0). Gerente confere a entrega.
 - 19/11/2026 03:57 UTC — Revisão C8-R5 iniciada por Sol high normal somente leitura em fafc14d3.
 - 19/11/2026 03:58 UTC — QA a7808ccf passou 35/35, incluindo os dois nomes ESM distintos, função por namespace e recusa de argumento de mensagem como prova. A primeira asserção do laboratório comparava o caminho impresso sem sua codificação percentual e foi corrigida. A suíte de a5ef0b22 passou em 253 arquivos. A CLI da nova imagem de arquitetura passou 6/6.
+- 19/11/2026 03:58 UTC — Falha na validação de c2-exame-r3 em complementares, código 1. Logs privados do gerente.
+- 19/11/2026 03:58 UTC — Validação de c2-r8-painel em faf0a7c9 iniciada no checkout de integração.
+- 19/11/2026 04:01 UTC — Trabalhador encerrou C-REVERIFICAR-R2 em 0e8ad897 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:01 UTC — Trabalho C-EXAME-R4 iniciado por Sol high normal em final-c-exame-r4.
+- 19/11/2026 04:02 UTC — Revisor encerrou C8-R5 em fafc14d3 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:02 UTC — Revisão C7-R5 iniciada por Sol high normal somente leitura em 5fbbbb9f.
+- 19/11/2026 04:03 UTC — Conformidade b1ac9e42 passou nos 20 testes e laboratórios com ScanCode, ORT e Presidio. Na prova de QA a5ef0b22, 8 de 52 testes complementares falharam porque as duas simulações da consulta ao banco omitiam o estado da cota; o ajuste está em teste. A revisão de documentação encontrou atribuições de ambiente e subgrafos que podem levar a conclusões equivocadas. Aberta C8-R6.
