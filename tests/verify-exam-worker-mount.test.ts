@@ -884,7 +884,7 @@ test('exame Claude não monta .credentials.json, força renovação no lugar, le
     await writeFile(credential, JSON.stringify(staleBefore), {mode: 0o600});
     const pendingInput = reserveAttempt('specialist', 'Exame com inspeção de rede indisponível.');
     const pendingSnapshot = {pendingIntentIds: [...pendingIntents, pendingInput.intentId]};
-    memory.tables.ac_checkpoints[0]!.snapshot = pendingSnapshot;
+    memory.tables.ac_checkpoints[0]!.snapshot = structuredClone(pendingSnapshot);
     const pendingPhysical = {
       executionStarted: false, jobId: pendingInput.jobId, containerId: null, networkId: null,
       synthetic: false, modelInference: false, reason: 'exam_login_stale',
@@ -997,17 +997,22 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
     await insertIntent(earlyLowerId, '2026-01-01T00:00:00Z');
     await insertIntent(intentId, '2026-01-03T00:00:00Z');
     const remaining = [earlyLowerId, earlyHigherId, lateLowerId];
-    const snapshot = {planRevision: 0, pendingIntentIds: [...remaining, intentId]};
+    // The ledger contains a pending intent absent from this out-of-order checkpoint.
+    const snapshot = {planRevision: 0, pendingIntentIds: [earlyHigherId, intentId, earlyLowerId]};
     await db.pool.query('INSERT INTO ac_checkpoints(context_id,epoch,snapshot) VALUES($1,$2,$3)', [context, authority.epoch, snapshot]);
     const input = NativeExecutionRequest.parse({
       jobId, intentId, grantId, sessionId: randomUUID(), base, role: 'specialist', task: 'Exame sintético',
       writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
-    await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
-      VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,
-    [grantId, randomUUID(), intentId, context, authority.epoch, account, profile, project, digest(input)]);
-    const readGrant = async () => (await db.pool.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1', [grantId])).rows[0];
-    const readJob = async () => (await db.pool.query('SELECT state,receipt FROM ac_native_execution_jobs WHERE id=$1', [jobId])).rows[0];
+    const insertGrant = (request: typeof input, grantedIntentId: string) =>
+      db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
+        VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,'reserved')`,
+      [request.grantId, randomUUID(), grantedIntentId, context, authority.epoch, account, profile, project, digest(request)]);
+    await insertGrant(input, intentId);
+    const readGrant = async (id: string = grantId) => (await db.pool.query(
+      'SELECT state,physical_receipt,intent_id,request_digest FROM ac_capacity_grants WHERE id=$1', [id])).rows[0];
+    const readJob = async () => (await db.pool.query(
+      'SELECT state,receipt,grant_id,intent_id FROM ac_native_execution_jobs WHERE id=$1', [jobId])).rows[0];
     const readIntent = async () => (await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [intentId])).rows[0].state;
     const readCheckpoint = async () => (await db.pool.query('SELECT snapshot,updated_at FROM ac_checkpoints WHERE context_id=$1', [context])).rows[0];
     const readRetirement = async () => (await db.pool.query('SELECT state,proof FROM ac_native_terminal_retirements WHERE job_id=$1', [jobId])).rows[0];
@@ -1015,9 +1020,18 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
 
     await assert.rejects(() => supervisor.start(coOwner, authority, input), refuses('NATIVE_EXECUTION_SCOPE_MISMATCH'));
     await assert.rejects(() => supervisor.start(principal, {...authority, instanceId: randomUUID()}, input), refuses('STALE_MANAGER'));
-    await assert.rejects(() => supervisor.start(principal, authority, {...input, intentId: earlyLowerId}), refuses('NATIVE_EXECUTION_NOT_ELIGIBLE'));
+    const mismatchedInput = NativeExecutionRequest.parse({...input, grantId: randomUUID(), intentId: earlyLowerId});
+    // Match the request digest at insertion, keeping the grant bound to a different accepted intent.
+    await insertGrant(mismatchedInput, earlyHigherId);
+    const mismatchedGrant = {
+      state: 'reserved', physical_receipt: null, intent_id: earlyHigherId, request_digest: digest(mismatchedInput),
+    };
+    assert.deepEqual(await readGrant(mismatchedInput.grantId), mismatchedGrant);
+    await assert.rejects(() => supervisor.start(principal, authority, mismatchedInput), refuses('NATIVE_EXECUTION_NOT_ELIGIBLE'));
+    assert.deepEqual(await readGrant(mismatchedInput.grantId), mismatchedGrant);
     assert.equal(await readJob(), undefined);
-    assert.deepEqual(await readGrant(), {state: 'reserved', physical_receipt: null});
+    const grantBinding = {intent_id: intentId, request_digest: digest(input)};
+    assert.deepEqual(await readGrant(), {...grantBinding, state: 'reserved', physical_receipt: null});
     assert.equal(dockerRequests.length, 0);
 
     // The checkpoint is written after the job receipt, retirement and intent state.
@@ -1032,27 +1046,39 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
       executionStarted: false, jobId, containerId: null, networkId: null,
       synthetic: false, modelInference: false, reason: 'exam_login_stale',
     };
-    assert.deepEqual(await readGrant(), {state: 'released', physical_receipt: physical});
-    assert.deepEqual(await readJob(), {state: 'uncertain', receipt: null});
-    assert.equal(await readIntent(), 'accepted');
-    assert.equal(await readRetirement(), undefined);
-    assert.deepEqual(await readCheckpoint(), savedCheckpoint);
+    const releasedGrant = {...grantBinding, state: 'released', physical_receipt: physical};
+    const jobBinding = {grant_id: grantId, intent_id: intentId};
+    const assertUnsettled = async () => {
+      assert.deepEqual(await readGrant(), releasedGrant);
+      assert.deepEqual(await readJob(), {...jobBinding, state: 'uncertain', receipt: null});
+      assert.equal(await readIntent(), 'accepted');
+      assert.equal(await readRetirement(), undefined);
+      assert.deepEqual(await readCheckpoint(), savedCheckpoint);
+    };
+    await assertUnsettled();
     await assert.rejects(() => supervisor.recoverUnstartedExam(principal, authority, jobId), /fixture checkpoint write failed/);
+    await assertUnsettled();
     await db.pool.query('DROP TRIGGER fixture_fail_exam_checkpoint ON ac_checkpoints');
 
+    // An admission can precede its own job row and still block recovery through the grant.
+    const admissionJobId = randomUUID();
+    assert.notEqual(admissionJobId, jobId);
     await db.pool.query(`INSERT INTO ac_native_resource_admissions(job_id,grant_id,context_id,manager_epoch,authority_id,names,admission_id,state_root,state,reason)
       VALUES($1,$2,$3,$4,'fixture',$5,$6,$7,'admitted','admitted')`,
-    [jobId, grantId, context, authority.epoch, JSON.stringify([`ac-native-tools-${jobId}`, `ac-native-worker-${jobId}`]), randomUUID(), area]);
+    [admissionJobId, grantId, context, authority.epoch,
+      JSON.stringify([`ac-native-tools-${admissionJobId}`, `ac-native-worker-${admissionJobId}`]), randomUUID(), area]);
     const activeAdmission = "SELECT job_id FROM ac_native_resource_admissions WHERE grant_id=$1 AND state<>'canceled'";
-    assert.deepEqual((await db.pool.query(activeAdmission, [grantId])).rows, [{job_id: jobId}]);
+    assert.deepEqual((await db.pool.query(activeAdmission, [grantId])).rows, [{job_id: admissionJobId}]);
     await assert.rejects(() => supervisor.recoverUnstartedExam(principal, authority, jobId), refuses('NATIVE_RETIREMENT_UNCONFIRMED'));
-    assert.deepEqual(await readJob(), {state: 'uncertain', receipt: null});
-    assert.deepEqual((await db.pool.query('DELETE FROM ac_native_resource_admissions WHERE job_id=$1 RETURNING job_id', [jobId])).rows, [{job_id: jobId}]);
+    await assertUnsettled();
+    assert.deepEqual((await db.pool.query('DELETE FROM ac_native_resource_admissions WHERE job_id=$1 RETURNING job_id',
+      [admissionJobId])).rows, [{job_id: admissionJobId}]);
     assert.deepEqual((await db.pool.query(activeAdmission, [grantId])).rows, []);
 
     const settled = await supervisor.recoverUnstartedExam(principal, authority, jobId);
-    const {state, receipt} = await readJob();
+    const {state, receipt, grant_id, intent_id} = await readJob();
     assert.equal(state, 'failed');
+    assert.deepEqual({grant_id, intent_id}, jobBinding);
     assert.equal(receipt.payload.executionStarted, false);
     assert.equal(receipt.payload.physicalDigest, digest(physical));
     assert.equal(verify(null, Buffer.from('agent-control:native-execution-receipt:v1\n' + canonical(receipt.payload)),
@@ -1061,7 +1087,7 @@ test('liquidação Claude no PostgreSQL reverte falha no checkpoint e pode ser r
     assert.equal(await readIntent(), 'failed');
     assert.equal((await readRetirement()).state, 'removed');
     assert.deepEqual((await readCheckpoint()).snapshot, {...snapshot, pendingIntentIds: remaining});
-    assert.deepEqual(await readGrant(), {state: 'released', physical_receipt: physical});
+    assert.deepEqual(await readGrant(), releasedGrant);
     await assert.rejects(() => lstat(join(spool, jobId)), {code: 'ENOENT'});
     assert.deepEqual(dockerRequests.filter(request => !request.startsWith('GET ')), []);
   } finally {
