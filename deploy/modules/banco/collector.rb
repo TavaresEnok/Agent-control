@@ -23,6 +23,7 @@ module Banco
   MIGRATION_NAME = /\A\d+_[a-zA-Z0-9_.-]+\.sql\z/
   QUERY_NAME = /\A[a-zA-Z0-9_][a-zA-Z0-9_.-]*\.sql\z/
   SEED = "banco/seed.sql"
+  WORKLOAD_SEED = "banco/workload.sql"
   ASSERTION = "banco/assert.sql"
   Source = Struct.new(:path, :sql) do
     def line
@@ -43,7 +44,7 @@ module Banco
 
       raise ToolError, "entrada deve ser um arquivo regular: #{relative}" unless File.file?(path)
 
-      sql = File.binread(path, MAX_SQL_BYTES + 1).force_encoding(Encoding::UTF_8)
+      sql = (File.binread(path, MAX_SQL_BYTES + 1) || String.new).force_encoding(Encoding::UTF_8)
       unless sql.bytesize.between?(1, MAX_SQL_BYTES) && sql.valid_encoding? && !sql.include?("\0")
         raise ToolError, "arquivo vazio, não UTF-8 ou maior que 256 KiB: #{relative}"
       end
@@ -67,6 +68,29 @@ module Banco
         raise ToolError, "limite de #{maximum} arquivos SQL em #{relative}" if names.size > maximum
       end
       names.sort.map { |name| load("#{relative}/#{name}") }
+    end
+
+    # Um arquivo de consulta defeituoso não invalida os demais.
+    def queries
+      relative = "banco/queries"
+      path = checked_path(relative)
+      return [] unless path
+      raise ToolError, "entrada deve ser um diretório: #{relative}" unless File.directory?(path)
+
+      names = Dir.children(path).select { |name| name.end_with?(".sql") }.sort
+      raise ToolError, "limite de 40 arquivos SQL em #{relative}" if names.size > 40
+
+      names.map do |name|
+        display = "#{relative}/#{name.dump}"
+        begin
+          raise ToolError, "nome SQL fora da convenção" unless name.bytesize <= 160 && name.ascii_only? && QUERY_NAME.match?(name)
+          source = load("#{relative}/#{name}")
+          raise ToolError, "arquivo desapareceu" unless source
+          source
+        rescue ToolError, SystemCallError => error
+          [display, error.is_a?(ToolError) ? error.message : error.class.name]
+        end
+      end
     end
 
     private
@@ -218,23 +242,40 @@ module Banco
             end
 
             db.exec(source.sql)
-            @report.cover("pg-migrate", "ok", "pg-migrate:#{name}:#{source.path}: SQL aplicado na transação")
           rescue PG::Error, PgQuery::ParseError, ToolError => error
-            raise if error.is_a?(PG::Error) && !error.result
-
             evidence = error.is_a?(ToolError) ? error.message : sql_diagnostic(error)
-            @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", source, "alta",
-              "A migração foi rejeitada no cenário #{name}.", evidence, line: error_line(error, source))
-            db.exec("ROLLBACK")
-            @report.cover("pg-migrate", "ok", "pg-migrate:#{name}:#{source.path}: rejeitada (#{evidence}); transação revertida")
+            rejected = error.is_a?(PgQuery::ParseError) || (error.is_a?(PG::Error) && rejection?(error))
+            rollback(db)
+            sources.take(index).each do |prior|
+              @report.cover("pg-migrate", "skipped", "pg-migrate:#{name}:#{prior.path}: transação não confirmada (#{evidence})")
+            end
+            if rejected
+              @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", source, "alta",
+                "A migração foi rejeitada no cenário #{name}.", evidence, line: error_line(error, source))
+            end
+            @report.cover("pg-migrate", rejected ? "ok" : "failed", "pg-migrate:#{name}:#{source.path}: #{rejected ? 'rejeitada' : 'execução interrompida'} (#{evidence}); transação não confirmada")
             sources.drop(index + 1).each do |blocked|
-              @report.cover("pg-migrate", "skipped", "pg-migrate:#{name}:#{blocked.path}: migração anterior rejeitada")
+              @report.cover("pg-migrate", "skipped", "pg-migrate:#{name}:#{blocked.path}: migração anterior não concluída")
             end
             return false
           end
         end
-        db.exec("COMMIT")
+        begin
+          db.exec("COMMIT")
+        rescue PG::Error => error
+          evidence = sql_diagnostic(error)
+          rollback(db)
+          if rejection?(error) && sources.size == 1
+            @report.find("pg-migrate", "BANCO-MIGRACAO-REJEITADA", sources.first, "alta",
+              "A transação da migração foi rejeitada no commit em #{name}.", "#{evidence}; linha exata não informada no commit.")
+          end
+          sources.each do |source|
+            @report.cover("pg-migrate", "failed", "pg-migrate:#{name}:#{source.path}: commit não confirmado (#{evidence}); #{sources.size > 1 ? 'origem entre arquivos indeterminada' : 'verificação no commit'}")
+          end
+          return false
+        end
       end
+      sources.each { |source| @report.cover("pg-migrate", "ok", "pg-migrate:#{name}:#{source.path}: SQL aplicado e confirmado") }
       @report.cover("pg-migrate", "ok", "pg-migrate:#{name}: commit de #{sources.size} migrações")
       true
     rescue PG::Error => error
@@ -272,7 +313,22 @@ module Banco
 
     def prepare_workload(seed)
       connect("fresh") do |db|
-        db.exec(seed.sql) if seed
+        if seed
+          begin
+            statements = PgQuery.parse(seed.sql).tree.stmts
+            if statements.empty? || statements.any? { |entry| entry.stmt.transaction_stmt }
+              raise ToolError, "carga deve ser SQL sem controle explícito de transação"
+            end
+            db.exec("BEGIN")
+            db.exec(seed.sql)
+            db.exec("COMMIT")
+            @report.cover("EXPLAIN", "ok", "Carga #{seed.path} confirmada no esquema final.")
+          rescue PG::Error, PgQuery::ParseError, ToolError => error
+            rollback(db)
+            detail = error.is_a?(ToolError) ? error.message : sql_diagnostic(error)
+            @report.cover("EXPLAIN", "failed", "Carga #{seed.path} não confirmada: #{detail}; linha #{error_line(error, seed)} (linha inicial se posição indisponível). Medição continua sem essa carga.")
+          end
+        end
         db.exec("ANALYZE")
       end
       connect("fresh", admin: true) do |db|
@@ -299,7 +355,7 @@ module Banco
         %w[pg_stat_statements dexter].each do |tool|
           @report.cover(tool, "skipped", "#{source.path}: plano inicial indisponível")
         end
-        raise ToolError, sql_diagnostic(error)
+        raise ToolError, "#{sql_diagnostic(error)}; linha #{error_line(error, source, prefix: template)} (linha inicial se posição indisponível)"
       rescue ToolError
         %w[pg_stat_statements dexter].each do |tool|
           @report.cover(tool, "skipped", "#{source.path}: consulta fora do contrato")
@@ -309,6 +365,18 @@ module Banco
     end
 
     private
+
+    # Apenas classes de erro atribuíveis ao SQL são tratadas como rejeição.
+    def rejection?(error)
+      code = error.result&.error_field(PG::Result::PG_DIAG_SQLSTATE)
+      code && %w[0A 21 22 23 25 2B 2D 3D 3F 42 44].include?(code[0, 2])
+    end
+
+    def rollback(db)
+      db.exec("ROLLBACK")
+    rescue PG::Error
+      # Uma conexão perdida também impede confirmar a transação.
+    end
 
     def client_args(database)
       ["--host", @directory, "--port", "5432", "--username", "projeto", "--no-password", "--dbname", database]
@@ -323,10 +391,16 @@ module Banco
       code ? "SQLSTATE #{code}" : error.class.name
     end
 
-    def error_line(error, source)
+    def error_line(error, source, prefix: "")
       position = if error.is_a?(PG::Error)
         error.result&.error_field(PG::Result::PG_DIAG_STATEMENT_POSITION)&.to_i
+      elsif error.is_a?(PgQuery::ParseError)
+        error.location.to_i + 1 if error.location && error.location >= 0
       end
+      if error.is_a?(PgQuery::ParseError) && position && position > 0
+        return source.sql.byteslice(0, position - 1).count("\n") + 1
+      end
+      position -= prefix.length if position && error.is_a?(PG::Error)
       return source.line unless position && position > 0
 
       source.sql[0, position - 1].count("\n") + 1
@@ -335,8 +409,9 @@ module Banco
     def select_only!(sql)
       statements = PgQuery.parse(sql).tree.stmts
       raise ToolError, "é exigido um único SELECT" unless statements.size == 1 && statements.first.stmt.select_stmt
-    rescue PgQuery::ParseError
-      raise ToolError, "SELECT inválido para o parser PostgreSQL"
+    rescue PgQuery::ParseError => error
+      line = error.location && error.location >= 0 ? sql.byteslice(0, error.location).count("\n") + 1 : nil
+      raise ToolError, "SELECT inválido para o parser PostgreSQL#{line ? "; linha #{line}" : ''}"
     end
 
     def check_assertion(database, assertion, after_migration: false)
@@ -349,7 +424,7 @@ module Banco
           result.nfields == 1 && result.ftype(0) == 16 && result.ntuples == 1 && result.getvalue(0, 0) == "t"
         end
       rescue PG::Error => error
-        raise unless error.result
+        raise ToolError, sql_diagnostic(error) unless rejection?(error)
 
         passed = false
         evidence = "O SELECT de verificação foi rejeitado (#{phase}; #{sql_diagnostic(error)})."
@@ -400,7 +475,7 @@ module Banco
           "A consulta atingiu a média de #{SLOW_MS} ms na carga ensaiada.", evidence)
       end
     rescue PG::Error => error
-      raise ToolError, sql_diagnostic(error)
+      raise ToolError, "#{sql_diagnostic(error)}; linha #{error_line(error, source)} (linha inicial se posição indisponível)"
     end
 
     def explain(source)
@@ -417,7 +492,7 @@ module Banco
         plan.fetch("Shared Hit Blocks"), plan.fetch("Shared Read Blocks"))
       @report.cover("EXPLAIN", "ok", "EXPLAIN:query:#{source.path}: #{evidence}")
     rescue PG::Error => error
-      raise ToolError, sql_diagnostic(error)
+      raise ToolError, "#{sql_diagnostic(error)}; linha #{error_line(error, source, prefix: 'EXPLAIN (ANALYZE, BUFFERS, TIMING OFF, FORMAT JSON) ')} (linha inicial se posição indisponível)"
     end
 
     def advisor
@@ -468,16 +543,25 @@ module Banco
     report = Report.new
     inventory = Inventory.new(root)
     migrations = report.measure("squawk", "Inventário de migrações") { inventory.list("db/migrations", MIGRATION_NAME, 400) }
+    queries = report.measure("EXPLAIN", "Inventário de consultas") { inventory.queries }
+    query_tools = %w[pg_stat_statements EXPLAIN dexter]
+    if queries
+      invalid, queries = queries.partition { |entry| entry.is_a?(Array) }
+      invalid.each do |path, detail|
+        query_tools.each { |tool| report.cover(tool, tool == "EXPLAIN" ? "failed" : "skipped", "#{path}: #{detail}") }
+      end
+    end
     if migrations.nil? || migrations.empty?
       status = migrations ? "skipped" : "failed"
       report.cover("squawk", status, "db/migrations: nenhuma migração disponível") if migrations
       DB_TOOLS.each { |tool| report.cover(tool, "skipped", "Sem migrações disponíveis para criar o esquema.") }
+      queries&.each { |source| query_tools.each { |tool| report.cover(tool, "skipped", "#{source.path}: sem migrações disponíveis") } }
       return report
     end
 
     lint(migrations, report)
     restore_inputs = report.measure("pg_restore", "Inventário de dados antigos") { [inventory.load(SEED), inventory.load(ASSERTION)] }
-    queries = report.measure("EXPLAIN", "Inventário de consultas") { inventory.list("banco/queries", QUERY_NAME, 40) }
+    workload_seed = report.measure("EXPLAIN", "Inventário da carga final") { [inventory.load(WORKLOAD_SEED)] }
     Dir.mktmpdir("ac-banco-", "/tmp") do |directory|
       db = Database.new(directory, report)
       begin
@@ -486,28 +570,29 @@ module Banco
       rescue LoadError, StandardError => error
         detail = error.is_a?(ToolError) ? error.message : error.class.name
         DB_TOOLS.each { |tool| report.cover(tool, "failed", "Inicialização do banco isolado: #{detail}") }
+        queries&.each { |source| query_tools.each { |tool| report.cover(tool, "skipped", "#{source.path}: banco isolado indisponível") } }
         next
       end
       fresh = report.measure("pg-migrate", "Cenário do zero") { db.migrate("fresh", migrations) }
       if restore_inputs
         report.measure("pg_restore", "Restauração histórica") { db.exercise_restore(migrations, *restore_inputs) }
       end
-      query_tools = %w[pg_stat_statements EXPLAIN dexter]
       if !fresh || !queries || queries.empty?
         query_tools.each do |tool|
           status = !queries && tool == "EXPLAIN" ? "failed" : "skipped"
           report.cover(tool, status, "Consultas indisponíveis ou migrações do zero não concluídas.")
         end
+        queries&.each { |source| query_tools.each { |tool| report.cover(tool, "skipped", "#{source.path}: migrações do zero não concluídas") } }
       else
         begin
-          seed = restore_inputs&.first
+          seed = workload_seed&.first || restore_inputs&.first
           db.prepare_workload(seed)
-          summary = seed ? "#{seed.path} aplicado" : "apenas os dados gerados pelas migrações"
-          query_tools.each { |tool| report.cover(tool, "ok", "Carga local preparada com #{summary}.") }
+          query_tools.each { |tool| report.cover(tool, "ok", "Esquema final preparado para medição.") }
           queries.each { |source| db.workload(source) }
         rescue StandardError => error
           detail = error.is_a?(ToolError) ? error.message : error.class.name
           query_tools.each { |tool| report.cover(tool, "failed", "Preparo da carga: #{detail}") }
+          queries.each { |source| query_tools.each { |tool| report.cover(tool, "skipped", "#{source.path}: preparo indisponível") } }
         end
       end
     ensure
