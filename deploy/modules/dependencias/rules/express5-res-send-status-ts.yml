@@ -1,0 +1,9 @@
+id: express5-res-send-status-ts
+language: TypeScript
+severity: error
+message: "res.send(status, body) pode usar API removida no Express 5; revise antes de substituir por res.status(status).send(body)"
+rule:
+  pattern: $RES.send($STATUS, $BODY)
+constraints:
+  STATUS:
+    regex: "^[1-5][0-9]{2}$"

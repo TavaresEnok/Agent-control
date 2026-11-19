@@ -1,0 +1,19 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "components": [
+    {
+      "type": "library",
+      "name": "express",
+      "version": "4.17.1",
+      "purl": "pkg:npm/express@4.17.1"
+    },
+    {
+      "type": "library",
+      "name": "axios",
+      "version": "0.21.1",
+      "purl": "pkg:npm/axios@0.21.1"
+    }
+  ]
+}

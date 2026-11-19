@@ -1,0 +1,9 @@
+id: lodash4-removed-pluck-js
+language: JavaScript
+severity: error
+message: "_.pluck() pode usar API removida no Lodash 4+; revise antes de substituir por _.map()"
+rule:
+  pattern: $LODASH.pluck($COL, $PROP)
+constraints:
+  LODASH:
+    regex: "^(_|lodash)$"
