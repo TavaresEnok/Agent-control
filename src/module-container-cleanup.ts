@@ -11,6 +11,8 @@ export type CollectorProcess = (
   options: {timeoutMs: number; maxStdoutBytes: number; signal?: AbortSignal},
 ) => Promise<{code: number; stdout: Buffer; stderr: string}>;
 
+type CleanupOptions = {creationRejected?: boolean; startAuthorized?: boolean; recovering?: boolean};
+
 type ModuleContainerIdentity = {token: string; id: string | null};
 
 export function moduleContainerName(token: string): string {
@@ -52,16 +54,21 @@ async function findContainer(run: CollectorProcess, owner: ModuleContainerIdenti
 
 export async function removeOwnedModuleContainer(
   run: CollectorProcess, owner: ModuleContainerIdentity, rememberId: (id: string) => Promise<void>,
-): Promise<void> {
+  options: CleanupOptions = {},
+): Promise<'removed' | 'deferred'> {
   const id = await findContainer(run, owner);
   if (!id) {
     // Without the ID, create may still be in flight or have lost its ACK.
-    if (owner.id === null) throw containerCleanupPending();
-    return;
+    if (owner.id !== null || options.creationRejected) return 'removed';
+    // A successor fenced the previous run. Without a durable ID that run
+    // cannot start anything. Keep its token to collect a late create on a later pass.
+    if (options.recovering) return 'deferred';
+    throw containerCleanupPending();
   }
   if (owner.id === null) await rememberId(id);
   await dockerCommand(run, ['container', 'rm', '--force', id]);
   if (await findContainer(run, {...owner, id})) throw containerCleanupPending();
+  return 'removed';
 }
 
 export async function assertOwnedModuleContainer(run: CollectorProcess, token: string, id: string): Promise<void> {
@@ -103,7 +110,7 @@ export function moduleContainerJournal(
         if (!result.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
       });
     },
-    async cleanup(token: string, knownId?: string): Promise<void> {
+    async cleanup(token: string, knownId?: string, options: CleanupOptions = {}): Promise<void> {
       try {
         // The session lock outlives individual commits. A discovered ID is
         // committed before rm, including when the context lease has expired.
@@ -119,7 +126,8 @@ export function moduleContainerJournal(
           if (knownId && row.collector_container_id && row.collector_container_id !== knownId) throw containerCleanupPending();
           const id = row.collector_container_id ?? knownId ?? null;
           if (id && !row.collector_container_id) await rememberId(client, token, id);
-          await removeOwnedModuleContainer(run, {token, id}, foundId => rememberId(client, token, foundId));
+          const outcome = await removeOwnedModuleContainer(run, {token, id}, foundId => rememberId(client, token, foundId), options);
+          if (outcome === 'deferred') return;
           await client.query(
             'UPDATE ac_verify_runs SET collector_container_token=NULL, collector_container_id=NULL WHERE id=$1 AND collector_container_token=$2',
             [runId, token],
@@ -135,9 +143,9 @@ export function moduleContainerJournal(
           }
         }
       } catch (error) {
-        // If the journal is unavailable, a known ID still permits immediate
-        // physical cleanup. Recovery will later reconcile the database entry.
-        if (!(error instanceof Refusal) && knownId) {
+        // An authorized start implies the ID was stored durably. Otherwise
+        // leave the stopped container discoverable until the database recovers.
+        if (!(error instanceof Refusal) && knownId && options.startAuthorized) {
           await removeOwnedModuleContainer(run, {token, id: knownId}, async () => {});
         }
         throw containerCleanupPending();

@@ -154,3 +154,67 @@ for (const scenario of ['timeout', 'stdout'] as const) {
     });
   });
 }
+
+test('rejeição de imagem ausente registra falha sem deixar uma reserva de contêiner', {skip: !databaseUrl}, async () => {
+  await withModuleRecoveryFixture(databaseUrl!, async base => {
+    const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'create') return {...reply(1), stderr: 'Error response from daemon: No such image: fixture'};
+      assert.equal(argv[2], 'ls');
+      return reply(0);
+    };
+    const result = await runVerificationModule({...base, image, executeCollectorProcess: execute});
+    assert.equal(result.hasToolFailure, true);
+    const {rows: [row]} = await base.ledger.pool.query('SELECT collector_container_token FROM ac_verify_runs WHERE id=$1', [result.runId]);
+    assert.equal(row.collector_container_token, null);
+    assert.equal((await runVerificationModule({...base, collectorOutput: output})).hasToolFailure, false);
+  });
+});
+
+test('recuperação conserva o token de criação incerta sem impedir o sucessor e remove entrega tardia', {skip: !databaseUrl}, async () => {
+  await withModuleRecoveryFixture(databaseUrl!, async base => {
+    const runId = randomUUID();
+    let token = '';
+    let exists = false;
+    const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'create') {
+        token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!;
+        return reply(1);
+      }
+      if (argv[2] === 'ls') return reply(0, exists ? `${containerId} ${moduleContainerName(token)} ${token}` : '');
+      assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
+      exists = false;
+      return reply(0);
+    };
+    await assert.rejects(runVerificationModule({...base, runId, image, executeCollectorProcess: execute}), pending);
+    const retry = () => runVerificationModule({...base, collectorOutput: output, executeCollectorProcess: execute});
+    await retry();
+    const journal = async () => (await base.ledger.pool.query('SELECT collector_container_token FROM ac_verify_runs WHERE id=$1', [runId])).rows[0].collector_container_token;
+    assert.equal(await journal(), token);
+    exists = true;
+    await retry();
+    assert.equal(exists, false);
+    assert.equal(await journal(), null);
+  });
+});
+
+test('um ID ainda não persistido sobrevive à indisponibilidade do banco até a recuperação', {skip: !databaseUrl}, async () => {
+  await withModuleRecoveryFixture(databaseUrl!, async base => {
+    await base.ledger.pool.query(`CREATE FUNCTION refuse_id() RETURNS trigger LANGUAGE plpgsql AS
+      $$ BEGIN RAISE EXCEPTION 'synthetic'; END $$;
+      CREATE TRIGGER refuse_id BEFORE UPDATE OF collector_container_id ON ac_verify_runs
+      FOR EACH ROW WHEN (NEW.collector_container_id IS NOT NULL) EXECUTE FUNCTION refuse_id()`);
+    let token = '', exists = true;
+    const execute: CollectorProcess = async argv => {
+      if (argv[1] === 'create') {token = argv[argv.indexOf('--label') + 1]!.split('=')[1]!; return reply(0, containerId);}
+      if (argv[2] === 'ls') return reply(0, exists ? `${containerId} ${moduleContainerName(token)} ${token}` : '');
+      assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
+      exists = false;
+      return reply(0);
+    };
+    await assert.rejects(runVerificationModule({...base, image, executeCollectorProcess: execute}), pending);
+    assert.equal(exists, true);
+    await base.ledger.pool.query('DROP TRIGGER refuse_id ON ac_verify_runs');
+    await runVerificationModule({...base, collectorOutput: output, executeCollectorProcess: execute});
+    assert.equal(exists, false);
+  });
+});

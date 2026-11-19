@@ -5,7 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Ledger} from '../src/ledger.ts';
-import {listModuleReports, reconcileModuleReports, writeModuleReport} from '../src/verification-modules.ts';
+import {discardModuleReport, listModuleReports, reconcileModuleReports, runVerificationModule, writeModuleReport} from '../src/verification-modules.ts';
+import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('publicação interrompida e atualizações concorrentes reconciliam com o banco', async () => {
@@ -60,10 +61,21 @@ test('publicação interrompida e atualizações concorrentes reconciliam com o 
     const file = join(report.directory, 'achados.json');
     const stale = JSON.parse(await readFile(file, 'utf8'));
     stale.achados[0].status = 'confirmado';
+    stale.achados[0].severity = 'baixa';
+    stale.achados[0].proof = 'não corresponde ao registro confirmado';
     await writeFile(file, JSON.stringify(stale));
     await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
     assert.equal(JSON.parse(await readFile(file,'utf8')).achados[0].status, 'fechado');
     assert.equal((await listModuleReports(join(root,'data'), projectId))[0]?.counts.alta, 0);
+    const corrected = JSON.parse(await readFile(file, 'utf8')).achados[0];
+    assert.equal(corrected.severity, 'alta');
+    assert.equal(corrected.proof, achado.proof);
+    const coverageFile = join(report.directory, 'cobertura.md');
+    await rename(coverageFile, coverageFile + '.saved');
+    await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
+    assert.equal((await ledger.pool.query('SELECT report_legacy_missing FROM ac_verify_runs WHERE id=$1',[runId])).rows[0].report_legacy_missing, true);
+    assert.deepEqual(await listModuleReports(join(root,'data'), projectId), []);
+    await rename(coverageFile + '.saved', coverageFile);
     // The pre-tombstone CLI used to remove a directory and leave its path in
     // the database. Missing historical files have an indeterminate cause.
     const hidden = join(root, 'historical');
@@ -76,4 +88,25 @@ test('publicação interrompida e atualizações concorrentes reconciliam com o 
     await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
     assert.equal((await ledger.pool.query('SELECT report_legacy_missing FROM ac_verify_runs WHERE id=$1', [runId])).rows[0]?.report_legacy_missing, false);
   } finally { await ledger.pool.end(); await database.close(); await rm(root,{recursive:true,force:true}); }
+});
+
+test('descarte de diretório legado incompleto com prefixo ambíguo preserva os dados', async () => {
+  await withModuleRecoveryFixture(process.env.AC_TEST_DATABASE_URL!, async base => {
+    const {ledger, projectId, principal, dataDirectory} = base;
+    const firstId = randomUUID();
+    const secondId = firstId.slice(0, 8) + randomUUID().slice(8);
+    const collectorOutput = {coverage: [{tool:'fixture', version:'1', status:'ok', detail:'synthetic'}], findings:[]};
+    const first = await runVerificationModule({...base, runId:firstId, collectorOutput});
+    const second = await runVerificationModule({...base, runId:secondId, collectorOutput});
+    const old = first.directory.replace(firstId.replaceAll('-', ''), firstId.slice(0, 8));
+    assert.notEqual(old, first.directory);
+    await rename(first.directory, old);
+    await rm(join(old, 'run.json'));
+    await rm(join(old, '.run-pending.json'), {force:true});
+    await ledger.pool.query('UPDATE ac_verify_runs SET report_prepared_dir=NULL, report_dir=$2 WHERE id=$1', [firstId, old]);
+    await ledger.pool.query("UPDATE ac_verify_runs SET report_prepared_dir=NULL, report_dir='pending' WHERE id=$1", [secondId]);
+    await assert.rejects(discardModuleReport(ledger, principal, dataDirectory, projectId, 'qa', firstId), /VERIFY_REPORT_INTEGRITY/);
+    assert.match(await readFile(join(old, 'mapa.md'), 'utf8'), /Mapa/);
+    assert.match(await readFile(join(second.directory, 'run.json'), 'utf8'), new RegExp(secondId));
+  });
 });

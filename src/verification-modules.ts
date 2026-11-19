@@ -881,23 +881,31 @@ export async function runModuleCollectorContainer(input: {
     const createArgs = [MODULE_RUNTIME_BIN, 'create', '--pull', 'never', '--name', moduleContainerName(token),
       '--label', `${MODULE_CONTAINER_LABEL}=${token}`, ...baseArgs.slice(3)];
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
-    await input.journal?.register(token);
     let id: string | undefined;
+    let creationRejected = true;
+    let startAuthorized = false;
     try {
+      await input.journal?.register(token);
+      creationRejected = false;
       const created = await run(createArgs, {timeoutMs: Math.min(timeoutMs, 10_000), maxStdoutBytes: 4096});
-      if (created.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+      if (created.code !== 0) {
+        // A missing image with --pull never is a definitive daemon rejection.
+        creationRejected = /(?:^|\n)(?:docker: )?Error response from daemon: No such image:/i.test(created.stderr);
+        throw new Refusal('VERIFY_TOOLS_FAILED', 503);
+      }
       const candidate = createdContainerId(created.stdout);
       await assertOwnedModuleContainer(run, token, candidate);
       id = candidate;
       await input.journal?.beforeStart(token, id);
+      startAuthorized = true;
       if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
       const result = await run([MODULE_RUNTIME_BIN, 'start', '--attach', id],
         {timeoutMs, maxStdoutBytes, signal: input.signal});
       const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes, module: input.module});
       return {code: result.code, output};
     } finally {
-      if (input.journal) await input.journal.cleanup(token, id);
-      else await removeOwnedModuleContainer(run, {token, id: id ?? null}, async () => {});
+      if (input.journal) await input.journal.cleanup(token, id, {creationRejected, startAuthorized});
+      else await removeOwnedModuleContainer(run, {token, id: id ?? null}, async () => {}, {creationRejected});
     }
   } finally {
     try {
@@ -1452,6 +1460,14 @@ async function readTextInside(root: string, path: string, missingCode: 'VERIFY_A
   }
 }
 
+function requiredModuleArtifacts(coverage: readonly ModuleToolCoverage[]): string[] {
+  const published = new Set(coverage.filter(row => row.status === 'ok').map(row => row.tool));
+  const names: string[] = [];
+  if (published.has('typedoc:artefato')) names.push('api.json');
+  if (published.has('dependency-cruiser:artefato')) names.push('dependencias.mmd');
+  return names;
+}
+
 async function loadModuleReports(
   projectDir: string,
   module?: VerificationModule,
@@ -1470,6 +1486,17 @@ async function loadModuleReports(
       const parsed = ModuleReportSummary.safeParse(JSON.parse(text));
       if (!parsed.success || parsed.data.directoryName !== name) continue;
       if (module !== undefined && parsed.data.module !== module) continue;
+      const required = ['mapa.md', 'cobertura.md', 'achados.json', 'bruto/achados-brutos.json'];
+      if (parsed.data.module === 'documentacao') {
+        const rawText = await readTextInside(path, join(path, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID');
+        const raw = validateModuleCollectorObject(JSON.parse(rawText), 'documentacao');
+        required.push(...requiredModuleArtifacts(raw.coverage));
+      }
+      for (const file of required) {
+        const fullPath = join(path, file);
+        const info = await lstat(fullPath);
+        if (info.isSymbolicLink() || !info.isFile() || await realpath(fullPath) !== fullPath) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+      }
       found.push({directory: path, summary: parsed.data});
     } catch (error) {
       if (error instanceof Refusal && error.code === 'VERIFY_PATH_FORBIDDEN') throw error;
@@ -2499,7 +2526,17 @@ async function removePersistedModuleReport(client: pg.PoolClient, projectDir: st
     if (!await reportDirectoryExists(target)) return;
     const {summary} = await findReportSummary(target);
     if (summary && !reportMatches(summary, target, row)) throw reportIntegrity();
-    if (!row.report_prepared_dir) await assertUnsharedLegacyReport(client, target, row.id);
+    if (!row.report_prepared_dir) {
+      await assertUnsharedLegacyReport(client, target, row.id);
+      if (!summary) {
+        const collision = await client.query(
+          `SELECT 1 FROM ac_verify_runs own JOIN ac_verify_runs other ON other.project_id=own.project_id
+           AND other.module=own.module AND left(other.id::text,8)=left(own.id::text,8)
+           WHERE own.id=$1 AND other.id<>own.id AND other.report_prepared_dir IS NULL LIMIT 1`, [row.id],
+        );
+        if (collision.rowCount) throw reportIntegrity();
+      }
+    }
     await rm(target, {recursive: true, force: true});
     return;
   }
@@ -2560,7 +2597,7 @@ export async function discardModuleReport(
   });
 }
 
-type PersistedFinding = {achado_id: string; status: Achado['status']; file: string; line: number | null; payload: Achado};
+type PersistedFinding = {achado_id: string; severity: Achado['severity']; status: Achado['status']; file: string; line: number | null; payload: Achado};
 
 async function recoverHistoricalCoverage(
   client: pg.PoolClient, runId: string, raw: ModuleCollectorOutput, findings: PersistedFinding[],
@@ -2605,25 +2642,24 @@ async function publishModuleReport(client: pg.PoolClient, row: PersistedModuleRe
   const raw = validateModuleCollectorObject(
     JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')), row.module,
   );
-  if (!published) {
-    const files = ['mapa.md', 'cobertura.md'];
-    if (row.module === 'documentacao') {
-      if (raw.coverage.some(tool => tool.tool === 'typedoc:artefato' && tool.status === 'ok')) files.push('api.json');
-      if (raw.coverage.some(tool => tool.tool === 'dependency-cruiser:artefato' && tool.status === 'ok')) files.push('dependencias.mmd');
-    }
-    for (const file of files) {
-      await readTextInside(directory, join(directory, file), 'VERIFY_REPORT_INVALID');
-    }
+  const files = ['mapa.md', 'cobertura.md'];
+  if (row.module === 'documentacao') files.push(...requiredModuleArtifacts(raw.coverage));
+  for (const file of files) {
+    await readTextInside(directory, join(directory, file), 'VERIFY_REPORT_INVALID');
   }
   const findings = (await client.query<PersistedFinding>(
-    'SELECT achado_id, status, file, line, payload FROM ac_verify_findings WHERE run_id=$1', [row.id],
+    'SELECT achado_id, status, severity, file, line, payload FROM ac_verify_findings WHERE run_id=$1', [row.id],
   )).rows;
   const byId = new Map(findings.map(item => [item.achado_id, item]));
   if (byId.size !== archived.length || new Set(archived.map(item => item.id)).size !== archived.length) throw reportIntegrity();
   const reconciled = archived.map(item => {
     const finding = byId.get(item.id);
     if (!finding || item.where.file !== finding.file || item.where.line !== finding.line) throw reportIntegrity();
-    return {...item, status: Achado.shape.status.parse(finding.status)};
+    const persisted = Achado.strip().safeParse({...finding.payload, status: finding.status, severity: finding.severity});
+    if (!persisted.success || persisted.data.id !== finding.achado_id || persisted.data.where.file !== finding.file
+      || persisted.data.where.line !== finding.line) throw reportIntegrity();
+    assertNoLiveAccessKey(persisted.data);
+    return persisted.data;
   });
   if (!row.report_prepared_dir) await recoverHistoricalCoverage(client, row.id, raw, findings);
   const findingsDirectory = join(directory, 'achados');
@@ -2678,7 +2714,17 @@ async function reconcileReports(
         if (!row.report_legacy_missing) await client.query('UPDATE ac_verify_runs SET report_legacy_missing=true WHERE id=$1', [row.id]);
         continue;
       }
-      await publishModuleReport(client, row);
+      try {
+        await publishModuleReport(client, row);
+      } catch (error) {
+        // A historical partial restore has no durable reservation. Preserve
+        // the files and let unrelated runs reconcile. Reject unsafe paths.
+        const incomplete = error instanceof SyntaxError || error instanceof z.ZodError ||
+          (error instanceof Refusal && ['VERIFY_REPORT_INTEGRITY', 'VERIFY_REPORT_INVALID'].includes(error.code));
+        if (row.report_prepared_dir || !incomplete) throw error;
+        await client.query('UPDATE ac_verify_runs SET report_legacy_missing=true WHERE id=$1', [row.id]);
+        continue;
+      }
       if (row.report_legacy_missing) await client.query('UPDATE ac_verify_runs SET report_legacy_missing=false WHERE id=$1', [row.id]);
     }
   });
@@ -2708,7 +2754,7 @@ async function recoverModuleContainers(
     )).rows;
   });
   for (const row of pending) {
-    await moduleContainerJournal(ledger, principal, authority, row.id, execute).cleanup(row.collector_container_token);
+    await moduleContainerJournal(ledger, principal, authority, row.id, execute).cleanup(row.collector_container_token, undefined, {recovering: true});
   }
 }
 
