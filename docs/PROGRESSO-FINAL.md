@@ -1191,3 +1191,8 @@ PAUSADO-COTA
 - 19/11/2026 21:45 UTC — Imagem de conformidade construída e arquivada por digest em 0c543c96.
 - 19/11/2026 21:45 UTC — C-DOCUMENTACAO-VIVA-R2 encerrado com código 0.
 - 19/11/2026 21:45 UTC — Correção doc-viva recebida em 363082ff. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 21:45 UTC — revisor-C-ACEITE-DOCUMENTACAO-VIVA-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 21:45 UTC — Imagem de documentacao construída e arquivada por digest em 5272ace0.
+- 19/11/2026 21:46 UTC — documentacao em 5272ace0 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 333, 'failed': 1, 'skipped': 62}; código do produto VERIFY_TOOLS_FAILED.
+- 19/11/2026 21:47 UTC — C-ACEITE-DOCUMENTACAO-VIVA-R2 encerrado com código 0.
+- 19/11/2026 21:47 UTC — Publica os símbolos em rotas válidas e protege os nomes dos grafos. Ordem C-DOCUMENTACAO-VIVA-R3 em worktree separado conforme 43f1c664.
