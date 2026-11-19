@@ -2531,3 +2531,59 @@ test('R8: validade do timeout, posição do executável e array HTTP genérico',
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+test('R11: incerteza de timeout preserva somente os requisitos possíveis', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r11-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'app.service'), '[Service]\nStandardOutput=append:/var/log/app.log\n');
+    const audit = (line: string) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
+      return runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+    };
+    const pillars = ['alertas-logs', 'disco-memoria', 'backup-restauracao'];
+    const status = (out: ReturnType<typeof audit>, pillar: string) => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status;
+    const has = (out: ReturnType<typeof audit>, rule: string) => out.findings.some(f => f.rule === rule);
+    for (const [signal, accepted] of [['32', true], ['33', true], ['160', true], ['288', true], ['SIG160', false], ['SIG32', false], ['SIGTERM', true], ['TERM', true]] as [string, boolean][]) {
+      const out = audit(`timeout --signal=${signal} 30s npm run personal:watch`);
+      assert.equal(status(out, 'alertas-logs'), 'ok', signal);
+      assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), !accepted, signal);
+    }
+    for (const [duration, expected] of [['-0,0s', 'failed'], ['-0,1s', 'ok'], ['1,5s', 'failed'], ['1,5ss', 'ok'], ['-0.0s', 'ok'], ['-1s', 'ok']] as [string, string][]) {
+      for (const args of [`-- ${duration}`, `--kill-after=${duration} 30s`, `-k ${duration} 30s`]) {
+        const out = audit(`timeout ${args} npm run personal:watch`);
+        assert.equal(status(out, 'alertas-logs'), expected, args);
+        assert.equal(has(out, 'PRONTIDAO-ALERTA-AUSENTE'), expected === 'ok' && duration !== '-0.0s', args);
+      }
+    }
+    for (const suffix of ['', ' && true', ' | cat']) {
+      for (const [command, pillar, rule] of [
+        ['npm run personal:watch', 'alertas-logs', 'PRONTIDAO-ALERTA-AUSENTE'],
+        ['df -P /', 'disco-memoria', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'],
+        ['pg_dump db', 'backup-restauracao', 'PRONTIDAO-BACKUP-AUSENTE'],
+      ]) {
+        for (const prefix of ['timeout -- $LIMITE 30s', 'timeout "$OPCAO" 1,5s', 'timeout -- 1,5s']) {
+          const line = `${prefix} ${command}${suffix}`;
+          const out = audit(line);
+          for (const p of pillars) assert.equal(status(out, p), p === pillar ? 'failed' : 'ok', `${line}: ${p}`);
+          assert.equal(has(out, rule), false, line);
+        }
+      }
+      const backup = audit(`timeout -- 1,5s sh -c 'pg_dump db'${suffix}`);
+      assert.equal(status(backup, 'backup-restauracao'), 'failed', suffix);
+      assert.equal(has(backup, 'PRONTIDAO-BACKUP-AUSENTE'), false, suffix);
+      for (const p of ['alertas-logs', 'disco-memoria']) assert.equal(status(backup, p), 'ok', suffix);
+      for (const line of [`timeout -- 1,5s pg_dump --version${suffix}`, `timeout -- 1,5s sh -c 'pg_dump --version'${suffix}`]) {
+        const out = audit(line);
+        assert.equal(status(out, 'backup-restauracao'), 'ok', line);
+        assert.equal(has(out, 'PRONTIDAO-BACKUP-AUSENTE'), true, line);
+      }
+    }
+    const quoted = audit('timeout -- "$LIMITE" 30s npm run personal:watch');
+    assert.equal(status(quoted, 'alertas-logs'), 'ok');
+    assert.equal(has(quoted, 'PRONTIDAO-ALERTA-AUSENTE'), true);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});

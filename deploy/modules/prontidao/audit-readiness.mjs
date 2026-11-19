@@ -1681,8 +1681,8 @@ function timeoutSignal(value) {
   if (/[$`*?\[\]]/.test(value)) return 'dynamic';
   const signal = value.toUpperCase().replace(/^SIG/, '');
   if (LINUX_SIGNAL_NAMES.has(signal)) return 'valid';
-  if (/^\d+$/.test(signal)) {
-    const n = Number(signal);
+  if (/^\d+$/.test(value)) {
+    const n = Number(value);
     if (!Number.isSafeInteger(n) || n > 2147483647) return 'invalid';
     const normalized = n & (n >= 255 ? 255 : 127);
     return normalized <= 64 ? 'valid' : 'invalid';
@@ -1695,11 +1695,34 @@ function timeoutSignal(value) {
   }
   return 'invalid';
 }
-function invalidDuration(value) {
-  // A decimal comma can be valid under the installation's numeric locale.
-  const dynamic = /[$`*?\[\]]/.test(value)
-    || (value.includes(',') && TIMEOUT_DURATION_RE.test(value.replace(',', '.')));
-  return {words: [], query: !dynamic, ambiguous: dynamic};
+function timeoutDuration(value) {
+  if (/[$`*?\[\]]/.test(value)) return 'dynamic';
+  const normalized = value.replace(',', '.').replace(/^[ \t]+/, '');
+  const unsigned = normalized.startsWith('-') ? normalized.slice(1) : normalized;
+  if (!TIMEOUT_DURATION_RE.test(unsigned)) return 'invalid';
+  if (normalized.startsWith('-')) {
+    const numeric = unsigned.replace(/[smhd]$/, '');
+    const mantissa = (/^0[xX]/.test(numeric) ? numeric.replace(/[pP][+-]?\d+$/, '').slice(2) : numeric.replace(/[eE][+-]?\d+$/, ''));
+    if (!/^[0.]+$/.test(mantissa)) return 'invalid';
+  }
+  return value.includes(',') ? 'dynamic' : 'valid';
+}
+function durationResult(value) {
+  const state = timeoutDuration(value);
+  return state === 'valid' ? null : {words: [], query: state === 'invalid', ambiguous: state === 'dynamic'};
+}
+// An unquoted expansion can disappear or split into multiple shell words.
+function mayChangeWordCount(word) {
+  const raw = word.raw ?? word.text ?? '';
+  let quote = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "'" && quote !== '"') { quote = quote === "'" ? '' : "'"; continue; }
+    if (ch === '"' && quote !== "'") { quote = quote === '"' ? '' : '"'; continue; }
+    if (ch === '\\' && quote !== "'") { i++; continue; }
+    if (!quote && /[$`*?\[\]]/.test(ch)) return true;
+  }
+  return false;
 }
 function signalResult(value) {
   const state = timeoutSignal(value);
@@ -1818,8 +1841,8 @@ function skipWrapperOptions(words, spec, binary) {
       if (eq !== -1) {
         if (longValues.has(name) || longOptionalEquals.has(name) || (!strict && longFlags.has(name))) {
           if (strict && opt.slice(eq + 1) === '') return {words: [], query: binary === 'timeout', ambiguous: binary !== 'timeout'};
-          if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(opt.slice(eq + 1))) {
-            const result = invalidDuration(opt.slice(eq + 1));
+          if (binary === 'timeout' && name === '--kill-after') {
+            const result = durationResult(opt.slice(eq + 1));
             if (!acceptUncertain(result)) return result;
           }
           if (binary === 'timeout' && name === '--signal') {
@@ -1839,8 +1862,8 @@ function skipWrapperOptions(words, spec, binary) {
         if (strict && (!next || next.operator || next.text === '--')) {
           return {words: [], query: false, ambiguous: true};
         }
-        if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(next?.text ?? '')) {
-          const result = invalidDuration(next?.text ?? '');
+        if (binary === 'timeout' && name === '--kill-after') {
+          const result = durationResult(next?.text ?? '');
           if (!acceptUncertain(result)) return result;
         }
         if (binary === 'timeout' && name === '--signal') {
@@ -1881,10 +1904,8 @@ function skipWrapperOptions(words, spec, binary) {
         }
         if (binary === 'timeout' && ch === 'k') {
           const val = inlineValue ? opt.slice(j + 1) : (next?.text ?? '');
-          if (!TIMEOUT_DURATION_RE.test(val)) {
-            const result = invalidDuration(val);
-            if (!acceptUncertain(result)) return result;
-          }
+          const result = durationResult(val);
+          if (!acceptUncertain(result)) return result;
         }
         break;
       }
@@ -1903,14 +1924,16 @@ function skipWrapperOptions(words, spec, binary) {
     if (rest.length === 0 || rest[0].operator) {
       return {words: [], query: false, ambiguous: false};
     }
-    if (!TIMEOUT_DURATION_RE.test(rest[0].text ?? '')) {
-      // A dynamic word before a possible duration can instead be an option.
-      if (!optionsEnded && /[$`*?\[\]]/.test(rest[0].text ?? '') && rest[1] && !rest[1].operator
-        && (TIMEOUT_DURATION_RE.test(rest[1].text ?? '') || (rest[1].text ?? '').startsWith('-')
-          || /[$`*?\[\]]/.test(rest[1].text ?? ''))) {
+    const duration = timeoutDuration(rest[0].text ?? '');
+    if (duration !== 'valid') {
+      // An unquoted expansion can vanish or split, even after --. Before --,
+      // a quoted expansion can also be an option preceding the duration.
+      if (duration === 'dynamic' && (mayChangeWordCount(rest[0])
+        || (!optionsEnded && rest[1] && !rest[1].operator
+          && (timeoutDuration(rest[1].text ?? '') !== 'invalid' || (rest[1].text ?? '').startsWith('-'))))) {
         return {words: [], query: false, ambiguous: true};
       }
-      const result = invalidDuration(rest[0].text ?? '');
+      const result = durationResult(rest[0].text ?? '');
       if (!acceptUncertain(result)) return result;
     }
     return {words: rest.slice(1), query: false, ambiguous: uncertain, knownPosition: uncertain};
@@ -2074,10 +2097,10 @@ function splitShellSegments(words) {
 
 function unwrapShellDashC(parsed) {
   if (!parsed || parsed.operator) return null;
-  const {words} = unwrapCommandWords(parsed.words);
+  const {words, ambiguous} = unwrapCommandWords(parsed.words);
   const binary = basename(words[0]?.text ?? '');
   if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[1]?.text ?? '') && words[2]) {
-    return words[2].text;
+    return {command: words[2].text, ambiguous};
   }
   return null;
 }
@@ -2118,8 +2141,9 @@ function isBackupCandidateSegment(segWords) {
       && isBackupCandidateSegment(segWords.slice(i + 1)));
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return false;
-  if (/^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find)$/.test(binary)) return true;
   const args = words.map(word => word.text);
+  if (args.some(arg => /^(?:--help|--version|-h)$/.test(arg))) return false;
+  if (/^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find)$/.test(binary)) return true;
   const npmTarget = npmScriptTarget(binary, args);
   if (npmTarget) return /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(npmTarget);
   if (binary === 'node') {
@@ -2247,9 +2271,15 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
     if (!BACKUP_CANDIDATE_RE.test(command)) continue;
     const outerParsed = shellWords(command);
     const dashC = outerParsed ? unwrapShellDashC(outerParsed) : null;
-    const invocation = dashC ?? command;
+    const invocation = dashC?.command ?? command;
     if (dashC !== null && !BACKUP_CANDIDATE_RE.test(invocation)) continue;
     const parsed = dashC !== null ? shellWords(invocation) : outerParsed;
+    if (dashC?.ambiguous) {
+      if (!parsed || splitShellSegments(parsed.words).some(isBackupCandidateSegment)) {
+        onIncomplete(line, 'comando de backup depende de wrapper não resolvido');
+      }
+      continue;
+    }
     if (!parsed) {
       onIncomplete(line, 'comando de backup ou restauração com sintaxe não coberta');
       continue;
