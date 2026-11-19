@@ -46,6 +46,11 @@ if [ ! -d /repo ] || [ ! -d /tmp ] || [ ! -w /tmp ]; then
   exit 78
 fi
 
+if [ ! -r /repo ] || [ ! -x /repo ]; then
+  printf '%s\n' ARQUITETURA_REPO_UNREADABLE >&2
+  exit 78
+fi
+
 export HOME=/tmp
 export TMPDIR=/tmp
 export NPM_CONFIG_UPDATE_NOTIFIER=false

@@ -5,6 +5,8 @@
  */
 import {spawnSync} from 'node:child_process';
 import {
+  accessSync,
+  constants as fsConstants,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -162,6 +164,12 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   if (!existsSync(sourceRoot) || !statSync(sourceRoot).isDirectory()) {
     throw new Error(`Diretório do repositório inválido: ${sourceRoot}`);
   }
+  try {
+    accessSync(sourceRoot, fsConstants.R_OK | fsConstants.X_OK);
+  } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : 'ERR';
+    throw new Error(`ARQUITETURA_REPO_UNREADABLE: raiz do repositório presente porém ilegível (${code}): ${sourceRoot}`);
+  }
   const maxFiles = opts.maxFiles ?? MAX_COPY_FILES;
   const maxFileBytes = opts.maxFileBytes ?? MAX_FILE_BYTES;
   const copiedFiles = [];
@@ -174,7 +182,12 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
     let entries;
     try {
       entries = readdirSync(currentSrc, {withFileTypes: true});
-    } catch {
+    } catch (err) {
+      if (currentRel === '') {
+        const code = err && typeof err === 'object' && 'code' in err ? String(err.code) : 'ERR';
+        throw new Error(`ARQUITETURA_REPO_UNREADABLE: falha ao ler raiz do repositório (${code}): ${sourceRoot}`);
+      }
+      skipped.push(`${currentRel}/[ilegivel]`);
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -1386,6 +1399,11 @@ function launchedAsEntry() {
 }
 
 if (launchedAsEntry()) {
-  const result = runCollector();
-  process.stdout.write(`${JSON.stringify(result)}\n`);
+  try {
+    const result = runCollector();
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+  } catch (err) {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.exitCode = 1;
+  }
 }

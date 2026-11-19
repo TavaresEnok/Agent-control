@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -127,14 +128,19 @@ test('hadolint aceita o Dockerfile do módulo quando disponível no PATH', t => 
   assert.equal(res.status, 0, `${res.stdout ?? ''}${res.stderr ?? ''}`);
 });
 
-test('entrypoint recusa rede ativa, socket e path traversal', () => {
+test('entrypoint recusa rede ativa, socket, path traversal e raiz ilegível', () => {
   const entrypoint = readFileSync(join(moduleDir, 'entrypoint.sh'), 'utf8');
   assert.match(entrypoint, /ARQUITETURA_PATH_FORBIDDEN/);
+  assert.match(entrypoint, /ARQUITETURA_REPO_UNREADABLE/);
   assert.match(entrypoint, /ARQUITETURA_SOCKET_FORBIDDEN/);
   assert.match(entrypoint, /ARQUITETURA_NETWORK_FORBIDDEN/);
+  assert.match(entrypoint, /\[ ! -r \/repo \] \|\| \[ ! -x \/repo \]/);
   assert.match(entrypoint, /\/sys\/class\/net\/\*/);
   assert.match(entrypoint, /\/var\/run\/docker\.sock/);
   assert.match(entrypoint, /unset\s+"\$name"/);
+
+  const shSyntax = spawnSync('/bin/sh', ['-n', join(moduleDir, 'entrypoint.sh')], {encoding: 'utf8'});
+  assert.equal(shSyntax.status, 0, shSyntax.stderr ?? '');
 
   const traversal = spawnSync('/bin/sh', [join(moduleDir, 'entrypoint.sh'), '../fora'], {encoding: 'utf8'});
   assert.equal(traversal.status, 78);
@@ -320,6 +326,24 @@ test('complexidade e buildKnipConfig distinguem a fixture com defeito da fixture
     moduleDir,
   );
   assert.deepEqual(knipCfg.entry, ['src/index.ts']);
+
+  const fakeTools = mkdtempSync(join(tmpdir(), 'arch-tools-'));
+  try {
+    for (const plugin of ['vite', 'vitest', 'eslint', '_internal']) {
+      mkdirSync(join(fakeTools, 'node_modules', 'knip', 'dist', 'plugins', plugin), {recursive: true});
+    }
+    const disabledCfg = buildKnipConfig(
+      cleanFixture,
+      ['package.json', 'src/index.ts', 'vite.config.ts'],
+      fakeTools,
+    );
+    assert.equal(disabledCfg.vite, false);
+    assert.equal(disabledCfg.vitest, false);
+    assert.equal(disabledCfg.eslint, false);
+    assert.equal('_internal' in disabledCfg, false);
+  } finally {
+    rmSync(fakeTools, {recursive: true, force: true});
+  }
 });
 
 test('falha de ferramenta aparece na cobertura como failed sem abortar o JSON e repositório vazio vira skipped', () => {
@@ -357,4 +381,60 @@ test('falha de ferramenta aparece na cobertura como failed sem abortar o JSON e 
   }
   const astRow = failedTools.coverage.find(c => c.tool === 'ast-complexity');
   assert.equal(astRow?.status, 'ok');
+});
+
+test('raiz presente porém ilegível falha explicitamente, enquanto projeto acessível sem JS/TS declara skipped', t => {
+  const noJsTsRepo = mkdtempSync(join(tmpdir(), 'arch-docs-only-'));
+  try {
+    writeFileSync(join(noJsTsRepo, 'README.md'), '# Apenas documentação\n');
+    chmodSync(noJsTsRepo, 0o755);
+    chmodSync(join(noJsTsRepo, 'README.md'), 0o644);
+    const docsRes = runCollector({
+      repoDir: noJsTsRepo,
+      toolsRoot: moduleDir,
+    });
+    assertValidOutputContract(docsRes);
+    assert.equal(docsRes.findings.length, 0);
+    for (const tool of ['knip', 'ast-complexity', 'jscpd', 'dependency-cruiser']) {
+      const row = docsRes.coverage.find(c => c.tool === tool);
+      assert.ok(row, `cobertura ausente para ${tool}`);
+      assert.equal(row.status, 'skipped');
+    }
+    assert.match(docsRes.coverage.find(c => c.tool === 'knip')?.detail ?? '', /arquivos copiados=1/);
+  } finally {
+    rmSync(noJsTsRepo, {recursive: true, force: true});
+  }
+
+  if (process.getuid?.() === 0) {
+    t.skip('usuário root ignora modo 0000 no teste unitário sem contêiner');
+    return;
+  }
+
+  for (const mode of [0o000, 0o400, 0o100]) {
+    const unreadableRepo = mkdtempSync(join(tmpdir(), 'arch-unreadable-'));
+    const copyDst = mkdtempSync(join(tmpdir(), 'arch-unreadable-dst-'));
+    try {
+      mkdirSync(join(unreadableRepo, 'src'), {recursive: true});
+      writeFileSync(join(unreadableRepo, 'src', 'index.ts'), 'export const x = 1;\n');
+      chmodSync(unreadableRepo, mode);
+
+      assert.throws(() => copyRepoSafely(unreadableRepo, copyDst), /ARQUITETURA_REPO_UNREADABLE/);
+      assert.throws(
+        () => runCollector({repoDir: unreadableRepo, toolsRoot: moduleDir}),
+        /ARQUITETURA_REPO_UNREADABLE/,
+      );
+
+      const cliRun = spawnSync(process.execPath, [join(moduleDir, 'collect.mjs')], {
+        encoding: 'utf8',
+        env: {...process.env, AC_REPO_DIR: unreadableRepo},
+      });
+      assert.equal(cliRun.status, 1);
+      assert.equal((cliRun.stdout ?? '').trim(), '');
+      assert.match(cliRun.stderr ?? '', /ARQUITETURA_REPO_UNREADABLE/);
+    } finally {
+      chmodSync(unreadableRepo, 0o700);
+      rmSync(unreadableRepo, {recursive: true, force: true});
+      rmSync(copyDst, {recursive: true, force: true});
+    }
+  }
 });

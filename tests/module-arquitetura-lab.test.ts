@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -20,35 +30,53 @@ function readPinnedImage(): string {
   throw new Error(`Digest inválido ou ausente em deploy/modules/arquitetura/digest.txt: "${raw}"`);
 }
 
-function runInContainer(image: string, repoPath: string, network: 'none' | 'bridge' = 'none') {
-  return spawnSync(
-    'docker',
-    [
-      'run',
-      '--rm',
-      '--network',
-      network,
-      '--read-only',
-      '--user',
-      '65532:65532',
-      '--cap-drop',
-      'ALL',
-      '--security-opt',
-      'no-new-privileges',
-      '--pids-limit',
-      '256',
-      '--memory',
-      '1073741824',
-      '--cpus',
-      '1',
-      '--tmpfs',
-      '/tmp:rw,exec,nosuid,nodev,mode=1777,size=512m',
-      '--mount',
-      `type=bind,src=${repoPath},dst=/repo,readonly`,
-      image,
-    ],
-    {encoding: 'utf8', timeout: 180_000, maxBuffer: 32 * 1024 * 1024},
-  );
+function ensureWorldReadable(targetPath: string): void {
+  const st = lstatSync(targetPath);
+  if (st.isSymbolicLink()) return;
+  if (st.isDirectory()) {
+    chmodSync(targetPath, 0o755);
+    for (const entry of readdirSync(targetPath)) {
+      ensureWorldReadable(join(targetPath, entry));
+    }
+  } else if (st.isFile()) {
+    chmodSync(targetPath, 0o644);
+  }
+}
+
+function runInContainer(
+  image: string,
+  repoPath: string,
+  network: 'none' | 'bridge' = 'none',
+  canaryDir?: string,
+) {
+  const args = [
+    'run',
+    '--rm',
+    '--network',
+    network,
+    '--read-only',
+    '--user',
+    '65532:65532',
+    '--cap-drop',
+    'ALL',
+    '--security-opt',
+    'no-new-privileges',
+    '--pids-limit',
+    '256',
+    '--memory',
+    '1073741824',
+    '--cpus',
+    '1',
+    '--tmpfs',
+    '/tmp:rw,exec,nosuid,nodev,mode=1777,size=512m',
+    '--mount',
+    `type=bind,src=${repoPath},dst=/repo,readonly`,
+  ];
+  if (canaryDir) {
+    args.push('--mount', `type=bind,src=${canaryDir},dst=/var/tmp`);
+  }
+  args.push(image);
+  return spawnSync('docker', args, {encoding: 'utf8', timeout: 180_000, maxBuffer: 32 * 1024 * 1024});
 }
 
 type CollectorOutput = {
@@ -105,35 +133,99 @@ test('laboratório módulo 3 encontra os defeitos plantados e não acusa o contr
   assertSchema(cleanOut);
   assert.equal(cleanOut.findings.length, 0, `controle limpo acusou achados: ${JSON.stringify(cleanOut.findings)}`);
 
-  // Prova de segurança: rede ativa é recusada e configs maliciosas no repo não executam
+  // Prova de segurança: rede ativa é recusada, raiz ilegível falha explicitamente,
+  // projeto acessível sem JS/TS declara skipped e configs maliciosas não executam.
   const netRefusal = runInContainer(image, cleanFixture, 'bridge');
   assert.equal(netRefusal.status, 78);
   assert.match(netRefusal.stderr ?? '', /ARQUITETURA_NETWORK_FORBIDDEN/);
 
+  const unreadableRepo = mkdtempSync(join(tmpdir(), 'arch-unreadable-'));
+  try {
+    mkdirSync(join(unreadableRepo, 'src'), {recursive: true});
+    writeFileSync(join(unreadableRepo, 'src', 'index.ts'), 'export const value = 1;\n');
+    chmodSync(unreadableRepo, 0o000);
+    const unreadableRun = runInContainer(image, unreadableRepo, 'none');
+    assert.equal(unreadableRun.status, 78);
+    assert.equal((unreadableRun.stdout ?? '').trim(), '');
+    assert.match(unreadableRun.stderr ?? '', /ARQUITETURA_REPO_UNREADABLE/);
+  } finally {
+    chmodSync(unreadableRepo, 0o700);
+    rmSync(unreadableRepo, {recursive: true, force: true});
+  }
+
+  const noJsTsRepo = mkdtempSync(join(tmpdir(), 'arch-no-jsts-'));
+  try {
+    writeFileSync(join(noJsTsRepo, 'README.md'), '# Projeto sem código JS/TS\n');
+    ensureWorldReadable(noJsTsRepo);
+    const noJsTsRun = runInContainer(image, noJsTsRepo, 'none');
+    assert.equal(noJsTsRun.status, 0, `${noJsTsRun.stdout ?? ''}\n${noJsTsRun.stderr ?? ''}`);
+    const noJsTsOut = JSON.parse(noJsTsRun.stdout.trim()) as CollectorOutput;
+    assert.equal(noJsTsOut.findings.length, 0);
+    for (const tool of ['knip', 'ast-complexity', 'jscpd', 'dependency-cruiser']) {
+      const row = noJsTsOut.coverage.find(c => c.tool === tool);
+      assert.ok(row, `ferramenta ausente na cobertura: ${tool}`);
+      assert.equal(row.status, 'skipped', `${tool} deveria declarar skipped: ${row.detail}`);
+    }
+    const knipSkipped = noJsTsOut.coverage.find(c => c.tool === 'knip');
+    assert.match(knipSkipped?.detail ?? '', /arquivos copiados=1/);
+  } finally {
+    rmSync(noJsTsRepo, {recursive: true, force: true});
+  }
+
   const untrustedRepo = mkdtempSync(join(tmpdir(), 'arch-untrusted-'));
+  const canaryDir = mkdtempSync(join(tmpdir(), 'arch-canary-'));
   try {
     cpSync(cleanFixture, untrustedRepo, {recursive: true});
     writeFileSync(
       join(untrustedRepo, 'vite.config.ts'),
-      "import {writeFileSync} from 'node:fs';\nwriteFileSync('/tmp/pwned-vite.txt', '1');\nexport default {};\n",
+      [
+        "import {writeFileSync} from 'node:fs';",
+        "writeFileSync('/var/tmp/pwned-vite.txt', '1');",
+        "process.stderr.write('UNTRUSTED_VITE_EXECUTED\\n');",
+        "throw new Error('UNTRUSTED_VITE_EXECUTED');",
+      ].join('\n'),
     );
     writeFileSync(
       join(untrustedRepo, 'knip.ts'),
-      "import {writeFileSync} from 'node:fs';\nwriteFileSync('/tmp/pwned-knip.txt', '1');\nexport default {};\n",
+      [
+        "import {writeFileSync} from 'node:fs';",
+        "writeFileSync('/var/tmp/pwned-knip.txt', '1');",
+        "process.stderr.write('UNTRUSTED_KNIP_EXECUTED\\n');",
+        "throw new Error('UNTRUSTED_KNIP_EXECUTED');",
+      ].join('\n'),
     );
     writeFileSync(
       join(untrustedRepo, '.dependency-cruiser.js'),
-      "require('node:fs').writeFileSync('/tmp/pwned-depcruise.txt', '1');\nmodule.exports = {};\n",
+      [
+        "require('node:fs').writeFileSync('/var/tmp/pwned-depcruise.txt', '1');",
+        "process.stderr.write('UNTRUSTED_DEPCRUISE_EXECUTED\\n');",
+        "throw new Error('UNTRUSTED_DEPCRUISE_EXECUTED');",
+      ].join('\n'),
     );
     writeFileSync(
       join(untrustedRepo, 'package.json'),
       JSON.stringify({name: 'untrusted', version: '1.0.0', type: 'module', main: 'src/index.ts', devDependencies: {vite: '6.0.0'}}),
     );
-    const untrustedRun = runInContainer(image, untrustedRepo, 'none');
+    ensureWorldReadable(untrustedRepo);
+    chmodSync(canaryDir, 0o777);
+
+    const untrustedRun = runInContainer(image, untrustedRepo, 'none', canaryDir);
     assert.equal(untrustedRun.status, 0, untrustedRun.stderr ?? '');
+    assert.doesNotMatch(untrustedRun.stderr ?? '', /UNTRUSTED_.*_EXECUTED/);
+    assert.doesNotMatch(untrustedRun.stdout ?? '', /UNTRUSTED_.*_EXECUTED/);
+    assert.deepEqual(readdirSync(canaryDir), []);
+
     const untrustedOut = JSON.parse(untrustedRun.stdout.trim()) as CollectorOutput;
     assertSchema(untrustedOut);
+    for (const perFileTool of ['knip:file', 'ast-complexity:file', 'jscpd:file', 'dependency-cruiser:file']) {
+      assert.equal(
+        untrustedOut.coverage.some(c => c.tool === perFileTool && c.detail.includes('src/index.ts')),
+        true,
+        `cobertura por arquivo ausente para ${perFileTool} em untrustedRepo`,
+      );
+    }
   } finally {
     rmSync(untrustedRepo, {recursive: true, force: true});
+    rmSync(canaryDir, {recursive: true, force: true});
   }
 });
