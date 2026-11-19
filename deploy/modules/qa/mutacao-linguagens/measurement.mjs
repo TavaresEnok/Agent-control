@@ -11,6 +11,8 @@ const arithmetic = new Set(['+', '-', '*', '/', '//', '%', '**']);
 const caseStatuses = new Set(['passed', 'failed', 'skipped', 'error', 'pending']);
 const positive = value => Number.isSafeInteger(value) && value > 0;
 export const goDependencyMissing = /module lookup disabled by GOPROXY=off|import lookup disabled by -mod=vendor|inconsistent vendoring|no required module provides package|missing go\.sum entry|updates to go\.mod needed|requires go >= .*GOTOOLCHAIN=local/i;
+const goCompilerDiagnostic = /^[^\r\n]+\.go:\d+(?::\d+)?: /m;
+const goBuildOperational = /fork\/exec|resource temporarily unavailable|cannot allocate memory|out of memory|permission denied|no space left on device|too many open files|read-only file system|input\/output error|signal: (?:killed|terminated)|internal compiler error/i;
 export const goListFormat = String.raw`{{range .GoFiles}}{{printf "S\t%s/%s\n" $.Dir .}}{{end}}{{if or .TestGoFiles .XTestGoFiles}}{{printf "P\t%s\n" .ImportPath}}{{end}}`;
 
 export function processJson({code, output}) {
@@ -103,8 +105,9 @@ export function decodePythonSuite(result, files, propertiesOnly = false) {
     (report.exitCode !== Number(failed) || tests.some(test => ['error', 'pending'].includes(test.status)));
   const reason = report.unavailable ? 'offline-dependency' : report.limited ? 'test-limit'
     : executionError ? 'python-test-execution' : undefined;
-  // Preserve other completed properties after a case-level error in a valid pytest report.
-  if (reason && propertiesOnly && report.exitCode === 1 && failed) return {reason, tests};
+  // Preserve the validated observations even if pytest was interrupted. The property
+  // summary counts only cases with examples and a passing or failing verdict.
+  if (reason && propertiesOnly) return {reason, tests};
   return reason ? {reason} : {tests};
 }
 
@@ -114,12 +117,18 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
   const packages = new Map();
   const completedFailures = new Set();
   let buildFailure = false;
+  let compilerDiagnostic = goCompilerDiagnostic.test(diagnostics);
+  let buildOperational = goBuildOperational.test(diagnostics);
   let executionFailure = false;
   for (const line of output.split('\n').filter(Boolean)) {
     const event = JSON.parse(line);
     const {Action: action, Package: pkg, Test: name, Output: message, OutputType: outputType} = event ?? {};
     if (typeof action !== 'string') throw new Error('invalid-go-event');
-    if (action === 'build-output' && goDependencyMissing.test(message)) return {reason: 'offline-dependency'};
+    if (action === 'build-output') {
+      if (goDependencyMissing.test(message)) return {reason: 'offline-dependency'};
+      compilerDiagnostic ||= goCompilerDiagnostic.test(message);
+      buildOperational ||= goBuildOperational.test(message);
+    }
     if (action === 'build-fail' || (action === 'fail' && event.FailedBuild)) buildFailure = true;
     // The testing binary emits this frame when it finishes a failing suite. The go command
     // can also report a failed case and package after an abort, with only its FAIL\t... frame.
@@ -157,7 +166,9 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
   }
   const observed = [...tests.values()];
   const failedPackages = new Set(observed.filter(test => test.status === 'failed').map(test => test.package));
-  if (buildFailure) return {reason: 'go-build-failed'};
+  if (buildFailure) {
+    return {reason: compilerDiagnostic && !buildOperational ? 'go-build-failed' : 'go-build-execution'};
+  }
   if (executionFailure || !packages.size || observed.some(test => test.status === 'pending') ||
       [...testPackages].some(pkg => !packages.has(pkg)) ||
       [...packages].some(([pkg, status]) => status === 'pending' ||

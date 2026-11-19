@@ -4,6 +4,7 @@ import {limits} from './measurement.mjs';
 const maxPropertyFindings = 50;
 const reasons = {
   'baseline-failed': 'suíte de referência reprovada',
+  'go-build-execution': 'falha operacional na compilação Go',
   'go-build-failed': 'compilação Go reprovada',
   'go-local-replace': 'replace local fora do escopo offline',
   'go-package-selection': 'falha na seleção dos pacotes Go',
@@ -25,7 +26,7 @@ const reasons = {
   'tool-unavailable': 'ferramenta ou versão fixada indisponível',
 };
 const operationalReasons = new Set([
-  'go-build-failed', 'go-package-selection', 'go-test-execution', 'invalid-snapshot',
+  'go-build-execution', 'go-build-failed', 'go-package-selection', 'go-test-execution', 'invalid-snapshot',
   'process-output-limit', 'process-timeout', 'python-test-execution', 'tool-execution',
 ]);
 

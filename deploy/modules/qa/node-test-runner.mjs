@@ -51,18 +51,18 @@ const apply = Reflect.apply;
 const callbacks = new WeakMap();
 const rememberCallback = callbacks.set.bind(callbacks);
 const lookupCallback = callbacks.get.bind(callbacks);
+const noArguments = {
+  [Symbol.iterator]() { return this; },
+  next() { return {done: true}; },
+};
 export function captureAssertionCallback(factory) {
   const evidence = {invoked: false};
-  const callback = factory(() => { evidence.invoked = true; });
+  const callback = factory(() => {
+    evidence.invoked = true;
+    return noArguments;
+  });
   rememberCallback(callback, evidence);
   return callback;
-}
-export function captureTarget(fn, receiver, markInvoked) {
-  return (...args) => {
-    // This body runs only after all of the target's arguments have been evaluated.
-    if (typeof fn === 'function') markInvoked();
-    return apply(fn, receiver, args);
-  };
 }
 export function captureAssertion(fn, receiver, method, completed, failed, targetCompleted, targetFailed) {
   return (...args) => {

@@ -44,6 +44,9 @@ RUN echo "fd08d53610a4d9e3cba811b3dbb94a25470d1def52728ac9d6521f579e3cabfd  pack
     && chown -R 65532:65532 /opt/qa-tools
 
 COPY entrypoint.sh /usr/local/bin/qa-entrypoint.sh
+COPY banco-local/install.sh /tmp/qa-banco-install.sh
+RUN /bin/sh /tmp/qa-banco-install.sh && rm /tmp/qa-banco-install.sh
+COPY banco-local/*.mjs /opt/qa-tools/banco-local/
 COPY collect.mjs browser-qa.mjs visual-reference.mjs execute-tests.mjs language-tests.mjs node-test-runner.mjs python-test-runner.py js-properties.mjs /opt/qa-tools/
 COPY contratos/*.mjs /opt/qa-tools/contratos/
 COPY mutacao-linguagens/index.mjs mutacao-linguagens/measurement.mjs mutacao-linguagens/report.mjs mutacao-linguagens/python-runner.py /opt/qa-tools/mutacao-linguagens/

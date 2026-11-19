@@ -19,7 +19,7 @@ import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
   runBoundedCollectorProcess, type CollectorProcess,
 } from './module-container-cleanup.ts';
-import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
+import {moduleCollectorCandidate, moduleExamReadBinding, moduleExamReviewEvidence, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
 import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
 import {isPublicModuleRule, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewObservationTitle, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
@@ -531,10 +531,12 @@ function isSecretToken(token: string): boolean {
   });
 }
 
-async function independentVerifier(snapshot: string, module: VerificationModule, exam: ModuleExamResult,
+async function independentVerifier(snapshot: string, module: VerificationModule, commit: string, exam: ModuleExamResult,
   finding: ModuleExamResult['findings'][number], raw?: ModuleRawFinding, collectorReview?: ModuleExamCollectorReview): Promise<Achado['verifier']> {
-  if (exam.mode !== 'exame' || finding.status === 'provavel' || !finding.verifier || !finding.binding || isProtectedLocation(finding.file)) return null;
-  const examiner = exam.coverage.find(row => row.file === finding.file && row.status === 'lido')?.examiner;
+  if (exam.mode !== 'exame' || finding.reviewCommit !== commit || finding.status === 'provavel'
+    || !finding.verifier || !finding.binding || isProtectedLocation(finding.file)) return null;
+  const coverage = exam.coverage.find(row => row.file === finding.file && row.status === 'lido');
+  const examiner = coverage?.examiner;
   const verifier = finding.verifier;
   if (!examiner || !verifier.accountId || !verifier.profileId || examiner.provider === verifier.provider ||
       examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) return null;
@@ -543,7 +545,9 @@ async function independentVerifier(snapshot: string, module: VerificationModule,
   const located = await locateRepoFile(snapshot, finding.file);
   if (!located) return null;
   const {code} = await readModuleExamFile(located, finding.file);
-  const evidence = code === null ? null : moduleExamReviewEvidence(module, finding, code, raw, collectorReview);
+  if (code === null) return null;
+  const binding = moduleExamReadBinding(coverage, module, finding.file, code, commit);
+  const evidence = binding ? moduleExamReviewEvidence(module, finding, code, raw, collectorReview, binding) : null;
   if (!evidence || !hasModuleReviewProof(evidence, finding)) return null;
   return {provider: verifier.provider, model: verifier.model};
 }
@@ -1982,7 +1986,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           audited.evidence !== origin.evidence || audited.title !== origin.title || audited.severity !== origin.severity) {
           throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
         }
-        verifier = await independentVerifier(snapshot, input.module, exam!, audited, finding, collectorReview);
+        verifier = await independentVerifier(snapshot, input.module, input.commit, exam!, audited, finding, collectorReview);
         status = verifier ? audited.status : 'provavel';
         if (verifier) {
           proof = localizedProof(audited.proof, audited.reason);
@@ -2020,7 +2024,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
       }
       await resolveInsideRepo(snapshot, judged.file);
-      const verifier = await independentVerifier(snapshot, input.module, exam!, judged);
+      const verifier = await independentVerifier(snapshot, input.module, input.commit, exam!, judged);
       achados.push(Achado.parse({
         id: `ACH-${String(achados.length + 1).padStart(3, '0')}`, title: sanitizeText(judged.title), severity: judged.severity,
         status: verifier ? judged.status : 'provavel', verifier,
