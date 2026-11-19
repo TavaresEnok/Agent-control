@@ -1030,3 +1030,7 @@ PAUSADO-COTA
 - 19/11/2026 20:12 UTC — Suíte de entrega-fechamento-9 em 6587e792 passou: 276 arquivos, 0 falhas, 95 excluídos pelo executor.
 - 19/11/2026 20:12 UTC — Matriz atualizada com os merges e os números de desempenho e documentação. No candidato de fechamento 6587e792, passaram 276 arquivos da suíte oficial; a prova conjunta segue pelos complementares e laboratórios.
 - 19/11/2026 20:16 UTC — No fechamento 6587e792 passaram 51 dos 52 testes à parte. Um caso sintético de recusa de exame devolveu liquidação pendente. Sol high investiga a divergência antes do merge.
+- 19/11/2026 20:16 UTC — trabalho-C-FECHAMENTO-RECUSA iniciado em final-ajuste-fechamento por Sol high normal.
+- 19/11/2026 20:17 UTC — Aceite de all em 6587e792 iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
+- 19/11/2026 20:22 UTC — C-FECHAMENTO-RECUSA encerrado com código 0.
+- 19/11/2026 20:23 UTC — Reparo de fechamento recebido em f6602e94. Revisão independente Sol high e aceite integral autorizados em paralelo.
