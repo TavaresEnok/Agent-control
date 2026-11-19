@@ -218,6 +218,8 @@ function openDirectoryChain(root, path, create = false) {
   }
 }
 
+const skippedDirectories = new WeakMap();
+
 /**
  * Copia apenas arquivos regulares e diretórios seguros de sourceRoot para destRoot,
  * ignorando symlinks, sockets, dispositivos, diretórios de build/vendor e arquivos > 2 MiB.
@@ -228,6 +230,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? MAX_FILE_BYTES;
   const copiedFiles = [];
   const skipped = [];
+  const excludedDirs = new Set();
   let stoppedAt;
   let failure;
   let destinationFd;
@@ -281,6 +284,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
       if (st.isDirectory() && SKIP_DIRS.has(entry.name)) {
         skipped.push({file: relPath, reason: 'diretorio_excluido'});
       } else if (excludedName(entry.name) || hasKnownSecret(relPath)) {
+        if (st.isDirectory()) excludedDirs.add(relPath);
         skipped.push({file: relPath, reason: 'caminho_excluido'});
       } else if (st.isDirectory()) {
         walk(srcPath, relPath);
@@ -320,6 +324,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
     if (!error.code) throw error;
     throw new Error('ARQUITETURA_REPO_UNREADABLE: raiz não acessível (' + error.code + ')', {cause: error});
   } finally { if (rootFd !== undefined) closeSync(rootFd); }
+  skippedDirectories.set(skipped, excludedDirs);
   return {copiedFiles, skipped, stoppedAt, failure};
 }
 
@@ -525,7 +530,8 @@ const KNIP_TS_MAPPINGS = {
 
 function relativeImportCandidates(target) {
   const clean = target.replace(/\/+$/, '');
-  if (!clean || clean === '.') return [];
+  if (!clean) return [];
+  if (clean === '.') return KNIP_CANDIDATE_EXTS.map(suffix => `index${suffix}`);
   const candidates = [clean];
   const ext = posix.extname(clean).toLowerCase();
   const stem = ext ? clean.slice(0, -ext.length) : '';
@@ -624,14 +630,17 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles, includesFile 
       if (!Array.isArray(issue[key])) continue;
       for (const item of issue[key]) {
         const name = String(item?.name ?? 'desconhecido');
-        if (key === 'unresolved' && /^\.\.?\//.test(name)) {
-          const spec = name.split(/[?#]/, 1)[0];
-          const target = normalizeRepoPath(posix.join(posix.dirname(relFile), spec), repoRoot);
-          const omittedTarget = relativeImportCandidates(target).find(candidate => wasOmitted(candidate));
-          // A dependency removed from the analysis copy is not an unresolved import in the source.
-          if (omittedTarget) {
-            includesFile(omittedTarget);
-            continue;
+        const spec = name.split(/[?#]/, 1)[0];
+        if (key === 'unresolved' && /^\.\.?(?:\/|$)/.test(spec)) {
+          const resolvedPosix = posix.normalize(posix.join(posix.dirname(relFile), spec));
+          if (resolvedPosix !== '..' && !resolvedPosix.startsWith('../')) {
+            const target = normalizeRepoPath(resolvedPosix, repoRoot);
+            const omittedTarget = relativeImportCandidates(target).find(candidate => wasOmitted(candidate));
+            // A dependency removed from the analysis copy is not an unresolved import in the source.
+            if (omittedTarget) {
+              includesFile(omittedTarget);
+              continue;
+            }
           }
         }
         const line = clampLine(item?.line);
@@ -1627,10 +1636,11 @@ export function runCollector(options = {}) {
           inventory.includesFile,
         );
         findings.push(...parsedDep.findings);
+        const omittedDirs = skippedDirectories.get(snapshot.skipped);
         const snapshotOmittedSources = Boolean(snapshot.stoppedAt) || snapshot.skipped.some(
           item => item.reason === 'diretorio_ilegivel' || item.reason === 'symlink'
             || JS_TS_EXTS.has(extname(item.file).toLowerCase())
-            || (item.reason === 'caminho_excluido' && !extname(item.file)),
+            || (item.reason === 'caminho_excluido' && (omittedDirs ? omittedDirs.has(item.file) : !extname(item.file))),
         );
         const omissionSuffix = inventory.omissionDetail();
         const graphPartial = parsedDep.stats.partial || Boolean(omissionSuffix) || snapshotOmittedSources;

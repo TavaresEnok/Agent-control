@@ -32,6 +32,7 @@ import {
   runVerificationModule,
   writeModuleReport,
 } from '../src/verification-modules.ts';
+import {hasKnownSecret, redactUnknownSecrets} from '../src/verify-redact.ts';
 import {REMEDIATION_ACCEPTANCE} from '../src/verify-types.ts';
 import {
   analyzeAstComplexity,
@@ -1510,5 +1511,456 @@ test('binários fixados suprimem import sem extensão de arquivo omitido no Knip
     assert.ok(!JSON.stringify(out).includes('credentials-config'));
   } finally {
     rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+function createSyntheticArchLedger(repo: string, projectId: string): Ledger {
+  const runs = new Map<string, {id: string; module: string; commit_id: string; status: string;
+    report_dir: string; report_prepared_dir: string; report_legacy_missing: boolean}>();
+  const findingsRows: {achado_id: string; status: string; severity: string; file: string; line: number; payload: unknown}[] = [];
+  const client = {
+    async query(sql: string, params: unknown[] = []) {
+      if (sql.includes('FROM ac_project_repositories')) return {rowCount: 1, rows: [{repo}]};
+      if (sql.includes('FROM ac_exam_contexts')) return {rowCount: 1, rows: [{module: 'arquitetura'}]};
+      if (sql.includes('pg_advisory_xact_lock')) return {rowCount: 0, rows: []};
+      if (sql.includes('INSERT INTO ac_intents') || sql.includes('UPDATE ac_intents')) return {rowCount: 1, rows: []};
+      if (sql.includes('SELECT 1 FROM ac_verify_runs') && sql.includes("status='running' AND report_prepared_dir")) {
+        const row = runs.get(String(params[0]));
+        return {rowCount: row && row.status === 'running' && row.report_prepared_dir === params[2] ? 1 : 0, rows: []};
+      }
+      if (sql.includes('FROM ac_verify_runs') && sql.includes("status IN ('done','failed')")) {
+        const idFilter = params[2] ? String(params[2]) : null;
+        const rows = [...runs.values()].filter(r => ['done', 'failed'].includes(r.status) && (!idFilter || r.id === idFilter));
+        return {rowCount: rows.length, rows};
+      }
+      if (sql.includes('FROM ac_verify_runs')) return {rowCount: 0, rows: []};
+      if (sql.includes('INSERT INTO ac_verify_runs')) {
+        runs.set(String(params[0]), {
+          id: String(params[0]), module: String(params[6]), commit_id: String(params[5]),
+          status: 'running', report_dir: 'pending', report_prepared_dir: String(params[7]), report_legacy_missing: false,
+        });
+        return {rowCount: 1, rows: []};
+      }
+      if (sql.includes('UPDATE ac_verify_runs r SET status=')) return {rowCount: 0, rows: []};
+      if (sql.includes('UPDATE ac_verify_runs SET status=')) {
+        const row = runs.get(String(params[0]))!;
+        row.status = String(params[1]);
+        row.report_dir = String(params[2]);
+        return {rowCount: 1, rows: []};
+      }
+      if (sql.includes('UPDATE ac_verify_runs SET exam_origin_sha256=')) return {rowCount: 1, rows: []};
+      if (sql.includes('INSERT INTO ac_verify_findings')) {
+        findingsRows.push({
+          achado_id: String(params[1]), status: String(params[2]), severity: String(params[3]),
+          file: String(params[4]), line: Number(params[5]), payload: JSON.parse(String(params[6])),
+        });
+        return {rowCount: 1, rows: []};
+      }
+      if (sql.includes('SELECT achado_id, status, severity, file, line, payload FROM ac_verify_findings')) {
+        return {rowCount: findingsRows.length, rows: findingsRows};
+      }
+      if (sql.includes('INSERT INTO ac_verify_coverage') || sql.includes('INSERT INTO ac_verify_tool_coverage')) {
+        return {rowCount: 1, rows: []};
+      }
+      throw new Error(`Unexpected SQL in synthetic ledger: ${sql}`);
+    },
+  };
+  return {
+    pool: {
+      async query(sql: string) {
+        if (sql.includes('ac_installation_activation')) return {rowCount: 1, rows: [{1: 1}]};
+        throw new Error(`Unexpected pool SQL: ${sql}`);
+      },
+    },
+    async authorize() { return {project_id: projectId, policy_revision: 0, plan_revision: 0}; },
+    async fence() { return; },
+    async refreshPending() { return; },
+    async tx<T>(fn: (c: typeof client) => Promise<T>) { return fn(client); },
+  } as unknown as Ledger;
+}
+
+test('host e coletor alinham contrato global de redação entre caminho recusado, caminho comum longo suportado, componente protegido, ancestrais e token em texto livre', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'arch-global-redact-compat-'));
+  const repo = join(root, 'repo');
+  const dataDirectory = join(root, 'data');
+  const globalRefusedPath = 'src/international/payment/reconciliation.ts';
+  const supportedLongPath = 'src/international/payments/reconciliation.ts';
+  const protectedComponent = `src/token_${'A'.repeat(39)}G.ts`;
+  const protectedAncestor = 'app/(portal)/.npmrc/[id].ts';
+  const freeTextToken = `${'wJalrXUtn'.padEnd(19, 'Q')}/${'b'.repeat(20)}`;
+  let snapshot: string | undefined;
+
+  assert.equal(hasKnownSecret(globalRefusedPath), true);
+  assert.equal(hasKnownSecret(supportedLongPath), false);
+  assert.equal(hasKnownSecret(protectedComponent), true);
+  assert.equal(hasKnownSecret(freeTextToken), true);
+  assert.equal(redactUnknownSecrets(freeTextToken).includes(freeTextToken), false);
+
+  for (const blocked of [globalRefusedPath, protectedComponent, protectedAncestor, freeTextToken]) {
+    assert.throws(() => assertModuleRepoRelativePath(blocked), (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_PATH_FORBIDDEN', blocked);
+  }
+  assert.equal(assertModuleRepoRelativePath(supportedLongPath), supportedLongPath);
+  const redactedFinding = parseModuleCollectorOutput(JSON.stringify({
+    coverage: [{tool: 'knip', version: '1', status: 'ok', detail: 'ok', files: [supportedLongPath]}],
+    findings: [{
+      tool: 'knip', rule: 'KNIP-UNUSED-EXPORT', file: supportedLongPath, line: 1, severity: 'baixa',
+      message: `Token ${freeTextToken}`, evidence: `token=${freeTextToken}`,
+    }],
+  }), {module: 'arquitetura'});
+  assert.equal(redactedFinding.findings[0]?.message.includes(freeTextToken), false);
+  assert.equal(redactedFinding.findings[0]?.evidence.includes(freeTextToken), false);
+  assert.equal(hasKnownSecret(redactedFinding.findings[0]?.message ?? ''), false);
+  assert.equal(hasKnownSecret(redactedFinding.findings[0]?.evidence ?? ''), false);
+
+  try {
+    mkdirSync(dataDirectory, {recursive: true, mode: 0o700});
+    for (const file of [globalRefusedPath, supportedLongPath, protectedComponent, protectedAncestor]) {
+      mkdirSync(dirname(join(repo, file)), {recursive: true});
+      writeFileSync(join(repo, file), 'export const synthetic = 1;\n');
+    }
+    const git = (...args: string[]) => {
+      const result = spawnSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-C', repo, ...args], {
+        encoding: 'utf8',
+        env: {PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'},
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    git('init');
+    git('add', '-f', '.');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'fixture');
+    const commit = git('rev-parse', 'HEAD');
+
+    const projectId = '44444444-4444-4444-8444-444444444444';
+    const contextId = '55555555-5555-4555-8555-555555555555';
+    const runId = '66666666-6666-4666-8666-666666666666';
+    const authority: Authority = {contextId, instanceId: 'synthetic-instance', epoch: 1};
+
+    const result = await runVerificationModule({
+      module: 'arquitetura',
+      ledger: createSyntheticArchLedger(repo, projectId),
+      principal: 'owner-arch',
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      runId,
+      createdAt: new Date('2026-11-19T00:00:00Z'),
+      runCollector: async () => {
+        snapshot = await prepareModuleSnapshot(repo, commit);
+        return runCollector({
+          repoDir: snapshot,
+          toolsRoot: moduleDir,
+          spawnSync: (_cmd, args, options) => {
+            const argv = args as string[];
+            const {cwd} = options as {cwd: string};
+            for (const blocked of [globalRefusedPath, protectedComponent, protectedAncestor]) {
+              assert.equal(existsSync(join(cwd, blocked)), false, blocked);
+            }
+            assert.equal(existsSync(join(cwd, supportedLongPath)), true);
+            if (argv[0]?.endsWith('/knip-worker.mjs')) {
+              return {
+                status: 0,
+                stderr: '',
+                stdout: JSON.stringify({
+                  analyzedFiles: [supportedLongPath],
+                  entryFiles: [],
+                  issues: [{file: supportedLongPath, files: [{name: supportedLongPath}], exports: [], unresolved: []}],
+                }),
+              };
+            }
+            if (argv.includes('--output-to')) {
+              writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({
+                modules: [{source: supportedLongPath, instability: 0, dependencies: [], dependents: []}],
+              }));
+            } else {
+              const outDir = argv[argv.indexOf('--output') + 1];
+              writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+              writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({
+                summary: {files: [{path: supportedLongPath, lines: 1, tokens: 8, complexity: 1}]},
+              }));
+            }
+            return {status: 0, stdout: '', stderr: ''};
+          },
+        });
+      },
+      examinar: async req => {
+        const map = await mapModuleSnapshot(req.snapshot, req.signal, {aggregateOmissions: true});
+        assert.equal(map.fileOmissions, 3);
+        assert.deepEqual(map.files.map(item => item.file), [supportedLongPath]);
+        return examineFunctionalModule({intentId: req.intentId, module: req.module, map, findings: req.findings, commit, signal: req.signal});
+      },
+    });
+
+    const published = await readModuleReport(dataDirectory, projectId, result.runId, 'arquitetura');
+    assert.equal(published.summary.id, runId);
+    const mapa = readFileSync(join(result.directory, 'mapa.md'), 'utf8');
+    const cobertura = readFileSync(join(result.directory, 'cobertura.md'), 'utf8');
+    const achadosJson = readFileSync(join(result.directory, 'achados.json'), 'utf8');
+    const rawJson = readFileSync(join(result.directory, 'bruto', 'achados-brutos.json'), 'utf8');
+    const achadosMd = published.achados.map(item => readFileSync(join(result.directory, 'achados', `${item.id}.md`), 'utf8'));
+
+    assert.ok(mapa.includes(`| ${supportedLongPath} |`));
+    assert.ok(cobertura.includes('omissoes_conhecidas=3;'));
+    assert.ok(cobertura.includes('metricas_grafo=parciais; cobertura_parcial=sim'));
+    assert.ok(cobertura.includes(`arquivo=${supportedLongPath}; deps=0; dependentes=0; instabilidade=n/a; ciclo=nao; violacao_camada=nao; metricas_parciais=sim`));
+    assert.ok(achadosMd.some(md => md.includes(`- Onde: ${supportedLongPath}:1`)));
+
+    for (const content of [mapa, cobertura, achadosJson, rawJson, ...achadosMd]) {
+      assert.equal(content.includes('payment/reconciliation.ts'), false);
+      assert.equal(content.includes('token_' + 'A'.repeat(39) + 'G'), false);
+      assert.equal(content.includes('.npmrc'), false);
+    }
+  } finally {
+    if (snapshot) await removeModuleSnapshot(snapshot);
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('diretório omitido com ponto no nome (src/credentials.v1) marca métricas e instabilidade do grafo como parciais', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-omitted-dot-dir-'));
+  try {
+    const omittedEntry = 'src/credentials.v1/index.ts';
+    const helper = 'src/helper.ts';
+    mkdirSync(dirname(join(repo, omittedEntry)), {recursive: true});
+    writeFileSync(join(repo, omittedEntry), "import {helper} from '../helper';\nexport const run = () => helper();\n");
+    writeFileSync(join(repo, helper), 'export const helper = () => 1;\n');
+
+    const out = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: (_cmd, args, options) => {
+        const argv = args as string[];
+        const {cwd} = options as {cwd: string};
+        assert.equal(existsSync(join(cwd, 'src/credentials.v1')), false);
+        assert.equal(existsSync(join(cwd, helper)), true);
+        if (argv[0]?.endsWith('/knip-worker.mjs')) {
+          return {status: 0, stdout: JSON.stringify({analyzedFiles: [helper], entryFiles: [], issues: []}), stderr: ''};
+        }
+        if (argv.includes('--output-to')) {
+          writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({
+            modules: [{source: helper, instability: 0, dependencies: [], dependents: []}],
+          }));
+        } else {
+          const outDir = argv[argv.indexOf('--output') + 1];
+          writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+          writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({
+            summary: {files: [{path: helper, lines: 1, tokens: 6, complexity: 1}]},
+          }));
+        }
+        return {status: 0, stdout: '', stderr: ''};
+      },
+    });
+
+    const depSummary = out.coverage.find(row => row.tool === 'dependency-cruiser')!;
+    assert.equal(depSummary.status, 'ok');
+    assert.match(depSummary.detail, /metricas_grafo=parciais; cobertura_parcial=sim/);
+    const helperDep = out.coverage.find(row => row.tool === 'dependency-cruiser:file' && row.files?.includes(helper))!;
+    assert.equal(
+      helperDep.detail,
+      `arquivo=${helper}; deps=0; dependentes=0; instabilidade=n/a; ciclo=nao; violacao_camada=nao; metricas_parciais=sim`,
+    );
+    assert.equal(JSON.stringify(out).includes('credentials.v1'), false);
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('Knip suprime importação relativa para index na raiz omitido (../, .., ./) sem suprimir fuga da raiz (../../)', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-knip-root-index-'));
+  try {
+    const rootIndex = 'index.ts';
+    const srcPage = 'src/page.ts';
+    const rootPage = 'page.ts';
+    mkdirSync(dirname(join(repo, srcPage)), {recursive: true});
+    writeFileSync(join(repo, srcPage), 'export const srcPage = 1;\n');
+    writeFileSync(join(repo, rootPage), 'export const rootPage = 1;\n');
+    const outside = join(repo, '.env.outside');
+    writeFileSync(outside, 'SECRET=1\n');
+    symlinkSync(outside, join(repo, rootIndex));
+
+    const out = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: (_cmd, args) => {
+        const argv = args as string[];
+        if (argv[0]?.endsWith('/knip-worker.mjs')) {
+          return {
+            status: 0,
+            stderr: '',
+            stdout: JSON.stringify({
+              analyzedFiles: [srcPage, rootPage],
+              entryFiles: [rootPage],
+              issues: [
+                {
+                  file: srcPage,
+                  unresolved: [
+                    {name: '../', line: 1},
+                    {name: '..', line: 2},
+                    {name: '../?raw', line: 3},
+                    {name: '../../', line: 4},
+                    {name: './ausente', line: 5},
+                  ],
+                },
+                {
+                  file: rootPage,
+                  unresolved: [{name: './', line: 1}],
+                },
+              ],
+            }),
+          };
+        }
+        if (argv.includes('--output-to')) {
+          writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({
+            modules: [{source: srcPage}, {source: rootPage}],
+          }));
+        } else {
+          const outDir = argv[argv.indexOf('--output') + 1];
+          writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+          writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({
+            summary: {files: [{path: srcPage, lines: 1, complexity: 1}, {path: rootPage, lines: 1, complexity: 1}]},
+          }));
+        }
+        return {status: 0, stdout: '', stderr: ''};
+      },
+    });
+
+    const unresolved = out.findings.filter(f => f.rule === 'KNIP-UNRESOLVED-IMPORT');
+    assert.deepEqual(unresolved.map(f => ({line: f.line, msg: f.message})), [
+      {line: 4, msg: 'Importação local não resolvida: ../../'},
+      {line: 5, msg: 'Importação local não resolvida: ./ausente'},
+    ]);
+    assert.match(out.coverage.find(row => row.tool === 'knip')!.detail, /fora_do_snapshot=1; cobertura_parcial=sim/);
+
+    const nonOmitted = parseKnipReport(
+      {
+        analyzedFiles: [srcPage],
+        issues: [{file: srcPage, unresolved: [{name: '../', line: 1}]}],
+      },
+      '/tmp/repo',
+      new Set([srcPage]),
+      file => file === srcPage,
+      () => false,
+    );
+    assert.equal(nonOmitted.findings.length, 1);
+    assert.equal(nonOmitted.findings[0]?.rule, 'KNIP-UNRESOLVED-IMPORT');
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+test('publicação preserva rotas de interceptação longas em Markdown sem eximir segmento genérico de alta entropia', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'arch-intercept-route-'));
+  const repo = join(root, 'repo');
+  const dataDirectory = join(root, 'data');
+  const interceptRoutes = [
+    'app/(.)[identificadorInternacionalDaTransacao]/page.ts',
+    'app/(..)[identificadorInternacionalDaTransacao]/page.ts',
+    'app/(..)(..)[identificadorInternacionalDaTransacao]/page.ts',
+    'app/(...)[identificadorInternacionalDaTransacao]/page.ts',
+    'app/(.)detalhesDoPagamentoInternacionalDaConta/page.ts',
+  ];
+  const nonFrameworkHighEntropy = 'app/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/page.ts';
+  let snapshot: string | undefined;
+
+  try {
+    mkdirSync(dataDirectory, {recursive: true, mode: 0o700});
+    for (const file of interceptRoutes) {
+      mkdirSync(dirname(join(repo, file)), {recursive: true});
+      writeFileSync(join(repo, file), 'export const routeHandler = 1;\n');
+    }
+    const git = (...args: string[]) => {
+      const result = spawnSync('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-C', repo, ...args], {
+        encoding: 'utf8',
+        env: {PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'},
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return result.stdout.trim();
+    };
+    git('init');
+    git('add', '-f', '.');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'fixture');
+    const commit = git('rev-parse', 'HEAD');
+
+    const projectId = '77777777-7777-4777-8777-777777777777';
+    const contextId = '88888888-8888-4888-8888-888888888888';
+    const runId = '99999999-9999-4999-8999-999999999999';
+    const authority: Authority = {contextId, instanceId: 'synthetic-instance', epoch: 1};
+
+    const result = await runVerificationModule({
+      module: 'arquitetura',
+      ledger: createSyntheticArchLedger(repo, projectId),
+      principal: 'owner-arch',
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      runId,
+      createdAt: new Date('2026-11-19T00:00:00Z'),
+      runCollector: async () => {
+        snapshot = await prepareModuleSnapshot(repo, commit);
+        return runCollector({
+          repoDir: snapshot,
+          toolsRoot: moduleDir,
+          spawnSync: (_cmd, args) => {
+            const argv = args as string[];
+            if (argv[0]?.endsWith('/knip-worker.mjs')) {
+              return {
+                status: 0,
+                stderr: '',
+                stdout: JSON.stringify({
+                  analyzedFiles: interceptRoutes,
+                  entryFiles: [],
+                  issues: interceptRoutes.map((route, idx) => ({
+                    file: route,
+                    files: [{name: route}],
+                    exports: [],
+                    unresolved: idx === 0 ? [{name: nonFrameworkHighEntropy, line: 1}] : [],
+                  })),
+                }),
+              };
+            }
+            if (argv.includes('--output-to')) {
+              writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({
+                modules: interceptRoutes.map(route => ({source: route, instability: 0, dependencies: [], dependents: []})),
+              }));
+            } else {
+              const outDir = argv[argv.indexOf('--output') + 1];
+              writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+              writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({
+                summary: {files: interceptRoutes.map(path => ({path, lines: 1, tokens: 8, complexity: 1}))},
+              }));
+            }
+            return {status: 0, stdout: '', stderr: ''};
+          },
+        });
+      },
+      examinar: async req => {
+        const map = await mapModuleSnapshot(req.snapshot, req.signal, {aggregateOmissions: true});
+        return examineFunctionalModule({intentId: req.intentId, module: req.module, map, findings: req.findings, commit, signal: req.signal});
+      },
+    });
+
+    const published = await readModuleReport(dataDirectory, projectId, result.runId, 'arquitetura');
+    const mapa = readFileSync(join(result.directory, 'mapa.md'), 'utf8');
+    const cobertura = readFileSync(join(result.directory, 'cobertura.md'), 'utf8');
+    const achadosMd = published.achados.map(item => readFileSync(join(result.directory, 'achados', `${item.id}.md`), 'utf8'));
+    const achadosJson = readFileSync(join(result.directory, 'achados.json'), 'utf8');
+
+    for (const route of interceptRoutes) {
+      assert.ok(mapa.includes(`| ${route} |`), `mapa.md missing ${route}`);
+      assert.ok(cobertura.includes(`arquivo=${route};`), `cobertura.md missing ${route}`);
+      assert.ok(cobertura.includes(`| ${route} |`), `cobertura.md table missing ${route}`);
+      assert.ok(achadosMd.some(md => md.includes(`- Onde: ${route}:1`) && md.includes(route)), `achado missing ${route}`);
+      assert.ok(achadosJson.includes(route));
+    }
+    assert.equal(mapa.includes('[removido: alta entropia]'), false);
+    assert.equal(achadosMd.some(md => md.includes('AbCdEfGhIjKlMnOpQrStUvWxYz0123456789')), false);
+    assert.equal(achadosMd.some(md => md.includes('[removido: alta entropia]')), true);
+  } finally {
+    if (snapshot) await removeModuleSnapshot(snapshot);
+    rmSync(root, {recursive: true, force: true});
   }
 });

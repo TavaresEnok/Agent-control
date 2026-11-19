@@ -505,7 +505,13 @@ const REMOVED_HIGH_ENTROPY = '[removido: alta entropia]';
 const BASE64_SECRET = /[A-Za-z0-9+]{40,}={0,2}/;
 const SNAKE_IDENTIFIER = /^[a-z][a-z0-9_]{31,}$/;
 const SHORT_FILE_EXTENSION = /\.[A-Za-z0-9]{1,5}$/;
-const FRAMEWORK_SEGMENT = /^(?:\[+(?:\.\.\.)?[\p{L}][\p{L}\p{N}_-]*\]+|\([\p{L}][\p{L}\p{N}_-]*\))$/u;
+const INTERCEPT_PREFIX = String.raw`(?:\(\.\)|\(\.\.\)(?:\(\.\.\))?|\(\.\.\.\))`;
+const FRAMEWORK_DYNAMIC = String.raw`\[+(?:\.\.\.)?[\p{L}][\p{L}\p{N}_-]*\]+`;
+const FRAMEWORK_GROUP = String.raw`\([\p{L}][\p{L}\p{N}_-]*\)`;
+const FRAMEWORK_SEGMENT = new RegExp(
+  String.raw`^(?:${INTERCEPT_PREFIX}(?:${FRAMEWORK_DYNAMIC}|[\p{L}][\p{L}\p{N}_-]*)|${FRAMEWORK_DYNAMIC}|${FRAMEWORK_GROUP})$`,
+  'u',
+);
 
 function isSnakeToken(token: string): boolean {
   if (SNAKE_IDENTIFIER.test(token)) return true;
