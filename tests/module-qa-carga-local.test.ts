@@ -98,24 +98,26 @@ function assertProof(report: Report) {
   assert.doesNotMatch(JSON.stringify(report), /FIXTURE-CARGA|127\.0\.0\.1|qa-carga-teste-/);
 }
 
-test('a imagem de QA seleciona os artefatos fixados para linux/amd64 e linux/arm64', () => {
-  const qaDir = new URL('../deploy/modules/qa/', import.meta.url);
-  const dockerfile = readFileSync(new URL('Dockerfile', qaDir), 'utf8');
+type Artifact = {url: string; sha256: string};
+type Pin<T> = {version: string; linuxAmd64: T; linuxArm64: T};
+type LoadToolLock = {
+  k6: Pin<Artifact & {member: string}>;
+  'toxiproxy-server': Pin<Artifact>;
+};
+
+function assertLoadPackaging(dockerfile: string, lock: LoadToolLock) {
   const stages = dockerfile.split(/^FROM /m);
   const selection = stages.find(stage => stage.startsWith('qa-carga-${TARGETARCH} AS qa-carga\n'));
   const image = stages.find(stage => stage.startsWith('mcr.microsoft.com/playwright:'));
   assert.ok(selection);
   assert.ok(image);
-  assert.match(selection, /^ARG TARGETARCH$/m);
-  assert.match(selection, /chmod 0555 \/opt\/qa-carga\/k6 \/opt\/qa-carga\/toxiproxy-server/);
   assert.match(image, /^COPY --from=qa-carga \/opt\/qa-carga\/ \/usr\/local\/bin\/$/m);
 
-  type Artifact = {url: string; sha256: string};
-  type Pin<T> = {version: string; linuxAmd64: T; linuxArm64: T};
-  const lock = JSON.parse(readFileSync(new URL('carga-local/tools.lock.json', qaDir), 'utf8')) as {
-    k6: Pin<Artifact & {member: string}>;
-    'toxiproxy-server': Pin<Artifact>;
-  };
+  const commonInstructions = selection.split('\n').slice(1)
+    .filter(line => !line.trimStart().startsWith('#'))
+    .join('\n').replace(/[ \t]*\\[ \t]*\n[ \t]*/g, ' ')
+    .split('\n').map(line => line.trim()).filter(Boolean);
+
   for (const [arch, key] of [['amd64', 'linuxAmd64'], ['arm64', 'linuxArm64']] as const) {
     const stage = stages.find(candidate => candidate.startsWith(`qa-python AS qa-carga-${arch}\n`));
     assert.ok(stage, arch);
@@ -131,8 +133,33 @@ test('a imagem de QA seleciona os artefatos fixados para linux/amd64 e linux/arm
       `ADD --checksum=sha256:${k6.sha256} ${k6.url} /tmp/k6.tar.gz`,
       `ADD --checksum=sha256:${proxy.sha256} ${proxy.url} /opt/qa-carga/toxiproxy-server`,
     ], arch);
-    assert.ok(selection.replaceAll('${TARGETARCH}', arch)
-      .includes(`tar -xzOf /tmp/k6.tar.gz "${k6.member}" > /opt/qa-carga/k6`), arch);
+    assert.deepEqual(commonInstructions.map(instruction => instruction.replaceAll('${TARGETARCH}', arch)), [
+      'ARG TARGETARCH',
+      `RUN tar -xzOf /tmp/k6.tar.gz "${k6.member}" > /opt/qa-carga/k6`
+        + ' && chmod 0555 /opt/qa-carga/k6 /opt/qa-carga/toxiproxy-server',
+    ], `instruções da etapa comum para linux/${arch}`);
+  }
+}
+
+test('a imagem de QA seleciona os artefatos fixados para linux/amd64 e linux/arm64', async t => {
+  const qaDir = new URL('../deploy/modules/qa/', import.meta.url);
+  const dockerfile = readFileSync(new URL('Dockerfile', qaDir), 'utf8');
+  const lock = JSON.parse(readFileSync(new URL('carga-local/tools.lock.json', qaDir), 'utf8')) as LoadToolLock;
+  assertLoadPackaging(dockerfile, lock);
+
+  const guard = 'test "${TARGETARCH}" = amd64';
+  const mutations = [
+    ['comando extra no RUN de extração', `RUN ${guard} && tar -xzOf`],
+    ['instrução RUN extra antes da extração', `RUN ${guard}\nRUN tar -xzOf`],
+  ];
+  for (const [description, replacement] of mutations) {
+    await t.test(`rejeita trava amd64 como ${description}`, () => {
+      const restricted = dockerfile.replace('RUN tar -xzOf', replacement);
+      assert.throws(() => assertLoadPackaging(restricted, lock), {
+        code: 'ERR_ASSERTION',
+        message: /instruções da etapa comum para linux\//,
+      });
+    });
   }
 });
 
