@@ -39,6 +39,17 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
   - Nunca compre créditos.
   - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
 
+## Ordem do titular (19/11/2026 ~19:20 UTC): só os módulos
+
+**Esqueça o NexoISP (parte E) e as 20 telas (parte B) por enquanto.** Termine apenas os módulos.
+
+1. **Parte C, até o fim.** Integre os módulos 2 a 9 em `task/personal-activation`. Antes de integrar, passe pelo `tsc`, pela suíte completa, pelos testes à parte e pelos laboratórios.
+2. **Aplicação na instalação viva.** Faça backup, rode `personal:images` e reinicie o gateway. Confira que o gateway está saudável e que cada CLI de módulo roda na instalação viva.
+3. **Parte D, só para os módulos.** Atualize `docs/MODULOS-DE-VERIFICACAO.md` e escreva `docs/RELATORIO-FINAL.md`.
+4. **Encerre.** Escreva `FIM` como última linha de `docs/PROGRESSO-FINAL.md` e encerre.
+
+Não comece as partes E ou B. A regra de cota continua: se a cota acabar antes, pause e escreva o relatório.
+
 ## Retomada (titular, 19/11/2026 ~11:10 UTC)
 
 A cota do Codex voltou. Retome a partir de `docs/RELATORIO-PAUSA.md`, com a mesma ordem de trabalho e a mesma regra de cota da seção seguinte. Muda só a equipe de trabalhadores: até 4 Sol 6.2, sendo 2 `high` e 2 `medium`, todos em modo normal. Os itens mais difíceis vão para os `high`. O gerente continua Astra `high` e o revisor continua 1 Sol `high`, só leitura.
