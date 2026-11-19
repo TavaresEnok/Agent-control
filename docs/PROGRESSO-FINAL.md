@@ -797,3 +797,5 @@ PAUSADO-COTA
 - 19/11/2026 18:00 UTC — C6-VALIDACAO-COMPOSE encerrado com código 0.
 - 19/11/2026 18:00 UTC — revisor-C2-GO-DIAGNOSTICOS iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:01 UTC — O controle do PNG de desempenho em ac495948 passou nos 12 testes do coletor. A revisão de 7233fe29 identificou um caso de tag YAML vazia aceito pelo parser. Aberto teste dirigido, incluindo o texto literal em strings ou comentários. Os reparos finais específicos de arquitetura e dependências foram encaminhados ao revisor.
+- 19/11/2026 18:01 UTC — trabalho-C6-TAG-COMPOSE iniciado em final-c6-r2 por Sol medium normal.
+- 19/11/2026 18:02 UTC — Banco 7946dbee incorpora 94af07b4 no ramo estável da integração acumulada. Ensaios em espera de C6, C8 e C9 passam para cópias fixas assim que cada correção em andamento terminar; os digests já construídos permanecem arquivados. Esse isolamento mantém imagem, código e testes na mesma revisão.
