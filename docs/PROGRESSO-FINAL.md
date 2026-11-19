@@ -615,3 +615,9 @@ PAUSADO-COTA
 - 19/11/2026 16:52 UTC — Validação de retomada-c3-257a em 257a3451 iniciada no checkout de integração.
 - 19/11/2026 16:53 UTC — C-EXAME-MEDICOES-R2 encerrado com código 0.
 - 19/11/2026 16:53 UTC — Removidas 11 candidatas próprias substituídas e conferidos os oito digests da homologação db0ea342. A imagem aceita de QA foi recuperada do arquivo privado e verificada pelo SHA. O controle de latência de banco passou 6/6 em 8d7bfc94, com as duas consultas medidas. C6-R11 encomendada para as lacunas de leitura estática.
+- 19/11/2026 16:53 UTC — revisor-C5-CONTROLE-SQL iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:54 UTC — C5-CONTROLE-SQL encerrado com código 0.
+- 19/11/2026 16:55 UTC — C5-R8 encerrado com código 0.
+- 19/11/2026 16:55 UTC — C2-LINGUAGENS-R3 encerrado com código 0.
+- 19/11/2026 16:55 UTC — trabalho-C6-R11 iniciado em final-c6-r2 por Sol high normal.
+- 19/11/2026 16:56 UTC — A revisão do exame c052f630 encontrou confirmação com decisão contraditória e leitura sem atestado do conteúdo. A correção parte de ffcd9ea5. C3 recebeu os dois apontamentos sobre inventário parcial e âncora relativa. Em banco, a correção da unicidade da série está em 1fc208e8 com 6/6 no laboratório físico.
