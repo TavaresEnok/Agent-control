@@ -178,7 +178,23 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
   let stoppedAt;
   let failure;
 
-  function walk(currentSrc, currentRel) {
+  function walk(directoryPath, currentRel) {
+    let directory;
+    try {
+      directory = openSync(directoryPath, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+    } catch (err) {
+      if (currentRel === '') throw new Error(`ARQUITETURA_REPO_UNREADABLE: raiz não acessível (${err.code ?? 'ERR'})`);
+      skipped.push({file: currentRel, reason: 'diretorio_ilegivel'});
+      return;
+    }
+    try {
+      walkOpened(`/proc/self/fd/${directory}`, currentRel);
+    } finally {
+      closeSync(directory);
+    }
+  }
+
+  function walkOpened(currentSrc, currentRel) {
     let entries;
     try {
       entries = readdirSync(currentSrc, {withFileTypes: true});
@@ -430,7 +446,10 @@ export function findImportLine(fileText, moduleSpecifier) {
   return getImportLines(fileText, 'source.tsx').get(moduleSpecifier) ?? 1;
 }
 
-export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
+export function parseKnipReport(rawJson, repoRoot, candidateFiles) {
+  const isCandidate = candidateFiles === undefined
+    ? file => /\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file) && !isIgnoredByKnipConfig(file)
+    : file => candidateFiles.has(file);
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   if (!data || typeof data !== 'object' || !Array.isArray(data.issues)) {
     throw new Error('Saída JSON do knip inválida: campo issues ausente');
@@ -454,7 +473,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
     if (Array.isArray(issue.files)) {
       for (const f of issue.files) {
         const target = normalizeRepoPath(f?.name ?? relFile, repoRoot);
-        if (!candidateFiles.has(target)) continue;
+        if (!isCandidate(target)) continue;
         unusedFiles.add(target);
         bumpFile(target);
         findings.push({
@@ -480,7 +499,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
     ];
 
     for (const [key, rule, label] of exportBuckets) {
-      if (!candidateFiles.has(relFile)) continue;
+      if (!isCandidate(relFile)) continue;
       if (!Array.isArray(issue[key])) continue;
       for (const item of issue[key]) {
         const name = String(item?.name ?? 'desconhecido');
@@ -509,7 +528,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
 
     for (const [key, rule, label, severity] of depBuckets) {
       // Problemas de dependências também podem pertencer a um manifesto.
-      if (!candidateFiles.has(relFile) && !/(^|\/)package\.json$/i.test(relFile)) continue;
+      if (!isCandidate(relFile) && !/(^|\/)package\.json$/i.test(relFile)) continue;
       if (isIgnoredByKnipConfig(relFile)) continue;
       if (!Array.isArray(issue[key])) continue;
       for (const item of issue[key]) {
@@ -531,7 +550,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles = new Set()) {
   }
 
   const confirmedFiles = [...new Set([...(data.analyzedFiles ?? []), ...unusedFiles])]
-    .filter(file => candidateFiles.has(file))
+    .filter(isCandidate)
     .sort();
   const perFileCoverage = confirmedFiles.slice(0, MAX_PER_FILE_COVERAGE).map(file => ({
     tool: 'knip:file',

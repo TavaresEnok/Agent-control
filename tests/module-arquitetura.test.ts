@@ -174,7 +174,9 @@ test('normalização de caminhos, linhas e cópia segura ignoram symlinks e trav
     writeFileSync(outside, 'outside synthetic content');
     symlinkSync(outside, join(src, 'src', 'escape.ts'));
 
+    chmodSync(join(src, 'src', 'ok.ts'), 0o444);
     const res = copyRepoSafely(src, dst);
+    assert.equal(statSync(join(dst, 'src', 'ok.ts')).mode & 0o777, 0o600);
     assert.deepEqual(res.copiedFiles, ['src/ok.ts']);
     assert.deepEqual(res.skipped, [
       {file: 'node_modules', reason: 'diretorio_excluido'},
@@ -318,6 +320,16 @@ test('parsers de knip, jscpd e dependency-cruiser extraem todos os 5 tipos de ac
   assert.equal(depOut.stats.cycles, 2);
   assert.equal(depOut.findings.filter(f => f.rule === 'DEPCRUISE-NO-CIRCULAR' && f.file === 'src/domain/order.ts').length, 1);
   assert.equal(depOut.stats.layerViolations, 2);
+});
+
+test('Knip conserva os achados de produção quando a chamada omite o inventário', () => {
+  const result = parseKnipReport({
+    analyzedFiles: ['src/billing.ts', 'src/tests/helper.ts'],
+    issues: [{file:'src/billing.ts', exports:[{name:'old', line:3}]},
+      {file:'src/tests/helper.ts', exports:[{name:'fixture', line:1}]}],
+  }, '/synthetic');
+  assert.deepEqual(result.findings.map(f => f.file), ['src/billing.ts']);
+  assert.equal(result.stats.totalFiles, 1);
 });
 
 test('Knip aplica a elegibilidade aos achados e mantém problemas por arquivo e manifesto', () => {
