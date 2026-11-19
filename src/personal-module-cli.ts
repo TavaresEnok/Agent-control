@@ -1,6 +1,7 @@
 import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {resolve} from 'node:path';
+import {lstat, realpath, rm} from 'node:fs/promises';
+import {basename, dirname, join, resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
@@ -11,6 +12,7 @@ import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersona
 import {
   assertVerificationModule,
   removeModuleReport,
+  reconcileModuleReports,
   requestModuleCorrection,
   runVerificationModule,
   type CollectorRunnerSpec,
@@ -129,6 +131,26 @@ function readHead(repoPath: string): Promise<string> {
   });
 }
 
+// The database path survives a crash before run.json was published. Never trust
+// it as a deletion target until its project, run suffix and module are checked.
+async function removePersistedReport(dataDirectory: string, projectId: string, runId: string, module: VerificationModule, path: string): Promise<void> {
+  const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
+  let data: string;
+  try { data = await realpath(dataDirectory); } catch (error) { if (missing(error)) return; throw error; }
+  const root = join(data, 'verificacoes');
+  const project = join(root, projectId);
+  const name = basename(path);
+  const pattern = new RegExp(`^\\d{8}-\\d{6}-${runId.slice(0, 8).toLowerCase()}-${module}$`);
+  if (resolve(path) !== path || dirname(path) !== project || !pattern.test(name)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  try {
+    for (const directory of [root, project, path]) {
+      const info = await lstat(directory);
+      if (info.isSymbolicLink() || !info.isDirectory() || await realpath(directory) !== directory) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+    }
+    await rm(path, {recursive: true, force: true});
+  } catch (error) { if (!missing(error)) throw error; }
+}
+
 async function acquirePersonalModule(
   ledger: Ledger,
   principal: string,
@@ -176,20 +198,29 @@ export async function runPersonalModuleCli(
   let authority: Authority | undefined;
   try {
     if (parsed.kind === 'discard') {
-      await ledger.tx(async client => {
+      const reportPath = await ledger.tx(async client => {
+        const activation = await client.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal' FOR SHARE");
+        if (!activation.rowCount) throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
         const membership = await client.query(
           'SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 FOR SHARE',
           [project.id, project.owner],
         );
         if (!membership.rowCount || membership.rows[0].role === 'viewer') throw new Refusal('PROJECT_FORBIDDEN', 403);
-        const run = (await client.query<{context_id: string}>(
-          'SELECT context_id::text FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND module=$3 FOR SHARE',
+        const run = (await client.query<{context_id: string; report_dir: string}>(
+          "SELECT context_id::text, report_dir FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND module=$3 AND status IN ('done','failed') FOR UPDATE",
           [parsed.runId, project.id, module],
         )).rows[0];
         if (!run) throw new Refusal('VERIFY_RUN_MISSING', 404);
         await ledger.authorize(client, project.owner, run.context_id);
-        await removeModuleReport(config.dataDirectory, project.id, parsed.runId, module);
+        // Commit the tombstone first so recovery never republishes a discarded run.
+        // A retry can finish deleting the files if the process stops after commit.
+        const path = run.report_dir.startsWith('discarded:') ? run.report_dir.slice('discarded:'.length) : run.report_dir;
+        const marker = path === 'discarded' || path === 'pending' ? 'discarded' : `discarded:${path}`;
+        await client.query('UPDATE ac_verify_runs SET report_dir=$2 WHERE id=$1', [parsed.runId, marker]);
+        return path;
       });
+      if (reportPath === 'discarded' || reportPath === 'pending') await removeModuleReport(config.dataDirectory, project.id, parsed.runId, module);
+      else await removePersistedReport(config.dataDirectory, project.id, parsed.runId, module, reportPath);
       return ['Relatório descartado.'];
     }
     const exam = await ledger.ensureExamContext(project.owner, project.id, module);
@@ -199,6 +230,7 @@ export async function runPersonalModuleCli(
     }
 
     if (parsed.kind === 'remediate') {
+      await reconcileModuleReports(ledger, project.owner, authority, config.dataDirectory, project.id);
       const corrected = await requestModuleCorrection(ledger, project.owner, authority, {
         module,
         runId: parsed.runId,

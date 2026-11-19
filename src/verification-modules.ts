@@ -33,7 +33,6 @@ export const DEFAULT_COLLECTOR_TIMEOUT_MS = 1_200_000;
 export const MODULE_MEMORY_BYTES = 2_147_483_648;
 export const MODULE_NANO_CPUS = 2_000_000_000;
 export const MODULE_PIDS_LIMIT = 256;
-export const DETERMINISTIC_MODULE_PROFILE_ID = '00000000-0000-4000-8000-000000000104';
 
 export const MODULE_TITLES: Readonly<Record<VerificationModule, string>> = Object.freeze({
   qa: 'QA pesado',
@@ -81,6 +80,30 @@ export const ModuleRawFinding = z.object({
   evidence: z.string().min(1).max(2000),
 }).strict();
 export type ModuleRawFinding = z.infer<typeof ModuleRawFinding>;
+
+// Existing collectors emit per-file measurements in tool-specific detail rows.
+// Aggregate, skipped and failure messages do not establish file coverage.
+export function collectorMeasuredDetailFile(row: ModuleToolCoverage): string | null {
+  if (row.status !== 'ok') return null;
+  const metrics: Record<string, string[]> = {
+    'ast-complexity:file': ['loc'], 'jscpd:file': ['linhas'],
+    'dependency-cruiser:file': ['deps'], 'knip:file': ['papel'],
+    'ast-grep': ['achados'], 'jscodeshift': ['reescritas'],
+    'npm-check-updates': ['dependencias', 'manifesto_invalido'],
+    'sbom-lockfile': ['dependencias_verificadas'],
+    'typedoc:markdown': ['assinaturas_conferidas'], 'typedoc:file': ['simbolos'],
+    'dependency-cruiser:diagrama': ['arestas_doc_conferidas'],
+    'mermaid:file': ['blocos_mermaid'],
+  };
+  const allowed = metrics[row.tool] ?? [];
+  let file: string | undefined;
+  const match = /^arquivo=([^;]+); ([a-z_]+)=/.exec(row.detail);
+  if (match && allowed.includes(match[2]!)) file = match[1];
+  if (row.tool === 'hadolint:arquivo') file = /^(.+): \d+ achado\(s\)\.$/.exec(row.detail)?.[1];
+  if (row.tool === 'trivy:arquivo') file = /^(.+): \d+ achado\(s\) de configuração\.$/.exec(row.detail)?.[1];
+  if (!file) return null;
+  try { return assertModuleRepoRelativePath(file); } catch { return null; }
+}
 
 export const ModuleCollectorOutput = z.object({
   coverage: z.array(ModuleToolCoverage).min(1).max(5000),
@@ -1178,7 +1201,7 @@ export async function writeModuleReport(input: {
     {segments: ['achados.json'], body: guardReportText(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guardReportText(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},
-    ...(!input.deferPublication ? [{segments: ['run.json'], body: guardReportText(`${JSON.stringify(summary, null, 2)}\n`)}] : []),
+    {segments: [input.deferPublication ? '.run-pending.json' : 'run.json'], body: guardReportText(`${JSON.stringify(summary, null, 2)}\n`)},
   ];
   for (const file of planned) {
     for (const segment of file.segments) assertSafeSegment(segment);
@@ -1640,6 +1663,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   }
   await assertPersonalActivation(input.ledger);
   await assertReportOutsideRepo(input.repoPath, input.dataDirectory);
+  await reconcileModuleReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId);
   const runId = input.runId ?? randomUUID();
   if (!Id.safeParse(runId).success) throw new Refusal('INVALID_CONTRACT', 400);
   const createdAt = input.createdAt ?? new Date();
@@ -1763,14 +1787,19 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     const measured = new Map<string, ModuleToolCoverage[]>();
     for (const row of collectorData.coverage.filter(row => row.status === 'ok')) {
       const files = new Set([...(row.files ?? []), ...collectorData.findings.filter(f => f.tool === row.tool).map(f => f.file)]);
+      const detailFile = collectorMeasuredDetailFile(row);
+      if (detailFile) {
+        // A text field is not trusted as a filesystem path until resolved in the snapshot.
+        try { await resolveInsideRepo(snapshot, detailFile); files.add(detailFile); } catch { /* no positive file evidence */ }
+      }
       for (const file of files) measured.set(file, [...(measured.get(file) ?? []), row]);
     }
     const fileCoverage: CoverageRow[] = [...measured.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([file, rows]) =>
       CoverageRow.parse({
         file,
-        examinerProvider: input.module,
+        examinerProvider: 'ferramenta',
         examinerModel: `${rows[0]!.tool}@${rows[0]!.version}`.slice(0, 100),
-        profileId: DETERMINISTIC_MODULE_PROFILE_ID,
+        profileId: null,
         checklist: [...new Set(rows.map(row => row.tool.slice(0, 80)))].slice(0, 80),
       }),
     );
@@ -1848,7 +1877,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       await finishExamIntentTx(c, input.ledger, {intentId, contextId: input.authority.contextId}, finalState);
     });
     databaseCommitted = true;
-    await writePrivate(join(report.directory, 'run.json'), report.directory, guardReportText(`${JSON.stringify(report.summary, null, 2)}\n`));
+    await reconcileModuleReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId);
     unpublishedReport = undefined;
 
     return {
@@ -2006,7 +2035,7 @@ export async function requestModuleCorrection(
       intent_id: string;
       commit_id: string;
     }>(
-      'SELECT id::text AS id, project_id::text AS project_id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 FOR UPDATE',
+      "SELECT id::text AS id, project_id::text AS project_id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' FOR UPDATE",
       [input.runId, input.projectId],
     )).rows[0];
     if (!runRow) throw new Refusal('VERIFY_RUN_MISSING', 404);
@@ -2123,12 +2152,6 @@ export async function requestModuleCorrection(
   });
 }
 
-function replaceSituacao(markdown: string, status: 'fechado' | 'reaberto'): string {
-  const pattern = /^([ \t]*-[ \t]*Situação:[ \t]*)(\S+)/m;
-  if (!pattern.test(markdown)) return markdown;
-  return markdown.replace(pattern, `$1${status}`);
-}
-
 async function replacePrivateFile(directory: string, name: string, body: string): Promise<void> {
   const target = join(directory, name);
   const temporary = join(directory, `.${name}.${randomUUID()}.tmp`);
@@ -2159,7 +2182,7 @@ async function updateModuleReportFiles(
   dataDirectory: string,
   projectId: string,
   runId: string,
-  updates: readonly {id: string; status: 'fechado' | 'reaberto'}[],
+  updates: readonly {id: string; status: Achado['status']}[],
 ): Promise<void> {
   const projectDir = await resolveProjectVerificationsDir(dataDirectory, projectId);
   if (!projectDir) return;
@@ -2177,6 +2200,14 @@ async function updateModuleReportFiles(
       });
       await replacePrivateFile(report.directory, 'achados.json', `${JSON.stringify(parsed, null, 2)}\n`);
       const findings = parsed.achados.map(item => Achado.parse(item));
+      const findingsDirectory = join(report.directory, 'achados');
+      const findingsInfo = await lstat(findingsDirectory);
+      if (findingsInfo.isSymbolicLink() || !findingsInfo.isDirectory() || await realpath(findingsDirectory) !== findingsDirectory) {
+        throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+      }
+      for (const finding of findings) {
+        await replacePrivateFile(findingsDirectory, `${finding.id}.md`, guardReportText(achadoMarkdown(finding)));
+      }
       const raw = JSON.parse(await readTextInside(report.directory, join(report.directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID'));
       const coverage = ModuleCollectorOutput.parse(raw).coverage;
       const runText = await readTextInside(report.directory, join(report.directory, 'run.json'), 'VERIFY_REPORT_INVALID');
@@ -2190,18 +2221,51 @@ async function updateModuleReportFiles(
       })));
       await replacePrivateFile(report.directory, 'run.json', `${JSON.stringify({...run, counts: summary.counts}, null, 2)}\n`);
     }
-    const achadosDir = join(report.directory, 'achados');
-    for (const update of updates) {
-      const mdPath = join(achadosDir, `${update.id}.md`);
-      try {
-        const mdText = await readTextInside(report.directory, mdPath, 'VERIFY_ACHADO_NOT_FOUND');
-        await replacePrivateFile(dirname(mdPath), basename(mdPath), replaceSituacao(mdText, update.status));
-      } catch (error) {
-        if (error instanceof Refusal && error.code === 'VERIFY_ACHADO_NOT_FOUND') continue;
-        throw error;
-      }
-    }
+
   }
+}
+
+/** Rebuild published reports from committed finding statuses while holding the run row lock.
+ * Call before public report reads. The pending summary is private and is written
+ * before the database commit; only committed rows may publish it as run.json.
+ */
+export async function reconcileModuleReports(
+  ledger: Ledger, principal: string, authority: Authority, dataDirectory: string, projectId: string,
+): Promise<void> {
+  await ledger.tx(async client => {
+    const context = await ledger.authorize(client, principal, authority.contextId);
+    await ledger.fence(client, authority);
+    if (context.project_id !== projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
+    const rows = (await client.query<{id: string; report_dir: string}>(
+      `SELECT id::text, report_dir FROM ac_verify_runs
+       WHERE project_id=$1 AND context_id=$2 AND status IN ('done','failed') AND report_dir NOT IN ('pending','discarded') AND report_dir NOT LIKE 'discarded:%' AND module IS NOT NULL
+       ORDER BY id FOR UPDATE`, [projectId, authority.contextId],
+    )).rows;
+    const projectDir = await resolveProjectVerificationsDir(dataDirectory, projectId);
+    if (!projectDir) return;
+    for (const row of rows) {
+      const directory = resolve(row.report_dir);
+      if (dirname(directory) !== projectDir || !MODULE_REPORT_DIR.test(basename(directory))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+      const info = await lstat(directory);
+      if (info.isSymbolicLink() || !info.isDirectory() || await realpath(directory) !== directory) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+      let summaryText: string;
+      try {
+        summaryText = await readTextInside(directory, join(directory, 'run.json'), 'VERIFY_REPORT_INVALID');
+      } catch (error) {
+        if (!(error instanceof Refusal && error.code === 'VERIFY_REPORT_INVALID')) throw error;
+        summaryText = await readTextInside(directory, join(directory, '.run-pending.json'), 'VERIFY_REPORT_INVALID');
+      }
+      const summary = ModuleReportSummary.parse(JSON.parse(summaryText));
+      if (summary.id !== row.id || summary.directoryName !== basename(directory)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+      // The report becomes discoverable only after the database transaction committed.
+      await replacePrivateFile(directory, 'run.json', guardReportText(`${JSON.stringify(summary, null, 2)}\n`));
+      const findings = (await client.query<{achado_id: string; status: string}>(
+        'SELECT achado_id, status FROM ac_verify_findings WHERE run_id=$1', [row.id],
+      )).rows;
+      await updateModuleReportFiles(dataDirectory, projectId, row.id,
+        findings.map(item => ({id: item.achado_id, status: Achado.shape.status.parse(item.status)})));
+    }
+  });
 }
 
 /**
@@ -2238,7 +2302,7 @@ export async function recheckModuleFindings(
       intent_id: string;
       commit_id: string;
     }>(
-      'SELECT id::text AS id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2',
+      "SELECT id::text AS id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%'",
       [input.runId, input.projectId],
     )).rows[0];
     if (!runRow) throw new Refusal('VERIFY_RUN_MISSING', 404);
@@ -2274,6 +2338,7 @@ export async function recheckModuleFindings(
     return {run: runRow, items, repo: repoRow?.repo ?? null};
   });
 
+  await reconcileModuleReports(ledger, principal, authority, input.dataDirectory, input.projectId);
   const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
   if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   const report = (await loadModuleReports(projectDir)).find(item => item.summary.id === input.runId);
@@ -2285,7 +2350,25 @@ export async function recheckModuleFindings(
   const snapshot = await prepareModuleSnapshot(loaded.repo, head);
   const decided: {id: string; status: 'fechado' | 'reaberto'}[] = [];
   const moduleName = assertVerificationModule(loaded.run.module);
+  let recheckIntentId: string | undefined;
+  let completed = false;
   try {
+  recheckIntentId = randomUUID();
+  await ledger.tx(async client => {
+    const context = await ledger.authorize(client, principal, authority.contextId);
+    await ledger.fence(client, authority);
+    if (context.project_id !== input.projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
+    const command = {
+      schemaVersion: 1 as const, intentId: recheckIntentId!, deliveryAttemptId: randomUUID(),
+      contextId: authority.contextId, policyRevision: Number(context.policy_revision), action: 'plan.start' as const,
+      payload: {workflow: 'security-verify-readonly-v1' as const, messageRef: `recheck:${loaded.run.id}`, projectId: input.projectId, commit: head},
+    };
+    await client.query(
+      `INSERT INTO ac_intents (id, context_id, principal_id, digest, command, operation_id, run_id, manager_epoch, plan_revision)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)`,
+      [recheckIntentId, authority.contextId, principal, digest(command), JSON.stringify(command), randomUUID(), randomUUID(), authority.epoch, Number(context.plan_revision)],
+    );
+  });
   for (const item of loaded.items) {
     const original = raw.findings[Number(item.id.slice(4)) - 1];
     if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) throw new Refusal('VERIFY_REPORT_INVALID', 400);
@@ -2301,7 +2384,7 @@ export async function recheckModuleFindings(
       codeExcerpt: excerpt.text,
     });
     const capacity = new Capacity(ledger);
-    const seat = await reserveSpecialistExamSeat({capacity, ledger, principal, authority, intentId: loaded.run.intent_id,
+    const seat = await reserveSpecialistExamSeat({capacity, ledger, principal, authority, intentId: recheckIntentId,
       purpose: 'reviewer', releaseGrant: grantId => capacity.transition(principal, grantId, authority, 'released', {processId: 'module-recheck', state: 'not_started'})});
     try {
     const call = VerifyWorkerCall.parse({
@@ -2311,7 +2394,7 @@ export async function recheckModuleFindings(
       profileId: seat.profileId,
       model: seat.model,
       grantId: seat.grantId,
-      intentId: loaded.run.intent_id,
+      intentId: recheckIntentId,
       task: `${task}\nCommit examinado: ${head}`,
       repo: snapshot,
       writePaths: [],
@@ -2323,13 +2406,11 @@ export async function recheckModuleFindings(
       await capacity.transition(principal, seat.grantId, authority, 'released', {processId: 'module-recheck', state: 'not_started'}).catch(() => undefined);
     }
   }
-  } finally {
-    await removeModuleSnapshot(snapshot);
-  }
-
-  const reportStatuses = await ledger.tx(async client => {
+  await ledger.tx(async client => {
     await ledger.authorize(client, principal, authority.contextId);
     await ledger.fence(client, authority);
+    const liveRun = await client.query("SELECT id FROM ac_verify_runs WHERE id=$1 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' FOR UPDATE", [loaded.run.id]);
+    if (!liveRun.rowCount) throw new Refusal('VERIFY_RUN_MISSING', 404);
     for (const result of decided) {
       const updated = await client.query(
         'UPDATE ac_verify_findings SET status=$3 WHERE run_id=$1 AND achado_id=$2',
@@ -2338,8 +2419,21 @@ export async function recheckModuleFindings(
       if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
     }
     const rows = await client.query<{achado_id: string; status: string}>('SELECT achado_id, status FROM ac_verify_findings WHERE run_id=$1', [loaded.run.id]);
-    return rows.rows.filter(row => row.status === 'fechado' || row.status === 'reaberto').map(row => ({id: row.achado_id, status: row.status as 'fechado' | 'reaberto'}));
+    const statuses = rows.rows.filter(row => row.status === 'fechado' || row.status === 'reaberto').map(row => ({id: row.achado_id, status: row.status as 'fechado' | 'reaberto'}));
+    await updateModuleReportFiles(input.dataDirectory, input.projectId, loaded.run.id, statuses);
+    await finishExamIntentTx(client, ledger, {intentId: recheckIntentId!, contextId: authority.contextId}, 'done');
+    return statuses;
   });
-  await updateModuleReportFiles(input.dataDirectory, input.projectId, loaded.run.id, reportStatuses);
+  completed = true;
   return {results: decided};
+  } finally {
+    if (recheckIntentId && !completed) {
+      await ledger.tx(async client => {
+        await ledger.authorize(client, principal, authority.contextId);
+        await ledger.fence(client, authority);
+        await finishExamIntentTx(client, ledger, {intentId: recheckIntentId!, contextId: authority.contextId}, 'failed');
+      }).catch(() => undefined);
+    }
+    await removeModuleSnapshot(snapshot);
+  }
 }

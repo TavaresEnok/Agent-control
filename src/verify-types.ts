@@ -113,7 +113,7 @@ export const CoverageRow = z.object({
   file: z.string().min(1).max(400),
   examinerProvider: z.string().min(1).max(80),
   examinerModel: z.string().min(1).max(100),
-  profileId: Id,
+  profileId: Id.nullable(),
   checklist: z.array(z.string().min(1).max(80)).min(1),
 }).strict();
 export type CoverageRow = z.infer<typeof CoverageRow>;

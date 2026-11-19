@@ -392,6 +392,17 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       otherRepo,
     ]);
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+    // Reserva sintética real: reverificação não deve fabricar identidade de revisor.
+    const capacity = new Capacity(db);
+    const accountId = randomUUID();
+    const profileId = randomUUID();
+    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+    await capacity.configure(principal, {programmingLimit: 4, evaluationLimit: 2});
+    await capacity.registerModel(principal, {provider: 'claude', model: 'fixture-model', efforts: ['medium'], roles: ['specialist'], source: 'synthetic://module-test'});
+    await capacity.addAccount(principal, projectId, {id: accountId, provider: 'claude', label: 'Synthetic reviewer', resourceIdentity: `fixture-${accountId}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://module-test', maxConcurrent: 2});
+    await capacity.addProfile(principal, projectId, {id: profileId, accountId, model: 'fixture-model', effort: 'medium', role: 'specialist'});
+    await capacity.observeQuota(principal, accountId, {status: 'available', source: 'synthetic://module-test', ttlSeconds: 3600});
+    const policyRevision = await capacity.publish(principal, projectId, 0, {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 1, roles: {specialist: {regular: [profileId], emergency: []}}});
 
     // Sem contexto principal ainda -> VERIFY_CONTEXT_REQUIRED
     await assert.rejects(
@@ -430,6 +441,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         assert.notEqual(first.contextId, existingId);
       }
       moduleContexts.set(mod, first.contextId);
+      await capacity.assignPolicy(principal, first.contextId, policyRevision);
     }
 
     // Guarda de vínculo ao contexto correto: tentar rodar módulo 'qa' com autoridade do contexto principal ou de 'banco' falha
@@ -605,7 +617,12 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         'ACH-002',
       ]);
       assert.deepEqual(fix1, fix2);
-      assert.deepEqual(fix1.slice(1), ['src/app.ts', 'src/db.ts']);
+      assert.deepEqual(fix1.slice(1), ['src/app.ts', 'src/db.ts', `tests/${mod}/ach-001.test.ts`, `tests/${mod}/ach-002.test.ts`]);
+      if (mod === 'qa') {
+        await db.pool.query("UPDATE ac_verify_findings SET status='fechado' WHERE run_id=$1 AND achado_id='ACH-001'", [runId]);
+        assert.deepEqual(await runPersonalModuleCli(mod, [installationPath, projectId, '--corrigir', runId!, 'ACH-001', 'ACH-002']), fix1);
+        await db.pool.query("UPDATE ac_verify_findings SET status='confirmado' WHERE run_id=$1 AND achado_id='ACH-001'", [runId]);
+      }
 
       const remRows = (await db.pool.query<{
         finding_ids: string[];
@@ -619,7 +636,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       )).rows;
       assert.equal(remRows.length, 1);
       assert.deepEqual(remRows[0]?.finding_ids, ['ACH-001', 'ACH-002']);
-      assert.deepEqual(remRows[0]?.write_paths, ['src/app.ts', 'src/db.ts']);
+      assert.deepEqual(remRows[0]?.write_paths, ['src/app.ts', 'src/db.ts', `tests/${mod}/ach-001.test.ts`, `tests/${mod}/ach-002.test.ts`]);
       assert.match(remRows[0]?.regression_test ?? '', new RegExp(`tests/${mod}/ach-001\\.test\\.ts`));
       assert.equal(remRows[0]?.acceptance, REMEDIATION_ACCEPTANCE);
 
@@ -632,8 +649,8 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       assert.match(mainMsg?.text ?? '', /- src\/app\.ts/);
       assert.match(mainMsg?.text ?? '', /- src\/db\.ts/);
       assert.match(mainMsg?.text ?? '', new RegExp(REMEDIATION_ACCEPTANCE));
-      // A conclusão do autor nunca entra no texto da tarefa do gerente
-      assert.equal((mainMsg?.text ?? '').includes('Defeito detectado pelo módulo'), false);
+      // A tarefa de correção inclui a descrição; prompts de revisão omitem conclusões.
+      assert.match(mainMsg?.text ?? '', /Defeito detectado pelo módulo/);
     }
 
     // O gerente do contexto principal permanece intacto e com o mesmo epoch após rodar todos os 8 módulos
@@ -692,6 +709,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
 
     // Reverificação sem conclusão do autor e descarte de relatório
     const seenTasks: string[] = [];
+    let recheckIntent = '';
     const depAuth = await db.acquire(principal, moduleContexts.get('dependencias')!, randomUUID(), 'recheck-dep', 60);
     try {
       const rechecked = await recheckModuleFindings(db, principal, depAuth, {
@@ -703,6 +721,9 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         worker: {
           async run(call) {
             seenTasks.push(call.task);
+            recheckIntent = call.intentId;
+            assert.equal(call.provider, 'claude');
+            assert.equal(call.profileId, profileId);
             return JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'Atualizado.', proof: 'ok'});
           },
         },
@@ -710,18 +731,22 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       assert.deepEqual(rechecked.results, [{id: 'ACH-001', status: 'fechado'}]);
       assert.equal(seenTasks.length, 1);
       assert.equal(seenTasks[0]?.includes('Atualização disponível.'), false);
+      assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [recheckIntent])).rows[0]?.state, 'done');
+      const updated = await readModuleReport(dataDirectory, projectId, failedResultRunId, 'dependencias');
+      assert.equal(updated.summary.counts.baixa, 0);
+      assert.equal(updated.achados[0]?.status, 'fechado');
+      assert.equal((await db.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [failedResultRunId])).rows[0]?.status, 'fechado');
     } finally {
       await db.releaseLease(depAuth);
     }
 
-    // Symlink dentro do repositório é recusado antes de persistir ou converter em tarefa
+    // Arquivo fora do snapshot não gera achado: o relatório registra falha do coletor.
     const outsideSecret = join(root, 'outside.txt');
     await writeFile(outsideSecret, 'SEGREDO_FORA\n');
     await symlink(outsideSecret, join(repo, 'src', 'symlink.ts'));
     const arqAuth = await db.acquire(principal, moduleContexts.get('arquitetura')!, randomUUID(), 'symlink-check', 60);
     try {
-      await assert.rejects(
-        () => runVerificationModule({
+      const invalid = await runVerificationModule({
           module: 'arquitetura',
           ledger: db,
           principal,
@@ -742,9 +767,10 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
               evidence: 'symlink',
             }],
           },
-        }),
-        (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_PATH_FORBIDDEN',
-      );
+        });
+      assert.equal(invalid.hasToolFailure, true);
+      assert.deepEqual(invalid.achados, []);
+      assert.deepEqual(invalid.coverage, []);
     } finally {
       await db.releaseLease(arqAuth);
     }
@@ -752,8 +778,14 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     // --descartar remove o relatório privado do disco
     const beforeDiscard = await listModuleReports(dataDirectory, projectId, 'dependencias');
     assert.equal(beforeDiscard.some(item => item.id === failedResultRunId), true);
+    await db.pool.query('DELETE FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [projectId, principal]);
+    await assert.rejects(() => runPersonalModuleCli('dependencias', [installationPath, projectId, '--descartar', failedResultRunId]),
+      (error: unknown) => error instanceof Refusal && error.code === 'PROJECT_FORBIDDEN');
+    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [projectId, principal]);
     const discardOut = await runPersonalModuleCli('dependencias', [installationPath, projectId, '--descartar', failedResultRunId]);
     assert.deepEqual(discardOut, ['Relatório descartado.']);
+    assert.deepEqual(await runPersonalModuleCli('dependencias', [installationPath, projectId, '--descartar', failedResultRunId]), ['Relatório descartado.']);
+    assert.match((await db.pool.query('SELECT report_dir FROM ac_verify_runs WHERE id=$1', [failedResultRunId])).rows[0]?.report_dir, /^discarded(?::|$)/);
     const afterDiscard = await listModuleReports(dataDirectory, projectId, 'dependencias');
     assert.equal(afterDiscard.some(item => item.id === failedResultRunId), false);
 
@@ -839,6 +871,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     assert.equal(interruptedDoc?.intent_state, 'failed');
 
     // Diretório de dados dentro do repositório é recusado com VERIFY_REPORT_INSIDE_REPO
+    await mkdir(join(repo, 'sub-data'));
     const docAuth = await db.acquire(principal, moduleContexts.get('documentacao')!, randomUUID(), 'inside-repo-check', 60);
     try {
       await assert.rejects(
