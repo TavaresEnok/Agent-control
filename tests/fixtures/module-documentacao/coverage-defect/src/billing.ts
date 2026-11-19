@@ -2,13 +2,13 @@
  * @param legacy valid parameter
  */
 export function first(legacy: string) { return legacy; }
-/** Obsolete parameter.
+/** The previous name was `@param legacy`.
  * @param legacy no longer accepted
  */
 export function second(current: string) { return current; }
 /** Billing. */
 export class Billing {
-  /** Charge.
+  /** Charge used to document `@param legacy`.
    * @param legacy no longer accepted
    * @see {@link MissingCharge}
    */

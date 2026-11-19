@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {test} from 'node:test';
@@ -472,6 +473,9 @@ test('um arquivo de saída deixado por ferramenta que falhou não vira cobertura
   });
   assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'failed');
   assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser')?.status, 'failed');
+  const diagram = result.coverage.find(row => row.tool === 'dependency-cruiser:diagrama' && row.detail.includes('arquivo=README.md'));
+  assert.equal(diagram?.status, 'skipped');
+  assert.match(diagram.detail, /arestas_doc_conferidas=0; arestas_doc_nao_conferidas=1/);
   assert.equal(result.coverage.find(row => row.tool.endsWith(':artefato')), undefined);
   assert.deepEqual(result.findings, []);
 });
@@ -686,30 +690,58 @@ test('diagramas só comparam pontas cobertas e conferem cada aresta da cadeia, i
     {source: 'src/third.ts', dependencies: []},
   ]};
   const defect = parseDepcruiseReport(graph, 'flowchart LR', root, blocks, read);
-  assert.deepEqual(defect.findings.map(f => [f.rule, f.line]), [
-    ['DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE', 3],
-  ]);
-  assert.match(defect.findings[0].message, /src\/billing\.ts -> src\/third\.ts/);
-  assert.deepEqual([defect.stats.checkedEdges, defect.stats.skippedEdges, defect.stats.edgeMismatches], [2, 1, 1]);
+  assert.deepEqual(defect.findings.map(f => f.line), [6, 7, 8]);
+  for (const finding of defect.findings) {
+    assert.equal(finding.rule, 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE');
+    assert.match(finding.message, /src\/billing\.ts -> src\/third\.ts/);
+  }
+  const {checkedEdges, skippedEdges, unmeasured, edgeMismatches} = defect.stats;
+  assert.deepEqual({checkedEdges, skippedEdges, unmeasured, edgeMismatches}, {
+    checkedEdges: 7, skippedEdges: 1, unmeasured: 1, edgeMismatches: 3,
+  });
   assert.equal(defect.skippedEdgesByFile.get('README.md'), 1);
+  assert.equal(defect.unmeasuredByFile.get('README.md'), 1);
   const control = structuredClone(graph);
   control.modules[1].dependencies.push({resolved: 'src/third.ts'});
   assert.deepEqual(parseDepcruiseReport(control, 'flowchart LR', root, blocks, read).findings, []);
   const validation = await validateMermaidDocuments(['README.md'], blocks,
     new Set(['src/api.ts', 'src/billing.ts', 'src/third.ts', 'src/api.test.ts']), async () => ({}));
   assert.deepEqual(validation.findings, []);
-  const result = await runCollector({repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B', graph)});
-  assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /cobertura parcial/);
-  assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser')?.detail ?? '', /arestas_doc_conferidas=0, arestas_doc_nao_conferidas=3/);
-  assert.equal(result.findings.some(f => f.rule === 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE'), false);
-  const withoutAlias = join(FIXTURES, 'control-clean');
-  const unresolvedGraph = {modules: [
+
+  for (const link of ['A -. chama .-> B', 'A == chama ==> B', 'A -- chama & grava = sim --> B', 'A -- "chama -->" --> B']) {
+    const code = `flowchart LR\nA["src/api.ts"]; B["src/billing.ts"]\n${link}`;
+    const result = parseDepcruiseReport(graph, 'flowchart LR', root, [{file: 'README.md', startLine: 1, code}], read);
+    assert.equal(result.stats.checkedEdges, 1, link);
+    assert.equal(result.stats.unmeasured, 0, link);
+    assert.deepEqual(result.findings, [], link);
+  }
+});
+
+test('origens e diagramas sem medição confiável não geram divergência', async () => {
+  const blocks = [{file: 'README.md', startLine: 1, code: 'flowchart LR\nA["src/api.ts"] --> B["src/billing.ts"]'}];
+  const target = {source: 'src/billing.ts', dependencies: []};
+  for (const source of [
     {source: 'src/api.ts', dependencies: [{module: '@app/billing', couldNotResolve: true}]},
-    {source: 'src/billing.ts', dependencies: []},
-  ]};
-  const noClaim = parseDepcruiseReport(unresolvedGraph, 'flowchart LR', withoutAlias,
-    [{file: 'README.md', startLine: 1, code: 'A["src/api.ts"] --> B["src/billing.ts"]'}]);
-  assert.deepEqual(noClaim.findings, []);
+    {source: 'src/api.ts'},
+    {source: 'src/api.ts', dependencies: [null]},
+    {source: 'src/api.ts', dependencies: [], followable: false},
+  ]) {
+    const result = parseDepcruiseReport({modules: [source, target]}, 'flowchart LR', FIXTURE_CLEAN_DIR, blocks);
+    assert.deepEqual(result.findings, []);
+    assert.equal(result.stats.skippedEdges, 1);
+  }
+  const graph = {modules: [{source: 'src/api.ts', dependencies: []}, target]};
+  const output = await runCollector({
+    repoDir: FIXTURE_CLEAN_DIR,
+    ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B', graph),
+    mermaidParseFn: async code => {
+      if (code.includes('src/api.ts')) throw new Error('Parse error on line 2');
+    },
+  });
+  assert.deepEqual(output.findings.map(finding => finding.rule), ['DOC-MERMAID-SINTAXE-INVALIDA']);
+  const diagram = output.coverage.find(row => row.tool === 'dependency-cruiser:diagrama');
+  assert.equal(diagram?.status, 'skipped');
+  assert.match(diagram.detail, /arestas_doc_conferidas=0; arestas_doc_nao_conferidas=1; trechos_doc_nao_medidos=2/);
 });
 
 test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', () => {
@@ -735,14 +767,24 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   assert.ok(parsed.symbols.some(s => s.qualifiedName === 'Billing.charge'));
   assert.ok(parsed.symbols.some(s => s.qualifiedName === 'Contract.submit'));
   assert.equal(parsed.symbols.some(s => s.name === 'hidden'), false);
+
+  const source = ['/** Example.', ' * ```js', ' * @param legacy', ' * ```', ' * @param legacy obsolete', ' */',
+    'export function sample(current: string) { return current; }'].join('\n');
+  const example = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => source,
+  );
+  assert.deepEqual(example.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
 });
 
-test('ferramentas fixadas expõem membros e cobertura parcial para aliases herdados', {skip: process.env.C8_TEST_LOCAL_TOOLS !== '1'}, async () => {
+test('ferramentas fixadas encontram as três segundas arestas ausentes e conferem o controle real', {skip: process.env.C8_TEST_LOCAL_TOOLS !== '1'}, async () => {
   const root = join(FIXTURES, 'coverage-defect');
   const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
   assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
-  assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.status, 'skipped');
-  assert.equal(result.findings.some(f => f.rule === 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE'), false);
+  assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined);
+  assert.deepEqual(result.findings.filter(f => f.rule === 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE').map(f => f.line), [6, 7, 8]);
+  const measured = /arestas_doc_conferidas=7, arestas_doc_nao_conferidas=1, trechos_doc_nao_medidos=1/;
+  assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser')?.detail ?? '', measured);
   const catalog = assembleDocumentationArtifacts(result.coverage)['api.json'];
   assert.equal(catalog.status, 'present');
   if (catalog.status === 'present') {
@@ -755,20 +797,69 @@ test('ferramentas fixadas expõem membros e cobertura parcial para aliases herda
   assert.ok(params.some(f => f.line === 12));
   assert.ok(result.findings.some(f => f.rule === 'DOC-TYPEDOC-LINK-QUEBRADO' && f.line === 13));
   const clean = await runCollector({repoDir: join(FIXTURES, 'coverage-control'), toolsRoot: MODULE_DEPLOY_DIR});
-  assert.equal(clean.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.status, 'skipped');
-  assert.equal(clean.findings.some(f => f.rule === 'DOC-TYPEDOC-PARAM-DESATUALIZADO'), false);
+  assert.equal(clean.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined);
+  assert.match(clean.coverage.find(row => row.tool === 'dependency-cruiser')?.detail ?? '', measured);
+  assert.deepEqual(clean.findings, []);
 });
 
-test('configurações não analisáveis e chaves JSON escapadas resultam em cobertura parcial', async () => {
-  for (const config of ['{"compilerOptions":{"\\u0070aths":{"@app/*":["src/*"]}}}', '{ /* JSONC */ "compilerOptions": {} }']) {
+test('configurações divergentes ou não analisáveis suspendem a comparação do grafo', async () => {
+  for (const [config, reason] of [
+    ['{"compilerOptions":{"\\u0070aths":{"@app/*":["src/*"]}}}', /paths/],
+    ['{"extends":"./base.json"}', /extends/],
+    ['{"compilerOptions":{"module":"NodeNext","moduleResolution":"NodeNext"}}', /module/],
+    ['{"compilerOptions":{"module":"ESNext","moduleResolution":"bundler","customConditions":["development"]}}', /customConditions/],
+    ['{"compilerOptions":{"skipLibCheck":true}}', /modo de resolução implícito/],
+    ['{ /* JSONC */ "compilerOptions": {} }', /configuração não analisada/],
+  ] as const) {
     const root = mkdtempSync(join(tmpdir(), 'doc-config-'));
     try {
       writeFileSync(join(root, 'index.ts'), 'export const value = 1;\n');
+      writeFileSync(join(root, 'billing.ts'), 'export const billing = 1;\n');
       writeFileSync(join(root, 'tsconfig.json'), config);
-      const result = await runCollector({repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B')});
-      assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.status, 'skipped');
+      writeFileSync(join(root, 'base.json'), '{"compilerOptions":{"baseUrl":".","paths":{"@app/*":["*"]}}}');
+      writeFileSync(join(root, 'arch.mmd'), 'flowchart LR\nA["index.ts"] --> B["billing.ts"]\n');
+      const graph = {modules: [{source: 'index.ts', dependencies: []}, {source: 'billing.ts', dependencies: []}]};
+      const result = await runCollector({repoDir: root, ...syntheticTools({kind: 1, name: 'x'}, 'flowchart LR\nA --> B', graph)});
+      const resolution = result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao');
+      assert.equal(resolution?.status, 'skipped');
+      assert.match(resolution.detail, reason);
+      assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser:diagrama')?.detail ?? '', /arestas_doc_conferidas=0; arestas_doc_nao_conferidas=1/);
+      assert.deepEqual(result.findings, []);
     } finally {
       rmSync(root, {recursive: true, force: true});
     }
+  }
+});
+
+test('moduleSuffixes muda o destino no TypeScript e impede falso positivo do grafo isolado', {skip: process.env.C8_TEST_LOCAL_TOOLS !== '1'}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-module-suffixes-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), '/** API. */\nexport {billing} from "./billing";\n');
+    for (const file of ['billing.ts', 'billing.native.ts']) {
+      writeFileSync(join(root, file), '/** Billing. */\nexport const billing = 1;\n');
+    }
+    writeFileSync(join(root, 'arch.mmd'), 'flowchart LR\nA["api.ts"] --> B["billing.native.ts"]\n');
+    const config = {module: 'ESNext', moduleResolution: 'bundler'};
+    writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({compilerOptions: {...config, moduleSuffixes: ['.native', '']}}));
+    const load = createRequire(join(MODULE_DEPLOY_DIR, 'package.json'));
+    const ts = load('typescript');
+    const resolved = ts.resolveModuleName('./billing', join(root, 'api.ts'), {
+      moduleResolution: ts.ModuleResolutionKind.Bundler, moduleSuffixes: ['.native', ''],
+    }, ts.sys);
+    assert.equal(resolved.resolvedModule?.resolvedFileName, join(root, 'billing.native.ts'));
+
+    const partial = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    assert.match(partial.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /moduleSuffixes/);
+    assert.match(partial.coverage.find(row => row.tool === 'dependency-cruiser')?.detail ?? '', /arestas_doc_conferidas=0, arestas_doc_nao_conferidas=1/);
+    assert.deepEqual(partial.findings.filter(finding => finding.tool === 'dependency-cruiser'), []);
+
+    writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({compilerOptions: config}));
+    const measured = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    assert.equal(measured.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined);
+    const [mismatch] = measured.findings.filter(finding => finding.tool === 'dependency-cruiser');
+    assert.equal(mismatch?.rule, 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE');
+    assert.match(mismatch.evidence, /módulos reais de api\.ts: \[billing\.ts\]/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
   }
 });

@@ -1,4 +1,3 @@
-// @ts-ignore: alias sintético resolvido pela configuração da fixture
-import { billing } from '@app/billing';
+import { billing } from './billing.js';
 /** API. */
 export const api = billing;

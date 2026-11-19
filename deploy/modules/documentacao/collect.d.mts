@@ -53,11 +53,15 @@ export function parseTypedocReport(json: unknown, diagnostics: string, root: str
   symbols: Symbol[];
 };
 export function crossCheckMarkdownAgainstTypedoc(files: string[], symbols: Symbol[], readFile?: ReadFile): Finding[];
-export function parseDepcruiseReport(json: unknown, diagram: string, root: string, blocks?: Block[], readFile?: ReadFile, resolutionPartial?: boolean): {
+export function parseDepcruiseReport(
+  json: unknown, diagram: string, root: string, blocks?: Block[], readFile?: ReadFile, resolutionPartial?: boolean,
+  validDocumentBlocks?: ReadonlySet<Block>,
+): {
   findings: Finding[];
   checkedEdgesByFile: Map<string, number>;
   skippedEdgesByFile: Map<string, number>;
-  stats: {checkedEdges: number; skippedEdges: number; edgeMismatches: number};
+  unmeasuredByFile: Map<string, number>;
+  stats: {checkedEdges: number; skippedEdges: number; unmeasured: number; edgeMismatches: number};
 };
 export function validateMermaidDocuments(
   files: string[], blocks: Block[], repositoryFiles: ReadonlySet<string>, parse: MermaidParse, generated?: string,

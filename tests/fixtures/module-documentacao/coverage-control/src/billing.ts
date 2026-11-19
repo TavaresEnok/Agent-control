@@ -1,3 +1,5 @@
+import { third } from './third.js';
+
 /** First.
  * @param legacy valid parameter
  */
@@ -19,4 +21,4 @@ export interface Contract {
   submit(value: string): void;
 }
 /** Billing value. */
-export const billing = 1;
+export const billing = third;

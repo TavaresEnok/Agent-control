@@ -21,6 +21,7 @@ import {
 import {createRequire} from 'node:module';
 import {dirname, extname, join, posix, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {isDeepStrictEqual} from 'node:util';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -78,6 +79,19 @@ const UNTRUSTED_CONFIG_FILES = new Set([
 
 const JS_TS_EXTS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 const DOC_EXTS = new Set(['.md', '.markdown', '.mmd', '.mermaid']);
+const SNAPSHOT_COMPILER_OPTIONS = {
+  target: 'ES2022',
+  module: 'ESNext',
+  moduleResolution: 'bundler',
+  allowJs: true,
+  checkJs: false,
+  strict: false,
+  skipLibCheck: true,
+  noEmit: true,
+  types: [],
+  plugins: [],
+};
+const TYPE_CHECK_ONLY_OPTIONS = new Set(['checkJs', 'strict', 'skipLibCheck', 'noEmit']);
 
 function toPosix(value) {
   return String(value ?? '').replace(/\\/g, '/');
@@ -277,24 +291,47 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
  */
 export function sanitizeTsConfigInWork(workRepoDir, codeFiles = []) {
   const safeConfig = {
-    compilerOptions: {
-      target: 'ES2022',
-      module: 'ESNext',
-      moduleResolution: 'bundler',
-      allowJs: true,
-      checkJs: false,
-      strict: false,
-      skipLibCheck: true,
-      noEmit: true,
-      types: [],
-      plugins: [],
-    },
+    compilerOptions: SNAPSHOT_COMPILER_OPTIONS,
     files: codeFiles.map(file => `./${file}`),
   };
 
   const tsConfigPath = join(workRepoDir, 'tsconfig.json');
   writeFileSync(tsConfigPath, JSON.stringify(safeConfig, null, 2));
   return tsConfigPath;
+}
+
+function measureResolutionCoverage(copiedFiles, skipped, readFile) {
+  const isConfigFile = file => /(^|\/)(?:ts|js)config[^/]*\.json$/i.test(file);
+  if (skipped.some(file => isConfigFile(file) || file === 'LIMITE_ARQUIVOS' || file.endsWith('/[ilegivel]')
+    || JS_TS_EXTS.has(extname(file).toLowerCase()) || posix.basename(file) === 'package.json')) {
+    return 'arquivo de código, manifesto ou configuração omitido do snapshot';
+  }
+  for (const file of copiedFiles.filter(isConfigFile)) {
+    try {
+      const config = JSON.parse(readFile(file));
+      if (!config || typeof config !== 'object' || Array.isArray(config)) return `configuração não analisada em ${file}`;
+      if (Object.hasOwn(config, 'extends') || Object.hasOwn(config, 'references')) return `extends ou references em ${file}`;
+
+      const options = config.compilerOptions;
+      if (!options || typeof options !== 'object' || Array.isArray(options)) return `compilerOptions não analisado em ${file}`;
+      // Only settings known to match the snapshot or unrelated to resolution are measured.
+      // In particular, omitted resolution modes use TypeScript defaults, not the snapshot defaults.
+      const changed = Object.entries(options).find(([key, value]) => {
+        if (TYPE_CHECK_ONLY_OPTIONS.has(key)) return typeof value !== 'boolean';
+        const expected = SNAPSHOT_COMPILER_OPTIONS[key];
+        return typeof expected === 'string'
+          ? typeof value !== 'string' || value.toLowerCase() !== expected.toLowerCase()
+          : !Object.hasOwn(SNAPSHOT_COMPILER_OPTIONS, key) || !isDeepStrictEqual(value, expected);
+      });
+      if (changed) return `opção ${JSON.stringify(changed[0])} em ${file}`;
+      if (!Object.hasOwn(options, 'module') || !Object.hasOwn(options, 'moduleResolution')) {
+        return `modo de resolução implícito em ${file}`;
+      }
+    } catch {
+      return `configuração não analisada em ${file}`;
+    }
+  }
+  return '';
 }
 
 function escapeRegExp(value) {
@@ -463,7 +500,16 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     if (!/^\s*(?:@[^\n]*\n\s*)*(?:(?:export|declare|public|static|async|abstract|readonly|default)\s+)*[^\n]*$/.test(between)) return clampLine(sym.line);
     const comment = prefix.slice(offset, close + 2);
     const commentLines = comment.split('\n');
-    const index = commentLines.findIndex(text => matcher.test(text));
+    let fence = null;
+    const index = commentLines.findIndex(text => {
+      const content = text.replace(/^\s*(?:\/\*\*|\*)[ \t]?/, '');
+      if (fence) {
+        if (closesFence(content, fence)) fence = null;
+        return false;
+      }
+      fence = openingFence(content);
+      return !fence && matcher.test(text);
+    });
     return index < 0 ? clampLine(sym.line) : prefix.slice(0, offset).split('\n').length + index;
   };
 
@@ -483,7 +529,8 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const sym = resolveSymbol(sigName);
       if (!sym) continue;
       const file = sym.file;
-      const line = findInSymbolComment(sym, new RegExp(`@param\\s+(?:\\{[^}]+\\}\\s+)?${escapeRegExp(paramName)}\\b`));
+      const paramTag = new RegExp(String.raw`^\s*(?:/\*\*\s*|\*\s*)?@param\s+(?:\{[^}]+\}\s+)?\[?${escapeRegExp(paramName)}(?=\s|[\]=]|\*/|$)`);
+      const line = findInSymbolComment(sym, paramTag);
       const dedupKey = `PARAM:${file}:${sigName}:${paramName}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
@@ -683,81 +730,102 @@ export function extractMermaidBlocks(docFiles, readFileFn = () => '') {
 }
 
 /**
- * Extrai referências a caminhos de módulos (.ts, .tsx, .js, .mjs, .cjs) e arestas entre módulos
- * dentro de um bloco Mermaid.
+ * Extrai o subconjunto de flowcharts que pode ser comparado com um grafo de imports.
+ * A leitura de uma cadeia só é aceita quando toda a instrução foi reconhecida.
  */
 export function extractMermaidModuleReferences(block) {
-  const nodeLabelToModule = new Map();
   const moduleNodes = [];
-  const moduleEdges = [];
+  const chains = [];
+  let unmeasured = 0;
+  let hasHeader = false;
 
-  // Mermaid comments begin at %% outside quoted labels and cannot declare nodes.
-  const lines = String(block.code ?? '').split(/\r?\n/).map(line => {
-    let quote = '';
-    for (let i = 0; i < line.length; i += 1) {
-      if (quote && line[i] === '\\') { i += 1; continue; }
-      if (line[i] === quote) quote = '';
-      else if (!quote && (line[i] === '"' || line[i] === "'")) quote = line[i];
-      else if (!quote && line.slice(i, i + 2) === '%%') return line.slice(0, i);
+  const quoted = String.raw`"(?:\\.|[^"\\])*"`;
+  const id = String.raw`(?:[\w/]|-(?![-.])|\.(?!-))+`; // Leave the first character of an arrow for the link lexer.
+  const label = String.raw`(?:${quoted}|[^"\[\](){}\r\n])*`;
+  const shape = String.raw`(?:\[\[(${label})\]\]|\[\((${label})\)\]|\(\((${label})\)\)|\[(${label})\]|\((${label})\)|\{\{(${label})\}\}|\{(${label})\})`;
+  const node = new RegExp(String.raw`\s*(${id})(?:\s*${shape})?(?::::[\w-]+)?\s*`, 'y');
+  const linkLabel = String.raw`(?:${quoted}|[^"\[\]{}<>=|;.-]|[-.=](?![-.=>]))+?`;
+  const direct = String.raw`(<?)(?:--+>|==+>|-\.+-+>)`;
+  const inline = String.raw`(<?)(?:--(?![-ox])${linkLabel}--+>|==(?!=)${linkLabel}\s==+>|-\.${linkLabel}\.+-+>)`;
+  const link = new RegExp(String.raw`(?:${direct}(?:\s*\|(?:${quoted}|[^"|])*\|)?|${inline})`, 'y');
+  const modulePath = /(?:^|[^\p{L}\p{N}\p{M}_./-])([\p{L}\p{N}\p{M}_./-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs))(?![\p{L}\p{N}\p{M}_./-])/u;
+  const moduleFor = text => {
+    const match = text.match(modulePath);
+    return match ? normalizeRepoPath(match[1]) : null;
+  };
+
+  for (const [index, rawLine] of String(block.code ?? '').split(/\r?\n/).entries()) {
+    const text = rawLine.trim();
+    if (!text || text.startsWith('%%')) continue;
+    let cursor = 0;
+    if (!hasHeader) {
+      const header = /^(?:flowchart|graph)(?:\s+(?:TB|TD|BT|RL|LR))?(?:\s*;\s*|\s*$)/.exec(text);
+      if (!header) return {moduleNodes: [], moduleEdges: [], unmeasured: 1};
+      hasHeader = true;
+      cursor = header[0].length;
     }
-    return line;
-  });
-  const modulePathRegex = /\b([A-Za-z0-9_./-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs))\b/;
-
-  // Primeira passagem: mapeia IDs de nós que declaram caminhos de arquivo, ex: A["src/api.ts"]
-  for (let i = 0; i < lines.length; i += 1) {
-    const lineText = lines[i];
-    const lineNo = block.startLine + i;
-    const nodeDefRegex = /\b([A-Za-z0-9_.-]+)\s*(?:\["([^"]+)"\]|\['([^']+)'\]|\[([^\]]+)\]|\("([^"]+)"\)|\(([^)]+)\))/g;
-    let match;
-    while ((match = nodeDefRegex.exec(lineText)) !== null) {
-      const nodeId = match[1];
-      const rawLabel = (match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? '').trim();
-      const pathMatch = rawLabel.match(modulePathRegex);
-      if (pathMatch) {
-        const modPath = normalizeRepoPath(pathMatch[1]);
-        nodeLabelToModule.set(nodeId, modPath);
-        moduleNodes.push({
-          nodeId,
-          modulePath: modPath,
-          line: lineNo,
-          rawLine: lineText.trim(),
-        });
+    const line = block.startLine + index;
+    while (cursor < text.length) {
+      node.lastIndex = cursor;
+      const first = node.exec(text);
+      if (!first) {
+        unmeasured += 1;
+        break;
       }
+      const nodes = [first];
+      const links = [];
+      cursor = node.lastIndex;
+      while (cursor < text.length && text[cursor] !== ';') {
+        link.lastIndex = cursor;
+        const arrow = link.exec(text);
+        if (!arrow) break;
+        node.lastIndex = link.lastIndex;
+        const next = node.exec(text);
+        if (!next) break;
+        nodes.push(next);
+        links.push(arrow);
+        cursor = node.lastIndex;
+      }
+      if (cursor < text.length && text[cursor] !== ';') {
+        unmeasured += 1;
+        break;
+      }
+      for (const [, nodeId, ...labels] of nodes) {
+        const path = moduleFor(labels.find(value => value !== undefined) ?? '');
+        if (path) moduleNodes.push({nodeId, modulePath: path, line, rawLine: text});
+      }
+      chains.push({ids: nodes.map(match => match[1]), links, line, rawLine: text});
+      cursor += 1;
     }
   }
 
-  // Segunda passagem: identifica arestas A --> B onde ambos representam módulos de código
-  for (let i = 0; i < lines.length; i += 1) {
-    const lineText = lines[i];
-    const lineNo = block.startLine + i;
-    const node = String.raw`([A-Za-z0-9_./-]+)(?:\s*(?:\["[^"]+"\]|\['[^']+'\]|\[[^\]]+\]|\("[^"]+"\)|\([^)]+\)))?`;
-    const arrow = String.raw`\s*(?:--+>|==+>|\.-+>)\s*(?:\|[^|]*\|\s*)?`;
-    const first = new RegExp(`^\\s*${node}${arrow}${node}`).exec(lineText);
-    if (!first) continue;
-    let leftId = first[1];
-    let rightId = first[2];
-    let end = first[0].length;
-    while (true) {
-      const leftMod = nodeLabelToModule.get(leftId) ?? (modulePathRegex.test(leftId) ? normalizeRepoPath(leftId) : null);
-      const rightMod = nodeLabelToModule.get(rightId) ?? (modulePathRegex.test(rightId) ? normalizeRepoPath(rightId) : null);
-      if (leftMod && rightMod) moduleEdges.push({from: leftMod, to: rightMod, line: lineNo, rawLine: lineText.trim()});
-      const next = new RegExp(`^${arrow}${node}`).exec(lineText.slice(end));
-      if (!next) break;
-      leftId = rightId;
-      rightId = next[1];
-      end += next[0].length;
+  const modulesById = new Map();
+  for (const {nodeId, modulePath: path} of moduleNodes) {
+    if (!modulesById.has(nodeId)) modulesById.set(nodeId, path);
+    else if (modulesById.get(nodeId) !== path) modulesById.set(nodeId, null);
+  }
+  const resolveId = value => modulesById.has(value) ? modulesById.get(value) : moduleFor(value);
+  const moduleEdges = [];
+  for (const {ids, links, line, rawLine} of chains) {
+    for (const [index, arrow] of links.entries()) {
+      const from = resolveId(ids[index]);
+      const to = resolveId(ids[index + 1]);
+      if (!from || !to) {
+        if (from || to || modulesById.has(ids[index]) || modulesById.has(ids[index + 1])) unmeasured += 1;
+        continue;
+      }
+      moduleEdges.push({from, to, line, rawLine});
+      if ((arrow[1] || arrow[2]) && from !== to) moduleEdges.push({from: to, to: from, line, rawLine});
     }
   }
-
-  return {moduleNodes, moduleEdges};
+  return {moduleNodes, moduleEdges, unmeasured};
 }
 
 /**
  * Analisa o relatório JSON e o diagrama Mermaid gerados pelo dependency-cruiser e
  * confere o grafo real contra os diagramas de arquitetura documentados no repositório.
  */
-export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermaidBlocks = [], readFileFn = () => '', resolutionPartial = false) {
+export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermaidBlocks = [], readFileFn = () => '', resolutionPartial = false, validDocumentBlocks) {
   const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
   if (!data || typeof data !== 'object' || !Array.isArray(data.modules)) {
     throw new Error('Saída JSON do dependency-cruiser inválida: campo modules ausente');
@@ -767,7 +835,9 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
   const perFileCoverage = [];
   const realModules = new Set();
   const realEdges = new Map(); // from -> Set(to)
-  const unresolvedSources = new Set();
+  const incompleteSources = new Set();
+  const environmentIssues = data.summary?.environment?.issues?.length > 0;
+  const canCompare = !resolutionPartial && !environmentIssues;
   let totalDependencies = 0;
   let unresolvedCount = 0;
   let circularCount = 0;
@@ -782,7 +852,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
 
   for (const mod of data.modules) {
     if (!mod || typeof mod !== 'object' || typeof mod.source !== 'string') continue;
-    if (mod.coreModule) continue;
+    if (mod.coreModule || mod.couldNotResolve) continue;
     const srcRel = normalizeRepoPath(mod.source, repoRoot);
     if (srcRel === '.' || srcRel.startsWith('node_modules/')) continue;
 
@@ -790,6 +860,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
     if (!realEdges.has(srcRel)) realEdges.set(srcRel, new Set());
 
     const deps = Array.isArray(mod.dependencies) ? mod.dependencies : [];
+    if (!Array.isArray(mod.dependencies) || mod.matchesDoNotFollow || mod.followable === false) incompleteSources.add(srcRel);
     const dependents = Array.isArray(mod.dependents) ? mod.dependents : [];
     let localDepsCount = 0;
 
@@ -806,7 +877,11 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
     };
 
     for (const dep of deps) {
-      if (!dep || typeof dep !== 'object') continue;
+      const resolved = typeof dep?.resolved === 'string' && dep.resolved.length > 0;
+      if (!dep || typeof dep !== 'object' || (!dep.coreModule && !dep.couldNotResolve && !resolved)) {
+        incompleteSources.add(srcRel);
+        continue;
+      }
       totalDependencies += 1;
 
       if (dep.resolved && !dep.coreModule && !dep.couldNotResolve) {
@@ -817,9 +892,9 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
         }
       }
 
-      if (dep.couldNotResolve) unresolvedSources.add(srcRel);
+      if (dep.couldNotResolve) incompleteSources.add(srcRel);
       const depSpec = String(dep.module ?? '');
-      if (dep.couldNotResolve && depSpec.startsWith('.')) {
+      if (canCompare && dep.couldNotResolve && depSpec.startsWith('.')) {
         unresolvedCount += 1;
         const line = findLineInText(getFileText(), depSpec);
         findings.push({
@@ -865,25 +940,24 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
   let edgeMismatches = 0;
   let skippedEdges = 0;
   const skippedEdgesByFile = new Map();
+  const unmeasuredByFile = new Map();
   for (const block of mermaidBlocks) {
-    const {moduleEdges} = extractMermaidModuleReferences(block);
     if (!checkedEdgesByFile.has(block.file)) checkedEdgesByFile.set(block.file, 0);
+    const {moduleEdges, unmeasured} = extractMermaidModuleReferences(block);
+    const valid = !validDocumentBlocks || validDocumentBlocks.has(block);
+    const unknown = valid ? unmeasured : Math.max(1, unmeasured);
+    unmeasuredByFile.set(block.file, (unmeasuredByFile.get(block.file) ?? 0) + unknown);
     for (const edge of moduleEdges) {
       const resolvedFrom = resolveModuleAlias(edge.from);
       const resolvedTo = resolveModuleAlias(edge.to);
-      if (!resolvedFrom || !resolvedTo || resolutionPartial || unresolvedSources.has(resolvedFrom)) {
+      if (!valid || !canCompare || !resolvedFrom || !resolvedTo || incompleteSources.has(resolvedFrom)) {
         skippedEdges += 1;
         skippedEdgesByFile.set(block.file, (skippedEdgesByFile.get(block.file) ?? 0) + 1);
         continue;
       }
       checkedEdges += 1;
       checkedEdgesByFile.set(block.file, checkedEdgesByFile.get(block.file) + 1);
-      const hasEdge =
-        resolvedFrom !== null &&
-        resolvedTo !== null &&
-        Boolean(realEdges.get(resolvedFrom)?.has(resolvedTo));
-
-      if (!hasEdge) {
+      if (!realEdges.get(resolvedFrom)?.has(resolvedTo)) {
         edgeMismatches += 1;
         findings.push({
           tool: 'dependency-cruiser',
@@ -892,7 +966,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
           line: edge.line,
           severity: 'alta',
           message: `Diagrama em ${block.file} documenta a dependência "${edge.from} -> ${edge.to}", que não existe no grafo real extraído pelo dependency-cruiser.`,
-          evidence: `aresta documentada: ${edge.rawLine} | módulos reais de ${edge.from}: [${resolvedFrom ? [...(realEdges.get(resolvedFrom) ?? [])].join(', ') : 'módulo ausente'}]`,
+          evidence: `aresta documentada: ${edge.rawLine} | módulos reais de ${edge.from}: [${[...(realEdges.get(resolvedFrom) ?? [])].join(', ')}]`,
         });
       }
     }
@@ -905,6 +979,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
     perFileCoverage,
     checkedEdgesByFile,
     skippedEdgesByFile,
+    unmeasuredByFile,
     stats: {
       totalModules: realModules.size,
       totalDependencies,
@@ -912,6 +987,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
       circularCount,
       checkedEdges,
       skippedEdges,
+      unmeasured: [...unmeasuredByFile.values()].reduce((total, count) => total + count, 0),
       edgeMismatches,
       hasMermaidDiagram,
     },
@@ -925,6 +1001,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
 export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFilesSet, mermaidParseFn, generatedMermaid = '') {
   const findings = [];
   const perFileStats = new Map();
+  const validDocumentBlocks = new Set();
   for (const docFile of docFiles) {
     perFileStats.set(docFile, {blocks: 0, valid: 0, invalid: 0, moduleRefsChecked: 0});
   }
@@ -984,6 +1061,7 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
     }
     validBlocks += 1;
     fileStat.valid += 1;
+    validDocumentBlocks.add(block);
 
     const {moduleNodes} = extractMermaidModuleReferences(block);
     const seenMissing = new Set();
@@ -1007,6 +1085,7 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
   return {
     findings,
     perFileStats,
+    validDocumentBlocks,
     stats: {
       totalDocFiles: docFiles.length,
       totalBlocks: mermaidBlocks.length,
@@ -1164,26 +1243,10 @@ export async function runCollector(opts = {}) {
     const repoFilesSet = new Set(copiedFiles);
     const readWorkFile = rel => readFileSync(join(workRepoDir, rel), 'utf8');
 
-    // The isolated config deliberately does not consume project configs. A path map,
-    // inheritance, or an unreadable/skipped config can affect resolution anywhere;
-    // conservatively report partial coverage rather than invent missing edges.
-    const isConfigFile = file => /(^|\/)(?:ts|js)config[^/]*\.json$/i.test(file);
-    const configFiles = copiedFiles.filter(isConfigFile);
-    const resolutionPartial = configFiles.some(file => {
-      try {
-        const config = JSON.parse(readWorkFile(file));
-        if (!config || typeof config !== 'object' || Array.isArray(config)) return true;
-        const options = config.compilerOptions;
-        return Object.hasOwn(config, 'extends') ||
-          (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options) || Object.hasOwn(options, 'paths')));
-      } catch {
-        // JSONC, malformed or unsupported configs cannot prove that paths are absent.
-        return true;
-      }
-    }) || skipped.some(file => isConfigFile(file) || file === 'LIMITE_ARQUIVOS' || file.endsWith('/[ilegivel]'));
-    if (resolutionPartial) coverage.push({
+    const resolutionGap = measureResolutionCoverage(copiedFiles, skipped, readWorkFile);
+    if (resolutionGap) coverage.push({
       tool: 'dependency-cruiser:resolucao', version: versions.depcruise, status: 'skipped',
-      detail: 'cobertura parcial: configuração TypeScript/JavaScript com paths/extends, formato não analisado ou configuração omitida não é aplicada ao snapshot isolado; arestas documentadas não são comparadas',
+      detail: `cobertura parcial: ${resolutionGap}; arestas documentadas não são comparadas`,
     });
 
     const codeFiles = copiedFiles.filter(
@@ -1306,6 +1369,7 @@ export async function runCollector(opts = {}) {
 
     // 2. dependency-cruiser (grafo JSON + geração de diagrama Mermaid do código + conferência contra docs)
     let generatedMermaid = '';
+    let graph;
     if (codeFiles.length === 0) {
       coverage.push({
         tool: 'dependency-cruiser',
@@ -1336,42 +1400,9 @@ export async function runCollector(opts = {}) {
           ),
           file,
         );
-        const graph = cruise('json', depJsonPath);
+        const json = cruise('json', depJsonPath);
         generatedMermaid = cruise('mermaid', depMmdPath);
-        const parsedDep = parseDepcruiseReport(graph, generatedMermaid, workRepoDir, mermaidBlocks, readWorkFile, resolutionPartial);
-        findings.push(...parsedDep.findings.filter(finding => repoFilesSet.has(finding.file)));
-        appendArtifact(coverage, 'dependency-cruiser:artefato', versions.depcruise, 'dependencias.mmd', generatedMermaid);
-
-        coverage.push({
-          tool: 'dependency-cruiser',
-          version: versions.depcruise,
-          status: 'ok',
-          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, diagrama_mermaid_gerado=${parsedDep.stats.hasMermaidDiagram ? 'sim' : 'nao'}, arestas_doc_conferidas=${parsedDep.stats.checkedEdges}, arestas_doc_nao_conferidas=${parsedDep.stats.skippedEdges}, divergencias=${parsedDep.stats.edgeMismatches}`,
-        });
-
-        for (const row of parsedDep.perFileCoverage.filter(row => repoFilesSet.has(row.file))) {
-          coverage.push({
-            tool: 'dependency-cruiser:file',
-            version: versions.depcruise,
-            status: 'ok',
-            detail: `arquivo=${row.file}; deps=${row.deps}; dependentes=${row.dependents}; orfao=${row.orphan ? 'sim' : 'nao'}`,
-          });
-        }
-        const graphedFiles = new Set(parsedDep.perFileCoverage.map(row => row.file));
-        for (const file of codeFiles) {
-          if (!graphedFiles.has(file)) {
-            coverage.push({
-              tool: 'dependency-cruiser:file', version: versions.depcruise, status: 'skipped',
-              detail: `arquivo=${file}; ausente no grafo gerado`,
-            });
-          }
-        }
-        for (const [file, count] of parsedDep.checkedEdgesByFile) {
-          coverage.push({
-            tool: 'dependency-cruiser:diagrama', version: versions.depcruise, status: count > 0 ? 'ok' : 'skipped',
-            detail: `arquivo=${file}; arestas_doc_conferidas=${count}; arestas_doc_nao_conferidas=${parsedDep.skippedEdgesByFile.get(file) ?? 0}`,
-          });
-        }
+        graph = json;
       } catch (err) {
         coverage.push({
           tool: 'dependency-cruiser',
@@ -1382,6 +1413,7 @@ export async function runCollector(opts = {}) {
       }
     }
 
+    let validDocumentBlocks = new Set();
     // 3. Mermaid (validação sintática e estrutural dos diagramas documentados e do diagrama gerado)
     if (mermaidBlocks.length === 0 && !generatedMermaid) {
       coverage.push({
@@ -1400,6 +1432,7 @@ export async function runCollector(opts = {}) {
           mermaidParseFn,
           generatedMermaid,
         );
+        validDocumentBlocks = parsedMermaid.validDocumentBlocks;
         findings.push(...parsedMermaid.findings);
 
         coverage.push({
@@ -1423,6 +1456,63 @@ export async function runCollector(opts = {}) {
           version: versions.mermaid,
           status: 'failed',
           detail: `falha ao executar mermaid: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+        });
+      }
+    }
+
+    let comparison;
+    if (graph !== undefined) {
+      try {
+        const parsedDep = parseDepcruiseReport(
+          graph, generatedMermaid, workRepoDir, mermaidBlocks, readWorkFile, Boolean(resolutionGap), validDocumentBlocks,
+        );
+        comparison = parsedDep;
+        findings.push(...parsedDep.findings.filter(finding => repoFilesSet.has(finding.file)));
+        appendArtifact(coverage, 'dependency-cruiser:artefato', versions.depcruise, 'dependencias.mmd', generatedMermaid);
+
+        coverage.push({
+          tool: 'dependency-cruiser',
+          version: versions.depcruise,
+          status: 'ok',
+          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, diagrama_mermaid_gerado=${parsedDep.stats.hasMermaidDiagram ? 'sim' : 'nao'}, arestas_doc_conferidas=${parsedDep.stats.checkedEdges}, arestas_doc_nao_conferidas=${parsedDep.stats.skippedEdges}, trechos_doc_nao_medidos=${parsedDep.stats.unmeasured}, divergencias=${parsedDep.stats.edgeMismatches}`,
+        });
+
+        for (const row of parsedDep.perFileCoverage.filter(row => repoFilesSet.has(row.file))) {
+          coverage.push({
+            tool: 'dependency-cruiser:file',
+            version: versions.depcruise,
+            status: 'ok',
+            detail: `arquivo=${row.file}; deps=${row.deps}; dependentes=${row.dependents}; orfao=${row.orphan ? 'sim' : 'nao'}`,
+          });
+        }
+        const graphedFiles = new Set(parsedDep.perFileCoverage.map(row => row.file));
+        for (const file of codeFiles) {
+          if (!graphedFiles.has(file)) {
+            coverage.push({
+              tool: 'dependency-cruiser:file', version: versions.depcruise, status: 'skipped',
+              detail: `arquivo=${file}; ausente no grafo gerado`,
+            });
+          }
+        }
+      } catch (err) {
+        coverage.push({
+          tool: 'dependency-cruiser',
+          version: versions.depcruise,
+          status: 'failed',
+          detail: `falha ao ler o grafo do dependency-cruiser: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+        });
+      }
+    }
+    if (mermaidBlocks.length) {
+      comparison ??= parseDepcruiseReport(
+        {modules: []}, '', workRepoDir, mermaidBlocks, readWorkFile, true, validDocumentBlocks,
+      );
+      for (const [file, checked] of comparison.checkedEdgesByFile) {
+        coverage.push({
+          tool: 'dependency-cruiser:diagrama',
+          version: versions.depcruise,
+          status: checked > 0 ? 'ok' : 'skipped',
+          detail: `arquivo=${file}; arestas_doc_conferidas=${checked}; arestas_doc_nao_conferidas=${comparison.skippedEdgesByFile.get(file) ?? 0}; trechos_doc_nao_medidos=${comparison.unmeasuredByFile.get(file) ?? 0}`,
         });
       }
     }
