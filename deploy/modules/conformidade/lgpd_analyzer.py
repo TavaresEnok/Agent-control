@@ -1,6 +1,8 @@
 """Sinais estáticos de tratamento e reconhecimento de PII sem exportar valores."""
 
 from bisect import bisect_right
+from contextlib import contextmanager
+import logging
 import re
 
 TEXT_SUFFIXES = {
@@ -22,6 +24,19 @@ SINKS = [
     ("NETWORK", re.compile(r"\b(?:fetch\s*\(|(?:axios|requests|httpx|httpxClient)\.(?:post|put|patch|request)\s*\()")),
     ("STORAGE", re.compile(r"\b(?:localStorage\.setItem\s*\(|INSERT\s+INTO\b|UPDATE\s+\w+\s+SET\b)", re.IGNORECASE)),
 ]
+JS_SUFFIXES = (".js", ".jsx", ".mjs", ".ts", ".tsx")
+JS_TRIVIA = re.compile(r'''//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)|(["'`])(?:\\[\s\S]|(?!\1)[^\\])*\1''')
+JS_ASSIGNMENT = r"(?<![\w$.])(?P<binding>[A-Za-z_$][\w$]*)[ \t]*=(?![=>])"
+JS_EVENTS = re.compile(
+    "|".join([JS_ASSIGNMENT, r"(?P<block>[{}])"] +
+             [f"(?P<{kind}>(?{'i' if sink.flags & re.IGNORECASE else ''}:{sink.pattern}))"
+              for kind, sink in SINKS]),
+)
+JS_DELIMITERS = re.compile(r"[(){}\[\],;\n]")
+JS_REFERENCE = re.compile(r"\.\s*[\w$]+|(?<![\w$])(?P<name>[A-Za-z_$][\w$]*)(?![\w$]|\s*:)")
+JS_EXPRESSION_LIMIT = 4096
+PRESIDIO_LOG = logging.getLogger("presidio-analyzer")
+PRESIDIO_TIMEOUT = "Regex pattern '%s' timed out after %s seconds, skipping."
 
 
 def valid_cpf(value):
@@ -35,21 +50,81 @@ def valid_cpf(value):
     return True
 
 
+def js_expression(code, start, closing=None):
+    end = min(len(code), start + JS_EXPRESSION_LIMIT)
+    stack = [closing] if closing else []
+    for match in JS_DELIMITERS.finditer(code, start, end):
+        token = match.group()
+        if not stack and token in (",", ";", "\n", "}", ")", "]"):
+            return code[start:match.start()]
+        if token in "({[":
+            stack.append({"(": ")", "{": "}", "[": "]"}[token])
+        elif stack and token in ")}]":
+            if token != stack.pop():
+                return ""
+            if closing and not stack:
+                return code[start:match.start()]
+    return code[start:end] if not stack and end == len(code) else ""
+
+
+def js_destinations(text):
+    # Keep offsets while ignoring comments and literals in the cross-line heuristic.
+    def mask(match):
+        blank = re.sub(r"[^\n]", " ", match.group())
+        return "0" + blank[1:] if match.group(1) else blank
+
+    code = JS_TRIVIA.sub(mask, text)
+    newlines = [match.start() for match in re.finditer("\n", code)]
+    blocks = [{}]
+
+    def source(expression, start):
+        field = FIELD.search(expression)
+        if field:
+            return bisect_right(newlines, start + field.start()) + 1
+        for reference in JS_REFERENCE.finditer(expression):
+            line = blocks[-1].get(reference.group("name"))
+            if line is not None:
+                return line
+        return None
+
+    for match in JS_EVENTS.finditer(code):
+        kind = match.lastgroup
+        if kind == "block":
+            if match.group() == "{":
+                blocks.append({})
+            elif len(blocks) > 1:
+                blocks.pop()
+        elif kind == "binding":
+            start = match.end()
+            while start < len(code) and code[start].isspace():
+                start += 1
+            blocks[-1][match.group("binding")] = source(js_expression(code, start), start)
+        elif match.group().endswith("("):
+            start = match.end()
+            line = source(js_expression(code, start, closing=")"), start)
+            if line is not None:
+                yield bisect_right(newlines, match.start()) + 1, kind, line
+
+
 def inspect_fields(text, file, report):
     sources = observations = 0
+    cross_line = {}
+    if file.lower().endswith(JS_SUFFIXES):
+        for number, kind, line in js_destinations(text):
+            cross_line.setdefault(number, {}).setdefault(kind, line)
     for number, line in enumerate(text.splitlines(), 1):
-        if not FIELD.search(line):
-            continue
-        sources += 1
-        destinations = [kind for kind, sink in SINKS if sink.search(line)]
-        for kind in destinations:
+        has_field = bool(FIELD.search(line))
+        sources += has_field
+        destinations = {kind: number for kind, sink in SINKS if has_field and sink.search(line)}
+        destinations.update(cross_line.get(number, {}))
+        for kind, origin in destinations.items():
             observations += 1
             report.find(
                 "lgpd-static", "PII_POSSIBLE_" + kind, file, number, "media",
                 "Possível tratamento de dado pessoal; confirmar a origem e o destino.",
-                f"Identificador de dado pessoal e chamada da categoria {kind} na mesma linha.",
+                f"Indício de campo de dado pessoal na linha {origin}. Chamada da categoria {kind}.",
             )
-        if not destinations:
+        if has_field and not destinations:
             report.find(
                 "lgpd-static", "PII_FIELD", file, number, "informativa",
                 "Referência a campo de dado pessoal.",
@@ -63,7 +138,7 @@ def create_presidio():
     from tldextract import TLDExtract
     from presidio_analyzer import AnalyzerEngine, Pattern, PatternRecognizer
     from presidio_analyzer.nlp_engine import NerModelConfiguration, SpacyNlpEngine
-    from presidio_analyzer.predefined_recognizers import EmailRecognizer
+    from presidio_analyzer.predefined_recognizers import EmailRecognizer, PhoneRecognizer
 
     models = {"pt": "pt_core_news_sm", "en": "en_core_web_sm"}
     if any(not spacy.util.is_package(model) for model in models.values()):
@@ -85,7 +160,10 @@ def create_presidio():
             model_to_presidio_entity_mapping={"PER": "PERSON", "PERSON": "PERSON"},
         ),
     )
-    analyzer = AnalyzerEngine(nlp_engine=engine, supported_languages=list(models))
+    analyzer = AnalyzerEngine(nlp_engine=engine, supported_languages=list(models), default_score_threshold=0.6)
+    for recognizer in analyzer.get_recognizers(language="en"):
+        if isinstance(recognizer, PhoneRecognizer):
+            recognizer.score_thresholds = {"PHONE_NUMBER": PhoneRecognizer.SCORE}
     analyzer.registry.remove_recognizer("EmailRecognizer", language="en")
     analyzer.registry.add_recognizer(OfflineEmailRecognizer())
     for language in models:
@@ -96,11 +174,36 @@ def create_presidio():
     return analyzer
 
 
-def inspect_entities(analyzer, text, file, version, report):
+class PresidioDiagnostics(logging.Handler):
+    timed_out = False
+
+    def emit(self, record):
+        if record.msg == PRESIDIO_TIMEOUT:
+            self.timed_out = True
+
+
+@contextmanager
+def presidio_diagnostics():
+    # Presidio 2.2.366 reports swallowed timeouts through this shared logger.
+    logger = PRESIDIO_LOG
+    previous = logger.handlers, logger.level, logger.propagate, logger.disabled
+    diagnostics = PresidioDiagnostics()
+    logger.handlers, logger.propagate, logger.disabled = [diagnostics], False, False
+    logger.setLevel(logging.WARNING)
+    try:
+        yield diagnostics
+    finally:
+        logger.handlers, level, logger.propagate, logger.disabled = previous
+        logger.setLevel(level)
+        diagnostics.close()
+
+
+def inspect_entities(analyzer, text, file, version, report, diagnostics):
     starts = [0] + [match.end() for match in re.finditer(r"\n", text)]
     entities = {}
+    diagnostics.timed_out = False
     for language, requested in (("pt", ["BR_CPF", "PERSON"]), ("en", ["EMAIL_ADDRESS", "PHONE_NUMBER", "PERSON"])):
-        for entity in analyzer.analyze(text=text, language=language, entities=requested, score_threshold=0.6):
+        for entity in analyzer.analyze(text=text, language=language, entities=requested):
             line = bisect_right(starts, entity.start)
             entities.setdefault((line, entity.entity_type), set()).add((entity.start, entity.end))
     for (line, kind), matches in sorted(entities.items()):
@@ -109,4 +212,7 @@ def inspect_entities(analyzer, text, file, version, report):
             "Possível dado pessoal presente no texto.",
             f"Entidade {kind}; ocorrências distintas na linha: {len(matches)}. Valor suprimido.",
         )
-    report.cover("presidio-analyzer:file", version, "ok", f"{file} | português e inglês; tipos por linha={len(entities)}")
+    status = "failed" if diagnostics.timed_out else "ok"
+    detail = "tempo limite de padrão atingido. Resultados parciais" if diagnostics.timed_out else "português e inglês"
+    report.cover("presidio-analyzer:file", version, status, f"{file} | {detail}. Tipos por linha={len(entities)}")
+    return not diagnostics.timed_out

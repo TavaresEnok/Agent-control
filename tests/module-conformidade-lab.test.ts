@@ -10,6 +10,12 @@ const run = promisify(execFile);
 const enabled = process.env.AC_MODULE_LAB === '1';
 const root = new URL('../deploy/modules/conformidade/', import.meta.url);
 const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
+const isolated = [
+  'run', '--pull=never', '--rm', '--network', 'none', '--read-only',
+  '--user', '65532:65532', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+  '--pids-limit', '256', '--memory', '2g', '--memory-swap', '2g', '--cpus', '2',
+  '--tmpfs', '/tmp:rw,exec,nosuid,nodev,mode=1777,size=512m',
+];
 
 type Output = {
   coverage: {tool: string; version: string; status: string; detail: string}[];
@@ -18,10 +24,7 @@ type Output = {
 
 async function collect(image: string, fixture: string): Promise<Output> {
   const {stdout} = await run('docker', [
-    'run', '--pull=never', '--rm', '--network', 'none', '--read-only',
-    '--user', '65532:65532', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--pids-limit', '256', '--memory', '2g', '--memory-swap', '2g', '--cpus', '2',
-    '--tmpfs', '/tmp:rw,exec,nosuid,nodev,mode=1777,size=512m',
+    ...isolated,
     '--mount', `type=bind,src=${join(fixtures, fixture)},dst=/repo,readonly`, image,
   ], {timeout: 420_000, maxBuffer: 8 * 1024 * 1024});
   const report = JSON.parse(stdout) as Output;
@@ -75,4 +78,57 @@ test('laboratório C9 detecta licença forte e CPF plantados e verifica o contro
         !['LICENSE_OBLIGATION_REVIEW', 'PII_BR_CPF', 'PII_POSSIBLE_LOG'].includes(row.rule)));
     }
   }
+});
+
+test('laboratório C9 carrega o índice empacotado do ScanCode com HOME sem escrita', {skip: !enabled}, async () => {
+  const image = (await readFile(new URL('digest.txt', root), 'utf8')).trim();
+  assert.match(image, /^(?:[A-Za-z0-9._:/-]+@)?sha256:[a-f0-9]{64}$/);
+  const {stdout} = await run('docker', [
+    ...isolated, '--entrypoint', '/usr/bin/env', image,
+    '-i', 'PATH=/opt/conformidade/venv/bin:/usr/bin:/bin', 'HOME=/tmp/c9-cache-home', 'TMPDIR=/tmp',
+    '/opt/conformidade/venv/bin/python3', '-B', '-c', String.raw`
+import os
+import sys
+from importlib.metadata import version
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+home = Path.home()
+general = home / ".cache" / "scancode-tk" / version("scancode-toolkit")
+general.mkdir(parents=True)
+for directory in (general, *home.rglob("*"), home):
+    directory.chmod(0o555)
+assert os.geteuid() == 65532
+assert not os.access(home, os.W_OK)
+assert not os.access(general, os.W_OK)
+
+from licensedcode import cache
+from licensedcode.index import LicenseIndex
+from scancode_config import licensedcode_cache_dir, scancode_cache_dir
+
+assert Path(scancode_cache_dir) == general
+packed = Path(licensedcode_cache_dir) / cache.LICENSE_INDEX_DIR / cache.LICENSE_INDEX_FILENAME
+assert packed.resolve().is_relative_to(Path(sys.prefix).resolve())
+assert packed.stat().st_size > 0 and not os.access(packed, os.W_OK)
+with patch.object(cache, "load_cache_file", wraps=cache.load_cache_file) as load:
+    with patch.object(cache, "build_index", side_effect=AssertionError("reconstrução inesperada")):
+        assert isinstance(cache.get_index(), LicenseIndex)
+    load.assert_called_once_with(str(packed))
+assert all(path.is_dir() for path in home.rglob("*"))
+
+class CacheMiss(Exception):
+    pass
+
+with TemporaryDirectory() as empty, patch("scancode.lockfile.FileLock", side_effect=CacheMiss) as lock:
+    try:
+        cache.LicenseCache.load_or_build(licensedcode_cache_dir=empty, scancode_cache_dir=empty)
+    except CacheMiss:
+        lock.assert_called_once()
+    else:
+        raise AssertionError("cache vazio deveria seguir para reconstrução")
+print("cache ScanCode carregado")
+`,
+  ], {timeout: 60_000});
+  assert.equal(stdout.trim(), 'cache ScanCode carregado');
 });

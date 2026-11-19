@@ -36,14 +36,14 @@ def write_documents(locks, input_dir, version, report):
             }
 
         packages.append(package(root, "NOASSERTION"))
-        for number, (name, expression, line) in enumerate(entries, 1):
+        for number, (_, expression, line) in enumerate(entries, 1):
             component = f"component-{document_number}-{number}"
             packages.append(package(component, expression))
             relationships.append({
                 "spdxElementId": f"SPDXRef-{root}", "relationshipType": "DEPENDS_ON",
                 "relatedSpdxElement": f"SPDXRef-{component}",
             })
-            picked[f"SpdxDocumentFile::{component}:1"] = (file, name, line)
+            picked[f"SpdxDocumentFile::{component}:1"] = (file, line)
         document = {
             "SPDXID": "SPDXRef-DOCUMENT", "spdxVersion": "SPDX-2.3",
             "creationInfo": {"created": "2024-01-01T00:00:00Z", "creators": ["Tool: conformidade"]},
@@ -57,7 +57,7 @@ def write_documents(locks, input_dir, version, report):
 
 
 def read_results(result, picked, version, report):
-    observed = Counter(file for file, _, _ in picked.values())
+    observed = Counter(file for file, _ in picked.values())
     classified = Counter()
     seen = set()
     for package in result["packages"]:
@@ -65,7 +65,7 @@ def read_results(result, picked, version, report):
         if coordinate not in picked or coordinate in seen:
             raise ValueError("pacote inesperado na saída ORT")
         seen.add(coordinate)
-        file, name, line = picked[coordinate]
+        file, line = picked[coordinate]
         expression = (package.get("declared_licenses_processed") or {}).get("spdx_expression")
         category, normalized = classify(expression)
         if not normalized:
@@ -75,7 +75,7 @@ def read_results(result, picked, version, report):
             report.find(
                 TOOL, "ORT_STRONG_COPYLEFT_DECLARED", file, line, "informativa",
                 "ORT classificou declaração SPDX de copyleft forte no inventário.",
-                f"packages[{name}]; ORT processou a declaração como {normalized}.",
+                f"ORT processou a declaração em packages como {normalized}.",
             )
     for file, count in observed.items():
         report.cover(TOOL + ":file", version, "ok" if classified[file] == count else "failed",

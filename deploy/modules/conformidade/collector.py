@@ -1,7 +1,7 @@
 """Coleta offline de licenças e sinais de tratamento de dados pessoais."""
 
 import argparse
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import json
 import os
 from pathlib import Path
@@ -193,13 +193,19 @@ def inspect_npm(selected, declarations, report):
             continue
         try:
             project_license = None
+            project_origin = None
             manifest = path.with_name("package.json")
             if manifest.is_file():
-                metadata = json.loads(manifest.read_text(encoding="utf-8-sig"))
+                manifest_text = manifest.read_text(encoding="utf-8-sig")
+                metadata = json.loads(manifest_text)
                 if not isinstance(metadata, dict):
                     raise ValueError("manifesto")
                 project_license = metadata.get("license")
-            found = license_policy.inspect_lock(path.read_text(encoding="utf-8-sig"), project_license, file, report)
+                if project_license is not None:
+                    offset, _ = license_policy.object_locations(manifest_text)["license"]
+                    project_origin = (str(Path(file).with_name("package.json")), license_policy.source_line(manifest_text, offset))
+            found = license_policy.inspect_lock(path.read_text(encoding="utf-8-sig"), project_license, file, report,
+                                                project_origin=project_origin)
             if found is not None:
                 eligible += 1
                 declarations.append((file, found))
@@ -216,6 +222,7 @@ def inspect_privacy(selected, version, report):
     static_count = 0
     for file, path in selected.items():
         if path.suffix.lower() not in lgpd.TEXT_SUFFIXES:
+            report.cover("lgpd:file", "1", "skipped", f"{file} | extensão fora do recorte de privacidade")
             continue
         try:
             if path.stat().st_size > lgpd.MAX_TEXT_BYTES:
@@ -227,6 +234,9 @@ def inspect_privacy(selected, version, report):
         except (UnicodeError, ValueError):
             report.cover("lgpd:file", "1", "skipped", f"{file} | conteúdo fora do recorte UTF-8")
             continue
+        except OSError:
+            report.cover("lgpd:file", "1", "failed", f"{file} | leitura do texto falhou")
+            continue
         texts.append((file, text))
         if path.suffix.lower() in lgpd.CODE_SUFFIXES:
             lgpd.inspect_fields(text, file, report)
@@ -237,14 +247,21 @@ def inspect_privacy(selected, version, report):
     if not texts:
         report.cover(PRESIDIO, version, "skipped", "Nenhum texto com extensão, codificação e tamanho elegíveis.")
         return
-    analyzer = lgpd.create_presidio()
     errors = 0
-    for file, text in texts:
+    with lgpd.presidio_diagnostics() as diagnostics:
         try:
-            lgpd.inspect_entities(analyzer, text, file, version, report)
-        except Exception as error:
-            errors += 1
-            report.cover(PRESIDIO + ":file", version, "failed", f"{file} | exame falhou ({type(error).__name__})")
+            analyzer = lgpd.create_presidio()
+        except Exception:
+            for file, _ in texts:
+                report.cover(PRESIDIO + ":file", version, "failed", f"{file} | analisador indisponível")
+            report.cover(PRESIDIO, version, "failed", "Falha ao inicializar o analisador.")
+            return
+        for file, text in texts:
+            try:
+                errors += not lgpd.inspect_entities(analyzer, text, file, version, report, diagnostics)
+            except Exception:
+                errors += 1
+                report.cover(PRESIDIO + ":file", version, "failed", f"{file} | exame interrompido")
     report.cover(PRESIDIO, version, "failed" if errors else "ok",
                  f"{len(texts) - errors}/{len(texts)} textos examinados (CPF, e-mail, telefone, pessoa).")
 
@@ -277,8 +294,8 @@ def main():
     parser.add_argument("--repo", type=Path, required=True)
     args = parser.parse_args()
     report = Report()
-    # All library and subprocess diagnostics stay off the JSON channel.
-    with redirect_stdout(sys.stderr):
+    # Libraries can include source text in warnings and tracebacks.
+    with open(os.devnull, "w") as sink, redirect_stdout(sink), redirect_stderr(sink):
         attempt(report, "conformidade", "1", collect, args.repo, report)
     print(json.dumps(report.output(), ensure_ascii=True))
     return int(report.has_errors)

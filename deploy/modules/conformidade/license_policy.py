@@ -10,6 +10,7 @@ VERSION = "1"
 PERMISSIVE = {"MIT", "ISC", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "Unlicense"}
 STRONG = re.compile(r"(?:A?GPL-[123]\.[01](?:-only|-or-later)?|SSPL-1\.0)")
 DEPENDENCY = re.compile(r"(?:node_modules/(?:@[-\w.]+/)?[-\w.]+/)*node_modules/(?:@[-\w.]+/)?[-\w.]+", re.ASCII)
+JSON_SPACE = re.compile(r"[ \t\r\n]*")
 
 
 def classify(value):
@@ -56,7 +57,32 @@ def get_spdx_parser():
     return get_spdx_licensing()
 
 
-def inspect_lock(text, project_license, file, report):
+def object_locations(text, start=0):
+    """Offsets of immediate JSON object members, after syntax validation."""
+    decode = json.JSONDecoder().raw_decode
+
+    def skip_space(offset):
+        return JSON_SPACE.match(text, offset).end()
+
+    key_start = skip_space(skip_space(start) + 1)
+    locations = {}
+    while text[key_start] != "}":
+        key, key_end = decode(text, key_start)
+        value_start = skip_space(skip_space(key_end) + 1)
+        _, value_end = decode(text, value_start)
+        locations[key] = (key_start, value_start)
+        separator = skip_space(value_end)
+        if text[separator] != ",":
+            break
+        key_start = skip_space(separator + 1)
+    return locations
+
+
+def source_line(text, offset):
+    return 1 + text.count("\n", 0, offset)
+
+
+def inspect_lock(text, project_license, file, report, project_origin=None):
     lock = json.loads(text)
     if not isinstance(lock, dict):
         raise ValueError("lock")
@@ -67,17 +93,20 @@ def inspect_lock(text, project_license, file, report):
     if any(not isinstance(entry, dict) for entry in entries.values()):
         raise ValueError("packages")
 
+    _, packages_start = object_locations(text)["packages"]
+    locations = object_locations(text, packages_start)
     if project_license is None:
         project_license = entries.get("", {}).get("license")
+        if project_license is not None:
+            _, root_start = locations[""]
+            license_start, _ = object_locations(text, root_start)["license"]
+            project_origin = (file, source_line(text, license_start))
     project_category, project_expression = classify(project_license)
     counts = {"classificadas": 0, "sem licença reconhecida": 0, "fora do escopo": 0}
     declared = []
     newlines = [match.start() for match in re.finditer(r"\n", text)]
-    entry_lines = {}
-    for match in re.finditer(r'^([ \t]*"([^"\\]+)"\s*:\s*\{)', text, re.MULTILINE):
-        name = match.group(2)
-        if len(name) <= 400 and DEPENDENCY.fullmatch(name):
-            entry_lines.setdefault(name, bisect_right(newlines, match.start(1)) + 1)
+    strong = {}
+    proprietary = None
     for name, entry in entries.items():
         if name == "":
             continue
@@ -89,21 +118,38 @@ def inspect_lock(text, project_license, file, report):
             counts["sem licença reconhecida"] += 1
             continue
         counts["classificadas"] += 1
-        line = entry_lines.get(name, 1)
+        line = bisect_right(newlines, locations[name][0]) + 1
         if expression != "UNLICENSED":
             declared.append((name, expression, line))
-        release = entry.get("version")
-        at_release = f" versão {release}" if isinstance(release, str) and re.fullmatch(r"[0-9A-Za-z.+-]{1,80}", release) else ""
         report.find(
             TOOL, "LICENSE_DEPENDENCY_DECLARED", file, line, "informativa",
             "Licença de dependência declarada no lockfile.",
-            f"packages[{name}]{at_release} declara {expression}.",
+            f"Declaração em packages: {expression}.",
         )
-        if category in {"copyleft forte", "proprietária"} and project_category == "permissiva":
+        if (category == "copyleft forte" and project_category in {"permissiva", "proprietária"}) or (
+            category == "proprietária" and project_category == "permissiva"
+        ):
+            origin = f" em {project_origin[0]} linha {project_origin[1]}" if project_origin else ""
             report.find(
                 TOOL, "LICENSE_OBLIGATION_REVIEW", file, line, "media",
-                "Licença de dependência requer revisão das condições de distribuição.",
-                f"packages[{name}] declara {expression}; projeto declara {project_expression}.",
+                "Triagem das condições de distribuição entre projeto e dependência.",
+                f"Dependência declara {expression}. Projeto declara {project_expression}{origin}.",
+            )
+        counterparts = []
+        if category == "copyleft forte":
+            counterparts = [proprietary, next(((other, at) for other, at in strong.items() if other != expression), None)]
+            strong.setdefault(expression, line)
+        elif category == "proprietária":
+            counterparts = [next(iter(strong.items()), None)]
+            proprietary = proprietary or (expression, line)
+        for counterpart in counterparts:
+            if counterpart is None:
+                continue
+            other, at = counterpart
+            report.find(
+                TOOL, "LICENSE_DEPENDENCY_OBLIGATION_REVIEW", file, line, "media",
+                "Triagem das condições de distribuição entre dependências do lockfile.",
+                f"Dependência declara {expression}. Outra dependência declara {other} neste lockfile, linha {at}.",
             )
     project = project_expression or "desconhecida"
     totals = ", ".join(f"{key}={count}" for key, count in counts.items())
