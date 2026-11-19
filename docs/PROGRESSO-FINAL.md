@@ -580,3 +580,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:42 UTC — Revisor encerrou C5-R7 em 1cd11ad5 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:42 UTC — Revisão C8-R8 iniciada por Sol high normal somente leitura em 79d499e8.
 - 19/11/2026 06:44 UTC — C5: a revisão de 1cd11ad5 apontou quatro casos de atribuição de erro em migrações; C5-R8 tratará os quadros ambíguos do PostgreSQL. C9: a imagem de 362efd58 passou em 31/31 com a CLI. As imagens atuais de QA e dependências foram exportadas e os arquivos gzip conferidos para recuperação do digest nos aceites em fila.
+- 19/11/2026 06:44 UTC — Imagem QA de e245fca3: a primeira rodada integrada passou em 93/94. O caso restante detectou o defeito plantado e mediu 92 chamadas; a asserção esperava a descrição anterior “por asserção”. A expectativa foi corrigida para a mensagem pública atual, preservando arquivo, linha, identidade, semente e contagem. A repetição integral está em andamento.
