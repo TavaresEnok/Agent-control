@@ -1059,3 +1059,6 @@ PAUSADO-COTA
 - 19/11/2026 20:42 UTC — C-ACEITE-RECUSA-R3 encerrado com código 0.
 - 19/11/2026 20:42 UTC — O revisor aceitou os vínculos de admissão e intenção, a ordenação e a separação de objetos em c67a4f46. Sol medium recebeu duas leituras imediatas adicionais para observar admissão e checkpoint nas recusas.
 - 19/11/2026 20:42 UTC — TypeScript e os testes complementares do novo fechamento passaram no PostgreSQL descartável.
+- 19/11/2026 20:42 UTC — trabalho-C-FECHAMENTO-RECUSA-R4 iniciado em final-argon-recusa por Sol medium normal.
+- 19/11/2026 20:44 UTC — C-FECHAMENTO-RECUSA-R4 encerrado com código 0.
+- 19/11/2026 20:44 UTC — O Sol entregou 5f8a8789. Iniciados o exame estático independente e a prova do checkout em PostgreSQL, com comparação dos insumos da suíte e do laboratório já executados.
