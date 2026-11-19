@@ -4,13 +4,17 @@ import {randomUUID} from 'node:crypto';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {execFileSync,spawn,type ChildProcess} from 'node:child_process';
+import {performance} from 'node:perf_hooks';
+import {setTimeout as delay} from 'node:timers/promises';
 import {Ledger} from '../src/ledger.ts';
 import {CezarRuntime} from '../src/cezar.ts';
 import {Capacity} from '../src/capacity.ts';
 import {Templates} from '../src/templates.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 
-for(const stopNode of ['qa','review','judge','integrate','integrate-after-cas','integrate-before-cas','qa-before-start','qa-wait-capacity','integrate-registered'])test(`SIGKILL at ${stopNode}: ${stopNode==='integrate-before-cas'?'preserve uncertainty without writing Git':'replay receipt and finish the same graph'}`,{timeout:30000},async()=>{
+const markerTimeoutMs=30_000;
+
+for(const stopNode of ['qa','review','judge','integrate','integrate-after-cas','integrate-before-cas','qa-before-start','qa-wait-capacity','integrate-registered'])test(`SIGKILL at ${stopNode}: ${stopNode==='integrate-before-cas'?'preserve uncertainty without writing Git':'replay receipt and finish the same graph'}`,{timeout:60_000},async()=>{
  const url=process.env.AC_TEST_DATABASE_URL;if(!url?.endsWith('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
  const db=new Ledger(url);await db.migrate();let runtime:CezarRuntime|undefined,child:ChildProcess|undefined,configPath:string|undefined;
  try{
@@ -32,16 +36,45 @@ for(const stopNode of ['qa','review','judge','integrate','integrate-after-cas','
   const marker=join(repo,'completed-marker.json');configPath=join(repo,'controller-fixture.json');
   await writeFile(configPath,JSON.stringify({scope:'isolated-completed-node-recovery',repo,project,intent,authority,marker,stopNode,
    verifierKey:Buffer.from(options.verifierKey).toString('base64'),qualityRevision:options.qualityRevision}),{mode:0o600});
-  child=spawn(process.execPath,['--import','tsx','tests/fixtures/interrupted-completed-node.ts',configPath],{stdio:['ignore','pipe','pipe']});
-  let output='';child.stdout?.on('data',b=>{output=(output+String(b)).slice(-3000);});child.stderr?.on('data',b=>{output=(output+String(b)).slice(-3000);});
-  const closed=new Promise<void>((ok,fail)=>{child!.once('close',()=>ok());child!.once('error',fail);});
-  let saved=false;
-  for(let i=0;i<150;i++){
-   try{saved=JSON.parse(await readFile(marker,'utf8')).ready;}catch{}
-   if(saved)break;if(child.exitCode!==null)throw Error('CHILD_EXITED '+output);
-   await new Promise(resolve=>setTimeout(resolve,50));
+  const controller=spawn(process.execPath,['--import','tsx','tests/fixtures/interrupted-completed-node.ts',configPath],{stdio:['ignore','pipe','pipe']});
+  child=controller;
+  let output='';controller.stdout?.on('data',b=>{output=(output+String(b)).slice(-3000);});controller.stderr?.on('data',b=>{output=(output+String(b)).slice(-3000);});
+  const closed=new Promise<{code:number|null,signal:NodeJS.Signals|null}>(resolve=>{
+   controller.once('close',(code,signal)=>resolve({code,signal}));
+  });
+  const markerWait=new AbortController();
+  const {signal}=markerWait;
+  controller.once('error',error=>markerWait.abort(Error(`Child process error at ${stopNode}\n${output}`,{cause:error})));
+  controller.once('exit',(code,signal)=>{
+   markerWait.abort(Error(`Child exited before SIGKILL at ${stopNode} (code=${code}, signal=${signal})\n${output}`));
+  });
+  const markerDeadline=performance.now()+markerTimeoutMs;
+  const markerTimeoutError=()=>Error(`Completed stage marker missing at ${stopNode} after ${markerTimeoutMs} ms\n${output}`);
+  const markerTimer=setTimeout(()=>markerWait.abort(markerTimeoutError()),markerTimeoutMs);
+  try{
+   while(true){
+    let saved=false;
+    try{
+     const state=JSON.parse(await readFile(marker,{encoding:'utf8',signal}));
+     saved=state?.ready===true&&state.node===stopNode;
+    }catch(error){
+     // The fixture writes directly to the marker, so a poll can see a partial write.
+     if(!(error instanceof SyntaxError)&&(error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+    }
+    signal.throwIfAborted();
+    const remaining=markerDeadline-performance.now();
+    if(remaining<=0)throw markerTimeoutError();
+    if(saved)break;
+    await delay(Math.min(50,remaining),undefined,{signal});
+   }
+  }catch(error){
+   signal.throwIfAborted();
+   throw error;
+  }finally{
+   clearTimeout(markerTimer);
   }
-  assert(saved,'completed stage marker missing '+output);child.kill('SIGKILL');await closed;
+  assert(controller.kill('SIGKILL'),`Could not send SIGKILL at ${stopNode}\n${output}`);
+  assert.deepEqual(await closed,{code:null,signal:'SIGKILL'},`Child did not terminate with SIGKILL at ${stopNode}\n${output}`);
   const before=(await db.pool.query('SELECT id,node_id,session_id FROM ac_stage_operations WHERE intent_id=$1 ORDER BY id',[intent.id])).rows;
   if(stopNode==='qa-wait-capacity'){
    const account=(await db.pool.query("SELECT account_id FROM ac_capacity_grants WHERE intent_id=$1 AND role='programmer'",[intent.id])).rows[0].account_id;
