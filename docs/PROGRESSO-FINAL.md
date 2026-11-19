@@ -258,3 +258,12 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:35 UTC — Revisor encerrou C4-R5 em 8669f900 (código 0). Gerente confere a entrega.
 - 19/11/2026 03:35 UTC — Revisão C-REVERIFICAR iniciada por Sol high normal somente leitura em 7c27cb7b.
 - 19/11/2026 03:36 UTC — A revisão independente de dependências 8669f900 encontrou proposta de downgrade indevida, perda de itens válidos e três falhas de validação de evidências. C4-R6 aberta. O laboratório de desempenho mede agora a nova localização da declaração de rota.
+- 19/11/2026 03:36 UTC — Trabalhador encerrou C-EXAME-R3 em 9808488b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:36 UTC — Trabalho C6-R8 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 03:37 UTC — A imagem de desempenho a4499fcc passou nos três laboratórios reais. O primeiro localizou CPU, SQL, navegador e rota HTTP; o segundo registrou a indisponibilidade do backend e mediu a página estática; o terceiro comprovou as omissões no repositório vazio.
+- 19/11/2026 03:38 UTC — Suíte oficial de c2-r7-reverificacao em df6bd1f5: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 03:38 UTC — Exame 9808488b integrado em a5ef0b22 para QA. A integração conserva a reverificação dos relatórios antigos sem exame.json com conferência da linha original no Git. As próximas provas usam supervisor e ledger do produto com provedores de bancada identificados.
+- 19/11/2026 03:40 UTC — Revisor encerrou C-REVERIFICAR em 7c27cb7b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:40 UTC — Revisão C2-R7 iniciada por Sol high normal somente leitura em a7783fba.
+- 19/11/2026 03:40 UTC — Testes complementares de c2-r7-reverificacao em df6bd1f5: 52 aprovados.
+- 19/11/2026 03:40 UTC — A prova integrada do exame a5ef0b22 passou em 22 testes. A revisão da reverificação informou um alto sobre fechamento sem prova de regressão e um médio sobre falha de publicação depois do commit. Ordem C-REVERIFICAR-R2 sobre a integração atual.
