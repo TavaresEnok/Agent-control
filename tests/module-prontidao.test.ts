@@ -596,6 +596,56 @@ test('documentação, comentários e texto de shell não contam como rotinas de 
   }
 });
 
+test('Here-docs distinguem delimitadores físicos, continuados e citados de comandos de backup', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-heredoc-'));
+  try {
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const script = join(dir, 'backup.sh');
+    const audit = (lines: string[]) => {
+      writeFileSync(script, ['#!/bin/bash', ...lines, ''].join('\n'));
+      return auditRepositoryReadiness(dir);
+    };
+    const requirement = (out: ReturnType<typeof audit>) => out.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao');
+    const backupMissing = (out: ReturnType<typeof audit>) => out.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-AUSENTE');
+    const textOnly = audit([
+      'cat <<EOF', 'texto\\', 'EOF', 'pg_dump -f fixture.dump', 'EOF',
+      'cat <<-EOF', '\ttexto' + '\\'.repeat(3), '\tEOF', 'pg_dump -f fixture.dump', '\tEOF',
+      'cat <<EOF', 'EOF\r', 'pg_dump -f fixture.dump', 'EOF',
+      'cat <<EOF\u00a0text', 'EOF', 'pg_dump -f fixture.dump', 'EOF\u00a0text',
+    ]);
+    assert.equal(backupMissing(textOnly), true);
+    assert.equal(requirement(textOnly)?.status, 'ok');
+
+    for (const lines of [
+      ['cat <<EOF', 'EO\\', 'F'],
+      ['cat <<EOF', 'text' + '\\'.repeat(2), 'EOF'],
+      ["cat <<'EOF'", 'text\\', 'EOF'],
+      ['cat <<\\EOF', 'text\\', 'EOF'],
+      ['cat <<EOF # comentário com barra\\', 'pg_dump -f ignored.dump', 'EOF'],
+    ]) {
+      const result = audit([...lines, 'pg_dump -f declared.dump']);
+      assert.equal(backupMissing(result), false);
+      assert.equal(requirement(result)?.status, 'ok');
+      assert.deepEqual(result.findings.filter(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO').map(f => f.line),
+        [lines.length + 2]);
+      assert.doesNotMatch(JSON.stringify(result), /ignored\.dump|declared\.dump/);
+    }
+
+    for (const lines of [
+      ['cat <<EOF', 'text\\', 'EOF', 'pg_dump -f fixture.dump'],
+      ["cat <<$'EOF'", 'pg_dump -f fixture.dump', 'EOF'],
+      ['cat <<EOF | wc -l', 'pg_dump -f fixture.dump', 'EOF'],
+    ]) {
+      const result = audit(lines);
+      assert.equal(backupMissing(result), true);
+      assert.equal(requirement(result)?.status, 'failed');
+      assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith('backup.sh: linha 2,')));
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
 test('Nginx aplica protocolo exato e redirecionamento somente no bloco correspondente', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-nginx-blocks-'));
   try {
@@ -890,6 +940,55 @@ test('Compose respeita chaves de fluxo YAML e os valores literais do driver de l
   }
 });
 
+test('Compose consome blocos dobrados de metadados e mantém as verificações dos serviços', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-compose-extensao-'));
+  try {
+    const file = join(dir, 'compose.yaml');
+    const metadata = [
+      'x-description: &notes >-',
+      '  descrição sintética',
+      '  restart: always',
+      'services:',
+      '  api:',
+      '    image: scratch',
+      '    x-notes: >-',
+      '      outra descrição',
+      '      pids_limit: 128',
+      '    logging:',
+      '      x-notes: >-',
+      '        max-size: 10m',
+      '        max-file: 3',
+    ];
+    const footer = [
+      'x-after: >-',
+      '  primeira linha',
+      '  segunda linha',
+    ];
+    writeFileSync(file, [...metadata, ...footer].join('\n'));
+    const out = auditRepositoryReadiness(dir);
+    const serviceRules = [
+      'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE', 'PRONTIDAO-HEALTHCHECK-COMPOSE-AUSENTE',
+      'PRONTIDAO-LOG-SEM-ROTACAO', 'PRONTIDAO-LIMITE-MEMORIA-AUSENTE', 'PRONTIDAO-LIMITE-PIDS-AUSENTE',
+    ];
+    assert.deepEqual(out.findings.filter(f => serviceRules.includes(f.rule)).map(f => [f.rule, f.line]),
+      serviceRules.map(rule => [rule, 5]));
+    assert.ok(out.coverage.some(c => c.status === 'ok' && c.detail.startsWith('compose.yaml: verificações [compose')));
+    assert.equal(out.coverage.some(c => c.status === 'failed'), false);
+
+    for (const auditedSetting of [
+      ['    restart: *notes'],
+      ['    restart: >-', '      unless-', '      stopped'],
+    ]) {
+      writeFileSync(file, [...metadata, ...auditedSetting, ...footer].join('\n'));
+      const partial = auditRepositoryReadiness(dir);
+      assert.ok(partial.coverage.some(c => c.status === 'failed' && c.detail.startsWith('compose.yaml:')));
+      assert.equal(partial.coverage.find(c => c.tool === 'prontidao:requisito:reinicio-automatico')?.status, 'failed');
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
 test('Caddy e Nginx auditam o bloco efetivo e declaram imports ou rotas não resolvidos', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-proxy-'));
   try {
@@ -1007,6 +1106,65 @@ test('Proxies avaliam porta, ordem de reescrita e aplicação dos cabeçalhos po
   }
 });
 
+test('Redirecionamentos HTTPS validam a autoridade e preservam destinos literais ou modelos conhecidos', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-redirecionamento-'));
+  try {
+    const invalid = [
+      'https://[fixture.invalid', 'https://[not:ipv6]', 'https://[::1]tail',
+      'https://fixture.invalid:65536', 'https://fixture.invalid:bad', 'https://fixture.invalid:',
+      'https:///elsewhere', 'https://fixture.invalid@', 'https://fixture.invalid/%ZZ',
+    ];
+    const valid = ['https://fixture.invalid', 'https://[2001:db8::1]:8443/path?x=y', 'https://fixture.invalid/p%20q'];
+    writeFileSync(join(dir, 'Caddyfile'), [...invalid, ...valid, 'https://{host}{uri}'].flatMap((target, i) => [
+      'http://site' + i + '.invalid {',
+      '  redir /* ' + target + ' 303',
+      '}',
+    ]).join('\n'));
+    writeFileSync(join(dir, 'nginx.conf'), [...invalid, ...valid, 'https://${host}$request_uri'].map((target, i) =>
+      'server { listen ' + (8000 + i) + '; return 303 "' + target + '"; }').join('\n'));
+    const out = auditRepositoryReadiness(dir);
+    const findings = (file: string) => out.findings.filter(f => f.file === file && f.rule === 'PRONTIDAO-TLS-DESATIVADO').map(f => f.line);
+    assert.deepEqual(findings('Caddyfile'), invalid.map((_, i) => i * 3 + 1));
+    assert.deepEqual(findings('nginx.conf'), invalid.map((_, i) => i + 1));
+    assert.equal(out.coverage.find(c => c.tool === 'prontidao:requisito:tls-cabecalhos')?.status, 'ok');
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Nginx avalia redirecionamentos por caminho e só aplica error_page a status correspondentes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-nginx-rotas-'));
+  try {
+    writeFileSync(join(dir, 'nginx.conf'), [
+      'http {',
+      '  error_page 404 500 =200 /missing;',
+      '  server { listen 80; location / { return 303 https://fixture.invalid; } }',
+      '  server { listen 8080; error_page 303 /missing; location / { return 303 https://fixture.invalid; } }',
+      '  server { listen 8081; location / { return 303 https://fixture.invalid; } location = /clear { return 200; } }',
+      '  server { listen 8082; location ^~ / { return 303 https://fixture.invalid; } location /other { return 301 https://fixture.invalid; } }',
+      '  server { listen 8083; location / { return 303 https://fixture.invalid; } location ~ ^/other { return 200; } }',
+      '  server { listen 8443 ssl; return 303 https://fixture.invalid; add_header Strict-Transport-Security "max-age=0" always; }',
+      '  server { listen 8444 ssl; error_page 303 /missing; return 303 https://fixture.invalid; add_header Strict-Transport-Security "max-age=0" always; }',
+      '  server { listen 8445 ssl; error_page 303 /missing;',
+      '    location / { error_page 404 /local; return 303 https://fixture.invalid; add_header Strict-Transport-Security "max-age=0" always; }',
+      '  }',
+      '}',
+    ].join('\n'));
+    const out = auditRepositoryReadiness(dir);
+    const locations = (rule: string) => out.findings.filter(f => f.rule === rule).map(f => f.line);
+    assert.deepEqual(locations('PRONTIDAO-TLS-DESATIVADO'), [5]);
+    assert.deepEqual(locations('PRONTIDAO-HSTS-FRACO'), [8, 11]);
+    for (const line of [4, 7, 9]) {
+      assert.ok(out.coverage.some(c => c.status === 'failed' && c.detail.startsWith('nginx.conf: linha ' + line + ',')));
+    }
+    for (const line of [3, 5, 6, 8, 11]) {
+      assert.equal(out.coverage.some(c => c.status === 'failed' && c.detail.startsWith('nginx.conf: linha ' + line + ',')), false);
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
 test('cron de usuário e sistema, truncate e catálogo têm evidências distintas', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-rotinas-'));
   try {
@@ -1073,6 +1231,17 @@ test('Restic exige snapshot e destino na restauração, ou snapshot ou política
     assert.match(literal.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.detail ?? '',
       /rotina de restauração identificada e retenção de backup identificada.*prova de restauração requer execução/);
     assert.deepEqual(absent(audit('restic restore --target /var/tmp/fixture 2d63c1a5', 'restic forget --keep-within 1m7d')), []);
+    for (const command of [
+      'restic forget --keep-daily 2 --keep-weekly invalid',
+      'restic forget --keep-within invalid --keep-daily 2',
+      'restic forget --keep-daily invalid --keep-daily 2',
+      'restic forget 2d63c1a5 --keep-weekly invalid',
+      'restic forget --keep-tag one, --keep-daily 2',
+      'restic forget --keep-daily 2 --keep-daily 0',
+    ]) {
+      assert.ok(absent(audit(command)).includes('PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), command);
+    }
+    assert.equal(absent(audit('restic forget --keep-daily 2 --keep-weekly 0')).includes('PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), false);
     const unresolved = audit('restic forget --keep-last="$KEEP"');
     assert.equal(absent(unresolved).length, 2);
     assert.equal(unresolved.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed');
