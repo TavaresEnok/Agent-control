@@ -206,6 +206,12 @@ test('runner revalida o vínculo e a prova antes da publicação', {skip: !datab
       });
       await assertPublished(result, ['confirmado', 'provavel', 'provavel']);
     });
+    await t.test('conserva a evidência original quando falta a prova do veredito', async () => {
+      const result = await run(exam => {
+        Reflect.deleteProperty(exam.findings[1]!, 'proof');
+      });
+      await assertPublished(result, ['confirmado', 'provavel', 'confirmado']);
+    });
     await t.test('recusa o vínculo de outro conteúdo com digest do snapshot atual', async () => {
       const result = await run((exam, snapshotSource) => {
         const read = exam.coverage.find(row => row.file === testFile)!.read!;
