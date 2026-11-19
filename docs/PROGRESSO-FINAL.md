@@ -1131,3 +1131,5 @@ PAUSADO-COTA
 - 19/11/2026 21:09 UTC — C-ACEITE-CAMINHOS-VIVOS encerrado com código 0.
 - 19/11/2026 21:09 UTC — revisor-C-ACEITE-PROVA-LEASE iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 21:10 UTC — No reparo de arquitetura, a revisão encontrou quatro divergências entre host, mapa e cópia de análise. Sol high recebeu as correções de proteção e do escopo das métricas.
+- 19/11/2026 21:10 UTC — C-ACEITE-PROVA-LEASE encerrado com código 0.
+- 19/11/2026 21:11 UTC — A revisão da prova de locação identificou callback tardio após encerramento e renovações sobrepostas. O helper compartilhado pelas oito CLIs entrou em correção com teste de cada cenário.
