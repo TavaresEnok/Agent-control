@@ -728,3 +728,8 @@ PAUSADO-COTA
 - 19/11/2026 17:36 UTC — revisor-C8-R10 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:37 UTC — C5-R10 encerrado com código 0.
 - 19/11/2026 17:38 UTC — Desempenho em 26aa6baf passou em 67/67, incluindo a CLI e a procura da medição anterior. C7 segue para a prova de b5efe37c. A revisão de carga abriu uma correção de empacotamento para arm64.
+- 19/11/2026 17:38 UTC — trabalho-C2-CARGA-PLATAFORMAS iniciado em final-qa-carga-local por Sol medium normal.
+- 19/11/2026 17:38 UTC — C2-BANCO-LOCAL-R2 encerrado com código 0.
+- 19/11/2026 17:38 UTC — C8-R10 encerrado com código 0.
+- 19/11/2026 17:38 UTC — revisor-C2-LINGUAGENS-R4 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:38 UTC — QA em 6601eb59 incorpora PostgreSQL 16.15 e isola a confirmação pgTAP. A restauração do arquivo OCI de arquitetura retornou ao Docker o digest original 0758fd40. C5-R10 entregou fdfeb56e e C3 recebeu a prova das duas raízes 86894260.
