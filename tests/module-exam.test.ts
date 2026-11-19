@@ -25,6 +25,8 @@ test('mapa inventaria fontes e rotas, omitindo credenciais, links e arquivos gra
     await writeFile(join(dir, '.env'), 'DADO_SINTETICO_NAO_LER');
     await writeFile(join(dir, 'pem-in-code.txt'), '-----BEGIN PRIVATE KEY-----\nsynthetic-pem-only\n-----END PRIVATE KEY-----\napp.get("/depois", handler);');
     await writeFile(join(dir, 'huge.ts'), 'x'.repeat(17000));
+    const sql = '\uFEFF-- Consulta\r\nSELECT 1;\r\n';
+    await writeFile(join(dir, 'query.sql'), sql);
     await symlink('.env', join(dir, 'link'));
     const mapped = await mapModuleSnapshot(dir);
     assert.deepEqual(mapped.routes, [{file:'src/routes.ts', line:1, column:expressApp.length + 1, method:'GET', path:'/pedidos'}]);
@@ -32,6 +34,7 @@ test('mapa inventaria fontes e rotas, omitindo credenciais, links e arquivos gra
     assert.equal(mapped.files.find(f=>f.file==='.env')?.code, null);
     assert.equal(mapped.files.find(f=>f.file==='link')?.code, null);
     assert.equal(mapped.files.find(f=>f.file==='huge.ts')?.code, null);
+    assert.equal(mapped.files.find(f=>f.file==='query.sql')?.code, sql);
     assert.doesNotMatch(mapped.files.find(f=>f.file==='src/routes.ts')!.code!, /sintetico-privado/);
   } finally { await rm(dir, {recursive:true, force:true}); }
 });
@@ -281,6 +284,7 @@ test('nomes sombreados comprovam a grafia da chamada e deixam a hipótese funcio
     assert.equal(hasModuleReviewProof(evidence, {...observed, reason: hypothesis}), false);
     const reread = readModuleReviewVerdict({...observed, reason: hypothesis});
     assert.equal(reread?.reason, reason);
+    assert.equal(readModuleReviewVerdict({...observed, reason: hypothesis}, {preserveReason: true})?.reason, hypothesis);
     assert.equal(hasModuleReviewProof(evidence, reread!), true);
     for (const unproved of [hypothesis, 'A linha atual ainda sustenta a observação original?']) {
       const functional = {...evidence, hypothesis: unproved, rule: 'exame-de-arquivo', tool: 'examinador', evidence: expression};
