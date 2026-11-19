@@ -1241,3 +1241,7 @@ PAUSADO-COTA
 - 19/11/2026 22:16 UTC — C-ACEITE-CONFORMIDADE-VIVA-R3 encerrado com código 0.
 - 19/11/2026 22:17 UTC — C-DOCUMENTACAO-VIVA-R3 encerrado com código 0.
 - 19/11/2026 22:17 UTC — Correção doc-viva recebida em 6fcef8cf. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:17 UTC — revisor-C-ACEITE-DOCUMENTACAO-VIVA-R3 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:17 UTC — Imagem de documentacao construída e arquivada por digest em 77ca0242.
+- 19/11/2026 22:17 UTC — documentacao em 77ca0242 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 333, 'failed': 0, 'skipped': 62}; código do produto OK.
+- 19/11/2026 22:17 UTC — Preserva as medições de conformidade quando há exclusões no inventário. Ordem C-CONFORMIDADE-VIVA-R4 em worktree separado conforme 43f1c664.
