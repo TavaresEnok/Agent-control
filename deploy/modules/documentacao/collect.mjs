@@ -797,25 +797,33 @@ export function extractTypedocSymbols(typedocData, repoRoot) {
 
 function indexTypedocReflections(project) {
   const byName = new Map();
-  const visit = (node, parent, grandparent, parentName) => {
+  const visit = (node, parent, parentName) => {
     if (!node || node.flags?.isPrivate || node.flags?.isProtected) return;
     const signature = TYPEDOC_SIGNATURE_KINDS.has(node.kind);
     // TypeDoc's getFriendlyFullName omits the project prefix and the signature's own name.
     const name = signature ? parentName : parentName ? `${parentName}.${node.name}` : node.name;
+    const reflection = {node, parent, signature};
     if (!byName.has(name)) byName.set(name, []);
-    byName.get(name).push({node, parent, container: signature ? grandparent : parent, signature});
-    for (const child of node.children ?? []) visit(child, node, parent, name);
-    for (const sig of node.signatures ?? []) visit(sig, node, parent, name);
-    visit(node.getSignature, node, parent, name);
-    visit(node.setSignature, node, parent, name);
+    byName.get(name).push(reflection);
+    for (const child of node.children ?? []) visit(child, reflection, name);
+    for (const sig of node.signatures ?? []) visit(sig, reflection, name);
+    visit(node.getSignature, reflection, name);
+    visit(node.setSignature, reflection, name);
   };
-  for (const child of project.children ?? []) visit(child, project, null, '');
+  const root = {node: project, parent: null, signature: false};
+  for (const child of project.children ?? []) visit(child, root, '');
   return byName;
 }
 
 function hasTypedocComment(node) {
   const comment = node?.comment;
   return comment?.summary?.some(part => part.kind !== 'text' || part.text !== '') || comment?.blockTags?.length > 0;
+}
+
+function leadingJsdocTexts(ts, text, position) {
+  return (ts.getLeadingCommentRanges(text, position) ?? [])
+    .filter(({pos}) => text.startsWith('/**', pos))
+    .map(({pos, end}) => text.slice(pos, end - 2));
 }
 
 function typedocDeclarationSource(node, repoRoot, repoFiles) {
@@ -876,6 +884,11 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   const syntaxByFile = new Map();
   const packageByDirectory = new Map();
   const declarationMaps = new Map();
+  const filesByReflection = new Map();
+  for (const [fileId, reflectionId] of Object.entries(data.files?.reflections ?? {})) {
+    const file = normalizeRepoPath(data.files?.entries?.[fileId], repoRoot);
+    filesByReflection.set(reflectionId, filesByReflection.has(reflectionId) ? null : file);
+  }
 
   const getFileText = relFile => {
     if (!relFile || relFile === '.') return '';
@@ -972,31 +985,77 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return pkg && pkg.name === id.packageName && posix.relative(pkg.directory, mappedFile) === id.packagePath
       ? source : null;
   };
-  const mayReplaceMemberComment = (container, memberName, declaration) => {
-    if (!TYPEDOC_MEMBER_CONTAINER_KINDS.has(container?.kind)) return false;
-    const source = getSource(container);
+  const getAncestorComments = (ancestor, declaration, isSignature) => {
+    const {ts} = declaration;
+    // A project or entry-point module's file comment may disappear from JSON after moving its tags.
+    if ((ancestor.kind === 1 || ancestor.kind === 2) && filesByReflection.has(ancestor.id)) {
+      const file = filesByReflection.get(ancestor.id);
+      if (!file || !isReportablePath(file) || !JS_TS_EXTS.has(extname(file).toLowerCase())
+        || (repoFiles.size && !repoFiles.has(file))) return null;
+      const text = getFileText(file);
+      return text ? leadingJsdocTexts(ts, text, 0).filter(doc => /@(?:module|packageDocumentation)(?=[\s}]|$)/.test(doc)) : null;
+    }
+    // With multiple entry points, the project holds modules and has no file comment of its own.
+    if (ancestor.kind === 1) return ancestor.comment ? null : [];
+
+    const source = getSource(ancestor);
     const owner = source && findDeclaration(source, false);
-    if (!owner || owner.node !== declaration.node.parent) return true;
-    // TypeDoc removes @prop/@property from the serialized owner's comment.
-    // Its parser can recognize block tags even after prose on the same line.
-    const ranges = owner.ts.getLeadingCommentRanges(owner.source.text, owner.node.pos) ?? [];
-    return ranges.some(({pos, end}) => {
-      if (!owner.source.text.startsWith('/**', pos)) return false;
-      const properties = owner.source.text.slice(pos, end - 2)
-        .matchAll(/@prop(?:erty)?(?=[\s}]|$)(?:[ \t]+([A-Za-z_$][\w$]*)(?=\s|$))?/g);
-      for (const [, name] of properties) {
-        // Noncanonical names can target quoted, optional, or nested properties.
-        if (!name || name === memberName) return true;
+    if (!owner) {
+      // A top-level overload can be documented independently of its implementation.
+      // For a same-file function with no property tags, the extra declaration coordinates are immaterial.
+      if (isSignature && ancestor.kind === 64 && !ancestor.comment && ts.isFunctionDeclaration(declaration.node)
+        && ancestor.sources?.length && !declaration.source.text.includes('@prop')
+        && ancestor.sources.every(({fileName}) => normalizeRepoPath(fileName, repoRoot) === declaration.source.fileName)) return [];
+      return null;
+    }
+    if (!ts.findAncestor(declaration.node, node => node === owner.node)) return null;
+    if ((ancestor.kind === 2 || ancestor.kind === 4) && !ts.isModuleDeclaration(owner.node)) return null;
+
+    let commentNode = owner.node;
+    if (ts.isVariableDeclaration(commentNode.parent)) commentNode = commentNode.parent;
+    if (ts.isVariableDeclarationList(commentNode.parent)) commentNode = commentNode.parent.parent;
+    if (ts.isExportAssignment(commentNode.parent) || ts.isPropertyDeclaration(commentNode.parent)
+      || ts.isBinaryExpression(commentNode.parent)) commentNode = commentNode.parent;
+    const comments = [];
+    for (;;) {
+      comments.push(...leadingJsdocTexts(ts, owner.source.text, commentNode.pos));
+      const parent = commentNode.parent;
+      // A dotted namespace can take its comment from the outer declaration.
+      if (!ts.isModuleDeclaration(parent) || parent.body !== commentNode) break;
+      commentNode = parent;
+    }
+    return ancestor.comment && !comments.length ? null : comments;
+  };
+  const mayReplaceMemberComment = (reflection, declaration) => {
+    const path = [];
+    const signatureName = reflection.signature ? reflection.node.name : null;
+    for (let child = reflection; child.parent; child = child.parent) {
+      if (!child.signature) path.unshift(child.node.name);
+      const comments = getAncestorComments(child.parent.node, declaration, child.signature);
+      if (!comments) return true;
+
+      const memberPath = path.join('.');
+      const names = signatureName === null ? path : [...path, signatureName];
+      const signaturePath = signatureName === null ? null : names.join('.');
+      const simplePath = names.every(name => /^[A-Za-z_$][\w$]*$/.test(name));
+      for (const comment of comments) {
+        // The TypeDoc parser also recognizes block tags after prose on the same line.
+        const properties = comment.matchAll(/@prop(?:erty)?(?=[\s}]|$)(?:[ \t]+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(?=\s|$))?/g);
+        for (const [, name] of properties) {
+          // Quoted, optional, or otherwise ambiguous targets may name this descendant.
+          if (!name || !simplePath || name === memberPath || name === signaturePath) return true;
+        }
       }
-      return false;
-    });
+    }
+    return false;
   };
   const locateInComment = (candidates, text, expectedTag, expectedBlock = '@param') => {
     const occurrences = [];
-    for (const {node, parent, signature, container} of candidates) {
+    for (const reflection of candidates) {
+      const {node, signature} = reflection;
       const source = getSource(node);
       const declaration = source && findDeclaration(source, signature);
-      if (!declaration || mayReplaceMemberComment(container, signature ? parent.name : node.name, declaration)) return null;
+      if (!declaration || mayReplaceMemberComment(reflection, declaration)) return null;
       const {ts, source: syntax, lineAt, node: declarationNode} = declaration;
       const comments = ts.getJSDocCommentsAndTags(declarationNode).filter(ts.isJSDoc);
       if (comments.length !== 1) return null;
@@ -1090,7 +1149,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const matches = getReflections(symRef).filter(({node, parent, signature}) => {
         const id = data.symbolIdMap?.[node.id];
         return node.kind === kind && id && `${id.packageName}/${id.packagePath}` === reportedPath
-          && !hasTypedocComment(node) && !(signature && hasTypedocComment(parent));
+          && !hasTypedocComment(node) && !(signature && hasTypedocComment(parent?.node));
       });
       const source = uniqueWarning && matches.length === 1 ? getSource(matches[0].node) : null;
       // TypeDoc may substitute the parent's coordinates for a signature, even within the same file.

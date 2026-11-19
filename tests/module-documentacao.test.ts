@@ -1311,6 +1311,107 @@ test('TypeDoc distingue o comentário efetivo do membro, exemplos e tags diretas
   }
 });
 
+test('TypeDoc preserva avisos de membros alcançados por @property em namespaces ancestrais', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-ancestor-comment-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), [
+      '/** Namespace externo.',
+      ' * @prop Inner.Api.far Consulte {@link MissingFar}.',
+      ' */',
+      'export namespace Outer {',
+      '  /** Namespace interno.',
+      '   * @property Api.value Consulte {@link MissingValue} e {@link MissingAncestorOnly}.',
+      '   */',
+      '  export namespace Inner {',
+      '    /** Contrato da API. */',
+      '    export interface Api {',
+      '      /** Outra descrição para {@link MissingValue}. */',
+      '      value: string;',
+      '      /** Outra descrição para {@link MissingFar}. */',
+      '      far: string;',
+      '      /** Consulte {@link MissingDirectMember}. */',
+      '      direct: string;',
+      '    }',
+      '  }',
+      '}',
+      '/** Consulte {@link MissingIndependent}. */',
+      'export function independent() {}',
+      '/** @property Api.value Consulte {@link MissingMerged}. */',
+      'export namespace Merged {',
+      '  /** Contrato da API. */',
+      '  export interface Api {',
+      '    /** Outra descrição para {@link MissingMerged}. */',
+      '    value: string;',
+      '    /** Consulte {@link MissingUnproven}. */',
+      '    unproven: string;',
+      '  }',
+      '}',
+      'export namespace Merged {',
+      '  /** Valor padrão. */',
+      '  export const defaultValue = 0;',
+      '}',
+    ].join('\n'));
+
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    const coverage = result.coverage.find(row => row.tool === 'typedoc');
+    assert.equal(coverage?.status, 'ok', coverage?.detail);
+    assert.equal(coverage.version, '0.28.20');
+    assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
+      .map(finding => [finding.file, finding.line, finding.evidence]).sort(), [
+      ['api.ts', 15, '[warning] Failed to resolve link to "MissingDirectMember" in comment for Outer.Inner.Api.direct'],
+      ['api.ts', 20, '[warning] Failed to resolve link to "MissingIndependent" in comment for independent'],
+    ]);
+    const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+    const expectedWarnings = [
+      ['Merged.Api.unproven', 'MissingUnproven'],
+      ['Merged.Api.value', 'MissingMerged'],
+      ['Outer.Inner.Api.far', 'MissingFar'],
+      ['Outer.Inner.Api.value', 'MissingAncestorOnly'],
+      ['Outer.Inner.Api.value', 'MissingValue'],
+    ].map(([member, link]) => 'DOC-TYPEDOC-LINK-QUEBRADO. Linha indeterminada. '
+      + `Comentário JSDoc de "${member}" contém referência {@link ${link}} para símbolo inexistente.`);
+    assert.ok(pending.every(row => row.status === 'skipped'));
+    assert.deepEqual(pending.map(row => row.detail).sort(), expectedWarnings);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('TypeDoc verifica comentários de arquivo nas reflexões de projeto e módulo', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-file-comment-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), [
+      '/** @packageDocumentation',
+      ' * @property Api.value Consulte {@link MissingFromFile}.',
+      ' */',
+      '/** Contrato da API. */',
+      'export interface Api {',
+      '  /** Outra descrição para {@link MissingFromFile}. */',
+      '  value: string;',
+      '}',
+      '/** Consulte {@link MissingDirect}. */',
+      'export function direct() {}',
+    ].join('\n'));
+    for (const prefix of ['', 'api.']) {
+      if (prefix) writeFileSync(join(root, 'extra.ts'), '/** Controle. */\nexport const extra = 1;');
+      const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+      const coverage = result.coverage.find(row => row.tool === 'typedoc');
+      assert.equal(coverage?.status, 'ok', coverage?.detail);
+      assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
+        .map(finding => [finding.file, finding.line, finding.evidence]), [
+        ['api.ts', 9, `[warning] Failed to resolve link to "MissingDirect" in comment for ${prefix}direct`],
+      ]);
+      const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+      assert.deepEqual(pending.map(row => row.detail), [
+        'DOC-TYPEDOC-LINK-QUEBRADO. Linha indeterminada. '
+          + `Comentário JSDoc de "${prefix}Api.value" contém referência {@link MissingFromFile} para símbolo inexistente.`,
+      ]);
+    }
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
 test('TypeDoc localiza a sobrecarga canônica e preserva avisos com escapes ou tags multilinha', {skip: skipLocalTools}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'doc-overload-comments-'));
   try {
