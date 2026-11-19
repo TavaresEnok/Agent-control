@@ -652,3 +652,17 @@ PAUSADO-COTA
 - 19/11/2026 17:04 UTC — revisor-C2-LINGUAGENS-R3 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:05 UTC — C2-MATRIZ-R13 encerrado com código 0.
 - 19/11/2026 17:05 UTC — Revisão de conformidade em df297d9b encontrou perdas e falsos destinos em reatribuições e nomes homônimos. C9-R7 encomendada. Em C4, a primeira execução complementar usou um runtime Java antigo da área temporária; a repetição usa o runtime extraído do digest ensaiado.
+- 19/11/2026 17:05 UTC — C4 passou em 34/34 testes com o runtime Java extraído da imagem aceita, incluindo o tratamento de nome vazio e o encerramento da requisição e resposta HTTP. Iniciada a reconstrução para a prova integral.
+- 19/11/2026 17:06 UTC — C2-BANCO-LOCAL encerrado com código 0.
+- 19/11/2026 17:07 UTC — C2-LINGUAGENS-R3 encerrado com código 0.
+- 19/11/2026 17:07 UTC — revisor-C5-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:08 UTC — C-EXAME-VINCULO encerrado com código 0.
+- 19/11/2026 17:08 UTC — trabalho-C9-R7 iniciado em final-c9 por Sol high normal.
+- 19/11/2026 17:10 UTC — QA poliglota a46061b8 passou em 98/99. A imagem tinha Hypothesis para o adaptador de propriedades, mas o unittest não via a dependência ao importar o arquivo misto. Ajustado o caminho fixado e adicionada prova de que só a parte unittest recebe cobertura. A versão anterior de QA permanece disponível.
+- 19/11/2026 17:10 UTC — C5-R8 encerrado com código 0.
+- 19/11/2026 17:10 UTC — revisor-C7-RECONCILIACAO-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:12 UTC — C7-RECONCILIACAO-R8 encerrado com código 0.
+- 19/11/2026 17:12 UTC — revisor-C8-R9 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:12 UTC — banco em 840a02a6 passou 20 testes com 0 falhas e 0 pulos. Digest sha256:7203e1ec1909 fixado no ramo. Revisões e promoção registradas separadamente.
+- 19/11/2026 17:12 UTC — documentacao em 782385cd passou 27 testes com 0 falhas e 0 pulos. Digest sha256:9b45c131679e fixado no ramo. Revisões e promoção registradas separadamente.
+- 19/11/2026 17:12 UTC — A revisão de banco e a de QA poliglota encontraram imprecisões na origem das medições. Ordens C5-R9 e C2-LINGUAGENS-R4 abertas. O pgTAP no entrypoint de QA já distinguiu a migração de controle do defeito após restauração, em banco temporário por socket.
