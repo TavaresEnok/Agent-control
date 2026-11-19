@@ -136,6 +136,13 @@ if (cmd === 'image') {
   const record = read(name);
   if (ownership) {
     const id = mode === 'cancel-output-id-divergent' ? idFor('id-divergente') : objectId(name);
+    if (mode === 'cancel-inspect-output' && last === name) {
+      fs.renameSync(path.join(base, name + '.object'), path.join(base, 'renomeado.object'));
+      write(name, {...record, id: idFor('substituto')});
+      console.log(id + ' ' + record.owner);
+      setInterval(() => {}, 1000);
+      return;
+    }
     console.log(id + ' ' + record.owner);
   }
   else console.log((record.status === 'running') + ' ' + digest + ' 0');
@@ -329,7 +336,7 @@ for (const stage of ['antes do rename', 'depois do rename']) {
       if (beforeRename ? !path.endsWith('/state.next') : path.endsWith('/state.next')) return;
       const statePath = beforeRename ? path : join(path, 'state.json');
       const state = JSON.parse(await readFile(statePath, 'utf8'));
-      failed = Object.keys(state.resources).find(name => name.endsWith('-obs') && state.resources[name] === false);
+      failed = Object.keys(state.resources).find(name => name.endsWith('-obs') && state.resources[name] === null);
       if (failed) {
         controller.abort(new Error('autoridade perdida após a falha de gravação'));
         throw new Error('falha sintética de fsync na reserva');
@@ -368,6 +375,15 @@ test('falha de fsync após publicar o diretório do diário desfaz a criação d
   assert.deepEqual((await fixture.calls()).map(args => args[0]), ['image']);
 });
 
+async function reconcileInAnotherProcess(fixture) {
+  const invocation = `import {reconcilePerformanceResources} from ${JSON.stringify(orchestrator)};
+    const [recoveryDirectory, dockerBinary] = process.argv.slice(1);
+    console.log(JSON.stringify(await reconcilePerformanceResources({recoveryDirectory}, {dockerBinary})));`;
+  const {stdout} = await runProcess(process.execPath,
+    ['--input-type=module', '-e', invocation, fixture.recoveryDirectory, fixture.dockerBinary]);
+  return JSON.parse(stdout);
+}
+
 test('prazo expirado preserva a intenção para um reconciliador em outro processo', async t => {
   const fixture = await setup(t, 'late-timeout');
   await writeFile(join(fixture.repo, 'desempenho.config.json'), '{}');
@@ -376,12 +392,7 @@ test('prazo expirado preserva a intenção para um reconciliador em outro proces
   assert.ok(!before.some(args => args[0] === 'start'));
   assert.ok(!before.some(args => args[0] === 'container' && args[1] === 'inspect'));
   await fixture.materialize();
-  const invocation = `import {reconcilePerformanceResources} from ${JSON.stringify(orchestrator)};
-    const [recoveryDirectory, dockerBinary] = process.argv.slice(1);
-    console.log(JSON.stringify(await reconcilePerformanceResources({recoveryDirectory}, {dockerBinary})));`;
-  const {stdout} = await runProcess(process.execPath,
-    ['--input-type=module', '-e', invocation, fixture.recoveryDirectory, fixture.dockerBinary]);
-  assert.deepEqual(JSON.parse(stdout), {cleaned: 1, pending: 0, active: 0, invalid: 0});
+  assert.deepEqual(await reconcileInAnotherProcess(fixture), {cleaned: 1, pending: 0, active: 0, invalid: 0});
   await fixture.verifyCleanup();
 });
 
@@ -515,29 +526,34 @@ test('perda de autoridade durante docker create mantém a recuperação e nunca 
   assert.ok(!(await fixture.calls()).some(args => args[0] === 'start'));
 });
 
+async function cancelAfterCreateOutput(t, fixture, expectedError = /autoridade perdida após stdout/) {
+  const controller = new AbortController();
+  const spawn = ChildProcess.prototype.spawn;
+  let stdout = '';
+  t.mock.method(ChildProcess.prototype, 'spawn', function (options) {
+    const child = spawn.call(this, options);
+    if (options.file === fixture.dockerBinary && options.args[1] === 'create') {
+      this.stdout.on('data', chunk => {
+        stdout += chunk;
+        if (stdout.endsWith('\n')) queueMicrotask(() => controller.abort(new Error('autoridade perdida após stdout')));
+      });
+    }
+    return child;
+  });
+  await assert.rejects(fixture.run({signal: controller.signal}), expectedError);
+  return stdout.trim();
+}
+
 for (const scenario of ['renamed', 'late', 'partial', 'foreign', 'id-divergent']) {
   test(`cancelamento após stdout de docker create (${scenario})`, async t => {
     const fixture = await setup(t, `cancel-output-${scenario}`);
-    const controller = new AbortController();
-    const spawn = ChildProcess.prototype.spawn;
-    let stdout = '';
-    t.mock.method(ChildProcess.prototype, 'spawn', function (options) {
-      const child = spawn.call(this, options);
-      if (options.file === fixture.dockerBinary && options.args[1] === 'create') {
-        this.stdout.on('data', chunk => {
-          stdout += chunk;
-          if (stdout.endsWith('\n')) queueMicrotask(() => controller.abort(new Error('autoridade perdida após stdout')));
-        });
-      }
-      return child;
-    });
-    await assert.rejects(fixture.run({signal: controller.signal}), /autoridade perdida após stdout/);
+    const stdout = await cancelAfterCreateOutput(t, fixture);
     const calls = await fixture.calls();
     const [create] = calls.filter(args => args[0] === 'create');
     const name = create[2];
     const id = containerId(name);
     const partial = scenario === 'partial';
-    assert.equal(stdout.trim(), partial ? id.slice(0, -1) : id);
+    assert.equal(stdout, partial ? id.slice(0, -1) : id);
     assert.ok(!calls.some(args => args[0] === 'start'));
     const containerCalls = calls.filter(args => args[0] === 'container');
     assert.ok(containerCalls.length);
@@ -567,6 +583,99 @@ for (const scenario of ['renamed', 'late', 'partial', 'foreign', 'id-divergent']
     }
   });
 }
+
+for (const operation of ['writeFile', 'sync']) {
+  test(`reconciliação após falha persistente de ${operation} com ID completo preserva o substituto`, async t => {
+    const fixture = await setup(t, 'cancel-output-renamed');
+    const handle = await open(fixture.temp, 'r');
+    const prototype = Object.getPrototypeOf(handle);
+    await handle.close();
+    const original = prototype[operation];
+    t.mock.method(prototype, operation, async function (...args) {
+      const path = await readlink(`/proc/self/fd/${this.fd}`);
+      if (path.startsWith(fixture.recoveryDirectory) && path.endsWith('/state.next')) {
+        const state = JSON.parse(operation === 'writeFile' ? args[0] : await readFile(path, 'utf8'));
+        if (Object.values(state.resources).some(value => typeof value === 'string' || value?.id)) {
+          if (operation === 'writeFile') await original.call(this, args[0].slice(0, -1));
+          throw new Error(`falha persistente de ${operation}`);
+        }
+      }
+      return original.apply(this, args);
+    });
+    const id = await cancelAfterCreateOutput(t, fixture, new RegExp(`falha persistente de ${operation}`));
+    const [name] = await fixture.pending();
+    assert.equal(id, containerId(name));
+    const statePath = join(fixture.recoveryDirectory, name, 'state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8'));
+    assert.equal(state.resources[name], null);
+    const staged = await readFile(join(fixture.recoveryDirectory, name, 'state.next'), 'utf8');
+    if (operation === 'writeFile') assert.throws(() => JSON.parse(staged), SyntaxError);
+    else {
+      const candidate = JSON.parse(staged).resources[name];
+      assert.equal(typeof candidate === 'string' ? candidate : candidate.id, id);
+    }
+    const replacementPath = join(fixture.temp, name + '.object');
+    const replacement = JSON.parse(await readFile(replacementPath, 'utf8'));
+    assert.equal(replacement.id, containerId('substituto'));
+    assert.equal(replacement.owner, state.owner);
+    const renamed = join(fixture.temp, 'renomeado.object');
+    assert.equal(JSON.parse(await readFile(renamed, 'utf8')).id, id);
+    const before = await fixture.calls();
+    assert.ok(!before.some(args => args[0] === 'start' || args[1] === 'rm'));
+    if (operation === 'sync') {
+      assert.deepEqual(await fixture.reconcile(), {cleaned: 0, pending: 0, active: 0, invalid: 1});
+      assert.equal(await readFile(join(fixture.recoveryDirectory, name, 'state.next'), 'utf8'), staged);
+      assert.deepEqual(await fixture.calls(), before);
+    }
+    assert.deepEqual(await reconcileInAnotherProcess(fixture),
+      {cleaned: operation === 'sync' ? 1 : 0, pending: operation === 'sync' ? 0 : 1, active: 0, invalid: 0});
+    const recoveryCalls = (await fixture.calls()).slice(before.length);
+    if (operation === 'sync') {
+      assert.deepEqual(recoveryCalls.map(args => [args[1], args.at(-1)]), [['inspect', id], ['rm', id], ['inspect', id]]);
+      await assert.rejects(lstat(renamed), {code: 'ENOENT'});
+    } else {
+      assert.deepEqual(recoveryCalls, []);
+      assert.ok((await lstat(renamed)).isFile());
+    }
+    assert.deepEqual(JSON.parse(await readFile(replacementPath, 'utf8')), replacement);
+  });
+}
+
+test('inspeção por nome interrompida após confirmar o ID fixa a identidade no diário', async t => {
+  const fixture = await setup(t, 'cancel-inspect-output');
+  const name = 'ac-perf-' + randomUUID();
+  const owner = randomUUID();
+  const id = containerId(name);
+  const directory = join(fixture.recoveryDirectory, name);
+  await mkdir(directory, {recursive: true, mode: 0o700});
+  const statePath = join(directory, 'state.json');
+  await writeFile(statePath, JSON.stringify({owner, resources: {[name]: false}}));
+  const original = join(fixture.temp, name + '.object');
+  await writeFile(original, JSON.stringify({id, owner}));
+
+  const controller = new AbortController();
+  const spawn = ChildProcess.prototype.spawn;
+  t.mock.method(ChildProcess.prototype, 'spawn', function (options) {
+    const child = spawn.call(this, options);
+    if (options.file === fixture.dockerBinary && options.args[2] === 'inspect' && options.args.at(-1) === name) {
+      let output = '';
+      this.stdout.on('data', chunk => {
+        output += chunk;
+        if (output === `${id} ${owner}\n`) queueMicrotask(() => controller.abort(new Error('inspeção interrompida')));
+      });
+    }
+    return child;
+  });
+  await assert.rejects(fixture.reconcile({signal: controller.signal}), /inspeção interrompida/);
+  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')).resources, {[name]: {id}});
+  const before = await fixture.calls();
+  assert.deepEqual(before.map(args => [args[1], args.at(-1)]), [['inspect', name]]);
+  assert.deepEqual(await reconcileInAnotherProcess(fixture), {cleaned: 1, pending: 0, active: 0, invalid: 0});
+  assert.deepEqual((await fixture.calls()).slice(before.length).map(args => [args[1], args.at(-1)]),
+    [['inspect', id], ['rm', id], ['inspect', id]]);
+  await assert.rejects(lstat(join(fixture.temp, 'renomeado.object')), {code: 'ENOENT'});
+  assert.deepEqual(JSON.parse(await readFile(original, 'utf8')), {owner, id: containerId('substituto')});
+});
 
 test('saída malformada passa pela limpeza verificável', async t => {
   const fixture = await setup(t, 'invalid');

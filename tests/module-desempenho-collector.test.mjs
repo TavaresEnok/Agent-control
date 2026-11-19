@@ -215,7 +215,7 @@ test('Lighthouse carrega recursos no caminho canônico e k6 mede o alias HTTP de
   assert.equal(output.measurement.k6Routes[0]?.p95, 20);
 });
 
-test('páginas fora da raiz estática resolvem recursos relativos e absolutos na mesma origem', async t => {
+test('Lighthouse conserva recursos das páginas externas e omite referências que saem do snapshot', async t => {
   const setup = await fixture(t);
   const {repo} = setup;
   await mkdir(join(repo, 'guias', 'introdução'), {recursive: true});
@@ -223,6 +223,10 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
   for (const [file, body] of Object.entries({
     'especial.html': '<h1>Externa</h1><link href="tema.css"><script src="/tema.css"></script>',
     'guias/introdução/index.html': '<h1>Aninhada</h1><link href="local.css"><script src="../comum.js"></script><link href="../../tema.css">',
+    'fora.html': '<h1>Externa ambígua</h1><link href="../tema.css">',
+    'guias/introdução/fora.html': '<h1>Aninhada ambígua</h1><script src=../../&#46;%2e/tema.css></script>',
+    'guias/introdução/base.html': '<base href="../"><h1>Base relativa</h1><img srcset="data:image/png;base64,AAAA 1x, ../../tema.css 2x">',
+    'esquema.html': '<h1>Mesmo esquema</h1><link href="http:../tema.css">',
     'guias/introdução/local.css': 'local',
     'guias/comum.js': 'pai',
     'tema.css': 'relativo',
@@ -232,12 +236,17 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
   await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({staticDir: 'recursos', routes: [
     {path: '/especial?modo=teste', file: 'especial.html'},
     {path: '/inicio/nested?modo=teste', file: 'guias/introdução/index.html'},
+    {path: '/fora?modo=teste', file: 'fora.html'},
+    {path: '/inicio/fora?modo=teste', file: 'guias/introdução/fora.html'},
+    {path: '/inicio/base?modo=teste', file: 'guias/introdução/base.html'},
+    {path: '/esquema?modo=teste', file: 'esquema.html'},
   ]}));
   const output = await collectSynthetic(setup, {
     lhci: `const assert = require('node:assert/strict');
       const fs = require('node:fs');
       if (process.argv[2] === 'collect') (async () => {
         const {ci} = JSON.parse(fs.readFileSync(process.argv[3].slice(9)));
+        assert.equal(ci.collect.url.length, 2);
         const [external, nested] = ci.collect.url;
         assert.ok(new URL(external).pathname.endsWith('/especial.html'));
         assert.ok(new URL(nested).pathname.endsWith('/guias/introdu%C3%A7%C3%A3o/'));
@@ -274,13 +283,15 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
       else (async () => {
         const script = fs.readFileSync(process.argv.at(-1), 'utf8');
         const origin = JSON.parse(/const ORIGIN = (.*);/.exec(script)[1]);
-        const routes = JSON.parse(/const ROUTES = (.*);/.exec(script)[1]).slice(0, 2);
-        assert.deepEqual(routes, ['/especial?modo=teste', '/inicio/nested?modo=teste']);
+        const routes = JSON.parse(/const ROUTES = (.*);/.exec(script)[1]);
+        assert.deepEqual(routes, ['/especial?modo=teste', '/inicio/nested?modo=teste', '/fora?modo=teste',
+          '/inicio/fora?modo=teste', '/inicio/base?modo=teste', '/esquema?modo=teste']);
+        const titles = [/Externa/, /Aninhada/, /Externa ambígua/, /Aninhada ambígua/, /Base relativa/, /Mesmo esquema/];
         const metrics = {};
         for (const [i, route] of routes.entries()) {
           const page = await fetch(origin + route);
           assert.equal(page.status, 200);
-          assert.match(await page.text(), i === 0 ? /Externa/ : /Aninhada/);
+          assert.match(await page.text(), titles[i]);
           assert.equal((await fetch(origin + route.split('?')[0])).status, 404);
           metrics['http_reqs{route:' + route + '}'] = {count: 3};
           metrics['http_req_duration{route:' + route + '}'] = {'p(95)': 20};
@@ -291,8 +302,13 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
   });
   assert.deepEqual(output.findings, []);
   const measured = [['/especial?modo=teste', 'especial.html'], ['/inicio/nested?modo=teste', 'guias/introdução/index.html']];
-  for (const tool of ['lighthouse', 'k6Routes']) {
-    assert.deepEqual(output.measurement[tool].map(({route, file}) => [route, file]), measured);
+  const omitted = [['/fora?modo=teste', 'fora.html'], ['/inicio/fora?modo=teste', 'guias/introdução/fora.html'],
+    ['/inicio/base?modo=teste', 'guias/introdução/base.html'], ['/esquema?modo=teste', 'esquema.html']];
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => [route, file]), measured);
+  assert.deepEqual(output.measurement.k6Routes.map(({route, file}) => [route, file]), [...measured, ...omitted]);
+  for (const [route] of omitted) {
+    assert.ok(output.coverage.some(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+      row.detail === `rota=${route}; referência relativa sai da raiz do snapshot`));
   }
 });
 
