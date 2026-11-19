@@ -751,3 +751,5 @@ PAUSADO-COTA
 - 19/11/2026 17:46 UTC — C9-R8 encerrado com código 0.
 - 19/11/2026 17:46 UTC — trabalho-C2-BANCO-ESCOPO iniciado em final-qa-banco-local por Sol high normal.
 - 19/11/2026 17:46 UTC — O laboratório de desempenho da fonte b5efe37c aprovou 66/68. Nas duas falhas, o V8 entregou um perfil rejeitado pelo coletor. Iniciada repetição isolada do controle. Dependências em 910c59cb passou em 42/42 com o OpenRewrite real. A seleção das duas arquiteturas de QA foi confirmada pelo revisor, que pediu reforço do teste.
+- 19/11/2026 17:46 UTC — trabalho-C2-CARGA-REGRESSAO iniciado em final-qa-carga-local por Sol medium normal.
+- 19/11/2026 17:47 UTC — Banco em fa97e86b passou em 21/21 com ferramentas e CLI e entrou no ramo de homologação 811f77fb. O controle físico isolado do desempenho passou com o mesmo digest rejeitado na rodada anterior. Os hashes oficiais dos dois binários Toxiproxy coincidem com o lock do QA. C9-R8 entregou 93a8553c.
