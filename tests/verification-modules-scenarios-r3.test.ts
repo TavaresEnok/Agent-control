@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {mkdir, mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -67,10 +67,9 @@ test('cenários sintéticos: isolamento, caminhos, processo e identidade do exam
     // The server commits, but the client observes a lost COMMIT acknowledgement.
     const ackRun = randomUUID();
     const originalTx = db.tx.bind(db);
-    let txCount = 0;
     db.tx = (async fn => {
       const value = await originalTx(fn);
-      if (++txCount === 3) throw Error('synthetic lost commit ACK');
+      if (value && typeof value === 'object' && 'summary' in value) throw Error('synthetic lost commit ACK');
       return value;
     }) as typeof db.tx;
     try {
@@ -86,16 +85,48 @@ test('cenários sintéticos: isolamento, caminhos, processo e identidade do exam
     let workerCalls = 0;
     await assert.rejects(() => runVerificationModule({...base, collectorOutput: output('app.ts'), worker: {run: async () => {workerCalls++; return '{}';}}}));
     assert.equal(workerCalls, 0, 'sem reserva comprovada, o worker não recebe identidade fabricada');
-    // Simula uma interrupção do host depois de registrar um run e antes da limpeza.
-    await db.pool.query("UPDATE ac_verify_runs SET status='running', report_dir='pending', finished_at=NULL WHERE id=$1", [github.runId]);
-    await db.pool.query("UPDATE ac_intents SET state='accepted' WHERE id=$1", [github.intentId]);
+    // Perde o processo depois da preparação e antes do COMMIT, sem executar
+    // a transação de compensação. Somente a reserva sobrevive no banco.
+    const orphanId = randomUUID();
+    let interrupted = false;
+    db.tx = (async fn => {
+      if (interrupted) throw Error('synthetic connection unavailable');
+      return originalTx(async client => {
+        const value = await fn(client);
+        if (value && typeof value === 'object' && 'summary' in value) {
+          interrupted = true;
+          throw Error('synthetic stop before commit');
+        }
+        return value;
+      });
+    }) as typeof db.tx;
+    try {
+      await assert.rejects(runVerificationModule({...base, runId: orphanId, collectorOutput: output('app.ts')}), /synthetic stop before commit/);
+    } finally {
+      db.tx = originalTx;
+    }
+    const {rows: [orphan]} = await db.pool.query(
+      'SELECT status, report_dir, report_prepared_dir FROM ac_verify_runs WHERE id=$1', [orphanId],
+    );
+    assert.equal(orphan.status, 'running');
+    assert.equal(orphan.report_dir, 'pending');
+    assert.ok(await readFile(join(orphan.report_prepared_dir, '.run-pending.json'), 'utf8'));
+    assert.ok(!(await listModuleReports(data, projectId)).some(item => item.id === orphanId));
     await assert.rejects(() => runVerificationModule({...base, collectorOutput: output('app.ts')}), refusal('VERIFY_ALREADY_RUNNING'));
     await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1", [exam.contextId]);
     const nextAuthority = await db.acquire(principal, exam.contextId, randomUUID(), 'personal-qa', 60);
     const retried = await runVerificationModule({...base, authority: nextAuthority, collectorOutput: output('app.ts')});
     assert.equal(retried.hasToolFailure, false);
-    const abandoned = await db.pool.query('SELECT r.status, i.state FROM ac_verify_runs r JOIN ac_intents i ON i.id=r.intent_id WHERE r.id=$1', [github.runId]);
+    const abandoned = await db.pool.query('SELECT r.status, i.state FROM ac_verify_runs r JOIN ac_intents i ON i.id=r.intent_id WHERE r.id=$1', [orphanId]);
     assert.deepEqual(abandoned.rows[0], {status: 'failed', state: 'failed'});
+    await assert.rejects(stat(orphan.report_prepared_dir), {code: 'ENOENT'});
+    const hidden = join(root, 'interrupted-storage');
+    await rename(join(data, 'verificacoes'), hidden);
+    await assert.rejects(reconcileModuleReports(db, principal, nextAuthority, data, projectId), refusal('VERIFY_REPORT_INTEGRITY'));
+    assert.equal((await db.pool.query('SELECT report_legacy_missing FROM ac_verify_runs WHERE id=$1', [retried.runId])).rows[0]?.report_legacy_missing, false);
+    await rename(hidden, join(data, 'verificacoes'));
+    await reconcileModuleReports(db, principal, nextAuthority, data, projectId);
+    assert.ok((await listModuleReports(data, projectId)).some(item => item.id === retried.runId));
     await db.releaseLease(nextAuthority);
   } finally {
     await db.pool.end();

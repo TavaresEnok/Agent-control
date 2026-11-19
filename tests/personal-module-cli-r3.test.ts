@@ -7,6 +7,7 @@ import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {runPersonalModuleCli} from '../src/personal-module-cli.ts';
+import {listModuleReports, reconcileModuleReports, writeModuleReport} from '../src/verification-modules.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const base=process.env.AC_TEST_DATABASE_URL;
@@ -46,5 +47,31 @@ test('descarte retoma publicação parcial e não aceita caminhos fora do projet
   await db.pool.query('UPDATE ac_verify_runs SET report_dir=$2 WHERE id=$1',[run,outside]);
   await assert.rejects(discard,(e:unknown)=>e instanceof Refusal&&e.code==='VERIFY_PATH_FORBIDDEN');
   assert.equal(await readFile(join(outside,'keep'),'utf8'),'safe');
+  await db.pool.query('UPDATE ac_verify_runs SET report_dir=$2 WHERE id=$1', [run, 'discarded:'+dir]);
+
+  const authority = await db.acquire(owner, contextId, randomUUID(), 'discard-recovery', 60);
+  const coverage = [{tool: 'fixture', version: '1', status: 'ok' as const, detail: 'synthetic'}];
+  for (const reportState of ['committed', 'legacy-pending', 'reserved-partial']) {
+   const target = randomUUID(), intentId = randomUUID();
+   const report = await writeModuleReport({
+    dataDirectory: data, projectId: project, module: 'qa', runId: target, createdAt: new Date(), commit: 'a'.repeat(40),
+    deferPublication: true, toolCoverage: coverage, fileCoverage: [], achados: [], raw: {coverage, findings: []},
+    ...(reportState === 'legacy-pending' ? {directoryName: `20261119-120001-${target.slice(0, 8)}-qa`} : {}),
+   });
+   if (reportState === 'reserved-partial') await rm(join(report.directory, '.run-pending.json'));
+   await db.pool.query(`INSERT INTO ac_intents(id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
+    VALUES($1,$2,$3,'synthetic','{}',$4,$5,$6,0)`, [intentId, contextId, owner, randomUUID(), randomUUID(), authority.epoch]);
+   await db.pool.query(`INSERT INTO ac_verify_runs(id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir,module,report_prepared_dir)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,'qa',$9)`, [
+    target, project, contextId, intentId, owner, 'a'.repeat(40), reportState === 'committed' ? 'done' : 'failed',
+    reportState === 'committed' ? report.directory : 'pending', reportState === 'legacy-pending' ? null : report.directory,
+   ]);
+   const retry = () => runPersonalModuleCli('qa', [file, project, '--descartar', target]);
+   await Promise.all([retry(), reconcileModuleReports(db, owner, authority, data, project), retry()]);
+   await assert.rejects(stat(report.directory), {code: 'ENOENT'});
+   assert.match((await db.pool.query('SELECT report_dir FROM ac_verify_runs WHERE id=$1', [target])).rows[0].report_dir, /^discarded(?::|$)/);
+   await reconcileModuleReports(db, owner, authority, data, project);
+   assert.ok(!(await listModuleReports(data, project)).some(summary => summary.id === target));
+  }
  } finally { await db.close(); await fixture.close(); await rm(root,{recursive:true,force:true}); }
 });

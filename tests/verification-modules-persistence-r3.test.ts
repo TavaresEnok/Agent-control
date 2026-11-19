@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, rename, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -15,6 +15,7 @@ test('publicação interrompida e atualizações concorrentes reconciliam com o 
   const root = await mkdtemp(join(tmpdir(), 'vmod-r3-'));
   try {
     await ledger.migrate();
+    await ledger.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     const principal = 'owner-persistence';
     const projectId = randomUUID();
     await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [projectId, 'Projeto']);
@@ -28,6 +29,7 @@ test('publicação interrompida e atualizações concorrentes reconciliam com o 
     const coverage = [{tool:'tool', version:'1', status:'ok' as const, detail:'exame concluído', files:['src/a.ts']}];
     await mkdir(join(root,'data'), {mode:0o700});
     const report = await writeModuleReport({dataDirectory:join(root,'data'), projectId, module:'qa', runId, createdAt:new Date(), commit,
+      directoryName:`20261119-120000-${runId.slice(0, 8)}-qa`,
       deferPublication:true, achados:[achado], toolCoverage:coverage, fileCoverage:[], raw:{coverage,findings:[]}});
     await ledger.pool.query(`INSERT INTO ac_intents (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,0)`, [intent,contextId,principal,'0'.repeat(64),'{}',randomUUID(),randomUUID(),authority.epoch]);
@@ -35,9 +37,15 @@ test('publicação interrompida e atualizações concorrentes reconciliam com o 
       VALUES($1,$2,$3,$4,$5,$6,'done',$7,'qa')`, [runId,projectId,contextId,intent,principal,commit,report.directory]);
     await ledger.pool.query(`INSERT INTO ac_verify_findings(run_id,achado_id,status,severity,file,line,payload)
       VALUES($1,'ACH-001','confirmado','alta','src/a.ts',1,$2::jsonb)`, [runId,JSON.stringify(achado)]);
+    await ledger.pool.query(`INSERT INTO ac_verify_tool_coverage(run_id,seq,tool,version,status,detail)
+      VALUES($1,1,'tool','1','ok','exame concluído')`, [runId]);
+    await ledger.pool.query(`INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,checklist)
+      VALUES($1,'src/a.ts','ferramenta','tool@1','[]'), ($1,'src/sem-evidencia.ts','ferramenta','tool@1','[]')`, [runId]);
     assert.equal((await listModuleReports(join(root,'data'), projectId)).length, 0);
     await Promise.all([reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId), reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId)]);
     assert.equal((await listModuleReports(join(root,'data'), projectId))[0]?.counts.alta, 1);
+    assert.deepEqual((await ledger.pool.query('SELECT file, provenance FROM ac_verify_coverage WHERE run_id=$1 ORDER BY file', [runId])).rows,
+      [{file:'src/a.ts', provenance:'collector'}, {file:'src/sem-evidencia.ts', provenance:'unknown'}]);
     // Simulates process death immediately after a committed status change.
     await ledger.pool.query("UPDATE ac_verify_findings SET status='fechado' WHERE run_id=$1", [runId]);
     assert.equal((await listModuleReports(join(root,'data'), projectId))[0]?.counts.alta, 1);
@@ -56,5 +64,16 @@ test('publicação interrompida e atualizações concorrentes reconciliam com o 
     await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
     assert.equal(JSON.parse(await readFile(file,'utf8')).achados[0].status, 'fechado');
     assert.equal((await listModuleReports(join(root,'data'), projectId))[0]?.counts.alta, 0);
+    // The pre-tombstone CLI used to remove a directory and leave its path in
+    // the database. Missing historical files have an indeterminate cause.
+    const hidden = join(root, 'historical');
+    await rename(report.directory, hidden);
+    await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
+    assert.deepEqual((await ledger.pool.query('SELECT report_dir, report_legacy_missing FROM ac_verify_runs WHERE id=$1', [runId])).rows[0],
+      {report_dir: report.directory, report_legacy_missing: true});
+    assert.deepEqual(await listModuleReports(join(root,'data'), projectId), []);
+    await rename(hidden, report.directory);
+    await reconcileModuleReports(ledger,principal,authority,join(root,'data'),projectId);
+    assert.equal((await ledger.pool.query('SELECT report_legacy_missing FROM ac_verify_runs WHERE id=$1', [runId])).rows[0]?.report_legacy_missing, false);
   } finally { await ledger.pool.end(); await database.close(); await rm(root,{recursive:true,force:true}); }
 });

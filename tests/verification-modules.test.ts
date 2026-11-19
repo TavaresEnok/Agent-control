@@ -273,6 +273,16 @@ test('parseModuleCollectorOutput e runBoundedCollectorProcess validam caminhos, 
     '.mcp.json',
     '.husky/pre-commit',
   ];
+  const namedFile = 'telas/Código de barras..test.ts';
+  assert.equal(assertModuleRepoRelativePath(namedFile), namedFile);
+  const namedOutput = parseModuleCollectorOutput(JSON.stringify({
+    coverage: [{tool: 'knip', version: '5.1.0', status: 'ok', detail: 'analisado'}],
+    findings: [{tool: 'knip', rule: 'unused', file: namedFile, line: 1, severity: 'baixa', message: 'não utilizado', evidence: 'localizado'}],
+  }));
+  assert.equal(namedOutput.findings[0]?.file, namedFile);
+  for (const unsafe of ['telas/../config', 'telas/ .env/token', ' origem.ts', 'telas/oculto\u202e.ts']) {
+    assert.throws(() => assertModuleRepoRelativePath(unsafe));
+  }
   for (const badPath of badPaths) {
     assert.throws(
       () => assertModuleRepoRelativePath(badPath),
@@ -402,7 +412,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     await capacity.addAccount(principal, projectId, {id: accountId, provider: 'claude', label: 'Synthetic reviewer', resourceIdentity: `fixture-${accountId}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://module-test', maxConcurrent: 2});
     await capacity.addProfile(principal, projectId, {id: profileId, accountId, model: 'fixture-model', effort: 'medium', role: 'specialist'});
     await capacity.observeQuota(principal, accountId, {status: 'available', source: 'synthetic://module-test', ttlSeconds: 3600});
-    const policyRevision = await capacity.publish(principal, projectId, 0, {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 1, roles: {specialist: {regular: [profileId], emergency: []}}});
+    const policyRevision = await capacity.publish(principal, projectId, 0, {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {specialist: {regular: [profileId], emergency: []}}});
 
     // Sem contexto principal ainda -> VERIFY_CONTEXT_REQUIRED
     await assert.rejects(
@@ -723,13 +733,26 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, 'confirmado');
       await db.pool.query('DROP TRIGGER synthetic_recheck_failure ON ac_verify_findings');
       await db.pool.query('DROP FUNCTION synthetic_recheck_failure()');
-      // A later recheck's generation fences a reviewer that returns late.
-      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput, worker: {run: async () => {
-        await db.pool.query('UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1 WHERE id=$1', [failedResultRunId]);
-        return closedWorker.run();
-      }}}));
-      assert.equal((await db.pool.query('SELECT status FROM ac_verify_findings WHERE run_id=$1', [failedResultRunId])).rows[0]?.status, 'confirmado');
-      const rechecked = await recheckModuleFindings(db, principal, depAuth, {
+      // Two real requests use the same HEAD, so only the generation can
+      // reject the older conflicting verdict after both workers have run.
+      let markOlderStarted!: () => void;
+      let finishOlder!: () => void;
+      const olderStarted = new Promise<void>(resolve => {markOlderStarted = resolve;});
+      const olderMayFinish = new Promise<void>(resolve => {finishOlder = resolve;});
+      let olderIntent = '';
+      const older = recheckModuleFindings(db, principal, depAuth, {...recheckInput, worker: {async run(call) {
+        olderIntent = call.intentId;
+        markOlderStarted();
+        await olderMayFinish;
+        return JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'Persiste.', proof: 'fixture'});
+      }}});
+      const olderRejected = assert.rejects(older,
+        (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_RUN_CONFLICT');
+      void olderRejected.catch(() => undefined);
+      let rechecked: Awaited<ReturnType<typeof recheckModuleFindings>>;
+      try {
+        await Promise.race([olderStarted, older]);
+        rechecked = await recheckModuleFindings(db, principal, depAuth, {
         module: 'dependencias',
         runId: failedResultRunId,
         achadoIds: ['ACH-001'],
@@ -744,11 +767,16 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
             return JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'Atualizado.', proof: 'ok'});
           },
         },
-      });
+        });
+      } finally {
+        finishOlder();
+        await olderRejected;
+      }
       assert.deepEqual(rechecked.results, [{id: 'ACH-001', status: 'fechado'}]);
       assert.equal(seenTasks.length, 1);
       assert.equal(seenTasks[0]?.includes('Atualização disponível.'), false);
       assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [recheckIntent])).rows[0]?.state, 'done');
+      assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1', [olderIntent])).rows[0]?.state, 'failed');
       const updated = await readModuleReport(dataDirectory, projectId, failedResultRunId, 'dependencias');
       assert.equal(updated.summary.counts.baixa, 0);
       assert.equal(updated.achados[0]?.status, 'fechado');

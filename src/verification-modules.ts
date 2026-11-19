@@ -13,6 +13,10 @@ import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transp
 import {finishExamIntentTx} from './exam-intent.ts';
 import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
+import {
+  MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
+  removeOwnedModuleContainer, type CollectorProcess,
+} from './module-container-cleanup.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
 import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
@@ -28,7 +32,7 @@ import {
 } from './verify-types.ts';
 
 /** Container runtime binary. Tests compare against this constant and do not quote the name. */
-export const MODULE_RUNTIME_BIN = 'docker';
+export {MODULE_RUNTIME_BIN};
 export const MODULE_CONTAINER_USER = '65532:65532';
 export const MAX_COLLECTOR_STDOUT_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_COLLECTOR_TIMEOUT_MS = 1_200_000;
@@ -52,10 +56,11 @@ const DIGEST = /(?:^|@)sha256:[a-f0-9]{64}$/;
 const MUTABLE_LATEST = /(^|[/:])latest($|@)/i;
 const CONTROL_CHAR = /[\u0000-\u001F\u007F-\u009F]/;
 const MULTILINE_CONTROL_CHAR = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
-const REPO_PATH = /^[A-Za-z0-9._@+\/-]+$/;
+const REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/-]+$/u;
 const LOWER_FORBIDDEN = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 const ACHADO_ID = z.string().regex(/^ACH-\d{3}$/);
 const ACHADO_FILE = /^ACH-\d{3}\.md$/;
+const MODULE_REPORT_DIR = /^\d{8}-\d{6}-(?:[a-f0-9]{8}|[a-f0-9]{32})-(qa|arquitetura|dependencias|banco|prontidao|desempenho|documentacao|conformidade)$/;
 const EXCERPT_LIMIT = 4000;
 const ARCHIVE_TIMEOUT_MS = 60_000;
 const execGit = promisify(execFile);
@@ -122,7 +127,7 @@ export type ModuleCollectorOutput = z.infer<typeof ModuleCollectorOutput>;
 export const ModuleReportSummary = z.object({
   id: Id,
   module: z.enum(VERIFICATION_MODULES),
-  directoryName: z.string().regex(/^\d{8}-\d{6}-[a-f0-9]{8}-(qa|arquitetura|dependencias|banco|prontidao|desempenho|documentacao|conformidade)$/),
+  directoryName: z.string().regex(MODULE_REPORT_DIR),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   image: z.string().optional(),
   createdAt: z.string().min(1).max(40),
@@ -167,6 +172,7 @@ export type VerificationModuleRunInput = {
   passiveTlsEvidence?: ProntidaoPassiveEvidence;
   collectorOutput?: unknown;
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
+  executeCollectorProcess?: CollectorProcess;
   /** Optional independent reviewer worker. When present, findings are confirmed without passing author conclusions. */
   worker?: VerifyWorker;
   notes?: readonly string[];
@@ -225,6 +231,7 @@ function assertInside(root: string, target: string): void {
 function forbiddenSegment(part: string): boolean {
   return (
     part === ''
+    || part !== part.trim()
     || part === '.'
     || part === '..'
     || part === '.git'
@@ -242,6 +249,7 @@ export function assertModuleRepoRelativePath(file: string): string {
   const trimmed = file.trim();
   if (
     !trimmed
+    || file !== trimmed
     || trimmed.length > 400
     || trimmed.startsWith('/')
     || trimmed.startsWith('~')
@@ -771,8 +779,9 @@ export type BoundedProcessResult = {code: number; stdout: Buffer; stderr: string
 
 export function runBoundedCollectorProcess(
   args: readonly string[],
-  options: {timeoutMs: number; maxStdoutBytes: number; signal?: AbortSignal; containerName?: string},
+  options: Parameters<CollectorProcess>[1],
 ): Promise<BoundedProcessResult> {
+  if (options.signal?.aborted) return Promise.reject(new Refusal('VERIFY_TOOLS_FAILED', 503));
   return new Promise((resolvePromise, reject) => {
     let settled = false;
     let totalBytes = 0;
@@ -790,13 +799,8 @@ export function runBoundedCollectorProcess(
       settled = true;
       if (timer) clearTimeout(timer);
       options.signal?.removeEventListener('abort', onAbort);
+      child.once('close', () => reject(error));
       child.kill('SIGKILL');
-      if (!options.containerName) { reject(error); return; }
-      // The Docker client and daemon are separate processes: removing the named
-      // container is necessary even after the client has been killed.
-      execFile(MODULE_RUNTIME_BIN, ['rm', '-f', options.containerName],
-        {timeout: 10000, env: {PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent'}},
-        () => reject(error));
     };
     const finish = (code: number) => {
       if (settled) return;
@@ -813,6 +817,7 @@ export function runBoundedCollectorProcess(
     options.signal?.addEventListener('abort', onAbort, {once: true});
     if (options.signal?.aborted) onAbort();
     child.stdout?.on('data', (chunk: Buffer | string) => {
+      if (settled) return;
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
       totalBytes += buf.byteLength;
       if (totalBytes > options.maxStdoutBytes) {
@@ -842,11 +847,12 @@ export async function runModuleCollectorContainer(input: {
   maxStdoutBytes?: number;
   passiveTlsEvidence?: ProntidaoPassiveEvidence;
   signal?: AbortSignal;
-  executeProcess?: (args: readonly string[], options: {timeoutMs: number; maxStdoutBytes: number; signal?: AbortSignal; containerName?: string}) => Promise<BoundedProcessResult>;
+  executeProcess?: CollectorProcess;
+  journal?: ReturnType<typeof moduleContainerJournal>;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
-  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs) || timeoutMs < 1) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || !Number.isInteger(maxStdoutBytes) || maxStdoutBytes < 1) {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
   const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
@@ -860,31 +866,35 @@ export async function runModuleCollectorContainer(input: {
       await writeFile(evidenceFile, `${JSON.stringify(validated)}\n`, {encoding: 'utf8', mode: 0o644, flag: 'wx'});
       await chmod(evidenceFile, 0o644);
     }
-    const containerName = `ac-module-${randomUUID()}`;
+    const token = randomUUID();
     const baseArgs = moduleCollectorArguments({
       image: input.image,
       repository: snapshot,
       ...(evidenceFile !== undefined ? {evidenceFile} : {}),
     });
     const run = input.executeProcess ?? runBoundedCollectorProcess;
-    // Create before start: cancellation during creation can leave only a stopped
-    // container, and removal racing with start cannot leave a running container.
-    const createArgs = [baseArgs[0]!, 'create', '--name', containerName, ...baseArgs.slice(2)];
+    // Journal the owner before create, and record the immutable ID before start.
+    // Let create return its ID even when cancellation arrives during the call.
+    const createArgs = [MODULE_RUNTIME_BIN, 'create', '--pull', 'never', '--name', moduleContainerName(token),
+      '--label', `${MODULE_CONTAINER_LABEL}=${token}`, ...baseArgs.slice(3)];
+    if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+    await input.journal?.register(token);
+    let id: string | undefined;
     try {
-      const created = await run(createArgs, {timeoutMs, maxStdoutBytes: 4096, signal: input.signal, containerName});
+      const created = await run(createArgs, {timeoutMs: Math.min(timeoutMs, 10_000), maxStdoutBytes: 4096});
       if (created.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
-      const result = await run([MODULE_RUNTIME_BIN, 'start', '--attach', containerName],
-        {timeoutMs, maxStdoutBytes, signal: input.signal, containerName});
+      const candidate = createdContainerId(created.stdout);
+      await assertOwnedModuleContainer(run, token, candidate);
+      id = candidate;
+      await input.journal?.beforeStart(token, id);
+      if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+      const result = await run([MODULE_RUNTIME_BIN, 'start', '--attach', id],
+        {timeoutMs, maxStdoutBytes, signal: input.signal});
       const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes, module: input.module});
       return {code: result.code, output};
     } finally {
-      if (!input.executeProcess) {
-        await new Promise<void>(resolveCleanup => {
-          execFile(MODULE_RUNTIME_BIN, ['rm', '-f', containerName],
-            {timeout: 10000, env: {PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent'}},
-            () => resolveCleanup());
-        });
-      }
+      if (input.journal) await input.journal.cleanup(token, id);
+      else await removeOwnedModuleContainer(run, {token, id: id ?? null}, async () => {});
     }
   } finally {
     try {
@@ -970,7 +980,7 @@ function stampOf(createdAt: Date): string {
 }
 
 function reportSuffix(runId: string): string {
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) return runId.slice(0, 8).toLowerCase();
+  if (Id.safeParse(runId).success) return runId.replaceAll('-', '').toLowerCase();
   return randomBytes(4).toString('hex');
 }
 
@@ -1214,6 +1224,7 @@ async function writePrivate(path: string, root: string, content: string): Promis
   try {
     await handle.writeFile(content, {encoding: 'utf8'});
     await handle.chmod(0o600);
+    await handle.sync();
   } finally {
     await handle.close();
   }
@@ -1224,6 +1235,15 @@ async function writePrivate(path: string, root: string, content: string): Promis
   const real = await realpath(lexical);
   if (real !== lexical) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   assertInside(root, real);
+}
+
+async function syncReportDirectory(path: string): Promise<void> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 export async function writeModuleReport(input: {
@@ -1343,8 +1363,8 @@ export async function writeModuleReport(input: {
   const root = await ensureDir(dataReal, 'verificacoes');
   const project = await ensureDir(root, input.projectId);
   const directory = reserved ? await ensureDir(project, directoryName) : await createReportDir(project, directoryName);
-  await ensureDir(directory, 'achados');
-  await ensureDir(directory, 'bruto');
+  const findingsDirectory = await ensureDir(directory, 'achados');
+  const rawDirectory = await ensureDir(directory, 'bruto');
   for (const file of planned) {
     const path = file.segments.reduce((parent, segment) => {
       const next = join(parent, segment);
@@ -1353,10 +1373,10 @@ export async function writeModuleReport(input: {
     }, directory);
     await writePrivate(path, directory, file.body);
   }
+  await Promise.all([syncReportDirectory(findingsDirectory), syncReportDirectory(rawDirectory)]);
+  for (const ancestor of [directory, project, root, dataReal]) await syncReportDirectory(ancestor);
   return {directory, directoryName, summary};
 }
-
-const MODULE_REPORT_DIR = /^\d{8}-\d{6}-[a-f0-9]{8}-(qa|arquitetura|dependencias|banco|prontidao|desempenho|documentacao|conformidade)$/;
 
 async function resolveProjectVerificationsDir(dataDirectory: string, projectId: string): Promise<string | null> {
   assertSafeSegment(projectId);
@@ -1409,7 +1429,12 @@ async function readTextInside(root: string, path: string, missingCode: 'VERIFY_A
   const real = await realpath(lexical);
   if (real !== lexical) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   assertInside(root, real);
-  return readFile(real, 'utf8');
+  const handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    return await handle.readFile('utf8');
+  } finally {
+    await handle.close();
+  }
 }
 
 async function loadModuleReports(
@@ -1418,22 +1443,19 @@ async function loadModuleReports(
 ): Promise<{directory: string; summary: ModuleReportSummary}[]> {
   if (module !== undefined) assertVerificationModule(module);
   const found: {directory: string; summary: ModuleReportSummary}[] = [];
-  for (const name of await readdir(projectDir)) {
+  for (const entry of await readdir(projectDir, {withFileTypes: true})) {
+    const name = entry.name;
     if (!MODULE_REPORT_DIR.test(name)) continue;
     if (module !== undefined && !name.endsWith(`-${module}`)) continue;
     const path = join(projectDir, name);
-    const info = await lstat(path);
-    if (info.isSymbolicLink()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
-    if (!info.isDirectory()) continue;
-    const real = await realpath(path);
-    if (real !== path) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
-    assertInside(projectDir, real);
+    if (entry.isSymbolicLink()) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+    if (!entry.isDirectory() || !await reportDirectoryExists(path)) continue;
     try {
-      const text = await readTextInside(projectDir, join(real, 'run.json'), 'VERIFY_REPORT_INVALID');
+      const text = await readTextInside(projectDir, join(path, 'run.json'), 'VERIFY_REPORT_INVALID');
       const parsed = ModuleReportSummary.safeParse(JSON.parse(text));
       if (!parsed.success || parsed.data.directoryName !== name) continue;
       if (module !== undefined && parsed.data.module !== module) continue;
-      found.push({directory: real, summary: parsed.data});
+      found.push({directory: path, summary: parsed.data});
     } catch (error) {
       if (error instanceof Refusal && error.code === 'VERIFY_PATH_FORBIDDEN') throw error;
     }
@@ -1500,23 +1522,6 @@ export async function readModuleAchadoMarkdown(
   const matches = (await loadModuleReports(projectDir, module)).filter(item => item.summary.id === runId);
   if (matches.length !== 1) throw new Refusal('VERIFY_REPORT_NOT_FOUND', 404);
   return readTextInside(matches[0]!.directory, join(matches[0]!.directory, 'achados', `${achadoId}.md`), 'VERIFY_ACHADO_NOT_FOUND');
-}
-
-export async function removeModuleReport(
-  dataDirectory: string,
-  projectId: string,
-  runId: string,
-  module?: VerificationModule,
-): Promise<void> {
-  assertSafeSegment(projectId);
-  assertSafeSegment(runId);
-  const projectDir = await resolveProjectVerificationsDir(dataDirectory, projectId);
-  if (!projectDir) return;
-  const matches = (await loadModuleReports(projectDir, module)).filter(item => item.summary.id === runId);
-  for (const match of matches) {
-    assertInside(projectDir, match.directory);
-    await rm(match.directory, {recursive: true, force: true});
-  }
 }
 
 async function assertReportOutsideRepo(repoPath: string, dataDirectory: string): Promise<void> {
@@ -1709,6 +1714,7 @@ async function beginModuleRunTx(input: {
   commit: string;
   runId: string;
   repoPath: string;
+  preparedDir: string;
 }): Promise<string> {
   const intentId = randomUUID();
   await input.ledger.tx(async c => {
@@ -1729,17 +1735,6 @@ async function beginModuleRunTx(input: {
       throw new Refusal('EXAM_CONTEXT_MISMATCH', 403);
     }
     await c.query('SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))', [input.projectId, input.module]);
-    const abandoned = await c.query<{id: string; intent_id: string; context_id: string}>(
-      `SELECT r.id::text, r.intent_id::text, r.context_id::text FROM ac_verify_runs r
-       JOIN ac_intents i ON i.id=r.intent_id
-       LEFT JOIN ac_managers m ON m.context_id=r.context_id AND m.epoch=i.manager_epoch AND m.lease_until>clock_timestamp()
-       WHERE r.project_id=$1 AND r.module=$2 AND r.status='running' AND m.context_id IS NULL FOR UPDATE OF r`,
-      [input.projectId, input.module],
-    );
-    for (const old of abandoned.rows) {
-      await c.query("UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running'", [old.id]);
-      await finishExamIntentTx(c, input.ledger, {intentId: old.intent_id, contextId: old.context_id}, 'failed');
-    }
     const alreadyRunning = await c.query(
       "SELECT 1 FROM ac_verify_runs WHERE project_id=$1 AND module=$2 AND status='running' LIMIT 1",
       [input.projectId, input.module],
@@ -1775,9 +1770,9 @@ async function beginModuleRunTx(input: {
       ],
     );
     await c.query(
-      `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module)
-       VALUES ($1,$2,$3,$4,$5,$6,'running','pending',$7)`,
-      [input.runId, input.projectId, input.authority.contextId, intentId, input.principal, input.commit, input.module],
+      `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module, report_prepared_dir)
+       VALUES ($1,$2,$3,$4,$5,$6,'running','pending',$7,$8)`,
+      [input.runId, input.projectId, input.authority.contextId, intentId, input.principal, input.commit, input.module, input.preparedDir],
     );
   });
   return intentId;
@@ -1795,10 +1790,15 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   }
   await assertPersonalActivation(input.ledger);
   await assertReportOutsideRepo(input.repoPath, input.dataDirectory);
-  await reconcileModuleReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId);
-  const runId = input.runId ?? randomUUID();
-  if (!Id.safeParse(runId).success) throw new Refusal('INVALID_CONTRACT', 400);
+  const execute = input.executeCollectorProcess ?? runBoundedCollectorProcess;
+  await recoverModuleContainers(input.ledger, input.principal, input.authority, input.projectId, execute, input.module);
+  await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId);
+  const parsedRunId = Id.safeParse(input.runId ?? randomUUID());
+  if (!parsedRunId.success) throw new Refusal('INVALID_CONTRACT', 400);
+  const runId = parsedRunId.data.toLowerCase();
   const createdAt = input.createdAt ?? new Date();
+  const preparedDir = join(await requireDataDirectory(input.dataDirectory), 'verificacoes', input.projectId,
+    moduleReportDirectoryName(createdAt, runId, input.module));
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
   const needImage = input.collectorOutput === undefined && input.runCollector === undefined;
@@ -1817,11 +1817,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     commit: input.commit,
     runId,
     repoPath: input.repoPath,
+    preparedDir,
   });
 
   let snapshot: string | undefined;
-  let unpublishedReport: string | undefined;
-  let databaseCommitted = false;
   let sourceCoverage: ModuleToolCoverage[] | undefined;
   try {
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
@@ -1862,6 +1861,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         timeoutMs,
         maxStdoutBytes,
         signal: input.signal,
+        executeProcess: execute,
+        journal: moduleContainerJournal(input.ledger, input.principal, input.authority, runId, execute),
         ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
       });
       collectorCode = executed.code;
@@ -1885,7 +1886,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       for (const file of row.files ?? []) await resolveInsideRepo(snapshot, file);
     }
     } catch (error) {
-      if (input.signal?.aborted) throw error;
+      if (input.signal?.aborted || (error instanceof Refusal && error.code === 'VERIFY_CONTAINER_CLEANUP_PENDING')) throw error;
       sourceCoverage = undefined;
       const reason = error instanceof Refusal ? error.code : 'VERIFY_TOOLS_FAILED';
       collectorCode = 1;
@@ -1967,28 +1968,33 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     if (collectorCode !== 0 && !collectorData.coverage.some(row => row.status === 'failed')) {
       notes.push(`O coletor saiu com código ${collectorCode}.`);
     }
-    const report = await writeModuleReport({
-      dataDirectory: input.dataDirectory,
-      projectId: input.projectId,
-      module: input.module,
-      runId,
-      createdAt,
-      commit: input.commit,
-      image,
-      deferPublication: true,
-      toolCoverage: sourceCoverage ?? collectorData.coverage,
-      fileCoverage,
-      achados,
-      raw: {...collectorData, coverage: sourceCoverage ?? collectorData.coverage},
-      ...(notes.length > 0 ? {note: notes.join(' ')} : {}),
-    });
-    unpublishedReport = report.directory;
-
     const finalState: 'done' | 'failed' = hasToolFailure ? 'failed' : 'done';
-    if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
-    await input.ledger.tx(async c => {
+    const report = await input.ledger.tx(async c => {
       await input.ledger.authorize(c, input.principal, input.authority.contextId);
       await input.ledger.fence(c, input.authority);
+      const active = await c.query(
+        "SELECT 1 FROM ac_verify_runs WHERE id=$1 AND context_id=$2 AND status='running' AND report_prepared_dir=$3 FOR UPDATE",
+        [runId, input.authority.contextId, preparedDir],
+      );
+      if (!active.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
+      if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+      const prepared = await writeModuleReport({
+        dataDirectory: input.dataDirectory,
+        projectId: input.projectId,
+        module: input.module,
+        runId,
+        createdAt,
+        commit: input.commit,
+        image,
+        deferPublication: true,
+        toolCoverage: sourceCoverage ?? collectorData.coverage,
+        fileCoverage,
+        achados,
+        raw: {...collectorData, coverage: sourceCoverage ?? collectorData.coverage},
+        ...(notes.length > 0 ? {note: notes.join(' ')} : {}),
+      });
+      if (prepared.directory !== preparedDir) throw new Refusal('VERIFY_REPORT_INTEGRITY', 409);
+      if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
       for (const achado of achados) {
         await c.query(
           `INSERT INTO ac_verify_findings (run_id, achado_id, status, severity, file, line, payload)
@@ -2022,17 +2028,17 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           [runId, index + 1, item.tool, item.version, item.status, item.detail],
         );
       }
+      await input.ledger.fence(c, input.authority);
       const updated = await c.query(
         `UPDATE ac_verify_runs SET status=$2, report_dir=$3, finished_at=clock_timestamp(), collector_image=$5
          WHERE id=$1 AND context_id=$4 AND status='running'`,
-        [runId, finalState, report.directory, input.authority.contextId, image ?? null],
+        [runId, finalState, prepared.directory, input.authority.contextId, image ?? null],
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
       await finishExamIntentTx(c, input.ledger, {intentId, contextId: input.authority.contextId}, finalState);
+      return prepared;
     });
-    databaseCommitted = true;
-    await reconcileModuleReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId);
-    unpublishedReport = undefined;
+    await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId, runId);
 
     return {
       runId,
@@ -2057,10 +2063,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         return Boolean(updated.rowCount);
       });
     } catch { /* preserve original failure */ }
-    // Never delete on an ambiguous commit: the final transaction may have
-    // committed despite a lost acknowledgement. A confirmed transition from
-    // running proves that the final transaction did not commit.
-    if (unpublishedReport && !databaseCommitted && rolledBackRun) await rm(unpublishedReport, {recursive: true, force: true}).catch(() => undefined);
+    // Only a confirmed failure transition permits cleanup here. After an
+    // ambiguous COMMIT recovery consults the persisted reservation and outcome.
+    if (rolledBackRun) await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId)
+      .catch(() => undefined);
     throw error;
   } finally {
     if (snapshot) await removeModuleSnapshot(snapshot);
@@ -2350,104 +2356,313 @@ async function replacePrivateFile(directory: string, name: string, body: string)
     if (existing?.isSymbolicLink() || (existing && !existing.isFile())) {
       throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     }
-    await writeFile(temporary, body, {mode: 0o600, flag: 'wx'});
-    await chmod(temporary, 0o600);
+    if (existing && (existing.mode & 0o777) === 0o600
+      && await readTextInside(directory, target, 'VERIFY_REPORT_INVALID') === body) return;
+    await writePrivate(temporary, directory, body);
     await rename(temporary, target);
-    await chmod(target, 0o600);
   } catch (error) {
     await rm(temporary, {force: true});
     throw error;
   }
 }
 
-async function updateModuleReportFiles(
-  dataDirectory: string,
-  projectId: string,
-  runId: string,
-  updates: readonly {id: string; status: Achado['status']}[],
-): Promise<void> {
-  const projectDir = await resolveProjectVerificationsDir(dataDirectory, projectId);
-  if (!projectDir) return;
-  const loaded = (await loadModuleReports(projectDir)).filter(item => item.summary.id === runId);
-  const byId = new Map(updates.map(item => [item.id, item.status]));
-  for (const report of loaded) {
-    const achadosPath = join(report.directory, 'achados.json');
-    const text = await readTextInside(report.directory, achadosPath, 'VERIFY_REPORT_INVALID');
-    const parsed = JSON.parse(text) as {achados?: Array<Record<string, unknown>>};
-    if (Array.isArray(parsed.achados)) {
-      parsed.achados = parsed.achados.map(item => {
-        const id = typeof item.id === 'string' ? item.id : '';
-        const nextStatus = byId.get(id);
-        return nextStatus ? {...item, status: nextStatus} : item;
-      });
-      await replacePrivateFile(report.directory, 'achados.json', `${JSON.stringify(parsed, null, 2)}\n`);
-      const findings = parsed.achados.map(item => Achado.parse(item));
-      const findingsDirectory = join(report.directory, 'achados');
-      const findingsInfo = await lstat(findingsDirectory);
-      if (findingsInfo.isSymbolicLink() || !findingsInfo.isDirectory() || await realpath(findingsDirectory) !== findingsDirectory) {
-        throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-      }
-      for (const finding of findings) {
-        await replacePrivateFile(findingsDirectory, `${finding.id}.md`, guardReportText(achadoMarkdown(finding)));
-      }
-      const raw = JSON.parse(await readTextInside(report.directory, join(report.directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID'));
-      const coverage = ModuleCollectorOutput.parse(raw).coverage;
-      const runText = await readTextInside(report.directory, join(report.directory, 'run.json'), 'VERIFY_REPORT_INVALID');
-      const run = JSON.parse(runText) as Record<string, unknown>;
-      const summary = {...report.summary, counts: failureCounts(findings)};
-      await replacePrivateFile(report.directory, 'README.md', guardReportText(renderModuleReadme({
-        module: summary.module, runId: summary.id, directoryName: summary.directoryName,
-        createdAt: new Date(summary.createdAt), commit: summary.commit, note: summary.note,
-        total: findings.length, counts: summary.counts,
-        discarded: findings.filter(item => item.status === 'descartado').length, toolCoverage: coverage,
-      })));
-      await replacePrivateFile(report.directory, 'run.json', `${JSON.stringify({...run, counts: summary.counts}, null, 2)}\n`);
-    }
+type PersistedModuleReport = {
+  id: string;
+  module: VerificationModule;
+  commit_id: string;
+  report_dir: string;
+  report_prepared_dir: string | null;
+  report_legacy_missing: boolean;
+};
 
+function reportIntegrity(): Refusal {
+  return new Refusal('VERIFY_REPORT_INTEGRITY', 409);
+}
+
+function assertPersistedReportPath(projectDir: string, path: string, row: PersistedModuleReport): void {
+  const id = row.id.replaceAll('-', '');
+  const name = basename(path);
+  const suffix = name.slice(16, -(row.module.length + 1));
+  if (dirname(path) !== projectDir || resolve(path) !== path || !MODULE_REPORT_DIR.test(name)
+    || !name.endsWith(`-${row.module}`) || (suffix !== id && (row.report_prepared_dir !== null || suffix !== id.slice(0, 8)))) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   }
 }
 
-/** Rebuild published reports from committed finding statuses while holding the run row lock.
- * Call before public report reads. The pending summary is private and is written
- * before the database commit; only committed rows may publish it as run.json.
- */
-export async function reconcileModuleReports(
-  ledger: Ledger, principal: string, authority: Authority, dataDirectory: string, projectId: string,
+async function reportDirectoryExists(directory: string): Promise<boolean> {
+  try {
+    const info = await lstat(directory);
+    if (info.isSymbolicLink() || !info.isDirectory() || await realpath(directory) !== directory) {
+      throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+    }
+    return true;
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return false;
+    throw error;
+  }
+}
+
+async function findReportSummary(directory: string): Promise<{summary: ModuleReportSummary | null; published: boolean}> {
+  for (const name of ['run.json', '.run-pending.json']) {
+    let text: string;
+    try {
+      text = await readTextInside(directory, join(directory, name), 'VERIFY_REPORT_INVALID');
+    } catch (error) {
+      if (error instanceof Refusal && error.code === 'VERIFY_REPORT_INVALID') continue;
+      throw error;
+    }
+    try {
+      const summary = ModuleReportSummary.safeParse(JSON.parse(text));
+      return {summary: summary.success ? summary.data : null, published: name === 'run.json'};
+    } catch {
+      return {summary: null, published: name === 'run.json'};
+    }
+  }
+  return {summary: null, published: false};
+}
+
+function reportMatches(summary: ModuleReportSummary, directory: string, row: PersistedModuleReport): boolean {
+  return summary.id === row.id && summary.module === row.module && summary.commit === row.commit_id
+    && summary.directoryName === basename(directory);
+}
+
+async function assertUnsharedLegacyReport(client: pg.PoolClient, target: string, runId: string): Promise<void> {
+  // A historical short suffix can collide even if the summary is incomplete.
+  const conflict = await client.query(
+    "SELECT 1 FROM ac_verify_runs WHERE id<>$1 AND (report_dir IN ($2, 'discarded:' || $2) OR report_prepared_dir=$2)",
+    [runId, target],
+  );
+  if (conflict.rowCount) throw reportIntegrity();
+}
+
+async function removePersistedModuleReport(client: pg.PoolClient, projectDir: string, row: PersistedModuleReport): Promise<void> {
+  const path = row.report_dir.startsWith('discarded:') ? row.report_dir.slice('discarded:'.length) : row.report_dir;
+  const target = path === 'pending' || path === 'discarded' ? row.report_prepared_dir : path;
+  if (target) {
+    assertPersistedReportPath(projectDir, target, row);
+    if (!await reportDirectoryExists(target)) return;
+    const {summary} = await findReportSummary(target);
+    if (summary && !reportMatches(summary, target, row)) throw reportIntegrity();
+    if (!row.report_prepared_dir) await assertUnsharedLegacyReport(client, target, row.id);
+    await rm(target, {recursive: true, force: true});
+    return;
+  }
+
+  // Pre-reservation runs may have prepared a directory while report_dir was
+  // still pending. Match the full identity in its summary before removing it.
+  if (!await reportDirectoryExists(projectDir)) return;
+  for (const name of await readdir(projectDir)) {
+    if (!MODULE_REPORT_DIR.test(name) || !name.endsWith(`-${row.id.slice(0, 8)}-${row.module}`)) continue;
+    const directory = join(projectDir, name);
+    if (!await reportDirectoryExists(directory)) continue;
+    const {summary} = await findReportSummary(directory);
+    if (summary && reportMatches(summary, directory, row)) {
+      await assertUnsharedLegacyReport(client, directory, row.id);
+      await rm(directory, {recursive: true, force: true});
+    }
+  }
+}
+
+export async function discardModuleReport(
+  ledger: Ledger, principal: string, dataDirectory: string, projectId: string, module: VerificationModule, runId: string,
+): Promise<void> {
+  const load = async (client: pg.PoolClient) => {
+    const activation = await client.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal' FOR SHARE");
+    if (!activation.rowCount) throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
+    const membership = await client.query(
+      'SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 FOR SHARE', [projectId, principal],
+    );
+    if (!membership.rowCount || membership.rows[0].role === 'viewer') throw new Refusal('PROJECT_FORBIDDEN', 403);
+    const keys = [runId, projectId, module];
+    const {rows: [binding]} = await client.query<{context_id: string}>(
+      'SELECT context_id FROM ac_verify_runs WHERE id=$1 AND project_id=$2 AND module=$3', keys,
+    );
+    if (!binding) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    // Match reconciliation's context-before-run lock order.
+    await ledger.authorize(client, principal, binding.context_id);
+    const {rows: [row]} = await client.query<PersistedModuleReport>(
+      `SELECT id, module, commit_id, report_dir, report_prepared_dir, report_legacy_missing FROM ac_verify_runs
+       WHERE id=$1 AND project_id=$2 AND module=$3 AND status IN ('done','failed') FOR UPDATE`, keys,
+    );
+    if (!row) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    return row;
+  };
+  const parent = join(await requireDataDirectory(dataDirectory), 'verificacoes', projectId);
+  await ledger.tx(async client => {
+    const row = await load(client);
+    if (row.report_dir === 'discarded' || row.report_dir.startsWith('discarded:')) return;
+    if (row.report_dir !== 'pending') assertPersistedReportPath(parent, row.report_dir, row);
+    await client.query(
+      'UPDATE ac_verify_runs SET report_dir=$2, report_legacy_missing=false WHERE id=$1',
+      [runId, row.report_dir === 'pending' ? 'discarded' : `discarded:${row.report_dir}`],
+    );
+  });
+  await ledger.tx(async client => {
+    const row = await load(client);
+    await resolveProjectVerificationsDir(dataDirectory, projectId);
+    await removePersistedModuleReport(client, parent, row);
+  });
+}
+
+type PersistedFinding = {achado_id: string; status: Achado['status']; file: string; line: number | null; payload: Achado};
+
+async function recoverHistoricalCoverage(
+  client: pg.PoolClient, runId: string, raw: ModuleCollectorOutput, findings: PersistedFinding[],
+): Promise<void> {
+  const unknown = await client.query(
+    "SELECT 1 FROM ac_verify_coverage WHERE run_id=$1 AND provenance='unknown' AND examiner_provider='ferramenta' AND profile_id IS NULL LIMIT 1",
+    [runId],
+  );
+  if (!unknown.rowCount) return;
+
+  const archived = (await client.query<ModuleToolCoverage>(
+    'SELECT tool, version, status, detail FROM ac_verify_tool_coverage WHERE run_id=$1', [runId],
+  )).rows;
+  const recordedTools = new Set(archived.filter(row => row.status === 'ok')
+    .map(row => JSON.stringify([row.tool, row.version, row.detail])));
+  const recordedFindings = new Map(findings.map(finding => [finding.achado_id, finding]));
+  const proven = new Set<string>();
+  for (const row of raw.coverage) {
+    if (row.status !== 'ok' || !recordedTools.has(JSON.stringify([row.tool, row.version, row.detail]))) continue;
+    for (const file of row.files ?? []) proven.add(file);
+    const measured = collectorMeasuredDetailFile(row);
+    if (measured) proven.add(measured);
+    for (const [index, finding] of raw.findings.entries()) {
+      if (finding.tool !== row.tool) continue;
+      const recorded = recordedFindings.get(`ACH-${String(index + 1).padStart(3, '0')}`);
+      if (recorded?.file === finding.file && recorded.line === finding.line
+        && recorded.payload?.sources?.[0] === finding.tool && recorded.payload.sources?.[1] === finding.rule) proven.add(finding.file);
+    }
+  }
+  if (proven.size) await client.query(
+    `UPDATE ac_verify_coverage SET provenance='collector' WHERE run_id=$1 AND file=ANY($2::text[])
+     AND provenance='unknown' AND examiner_provider='ferramenta' AND profile_id IS NULL`, [runId, [...proven]],
+  );
+}
+
+async function publishModuleReport(client: pg.PoolClient, row: PersistedModuleReport): Promise<void> {
+  const directory = row.report_dir;
+  const {summary, published} = await findReportSummary(directory);
+  if (!summary || !reportMatches(summary, directory, row)) throw reportIntegrity();
+  const parsed = JSON.parse(await readTextInside(directory, join(directory, 'achados.json'), 'VERIFY_REPORT_INVALID'));
+  const archived = z.object({achados: z.array(Achado)}).parse(parsed).achados;
+  const raw = validateModuleCollectorObject(
+    JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')), row.module,
+  );
+  if (!published) {
+    const files = ['mapa.md', 'cobertura.md'];
+    if (row.module === 'documentacao') {
+      if (raw.coverage.some(tool => tool.tool === 'typedoc:artefato' && tool.status === 'ok')) files.push('api.json');
+      if (raw.coverage.some(tool => tool.tool === 'dependency-cruiser:artefato' && tool.status === 'ok')) files.push('dependencias.mmd');
+    }
+    for (const file of files) {
+      await readTextInside(directory, join(directory, file), 'VERIFY_REPORT_INVALID');
+    }
+  }
+  const findings = (await client.query<PersistedFinding>(
+    'SELECT achado_id, status, file, line, payload FROM ac_verify_findings WHERE run_id=$1', [row.id],
+  )).rows;
+  const byId = new Map(findings.map(item => [item.achado_id, item]));
+  if (byId.size !== archived.length || new Set(archived.map(item => item.id)).size !== archived.length) throw reportIntegrity();
+  const reconciled = archived.map(item => {
+    const finding = byId.get(item.id);
+    if (!finding || item.where.file !== finding.file || item.where.line !== finding.line) throw reportIntegrity();
+    return {...item, status: Achado.shape.status.parse(finding.status)};
+  });
+  if (!row.report_prepared_dir) await recoverHistoricalCoverage(client, row.id, raw, findings);
+  const findingsDirectory = join(directory, 'achados');
+  if (!await reportDirectoryExists(findingsDirectory)) throw reportIntegrity();
+  const counts = failureCounts(reconciled);
+  await replacePrivateFile(directory, 'achados.json', guardReportText(`${JSON.stringify({achados: reconciled}, null, 2)}\n`));
+  for (const finding of reconciled) {
+    await replacePrivateFile(findingsDirectory, `${finding.id}.md`, guardReportText(achadoMarkdown(finding)));
+  }
+  await syncReportDirectory(findingsDirectory);
+  await replacePrivateFile(directory, 'README.md', guardReportText(renderModuleReadme({
+    module: summary.module, runId: summary.id, directoryName: summary.directoryName,
+    createdAt: new Date(summary.createdAt), commit: summary.commit, note: summary.note,
+    total: reconciled.length, counts, discarded: reconciled.filter(item => item.status === 'descartado').length,
+    toolCoverage: raw.coverage,
+  })));
+  // Initial publication is a single rename of run.json after the files above
+  // are ready. Rechecks rebuild these files only from committed database state.
+  if (!published || JSON.stringify(summary.counts) !== JSON.stringify(counts)) {
+    await replacePrivateFile(directory, 'run.json', guardReportText(`${JSON.stringify({...summary, counts}, null, 2)}\n`));
+  }
+  await syncReportDirectory(directory);
+}
+
+async function reconcileReports(
+  ledger: Ledger, principal: string, authority: Authority, dataDirectory: string, projectId: string, publishedRunId?: string,
 ): Promise<void> {
   await ledger.tx(async client => {
     const context = await ledger.authorize(client, principal, authority.contextId);
     await ledger.fence(client, authority);
     if (context.project_id !== projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
-    const rows = (await client.query<{id: string; report_dir: string}>(
-      `SELECT id::text, report_dir FROM ac_verify_runs
-       WHERE project_id=$1 AND context_id=$2 AND status IN ('done','failed') AND report_dir NOT IN ('pending','discarded') AND report_dir NOT LIKE 'discarded:%' AND module IS NOT NULL
-       ORDER BY id FOR UPDATE`, [projectId, authority.contextId],
+    const rows = (await client.query<PersistedModuleReport>(
+      `SELECT id, module, commit_id, report_dir, report_prepared_dir, report_legacy_missing FROM ac_verify_runs
+       WHERE project_id=$1 AND context_id=$2 AND status IN ('done','failed') AND module <> 'verify' ORDER BY id FOR UPDATE`,
+      [projectId, authority.contextId],
     )).rows;
+    if (publishedRunId && !rows.some(row => row.id === publishedRunId && row.report_dir === row.report_prepared_dir)) {
+      throw new Refusal('VERIFY_RUN_MISSING', 404);
+    }
+    if (!rows.length) return;
     const projectDir = await resolveProjectVerificationsDir(dataDirectory, projectId);
-    if (!projectDir) return;
+    const parent = projectDir ?? join(await requireDataDirectory(dataDirectory), 'verificacoes', projectId);
     for (const row of rows) {
-      const directory = resolve(row.report_dir);
-      if (dirname(directory) !== projectDir || !MODULE_REPORT_DIR.test(basename(directory))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
-      const info = await lstat(directory);
-      if (info.isSymbolicLink() || !info.isDirectory() || await realpath(directory) !== directory) throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
-      let summaryText: string;
-      try {
-        summaryText = await readTextInside(directory, join(directory, 'run.json'), 'VERIFY_REPORT_INVALID');
-      } catch (error) {
-        if (!(error instanceof Refusal && error.code === 'VERIFY_REPORT_INVALID')) throw error;
-        summaryText = await readTextInside(directory, join(directory, '.run-pending.json'), 'VERIFY_REPORT_INVALID');
+      if (row.report_dir === 'pending' || row.report_dir === 'discarded' || row.report_dir.startsWith('discarded:')) {
+        await removePersistedModuleReport(client, parent, row);
+        continue;
       }
-      const summary = ModuleReportSummary.parse(JSON.parse(summaryText));
-      if (summary.id !== row.id || summary.directoryName !== basename(directory)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-      // The report becomes discoverable only after the database transaction committed.
-      await replacePrivateFile(directory, 'run.json', guardReportText(`${JSON.stringify(summary, null, 2)}\n`));
-      const findings = (await client.query<{achado_id: string; status: string}>(
-        'SELECT achado_id, status FROM ac_verify_findings WHERE run_id=$1', [row.id],
-      )).rows;
-      await updateModuleReportFiles(dataDirectory, projectId, row.id,
-        findings.map(item => ({id: item.achado_id, status: Achado.shape.status.parse(item.status)})));
+      assertPersistedReportPath(parent, row.report_dir, row);
+      if (row.report_prepared_dir && row.report_dir !== row.report_prepared_dir) throw reportIntegrity();
+      if (!projectDir || !await reportDirectoryExists(row.report_dir)) {
+        if (row.report_prepared_dir) throw reportIntegrity();
+        if (!row.report_legacy_missing) await client.query('UPDATE ac_verify_runs SET report_legacy_missing=true WHERE id=$1', [row.id]);
+        continue;
+      }
+      await publishModuleReport(client, row);
+      if (row.report_legacy_missing) await client.query('UPDATE ac_verify_runs SET report_legacy_missing=false WHERE id=$1', [row.id]);
     }
   });
+}
+
+async function recoverModuleContainers(
+  ledger: Ledger, principal: string, authority: Authority, projectId: string, execute: CollectorProcess, module?: VerificationModule,
+): Promise<void> {
+  const pending = await ledger.tx(async client => {
+    const context = await ledger.authorize(client, principal, authority.contextId);
+    await ledger.fence(client, authority);
+    if (context.project_id !== projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
+    if (module && !(await client.query(
+      'SELECT 1 FROM ac_exam_contexts WHERE project_id=$1 AND context_id=$2 AND module=$3', [projectId, authority.contextId, module],
+    )).rowCount) throw new Refusal('EXAM_CONTEXT_MISMATCH', 403);
+    const abandoned = await client.query<{id: string; intent_id: string}>(
+      `UPDATE ac_verify_runs r SET status='failed', finished_at=clock_timestamp() FROM ac_intents i
+       WHERE r.intent_id=i.id AND r.context_id=$1 AND r.module <> 'verify'
+       AND r.status='running' AND i.manager_epoch<>$2 RETURNING r.id, r.intent_id`, [authority.contextId, authority.epoch],
+    );
+    for (const row of abandoned.rows) {
+      await finishExamIntentTx(client, ledger, {intentId: row.intent_id, contextId: authority.contextId}, 'failed');
+    }
+    return (await client.query<{id: string; collector_container_token: string}>(
+      `SELECT id, collector_container_token FROM ac_verify_runs WHERE context_id=$1 AND module <> 'verify'
+       AND status IN ('done','failed') AND collector_container_token IS NOT NULL ORDER BY id`, [authority.contextId],
+    )).rows;
+  });
+  for (const row of pending) {
+    await moduleContainerJournal(ledger, principal, authority, row.id, execute).cleanup(row.collector_container_token);
+  }
+}
+
+/** Recover reports and collector cleanup under the current project/context authority. */
+export async function reconcileModuleReports(
+  ledger: Ledger, principal: string, authority: Authority, dataDirectory: string, projectId: string,
+): Promise<void> {
+  await assertPersonalActivation(ledger);
+  await recoverModuleContainers(ledger, principal, authority, projectId, runBoundedCollectorProcess);
+  await reconcileReports(ledger, principal, authority, dataDirectory, projectId);
 }
 
 /**
@@ -2485,12 +2700,13 @@ export async function recheckModuleFindings(
       commit_id: string;
       recheck_generation: string;
     }>(
-      "UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1 WHERE id=$1 AND project_id=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' RETURNING id::text AS id, context_id::text AS context_id, module, intent_id::text AS intent_id, commit_id, recheck_generation::text",
-      [input.runId, input.projectId],
+      `UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1
+       WHERE id=$1 AND project_id=$2 AND context_id=$3 AND ($4::text IS NULL OR module=$4)
+       AND module <> 'verify' AND status IN ('done','failed') AND report_dir NOT IN ('pending','discarded')
+       AND report_dir NOT LIKE 'discarded:%' RETURNING id::text, context_id::text, module, intent_id::text, commit_id, recheck_generation::text`,
+      [input.runId, input.projectId, authority.contextId, input.module ?? null],
     )).rows[0];
     if (!runRow) throw new Refusal('VERIFY_RUN_MISSING', 404);
-    if (input.module !== undefined && runRow.module !== input.module) throw new Refusal('VERIFY_RUN_MISSING', 404);
-    if (authority.contextId !== runRow.context_id) throw new Refusal('VERIFY_RUN_MISSING', 404);
     const coveredRows = (await client.query<{file: string}>('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runRow.id])).rows;
     const covered = new Set(coveredRows.map(row => String(row.file)));
     const rows = (await client.query<{
@@ -2598,8 +2814,12 @@ export async function recheckModuleFindings(
   await ledger.tx(async client => {
     await ledger.authorize(client, principal, authority.contextId);
     await ledger.fence(client, authority);
-    const liveRun = await client.query("SELECT id FROM ac_verify_runs WHERE id=$1 AND recheck_generation=$2 AND report_dir <> 'discarded' AND report_dir NOT LIKE 'discarded:%' FOR UPDATE", [loaded.run.id, loaded.run.recheck_generation]);
-    if (!liveRun.rowCount) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    const {rows: [liveRun]} = await client.query<{recheck_generation: string}>(
+      "SELECT recheck_generation::text FROM ac_verify_runs WHERE id=$1 AND report_dir NOT IN ('pending','discarded') AND report_dir NOT LIKE 'discarded:%' FOR UPDATE",
+      [loaded.run.id],
+    );
+    if (!liveRun) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    if (liveRun.recheck_generation !== loaded.run.recheck_generation) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
     const {stdout: currentHead} = await execGit('git', ['-C', loaded.repo!, 'rev-parse', '--verify', 'HEAD^{commit}']);
     if (currentHead.trim() !== head) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
     for (const result of decided) {

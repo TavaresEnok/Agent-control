@@ -537,6 +537,24 @@ async function verifyModuleEndToEnd(
     assert.equal((mainMsgs[0]?.text ?? '').includes(`- ${confirmedFinding.where.file}`), true);
     assert.equal((mainMsgs[0]?.text ?? '').includes(REMEDIATION_ACCEPTANCE), true);
 
+    if (module === 'banco') {
+      const migration = 'db/migrations/003_prazo.sql';
+      await writeFile(join(repo, migration), 'SELECT pg_sleep(8);\n');
+      await exec('git', ['add', '--', migration], {cwd: repo});
+      await exec('git', ['-c', 'user.name=Lab', '-c', 'user.email=lab@example.com', 'commit', '-m', 'migração válida excede o prazo do coletor'], {cwd: repo});
+      await assert.rejects(() => runPersonalCliSubprocess('banco', [installationPath, projectId]),
+        (error: {code?: number; stderr?: string}) => error.code === 1 && !!error.stderr?.includes('registrado na cobertura'));
+      const {rows} = await db.pool.query<{report_dir: string; status: string}>(
+        'SELECT report_dir, status FROM ac_verify_runs WHERE project_id=$1 AND module=$2 AND id<>$3 ORDER BY created_at DESC LIMIT 1',
+        [projectId, module, runId]);
+      assert.equal(rows[0]?.status, 'failed');
+      const raw = JSON.parse(await readFile(join(rows[0]!.report_dir, 'bruto', 'achados-brutos.json'), 'utf8'));
+      assert.ok(raw.coverage.some((row: {tool: string; status: string; detail: string}) =>
+        row.tool === 'pg-migrate' && row.status === 'failed' && row.detail.includes('57014') && row.detail.includes(migration)));
+      assert.equal(raw.findings.some((finding: {file: string; rule: string}) =>
+        finding.file === migration && finding.rule === 'BANCO-MIGRACAO-REJEITADA'), false);
+    }
+
     // 6. Limite real de saída stdout contra o contêiner real (sem mock)
     if (verifyStdoutLimit) {
       await assert.rejects(
