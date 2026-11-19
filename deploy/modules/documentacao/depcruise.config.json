@@ -1,0 +1,43 @@
+{
+  "forbidden": [
+    {
+      "name": "no-circular",
+      "severity": "warn",
+      "comment": "Dependência circular entre módulos deve ser documentada ou evitada.",
+      "from": {},
+      "to": {
+        "circular": true
+      }
+    },
+    {
+      "name": "not-to-unresolvable",
+      "severity": "error",
+      "comment": "Módulo importado não pode ser resolvido no repositório.",
+      "from": {},
+      "to": {
+        "couldNotResolve": true,
+        "dependencyTypesNot": [
+          "npm",
+          "npm-bundled",
+          "npm-dev",
+          "npm-no-pkg",
+          "npm-optional",
+          "npm-peer",
+          "npm-unknown",
+          "core",
+          "type-only"
+        ]
+      }
+    }
+  ],
+  "options": {
+    "doNotFollow": {
+      "path": "(^|/)(node_modules|dist|build|coverage|\\.git)(/|$)"
+    },
+    "exclude": {
+      "path": "(^|/)(node_modules|dist|build|coverage|\\.git)(/|$)"
+    },
+    "tsPreCompilationDeps": true,
+    "preserveSymlinks": false
+  }
+}
