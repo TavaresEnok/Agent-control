@@ -1294,3 +1294,6 @@ PAUSADO-COTA
 - 19/11/2026 22:31 UTC — Confere a proveniência dos achados de rota pela CLI no laboratório. Ordem C-DOCUMENTACAO-VIVA-R5 em worktree separado conforme 43f1c664.
 - 19/11/2026 22:31 UTC — Correção c9-publicacao recebida em 34f85753. Revisão Sol high somente leitura solicitada.
 - 19/11/2026 22:31 UTC — trabalho-C-DOCUMENTACAO-VIVA-R5 iniciado em final-doc-viva por terra high.
+- 19/11/2026 22:31 UTC — prontidao em 563be97a publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 183, 'failed': 3, 'skipped': 7}; código do produto VERIFY_TOOLS_FAILED.
+- 19/11/2026 22:33 UTC — C-DOCUMENTACAO-VIVA-R5 encerrado com código 0.
+- 19/11/2026 22:33 UTC — Correção doc-viva recebida em c2a38c1a. Revisão Sol high somente leitura solicitada.
