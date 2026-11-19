@@ -2293,6 +2293,10 @@ function isFindRetention(args, onIncomplete) {
       if (ages.has(token)) {
         if (++ageCount > 1 || !/^[+-]?\d+$/.test(operand) || Number(operand) > 365000 || Number(operand) < -365000 || token !== '-mtime') valid = false;
         if (token === '-mtime' && /^\+\d+$/.test(operand)) age = true;
+      } else if (patterns.has(token)) {
+        // Only simple basename globs whose nonempty component is demonstrable.
+        // Paths, bracket expressions, escapes and other pattern dialects need more semantics.
+        if (!/^[A-Za-z0-9_.?*+-]+$/.test(operand) || !/[A-Za-z0-9_.?+-]/.test(operand) && !/^\*+$/.test(operand)) valid = false;
       } else if (token === '-type') {
         if (++typeCount > 1 || !/^[bcdflps]$/.test(operand)) valid = false;
       } else if (otherOperands.has(token) || printOperands.has(token)) {
@@ -2304,7 +2308,7 @@ function isFindRetention(args, onIncomplete) {
       let terminated = false;
       while (i < args.length) {
         const part = args[i++];
-        if (part === ';' || (part === '+' && args[i - 2] === '{}')) { terminated = true; break; }
+        if (part === ';' || (/^-(?:exec|execdir)$/.test(token) && part === '+' && args[i - 2] === '{}')) { terminated = true; break; }
       }
       if (!/^(?:echo|printf)$/.test(basename(command ?? ''))) relevant = true;
       if (!terminated) valid = false;
@@ -2365,35 +2369,72 @@ function classifyBackupOperation(binary, args, onIncomplete) {
   return {dump, backup, catalog, restore, rotation, pg};
 }
 
-// Keep only complete words and separators before an unfinished shell word.
+// Recover only lexical top-level segments. Substitutions are opaque data: their
+// contents must never introduce commands or close an enclosing quote.
 function malformedShellPrefix(command) {
-  let quote = '', escaped = false, wordStart = -1;
+  const segments = [];
+  let fragment = '', quote = '', escaped = false, wordStart = -1;
+  const substitutionEnd = start => {
+    const stack = [{quote: '', parens: 1}];
+    for (let i = start + 2; i < command.length; i++) {
+      const frame = stack[stack.length - 1], ch = command[i];
+      if (ch === '\\' && frame.quote !== "'") { i++; continue; }
+      if (frame.quote === "'") { if (ch === "'") frame.quote = ''; continue; }
+      if (ch === '$' && command[i + 1] === '(') { stack.push({quote: '', parens: 1}); i++; continue; }
+      if (frame.quote === '"') { if (ch === '"') frame.quote = ''; continue; }
+      if (ch === "'" || ch === '"') { frame.quote = ch; continue; }
+      if (ch === '`' || (ch === '$' && command[i + 1] === '{')) return -1; // Unsupported nesting.
+      if (ch === '#' && (i === start + 2 || /[\s;|&()]/.test(command[i - 1]))) {
+        const newline = command.indexOf('\n', i);
+        if (newline < 0) return -1;
+        i = newline; continue;
+      }
+      if (ch === '(') frame.parens++;
+      if (ch === ')' && --frame.parens === 0) { stack.pop(); if (!stack.length) return i; }
+    }
+    return -1;
+  };
+  const emit = () => {
+    const parsed = shellWords(fragment);
+    if (parsed) segments.push(...splitShellSegments(parsed.words));
+    fragment = ''; wordStart = -1;
+  };
   for (let i = 0; i < command.length; i++) {
     const ch = command[i];
-    if (escaped) { escaped = false; continue; }
-    if (ch === "\\" && quote !== "'") { if (wordStart < 0) wordStart = i; escaped = true; continue; }
-    if (quote) { if (ch === quote) quote = ''; continue; }
-    if (ch === "'" || ch === '"') { if (wordStart < 0) wordStart = i; quote = ch; continue; }
-    if (ch === '#' && wordStart < 0) break;
-    if (/[\s;|&<>]/.test(ch)) wordStart = -1;
-    else if (wordStart < 0) wordStart = i;
+    if (escaped) { fragment += ch; escaped = false; continue; }
+    if (ch === '\\' && quote !== "'") { if (wordStart < 0) wordStart = fragment.length; fragment += ch; escaped = true; continue; }
+    if (quote !== "'" && ch === '$' && command[i + 1] === '(') {
+      if (wordStart < 0) wordStart = fragment.length;
+      const end = substitutionEnd(i);
+      if (end < 0) { fragment = fragment.slice(0, wordStart); emit(); return segments; }
+      fragment += '$RECOVERED'; i = end; continue;
+    }
+    if (quote !== "'" && (ch === '`' || (ch === '$' && command[i + 1] === '{'))) {
+      fragment = fragment.slice(0, Math.max(0, wordStart)); emit(); return segments;
+    }
+    if (quote) { fragment += ch; if (ch === quote) quote = ''; continue; }
+    if (ch === "'" || ch === '"') { if (wordStart < 0) wordStart = fragment.length; quote = ch; fragment += ch; continue; }
+    if (ch === '#' && wordStart < 0) { emit(); return segments; }
+    if (ch === '(' || ch === ')' || (ch === '<' && command[i + 1] === '<')) {
+      fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
+    }
+    if (ch === '&' && command[i + 1] === '>') { fragment += ch; continue; }
+    if (/[;|&\n]/.test(ch)) { emit(); continue; }
+    if (/\s/.test(ch) || /[<>]/.test(ch)) wordStart = -1;
+    else if (wordStart < 0) wordStart = fragment.length;
+    fragment += ch;
   }
-  const prefix = quote || escaped ? command.slice(0, Math.max(0, wordStart)) : command;
-  return splitShellSegments(shellWords(prefix)?.words ?? []);
+  if (quote || escaped) fragment = fragment.slice(0, Math.max(0, wordStart));
+  emit();
+  return segments;
 }
 
-function malformedShellCandidate(command, kind) {
+function malformedShellCandidate(command, kind, depth = 0) {
   return malformedShellPrefix(command).some(segment => {
-    const binary = basename(segment[0]?.text ?? '');
-    const args = segment.slice(1).map(word => word.text);
-    if (binary === 'npm' || binary === 'pnpm') {
-      const target = npmScriptTarget(binary, args);
-      if (target) return kind === 'backup' ? /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(target)
-        : kind === 'disk' ? target === 'personal:maintenance' : target === 'personal:watch';
-    }
-    if (kind === 'backup') return /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
-    if (kind === 'disk') return /^(?:df|docker|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(binary);
-    return /^(?:alertmanager|npm|pnpm|node|curl|wget|logrotate|(?:ba|da|k|z)?sh)$/.test(binary);
+    if (kind === 'backup') return isBackupCandidateSegment(segment, depth);
+    const result = evaluateShellSegment(segment, depth);
+    return kind === 'disk' ? result.disk || result.partialDisk
+      : result.alerting || result.logrotate || result.partialAlert;
   });
 }
 
@@ -2409,7 +2450,7 @@ function isBackupCandidateSegment(segWords, depth = 0) {
   const args = words.map(word => word.text);
   if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(args[0] ?? '') && args[1]) {
     const inner = shellWords(args[1]);
-    if (!inner) return malformedShellCandidate(args[1], 'backup');
+    if (!inner) return malformedShellCandidate(args[1], 'backup', depth + 1);
     return splitShellSegments(inner.words).some(segment => isBackupCandidateSegment(segment, depth + 1));
   }
   let incomplete = false;
@@ -2450,8 +2491,8 @@ function evaluateShellSegment(segWords, depth = 0) {
   if (depth >= 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
     const inner = shellWords(words[1].text);
     if (!inner) {
-      res.partialAlert = malformedShellCandidate(words[1].text, 'alert');
-      res.partialDisk = malformedShellCandidate(words[1].text, 'disk');
+      res.partialAlert = malformedShellCandidate(words[1].text, 'alert', depth + 1);
+      res.partialDisk = malformedShellCandidate(words[1].text, 'disk', depth + 1);
     } else {
       for (const segment of splitShellSegments(inner.words)) {
         const sub = evaluateShellSegment(segment, depth + 1);
@@ -2464,8 +2505,8 @@ function evaluateShellSegment(segWords, depth = 0) {
   if (depth < 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
     const inner = shellWords(words[1].text);
     if (!inner) {
-      res.partialAlert = malformedShellCandidate(words[1].text, 'alert');
-      res.partialDisk = malformedShellCandidate(words[1].text, 'disk');
+      res.partialAlert = malformedShellCandidate(words[1].text, 'alert', depth + 1);
+      res.partialDisk = malformedShellCandidate(words[1].text, 'disk', depth + 1);
       return res;
     }
     for (const innerSeg of splitShellSegments(inner.words)) {
