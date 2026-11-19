@@ -287,3 +287,12 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:49 UTC — Revisão C2-R8 iniciada por Sol high normal somente leitura em ca4b1171.
 - 19/11/2026 03:51 UTC — Exame 7b512f4d passou nos quatro testes de persistência. Exclusão ou adulteração da origem agora falha nos relatórios novos, e IDs duplicados são rejeitados inclusive no formato antigo. O parecer de arquitetura indicou um alto e três médios nos caminhos do snapshot. A hipótese separada sobre walkOpened foi descartada pela definição presente e pela execução real. C3-R8 aberta.
 - 19/11/2026 03:52 UTC — Arquitetura aed61c1d passou em 18 testes habilitados, incluindo as ferramentas reais na nova imagem, com um caso opcional pulado. O laboratório das oito CLIs em 8bf6ed47 passou 6/6, incluindo as duas execuções comparáveis de desempenho.
+- 19/11/2026 03:52 UTC — Revisor encerrou C2-R8 em ca4b1171 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:52 UTC — Revisão C-EXAME-R3 iniciada por Sol high normal somente leitura em 9808488b.
+- 19/11/2026 03:53 UTC — Trabalhador encerrou C6-R8 em 8ff87772 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:53 UTC — Trabalho C-BASE-R8 iniciado por Sol high normal em final-c-interop.
+- 19/11/2026 03:54 UTC — Trabalhador encerrou C9-R4 em b1ac9e42 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:54 UTC — Trabalho C4-R6 iniciado por Sol high normal em final-c4.
+- 19/11/2026 03:55 UTC — Revisor encerrou C-EXAME-R3 em 9808488b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:55 UTC — Revisão C-PAINEL iniciada por Sol high normal somente leitura em a1500106.
+- 19/11/2026 03:56 UTC — A revisão de QA ca4b1171 encontrou falso vínculo em nomes com $, omissões de namespace e ambiguidade entre nome e valor literal. C2-R9 em laboratório. A revisão de exame 9808488b mostrou que citação genérica ainda pode validar hipóteses diferentes; C-EXAME-R4 cobre o vínculo entre critério e prova, a origem das rotas e o limite de linha. Prontidão 8ff87772 passou nos 29 testes e laboratórios.
