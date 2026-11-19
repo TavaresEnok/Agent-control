@@ -201,3 +201,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:00 UTC — Trabalho C4-R5 iniciado por Sol high normal em final-c4.
 - 19/11/2026 03:01 UTC — C5-R4 entregue em 5d494800; reconstrução da imagem e laboratório iniciados. Revisão independente de desempenho identificou um risco de contêiner ou volume órfão após timeout e três defeitos médios em rotas, baseline e falha de backend. Ordem C7-R5 aberta.
 - 19/11/2026 03:01 UTC — C5 em 5d494800 passou no laboratório de migração, classificação de falhas e plano de consultas em PostgreSQL isolado. C2-R6 entregue em 9b8959dc entrou em reconstrução e revisão.
+- 19/11/2026 03:02 UTC — Trabalhador encerrou C-EXAME-R2 em c8fe44e5 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:02 UTC — Trabalho C-REVERIFICAR iniciado por Sol high normal em final-c-exame.
+- 19/11/2026 03:03 UTC — QA R6 passou em 33 testes de execução e análise estática, com um caso opcional omitido. C5-R4 passou nos 10 testes, incluindo o laboratório por digest. O adaptador de exame pessoal c8fe44e5 e as correções de persistência db4b5c40 entraram na homologação de QA; iniciada a validação conjunta.
