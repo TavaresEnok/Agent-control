@@ -29,7 +29,7 @@ const credentialNames = new Set([
   '.credentials.json', 'auth.json', 'credentials.json', 'application_default_credentials.json',
   'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
 ]);
-const credentialPatterns = /^\.env(?:\..*)?$|\.(?:key|pem|p12|pfx)$/;
+const credentialPatterns = /^\.env|^service-account.*\.json$|\.(?:key|pem|p12|pfx)$/;
 
 export const languageSuites = {
   python: {tool: 'python-unittest-coverage', version: `Python ${pins.python.version} / coverage.py ${pins.coverage.version}`},
@@ -261,12 +261,7 @@ function goCaseKey(pkg, name) {
 
 export function decodeGoPass({code, output, diagnostics}, profile, selection, moduleName, locations = new Map()) {
   const errorCode = 'QA_GO_REPORT_INVALID';
-  const filesByPackage = new Map();
-  for (const file of selection.files) {
-    const pkg = goImportPath(selection, moduleName, posix.dirname(file));
-    if (!filesByPackage.has(pkg)) filesByPackage.set(pkg, []);
-    filesByPackage.get(pkg).push(file);
-  }
+  const testPackages = new Set(selection.files.map(file => goImportPath(selection, moduleName, posix.dirname(file))));
   const tests = [];
   const running = new Map();
   const failedTests = new Set();
@@ -284,8 +279,7 @@ export function decodeGoPass({code, output, diagnostics}, profile, selection, mo
     if (typeof event.Test !== 'string') continue;
     const root = event.Test.split('/', 1)[0];
     if (!goTestName.test(root)) continue;
-    const candidates = filesByPackage.get(event.Package);
-    if (!candidates?.length) continue;
+    if (!testPackages.has(event.Package)) continue;
     const key = goCaseKey(event.Package, event.Test);
     const inFlight = running.get(key) ?? 0;
     if (event.Action === 'run') {
@@ -297,11 +291,10 @@ export function decodeGoPass({code, output, diagnostics}, profile, selection, mo
     if (inFlight > 1) running.set(key, inFlight - 1);
     else running.delete(key);
     if (status === 'failed') failedTests.add(event.Package);
-    const parent = locations.get(goCaseKey(event.Package, root));
-    const location = locations.get(key) ?? parent;
-    const file = location?.file ?? (candidates.length === 1 ? candidates[0] : null);
+    const location = locations.get(key);
+    const file = location?.file ?? null;
     if (!file) unattributed++;
-    tests.push({...testCase(file, `${event.Package}.${event.Test}`, status), package: event.Package, line: location?.line ?? 1});
+    tests.push({...testCase(file, `${event.Package}.${event.Test}`, status), package: event.Package, line: location?.line ?? null});
     if (tests.length > maxTests) throw new Error('QA_LANGUAGE_TEST_LIMIT');
   }
   const unavailableDiagnostic = goUnavailable.test(diagnostics);
@@ -446,7 +439,7 @@ function goEnvironment(home) {
   };
 }
 
-async function executeLanguagePass(language, snapshot, selection) {
+export async function executeLanguagePass(language, snapshot, selection, goBinary = go) {
   const deadline = performance.now() + (language === 'go' ? goTimeoutMs : testTimeoutMs);
   function run(binary, args, cwd, env, limit) {
     const timeoutMs = Math.min(limit, Math.floor(deadline - performance.now()));
@@ -457,17 +450,22 @@ async function executeLanguagePass(language, snapshot, selection) {
   const scratch = mkdtempSync(join(tmpdir(), `qa-${language}-`));
   try {
     const cwd = join(scratch, 'project');
-    snapshot.copyTo(cwd);
     if (language === 'python') {
+      snapshot.copyTo(cwd);
       const plan = join(scratch, 'plan.json');
       writeFileSync(plan, JSON.stringify({...selection, maxTests, maxProfileBytes}));
       const result = await run(python, ['-I', '-S', '-B', pythonRunner, plan, join(scratch, 'coverage.json')],
         cwd, {HOME: scratch, TMPDIR: scratch}, testTimeoutMs);
       return decodePythonPass(result, selection);
     }
-    const moduleDir = join(cwd, selection.moduleDir);
     const env = goEnvironment(scratch);
-    const manifest = await run(go, ['mod', 'edit', '-json'], moduleDir, env, testTimeoutMs);
+    const version = await run(goBinary, ['env', 'GOVERSION'], scratch, env, testTimeoutMs);
+    if (version.code !== 0 || version.output.trim() !== `go${pins.go.version}`) {
+      return {tests: [], unavailable: 1, errors: 0, coverage: null, fixtureSkips: 0, reason: 'versão Go fixada indisponível'};
+    }
+    snapshot.copyTo(cwd);
+    const moduleDir = join(cwd, selection.moduleDir);
+    const manifest = await run(goBinary, ['mod', 'edit', '-json'], moduleDir, env, testTimeoutMs);
     if (manifest.code !== 0) throw new Error('QA_GO_MODULE_INVALID');
     const {Module, Replace} = readJson(manifest.output, 'QA_GO_MODULE_INVALID');
     if (typeof Module?.Path !== 'string' || !Module.Path) throw new Error('QA_GO_MODULE_INVALID');
@@ -475,8 +473,8 @@ async function executeLanguagePass(language, snapshot, selection) {
       return {tests: [], unavailable: 1, errors: 0, coverage: null, reason: 'replace local no go.mod fora do escopo offline', fixtureSkips: 0};
     }
     const profile = join(scratch, 'coverage.out');
-    const {overlayFile, cases} = prepareGoTestBudget(scratch, dirname(dirname(go)));
-    const result = await run(go, [
+    const {overlayFile, cases} = prepareGoTestBudget(scratch, dirname(dirname(goBinary)));
+    const result = await run(goBinary, [
       'test', '-json', '-mod=readonly', '-count=1', '-p=2', '-parallel=1', '-vet=off', '-timeout=8s',
       '-run', '^(Test|Example)', `-overlay=${overlayFile}`, '-covermode=set', `-coverprofile=${profile}`, './...',
     ], moduleDir, {...env, QA_GO_CASE_DIR: cases}, goTimeoutMs);
@@ -523,7 +521,7 @@ function compareGoPasses(passes) {
   }
   // A case with missing or inconsistent locations still has one identity in its package.
   return comparePasses(passes.map(pass => ({...pass, tests: pass.tests.map(test =>
-    attribution.get(goCaseKey(test.package, test.name)) ? test : {...test, file: null, line: 1})})));
+    attribution.get(goCaseKey(test.package, test.name)) ? test : {...test, file: null, line: null})})));
 }
 
 export async function measureLanguageSuite(language, selection, executePass) {
