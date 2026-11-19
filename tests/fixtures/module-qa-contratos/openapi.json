@@ -1,0 +1,68 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Catálogo sintético", "version": "1.0.0"},
+  "paths": {
+    "/catalogo": {
+      "get": {
+        "parameters": [
+          {"name": "categoria", "in": "query", "schema": {"type": "string"}, "example": "papel"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de produtos sintéticos",
+            "content": {
+              "application/json": {
+                "example": {"itens": [{"codigo": "lapis", "preco": 2}]}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/catalogo/{codigo}": {
+      "parameters": [
+        {
+          "name": "codigo",
+          "in": "path",
+          "required": true,
+          "schema": {"type": "string"},
+          "examples": {"encontrado": {"value": "lapis"}, "ausente": {"value": "ausente"}}
+        }
+      ],
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Produto encontrado",
+            "content": {
+              "application/json": {
+                "examples": {"encontrado": {"value": {"codigo": "lapis", "preco": 2}}}
+              }
+            }
+          },
+          "404": {
+            "description": "Produto ausente do catálogo",
+            "content": {
+              "application/json": {
+                "examples": {"ausente": {"value": {"erro": "produto-ausente"}}}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/soma": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"example": {"a": 2, "b": 3}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Soma",
+            "content": {"application/json": {"example": {"total": 5}}}
+          }
+        }
+      }
+    }
+  }
+}
