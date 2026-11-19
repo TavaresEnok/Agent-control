@@ -810,3 +810,6 @@ PAUSADO-COTA
 - 19/11/2026 18:07 UTC — C2-MATRIZ-PAPEIS encerrado com código 0.
 - 19/11/2026 18:07 UTC — revisor-C3-ACEITE-REVISAO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:07 UTC — A repetição integral de desempenho em b5efe37c passou em 68/68 com o mesmo digest 9a63412e. O candidato recebeu os controles de PNG de ac495948. A revisão do SQL confirmou protocolo e tipo. Na rodada de ACL, a medição será inconclusiva quando permissões efetivas de PUBLIC alcançarem relações sintéticas fora do escopo.
+- 19/11/2026 18:07 UTC — C3-ACEITE-REVISAO encerrado com código 0.
+- 19/11/2026 18:07 UTC — revisor-C4-ACEITE-REVISAO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:07 UTC — O revisor da matriz 50ac4590 encontrou ambiguidades de oração e de agrupamento ainda capazes de confirmar a função errada. A nova ordem pede uma gramática delimitada para os vínculos explícitos e documentação das formas que só permitem cobertura parcial.
