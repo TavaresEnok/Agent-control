@@ -173,12 +173,13 @@ async function loadMermaidParser(toolsRoot) {
       let graph;
       parser.parse = function (source, ...args) {
         const db = this.yy;
-        if (typeof db?.getVertices !== 'function' || typeof db?.getEdges !== 'function'
+        if (typeof db?.getVertices !== 'function' || typeof db?.getEdges !== 'function' || typeof db?.getSubGraphs !== 'function'
           || typeof this.performAction !== 'function') return parse.call(this, source, ...args);
         const observed = Object.create(this);
         const positions = trackFlowchartPositions(observed, db);
         const parsed = parse.call(observed, source, ...args);
-        graph = {source, vertices: db.getVertices(), edges: db.getEdges(), ...positions};
+        const subgraphIds = new Set(db.getSubGraphs().map(group => group.id));
+        graph = {source, vertices: db.getVertices(), edges: db.getEdges(), subgraphIds, ...positions};
         return parsed;
       };
       try {
@@ -380,12 +381,27 @@ function loadTypeScript(toolsRoot = MODULE_DIR) {
 
 const isDefaultConfig = file => /(^|\/)(?:ts|js)config\.json$/.test(file);
 
+function readManifestShellWord(word) {
+  let dynamic = false;
+  const value = word.replace(/"((?:[^"\\]|\\[\s\S])*)"|'([^']*)'|\\[^\n]|[^"'\\]+|./g, (part, double, single) => {
+    if (single !== undefined) return single;
+    if (double !== undefined) {
+      dynamic ||= /[$`\\]/.test(double);
+      return double;
+    }
+    dynamic ||= /[$`\\<>()*?"']/.test(part);
+    return part;
+  });
+  return {value, dynamic};
+}
+
 function manifestTypeScriptCommands(script) {
-  // Tokenize only literal shell words. Compound or dynamic invocations can
-  // identify tsc, but their arguments and working directory are uncertain.
+  // A comment begins only at a token boundary outside quotes. Keep the raw
+  // prefix to distinguish an assignment from a quoted command or argument.
   const commands = [];
   let words = [];
-  for (const [token] of script.matchAll(/(?:[^\s"';&|]+|"[^"]*"|'[^']*')+|[;&|\n]+|["']/g)) {
+  for (const [token] of script.matchAll(/#[^\n]*|[;&|\n]+|(?:[^\s"'\\;&|]+|"(?:[^"\\]|\\[\s\S])*"|'[^']*'|\\[^\n])+|["'\\]/g)) {
+    if (token.startsWith('#')) continue;
     if (/^[;&|\n]/.test(token)) {
       if (words.length) commands.push(words);
       words = [];
@@ -398,8 +414,10 @@ function manifestTypeScriptCommands(script) {
   let cwdChanged = false;
   const invocations = [];
   for (const command of commands) {
-    const literals = command.map(word => word.replace(/"([^"]*)"|'([^']*)'/g, (_, double, single) => double ?? single));
-    let [bin, ...args] = literals;
+    const commandIndex = command.findIndex(word => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word));
+    if (commandIndex === -1) continue;
+    const words = command.map(readManifestShellWord);
+    let [bin, ...args] = words.slice(commandIndex).map(word => word.value);
     bin = posix.basename(bin);
     if (['cd', 'pushd', 'popd'].includes(bin)) cwdChanged = true;
     if (bin === 'node' && /(?:^|\/)typescript\/(?:bin\/tsc|lib\/tsc\.js)$/.test(args[0] ?? '')) {
@@ -410,7 +428,7 @@ function manifestTypeScriptCommands(script) {
       bin = posix.basename(args.shift() ?? '');
     }
     if (bin !== 'tsc') continue;
-    const dynamic = command.some(word => /[$`\\<>()*?]/.test(word) || word === '"' || word === "'");
+    const dynamic = words.some(word => word.dynamic);
     invocations.push(cwdChanged || dynamic || args.some(arg => arg.startsWith('@')) ? null : args);
   }
   return invocations;
@@ -704,11 +722,16 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const declarations = new Map();
       const visit = node => {
         const name = node.name?.text ?? (ts.isConstructorDeclaration(node) ? 'constructor' : null);
-        if (typeof name === 'string' && ts.isDeclaration(node)) {
+        const names = typeof name === 'string' ? [name] : [];
+        if (name !== 'default' && (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node))
+          && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default)) names.push('default');
+        if (names.length && ts.isDeclaration(node)) {
           for (const line of new Set([lineAt(node.getStart(source)), lineAt((node.name ?? node).getStart(source))])) {
-            const key = `${line}:${name}`;
-            if (!declarations.has(key)) declarations.set(key, []);
-            declarations.get(key).push(node);
+            for (const declarationName of names) {
+              const key = `${line}:${declarationName}`;
+              if (!declarations.has(key)) declarations.set(key, []);
+              declarations.get(key).push(node);
+            }
           }
         }
         ts.forEachChild(node, visit);
@@ -953,7 +976,11 @@ export function extractMermaidBlocks(docFiles, readFileFn = () => '') {
 
 function matchMermaidSourceLines(source, original) {
   const parsed = source.map(line => line.trim());
-  const raw = original.map(line => line.trim());
+  // Match the pinned parser's entity encoding and retain the original line for evidence.
+  const raw = original.map(line => line.trim()
+    .replace(/style.*:\S*#.*;/g, style => style.slice(0, -1))
+    .replace(/classDef.*:\S*#.*;/g, style => style.slice(0, -1))
+    .replace(/#(\w+);/g, (_, entity) => `ﬂ°${/^\d+$/.test(entity) ? '°' : ''}${entity}¶ß`));
   const align = step => {
     const matches = new Map();
     let cursor = step === 1 ? 0 : raw.length - 1;
@@ -980,15 +1007,15 @@ const MODULE_LABEL = /^(?:[\p{L}\p{N}\p{M}_.-]+\/)*[\p{L}\p{N}\p{M}_.-]+\.(?:ts|
  * Compara apenas arestas direcionadas entre nós que tenham um caminho relativo
  * inteiro como rótulo explícito e efetivo no grafo do Mermaid.
  */
-function extractMermaidModuleReferences(block, parsed) {
+function extractMermaidModuleReferences(block, parsed, resolveRepoFile) {
   const moduleNodes = [];
   const moduleEdges = [];
   const graph = parsed?.graph;
   if (!graph) return {moduleNodes, moduleEdges, unmeasured: 1};
 
-  const {source, vertices, edges, labels, edgeLines} = graph;
-  const sourceLines = source.split(/\r?\n/);
-  const originalLines = block.code.split(/\r?\n/);
+  const {source, vertices, edges, subgraphIds, labels, edgeLines} = graph;
+  const sourceLines = source.split('\n');
+  const originalLines = block.code.split(/\r\n?|\n/);
   const lineMatches = matchMermaidSourceLines(sourceLines, originalLines);
   const location = (line, evidence) => {
     const index = lineMatches.get(line - 1);
@@ -999,20 +1026,20 @@ function extractMermaidModuleReferences(block, parsed) {
 
   const modulesById = new Map();
   for (const [id, vertex] of vertices) {
+    if (subgraphIds.has(id)) continue;
     const label = labels.get(id);
     const text = label?.text;
     if (typeof text !== 'string' || text !== vertex.text || !MODULE_LABEL.test(text) || text.split('/').includes('..')) continue;
     const modulePath = normalizeRepoPath(text);
     moduleNodes.push({modulePath, ...location(label.line, text)});
-    modulesById.set(id, modulePath);
+    modulesById.set(id, resolveRepoFile(modulePath));
   }
 
   let unmeasured = 0;
   for (const [index, edge] of edges.entries()) {
-    if (edge.stroke === 'invisible') continue;
     const from = modulesById.get(edge.start);
     const to = modulesById.get(edge.end);
-    if (!from || !to || !['arrow_point', 'double_arrow_point'].includes(edge.type)) {
+    if (!from || !to || edge.stroke === 'invisible' || !['arrow_point', 'double_arrow_point'].includes(edge.type)) {
       unmeasured += 1;
       continue;
     }
@@ -1043,14 +1070,6 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
   let totalDependencies = 0;
   let unresolvedCount = 0;
   let circularCount = 0;
-
-  const resolveModuleAlias = modCandidate => {
-    const norm = normalizeRepoPath(modCandidate, repoRoot);
-    if (realModules.has(norm)) return norm;
-    if (norm.includes('/') || norm === '.') return null;
-    const candidates = [...realModules].filter(file => posix.basename(file) === norm);
-    return candidates.length === 1 ? candidates[0] : null;
-  };
 
   for (const mod of data.modules) {
     if (!mod || typeof mod !== 'object' || typeof mod.source !== 'string') continue;
@@ -1148,16 +1167,14 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
     const {moduleEdges, unmeasured} = documentReferences.get(block) ?? {moduleEdges: [], unmeasured: 1};
     unmeasuredByFile.set(block.file, (unmeasuredByFile.get(block.file) ?? 0) + unmeasured);
     for (const edge of moduleEdges) {
-      const resolvedFrom = resolveModuleAlias(edge.from);
-      const resolvedTo = resolveModuleAlias(edge.to);
-      if (!canCompare || !resolvedFrom || !resolvedTo || incompleteSources.has(resolvedFrom)) {
+      if (!canCompare || !realModules.has(edge.from) || !realModules.has(edge.to) || incompleteSources.has(edge.from)) {
         skippedEdges += 1;
         skippedEdgesByFile.set(block.file, (skippedEdgesByFile.get(block.file) ?? 0) + 1);
         continue;
       }
       checkedEdges += 1;
       checkedEdgesByFile.set(block.file, checkedEdgesByFile.get(block.file) + 1);
-      if (!realEdges.get(resolvedFrom)?.has(resolvedTo)) {
+      if (!realEdges.get(edge.from)?.has(edge.to)) {
         edgeMismatches += 1;
         findings.push({
           tool: 'dependency-cruiser',
@@ -1166,7 +1183,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
           line: edge.line,
           severity: 'alta',
           message: `Diagrama em ${block.file} documenta a dependência "${edge.from} -> ${edge.to}", que não existe no grafo real extraído pelo dependency-cruiser.`,
-          evidence: `aresta documentada: ${edge.rawLine} | módulos reais de ${edge.from}: [${[...(realEdges.get(resolvedFrom) ?? [])].join(', ')}]`,
+          evidence: `aresta documentada: ${edge.rawLine} | módulos reais de ${edge.from}: [${[...(realEdges.get(edge.from) ?? [])].join(', ')}]`,
         });
       }
     }
@@ -1221,16 +1238,15 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
     }
   }
 
-  const hasRepoFile = modPath => {
-    const norm = normalizeRepoPath(modPath);
-    if (repoFilesSet.has(norm)) return true;
-    if (norm.includes('/') || norm === '.') return false;
-    for (const candidate of repoFilesSet) {
-      if (posix.basename(candidate) === norm) {
-        return true;
-      }
-    }
-    return false;
+  const filesByBasename = new Map();
+  for (const file of repoFilesSet) {
+    const basename = posix.basename(file);
+    filesByBasename.set(basename, filesByBasename.has(basename) ? null : file);
+  }
+  const resolveRepoFile = modulePath => {
+    if (repoFilesSet.has(modulePath)) return modulePath;
+    // An ambiguous basename has candidates but cannot identify an endpoint.
+    return filesByBasename.get(modulePath);
   };
 
   for (const block of mermaidBlocks) {
@@ -1262,14 +1278,14 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
     }
     validBlocks += 1;
     fileStat.valid += 1;
-    const references = extractMermaidModuleReferences(block, parsed);
+    const references = extractMermaidModuleReferences(block, parsed, resolveRepoFile);
     documentReferences.set(block, references);
 
     const {moduleNodes} = references;
     const seenMissing = new Set();
     for (const nodeRef of moduleNodes) {
       fileStat.moduleRefsChecked += 1;
-      if (!hasRepoFile(nodeRef.modulePath) && !seenMissing.has(`${nodeRef.line}:${nodeRef.modulePath}`)) {
+      if (resolveRepoFile(nodeRef.modulePath) === undefined && !seenMissing.has(`${nodeRef.line}:${nodeRef.modulePath}`)) {
         seenMissing.add(`${nodeRef.line}:${nodeRef.modulePath}`);
         findings.push({
           tool: 'mermaid',

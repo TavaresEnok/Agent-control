@@ -805,6 +805,45 @@ test('Mermaid compara o grafo efetivo de descrições, rótulos redefinidos e ca
   }
 });
 
+test('subgrafos e nomes de arquivos ambíguos ficam sem medição e entidades preservam a linha da aresta', {
+  skip: skipLocalTools,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-mermaid-endpoints-'));
+  try {
+    mkdirSync(join(root, 'src'));
+    mkdirSync(join(root, 'tests'));
+    for (const file of ['source.ts', 'existing.ts', 'target.ts', 'src/dup.ts', 'tests/dup.ts', 'tests/offgraph.ts']) {
+      writeFileSync(join(root, file), '/** Valor. */\nexport const value = 1;\n');
+    }
+    writeFileSync(join(root, 'src', 'unique.ts'), '/** Valor. */\nexport {value} from "../target";\n');
+    const diagram = [
+      '---', 'title: Arquitetura', '---', 'flowchart LR',
+      'G["ghost.ts"]', 'subgraph G["Camada"]', 'B["source.ts"]', 'end',
+      'E["existing.ts"]', 'subgraph E["Camada 2"]', 'U["unique.ts"]', 'end',
+      'T["target.ts"]', 'N["#quot; #9829;"]', 'style B fill:#abc;',
+      'G --> T', 'T --> E', 'D["dup.ts"] --> T', 'M["missing.ts"] --> T', 'N ~~~ T',
+      'F["tests/offgraph.ts"] --> T', 'U --> T',
+      '%% Comentário com #quot;', 'B -->|chama #43;| T',
+    ];
+    const markdownPrefix = ['# Arquitetura', '', '```mermaid'];
+    writeFileSync(join(root, 'README.md'), [...markdownPrefix, ...diagram, '```', ''].join('\r\n'));
+    const lineOf = (statement: string) => markdownPrefix.length + diagram.indexOf(statement) + 1;
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+
+    const coverage = result.coverage.find(row => row.tool === 'dependency-cruiser:diagrama');
+    assert.equal(coverage?.status, 'ok');
+    assert.match(coverage.detail, /arestas_doc_conferidas=2; arestas_doc_nao_conferidas=1; trechos_doc_nao_medidos=5; cobertura parcial/);
+    assert.deepEqual(result.findings.map(finding => [finding.rule, finding.line]), [
+      ['DOC-MERMAID-MODULO-INEXISTENTE', lineOf('M["missing.ts"] --> T')],
+      ['DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE', lineOf('B -->|chama #43;| T')],
+    ]);
+    assert.equal(result.findings[0].evidence, 'M["missing.ts"] --> T');
+    assert.match(result.findings[1].evidence, /^aresta documentada: B -->\|chama #43;\| T \|/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
 test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', {skip: skipLocalTools}, () => {
   const root = join(FIXTURES, 'coverage-defect');
   const read = (file: string) => readFileSync(join(root, file), 'utf8');
@@ -842,6 +881,13 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => exampleWithOpener,
   );
   assert.deepEqual(literal.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+
+  const anonymous = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('default', 4, 128)]},
+    '[warning] Failed to resolve link to "Missing" in comment for default', root,
+    () => ['/** Public class.', ' * See {@link Missing}.', ' */', 'export default', 'class {}'].join('\n'),
+  );
+  assert.deepEqual(anonymous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
 });
 
 test('ferramentas fixadas encontram as quatro arestas ausentes e conferem o controle real', {skip: skipLocalTools}, async () => {
@@ -863,6 +909,7 @@ test('ferramentas fixadas encontram as quatro arestas ausentes e conferem o cont
   assert.ok(params.some(f => f.line === 6));
   assert.ok(params.some(f => f.line === 12));
   assert.ok(params.some(f => f.line === 31 && f.message.includes('"sample"')));
+  assert.ok(params.some(f => f.file === 'src/billing.ts' && f.line === 36 && f.message.includes('"default"')));
   assert.ok(result.findings.some(f => f.rule === 'DOC-TYPEDOC-LINK-QUEBRADO' && f.line === 13));
   const clean = await runCollector({repoDir: join(FIXTURES, 'coverage-control'), toolsRoot: MODULE_DEPLOY_DIR});
   assert.equal(clean.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined);
@@ -922,7 +969,11 @@ test('tsc -p seleciona build.json e moduleSuffixes impede falso positivo do graf
       assert.equal(tsc.status, 0, tsc.stderr || tsc.stdout);
       assert.match(tsc.stdout, /Module name '\.\/billing' was successfully resolved to '.*\/billing\.native\.ts'/);
     }
-    manifest('tsc -p build.json && node -e "require(\'node:fs\').writeFileSync(\'script-ran\', \'yes\')"');
+    manifest([
+      '# Build de exemplo; cd ignored && tsc -p tsconfig.build.json',
+      "NODE_ENV=production BUILD_LABEL='literal # $ ;' npx --no-install tsc -p build.json # ; tsc -p tsconfig.build.json",
+      'node -e "require(\'node:fs\').writeFileSync(\'script-ran\', \'yes\')"',
+    ].join('\n'));
 
     const partial = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
     assert.match(partial.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /moduleSuffixes.* em build\.json/);
@@ -957,15 +1008,15 @@ test('seleção estática segue manifesto aninhado, references e extends JSONC d
     write('arch.mmd', 'flowchart LR\nA["index.ts"] --> B["billing.ts"]\n');
     write('base.json', options);
     write('app/package.json', JSON.stringify({scripts: {
-      build: "npm exec -- tsc -b 'build config/project.json'",
+      build: "npm exec -- tsc -b 'build config/project#local.json'",
       description: 'echo tsc -p example.json',
     }}));
-    write('app/build config/project.json', '{ /* JSONC */ "extends": "../../base", }');
+    write('app/build config/project#local.json', '{ /* JSONC */ "extends": "../../base", }');
     const measured = await collect();
     assert.equal(measured.coverage.some(row => row.tool === 'dependency-cruiser:resolucao'), false);
     assert.equal(measured.findings[0]?.rule, 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE');
 
-    write('app/build config/project.json', '{"extends":"../../base","references":[{"path":"./reference.json"}]}');
+    write('app/build config/project#local.json', '{"extends":"../../base","references":[{"path":"./reference.json"}]}');
     write('app/build config/reference.json', '{"extends":["../../base","./suffixes"]}');
     write('app/build config/suffixes.json', '{"compilerOptions":{"moduleSuffixes":[".native",""]}}');
     const partial = await collect();
@@ -982,10 +1033,12 @@ test('seleção estática segue manifesto aninhado, references e extends JSONC d
     assert.match(outside.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /extends não local/);
     assert.deepEqual(outside.findings, []);
 
-    write('app/package.json', JSON.stringify({scripts: {build: 'tsc --project "$CONFIG"'}}));
-    const dynamic = await collect();
-    assert.match(dynamic.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /comando TypeScript não analisado.*app\/package\.json/);
-    assert.deepEqual(dynamic.findings, []);
+    for (const build of ['tsc --project "$CONFIG"', 'MODE="$PROFILE" tsc -p build.json']) {
+      write('app/package.json', JSON.stringify({scripts: {build}}));
+      const dynamic = await collect();
+      assert.match(dynamic.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /comando TypeScript não analisado.*app\/package\.json/);
+      assert.deepEqual(dynamic.findings, []);
+    }
   } finally {
     rmSync(root, {recursive: true, force: true});
   }

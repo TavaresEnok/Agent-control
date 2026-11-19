@@ -31,6 +31,7 @@ type Block = {file: string; startLine: number; code: string};
 type ReadFile = (file: string) => string;
 type MermaidParse = (code: string) => Promise<unknown>;
 type DocumentReferences = ReadonlyMap<Block, {
+  // Endpoints are exact, repository-relative snapshot paths.
   moduleEdges: {from: string; to: string; line: number; rawLine: string}[];
   unmeasured: number;
 }>;

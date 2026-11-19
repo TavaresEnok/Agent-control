@@ -31,3 +31,8 @@ export const billing = 1;
  * @param legacy no longer accepted
  */
 export function sample(current: string) { return current; }
+
+/** Anonymous default function.
+ * @param legacy no longer accepted
+ */
+export default function (current: string) { return current; }
