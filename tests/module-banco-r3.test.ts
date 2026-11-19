@@ -402,31 +402,51 @@ test('rejeições ambíguas preservam o ponto de detecção e usam uma única ex
       CREATE TABLE parent (id integer PRIMARY KEY);
       CREATE TABLE child (id integer REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);
     SQL
+    builtin_schema = <<~SQL
+      CREATE TABLE parent (label text, id uuid, PRIMARY KEY (label, id));
+      CREATE TABLE child (label "text", id UUID,
+        FOREIGN KEY (label, id) REFERENCES parent(label, id) DEFERRABLE INITIALLY DEFERRED);
+    SQL
+    builtin_insert = "INSERT INTO child VALUES ('sintético', '00000000-0000-0000-0000-000000000001');"
     cases = {
-      replacement: [
+      replacement: [schema,
         'INSERT INTO child VALUES (42);',
         'DELETE FROM child WHERE id = 42;',
         'INSERT INTO child VALUES (42);',
         'SELECT 1;'
       ],
-      parent_removal: [
+      parent_removal: [schema,
         'INSERT INTO parent VALUES (42);',
         'INSERT INTO child VALUES (42);',
         'DELETE FROM parent WHERE id = 42;',
         'SET CONSTRAINTS ALL IMMEDIATE;'
       ],
-      conditional: [
+      conditional: [schema,
         "DO $$ BEGIN IF current_database() <> 'fresh' THEN INSERT INTO child VALUES (42); END IF; END $$;",
         'SELECT 1;',
         "DO $$ BEGIN IF current_database() = 'fresh' THEN INSERT INTO child VALUES (42); END IF; END $$;",
         'SELECT 1;'
-      ]
+      ],
+      builtin_commit: [builtin_schema, builtin_insert, 'SELECT 1;'],
+      builtin_early: [builtin_schema, builtin_insert, 'SET /* checagem */ CONSTRAINTS ALL IMMEDIATE;'],
+      builtin_two_writers: [builtin_schema, builtin_insert, builtin_insert, 'SELECT 1;'],
+      type_path: [
+        "SET LOCAL search_path = public, pg_catalog; #{builtin_schema}",
+        builtin_insert, 'SELECT 1;'
+      ],
+      type_qualified: [
+        builtin_schema.gsub(/\buuid\b/i, 'public.uuid'),
+        builtin_insert, 'SELECT 1;'
+      ],
     }
     reports = {}
     Dir.mktmpdir('c5-r6-', '/tmp') do |dir|
       db = Banco::Database.new(dir, Banco::Report.new)
       begin
         db.start
+        db.connect('fresh') do |connection|
+          connection.exec('CREATE DOMAIN public.text AS pg_catalog.text; CREATE DOMAIN public.uuid AS pg_catalog.uuid;')
+        end
         connections = []
         executed = []
         db.define_singleton_method(:connect) do |name, **options, &block|
@@ -442,7 +462,7 @@ test('rejeições ambíguas preservam o ponto de detecção e usam uma única ex
         cases.each do |name, commands|
           report = Banco::Report.new
           db.instance_variable_set(:@report, report)
-          sources = [schema, *commands].map.with_index(1) do |sql, index|
+          sources = commands.map.with_index(1) do |sql, index|
             Banco::Source.new(format('db/migrations/%03d_%s.sql', index, name), sql)
           end
           connections.clear
@@ -450,7 +470,7 @@ test('rejeições ambíguas preservam o ponto de detecção e usam uma única ex
           raise "unexpected commit for #{name}" if db.migrate('fresh', sources)
           raise "unexpected connections for #{name}: #{connections}" unless connections == ['fresh']
           expected = ['BEGIN', *sources.map(&:sql)]
-          expected << 'COMMIT' unless name == :parent_removal
+          expected << 'COMMIT' unless %i[parent_removal builtin_early].include?(name)
           expected << 'ROLLBACK'
           raise "unexpected SQL execution sequence for #{name}" unless executed == expected
           reports[name] = JSON.parse(report.to_json)
@@ -461,22 +481,182 @@ test('rejeições ambíguas preservam o ponto de detecção e usam uma única ex
     end
     puts JSON.generate(reports)
   `);
-  for (const [scenario, detection] of [
-    ['replacement', 'detecção no commit'],
-    ['parent_removal', 'detecção em SET CONSTRAINTS IMMEDIATE na linha 1'],
-    ['conditional', 'detecção no commit'],
+  for (const [scenario, detection, count] of [
+    ['replacement', 'detecção no commit', 5],
+    ['parent_removal', 'detecção em SET CONSTRAINTS IMMEDIATE na linha 1', 5],
+    ['conditional', 'detecção no commit', 5],
+    ['builtin_two_writers', 'detecção no commit', 4],
+    ['type_path', 'detecção no commit', 3],
+    ['type_qualified', 'detecção no commit', 3],
   ] as const) {
     const report = result[scenario];
     assert.equal(report.findings.length, 1, scenario);
     const [finding] = report.findings;
     assert.equal(finding.rule, 'BANCO-LOTE-MIGRACAO-REJEITADO', scenario);
-    assert.equal(finding.file, `db/migrations/005_${scenario}.sql`, scenario);
+    assert.equal(finding.file, `db/migrations/00${count}_${scenario}.sql`, scenario);
     assert.ok(finding.evidence.includes(`SQLSTATE 23503; ${detection}`), scenario);
-    assert.match(finding.evidence, /lote de 5 arquivos.*origem entre arquivos indeterminada.*último arquivo alcançado/);
+    assert.match(finding.evidence, new RegExp(`lote de ${count} arquivos.*origem entre arquivos indeterminada.*último arquivo alcançado`));
     assert.ok(report.coverage.some(row => row.status === 'ok' && /lote rejeitado.*origem entre arquivos indeterminada/.test(row.detail)), scenario);
     assert.ok(report.coverage.every(row => row.status !== 'failed' && !row.files?.length), scenario);
   }
-  assert.doesNotMatch(JSON.stringify(result), /INSERT INTO|DELETE FROM|current_database|inline_code_block/);
+  for (const [scenario, detection] of [
+    ['builtin_commit', 'detecção no commit'],
+    ['builtin_early', 'detecção em SET CONSTRAINTS IMMEDIATE na linha 1'],
+  ] as const) {
+    const report = result[scenario];
+    assert.equal(report.findings.length, 1, scenario);
+    const [finding] = report.findings;
+    const origin = `db/migrations/002_${scenario}.sql`;
+    assert.equal(finding.rule, 'BANCO-MIGRACAO-REJEITADA', scenario);
+    assert.equal(finding.file, origin, scenario);
+    assert.ok(finding.evidence.includes(`SQLSTATE 23503; ${detection}`), scenario);
+    assert.match(finding.evidence, /execução original e único arquivo com inserções/);
+    assert.ok(report.coverage.some(row => row.status === 'ok' && row.detail.includes(`origem atribuída a ${origin}`)), scenario);
+    assert.ok(report.coverage.every(row => row.status !== 'failed' && !row.files?.length), scenario);
+  }
+  assert.doesNotMatch(JSON.stringify(result), /INSERT INTO|DELETE FROM|current_database|inline_code_block|00000000-0000/);
+});
+
+test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem diferida e texto em quadros SQL', {
+  skip: skipPostgres, timeout: 90_000,
+}, () => {
+  const result = runIsolated<Record<string, Report>>(String.raw`
+    require 'dexter'
+    pending = <<~SQL
+      CREATE TABLE parent (id integer PRIMARY KEY);
+      CREATE TABLE child (id integer CONSTRAINT child_fk
+        REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);
+      INSERT INTO child VALUES (42);
+    SQL
+    cases = {
+      schema: [pending, <<~'SQL'],
+        SELECT 'ação';
+        /* resolução */
+        SET CONSTRAINTS "falta""esquema"."falta.constraint" IMMEDIATE;
+      SQL
+      constraint: [pending, <<~'SQL'],
+        SELECT 'SET CONSTRAINTS';
+        SET /* ação */ CONSTRAINTS public."falta""constraint" IMMEDIATE;
+      SQL
+      catalog: [pending, "SET CONSTRAINTS absent.public.child_fk IMMEDIATE;"],
+      schema_acl: [
+        "CREATE SCHEMA restricted; REVOKE USAGE ON SCHEMA restricted FROM projeto;",
+        "SET CONSTRAINTS restricted.child_fk IMMEDIATE;"
+      ],
+      nondeferrable: [
+        "CREATE TABLE task (id integer CONSTRAINT task_unique UNIQUE);",
+        "SET CONSTRAINTS public.task_unique DEFERRED;"
+      ],
+      inline_schema: [pending, <<~'SQL'],
+        SELECT 'ação';
+        /* o bloco começa na terceira linha */
+        DO $$ BEGIN
+          SET /* comentário "
+        SQL statement "SELECT 1"
+        PL/pgSQL function inline_code_block line 99 at SQL statement
+            /* comentário interno */ */
+          CONSTRAINTS "falta""esquema"."falta.constraint" IMMEDIATE;
+        END $$;
+      SQL
+      execute_schema: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          EXECUTE $cmd$SELECT 1;
+            SET CONSTRAINTS "falta
+        SQL statement ""SELECT 1"""."falta.constraint" IMMEDIATE;$cmd$;
+        END $$;
+      SQL
+      cursor: [pending, <<~'SQL'],
+        SELECT 'ação';
+        SELECT 'a'::falta.tipo;
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+      SQL
+      raise_message: [pending, <<~'SQL'],
+        SELECT 'ação';
+        DO $$ BEGIN
+          RAISE SQLSTATE '3F000' USING MESSAGE = 'SET CONSTRAINTS synthetic-private';
+        END $$;
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+      SQL
+      comment_frame: [<<~'SQL', <<~'QUERY'],
+        CREATE FUNCTION failed_query() RETURNS int LANGUAGE plpgsql AS $$
+        BEGIN
+          RAISE SQLSTATE '3F000' USING MESSAGE = 'SET CONSTRAINTS synthetic-private';
+        END $$;
+      SQL
+        DO $$ BEGIN
+          EXECUTE $cmd$SELECT failed_query() /* comentário "
+        SQL statement "SET CONSTRAINTS ALL IMMEDIATE"
+        PL/pgSQL function inline_code_block line 99 at SQL statement
+          */$cmd$;
+        END $$;
+      QUERY
+      fk_check: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          SET /* resolução */ CONSTRAINTS public.child_fk IMMEDIATE;
+        END $$;
+      SQL
+      trigger_schema: [<<~'SQL', 'INSERT INTO task VALUES (1);', 'DO $$ BEGIN SET CONSTRAINTS ALL IMMEDIATE; END $$;'],
+        CREATE TABLE task (id integer);
+        CREATE FUNCTION check_task() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          SET /* resolução */ CONSTRAINTS falta.constraint DEFERRED;
+          RETURN NEW;
+        END $$;
+        CREATE CONSTRAINT TRIGGER deferred_task AFTER INSERT ON task
+          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_task();
+      SQL
+      mixed: [pending, "CREATE TYPE falta.ty AS ENUM ('a'); SET CONSTRAINTS ALL IMMEDIATE;"]
+    }
+    reports = {}
+    Dir.mktmpdir('c5-r7-', '/tmp') do |dir|
+      db = Banco::Database.new(dir, Banco::Report.new)
+      begin
+        db.start
+        cases.each do |name, commands|
+          report = Banco::Report.new
+          db.instance_variable_set(:@report, report)
+          sources = commands.map.with_index(1) do |sql, index|
+            Banco::Source.new(format('db/migrations/%03d_%s.sql', index, name), sql)
+          end
+          raise "unexpected commit for #{name}" if db.migrate('fresh', sources)
+          reports[name] = JSON.parse(report.to_json)
+        end
+      ensure
+        db.stop
+      end
+    end
+    puts JSON.generate(reports)
+  `);
+  for (const [scenario, code, line] of [
+    ['schema', '3F000', 3], ['constraint', '42704', 2], ['catalog', '0A000', 1],
+    ['schema_acl', '42501', 1], ['nondeferrable', '42809', 1],
+    ['inline_schema', '3F000', 3], ['execute_schema', '3F000', 1], ['cursor', '3F000', 2],
+    ['raise_message', '3F000', 2], ['comment_frame', '3F000', 1],
+  ] as const) {
+    const report = result[scenario];
+    const path = `db/migrations/002_${scenario}.sql`;
+    assert.deepEqual(report.findings, [{rule: 'BANCO-MIGRACAO-REJEITADA', tool: 'pg-migrate', severity: 'alta',
+      file: path, line, message: 'A migração foi rejeitada no cenário fresh.', evidence: `SQLSTATE ${code}`}], scenario);
+    assert.ok(report.coverage.some(row => row.status === 'ok' && row.detail.includes(`${path}: rejeitada (SQLSTATE ${code})`)), scenario);
+  }
+  for (const [scenario, file, code, detection] of [
+    ['fk_check', '002_fk_check.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['trigger_schema', '003_trigger_schema.sql', '3F000', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['mixed', '002_mixed.sql', '3F000', /SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
+  ] as const) {
+    const report = result[scenario];
+    assert.equal(report.findings.length, 1, scenario);
+    const [finding] = report.findings;
+    assert.equal(finding.rule, 'BANCO-LOTE-MIGRACAO-REJEITADO', scenario);
+    assert.equal(finding.file, 'db/migrations/' + file, scenario);
+    assert.match(finding.evidence, new RegExp('SQLSTATE ' + code));
+    assert.match(finding.evidence, detection);
+    assert.match(finding.evidence, /origem entre arquivos indeterminada/);
+  }
+  for (const report of Object.values(result)) {
+    assert.ok(report.coverage.every(row => row.status !== 'failed' && !row.files?.length));
+  }
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-private|inline_code_block|SQL statement|falta\.constraint|failed_query/);
 });
 
 test('coletor atribui as medições e o candidato Dexter e valida o controle limpo com Squawk', {
