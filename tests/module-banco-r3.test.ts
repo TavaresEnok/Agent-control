@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
 
@@ -565,6 +566,33 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
         SQL statement ""SELECT 1"""."falta.constraint" IMMEDIATE;$cmd$;
         END $$;
       SQL
+      nested_do: [pending, <<~'SQL'],
+        SELECT 1;
+        DO $$ BEGIN
+          EXECUTE $cmd$DO $inner$ BEGIN
+            SET CONSTRAINTS "falta""esquema".child_fk DEFERRED;
+          END $inner$;$cmd$;
+        END $$;
+      SQL
+      timeout_schema: [pending, <<~'SQL'],
+        SET LOCAL statement_timeout = '15s';
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+      SQL
+      repeated_names: [pending, <<~'SQL'],
+        SET LOCAL statement_timeout = '15s';
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+      SQL
+      repeated_blocks: [pending, <<~'SQL'],
+        SELECT 1;
+        DO $$ BEGIN SET CONSTRAINTS falta.child_fk IMMEDIATE; END $$;
+        DO $$ BEGIN SET CONSTRAINTS falta.child_fk IMMEDIATE; END $$;
+      SQL
+      unpositioned: [pending, <<~'SQL'],
+        -- referência no primeiro comando
+        SELECT 1;
+        CREATE TYPE falta.ty AS ENUM ('a');
+      SQL
       cursor: [pending, <<~'SQL'],
         SELECT 'ação';
         SELECT 'a'::falta.tipo;
@@ -595,6 +623,45 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
           SET /* resolução */ CONSTRAINTS public.child_fk IMMEDIATE;
         END $$;
       SQL
+      line_comment: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          EXECUTE $cmd$SET -- checagem da restrição "
+          CONSTRAINTS ALL IMMEDIATE;$cmd$;
+        END $$;
+      SQL
+      trailing_comment: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          EXECUTE $cmd$SET CONSTRAINTS ALL IMMEDIATE; -- checagem$cmd$;
+        END $$;
+      SQL
+      nested_check: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          EXECUTE $cmd$DO $inner$ BEGIN
+            SET CONSTRAINTS ALL IMMEDIATE;
+          END $inner$;$cmd$;
+        END $$;
+      SQL
+      quoted_routine: [<<~'SQL', 'INSERT INTO task VALUES (1);', 'DO $$ BEGIN SET CONSTRAINTS ALL IMMEDIATE; END $$;'],
+        CREATE TABLE task (id integer);
+        CREATE FUNCTION "check""task"(integer) RETURNS integer LANGUAGE sql SET search_path = public AS $$
+          SELECT $1 / 0;
+        $$;
+        CREATE FUNCTION "check""task"(text) RETURNS integer LANGUAGE sql SET search_path = public AS $$
+          SELECT "check""task"($1::integer);
+        $$;
+        CREATE FUNCTION "check
+        task"(text) RETURNS integer LANGUAGE sql SET search_path = public AS $$
+          SELECT "check""task"($1);
+        $$;
+        CREATE FUNCTION check_task() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM "check
+        task"(NEW.id::text);
+          RETURN NEW;
+        END $$;
+        CREATE CONSTRAINT TRIGGER deferred_task AFTER INSERT ON task
+          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_task();
+      SQL
       trigger_schema: [<<~'SQL', 'INSERT INTO task VALUES (1);', 'DO $$ BEGIN SET CONSTRAINTS ALL IMMEDIATE; END $$;'],
         CREATE TABLE task (id integer);
         CREATE FUNCTION check_task() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -608,17 +675,33 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
       mixed: [pending, "CREATE TYPE falta.ty AS ENUM ('a'); SET CONSTRAINTS ALL IMMEDIATE;"]
     }
     reports = {}
-    Dir.mktmpdir('c5-r7-', '/tmp') do |dir|
+    Dir.mktmpdir('c5-r8-', '/tmp') do |dir|
       db = Banco::Database.new(dir, Banco::Report.new)
       begin
         db.start
+        connections = []
+        executed = []
+        db.define_singleton_method(:connect) do |name, **options, &block|
+          connections << name
+          super(name, **options) do |connection|
+            connection.define_singleton_method(:exec) do |sql|
+              executed << sql
+              super(sql)
+            end
+            block.call(connection)
+          end
+        end
         cases.each do |name, commands|
           report = Banco::Report.new
           db.instance_variable_set(:@report, report)
           sources = commands.map.with_index(1) do |sql, index|
             Banco::Source.new(format('db/migrations/%03d_%s.sql', index, name), sql)
           end
+          connections.clear
+          executed.clear
           raise "unexpected commit for #{name}" if db.migrate('fresh', sources)
+          raise "unexpected connections for #{name}" unless connections == ['fresh']
+          raise "unexpected SQL execution sequence for #{name}" unless executed == ['BEGIN', *commands, 'ROLLBACK']
           reports[name] = JSON.parse(report.to_json)
         end
       ensure
@@ -631,6 +714,7 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
     ['schema', '3F000', 3], ['constraint', '42704', 2], ['catalog', '0A000', 1],
     ['schema_acl', '42501', 1], ['nondeferrable', '42809', 1],
     ['inline_schema', '3F000', 3], ['execute_schema', '3F000', 1], ['cursor', '3F000', 2],
+    ['nested_do', '3F000', 2], ['timeout_schema', '3F000', 2],
     ['raise_message', '3F000', 2], ['comment_frame', '3F000', 1],
   ] as const) {
     const report = result[scenario];
@@ -641,6 +725,10 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
   }
   for (const [scenario, file, code, detection] of [
     ['fk_check', '002_fk_check.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['line_comment', '002_line_comment.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['trailing_comment', '002_trailing_comment.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['nested_check', '002_nested_check.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['quoted_routine', '003_quoted_routine.sql', '22012', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
     ['trigger_schema', '003_trigger_schema.sql', '3F000', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
     ['mixed', '002_mixed.sql', '3F000', /SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
   ] as const) {
@@ -652,6 +740,14 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
     assert.match(finding.evidence, new RegExp('SQLSTATE ' + code));
     assert.match(finding.evidence, detection);
     assert.match(finding.evidence, /origem entre arquivos indeterminada/);
+  }
+  for (const [scenario, reference] of [['repeated_names', 1], ['repeated_blocks', 1], ['unpositioned', 2]] as const) {
+    assert.equal(result[scenario].findings.length, 1, scenario);
+    const [finding] = result[scenario].findings;
+    assert.equal(finding.rule, 'BANCO-MIGRACAO-REJEITADA', scenario);
+    assert.equal(finding.file, `db/migrations/002_${scenario}.sql`);
+    assert.equal(finding.line, reference, scenario);
+    assert.match(finding.evidence, /SQLSTATE 3F000; posição exata indisponível; linha de referência do arquivo/);
   }
   for (const report of Object.values(result)) {
     assert.ok(report.coverage.every(row => row.status !== 'failed' && !row.files?.length));
@@ -678,6 +774,12 @@ test('coletor atribui as medições e o candidato Dexter e valida o controle lim
       }
     }
   }
+  const query = 'banco/queries/latency.sql';
+  const digest = createHash('sha256').update(readFileSync(join(fixtures, 'defective', query))).digest('hex');
+  const slow = defective.findings.find(f => f.rule === 'BANCO-CONSULTA-LENTA' && f.file === query);
+  assert.ok(slow);
+  assert.ok(defective.coverage.some(row => row.tool === 'pg_stat_statements' && row.status === 'ok'
+    && row.detail === `pg_stat_statements:query:${query}: linha ${slow.line}; ${slow.evidence} | SQL medido (sha256:${digest})`));
   assert.ok(defective.coverage.some(row => row.tool === 'dexter' && row.status === 'ok'
     && row.files?.includes('banco/queries/by-code.sql') && /by-code.sql: linha 2; planos hipotéticos comparados/.test(row.detail)));
   const finding = defective.findings.find(f => f.rule === 'BANCO-INDICE-CANDIDATO');
