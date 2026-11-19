@@ -364,7 +364,9 @@ test('os analisadores distinguem a documentação com defeitos do controle limpo
     FIXTURE_DEFECTIVE_DIR,
     readDefective,
   );
-  assert.equal(tdParsed.findings.length, 3);
+  assert.deepEqual(tdParsed.findings.map(finding => finding.rule), ['DOC-TYPEDOC-SIMBOLO-SEM-DOC']);
+  assert.deepEqual(tdParsed.unlocatedWarnings.map(warning => warning.rule),
+    ['DOC-TYPEDOC-PARAM-DESATUALIZADO', 'DOC-TYPEDOC-LINK-QUEBRADO']);
   const mdCross = crossCheckMarkdownAgainstTypedoc(['README.md'], tdParsed.symbols, readDefective);
   assert.equal(mdCross.length, 1);
   assert.equal(mdCross[0]?.rule, 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA');
@@ -926,12 +928,32 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   const root = join(FIXTURES, 'coverage-defect');
   const read = (file: string) => readFileSync(join(root, file), 'utf8');
   const comment = {summary: [{text: 'Documentado.'}]};
-  const member = (name: string, line: number, kind: number) => ({name, kind, sources: [{fileName: 'src/billing.ts', line}], comment});
+  const fileName = 'src/billing.ts';
+  const link = (text: string) => ({summary: [{kind: 'inline-tag', tag: '@link', text}]});
+  let nextId = 0;
+  const symbolIdMap: Record<number, object> = {};
+  const member = (name: string, line: number, kind: number, character: number, doc: object = comment) => {
+    const id = ++nextId;
+    symbolIdMap[id] = {packageName: '<unknown>', packagePath: join(root, fileName), qualifiedName: name};
+    const sources = [{fileName, line, character}];
+    return {id, name, kind, sources, comment: doc};
+  };
+  const callable = (name: string, line: number, kind: number, character: number, doc: object = comment) => ({
+    ...member(name, line, kind, character),
+    signatures: [member(name, line, 4096, character, doc)],
+  });
+  const sample = (line: number, doc: object = comment) => {
+    const child = callable('sample', line, 64, 16, doc);
+    return {kind: 1, name: 'x', children: [child], symbolIdMap};
+  };
   const reflection = {kind: 1, name: 'x', children: [
-    member('first', 4, 64), member('second', 8, 64),
-    {...member('Billing', 10, 128), children: [member('charge', 15, 2048), {...member('hidden', 17, 2048), flags: {isPrivate: true}}]},
-    {...member('Contract', 20, 256), children: [member('submit', 22, 2048)]},
-  ]};
+    callable('first', 4, 64, 16), callable('second', 8, 64, 16),
+    {...member('Billing', 10, 128, 13), children: [
+      callable('charge', 15, 2048, 2, link('MissingCharge')),
+      {...member('hidden', 17, 2048, 10), flags: {isPrivate: true}},
+    ]},
+    {...member('Contract', 20, 256, 17), children: [callable('submit', 22, 2048, 2)]},
+  ], symbolIdMap};
   const parsed = parseTypedocReport(reflection, [
     '[warning] The signature second has an @param with name "legacy", which was not used',
     '[warning] The signature Billing.charge has an @param with name "legacy", which was not used',
@@ -949,66 +971,74 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   const source = ['/** Example.', ' * ```js', ' * @param legacy', ' * ```', ' * @param legacy obsolete', ' */',
     'export function sample(current: string) { return current; }'].join('\n');
   const example = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    sample(7),
     '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => source,
   );
   assert.deepEqual(example.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
   const multilineCode = source.replace(' * ```js', ' * Inline ``example').replace(' * ```', ' * end``');
   const multiline = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    sample(7),
     '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => multilineCode,
   );
   assert.deepEqual(multiline.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
   const onlyInline = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    sample(7),
     '[warning] The signature sample has an @param with name "legacy", which was not used', root,
     () => multilineCode.replace('@param legacy obsolete', 'See the example.'),
   );
-  assert.equal(onlyInline.findings[0].line, 7);
-  assert.match(onlyInline.findings[0].message, /Linha da tag indeterminada/);
+  assert.deepEqual(onlyInline.findings, []);
+  assert.equal(onlyInline.unlocatedWarnings[0]?.rule, 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
   const exampleWithOpener = source.replace(' * @param legacy\n', ' * const text = "/**";\n');
   const literal = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    sample(7),
     '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => exampleWithOpener,
   );
   assert.deepEqual(literal.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
 
   const anonymous = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('default', 4, 128)]},
+    {kind: 1, name: 'x', children: [member('default', 4, 128, 0, link('Missing'))], symbolIdMap},
     '[warning] Failed to resolve link to "Missing" in comment for default', root,
     () => ['/** Public class.', ' * See {@link Missing}.', ' */', 'export default', 'class {}'].join('\n'),
   );
   assert.deepEqual(anonymous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
   const arrow = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('default', 4, 64)]},
+    {kind: 1, name: 'x', children: [callable('default', 4, 64, 15, link('Missing'))], symbolIdMap},
     '[warning] Failed to resolve link to "Missing" in comment for default', root,
     () => ['/** Public arrow.', ' * See {@link Missing}.', ' */', 'export default (current: string) => current'].join('\n'),
   );
   assert.deepEqual(arrow.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
 
   const ambiguous = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('sample', 5, 64)]},
+    sample(5, link('Missing')),
     '[warning] Failed to resolve link to "Missing" in comment for sample', root,
     () => ['/** Public function.', ' * See {@link Missing}.', ' * Compare {@link Missing}.', ' */', 'export function sample() {}'].join('\n'),
   );
-  assert.deepEqual(ambiguous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 5]]);
-  assert.match(ambiguous.findings[0].message, /Linha da tag indeterminada/);
+  assert.deepEqual(ambiguous.findings, []);
+  assert.equal(ambiguous.unlocated, 1);
+
+  const unclosed = parseTypedocReport(
+    sample(5, link('Missing')),
+    '[warning] Failed to resolve link to "Missing" in comment for sample', root,
+    () => ['/** Public function.', ' * See {@link Missing}.', ' * Compare {@link Missing', ' */', 'export function sample() {}'].join('\n'),
+  );
+  assert.deepEqual(unclosed.findings, []);
+  assert.equal(unclosed.unlocated, 1);
 
   const sameLine = parseTypedocReport(
-    {kind: 1, name: 'x', children: [member('sample', 4, 64)]},
+    sample(4, link('Missing')),
     '[warning] Failed to resolve link to "Missing" in comment for sample', root,
     () => ['/** Public function.', ' * See {@link Missing} and {@linkplain Missing}.', ' */', 'export function sample() {}'].join('\n'),
   );
-  assert.deepEqual(sameLine.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
-  assert.doesNotMatch(sameLine.findings[0].message, /Linha da tag indeterminada/);
+  assert.deepEqual(sameLine.findings, []);
+  assert.equal(sameLine.unlocated, 1);
 
   const literalLink = ['/** Public function.', String.raw` * See \{@link Missing \}.`,
     ' * Literal `{@link Missing}`.', ' */', 'export function sample() {}'].join('\n');
-  const reflectionWithLiteral = {kind: 1, name: 'x', children: [member('sample', 5, 64)]};
+  const reflectionWithLiteral = sample(5, link('Missing'));
   const diagnostic = 'Failed to resolve link to "Missing" in comment for sample';
   const withoutLocation = parseTypedocReport(reflectionWithLiteral, `[warning] ${diagnostic}`, root, () => literalLink);
-  assert.equal(withoutLocation.findings[0].line, 5);
-  assert.match(withoutLocation.findings[0].message, /Linha da tag indeterminada/);
+  assert.deepEqual(withoutLocation.findings, []);
+  assert.equal(withoutLocation.unlocated, 1);
   const unrelated = parseTypedocReport(reflectionWithLiteral, `[info] Exemplo: ${diagnostic}`, root, () => literalLink);
   assert.deepEqual(unrelated.findings, []);
 
@@ -1016,8 +1046,12 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   const suggested = `${packageLink}. You may have wanted "@scope/pkg!Missing"`;
   const readSuggested = () => ['/** Public function.', ' * See {@link @scope/pkg.Missing}.', ' * Example.', ' */',
     'export function sample() {}'].join('\n');
-  assert.deepEqual(parseTypedocReport(reflectionWithLiteral, suggested, root, readSuggested).findings
+  const packageReflection = sample(5, link('@scope/pkg.Missing'));
+  assert.deepEqual(parseTypedocReport(packageReflection, suggested, root, readSuggested).findings
     .map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
+  const missingId = parseTypedocReport({...packageReflection, symbolIdMap: {}}, suggested, root, readSuggested);
+  assert.deepEqual(missingId.findings, []);
+  assert.equal(missingId.unlocated, 1);
   for (const message of [`[warning] ${diagnostic}. You may have wanted qualquer coisa`,
     `${packageLink}. You may have wanted "outro texto"`, `${suggested} em um exemplo`]) {
     assert.deepEqual(parseTypedocReport(reflectionWithLiteral, message, root, readSuggested).findings, [], message);
@@ -1028,17 +1062,22 @@ test('TypeDoc exige declaração inequívoca com o nome, o tipo e o identificado
   const root = FIXTURE_CLEAN_DIR;
   const diagnostic = '[warning] sample (CallSignature), defined in @scope/pkg/src/api.ts, does not have any documentation';
   const fileName = 'src/api.ts';
-  const first = {id: 2, name: 'sample', kind: 4096, sources: [{fileName, line: 2}],
+  const first = {id: 2, name: 'sample', kind: 4096, sources: [{fileName, line: 2, character: 16}],
     comment: {summary: [{kind: 'text', text: 'Documentado.'}]}};
-  const second = {id: 3, name: 'sample', kind: 4096, sources: [{fileName, line: 3}]};
+  const second = {id: 3, name: 'sample', kind: 4096, sources: [{fileName, line: 3, character: 16}]};
   const symbolId = {packageName: '@scope/pkg', packagePath: fileName, qualifiedName: 'sample'};
   const report = {
     kind: 1, name: 'x', symbolIdMap: {1: symbolId, 2: symbolId, 3: symbolId},
     children: [{id: 1, name: 'sample', kind: 64, sources: [...first.sources, ...second.sources],
       signatures: [first, second]}],
   };
+  const files = new Map([
+    ['package.json', '{"name":"@scope/pkg"}'],
+    [fileName, ['/** Documentado. */', 'export function sample(value: string): string;',
+      'export function sample(value: number): number;', 'export function sample(value: string | number) { return value; }'].join('\n')],
+  ]);
   const parse = (data: object, warning = diagnostic) =>
-    parseTypedocReport(data, warning, root, undefined, MODULE_DEPLOY_DIR, new Set([fileName]));
+    parseTypedocReport(data, warning, root, file => files.get(file) ?? '', MODULE_DEPLOY_DIR, new Set(files.keys()));
   const confirmed = parse(report);
   assert.deepEqual(confirmed.findings.map(finding => [finding.file, finding.line]), [[fileName, 3]]);
   assert.equal(confirmed.unlocated, 0);
@@ -1064,6 +1103,54 @@ test('TypeDoc exige declaração inequívoca com o nome, o tipo e o identificado
   assert.deepEqual(wrongKind.findings, []);
   assert.equal(wrongKind.unlocated, 1);
   assert.equal(parse(report, `${diagnostic} em um exemplo`).unlocated, 0);
+});
+
+test('TypeDoc publica a posição direta e preserva avisos de aliases e links ambíguos', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-confirmed-position-'));
+  try {
+    writeFileSync(join(root, 'package.json'), '{"name":"@scope/fixture"}');
+    writeFileSync(join(root, 'api.ts'), 'export function original(value: string) { return value; }');
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'api.ts'), [
+      'import {original} from "../api";',
+      '/** @function */',
+      'export const alias = original;',
+      'function local(value: string) { return value; }',
+      '/** @function */',
+      'export const sameFileAlias = local;',
+      'export function direct() {}',
+      '/** Consulte {@link MissingDirect}. */',
+      'export function documented() {}',
+      '/** Dois links para o mesmo destino.',
+      ' * Consulte {@link MissingRepeated}.',
+      ' * Compare {@link MissingRepeated',
+      ' */',
+      'export function repeated() {}',
+    ].join('\n'));
+
+    const result = await validateWithBase(await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR}));
+    const coverage = result.coverage.find(row => row.tool === 'typedoc');
+    assert.equal(coverage?.status, 'ok', coverage?.detail);
+    assert.match(coverage.detail, /avisos_sem_origem=4$/);
+    assert.deepEqual(result.findings.filter(finding => finding.tool === 'typedoc')
+      .map(finding => [finding.rule, finding.file, finding.line]).sort(), [
+      ['DOC-TYPEDOC-LINK-QUEBRADO', 'src/api.ts', 8],
+      ['DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'api.ts', 1],
+      ['DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'src/api.ts', 7],
+    ]);
+    const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+    assert.equal(pending.length, 4);
+    for (const row of pending) {
+      assert.equal(row.status, 'skipped');
+      assert.match(row.detail, /Linha indeterminada\./);
+      assert.doesNotMatch(row.detail, /\bapi\.ts\b/);
+    }
+    assert.equal(pending.filter(row => row.detail.includes('.alias"')).length, 1);
+    assert.equal(pending.filter(row => row.detail.includes('.sameFileAlias"')).length, 1);
+    assert.equal(pending.filter(row => row.detail.includes('MissingRepeated')).length, 2);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
 });
 
 test('TypeDoc usa a declaração de avisos reais com mapas de declaração inequívocos', {skip: skipLocalTools}, async () => {
