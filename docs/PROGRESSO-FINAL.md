@@ -936,3 +936,6 @@ PAUSADO-COTA
 - 19/11/2026 19:00 UTC — C9-ACEITE-ATRIBUICAO encerrado com código 0.
 - 19/11/2026 19:00 UTC — As CLIs de QA, arquitetura e dependências passaram na mesma instalação de bancada sobre da2c8bc4, incluindo o digest de QA aprovado na revisão da gramática.
 - 19/11/2026 19:01 UTC — Na revisão de fb99a576, os quatro controles contratados de C9 foram conferidos. A revisão apontou duas perdas de achado em chamadas indiretas com constantes e argumento presente; foi aberta a correção. As três CLIs C2 a C4 também passaram em 6/6 no candidato cumulativo.
+- 19/11/2026 19:01 UTC — trabalho-C9-CONSTANTES-E-PRESENCA iniciado em final-c9 por Sol high normal.
+- 19/11/2026 19:03 UTC — C8-ANCESTRAIS-TYPEDOC encerrado com código 0.
+- 19/11/2026 19:03 UTC — No laboratório C9 de fb99a576, o defeito e o controle limpo passaram, mas a fixture R6 retornou cobertura parcial para resultados de chamadas sem vínculo. O teste físico tratava qualquer código 1 como falha. Um trabalhador separado confere as expectativas precisas sem remover as provas de linha nem alterar o coletor.
