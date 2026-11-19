@@ -709,3 +709,6 @@ PAUSADO-COTA
 - 19/11/2026 17:29 UTC — C7-R9 encerrado com código 0.
 - 19/11/2026 17:29 UTC — revisor-C5-R9 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:29 UTC — A versão 16.14 do PostgreSQL do QA está afetada pela CVE-2026-14680 segundo o aviso oficial do PostgreSQL. Confirmada 16.15-0ubuntu0.24.04.1 no índice Ubuntu de 18/11. A promoção aguarda a correção, o isolamento do julgamento pgTAP e o novo laboratório. O revisor também pediu preservar duas formas de requisitos na matriz. A aplicação viva não recebeu os candidatos.
+- 19/11/2026 17:29 UTC — trabalho-C2-BANCO-LOCAL-R2 iniciado em final-qa-banco-local por Sol high normal.
+- 19/11/2026 17:29 UTC — trabalho-C2-MATRIZ-R14 iniciado em final-qa-matriz-r12 por Sol medium normal.
+- 19/11/2026 17:30 UTC — A carga local ficou integrada em e5bc77dc; f83ce11a inclui também a origem de casos Python e Go. A fila da imagem anterior foi retirada enquanto o trabalhador atualiza o PostgreSQL. C7-R10 corrige a classificação de imagens estáticas; documentação 7355c13c pronta para o laboratório.
