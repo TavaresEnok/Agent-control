@@ -1122,3 +1122,8 @@ PAUSADO-COTA
 - 19/11/2026 21:07 UTC — Correção caminhos-vivos recebida em c95fd3cd. Revisão Sol high somente leitura solicitada.
 - 19/11/2026 21:07 UTC — C-PROVA-LEASE-VIVA encerrado com código 0.
 - 19/11/2026 21:07 UTC — Correção prova-lease-viva recebida em 4f599841. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 21:07 UTC — Imagem de prontidao construída e arquivada por digest em 9f484356.
+- 19/11/2026 21:07 UTC — Imagem de arquitetura construída e arquivada por digest em c4972328.
+- 19/11/2026 21:08 UTC — C-ACEITE-PRONTIDAO-VIVA encerrado com código 0.
+- 19/11/2026 21:08 UTC — revisor-C-ACEITE-CAMINHOS-VIVOS iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 21:08 UTC — A revisão de prontidão encontrou ausência de vínculo com o arquivo medido e uma conclusão de ausência em Compose parcialmente interpretado. Correção devolvida ao Sol que mantém esse coletor.
