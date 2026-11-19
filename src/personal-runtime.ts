@@ -145,6 +145,20 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  for(const project of config.projects){if(project.id!==config.project.id)await bind(project.repo,project.id,project.owner,false);}
  if(!byProject.has(config.project.id))throw new Error('PERSONAL_TARGET_UNRESOLVED');
  await retryPendingRemotePushes().catch(()=>{console.error('REMOTE_PUSH_RETRY_FAILED');});
+ const {reconcilePerformanceResources} = await import('../deploy/modules/desempenho/orchestrator.mjs');
+ const recoveryDirectory = join(config.dataDirectory, 'performance-docker');
+ let recoveringPerformance = false;
+ async function recoverPerformance() {
+  if (recoveringPerformance) return;
+  recoveringPerformance = true;
+  try {
+   const result = await reconcilePerformanceResources({recoveryDirectory});
+   if (result.invalid || result.pending) console.error('PERFORMANCE_RECOVERY_PENDING', result.invalid, result.pending);
+  } catch { console.error('PERFORMANCE_RECOVERY_FAILED'); }
+  finally { recoveringPerformance = false; }
+ }
+ void recoverPerformance();
+ setInterval(recoverPerformance, 2*60*1000).unref();
  return {planning,executions,semantic,managerChat,byProject};
 }
 

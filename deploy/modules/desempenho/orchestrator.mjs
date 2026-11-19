@@ -184,8 +184,9 @@ export async function runPerformanceModule({snapshotPath, imageDigest, signal, r
             }
           }
         }
-      } catch {
+      } catch (error) {
         active.throwIfAborted();
+        if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw error;
       }
       fallback = stage !== null;
       coverage.push(normalizeCoverageRow({tool: 'isolamento-http', version: '5', status: fallback ? 'failed' : 'ok',

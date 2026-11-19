@@ -97,7 +97,7 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
     matchFinding: f =>
       f.where.file === 'server.mjs'
       && (f.title.startsWith('K6-THRESHOLD-LATENCY-P95') || f.title.startsWith('CPU-PROF-HOTSPOT')),
-    coverageDetailPattern: /node-cpu-prof:arquivo:/,
+    coverageDetailPattern: /\| node-cpu-prof:arquivo \| [^|]+ \| ok \| arquivo=server\.mjs:\d+; função=computeHeavyReport;.*amostras próprias=\d+\/[1-9]\d*/,
   },
   documentacao: {
     fixtureCandidates: ['tests/fixtures/module-documentacao/defective'],
@@ -479,6 +479,28 @@ async function verifyModuleEndToEnd(
     assert.equal(measuredFinding.verifier, null);
     await assert.rejects(runPersonalCliSubprocess(module, [installationPath, projectId, '--corrigir', runId, measuredFinding.id]),
       /Achado não encontrado ou não elegível para correção/);
+
+    if (module === 'desempenho') {
+      const firstMeasurement = (await db.pool.query(
+        'SELECT collector_image, performance_measurement FROM ac_verify_runs WHERE id=$1', [runId],
+      )).rows[0];
+      assert.equal(firstMeasurement.performance_measurement.imageDigest, firstMeasurement.collector_image);
+      assert.ok(firstMeasurement.performance_measurement.k6Routes.length > 0);
+      assert.equal(toolCovRows.find(row => row.tool === 'medicao-anterior-independente')?.status, 'skipped');
+      const repeated = await runPersonalCliSubprocess(module, [installationPath, projectId]);
+      const repeatedId = repeated.at(-2)!;
+      assert.notEqual(repeatedId, runId);
+      const comparison = (await db.pool.query(
+        "SELECT detail, status FROM ac_verify_tool_coverage WHERE run_id=$1 AND tool='medicao-anterior-independente'",
+        [repeatedId],
+      )).rows[0];
+      assert.equal(comparison.status, 'ok');
+      assert.match(comparison.detail, /[1-9]\d* par\(es\) comparável/);
+      const comparedReport = await readModuleReport(dataDirectory, projectId, repeatedId, module);
+      assert.equal(comparedReport.summary.previousPerformanceRunId, runId);
+      assert.ok(comparedReport.coverageMarkdown.includes(runId));
+      assert.deepEqual(await readdir(join(dataDirectory, 'performance-docker')), []);
+    }
 
     if (module === 'banco') {
       const migration = 'db/migrations/003_prazo.sql';

@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {promisify} from 'node:util';
 import type pg from 'pg';
+import type {PreviousPerformanceMeasurement} from '../deploy/modules/desempenho/orchestrator.mjs';
 import {z} from 'zod';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
@@ -137,6 +138,7 @@ export const ModuleReportSummary = z.object({
   directoryName: z.string().regex(MODULE_REPORT_DIR),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   image: z.string().optional(),
+  previousPerformanceRunId: Id.optional(),
   createdAt: z.string().min(1).max(40),
   counts: z.object({
     alta: z.number().int().nonnegative(),
@@ -1252,6 +1254,7 @@ export async function writeModuleReport(input: {
   createdAt: Date;
   commit: string;
   image?: string;
+  previousPerformanceRunId?: string;
   deferPublication?: boolean;
   toolCoverage: readonly ModuleToolCoverage[];
   fileCoverage: readonly CoverageRow[];
@@ -1318,6 +1321,7 @@ export async function writeModuleReport(input: {
     directoryName,
     commit: input.commit,
     ...(input.image ? {image: assertPinnedModuleImage(input.image)} : {}),
+    ...(input.previousPerformanceRunId ? {previousPerformanceRunId: Id.parse(input.previousPerformanceRunId)} : {}),
     createdAt: input.createdAt.toISOString(),
     counts,
     toolFailures,
@@ -1328,6 +1332,7 @@ export async function writeModuleReport(input: {
   const discarded = achados.filter(item => item.status === 'descartado').length;
   let mapMarkdown = renderModuleMapMarkdown(input.module, fileCoverage.map(row => row.file), toolCoverage);
   let coverageBody = renderModuleCoverageMarkdown(toolCoverage, fileCoverage);
+  if (summary.previousPerformanceRunId) coverageBody += '\nMedição anterior de desempenho: ' + summary.previousPerformanceRunId + '\n';
   const cell = (value: string) => sanitizeText(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;').replaceAll('|', '&#124;').replace(/[\r\n]+/g, ' ');
   if (input.measuredFiles?.size) {
@@ -1856,6 +1861,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           return validatePassiveTlsEvidence(input.passiveTlsEvidence);
         })()
       : undefined;
+    let previousPerformanceRunId: string | undefined;
+    let performanceMeasurement: Record<string, unknown> | undefined;
     let collectorCode = 0;
     let collectorData: ModuleCollectorOutput;
     try {
@@ -1877,6 +1884,35 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       collectorData = typeof raw === 'string' || Buffer.isBuffer(raw)
         ? parseModuleCollectorOutput(raw, {maxStdoutBytes, module: input.module})
         : validateModuleCollectorObject(raw, input.module);
+    } else if (input.module === 'desempenho') {
+      const {runPerformanceModule, reconcilePerformanceResources} = await import('../deploy/modules/desempenho/orchestrator.mjs');
+      const recoveryDirectory = join(await requireDataDirectory(input.dataDirectory), 'performance-docker');
+      await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
+      const previousMeasurement = await input.ledger.tx(async client => {
+        await input.ledger.authorize(client, input.principal, input.authority.contextId);
+        await input.ledger.fence(client, input.authority);
+        return (await client.query<PreviousPerformanceMeasurement>(
+          `SELECT p.id AS "examId", p.performance_measurement AS measurement
+           FROM ac_verify_runs p JOIN ac_verify_runs current_run ON current_run.id=$1
+           WHERE current_run.context_id=$2 AND current_run.project_id=$3 AND current_run.module='desempenho'
+             AND p.project_id=current_run.project_id AND p.context_id=current_run.context_id
+             AND p.module='desempenho' AND p.status='done' AND p.collector_image=$4
+             AND p.report_dir=p.report_prepared_dir AND NOT p.report_legacy_missing
+             AND p.performance_measurement IS NOT NULL AND p.finished_at <= current_run.created_at
+           ORDER BY p.finished_at DESC, p.id DESC LIMIT 1`,
+          [runId, input.authority.contextId, input.projectId, image],
+        )).rows[0];
+      });
+      const {coverage, findings, measurement} = await runPerformanceModule({
+        snapshotPath: snapshot, imageDigest: image!, signal: input.signal, timeoutMs, maxStdoutBytes,
+        recoveryDirectory, previousMeasurement,
+      });
+      collectorData = validateModuleCollectorObject({coverage, findings}, input.module);
+      assertNoLiveAccessKey(measurement);
+      performanceMeasurement = measurement;
+      if (previousMeasurement && collectorData.coverage.some(row => row.tool === 'medicao-anterior-independente' && row.status === 'ok')) {
+        previousPerformanceRunId = previousMeasurement.examId;
+      }
     } else {
       const executed = await runModuleCollectorContainer({
         image: image!,
@@ -1913,7 +1949,11 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     } catch (error) {
       if (input.signal?.aborted || (error instanceof Refusal && error.code === 'VERIFY_CONTAINER_CLEANUP_PENDING')) throw error;
       sourceCoverage = undefined;
-      const reason = error instanceof Refusal ? error.code : 'VERIFY_TOOLS_FAILED';
+      performanceMeasurement = undefined;
+      previousPerformanceRunId = undefined;
+      const reason = error instanceof Refusal ? error.code
+        : input.module === 'desempenho' && isErrno(error, 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') ? 'VERIFY_STDOUT_LIMIT'
+          : 'VERIFY_TOOLS_FAILED';
       collectorCode = 1;
       collectorData = {coverage: [{tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Falha de processo ou leitura da saída: ${reason}`}], findings: []};
     }
@@ -2046,7 +2086,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         commit: input.commit,
         image,
         deferPublication: true,
-        exam, measuredFiles: measured,
+        exam, measuredFiles: measured, previousPerformanceRunId,
         toolCoverage: sourceCoverage ?? collectorData.coverage,
         fileCoverage,
         achados,
@@ -2091,9 +2131,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }
       await input.ledger.fence(c, input.authority);
       const updated = await c.query(
-        `UPDATE ac_verify_runs SET status=$2, report_dir=$3, finished_at=clock_timestamp(), collector_image=$5
+        `UPDATE ac_verify_runs SET status=$2, report_dir=$3, finished_at=clock_timestamp(), collector_image=$5, performance_measurement=$6::jsonb
          WHERE id=$1 AND context_id=$4 AND status='running'`,
-        [runId, finalState, prepared.directory, input.authority.contextId, image ?? null],
+        [runId, finalState, prepared.directory, input.authority.contextId, image ?? null,
+          performanceMeasurement && finalState === 'done' ? JSON.stringify({...performanceMeasurement, previousPerformanceRunId}) : null],
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
       if (prepared.examOriginSha256) {
