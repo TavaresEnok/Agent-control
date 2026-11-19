@@ -586,3 +586,11 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:45 UTC — Trabalho C2-LINGUAGENS-R3 iniciado por Sol high normal em final-qa-mutacao-linguagens.
 - 19/11/2026 06:45 UTC — Suíte oficial de c5-aceite-r7 em 03ee7abb: 261 arquivos aprovados, 0 falhas, 90 excluídos pelo executor.
 - 19/11/2026 06:46 UTC — Banco: o daemon já não tinha o digest de fe23944f. O rebuild da mesma fonte emitiu novo digest, fixado em 6bc34d08; a nova imagem volta agora à prova PostgreSQL e à CLI. A suíte oficial de 03ee7abb passou nos 261 arquivos com 90 exclusões; complementares e laboratório são etapas separadas.
+- 19/11/2026 06:46 UTC — Trabalhador encerrou C7-HISTORICO-R4 em 19413541 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:46 UTC — Trabalho C7-RECONCILIACAO-R8 iniciado por Sol high normal em final-c7.
+- 19/11/2026 06:47 UTC — Testes complementares de c5-aceite-r7 em 03ee7abb: 52 aprovados.
+- 19/11/2026 06:47 UTC — Falha na validação de c5-aceite-r7 em laboratorio, código 1. Logs privados do gerente.
+- 19/11/2026 06:47 UTC — Validação de c3-257a-lock em 257a3451 iniciada no checkout de integração.
+- 19/11/2026 06:47 UTC — Trabalhador encerrou C-EXAME-R6 em e033b649 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:47 UTC — Trabalho C5-R8 iniciado por Sol high normal em final-c5.
+- 19/11/2026 06:47 UTC — QA e245fca3: 94/94 sem pulos na repetição integral. Os checkouts de aceite de C2 e C4 passam a apontar para e245fca3 e 66f4f4e0; os nomes dos processos em fila preservam os rótulos anteriores, e cada validação registra o SHA que efetivamente executa. C7 recebeu a correção de cancelamento do histórico 19413541 para a prova com PostgreSQL.

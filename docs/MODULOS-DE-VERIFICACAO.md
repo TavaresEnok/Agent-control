@@ -290,6 +290,8 @@ Em `fcbffe1e`, os 69 testes de QA passaram sem saltos. A imagem mediu contraste 
 
 No laboratório integrado de QA, 82 de 82 testes passaram com todos os adaptadores habilitados. Em `1d357911`, a imagem de QA executou fast-check 4.10.3 em um projeto sintético, mediu 32 chamadas no controle e reproduziu a propriedade falsificada. A prova distingue regras de catálogo e texto sensível.
 
+Na versão `e245fca3`, passaram os 94 testes de QA com os adaptadores habilitados. A imagem também executou exemplos OpenAPI e interações Pact nominais sobre um socket local, além das provas de renderização e das propriedades Python e JavaScript.
+
 ### Prova do módulo 3
 
 **Arquitetura e dívida técnica.** Em homologação, a CLI `personal:arquitetura` mediu código JavaScript e TypeScript com Knip, complexidade no AST, duplicação com jscpd e dependências com dependency-cruiser. O laboratório da imagem fixada em `303b1b36` passou após conferir a contagem por arquivo com caminhos equivalentes e o controle limpo. A imagem de C3-R7 em `88229a82` passou nas 18 provas habilitadas e na CLI com a conferência de travessia de diretório. A revisão de `7fb2f861` apontou omissões no destino e na interpretação de componentes. Em C3-R8, a imagem `43b3ef40` passou nas 18 provas habilitadas e nas seis da CLI. Um teste opcional do laboratório foi pulado. Em R9, `70a8c7cc` passou nas 19 provas habilitadas e a CLI no ramo incremental passou em seis testes. A imagem conserva a origem de caminhos relativos e identifica entradas sem cobertura mesmo quando chega ao limite de arquivos.
