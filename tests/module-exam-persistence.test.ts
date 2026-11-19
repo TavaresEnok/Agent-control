@@ -112,12 +112,17 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
       dataDirectory: input.dataDirectory, projectId: input.projectId, runId: result.runId, achadoIds: ['ACH-001'],
       async review() { collectorReviews++; throw new Error('Origem inválida precede a chamada ao revisor'); },
     });
+    const generation = async () => (await input.ledger.pool.query(
+      'SELECT recheck_generation::text FROM ac_verify_runs WHERE id=$1', [result.runId],
+    )).rows[0].recheck_generation;
+    const validGeneration = await generation();
     await unlink(originFile);
     await assert.rejects(recheck(recorded[0].hypothesis), /VERIFY_REPORT_INVALID/);
     await assert.rejects(collectorOnly(), /VERIFY_REPORT_INVALID/);
     await writeFile(originFile, JSON.stringify([{...recorded[0], hypothesis: 'alterada'}]));
     await assert.rejects(recheck(recorded[0].hypothesis), /VERIFY_REPORT_INVALID/);
     await assert.rejects(collectorOnly(), /VERIFY_REPORT_INVALID/);
+    assert.equal(await generation(), validGeneration);
     assert.equal(collectorReviews, 0);
     // Um run anterior à migração não tem o hash de origem.
     await input.ledger.pool.query('UPDATE ac_verify_runs SET exam_origin_sha256=NULL WHERE id=$1', [result.runId]);
