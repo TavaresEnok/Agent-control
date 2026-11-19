@@ -1,0 +1,86 @@
+diff --git a/src/personal-module-cli.ts b/src/personal-module-cli.ts
+index 0f93fda2..02150037 100644
+--- a/src/personal-module-cli.ts
++++ b/src/personal-module-cli.ts
+@@ -228,13 +228,8 @@ export async function runPersonalModuleCli(
+       return [corrected.messageLocalId, ...corrected.writePaths];
+     }
+
+-    const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
+-      module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
+-        ? await probePublishedHttpsOrigins(authorizedOrigins, deps?.prontidaoProbeOptions)
+-        : undefined;
+-
+-    const commit = await readHead(project.repo);
+     const runId = randomUUID();
++    const leaseLoss = new AbortController();
+     let rejectAbort: (error: unknown) => void = () => {};
+     const aborted = new Promise<never>((_, reject) => {
+       rejectAbort = reject;
+@@ -247,6 +242,7 @@ export async function runPersonalModuleCli(
+           stopLease();
+         },
+         async stopJob() {
++          leaseLoss.abort(new Refusal('VERIFY_LEASE_LOST'));
+           await deps?.worker?.stop?.();
+         },
+         rejectAbort,
+@@ -256,26 +252,38 @@ export async function runPersonalModuleCli(
+     let failed: unknown;
+     try {
+       const result = await withExamSignals(
+-        async () => {
+-          const task = runVerificationModule({
+-            module,
+-            ledger,
+-            principal: project.owner,
+-            authority: authority!,
+-            projectId: project.id,
+-            repoPath: project.repo,
+-            dataDirectory: config.dataDirectory,
+-            commit,
+-            runId,
+-            ...(deps?.image !== undefined ? {image: deps.image} : {}),
+-            ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
+-            ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
+-            ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),
+-            ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
+-            ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
+-            ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
+-            ...(deps?.worker !== undefined ? {worker: deps.worker} : {}),
+-          });
++        async examSignal => {
++          const signals = [examSignal, leaseLoss.signal];
++          if (deps?.prontidaoProbeOptions?.signal) signals.push(deps.prontidaoProbeOptions.signal);
++          const signal = AbortSignal.any(signals);
++          const task = (async () => {
++            const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
++              authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
++                ? await probePublishedHttpsOrigins(authorizedOrigins, {...deps?.prontidaoProbeOptions, signal})
++                : undefined;
++            signal.throwIfAborted();
++            const commit = await readHead(project.repo);
++            signal.throwIfAborted();
++            return runVerificationModule({
++              module,
++              ledger,
++              principal: project.owner,
++              authority: authority!,
++              projectId: project.id,
++              repoPath: project.repo,
++              dataDirectory: config.dataDirectory,
++              commit,
++              runId,
++              ...(deps?.image !== undefined ? {image: deps.image} : {}),
++              ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
++              ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
++              ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),
++              ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
++              ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
++              ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
++              ...(deps?.worker !== undefined ? {worker: deps.worker} : {}),
++            });
++          })();
+           void task.catch(() => undefined);
+           return await Promise.race([task, aborted]);
+         },

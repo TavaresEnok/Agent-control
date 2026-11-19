@@ -26,7 +26,9 @@ export type ComposeServiceInfo = {
   image: string;
   restart: string | null;
   hasDeployRestart: boolean;
+  deployRestartCondition: string | null;
   hasHealthcheck: boolean;
+  healthcheckDisabled: boolean;
   hasMemLimit: boolean;
   hasPidsLimit: boolean;
   hasVolumes: boolean;
@@ -39,8 +41,8 @@ export type ComposeServiceInfo = {
 };
 
 export function redactEvidence(text: string): string;
-export function collectRepoFiles(repoRoot: string): {rel: string; content: string; lines: string[]}[];
-export function parseComposeServices(content: string): ComposeServiceInfo[];
+export function collectRepoFiles(repoRoot: string, onSkip?: (status: 'failed' | 'skipped', file: string, reason: string) => void): {rel: string; content: string; lines: string[]}[];
+export function parseComposeServices(content: string, onIncomplete?: () => void): ComposeServiceInfo[];
 export function auditRepositoryReadiness(repoRoot: string): {
   filesAnalyzed: number;
   anchorFile: string;

@@ -1,6 +1,6 @@
 import {spawnSync} from 'node:child_process';
-import {closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync} from 'node:fs';
-import {join, relative, resolve, sep} from 'node:path';
+import {closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync} from 'node:fs';
+import {basename, join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {stripVTControlCharacters} from 'node:util';
 import {AUDIT_VERSION, auditRepositoryReadiness, redactEvidence} from './audit-readiness.mjs';
@@ -8,6 +8,8 @@ import {AUDIT_VERSION, auditRepositoryReadiness, redactEvidence} from './audit-r
 const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
 const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
 const MAX_EVIDENCE_BYTES = 512 * 1024;
+const MAX_PASSIVE_TARGETS = 16;
+const MAX_UNMEASURED_ORIGINS = 33;
 const MIN_HSTS_MAX_AGE_SECONDS = 15_552_000;
 const EXPIRING_CERT_DAYS = 14;
 
@@ -121,6 +123,53 @@ function mapTlsFailureRule(errorCode, errorMessage) {
   return 'PRONTIDAO-TLS-FALHA';
 }
 
+function safeErrorCode(value, fallback) {
+  return typeof value === 'string' && /^(?:E[A-Z0-9_]{1,60}|[A-Z_]+_CERT[A-Z_]*|CERT_[A-Z_]+|HOSTNAME_MISMATCH)$/.test(value)
+    ? value
+    : fallback;
+}
+
+function readRedirectOrigin(value) {
+  try {
+    return validateTargetUrl(value)?.origin ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function hstsMaxAge(value) {
+  const seen = new Set();
+  let maxAge = null;
+  for (const directive of value.split(';').map(part => part.trim()).filter(Boolean)) {
+    const match = /^([!#$%&'*+.^_`|~\w-]+)(?:[\t ]*=[\t ]*("[^"\r\n]*"|[!#$%&'*+.^_`|~\w-]+))?$/.exec(directive);
+    if (!match) return null;
+    const [, key, arg] = match;
+    const lower = key.toLowerCase();
+    if (seen.has(lower)) return null;
+    seen.add(lower);
+    if (lower === 'includesubdomains' && arg !== undefined) return null;
+    if (lower !== 'max-age') continue;
+    if (!/^(?:\d+|"\d+")$/.test(arg ?? '')) return null;
+    maxAge = Number(arg.replaceAll('"', ''));
+  }
+  return Number.isFinite(maxAge) ? maxAge : null;
+}
+
+function hasFrameAncestors(value) {
+  return value.split(',').some(policy => {
+    // Browsers use the first directive of a given name within each policy.
+    const directive = policy.split(';').find(part => /^\s*frame-ancestors(?:\s|$)/i.test(part));
+    if (!directive) return false;
+    const sources = directive.trim().split(/\s+/).slice(1);
+    if (sources.length === 1 && sources[0].toLowerCase() === "'none'") return true;
+    return sources.length > 0 && !sources.includes('*') && sources.every(source =>
+      /^'self'$/i.test(source)
+      || /^[a-z][a-z0-9+.-]*:$/i.test(source)
+      || /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*(?::(?:\d+|\*))?(?:\/[^\s;,]*)?$/i.test(source),
+    );
+  });
+}
+
 export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
     throw new Error('PASSIVE_EVIDENCE_INVALID');
@@ -128,8 +177,12 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
   if (evidence.schemaVersion !== 1 || evidence.collectedBy !== 'agent-control-prontidao-adapter') {
     throw new Error('PASSIVE_EVIDENCE_UNTRUSTED');
   }
-  if (!Array.isArray(evidence.targets) || evidence.targets.length === 0 || evidence.targets.length > 16) {
+  if (!Array.isArray(evidence.targets) || evidence.targets.length === 0 || evidence.targets.length > MAX_PASSIVE_TARGETS) {
     throw new Error('PASSIVE_EVIDENCE_TARGETS_INVALID');
+  }
+  const unmeasured = evidence.unmeasuredOrigins === undefined ? [] : evidence.unmeasuredOrigins;
+  if (!Array.isArray(unmeasured) || unmeasured.length > MAX_UNMEASURED_ORIGINS) {
+    throw new Error('PASSIVE_EVIDENCE_ORIGINS_INVALID');
   }
 
   const coverage = [];
@@ -146,13 +199,13 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         tool: 'prontidao-tls-passivo',
         version: AUDIT_VERSION,
         status: 'failed',
-        detail: `Falha na medição passiva de ${origin} (${target.errorCode || 'PROBE_ERROR'}): ${target.errorMessage || 'sem resposta'}.`,
+        detail: `Falha na medição passiva de ${origin} (${safeErrorCode(target.errorCode, 'PROBE_ERROR')}).`,
       }));
       continue;
     }
 
     if (target.status === 'tls_error') {
-      const code = String(target.tlsErrorCode || 'TLS_ERROR');
+      const code = safeErrorCode(target.tlsErrorCode, 'TLS_ERROR');
       const rule = mapTlsFailureRule(code, target.tlsErrorMessage);
       findings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
@@ -161,7 +214,7 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         line: 1,
         severity: 'alta',
         message: `Falha de validação TLS ao consultar ${origin} (${code}).`,
-        evidence: `${origin} [${code}] ${target.tlsErrorMessage || ''}`,
+        evidence: `${origin} [${code}]: validação TLS falhou.`,
       }, repoRoot, tlsAnchorFile));
       coverage.push(normalizeCoverageRow({
         tool: 'prontidao-tls-passivo',
@@ -177,7 +230,7 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
     }
 
     const targetFindings = [];
-    const protocol = String(target.tlsProtocol || '');
+    const protocol = /^(?:SSLv[23]|TLSv1(?:\.[0-3])?)$/i.test(target.tlsProtocol ?? '') ? target.tlsProtocol : '';
     if (/^(?:SSLv2|SSLv3|TLSv1(?:\.0)?|TLSv1\.1)$/i.test(protocol)) {
       targetFindings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
@@ -200,7 +253,7 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
           line: 1,
           severity: 'alta',
           message: `Certificado TLS de ${origin} expirado há ${Math.abs(daysRemaining)} dia(s).`,
-          evidence: `${origin} validTo=${target.certificate?.validTo ?? 'desconhecido'}`,
+          evidence: `${origin}: ${Math.abs(daysRemaining)} dia(s) de diferença até a expiração.`,
         }, repoRoot, tlsAnchorFile));
       } else if (daysRemaining <= EXPIRING_CERT_DAYS) {
         targetFindings.push(normalizeFinding({
@@ -210,11 +263,12 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
           line: 1,
           severity: 'media',
           message: `Certificado TLS de ${origin} vence em ${daysRemaining} dia(s).`,
-          evidence: `${origin} validTo=${target.certificate?.validTo ?? 'desconhecido'}`,
+          evidence: `${origin}: ${Math.abs(daysRemaining)} dia(s) de diferença até a expiração.`,
         }, repoRoot, tlsAnchorFile));
       }
     }
 
+    const redirectOrigin = readRedirectOrigin(target.redirectTargetOrigin);
     if (target.redirectDowngradeHttp) {
       targetFindings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
@@ -222,8 +276,8 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         file: tlsAnchorFile,
         line: 1,
         severity: 'alta',
-        message: `Origem HTTPS ${origin} respondeu com redirecionamento para HTTP sem TLS (${target.redirectTargetOrigin ?? 'http://'}).`,
-        evidence: `${origin} HTTP ${target.httpStatus ?? 302} -> ${target.redirectTargetOrigin ?? 'http://'}`,
+        message: `Origem HTTPS ${origin} respondeu com redirecionamento para HTTP sem TLS (${redirectOrigin ?? 'HTTP'}).`,
+        evidence: `${origin} HTTP ${target.httpStatus ?? 302} -> ${redirectOrigin ?? 'HTTP'}`,
       }, repoRoot, tlsAnchorFile));
     }
 
@@ -240,17 +294,16 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         evidence: `${origin} HTTP ${target.httpStatus ?? 200}: Strict-Transport-Security ausente`,
       }, repoRoot, tlsAnchorFile));
     } else {
-      const maxAgeMatch = /(?:^|[;\s])max-age\s*=\s*(\d+)/i.exec(hsts);
-      const maxAge = maxAgeMatch ? Number.parseInt(maxAgeMatch[1], 10) : -1;
-      if (!Number.isFinite(maxAge) || maxAge < MIN_HSTS_MAX_AGE_SECONDS) {
+      const maxAge = hstsMaxAge(hsts);
+      if (maxAge === null || maxAge < MIN_HSTS_MAX_AGE_SECONDS) {
         targetFindings.push(normalizeFinding({
           tool: 'prontidao-tls-passivo',
           rule: 'PRONTIDAO-HSTS-FRACO',
           file: tlsAnchorFile,
           line: 1,
           severity: 'media',
-          message: `Cabeçalho Strict-Transport-Security de ${origin} possui max-age insuficiente (${Number.isFinite(maxAge) && maxAge >= 0 ? maxAge : 'ausente'}).`,
-          evidence: `${origin} Strict-Transport-Security: ${hsts}`,
+          message: `Cabeçalho Strict-Transport-Security de ${origin} possui max-age inválido ou insuficiente.`,
+          evidence: `${origin}: max-age ${maxAge === null ? 'inválido ou ausente' : 'abaixo do mínimo'}.`,
         }, repoRoot, tlsAnchorFile));
       }
     }
@@ -264,13 +317,13 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         line: 1,
         severity: 'baixa',
         message: `Resposta HTTPS de ${origin} sem X-Content-Type-Options: nosniff.`,
-        evidence: `${origin} HTTP ${target.httpStatus ?? 200}: X-Content-Type-Options=${noSniff || 'ausente'}`,
+        evidence: `${origin}: X-Content-Type-Options ausente ou inválido.`,
       }, repoRoot, tlsAnchorFile));
     }
 
     const xfo = typeof headers['x-frame-options'] === 'string' ? headers['x-frame-options'].trim() : '';
     const csp = typeof headers['content-security-policy'] === 'string' ? headers['content-security-policy'] : '';
-    if (!xfo && !/\bframe-ancestors\b/i.test(csp)) {
+    if (!/^(?:DENY|SAMEORIGIN)$/i.test(xfo) && !hasFrameAncestors(csp)) {
       targetFindings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
         rule: 'PRONTIDAO-FRAME-AUSENTE',
@@ -278,13 +331,13 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         line: 1,
         severity: 'baixa',
         message: `Resposta HTTPS de ${origin} sem proteção contra clickjacking (X-Frame-Options ou CSP frame-ancestors).`,
-        evidence: `${origin} HTTP ${target.httpStatus ?? 200}: X-Frame-Options e frame-ancestors ausentes`,
+        evidence: `${origin}: X-Frame-Options e frame-ancestors ausentes ou inválidos.`,
       }, repoRoot, tlsAnchorFile));
     }
 
     findings.push(...targetFindings);
     const redirectNote = target.redirectCrossOrigin
-      ? `; redirecionamento para ${target.redirectTargetOrigin ?? 'outro destino'} não seguido`
+      ? `; redirecionamento para ${redirectOrigin ?? 'outro destino'} não seguido`
       : '';
     const certNote = typeof daysRemaining === 'number' ? `, cert=${daysRemaining}d` : '';
     coverage.push(normalizeCoverageRow({
@@ -295,6 +348,16 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
     }));
   }
 
+  for (const raw of unmeasured) {
+    const origin = validateTargetUrl(raw);
+    if (origin?.protocol !== 'https:') throw new Error('PASSIVE_EVIDENCE_ORIGIN_INVALID');
+    coverage.push(normalizeCoverageRow({
+      tool: 'prontidao-tls-passivo',
+      version: AUDIT_VERSION,
+      status: 'skipped',
+      detail: `Origem HTTPS ${origin.origin} não medida pelo limite de ${MAX_PASSIVE_TARGETS} origens por execução.`,
+    }));
+  }
   return {coverage, findings};
 }
 
@@ -319,108 +382,143 @@ function defaultRunBin(bin, args, options = {}) {
 }
 
 function findDockerfiles(repoRoot) {
-  const out = [];
+  const files = [];
+  let omitted = null;
+  const asRelative = path => relative(repoRoot, path).split(sep).join('/') || '.';
   const walk = (dir, depth) => {
-    if (depth > 8 || out.length >= 100) return;
+    if (depth > 8) {
+      omitted ??= `${asRelative(dir)}: limite de profundidade na busca de Dockerfiles.`;
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(dir, {withFileTypes: true});
     } catch {
+      omitted ??= `${asRelative(dir)}: diretório ilegível na busca de Dockerfiles.`;
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (out.length >= 100 || entry.isSymbolicLink()) continue;
+      if (entry.isSymbolicLink()) continue;
+      const abs = join(dir, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === '.git' || entry.name === 'node_modules') continue;
-        walk(join(dir, entry.name), depth + 1);
+        if (files.length >= 100) {
+          omitted ??= `${asRelative(abs)}: início de entradas omitidas pelo limite de 100 Dockerfiles.`;
+          break;
+        }
+        walk(abs, depth + 1);
       } else if (entry.isFile()) {
         const name = entry.name;
         if ((name === 'Dockerfile' || name.startsWith('Dockerfile.') || name.endsWith('.Dockerfile')) && !name.endsWith('.dockerignore')) {
-          const abs = join(dir, name);
-          const rel = relative(repoRoot, abs).split(sep).join('/');
-          out.push({abs, rel});
+          if (files.length >= 100) {
+            omitted ??= `${asRelative(abs)}: início de entradas omitidas pelo limite de 100 Dockerfiles.`;
+            break;
+          }
+          files.push({abs, rel: asRelative(abs)});
         }
       }
     }
   };
   walk(repoRoot, 0);
-  return out;
+  return {files, omitted};
+}
+
+const REPORT_INVALID = 'ESTRUTURA_DE_RELATORIO_INVALIDA';
+const SECRET_MESSAGE = 'Possível segredo em arquivo protegido.';
+const SECRET_EVIDENCE = 'Localização informada pelo coletor; conteúdo protegido.';
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function reportRows(value, validate) {
+  if (!Array.isArray(value) || !value.every(row => isRecord(row) && validate(row))) {
+    throw new Error(REPORT_INVALID);
+  }
+  return value;
+}
+
+function isRuleId(value) {
+  return typeof value === 'string' && /^[\w.-]{1,200}$/.test(value);
+}
+
+function isLocation(file, line) {
+  return typeof file === 'string' && file.length > 0 && Number.isSafeInteger(line) && line > 0;
 }
 
 export function parseGitleaksJson(text, repoRoot, fallbackFile) {
-  const trimmed = text.trim();
-  if (!trimmed || trimmed === 'null' || trimmed === '[]') return [];
-  const parsed = JSON.parse(trimmed);
-  if (parsed === null) return [];
-  const rows = Array.isArray(parsed) ? parsed : Array.isArray(parsed.findings) ? parsed.findings : [];
-  return rows.filter(r => r && typeof r === 'object').map(row => normalizeFinding({
+  const parsed = JSON.parse(text);
+  // Upstream marshals a nil slice as null on a clean scan.
+  const rows = parsed === null ? [] : reportRows(parsed, row => isRuleId(row.RuleID) && isLocation(row.File, row.StartLine));
+  return rows.map(row => normalizeFinding({
     tool: 'gitleaks',
-    rule: row.RuleID ?? row.RuleId ?? row.ruleId ?? 'segredo-detectado',
-    file: row.File ?? row.file,
-    line: row.StartLine ?? row.startLine ?? row.Line ?? row.line ?? 1,
+    rule: row.RuleID,
+    file: row.File,
+    line: row.StartLine,
     severity: 'alta',
-    message: 'Possível segredo em arquivo protegido.',
-    evidence: 'Localização informada pelo coletor; conteúdo protegido.',
+    message: SECRET_MESSAGE,
+    evidence: SECRET_EVIDENCE,
   }, repoRoot, fallbackFile));
 }
 
 export function parseHadolintJson(text, repoRoot, fallbackFile) {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-  const parsed = JSON.parse(trimmed);
-  const rows = Array.isArray(parsed) ? parsed : [];
-  return rows.filter(r => r && typeof r === 'object').map(row => normalizeFinding({
+  const rows = reportRows(JSON.parse(text), row =>
+    isRuleId(row.code) && isLocation(row.file, row.line) && typeof row.level === 'string' && typeof row.message === 'string');
+  return rows.map(row => normalizeFinding({
     tool: 'hadolint',
-    rule: row.code ?? row.rule ?? 'DL0000',
+    rule: row.code,
     file: row.file,
-    line: row.line ?? 1,
-    severity: mapSeverity(row.level ?? 'warning'),
-    message: row.message ?? 'Problema de boas práticas no Dockerfile.',
-    evidence: `${row.code ?? 'hadolint'} (${row.level ?? 'warning'}): ${row.message ?? ''}`,
+    line: row.line,
+    severity: mapSeverity(row.level),
+    message: 'Hadolint apontou problema na instrução do Dockerfile.',
+    evidence: `Regra Hadolint ${row.code} na instrução indicada.`,
   }, repoRoot, fallbackFile));
 }
 
 export function parseTrivyConfigJson(text, repoRoot, fallbackFile) {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-  const parsed = JSON.parse(trimmed);
-  const results = Array.isArray(parsed?.Results) ? parsed.Results : [];
-  const out = [];
-  const targets = [];
-  for (const res of results) {
-    if (!res || typeof res !== 'object') continue;
-    const target = normalizeRelativeFile(res.Target, repoRoot, fallbackFile);
-    targets.push(target);
-    const misconfigs = Array.isArray(res.Misconfigurations) ? res.Misconfigurations : [];
-    for (const m of misconfigs) {
-      if (!m || typeof m !== 'object') continue;
-      if (String(m.Status ?? '').toUpperCase() === 'PASS') continue;
-      out.push(normalizeFinding({
+  const parsed = JSON.parse(text);
+  if (!isRecord(parsed)) throw new Error(REPORT_INVALID);
+  // Trivy v2 omits Results when the scan has no results.
+  const emptyReport = parsed.SchemaVersion === 2
+    && typeof parsed.ArtifactName === 'string' && typeof parsed.ArtifactType === 'string';
+  const results = parsed.Results === undefined && emptyReport
+    ? []
+    : reportRows(parsed.Results, row => typeof row.Target === 'string' && row.Target.length > 0);
+  const findings = [];
+  const targets = new Set();
+  for (const result of results) {
+    const target = normalizeRelativeFile(result.Target, repoRoot, fallbackFile);
+    targets.add(target);
+    const misconfigs = result.Misconfigurations === undefined ? [] : reportRows(result.Misconfigurations,
+      row => isRuleId(row.AVDID || row.ID) && typeof row.Status === 'string' && typeof row.Severity === 'string');
+    for (const row of misconfigs) {
+      if (row.Status.toUpperCase() === 'PASS') continue;
+      findings.push(normalizeFinding({
         tool: 'trivy',
-        rule: m.AVDID ?? m.ID ?? 'TRIVY-CONFIG',
+        rule: row.AVDID || row.ID,
         file: target,
-        line: m.CauseMetadata?.StartLine ?? 1,
-        severity: mapSeverity(m.Severity),
-        message: m.Title ?? m.Message ?? m.Description ?? 'Configuração insegura ou não pronta para produção.',
-        evidence: `${m.AVDID ?? m.ID ?? 'trivy'}: ${m.Message ?? m.Title ?? ''}`,
+        line: row.CauseMetadata?.StartLine ?? 1,
+        severity: mapSeverity(row.Severity),
+        message: 'Trivy apontou problema de configuração na instrução indicada.',
+        evidence: `Regra Trivy ${row.AVDID || row.ID} na instrução indicada.`,
       }, repoRoot, fallbackFile));
     }
-    const secrets = Array.isArray(res.Secrets) ? res.Secrets : [];
-    for (const s of secrets) {
-      if (!s || typeof s !== 'object') continue;
-      out.push(normalizeFinding({
+    const secrets = result.Secrets === undefined ? [] : reportRows(result.Secrets,
+      row => isRuleId(row.RuleID) && Number.isSafeInteger(row.StartLine) && row.StartLine > 0);
+    for (const row of secrets) {
+      findings.push(normalizeFinding({
         tool: 'trivy',
-        rule: s.RuleID ?? 'trivy-secret',
+        rule: row.RuleID,
         file: target,
-        line: s.StartLine ?? 1,
-        severity: mapSeverity(s.Severity ?? 'HIGH'),
-        message: 'Possível segredo em arquivo protegido.',
-        evidence: 'Localização informada pelo coletor; conteúdo protegido.',
+        line: row.StartLine,
+        severity: mapSeverity(row.Severity ?? 'HIGH'),
+        message: SECRET_MESSAGE,
+        evidence: SECRET_EVIDENCE,
       }, repoRoot, fallbackFile));
     }
   }
-  return {findings: out, targets: [...new Set(targets)]};
+  return {findings, targets: [...targets]};
 }
 
 export function parseTestsslJson(text, repoRoot, anchorFile) {
@@ -444,6 +542,44 @@ export function parseTestsslJson(text, repoRoot, anchorFile) {
     }, repoRoot, anchorFile));
   }
   return out;
+}
+
+function runGitleaks(runBin, bin, repoRoot, workDir, anchorFile) {
+  const config = join(workDir, 'gitleaks.toml');
+  const report = join(workDir, 'gitleaks.json');
+  writeFileSync(config, '[extend]\nuseDefault = true\n', {mode: 0o600});
+  let source = repoRoot;
+  let fileRoot = repoRoot;
+  if (existsSync(join(repoRoot, '.gitleaksignore')) || existsSync(join(repoRoot, '.git'))) {
+    // v8.30.1 also loads a .gitleaksignore at the source root, even with an explicit flag.
+    // Nest the checkout so that this file can be scanned as data without becoming policy.
+    source = join(workDir, 'source');
+    fileRoot = join(source, 'checkout');
+    mkdirSync(source, {mode: 0o700});
+    cpSync(repoRoot, fileRoot, {
+      recursive: true,
+      filter(path) {
+        const info = lstatSync(path);
+        return (path === repoRoot || basename(path) !== '.git') && (info.isFile() || info.isDirectory());
+      },
+    });
+  }
+  const res = runBin(bin, [
+    'dir', '--config', config, '--gitleaks-ignore-path', workDir, '--ignore-gitleaks-allow',
+    '--report-format', 'json', '--report-path', report, '--exit-code', '0',
+    '--no-banner', '--redact=100', '--log-level', 'error', source,
+  ], {cwd: workDir});
+  if (res.error || res.status !== 0) return {detail: `Falha ao executar gitleaks (${toolExit(res)}).`};
+  if (!existsSync(report)) return {detail: 'Relatório JSON do gitleaks ausente.'};
+  try {
+    return {findings: parseGitleaksJson(readFileSync(report, 'utf8'), fileRoot, anchorFile)};
+  } catch {
+    return {detail: 'Saída JSON inválida do gitleaks.'};
+  }
+}
+
+function toolExit(result) {
+  return Number.isInteger(result.status) ? `exit=${result.status}` : safeErrorCode(result.error?.code, 'execução interrompida');
 }
 
 export function runCollector(options = {}) {
@@ -470,51 +606,47 @@ export function runCollector(options = {}) {
       tlsAnchorFile = audit.tlsAnchorFile ?? audit.anchorFile;
       for (const f of audit.findings) findings.push(normalizeFinding(f, repoRoot, anchorFile));
       for (const c of audit.coverage) coverage.push(normalizeCoverageRow(c));
-    } catch (err) {
+    } catch {
       coverage.push(normalizeCoverageRow({
         tool: 'prontidao-audit',
         version: AUDIT_VERSION,
         status: 'failed',
-        detail: `Falha na análise de prontidão: ${err instanceof Error ? err.message : String(err)}`,
+        detail: 'Falha na análise estática de prontidão.',
       }));
     }
 
     // 2. gitleaks (segredos fora do código)
     const gitleaksVer = probeVersion(runBin, bins.gitleaks, ['version'], /([0-9]+\.[0-9]+\.[0-9]+)/) ?? 'desconhecida';
-    const hasGit = existsSync(join(repoRoot, '.git'));
-    const gitleaksOut = join(workDir, 'gitleaks.json');
-    const gitleaksArgs = ['detect', ...(hasGit ? [] : ['--no-git']), '--source', repoRoot, '--report-format', 'json', '--report-path', gitleaksOut, '--exit-code', '0', '--no-banner', '--redact', '--log-level', 'error'];
-    const glRes = runBin(bins.gitleaks, gitleaksArgs, {cwd: workDir});
-    if (glRes.error || glRes.status !== 0 || !existsSync(gitleaksOut)) {
-      coverage.push(normalizeCoverageRow({
+    let scan;
+    try {
+      scan = runGitleaks(runBin, bins.gitleaks, repoRoot, workDir, anchorFile);
+    } catch {
+      scan = {detail: 'Falha ao preparar ou ler a varredura isolada do gitleaks.'};
+    }
+    if (scan.findings) findings.push(...scan.findings);
+    coverage.push(
+      normalizeCoverageRow({
         tool: 'gitleaks',
         version: gitleaksVer,
-        status: 'failed',
-        detail: `Falha ao executar gitleaks (${glRes.error?.message ?? `exit=${glRes.status}`}).`,
-      }));
-    } else {
-      try {
-        const glFindings = parseGitleaksJson(readFileSync(gitleaksOut, 'utf8'), repoRoot, anchorFile);
-        findings.push(...glFindings);
-        coverage.push(normalizeCoverageRow({
-          tool: 'gitleaks',
-          version: gitleaksVer,
-          status: 'ok',
-          detail: `Varredura ${hasGit ? 'git+arquivos' : 'sem-git'} concluída; ${glFindings.length} segredo(s) encontrado(s).`,
-        }));
-      } catch (err) {
-        coverage.push(normalizeCoverageRow({
-          tool: 'gitleaks',
-          version: gitleaksVer,
-          status: 'failed',
-          detail: `Saída JSON inválida do gitleaks: ${err instanceof Error ? err.message : String(err)}`,
-        }));
-      }
-    }
+        status: scan.findings ? 'ok' : 'failed',
+        detail: scan.detail ?? `Varredura dos arquivos do snapshot concluída; ${scan.findings.length} segredo(s) encontrado(s).`,
+      }),
+      normalizeCoverageRow({
+        tool: 'gitleaks:historico',
+        version: gitleaksVer,
+        status: 'skipped',
+        detail: 'Histórico Git fora do escopo do snapshot de arquivos examinado.',
+      }),
+    );
 
     // 3. hadolint (Dockerfiles)
     const hadolintVer = probeVersion(runBin, bins.hadolint, ['--version'], /([0-9]+\.[0-9]+\.[0-9]+)/) ?? 'desconhecida';
-    const dockerfiles = findDockerfiles(repoRoot);
+    const {files: dockerfiles, omitted: dockerfilesOmitted} = findDockerfiles(repoRoot);
+    if (dockerfilesOmitted) {
+      coverage.push(normalizeCoverageRow({
+        tool: 'hadolint:limites', version: hadolintVer, status: 'failed', detail: dockerfilesOmitted,
+      }));
+    }
     if (hadolintVer === 'desconhecida' && dockerfiles.length === 0) {
       const probe = runBin(bins.hadolint, ['--version'], {timeout: 10_000});
       if (probe.error) {
@@ -522,7 +654,7 @@ export function runCollector(options = {}) {
           tool: 'hadolint',
           version: 'desconhecida',
           status: 'failed',
-          detail: `Binário hadolint indisponível: ${probe.error.message}`,
+          detail: `Binário hadolint indisponível (${toolExit(probe)}).`,
         }));
       } else {
         coverage.push(normalizeCoverageRow({
@@ -546,11 +678,11 @@ export function runCollector(options = {}) {
           tool: 'hadolint',
           version: hadolintVer,
           status: 'failed',
-          detail: `Falha ao executar hadolint (${hlRes.error?.message ?? `exit=${hlRes.status}`}).`,
+          detail: `Falha ao executar hadolint (${toolExit(hlRes)}).`,
         }));
       } else {
         try {
-          const hlFindings = parseHadolintJson(hlRes.stdout || '[]', repoRoot, anchorFile);
+          const hlFindings = parseHadolintJson(hlRes.stdout, repoRoot, anchorFile);
           findings.push(...hlFindings);
           coverage.push(normalizeCoverageRow({
             tool: 'hadolint',
@@ -567,19 +699,19 @@ export function runCollector(options = {}) {
               detail: `${df.rel}: ${count} achado(s).`,
             }));
           }
-        } catch (err) {
+        } catch {
           coverage.push(normalizeCoverageRow({
             tool: 'hadolint',
             version: hadolintVer,
             status: 'failed',
-            detail: `Saída JSON inválida do hadolint: ${err instanceof Error ? err.message : String(err)}`,
+            detail: 'Saída JSON inválida do hadolint.',
           }));
         }
       }
     }
 
     // 4. trivy config (IaC / Dockerfile / Compose no contêiner sem rede)
-    const trivyVer = probeVersion(runBin, bins.trivy, ['--version'], /Version:\s*([^\s]+)/i) ?? 'desconhecida';
+    const trivyVer = probeVersion(runBin, bins.trivy, ['--version'], /Version:\s*v?([0-9]+\.[0-9]+\.[0-9]+)\b/i) ?? 'desconhecida';
     const trivyOut = join(workDir, 'trivy-config.json');
     const trivyCache = join(workDir, 'trivy-cache');
     mkdirSync(trivyCache, {recursive: true});
@@ -590,13 +722,11 @@ export function runCollector(options = {}) {
         tool: 'trivy',
         version: trivyVer,
         status: 'failed',
-        detail: `Falha ao executar trivy config (${trRes.error?.message ?? `exit=${trRes.status}`}).`,
+        detail: `Falha ao executar trivy config (${toolExit(trRes)}).`,
       }));
     } else {
       try {
-        const parsedTrivy = parseTrivyConfigJson(readFileSync(trivyOut, 'utf8'), repoRoot, anchorFile);
-        const trFindings = Array.isArray(parsedTrivy) ? parsedTrivy : parsedTrivy.findings;
-        const trTargets = Array.isArray(parsedTrivy) ? [] : parsedTrivy.targets;
+        const {findings: trFindings, targets: trTargets} = parseTrivyConfigJson(readFileSync(trivyOut, 'utf8'), repoRoot, anchorFile);
         findings.push(...trFindings);
         coverage.push(normalizeCoverageRow({
           tool: 'trivy',
@@ -613,12 +743,18 @@ export function runCollector(options = {}) {
             detail: `${target}: ${count} achado(s) de configuração.`,
           }));
         }
-      } catch (err) {
+        if (trTargets.length > 100) {
+          coverage.push(normalizeCoverageRow({
+            tool: 'trivy:limites', version: trivyVer, status: 'skipped',
+            detail: `${trTargets.length - 100} alvo(s) analisado(s) sem linha de cobertura individual pelo limite de 100 linhas.`,
+          }));
+        }
+      } catch {
         coverage.push(normalizeCoverageRow({
           tool: 'trivy',
           version: trivyVer,
           status: 'failed',
-          detail: `Saída JSON inválida do trivy: ${err instanceof Error ? err.message : String(err)}`,
+          detail: 'Saída JSON inválida do trivy.',
         }));
       }
     }
@@ -633,12 +769,12 @@ export function runCollector(options = {}) {
         const evaluated = evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile);
         findings.push(...evaluated.findings);
         coverage.push(...evaluated.coverage);
-      } catch (err) {
+      } catch {
         coverage.push(normalizeCoverageRow({
           tool: 'prontidao-tls-passivo',
           version: AUDIT_VERSION,
           status: 'failed',
-          detail: `Evidência passiva TLS inválida: ${err instanceof Error ? err.message : String(err)}`,
+          detail: 'Evidência passiva TLS inválida ou ilegível.',
         }));
       }
     } else {

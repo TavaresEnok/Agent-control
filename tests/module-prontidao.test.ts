@@ -454,3 +454,272 @@ test('nginx com TLS legado e backup em /tmp são detectados sem executar scripts
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+test('segredos em formatos de Compose, systemd e dotenv aparecem somente por localização', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-secret-metadata-'));
+  try {
+    writeFileSync(join(dir, 'compose.yml'), [
+      'services:',
+      '  maps:',
+      '    environment:',
+      String.raw`      APP_PASSWORD: "synthetic-map-first \"synthetic-map-second\""`,
+      "      APP_TOKEN: 'synthetic-single-first ''synthetic-single-second'''",
+      '      APP_API_KEY: >-',
+      '        synthetic-block-first',
+      '        # synthetic-block-second',
+      '      CONTROL_TOKEN: ${MOUNTED_TOKEN}',
+      '  lists:',
+      '    environment:',
+      String.raw`      - "APP_PASSWORD=synthetic-list-first \\ synthetic-list-second"`,
+      "      - 'CONTROL_PASSWORD=changeme'",
+      '  flow: {environment: ["APP_PASSWORD=synthetic-flow-first synthetic-flow-second"]}',
+      "  flowmap: {environment: {'APP_TOKEN': 'synthetic-flowmap-first synthetic-flowmap-second'}}",
+    ].join('\n'));
+    writeFileSync(join(dir, '.env'), [
+      'export APP_TOKEN="synthetic-dotenv-first synthetic-dotenv-second"',
+      'APP_SECRET: synthetic-colon-first synthetic-colon-second',
+      'CONTROL_PASSWORD=${INJECTED_PASSWORD} # referência',
+    ].join('\n'));
+    writeFileSync(join(dir, 'app.service'), [
+      '[Service]',
+      'Restart=on-failure',
+      'MemoryMax=128M',
+      String.raw`Environment="APP_TOKEN=synthetic-systemd-first \"synthetic-systemd-second\"" 'APP_PASSWORD=synthetic-unit-first synthetic-unit-second' ` + '\\',
+      '# comentário entre linhas da diretiva',
+      String.raw`    APP_SECRET=synthetic-escape-first\ssynthetic-escape-second`,
+    ].join('\n'));
+    const out = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin(bin, args) {
+        if (bin === 'gitleaks' && args[0] === 'dir') {
+          writeFileSync(args[args.indexOf('--report-path') + 1]!, JSON.stringify([{
+            RuleID: 'generic-api-key', File: join(dir, '.env'), StartLine: 1,
+            Secret: 'synthetic-gitleaks-first synthetic-gitleaks-second',
+            Match: 'synthetic-match-first synthetic-match-second',
+          }]));
+          return {status: 0, stdout: '', stderr: ''};
+        }
+        if (bin === 'trivy' && args[0] === 'config') {
+          writeFileSync(args[args.indexOf('--output') + 1]!, JSON.stringify({
+            Results: [{Target: '.env', Secrets: [{
+              RuleID: 'generic-api-key', StartLine: 2, Match: 'synthetic-trivy-first synthetic-trivy-second',
+            }]}],
+          }));
+          return {status: 0, stdout: '', stderr: ''};
+        }
+        return {status: 1, stdout: '', stderr: ''};
+      },
+    });
+    const secrets = out.findings.filter(f => f.rule.startsWith('PRONTIDAO-SEGREDO-'));
+    const linesFor = (file: string) => secrets.filter(f => f.file === file).map(f => f.line).sort((a, b) => a - b);
+    assert.deepEqual(linesFor('compose.yml'), [4, 5, 6, 12, 14, 15]);
+    assert.deepEqual(linesFor('app.service'), [4, 4, 4]);
+    assert.deepEqual(linesFor('.env'), [1, 2]);
+    assert.equal(out.findings.filter(f => ['gitleaks', 'trivy'].includes(f.tool)).length, 2);
+    assert.ok(secrets.every(f => f.evidence === 'Localização informada pelo coletor; conteúdo protegido.'));
+    assert.equal(/synthetic-[a-z]+-(?:first|second)/.test(JSON.stringify(out)), false);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Compose e systemd reconhecem políticas efetivas de reinício e healthchecks desativados', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-compose-state-'));
+  try {
+    writeFileSync(join(dir, 'compose.yml'), [
+      'services:',
+      '  disabled:',
+      '    restart: always',
+      '    deploy: {restart_policy: {condition: none}}',
+      '    healthcheck: {disable: true, test: ["CMD", "true"]}',
+      '  none:',
+      '    restart: "no"',
+      '    deploy:',
+      '      restart_policy:',
+      '    healthcheck: {test: [NONE]}',
+      '  enabled:',
+      '    deploy:',
+      '      restart_policy:',
+      '        delay: 2s',
+      '    healthcheck:',
+      '      disable: false',
+      '      test:',
+      '        - CMD',
+      '        - "true"',
+      '  explicit: {restart: "on-failure:3", healthcheck: {test: "true"}}',
+    ].join('\n'));
+    writeFileSync(join(dir, 'app.service'), [
+      '[Unit]', 'Restart=always', '[Service]', 'Restart=on-failure', 'Restart=no', 'MemoryMax=128M',
+    ].join('\n'));
+    const findings = auditRepositoryReadiness(dir).findings;
+    for (const rule of ['PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE', 'PRONTIDAO-HEALTHCHECK-COMPOSE-AUSENTE']) {
+      assert.deepEqual(findings.filter(f => f.rule === rule).map(f => f.line), [2, 6]);
+    }
+    assert.deepEqual(findings.filter(f => f.rule === 'PRONTIDAO-SYSTEMD-REINICIO-AUSENTE').map(f => f.line), [3]);
+    assert.equal(parseComposeServices('{"services":{"app":{"restart":"always","healthcheck":{"test":["CMD","true"]}}}}')[0]?.hasHealthcheck, true);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('documentação, comentários e texto de shell não contam como rotinas de backup ou restauração', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-backup-declaration-'));
+  try {
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'README.md'), '# Rotinas planejadas\npg_dump\npg_restore\n');
+    writeFileSync(join(dir, 'notes.sh'), [
+      '#!/bin/sh', '# pg_dump -f /var/backups/example.dump', 'echo "pg_dump e pg_restore"',
+      "cat <<'NOTES'", 'pg_dump', 'pg_restore', 'NOTES',
+    ].join('\n'));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({description: 'pg_dump', scripts: {notes: 'echo pg_restore'}}));
+    const absent = ['PRONTIDAO-BACKUP-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE'];
+    assert.ok(absent.every(rule => auditRepositoryReadiness(dir).findings.some(f => f.rule === rule)));
+    writeFileSync(join(dir, 'backup.service'), '[Service]\nType=oneshot\nExecStart=/usr/bin/pg_dump -f /var/backups/app.dump\n');
+    writeFileSync(join(dir, 'restore.sh'), '#!/bin/sh\npg_restore --exit-on-error /var/backups/app.dump\n');
+    assert.ok(absent.every(rule => !auditRepositoryReadiness(dir).findings.some(f => f.rule === rule)));
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Nginx aplica protocolo exato e redirecionamento somente no bloco correspondente', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-nginx-blocks-'));
+  try {
+    writeFileSync(join(dir, 'nginx.conf'), [
+      'http {',
+      '  server { listen 443 ssl; ssl_protocols TLSv1.2 TLSv1.3; }',
+      '  server { listen 80; return 308 https://$host$request_uri; }',
+      '  server {',
+      '    listen 0.0.0.0:80; # return 301 https://exemplo.invalid;',
+      '    location /example { return 301 https://exemplo.invalid; }',
+      '  }',
+      '  server { listen [::]:80; return 301 "https://${host}$request_uri"; }',
+      '  server { listen 443 ssl; ssl_protocols TLSv1.1 TLSv1.3; }',
+      '}',
+    ].join('\n'));
+    const findings = auditRepositoryReadiness(dir).findings;
+    assert.deepEqual(findings.filter(f => f.rule === 'PRONTIDAO-TLS-PROTOCOLO-FRACO').map(f => f.line), [9]);
+    assert.deepEqual(findings.filter(f => f.rule === 'PRONTIDAO-TLS-DESATIVADO').map(f => f.line), [5]);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('a cobertura estática aponta subárvores, arquivos e cotas com análise parcial', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-cobertura-'));
+  try {
+    const deep = Array.from({length: 11}, (_, i) => `d${i}`).join('/');
+    mkdirSync(join(dir, deep), {recursive: true});
+    writeFileSync(join(dir, deep, 'fora.ts'), '');
+    writeFileSync(join(dir, 'grande.yml'), Buffer.alloc(1024 * 1024 + 1));
+    symlinkSync(join(dir, 'grande.yml'), join(dir, 'link.yml'));
+    for (let i = 0; i < 4001; i++) writeFileSync(join(dir, `src-${String(i).padStart(4, '0')}.ts`), '');
+    const out = auditRepositoryReadiness(dir);
+    assert.equal(out.coverage.find(c => c.tool === 'prontidao-audit')?.status, 'failed');
+    assert.ok(out.coverage.some(c => c.status === 'failed' && c.detail.includes(deep) && c.detail.includes('profundidade')));
+    assert.ok(out.coverage.some(c => c.status === 'failed' && c.detail.startsWith('grande.yml:')));
+    assert.ok(out.coverage.some(c => c.status === 'skipped' && c.detail.startsWith('link.yml:')));
+    assert.ok(out.coverage.some(c => c.status === 'failed' && c.detail.includes('src-3999.ts') && c.detail.includes('4000 arquivos')));
+    assert.equal(out.coverage.filter(c => c.tool === 'prontidao:arquivo' && c.status === 'ok').length, 3999);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('adaptadores recusam relatórios inválidos sem publicar mensagens brutas dos binários', () => {
+  const malformed = 'synthetic-tool-data-first synthetic-tool-data-second';
+  for (const bad of ['{}', '', '[{}]', '[null]', '{"bad":"shape"}']) {
+    assert.throws(() => parseHadolintJson(bad, '/repo', 'Dockerfile'));
+  }
+  for (const bad of ['{}', '', '{"Results":42}', '{"Results":[null]}', '{"Results":[{"Target":"Dockerfile","Misconfigurations":42}]}']) {
+    assert.throws(() => parseTrivyConfigJson(bad, '/repo', 'Dockerfile'));
+  }
+  assert.deepEqual(parseTrivyConfigJson('{"SchemaVersion":2,"ArtifactName":"/repo","ArtifactType":"filesystem"}', '/repo', 'Dockerfile'), {findings: [], targets: []});
+  const out = runCollector({
+    repoRoot: cleanDir,
+    evidenceFile: '',
+    runBin(bin, args) {
+      if (bin === 'trivy' && args[0] === 'config') {
+        writeFileSync(args[args.indexOf('--output') + 1]!, malformed);
+      }
+      if (bin === 'gitleaks' && args[0] === 'dir') {
+        writeFileSync(args[args.indexOf('--report-path') + 1]!, '{"findings":42}');
+      }
+      return {status: 0, stdout: malformed, stderr: malformed};
+    },
+  });
+  for (const bin of ['gitleaks', 'hadolint', 'trivy']) {
+    assert.equal(out.coverage.find(c => c.tool === bin)?.status, 'failed');
+  }
+  assert.equal(JSON.stringify(out).includes('synthetic-tool-data'), false);
+});
+
+test('Gitleaks usa configuração fixa, isola políticas do repositório e anuncia o escopo de arquivos', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-gitleaks-source-'));
+  try {
+    mkdirSync(join(dir, '.git'));
+    writeFileSync(join(dir, '.gitleaks.toml'), '# configuração de fixture\n');
+    writeFileSync(join(dir, '.gitleaksignore'), '# exclusões de fixture\n');
+    writeFileSync(join(dir, 'source.txt'), 'dados fictícios\n');
+    symlinkSync(join(dir, 'source.txt'), join(dir, 'link.txt'));
+    const out = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin(bin, args, options) {
+        if (bin !== 'gitleaks' || args[0] !== 'dir') return {status: 1, stdout: '', stderr: ''};
+        const config = args[args.indexOf('--config') + 1]!;
+        assert.equal(readFileSync(config, 'utf8'), '[extend]\nuseDefault = true\n');
+        assert.equal(args[args.indexOf('--gitleaks-ignore-path') + 1], options?.cwd);
+        assert.ok(args.includes('--ignore-gitleaks-allow'));
+        assert.ok(args.includes('--redact=100'));
+        const source = args.at(-1)!;
+        assert.throws(() => statSync(join(source, '.gitleaksignore')), /ENOENT/);
+        assert.throws(() => statSync(join(source, 'checkout', '.git')), /ENOENT/);
+        assert.throws(() => statSync(join(source, 'checkout', 'link.txt')), /ENOENT/);
+        assert.ok(statSync(join(source, 'checkout', '.gitleaksignore')).isFile());
+        writeFileSync(args[args.indexOf('--report-path') + 1]!, JSON.stringify([
+          {File: join(source, 'checkout', 'source.txt'), RuleID: 'generic-api-key', StartLine: 1},
+        ]));
+        return {status: 0, stdout: '', stderr: ''};
+      },
+    });
+    assert.equal(out.findings.find(f => f.tool === 'gitleaks')?.file, 'source.txt');
+    assert.equal(out.coverage.find(c => c.tool === 'gitleaks')?.status, 'ok');
+    assert.equal(out.coverage.find(c => c.tool === 'gitleaks:historico')?.status, 'skipped');
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('HTTPS passivo distingue cabeçalhos inválidos e registra origens que excedem a cota', () => {
+  const omitted = 'https://fora-da-cota.example.invalid';
+  const evaluate = (hsts: string, xfo: string, csp = '') => evaluatePassiveTlsEvidence({
+    schemaVersion: 1,
+    collectedBy: 'agent-control-prontidao-adapter',
+    unmeasuredOrigins: [omitted],
+    targets: [{
+      origin: 'https://passivo.example.invalid',
+      status: 'ok',
+      httpStatus: 200,
+      tlsProtocol: 'TLSv1.3',
+      headers: {
+        'strict-transport-security': hsts,
+        'x-content-type-options': 'nosniff',
+        'x-frame-options': xfo,
+        'content-security-policy': csp,
+      },
+    }],
+  }, cleanDir, 'deploy/caddy/site.caddy');
+  for (const hsts of ['max-age=31536000abc', 'max-age=31536000; max-age=0', 'prefix max-age=31536000', 'max-age=31536000, max-age=31536000']) {
+    const invalid = evaluate(hsts, 'synthetic-invalid-frame');
+    assert.deepEqual(invalid.findings.map(f => f.rule), ['PRONTIDAO-HSTS-FRACO', 'PRONTIDAO-FRAME-AUSENTE']);
+    assert.equal(JSON.stringify(invalid).includes('synthetic-invalid-frame'), false);
+  }
+  const valid = evaluate('max-age="31536000"; includeSubDomains', 'SAMEORIGIN');
+  assert.deepEqual(valid.findings, []);
+  assert.deepEqual(valid.coverage.map(row => row.status), ['ok', 'skipped']);
+  assert.ok(valid.coverage[1]?.detail.includes(omitted));
+  assert.deepEqual(evaluate('max-age=31536000', 'inválido', "default-src 'self'; frame-ancestors 'none'").findings, []);
+  assert.deepEqual(evaluate('max-age=31536000', 'inválido', "default-src 'self' frame-ancestors").findings.map(f => f.rule), ['PRONTIDAO-FRAME-AUSENTE']);
+});
