@@ -1145,3 +1145,8 @@ PAUSADO-COTA
 - 19/11/2026 21:15 UTC — trabalho-C-CAMINHOS-VIVOS-R2 iniciado em final-caminhos-vivos por hydrogen high.
 - 19/11/2026 21:15 UTC — C-PRONTIDAO-VIVA-R2 encerrado com código 0.
 - 19/11/2026 21:15 UTC — Correção pront-viva recebida em 3890f594. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 21:16 UTC — Imagem de prontidao construída e arquivada por digest em 937e887b.
+- 19/11/2026 21:16 UTC — documentacao em 8d201ed5 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 332, 'failed': 2, 'skipped': 62}; código do produto VERIFY_TOOLS_FAILED.
+- 19/11/2026 21:18 UTC — C-ACEITE-DOCUMENTACAO-VIVA encerrado com código 0.
+- 19/11/2026 21:18 UTC — revisor-C-ACEITE-LEASE-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 21:19 UTC — Trata os limites de publicação do grafo de documentação. Ordem C-DOCUMENTACAO-VIVA-R2 em worktree separado conforme 43f1c664.
