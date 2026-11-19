@@ -573,3 +573,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:37 UTC — Trabalhador encerrou C2-MUTACAO-R2 em a386516b (código 0). Gerente confere a entrega.
 - 19/11/2026 06:37 UTC — Trabalho C7-HISTORICO-R4 iniciado por Sol high normal em final-c7-hist-r4.
 - 19/11/2026 06:37 UTC — C4 901dae24: 36/36 incluindo OpenRewrite na nova imagem. Base 918324f4: 28/28 com Docker e PostgreSQL, incluindo imagem realmente ausente e criação de resultado ambíguo mantida no diário. O primeiro disparo usava um digest antigo de QA que já havia saído do daemon; repetido com o digest disponível.
+- 19/11/2026 06:38 UTC — Revisor encerrou C7-R7 em 9f22e01e (código 0). Gerente confere a entrega.
+- 19/11/2026 06:38 UTC — Revisão C5-R7 iniciada por Sol high normal somente leitura em 1cd11ad5.
+- 19/11/2026 06:38 UTC — QA: o laboratório da imagem executou quatro exemplos OpenAPI e duas interações Pact por socket local. Oito testes passaram sem saltos. Em b05e9d24, chegaram também a cobertura por HTML e o tratamento de estados de mutação/propriedades Python/Go. As duas correções recebem nova prova sobre a imagem integrada.
