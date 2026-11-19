@@ -2,11 +2,13 @@
 
 from bisect import bisect_right
 from functools import cache
+from itertools import combinations, islice
 import json
 import re
 
 TOOL = "npm-license-policy"
 VERSION = "1"
+MAX_LICENSE_PAIRS = 256
 PERMISSIVE = {"MIT", "ISC", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "Unlicense"}
 STRONG = re.compile(r"(?:A?GPL-[123]\.[01](?:-only|-or-later)?|SSPL-1\.0)")
 DEPENDENCY = re.compile(r"(?:node_modules/(?:@[-\w.]+/)?[-\w.]+/)*node_modules/(?:@[-\w.]+/)?[-\w.]+", re.ASCII)
@@ -105,8 +107,7 @@ def inspect_lock(text, project_license, file, report, project_origin=None):
     counts = {"classificadas": 0, "sem licença reconhecida": 0, "fora do escopo": 0}
     declared = []
     newlines = [match.start() for match in re.finditer(r"\n", text)]
-    strong = {}
-    proprietary = None
+    pair_locations = {}
     for name, entry in entries.items():
         if name == "":
             continue
@@ -135,23 +136,21 @@ def inspect_lock(text, project_license, file, report, project_origin=None):
                 "Triagem das condições de distribuição entre projeto e dependência.",
                 f"Dependência declara {expression}. Projeto declara {project_expression}{origin}.",
             )
-        counterparts = []
-        if category == "copyleft forte":
-            counterparts = [proprietary, next(((other, at) for other, at in strong.items() if other != expression), None)]
-            strong.setdefault(expression, line)
-        elif category == "proprietária":
-            counterparts = [next(iter(strong.items()), None)]
-            proprietary = proprietary or (expression, line)
-        for counterpart in counterparts:
-            if counterpart is None:
-                continue
-            other, at = counterpart
-            report.find(
-                TOOL, "LICENSE_DEPENDENCY_OBLIGATION_REVIEW", file, line, "media",
-                "Triagem das condições de distribuição entre dependências do lockfile.",
-                f"Dependência declara {expression}. Outra dependência declara {other} neste lockfile, linha {at}.",
-            )
+        if category in {"copyleft forte", "proprietária"}:
+            pair_locations.setdefault(expression, line)
+
+    classes = sorted(pair_locations)
+    total_pairs = len(classes) * (len(classes) - 1) // 2
+    for left, right in islice(combinations(classes, 2), MAX_LICENSE_PAIRS):
+        (at, other), (line, expression) = sorted(((pair_locations[left], left), (pair_locations[right], right)))
+        report.find(
+            TOOL, "LICENSE_DEPENDENCY_OBLIGATION_REVIEW", file, line, "media",
+            "Triagem das condições de distribuição entre dependências do lockfile.",
+            f"Dependência declara {expression}. Outra dependência declara {other} neste lockfile, linha {at}.",
+        )
     project = project_expression or "desconhecida"
     totals = ", ".join(f"{key}={count}" for key, count in counts.items())
-    report.cover(TOOL + ":file", VERSION, "ok", f"{file} | projeto={project}; {totals}")
+    omitted = max(0, total_pairs - MAX_LICENSE_PAIRS)
+    report.cover(TOOL + ":file", VERSION, "failed" if omitted else "ok",
+                 f"{file} | projeto={project}; {totals}; pares fora do limite={omitted}")
     return declared

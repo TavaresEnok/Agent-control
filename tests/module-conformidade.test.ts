@@ -442,11 +442,45 @@ print(json.dumps([report.output() for report in (dirty, clean, from_manifest)]))
   assert.ok(dirty.findings.filter(review).every((row: {evidence: string}) =>
     row.evidence.includes('UNLICENSED em package-lock.json linha 4')));
   assert.deepEqual(dirty.findings.filter(dependencies).map((row: {line: number; evidence: string}) =>
-    [row.line, row.evidence.match(/linha (\d+)/)?.[1]]), [[6, '5'], [7, '5']]);
+    [row.line, row.evidence.match(/linha (\d+)/)?.[1]]).sort(), [[6, '5'], [7, '5'], [7, '6']]);
   assert.ok(clean.findings.every((row: {rule: string}) => !review(row) && !dependencies(row)));
   assert.equal(manifest.findings.find(review).file, 'demo/npm-shrinkwrap.json');
   assert.match(manifest.findings.find(review).evidence, /UNLICENSED em demo\/package\.json linha 2/);
   assert.doesNotMatch(JSON.stringify(reports), /synthetic-gpl|synthetic-closed|SYNTHETIC_SECRET/);
+});
+
+test('C9 conserva pares SPDX em todas as permutações e declara a cobertura limitada', () => {
+  python(String.raw`
+from itertools import permutations, combinations
+from unittest.mock import patch
+from collector import Report
+from license_policy import inspect_lock
+import json
+import re
+
+classes = ("GPL-2.0-or-later", "GPL-2.0-only", "GPL-3.0-only")
+wanted = {tuple(sorted(pair)) for pair in combinations(classes, 2)}
+def inspect(items):
+    lock = {"lockfileVersion": 3, "packages": {
+        "node_modules/p" + str(i): {"license": value} for i, value in enumerate(items)
+    }}
+    report = Report()
+    with patch("license_policy.classify", side_effect=lambda value: ("copyleft forte", value)):
+        inspect_lock(json.dumps(lock), None, "package-lock.json", report)
+    return report.output()
+for ordering in permutations(classes):
+    result = inspect((*ordering, ordering[0]))
+    pairs = [tuple(sorted(re.findall(r"declara (GPL-[^.]+\.0-[a-z-]+)", row["evidence"])))
+             for row in result["findings"] if row["rule"] == "LICENSE_DEPENDENCY_OBLIGATION_REVIEW"]
+    assert len(pairs) == len(wanted) and set(pairs) == wanted
+with patch("license_policy.MAX_LICENSE_PAIRS", 1):
+    for ordering in permutations(classes):
+        result = inspect(ordering)
+        assert result["coverage"][0]["status"] == "failed"
+        assert "pares fora do limite=2" in result["coverage"][0]["detail"]
+        emitted = [row for row in result["findings"] if row["rule"] == "LICENSE_DEPENDENCY_OBLIGATION_REVIEW"]
+        assert len(emitted) == 1 and all(term in emitted[0]["evidence"] for term in sorted(classes)[:2])
+`);
 });
 
 test('C9 localiza chaves reais de packages em JSON compacto, inclusive escapadas', () => {
