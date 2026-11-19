@@ -1109,6 +1109,7 @@ for gate, js, py, reaches_stop in (
     ("true-right", "(fixtureGate || true) || stop()", "((fixture_gate is None) or True) or stop()", False),
     ("and-chain", "(fixtureGate && fixtureOther && false) && stop()",
      "(fixture_gate and fixture_other and False) and stop()", False),
+    ("negated-and", "!(fixtureGate && false) || stop()", "not (fixture_gate and False) or stop()", False),
 ):
     reasons = (capture,) if reaches_stop else ()
     cases.extend([
@@ -1201,6 +1202,24 @@ def touch(): stop()
 def run(): (touch() and False) and print(mock_row.amberSignal)
 run()
 emit(mock_row.quartzSignal)''', [], (capture, "chamadas com possível origem e destino sem vínculo estático")),
+    ("negated-left-effects.js", '''let emitLeft = logger.info;
+let emitRight = logger.info;
+function touch() { emitLeft = () => {}; }
+function stop() { emitRight = () => {}; }
+!(touch() && false) || stop();
+emitLeft(mockRow.quartzSignal);
+emitRight(mockRow.amberSignal);''', [(7, 7)], (capture, "resultados de chamadas sem vínculo estático")),
+    ("negated-left-effects.py", '''emit_left = print
+emit_right = print
+def touch():
+    global emit_left
+    emit_left = lambda *items: None
+def stop():
+    global emit_right
+    emit_right = lambda *items: None
+not (touch() and False) or stop()
+emit_left(mock_row.quartzSignal)
+emit_right(mock_row.amberSignal)''', [(11, 11)], (capture, "chamadas com possível origem e destino sem vínculo estático")),
 ])
 
 with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
