@@ -845,3 +845,9 @@ PAUSADO-COTA
 - 19/11/2026 18:21 UTC — C8-POSICAO-CONFIRMADA encerrado com código 0.
 - 19/11/2026 18:21 UTC — revisor-C9-ESCOPO-EFEITOS iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:21 UTC — Documentação em 2c21f573 passou em 37 testes físicos e de CLI. A revisão de 74c33f3f encontrou atribuições indevidas em comentários complexos e no uso de um mapa de declaração sem posição. A correção restringe a publicação a locais demonstrados pelo parser ou por um mapeamento de posição.
+- 19/11/2026 18:21 UTC — trabalho-C8-ORIGEM-LEXICA iniciado em final-c8 por Sol high normal.
+- 19/11/2026 18:22 UTC — Suíte de entrega-qa-1 em 0d8198b6 passou: 266 arquivos, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 18:23 UTC — C9-ESCOPO-EFEITOS encerrado com código 0.
+- 19/11/2026 18:23 UTC — revisor-C2-ACEITE-CONSOLIDADO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:23 UTC — Suíte oficial de entrega-arquitetura-1 em 38e9984c: 267 arquivos aprovados, 0 falhas, 87 excluídos pelo executor.
+- 19/11/2026 18:23 UTC — C9 em 30cab4eb passou nos 36 testes físicos e de CLI. A revisão de 52b078d2 identificou perda de origem em chamadas locais e uniões de estados. A ordem exige manter origem invalidada como indeterminada e informar o limite do rastreamento.
