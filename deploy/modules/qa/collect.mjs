@@ -878,8 +878,18 @@ const returnPredicate = /^\s+(?:retorna|devolve)\s+/i;
 const returnValue = /^(?:[^`()[\]]*\s+)?`[^`]+`$/;
 const qualifiedSubject = /^`[^`]+`\s+(?:de|from)\s+`[^`]+`\s+(?:retorna|devolve)\s+/i;
 const clauseConjunction = '(?:' + listConjunction + '|mas|ou)';
-const clauseTokens = new RegExp(/`[^`]*`|[()[\]]|;|[.!?](?=\s|$)/.source +
-  '|,\\s*(?:' + clauseConjunction + '\\s+)?|\\s+' + clauseConjunction + '\\s+', 'gi');
+const singleQuoteStart = /(?<![\p{L}\p{M}\p{N}])'/u.source;
+const quotedMessage = [
+  /"(?:\\.|[^"\\])*"/.source,
+  singleQuoteStart + /(?:\\.|[^'\\]|'(?=[\p{L}\p{M}\p{N}]))*'(?![\p{L}\p{M}\p{N}])/u.source,
+  /“[^”]*”|‘(?:[^’]|’(?=[\p{L}\p{M}\p{N}]))*’(?![\p{L}\p{M}\p{N}])|«[^»]*»|‹[^›]*›/u.source,
+].join('|');
+const innerQuote = /["“”‘«»‹›]|(?<![\p{L}\p{M}\p{N}])['’]|['’](?![\p{L}\p{M}\p{N}])/u;
+const wordStart = /^[\p{L}\p{M}\p{N}]/u;
+const clauseTokens = new RegExp(/`[^`]*`/.source + `|(?<literal>${quotedMessage})|(?<openQuote>["“‘«‹]|${singleQuoteStart})|` +
+  /(?<closeQuote>[”»›]|['’](?![\p{L}\p{M}\p{N}]))|/.source +
+  /[()[\]]|;|[.!?](?=\s|$)/.source +
+  '|,\\s*(?:' + clauseConjunction + '\\s+)?|\\s+' + clauseConjunction + '\\s+', 'giu');
 
 function readTargetList(text) {
   const targets = [];
@@ -905,10 +915,30 @@ function readTargetList(text) {
 }
 
 function* requirementClauses(body) {
+  const tokens = [...body.matchAll(clauseTokens)];
+  // Only one message is supported. Multiple literals may be parts of a nested message.
+  const [firstMessage, secondMessage] = tokens.filter(({groups}) => groups.literal);
+  const ambiguous = tokens.find(({0: token, index, groups}) => {
+    if (!groups.literal) return groups.openQuote || groups.closeQuote;
+    const straight = token.startsWith('"') || token.startsWith("'");
+    const inner = token.slice(1, -1);
+    return innerQuote.test(straight ? inner.replace(/\\./g, ' ') : inner) ||
+      (straight && wordStart.test(body.slice(index + token.length, index + token.length + 2)));
+  });
+  // A stray closer provides no safe start for the message.
+  if (ambiguous?.groups.closeQuote) {
+    yield null;
+    return;
+  }
   const brackets = [];
   let start = 0;
-  for (const {0: token, index} of body.matchAll(clauseTokens)) {
-    if (token.startsWith('`')) continue;
+  for (const match of tokens) {
+    if (match === ambiguous || (secondMessage && match === firstMessage)) {
+      yield null;
+      return;
+    }
+    const {0: token, index, groups} = match;
+    if (token.startsWith('`') || groups.literal) continue;
     if (token === '(' || token === '[') {
       brackets.push(token);
       continue;
@@ -954,6 +984,10 @@ function requirementTargets(body) {
   const references = [];
   let first = true;
   for (const clause of requirementClauses(body)) {
+    if (clause === null) {
+      references.push({ambiguous: true});
+      break;
+    }
     const declared = first;
     first = false;
     if (!clause.includes('`')) continue;
