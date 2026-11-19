@@ -188,13 +188,13 @@ async function loadMermaidParser(toolsRoot) {
       try {
         return {...await mermaid.parse(code), graph};
       } catch (err) {
-        if (err instanceof Error) {
-          const matches = parserInput ? matchMermaidSourceLines(parserInput, code.split(/\r\n?|\n/)) : null;
+        if (err instanceof Error && parserInput !== undefined) {
+          const matches = matchMermaidSourceLines(parserInput, code.split(/\r\n?|\n/));
           const {line, loc, text} = err.hash ?? {};
-          const lastMappedLine = matches && [...matches.keys()].at(-1);
+          const lastMappedLine = [...matches.keys()].at(-1);
           // An EOF after a single-line token can point to the added newline.
           const finalTokenLine = text === '' && lastMappedLine === loc?.first_line - 1 ? lastMappedLine : undefined;
-          mermaidErrorLines.set(err, matches?.get(line) ?? matches?.get(finalTokenLine) ?? null);
+          mermaidErrorLines.set(err, matches.get(line) ?? matches.get(finalTokenLine) ?? null);
         }
         throw err;
       } finally {
@@ -418,7 +418,8 @@ function manifestTypeScriptCommands(script, toolsRoot) {
   const invocations = [];
   let cwdChanged = false;
   const outerDirectoryChanges = [];
-  const isolatesDirectory = node => node.type === 'Subshell' || node.type === 'CmdSubst';
+  const isolatesDirectory = node => node.type === 'Subshell' || node.type === 'CmdSubst'
+    || (node.type === 'Stmt' && node.background);
   try {
     const {parse, walk, LangVariant} = createRequire(join(toolsRoot, 'package.json'))('sh-syntax/sync');
     if (Buffer.byteLength(script) > 64 * 1024) return [null];
@@ -432,7 +433,6 @@ function manifestTypeScriptCommands(script, toolsRoot) {
         return;
       }
       let [bin, ...args] = words;
-      bin = posix.basename(bin);
       while (bin === 'command' || bin === 'exec') {
         if (bin === 'command') {
           while (args[0] === '-p') args.shift();
@@ -444,9 +444,10 @@ function manifestTypeScriptCommands(script, toolsRoot) {
           invocations.push(null);
           return;
         }
-        bin = posix.basename(executable ?? '');
+        bin = executable ?? '';
       }
       if (['cd', 'pushd', 'popd'].includes(bin)) cwdChanged = true;
+      bin = posix.basename(bin);
       if (bin === 'node' && /(?:^|\/)typescript\/(?:bin\/tsc|lib\/tsc\.js)$/.test(args[0] ?? '')) {
         [bin, ...args] = ['tsc', ...args.slice(1)];
       } else if (['npx', 'npm', 'pnpm', 'yarn', 'bun'].includes(bin)) {
@@ -601,6 +602,58 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function commentProseLines(comment) {
+  let fence = null;
+  return comment.slice(3, -2).split(/\r\n?|\n/).map((line, index) => {
+    const content = index === 0 ? line.trimStart() : line.replace(/^\s*\*[ \t]?/, '');
+    if (fence) {
+      if (closesFence(content, fence)) fence = null;
+      return '';
+    }
+    fence = openingFence(content);
+    return fence ? '' : content;
+  });
+}
+
+function commentLinkLines(lines, target) {
+  const text = lines.join('\n');
+  const tokens = [...text.matchAll(/\\[{}@/`]|`+|[{}]|(\n[ \t]*(?=\n))|\n/g)];
+  // Inline code closes on a run of the same length within the paragraph.
+  const closingTicks = new Map();
+  const nextTicks = new Map();
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const [token, paragraphBreak] = tokens[i];
+    const {index} = tokens[i];
+    if (paragraphBreak) nextTicks.clear();
+    if (!token.startsWith('`')) continue;
+    if (nextTicks.has(token.length)) closingTicks.set(index, nextTicks.get(token.length));
+    nextTicks.set(token.length, index);
+  }
+
+  const tag = /[ \t]*@([a-z][a-z0-9-]*)(?=\s|})/iy;
+  const targetPattern = new RegExp(String.raw`^\s*${escapeRegExp(target)}(?=[\s|]|$)`);
+  const matches = [];
+  let line = 0;
+  let codeEnd = -1;
+  let inlineTag;
+  for (const {0: token, index} of tokens) {
+    if (token.startsWith('\n')) line++;
+    if (index <= codeEnd) continue;
+    if (token.startsWith('`')) {
+      codeEnd = closingTicks.get(index) ?? -1;
+    } else if (token === '{' && !inlineTag) {
+      tag.lastIndex = index + 1;
+      const name = tag.exec(text)?.[1];
+      if (name) inlineTag = {name, line, start: tag.lastIndex};
+    } else if (token === '}' && inlineTag) {
+      if (['link', 'linkcode', 'linkplain'].includes(inlineTag.name)
+        && targetPattern.test(text.slice(inlineTag.start, index))) matches.push(inlineTag.line);
+      inlineTag = undefined;
+    }
+  }
+  return matches;
+}
+
 function findLineInText(text, matcher) {
   if (!text) return 1;
   const lines = String(text).split(/\r?\n/);
@@ -723,13 +776,13 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   }
 
   const symbols = extractTypedocSymbols(data, repoRoot);
-  const resolveSymbol = rawSymName => {
+  const resolveSymbol = (rawSymName, candidates = symbols) => {
     const cleaned = String(rawSymName ?? '').trim().replace(/#/g, '.');
-    const exact = symbols.filter(sym => sym.qualifiedName === cleaned);
+    const exact = candidates.filter(sym => sym.qualifiedName === cleaned);
     if (exact.length) return exact.length === 1 ? exact[0] : null;
-    const suffix = symbols.filter(sym => sym.qualifiedName.endsWith(`.${cleaned}`));
+    const suffix = candidates.filter(sym => sym.qualifiedName.endsWith(`.${cleaned}`));
     if (suffix.length) return suffix.length === 1 ? suffix[0] : null;
-    const named = symbols.filter(sym => sym.name === cleaned);
+    const named = candidates.filter(sym => sym.name === cleaned);
     return named.length === 1 ? named[0] : null;
   };
 
@@ -751,10 +804,10 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return content;
   };
 
-  const findInSymbolComment = (sym, matcher) => {
+  const findInSymbolComment = (sym, findMatches) => {
     const ts = loadTypeScript(toolsRoot);
     const declarationLine = clampLine(sym.line);
-    if (!ts) return declarationLine;
+    if (!ts) return null;
     if (!syntaxByFile.has(sym.file)) {
       const source = ts.createSourceFile(sym.file, getFileText(sym.file), ts.ScriptTarget.Latest, true);
       const lineAt = offset => source.getLineAndCharacterOfPosition(offset).line + 1;
@@ -799,22 +852,14 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     }
     const {source, lineAt, declarations} = syntaxByFile.get(sym.file);
     const matching = declarations.get(`${declarationLine}:${sym.name}`);
-    if (matching?.length !== 1) return declarationLine;
+    if (matching?.length !== 1) return null;
     const commentLines = [];
     for (const comment of ts.getJSDocCommentsAndTags(matching[0]).filter(ts.isJSDoc)) {
-      let fence = null;
       const startLine = lineAt(comment.getStart(source));
-      for (const [index, text] of comment.getText(source).split(/\r?\n/).entries()) {
-        const content = text.replace(/^\s*(?:\/\*\*|\*)[ \t]?/, '');
-        if (fence) {
-          if (closesFence(content, fence)) fence = null;
-          continue;
-        }
-        fence = openingFence(content);
-        if (!fence && matcher.test(text)) commentLines.push(startLine + index);
-      }
+      const lines = commentProseLines(comment.getText(source));
+      for (const index of findMatches(lines)) commentLines.push(startLine + index);
     }
-    return commentLines.length === 1 ? commentLines[0] : declarationLine;
+    return commentLines.length === 1 ? commentLines[0] : null;
   };
 
   const cliLines = String(rawCliOutput ?? '')
@@ -825,7 +870,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   for (const lineText of cliLines) {
     // 1. Parâmetro JSDoc @param desatualizado / inexistente na assinatura real
     const unusedParamMatch = lineText.match(
-      /The signature ([^\s]+) has an @param with name "([^"]+)", which was not used/i,
+      /^\[warning\]\s+The signature ([^\s]+) has an @param with name "([^"]+)", which was not used$/i,
     );
     if (unusedParamMatch) {
       const sigName = unusedParamMatch[1];
@@ -833,8 +878,8 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const sym = resolveSymbol(sigName);
       if (!sym) continue;
       const file = sym.file;
-      const paramTag = new RegExp(String.raw`^\s*(?:/\*\*\s*|\*\s*)?@param\s+(?:\{[^}]+\}\s+)?\[?${escapeRegExp(paramName)}(?=\s|[\]=]|\*/|$)`);
-      const line = findInSymbolComment(sym, paramTag);
+      const paramTag = new RegExp(String.raw`^\s*@param\s+(?:\{[^}]+\}\s+)?\[?${escapeRegExp(paramName)}(?=\s|[\]=]|$)`);
+      const line = findInSymbolComment(sym, lines => lines.flatMap((text, index) => paramTag.test(text) ? [index] : []));
       const dedupKey = `PARAM:${file}:${sigName}:${paramName}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
@@ -842,9 +887,9 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
           tool: 'typedoc',
           rule: 'DOC-TYPEDOC-PARAM-DESATUALIZADO',
           file,
-          line,
+          line: line ?? sym.line,
           severity: 'alta',
-          message: `JSDoc de "${sym?.name ?? sigName}" documenta o parâmetro "@param ${paramName}", que não existe na assinatura real da função.`,
+          message: `JSDoc de "${sym.name}" documenta o parâmetro "@param ${paramName}", que não existe na assinatura real da função.${line === null ? ' Linha da tag indeterminada.' : ''}`,
           evidence: lineText,
         });
       }
@@ -853,7 +898,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
 
     // 2. Link JSDoc {@link ...} apontando para símbolo inexistente
     const brokenLinkMatch = lineText.match(
-      /Failed to resolve link to "([^"]+)" in comment for ([^\s]+)/i,
+      /^\[warning\]\s+Failed to resolve link to "([^"]+)" in comment for (\S+?)(?=\. You may have wanted |$)/i,
     );
     if (brokenLinkMatch) {
       const targetLink = brokenLinkMatch[1];
@@ -861,7 +906,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const sym = resolveSymbol(symRef);
       if (!sym) continue;
       const file = sym.file;
-      const line = findInSymbolComment(sym, new RegExp(String.raw`\{@link(?:code|plain)?\s+${escapeRegExp(targetLink)}(?=[\s|}])`));
+      const line = findInSymbolComment(sym, lines => commentLinkLines(lines, targetLink));
       const dedupKey = `LINK:${file}:${symRef}:${targetLink}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
@@ -869,9 +914,9 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
           tool: 'typedoc',
           rule: 'DOC-TYPEDOC-LINK-QUEBRADO',
           file,
-          line,
+          line: line ?? sym.line,
           severity: 'media',
-          message: `Comentário JSDoc de "${sym?.name ?? symRef}" contém referência {@link ${targetLink}} para símbolo inexistente.`,
+          message: `Comentário JSDoc de "${sym.name}" contém referência {@link ${targetLink}} para símbolo inexistente.${line === null ? ' Linha da tag indeterminada.' : ''}`,
           evidence: lineText,
         });
       }
@@ -880,21 +925,20 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
 
     // 3. Símbolo exportado sem documentação reportado pela validação do TypeDoc
     const notDocMatch = lineText.match(
-      /^\[warning\]\s+([^\s]+)\s+\([^)]+\),\s+defined in\s+(.+),\s+does not have any documentation/i,
+      /^\[warning\]\s+([^\s]+)\s+\([^)]+\),\s+defined in\s+(.+),\s+does not have any documentation$/i,
     );
     if (notDocMatch) {
       const symRef = notDocMatch[1];
       if (symRef.includes('.__type.')) continue;
-      const sym = resolveSymbol(symRef);
-      let file = sym?.file ?? normalizeRepoPath(notDocMatch[2], repoRoot);
-      if (!sym && file.includes('/')) {
-        const firstSlash = file.indexOf('/');
-        const withoutPkgPrefix = file.slice(firstSlash + 1);
-        if (withoutPkgPrefix && getFileText(withoutPkgPrefix)) {
-          file = withoutPkgPrefix;
-        }
-      }
-      if (file === '.' || !getFileText(file)) continue;
+      const diagnosticPath = toPosix(notDocMatch[2]);
+      const direct = normalizeRepoPath(diagnosticPath, repoRoot);
+      // TypeDoc can prefix its diagnostic path with a package name.
+      const packagePath = !posix.isAbsolute(diagnosticPath) && direct !== '.'
+        ? direct.match(/^(?:@[^/]+\/)?[^/]+\/(.+)$/)?.[1] : null;
+      const files = new Set([direct, packagePath].filter(file => file && getFileText(file)));
+      const sym = resolveSymbol(symRef, symbols.filter(symbol => files.has(symbol.file)));
+      const file = sym?.file ?? (files.size === 1 ? files.values().next().value : undefined);
+      if (!file) continue;
       const line = clampLine(sym?.line ?? 1);
       const shortName = sym?.name ?? (symRef.includes('.') ? symRef.split('.').pop() : symRef);
       const dedupKey = `NODOC:${file}:${sym?.qualifiedName ?? symRef}`;
@@ -906,7 +950,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
           file,
           line,
           severity: 'media',
-          message: `Símbolo público exportado "${shortName}" em ${file} não possui documentação JSDoc/TSDoc.`,
+          message: `Símbolo público exportado "${shortName}" em ${file} não possui documentação JSDoc/TSDoc.${sym ? '' : ' Linha da declaração indeterminada.'}`,
           evidence: lineText,
         });
       }
@@ -1054,7 +1098,8 @@ function matchMermaidSourceLines(source, original) {
       .replace(/#(\w+);/g, (_, entity) => `ﬂ°${/^\d+$/.test(entity) ? '°' : ''}${entity}¶ß`).trim());
   // Removing an inline or multiline directive can splice source lines. Only
   // attribute locations when the remaining lines correspond in order.
-  if (raw.some(line => line.includes('%%{') && !/^%%\{.*\}%%$/.test(line))) return new Map();
+  const isComment = line => line.startsWith('%%') && !line.startsWith('%%{');
+  if (raw.some(line => !isComment(line) && line.includes('%%{') && !/^%%\{.*\}%%$/.test(line))) return new Map();
   const isCode = line => line && !line.startsWith('%%');
   const candidates = raw.flatMap((line, index) => isCode(line) ? [{line, index}] : []);
   const matches = new Map();
@@ -1067,6 +1112,17 @@ function matchMermaidSourceLines(source, original) {
     matches.set(index, candidate.index + firstCodeIndex);
   }
   return cursor === candidates.length ? matches : new Map();
+}
+
+function reportedMermaidErrorIndex(message, code) {
+  const reported = message.match(/^(?:Parse|Lexical) error on line ([1-9]\d*)(?=[:.\s]|$)/i);
+  if (!reported) return null;
+  const lines = code.split(/\r\n?|\n/);
+  // Without the parser input, trust the reported line only if preprocessing
+  // cannot remove or splice lines before it.
+  if (!lines[0].trim() || lines.some(line => /^\s*(?:%%|---\s*$)/.test(line) || line.includes('%%{'))) return null;
+  const index = Number(reported[1]) - 1;
+  return index < lines.length && lines[index].trim() ? index : null;
 }
 
 const MODULE_LABEL = /^(?:[\p{L}\p{N}\p{M}_.-]+\/)*[\p{L}\p{N}\p{M}_.-]+\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/u;
@@ -1333,10 +1389,7 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
       fileStat.invalid += 1;
       const errMsg = err instanceof Error ? err.message : String(err);
       const errorLine = mermaidErrorLines.get(err);
-      const reportedLine = errMsg.match(/Parse error on line (\d+)/i);
-      const lineCount = block.code.split(/\r\n?|\n/).length;
-      const originalIndex = errorLine === undefined && reportedLine
-        ? Math.min(clampLine(reportedLine[1]), lineCount) - 1 : errorLine;
+      const originalIndex = errorLine === undefined ? reportedMermaidErrorIndex(errMsg, block.code) : errorLine;
       const line = block.startLine + (originalIndex ?? 0);
       findings.push({
         tool: 'mermaid',

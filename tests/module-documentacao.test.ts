@@ -853,7 +853,7 @@ test('Mermaid localiza a aresta original após YAML e comentários com aspas HTM
   const document = [
     '# Arquitetura', '```mermaid', '---', 'title: |',
     "  A -->|<span title='x'>chama</span>| B", '---',
-    'flowchart LR', '  A["a.ts"]', '  B["b.ts"]', `%% ${edge}`, edge, '```',
+    'flowchart LR', '  A["a.ts"]', '  B["b.ts"]', `%% ${edge} Exemplo escrito: %%{...`, edge, '```',
   ];
   const inspect = async () => {
     const blocks = extractMermaidBlocks([file], () => document.join('\r\n'));
@@ -883,6 +883,27 @@ test('Mermaid localiza a aresta original após YAML e comentários com aspas HTM
   assert.deepEqual(ambiguous.compared.findings, []);
   assert.equal(ambiguous.compared.stats.checkedEdges, 0);
   assert.ok(ambiguous.compared.stats.unmeasured > 0);
+});
+
+test('Mermaid atribui a linha reportada de um diagrama de sequência com origem direta', {skip: skipLocalTools}, async () => {
+  const parse = await createDefaultMermaidParser();
+  const file = 'README.md';
+  const validCode = 'sequenceDiagram\nAlice->>Bob: Olá\nBob->>Alice: Resposta';
+  const invalidCode = 'sequenceDiagram\nAlice->>Bob: Olá\nAlice -? Bob';
+  const blocks = [validCode, invalidCode, `---\ntitle: Conversa\n---\n${invalidCode}`,
+    invalidCode.replace('\n', '\n%% Exemplo\n')].map((code, index) => ({file, startLine: 12 + index * 10, code}));
+  const output = await validateMermaidDocuments([file], blocks, new Set(), parse);
+  assert.deepEqual(output.documentReferences.get(blocks[0]), {moduleNodes: [], moduleEdges: [], unmeasured: 1});
+  assert.deepEqual(output.findings.map(finding => [finding.rule, finding.line, finding.message.includes('iniciado')]), [
+    ['DOC-MERMAID-SINTAXE-INVALIDA', 24, false],
+    ['DOC-MERMAID-SINTAXE-INVALIDA', 32, true],
+    ['DOC-MERMAID-SINTAXE-INVALIDA', 42, true],
+  ]);
+
+  for (const message of ['Parse error on line 3', 'Parse error on line 30', 'Falha interna: Parse error on line 3']) {
+    const error = await validateMermaidDocuments([file], [blocks[0]], new Set(), async () => { throw new Error(message); });
+    assert.equal(error.findings[0].line, message === 'Parse error on line 3' ? 14 : 12);
+  }
 });
 
 test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', {skip: skipLocalTools}, () => {
@@ -942,13 +963,44 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     () => ['/** Public function.', ' * See {@link Missing}.', ' * Compare {@link Missing}.', ' */', 'export function sample() {}'].join('\n'),
   );
   assert.deepEqual(ambiguous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 5]]);
+  assert.match(ambiguous.findings[0].message, /Linha da tag indeterminada/);
+
+  const literalLink = ['/** Public function.', String.raw` * See \{@link Missing \}.`,
+    ' * Literal `{@link Missing}`.', ' */', 'export function sample() {}'].join('\n');
+  const reflectionWithLiteral = {kind: 1, name: 'x', children: [member('sample', 5, 64)]};
+  const diagnostic = 'Failed to resolve link to "Missing" in comment for sample';
+  const withoutLocation = parseTypedocReport(reflectionWithLiteral, `[warning] ${diagnostic}`, root, () => literalLink);
+  assert.equal(withoutLocation.findings[0].line, 5);
+  assert.match(withoutLocation.findings[0].message, /Linha da tag indeterminada/);
+  const unrelated = parseTypedocReport(reflectionWithLiteral, `[info] Exemplo: ${diagnostic}`, root, () => literalLink);
+  assert.deepEqual(unrelated.findings, []);
+});
+
+test('TypeDoc exige um arquivo inequívoco quando o aviso aceita um prefixo de pacote', () => {
+  const root = FIXTURE_CLEAN_DIR;
+  const diagnostic = '[warning] Sample (Interface), defined in pkg/src/api.ts, does not have any documentation';
+  const reflection = {kind: 1, name: 'x', children: []};
+  const sources = new Map([['pkg/src/api.ts', 'export interface Sample {}'], ['src/api.ts', 'export interface Sample {}']]);
+  const read = (file: string) => sources.get(file) ?? '';
+  assert.deepEqual(parseTypedocReport(reflection, diagnostic, root, read).findings, []);
+
+  const withSource = {...reflection, children: [{name: 'Sample', kind: 256, sources: [{fileName: 'pkg/src/api.ts', line: 3}]}]};
+  assert.deepEqual(parseTypedocReport(withSource, diagnostic, root, read).findings.map(finding => [finding.file, finding.line]),
+    [['pkg/src/api.ts', 3]]);
+
+  sources.delete('pkg/src/api.ts');
+  const output = parseTypedocReport(reflection, diagnostic, root, read);
+  assert.deepEqual(output.findings.map(finding => [finding.file, finding.line]), [['src/api.ts', 1]]);
+  assert.match(output.findings[0].message, /Linha da declaração indeterminada/);
 });
 
 test('TypeDoc localiza avisos reais de exports default e confere assinaturas documentadas inequívocas', {skip: skipLocalTools}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'doc-default-exports-'));
   try {
     const files = {
-      'contract.ts': ['/** Configuração.', ' * Consulte {@link MissingContract}.', ' */', 'export default', 'interface Config {}'],
+      'contract.ts': ['/** Configuração.', String.raw` * Exemplo \{@linkcode MissingContract \}.`,
+        ' * Consulte {@linkcode', ' * MissingContract}.', ' * Literal `{@linkcode MissingContract}`.',
+        ' */', 'export default', 'interface Config {}'],
       'modes.ts': ['/** Modos.', ' * Consulte {@link MissingMode}.', ' */', 'enum Mode {', '  Active,', '}', 'export default Mode;'],
       'choice.ts': ['/** Escolhas.', ' * Consulte {@link MissingChoice}.', ' */', 'enum Choice {', '  /** Padrão. */ First,', '}', 'export { Choice as default };'],
       'control.ts': ['/** Controle. */', 'export default interface Control {}', '/** Formata. */', 'export function format(current: string) { return current; }',
@@ -960,7 +1012,7 @@ test('TypeDoc localiza avisos reais de exports default e confere assinaturas doc
     const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
     assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
     assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
-      .map(finding => [finding.file, finding.line]).sort(), [['choice.ts', 2], ['contract.ts', 2], ['modes.ts', 2]]);
+      .map(finding => [finding.file, finding.line]).sort(), [['choice.ts', 2], ['contract.ts', 3], ['modes.ts', 2]]);
     assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC')
       .map(finding => [finding.file, finding.line]), [['modes.ts', 5]]);
     assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA')
@@ -1162,6 +1214,7 @@ test('AST do manifesto isola o diretório de subshells e registra executáveis c
     for (const build of [
       'command cd app && tsc -p build.json', 'command -- cd app && tsc -p build.json',
       '(command cd app && tsc -p build.json)', 'cd app && (true); tsc -p build.json',
+      'command cd app && tsc -p build.json &',
       'TSC=${TSC:-tsc}; exec "$TSC" -p build.json', 'command "$TSC" -p build.json', 'command -p -- "$TSC" -p build.json',
     ]) {
       const result = await collect(build);
@@ -1175,6 +1228,8 @@ test('AST do manifesto isola o diretório de subshells e registra executáveis c
     for (const build of [
       '(command cd app); tsc -p build.json', '(cd app; (cd ..)); command tsc -p build.json',
       'printf "%s" "$(cd app)"; exec tsc -p build.json', 'command -v "$TSC"; tsc -p build.json',
+      'command cd app & tsc -p build.json', 'command cd app && true & tsc -p build.json',
+      'command ./helpers/cd app; tsc -p build.json', './helpers/cd app; tsc -p build.json',
     ]) {
       const result = await collect(build);
       assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined, build);
