@@ -684,3 +684,18 @@ PAUSADO-COTA
 - 19/11/2026 17:17 UTC — arquitetura aprovado em 21/21 testes dirigidos sem saltos, imagem sha256:0758fd4034df, fixada em f41671be.
 - 19/11/2026 17:17 UTC — C7-R9 encerrado com código 0.
 - 19/11/2026 17:19 UTC — Arquitetura 257a3451 passou em TypeScript, 261 arquivos oficiais e 52 complementares. O laboratório histórico não encontrou mais o digest anterior. A nova versão f41671be tem 21/21 físicos com Hadolint e arquivo privado do digest; continuará o aceite sobre a integração atualizada. C8-R10 registra os achados de atribuição TypeDoc/Mermaid.
+- 19/11/2026 17:20 UTC — trabalho-C8-R10 iniciado em final-c8 por Sol medium normal.
+- 19/11/2026 17:20 UTC — Validação de retomada-c3-atual em c4d49bcb iniciada no checkout de integração.
+- 19/11/2026 17:21 UTC — C6-R11 encerrado com código 0.
+- 19/11/2026 17:21 UTC — revisor-C-EXAME-VINCULO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:22 UTC — C9-R7 encerrado com código 0.
+- 19/11/2026 17:22 UTC — C-EXAME-VINCULO encerrado com código 0.
+- 19/11/2026 17:22 UTC — revisor-C2-MATRIZ-R13 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:24 UTC — C5-R9 encerrado com código 0.
+- 19/11/2026 17:24 UTC — C2-MATRIZ-R13 encerrado com código 0.
+- 19/11/2026 17:24 UTC — revisor-C2-BANCO-LOCAL iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:24 UTC — C2-LINGUAGENS-R4 encerrado com código 0.
+- 19/11/2026 17:24 UTC — Arquitetura 86894260 confirmou as duas aberturas relativas com o sistema de arquivos real. TypeScript e todos os 20 testes do arquivo principal passaram sem pulos.
+- 19/11/2026 17:24 UTC — Homologação de a classificação de documentos estáticos em 26aa6baf.
+- 19/11/2026 17:24 UTC — Homologação de a qualificação da origem do diagnóstico SQL em 772e0afe.
+- 19/11/2026 17:24 UTC — A revisão do exame solicitou a revalidação da prova ao publicar; a de prontidão identificou três estados indeterminados. As duas correções estão encomendadas. C9 entregou a atualização de origem de dados em ee77a916.
