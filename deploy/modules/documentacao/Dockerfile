@@ -27,9 +27,9 @@ RUN sha256sum package-lock.json | grep -q "^2acd6ab4a2f4f9c414ddcdc14b1e0289f39f
     && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force
 
-COPY depcruise.config.json collect.mjs /opt/documentacao-tools/
+COPY depcruise.config.json collect.mjs report-privacy.mjs /opt/documentacao-tools/
 COPY documentacao-entrypoint.sh /usr/local/bin/documentacao-entrypoint.sh
-RUN chmod 0444 /opt/documentacao-tools/tools.lock.json /opt/documentacao-tools/depcruise.config.json \
+RUN chmod 0444 /opt/documentacao-tools/tools.lock.json /opt/documentacao-tools/depcruise.config.json /opt/documentacao-tools/report-privacy.mjs \
     && chmod 0555 /opt/documentacao-tools/collect.mjs /usr/local/bin/documentacao-entrypoint.sh
 
 USER 65532:65532
