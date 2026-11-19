@@ -22,6 +22,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {dirname, extname, isAbsolute, join, posix, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
@@ -85,6 +86,20 @@ function normalizeRelPath(rel) {
   return parts.join(posix.sep);
 }
 
+function displayPath(file) {
+  return file.replace(/[%|~\s\u0000-\u001f\u007f]/g, char => char === '~' ? '%7E' : encodeURIComponent(char));
+}
+
+function abbreviateIdentity(value, maxLength) {
+  if (value.length <= maxLength) return value;
+  const hash = createHash('sha256').update(value).digest('hex').slice(0, 24);
+  return `${value.slice(0, maxLength - hash.length - 1)}~${hash}`;
+}
+
+function fileCoverageKey(prefix, file, suffix = '') {
+  return abbreviateIdentity(`${prefix}:${displayPath(file)}${suffix}`, 120);
+}
+
 const internal = 'interno';
 const unmeasured = 'não aferida';
 
@@ -122,8 +137,8 @@ function copyRepoToIsolatedTmp(repoDir) {
   let incomplete = false;
   let copiedBytes = 0;
 
-  function exclude(reason, cutsAnalysis = false, count = 1) {
-    exclusions.set(reason, (exclusions.get(reason) ?? 0) + count);
+  function exclude(reason, cutsAnalysis = false) {
+    exclusions.set(reason, (exclusions.get(reason) ?? 0) + 1);
     incomplete ||= cutsAnalysis;
   }
 
@@ -136,11 +151,7 @@ function copyRepoToIsolatedTmp(repoDir) {
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const [index, entry] of entries.entries()) {
-      if (copiedFiles.length >= MAX_FILES) {
-        exclude('entradas ou subárvores fora do limite de arquivos', true, entries.length - index);
-        break;
-      }
+    for (const entry of entries) {
       if (FORBIDDEN_FILENAMES.has(entry.name)) {
         exclude('nomes reservados a credenciais');
         continue;
@@ -183,6 +194,10 @@ function copyRepoToIsolatedTmp(repoDir) {
         exclude('arquivos fora do limite total de bytes', true);
         continue;
       }
+      if (copiedFiles.length >= MAX_FILES) {
+        exclude('arquivos elegíveis fora do limite de arquivos', true);
+        continue;
+      }
       const rel = normalizeRelPath(relative(resolvedRepo, fullPath));
       const destPath = join(workspace, rel);
       try {
@@ -210,14 +225,6 @@ function copyRepoToIsolatedTmp(repoDir) {
   }
 }
 
-function lineOfOffset(content, offset) {
-  let line = 1;
-  for (let i = 0; i < offset && i < content.length; i += 1) {
-    if (content.charCodeAt(i) === 10) line += 1;
-  }
-  return line;
-}
-
 function findLineNumber(content, pattern, fallback = 1) {
   const lines = content.split(/\r?\n/);
   for (let i = 0; i < lines.length; i += 1) {
@@ -228,44 +235,116 @@ function findLineNumber(content, pattern, fallback = 1) {
   return Math.max(1, fallback);
 }
 
-/**
- * Extrai informações estruturais de arquivos de código e de teste sem executar código.
- */
-function analyzeSourceFile(relFile, content) {
+export async function loadQaSyntax() {
+  const [{api: {parse}, version}, {api: traversal}] = await Promise.all([
+    loadTool('@babel/parser', 'lib/index.js'),
+    loadTool('@babel/traverse', 'lib/index.js'),
+  ]);
+  return {version, parse, traverse: traversal.default};
+}
+
+function parseFile(file, content, parse) {
+  return parse(content, {
+    sourceType: 'unambiguous',
+    plugins: [/\.(?:ts|mts|cts|tsx)$/.test(file) ? 'typescript' : null,
+      /\.(?:js|jsx|tsx)$/.test(file) ? 'jsx' : null].filter(Boolean),
+  });
+}
+
+function staticString(node) {
+  while (['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression', 'TSTypeAssertion'].includes(node?.type)) {
+    node = node.expression;
+  }
+  if (node?.type === 'StringLiteral') return node.value;
+  if (node?.type === 'TemplateLiteral' && !node.expressions.length) return node.quasis[0].value.cooked;
+}
+
+const httpMethods = new Set(['get', 'post', 'put', 'patch', 'delete']);
+const routeReceivers = new Set(['app', 'router', 'server']);
+const primitiveBinary = new Set(['+', '-', '*', '/', '%', '**', '<<', '>>', '>>>', '|', '&', '^',
+  '==', '!=', '===', '!==', '<', '<=', '>', '>=']);
+const primitiveUnary = new Set(['+', '-', '!', '~', 'typeof', 'void']);
+
+function pureValidator(fn) {
+  if (fn.node.async || fn.node.generator || !fn.node.params.every(param => param.type === 'Identifier')) return false;
+
+  function expression(path) {
+    const {node} = path;
+    if (literal(node)) return true;
+    if (path.isIdentifier()) {
+      const binding = path.scope.getBinding(node.name);
+      return ['param', 'const'].includes(binding?.kind) && binding.scope.getFunctionParent()?.path === fn;
+    }
+    if (path.isUnaryExpression()) return primitiveUnary.has(node.operator) && expression(path.get('argument'));
+    if (path.isLogicalExpression() || (path.isBinaryExpression() && primitiveBinary.has(node.operator))) {
+      return expression(path.get('left')) && expression(path.get('right'));
+    }
+    if (path.isConditionalExpression()) return ['test', 'consequent', 'alternate'].every(key => expression(path.get(key)));
+    return path.isTemplateLiteral() && path.get('expressions').every(expression);
+  }
+
+  function statement(path) {
+    if (path.isBlockStatement()) return path.get('body').every(statement);
+    if (path.isEmptyStatement()) return true;
+    if (path.isReturnStatement()) return !path.node.argument || expression(path.get('argument'));
+    if (path.isThrowStatement()) return expression(path.get('argument'));
+    if (path.isIfStatement()) return expression(path.get('test')) && statement(path.get('consequent')) &&
+      (!path.node.alternate || statement(path.get('alternate')));
+    if (path.isSwitchStatement()) {
+      return expression(path.get('discriminant')) && path.get('cases').every(branch =>
+        (!branch.node.test || expression(branch.get('test'))) && branch.get('consequent').every(statement));
+    }
+    return path.isVariableDeclaration({kind: 'const'}) && path.get('declarations').every(declarator =>
+      declarator.get('id').isIdentifier() && declarator.node.init && expression(declarator.get('init')));
+  }
+
+  return statement(fn.get('body'));
+}
+
+/** Lê a estrutura das fontes sem carregar seus módulos. */
+export function analyzeSourceFile(relFile, content, {parse, traverse}) {
   const functions = [];
   const routes = [];
-  const lines = content.split(/\r?\n/);
+  let directEval = false;
+  traverse(parseFile(relFile, content, parse), {
+    FunctionDeclaration(path) {
+      const {node} = path;
+      if (!node.id) return;
+      const isExported = path.parentPath.isExportNamedDeclaration();
+      const binding = path.parentPath.scope.getBinding(node.id.name);
+      functions.push({name: node.id.name, startLine: node.loc.start.line, isExported,
+        pure: isExported && binding?.constant === true && pureValidator(path)});
+    },
+    CallExpression(path) {
+      const callee = path.node.callee;
+      if (callee.type === 'Identifier' && callee.name === 'eval') directEval = true;
+      if (callee.type !== 'MemberExpression' || !routeReceivers.has(callee.object.name?.toLowerCase())) return;
+      const method = (callee.computed ? staticString(callee.property) : callee.property.name)?.toLowerCase();
+      if (!httpMethods.has(method)) return;
+      const arg = path.node.arguments[0];
+      if (!arg) return;
+      const binding = arg.type === 'Identifier' ? path.scope.getBinding(arg.name) : undefined;
+      const init = binding?.kind === 'const' && binding.constant && binding.path.isVariableDeclarator() &&
+        binding.path.get('id').isIdentifier({name: arg.name}) && binding.path.node.end < arg.start
+        ? binding.path.node.init : undefined;
+      routes.push({method: method.toUpperCase(), path: staticString(arg) ?? staticString(init),
+        expression: content.slice(arg.start, arg.end), file: relFile, line: path.node.loc.start.line,
+        snippet: content.slice(path.node.start, arg.end)});
+    },
+  });
 
-  // Descobre funções exportadas e locais: `export function nome(params)` ou `function nome(params)`
-  const fnRegex = /(?:export\s+)?(?:async\s+)?function\s+([A-Za-z0-9_]+)\s*\(([^)]*)\)/g;
-  let match;
-  while ((match = fnRegex.exec(content)) !== null) {
-    const name = match[1];
-    const startLine = lineOfOffset(content, match.index);
-    const isExported = /export\s+(?:async\s+)?function/.test(match[0]);
-
-    functions.push({name, startLine, isExported});
-  }
-
-  // Descobre declarações de rotas HTTP: app.get('/api/...', ...), router.post('/api/...', ...)
-  const routeRegex = /\b(?:app|router|server)\s*\.\s*(get|post|put|patch|delete)\s*\(\s*['"`]([^'"`]+)['"`]/gi;
-  let routeMatch;
-  while ((routeMatch = routeRegex.exec(content)) !== null) {
-    routes.push({
-      method: routeMatch[1].toUpperCase(),
-      path: routeMatch[2],
-      file: relFile,
-      line: lineOfOffset(content, routeMatch.index),
-      snippet: lines[lineOfOffset(content, routeMatch.index) - 1]?.trim() ?? routeMatch[0],
-    });
-  }
-
+  if (directEval) for (const fn of functions) fn.pure = false;
   return {file: relFile, functions, routes};
 }
 
 const testNames = new Set(['test', 'it', 'describe', 'xit', 'xtest', 'xdescribe']);
 const skipMethods = new Set(['skip', 'fixme', 'todo']);
 const validatorPrefix = 'QA-VALIDADOR: ';
+const assertionModules = new Set(['node:assert', 'assert', 'node:assert/strict', 'assert/strict']);
+export const qaAssertionMethods = ['ok', 'equal', 'notEqual', 'strictEqual', 'notStrictEqual', 'deepEqual',
+  'notDeepEqual', 'deepStrictEqual', 'notDeepStrictEqual', 'partialDeepStrictEqual', 'throws',
+  'doesNotThrow', 'match', 'doesNotMatch', 'ifError', 'fail'];
+const assertionMethods = new Set(qaAssertionMethods);
 
 function visitAst(node, visitor) {
   if (!node?.type || visitor(node) === false) return;
@@ -281,6 +360,88 @@ function visitAst(node, visitor) {
 function member(node, object, property) {
   return node?.type === 'MemberExpression' && !node.computed &&
     node.object.name === object && node.property.name === property;
+}
+
+function importedBinding(path, name) {
+  const binding = path.scope.getBinding(name);
+  if (binding?.kind !== 'module' || !binding.path.parentPath.isImportDeclaration()) return;
+  const specifier = binding.path.node;
+  const declaration = binding.path.parentPath.node;
+  if (declaration.importKind === 'type' || specifier.importKind === 'type') return;
+  return {module: declaration.source.value, name: specifier.imported?.name ?? specifier.imported?.value,
+    namespace: binding.path.isImportNamespaceSpecifier()};
+}
+
+function proofAssertion(path) {
+  const {callee} = path.node;
+  const receiver = callee.type === 'MemberExpression' && !callee.computed ? callee.object.name : undefined;
+  const name = receiver ?? callee.name;
+  const binding = name && importedBinding(path, name);
+  if (!binding || !assertionModules.has(binding.module)) return;
+  const root = !binding.name || binding.name === 'strict' || binding.name === 'default';
+  if (receiver && root && assertionMethods.has(callee.property.name)) return {receiver};
+  if (callee.type === 'Identifier' && !binding.namespace && (root || assertionMethods.has(binding.name))) return {receiver: 'void 0'};
+}
+
+/** Instrumenta chamadas diretas no callback registrado com node:test, preservando as linhas. */
+export function instrumentTestAssertions(file, content, {parse, traverse}) {
+  const ast = parseFile(file, content, parse);
+  const aliases = new Map();
+  for (const declaration of ast.program.body) {
+    if (declaration.type !== 'ImportDeclaration' || declaration.source.value !== 'node:test') continue;
+    for (const spec of declaration.specifiers) aliases.set(spec.local.name, spec.imported?.name ?? 'test');
+  }
+  const sites = new Map();
+  const edits = [];
+  let prefix = '__qaAssertion';
+  while (content.includes(prefix)) prefix += '_';
+  let index = 0;
+  traverse(ast, {
+    CallExpression(path) {
+      const owner = path.getFunctionParent();
+      const registration = owner?.parentPath;
+      if (!registration?.isCallExpression()) return;
+      const test = testCall(registration.node, aliases);
+      if (!test || test.suite || test.skipped || test.callback !== owner.node) return;
+      const runner = importedBinding(registration, test.localName);
+      if (runner?.module !== 'node:test' || runner.namespace || (runner.name && !['test', 'it', 'default'].includes(runner.name))) return;
+      const accepted = proofAssertion(path);
+      if (!accepted) return;
+      const {callee} = path.node;
+      const probe = `${prefix}${index++}`;
+      const site = sites.get(registration.node) ?? {title: test.title, probes: []};
+      site.probes.push(probe);
+      sites.set(registration.node, site);
+      edits.push({offset: callee.start, loc: callee.loc.start, text: `${prefix}(`},
+        {offset: callee.end, loc: callee.loc.end, text: `, ${accepted.receiver}, function ${probe}() {})`});
+    },
+  });
+  const proofs = [...sites].map(([node, site]) => {
+    const {line, column} = node.loc.start;
+    return {...site, file, line, column: column + 1};
+  });
+  if (!edits.length) return {content, proofs};
+  let cursor = 0;
+  const chunks = [];
+  const editLines = new Map();
+  for (const edit of edits.sort((a, b) => a.offset - b.offset)) {
+    chunks.push(content.slice(cursor, edit.offset), edit.text);
+    cursor = edit.offset;
+    const line = editLines.get(edit.loc.line) ?? [];
+    line.push(edit);
+    editLines.set(edit.loc.line, line);
+  }
+  const preload = posix.relative(posix.dirname(file), '.qa-v8-probe.mjs');
+  const specifier = preload.startsWith('../') ? preload : `./${preload}`;
+  chunks.push(content.slice(cursor), `\nimport {captureAssertion as ${prefix}} from ${JSON.stringify(specifier)};\n`);
+  return {content: chunks.join(''), proofs, originalColumn(line, column) {
+    let shift = 0;
+    for (const edit of editLines.get(line) ?? []) {
+      if (edit.loc.column + shift >= column) break;
+      shift += edit.text.length;
+    }
+    return column - shift;
+  }};
 }
 
 function testCall(node, aliases) {
@@ -333,10 +494,7 @@ function declaredValidator(test, runnerBindings, assertBindings, importedFunctio
 
 /** Levanta candidatos estáticos sem confundir opções do teste com seu callback. */
 export function analyzeTestFile(relFile, content, parse) {
-  const ast = parse(content, {
-    sourceType: 'unambiguous',
-    plugins: [/\.(?:ts|mts|cts|tsx)$/.test(relFile) ? 'typescript' : null, /\.(?:js|jsx|tsx)$/.test(relFile) ? 'jsx' : null].filter(Boolean),
-  });
+  const ast = parseFile(relFile, content, parse);
   const skippedTests = [];
   const assertionFreeTests = [];
   const flakyPatterns = [];
@@ -347,6 +505,8 @@ export function analyzeTestFile(relFile, content, parse) {
   const aliases = new Map();
   const runnerBindings = new Set();
   const assertBindings = new Set();
+  const assertFunctions = new Set();
+  const playwrightBindings = new Set();
   const topLevelCalls = new Set(ast.program.body.map(node => node.expression));
 
   for (const declaration of ast.program.body) {
@@ -360,8 +520,13 @@ export function analyzeTestFile(relFile, content, parse) {
         runnerBindings.add(local);
         aliases.set(local, name ?? 'test');
       }
-      if (['node:assert/strict', 'node:assert', 'assert/strict', 'assert'].includes(path) && !name) {
+      if (assertionModules.has(path) && (!name || name === 'strict' || name === 'default')) {
         assertBindings.add(local);
+      }
+      if (assertionModules.has(path) && (assertionMethods.has(name) || assertBindings.has(local))) assertFunctions.add(local);
+      if (path === '@playwright/test' && name === 'test') {
+        playwrightBindings.add(local);
+        aliases.set(local, 'test');
       }
       if (path.startsWith('.') && name) {
         const source = posix.normalize(posix.join(posix.dirname(relFile), path));
@@ -397,11 +562,15 @@ export function analyzeTestFile(relFile, content, parse) {
       if (child.type !== 'CallExpression') return;
       const call = child.callee;
       const context = callback.params[0]?.name;
-      if (context && (member(call, context, 'skip') || member(call, context, 'todo'))) {
+      const receiver = call.object?.name;
+      const playwrightSkip = (playwrightBindings.has(receiver) || (receiver === 'test' && !runnerBindings.has(receiver))) &&
+        (member(call, receiver, 'skip') || member(call, receiver, 'fixme')) &&
+        !(child.arguments[0]?.type === 'BooleanLiteral' && !child.arguments[0].value);
+      if (playwrightSkip || (context && (member(call, context, 'skip') || member(call, context, 'todo')))) {
         conditionalSkip = true;
         record(test, child, 'skip/todo no callback');
       }
-      if (call.name === 'assert' || call.name === 'expect' ||
+      if (assertFunctions.has(call.name) || call.name === 'assert' || call.name === 'expect' ||
           (call.type === 'MemberExpression' && (assertBindings.has(call.object.name) || call.object.name === 'assert' ||
             member(call, 'fc', 'assert')))) hasAssertion = true;
       const imported = importedFunctions.get(call.name);
@@ -427,14 +596,17 @@ function coverageRow(tool, version, status, detail) {
   return {tool: cleanSingleLine(tool, 120), version, status, detail: cleanSingleLine(detail)};
 }
 
-function indexRuntimeStatuses(tests = []) {
+function indexRuntimeTests(tests = []) {
   const statuses = new Map();
   for (const test of tests) {
     const identity = testIdentity(test);
-    statuses.set(identity, statuses.has(identity) ? undefined : test.statuses);
+    statuses.set(identity, statuses.has(identity) ? undefined : test);
   }
   return candidate => statuses.get(testIdentity({...candidate, name: candidate.title.slice(0, 200)}));
 }
+
+const everyPass = (values, accepts) => values?.length === 3 && values.every(accepts);
+const observedAssertions = test => everyPass(test?.assertionStatuses, status => status === 'executed');
 
 function referencesFunction(calls, file, fn) {
   return calls.some(call => call.name === fn.name &&
@@ -446,23 +618,32 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
   const version = internal;
   const rows = [];
   const findings = [];
-  const tests = testAnalyses.flatMap(t => t.activeTests).filter(t => t.hasAssertion);
-  const linked = (file, fn) => tests.filter(t => referencesFunction(t.calls, file, fn));
-  const statusesOf = indexRuntimeStatuses(runtimeTests);
-  const providesEvidence = t => runtimeTests
-    ? statusesOf(t)?.every(status => status === 'passed')
-    : !t.conditionalSkip;
+  const tests = testAnalyses.flatMap(t => t.activeTests);
+  const linked = (file, fn) => tests.filter(t => t.hasAssertion && referencesFunction(t.calls, file, fn));
+  const runtimeOf = indexRuntimeTests(runtimeTests);
+  const providesEvidence = t => {
+    if (!runtimeTests) return t.hasAssertion && !t.conditionalSkip;
+    const result = runtimeOf(t);
+    return everyPass(result?.statuses, status => status === 'passed') && observedAssertions(result);
+  };
   const describe = matches => matches.map(t => {
-    const statuses = statusesOf(t);
-    const detail = statuses?.join(',') ?? (t.conditionalSkip ? 'skip/todo possível' : 'execução sem vínculo confirmado');
-    return `${t.file}:${t.line} ${t.title} (${detail})`;
+    const result = runtimeOf(t);
+    let detail = t.conditionalSkip ? 'skip/todo possível'
+      : t.hasAssertion ? 'execução sem vínculo confirmado' : 'asserção estática não identificada';
+    if (result) {
+      const assertions = observedAssertions(result) ? 'asserção executada nas três passadas'
+        : result.assertionStatuses?.includes('unsupported') ? 'cobertura limitada de asserções'
+          : 'asserção não observada em todas as passadas';
+      detail = `${result.statuses.join(',')}, ${assertions}`;
+    }
+    return `${displayPath(t.file)}:${t.line} ${t.title} (${detail})`;
   }).join('; ') || 'sem teste vinculado';
   const functions = sourceAnalyses.flatMap(src => src.functions.filter(fn => fn.isExported).map(fn => ({
     file: src.file, name: fn.name, line: fn.startLine, matches: linked(src.file, fn),
   })));
   for (const fn of functions) {
-    rows.push(coverageRow(`qa-funcionalidade:${fn.file}:${fn.name}`, version, 'ok',
-      `vínculo estático ${fn.file}:${fn.line} ${fn.name} → ${describe(fn.matches)}`));
+    rows.push(coverageRow(fileCoverageKey('qa-funcionalidade', fn.file, `:${fn.name}`), version, 'ok',
+      `vínculo estático ${abbreviateIdentity(displayPath(fn.file), 240)}:${fn.line} ${fn.name} → ${describe(fn.matches)}`));
   }
   let requirements = 0;
   for (const reqFile of reqFiles) {
@@ -472,15 +653,15 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       requirements++;
       const mentioned = [...text.matchAll(/`([A-Za-z_]\w*)`/g)].map(match => match[1]);
       const features = functions.filter(fn => mentioned.includes(fn.name));
-      const identifiers = features.map(fn => `${fn.name} (${fn.file}:${fn.line})`).join(', ');
+      const identifiers = features.map(fn => `${fn.name} (${displayPath(fn.file)}:${fn.line})`).join(', ');
       const matches = [...new Set([...tests.filter(t => t.requirements.includes(id)), ...features.flatMap(fn => fn.matches)])];
       const line = idx + 1;
       rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
-        `vínculo estático ${reqFile}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`));
+        `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`));
       if (!matches.some(providesEvidence) && !incomplete) {
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
-          message: `Requisito ${id} sem ${runtimeTests ? 'teste vinculado aprovado nas três passadas' : 'vínculo estático com teste ativo que contenha asserção'}`,
-          evidence: `${reqFile}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`});
+          message: `Requisito ${id} sem ${runtimeTests ? 'teste vinculado aprovado com asserção executada nas três passadas' : 'vínculo estático com teste ativo que contenha asserção'}`,
+          evidence: `${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`});
       }
     }
   }
@@ -518,7 +699,7 @@ export function summarizeNodePasses(passes, sourceAnalyses, version) {
   for (const src of sourceAnalyses) {
     const coverage = measured.map(files => files.get(src.file));
     const describe = c => c ? `ramos ${c.coveredBranchCount}/${c.totalBranchCount}, funções ${c.coveredFunctionCount}/${c.totalFunctionCount}` : 'arquivo sem medição';
-    extraRows.push(coverageRow(`qa-arquivo:${src.file}`, version, coverage.some(Boolean) ? 'ok' : 'skipped',
+    extraRows.push(coverageRow(fileCoverageKey('qa-arquivo', src.file), version, coverage.some(Boolean) ? 'ok' : 'skipped',
       `V8 em três passadas: ${coverage.map(describe).join('; ')}`));
     for (const fn of src.functions.filter(fn => fn.isExported)) {
       const measurements = coverage.map(c => c?.functions.find(f => f.name === fn.name && f.line === fn.startLine));
@@ -541,6 +722,10 @@ async function runNodeCoverage({context, sourceAnalyses, version, failTool, runt
   }
   const result = summarizeNodePasses(passes, sourceAnalyses, version);
   runtime.tests = result.tests;
+  const proved = result.tests.filter(observedAssertions).length;
+  const unsupported = result.tests.filter(test => test.assertionStatuses.includes('unsupported')).length;
+  result.extraRows.push(coverageRow('qa-assercoes-node-test', version, unsupported === result.tests.length ? 'skipped' : 'ok',
+    `${proved} testes com chamada de node:assert observada nas três passadas, ${result.tests.length - proved - unsupported} sem observação em todas, ${unsupported} com cobertura limitada; somente chamadas síncronas diretas no callback reconhecido`));
   if (result.stable && passes.every(p => p.summary && p.tests.some(t => t.status === 'passed'))) runtime.baseline = passes[0];
   return {
     coverageRow: coverageRow(suiteTool, version, 'ok',
@@ -603,15 +788,18 @@ async function runStrykerMutationTool({context, sourceFiles, failTool, runtime})
 export function measureValidatorCases({sourceAnalyses, testAnalyses, runtimeTests}) {
   const tool = 'qa-propriedades-funcionais';
   const declaredCount = testAnalyses.reduce((sum, test) => sum + test.validatorDeclarations, 0);
-  const statusesOf = indexRuntimeStatuses(runtimeTests);
+  const runtimeOf = indexRuntimeTests(runtimeTests);
   const findings = [];
+  let pureCases = 0;
   let measured = 0;
   for (const candidate of testAnalyses.flatMap(t => t.validators)) {
     const {validator, file, line, title} = candidate;
-    if (!sourceAnalyses.some(src => src.functions.some(fn => fn.isExported &&
-      referencesFunction([validator], src.file, fn)))) continue;
-    const statuses = statusesOf(candidate);
-    if (statuses?.length !== 3 || !statuses.every(status => status === 'passed' || status === 'failed')) continue;
+    if (!sourceAnalyses.some(src => src.file === validator.source &&
+      src.functions.some(fn => fn.isExported && fn.pure && fn.name === validator.name))) continue;
+    pureCases++;
+    const result = runtimeOf(candidate);
+    const statuses = result?.statuses;
+    if (!everyPass(statuses, status => status === 'passed' || status === 'failed') || !observedAssertions(result)) continue;
     measured++;
     if (statuses.includes('failed')) {
       findings.push({tool, rule: 'QA-VALIDADOR-CASO-REPROVADO', file, line, severity: 'alta',
@@ -621,7 +809,7 @@ export function measureValidatorCases({sourceAnalyses, testAnalyses, runtimeTest
   }
   return {
     coverageRow: coverageRow(tool, internal, measured ? 'ok' : 'skipped',
-      `${measured} de ${declaredCount} casos de borda sintéticos declarados medidos nas três passadas; ${findings.length} com reprovação`),
+      `${measured} de ${declaredCount} casos de borda sintéticos declarados medidos nas três passadas; ${findings.length} com reprovação; ${declaredCount - pureCases} sem forma elegível ou pureza demonstrável; ${pureCases - measured} elegíveis sem execução comprovada; somente operações primitivas e vínculos locais`),
     findings,
   };
 }
@@ -816,21 +1004,33 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
   }
 
   const findings = [];
+  const extraRows = [];
   const documentedOperations = new Set(); // "METHOD /path"
   let totalSpecOps = 0;
+  let invalidSpecs = 0;
 
   for (const specRel of openapiFiles) {
     const specFull = join(workspace, specRel);
-    const parsedSpec = await SwaggerParser.validate(specFull, {
-      resolve: {
-        http: false,
-        file: {canRead: file => file.url === specFull, read: () => readFileSync(specFull)},
-      },
-    });
+    let parsedSpec;
+    try {
+      parsedSpec = await SwaggerParser.validate(specFull, {
+        resolve: {
+          http: false,
+          file: {canRead: file => file.url === specFull, read: () => readFileSync(specFull)},
+        },
+      });
+    } catch {
+      invalidSpecs++;
+      extraRows.push(coverageRow(fileCoverageKey('qa-openapi', specRel), version, 'failed',
+        `${displayPath(specRel)}: especificação ilegível, inválida ou com referência fora do escopo`));
+      continue;
+    }
+    extraRows.push(coverageRow(fileCoverageKey('qa-openapi', specRel), version, 'ok',
+      `${displayPath(specRel)}: especificação validada`));
 
     for (const [routePath, pathItem] of Object.entries(parsedSpec.paths ?? {})) {
       if (!pathItem || typeof pathItem !== 'object') continue;
-      for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+      for (const method of httpMethods) {
         const op = pathItem[method];
         if (!op) continue;
         totalSpecOps += 1;
@@ -841,15 +1041,15 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
     }
   }
 
-  const extraRows = [];
   let unchecked = 0;
   for (const route of allRoutes) {
-    const key = `${route.method} ${route.path}`;
-    const shape = routeShape(route.path);
-    const inContract = documentedOperations.has(key) ||
-      (shape !== undefined && documentedOperations.has(`${route.method} ${shape}`));
+    const label = `${route.method} ${route.path ?? route.expression}`;
+    const shape = route.path === undefined ? undefined : routeShape(route.path);
+    const inContract = shape !== undefined && (documentedOperations.has(label) ||
+      documentedOperations.has(`${route.method} ${shape}`));
     const excluded = inContract ? undefined : shape === undefined ? 'sintaxe de rota fora do cruzamento'
-      : incomplete ? 'contrato não confirmado na cópia parcial' : undefined;
+      : incomplete ? 'contrato não confirmado no escopo parcial'
+        : invalidSpecs ? 'contrato não confirmado com especificação inválida' : undefined;
     if (excluded) unchecked++;
     if (!inContract && !excluded) {
       findings.push({
@@ -858,19 +1058,20 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
         file: route.file,
         line: route.line,
         severity: 'media',
-        message: `Rota '${key}' declarada no codigo nao consta no contrato OpenAPI do projeto`,
-        evidence: cleanSingleLine(`rota ${key} em ${route.file}:${route.line} (${route.snippet}) ausente de ${openapiFiles.join(', ') || 'openapi.json'}`),
+        message: `Rota '${label}' declarada no codigo nao consta no contrato OpenAPI do projeto`,
+        evidence: `rota ${label} em ${displayPath(route.file)}:${route.line} (${route.snippet}) ausente de ${openapiFiles.map(displayPath).join(', ') || 'openapi.json'}`,
       });
     }
-    extraRows.push(coverageRow(`qa-rota:${key}`, version, excluded ? 'skipped' : 'ok',
-      `rota ${key} (${route.file}:${route.line}): ${excluded ??
+    const key = route.path === undefined ? `qa-rota:${label} (${displayPath(route.file)}:${route.line})` : `qa-rota:${label}`;
+    extraRows.push(coverageRow(key, version, excluded ? 'skipped' : 'ok',
+      `rota ${label} (${displayPath(route.file)}:${route.line}): ${excluded ??
         (inContract ? 'documentada e validada no contrato OpenAPI' : 'ausente no contrato OpenAPI')}`));
   }
 
   return {
     coverageRow: coverageRow(openapiFiles.length ? toolName : 'qa-contrato-openapi', version,
-      openapiFiles.length || unchecked < allRoutes.length ? 'ok' : 'skipped',
-      `${openapiFiles.length} especificações validadas, ${totalSpecOps} operações do contrato, ${allRoutes.length - unchecked} rotas conferidas e ${unchecked} sem conferência; métodos GET, POST, PUT, PATCH e DELETE`),
+      invalidSpecs ? 'failed' : openapiFiles.length || unchecked < allRoutes.length ? 'ok' : 'skipped',
+      `${openapiFiles.length - invalidSpecs} especificações validadas, ${invalidSpecs} inválidas ou indisponíveis, ${totalSpecOps} operações do contrato, ${allRoutes.length - unchecked} rotas conferidas e ${unchecked} sem conferência; métodos GET, POST, PUT, PATCH e DELETE`),
     extraRows,
     findings,
   };
@@ -889,28 +1090,37 @@ export async function collectQaModule(options = {}) {
     const testFiles = codeFiles.filter(f => /(?:^|\/)(?:test|tests)\//.test(f) ||
       /(?:^|\/|[.-])(?:test|spec)\.(?:[cm]?[jt]s|tsx)$/.test(f));
     const sourceFiles = codeFiles.filter(f => !testFiles.includes(f));
-    const htmlFiles = copiedFiles.filter(f => /\.(?:html|htm)$/.test(f));
+    const htmlFiles = copiedFiles.filter(f => /\.(?:html|htm)$/i.test(f));
     const openapiFiles = copiedFiles.filter(f => /(?:^|\/)(?:openapi|swagger)\.(?:json|yaml|yml)$/i.test(f));
     const reqFiles = copiedFiles.filter(f => /(?:^|\/)(?:requisitos|requirements)\.md$/i.test(f));
 
-    const sourceAnalyses = sourceFiles.map(rel => analyzeSourceFile(rel, readFileSync(join(workspace, rel), 'utf8')));
+    const sourceAnalyses = [];
     const testAnalyses = [];
     let parserVersion = unmeasured;
     let parserError;
     let omittedTestFiles = 0;
-    if (testFiles.length) {
+    let omittedSourceFiles = 0;
+    if (codeFiles.length) {
       try {
-        const {api: {parse}, version} = await loadTool('@babel/parser', 'lib/index.js');
-        parserVersion = version;
+        const syntax = await loadQaSyntax();
+        parserVersion = syntax.version;
+        for (const file of sourceFiles) {
+          try {
+            sourceAnalyses.push(analyzeSourceFile(file, readFileSync(join(workspace, file), 'utf8'), syntax));
+          } catch {
+            omittedSourceFiles++;
+          }
+        }
         for (const file of testFiles) {
           try {
-            testAnalyses.push(analyzeTestFile(file, readFileSync(join(workspace, file), 'utf8'), parse));
+            testAnalyses.push(analyzeTestFile(file, readFileSync(join(workspace, file), 'utf8'), syntax.parse));
           } catch {
             omittedTestFiles++;
           }
         }
       } catch (error) {
         parserError = error;
+        omittedSourceFiles = sourceFiles.length;
       }
     }
 
@@ -950,7 +1160,12 @@ export async function collectQaModule(options = {}) {
       coverage.push(coverageRow('qa-sintaxe-testes', parserVersion, 'skipped',
         `${omittedTestFiles} arquivos de teste ilegíveis ou com sintaxe não analisada`));
     }
-    const matrixPartial = incomplete || !!parserError || omittedTestFiles > 0;
+    if (omittedSourceFiles) {
+      coverage.push(coverageRow('qa-sintaxe-fontes', parserVersion, 'skipped',
+        `${omittedSourceFiles} arquivos de fonte ilegíveis ou com sintaxe não analisada`));
+    }
+    const sourcePartial = incomplete || omittedSourceFiles > 0;
+    const matrixPartial = sourcePartial || !!parserError || omittedTestFiles > 0;
     const toolRunners = [
       {
         name: suiteTool,
@@ -995,8 +1210,8 @@ export async function collectQaModule(options = {}) {
       },
       {
         name: 'qa-contrato-openapi',
-        partial: incomplete,
-        run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete, failTool}),
+        partial: sourcePartial,
+        run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete: sourcePartial, failTool}),
       },
     ];
 

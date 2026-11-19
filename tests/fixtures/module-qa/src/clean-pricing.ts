@@ -6,12 +6,15 @@ export function calcularDescontoFidelidade(valor: number): number {
 }
 
 export function parseQuantidadeSegura(entrada: string): number {
-  if (!/^[1-9]\d{0,3}$/.test(entrada)) {
-    throw new Error('QUANTIDADE_INVALIDA');
+  // A comparação com a forma decimal rejeita frações, sinais e conversões com perda.
+  const quantidade = +entrada >>> 0;
+  if (!quantidade || quantidade > 9999) {
+    throw 'QUANTIDADE_INVALIDA';
   }
-  const parsed = Number.parseInt(entrada, 10);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error('QUANTIDADE_FORA_DE_FAIXA');
+  switch (entrada) {
+    case `${quantidade}`:
+      return quantidade;
+    default:
+      throw 'QUANTIDADE_INVALIDA';
   }
-  return parsed;
 }

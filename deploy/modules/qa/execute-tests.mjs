@@ -92,6 +92,7 @@ export function runBoundedNode(args, cwd, {timeoutMs = testTimeoutMs, maxBytes =
 
 const isCount = value => Number.isSafeInteger(value) && value >= 0;
 const testStatuses = new Set(['passed', 'failed', 'skipped', 'todo', 'error']);
+const assertionStatuses = new Set(['executed', 'unobserved', 'unsupported']);
 
 export function decodeNodeReport({code, output}, files, measure) {
   let report;
@@ -102,7 +103,8 @@ export function decodeNodeReport({code, output}, files, measure) {
   }
   if (typeof report?.summary !== 'boolean' || !Array.isArray(report.tests) ||
       report.tests.some(t => !files.includes(t.file) || typeof t.name !== 'string' ||
-        !testStatuses.has(t.status) || !isCount(t.line) || !isCount(t.column))) {
+        !testStatuses.has(t.status) || !isCount(t.line) || !isCount(t.column) ||
+        (t.assertionStatus !== undefined && !assertionStatuses.has(t.assertionStatus)))) {
     throw new Error('QA_NODE_TEST_REPORT_INVALID');
   }
   const infrastructure = report.tests.find(t => t.status === 'error' ||
@@ -148,8 +150,11 @@ export function comparePasses(passes) {
       const occurrence = (repeats.get(identity) ?? 0) + 1;
       repeats.set(identity, occurrence);
       const key = `${identity}:${occurrence}`;
-      if (!results.has(key)) results.set(key, {...result, statuses: passes.map(() => 'absent')});
-      results.get(key).statuses[index] = result.status;
+      if (!results.has(key)) results.set(key, {...result, statuses: passes.map(() => 'absent'),
+        assertionStatuses: passes.map(() => 'unsupported')});
+      const test = results.get(key);
+      test.statuses[index] = result.status;
+      test.assertionStatuses[index] = result.assertionStatus ?? 'unsupported';
     }
   }
   return [...results.values()];
