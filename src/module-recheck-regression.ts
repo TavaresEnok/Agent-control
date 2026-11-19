@@ -1,4 +1,5 @@
 import {execFile} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join, posix} from 'node:path';
@@ -9,13 +10,14 @@ import type {Ledger, VerificationModule} from './ledger.ts';
 import {readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob} from './module-recheck-git.ts';
 import type {LocalRegression} from './module-recheck-local.ts';
-import {readModuleMeasurements} from './module-recheck-measurement.ts';
+import {readModuleMeasurements, RECHECK_PROOF_VERSION} from './module-recheck-measurement.ts';
 import {redactUnknownSecrets} from './verify-redact.ts';
 import type {ModuleToolCoverage} from './verification-modules.ts';
 
 export const FUNCTION_COVERAGE_RULE = 'QA-COBERTURA-FUNCAO-SEM-TESTE';
 const NODE_TEST_TOOL = 'node-test-v8';
 const ORIGINAL_ZERO_COUNTS = 'contagem V8 da função nas passadas 1, 2 e 3: 0, 0, 0';
+export const FUNCTION_COVERAGE_CRITERION = 'same-function-executed-in-three-v8-passes';
 const MAX_SOURCE_BYTES = 8 * 1024;
 const MAX_EXPRESSION_LENGTH = 1000;
 const EXECUTION_TIMEOUT_MS = 5000;
@@ -36,8 +38,8 @@ function lineAt(text: string, index: number) {
   return text.slice(0, index).split('\n').length;
 }
 
-// Admit whole modules consisting of pure numeric functions only. Both Git
-// blobs are later run verbatim. No repository config, dependency, or hook is loaded.
+// Admit whole modules consisting of pure numeric functions only. This gives
+// us the full inventory and allows the current blob to run in isolation.
 function readFunctions(source: string): Target[] | undefined {
   if (Buffer.byteLength(source) > MAX_SOURCE_BYTES || /\r(?!\n)|[\u2028\u2029]/.test(source)) return;
   const expression = String.raw`${NUMBER}(?:[ \t]+[+*-][ \t]+${NUMBER}){0,12}`;
@@ -141,38 +143,59 @@ async function runTest(source: Blob, sourceFile: string, test: Blob, testFile: s
   }
 }
 
-async function readCorrectionProof(ledger: Ledger, scope: BoundScope, current: Target): Promise<RecheckProof | undefined> {
-  const fileKey = scope.item.file.replace(/[%|~\s\u0000-\u001f\u007f]/g, char => char === '~' ? '%7E' : encodeURIComponent(char));
-  const {item, measurement} = scope;
-  if (!measurement?.collectorImage) return;
-  const coverage = await readModuleMeasurements(ledger.pool, scope.runId, measurement.runId, item.file);
-  if (coverage.findings.some(({tool, rule, line}) => tool === item.tool && rule === item.rule
-    && (line === null || line >= current.line && line <= current.endLine))) return;
-  const find = (rows: ModuleToolCoverage[], tool: string) => {
-    const hits = rows.filter(row => row.tool === tool);
-    return hits.length === 1 && hits[0]!.status === 'ok' ? hits[0] : undefined;
-  };
-  const base = find(coverage.original, item.tool);
-  if (!base || find(coverage.corrected, item.tool)?.version !== base.version) return;
-  const before = find(coverage.original, `qa-arquivo:${fileKey}`);
-  const after = find(coverage.corrected, `qa-arquivo:${fileKey}`);
-  if (!before || !after || [before, after].some(row => row.version !== base.version)
-    || !completeV8Coverage(before.detail, true) || !completeV8Coverage(after.detail, false)) return;
-  return {runId: measurement.runId, tool: item.tool, version: base.version, origin: 'collector', collectorImage: measurement.collectorImage};
+type Measurements = Awaited<ReturnType<typeof readModuleMeasurements>>;
+
+function coverageKey(file: string) {
+  const key = 'qa-arquivo:' + file.replace(/[%|~\s\u0000-\u001f\u007f]/g, char => char === '~' ? '%7E' : encodeURIComponent(char));
+  return key.length <= 120 ? key : key.slice(0, 95) + '~' + createHash('sha256').update(key).digest('hex').slice(0, 24);
 }
 
-function completeV8Coverage(detail: string, original: boolean): boolean {
+function readPasses(detail: string) {
   const header = 'V8 em três passadas: ramos';
   const prefix = detail.startsWith(header) ? header : redactUnknownSecrets(header);
-  if (!detail.startsWith(prefix + ' ')) return false;
+  if (!detail.startsWith(prefix + ' ')) return;
   const passes = detail.slice(prefix.length + 1).split('; ramos ');
-  return passes.length === 3 && passes.every(pass => {
+  if (passes.length !== 3) return;
+  const counts = [];
+  for (const pass of passes) {
     const parsed = /^(\d+)\/(\d+), funções (\d+)\/(\d+)$/.exec(pass);
-    if (!parsed) return false;
+    if (!parsed) return;
     const [branches, allBranches, covered, allFunctions] = parsed.slice(1).map(Number) as [number, number, number, number];
-    return [branches, allBranches, covered, allFunctions].every(Number.isSafeInteger) && branches <= allBranches
-      && (original ? covered < allFunctions : covered > 0 && covered <= allFunctions);
-  });
+    if (![branches, allBranches, covered, allFunctions].every(Number.isSafeInteger)
+      || branches > allBranches || covered > allFunctions) return;
+    counts.push({covered, total: allFunctions});
+  }
+  return counts;
+}
+
+function measuredTool(rows: ModuleToolCoverage[], tool: string) {
+  const hits = rows.filter(row => row.tool === tool);
+  return hits.length === 1 && hits[0]!.status === 'ok' ? hits[0] : undefined;
+}
+
+function measureCoverage(rows: ModuleToolCoverage[], findings: Measurements['findings'], item: RecheckScope, version: string,
+  functions: Target[], target: Target) {
+  const row = measuredTool(rows, coverageKey(item.file));
+  const passes = row?.version === version ? readPasses(row.detail) : undefined;
+  if (!passes || !passes.every(pass => pass.total === functions.length)) return;
+  const uncovered = new Map<string, {id: string; name: string; line: number}>();
+  for (const finding of findings) {
+    if (finding.tool !== item.tool || finding.rule !== item.rule) continue;
+    const name = new RegExp(`^Função exportada '(${IDENTIFIER})' sem execução medida pelo V8$`).exec(finding.message ?? '')?.[1];
+    const fn = functions.find(fn => fn.name === name);
+    // A matching name in a stale location still contradicts a correction.
+    // An ambiguous or stale entry cannot account for any of the gaps.
+    if (!fn || fn.line !== finding.line || uncovered.has(fn.name)
+      || (finding.collectorEvidence !== null && finding.collectorEvidence !== ORIGINAL_ZERO_COUNTS)) return;
+    uncovered.set(fn.name, {id: finding.id, name: fn.name, line: fn.line});
+  }
+  const missing = passes.map(pass => pass.total - pass.covered);
+  if (missing.some(count => count < uncovered.size)) return;
+  const targetFinding = uncovered.get(target.name)?.id ?? null;
+  // With the whole function inventory and every gap accounted for, the
+  // complement is measured as executed, even when other functions are not.
+  if (!targetFinding && !missing.every(count => count === uncovered.size)) return;
+  return {passes, uncovered: [...uncovered.values()], targetFinding};
 }
 
 export type BoundScope = {
@@ -201,32 +224,43 @@ export async function measureRecheckRegression(ledger: Ledger, scope: BoundScope
   if (scope.originalMessage !== `Função exportada '${before.name}' sem execução medida pelo V8`) {
     return {reason: 'MODULE_RECHECK_FUNCTIONAL_ORIGIN_UNPROVEN'} as const;
   }
-  const test = testBlob && readTest(testBlob.text, testFile, item.file, before.name);
-  if (!test || !testBlob) return {reason: 'MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE'} as const;
-  const moduleProof = await readCorrectionProof(ledger, scope, after);
-  if (!moduleProof) return {reason: 'MODULE_RECHECK_MODULE_PROOF_MISSING'} as const;
-
-  const originalRun = await runTest(beforeBlob, item.file, testBlob, testFile, test, signal);
-  const correctedRun = await runTest(afterBlob, item.file, testBlob, testFile, test, signal);
-  if (!originalRun || !correctedRun || originalRun.node !== correctedRun.node) {
-    return {reason: 'MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE'} as const;
+  const {measurement} = scope;
+  const missingProof = {reason: 'MODULE_RECHECK_MODULE_PROOF_MISSING'} as const;
+  if (!measurement?.collectorImage) return missingProof;
+  const coverage = await readModuleMeasurements(ledger.pool, runId, measurement.runId, item.file);
+  const version = measuredTool(coverage.original, item.tool)?.version;
+  if (!version || measuredTool(coverage.corrected, item.tool)?.version !== version) return missingProof;
+  const originCoverage = measureCoverage(coverage.original, coverage.originalFindings, item, version, original, before);
+  const currentCoverage = measureCoverage(coverage.corrected, coverage.findings, item, version, current, after);
+  if (originCoverage?.targetFinding !== item.id || !currentCoverage) return missingProof;
+  const verdict: 'reaberto' | 'fechado' = currentCoverage.targetFinding ? 'reaberto' : 'fechado';
+  let probe = null;
+  if (verdict === 'fechado') {
+    const test = testBlob && readTest(testBlob.text, testFile, item.file, before.name);
+    if (!test || !testBlob) return {reason: 'MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE'} as const;
+    const execution = await runTest(afterBlob, item.file, testBlob, testFile, test, signal);
+    if (!execution) return {reason: 'MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE'} as const;
+    if (execution.status !== 'passed') return {reason: 'MODULE_RECHECK_CORRECTED_TEST_FAILED'} as const;
+    probe = {testFile, testBlob: testBlob.oid, testLine: test.line, testColumn: test.column, testTitle: test.title,
+      assertion: test.assertion, execution};
   }
-  if (originalRun.status === 'passed') return {reason: 'MODULE_RECHECK_ORIGINAL_TEST_PASSED'} as const;
-  if (correctedRun.status !== 'passed') return {reason: 'MODULE_RECHECK_CORRECTED_TEST_FAILED'} as const;
+  const moduleProof: RecheckProof = {runId: measurement.runId, tool: item.tool, version,
+    origin: 'collector', collectorImage: measurement.collectorImage};
   const observations = {
-    original: {commit: originalCommit, status: originalRun.status, actual: originalRun.actual, expected: originalRun.expected},
-    corrected: {commit: head, status: correctedRun.status, actual: correctedRun.actual, expected: correctedRun.expected},
+    original: {commit: originalCommit, ...originCoverage},
+    corrected: {commit: head, ...currentCoverage},
   };
   const receipt = {
+    proofVersion: RECHECK_PROOF_VERSION, criterion: FUNCTION_COVERAGE_CRITERION,
     moduleProofRunId: moduleProof.runId, scope: {...item, runId, evidenceDigest: digest(evidence)},
     original: {blob: beforeBlob.oid, line: before.line, endLine: before.endLine},
     corrected: {blob: afterBlob.oid, line: after.line, endLine: after.endLine},
-    function: {name: before.name, signature: before.signature}, observations, executionVersion: originalRun.node,
-    testFile, testBlob: testBlob.oid, testLine: test.line, testColumn: test.column, testTitle: test.title,
-    assertionDigest: digest(test.assertion),
+    function: {name: before.name, signature: before.signature}, observations,
+    ...(probe && {testFile: probe.testFile, testBlob: probe.testBlob, testLine: probe.testLine, testColumn: probe.testColumn,
+      testTitle: probe.testTitle, assertionDigest: digest(probe.assertion), execution: probe.execution}),
   };
-  return {criterion: 'direct-call-meets-expected-value' as const,
-    before, after, moduleProof, assertion: test.assertion, receipt: {...receipt, receiptDigest: digest(receipt)}};
+  return {criterion: FUNCTION_COVERAGE_CRITERION, verdict, before, after, moduleProof,
+    assertion: probe?.assertion ?? null, receipt: {...receipt, receiptDigest: digest(receipt)}};
 }
 
 function overlappingDeclaration(functions: Target[], target: Target) {
@@ -237,9 +271,11 @@ type QaRegression = Exclude<Awaited<ReturnType<typeof measureRecheckRegression>>
 export type FunctionalRegression = QaRegression | LocalRegression;
 
 const Observation = TestExecution.omit({node: true}).extend({commit: z.string().regex(/^[a-f0-9]{40}$/)});
-const Correction = z.object({
-  rule: z.literal(FUNCTION_COVERAGE_RULE), assertion: z.string().max(MAX_EXPRESSION_LENGTH),
-  original: Observation, corrected: Observation, criterion: z.literal('direct-call-meets-expected-value'),
+const CoverageCorrection = z.object({
+  rule: z.literal(FUNCTION_COVERAGE_RULE), criterion: z.literal(FUNCTION_COVERAGE_CRITERION),
+  function: z.string(), conclusion: z.enum(['coverage-added', 'coverage-regressed']),
+  originalGaps: z.array(z.number().int().nonnegative()).length(3),
+  currentGaps: z.array(z.number().int().nonnegative()).length(3),
 }).strict();
 const LocalObservation = Observation.extend({actual: z.string().min(1).max(400), expected: z.string().min(1).max(400)});
 const LocalCorrection = z.object({
@@ -255,18 +291,38 @@ export function readFunctionalRecheckVerdict(value: unknown) {
 
 export function recheckCorrectionMatches(value: unknown, reason: string, proof: FunctionalRegression): boolean {
   if (typeof value !== 'object' || value === null || !('correction' in value)) return false;
-  const {original, corrected} = proof.receipt.observations;
-  const cites = (item: string) => reason.includes('`' + item + '`');
-  if ('object' in proof.receipt) {
+  if (!('verdict' in proof)) {
+    const {original, corrected} = proof.receipt.observations;
     const parsed = LocalCorrection.safeParse(value.correction);
     const expected = {rule: proof.receipt.scope.rule, criterion: proof.criterion, object: proof.receipt.object,
       ...proof.receipt.observations};
     return parsed.success && digest(parsed.data) === digest(expected)
-      && [proof.receipt.object, original.actual, corrected.actual].every(cites);
+      && [proof.receipt.object, original.actual, corrected.actual].every(item => reason.includes('`' + item + '`'));
   }
-  const parsed = Correction.safeParse(value.correction);
+  const parsed = CoverageCorrection.safeParse(value.correction);
+  const {original, corrected} = proof.receipt.observations;
+  const gaps = (side: typeof original) => side.passes.map(pass => pass.total - pass.covered);
+  const closes = proof.verdict === 'fechado';
+  const name = proof.receipt.function.name;
   return parsed.success && digest(parsed.data) === digest({
-    rule: proof.receipt.scope.rule, assertion: proof.assertion, criterion: 'direct-call-meets-expected-value',
-    ...proof.receipt.observations,
-  }) && [parsed.data.rule, parsed.data.assertion, original.actual, corrected.actual].every(cites);
+    rule: proof.receipt.scope.rule, criterion: proof.criterion, function: name,
+    conclusion: closes ? 'coverage-added' : 'coverage-regressed', originalGaps: gaps(original), currentGaps: gaps(corrected),
+  }) && reason === coverageReason(name, closes);
 }
+
+const COVERAGE_REASON_START = 'A função `<nome>` teve zero execuções nas três passadas da origem.';
+const COVERAGE_CLOSE_REASON = 'Na medição atual, os outros achados explicam todas as lacunas, portanto a função foi executada nas três passadas.';
+const COVERAGE_REOPEN_REASON = 'Na medição atual, a mesma função voltou a registrar zero execuções nas três passadas.';
+
+function coverageReason(name: string, closes: boolean) {
+  return COVERAGE_REASON_START.replace('<nome>', () => name) + ' ' + (closes ? COVERAGE_CLOSE_REASON : COVERAGE_REOPEN_REASON);
+}
+
+export const COVERAGE_REVIEW_INSTRUCTION = 'Compare a identidade da função no mesmo arquivo e as passadas V8 de regressionProof. '
+  + 'Sem ferramentas, rede ou escrita. Responda JSON com kind confirmacao, binding, status, proof e reason. '
+  + 'Use provavel quando não puder decidir. Ao decidir, copie code em proof e inclua correction '
+  + 'com rule, criterion e function (somente o nome), e calcule originalGaps e currentGaps (total menos covered, por passada). '
+  + 'Use descartado e conclusion coverage-added se os outros achados explicarem todas as lacunas atuais. '
+  + 'Use confirmado e conclusion coverage-regressed se o achado atual registrar três zeros para a mesma função. '
+  + 'Em reason, preencha o nome no início e escolha a frase final conforme o resultado. Início: ' + COVERAGE_REASON_START
+  + ' Finais: ' + COVERAGE_CLOSE_REASON + ' ' + COVERAGE_REOPEN_REASON;

@@ -3,8 +3,12 @@ import type {VerificationModule} from './ledger.ts';
 import type {ModuleToolCoverage} from './verification-modules.ts';
 
 export type MeasurementScope = {projectId: string; contextId: string; module: VerificationModule; head: string};
+export const RECHECK_PROOF_VERSION = 2;
 type MeasurementRow = {runId: string; collectorImage: string | null; status: 'done' | 'failed'; usable: boolean};
-type FindingLocation = {line: number | null; tool: string | null; rule: string | null};
+type FindingLocation = {
+  runId: string; id: string; line: number | null; tool: string | null; rule: string | null; message: string | null;
+  collectorEvidence: string | null;
+};
 
 // Consider the latest completed measurement even when it failed or used a
 // different image. An older success must not hide a newer inconclusive run.
@@ -25,12 +29,15 @@ export async function readModuleMeasurements(client: pg.Pool, runId: string, cor
       `SELECT run_id AS "runId", tool, version, status, detail FROM ac_verify_tool_coverage
        WHERE run_id IN ($1,$2) ORDER BY seq`, [runId, correctedRunId]),
     client.query<FindingLocation>(
-      `SELECT line, payload->'sources'->>0 AS tool, payload->'sources'->>1 AS rule
-       FROM ac_verify_findings WHERE run_id=$1 AND file=$2`, [correctedRunId, file]),
+      `SELECT run_id AS "runId", achado_id AS id, line, payload->'sources'->>0 AS tool, payload->'sources'->>1 AS rule,
+         payload->>'scenario' AS message,
+         CASE WHEN payload->>'verifier' IS NULL THEN payload->>'proof' END AS "collectorEvidence"
+       FROM ac_verify_findings WHERE run_id IN ($1,$2) AND file=$3 ORDER BY achado_id`, [runId, correctedRunId, file]),
   ]);
   return {
     original: coverage.rows.filter(row => row.runId === runId),
     corrected: coverage.rows.filter(row => row.runId === correctedRunId),
-    findings: findings.rows,
+    originalFindings: findings.rows.filter(row => row.runId === runId),
+    findings: findings.rows.filter(row => row.runId === correctedRunId),
   };
 }
