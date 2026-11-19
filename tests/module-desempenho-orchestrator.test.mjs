@@ -496,7 +496,13 @@ test('a base pode passar e receber medição fora do snapshot pelo contrato do o
   assert.equal(third.comparedExamId, 'exame-1');
   assert.equal(third.findings[0]?.rule, 'DESEMPENHO-REGRESSAO-ROTA');
   assert.match(third.findings[0].evidence, /exame anterior=exame-1/);
-  const exhausted = await fixture.run({previousMeasurements: (async function* () { yield disjoint; })()});
+  let reads = 0;
+  const exhausted = await fixture.run({previousMeasurements: {
+    [Symbol.asyncIterator]() { return this; },
+    async next() { return ++reads === 1 ? {done: false, value: disjoint} : {done: true}; },
+    async return() { assert.fail('return() chamado após esgotar o histórico'); },
+  }});
+  assert.equal(reads, 2);
   assert.equal(exhausted.comparedExamId, undefined);
   assert.ok(!exhausted.findings.some(row => row.rule.includes('REGRESSAO')));
 });
@@ -519,6 +525,38 @@ test('cancelar durante uma página pendente libera os recursos de desempenho', {
     assert.equal(historySignal.aborted, true);
     assert.deepEqual(await fixture.pending(), []);
   } finally { release.resolve(); }
+});
+
+test('o prazo interrompe a espera pelo fechamento do histórico após uma comparação', {timeout: 10000}, async t => {
+  const fixture = await setup(t, 'historical');
+  const prior = {examId: 'exame-1', measurement: {...measurement('isolated'), imageDigest: digest,
+    k6Routes: [{route: '/api/ping', file: 'server.mjs', p95: 20,
+      source: {kind: 'declaration', file: 'desempenho.config.json', line: 1}}]}};
+  const close = Promise.withResolvers();
+  const watchdog = new AbortController();
+  let returns = 0;
+  const rejected = assert.rejects(fixture.run({timeoutMs: 3000, previousMeasurements: {
+    [Symbol.asyncIterator]() { return this; },
+    async next() { return {done: false, value: prior}; },
+    return() {
+      returns++;
+      return close.promise;
+    },
+  }}), {name: 'TimeoutError'});
+  try {
+    await Promise.race([
+      rejected,
+      delay(6000, undefined, {signal: watchdog.signal}).then(() => assert.fail('o orquestrador continuou aguardando return()')),
+    ]);
+    assert.equal(returns, 1);
+    close.reject(new Error('fechamento tardio da fonte sintética'));
+    assert.deepEqual(await fixture.reconcile(), {cleaned: 1, pending: 0, active: 0, invalid: 0});
+    await fixture.verifyCleanup();
+  } finally {
+    watchdog.abort();
+    close.resolve({done: true});
+    await rejected.catch(() => {});
+  }
 });
 
 async function abortWhile(fixture, reached) {
