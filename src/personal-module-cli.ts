@@ -295,11 +295,6 @@ export async function runPersonalModuleCli(
       return [...(corrected.messageLocalIds ?? [corrected.messageLocalId]), ...corrected.writePaths];
     }
 
-    const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
-      module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
-        ? await probePublishedHttpsOrigins(authorizedOrigins, deps?.prontidaoProbeOptions)
-        : undefined;
-
     let providerLimited = false;
     const runId = randomUUID();
     const collectorAbort = new AbortController();
@@ -322,45 +317,53 @@ export async function runPersonalModuleCli(
     });
 
     let runningTask: Promise<VerificationModuleRunResult> | undefined;
+    const execute = async (signal: AbortSignal) => {
+      const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
+        module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
+          ? await probePublishedHttpsOrigins(authorizedOrigins, {...deps?.prontidaoProbeOptions, signal})
+          : undefined;
+      signal.throwIfAborted();
+      const measurement = parsed.kind === 'measure' ? await moduleRemeasurementTarget(ledger, project.owner, authority!, {
+        projectId: project.id, module, runId: parsed.runId, repo: project.repo, signal,
+      }) : undefined;
+      const commit = measurement?.commit ?? await readHead(project.repo);
+      signal.throwIfAborted();
+      const runExam = measurement ? undefined : createPersonalModuleExam({
+        ledger, principal: project.owner, authority: authority!, commit,
+        loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
+      });
+      return runVerificationModule({
+        module,
+        ledger,
+        principal: project.owner,
+        authority: authority!,
+        projectId: project.id,
+        repoPath: project.repo,
+        dataDirectory: config.dataDirectory,
+        commit,
+        runId,
+        signal,
+        image: measurement?.image ?? deps?.image,
+        ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
+        ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
+        ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),
+        ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
+        ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
+        ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
+        examinar: runExam && (async request => {
+          const examined = await runExam(request);
+          providerLimited = examined.coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT')
+            || examined.findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT');
+          return examined;
+        }),
+      });
+    };
     try {
       const result = await withExamSignals(
-        async () => {
-          const task = runningTask = (async () => {
-            const measurement = parsed.kind === 'measure' ? await moduleRemeasurementTarget(ledger, project.owner, authority!, {
-              projectId: project.id, module, runId: parsed.runId, repo: project.repo, signal: collectorAbort.signal,
-            }) : undefined;
-            const commit = measurement?.commit ?? await readHead(project.repo);
-            collectorAbort.signal.throwIfAborted();
-            const runExam = measurement ? undefined : createPersonalModuleExam({
-              ledger, principal: project.owner, authority: authority!, commit,
-              loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
-            });
-            return runVerificationModule({
-              module,
-              ledger,
-              principal: project.owner,
-              authority: authority!,
-              projectId: project.id,
-              repoPath: project.repo,
-              dataDirectory: config.dataDirectory,
-              commit,
-              runId,
-              signal: collectorAbort.signal,
-              image: measurement?.image ?? deps?.image,
-              rootDir: deps?.rootDir,
-              timeoutMs: deps?.timeoutMs,
-              maxStdoutBytes: deps?.maxStdoutBytes,
-              passiveTlsEvidence,
-              collectorOutput: deps?.collectorOutput,
-              runCollector: deps?.runCollector,
-              examinar: runExam && (async request => {
-                const examined = await runExam(request);
-                providerLimited = examined.coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT')
-                  || examined.findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT');
-                return examined;
-              }),
-            });
-          })();
+        async signal => {
+          const runSignals = [signal, collectorAbort.signal];
+          if (deps?.prontidaoProbeOptions?.signal) runSignals.push(deps.prontidaoProbeOptions.signal);
+          const task = runningTask = execute(AbortSignal.any(runSignals));
           void task.catch(() => undefined);
           return await Promise.race([task, aborted]);
         },

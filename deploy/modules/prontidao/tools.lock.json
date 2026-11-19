@@ -1,0 +1,71 @@
+{
+  "baseImage": {
+    "name": "node",
+    "version": "22-trixie-slim",
+    "url": "https://hub.docker.com/_/node",
+    "digest": "sha256:68c76cfad89921b927eae28ba21407475e29d0ce450afcdbe70c1532db042b64",
+    "platform": "linux/amd64",
+    "platformDigest": "sha256:33d41cc7365593a3622f3f1ce1c6af788de32c0709016ec15685de7aaa681d97",
+    "baseOsDigest": "sha256:7378260c0a098d27ac206225db5e7d92b8c7c84ea7afccc86eeb513756bbd392",
+    "sourceUrl": "https://hub.docker.com/_/node/tags?name=22-trixie-slim",
+    "releasedAt": "2026-11-11T20:16:43Z",
+    "note": "Índice OCI de node:22-trixie-slim conferido via docker buildx imagetools inspect em 2026-11-19. Baseado em debian:trixie-slim."
+  },
+  "tools": [
+    {
+      "name": "testssl.sh",
+      "version": "3.2.5",
+      "license": "GPL-2.0",
+      "url": "https://github.com/testssl/testssl.sh/archive/refs/tags/v3.2.5.tar.gz",
+      "sha256": "23bb53d50ae093b89631e9fff547c087f632bf35f7a3d7dc78dd4ffff56cd779",
+      "sha256Source": "computed",
+      "sourceUrl": "https://github.com/testssl/testssl.sh/releases/tag/v3.2.5",
+      "releasedAt": "2026-11-04T17:11:44Z",
+      "note": "Tarball oficial da tag v3.2.5; hash SHA256 calculado após download direto da release em 2026-11-19.",
+      "kind": "tar.gz-dir",
+      "file": "testssl.sh-3.2.5.tar.gz",
+      "prefix": "testssl.sh-3.2.5",
+      "destDir": "/opt/testssl",
+      "entrypoint": "testssl.sh"
+    },
+    {
+      "name": "gitleaks",
+      "version": "8.30.1",
+      "license": "MIT",
+      "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz",
+      "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1",
+      "releasedAt": "2026-03-21T02:17:58Z",
+      "kind": "tar.gz",
+      "file": "gitleaks_8.30.1_linux_x64.tar.gz",
+      "member": "gitleaks"
+    },
+    {
+      "name": "hadolint",
+      "version": "2.15.1",
+      "license": "GPL-3.0",
+      "url": "https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64",
+      "sha256": "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/hadolint/hadolint/releases/tag/v2.15.1",
+      "releasedAt": "2026-07-31T10:13:06Z",
+      "kind": "bin",
+      "file": "hadolint-linux-x86_64"
+    },
+    {
+      "name": "trivy",
+      "version": "0.76.2",
+      "license": "Apache-2.0",
+      "url": "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz",
+      "sha256": "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/aquasecurity/trivy/releases/tag/v0.76.2",
+      "releasedAt": "2026-11-05T12:50:25Z",
+      "note": "Binário oficial v0.76.2 (fora da janela comprometida de março de 2026).",
+      "kind": "tar.gz",
+      "file": "trivy_0.76.2_Linux-64bit.tar.gz",
+      "member": "trivy"
+    }
+  ]
+}
