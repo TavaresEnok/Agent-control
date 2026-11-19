@@ -1,0 +1,12 @@
+{
+  "operations.js": [
+    ["LOG", 1, 1], ["LOG", 2, 2], ["LOG", 9, 9], ["NETWORK", 21, 15], ["STORAGE", 26, 15]
+  ],
+  "operations.py": [
+    ["LOG", 5, 5], ["LOG", 7, 6], ["LOG", 14, 6], ["LOG", 17, 16], ["STORAGE", 19, 6]
+  ],
+  "writes.ts": [
+    ["LOG", 3, 2], ["STORAGE", 5, 2], ["STORAGE", 6, 6], ["STORAGE", 7, 4],
+    ["STORAGE", 14, 2], ["STORAGE", 16, 2]
+  ]
+}

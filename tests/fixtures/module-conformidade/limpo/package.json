@@ -1,0 +1,8 @@
+{
+  "name": "c9-exemplo-sintetico",
+  "version": "1.0.0",
+  "license": "MIT",
+  "dependencies": {
+    "fixture-widget": "1.0.0"
+  }
+}
