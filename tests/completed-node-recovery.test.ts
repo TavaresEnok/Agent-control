@@ -39,29 +39,42 @@ for(const stopNode of ['qa','review','judge','integrate','integrate-after-cas','
   const controller=spawn(process.execPath,['--import','tsx','tests/fixtures/interrupted-completed-node.ts',configPath],{stdio:['ignore','pipe','pipe']});
   child=controller;
   let output='';controller.stdout?.on('data',b=>{output=(output+String(b)).slice(-3000);});controller.stderr?.on('data',b=>{output=(output+String(b)).slice(-3000);});
-  const closed=new Promise<void>(resolve=>controller.once('close',resolve));
-  let childError:Error|undefined;
-  controller.once('error',error=>{childError=error;});
+  const closed=new Promise<{code:number|null,signal:NodeJS.Signals|null}>(resolve=>{
+   controller.once('close',(code,signal)=>resolve({code,signal}));
+  });
+  const markerWait=new AbortController();
+  const {signal}=markerWait;
+  controller.once('error',error=>markerWait.abort(Error(`Child process error at ${stopNode}\n${output}`,{cause:error})));
+  controller.once('exit',(code,signal)=>{
+   markerWait.abort(Error(`Child exited before SIGKILL at ${stopNode} (code=${code}, signal=${signal})\n${output}`));
+  });
   const markerDeadline=performance.now()+markerTimeoutMs;
-  while(true){
-   let saved=false;
-   try{
-    const state=JSON.parse(await readFile(marker,'utf8'));
-    saved=state?.ready===true&&state.node===stopNode;
-   }catch(error){
-    // The fixture writes directly to the marker, so a poll can see a partial write.
-    if(!(error instanceof SyntaxError)&&(error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+  const markerTimeoutError=()=>Error(`Completed stage marker missing at ${stopNode} after ${markerTimeoutMs} ms\n${output}`);
+  const markerTimer=setTimeout(()=>markerWait.abort(markerTimeoutError()),markerTimeoutMs);
+  try{
+   while(true){
+    let saved=false;
+    try{
+     const state=JSON.parse(await readFile(marker,{encoding:'utf8',signal}));
+     saved=state?.ready===true&&state.node===stopNode;
+    }catch(error){
+     // The fixture writes directly to the marker, so a poll can see a partial write.
+     if(!(error instanceof SyntaxError)&&(error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+    }
+    signal.throwIfAborted();
+    const remaining=markerDeadline-performance.now();
+    if(remaining<=0)throw markerTimeoutError();
+    if(saved)break;
+    await delay(Math.min(50,remaining),undefined,{signal});
    }
-   if(childError)throw Error(`Child process error at ${stopNode}\n${output}`,{cause:childError});
-   if(controller.exitCode!==null||controller.signalCode!==null){
-    throw Error(`Child exited before SIGKILL at ${stopNode} (code=${controller.exitCode}, signal=${controller.signalCode})\n${output}`);
-   }
-   const remaining=markerDeadline-performance.now();
-   if(remaining<=0)throw Error(`Completed stage marker missing at ${stopNode} after ${markerTimeoutMs} ms\n${output}`);
-   if(saved)break;
-   await delay(Math.min(50,remaining));
+  }catch(error){
+   signal.throwIfAborted();
+   throw error;
+  }finally{
+   clearTimeout(markerTimer);
   }
-  assert(controller.kill('SIGKILL'),`Could not send SIGKILL at ${stopNode}\n${output}`);await closed;
+  assert(controller.kill('SIGKILL'),`Could not send SIGKILL at ${stopNode}\n${output}`);
+  assert.deepEqual(await closed,{code:null,signal:'SIGKILL'},`Child did not terminate with SIGKILL at ${stopNode}\n${output}`);
   const before=(await db.pool.query('SELECT id,node_id,session_id FROM ac_stage_operations WHERE intent_id=$1 ORDER BY id',[intent.id])).rows;
   if(stopNode==='qa-wait-capacity'){
    const account=(await db.pool.query("SELECT account_id FROM ac_capacity_grants WHERE intent_id=$1 AND role='programmer'",[intent.id])).rows[0].account_id;
