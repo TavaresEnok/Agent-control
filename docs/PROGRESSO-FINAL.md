@@ -974,3 +974,7 @@ PAUSADO-COTA
 - 19/11/2026 19:19 UTC — Suíte de entrega-qa-publicacao em 53012d07 passou: 266 arquivos, 0 falhas, 86 excluídos pelo executor.
 - 19/11/2026 19:19 UTC — Iniciado backup pelo produto antes da primeira promoção ao checkout da instalação. Origem em 3d6cb612, serviço active.
 - 19/11/2026 19:19 UTC — O revisor confirmou a presença garantida do objeto e os efeitos de desconhecido && false. Solicitou uma prova explícita da negação composta nos dois idiomas e comparação integral do motivo de skipped da política npm. Ambos os controles estão em uma ordem isolada.
+- 19/11/2026 19:19 UTC — trabalho-C9-NEGACAO-E-MOTIVO iniciado em final-c9-lab-parcial por Sol medium normal.
+- 19/11/2026 19:19 UTC — Backup pré-aplicação concluído em /home/app/backups-agent-control/ispagent-pre-aplicacao-modulos-20261119-191913/agent-control-ispagent-20261119-1919. MANIFEST.txt confere (11870 arquivos) e 152 entradas TABLE DATA conferidas por pg_restore; permissões 0700 no diretório e 0600 no dump.
+- 19/11/2026 19:21 UTC — C5-MARCADOR-RECUPERACAO encerrado com código 0.
+- 19/11/2026 19:22 UTC — A correção de bancada dc5834d6 passou nos nove cenários da fixture e foi integrada aos candidatos C5, C6 e C7 (35db707f, 57c136eb, e49076c3). Repetição integral do banco iniciada com a base atual de QA. O revisor examina o delta do teste.
