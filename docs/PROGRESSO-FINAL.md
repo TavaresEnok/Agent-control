@@ -1069,3 +1069,5 @@ PAUSADO-COTA
 - 19/11/2026 20:46 UTC — Revisão independente Sol high de 5f8a8789 aprovada. A prova distingue a preservação do checkpoint e o estado admitted após as duas recusas. O gerente confere os 53 testes complementares desta revisão antes da integração.
 - 19/11/2026 20:47 UTC — TypeScript e os testes complementares do novo fechamento passaram no PostgreSQL descartável.
 - 19/11/2026 20:47 UTC — Aceite final de 5f8a8789. TypeScript e os 53 testes à parte passaram no novo checkout. Os insumos dos 276 arquivos da suíte oficial e das 51 provas do laboratório conjunto são idênticos aos executados em 6587e792. As oito CLIs passaram no laboratório.
+- 19/11/2026 20:47 UTC — Conformidade integrada no merge cf3f5010 após o aceite conjunto de 5f8a8789.
+- 19/11/2026 20:47 UTC — A árvore do produto no merge e467c36b é idêntica ao candidato 5f8a8789 aprovado na suíte, complementares e laboratórios. Segue a aplicação viva com backup.
