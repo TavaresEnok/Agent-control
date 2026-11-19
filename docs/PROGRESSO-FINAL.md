@@ -359,3 +359,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:28 UTC — QA poliglota passou em 41/41 e no laboratório adicional da imagem real com as duas linguagens. Um defeito aritmético e um controle por linguagem produziram uma falha e uma aprovação em cada uma das três passadas; após corrigir só as implementações, os quatro testes passaram três vezes. A medição registrou ramos no Python e statements no Go.
 - 19/11/2026 04:28 UTC — Trabalhador encerrou C7-R6 em e3527238 (código 0). Gerente confere a entrega.
 - 19/11/2026 04:30 UTC — A imagem poliglota fixada em 957a0817 já está no candidato de QA. O merge da prova estruturada 3ec5a0fe com a reverificação 0e8ad897 exige conciliar três suítes que evoluíram em paralelo. O worktree de QA ficou dedicado a C-EXAME-INTEGRAR. As três condições estruturadas atuais são de QA; os demais módulos ainda precisam de vínculo verificável com suas próprias medições.
+- 19/11/2026 04:30 UTC — Trabalho C-EXAME-INTEGRAR iniciado por Sol high normal em final-integracao-c2.
+- 19/11/2026 04:30 UTC — Revisor encerrou C5-R5 em d58c8e69 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:30 UTC — Revisão C7-HISTORICO iniciada por Sol high normal somente leitura em 1156ed12.
+- 19/11/2026 04:31 UTC — Arquitetura 70a8c7cc passou em 19 testes de coletor e laboratório com um caso opcional pulado. A raiz relativa usa o diretório mantido pelo kernel, a raiz vazia é recusada e a omissão de nomes não suportados fica registrada mesmo no limite. Desempenho e3527238 recebido para prova física.
