@@ -947,3 +947,7 @@ PAUSADO-COTA
 - 19/11/2026 19:06 UTC — C9-LAB-COBERTURA-PARCIAL encerrado com código 0.
 - 19/11/2026 19:07 UTC — C9-CONSTANTES-E-PRESENCA encerrado com código 0.
 - 19/11/2026 19:07 UTC — C9 reuniu 0ab3a69a e f4a9d5d0 em 6392b44f para revisão e reensaio. A fixture deve demonstrar os 16 achados e as lacunas específicas. C8 passou em 41/41; resta comprovar que um comentário de módulo ambiente depois de outra declaração não fornece uma linha local indevida.
+- 19/11/2026 19:07 UTC — trabalho-C8-PROVENIENCIA-AMBIENTE iniciado em final-c8 por Sol high normal.
+- 19/11/2026 19:07 UTC — revisor-C9-ACEITE-CONTRATO-FISICO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:07 UTC — C9-ACEITE-CONTRATO-FISICO encerrado com código 1.
+- 19/11/2026 19:08 UTC — O primeiro envio da revisão C9 incluiu por engano o histórico cumulativo de outros módulos e a CLI recusou a entrada por tamanho, antes do parecer. Reenviei o contrato com o diff exclusivo dos quatro arquivos do módulo em 8cfc03d5.
