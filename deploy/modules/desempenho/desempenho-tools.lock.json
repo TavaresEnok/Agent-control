@@ -1,0 +1,50 @@
+{
+  "baseImage": {
+    "name": "mcr.microsoft.com/playwright",
+    "version": "v1.65.1-noble",
+    "digest": "sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579",
+    "sourceUrl": "https://mcr.microsoft.com/v2/playwright/manifests/v1.65.1-noble",
+    "note": "Mesma imagem base fixada por digest usada em deploy/Dockerfile.design (Ubuntu 24.04 Noble com Node.js e Chromium em /ms-playwright)."
+  },
+  "packageLockSha256": "0b0098a015db926313cc9fa16e81631e73ba3bed72e14248eddff57797a5217c",
+  "npmDependencies": {
+    "@lhci/cli": {
+      "version": "0.16.1",
+      "integrity": "sha512-Vh3z9Xkcs4ULrl62NTF9a+c9HL9teyD+dq3TueG4p4oo9ypYbPBb3Ht4YvxHzOyr31rFaiuHqdphpnVZs5SXQw==",
+      "resolved": "https://registry.npmjs.org/@lhci/cli/-/cli-0.16.1.tgz"
+    },
+    "lighthouse": {
+      "version": "13.6.0",
+      "integrity": "sha512-2/HUPUpQyGm01VEgYCUjSlNZY7Zkhk1v3QI4c7UTbnaoRB7HF0qYMPzzaiidNf5iqw5wnmtm9LpGawKKqCfLmg==",
+      "resolved": "https://registry.npmjs.org/lighthouse/-/lighthouse-13.6.0.tgz"
+    },
+    "pg": {
+      "version": "8.23.1",
+      "integrity": "sha512-aL96AHANtWjPLDOLqnhx+ngp9+UK7ETEU8VJrDCGvsSSi/mGLcWYsS6Herg7lmaBJe4uwrfqsa7gTEFaSizDoQ==",
+      "resolved": "https://registry.npmjs.org/pg/-/pg-8.23.1.tgz"
+    }
+  },
+  "tools": [
+    {
+      "name": "k6",
+      "version": "2.4.0",
+      "url": "https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-linux-amd64.tar.gz",
+      "sha256": "5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87",
+      "sha256Source": "published",
+      "sourceUrl": "https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-checksums.txt",
+      "kind": "tar.gz",
+      "file": "k6-v2.4.0-linux-amd64.tar.gz",
+      "member": "k6-v2.4.0-linux-amd64/k6"
+    }
+  ],
+  "runtimeTools": [
+    {
+      "name": "node-cpu-prof",
+      "description": "Profiler nativo V8 do Node.js (--cpu-prof)"
+    },
+    {
+      "name": "pg_stat_statements",
+      "description": "Extensão nativa do PostgreSQL (postgresql + postgresql-contrib) para coleta de estatísticas de execução SQL"
+    }
+  ]
+}

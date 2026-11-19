@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Painel Lento (Defeito Plantado)</title>
+  <style>
+    body { font-family: sans-serif; margin: 0; padding: 16px; background: #fff; color: #111; }
+    main { padding: 24px; border: 1px solid #d4d4d8; min-height: 280px; }
+  </style>
+</head>
+<body>
+  <div id="slot-aviso"></div>
+  <main id="conteudo">
+    <h1>Resumo operacional</h1>
+    <p>Painel de exemplo com bloqueio de thread principal e deslocamento tardio de layout.</p>
+  </main>
+  <script>
+    // Tarefa longa síncrona no carregamento para elevar TBT acima do limite.
+    const inicio = performance.now();
+    let soma = 0;
+    while (performance.now() - inicio < 720) {
+      soma = (soma + 13) % 1000003;
+    }
+    // Inserção tardia sem altura reservada para gerar CLS elevado.
+    setTimeout(() => {
+      const aviso = document.createElement('div');
+      aviso.style.height = '260px';
+      aviso.style.background = '#fee2e2';
+      aviso.textContent = 'Banner inserido apos renderizacao inicial (' + soma + ')';
+      document.getElementById('slot-aviso').appendChild(aviso);
+    }, 150);
+  </script>
+</body>
+</html>
