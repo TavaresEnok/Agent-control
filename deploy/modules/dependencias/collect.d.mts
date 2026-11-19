@@ -64,8 +64,9 @@ export function analyzeLockfileAndSbom(input: {
   manifests: DiscoveredManifest[];
   lockfiles: Map<string, string>;
   sbomFiles: DiscoveredManifest[];
-  registry: {path: string; versions: Record<string, string>} | null;
+  registry: {path: string; versions: Record<string, unknown>} | null;
   ncuDetectedPackages: Set<string>;
+  mountedSbomPaths?: string[];
 }): Promise<ModuleCollectorOutput>;
 export function validateModuleOutput(doc: unknown): ModuleCollectorOutput;
 export function runCollection(options?: {
@@ -83,4 +84,14 @@ export function runCollection(options?: {
 }): Promise<ModuleCollectorOutput>;
 
 export function runAstGrepCheck(input: {sourceFiles: DiscoveredSourceFile[]; isoSrcDir: string; astGrepBin: string; astGrepVersion: string; sgConfigPath: string}): Promise<ModuleCollectorOutput>;
-export function runJscodeshiftCheck(input: {sourceFiles: DiscoveredSourceFile[]; isoSrcDir: string; isoCodemodDir: string; workRoot: string; jscodeshiftBin: string; jscodeshiftVersion: string; transformPath: string}): Promise<ModuleCollectorOutput>;
+export function runJscodeshiftCheck(input: {
+  sourceFiles: DiscoveredSourceFile[];
+  isoSrcDir: string;
+  isoCodemodDir: string;
+  workRoot: string;
+  jscodeshiftBin: string;
+  jscodeshiftVersion: string;
+  transformPath: string;
+  fileTimeoutMs?: number;
+  totalTimeoutMs?: number;
+}): Promise<ModuleCollectorOutput>;

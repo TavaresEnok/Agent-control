@@ -180,7 +180,9 @@ test('descoberta ignora symlinks e análise de lockfile + SBOM detecta defeito s
     await writeFile(join(scratch, 'package.json'), '{"name":"s","dependencies":{"hono":"^4.13.19"}}\n');
     await mkdir(join(scratch, 'src'));
     await writeFile(join(scratch, 'src', 'ok.ts'), 'export const x = 1;\n');
-    await symlink('/etc/passwd', join(scratch, 'src', 'evil.ts'));
+    const symlinkTarget = join(scratch, 'synthetic.txt');
+    await writeFile(symlinkTarget, 'synthetic');
+    await symlink(symlinkTarget, join(scratch, 'src', 'ignored.ts'));
     const discovered = await discoverRepoFiles(scratch);
     assert.equal(discovered.skippedSymlinks, 1);
     assert.equal(discovered.sourceFiles.length, 1);
@@ -296,6 +298,15 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
         '  process.exit(2);',
         '}',
         'const target = args[4];',
+        'if (!args.includes("--inspect") || !args.includes("entity")) process.exit(2);',
+        'function trace(dir) {',
+        '  for (const entry of fs.readdirSync(dir, {withFileTypes:true})) {',
+        '    const file = path.join(dir, entry.name);',
+        '    if (entry.isDirectory()) trace(file);',
+        '    else process.stderr.write("sg: entity|file|"+file+": language=TypeScript,appliedRuleCount=5\\n");',
+        '  }',
+        '}',
+        'trace(target);',
         'const serverFile = path.join(target, "src", "server.ts");',
         'const text = fs.existsSync(serverFile) ? fs.readFileSync(serverFile, "utf8") : "";',
         'if (text.includes("app.del(")) {',
@@ -326,7 +337,7 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
         '  if (orig.includes("new Buffer(")) {',
         '    fs.writeFileSync(f, orig.replace("new Buffer(payload)", "Buffer.from(payload)"));',
         '    if (process.env.AC_JSCODESHIFT_REPORT) {',
-        '      fs.appendFileSync(process.env.AC_JSCODESHIFT_REPORT, JSON.stringify({file:f,line:5,rule:"JSCODESHIFT-NODE-BUFFER-CTOR",severity:"alta",message:"new Buffer obsoleto",before:"new Buffer(payload)",after:"Buffer.from(payload)"})+"\\n");',
+        '      fs.appendFileSync(process.env.AC_JSCODESHIFT_REPORT, JSON.stringify({file:f,line:5,rule:"JSCODESHIFT-NODE-BUFFER-CTOR",severity:"alta",message:"new Buffer obsoleto",before:"new Buffer(payload)",after:"Buffer.from(payload)",review:false})+"\\n");',
         '    }',
         '  }',
         '}',
@@ -358,7 +369,7 @@ test('runCollection prova contrato CLI do ncu 23.1.1, caminho offline real, isol
     assert.equal(dirtyResult.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MINOR' && f.evidence.includes('^4.18.1')), true);
     assert.equal(dirtyResult.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-PATCH' && f.evidence.includes('^4.8.4')), true);
     assert.equal(dirtyResult.findings.some(f => f.tool === 'ast-grep' && f.rule === 'ASTGREP-EXPRESS5-APP-DEL'), true);
-    assert.equal(dirtyResult.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-BUFFER-CTOR'), true);
+    assert.equal(dirtyResult.findings.some(f => f.tool === 'jscodeshift' && f.rule === 'JSCODESHIFT-NODE-BUFFER-CTOR' && f.evidence.includes('Patch pronto')), true);
     assert.equal(dirtyResult.findings.some(f => f.tool === 'sbom-lockfile' && f.rule === 'LOCKFILE-DRIFT'), true);
 
     const cleanResult = await runCollection({
@@ -560,21 +571,38 @@ test('limites de descoberta e extensões não medidas são registrados', async (
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
-test('processos medem TSX e registram erro de parse, saída não zero e relatório limitado', async () => {
+test('processos atribuem a varredura por arquivo e distinguem sintaxe inválida, saída não zero e relatório limitado', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dep-ferramentas-'));
   try {
     const src = join(root, 'src'); const codemod = join(root, 'codemod');
     await mkdir(src); await mkdir(codemod);
-    const files = [{rel: 'view.tsx', fullPath: join(src, 'view.tsx'), ext: '.tsx'}, {rel: 'bad.js', fullPath: join(src, 'bad.js'), ext: '.js'}, {rel: 'extra.mts', fullPath: join(src, 'extra.mts'), ext: '.mts'}];
-    for (const [name, content] of [['view.tsx', 'const x = <div/>; res.send(200, x);'], ['bad.js', 'const = ;'], ['extra.mts', 'export const x = 1;']]) {
+    const files = [];
+    for (const [name, content] of Object.entries({
+      'view.tsx': 'const x = <div/>; res.send(200, x);',
+      'bad.js': 'const = ; res.send(200, x);',
+      'bad-missing.ts': 'const x = (1;',
+      'extra.mts': 'export const x = 1; res.send(200, x);',
+      'extra.cts': 'export const x = 1;',
+      'extra.cjs': 'module.exports = () => res.send(200, x);',
+      'extra.mjs': 'export const x = 1;',
+      'unmeasured.TS': 'export const x = 1;',
+    })) {
+      files.push({rel: name, fullPath: join(src, name), ext: name.slice(name.lastIndexOf('.')).toLowerCase()});
       await writeFile(join(src, name), content); await writeFile(join(codemod, name), content);
     }
     const astBin = join(moduleDir, 'node_modules/.bin/ast-grep');
     const jsBin = join(moduleDir, 'node_modules/.bin/jscodeshift');
     const ast = await runAstGrepCheck({sourceFiles: files, isoSrcDir: src, astGrepBin: astBin, astGrepVersion: '0.51.3', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
-    assert.ok(ast.findings.some(f => f.file === 'view.tsx' && f.rule.includes('SEND-STATUS')));
-    assert.ok(ast.coverage.some(c => c.detail.includes('extra.mts') && c.status === 'skipped'));
-    const js = await runJscodeshiftCheck({sourceFiles: files, isoSrcDir: src, isoCodemodDir: codemod, workRoot: root, jscodeshiftBin: jsBin, jscodeshiftVersion: '17.4.0', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')});
+    assert.deepEqual(ast.findings.map(f => f.file).sort(), ['extra.cjs', 'extra.mts', 'view.tsx']);
+    assert.ok(ast.findings.every(f => f.rule.includes('SEND-STATUS')));
+    for (const file of ['view.tsx', 'extra.mts', 'extra.cts', 'extra.cjs', 'extra.mjs']) {
+      assert.ok(ast.coverage.some(c => c.detail.startsWith(`arquivo=${file};`) && c.status === 'ok'), file);
+    }
+    for (const file of ['bad.js', 'bad-missing.ts']) {
+      assert.ok(ast.coverage.some(c => c.detail.startsWith(`arquivo=${file};`) && c.status === 'failed' && c.detail.includes('sintaxe_invalida')));
+    }
+    assert.ok(ast.coverage.some(c => c.detail.includes('unmeasured.TS') && c.status === 'skipped'));
+    const js = await runJscodeshiftCheck({sourceFiles: files.slice(0, 3), isoSrcDir: src, isoCodemodDir: codemod, workRoot: root, jscodeshiftBin: jsBin, jscodeshiftVersion: '17.4.0', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')});
     assert.ok(js.coverage.some(c => c.detail.includes('bad.js') && c.status === 'failed'));
     assert.ok(js.coverage.some(c => c.detail.includes('view.tsx') && c.status === 'ok'));
     const fake = join(root, 'fake.cjs');
@@ -642,4 +670,283 @@ test('padrões ambíguos requerem revisão e entrada ausente produz JSON', async
       assert.equal(output.coverage[0].status, 'failed'); assert.match(output.coverage[0].detail, /REPO_MISSING/); return true;
     });
   } finally { await rm(root, {recursive: true, force: true}); }
+});
+
+test('lock do workspace prevalece e o achado aponta para a entrada efetivamente resolvida', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-workspace-'));
+  try {
+    await mkdir(join(root, 'packages/a'), {recursive: true});
+    await writeFile(join(root, 'package.json'), '{"workspaces":{"packages":["packages/*"]}}');
+    await writeFile(join(root, 'packages/a/package.json'),
+      '{"dependencies":{"foo":"^2.0.0","outdated":"^1.0.0","broken":"^2.0.0","ghost":"^1.0.0"}}');
+    await writeFile(join(root, 'packages/a/package-lock.json'),
+      '{"packages":{"node_modules/foo":{"version":"2.0.0"},"node_modules/broken":{"version":"2.0.0"}}}');
+
+    const lockText = [
+      '{ "lockfileVersion": 2, "packages": {',
+      '  "node_modules/foo": {"version":"2.2.0"}, "node_modules/outdated": {"version":"2.0.0"},',
+      '  "packages/a/node_modules/foo": {"version":"1.0.0"},',
+      '  "packages/a/node_modules/outdated": {"version":"1.0.0"},',
+      '  "packages/a/node_modules/broken": 1,',
+      '  "node_modules/broken": {"version":"2.0.0"}',
+      '}, "dependencies": {"ghost": {"version":"1.0.0"}} }',
+    ].join('\n');
+    await writeFile(join(root, 'package-lock.json'), lockText);
+    const found = await discoverRepoFiles(root);
+    const result = await analyzeLockfileAndSbom({...found, mountedSbomPaths: [], ncuDetectedPackages: new Set(),
+      registry: {path: '', versions: {foo: '2.2.0', outdated: '2.0.0'}}});
+    const mismatch = result.findings.find(finding => finding.rule === 'LOCKFILE-VERSION-MISMATCH');
+    assert.equal(mismatch?.file, 'package-lock.json');
+    assert.equal(mismatch?.line, 3);
+    assert.match(mismatch?.evidence ?? '', /packages\/a\/node_modules\/foo/);
+    const outdated = result.findings.find(finding => finding.rule === 'LOCKFILE-OUTDATED-RESOLVED');
+    assert.equal(outdated?.line, 4);
+    assert.match(outdated?.evidence ?? '', /packages\/a\/node_modules\/outdated/);
+    const drift = result.findings.filter(finding => finding.rule === 'LOCKFILE-DRIFT');
+    assert.equal(drift.length, 1);
+    assert.match(drift[0].evidence, /ghost/);
+    assert.ok(result.coverage.some(row => row.status === 'failed' &&
+      row.detail.includes('entrada=packages/a/node_modules/broken; erro=entrada_lockfile_invalida')));
+    assert.ok(result.coverage.every(row => !row.detail.includes('arquivo=packages/a/package-lock.json')));
+
+    await rm(join(root, 'package-lock.json'));
+    const withoutRoot = await discoverRepoFiles(root);
+    const missing = await analyzeLockfileAndSbom({...withoutRoot, mountedSbomPaths: [], registry: null, ncuDetectedPackages: new Set()});
+    assert.ok(missing.findings.some(finding => finding.rule === 'LOCKFILE-MISSING' &&
+      finding.file === 'packages/a/package.json' && finding.evidence.endsWith('diretório raiz.')));
+
+    await writeFile(join(root, 'package-lock.json'), '{"packages":{"node_modules/foo":{"version":"2.0.0"}}}');
+    await writeFile(join(root, 'npm-shrinkwrap.json'), lockText);
+    const withShrinkwrap = await discoverRepoFiles(root);
+    const byShrinkwrap = await analyzeLockfileAndSbom({...withShrinkwrap, mountedSbomPaths: [], registry: null, ncuDetectedPackages: new Set()});
+    assert.ok(byShrinkwrap.findings.some(finding => finding.rule === 'LOCKFILE-VERSION-MISMATCH' &&
+      finding.file === 'npm-shrinkwrap.json' && finding.line === 3));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('ncu rejeita resultados inválidos por manifesto e aceita o alias confirmado pelo registro offline', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-ncu-output-'));
+  try {
+    for (const name of ['bad-type', 'bad-name', 'bad-range', 'bad-registry', 'valid']) {
+      await mkdir(join(root, name));
+      await writeFile(join(root, name, 'package.json'),
+        JSON.stringify({name, dependencies: {foo: '^1.0.0', repo: 'github:example/test#semver:^1.0.0'}}));
+    }
+    const registryPath = join(root, 'registry.json');
+    await writeFile(registryPath, '{"foo":"2.0.0","repo":"2.0.0"}');
+    const fake = join(root, 'ncu-fixture');
+    await writeFile(fake, [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'const file = process.argv[process.argv.indexOf("--packageFile") + 1];',
+      'const {name, dependencies} = JSON.parse(fs.readFileSync(file));',
+      'if (dependencies.repo || process.env.NPM_CONFIG_OFFLINE !== "true") process.exit(4);',
+      'const messages = {"bad-type":{foo:{version:"2.0.0"},other:"2.0.0"},"bad-name":{foo:"^2.0.0",other:"2.0.0"},',
+      '  "bad-range":{foo:"nonsense"},"bad-registry":{foo:"^999.0.0"},valid:{foo:"^2.0.0"}};',
+      'process.stdout.write(JSON.stringify(messages[name]));',
+    ].join('\n'));
+    await chmod(fake, 0o755);
+    const output = await runCollection({repoRoot: root, registryPath, ncuBin: fake,
+      ncuVersion: 'sintetica', astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
+    for (const name of ['bad-type', 'bad-name', 'bad-range', 'bad-registry']) {
+      const rows = output.coverage.filter(row => row.tool === 'npm-check-updates' && row.detail.startsWith(`arquivo=${name}/package.json;`));
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].status, 'failed');
+      assert.match(rows[0].detail, /Saída JSON inválida/);
+    }
+    assert.equal(output.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'ok' &&
+      row.detail.includes('arquivo=valid/package.json')), true);
+    assert.deepEqual(output.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => f.file), ['valid/package.json']);
+
+    const aliasRepo = join(root, 'alias');
+    await mkdir(aliasRepo);
+    await writeFile(join(aliasRepo, 'package.json'), '{"dependencies":{"local-name":"npm:foo@^1.0.0"}}');
+    const real = await runCollection({repoRoot: aliasRepo, registryPath,
+      ncuBin: join(moduleDir, 'node_modules/.bin/ncu'), ncuVersion: '23.1.1',
+      astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
+    assert.ok(real.findings.some(f => f.rule === 'NCU-OUTDATED-MAJOR' && f.evidence.includes('npm:foo@^2.0.0')));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('CycloneDX preserva componentes aninhados e distingue inventário vazio, entradas inválidas e metadados', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-cyclonedx-'));
+  try {
+    const report = (name: string, doc: unknown) => writeFile(join(root, name), JSON.stringify(doc));
+    await report('bom-empty', {bomFormat: 'CycloneDX'});
+    await report('bom-invalid', {bomFormat: 'CycloneDX', components: [
+      null, {}, 42,
+      {name: 'bad-children', components: {}},
+      {name: 'purl-error', purl: 'pkg:npm/%XX@1.0.0'},
+      {name: 'conflict', version: '2.0.0', purl: 'pkg:npm/conflict@1.0.0'},
+      {name: 'assembly', components: [{name: 'example', purl: 'pkg:npm/%40scope/example@1.0.0?arch=all'}]},
+    ]});
+    await report('bom-unavailable', {bomFormat: 'CycloneDX', components: [
+      {name: 'invalid', purl: 'pkg:npm/invalid@1.0.0'},
+      {name: 'absent', purl: 'pkg:npm/absent@1.0.0'},
+      {name: 'other', purl: 'pkg:pypi/other@2', version: '2'},
+    ]});
+    const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],
+      sbomFiles: ['bom-empty', 'bom-invalid', 'bom-unavailable'].map(rel => ({rel, fullPath: join(root, rel)})),
+      ncuDetectedPackages: new Set(), registry: {path: '', versions: {'@scope/example': '2.0.0', invalid: 'inválida'}}});
+    const empty = result.coverage.find(row => row.detail.startsWith('sbom=bom-empty;'));
+    assert.equal(empty?.status, 'ok');
+    assert.match(empty?.detail ?? '', /componentes=0/);
+    const invalid = result.coverage.find(row => row.detail.startsWith('sbom=bom-invalid;'));
+    assert.equal(invalid?.status, 'failed');
+    assert.match(invalid?.detail ?? '', /componente_invalido=3/);
+    assert.match(invalid?.detail ?? '', /componentes_aninhados_invalidos=1/);
+    assert.match(invalid?.detail ?? '', /purl_npm_invalida=1/);
+    assert.match(invalid?.detail ?? '', /versao_componente_invalida=1/);
+    assert.deepEqual(result.findings.map(f => f.file), ['bom-invalid']);
+    assert.match(result.findings[0].evidence, /@scope\/example@1.0.0 -> 2.0.0/);
+    const unavailable = result.coverage.find(row => row.detail.startsWith('sbom=bom-unavailable;'));
+    assert.equal(unavailable?.status, 'failed');
+    assert.match(unavailable?.detail ?? '', /sem_metadados=2; metadados_invalidos=1/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('limites de bytes preservam provas de outros SBOMs e distinguem artefatos desaparecidos', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-sbom-bytes-'));
+  try {
+    const large = Buffer.alloc(19 * 1024 * 1024, ' ');
+    large.write('{"bomFormat":"CycloneDX"}');
+    for (const name of ['volume-a', 'volume-b', 'volume-c', 'volume-d']) {
+      await writeFile(join(root, name), large);
+    }
+    await writeFile(join(root, 'last'), '{"bomFormat":"CycloneDX","components":[{"name":"foo","purl":"pkg:npm/foo@1.0.0"}]}');
+    for (const name of ['oversized-sbom', 'package-lock.json']) {
+      const file = join(root, name);
+      await writeFile(file, '');
+      await truncate(file, 21 * 1024 * 1024);
+    }
+    await writeFile(join(root, 'package.json'), '{"dependencies":{"foo":"^1.0.0"}}');
+    await mkdir(join(root, 'gone'));
+    await writeFile(join(root, 'gone/package.json'), '{"dependencies":{"foo":"^1.0.0"}}');
+    const found = await discoverRepoFiles(root);
+    found.lockfiles.set('gone/package-lock.json', join(root, 'gone/package-lock.json'));
+    const result = await analyzeLockfileAndSbom({...found, mountedSbomPaths: [join(root, 'no-mount')],
+      sbomFiles: ['volume-a', 'volume-b', 'volume-c', 'volume-d', 'oversized-sbom', 'gone-sbom', 'last']
+        .map(rel => ({rel, fullPath: join(root, rel)})),
+      ncuDetectedPackages: new Set(), registry: {path: '', versions: {foo: '2.0.0'}}});
+    for (const file of ['arquivo=package-lock.json;', 'sbom=oversized-sbom;']) {
+      assert.ok(result.coverage.some(row => row.status === 'skipped' && row.detail.startsWith(file) &&
+        row.detail.includes('motivo=limite_bytes;')));
+    }
+    assert.ok(result.coverage.some(row => row.status === 'skipped' &&
+      row.detail.startsWith('sbom=volume-d;') && row.detail.includes('motivo=limite_bytes_total;')));
+    for (const file of ['arquivo=gone/package-lock.json;', 'sbom=gone-sbom;']) {
+      assert.ok(result.coverage.some(row => row.status === 'failed' && row.detail.startsWith(file) &&
+        row.detail.includes('erro=arquivo_ausente')));
+    }
+    assert.ok(result.coverage.every(row => !row.detail.includes('no-mount')));
+    assert.deepEqual(result.findings.map(f => f.file), ['last']);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('CycloneDX limita componentes agregados e conserva comparações anteriores ao limite', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-sbom-components-'));
+  try {
+    const first = {name: 'foo', purl: 'pkg:npm/foo@1.0.0'};
+    const other = {name: 'non-npm', purl: 'pkg:pypi/non-npm@1.0.0'};
+    const files = ['first', 'later'].map(rel => ({rel, fullPath: join(root, rel)}));
+    await writeFile(files[0].fullPath, JSON.stringify({
+      bomFormat: 'CycloneDX',
+      components: [first, ...Array.from({length: 19_999}, () => other)],
+    }));
+    await writeFile(files[1].fullPath, JSON.stringify({bomFormat: 'CycloneDX', components: [first]}));
+    const result = await analyzeLockfileAndSbom({manifests: [], lockfiles: new Map(), mountedSbomPaths: [],
+      sbomFiles: files, ncuDetectedPackages: new Set(), registry: {path: '', versions: {foo: '2.0.0'}}});
+    assert.deepEqual(result.findings.map(f => f.file), ['first']);
+    assert.ok(result.coverage.some(row => row.status === 'ok' && row.detail.includes('sbom=first; componentes=20000;')));
+    assert.ok(result.coverage.some(row => row.status === 'skipped' &&
+      row.detail.includes('sbom=later;') && row.detail.includes('motivo=limite_componentes_total')));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('jscodeshift distingue eventos incompletos, alterações sem prova, relatório ausente e timeout real', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-codemod-output-'));
+  try {
+    const isoSrcDir = join(root, 'src');
+    const isoCodemodDir = join(root, 'dst');
+    await mkdir(isoSrcDir);
+    await mkdir(isoCodemodDir);
+    const sourceFiles = ['incomplete.js', 'unchanged.js', 'gone.js', 'exit.js', 'hang.js', 'good.js']
+      .map(rel => ({rel, fullPath: join(isoSrcDir, rel), ext: '.js'}));
+    for (const source of sourceFiles) {
+      await writeFile(source.fullPath, 'original();\n');
+      await copyFile(source.fullPath, join(isoCodemodDir, source.rel));
+    }
+    const jscodeshiftBin = join(root, 'codemod-fixture');
+    await writeFile(jscodeshiftBin, [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'const file = process.argv.at(-1), report = process.env.AC_JSCODESHIFT_REPORT;',
+      'const event = {file,line:1,rule:"TEST-RULE",severity:"media",message:"synthetic",before:"original()",after:"different()",review:false};',
+      'if (file.endsWith("/incomplete.js")) fs.writeFileSync(report, JSON.stringify({file}));',
+      'if (file.endsWith("/unchanged.js")) fs.writeFileSync(report, JSON.stringify(event));',
+      'if (file.endsWith("/gone.js")) fs.unlinkSync(report);',
+      'if (file.endsWith("/exit.js")) process.exit(7);',
+      'if (file.endsWith("/hang.js")) { fs.writeFileSync(file + ".started", "yes"); setInterval(() => {}, 100); }',
+      'if (file.endsWith("/good.js")) fs.writeFileSync(report, JSON.stringify({...event,review:true}));',
+    ].join('\n'));
+    await chmod(jscodeshiftBin, 0o755);
+    const options = {sourceFiles, isoSrcDir, isoCodemodDir, workRoot: root, jscodeshiftBin,
+      jscodeshiftVersion: 'sintetica', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')};
+    const result = await runJscodeshiftCheck({...options, fileTimeoutMs: 1000});
+    const details = new Map(result.coverage.slice(1).map(row => [row.detail.split(';')[0], row]));
+    for (const [file, reason] of [['incomplete.js', 'relatorio_invalido'], ['unchanged.js', 'relatorio_invalido'],
+      ['gone.js', 'relatorio_ilegivel'], ['exit.js', 'execucao; codigo=7'], ['hang.js', 'timeout; timeout_ms=1000; prazo=arquivo']]) {
+      const row = details.get(`arquivo=${file}`);
+      assert.equal(row?.status, 'failed', file);
+      assert.ok(row?.detail.includes(`erro=${reason}`), row?.detail);
+    }
+    assert.equal(await readFile(join(isoCodemodDir, 'hang.js.started'), 'utf8'), 'yes');
+    assert.deepEqual(result.findings.map(f => f.file), ['good.js']);
+    assert.match(result.findings[0].evidence, /Revisão necessária/);
+
+    const total = await runJscodeshiftCheck({...options, sourceFiles: sourceFiles.slice(-2), totalTimeoutMs: 500});
+    assert.ok(total.coverage.some(row => row.status === 'failed' && /erro=timeout;.*prazo=total/.test(row.detail)));
+    assert.ok(total.coverage.some(row => row.status === 'skipped' && row.detail.includes('arquivo=good.js; motivo=limite_tempo_total')));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('jscodeshift limita achados e bytes agregados mesmo com relatórios individuais dentro do limite', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-codemod-limits-'));
+  try {
+    const sourceFiles = Array.from({length: 10}, (_, i) => ({rel: `file-${i}.js`, fullPath: join(root, `file-${i}.js`), ext: '.js'}));
+    const jscodeshiftBin = join(root, 'codemod-fixture');
+    const makeReport = [
+      '#!/usr/bin/env node',
+      'const fs = require("node:fs");',
+      'const event = {file:process.argv.at(-1),line:1,rule:"TEST-RULE",severity:"media",message:"synthetic",before:BEFORE,review:true};',
+      'fs.writeFileSync(process.env.AC_JSCODESHIFT_REPORT, (JSON.stringify(event)+"\\n").repeat(REPEAT));',
+    ].join('\n');
+    const options = {sourceFiles, isoSrcDir: root, isoCodemodDir: root, workRoot: root, jscodeshiftBin,
+      jscodeshiftVersion: 'sintetica', transformPath: join(moduleDir, 'codemods/upgrade-rewrites.cjs')};
+
+    await writeFile(jscodeshiftBin, makeReport.replace('BEFORE', '"short"').replace('REPEAT', '3000'), {mode: 0o755});
+    const count = await runJscodeshiftCheck(options);
+    assert.equal(count.findings.length, 5000);
+    assert.equal(count.findings.filter(f => f.file === 'file-1.js').length, 2000);
+    assert.ok(count.coverage.some(row => row.status === 'skipped' && row.detail.includes('arquivo=file-2.js; motivo=limite_achados_total')));
+
+    await writeFile(jscodeshiftBin, makeReport.replace('BEFORE', '"x".repeat(2_000_000)').replace('REPEAT', '1'));
+    const bytes = await runJscodeshiftCheck(options);
+    assert.equal(bytes.findings.length, 8);
+    assert.ok(bytes.coverage.some(row => row.status === 'skipped' && row.detail.includes('arquivo=file-8.js; motivo=limite_bytes_total')));
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
 });

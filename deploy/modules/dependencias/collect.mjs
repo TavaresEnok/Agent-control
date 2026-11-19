@@ -1,23 +1,27 @@
 import {execFile as execFileCb} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {constants as fsConstants} from 'node:fs';
 import {
   copyFile,
   lstat,
   mkdir,
   mkdtemp,
-  readFile,
+  open,
   readdir,
   rm,
   writeFile,
 } from 'node:fs/promises';
+import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
-import {dirname, extname, join, posix, relative, resolve, sep} from 'node:path';
+import {dirname, extname, isAbsolute, join, posix, relative, resolve, sep} from 'node:path';
+import {performance} from 'node:perf_hooks';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import semver from 'semver';
 import {minimatch} from 'minimatch';
 
 const execFile = promisify(execFileCb);
+const require = createRequire(import.meta.url);
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -26,6 +30,11 @@ const MAX_MANIFESTS = 50;
 const MAX_SOURCE_BYTES = 128 * 1024 * 1024;
 const MAX_SOURCE_FILES = 2000;
 const TOOL_TIMEOUT_MS = 120_000;
+const MAX_CODEMOD_TIME_MS = 600_000;
+const MAX_CODEMOD_REPORT_BYTES = 16 * 1024 * 1024;
+const MAX_CODEMOD_FINDINGS = 5_000;
+const MAX_SBOM_BYTES = 64 * 1024 * 1024;
+const MAX_SBOM_COMPONENTS = 20_000;
 
 const IGNORED_DIRS = new Set([
   '.git',
@@ -45,7 +54,8 @@ const IGNORED_DIRS = new Set([
 ]);
 
 const JS_TS_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts']);
-const LOCKFILE_NAMES = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml'];
+const NPM_LOCKFILE_NAMES = ['npm-shrinkwrap.json', 'package-lock.json'];
+const LOCKFILE_NAMES = [...NPM_LOCKFILE_NAMES, 'yarn.lock', 'pnpm-lock.yaml'];
 const SBOM_CANDIDATE_FILES = [
   '/databases/syft.cdx.json',
   '/databases/sbom.cdx.json',
@@ -55,6 +65,14 @@ const SBOM_CANDIDATE_FILES = [
 
 const VALID_STATUS = new Set(['ok', 'failed', 'skipped']);
 const VALID_SEVERITY = new Set(['alta', 'media', 'baixa', 'informativa']);
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function nonemptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
 
 /** Normalizes any path to a clean repository-relative POSIX path without traversal. */
 export function toRepoRelPath(rawPath, fallback = 'package.json') {
@@ -69,15 +87,46 @@ export function toRepoRelPath(rawPath, fallback = 'package.json') {
   return cleaned;
 }
 
+/** Reads from the validated descriptor and keeps limits distinct from absence and I/O failure. */
+async function readArtifact(filePath, maxBytes, remainingBytes = maxBytes) {
+  try {
+    const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile()) return {kind: 'unreadable'};
+      if (info.size > maxBytes) return {kind: 'fileLimit'};
+      if (info.size > remainingBytes) return {kind: 'totalLimit'};
+      const buffer = Buffer.allocUnsafe(info.size + 1);
+      let bytes = 0;
+      while (bytes < buffer.length) {
+        const {bytesRead} = await handle.read(buffer, bytes, buffer.length - bytes, null);
+        if (bytesRead === 0) break;
+        bytes += bytesRead;
+      }
+      if (bytes > maxBytes) return {kind: 'fileLimit'};
+      if (bytes > remainingBytes) return {kind: 'totalLimit'};
+      if (bytes !== info.size) return {kind: 'unreadable'};
+      return {kind: 'ok', content: buffer.toString('utf8', 0, bytes), bytes};
+    } finally {
+      await handle.close();
+    }
+  } catch (err) {
+    return {kind: err?.code === 'ENOENT' ? 'missing' : 'unreadable'};
+  }
+}
+
 /** Reads a regular non-symlink file bounded by maxBytes. Returns null if rejected or missing. */
 export async function readSafeRegularFile(filePath, maxBytes = MAX_FILE_BYTES) {
-  try {
-    const info = await lstat(filePath);
-    if (info.isSymbolicLink() || !info.isFile() || info.size > maxBytes) return null;
-    return await readFile(filePath, 'utf8');
-  } catch {
-    return null;
-  }
+  return (await readArtifact(filePath, maxBytes)).content ?? null;
+}
+
+function registryVersion(registry, pkg) {
+  const versions = registry?.versions;
+  if (!versions || !Object.hasOwn(versions, pkg)) return {kind: 'missing'};
+  const version = versions[pkg];
+  return typeof version === 'string' && semver.valid(version)
+    ? {kind: 'ok', version}
+    : {kind: 'invalid'};
 }
 
 /** Reads installed tool version from its package.json or falls back to binary --version. */
@@ -397,6 +446,24 @@ async function resolveRegistrySnapshot(customPath) {
   return null;
 }
 
+function ncuSpecifier(spec, onlineMode) {
+  const alias = /^npm:((?:@[^/]+\/)?[^@/]+)@(.+)$/.exec(spec);
+  const hash = onlineMode && !alias && spec.indexOf('#');
+  let range = alias ? alias[2] : spec;
+  let source = alias ? `npm:${alias[1]}` : '';
+  if (hash > 0) {
+    try {
+      range = decodeURIComponent(spec.slice(hash + 1)).replace(/^semver:/, '');
+      source = spec.slice(0, hash + 1);
+    } catch {
+      return null;
+    }
+  }
+  return nonemptyString(range) && semver.validRange(range) !== null
+    ? {range, source, registryName: alias?.[1]}
+    : null;
+}
+
 /** Executes npm-check-updates safely on isolated copies of package.json files. */
 export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVersion, onlineMode}) {
   const coverage = [];
@@ -440,6 +507,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
   let totalDeps = 0;
   let totalMatched = 0;
   let totalMissing = 0;
+  let totalUnsupported = 0;
   let totalOutdated = 0;
   let totalOnlineChecked = 0;
   let toolFailed = Boolean(registry?.error);
@@ -499,29 +567,16 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     let fileRegistryMatches = 0;
     let fileMissingCount = 0;
     let fileInvalidMeta = 0;
+    let fileUnsupported = 0;
 
     for (const sec of sections) {
       const block = parsed[sec];
       if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
-      sanitized[sec] = {};
+      sanitized[sec] = Object.create(null);
       for (const [pkg, spec] of Object.entries(block)) {
         if (typeof spec !== 'string') continue;
-        sanitized[sec][pkg] = spec;
         fileDepCount += 1;
         totalDeps += 1;
-        if (!depLocations.has(pkg)) depLocations.set(pkg, []);
-        depLocations.get(pkg).push({section: sec, spec});
-        if (!onlineMode) {
-          if (registry && Object.hasOwn(registry.versions, pkg) && typeof registry.versions[pkg] === 'string' && semver.valid(registry.versions[pkg])) {
-            fileRegistryMatches += 1;
-
-          } else {
-            fileMissingCount += 1;
-            if (registry && Object.hasOwn(registry.versions, pkg)) fileInvalidMeta += 1;
-            totalMissing += 1;
-            fileMissingSet.add(pkg);
-          }
-        }
         if (isUnpinnedSpecifier(spec)) {
           const line = findLineInPackageJson(raw, pkg, sec);
           findings.push({
@@ -533,6 +588,28 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
             message: `Dependência "${pkg}" usa faixa não fixada ("${spec}"), sujeita a atualizações quebradoras ou não reproduzíveis.`,
             evidence: `${sec}: "${pkg}": "${spec}"`,
           });
+        }
+        const current = ncuSpecifier(spec, onlineMode);
+        if (!onlineMode && !current) {
+          fileUnsupported += 1;
+          totalUnsupported += 1;
+          continue;
+        }
+        sanitized[sec][pkg] = spec;
+        if (!depLocations.has(pkg)) depLocations.set(pkg, []);
+        const entry = {section: sec, spec, current};
+        depLocations.get(pkg).push(entry);
+        if (!onlineMode) {
+          const meta = registryVersion(registry, current.registryName ?? pkg);
+          if (meta.kind === 'ok') {
+            fileRegistryMatches += 1;
+            entry.latest = meta.version;
+          } else {
+            fileMissingCount += 1;
+            if (meta.kind === 'invalid') fileInvalidMeta += 1;
+            totalMissing += 1;
+            fileMissingSet.add(pkg);
+          }
         }
       }
     }
@@ -569,6 +646,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
           TMPDIR: workRoot,
           NO_UPDATE_NOTIFIER: '1',
           NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+          ...(!onlineMode && {NPM_CONFIG_OFFLINE: 'true'}),
         },
       });
       ncuStdout = res.stdout;
@@ -589,14 +667,22 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
       continue;
     }
 
-    let upgraded;
+    const updates = [];
     try {
       if (!ncuStdout.trim()) throw new Error('saída vazia');
-      upgraded = JSON.parse(ncuStdout);
-      if (!upgraded || typeof upgraded !== 'object' || Array.isArray(upgraded)) throw new Error('raiz inválida');
-    } catch {
+      const upgraded = JSON.parse(ncuStdout);
+      if (!isRecord(upgraded)) throw new Error('raiz inválida');
+      for (const [pkg, targetSpec] of Object.entries(upgraded)) {
+        const target = typeof targetSpec === 'string' ? ncuSpecifier(targetSpec, onlineMode) : null;
+        const entries = target && depLocations.get(pkg)?.filter(entry => entry.current?.source === target.source &&
+          entry.spec !== targetSpec &&
+          (onlineMode || semver.satisfies(entry.latest, target.range, {includePrerelease: true})));
+        if (!entries?.length) throw new Error(`atualização inválida para ${pkg}`);
+        updates.push({pkg, entries, targetSpec, targetRange: target.range});
+      }
+    } catch (err) {
       toolFailed = true;
-      failMessage = 'Saída JSON inválida de npm-check-updates.';
+      failMessage = `Saída JSON inválida de npm-check-updates: ${err.message.slice(0, 150)}`;
       coverage.push({
         tool: 'npm-check-updates',
         version: ncuVersion,
@@ -609,11 +695,9 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     totalMatched += fileRegistryMatches;
     if (onlineMode) totalOnlineChecked += fileDepCount;
     let fileOutdated = 0;
-    for (const [pkg, targetSpec] of Object.entries(upgraded)) {
-      if (typeof targetSpec !== 'string') continue;
-      const entries = depLocations.get(pkg) || [{section: 'dependencies', spec: ''}];
+    for (const {pkg, entries, targetSpec, targetRange} of updates) {
       for (const entry of entries) {
-        const risk = classifySemverRisk(entry.spec, targetSpec);
+        const risk = classifySemverRisk(entry.current.range, targetRange);
         const line = findLineInPackageJson(raw, pkg, entry.section);
         fileOutdated += 1;
         totalOutdated += 1;
@@ -630,12 +714,16 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
       }
     }
 
+    if (fileUnsupported > 0) {
+      coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'skipped',
+        detail: `arquivo=${manifest.rel}; faixas_nao_verificadas=${fileUnsupported}; motivo=faixa_nao_semver_offline; prova_parcial=true`});
+    }
     if (!onlineMode && fileDepCount > 0 && fileRegistryMatches === 0) {
       coverage.push({
         tool: 'npm-check-updates',
         version: ncuVersion,
         status: 'skipped',
-        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=0; sem_metadados=${fileMissingCount}; desatualizadas=0; motivo=nenhuma_dependencia_no_registro_offline`,
+        detail: `arquivo=${manifest.rel}; dependencias=${fileDepCount}; verificadas_registro=0; sem_metadados=${fileMissingCount}; faixas_nao_verificadas=${fileUnsupported}; desatualizadas=0; motivo=${fileMissingCount ? 'nenhuma_dependencia_no_registro_offline' : 'faixas_nao_semver_offline'}`,
       });
     } else {
       coverage.push({
@@ -669,7 +757,7 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
     summaryDetail = failMessage;
   } else if (!onlineMode && totalDeps > 0 && totalMatched === 0) {
     summaryStatus = 'skipped';
-    summaryDetail = `manifestos=${manifests.length}; dependencias=${totalDeps}; verificadas_registro=0; sem_metadados=${totalMissing}; desatualizadas=${totalOutdated}; modo=offline-json; motivo=nenhuma_dependencia_no_registro_offline`;
+    summaryDetail = `manifestos=${manifests.length}; dependencias=${totalDeps}; verificadas_registro=0; sem_metadados=${totalMissing}; faixas_nao_verificadas=${totalUnsupported}; desatualizadas=${totalOutdated}; modo=offline-json; motivo=${totalMissing ? 'nenhuma_dependencia_no_registro_offline' : 'faixas_nao_semver_offline'}`;
   }
 
   coverage.unshift({
@@ -703,16 +791,18 @@ export function parseAstGrepJson(rawStdout, srcRootDir) {
   const parsed = JSON.parse(trimmed);
   if (!Array.isArray(parsed)) throw new Error('Saída ast-grep não é um array JSON.');
 
-  const prefix = srcRootDir.endsWith(sep) ? srcRootDir : `${srcRootDir}${sep}`;
   const findings = [];
   for (const item of parsed) {
-    if (!item || typeof item !== 'object') continue;
-    const rawFile = typeof item.file === 'string' ? item.file : '';
-    const stripped = rawFile.startsWith(prefix) ? rawFile.slice(prefix.length) : rawFile;
-    const file = toRepoRelPath(stripped, 'src');
-    const zeroLine = item.range?.start?.line;
-    const line = typeof zeroLine === 'number' && Number.isInteger(zeroLine) && zeroLine >= 0 ? zeroLine + 1 : 1;
-    const ruleId = String(item.ruleId || 'ast-grep-rule')
+    const zeroLine = item?.range?.start?.line;
+    if (!isRecord(item) || !nonemptyString(item.file) || item.file.includes('\0') ||
+        !nonemptyString(item.ruleId) || !Number.isSafeInteger(zeroLine) || zeroLine < 0) {
+      throw new Error('Diagnóstico ast-grep inválido.');
+    }
+    const file = relative(srcRootDir, resolve(srcRootDir, item.file)).split(sep).join('/');
+    if (!file || isAbsolute(file) || file.split('/').includes('..')) {
+      throw new Error('Diagnóstico ast-grep fora da cópia de análise.');
+    }
+    const ruleId = item.ruleId
       .replace(/-(ts|tsx|js|jsx)$/i, '')
       .toUpperCase();
     const rule = `ASTGREP-${ruleId}`;
@@ -726,13 +816,19 @@ export function parseAstGrepJson(rawStdout, srcRootDir) {
       tool: 'ast-grep',
       rule,
       file,
-      line,
+      line: zeroLine + 1,
       severity,
       message,
       evidence: evidence.slice(0, 600),
     });
   }
   return findings;
+}
+
+function sourceParser(ext) {
+  if (ext === '.tsx') return 'tsx';
+  if (['.ts', '.mts', '.cts'].includes(ext)) return 'ts';
+  return 'babel';
 }
 
 /** Runs ast-grep scan on isolated copy of JS/TS files. */
@@ -757,7 +853,8 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
   try {
     const res = await execFile(
       astGrepBin,
-      ['scan', '--config', sgConfigPath, '--json=compact', isoSrcDir],
+      ['scan', '--config', sgConfigPath, '--json=compact', isoSrcDir, '--inspect', 'entity',
+        '--no-ignore', 'hidden', '--no-ignore', 'dot', '--no-ignore', 'vcs', '--no-ignore', 'global', '--no-ignore', 'exclude'],
       {
         timeout: TOOL_TIMEOUT_MS,
         maxBuffer: 20 * 1024 * 1024,
@@ -797,10 +894,12 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
     return {coverage, findings: []};
   }
 
+  const expected = new Set(sourceFiles.map(src => src.rel));
   try {
     if (!stdout.trim()) throw new Error('Saída JSON vazia do ast-grep');
     findings = parseAstGrepJson(stdout, isoSrcDir);
     if (exitCode === 1 && findings.length === 0) throw new Error('ast-grep retornou erro sem diagnósticos');
+    if (findings.some(f => !expected.has(f.file))) throw new Error('Diagnóstico ast-grep sem arquivo correspondente.');
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Saída JSON inválida do ast-grep';
     coverage.push({
@@ -812,30 +911,102 @@ export async function runAstGrepCheck({sourceFiles, isoSrcDir, astGrepBin, astGr
     return {coverage, findings: []};
   }
 
-  const countByFile = new Map();
+  const scanned = new Set();
+  for (const entry of stderr.split(/\r?\n/)) {
+    const match = /^sg: entity\|file\|(.+): language=[^,]+,appliedRuleCount=(\d+)$/.exec(entry);
+    if (match && Number(match[2]) > 0) scanned.add(match[1]);
+  }
+  const findingsByFile = new Map();
   for (const f of findings) {
-    countByFile.set(f.file, (countByFile.get(f.file) ?? 0) + 1);
+    if (!findingsByFile.has(f.file)) findingsByFile.set(f.file, []);
+    findingsByFile.get(f.file).push(f);
   }
 
-  coverage.push({
-    tool: 'ast-grep',
-    version: astGrepVersion,
-    status: 'ok',
-    detail: `arquivos=${sourceFiles.length}; achados=${findings.length}`,
-  });
+  const getParser = require('jscodeshift/src/getParser');
+  const accepted = [];
+  let failures = 0;
+  let skipped = 0;
   for (const src of sourceFiles) {
-    const supported = ['.js', '.jsx', '.ts', '.tsx'].includes(src.ext);
-    coverage.push({
-      tool: 'ast-grep', version: astGrepVersion,
-      status: supported ? 'ok' : 'skipped',
-      detail: supported ? `arquivo=${src.rel}; achados=${countByFile.get(src.rel) ?? 0}` : `arquivo=${src.rel}; motivo=extensao_sem_regras_aplicaveis`,
-    });
+    const target = resolve(isoSrcDir, src.rel);
+    const row = {tool: 'ast-grep', version: astGrepVersion};
+    const fileFindings = findingsByFile.get(src.rel) ?? [];
+    if (!scanned.has(target)) {
+      if (fileFindings.length) {
+        failures += 1;
+        coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=achado_sem_prova_de_varredura`});
+      } else {
+        skipped += 1;
+        coverage.push({...row, status: 'skipped', detail: `arquivo=${src.rel}; motivo=varredura_nao_confirmada; prova_parcial=true`});
+      }
+      continue;
+    }
+    const content = await readSafeRegularFile(target);
+    try {
+      if (content === null) throw new Error('fonte_ilegivel');
+      getParser(sourceParser(src.ext)).parse(content);
+    } catch (err) {
+      failures += 1;
+      const reason = content === null ? 'fonte_ilegivel' : `sintaxe_invalida; detalhe=${err.message.slice(0, 150)}`;
+      coverage.push({...row, status: 'failed', detail: `arquivo=${src.rel}; erro=${reason}`});
+      continue;
+    }
+    for (const finding of fileFindings) accepted.push(finding);
+    coverage.push({...row, status: 'ok', detail: `arquivo=${src.rel}; achados=${fileFindings.length}`});
   }
 
-  return {coverage, findings};
+  coverage.unshift({tool: 'ast-grep', version: astGrepVersion,
+    status: failures ? 'failed' : skipped ? 'skipped' : 'ok',
+    detail: `arquivos=${sourceFiles.length}; falhas=${failures}; prova_parcial=${skipped}; achados=${accepted.length}`});
+  return {coverage, findings: accepted};
 }
 
-/** Runs jscodeshift codemod transforms on isolated writable copy and computes ready diffs. */
+function parseCodemodReport(raw, target) {
+  return raw.split(/\r?\n/).filter(Boolean).map(line => {
+    const event = JSON.parse(line);
+    if (!isRecord(event) || event.file !== target ||
+        !Number.isSafeInteger(event.line) || event.line < 1 ||
+        !nonemptyString(event.rule) || !VALID_SEVERITY.has(event.severity) ||
+        !nonemptyString(event.message) || !nonemptyString(event.before) ||
+        (event.review !== true && (event.review !== false ||
+          !nonemptyString(event.after) || event.after === event.before))) {
+      throw new Error('Evento de codemod inválido.');
+    }
+    return event;
+  });
+}
+
+async function matchesCodemodPatch(events, original, target) {
+  const patches = events.filter(event => event.review === false);
+  if (!patches.length) return true;
+  const [before, after] = await Promise.all([readSafeRegularFile(original), readSafeRegularFile(target)]);
+  if (before === null || after === null || before === after) return false;
+
+  const starts = [0];
+  for (let index = before.indexOf('\n'); index !== -1; index = before.indexOf('\n', index + 1)) {
+    starts.push(index + 1);
+  }
+  const edits = [];
+  for (const patch of patches) {
+    const start = starts[patch.line - 1];
+    const next = starts[patch.line] ?? before.length;
+    if (start === undefined) return false;
+    const withinLine = before.indexOf(patch.before, start);
+    if (withinLine === -1 || withinLine >= next) return false;
+    edits.push({start: withinLine, end: withinLine + patch.before.length, after: patch.after});
+  }
+  edits.sort((a, b) => a.start - b.start);
+  const pieces = [];
+  let lastEnd = 0;
+  for (const edit of edits) {
+    if (edit.start < lastEnd) return false;
+    pieces.push(before.slice(lastEnd, edit.start), edit.after);
+    lastEnd = edit.end;
+  }
+  pieces.push(before.slice(lastEnd));
+  return pieces.join('') === after;
+}
+
+/** Runs jscodeshift on isolated writable copies and verifies the emitted report. */
 export async function runJscodeshiftCheck({
   sourceFiles,
   isoSrcDir,
@@ -844,106 +1015,229 @@ export async function runJscodeshiftCheck({
   jscodeshiftBin,
   jscodeshiftVersion,
   transformPath,
+  fileTimeoutMs = TOOL_TIMEOUT_MS,
+  totalTimeoutMs = MAX_CODEMOD_TIME_MS,
 }) {
   const coverage = [];
   const findings = [];
+  const tool = {tool: 'jscodeshift', version: jscodeshiftVersion};
 
   if (sourceFiles.length === 0) {
-    coverage.push({
-      tool: 'jscodeshift',
-      version: jscodeshiftVersion,
-      status: 'skipped',
-      detail: 'Nenhum arquivo JS/TS encontrado para codemods jscodeshift.',
-    });
+    coverage.push({...tool, status: 'skipped', detail: 'Nenhum arquivo JS/TS encontrado para codemods jscodeshift.'});
     return {coverage, findings};
   }
 
   let failures = 0;
   let skipped = 0;
+  let reportBytes = 0;
+  const deadline = performance.now() + totalTimeoutMs;
   for (const [index, src] of sourceFiles.entries()) {
-    const parser = ['.tsx', '.jsx'].includes(src.ext) ? 'tsx' :
-      ['.ts', '.mts', '.cts'].includes(src.ext) ? 'ts' : 'babel';
+    const remainingMs = Math.floor(deadline - performance.now());
+    const remainingBytes = MAX_CODEMOD_REPORT_BYTES - reportBytes;
+    const remainingFindings = MAX_CODEMOD_FINDINGS - findings.length;
+    const limit = remainingMs < 1 ? 'limite_tempo_total' :
+      remainingBytes === 0 ? 'limite_bytes_total' :
+      remainingFindings === 0 ? 'limite_achados_total' : '';
+    if (limit) {
+      skipped += 1;
+      coverage.push({...tool, status: 'skipped', detail: `arquivo=${src.rel}; motivo=${limit}; prova_parcial=true`});
+      continue;
+    }
+
+    const parser = sourceParser(src.ext);
     const target = join(isoCodemodDir, src.rel);
     const report = join(workRoot, `matches-${index}.ndjson`);
-    await writeFile(report, '', 'utf8');
+    const timeoutMs = Math.min(remainingMs, fileTimeoutMs);
+    const signal = AbortSignal.timeout(timeoutMs);
+    let phase = 'inicializacao_relatorio';
     try {
+      await writeFile(report, '', 'utf8');
+      phase = 'execucao';
       await execFile(jscodeshiftBin,
         ['--run-in-band', '--fail-on-error', `--parser=${parser}`, '-t', transformPath, target],
-        {timeout: TOOL_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024,
+        {signal, killSignal: 'SIGKILL', maxBuffer: 10 * 1024 * 1024,
           env: {...process.env, HOME: workRoot, TMPDIR: workRoot, AC_JSCODESHIFT_REPORT: report}});
+
+      phase = 'relatorio_ilegivel';
+      const result = await readArtifact(report, MAX_FILE_BYTES, remainingBytes);
+      if (result.kind === 'fileLimit' || result.kind === 'totalLimit') {
+        skipped += 1;
+        const reason = result.kind === 'fileLimit' ? 'limite_relatorio' : 'limite_bytes_total';
+        coverage.push({...tool, status: 'skipped', detail: `arquivo=${src.rel}; motivo=${reason}; prova_parcial=true`});
+        continue;
+      }
+      if (result.kind !== 'ok') throw new Error(result.kind === 'missing' ? 'relatório ausente' : 'erro de leitura');
+      reportBytes += result.bytes;
+
+      const marker = await readArtifact(`${report}.limit`, 32);
+      phase = 'relatorio_invalido';
+      if (marker.kind !== 'missing' && (marker.kind !== 'ok' || marker.content !== 'limit')) {
+        throw new Error('marcador de limite inválido');
+      }
+      const events = parseCodemodReport(result.content, target);
+      const reason = events.length > remainingFindings ? 'limite_achados_total' :
+        marker.kind === 'ok' ? 'limite_relatorio' : '';
+      if (!(await matchesCodemodPatch(events, join(isoSrcDir, src.rel), target))) {
+        throw new Error('alteração reportada não confere com a cópia');
+      }
+      const accepted = events.slice(0, remainingFindings);
+      for (const event of accepted) {
+        const evidence = event.review ? `Revisão necessária: ${event.before}` :
+          `Patch pronto:\n- ${event.before}\n+ ${event.after}`;
+        findings.push({tool: tool.tool, rule: event.rule, file: src.rel, line: event.line,
+          severity: event.severity, message: event.message, evidence: evidence.slice(0, 600)});
+      }
+      if (reason) skipped += 1;
+      coverage.push({...tool, status: reason ? 'skipped' : 'ok',
+        detail: `arquivo=${src.rel}; correspondencias=${accepted.length}${reason ? `; motivo=${reason}; prova_parcial=true` : ''}`});
     } catch (err) {
       failures += 1;
-      const msg = err instanceof Error ? err.message.slice(0, 240) : 'Falha ao executar jscodeshift';
-      coverage.push({tool: 'jscodeshift', version: jscodeshiftVersion, status: 'failed',
-        detail: `arquivo=${src.rel}; parser=${parser}; erro=${msg}`});
-      await rm(report, {force: true});
-      await rm(`${report}.limit`, {force: true});
-      continue;
+      let reason;
+      if (phase === 'execucao' && err?.code === 'ABORT_ERR' && signal.aborted) {
+        reason = `timeout; timeout_ms=${timeoutMs}; prazo=${remainingMs <= fileTimeoutMs ? 'total' : 'arquivo'}`;
+      } else {
+        const detail = err?.stderr?.trim() || err?.stdout?.trim() || String(err?.message ?? err);
+        const signalDetail = err?.signal ? `sinal=${err.signal}; ` : '';
+        const codeDetail = err?.code === undefined ? '' : `codigo=${err.code}; `;
+        reason = `${phase}; ${signalDetail}${codeDetail}detalhe=${detail.slice(0, 200)}`;
+      }
+      coverage.push({...tool, status: 'failed', detail: `arquivo=${src.rel}; parser=${parser}; erro=${reason}`});
+    } finally {
+      await rm(report, {force: true, recursive: true});
+      await rm(`${report}.limit`, {force: true, recursive: true});
     }
-    const truncated = await readSafeRegularFile(`${report}.limit`, 32);
-    if (truncated !== null) {
-      skipped += 1;
-      coverage.push({tool: 'jscodeshift', version: jscodeshiftVersion, status: 'skipped', detail: `arquivo=${src.rel}; motivo=limite_relatorio; prova_parcial=true`});
-    }
-    const raw = await readSafeRegularFile(report, MAX_FILE_BYTES);
-    await rm(report, {force: true});
-    await rm(`${report}.limit`, {force: true});
-    if (raw === null) {
-      skipped += 1;
-      coverage.push({tool: 'jscodeshift', version: jscodeshiftVersion, status: 'skipped',
-        detail: `arquivo=${src.rel}; motivo=relatorio_acima_do_limite_ou_ilegivel; prova_parcial=true`});
-      continue;
-    }
-    let events;
-    try {
-      events = raw.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
-      if (events.some(ev => !ev || typeof ev !== 'object' || ev.file !== target)) throw new Error('evento inválido');
-    } catch {
-      failures += 1;
-      coverage.push({tool: 'jscodeshift', version: jscodeshiftVersion, status: 'failed',
-        detail: `arquivo=${src.rel}; erro=relatorio_invalido`});
-      continue;
-    }
-    for (const ev of events) {
-      const review = ev.review === true;
-      findings.push({tool: 'jscodeshift', rule: typeof ev.rule === 'string' && ev.rule ? ev.rule : 'JSCODESHIFT-REVIEW',
-        file: src.rel, line: Number.isInteger(ev.line) && ev.line > 0 ? ev.line : 1,
-        severity: VALID_SEVERITY.has(ev.severity) ? ev.severity : 'media',
-        message: typeof ev.message === 'string' ? ev.message : 'Revisão necessária.',
-        evidence: (review ? `Revisão necessária: ${ev.before || ''}` : `Patch pronto:\n- ${ev.before || ''}\n+ ${ev.after || ''}`).slice(0, 600)});
-    }
-    coverage.push({tool: 'jscodeshift', version: jscodeshiftVersion, status: truncated !== null ? 'skipped' : 'ok',
-      detail: `arquivo=${src.rel}; correspondencias=${events.length}${truncated !== null ? '; prova_parcial=true' : ''}`});
   }
-  coverage.unshift({tool: 'jscodeshift', version: jscodeshiftVersion,
+  coverage.unshift({...tool,
     status: failures ? 'failed' : skipped ? 'skipped' : 'ok',
-    detail: `arquivos=${sourceFiles.length}; falhas=${failures}; prova_parcial=${skipped}; achados=${findings.length}`});
+    detail: `arquivos=${sourceFiles.length}; falhas=${failures}; prova_parcial=${skipped}; bytes_relatorios=${reportBytes}; achados=${findings.length}`});
 
   return {coverage, findings};
 }
 
-/** Parses npm package name from CycloneDX purl (pkg:npm/...) or component.name. */
-function npmNameFromCycloneDx(component) {
-  if (typeof component?.purl !== 'string' || !component.purl.startsWith('pkg:npm/')) return '';
-  const rest = component.purl.slice('pkg:npm/'.length).split(/[?#]/)[0];
-  const at = rest.lastIndexOf('@');
-  return decodeURIComponent(at > 0 ? rest.slice(0, at) : rest);
+function workspaceMatches(patterns, path) {
+  let matched = false;
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string') continue;
+    const negate = pattern.startsWith('!');
+    const glob = (negate ? pattern.slice(1) : pattern).replace(/^\.\//, '').replace(/\/$/, '');
+    if (minimatch(path, glob, {dot: true, nonegate: true})) matched = !negate;
+  }
+  return matched;
 }
 
-/** Checks lockfile consistency and reuses Module 1 CycloneDX SBOM when present. */
+function lockEntryIsMalformed(entry) {
+  return !isRecord(entry) ||
+    (Object.hasOwn(entry, 'version') && !nonemptyString(entry.version)) ||
+    (Object.hasOwn(entry, 'link') && typeof entry.link !== 'boolean') ||
+    (Object.hasOwn(entry, 'resolved') && !nonemptyString(entry.resolved)) ||
+    (entry.link === true && !nonemptyString(entry.resolved));
+}
+
+function resolveLockedEntry(lock, workspacePath, pkg) {
+  if (!lock.packages) {
+    if (!workspacePath && Object.hasOwn(lock.dependencies, pkg)) {
+      return {section: 'dependencies', key: pkg, entry: lock.dependencies[pkg]};
+    }
+    return null;
+  }
+  let dir = workspacePath;
+  while (true) {
+    const key = dir ? `${dir}/node_modules/${pkg}` : `node_modules/${pkg}`;
+    if (Object.hasOwn(lock.packages, key)) return {section: 'packages', key, entry: lock.packages[key]};
+    if (!dir) return null;
+    dir = posix.dirname(dir);
+    if (dir === '.') dir = '';
+  }
+}
+
+/** Indexes keys of the top-level npm lock maps without confusing them with nested keys. */
+function lockEntryLines(raw) {
+  const sections = {packages: new Map(), dependencies: new Map()};
+  let section = null;
+  let depth = 0;
+  let line = 1;
+  let key;
+  let keyLine;
+  for (const [token] of raw.matchAll(/"[^"\\]*(?:\\.[^"\\]*)*"|[{}\[\]:,\n]/g)) {
+    if (token === '\n') {
+      line += 1;
+      continue;
+    }
+    if (token[0] === '"') {
+      key = token;
+      keyLine = line;
+      continue;
+    }
+    if (token === ':' && key && depth === 1) {
+      const name = JSON.parse(key);
+      section = Object.hasOwn(sections, name) ? sections[name] : null;
+      section?.clear();
+    }
+    if (token === ':' && key && depth === 2 && section) section.set(JSON.parse(key), keyLine);
+    if (token === '{' || token === '[') depth += 1;
+    if (token === '}' || token === ']') depth -= 1;
+    key = undefined;
+  }
+  return sections;
+}
+
+const NPM_NAME = /^(?:@[\w.~-]+\/)?[\w.~-]+$/;
+function npmComponentIdentity(component) {
+  if (!isRecord(component) || !nonemptyString(component.name) ||
+      (Object.hasOwn(component, 'type') && !nonemptyString(component.type)) ||
+      (Object.hasOwn(component, 'version') && !nonemptyString(component.version)) ||
+      (Object.hasOwn(component, 'purl') && !nonemptyString(component.purl))) {
+    return {error: 'componente_invalido'};
+  }
+  if (!component.purl) return {};
+  if (!/^pkg:[a-z][a-z0-9.+-]*\/[^\s?#]+(?:[?#]\S*)?$/.test(component.purl)) {
+    return {error: component.purl.startsWith('pkg:npm') ? 'purl_npm_invalida' : 'purl_invalida'};
+  }
+  if (!component.purl.startsWith('pkg:npm/')) return {};
+
+  const locator = component.purl.slice('pkg:npm/'.length).split(/[?#]/, 1)[0];
+  const at = locator.lastIndexOf('@');
+  let name;
+  let purlVersion;
+  try {
+    name = decodeURIComponent(at > 0 ? locator.slice(0, at) : locator);
+    if (at > 0) purlVersion = decodeURIComponent(locator.slice(at + 1));
+  } catch {
+    return {error: 'purl_npm_invalida'};
+  }
+  if (!NPM_NAME.test(name)) return {error: 'purl_npm_invalida'};
+  const version = component.version ?? purlVersion;
+  if (!semver.valid(version) || (purlVersion !== undefined && purlVersion !== version)) {
+    return {error: 'versao_componente_invalida'};
+  }
+  return {name, version};
+}
+
+/** Checks npm lock consistency and compares the available CycloneDX inventory offline. */
 export async function analyzeLockfileAndSbom({
   manifests,
   lockfiles,
   sbomFiles,
   registry,
   ncuDetectedPackages,
+  mountedSbomPaths = SBOM_CANDIDATE_FILES,
 }) {
   const coverage = [];
   const findings = [];
-  let checkedFiles = 0;
+  const tool = {tool: 'sbom-lockfile', version: '1.0.0'};
+  const checkedFiles = new Set();
   let componentsScanned = 0;
   let totalMissingMeta = 0;
+  let totalInvalidMeta = 0;
   let artifactFailures = 0;
+  let artifactSkips = 0;
+
+  function record(status, detail) {
+    if (status === 'failed') artifactFailures += 1;
+    if (status === 'skipped') artifactSkips += 1;
+    coverage.push({...tool, status, detail});
+  }
+
   const workspaceRoots = [];
   for (const root of manifests) {
     try {
@@ -952,131 +1246,120 @@ export async function analyzeLockfileAndSbom({
       if (Array.isArray(patterns)) workspaceRoots.push({dir: posix.dirname(root.rel), patterns});
     } catch { /* The manifest itself is reported below and by NCU. */ }
   }
-  function workspaceMatches(patterns, path) {
-    let matched = false;
-    for (const pattern of patterns) {
-      if (typeof pattern !== 'string') continue;
-      const negate = pattern.startsWith('!');
-      const glob = (negate ? pattern.slice(1) : pattern).replace(/^\.\//, '').replace(/\/$/, '');
-      if (minimatch(path, glob, {dot: true, nonegate: true})) matched = !negate;
-    }
-    return matched;
-  }
+  workspaceRoots.sort((a, b) => b.dir.length - a.dir.length);
 
+  let lastLock;
   for (const manifest of manifests) {
-    const rawPkg = await readSafeRegularFile(manifest.fullPath, MAX_FILE_BYTES);
-    if (!rawPkg) { artifactFailures += 1; coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `arquivo=${manifest.rel}; erro=ilegivel_ou_vazio`}); continue; }
+    const rawPkg = await readArtifact(manifest.fullPath, MAX_FILE_BYTES);
+    if (rawPkg.kind !== 'ok') {
+      record(rawPkg.kind === 'fileLimit' ? 'skipped' : 'failed', rawPkg.kind === 'fileLimit'
+        ? `arquivo=${manifest.rel}; motivo=limite_bytes; prova_parcial=true`
+        : `arquivo=${manifest.rel}; erro=ilegivel`);
+      continue;
+    }
     let parsedPkg;
     try {
-      parsedPkg = JSON.parse(rawPkg);
-      if (!parsedPkg || typeof parsedPkg !== 'object' || Array.isArray(parsedPkg)) throw new Error('raiz inválida');
+      parsedPkg = JSON.parse(rawPkg.content);
+      if (!isRecord(parsedPkg)) throw new Error('raiz inválida');
     } catch {
-      artifactFailures += 1;
-      coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `arquivo=${manifest.rel}; manifesto_invalido=true`});
+      record('failed', `arquivo=${manifest.rel}; manifesto_invalido=true`);
       continue;
     }
 
     const dir = posix.dirname(manifest.rel);
-    let lockDir = dir;
-    let lockName = LOCKFILE_NAMES.find(name => lockfiles.has(dir === '.' ? name : `${dir}/${name}`));
-    if (!lockName) {
-      const roots = workspaceRoots.filter(root => root.dir !== dir &&
-        (root.dir === '.' || dir.startsWith(`${root.dir}/`)) &&
-        workspaceMatches(root.patterns, root.dir === '.' ? dir : dir.slice(root.dir.length + 1)))
-        .sort((a, b) => b.dir.length - a.dir.length);
-      for (const root of roots) {
-        const candidate = LOCKFILE_NAMES.find(name => lockfiles.has(root.dir === '.' ? name : `${root.dir}/${name}`));
-        if (candidate) { lockDir = root.dir; lockName = candidate; break; }
-      }
-    }
-    const lockRel = lockName ? (lockDir === '.' ? lockName : `${lockDir}/${lockName}`) : '';
-    const hasAnyLock = Boolean(lockName);
+    const workspace = workspaceRoots.find(root => root.dir !== dir &&
+      (root.dir === '.' || dir.startsWith(`${root.dir}/`)) &&
+      workspaceMatches(root.patterns, posix.relative(root.dir, dir)));
+    const lockDir = workspace?.dir ?? dir;
+    const lockRel = LOCKFILE_NAMES.map(name => posix.join(lockDir, name)).find(path => lockfiles.has(path));
     const declaredEntries = [];
     for (const sec of ['dependencies', 'devDependencies', 'optionalDependencies']) {
-      const block = parsedPkg[sec];
-      if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
-      for (const [pkg, spec] of Object.entries(block)) {
+      if (!isRecord(parsedPkg[sec])) continue;
+      for (const [pkg, spec] of Object.entries(parsedPkg[sec])) {
         if (typeof spec === 'string') declaredEntries.push({sec, pkg, spec});
       }
     }
 
-    if (declaredEntries.length > 0 && !hasAnyLock) {
+    if (!lockRel) {
+      if (declaredEntries.length === 0) continue;
       findings.push({
-        tool: 'sbom-lockfile',
+        tool: tool.tool,
         rule: 'LOCKFILE-MISSING',
         file: manifest.rel,
         line: 1,
         severity: 'media',
-        message: `Manifesto "${manifest.rel}" declara ${declaredEntries.length} dependência(s) sem arquivo de lock (package-lock.json/yarn.lock/pnpm-lock.yaml).`,
-        evidence: `Manifesto ${manifest.rel} sem lockfile no diretório.`,
+        message: `Manifesto "${manifest.rel}" declara ${declaredEntries.length} dependência(s) sem arquivo de lock.`,
+        evidence: `Manifesto ${manifest.rel} sem lockfile no diretório ${lockDir === '.' ? 'raiz' : lockDir}.`,
       });
-      coverage.push({
-        tool: 'sbom-lockfile',
-        version: '1.0.0',
-        status: 'ok',
-        detail: `arquivo=${manifest.rel}; lockfile=ausente; achados=1`,
-      });
+      record('ok', `arquivo=${manifest.rel}; lockfile=ausente; diretorio=${lockDir}; achados=1`);
       continue;
     }
 
-    if (lockName && lockName !== 'package-lock.json') {
-      coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'skipped', detail: `arquivo=${lockRel}; manifesto=${manifest.rel}; motivo=formato_nao_analisado`});
+    const fileScope = `arquivo=${lockRel}; manifesto=${manifest.rel}`;
+    if (!NPM_LOCKFILE_NAMES.includes(posix.basename(lockRel))) {
+      record('skipped', `${fileScope}; motivo=formato_nao_analisado`);
       continue;
     }
-    const lockFullPath = lockfiles.get(lockRel);
-    if (!lockFullPath) continue;
 
-    const rawLock = await readSafeRegularFile(lockFullPath, MAX_REGISTRY_BYTES);
-    if (!rawLock) { artifactFailures += 1; coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `arquivo=${lockRel}; erro=ilegivel_ou_acima_do_limite`}); continue; }
-
-    let parsedLock;
-    try {
-      parsedLock = JSON.parse(rawLock);
-      if (!parsedLock || typeof parsedLock !== 'object' || Array.isArray(parsedLock) ||
-          (!parsedLock.packages && !parsedLock.dependencies) ||
-          (parsedLock.packages && (typeof parsedLock.packages !== 'object' || Array.isArray(parsedLock.packages))) ||
-          (parsedLock.dependencies && (typeof parsedLock.dependencies !== 'object' || Array.isArray(parsedLock.dependencies)))) throw new Error('estrutura inválida');
-    } catch {
-      artifactFailures += 1;
-      coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `arquivo=${lockRel}; lockfile_invalido=true`});
+    if (lastLock?.path !== lockRel) {
+      const raw = await readArtifact(lockfiles.get(lockRel), MAX_REGISTRY_BYTES);
+      lastLock = {path: lockRel, raw};
+      if (raw.kind === 'ok') {
+        try {
+          const parsed = JSON.parse(raw.content);
+          if (!isRecord(parsed) ||
+              (!Object.hasOwn(parsed, 'packages') && !Object.hasOwn(parsed, 'dependencies')) ||
+              (Object.hasOwn(parsed, 'packages') && !isRecord(parsed.packages)) ||
+              (Object.hasOwn(parsed, 'dependencies') && !isRecord(parsed.dependencies)) ||
+              (parsed.lockfileVersion >= 2 && !parsed.packages)) {
+            throw new Error('estrutura inválida');
+          }
+          lastLock.parsed = parsed;
+          const entries = parsed.packages ?? parsed.dependencies;
+          lastLock.invalidEntries = Object.values(entries).filter(lockEntryIsMalformed).length;
+        } catch (err) {
+          lastLock.error = err instanceof SyntaxError ? 'json_invalido' : 'estrutura_invalida';
+        }
+      }
+    }
+    const {raw, parsed, error, invalidEntries} = lastLock;
+    if (raw.kind !== 'ok') {
+      if (raw.kind === 'fileLimit') record('skipped', `${fileScope}; motivo=limite_bytes; prova_parcial=true`);
+      else record('failed', `${fileScope}; erro=${raw.kind === 'missing' ? 'arquivo_ausente' : 'ilegivel'}`);
+      continue;
+    }
+    if (error) {
+      record('failed', `${fileScope}; lockfile_invalido=true; erro=${error}`);
       findings.push({
-        tool: 'sbom-lockfile',
+        tool: tool.tool,
         rule: 'LOCKFILE-INVALID-JSON',
         file: lockRel,
         line: 1,
         severity: 'alta',
-        message: `Arquivo ${lockRel} contém JSON inválido.`,
-        evidence: 'JSON.parse falhou em package-lock.json.',
+        message: `Arquivo ${lockRel} contém JSON ou estrutura de lock npm inválida.`,
+        evidence: `${lockRel}: ${error}`,
       });
       continue;
     }
 
-    checkedFiles += 1;
+    checkedFiles.add(lockfiles.get(lockRel));
     let fileFindings = 0;
     let fileMissingMeta = 0;
+    let fileInvalidMeta = 0;
     let fileUnverifiable = 0;
-    const packagesMap = parsedLock.packages && typeof parsedLock.packages === 'object' ? parsedLock.packages : {};
-    const legacyDepsMap = parsedLock.dependencies && typeof parsedLock.dependencies === 'object' ? parsedLock.dependencies : {};
-
+    let invalidResolutions = 0;
+    const workspacePath = lockDir === dir ? '' : posix.relative(lockDir, dir);
     for (const {sec, pkg, spec} of declaredEntries) {
-      const workspacePath = lockDir === '.' ? (dir === '.' ? '' : dir) : (dir === lockDir ? '' : dir.slice(lockDir.length + 1));
-      let lookupDir = workspacePath;
-      let pkgEntry;
-      while (true) {
-        const key = lookupDir ? `${lookupDir}/node_modules/${pkg}` : `node_modules/${pkg}`;
-        if (packagesMap[key]) { pkgEntry = packagesMap[key]; break; }
-        if (!lookupDir) break;
-        lookupDir = posix.dirname(lookupDir);
-        if (lookupDir === '.') lookupDir = '';
+      if (workspacePath && !parsed.packages) {
+        fileUnverifiable += 1;
+        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; motivo=lock_legado_sem_entrada_workspace`});
+        continue;
       }
-      if (!workspacePath) pkgEntry ??= legacyDepsMap[pkg];
-      if (pkgEntry?.link && typeof pkgEntry.resolved === 'string' && !pkgEntry.resolved.split('/').includes('..')) pkgEntry = packagesMap[pkgEntry.resolved];
-      const resolvedVer = typeof pkgEntry?.version === 'string' ? pkgEntry.version : null;
-
-      if (!resolvedVer) {
+      let match = resolveLockedEntry(parsed, workspacePath, pkg);
+      if (!match) {
         fileFindings += 1;
         findings.push({
-          tool: 'sbom-lockfile',
+          tool: tool.tool,
           rule: 'LOCKFILE-DRIFT',
           file: lockRel,
           line: 1,
@@ -1087,164 +1370,175 @@ export async function analyzeLockfileAndSbom({
         continue;
       }
 
+      if (match.entry?.link === true && !lockEntryIsMalformed(match.entry)) {
+        const key = match.entry.resolved;
+        if (posix.isAbsolute(key) || key.split('/').includes('..')) {
+          fileUnverifiable += 1;
+          coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; motivo=link_externo`});
+          continue;
+        }
+        match = {section: 'packages', key, entry: parsed.packages?.[key]};
+      }
+      if (lockEntryIsMalformed(match.entry) || match.entry.link === true) {
+        invalidResolutions += 1;
+        coverage.push({...tool, status: 'failed', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; erro=entrada_lockfile_invalida`});
+        continue;
+      }
+
+      const resolvedVer = match.entry.version;
+      if (!resolvedVer) {
+        fileUnverifiable += 1;
+        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; entrada=${match.key}; motivo=versao_ausente`});
+        continue;
+      }
       componentsScanned += 1;
       const validSpec = semver.validRange(spec) !== null && Boolean(semver.valid(resolvedVer));
       if (!validSpec) {
         fileUnverifiable += 1;
-        coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'skipped', detail: `arquivo=${lockRel}; manifesto=${manifest.rel}; pacote=${pkg}; motivo=faixa_ou_versao_nao_semver`});
+        coverage.push({...tool, status: 'skipped', detail: `${fileScope}; pacote=${pkg}; motivo=faixa_ou_versao_nao_semver`});
       }
       if (validSpec && !satisfiesRange(resolvedVer, spec)) {
         fileFindings += 1;
-        const line = findLineInPackageJson(rawLock, `node_modules/${pkg}`);
+        lastLock.lines ??= lockEntryLines(raw.content);
         findings.push({
-          tool: 'sbom-lockfile',
+          tool: tool.tool,
           rule: 'LOCKFILE-VERSION-MISMATCH',
           file: lockRel,
-          line,
+          line: lastLock.lines[match.section].get(match.key) ?? 1,
           severity: 'alta',
           message: `Versão travada de "${pkg}" (${resolvedVer}) em ${lockRel} não satisfaz a faixa "${spec}" de ${manifest.rel}.`,
-          evidence: `${manifest.rel}="${spec}" vs ${lockRel}="${resolvedVer}"`,
+          evidence: `${manifest.rel}="${spec}" vs ${lockRel}#${match.key}="${resolvedVer}"`,
         });
         continue;
       }
 
-      const latest = registry?.versions?.[pkg];
-      if (typeof latest !== 'string') {
+      const meta = registryVersion(registry, pkg);
+      if (meta.kind !== 'ok') {
         fileMissingMeta += 1;
-        totalMissingMeta += 1;
+        if (meta.kind === 'invalid') fileInvalidMeta += 1;
         continue;
       }
-      const parsedResolved = parseSemver(resolvedVer);
-      const parsedLatest = parseSemver(latest);
-      if (
-        parsedResolved &&
-        parsedLatest &&
-        compareSemver(parsedResolved, parsedLatest) < 0 &&
-        !ncuDetectedPackages.has(`${manifest.rel}:${pkg}`)
-      ) {
-        const risk = classifySemverRisk(resolvedVer, latest);
+      if (semver.valid(resolvedVer) && semver.lt(resolvedVer, meta.version) &&
+          !ncuDetectedPackages.has(`${manifest.rel}:${pkg}`)) {
+        const risk = classifySemverRisk(resolvedVer, meta.version);
         fileFindings += 1;
-        const line = findLineInPackageJson(rawLock, `node_modules/${pkg}`);
+        lastLock.lines ??= lockEntryLines(raw.content);
         findings.push({
-          tool: 'sbom-lockfile',
+          tool: tool.tool,
           rule: 'LOCKFILE-OUTDATED-RESOLVED',
           file: lockRel,
-          line,
+          line: lastLock.lines[match.section].get(match.key) ?? 1,
           severity: risk.severity,
-          message: `Versão travada em ${lockRel} para "${pkg}" (${resolvedVer}) está atrás da mais recente (${latest}; risco ${risk.riskLabel}).`,
-          evidence: `${lockRel}: "${pkg}"@${resolvedVer} -> ${latest}`,
+          message: `Versão travada em ${lockRel} para "${pkg}" (${resolvedVer}) está atrás da mais recente (${meta.version}; risco ${risk.riskLabel}).`,
+          evidence: `${lockRel}#${match.key}: "${pkg}"@${resolvedVer} -> ${meta.version}`,
         });
       }
     }
 
-    coverage.push({
-      tool: 'sbom-lockfile',
-      version: '1.0.0',
-      status: 'ok',
-      detail: `arquivo=${lockRel}; dependencias_verificadas=${declaredEntries.length - fileUnverifiable}; faixas_nao_verificadas=${fileUnverifiable}; sem_metadados=${fileMissingMeta}; achados=${fileFindings}`,
-    });
+    totalMissingMeta += fileMissingMeta;
+    totalInvalidMeta += fileInvalidMeta;
+    record(invalidEntries || invalidResolutions || fileInvalidMeta ? 'failed' :
+      fileUnverifiable || fileMissingMeta ? 'skipped' : 'ok',
+    `${fileScope}; dependencias_verificadas=${declaredEntries.length - fileUnverifiable - invalidResolutions}; faixas_nao_verificadas=${fileUnverifiable}; entradas_invalidas=${invalidEntries}; resolucoes_invalidas=${invalidResolutions}; sem_metadados=${fileMissingMeta}; metadados_invalidos=${fileInvalidMeta}; achados=${fileFindings}`);
   }
 
-  // Reuse Module 1 CycloneDX SBOM if present in /databases, /input, or /repo
-  const externalSboms = [];
-  for (const path of SBOM_CANDIDATE_FILES) {
-    const content = await readSafeRegularFile(path, MAX_REGISTRY_BYTES);
-    if (content !== null) externalSboms.push({rel: path, content});
-    else {
-      try {
-        await lstat(path);
-        artifactFailures += 1;
-        coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${path}; erro=ilegivel_ou_acima_do_limite`});
-      } catch (err) {
-        if (err?.code !== 'ENOENT') { artifactFailures += 1; coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${path}; erro=acesso`}); }
+  let sbomBytes = 0;
+  let inventoryComponents = 0;
+  const sbomCandidates = [
+    ...mountedSbomPaths.map(path => ({rel: path, fullPath: path, optional: true})),
+    ...sbomFiles,
+  ];
+  for (const sb of sbomCandidates) {
+    const scope = `sbom=${sb.rel}`;
+    const raw = await readArtifact(sb.fullPath, MAX_REGISTRY_BYTES, MAX_SBOM_BYTES - sbomBytes);
+    if (raw.kind !== 'ok') {
+      if (sb.optional && raw.kind === 'missing') continue;
+      if (raw.kind === 'fileLimit' || raw.kind === 'totalLimit') {
+        record('skipped', `${scope}; motivo=${raw.kind === 'fileLimit' ? 'limite_bytes' : 'limite_bytes_total'}; prova_parcial=true`);
+      } else {
+        record('failed', `${scope}; erro=${raw.kind === 'missing' ? 'arquivo_ausente' : 'ilegivel'}`);
       }
+      continue;
     }
-  }
-  for (const sb of sbomFiles) {
-    const content = await readSafeRegularFile(sb.fullPath, MAX_REGISTRY_BYTES);
-    if (content !== null) externalSboms.push({rel: sb.rel, content});
-    else { artifactFailures += 1; coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${sb.rel}; erro=ilegivel_ou_acima_do_limite`}); }
-  }
+    sbomBytes += raw.bytes;
 
-  for (const sb of externalSboms) {
-    let parsed;
+    let bom;
     try {
-      parsed = JSON.parse(sb.content);
+      bom = JSON.parse(raw.content);
     } catch {
-      artifactFailures += 1;
-      coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${sb.rel}; erro=json_invalido`});
+      record('failed', `${scope}; erro=json_invalido`);
       continue;
     }
-    if (!parsed || parsed.bomFormat !== 'CycloneDX' || !Array.isArray(parsed.components)) {
-      artifactFailures += 1;
-      coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${sb.rel}; erro=formato_invalido`});
+    if (!isRecord(bom) || bom.bomFormat !== 'CycloneDX' ||
+        (Object.hasOwn(bom, 'components') && !Array.isArray(bom.components))) {
+      record('failed', `${scope}; erro=formato_invalido`);
       continue;
     }
-    checkedFiles += 1;
+
+    checkedFiles.add(sb.fullPath);
+    const errors = new Map();
     let sbomFindings = 0;
     let sbomMissingMeta = 0;
-    let sbomInvalidComponents = 0;
-    for (const comp of parsed.components) {
-      let name;
-      try { name = npmNameFromCycloneDx(comp); } catch {
-        artifactFailures += 1;
-        sbomInvalidComponents += 1;
-        coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${sb.rel}; erro=purl_npm_invalida`});
+    let sbomInvalidMeta = 0;
+    let componentCount = 0;
+    let truncated = false;
+    const lists = [(bom.components ?? []).values()];
+    while (lists.length) {
+      const next = lists.at(-1).next();
+      if (next.done) {
+        lists.pop();
         continue;
       }
-      const purlPart = typeof comp?.purl === 'string' ? comp.purl.split(/[?#]/)[0] : '';
-      const versionAt = purlPart.lastIndexOf('@');
-      let purlVersion = '';
-      try { if (versionAt > purlPart.indexOf('/')) purlVersion = decodeURIComponent(purlPart.slice(versionAt + 1)); } catch {
-        artifactFailures += 1; sbomInvalidComponents += 1;
-        coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${sb.rel}; erro=purl_npm_invalida`});
+      if (inventoryComponents >= MAX_SBOM_COMPONENTS) {
+        truncated = true;
+        break;
+      }
+      inventoryComponents += 1;
+      componentCount += 1;
+      const component = next.value;
+      const identity = npmComponentIdentity(component);
+      if (isRecord(component) && Object.hasOwn(component, 'components')) {
+        if (Array.isArray(component.components)) lists.push(component.components.values());
+        else errors.set('componentes_aninhados_invalidos', (errors.get('componentes_aninhados_invalidos') ?? 0) + 1);
+      }
+      if (identity.error) {
+        errors.set(identity.error, (errors.get(identity.error) ?? 0) + 1);
         continue;
       }
-      const version = typeof comp?.version === 'string' ? comp.version : purlVersion;
-      if (name && (!semver.valid(version) || (purlVersion && purlVersion !== version))) {
-        artifactFailures += 1; sbomInvalidComponents += 1;
-        coverage.push({tool: 'sbom-lockfile', version: '1.0.0', status: 'failed', detail: `sbom=${sb.rel}; erro=versao_componente_invalida`});
-        continue;
-      }
-      const parsedVersion = parseSemver(version);
-      if (!name || !parsedVersion) continue;
+      if (!identity.name) continue;
       componentsScanned += 1;
-      const latest = registry?.versions?.[name];
-      if (typeof latest !== 'string') {
+      const {name, version} = identity;
+      const meta = registryVersion(registry, name);
+      if (meta.kind !== 'ok') {
         sbomMissingMeta += 1;
-        totalMissingMeta += 1;
+        if (meta.kind === 'invalid') sbomInvalidMeta += 1;
         continue;
       }
-      const parsedLatest = parseSemver(latest);
-      if (parsedLatest && compareSemver(parsedVersion, parsedLatest) < 0) {
-        const risk = classifySemverRisk(version, latest);
+      if (semver.lt(version, meta.version)) {
+        const risk = classifySemverRisk(version, meta.version);
         sbomFindings += 1;
-        const fileRef = sb.rel.startsWith('/') ? 'package.json' : sb.rel;
         findings.push({
-          tool: 'sbom-lockfile',
+          tool: tool.tool,
           rule: 'SBOM-OUTDATED-COMPONENT',
-          file: fileRef,
+          file: sb.rel.startsWith('/') ? 'package.json' : sb.rel,
           line: 1,
           severity: risk.severity,
-          message: `Componente SBOM "${name}"@${version} está desatualizado (mais recente: ${latest}; risco ${risk.riskLabel}).`,
-          evidence: `SBOM (${sb.rel}): ${name}@${version} -> ${latest}`,
+          message: `Componente SBOM "${name}"@${version} está desatualizado (mais recente: ${meta.version}; risco ${risk.riskLabel}).`,
+          evidence: `SBOM (${sb.rel}): ${name}@${version} -> ${meta.version}`,
         });
       }
     }
-    coverage.push({
-      tool: 'sbom-lockfile',
-      version: '1.0.0',
-      status: sbomInvalidComponents ? 'failed' : 'ok',
-      detail: `sbom=${sb.rel}; componentes=${parsed.components.length}; invalidos=${sbomInvalidComponents}; sem_metadados=${sbomMissingMeta}; achados=${sbomFindings}`,
-    });
+    totalMissingMeta += sbomMissingMeta;
+    totalInvalidMeta += sbomInvalidMeta;
+    const issues = Array.from(errors, ([reason, count]) => `${reason}=${count}`).join('; ');
+    record(errors.size || sbomInvalidMeta ? 'failed' : truncated || sbomMissingMeta ? 'skipped' : 'ok',
+      `${scope}; componentes=${componentCount}; sem_metadados=${sbomMissingMeta}; metadados_invalidos=${sbomInvalidMeta}; achados=${sbomFindings}${issues ? `; ${issues}` : ''}${truncated ? '; motivo=limite_componentes_total; prova_parcial=true' : ''}`);
   }
 
-  coverage.unshift({
-    tool: 'sbom-lockfile',
-    version: '1.0.0',
-    status: artifactFailures ? 'failed' : checkedFiles > 0 || findings.length > 0 ? 'ok' : 'skipped',
-    detail: checkedFiles > 0 || findings.length > 0
-      ? `artefatos=${checkedFiles}; componentes=${componentsScanned}; sem_metadados=${totalMissingMeta}; achados=${findings.length}`
+  coverage.unshift({...tool,
+    status: artifactFailures ? 'failed' : artifactSkips ? 'skipped' : checkedFiles.size || findings.length ? 'ok' : 'skipped',
+    detail: checkedFiles.size || findings.length || artifactFailures || artifactSkips
+      ? `artefatos=${checkedFiles.size}; componentes=${componentsScanned}; sem_metadados=${totalMissingMeta}; metadados_invalidos=${totalInvalidMeta}; falhas=${artifactFailures}; analises_parciais=${artifactSkips}; bytes_sbom=${sbomBytes}; achados=${findings.length}`
       : 'Nenhum lockfile ou SBOM CycloneDX encontrado para verificação.',
   });
 
