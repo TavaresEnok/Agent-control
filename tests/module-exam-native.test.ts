@@ -350,23 +350,24 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.deepEqual(cancelled, {state: 'failed', released: true});
 
       recheckAnswer = verdict;
-      assert.deepEqual(await recheck(), ['ACH-001 fechado']);
-      assert.equal(await findingStatus(), 'fechado');
+      assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
+      assert.equal(await findingStatus(), 'confirmado');
       const launch = docker.logs.at(-1)!;
       assert.equal(launch.provider, 'codex');
       assert.equal(launch.moduleExam, true);
       assert.deepEqual(launch.writePaths, []);
       assert.deepEqual(JSON.parse(launch.task).code, activeIndex);
       assert.doesNotMatch(launch.task, /NOVA_CREDENCIAL_SINTETICA|CONCLUSAO_DO_AUTOR|\/tmp\//);
-      const {rows: [closed]} = await ledger.pool.query(`SELECT detail FROM ac_audit
-        WHERE kind='module.finding_rechecked' AND detail->>'status'='fechado' AND context_id=$1`, [contextId]);
-      assert.equal(closed.detail.commit, correctedHead);
-      assert.equal(closed.detail.proofDigest, digest(activeIndex));
-      assert.deepEqual(closed.detail.examiner, {provider: 'claude', model: 'claude-module-fixture',
+      const {rows: [pending]} = await ledger.pool.query(`SELECT detail FROM ac_audit
+        WHERE kind='module.finding_rechecked' AND detail->>'status'='pendente' AND context_id=$1
+          AND detail->>'commit'=$2`, [contextId, correctedHead]);
+      assert.equal(pending.detail.reason, 'MODULE_RECHECK_PROOF_UNAVAILABLE');
+      assert.equal(pending.detail.proofDigest, null);
+      assert.deepEqual(pending.detail.examiner, {provider: 'claude', model: 'claude-module-fixture',
         accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0]});
-      assert.deepEqual(closed.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',
-        accountId: reviewerAccount, profileId: profiles[1], grantId: closed.detail.reviewer.grantId});
-      const {rows: [receipt]} = await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [closed.detail.reviewer.grantId]);
+      assert.deepEqual(pending.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',
+        accountId: reviewerAccount, profileId: profiles[1], grantId: pending.detail.reviewer.grantId});
+      const {rows: [receipt]} = await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [pending.detail.reviewer.grantId]);
       assert.equal(receipt.state, 'released');
       assert.ok(receipt.physical_receipt.containerId);
 
@@ -412,7 +413,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.deepEqual(await recheck([uncertain]), ['ACH-001 pendente MODULE_RECHECK_RESULT_UNCERTAIN']);
       assert.equal((await lastGrant()).state, 'running');
       assert.equal((await lastGrant()).physical_receipt, null);
-      assert.equal(await findingStatus(), 'fechado');
+      assert.equal(await findingStatus(), 'confirmado');
       assert.ok(recoveryRequest);
       const recovery = await ledger.acquire(owner, contextId, randomUUID(), 'fixture-reconciler', 60);
       try {

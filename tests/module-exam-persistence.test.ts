@@ -30,7 +30,8 @@ async function withExamFixture(run: (input: VerificationModuleRunInput) => Promi
   await withModuleRecoveryFixture(databaseUrl!, async input => {
     await writeFile(join(input.repoPath, testFile), [skipped + ';',
       `test("calcula preço", () => ${random}); test("espera", () => ${wait});`,
-      'router.get("/item/<slug>", handler);', 'router.get("/item/slug", handler);', ''].join('\n'));
+      "import {Router} from 'express'; const router = Router(); router.get(\"/item/<slug>\", handler);",
+      'router.get("/item/slug", handler);', ''].join('\n'));
     const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-C', input.repoPath, ...args], {encoding: 'utf8', stdio: 'pipe'}).trim();
     git('add', testFile);
     git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Observações funcionais sintéticas');
