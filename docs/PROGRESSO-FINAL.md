@@ -25,3 +25,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 — C4-R2 passou o laboratório real offline com defeitos plantados e controle limpo: 1/1, 7,3 s. Imagem 89f999f2dccd fixada no ramo em 34cc3227. Disco 86%. Integração e revisão do módulo pendentes.
 - 19/11/2026 — Suíte oficial verde no código integrado da R13 (e92a26f6): 236 arquivos passaram, zero falharam e 86 foram excluídos pelo executor. Artefato gerado da suíte restaurado. R14 pendente por achados da revisão.
 - 19/11/2026 — R13 passou os cinco arquivos adicionais: 51/51, sem pulos, 94,2 s. C3-R3 passou o laboratório com a imagem real: 1/1, 9,4 s; digest fixado em c1536db0. C9 em execução no assento liberado.
+- 19/11/2026 — A3 recebida em 6ee180f3, TypeScript e 14/14 testes do trabalhador. Integrada para revisão em worktree isolado (acb7e378). O job vivo permanece pendente. C6-R2 encomendada para ligar medições passivas de TLS e cabeçalhos à CLI pessoal.
