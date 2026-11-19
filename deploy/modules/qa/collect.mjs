@@ -34,6 +34,7 @@ import {collectLanguageMutation, collectPythonProperties, languageMeasurementToo
 import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
 import {collectJsProperties, propertyLimits, propertyTool} from './js-properties.mjs';
 import {bancoLocalTool, collectQaBancoLocal} from './banco-local/index.mjs';
+import {localLoadTool, runLocalLoadQa} from './carga-local/index.mjs';
 import {functionalContractTools, maxContractDocuments, runFunctionalContract} from './contratos/index.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -1629,6 +1630,12 @@ export async function collectQaModule(options = {}) {
         partial: incomplete,
         run: () => collectQaBancoLocal({repoDir, workspace, copiedFiles, incomplete, row: coverageRow}),
       },
+      {
+        name: localLoadTool,
+        partial: incomplete,
+        run: () => runLocalLoadQa({workspace, workRoot, copiedFiles, enabled: executionAllowed(repoDir),
+          row: coverageRow, key: fileCoverageKey}),
+      },
       ...Object.entries(functionalContractTools).map(([kind, name]) => ({
         name,
         partial: incomplete,
@@ -1695,7 +1702,6 @@ export async function collectQaModule(options = {}) {
 
     coverage.push(
       coverageRow('qa-fuzz', unmeasured, 'skipped', 'geração aleatória de entradas não executada'),
-      coverageRow('qa-carga', unmeasured, 'skipped', 'carga ativa não executada no coletor offline'),
     );
 
     coverage.push(...extraCoverageRows);
