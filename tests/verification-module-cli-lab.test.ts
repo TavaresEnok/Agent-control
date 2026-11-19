@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {test} from 'node:test';
 import {promisify} from 'node:util';
-import {Refusal} from '../src/contracts.ts';
+import {Refusal, type Authority} from '../src/contracts.ts';
 import {Ledger, VERIFICATION_MODULES, type VerificationModule} from '../src/ledger.ts';
 import {runPersonalModuleCli} from '../src/personal-module-cli.ts';
 import {
@@ -22,6 +22,8 @@ const exec = promisify(execFile);
 const REPO_ROOT = resolve(import.meta.dirname, '..');
 const LAB_ENABLED = process.env.AC_MODULE_LAB === '1';
 const CLEAN_SUBDIR_NAMES = new Set(['clean', 'limpo', 'control-clean', 'controle-limpo']);
+// Ledger.heartbeat renews for 15 seconds regardless of the initial lease duration.
+const MAIN_MANAGER_HEARTBEAT_MS = 5_000;
 
 type ModuleLabExpectation = {
   /** Known defective fixture subpath relative to repo root, or candidates for modules still in flight. */
@@ -304,6 +306,26 @@ async function assertPrivateMode(targetPath: string, expectedMode: number): Prom
   assert.equal(info.mode & 0o777, expectedMode, `permissão esperada ${expectedMode.toString(8)} em ${targetPath}`);
 }
 
+function keepMainManagerLease(db: Pick<Ledger, 'heartbeat'>, authority: Authority): () => Promise<void> {
+  let inFlight: Promise<void> | undefined;
+  let failure: Error | undefined;
+  const timer = setInterval(() => {
+    if (inFlight || failure) return;
+    inFlight = db.heartbeat(authority).catch((cause: unknown) => {
+      failure = new Error(`Falha no heartbeat do gerente principal (${authority.contextId})`, {cause});
+    }).finally(() => {
+      inFlight = undefined;
+    });
+  }, MAIN_MANAGER_HEARTBEAT_MS);
+  timer.unref();
+
+  return async () => {
+    clearInterval(timer);
+    await inFlight;
+    if (failure) throw failure;
+  };
+}
+
 async function verifyModuleEndToEnd(
   db: Ledger,
   databaseUrl: string,
@@ -329,7 +351,9 @@ async function verifyModuleEndToEnd(
   await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)', [projectId, repo]);
 
   const mainContext = await db.createContext(principal, projectId, randomUUID());
-  const mainAuthority = await db.acquire(principal, mainContext, randomUUID(), 'live-gateway-manager', 300);
+  const mainInstance = randomUUID();
+  const mainAuthority = await db.acquire(principal, mainContext, mainInstance, 'live-gateway-manager', 60);
+  const stopHeartbeat = keepMainManagerLease(db, mainAuthority);
   try {
     const installationPath = await writeDisposablePersonalInstallation(modRoot, {
       databaseUrl,
@@ -405,10 +429,12 @@ async function verifyModuleEndToEnd(
     assert.equal(intentRow?.context_id, examRow.context_id);
     assert.equal(intentRow?.state, 'done');
 
-    const mgrRow = (await db.pool.query<{epoch: string; active: boolean}>(
-      'SELECT epoch::text AS epoch, lease_until > clock_timestamp() AS active FROM ac_managers WHERE context_id=$1',
+    const mgrRow = (await db.pool.query<{instance_id: string; epoch: string; active: boolean}>(
+      `SELECT instance_id::text AS instance_id, epoch::text AS epoch, lease_until > clock_timestamp() AS active
+       FROM ac_managers WHERE context_id=$1`,
       [mainContext],
     )).rows[0];
+    assert.equal(mgrRow?.instance_id, mainInstance);
     assert.equal(Number(mgrRow?.epoch), mainAuthority.epoch);
     assert.equal(mgrRow?.active, true);
 
@@ -481,8 +507,10 @@ async function verifyModuleEndToEnd(
       regression_test: string;
       acceptance: string;
     }>(
-      `SELECT project_id::text AS project_id, finding_ids, message_local_id, write_paths, regression_test, acceptance
-       FROM ac_verify_remediations WHERE run_id=$1`,
+      `SELECT r.project_id::text AS project_id, m.finding_ids, m.message_local_id, m.write_paths,
+              m.regression_test, m.acceptance
+       FROM ac_verify_remediations m JOIN ac_verify_runs r ON r.id=m.run_id
+       WHERE m.run_id=$1`,
       [runId],
     )).rows;
     assert.equal(remRows.length, 1);
@@ -496,11 +524,14 @@ async function verifyModuleEndToEnd(
     );
     assert.equal(remRows[0]?.acceptance, REMEDIATION_ACCEPTANCE);
 
-    const mainMsgs = (await db.pool.query<{local_id: string; role: string; text: string}>(
-      'SELECT local_id, role, text FROM ac_personal_messages WHERE context_id=$1 ORDER BY created_at',
+    const mainMsgs = (await db.pool.query<{project_id: string; local_id: string; role: string; text: string}>(
+      `SELECT c.project_id::text AS project_id, m.local_id, m.role, m.text
+       FROM ac_personal_messages m JOIN ac_contexts c ON c.id=m.context_id
+       WHERE m.context_id=$1 ORDER BY m.created_at`,
       [mainContext],
     )).rows;
     assert.equal(mainMsgs.length, 1, `duplicata de --corrigir deve ser idempotente em ${module}`);
+    assert.equal(mainMsgs[0]?.project_id, remRows[0]?.project_id);
     assert.equal(mainMsgs[0]?.local_id, messageLocalId);
     assert.equal(mainMsgs[0]?.role, 'owner');
     assert.equal((mainMsgs[0]?.text ?? '').includes(`Projeto: ${projectId}`), true);
@@ -525,7 +556,11 @@ async function verifyModuleEndToEnd(
       assert.equal(limitedRun?.intent_state, 'failed');
     }
   } finally {
-    await db.releaseLease(mainAuthority).catch(() => undefined);
+    try {
+      await stopHeartbeat();
+    } finally {
+      await db.releaseLease(mainAuthority);
+    }
   }
 }
 
@@ -560,6 +595,39 @@ test('ausência de digest.txt ou fixture com defeito falha explicitamente na res
   } finally {
     await rm(emptyRoot, {recursive: true, force: true});
   }
+});
+
+test('heartbeat do gerente não se sobrepõe e propaga falha em voo ao encerrar', async ({mock}) => {
+  mock.timers.enable({apis: ['setInterval']});
+  const authority = {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1};
+  const cause = new Refusal('STALE_MANAGER');
+  let rejectHeartbeat!: (reason: unknown) => void;
+  const pending = new Promise<void>((_, reject) => {
+    rejectHeartbeat = reject;
+  });
+  const heartbeat = mock.fn(async (received: Authority) => {
+    assert.deepEqual(received, authority);
+    await pending;
+  });
+  const stopHeartbeat = keepMainManagerLease({heartbeat}, authority);
+  mock.timers.tick(MAIN_MANAGER_HEARTBEAT_MS);
+  mock.timers.tick(MAIN_MANAGER_HEARTBEAT_MS);
+  assert.equal(heartbeat.mock.callCount(), 1);
+
+  const stopped = stopHeartbeat();
+  rejectHeartbeat(cause);
+  await assert.rejects(stopped, {cause});
+});
+
+test('encerrar heartbeat do gerente cancela novas renovações', async ({mock}) => {
+  mock.timers.enable({apis: ['setInterval']});
+  const authority = {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1};
+  const heartbeat = mock.fn(async () => {});
+  const stopHeartbeat = keepMainManagerLease({heartbeat}, authority);
+  mock.timers.tick(MAIN_MANAGER_HEARTBEAT_MS);
+  await stopHeartbeat();
+  mock.timers.tick(MAIN_MANAGER_HEARTBEAT_MS);
+  assert.equal(heartbeat.mock.callCount(), 1);
 });
 
 test(
