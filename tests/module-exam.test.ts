@@ -19,10 +19,12 @@ test('mapa inventaria fontes e rotas, omitindo credenciais, links e arquivos gra
     await mkdir(join(dir, 'src'));
     await writeFile(join(dir, 'src', 'routes.ts'), 'app.get("/pedidos", handler);\nconst token = "sintetico-privado";');
     await writeFile(join(dir, '.env'), 'DADO_SINTETICO_NAO_LER');
+    await writeFile(join(dir, 'pem-in-code.txt'), '-----BEGIN PRIVATE KEY-----\nsynthetic-pem-only\n-----END PRIVATE KEY-----\napp.get("/depois", handler);');
     await writeFile(join(dir, 'huge.ts'), 'x'.repeat(17000));
     await symlink('.env', join(dir, 'link'));
     const mapped = await mapModuleSnapshot(dir);
-    assert.deepEqual(mapped.routes, [{file:'src/routes.ts', line:1, method:'GET', path:'/pedidos'}]);
+    assert.deepEqual(mapped.routes, [{file:'pem-in-code.txt', line:4, method:'GET', path:'/depois'},
+      {file:'src/routes.ts', line:1, method:'GET', path:'/pedidos'}]);
     assert.equal(mapped.files.find(f=>f.file==='.env')?.code, null);
     assert.equal(mapped.files.find(f=>f.file==='link')?.code, null);
     assert.equal(mapped.files.find(f=>f.file==='huge.ts')?.code, null);
@@ -31,7 +33,7 @@ test('mapa inventaria fontes e rotas, omitindo credenciais, links e arquivos gra
 });
 
 test('modo coletor conserva achado sem confirmação e rotas não julgadas', async () => {
-  const result = await examineFunctionalModule({module:'qa', intentId, repo:'/synthetic', map, findings:[finding]});
+  const result = await examineFunctionalModule({module:'qa', intentId, map, findings:[finding]});
   assert.equal(result.mode, 'somente_ferramentas');
   assert.equal(result.findings[0]!.status, 'provavel');
   assert.equal(result.findings[0]!.verifier, null);
@@ -42,7 +44,7 @@ test('modo coletor conserva achado sem confirmação e rotas não julgadas', asy
 test('examinador e revisor distintos, só evidência no pedido e prova obrigatória para confirmação', async () => {
   const examiner = seat('a'), reviewer = seat('b');
   const tasks: any[] = [], releases: string[] = [];
-  const result = await examineFunctionalModule({module:'qa', intentId, repo:'/synthetic', map, findings:[finding],
+  const result = await examineFunctionalModule({module:'qa', intentId, map, findings:[finding],
     reserve: async purpose => purpose === 'examiner' ? examiner : reviewer,
     release: async (_seat, state) => { releases.push(state); },
     worker: {run: async call => {
@@ -65,7 +67,7 @@ test('examinador e revisor distintos, só evidência no pedido e prova obrigató
 test('não confirma com mesmo provedor, preserva cota ou indisponibilidade e não libera execução incerta', async () => {
   const examiner = seat('a'), reviewer = seat('a');
   const released: string[] = [];
-  const result = await examineFunctionalModule({module:'qa', intentId, repo:'/synthetic', map, findings:[finding],
+  const result = await examineFunctionalModule({module:'qa', intentId, map, findings:[finding],
     reserve: async purpose => purpose === 'examiner' ? examiner : reviewer,
     release: async (_seat, state) => { released.push(state); },
     worker: {run: async () => JSON.stringify({kind:'exame', filesRead:['src/routes.ts'], checklist:['qa'], findings:[]})},
@@ -73,11 +75,11 @@ test('não confirma com mesmo provedor, preserva cota ou indisponibilidade e nã
   assert.equal(result.findings[0]!.failure, 'MODULE_EXAM_PROVIDER_NOT_DISTINCT');
   assert.equal(result.findings[0]!.status, 'provavel');
   assert.deepEqual(released, ['exited','not_started']);
-  const quota = await examineFunctionalModule({module:'qa', intentId, repo:'/synthetic', map, findings:[finding],
+  const quota = await examineFunctionalModule({module:'qa', intentId, map, findings:[finding],
     reserve: async () => { throw new Refusal('PROVIDER_USAGE_LIMIT'); }, release: async () => {}, worker:{run:async()=>''},
   });
   assert.equal(quota.coverage[0]!.reason, 'PROVIDER_USAGE_LIMIT');
-  const uncertain = await examineFunctionalModule({module:'qa', intentId, repo:'/synthetic', map, findings:[],
+  const uncertain = await examineFunctionalModule({module:'qa', intentId, map, findings:[],
     reserve: async () => examiner, release: async () => { throw Error('não deve liberar'); }, worker:{run:async()=>{ throw new Refusal('VERIFY_EXAM_TIMEOUT'); }},
   });
   assert.equal(uncertain.coverage[0]!.reason, 'VERIFY_EXAM_TIMEOUT');
@@ -85,7 +87,7 @@ test('não confirma com mesmo provedor, preserva cota ou indisponibilidade e nã
 
 test('falha de cota do revisor não inventa confirmação', async () => {
   const examiner = seat('a');
-  const result = await examineFunctionalModule({module:'qa', intentId, repo:'/synthetic', map, findings:[finding],
+  const result = await examineFunctionalModule({module:'qa', intentId, map, findings:[finding],
     reserve: async purpose => { if (purpose === 'reviewer') throw new Refusal('PROVIDER_USAGE_LIMIT'); return examiner; },
     release: async () => {}, worker:{run:async()=>JSON.stringify({kind:'exame',filesRead:['src/routes.ts'],checklist:['qa'],findings:[]})},
   });
@@ -95,8 +97,45 @@ test('falha de cota do revisor não inventa confirmação', async () => {
 });
 
 test('recusa de autorização encerra o exame', async () => {
-  await assert.rejects(() => examineFunctionalModule({module:'qa', intentId, repo:'/synthetic', map, findings:[],
+  await assert.rejects(() => examineFunctionalModule({module:'qa', intentId, map, findings:[],
     reserve: async () => { throw new Refusal('PROJECT_FORBIDDEN', 403); },
     release: async () => {}, worker:{run:async()=>''},
   }), (error: unknown) => error instanceof Refusal && error.code === 'PROJECT_FORBIDDEN');
+});
+
+
+test('limite na fase de leitura preserva cobertura anterior e impede consumo do revisor', async () => {
+  const examiner = seat('a');
+  const extended = {...map, files: [...map.files,
+    {file: 'pending.ts', code: 'export const one = 1;', reason: null},
+    {file: 'unattempted.ts', code: 'export const two = 2;', reason: null},
+  ]};
+  const requests: string[] = [];
+  let calls = 0;
+  const result = await examineFunctionalModule({module: 'qa', intentId, map: extended, findings: [finding],
+    async reserve(purpose) { requests.push(purpose); return examiner; },
+    async release() {},
+    worker: {async run(call) {
+      calls++;
+      assert.ok(!('repo' in call));
+      if (calls === 2) throw new Refusal('PROVIDER_USAGE_LIMIT');
+      return JSON.stringify({kind: 'exame', filesRead: ['src/routes.ts'], checklist: ['qa'], findings: []});
+    }},
+  });
+  assert.deepEqual(requests, ['examiner', 'examiner']);
+  assert.deepEqual(result.coverage.map(row => [row.status, row.reason]),
+    [['lido', null], ['nao_julgado', 'binário'], ['nao_julgado', 'PROVIDER_USAGE_LIMIT'], ['nao_julgado', 'PROVIDER_USAGE_LIMIT']]);
+  assert.equal(result.findings[0]?.status, 'provavel');
+  assert.equal(result.findings[0]?.failure, 'PROVIDER_USAGE_LIMIT');
+});
+
+test('coletores isolados identificam apenas a evidência determinística da linha', async () => {
+  const result = await examineFunctionalModule({module: 'qa', intentId, map, isolatedMeasurements: true, findings: [
+    {...finding, evidence: 'app.get("/pedidos", handler);'},
+    {...finding, evidence: 'app.get("/ausente", handler);'},
+  ]});
+  assert.equal(result.mode, 'somente_ferramentas');
+  assert.deepEqual(result.findings.map(candidate => [candidate.status, candidate.verifier?.model]),
+    [['confirmado', 'medição determinística'], ['provavel', undefined]]);
+  assert.ok(result.coverage.every(row => row.status === 'nao_julgado'));
 });

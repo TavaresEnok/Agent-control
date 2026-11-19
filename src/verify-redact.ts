@@ -87,9 +87,9 @@ export function redactText(text: string, secrets: readonly string[]): string {
   return out + text.slice(cursor);
 }
 
-export function redactUnknownSecrets(text: string): string {
+export function redactUnknownSecrets(text: string, mask: (secret: string) => string = masked): string {
   let out = text;
-  for (const pattern of UNKNOWN_PATTERNS) out = out.replace(fresh(pattern, true), match => masked(match));
+  for (const pattern of UNKNOWN_PATTERNS) out = out.replace(fresh(pattern, true), mask);
   return out;
 }
 

@@ -24,7 +24,7 @@ import {
   type ModuleCollectorOutput,
   type VerificationModuleRunResult,
 } from './verification-modules.ts';
-import type {VerifyWorker} from './verify-types.ts';
+import {composePersonalModuleExamRuntime, createPersonalModuleExam, type ModuleExamRuntime} from './module-exam-native.ts';
 
 const messages: Record<string, string> = {
   VERIFY_USAGE: 'Uso: npm run personal:<modulo> -- <instalação.json> <projeto> [--corrigir <runId> <ACH-001...> | --descartar <runId>]',
@@ -57,6 +57,7 @@ const messages: Record<string, string> = {
   VERIFY_SECRET_IN_REPORT: 'Um segredo vivo apareceria no relatório.',
   PRONTIDAO_ORIGIN_INVALID: 'Origem HTTPS inválida; informe apenas esquema https:// sem usuário, caminho ou parâmetros.',
   PRONTIDAO_ORIGIN_UNAUTHORIZED: 'A origem HTTPS informada não está declarada e autorizada na instalação ou no projeto.',
+  PROVIDER_USAGE_LIMIT: 'PROVIDER_USAGE_LIMIT. A cota do provedor foi atingida. Consulte as pendências no relatório.',
   EXAM_INTERRUPTED: 'A execução do módulo foi interrompida.',
 };
 
@@ -187,7 +188,8 @@ export type PersonalModuleCliDeps = {
   prontidaoProbeOptions?: PassiveHttpsProbeOptions;
   collectorOutput?: unknown;
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
-  worker?: VerifyWorker;
+  /** Tests supply a synthetic native supervisor and an isolated collector. */
+  moduleExamRuntime?: () => Promise<ModuleExamRuntime>;
   onResult?: (result: VerificationModuleRunResult) => void;
 };
 
@@ -237,6 +239,12 @@ export async function runPersonalModuleCli(
         : undefined;
 
     const commit = await readHead(project.repo);
+    let providerLimited = false;
+    const runExam = createPersonalModuleExam({
+      ledger, principal: project.owner, authority, commit,
+      loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
+      isolatedMeasurements: !deps?.moduleExamRuntime && (deps?.collectorOutput !== undefined || deps?.runCollector !== undefined),
+    });
     const runId = randomUUID();
     const collectorAbort = new AbortController();
     let rejectAbort: (error: unknown) => void = () => {};
@@ -252,7 +260,6 @@ export async function runPersonalModuleCli(
         },
         async stopJob() {
           collectorAbort.abort();
-          await deps?.worker?.stop?.();
         },
         rejectAbort,
       });
@@ -280,17 +287,22 @@ export async function runPersonalModuleCli(
             ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
             ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
             ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
-            ...(deps?.worker !== undefined ? {worker: deps.worker} : {}),
+            async examinar(request) {
+              const examined = await runExam(request);
+              providerLimited = examined.coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT')
+                || examined.findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT');
+              return examined;
+            },
           });
           void task.catch(() => undefined);
           return await Promise.race([task, aborted]);
         },
         () => {
           collectorAbort.abort();
-          void deps?.worker?.stop?.().catch(() => undefined);
         },
       );
       deps?.onResult?.(result);
+      if (providerLimited) throw new Refusal('PROVIDER_USAGE_LIMIT', 409);
       if (result.hasToolFailure) {
         throw new Refusal('VERIFY_TOOLS_FAILED', 409);
       }

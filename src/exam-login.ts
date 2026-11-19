@@ -210,6 +210,8 @@ export async function prepareClaudeExamAccessToken(input: {
   now?: number | (() => number);
   examMaxMs?: number;
   renew: (accountDir: string) => Promise<void>;
+  /** A stale credential is refused before any account write or renewal. */
+  freshOnly?: boolean;
   lock?: AccountLoginLock;
   hooks?: {beforeForceExpire?: () => Promise<void>; beforeRestore?: () => Promise<void>};
 }): Promise<{status: 'fresh' | 'renewed'; accessToken: string; secrets: string[]}> {
@@ -250,6 +252,7 @@ export async function prepareClaudeExamAccessToken(input: {
         };
       }
 
+      if (input.freshOnly) throw new Refusal('EXAM_LOGIN_STALE', 409);
       await input.hooks?.beforeForceExpire?.();
       const beforeWriteText = await readCredentialText(file);
       if (beforeWriteText === undefined) throw new Refusal('EXAM_LOGIN_STALE', 409);

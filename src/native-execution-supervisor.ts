@@ -1,9 +1,10 @@
+import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {redactNativeLogsOrWithhold,assertNoNativeTaskSecrets} from './native-execution-redaction.ts';
 import {readNativeSecretSnapshot,writeNativeSecretSnapshot,quarantineNativeLegacyLog,readNativeArtifactSecrets} from './native-execution-secret-snapshot.ts';
 import {collectSecretValues} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {assertCodexSubscriptionIdentity,readMountedCredentialSecrets} from './native-worker-security.ts';
-import {providerLimitDisposition} from './quota-exhaustion.ts';
+import {isProviderLimit, noteProviderExhaustion, providerLimitDisposition} from './quota-exhaustion.ts';
 import {requireProjectEnvironmentLaunch} from './project-environments.ts';
 import {verifiedWorktreeWriterContinuation} from './worktree-lease.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
@@ -45,7 +46,9 @@ const Path=z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes(
 export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,sessionId:Id,base:GitId,
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(Path).max(64),
  artifactId:Id.optional(),outputSchema:z.record(z.string(),z.unknown()).optional(),timeoutMs:z.number().int().min(1000).max(1800000).default(900000),
+ moduleExam:z.object({accountId:Id,profileId:Id,model:z.string().min(1).max(100)}).strict().optional(),
  model:z.string().min(1).max(100).optional(),effort:z.enum(['low','medium','high','xhigh','max']).optional()}).strict().superRefine((v,c)=>{
+ if(v.moduleExam&&(v.role!=='specialist'||v.model!==undefined||v.effort!==undefined))c.addIssue({code:'custom',message:'MODULE_EXAM_SCOPE_MISMATCH'});
  if((v.model===undefined)!==(v.effort===undefined))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
  if(v.model!==undefined&&(v.model!=='claude-opus-5-5'||v.effort!=='medium'))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
  if(v.role==='programmer'&&!v.writePaths.length)c.addIssue({code:'custom',message:'PROGRAMMER_SCOPE_REQUIRED'});
@@ -63,6 +66,7 @@ export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'complet
 const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
 export {nativeExecutionExecutorDigest};
 const toolsEntrypoint=['node','/opt/agent-control/dist/src/native-tools-worker.mjs'];
+const moduleExamCompanion=['node','-e','setInterval(() => {}, 60_000)'];
 const workerEntrypoint=['node','/opt/agent-control/dist/src/native-execution-worker.mjs'];
 /** Remove only the private network identified by the signed terminal receipt.
  * Caller must hold the fenced job lock and have confirmed both containers absent. */
@@ -105,6 +109,8 @@ export class NativeExecutionSupervisor{
  get active(){return this.config.active!==false;}
  get keyFingerprint(){return this.fingerprint;}private readonly key;private readonly publicKey:string;private readonly fingerprint:string;
  private readonly subjects=new Map<string,string>();private readonly docker:DockerDaemon;private readonly user:string;
+ private readonly moduleExamEgress=new Map<string,()=>void>();
+ closeModuleExamEgress(jobId:string){this.moduleExamEgress.get(jobId)?.();this.moduleExamEgress.delete(jobId);}
  private readonly effectTails=new Map<string,Promise<void>>();
  constructor(readonly ledger:Ledger,private readonly config:NativeExecutionSupervisorConfig,private readonly diskGuard:DiskGuard|undefined=diskGuardFromEnvironment()){
   z.string().regex(/^[a-z][a-z0-9._-]{0,99}$/).parse(config.id);this.scopeId=config.id+'@'+(config.provider??'codex');
@@ -146,6 +152,18 @@ export class NativeExecutionSupervisor{
    JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=g.project_id JOIN ac_quota_observations q ON q.account_id=a.id
    WHERE g.id=$1 AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g FOR SHARE OF a,p,x`,[input.grantId])).rows[0];
   if(!g||g.state!=='reserved'||g.resource_kind!=='model'||g.context_id!==authority.contextId||g.project_id!==context.project_id||g.intent_id!==input.intentId||Number(g.manager_epoch)!==authority.epoch||g.role!==input.role||g.profile_role!==input.role||g.provider!==provider||g.mode!==mode||g.eligibility!=='documented_supported'||!g.account_enabled||!g.profile_enabled||!this.subjects.has(g.account_id)||g.resource_identity!==provider+':'+this.subjects.get(g.account_id))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+  if(input.moduleExam){
+   const binding=(await c.query(`SELECT 1 FROM ac_verify_runs r JOIN ac_exam_contexts e
+    ON e.context_id=r.context_id AND e.project_id=r.project_id AND e.module=r.module
+    JOIN ac_intents i ON i.id=r.intent_id
+    WHERE r.intent_id=$1 AND r.context_id=$2 AND r.commit_id=$3 AND r.status='running'
+    AND i.command->'payload'->>'workflow'='security-verify-readonly-v1' AND ac_activation_personal()`,
+    [input.intentId,authority.contextId,input.base])).rowCount;
+   if(!binding||this.config.syntheticFixture||!moduleExamProviders.some(candidate=>candidate===this.config.provider)||
+    input.moduleExam.accountId!==g.account_id||input.moduleExam.profileId!==g.profile_id||input.moduleExam.model!==g.model)
+    throw new Refusal('MODULE_EXAM_SCOPE_MISMATCH');
+   return g;
+  }
   if((input.role==='specialist'||input.role==='reviewer')&&await this.personalReadonlyExam(c,input.intentId,input.role))return g;
   const quality=(await c.query(`SELECT p.snapshot,p.digest FROM ac_execution_contracts x JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision WHERE x.intent_id=$1 AND x.project_id=$2`,[input.intentId,context.project_id])).rows[0];
   if(!quality)throw new Refusal('NATIVE_EXECUTION_POLICY_REQUIRED');
@@ -196,10 +214,12 @@ export class NativeExecutionSupervisor{
    grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||this.profileDigest(grant)!==job.profile_digest)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   assertModelAllowed(grant.model);return fn();
  });}
- async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>){
+ async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(prior){await this.validateReplay(principal,authority,input,prior);return this.reconcile(principal,authority,input);}
   if(!this.active)throw new Refusal('NATIVE_EXECUTOR_RETIRED');
+  const checkAbort=()=>{if(signal?.aborted)throw new Refusal('EXAM_INTERRUPTED');};
+  checkAbort();
   const g=await this.ledger.tx(async c=>{const grant=await this.identity(c,principal,authority,input);assertModelAllowed(grant.model);
    // This path creates a private network outside the fenced resource bridge.
    if(await requireRecoveryInventory(c,this.ledger))throw new Refusal('RECOVERY_EFFECT_NOT_INSTRUMENTED');
@@ -252,11 +272,16 @@ export class NativeExecutionSupervisor{
    assessment=personal?undefined:(await new ProviderEligibility(this.ledger).view(principal,g.project_id,g.account_id,1)).latest;
    if(!personal&&(!assessment?.fresh||assessment.effectiveStatus!=='documented_supported'||assessment.authenticationMode!==(synthetic?'synthetic':'subscription_oauth')||assessment.executionMode!==(synthetic?'synthetic':'central_isolated_cli')||assessment.adapterId!==this.config.id||assessment.adapterVersion!==this.executorDigest))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
    await new AccountHomes(this.ledger,this.config.accountRoot,this.config.protectedRepositories).inspectGranted(principal,input.grantId,authority);
-   envSecrets=[...this.config.workerEnv,...this.config.toolsEnv].flatMap(entry=>{const index=entry.indexOf('=');return index<0?[]:collectSecretValues({[entry.slice(0,index)]:entry.slice(index+1)});});
+   envSecrets=(input.moduleExam?[]:[...this.config.workerEnv,...this.config.toolsEnv]).flatMap(entry=>{const index=entry.indexOf('=');return index<0?[]:collectSecretValues({[entry.slice(0,index)]:entry.slice(index+1)});});
    examWorkflowEarly=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
    claudeExam=!synthetic&&readonlyExamIsolation(personal,examWorkflowEarly,input.role)&&this.config.provider==='claude';
    if(!claudeExam){
-    if(!synthetic)accountSecrets=personal?await readMountedCredentialSecrets(this.config.provider??'codex',accountRoot):(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
+    if(input.moduleExam){
+     const codexHome=join(accountRoot,'.codex'), info=await lstat(codexHome);
+     if(!info.isDirectory()||info.isSymbolicLink()||await realpath(codexHome)!==codexHome)throw new Refusal('EXAM_LOGIN_STALE');
+     accountSecrets=(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
+    }
+    else if(!synthetic)accountSecrets=personal?await readMountedCredentialSecrets(this.config.provider??'codex',accountRoot):(await assertCodexSubscriptionIdentity(this.subjects.get(g.account_id)!,accountRoot)).secrets;
     else{
      // Synthetic fixtures may opt into the production worker with synthetic
      // auth; older deterministic substitute workers have no auth file.
@@ -285,6 +310,7 @@ export class NativeExecutionSupervisor{
     const catalog=await this.ledger.pool.query(`SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider WHERE a.id=$1 AND a.provider='claude' AND m.model='claude-opus-5-5' AND 'medium'=ANY(m.efforts) AND (($2='claude-opus-5-5' AND $3='medium') OR EXISTS (SELECT 1 FROM ac_profiles p WHERE p.account_id=a.id AND p.model='claude-opus-5-5' AND p.effort='medium'))`,[g.account_id,g.model,g.effort]);
     if(!catalog.rowCount)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
    }
+   checkAbort();
    await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
    // Commit the uncertainty before files, Docker networks or processes exist.
    await this.ledger.tx(async c=>{const current=await this.identity(c,principal,authority,input);assertModelAllowed(current.model);
@@ -310,18 +336,19 @@ export class NativeExecutionSupervisor{
   try{
    if(claudeExam){
     inClaudePrep=true;
-    const prepared=await prepareClaudeExamAccessToken({accountDir:accountRoot,accountId:String(g.account_id),examMaxMs:input.timeoutMs,renew:this.config.examLoginRenew??renewClaudeLoginInPlace,lock:postgresAccountLoginLock(this.ledger)});
+    const prepared=await prepareClaudeExamAccessToken({accountDir:accountRoot,accountId:String(g.account_id),examMaxMs:input.timeoutMs,renew:this.config.examLoginRenew??renewClaudeLoginInPlace,lock:postgresAccountLoginLock(this.ledger),
+     ...(input.moduleExam?{freshOnly:true}:{})});
     examAccessToken=prepared.accessToken;
     accountSecrets=prepared.secrets;
     assertNoNativeTaskSecrets(input.task,[...envSecrets,...accountSecrets]);
     inClaudePrep=false;
    }
-   const repository=await this.jobRepository(this.ledger.pool,String(g.project_id));
+   const repository=input.moduleExam?undefined:await this.jobRepository(this.ledger.pool,String(g.project_id));
    await mkdir(p.root,{mode:0o700});jobDirCreated=true;
    await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});for(const path of [p.input,p.output,p.planning])await mkdir(path,{mode:0o700});
-   await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
+   if(repository)await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
    const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
-   if(stageDesignExamCaptures(personal,examWorkflow,input.role))await stageDesignCapturesForJob(repository,[p.planning,p.work]);
+   if(repository&&stageDesignExamCaptures(personal,examWorkflow,input.role))await stageDesignCapturesForJob(repository,[p.planning,p.work]);
    await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});token=randomBytes(32).toString('hex');
    for(const path of [p.workerToken,p.toolsToken])await writeFile(path,token,{mode:0o600,flag:'wx'});
    // A personal Claude or Codex evaluator reads the artifact itself, so it gets its own read-only copy: the tools container keeps the original and the two may not share a source.
@@ -329,8 +356,8 @@ export class NativeExecutionSupervisor{
    const designExam=personal&&readonlyDesignExam(examWorkflow,input.role);
    const securityExam=personal&&readonlySecurityExam(examWorkflow,input.role);
    const isolateExam=readonlyExamIsolation(personal,examWorkflow,input.role);
-   const workerArtifact=designExam||securityExam||(input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex'))?join(p.root,'review-artifact'):undefined;
-   if(workerArtifact){
+   const workerArtifact=repository&&(designExam||securityExam||(input.role!=='programmer'&&personal&&(this.config.provider==='claude'||this.config.provider==='codex')))?join(p.root,'review-artifact'):undefined;
+   if(workerArtifact&&repository){
     // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
     await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
     if(isolateExam){await replaceSecretClassFiles(workerArtifact);const stripped=await stripExamHostileConfig(workerArtifact);const stripNote=formatExamStripNote(stripped);if(stripNote)rememberExamStripNote(input.intentId,stripNote);}
@@ -351,6 +378,18 @@ export class NativeExecutionSupervisor{
    const toolsWork=workerOwnsCheckout?join(p.root,'tools-workspace'):p.work;
    if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});
    toolsMounts=[{source:toolsWork,destination:'/work',writable:input.role==='programmer'},{source:p.toolsToken,destination:'/runner/exec-token',writable:false}];
+   if(input.moduleExam){
+    const provider=this.config.provider;
+    if(provider!=='claude'&&provider!=='codex')throw new Refusal('MODULE_EXAM_PROVIDER_UNAVAILABLE');
+    const socket=join(p.root,'egress.sock');
+    this.moduleExamEgress.set(input.jobId,await startModuleExamEgress(socket,provider));
+    checkAbort();
+    workerEnv=[];
+    workerMounts=workerMounts.filter(m=>m.destination!=='/account'&&m.destination!=='/work'&&m.destination!=='/runner/exec-token');
+    workerMounts.push({source:socket,destination:moduleExamSocket,writable:false});
+    if(provider==='codex')workerMounts.push({source:join(accountRoot,'.codex','auth.json'),destination:'/account/.codex/auth.json',writable:false});
+    toolsMounts=[];
+   }
   }catch(error){
    const reason=inClaudePrep
     ?(error instanceof Refusal&&error.code==='EXAM_LOGIN_BUSY'?'exam_login_busy':error instanceof Refusal&&error.code==='EXAM_LOGIN_STALE'?'exam_login_stale':error instanceof Refusal&&error.code==='EXAM_LOGIN_RESTORE_FAILED'?'exam_login_restore_failed':error instanceof Refusal&&error.code==='NATIVE_EXECUTION_SECRET_IN_TASK'?'secret_in_task':'exam_login_token_failed')
@@ -358,14 +397,18 @@ export class NativeExecutionSupervisor{
    await failBeforeLaunch(reason);
    throw error;
   }
+  const companion=input.moduleExam?moduleExamCompanion:toolsEntrypoint;
+  const toolsEnv=input.moduleExam?[]:[...this.config.toolsEnv];
+  const toolsDirectory=input.moduleExam?'/':'/work';
   const host=(networkId:string,mounts:typeof toolsMounts)=>({NetworkMode:networkId,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9,Tmpfs:{'/tmp':'rw,nosuid,nodev,size=64m'},Binds:mounts.map(m=>describeBind(m))});
   let started:{network:string;tools:string;worker:string};
   try{started=await this.serialEffect(input.jobId,async()=>{
+   checkAbort();
    const network=await this.effect(principal,authority,input,()=>this.docker.createPrivateNetwork('ac-native-exec-'+input.jobId,labels));
    await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET network_id=$2 WHERE id=$1',[input.jobId,network]);
-   const tools=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-tools-'+input.jobId,{Image:this.config.toolsImage,User:this.user,WorkingDir:'/work',Entrypoint:toolsEntrypoint,Cmd:[],Env:[...this.config.toolsEnv],Labels:labels,HostConfig:host(network,toolsMounts)}));
+   const tools=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-tools-'+input.jobId,{Image:this.config.toolsImage,User:this.user,WorkingDir:toolsDirectory,Entrypoint:companion,Cmd:[],Env:toolsEnv,Labels:labels,HostConfig:host(network,toolsMounts)}));
    await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[input.jobId,tools]);
-   const worker=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-worker-'+input.jobId,{Image:this.config.workerImage,User:this.user,WorkingDir:'/planning',Entrypoint:workerEntrypoint,Cmd:[],Env:[...workerEnv],Labels:labels,HostConfig:host(network,workerMounts),NetworkingConfig:{EndpointsConfig:{[network]:{},[this.config.providerNetworkId]:{}}}}));
+   const worker=await this.effect(principal,authority,input,()=>this.docker.create('ac-native-worker-'+input.jobId,{Image:this.config.workerImage,User:this.user,WorkingDir:'/planning',Entrypoint:workerEntrypoint,Cmd:[],Env:[...workerEnv],Labels:labels,HostConfig:host(input.moduleExam?'none':network,workerMounts),...(!input.moduleExam?{NetworkingConfig:{EndpointsConfig:{[network]:{},[this.config.providerNetworkId]:{}}}}:{})}));
    await this.ledger.pool.query('UPDATE ac_native_execution_jobs SET worker_id=$2 WHERE id=$1',[input.jobId,worker]);
    // The CLI wrapper waits for a signed launch. No account is opened yet.
    await this.effect(principal,authority,input,()=>this.docker.start(tools));await this.effect(principal,authority,input,()=>this.docker.start(worker));
@@ -391,17 +434,17 @@ export class NativeExecutionSupervisor{
   }
   const {network,tools,worker}=started;
   const physical=await this.docker.inspectPrivateNetwork(network);const address=physical?.Containers?.[tools]?.IPv4Address?.split('/')[0];
-  const expected={jobId:input.jobId,launchDigest:hash,workerImage:this.config.workerImage,toolsImage:this.config.toolsImage,workerUser:this.user,toolsUser:this.user,providerNetwork:this.config.providerNetworkId,networkId:network,toolsAddress:address,workerMounts,toolsMounts,role:input.role,phase:'gated-running'};
-  const rules={state:'running',workerEntrypoint,toolsEntrypoint,workerCmd:[],toolsCmd:[],workerEnv:[...workerEnv],toolsEnv:[...this.config.toolsEnv],workerWorkingDir:'/planning',toolsWorkingDir:'/work',workerMemory:512*1024*1024,toolsMemory:512*1024*1024,workerPids:96,toolsPids:96,workerNanoCpus:1e9,toolsNanoCpus:1e9};
+  const expected={jobId:input.jobId,launchDigest:hash,workerImage:this.config.workerImage,toolsImage:this.config.toolsImage,workerUser:this.user,toolsUser:this.user,providerNetwork:this.config.providerNetworkId,networkId:network,toolsAddress:address,workerMounts,toolsMounts,role:input.role,phase:'gated-running',...(input.moduleExam?{moduleExam:true}:{})};
+  const rules={state:'running',workerEntrypoint,toolsEntrypoint:companion,workerCmd:[],toolsCmd:[],workerEnv:[...workerEnv],toolsEnv,workerWorkingDir:'/planning',toolsWorkingDir:toolsDirectory,workerMemory:512*1024*1024,toolsMemory:512*1024*1024,workerPids:96,toolsPids:96,workerNanoCpus:1e9,toolsNanoCpus:1e9};
   await inspectNativeExecutionPair(dockerReadOnly(this.config.socketPath??'/var/run/docker.sock'),{worker,tools,network},expected,rules);
   const launchProvider=personal?this.config.provider:this.config.provider&&this.config.provider!=='codex'?this.config.provider:undefined;
   const effectiveModel=askedModel?'claude-opus-5-5':g.model,effectiveEffort=askedModel?'medium':g.effort;
   const tagSecrets=claudeExam&&examAccessToken?[examAccessToken]:accountSecrets;
-  const launch={schemaVersion:1,jobId:input.jobId,contextId:authority.contextId,intentId:input.intentId,grantId:input.grantId,accountId:g.account_id,profileId:g.profile_id,sessionId:input.sessionId,epoch:authority.epoch,providerSubjectDigest:this.subjects.get(g.account_id)!,credentialSnapshotTag:createHmac('sha256',token).update(canonical(tagSecrets)).digest('hex'),executorDigest:this.executorDigest,inputDigest:hash,proxyUrl:'http://provider-egress:8080',model:effectiveModel,effort:effectiveEffort,role:input.role,task:input.task,writePaths:input.writePaths,...(input.role!=='programmer'?{artifactCommit:input.base,outputSchema:input.outputSchema}:input.outputSchema?{outputSchema:input.outputSchema}:{}),environmentId:'native_tools',toolsAddress:address,timeoutMs:input.timeoutMs,expiresAt:Date.now()+60000,...(launchProvider?{provider:launchProvider}:{}),...(synthetic?{synthetic:true}:{}),...(claudeExam&&examAccessToken?{oauthAccessToken:examAccessToken}:{})};
+  const launch={schemaVersion:1,jobId:input.jobId,contextId:authority.contextId,intentId:input.intentId,grantId:input.grantId,accountId:g.account_id,profileId:g.profile_id,sessionId:input.sessionId,epoch:authority.epoch,providerSubjectDigest:this.subjects.get(g.account_id)!,credentialSnapshotTag:createHmac('sha256',token).update(canonical(tagSecrets)).digest('hex'),executorDigest:this.executorDigest,inputDigest:hash,proxyUrl:'http://provider-egress:8080',model:effectiveModel,effort:effectiveEffort,role:input.role,task:input.task,writePaths:input.writePaths,...(input.role!=='programmer'?{artifactCommit:input.base,outputSchema:input.outputSchema}:input.outputSchema?{outputSchema:input.outputSchema}:{}),environmentId:'native_tools',toolsAddress:address,...(input.moduleExam?{moduleExam:true as const}:{}),timeoutMs:input.timeoutMs,expiresAt:Date.now()+60000,...(launchProvider?{provider:launchProvider}:{}),...(synthetic?{synthetic:true}:{}),...(claudeExam&&examAccessToken?{oauthAccessToken:examAccessToken}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(launch)),this.key).toString('hex')};
   // Atomic publication prevents partial JSON reads by the worker; the journal
   // and private directory make this an exclusive one-time release.
-  await this.effect(principal,authority,input,async()=>{await writeFile(join(p.input,'launch.pending'),JSON.stringify(signed),{mode:0o600,flag:'wx'});try{await lstat(join(p.input,'launch.json'));throw new Refusal('NATIVE_EXECUTION_ALREADY_RELEASED');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}await rename(join(p.input,'launch.pending'),join(p.input,'launch.json'));});
+  await this.effect(principal,authority,input,async()=>{checkAbort();await writeFile(join(p.input,'launch.pending'),JSON.stringify(signed),{mode:0o600,flag:'wx'});try{await lstat(join(p.input,'launch.json'));throw new Refusal('NATIVE_EXECUTION_ALREADY_RELEASED');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}checkAbort();await rename(join(p.input,'launch.pending'),join(p.input,'launch.json'));});
   await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);await c.query("UPDATE ac_native_execution_jobs SET state='running',launch_digest=$2 WHERE id=$1 AND state='uncertain'",[input.jobId,digest(launch)]);await c.query("UPDATE ac_capacity_grants SET state='running',selection=COALESCE(selection,'{}'::jsonb)||$2::jsonb WHERE id=$1 AND state='uncertain'",[input.grantId,JSON.stringify({effectiveModel,effectiveEffort})]);});
   return {state:'running' as const,jobId:input.jobId};
  }
@@ -774,7 +817,8 @@ export class NativeExecutionSupervisor{
     grant?.state!=='released'||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role||!grant.physical_receipt||payload.physicalDigest!==digest(grant.physical_receipt)||
     ((payload.exitCode===0)!==(job.state==='completed')))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
    const result=await this.readResult(input,payload.exitCode);
-   if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.workerExitCode||result.jobId!==input.jobId)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+   if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.workerExitCode||result.jobId!==input.jobId||
+    (input.moduleExam&&grant.physical_receipt.failureCode!==result.failureCode))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
    await this.removeLaunchFiles(input.jobId);
    return {state:job.state as 'completed'|'failed',receipt,output:result.output,artifact:payload.artifact??null,failureCode:result.failureCode};
   }
@@ -790,7 +834,8 @@ export class NativeExecutionSupervisor{
   if(tools.State.Status!=='exited'||[worker,tools].some(p=>!Number.isFinite(Date.parse(p.State.FinishedAt))||p.State.FinishedAt.startsWith('0001-')))return {state:'uncertain' as const};
   const result=await this.readResult(input,worker.State.ExitCode);
   if(result.jobId!==input.jobId||result.exitCode!==worker.State.ExitCode||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
-  const disposition=await providerLimitDisposition(this.ledger,job.account_id,result.failureCode,result.usageWindows,Date.now(),Date.parse(worker.State.FinishedAt));
+  if(input.moduleExam&&isProviderLimit(result.failureCode))await noteProviderExhaustion(this.ledger,job.account_id,result.usageWindows);
+  const disposition=input.moduleExam?'seal':await providerLimitDisposition(this.ledger,job.account_id,result.failureCode,result.usageWindows,Date.now(),Date.parse(worker.State.FinishedAt));
   if(disposition==='wait')return {state:'running' as const};
   let resumeFailureCode:string|null=null;
   if(disposition==='resume'){
@@ -825,7 +870,8 @@ export class NativeExecutionSupervisor{
    }
   }
   const effectiveExitCode=resumeFailureCode?(result.exitCode!==0?result.exitCode:1):finalization?.status==='failed'&&result.exitCode===0?1:result.exitCode;
-  const physical={jobId:input.jobId,containerId:worker.Id,toolsContainerId:tools.Id,networkId:job.network_id,exitCode:effectiveExitCode,workerExitCode:worker.State.ExitCode,finalization,finishedAt:worker.State.FinishedAt,toolsFinishedAt:tools.State.FinishedAt,synthetic:Boolean(this.config.syntheticFixture),executorDigest:this.executorDigest,nativeSessionId:result.nativeSessionId,normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows};
+  const physical={jobId:input.jobId,containerId:worker.Id,toolsContainerId:tools.Id,networkId:job.network_id,exitCode:effectiveExitCode,workerExitCode:worker.State.ExitCode,finalization,finishedAt:worker.State.FinishedAt,toolsFinishedAt:tools.State.FinishedAt,synthetic:Boolean(this.config.syntheticFixture),executorDigest:this.executorDigest,nativeSessionId:result.nativeSessionId,normalizedTokensUsed:result.normalizedTokensUsed,usageWindows:result.usageWindows,
+   ...(input.moduleExam?{failureCode:result.failureCode}:{})};
   const payload={schemaVersion:1,accountId:job.account_id,profileId:job.profile_id,profileDigest:job.profile_digest,jobId:input.jobId,intentId:input.intentId,contextId:authority.contextId,grantId:input.grantId,sessionId:input.sessionId,epoch:Number(job.manager_epoch),inputDigest:job.input_digest,executorDigest:this.executorDigest,outputDigest:digest(result.output),physicalDigest:digest(physical),workerExitCode:result.exitCode,artifact,exitCode:effectiveExitCode};
   const receipt={payload,signature:sign(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),this.key).toString('hex')};
   await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);const saved=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];if(['completed','failed'].includes(saved.state)){if(digest(saved.receipt)!==digest(receipt))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');return;}

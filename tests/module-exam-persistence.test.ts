@@ -22,7 +22,7 @@ test('exame indisponível conserva a evidência do coletor sem atribuir confirma
     assert.equal(withoutExam.achados[0]?.verifier, null);
     const result = await runVerificationModule({...input, collectorOutput, async examinar(req) {
       const map = await mapModuleSnapshot(req.snapshot);
-      return examineFunctionalModule({...req, repo: req.snapshot, map});
+      return examineFunctionalModule({...req, map});
     }});
     assert.equal(result.achados.length, 1);
     assert.equal(result.achados[0]?.status, 'provavel');
@@ -43,7 +43,7 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     const reviewer = seat('revisor');
     const result = await runVerificationModule({...input, collectorOutput, async examinar(req) {
       const map = await mapModuleSnapshot(req.snapshot);
-      return examineFunctionalModule({...req, repo: req.snapshot, map, async reserve(purpose) {
+      return examineFunctionalModule({...req, map, async reserve(purpose) {
         return purpose === 'examiner' ? author : reviewer;
       }, async release() {}, worker: {async run(call) {
         return JSON.stringify(call.provider === 'autor'
