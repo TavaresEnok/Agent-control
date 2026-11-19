@@ -1292,3 +1292,5 @@ PAUSADO-COTA
 - 19/11/2026 22:31 UTC — Imagem de prontidao construída e arquivada por digest em 563be97a.
 - 19/11/2026 22:31 UTC — C-CONFORMIDADE-VIVA-R5 encerrado com código 0.
 - 19/11/2026 22:31 UTC — Confere a proveniência dos achados de rota pela CLI no laboratório. Ordem C-DOCUMENTACAO-VIVA-R5 em worktree separado conforme 43f1c664.
+- 19/11/2026 22:31 UTC — Correção c9-publicacao recebida em 34f85753. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:31 UTC — trabalho-C-DOCUMENTACAO-VIVA-R5 iniciado em final-doc-viva por terra high.
