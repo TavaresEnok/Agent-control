@@ -1,5 +1,6 @@
 import {constants, openSync, readSync, closeSync, fstatSync, readdirSync} from 'node:fs';
 import {basename, join, relative, sep} from 'node:path';
+import {parseDocument} from 'yaml';
 import {passiveHeaderFacts} from './header-facts.mjs';
 
 export const AUDIT_VERSION = '1.0.0';
@@ -289,6 +290,13 @@ function* composeLines(content, onIncomplete) {
 
 /** Reads declaration lines without executing Compose, resolving external files or interpolating variables. */
 export function parseComposeServices(content, onIncomplete = () => {}) {
+  // Validate the whole document, including opaque extensions, without converting nodes to JS or resolving aliases.
+  const document = parseDocument(content, {schema: 'failsafe', prettyErrors: false});
+  if (document.errors.length) {
+    onIncomplete();
+    return [];
+  }
+
   const services = [];
   let servicesIndent = null;
   let current = null;
