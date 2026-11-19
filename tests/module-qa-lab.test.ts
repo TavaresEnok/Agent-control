@@ -10,6 +10,7 @@ import {assertBrowserFixture, imageRenderer, stageBrowserFixture} from './fixtur
 const qaModuleDir = fileURLToPath(new URL('../deploy/modules/qa/', import.meta.url));
 const fixtureDir = fileURLToPath(new URL('./fixtures/module-qa/', import.meta.url));
 const cleanFixtureDir = fileURLToPath(new URL('./fixtures/module-qa-clean/', import.meta.url));
+const languageMutationFixtureDir = fileURLToPath(new URL('./fixtures/module-qa-mutacao-linguagens/', import.meta.url));
 const labEnabled = process.env.AC_MODULE_LAB === '1';
 
 function readQaDigestPin(raw: string): string {
@@ -125,6 +126,66 @@ const row = (out: Output, tool: string) => {
 };
 
 const passRows = (out: Output) => out.coverage.filter(row => row.tool === 'node-test-v8-execucao');
+
+test('imagem pelo digest publica mutação aritmética e falsificação de propriedade pelo entrypoint', {skip: !labEnabled}, () => {
+  const pin = readQaDigestPin(readFileSync(join(qaModuleDir, 'digest.txt'), 'utf8'));
+  const repo = mkdtempSync(join(tmpdir(), 'qa-language-mutation-fixture-'));
+  try {
+    cpSync(languageMutationFixtureDir, repo, {recursive: true});
+    chmodSync(repo, 0o755);
+
+    const control = collect(pin, repo);
+    for (const tool of ['python-unittest-coverage', 'go-test-cover']) {
+      assert.equal(row(control, tool).status, 'ok');
+      const passes = control.coverage.filter(item => item.tool === `${tool}-execucao`);
+      assert.equal(passes.length, 3);
+      assert.ok(passes.every(pass => pass.status === 'ok' && /aprovado/.test(pass.detail)));
+    }
+    assert.equal(row(control, 'mutmut').status, 'ok');
+    assert.match(row(control, 'mutmut').detail, /medição concluída.*2 candidatos enumerados, 1 mortos, 1 sobreviventes, 0 sem classificação/);
+    assert.equal(row(control, 'go-mutesting').status, 'ok');
+    assert.match(row(control, 'go-mutesting').detail, /medição parcial.*3 candidatos enumerados, 1 mortos, 1 sobreviventes, 1 sem classificação/);
+
+    for (const [tool, file] of [['mutmut', 'arithmetic.py'], ['go-mutesting', 'go/arithmetic.go']] as const) {
+      const trials = control.coverage.filter(item => item.tool.startsWith(`qa-mutante:${tool}:`));
+      assert.ok(trials.some(item => item.status === 'ok' &&
+        item.detail.includes(`morto. ${file}:3:`) && /operador \+ → -.*reprovou após a mutação/.test(item.detail)));
+      const survivor = control.findings.find(item => item.tool === tool && item.rule === 'QA-MUTANTE-SOBREVIVENTE');
+      assert.equal(survivor?.file, file);
+      const survivorLine = tool === 'mutmut' ? 7 : 4;
+      assert.equal(survivor.line, survivorLine);
+      assert.ok(survivor.evidence.includes(`${file}:${survivorLine}:`));
+      assert.match(survivor.evidence, /:\d+ operador \* → \//);
+    }
+    assert.ok(control.coverage.some(item => item.tool.startsWith('qa-mutante:go-mutesting:') &&
+      item.status === 'skipped' && /go\/arithmetic\.go:5:.*compilação Go reprovada/.test(item.detail)));
+    assert.equal(row(control, 'hypothesis').status, 'ok');
+    assert.match(row(control, 'hypothesis').detail, /2\/2 propriedades medidas \(2 aprovadas, 0 falsificadas\)/);
+    assert.ok(control.findings.every(item => item.rule !== 'QA-PROPRIEDADE-FALSIFICADA'));
+
+    const source = join(repo, 'arithmetic.py');
+    const original = readFileSync(source, 'utf8');
+    const defective = original.replace('variável + right', 'variável - right');
+    assert.notEqual(defective, original);
+    writeFileSync(source, defective);
+
+    const defect = collect(pin, repo);
+    assert.equal(row(defect, 'mutmut').status, 'skipped');
+    assert.match(row(defect, 'mutmut').detail, /0 mortos, 0 sobreviventes.*suíte de referência reprovada/);
+    assert.equal(row(defect, 'hypothesis').status, 'ok');
+    assert.match(row(defect, 'hypothesis').detail, /2\/2 propriedades medidas \(1 aprovadas, 1 falsificadas\)/);
+    const found = defect.findings.filter(item => item.rule === 'QA-PROPRIEDADE-FALSIFICADA');
+    assert.equal(found.length, 1);
+    assert.equal(found[0]?.file, 'test_arithmetic.py');
+    assert.equal(found[0]?.line, 16);
+    assert.match(found[0]!.evidence, /caso [a-f0-9]{16}.*reprovou por asserção após [1-9]\d* chamadas.*semente/i);
+    assert.equal(row(defect, 'python-unittest-coverage').status, 'ok');
+    assert.ok(defect.findings.some(item => item.tool === 'python-unittest-coverage' && item.rule === 'QA-TESTE-FALHOU'));
+    assert.deepEqual(row(defect, 'go-mutesting'), row(control, 'go-mutesting'));
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
 
 test('imagem pelo digest mede Chromium offline, contraste e regressão visual objetiva', {skip: !labEnabled}, () => {
   const pin = readQaDigestPin(readFileSync(join(qaModuleDir, 'digest.txt'), 'utf8'));

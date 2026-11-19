@@ -16,6 +16,7 @@ const {
 } = measurement;
 const fixture = fileURLToPath(new URL('./fixtures/module-qa-mutacao-linguagens/', import.meta.url));
 const pythonRunner = fileURLToPath(new URL('../deploy/modules/qa/mutacao-linguagens/python-runner.py', import.meta.url));
+const pythonUnitRunner = fileURLToPath(new URL('../deploy/modules/qa/python-test-runner.py', import.meta.url));
 
 type Edit = {id: string; file: string; line: number; column: number; before: string; after: string};
 type FixtureResult = {status: string; mutants: (Edit & {status: string; reason?: string})[]};
@@ -108,7 +109,7 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
   const start = [event('start'), event('run', 'TestTotal')];
   const baseline = run(0, [...start, event('pass', 'TestTotal'), event('pass')]);
   assert.equal(classifyTrial(baseline, run(1, [...start, event('fail', 'TestTotal'), event('fail')])).status, 'killed');
-  assert.equal(run(1, [event('build-fail'), event('fail')]).reason, 'go-test-execution');
+  assert.equal(run(1, [event('build-fail'), event('fail')]).reason, 'go-build-failed');
   assert.equal(run(1, []).reason, 'go-test-execution');
   assert.equal(run(0, [...start, event('pass')]).reason, 'go-test-execution');
   assert.equal(run(1, [], 'module lookup disabled by GOPROXY=off').reason, 'offline-dependency');
@@ -141,8 +142,8 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
   const root = mkdtempSync(join(tmpdir(), 'qa-synthetic-python-'));
   try {
     const project = join(root, 'project');
-    const tools = join(root, 'tools');
-    mkdirSync(tools);
+    const tools = join(root, 'tools', 'mutacao-linguagens');
+    mkdirSync(tools, {recursive: true});
     cpSync(fixture, project, {recursive: true});
     cpSync(pythonRunner, join(tools, 'python-runner.py'));
     cpSync(pythonDeps!, join(tools, 'python-deps'), {recursive: true});
@@ -174,6 +175,38 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
     writeFileSync(join(project, ordinary), 'def test_hypothesis_name_only():\n    assert False\n');
     const withoutProperties = decodePythonSuite(run('properties', String(seed), ordinary), [ordinary], true);
     assert.equal(summarizeProperties(withoutProperties).reason, 'no-properties');
+    const partialFile = 'test_partial.py';
+    writeFileSync(join(project, partialFile), [
+      'from hypothesis import given, strategies as st', 'import os',
+      '@given(st.just(2))', 'def test_bad_property(value):',
+      "    os.write(1, b'log sintetico do teste\\n')", '    assert value == 0',
+      '@given(st.just(3))', 'def test_runtime_error(value):', '    raise RuntimeError("erro sintetico")', '',
+    ].join('\n'));
+    const partialRun = run('properties', String(seed), partialFile);
+    assert.match(partialRun.diagnostics, /log sintetico/);
+    const partial = summarizeProperties(decodePythonSuite(partialRun, [partialFile], true));
+    assert.equal(partial.status, 'partial');
+    assert.equal(partial.outcome, 'failed');
+    assert.equal(partial.reason, 'python-test-execution');
+
+    // Mirror the runner layout in the image and give unittest only its coverage import path.
+    const coveragePath = join(root, 'coverage-runtime');
+    mkdirSync(coveragePath);
+    cpSync(join(pythonDeps!, 'coverage'), join(coveragePath, 'coverage'), {recursive: true});
+    const unitRunner = join(root, 'tools', 'python-test-runner.py');
+    cpSync(pythonUnitRunner, unitRunner);
+    const unitPlan = join(root, 'plan.json');
+    writeFileSync(unitPlan, JSON.stringify({
+      files: [...files, 'test_unit.py'], sourceFiles: [file], maxTests: 200, maxProfileBytes: 1024 * 1024,
+    }));
+    writeFileSync(path, source);
+    const unitRun = invoke(python!, ['-P', '-s', '-S', '-B', unitRunner, unitPlan, join(root, 'coverage.json')],
+      project, {HOME: root, TMPDIR: root, PYTHONPATH: coveragePath});
+    const unitResult = JSON.parse(unitRun.output);
+    assert.equal(unitResult.unavailable, 0);
+    assert.equal(unitResult.errors, 0);
+    assert.deepEqual(unitResult.tests, [{file: 'test_unit.py', name: 'ArithmeticTest.test_total', status: 'passed'}]);
+    assert.equal(unitResult.coverage.files, 1);
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
@@ -207,7 +240,7 @@ test('go-mutesting e go test reais em cópia temporária da fixture', {skip: !go
     assert.equal(result.status, 'partial');
     assert.deepEqual(result.mutants.sort((a, b) => a.line - b.line).map(mutant => mutant.status),
       ['killed', 'survived', 'not-run']);
-    assert.equal(result.mutants.find(mutant => mutant.line === 5)?.reason, 'go-test-execution');
+    assert.equal(result.mutants.find(mutant => mutant.line === 5)?.reason, 'go-build-failed');
   } finally {
     rmSync(root, {recursive: true, force: true});
   }

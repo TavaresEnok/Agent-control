@@ -13,13 +13,13 @@ const python = '/usr/local/bin/python3.12';
 const go = '/usr/local/go/bin/go';
 const goPlanner = fileURLToPath(new URL('./go-mutesting-plan', import.meta.url));
 const pythonRunner = fileURLToPath(new URL('./python-runner.py', import.meta.url));
-const tools = {
-  python: {tool: 'mutmut', version: '3.5.0'},
-  go: {tool: 'go-mutesting', version: 'v0.0.0-20261002081621-9ce5f731e321'},
-  properties: {tool: 'hypothesis', version: '6.140.2'},
+const {languageMeasurements: pins} = JSON.parse(readFileSync(new URL('../qa-tools.lock.json', import.meta.url), 'utf8'));
+const pythonVersions = pins.python.versions;
+export const languageMeasurementTools = {
+  python: {tool: 'mutmut', version: pythonVersions.mutmut},
+  go: {tool: 'go-mutesting', version: pins.go.version},
+  properties: {tool: 'hypothesis', version: pythonVersions.hypothesis},
 };
-const pytestVersion = '8.4.2';
-const libcstVersion = '1.9.0';
 
 class MeasurementError extends Error {
   constructor(reason, status = 'not-run') {
@@ -38,7 +38,7 @@ function checkContext({repoDir, workRoot, workspace}, files) {
   if (!contained('/tmp', workRoot) || !contained(workRoot, workspace) ||
       realpathSync(workRoot) !== workRoot || realpathSync(workspace) !== workspace ||
       files.some(file => !contained(workspace, resolve(workspace, file)) ||
-        relative(workspace, resolve(workspace, file)) !== file || /[\x00-\x1f\x7f]/.test(file))) {
+        relative(workspace, resolve(workspace, file)) !== file || /[\p{Cc}\p{Cf}]/u.test(file))) {
     throw new MeasurementError('invalid-snapshot');
   }
 }
@@ -84,8 +84,8 @@ async function checkPython(run, scratch, mode) {
   requireTool(python);
   requireTool(pythonRunner, constants.R_OK);
   const installed = processJson(await pythonCommand(run, ['probe', mode], scratch, scratch));
-  if (installed?.pytest !== pytestVersion || installed.hypothesis !== tools.properties.version ||
-      (mode === 'plan' && (installed.mutmut !== tools.python.version || installed.libcst !== libcstVersion))) {
+  const required = mode === 'plan' ? Object.keys(pythonVersions) : ['pytest', 'hypothesis'];
+  if (required.some(tool => installed?.[tool] !== pythonVersions[tool])) {
     throw new MeasurementError('tool-unavailable', 'unavailable');
   }
 }
@@ -139,7 +139,7 @@ async function measure(language, context, selection) {
       requireTool(goPlanner);
       mkdirSync(cache);
       const version = processJson(await run(goPlanner, ['--version'], root, {}, limits.goMs));
-      if (version !== tools.go.version) throw new MeasurementError('tool-unavailable', 'unavailable');
+      if (version !== pins.go.version) throw new MeasurementError('tool-unavailable', 'unavailable');
     }
 
     const plan = await copySession(context, async (project, scratch) => {
@@ -185,10 +185,10 @@ async function measure(language, context, selection) {
 }
 
 async function collect(kind, context, copiedFiles, incomplete, runner) {
-  const report = {...tools[kind], seed};
+  const report = {...languageMeasurementTools[kind], seed};
   const language = kind === 'properties' ? 'python' : kind;
   const selection = selectLanguageSuite(language, copiedFiles, incomplete);
-  if (selection.reason) return {...report, status: 'not-run', reason: selection.reason};
+  if (selection.reason) return {...report, status: 'not-run', reason: selection.reason, selection: true};
   try {
     checkContext(context, copiedFiles);
     const result = await runner(selection);

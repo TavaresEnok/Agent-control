@@ -30,6 +30,8 @@ import {
   classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool, testIdentity,
 } from './execute-tests.mjs';
 import {collectLanguageSuite, languageSuites} from './language-tests.mjs';
+import {collectLanguageMutation, collectPythonProperties, languageMeasurementTools} from './mutacao-linguagens/index.mjs';
+import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
@@ -1257,6 +1259,7 @@ export async function collectQaModule(options = {}) {
     }
     const sourcePartial = incomplete || omittedSourceFiles > 0;
     const matrixPartial = sourcePartial || !!parserError || omittedTestFiles > 0;
+    const measurementPath = file => abbreviateIdentity(displayPath(file), 100);
     const toolRunners = [
       {
         name: suiteTool,
@@ -1323,6 +1326,19 @@ export async function collectQaModule(options = {}) {
         run: () => {
           if (failTool === tool) throw new Error('QA_LANGUAGE_TEST_FORCED_FAILURE');
           return collectLanguageSuite(language, context, copiedFiles, incomplete);
+        },
+      })),
+      ...Object.entries(languageMeasurementTools).map(([kind, {tool, version}]) => ({
+        name: tool,
+        version,
+        run: async () => {
+          if (failTool === tool) throw new Error('QA_LANGUAGE_MEASUREMENT_FORCED_FAILURE');
+          if (kind === 'properties') {
+            const report = await collectPythonProperties(context, copiedFiles, incomplete);
+            return publishProperties(report, coverageRow, measurementPath);
+          }
+          const report = await collectLanguageMutation(kind, context, copiedFiles, incomplete);
+          return publishMutation(report, coverageRow, measurementPath);
         },
       })),
     ];

@@ -77,14 +77,14 @@ export function decodePythonSuite(result, files, propertiesOnly = false) {
     return {id, file, line, status, property, examples};
   });
   if (new Set(tests.map(test => test.id)).size !== tests.length) throw new Error('duplicate-python-test');
-  if (report.unavailable) return {reason: 'offline-dependency'};
-  if (report.limited) return {reason: 'test-limit'};
-  if (!tests.length && report.exitCode === 5) return {tests};
-  const failed = tests.some(test => test.status === 'failed');
-  if (report.exitCode !== Number(failed) || tests.some(test => ['error', 'pending'].includes(test.status))) {
-    return {reason: 'python-test-execution'};
-  }
-  return {tests};
+  const failed = tests.some(test => test.status === 'failed' || test.status === 'error');
+  const executionError = !(tests.length === 0 && report.exitCode === 5) &&
+    (report.exitCode !== Number(failed) || tests.some(test => ['error', 'pending'].includes(test.status)));
+  const reason = report.unavailable ? 'offline-dependency' : report.limited ? 'test-limit'
+    : executionError ? 'python-test-execution' : undefined;
+  // Preserve other completed properties after a case-level error in a valid pytest report.
+  if (reason && propertiesOnly && report.exitCode === 1 && failed) return {reason, tests};
+  return reason ? {reason} : {tests};
 }
 
 export function decodeGoSuite({code, output, diagnostics}, testPackages) {
@@ -92,13 +92,13 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
   const tests = new Map();
   const packages = new Map();
   let buildFailure = false;
+  let executionFailure = false;
   for (const line of output.split('\n').filter(Boolean)) {
     const event = JSON.parse(line);
     const {Action: action, Package: pkg, Test: name, Output: message} = event ?? {};
     if (action === 'build-output' && goDependencyMissing.test(message)) return {reason: 'offline-dependency'};
-    if (action === 'build-fail' || (action === 'output' && /^(?:panic:|fatal error:)/m.test(message))) {
-      buildFailure = true;
-    }
+    if (action === 'build-fail' || (action === 'fail' && event.FailedBuild)) buildFailure = true;
+    if (action === 'output' && /^(?:panic:|fatal error:)/m.test(message)) executionFailure = true;
     if (!['start', 'run', 'pass', 'fail', 'skip'].includes(action)) continue;
     if (typeof pkg !== 'string' || (name !== undefined && typeof name !== 'string')) {
       throw new Error('invalid-go-event');
@@ -109,7 +109,7 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
         packages.set(pkg, 'pending');
       } else {
         // Build failures can report a package without starting a test binary.
-        if (packages.get(pkg) !== 'pending') buildFailure = true;
+        if (packages.get(pkg) !== 'pending') executionFailure = true;
         packages.set(pkg, action);
       }
       continue;
@@ -130,7 +130,8 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
   }
   const observed = [...tests.values()];
   const failedPackages = new Set(observed.filter(test => test.status === 'failed').map(test => test.package));
-  if (buildFailure || !packages.size || observed.some(test => test.status === 'pending') ||
+  if (buildFailure) return {reason: 'go-build-failed'};
+  if (executionFailure || !packages.size || observed.some(test => test.status === 'pending') ||
       [...testPackages].some(pkg => !packages.has(pkg)) ||
       [...packages].some(([pkg, status]) => status === 'pending' || (status === 'fail') !== failedPackages.has(pkg)) ||
       code !== Number(failedPackages.size > 0)) return {reason: 'go-test-execution'};
@@ -139,10 +140,12 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
 
 export function baselineStatus(suite) {
   if (suite.reason) return {status: 'not-run', reason: suite.reason};
-  if (suite.tests.some(test => test.status === 'failed')) return {status: 'failed', reason: 'baseline-failed'};
   const passed = suite.tests.filter(test => test.status === 'passed').length;
+  const failed = suite.tests.filter(test => test.status === 'failed').length;
+  const skipped = suite.tests.length - passed - failed;
+  if (failed) return {status: 'failed', reason: 'baseline-failed', passed, failed, skipped};
   if (!passed) return {status: 'not-run', reason: 'no-passing-tests'};
-  return {status: 'passed', passed, skipped: suite.tests.length - passed};
+  return {status: 'passed', passed, skipped};
 }
 
 export function classifyTrial(baseline, trial) {
@@ -188,12 +191,13 @@ export async function measurePlan(plan, runSuite) {
 }
 
 export function summarizeProperties(suite) {
-  if (suite.reason) return {status: suite.reason === 'offline-dependency' ? 'unavailable' : 'not-run', reason: suite.reason};
-  const properties = suite.tests;
-  if (!properties.length) return {status: 'not-run', reason: 'no-properties', properties};
+  const properties = suite.tests ?? [];
   const measured = properties.filter(test => test.examples > 0 && ['passed', 'failed'].includes(test.status));
-  if (!measured.length) return {status: 'not-run', reason: 'no-property-examples', properties};
-  const status = measured.length === properties.length ? 'measured' : 'partial';
+  if (!measured.length) {
+    const reason = suite.reason ?? (properties.length ? 'no-property-examples' : 'no-properties');
+    return {status: reason === 'offline-dependency' ? 'unavailable' : 'not-run', reason, properties};
+  }
+  const status = !suite.reason && measured.length === properties.length ? 'measured' : 'partial';
   const outcome = measured.some(test => test.status === 'failed') ? 'failed' : 'passed';
-  return {status, outcome, properties};
+  return {status, outcome, properties, ...(suite.reason && {reason: suite.reason})};
 }

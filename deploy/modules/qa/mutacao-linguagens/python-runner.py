@@ -1,8 +1,8 @@
 """Generate mutmut edits or run explicit pytest files in a disposable copy."""
-import contextlib
 import hashlib
 import importlib.metadata
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -180,20 +180,28 @@ def suite(mode, seed, files):
         "--hypothesis-seed=" + str(seed), "-q", "-s", "--tb=no", "--",
         *("./" + file for file in files),
     ]
-    with contextlib.redirect_stdout(sys.stderr):
-        result = pytest.main(args, plugins=[reporter])
+    result = pytest.main(args, plugins=[reporter])
     return {"exitCode": int(result), "tests": list(reporter.tests.values()),
             "limited": reporter.limited, "unavailable": reporter.unavailable}
 
 
-if __name__ == "__main__":
+def main():
     command, *args = sys.argv[1:]
     if command == "probe":
         result = probe(args[0])
     elif command == "plan":
         result = plan(args)
     elif command in ("suite", "properties"):
-        result = suite(command, int(args[0]), args[1:])
+        # Reserve stdout for the protocol even when a test writes directly to fd 1.
+        with os.fdopen(os.dup(1), "w", encoding="utf-8") as output:
+            sys.stdout.flush()
+            os.dup2(2, 1)
+            output.write(json.dumps(suite(command, int(args[0]), args[1:])) + "\n")
+        return
     else:
         raise SystemExit(1)
     print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()
