@@ -195,26 +195,35 @@ test('JSON do coletor vincula a função realmente executada e respeita a resolu
     chmodSync(repo, 0o755);
     writeFileSync(join(repo, 'src', 'pedido novo.mjs'), 'let total = 0; export function validar(x) { return x + ++total; }');
     writeFileSync(join(repo, 'src', 'pedido%20novo.mjs'), 'export function identidadeLiteral(x) { return x + 1; }');
-    writeFileSync(join(repo, 'src', 'operacoes.mjs'), 'export function somar(x) { return x + 1; }\nexport function subtrair(x) { return x - 1; }\nexport async function buscar() { return 42; }');
+    writeFileSync(join(repo, 'src', 'operacoes.mjs'), 'export function somar(x) { return x + 1; }\nexport function subtrair(x) { return x - 1; }\nexport async function buscar() { return 42; }\nexport function validar$(x) { return x; }');
+    writeFileSync(join(repo, 'src', 'outras.mjs'), 'export function buscar() { return -1; }');
     writeFileSync(join(repo, 'tests', 'vinculos.test.mjs'), [
       "import {test} from 'node:test'; import assert from 'node:assert/strict';",
       "import {validar} from '../src/pedido%20novo.mjs';",
       "import {identidadeLiteral} from '../src/pedido%2520novo.mjs';",
-      "import {somar, subtrair, buscar} from '../src/operacoes.mjs';",
+      "import * as ops from '../src/operacoes.mjs';",
+      "import {somar, subtrair, buscar, validar$} from '../src/operacoes.mjs';",
       "test('QA-VALIDADOR: contador', () => assert.equal(validar(0), 1));",
       "test('REQ-31 operação não exercida', () => { if (false) assert.equal(subtrair(1), 0); assert.equal(1 + 1, 2); });",
       "test('importa o nome com percentual', () => assert.equal(identidadeLiteral(1), 2));",
-      "test('função assíncrona', async () => assert.equal(await buscar(), 42));",
+      "test('função assíncrona', async () => assert.equal(await ops.buscar(), 42));",
+      "test('REQ-36 argumento de mensagem', () => assert.equal(1, 1, validar$(1)));",
       "test('operação exercida', () => assert.equal(somar(1), 2));",
     ].join('\n'));
-    appendFileSync(join(repo, 'requisitos.md'), '\nREQ-31: `subtrair`\nREQ-32: `somar`\nREQ-33: `buscar`\nREQ-34: `identidadeLiteral`\nREQ-35: `somar` e `subtrair`\n');
+    appendFileSync(join(repo, 'requisitos.md'), '\nREQ-31: `subtrair`\nREQ-32: `somar`\nREQ-33: `buscar` de `src/operacoes.mjs` retorna `OK`\nREQ-34: `identidadeLiteral`\nREQ-35: `somar` e `subtrair`\nREQ-36: `validar$`\nREQ-37: `validar` de `src/pedido novo.mjs`\n');
     const report = collect(pin, repo);
     assert.equal(row(report, 'node-test-v8').status, 'ok');
     assert.match(row(report, 'qa-propriedades-funcionais').detail, /4 de 5 casos/);
     assert.match(row(report, 'qa-requisito:REQ-32').detail, /somar/);
     const unproved = report.findings.filter(f => f.rule === 'QA-REQUISITO-SEM-PROVA');
     assert.ok(unproved.some(f => f.message.includes('REQ-31')));
-    for (const id of ['REQ-32', 'REQ-33', 'REQ-34']) assert.ok(!unproved.some(f => f.message.includes(id)), id);
+    for (const [id, file] of [['REQ-32', 'src/operacoes.mjs'], ['REQ-33', 'src/operacoes.mjs'], ['REQ-34', 'src/pedido%2520novo.mjs'], ['REQ-37', 'src/pedido%20novo.mjs']]) {
+      const requirement = row(report, 'qa-requisito:' + id);
+      assert.ok(requirement.detail.includes(file), id);
+      assert.match(requirement.detail, /vínculo comprovado nas três passadas/, id);
+      assert.ok(!unproved.some(f => f.message.includes(id)), id);
+    }
+    assert.ok(unproved.some(f => f.message.includes('REQ-36')));
     assert.ok(unproved.some(f => f.message.includes('REQ-35')));
   } finally { rmSync(repo, {recursive:true, force:true}); }
 });
