@@ -1,9 +1,11 @@
 """Inventário passivo de licenças e triagem de obrigações em lockfiles npm."""
 
 from bisect import bisect_right
+from collections import Counter
 from functools import cache
 from itertools import combinations, islice
 import json
+import math
 import re
 
 TOOL = "npm-license-policy"
@@ -13,6 +15,163 @@ PERMISSIVE = {"MIT", "ISC", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD"
 STRONG = re.compile(r"(?:A?GPL-[123]\.[01](?:-only|-or-later)?|SSPL-1\.0)")
 DEPENDENCY = re.compile(r"(?:node_modules/(?:@[-\w.]+/)?[-\w.]+/)*node_modules/(?:@[-\w.]+/)?[-\w.]+", re.ASCII)
 JSON_SPACE = re.compile(r"[ \t\r\n]*")
+SAFE_PATH = re.compile(r"[A-Za-z0-9._@+/\-]{1,400}", re.ASCII)
+EXCLUDED_DIRS_AND_FILES = {".git", ".github", ".ai", "node_modules", ".venv", "__pycache__"}
+EXCLUDED_LOWER = {
+    ".mcp.json", ".claude", ".husky", ".codex", ".grok",
+    ".aws", ".ssh", ".config", ".pypirc",
+    ".docker", ".git-credentials", ".gnupg", ".kube",
+    ".npmrc", ".netrc", ".pgpass",
+}
+SECRET_COMPONENT_RE = re.compile(
+    r"(?:^|[._-])(?:secrets?|credentials?|password|senha)(?:[._-]|$)",
+    re.IGNORECASE,
+)
+_NOT_A_MASK = r"(?![^\s\u2026]*\u2026)"
+_SECRET_VALUE = r'(?:"[^"\r\n]*"|\'[^\'\r\n]*\'|\S+)'
+_ASSIGN_NAME = r"pass|passwd|password|secret|token|(?<![A-Za-z])key(?!board)|auth|credential"
+_UNKNOWN_PATTERNS = (
+    re.compile(r"-----BEGIN(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----[\s\S]*?-----END(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----"),
+    re.compile(r"(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])"),
+    re.compile(r"(?<![A-Z0-9])ASIA[0-9A-Z]{16}(?![A-Z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,400}(?![A-Za-z0-9_])"),
+    re.compile(r"(?<![A-Za-z0-9_])ghp_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9_])ghs_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9_])gho_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,400}(?![A-Za-z0-9_-])"),
+    re.compile(r"(?<![A-Za-z0-9])xox[a-z]-[A-Za-z0-9-]{10,400}(?![A-Za-z0-9-])"),
+    re.compile(r"(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}://[^\s/:@\u2026]{1,200}:[^\s/@\u2026]{1,200}@"),
+    re.compile(r"(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,255}(?![A-Za-z0-9_-])"),
+    re.compile(r"(?<![A-Za-z0-9_])sk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9_])rk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])"),
+    re.compile(r"(?<![A-Za-z0-9_])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"),
+    re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])"),
+    re.compile(rf"(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*(?:bearer|basic)[ \t]+{_NOT_A_MASK}{_SECRET_VALUE}", re.IGNORECASE),
+    re.compile(r"(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]{0,39}[G-Zg-z+/])[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])"),
+    re.compile(r"(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,128}\.[A-Za-z0-9_-]{16,128}(?![A-Za-z0-9_-])"),
+    re.compile(rf"(?<![A-Za-z0-9_])--(?:{_ASSIGN_NAME})\w*(?:[\"']?\s*[:=]\s*|[ \t]+){_NOT_A_MASK}(?!(?:null|true|false)\b){_SECRET_VALUE}", re.IGNORECASE),
+    re.compile(rf"(?:{_ASSIGN_NAME})\w*[\"']?\s*[:=]\s*{_NOT_A_MASK}(?!(?:null|true|false)\b){_SECRET_VALUE}", re.IGNORECASE),
+)
+_BASE64_SECRET = re.compile(r"[A-Za-z0-9+]{40,}={0,2}")
+_SNAKE_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]{31,}$")
+_READABLE_SLUG = re.compile(r"^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)+(?:\.[a-z0-9]{1,8})?$")
+_SNAKE_PIECE = re.compile(r"^[a-z][a-z0-9_]*$")
+_SHORT_FILE_EXTENSION = re.compile(r"\.[A-Za-z0-9]{1,5}$")
+_MASK_TOKEN = re.compile(r"^\(sha256:[a-f0-9]{64}\)$")
+
+
+def _shannon_entropy(value):
+    total = len(value)
+    if not total:
+        return 0.0
+    counts = Counter(value)
+    return -sum((count / total) * math.log2(count / total) for count in counts.values())
+
+
+def _is_snake_token(token):
+    if _SNAKE_IDENTIFIER.fullmatch(token):
+        return True
+    pieces = [piece for piece in re.split(r"[^A-Za-z0-9_]+", token) if piece]
+    if not pieces or any(not _SNAKE_PIECE.fullmatch(piece) for piece in pieces):
+        return False
+    return any(_SNAKE_IDENTIFIER.fullmatch(piece) for piece in pieces)
+
+
+def _is_path_token(token):
+    if token.startswith(("/", "./", "../")):
+        return True
+    segments = token.split("/")
+    if len(segments) <= 1:
+        return False
+    if not all(len(segment) < 32 for segment in segments):
+        return False
+    return any(_SHORT_FILE_EXTENSION.search(segment) for segment in segments)
+
+
+def is_secret_token(token):
+    if not token or _MASK_TOKEN.fullmatch(token) or _is_path_token(token) or _is_snake_token(token):
+        return False
+    if "/" not in token:
+        if _BASE64_SECRET.search(token):
+            return True
+        return len(token) >= 32 and _shannon_entropy(token) >= 3.5
+    return any(
+        segment
+        and not _SNAKE_IDENTIFIER.fullmatch(segment)
+        and (_BASE64_SECRET.search(segment) or (len(segment) >= 32 and _shannon_entropy(segment) >= 3.5))
+        for segment in token.split("/")
+    )
+
+
+def has_known_secret(text):
+    return isinstance(text, str) and any(pattern.search(text) for pattern in _UNKNOWN_PATTERNS)
+
+
+def is_redacted_text(text):
+    if not isinstance(text, str):
+        return True
+    if has_known_secret(text):
+        return True
+    return any(is_secret_token(token) for token in text.split())
+
+
+def _is_readable_path_or_slug(token):
+    if _BASE64_SECRET.search(token):
+        return False
+    parts = token.split("/")
+    return all(_READABLE_SLUG.fullmatch(part) or _SNAKE_IDENTIFIER.fullmatch(part) or len(part) < 32 for part in parts)
+
+
+def sanitize_report_text(text):
+    if not isinstance(text, str):
+        return ""
+    out = text
+    for pattern in _UNKNOWN_PATTERNS:
+        out = pattern.sub("[trecho omitido]", out)
+    return re.sub(
+        r"\S+",
+        lambda m: "[removido: alta entropia]"
+        if not _is_readable_path_or_slug(m.group(0)) and is_secret_token(m.group(0))
+        else m.group(0),
+        out,
+    )
+
+
+def is_protected_component(part):
+    if not isinstance(part, str) or not part or part in {".", ".."} or part != part.strip():
+        return True
+    if part in EXCLUDED_DIRS_AND_FILES:
+        return True
+    lower = part.lower()
+    if lower in EXCLUDED_LOWER:
+        return True
+    if lower == ".env" or lower.startswith(".env"):
+        return True
+    if lower.endswith((".pem", ".key", ".p12", ".pfx", ".jks", ".tfstate", ".tfvars")):
+        return True
+    if lower.startswith(("id_", "credentials")):
+        return True
+    if lower.startswith("service-account") and lower.endswith(".json"):
+        return True
+    if "kubeconfig" in lower:
+        return True
+    if SECRET_COMPONENT_RE.search(part):
+        return True
+    return False
+
+
+def is_sensitive_path(file):
+    if not isinstance(file, str) or not file or not SAFE_PATH.fullmatch(file):
+        return True
+    parts = file.split("/")
+    if any(is_protected_component(part) for part in parts):
+        return True
+    if has_known_secret(file) or any(has_known_secret(part) for part in parts):
+        return True
+    if any(not _READABLE_SLUG.fullmatch(part) and is_secret_token(part) for part in parts):
+        return True
+    return False
 
 
 def classify(value):
@@ -49,7 +208,10 @@ def classify(value):
             return "permissiva"
         return "copyleft forte" if STRONG.fullmatch(key) else "revisão"
 
-    return category(expression), str(expression)
+    normalized = str(expression)
+    if is_redacted_text(normalized):
+        return "desconhecida", None
+    return category(expression), normalized
 
 
 @cache
@@ -85,6 +247,11 @@ def source_line(text, offset):
 
 
 def inspect_lock(text, project_license, file, report, project_origin=None):
+    if is_sensitive_path(file):
+        report.cover(TOOL + ":file", VERSION, "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+        return None
+    if project_origin is not None and is_sensitive_path(project_origin[0]):
+        project_origin = None
     lock = json.loads(text)
     if not isinstance(lock, dict):
         raise ValueError("lock")

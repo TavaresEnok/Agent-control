@@ -13,15 +13,21 @@ from tempfile import TemporaryDirectory
 
 import lgpd_analyzer as lgpd
 import license_policy
+from license_policy import (
+    EXCLUDED_DIRS_AND_FILES as EXCLUDED,
+    EXCLUDED_LOWER,
+    SAFE_PATH,
+    is_protected_component,
+    is_redacted_text,
+    is_sensitive_path,
+    sanitize_report_text,
+)
 import ort_inventory
 
 HERE = Path(__file__).resolve().parent
 SCANCODE = "scancode-toolkit"
 PRESIDIO = "presidio-analyzer"
-SAFE_PATH = re.compile(r"[A-Za-z0-9._@+/\-]{1,400}", re.ASCII)
 SAFE_EXPRESSION = re.compile(r"[A-Za-z0-9.+:()\- ]{1,512}", re.ASCII)
-EXCLUDED = {".git", ".github", ".ai", "node_modules", ".venv", "__pycache__"}
-EXCLUDED_LOWER = {".mcp.json", ".claude", ".husky", ".codex", ".grok"}
 MAX_FILES = 1500
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
@@ -34,6 +40,7 @@ class Report:
     def __init__(self):
         self.coverage = []
         self._evidence_rows = {}
+        self._enforce_tool_coverage = False
         self.dropped_coverage = 0
         self.has_errors = False
         self.findings = {level: [] for level in ("alta", "media", "baixa", "informativa")}
@@ -46,24 +53,54 @@ class Report:
             self.dropped_coverage += 1
             self.has_errors = True
             return
-        row = dict(tool=tool, version=version, status=status, detail=detail)
+        row = dict(tool=tool, version=version, status=status, detail=sanitize_report_text(detail))
         if files is not None:
-            row["files"] = sorted(dict.fromkeys(files))
+            row["files"] = sorted(dict.fromkeys(file for file in files if not is_sensitive_path(file)))
         if require_findings:
-            self._evidence_rows[len(self.coverage)] = detail
+            self._evidence_rows[len(self.coverage)] = row["detail"]
         self.coverage.append(row)
 
     def find(self, tool, rule, file, line, severity, message, evidence):
+        if is_sensitive_path(file):
+            self.cover(f"{tool}:file", "1", "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+            return
         self.finding_count += 1
         if self.finding_count > MAX_FINDINGS:
             self.has_errors = True
         bucket = self.findings[severity]
         if len(bucket) < MAX_FINDINGS:
-            bucket.append(dict(tool=tool, rule=rule, file=file, line=line, severity=severity,
-                               message=message, evidence=evidence))
+            bucket.append(dict(
+                tool=tool,
+                rule=rule,
+                file=file,
+                line=line,
+                severity=severity,
+                message=sanitize_report_text(message),
+                evidence=sanitize_report_text(evidence),
+            ))
 
     def output(self):
-        findings = [item for bucket in self.findings.values() for item in bucket][:MAX_FINDINGS]
+        tools_with_rows = {row["tool"] for row in self.coverage}
+        covered_all_tools = {row["tool"] for row in self.coverage if row["status"] == "ok" and "files" not in row}
+        covered_pairs = {
+            (row["tool"], file)
+            for row in self.coverage
+            if row["status"] == "ok" and "files" in row
+            for file in row["files"]
+        }
+        enforce_all = bool(self.dropped_coverage or self._enforce_tool_coverage)
+
+        def is_covered(item):
+            tool = item["tool"]
+            if not enforce_all and tool not in tools_with_rows:
+                return True
+            return tool in covered_all_tools or (tool, item["file"]) in covered_pairs
+
+        candidates = [item for bucket in self.findings.values() for item in bucket]
+        eligible = [item for item in candidates if is_covered(item)]
+        if len(eligible) < len(candidates):
+            self.has_errors = True
+        findings = eligible[:MAX_FINDINGS]
         published_files = {(item["tool"], item["file"]) for item in findings}
         coverage = []
         for index, row in enumerate(self.coverage):
@@ -85,13 +122,15 @@ class Report:
 
 
 def excluded(name):
-    return name in EXCLUDED or name.startswith(".env") or name.lower() in EXCLUDED_LOWER
+    return is_protected_component(name)
 
 
 def snapshot(root, staging, report):
+    report._enforce_tool_coverage = True
     selected = {}
     total = 0
     omitted = 0
+    omitted_protected = 0
 
     def walk_error(_error):
         report.cover("conformidade:snapshot", "1", "failed", "Diretório do repositório inacessível.")
@@ -103,16 +142,23 @@ def snapshot(root, staging, report):
         for name in sorted(directories):
             path = Path(parent, name)
             file = path.relative_to(root).as_posix()
-            if excluded(name) or path.is_symlink() or not SAFE_PATH.fullmatch(file):
+            sensitive = is_protected_component(name) or is_sensitive_path(file)
+            if sensitive or path.is_symlink() or not SAFE_PATH.fullmatch(file):
                 directories.remove(name)
-                reason = "diretório excluído, link ou caminho incompatível"
-                report.cover("conformidade:file", "1", "skipped", f"{file} | {reason}" if SAFE_PATH.fullmatch(file) else reason)
+                omitted_protected += 1
+                if sensitive or not SAFE_PATH.fullmatch(file):
+                    report.cover("conformidade:file", "1", "skipped",
+                                 "Diretório excluído, protegido ou com nome incompatível.")
+                else:
+                    report.cover("conformidade:file", "1", "skipped",
+                                 f"{file} | diretório excluído, link ou caminho incompatível")
         directories.sort()
         for name in sorted(files):
             source = Path(parent, name)
             file = source.relative_to(root).as_posix()
-            if not SAFE_PATH.fullmatch(file) or excluded(name):
-                report.cover("conformidade:file", "1", "skipped", "Arquivo excluído ou com caminho incompatível.")
+            if not SAFE_PATH.fullmatch(file) or is_protected_component(name) or is_sensitive_path(file):
+                omitted_protected += 1
+                report.cover("conformidade:file", "1", "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
                 continue
             if len(selected) >= MAX_FILES:
                 omitted += 1
@@ -143,8 +189,10 @@ def snapshot(root, staging, report):
                 report.cover("conformidade:file", "1", "failed", f"{file} | leitura ou cópia falhou")
     if omitted:
         report.cover("conformidade:snapshot", "1", "skipped", f"{omitted} arquivos fora do limite de {MAX_FILES}.")
-    report.cover("conformidade:snapshot", "1", "ok" if selected else "skipped",
-                 f"{len(selected)} arquivos regulares copiados para /tmp; {total} bytes.")
+    snapshot_detail = f"{len(selected)} arquivos regulares copiados para /tmp; {total} bytes."
+    if omitted_protected:
+        snapshot_detail += f" {omitted_protected} entradas excluídas ou protegidas omitidas."
+    report.cover("conformidade:snapshot", "1", "ok" if selected else "skipped", snapshot_detail)
     return selected
 
 
@@ -164,6 +212,9 @@ def add_scancode_results(data, selected, version, report, ok_files=None):
         if row.get("type") != "file":
             continue
         file = row.get("path")
+        if is_sensitive_path(file):
+            report.cover(SCANCODE + ":file", version, "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+            continue
         if row.get("scan_errors"):
             scan_errors = True
             report.cover(SCANCODE + ":file", version, "failed", f"{file} | erro no exame")
@@ -176,7 +227,7 @@ def add_scancode_results(data, selected, version, report, ok_files=None):
                      f"{file} | detecções de licença={len(detections)}, metadados de pacote={len(packages)}")
         for detection in detections:
             expression = detection.get("license_expression_spdx")
-            if not isinstance(expression, str) or not SAFE_EXPRESSION.fullmatch(expression):
+            if not isinstance(expression, str) or not SAFE_EXPRESSION.fullmatch(expression) or is_redacted_text(expression):
                 continue
             lines = {match["start_line"] for match in detection.get("matches", [])
                      if type(match.get("start_line")) is int and 1 <= match["start_line"] <= 10_000_000}
@@ -185,11 +236,14 @@ def add_scancode_results(data, selected, version, report, ok_files=None):
                             "Identificador de licença reconhecido no arquivo.", f"Expressão SPDX: {expression}.")
         for package in packages:
             expression = package.get("declared_license_expression_spdx")
-            if isinstance(expression, str) and SAFE_EXPRESSION.fullmatch(expression):
+            if isinstance(expression, str) and SAFE_EXPRESSION.fullmatch(expression) and not is_redacted_text(expression):
                 report.find(SCANCODE, "LICENSE_DECLARED", file, 1, "informativa",
                             "Licença declarada em metadados de pacote.", f"Expressão SPDX: {expression}.")
     for file in sorted(selected.keys() - measured):
-        report.cover(SCANCODE + ":file", version, "skipped", f"{file} | sem registro de arquivo na saída")
+        if is_sensitive_path(file):
+            report.cover(SCANCODE + ":file", version, "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+        else:
+            report.cover(SCANCODE + ":file", version, "skipped", f"{file} | sem registro de arquivo na saída")
     return len(measured), scan_errors or any(header.get("errors") for header in data.get("headers", []))
 
 
@@ -230,11 +284,15 @@ def inspect_npm(selected, declarations, report):
     for file, path in selected.items():
         if path.name not in {"package-lock.json", "npm-shrinkwrap.json"}:
             continue
+        if is_sensitive_path(file):
+            report.cover(license_policy.TOOL + ":file", license_policy.VERSION, "skipped",
+                         "Arquivo excluído, protegido ou com caminho incompatível.")
+            continue
         try:
             project_license = None
             project_origin = None
             manifest = path.with_name("package.json")
-            if manifest.is_file():
+            if manifest.is_file() and not manifest.is_symlink():
                 manifest_text = manifest.read_text(encoding="utf-8-sig")
                 metadata = json.loads(manifest_text)
                 if not isinstance(metadata, dict):
@@ -242,7 +300,9 @@ def inspect_npm(selected, declarations, report):
                 project_license = metadata.get("license")
                 if project_license is not None:
                     offset, _ = license_policy.object_locations(manifest_text)["license"]
-                    project_origin = (str(Path(file).with_name("package.json")), license_policy.source_line(manifest_text, offset))
+                    origin_file = Path(file).with_name("package.json").as_posix()
+                    if not is_sensitive_path(origin_file):
+                        project_origin = (origin_file, license_policy.source_line(manifest_text, offset))
             found = license_policy.inspect_lock(path.read_text(encoding="utf-8-sig"), project_license, file, report,
                                                 project_origin=project_origin)
             if found is not None:
@@ -270,6 +330,9 @@ def inspect_privacy(selected, version, report):
     texts = []
     static_count = static_errors = 0
     for file, path in selected.items():
+        if is_sensitive_path(file):
+            report.cover("lgpd:file", "1", "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+            continue
         if path.suffix.lower() not in lgpd.TEXT_SUFFIXES:
             report.cover("lgpd:file", "1", "skipped", f"{file} | extensão fora do recorte de privacidade")
             continue

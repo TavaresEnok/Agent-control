@@ -6,12 +6,213 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
-import {Refusal} from '../src/contracts.ts';
-import {parseModuleCollectorOutput, validateModuleCollectorPublication, writeModuleReport, type ModuleToolCoverage} from '../src/verification-modules.ts';
-import {Achado, CoverageRow, REMEDIATION_ACCEPTANCE} from '../src/verify-types.ts';
+import {Refusal, type Authority} from '../src/contracts.ts';
+import type {Ledger} from '../src/ledger.ts';
+import {
+  parseModuleCollectorOutput,
+  runVerificationModule,
+  validateModuleCollectorPublication,
+  writeModuleReport,
+} from '../src/verification-modules.ts';
 
 const moduleDir = fileURLToPath(new URL('../deploy/modules/conformidade/', import.meta.url));
 const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
+
+function commitSyntheticRepo(repo: string): string {
+  const gitEnv = {
+    PATH: process.env.PATH ?? '/usr/bin:/bin',
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: '/dev/null',
+    HOME: '/nonexistent',
+  };
+  for (const args of [
+    ['init'],
+    ['add', '-A'],
+    ['-c', 'user.name=Sintetico', '-c', 'user.email=sintetico@localhost', 'commit', '-m', 'fixture sintetica'],
+  ]) {
+    execFileSync('git', args, {cwd: repo, env: gitEnv, stdio: 'ignore'});
+  }
+  return execFileSync('git', ['rev-parse', 'HEAD'], {cwd: repo, env: gitEnv, encoding: 'utf8'}).trim();
+}
+
+function createConformidadePublicationLedger(projectId: string, repoPath: string) {
+  const principal = 'owner-conformidade';
+  const contextId = randomUUID();
+  const authority: Authority = {contextId, instanceId: randomUUID(), epoch: 1};
+  type RunRow = {
+    id: string;
+    project_id: string;
+    context_id: string;
+    intent_id: string;
+    principal_id: string;
+    commit_id: string;
+    status: string;
+    report_dir: string;
+    module: string;
+    report_prepared_dir: string;
+    report_legacy_missing: boolean;
+    collector_container_token: string | null;
+    collector_image: string | null;
+    performance_measurement: unknown;
+    exam_origin_sha256: string | null;
+  };
+  const runs = new Map<string, RunRow>();
+  const intents = new Map<string, {id: string; context_id: string; state: string; manager_epoch: number}>();
+  const persistedFindings: {runId: string; achadoId: string; status: string; severity: string; file: string; line: number; payload: unknown}[] = [];
+  const persistedCoverage: {runId: string; file: string; checklist: unknown; provenance: string; measurements: unknown}[] = [];
+  const persistedToolCoverage: {runId: string; seq: number; tool: string; version: string; status: string; detail: string}[] = [];
+
+  const query = async (sql: string, params: unknown[] = []) => {
+    const text = sql.replace(/\s+/g, ' ').trim();
+    if (text.startsWith("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")) {
+      return {rowCount: 1, rows: [{'?column?': 1}]};
+    }
+    if (text.startsWith('SELECT repo FROM ac_project_repositories WHERE project_id=$1')) {
+      return params[0] === projectId ? {rowCount: 1, rows: [{repo: repoPath}]} : {rowCount: 0, rows: []};
+    }
+    if (text.includes('FROM ac_exam_contexts WHERE project_id=$1 AND context_id=$2')) {
+      return params[0] === projectId && params[1] === contextId
+        ? {rowCount: 1, rows: [{module: 'conformidade'}]}
+        : {rowCount: 0, rows: []};
+    }
+    if (text.startsWith('SELECT pg_advisory_xact_lock')) {
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith("SELECT 1 FROM ac_verify_runs WHERE project_id=$1 AND module=$2 AND status='running'")) {
+      const running = [...runs.values()].some(r => r.project_id === params[0] && r.module === params[1] && r.status === 'running');
+      return {rowCount: running ? 1 : 0, rows: running ? [{'?column?': 1}] : []};
+    }
+    if (text.startsWith('INSERT INTO ac_intents')) {
+      intents.set(String(params[0]), {
+        id: String(params[0]),
+        context_id: String(params[1]),
+        state: 'accepted',
+        manager_epoch: Number(params[7]),
+      });
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith('INSERT INTO ac_verify_runs')) {
+      const row: RunRow = {
+        id: String(params[0]),
+        project_id: String(params[1]),
+        context_id: String(params[2]),
+        intent_id: String(params[3]),
+        principal_id: String(params[4]),
+        commit_id: String(params[5]),
+        status: 'running',
+        report_dir: 'pending',
+        module: String(params[6]),
+        report_prepared_dir: String(params[7]),
+        report_legacy_missing: false,
+        collector_container_token: null,
+        collector_image: null,
+        performance_measurement: null,
+        exam_origin_sha256: null,
+      };
+      runs.set(row.id, row);
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith("SELECT 1 FROM ac_verify_runs WHERE id=$1 AND context_id=$2 AND status='running' AND report_prepared_dir=$3")) {
+      const row = runs.get(String(params[0]));
+      const ok = Boolean(row && row.context_id === params[1] && row.status === 'running' && row.report_prepared_dir === params[2]);
+      return {rowCount: ok ? 1 : 0, rows: ok ? [{'?column?': 1}] : []};
+    }
+    if (text.startsWith('INSERT INTO ac_verify_findings')) {
+      persistedFindings.push({
+        runId: String(params[0]),
+        achadoId: String(params[1]),
+        status: String(params[2]),
+        severity: String(params[3]),
+        file: String(params[4]),
+        line: Number(params[5]),
+        payload: JSON.parse(String(params[6])),
+      });
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith('INSERT INTO ac_verify_coverage')) {
+      persistedCoverage.push({
+        runId: String(params[0]),
+        file: String(params[1]),
+        checklist: JSON.parse(String(params[5])),
+        provenance: String(params[6]),
+        measurements: JSON.parse(String(params[7])),
+      });
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith('INSERT INTO ac_verify_tool_coverage')) {
+      persistedToolCoverage.push({
+        runId: String(params[0]),
+        seq: Number(params[1]),
+        tool: String(params[2]),
+        version: String(params[3]),
+        status: String(params[4]),
+        detail: String(params[5]),
+      });
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith('UPDATE ac_verify_runs SET status=$2, report_dir=$3')) {
+      const row = runs.get(String(params[0]));
+      if (!row || row.context_id !== params[3] || row.status !== 'running') return {rowCount: 0, rows: []};
+      row.status = String(params[1]);
+      row.report_dir = String(params[2]);
+      row.collector_image = params[4] === null ? null : String(params[4]);
+      row.performance_measurement = params[5] ? JSON.parse(String(params[5])) : null;
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith('UPDATE ac_verify_runs SET exam_origin_sha256=$2')) {
+      const row = runs.get(String(params[0]));
+      if (row) row.exam_origin_sha256 = String(params[1]);
+      return {rowCount: row ? 1 : 0, rows: []};
+    }
+    if (text.startsWith("UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE id=$1 AND status='running'")) {
+      const row = runs.get(String(params[0]));
+      if (!row || row.status !== 'running') return {rowCount: 0, rows: []};
+      row.status = 'failed';
+      return {rowCount: 1, rows: []};
+    }
+    if (text.startsWith('UPDATE ac_verify_runs r SET status=\'failed\'')) {
+      return {rowCount: 0, rows: []};
+    }
+    if (text.startsWith('SELECT id, collector_container_token FROM ac_verify_runs')) {
+      return {rowCount: 0, rows: []};
+    }
+    if (text.startsWith('SELECT id, module, commit_id, report_dir, report_prepared_dir, report_legacy_missing FROM ac_verify_runs')) {
+      const matching = [...runs.values()].filter(r =>
+        r.project_id === params[0]
+        && r.context_id === params[1]
+        && (r.status === 'done' || r.status === 'failed')
+        && r.module !== 'verify'
+        && (params[2] === null || r.id === params[2]));
+      return {rowCount: matching.length, rows: matching};
+    }
+    if (text.startsWith('SELECT achado_id, status, severity, file, line, payload FROM ac_verify_findings WHERE run_id=$1')) {
+      const rows = persistedFindings
+        .filter(f => f.runId === params[0])
+        .map(f => ({achado_id: f.achadoId, status: f.status, severity: f.severity, file: f.file, line: f.line, payload: f.payload}));
+      return {rowCount: rows.length, rows};
+    }
+    if (text.startsWith('UPDATE ac_intents SET state=$3')) {
+      const intent = intents.get(String(params[0]));
+      if (intent && intent.context_id === params[1] && intent.state === 'accepted') {
+        intent.state = String(params[2]);
+        return {rowCount: 1, rows: []};
+      }
+      return {rowCount: 0, rows: []};
+    }
+    throw new Error(`Consulta inesperada no stub de Ledger: ${text}`);
+  };
+
+  const client = {query};
+  const ledger = {
+    pool: {query},
+    tx: async <T>(fn: (c: unknown) => Promise<T>) => fn(client),
+    authorize: async () => ({project_id: projectId, policy_revision: 1, plan_revision: 1}),
+    fence: async () => undefined,
+    refreshPending: async () => undefined,
+  } as unknown as Ledger;
+
+  return {ledger, principal, authority, persistedFindings, persistedCoverage, persistedToolCoverage};
+}
 
 function python(code: string, ...args: string[]) {
   return execFileSync('python3', ['-B', '-c', code, fixtures, ...args], {
@@ -1967,57 +2168,68 @@ with patch("collector.subprocess.run", side_effect=fake_scancode), \
       );
     }
 
-    // Publica o relatório sintético pelo caminho real de writeModuleReport sem perder falhas nem medir entradas fora de ok.
-    const measured = new Map<string, ModuleToolCoverage[]>();
-    for (const row of parsed.coverage.filter(row => row.status === 'ok')) {
-      for (const file of row.files ?? []) {
-        measured.set(file, [...(measured.get(file) ?? []), row]);
-      }
-    }
-    const fileCoverage = [...measured.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([file, rows]) =>
-      CoverageRow.parse({
-        file,
-        examinerProvider: 'ferramenta',
-        examinerModel: `${rows[0]!.tool}@${rows[0]!.version}`,
-        profileId: null,
-        checklist: [...new Set(rows.map(row => row.tool))],
-      }));
-    const achados = parsed.findings.map((finding, index) => Achado.parse({
-      id: `ACH-${String(index + 1).padStart(3, '0')}`,
-      title: `${finding.rule}: ${finding.message}`,
-      severity: finding.severity,
-      status: 'provavel',
-      verifier: null,
-      reference: `${finding.tool}:${finding.rule}`,
-      where: {file: finding.file, line: finding.line},
-      scenario: finding.message,
-      proof: finding.evidence,
-      suggestion: 'Revisar no snapshot.',
-      acceptance: REMEDIATION_ACCEPTANCE,
-      sources: [finding.tool, finding.rule],
-      secretPreview: null,
-    }));
-    const written = await writeModuleReport({
-      dataDirectory,
-      projectId: 'proj-conformidade-sintetico',
+    // Publica o relatório sintético pelo fluxo real de produção (runVerificationModule),
+    // sem montar measured manualmente, comprovando também a recusa quando só há linha failed para o arquivo do achado.
+    const commit = commitSyntheticRepo(repo);
+    const projectId = randomUUID();
+    const {ledger, principal, authority, persistedCoverage} = createConformidadePublicationLedger(projectId, repo);
+
+    const rejected = await runVerificationModule({
       module: 'conformidade',
-      runId: randomUUID(),
-      createdAt: new Date('2026-11-19T21:20:00.000Z'),
-      commit: 'a'.repeat(40),
-      toolCoverage: parsed.coverage,
-      fileCoverage,
-      achados,
-      raw: parsed,
-      measuredFiles: measured,
+      ledger,
+      principal,
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      collectorOutput: {
+        coverage: [{...partialFail, files: ['src/unmeasured-sql.ts']}, cleanOnlyOk],
+        findings: [unmeasuredFinding],
+      },
     });
-    assert.ok(written.summary.toolFailures > 0);
-    const coberturaMd = readFileSync(join(written.directory, 'cobertura.md'), 'utf8');
-    const mapaMd = readFileSync(join(written.directory, 'mapa.md'), 'utf8');
+    assert.ok(rejected.toolCoverage.some(row => row.tool === 'coletor' && row.status === 'failed'
+      && row.detail.includes('VERIFY_COLLECTOR_INVALID')));
+    assert.equal(rejected.achados.length, 0);
+
+    const published = await runVerificationModule({
+      module: 'conformidade',
+      ledger,
+      principal,
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      createdAt: new Date('2026-11-19T21:20:00.000Z'),
+      collectorOutput: run.stdout,
+    });
+    assert.equal(published.toolCoverage.some(row => row.tool === 'coletor'), false);
+    assert.equal(published.hasToolFailure, true);
+    assert.ok(published.summary.toolFailures > 0);
+    assert.ok(readFileSync(join(published.directory, 'run.json'), 'utf8').includes(published.runId));
+
+    const coberturaMd = readFileSync(join(published.directory, 'cobertura.md'), 'utf8');
+    const mapaMd = readFileSync(join(published.directory, 'mapa.md'), 'utf8');
+    const byFile = new Map(published.coverage.map(row => [row.file, row]));
+    assert.equal(byFile.get('src/sustained-partial.ts')?.checklist.includes('lgpd-static'), true);
+    assert.equal(byFile.get('src/clean-ast.ts')?.checklist.includes('lgpd-static'), true);
+    assert.equal(byFile.get('src/unmeasured-sql.ts')?.checklist.includes('lgpd-static'), false);
+    assert.equal(byFile.get('src/unmeasured-sql.ts')?.checklist.includes('scancode-toolkit'), false);
+    assert.equal(byFile.get('src/unmeasured-syntax.ts')?.checklist.includes('lgpd-static'), false);
+    assert.equal(byFile.get('src/unmeasured-syntax.ts')?.checklist.includes('scancode-toolkit'), false);
+    assert.equal(byFile.has('.env.synthetic'), false);
     assert.match(coberturaMd, /\| src\/sustained-partial\.ts \|[^|\n]*lgpd-static@1/);
     assert.match(coberturaMd, /\| src\/clean-ast\.ts \|[^|\n]*lgpd-static@1/);
     assert.doesNotMatch(coberturaMd, /\| src\/unmeasured-sql\.ts \|[^|\n]*lgpd-static@1/);
     assert.doesNotMatch(coberturaMd, /\| src\/unmeasured-syntax\.ts \|[^|\n]*lgpd-static@1/);
     assert.match(mapaMd, /src\/sustained-partial\.ts/);
+    assert.doesNotMatch(mapaMd, /\.env\.synthetic/);
+    const publishedRunCoverage = new Map(persistedCoverage.filter(row => row.runId === published.runId).map(row => [row.file, row.checklist as string[]]));
+    assert.equal(publishedRunCoverage.get('src/sustained-partial.ts')?.includes('lgpd-static'), true);
+    assert.equal(publishedRunCoverage.get('src/unmeasured-sql.ts')?.includes('lgpd-static'), false);
+    assert.equal(publishedRunCoverage.get('src/unmeasured-syntax.ts')?.includes('lgpd-static'), false);
+    assert.equal(publishedRunCoverage.has('.env.synthetic'), false);
   } finally {
     rmSync(scratch, {recursive: true, force: true});
   }
@@ -2420,5 +2632,381 @@ print(json.dumps({
     assert.ok(lgpdOkFiles.has('c-clean.ts'));
   } finally {
     rmSync(rootDir, {recursive: true, force: true});
+  }
+});
+
+test('C9 filtra componentes protegidos e nomes redigíveis antes da análise e publica pelo fluxo real sem enfraquecer o host', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'conformidade-privacidade-'));
+  const repo = join(scratch, 'repo');
+  const dataDirectory = join(scratch, 'data');
+  mkdirSync(repo);
+  mkdirSync(dataDirectory);
+
+  const akiaName = 'AKIA' + 'IOSFODNN7EXAMPLE';
+  const ghpDir = 'ghp_' + 'a'.repeat(20);
+  const skLiveName = 'sk_live_' + 'b'.repeat(24);
+  const base64Dir = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd';
+  const jwtDir = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SyntheticSignature123';
+  const highEntropyFile = 'HighEntropyTokenName123456789012.ts';
+  const longKebabFile = 'src/my-long-kebab-case-module-name.ts';
+
+  try {
+    const put = (rel: string, content: string) => {
+      const target = join(repo, rel);
+      mkdirSync(join(target, '..'), {recursive: true});
+      writeFileSync(target, content, 'utf8');
+    };
+
+    // Entradas normais válidas (controle positivo)
+    put('src/clean.ts', 'export const ok = true;\n');
+    put('src/personal.ts', 'const body = JSON.stringify({ cpf: cliente.cpf });\nfetch(url, { body });\n');
+    put(longKebabFile, 'export const kebab = 1;\n');
+    put('docs/public-note.txt', 'nota publica sintetica sem dados pessoais\n');
+    put('package.json', '{\n  "name": "synthetic-app",\n  "license": "MIT"\n}\n');
+    put('package-lock.json', JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': {license: 'MIT'},
+        'node_modules/synthetic-gpl': {license: 'GPL-3.0-only'},
+        'node_modules/synthetic-ref': {license: `LicenseRef-${akiaName}`},
+      },
+    }, null, 2));
+
+    // Componentes de nome protegido (diretórios e arquivos) e conteúdo sensível sintético
+    put('.env.local', 'SYNTHETIC_SECRET_CONTENT=1\n');
+    put('.npmrc', '//registry.example.invalid/:_authToken=SYNTHETIC_SECRET_CONTENT\n');
+    put('keys/id_rsa', 'SYNTHETIC_SECRET_CONTENT\n');
+    put('certs/server.pem', 'SYNTHETIC_SECRET_CONTENT\n');
+    put('deploy/service-account-synthetic.json', '{"cpf":"123.456.789-09","marker":"SYNTHETIC_SECRET_CONTENT"}\n');
+    put('k8s/dev-kubeconfig.yaml', 'cpf: "123.456.789-09"\n');
+    put('infra/prod.tfstate', '{"email":"synthetic@example.invalid"}\n');
+    put('config/credentials.json', '{"cpf":"123.456.789-09"}\n');
+    put('secrets/nested-secret.ts', 'fetch(url, request.cpf);\n');
+    put('id_synthetic_dir/nested.txt', 'synthetic@example.invalid\n');
+    put('certs.pem/inside.ts', 'fetch(url, request.cpf);\n');
+    put('.aws/config', 'SYNTHETIC_SECRET_CONTENT\n');
+
+    // Nomes que acionam redação / VERIFY_SECRET_IN_REPORT no relatório
+    put(`tokens/${akiaName}.txt`, 'synthetic@example.invalid\n');
+    put(`${ghpDir}/service.ts`, 'fetch(url, request.cpf);\n');
+    put(`src/${skLiveName}.ts`, 'fetch(url, request.cpf);\n');
+    put(`uploads/${base64Dir}/note.txt`, 'synthetic@example.invalid\n');
+    put(`src/${highEntropyFile}`, 'fetch(url, request.cpf);\n');
+    put(`docs/${jwtDir}/readme.md`, 'synthetic@example.invalid\n');
+
+    // Symlinks com nomes protegidos ou redigíveis
+    const linkEnv = join(repo, '.env.link');
+    const linkAkia = join(repo, `${akiaName}-link`);
+    spawnSync('ln', ['-s', 'docs/public-note.txt', linkEnv], {encoding: 'utf8'});
+    spawnSync('ln', ['-s', 'docs/public-note.txt', linkAkia], {encoding: 'utf8'});
+
+    const run = spawnSync('python3', ['-B', '-c', String.raw`
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+import json, subprocess, sys
+import collector
+import license_policy
+import ort_inventory
+
+repo = Path(sys.argv[1])
+real_run = subprocess.run
+staged_files = []
+categories = {"MIT": "permissiva", "GPL-3.0-only": "copyleft forte"}
+
+def fake_classify(value):
+    if isinstance(value, str) and value in categories:
+        return (categories[value], value)
+    return ("desconhecida", None)
+
+def fake_run(command, **kwargs):
+    tool_name = Path(command[0]).name
+    if tool_name == "scancode":
+        staging = Path(command[-1])
+        out = Path(command[command.index("--json-pp") + 1])
+        files = []
+        for path in sorted(staging.rglob("*")):
+            if path.is_file():
+                rel = path.relative_to(staging).as_posix()
+                staged_files.append(rel)
+                entry = {"type": "file", "path": rel, "license_detections": []}
+                if rel == "src/clean.ts":
+                    entry["license_detections"] = [{"license_expression_spdx": "MIT", "matches": [{"start_line": 1}]}]
+                files.append(entry)
+        out.write_text(json.dumps({"headers": [{"errors": []}], "files": files}), encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+    if tool_name == "ort":
+        out_dir = Path(command[command.index("--output-dir") + 1])
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "analyzer-result.json").write_text(json.dumps({
+            "analyzer": {"result": {"packages": [
+                {"id": "SpdxDocumentFile::component-1-1:1", "declared_licenses_processed": {"spdx_expression": "GPL-3.0-only"}},
+            ]}},
+        }), encoding="utf-8")
+        return SimpleNamespace(returncode=0)
+    return real_run(command, **kwargs)
+
+# Testa classify() real contra LicenseRef contendo segredo usando parser SPDX sintético.
+class FakeExpr:
+    def __init__(self, key):
+        self.key = key
+    def __str__(self):
+        return self.key
+
+fake_spdx_parser = SimpleNamespace(parse=lambda val, validate=True: FakeExpr(val))
+fake_lic_mod = SimpleNamespace(AND=tuple, OR=tuple, ExpressionError=ValueError, get_spdx_licensing=lambda: fake_spdx_parser)
+with patch.dict(sys.modules, {"license_expression": fake_lic_mod}):
+    license_policy.get_spdx_parser.cache_clear()
+    assert license_policy.classify("LicenseRef-AKIA" + "IOSFODNN7EXAMPLE") == ("desconhecida", None)
+    assert license_policy.classify("MIT") == ("permissiva", "MIT")
+    license_policy.get_spdx_parser.cache_clear()
+
+analyzer = Mock()
+analyzer.analyze.return_value = []
+sys.argv = ["collector.py", "--repo", str(repo)]
+with patch("subprocess.run", side_effect=fake_run), \
+     patch("license_policy.classify", side_effect=fake_classify), \
+     patch("ort_inventory.classify", side_effect=fake_classify), \
+     patch("lgpd_analyzer.create_presidio", return_value=analyzer):
+    code = collector.main()
+
+# Também verifica chamadas diretas aos helpers (defesa em profundidade para textos e campos estruturados).
+direct = collector.Report()
+direct.find("lgpd-static", "PII_FIELD", "keys/id_rsa", 1, "media", "token=SYNTHETIC_VAL_12345", "password=SYNTHETIC_PASS_99")
+direct.cover("lgpd-static", "1", "ok", "detalhe password=SYNTHETIC_PASS_99", files=["src/clean.ts", "certs/server.pem"])
+direct_out = direct.output()
+assert direct_out["findings"] == []
+assert direct_out["coverage"][1]["files"] == ["src/clean.ts"]
+assert "SYNTHETIC_PASS_99" not in json.dumps(direct_out)
+assert "server.pem" not in json.dumps(direct_out)
+assert "id_rsa" not in json.dumps(direct_out)
+assert not any(f for f in staged_files if "id_rsa" in f or "AKIA" in f or "ghp_" in f or "sk_live_" in f or "pem" in f)
+sys.exit(code)
+`, repo], {cwd: moduleDir, env: {...process.env, TMPDIR: scratch}, encoding: 'utf8'});
+
+    assert.equal(run.status, 0, run.stderr || run.stdout);
+    assert.equal(run.stderr, '');
+    const parsed = parseModuleCollectorOutput(run.stdout, {module: 'conformidade'});
+    await validateModuleCollectorPublication(repo, parsed);
+
+    // Nenhum nome protegido, redigível, fragmento ou conteúdo sensível vaza na saída do coletor.
+    const forbiddenFragments = [
+      akiaName, 'IOSFODNN7EXAMPLE', ghpDir, 'ghp_aaaa', skLiveName, 'sk_live_bbbb',
+      base64Dir, jwtDir, 'eyJhbGci', highEntropyFile, 'HighEntropyTokenName',
+      'id_rsa', 'server.pem', 'service-account', 'kubeconfig', 'tfstate',
+      'credentials.json', 'nested-secret', 'id_synthetic_dir', 'certs.pem',
+      '.env.local', '.env.link', '.npmrc', '.aws', 'SYNTHETIC_SECRET_CONTENT',
+    ];
+    for (const fragment of forbiddenFragments) {
+      assert.equal(run.stdout.includes(fragment), false, `Vazamento proibido na saída do coletor: ${fragment}`);
+    }
+
+    // Cobertura incompleta é contabilizada sem expor nomes/fragmentos, e medições não afetadas são preservadas.
+    const snapshotRow = parsed.coverage.find(row => row.tool === 'conformidade:snapshot' && row.status === 'ok');
+    assert.ok(snapshotRow);
+    assert.match(snapshotRow.detail, /\bentradas excluídas ou protegidas omitidas\b/);
+    assert.ok(parsed.coverage.some(row => row.tool === 'conformidade:file' && row.status === 'skipped'));
+
+    for (const tool of ['scancode-toolkit', 'lgpd-static', 'presidio-analyzer']) {
+      const okFiles = new Set(parsed.coverage.filter(r => r.tool === tool && r.status === 'ok').flatMap(r => r.files ?? []));
+      assert.equal(okFiles.has('src/clean.ts'), true, tool);
+      assert.equal(okFiles.has('src/personal.ts'), true, tool);
+      assert.equal(okFiles.has(longKebabFile), true, tool);
+      if (tool !== 'lgpd-static') assert.equal(okFiles.has('docs/public-note.txt'), true, tool);
+    }
+    assert.ok(parsed.findings.some(f => f.tool === 'lgpd-static' && f.file === 'src/personal.ts' && f.rule === 'PII_POSSIBLE_NETWORK'));
+    assert.ok(parsed.findings.some(f => f.tool === 'npm-license-policy' && f.file === 'package-lock.json' && f.rule === 'LICENSE_OBLIGATION_REVIEW'));
+    assert.ok(parsed.findings.some(f => f.tool === 'ort' && f.file === 'package-lock.json' && f.rule === 'ORT_STRONG_COPYLEFT_DECLARED'));
+
+    // Publicação global pelo fluxo real de produção (runVerificationModule).
+    const commit = commitSyntheticRepo(repo);
+    const projectId = randomUUID();
+    const {ledger, principal, authority} = createConformidadePublicationLedger(projectId, repo);
+
+    const published = await runVerificationModule({
+      module: 'conformidade',
+      ledger,
+      principal,
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      createdAt: new Date('2026-11-19T21:40:00.000Z'),
+      collectorOutput: run.stdout,
+    });
+    assert.equal(published.hasToolFailure, false);
+    assert.equal(published.summary.toolFailures, 0);
+    assert.equal(published.toolCoverage.some(row => row.tool === 'coletor'), false);
+    const publishedFiles = new Set(published.coverage.map(row => row.file));
+    assert.equal(publishedFiles.has('src/clean.ts'), true);
+    assert.equal(publishedFiles.has('src/personal.ts'), true);
+    assert.equal(publishedFiles.has('docs/public-note.txt'), true);
+    assert.equal(publishedFiles.has('package-lock.json'), true);
+    assert.equal(publishedFiles.has(longKebabFile), true);
+
+    const reportText = [
+      readFileSync(join(published.directory, 'README.md'), 'utf8'),
+      readFileSync(join(published.directory, 'cobertura.md'), 'utf8'),
+      readFileSync(join(published.directory, 'mapa.md'), 'utf8'),
+      readFileSync(join(published.directory, 'achados.json'), 'utf8'),
+      readFileSync(join(published.directory, 'bruto', 'achados-brutos.json'), 'utf8'),
+    ].join('\n');
+    for (const fragment of forbiddenFragments) {
+      assert.equal(reportText.includes(fragment), false, `Vazamento proibido no relatório: ${fragment}`);
+    }
+
+    // Garante que o controle do host NÃO foi enfraquecido: nomes segredo/protegidos continuam recusados se um coletor tentar publicá-los.
+    const secretLeakOutput = {
+      coverage: [{
+        tool: 'scancode-toolkit',
+        version: '32.5.0',
+        status: 'ok' as const,
+        detail: 'sintetico',
+        files: [`tokens/${akiaName}.txt`],
+      }],
+      findings: [],
+    };
+    const hostBlocked = await runVerificationModule({
+      module: 'conformidade',
+      ledger,
+      principal,
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      collectorOutput: secretLeakOutput,
+    });
+    assert.ok(hostBlocked.toolCoverage.some(row => row.tool === 'coletor' && row.status === 'failed'
+      && row.detail.includes('VERIFY_SECRET_IN_REPORT')));
+    await assert.rejects(
+      writeModuleReport({
+        dataDirectory,
+        projectId,
+        module: 'conformidade',
+        runId: randomUUID(),
+        createdAt: new Date('2026-11-19T21:41:00.000Z'),
+        commit,
+        toolCoverage: secretLeakOutput.coverage,
+        fileCoverage: [],
+        achados: [],
+        raw: secretLeakOutput,
+      }),
+      (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_SECRET_IN_REPORT',
+    );
+    assert.throws(
+      () => parseModuleCollectorOutput(JSON.stringify({
+        coverage: [{tool: 'scancode-toolkit', version: '32.5.0', status: 'ok', detail: 'ok', files: ['certs/server.pem']}],
+        findings: [],
+      }), {module: 'conformidade'}),
+      (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_PATH_FORBIDDEN',
+    );
+  } finally {
+    rmSync(scratch, {recursive: true, force: true});
+  }
+});
+
+test('C9 no teto MAX_COVERAGE não emite achado sem linha ok correspondente e publica cobertura fiel', async () => {
+  const scratch = mkdtempSync(join(tmpdir(), 'conformidade-teto-geral-'));
+  const repo = join(scratch, 'repo');
+  const dataDirectory = join(scratch, 'data');
+  mkdirSync(repo);
+  mkdirSync(dataDirectory);
+
+  try {
+    writeFileSync(join(repo, 'a-covered.ts'), 'export const ok = true;\n', 'utf8');
+    writeFileSync(join(repo, 'b-partial.ts'), 'const cpf = row;\ndb.query(cmd, [cpf]);\nfetch(url, row.cpf);\n', 'utf8');
+    writeFileSync(join(repo, 'c-uncovered.ts'), 'export const clean = 1;\n', 'utf8');
+    const commit = commitSyntheticRepo(repo);
+
+    const stdout = python(String.raw`
+import json, sys
+from pathlib import Path
+from unittest.mock import Mock, patch
+from collector import MAX_COVERAGE, Report, inspect_privacy
+
+root = Path(sys.argv[2])
+
+# Cenário A: uma ferramenta cobre e emite achado antes do teto; depois MAX_COVERAGE é preenchido por linhas comuns
+# e lgpd-static registra um achado sustentado em arquivo parcial cuja linha ok é descartada por cover().
+report_a = Report()
+report_a.cover("scancode-toolkit", "32.5.0", "ok", "Licenças e pacotes: 1/1.", files=["a-covered.ts"])
+report_a.find("scancode-toolkit", "LICENSE_DETECTED", "a-covered.ts", 1, "informativa", "Licença.", "Expressão SPDX: MIT.")
+while len(report_a.coverage) < MAX_COVERAGE:
+    report_a.cover("conformidade:diag", "1", "ok", f"linha-comum-{len(report_a.coverage)}")
+
+analyzer = Mock()
+analyzer.analyze.return_value = []
+with patch("lgpd_analyzer.create_presidio", return_value=analyzer):
+    inspect_privacy({"b-partial.ts": root / "b-partial.ts"}, "2.2.366", report_a)
+
+out_a = report_a.output()
+assert report_a.has_errors
+assert report_a.dropped_coverage > 0
+assert len(out_a["coverage"]) <= MAX_COVERAGE + 1
+
+# Cenário B: MAX_COVERAGE já está 100% preenchido antes de qualquer achado.
+report_b = Report()
+while len(report_b.coverage) < MAX_COVERAGE:
+    report_b.cover("conformidade:diag", "1", "ok", f"linha-comum-{len(report_b.coverage)}")
+report_b.find("lgpd-static", "PII_POSSIBLE_NETWORK", "b-partial.ts", 3, "media", "m", "e")
+report_b.cover("lgpd-static", "1", "ok", "parcial {count}", files=["b-partial.ts"], require_findings=True)
+out_b = report_b.output()
+assert report_b.has_errors
+assert report_b.dropped_coverage == 1
+assert out_b["findings"] == []
+
+print(json.dumps({
+    "out_a": out_a,
+    "dropped_cov_a": report_a.dropped_coverage,
+    "dropped_find_a": report_a.finding_count - len(out_a["findings"]),
+    "out_b": out_b,
+}))
+`, repo);
+
+    const payload = JSON.parse(stdout);
+    const parsedA = parseModuleCollectorOutput(JSON.stringify(payload.out_a), {module: 'conformidade'});
+    await validateModuleCollectorPublication(repo, parsedA);
+    assert.deepEqual(parsedA.findings.map(f => [f.tool, f.file]), [['scancode-toolkit', 'a-covered.ts']]);
+    const truncA = parsedA.coverage.find(row => row.tool === 'conformidade:output');
+    assert.equal(truncA?.status, 'failed');
+    assert.ok(payload.dropped_cov_a > 0 && payload.dropped_find_a > 0);
+    assert.match(truncA?.detail ?? '', new RegExp(`\\b${payload.dropped_cov_a} linhas de cobertura\\b`));
+    assert.match(truncA?.detail ?? '', new RegExp(`\\b${payload.dropped_find_a} achados omitidos\\b`));
+
+    const parsedB = parseModuleCollectorOutput(JSON.stringify(payload.out_b), {module: 'conformidade'});
+    await validateModuleCollectorPublication(repo, parsedB);
+    assert.equal(parsedB.findings.length, 0);
+    const truncB = parsedB.coverage.find(row => row.tool === 'conformidade:output');
+    assert.equal(truncB?.status, 'failed');
+    assert.match(truncB?.detail ?? '', /\b1 linhas de cobertura e 1 achados omitidos\b/);
+
+    // Publica o Cenário A pelo fluxo real de produção (runVerificationModule).
+    const projectId = randomUUID();
+    const {ledger, principal, authority} = createConformidadePublicationLedger(projectId, repo);
+    const published = await runVerificationModule({
+      module: 'conformidade',
+      ledger,
+      principal,
+      authority,
+      projectId,
+      repoPath: repo,
+      dataDirectory,
+      commit,
+      collectorOutput: JSON.stringify(payload.out_a),
+    });
+    assert.equal(published.toolCoverage.some(row => row.tool === 'coletor'), false);
+    assert.equal(published.hasToolFailure, true);
+    assert.deepEqual(published.achados.map(a => a.where.file), ['a-covered.ts']);
+    assert.deepEqual(published.coverage.map(c => c.file), ['a-covered.ts']);
+    const coberturaMd = readFileSync(join(published.directory, 'cobertura.md'), 'utf8');
+    const mapaMd = readFileSync(join(published.directory, 'mapa.md'), 'utf8');
+    assert.match(coberturaMd, /conformidade:output/);
+    assert.match(coberturaMd, /\| a-covered\.ts \|/);
+    assert.doesNotMatch(coberturaMd, /\| b-partial\.ts \|/);
+    assert.doesNotMatch(mapaMd, /b-partial\.ts/);
+  } finally {
+    rmSync(scratch, {recursive: true, force: true});
   }
 });

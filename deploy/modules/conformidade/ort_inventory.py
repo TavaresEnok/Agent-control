@@ -6,7 +6,7 @@ import json
 import os
 import subprocess
 
-from license_policy import classify
+from license_policy import classify, is_sensitive_path
 
 TOOL = "ort"
 ORT_BIN = "/opt/ort/bin/ort"
@@ -16,6 +16,9 @@ MAX_PACKAGES = 500
 def write_documents(locks, input_dir, version, report):
     picked = {}
     for document_number, (file, declared) in enumerate(locks, 1):
+        if is_sensitive_path(file):
+            report.cover(TOOL + ":file", version, "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+            continue
         capacity = MAX_PACKAGES - len(picked)
         if len(declared) > capacity:
             report.cover(TOOL + ":file", version, "skipped",
