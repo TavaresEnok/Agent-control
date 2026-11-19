@@ -32,6 +32,7 @@ import {
 import {collectLanguageSuite, hasLanguageTestCandidates, languageSuites} from './language-tests.mjs';
 import {collectLanguageMutation, collectPythonProperties, languageMeasurementTools} from './mutacao-linguagens/index.mjs';
 import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
+import {functionalContractTools, maxContractDocuments, runFunctionalContract} from './contratos/index.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
@@ -1173,7 +1174,7 @@ function routeShape(path, openapi = false) {
   return normalized;
 }
 
-async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete, failTool}) {
+async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete, failTool, validatedOpenApi}) {
   const toolName = 'swagger-parser';
   if (failTool === toolName) {
     throw new Error('QA_SWAGGER_FORCED_FAILURE');
@@ -1225,6 +1226,7 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
     }
     extraRows.push(coverageRow(fileCoverageKey('qa-openapi', specRel), version, 'ok',
       `${displayPath(specRel)}: especificação validada`));
+    if (validatedOpenApi.size < maxContractDocuments) validatedOpenApi.set(specRel, parsedSpec);
 
     for (const [routePath, pathItem] of Object.entries(parsedSpec.paths ?? {})) {
       if (!pathItem || typeof pathItem !== 'object') continue;
@@ -1331,6 +1333,7 @@ export async function collectQaModule(options = {}) {
     const findings = [];
 
     const runtime = {tests: undefined, baseline: null};
+    const validatedOpenApi = new Map();
     const context = {repoDir, workspace, workRoot};
     let selectionError;
     try {
@@ -1426,8 +1429,21 @@ export async function collectQaModule(options = {}) {
       {
         name: 'qa-contrato-openapi',
         partial: sourcePartial,
-        run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete: sourcePartial, failTool}),
+        run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete: sourcePartial, failTool, validatedOpenApi}),
       },
+      ...Object.entries(functionalContractTools).map(([kind, name]) => ({
+        name,
+        partial: incomplete,
+        run: async () => {
+          if (failTool === name) throw new Error('QA_FUNCTIONAL_CONTRACT_FORCED_FAILURE');
+          try {
+            return await runFunctionalContract(kind, {workspace, workRoot, copiedFiles, openapiFiles, validatedOpenApi,
+              enabled: executionAllowed(repoDir), row: coverageRow, key: fileCoverageKey, pathLabel: measurementPath});
+          } catch {
+            throw new Error('QA_FUNCTIONAL_CONTRACT_UNAVAILABLE');
+          }
+        },
+      })),
       ...Object.entries(languageSuites).map(([language, {tool, version}]) => ({
         name: tool,
         version,
@@ -1455,7 +1471,7 @@ export async function collectQaModule(options = {}) {
       try {
         const res = await runner.run();
         const scoped = row => runner.partial
-          ? coverageRow(row.tool, row.version, row.status, `escopo parcial; ${row.detail}`)
+          ? {...row, detail: cleanSingleLine(`escopo parcial; ${row.detail}`)}
           : row;
         coverage.push(scoped(res.coverageRow));
         if (res.extraRows) extraCoverageRows.push(...res.extraRows.map(scoped));
