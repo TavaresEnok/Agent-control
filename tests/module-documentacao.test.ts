@@ -844,6 +844,47 @@ test('subgrafos e nomes de arquivos ambíguos ficam sem medição e entidades pr
   }
 });
 
+test('Mermaid localiza a aresta original após YAML e comentários com aspas HTML normalizadas', {skip: skipLocalTools}, async () => {
+  const parse = await createDefaultMermaidParser();
+  const files = new Set(['a.ts', 'b.ts']);
+  const graph = {modules: [...files].map(source => ({source, dependencies: []}))};
+  const file = 'README.md';
+  const edge = 'A -->|<span title="x">chama</span>| B';
+  const document = [
+    '# Arquitetura', '```mermaid', '---', 'title: |',
+    "  A -->|<span title='x'>chama</span>| B", '---',
+    'flowchart LR', '  A["a.ts"]', '  B["b.ts"]', `%% ${edge}`, edge, '```',
+  ];
+  const inspect = async () => {
+    const blocks = extractMermaidBlocks([file], () => document.join('\r\n'));
+    const validated = await validateMermaidDocuments([file], blocks, files, parse);
+    const compared = parseDepcruiseReport(graph, '', FIXTURE_CLEAN_DIR, blocks, undefined, false, validated.documentReferences);
+    return {validated, compared};
+  };
+  const located = await inspect();
+  assert.deepEqual(located.validated.findings, []);
+  assert.equal(located.compared.stats.checkedEdges, 1);
+  assert.equal(located.compared.stats.unmeasured, 0);
+  assert.deepEqual(located.compared.findings.map(finding => finding.line), [11]);
+  assert.ok(located.compared.findings[0].evidence.startsWith(`aresta documentada: ${edge} |`));
+
+  document.splice(11, 0, edge);
+  const repeated = await inspect();
+  assert.equal(repeated.compared.stats.checkedEdges, 2);
+  assert.deepEqual(repeated.compared.findings.map(finding => finding.line), [11, 12]);
+
+  document.splice(10, 2, 'A --> )');
+  const invalid = await inspect();
+  assert.deepEqual(invalid.validated.findings.map(finding => [finding.rule, finding.line]), [['DOC-MERMAID-SINTAXE-INVALIDA', 11]]);
+
+  document.splice(10, 1, `A --> B %%{init: {"theme":"default"}}%%`);
+  const ambiguous = await inspect();
+  assert.deepEqual(ambiguous.validated.findings, []);
+  assert.deepEqual(ambiguous.compared.findings, []);
+  assert.equal(ambiguous.compared.stats.checkedEdges, 0);
+  assert.ok(ambiguous.compared.stats.unmeasured > 0);
+});
+
 test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', {skip: skipLocalTools}, () => {
   const root = join(FIXTURES, 'coverage-defect');
   const read = (file: string) => readFileSync(join(root, file), 'utf8');
@@ -894,6 +935,51 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     () => ['/** Public arrow.', ' * See {@link Missing}.', ' */', 'export default (current: string) => current'].join('\n'),
   );
   assert.deepEqual(arrow.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
+
+  const ambiguous = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 5, 64)]},
+    '[warning] Failed to resolve link to "Missing" in comment for sample', root,
+    () => ['/** Public function.', ' * See {@link Missing}.', ' * Compare {@link Missing}.', ' */', 'export function sample() {}'].join('\n'),
+  );
+  assert.deepEqual(ambiguous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 5]]);
+});
+
+test('TypeDoc localiza avisos reais de exports default e confere assinaturas documentadas inequívocas', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-default-exports-'));
+  try {
+    const files = {
+      'contract.ts': ['/** Configuração.', ' * Consulte {@link MissingContract}.', ' */', 'export default', 'interface Config {}'],
+      'modes.ts': ['/** Modos.', ' * Consulte {@link MissingMode}.', ' */', 'enum Mode {', '  Active,', '}', 'export default Mode;'],
+      'choice.ts': ['/** Escolhas.', ' * Consulte {@link MissingChoice}.', ' */', 'enum Choice {', '  /** Padrão. */ First,', '}', 'export { Choice as default };'],
+      'control.ts': ['/** Controle. */', 'export default interface Control {}', '/** Formata. */', 'export function format(current: string) { return current; }',
+        '/** Primeiro. */', 'export function repeated(one: string) { return one; }'],
+      'other.ts': ['/** Segundo. */', 'export function repeated(two: string) { return two; }'],
+      'README.md': ['# API', '`format(current)`', '`format(old)`', '`repeated(old)`'],
+    };
+    for (const [file, lines] of Object.entries(files)) writeFileSync(join(root, file), lines.join('\n') + '\n');
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
+    assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
+      .map(finding => [finding.file, finding.line]).sort(), [['choice.ts', 2], ['contract.ts', 2], ['modes.ts', 2]]);
+    assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC')
+      .map(finding => [finding.file, finding.line]), [['modes.ts', 5]]);
+    assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA')
+      .map(finding => [finding.file, finding.line]), [['README.md', 3]]);
+    assert.match(result.coverage.find(row => row.tool === 'typedoc:markdown')?.detail ?? '', /assinaturas_conferidas=2$/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('Markdown exige assinaturas presentes no relatório TypeDoc', () => {
+  const comment = {summary: [{text: 'Documentado.'}]};
+  const symbol = (name: string) => ({name, kind: 64, sources: [{fileName: 'src/api.ts', line: 1}], comment});
+  const {symbols} = parseTypedocReport({kind: 1, name: 'fixture', children: [
+    symbol('incomplete'),
+    {...symbol('noArgs'), signatures: [{parameters: []}]},
+  ]}, '', FIXTURE_CLEAN_DIR);
+  const findings = crossCheckMarkdownAgainstTypedoc(['README.md'], symbols, () => '`incomplete()`\n`noArgs()`\n`noArgs(stale)`');
+  assert.deepEqual(findings.map(finding => [finding.rule, finding.line]), [['DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA', 3]]);
 });
 
 test('ferramentas fixadas encontram as quatro arestas ausentes e conferem o controle real', {skip: skipLocalTools}, async () => {
@@ -1045,6 +1131,54 @@ test('seleção estática segue manifesto aninhado, references e extends JSONC d
       const dynamic = await collect();
       assert.match(dynamic.coverage.find(row => row.tool === 'dependency-cruiser:resolucao')?.detail ?? '', /comando TypeScript não analisado.*app\/package\.json/);
       assert.deepEqual(dynamic.findings, []);
+    }
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('AST do manifesto isola o diretório de subshells e registra executáveis calculados', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-shell-scope-'));
+  try {
+    mkdirSync(join(root, 'app'));
+    const options = {module: 'ESNext', moduleResolution: 'bundler'};
+    writeFileSync(join(root, 'build.json'), JSON.stringify({compilerOptions: options}));
+    writeFileSync(join(root, 'app', 'build.json'), JSON.stringify({compilerOptions: {...options, moduleSuffixes: ['.native', '']}}));
+    writeFileSync(join(root, 'index.ts'), 'export const value = 1;\n');
+    writeFileSync(join(root, 'billing.ts'), 'export const billing = 1;\n');
+    writeFileSync(join(root, 'arch.mmd'), 'flowchart LR\nA["index.ts"] --> B["billing.ts"]\n');
+    const graph = {modules: [{source: 'index.ts', dependencies: []}, {source: 'billing.ts', dependencies: []}]};
+    const mermaidParseFn = await createDefaultMermaidParser();
+    const marker = join(root, 'script-ran');
+    const collect = async (build: string) => {
+      writeFileSync(join(root, 'package.json'), JSON.stringify({scripts: {build: `printf ran > '${marker}'\n${build}`}}));
+      const result = await runCollector({
+        repoDir: root, ...syntheticTools({kind: 1, name: 'fixture'}, 'flowchart LR\nA --> B', graph), mermaidParseFn,
+      });
+      assert.equal(existsSync(marker), false, build);
+      return result;
+    };
+
+    for (const build of [
+      'command cd app && tsc -p build.json', 'command -- cd app && tsc -p build.json',
+      '(command cd app && tsc -p build.json)', 'cd app && (true); tsc -p build.json',
+      'TSC=${TSC:-tsc}; exec "$TSC" -p build.json', 'command "$TSC" -p build.json', 'command -p -- "$TSC" -p build.json',
+    ]) {
+      const result = await collect(build);
+      const resolution = result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao');
+      assert.equal(resolution?.status, 'skipped', build);
+      assert.match(resolution.detail, /comando TypeScript não analisado.*package\.json/, build);
+      assert.match(result.coverage.find(row => row.tool === 'dependency-cruiser:diagrama')?.detail ?? '', /arestas_doc_nao_conferidas=1/, build);
+      assert.deepEqual(result.findings, [], build);
+    }
+
+    for (const build of [
+      '(command cd app); tsc -p build.json', '(cd app; (cd ..)); command tsc -p build.json',
+      'printf "%s" "$(cd app)"; exec tsc -p build.json', 'command -v "$TSC"; tsc -p build.json',
+    ]) {
+      const result = await collect(build);
+      assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined, build);
+      assert.deepEqual(result.findings.map(finding => finding.rule), ['DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE'], build);
     }
   } finally {
     rmSync(root, {recursive: true, force: true});
