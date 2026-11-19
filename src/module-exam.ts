@@ -7,7 +7,8 @@ import {redactUnknownSecrets} from './verify-redact.ts';
 import {VerifyWorkerCall} from './verify-types.ts';
 import type {ModuleRawFinding} from './verification-modules.ts';
 import {findModuleExamRoutes, moduleExamRouteKey, redactModuleExamText, type ModuleExamMap} from './module-exam-map.ts';
-import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewObservation} from './module-exam-proof.ts';
+import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
+import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 
 const checklist: Record<VerificationModule, string> = {
@@ -40,6 +41,8 @@ export type ModuleExamWorker = {run(call: z.infer<typeof ModuleExamCall>): Promi
 
 export type ModuleExamInput = {
   module: VerificationModule; intentId: string; map: ModuleExamMap; findings: readonly ModuleRawFinding[]; commit?: string;
+  /** Validated by the host, from this run's collector before publication. */
+  collectorReview?: ModuleExamCollectorReview;
   worker?: ModuleExamWorker;
   unavailable?: string;
   reserve?: (purpose: 'examiner'|'reviewer', avoid?: {provider: string; profileId: string; accountId: string}) => Promise<ModuleExamSeat>;
@@ -47,6 +50,8 @@ export type ModuleExamInput = {
   release?: (seat: ModuleExamSeat, state: 'not_started'|'exited') => Promise<void>;
   signal?: AbortSignal;
 };
+export type ModuleExamCollectorReview = {collector: ModuleExamCollectorContext; intentId: string; snapshot: string;
+  relatedSources?: ReadonlyMap<string, string | null>};
 function clean(s: string, max?: number): string { return redactModuleExamText(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ' ').slice(0, max); }
 const EXAM_CODE_LIMIT = 16000;
 
@@ -81,20 +86,28 @@ export function moduleCollectorCandidate(f: ModuleRawFinding): ModuleExamCandida
 }
 
 export function moduleExamReviewEvidence(module: VerificationModule, finding: ModuleExamCandidate,
-  sourceCode: string, raw?: ModuleRawFinding) {
-  const {code: sent} = codeForExam(sourceCode);
+  sourceCode: string, raw?: ModuleRawFinding, collectorReview?: ModuleExamCollectorReview): ModuleReviewEvidence | null {
+  const {code: sent, limited} = codeForExam(sourceCode);
   const code = sent.split('\n')[finding.line - 1]?.trim();
   const tool = raw ? clean(raw.tool, 120) : 'examinador';
   const rule = raw ? clean(raw.rule, 200) : 'exame-de-arquivo';
   const origin = {module, file: finding.file, line: finding.line, tool, rule, evidence: finding.evidence};
   const hypothesis = raw ? moduleCollectorHypothesis(rule, origin) : finding.hypothesis;
-  if (!code || code.length > 2000 || !/[\p{L}\p{N}]/u.test(code) || code.includes('…')
+  if ((limited && collectorReview) || !code || code.length > 2000 || !/[\p{L}\p{N}]/u.test(code) || code.includes('…')
     || !hypothesis || !finding.evidence.trim() || (!raw && !code.includes(finding.evidence))) return null;
+  const collectorCase = raw && collectorReview && finding.file === raw.file && finding.line === raw.line
+    && tool === raw.tool && rule === raw.rule && sourceCode === sent && finding.evidence === raw.evidence
+    ? buildCollectorReviewCase({raw, context: collectorReview.collector, source: sent, module,
+      commit: finding.reviewCommit, intentId: collectorReview.intentId, snapshot: collectorReview.snapshot,
+      relatedSources: collectorReview.relatedSources})
+    : null;
+  const evidence = {...origin, hypothesis, code, ...(finding.reviewCommit ? {commit: finding.reviewCommit} : {})};
+  if (collectorCase) return {...evidence, collectorCase};
   const lineTokens = scanModuleExamSource(code)?.map(token => token.text);
   const sourceTokens = scanModuleExamSource(sent)?.filter(token => token.line === finding.line).map(token => token.text);
   if (!lineTokens?.length || !sourceTokens || lineTokens.length !== sourceTokens.length
     || lineTokens.some((token, index) => token !== sourceTokens[index])) return null;
-  return {...origin, hypothesis, code, ...(finding.reviewCommit ? {commit: finding.reviewCommit} : {})};
+  return evidence;
 }
 
 function unavailableText(code: string) {
@@ -237,12 +250,16 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     if (limitedFiles) notes.add(`Arquivos com envio limitado a linhas completas: ${limitedFiles}.`);
 
     let stopReview = stopExam === 'PROVIDER_USAGE_LIMIT' ? stopExam : null;
+    const collectorReview = input.collectorReview?.intentId === input.intentId ? {
+      ...input.collectorReview,
+      ...(input.module === 'arquitetura' ? {relatedSources: new Map(input.map.files.map(file => [file.file, file.code]))} : {}),
+    } : undefined;
     for (const [index, finding] of findings.entries()) {
       checkAbort(input.signal);
       const file = filesByName.get(finding.file);
       const row = coverageByFile.get(finding.file);
       const examiner = finding.examiner ?? (row?.status === 'lido' ? row.examiner : null);
-      const evidence = file?.code ? moduleExamReviewEvidence(input.module, finding, file.code, input.findings[index]) : null;
+      const evidence = file?.code ? moduleExamReviewEvidence(input.module, finding, file.code, input.findings[index], collectorReview) : null;
       if (stopReview || !evidence || !examiner) {
         finding.failure = stopReview ?? stopExam ?? 'MODULE_EXAM_EVIDENCE_UNAVAILABLE';
         finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;

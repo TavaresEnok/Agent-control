@@ -70,11 +70,17 @@ const messages: Record<string, string> = {
 
 const recheckGuidance: Record<string, string> = {
   MODULE_RECHECK_ORIGINAL_UNKNOWN: 'Recupere o relatório e a cobertura originais para identificar a origem do achado.',
-  MODULE_RECHECK_SAME_COMMIT: 'Integre a correção e rode o módulo e o QA no novo commit.',
+  MODULE_RECHECK_SAME_COMMIT: 'Integre a correção e rode o módulo no novo commit.',
   MODULE_RECHECK_CHANGE_UNPROVEN: 'Confira a linhagem do commit e a alteração no ponto original do achado.',
   MODULE_RECHECK_MODULE_PROOF_MISSING: 'Rode novamente o módulo no commit atual com a mesma origem e cobertura do ponto original.',
-  MODULE_RECHECK_REGRESSION_PROOF_MISSING: 'Rode o QA no commit atual com o teste de regressão do achado vinculado ao ponto original.',
-  MODULE_RECHECK_CORRECTION_UNEXPLAINED: 'Repita a revisão com uma justificativa que cite a mudança e o teste de regressão.',
+  MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED: 'A regra ainda não dispõe de prova funcional de antes e depois.',
+  MODULE_RECHECK_FUNCTIONAL_ORIGIN_UNPROVEN: 'A medição original do módulo não comprova a condição funcional desta regra.',
+  MODULE_RECHECK_FUNCTION_IDENTITY_UNPROVEN: 'A declaração original e a atual precisam identificar inequivocamente a mesma função exportada.',
+  MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE: 'O teste versionado precisa conter uma asserção numérica direta sobre a mesma função exportada.',
+  MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE: 'A execução isolada não produziu um resultado válido para a asserção nas duas revisões.',
+  MODULE_RECHECK_ORIGINAL_TEST_PASSED: 'O teste de regressão já passou na revisão original.',
+  MODULE_RECHECK_CORRECTED_TEST_FAILED: 'A mesma asserção ainda falhou na revisão corrigida.',
+  MODULE_RECHECK_CORRECTION_UNEXPLAINED: 'A revisão precisa vincular a regra, a asserção exata e os resultados medidos nas duas revisões.',
 };
 
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
