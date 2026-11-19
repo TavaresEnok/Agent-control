@@ -1,0 +1,5 @@
+# Revisar a recuperação de criações sem ID e o restauro de relatórios
+
+Revisão somente leitura sobre 57471e2c contra b4668d56. Confira os dois altos e quatro médios do parecer anterior: rejeição de create e ACK sem ID, ausência do banco durante a limpeza, colisão de prefixo, artefatos obrigatórios, payload e gravidade canônicos e isolamento de relatórios legados incompletos. Considere o contrato Docker de que antes de partir o contêiner a aplicação precisa gravar o ID e revalidar a autoridade. Confira provas negativas, recuperabilidade e estados de concorrência. Apenas parecer, sem editar arquivos.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C-BASE-R6.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

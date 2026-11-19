@@ -183,7 +183,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         }
         if (launch.provider === 'codex' && exhaust) return {output: 'diagnóstico privado descartado', failureCode: 'PROVIDER_USAGE_LIMIT'};
         if (task.file === 'index.ts' && task.checklist && examineFunctionalFinding) {
-          return {failureCode: null, output: JSON.stringify({kind: 'exame', filesRead: [task.file],
+          return {failureCode: null, output: JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file],
             checklist: ['qa'], findings: [{line: 1, snippet: skippedIndex, hypothesis: skipQuestion,
               title: 'Teste funcional pulado', severity: 'baixa'}]})};
         }

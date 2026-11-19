@@ -1,0 +1,5 @@
+# Conformidade — atualização de origem ao longo do fluxo
+
+Trate os casos de atribuição de dados descritos em /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C9-DESTINOS-R6.txt. Verifique reatribuições das propriedades em JS/TS e Python e a identidade do destino de saída, inclusive homônimos. Preserve a localização e a sanitação dos dados. Quando o fluxo não for determinável, mostre os limites da cobertura. Use fixtures com nomes de campos e valores inventados, sem dados pessoais reais. Sua responsabilidade é o analisador de conformidade e seus testes locais.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C9-R7.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

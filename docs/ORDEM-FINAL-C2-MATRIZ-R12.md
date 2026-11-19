@@ -1,0 +1,11 @@
+# C2 — atribuição de requisitos e asserções
+
+Implemente os casos confirmados de /tmp/ac-final-3aDgqp8I/parecer-high-C2-R11.txt no analisador da matriz de requisitos de QA e seus testes focados. Distinga resultados esperados de funções, preserve a origem qualificada, o vínculo com asserção e cobertura parcial em projetos mistos. Uma falha observada deve constar; só emita lacuna quando comprovada. Conserve o comportamento do código avaliado, o escopo do inventário e o relatório por funcionalidade. Dados locais sintéticos e testes funcionais benignos.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-MATRIZ-R12.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
+
+## Revisão independente — C2-MATRIZ-R12
+
+Examine se cada célula da matriz de QA usa apenas evidência do teste, linguagem e arquivo efetivamente observados. Veja o vínculo entre requisito, alvo e medição.
+
+Examinar 77afc70d contra 9e72a930. Somente leitura.

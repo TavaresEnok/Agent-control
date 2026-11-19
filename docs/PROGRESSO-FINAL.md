@@ -124,3 +124,581 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:09 UTC — Trabalho C2-R5 iniciado por Sol high normal em final-c2.
 - 19/11/2026 02:10 UTC — Trabalho C4-R4 iniciado por Sol high normal em final-c4.
 - 19/11/2026 02:11 UTC — Os três Terra remanescentes entregaram banco 63ac0d75, medições PostgreSQL 88ae6d4f e CPU 58c19a8f. As medições e a entrega HTTP estão reunidas em f49cb686 para ligação ao produto. O Sol da base conclui as pendências de persistência e cancelamento. A revisão de arquitetura segue com um Sol high somente leitura.
+- 19/11/2026 02:11 UTC — Revisor encerrou C3-R5 em a42d0136 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:11 UTC — Revisão C8-R3 iniciada por Sol high normal somente leitura em bdcaa6c6.
+- 19/11/2026 02:12 UTC — C6 em bce4196c passou nos 12 testes de integração e imagem, e nos 6 da CLI real, incluindo a tarefa manual idempotente e ausência de valores de credenciais no relatório. C5-R3 em 31371fea passou em 8 testes com imagem e PostgreSQL, com uma prova local opcional pulada. C8-R3 integrada no checkout isolado em b5b6fe14.
+- 19/11/2026 02:14 UTC — Criada task/final-integracao-c2 a partir do ramo principal para integrar apenas a base compartilhada e os arquivos de QA. Os módulos 3 a 9 mantêm seus coletores nos ramos de prova. O trabalho de revisão e correção continua antes da aplicação viva.
+- 19/11/2026 02:15 UTC — Matriz de C3-R5 em a42d0136: Sol high normal encontrou dois médios e um baixo na cópia e no parser. O apontamento sobre o digest referia-se ao pin realizado pelo gerente após o laboratório, como pede o plano. Correções no candidato c72431cc, laboratório real 1/1 e testes 17 aprovados com uma verificação opcional omitida. Pin do gerente em 7ebcf5f6. Nova revisão sobre o código.
+- 19/11/2026 02:16 UTC — Revisor encerrou C8-R3 em bdcaa6c6 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:16 UTC — Revisão C5-R3 iniciada por Sol high normal somente leitura em 31371fea.
+- 19/11/2026 02:17 UTC — C8-R3 em bdcaa6c6 passou a prova das ferramentas e recebeu apontamentos na revisão Sol high normal para variantes de arestas Mermaid e opções de resolução TypeScript. Aberta C8-R4. O build C9-R2 continua no download de artefatos fixados; o laboratório depende da conclusão da imagem.
+- 19/11/2026 02:18 UTC — Iniciada prova conjunta das seis CLIs que já têm imagens e fixtures disponíveis, na versão 2fdb29c4. A primeira suíte preliminar de C2 também está em execução na trilha isolada bc5fb353.
+- 19/11/2026 02:19 UTC — Revisor encerrou C5-R3 em 31371fea (código 0). Gerente confere a entrega.
+- 19/11/2026 02:19 UTC — Revisão C6 iniciada por Sol high normal somente leitura em bce4196c.
+- 19/11/2026 02:19 UTC — As seis CLIs de QA, arquitetura, dependências, banco, prontidão e documentação passaram em conjunto no checkout de integração, incluindo relatório privado, conversão em tarefa e código de falha verificável. No banco, as nove provas reais passaram usando o Squawk extraído da própria imagem fixada. A revisão de 31371fea encontrou um alto e seis médios fora das fixtures atuais; distribuída C5-R4.
+- 19/11/2026 02:20 UTC — No parecer C5-R3, o sexto médio questiona a atualização do digest. O histórico separa o commit de código do Terra 63ac0d75 do pin do gerente fbd1ed3f. A ordem reserva essa atualização ao gerente após a prova, como foi feito. C5-R4 cobre o alto e os cinco médios de comportamento.
+- 19/11/2026 02:22 UTC — A prova adicional do banco passou pela CLI real contra uma instalação descartável. A migração sintética válida excedeu o prazo de 5 s e a CLI saiu com erro, gravou SQLSTATE 57014 na cobertura e não a classificou como migração rejeitada. Na suíte preliminar da QA faltava o pacote de PNG do laboratório de design no worktree; a mesma dependência do checkout principal foi ligada e os seis testes desse arquivo passaram na repetição.
+- 19/11/2026 02:23 UTC — Revisor encerrou C6 em bce4196c (código 0). Gerente confere a entrega.
+- 19/11/2026 02:23 UTC — Revisão C3-FINAL iniciada por Sol high normal somente leitura em c72431cc.
+- 19/11/2026 02:24 UTC — Trabalhador encerrou C2-R5 em 211dc9aa (código 0). Gerente confere a entrega.
+- 19/11/2026 02:24 UTC — Trabalho C7-R4 iniciado por Sol high normal em final-c7.
+- 19/11/2026 02:25 UTC — Matriz C6 em bce4196c, Sol high normal: quatro altos e cinco médios. Além das regras operacionais, uma atribuição em Compose ou systemd com valor de duas palavras ainda podia vazar um fragmento. C6-R7 exige localização e texto fixo na origem para os detectores de segredos. O trabalho de prontidão segue em laboratório isolado.
+- 19/11/2026 02:25 UTC — Revisor encerrou C3-FINAL em c72431cc (código 0). Gerente confere a entrega.
+- 19/11/2026 02:25 UTC — Revisão C2-R5 iniciada por Sol high normal somente leitura em 211dc9aa.
+- 19/11/2026 02:26 UTC — Trabalhador encerrou C4-R4 em cbf83ce3 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:26 UTC — Trabalho C6-R7 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 02:27 UTC — Trabalhador encerrou C-BASE-R5 em b4668d56 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:27 UTC — Trabalho C8-R4 iniciado por Sol high normal em final-c8.
+- 19/11/2026 02:29 UTC — C-BASE-R5 entregue em b4668d56. A preparação do exame incorporou a recuperação de relatórios antes da nova ordem. C4-R4 entregue em cbf83ce3, em construção e laboratório. As duas revisões independentes estão na fila. C3-FINAL identificou um achado baixo de contagem por arquivo para caminhos equivalentes.
+- 19/11/2026 02:30 UTC — C4-R4 passou 20 de 20 testes, incluindo o laboratório da imagem fixada em ec1122ff. C-BASE-R5 passou os três laboratórios Docker reais de limpeza física após perda de lease, tempo excedido e excesso de saída. O teste de runtime da suíte preliminar de QA passou ao disponibilizar os arquivos do frontend de Cezar no checkout descartável.
+- 19/11/2026 02:30 UTC — Revisor encerrou C2-R5 em 211dc9aa (código 0). Gerente confere a entrega.
+- 19/11/2026 02:30 UTC — Revisão C9 iniciada por Sol high normal somente leitura em a1e4ec28.
+- 19/11/2026 02:31 UTC — C9-R2 concluiu a construção da imagem e passou no laboratório de conformidade sobre a imagem final; o gerente segue com a revisão e a prova pela CLI.
+- 19/11/2026 02:31 UTC — Matriz C2-R5, Sol high normal, código 211dc9aa, revisão independente por modelo distinto do gerente. Dois altos, seis médios e um baixo. Aberta C2-R6 para registrar provas por execução, propriedade pura e erros por arquivo. Suíte preliminar de C2 em bc5fb353: 246 arquivos aprovados e dois com dependências ausentes nesse checkout. Os dois passaram na repetição após disponibilizar as dependências.
+- 19/11/2026 02:32 UTC — C9-R2 passou nove testes, incluindo o laboratório que detecta CPF e licença sintéticos e aprova o controle limpo, imagem fixada em 6c3cddbf. C3 corrigiu a contagem do Knip em 78a334bf, com laboratório verde e imagem em 303b1b36. A primeira repetição conjunta falhou porque o teste da CLI ainda esperava nomes de ferramentas substituídas em C2-R5; atualizada a prova de QA para exigir os coletores realmente executados.
+- 19/11/2026 02:32 UTC — Definido o contrato entre a CLI e a persistência do exame. O transporte recebe apenas texto saneado. A CLI terá de conservar como pendente todo achado para o qual não obteve revisão independente.
+- 19/11/2026 02:35 UTC — Sete módulos passaram em conjunto pela CLI pessoal em 7585aa9c, incluindo QA, arquitetura, dependências e conformidade nas imagens corrigidas. Na trilha de integração, duas provas com PostgreSQL verificaram que um resultado sem revisor fica provável e que uma revisão sintética de provedor distinto grava a identidade e a origem no relatório e no banco, commit 6453511c.
+- 19/11/2026 02:35 UTC — Validação de c2-base-exame em 6453511c iniciada no checkout de integração.
+- 19/11/2026 02:36 UTC — Revisor encerrou C9 em a1e4ec28 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:36 UTC — Revisão C4-R4 iniciada por Sol high normal somente leitura em cbf83ce3.
+- 19/11/2026 02:36 UTC — Atualizadas as oito seções de MODULOS-DE-VERIFICACAO com o que foi demonstrado em homologação, os limites medidos e as ordens abertas. A aplicação desses módulos na instalação viva segue pendente.
+- 19/11/2026 02:37 UTC — Revisão C9 em a1e4ec28: os dois lockfiles indicados como ausentes foram confirmados no commit por git cat-file (330 e 321 bytes) e utilizados no laboratório real. Os seis médios e o baixo sobre cobertura LGPD, licenças, cache e linha da prova seguem para C9-R3.
+- 19/11/2026 02:38 UTC — Trabalhador encerrou C8-R4 em 9c2782fd (código 0). Gerente confere a entrega.
+- 19/11/2026 02:38 UTC — Trabalho C-EXAME-R2 iniciado por Sol high normal em final-c-exame.
+- 19/11/2026 02:39 UTC — C8-R4 chegou em 9c2782fd; iniciados build da imagem e laboratório de documentação. C-EXAME-R2 assumiu a ligação da CLI com a persistência já disponível no seu worktree.
+- 19/11/2026 02:39 UTC — C8-R4 passou nos 18 testes com os binários reais, incluindo as arestas ausentes e a resolução por moduleSuffixes; imagem fixada em da58dca6. Nova prova pela CLI de documentação em andamento.
+- 19/11/2026 02:40 UTC — Trabalhador encerrou C7-R4 em 9a7018c4 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:40 UTC — Trabalho C2-R6 iniciado por Sol high normal em final-c2.
+- 19/11/2026 02:40 UTC — C7-R4 chegou em 9a7018c4. Iniciei a construção da imagem e a ligação do coletor de desempenho à CLI no checkout de integração. C8-R4 passou novamente pela CLI pessoal da documentação, 6/6.
+- 19/11/2026 02:42 UTC — A hipótese da revisão C9 sobre reconstrução do índice do ScanCode foi conferida na imagem como UID 65532, com raiz somente leitura e /tmp novo: o pacote contém o cache de licença, get_index() carregou LicenseIndex e o cache do usuário ficou com zero bytes. C9-R3 foi atualizada com a prova. A integração de desempenho em 9fa35748 compilou no TypeScript e iniciou o laboratório Docker da imagem R4.
+- 19/11/2026 02:42 UTC — C7-R4 passou no laboratório das quatro ferramentas em conjunto sobre a imagem fixada. Iniciada a prova pela CLI pessoal de desempenho.
+- 19/11/2026 02:43 UTC — Revisor encerrou C4-R4 em cbf83ce3 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:43 UTC — Revisão C-BASE-R5 iniciada por Sol high normal somente leitura em b4668d56.
+- 19/11/2026 02:43 UTC — O comando público dos módulos já executa a correção. A reverificação por achado ainda estava acessível apenas pelo helper interno. Registrada a ordem para expor --reverificar com a mesma autoridade do exame e confirmação em provedor distinto, depois da ligação da CLI ao transporte de texto.
+- 19/11/2026 02:44 UTC — C4-R4 em cbf83ce3 voltou da revisão independente com defeitos de comparação semver, resolução de workspaces, validade de inventário e evidência de codemod. A R5 deve cobrir os cenários apontados mantendo o registro de pacotes offline.
+- 19/11/2026 02:44 UTC — C7-R4: a primeira execução pela CLI mediu Lighthouse, k6, CPU e PostgreSQL. O teste ainda esperava um segundo dois-pontos no nome da linha de CPU e falhou. A asserção agora exige o nome real, estado ok, arquivo, função e amostras não vazias. Em curso a repetição nas oito CLIs.
+- 19/11/2026 02:46 UTC — Prova conjunta em db875596, 8 de 8 módulos pela CLI pessoal, com snapshot Git, imagem real fixada, cobertura, relatório privado, contexto dedicado e tarefa idempotente. Os 6 testes do arquivo passaram. O laboratório específico de desempenho passou 3/3 em f5f9a9ec, cobrindo defeito e controle, backend ausente e snapshot vazio. Na prova dirigida de interoperabilidade, 29 testes passaram e 1 ficou pulado pela ausência de PostgreSQL 16 nativo; o PostgreSQL 16.2 da imagem foi exercitado pelo laboratório real. O exame com contas e a aplicação viva continuam pendentes.
+- 19/11/2026 02:47 UTC — Trabalhador encerrou C6-R7 em 757eced2 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:47 UTC — Trabalho C5-R4 iniciado por Sol high normal em final-c5.
+- 19/11/2026 02:48 UTC — Revisor encerrou C-BASE-R5 em b4668d56 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:48 UTC — Revisão C-EXAME-PERSISTENCIA iniciada por Sol high normal somente leitura em 6453511c.
+- 19/11/2026 02:48 UTC — Suíte oficial de c2-base-exame em 6453511c: 252 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 02:48 UTC — C6-R7 entregue em 757eced2. A sondagem HTTPS passiva passa a receber o cancelamento desde a primeira requisição e a manter a renovação da reserva. Em andamento a verificação via HTTPS sintético e o laboratório dos detectores.
+- 19/11/2026 02:49 UTC — Testes complementares de c2-base-exame em 6453511c: 52 aprovados.
+- 19/11/2026 02:50 UTC — Validação completa de c2-base-exame em 6453511c: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 02:50 UTC — Revisor encerrou C-EXAME-PERSISTENCIA em 6453511c (código 0). Gerente confere a entrega.
+- 19/11/2026 02:50 UTC — Revisão C8-R4 iniciada por Sol high normal somente leitura em 9c2782fd.
+- 19/11/2026 02:51 UTC — C6 em a2c2a68f passou nos 19 testes do coletor e da sondagem, e a CLI integrada passou nos 5 testes HTTPS locais. A base em 6453511c passou em 252 arquivos da suíte oficial, 52 complementares e no laboratório da QA. Os pareceres independentes abriram novas correções para recuperação de contêiner sem ID e confirmação de achados sem examinador.
+- 19/11/2026 02:54 UTC — Revisor encerrou C8-R4 em 9c2782fd (código 0). Gerente confere a entrega.
+- 19/11/2026 02:54 UTC — Revisão C7-R4 iniciada por Sol high normal somente leitura em 9a7018c4.
+- 19/11/2026 02:55 UTC — C8-R4 retornou com três altos e dois médios sobre a origem das arestas e a interpretação da configuração e de JSDoc. Aberta C8-R5. Na prontidão, o detector passou a usar mensagem constante que o parser comum ainda recusava. Corrigido o contrato estrito e a prova de TLS por arquivo, linha e texto fixo; C6-R7 voltou a passar 6/6 na CLI em 8bff52b5.
+- 19/11/2026 02:56 UTC — Recuperação R6 em 57471e2c: 10/10 testes de recuperação de contêiner, incluindo Docker real, e 2/2 provas finais de restauro e de colisão de diretório legado no PostgreSQL. A rejeição por imagem ausente obteve falha de ferramenta sem bloquear o sucessor. Um create de resultado desconhecido conserva o token para remover uma entrega tardia, e o ID sem gravação confirmada permanece recuperável. Na bateria de persistência, 24 aprovados e três laboratórios pulados que foram executados à parte.
+- 19/11/2026 02:58 UTC — Revisor encerrou C7-R4 em 9a7018c4 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:58 UTC — Revisão C6-R7 iniciada por Sol high normal somente leitura em 757eced2.
+- 19/11/2026 02:59 UTC — Trabalhador encerrou C5-R4 em 5d494800 (código 0). Gerente confere a entrega.
+- 19/11/2026 02:59 UTC — Trabalho C9-R3 iniciado por Sol high normal em final-c9.
+- 19/11/2026 03:00 UTC — Trabalhador encerrou C2-R6 em 9b8959dc (código 0). Gerente confere a entrega.
+- 19/11/2026 03:00 UTC — Trabalho C4-R5 iniciado por Sol high normal em final-c4.
+- 19/11/2026 03:01 UTC — C5-R4 entregue em 5d494800; reconstrução da imagem e laboratório iniciados. Revisão independente de desempenho identificou um risco de contêiner ou volume órfão após timeout e três defeitos médios em rotas, baseline e falha de backend. Ordem C7-R5 aberta.
+- 19/11/2026 03:01 UTC — C5 em 5d494800 passou no laboratório de migração, classificação de falhas e plano de consultas em PostgreSQL isolado. C2-R6 entregue em 9b8959dc entrou em reconstrução e revisão.
+- 19/11/2026 03:02 UTC — Trabalhador encerrou C-EXAME-R2 em c8fe44e5 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:02 UTC — Trabalho C-REVERIFICAR iniciado por Sol high normal em final-c-exame.
+- 19/11/2026 03:03 UTC — QA R6 passou em 33 testes de execução e análise estática, com um caso opcional omitido. C5-R4 passou nos 10 testes, incluindo o laboratório por digest. O adaptador de exame pessoal c8fe44e5 e as correções de persistência db4b5c40 entraram na homologação de QA; iniciada a validação conjunta.
+- 19/11/2026 03:04 UTC — Revisor encerrou C6-R7 em 757eced2 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:04 UTC — Revisão C-BASE-R6 iniciada por Sol high normal somente leitura em 57471e2c.
+- 19/11/2026 03:05 UTC — Revisão de prontidão 757eced2 identificou quatro defeitos altos e seis médios em parsing, limites e privacidade. Aberta C6-R8. O primeiro teste da recusa de correção pela CLI obteve a mensagem pública prevista em português. Ajustada a asserção que procurava o código interno.
+- 19/11/2026 03:07 UTC — Validação de c2-r6-exame-nativo em 91a6c71a iniciada no checkout de integração.
+- 19/11/2026 03:08 UTC — Revisor encerrou C-BASE-R6 em 57471e2c (código 0). Gerente confere a entrega.
+- 19/11/2026 03:08 UTC — Revisão C5-R4 iniciada por Sol high normal somente leitura em 5d494800.
+- 19/11/2026 03:08 UTC — Revisor encerrou C5-R4 em 5d494800 (código 1). Gerente confere a entrega.
+- 19/11/2026 03:08 UTC — Revisão C2-R6 iniciada por Sol high normal somente leitura em 9b8959dc.
+- 19/11/2026 03:09 UTC — Homologação de QA 91a6c71a: seis provas ponta a ponta aprovadas, incluindo a recusa de correção sem verificador e criação idempotente na medição sintética explícita. Nove testes de fluxo e persistência passaram. A revisão da base encontrou uma janela entre autorização e partida Docker e três defeitos médios. A primeira entrada da revisão C5 excedeu o limite de tamanho; reenviada com o diff contra o pai direto.
+- 19/11/2026 03:10 UTC — A recuperação distingue um JSON truncado ou um diretório comum de um arquivo íntegro, e o descarte com prefixo curto preserva a outra execução de caminho distinto. Duas provas de integração no PostgreSQL passaram. A ordem C-BASE-R7 tem prioridade na próxima vaga para concluir a autorização da partida.
+- 19/11/2026 03:10 UTC — Matriz dos módulos atualizada com os commits de imagem, limites das provas, revisão independente e pendências de QA, banco, prontidão, desempenho e documentação. A suíte de QA segue sobre a árvore congelada em 91a6c71a.
+- 19/11/2026 03:11 UTC — As oito CLIs passaram juntas em d406e85a com o adaptador nativo de exame (6/6, 150 s); TypeScript aprovado. A instalação sintética sem provedor deixou os achados como prováveis. A criação idempotente de tarefas foi provada com medição explícita de fixture. A leitura do painel mostrou que as rotas atuais só consultam os relatórios do módulo 1; aberta a ligação de consulta e correção prevista no item 6 do contrato comum.
+- 19/11/2026 03:11 UTC — Trabalhador encerrou C9-R3 em b433235e (código 0). Gerente confere a entrega.
+- 19/11/2026 03:11 UTC — Trabalho C-BASE-R7 iniciado por Sol high normal em final-c-interop.
+- 19/11/2026 03:12 UTC — Revisor encerrou C2-R6 em 9b8959dc (código 0). Gerente confere a entrega.
+- 19/11/2026 03:12 UTC — Revisão C-EXAME-R2 iniciada por Sol high normal somente leitura em c8fe44e5.
+- 19/11/2026 03:14 UTC — A revisão de QA R6 apontou duas atribuições incorretas de prova e três defeitos médios na detecção de rotas, skip e teste pela entrada pública. Aberta C2-R7, executada pelo gerente enquanto as três vagas de trabalhador estão ocupadas.
+- 19/11/2026 03:15 UTC — Conformidade b433235e passou nos 16 testes, incluindo o laboratório por digest com licença e CPF sintéticos, controle limpo e leitura do índice ScanCode com HOME sem escrita. Integração de homologação em ffe86c74.
+- 19/11/2026 03:16 UTC — Trabalhador encerrou C4-R5 em 8669f900 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:16 UTC — Trabalho C8-R5 iniciado por Sol high normal em final-c8.
+- 19/11/2026 03:16 UTC — A CLI de conformidade na nova imagem passou 6/6 em ffe86c74. C4-R5 entregue em 8669f900 entrou em reconstrução, laboratório e fila de revisão independente.
+- 19/11/2026 03:17 UTC — Revisor encerrou C-EXAME-R2 em c8fe44e5 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:17 UTC — Revisão C-EXAME-PERSISTENCIA-R2 iniciada por Sol high normal somente leitura em db4b5c40.
+- 19/11/2026 03:17 UTC — Trabalhador encerrou C-REVERIFICAR em 7c27cb7b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:17 UTC — Trabalho C7-R5 iniciado por Sol high normal em final-c7.
+- 19/11/2026 03:18 UTC — Revisão c8fe44e5 solicitou vincular a hipótese e o trecho na confirmação, retirar a confirmação por substring, tratar limites do provedor e exigir atestado da rota. C-EXAME-R3 aberta com dados sintéticos. A CLI de reverificação de 7c27cb7b entrou em 86799c06 preservando a comparação com o documento privado de origem.
+- 19/11/2026 03:19 UTC — A imagem C4-R5 por digest passou nos 26 testes de ferramenta e laboratório, incluindo seleção por workspace, direção de mudança de versão, SBOM e aplicação de codemod em cópia. Iniciada a prova da CLI em b16408a1.
+- 19/11/2026 03:19 UTC — Revisor encerrou C-EXAME-PERSISTENCIA-R2 em db4b5c40 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:19 UTC — Revisão C3-R6 iniciada por Sol high normal somente leitura em 78a334bf.
+- 19/11/2026 03:19 UTC — QA R7 em a7783fba passou nos 35 testes sem omissões, incluindo a imagem pela entrada pública, a fixture histórica do relatório privado, rota opcional, nomes com espaço e %20, propriedade impura e vínculo de função morto. TypeScript aprovado. O digest do gerente foi commitado separadamente. Revisão solicitada sobre o código.
+- 19/11/2026 03:20 UTC — Trabalhador encerrou C-BASE-R7 em e372b57a (código 0). Gerente confere a entrega.
+- 19/11/2026 03:20 UTC — Trabalho C-EXAME-R3 iniciado por Sol high normal em final-c-exame-r3.
+- 19/11/2026 03:21 UTC — Revisor encerrou C3-R6 em 78a334bf (código 0). Gerente confere a entrega.
+- 19/11/2026 03:21 UTC — Revisão C5-R4-CODIGO iniciada por Sol high normal somente leitura em 5d494800.
+- 19/11/2026 03:21 UTC — Falha na validação de c2-r6-exame-nativo em suite, código 1. Logs privados do gerente.
+- 19/11/2026 03:21 UTC — A CLI pública de reverificação passou nas 16 provas da integração. O parecer da persistência apontou a ausência do arquivo de origem nos relatórios antigos, confirmação por substring, publicação de prova rejeitada e omissão de medições. Em 8576fe97 as três provas da compatibilidade e origem passaram. A remoção do modo de confirmação por substring está atribuída à rodada do exame. C4-R5 passou 6/6 pela CLI real.
+- 19/11/2026 03:24 UTC — A última suíte de 91a6c71a aprovou 252 arquivos e encontrou uma falha na prova de isolamento de design. A nova condição exige repositório para preparar capturas; o teste atualizado verifica também a ausência de repositório e passou 4/4. Base e372b57a passou nos 15 testes de recuperação e autoridade, incluindo os três cenários Docker reais. Revisão de arquitetura apontou dois médios e um baixo sobre caminhos do inventário, em C3-R7.
+- 19/11/2026 03:24 UTC — Validação de c2-r7-reverificacao em df6bd1f5 iniciada no checkout de integração.
+- 19/11/2026 03:25 UTC — Revisor encerrou C5-R4-CODIGO em 5d494800 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:25 UTC — Revisão C9-R3 iniciada por Sol high normal somente leitura em b433235e.
+- 19/11/2026 03:25 UTC — Arquitetura 7fb2f861 passou nas 18 provas habilitadas, incluindo o laboratório. Na primeira tentativa a raiz apenas legível passou sem permissão de travessia; o teste identificou a regressão e a versão final confere leitura e travessia no descritor ancorado. O módulo banco recebeu um alto e dois médios sobre rejeições SQL e atribuição de lote; C5-R5 aberta. As oito CLIs passaram novamente 6/6 depois da mudança de autoridade.
+- 19/11/2026 03:28 UTC — Prontidão agora guarda somente os resultados de HSTS, nosniff e proteção de frame, sem valores brutos de cabeçalhos. A prova HTTPS local confirmou a retirada do nonce e preservou a conclusão. A CLI de arquitetura com a nova imagem passou 6/6; a suíte de QA segue no commit df6bd1f5.
+- 19/11/2026 03:29 UTC — Trabalhador encerrou C8-R5 em fafc14d3 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:29 UTC — Trabalho C-PAINEL iniciado por Sol high normal em final-c-painel.
+- 19/11/2026 03:29 UTC — Revisor encerrou C9-R3 em b433235e (código 0). Gerente confere a entrega.
+- 19/11/2026 03:29 UTC — Revisão C4-R5 iniciada por Sol high normal somente leitura em 8669f900.
+- 19/11/2026 03:32 UTC — Documentação fafc14d3 passou nos 20 testes com ferramentas reais e entrou na homologação 6737130b. Revisão de conformidade b433235e encontrou três médios e um baixo relativos a fluxos de campos e pares SPDX. Ordem C9-R4 registrada.
+- 19/11/2026 03:32 UTC — Trabalhador encerrou C7-R5 em 5fbbbb9f (código 0). Gerente confere a entrega.
+- 19/11/2026 03:32 UTC — Trabalho C5-R5 iniciado por Sol high normal em final-c5.
+- 19/11/2026 03:34 UTC — A CLI de documentação passou 6/6 em 6737130b. A triagem SPDX passou nos 15 testes locais, incluindo as seis permutações das três classes e o limite de pares; a análise de fluxos pessoais continua em C9-R4. Matriz de provas atualizada.
+- 19/11/2026 03:35 UTC — Desempenho 5fbbbb9f chegou à homologação fb632787, com tratamento de recursos Docker e separação entre orçamento do projeto e medição histórica. A nova imagem entra no laboratório; persistência do histórico na CLI ainda pendente.
+- 19/11/2026 03:35 UTC — Revisor encerrou C4-R5 em 8669f900 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:35 UTC — Revisão C-REVERIFICAR iniciada por Sol high normal somente leitura em 7c27cb7b.
+- 19/11/2026 03:36 UTC — A revisão independente de dependências 8669f900 encontrou proposta de downgrade indevida, perda de itens válidos e três falhas de validação de evidências. C4-R6 aberta. O laboratório de desempenho mede agora a nova localização da declaração de rota.
+- 19/11/2026 03:36 UTC — Trabalhador encerrou C-EXAME-R3 em 9808488b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:36 UTC — Trabalho C6-R8 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 03:37 UTC — A imagem de desempenho a4499fcc passou nos três laboratórios reais. O primeiro localizou CPU, SQL, navegador e rota HTTP; o segundo registrou a indisponibilidade do backend e mediu a página estática; o terceiro comprovou as omissões no repositório vazio.
+- 19/11/2026 03:38 UTC — Suíte oficial de c2-r7-reverificacao em df6bd1f5: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 03:38 UTC — Exame 9808488b integrado em a5ef0b22 para QA. A integração conserva a reverificação dos relatórios antigos sem exame.json com conferência da linha original no Git. As próximas provas usam supervisor e ledger do produto com provedores de bancada identificados.
+- 19/11/2026 03:40 UTC — Revisor encerrou C-REVERIFICAR em 7c27cb7b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:40 UTC — Revisão C2-R7 iniciada por Sol high normal somente leitura em a7783fba.
+- 19/11/2026 03:40 UTC — Testes complementares de c2-r7-reverificacao em df6bd1f5: 52 aprovados.
+- 19/11/2026 03:40 UTC — A prova integrada do exame a5ef0b22 passou em 22 testes. A revisão da reverificação informou um alto sobre fechamento sem prova de regressão e um médio sobre falha de publicação depois do commit. Ordem C-REVERIFICAR-R2 sobre a integração atual.
+- 19/11/2026 03:41 UTC — Trabalhador encerrou C-PAINEL em a1500106 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:41 UTC — Trabalho C-REVERIFICAR-R2 iniciado por Sol high normal em final-c-reverificar-r2.
+- 19/11/2026 03:41 UTC — Validação completa de c2-r7-reverificacao em df6bd1f5: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 03:41 UTC — Validação de c2-exame-r3 em a5ef0b22 iniciada no checkout de integração.
+- 19/11/2026 03:42 UTC — Painel a1500106 integrado ao candidato de QA a11377dc. O gerente iniciou a prova de autorização do gateway e a prova de seleção e correção no navegador de teste. A suíte anterior df6bd1f5 completou TypeScript, 253 arquivos, 52 complementares e laboratório.
+- 19/11/2026 03:43 UTC — Revisor encerrou C2-R7 em a7783fba (código 0). Gerente confere a entrega.
+- 19/11/2026 03:43 UTC — Revisão C-BASE-R7 iniciada por Sol high normal somente leitura em e372b57a.
+- 19/11/2026 03:46 UTC — Trabalhador encerrou C5-R5 em d58c8e69 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:46 UTC — Revisor encerrou C-BASE-R7 em e372b57a (código 0). Gerente confere a entrega.
+- 19/11/2026 03:46 UTC — Revisão C-EXAME-LEGADO iniciada por Sol high normal somente leitura em 8576fe97.
+- 19/11/2026 03:46 UTC — Trabalho C9-R4 iniciado por Sol high normal em final-c9.
+- 19/11/2026 03:46 UTC — Painel passou nas sete provas de gateway e nas seis de interface. A integração revelou que o fixture de relatório legado precisava da ficha física do quarto achado e que o relatório danificado conhecido precisava resposta de erro própria. A aplicação web compilou em diretório temporário. C2-R8 trata o alto de vínculo por ID e os dois médios da revisão de QA. C7-HISTORICO liga a medição à execução anterior pela CLI.
+- 19/11/2026 03:47 UTC — QA ca4b1171 passou 35/35 com laboratório real. Integração dos oito módulos em 753be95f. Duas execuções de desempenho pela CLI, comparadas pelo identificador de exame em 1156ed12, passaram nas seis provas após corrigir a apresentação do identificador e a classificação do limite de stdout. Banco d58c8e69 entrou no laboratório. A revisão da base e372b57a abriu C-BASE-R8 para tratar a partida tardia do Docker e limites.
+- 19/11/2026 03:47 UTC — Revisor encerrou C-EXAME-LEGADO em 8576fe97 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:47 UTC — Revisão C3-R7 iniciada por Sol high normal somente leitura em 7fb2f861.
+- 19/11/2026 03:47 UTC — Banco d58c8e69 passou nos onze testes com PostgreSQL, Squawk, Dexter e restauração. Prova das oito CLIs iniciada em 8bf6ed47 com a nova atribuição de lote e as medições independentes de desempenho.
+- 19/11/2026 03:49 UTC — Revisor encerrou C3-R7 em 7fb2f861 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:49 UTC — Revisão C2-R8 iniciada por Sol high normal somente leitura em ca4b1171.
+- 19/11/2026 03:51 UTC — Exame 7b512f4d passou nos quatro testes de persistência. Exclusão ou adulteração da origem agora falha nos relatórios novos, e IDs duplicados são rejeitados inclusive no formato antigo. O parecer de arquitetura indicou um alto e três médios nos caminhos do snapshot. A hipótese separada sobre walkOpened foi descartada pela definição presente e pela execução real. C3-R8 aberta.
+- 19/11/2026 03:52 UTC — Arquitetura aed61c1d passou em 18 testes habilitados, incluindo as ferramentas reais na nova imagem, com um caso opcional pulado. O laboratório das oito CLIs em 8bf6ed47 passou 6/6, incluindo as duas execuções comparáveis de desempenho.
+- 19/11/2026 03:52 UTC — Revisor encerrou C2-R8 em ca4b1171 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:52 UTC — Revisão C-EXAME-R3 iniciada por Sol high normal somente leitura em 9808488b.
+- 19/11/2026 03:53 UTC — Trabalhador encerrou C6-R8 em 8ff87772 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:53 UTC — Trabalho C-BASE-R8 iniciado por Sol high normal em final-c-interop.
+- 19/11/2026 03:54 UTC — Trabalhador encerrou C9-R4 em b1ac9e42 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:54 UTC — Trabalho C4-R6 iniciado por Sol high normal em final-c4.
+- 19/11/2026 03:55 UTC — Revisor encerrou C-EXAME-R3 em 9808488b (código 0). Gerente confere a entrega.
+- 19/11/2026 03:55 UTC — Revisão C-PAINEL iniciada por Sol high normal somente leitura em a1500106.
+- 19/11/2026 03:56 UTC — A revisão de QA ca4b1171 encontrou falso vínculo em nomes com $, omissões de namespace e ambiguidade entre nome e valor literal. C2-R9 em laboratório. A revisão de exame 9808488b mostrou que citação genérica ainda pode validar hipóteses diferentes; C-EXAME-R4 cobre o vínculo entre critério e prova, a origem das rotas e o limite de linha. Prontidão 8ff87772 passou nos 29 testes e laboratórios.
+- 19/11/2026 03:57 UTC — Suíte oficial de c2-exame-r3 em a5ef0b22: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 03:57 UTC — Revisor encerrou C-PAINEL em a1500106 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:57 UTC — Revisão C8-R5 iniciada por Sol high normal somente leitura em fafc14d3.
+- 19/11/2026 03:58 UTC — QA a7808ccf passou 35/35, incluindo os dois nomes ESM distintos, função por namespace e recusa de argumento de mensagem como prova. A primeira asserção do laboratório comparava o caminho impresso sem sua codificação percentual e foi corrigida. A suíte de a5ef0b22 passou em 253 arquivos. A CLI da nova imagem de arquitetura passou 6/6.
+- 19/11/2026 03:58 UTC — Falha na validação de c2-exame-r3 em complementares, código 1. Logs privados do gerente.
+- 19/11/2026 03:58 UTC — Validação de c2-r8-painel em faf0a7c9 iniciada no checkout de integração.
+- 19/11/2026 04:01 UTC — Trabalhador encerrou C-REVERIFICAR-R2 em 0e8ad897 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:01 UTC — Trabalho C-EXAME-R4 iniciado por Sol high normal em final-c-exame-r4.
+- 19/11/2026 04:02 UTC — Revisor encerrou C8-R5 em fafc14d3 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:02 UTC — Revisão C7-R5 iniciada por Sol high normal somente leitura em 5fbbbb9f.
+- 19/11/2026 04:03 UTC — Conformidade b1ac9e42 passou nos 20 testes e laboratórios com ScanCode, ORT e Presidio. Na prova de QA a5ef0b22, 8 de 52 testes complementares falharam porque as duas simulações da consulta ao banco omitiam o estado da cota; o ajuste está em teste. A revisão de documentação encontrou atribuições de ambiente e subgrafos que podem levar a conclusões equivocadas. Aberta C8-R6.
+- 19/11/2026 04:05 UTC — O painel corrigido passou em sete provas da API e nove do navegador simulado, incluindo cobertura com arquivo protegido sem achado, troca de projeto e links antigos. O build da interface saiu no diretório privado de homologação. Revisão pedida para 4a3c8407 e para a nova reverificação 0e8ad897.
+- 19/11/2026 04:05 UTC — As duas simulações de admissão corrigidas passaram com os 52 testes complementares. Conformidade passou nas seis provas da CLI em 3ede9a43. A política de admissão real continua exigindo estado de cota disponível.
+- 19/11/2026 04:05 UTC — Trabalhador encerrou C-BASE-R8 em 01d258b4 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:05 UTC — Trabalho C8-R6 iniciado por Sol high normal em final-c8.
+- 19/11/2026 04:07 UTC — Base comum recebida em 01d258b4. Foi iniciada a prova com o daemon Docker e a revisão independente. Aberta uma ordem de QA para executar também testes unitários offline Python e Go; a prova até aqui cobria Node.
+- 19/11/2026 04:08 UTC — Trabalhador encerrou C4-R6 em db55280f (código 0). Gerente confere a entrega.
+- 19/11/2026 04:08 UTC — Trabalho C2-LINGUAGENS iniciado por Sol high normal em final-c2.
+- 19/11/2026 04:08 UTC — Revisor encerrou C7-R5 em 5fbbbb9f (código 0). Gerente confere a entrega.
+- 19/11/2026 04:08 UTC — Revisão C2-R9 iniciada por Sol high normal somente leitura em a7808ccf.
+- 19/11/2026 04:09 UTC — A integração ace07a61 passou nas 18 provas de exame e persistência em PostgreSQL. A primeira prova de 01d258b4 no Docker detectou que um coletor com saída excessiva só parava no prazo. A leitura limitada durante a execução fez as três provas físicas passarem; duas simulações de cancelamento precisaram acompanhar a etapa de leitura. Desempenho recebeu C7-R6 após a revisão encontrar risco de remoção de volume homônimo e quatro defeitos médios.
+- 19/11/2026 04:11 UTC — Dependências recebeu o digest em 8da07644 após 28/28 no laboratório e nos testes locais. A matriz de homologação registra os novos resultados de QA, arquitetura, dependências, prontidão, documentação e conformidade. A instalação dos módulos continua pendente.
+- 19/11/2026 04:11 UTC — A base corrigida c7beedd2 passou nos 22 testes, incluindo três falhas físicas no daemon Docker e as duas simulações de transferência de autoridade. A CLI da imagem nova de dependências passou em 06dc592d nas seis provas. O revisor recebe a versão com a leitura limitada durante a execução.
+- 19/11/2026 04:12 UTC — Revisor encerrou C2-R9 em a7808ccf (código 0). Gerente confere a entrega.
+- 19/11/2026 04:12 UTC — Revisão C-BASE-R8 iniciada por Sol high normal somente leitura em c7beedd2.
+- 19/11/2026 04:13 UTC — Trabalhador encerrou C8-R6 em 96a7a766 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:13 UTC — Trabalho C7-R6 iniciado por Sol high normal em final-c7.
+- 19/11/2026 04:13 UTC — Revisão independente por modelo distinto sobre a7808ccf. A matriz podia atribuir uma mensagem de asserção à prova e trocar os arquivos de duas funções. C2-R10 corrigirá o vínculo por operando e por arquivo após a ordem em curso no mesmo worktree. A integração de QA bc28bdb6 também passou nas 19 provas de limpeza, com três cenários no Docker.
+- 19/11/2026 04:14 UTC — Arquitetura em candidato isolado 68273d88, com apenas QA e arquitetura. A CLI do módulo 3 está em prova neste conjunto para verificar a aplicação incremental das entregas.
+- 19/11/2026 04:14 UTC — Suíte oficial de c2-r8-painel em faf0a7c9: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 04:15 UTC — Os oito módulos em 9622ce0b e a arquitetura incremental em 68273d88 passaram nas seis provas da CLI em cada execução. Preparado o candidato incremental de dependências d130f2fb. A instalação viva continua na versão de A2.
+- 19/11/2026 04:15 UTC — Falha na validação de c2-r8-painel em complementares, código 1. Logs privados do gerente.
+- 19/11/2026 04:15 UTC — Validação de c2-r9-reverif-r2 em ace07a61 iniciada no checkout de integração.
+- 19/11/2026 04:15 UTC — Dependências incremental d130f2fb passou nas seis provas pela CLI. Banco em candidato incremental 3961ea53.
+- 19/11/2026 04:16 UTC — Revisor encerrou C-BASE-R8 em c7beedd2 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:16 UTC — Revisão C-REVERIFICAR-R2 iniciada por Sol high normal somente leitura em 0e8ad897.
+- 19/11/2026 04:16 UTC — Documentação 96a7a766 passou em 21/21 com ferramentas fixadas locais e no contêiner. A primeira passagem correu sem a opção das ferramentas locais e pulou nove testes; a repetição executou todos. A CLI está em prova em 43378796.
+- 19/11/2026 04:16 UTC — Banco incremental 3961ea53 passou nas seis provas pela CLI. Prontidão em candidato 8e4cb444 com a renovação da reserva durante a sondagem passiva, evidência de cabeçalho saneada e conferência do projeto.
+- 19/11/2026 04:18 UTC — A primeira CLI incremental de prontidão encontrou a diretiva de TLS no arquivo esperado, mas a asserção esperava a representação antiga da evidência. Aplicada a conferência de arquivo, linha e mensagem fixa já comprovada na homologação. A revisão de c7beedd2 localizou dois casos de integridade ou compatibilidade envolvendo retenção do log e stderr. C-BASE-R9 aberta. A CLI de documentação 96a7a766 passou 6/6.
+- 19/11/2026 04:18 UTC — Prontidão incremental 64d39b74 passou em 9/9, incluindo a CLI e o servidor HTTPS local autorizado. A aplicação incremental de desempenho já reúne o registro de medições e a recuperação. A prova da próxima correção de recursos Docker aguarda C7-R6.
+- 19/11/2026 04:19 UTC — Revisor encerrou C-REVERIFICAR-R2 em 0e8ad897 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:19 UTC — Revisão C-EXAME-ORIGEM iniciada por Sol high normal somente leitura em 7b512f4d.
+- 19/11/2026 04:19 UTC — As migrações passaram em PostgreSQL descartável partindo do esquema A2 com um projeto cadastrado. QA aplicou até 113 com a lacuna 111, a etapa de desempenho aplicou 111 e uma repetição preservou o mesmo projeto e as versões sem duplicação. O TypeScript de 023d7625 também passou.
+- 19/11/2026 04:19 UTC — Iniciada prova da CLI incremental documentacao em e53a5ed0.
+- 19/11/2026 04:19 UTC — A CLI incremental de documentacao em e53a5ed0 passou nas seis provas com a imagem fixada.
+- 19/11/2026 04:19 UTC — Iniciada prova da CLI incremental conformidade em bd23de33.
+- 19/11/2026 04:20 UTC — A CLI incremental de conformidade em bd23de33 passou nas seis provas com a imagem fixada.
+- 19/11/2026 04:20 UTC — A revisão de reverificação em 0e8ad897 encontrou que um teste sempre verde podia satisfazer o requisito e que o número da linha podia passar a outra função. C-REVERIFICAR-R3 exige o mesmo teste com resultado distinto nas duas revisões e origem estável. A ordem será executada depois das mudanças no runtime compartilhado.
+- 19/11/2026 04:21 UTC — Revisor encerrou C-EXAME-ORIGEM em 7b512f4d (código 0). Gerente confere a entrega.
+- 19/11/2026 04:21 UTC — Revisão C-PAINEL-R2 iniciada por Sol high normal somente leitura em 4a3c8407.
+- 19/11/2026 04:21 UTC — Trabalhador encerrou C2-LINGUAGENS em 1af4e0b2 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:21 UTC — Trabalho C2-R10 iniciado por Sol high normal em final-c2.
+- 19/11/2026 04:22 UTC — Revisor encerrou C-PAINEL-R2 em 4a3c8407 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:22 UTC — Revisão C3-R8 iniciada por Sol high normal somente leitura em aed61c1d.
+- 19/11/2026 04:25 UTC — A correção da origem em 30af542f passou em 12/12. A prova incluiu seleção exclusiva do coletor com arquivo de exame removido ou alterado e confirmou zero chamadas ao revisor. O módulo de QA para Python e Go foi recebido em 1af4e0b2 e a imagem está em construção no checkout isolado.
+- 19/11/2026 04:26 UTC — Trabalhador encerrou C-EXAME-R4 em 3ec5a0fe (código 0). Gerente confere a entrega.
+- 19/11/2026 04:26 UTC — Trabalho C-BASE-R9 iniciado por Sol high normal em final-c-interop.
+- 19/11/2026 04:26 UTC — Revisor encerrou C3-R8 em aed61c1d (código 0). Gerente confere a entrega.
+- 19/11/2026 04:26 UTC — Revisão C5-R5 iniciada por Sol high normal somente leitura em d58c8e69.
+- 19/11/2026 04:26 UTC — Painel 7efe20f0 passou em sete testes da API, dez do navegador simulado e no build. O painel preservou a consulta da instalação durante a troca de projeto e descartou a resposta funcional tardia. Exame R4 recebido em 3ec5a0fe. O laboratório de linguagens está rodando no digest da imagem reconstruída.
+- 19/11/2026 04:28 UTC — QA poliglota passou em 41/41 e no laboratório adicional da imagem real com as duas linguagens. Um defeito aritmético e um controle por linguagem produziram uma falha e uma aprovação em cada uma das três passadas; após corrigir só as implementações, os quatro testes passaram três vezes. A medição registrou ramos no Python e statements no Go.
+- 19/11/2026 04:28 UTC — Trabalhador encerrou C7-R6 em e3527238 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:30 UTC — A imagem poliglota fixada em 957a0817 já está no candidato de QA. O merge da prova estruturada 3ec5a0fe com a reverificação 0e8ad897 exige conciliar três suítes que evoluíram em paralelo. O worktree de QA ficou dedicado a C-EXAME-INTEGRAR. As três condições estruturadas atuais são de QA; os demais módulos ainda precisam de vínculo verificável com suas próprias medições.
+- 19/11/2026 04:30 UTC — Trabalho C-EXAME-INTEGRAR iniciado por Sol high normal em final-integracao-c2.
+- 19/11/2026 04:30 UTC — Revisor encerrou C5-R5 em d58c8e69 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:30 UTC — Revisão C7-HISTORICO iniciada por Sol high normal somente leitura em 1156ed12.
+- 19/11/2026 04:31 UTC — Arquitetura 70a8c7cc passou em 19 testes de coletor e laboratório com um caso opcional pulado. A raiz relativa usa o diretório mantido pelo kernel, a raiz vazia é recusada e a omissão de nomes não suportados fica registrada mesmo no limite. Desempenho e3527238 recebido para prova física.
+- 19/11/2026 04:32 UTC — Suíte oficial de c2-r9-reverif-r2 em ace07a61: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 04:32 UTC — Revisor encerrou C7-HISTORICO em 1156ed12 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:32 UTC — Revisão C6-R8 iniciada por Sol high normal somente leitura em 8ff87772.
+- 19/11/2026 04:33 UTC — Testes complementares de c2-r9-reverif-r2 em ace07a61: 52 aprovados.
+- 19/11/2026 04:33 UTC — Validação completa de c2-r9-reverif-r2 em ace07a61: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 04:34 UTC — Trabalhador encerrou C2-R10 em 69fe35e3 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:35 UTC — Suíte oficial em ace07a61 aprovada com TypeScript, 253 arquivos, 52 complementares e laboratório. CLI incremental de arquitetura em 84f5e90b aprovada em 6/6. Nova ordem C5-R6 para impedir atribuição de uma rejeição de banco ao arquivo errado. QA 69fe35e3 recebido para reconstrução da imagem.
+- 19/11/2026 04:35 UTC — Trabalho C5-R6 iniciado por Sol high normal em final-c5.
+- 19/11/2026 04:37 UTC — QA R10 passou nos 43 testes do coletor e laboratório sem saltos. A prova usa a imagem 80c3c6ab, reconstruiu os casos de mutação e conferiu a relação entre requisito e arquivo.
+- 19/11/2026 04:38 UTC — Aberta a ordem de exame independente para estender aos demais módulos a validação da condição exata registrada pelo coletor. Um achado sem evidência suficiente continua provável.
+- 19/11/2026 04:38 UTC — Desempenho integrado em e4680e65 com imagem a0bd77af. Os três laboratórios físicos passaram (quatro ferramentas, backend ausente, snapshot vazio). Após ligar a dependência Acorn do checkout, os 30 testes do coletor e orquestrador passaram, assim como TypeScript. A comparação busca o exame anterior compatível e ignora séries intermediárias diferentes.
+- 19/11/2026 04:39 UTC — Trabalhador encerrou C-BASE-R9 em 66fa91b5 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:39 UTC — Trabalho C-EXAME-MEDICOES iniciado por Sol high normal em final-exame-medicoes.
+- 19/11/2026 04:39 UTC — Revisor encerrou C6-R8 em 8ff87772 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:39 UTC — Revisão C9-R4 iniciada por Sol high normal somente leitura em b1ac9e42.
+- 19/11/2026 04:40 UTC — Trabalhador encerrou C-EXAME-INTEGRAR em 552b30cb (código 0). Gerente confere a entrega.
+- 19/11/2026 04:42 UTC — CLI do desempenho e4680e65 aprovada em 6/6 com duas medições reais. A prova poliglota do QA R10 passou; a CLI registrou uma ferramenta com falha e estamos identificando qual na base sintética. Aberta C6-R9 para tratar a avaliação passiva de configurações apontada pelo revisor.
+- 19/11/2026 04:42 UTC — Trabalho C6-R9 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 04:43 UTC — Base compartilhada 66fa91b5 passou nos 25 testes com PostgreSQL, incluindo os três casos de limpeza física em Docker e a migração 114. Diagnóstico da CLI de QA: a matriz completou a medição e encontrou REQ-02 sem teste; o registro usou o estado de falha operacional para esse achado de projeto. Correção em curso.
+- 19/11/2026 04:44 UTC — Imagem da matriz de QA corrigida em 3eead086 e integrada em 18a73502. Passaram as 43 provas de coletor e laboratório, com as verificações da ausência de vínculo e do achado preservadas. A validação em homologação seguirá pela CLI pública e suíte oficial.
+- 19/11/2026 04:44 UTC — Validação de c2-r10-base-r9 em 18a73502 iniciada no checkout de integração.
+- 19/11/2026 04:44 UTC — Revisor encerrou C9-R4 em b1ac9e42 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:44 UTC — Revisão C4-R6 iniciada por Sol high normal somente leitura em db55280f.
+- 19/11/2026 04:44 UTC — Revisor encerrou C4-R6 em db55280f (código 1). Gerente confere a entrega.
+- 19/11/2026 04:44 UTC — Revisão C8-R6 iniciada por Sol high normal somente leitura em 96a7a766.
+- 19/11/2026 04:45 UTC — Trabalhador encerrou C5-R6 em dc0dff58 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:45 UTC — Trabalho C-REVERIFICAR-R3 iniciado por Sol high normal em final-c-reverificar-r3.
+- 19/11/2026 04:45 UTC — A tentativa de revisão C4-R6 excedeu o limite de tamanho de entrada da CLI (1.048.576 caracteres) antes da análise. Reenviada com o diff de código completo da rodada e inventário SHA-256 dos esquemas vendorizados. A revisão C9-R4 confirmou cinco omissões de cobertura no código JS/TS; C9-R5 recebeu a correção.
+- 19/11/2026 04:48 UTC — QA 18a73502 passou nas sete provas da CLI e de Python/Go. As oito CLIs da base eeafe383 passaram juntas em 6/6, com as imagens reais e PostgreSQL descartável. No teste dirigido do exame, Node 24 emitiu o relatório em formato diferente do Node 22. O teste de regressão agora pede TAP explicitamente para verificar a mesma asserção nas duas versões. A instalação viva continua no estado anterior à parte C.
+- 19/11/2026 04:49 UTC — Revisor encerrou C8-R6 em 96a7a766 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:49 UTC — Revisão C-EXAME-R4 iniciada por Sol high normal somente leitura em 3ec5a0fe.
+- 19/11/2026 04:49 UTC — QA visual recebeu ordem para medir contraste com Chromium e comparar somente referências versionadas no snapshot. A suíte de QA aceita a medição de requisitos sem esconder os defeitos funcionais; a verificação das oito CLIs foi concluída em homologação.
+- 19/11/2026 04:51 UTC — Banco de dados R6, imagem fixada em b39683af, passou nos 12 testes e laboratório com PostgreSQL, Dexter e Squawk. A rejeição do lote original é preservada nos casos ambíguos. Integração incremental C5 a8113f92, C6 d7f37795, C7 f154d09a, C8 20e1dce5, C9 b53f2fb4. Em QA, o teste nativo com TAP explícito passou em 8/8, incluindo antes e depois da correção funcional.
+- 19/11/2026 04:52 UTC — Revisor encerrou C-EXAME-R4 em 3ec5a0fe (código 0). Gerente confere a entrega.
+- 19/11/2026 04:52 UTC — Revisão C-BASE-R9 iniciada por Sol high normal somente leitura em 66fa91b5.
+- 19/11/2026 04:55 UTC — Trabalhador encerrou C6-R9 em 2cafe62b (código 0). Gerente confere a entrega.
+- 19/11/2026 04:55 UTC — Trabalho C9-R5 iniciado por Sol high normal em final-c9.
+- 19/11/2026 04:55 UTC — Comparados os dez arquivos de licença e esquemas CycloneDX com o commit oficial 4b3f59453366e27c8073fd24e98bf21ef8892c8e: dez SHA-256 iguais. A CLI de banco R6 e os controles passivos de prontidão passaram em 9/9. Sol fará C-EXAME-R5 sobre a identidade de testes e rotas após a ordem de medições. Em documentação, o parser POSIX real já passou nos casos de continuação, comentário e redirecionamento.
+- 19/11/2026 04:56 UTC — Documentação R7 em c1d36024 passou em 21 testes, com TypeDoc, dependency-cruiser e Mermaid reais. A imagem fixa o parser POSIX sh-syntax 0.8.7 e inclui controles de HTML em rótulos Mermaid e função seta default. Prontidão R9 2cafe62b recebida para laboratório.
+- 19/11/2026 04:56 UTC — Revisor encerrou C-BASE-R9 em 66fa91b5 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:56 UTC — Revisão C2-R10 iniciada por Sol high normal somente leitura em 69fe35e3.
+- 19/11/2026 04:57 UTC — Prontidão R9 com imagem cdef90eb aprovada nos 32 testes, incluindo laboratório de configuração e HTTPS local. Entrega incremental C9 em e1086065 incorpora também documentação R7. A suíte em 18a73502 revelou uma corrida no teste de armazenamento: liberar 1 MiB no host entre duas leituras mudava o resultado. O teste passou a solicitar mais que a capacidade total do sistema de arquivos, mantendo o código de admissão intacto.
+- 19/11/2026 04:58 UTC — Trabalhador encerrou C-EXAME-MEDICOES em 1b42a859 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:58 UTC — Trabalho C2-NAVEGADOR iniciado por Sol high normal em final-c2.
+- 19/11/2026 05:00 UTC — Falha na validação de c2-r10-base-r9 em suite, código 1. Logs privados do gerente.
+- 19/11/2026 05:02 UTC — Trabalhador encerrou C-REVERIFICAR-R3 em 6e5edfd1 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:02 UTC — Trabalho C-EXAME-R5 iniciado por Sol high normal em final-exame-medicoes.
+- 19/11/2026 05:02 UTC — Revisor encerrou C2-R10 em 69fe35e3 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:02 UTC — Revisão C2-LINGUAGENS iniciada por Sol high normal somente leitura em 1af4e0b2.
+- 19/11/2026 05:03 UTC — Trabalhador encerrou C9-R5 em 86ec5e87 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:04 UTC — Publicação das medições em bfab53bd: PostgreSQL descartável gravou um achado confirmado em cada um dos oito módulos com dados de coletor e respostas independentes sintéticos e snapshots Git reais. Os 14 critérios não cobrem todas as regras. R3 da reverificação e C9-R5 recebidas. Aberta C2-R11 para asserções capturadas e chamadas que não chegam a executar a função.
+- 19/11/2026 05:05 UTC — Disponibilizada uma ordem independente de QA para medir a força dos testes Python e Go e propriedades Python, em arquivos próprios. A reverificação funcional 6e5edfd1 já foi incorporada à base de homologação d6aaf1c9 para a prova com o exame de medições.
+- 19/11/2026 05:05 UTC — Trabalho C2-MUTACAO-LINGUAGENS iniciado por Sol high normal em final-qa-mutacao-linguagens.
+- 19/11/2026 05:06 UTC — Revisor encerrou C2-LINGUAGENS em 1af4e0b2 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:06 UTC — Revisão C2-R10-INTEGRACAO iniciada por Sol high normal somente leitura em 3eead086.
+- 19/11/2026 05:07 UTC — Exame com reverificação R3 em d6aaf1c9 passou nos 31 testes dirigidos, incluindo publicação no Ledger para os oito módulos. O revisor identificou limites de execução e descoberta no coletor poliglota. C2-LINGUAGENS-R2 recebeu esses pontos e a prova já feita com os runtimes reais.
+- 19/11/2026 05:07 UTC — Revisor encerrou C2-R10-INTEGRACAO em 3eead086 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:07 UTC — Revisão C-EXAME-ORIGEM-R2 iniciada por Sol high normal somente leitura em 30af542f.
+- 19/11/2026 05:07 UTC — Base comum R10 b01ca7b3 passou em 26 testes sem saltos. Em Docker real, 12 MiB em stderr não impediram a publicação do JSON, e foram verificados cancelamento, prazo e excesso em stdout. Em PostgreSQL a troca concorrente de epoch foi bloqueada durante a partida do cliente anterior e a transferência só avançou após a limpeza.
+- 19/11/2026 05:08 UTC — Validação de c2-medicoes-r3-base-r10 em 5805da0d iniciada no checkout de integração.
+- 19/11/2026 05:09 UTC — Revisor encerrou C-EXAME-ORIGEM-R2 em 30af542f (código 0). Gerente confere a entrega.
+- 19/11/2026 05:09 UTC — Revisão C-PAINEL-R3 iniciada por Sol high normal somente leitura em 7efe20f0.
+- 19/11/2026 05:09 UTC — Conformidade R5 com imagem fixada em e1798884 passou nos 22 testes, incluindo a imagem real com licença e identificador artificiais. A entrega incremental f38ad8f4 reúne o novo QA, a confirmação terminal e os módulos 3 a 9 em ordem. O revisor confirmou a correção da classificação de REQ-02. O teste da CLI passa a exigir também o achado na linha do requisito e falhas operacionais iguais a zero.
+- 19/11/2026 05:10 UTC — Revisor encerrou C-PAINEL-R3 em 7efe20f0 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:10 UTC — Revisão C3-R9 iniciada por Sol high normal somente leitura em 70a8c7cc.
+- 19/11/2026 05:11 UTC — Revisor encerrou C3-R9 em 70a8c7cc (código 0). Gerente confere a entrega.
+- 19/11/2026 05:11 UTC — Revisão C4-R6-REVISAO iniciada por Sol high normal somente leitura em db55280f.
+- 19/11/2026 05:12 UTC — Trabalhador encerrou C2-NAVEGADOR em 735da841 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:12 UTC — Trabalho C2-R11 iniciado por Sol high normal em final-c2.
+- 19/11/2026 05:13 UTC — Diagnóstico da CLI em homologação confirmou imagem ausente antes do start. Na entrega f38ad8f4, QA, banco, prontidão e documentação perderam as referências locais aos digests. Iniciada restauração com etiquetas próprias de homologação e verificação do ID completo antes de repetir as oito CLIs.
+- 19/11/2026 05:15 UTC — Origem do exame corrigida em 15fa0960. TypeScript aprovado e seis testes passaram em PostgreSQL. A origem ausente ou alterada preserva a geração da última reverificação válida. Chromium offline recebido em 735da841 para prova física.
+- 19/11/2026 05:15 UTC — Imagens de homologação reconstruídas e etiquetadas por ID. Os quatro IDs resultantes mudaram. A prova das oito CLIs usa os digests novos em ramo isolado. O gateway continua usando a versão anterior.
+- 19/11/2026 05:15 UTC — Imagem Chromium de 735da841 construída e etiquetada em sha256:2e23a93cd852. Iniciada medição física de contraste e comparação de pixels. Banco 31b447bc, prontidão 256589e2 e documentação 6daae927 preservam os digests reconstruídos.
+- 19/11/2026 05:16 UTC — Revisor encerrou C4-R6-REVISAO em db55280f (código 0). Gerente confere a entrega.
+- 19/11/2026 05:16 UTC — Revisão C7-R6 iniciada por Sol high normal somente leitura em e3527238.
+- 19/11/2026 05:17 UTC — QA Chromium em 6b312c2d passou nos oito testes físicos, incluindo contraste da linha plantada, controle visual limpo e a diferença de pixels esperada. API do painel corrigida em b809469f e aprovada nos sete testes. Revisão independente por modelo distinto de db55280f indicou três falhas médias de comprovação das atualizações; aberta C4-R7. Em 70a8c7cc o revisor encontrou duas observações baixas relativas ao limite de inventário e ao teste da raiz relativa.
+- 19/11/2026 05:17 UTC — Trabalhador encerrou C-EXAME-R5 em 6ec910f0 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:17 UTC — Trabalho C2-LINGUAGENS-R2 iniciado por Sol high normal em final-c2-linguagens-r2.
+- 19/11/2026 05:19 UTC — Trabalhador encerrou C2-MUTACAO-LINGUAGENS em 195c8cd8 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:19 UTC — Trabalho C4-R7 iniciado por Sol high normal em final-c4.
+- 19/11/2026 05:21 UTC — Revisor encerrou C7-R6 em e3527238 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:21 UTC — Revisão C7-HISTORICO-R2 iniciada por Sol high normal somente leitura em e4680e65.
+- 19/11/2026 05:22 UTC — As oito CLIs na entrega 6797c1a9 passaram nos seis testes de ponta a ponta em 167 s. Banco, prontidão e documentação tiveram 68/68 nos laboratórios e testes dirigidos, com as dependências fixadas habilitadas e a proteção dos achados prováveis verificada na CLI. A revisão de desempenho e3527238 retornou quatro correções de recursos e recuperação; aberta C7-R7. A medição de mutações de Python e Go chegou em 195c8cd8 e segue para ligação à CLI.
+- 19/11/2026 05:23 UTC — Revisor encerrou C7-HISTORICO-R2 em e4680e65 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:23 UTC — Revisão C5-R6 iniciada por Sol high normal somente leitura em dc0dff58.
+- 19/11/2026 05:24 UTC — Matriz dos módulos atualizada com os commits, números das provas físicas e resultados de revisão por módulo. A prova de prontidão distingue uma observação provável de um achado autorizado para correção.
+- 19/11/2026 05:24 UTC — Exame R5 integrado em 1fd88007. A prova com dois perfis sintéticos e PostgreSQL criou oito tarefas, uma para cada módulo, com o arquivo e o teste de regressão corretos. As verificações da CLI nativa e de cancelamento passaram. Tipo e persistência validados.
+- 19/11/2026 05:24 UTC — Trabalhador encerrou C2-R11 em 2a440fd9 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:24 UTC — Trabalho C2-MUTACAO-INTEGRACAO iniciado por Sol high normal em final-qa-mutacao-linguagens.
+- 19/11/2026 05:25 UTC — Suíte oficial de c2-medicoes-r3-base-r10 em 5805da0d: 255 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 05:26 UTC — Testes complementares de c2-medicoes-r3-base-r10 em 5805da0d: 52 aprovados.
+- 19/11/2026 05:26 UTC — Falha na validação de c2-medicoes-r3-base-r10 em laboratorio, código 1. Logs privados do gerente.
+- 19/11/2026 05:26 UTC — Validação de c2-chromium-r5 em 1fd88007 iniciada no checkout de integração.
+- 19/11/2026 05:26 UTC — QA R11 recebido em 2a440fd9 para prova física. A versão anterior do QA, 5805da0d, passou nos 255 arquivos da suíte oficial. A leitura de histórico de desempenho foi corrigida para reagir ao cancelamento durante uma página PostgreSQL e está em teste no ramo de integração de C7.
+- 19/11/2026 05:27 UTC — Revisor encerrou C5-R6 em dc0dff58 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:27 UTC — Revisão C8-R7 iniciada por Sol high normal somente leitura em c1d36024.
+- 19/11/2026 05:29 UTC — Histórico de desempenho corrigido em 004271d0. Os 23 testes do orquestrador passaram e uma conexão PostgreSQL bloqueada foi cancelada antes de soltar o bloqueio. A revisão independente de dc0dff58 achou casos adicionais de diagnóstico PostgreSQL; o refinamento está em C5-R7. Na suíte anterior 5805da0d passaram 255 arquivos e 52 complementares, e o laboratório confirmou a ausência do digest antigo. A suíte seguinte usa imagem etiquetada.
+- 19/11/2026 05:29 UTC — Trabalhador encerrou C2-LINGUAGENS-R2 em 3757031b (código 0). Gerente confere a entrega.
+- 19/11/2026 05:29 UTC — Trabalho C7-R7 iniciado por Sol high normal em final-c7.
+- 19/11/2026 05:30 UTC — Trabalhador encerrou C4-R7 em 49841c60 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:30 UTC — Trabalho C5-R7 iniciado por Sol high normal em final-c5.
+- 19/11/2026 05:31 UTC — Revisor encerrou C8-R7 em c1d36024 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:31 UTC — Revisão C6-R9 iniciada por Sol high normal somente leitura em 2cafe62b.
+- 19/11/2026 05:32 UTC — QA R11 em 2abce48d passou nos 52 testes ativos e na prova privada histórica direcionada, completando 53 casos. Em 004271d0, duas medições de desempenho pela CLI passaram em seis testes. QA integrou 3757031b com a descoberta de Python e Go; a imagem de dependências de 49841c60 também está em nova prova. Documentação c1d36024 recebeu correções de atribuição de comando e linha Mermaid na ordem C8-R8.
+- 19/11/2026 05:33 UTC — Homologação incremental em 0c7ce4b6 reuniu as novas versões de QA e dependências, as três imagens reconstruídas, a consulta cancelável de desempenho e a prova de prontidão. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 05:34 UTC — Prova física de dependências em 547fa8c9 aprovada nos 30 testes sem saltos. A ordem C-REVERIFICAR-MODULOS estende a reverificação de correções aos módulos com medições locais, além do caso funcional de QA já medido, com teste e verificador independente.
+- 19/11/2026 05:34 UTC — Trabalhador encerrou C2-MUTACAO-INTEGRACAO em 9373c088 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:34 UTC — Trabalho C8-R8 iniciado por Sol high normal em final-c8.
+- 19/11/2026 05:37 UTC — Prova incremental das oito CLIs em 0c7ce4b6 com seis testes aprovados. Em bf5ff27a passaram 58 dos 60 testes na bateria principal e os dois testes opcionais também passaram com Python/coverage e Go habilitados na bateria separada de sete casos. Mutação e propriedades chegaram ao coletor em 9373c088, integradas em 21f41409 e reconstruídas para prova física.
+- 19/11/2026 05:38 UTC — Trabalhador encerrou C7-R7 em 9f22e01e (código 0). Gerente confere a entrega.
+- 19/11/2026 05:38 UTC — Trabalho C-REVERIFICAR-MODULOS iniciado por Sol high normal em final-recheck-modulos.
+- 19/11/2026 05:38 UTC — Revisor encerrou C6-R9 em 2cafe62b (código 0). Gerente confere a entrega.
+- 19/11/2026 05:38 UTC — Revisão C-EXAME-MEDICOES iniciada por Sol high normal somente leitura em 1b42a859.
+- 19/11/2026 05:39 UTC — Revisão independente por modelo distinto de 2cafe62b encontrou possível falso positivo de backup em here-doc e falhas de cobertura de configuração local. C6-R10 trata os casos em análise passiva de arquivos.
+- 19/11/2026 05:40 UTC — Em 53a37821 a cobertura identifica explicitamente quando o daemon não tem a imagem fixada. Dois testes aprovaram a falha antes e durante a criação, um deles com Docker real e PostgreSQL. A imagem de desempenho com as correções do revisor em 9f22e01e entrou em reconstrução.
+- 19/11/2026 05:42 UTC — Desempenho R7 e leitura de histórico cancelável reunidos em 4e90e9c5. O conflito de digest foi resolvido com o ID físico de 5e91abad e a bateria foi relançada sobre o commit fixado. No QA, a montagem noexec do laboratório anterior foi observada no Docker; a prova de mutação agora usa os argumentos reais do produto.
+- 19/11/2026 05:42 UTC — Trabalhador encerrou C5-R7 em 1cd11ad5 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:42 UTC — Trabalho C6-R10 iniciado por Sol high normal em final-c6-r2.
+- 19/11/2026 05:42 UTC — Revisor encerrou C-EXAME-MEDICOES em 1b42a859 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:42 UTC — Revisão C-REVERIFICAR-R3 iniciada por Sol high normal somente leitura em 6e5edfd1.
+- 19/11/2026 05:43 UTC — Próximas ordens cobrem dois itens da especificação que ainda dependiam de execução real, OpenRewrite para fontes Java e fast-check para propriedades funcionais de JavaScript. A revisão das medições 1b42a859 encontrou problemas na identidade de uma consulta, no motivo do verificador e na cobertura do material de apoio; essas correções têm prioridade na fila.
+- 19/11/2026 05:44 UTC — Banco 1cd11ad5 reconstruído em homologação com PostgreSQL, Squawk e Dexter. Iniciado o laboratório dos casos de esquema, identificação de comando e origem inequívoca de erro.
+- 19/11/2026 05:45 UTC — O laboratório do QA com as montagens do produto executou mutmut, go-mutesting e Hypothesis por digest em 119 s. A passagem confirmou mutantes mortos e sobreviventes com localização, propriedade falsificada e controle limpo. Iniciada a bateria unificada com os adaptadores locais habilitados.
+- 19/11/2026 05:46 UTC — Banco a382ae45 aprovado nos 13 testes reais, sem saltos; desempenho 4e90e9c5 aprovado nos 62 testes, sem saltos, incluindo as duas medições da CLI e o cancelamento de consulta bloqueada.
+- 19/11/2026 05:46 UTC — Homologação incremental em 525f929e reuniu o laboratório de QA no runtime do produto, o diagnóstico de imagem ausente e as correções de atribuição em banco e de recuperação em desempenho. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 05:46 UTC — Suíte oficial de c2-chromium-r5 em 1fd88007: 256 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 05:46 UTC — Revisor encerrou C-REVERIFICAR-R3 em 6e5edfd1 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:46 UTC — Revisão C9-R5 iniciada por Sol high normal somente leitura em 86ec5e87.
+- 19/11/2026 05:46 UTC — Trabalhador encerrou C8-R8 em 79d499e8 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:46 UTC — Trabalho C-EXAME-MEDICOES-R2 iniciado por Sol high normal em final-exame-medicoes.
+- 19/11/2026 05:47 UTC — O revisor de 6e5edfd1 identificou que uma diferença numérica pode ter causa diferente de falta de cobertura V8 e que uma decisão legada pode ser reutilizada sem o novo recibo. C-REVERIFICAR-R4 fica no mesmo ramo da ampliação, para corrigir os cinco achados depois da ordem em andamento. Documentação 79d499e8 recebida para reconstrução.
+- 19/11/2026 05:47 UTC — Testes complementares de c2-chromium-r5 em 1fd88007: 52 aprovados.
+- 19/11/2026 05:48 UTC — Bateria de QA em fcbffe1e passou em 69/69 sem saltos, incluindo os adaptadores reais, Chromium, mutação e CLI. Documentação com correções de manifesto e Mermaid passou nos 25 testes sem saltos. A inspeção do fluxo de correção mostrou que seleções de arquivos distintos ainda compartilhavam um pedido. Aberta C-CORRECAO-ESCOPO para o contrato por arquivo e por atualização de dependência.
+- 19/11/2026 05:49 UTC — Validação completa de c2-chromium-r5 em 1fd88007: TypeScript, suíte, complementares e laboratório aprovados.
+- 19/11/2026 05:49 UTC — Validação de c3-r11 em e66a635f iniciada no checkout de integração.
+- 19/11/2026 05:50 UTC — As oito CLIs em 525f929e passaram nos seis testes sem saltos. Validação oficial de 1fd88007 terminou com 256 arquivos, 52 testes complementares e laboratório verde. Nova integração de documentação f990c92f e conformidade a529fbee segue para nova prova de CLI.
+- 19/11/2026 05:51 UTC — Revisor encerrou C9-R5 em 86ec5e87 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:51 UTC — Revisão C-BASE-R10 iniciada por Sol high normal somente leitura em b01ca7b3.
+- 19/11/2026 05:51 UTC — Revisão independente por modelo distinto de 86ec5e87 identificou erros estáticos de atribuição de campos, argumentos e callbacks na análise de dados pessoais. Aberta C9-R6. A arquitetura em homologação passou nos 20 testes com Hadolint fixado e as ferramentas locais habilitadas. As CLIs de documentação e conformidade passaram nos seis testes após a integração de bd0211ec.
+- 19/11/2026 05:52 UTC — QA contratual já compara as rotas ao OpenAPI. C2-CONTRATOS acrescenta a prova funcional com exemplos positivos declarados e interações Pact entre componentes locais. A bancada usa dados artificiais e registra status e estrutura da resposta.
+- 19/11/2026 05:53 UTC — Matriz consolidada com os resultados mais recentes de QA, arquitetura, dependências, banco, desempenho, documentação e conformidade. O registro distingue medições com ferramentas reais das confirmações com provedores sintéticos.
+- 19/11/2026 05:54 UTC — Revisor encerrou C-BASE-R10 em b01ca7b3 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:54 UTC — Revisão C-EXAME-ORIGEM-R3 iniciada por Sol high normal somente leitura em 15fa0960.
+- 19/11/2026 05:54 UTC — Trabalhador encerrou C6-R10 em 76917101 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:54 UTC — Trabalho C4-JAVA iniciado por Sol high normal em final-c4-java.
+- 19/11/2026 05:55 UTC — Revisor encerrou C-EXAME-ORIGEM-R3 em 15fa0960 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:55 UTC — Revisão C2-NAVEGADOR iniciada por Sol high normal somente leitura em 735da841.
+- 19/11/2026 05:56 UTC — Trabalhador encerrou C-EXAME-MEDICOES-R2 em c052f630 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:56 UTC — Trabalho C2-PROPRIEDADES-JS iniciado por Sol high normal em final-qa-propriedades-js.
+- 19/11/2026 06:00 UTC — Trabalhador encerrou C-REVERIFICAR-MODULOS em f08375b8 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:00 UTC — Trabalho C-REVERIFICAR-R4 iniciado por Sol high normal em final-recheck-modulos.
+- 19/11/2026 06:00 UTC — Revisor encerrou C2-NAVEGADOR em 735da841 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:00 UTC — Revisão C-PAINEL-R4 iniciada por Sol high normal somente leitura em b809469f.
+- 19/11/2026 06:01 UTC — C5 2e18a141: a imagem agora identifica por SHA-256 o SQL medido. Após corrigir uma variável duplicada no teste, 13/13 passaram com PostgreSQL, Squawk e Dexter. C6 049b33c9: 34/34 passaram com a nova interpretação estática e os controles. Ambas as imagens estão fixadas em homologação.
+- 19/11/2026 06:02 UTC — Revisor encerrou C-PAINEL-R4 em b809469f (código 0). Gerente confere a entrega.
+- 19/11/2026 06:02 UTC — Revisão C2-MUTACAO-LINGUAGENS iniciada por Sol high normal somente leitura em 195c8cd8.
+- 19/11/2026 06:03 UTC — Captura 7bf5c1e5: 28/28 com PostgreSQL e Docker. O cliente R7 original removeu o contêiner exato enquanto a troca de época permaneceu bloqueada. Os testes separam erro de transporte e falha legítima do filho. Exame: após ligar os recibos de leitura à publicação, os 43 testes passaram, incluindo confirmação e pedido de correção nos oito módulos. Registrada segunda rodada de fidelidade do Chromium.
+- 19/11/2026 06:05 UTC — Homologação incremental em c87a21ab reuniu o transporte íntegro do coletor, o vínculo do SQL executado, a revisão com recibo de leitura, a reverificação funcional e a imagem de prontidão. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:06 UTC — Falha na validação de c3-r11 em suite, código 1. Logs privados do gerente.
+- 19/11/2026 06:06 UTC — Validação de c4-aceite-r7 em 8203f2f9 iniciada no checkout de integração.
+- 19/11/2026 06:06 UTC — Revisor encerrou C2-MUTACAO-LINGUAGENS em 195c8cd8 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:06 UTC — Revisão C-EXAME-R5 iniciada por Sol high normal somente leitura em 6ec910f0.
+- 19/11/2026 06:08 UTC — Trabalhador encerrou C2-PROPRIEDADES-JS em b991995f (código 0). Gerente confere a entrega.
+- 19/11/2026 06:08 UTC — Trabalho C-CORRECAO-ESCOPO iniciado por Sol high normal em final-correcao-por-arquivo.
+- 19/11/2026 06:09 UTC — A suíte de C3 em e66a635f passou em 256 arquivos e falhou em module-arquitetura.test.ts. O checkout de aceite carregava o pacote de versão do TypeScript 7 raiz, sem a API de AST. Com a dependência 5.9.3 do lock do coletor, o arquivo passou nos 18 casos executáveis nesse host; o ensaio de permissão é condicionado ao usuário. A suíte completa será repetida. Revisão de mutação Python/Go encaminhada aos trabalhadores.
+- 19/11/2026 06:10 UTC — Revisor encerrou C-EXAME-R5 em 6ec910f0 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:10 UTC — Revisão C-EXAME-R5-INTEGRACAO iniciada por Sol high normal somente leitura em 1fd88007.
+- 19/11/2026 06:11 UTC — Em c87a21ab passaram 26/26 na rodada das oito CLIs e da reverificação. C5 a22546c0: prova física verde com pg_stat_statements, Docker, Git e PostgreSQL; a medição confirma a fonte correta e a substituição por SELECT 1 recebe provável. C-PAINEL 58690bb2: sete testes passaram na API. C2 fast-check integrado em f4cb3216; imagem será reconstruída.
+- 19/11/2026 06:11 UTC — Trabalhador encerrou C4-JAVA em 1924a13c (código 0). Gerente confere a entrega.
+- 19/11/2026 06:11 UTC — Trabalho C9-R6 iniciado por Sol high normal em final-c9.
+- 19/11/2026 06:14 UTC — Revisor encerrou C-EXAME-R5-INTEGRACAO em 1fd88007 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:14 UTC — Revisão C2-R11 iniciada por Sol high normal somente leitura em 2a440fd9.
+- 19/11/2026 06:17 UTC — Trabalhador encerrou C-REVERIFICAR-R4 em ced1deaf (código 0). Gerente confere a entrega.
+- 19/11/2026 06:17 UTC — Trabalho C2-CONTRATOS iniciado por Sol high normal em final-qa-contratos.
+- 19/11/2026 06:18 UTC — QA 1d357911: o fast-check executou 32 casos no controle e reproduziu a falsificação na imagem. A regra fixa agora preserva sua identidade no relatório; os três controles fora do catálogo continuaram saneados. Em 9b8f9850, passaram 26/26 exames e provas de persistência; a ordem de correção dos oito módulos foi lida na conversa principal do projeto correspondente. Faltam a rodada de fidelidade das rotas e o aceite.
+- 19/11/2026 06:19 UTC — Revisor encerrou C2-R11 em 2a440fd9 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:19 UTC — Revisão C7-HISTORICO-R3 iniciada por Sol high normal somente leitura em 004271d0.
+- 19/11/2026 06:19 UTC — C4 3e0bd99f: 36/36 com OpenRewrite, testes de atribuição do JDK e laboratório da imagem. A receita mediu a chamada de charset no arquivo Java e o controle corrigido; a fonte do projeto permaneceu íntegra.
+- 19/11/2026 06:19 UTC — Homologação incremental em 48db830a reuniu as imagens de fast-check e OpenRewrite, a prova da medição PostgreSQL e o pedido de correção persistido na conversa. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:21 UTC — A revisão da matriz de QA apontou atribuições indevidas entre requisitos, funções e asserções. Foi aberta C2-MATRIZ-R12 com controles positivos e negativos. R4 da reverificação está em homologação após a integração de ced1deaf.
+- 19/11/2026 06:22 UTC — Revisor encerrou C7-HISTORICO-R3 em 004271d0 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:22 UTC — Revisão C2-LINGUAGENS-R2 iniciada por Sol high normal somente leitura em 3757031b.
+- 19/11/2026 06:22 UTC — Homologação incremental em d973118d reuniu a repetição da medição funcional vinculada ao alvo e ao recibo persistido. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:23 UTC — A revisão de C7 pediu uma prova mais forte do cancelamento no servidor PostgreSQL, sob bloqueio e saturação do pool. C7-HISTORICO-R4 prepara essa correção na homologação. A revisão da versão de dependências de C4 identificou a ausência de semver no checkout oficial anterior; o pacote do lock já foi ligado aos checkouts de aceite.
+- 19/11/2026 06:24 UTC — Trabalhador encerrou C-CORRECAO-ESCOPO em 576375cd (código 0). Gerente confere a entrega.
+- 19/11/2026 06:24 UTC — Trabalho C2-NAVEGADOR-R2 iniciado por Sol high normal em final-navegador-r2.
+- 19/11/2026 06:25 UTC — Falha na validação de c4-aceite-r7 em suite, código 1. Logs privados do gerente.
+- 19/11/2026 06:25 UTC — Validação de c5-aceite-r7 em 03ee7abb iniciada no checkout de integração.
+- 19/11/2026 06:26 UTC — Revisor encerrou C2-LINGUAGENS-R2 em 3757031b (código 0). Gerente confere a entrega.
+- 19/11/2026 06:26 UTC — Revisão C4-R7 iniciada por Sol high normal somente leitura em 49841c60.
+- 19/11/2026 06:27 UTC — QA: 82/82 com Chromium fixado, Go, Python, fast-check e a CLI. A reverificação R4 passou em 42/42, e a rodada d973118d passou nos 18 testes das oito CLIs, banco e prontidão. O escopo de correções em 48c071e7 passou em 43 testes de backend e em 10 testes da interface. C4: 29/29 no arquivo da suíte depois de repor semver do lock; a suíte de 8203f2f9 havia passado em 258 arquivos e falhado nesse arquivo.
+- 19/11/2026 06:27 UTC — Homologação incremental em 674c2dce reuniu os pedidos agrupados por arquivo e por atualização de dependência. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:27 UTC — Trabalhador encerrou C9-R6 em df297d9b (código 0). Gerente confere a entrega.
+- 19/11/2026 06:27 UTC — Trabalho C2-MUTACAO-R2 iniciado por Sol high normal em final-qa-mutacao-linguagens.
+- 19/11/2026 06:29 UTC — C9-R6 entregou a atribuição estática de destinos de dados por AST em df297d9b; a imagem está em reconstrução. C2-LINGUAGENS-R3 cobrirá escopo da cópia e atribuição de falhas após a ordem de mutação Python/Go em curso.
+- 19/11/2026 06:30 UTC — Revisor encerrou C4-R7 em 49841c60 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:30 UTC — Revisão C2-MUTACAO-INTEGRACAO iniciada por Sol high normal somente leitura em 9373c088.
+- 19/11/2026 06:32 UTC — Trabalhador encerrou C2-CONTRATOS em 4af18f19 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:32 UTC — Trabalho C-EXAME-R6 iniciado por Sol high normal em final-exame-r6.
+- 19/11/2026 06:32 UTC — Revisor encerrou C2-MUTACAO-INTEGRACAO em 9373c088 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:32 UTC — Revisão C-BASE-IMAGEM iniciada por Sol high normal somente leitura em 53a37821.
+- 19/11/2026 06:33 UTC — C9 362efd58: 25/25 incluindo a fixture de atribuição de operações por AST, ScanCode, Presidio e controle sem identificação pessoal. Integração de homologação em b6229e11. As oito CLIs de 674c2dce passaram nos dez ensaios com banco e pedidos por escopo. A instalação viva segue em A2.
+- 19/11/2026 06:34 UTC — Revisor encerrou C-BASE-IMAGEM em 53a37821 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:34 UTC — Revisão C7-R7 iniciada por Sol high normal somente leitura em 9f22e01e.
+- 19/11/2026 06:34 UTC — C4 4a35e97e: 29/29 nos testes das respostas HTTP sintéticas, sem tráfego ao registro. As respostas de erro encerram a conexão, catálogo inválido fica sem medição e uma proposta que recua no lock é descartada antes da consulta. A reconstrução da imagem e a prova física seguem.
+- 19/11/2026 06:35 UTC — Trabalhador encerrou C2-NAVEGADOR-R2 em 9eaeb0cb (código 0). Gerente confere a entrega.
+- 19/11/2026 06:35 UTC — Trabalho C2-MATRIZ-R12 iniciado por Sol high normal em final-qa-matriz-r12.
+- 19/11/2026 06:37 UTC — Trabalhador encerrou C2-MUTACAO-R2 em a386516b (código 0). Gerente confere a entrega.
+- 19/11/2026 06:37 UTC — Trabalho C7-HISTORICO-R4 iniciado por Sol high normal em final-c7-hist-r4.
+- 19/11/2026 06:37 UTC — C4 901dae24: 36/36 incluindo OpenRewrite na nova imagem. Base 918324f4: 28/28 com Docker e PostgreSQL, incluindo imagem realmente ausente e criação de resultado ambíguo mantida no diário. O primeiro disparo usava um digest antigo de QA que já havia saído do daemon; repetido com o digest disponível.
+- 19/11/2026 06:38 UTC — Revisor encerrou C7-R7 em 9f22e01e (código 0). Gerente confere a entrega.
+- 19/11/2026 06:38 UTC — Revisão C5-R7 iniciada por Sol high normal somente leitura em 1cd11ad5.
+- 19/11/2026 06:38 UTC — QA: o laboratório da imagem executou quatro exemplos OpenAPI e duas interações Pact por socket local. Oito testes passaram sem saltos. Em b05e9d24, chegaram também a cobertura por HTML e o tratamento de estados de mutação/propriedades Python/Go. As duas correções recebem nova prova sobre a imagem integrada.
+- 19/11/2026 06:39 UTC — C7-R7 recebeu dois apontamentos independentes sobre recuperação por identidade e paginação estática do Lighthouse; a nova ordem é separada do cancelamento do histórico. QA e dependências contam agora com cópia privada das imagens em preparo para os aceites congelados.
+- 19/11/2026 06:42 UTC — Revisor encerrou C5-R7 em 1cd11ad5 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:42 UTC — Revisão C8-R8 iniciada por Sol high normal somente leitura em 79d499e8.
+- 19/11/2026 06:44 UTC — C5: a revisão de 1cd11ad5 apontou quatro casos de atribuição de erro em migrações; C5-R8 tratará os quadros ambíguos do PostgreSQL. C9: a imagem de 362efd58 passou em 31/31 com a CLI. As imagens atuais de QA e dependências foram exportadas e os arquivos gzip conferidos para recuperação do digest nos aceites em fila.
+- 19/11/2026 06:44 UTC — Imagem QA de e245fca3: a primeira rodada integrada passou em 93/94. O caso restante detectou o defeito plantado e mediu 92 chamadas; a asserção esperava a descrição anterior “por asserção”. A expectativa foi corrigida para a mensagem pública atual, preservando arquivo, linha, identidade, semente e contagem. A repetição integral está em andamento.
+- 19/11/2026 06:44 UTC — Homologação incremental em 3e2aa0f6 reuniu a identidade exata das imagens, os exemplos nominais de contrato, a fidelidade do navegador e os controles de proposta de dependência. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:45 UTC — Trabalhador encerrou C2-MATRIZ-R12 em 77afc70d (código 0). Gerente confere a entrega.
+- 19/11/2026 06:45 UTC — Trabalho C2-LINGUAGENS-R3 iniciado por Sol high normal em final-qa-mutacao-linguagens.
+- 19/11/2026 06:45 UTC — Suíte oficial de c5-aceite-r7 em 03ee7abb: 261 arquivos aprovados, 0 falhas, 90 excluídos pelo executor.
+- 19/11/2026 06:46 UTC — Banco: o daemon já não tinha o digest de fe23944f. O rebuild da mesma fonte emitiu novo digest, fixado em 6bc34d08; a nova imagem volta agora à prova PostgreSQL e à CLI. A suíte oficial de 03ee7abb passou nos 261 arquivos com 90 exclusões; complementares e laboratório são etapas separadas.
+- 19/11/2026 06:46 UTC — Trabalhador encerrou C7-HISTORICO-R4 em 19413541 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:46 UTC — Trabalho C7-RECONCILIACAO-R8 iniciado por Sol high normal em final-c7.
+- 19/11/2026 06:47 UTC — Testes complementares de c5-aceite-r7 em 03ee7abb: 52 aprovados.
+- 19/11/2026 06:47 UTC — Falha na validação de c5-aceite-r7 em laboratorio, código 1. Logs privados do gerente.
+- 19/11/2026 06:47 UTC — Validação de c3-257a-lock em 257a3451 iniciada no checkout de integração.
+- 19/11/2026 06:47 UTC — Trabalhador encerrou C-EXAME-R6 em e033b649 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:47 UTC — Trabalho C5-R8 iniciado por Sol high normal em final-c5.
+- 19/11/2026 06:47 UTC — QA e245fca3: 94/94 sem pulos na repetição integral. Os checkouts de aceite de C2 e C4 passam a apontar para e245fca3 e 66f4f4e0; os nomes dos processos em fila preservam os rótulos anteriores, e cada validação registra o SHA que efetivamente executa. C7 recebeu a correção de cancelamento do histórico 19413541 para a prova com PostgreSQL.
+- 19/11/2026 06:47 UTC — Revisor encerrou C8-R8 em 79d499e8 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:47 UTC — Revisão C5-SQL-MEDIDO iniciada por Sol high normal somente leitura em 2e18a141.
+- 19/11/2026 06:49 UTC — Revisor encerrou C5-SQL-MEDIDO em 2e18a141 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:49 UTC — Revisão C6-R10 iniciada por Sol high normal somente leitura em 049b33c9.
+- 19/11/2026 06:49 UTC — C5 6bc34d08: 20/20 com a imagem reconstruída, banco real, origem do SQL e CLI. Em 03ee7abb passaram TypeScript, 261 arquivos e 52 complementares; o laboratório desse commit antigo encontrou um digest ausente, e o rebuild da mesma fonte não conferiu com aquele identificador. Exame R6 integrado em ffcd9ea5; C8 recebeu nova ordem de atribuição de avisos TypeDoc/Mermaid.
+- 19/11/2026 06:49 UTC — Homologação incremental em db0ea342 reuniu o exame R6, o digest reconstruído de banco e o cancelamento do histórico de desempenho. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:53 UTC — Integração db0ea342 passou os 10 testes de laboratório que acionam as oito CLIs por digest, com Git e PostgreSQL. O exame integrado em ffcd9ea5 passou 54/54. Em C5 a revisão apontou três lacunas nas asserções de medição do controle; em correção.
+- 19/11/2026 06:53 UTC — Revisor encerrou C6-R10 em 049b33c9 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:53 UTC — Revisão C-EXAME-MEDICOES-R2 iniciada por Sol high normal somente leitura em c052f630.
+- 19/11/2026 06:54 UTC — COTA do Codex registrada em high-C5-R8.jsonl. Encerramento dos processos da equipe e preparação do relatório de pausa.
+- 19/11/2026 06:54 UTC — COTA do Codex. Equipe e execuções do plano interrompidas. Relatório de pausa commitado em 1ff24599. A retomada depende do titular.
+PAUSADO-COTA
+- 19/11/2026 16:50 UTC — Retomada autorizada pelo titular em 8f5dddf3. Confirmados os worktrees da pausa, o histórico de homologação e o espaço de 19 GB. Iniciada a conferência das imagens e dos digests antes de novos builds.
+- 19/11/2026 16:51 UTC — trabalho-C7-RECONCILIACAO-R8 iniciado em final-c7 por Sol high normal.
+- 19/11/2026 16:51 UTC — trabalho-C2-LINGUAGENS-R3 iniciado em final-qa-mutacao-linguagens por Sol high normal.
+- 19/11/2026 16:51 UTC — trabalho-C5-R8 iniciado em final-c5 por Sol medium normal.
+- 19/11/2026 16:51 UTC — trabalho-C8-R9 iniciado em final-c8 por Sol medium normal.
+- 19/11/2026 16:51 UTC — revisor-C-EXAME-MEDICOES-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:52 UTC — Validação de retomada-c3-257a em 257a3451 iniciada no checkout de integração.
+- 19/11/2026 16:53 UTC — C-EXAME-MEDICOES-R2 encerrado com código 0.
+- 19/11/2026 16:53 UTC — Removidas 11 candidatas próprias substituídas e conferidos os oito digests da homologação db0ea342. A imagem aceita de QA foi recuperada do arquivo privado e verificada pelo SHA. O controle de latência de banco passou 6/6 em 8d7bfc94, com as duas consultas medidas. C6-R11 encomendada para as lacunas de leitura estática.
+- 19/11/2026 16:53 UTC — revisor-C5-CONTROLE-SQL iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:54 UTC — C5-CONTROLE-SQL encerrado com código 0.
+- 19/11/2026 16:55 UTC — C5-R8 encerrado com código 0.
+- 19/11/2026 16:55 UTC — C2-LINGUAGENS-R3 encerrado com código 0.
+- 19/11/2026 16:55 UTC — trabalho-C6-R11 iniciado em final-c6-r2 por Sol high normal.
+- 19/11/2026 16:56 UTC — A revisão do exame c052f630 encontrou confirmação com decisão contraditória e leitura sem atestado do conteúdo. A correção parte de ffcd9ea5. C3 recebeu os dois apontamentos sobre inventário parcial e âncora relativa. Em banco, a correção da unicidade da série está em 1fc208e8 com 6/6 no laboratório físico.
+- 19/11/2026 16:56 UTC — trabalho-C3-R10 iniciado em final-c3 por Sol medium normal.
+- 19/11/2026 16:56 UTC — revisor-C5-UNICIDADE iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:56 UTC — C5-UNICIDADE encerrado com código 1.
+- 19/11/2026 16:56 UTC — C7-RECONCILIACAO-R8 encerrado com código 0.
+- 19/11/2026 16:56 UTC — trabalho-C-EXAME-VINCULO iniciado em final-exame-vinculo por Sol high normal.
+- 19/11/2026 16:56 UTC — O primeiro envio da revisão de unicidade excedeu o tamanho de entrada por incluir os módulos antecedentes. A repetição usa apenas o diff de banco e o trecho do coletor. Enfileiradas revisões da matriz de QA, do registro de dependências e dos destinos de dados em C9.
+- 19/11/2026 16:56 UTC — revisor-C5-UNICIDADE-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:57 UTC — C5-UNICIDADE-R2 encerrado com código 0.
+- 19/11/2026 16:57 UTC — revisor-C2-MATRIZ-R12 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:58 UTC — C8-R9 encerrado com código 0.
+- 19/11/2026 16:58 UTC — C3-R10 encerrado com código 0.
+- 19/11/2026 16:59 UTC — Banco 99817b08 passou 6/6 após a revisão do limiar arredondado e da unicidade. O QA já mede a execução poliglota, a mutação, o navegador e os contratos nominais; abertas as provas complementares de migrações num banco descartável e de recuperação de latência em homologação local.
+- 19/11/2026 16:59 UTC — trabalho-C2-BANCO-LOCAL iniciado em final-qa-banco-local por Sol medium normal.
+- 19/11/2026 17:00 UTC — QA em 0ce813a1: 96/96 no laboratório da matriz, com a CLI e sem pulos. Digest conferido e fixado. A prova de linguagens da nova rodada será feita sobre esta base.
+- 19/11/2026 17:00 UTC — Homologação de a correção do escopo Python e Go preparada no worktree final-integracao-c2 em a46061b8.
+- 19/11/2026 17:00 UTC — Homologação de a atribuição de falhas das migrações preparada no worktree final-aceite-c5-r7 em 840a02a6.
+- 19/11/2026 17:00 UTC — Homologação de a reconciliação do desempenho preparada no worktree final-integracao-c7 em beca2aca.
+- 19/11/2026 17:00 UTC — C2-MATRIZ-R12 encerrado com código 0.
+- 19/11/2026 17:00 UTC — revisor-C4-REGISTRO-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:01 UTC — C4-REGISTRO-R8 encerrado com código 0.
+- 19/11/2026 17:01 UTC — revisor-C9-DESTINOS-R6 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:01 UTC — As entregas de QA poliglota 1bbf6c41, arquitetura 56177e90, banco fbe3acb8, desempenho 956c2314 e documentação 782385cd entraram na fila de validação por digest. A revisão da matriz pediu ajustes para não dar prova a uma função homônima ou declarar lacuna numa guarda manual.
+- 19/11/2026 17:01 UTC — trabalho-C2-MATRIZ-R13 iniciado em final-qa-matriz-r12 por Sol medium normal.
+- 19/11/2026 17:01 UTC — C6-R11 encerrado com código 0.
+- 19/11/2026 17:01 UTC — trabalho-C2-CARGA-LOCAL iniciado em final-qa-carga-local por Sol high normal.
+- 19/11/2026 17:03 UTC — Backup da instalação viva criado pelo personal:backup em /home/app/backups-agent-control/ispagent-antes-modulos-20261119-170208/agent-control-ispagent-20261119-1702. Diretório privado e catálogo do database.dump conferidos com pg_restore -l. Gateway ativo. A rodada de módulos segue em homologação.
+- 19/11/2026 17:04 UTC — Prontidão 060b8269 entrou em revisão independente e no laboratório passivo. A revisão de dependências encontrou nome vazio em metadados HTTP e uma lacuna na verificação de encerramento do transporte; ambos já têm teste focado em andamento.
+- 19/11/2026 17:04 UTC — C9-DESTINOS-R6 encerrado com código 0.
+- 19/11/2026 17:04 UTC — revisor-C2-LINGUAGENS-R3 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:05 UTC — C2-MATRIZ-R13 encerrado com código 0.
+- 19/11/2026 17:05 UTC — Revisão de conformidade em df297d9b encontrou perdas e falsos destinos em reatribuições e nomes homônimos. C9-R7 encomendada. Em C4, a primeira execução complementar usou um runtime Java antigo da área temporária; a repetição usa o runtime extraído do digest ensaiado.
+- 19/11/2026 17:05 UTC — C4 passou em 34/34 testes com o runtime Java extraído da imagem aceita, incluindo o tratamento de nome vazio e o encerramento da requisição e resposta HTTP. Iniciada a reconstrução para a prova integral.
+- 19/11/2026 17:06 UTC — C2-BANCO-LOCAL encerrado com código 0.
+- 19/11/2026 17:07 UTC — C2-LINGUAGENS-R3 encerrado com código 0.
+- 19/11/2026 17:07 UTC — revisor-C5-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:08 UTC — C-EXAME-VINCULO encerrado com código 0.
+- 19/11/2026 17:08 UTC — trabalho-C9-R7 iniciado em final-c9 por Sol high normal.
+- 19/11/2026 17:10 UTC — QA poliglota a46061b8 passou em 98/99. A imagem tinha Hypothesis para o adaptador de propriedades, mas o unittest não via a dependência ao importar o arquivo misto. Ajustado o caminho fixado e adicionada prova de que só a parte unittest recebe cobertura. A versão anterior de QA permanece disponível.
+- 19/11/2026 17:10 UTC — C5-R8 encerrado com código 0.
+- 19/11/2026 17:10 UTC — revisor-C7-RECONCILIACAO-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:12 UTC — C7-RECONCILIACAO-R8 encerrado com código 0.
+- 19/11/2026 17:12 UTC — revisor-C8-R9 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:12 UTC — banco em 840a02a6 passou 20 testes com 0 falhas e 0 pulos. Digest sha256:7203e1ec1909 fixado no ramo. Revisões e promoção registradas separadamente.
+- 19/11/2026 17:12 UTC — documentacao em 782385cd passou 27 testes com 0 falhas e 0 pulos. Digest sha256:9b45c131679e fixado no ramo. Revisões e promoção registradas separadamente.
+- 19/11/2026 17:12 UTC — A revisão de banco e a de QA poliglota encontraram imprecisões na origem das medições. Ordens C5-R9 e C2-LINGUAGENS-R4 abertas. O pgTAP no entrypoint de QA já distinguiu a migração de controle do defeito após restauração, em banco temporário por socket.
+- 19/11/2026 17:12 UTC — trabalho-C5-R9 iniciado em final-c5 por Sol medium normal.
+- 19/11/2026 17:13 UTC — QA integrou pgTAP 786e6f0e (9/9 físico e confirmado o achado em banco/assert.sql:2), exame 2b23ebc2 e matriz f5c5bfea. Candidato em a55d7bcd.
+- 19/11/2026 17:13 UTC — trabalho-C7-R9 iniciado em final-c7 por Sol medium normal.
+- 19/11/2026 17:14 UTC — C2-CARGA-LOCAL encerrado com código 0.
+- 19/11/2026 17:14 UTC — trabalho-C2-LINGUAGENS-R4 iniciado em final-qa-mutacao-linguagens por Sol high normal.
+- 19/11/2026 17:15 UTC — C8-R9 encerrado com código 0.
+- 19/11/2026 17:15 UTC — revisor-C3-R10 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:15 UTC — O laboratório de desempenho passou em 64/65. A nova dependência parse5 constava no lock do npm, mas faltava no inventário de integridade do módulo. Inventário corrigido e teste dirigido aprovado; a imagem será novamente conferida.
+- 19/11/2026 17:15 UTC — Suíte oficial de retomada-c3-257a em 257a3451: 261 arquivos aprovados, 0 falhas, 87 excluídos pelo executor.
+- 19/11/2026 17:17 UTC — Testes complementares de retomada-c3-257a em 257a3451: 52 aprovados.
+- 19/11/2026 17:17 UTC — C3-R10 encerrado com código 0.
+- 19/11/2026 17:17 UTC — revisor-C6-R11 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:17 UTC — Falha na validação de retomada-c3-257a em laboratorio, código 1. Logs privados do gerente.
+- 19/11/2026 17:17 UTC — prontidao aprovado em 36/36 testes dirigidos sem saltos, imagem sha256:efbdf7b405c2, fixada em 44f101b3.
+- 19/11/2026 17:17 UTC — dependencias aprovado em 36/36 testes dirigidos sem saltos, imagem sha256:df0a5915eca9, fixada em 985c96b0.
+- 19/11/2026 17:17 UTC — arquitetura aprovado em 21/21 testes dirigidos sem saltos, imagem sha256:0758fd4034df, fixada em f41671be.
+- 19/11/2026 17:17 UTC — C7-R9 encerrado com código 0.
+- 19/11/2026 17:19 UTC — Arquitetura 257a3451 passou em TypeScript, 261 arquivos oficiais e 52 complementares. O laboratório histórico não encontrou mais o digest anterior. A nova versão f41671be tem 21/21 físicos com Hadolint e arquivo privado do digest; continuará o aceite sobre a integração atualizada. C8-R10 registra os achados de atribuição TypeDoc/Mermaid.
+- 19/11/2026 17:20 UTC — trabalho-C8-R10 iniciado em final-c8 por Sol medium normal.
+- 19/11/2026 17:20 UTC — Validação de retomada-c3-atual em c4d49bcb iniciada no checkout de integração.
+- 19/11/2026 17:21 UTC — C6-R11 encerrado com código 0.
+- 19/11/2026 17:21 UTC — revisor-C-EXAME-VINCULO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:22 UTC — C9-R7 encerrado com código 0.
+- 19/11/2026 17:22 UTC — C-EXAME-VINCULO encerrado com código 0.
+- 19/11/2026 17:22 UTC — revisor-C2-MATRIZ-R13 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:24 UTC — C5-R9 encerrado com código 0.
+- 19/11/2026 17:24 UTC — C2-MATRIZ-R13 encerrado com código 0.
+- 19/11/2026 17:24 UTC — revisor-C2-BANCO-LOCAL iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:24 UTC — C2-LINGUAGENS-R4 encerrado com código 0.
+- 19/11/2026 17:24 UTC — Arquitetura 86894260 confirmou as duas aberturas relativas com o sistema de arquivos real. TypeScript e todos os 20 testes do arquivo principal passaram sem pulos.
+- 19/11/2026 17:24 UTC — Homologação de a classificação de documentos estáticos em 26aa6baf.
+- 19/11/2026 17:24 UTC — Homologação de a qualificação da origem do diagnóstico SQL em 772e0afe.
+- 19/11/2026 17:24 UTC — A revisão do exame solicitou a revalidação da prova ao publicar; a de prontidão identificou três estados indeterminados. As duas correções estão encomendadas. C9 entregou a atualização de origem de dados em ee77a916.
+- 19/11/2026 17:24 UTC — trabalho-C-EXAME-VINCULO-R2 iniciado em final-exame-vinculo por Sol high normal.
+- 19/11/2026 17:24 UTC — trabalho-C6-R12 iniciado em final-c6-r2 por Sol medium normal.
+- 19/11/2026 17:25 UTC — Carga nominal e recuperação por rota passaram em 11/11 com k6 e Toxiproxy reais. Em 166659e9 o entrypoint confirmou duas rotas estáticas, com 250 ms de atraso induzido e recuperação medida. A integração anterior do QA passou 107/108, com falha na CLI por digest ausente. Em andamento a integração das duas funcionalidades na mesma imagem.

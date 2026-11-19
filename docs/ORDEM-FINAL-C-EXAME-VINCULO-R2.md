@@ -1,0 +1,5 @@
+# Exame — revalidação antes da publicação
+
+Confira os dois pontos P2 em /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C-EXAME-VINCULO.txt. Na publicação, verifique a mesma relação entre pedido, conteúdo e veredito que foi obtida pelo executor. Preserve dados anteriores como históricos quando faltarem os elementos necessários e evite atribuir confirmação nova a evidências incompletas. Sua responsabilidade são o exame, a publicação e suas fixtures; prove as duas situações nas interfaces normais.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C-EXAME-VINCULO-R2.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

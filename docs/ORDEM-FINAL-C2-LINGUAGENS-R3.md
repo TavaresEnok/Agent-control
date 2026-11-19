@@ -1,0 +1,7 @@
+# C2 — escopo e atribuição de testes Python e Go
+
+Na sequência da ordem atual desse worktree, trate os quatro casos de /tmp/ac-final-3aDgqp8I/parecer-high-C2-LINGUAGENS-R2.txt. Ajuste a cópia e o relatório do adaptador de testes Python e Go. Omissões de insumo rastreado por proteção tornam o escopo parcial; evite copiar qualquer credencial. Diferencie pytest ou dependência indisponível da falha funcional. Preserve falhas Go sem atribuição individual como fatos do pacote e teste com versões real e incompatível do binário. Fixtures locais sem atividade ofensiva.
+
+Considere também os quatro pontos do parecer /tmp/ac-final-3aDgqp8I/parecer-high-C2-MUTACAO-INTEGRACAO.txt: preserve medições já concluídas após interrupção de pytest, isolamento da suíte unittest, erro operacional de compilação e evento Go aprovado. Compare com as mudanças em a386516b; corrija somente o que permanecer e prove os casos.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-LINGUAGENS-R3.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
