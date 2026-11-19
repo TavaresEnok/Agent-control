@@ -14,6 +14,7 @@ const ALLOWED_DATA_IMAGE = /^data:image\/(?:png|jpeg|webp)(?:;base64)?,/i;
 const DROPPED_TAGS = new Set(['script', 'iframe', 'object', 'embed', 'base', 'noscript']);
 const URL_ATTRIBUTES = new Set(['href', 'src', 'action', 'formaction', 'poster', 'cite', 'background', 'data', 'ping']);
 const HTML_NS = parse5Html.NS.HTML;
+export const MAX_CREATE_TASK_CHARS = 100_000;
 
 type DocumentNode = DefaultTreeAdapterTypes.Document;
 type ElementNode = DefaultTreeAdapterTypes.Element;
@@ -683,15 +684,16 @@ function measuredFindings(findings: readonly DesignRawFinding[]): DesignRawFindi
   return findings.filter(finding => finding.measure !== undefined && finding.measure !== null).slice(0, 40);
 }
 
-function createTask(input: {briefing: string; screens: number; round: number; referenceNote: string; rework: readonly ReworkScreen[]}): string {
+export function createTask(input: {briefing: string; screens: number; round: number; referenceNote: string; rework: readonly ReworkScreen[]}): string {
   const lines = [
     'Pedido de criação.',
     'Responda só um JSON com kind "criacao", tokens (DTCG) e screens.',
     `screens tem ${input.screens} itens. Cada item tem name, html e css.`,
     'O HTML é autossuficiente, com fonte por <link>, sem base64 e sem JavaScript externo.',
+    'Quando o briefing pedir conceitos diferentes da mesma tela, preserve a função e as ações e siga as direções fornecidas a cada conceito, inclusive no retrabalho dos nomes rejeitados.',
     `Rodada: ${input.round}`,
     'Briefing:',
-    input.briefing.slice(0, 8000),
+    input.briefing,
   ];
   if (input.referenceNote.trim().length > 0) lines.push(input.referenceNote.slice(0, 2000));
   if (input.rework.length > 0) {
@@ -714,7 +716,13 @@ function createTask(input: {briefing: string; screens: number; round: number; re
       }
     }
   }
-  return lines.join('\n').slice(0, 100000);
+  const task = lines.join('\n');
+  if (task.length > MAX_CREATE_TASK_CHARS) {
+    const refusal = new Refusal('DESIGN_CREATE_PROMPT_TOO_LARGE', 400);
+    refusal.message = `O prompt de criação excedeu o limite de ${MAX_CREATE_TASK_CHARS} caracteres (${task.length}).`;
+    throw refusal;
+  }
+  return task;
 }
 
 async function writePrivate(path: string, body: string): Promise<void> {
@@ -790,6 +798,7 @@ export async function runDesignCreate(input: {
   examine(round: number, files: readonly {path: string; text: string}[]): Promise<CreateExam>;
 }): Promise<{directory: string; rounds: CreateRound[]; indexPath: string}> {
   if (input.screens < 1 || input.screens > 8 || input.rounds < 1 || input.rounds > 5) throw new Refusal('DESIGN_CREATE_INVALID', 400);
+  const firstTask = createTask({briefing: input.briefing, screens: input.screens, round: 1, referenceNote: input.referenceNote, rework: []});
   const root = join(input.dataDirectory, 'design-criacoes', input.runId);
   outsideRepository(root, input.repository);
   await mkdir(root, {recursive: true, mode: 0o700});
@@ -800,27 +809,30 @@ export async function runDesignCreate(input: {
   let rework: ReworkScreen[] = [];
   for (let round = 1; round <= input.rounds; round += 1) {
     const expect = rework.length > 0 ? rework.length : input.screens;
+    const task = round === 1 ? firstTask : createTask({briefing: input.briefing, screens: expect, round, referenceNote: input.referenceNote, rework});
     const seat = await input.reserve();
-    const call = DesignWorkerCall.parse({
-      role: 'specialist',
-      provider: seat.provider,
-      accountId: seat.accountId,
-      profileId: seat.profileId,
-      model: seat.model,
-      grantId: seat.grantId,
-      intentId: input.intentId,
-      task: createTask({briefing: input.briefing, screens: expect, round, referenceNote: input.referenceNote, rework}),
-      repo: input.repository,
-      writePaths: [],
-      forcedModel: 'claude-opus-5-5',
-      forcedEffort: 'medium',
-    });
     let output = '';
     try {
-      output = await input.worker.run(call);
-    } catch (error) {
-      if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
-      throw new DesignCreateModelFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
+      const call = DesignWorkerCall.parse({
+        role: 'specialist',
+        provider: seat.provider,
+        accountId: seat.accountId,
+        profileId: seat.profileId,
+        model: seat.model,
+        grantId: seat.grantId,
+        intentId: input.intentId,
+        task,
+        repo: input.repository,
+        writePaths: [],
+        forcedModel: 'claude-opus-5-5',
+        forcedEffort: 'medium',
+      });
+      try {
+        output = await input.worker.run(call);
+      } catch (error) {
+        if (error instanceof Refusal && (error.code === 'EXAM_LOGIN_STALE' || error.code === 'EXAM_LOGIN_BUSY' || error.code === 'EXAM_LOGIN_RESTORE_FAILED' || error.code === 'EXAM_PROVIDER_UNSUPPORTED')) throw error;
+        throw new DesignCreateModelFailure(error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED');
+      }
     } finally {
       await input.release(seat);
     }
