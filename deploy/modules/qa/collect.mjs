@@ -916,6 +916,8 @@ function readTargetList(text) {
 
 function* requirementClauses(body) {
   const tokens = [...body.matchAll(clauseTokens)];
+  // Only one message is supported. Multiple literals may be parts of a nested message.
+  const [firstMessage, secondMessage] = tokens.filter(({groups}) => groups.literal);
   const ambiguous = tokens.find(({0: token, index, groups}) => {
     if (!groups.literal) return groups.openQuote || groups.closeQuote;
     const straight = token.startsWith('"') || token.startsWith("'");
@@ -931,7 +933,7 @@ function* requirementClauses(body) {
   const brackets = [];
   let start = 0;
   for (const match of tokens) {
-    if (match === ambiguous) {
+    if (match === ambiguous || (secondMessage && match === firstMessage)) {
       yield null;
       return;
     }
