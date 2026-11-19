@@ -1117,3 +1117,6 @@ PAUSADO-COTA
 - 19/11/2026 21:05 UTC — As oito CLIs foram executadas na instalação. Quatro terminaram com código zero. Conformidade também registrou recusa de contrato do coletor. A investigação dos quatro relatórios que falharam continua e o fechamento permanece aberto.
 - 19/11/2026 21:07 UTC — C-PRONTIDAO-VIVA-CAMPO encerrado com código 0.
 - 19/11/2026 21:07 UTC — Correção pront-viva recebida em 67770bd9. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 21:07 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 21:07 UTC — C-CAMINHOS-VIVOS encerrado com código 0.
+- 19/11/2026 21:07 UTC — Correção caminhos-vivos recebida em c95fd3cd. Revisão Sol high somente leitura solicitada.
