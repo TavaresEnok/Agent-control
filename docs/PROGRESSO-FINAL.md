@@ -351,3 +351,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:22 UTC — Revisor encerrou C-PAINEL-R2 em 4a3c8407 (código 0). Gerente confere a entrega.
 - 19/11/2026 04:22 UTC — Revisão C3-R8 iniciada por Sol high normal somente leitura em aed61c1d.
 - 19/11/2026 04:25 UTC — A correção da origem em 30af542f passou em 12/12. A prova incluiu seleção exclusiva do coletor com arquivo de exame removido ou alterado e confirmou zero chamadas ao revisor. O módulo de QA para Python e Go foi recebido em 1af4e0b2 e a imagem está em construção no checkout isolado.
+- 19/11/2026 04:26 UTC — Trabalhador encerrou C-EXAME-R4 em 3ec5a0fe (código 0). Gerente confere a entrega.
+- 19/11/2026 04:26 UTC — Trabalho C-BASE-R9 iniciado por Sol high normal em final-c-interop.
+- 19/11/2026 04:26 UTC — Revisor encerrou C3-R8 em aed61c1d (código 0). Gerente confere a entrega.
+- 19/11/2026 04:26 UTC — Revisão C5-R5 iniciada por Sol high normal somente leitura em d58c8e69.
+- 19/11/2026 04:26 UTC — Painel 7efe20f0 passou em sete testes da API, dez do navegador simulado e no build. O painel preservou a consulta da instalação durante a troca de projeto e descartou a resposta funcional tardia. Exame R4 recebido em 3ec5a0fe. O laboratório de linguagens está rodando no digest da imagem reconstruída.
