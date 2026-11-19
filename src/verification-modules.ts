@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import type pg from 'pg';
-import type {PreviousPerformanceMeasurement} from '../deploy/modules/desempenho/orchestrator.mjs';
+import {previousPerformanceMeasurements} from './module-performance-history.ts';
 import {z} from 'zod';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
@@ -1847,34 +1847,6 @@ async function beginModuleRunTx(input: {
  * Full execution path for verification modules 2 to 9 (`qa`, `arquitetura`, `dependencias`,
  * `banco`, `prontidao`, `desempenho`, `documentacao`, `conformidade`).
  */
-async function* previousPerformanceMeasurements(input: VerificationModuleRunInput, runId: string, image: string) {
-  type HistoricalRow = PreviousPerformanceMeasurement & {finishedAt: string};
-  let cursor: HistoricalRow | undefined;
-  const pageSize = 8;
-  while (true) {
-    input.signal?.throwIfAborted();
-    const page: HistoricalRow[] = await input.ledger.tx(async client => {
-      await input.ledger.authorize(client, input.principal, input.authority.contextId);
-      await input.ledger.fence(client, input.authority);
-      return (await client.query<HistoricalRow>(
-        `SELECT p.id AS "examId", p.performance_measurement AS measurement, p.finished_at::text AS "finishedAt"
-         FROM ac_verify_runs p JOIN ac_verify_runs current_run ON current_run.id=$1
-         WHERE current_run.context_id=$2 AND current_run.project_id=$3 AND current_run.module='desempenho'
-           AND p.project_id=current_run.project_id AND p.context_id=current_run.context_id
-           AND p.module='desempenho' AND p.status='done' AND p.collector_image=$4
-           AND p.report_dir=p.report_prepared_dir AND NOT p.report_legacy_missing
-           AND p.performance_measurement IS NOT NULL AND p.finished_at < current_run.created_at
-           AND ($5::timestamptz IS NULL OR (p.finished_at, p.id) < ($5::timestamptz, $6::uuid))
-         ORDER BY p.finished_at DESC, p.id DESC LIMIT $7`,
-        [runId, input.authority.contextId, input.projectId, image, cursor?.finishedAt ?? null, cursor?.examId ?? null, pageSize],
-      )).rows;
-    });
-    yield* page;
-    if (page.length < pageSize) return;
-    cursor = page[page.length - 1];
-  }
-}
-
 export async function runVerificationModule(input: VerificationModuleRunInput): Promise<VerificationModuleRunResult> {
   assertVerificationModule(input.module);
   if (!Id.safeParse(input.projectId).success) throw new Refusal('NOT_FOUND', 404);
@@ -1953,7 +1925,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       await reconcilePerformanceResources({recoveryDirectory, signal: input.signal});
       const {coverage, findings, measurement, comparedExamId} = await runPerformanceModule({
         snapshotPath: snapshot, imageDigest: image!, signal: input.signal, timeoutMs, maxStdoutBytes,
-        recoveryDirectory, previousMeasurements: previousPerformanceMeasurements(input, runId, image!),
+        recoveryDirectory, previousMeasurements: signal => previousPerformanceMeasurements(input, runId, image!, signal),
       });
       collectorData = validateModuleCollectorObject({coverage, findings}, input.module);
       assertNoLiveAccessKey(measurement);

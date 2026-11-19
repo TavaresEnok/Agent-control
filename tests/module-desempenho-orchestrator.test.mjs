@@ -369,8 +369,10 @@ test('a base pode passar e receber medição fora do snapshot pelo contrato do o
   assert.match(second.findings[0].evidence, /exame anterior=exame-1/);
   assert.equal(second.measurement.imageDigest, digest);
   assert.equal(second.comparedExamId, 'exame-1');
+  const disjoint = {examId: 'exame-2', measurement: {...prior,
+    k6Routes: prior.k6Routes.map(route => ({...route, route: '/outra-rota'})), lighthouse: [], sqlQueries: []}};
   async function* history() {
-    yield {examId: 'exame-2', measurement: {...prior, k6Routes: [], lighthouse: [], sqlQueries: []}};
+    yield disjoint;
     yield {examId: 'exame-1', measurement: prior};
     assert.fail('a comparação já encontrou o exame compatível');
   }
@@ -378,6 +380,29 @@ test('a base pode passar e receber medição fora do snapshot pelo contrato do o
   assert.equal(third.comparedExamId, 'exame-1');
   assert.equal(third.findings[0]?.rule, 'DESEMPENHO-REGRESSAO-ROTA');
   assert.match(third.findings[0].evidence, /exame anterior=exame-1/);
+  const exhausted = await fixture.run({previousMeasurements: (async function* () { yield disjoint; })()});
+  assert.equal(exhausted.comparedExamId, undefined);
+  assert.ok(!exhausted.findings.some(row => row.rule.includes('REGRESSAO')));
+});
+
+test('cancelar durante uma página pendente libera os recursos de desempenho', {timeout: 10000}, async t => {
+  const fixture = await setup(t, 'historical');
+  const controller = new AbortController();
+  const reached = Promise.withResolvers(), release = Promise.withResolvers();
+  let historySignal;
+  try {
+    const pending = fixture.run({signal: controller.signal, previousMeasurements: async function* (signal) {
+      historySignal = signal;
+      reached.resolve();
+      await release.promise;
+    }});
+    const rejected = assert.rejects(pending, /cancelamento do histórico/);
+    await reached.promise;
+    controller.abort(new Error('cancelamento do histórico'));
+    await rejected;
+    assert.equal(historySignal.aborted, true);
+    assert.deepEqual(await fixture.pending(), []);
+  } finally { release.resolve(); }
 });
 
 async function abortWhile(fixture, reached) {
