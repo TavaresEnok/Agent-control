@@ -32,6 +32,7 @@ import {
 import {collectLanguageSuite, hasLanguageTestCandidates, languageSuites} from './language-tests.mjs';
 import {collectLanguageMutation, collectPythonProperties, languageMeasurementTools} from './mutacao-linguagens/index.mjs';
 import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
+import {collectJsProperties, propertyLimits, propertyTool} from './js-properties.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MAX_FILES = 400;
@@ -273,7 +274,7 @@ const primitiveBinary = new Set(['+', '-', '*', '/', '%', '**', '<<', '>>', '>>>
   '==', '!=', '===', '!==', '<', '<=', '>', '>=']);
 const primitiveUnary = new Set(['+', '-', '!', '~', 'typeof', 'void']);
 
-function pureValidator(fn) {
+function purePrimitiveFunction(fn) {
   if (fn.node.async || fn.node.generator || !fn.node.params.every(param => param.type === 'Identifier')) return false;
 
   function expression(path) {
@@ -306,7 +307,8 @@ function pureValidator(fn) {
       declarator.get('id').isIdentifier() && declarator.node.init && expression(declarator.get('init')));
   }
 
-  return statement(fn.get('body'));
+  const body = fn.get('body');
+  return body.isBlockStatement() ? statement(body) : expression(body);
 }
 
 /** Lê a estrutura das fontes sem carregar seus módulos. */
@@ -367,8 +369,11 @@ export function analyzeSourceFile(relFile, content, {parse, traverse}) {
   const functions = [...declarations].map(([node, {path, binding, name}]) => {
     const names = [...(exportNames.get(node) ?? [])];
     const stable = !directEval && binding?.constant === true;
+    const primitive = names.length > 0 && stable && purePrimitiveFunction(path);
+    const propertyTarget = primitive && binding.scope.path.isProgram() && node.end - node.start <= propertyLimits.maxPlanBytes
+      ? {code: content.slice(node.start, node.end), arity: node.params.length} : undefined;
     return {name, startLine: node.loc.start.line, isExported: names.length > 0, exportNames: names, stable,
-      pure: path.isFunctionDeclaration() && names.length > 0 && stable && pureValidator(path)};
+      pure: path.isFunctionDeclaration() && primitive, propertyTarget};
   });
   return {file: relFile, functions, routes};
 }
@@ -598,6 +603,125 @@ function declaredValidator(registration, test, file) {
   if (imported && !imported.optional && call.node.arguments.every(literal)) return imported;
 }
 
+function fastCheckMethod({receiver, property, binding, optional}) {
+  if (optional || binding?.module !== 'fast-check') return;
+  if (!receiver) return binding.name;
+  if (binding.namespace || binding.name === 'default') return property;
+}
+
+function integerOptions(path, defaults, bounds) {
+  if (!path) return defaults;
+  if (!path.isObjectExpression()) return;
+  const values = {...defaults};
+  const keys = new Set();
+  for (const entry of path.node.properties) {
+    if (entry.type !== 'ObjectProperty' || entry.computed) return;
+    const key = entry.key.name ?? staticString(entry.key);
+    if (!Object.hasOwn(bounds, key) || keys.has(key)) return;
+    const node = entry.value;
+    const value = node.type === 'NumericLiteral' ? node.value
+      : node.type === 'UnaryExpression' && node.operator === '-' && node.argument.type === 'NumericLiteral'
+        ? -node.argument.value : undefined;
+    const [min, max] = bounds[key];
+    if (!Number.isSafeInteger(value) || value < min || value > max) return;
+    values[key] = value;
+    keys.add(key);
+  }
+  return values;
+}
+
+// A comparação deve avaliar diretamente a função local com ao menos um argumento gerado.
+function propertyComparison(predicate, file, content) {
+  if ((!predicate?.isArrowFunctionExpression() && !predicate?.isFunctionExpression()) ||
+      predicate.node.async || predicate.node.generator || !predicate.node.params.every(param =>
+        param.type === 'Identifier' && !param.optional)) return;
+  const body = predicate.get('body');
+  let expr = body;
+  let returnsValue = true;
+  if (body.isBlockStatement()) {
+    if (body.node.body.length !== 1) return;
+    const [statement] = body.get('body');
+    if (statement.isReturnStatement()) expr = statement.get('argument');
+    else if (statement.isExpressionStatement()) {
+      expr = statement.get('expression');
+      returnsValue = false;
+    } else return;
+  }
+  let operator;
+  let operands;
+  if (returnsValue && expr.isBinaryExpression() &&
+      ['===', '!==', '<', '<=', '>', '>='].includes(expr.node.operator)) {
+    operator = expr.node.operator;
+    operands = [expr.get('left'), expr.get('right')];
+  } else if (expr.isCallExpression()) {
+    const assertionTarget = callTarget(expr);
+    const assertion = proofAssertion(assertionTarget);
+    const strictEqual = assertion?.method === 'strictEqual' || (assertion?.method === 'equal' &&
+      (assertionTarget.binding.module.endsWith('/strict') || assertionTarget.binding.name === 'strict'));
+    if (assertion?.optional || !strictEqual || expr.node.arguments.length !== 2) return;
+    operator = 'strictEqual';
+    operands = expr.get('arguments');
+  } else return;
+
+  const params = predicate.node.params.map(param => param.name);
+  let target;
+  let generatedReferences = 0;
+  function verify(path, allowTarget = false) {
+    if (literal(path.node)) return true;
+    if (path.isIdentifier() && predicate.node.params.includes(path.scope.getBinding(path.node.name)?.path.node)) {
+      generatedReferences++;
+      return true;
+    }
+    if (path.isUnaryExpression()) return primitiveUnary.has(path.node.operator) && verify(path.get('argument'));
+    if (path.isBinaryExpression()) return primitiveBinary.has(path.node.operator) &&
+      verify(path.get('left')) && verify(path.get('right'));
+    if (!allowTarget) return false;
+    const imported = importedCall(path, file);
+    if (!imported || imported.receiver || imported.optional) return false;
+    const local = path.node.callee.name;
+    const args = path.get('arguments');
+    const before = generatedReferences;
+    if (!args.every(arg => verify(arg)) || generatedReferences === before) return false;
+    if (target && (target.source !== imported.source || target.name !== imported.name ||
+      target.local !== local || target.arity !== args.length)) return false;
+    target = {...imported, local, arity: args.length};
+    return true;
+  }
+
+  if (!operands.every(operand => verify(operand, true)) || !target) return;
+  return {operator, params, target, operands: operands.map(({node}) => content.slice(node.start, node.end))};
+}
+
+function declaredJsProperty(path, file, content) {
+  const callback = path.getFunctionParent();
+  const registration = callback?.parentPath;
+  if (!registration?.isCallExpression() || !registration.parentPath.isExpressionStatement() ||
+      !registration.parentPath.parentPath.isProgram()) return;
+  const registrationTarget = callTarget(registration);
+  const test = testCall(registration, registrationTarget);
+  if (!test?.nodeRunner || registrationTarget.receiver || test.optional || test.suite || test.skipped || registration.node.arguments.length !== 2 ||
+      registration.node.arguments[1] !== callback.node || onlyExpression(callback)?.node !== path.node) return;
+  const [property, options] = path.get('arguments');
+  if (!property?.isCallExpression() || fastCheckMethod(callTarget(property)) !== 'property' || path.node.arguments.length > 2) return;
+  const args = property.get('arguments');
+  const predicate = args.pop();
+  if (!args.length || args.length > propertyLimits.maxParameters) return;
+  const integers = [];
+  const {int32, defaultSeed, defaultRuns, maxRuns} = propertyLimits;
+  for (const arbitrary of args) {
+    if (!arbitrary.isCallExpression() || fastCheckMethod(callTarget(arbitrary)) !== 'integer' ||
+        arbitrary.node.arguments.length > 1) return;
+    const range = integerOptions(arbitrary.get('arguments')[0], {min: int32[0], max: int32[1]}, {min: int32, max: int32});
+    if (!range || range.min >= range.max) return;
+    integers.push(range);
+  }
+  const settings = integerOptions(options, {seed: defaultSeed, numRuns: defaultRuns}, {seed: int32, numRuns: [1, maxRuns]});
+  const comparison = propertyComparison(predicate, file, content);
+  if (!settings || comparison?.params.length !== integers.length) return;
+  const {line, column} = path.node.loc.start;
+  return {...comparison, ...settings, integers, file, line, column: column + 1, testLine: registration.node.loc.start.line};
+}
+
 /** Levanta candidatos estáticos sem confundir opções do teste com seu callback. */
 export function analyzeTestFile(relFile, content, {parse, traverse}) {
   const ast = parseFile(relFile, content, parse);
@@ -606,7 +730,9 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
   const flakyPatterns = [];
   const activeTests = [];
   const validators = [];
+  const jsProperties = [];
   let validatorDeclarations = 0;
+  let jsPropertyDeclarations = 0;
   const byCallback = new Map();
 
   function record(test, node, kind) {
@@ -621,6 +747,12 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
       const owner = path.findParent(parent => byCallback.has(parent.node));
       const enclosing = byCallback.get(owner?.node);
       const target = callTarget(path);
+      const fastCheck = fastCheckMethod(target);
+      if (fastCheck === 'assert' || fastCheck === 'check') {
+        jsPropertyDeclarations++;
+        const property = fastCheck === 'assert' && declaredJsProperty(path, relFile, content);
+        if (property) jsProperties.push(property);
+      }
       const test = testCall(path, target);
       if (test) {
         const {title, callback, skipped, suite} = test;
@@ -656,7 +788,7 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
       const accepted = proofAssertion(target);
       const otherAssertion = (local === 'assert' || (!receiver && local === 'expect') || (receiver === 'fc' && property === 'assert')) &&
         (!path.scope.getBinding(local) || (binding && !assertionModules.has(binding.module)));
-      if (accepted || otherAssertion) candidate.hasAssertion = true;
+      if (accepted || otherAssertion || fastCheck === 'assert') candidate.hasAssertion = true;
       if (accepted) {
         const {features, callback, limited, unknownSpread} = assertionFeatures(path, relFile, accepted);
         if (callback) features.push(callback.identity);
@@ -673,7 +805,7 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
   for (const {title, file, line, column, hasAssertion} of activeTests) {
     if (!hasAssertion) assertionFreeTests.push({title, file, line, column, snippet: title});
   }
-  return {activeTests, skippedTests, assertionFreeTests, flakyPatterns, validators, validatorDeclarations};
+  return {activeTests, skippedTests, assertionFreeTests, flakyPatterns, validators, validatorDeclarations, jsProperties, jsPropertyDeclarations};
 }
 
 function coverageRow(tool, version, status, detail) {
@@ -1394,6 +1526,12 @@ export async function collectQaModule(options = {}) {
         name: 'qa-propriedades-funcionais',
         partial: matrixPartial,
         run: () => measureValidatorCases({sourceAnalyses, testAnalyses, runtimeTests: runtime.tests}),
+      },
+      {
+        name: propertyTool,
+        partial: matrixPartial,
+        run: () => collectJsProperties({context, sourceAnalyses, testAnalyses, incomplete, parserError, failTool,
+          row: coverageRow, key: fileCoverageKey, path: measurementPath, unmeasured}),
       },
       {
         name: 'qa-auditoria-estatica-testes',
