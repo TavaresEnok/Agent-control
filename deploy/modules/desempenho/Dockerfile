@@ -1,7 +1,7 @@
 # Imagem do módulo 7 (desempenho). Contexto de build: deploy/modules/desempenho/.
 # Base fixa v1.65.1-noble por digest (mesma base de deploy/Dockerfile.design).
 FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
-LABEL org.agent-control.performance.protocol="5"
+LABEL org.agent-control.performance.protocol="6"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \

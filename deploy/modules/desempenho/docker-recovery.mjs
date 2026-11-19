@@ -8,6 +8,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 
 const runName = /^ac-perf-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const ownerToken = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+const containerId = /^[a-f0-9]{64}$/;
 const ownerLabel = 'org.agent-control.performance.owner';
 const cleanupTimeout = 5000;
 const defaultDirectory = join(homedir(), '.local', 'state', 'agent-control', 'performance-docker');
@@ -22,11 +23,21 @@ export function performanceDocker(dockerBinary, cwd) {
       execFile(dockerBinary, args, {cwd, env, encoding: 'utf8', timeout, maxBuffer: limit, killSignal: 'SIGKILL', signal},
         (error, stdout, stderr) => {
           if (!error) return ok(stdout.trim());
+          error.stdout = stdout;
           error.stderr = stderr;
           fail(error);
         });
     });
   };
+}
+
+export function creationRefused(error) {
+  if (['ENOENT', 'ENOTDIR', 'EACCES', 'ENOEXEC'].includes(error?.code) && error.syscall?.startsWith('spawn ')) return true;
+  if (error?.code !== 1 || error.killed || error.signal || error.stdout?.trim()) return false;
+  // Apenas recusas anteriores à criação. Uma mensagem genérica do daemon
+  // também pode ocorrer quando o cliente perde a resposta da operação.
+  return /^(?:docker: )?Error response from daemon: (?:No such image: |Conflict\. The container name .* is already in use by container |invalid mount config for type "bind": bind source path does not exist: )/i
+    .test(error.stderr?.trim() ?? '');
 }
 
 async function privateDirectory(path) {
@@ -81,11 +92,11 @@ function anchored(directory, file = '') {
   return join(`/proc/self/fd/${directory.fd}/`, file);
 }
 
-function resourceKind(run, name) {
-  if ([run, `${run}-obs`, `${run}-obs-static`].includes(name)) return 'container';
-  if (name === `${run}-link`) return 'volume';
-  return null;
+function isContainerName(run, name) {
+  return [run, `${run}-obs`, `${run}-obs-static`].includes(name);
 }
+
+const legacyVolume = run => `${run}-link`;
 
 class RecoveryRun {
   constructor(registry, directory, name, state) {
@@ -106,8 +117,16 @@ class RecoveryRun {
     await this.directory.sync();
   }
 
-  async reserve(kind, name) {
-    if (resourceKind(this.name, name) !== kind || Object.hasOwn(this.state.resources, name)) {
+  socket(file) {
+    return {listenPath: anchored(this.directory, file), mountPath: join(this.path, file)};
+  }
+
+  get pending() {
+    return Object.keys(this.state.resources).length;
+  }
+
+  async reserve(name) {
+    if (!isContainerName(this.name, name) || Object.hasOwn(this.state.resources, name)) {
       throw new Error('reserva Docker inválida');
     }
     this.state.resources[name] = false;
@@ -115,33 +134,34 @@ class RecoveryRun {
     return ['--label', `${ownerLabel}=${this.state.owner}`];
   }
 
-  async discardUnsent(name) {
-    delete this.state.resources[name];
+  async record(name, state) {
+    if (state === undefined) delete this.state.resources[name];
+    else this.state.resources[name] = state;
     await this.save();
   }
 
-  async owned(docker, kind, name, options) {
-    const labels = kind === 'container' ? '.Config.Labels' : '.Labels';
-    const identity = kind === 'container' ? '.Id' : '.Name';
-    const format = `{{${identity}}} {{index ${labels} "${ownerLabel}"}}`;
+  async ownedContainer(docker, reference, options) {
+    const format = `{{.Id}} {{index .Config.Labels "${ownerLabel}"}}`;
     let inspected;
-    try { inspected = await docker([kind, 'inspect', '--format', format, name], options); }
+    try { inspected = await docker(['container', 'inspect', '--format', format, reference], options); }
     catch (error) {
-      if (error?.code === 1 && /no such (?:container|object|volume)\b/i.test(error.stderr ?? '')) return null;
+      if (error?.code === 1 && /no such (?:container|object)\b/i.test(error.stderr ?? '')) return null;
       throw error;
     }
-    const [id, owner] = inspected.split(' ');
-    if (owner !== this.state.owner || (kind === 'container' ? !/^[a-f0-9]{64}$/.test(id) : id !== name)) {
+    const [id, owner, extra] = inspected.split(' ');
+    if (owner !== this.state.owner || extra !== undefined || !containerId.test(id) ||
+        (containerId.test(reference) && reference !== id)) {
       throw new Error('propriedade Docker sem confirmação');
     }
     return id;
   }
 
-  async confirmCreation(docker, kind, name) {
-    const id = await this.owned(docker, kind, name, {timeout: cleanupTimeout});
-    if (!id) throw new Error('criação Docker sem confirmação');
-    this.state.resources[name] = true;
-    await this.save();
+  async confirmCreation(docker, name, id, signal) {
+    if (!containerId.test(id)) throw new Error('ID da criação Docker indisponível');
+    await this.record(name, id);
+    if (!await this.ownedContainer(docker, id, {timeout: cleanupTimeout, signal})) {
+      throw new Error('criação Docker sem confirmação');
+    }
     return id;
   }
 
@@ -150,24 +170,23 @@ class RecoveryRun {
     const names = Object.keys(this.state.resources).reverse();
     for (const name of names) {
       signal?.throwIfAborted();
-      const kind = resourceKind(this.name, name);
+      // Um nome de volume legado não fixa a identidade do objeto. Preserve
+      // a intenção original, inclusive quando o daemon ainda não o publicou.
+      if (name === legacyVolume(this.name)) continue;
       for (let attempt = 0; attempt < attempts; attempt++) {
         signal?.throwIfAborted();
         try {
-          const id = await this.owned(docker, kind, name, options);
+          const recorded = this.state.resources[name];
+          const reference = typeof recorded === 'string' ? recorded : name;
+          const id = await this.ownedContainer(docker, reference, options);
           if (id) {
-            if (!this.state.resources[name]) {
-              this.state.resources[name] = true;
-              await this.save();
-            }
-            const args = kind === 'container' ? ['container', 'rm', '-f', id] : ['volume', 'rm', id];
-            await docker(args, options);
-            if (await this.owned(docker, kind, name, options)) throw new Error('recurso Docker ainda presente');
+            if (id !== recorded) await this.record(name, id);
+            await docker(['container', 'rm', '-f', id], options);
+            if (await this.ownedContainer(docker, id, options)) throw new Error('contêiner Docker ainda presente');
           }
           // Ausência não encerra uma criação cuja resposta não foi confirmada.
           if (this.state.resources[name]) {
-            delete this.state.resources[name];
-            await this.save();
+            await this.record(name);
             break;
           }
         } catch {
@@ -177,12 +196,12 @@ class RecoveryRun {
         if (attempt + 1 < attempts) await delay(200, undefined, {signal});
       }
     }
-    return Object.keys(this.state.resources).length;
+    return this.pending;
   }
 
   async close() {
     try {
-      if (!Object.keys(this.state.resources).length) {
+      if (!this.pending) {
         await rm(anchored(this.registry, this.name), {recursive: true, force: true});
         await this.registry.sync();
       }
@@ -202,6 +221,7 @@ export async function openPerformanceRecoveryRun(name, recoveryDirectory) {
     directory = await privateDirectory(staging);
     if (!await tryLock(directory)) throw new Error('trava Docker inesperadamente ocupada');
     const run = new RecoveryRun(registry, directory, name, {owner: randomUUID(), resources: {}});
+    run.path = join(resolve(recoveryDirectory ?? defaultDirectory), name);
     await run.save();
     await rename(staging, anchored(registry, name));
     await registry.sync();
@@ -222,7 +242,11 @@ async function readState(directory, name) {
     const state = JSON.parse(await file.readFile('utf8'));
     if (typeof state?.owner !== 'string' || !ownerToken.test(state.owner) || !state.resources || typeof state.resources !== 'object' ||
         Array.isArray(state.resources) ||
-        Object.entries(state.resources).some(([key, value]) => !resourceKind(name, key) || typeof value !== 'boolean')) {
+        Object.entries(state.resources).some(([key, value]) => {
+          if (key === legacyVolume(name)) return typeof value !== 'boolean';
+          return !isContainerName(name, key) || !(typeof value === 'boolean' ||
+            (typeof value === 'string' && containerId.test(value)));
+        })) {
       throw new Error('registro Docker inválido');
     }
     return state;

@@ -185,14 +185,14 @@ export function validateConfig(raw) {
     out.staticDir = rel;
   }
   if (Array.isArray(raw.routes)) {
-    for (const entry of raw.routes.slice(0, MAX_DECLARED_ROUTES)) {
+    for (const [declarationIndex, entry] of raw.routes.slice(0, MAX_DECLARED_ROUTES).entries()) {
       if (typeof entry === 'string') {
         const route = safeRoutePath(entry);
-        if (route) out.routes.push({path: route, file: undefined});
+        if (route) out.routes.push({path: route, file: undefined, declarationIndex});
       } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
         const route = safeRoutePath(entry.path);
         const file = entry.file !== undefined ? normalizeRepoRelativePath(entry.file) : undefined;
-        if (route) out.routes.push({path: route, file: file ?? undefined,
+        if (route) out.routes.push({path: route, file, declarationIndex,
           ...(typeof entry.page === 'boolean' ? {page: entry.page} : {})});
       }
     }

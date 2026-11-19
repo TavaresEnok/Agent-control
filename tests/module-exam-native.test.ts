@@ -21,6 +21,7 @@ import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli, typ
 import {runPersonalQaCli} from '../src/personal-qa-cli.ts';
 import {readModuleReport, type ModuleCollectorOutput, type VerificationModuleRunResult} from '../src/verification-modules.ts';
 import {createModuleExamFixture, moduleExamFixtureAnswer} from './fixtures/module-exam-native.ts';
+import {qaStaticFinding, qaStaticTool, reviewFixtureVerdict, skipQuestion, type ReviewTaskFixture} from './fixtures/module-exam-review.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('provedores recebem apenas HTTPS fixo e o Claude inicia sem ferramentas nem configuração externa', () => {
@@ -107,6 +108,7 @@ test('o fechamento do relay encerra a autorização de inferência do worker', a
 });
 
 const base = process.env.AC_TEST_DATABASE_URL;
+const skippedOther = 'test.todo("valida estoque", () => {});';
 test('status 429 prevalece com corpo vazio, excessivo ou sem fim', async () => {
   for (const body of [null, Buffer.alloc(1024 * 1024 + 1), undefined]) {
     const response = new IncomingMessage(new Socket());
@@ -137,17 +139,24 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
     const ledger = new Ledger(database.url);
     const root = await mkdtemp(join(tmpdir(), 'ac-module-native-test-'));
     let exhaust = false;
-    let recheckAnswer: ((task: {code: string; binding: string}) => string) | undefined;
+    let examineFunctionalFinding = false;
+    let recheckAnswer: ((task: ReviewTaskFixture & {moduleProof: unknown}) => string) | undefined;
     let fixture: Awaited<ReturnType<typeof createModuleExamFixture>> | undefined;
     try {
       await ledger.migrate();
       const dataDirectory = join(root, 'data'), repo = join(root, 'repo');
       for (const path of [dataDirectory, repo]) await mkdir(path, {mode: 0o700});
       const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-C', repo, ...args], {stdio: 'pipe'});
-      const originalCode = 'export function total() { return 42; }';
-      const correctedCode = 'export function total() { return 43; }';
-      await writeFile(join(repo, 'index.ts'), originalCode + '\nconst password = "SEGREDO_SINTETICO_OMITIDO";\n');
-      await writeFile(join(repo, 'other.ts'), 'return 7;\n');
+      const skippedIndex = 'test.skip("valida pedidos", () => assert.equal(total(), 43))';
+      const activeIndex = skippedIndex.replace('test.skip', 'test');
+      const originalCode = `export function total() { return 42; } ${skippedIndex};`;
+      const correctedCode = `export function total() { return 43; } ${activeIndex};`;
+      const writeIndex = (code: string, password: string) => writeFile(join(repo, 'index.ts'),
+        code + '\n' + "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+        `const password = "${password}";\n`);
+      const staleTest = 'test("valida inventário", () => {})';
+      await writeIndex(originalCode, 'SEGREDO_SINTETICO_OMITIDO');
+      await writeFile(join(repo, 'other.ts'), skippedOther + '\n' + staleTest + ';\n');
       await writeFile(join(repo, '.env'), 'CONTEUDO_SINTETICO_PROTEGIDO\n');
       git('init'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic');
 
@@ -165,8 +174,16 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       await capacity.configure(owner, {programmingLimit: 2, evaluationLimit: 2});
       fixture = await createModuleExamFixture({root, repo, ledger, owner, project, answer(launch) {
         const task = JSON.parse(launch.task);
-        if (task.commit && recheckAnswer) return {failureCode: null, output: recheckAnswer(task)};
+        if (task.originalCommit && recheckAnswer) return {failureCode: null, output: recheckAnswer(task)};
         if (launch.provider === 'codex' && exhaust) return {output: 'diagnóstico privado descartado', failureCode: 'PROVIDER_USAGE_LIMIT'};
+        if (task.file === 'index.ts' && task.checklist && examineFunctionalFinding) {
+          return {failureCode: null, output: JSON.stringify({kind: 'exame', filesRead: [task.file],
+            checklist: ['qa'], findings: [{line: 1, snippet: skippedIndex, hypothesis: skipQuestion,
+              title: 'Teste funcional pulado', severity: 'baixa'}]})};
+        }
+        if (task.file === 'index.ts' && task.criterion) {
+          return {failureCode: null, output: JSON.stringify(reviewFixtureVerdict(task, skippedIndex))};
+        }
         return moduleExamFixtureAnswer(launch);
       }});
       const {docker, runtime, profiles} = fixture;
@@ -179,18 +196,8 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         projects: [{id: otherProject, label: 'Outro projeto', repo: join(root, 'other-repo'), owner}],
         http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
         happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'}}), {mode: 0o600});
-      const collectorOutput: ModuleCollectorOutput = {
-        coverage: [
-          {tool: 'node-test-v8', version: '22', status: 'ok', detail: 'três execuções estáveis'},
-          {tool: 'fixture', version: '1', status: 'ok', detail: 'leitura local'},
-        ],
-        findings: [
-          {tool: 'node-test-v8', rule: 'QA-COBERTURA-FUNCAO-SEM-TESTE', file: 'index.ts', line: 1, severity: 'baixa',
-            message: 'Conclusão sintética do autor', evidence: originalCode},
-          {tool: 'fixture', rule: 'FIXTURE-01', file: 'other.ts', line: 1, severity: 'baixa',
-            message: 'Conclusão sintética do autor', evidence: 'return 7;'},
-        ],
-      };
+      const collectorOutput: ModuleCollectorOutput = {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'leitura local'}],
+        findings: [qaStaticFinding('index.ts', 1, skippedIndex + ';'), qaStaticFinding('other.ts', 1, skippedOther)]};
       let result: VerificationModuleRunResult | undefined;
       const run = (moduleExamRuntime: NonNullable<PersonalModuleCliDeps['moduleExamRuntime']>) =>
         runPersonalModuleCli('qa', [installation, project], {collectorOutput, moduleExamRuntime,
@@ -245,12 +252,11 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.deepEqual(result?.achados.map(f => [f.status, f.verifier?.provider]), [['confirmado', 'codex'], ['confirmado', 'codex']]);
       assert.deepEqual((await ledger.pool.query('SELECT DISTINCT provenance FROM ac_verify_coverage WHERE run_id=$1', [result!.runId])).rows,
         [{provenance: 'examiner'}]);
-      const reviewRunId = result!.runId;
       for (const launch of docker.logs) {
         assert.equal(launch.moduleExam, true);
         assert.equal(launch.role, 'specialist');
         assert.deepEqual(launch.writePaths, []);
-        assert.doesNotMatch(launch.task, /SEGREDO_SINTETICO_OMITIDO|CONTEUDO_SINTETICO_PROTEGIDO|Conclusão sintética do autor|\/tmp\//);
+        assert.doesNotMatch(launch.task, /SEGREDO_SINTETICO_OMITIDO|CONTEUDO_SINTETICO_PROTEGIDO|CONCLUSAO_DO_AUTOR|\/tmp\//);
       }
 
       exhaust = true;
@@ -305,6 +311,26 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.ok(result?.achados.every(f => f.status === 'provavel' && f.verifier === null));
       assert.match(await readFile(join(result!.directory, 'cobertura.md'), 'utf8'), /PROVIDER_USAGE_LIMIT/);
       await capacity.observeQuota(owner, reviewerAccount, {status: 'available', ttlSeconds: 3600, source: 'synthetic://module-exam'});
+      // Keep the V8-only observation separate from the examiner's verifiable defect.
+      const v8Coverage = {tool: 'node-test-v8', version: '22', status: 'ok' as const, detail: 'três execuções estáveis'};
+      const opaqueFinding = {tool: v8Coverage.tool, rule: 'QA-COBERTURA-FUNCAO-SEM-TESTE', file: 'index.ts', line: 1,
+        severity: 'alta', message: 'Função exportada sem execução medida', evidence: 'contagem V8 da função nas passadas 1, 2 e 3: 0, 0, 0'};
+      const [collectorRun] = await runPersonalQaCli([installation, project], {collectorOutput: {
+        coverage: [v8Coverage, ...collectorOutput.coverage],
+        findings: [opaqueFinding, qaStaticFinding('other.ts', 2, staleTest.replace('test(', 'test.skip('))],
+      }});
+      const collectorRecheck = (id: string) =>
+        runPersonalQaCli([installation, project, '--reverificar', collectorRun!, id], {moduleExamRuntime: async () => runtime});
+      const collectorStatuses = async () => (await readModuleReport(dataDirectory, project, collectorRun!, 'qa')).achados.map(f => f.status);
+      assert.deepEqual(await collectorStatuses(), ['provavel', 'provavel']);
+
+      examineFunctionalFinding = true;
+      const [reviewRunId] = await runPersonalQaCli([installation, project], {
+        collectorOutput: {coverage: [v8Coverage], findings: []},
+        moduleExamRuntime: async () => runtime,
+      });
+      examineFunctionalFinding = false;
+      assert.ok(reviewRunId);
       const args = [installation, project, '--reverificar', reviewRunId, 'ACH-001'];
       const recheck = (seats: ModuleExamRuntime = runtime) => runPersonalQaCli(args, {moduleExamRuntime: async () => seats});
       const findingStatus = async () => (await readModuleReport(dataDirectory, project, reviewRunId, 'qa')).achados[0]?.status;
@@ -332,22 +358,32 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(docker.logs.length, count);
 
       const testFile = 'tests/qa/ach-001.test.ts';
+      const correctionReason = 'O retorno anterior `return 42` passou a `return 43`. O teste voltou a ficar ativo e a asserção em `tests/qa/ach-001.test.ts` verifica esse total.';
       const commitChanges = (label: string, ...rest: string[]) =>
         git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', label, ...rest);
-      const verdict = ({code, binding}: {code: string; binding: string}, options?: {reason?: string; status?: string}) =>
-        JSON.stringify({kind: 'confirmacao', status: options?.status ?? 'descartado', proof: code, binding,
-          reason: options?.reason ?? 'O retorno anterior `42` passou a `43` e `tests/qa/ach-001.test.ts` verifica esse total.'});
-      recheckAnswer = task => verdict(task, {reason: 'A função retorna `42`.'});
-      assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_SAME_COMMIT \(/);
+      const verdict = (task: ReviewTaskFixture, reason = correctionReason) =>
+        JSON.stringify({...reviewFixtureVerdict(task, activeIndex, 'descartado'), reason});
+
+      // A structured refutation without a committed change cannot close a stale collector finding.
+      recheckAnswer = task => JSON.stringify(reviewFixtureVerdict(task, staleTest, 'descartado'));
+      assert.match((await collectorRecheck('ACH-002'))[0]!, /^ACH-002 pendente MODULE_RECHECK_SAME_COMMIT \(/);
       commitChanges('synthetic unrelated change', '--allow-empty');
-      assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_CHANGE_UNPROVEN \(/);
-      await writeFile(join(repo, 'index.ts'), correctedCode + '\nconst password = "NOVA_CREDENCIAL_SINTETICA";\n');
+      assert.match((await collectorRecheck('ACH-002'))[0]!, /^ACH-002 pendente MODULE_RECHECK_CHANGE_UNPROVEN \(/);
+      assert.deepEqual(await collectorStatuses(), ['provavel', 'provavel']);
+
+      recheckAnswer = task => verdict(task);
+      assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
       await mkdir(join(repo, 'tests', 'qa'), {recursive: true});
       await writeFile(join(repo, testFile), "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
         "import {total} from '../../index.ts';\ntest('total corrigido', () => assert.equal(total(), 43));\n");
+      const runRegression = () => promisify(execFile)(process.execPath, ['--test', testFile], {
+        cwd: repo, env: {PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8'}, timeout: 5000,
+      });
+      await assert.rejects(runRegression(), {code: 1, stdout: /not ok \d+ - total corrigido[\s\S]*42 !== 43/});
+      await writeIndex(correctedCode, 'NOVA_CREDENCIAL_SINTETICA');
+      assert.match((await runRegression()).stdout, /ok \d+ - total corrigido/);
       git('add', 'index.ts', testFile);
       commitChanges('synthetic correction');
-      recheckAnswer = verdict;
       assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_MODULE_PROOF_MISSING \(/);
       recheckAnswer = task => verdict({...task, code: 'prova sem vínculo com o trecho'});
       assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
@@ -372,32 +408,51 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         ORDER BY i.manager_epoch DESC LIMIT 1`, [`recheck:${reviewRunId}`]);
       assert.deepEqual(cancelled, {state: 'failed', released: true});
 
-      const qaReceipt = (scope: string, version = '22', withFinding = false, testLine = 4) => runPersonalQaCli([installation, project], {
-        collectorOutput: {
-          coverage: [
-            {tool: 'qa-matriz-estatica', version: 'interno', status: 'ok', detail: 'análise estática de 0 requisitos e 1 funções exportadas'},
-            {tool: 'node-test-v8', version, status: 'ok', detail: 'três execuções estáveis'},
-            {tool: 'qa-arquivo:index.ts', version, status: 'ok',
-              detail: 'V8 em três passadas: ramos 1/1, funções 1/1; ramos 1/1, funções 1/1; ramos 1/1, funções 1/1'},
-            ...[1, 2, 3].map(pass => ({tool: 'node-test-v8-execucao', version, status: 'ok' as const,
-              detail: `execução ${pass}: node:test resultado aprovado; 1 aprovados, 0 reprovados, 0 pulados, 0 todo`})),
-            {tool: 'qa-funcionalidade:index.ts:total', version: 'interno', status: 'ok',
-              detail: `vínculo estático ${scope} total → ${testFile}:${testLine} total corrigido (passed,passed,passed, asserção executada nas três passadas)`},
-          ],
-          findings: withFinding ? [collectorOutput.findings[0]!] : [],
-        },
-      });
-      recheckAnswer = verdict;
-      await qaReceipt('index.ts:1', 'other-version');
+      const qaReceipt = (scope: string, options: {version?: string; withFinding?: boolean; testLine?: number; examined?: boolean} = {}) => {
+        const {version = '22', withFinding = false, testLine = 4, examined = true} = options;
+        return runPersonalQaCli([installation, project], {
+          ...(examined ? {moduleExamRuntime: async () => runtime.slice(0, 1)} : {}),
+          collectorOutput: {
+            coverage: [
+              {tool: 'qa-matriz-estatica', version: 'interno', status: 'ok', detail: 'análise estática de 0 requisitos e 1 funções exportadas'},
+              {tool: 'node-test-v8', version, status: 'ok', detail: 'três execuções estáveis'},
+              {tool: 'qa-arquivo:index.ts', version, status: 'ok',
+                detail: 'V8 em três passadas: ramos 1/1, funções 1/1; ramos 1/1, funções 1/1; ramos 1/1, funções 1/1'},
+              ...[1, 2, 3].map(pass => ({tool: 'node-test-v8-execucao', version, status: 'ok' as const,
+                detail: `execução ${pass}: node:test resultado aprovado; 1 aprovados, 0 reprovados, 0 pulados, 0 todo`})),
+              {tool: 'qa-funcionalidade:index.ts:total', version: 'interno', status: 'ok',
+                detail: `vínculo estático ${scope} total → ${testFile}:${testLine} total corrigido (passed,passed,passed, asserção executada nas três passadas)`},
+            ],
+            findings: withFinding ? [opaqueFinding] : [],
+          },
+        });
+      };
+      const checkOpaqueV8 = async (expected: {runId: string; tool: string; version: string; origin: string; collectorImage: null} | null) => {
+        const observed: unknown[] = [];
+        recheckAnswer = task => {
+          observed.push({criterion: task.criterion, moduleProof: task.moduleProof});
+          return JSON.stringify({kind: 'confirmacao', status: 'descartado', binding: task.binding, proof: task.code,
+            reason: correctionReason});
+        };
+        assert.deepEqual(await collectorRecheck('ACH-001'), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
+        assert.deepEqual(observed, [{criterion: null, moduleProof: expected}]);
+        assert.deepEqual(await collectorStatuses(), ['provavel', 'provavel']);
+        recheckAnswer = task => verdict(task);
+      };
+      await qaReceipt('index.ts:1', {version: 'other-version', examined: false});
+      await checkOpaqueV8(null);
       assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_MODULE_PROOF_MISSING \(/);
-      await qaReceipt('index.ts:1', '22', true);
+      await qaReceipt('index.ts:1', {withFinding: true, examined: false});
+      await checkOpaqueV8(null);
       assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_MODULE_PROOF_MISSING \(/);
       await qaReceipt('index.ts:2');
       assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_REGRESSION_PROOF_MISSING \(/);
-      await qaReceipt('index.ts:1', '22', false, 3);
+      await qaReceipt('index.ts:1', {testLine: 3});
       assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_REGRESSION_PROOF_MISSING \(/);
       const [proofRun] = await qaReceipt('index.ts:1');
-      recheckAnswer = task => verdict(task, {reason: 'O retorno apresenta `43` após a alteração.'});
+      assert.ok(proofRun);
+      await checkOpaqueV8({runId: proofRun, tool: 'node-test-v8', version: '22', origin: 'collector', collectorImage: null});
+      recheckAnswer = task => verdict(task, 'O retorno apresenta `43` após a alteração.');
       assert.match((await recheck())[0]!, /^ACH-001 pendente MODULE_RECHECK_CORRECTION_UNEXPLAINED \(/);
 
       const {summary} = await readModuleReport(dataDirectory, project, reviewRunId, 'qa');
@@ -406,7 +461,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       const savedAchados = join(directory, 'achados-sinteticos');
       recheckAnswer = task => {
         renameSync(achados, savedAchados);
-        return verdict(task, {reason: 'O retorno anterior `42` passou a `43` e `tests/qa/ach-001.test.ts` verifica esse total.\npassword=TOKEN_SINTETICO_NAO_PUBLICAR'});
+        return verdict(task, correctionReason + '\npassword=TOKEN_SINTETICO_NAO_PUBLICAR');
       };
       const lines = await recheck();
       assert.equal(lines[0], 'ACH-001 fechado');
@@ -419,14 +474,15 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(launch.moduleExam, true);
       assert.deepEqual(launch.writePaths, []);
       assert.deepEqual(JSON.parse(launch.task).code, correctedCode);
-      assert.doesNotMatch(launch.task, /NOVA_CREDENCIAL_SINTETICA|Conclusão sintética do autor|\/tmp\//);
+      assert.doesNotMatch(launch.task, /NOVA_CREDENCIAL_SINTETICA|CONCLUSAO_DO_AUTOR|Teste funcional pulado|\/tmp\//);
       const {rows: [closed]} = await ledger.pool.query(`SELECT detail FROM ac_audit
         WHERE kind='module.finding_rechecked' AND detail->>'status'='fechado' AND context_id=$1`, [contextId]);
       assert.equal(closed.detail.commit, correctedHead);
       assert.equal(closed.detail.proofDigest, digest(correctedCode));
       assert.match(closed.detail.reviewerReason, /retorno anterior/);
       assert.doesNotMatch(closed.detail.reviewerReason, /TOKEN_SINTETICO_NAO_PUBLICAR/);
-      assert.deepEqual(closed.detail.moduleProof, {runId: proofRun, tool: 'node-test-v8', version: '22', origin: 'collector', collectorImage: null});
+      assert.deepEqual(closed.detail.moduleProof, {runId: proofRun, tool: 'examinador', version: 'claude-module-fixture',
+        origin: 'examiner', collectorImage: null});
       assert.equal(closed.detail.regressionProof.runId, proofRun);
       assert.equal(closed.detail.regressionProof.testFile, testFile);
       assert.equal(closed.detail.regressionProof.testLine, 4);
@@ -434,7 +490,8 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(closed.detail.regressionProof.assertionDigest, digest('assert.equal(total(), 43)'));
       assert.match(closed.detail.regressionProof.receiptDigest, /^[a-f0-9]{64}$/);
       assert.equal(closed.detail.source.file, 'index.ts');
-      assert.equal(closed.detail.source.rule, 'QA-COBERTURA-FUNCAO-SEM-TESTE');
+      assert.equal(closed.detail.source.rule, 'exame-de-arquivo');
+      assert.equal(closed.detail.source.origin, 'examiner');
       assert.deepEqual(closed.detail.examiner, {provider: 'claude', model: 'claude-module-fixture',
         accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0]});
       assert.deepEqual(closed.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',
@@ -514,7 +571,10 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal((await lastGrant()).state, 'released');
       assert.ok((await lastGrant()).physical_receipt.containerId);
 
-      recheckAnswer = task => verdict(task, {status: 'confirmado', reason: 'A função ainda contém o retorno incorreto `43`.'});
+      await writeIndex(originalCode, 'NOVA_CREDENCIAL_SINTETICA');
+      git('add', 'index.ts');
+      commitChanges('synthetic recurrence');
+      recheckAnswer = task => JSON.stringify(reviewFixtureVerdict(task, skippedIndex));
       await ledger.pool.query(`CREATE FUNCTION synthetic_interrupt_publication() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
           IF NEW.kind='module.recheck_report_pending' THEN PERFORM pg_notify('synthetic_verdict_committed', '');
