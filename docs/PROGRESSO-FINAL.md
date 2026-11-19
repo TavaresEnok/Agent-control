@@ -803,3 +803,5 @@ PAUSADO-COTA
 - 19/11/2026 18:03 UTC — C2-GO-DIAGNOSTICOS encerrado com código 0.
 - 19/11/2026 18:03 UTC — revisor-C2-BANCO-ESCOPO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:04 UTC — O parecer de 9f23b190 reproduziu um erro global do Go classificado pelo último cabeçalho de pacote e um índice constante negativo sem atribuição. Também pediu que o teste de executável incompatível aceite uma versão diferente da fixada quando configurada explicitamente. A homologação em curso permanece fixa em 0d8198b6.
+- 19/11/2026 18:04 UTC — trabalho-C2-GO-EXECUCAO iniciado em final-qa-mutacao-linguagens por Sol medium normal.
+- 19/11/2026 18:04 UTC — Prontidão b2e62e6b recebe 3b9e0115 em checkout próprio de integração e usa o parser correspondente ao lock para a prova de sintaxe. Estão incluídos erro de YAML, tag vazia e controles válidos sem perda da origem dos achados.
