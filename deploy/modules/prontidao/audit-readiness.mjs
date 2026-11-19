@@ -21,6 +21,84 @@ const COMPOSE_EXTERNAL_LOG_DRIVERS = new Set([
   'none', 'journald', 'syslog', 'gelf', 'fluentd', 'awslogs', 'splunk', 'etwlogs', 'gcplogs',
 ]);
 
+const NOT_A_MASK = String.raw`(?![^\s\u2026]*\u2026)`;
+const SECRET_VALUE = String.raw`(?:"[^"\r\n]*"|'[^'\r\n]*'|\S+)`;
+const ASSIGN_NAME = String.raw`pass|passwd|password|secret|token|(?<![A-Za-z])key(?!board)|auth|credential`;
+const KNOWN_SECRET_PATTERNS = [
+  /-----BEGIN(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----[\s\S]*?-----END(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----/,
+  /(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Z0-9])ASIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,400}(?![A-Za-z0-9_])/,
+  /(?<![A-Za-z0-9_])ghp_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])ghs_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])gho_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,400}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9])xox[a-z]-[A-Za-z0-9-]{10,400}(?![A-Za-z0-9-])/,
+  /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@\u2026]{1,200}:[^\s/@\u2026]{1,200}@/,
+  /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,255}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_])sk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])rk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*(?:bearer|basic)[ \t]+${NOT_A_MASK}${SECRET_VALUE}`, 'i'),
+  /(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]{0,39}[G-Zg-z+/])[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])/,
+  /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,128}\.[A-Za-z0-9_-]{16,128}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])--(?:${ASSIGN_NAME})\w*(?:["']?\s*[:=]\s*|[ \t]+)${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+  new RegExp(String.raw`(?:${ASSIGN_NAME})\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+];
+
+const REPO_PATH_RE = /^[\p{L}\p{M}\p{N} ._@+/-]+$/u;
+const CONTROL_CHAR_RE = /[\u0000-\u001F\u007F-\u009F]/;
+const PROTECTED_READINESS_RULES = new Set([
+  'PRONTIDAO-SEGREDO-ARQUIVO-ENV',
+  'PRONTIDAO-CHAVE-PRIVADA-NO-REPOSITORIO',
+]);
+
+/** Matches the host secret-value detector so collector outputs omit triggering paths before emission. */
+export function hasKnownSecret(text) {
+  return typeof text === 'string' && KNOWN_SECRET_PATTERNS.some(pattern => pattern.test(text));
+}
+
+function hasForbiddenSegment(part, allowDotEnvName = false) {
+  if (part === '' || part !== part.trim() || part === '.' || part === '..'
+    || part === '.git' || part === '.ai' || part === 'node_modules'
+    || /^(?:\.mcp\.json|\.claude|\.husky|\.codex|\.grok)$/i.test(part)) return true;
+  return !allowDotEnvName && part.startsWith('.env');
+}
+
+function isSecretClassName(file) {
+  const name = basename(file).toLowerCase();
+  return /^(?:\.env|id_|credentials)|^(?:\.npmrc|\.netrc|\.pgpass)$|\.(?:pem|key|p12|pfx|jks|tfstate|tfvars)$|^service-account.*\.json$|kubeconfig/.test(name);
+}
+
+/** Checks whether a repository path satisfies the public publication contract and passes secret detection. */
+export function isPublicReportPath(file) {
+  if (typeof file !== 'string' || file !== file.trim() || file.includes('\\') || CONTROL_CHAR_RE.test(file)) return false;
+  if (!file || file.length > 400 || file.startsWith('/') || file.startsWith('~') || /^[A-Za-z]:/.test(file)) return false;
+  if (!REPO_PATH_RE.test(file) || hasKnownSecret(file)) return false;
+  const parts = file.split('/');
+  return !parts.some(part => hasForbiddenSegment(part, false)) && !isSecretClassName(file);
+}
+
+/** Checks whether a secret-class path is allowed as a protected finding location without triggering secret detection. */
+export function isProtectedReportPath(file) {
+  if (typeof file !== 'string' || file !== file.trim() || file.includes('\\') || CONTROL_CHAR_RE.test(file)) return false;
+  if (!file || file.length > 400 || file.startsWith('/') || file.startsWith('~') || /^[A-Za-z]:/.test(file)) return false;
+  if (!REPO_PATH_RE.test(file) || hasKnownSecret(file)) return false;
+  const parts = file.split('/');
+  const name = parts.pop();
+  return Boolean(name && isSecretClassName(name) && !name.includes('..')
+    && !hasForbiddenSegment(name, true) && !parts.some(part => hasForbiddenSegment(part, false)));
+}
+
+function canEmitReadinessFinding(rule, file) {
+  if (isPublicReportPath(file)) return true;
+  return PROTECTED_READINESS_RULES.has(rule) && isProtectedReportPath(file);
+}
+
+const findingOmitHandlers = new WeakMap();
+
 /** Redacts secret values before placing text into finding evidence or messages. */
 export function redactEvidence(text) {
   let out = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -577,6 +655,10 @@ function checkDotenv(file, findings, pillarCounts, onIncomplete, onMeasured) {
 }
 
 function addFinding(findings, pillarCounts, pillar, item) {
+  if (!canEmitReadinessFinding(item.rule, item.file)) {
+    findingOmitHandlers.get(findings)?.(pillar);
+    return false;
+  }
   pillarCounts[pillar] = (pillarCounts[pillar] ?? 0) + 1;
   findings.push({
     tool: 'prontidao-audit',
@@ -587,6 +669,7 @@ function addFinding(findings, pillarCounts, pillar, item) {
     message: item.message,
     evidence: redactEvidence(item.evidence),
   });
+  return true;
 }
 
 const PROTECTION_HEADERS = new Set([
@@ -805,9 +888,9 @@ function checkCaddy(file, findings, pillarCounts, onIncomplete, onMeasured) {
     if (routingUnknown) onIncomplete(line, 'rotas ou imports Caddy exigem avaliação adicional');
     if (headersUnknown) onIncomplete(line, 'política Caddy de cabeçalhos condicional ou dinâmica');
     const publicHttp = addresses.some(address => address.http && !address.local);
-    if (publicHttp && !routingUnknown) {
+    if (addresses.some(address => address.http) && !routingUnknown) {
       onMeasured();
-      if (!redirect) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
+      if (publicHttp && !redirect) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
     }
     if (addresses.some(address => !address.http) && !routingUnknown && !headersUnknown) {
       onMeasured();
@@ -1545,35 +1628,34 @@ function checkBackup(file, findings, pillarCounts, onIncomplete) {
   return {backup, restore, catalog, rotation};
 }
 
-// Coverage-only paths use the ordinary report contract. Protected names may
-// cross that boundary only with a corresponding structured finding.
-function isPublicCoveragePath(file) {
-  if (file.length > 400 || !/^[\p{L}\p{M}\p{N} ._@+/-]+$/u.test(file)) return false;
-  if (file.split('/').some(part => !part || part !== part.trim()
-    || /^(?:\.{1,2}|\.git|\.ai|node_modules)$/.test(part)
-    || /^\.env/.test(part) || /^(?:\.mcp\.json|\.claude|\.husky|\.codex|\.grok)$/i.test(part))) return false;
-  const name = basename(file).toLowerCase();
-  return !/^(?:\.env|id_|credentials)|^(?:\.npmrc|\.netrc|\.pgpass)$|\.(?:pem|key|p12|pfx|jks|tfstate|tfvars)$|^service-account.*\.json$|kubeconfig/.test(name);
-}
-
 /** Runs all passive production-readiness checks across a repository directory. */
 export function auditRepositoryReadiness(repoRoot) {
   const skipCoverage = [];
   const partialFiles = new Set();
   const partialPillars = new Set();
   let skipped = 0;
-  let failed = 0;
+  let skipFailed = 0;
+  let omittedProtectedSkipRows = 0;
+  let omittedProtectedSkipFailed = 0;
+  let omittedInventoryPaths = 0;
+  let omittedFindings = 0;
   const recordSkip = (status, rel, reason) => {
     if (status === 'failed') {
-      failed++;
+      skipFailed++;
       partialFiles.add(rel);
     } else skipped++;
+    const detail = `${rel}: ${reason}.`;
+    if (!isPublicReportPath(rel) || hasKnownSecret(detail)) {
+      omittedProtectedSkipRows++;
+      if (status === 'failed') omittedProtectedSkipFailed++;
+      return;
+    }
     if (skipCoverage.length < MAX_SKIP_ROWS) {
-      skipCoverage.push({tool: 'prontidao:arquivo', version: AUDIT_VERSION, status, detail: `${rel}: ${reason}.`});
+      skipCoverage.push({tool: 'prontidao:arquivo', version: AUDIT_VERSION, status, detail});
     }
   };
   const files = collectRepoFiles(repoRoot, recordSkip);
-  const collectionIncomplete = failed > 0;
+  const collectionIncomplete = skipFailed > 0;
   const findings = [];
   const pillarCounts = {
     'tls-cabecalhos': 0,
@@ -1592,7 +1674,13 @@ export function auditRepositoryReadiness(repoRoot) {
     for (const pillar of pillars) partialPillars.add(pillar);
     recordSkip('failed', file, reason);
   };
+  const recordOmittedFinding = pillar => {
+    partialPillars.add(pillar);
+    omittedFindings++;
+  };
+  findingOmitHandlers.set(findings, recordOmittedFinding);
 
+  let hasDeployable = false;
   let deploymentFile = null;
   let hasBackup = false;
   let hasRestoreRoutine = false;
@@ -1601,12 +1689,14 @@ export function auditRepositoryReadiness(repoRoot) {
   let hasLogrotate = false;
   let hasAlerting = false;
   let hasDiskMonitoring = false;
+  let hasFileLogService = false;
   let fileLogService = null;
   let anchorFile = null;
   let tlsAnchorFile = null;
 
   for (const file of files) {
-    if (anchorFile === null && (basename(file.rel) === 'package.json' || isComposeFile(file.rel) || basename(file.rel) === 'Dockerfile')) {
+    if (anchorFile === null && isPublicReportPath(file.rel)
+      && (basename(file.rel) === 'package.json' || isComposeFile(file.rel) || basename(file.rel) === 'Dockerfile')) {
       anchorFile = file.rel;
     }
     const lowerContent = file.content.toLowerCase();
@@ -1625,11 +1715,14 @@ export function auditRepositoryReadiness(repoRoot) {
       if (incomplete) {
         structuredIncomplete = true;
         recordPartial(file.rel, 'estrutura Compose inválida ou referência YAML não resolvida',
-          'alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo');
+          'backup-restauracao', 'alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo');
         if (services.some(service => service.environment.length > 0)) checksApplied.push('compose-environment-local');
       } else {
         checksApplied.push('compose');
-        if (services.length > 0) deploymentFile ??= file.rel;
+        if (services.length > 0) {
+          hasDeployable = true;
+          if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
+        }
       }
       for (const svc of services) {
         for (const {line} of svc.environment) {
@@ -1703,7 +1796,7 @@ export function auditRepositoryReadiness(repoRoot) {
 
     const proxy = isCaddyFile(file.rel) ? 'Caddy' : isNginxFile(file.rel) ? 'Nginx' : null;
     if (proxy) {
-      if (tlsAnchorFile === null) tlsAnchorFile = file.rel;
+      if (tlsAnchorFile === null && isPublicReportPath(file.rel)) tlsAnchorFile = file.rel;
       let incomplete = false;
       let measured = false;
       const onIncomplete = (line, reason) => {
@@ -1717,20 +1810,28 @@ export function auditRepositoryReadiness(repoRoot) {
         onIncomplete(1, `sintaxe ${proxy} inválida ou não coberta`);
       }
       structuredIncomplete ||= incomplete;
-      if (measured) deploymentFile ??= file.rel;
+      if (measured) {
+        hasDeployable = true;
+        if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
+      }
       if (!incomplete) checksApplied.push(`${proxy.toLowerCase()}-tls-headers`);
       else if (measured) checksApplied.push(`${proxy.toLowerCase()}-tls-headers-local`);
     }
 
     if (isSystemdService(file.rel)) {
-      deploymentFile ??= file.rel;
+      hasDeployable = true;
+      if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
       checksApplied.push('systemd');
       const res = checkSystemd(file, findings, pillarCounts);
-      if (res.writesFileLog) fileLogService ??= file.rel;
+      if (res.writesFileLog) {
+        hasFileLogService = true;
+        if (isPublicReportPath(file.rel)) fileLogService ??= file.rel;
+      }
     }
 
     if (basename(file.rel) === 'Dockerfile' || basename(file.rel).startsWith('Dockerfile.') || file.rel.endsWith('.Dockerfile')) {
-      deploymentFile ??= file.rel;
+      hasDeployable = true;
+      if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
       checksApplied.push('dockerfile');
     }
 
@@ -1799,89 +1900,140 @@ export function auditRepositoryReadiness(repoRoot) {
 
     if (checksApplied.length > 0) {
       // A local check can complete even when a different check leaves this file partial.
-      measuredFiles.add(file.rel);
       const fileCount = findings.length - findingsBeforeFile;
-      fileCoverage.push({
-        tool: 'prontidao:arquivo',
-        version: AUDIT_VERSION,
-        status: partialFiles.has(file.rel) ? 'failed' : 'ok',
-        detail: `${file.rel}: verificações [${[...new Set(checksApplied)].join(', ')}], ${fileCount} achado(s).`,
-      });
+      const detail = `${file.rel}: verificações [${[...new Set(checksApplied)].join(', ')}], ${fileCount} achado(s).`;
+      const isPublic = isPublicReportPath(file.rel);
+      const hasProtectedFinding = fileCount > 0 && isProtectedReportPath(file.rel)
+        && findings.slice(findingsBeforeFile).every(f => canEmitReadinessFinding(f.rule, f.file));
+      if (isPublic) measuredFiles.add(file.rel);
+      if ((isPublic && !hasKnownSecret(detail)) || hasProtectedFinding) {
+        if (hasProtectedFinding) measuredFiles.add(file.rel);
+        fileCoverage.push({
+          tool: 'prontidao:arquivo',
+          version: AUDIT_VERSION,
+          status: partialFiles.has(file.rel) ? 'failed' : 'ok',
+          detail,
+        });
+      } else {
+        omittedInventoryPaths++;
+      }
     }
   }
 
-  const fallbackFile = anchorFile ?? files[0]?.rel ?? 'package.json';
-  if (deploymentFile !== null) {
+  const fallbackFile = anchorFile ?? files.find(file => isPublicReportPath(file.rel))?.rel ?? 'package.json';
+  if (hasDeployable) {
     const backupMeasured = !partialPillars.has('backup-restauracao');
     const alertingMeasured = !partialPillars.has('alertas-logs');
     const diskMeasured = !partialPillars.has('disco-memoria');
     if (backupMeasured && !hasBackup) {
-      addFinding(findings, pillarCounts, 'backup-restauracao', {
-        rule: 'PRONTIDAO-BACKUP-AUSENTE',
-        file: deploymentFile,
-        line: 1,
-        severity: 'alta',
-        message: 'Sistema publicável ou com estado persistente sem script, rotina ou agendamento de backup identificado.',
-        evidence: 'Nenhum script/comando de backup (pg_dump, restic, borg, personal:backup) encontrado.',
-      });
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'backup-restauracao', {
+          rule: 'PRONTIDAO-BACKUP-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'alta',
+          message: 'Sistema publicável ou com estado persistente sem script, rotina ou agendamento de backup identificado.',
+          evidence: 'Nenhum script/comando de backup (pg_dump, restic, borg, personal:backup) encontrado.',
+        });
+      } else {
+        recordOmittedFinding('backup-restauracao');
+      }
     }
     if (backupMeasured && !hasRestoreRoutine) {
-      addFinding(findings, pillarCounts, 'backup-restauracao', {
-        rule: 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
-        file: deploymentFile,
-        line: 1,
-        severity: 'media',
-        message: 'Nenhuma rotina que restaure dados em um destino foi identificada no repositório.',
-        evidence: 'Verificações de catálogo ou de integridade não demonstram restauração dos dados.',
-      });
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'backup-restauracao', {
+          rule: 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'media',
+          message: 'Nenhuma rotina que restaure dados em um destino foi identificada no repositório.',
+          evidence: 'Verificações de catálogo ou de integridade não demonstram restauração dos dados.',
+        });
+      } else {
+        recordOmittedFinding('backup-restauracao');
+      }
     }
     if (backupMeasured && hasBackup && !hasBackupRotation) {
-      addFinding(findings, pillarCounts, 'backup-restauracao', {
-        rule: 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE',
-        file: deploymentFile,
-        line: 1,
-        severity: 'baixa',
-        message: 'Backup identificado sem política explícita de rotação/retenção.',
-        evidence: 'Nenhuma diretiva de retenção/rotação de backups identificada.',
-      });
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'backup-restauracao', {
+          rule: 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'baixa',
+          message: 'Backup identificado sem política explícita de rotação/retenção.',
+          evidence: 'Nenhuma diretiva de retenção/rotação de backups identificada.',
+        });
+      } else {
+        recordOmittedFinding('backup-restauracao');
+      }
     }
-    if (alertingMeasured && fileLogService !== null && !hasLogrotate) {
-      addFinding(findings, pillarCounts, 'alertas-logs', {
-        rule: 'PRONTIDAO-LOGROTATE-AUSENTE',
-        file: fileLogService,
-        line: 1,
-        severity: 'baixa',
-        message: 'Serviço grava logs em arquivo sem configuração de logrotate no repositório.',
-        evidence: 'StandardOutput ou StandardError com file:, append: ou truncate: sem configuração logrotate.',
-      });
+    if (alertingMeasured && hasFileLogService && !hasLogrotate) {
+      if (fileLogService !== null) {
+        addFinding(findings, pillarCounts, 'alertas-logs', {
+          rule: 'PRONTIDAO-LOGROTATE-AUSENTE',
+          file: fileLogService,
+          line: 1,
+          severity: 'baixa',
+          message: 'Serviço grava logs em arquivo sem configuração de logrotate no repositório.',
+          evidence: 'StandardOutput ou StandardError com file:, append: ou truncate: sem configuração logrotate.',
+        });
+      } else {
+        recordOmittedFinding('alertas-logs');
+      }
     }
     if (alertingMeasured && !hasAlerting) {
-      addFinding(findings, pillarCounts, 'alertas-logs', {
-        rule: 'PRONTIDAO-ALERTA-AUSENTE',
-        file: deploymentFile,
-        line: 1,
-        severity: 'media',
-        message: 'Não há configuração de alertas operacionais ou vigia de falhas no repositório.',
-        evidence: 'Nenhuma rotina de alerta/vigia (watch, alert, OnFailure, webhook/push) identificada.',
-      });
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'alertas-logs', {
+          rule: 'PRONTIDAO-ALERTA-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'media',
+          message: 'Não há configuração de alertas operacionais ou vigia de falhas no repositório.',
+          evidence: 'Nenhuma rotina de alerta/vigia (watch, alert, OnFailure, webhook/push) identificada.',
+        });
+      } else {
+        recordOmittedFinding('alertas-logs');
+      }
     }
     if (diskMeasured && !hasDiskMonitoring) {
-      addFinding(findings, pillarCounts, 'disco-memoria', {
-        rule: 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
-        file: deploymentFile,
-        line: 1,
-        severity: 'media',
-        message: 'Não há verificação de uso de disco ou limpeza periódica configurada.',
-        evidence: 'Nenhum monitoramento de disco ou rotina de limpeza (df, statfs, maintenance, prune) encontrado.',
-      });
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'disco-memoria', {
+          rule: 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+          file: deploymentFile,
+          line: 1,
+          severity: 'media',
+          message: 'Não há verificação de uso de disco ou limpeza periódica configurada.',
+          evidence: 'Nenhum monitoramento de disco ou rotina de limpeza (df, statfs, maintenance, prune) encontrado.',
+        });
+      } else {
+        recordOmittedFinding('disco-memoria');
+      }
     }
   }
 
-  const omittedSkipRows = skipped + failed - skipCoverage.length;
+  const failed = skipFailed + omittedFindings;
+  const omittedSkipRows = skipped + skipFailed - omittedProtectedSkipRows - skipCoverage.length;
   if (omittedSkipRows > 0) {
     skipCoverage.push({
-      tool: 'prontidao:limites', version: AUDIT_VERSION, status: failed ? 'failed' : 'skipped',
+      tool: 'prontidao:limites', version: AUDIT_VERSION, status: skipFailed ? 'failed' : 'skipped',
       detail: `${omittedSkipRows} registro(s) de entrada(s) omitida(s) sem linha de cobertura individual pelo limite de ${MAX_SKIP_ROWS}.`,
+    });
+  }
+  const omittedPathCount = omittedInventoryPaths + omittedProtectedSkipRows;
+  if (omittedPathCount > 0) {
+    skipCoverage.push({
+      tool: 'prontidao:limites',
+      version: AUDIT_VERSION,
+      status: omittedProtectedSkipFailed ? 'failed' : 'skipped',
+      detail: `${omittedPathCount} caminho(s) omitido(s) dos relatórios por conter padrão protegido ou incompatível com o contrato de publicação.`,
+    });
+  }
+  if (omittedFindings > 0) {
+    skipCoverage.push({
+      tool: 'prontidao:limites',
+      version: AUDIT_VERSION,
+      status: 'failed',
+      detail: `${omittedFindings} achado(s) omitido(s) por restrição de caminho ou ausência de âncora no contrato de publicação.`,
     });
   }
 
@@ -1927,7 +2079,7 @@ export function auditRepositoryReadiness(repoRoot) {
     : row);
 
   const findingFiles = new Set(findings.map(finding => finding.file));
-  const scopedFiles = [...measuredFiles].filter(file => isPublicCoveragePath(file) || findingFiles.has(file));
+  const scopedFiles = [...measuredFiles].filter(file => !hasKnownSecret(file) && (isPublicReportPath(file) || findingFiles.has(file)));
   return {
     filesAnalyzed: files.length,
     anchorFile: fallbackFile,

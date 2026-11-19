@@ -43,6 +43,9 @@ export type ComposeServiceInfo = {
 };
 
 export function redactEvidence(text: string): string;
+export function hasKnownSecret(text: string): boolean;
+export function isPublicReportPath(file: string): boolean;
+export function isProtectedReportPath(file: string): boolean;
 export function collectRepoFiles(repoRoot: string, onSkip?: (status: 'failed' | 'skipped', file: string, reason: string) => void): {rel: string; content: string; lines: string[]}[];
 export function parseComposeServices(content: string, onIncomplete?: () => void): ComposeServiceInfo[];
 export function auditRepositoryReadiness(repoRoot: string): {
