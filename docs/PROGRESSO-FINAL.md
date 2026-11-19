@@ -576,3 +576,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:38 UTC — Revisor encerrou C7-R7 em 9f22e01e (código 0). Gerente confere a entrega.
 - 19/11/2026 06:38 UTC — Revisão C5-R7 iniciada por Sol high normal somente leitura em 1cd11ad5.
 - 19/11/2026 06:38 UTC — QA: o laboratório da imagem executou quatro exemplos OpenAPI e duas interações Pact por socket local. Oito testes passaram sem saltos. Em b05e9d24, chegaram também a cobertura por HTML e o tratamento de estados de mutação/propriedades Python/Go. As duas correções recebem nova prova sobre a imagem integrada.
+- 19/11/2026 06:39 UTC — C7-R7 recebeu dois apontamentos independentes sobre recuperação por identidade e paginação estática do Lighthouse; a nova ordem é separada do cancelamento do histórico. QA e dependências contam agora com cópia privada das imagens em preparo para os aceites congelados.
