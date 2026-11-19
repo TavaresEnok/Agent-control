@@ -376,7 +376,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       await mkdir(join(repo, 'tests', 'qa'), {recursive: true});
       await writeFile(join(repo, testFile), "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
         "import {total} from '../../index.ts';\ntest('total corrigido', () => assert.equal(total(), 43));\n");
-      const runRegression = () => promisify(execFile)(process.execPath, ['--test', testFile], {
+      const runRegression = () => promisify(execFile)(process.execPath, ['--test', '--test-reporter=tap', testFile], {
         cwd: repo, env: {PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8'}, timeout: 5000,
       });
       await assert.rejects(runRegression(), {code: 1, stdout: /not ok \d+ - total corrigido[\s\S]*42 !== 43/});
