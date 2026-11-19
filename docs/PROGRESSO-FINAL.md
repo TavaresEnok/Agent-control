@@ -504,3 +504,16 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:51 UTC — Revisão independente por modelo distinto de 86ec5e87 identificou erros estáticos de atribuição de campos, argumentos e callbacks na análise de dados pessoais. Aberta C9-R6. A arquitetura em homologação passou nos 20 testes com Hadolint fixado e as ferramentas locais habilitadas. As CLIs de documentação e conformidade passaram nos seis testes após a integração de bd0211ec.
 - 19/11/2026 05:52 UTC — QA contratual já compara as rotas ao OpenAPI. C2-CONTRATOS acrescenta a prova funcional com exemplos positivos declarados e interações Pact entre componentes locais. A bancada usa dados artificiais e registra status e estrutura da resposta.
 - 19/11/2026 05:53 UTC — Matriz consolidada com os resultados mais recentes de QA, arquitetura, dependências, banco, desempenho, documentação e conformidade. O registro distingue medições com ferramentas reais das confirmações com provedores sintéticos.
+- 19/11/2026 05:54 UTC — Revisor encerrou C-BASE-R10 em b01ca7b3 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:54 UTC — Revisão C-EXAME-ORIGEM-R3 iniciada por Sol high normal somente leitura em 15fa0960.
+- 19/11/2026 05:54 UTC — Trabalhador encerrou C6-R10 em 76917101 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:54 UTC — Trabalho C4-JAVA iniciado por Sol high normal em final-c4-java.
+- 19/11/2026 05:55 UTC — Revisor encerrou C-EXAME-ORIGEM-R3 em 15fa0960 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:55 UTC — Revisão C2-NAVEGADOR iniciada por Sol high normal somente leitura em 735da841.
+- 19/11/2026 05:56 UTC — Trabalhador encerrou C-EXAME-MEDICOES-R2 em c052f630 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:56 UTC — Trabalho C2-PROPRIEDADES-JS iniciado por Sol high normal em final-qa-propriedades-js.
+- 19/11/2026 06:00 UTC — Trabalhador encerrou C-REVERIFICAR-MODULOS em f08375b8 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:00 UTC — Trabalho C-REVERIFICAR-R4 iniciado por Sol high normal em final-recheck-modulos.
+- 19/11/2026 06:00 UTC — Revisor encerrou C2-NAVEGADOR em 735da841 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:00 UTC — Revisão C-PAINEL-R4 iniciada por Sol high normal somente leitura em b809469f.
+- 19/11/2026 06:01 UTC — C5 2e18a141: a imagem agora identifica por SHA-256 o SQL medido. Após corrigir uma variável duplicada no teste, 13/13 passaram com PostgreSQL, Squawk e Dexter. C6 049b33c9: 34/34 passaram com a nova interpretação estática e os controles. Ambas as imagens estão fixadas em homologação.
