@@ -208,9 +208,9 @@ test('C5 laboratório por digest prova a migração, restauração e os três de
     assert.equal(clean.findings.some(row => row.rule === rule), false, rule);
   }
   const query = 'banco/queries/latency.sql';
-  const digest = createHash('sha256').update(readFileSync(join(fixtures, 'defective', query))).digest('hex');
+  const queryDigest = createHash('sha256').update(readFileSync(join(fixtures, 'defective', query))).digest('hex');
   const slow = defective.findings.find(row => row.rule === 'BANCO-CONSULTA-LENTA' && row.file === query)!;
   assert.ok(defective.coverage.some(row => row.tool === 'pg_stat_statements' && row.status === 'ok'
-    && row.detail === `pg_stat_statements:query:${query}: linha ${slow.line}; ${slow.evidence} | SQL medido (sha256:${digest})`));
+    && row.detail === `pg_stat_statements:query:${query}: linha ${slow.line}; ${slow.evidence} | SQL medido (sha256:${queryDigest})`));
   assert.ok(defective.coverage.some(row => row.tool === 'dexter' && row.status === 'ok' && row.detail.includes('planos hipotéticos comparados')));
 });
