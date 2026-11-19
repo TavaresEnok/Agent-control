@@ -880,6 +880,12 @@ export async function runModuleCollectorContainer(input: {
         if (remaining < 1) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
         return remaining;
       };
+      // Stop a continuously noisy collector as soon as it crosses a stream limit.
+      // The final read below is authoritative even if this subscription ends early.
+      const logLimits = {maxStdoutBytes, maxStderrBytes: MAX_COLLECTOR_STDERR_BYTES, signal: input.signal};
+      const follow = await run([MODULE_RUNTIME_BIN, 'logs', '--follow', candidate],
+        {...logLimits, timeoutMs: remainingTime()});
+      if (follow.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       const waited = await run([MODULE_RUNTIME_BIN, 'wait', candidate],
         {timeoutMs: remainingTime(), maxStdoutBytes: 4096, signal: input.signal});
       const exitCode = waited.stdout.toString('utf8').trim();
@@ -890,7 +896,7 @@ export async function runModuleCollectorContainer(input: {
       // dropped anything, the previous file is full and necessarily exceeds
       // at least one stream limit, even if the surviving stdout parses as JSON.
       const logs = await run([MODULE_RUNTIME_BIN, 'logs', candidate],
-        {timeoutMs: remainingTime(), maxStdoutBytes, maxStderrBytes: MAX_COLLECTOR_STDERR_BYTES, signal: input.signal});
+        {...logLimits, timeoutMs: remainingTime()});
       remainingTime();
       if (logs.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       const output = parseModuleCollectorOutput(logs.stdout, {maxStdoutBytes, module: input.module});

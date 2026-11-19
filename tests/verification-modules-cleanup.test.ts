@@ -209,8 +209,8 @@ test('lease perdido mantém limpeza pendente e retry só remove o contêiner ide
         running = true;
         return reply(0, containerId);
       }
-      if (argv[1] === 'wait') {
-        assert.deepEqual(argv.slice(1), ['wait', containerId]);
+      if (argv[1] === 'logs') {
+        assert.deepEqual(argv.slice(1), ['logs', '--follow', containerId]);
         collecting.resolve();
         return new Promise((_, reject) => options.signal!.addEventListener('abort',
           () => reject(new Refusal('VERIFY_TOOLS_FAILED', 503)), {once: true}));
@@ -285,7 +285,7 @@ test('a aquisição aguarda a resposta de partida e prossegue durante a coleta',
         await ack.promise;
         return reply(0, containerId);
       }
-      if (argv[1] === 'wait') {
+      if (argv[1] === 'logs' && argv[2] === '--follow') {
         collecting.resolve();
         return new Promise((_, reject) => options.signal!.addEventListener('abort',
           () => reject(new Refusal('VERIFY_TOOLS_FAILED', 503)), {once: true}));
@@ -388,6 +388,7 @@ test('logs completos e código de saída só são lidos após o término observa
       }
       if (argv[1] === 'start') return reply(0, containerId);
       if (argv[1] === 'logs') {
+        if (argv[2] === '--follow') return reply(0, '');
         readLogs = true;
         assert.deepEqual(argv.slice(1), ['logs', containerId]);
         assert.ok(options.timeoutMs < waitTimeout);
