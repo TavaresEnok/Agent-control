@@ -1225,3 +1225,9 @@ PAUSADO-COTA
 - 19/11/2026 22:08 UTC — C-CAMINHOS-VIVOS-R4 encerrado com código 0.
 - 19/11/2026 22:08 UTC — Imagem de prontidao construída e arquivada por digest em 6bed71be.
 - 19/11/2026 22:08 UTC — Correção caminhos-vivos recebida em 35da9db4. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:08 UTC — prontidao em 6bed71be publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 184, 'failed': 0, 'skipped': 7}; código do produto OK.
+- 19/11/2026 22:09 UTC — arquitetura em 35da9db4 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 508, 'failed': 0, 'skipped': 1}; código do produto OK.
+- 19/11/2026 22:10 UTC — C-ACEITE-PRONTIDAO-VIVA-R5 encerrado com código 0.
+- 19/11/2026 22:10 UTC — revisor-C-ACEITE-CAMINHOS-VIVOS-R4 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:11 UTC — C-CONFORMIDADE-VIVA-R3 encerrado com código 0.
+- 19/11/2026 22:11 UTC — Distingue comandos de consulta e argumentos operacionais na prontidão. Ordem C-PRONTIDAO-VIVA-R6 em worktree separado conforme 43f1c664.
