@@ -296,3 +296,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:55 UTC — Revisor encerrou C-EXAME-R3 em 9808488b (código 0). Gerente confere a entrega.
 - 19/11/2026 03:55 UTC — Revisão C-PAINEL iniciada por Sol high normal somente leitura em a1500106.
 - 19/11/2026 03:56 UTC — A revisão de QA ca4b1171 encontrou falso vínculo em nomes com $, omissões de namespace e ambiguidade entre nome e valor literal. C2-R9 em laboratório. A revisão de exame 9808488b mostrou que citação genérica ainda pode validar hipóteses diferentes; C-EXAME-R4 cobre o vínculo entre critério e prova, a origem das rotas e o limite de linha. Prontidão 8ff87772 passou nos 29 testes e laboratórios.
+- 19/11/2026 03:57 UTC — Suíte oficial de c2-exame-r3 em a5ef0b22: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 03:57 UTC — Revisor encerrou C-PAINEL em a1500106 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:57 UTC — Revisão C8-R5 iniciada por Sol high normal somente leitura em fafc14d3.
+- 19/11/2026 03:58 UTC — QA a7808ccf passou 35/35, incluindo os dois nomes ESM distintos, função por namespace e recusa de argumento de mensagem como prova. A primeira asserção do laboratório comparava o caminho impresso sem sua codificação percentual e foi corrigida. A suíte de a5ef0b22 passou em 253 arquivos. A CLI da nova imagem de arquitetura passou 6/6.
