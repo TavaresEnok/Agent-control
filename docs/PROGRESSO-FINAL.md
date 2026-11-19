@@ -785,3 +785,8 @@ PAUSADO-COTA
 - 19/11/2026 17:55 UTC — C2-MATRIZ-PAPEIS encerrado com código 0.
 - 19/11/2026 17:56 UTC — No laboratório da QA anterior, 120/124 passaram e duas fixtures de Go omitiram a localização exigida pelo coletor. Os dois testes corrigidos usam os pontos reais do arquivo sintético e passaram. Dois testes opcionais ficaram sem ferramenta nessa execução; a prova física do PostgreSQL passou à parte. O reparo de escopo SQL cd21c54e entrou no candidato de entrega.
 - 19/11/2026 17:57 UTC — O candidato de entrega QA 4561d430 reúne todas as correções de banco, Go, matriz e prova de revisão disponíveis. Iniciada a construção da imagem e o aceite oficial do ramo do produto. O revisor de conformidade encontrou quatro casos de efeitos de funções e reatribuição ambígua; a nova ordem pede cobertura parcial onde a origem não puder ser demonstrada.
+- 19/11/2026 17:57 UTC — trabalho-C9-ESCOPO-EFEITOS iniciado em final-c9 por Sol high normal.
+- 19/11/2026 17:58 UTC — C8-VINCULO-FONTE encerrado com código 0.
+- 19/11/2026 17:58 UTC — revisor-C6-VALIDACAO-COMPOSE iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:59 UTC — Aceite de qa em 0d8198b6 iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
+- 19/11/2026 17:59 UTC — A prova negativa com o toolchain oficial Go 1.22.2 conferiu a versão e a recusa do adaptador. Em C8, o parecer de 3ff8610d identificou divergência entre a posição da assinatura e a definição e ambiguidade em comentários. A correção preserva o aviso quando o TypeDoc não permite localizar a origem.
