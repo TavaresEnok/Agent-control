@@ -1,0 +1,8 @@
+/var/log/app/*.log {
+  daily
+  rotate 14
+  maxsize 50M
+  compress
+  missingok
+  notifempty
+}

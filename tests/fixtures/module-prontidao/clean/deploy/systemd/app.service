@@ -1,0 +1,13 @@
+[Unit]
+Description=App limpo para controle de prontidao
+OnFailure=app-alert@%n.service
+
+[Service]
+Type=simple
+Restart=on-failure
+MemoryMax=512M
+EnvironmentFile=/etc/app/app.env
+ExecStart=/usr/bin/node /opt/app/src/server.mjs
+
+[Install]
+WantedBy=multi-user.target
