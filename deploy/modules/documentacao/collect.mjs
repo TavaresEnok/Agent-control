@@ -826,6 +826,19 @@ function leadingJsdocTexts(ts, text, position) {
     .map(({pos, end}) => text.slice(pos, end - 2));
 }
 
+function entryPointJsdocTexts(ts, source) {
+  const comments = leadingJsdocTexts(ts, source.text, source.pos);
+  // In a script, TypeDoc can use the ambient module's symbol as the entry point.
+  if (!ts.isExternalModule(source)) {
+    for (const statement of source.statements) {
+      if (ts.isModuleDeclaration(statement) && ts.isStringLiteral(statement.name)) {
+        comments.push(...leadingJsdocTexts(ts, source.text, statement.pos));
+      }
+    }
+  }
+  return comments.filter(doc => /@(?:module|packageDocumentation)(?=[\s}]|$)/.test(doc));
+}
+
 function typedocDeclarationSource(node, repoRoot, repoFiles) {
   if (node.sources?.length !== 1) return null;
   const {fileName, line, character} = node.sources[0];
@@ -922,11 +935,9 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return pkg;
   };
 
-  const findDeclaration = (sym, signature) => {
-    const ts = loadTypeScript(toolsRoot);
-    if (!ts || !Number.isInteger(sym.character) || sym.character < 0) return null;
-    if (!syntaxByFile.has(sym.file)) {
-      const source = ts.createSourceFile(sym.file, getFileText(sym.file), ts.ScriptTarget.Latest, true);
+  const getFileSyntax = (ts, file) => {
+    if (!syntaxByFile.has(file)) {
+      const source = ts.createSourceFile(file, getFileText(file), ts.ScriptTarget.Latest, true);
       const lineAt = offset => source.getLineAndCharacterOfPosition(offset).line + 1;
       const declarations = new Map();
       const visit = node => {
@@ -940,9 +951,14 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
         ts.forEachChild(node, visit);
       };
       visit(source);
-      syntaxByFile.set(sym.file, {source, lineAt, declarations});
+      syntaxByFile.set(file, {source, lineAt, declarations});
     }
-    const {source, lineAt, declarations} = syntaxByFile.get(sym.file);
+    return syntaxByFile.get(file);
+  };
+  const findDeclaration = (sym, signature) => {
+    const ts = loadTypeScript(toolsRoot);
+    if (!ts || !Number.isInteger(sym.character) || sym.character < 0) return null;
+    const {source, lineAt, declarations} = getFileSyntax(ts, sym.file);
     const matching = (declarations.get(`${sym.line}:${sym.character}`) ?? [])
       .filter(node => !signature || ts.isFunctionLike(node));
     if (matching.length !== 1) return null;
@@ -992,8 +1008,11 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const file = filesByReflection.get(ancestor.id);
       if (!file || !isReportablePath(file) || !JS_TS_EXTS.has(extname(file).toLowerCase())
         || (repoFiles.size && !repoFiles.has(file))) return null;
-      const text = getFileText(file);
-      return text ? leadingJsdocTexts(ts, text, 0).filter(doc => /@(?:module|packageDocumentation)(?=[\s}]|$)/.test(doc)) : null;
+      const syntax = getFileSyntax(ts, file);
+      const {source} = syntax;
+      if (!source.text || source.parseDiagnostics.length) return null;
+      const comments = syntax.entryPointComments ??= entryPointJsdocTexts(ts, source);
+      return ancestor.comment && !comments.length ? null : comments;
     }
     // With multiple entry points, the project holds modules and has no file comment of its own.
     if (ancestor.kind === 1) return ancestor.comment ? null : [];
