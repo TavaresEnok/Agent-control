@@ -638,3 +638,8 @@ PAUSADO-COTA
 - 19/11/2026 17:00 UTC — Homologação de a correção do escopo Python e Go preparada no worktree final-integracao-c2 em a46061b8.
 - 19/11/2026 17:00 UTC — Homologação de a atribuição de falhas das migrações preparada no worktree final-aceite-c5-r7 em 840a02a6.
 - 19/11/2026 17:00 UTC — Homologação de a reconciliação do desempenho preparada no worktree final-integracao-c7 em beca2aca.
+- 19/11/2026 17:00 UTC — C2-MATRIZ-R12 encerrado com código 0.
+- 19/11/2026 17:00 UTC — revisor-C4-REGISTRO-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:01 UTC — C4-REGISTRO-R8 encerrado com código 0.
+- 19/11/2026 17:01 UTC — revisor-C9-DESTINOS-R6 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:01 UTC — As entregas de QA poliglota 1bbf6c41, arquitetura 56177e90, banco fbe3acb8, desempenho 956c2314 e documentação 782385cd entraram na fila de validação por digest. A revisão da matriz pediu ajustes para não dar prova a uma função homônima ou declarar lacuna numa guarda manual.
