@@ -22,7 +22,7 @@
     }
   ],
   "requirementsLockFile": "requirements.lock",
-  "requirementsLockSha256": "5e8bd0704c23333e8bb045b6c98aa8ffcb09a9f470c3798f14656d18b2bd7c0c",
+  "requirementsLockSha256": "5c2773c433e56541c9a79ca7986deea7975ed1bdf9c4ff5f66a306d6495f76a2",
   "tools": [
     {
       "name": "scancode-toolkit",

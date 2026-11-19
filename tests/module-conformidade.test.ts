@@ -37,6 +37,12 @@ test('C9 fixa a base, os wheels e o lock que a imagem instala', () => {
   }
 });
 
+test('C9 mantém a versão de pluggy compatível com os hooks de classe do plugincode', () => {
+  const requirements = readFileSync(join(moduleDir, 'requirements.lock'), 'utf8');
+  assert.match(requirements, /^plugincode==32\.0\.0 --hash=sha256:344bb9943fcf4d6d05669c3c61efd4093fffa6a290fba7c5c11db15f2b51305e$/m);
+  assert.match(requirements, /^pluggy==1\.6\.0 --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746$/m);
+});
+
 test('C9 valida dígitos de CPF e indica destino local sem copiar a linha ou os valores', () => {
   const result = JSON.parse(python(String.raw`
 from pathlib import Path
