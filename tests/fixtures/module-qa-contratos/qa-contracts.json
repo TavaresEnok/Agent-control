@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "openapi": {
+    "openapi.json": "provider.mjs"
+  },
+  "pact": {
+    "pacts/catalogo.pact.json": "provider.mjs"
+  }
+}

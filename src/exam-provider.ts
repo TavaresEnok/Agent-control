@@ -177,6 +177,7 @@ export async function reserveSpecialistExamSeat(input: {
   authority: Authority;
   intentId: string;
   purpose: 'create' | 'examiner' | 'reviewer';
+  allowedAccounts?: readonly string[];
   avoidProfileId?: string;
   avoidProfileIds?: readonly string[];
   avoidAccountId?: string;
@@ -220,6 +221,7 @@ export async function reserveSpecialistExamSeat(input: {
         contextId: input.authority.contextId,
         role: 'specialist',
         provider: 'claude',
+        ...(input.allowedAccounts ? {allowedAccounts: [...input.allowedAccounts]} : {}),
         examReviewer: {
           preparedProfiles: orderedReviewers,
           ...(avoidExaminerAccounts.length ? {avoidExaminerAccounts} : {}),
@@ -241,7 +243,8 @@ export async function reserveSpecialistExamSeat(input: {
     intentId: input.intentId,
     contextId: input.authority.contextId,
     role: 'specialist',
-    ...(plan.hasClaude ? {provider: 'claude'} : {}),
+    ...(plan.hasClaude || input.allowedAccounts ? {provider: 'claude'} : {}),
+    ...(input.allowedAccounts ? {allowedAccounts: [...input.allowedAccounts]} : {}),
     ...(preferredProfileId ? {preferredProfileId} : {}),
   }, input.authority);
   return acceptReservedSeat({reserved, purpose: input.purpose, releaseGrant: input.releaseGrant});

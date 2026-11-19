@@ -174,7 +174,7 @@ test('segurança continua isolada; programador, qa, judge, travado e avaliador c
 });
 
 /** Whether the launch path calls stageDesignCapturesForJob for this job. */
-function launchStagesCaptures(personal: boolean, workflow: unknown, role: unknown): boolean {
+function launchStagesCaptures(personal: boolean, workflow: unknown, role: unknown, repository = true): boolean {
   const marker = 'await stageDesignCapturesForJob(repository,[p.planning,p.work]);';
   const idx = supervisorSource.indexOf(marker);
   assert.ok(idx >= 0);
@@ -183,10 +183,11 @@ function launchStagesCaptures(personal: boolean, workflow: unknown, role: unknow
   if (/^[ \t]*await stageDesignCapturesForJob\(/.test(line)) return true;
   const gated = /^[ \t]*if\((.*)\)await stageDesignCapturesForJob\(repository,\[p\.planning,p\.work\]\);$/.exec(line);
   assert.ok(gated, line);
-  return decideStage(gated[1]!.replace(/\s+/g, ''), personal, workflow, role);
+  return decideStage(gated[1]!.replace(/\s+/g, ''), personal, workflow, role, repository);
 }
 
-function decideStage(flag: string, personal: boolean, workflow: unknown, role: unknown): boolean {
+function decideStage(flag: string, personal: boolean, workflow: unknown, role: unknown, repository: boolean): boolean {
+  if (flag.startsWith('repository&&')) return repository && decideStage(flag.slice('repository&&'.length), personal, workflow, role, repository);
   const designExam = Boolean(personal) && supervisor.readonlyDesignExam(workflow, role);
   if (flag === 'designExam' || flag === 'personal&&readonlyDesignExam(examWorkflow,input.role)') return designExam;
   if (flag === 'stageDesignExamCaptures(personal,examWorkflow,input.role)') {
@@ -197,12 +198,13 @@ function decideStage(flag: string, personal: boolean, workflow: unknown, role: u
   if (flag === 'stageCaptures') {
     const assign = /const stageCaptures=([^;]+);/.exec(supervisorSource);
     assert.ok(assign);
-    return decideStage(assign[1]!.replace(/\s+/g, ''), personal, workflow, role);
+    return decideStage(assign[1]!.replace(/\s+/g, ''), personal, workflow, role, repository);
   }
   throw new Error('STAGE_EXPRESSION ' + flag);
 }
 
 test('capturas só entram no exame de design pessoal', () => {
+  assert.equal(launchStagesCaptures(true, 'design-readonly-v1', 'specialist', false), false);
   assert.equal(launchStagesCaptures(true, 'design-readonly-v1', 'specialist'), true);
   assert.equal(launchStagesCaptures(true, 'design-readonly-v1', 'reviewer'), true);
   for (const role of ['programmer', 'qa', 'judge'] as const) {

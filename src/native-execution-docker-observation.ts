@@ -10,7 +10,7 @@ const Container=z.object({Id,Image:z.string(),Config:z.object({User:z.string(),L
  Devices:z.array(z.unknown()).nullable(),
  PidsLimit:z.number().nullable(),Memory:z.number(),NanoCpus:z.number(),PortBindings:z.record(z.string(),z.unknown()).nullable()}),
  Mounts:z.array(z.object({Type:z.string(),Source:z.string(),Destination:z.string(),RW:z.boolean()})),
- NetworkSettings:z.object({Networks:z.record(z.string(),z.object({NetworkID:Id,IPAddress:z.string()}))})});
+ NetworkSettings:z.object({Networks:z.record(z.string(),z.object({NetworkID:z.union([Id,z.literal('')]),IPAddress:z.string()}))})});
 const Network=z.object({Id,Internal:z.boolean(),Containers:z.record(z.string(),z.object({IPv4Address:z.string()})).nullable()});
 type Container=z.infer<typeof Container>;
 const Rules=z.object({workerEntrypoint:z.array(z.string()).min(1),toolsEntrypoint:z.array(z.string()).min(1),
@@ -60,12 +60,15 @@ export async function inspectNativeExecutionPair(read:(path:string)=>Promise<unk
    !['','private'].includes(h.PidMode)||!['','private'].includes(h.IpcMode)||h.SecurityOpt?.some(s=>s.startsWith('seccomp=unconfined')||s.startsWith('apparmor=unconfined'))||
    h.NetworkMode==='host'||h.NetworkMode.startsWith('container:'))throw new Refusal('NATIVE_EXECUTION_INSPECTION_MISMATCH');
  }
+ const moduleExam=z.object({moduleExam:z.literal(true).optional()}).parse(expected).moduleExam;
+ if(moduleExam&&(worker.HostConfig.NetworkMode!=='none'||Object.entries(worker.NetworkSettings.Networks).some(([name,value])=>name!=='none'||value.IPAddress!=='')))
+  throw new Refusal('NATIVE_EXECUTION_INSPECTION_MISMATCH');
  const endpoints=Object.entries(network.Containers??{}).map(([containerId,value])=>({containerId,address:value.IPv4Address.split('/')[0]}));
- for(const c of [worker,tools]){
+ for(const c of moduleExam?[tools]:[worker,tools]){
   const address=Object.values(c.NetworkSettings.Networks).find(x=>x.NetworkID===nId)?.IPAddress;
   if(!address||endpoints.find(x=>x.containerId===c.Id)?.address!==address)throw new Refusal('NATIVE_EXECUTION_INSPECTION_MISMATCH');
  }
- const facts={worker:convert(worker),tools:convert(tools),network:{id:network.Id,internal:network.Internal,endpoints}};
+ const facts={worker:moduleExam?{...convert(worker),networks:[]}:convert(worker),tools:convert(tools),network:{id:network.Id,internal:network.Internal,endpoints}};
  assertNativeExecutionIsolation(facts,expected);
  return facts;
 }

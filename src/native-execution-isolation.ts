@@ -10,13 +10,13 @@ const Mount=z.object({source:z.string().min(1),destination:z.string().startsWith
 const Container=z.object({id:Id,image:Image,user:z.string().regex(/^[1-9][0-9]*:[1-9][0-9]*$/),running:z.boolean(),
  privileged:z.boolean(),readOnlyRoot:z.boolean(),capDropAll:z.boolean(),noNewPrivileges:z.boolean(),
  hostNetwork:z.boolean(),hostPid:z.boolean(),hostIpc:z.boolean(),mounts:z.array(Mount).max(20),
- networks:z.array(z.string().min(1)).min(1).max(2),labels:z.record(z.string(),z.string())}).strict();
+ networks:z.array(z.string().min(1)).max(2),labels:z.record(z.string(),z.string())}).strict();
 const Facts=z.object({worker:Container,tools:Container,network:z.object({id:Id,internal:z.boolean(),
- endpoints:z.array(z.object({containerId:Id,address:z.string()}).strict()).length(2)}).strict()}).strict();
+ endpoints:z.array(z.object({containerId:Id,address:z.string()}).strict()).min(1).max(2)}).strict()}).strict();
 const Expected=z.object({jobId:z.uuid(),launchDigest:z.string().regex(/^[a-f0-9]{64}$/),workerImage:Image,toolsImage:Image,
  workerUser:z.string().regex(/^[1-9][0-9]*:[1-9][0-9]*$/),toolsUser:z.string().regex(/^[1-9][0-9]*:[1-9][0-9]*$/),
  providerNetwork:z.string().min(1),networkId:Id,toolsAddress:z.string().refine(isPrivateToolAddress),
- workerMounts:z.array(Mount).min(1).max(20),toolsMounts:z.array(Mount).min(1).max(20),role:z.enum(['programmer','qa','reviewer','judge','specialist']),phase:z.enum(['created','gated-running']).default('created')}).strict();
+ workerMounts:z.array(Mount).min(1).max(20),toolsMounts:z.array(Mount).max(20),moduleExam:z.literal(true).optional(),role:z.enum(['programmer','qa','reviewer','judge','specialist']),phase:z.enum(['created','gated-running']).default('created')}).strict();
 /** Docker proves the process never started only with an explicit created state.
  * A missing pid or start time is not proof and must not release a grant. */
 export function nativeContainerNeverStarted(state:{Status?:unknown;Running?:unknown;Pid?:unknown;StartedAt?:unknown}):boolean{
@@ -41,15 +41,16 @@ export function assertNativeExecutionIsolation(rawFacts:unknown,rawExpected:unkn
   if(c.privileged||!c.readOnlyRoot||!c.capDropAll||!c.noNewPrivileges||c.hostNetwork||c.hostPid||c.hostIpc||
     c.labels['agent-control.job']!==e.jobId||c.labels['agent-control.launch']!==e.launchDigest)refuse();
  }
- if(!sameStrings(w.networks,[e.networkId,e.providerNetwork])||!sameStrings(t.networks,[e.networkId])||
+ if(!sameStrings(w.networks,e.moduleExam?[]:[e.networkId,e.providerNetwork])||!sameStrings(t.networks,[e.networkId])||
   !mountsEqual(w.mounts,e.workerMounts)||!mountsEqual(t.mounts,e.toolsMounts))refuse();
  const endpoints=f.network.endpoints;
- if(!sameStrings(endpoints.map(x=>x.containerId),[w.id,t.id])||
+ if(!sameStrings(endpoints.map(x=>x.containerId),e.moduleExam?[t.id]:[w.id,t.id])||
   endpoints.find(x=>x.containerId===t.id)?.address!==e.toolsAddress||
-  endpoints.some(x=>!isPrivateToolAddress(x.address))||endpoints[0]!.address===endpoints[1]!.address)refuse();
+  endpoints.some(x=>!isPrivateToolAddress(x.address))||(endpoints.length===2&&endpoints[0]!.address===endpoints[1]!.address))refuse();
  // Worktree mount is mandatory and physically read-only for independent roles.
  const work=t.mounts.find(m=>m.destination==='/work');
- if(!work||(e.role!=='programmer'&&t.mounts.some(m=>m.writable&&(m.destination==='/work'||m.destination.startsWith('/work/')))))refuse();
+ if(e.moduleExam&&(e.role!=='specialist'||t.mounts.length||w.mounts.some(m=>m.destination==='/work'||m.destination.startsWith('/work/'))))refuse();
+ if((!e.moduleExam&&!work)||(e.role!=='programmer'&&t.mounts.some(m=>m.writable&&(m.destination==='/work'||m.destination.startsWith('/work/')))))refuse();
  // A tools container cannot receive the worker's provider home or its input,
  // output, credential or signing-key mounts, even under an unexpected path.
  const overlap=(a:string,b:string)=>a===b||a.startsWith(b+sep)||b.startsWith(a+sep);

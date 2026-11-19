@@ -34,7 +34,14 @@
     "personal:maintenance": "node scripts/personal-maintenance.mjs",
     "personal:restore-proof": "node scripts/personal-restore-proof.mjs",
     "personal:design": "node scripts/personal-design.mjs",
-    "personal:verify": "node scripts/personal-verify.mjs"
+    "personal:verify": "node scripts/personal-verify.mjs",
+    "personal:arquitetura": "node scripts/personal-arquitetura.mjs",
+    "personal:dependencias": "node scripts/personal-dependencias.mjs",
+    "personal:banco": "node scripts/personal-banco.mjs",
+    "personal:prontidao": "node scripts/personal-prontidao.mjs",
+    "personal:desempenho": "node scripts/personal-desempenho.mjs",
+    "personal:documentacao": "node scripts/personal-documentacao.mjs",
+    "personal:conformidade": "node scripts/personal-conformidade.mjs"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",
