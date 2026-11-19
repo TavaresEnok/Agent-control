@@ -40,6 +40,9 @@ export function verifyQaLockfiles(baseDir = dirname(fileURLToPath(import.meta.ur
   const declaredDeps = pkg.dependencies ?? {};
   const pinnedDeps = pin.dependencies ?? {};
   const lockPackages = lock.packages ?? {};
+  if (!pinnedDeps['playwright-core'] || !pin.baseImage.tag?.startsWith(`v${pinnedDeps['playwright-core'].version}-`)) {
+    throw new Error('QA_PLAYWRIGHT_IMAGE_VERSION_MISMATCH');
+  }
 
   for (const [name, meta] of Object.entries(pinnedDeps)) {
     if (declaredDeps[name] !== meta.version) {

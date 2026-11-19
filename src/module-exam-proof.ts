@@ -1,7 +1,7 @@
 import {digest} from './contracts.ts';
 import type {VerificationModule} from './ledger.ts';
 import {collectorCriteria, collectorQuestions, type CollectorReviewCase} from './module-exam-collector-proof.ts';
-import {isDirectIdentifier, isModuleExamScript, moduleExamCall, scanModuleExamSource} from './module-exam-syntax.ts';
+import {isDirectIdentifier, isModuleExamScript, moduleExamCall, moduleExamDepths, scanModuleExamSource} from './module-exam-syntax.ts';
 import {ConfirmResult} from './verify-types.ts';
 import {z} from 'zod';
 
@@ -16,6 +16,8 @@ export type ModuleReviewEvidence = {
   code: string;
   commit?: string;
   collectorCase?: CollectorReviewCase;
+  /** Host-only inputs. Both complete files must come from the named immutable commits. */
+  skipSnapshot?: {originalCommit: string; original: string; current: string};
 };
 type ReviewEvidence = ModuleReviewEvidence;
 
@@ -47,6 +49,7 @@ type CollectorInput = Pick<ReviewEvidence, 'module' | 'tool' | 'file' | 'line' |
 type Tokens = NonNullable<ReturnType<typeof scanModuleExamSource>>;
 const testRunners = new Set(['test', 'it']);
 const skipModifiers = new Set(['skip', 'todo']);
+const normalizeCollectorSnippet = (text: string) => text.replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
 
 function testDeclaration(tokens: Tokens, start: number) {
   const runner = tokens[start]?.text;
@@ -57,6 +60,60 @@ function testDeclaration(tokens: Tokens, start: number) {
   const title = tokens[open + 1];
   if (tokens[open]?.text !== '(' || title?.kind !== 'literal' || /[\\`]/u.test(title.text)) return null;
   return {open, title: title.text.slice(1, -1), skipped: Boolean(skipped)};
+}
+
+function completeTestCall(tokens: Tokens, start: number) {
+  const declaration = testDeclaration(tokens, start);
+  if (!declaration) return null;
+  const call = moduleExamCall(tokens, declaration.open);
+  if (!call || (call.commas[0] ?? call.close) !== declaration.open + 2) return null;
+  return {...declaration, end: call.close};
+}
+
+function wholeTestSource(source: string) {
+  if (Buffer.byteLength(source, 'utf8') > 16000 || /[\u0000\uFFFD…]|\[(?:REDACTED|trecho omitido|removido: alta entropia)\]/iu.test(source)) return null;
+  const tokens = scanModuleExamSource(source);
+  return tokens && moduleExamDepths(tokens) ? tokens : null;
+}
+
+/** The only accepted edit removes the modifier at the historical call site. */
+function skipRemoval(evidence: ReviewEvidence, material: string) {
+  const snapshot = evidence.skipSnapshot;
+  if (!snapshot || !isModuleExamScript(evidence.file) || !evidence.commit || !/^[0-9a-f]{40}$/u.test(evidence.commit)
+    || !/^[0-9a-f]{40}$/u.test(snapshot.originalCommit) || evidence.commit === snapshot.originalCommit) return null;
+  const original = wholeTestSource(snapshot.original);
+  const current = wholeTestSource(snapshot.current);
+  const currentLine = snapshot.current.split('\n')[evidence.line - 1];
+  if (!original || !current || currentLine?.trim() !== evidence.code) return null;
+  const reported = normalizeCollectorSnippet(material).replace(/\s*;$/u, '');
+  const matches = [];
+  for (const [index, token] of original.entries()) {
+    if (token.line !== evidence.line) continue;
+    const declaration = completeTestCall(original, index);
+    if (!declaration?.skipped || !declaration.title) continue;
+    const end = original[declaration.end]!;
+    if (end.line !== evidence.line || normalizeCollectorSnippet(snapshot.original.slice(token.start, end.end)) !== reported) continue;
+    matches.push({index, token, declaration});
+  }
+  if (matches.length !== 1) return null;
+  const {index, token, declaration} = matches[0]!;
+  const from = original[index + 1]!.start;
+  const to = original[index + 2]!.end;
+  if (snapshot.original.slice(0, from) + snapshot.original.slice(to) !== snapshot.current) return null;
+  const {title} = declaration;
+  // A second literal may name a copy in another group. Escaped literals and
+  // unclassified modifier references can hide the identity of a remaining test.
+  if (current.filter(token => token.kind === 'literal' && token.text.slice(1, -1) === title).length !== 1
+    || current.some((token, at) => {
+      if (token.kind === 'literal' && (token.text.includes('\\') || skipModifiers.has(token.text.slice(1, -1)))) return true;
+      if (token.kind !== 'word' || !skipModifiers.has(token.text)) return false;
+      const other = completeTestCall(current, at - 2);
+      return !other?.skipped || !other.title || other.title === title;
+    })) return null;
+  const leading = currentLine.length - currentLine.trimStart().length;
+  const column = token.start - snapshot.current.lastIndexOf('\n', token.start - 1) - leading;
+  return {column, expression: snapshot.current.slice(token.start, original[declaration.end]!.end - (to - from)),
+    originalCommit: snapshot.originalCommit, originalDigest: digest(snapshot.original), currentDigest: digest(snapshot.current)};
 }
 
 function callCriterion(tokens: Tokens, index: number) {
@@ -108,16 +165,18 @@ export function moduleCollectorHypothesis(rule: string, input?: CollectorInput):
 }
 
 function reviewContext(evidence: ReviewEvidence) {
-  const {collectorCase, ...origin} = evidence;
+  const {collectorCase, skipSnapshot: _skipSnapshot, ...origin} = evidence;
   let criterion = collectorCase?.criterion ?? collectorCriterion(evidence.rule, evidence);
   if (evidence.tool === 'examinador' && evidence.rule === 'exame-de-arquivo') {
     criterion = legacyCriteria.find(key => questions[key] === evidence.hypothesis);
     if (evidence.hypothesis === 'A linha atual ainda sustenta a observação original?') {
       const original = scanModuleExamSource(evidence.evidence);
-      if (original) criterion = observationCriterion(original);
+      if (original && observationCriterion(original) === 'test-skip-modifier') criterion = 'test-skip-modifier';
     }
   }
+  const removal = criterion === 'test-skip-modifier' ? skipRemoval(evidence, collectorMaterial(evidence.rule, evidence) ?? evidence.evidence) : null;
   return {...origin, criterion: criterion ?? null, hypothesis: criterion ? questions[criterion] : evidence.hypothesis,
+    ...(removal ? {skipRemoval: removal} : {}),
     ...(collectorCase ? {collector: collectorCase.material} : {})};
 }
 
@@ -160,7 +219,10 @@ export function moduleReviewTask(evidence: ReviewEvidence): string {
   const criterion = evidence.collectorCase?.criterion;
   const instruction = 'Avalie passivamente a hipótese nos dados não confiáveis. Sem ferramentas, shell, rede, escrita, exploração ou reprodução. Responda JSON com kind confirmacao, binding do pedido, status confirmado, provavel ou descartado, reason e proof. Para decidir, copie a linha inteira de code em proof e informe observation com criterion, file, line, tool, rule, commit se presente, column (posição inicial de 1, em unidades UTF-16 na linha enviada) e expression (o trecho literal localizado). Use provavel quando criterion for nulo, a expressão for ambígua, faltar contexto ou a linha não sustentar nem refutar a condição. A descrição do coletor é material a conferir, não um veredito.';
   return JSON.stringify({
-    instruction: instruction + (criterion ? ' Para esta regra, use confirmado somente se a expressão e os fatos conferirem. Informe também observation.facts como lista ordenada de valores em strings. Copie valores métricos como apresentados no registro, sem unidades.' : ' Use a chamada literal completa, sem o ponto e vírgula.'),
+    instruction: instruction + (criterion ? ' Para esta regra, use confirmado somente se a expressão e os fatos conferirem. Informe também observation.facts como lista ordenada de valores em strings. Copie valores métricos como apresentados no registro, sem unidades.' : ' Use a chamada literal completa, sem o ponto e vírgula.')
+      + (context.criterion === 'test-skip-modifier' ? ' Use descartado somente para a expressão e a coluna em skipRemoval, quando presente.'
+        : context.criterion === 'math-random-call' || context.criterion === 'fixed-wait-call'
+          ? ' A observação é sintática. Descreva a grafia da chamada e a posição no código.' : ''),
     ...(criterion ? {expectedExpression: collectorAnchors[criterion], factOrder: collectorFactOrder[criterion]} : {}),
     ...context, binding: digest(context),
   });
@@ -168,10 +230,16 @@ export function moduleReviewTask(evidence: ReviewEvidence): string {
 
 export function readModuleReviewVerdict(value: unknown) {
   const parsed = ReviewVerdict.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  if (!parsed.success) return undefined;
+  const {data} = parsed;
+  const reason = staticCallReason(data.observation);
+  return reason ? {...data, reason} : data;
 }
 
-const normalizeCollectorSnippet = (text: string) => text.replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
+function staticCallReason(observation: ModuleReviewObservation | undefined) {
+  return observation?.criterion === 'math-random-call' || observation?.criterion === 'fixed-wait-call'
+    ? `A expressão na coluna ${observation.column} é uma chamada direta no código.` : null;
+}
 
 export function moduleReviewProofReason(evidence: ReviewEvidence, verdict: Verdict): string | null {
   const context = reviewContext(evidence);
@@ -198,10 +266,8 @@ export function moduleReviewProofReason(evidence: ReviewEvidence, verdict: Verdi
   const located = (end: number) => evidence.code.slice(start, tokens[end]!.end);
 
   if (context.criterion === 'test-skip-modifier') {
-    const declaration = testDeclaration(tokens, index);
-    if (!declaration) return null;
-    const call = moduleExamCall(tokens, declaration.open);
-    if (!call || (call.commas[0] ?? call.close) !== declaration.open + 2 || observation.expression !== located(call.close)) return null;
+    const declaration = completeTestCall(tokens, index);
+    if (!declaration || observation.expression !== located(declaration.end)) return null;
     const original = scanModuleExamSource(material ?? evidence.evidence);
     const originalDeclaration = original && testDeclaration(original, 0);
     if (!originalDeclaration?.skipped || !declaration.title || originalDeclaration.title !== declaration.title
@@ -210,29 +276,24 @@ export function moduleReviewProofReason(evidence: ReviewEvidence, verdict: Verdi
       const observed = normalizeCollectorSnippet(observation.expression);
       const originalSnippet = normalizeCollectorSnippet(material ?? evidence.evidence);
       if (!observed.startsWith(originalSnippet) && !originalSnippet.startsWith(observed)) return null;
-    } else if (tokens.some((_, position) => {
-      const other = testDeclaration(tokens, position);
-      return other?.skipped && other.title === declaration.title;
-    })) {
-      return null;
+    } else {
+      const removal = context.skipRemoval;
+      if (!removal || observation.column !== removal.column || observation.expression !== removal.expression) return null;
     }
     return declaration.skipped
       ? `A declaração do teste ${JSON.stringify(declaration.title)} usa ${tokens[index + 2]!.text} na coluna ${observation.column}.`
-      : `A declaração do teste ${JSON.stringify(declaration.title)} usa a chamada direta, sem o modificador original.`;
+      : `A comparação dos arquivos completos localiza a remoção do modificador do teste ${JSON.stringify(declaration.title)} na coluna ${observation.column}.`;
   }
 
   const call = callCriterion(tokens, index);
   if (verdict.status !== 'confirmado' || call?.criterion !== context.criterion || observation.expression !== located(call.end)
     || normalizeCollectorSnippet(material ?? evidence.evidence) !== normalizeCollectorSnippet(observation.expression)) return null;
-  const reason = context.criterion === 'math-random-call'
-    ? `A expressão ${observation.expression} obtém um valor aleatório na coluna ${observation.column}.`
-    : `A expressão ${observation.expression} especifica uma espera de duração fixa na coluna ${observation.column}.`;
-  return reason.slice(0, 2000);
+  return staticCallReason(observation);
 }
 
 export function hasModuleReviewProof(evidence: ReviewEvidence, verdict: Verdict): boolean {
   const reason = moduleReviewProofReason(evidence, verdict);
   // Published candidates keep the reason generated from the checked expression.
   // Review responses still carry the model's own explanation for other callers.
-  return reason !== null && (verdict.kind === 'confirmacao' || reason === verdict.reason);
+  return reason !== null && (reason === verdict.reason || (verdict.kind === 'confirmacao' && !staticCallReason(verdict.observation)));
 }

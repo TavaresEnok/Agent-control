@@ -2940,34 +2940,31 @@ export async function recheckModuleFindings(
     )).rows[0];
     const previous = latest && ModuleRecheckPublication.parse(latest.detail);
     const legacyExamOrigin = !run.exam_origin_sha256 && items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo');
-    if (previous && sameIdSet(requested, previous.results.map(result => result.id))
-      && (!latest!.published || (!legacyExamOrigin && repo && await recheckHead(repo, signal) === previous.commit))) {
-      return {run, journal: previous, replay: true as const, previousPublished: latest!.published};
+    const replay = previous && sameIdSet(requested, previous.results.map(result => result.id))
+      && (!latest!.published || (!legacyExamOrigin && repo && await recheckHead(repo, signal) === previous.commit));
+    let verifiedOrigin: string | undefined;
+    if (run.exam_origin_sha256) {
+      try {
+        const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
+        if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+        assertInside(projectDir, run.report_dir);
+        verifiedOrigin = await readTextInside(projectDir, join(run.report_dir, 'bruto', 'exame.json'),
+          'VERIFY_REPORT_INVALID', run.exam_origin_sha256);
+      } catch (error) {
+        // Preserve a committed verdict until its original archive can be restored.
+        if (replay && !latest!.published) return {journal: previous, replay: true as const, archivePending: true};
+        throw error;
+      }
     }
+    if (replay) return {journal: previous, replay: true as const, archivePending: false};
     const journal = latest?.published ? undefined : previous;
     if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     const generation = await client.query<{recheck_generation: string}>(
       'UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1 WHERE id=$1 RETURNING recheck_generation::text',
       [run.id],
     );
-    return {run, items, repo, journal, generation: generation.rows[0]!.recheck_generation, replay: false as const};
+    return {run, items, repo, journal, verifiedOrigin, generation: generation.rows[0]!.recheck_generation, replay: false as const};
   });
-
-  const directory = loaded.run.report_dir;
-  const sourceFile = join(directory, 'bruto', 'exame.json');
-  let verifiedOrigin: string | undefined;
-  if (loaded.run.exam_origin_sha256) {
-    try {
-      const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
-      if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-      assertInside(projectDir, directory);
-      verifiedOrigin = await readTextInside(projectDir, sourceFile, 'VERIFY_REPORT_INVALID', loaded.run.exam_origin_sha256);
-    } catch (error) {
-      // A committed verdict remains in the publication journal until the archive is restored.
-      if (loaded.replay && !loaded.previousPublished) return {results: loaded.journal.results, publication: 'pending'};
-      throw error;
-    }
-  }
 
   const publish = async (journal: ModuleRecheckPublication): Promise<ModuleRecheckOutcome> => {
     try {
@@ -2978,7 +2975,13 @@ export async function recheckModuleFindings(
       return {results: journal.results, publication: 'pending'};
     }
   };
-  if (loaded.replay) return publish(loaded.journal);
+  if (loaded.replay) {
+    if (loaded.archivePending) return {results: loaded.journal.results, publication: 'pending'};
+    return publish(loaded.journal);
+  }
+  const directory = loaded.run.report_dir;
+  const sourceFile = join(directory, 'bruto', 'exame.json');
+  const {verifiedOrigin} = loaded;
   if (loaded.journal) {
     const recovered = await publish(loaded.journal);
     if (recovered.publication === 'pending') {
@@ -3109,10 +3112,19 @@ export async function recheckModuleFindings(
         const rule = sanitizeRecheckText(item.rule);
         const hypothesis = observed?.hypothesis ? sanitizeRecheckText(observed.hypothesis)
           : fromExaminer ? 'A linha atual ainda sustenta a observação original?' : moduleCollectorHypothesis(rule);
+        let skipSnapshot: {originalCommit: string; original: string; current: string} | undefined;
+        if (sameHistory && moduleName === 'qa' && !regression && (fromExaminer || rule === 'QA-TESTE-PULADO')) {
+          const [original, current] = await Promise.all([originalCommit, head].map(commit =>
+            readRecheckBlob(loaded.repo, commit, item.file, signal)));
+          if (original && current && [original.text, current.text].every(text =>
+            Buffer.byteLength(text) <= 16000 && sanitizeRecheckText(text) === text)) {
+            skipSnapshot = {originalCommit, original: original.text, current: current.text};
+          }
+        }
         const reviewEvidence = {
           module: moduleName, file: item.file, line: regression?.after.line ?? item.line, code: line, commit: head,
           tool: sanitizeRecheckText(item.tool), rule, hypothesis, evidence,
-          originalCommit, originalCode: regression?.before.code ?? (historicalLine || null),
+          skipSnapshot, originalCommit, originalCode: regression?.before.code ?? (historicalLine || null),
           moduleProof: regression?.moduleProof ?? null, regressionProof: regression?.receipt ?? null,
           regressionAssertion: regression?.assertion ?? null,
         };
