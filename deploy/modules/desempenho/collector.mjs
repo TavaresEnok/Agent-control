@@ -6,7 +6,7 @@
 import {spawn, spawnSync} from 'node:child_process';
 import {existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {dirname, extname, isAbsolute, join, relative, resolve} from 'node:path';
+import {extname, isAbsolute, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {tokenizer, tokTypes} from './cpu-parser/node_modules/acorn/dist/acorn.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -168,7 +168,9 @@ function discoverStaticWeb(root, config) {
       const path = safeRoutePath(pagePath(file));
       return path ? [{path, file: candidate === '.' ? file : `${candidate}/${file}`, page: true}] : [];
     });
-    if (routes.length) return {rootDir, routes};
+    if (routes.length || (candidate === config?.staticDir && statSync(rootDir, {throwIfNoEntry: false})?.isDirectory())) {
+      return {rootDir, routes};
+    }
   }
   return null;
 }
@@ -307,20 +309,30 @@ async function serveStaticPlan(root, plan) {
   const close = () => Promise.all(servers.map(server => server.close()));
   try {
     const http = await serve(plan.rootDir, {aliasRoot: root, aliases: plan.aliases});
-    const canonicalOrigins = new Map();
-    if (!plan.aliases.size) canonicalOrigins.set(plan.rootDir, http.origin);
+    let canonical = plan.aliases.size ? undefined : http;
+    let external, segment;
     const targets = [];
     for (const route of plan.targets) {
       if (!route.page) { targets.push(route); continue; }
-      const file = join(root, route.file);
-      let webRoot = plan.rootDir;
-      const fromStaticRoot = relative(webRoot, file);
-      if (fromStaticRoot === '..' || fromStaticRoot.startsWith('../') || isAbsolute(fromStaticRoot)) webRoot = dirname(file);
-      if (!canonicalOrigins.has(webRoot)) canonicalOrigins.set(webRoot, (await serve(webRoot)).origin);
+      const fromStaticRoot = relative(plan.rootDir, join(root, route.file));
+      let pageUrl;
+      if (fromStaticRoot.startsWith('../') || isAbsolute(fromStaticRoot)) {
+        if (!external) {
+          // O prefixo conserva a árvore do snapshot para URLs relativas. A raiz
+          // da mesma origem serve as URLs absolutas a partir do recorte estático.
+          const entries = new Set(readdirSync(plan.rootDir));
+          segment = '.ac-perf-pages';
+          while (entries.has(segment)) segment += '-';
+          external = await serve(plan.rootDir, {mount: {segment, root}});
+        }
+        pageUrl = external.origin + '/' + segment + pagePath(route.file);
+      } else {
+        canonical ??= await serve(plan.rootDir);
+        pageUrl = canonical.origin + pagePath(fromStaticRoot);
+      }
       const queryIndex = route.path.indexOf('?');
       const query = queryIndex < 0 ? '' : route.path.slice(queryIndex);
-      const pageUrl = canonicalOrigins.get(webRoot) + pagePath(relative(webRoot, file)) + query;
-      targets.push({...route, pageUrl});
+      targets.push({...route, pageUrl: pageUrl + query});
     }
     return {origin: http.origin, close, targets};
   } catch (error) {

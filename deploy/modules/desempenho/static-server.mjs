@@ -70,9 +70,10 @@ async function resolveTarget(rootReal, parts) {
   return {real, size: info.size};
 }
 
-export async function startStaticServer(rootDir, {aliasRoot = rootDir, aliases = new Map()} = {}) {
+export async function startStaticServer(rootDir, {aliasRoot = rootDir, aliases = new Map(), mount} = {}) {
   const rootReal = await realpath(rootDir);
   const aliasRootReal = aliases.size ? await realpath(aliasRoot) : rootReal;
+  const mountRootReal = mount && await realpath(mount.root);
   const server = createServer((req, res) => {
     const method = String(req.method ?? 'GET').toUpperCase();
     if (method !== 'GET' && method !== 'HEAD') {
@@ -87,7 +88,10 @@ export async function startStaticServer(rootDir, {aliasRoot = rootDir, aliases =
       return;
     }
     const alias = aliases.get(req.url);
-    const target = alias ? resolveTarget(aliasRootReal, alias.split('/')) : resolveTarget(rootReal, parts);
+    let target;
+    if (alias) target = resolveTarget(aliasRootReal, alias.split('/'));
+    else if (mount && parts[0] === mount.segment) target = resolveTarget(mountRootReal, parts.slice(1));
+    else target = resolveTarget(rootReal, parts);
     target
       .then(async found => {
         if (!found) {

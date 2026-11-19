@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import {execFile} from 'node:child_process';
+import {ChildProcess, execFile} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
-import {lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile} from 'node:fs/promises';
+import {lstat, mkdtemp, mkdir, open, readFile, readdir, readlink, rename, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -63,17 +63,30 @@ if (cmd === 'image') {
     const socket = mount?.match(/"src=(.*)",dst=\/perf-link\/(?:target|http)\.sock,readonly$/)?.[1];
     if (!socket || !fs.statSync(socket).isSocket()) fail('socket local ausente no bind');
   } else if (mount) fail('observador estático com socket');
-  const late = mode === 'late-timeout' && record.mode === 'static' || mode === 'late-create' && record.mode === 'isolated';
+  const late = mode === 'late-timeout' && record.mode === 'static' ||
+    ['late-create', 'client-eagain'].includes(mode) && record.mode === 'isolated';
   if (late) {
     fs.writeFileSync(path.join(base, name + '.later'), JSON.stringify(record));
+    if (mode === 'client-eagain') fail('spawn worker EAGAIN');
     if (mode !== 'late-timeout') fail('Error response from daemon: context canceled');
+    setInterval(() => {}, 1000);
+  } else if (mode.startsWith('cancel-output-')) {
+    const id = record.id;
+    if (mode === 'cancel-output-late' || mode === 'cancel-output-partial') {
+      fs.writeFileSync(path.join(base, name + '.later'), JSON.stringify(record));
+    } else {
+      const owner = mode === 'cancel-output-foreign' ? 'outro-dono' : record.owner;
+      write('renomeado', {...record, owner});
+      write(name, {...record, id: idFor('substituto')});
+    }
+    console.log(mode === 'cancel-output-partial' ? id.slice(0, -1) : id);
     setInterval(() => {}, 1000);
   } else {
     if (mode === 'backend-create-failure' && record.mode === 'isolated') {
       fail('Error response from daemon: No such image: imagem-sintetica');
     }
     write(name, record);
-    if (mode === 'cancel-create') setTimeout(() => console.log(idFor(name)), 350);
+    if (mode === 'cancel-create') setInterval(() => {}, 1000);
     else console.log(idFor(name));
   }
 } else if (cmd === 'start') {
@@ -121,7 +134,10 @@ if (cmd === 'image') {
   const name = nameFor(last);
   if (!name) fail('Error: No such ' + cmd + ': ' + last);
   const record = read(name);
-  if (ownership) console.log(objectId(name) + ' ' + record.owner);
+  if (ownership) {
+    const id = mode === 'cancel-output-id-divergent' ? idFor('id-divergente') : objectId(name);
+    console.log(id + ' ' + record.owner);
+  }
   else console.log((record.status === 'running') + ' ' + digest + ' 0');
 } else fail('comando inesperado');
 `, {mode: 0o755});
@@ -250,6 +266,106 @@ test('reconcilia criação incerta publicada após a saída sem reter a mediçã
   assert.deepEqual(await fixture.pending(), []);
   assert.deepEqual(await fixture.reconcile(), {cleaned: 0, pending: 0, active: 0, invalid: 0});
   await fixture.verifyCleanup();
+});
+
+test('EAGAIN sem processo libera a reserva e permite a medição estática', async t => {
+  const fixture = await setup(t);
+  const spawn = ChildProcess.prototype.spawn;
+  let refused;
+  t.mock.method(ChildProcess.prototype, 'spawn', function (options) {
+    if (options.file !== fixture.dockerBinary || options.args[1] !== 'create' || refused) {
+      return spawn.call(this, options);
+    }
+    refused = options.args[3];
+    assert.equal(this.pid, undefined);
+    const error = Object.assign(new Error('spawn EAGAIN'), {code: 'EAGAIN', syscall: `spawn ${options.file}`});
+    process.nextTick(() => this.emit('error', error));
+  });
+  const output = await fixture.run();
+  assert.match(refused, /^ac-perf-/);
+  assert.equal(output.measurement.httpMode, 'static');
+  assert.ok(!output.coverage.some(row => row.tool === 'limpeza-docker'));
+  const calls = await fixture.calls();
+  assert.deepEqual(calls.filter(args => args[0] === 'create').map(args => args[2]), [`${refused}-obs-static`]);
+  assert.ok(!calls.some(args => [refused, containerId(refused)].includes(args.at(-1))));
+  assert.deepEqual(await fixture.pending(), []);
+  await fixture.verifyCleanup();
+});
+
+test('EAGAIN relatado por cliente já iniciado conserva a criação incerta', async t => {
+  const fixture = await setup(t, 'client-eagain');
+  const output = await fixture.run();
+  assert.equal(output.measurement.httpMode, 'static');
+  assert.equal(output.coverage.find(row => row.tool === 'limpeza-docker')?.status, 'failed');
+  const [name] = await fixture.pending();
+  const state = JSON.parse(await readFile(join(fixture.recoveryDirectory, name, 'state.json'), 'utf8'));
+  assert.deepEqual(state.resources, {[name]: false});
+  assert.equal((await fixture.reconcile()).pending, 1);
+  await fixture.materialize();
+  assert.equal((await fixture.reconcile()).cleaned, 1);
+  await fixture.verifyCleanup();
+});
+
+async function interceptSync(t, fixture, beforeSync) {
+  const handle = await open(fixture.temp, 'r');
+  const prototype = Object.getPrototypeOf(handle);
+  await handle.close();
+  const sync = prototype.sync;
+  t.mock.method(prototype, 'sync', async function () {
+    const path = await readlink(`/proc/self/fd/${this.fd}`);
+    if (path.startsWith(fixture.recoveryDirectory)) await beforeSync(path);
+    return sync.call(this);
+  });
+}
+
+for (const stage of ['antes do rename', 'depois do rename']) {
+  test(`falha na reserva ${stage} desvincula apenas a criação não enviada`, async t => {
+    const fixture = await setup(t, 'unconfirmed');
+    const controller = new AbortController();
+    let failed;
+    await interceptSync(t, fixture, async path => {
+      if (failed || !path.startsWith(join(fixture.recoveryDirectory, 'ac-perf-'))) return;
+      const beforeRename = stage === 'antes do rename';
+      if (beforeRename ? !path.endsWith('/state.next') : path.endsWith('/state.next')) return;
+      const statePath = beforeRename ? path : join(path, 'state.json');
+      const state = JSON.parse(await readFile(statePath, 'utf8'));
+      failed = Object.keys(state.resources).find(name => name.endsWith('-obs') && state.resources[name] === false);
+      if (failed) {
+        controller.abort(new Error('autoridade perdida após a falha de gravação'));
+        throw new Error('falha sintética de fsync na reserva');
+      }
+    });
+    await assert.rejects(fixture.run({signal: controller.signal}), /autoridade perdida após a falha de gravação/);
+    const [name] = await fixture.pending();
+    assert.equal(failed, `${name}-obs`);
+    const state = JSON.parse(await readFile(join(fixture.recoveryDirectory, name, 'state.json'), 'utf8'));
+    assert.deepEqual(state.resources, {[name]: containerId(name)});
+    const calls = await fixture.calls();
+    assert.deepEqual(calls.filter(args => args[0] === 'create').map(args => args[2]), [name]);
+    assert.ok(!calls.some(args => [failed, containerId(failed)].includes(args.at(-1))));
+    await writeFile(join(fixture.temp, 'recover'), '');
+    assert.deepEqual(await fixture.reconcile(), {cleaned: 1, pending: 0, active: 0, invalid: 0});
+    await fixture.verifyCleanup();
+  });
+}
+
+test('falha de fsync após publicar o diretório do diário desfaz a criação do registro', async t => {
+  const fixture = await setup(t);
+  await mkdir(fixture.recoveryDirectory, {mode: 0o700});
+  let failed = false;
+  await interceptSync(t, fixture, async path => {
+    if (failed || path !== fixture.recoveryDirectory) return;
+    const [name] = await fixture.pending();
+    assert.match(name, /^ac-perf-/);
+    const state = JSON.parse(await readFile(join(path, name, 'state.json'), 'utf8'));
+    assert.deepEqual(state.resources, {});
+    failed = true;
+    throw new Error('falha sintética de fsync na publicação');
+  });
+  await assert.rejects(fixture.run(), /falha sintética de fsync na publicação/);
+  assert.ok(failed);
+  assert.deepEqual(await fixture.pending(), []);
+  assert.deepEqual((await fixture.calls()).map(args => args[0]), ['image']);
 });
 
 test('prazo expirado preserva a intenção para um reconciliador em outro processo', async t => {
@@ -413,7 +529,7 @@ async function abortWhile(fixture, reached) {
     for (let ticks = 0; ; ticks++) {
       assert.ok(ticks < 250, 'heartbeat não observou o início da coleta');
       const [last] = (await fixture.calls()).slice(-1);
-      if (last && reached(last)) break;
+      if (last && await reached(last)) break;
       await delay(20);
     }
   } finally {
@@ -430,9 +546,62 @@ test('aguarda Docker sem bloquear o heartbeat e confirma a limpeza após perda d
 
 test('perda de autoridade durante docker create mantém a recuperação e nunca inicia o alvo', async t => {
   const fixture = await setup(t, 'cancel-create');
-  await abortWhile(fixture, args => args[0] === 'create');
+  await abortWhile(fixture, async args => args[0] === 'create' && (await readdir(fixture.temp)).includes(args[2] + '.object'));
   assert.ok(!(await fixture.calls()).some(args => args[0] === 'start'));
 });
+
+for (const scenario of ['renamed', 'late', 'partial', 'foreign', 'id-divergent']) {
+  test(`cancelamento após stdout de docker create (${scenario})`, async t => {
+    const fixture = await setup(t, `cancel-output-${scenario}`);
+    const controller = new AbortController();
+    const spawn = ChildProcess.prototype.spawn;
+    let stdout = '';
+    t.mock.method(ChildProcess.prototype, 'spawn', function (options) {
+      const child = spawn.call(this, options);
+      if (options.file === fixture.dockerBinary && options.args[1] === 'create') {
+        this.stdout.on('data', chunk => {
+          stdout += chunk;
+          if (stdout.endsWith('\n')) queueMicrotask(() => controller.abort(new Error('autoridade perdida após stdout')));
+        });
+      }
+      return child;
+    });
+    await assert.rejects(fixture.run({signal: controller.signal}), /autoridade perdida após stdout/);
+    const calls = await fixture.calls();
+    const [create] = calls.filter(args => args[0] === 'create');
+    const name = create[2];
+    const id = containerId(name);
+    const partial = scenario === 'partial';
+    assert.equal(stdout.trim(), partial ? id.slice(0, -1) : id);
+    assert.ok(!calls.some(args => args[0] === 'start'));
+    const containerCalls = calls.filter(args => args[0] === 'container');
+    assert.ok(containerCalls.length);
+    assert.ok(containerCalls.every(args => args.at(-1) === (partial ? name : id)));
+
+    const renamed = join(fixture.temp, 'renomeado.object');
+    if (scenario === 'renamed') {
+      assert.deepEqual(containerCalls.map(args => args[1]), ['inspect', 'rm', 'inspect']);
+      await assert.rejects(lstat(renamed), {code: 'ENOENT'});
+      const replacement = JSON.parse(await readFile(join(fixture.temp, name + '.object'), 'utf8'));
+      assert.equal(replacement.id, containerId('substituto'));
+      assert.deepEqual(await fixture.pending(), []);
+    } else {
+      assert.ok(!containerCalls.some(args => args[1] === 'rm'));
+      assert.deepEqual(await fixture.pending(), [name]);
+      const state = JSON.parse(await readFile(join(fixture.recoveryDirectory, name, 'state.json'), 'utf8'));
+      assert.deepEqual(state.resources, {[name]: partial ? false : {id}});
+      assert.equal((await fixture.reconcile()).pending, 1);
+      if (scenario === 'late' || partial) {
+        assert.equal(await fixture.materialize(), name);
+        assert.equal((await fixture.reconcile()).cleaned, 1);
+        await fixture.verifyCleanup();
+      } else {
+        assert.ok((await lstat(renamed)).isFile());
+        assert.ok(!(await fixture.calls()).some(args => args[1] === 'rm'));
+      }
+    }
+  });
+}
 
 test('saída malformada passa pela limpeza verificável', async t => {
   const fixture = await setup(t, 'invalid');

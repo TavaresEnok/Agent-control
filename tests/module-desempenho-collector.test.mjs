@@ -215,6 +215,87 @@ test('Lighthouse carrega recursos no caminho canônico e k6 mede o alias HTTP de
   assert.equal(output.measurement.k6Routes[0]?.p95, 20);
 });
 
+test('páginas fora da raiz estática resolvem recursos relativos e absolutos na mesma origem', async t => {
+  const setup = await fixture(t);
+  const {repo} = setup;
+  await mkdir(join(repo, 'guias', 'introdução'), {recursive: true});
+  await mkdir(join(repo, 'recursos'));
+  for (const [file, body] of Object.entries({
+    'especial.html': '<h1>Externa</h1><link href="tema.css"><script src="/tema.css"></script>',
+    'guias/introdução/index.html': '<h1>Aninhada</h1><link href="local.css"><script src="../comum.js"></script><link href="../../tema.css">',
+    'guias/introdução/local.css': 'local',
+    'guias/comum.js': 'pai',
+    'tema.css': 'relativo',
+    'recursos/tema.css': 'absoluto',
+    'recursos/.ac-perf-pages': 'recurso estático existente',
+  })) await writeFile(join(repo, file), body);
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({staticDir: 'recursos', routes: [
+    {path: '/especial?modo=teste', file: 'especial.html'},
+    {path: '/inicio/nested?modo=teste', file: 'guias/introdução/index.html'},
+  ]}));
+  const output = await collectSynthetic(setup, {
+    lhci: `const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      if (process.argv[2] === 'collect') (async () => {
+        const {ci} = JSON.parse(fs.readFileSync(process.argv[3].slice(9)));
+        const [external, nested] = ci.collect.url;
+        assert.ok(new URL(external).pathname.endsWith('/especial.html'));
+        assert.ok(new URL(nested).pathname.endsWith('/guias/introdu%C3%A7%C3%A3o/'));
+        assert.equal(new URL(nested).search, '?modo=teste');
+        for (const [url, title, references] of [[external, /Externa/, ['relativo', 'absoluto']],
+          [nested, /Aninhada/, ['local', 'pai', 'relativo']]]) {
+          const page = await fetch(url);
+          assert.equal(page.status, 200);
+          const html = await page.text();
+          assert.match(html, title);
+          const bodies = [];
+          for (const match of html.matchAll(/(?:href|src)="([^"]+)"/g)) {
+            const asset = await fetch(new URL(match[1], url));
+            assert.equal(asset.status, 200);
+            bodies.push(await asset.text());
+          }
+          assert.deepEqual(bodies, references);
+          assert.equal((await fetch(new URL('/guias/comum.js', url))).status, 404);
+          assert.equal((await fetch(new URL('/especial?modo=teste', url))).status, 404);
+          const existing = await fetch(new URL('/.ac-perf-pages', url));
+          assert.equal(await existing.text(), 'recurso estático existente');
+        }
+        fs.mkdirSync('.lighthouseci');
+        for (const [i, url] of [external, nested].entries()) {
+          fs.writeFileSync('.lighthouseci/lhr-' + i + '.json', JSON.stringify({requestedUrl: url, finalUrl: url,
+            categories: {performance: {score: 1}}, audits: {
+              'largest-contentful-paint': {numericValue: 100}, 'cumulative-layout-shift': {numericValue: 0},
+              'total-blocking-time': {numericValue: 0}}}));
+        }
+      })().catch(error => { console.error(error); process.exitCode = 1; });`,
+    k6: `const assert = require('node:assert/strict');
+      const fs = require('node:fs');
+      if (process.argv[2] === 'version') console.log('k6 v2.4.0');
+      else (async () => {
+        const script = fs.readFileSync(process.argv.at(-1), 'utf8');
+        const origin = JSON.parse(/const ORIGIN = (.*);/.exec(script)[1]);
+        const routes = JSON.parse(/const ROUTES = (.*);/.exec(script)[1]).slice(0, 2);
+        assert.deepEqual(routes, ['/especial?modo=teste', '/inicio/nested?modo=teste']);
+        const metrics = {};
+        for (const [i, route] of routes.entries()) {
+          const page = await fetch(origin + route);
+          assert.equal(page.status, 200);
+          assert.match(await page.text(), i === 0 ? /Externa/ : /Aninhada/);
+          assert.equal((await fetch(origin + route.split('?')[0])).status, 404);
+          metrics['http_reqs{route:' + route + '}'] = {count: 3};
+          metrics['http_req_duration{route:' + route + '}'] = {'p(95)': 20};
+          metrics['http_req_failed{route:' + route + '}'] = {rate: 0};
+        }
+        fs.writeFileSync(process.argv.find(v => v.startsWith('--summary-export=')).slice(17), JSON.stringify({metrics}));
+      })().catch(error => { console.error(error); process.exitCode = 1; });`,
+  });
+  assert.deepEqual(output.findings, []);
+  const measured = [['/especial?modo=teste', 'especial.html'], ['/inicio/nested?modo=teste', 'guias/introdução/index.html']];
+  for (const tool of ['lighthouse', 'k6Routes']) {
+    assert.deepEqual(output.measurement[tool].map(({route, file}) => [route, file]), measured);
+  }
+});
+
 test('identifica declarações excedentes mesmo depois do limite de leitura das rotas', async t => {
   const setup = await fixture(t);
   const routes = Array.from({length: 41}, (_, i) => `/declarada-${i}`);
