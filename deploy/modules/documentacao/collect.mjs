@@ -612,71 +612,36 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function commentProseLines(comment) {
-  let fence = null;
-  const text = comment.slice(3, -2).split(/\r\n?|\n/).map((line, index) => {
-    const content = index === 0 ? line.trimStart() : line.replace(/^\s*\*[ \t]?/, '');
-    if (fence) {
-      if (closesFence(content, fence)) fence = null;
-      return '';
+function canonicalTypedocTags(comment, startLine) {
+  if (!comment.startsWith('/**') || !comment.endsWith('*/')) return null;
+  const lines = comment.slice(3, -2).split(/\r?\n/);
+  const tags = [];
+  // Only recognize constructs with proven single-line boundaries. An unsupported
+  // construct anywhere in the comment can change which tag TypeDoc reports.
+  const inline = /(?<!`)`[^`\\]+`(?!`)|\{(@link(?:code|plain)?)[ \t]+([^\s{}\\`]+)[ \t]*\}/g;
+  let margin;
+  for (const [index, raw] of lines.entries()) {
+    if (/[\\\r\u2028\u2029]/.test(raw)) return null;
+    const prefix = raw.match(index === 0 ? /^[ \t]*/ : /^([ \t]*)\*(?:[ \t]+|$)/);
+    if (!prefix) {
+      if (index === lines.length - 1 && /^[ \t]*$/.test(raw)) break;
+      return null;
     }
-    fence = openingFence(content);
-    return fence ? '' : content;
-  }).join('\n');
-  const tokens = [...text.matchAll(/\\[\\{}@/`]|`+|(\n[ \t]*(?=\n))/g)];
-  // Inline code closes on a run of the same length within the paragraph.
-  const closingTicks = new Map();
-  const nextTicks = new Map();
-  for (let i = tokens.length - 1; i >= 0; i--) {
-    const [token, paragraphBreak] = tokens[i];
-    const {index} = tokens[i];
-    if (paragraphBreak) nextTicks.clear();
-    if (!token.startsWith('`')) continue;
-    if (nextTicks.has(token.length)) closingTicks.set(index, nextTicks.get(token.length));
-    nextTicks.set(token.length, index);
-  }
-
-  let cursor = 0;
-  const prose = [];
-  for (const {0: token, index} of tokens) {
-    const closing = closingTicks.get(index);
-    if (index < cursor || closing === undefined) continue;
-    prose.push(text.slice(cursor, index));
-    cursor = closing + token.length;
-    // Keep line breaks and keep later text from becoming the start of a tag.
-    prose.push(text.slice(index, cursor).replace(/[^\n]/g, '\uFFFC'));
-  }
-  prose.push(text.slice(cursor));
-  return prose.join('').split('\n');
-}
-
-function commentLinkLines(lines, target, expectedTag) {
-  const text = lines.join('\n');
-  const tag = /[ \t]*(@[a-z][a-z0-9-]*)(?=\s|})/iy;
-  const matches = [];
-  let line = 0;
-  let inlineTag;
-  const finishTag = (end, closed) => {
-    const value = text.slice(inlineTag.start, end).replace(/\\([{}@/`])/g, '$1').replaceAll('\n', ' ').trim();
-    if (TYPEDOC_LINK_TAGS.has(inlineTag.name) && value === target) {
-      matches.push(closed && inlineTag.name === expectedTag ? inlineTag.line : null);
+    if (index > 0) {
+      margin ??= prefix[1];
+      if (margin !== prefix[1]) return null;
     }
-    inlineTag = undefined;
-  };
-  // In TypeDoc's block lexer, a backslash can escape a brace but cannot escape another backslash.
-  for (const {0: token, index} of text.matchAll(/\\[{}@/`]|[{}\n]/g)) {
-    if (token === '\n') line++;
-    else if (token === '{' && !inlineTag) {
-      tag.lastIndex = index + 1;
-      const name = tag.exec(text)?.[1];
-      if (name) inlineTag = {name, line, start: tag.lastIndex};
-    } else if (token === '}' && inlineTag) {
-      finishTag(index, true);
-    }
+    const line = startLine + index;
+    const prose = raw.slice(prefix[0].length).replace(inline, (_, tag, text) => {
+      if (tag) tags.push({tag, text, line});
+      return '\uFFFC'; // Keep inline content from exposing a block tag after it.
+    });
+    const param = prose.match(/^@param[ \t]+([A-Za-z_$][\w$]*)(?=[ \t]|$)/);
+    if (param) tags.push({tag: '@param', text: param[1], line});
+    const block = param ?? prose.match(/^@(?:see|returns?)(?=[ \t]|$)/);
+    if (/[@{}`]|~{3}/.test(prose.slice(block?.[0].length ?? 0))) return null;
   }
-  // TypeDoc can serialize an unfinished inline tag and emit a warning for it.
-  if (inlineTag) finishTag(text.length, false);
-  return matches;
+  return tags;
 }
 
 function findLineInText(text, matcher) {
@@ -822,23 +787,36 @@ function typedocDeclarationSource(node, repoRoot, repoFiles) {
   return {file, line, character};
 }
 
-function typedocMappedDeclaration(file, repoRoot, repoFiles, readFileText) {
+function readTypedocDeclarationMap(file, repoRoot, repoFiles, readFileText, ts) {
+  if (typeof ts?.decodeMappings !== 'function') return null;
   const mapFile = file + '.map';
-  if (!DECLARATION_MAP.test(mapFile) || !repoFiles.has(mapFile)) return file;
   let map;
   try {
     map = JSON.parse(readFileText(mapFile).replace(/^\uFEFF/, ''));
   } catch {
     return null;
   }
-  // TypeDoc uses only sources[0] to construct the symbol ID. Its sources coordinates stay in the declaration.
-  if (typeof map?.file !== 'string' || posix.join(posix.dirname(mapFile), map.file) !== file
-    || map.sources?.length !== 1 || !Array.isArray(map.sources)
+  // TypeDoc uses sources[0] for the symbol ID and leaves the reflection coordinates in the declaration.
+  if (map?.version !== 3 || typeof map.mappings !== 'string' || !map.mappings
+    || typeof map.file !== 'string' || posix.join(posix.dirname(mapFile), map.file) !== file
+    || !Array.isArray(map.sources) || map.sources.length !== 1
     || typeof map.sources[0] !== 'string' || !map.sources[0]
     || (map.sourceRoot !== undefined && typeof map.sourceRoot !== 'string')) return null;
   const source = map.sourceRoot === undefined ? map.sources[0] : posix.join(map.sourceRoot, map.sources[0].replace(/^\//, ''));
   const mappedFile = normalizeRepoPath(resolve(repoRoot, posix.dirname(mapFile), source), repoRoot);
-  return isReportablePath(mappedFile) && repoFiles.has(mappedFile) ? mappedFile : null;
+  if (!isReportablePath(mappedFile) || !repoFiles.has(mappedFile)) return null;
+
+  const positions = new Map();
+  const decoded = ts.decodeMappings(map.mappings);
+  for (const entry of decoded) {
+    if (entry.sourceIndex !== undefined && entry.sourceIndex !== 0) return null;
+    const key = `${entry.generatedLine + 1}:${entry.generatedCharacter}`;
+    const original = entry.sourceIndex === 0 && !positions.has(key)
+      ? {file: mappedFile, line: entry.sourceLine + 1, character: entry.sourceCharacter}
+      : null;
+    positions.set(key, original);
+  }
+  return decoded.error ? null : {file: mappedFile, positions};
 }
 
 /**
@@ -858,6 +836,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   const fileCache = new Map();
   const syntaxByFile = new Map();
   const packageByDirectory = new Map();
+  const declarationMaps = new Map();
 
   const getFileText = relFile => {
     if (!relFile || relFile === '.') return '';
@@ -918,19 +897,6 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return {ts, source, lineAt, node: matching[0]};
   };
 
-  const findInSymbolComment = (sym, signature, findMatches) => {
-    const declaration = findDeclaration(sym, signature);
-    if (!declaration) return null;
-    const {ts, source, lineAt, node} = declaration;
-    const commentLines = [];
-    for (const comment of ts.getJSDocCommentsAndTags(node).filter(ts.isJSDoc)) {
-      const startLine = lineAt(comment.getStart(source));
-      const lines = commentProseLines(comment.getText(source));
-      for (const index of findMatches(lines)) commentLines.push(index === null ? null : startLine + index);
-    }
-    return commentLines;
-  };
-
   let reflectionsByName;
   const getReflections = name => {
     reflectionsByName ??= indexTypedocReflections(data);
@@ -940,9 +906,25 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     const id = data.symbolIdMap?.[node.id];
     const source = typedocDeclarationSource(node, repoRoot, repoFiles);
     if (!source || typeof id?.packagePath !== 'string' || !id.packagePath) return null;
+    let mappedFile = source.file;
+    const mapFile = source.file + '.map';
+    if (DECLARATION_MAP.test(mapFile) && repoFiles.has(mapFile)) {
+      if (!declarationMaps.has(mapFile)) {
+        declarationMaps.set(mapFile,
+          readTypedocDeclarationMap(source.file, repoRoot, repoFiles, getFileText, loadTypeScript(toolsRoot)));
+      }
+      const map = declarationMaps.get(mapFile);
+      const originalPosition = map?.positions.get(`${source.line}:${source.character}`);
+      if (!originalPosition) return null;
+      const generated = findDeclaration(source, false);
+      const original = findDeclaration(originalPosition, false);
+      if (!generated || !original || generated.node.kind !== original.node.kind) return null;
+      // Match top-level identifiers to the symbol ID at both ends of the mapping.
+      if (![generated, original].every(({ts, node}) => ts.isSourceFile(node.parent)
+        && node.name && ts.isIdentifier(node.name) && node.name.text === id.qualifiedName)) return null;
+      mappedFile = map.file;
+    }
     // The symbol ID is relative to the package of the declaration, even when a map points elsewhere.
-    const mappedFile = typedocMappedDeclaration(source.file, repoRoot, repoFiles, getFileText);
-    if (!mappedFile) return null;
     if (id.packageName === '<unknown>') {
       return posix.isAbsolute(toPosix(id.packagePath)) && normalizeRepoPath(id.packagePath, repoRoot) === mappedFile
         ? source : null;
@@ -951,15 +933,25 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return pkg && pkg.name === id.packageName && posix.relative(pkg.directory, mappedFile) === id.packagePath
       ? source : null;
   };
-  const locateInComment = (candidates, findMatches) => {
+  const locateInComment = (candidates, text, expectedTag) => {
     const occurrences = [];
     for (const {node, signature} of candidates) {
       const source = getSource(node);
-      const lines = source && findInSymbolComment(source, signature, findMatches);
-      if (!lines) return null;
-      for (const line of lines) occurrences.push({file: source.file, line, name: node.name});
+      const declaration = source && findDeclaration(source, signature);
+      if (!declaration) return null;
+      const {ts, source: syntax, lineAt, node: declarationNode} = declaration;
+      const comments = ts.getJSDocCommentsAndTags(declarationNode).filter(ts.isJSDoc);
+      if (comments.length !== 1) return null;
+      const [comment] = comments;
+      const tags = canonicalTypedocTags(comment.getText(syntax), lineAt(comment.getStart(syntax)));
+      if (!tags) return null;
+      for (const tag of tags) {
+        if (tag.text === text && (expectedTag === '@param' ? tag.tag === '@param' : TYPEDOC_LINK_TAGS.has(tag.tag))) {
+          occurrences.push({file: source.file, line: tag.line, name: node.name, tag: tag.tag});
+        }
+      }
     }
-    return occurrences.length === 1 && occurrences[0].line !== null ? occurrences[0] : null;
+    return occurrences.length === 1 && occurrences[0].tag === expectedTag ? occurrences[0] : null;
   };
   const recordWarning = (rule, severity, message, evidence, location) => {
     if (!location) {
@@ -986,15 +978,11 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     if (unusedParamMatch) {
       const sigName = unusedParamMatch[1];
       const paramName = unusedParamMatch[2];
-      const paramTag = new RegExp(String.raw`^\s*@param\s+(?:\{[^}]+\}\s+)?\[?${escapeRegExp(paramName)}(?=\s|[\]=]|$)`);
       // TypeDoc removes unused @param tags before serializing comments.
       const candidates = getReflections(sigName).filter(
         ({signature, node}) => signature && !node.parameters?.some(param => param.name === paramName),
       );
-      const location = uniqueWarning ? locateInComment(
-        candidates,
-        lines => lines.flatMap((text, index) => paramTag.test(text) ? [index] : []),
-      ) : null;
+      const location = uniqueWarning ? locateInComment(candidates, paramName, '@param') : null;
       recordWarning('DOC-TYPEDOC-PARAM-DESATUALIZADO', 'alta',
         `JSDoc de "${location?.name ?? sigName}" documenta o parâmetro "@param ${paramName}", que não existe na assinatura real da função.`,
         lineText, location);
@@ -1018,7 +1006,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
           && part.text.trim() === targetLink).map(part => ({reflection, tag: part.tag}));
       });
       const location = uniqueWarning && candidates.length === 1
-        ? locateInComment([candidates[0].reflection], lines => commentLinkLines(lines, targetLink, candidates[0].tag))
+        ? locateInComment([candidates[0].reflection], targetLink, candidates[0].tag)
         : null;
       recordWarning('DOC-TYPEDOC-LINK-QUEBRADO', 'media',
         `Comentário JSDoc de "${location?.name ?? symRef}" contém referência {@link ${targetLink}} para símbolo inexistente.`,

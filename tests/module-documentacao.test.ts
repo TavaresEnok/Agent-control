@@ -970,30 +970,16 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
 
   const source = ['/** Example.', ' * ```js', ' * @param legacy', ' * ```', ' * @param legacy obsolete', ' */',
     'export function sample(current: string) { return current; }'].join('\n');
-  const example = parseTypedocReport(
-    sample(7),
-    '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => source,
-  );
-  assert.deepEqual(example.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
   const multilineCode = source.replace(' * ```js', ' * Inline ``example').replace(' * ```', ' * end``');
-  const multiline = parseTypedocReport(
-    sample(7),
-    '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => multilineCode,
-  );
-  assert.deepEqual(multiline.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
-  const onlyInline = parseTypedocReport(
-    sample(7),
-    '[warning] The signature sample has an @param with name "legacy", which was not used', root,
-    () => multilineCode.replace('@param legacy obsolete', 'See the example.'),
-  );
-  assert.deepEqual(onlyInline.findings, []);
-  assert.equal(onlyInline.unlocatedWarnings[0]?.rule, 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
   const exampleWithOpener = source.replace(' * @param legacy\n', ' * const text = "/**";\n');
-  const literal = parseTypedocReport(
-    sample(7),
-    '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => exampleWithOpener,
-  );
-  assert.deepEqual(literal.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+  for (const example of [source, multilineCode, multilineCode.replace('@param legacy obsolete', 'See the example.'), exampleWithOpener]) {
+    const result = parseTypedocReport(
+      sample(7),
+      '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => example,
+    );
+    assert.deepEqual(result.findings, []);
+    assert.equal(result.unlocatedWarnings[0]?.rule, 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
+  }
 
   const anonymous = parseTypedocReport(
     {kind: 1, name: 'x', children: [member('default', 4, 128, 0, link('Missing'))], symbolIdMap},
@@ -1016,13 +1002,16 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   assert.deepEqual(ambiguous.findings, []);
   assert.equal(ambiguous.unlocated, 1);
 
-  const unclosed = parseTypedocReport(
-    sample(5, link('Missing')),
-    '[warning] Failed to resolve link to "Missing" in comment for sample', root,
-    () => ['/** Public function.', ' * See {@link Missing}.', ' * Compare {@link Missing', ' */', 'export function sample() {}'].join('\n'),
-  );
-  assert.deepEqual(unclosed.findings, []);
-  assert.equal(unclosed.unlocated, 1);
+  for (const padding of ['', '\u00A0']) {
+    const unclosed = parseTypedocReport(
+      sample(5, link('Missing')),
+      '[warning] Failed to resolve link to "Missing" in comment for sample', root,
+      () => ['/** Public function.', ' * See {@link Missing}.', ' * Compare {' + padding + '@link Missing', ' */',
+        'export function sample() {}'].join('\n'),
+    );
+    assert.deepEqual(unclosed.findings, []);
+    assert.equal(unclosed.unlocatedWarnings[0]?.rule, 'DOC-TYPEDOC-LINK-QUEBRADO');
+  }
 
   const sameLine = parseTypedocReport(
     sample(4, link('Missing')),
@@ -1123,7 +1112,7 @@ test('TypeDoc publica a posição direta e preserva avisos de aliases e links am
       'export function documented() {}',
       '/** Dois links para o mesmo destino.',
       ' * Consulte {@link MissingRepeated}.',
-      ' * Compare {@link MissingRepeated',
+      ' * Compare {\u00A0@link MissingRepeated',
       ' */',
       'export function repeated() {}',
     ].join('\n'));
@@ -1158,41 +1147,88 @@ test('TypeDoc usa a declaração de avisos reais com mapas de declaração inequ
   try {
     const files = {
       'package.json': '{"name":"fixture"}',
-      'index.ts': ['Confirmed', 'Multiple', 'Missing', 'Direct']
+      'index.ts': ['Confirmed', 'Empty', 'Nearby', 'Unmapped', 'Wrong', 'Multiple', 'Missing', 'Direct']
         .map(name => `export {${name}} from "./types/${name.toLowerCase()}";`).join('\n'),
-      'types/confirmed.d.ts': '\nexport interface Confirmed {}',
+      'types/confirmed.d.ts': 'export interface Confirmed {\n}',
+      'types/empty.d.ts': 'export interface Empty {}',
+      'types/nearby.d.ts': 'export interface Nearby {}',
+      'types/unmapped.d.ts': 'export interface Unmapped {}',
+      'types/wrong.d.ts': 'export interface Wrong {}',
       'types/multiple.d.ts': '\n\nexport interface Multiple {}',
       'types/missing.d.ts': 'export interface Missing {}',
       'types/direct.d.ts': '\n\n\nexport interface Direct {}',
-      'original/confirmed.ts': 'export {};',
+      'original/confirmed.ts': '\n/** Original. */\nexport interface Confirmed {}',
+      'original/empty.ts': '/** Original. */\nexport interface Empty {}',
+      'original/nearby.ts': '/** Original. */\nexport interface Nearby {}',
+      'original/unmapped.ts': '/** Original. */\nexport interface Unmapped {}',
+      'original/wrong.ts': '/** Original. */\nexport interface Different {}',
       'original/other.ts': 'export {};',
     };
     for (const [file, body] of Object.entries(files)) {
       mkdirSync(dirname(join(root, file)), {recursive: true});
       writeFileSync(join(root, file), body);
     }
-    for (const [name, sources] of Object.entries({
-      confirmed: ['confirmed.ts'], multiple: ['confirmed.ts', 'other.ts'], missing: ['missing.ts'],
-    })) {
+    for (const [name, sources, mappings] of [
+      // TypeScript 5.9.3 maps the generated name at 1:17 to the original name at 3:17.
+      ['confirmed', ['confirmed.ts'], 'AAEA,MAAM,WAAW,SAAS;CAAG'],
+      ['empty', ['empty.ts'], ''],
+      ['nearby', ['nearby.ts'], 'gBACiB'], // Only a segment at generated column 16.
+      ['unmapped', ['unmapped.ts'], 'iB'], // A generated coordinate with no original position.
+      ['wrong', ['wrong.ts'], 'iBACiB'], // The mapped name is Different.
+      ['multiple', ['confirmed.ts', 'other.ts'], ''],
+      ['missing', ['missing.ts'], ''],
+    ]) {
       writeFileSync(join(root, `types/${name}.d.ts.map`), JSON.stringify({
-        version: 3, file: `${name}.d.ts`, sourceRoot: '../original', sources, names: [], mappings: '',
+        version: 3, file: `${name}.d.ts`, sourceRoot: '../original', sources, names: [], mappings,
       }));
     }
     const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
     const coverage = result.coverage.find(row => row.tool === 'typedoc');
     assert.equal(coverage?.status, 'ok', coverage?.detail);
-    assert.match(coverage.detail, /avisos_sem_origem=2$/);
+    assert.match(coverage.detail, /avisos_sem_origem=6$/);
     const findings = result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC');
     assert.deepEqual(findings.map(finding => [finding.file, finding.line]).sort(),
-      [['types/confirmed.d.ts', 2], ['types/direct.d.ts', 4]]);
+      [['types/confirmed.d.ts', 1], ['types/direct.d.ts', 4]]);
     assert.match(findings.find(finding => finding.file === 'types/confirmed.d.ts')?.evidence ?? '',
       /defined in fixture\/original\/confirmed\.ts,/);
+    const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+    assert.equal(pending.length, 6);
+    for (const name of ['Empty', 'Nearby', 'Unmapped', 'Wrong', 'Multiple', 'Missing']) {
+      assert.ok(pending.some(row => row.detail.includes(`.${name}"`) && row.detail.includes('Linha indeterminada.')), name);
+    }
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
 });
 
-test('TypeDoc localiza a sobrecarga comentada e segue os escapes de chaves do lexer real', {skip: skipLocalTools}, async () => {
+test('TypeDoc mantém na cobertura o @param ambíguo entre exemplo inline e texto', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-param-position-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), [
+      '/** Exemplo em tag inline {@link',
+      ' * @param legacy',
+      ' * }. Texto. @param legacy Parâmetro antigo.',
+      ' */',
+      'export function illustrated(current: string) { return current; }',
+      '/** Controle.',
+      ' * @param legacy Parâmetro antigo.',
+      ' */',
+      'export function canonical(current: string) { return current; }',
+    ].join('\n'));
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
+    assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-PARAM-DESATUALIZADO')
+      .map(finding => [finding.file, finding.line]), [['api.ts', 7]]);
+    const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso'
+      && row.detail.includes('DOC-TYPEDOC-PARAM-DESATUALIZADO'));
+    assert.equal(pending.length, 1);
+    assert.match(pending[0].detail, /Linha indeterminada\..*"illustrated".*"@param legacy"/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('TypeDoc localiza a sobrecarga canônica e preserva avisos com escapes ou tags multilinha', {skip: skipLocalTools}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'doc-overload-comments-'));
   try {
     writeFileSync(join(root, 'api.ts'), [
@@ -1215,17 +1251,27 @@ test('TypeDoc localiza a sobrecarga comentada e segue os escapes de chaves do le
       'export function withoutDoc(value: string): string;',
       'export function withoutDoc(value: number): number;',
       'export function withoutDoc(value: string | number) { return value; }',
+      '/** Primeira sobrecarga. */',
+      'export function canonical(value: string): string;',
+      '/** Segunda sobrecarga. Consulte {@link MissingCanonical}.',
+      ' * @param legacy Parâmetro antigo.',
+      ' */',
+      'export function canonical(value: number): number;',
+      'export function canonical(value: string | number) { return value; }',
     ].join('\n'));
     const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
     const coverage = result.coverage.find(row => row.tool === 'typedoc');
     assert.equal(coverage?.status, 'ok', coverage?.detail);
-    assert.match(coverage.detail, /avisos_sem_origem=4$/);
+    assert.match(coverage.detail, /avisos_sem_origem=7$/);
     assert.deepEqual(result.findings.filter(finding => finding.tool === 'typedoc')
       .map(finding => [finding.rule, finding.file, finding.line]).sort(), [
-      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 5],
-      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 7],
-      ['DOC-TYPEDOC-PARAM-DESATUALIZADO', 'api.ts', 8],
+      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 22],
+      ['DOC-TYPEDOC-PARAM-DESATUALIZADO', 'api.ts', 23],
     ]);
+    const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+    for (const warning of ['{@link Missing}', '{@link Missing}Brace}', '@param old']) {
+      assert.ok(pending.some(row => row.detail.includes(warning) && row.detail.includes('Linha indeterminada.')), warning);
+    }
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
@@ -1250,8 +1296,8 @@ test('TypeDoc localiza avisos reais de exports default e confere assinaturas doc
   const root = mkdtempSync(join(tmpdir(), 'doc-default-exports-'));
   try {
     const files = {
-      'contract.ts': ['/** Configuração.', String.raw` * Exemplo \{@linkcode MissingContract \}.`,
-        ' * Consulte {@linkcode', ' * MissingContract}.', ' * Literal `{@linkcode MissingContract}`.',
+      'contract.ts': ['/** Configuração.',
+        ' * Literal `{@linkcode MissingContract}`.', ' * Consulte {@linkcode MissingContract}.',
         ' */', 'export default', 'interface Config {}'],
       'modes.ts': ['/** Modos.', ' * Consulte {@link MissingMode}.', ' */', 'enum Mode {', '  Active,', '}', 'export default Mode;'],
       'choice.ts': ['/** Escolhas.', ' * Consulte {@link MissingChoice}.', ' */', 'enum Choice {', '  /** Padrão. */ First,', '}', 'export { Choice as default };'],
@@ -1304,7 +1350,8 @@ test('ferramentas fixadas encontram as quatro arestas ausentes e conferem o cont
   const params = result.findings.filter(f => f.rule === 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
   assert.ok(params.some(f => f.line === 6));
   assert.ok(params.some(f => f.line === 12));
-  assert.ok(params.some(f => f.line === 31 && f.message.includes('"sample"')));
+  assert.ok(result.coverage.some(row => row.tool === 'typedoc:aviso' && row.detail.includes('Linha indeterminada.')
+    && row.detail.includes('.sample"') && row.detail.includes('"@param legacy"')));
   assert.ok(params.some(f => f.file === 'src/billing.ts' && f.line === 36 && f.message.includes('"default"')));
   assert.ok(result.findings.some(f => f.rule === 'DOC-TYPEDOC-LINK-QUEBRADO' && f.line === 13));
   const clean = await runCollector({repoDir: join(FIXTURES, 'coverage-control'), toolsRoot: MODULE_DEPLOY_DIR});
