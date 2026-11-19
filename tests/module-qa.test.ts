@@ -952,6 +952,130 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
   });
 });
 
+test('matriz protege referências literais em mensagens entre aspas', realTools, async () => {
+  await withSyntheticRepo('qa-mensagens-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      'REQ-180: Retornar a mensagem "Falhou. Calcular com `OK` de `a.mjs`. Tente novamente."',
+      'REQ-181: Retornar a mensagem Falhou. Calcular com `OK` de `a.mjs`. Tente novamente.',
+      'REQ-182: Retornar a mensagem "Falhou. Calcular com `OK` de `a.mjs`. Tente novamente.',
+      'REQ-183: Retornar a mensagem "Falhou. Tente novamente.',
+      'REQ-184: Retornar a mensagem “Falhou; Calcular com `OK` de `a.mjs`. Tente novamente.”',
+      "REQ-185: Retornar a mensagem 'Falhou. Calcular com `OK` de `a.mjs`. Tente novamente.'",
+      'REQ-186: Retornar a mensagem "Falhou (tente novamente.". Calcular com `OK` de `a.mjs`.',
+      'REQ-187: Retornar a mensagem "O estado é \\"falhou\\". Calcular com `OK` de `a.mjs`."',
+      "REQ-188: Retornar a mensagem Falta d'água. Calcular com `OK` de `a.mjs`.",
+      'REQ-189: Calcular com `OK` de `a.mjs`. Retornar a mensagem "Falhou.',
+      'REQ-190: Retornar a mensagem “Falhou. Motivo: “sem rede”. Calcular com `OK` de `a.mjs`.”.',
+      'REQ-191: Retornar a mensagem «Falhou. Motivo: «sem rede». Calcular com `OK` de `a.mjs`.»',
+      'REQ-192: Retornar a mensagem “Falhou. Motivo: «sem rede». Calcular com `OK` de `a.mjs`.”',
+      'REQ-193: Retornar a mensagem «Falhou. Motivo: “sem rede». Calcular com `OK` de `a.mjs`.”',
+      'REQ-194: Retornar a mensagem Falhou. Calcular com `OK` de `a.mjs`.»',
+      'REQ-195: Retornar a mensagem «Falhou. Calcular com `OK` de `a.mjs`.',
+      'REQ-196: Retornar a mensagem ‹Falhou. Tente novamente.›. Calcular com `OK` de `a.mjs`.',
+      'REQ-197: Retornar a mensagem d’água. Calcular com `OK` de `a.mjs`.',
+      'REQ-198: Retornar a mensagem "Falhou. Motivo: "sem rede". Calcular com `OK` de `a.mjs`."',
+      'REQ-199: Calcular com `OK` de `a.mjs`. Retornar a mensagem “Falhou. Motivo: “sem rede”.”',
+      'REQ-200: Retornar a mensagem ‘Falhou. Motivo: ‘sem rede’. Calcular com `OK` de `a.mjs`.’',
+      'REQ-201: Retornar a mensagem “Falhou. Motivo: “sem rede”. Calcular com `OK` de `a.mjs`. Tente novamente.”',
+    ], {
+      'a.mjs': 'export function OK() { return 4; }',
+    }, [
+      "import {test} from 'node:test'; import assert from 'node:assert/strict'; import {OK} from './a.mjs';",
+      "test('REQ-180 REQ-182 REQ-183 REQ-184 REQ-185 função homônima', () => assert.equal(OK(), 4));",
+      "test('REQ-190 REQ-191 REQ-192 REQ-193 REQ-194 REQ-195 REQ-198 REQ-200 REQ-201 função homônima', () => assert.equal(OK(), 4));",
+    ]);
+    for (const id of [180, 182, 183, 184, 185, 187, 190, 191, 192, 193, 194, 195, 198, 200, 201]) {
+      for (const row of [result.row(id), result.staticRow(id)]) {
+        assert.equal(row.status, 'skipped', String(id));
+        assert.match(row.detail, /sem funcionalidade identificada.*cobertura limitada.*sem teste vinculado/);
+      }
+    }
+    for (const id of [181, 186, 188, 196, 197]) {
+      assert.equal(result.row(id).status, 'ok', String(id));
+      assert.match(result.row(id).detail, /OK \(a\.mjs:1\).*vínculo comprovado nas três passadas/);
+    }
+    for (const id of [189, 199]) {
+      assert.equal(result.row(id).status, 'skipped', String(id));
+      assert.match(result.row(id).detail, /OK \(a\.mjs:1\).*cobertura limitada.*asserção do alvo concluída nas três passadas/);
+    }
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.staticFindings, []);
+  });
+});
+
+const twoMessageRequirement = 'Retornar a mensagem "Falhou. Motivo: " Sem rede. Calcular com `OK` de `a.mjs`. " Tente novamente."';
+
+test('matriz limita a cobertura a partir do primeiro de múltiplos literais de mensagem', realTools, async () => {
+  const operation = 'Calcular com `OK` de `a.mjs`';
+  const cases = [
+    {id: 202, body: twoMessageRequirement},
+    {id: 203, body: `Retornar a mensagem "Falhou"; ${operation};"Tente novamente."`},
+    {id: 204, body: `Retornar a mensagem “Falhou.”; ${operation}; «Tente novamente.»`},
+    {id: 205, body: `Retornar a mensagem 'Falhou.'  sem rede! ${operation}. 'Tente novamente.'`},
+    {id: 206, body: `Retornar a mensagem ‹Falhou.›? ${operation};‘Tente novamente.’`},
+    {id: 207, body: `Aviso (“Falhou.”). 42 segundos. ${operation}, devolver "Tente novamente."`},
+    {id: 208, body: `Retornar a mensagem "Falhou." e devolver "Sem rede."; ${operation}. «Tente novamente.»`},
+  ];
+  await withSyntheticRepo('qa-limite-literais-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      ...cases.map(({id, body}) => `REQ-${id}: ${body}`),
+      'REQ-209: Calcular com `primeira` de `a.mjs`. ' + twoMessageRequirement,
+      `REQ-210: Retornar a mensagem "Falhou.". ${operation}.`,
+    ], {
+      'a.mjs': 'export function OK() { return 4; }\nexport function primeira() { return 1; }',
+    }, [
+      "import {test} from 'node:test'; import assert from 'node:assert/strict'; import {OK, primeira} from './a.mjs';",
+      `test('${cases.map(({id}) => `REQ-${id}`).join(' ')} função homônima', () => assert.equal(OK(), 4));`,
+      "test('operação anterior à mensagem', () => assert.equal(primeira(), 1));",
+    ]);
+    assert.match(result.functionRow('a.mjs', 'OK').detail, /passed,passed,passed.*asserção do alvo concluída/);
+    for (const {id, body} of cases) {
+      for (const row of [result.row(id), result.staticRow(id)]) {
+        assert.equal(row.status, 'skipped', body);
+        assert.match(row.detail, /sem funcionalidade identificada.*cobertura limitada.*sem teste vinculado/, body);
+      }
+    }
+    const prefix = result.row(209);
+    assert.equal(prefix.status, 'skipped');
+    assert.match(prefix.detail, /primeira \(a\.mjs:2\).*cobertura limitada.*asserção do alvo concluída nas três passadas/);
+    assert.doesNotMatch(prefix.detail, /OK \(a\.mjs:/);
+    assert.equal(result.row(210).status, 'ok');
+    assert.match(result.row(210).detail, /OK \(a\.mjs:1\).*vínculo comprovado nas três passadas/);
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.staticFindings, []);
+  });
+});
+
+test('coletor físico limita a cobertura de aspas aninhadas e múltiplos literais de mensagem', realTools, async () => {
+  await withSyntheticRepo('qa-mensagens-coletor-', async repo => {
+    writeFileSync(join(repo, 'a.mjs'), 'export function OK() { return 4; }');
+    writeFileSync(join(repo, 'trace.test.mjs'), [
+      "import {test} from 'node:test'; import assert from 'node:assert/strict'; import {OK} from './a.mjs';",
+      "test('REQ-190 REQ-201 REQ-202 e REQ-186', () => assert.equal(OK(), 4));",
+    ].join('\n'));
+    writeFileSync(join(repo, 'requisitos.md'), [
+      'REQ-190: Retornar a mensagem “Falhou. Motivo: “sem rede”. Calcular com `OK` de `a.mjs`.”.',
+      'REQ-201: Retornar a mensagem “Falhou. Motivo: “sem rede”. Calcular com `OK` de `a.mjs`. Tente novamente.”',
+      'REQ-202: ' + twoMessageRequirement,
+      'REQ-186: Retornar a mensagem "Falhou (tente novamente.". Calcular com `OK` de `a.mjs`.',
+    ].join('\n'));
+    const child = spawnSync('/bin/sh', [entrypointPath], {
+      encoding: 'utf8',
+      env: {PATH: process.env.PATH, QA_HOST_TEST_MODE: '1', QA_REPO_DIR: repo},
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.stdout.trim().split('\n').length, 1);
+    const report = JSON.parse(child.stdout) as {coverage: QaCoverageRow[]; findings: QaFinding[]};
+    for (const id of [190, 201, 202]) {
+      const row = coverageFor(report, `qa-requisito:REQ-${id}`);
+      assert.equal(row.status, 'skipped', String(id));
+      assert.match(row.detail, /sem funcionalidade identificada.*cobertura limitada.*sem teste vinculado/);
+    }
+    assert.match(coverageFor(report, 'qa-requisito:REQ-186').detail, /OK \(a\.mjs:1\).*trace\.test\.mjs/);
+    assert.deepEqual(report.findings, []);
+  });
+});
+
 test('matriz e V8 concordam sobre operandos, spreads, chamadas opcionais e sombreamento', realTools, async () => {
   await withSyntheticRepo('qa-operandos-', async repo => {
     const result = await measureSyntheticRequirements(repo, [
