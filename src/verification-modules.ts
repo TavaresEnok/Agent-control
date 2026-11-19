@@ -505,13 +505,53 @@ const REMOVED_HIGH_ENTROPY = '[removido: alta entropia]';
 const BASE64_SECRET = /[A-Za-z0-9+]{40,}={0,2}/;
 const SNAKE_IDENTIFIER = /^[a-z][a-z0-9_]{31,}$/;
 const SHORT_FILE_EXTENSION = /\.[A-Za-z0-9]{1,5}$/;
-const INTERCEPT_PREFIX = String.raw`(?:\(\.\)|\(\.\.\)(?:\(\.\.\))?|\(\.\.\.\))`;
-const FRAMEWORK_DYNAMIC = String.raw`\[+(?:\.\.\.)?[\p{L}][\p{L}\p{N}_-]*\]+`;
-const FRAMEWORK_GROUP = String.raw`\([\p{L}][\p{L}\p{N}_-]*\)`;
-const FRAMEWORK_SEGMENT = new RegExp(
-  String.raw`^(?:${INTERCEPT_PREFIX}(?:${FRAMEWORK_DYNAMIC}|[\p{L}][\p{L}\p{N}_-]*)|${FRAMEWORK_DYNAMIC}|${FRAMEWORK_GROUP})$`,
-  'u',
-);
+const INTERCEPT_PREFIX = /^(?:\(\.\)|\(\.\.\)(?:\(\.\.\))?|\(\.\.\.\))(.+)$/u;
+const ROUTE_IDENTIFIER = /^[\p{L}][\p{L}\p{N}_-]*$/u;
+const APP_ROUTE_LEAF = /^(?:page|layout|template|loading|error|not-found|global-error|default|route)\.(?:[cm]?[jt]sx?)$/;
+
+function isDescriptiveRouteIdentifier(name: string): boolean {
+  if (!ROUTE_IDENTIFIER.test(name) || shannonEntropy(name) >= 4.3) return false;
+  const words = name
+    .split(/[-_]+/)
+    .flatMap(part => part.split(/(?=\p{Lu}\p{Ll})/u))
+    .filter(Boolean);
+  if (words.length === 0 || words.some(word => !/^\p{Lu}?\p{Ll}+$/u.test(word))) return false;
+  const longWordChars = words
+    .filter(word => /^\p{Lu}?\p{Ll}{3,}$/u.test(word))
+    .reduce((sum, word) => sum + word.length, 0);
+  return longWordChars * 2 >= name.length;
+}
+
+function extractFrameworkRouteName(segment: string): string | null {
+  let body = segment;
+  let intercepted = false;
+  const interceptMatch = INTERCEPT_PREFIX.exec(segment);
+  if (interceptMatch) {
+    intercepted = true;
+    body = interceptMatch[1]!;
+  }
+
+  let inner: string | null = null;
+  if (body.startsWith('[[...') && body.endsWith(']]')) {
+    inner = body.slice(5, -2);
+  } else if (body.startsWith('[...') && body.endsWith(']')) {
+    inner = body.slice(4, -1);
+  } else if (body.startsWith('[') && body.endsWith(']')) {
+    inner = body.slice(1, -1);
+  } else if (!intercepted && body.startsWith('(') && body.endsWith(')')) {
+    inner = body.slice(1, -1);
+  } else if (intercepted) {
+    inner = body;
+  }
+
+  return inner && isDescriptiveRouteIdentifier(inner) ? inner : null;
+}
+
+function isAppRouteContext(segments: readonly string[], cleanLeaf: string): boolean {
+  const appIndex = segments[0] === 'app' ? 0 : (segments[0] === 'src' && segments[1] === 'app' ? 1 : -1);
+  if (appIndex < 0 || segments.length <= appIndex + 2) return false;
+  return APP_ROUTE_LEAF.test(cleanLeaf);
+}
 
 function isSnakeToken(token: string): boolean {
   if (SNAKE_IDENTIFIER.test(token)) return true;
@@ -522,10 +562,15 @@ function isSnakeToken(token: string): boolean {
 
 function isPathToken(token: string): boolean {
   if (token.startsWith('/') || token.startsWith('./') || token.startsWith('../')) return true;
-  const segments = token.split('/');
+  const normalized = token.replace(/^(?:arquivo|modulo|pacote)=/, '');
+  const segments = normalized.split('/');
   if (segments.length <= 1) return false;
-  if (!segments.every(segment => segment.length < 32 || FRAMEWORK_SEGMENT.test(segment))) return false;
-  return segments.some(segment => SHORT_FILE_EXTENSION.test(segment.replace(/(?::\d+(?:-\d+)?)?[,;:)]*$/, '')));
+  const cleanLeaf = segments[segments.length - 1]!.replace(/(?::\d+(?:-\d+)?)?[,;:)]*$/, '');
+  if (segments.every(segment => segment.length < 32)) {
+    return segments.slice(0, -1).some(segment => SHORT_FILE_EXTENSION.test(segment)) || SHORT_FILE_EXTENSION.test(cleanLeaf);
+  }
+  if (!isAppRouteContext(segments, cleanLeaf) || cleanLeaf.length >= 32) return false;
+  return segments.slice(0, -1).every(segment => segment.length < 32 || extractFrameworkRouteName(segment) !== null);
 }
 
 function isMaskToken(token: string): boolean {

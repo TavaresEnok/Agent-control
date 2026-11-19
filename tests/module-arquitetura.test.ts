@@ -1860,8 +1860,23 @@ test('publicação preserva rotas de interceptação longas em Markdown sem exim
     'app/(..)(..)[identificadorInternacionalDaTransacao]/page.ts',
     'app/(...)[identificadorInternacionalDaTransacao]/page.ts',
     'app/(.)detalhesDoPagamentoInternacionalDaConta/page.ts',
+    'src/app/(.)[[...identificadorInternacionalDaTransacao]]/page.tsx',
   ];
-  const nonFrameworkHighEntropy = 'app/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/page.ts';
+  const negativeCases = [
+    'app/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/page.ts',
+    'app/[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]/page.ts',
+    'app/[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]]/page.ts',
+    'app/(.)AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/page.ts',
+    'app/(.)[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]/page.ts',
+    'app/(.)[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]]/page.ts',
+    'app/(AbCdEfGhIjKlMnOpQrStUvWxYz0123456789)/page.ts',
+    'src/AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/x.ts',
+    'src/(.)AbCdEfGhIjKlMnOpQrStUvWxYz0123456789/x.ts',
+    'src/(.)[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]/x.ts',
+    'src/(.)[AbCdEfGhIjKlMnOpQrStUvWxYz0123456789]]/x.ts',
+    'app/(.)[identificadorInternacionalDaTransacao]]/page.ts',
+    'src/(.)detalhesDoPagamentoInternacionalDaConta/x.ts',
+  ];
   let snapshot: string | undefined;
 
   try {
@@ -1917,7 +1932,7 @@ test('publicação preserva rotas de interceptação longas em Markdown sem exim
                     file: route,
                     files: [{name: route}],
                     exports: [],
-                    unresolved: idx === 0 ? [{name: nonFrameworkHighEntropy, line: 1}] : [],
+                    unresolved: idx === 0 ? negativeCases.map((name, i) => ({name, line: i + 1})) : [],
                   })),
                 }),
               };
@@ -1948,17 +1963,27 @@ test('publicação preserva rotas de interceptação longas em Markdown sem exim
     const cobertura = readFileSync(join(result.directory, 'cobertura.md'), 'utf8');
     const achadosMd = published.achados.map(item => readFileSync(join(result.directory, 'achados', `${item.id}.md`), 'utf8'));
     const achadosJson = readFileSync(join(result.directory, 'achados.json'), 'utf8');
+    const rawJson = readFileSync(join(result.directory, 'bruto', 'achados-brutos.json'), 'utf8');
 
     for (const route of interceptRoutes) {
       assert.ok(mapa.includes(`| ${route} |`), `mapa.md missing ${route}`);
       assert.ok(cobertura.includes(`arquivo=${route};`), `cobertura.md missing ${route}`);
       assert.ok(cobertura.includes(`| ${route} |`), `cobertura.md table missing ${route}`);
-      assert.ok(achadosMd.some(md => md.includes(`- Onde: ${route}:1`) && md.includes(route)), `achado missing ${route}`);
+      assert.ok(achadosMd.some(md => md.includes(`- Onde: ${route}:`) && md.includes(route)), `achado missing ${route}`);
       assert.ok(achadosJson.includes(route));
     }
     assert.equal(mapa.includes('[removido: alta entropia]'), false);
-    assert.equal(achadosMd.some(md => md.includes('AbCdEfGhIjKlMnOpQrStUvWxYz0123456789')), false);
-    assert.equal(achadosMd.some(md => md.includes('[removido: alta entropia]')), true);
+    for (const artifact of [mapa, cobertura, achadosJson, rawJson, ...achadosMd]) {
+      assert.equal(artifact.includes('AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'), false);
+      assert.equal(artifact.includes('[identificadorInternacionalDaTransacao]]'), false);
+      assert.equal(artifact.includes('src/(.)detalhesDoPagamentoInternacionalDaConta/x.ts'), false);
+    }
+    const unresolvedAchados = published.achados.filter(item => item.reference === 'knip:KNIP-UNRESOLVED-IMPORT');
+    assert.equal(unresolvedAchados.length, negativeCases.length);
+    for (const item of unresolvedAchados) {
+      assert.ok(item.scenario.includes('[removido: alta entropia]'), `scenario not redacted: ${item.scenario}`);
+      assert.ok(item.proof.includes('[removido: alta entropia]'), `proof not redacted: ${item.proof}`);
+    }
   } finally {
     if (snapshot) await removeModuleSnapshot(snapshot);
     rmSync(root, {recursive: true, force: true});
