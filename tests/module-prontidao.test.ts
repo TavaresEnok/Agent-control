@@ -621,6 +621,7 @@ test('Here-docs distinguem delimitadores físicos, continuados e citados de coma
       ['cat <<EOF', 'text' + '\\'.repeat(2), 'EOF'],
       ["cat <<'EOF'", 'text\\', 'EOF'],
       ['cat <<\\EOF', 'text\\', 'EOF'],
+      ["cat <<'END${fixture:-with spaces}'", 'END${fixture:-with', 'pg_dump -f ignored.dump', 'END${fixture:-with spaces}'],
       ['cat <<EOF # comentário com barra\\', 'pg_dump -f ignored.dump', 'EOF'],
     ]) {
       const result = audit([...lines, 'pg_dump -f declared.dump']);
@@ -631,16 +632,25 @@ test('Here-docs distinguem delimitadores físicos, continuados e citados de coma
       assert.doesNotMatch(JSON.stringify(result), /ignored\.dump|declared\.dump/);
     }
 
+    const compoundDelimiter = [
+      "cat <<'END'${fixture:-with spaces}", 'END${fixture:-with', 'pg_dump -f fixture.dump', 'END${fixture:-with spaces}',
+    ];
     for (const lines of [
       ['cat <<EOF', 'text\\', 'EOF', 'pg_dump -f fixture.dump'],
       ["cat <<$'EOF'", 'pg_dump -f fixture.dump', 'EOF'],
+      compoundDelimiter,
       ['cat <<EOF | wc -l', 'pg_dump -f fixture.dump', 'EOF'],
     ]) {
       const result = audit(lines);
       assert.equal(backupMissing(result), true);
       assert.equal(requirement(result)?.status, 'failed');
       assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith('backup.sh: linha 2,')));
+      assert.equal(result.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
     }
+    const knownPrefix = audit(['pg_dump -f /var/backups/fixture.dump', ...compoundDelimiter, 'pg_dump -f later.dump']);
+    assert.equal(backupMissing(knownPrefix), false);
+    assert.ok(knownPrefix.coverage.some(c => c.status === 'failed' && c.detail.startsWith('backup.sh: linha 3,')));
+    assert.equal(knownPrefix.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }
@@ -989,6 +999,40 @@ test('Compose consome blocos dobrados de metadados e mantém as verificações d
   }
 });
 
+test('Compose limita a cobertura de extensões de raiz às referências nos serviços', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-compose-ancora-'));
+  try {
+    const file = join(dir, 'compose.yaml');
+    const audit = (note: string, ...serviceSettings: string[]) => {
+      writeFileSync(file, [
+        'x-notes: &unused',
+        '  logging:',
+        `    driver: ${note}`,
+        'services:',
+        '  api:',
+        '    image: scratch',
+        ...serviceSettings,
+      ].join('\n'));
+      return auditRepositoryReadiness(dir);
+    };
+    for (const note of ['local', '!!str local']) {
+      const result = audit(note);
+      assert.equal(result.coverage.some(c => c.status === 'failed'), false);
+      assert.deepEqual(result.findings.filter(f => f.rule === 'PRONTIDAO-LOG-SEM-ROTACAO').map(f => f.line), [5]);
+    }
+    const partial = audit('!!str local', '    <<: *unused');
+    assert.ok(partial.coverage.some(c => c.status === 'failed' && c.detail.startsWith('compose.yaml:')));
+    assert.equal(partial.coverage.find(c => c.tool === 'prontidao:requisito:alertas-logs')?.status, 'failed');
+
+    writeFileSync(file, 'x-restart: &restart/v1 always\nservices:\n  api:\n    image: scratch\n    restart: *restart/v1\n');
+    const alias = auditRepositoryReadiness(dir);
+    assert.equal(alias.coverage.find(c => c.tool === 'prontidao:requisito:reinicio-automatico')?.status, 'failed');
+    assert.equal(alias.findings.some(f => f.rule === 'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE'), false);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
 test('Caddy e Nginx auditam o bloco efetivo e declaram imports ou rotas não resolvidos', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-proxy-'));
   try {
@@ -1115,18 +1159,49 @@ test('Redirecionamentos HTTPS validam a autoridade e preservam destinos literais
       'https:///elsewhere', 'https://fixture.invalid@', 'https://fixture.invalid/%ZZ',
     ];
     const valid = ['https://fixture.invalid', 'https://[2001:db8::1]:8443/path?x=y', 'https://fixture.invalid/p%20q'];
+    const invalidNginx = [...invalid, 'https://fixture.invalid:bad/$request_filename', 'https://[not:ipv6]/${request_filename}'];
+    const nginxKnown = [...valid, 'https://${host}$request_uri'];
+    const nginxUnknown = ['https://fixture.invalid/$request_filename', 'https://$custom_host:bad/path', 'https://$host$request_uri?$custom_query'];
     writeFileSync(join(dir, 'Caddyfile'), [...invalid, ...valid, 'https://{host}{uri}'].flatMap((target, i) => [
       'http://site' + i + '.invalid {',
       '  redir /* ' + target + ' 303',
       '}',
     ]).join('\n'));
-    writeFileSync(join(dir, 'nginx.conf'), [...invalid, ...valid, 'https://${host}$request_uri'].map((target, i) =>
+    writeFileSync(join(dir, 'nginx.conf'), [...invalidNginx, ...nginxKnown, ...nginxUnknown].map((target, i) =>
       'server { listen ' + (8000 + i) + '; return 303 "' + target + '"; }').join('\n'));
     const out = auditRepositoryReadiness(dir);
     const findings = (file: string) => out.findings.filter(f => f.file === file && f.rule === 'PRONTIDAO-TLS-DESATIVADO').map(f => f.line);
     assert.deepEqual(findings('Caddyfile'), invalid.map((_, i) => i * 3 + 1));
-    assert.deepEqual(findings('nginx.conf'), invalid.map((_, i) => i + 1));
-    assert.equal(out.coverage.find(c => c.tool === 'prontidao:requisito:tls-cabecalhos')?.status, 'ok');
+    assert.ok(out.coverage.some(c => c.status === 'ok' && c.detail.startsWith('Caddyfile: verificações [')));
+    assert.deepEqual(findings('nginx.conf'), invalidNginx.map((_, i) => i + 1));
+    assert.deepEqual(out.coverage.filter(c => c.status === 'failed' && c.detail.startsWith('nginx.conf: linha '))
+      .map(c => Number(/^nginx\.conf: linha (\d+),/.exec(c.detail)?.[1])),
+      nginxUnknown.map((_, i) => invalidNginx.length + nginxKnown.length + i + 1));
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Nginx considera o 301 da barra final antes do return da localização', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-nginx-barra-'));
+  try {
+    const toHttps = 'return 308 https://fixture.invalid;';
+    const root = `location / { ${toHttps} }`;
+    const app = `location /app/ { ${toHttps} proxy_pass http://fixture.invalid; }`;
+    writeFileSync(join(dir, 'nginx.conf'), [
+      `server { listen 8000; ${root} ${app} }`,
+      `server { listen 8001; absolute_redirect off; ${root} ${app} }`,
+      `server { listen 8002; ${root} ${app} location = /app { ${toHttps} } }`,
+      `server { listen 8003; ${toHttps} ${root} ${app} }`,
+      `server { listen 8004; ${root} location /app/ { ${toHttps} } }`,
+      `server { listen 8005; ${root} location /app { ${toHttps} proxy_pass http://fixture.invalid; } }`,
+      `server { listen 8006; error_page 301 /redirect; ${root} ${app} }`,
+      `server { listen 8007; error_page 404 /redirect; ${root} location /app/ { internal; ${toHttps} proxy_pass http://fixture.invalid; } }`,
+    ].join('\n'));
+    const result = auditRepositoryReadiness(dir);
+    assert.deepEqual(result.findings.filter(f => f.rule === 'PRONTIDAO-TLS-DESATIVADO').map(f => f.line), [1, 2]);
+    assert.deepEqual(result.coverage.filter(c => c.status === 'failed' && c.detail.startsWith('nginx.conf: linha '))
+      .map(c => Number(/^nginx\.conf: linha (\d+),/.exec(c.detail)?.[1])), [7, 8]);
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }

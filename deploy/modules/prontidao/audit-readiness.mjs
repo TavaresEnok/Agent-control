@@ -193,6 +193,7 @@ function* composeLines(content, onIncomplete) {
   const lines = content.split(/\r?\n/);
   const endedWithNewline = lines.at(-1) === '';
   if (endedWithNewline) lines.pop();
+  let rootIndent;
   function* expand(text, indent, line, inFlow = false) {
     const property = yamlProperty(text, inFlow);
     const value = property && withoutYamlAnchor(property.value);
@@ -218,6 +219,7 @@ function* composeLines(content, onIncomplete) {
       if (lines.slice(i + 1).some(rest => stripYamlComment(rest).trim())) onIncomplete();
       return;
     }
+    rootIndent ??= indent;
     if (/^(?:---|%|\?\s)/.test(text)) onIncomplete();
     if (text.startsWith('{')) raw = `__root__: ${text}`;
     const prop = yamlProperty(raw.trim());
@@ -227,6 +229,17 @@ function* composeLines(content, onIncomplete) {
       const flow = flowEntries(value, () => i + 1 < lines.length ? stripYamlComment(lines[++i]) : undefined);
       if (!flow) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
       raw = `${prop.key}: ${flow.value}`;
+    }
+    if (indent === rootIndent && prop && unquote(prop.key).startsWith('x-')) {
+      // Root extensions are metadata. Aliases and merges in services are checked at their use sites.
+      while (i + 1 < lines.length) {
+        const next = stripYamlComment(lines[i + 1]);
+        const nextIndent = next.search(/\S/);
+        if (nextIndent >= 0 && nextIndent <= indent && !(nextIndent === indent && /^-\s/.test(next.trimStart()))) break;
+        i++;
+      }
+      yield {key: prop.key, text, indent, line};
+      continue;
     }
     if (YAML_BLOCK.test(value)) {
       let scalar = '';
@@ -319,7 +332,7 @@ export function parseComposeServices(content, onIncomplete = () => {}) {
       }
       continue;
     }
-    if (key === '<<' || /^\*[\w.-]+$/.test(value)) {
+    if (key === '<<' || value.startsWith('*')) {
       if (!current || indent <= serviceIndent) {
         serviceIndent = indent;
         current = null;
@@ -552,6 +565,9 @@ const PROTECTION_HEADERS = new Set([
 ]);
 const HTTPS_REDIRECT_STATUSES = /^(?:301|302|303|307|308)$/;
 const NGINX_HEADER_STATUSES = new Set([200, 201, 204, 206, 301, 302, 303, 304, 307, 308]);
+const NGINX_SLASH_REDIRECT_HANDLERS = new Set([
+  'proxy_pass', 'fastcgi_pass', 'uwsgi_pass', 'scgi_pass', 'memcached_pass', 'grpc_pass',
+]);
 
 function httpsDestination(value, proxy) {
   if (!/^https:\/\//i.test(value ?? '') || /[\s\\\x00-\x1f\x7f<>"\x60]|%(?![\da-f]{2})/i.test(value)) return false;
@@ -563,19 +579,18 @@ function httpsDestination(value, proxy) {
       }
     : {host: 'fixture.invalid', request_uri: '/path', uri: '/path', server_port: '443'};
   const placeholder = proxy === 'Caddy' ? /\{([\w.]+)\}/g : /\$(?:\{(\w+)\}|(\w+))/g;
-  let unresolved = false;
-  const candidate = value.replace(placeholder, (_, first, second) => {
+  const expanded = value.replace(placeholder, (match, first, second) => {
     const name = first ?? second;
-    if (Object.hasOwn(substitutions, name)) return substitutions[name];
-    unresolved = true;
-    return 'fixture.invalid';
+    return Object.hasOwn(substitutions, name) ? substitutions[name] : match;
   });
   // URL normalizes forms such as empty ports and extra slashes. Require an explicit authority first.
-  const authority = /^https:\/\/([^/?#]+)/i.exec(candidate)?.[1];
+  const authority = /^https:\/\/([^/?#]+)/i.exec(expanded)?.[1];
+  const candidate = expanded.replace(placeholder, 'fixture.invalid');
   if (!authority || /[{}]/.test(candidate)) return false;
+  if (authority.match(placeholder)) return null;
   if (!/^(?:[^:[\]@]*(?::[^:[\]@]*)?@)?(?:\[[^\]]+\]|[^:[\]@]+)(?::\d+)?$/.test(authority)
-    || !URL.canParse(candidate)) return unresolved ? null : false;
-  return unresolved ? null : true;
+    || !URL.canParse(candidate)) return false;
+  return expanded === candidate ? true : null;
 }
 
 function checkProxyHeaders(file, line, proxy, headers, findings, pillarCounts) {
@@ -920,16 +935,23 @@ function nginxHttpRedirect(server, policy, onIncomplete) {
     }
     return null;
   });
-  if (paths.includes(null) || new Set(paths).size !== paths.length) return null;
-  if (!paths.includes('/')) {
+  const pathSet = new Set(paths);
+  if (pathSet.has(null) || pathSet.size !== paths.length) return null;
+  if (!pathSet.has('/')) {
     return nginxErrorPageAffects(policy.errorPages, 404) ? null : false;
   }
-  const redirects = locations.map(location => {
+  const redirects = locations.map((location, index) => {
     if (location.children.some(child => child.name === 'location')
       || location.directives.some(item => item.name === 'include')) return null;
-    const response = nginxResponse(location);
     const errorPages = nginxErrorPages(location, policy.errorPages, onIncomplete);
     const internal = location.directives.some(item => item.name === 'internal');
+    const path = paths[index];
+    // Location lookup can append a slash before location-level rewrite directives run.
+    if (!internal && path.startsWith('/') && path.length > 1 && path.endsWith('/') && !pathSet.has('= ' + path.slice(0, -1))
+      && location.directives.some(item => NGINX_SLASH_REDIRECT_HANDLERS.has(item.name))) {
+      return nginxErrorPageAffects(errorPages, 301) ? null : false;
+    }
+    const response = nginxResponse(location);
     if (response.unknown || nginxErrorPageAffects(errorPages, internal ? 404 : response.status)) return null;
     return !internal && response.redirectsHttps === true;
   });
@@ -1164,6 +1186,9 @@ function shellHeredocs(parsed) {
     if (!word.operator || !/^\d*<<-?$/.test(word.text)) continue;
     const next = parsed.words[position + 1];
     if (!next?.raw || /\$['"]/.test(next.raw)) return null;
+    // Spaces inside ${...} can belong to the same Bash word. A split token is unsafe as a delimiter.
+    const unquoted = next.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, ' ');
+    if (unquoted.includes('${')) return null;
     const delimiter = next.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, part =>
       part.startsWith('"') ? part.slice(1, -1).replace(/\\([$"\\\x60])/g, '$1')
         : part.startsWith("'") ? part.slice(1, -1) : part.slice(1));
