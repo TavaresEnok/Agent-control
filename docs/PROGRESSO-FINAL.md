@@ -1273,3 +1273,9 @@ PAUSADO-COTA
 - 19/11/2026 22:24 UTC — Correção aprovada de arquitetura em 615c1f9f integrada à bancada no merge 26ab7c2b.
 - 19/11/2026 22:26 UTC — C-DOCUMENTACAO-VIVA-R4 encerrado com código 0.
 - 19/11/2026 22:26 UTC — Correção doc-viva recebida em ffad6b43. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:26 UTC — C-ACEITE-PRONTIDAO-VIVA-R6 encerrado com código 0.
+- 19/11/2026 22:26 UTC — revisor-C-ACEITE-CONFORMIDADE-VIVA-R4 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:26 UTC — Imagem de conformidade construída e arquivada por digest em 51ff4098.
+- 19/11/2026 22:27 UTC — Imagem de documentacao construída e arquivada por digest em 4257aebc.
+- 19/11/2026 22:27 UTC — documentacao em 4257aebc publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 333, 'failed': 0, 'skipped': 62}; código do produto OK.
+- 19/11/2026 22:27 UTC — Corrige os argumentos que alteram a cobertura efetiva de prontidão. Ordem C-PRONTIDAO-VIVA-R7 em worktree separado conforme 43f1c664.
