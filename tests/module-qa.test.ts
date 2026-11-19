@@ -952,6 +952,42 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
   });
 });
 
+test('matriz protege referências literais em mensagens entre aspas', realTools, async () => {
+  await withSyntheticRepo('qa-mensagens-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      'REQ-180: Retornar a mensagem "Falhou. Calcular com `OK` de `a.mjs`. Tente novamente."',
+      'REQ-181: Retornar a mensagem Falhou. Calcular com `OK` de `a.mjs`. Tente novamente.',
+      'REQ-182: Retornar a mensagem "Falhou. Calcular com `OK` de `a.mjs`. Tente novamente.',
+      'REQ-183: Retornar a mensagem "Falhou. Tente novamente.',
+      'REQ-184: Retornar a mensagem “Falhou; Calcular com `OK` de `a.mjs`. Tente novamente.”',
+      "REQ-185: Retornar a mensagem 'Falhou. Calcular com `OK` de `a.mjs`. Tente novamente.'",
+      'REQ-186: Retornar a mensagem "Falhou (tente novamente.". Calcular com `OK` de `a.mjs`.',
+      'REQ-187: Retornar a mensagem "O estado é \\"falhou\\". Calcular com `OK` de `a.mjs`."',
+      "REQ-188: Retornar a mensagem Falta d'água. Calcular com `OK` de `a.mjs`.",
+      'REQ-189: Calcular com `OK` de `a.mjs`. Retornar a mensagem "Falhou.',
+    ], {
+      'a.mjs': 'export function OK() { return 4; }',
+    }, [
+      "import {test} from 'node:test'; import assert from 'node:assert/strict'; import {OK} from './a.mjs';",
+      "test('REQ-180 REQ-182 REQ-183 REQ-184 REQ-185 função homônima', () => assert.equal(OK(), 4));",
+    ]);
+    for (const id of [180, 182, 183, 184, 185, 187]) {
+      for (const row of [result.row(id), result.staticRow(id)]) {
+        assert.equal(row.status, 'skipped', String(id));
+        assert.match(row.detail, /sem funcionalidade identificada.*cobertura limitada.*sem teste vinculado/);
+      }
+    }
+    for (const id of [181, 186, 188]) {
+      assert.equal(result.row(id).status, 'ok', String(id));
+      assert.match(result.row(id).detail, /OK \(a\.mjs:1\).*vínculo comprovado nas três passadas/);
+    }
+    assert.equal(result.row(189).status, 'skipped');
+    assert.match(result.row(189).detail, /OK \(a\.mjs:1\).*cobertura limitada.*asserção do alvo concluída nas três passadas/);
+    assert.deepEqual(result.findings, []);
+    assert.deepEqual(result.staticFindings, []);
+  });
+});
+
 test('matriz e V8 concordam sobre operandos, spreads, chamadas opcionais e sombreamento', realTools, async () => {
   await withSyntheticRepo('qa-operandos-', async repo => {
     const result = await measureSyntheticRequirements(repo, [
