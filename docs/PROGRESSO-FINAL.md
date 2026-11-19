@@ -1018,3 +1018,4 @@ PAUSADO-COTA
 - 19/11/2026 19:49 UTC — Suíte de entrega-prontidao-1 em 0976b46a passou: 273 arquivos, 0 falhas, 91 excluídos pelo executor.
 - 19/11/2026 19:51 UTC — Aceite de entrega-prontidao-1 em 0976b46a passou em TypeScript, suíte oficial, complementares e laboratório.
 - 19/11/2026 19:51 UTC — Aceite de all em 6587e792 iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
+- 19/11/2026 19:51 UTC — Integração C6 em task/personal-activation concluída no merge ff7e75b0 do candidato 0976b46a. O checkout de homologação 0976b46a passou em TypeScript, suíte oficial, complementares e laboratório. A instalação aguarda a aplicação conjunta.
