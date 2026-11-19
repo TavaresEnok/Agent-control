@@ -24,3 +24,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 — A.5 primeira versão em 3993a54e; Argon revisa o uso de direções visuais fixas em outros projetos. C4-R2 entregue em 3d5418ad e C6 em c9c9f659, ambos em prova de imagem. C7 iniciado. Na suíte R13, completed-node-recovery e design-reconstruction passaram.
 - 19/11/2026 — C4-R2 passou o laboratório real offline com defeitos plantados e controle limpo: 1/1, 7,3 s. Imagem 89f999f2dccd fixada no ramo em 34cc3227. Disco 86%. Integração e revisão do módulo pendentes.
 - 19/11/2026 — Suíte oficial verde no código integrado da R13 (e92a26f6): 236 arquivos passaram, zero falharam e 86 foram excluídos pelo executor. Artefato gerado da suíte restaurado. R14 pendente por achados da revisão.
+- 19/11/2026 — R13 passou os cinco arquivos adicionais: 51/51, sem pulos, 94,2 s. C3-R3 passou o laboratório com a imagem real: 1/1, 9,4 s; digest fixado em c1536db0. C9 em execução no assento liberado.
