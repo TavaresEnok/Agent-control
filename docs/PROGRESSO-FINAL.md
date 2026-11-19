@@ -528,3 +528,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:08 UTC — Trabalhador encerrou C2-PROPRIEDADES-JS em b991995f (código 0). Gerente confere a entrega.
 - 19/11/2026 06:08 UTC — Trabalho C-CORRECAO-ESCOPO iniciado por Sol high normal em final-correcao-por-arquivo.
 - 19/11/2026 06:09 UTC — A suíte de C3 em e66a635f passou em 256 arquivos e falhou em module-arquitetura.test.ts. O checkout de aceite carregava o pacote de versão do TypeScript 7 raiz, sem a API de AST. Com a dependência 5.9.3 do lock do coletor, o arquivo passou nos 18 casos executáveis nesse host; o ensaio de permissão é condicionado ao usuário. A suíte completa será repetida. Revisão de mutação Python/Go encaminhada aos trabalhadores.
+- 19/11/2026 06:10 UTC — Revisor encerrou C-EXAME-R5 em 6ec910f0 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:10 UTC — Revisão C-EXAME-R5-INTEGRACAO iniciada por Sol high normal somente leitura em 1fd88007.
+- 19/11/2026 06:11 UTC — Em c87a21ab passaram 26/26 na rodada das oito CLIs e da reverificação. C5 a22546c0: prova física verde com pg_stat_statements, Docker, Git e PostgreSQL; a medição confirma a fonte correta e a substituição por SELECT 1 recebe provável. C-PAINEL 58690bb2: sete testes passaram na API. C2 fast-check integrado em f4cb3216; imagem será reconstruída.
