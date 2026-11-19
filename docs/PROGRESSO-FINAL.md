@@ -1309,3 +1309,5 @@ PAUSADO-COTA
 - 19/11/2026 22:35 UTC — Imagem de conformidade construída e arquivada por digest em 3e66f954.
 - 19/11/2026 22:35 UTC — C-ACEITE-DOCUMENTACAO-VIVA-R5 encerrado com código 0.
 - 19/11/2026 22:35 UTC — Mantém a proteção de nomes opacos com separadores no coletor. Ordem C-CONFORMIDADE-VIVA-R6 em worktree separado conforme 43f1c664.
+- 19/11/2026 22:35 UTC — trabalho-C-CONFORMIDADE-VIVA-R6 iniciado em final-c9-publicacao por terra high.
+- 19/11/2026 22:36 UTC — Exige a declaração da aresta no Mermaid publicado pela CLI. Ordem C-DOCUMENTACAO-VIVA-R6 em worktree separado conforme 43f1c664.
