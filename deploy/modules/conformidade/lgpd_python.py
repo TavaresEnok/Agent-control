@@ -42,7 +42,7 @@ CAPTURED = Value(unknown=True, invalidated=True)
 
 
 def scalar_operand(value):
-    return value is None or value.truth is not None or (value.line is not None and not value.unknown)
+    return value is None or (not value.unknown and (value.truth is not None or value.line is not None))
 
 
 def literal_truth(node):
@@ -66,10 +66,16 @@ def expression_truth(node, logical_truths):
     if not isinstance(node, ast.BoolOp):
         return literal_truth(node)
     if node not in logical_truths:
+        stop = isinstance(node.op, ast.Or)
+        truth = not stop
         for value in node.values:
-            truth = expression_truth(value, logical_truths)
-            if needs_right(node, truth) is not True:
+            operand = expression_truth(value, logical_truths)
+            # Earlier short-circuit paths have this same truth.
+            if operand is stop:
+                truth = stop
                 break
+            if operand is None:
+                truth = None
         logical_truths[node] = truth
     return logical_truths[node]
 
@@ -438,7 +444,7 @@ class Analyzer(ast.NodeVisitor):
                     return evaluate(index + 1)
                 before = self.branch_value(left)
                 after, = self.branches(index + 1, evaluate=lambda start: self.branch_value(evaluate(start)))
-                return self.join_values(before, after)
+                return self.join_values(before, after, stopped_truth=isinstance(node.op, ast.Or))
 
             return evaluate(0)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
@@ -470,23 +476,23 @@ class Analyzer(ast.NodeVisitor):
     def branch_value(self, reference):
         return reference, self.state(reference), self.origin(reference)
 
-    def join_values(self, left, right):
+    def join_values(self, left, right, stopped_truth=None):
         left_ref, left_state, left_origin = left
         right_ref, right_state, right_origin = right
         if left_ref is right_ref:
             return left_ref
+        left_truth = stopped_truth if stopped_truth is not None else left_ref and left_ref.truth
+        truth = left_truth if right_ref and left_truth is right_ref.truth else None
         if any(value and value.invalidated for value in (left_state, right_state)):
-            return Value(unknown=True, invalidated=True, attrs={}, alternatives=(left_ref, right_ref))
-        if left_state and right_state and left_state.truth is not None and left_state.truth is right_state.truth:
-            return left_ref
+            return Value(unknown=True, invalidated=True, attrs={}, truth=truth, alternatives=(left_ref, right_ref))
         if any(value and (value.items is not None or value.effects or value.kind or value.bound_receiver or
                           (not value.unknown and (value.keys is not None or value.attrs is not None)) or
                           value.keys or value.attrs)
                for value in (left_state, right_state)):
             self.gaps[EXPRESSION] += 1
-            return Value(unknown=True, invalidated=True, attrs={}, alternatives=(left_ref, right_ref))
+            return Value(unknown=True, invalidated=True, attrs={}, truth=truth, alternatives=(left_ref, right_ref))
         source = left_origin or right_origin
-        return Value(source) if source is not None else None
+        return Value(source, truth=truth) if source is not None or truth is not None else None
 
     def property_reference(self, target):
         reference = self.value(target.value)

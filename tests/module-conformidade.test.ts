@@ -1102,16 +1102,20 @@ from lgpd_analyzer import inspect_fields, javascript_destinations
 cases = []
 capture = "vínculos externos a funções"
 for gate, js, py, reaches_stop in (
-    ("false", "false", "False", False),
-    ("true", "true", "True", True),
-    ("unknown", "fixtureGate", "fixture_gate", True),
+    ("false", "(false && true) && stop()", "(False and True) and stop()", False),
+    ("true", "(true && true) && stop()", "(True and True) and stop()", True),
+    ("unknown", "(fixtureGate && true) && stop()", "(fixture_gate and True) and stop()", True),
+    ("false-right", "(fixtureGate && false) && stop()", "((fixture_gate is None) and False) and stop()", False),
+    ("true-right", "(fixtureGate || true) || stop()", "((fixture_gate is None) or True) or stop()", False),
+    ("and-chain", "(fixtureGate && fixtureOther && false) && stop()",
+     "(fixture_gate and fixture_other and False) and stop()", False),
 ):
     reasons = (capture,) if reaches_stop else ()
     cases.extend([
         (f"logical-{gate}.js", f'''const reading = mockRow.quartzSignal;
 let emit = logger.info;
 function stop() {{ emit = () => {{}}; }}
-function run() {{ ({js} && true) && stop(); }}
+function run() {{ {js}; }}
 run();
 emit(reading);
 logger.info(mockRow.amberSignal);''',
@@ -1121,7 +1125,7 @@ emit = print
 def stop():
     global emit
     emit = lambda *items: None
-def run(): ({py} and True) and stop()
+def run(): {py}
 run()
 emit(reading)
 print(mock_row.amberSignal)''',
@@ -1133,6 +1137,12 @@ mutation = "mutações de propriedades"
 for name, argument, invalidates_tray, reasons in (
     ("object", "{}", False, (capture, mutation)),
     ("compound", "(false && fixtureTarget) || {}", False, (capture, mutation)),
+    ("compound-unknown-left", "(fixtureTarget && false) || {}", False, (capture, mutation)),
+    ("defined-nullable", "fixtureTarget || null", False, (capture, mutation)),
+    ("defined-non-nullish", "(fixtureTarget || false) ?? undefined", False, (capture, mutation)),
+    ("maybe-nullish", "(fixtureTarget || null) ?? undefined", True, (capture, mutation, uncertain_default)),
+    ("maybe-undefined", "fixtureTarget && false", True, (capture, mutation, uncertain_default)),
+    ("always-undefined", "(fixtureTarget || true) && undefined", True, (capture, mutation)),
     ("omitted", "", True, (capture, mutation)),
     ("undefined", "undefined", True, (capture, mutation)),
     ("unknown", "fixtureTarget", True, (capture, mutation, uncertain_default)),
@@ -1161,6 +1171,37 @@ function run({parameter}) {{
 run();
 emit(reading);
 logger.info(mockRow.amberSignal);''', expected, reasons))
+
+cases.extend([
+    ("arguments.js", '''let reading = mockRow.quartzSignal;
+let emit = logger.info;
+function clear(target = (emit = () => {})) {}
+const argument = fixtureGate || null;
+clear(argument);
+emit(reading);
+logger.info((fixtureGate && false) && mockRow.amberSignal);
+logger.info((fixtureGate || true) || mockRow.amberSignal);
+logger.info((fixtureGate || false) ?? mockRow.amberSignal);
+logger.info((fixtureGate || null) ?? mockRow.amberSignal);''', [(6, 1), (10, 10)], ()),
+    ("arguments.py", '''reading = mock_row.quartzSignal
+print(reading)
+print((fixture_gate and False) and mock_row.amberSignal)
+print((fixture_gate or True) or mock_row.amberSignal)''', [(2, 1)], ()),
+    ("left-effects.js", '''let emit = logger.info;
+function stop() { emit = () => {}; }
+function touch() { stop(); }
+function run() { (touch() && false) && logger.info(mockRow.amberSignal); }
+run();
+emit(mockRow.quartzSignal);''', [], (capture, "resultados de chamadas sem vínculo estático")),
+    ("left-effects.py", '''emit = print
+def stop():
+    global emit
+    emit = lambda *items: None
+def touch(): stop()
+def run(): (touch() and False) and print(mock_row.amberSignal)
+run()
+emit(mock_row.quartzSignal)''', [], (capture, "chamadas com possível origem e destino sem vínculo estático")),
+])
 
 with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
     parsed = javascript_destinations((file, source) for file, source, _, _ in cases)
