@@ -21,6 +21,7 @@ import {
 } from '../deploy/modules/documentacao/collect.mjs';
 import {assembleDocumentationArtifacts} from '../src/module-documentation-artifacts.ts';
 import {hasKnownSecret} from '../src/verify-redact.ts';
+import {REMEDIATION_ACCEPTANCE} from '../src/verify-types.ts';
 
 const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const MODULE_DEPLOY_DIR = join(ROOT_DIR, 'deploy', 'modules', 'documentacao');
@@ -2218,7 +2219,7 @@ test('falha final da CLI com caminho protegido preserva documentacao:privacidade
 });
 
 test('rotas com colchetes, parênteses e Unicode preservam achados e cobertura sem disparar documentacao:limites', async () => {
-  const {writeModuleReport} = await import('../src/verification-modules.ts');
+  const {writeModuleReport, readModuleReport} = await import('../src/verification-modules.ts');
   const tmp = mkdtempSync(join(tmpdir(), 'doc-route-paths-'));
   const repoDir = join(tmp, 'repo');
   const dataDirectory = join(tmp, 'data');
@@ -2233,7 +2234,8 @@ test('rotas com colchetes, parênteses e Unicode preservam achados e cobertura s
     mkdirSync(dataDirectory, {mode: 0o700});
     for (const rel of routeFiles) {
       mkdirSync(dirname(join(repoDir, rel)), {recursive: true});
-      writeFileSync(join(repoDir, rel), `export function handler() { return 1; }\n`);
+      const dependency = rel === routeFiles[0] ? "import {handler as other} from '../../../../routes/ação (v2)/[param].js';\n" : '';
+      writeFileSync(join(repoDir, rel), `${dependency}export function handler() { return 1; }\n`);
     }
     const reflection = {
       kind: 1,
@@ -2278,7 +2280,60 @@ test('rotas com colchetes, parênteses e Unicode preservam achados e cobertura s
       assert.deepEqual(new Set(realValidated.findings.map(f => f.file)), new Set(routeFiles));
       assert.equal(realValidated.coverage.find(row => row.tool === 'documentacao:limites'), undefined);
       assert.equal(realValidated.coverage.find(row => row.tool === 'documentacao:escopo'), undefined);
+      assert.match(realValidated.coverage.find(row => row.tool === 'mermaid')?.detail ?? '', /diagrama_codigo_valido=true; erro_diagrama_gerado=$/);
+      const realReport = await writeModuleReport({
+        dataDirectory, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+        runId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', createdAt: new Date('2026-11-19T00:00:00Z'),
+        commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: realValidated.coverage, fileCoverage: [],
+        achados: realValidated.findings.map((finding, index) => ({
+          id: `ACH-${String(index + 1).padStart(3, '0')}`, title: finding.message, severity: finding.severity,
+          status: 'provavel', verifier: null, reference: `${finding.tool}:${finding.rule}`,
+          where: {file: finding.file, line: finding.line}, scenario: finding.message, proof: finding.evidence,
+          suggestion: 'Revisar o trecho.', acceptance: REMEDIATION_ACCEPTANCE,
+          sources: [finding.tool, finding.rule], secretPreview: null,
+        })), raw: realValidated,
+      });
+      const diagramPublished = readFileSync(join(realReport.directory, 'dependencias.mmd'), 'utf8');
+      const pageNode = diagramPublished.match(/^subgraph [A-Z0-9]+\["\[id_0\]"\]\n([A-Z0-9]+)\["page\.tsx"\]$/m)?.[1];
+      const targetNode = diagramPublished.match(/^subgraph [A-Z0-9]+\["ação \(v2\)"\]\n([A-Z0-9]+)\["\[param\]\.ts"\]$/m)?.[1];
+      assert.ok(pageNode && targetNode, diagramPublished);
+      assert.ok(diagramPublished.includes(`${pageNode}-->${targetNode}`));
+      for (const label of ['(portal)', '[id_0]', 'page.tsx', 'ação (v2)', '[param].ts']) {
+        assert.ok(diagramPublished.includes(label), `rótulo ausente: ${label}\n${diagramPublished}`);
+      }
+      const published = await readModuleReport(dataDirectory, '11111111-1111-4111-8111-111111111111',
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'documentacao');
+      assert.equal(published.achados.length, 18);
+      assert.deepEqual(new Set(published.achados.map(a => a.where.file)), new Set(routeFiles));
+      assert.match(published.toolCoverage.find(row => row.tool === 'mermaid')?.detail ?? '', /diagrama_codigo_valido=true; erro_diagrama_gerado=$/);
     }
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('TypeDoc instalado coleta a única entrada em rota com grupo e parâmetro', {skip: skipLocalTools}, async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-single-route-'));
+  const route = 'src/app/(portal)/[id]/page.tsx';
+  try {
+    mkdirSync(dirname(join(tmp, route)), {recursive: true});
+    writeFileSync(join(tmp, route), 'export function handler() { return 1; }\n');
+    const result = await validateWithBase(await runCollector({repoDir: tmp, toolsRoot: MODULE_DEPLOY_DIR}));
+    const typedoc = result.coverage.find(row => row.tool === 'typedoc');
+    assert.equal(typedoc?.version, JSON.parse(readFileSync(join(MODULE_DEPLOY_DIR, 'package.json'), 'utf8')).dependencies.typedoc);
+    assert.equal(typedoc?.status, 'ok', typedoc?.detail);
+    assert.ok(result.findings.some(f => f.tool === 'typedoc' && f.file === route));
+    assert.ok(result.coverage.some(row => row.tool === 'typedoc:file' && row.detail.startsWith(`arquivo=${route};`)));
+    assert.equal(result.coverage.find(row => row.tool === 'documentacao:escopo'), undefined);
+    // O padrão exato não pode incluir arquivos de teste excluídos da seleção.
+    writeFileSync(join(tmp, 'src/app/(portal)/[id]/page.test.ts'), 'export const excludedSentinel = 1;\n');
+    const withExcluded = await validateWithBase(await runCollector({repoDir: tmp, toolsRoot: MODULE_DEPLOY_DIR}));
+    assert.equal(withExcluded.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
+    assert.ok(withExcluded.findings.some(f => f.file === route));
+    assert.equal(JSON.stringify(withExcluded).includes('excludedSentinel'), false);
+    const catalog = assembleDocumentationArtifacts(withExcluded.coverage)['api.json'];
+    assert.equal(catalog.status, 'present');
+    assert.equal(catalog.content.includes('page.test.ts'), false);
   } finally {
     rmSync(tmp, {recursive: true, force: true});
   }

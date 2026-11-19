@@ -1961,7 +1961,14 @@ export async function runCollector(opts = {}) {
           basePath: workRepoDir,
           tsconfig: safeTsConfigPath,
           entryPointStrategy: 'resolve',
-          entryPoints: codeFiles.map(rel => toPosix(join(workRepoDir, rel)).replace(/[?*()[\]\\{}]/g, '\\$&')),
+          // Make the first repository character a one-choice extglob. TypeDoc then
+          // starts discovery at the unescaped work root even for a single entry;
+          // unlike a wildcard, this still matches only the selected exact path.
+          entryPoints: codeFiles.map(rel => {
+            const escape = value => value.replace(/[?*()[\]\\{}|]/g, '\\$&');
+            const [first, ...rest] = Array.from(toPosix(rel));
+            return `${escape(toPosix(workRepoDir))}/@(${escape(first)})${escape(rest.join(''))}`;
+          }),
           json: typedocOutPath,
           validation: {
             notExported: true,
