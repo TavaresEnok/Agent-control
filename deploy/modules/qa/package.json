@@ -1,0 +1,17 @@
+{
+  "name": "ac-module-qa-tools",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ferramentas fixadas do coletor do Módulo 2 (QA pesado).",
+  "engines": {
+    "node": ">=24.12.0"
+  },
+  "dependencies": {
+    "@apidevtools/swagger-parser": "13.1.0",
+    "@stryker-mutator/instrumenter": "10.1.1",
+    "axe-core": "4.14.1",
+    "fast-check": "4.10.3",
+    "jsdom": "31.0.1"
+  }
+}

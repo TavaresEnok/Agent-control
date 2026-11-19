@@ -1,0 +1,51 @@
+{
+  "purpose": "Pin das ferramentas da imagem do Módulo 2 (QA pesado). O lockfile npm completo está em deploy/modules/qa/package-lock.json.",
+  "module": "qa",
+  "registry": "https://registry.npmjs.org",
+  "lockfileVersion": 3,
+  "packageLockSha256": "28a00f552a3041e5e95492ce8913012ac5e75d197cab41b741b0790e691a9083",
+  "baseImage": {
+    "name": "mcr.microsoft.com/playwright",
+    "tag": "v1.65.1-noble",
+    "digest": "sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579",
+    "linuxAmd64Digest": "sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9",
+    "linuxArm64Digest": "sha256:56be08aca06bf736a928da2e3235a3b63ef71ee97313beb18c6019fea791aba4"
+  },
+  "dependencies": {
+    "@stryker-mutator/instrumenter": {
+      "version": "10.1.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-Vyude2i8LhDciLV1q6J55KtdA7gZpRuMfZcBcmWV6hLHAvWocoPKnCKc5BlZt1mwGWkX3Olc0457I7Ue6F1WEg==",
+      "resolved": "https://registry.npmjs.org/@stryker-mutator/instrumenter/-/instrumenter-10.1.1.tgz"
+    },
+    "fast-check": {
+      "version": "4.10.3",
+      "license": "MIT",
+      "integrity": "sha512-SBaU6nhh+sXxb05r2IHAKfxnR/1Pu6MqtHYaewM1BY6V5xzOxOk+4yoWO7WfeeyZG1iArFE6/DO/7iLYMUuOJg==",
+      "resolved": "https://registry.npmjs.org/fast-check/-/fast-check-4.10.3.tgz"
+    },
+    "axe-core": {
+      "version": "4.14.1",
+      "license": "MPL-2.0",
+      "integrity": "sha512-FHfa+lmNjQZfJz1q8wKqIDwC6DExcHt/pkjNQb09a3NPjCKg2rhu5qb2S4r76ASyFNNtuFooJpZe37OgudVGtQ==",
+      "resolved": "https://registry.npmjs.org/axe-core/-/axe-core-4.14.1.tgz"
+    },
+    "jsdom": {
+      "version": "31.0.1",
+      "license": "MIT",
+      "integrity": "sha512-CbhJL8ZQg3eKswxSZth4QO9tW0jPIhmR0vtSXQSbKSfWbwIT6hoRc17wdHIVTQ43KI0mdV5iTJr3281IDgVZ5g==",
+      "resolved": "https://registry.npmjs.org/jsdom/-/jsdom-31.0.1.tgz"
+    },
+    "@apidevtools/swagger-parser": {
+      "version": "13.1.0",
+      "license": "MIT",
+      "integrity": "sha512-dkCuqCWh5U7u0aurmmc/qvel2KeKDxHTwVtUdYonndIpD7mXV6AVaWNdvaja2HAy628z7FT/Qdz8sCgzwhgwKg==",
+      "resolved": "https://registry.npmjs.org/@apidevtools/swagger-parser/-/swagger-parser-13.1.0.tgz"
+    }
+  },
+  "transitive": {
+    "@babel/parser": "8.0.10",
+    "@babel/traverse": "8.0.10",
+    "playwright": "1.65.1"
+  }
+}
