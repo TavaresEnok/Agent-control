@@ -374,7 +374,7 @@ async function main() {
   let examStatus: {code: number; lines: string[]} = {code: 0, lines: []};
   let browser: Awaited<ReturnType<typeof openDesignBrowser>> | undefined;
   try {
-    const resolved = await resolvePersonalDesign(invocation.argv);
+    const resolved = await resolvePersonalDesign(invocation.argv, undefined, true);
     examStatus = await runDesignSession(
       resolved,
       async () => {

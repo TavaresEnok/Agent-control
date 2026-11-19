@@ -149,33 +149,27 @@ export async function reconcileNativeResourceAdmissions(input:{docker:DockerDaem
  if(!(input.docker instanceof NativeResourceDockerDaemon))return;
  const docker=input.docker,errors:unknown[]=[];
  await new ReconciliationHistory(input.ledger).run(input.authority,'native-resource:'+docker.authorityId+':'+docker.stateRoot+':'+(input.recoverSource??'prejournal'),'ac_native_resource_admissions',async(ids,retain)=>{
-  const rows=await input.ledger.tx(async c=>{const context=await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);return (await c.query(`SELECT r.*,g.intent_id,
-    (i.principal_id=$6 OR ($7='owner' AND EXISTS(SELECT 1 FROM ac_memberships m WHERE m.project_id=$8 AND m.principal_id=i.principal_id AND m.role='owner'))) owned
-    FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id JOIN ac_intents i ON i.id=g.intent_id
-    WHERE r.context_id=$1 AND g.context_id=r.context_id AND i.context_id=r.context_id AND r.authority_id=$2 AND r.state_root=$3
-     AND ((r.state<>'canceled' AND (g.state<>'released' OR ($5='ac_native_execution_jobs' AND EXISTS(SELECT 1 FROM ac_native_execution_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.worker_id IS NULL AND j.tools_id IS NULL)))) OR (r.state='canceled' AND g.state='released' AND EXISTS(
-      SELECT 1 FROM ac_operations o JOIN ac_intents child ON child.id=o.intent_id
-       JOIN ac_worktree_writers w ON w.parent_intent_id=child.parent_intent_id AND w.run_id=child.run_id AND w.holder_intent_id=child.id
-      WHERE o.id=r.job_id AND child.id=g.intent_id AND o.state='registered' AND w.state='held')))
-     AND r.job_id=ANY($4::uuid[])
-     AND ((NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=g.id)
-     AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs WHERE grant_id=g.id)
-     AND NOT EXISTS(SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=g.id))
-     OR ($5='ac_native_execution_jobs' AND EXISTS(SELECT 1 FROM ac_native_execution_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.worker_id IS NULL AND j.tools_id IS NULL))
-     OR ($5='ac_native_planning_jobs' AND EXISTS(SELECT 1 FROM ac_native_planning_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.container_id IS NULL))
-     OR ($5='ac_native_qa_jobs' AND EXISTS(SELECT 1 FROM ac_native_qa_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.container_id IS NULL))) ORDER BY r.created_at,r.job_id`,[input.authority.contextId,docker.authorityId,docker.stateRoot,ids,input.recoverJob?(input.recoverSource??null):null,input.principal,context.role,context.project_id])).rows;});
+  const rows=await input.ledger.tx(async c=>{await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);return (await c.query(`SELECT r.*,g.intent_id FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id JOIN ac_intents i ON i.id=g.intent_id AND i.context_id=r.context_id
+   WHERE r.context_id=$1 AND g.context_id=r.context_id AND r.authority_id=$2 AND r.state_root=$3 AND i.principal_id=$6 AND ((r.state<>'canceled' AND g.state<>'released') OR (r.state='canceled' AND g.state='released' AND EXISTS(
+     SELECT 1 FROM ac_operations o JOIN ac_intents child ON child.id=o.intent_id
+      JOIN ac_worktree_writers w ON w.parent_intent_id=child.parent_intent_id AND w.run_id=child.run_id AND w.holder_intent_id=child.id
+     WHERE o.id=r.job_id AND child.id=g.intent_id AND o.state='registered' AND w.state='held')))
+    AND r.job_id=ANY($4::uuid[])
+    AND ((NOT EXISTS(SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=g.id)
+    AND NOT EXISTS(SELECT 1 FROM ac_native_planning_jobs WHERE grant_id=g.id)
+    AND NOT EXISTS(SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=g.id))
+    OR ($5='ac_native_execution_jobs' AND EXISTS(SELECT 1 FROM ac_native_execution_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.worker_id IS NULL AND j.tools_id IS NULL))
+    OR ($5='ac_native_planning_jobs' AND EXISTS(SELECT 1 FROM ac_native_planning_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.container_id IS NULL))
+    OR ($5='ac_native_qa_jobs' AND EXISTS(SELECT 1 FROM ac_native_qa_jobs j WHERE j.id=r.job_id AND j.grant_id=g.id AND j.state='uncertain' AND j.container_id IS NULL))) ORDER BY r.created_at,r.job_id`,[input.authority.contextId,docker.authorityId,docker.stateRoot,ids,input.recoverJob?(input.recoverSource??null):null,input.principal])).rows;});
   retain(rows.map(row=>row.job_id));
-  for(const row of rows){if(!row.owned)continue;try{const recoverJob=await input.ledger.tx(async c=>{
-   const context=await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);
-   const current=(await c.query(`SELECT r.*,g.intent_id,g.state grant_state,i.principal_id FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id JOIN ac_intents i ON i.id=g.intent_id
-    WHERE r.job_id=$1 AND r.admission_id=$2 AND r.context_id=$3 AND g.context_id=$3 AND i.context_id=$3 AND r.authority_id=$4 AND r.state_root=$5 FOR UPDATE OF g,r`,[row.job_id,row.admission_id,input.authority.contextId,docker.authorityId,docker.stateRoot])).rows[0];
+  for(const row of rows){try{const recoverJob=await input.ledger.tx(async c=>{
+   await input.ledger.authorize(c,input.principal,input.authority.contextId);await input.ledger.fence(c,input.authority,true);
+   const current=(await c.query(`SELECT r.*,g.intent_id,g.state grant_state FROM ac_native_resource_admissions r JOIN ac_capacity_grants g ON g.id=r.grant_id JOIN ac_intents i ON i.id=g.intent_id AND i.context_id=r.context_id
+    WHERE r.job_id=$1 AND r.admission_id=$2 AND r.context_id=$3 AND g.context_id=$3 AND r.authority_id=$4 AND r.state_root=$5 AND i.principal_id=$6 FOR UPDATE OF g,r`,[row.job_id,row.admission_id,input.authority.contextId,docker.authorityId,docker.stateRoot,input.principal])).rows[0];
    if(!current)return;
-   if(current.principal_id!==input.principal){
-    if(context.role!=='owner'||!(await c.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[context.project_id,current.principal_id])).rowCount)return;
-   }
    const job=(await c.query('SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1 UNION ALL SELECT 1 FROM ac_native_planning_jobs WHERE grant_id=$1 UNION ALL SELECT 1 FROM ac_native_qa_jobs WHERE grant_id=$1',[row.grant_id])).rowCount;
    const terminal=(await c.query(`SELECT 1 FROM ac_intents i WHERE i.id=$1 AND (i.state IN ('failed','canceled','cancelled') OR EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id IN(i.id,i.parent_intent_id)))`,[current.intent_id])).rowCount;
-   if(Number(current.manager_epoch)===input.authority.epoch&&!terminal&&current.grant_state!=='released')return;
+   if(Number(current.manager_epoch)===input.authority.epoch&&!terminal)return;
    if(job)return true;
    if(!current.admission_id)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
    const proof=await docker.cancelAdmission(current.names,current.admission_id);

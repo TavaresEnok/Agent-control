@@ -336,6 +336,7 @@ async function insertDesignIntent(
   authority: Authority,
   projectId: string,
   commit: string,
+  readonlyExam: boolean,
 ): Promise<string> {
   const intentId = randomUUID();
   await ledger.tx(async c => {
@@ -355,7 +356,7 @@ async function insertDesignIntent(
       action: 'plan.start' as const,
       payload: {
         workflow: 'design-readonly-v1' as const,
-        messageRef: `design:${projectId}:${commit}`.slice(0, 200),
+        messageRef: `${readonlyExam ? 'design-exam' : 'design'}:${projectId}:${commit}`,
         projectId,
         commit,
       },
@@ -372,6 +373,7 @@ async function insertDesignIntent(
 export async function resolvePersonalDesign(
   argv: readonly string[],
   known?: {installationPath?: string; projectId?: string; composeRuntime?: typeof composePersonalRuntime},
+  readonlyExam = false,
 ): Promise<ResolvedPersonalDesign> {
   const parsed = known?.installationPath !== undefined && known?.projectId !== undefined
     ? {installationPath: known.installationPath, projectId: known.projectId}
@@ -393,7 +395,7 @@ export async function resolvePersonalDesign(
     }
     const runtime = await (known?.composeRuntime ?? composePersonalRuntime)(config, ledger);
     if (!runtime) throw new Refusal('DESIGN_WORKER_UNAVAILABLE', 503);
-    intentId = await insertDesignIntent(ledger, principal, authority, project.id, commit);
+    intentId = await insertDesignIntent(ledger, principal, authority, project.id, commit, readonlyExam);
     const releaseGrant = (grantId: string, how: 'not_started' | 'exited') => releaseDesignGrant(ledger, principal, authority!, grantId, how);
     const worker = createDesignNativeWorker({
       supervisors: runtime.executions as unknown as readonly DesignExamSupervisor[],
