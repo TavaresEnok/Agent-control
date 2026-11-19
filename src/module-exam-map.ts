@@ -10,8 +10,10 @@ import {isDirectIdentifier, isModuleExamScript, moduleExamCall, moduleExamDepths
 export type ModuleExamFile = {file: string; code: string | null; reason: string | null};
 export type ModuleExamRoute = {file: string; line: number; column?: number; method: string; path: string};
 type LocatedRoute = ModuleExamRoute & {column: number};
-type RouteOmission = 'linguagem não inventariada' | 'sintaxe não reconhecida' | 'declaração fora do subconjunto' | 'declaração ocultada pelo saneamento';
-type RouteInventory = {routes: LocatedRoute[]; omissions: RouteOmission[]; ambiguousLegacyKeys?: Set<string>};
+type RouteOmission = 'linguagem não inventariada' | 'sintaxe não reconhecida' | 'declaração fora do subconjunto'
+  | 'declaração ocultada pelo saneamento' | 'acesso indexado ou dinâmico' | 'método do receptor sobrescrito';
+type RouteInventory = {routes: LocatedRoute[]; omissions: RouteOmission[];
+  ambiguousLegacyKeys?: Set<string>; ambiguousLegacyLines?: Set<number>};
 export type ModuleExamMap = {files: ModuleExamFile[]; routes: ModuleExamRoute[]; routeOmissions?: number;
   routeOmissionDetails?: {file: string; reason: RouteOmission}[]};
 const MAX_FILE_BYTES = 16000;
@@ -30,10 +32,11 @@ export const moduleExamRouteKey = ({file, line, column, method, path}: ModuleExa
 
 /** Resolve a legacy key against the complete file, even when only one duplicate was sent. */
 export function moduleExamRouteMatcher(file: string, code: string | null | undefined) {
-  const {routes: declarations, ambiguousLegacyKeys} = code ? scanRoutes(file, code) : {routes: []};
+  const {routes: declarations, ambiguousLegacyKeys, ambiguousLegacyLines} = code ? scanRoutes(file, code) : {routes: []};
   const byPosition = new Map(declarations.map(route => [moduleExamRouteKey(route), route]));
   const legacyAllowed = Boolean(code && !code.includes('…'));
-  const byLegacyKey = new Map(declarations.filter(route => legacyAllowed && !ambiguousLegacyKeys?.has(legacyRouteKey(route)))
+  const byLegacyKey = new Map(declarations.filter(route => legacyAllowed && !ambiguousLegacyLines?.has(route.line)
+    && !ambiguousLegacyKeys?.has(legacyRouteKey(route)))
     .map(route => [legacyRouteKey(route), route]));
   return (route: ModuleExamRoute) => route.column === undefined
     ? byLegacyKey.get(legacyRouteKey(route)) : byPosition.get(moduleExamRouteKey(route));
@@ -43,22 +46,58 @@ const unsupportedSource = /\.(?:[jt]sx|vue|svelte|astro|html?|py|rb|php|go|java|
 type Factory = 'express' | 'router' | 'hono' | 'fastify';
 const defaultFactories = new Map<string, Factory>([['express', 'express'], ['fastify', 'fastify']]);
 const namedFactories = new Map<string, Factory>([['express:Router', 'router'], ['hono:Hono', 'hono']]);
+const singlePropertyWriters = new Set(['Object.defineProperty', 'Reflect.defineProperty', 'Reflect.set', 'Reflect.deleteProperty']);
+const receiverWriters = new Set(['Object.assign', 'Object.defineProperties', 'Object.setPrototypeOf', 'Reflect.setPrototypeOf']);
+
+type SourceTokens = NonNullable<ReturnType<typeof scanModuleExamSource>>;
+function literalProperty(token: SourceTokens[number] | undefined) {
+  return token?.kind === 'literal' && !token.text.includes('\\') ? token.text.slice(1, -1) : null;
+}
+
+function routeMember(tokens: SourceTokens, depths: number[], index: number) {
+  let at = index + 1;
+  const optional = tokens[at]?.text === '?' && tokens[at + 1]?.text === '.';
+  if (optional) at += 2;
+  if (tokens[at]?.text === '[') {
+    // The depth check has already verified that every opening bracket closes.
+    let close = at + 1;
+    while (depths[close] > depths[at] + 1 || tokens[close]?.text !== ']') close++;
+    return {method: close === at + 2 ? literalProperty(tokens[at + 1]) : null, next: close + 1, direct: false};
+  }
+  if (!optional && tokens[at++]?.text !== '.') return null;
+  const property = tokens[at];
+  return property?.kind === 'word' ? {method: property.text, next: at + 1, direct: !optional} : null;
+}
+
+function writesMember(tokens: SourceTokens, start: number, end: number) {
+  if (tokens[start - 1]?.text === 'delete') return true;
+  const operatorBefore = tokens.slice(Math.max(0, start - 2), start).map(token => token.text).join('');
+  if (operatorBefore === '++' || operatorBefore === '--') return true;
+  const operatorAfter = tokens.slice(end, end + 4).map(token => token.text).join('');
+  return /^(?:=(?!=)|(?:[+%&|^*-]|&&|\|\||\?\?|\*\*|>{2,3})=(?!=)|\+\+|--)/u.test(operatorAfter);
+}
 
 function scanRoutes(file: string, code: string): RouteInventory {
   if (!isModuleExamScript(file)) return {routes: [], omissions: unsupportedSource.test(file) ? ['linguagem não inventariada'] : []};
   const tokens = scanModuleExamSource(code);
   const depths = tokens && moduleExamDepths(tokens);
   if (!tokens || !depths) return {routes: [], omissions: ['sintaxe não reconhecida']};
-  const routes: LocatedRoute[] = [];
+  const candidates: {route: LocatedRoute; receiver: string; method: string}[] = [];
   const seenLegacyKeys = new Set<string>();
   const ambiguousLegacyKeys = new Set<string>();
+  const ambiguousLegacyLines = new Set<number>();
   const factories = new Map<string, Factory>();
   const receivers = new Set<string>();
-  let omitted = false;
+  const mutations = new Map<string, Set<string | null>>();
+  const omissions = new Set<RouteOmission>();
   const token = (index: number) => tokens[index]?.text;
   const word = (index: number) => tokens[index]?.kind === 'word' ? tokens[index]!.text : undefined;
   const startsStatement = (index: number) => depths[index] === 0 && (index === 0 || token(index - 1) === ';');
   const endsStatement = (index: number) => index === tokens.length || token(index) === ';';
+  const recordMutation = (receiver: string, method: string | null) => {
+    if (!mutations.has(receiver)) mutations.set(receiver, new Set());
+    mutations.get(receiver)!.add(method);
+  };
   for (let start = 0; start < tokens.length; start++) {
     if (token(start) !== 'import' || !startsStatement(start)) continue;
     const named = token(start + 1) === '{';
@@ -84,16 +123,39 @@ function scanRoutes(file: string, code: string): RouteInventory {
         receivers.add(word(index + 1)!);
       }
     }
-    if (!isDirectIdentifier(tokens, index) || token(index + 1) !== '.') continue;
-    const method = token(index + 2);
-    if (!method || !routeMethods.has(method) || token(index + 3) !== '(') continue;
+    if (!isDirectIdentifier(tokens, index)) continue;
+    const helper = `${receiver.text}.${token(index + 2)}`;
+    const writtenReceiver = word(index + 4);
+    if (writtenReceiver && token(index + 1) === '.' && token(index + 3) === '(' && token(index + 5) === ',') {
+      if (receiverWriters.has(helper)) recordMutation(writtenReceiver, null);
+      if (singlePropertyWriters.has(helper)) {
+        const property = token(index + 7) === ',' ? literalProperty(tokens[index + 6]) : null;
+        recordMutation(writtenReceiver, property);
+      }
+    }
+    const member = routeMember(tokens, depths, index);
+    if (!member || (member.method !== null && !routeMethods.has(member.method))) continue;
+    const {method, next} = member;
+    if (writesMember(tokens, index, next)) recordMutation(receiver.text, method);
+    const optionalCall = token(next) === '?' && token(next + 1) === '.';
+    const open = next + (optionalCall ? 2 : 0);
+    if (token(open) !== '(') continue;
     const known = receivers.has(receiver.text);
-    const argument = tokens[index + 4];
+    const argument = tokens[open + 1];
     const path = argument?.kind === 'literal' ? argument.text.slice(1, -1) : '';
-    const call = moduleExamCall(tokens, index + 3);
-    const handler = call && call.commas[0] === index + 5 && (call.commas[1] ?? call.close) > index + 6;
+    const call = moduleExamCall(tokens, open);
+    const handler = call && call.commas[0] === open + 2 && (call.commas[1] ?? call.close) > open + 3;
+    const indirect = !member.direct || optionalCall;
     if (!(path.startsWith('/') || path === '*') || path.length > 200 || /[\\\u0000-\u001f\u007f…]/u.test(path) || !handler) {
-      if (known) omitted = true;
+      if (known) {
+        omissions.add(indirect ? 'acesso indexado ou dinâmico' : 'declaração fora do subconjunto');
+        if (indirect) ambiguousLegacyLines.add(receiver.line);
+      }
+      continue;
+    }
+    if (method === null) {
+      omissions.add('acesso indexado ou dinâmico');
+      ambiguousLegacyLines.add(receiver.line);
       continue;
     }
     const column = receiver.start - code.lastIndexOf('\n', receiver.start - 1);
@@ -101,10 +163,18 @@ function scanRoutes(file: string, code: string): RouteInventory {
     const key = legacyRouteKey(route);
     if (seenLegacyKeys.has(key)) ambiguousLegacyKeys.add(key);
     seenLegacyKeys.add(key);
-    if (!root || !known) { omitted = true; continue; }
-    routes.push(route);
+    if (indirect) omissions.add('acesso indexado ou dinâmico');
+    else if (!root || !known) omissions.add('declaração fora do subconjunto');
+    else candidates.push({route, receiver: receiver.text, method});
   }
-  return {routes, omissions: omitted ? ['declaração fora do subconjunto'] : [], ambiguousLegacyKeys};
+  // A write in a callback may run before registration, regardless of source order.
+  const routes = candidates.filter(({receiver, method}) => {
+    const written = mutations.get(receiver);
+    if (!written?.has(null) && !written?.has(method)) return true;
+    omissions.add('método do receptor sobrescrito');
+    return false;
+  }).map(({route}) => route);
+  return {routes, omissions: [...omissions], ambiguousLegacyKeys, ambiguousLegacyLines};
 }
 
 export function findModuleExamRoutes(file: string, code: string): LocatedRoute[] {
