@@ -54,6 +54,8 @@ const Inspect=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Image:z.string(),C
  SecurityOpt:z.array(z.string()).nullable(),PidsLimit:z.number().nullable(),Memory:z.number(),NanoCpus:z.number()}).passthrough(),
  Mounts:z.array(z.object({Source:z.string(),Destination:z.string(),RW:z.boolean()}).passthrough())}).passthrough();
 type Inspected=z.infer<typeof Inspect>;
+const InspectPrivateNetwork=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Name:z.string().min(1),Internal:z.boolean(),
+ Labels:z.record(z.string(),z.string()).nullish(),Containers:z.record(z.string(),z.object({IPv4Address:z.string().optional()}).passthrough()).nullish()}).passthrough();
 /** Fixed Docker API operations. No caller-controlled URL, image, shell or mount is accepted. */
 export class DockerDaemon{
  constructor(private readonly socket='/var/run/docker.sock'){}
@@ -100,13 +102,21 @@ export class DockerDaemon{
  }
  async inspectPrivateNetwork(id:string):Promise<Record<string,any>|null>{
   if(!/^[a-f0-9]{64}$/.test(id))throw new Refusal('DOCKER_NETWORK_INVALID');
-  const r=await this.call('GET',`/v1.44/networks/${id}`);if(r.status===404)return null;
-  if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');return JSON.parse(r.body.toString('utf8'));
+  return this.inspectExecutionNetwork(id);
  }
  async inspectNamedPrivateNetwork(name:string):Promise<Record<string,any>|null>{
   if(!/^ac-native-exec-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name))throw new Refusal('DOCKER_NETWORK_INVALID');
-  const r=await this.call('GET',`/v1.44/networks/${encodeURIComponent(name)}`);if(r.status===404)return null;
-  if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');return JSON.parse(r.body.toString('utf8'));
+  return this.inspectExecutionNetwork(name);
+ }
+ private async inspectExecutionNetwork(reference:string){
+  const r=await this.call('GET',`/v1.44/networks/${encodeURIComponent(reference)}`);
+  if(r.status===404)return null;
+  if(r.status!==200)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+  let body:unknown;
+  try{body=JSON.parse(r.body.toString('utf8'));}catch{throw new Refusal('DOCKER_NETWORK_UNCERTAIN');}
+  const parsed=InspectPrivateNetwork.safeParse(body);
+  if(!parsed.success)throw new Refusal('DOCKER_NETWORK_UNCERTAIN');
+  return parsed.data;
  }
  /** QA-only internal network. Execution networks keep their own name check. */
  async createQaNetwork(name:string,labels:Record<string,string>){
