@@ -383,3 +383,11 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:42 UTC — Trabalho C6-R9 iniciado por Sol high normal em final-c6-r2.
 - 19/11/2026 04:43 UTC — Base compartilhada 66fa91b5 passou nos 25 testes com PostgreSQL, incluindo os três casos de limpeza física em Docker e a migração 114. Diagnóstico da CLI de QA: a matriz completou a medição e encontrou REQ-02 sem teste; o registro usou o estado de falha operacional para esse achado de projeto. Correção em curso.
 - 19/11/2026 04:44 UTC — Imagem da matriz de QA corrigida em 3eead086 e integrada em 18a73502. Passaram as 43 provas de coletor e laboratório, com as verificações da ausência de vínculo e do achado preservadas. A validação em homologação seguirá pela CLI pública e suíte oficial.
+- 19/11/2026 04:44 UTC — Validação de c2-r10-base-r9 em 18a73502 iniciada no checkout de integração.
+- 19/11/2026 04:44 UTC — Revisor encerrou C9-R4 em b1ac9e42 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:44 UTC — Revisão C4-R6 iniciada por Sol high normal somente leitura em db55280f.
+- 19/11/2026 04:44 UTC — Revisor encerrou C4-R6 em db55280f (código 1). Gerente confere a entrega.
+- 19/11/2026 04:44 UTC — Revisão C8-R6 iniciada por Sol high normal somente leitura em 96a7a766.
+- 19/11/2026 04:45 UTC — Trabalhador encerrou C5-R6 em dc0dff58 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:45 UTC — Trabalho C-REVERIFICAR-R3 iniciado por Sol high normal em final-c-reverificar-r3.
+- 19/11/2026 04:45 UTC — A tentativa de revisão C4-R6 excedeu o limite de tamanho de entrada da CLI (1.048.576 caracteres) antes da análise. Reenviada com o diff de código completo da rodada e inventário SHA-256 dos esquemas vendorizados. A revisão C9-R4 confirmou cinco omissões de cobertura no código JS/TS; C9-R5 recebeu a correção.
