@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
@@ -381,7 +381,7 @@ test('evaluatePassiveTlsEvidence avalia evidência estruturada e recusa arquivo 
         errorMessage: null,
         certificate: {subject: 'CN=weak.example.com', issuer: 'CN=Test CA', validFrom: '2026-01-01', validTo: '2026-11-25', daysRemaining: 6, subjectAltName: 'DNS:weak.example.com'},
         headers: {'strict-transport-security': 'max-age=60'},
-        redirectTargetOrigin: 'http://weak.example.com',
+        redirectTargetOrigin: 'http://synthetic-tenant.example.invalid',
         redirectCrossOrigin: true,
         redirectDowngradeHttp: true,
         bytesRead: 0,
@@ -397,6 +397,7 @@ test('evaluatePassiveTlsEvidence avalia evidência estruturada e recusa arquivo 
   assert.equal(rules.has('PRONTIDAO-HSTS-FRACO'), true);
   assert.equal(rules.has('PRONTIDAO-NOSNIFF-AUSENTE'), true);
   assert.equal(rules.has('PRONTIDAO-FRAME-AUSENTE'), true);
+  assert.equal(JSON.stringify(brokenEval).includes('synthetic-tenant'), false);
 
   assert.throws(() => evaluatePassiveTlsEvidence({
     schemaVersion: 1,
@@ -493,8 +494,10 @@ test('segredos em formatos de Compose, systemd e dotenv aparecem somente por loc
       evidenceFile: '',
       runBin(bin, args) {
         if (bin === 'gitleaks' && args[0] === 'dir') {
+          const staged = join(args.at(-1)!, 'checkout', '.env');
+          assert.equal(readFileSync(staged, 'utf8'), readFileSync(join(dir, '.env'), 'utf8'));
           writeFileSync(args[args.indexOf('--report-path') + 1]!, JSON.stringify([{
-            RuleID: 'generic-api-key', File: join(dir, '.env'), StartLine: 1,
+            RuleID: 'generic-api-key', File: staged, StartLine: 1,
             Secret: 'synthetic-gitleaks-first synthetic-gitleaks-second',
             Match: 'synthetic-match-first synthetic-match-second',
           }]));
@@ -576,7 +579,7 @@ test('documentação, comentários e texto de shell não contam como rotinas de 
     const absent = ['PRONTIDAO-BACKUP-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE'];
     assert.ok(absent.every(rule => auditRepositoryReadiness(dir).findings.some(f => f.rule === rule)));
     writeFileSync(join(dir, 'backup.service'), '[Service]\nType=oneshot\nExecStart=/usr/bin/pg_dump -f /var/backups/app.dump\n');
-    writeFileSync(join(dir, 'restore.sh'), '#!/bin/sh\npg_restore --exit-on-error /var/backups/app.dump\n');
+    writeFileSync(join(dir, 'restore.sh'), '#!/bin/sh\npg_restore --exit-on-error -d fixture /var/backups/app.dump\n');
     assert.ok(absent.every(rule => !auditRepositoryReadiness(dir).findings.some(f => f.rule === rule)));
   } finally {
     rmSync(dir, {recursive: true, force: true});
@@ -722,4 +725,236 @@ test('HTTPS passivo distingue cabeçalhos inválidos e registra origens que exce
   assert.ok(valid.coverage[1]?.detail.includes(omitted));
   assert.deepEqual(evaluate('max-age=31536000', 'inválido', "default-src 'self'; frame-ancestors 'none'").findings, []);
   assert.deepEqual(evaluate('max-age=31536000', 'inválido', "default-src 'self' frame-ancestors").findings.map(f => f.rule), ['PRONTIDAO-FRAME-AUSENTE']);
+});
+
+test('dotenv multilinha e âncoras inline do Compose preservam apenas as localizações', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-inline-'));
+  try {
+    const compose = [
+      'services: &services {',
+      '  web: &service {',
+      '    environment: &env {',
+      '      SYNTHETIC_KEY_PASSWORD: &value "synthetic-value-one",',
+      '      OTHER_TOKEN: "synthetic-value-two",',
+      '    },',
+      '  },',
+      '  list: {environment: &list ["LIST_TOKEN=synthetic-value-three"]}',
+      '}',
+    ].join('\n');
+    const backtick = String.fromCharCode(96);
+    const dotenv = [
+      'export APP_TOKEN="synthetic-dotenv-start',
+      'FAKE_PASSWORD=synthetic-dotenv-interior',
+      '# synthetic-dotenv-end" # fim',
+      'export APP_SECRET=',
+      "APP_PASSWORD='",
+      "synthetic-dotenv-multiline'",
+      'OTHER_TOKEN=$' + '{INJECTED_TOKEN}',
+      'APP_API_KEY=' + backtick + 'synthetic-dotenv-backtick',
+      backtick,
+    ].join('\n');
+    writeFileSync(join(dir, 'compose.yml'), compose);
+    writeFileSync(join(dir, '.env'), dotenv);
+    const result = auditRepositoryReadiness(dir);
+    const secretLines = (file: string) => result.findings
+      .filter(f => f.file === file && f.rule.startsWith('PRONTIDAO-SEGREDO-')).map(f => f.line);
+    assert.deepEqual(secretLines('.env'), [1, 5, 8]);
+    assert.deepEqual(secretLines('compose.yml'), [4, 5, 8]);
+    const services = parseComposeServices(compose);
+    assert.deepEqual(services.map(svc => svc.environment), [[{line: 4}, {line: 5}], [{line: 8}]]);
+    assert.doesNotMatch(JSON.stringify([services, result]), /synthetic-(?:dotenv|value)|SYNTHETIC_KEY_PASSWORD/);
+
+    writeFileSync(join(dir, 'compose.yml'), [
+      'x-env: &base {APP_TOKEN: dummy}',
+      'services:',
+      '  web:',
+      '    environment:',
+      '      <<: *base',
+      '      DIRECT_TOKEN: &direct |-',
+      '        synthetic-value-block',
+      '      OTHER_TOKEN: *direct',
+      '    extends: {file: other.yml, service: web}',
+    ].join('\n'));
+    const partial = auditRepositoryReadiness(dir);
+    assert.ok(partial.coverage.some(c => c.status === 'failed' && c.detail.startsWith('compose.yml:')));
+    assert.ok(partial.findings.some(f => f.rule === 'PRONTIDAO-SEGREDO-COMPOSE-INLINE' && f.line === 6));
+    assert.equal(partial.findings.some(f => f.rule === 'PRONTIDAO-LIMITE-MEMORIA-AUSENTE'), false);
+    assert.doesNotMatch(JSON.stringify(partial), /synthetic-value-block/);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Compose exige valores positivos e válidos para memória, PIDs e rotação', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-compose-limites-'));
+  try {
+    writeFileSync(join(dir, 'compose.yml'), [
+      'services:',
+      '  zero: {mem_limit: 0, pids_limit: -1, logging: {options: {max-size: 0m, max-file: 0}}}',
+      '  bad: {mem_limit: 15bananas, pids_limit: 2.5, logging: {options: {max-size: unlimited, max-file: "1.5"}}}',
+      '  unset: {mem_limit: null, pids_limit: null, logging: {options: {max-size: null, max-file: null}}}',
+      '  overflow: {mem_limit: 9007199254740992b, pids_limit: 9007199254740992, logging: {options: {max-size: 1e5, max-file: 1abc}}}',
+      '  valid: {mem_limit: 64MB, pids_limit: "64", logging: {options: {max-size: "8MB", max-file: "3"}}}',
+      '  alternative: {deploy: {resources: {limits: {memory: 512m, pids: 16}}}, logging: {options: {max-size: 256k, max-file: 1}}}',
+      '  conflict: {mem_limit: 1m, pids_limit: 1, deploy: {resources: {limits: {memory: 512m, pids: 16}}}, logging: {driver: null}}',
+    ].join('\n'));
+    const result = auditRepositoryReadiness(dir);
+    for (const rule of ['PRONTIDAO-LIMITE-MEMORIA-AUSENTE', 'PRONTIDAO-LIMITE-PIDS-AUSENTE', 'PRONTIDAO-LOG-SEM-ROTACAO']) {
+      assert.deepEqual(result.findings.filter(f => f.rule === rule).map(f => f.line), [2, 3, 4, 5, 8]);
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Caddy e Nginx auditam o bloco efetivo e declaram imports ou rotas não resolvidos', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-proxy-'));
+  try {
+    writeFileSync(join(dir, 'Caddyfile'), [
+      'http://redirect.example.invalid {',
+      '  redir https://{host}{uri} permanent',
+      '}',
+      'http://open.example.invalid, http://localhost {',
+      '  redir /somewhere https://other.example.invalid',
+      '  respond "redir https://synthetic-text.example.invalid # parte da resposta"',
+      '}',
+      'https://secure.example.invalid {',
+      '  header Strict-Transport-Security "max-age=31536000"',
+      '  header X-Content-Type-Options nosniff',
+      '  header X-Frame-Options DENY',
+      '}',
+      'https://unresolved.example.invalid {',
+      '  import fragment.caddy',
+      '}',
+    ].join('\n'));
+    writeFileSync(join(dir, 'nginx.conf'), [
+      'http {',
+      '  add_header Strict-Transport-Security "max-age=31536000" always;',
+      '  add_header X-Content-Type-Options nosniff always;',
+      '  add_header X-Frame-Options DENY always;',
+      '  ssl_protocols TLSv1 TLSv1.2;',
+      '  server { listen 8443 ssl; location / { try_files $uri =404; } }',
+      '  server {',
+      '    listen 443 ssl;',
+      '    ssl_protocols TLSv1.2 TLSv1.3;',
+      '    location /override { add_header X-Other data; }',
+      '    location /merge { add_header_inherit merge; add_header X-Other data; }',
+      '    location /off { add_header_inherit off; }',
+      '    location /external { include synthetic.conf; }',
+      '  }',
+      '  server { listen 443 ssl; add_header X-Content-Type-Options nosniff; }',
+      '  server { listen 80; if ($host) { return 200; } return 301 https://$host$request_uri; }',
+      '}',
+    ].join('\n'));
+    const result = auditRepositoryReadiness(dir);
+    const locations = (rule: string) => result.findings.filter(f => f.rule === rule).map(f => [f.file, f.line]);
+    assert.deepEqual(locations('PRONTIDAO-TLS-DESATIVADO'), [['Caddyfile', 4]]);
+    assert.deepEqual(locations('PRONTIDAO-TLS-PROTOCOLO-FRACO'), [['nginx.conf', 6], ['nginx.conf', 15]]);
+    for (const rule of ['PRONTIDAO-CABECALHO-HSTS-AUSENTE', 'PRONTIDAO-CABECALHO-SEGURANCA-AUSENTE']) {
+      assert.deepEqual(locations(rule), [['Caddyfile', 4], ['nginx.conf', 10], ['nginx.conf', 12], ['nginx.conf', 15]]);
+    }
+    for (const [file, line] of [['Caddyfile', 13], ['nginx.conf', 13], ['nginx.conf', 16]]) {
+      assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith(file + ': linha ' + line)));
+    }
+    assert.doesNotMatch(JSON.stringify(result), /synthetic-text|synthetic\.conf/);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('cron de usuário e sistema, truncate e catálogo têm evidências distintas', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-rotinas-'));
+  try {
+    mkdirSync(join(dir, 'etc', 'cron.d'), {recursive: true});
+    mkdirSync(join(dir, 'var', 'spool', 'cron', 'crontabs'), {recursive: true});
+    writeFileSync(join(dir, 'app.service'), '[Service]\nType=oneshot\nStandardError=truncate:/var/log/fixture.log\n');
+    writeFileSync(join(dir, 'etc', 'crontab'), '15 2 * * mon root pg_dump --file "fixture local.dump"\n');
+    writeFileSync(join(dir, 'etc', 'cron.d', 'fixture'), [
+      '@daily backup restic -r /var/backups/fixture forget synthetic-snapshot',
+      '@weekly backup mysql --not-a-dump',
+    ].join('\n'));
+    writeFileSync(join(dir, 'var', 'spool', 'cron', 'crontabs', 'fixture'), [
+      'PATH=/usr/bin',
+      '0 3 * * * pg_restore --list fixture.dump',
+      '@daily restic check',
+      '@weekly borg check',
+      '15 3 * * * mysqldump synthetic_db > relative.sql',
+    ].join('\n'));
+    const result = auditRepositoryReadiness(dir);
+    assert.deepEqual(result.findings.filter(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO').map(f => [f.file, f.line]), [
+      ['etc/crontab', 1], ['var/spool/cron/crontabs/fixture', 5],
+    ]);
+    assert.ok(result.findings.some(f => f.rule === 'PRONTIDAO-LOGROTATE-AUSENTE'));
+    assert.ok(result.findings.some(f => f.rule === 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE'));
+    assert.equal(result.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'), false);
+    const requirement = (out: typeof result) => out.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.detail ?? '';
+    assert.match(requirement(result), /checagemCatalogo=declarada, rotinaRestauracao=ausente/);
+    assert.doesNotMatch(JSON.stringify(result), /fixture local\.dump|relative\.sql|synthetic-snapshot/);
+
+    writeFileSync(join(dir, 'etc', 'cron.d', 'fixture'), '@daily backup pg_restore -d synthetic_db /var/backups/fixture.dump\n');
+    const withRestore = auditRepositoryReadiness(dir);
+    assert.match(requirement(withRestore), /checagemCatalogo=declarada, rotinaRestauracao=declarada.*restauração real não comprovada/);
+    assert.equal(withRestore.findings.some(f => f.rule === 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE'), false);
+    assert.ok(withRestore.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE'));
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('Gitleaks limita o preparo de snapshots sem metadados Git', async t => {
+  const limitCases = [
+    ['arquivos', (dir: string) => {
+      for (let i = 0; i < 4001; i++) writeFileSync(join(dir, 'empty-' + i), '');
+    }, /4000 arquivos/],
+    ['bytes por arquivo', (dir: string) => {
+      const file = join(dir, 'large');
+      writeFileSync(file, '');
+      truncateSync(file, 8 * 1024 * 1024 + 1);
+    }, /8 MiB por arquivo/],
+    ['bytes no total', (dir: string) => {
+      for (let i = 0; i < 9; i++) {
+        const file = join(dir, 'large-' + i);
+        writeFileSync(file, '');
+        truncateSync(file, 8 * 1024 * 1024);
+      }
+    }, /64 MiB no total/],
+    ['profundidade', (dir: string) => {
+      mkdirSync(join(dir, ...Array<string>(11).fill('nested')), {recursive: true});
+    }, /profundidade 10/],
+    ['prazo', (dir: string) => {
+      writeFileSync(join(dir, 'small'), 'fixture\n');
+    }, /5 s/],
+  ] as const;
+
+  for (const [name, prepare, expected] of limitCases) {
+    await t.test(name, sub => {
+      const root = mkdtempSync(join(tmpdir(), 'prontidao-gitleaks-limites-'));
+      const repoRoot = join(root, 'fixture');
+      mkdirSync(repoRoot);
+      let scans = 0;
+      try {
+        prepare(repoRoot);
+        let ticks = 0;
+        const out = runCollector({
+          repoRoot,
+          tmpDir: root,
+          evidenceFile: '',
+          runBin(bin, args) {
+            if (bin === 'gitleaks' && args[0] === 'version' && name === 'prazo') {
+              sub.mock.method(performance, 'now', () => ticks++ < 4 ? 0 : 5_001);
+            }
+            if (bin === 'gitleaks' && args[0] === 'dir') scans++;
+            return {status: 1, stdout: '', stderr: ''};
+          },
+        });
+        assert.equal(scans, 0);
+        const gitleaks = out.coverage.find(c => c.tool === 'gitleaks');
+        assert.equal(gitleaks?.status, 'failed');
+        assert.match(gitleaks.detail, expected);
+      } finally {
+        sub.mock.restoreAll();
+        rmSync(root, {recursive: true, force: true});
+      }
+    });
+  }
 });

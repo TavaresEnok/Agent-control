@@ -37,7 +37,8 @@ export type ComposeServiceInfo = {
   hasLogMaxFile: boolean;
   hasEnvFile: boolean;
   hasSecrets: boolean;
-  environment: {key: string; value: string; line: number}[];
+  /** Locations of possible inline secrets. */
+  environment: {line: number}[];
 };
 
 export function redactEvidence(text: string): string;

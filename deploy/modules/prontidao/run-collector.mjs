@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync} from 'node:fs';
+import {closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, opendirSync, openSync, readdirSync, readFileSync, readSync, rmSync, writeFileSync, writeSync} from 'node:fs';
 import {basename, join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {stripVTControlCharacters} from 'node:util';
@@ -10,6 +10,12 @@ const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
 const MAX_EVIDENCE_BYTES = 512 * 1024;
 const MAX_PASSIVE_TARGETS = 16;
 const MAX_UNMEASURED_ORIGINS = 33;
+const GITLEAKS_MAX_FILES = 4000;
+const GITLEAKS_MAX_ENTRIES = 16_000;
+const GITLEAKS_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const GITLEAKS_MAX_BYTES = 64 * 1024 * 1024;
+const GITLEAKS_MAX_DEPTH = 10;
+const GITLEAKS_PREPARE_MS = 5000;
 import {passiveHeaderFacts} from './header-facts.mjs';
 const EXPIRING_CERT_DAYS = 14;
 
@@ -129,16 +135,6 @@ function safeErrorCode(value, fallback) {
     : fallback;
 }
 
-function readRedirectOrigin(value) {
-  try {
-    return validateTargetUrl(value)?.origin ?? null;
-  } catch {
-    return null;
-  }
-}
-
-
-
 export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
   if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
     throw new Error('PASSIVE_EVIDENCE_INVALID');
@@ -237,7 +233,6 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
       }
     }
 
-    const redirectOrigin = readRedirectOrigin(target.redirectTargetOrigin);
     if (target.redirectDowngradeHttp) {
       targetFindings.push(normalizeFinding({
         tool: 'prontidao-tls-passivo',
@@ -245,8 +240,8 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
         file: tlsAnchorFile,
         line: 1,
         severity: 'alta',
-        message: `Origem HTTPS ${origin} respondeu com redirecionamento para HTTP sem TLS (${redirectOrigin ?? 'HTTP'}).`,
-        evidence: `${origin} HTTP ${target.httpStatus ?? 302} -> ${redirectOrigin ?? 'HTTP'}`,
+        message: `Origem HTTPS ${origin} respondeu com redirecionamento para HTTP sem TLS.`,
+        evidence: `${origin} HTTP ${target.httpStatus ?? 302}: redirecionamento para HTTP.`,
       }, repoRoot, tlsAnchorFile));
     }
 
@@ -301,7 +296,7 @@ export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
 
     findings.push(...targetFindings);
     const redirectNote = target.redirectCrossOrigin
-      ? `; redirecionamento para ${redirectOrigin ?? 'outro destino'} não seguido`
+      ? '; redirecionamento para outra origem não seguido'
       : '';
     const certNote = typeof daysRemaining === 'number' ? `, cert=${daysRemaining}d` : '';
     coverage.push(normalizeCoverageRow({
@@ -508,35 +503,102 @@ export function parseTestsslJson(text, repoRoot, anchorFile) {
   return out;
 }
 
+function prepareGitleaksSource(repoRoot, workDir) {
+  // Gitleaks reads .gitleaksignore at its scan root. Keep every checkout one level below.
+  const source = join(workDir, 'source');
+  const checkout = join(source, 'checkout');
+  const deadline = performance.now() + GITLEAKS_PREPARE_MS;
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  const tempRoot = resolve(workDir);
+  let files = 0;
+  let entries = 0;
+  let bytes = 0;
+  const limit = detail => new Error(`Preparação do gitleaks excedeu o limite de ${detail}.`);
+  const checkTime = () => {
+    if (performance.now() >= deadline) throw limit('5 s');
+  };
+  const copyFile = (from, to) => {
+    if (++files > GITLEAKS_MAX_FILES) throw limit('4000 arquivos');
+    const input = openSync(from, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const original = fstatSync(input);
+      if (!original.isFile()) throw new Error('GITLEAKS_SOURCE_CHANGED');
+      if (original.size > GITLEAKS_MAX_FILE_BYTES) throw limit('8 MiB por arquivo');
+      if (bytes + original.size > GITLEAKS_MAX_BYTES) throw limit('64 MiB no total');
+      const output = openSync(to, 'wx', 0o600);
+      try {
+        let offset = 0;
+        while (offset < original.size) {
+          checkTime();
+          const count = readSync(input, buffer, 0, Math.min(buffer.length, original.size - offset), offset);
+          if (!count) throw new Error('GITLEAKS_SOURCE_CHANGED');
+          offset += count;
+          bytes += count;
+          let written = 0;
+          while (written < count) {
+            checkTime();
+            const size = writeSync(output, buffer, written, count - written);
+            if (!size) throw new Error('GITLEAKS_WRITE_FAILED');
+            written += size;
+          }
+        }
+        const final = fstatSync(input);
+        if (final.size !== original.size || final.mtimeMs !== original.mtimeMs) throw new Error('GITLEAKS_SOURCE_CHANGED');
+      } finally {
+        closeSync(output);
+      }
+    } finally {
+      closeSync(input);
+    }
+  };
+  const walk = (from, to, depth) => {
+    checkTime();
+    if (depth > GITLEAKS_MAX_DEPTH) throw limit('profundidade 10');
+    if (!lstatSync(from).isDirectory()) throw new Error('GITLEAKS_SOURCE_CHANGED');
+    mkdirSync(to, {mode: 0o700});
+    const dir = opendirSync(from, {bufferSize: 32});
+    try {
+      while (true) {
+        checkTime();
+        const entry = dir.readSync();
+        if (!entry) break;
+        if (++entries > GITLEAKS_MAX_ENTRIES) throw limit('16000 entradas');
+        const src = join(from, entry.name);
+        if (entry.name === '.git' || src === tempRoot) continue;
+        const dst = join(to, entry.name);
+        if (entry.isDirectory()) walk(src, dst, depth + 1);
+        else if (entry.isFile()) copyFile(src, dst);
+      }
+    } finally {
+      dir.closeSync();
+    }
+  };
+  mkdirSync(source, {mode: 0o700});
+  walk(repoRoot, checkout, 0);
+  checkTime();
+  return {source, checkout};
+}
+
 function runGitleaks(runBin, bin, repoRoot, workDir, anchorFile) {
   const config = join(workDir, 'gitleaks.toml');
   const report = join(workDir, 'gitleaks.json');
   writeFileSync(config, '[extend]\nuseDefault = true\n', {mode: 0o600});
-  let source = repoRoot;
-  let fileRoot = repoRoot;
-  if (existsSync(join(repoRoot, '.gitleaksignore')) || existsSync(join(repoRoot, '.git'))) {
-    // v8.30.1 also loads a .gitleaksignore at the source root, even with an explicit flag.
-    // Nest the checkout so that this file can be scanned as data without becoming policy.
-    source = join(workDir, 'source');
-    fileRoot = join(source, 'checkout');
-    mkdirSync(source, {mode: 0o700});
-    cpSync(repoRoot, fileRoot, {
-      recursive: true,
-      filter(path) {
-        const info = lstatSync(path);
-        return (path === repoRoot || basename(path) !== '.git') && (info.isFile() || info.isDirectory());
-      },
-    });
+  let staged;
+  try {
+    staged = prepareGitleaksSource(repoRoot, workDir);
+  } catch (error) {
+    return {detail: error.message?.startsWith('Preparação do gitleaks excedeu o limite de ')
+      ? error.message : 'Falha ao preparar a cópia limitada do snapshot para gitleaks.'};
   }
   const res = runBin(bin, [
     'dir', '--config', config, '--gitleaks-ignore-path', workDir, '--ignore-gitleaks-allow',
     '--report-format', 'json', '--report-path', report, '--exit-code', '0',
-    '--no-banner', '--redact=100', '--log-level', 'error', source,
-  ], {cwd: workDir});
+    '--no-banner', '--redact=100', '--log-level', 'error', staged.source,
+  ], {cwd: workDir, timeout: 60_000});
   if (res.error || res.status !== 0) return {detail: `Falha ao executar gitleaks (${toolExit(res)}).`};
   if (!existsSync(report)) return {detail: 'Relatório JSON do gitleaks ausente.'};
   try {
-    return {findings: parseGitleaksJson(readFileSync(report, 'utf8'), fileRoot, anchorFile)};
+    return {findings: parseGitleaksJson(readFileSync(report, 'utf8'), staged.checkout, anchorFile)};
   } catch {
     return {detail: 'Saída JSON inválida do gitleaks.'};
   }

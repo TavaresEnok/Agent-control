@@ -13,6 +13,7 @@ import {
   MAX_PRONTIDAO_ORIGINS,
   probePublishedHttpsOrigins,
   resolveProjectAuthorizedOrigins,
+  validatePassiveTlsEvidence,
 } from '../src/prontidao-target.ts';
 
 test('autoriza todas as origens declaradas, deduplica e mantém seleção individual acima da cota de medição', () => {
@@ -74,7 +75,7 @@ test('HTTPS local mede cada origem uma vez e cancela a requisição ativa e a fi
         return;
       }
       res.writeHead(302, {
-        Location: `${second}/redirect-nao-seguido`,
+        Location: 'https://synthetic-location.example.invalid/tenant?token=synthetic-query',
         'Set-Cookie': 'session=fixture-cookie',
         'Content-Security-Policy': "script-src 'nonce-dado-sintetico'; frame-ancestors 'self'",
         'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
@@ -89,14 +90,22 @@ test('HTTPS local mede cada origem uma vez e cancela a requisição ativa e a fi
       {name: 'second', method: 'GET', url: '/', cookie: false, auth: false},
     ]);
     assert.deepEqual(evidence.targets.map(target => [target.origin, target.status]), [[first, 'ok'], [second, 'ok']]);
-    assert.equal(evidence.targets[0]?.redirectTargetOrigin, second);
+    assert.equal(evidence.targets[0]?.redirectTargetOrigin, null);
     assert.equal(evidence.targets[0]?.redirectCrossOrigin, true);
     assert.equal(evidence.targets[0]?.bytesRead, 64);
     assert.equal(evidence.targets[0]?.truncated, true);
     assert.equal(JSON.stringify(evidence).includes('fixture-cookie'), false);
     assert.equal(JSON.stringify(evidence).includes('nonce-dado-sintetico'), false);
+    assert.equal(JSON.stringify(evidence).includes('synthetic-location'), false);
+    assert.equal(JSON.stringify(evidence).includes('synthetic-query'), false);
     assert.deepEqual(evidence.targets[0]?.headers, {});
     assert.deepEqual(evidence.targets[0]?.headerFacts, {hsts:'adequate', noSniff:true, antiFrame:true});
+    const legacy = validatePassiveTlsEvidence({...evidence, targets: [{
+      ...evidence.targets[0],
+      redirectTargetOrigin: 'http://synthetic-legacy.example.invalid',
+      headers: {'set-cookie': 'synthetic-legacy'},
+    }]});
+    assert.equal(JSON.stringify(legacy).includes('synthetic-legacy'), false);
 
     const limited = await probePublishedHttpsOrigins([
       ...Array<string>(MAX_PRONTIDAO_ORIGINS).fill(second), 'https://fora-da-cota.example.invalid',
@@ -117,6 +126,18 @@ test('HTTPS local mede cada origem uma vez e cancela a requisição ativa e a fi
     controller.abort(failure);
     await Promise.all([stopped, closed]);
     assert.deepEqual(seen.map(request => request.name), ['first']);
+    await assert.rejects(probePublishedHttpsOrigins([second], {...options, signal: controller.signal}), failure);
+    const finalController = new AbortController();
+    let timestamps = 0;
+    await assert.rejects(probePublishedHttpsOrigins([second], {
+      ...options,
+      signal: finalController.signal,
+      now() {
+        if (++timestamps === 2) finalController.abort(failure);
+        return new Date();
+      },
+    }), failure);
+    assert.deepEqual(seen.map(request => request.name), ['first', 'second']);
   } finally {
     await Promise.all(servers.map(server => new Promise<void>(resolve => {
       server.close(() => resolve());

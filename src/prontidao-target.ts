@@ -157,27 +157,21 @@ export function authorizeProjectHttpsOrigin(
   return authorized;
 }
 
-function inspectRedirect(origin: string, statusCode: number | undefined, locationHeader: string | string[] | undefined): {
-  redirectTargetOrigin: string | null;
-  redirectCrossOrigin: boolean;
-  redirectDowngradeHttp: boolean;
-} {
+function inspectRedirect(origin: string, statusCode: number | undefined, locationHeader: string | string[] | undefined) {
+  const noRedirect = {redirectCrossOrigin: false, redirectDowngradeHttp: false};
   if (!statusCode || statusCode < 300 || statusCode >= 400 || !locationHeader) {
-    return {redirectTargetOrigin: null, redirectCrossOrigin: false, redirectDowngradeHttp: false};
+    return noRedirect;
   }
   const raw = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
-  if (!raw) return {redirectTargetOrigin: null, redirectCrossOrigin: false, redirectDowngradeHttp: false};
+  if (!raw?.trim()) return noRedirect;
   try {
     const dest = new URL(raw.trim(), origin);
-    const redirectDowngradeHttp = dest.protocol === 'http:';
-    const redirectCrossOrigin = dest.origin !== origin;
     return {
-      redirectTargetOrigin: cleanSingleLine(dest.origin, 2048),
-      redirectCrossOrigin,
-      redirectDowngradeHttp,
+      redirectCrossOrigin: dest.origin !== origin,
+      redirectDowngradeHttp: dest.protocol === 'http:',
     };
   } catch {
-    return {redirectTargetOrigin: null, redirectCrossOrigin: false, redirectDowngradeHttp: false};
+    return noRedirect;
   }
 }
 
@@ -309,9 +303,8 @@ export function probePublishedHttpsOrigin(
           certificate,
           headers: {},
           headerFacts,
-          redirectTargetOrigin: redirect.redirectTargetOrigin,
-          redirectCrossOrigin: redirect.redirectCrossOrigin,
-          redirectDowngradeHttp: redirect.redirectDowngradeHttp,
+          redirectTargetOrigin: null,
+          ...redirect,
           bytesRead,
           truncated,
           durationMs: Math.max(0, Date.now() - startedAt),
@@ -377,7 +370,8 @@ export function probePublishedHttpsOrigin(
     });
 
     signal?.addEventListener('abort', cancel, {once: true});
-    req.end();
+    if (signal?.aborted) cancel();
+    else req.end();
   });
 }
 
@@ -395,18 +389,20 @@ export async function probePublishedHttpsOrigins(
   for (const origin of authorized.slice(0, MAX_PRONTIDAO_ORIGINS)) {
     targets.push(await probePublishedHttpsOrigin(origin, options));
   }
-  return ProntidaoPassiveEvidence.parse({
+  const evidence = ProntidaoPassiveEvidence.parse({
     schemaVersion: 1,
     collectedBy: 'agent-control-prontidao-adapter',
     collectedAt: (options?.now ?? (() => new Date()))().toISOString(),
     targets,
     ...(unmeasuredOrigins.length > 0 ? {unmeasuredOrigins} : {}),
   });
+  options?.signal?.throwIfAborted();
+  return evidence;
 }
 
 export function validatePassiveTlsEvidence(raw: unknown): ProntidaoPassiveEvidence {
   const evidence = ProntidaoPassiveEvidence.parse(raw);
   return {...evidence, targets: evidence.targets.map(target => ({
-    ...target, headerFacts: target.headerFacts ?? passiveHeaderFacts(target.headers), headers: {},
+    ...target, headerFacts: target.headerFacts ?? passiveHeaderFacts(target.headers), headers: {}, redirectTargetOrigin: null,
   }))};
 }
