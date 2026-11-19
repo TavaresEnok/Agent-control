@@ -446,3 +446,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:21 UTC — Revisor encerrou C7-R6 em e3527238 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:21 UTC — Revisão C7-HISTORICO-R2 iniciada por Sol high normal somente leitura em e4680e65.
 - 19/11/2026 05:22 UTC — As oito CLIs na entrega 6797c1a9 passaram nos seis testes de ponta a ponta em 167 s. Banco, prontidão e documentação tiveram 68/68 nos laboratórios e testes dirigidos, com as dependências fixadas habilitadas e a proteção dos achados prováveis verificada na CLI. A revisão de desempenho e3527238 retornou quatro correções de recursos e recuperação; aberta C7-R7. A medição de mutações de Python e Go chegou em 195c8cd8 e segue para ligação à CLI.
+- 19/11/2026 05:23 UTC — Revisor encerrou C7-HISTORICO-R2 em e4680e65 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:23 UTC — Revisão C5-R6 iniciada por Sol high normal somente leitura em dc0dff58.
+- 19/11/2026 05:24 UTC — Matriz dos módulos atualizada com os commits, números das provas físicas e resultados de revisão por módulo. A prova de prontidão distingue uma observação provável de um achado autorizado para correção.
