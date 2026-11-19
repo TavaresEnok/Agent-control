@@ -668,3 +668,17 @@ PAUSADO-COTA
 - 19/11/2026 17:12 UTC — A revisão de banco e a de QA poliglota encontraram imprecisões na origem das medições. Ordens C5-R9 e C2-LINGUAGENS-R4 abertas. O pgTAP no entrypoint de QA já distinguiu a migração de controle do defeito após restauração, em banco temporário por socket.
 - 19/11/2026 17:12 UTC — trabalho-C5-R9 iniciado em final-c5 por Sol medium normal.
 - 19/11/2026 17:13 UTC — QA integrou pgTAP 786e6f0e (9/9 físico e confirmado o achado em banco/assert.sql:2), exame 2b23ebc2 e matriz f5c5bfea. Candidato em a55d7bcd.
+- 19/11/2026 17:13 UTC — trabalho-C7-R9 iniciado em final-c7 por Sol medium normal.
+- 19/11/2026 17:14 UTC — C2-CARGA-LOCAL encerrado com código 0.
+- 19/11/2026 17:14 UTC — trabalho-C2-LINGUAGENS-R4 iniciado em final-qa-mutacao-linguagens por Sol high normal.
+- 19/11/2026 17:15 UTC — C8-R9 encerrado com código 0.
+- 19/11/2026 17:15 UTC — revisor-C3-R10 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:15 UTC — O laboratório de desempenho passou em 64/65. A nova dependência parse5 constava no lock do npm, mas faltava no inventário de integridade do módulo. Inventário corrigido e teste dirigido aprovado; a imagem será novamente conferida.
+- 19/11/2026 17:15 UTC — Suíte oficial de retomada-c3-257a em 257a3451: 261 arquivos aprovados, 0 falhas, 87 excluídos pelo executor.
+- 19/11/2026 17:17 UTC — Testes complementares de retomada-c3-257a em 257a3451: 52 aprovados.
+- 19/11/2026 17:17 UTC — C3-R10 encerrado com código 0.
+- 19/11/2026 17:17 UTC — revisor-C6-R11 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:17 UTC — Falha na validação de retomada-c3-257a em laboratorio, código 1. Logs privados do gerente.
+- 19/11/2026 17:17 UTC — prontidao aprovado em 36/36 testes dirigidos sem saltos, imagem sha256:efbdf7b405c2, fixada em 44f101b3.
+- 19/11/2026 17:17 UTC — dependencias aprovado em 36/36 testes dirigidos sem saltos, imagem sha256:df0a5915eca9, fixada em 985c96b0.
+- 19/11/2026 17:17 UTC — arquitetura aprovado em 21/21 testes dirigidos sem saltos, imagem sha256:0758fd4034df, fixada em f41671be.
