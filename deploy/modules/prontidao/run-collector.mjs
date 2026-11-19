@@ -1,11 +1,14 @@
 import {spawnSync} from 'node:child_process';
-import {existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync} from 'node:fs';
+import {closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync} from 'node:fs';
 import {join, relative, resolve, sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {AUDIT_VERSION, auditRepositoryReadiness, redactEvidence} from './audit-readiness.mjs';
 
 const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
 const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
+const MAX_EVIDENCE_BYTES = 512 * 1024;
+const MIN_HSTS_MAX_AGE_SECONDS = 15_552_000;
+const EXPIRING_CERT_DAYS = 14;
 
 function mapSeverity(raw) {
   const val = String(raw ?? '').trim().toLowerCase();
@@ -57,15 +60,6 @@ function normalizeCoverageRow(row) {
   };
 }
 
-function hasExternalNetwork(netDir = '/sys/class/net') {
-  try {
-    const ifaces = readdirSync(netDir);
-    return ifaces.some(name => name !== 'lo');
-  } catch {
-    return false;
-  }
-}
-
 export function validateTargetUrl(raw) {
   if (!raw || typeof raw !== 'string') return null;
   const trimmed = raw.trim();
@@ -79,9 +73,228 @@ export function validateTargetUrl(raw) {
   return url;
 }
 
-function isLoopbackHost(hostname) {
-  const h = hostname.toLowerCase();
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
+function readTrustedEvidenceFile(evidencePath, repoRoot) {
+  const absEvidence = resolve(evidencePath);
+  const absRepo = resolve(repoRoot);
+  const rel = relative(absRepo, absEvidence);
+  if (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('/'))) {
+    throw new Error('EVIDENCE_PATH_INSIDE_REPO');
+  }
+  const info = lstatSync(absEvidence);
+  if (info.isSymbolicLink() || !info.isFile() || info.size > MAX_EVIDENCE_BYTES) {
+    throw new Error('EVIDENCE_FILE_INVALID');
+  }
+  const fd = openSync(absEvidence, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const buf = Buffer.allocUnsafe(info.size);
+    let offset = 0;
+    while (offset < info.size) {
+      const n = readSync(fd, buf, offset, info.size - offset, offset);
+      if (n === 0) break;
+      offset += n;
+    }
+    return JSON.parse(buf.subarray(0, offset).toString('utf8'));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function mapTlsFailureRule(errorCode, errorMessage) {
+  const code = String(errorCode || '').toUpperCase();
+  const msg = String(errorMessage || '').toLowerCase();
+  if (code === 'CERT_HAS_EXPIRED' || code === 'CERT_NOT_YET_VALID') {
+    return 'PRONTIDAO-CERT-EXPIRADO';
+  }
+  if (code === 'ERR_TLS_CERT_ALTNAME_INVALID' || code === 'HOSTNAME_MISMATCH') {
+    return 'PRONTIDAO-CERT-DOMINIO';
+  }
+  if (
+    code.includes('PROTOCOL')
+    || code.includes('WRONG_VERSION')
+    || code.includes('INVALID_VERSION')
+    || msg.includes('protocol version')
+    || msg.includes('unsupported protocol')
+  ) {
+    return 'PRONTIDAO-TLS-FRACO';
+  }
+  return 'PRONTIDAO-TLS-FALHA';
+}
+
+export function evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile) {
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) {
+    throw new Error('PASSIVE_EVIDENCE_INVALID');
+  }
+  if (evidence.schemaVersion !== 1 || evidence.collectedBy !== 'agent-control-prontidao-adapter') {
+    throw new Error('PASSIVE_EVIDENCE_UNTRUSTED');
+  }
+  if (!Array.isArray(evidence.targets) || evidence.targets.length === 0 || evidence.targets.length > 16) {
+    throw new Error('PASSIVE_EVIDENCE_TARGETS_INVALID');
+  }
+
+  const coverage = [];
+  const findings = [];
+
+  for (const target of evidence.targets) {
+    if (!target || typeof target !== 'object') throw new Error('PASSIVE_EVIDENCE_TARGET_INVALID');
+    const url = validateTargetUrl(target.origin);
+    if (!url || url.protocol !== 'https:') throw new Error('PASSIVE_EVIDENCE_ORIGIN_INVALID');
+    const origin = url.origin;
+
+    if (target.status === 'failed') {
+      coverage.push(normalizeCoverageRow({
+        tool: 'prontidao-tls-passivo',
+        version: AUDIT_VERSION,
+        status: 'failed',
+        detail: `Falha na medição passiva de ${origin} (${target.errorCode || 'PROBE_ERROR'}): ${target.errorMessage || 'sem resposta'}.`,
+      }));
+      continue;
+    }
+
+    if (target.status === 'tls_error') {
+      const code = String(target.tlsErrorCode || 'TLS_ERROR');
+      const rule = mapTlsFailureRule(code, target.tlsErrorMessage);
+      findings.push(normalizeFinding({
+        tool: 'prontidao-tls-passivo',
+        rule,
+        file: tlsAnchorFile,
+        line: 1,
+        severity: 'alta',
+        message: `Falha de validação TLS ao consultar ${origin} (${code}).`,
+        evidence: `${origin} [${code}] ${target.tlsErrorMessage || ''}`,
+      }, repoRoot, tlsAnchorFile));
+      coverage.push(normalizeCoverageRow({
+        tool: 'prontidao-tls-passivo',
+        version: AUDIT_VERSION,
+        status: 'ok',
+        detail: `Medição passiva em ${origin}: validação TLS falhou (${code}); cabeçalhos HTTP não coletados em canal não confiável; 1 achado(s).`,
+      }));
+      continue;
+    }
+
+    if (target.status !== 'ok') {
+      throw new Error('PASSIVE_EVIDENCE_STATUS_INVALID');
+    }
+
+    const targetFindings = [];
+    const protocol = String(target.tlsProtocol || '');
+    if (/^(?:SSLv2|SSLv3|TLSv1(?:\.0)?|TLSv1\.1)$/i.test(protocol)) {
+      targetFindings.push(normalizeFinding({
+        tool: 'prontidao-tls-passivo',
+        rule: 'PRONTIDAO-TLS-FRACO',
+        file: tlsAnchorFile,
+        line: 1,
+        severity: 'alta',
+        message: `Serviço publicado em ${origin} negociou protocolo TLS legado (${protocol}).`,
+        evidence: `${origin} protocol=${protocol}`,
+      }, repoRoot, tlsAnchorFile));
+    }
+
+    const daysRemaining = target.certificate?.daysRemaining;
+    if (typeof daysRemaining === 'number' && Number.isFinite(daysRemaining)) {
+      if (daysRemaining < 0) {
+        targetFindings.push(normalizeFinding({
+          tool: 'prontidao-tls-passivo',
+          rule: 'PRONTIDAO-CERT-EXPIRADO',
+          file: tlsAnchorFile,
+          line: 1,
+          severity: 'alta',
+          message: `Certificado TLS de ${origin} expirado há ${Math.abs(daysRemaining)} dia(s).`,
+          evidence: `${origin} validTo=${target.certificate?.validTo ?? 'desconhecido'}`,
+        }, repoRoot, tlsAnchorFile));
+      } else if (daysRemaining <= EXPIRING_CERT_DAYS) {
+        targetFindings.push(normalizeFinding({
+          tool: 'prontidao-tls-passivo',
+          rule: 'PRONTIDAO-CERT-EXPIRANDO',
+          file: tlsAnchorFile,
+          line: 1,
+          severity: 'media',
+          message: `Certificado TLS de ${origin} vence em ${daysRemaining} dia(s).`,
+          evidence: `${origin} validTo=${target.certificate?.validTo ?? 'desconhecido'}`,
+        }, repoRoot, tlsAnchorFile));
+      }
+    }
+
+    if (target.redirectDowngradeHttp) {
+      targetFindings.push(normalizeFinding({
+        tool: 'prontidao-tls-passivo',
+        rule: 'PRONTIDAO-REDIR-HTTP',
+        file: tlsAnchorFile,
+        line: 1,
+        severity: 'alta',
+        message: `Origem HTTPS ${origin} respondeu com redirecionamento para HTTP sem TLS (${target.redirectTargetOrigin ?? 'http://'}).`,
+        evidence: `${origin} HTTP ${target.httpStatus ?? 302} -> ${target.redirectTargetOrigin ?? 'http://'}`,
+      }, repoRoot, tlsAnchorFile));
+    }
+
+    const headers = target.headers && typeof target.headers === 'object' ? target.headers : {};
+    const hsts = typeof headers['strict-transport-security'] === 'string' ? headers['strict-transport-security'] : '';
+    if (!hsts) {
+      targetFindings.push(normalizeFinding({
+        tool: 'prontidao-tls-passivo',
+        rule: 'PRONTIDAO-HSTS-AUSENTE',
+        file: tlsAnchorFile,
+        line: 1,
+        severity: 'media',
+        message: `Resposta HTTPS de ${origin} não enviou cabeçalho Strict-Transport-Security (HSTS).`,
+        evidence: `${origin} HTTP ${target.httpStatus ?? 200}: Strict-Transport-Security ausente`,
+      }, repoRoot, tlsAnchorFile));
+    } else {
+      const maxAgeMatch = /(?:^|[;\s])max-age\s*=\s*(\d+)/i.exec(hsts);
+      const maxAge = maxAgeMatch ? Number.parseInt(maxAgeMatch[1], 10) : -1;
+      if (!Number.isFinite(maxAge) || maxAge < MIN_HSTS_MAX_AGE_SECONDS) {
+        targetFindings.push(normalizeFinding({
+          tool: 'prontidao-tls-passivo',
+          rule: 'PRONTIDAO-HSTS-FRACO',
+          file: tlsAnchorFile,
+          line: 1,
+          severity: 'media',
+          message: `Cabeçalho Strict-Transport-Security de ${origin} possui max-age insuficiente (${Number.isFinite(maxAge) && maxAge >= 0 ? maxAge : 'ausente'}).`,
+          evidence: `${origin} Strict-Transport-Security: ${hsts}`,
+        }, repoRoot, tlsAnchorFile));
+      }
+    }
+
+    const noSniff = typeof headers['x-content-type-options'] === 'string' ? headers['x-content-type-options'] : '';
+    if (noSniff.trim().toLowerCase() !== 'nosniff') {
+      targetFindings.push(normalizeFinding({
+        tool: 'prontidao-tls-passivo',
+        rule: 'PRONTIDAO-NOSNIFF-AUSENTE',
+        file: tlsAnchorFile,
+        line: 1,
+        severity: 'baixa',
+        message: `Resposta HTTPS de ${origin} sem X-Content-Type-Options: nosniff.`,
+        evidence: `${origin} HTTP ${target.httpStatus ?? 200}: X-Content-Type-Options=${noSniff || 'ausente'}`,
+      }, repoRoot, tlsAnchorFile));
+    }
+
+    const xfo = typeof headers['x-frame-options'] === 'string' ? headers['x-frame-options'].trim() : '';
+    const csp = typeof headers['content-security-policy'] === 'string' ? headers['content-security-policy'] : '';
+    if (!xfo && !/\bframe-ancestors\b/i.test(csp)) {
+      targetFindings.push(normalizeFinding({
+        tool: 'prontidao-tls-passivo',
+        rule: 'PRONTIDAO-FRAME-AUSENTE',
+        file: tlsAnchorFile,
+        line: 1,
+        severity: 'baixa',
+        message: `Resposta HTTPS de ${origin} sem proteção contra clickjacking (X-Frame-Options ou CSP frame-ancestors).`,
+        evidence: `${origin} HTTP ${target.httpStatus ?? 200}: X-Frame-Options e frame-ancestors ausentes`,
+      }, repoRoot, tlsAnchorFile));
+    }
+
+    findings.push(...targetFindings);
+    const redirectNote = target.redirectCrossOrigin
+      ? `; redirecionamento para ${target.redirectTargetOrigin ?? 'outro destino'} não seguido`
+      : '';
+    const certNote = typeof daysRemaining === 'number' ? `, cert=${daysRemaining}d` : '';
+    coverage.push(normalizeCoverageRow({
+      tool: 'prontidao-tls-passivo',
+      version: AUDIT_VERSION,
+      status: 'ok',
+      detail: `Medição passiva em ${origin}: HTTP ${target.httpStatus ?? '-'}, ${protocol || 'TLS'}${certNote}, bytes=${target.bytesRead ?? 0}${redirectNote}; ${targetFindings.length} achado(s).`,
+    }));
+  }
+
+  return {coverage, findings};
 }
 
 function probeVersion(runBin, bin, args, regex) {
@@ -235,8 +448,6 @@ export function runCollector(options = {}) {
   const repoRoot = resolve(options.repoRoot ?? defaultRepoRoot());
   const workDir = mkdtempSync(join(options.tmpDir ?? process.env.TMPDIR ?? '/tmp', 'prontidao-run-'));
   const runBin = options.runBin ?? defaultRunBin;
-  const targetRaw = options.targetUrl ?? process.env.AC_TARGET_URL ?? process.env.PRONTIDAO_TARGET_URL ?? '';
-  const networkUp = options.hasExternalNetwork ?? hasExternalNetwork();
   const bins = {
     gitleaks: options.bins?.gitleaks ?? 'gitleaks',
     hadolint: options.bins?.hadolint ?? 'hadolint',
@@ -247,12 +458,14 @@ export function runCollector(options = {}) {
   const coverage = [];
   const findings = [];
   let anchorFile = 'package.json';
+  let tlsAnchorFile = 'package.json';
 
   try {
     // 1. Análise estática e requisitos de prontidão (prontidao-audit)
     try {
       const audit = auditRepositoryReadiness(repoRoot);
       anchorFile = audit.anchorFile;
+      tlsAnchorFile = audit.tlsAnchorFile ?? audit.anchorFile;
       for (const f of audit.findings) findings.push(normalizeFinding(f, repoRoot, anchorFile));
       for (const c of audit.coverage) coverage.push(normalizeCoverageRow(c));
     } catch (err) {
@@ -408,98 +621,63 @@ export function runCollector(options = {}) {
       }
     }
 
-    // 5. testssl.sh (TLS e cabeçalhos passivos ao vivo quando alvo e rede estão presentes)
-    const testsslVer = probeVersion(runBin, bins.testssl, ['--version'], /version\s+([0-9]+\.[0-9]+(?:\.[0-9]+)?)/i) ?? '3.2.5';
-    const testsslProbe = runBin(bins.testssl, ['--version'], {timeout: 10_000});
-    if (testsslProbe.error) {
-      coverage.push(normalizeCoverageRow({
-        tool: 'testssl.sh',
-        version: testsslVer,
-        status: 'failed',
-        detail: `Ferramenta testssl.sh indisponível: ${testsslProbe.error.message}`,
-      }));
-    } else {
-      let parsedTarget = null;
-      let targetError = null;
+    // 5. Medição passiva de certificado TLS e cabeçalhos (evidência estruturada confiável do adaptador do produto)
+    const evidenceFile = options.evidenceFile ?? process.env.AC_PRONTIDAO_EVIDENCE_FILE ?? '';
+    if (options.passiveTlsEvidence !== undefined || evidenceFile) {
       try {
-        parsedTarget = validateTargetUrl(targetRaw);
+        const evidence = options.passiveTlsEvidence !== undefined
+          ? options.passiveTlsEvidence
+          : readTrustedEvidenceFile(evidenceFile, repoRoot);
+        const evaluated = evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile);
+        findings.push(...evaluated.findings);
+        coverage.push(...evaluated.coverage);
       } catch (err) {
-        targetError = err instanceof Error ? err.message : String(err);
-      }
-
-      if (targetError) {
         coverage.push(normalizeCoverageRow({
-          tool: 'testssl.sh',
-          version: testsslVer,
+          tool: 'prontidao-tls-passivo',
+          version: AUDIT_VERSION,
           status: 'failed',
-          detail: `URL de alvo inválida (${targetError}).`,
+          detail: `Evidência passiva TLS inválida: ${err instanceof Error ? err.message : String(err)}`,
         }));
-      } else if (!parsedTarget) {
-        coverage.push(normalizeCoverageRow({
-          tool: 'testssl.sh',
-          version: testsslVer,
-          status: 'skipped',
-          detail: 'Alvo HTTPS não informado (AC_TARGET_URL); verificação passiva de TLS/cabeçalhos ao vivo ignorada no modo offline.',
-        }));
-      } else if (parsedTarget.protocol === 'http:') {
-        findings.push(normalizeFinding({
-          tool: 'testssl.sh',
-          rule: 'PRONTIDAO-ALVO-HTTP-SEM-TLS',
-          file: anchorFile,
-          line: 1,
-          severity: 'alta',
-          message: `Alvo declarado usa HTTP sem TLS (${parsedTarget.origin}).`,
-          evidence: parsedTarget.origin,
-        }, repoRoot, anchorFile));
-        coverage.push(normalizeCoverageRow({
-          tool: 'testssl.sh',
-          version: testsslVer,
-          status: 'ok',
-          detail: `Alvo ${parsedTarget.origin} sem HTTPS; achado de ausência de TLS registrado.`,
-        }));
-      } else if (!networkUp && !isLoopbackHost(parsedTarget.hostname)) {
-        coverage.push(normalizeCoverageRow({
-          tool: 'testssl.sh',
-          version: testsslVer,
-          status: 'skipped',
-          detail: `Rede desligada (--network none); verificação passiva de ${parsedTarget.origin} ignorada.`,
-        }));
-      } else {
-        const testsslOut = join(workDir, 'testssl.json');
-        const tsArgs = ['--jsonfile', testsslOut, '--warnings', 'off', '--quiet', '--sneaky', '--protocols', '--server-defaults', '--headers', parsedTarget.origin];
-        const tsRes = runBin(bins.testssl, tsArgs, {
-          cwd: workDir,
-          timeout: 180_000,
-          env: {...process.env, TESTSSL_INSTALL_DIR: process.env.TESTSSL_INSTALL_DIR || '/opt/testssl'},
-        });
-        if (tsRes.error || (typeof tsRes.status === 'number' && tsRes.status >= 242) || !existsSync(testsslOut)) {
-          coverage.push(normalizeCoverageRow({
-            tool: 'testssl.sh',
-            version: testsslVer,
-            status: 'failed',
-            detail: `Falha ao executar testssl.sh contra ${parsedTarget.origin} (${tsRes.error?.message ?? `exit=${tsRes.status}`}).`,
-          }));
-        } else {
-          try {
-            const tsFindings = parseTestsslJson(readFileSync(testsslOut, 'utf8'), repoRoot, anchorFile);
-            findings.push(...tsFindings);
-            coverage.push(normalizeCoverageRow({
-              tool: 'testssl.sh',
-              version: testsslVer,
-              status: 'ok',
-              detail: `Inspeção passiva de TLS/cabeçalhos em ${parsedTarget.origin}; ${tsFindings.length} achado(s).`,
-            }));
-          } catch (err) {
-            coverage.push(normalizeCoverageRow({
-              tool: 'testssl.sh',
-              version: testsslVer,
-              status: 'failed',
-              detail: `Saída JSON inválida do testssl.sh: ${err instanceof Error ? err.message : String(err)}`,
-            }));
-          }
-        }
       }
+    } else {
+      coverage.push(normalizeCoverageRow({
+        tool: 'prontidao-tls-passivo',
+        version: AUDIT_VERSION,
+        status: 'skipped',
+        detail: 'Nenhuma origem HTTPS autorizada informada; medição passiva ao vivo de certificado TLS e cabeçalhos ignorada no modo offline.',
+      }));
     }
+
+    // 6. testssl.sh não é executado contra a rede pelo coletor offline (evita varredura ativa e disfarce de cliente)
+    const testsslVer = probeVersion(runBin, bins.testssl, ['--version'], /version\s+([0-9]+\.[0-9]+\.[0-9]+)/i) ?? '3.2.5';
+    coverage.push(normalizeCoverageRow({
+      tool: 'testssl.sh',
+      version: testsslVer,
+      status: 'skipped',
+      detail: 'Varredura testssl.sh desabilitada no coletor offline (--network none, sem varredura nem disfarce de cliente).',
+    }));
+
+    // 7. Cobertura honesta de requisitos operacionais que não podem ser provados por mera configuração estática
+    coverage.push(
+      normalizeCoverageRow({
+        tool: 'prontidao:operacional:restauracao',
+        version: AUDIT_VERSION,
+        status: 'skipped',
+        detail: 'Prova real de restauração em ambiente vivo não executada; configuração estática no repositório não comprova restauração.',
+      }),
+      normalizeCoverageRow({
+        tool: 'prontidao:operacional:alertas',
+        version: AUDIT_VERSION,
+        status: 'skipped',
+        detail: 'Entrega real de alertas operacionais não testada; diretiva estática no repositório não comprova disparo de alerta.',
+      }),
+      normalizeCoverageRow({
+        tool: 'prontidao:operacional:disponibilidade',
+        version: AUDIT_VERSION,
+        status: 'skipped',
+        detail: 'Disponibilidade contínua do serviço publicado não comprovada por configuração estática ou requisição passiva pontual.',
+      }),
+    );
 
     return {coverage, findings};
   } finally {
@@ -512,14 +690,6 @@ function defaultRepoRoot() {
   if (existsSync('/repo')) return '/repo';
   if (existsSync('/repository')) return '/repository';
   return '/repo';
-}
-
-function parseTargetArg(argv) {
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--target' && argv[i + 1]) return argv[i + 1];
-    if (argv[i].startsWith('--target=')) return argv[i].slice('--target='.length);
-  }
-  return undefined;
 }
 
 function launchedAsEntry() {
@@ -538,7 +708,6 @@ if (launchedAsEntry()) {
     console.error('PRONTIDAO_REPO_MISSING');
     process.exit(78);
   }
-  const targetUrl = parseTargetArg(process.argv.slice(2));
-  const result = runCollector({repoRoot, targetUrl});
+  const result = runCollector({repoRoot});
   process.stdout.write(`${JSON.stringify(result)}\n`, 'utf8');
 }

@@ -6,6 +6,7 @@ import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {auditRepositoryReadiness, collectRepoFiles, parseComposeServices, redactEvidence} from '../deploy/modules/prontidao/audit-readiness.mjs';
 import {
+  evaluatePassiveTlsEvidence,
   parseGitleaksJson,
   parseHadolintJson,
   parseTestsslJson,
@@ -47,10 +48,15 @@ test('tools.lock.json e Dockerfile fixam versões, digests e usuário sem privil
 
   const entrypoint = readFileSync(join(moduleDir, 'entrypoint.sh'), 'utf8');
   assert.match(entrypoint, /unset\s+"\$name"/);
+  assert.match(entrypoint, /AC_PRONTIDAO_EVIDENCE_FILE/);
+  assert.match(entrypoint, /\/run\/prontidao-evidence\.json/);
   assert.match(entrypoint, /\*\.\.\*/);
   assert.match(entrypoint, /\*\.sock\*/);
   assert.match(entrypoint, /PRONTIDAO_SOCKET_FORBIDDEN/);
   assert.match(entrypoint, /export HOME=\/tmp/);
+
+  const collectorSrc = readFileSync(join(moduleDir, 'run-collector.mjs'), 'utf8');
+  assert.equal(collectorSrc.includes('--sneaky'), false);
 });
 
 test('auditRepositoryReadiness detecta todos os defeitos plantados e mascara segredos', () => {
@@ -109,6 +115,18 @@ test('auditRepositoryReadiness não acusa defeitos no controle limpo', () => {
     assert.equal(row.status, 'ok');
     assert.match(row.detail, /0 achado\(s\)/);
   }
+  assert.match(
+    reqRows.find(r => r.tool === 'prontidao:requisito:backup-restauracao')?.detail ?? '',
+    /restauração real não comprovada/,
+  );
+  assert.match(
+    reqRows.find(r => r.tool === 'prontidao:requisito:alertas-logs')?.detail ?? '',
+    /entrega real de alertas não comprovada/,
+  );
+  assert.match(
+    reqRows.find(r => r.tool === 'prontidao:requisito:reinicio-automatico')?.detail ?? '',
+    /disponibilidade real não comprovada/,
+  );
 });
 
 test('collectRepoFiles ignora symlinks e parseComposeServices preserva linhas', () => {
@@ -190,11 +208,9 @@ test('normalizadores e runCollector reportam cobertura, achados, skipped offline
   assert.equal(ts[0]?.severity, 'alta');
   assert.equal(ts[1]?.severity, 'media');
 
-  // Simula execução completa com stubs determinísticos (e uma ferramenta falhando)
+  // Simula execução completa offline com stubs determinísticos (e uma ferramenta falhando)
   const out = runCollector({
     repoRoot: defectiveDir,
-    hasExternalNetwork: false,
-    targetUrl: 'https://prod.example.com',
     runBin(bin, args) {
       if (args[0] === 'version') return {status: 0, stdout: '8.30.1\n', stderr: ''};
       if (args[0] === '--version') {
@@ -224,10 +240,139 @@ test('normalizadores e runCollector reportam cobertura, achados, skipped offline
   }
   const trivyRow = out.coverage.find(c => c.tool === 'trivy');
   assert.equal(trivyRow?.status, 'failed');
+  const passiveTlsRow = out.coverage.find(c => c.tool === 'prontidao-tls-passivo');
+  assert.equal(passiveTlsRow?.status, 'skipped');
   const testsslRow = out.coverage.find(c => c.tool === 'testssl.sh');
   assert.equal(testsslRow?.status, 'skipped');
+  for (const opTool of [
+    'prontidao:operacional:restauracao',
+    'prontidao:operacional:alertas',
+    'prontidao:operacional:disponibilidade',
+  ]) {
+    assert.equal(out.coverage.find(c => c.tool === opTool)?.status, 'skipped');
+  }
   assert.ok(out.coverage.some(c => c.tool === 'gitleaks' && c.status === 'ok'));
   assert.ok(out.coverage.some(c => c.tool === 'hadolint' && c.status === 'ok'));
+});
+
+test('evaluatePassiveTlsEvidence avalia evidência estruturada e recusa arquivo dentro do repo', () => {
+  const cleanEval = evaluatePassiveTlsEvidence({
+    schemaVersion: 1,
+    collectedBy: 'agent-control-prontidao-adapter',
+    collectedAt: '2026-11-19T00:00:00.000Z',
+    targets: [{
+      origin: 'https://app.example.com',
+      status: 'ok',
+      httpStatus: 200,
+      tlsProtocol: 'TLSv1.3',
+      cipher: 'TLS_AES_256_GCM_SHA384',
+      tlsAuthorized: true,
+      tlsErrorCode: null,
+      tlsErrorMessage: null,
+      errorCode: null,
+      errorMessage: null,
+      certificate: {subject: 'CN=app.example.com', issuer: 'CN=Test CA', validFrom: '2026-01-01', validTo: '2027-01-01', daysRemaining: 90, subjectAltName: 'DNS:app.example.com'},
+      headers: {
+        'strict-transport-security': 'max-age=31536000; includeSubDomains',
+        'x-content-type-options': 'nosniff',
+        'x-frame-options': 'DENY',
+      },
+      redirectTargetOrigin: null,
+      redirectCrossOrigin: false,
+      redirectDowngradeHttp: false,
+      bytesRead: 512,
+      truncated: false,
+      durationMs: 25,
+    }],
+  }, cleanDir, 'deploy/caddy/site.caddy');
+  assert.deepEqual(cleanEval.findings, []);
+  assert.equal(cleanEval.coverage[0]?.status, 'ok');
+
+  const brokenEval = evaluatePassiveTlsEvidence({
+    schemaVersion: 1,
+    collectedBy: 'agent-control-prontidao-adapter',
+    collectedAt: '2026-11-19T00:00:00.000Z',
+    targets: [
+      {
+        origin: 'https://expired.example.com',
+        status: 'tls_error',
+        httpStatus: null,
+        tlsProtocol: null,
+        cipher: null,
+        tlsAuthorized: false,
+        tlsErrorCode: 'CERT_HAS_EXPIRED',
+        tlsErrorMessage: 'certificate has expired',
+        errorCode: null,
+        errorMessage: null,
+        certificate: null,
+        headers: {},
+        redirectTargetOrigin: null,
+        redirectCrossOrigin: false,
+        redirectDowngradeHttp: false,
+        bytesRead: 0,
+        truncated: false,
+        durationMs: 12,
+      },
+      {
+        origin: 'https://weak.example.com',
+        status: 'ok',
+        httpStatus: 302,
+        tlsProtocol: 'TLSv1.2',
+        cipher: 'ECDHE-RSA-AES128-GCM-SHA256',
+        tlsAuthorized: true,
+        tlsErrorCode: null,
+        tlsErrorMessage: null,
+        errorCode: null,
+        errorMessage: null,
+        certificate: {subject: 'CN=weak.example.com', issuer: 'CN=Test CA', validFrom: '2026-01-01', validTo: '2026-11-25', daysRemaining: 6, subjectAltName: 'DNS:weak.example.com'},
+        headers: {'strict-transport-security': 'max-age=60'},
+        redirectTargetOrigin: 'http://weak.example.com',
+        redirectCrossOrigin: true,
+        redirectDowngradeHttp: true,
+        bytesRead: 0,
+        truncated: false,
+        durationMs: 18,
+      },
+    ],
+  }, cleanDir, 'deploy/caddy/site.caddy');
+  const rules = new Set(brokenEval.findings.map(f => f.rule));
+  assert.equal(rules.has('PRONTIDAO-CERT-EXPIRADO'), true);
+  assert.equal(rules.has('PRONTIDAO-CERT-EXPIRANDO'), true);
+  assert.equal(rules.has('PRONTIDAO-REDIR-HTTP'), true);
+  assert.equal(rules.has('PRONTIDAO-HSTS-FRACO'), true);
+  assert.equal(rules.has('PRONTIDAO-NOSNIFF-AUSENTE'), true);
+  assert.equal(rules.has('PRONTIDAO-FRAME-AUSENTE'), true);
+
+  assert.throws(() => evaluatePassiveTlsEvidence({
+    schemaVersion: 1,
+    collectedBy: 'untrusted-repo-script',
+    collectedAt: '2026-11-19T00:00:00.000Z',
+    targets: [],
+  }, cleanDir, 'deploy/caddy/site.caddy'));
+
+  const insideRepoOut = runCollector({
+    repoRoot: cleanDir,
+    evidenceFile: join(cleanDir, 'package.json'),
+    runBin(bin, args) {
+      if (args[0] === 'version') return {status: 0, stdout: '8.30.1\n', stderr: ''};
+      if (args[0] === '--version') {
+        if (bin === 'hadolint') return {status: 0, stdout: 'Haskell Dockerfile Linter 2.15.1\n', stderr: ''};
+        if (bin === 'trivy') return {status: 0, stdout: 'Version: 0.76.2\n', stderr: ''};
+        if (bin === 'testssl.sh') return {status: 0, stdout: 'testssl.sh version 3.2.5\n', stderr: ''};
+      }
+      if (bin === 'gitleaks') {
+        writeFileSync(args[args.indexOf('--report-path') + 1]!, '[]\n');
+        return {status: 0, stdout: '', stderr: ''};
+      }
+      if (bin === 'hadolint') return {status: 0, stdout: '[]', stderr: ''};
+      if (bin === 'trivy') {
+        writeFileSync(args[args.indexOf('--output') + 1]!, '{"Results":[]}\n');
+        return {status: 0, stdout: '', stderr: ''};
+      }
+      return {status: 0, stdout: '', stderr: ''};
+    },
+  });
+  assert.equal(insideRepoOut.coverage.find(c => c.tool === 'prontidao-tls-passivo')?.status, 'failed');
 });
 
 test('nginx com TLS legado e backup em /tmp são detectados sem executar scripts do repo', () => {

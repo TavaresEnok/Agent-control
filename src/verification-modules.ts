@@ -13,6 +13,7 @@ import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transp
 import {finishExamIntent, finishExamIntentTx} from './exam-intent.ts';
 import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
+import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {listExamFiles} from './verify-slices.ts';
@@ -112,6 +113,7 @@ export type CollectorRunnerSpec = {
   commit: string;
   timeoutMs: number;
   maxStdoutBytes: number;
+  passiveTlsEvidence?: ProntidaoPassiveEvidence;
 };
 
 export type VerificationModuleRunInput = {
@@ -129,6 +131,7 @@ export type VerificationModuleRunInput = {
   createdAt?: Date;
   timeoutMs?: number;
   maxStdoutBytes?: number;
+  passiveTlsEvidence?: ProntidaoPassiveEvidence;
   collectorOutput?: unknown;
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
   /** Optional independent reviewer worker. When present, findings are confirmed without passing author conclusions. */
@@ -323,12 +326,17 @@ function cpusFromNano(nanoCpus: number): string {
 export function moduleCollectorArguments(input: {
   image: string;
   repository: string;
+  evidenceFile?: string;
   memoryBytes?: number;
   nanoCpus?: number;
   pidsLimit?: number;
 }): readonly string[] {
   assertPinnedModuleImage(input.image);
   const source = assertHostPath(input.repository);
+  const evidence = input.evidenceFile !== undefined ? assertHostPath(input.evidenceFile) : undefined;
+  if (evidence !== undefined && (evidence === source || evidence.startsWith(`${source}/`))) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  }
   const memoryBytes = input.memoryBytes ?? MODULE_MEMORY_BYTES;
   const nanoCpus = input.nanoCpus ?? MODULE_NANO_CPUS;
   const pidsLimit = input.pidsLimit ?? MODULE_PIDS_LIMIT;
@@ -367,6 +375,7 @@ export function moduleCollectorArguments(input: {
     '/tmp',
     '--mount',
     `type=bind,src=${source},dst=/repo,readonly`,
+    ...(evidence !== undefined ? ['--mount', `type=bind,src=${evidence},dst=/run/prontidao-evidence.json,readonly`] : []),
     input.image,
   ];
 }
@@ -712,6 +721,7 @@ export async function runModuleCollectorContainer(input: {
   commit: string;
   timeoutMs?: number;
   maxStdoutBytes?: number;
+  passiveTlsEvidence?: ProntidaoPassiveEvidence;
   executeProcess?: (args: readonly string[], options: {timeoutMs: number; maxStdoutBytes: number}) => Promise<BoundedProcessResult>;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
@@ -720,13 +730,28 @@ export async function runModuleCollectorContainer(input: {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
   const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
+  let evidenceDir: string | undefined;
+  let evidenceFile: string | undefined;
   try {
-    const args = moduleCollectorArguments({image: input.image, repository: snapshot});
+    if (input.passiveTlsEvidence !== undefined) {
+      const validated = validatePassiveTlsEvidence(input.passiveTlsEvidence);
+      evidenceDir = await mkdtemp(join(tmpdir(), 'ac-prontidao-evidence-'));
+      await chmod(evidenceDir, 0o755);
+      evidenceFile = join(evidenceDir, 'evidence.json');
+      await writeFile(evidenceFile, `${JSON.stringify(validated)}\n`, {encoding: 'utf8', mode: 0o644, flag: 'wx'});
+      await chmod(evidenceFile, 0o644);
+    }
+    const args = moduleCollectorArguments({
+      image: input.image,
+      repository: snapshot,
+      ...(evidenceFile !== undefined ? {evidenceFile} : {}),
+    });
     const run = input.executeProcess ?? runBoundedCollectorProcess;
     const result = await run(args, {timeoutMs, maxStdoutBytes});
     const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes});
     return {code: result.code, output};
   } finally {
+    if (evidenceDir) await rm(evidenceDir, {recursive: true, force: true});
     await rm(snapshot, {recursive: true, force: true});
   }
 }
@@ -1597,6 +1622,12 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   });
 
   try {
+    const passiveTlsEvidence = input.passiveTlsEvidence !== undefined
+      ? (() => {
+          if (input.module !== 'prontidao') throw new Refusal('INVALID_CONTRACT', 400);
+          return validatePassiveTlsEvidence(input.passiveTlsEvidence);
+        })()
+      : undefined;
     let collectorCode = 0;
     let collectorData: ModuleCollectorOutput;
     if (input.collectorOutput !== undefined) {
@@ -1611,6 +1642,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         commit: input.commit,
         timeoutMs,
         maxStdoutBytes,
+        ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
       });
       collectorData = typeof raw === 'string' || Buffer.isBuffer(raw)
         ? parseModuleCollectorOutput(raw, {maxStdoutBytes})
@@ -1622,6 +1654,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         commit: input.commit,
         timeoutMs,
         maxStdoutBytes,
+        ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
       });
       collectorCode = executed.code;
       collectorData = executed.output;

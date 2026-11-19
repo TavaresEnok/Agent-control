@@ -21,13 +21,21 @@ const origin=()=>z.string().transform(value=>{
   (url.protocol!=='https:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname)))throw Error('UNSAFE_INSTALLATION_ORIGIN');
  return url.origin;
 });
+const httpsOrigin=()=>z.string().transform(value=>{
+ const trimmed=value.trim();
+ if(!trimmed||trimmed.length>2048||/[\u0000-\u0020\u007f\\]/.test(trimmed)||trimmed.toLowerCase().includes('.sock'))throw Error('UNSAFE_INSTALLATION_ORIGIN');
+ const url=new URL(trimmed);
+ if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||url.pathname!=='/')throw Error('UNSAFE_INSTALLATION_ORIGIN');
+ return url.origin;
+});
 const absolute=z.string().refine(isAbsolute,'Absolute path required');
-const projectDefinition=z.object({id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200)}).strict();
+const projectDefinition=z.object({id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
 export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  activation:z.enum(['locked','personal']).default('locked'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
+ publishedOrigins:z.array(httpsOrigin()).max(32).optional(),
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),
  accountHomesDirectory:absolute.optional(),
  workflowRuntime:WorkflowRuntimeRegistrationConfig.optional(),

@@ -44,6 +44,7 @@ export function parseComposeServices(content: string): ComposeServiceInfo[];
 export function auditRepositoryReadiness(repoRoot: string): {
   filesAnalyzed: number;
   anchorFile: string;
+  tlsAnchorFile: string;
   findings: FindingRow[];
   coverage: CoverageRow[];
 };

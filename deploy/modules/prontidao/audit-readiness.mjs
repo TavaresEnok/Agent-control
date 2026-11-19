@@ -504,6 +504,7 @@ export function auditRepositoryReadiness(repoRoot) {
   let hasDiskMonitoring = false;
   let systemdWritesFileLogs = false;
   let anchorFile = null;
+  let tlsAnchorFile = null;
 
   for (const file of files) {
     if (anchorFile === null && (basename(file.rel) === 'package.json' || isComposeFile(file.rel) || basename(file.rel) === 'Dockerfile')) {
@@ -589,12 +590,14 @@ export function auditRepositoryReadiness(repoRoot) {
 
     if (isCaddyFile(file.rel)) {
       hasDeployable = true;
+      if (tlsAnchorFile === null) tlsAnchorFile = file.rel;
       checksApplied.push('caddy-tls-headers');
       checkCaddy(file, findings, pillarCounts);
     }
 
     if (isNginxFile(file.rel)) {
       hasDeployable = true;
+      if (tlsAnchorFile === null) tlsAnchorFile = file.rel;
       checksApplied.push('nginx-tls-headers');
       checkNginx(file, findings, pillarCounts);
     }
@@ -783,50 +786,51 @@ export function auditRepositoryReadiness(repoRoot) {
       tool: 'prontidao:requisito:tls-cabecalhos',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `TLS e cabeçalhos de segurança: ${pillarCounts['tls-cabecalhos']} achado(s).`,
+      detail: `TLS e cabeçalhos (configuração estática no repositório): ${pillarCounts['tls-cabecalhos']} achado(s).`,
     },
     {
       tool: 'prontidao:requisito:backup-restauracao',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Backup e prova de restauração: backup=${hasBackup ? 'sim' : 'nao'}, provaRestauracao=${hasRestoreProof ? 'sim' : 'nao'}, ${pillarCounts['backup-restauracao']} achado(s).`,
+      detail: `Backup e restauração (configuração estática no repositório): scriptBackup=${hasBackup ? 'declarado' : 'ausente'}, scriptProvaRestauracao=${hasRestoreProof ? 'declarado' : 'ausente'}; restauração real não comprovada por configuração; ${pillarCounts['backup-restauracao']} achado(s).`,
     },
     {
       tool: 'prontidao:requisito:alertas-logs',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Alertas e rotação de logs: alertas=${hasAlerting ? 'sim' : 'nao'}, logrotate=${hasLogrotate ? 'sim' : 'nao'}, ${pillarCounts['alertas-logs']} achado(s).`,
+      detail: `Alertas e rotação de logs (configuração estática no repositório): diretivaAlerta=${hasAlerting ? 'declarada' : 'ausente'}, logrotate=${hasLogrotate ? 'declarado' : 'ausente'}; entrega real de alertas não comprovada por configuração; ${pillarCounts['alertas-logs']} achado(s).`,
     },
     {
       tool: 'prontidao:requisito:reinicio-automatico',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Reinício automático e healthcheck: ${pillarCounts['reinicio-automatico']} achado(s).`,
+      detail: `Reinício automático e healthcheck (configuração estática no repositório): disponibilidade real não comprovada por configuração; ${pillarCounts['reinicio-automatico']} achado(s).`,
     },
     {
       tool: 'prontidao:requisito:disco-memoria',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Uso de disco e memória: monitorDisco=${hasDiskMonitoring ? 'sim' : 'nao'}, ${pillarCounts['disco-memoria']} achado(s).`,
+      detail: `Disco e memória (configuração estática no repositório): rotinaDisco=${hasDiskMonitoring ? 'declarada' : 'ausente'}; uso real no host não medido; ${pillarCounts['disco-memoria']} achado(s).`,
     },
     {
       tool: 'prontidao:requisito:segredos-fora-codigo',
       version: AUDIT_VERSION,
       status: 'ok',
-      detail: `Segredos fora do código: ${pillarCounts['segredos-fora-codigo']} achado(s).`,
+      detail: `Segredos fora do código (análise estática): ${pillarCounts['segredos-fora-codigo']} achado(s).`,
     },
   ];
 
   return {
     filesAnalyzed: files.length,
     anchorFile: fallbackFile,
+    tlsAnchorFile: tlsAnchorFile ?? fallbackFile,
     findings,
     coverage: [
       {
         tool: 'prontidao-audit',
         version: AUDIT_VERSION,
         status: 'ok',
-        detail: `Analisados ${files.length} arquivo(s) nos 6 requisitos de prontidão; ${findings.length} achado(s).`,
+        detail: `Analisados ${files.length} arquivo(s) nos 6 requisitos estáticos de prontidão; ${findings.length} achado(s).`,
       },
       ...requirementCoverage,
       ...fileCoverage,

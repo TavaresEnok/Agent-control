@@ -7,7 +7,8 @@ set -eu
 for name in GH_TOKEN GITHUB_TOKEN GITLAB_TOKEN NPM_TOKEN NODE_AUTH_TOKEN \
   AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN \
   DOCKER_HOST DOCKER_CONFIG DOCKER_CERT_PATH KUBECONFIG \
-  ANTHROPIC_API_KEY OPENAI_API_KEY XAI_API_KEY GOOGLE_API_KEY GEMINI_API_KEY; do
+  ANTHROPIC_API_KEY OPENAI_API_KEY XAI_API_KEY GOOGLE_API_KEY GEMINI_API_KEY \
+  AC_PRONTIDAO_EVIDENCE_FILE; do
   unset "$name" || true
 done
 
@@ -45,6 +46,10 @@ export GIT_CONFIG_GLOBAL=/tmp/config/gitconfig
 export GIT_CONFIG_COUNT=1
 export GIT_CONFIG_KEY_0=safe.directory
 export GIT_CONFIG_VALUE_0=*
+
+if [ -f /run/prontidao-evidence.json ] && [ ! -L /run/prontidao-evidence.json ]; then
+  export AC_PRONTIDAO_EVIDENCE_FILE=/run/prontidao-evidence.json
+fi
 
 mkdir -p /tmp/cache /tmp/config /tmp/trivy-cache
 cd /tmp
