@@ -44,3 +44,4 @@
 - **Telas:** geradas pelo próprio produto (`npm run personal:design -- criar`), que usa Claude Opus 5.5 médio. Nenhum outro modelo desenha telas.
 - **Supervisão:** Claude (sessão Claude Code) acompanha, confere e informa o titular.
 - Não substituir modelos em silêncio. Se um modelo ficar sem cota, esperar e tentar de novo; nunca comprar créditos.
+- **Modo rápido (titular, 19/11/2026):** todo uso do Codex roda no modo fast, com `-c service_tier="fast"` (gerente e revisores). Pode haver **até 2 revisores Sol** (`gpt-6.2-sol`, `high`, fast) ao mesmo tempo. Se precisar, o gerente pode subir para `gpt-6.2-astra` com esforço `high`, também fast.

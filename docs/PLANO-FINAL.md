@@ -27,7 +27,7 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
 - **Revisor Sol**, uma vez por rodada, depois de juntar:
 
   ```
-  codex exec --skip-git-repo-check --sandbox read-only -m gpt-6.2-sol -c model_reasoning_effort=high -C <worktree> "<pedido>"
+  codex exec --skip-git-repo-check --sandbox read-only -m gpt-6.2-sol -c model_reasoning_effort=high -c service_tier="fast" -C <worktree> "<pedido>"
   ```
 
   - Entregue a ordem e o diff (`git diff <base>..HEAD`), nunca o relatório do autor.
@@ -38,6 +38,12 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
   - Se um modelo devolver erro de cota, espere e tente de novo a cada 10 min.
   - Nunca compre créditos.
   - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
+
+## Mudança do titular (19/11/2026)
+
+- Todo uso do Codex no modo **fast**: `-c service_tier="fast"`.
+- Até **2 revisores Sol** ao mesmo tempo (por exemplo, um para o design e outro para os módulos).
+- O gerente pode subir para `gpt-6.2-astra` esforço `high` fast, se precisar.
 
 ## Regras que não mudam
 
