@@ -1439,3 +1439,8 @@ PAUSADO-COTA
 - 19/11/2026 23:51 UTC — C-PRONTIDAO-VIVA-R19 encerrado com código 1.
 - 19/11/2026 23:51 UTC — O gerente conferiu o recibo turn_context do trabalhador GPT-6.1 Terra high, os arquivos da ordem e o diff. O trabalhador havia deixado o commit para quem pudesse confirmar o modelo. Entrega registrada em 54a38c06. C-PRONTIDAO-VIVA-R19 encerrado com código 0.
 - 19/11/2026 23:51 UTC — Correção pront-viva recebida em 54a38c06. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 23:51 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA-R19 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 23:52 UTC — Imagem de prontidao construída e arquivada por digest em de78eb37.
+- 19/11/2026 23:52 UTC — prontidao em de78eb37 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 183, 'failed': 3, 'skipped': 7}; código do produto VERIFY_TOOLS_FAILED.
+- 19/11/2026 23:54 UTC — C-ACEITE-PRONTIDAO-VIVA-R19 encerrado com código 0.
+- 19/11/2026 23:55 UTC — Unifica os operadores de redirecionamento e limita a recuperação de comandos malformados. Ordem C-PRONTIDAO-VIVA-R20 em worktree separado conforme 43f1c664.
