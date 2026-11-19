@@ -23,7 +23,7 @@ import {
 import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
 import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
 import {isPublicModuleRule, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
-import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
+import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewObservationTitle, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob, recheckHead, sameRecheckHistory} from './module-recheck-git.ts';
 import {moduleMeasurementCriterion} from './module-recheck-criteria.ts';
 import {measureLocalRegression} from './module-recheck-local.ts';
@@ -1708,7 +1708,7 @@ async function confirmFindingWithReviewer(
   input: VerificationModuleRunInput,
   intentId: string,
   finding: ModuleRawFinding,
-): Promise<{status: 'confirmado' | 'provavel' | 'descartado'; proof: string; verifier: Achado['verifier']}> {
+): Promise<{status: 'confirmado' | 'provavel' | 'descartado'; title?: string; proof: string; verifier: Achado['verifier']}> {
   const pending = {status: 'provavel' as const, proof: sanitizeText(finding.evidence), verifier: null};
   const excerpt = await readBoundedExcerpt(input.repoPath, finding.file, finding.line);
   if (!excerpt) return pending;
@@ -1748,6 +1748,7 @@ async function confirmFindingWithReviewer(
     if (!confirm || confirm.status === 'provavel' || !hasModuleReviewProof(evidence, confirm)) return pending;
     return {
       status: confirm.status,
+      title: confirm.status === 'confirmado' ? moduleReviewObservationTitle(confirm.observation) : undefined,
       proof: localizedProof(evidence.code, confirm.reason),
       verifier: {model: call.model, provider: call.provider},
     };
@@ -1993,7 +1994,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     const achados: Achado[] = [];
     for (const finding of collectorData.findings) {
       const achadoId = `ACH-${String(achados.length + 1).padStart(3, '0')}`;
-      const title = sanitizeText(`${finding.rule}: ${finding.message}`).slice(0, 200) || finding.rule;
+      let title = sanitizeText(`${finding.rule}: ${finding.message}`).slice(0, 200) || finding.rule;
       const toolRule = `${finding.tool}:${finding.rule}`;
       const reference = (isPublicModuleRule(input.module, finding.tool, finding.rule) ? toolRule : sanitizeText(toolRule)).slice(0, 200);
       let status: 'confirmado' | 'provavel' | 'descartado' = 'provavel';
@@ -2008,10 +2009,14 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         }
         verifier = await independentVerifier(snapshot, input.module, exam!, audited, finding, collectorReview);
         status = verifier ? audited.status : 'provavel';
-        if (verifier) proof = localizedProof(audited.proof, audited.reason);
+        if (verifier) {
+          proof = localizedProof(audited.proof, audited.reason);
+          if (status === 'confirmado') title = moduleReviewObservationTitle(audited.observation) ?? title;
+        }
       } else if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))) {
         const confirmed = await confirmFindingWithReviewer({...input, repoPath: snapshot}, intentId, finding);
         status = confirmed.status;
+        title = confirmed.title ?? title;
         proof = confirmed.proof;
         verifier = confirmed.verifier;
       }
