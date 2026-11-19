@@ -194,6 +194,12 @@ test('laboratório real do módulo dependencias acha defeitos plantados e aprova
         2
       )
     );
+    const manifest = JSON.parse(await readFile(join(mixedScratch, 'package.json'), 'utf8'));
+    await writeFile(join(mixedScratch, 'package-lock.json'), JSON.stringify({
+      name: manifest.name, version: manifest.version, lockfileVersion: 3,
+      packages: {'': manifest, 'node_modules/express': {version: '4.17.1'},
+        'node_modules/pacote-sem-metadados-interno': {version: '1.2.3'}},
+    }));
     await writeFile(join(mixedScratch, '.ncurc.js'), 'throw new Error("hostile repo config executed");\n');
     await writeFile(join(mixedScratch, '.ncurc.json'), '{"reject":["express"]}\n');
     await ensureWorldReadableTree(mixedScratch);

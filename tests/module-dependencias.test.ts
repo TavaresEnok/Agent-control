@@ -11,7 +11,7 @@ import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
-import {fetchLatestVersion} from '../deploy/modules/dependencias/fetch-registry.mjs';
+import {fetchLatestVersion, type RegistryRequestOptions} from '../deploy/modules/dependencias/fetch-registry.mjs';
 import {
   analyzeLockfileAndSbom,
   classifySemverRisk,
@@ -649,10 +649,10 @@ test('ast-grep atribui somente diagnósticos com trecho, bytes e posições Unic
       'const target = process.argv[6];',
       'const {join} = require("node:path");',
       `const files = ${JSON.stringify(sourceFiles.map(src => src.rel))};`,
-      'for (const file of files) console.error(`sg: entity|file|${join(target,file)}: language=TypeScript,appliedRuleCount=1`);',
+      'for (const file of files.filter(file => file !== "invalid-utf8.ts")) console.error(`sg: entity|file|${join(target,file)}: language=TypeScript,appliedRuleCount=1`);',
       'const diagnostic = name => ({file:join(target,name),ruleId:"synthetic-ts",severity:"error",',
       '  text:"res.send(\\r\\n  200, í\\r\\n)",range:{byteOffset:{start:35,end:58},start:{line:1,column:15},end:{line:3,column:1}}});',
-      'const rows = [...files.filter(file => file !== "clean.ts"), "unknown.ts"].map(diagnostic);',
+      'const rows = [...files.filter(file => !["clean.ts","invalid-utf8.ts"].includes(file)), "unknown.ts"].map(diagnostic);',
       'rows[1].range.byteOffset.start++;',
       'rows[2].range.byteOffset.end = 1000;',
       'rows[3].range.start.line = 0;',
@@ -677,6 +677,12 @@ test('ast-grep atribui somente diagnósticos com trecho, bytes e posições Unic
         row.detail.includes(`arquivo=${file}; erro=${error}`)), file);
     }
     assert.ok(result.coverage.some(row => row.status === 'ok' && row.detail.includes('arquivo=clean.ts; achados=0')));
+    await writeFile(astGrepBin, '#!/usr/bin/env node\nprocess.exitCode = 2;\n');
+    const failed = await runAstGrepCheck({sourceFiles, isoSrcDir: root, astGrepBin,
+      astGrepVersion: 'sintetica', sgConfigPath: join(moduleDir, 'sgconfig.yml')});
+    assert.match(failed.coverage[0].detail, /^exit=2; erro=/);
+    assert.ok(failed.coverage.some(row => row.status === 'failed' &&
+      row.detail === 'arquivo=invalid-utf8.ts; erro=fonte_nao_utf8'));
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -687,9 +693,9 @@ test('consulta do registro termina em timeout ou limite de bytes com resposta si
   const hanging = () => Object.assign(new EventEmitter(), {destroy() { destroyed = true; }});
   await assert.rejects(fetchLatestVersion('synthetic', {get: hanging, timeoutMs: 20}), /timeout/);
   assert.equal(destroyed, true);
-  const oversized = (_url: string, cb: (response: EventEmitter & {statusCode: number; destroy(): void}) => void) => {
+  const oversized: NonNullable<RegistryRequestOptions['get']> = (_url, cb) => {
     const req = Object.assign(new EventEmitter(), {destroy() {}});
-    const res = Object.assign(new EventEmitter(), {statusCode: 200, destroy() {}});
+    const res = Object.assign(new EventEmitter(), {statusCode: 200, destroy() {}, resume() {}});
     queueMicrotask(() => { cb(res); res.emit('data', Buffer.alloc(20)); });
     return req;
   };
@@ -868,6 +874,9 @@ test('ncu isola propostas inválidas, preserva propostas válidas e exige identi
       await mkdir(join(root, name));
       await writeFile(join(root, name, 'package.json'),
         JSON.stringify({name, dependencies: {foo: '^1.0.0', bar: '^1.0.0', repo: 'github:example/test#semver:^1.0.0'}}));
+      await writeFile(join(root, name, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
+        'node_modules/foo': {version: '1.0.0'}, 'node_modules/bar': {version: '1.0.0'},
+      }}));
     }
     const registryPath = join(root, 'registry.json');
     await writeFile(registryPath, '{"foo":"2.0.0","bar":"2.0.0","repo":"2.0.0"}');
@@ -901,23 +910,32 @@ test('ncu isola propostas inválidas, preserva propostas válidas e exige identi
     const aliasRepo = join(root, 'alias');
     await mkdir(aliasRepo);
     await writeFile(join(aliasRepo, 'package.json'), JSON.stringify({dependencies: {
-      'local-name': 'npm:foo@^1.0.0', 'unverified': 'npm:foo@^1.0.0', 'different': 'npm:foo@^1.0.0',
+      'local-name': 'npm:foo@^1.0.0', 'unverified': 'npm:foo@^1.0.0',
+      'different': 'npm:foo@^1.0.0', 'incompatible': 'npm:foo@^1.0.0',
     }}));
     const options = {repoRoot: aliasRepo, registryPath,
       ncuBin: join(moduleDir, 'node_modules/.bin/ncu'), ncuVersion: '23.1.1',
       astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'};
     const noLock = await runCollection(options);
     assert.ok(noLock.coverage.some(row => row.tool === 'npm-check-updates' &&
-      row.detail.includes('pacote=local-name; secao=dependencies; motivo=identidade_alias_nao_comprovada')));
+      row.status === 'skipped' && row.detail.includes('pacote=local-name; secao=dependencies; motivo=lockfile_ausente')));
     assert.ok(!noLock.findings.some(f => f.rule.startsWith('NCU-OUTDATED')));
     await writeFile(join(aliasRepo, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
       'node_modules/local-name': {name: 'foo', version: '1.0.0'},
       'node_modules/unverified': {version: '1.0.0'},
       'node_modules/different': {name: 'bar', version: '1.0.0'},
+      'node_modules/incompatible': {name: 'foo', version: '0.9.0'},
     }}));
     const real = await runCollection(options);
     assert.deepEqual(real.findings.filter(f => f.rule.includes('OUTDATED')).map(f => f.evidence),
       ['dependencies: "local-name": "npm:foo@^1.0.0" -> "local-name": "npm:foo@^2.0.0"; package-lock.json#node_modules/local-name="1.0.0"; registro="2.0.0"']);
+    const {stdout: exactOutput} = await execFile(options.ncuBin,
+      ['--jsonUpgraded', '--removeRange', '--registryType', 'json', '--registry', registryPath, '--packageFile', join(aliasRepo, 'package.json')],
+      {cwd: aliasRepo, env: {...process.env, NPM_CONFIG_OFFLINE: 'true', NO_UPDATE_NOTIFIER: '1'}});
+    assert.equal(JSON.parse(exactOutput)['local-name'], 'npm:foo@2.0.0');
+    assert.ok(real.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'skipped' &&
+      row.detail.includes('pacote=incompatible; secao=dependencies; motivo=versao_travada_incompativel_com_declaracao')));
+    assert.ok(real.findings.some(f => f.rule === 'LOCKFILE-VERSION-MISMATCH' && f.message.includes('"incompatible"')));
     for (const tool of ['npm-check-updates', 'sbom-lockfile']) {
       for (const [pkg, reason] of [['unverified', 'identidade_alias_nao_comprovada'], ['different', 'identidade_lockfile_divergente']]) {
         assert.ok(real.coverage.some(row => row.tool === tool && row.status === 'skipped' &&
@@ -939,7 +957,7 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
         local: 'file:../local', tagged: 'stable', pin: '1.0.0', range: '^1.0.0',
         same: '1.0.0+build.1', pre: '2.0.0-beta.1', shared: '^1.0.0',
         installedAhead: '^1.0.0', installedEqual: '^1.0.0', lowerBranch: '^1.0.0',
-        actualRisk: '>=1.0.0',
+        actualRisk: '>=1.0.0', incompatible: '^1.0.0', wrongName: '^1.0.0', missingEntry: '^1.0.0',
       },
       devDependencies: {shared: '>=1.5.0'},
     };
@@ -948,14 +966,14 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
       renamed: '6.0.0', local: '9.0.0', pin: '1.0.1', range: '1.2.0',
       same: '1.0.0+build.2', pre: '2.0.0', shared: '1.7.0',
       installedAhead: '1.6.0', installedEqual: '1.6.0', lowerBranch: '2.1.0',
-      actualRisk: '2.5.0',
+      actualRisk: '2.5.0', incompatible: '2.1.0', wrongName: '2.1.0', missingEntry: '2.1.0',
     };
     const targets = {
       backward: '2.0.0', reducedFloor: '>=1.2.0 <2', union: '^2.0.0',
       renamed: 'npm:another@^6.0.0', pin: '1.0.1', range: '^1.2.0',
       same: '1.0.0+build.2', pre: '2.0.0', shared: '^1.5.0',
       installedAhead: '^1.6.0', installedEqual: '^1.6.0', lowerBranch: '^2.0.0 || ^1.5.0',
-      actualRisk: '^2.5.0',
+      actualRisk: '^2.5.0', incompatible: '^2.1.0', wrongName: '^2.1.0', missingEntry: '^2.1.0',
     };
     const manifestText = JSON.stringify(manifest, null, 2);
     await writeFile(join(root, 'package.json'), manifestText);
@@ -964,10 +982,10 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
       gitRef: '1.0.0', local: '1.0.0', tagged: '1.0.0', pin: '1.0.0', range: '1.0.0',
       same: '1.0.0+build.1', pre: '2.0.0-beta.1', shared: '1.6.0',
       installedAhead: '1.8.0', installedEqual: '1.6.0', lowerBranch: '1.6.0',
-      actualRisk: '2.4.0',
+      actualRisk: '2.4.0', incompatible: '0.9.0', wrongName: '1.5.0',
     };
     const packages = Object.fromEntries(Object.entries(versions).map(([pkg, version]) =>
-      [`node_modules/${pkg}`, {version}]));
+      [`node_modules/${pkg}`, pkg === 'wrongName' ? {name: 'another', version} : {version}]));
     const lockText = JSON.stringify({lockfileVersion: 3, packages}, null, 2);
     await writeFile(join(root, 'package-lock.json'), lockText);
     const registryPath = join(root, 'registry.json');
@@ -1000,6 +1018,8 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
       ['gitRef', 'declaracao_nao_comparavel'], ['local', 'declaracao_nao_comparavel'], ['tagged', 'declaracao_nao_comparavel'],
       ['installedAhead', 'registro_nao_supera_versao_travada'], ['installedEqual', 'registro_nao_supera_versao_travada'],
       ['lowerBranch', 'alvo_admite_versao_inferior_ao_lock'], ['shared', 'alvo_admite_versao_inferior_ao_lock'],
+      ['incompatible', 'versao_travada_incompativel_com_declaracao'], ['wrongName', 'identidade_lockfile_divergente'],
+      ['missingEntry', 'entrada_lockfile_ausente'],
     ]) {
       assert.ok(result.coverage.some(row => row.status === 'skipped' &&
         row.detail.includes(`pacote=${pkg}; secao=dependencies; motivo=${reason}`)), pkg);
@@ -1009,6 +1029,117 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test('ncu offline exige catálogo válido e omite propostas sem lock npm comprovável', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-ncu-lock-utf8-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const [missingLock, invalidLock] = ['missing-lock', 'invalid-lock'].map(name => join(root, name));
+  for (const dir of [missingLock, invalidLock]) {
+    await mkdir(dir);
+    await writeFile(join(dir, 'package.json'), '{"dependencies":{"foo":"^1.0.0"}}');
+  }
+  const lockBytes = Buffer.concat([
+    Buffer.from('{"lockfileVersion":3,"name":"'), Buffer.from([0xff]),
+    Buffer.from('","packages":{"node_modules/foo":{"version":"1.0.0"}}}'),
+  ]);
+  await writeFile(join(invalidLock, 'package-lock.json'), lockBytes);
+  const registryPath = join(root, 'catalog.json');
+  const options = {repoRoot: root, registryPath, onlineMode: false,
+    ncuBin: join(moduleDir, 'node_modules/.bin/ncu'), ncuVersion: '23.1.1',
+    astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'};
+  const withoutCatalog = await runCollection({...options, ncuBin: join(root, 'nao-executar')});
+  assert.deepEqual(withoutCatalog.coverage.filter(row => row.tool === 'npm-check-updates').map(row => [row.status, row.detail]),
+    [['skipped', 'modo=offline-json; motivo=registro_ausente; prova_parcial=true']]);
+  await writeFile(registryPath, Buffer.concat([
+    Buffer.from('{"foo":"2.0.0","'), Buffer.from([0xff]), Buffer.from('":"1.0.0"}'),
+  ]));
+  const invalidCatalog = await runCollection({...options, ncuBin: join(root, 'nao-executar')});
+  assert.deepEqual(invalidCatalog.coverage.filter(row => row.tool === 'npm-check-updates').map(row => [row.status, row.detail]),
+    [['skipped', 'modo=offline-json; motivo=registro_invalido; prova_parcial=true']]);
+
+  await writeFile(registryPath, '{"foo":"2.0.0"}');
+  const result = await runCollection(options);
+  assert.deepEqual(result.coverage.filter(row => row.tool === 'npm-check-updates' && row.detail.includes('pacote=foo'))
+    .map(row => [row.status, row.detail]), [
+    ['skipped', 'arquivo=invalid-lock/package.json; pacote=foo; secao=dependencies; motivo=lockfile_nao_verificavel; prova_parcial=true'],
+    ['skipped', 'arquivo=missing-lock/package.json; pacote=foo; secao=dependencies; motivo=lockfile_ausente; prova_parcial=true'],
+  ]);
+  assert.ok(!result.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'failed'));
+  assert.ok(!result.findings.some(f => f.rule.startsWith('NCU-OUTDATED')));
+  assert.ok(result.findings.some(f => f.rule === 'LOCKFILE-INVALID-JSON' &&
+    f.evidence === 'invalid-lock/package-lock.json: lockfile_nao_utf8'));
+  assert.ok(result.findings.some(f => f.rule === 'LOCKFILE-MISSING' && f.file === 'missing-lock/package.json'));
+  assert.deepEqual(await readFile(join(invalidLock, 'package-lock.json')), lockBytes);
+});
+
+test('ncu online confirma a publicação exata para npm e alias com catálogo local ausente ou desatualizado', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dep-ncu-online-'));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const dependencies = {
+    ordinary: '^1.0.0', alias: 'npm:@synthetic/actual@>=1.0.0',
+    identity: '1.0.0', unpublished: '1.0.0', error: '1.0.0', skipRange: '1.0.0',
+    git: 'github:example/repo#semver:^1.0.0',
+  };
+  await writeFile(join(root, 'package.json'), JSON.stringify({dependencies}));
+  const packages = Object.fromEntries(Object.keys(dependencies).map(pkg => [`node_modules/${pkg}`, {version: '1.0.0'}]));
+  packages['node_modules/ordinary'] = {version: '1.8.0'};
+  await writeFile(join(root, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
+    ...packages, 'node_modules/alias': {name: '@synthetic/actual', version: '3.1.0'},
+  }}));
+  const ncuBin = join(root, 'ncu-fixture');
+  await writeFile(ncuBin, [
+    '#!/usr/bin/env node',
+    'const fs = require("node:fs"); const args = process.argv.slice(2);',
+    'const arg = flag => args[args.indexOf(flag) + 1];',
+    'const {dependencies} = JSON.parse(fs.readFileSync(arg("--packageFile")));',
+    'const config = fs.readFileSync(process.env.NPM_CONFIG_USERCONFIG, "utf8");',
+    'if (arg("--registryType") !== "npm" || arg("--registry") !== "https://registry.npmjs.org/" ||',
+    '  !args.includes("--removeRange") || dependencies.git || process.env.NPM_CONFIG_OFFLINE === "true" ||',
+    '  config !== "@synthetic:registry=https://registry.npmjs.org/\\n") process.exit(2);',
+    'console.log(JSON.stringify({ordinary:"1.8.1",alias:"npm:@synthetic/actual@3.1.1",',
+    '  identity:"2.0.0",unpublished:"2.0.0",error:"2.0.0",skipRange:"^2.0.0"}));',
+  ].join('\n'), {mode: 0o755});
+  const queries: string[] = [];
+  const registryGet: NonNullable<RegistryRequestOptions['get']> = (url, respond) => {
+    queries.push(url);
+    const [pkg, version] = new URL(url).pathname.slice(1).split('/').map(decodeURIComponent);
+    const statusCode = pkg === 'error' ? 503 : pkg === 'unpublished' ? 404 : 200;
+    const res = Object.assign(new EventEmitter(), {statusCode, destroy() {}, resume() {}});
+    queueMicrotask(() => {
+      respond(res);
+      if (statusCode === 200) {
+        res.emit('data', Buffer.from(JSON.stringify({name: pkg === 'identity' ? 'other' : pkg, version})));
+        res.emit('end');
+      }
+    });
+    return Object.assign(new EventEmitter(), {destroy() {}});
+  };
+  const registryPath = join(root, 'catalog.json');
+  const options = {repoRoot: root, onlineMode: true, registryPath, registryGet, ncuBin,
+    ncuVersion: 'sintetica', astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'};
+  const expected = [
+    ['NCU-OUTDATED-PATCH', 'dependencies: "ordinary": "^1.0.0" -> "ordinary": "1.8.1"; package-lock.json#node_modules/ordinary="1.8.0"; registro="1.8.1"; origem=https://registry.npmjs.org/'],
+    ['NCU-OUTDATED-PATCH', 'dependencies: "alias": "npm:@synthetic/actual@>=1.0.0" -> "alias": "npm:@synthetic/actual@3.1.1"; package-lock.json#node_modules/alias="3.1.0"; registro="3.1.1"; origem=https://registry.npmjs.org/'],
+  ];
+  const result = await runCollection(options);
+  assert.deepEqual(result.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => [f.rule, f.evidence]), expected);
+  for (const [pkg, reason] of [['identity', 'alvo_nao_confirmado_no_registro'], ['unpublished', 'alvo_nao_confirmado_no_registro'],
+    ['skipRange', 'alvo_online_sem_versao_exata'], ['git', 'declaracao_nao_comparavel']]) {
+    assert.ok(result.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'skipped' &&
+      row.detail.includes(`pacote=${pkg}; secao=dependencies; motivo=${reason}`)), pkg);
+  }
+  const failures = result.coverage.filter(row => row.tool === 'npm-check-updates' && row.status === 'failed');
+  assert.equal(failures.length, 3);
+  assert.ok(failures.some(row => row.detail.includes('pacote=error; secao=dependencies; erro=consulta_registro_online; detalhe=HTTP 503')));
+  assert.deepEqual(queries, [
+    'https://registry.npmjs.org/ordinary/1.8.1', 'https://registry.npmjs.org/%40synthetic%2Factual/3.1.1',
+    'https://registry.npmjs.org/identity/2.0.0', 'https://registry.npmjs.org/unpublished/2.0.0',
+    'https://registry.npmjs.org/error/2.0.0',
+  ]);
+  await writeFile(registryPath, '{"ordinary":"9.0.0","@synthetic/actual":"1.0.0"}');
+  const stale = await runCollection(options);
+  assert.deepEqual(stale.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => [f.rule, f.evidence]), expected);
 });
 
 test('lock npm usa a identidade de aliases modernos e legados e preserva versões fora de semver', async () => {

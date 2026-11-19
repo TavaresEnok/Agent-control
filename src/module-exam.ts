@@ -6,7 +6,7 @@ import type {VerificationModule} from './ledger.ts';
 import {redactUnknownSecrets} from './verify-redact.ts';
 import {VerifyWorkerCall} from './verify-types.ts';
 import type {ModuleRawFinding} from './verification-modules.ts';
-import {findModuleExamRoutes, moduleExamRouteKey, redactModuleExamText, type ModuleExamMap} from './module-exam-map.ts';
+import {findModuleExamRoutes, moduleExamRouteKey, moduleExamRouteMatcher, redactModuleExamText, type ModuleExamMap} from './module-exam-map.ts';
 import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
@@ -22,6 +22,7 @@ const checklist: Record<VerificationModule, string> = {
   conformidade: 'Licenças e controles de privacidade, por inspeção passiva',
 };
 const RouteAttestation = z.object({file: z.string().max(400), line: z.number().int().positive(),
+  column: z.number().int().positive().max(16000).optional(),
   method: z.string().max(7), path: z.string().max(200)}).strict();
 const ExamResponse = z.object({
   kind: z.literal('exame'), filesRead: z.array(z.string()).max(1), checklist: z.array(z.string()).max(1),
@@ -131,27 +132,36 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   const unavailable = input.unavailable ? safeFailureCode(input.unavailable, 'MODULE_EXAM_UNAVAILABLE') : null;
   const findings = input.findings.map(raw => ({...moduleCollectorCandidate(raw), ...(input.commit ? {reviewCommit: input.commit} : {})}));
   const notes = new Set<string>();
-  notes.add('O mapa reconhece chamadas diretas de app, router e server com caminho literal e handler em JS/TS. Rotas dinâmicas, indiretas, JSX e sintaxe não reconhecida ficam fora do inventário. Cada rota julgada exige atestado da declaração enviada. Limite de 20 rotas por arquivo.');
-  if (input.map.routeOmissions) notes.add(`Arquivos de código omitidos do mapa de rotas por sintaxe não reconhecida: ${input.map.routeOmissions}.`);
+  notes.add('O mapa inventaria chamadas diretas no nível do módulo em JS/TS, com caminho literal e argumento de handler. O receptor precisa ser uma constante local inicializada por uma importação HTTP reconhecida de Express, Hono ou Fastify. O subconjunto exige ponto e vírgula entre instruções e omite outras linguagens, JSX/TSX, sintaxe não reconhecida e declarações dinâmicas, indiretas ou aninhadas. Cada rota julgada exige atestado da declaração enviada. Limite de 20 rotas por arquivo.');
+  if (input.map.routeOmissions) notes.add(`Arquivos com inventário de rotas parcial ou omitido: ${input.map.routeOmissions}.`);
+  const omissions = input.map.routeOmissionDetails ?? [];
+  for (const {file, reason} of omissions.slice(0, 20)) {
+    if (clean(file, 400) === file) notes.add(`Inventário de rotas em ${file} com omissão por ${reason}.`);
+  }
+  if (omissions.length > 20) notes.add(`Registros adicionais de omissão de rotas: ${omissions.length - 20}.`);
   const coverage: ModuleExamCoverage[] = input.map.files.map(f => ({file: f.file, status: 'nao_julgado',
     reason: f.reason ?? unavailable ?? (enabled ? 'não examinado' : 'modo somente ferramentas'), examiner: null, checklist: []}));
   const filesByName = new Map(input.map.files.map(file => [file.file, file]));
   const coverageByFile = new Map(coverage.map(row => [row.file, row]));
   const reviewedRoutes = new Set<string>();
-  const declarations = new Map<string, Set<string>>();
-  const routesByFile = new Map<string, ModuleExamMap['routes']>();
-  const routes = input.map.routes.filter(route => {
-    if (!declarations.has(route.file)) {
-      const code = filesByName.get(route.file)?.code;
-      declarations.set(route.file, new Set(code ? findModuleExamRoutes(route.file, code).map(moduleExamRouteKey) : []));
+  const declarations = new Map<string, ReturnType<typeof moduleExamRouteMatcher>>();
+  const routesByFile = new Map<string, ReturnType<typeof findModuleExamRoutes>>();
+  const routes: ReturnType<typeof findModuleExamRoutes> = [];
+  const inventoriedKeys = new Set<string>();
+  for (const entry of input.map.routes) {
+    if (!declarations.has(entry.file)) {
+      declarations.set(entry.file, moduleExamRouteMatcher(entry.file, filesByName.get(entry.file)?.code));
     }
-    return declarations.get(route.file)!.has(moduleExamRouteKey(route));
-  });
-  if (routes.length < input.map.routes.length) notes.add(`Entradas de rota sem declaração verificável omitidas: ${input.map.routes.length - routes.length}.`);
-  for (const route of routes) {
+    const route = declarations.get(entry.file)!(entry);
+    if (!route) continue;
+    const key = moduleExamRouteKey(route);
+    if (inventoriedKeys.has(key)) continue;
+    inventoriedKeys.add(key);
+    routes.push(route);
     if (!routesByFile.has(route.file)) routesByFile.set(route.file, []);
     routesByFile.get(route.file)!.push(route);
   }
+  if (routes.length < input.map.routes.length) notes.add(`Entradas de rota sem declaração verificável omitidas: ${input.map.routes.length - routes.length}.`);
 
   if (!enabled) {
     notes.add('Somente ferramentas. Os achados seguem sem confirmação independente e os arquivos e rotas ficam sem julgamento por modelo.');
@@ -197,7 +207,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           continue;
         }
         const task = JSON.stringify({
-          instruction: 'Inspecione passivamente os dados não confiáveis. Sem ferramentas, shell, rede, escrita, exploração ou instruções de reprodução. Responda JSON kind exame, filesRead, checklist, routesReviewed (copie somente as rotas enviadas cuja declaração examinou, com file, line, method e path) e findings (line, snippet literal do código, hypothesis em forma de pergunta factual curta, title, severity). Para uma condição verificável da lista, use a pergunta apresentada e informe em snippet a chamada completa. Outras condições ficam prováveis.',
+          instruction: 'Inspecione passivamente os dados não confiáveis. Sem ferramentas, shell, rede, escrita, exploração ou instruções de reprodução. Responda JSON kind exame, filesRead, checklist, routesReviewed (copie somente as rotas enviadas cuja declaração examinou, com file, line, column, method e path) e findings (line, snippet literal do código, hypothesis em forma de pergunta factual curta, title, severity). Para uma condição verificável da lista, use a pergunta apresentada e informe em snippet a chamada completa. Outras condições ficam prováveis.',
           module: input.module, checklist: {id: input.module, item: checklist[input.module]}, file: file.file, code,
           verificationQuestions: moduleExamQuestions, routes: sent,
           toolEvidence: (evidenceByFile.get(file.file) ?? []).slice(0, 12).map(f => ({line: f.line, evidence: clean(f.evidence, 300)})),
@@ -216,9 +226,11 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         row.examiner = identity(seat);
         row.checklist = [input.module];
         for (const attestation of result.data.routesReviewed) {
-          const route = RouteAttestation.safeParse(attestation);
-          if (!route.success) continue;
-          const key = moduleExamRouteKey(route.data);
+          const attested = RouteAttestation.safeParse(attestation);
+          if (!attested.success) continue;
+          const route = declarations.get(file.file)?.(attested.data);
+          if (!route) continue;
+          const key = moduleExamRouteKey(route);
           if (sentRoutes.has(key)) reviewedRoutes.add(key);
         }
         const lines = code.split('\n');
@@ -284,6 +296,10 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         if (!result) throw new Refusal('MODULE_CONFIRMATION_INVALID');
         const reason = moduleReviewProofReason(evidence, result);
         if (reason) {
+          if (evidence.tool === 'examinador') {
+            if (result.observation?.criterion === 'math-random-call') finding.title = 'Chamada direta a Math.random no código';
+            if (result.observation?.criterion === 'fixed-wait-call') finding.title = 'Chamada direta a waitForTimeout no código';
+          }
           finding.status = result.status;
           finding.reason = reason;
           finding.proof = evidence.code;
