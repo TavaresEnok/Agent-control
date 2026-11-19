@@ -1038,3 +1038,9 @@ PAUSADO-COTA
 - 19/11/2026 20:23 UTC — revisor-C-ACEITE-RECUSA iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 20:25 UTC — C-ACEITE-RECUSA encerrado com código 0.
 - 19/11/2026 20:26 UTC — O parecer de f6602e94 encontrou quatro problemas médios e um baixo na fixture de liquidação. Sol high recebeu a correção de atomicidade, admissão, vínculo, recuperação e ordenação. A instalação segue na versão anterior.
+- 19/11/2026 20:26 UTC — trabalho-C-FECHAMENTO-RECUSA-R2 iniciado em final-ajuste-fechamento por Sol high normal.
+- 19/11/2026 20:26 UTC — Interrompida a repetição da suíte em f6602e94 após o parecer. A bancada independente mantém o laboratório conjunto de 6587e792. O próximo aceite integral usará uma cópia separada do worktree do trabalhador.
+- 19/11/2026 20:27 UTC — Laboratório conjunto preliminar de 6587e792 aprovado, com as oito CLIs. O aceite final ainda depende do reparo nos testes complementares.
+- 19/11/2026 20:28 UTC — No laboratório conjunto de 6587e792 passaram os 51 testes, sem falhas, cancelamentos ou saltos. A execução incluiu as oito CLIs, conformidade e a recuperação em banco descartável.
+- 19/11/2026 20:31 UTC — C-FECHAMENTO-RECUSA-R2 encerrado com código 0.
+- 19/11/2026 20:31 UTC — Reparo de fechamento recebido em a69311d7. Revisão independente Sol high e aceite integral autorizados em paralelo.
