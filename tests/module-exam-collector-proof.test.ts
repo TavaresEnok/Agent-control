@@ -495,6 +495,19 @@ test('a publicação confirma uma medição funcional de cada módulo usando o s
         module: row.module, runId: run.runId, achadoIds: [run.achados[0]!.id], dataDirectory: input.dataDirectory,
         projectId: input.projectId, repoPath: input.repoPath,
       });
+      const order = await input.ledger.pool.query(
+        `SELECT r.finding_ids, r.write_paths, p.text FROM ac_verify_remediations r
+         JOIN ac_personal_messages p ON p.local_id=r.message_local_id AND p.role='owner'
+         JOIN ac_contexts c ON c.id=p.context_id AND c.project_id=$3
+         WHERE r.run_id=$1 AND r.message_local_id=$2 AND NOT EXISTS
+           (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=p.context_id)`,
+        [run.runId, correction.messageLocalId, input.projectId],
+      );
+      assert.equal(order.rowCount, 1, row.module);
+      assert.deepEqual(order.rows[0].finding_ids, [run.achados[0]!.id]);
+      assert.ok(order.rows[0].write_paths.includes(row.raw.file));
+      assert.ok(order.rows[0].text.includes(row.raw.file));
+      assert.ok(order.rows[0].text.includes(run.achados[0]!.id));
       assert.ok(correction.writePaths.includes(row.raw.file), row.module);
       const regressionFile = 'tests/' + row.module + '/' + run.achados[0]!.id.toLowerCase() + '.test.ts';
       assert.ok(correction.writePaths.includes(regressionFile), row.module);

@@ -22,7 +22,7 @@ import {
 } from './module-container-cleanup.ts';
 import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
 import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
-import type {ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
+import {isPublicModuleRule, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob, recheckHead, sameRecheckHistory} from './module-recheck-git.ts';
 import {moduleMeasurementCriterion} from './module-recheck-criteria.ts';
@@ -686,7 +686,7 @@ export function validateModuleCollectorObject(parsed: unknown, module?: Verifica
     }
     return ModuleRawFinding.parse({
       tool: validateSingleLineString(row.tool, 1, 120, false),
-      rule: validateSingleLineString(row.rule, 1, 200, true),
+      rule: validateSingleLineString(row.rule, 1, 200, !isPublicModuleRule(module, row.tool, row.rule)),
       file,
       line: row.line,
       severity: severityParsed.data,
@@ -1990,7 +1990,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     for (const finding of collectorData.findings) {
       const achadoId = `ACH-${String(achados.length + 1).padStart(3, '0')}`;
       const title = sanitizeText(`${finding.rule}: ${finding.message}`).slice(0, 200) || finding.rule;
-      const reference = sanitizeText(`${finding.tool}:${finding.rule}`).slice(0, 200);
+      const toolRule = `${finding.tool}:${finding.rule}`;
+      const reference = (isPublicModuleRule(input.module, finding.tool, finding.rule) ? toolRule : sanitizeText(toolRule)).slice(0, 200);
       let status: 'confirmado' | 'provavel' | 'descartado' = 'provavel';
       let proof = sanitizeText(finding.evidence).slice(0, 2000);
       let verifier: Achado['verifier'] = null;

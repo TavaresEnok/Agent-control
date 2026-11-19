@@ -446,6 +446,14 @@ const rules: Record<VerificationModule, Record<string, CaseBuilder>> = {
   conformidade: {'ort:ORT_STRONG_COPYLEFT_DECLARED': ortLicense},
 };
 
+/** Only compile-time, public tool/rule pairs may bypass entropy heuristics. */
+export function isPublicModuleRule(module: VerificationModule | undefined, tool: unknown, rule: unknown): boolean {
+  if (!module || typeof tool !== 'string' || typeof rule !== 'string' || tool.includes(':') || rule.includes(':')) return false;
+  return Object.hasOwn(rules[module], tool + ':' + rule)
+    || (module === 'qa' && tool === 'fast-check' && rule === 'QA-FASTCHECK-PROPRIEDADE-VIOLADA');
+}
+
+
 export function buildCollectorReviewCase(input: CaseInput & {
   module: VerificationModule; commit?: string; intentId: string; snapshot: string;
 }) {
