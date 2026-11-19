@@ -629,8 +629,8 @@ export function auditRepositoryReadiness(repoRoot) {
             file: file.rel,
             line: i + 1,
             severity: 'alta',
-            message: `Arquivo ${file.rel} versionado contém credencial ou segredo (${key}).`,
-            evidence: `${key}=${val}`,
+            message: 'Possível segredo em arquivo protegido.',
+            evidence: 'Localização informada pelo coletor; conteúdo protegido.',
           });
         }
       }

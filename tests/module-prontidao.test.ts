@@ -305,7 +305,7 @@ test('runCollector extrai versão colorida de testssl e não inventa versão aus
     assert.deepEqual(calls, [['--version']]);
     const envFinding = out.findings.find(f => f.rule === 'PRONTIDAO-SEGREDO-ARQUIVO-ENV');
     assert.equal(envFinding?.file, '.env');
-    assert.match(envFinding?.evidence ?? '', /\[REDACTED\]/);
+    assert.equal(envFinding?.evidence, 'Localização informada pelo coletor; conteúdo protegido.');
     assert.equal(JSON.stringify(out).includes('synthetic_db_pass_987654321'), false);
   }
 });
