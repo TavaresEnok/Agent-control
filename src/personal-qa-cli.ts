@@ -2,9 +2,11 @@ import {basename,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
+import {Ledger} from './ledger.ts';
+import {moduleCliFailureText,runPersonalModuleCli,type PersonalModuleCliDeps} from './personal-module-cli.ts';
 import {clearPersonalQaConfig,parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig,type PersonalQaConfig} from './personal-qa-config.ts';
 
-const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> show|set|clear\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600] [--services \'{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}\']';
+const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> [show|set|clear|--corrigir <runId> <ACH-001...>|--descartar <runId>]\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600] [--services \'{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}\']';
 
 function flag(args:string[],name:string){const index=args.indexOf(name);return index<0?undefined:args[index+1];}
 
@@ -21,11 +23,21 @@ function restart(config:Installation){
  return `Reinicie o gateway para aplicar o QA: systemctl --user restart agent-control-gateway-${basename(config.dataDirectory)}`;
 }
 
-/** show prints the file, set validates and writes it mode 600, clear deletes it. */
-export async function runPersonalQaCli(argv:string[]){
+/** show prints the file, set validates and writes it mode 600, clear deletes it; without a config action, runs the qa verification module. */
+export async function runPersonalQaCli(argv:string[],deps?:PersonalModuleCliDeps){
  const [file,token,action,...rest]=argv;
+ if(file&&token&&!file.startsWith('--')&&!token.startsWith('--')&&(action===undefined||action==='--corrigir'||action==='--descartar')){
+  return runPersonalModuleCli('qa',argv,deps);
+ }
  if(!file||!token||!action||file.startsWith('--')||token.startsWith('--')||!['show','set','clear'].includes(action))throw new Refusal('QA_USAGE');
  const config=await loadInstallation(file),selected=project(config,token);
+ if(config.activation!=='personal')throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+ try{return await ledger.tx(async client=>{
+  const activation=await client.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal' FOR SHARE");
+  if(!activation.rowCount)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+  const membership=await client.query('SELECT role FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 FOR SHARE',[selected.id,selected.owner]);
+  if(!membership.rowCount||(action!=='show'&&membership.rows[0].role==='viewer'))throw new Refusal('PROJECT_FORBIDDEN',403);
  if(action==='show'){
   const saved=await readPersonalQaConfig(config.dataDirectory,selected.id);
   return saved?[JSON.stringify(saved,null,2)]:['QA padrão: este projeto não tem arquivo de configuração. A verificação de conflito, JSON e sintaxe continua valendo.'];
@@ -44,6 +56,7 @@ export async function runPersonalQaCli(argv:string[]){
  const parsed:PersonalQaConfig=parsePersonalQaConfig(input);
  const path=await writePersonalQaConfig(config.dataDirectory,selected.id,parsed);
  return ['QA gravado em '+path,restart(config)];
+ });}finally{await ledger.close();}
 }
 
 const messages:Record<string,string>={
@@ -58,8 +71,11 @@ const messages:Record<string,string>={
  QA_SERVICES_INVALID:'O serviço de QA é inválido. Por enquanto só postgres, com imagem postgres:15-alpine, postgres:16-alpine ou postgres:17-alpine.',
 };
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
- runPersonalQaCli(process.argv.slice(2)).then(lines=>{for(const line of lines)console.log(line);},error=>{
+ const printed:string[]=[];
+ runPersonalQaCli(process.argv.slice(2),{
+  onResult(result){printed.push(result.runId,result.directory);console.log(result.runId);console.log(result.directory);},
+ }).then(lines=>{if(printed.length===0)for(const line of lines)console.log(line);},error=>{
   const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'QA_CONFIG_FAILED';
-  console.error(messages[code]??code);process.exit(1);
+  console.error(messages[code]??moduleCliFailureText(error,'qa'));process.exit(1);
  });
 }
