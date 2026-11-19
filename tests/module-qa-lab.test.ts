@@ -113,7 +113,7 @@ function collect(pin: string, directory: string): Output {
   const lines = run.stdout.trim().split('\n');
   assert.equal(lines.length, 1);
   const report = JSON.parse(lines[0]!) as Output;
-  assert.deepEqual(report.coverage.filter(row => row.status === 'failed' && !row.tool.startsWith('qa-requisito:')), []);
+  assert.deepEqual(report.coverage.filter(row => row.status === 'failed'), []);
   return report;
 }
 
@@ -137,7 +137,8 @@ test('imagem pelo digest mede cobertura V8 e prova mutantes mortos e sobrevivent
   }
   assert.match(row(defective, 'qa-arquivo:src/defective-pricing.ts').detail, /V8 em três passadas: ramos [1-9]\/\d+/);
   assert.match(row(defective, 'qa-requisito:REQ-01').detail, /calcularDescontoFidelidade.*tests\/clean-pricing\.test\.ts:5.*passed,passed,passed/);
-  assert.equal(row(defective, 'qa-requisito:REQ-02').status, 'failed');
+  assert.equal(row(defective, 'qa-requisito:REQ-02').status, 'ok');
+  assert.match(row(defective, 'qa-requisito:REQ-02').detail, /vínculo sem prova nas três passadas/);
 
   const rules = new Set(defective.findings.map(f => f.rule));
   for (const rule of [
@@ -249,7 +250,8 @@ test('JSON do coletor vincula a função realmente executada e respeita a resolu
     assert.equal(row(report, 'qa-requisito:REQ-38').status, 'ok');
     assert.match(row(report, 'qa-requisito:REQ-38').detail, /somar \(src\/operacoes\.mjs:1\), cálculo\$ \(src\/outras\.mjs:3\).*comprovado nas três passadas/);
     for (const id of ['REQ-35', 'REQ-36', 'REQ-39']) {
-      assert.equal(row(report, 'qa-requisito:' + id).status, 'failed', id);
+      assert.equal(row(report, 'qa-requisito:' + id).status, 'ok', id);
+      assert.match(row(report, 'qa-requisito:' + id).detail, /vínculo sem prova nas três passadas/, id);
       assert.ok(unproved.some(f => f.message.includes(id)), id);
     }
     assert.equal(row(report, 'qa-requisito:REQ-40').status, 'skipped');

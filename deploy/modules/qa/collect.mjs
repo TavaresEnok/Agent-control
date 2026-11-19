@@ -735,7 +735,9 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
         return result.statuses.includes('passed') && !everyPass(result.assertionStatuses, status => status !== 'unsupported');
       }));
       const unmeasured = incomplete || executionPartial || unresolved.length > 0 || !runtimeTests?.length || limited;
-      const status = proved ? 'ok' : unmeasured ? 'skipped' : 'failed';
+      // Coverage records whether the matrix was measured. A measured gap is a finding.
+      const measuredGap = !proved && !unmeasured;
+      const status = proved || measuredGap ? 'ok' : 'skipped';
       const verification = proved ? 'vínculo comprovado nas três passadas' : !unmeasured ? 'vínculo sem prova nas três passadas'
         : unresolved.length ? 'prova não medida: referência não resolvida' : !runtimeTests?.length ? 'prova não medida: somente análise estática'
           : 'prova não medida: cobertura limitada';
@@ -745,7 +747,7 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       const staticGap = !runtimeTests && !incomplete && !unresolved.length && gaps.some(({feature, candidates}) =>
         !feature?.limited.length && !(feature && candidates.some(test => test.variableArity)) &&
         !(feature?.matches ?? candidates).some(test => test.hasAssertion && !test.conditionalSkip));
-      if (status === 'failed' || staticGap) {
+      if (measuredGap || staticGap) {
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
           message: `Requisito ${id} sem ${staticGap ? 'candidato estático ativo; execução não medida' : 'teste vinculado aprovado com asserção executada nas três passadas'}`,
           evidence: detail + context});
