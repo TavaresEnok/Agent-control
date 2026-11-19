@@ -88,7 +88,7 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
     matchFinding: f =>
       f.where.file === 'src/tls-client.ts'
       && f.sources.includes('prontidao-audit')
-      && /^rejectUnauthorized\s*:\s*false\b/.test(f.proof),
+      && f.where.line === 3 && f.proof === 'Diretiva de validação de certificado TLS desabilitada.',
     coverageDetailPattern: /prontidao:requisito:/,
   },
   desempenho: {
@@ -538,7 +538,7 @@ test('seletores de documentação e prontidão exigem o defeito específico apó
     {
       tool: 'prontidao-audit', rule: 'PRONTIDAO-TLS-VERIFICACAO-DESABILITADA', file: 'src/tls-client.ts', line: 3,
       severity: 'alta', message: 'Verificação de certificado TLS desabilitada.',
-      evidence: 'rejectUnauthorized: false,',
+      evidence: 'Diretiva de validação de certificado TLS desabilitada.',
     },
   ];
   const parsed = parseModuleCollectorOutput(JSON.stringify({coverage: [{tool: 'typedoc', version: '1', status: 'ok', detail: 'sintético'}], findings: rawFindings}));
