@@ -957,3 +957,6 @@ PAUSADO-COTA
 - 19/11/2026 19:10 UTC — trabalho-C9-JUNCAO-LOGICA iniciado em final-c9 por Sol high normal.
 - 19/11/2026 19:10 UTC — trabalho-C9-LAB-FERRAMENTAS iniciado em final-c9-lab-parcial por Sol medium normal.
 - 19/11/2026 19:12 UTC — A sequência de entrega C5 a C8 contém o QA 53012d07 nos commits 839e7a64, 32f26c23, 997df122, a2e5f7f6. A comparação com cada candidato ensaiado mostrou apenas a atualização de QA ou árvores de produto idênticas. O banco continua a suíte no checkout isolado original.
+- 19/11/2026 19:12 UTC — C8-PROVENIENCIA-AMBIENTE encerrado com código 0.
+- 19/11/2026 19:13 UTC — C9-LAB-FERRAMENTAS encerrado com código 0.
+- 19/11/2026 19:13 UTC — C8 integrou 44ed392a em a348fcb6 para verificar a origem em módulos ambientes com a AST e TypeDoc real. A fila de revisão recebeu somente o delta desta rodada.
