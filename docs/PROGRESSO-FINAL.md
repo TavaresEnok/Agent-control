@@ -978,3 +978,9 @@ PAUSADO-COTA
 - 19/11/2026 19:19 UTC — Backup pré-aplicação concluído em /home/app/backups-agent-control/ispagent-pre-aplicacao-modulos-20261119-191913/agent-control-ispagent-20261119-1919. MANIFEST.txt confere (11870 arquivos) e 152 entradas TABLE DATA conferidas por pg_restore; permissões 0700 no diretório e 0600 no dump.
 - 19/11/2026 19:21 UTC — C5-MARCADOR-RECUPERACAO encerrado com código 0.
 - 19/11/2026 19:22 UTC — A correção de bancada dc5834d6 passou nos nove cenários da fixture e foi integrada aos candidatos C5, C6 e C7 (35db707f, 57c136eb, e49076c3). Repetição integral do banco iniciada com a base atual de QA. O revisor examina o delta do teste.
+- 19/11/2026 19:22 UTC — Validação de entrega-banco-marcador em 35db707f iniciada no checkout de integração.
+- 19/11/2026 19:22 UTC — revisor-C5-ACEITE-MARCADOR iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 19:22 UTC — C9-NEGACAO-E-MOTIVO encerrado com código 0.
+- 19/11/2026 19:22 UTC — C5-ACEITE-MARCADOR encerrado com código 0.
+- 19/11/2026 19:23 UTC — C9 passou na prova física de curto-circuito e da presença das ferramentas por fixture, mais a CLI. A imagem está fixada no ramo acumulado.
+- 19/11/2026 19:23 UTC — A rodada de C9 em 696d81a9 corrigiu a negação no resumo dos dois coletores e acrescentou a prova do motivo da política npm. Reensaio da imagem em 88f4b2b7. O revisor do teste de recovery confirmou os nove pontos e pediu confirmar a causa real da saída do filho após o sinal.

@@ -1,0 +1,5 @@
+# Confirme o sinal efetivo antes de testar o replay
+
+No teste de bancada, após o fechamento do filho confirme que o sistema informou SIGKILL como causa de término; envio do sinal sozinho não basta. Torne o timeout monotônico aplicável à operação de leitura além da pausa, por exemplo com AbortSignal capaz de interromper readFile, preservando o diagnóstico de saída antecipada. Exija os nove pontos e os mesmos recibos e estados de CAS. Limite o patch ao teste e comprovação dirigida.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C5-SINAL-CONFIRMADO.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
