@@ -771,3 +771,8 @@ PAUSADO-COTA
 - 19/11/2026 17:51 UTC — revisor-C5-R10 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:51 UTC — C8-VINCULO-FONTE encerrado com código 0.
 - 19/11/2026 17:52 UTC — Documentação entregou 3ff8610d com origem do aviso conferida pelo TypeDoc e prontidão entregou 7233fe29 com validação da sintaxe YAML. No exame, a regressão de veredito sem prova passou no PostgreSQL real e manteve o achado provável com evidência original. O parecer de desempenho pediu ajuste do PNG e da rota de controle do teste.
+- 19/11/2026 17:52 UTC — C2-GO-DIAGNOSTICOS encerrado com código 0.
+- 19/11/2026 17:52 UTC — trabalho-C7-FIXTURES-IMAGEM iniciado em final-c7 por Sol medium normal.
+- 19/11/2026 17:52 UTC — C5-R10 encerrado com código 0.
+- 19/11/2026 17:52 UTC — revisor-C9-R8 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:53 UTC — QA no candidato 4c91bce3 integra o reparo do veredito 815e0ffd (6/6 com PostgreSQL) e a classificação de Go 9f23b190. A revisão do banco sobre fdfeb56e pediu evidência parcial quando o diagnóstico combina origens divergentes ou um quadro inline não reconhecido.
