@@ -750,7 +750,19 @@ async function main() {
   mkdirSync(cpuProfDir, {recursive: true});
 
   try {
-    if (config?.server) {
+    if (config?.server && process.env.PERF_ISOLATED_TARGET === '1') {
+      // O orquestrador inicia o alvo em contêiner irmão, com outro PID e filesystem.
+      // O único endereço aceito é o loopback fixo do namespace sem rede externa.
+      origin = 'http://127.0.0.1:31873';
+      if (!await waitForHttpReady(new URL(config.server.readyPath, origin).href)) {
+        serverStartFailure = 'Servidor isolado não respondeu no prazo';
+        origin = null;
+      } else {
+        webRoutes = config.routes.filter(route => route.file);
+        for (const route of config.routes) if (!route.file) unmappedRoutes.push(route.path);
+        httpRouteTargets = webRoutes.map(route => ({path: route.path, file: route.file, line: 1}));
+      }
+    } else if (config?.server) {
       serverStartFailure = 'Servidor do repositório não executado: UID compartilhado permite alterar evidências';
     } else if (process.env.PERF_TARGET_URL) {
       serverStartFailure = 'Alvo externo não permitido nesta coleta local';
@@ -770,6 +782,8 @@ async function main() {
       }
     }
 
+    const serverCoverage = serverStartFailure ? [normalizeCoverageRow({tool: 'servidor-isolado', version: '1', status: 'failed', detail: serverStartFailure})] : [];
+    retained.coverage.push(...serverCoverage);
     const lhResult = await runLighthouseCi({
       origin,
       routes: webRoutes,
@@ -812,7 +826,7 @@ async function main() {
         extraCoverage: [],
         findings: [],
       };
-    } else if (config?.cpuWorkloads?.length || existsSync(join(WORK_ROOT, 'perf')) || existsSync(join(WORK_ROOT, 'benchmarks'))) {
+    } else if (config?.server?.cpuProfile || config?.cpuWorkloads?.length || existsSync(join(WORK_ROOT, 'perf')) || existsSync(join(WORK_ROOT, 'benchmarks'))) {
       cpuResult = {summary: normalizeCoverageRow({tool: 'node-cpu-prof', version: versions.node, status: 'skipped', detail: 'Workloads não executados: UID compartilhado permite alterar evidências'}), extraCoverage: [], findings: []};
     } else {
       cpuResult = runCpuProfiling({
@@ -867,6 +881,7 @@ async function main() {
 
     const coverage = [
       normalizeCoverageRow({tool: 'copia-repositorio', version: '1', status: copyState.omissions.length ? 'failed' : 'ok', detail: `${copyState.files} arquivo(s); limites: 2500 arquivos, 10 MiB por arquivo; exclusões: .git, dependências, builds e symlinks; ${copyState.omissions.slice(0, 4).join('; ') || 'sem omissões adicionais'}`}),
+      ...serverCoverage,
       ...unmappedRoutes.map(route => normalizeCoverageRow({tool: `rota:${route}`, version: '1', status: 'skipped', detail: 'Arquivo da rota não identificado; informe routes[].file'})),
       lhResult.summary,
       ...lhResult.extraCoverage,
