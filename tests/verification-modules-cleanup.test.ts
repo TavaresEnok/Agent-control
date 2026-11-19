@@ -25,7 +25,7 @@ const imageCommand = (script = '', args: string[] = []) => reply(0, JSON.stringi
 
 function framedOutput(token: string, code: number, payload: string) {
   const hash = createHash('sha256').update(payload).digest('hex');
-  return reply(code, `ac-collector-v1 ${token} ${code} ${Buffer.byteLength(payload)} ${hash}\n${payload}`);
+  return reply(0, `ac-collector-v1 ${token} ${code} ${Buffer.byteLength(payload)} ${hash}\n${payload}`);
 }
 
 function barrier() {
@@ -409,7 +409,7 @@ test('stdout completo preserva o código do coletor e aguarda confirmação inde
         assert.equal(argv.at(-1), containerId);
         waiting.resolve();
         await exit.promise;
-        return reply(0, containerId + ' exited 7 ok');
+        return reply(0, containerId + ' exited 0 ok');
       }
       if (argv[2] === 'ls') return reply(0, removed ? '' : `${containerId} ${moduleContainerName(token)} ${token}`);
       assert.deepEqual(argv.slice(1), ['container', 'rm', '--force', containerId]);
@@ -558,11 +558,13 @@ test('um cliente R7 grava e limpa IDs durante a adoção das migrações 113 e 1
   });
 });
 
-for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout'] as const) {
+for (const scenario of ['stderr', 'prefix', 'hash', 'attach', 'inspect', 'wait', 'timeout', 'stdout'] as const) {
   test({
     stderr: 'stdout no limite e stderr longo preservam o JSON e os argumentos da imagem',
     prefix: 'perda do prefixo recusa um sufixo que ainda é JSON válido',
     hash: 'checksum recusa JSON alterado com o mesmo tamanho',
+    attach: 'falha do attach após o quadro de um filho que saiu com 1 recusa a captura',
+    inspect: 'falha do comando de inspeção final recusa o quadro completo',
     wait: 'falha no transporte final recusa stdout completo após acompanhamento normal',
     timeout: 'timeout confirma remoção antes de publicar a falha',
     stdout: 'excesso de stdout interrompe um coletor contínuo antes do prazo',
@@ -583,6 +585,8 @@ for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout']
           process.stdout.write(${JSON.stringify(collectorLogs)});`,
         prefix: `process.stdout.write('  ' + ${JSON.stringify(collectorLogs)})`,
         hash: `process.stdout.write(${JSON.stringify(collectorLogs)})`,
+        attach: `process.stdout.write(${JSON.stringify(collectorLogs)}); process.exitCode = 1`,
+        inspect: `process.stdout.write(${JSON.stringify(collectorLogs)})`,
         wait: `process.stdout.write(${JSON.stringify(collectorLogs)})`,
         timeout: '',
         stdout: `process.stdout.on('error', error => { if (error.code === 'EPIPE') process.exit(0); throw error; });
@@ -629,6 +633,11 @@ for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout']
             assert.equal(result.code, 0);
             assert.deepEqual(result.stdout, framedOutput(owner, 0, collectorLogs).stdout);
           }
+          if (scenario === 'attach') {
+            assert.equal(result.code, 0);
+            assert.deepEqual(result.stdout, framedOutput(owner, 1, collectorLogs).stdout);
+            result.code = 1;
+          }
           if (scenario === 'stdout') assert.equal(result.code, 125);
           completedCapture = true;
           return result;
@@ -643,6 +652,8 @@ for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout']
           assert.equal(argv.at(-1), containerId);
           assert.ok(observedStart && completedCapture);
           finalTransport = true;
+          if (scenario === 'inspect') return reply(1);
+          if (scenario === 'attach') return reply(0, containerId + ' exited 1 ok');
           if (scenario === 'wait') return reply(0, containerId + ' exited 0 invalid');
           return reply(0, containerId + (scenario === 'stdout' ? ' exited 125 ok' : ' exited 0 ok'));
         }
@@ -665,6 +676,8 @@ for (const scenario of ['stderr', 'prefix', 'hash', 'wait', 'timeout', 'stdout']
         assert.match(report.toolCoverage[0]!.detail, {
           prefix: /VERIFY_STDOUT_INCOMPLETE/,
           hash: /VERIFY_STDOUT_INCOMPLETE/,
+          attach: /VERIFY_STDOUT_INCOMPLETE/,
+          inspect: /VERIFY_TOOLS_FAILED/,
           wait: /VERIFY_TOOLS_FAILED/,
           timeout: /VERIFY_TOOLS_FAILED/,
           stdout: /VERIFY_STDOUT_LIMIT/,
