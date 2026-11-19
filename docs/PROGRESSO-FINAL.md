@@ -599,3 +599,10 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:49 UTC — Revisor encerrou C5-SQL-MEDIDO em 2e18a141 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:49 UTC — Revisão C6-R10 iniciada por Sol high normal somente leitura em 049b33c9.
 - 19/11/2026 06:49 UTC — C5 6bc34d08: 20/20 com a imagem reconstruída, banco real, origem do SQL e CLI. Em 03ee7abb passaram TypeScript, 261 arquivos e 52 complementares; o laboratório desse commit antigo encontrou um digest ausente, e o rebuild da mesma fonte não conferiu com aquele identificador. Exame R6 integrado em ffcd9ea5; C8 recebeu nova ordem de atribuição de avisos TypeDoc/Mermaid.
+- 19/11/2026 06:49 UTC — Homologação incremental em db0ea342 reuniu o exame R6, o digest reconstruído de banco e o cancelamento do histórico de desempenho. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 06:53 UTC — Integração db0ea342 passou os 10 testes de laboratório que acionam as oito CLIs por digest, com Git e PostgreSQL. O exame integrado em ffcd9ea5 passou 54/54. Em C5 a revisão apontou três lacunas nas asserções de medição do controle; em correção.
+- 19/11/2026 06:53 UTC — Revisor encerrou C6-R10 em 049b33c9 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:53 UTC — Revisão C-EXAME-MEDICOES-R2 iniciada por Sol high normal somente leitura em c052f630.
+- 19/11/2026 06:54 UTC — COTA do Codex registrada em high-C5-R8.jsonl. Encerramento dos processos da equipe e preparação do relatório de pausa.
+- 19/11/2026 06:54 UTC — COTA do Codex. Equipe e execuções do plano interrompidas. Relatório de pausa commitado em 1ff24599. A retomada depende do titular.
+PAUSADO-COTA
