@@ -1177,3 +1177,8 @@ PAUSADO-COTA
 - 19/11/2026 21:38 UTC — C-ACEITE-CAMINHOS-VIVOS-R2 encerrado com código 0.
 - 19/11/2026 21:38 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA-R3 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 21:39 UTC — Corrige cobertura de diretórios omitidos e rotas interceptadas. Ordem C-CAMINHOS-VIVOS-R3 em worktree separado conforme 43f1c664.
+- 19/11/2026 21:39 UTC — trabalho-C-CAMINHOS-VIVOS-R3 iniciado em final-caminhos-vivos por hydrogen high.
+- 19/11/2026 21:39 UTC — A bancada de prontidão em 8fb0092a preservou 183 medições e revelou uma limitação do leitor de shell em argumento literal com várias linhas. Na primeira candidata de conformidade, a recusa mudou de contrato para VERIFY_SECRET_IN_REPORT. Os oito recibos originais foram arquivados para confronto após a reaplicação.
+- 19/11/2026 21:40 UTC — C-ACEITE-PRONTIDAO-VIVA-R3 encerrado com código 0.
+- 19/11/2026 21:40 UTC — C-CONFORMIDADE-VIVA-R2 encerrado com código 0.
+- 19/11/2026 21:40 UTC — Correção c9-escopo recebida em 8996920c. Revisão Sol high somente leitura solicitada.
