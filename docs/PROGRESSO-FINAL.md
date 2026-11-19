@@ -373,3 +373,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:35 UTC — Trabalho C5-R6 iniciado por Sol high normal em final-c5.
 - 19/11/2026 04:37 UTC — QA R10 passou nos 43 testes do coletor e laboratório sem saltos. A prova usa a imagem 80c3c6ab, reconstruiu os casos de mutação e conferiu a relação entre requisito e arquivo.
 - 19/11/2026 04:38 UTC — Aberta a ordem de exame independente para estender aos demais módulos a validação da condição exata registrada pelo coletor. Um achado sem evidência suficiente continua provável.
+- 19/11/2026 04:38 UTC — Desempenho integrado em e4680e65 com imagem a0bd77af. Os três laboratórios físicos passaram (quatro ferramentas, backend ausente, snapshot vazio). Após ligar a dependência Acorn do checkout, os 30 testes do coletor e orquestrador passaram, assim como TypeScript. A comparação busca o exame anterior compatível e ignora séries intermediárias diferentes.
