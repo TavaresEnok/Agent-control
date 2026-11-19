@@ -23,13 +23,14 @@ export function executionAllowed(repoDir) {
     readdirSync('/sys/class/net').every(name => name === 'lo');
 }
 
-export function selectNodeSuite({manifest, testFiles, readTest, incomplete}) {
-  if (incomplete) return {reason: 'snapshot excedeu os limites de copia ou contem subprojetos'};
+export function selectNodeSuite({manifest, testFiles, readTest, incomplete, nestedManifest}) {
+  if (incomplete) return {reason: 'snapshot parcial por limites de cópia ou arquivos indisponíveis'};
+  if (nestedManifest) return {reason: 'manifesto de subprojeto encontrado; execução dinâmica cobre somente projetos simples'};
   if (manifest?.scripts?.test !== undefined && String(manifest.scripts.test).trim() !== 'node --test') {
     return {reason: 'script de teste incompatível com a execução offline de node --test sem opções'};
   }
   if (testFiles.some(file => file.endsWith('.tsx'))) return {reason: 'testes TSX exigem transformação fora do executor node:test'};
-  const files = testFiles.filter(file => /(?:^|\/)(?:test\.(?:[cm]?js|[cm]?ts)|[\w.-]+[.-](?:test|spec)\.(?:[cm]?js|[cm]?ts))$/.test(file) ||
+  const files = testFiles.filter(file => /(?:^|\/)(?:test\.(?:[cm]?js|[cm]?ts)|[^/]+[.-](?:test|spec)\.(?:[cm]?js|[cm]?ts))$/.test(file) ||
     /(?:^|\/)test\/.+\.[cm]?[jt]s$/.test(file));
   if (files.length === 0) return {reason: 'nenhum arquivo de teste compatível com node:test'};
   if (manifest?.scripts?.test === undefined && !files.some(file => /['"]node:test['"]/.test(readTest(file)))) {
@@ -121,14 +122,14 @@ export function decodeNodeReport({code, output}, files, measure) {
   return report;
 }
 
-export async function executeNodeSuite({repoDir, workRoot, workspace, files, measure, mutation}) {
+export async function executeNodeSuite({repoDir, workRoot, workspace, files, mutation}) {
   if (!executionAllowed(repoDir)) throw new Error('QA_CONTAINER_REQUIRED');
   const scratch = mkdtempSync(join(workRoot, 'run-'));
   try {
     cpSync(workspace, scratch, {recursive: true});
     if (mutation) writeFileSync(join(scratch, mutation.file), mutation.content);
-    const result = await runBoundedNode([runner, repoDir, measure ? 'coverage' : 'tests', ...files], scratch);
-    return decodeNodeReport(result, files, measure);
+    const result = await runBoundedNode([runner, repoDir, ...files], scratch);
+    return decodeNodeReport(result, files, true);
   } finally {
     rmSync(scratch, {recursive: true, force: true});
   }
@@ -155,6 +156,10 @@ export function comparePasses(passes) {
 }
 
 export function classifyMutant(baseline, mutated) {
+  if (!baseline.summary || !baseline.tests.some(test => test.status === 'passed') ||
+      baseline.tests.some(test => test.status === 'failed' || test.status === 'error')) {
+    throw new Error('QA_MUTANT_BASELINE_INELIGIBLE');
+  }
   const comparison = comparePasses([baseline, mutated]);
   if (comparison.some(t => t.statuses[0] === 'passed' ? !['passed', 'failed'].includes(t.statuses[1])
     : t.statuses[0] !== t.statuses[1])) throw new Error('QA_MUTANT_TEST_SET_CHANGED');

@@ -13,8 +13,8 @@ for name in GH_TOKEN GITHUB_TOKEN GITLAB_TOKEN NPM_TOKEN NODE_AUTH_TOKEN \
 done
 
 for arg in "$@"; do
-  case "$arg" in
-    *..*)
+  case "/$arg/" in
+    */../*)
       printf '%s\n' QA_PATH_FORBIDDEN >&2
       exit 78
       ;;
@@ -68,8 +68,8 @@ if [ "${QA_HOST_TEST_MODE:-0}" != "1" ]; then
   fi
 fi
 
-case "$REPO_PATH" in
-  *..*|*.sock*)
+case "/$REPO_PATH/" in
+  */../*|*.sock*)
     printf '%s\n' QA_PATH_FORBIDDEN >&2
     exit 78
     ;;

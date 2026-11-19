@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -25,13 +25,16 @@ type QaFinding = {
   evidence: string;
 };
 
-const {collectQaModule, summarizeNodePasses} = (await import(
+const {collectQaModule, summarizeNodePasses, analyzeTestFile, buildTraceability, measureValidatorCases} = (await import(
   new URL('../deploy/modules/qa/collect.mjs', import.meta.url).href
 )) as {
   collectQaModule: (options?: {repoDir?: string; failTool?: string}) => Promise<{
     coverage: QaCoverageRow[];
     findings: QaFinding[];
   }>;
+  analyzeTestFile: (file: string, source: string, parse: unknown) => {validators: {line: number}[]};
+  buildTraceability: (options: Record<string, unknown>) => {extraRows: QaCoverageRow[]; findings: QaFinding[]};
+  measureValidatorCases: (options: Record<string, unknown>) => {coverageRow: QaCoverageRow; findings: QaFinding[]};
   summarizeNodePasses: (passes: {summary: boolean; tests: {file: string; line: number; column: number; name: string; status: string}[]; coverage: never[]}[], sources: never[], version: string) => {extraRows: QaCoverageRow[]};
 };
 
@@ -48,10 +51,10 @@ const {verifyQaLockfiles} = (await import(
 
 const qaModuleDir = fileURLToPath(new URL('../deploy/modules/qa/', import.meta.url));
 const fixtureDir = fileURLToPath(new URL('./fixtures/module-qa/', import.meta.url));
-const cleanFixtureDir = fileURLToPath(new URL('./fixtures/module-qa/clean/', import.meta.url));
+const cleanFixtureDir = fileURLToPath(new URL('./fixtures/module-qa-clean/', import.meta.url));
 const entrypointPath = join(qaModuleDir, 'entrypoint.sh');
 const realTools = {
-  skip: ['fast-check', 'jsdom', 'axe-core', '@apidevtools/swagger-parser', '@stryker-mutator/instrumenter']
+  skip: ['@babel/parser', 'jsdom', 'axe-core', '@apidevtools/swagger-parser', '@stryker-mutator/instrumenter']
     .every(name => existsSync(join(qaModuleDir, 'node_modules', name, 'package.json')))
     ? false : 'instale as ferramentas com npm ci --prefix deploy/modules/qa --ignore-scripts',
 };
@@ -81,7 +84,7 @@ test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/qa-entrypoint\.sh"\]/);
 });
 
-test('entrypoint recusa caminho com .., argumento .sock e diretorio inexistente', () => {
+test('entrypoint recusa segmento .., argumento .sock e diretorio inexistente', () => {
   const traversal = spawnSync('/bin/sh', [entrypointPath, '../escape'], {
     encoding: 'utf8',
     env: {...process.env, QA_HOST_TEST_MODE: '1', QA_REPO_DIR: fixtureDir},
@@ -143,7 +146,7 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
     assert.ok(finding.rule.length > 0);
     assert.ok(finding.file.length > 0);
     assert.equal(finding.file.startsWith('/'), false);
-    assert.equal(finding.file.includes('..'), false);
+    assert.equal(finding.file.split('/').includes('..'), false);
     assert.equal(Number.isInteger(finding.line) && finding.line >= 1, true);
     assert.ok(['alta', 'media', 'baixa', 'informativa'].includes(finding.severity));
     assert.ok(finding.message.length > 0);
@@ -154,11 +157,12 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
   assert.equal(toolStatus.get('node-test-v8'), 'skipped');
   assert.equal(toolStatus.get('stryker-mutator'), 'skipped');
   assert.equal(toolStatus.get('qa-matriz-estatica'), 'ok');
-  assert.equal(toolStatus.get('fast-check'), 'ok');
-  assert.equal(toolStatus.get('playwright-test-audit'), 'ok');
+  assert.equal(toolStatus.get('qa-propriedades-funcionais'), 'skipped');
+  assert.equal(toolStatus.get('qa-fuzz'), 'skipped');
+  assert.equal(toolStatus.get('qa-auditoria-estatica-testes'), 'ok');
   assert.equal(toolStatus.get('axe-core'), 'ok');
   assert.equal(toolStatus.get('swagger-parser'), 'ok');
-  assert.equal(toolStatus.get('k6-homologacao'), 'skipped');
+  assert.equal(toolStatus.get('qa-carga'), 'skipped');
 
   // Linhas adicionais de cobertura por arquivo, requisito e rota
   assert.equal(toolStatus.get('qa-arquivo:src/defective-pricing.ts'), undefined);
@@ -172,7 +176,7 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
   assert.equal(toolStatus.get('qa-rota:GET /api/desconto'), 'ok');
   assert.equal(toolStatus.get('qa-rota:POST /api/estorno'), 'ok');
 
-  // Defeitos plantados encontrados pelas 6 ferramentas ativas
+  // Defeitos plantados observáveis pela análise estática.
   const hasFinding = (tool: string, rule: string, file: string, line?: number) =>
     output.findings.some(
       f => f.tool === tool && f.rule === rule && f.file === file && (line === undefined || f.line === line),
@@ -180,16 +184,16 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
 
   assert.equal(output.findings.some(f => ['node-test-v8', 'stryker-mutator'].includes(f.tool)), false);
   assert.equal(hasFinding('qa-matriz-estatica', 'QA-REQUISITO-SEM-PROVA', 'requisitos.md', 4), true);
+  assert.ok(output.coverage.every(row => !/fast-check|playwright|k6/.test(row.tool)));
+  assert.match(output.coverage.find(row => row.tool === 'qa-propriedades-funcionais')?.detail ?? '',
+    /0 de 4 casos/);
+  assert.equal(output.coverage.find(row => row.tool === 'qa-carga')?.version, 'não aferida');
   assert.equal(
-    hasFinding('fast-check', 'QA-FASTCHECK-PROPRIEDADE-VIOLADA', 'src/defective-pricing.ts', 15),
+    hasFinding('qa-auditoria-estatica-testes', 'QA-TESTE-PULADO', 'tests/defective-pricing.test.ts', 17),
     true,
   );
   assert.equal(
-    hasFinding('playwright-test-audit', 'QA-TESTE-PULADO', 'tests/defective-pricing.test.ts', 17),
-    true,
-  );
-  assert.equal(
-    hasFinding('playwright-test-audit', 'QA-TESTE-SEM-ASSERCAO', 'tests/defective-pricing.test.ts', 21),
+    hasFinding('qa-auditoria-estatica-testes', 'QA-TESTE-SEM-ASSERCAO', 'tests/defective-pricing.test.ts', 21),
     true,
   );
   assert.equal(
@@ -220,8 +224,7 @@ test('controle limpo isolado produz zero achados com todas as ferramentas ativas
   assert.deepEqual(result.findings, []);
   const activeTools = [
     'qa-matriz-estatica',
-    'fast-check',
-    'playwright-test-audit',
+    'qa-auditoria-estatica-testes',
     'axe-core',
     'swagger-parser',
   ];
@@ -259,13 +262,18 @@ test('ignora symlinks, arquivos de credenciais e scripts em HTML sem executar co
       join(tempRepo, 'public', 'page.html'),
       '<!doctype html><html lang="pt-BR"><head><title>T</title></head><body><script>throw new Error("NAO_EXECUTAR_SCRIPT_HTML")</script><main><p>Oi</p></main></body></html>',
     );
-    symlinkSync('/etc/hostname', join(tempRepo, 'src', 'link.ts'));
+    writeFileSync(join(tempRepo, 'ignorado.txt'), 'conteúdo sintético fora do escopo');
+    symlinkSync('../ignorado.txt', join(tempRepo, 'src', 'link.ts'));
 
     const result = await collectQaModule({repoDir: tempRepo});
     const serialized = JSON.stringify(result);
     assert.equal(serialized.includes('nao-pode-sair'), false);
     assert.equal(serialized.includes('segredo-proibido'), false);
     assert.equal(serialized.includes('link.ts'), false);
+    const exclusions = result.coverage.filter(row => row.tool === 'qa-snapshot-exclusao');
+    assert.ok(exclusions.some(row => row.detail === '2 nomes reservados a credenciais'));
+    assert.ok(exclusions.some(row => row.detail === '1 links simbólicos ou arquivos especiais'));
+    assert.ok(exclusions.some(row => row.detail === '1 arquivos de extensões fora da coleta'));
     const axeRow = result.coverage.find((c: {tool: string}) => c.tool === 'axe-core');
     assert.equal(axeRow?.status, 'ok');
   } finally {
@@ -279,7 +287,10 @@ test('seleção reconhece node:test offline e recusa scripts, dependências e c�
   assert.deepEqual(selectNodeSuite(options), {files: ['tests/order.test.ts']});
   assert.match(selectNodeSuite({...options, manifest: {scripts: {test: 'npm run arbitrary'}}}).reason, /incompatível/);
   assert.match(selectNodeSuite({...options, manifest: {dependencies: {widget: '1'}}}).reason, /dependências externas/);
-  assert.match(selectNodeSuite({...options, incomplete: true}).reason, /limites de copia/);
+  assert.match(selectNodeSuite({...options, incomplete: true}).reason, /limites de cópia/);
+  assert.match(selectNodeSuite({...options, nestedManifest: true}).reason, /subprojeto/);
+  assert.deepEqual(selectNodeSuite({...options, testFiles: ['tests/pedido .. revisão.test.ts']}),
+    {files: ['tests/pedido .. revisão.test.ts']});
 });
 
 test('compara as três passadas e separa falha do teste de erro do executor', () => {
@@ -354,6 +365,12 @@ test('saída sintética real passa pelo parser e pela proteção do relatório',
     const leaked = structuredClone(parsed);
     leaked.coverage[8].detail += ' password=syntheticSecretValue123';
     await assert.rejects(writeModuleReport({...common, module: 'qa', toolCoverage: leaked.coverage, fileCoverage: [], achados: [], raw: leaked}), /VERIFY_SECRET_IN_REPORT/);
+    const current = parseModuleCollectorOutput(JSON.stringify(await collectQaModule({repoDir: fixtureDir})));
+    assert.equal(current.coverage.find((row: QaCoverageRow) => row.tool === 'qa-fuzz')?.status, 'skipped');
+    assert.ok(current.findings.some((finding: QaFinding) => finding.rule === 'QA-CONTRATO-ROTA-SEM-OPENAPI'));
+    const currentWritten = await writeModuleReport({...common, runId: '44444444-4444-4444-8444-444444444444',
+      module: 'qa', toolCoverage: current.coverage, fileCoverage: [], achados: [], raw: current});
+    assert.deepEqual(JSON.parse(readFileSync(join(currentWritten.directory, 'bruto', 'achados-brutos.json'), 'utf8')), current);
   } finally {
     rmSync(data, {recursive: true, force: true});
   }
@@ -373,4 +390,255 @@ test('StrykerJS fornece a localização e a substituição aplicadas ao código 
 test('subprocesso limita duração e saída das ferramentas', async () => {
   await assert.rejects(runBoundedNode(['-e', 'setInterval(() => {}, 100)'], qaModuleDir, {timeoutMs: 100}), /QA_TEST_TIMEOUT/);
   await assert.rejects(runBoundedNode(['-e', 'process.stderr.write("x".repeat(8192))'], qaModuleDir, {maxBytes: 1024}), /QA_TEST_OUTPUT_LIMIT/);
+});
+
+const coverageFor = (report: {coverage: QaCoverageRow[]}, tool: string) => {
+  const row = report.coverage.find(item => item.tool === tool);
+  assert.ok(row, tool);
+  return row;
+};
+
+async function withSyntheticRepo(prefix: string, callback: (directory: string) => Promise<void>) {
+  const repo = mkdtempSync(join(tmpdir(), prefix));
+  try {
+    await callback(repo);
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+}
+
+test('nomes válidos com dois pontos e subárvore clean têm análise e JSON', realTools, async () => {
+  await withSyntheticRepo('qa..arquivo-', async repo => {
+    mkdirSync(join(repo, 'docs'));
+    mkdirSync(join(repo, 'src'));
+    cpSync(cleanFixtureDir, join(repo, 'clean'), {recursive: true});
+    writeFileSync(join(repo, 'docs', 'versao..md'), '# versão');
+    writeFileSync(join(repo, 'docs', 'revisão com espaço.md'), '# revisão');
+    writeFileSync(join(repo, 'clean', 'tests', 'segundo..test.ts'), "test('sintético sem asserção', () => {});");
+    const child = spawnSync('/bin/sh', [entrypointPath, 'docs/versao..md'], {
+      encoding: 'utf8',
+      env: {...process.env, QA_HOST_TEST_MODE: '1', QA_REPO_DIR: repo},
+    });
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.stdout.trim().split('\n').length, 1);
+    const report = JSON.parse(child.stdout) as {coverage: QaCoverageRow[]; findings: QaFinding[]};
+    assert.equal(report.coverage.some(row => row.tool === 'qa-snapshot-exclusao'), false);
+    assert.match(coverageFor(report, 'qa-snapshot').detail, /^10 arquivos copiados/);
+    assert.match(coverageFor(report, 'node-test-v8').detail, /subprojeto/);
+    assert.match(coverageFor(report, 'qa-requisito:REQ-01').detail, /clean\/tests\/clean-pricing/);
+    assert.ok(report.findings.some(row => row.rule === 'QA-TESTE-SEM-ASSERCAO' &&
+      row.file === 'clean/tests/segundo..test.ts'));
+  });
+});
+
+test('limites de cópia tornam as análises parciais e impedem acusar contrato ou prova ausentes', realTools, async () => {
+  await withSyntheticRepo('qa-limites-', async repo => {
+    writeFileSync(join(repo, 'a-routes.ts'), "app.get('/pedidos/:id', handler);");
+    mkdirSync(join(repo, 'b-docs'));
+    writeFileSync(join(repo, 'b-docs', 'requisitos.md'), 'REQ-17: entrega do pedido');
+    mkdirSync(join(repo, 'c-tests'));
+    writeFileSync(join(repo, 'c-tests', 'a.test.ts'), "test('exemplo sem asserção', () => {});");
+    writeFileSync(join(repo, 'd-openapi.json'), '');
+    truncateSync(join(repo, 'd-openapi.json'), 1024 * 1024 + 1);
+    mkdirSync(join(repo, 'e-depth', ...Array<string>(10).fill('d')), {recursive: true});
+    mkdirSync(join(repo, 'f-files'));
+    for (let index = 0; index < 400; index++) {
+      writeFileSync(join(repo, 'f-files', `doc-${index}.md`), '# sintético');
+    }
+    mkdirSync(join(repo, 'z-contract'));
+    cpSync(join(fixtureDir, 'openapi.json'), join(repo, 'z-contract', 'openapi.json'));
+    const report = await collectQaModule({repoDir: repo});
+    const exclusions = report.coverage.filter(row => row.tool === 'qa-snapshot-exclusao').map(row => row.detail);
+    for (const reason of [/limite de arquivos/, /limite individual de bytes/, /limite de profundidade/]) {
+      assert.ok(exclusions.some(detail => reason.test(detail)), String(reason));
+    }
+    for (const tool of ['qa-matriz-estatica', 'qa-auditoria-estatica-testes', 'qa-contrato-openapi', 'axe-core']) {
+      assert.match(coverageFor(report, tool).detail, /escopo parcial/);
+    }
+    assert.match(coverageFor(report, 'node-test-v8').detail, /snapshot parcial/);
+    assert.match(coverageFor(report, 'stryker-mutator').detail, /snapshot parcial/);
+    assert.match(coverageFor(report, 'qa-rota:GET /pedidos/:id').detail, /contrato não confirmado/);
+    assert.ok(!report.findings.some(f => ['QA-CONTRATO-ROTA-SEM-OPENAPI', 'QA-REQUISITO-SEM-PROVA'].includes(f.rule)));
+    assert.ok(report.findings.some(f => f.rule === 'QA-TESTE-SEM-ASSERCAO'));
+  });
+});
+
+test('limite total de bytes é registrado mesmo abaixo do limite de arquivos', async () => {
+  await withSyntheticRepo('qa-bytes-', async repo => {
+    for (let index = 0; index < 65; index++) {
+      const file = join(repo, `doc-${index}.md`);
+      writeFileSync(file, '');
+      truncateSync(file, 1024 * 1024);
+    }
+    const report = await collectQaModule({repoDir: repo});
+    assert.match(coverageFor(report, 'qa-snapshot').detail, /^64 arquivos copiados \(cópia parcial\)/);
+    assert.equal(coverageFor(report, 'qa-snapshot-exclusao').detail, '1 arquivos fora do limite total de bytes');
+    assert.match(coverageFor(report, 'qa-contrato-openapi').detail, /escopo parcial/);
+  });
+});
+
+test('contrato normaliza parâmetros simples e conserva método, prefixo e sufixo', realTools, async () => {
+  await withSyntheticRepo('qa-rotas-', async repo => {
+    writeFileSync(join(repo, 'routes.ts'), [
+      "app.get('/pedidos/:id', handler);",
+      "app.get('/export/:id.json', handler);",
+      "app.post('/pedidos/:id', handler);",
+      "app.get('/pedido/:id', handler);",
+      "app.get('/export/:id.csv', handler);",
+      "app.get('/opcional/:id?', handler);",
+    ].join('\n'));
+    const operation = {
+      parameters: [{name: 'pedido', in: 'path', required: true, schema: {type: 'string'}}],
+      responses: {'200': {description: 'ok'}},
+    };
+    writeFileSync(join(repo, 'openapi.json'), JSON.stringify({
+      openapi: '3.0.3',
+      info: {title: 'Controle de pedidos', version: '1'},
+      paths: {'/pedidos/{pedido}': {get: operation}, '/export/{pedido}.json': {get: operation}},
+    }));
+    const report = await collectQaModule({repoDir: repo});
+    assert.match(coverageFor(report, 'qa-rota:GET /pedidos/:id').detail, /documentada e validada/);
+    assert.match(coverageFor(report, 'qa-rota:GET /export/:id.json').detail, /documentada e validada/);
+    assert.equal(coverageFor(report, 'qa-rota:GET /opcional/:id?').status, 'skipped');
+    assert.deepEqual(report.findings.filter(f => f.rule === 'QA-CONTRATO-ROTA-SEM-OPENAPI').map(f => f.line), [3, 4, 5]);
+  });
+});
+
+test('axe registra que baixo contraste ficou sem medição e informa a versão instalada', realTools, async () => {
+  await withSyntheticRepo('qa-contraste-', async repo => {
+    writeFileSync(join(repo, 'contraste.html'), '<!doctype html><html lang="pt"><head><title>Controle</title></head>' +
+      '<body><main><p style="color:#aaa;background-color:#aaa">Texto sintético</p></main></body></html>');
+    const report = await collectQaModule({repoDir: repo});
+    const axe = coverageFor(report, 'axe-core');
+    const installed = JSON.parse(readFileSync(join(qaModuleDir, 'node_modules/axe-core/package.json'), 'utf8'));
+    assert.equal(axe.version, installed.version);
+    assert.match(axe.detail, /regra color-contrast desativada/);
+    assert.match(axe.detail, /sem scripts nem layout/);
+    assert.ok(!report.findings.some(f => f.rule === 'QA-AXE-COLOR-CONTRAST'));
+  });
+});
+
+const runnerUrl = pathToFileURL(join(qaModuleDir, 'node-test-runner.mjs')).href;
+// Invoca somente o núcleo do runner em fixtures sintéticas criadas por estes testes.
+async function runSyntheticPass(repo: string, files: string[]) {
+  const driver = join(repo, '.qa-synthetic-driver.mjs');
+  writeFileSync(driver, `
+    import {runNodeTests} from ${JSON.stringify(runnerUrl)};
+    const report = await runNodeTests(process.cwd(), ${JSON.stringify(files)});
+    process.stdout.write(JSON.stringify(report));
+    process.exitCode = Number(!report.summary);
+  `);
+  const child = await runBoundedNode([driver], repo);
+  return decodeNodeReport(child, files, true);
+}
+
+async function readTestAst(file: string, content: string) {
+  const qaRequire = createRequire(join(qaModuleDir, 'package.json'));
+  const {parse} = await import(pathToFileURL(qaRequire.resolve('@babel/parser')).href);
+  return analyzeTestFile(file, content, parse);
+}
+
+test('matriz lê o callback após opções, exige execução aprovada e reconhece skip e todo', realTools, async () => {
+  const file = 'options.test.mjs';
+  const source = [
+    "import {describe, test} from 'node:test';",
+    "import assert from 'node:assert/strict';",
+    "test('REQ-01 opção timeout', {timeout: 1000, skip: false}, () => { assert.equal(42, 42); });",
+    "test('REQ-02 skip em execução', {timeout: 1000}, context => { if (process.platform === 'linux') { context.skip(); return; } assert.equal(42, 42); });",
+    "test('REQ-03 skip nas opções', {timeout: 1000, skip: 'pendente'}, () => assert.equal(42, 42));",
+    "describe.skip('grupo inativo', () => { test('REQ-04 teste do grupo', () => assert.equal(42, 42)); });",
+    "test('REQ-05 todo', {timeout: 1000, todo: true}, () => assert.equal(42, 42));",
+    "test('REQ-06 status todo em execução', {timeout: 1000}, context => { context.todo(); assert.equal(42, 42); });",
+  ].join('\n');
+  await withSyntheticRepo('qa-status-', async repo => {
+    writeFileSync(join(repo, file), source);
+    writeFileSync(join(repo, 'requisitos.md'), Array.from({length: 6}, (_, index) => `REQ-0${index + 1}: sintético`).join('\n'));
+    const staticReport = await collectQaModule({repoDir: repo});
+    assert.ok(!staticReport.findings.some(f => f.rule === 'QA-TESTE-SEM-ASSERCAO'));
+    const passes = [];
+    for (let index = 0; index < 3; index++) {
+      const scratch = join(repo, `run-${index}`);
+      mkdirSync(scratch);
+      writeFileSync(join(scratch, file), source);
+      passes.push(await runSyntheticPass(scratch, [file]));
+    }
+    const runtimeTests = comparePasses(passes);
+    const matrix = buildTraceability({workspace: repo, sourceAnalyses: [], reqFiles: ['requisitos.md'],
+      testAnalyses: [await readTestAst(file, source)], runtimeTests, incomplete: false});
+    assert.deepEqual(matrix.findings.map(f => f.line), process.platform === 'linux' ? [2, 3, 4, 5, 6] : [3, 4, 5, 6]);
+    assert.match(matrix.extraRows.find(row => row.tool === 'qa-requisito:REQ-01')?.detail ?? '', /passed,passed,passed/);
+    if (process.platform === 'linux') assert.match(matrix.findings[0]!.evidence, /skipped,skipped,skipped/);
+    assert.match(matrix.findings.at(-1)!.evidence, /todo,todo,todo/);
+  });
+});
+
+test('propriedades declaradas medem o validador real com casos sintéticos determinísticos', realTools, async () => {
+  await withSyntheticRepo('qa-validadores-', async repo => {
+    const file = 'tests/clean-pricing.test.ts';
+    const sourceFile = 'src/clean-pricing.ts';
+    const source = readFileSync(join(cleanFixtureDir, sourceFile), 'utf8');
+    const testSource = readFileSync(join(cleanFixtureDir, file), 'utf8');
+    const ast = await readTestAst(file, testSource);
+    assert.equal(ast.validators.length, 4);
+    const options = {
+      sourceAnalyses: [{file: sourceFile, functions: [{name: 'parseQuantidadeSegura', isExported: true}]}],
+      testAnalyses: [ast],
+    };
+    const defective = source.replace("throw new Error('QUANTIDADE_INVALIDA');", 'return Number.parseInt(entrada, 10);');
+    assert.notEqual(defective, source);
+    assert.equal(measureValidatorCases(options).coverageRow.status, 'skipped');
+    for (const [tag, code] of [['limpo', source], ['defeito', defective]] as const) {
+      const passes = [];
+      for (let index = 0; index < 3; index++) {
+        const scratch = join(repo, `${tag}-${index}`);
+        cpSync(cleanFixtureDir, scratch, {recursive: true});
+        writeFileSync(join(scratch, sourceFile), code);
+        passes.push(await runSyntheticPass(scratch, [file]));
+      }
+      const runtimeTests = comparePasses(passes);
+      const result = measureValidatorCases({...options, runtimeTests});
+      assert.equal(result.coverageRow.status, 'ok');
+      assert.match(result.coverageRow.detail, /4 de 4 casos/);
+      assert.deepEqual(result.findings.map(finding => finding.line),
+        tag === 'limpo' ? [] : ast.validators.slice(2).map(candidate => candidate.line));
+      const noProof = runtimeTests.map((row: {statuses: string[]}) => ({...row, statuses: ['skipped', 'skipped', 'skipped']}));
+      assert.equal(measureValidatorCases({...options, runtimeTests: noProof}).coverageRow.status, 'skipped');
+    }
+  });
+});
+
+test('referência e mutantes executam com o mesmo preload e permissões V8', realTools, async () => {
+  await withSyntheticRepo('qa-mutacao-config-', async repo => {
+    const file = 'limiar.test.mjs';
+    const src = 'limiar.mjs';
+    const source = 'export function incluido(valor) { return valor >= 100; }';
+    const tests = [
+      "import {test} from 'node:test';",
+      "import assert from 'node:assert/strict';",
+      "import {existsSync} from 'node:fs';",
+      "import {incluido} from './limiar.mjs';",
+      "test('configuração de execução', () => {",
+      "  assert.ok(existsSync('.qa-v8-probe.mjs'));",
+      "  assert.ok(existsSync('.qa-coverage'));",
+      "});",
+      "test('fronteira do desconto', () => assert.equal(incluido(100), true));",
+    ].join('\n');
+    const run = async (name: string, code: string) => {
+      const scratch = join(repo, name);
+      mkdirSync(scratch);
+      writeFileSync(join(scratch, file), tests);
+      writeFileSync(join(scratch, src), code);
+      return runSyntheticPass(scratch, [file]);
+    };
+    const baseline = await run('referencia', source);
+    assert.ok(baseline.summary);
+    assert.ok(baseline.coverage.some((file: {file: string}) => file.file === src));
+    const inocuous = await run('equivalente', source.replace('>= 100', '> 99'));
+    assert.equal(classifyMutant(baseline, inocuous).status, 'sobrevivente');
+    const changed = await run('fronteira', source.replace('>= 100', '> 100'));
+    const result = classifyMutant(baseline, changed);
+    assert.equal(result.status, 'morto');
+    assert.equal(result.killedBy.name, 'fronteira do desconto');
+    assert.throws(() => classifyMutant(changed, inocuous), /QA_MUTANT_BASELINE_INELIGIBLE/);
+  });
 });

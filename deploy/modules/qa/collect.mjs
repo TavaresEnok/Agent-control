@@ -23,10 +23,10 @@ import {
   writeFileSync,
 } from 'node:fs';
 import {tmpdir} from 'node:os';
-import {dirname, extname, join, posix, relative, resolve, sep} from 'node:path';
+import {dirname, extname, isAbsolute, join, posix, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {
-  classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool,
+  classifyMutant, comparePasses, executeNodeSuite, executionAllowed, mutationTool, planMutations, runtimeInstalled, selectNodeSuite, suiteTool, testIdentity,
 } from './execute-tests.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -78,47 +78,17 @@ function cleanSingleLine(value, maxLen = 360) {
 }
 
 function normalizeRelPath(rel) {
-  const normalized = rel.split(sep).join(posix.sep).replace(/^\/+/, '');
-  if (!normalized || normalized.includes('..') || normalized.startsWith('/')) {
-    throw new Error(`QA_INVALID_RELATIVE_PATH: ${rel}`);
+  const parts = rel.split(sep);
+  if (isAbsolute(rel) || parts.some(part => !part || part === '.' || part === '..')) {
+    throw new Error('QA_INVALID_RELATIVE_PATH');
   }
-  return normalized;
+  return parts.join(posix.sep);
 }
 
-function loadLockedVersions() {
-  const candidates = [
-    join(SCRIPT_DIR, 'qa-tools.lock.json'),
-    '/opt/qa-tools/qa-tools.lock.json',
-  ];
-  for (const candidate of candidates) {
-    try {
-      if (existsSync(candidate)) {
-        const parsed = JSON.parse(readFileSync(candidate, 'utf8'));
-        const deps = parsed.dependencies ?? {};
-        return {
-          stryker: deps['@stryker-mutator/instrumenter']?.version ?? '10.1.1',
-          fastCheck: deps['fast-check']?.version ?? '4.10.3',
-          axe: deps['axe-core']?.version ?? '4.14.1',
-          jsdom: deps.jsdom?.version ?? '31.0.1',
-          swagger: deps['@apidevtools/swagger-parser']?.version ?? '13.1.0',
-          playwrightAudit: '1',
-        };
-      }
-    } catch {
-      /* fallback */
-    }
-  }
-  return {
-    stryker: '10.1.1',
-    fastCheck: '4.10.3',
-    axe: '4.14.1',
-    jsdom: '31.0.1',
-    swagger: '13.1.0',
-    playwrightAudit: '1',
-  };
-}
+const internal = 'interno';
+const unmeasured = 'não aferida';
 
-async function tryImportTool(specifier, EntryRelPath) {
+async function loadTool(specifier, entry) {
   const roots = [
     process.env.QA_TOOLS_NODE_MODULES,
     '/opt/qa-tools/node_modules',
@@ -127,95 +97,113 @@ async function tryImportTool(specifier, EntryRelPath) {
   ].filter(Boolean);
 
   for (const root of roots) {
-    const candidate = join(root, specifier, EntryRelPath);
-    if (existsSync(candidate)) {
-      return import(pathToFileURL(candidate).href);
+    const packageDir = join(root, specifier);
+    const candidate = join(packageDir, entry);
+    if (!existsSync(candidate)) continue;
+    const {version} = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
+    if (typeof version !== 'string' || !/^\d+\.\d+\.\d+/.test(version)) {
+      throw new Error(`QA_TOOL_VERSION_UNAVAILABLE: ${specifier}`);
     }
+    return {api: await import(pathToFileURL(candidate).href), version};
   }
-  return import(specifier);
+  throw new Error(`QA_TOOL_UNAVAILABLE: ${specifier}`);
 }
 
-/**
- * Copia apenas arquivos regulares permitidos de repoDir para /tmp/qa-isolated-XXXX/workspace.
- * Ignora subpasta `clean` apenas quando repoDir é a raiz da fixture que também contém `src/`
- * para que a pasta de controle limpo `tests/fixtures/module-qa/clean` possa coexistir sem duplicação.
- */
+/** Copia apenas arquivos regulares permitidos e contabiliza os recortes sem expor seus nomes. */
 function copyRepoToIsolatedTmp(repoDir) {
   const resolvedRepo = resolve(repoDir);
-  if (!existsSync(resolvedRepo)) {
-    throw new Error(`QA_REPO_NOT_FOUND: ${resolvedRepo}`);
+  if (!lstatSync(resolvedRepo, {throwIfNoEntry: false})?.isDirectory()) {
+    throw new Error('QA_REPO_NOT_FOUND');
   }
-  const hasRootSrc = existsSync(join(resolvedRepo, 'src'));
-  const hasCleanSubrepo =
-    hasRootSrc &&
-    existsSync(join(resolvedRepo, 'clean', 'src')) &&
-    existsSync(join(resolvedRepo, 'clean', 'tests'));
-
   const workRoot = mkdtempSync(join(tmpdir(), 'qa-isolated-'));
-  chmodSync(workRoot, 0o700);
   const workspace = join(workRoot, 'workspace');
-  mkdirSync(workspace, {recursive: true, mode: 0o700});
-
   const copiedFiles = [];
+  const exclusions = new Map();
   let incomplete = false;
   let copiedBytes = 0;
 
+  function exclude(reason, cutsAnalysis = false, count = 1) {
+    exclusions.set(reason, (exclusions.get(reason) ?? 0) + count);
+    incomplete ||= cutsAnalysis;
+  }
+
   function walk(currentDir, depth) {
-    if (depth > 10 || copiedFiles.length >= MAX_FILES) {
-      incomplete = true;
-      return;
-    }
     let entries;
     try {
       entries = readdirSync(currentDir, {withFileTypes: true});
     } catch {
-      incomplete = true;
+      exclude('diretórios ilegíveis', true);
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
       if (copiedFiles.length >= MAX_FILES) {
-        incomplete = true;
+        exclude('entradas ou subárvores fora do limite de arquivos', true, entries.length - index);
         break;
       }
-      if (entry.name.startsWith('.') && entry.name !== '.eslintrc.json') continue;
-      if (FORBIDDEN_FILENAMES.has(entry.name)) continue;
+      if (FORBIDDEN_FILENAMES.has(entry.name)) {
+        exclude('nomes reservados a credenciais');
+        continue;
+      }
+      if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) {
+        exclude('subárvores de metadados, dependências ou artefatos');
+        continue;
+      }
+      if (entry.name.startsWith('.') && entry.name !== '.eslintrc.json') {
+        exclude('entradas ou subárvores ocultas');
+        continue;
+      }
 
       const fullPath = join(currentDir, entry.name);
       let stat;
       try {
         stat = lstatSync(fullPath);
       } catch {
+        exclude('entradas ilegíveis', true);
         continue;
       }
-      if (stat.isSymbolicLink() || stat.isSocket() || stat.isFIFO() || stat.isBlockDevice() || stat.isCharacterDevice()) {
+      if (stat.isDirectory()) {
+        if (depth >= 10) exclude('subárvores fora do limite de profundidade', true);
+        else walk(fullPath, depth + 1);
+        continue;
+      }
+      if (!stat.isFile()) {
+        exclude('links simbólicos ou arquivos especiais');
+        continue;
+      }
+      if (!ALLOWED_EXTS.has(extname(entry.name).toLowerCase())) {
+        exclude('arquivos de extensões fora da coleta');
+        continue;
+      }
+      if (stat.size > MAX_FILE_BYTES) {
+        exclude('arquivos fora do limite individual de bytes', true);
+        continue;
+      }
+      if (copiedBytes + stat.size > MAX_SNAPSHOT_BYTES) {
+        exclude('arquivos fora do limite total de bytes', true);
         continue;
       }
       const rel = normalizeRelPath(relative(resolvedRepo, fullPath));
-      if (stat.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
-        if (depth === 0 && entry.name === 'clean' && hasCleanSubrepo) continue;
-        walk(fullPath, depth + 1);
-      } else if (stat.isFile()) {
-        const ext = extname(entry.name).toLowerCase();
-        if (!ALLOWED_EXTS.has(ext)) continue;
-        if (stat.size > MAX_FILE_BYTES || copiedBytes + stat.size > MAX_SNAPSHOT_BYTES) {
-          incomplete = true;
-          continue;
-        }
-        const destPath = join(workspace, rel);
+      const destPath = join(workspace, rel);
+      try {
         mkdirSync(dirname(destPath), {recursive: true, mode: 0o700});
         cpSync(fullPath, destPath, {dereference: false});
         chmodSync(destPath, 0o600);
-        copiedFiles.push(rel);
-        copiedBytes += stat.size;
+      } catch {
+        rmSync(destPath, {force: true});
+        exclude('arquivos indisponíveis durante a cópia', true);
+        continue;
       }
+      copiedFiles.push(rel);
+      copiedBytes += stat.size;
     }
   }
 
   try {
+    chmodSync(workRoot, 0o700);
+    mkdirSync(workspace, {mode: 0o700});
     walk(resolvedRepo, 0);
-    return {workRoot, workspace, copiedFiles, incomplete};
+    return {workRoot, workspace, copiedFiles, incomplete, exclusions};
   } catch (error) {
     rmSync(workRoot, {recursive: true, force: true});
     throw error;
@@ -256,48 +244,7 @@ function analyzeSourceFile(relFile, content) {
     const startLine = lineOfOffset(content, match.index);
     const isExported = /export\s+(?:async\s+)?function/.test(match[0]);
 
-    // Encontra o bloco da função contando chaves
-    const braceStart = content.indexOf('{', match.index + match[0].length);
-    let body = '';
-    if (braceStart !== -1) {
-      let depth = 0;
-      let i = braceStart;
-      for (; i < content.length; i += 1) {
-        const ch = content[i];
-        if (ch === '{') depth += 1;
-        else if (ch === '}') {
-          depth -= 1;
-          if (depth === 0) {
-            body = content.slice(braceStart, i + 1);
-            break;
-          }
-        }
-      }
-    }
-
-    // Verifica se a função faz parsing de entrada externa (parseInt/parseFloat/Number/JSON.parse)
-    const usesParseInt = /\b(?:parseInt|parseFloat|Number)\s*\(/.test(body);
-    const usesJsonParse = /\bJSON\.parse\s*\(/.test(body);
-    const hasRegexGuard = /\/[^\n/]+\/\.test\s*\(/.test(body);
-    const hasFiniteOrIntegerGuard = /\bNumber\.is(?:Finite|Integer|NaN)\b|\bisNaN\s*\(/.test(body);
-    const hasPositiveBoundGuard = /(?:<\s*1|<=\s*0|>=\s*1|>\s*0)/.test(body);
-    const hasTryCatch = /\btry\s*\{/.test(body);
-
-    functions.push({
-      name,
-      startLine,
-      isExported,
-      parserModel: (usesParseInt || usesJsonParse)
-        ? {
-            usesParseInt,
-            usesJsonParse,
-            hasRegexGuard,
-            hasFiniteOrIntegerGuard,
-            hasPositiveBoundGuard,
-            hasTryCatch,
-          }
-        : null,
-    });
+    functions.push({name, startLine, isExported});
   }
 
   // Descobre declarações de rotas HTTP: app.get('/api/...', ...), router.post('/api/...', ...)
@@ -316,119 +263,199 @@ function analyzeSourceFile(relFile, content) {
   return {file: relFile, functions, routes};
 }
 
-/**
- * Levanta candidatos estáticos para a matriz e a auditoria de testes.
- */
-function analyzeTestFile(relFile, content) {
+const testNames = new Set(['test', 'it', 'describe', 'xit', 'xtest', 'xdescribe']);
+const skipMethods = new Set(['skip', 'fixme', 'todo']);
+const validatorPrefix = 'QA-VALIDADOR: ';
+
+function visitAst(node, visitor) {
+  if (!node?.type || visitor(node) === false) return;
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) visitAst(child, visitor);
+    } else {
+      visitAst(value, visitor);
+    }
+  }
+}
+
+function member(node, object, property) {
+  return node?.type === 'MemberExpression' && !node.computed &&
+    node.object.name === object && node.property.name === property;
+}
+
+function testCall(node, aliases) {
+  if (node.type !== 'CallExpression') return;
+  const {callee, arguments: args} = node;
+  const localName = callee.type === 'Identifier' ? callee.name
+    : callee.type === 'MemberExpression' && !callee.computed ? callee.object.name : undefined;
+  const name = aliases.get(localName) ?? localName;
+  const method = callee.type === 'MemberExpression' ? callee.property.name : undefined;
+  if (!testNames.has(name) || (method && !skipMethods.has(method) && method !== 'only')) return;
+  const title = args[0]?.type === 'StringLiteral' ? args[0].value
+    : args[0]?.type === 'TemplateLiteral' && !args[0].expressions.length ? args[0].quasis[0].value.cooked : undefined;
+  if (title === undefined) return;
+  const callback = args.find(arg => ['ArrowFunctionExpression', 'FunctionExpression'].includes(arg.type));
+  const options = args.find(arg => arg.type === 'ObjectExpression');
+  const skipOption = options?.properties.some(prop => prop.type === 'ObjectProperty' && !prop.computed &&
+    ['skip', 'todo'].includes(prop.key.name ?? prop.key.value) &&
+    ((prop.value.type === 'BooleanLiteral' && prop.value.value) ||
+      (prop.value.type === 'StringLiteral' && prop.value.value.length > 0)));
+  const skipped = name.startsWith('x') || skipMethods.has(method) || skipOption;
+  return {title, callback, skipped, suite: name === 'describe' || name === 'xdescribe', localName};
+}
+
+function onlyExpression(callback) {
+  if (!['ArrowFunctionExpression', 'FunctionExpression'].includes(callback?.type) ||
+      callback.async || callback.generator || callback.params.length) return;
+  const {body} = callback;
+  if (body.type !== 'BlockStatement') return body;
+  if (body.body.length === 1 && body.body[0].type === 'ExpressionStatement') return body.body[0].expression;
+}
+
+function literal(node) {
+  return ['StringLiteral', 'NumericLiteral', 'BooleanLiteral', 'NullLiteral'].includes(node?.type) ||
+    (node?.type === 'UnaryExpression' && node.operator === '-' && node.argument.type === 'NumericLiteral');
+}
+
+// Declaração de caso de borda como uma asserção direta de node:test sobre uma importação local.
+function declaredValidator(test, runnerBindings, assertBindings, importedFunctions) {
+  if (!test.title.startsWith(validatorPrefix) || !runnerBindings.has(test.localName)) return;
+  const assertion = onlyExpression(test.callback);
+  if (assertion?.type !== 'CallExpression') return;
+  const {callee, arguments: args} = assertion;
+  if (callee.type !== 'MemberExpression' || callee.computed || !assertBindings.has(callee.object.name)) return;
+  const method = callee.property.name;
+  const call = method === 'throws' && args.length === 1 ? onlyExpression(args[0])
+    : ['equal', 'strictEqual'].includes(method) && args.length === 2 && literal(args[1]) ? args[0] : undefined;
+  if (call?.type !== 'CallExpression' || call.callee.type !== 'Identifier' || !call.arguments.every(literal)) return;
+  return importedFunctions.get(call.callee.name);
+}
+
+/** Levanta candidatos estáticos sem confundir opções do teste com seu callback. */
+export function analyzeTestFile(relFile, content, parse) {
+  const ast = parse(content, {
+    sourceType: 'unambiguous',
+    plugins: [/\.(?:ts|mts|cts|tsx)$/.test(relFile) ? 'typescript' : null, /\.(?:js|jsx|tsx)$/.test(relFile) ? 'jsx' : null].filter(Boolean),
+  });
   const skippedTests = [];
   const assertionFreeTests = [];
   const flakyPatterns = [];
   const activeTests = [];
+  const validators = [];
+  let validatorDeclarations = 0;
   const importedFunctions = new Map();
-  for (const [, names, path] of content.matchAll(/import\s*\{([^}]+)\}\s*from\s*['"](\.[^'"]+)['"]/g)) {
-    const source = posix.normalize(posix.join(posix.dirname(relFile), path));
-    for (const item of names.split(',')) {
-      const match = /^(\w+)(?:\s+as\s+(\w+))?$/.exec(item.trim());
-      if (match) importedFunctions.set(match[2] ?? match[1], {source, name: match[1]});
-    }
-  }
+  const aliases = new Map();
+  const runnerBindings = new Set();
+  const assertBindings = new Set();
+  const topLevelCalls = new Set(ast.program.body.map(node => node.expression));
 
-  // Detecta test.skip / it.skip / describe.skip / test.fixme / xit / xtest / { skip: true } / t.skip
-  const skipPatterns = [
-    {re: /\b(?:test|it|describe)\s*\.\s*(?:skip|fixme)\s*\(\s*['"`]([^'"`]+)['"`]/g, kind: 'test.skip/fixme'},
-    {re: /\b(?:xit|xtest|xdescribe)\s*\(\s*['"`]([^'"`]+)['"`]/g, kind: 'xit/xtest'},
-    {re: /\b(?:test|it)\s*\(\s*['"`]([^'"`]+)['"`]\s*,\s*\{\s*skip\s*:\s*true\b/g, kind: 'option skip:true'},
-    {re: /\bt\.skip\s*\(\s*['"`]?([^'"`)\n]*)/g, kind: 't.skip'},
-  ];
-
-  const lines = content.split(/\r?\n/);
-  for (const {re, kind} of skipPatterns) {
-    let m;
-    while ((m = re.exec(content)) !== null) {
-      const line = lineOfOffset(content, m.index);
-      skippedTests.push({
-        title: m[1] || kind,
-        kind,
-        file: relFile,
-        line,
-        snippet: lines[line - 1]?.trim() ?? m[0],
-      });
-    }
-  }
-
-  // Detecta blocos de teste ativos: test('titulo', (...) => { ... }) ou it('titulo', ...)
-  const testBlockRegex = /\b(?:test|it)\s*(\.\s*(?:skip|fixme))?\s*\(\s*['"`]([^'"`]+)['"`]/g;
-  let tm;
-  while ((tm = testBlockRegex.exec(content)) !== null) {
-    const isSkipped = Boolean(tm[1]);
-    const title = tm[2];
-    const startLine = lineOfOffset(content, tm.index);
-    const afterHeader = content.slice(tm.index + tm[0].length, tm.index + tm[0].length + 80);
-    if (/^\s*,\s*\{\s*skip\s*:\s*true\b/.test(afterHeader)) {
-      continue;
-    }
-    const braceIdx = content.indexOf('{', tm.index + tm[0].length);
-    let body = '';
-    if (braceIdx !== -1) {
-      let depth = 0;
-      for (let i = braceIdx; i < content.length; i += 1) {
-        if (content[i] === '{') depth += 1;
-        else if (content[i] === '}') {
-          depth -= 1;
-          if (depth === 0) {
-            body = content.slice(braceIdx, i + 1);
-            break;
-          }
-        }
+  for (const declaration of ast.program.body) {
+    if (declaration.type !== 'ImportDeclaration' || declaration.importKind === 'type') continue;
+    const path = declaration.source.value;
+    for (const spec of declaration.specifiers) {
+      if (spec.importKind === 'type') continue;
+      const local = spec.local.name;
+      const name = spec.imported?.name ?? spec.imported?.value;
+      if (path === 'node:test' && (name ? ['test', 'it', 'describe'].includes(name) : spec.type === 'ImportDefaultSpecifier')) {
+        runnerBindings.add(local);
+        aliases.set(local, name ?? 'test');
+      }
+      if (['node:assert/strict', 'node:assert', 'assert/strict', 'assert'].includes(path) && !name) {
+        assertBindings.add(local);
+      }
+      if (path.startsWith('.') && name) {
+        const source = posix.normalize(posix.join(posix.dirname(relFile), path));
+        importedFunctions.set(local, {source, name});
       }
     }
-    if (isSkipped) continue;
-
-    const hasAssertion = /\b(?:assert\b|expect\s*\(|fc\.assert\s*\()/.test(body);
-    if (!hasAssertion) {
-      assertionFreeTests.push({
-        title,
-        file: relFile,
-        line: startLine,
-        snippet: lines[startLine - 1]?.trim() ?? title,
-      });
-    }
-
-    if (/\bMath\.random\s*\(|\bwaitForTimeout\s*\(/.test(body)) {
-      const flakyLine = findLineNumber(content, /Math\.random|waitForTimeout/, startLine);
-      flakyPatterns.push({
-        title,
-        file: relFile,
-        line: flakyLine,
-        snippet: lines[flakyLine - 1]?.trim() ?? 'Math.random/waitForTimeout',
-      });
-    }
-
-    const calls = [...body.matchAll(/\b([A-Za-z_]\w*)\s*\(/g)]
-      .map(match => importedFunctions.get(match[1])).filter(Boolean);
-    const requirements = [...title.matchAll(/\bREQ-\d+\b/g)].map(match => match[0]);
-    activeTests.push({title, file: relFile, line: startLine, hasAssertion, calls, requirements});
   }
 
-  return {file: relFile, activeTests, skippedTests, assertionFreeTests, flakyPatterns};
+  function record(test, node, kind) {
+    const line = node.loc.start.line;
+    const snippet = content.slice(node.start, node.start + 140).split('\n')[0];
+    skippedTests.push({title: test.title, kind, file: relFile, line, snippet});
+  }
+
+  function analyze(node, suppressed) {
+    const test = testCall(node, aliases);
+    if (!test) return;
+    const {title, callback, skipped, suite} = test;
+    if (!suite && title.startsWith(validatorPrefix)) validatorDeclarations++;
+    if (skipped) record(test, node, 'skip/todo explícito');
+    if (suite || skipped || suppressed) {
+      if (callback) visitAst(callback.body, child => analyze(child, skipped || suppressed));
+      return false;
+    }
+
+    const {line, column} = node.loc.start;
+    const item = {title, file: relFile, line, column: column + 1};
+    const calls = [];
+    let hasAssertion = false;
+    let conditionalSkip = false;
+    if (callback) visitAst(callback.body, child => {
+      if (testCall(child, aliases)) return analyze(child, false);
+      if (child.type !== 'CallExpression') return;
+      const call = child.callee;
+      const context = callback.params[0]?.name;
+      if (context && (member(call, context, 'skip') || member(call, context, 'todo'))) {
+        conditionalSkip = true;
+        record(test, child, 'skip/todo no callback');
+      }
+      if (call.name === 'assert' || call.name === 'expect' ||
+          (call.type === 'MemberExpression' && (assertBindings.has(call.object.name) || call.object.name === 'assert' ||
+            member(call, 'fc', 'assert')))) hasAssertion = true;
+      const imported = importedFunctions.get(call.name);
+      if (imported) calls.push(imported);
+      if (member(call, 'Math', 'random') || call.name === 'waitForTimeout' || call.property?.name === 'waitForTimeout') {
+        flakyPatterns.push({...item, line: child.loc.start.line, snippet: content.slice(child.start, child.end)});
+      }
+    });
+
+    if (!hasAssertion) assertionFreeTests.push({...item, snippet: title});
+    const requirements = [...title.matchAll(/\bREQ-\d+\b/g)].map(match => match[0]);
+    activeTests.push({...item, hasAssertion, conditionalSkip, calls, requirements});
+    const validator = topLevelCalls.has(node) && declaredValidator(test, runnerBindings, assertBindings, importedFunctions);
+    if (validator) validators.push({...item, validator});
+    return false;
+  }
+
+  visitAst(ast.program, node => analyze(node, false));
+  return {activeTests, skippedTests, assertionFreeTests, flakyPatterns, validators, validatorDeclarations};
 }
 
 function coverageRow(tool, version, status, detail) {
-  return {tool, version, status, detail: cleanSingleLine(detail)};
+  return {tool: cleanSingleLine(tool, 120), version, status, detail: cleanSingleLine(detail)};
 }
 
-function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests}) {
+function indexRuntimeStatuses(tests = []) {
+  const statuses = new Map();
+  for (const test of tests) {
+    const identity = testIdentity(test);
+    statuses.set(identity, statuses.has(identity) ? undefined : test.statuses);
+  }
+  return candidate => statuses.get(testIdentity({...candidate, name: candidate.title.slice(0, 200)}));
+}
+
+function referencesFunction(calls, file, fn) {
+  return calls.some(call => call.name === fn.name &&
+    (call.source === file || call.source === file.slice(0, -extname(file).length)));
+}
+
+export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests, incomplete}) {
   const tool = 'qa-matriz-estatica';
-  const version = '1';
+  const version = internal;
   const rows = [];
   const findings = [];
-  const observed = new Map(runtimeTests.map(t => [JSON.stringify([t.file, t.line, t.name]), t.statuses.join(',')]));
   const tests = testAnalyses.flatMap(t => t.activeTests).filter(t => t.hasAssertion);
-  const linked = (file, fn) => tests.filter(t => t.calls.some(call =>
-    call.name === fn.name && (call.source === file || call.source === file.slice(0, -extname(file).length))));
+  const linked = (file, fn) => tests.filter(t => referencesFunction(t.calls, file, fn));
+  const statusesOf = indexRuntimeStatuses(runtimeTests);
+  const providesEvidence = t => runtimeTests
+    ? statusesOf(t)?.every(status => status === 'passed')
+    : !t.conditionalSkip;
   const describe = matches => matches.map(t => {
-    const statuses = observed.get(JSON.stringify([t.file, t.line, t.title]));
-    return `${t.file}:${t.line} ${t.title} (${statuses ?? 'execução sem vínculo confirmado'})`;
+    const statuses = statusesOf(t);
+    const detail = statuses?.join(',') ?? (t.conditionalSkip ? 'skip/todo possível' : 'execução sem vínculo confirmado');
+    return `${t.file}:${t.line} ${t.title} (${detail})`;
   }).join('; ') || 'sem teste vinculado';
   const functions = sourceAnalyses.flatMap(src => src.functions.filter(fn => fn.isExported).map(fn => ({
     file: src.file, name: fn.name, line: fn.startLine, matches: linked(src.file, fn),
@@ -450,10 +477,10 @@ function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, r
       const line = idx + 1;
       rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
         `vínculo estático ${reqFile}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`));
-      if (matches.length === 0) {
+      if (!matches.some(providesEvidence) && !incomplete) {
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
-          message: `Requisito ${id} sem vínculo estático com teste que contenha asserção`,
-          evidence: `${reqFile}:${line} → ${identifiers || 'sem funcionalidade identificada'} → sem teste vinculado`});
+          message: `Requisito ${id} sem ${runtimeTests ? 'teste vinculado aprovado nas três passadas' : 'vínculo estático com teste ativo que contenha asserção'}`,
+          evidence: `${reqFile}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`});
       }
     }
   }
@@ -507,10 +534,10 @@ export function summarizeNodePasses(passes, sourceAnalyses, version) {
 
 async function runNodeCoverage({context, sourceAnalyses, version, failTool, runtime}) {
   if (failTool === suiteTool) throw new Error('QA_NODE_TEST_FORCED_FAILURE');
-  if (context.reason) return {coverageRow: coverageRow(suiteTool, version, 'skipped', context.reason)};
+  if (context.reason) return {coverageRow: coverageRow(suiteTool, unmeasured, 'skipped', context.reason)};
   const passes = [];
   for (let index = 0; index < 3; index++) {
-    passes.push(await executeNodeSuite({...context, measure: true}));
+    passes.push(await executeNodeSuite(context));
   }
   const result = summarizeNodePasses(passes, sourceAnalyses, version);
   runtime.tests = result.tests;
@@ -522,20 +549,21 @@ async function runNodeCoverage({context, sourceAnalyses, version, failTool, runt
   };
 }
 
-async function runStrykerMutationTool({context, sourceFiles, version, failTool, runtime}) {
+async function runStrykerMutationTool({context, sourceFiles, failTool, runtime}) {
   if (failTool === mutationTool) throw new Error('QA_STRYKER_FORCED_FAILURE');
-  if (context.reason) return {coverageRow: coverageRow(mutationTool, version, 'skipped', context.reason)};
-  const {Instrumenter} = await tryImportTool('@stryker-mutator/instrumenter', 'dist/src/index.js');
-  if (typeof Instrumenter !== 'function') throw new Error('QA_STRYKER_INSTRUMENTER_MISSING');
-  if (!runtime.baseline) return {coverageRow: coverageRow(mutationTool, version, 'skipped',
+  if (context.reason) return {coverageRow: coverageRow(mutationTool, unmeasured, 'skipped', context.reason)};
+  if (!runtime.baseline) return {coverageRow: coverageRow(mutationTool, unmeasured, 'skipped',
     'mutação requer três passadas estáveis com testes aprovados e sem falhas')};
 
+  const {api: {Instrumenter}, version} = await loadTool('@stryker-mutator/instrumenter', 'dist/src/index.js');
+  if (typeof Instrumenter !== 'function') throw new Error('QA_STRYKER_INSTRUMENTER_MISSING');
   const measuredFiles = new Set(runtime.baseline.coverage.map(item => item.file));
   const measuredSources = sourceFiles.filter(file => measuredFiles.has(file));
+  const unmeasuredSources = sourceFiles.length - measuredSources.length;
   const {selected, total} = await planMutations(Instrumenter, measuredSources, file =>
     readFileSync(join(context.workspace, file), 'utf8'));
 
-  if (total === 0) return {coverageRow: coverageRow(mutationTool, version, 'skipped', 'StrykerJS não retornou mutantes EqualityOperator')};
+  if (total === 0) return {coverageRow: coverageRow(mutationTool, version, 'skipped', `StrykerJS não retornou mutantes EqualityOperator; ${unmeasuredSources} fontes fora por falta de medição V8`)};
   const extraRows = [];
   const findings = [];
   let killed = 0;
@@ -566,104 +594,40 @@ async function runStrykerMutationTool({context, sourceFiles, version, failTool, 
   }
   return {
     coverageRow: coverageRow(mutationTool, version, errors ? 'failed' : 'ok',
-      `${selected.length}/${total} mutantes EqualityOperator executados: ${killed} mortos, ${survived} sobreviventes, ${errors} sem classificação por erro`),
+      `${selected.length}/${total} mutantes EqualityOperator tentados sob a mesma configuração V8 da referência sem patch: ${killed} mortos, ${survived} sobreviventes, ${errors} sem classificação por erro; ${total - selected.length} fora do limite e ${unmeasuredSources} fontes sem medição V8`),
     extraRows,
     findings,
   };
 }
 
-/**
- * 3. Propriedades e Fuzz de entradas externas com fast-check (seed fixa 20261119).
- */
-async function runFastCheckTool({sourceAnalyses, versions, failTool}) {
-  const toolName = 'fast-check';
-  const version = versions.fastCheck;
-  if (failTool === toolName) {
-    throw new Error('QA_FASTCHECK_FORCED_FAILURE');
-  }
-
-  const fcMod = await tryImportTool('fast-check', 'lib/fast-check.js');
-  const fc = fcMod.default ?? fcMod;
-
+export function measureValidatorCases({sourceAnalyses, testAnalyses, runtimeTests}) {
+  const tool = 'qa-propriedades-funcionais';
+  const declaredCount = testAnalyses.reduce((sum, test) => sum + test.validatorDeclarations, 0);
+  const statusesOf = indexRuntimeStatuses(runtimeTests);
   const findings = [];
-  let checkedValidators = 0;
-  const numRuns = 200;
-  const seed = 20261119;
-
-  for (const src of sourceAnalyses) {
-    for (const fn of src.functions) {
-      if (!fn.parserModel) continue;
-      checkedValidators += 1;
-      const model = fn.parserModel;
-
-      // Simulador seguro do modelo de guarda AST da função para entradas arbitrárias geradas pelo fast-check
-      const checkGuardForInput = rawInput => {
-        const str = String(rawInput ?? '');
-        if (model.usesParseInt) {
-          const isStrictPositiveDigits = /^[1-9]\d{0,3}$/.test(str);
-          if (model.hasRegexGuard && model.hasFiniteOrIntegerGuard && model.hasPositiveBoundGuard) {
-            return true;
-          }
-          // Sem guarda completa, entradas vazias, negativas ou não numéricas produzem NaN ou <= 0
-          if (!isStrictPositiveDigits) {
-            const parsed = Number.parseInt(str, 10);
-            if (Number.isNaN(parsed) || parsed <= 0 || String(parsed) !== str.trim()) {
-              return false;
-            }
-          }
-        }
-        if (model.usesJsonParse && !model.hasTryCatch) {
-          try {
-            JSON.parse(str);
-          } catch {
-            return false;
-          }
-        }
-        return true;
-      };
-
-      const arb = fc.oneof(fc.string(), fc.constantFrom('', '-1', '0', 'NaN', '15abc'));
-      const details = fc.check(fc.property(arb, raw => checkGuardForInput(raw)), {seed, numRuns});
-      if (details.failed) {
-        const counterexample = JSON.stringify(details.counterexample?.[0] ?? '');
-        findings.push({
-          tool: toolName,
-          rule: 'QA-FASTCHECK-PROPRIEDADE-VIOLADA',
-          file: src.file,
-          line: fn.startLine,
-          severity: 'alta',
-          message: `Modelo estático da guarda de '${fn.name}' viola propriedade fast-check`,
-          evidence: cleanSingleLine(
-            `contraexemplo para o modelo estático encolhido pelo fast-check (seed=${seed}, ${numRuns} entradas): input=${counterexample} viola invariante de validacao`,
-          ),
-        });
-      }
+  let measured = 0;
+  for (const candidate of testAnalyses.flatMap(t => t.validators)) {
+    const {validator, file, line, title} = candidate;
+    if (!sourceAnalyses.some(src => src.functions.some(fn => fn.isExported &&
+      referencesFunction([validator], src.file, fn)))) continue;
+    const statuses = statusesOf(candidate);
+    if (statuses?.length !== 3 || !statuses.every(status => status === 'passed' || status === 'failed')) continue;
+    measured++;
+    if (statuses.includes('failed')) {
+      findings.push({tool, rule: 'QA-VALIDADOR-CASO-REPROVADO', file, line, severity: 'alta',
+        message: `Caso funcional declarado para '${validator.name}' reprovado pelo node:test`,
+        evidence: `${title} nas três passadas: ${statuses.join(', ')}`});
     }
   }
-
   return {
-    coverageRow: {
-      tool: toolName,
-      version,
-      status: 'ok',
-      detail: cleanSingleLine(
-        `${checkedValidators} modelos estáticos de validadores/parsers verificados com ${numRuns} entradas geradas por propriedade (seed=${seed}); ${findings.length} violacoes`,
-      ),
-    },
+    coverageRow: coverageRow(tool, internal, measured ? 'ok' : 'skipped',
+      `${measured} de ${declaredCount} casos de borda sintéticos declarados medidos nas três passadas; ${findings.length} com reprovação`),
     findings,
   };
 }
 
-/**
- * 4. Auditoria de testes Playwright / E2E / unitários (testes pulados pelo healer/autor, sem asserção ou oscilantes).
- */
-async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
-  const toolName = 'playwright-test-audit';
-  const version = versions.playwrightAudit;
-  if (failTool === toolName) {
-    throw new Error('QA_PLAYWRIGHT_AUDIT_FORCED_FAILURE');
-  }
-
+function runStaticTestAudit({testAnalyses, version}) {
+  const toolName = 'qa-auditoria-estatica-testes';
   const findings = [];
   let totalActive = 0;
   let totalSkipped = 0;
@@ -681,7 +645,7 @@ async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
         file: sk.file,
         line: sk.line,
         severity: 'alta',
-        message: `Marcação estática de teste pulado ('${sk.title}')`,
+        message: `Marcação estática de skip/todo em '${sk.title}'`,
         evidence: cleanSingleLine(`${sk.kind} em ${sk.file}:${sk.line} -> ${sk.snippet}`),
       });
     }
@@ -717,7 +681,7 @@ async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
       version,
       status: 'ok',
       detail: cleanSingleLine(
-        `${testAnalyses.length} arquivos de teste auditados por análise estática (${totalActive} blocos, ${totalSkipped} marcações de skip, ${totalNoAssert} sem asserção identificada)`,
+        `${testAnalyses.length} arquivos de teste analisados com @babel/parser (${totalActive} blocos, ${totalSkipped} marcações de skip, ${totalNoAssert} sem asserção identificada)`,
       ),
     },
     findings,
@@ -725,11 +689,10 @@ async function runPlaywrightTestAuditTool({testAnalyses, versions, failTool}) {
 }
 
 /**
- * 5. Acessibilidade básica de telas com axe-core 4.14.1 (sem executar scripts da página).
+ * Acessibilidade básica de HTML estático, sem executar scripts da página.
  */
-async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
+async function runAxeCoreTool({workspace, htmlFiles, failTool}) {
   const toolName = 'axe-core';
-  const version = versions.axe;
   if (failTool === toolName) {
     throw new Error('QA_AXE_FORCED_FAILURE');
   }
@@ -738,7 +701,7 @@ async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
     return {
       coverageRow: {
         tool: toolName,
-        version,
+        version: unmeasured,
         status: 'skipped',
         detail: 'nenhum arquivo HTML encontrado no repositorio',
       },
@@ -746,12 +709,13 @@ async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
     };
   }
 
-  const axeMod = await tryImportTool('axe-core', 'axe.js');
-  const {JSDOM} = await tryImportTool('jsdom', 'lib/api.js');
+  const {api: axeMod, version} = await loadTool('axe-core', 'axe.js');
+  const {api: {JSDOM}, version: domVersion} = await loadTool('jsdom', 'lib/api.js');
   const axeSource = (axeMod.default ?? axeMod).source;
   if (!axeSource || !JSDOM) throw new Error('QA_AXE_TOOL_INCOMPLETE');
 
   const findings = [];
+  let incompleteChecks = 0;
   for (const relHtml of htmlFiles) {
     const rawHtml = readFileSync(join(workspace, relHtml), 'utf8');
     // Remove qualquer tag <script> antes de criar o DOM para garantir que nenhum script não confiável exista
@@ -763,12 +727,13 @@ async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
       const results = await dom.window.axe.run(dom.window.document, {
         runOnly: {
           type: 'tag',
-          values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'],
+          values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'],
         },
         rules: {
           'color-contrast': {enabled: false},
         },
       });
+      incompleteChecks += results.incomplete.length;
       for (const violation of results.violations ?? []) {
         const ruleId = String(violation.id ?? 'wcag').toUpperCase();
         const severity =
@@ -803,7 +768,7 @@ async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
       version,
       status: 'ok',
       detail: cleanSingleLine(
-        `${htmlFiles.length} arquivos HTML auditados com regras WCAG 2.2 AA (axe-core); ${findings.length} violacoes encontradas`,
+        `HTML estático em jsdom ${domVersion}, sem scripts nem layout; regra color-contrast desativada. ${htmlFiles.length} arquivos em regras selecionadas WCAG A/AA e boas práticas; ${findings.length} violações e ${incompleteChecks} resultados de regra inconclusivos`,
       ),
     },
     findings,
@@ -813,9 +778,17 @@ async function runAxeCoreTool({workspace, htmlFiles, versions, failTool}) {
 /**
  * 6. Contrato de API (OpenAPI 3 via @apidevtools/swagger-parser cruzado com rotas do código).
  */
-async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, versions, failTool}) {
+function routeShape(path, openapi = false) {
+  if (!path.startsWith('/') || /[?*()+]|\$\{/.test(path)) return;
+  const normalized = openapi
+    ? path.replace(/\{[^/{}]+\}/g, '\u0000')
+    : path.replace(/:[A-Za-z_]\w*(?=\/|[.-]|$)/g, '\u0000');
+  if (/[{}:]/.test(normalized)) return;
+  return normalized;
+}
+
+async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete, failTool}) {
   const toolName = 'swagger-parser';
-  const version = versions.swagger;
   if (failTool === toolName) {
     throw new Error('QA_SWAGGER_FORCED_FAILURE');
   }
@@ -824,18 +797,23 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
   if (openapiFiles.length === 0 && allRoutes.length === 0) {
     return {
       coverageRow: {
-        tool: toolName,
-        version,
+        tool: 'qa-contrato-openapi',
+        version: unmeasured,
         status: 'skipped',
-        detail: 'nenhuma especificacao OpenAPI nem rota HTTP encontrada no repositorio',
+        detail: 'nenhuma especificação OpenAPI nem rota HTTP reconhecida na cópia',
       },
       extraRows: [],
       findings: [],
     };
   }
 
-  const swMod = await tryImportTool('@apidevtools/swagger-parser', 'lib/index.js');
-  const SwaggerParser = swMod.default ?? swMod;
+  let version = unmeasured;
+  let SwaggerParser;
+  if (openapiFiles.length) {
+    const {api, version: installedVersion} = await loadTool('@apidevtools/swagger-parser', 'lib/index.js');
+    SwaggerParser = api.default ?? api;
+    version = installedVersion;
+  }
 
   const findings = [];
   const documentedOperations = new Set(); // "METHOD /path"
@@ -857,17 +835,25 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
         if (!op) continue;
         totalSpecOps += 1;
         documentedOperations.add(`${method.toUpperCase()} ${routePath}`);
+        const shape = routeShape(routePath, true);
+        if (shape !== undefined) documentedOperations.add(`${method.toUpperCase()} ${shape}`);
       }
     }
   }
 
   const extraRows = [];
+  let unchecked = 0;
   for (const route of allRoutes) {
     const key = `${route.method} ${route.path}`;
-    const inContract = documentedOperations.has(key);
-    if (!inContract) {
+    const shape = routeShape(route.path);
+    const inContract = documentedOperations.has(key) ||
+      (shape !== undefined && documentedOperations.has(`${route.method} ${shape}`));
+    const excluded = inContract ? undefined : shape === undefined ? 'sintaxe de rota fora do cruzamento'
+      : incomplete ? 'contrato não confirmado na cópia parcial' : undefined;
+    if (excluded) unchecked++;
+    if (!inContract && !excluded) {
       findings.push({
-        tool: toolName,
+        tool: openapiFiles.length ? toolName : 'qa-contrato-openapi',
         rule: 'QA-CONTRATO-ROTA-SEM-OPENAPI',
         file: route.file,
         line: route.line,
@@ -876,25 +862,15 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
         evidence: cleanSingleLine(`rota ${key} em ${route.file}:${route.line} (${route.snippet}) ausente de ${openapiFiles.join(', ') || 'openapi.json'}`),
       });
     }
-    extraRows.push({
-      tool: `qa-rota:${key}`,
-      version,
-      status: 'ok',
-      detail: cleanSingleLine(
-        `rota ${key} (${route.file}:${route.line}): ${inContract ? 'documentada e validada no contrato OpenAPI' : 'ausente no contrato OpenAPI'}`,
-      ),
-    });
+    extraRows.push(coverageRow(`qa-rota:${key}`, version, excluded ? 'skipped' : 'ok',
+      `rota ${key} (${route.file}:${route.line}): ${excluded ??
+        (inContract ? 'documentada e validada no contrato OpenAPI' : 'ausente no contrato OpenAPI')}`));
   }
 
   return {
-    coverageRow: {
-      tool: toolName,
-      version,
-      status: 'ok',
-      detail: cleanSingleLine(
-        `${openapiFiles.length} especificacao OpenAPI validada (${totalSpecOps} operacoes no contrato, ${allRoutes.length} rotas conferidas no codigo)`,
-      ),
-    },
+    coverageRow: coverageRow(openapiFiles.length ? toolName : 'qa-contrato-openapi', version,
+      openapiFiles.length || unchecked < allRoutes.length ? 'ok' : 'skipped',
+      `${openapiFiles.length} especificações validadas, ${totalSpecOps} operações do contrato, ${allRoutes.length - unchecked} rotas conferidas e ${unchecked} sem conferência; métodos GET, POST, PUT, PATCH e DELETE`),
     extraRows,
     findings,
   };
@@ -906,9 +882,8 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
 export async function collectQaModule(options = {}) {
   const repoDir = options.repoDir ?? process.env.QA_REPO_DIR ?? '/repo';
   const failTool = options.failTool ?? process.env.QA_FAIL_TOOL ?? '';
-  const versions = loadLockedVersions();
 
-  const {workRoot, workspace, copiedFiles, incomplete} = copyRepoToIsolatedTmp(repoDir);
+  const {workRoot, workspace, copiedFiles, incomplete, exclusions} = copyRepoToIsolatedTmp(repoDir);
   try {
     const codeFiles = copiedFiles.filter(f => /\.(?:[cm]?[jt]s|tsx)$/.test(f) && !/\.d\.[cm]?ts$/.test(f));
     const testFiles = codeFiles.filter(f => /(?:^|\/)(?:test|tests)\//.test(f) ||
@@ -919,13 +894,35 @@ export async function collectQaModule(options = {}) {
     const reqFiles = copiedFiles.filter(f => /(?:^|\/)(?:requisitos|requirements)\.md$/i.test(f));
 
     const sourceAnalyses = sourceFiles.map(rel => analyzeSourceFile(rel, readFileSync(join(workspace, rel), 'utf8')));
-    const testAnalyses = testFiles.map(rel => analyzeTestFile(rel, readFileSync(join(workspace, rel), 'utf8')));
+    const testAnalyses = [];
+    let parserVersion = unmeasured;
+    let parserError;
+    let omittedTestFiles = 0;
+    if (testFiles.length) {
+      try {
+        const {api: {parse}, version} = await loadTool('@babel/parser', 'lib/index.js');
+        parserVersion = version;
+        for (const file of testFiles) {
+          try {
+            testAnalyses.push(analyzeTestFile(file, readFileSync(join(workspace, file), 'utf8'), parse));
+          } catch {
+            omittedTestFiles++;
+          }
+        }
+      } catch (error) {
+        parserError = error;
+      }
+    }
 
-    const coverage = [];
+    const coverage = [coverageRow('qa-snapshot', internal, 'ok',
+      `${copiedFiles.length} arquivos copiados (${incomplete ? 'cópia parcial' : 'dentro do escopo'}); limites de 400 arquivos, 1 MiB por arquivo, 64 MiB no total e 10 níveis`)];
+    for (const [reason, count] of exclusions) {
+      coverage.push(coverageRow('qa-snapshot-exclusao', internal, 'skipped', `${count} ${reason}`));
+    }
     const extraCoverageRows = [];
     const findings = [];
 
-    const runtime = {tests: [], baseline: null};
+    const runtime = {tests: undefined, baseline: null};
     const context = {repoDir, workspace, workRoot};
     let selectionError;
     try {
@@ -933,7 +930,8 @@ export async function collectQaModule(options = {}) {
       const selection = selectNodeSuite({
         manifest, testFiles,
         readTest: file => readFileSync(join(workspace, file), 'utf8'),
-        incomplete: incomplete || copiedFiles.some(f => f.endsWith('/package.json')),
+        incomplete,
+        nestedManifest: copiedFiles.some(f => f.endsWith('/package.json')),
       });
       Object.assign(context, selection);
       if (!context.reason && !executionAllowed(repoDir)) {
@@ -944,6 +942,15 @@ export async function collectQaModule(options = {}) {
       selectionError = error;
     }
 
+    if (context.files && context.files.length < testFiles.length) {
+      coverage.push(coverageRow('qa-selecao-execucao', internal, 'skipped',
+        `${testFiles.length - context.files.length} arquivos de teste fora dos padrões de descoberta do node:test`));
+    }
+    if (omittedTestFiles) {
+      coverage.push(coverageRow('qa-sintaxe-testes', parserVersion, 'skipped',
+        `${omittedTestFiles} arquivos de teste ilegíveis ou com sintaxe não analisada`));
+    }
+    const matrixPartial = incomplete || !!parserError || omittedTestFiles > 0;
     const toolRunners = [
       {
         name: suiteTool,
@@ -955,46 +962,52 @@ export async function collectQaModule(options = {}) {
       },
       {
         name: mutationTool,
-        version: versions.stryker,
         run: () => {
           if (selectionError) throw selectionError;
-          return runStrykerMutationTool({context, sourceFiles, version: versions.stryker, failTool, runtime});
+          return runStrykerMutationTool({context, sourceFiles, failTool, runtime});
         },
       },
       {
         name: 'qa-matriz-estatica',
-        version: '1',
-        run: () => buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles, runtimeTests: runtime.tests}),
+        partial: matrixPartial,
+        run: () => buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles,
+          runtimeTests: runtime.tests, incomplete: matrixPartial}),
       },
       {
-        name: 'fast-check',
-        version: versions.fastCheck,
-        run: () => runFastCheckTool({sourceAnalyses, versions, failTool}),
+        name: 'qa-propriedades-funcionais',
+        partial: matrixPartial,
+        run: () => measureValidatorCases({sourceAnalyses, testAnalyses, runtimeTests: runtime.tests}),
       },
       {
-        name: 'playwright-test-audit',
-        version: versions.playwrightAudit,
-        run: () => runPlaywrightTestAuditTool({testAnalyses, versions, failTool}),
+        name: 'qa-auditoria-estatica-testes',
+        partial: matrixPartial,
+        run: () => {
+          if (parserError) throw parserError;
+          if (!testAnalyses.length) return {coverageRow: coverageRow('qa-auditoria-estatica-testes', unmeasured,
+            'skipped', 'nenhum arquivo de teste com sintaxe analisada')};
+          return runStaticTestAudit({testAnalyses, version: parserVersion});
+        },
       },
       {
         name: 'axe-core',
-        version: versions.axe,
-        run: () => runAxeCoreTool({workspace, htmlFiles, versions, failTool}),
+        partial: incomplete,
+        run: () => runAxeCoreTool({workspace, htmlFiles, failTool}),
       },
       {
-        name: 'swagger-parser',
-        version: versions.swagger,
-        run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, versions, failTool}),
+        name: 'qa-contrato-openapi',
+        partial: incomplete,
+        run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete, failTool}),
       },
     ];
 
     for (const runner of toolRunners) {
       try {
         const res = await runner.run();
-        coverage.push(res.coverageRow);
-        if (Array.isArray(res.extraRows)) {
-          extraCoverageRows.push(...res.extraRows);
-        }
+        const scoped = row => runner.partial
+          ? coverageRow(row.tool, row.version, row.status, `escopo parcial; ${row.detail}`)
+          : row;
+        coverage.push(scoped(res.coverageRow));
+        if (res.extraRows) extraCoverageRows.push(...res.extraRows.map(scoped));
         if (Array.isArray(res.findings)) {
           for (const item of res.findings) {
             findings.push({
@@ -1010,22 +1023,15 @@ export async function collectQaModule(options = {}) {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        coverage.push({
-          tool: runner.name,
-          version: runner.version,
-          status: 'failed',
-          detail: cleanSingleLine(`falha na ferramenta ${runner.name}: ${message}`),
-        });
+        coverage.push(coverageRow(runner.name, runner.version ?? unmeasured, 'failed',
+          `${runner.partial ? 'escopo parcial; ' : ''}falha em ${runner.name}: ${message}`));
       }
     }
 
-    // Carga e falhas ativas (k6) só rodam em homologação com rede dedicada; no coletor offline ficam skipped
-    coverage.push({
-      tool: 'k6-homologacao',
-      version: '0.54.0',
-      status: 'skipped',
-      detail: 'rede desligada por padrao e sem URL de homologacao declarada; carga ativa nao executada no coletor offline',
-    });
+    coverage.push(
+      coverageRow('qa-fuzz', unmeasured, 'skipped', 'geração aleatória de entradas não executada'),
+      coverageRow('qa-carga', unmeasured, 'skipped', 'carga ativa não executada no coletor offline'),
+    );
 
     coverage.push(...extraCoverageRows);
 
@@ -1057,10 +1063,14 @@ async function main() {
   writeStdout(payload);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(error => {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`QA_COLLECTOR_FATAL: ${message}\n`);
-    process.exit(1);
+    process.stdout.write(`${JSON.stringify({
+      coverage: [coverageRow('qa-coletor', internal, 'failed', `falha antes de concluir a coleta: ${message}`)],
+      findings: [],
+    })}\n`);
+    process.exitCode = 1;
   });
 }
