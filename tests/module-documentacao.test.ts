@@ -949,7 +949,10 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
   const reflection = {kind: 1, name: 'x', children: [
     callable('first', 4, 64, 16), callable('second', 8, 64, 16),
     {...member('Billing', 10, 128, 13), children: [
-      callable('charge', 15, 2048, 2, link('MissingCharge')),
+      callable('charge', 15, 2048, 2, {
+        summary: [{kind: 'text', text: 'Charge used to document `@param legacy`.'}],
+        blockTags: [{tag: '@see', content: link('MissingCharge').summary}],
+      }),
       {...member('hidden', 17, 2048, 10), flags: {isPrivate: true}},
     ]},
     {...member('Contract', 20, 256, 17), children: [callable('submit', 22, 2048, 2)]},
@@ -972,10 +975,15 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     'export function sample(current: string) { return current; }'].join('\n');
   const multilineCode = source.replace(' * ```js', ' * Inline ``example').replace(' * ```', ' * end``');
   const exampleWithOpener = source.replace(' * @param legacy\n', ' * const text = "/**";\n');
-  for (const example of [source, multilineCode, multilineCode.replace('@param legacy obsolete', 'See the example.'), exampleWithOpener]) {
+  const unusedParam = '[warning] The signature sample has an @param with name "legacy", which was not used';
+  for (const example of [source, exampleWithOpener]) {
+    assert.deepEqual(parseTypedocReport(sample(7), unusedParam, root, () => example).findings
+      .map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+  }
+  for (const example of [source.replace(' * ```\n', ' * Aberto.\n'),
+    multilineCode, multilineCode.replace('@param legacy obsolete', 'See the example.')]) {
     const result = parseTypedocReport(
-      sample(7),
-      '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => example,
+      sample(7), unusedParam, root, () => example,
     );
     assert.deepEqual(result.findings, []);
     assert.equal(result.unlocatedWarnings[0]?.rule, 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
@@ -1147,7 +1155,7 @@ test('TypeDoc usa a declaração de avisos reais com mapas de declaração inequ
   try {
     const files = {
       'package.json': '{"name":"fixture"}',
-      'index.ts': ['Confirmed', 'Empty', 'Nearby', 'Unmapped', 'Wrong', 'Multiple', 'Missing', 'Direct']
+      'index.ts': ['Confirmed', 'Empty', 'Nearby', 'Unmapped', 'Wrong', 'Multiple', 'Missing', 'Indexed', 'Hybrid', 'Direct']
         .map(name => `export {${name}} from "./types/${name.toLowerCase()}";`).join('\n'),
       'types/confirmed.d.ts': 'export interface Confirmed {\n}',
       'types/empty.d.ts': 'export interface Empty {}',
@@ -1156,12 +1164,16 @@ test('TypeDoc usa a declaração de avisos reais com mapas de declaração inequ
       'types/wrong.d.ts': 'export interface Wrong {}',
       'types/multiple.d.ts': '\n\nexport interface Multiple {}',
       'types/missing.d.ts': 'export interface Missing {}',
+      'types/indexed.d.ts': 'export interface Indexed {}',
+      'types/hybrid.d.ts': 'export interface Hybrid {}',
       'types/direct.d.ts': '\n\n\nexport interface Direct {}',
       'original/confirmed.ts': '\n/** Original. */\nexport interface Confirmed {}',
       'original/empty.ts': '/** Original. */\nexport interface Empty {}',
       'original/nearby.ts': '/** Original. */\nexport interface Nearby {}',
       'original/unmapped.ts': '/** Original. */\nexport interface Unmapped {}',
       'original/wrong.ts': '/** Original. */\nexport interface Different {}',
+      'original/indexed.ts': '/** Original. */\nexport interface Indexed {}',
+      'original/hybrid.ts': '/** Original. */\nexport interface Hybrid {}',
       'original/other.ts': 'export {};',
     };
     for (const [file, body] of Object.entries(files)) {
@@ -1182,18 +1194,25 @@ test('TypeDoc usa a declaração de avisos reais com mapas de declaração inequ
         version: 3, file: `${name}.d.ts`, sourceRoot: '../original', sources, names: [], mappings,
       }));
     }
+    const sections = [{offset: {line: 0, column: 0},
+      map: {version: 3, sources: ['../original/indexed.ts'], names: [], mappings: 'iBACiB'}}];
+    writeFileSync(join(root, 'types/indexed.d.ts.map'), JSON.stringify({version: 3, file: 'indexed.d.ts', sections}));
+    // The root mapping alone would confirm Hybrid at the exact coordinates.
+    writeFileSync(join(root, 'types/hybrid.d.ts.map'), JSON.stringify({
+      version: 3, file: 'hybrid.d.ts', sourceRoot: '../original', sources: ['hybrid.ts'], names: [], mappings: 'iBACiB', sections,
+    }));
     const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
     const coverage = result.coverage.find(row => row.tool === 'typedoc');
     assert.equal(coverage?.status, 'ok', coverage?.detail);
-    assert.match(coverage.detail, /avisos_sem_origem=6$/);
+    assert.match(coverage.detail, /avisos_sem_origem=8$/);
     const findings = result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC');
     assert.deepEqual(findings.map(finding => [finding.file, finding.line]).sort(),
       [['types/confirmed.d.ts', 1], ['types/direct.d.ts', 4]]);
     assert.match(findings.find(finding => finding.file === 'types/confirmed.d.ts')?.evidence ?? '',
       /defined in fixture\/original\/confirmed\.ts,/);
     const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
-    assert.equal(pending.length, 6);
-    for (const name of ['Empty', 'Nearby', 'Unmapped', 'Wrong', 'Multiple', 'Missing']) {
+    assert.equal(pending.length, 8);
+    for (const name of ['Empty', 'Nearby', 'Unmapped', 'Wrong', 'Multiple', 'Missing', 'Indexed', 'Hybrid']) {
       assert.ok(pending.some(row => row.detail.includes(`.${name}"`) && row.detail.includes('Linha indeterminada.')), name);
     }
   } finally {
@@ -1223,6 +1242,171 @@ test('TypeDoc mantém na cobertura o @param ambíguo entre exemplo inline e text
       && row.detail.includes('DOC-TYPEDOC-PARAM-DESATUALIZADO'));
     assert.equal(pending.length, 1);
     assert.match(pending[0].detail, /Linha indeterminada\..*"illustrated".*"@param legacy"/);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('TypeDoc distingue o comentário efetivo do membro, exemplos e tags diretas', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-effective-comment-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), [
+      '/** Contrato da API.',
+      ' * @property value Consulte {@link MissingValue}.',
+      ' */',
+      'export interface Api {',
+      '  /** Outra descrição para {@link MissingValue}. */',
+      '  value: string;',
+      '  /** Consulte {@linkcode MissingDirectMember}. */',
+      '  direct: string;',
+      '}',
+      '/** Visão geral.',
+      ' * ``` ts',
+      ' * @param legacy Exemplo.',
+      ' * ```',
+      ' * @param legacy Parâmetro antigo.',
+      ' */',
+      'export function fenced(current: string) { return current; }',
+      '/** Consulte {@link MissingOperation}.',
+      ' * @throws {Error} quando o valor é inválido.',
+      ' */',
+      'export function operate() {}',
+      '/** Prepara a operação.',
+      ' * @throws Error ao chamar {@linkplain MissingPreparation}.',
+      ' */',
+      'export function prepare() {}',
+      '/** Exemplo documentado.',
+      ' * @example Uso',
+      ' * ```ts',
+      ' * illustrated()',
+      ' * ```',
+      ' * Consulte {@link MissingExample}.',
+      ' */',
+      'export function illustrated() {}',
+    ].join('\n'));
+
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    const coverage = result.coverage.find(row => row.tool === 'typedoc');
+    assert.equal(coverage?.status, 'ok', coverage?.detail);
+    assert.match(coverage.detail, /avisos_sem_origem=2$/);
+    assert.deepEqual(result.findings.filter(finding => finding.tool === 'typedoc')
+      .map(finding => [finding.rule, finding.file, finding.line]).sort(), [
+      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 17],
+      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 22],
+      ['DOC-TYPEDOC-LINK-QUEBRADO', 'api.ts', 7],
+      ['DOC-TYPEDOC-PARAM-DESATUALIZADO', 'api.ts', 14],
+    ]);
+    const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+    assert.equal(pending.length, 2);
+    assert.ok(pending.some(row => /Linha indeterminada\..*"Api\.value".*\{@link MissingValue\}/.test(row.detail)));
+    assert.ok(pending.some(row => /Linha indeterminada\..*"illustrated".*\{@link MissingExample\}/.test(row.detail)));
+    const catalog = assembleDocumentationArtifacts(result.coverage)['api.json'];
+    assert.equal(catalog.status, 'present');
+    if (catalog.status === 'present') {
+      const symbols = JSON.parse(catalog.content) as {qualifiedName: string; summaryText: string}[];
+      assert.equal(symbols.find(symbol => symbol.qualifiedName === 'Api.value')?.summaryText, 'Consulte MissingValue.');
+    }
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('TypeDoc preserva avisos de membros alcançados por @property em namespaces ancestrais', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-ancestor-comment-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), [
+      '/** Namespace externo.',
+      ' * @prop Inner.Api.far Consulte {@link MissingFar}.',
+      ' */',
+      'export namespace Outer {',
+      '  /** Namespace interno.',
+      '   * @property Api.value Consulte {@link MissingValue} e {@link MissingAncestorOnly}.',
+      '   */',
+      '  export namespace Inner {',
+      '    /** Contrato da API. */',
+      '    export interface Api {',
+      '      /** Outra descrição para {@link MissingValue}. */',
+      '      value: string;',
+      '      /** Outra descrição para {@link MissingFar}. */',
+      '      far: string;',
+      '      /** Consulte {@link MissingDirectMember}. */',
+      '      direct: string;',
+      '    }',
+      '  }',
+      '}',
+      '/** Consulte {@link MissingIndependent}. */',
+      'export function independent() {}',
+      '/** @property Api.value Consulte {@link MissingMerged}. */',
+      'export namespace Merged {',
+      '  /** Contrato da API. */',
+      '  export interface Api {',
+      '    /** Outra descrição para {@link MissingMerged}. */',
+      '    value: string;',
+      '    /** Consulte {@link MissingUnproven}. */',
+      '    unproven: string;',
+      '  }',
+      '}',
+      'export namespace Merged {',
+      '  /** Valor padrão. */',
+      '  export const defaultValue = 0;',
+      '}',
+    ].join('\n'));
+
+    const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+    const coverage = result.coverage.find(row => row.tool === 'typedoc');
+    assert.equal(coverage?.status, 'ok', coverage?.detail);
+    assert.equal(coverage.version, '0.28.20');
+    assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
+      .map(finding => [finding.file, finding.line, finding.evidence]).sort(), [
+      ['api.ts', 15, '[warning] Failed to resolve link to "MissingDirectMember" in comment for Outer.Inner.Api.direct'],
+      ['api.ts', 20, '[warning] Failed to resolve link to "MissingIndependent" in comment for independent'],
+    ]);
+    const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+    const expectedWarnings = [
+      ['Merged.Api.unproven', 'MissingUnproven'],
+      ['Merged.Api.value', 'MissingMerged'],
+      ['Outer.Inner.Api.far', 'MissingFar'],
+      ['Outer.Inner.Api.value', 'MissingAncestorOnly'],
+      ['Outer.Inner.Api.value', 'MissingValue'],
+    ].map(([member, link]) => 'DOC-TYPEDOC-LINK-QUEBRADO. Linha indeterminada. '
+      + `Comentário JSDoc de "${member}" contém referência {@link ${link}} para símbolo inexistente.`);
+    assert.ok(pending.every(row => row.status === 'skipped'));
+    assert.deepEqual(pending.map(row => row.detail).sort(), expectedWarnings);
+  } finally {
+    rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('TypeDoc verifica comentários de arquivo nas reflexões de projeto e módulo', {skip: skipLocalTools}, async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-file-comment-'));
+  try {
+    writeFileSync(join(root, 'api.ts'), [
+      '/** @packageDocumentation',
+      ' * @property Api.value Consulte {@link MissingFromFile}.',
+      ' */',
+      '/** Contrato da API. */',
+      'export interface Api {',
+      '  /** Outra descrição para {@link MissingFromFile}. */',
+      '  value: string;',
+      '}',
+      '/** Consulte {@link MissingDirect}. */',
+      'export function direct() {}',
+    ].join('\n'));
+    for (const prefix of ['', 'api.']) {
+      if (prefix) writeFileSync(join(root, 'extra.ts'), '/** Controle. */\nexport const extra = 1;');
+      const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
+      const coverage = result.coverage.find(row => row.tool === 'typedoc');
+      assert.equal(coverage?.status, 'ok', coverage?.detail);
+      assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
+        .map(finding => [finding.file, finding.line, finding.evidence]), [
+        ['api.ts', 9, `[warning] Failed to resolve link to "MissingDirect" in comment for ${prefix}direct`],
+      ]);
+      const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
+      assert.deepEqual(pending.map(row => row.detail), [
+        'DOC-TYPEDOC-LINK-QUEBRADO. Linha indeterminada. '
+          + `Comentário JSDoc de "${prefix}Api.value" contém referência {@link MissingFromFile} para símbolo inexistente.`,
+      ]);
+    }
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
@@ -1350,8 +1534,7 @@ test('ferramentas fixadas encontram as quatro arestas ausentes e conferem o cont
   const params = result.findings.filter(f => f.rule === 'DOC-TYPEDOC-PARAM-DESATUALIZADO');
   assert.ok(params.some(f => f.line === 6));
   assert.ok(params.some(f => f.line === 12));
-  assert.ok(result.coverage.some(row => row.tool === 'typedoc:aviso' && row.detail.includes('Linha indeterminada.')
-    && row.detail.includes('.sample"') && row.detail.includes('"@param legacy"')));
+  assert.ok(params.some(f => f.file === 'src/billing.ts' && f.line === 31 && f.message.includes('"sample"')));
   assert.ok(params.some(f => f.file === 'src/billing.ts' && f.line === 36 && f.message.includes('"default"')));
   assert.ok(result.findings.some(f => f.rule === 'DOC-TYPEDOC-LINK-QUEBRADO' && f.line === 13));
   const clean = await runCollector({repoDir: join(FIXTURES, 'coverage-control'), toolsRoot: MODULE_DEPLOY_DIR});
