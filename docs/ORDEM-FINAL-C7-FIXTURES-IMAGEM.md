@@ -1,0 +1,5 @@
+# Controles de imagem e rota estática em desempenho
+
+O parecer de 00bc71dd confirmou a lógica de seleção estática e identificou que o PNG de um pixel da fixture tem CRC de IDAT inválido. Use PNG válido, verifique os bytes efetivamente servidos e teste tanto recurso ausente na raiz como sob o prefixo da montagem. Escopo exclusivo de tests/module-desempenho-collector.test.mjs e relatório. A imagem do coletor e a rotina do benchmark permanecem as mesmas. Se acionado como revisor somente leitura, examine só os requisitos desta ordem no diff.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C7-FIXTURES-IMAGEM.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

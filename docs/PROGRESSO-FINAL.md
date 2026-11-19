@@ -765,3 +765,9 @@ PAUSADO-COTA
 - 19/11/2026 17:50 UTC — C-EXAME-VINCULO-R2 encerrado com código 0.
 - 19/11/2026 17:50 UTC — revisor-C7-R10 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:51 UTC — A suíte do candidato anterior de arquitetura c4d49bcb aprovou 261 arquivos e falhou em cinco. Um teste dependia de um caminho temporário externo e o exame excedeu os 180 s do executor. O teste de mascaramento agora usa AC_TEST_DATABASE_URL com as mesmas verificações locais. As provas temporizadas estão sendo repetidas em banco descartável.
+- 19/11/2026 17:51 UTC — C6-VALIDACAO-COMPOSE encerrado com código 0.
+- 19/11/2026 17:51 UTC — trabalho-C2-MATRIZ-PAPEIS iniciado em final-qa-matriz-r12 por Sol medium normal.
+- 19/11/2026 17:51 UTC — C7-R10 encerrado com código 0.
+- 19/11/2026 17:51 UTC — revisor-C5-R10 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:51 UTC — C8-VINCULO-FONTE encerrado com código 0.
+- 19/11/2026 17:52 UTC — Documentação entregou 3ff8610d com origem do aviso conferida pelo TypeDoc e prontidão entregou 7233fe29 com validação da sintaxe YAML. No exame, a regressão de veredito sem prova passou no PostgreSQL real e manteve o achado provável com evidência original. O parecer de desempenho pediu ajuste do PNG e da rota de controle do teste.
