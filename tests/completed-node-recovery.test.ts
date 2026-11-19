@@ -4,6 +4,7 @@ import {randomUUID} from 'node:crypto';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {execFileSync,spawn,type ChildProcess} from 'node:child_process';
+import {EventEmitter} from 'node:events';
 import {performance} from 'node:perf_hooks';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Ledger} from '../src/ledger.ts';
@@ -13,6 +14,91 @@ import {Templates} from '../src/templates.ts';
 import {provisionEngineering} from './fixtures/provision-engineering.ts';
 
 const markerTimeoutMs=30_000;
+
+async function waitForMarker(
+ controller:Pick<EventEmitter,'once'|'off'>,marker:string,stopNode:string,output:()=>string,
+ {timeoutMs=markerTimeoutMs,readMarker=readFile}:{
+  timeoutMs?:number;
+  readMarker?:(path:string,options:{encoding:'utf8',signal:AbortSignal})=>Promise<string>;
+ }={},
+){
+ const markerWait=new AbortController();
+ const {signal}=markerWait;
+ const interrupted=new Promise<never>((_,reject)=>{
+  signal.addEventListener('abort',()=>reject(signal.reason),{once:true});
+ });
+ const onError=(error:Error)=>markerWait.abort(Error(`Child process error at ${stopNode}\n${output()}`,{cause:error}));
+ const onExit=(code:number|null,exitSignal:NodeJS.Signals|null)=>{
+  markerWait.abort(Error(`Child exited before SIGKILL at ${stopNode} (code=${code}, signal=${exitSignal})\n${output()}`));
+ };
+ controller.once('error',onError);
+ controller.once('exit',onExit);
+ const deadline=performance.now()+timeoutMs;
+ const timeoutError=()=>Error(`Completed stage marker missing at ${stopNode} after ${timeoutMs} ms\n${output()}`);
+ const timer=setTimeout(()=>markerWait.abort(timeoutError()),timeoutMs);
+ async function poll(){
+  while(true){
+   let saved=false;
+   try{
+    const raw=await readMarker(marker,{encoding:'utf8',signal});
+    signal.throwIfAborted();
+    const state=JSON.parse(raw);
+    saved=state?.ready===true&&state.node===stopNode;
+   }catch(error){
+    // The fixture writes directly to the marker, so a poll can see a partial write.
+    if(!(error instanceof SyntaxError)&&(error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+   }
+   signal.throwIfAborted();
+   const remaining=deadline-performance.now();
+   if(remaining<=0)throw timeoutError();
+   if(saved)return;
+   await delay(Math.min(50,remaining),undefined,{signal});
+  }
+ }
+ try{
+  // Abort requests cancellation and independently settles the wait if the read stays pending.
+  await Promise.race([interrupted,poll()]);
+ }finally{
+  clearTimeout(timer);
+  controller.off('error',onError);
+  controller.off('exit',onExit);
+  markerWait.abort();
+ }
+}
+
+for(const interruption of ['deadline','exit','error'] as const)test(`Marker wait rejects on ${interruption} while the read is pending`,async t=>{
+ t.mock.timers.enable({apis:['setTimeout']});
+ const child=new EventEmitter();
+ const marker='synthetic-marker.json';
+ const stopNode='qa';
+ const output='synthetic controller output';
+ const getOutput=t.mock.fn(()=>output);
+ const timeoutMs=25;
+ const childError=Error('synthetic child error');
+ let rejectRead!:(error:Error)=>void;
+ const read=new Promise<never>((_,reject)=>{rejectRead=reject;});
+ const readMarker=t.mock.fn((_path:string,_options:{signal:AbortSignal})=>read);
+ const waiting=waitForMarker(child,marker,stopNode,getOutput,{timeoutMs,readMarker});
+ const expected={
+  deadline:{message:`Completed stage marker missing at qa after 25 ms\n${output}`},
+  exit:{message:`Child exited before SIGKILL at qa (code=7, signal=null)\n${output}`},
+  error:{message:`Child process error at qa\n${output}`,cause:childError},
+ }[interruption];
+ const rejected=assert.rejects(waiting,expected);
+ if(interruption==='deadline')t.mock.timers.tick(timeoutMs);
+ if(interruption==='exit')child.emit('exit',7,null);
+ if(interruption==='error')child.emit('error',childError);
+ await rejected;
+ assert.equal(child.listenerCount('exit'),0);
+ assert.equal(child.listenerCount('error'),0);
+ assert.equal(readMarker.mock.calls[0].arguments[1].signal.aborted,true);
+ t.mock.timers.tick(timeoutMs);
+ assert.equal(getOutput.mock.callCount(),1);
+
+ rejectRead(Error('synthetic late read failure'));
+ await new Promise<void>(resolve=>setImmediate(resolve));
+ assert.equal(readMarker.mock.callCount(),1);
+});
 
 for(const stopNode of ['qa','review','judge','integrate','integrate-after-cas','integrate-before-cas','qa-before-start','qa-wait-capacity','integrate-registered'])test(`SIGKILL at ${stopNode}: ${stopNode==='integrate-before-cas'?'preserve uncertainty without writing Git':'replay receipt and finish the same graph'}`,{timeout:60_000},async()=>{
  const url=process.env.AC_TEST_DATABASE_URL;if(!url?.endsWith('/ac_implementation_test'))throw Error('ISOLATED_DATABASE_REQUIRED');
@@ -42,37 +128,7 @@ for(const stopNode of ['qa','review','judge','integrate','integrate-after-cas','
   const closed=new Promise<{code:number|null,signal:NodeJS.Signals|null}>(resolve=>{
    controller.once('close',(code,signal)=>resolve({code,signal}));
   });
-  const markerWait=new AbortController();
-  const {signal}=markerWait;
-  controller.once('error',error=>markerWait.abort(Error(`Child process error at ${stopNode}\n${output}`,{cause:error})));
-  controller.once('exit',(code,signal)=>{
-   markerWait.abort(Error(`Child exited before SIGKILL at ${stopNode} (code=${code}, signal=${signal})\n${output}`));
-  });
-  const markerDeadline=performance.now()+markerTimeoutMs;
-  const markerTimeoutError=()=>Error(`Completed stage marker missing at ${stopNode} after ${markerTimeoutMs} ms\n${output}`);
-  const markerTimer=setTimeout(()=>markerWait.abort(markerTimeoutError()),markerTimeoutMs);
-  try{
-   while(true){
-    let saved=false;
-    try{
-     const state=JSON.parse(await readFile(marker,{encoding:'utf8',signal}));
-     saved=state?.ready===true&&state.node===stopNode;
-    }catch(error){
-     // The fixture writes directly to the marker, so a poll can see a partial write.
-     if(!(error instanceof SyntaxError)&&(error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
-    }
-    signal.throwIfAborted();
-    const remaining=markerDeadline-performance.now();
-    if(remaining<=0)throw markerTimeoutError();
-    if(saved)break;
-    await delay(Math.min(50,remaining),undefined,{signal});
-   }
-  }catch(error){
-   signal.throwIfAborted();
-   throw error;
-  }finally{
-   clearTimeout(markerTimer);
-  }
+  await waitForMarker(controller,marker,stopNode,()=>output);
   assert(controller.kill('SIGKILL'),`Could not send SIGKILL at ${stopNode}\n${output}`);
   assert.deepEqual(await closed,{code:null,signal:'SIGKILL'},`Child did not terminate with SIGKILL at ${stopNode}\n${output}`);
   const before=(await db.pool.query('SELECT id,node_id,session_id FROM ac_stage_operations WHERE intent_id=$1 ORDER BY id',[intent.id])).rows;
