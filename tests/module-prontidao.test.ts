@@ -1984,9 +1984,10 @@ test('linhas de cobertura com nomes protegidos ou segredos em texto livre são o
     assert.equal(withToken.coverage.some(c => c.detail.includes('.env.token')), false);
     assert.equal(withToken.coverage.some(c => c.detail.includes('logrotate-token')), false);
     assertNoHostSecretLeak(withToken);
-    const limits = withToken.coverage.find(c => c.tool === 'prontidao:limites');
-    assert.equal(limits?.status, 'skipped');
-    assert.match(limits?.detail ?? '', /^2 caminho\(s\) omitido\(s\)/);
+    const limitRows = withToken.coverage.filter(c => c.tool === 'prontidao:limites');
+    assert.equal(limitRows.length, 1);
+    assert.equal(limitRows[0]?.status, 'skipped');
+    assert.match(limitRows[0]?.detail ?? '', /^2 caminho\(s\) omitido\(s\) dos relatórios/);
     await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(withToken), {module: 'prontidao'}));
 
     writeFileSync(join(dir, 'compose.extra.yaml'), 'services:\n  worker:\n    <<: *unresolved\n');
@@ -2020,12 +2021,271 @@ test('linhas de cobertura com nomes protegidos ou segredos em texto livre são o
       evidenceFile: '',
       runBin: (bin, args) => stubCollectorBins(bin, args),
     });
-    const limits = out.coverage.find(c => c.tool === 'prontidao:limites');
-    assert.equal(limits?.status, 'failed');
-    assert.match(limits?.detail ?? '', /^1 caminho\(s\) omitido\(s\)/);
+    const limitRows = out.coverage.filter(c => c.tool === 'prontidao:limites');
+    assert.equal(limitRows.length, 1);
+    assert.equal(limitRows[0]?.status, 'failed');
+    assert.match(limitRows[0]?.detail ?? '', /^1 caminho\(s\) omitido\(s\) dos relatórios/);
     assert.equal(JSON.stringify(out).includes('infra '), false);
     await validateModuleCollectorPublication(dedupDir, parseModuleCollectorOutput(JSON.stringify(out), {module: 'prontidao'}));
   } finally {
     rmSync(dedupDir, {recursive: true, force: true});
+  }
+});
+
+test('medições de alerta, disco e rotação em scripts avaliam palavras e posições efetivas de comando', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-shell-positions-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'app.service'), '[Service]\nType=oneshot\nStandardOutput=append:/var/log/app.log\n');
+
+    // Defect 1 negative: markers after '\'' inside a single multiline printf argument must not count.
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      "printf '%s\\n' 'primeira linha",
+      "it'\\''s personal:watch df -P rotate 7 daily'",
+      '',
+    ].join('\n'));
+    const escapedSingleQuote = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.equal(escapedSingleQuote.coverage.some(c => c.status === 'failed'), false);
+    assert.equal(escapedSingleQuote.coverage.find(c => c.tool === 'prontidao-audit')?.status, 'ok');
+    for (const rule of [
+      'PRONTIDAO-ALERTA-AUSENTE',
+      'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+      'PRONTIDAO-LOGROTATE-AUSENTE',
+      'PRONTIDAO-BACKUP-AUSENTE',
+      'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+    ]) {
+      assert.ok(escapedSingleQuote.findings.some(f => f.rule === rule), `ausência esperada em literal multilinha: ${rule}`);
+    }
+    assert.match(
+      escapedSingleQuote.coverage.find(c => c.tool === 'prontidao:requisito:alertas-logs')?.detail ?? '',
+      /Diretiva de alerta não identificada e logrotate não identificado/,
+    );
+    assert.match(
+      escapedSingleQuote.coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.detail ?? '',
+      /Rotina de disco não identificada/,
+    );
+    assert.equal(
+      escapedSingleQuote.coverage.some(c => c.tool === 'prontidao:arquivo' && c.detail.startsWith('scripts/watch.sh:')),
+      false,
+    );
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(escapedSingleQuote), {module: 'prontidao'}));
+
+    // Defect 2 negative: unquoted arguments to printf/echo or command -v must not satisfy alerting/disk/logrotate.
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      "printf '%s\\n' personal:watch df -P",
+      'echo rotate 7 daily',
+      "node -e 'console.log(\"personal-watch.js\")'",
+      'command -v df -P',
+      '',
+    ].join('\n'));
+    const printedArgsOnly = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.equal(printedArgsOnly.coverage.some(c => c.status === 'failed'), false);
+    for (const rule of ['PRONTIDAO-ALERTA-AUSENTE', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO', 'PRONTIDAO-LOGROTATE-AUSENTE']) {
+      assert.ok(printedArgsOnly.findings.some(f => f.rule === rule), `ausência esperada para argumentos impressos: ${rule}`);
+    }
+    assert.equal(
+      printedArgsOnly.coverage.some(c => c.tool === 'prontidao:arquivo' && c.detail.startsWith('scripts/watch.sh:')),
+      false,
+    );
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(printedArgsOnly), {module: 'prontidao'}));
+
+    // Defect 1 & 2 positive: real commands with quoted args after multiline literal and with wrappers.
+    writeFileSync(join(dir, 'scripts', 'backup.sh'), [
+      '#!/bin/sh',
+      'restic backup /var/lib/app',
+      'restic forget --keep-daily 7',
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'scripts', 'restore.sh'), [
+      '#!/bin/sh',
+      'restic restore latest --target /var/tmp/restore',
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      "printf '%s\\n' 'primeira linha",
+      "it'\\''s personal:watch df -P rotate 7 daily'",
+      "npm run 'personal:watch'",
+      "df '-P' /",
+      'logrotate /etc/logrotate.conf',
+      '',
+    ].join('\n'));
+    const quotedCommands = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.deepEqual(quotedCommands.findings, []);
+    assert.equal(quotedCommands.coverage.some(c => c.status === 'failed'), false);
+    const watchRow = quotedCommands.coverage.find(c => c.tool === 'prontidao:arquivo' && c.detail.startsWith('scripts/watch.sh:'));
+    assert.ok(watchRow);
+    assert.match(watchRow.detail, /logrotate/);
+    assert.match(watchRow.detail, /alerting/);
+    assert.match(watchRow.detail, /disk-monitor/);
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(quotedCommands), {module: 'prontidao'}));
+
+    // Wrapper + quoted forms (sudo / env).
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      'sudo -u app npm \'run\' "personal:watch"',
+      'env TZ=UTC df "-P" /',
+      'sudo -u root logrotate -f /etc/logrotate.conf',
+      '',
+    ].join('\n'));
+    const wrappedCommands = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.deepEqual(wrappedCommands.findings, []);
+    assert.equal(wrappedCommands.coverage.some(c => c.status === 'failed'), false);
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(wrappedCommands), {module: 'prontidao'}));
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('delimitação indeterminada em script marca os três requisitos afetados como parciais e preserva fatos locais anteriores', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-shell-partial-pillars-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+
+    // Defect 3: multiline double-quoted printf before df and personal:watch.
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' "linha 1',
+      'linha 2"',
+      'df -P /',
+      'npm run personal:watch',
+      '',
+    ].join('\n'));
+    const interrupted = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.equal(interrupted.coverage.find(c => c.tool === 'prontidao-audit')?.status, 'failed');
+    for (const pillar of ['backup-restauracao', 'alertas-logs', 'disco-memoria']) {
+      assert.equal(interrupted.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status, 'failed', pillar);
+    }
+    assert.ok(
+      interrupted.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed' && c.detail.startsWith('scripts/watch.sh: linha 2,')),
+    );
+    for (const rule of [
+      'PRONTIDAO-ALERTA-AUSENTE',
+      'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+      'PRONTIDAO-BACKUP-AUSENTE',
+      'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+    ]) {
+      assert.equal(interrupted.findings.some(f => f.rule === rule), false, `ausência não pode ser declarada após interrupção: ${rule}`);
+    }
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(interrupted), {module: 'prontidao'}));
+
+    // Preserves local facts interpreted before the indeterminate delimitation.
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), [
+      '#!/bin/sh',
+      "df '-P' /",
+      'printf \'%s\\n\' "linha 1',
+      'linha 2"',
+      "npm run 'personal:watch'",
+      '',
+    ].join('\n'));
+    const prefixPreserved = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.equal(prefixPreserved.coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.status, 'failed');
+    assert.match(
+      prefixPreserved.coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.detail ?? '',
+      /Rotina de disco identificada.*Cobertura parcial/,
+    );
+    assert.equal(prefixPreserved.coverage.find(c => c.tool === 'prontidao:requisito:alertas-logs')?.status, 'failed');
+    assert.equal(prefixPreserved.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed');
+    assert.ok(
+      prefixPreserved.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed' && c.detail.includes('verificações [disk-monitor]')),
+    );
+    assert.ok(
+      prefixPreserved.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed' && c.detail.startsWith('scripts/watch.sh: linha 3,')),
+    );
+    assert.equal(prefixPreserved.findings.some(f => f.rule === 'PRONTIDAO-ALERTA-AUSENTE'), false);
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(prefixPreserved), {module: 'prontidao'}));
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('comando composto com wrapper sudo e opções aciona cobertura parcial mesmo com outro backup válido', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-sudo-compound-'));
+  try {
+    mkdirSync(join(dir, 'deploy'), {recursive: true});
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'deploy', 'logrotate'), '/var/log/app.log {\n  rotate 7\n  daily\n}\n');
+    writeFileSync(join(dir, 'scripts', 'watch.sh'), '#!/bin/sh\ndf -P /\nnpm run personal:watch\n');
+    writeFileSync(join(dir, 'scripts', 'restore.sh'), '#!/bin/sh\nrestic restore latest --target /var/tmp/restore\n');
+
+    // Defect 4 positive (partial coverage): compound sudo -u postgres pg_dump alongside another valid backup.
+    writeFileSync(join(dir, 'scripts', 'backup.sh'), [
+      '#!/bin/sh',
+      'restic backup /var/lib/app',
+      'restic forget --keep-daily 7',
+      'sudo -u postgres pg_dump -Fc -f /tmp/app.dump && echo ok',
+      '',
+    ].join('\n'));
+    const compoundSudo = runCollector({
+      repoRoot: dir,
+      evidenceFile: '',
+      runBin: (bin, args) => stubCollectorBins(bin, args),
+    });
+    assert.equal(compoundSudo.coverage.find(c => c.tool === 'prontidao-audit')?.status, 'failed');
+    assert.equal(compoundSudo.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'failed');
+    assert.equal(compoundSudo.coverage.find(c => c.tool === 'prontidao:requisito:alertas-logs')?.status, 'ok');
+    assert.equal(compoundSudo.coverage.find(c => c.tool === 'prontidao:requisito:disco-memoria')?.status, 'ok');
+    assert.ok(
+      compoundSudo.coverage.some(c => c.tool === 'prontidao:arquivo' && c.status === 'failed' && c.detail.startsWith('scripts/backup.sh: linha 4,')),
+    );
+    await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(compoundSudo), {module: 'prontidao'}));
+
+    // Simple command with sudo -u postgres unwraps and detects unsafe /tmp destination.
+    writeFileSync(join(dir, 'scripts', 'backup.sh'), [
+      '#!/bin/sh',
+      'sudo -u postgres pg_dump -Fc -f /tmp/app.dump',
+      'restic forget --keep-daily 7',
+      '',
+    ].join('\n'));
+    const simpleSudo = auditRepositoryReadiness(dir);
+    assert.equal(simpleSudo.coverage.some(c => c.status === 'failed'), false);
+    assert.deepEqual(
+      simpleSudo.findings.filter(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO').map(f => ({file: f.file, line: f.line})),
+      [{file: 'scripts/backup.sh', line: 2}],
+    );
+
+    // Negative control: quoted pg_dump inside compound command without any other backup must not trigger partial or backup.
+    writeFileSync(join(dir, 'scripts', 'backup.sh'), [
+      '#!/bin/sh',
+      'node -e \'console.log("pg_dump -Fc -f /tmp/ignored.dump")\' && echo ok',
+      '',
+    ].join('\n'));
+    writeFileSync(join(dir, 'scripts', 'restore.sh'), '#!/bin/sh\necho ok\n');
+    const quotedCompound = auditRepositoryReadiness(dir);
+    assert.equal(quotedCompound.coverage.some(c => c.status === 'failed'), false);
+    assert.equal(quotedCompound.coverage.find(c => c.tool === 'prontidao:requisito:backup-restauracao')?.status, 'ok');
+    assert.ok(quotedCompound.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-AUSENTE'));
+    assert.equal(quotedCompound.findings.some(f => f.rule === 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
   }
 });

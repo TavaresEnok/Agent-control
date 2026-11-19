@@ -1673,10 +1673,155 @@ function resticCommand(args) {
 
 const BACKUP_CANDIDATE_RE = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
 
+const SHELL_CONTROL_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', '{', '!']);
+const WRAPPER_SPECS = {
+  exec: {flagChars: new Set(['c', 'l']), valueChars: new Set(['a']), longFlags: new Set(), longValues: new Set()},
+  env: {
+    flagChars: new Set(['i', '0', 'v']),
+    valueChars: new Set(['u', 'C', 'S']),
+    longFlags: new Set(['--ignore-environment', '--null', '--debug']),
+    longValues: new Set(['--unset', '--chdir', '--split-string', '--block-signal', '--default-signal', '--ignore-signal', '--argv0']),
+  },
+  sudo: {
+    flagChars: new Set(['A', 'B', 'E', 'H', 'K', 'P', 'S', 'V', 'b', 'e', 'i', 'k', 'l', 'n', 's', 'v']),
+    valueChars: new Set(['C', 'D', 'R', 'T', 'U', 'a', 'c', 'g', 'h', 'p', 'r', 't', 'u']),
+    longFlags: new Set([
+      '--askpass', '--background', '--bell', '--edit', '--help', '--invalid', '--list', '--login',
+      '--non-interactive', '--preserve-env', '--remove-timestamp', '--reset-timestamp', '--set-home',
+      '--shell', '--stdin', '--validate', '--version',
+    ]),
+    longValues: new Set([
+      '--chdir', '--chroot', '--close-from', '--command-timeout', '--group', '--host',
+      '--login-class', '--other-user', '--prompt', '--role', '--type', '--user',
+    ]),
+  },
+};
+
+function skipWrapperOptions(words, {flagChars, valueChars, longFlags, longValues}) {
+  let i = 0;
+  while (i < words.length && !words[i].operator) {
+    const opt = words[i].text ?? '';
+    if (opt === '--') {
+      i++;
+      break;
+    }
+    if (!opt.startsWith('-') || opt === '-') break;
+    if (opt.startsWith('--')) {
+      const eq = opt.indexOf('=');
+      const name = eq === -1 ? opt : opt.slice(0, eq);
+      if (eq !== -1 && (longValues.has(name) || longFlags.has(name))) {
+        i++;
+        continue;
+      }
+      if (eq === -1 && longValues.has(name)) {
+        i += 2;
+        continue;
+      }
+      if (eq === -1 && longFlags.has(name)) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    let consumedValue = false;
+    let valid = true;
+    for (let j = 1; j < opt.length; j++) {
+      const ch = opt[j];
+      if (valueChars.has(ch)) {
+        if (j === opt.length - 1) consumedValue = true;
+        break;
+      }
+      if (!flagChars.has(ch)) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) break;
+    i += consumedValue ? 2 : 1;
+  }
+  return words.slice(i);
+}
+
+function unwrapCommandWords(segWords) {
+  let words = segWords.map(word => ({...word}));
+  let openedCommandSub = false;
+  while (words.length > 0) {
+    const first = words[0];
+    if (first.operator) break;
+    const text = first.text ?? '';
+    const unquoted = !first.raw || first.raw === text;
+    if (unquoted && SHELL_CONTROL_WORDS.has(text)) {
+      words.shift();
+      continue;
+    }
+    if (unquoted && text === 'time') {
+      words.shift();
+      if (words[0] && !words[0].operator && words[0].text === '-p') words.shift();
+      continue;
+    }
+    const rawText = first.raw ?? text;
+    const cmdSub = (!first.raw || (!first.raw.startsWith("'") && !first.raw.startsWith('"')))
+      && /^(?:[A-Za-z_][A-Za-z0-9_]*=)?\$\((.+)$/.exec(text);
+    if (cmdSub) {
+      words[0] = {...first, text: cmdSub[1]};
+      openedCommandSub = true;
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(text) && !/^(?:[A-Za-z_][A-Za-z0-9_]*=)?\$\(/.test(rawText)) {
+      words.shift();
+      continue;
+    }
+    const binary = basename(text);
+    if (binary === 'command') {
+      const next = words[1]?.text ?? '';
+      if (next === '-v' || next === '-V') break;
+      words.shift();
+      if (words[0]?.text === '-p') words.shift();
+      if (words[0]?.text === '--') words.shift();
+      continue;
+    }
+    const spec = WRAPPER_SPECS[binary];
+    if (spec) {
+      words.shift();
+      words = skipWrapperOptions(words, spec);
+      continue;
+    }
+    break;
+  }
+  if (openedCommandSub && words.length > 0) {
+    const last = words[words.length - 1];
+    if (!last.operator && (!last.raw || (!last.raw.endsWith("'") && !last.raw.endsWith('"')))
+      && last.text.endsWith(')') && !last.text.includes('(')) {
+      words[words.length - 1] = {...last, text: last.text.slice(0, -1)};
+    }
+  }
+  return words;
+}
+
+function splitShellSegments(words) {
+  const segments = [];
+  let current = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (!word.operator) {
+      current.push(word);
+      continue;
+    }
+    if (/^(?:\d*(?:<<-?|<<<|>>?|<)|&>>?)$/.test(word.text)) {
+      if (words[i + 1]?.operator && words[i + 1].text === '&') i++;
+      if (words[i + 1] && !words[i + 1].operator) i++;
+      continue;
+    }
+    if (current.length) segments.push(current);
+    current = [];
+  }
+  if (current.length) segments.push(current);
+  return segments;
+}
+
 function unwrapShellDashC(parsed) {
   if (!parsed || parsed.operator) return null;
-  const words = [...parsed.words];
-  while (!words[0]?.operator && /^(?:exec|command|(?:\S*\/)?env|[\w]+=.*)$/.test(words[0]?.text ?? '')) words.shift();
+  const words = unwrapCommandWords(parsed.words);
   const binary = basename(words[0]?.text ?? '');
   if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[1]?.text ?? '') && words[2]) {
     return words[2].text;
@@ -1684,50 +1829,126 @@ function unwrapShellDashC(parsed) {
   return null;
 }
 
+function npmScriptTarget(binary, args) {
+  if (!['npm', 'pnpm'].includes(binary)) return '';
+  let idx = 0;
+  while (idx < args.length && /^-(?:s|-silent|-if-present)$/.test(args[idx])) idx++;
+  const first = args[idx] ?? '';
+  if (/^run(?:-script)?$/.test(first)) {
+    let targetIdx = idx + 1;
+    while (targetIdx < args.length && /^-(?:s|-silent|-if-present)$/.test(args[targetIdx])) targetIdx++;
+    return args[targetIdx] ?? '';
+  }
+  return binary === 'pnpm' ? first : '';
+}
+
+function nodeScriptTarget(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return args[i + 1] ?? '';
+    if (arg === '-e' || arg === '--eval' || arg === '-p' || arg === '--print') return '';
+    if (/^(?:-r|--require|--import|--env-file|--conditions|-C)$/.test(arg)) {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    return arg;
+  }
+  return '';
+}
+
 function isBackupCandidateSegment(segWords) {
-  const words = [...segWords];
-  while (words[0] && /^(?:exec|command|(?:\S*\/)?env|[\w]+=.*)$/.test(words[0].text)) words.shift();
+  const words = unwrapCommandWords(segWords);
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return false;
   if (/^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find)$/.test(binary)) return true;
-  const subcommand = words[0]?.text ?? '';
-  if (['npm', 'pnpm'].includes(binary) && /^run(?:-script)?$/.test(subcommand)) {
-    return /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(words[1]?.text ?? '');
-  }
+  const args = words.map(word => word.text);
+  const npmTarget = npmScriptTarget(binary, args);
+  if (npmTarget) return /^personal:(?:backup(?:-rotate)?|restore-(?:check|proof))$/.test(npmTarget);
   if (binary === 'node') {
-    return /^personal-(?:backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.test(basename(subcommand));
+    const script = nodeScriptTarget(args);
+    return /^personal-(?:backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.test(basename(script));
   }
-  if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(subcommand)) {
-    return BACKUP_CANDIDATE_RE.test(words[1]?.text ?? '');
+  if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(args[0] ?? '') && args[1]) {
+    const inner = shellWords(args[1]);
+    if (!inner) return BACKUP_CANDIDATE_RE.test(args[1]);
+    return splitShellSegments(inner.words).some(isBackupCandidateSegment);
   }
   return false;
 }
 
-function shellWordsUnquotedSurface(words) {
-  return words.map(word => {
-    if (word.operator) return word.text;
-    return word.raw
-      .replace(/'[^']*'/g, ' ')
-      .replace(/"(?:\\.|[^"\\])*"/g, quoted => (quoted.match(/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/g) ?? []).join(' ') || ' ');
-  }).join(' ');
-}
-
-function shellCommandSurface(commands) {
-  const parts = [];
-  for (const {command} of commands) {
-    const parsed = shellWords(command);
-    if (!parsed) continue;
-    const dashC = unwrapShellDashC(parsed);
-    if (dashC !== null) {
-      const inner = shellWords(dashC);
-      if (inner) {
-        parts.push(shellWordsUnquotedSurface(inner.words));
-        continue;
+function evaluateShellSegment(segWords, depth = 0) {
+  const res = {alerting: false, disk: false, logrotate: false, incomplete: false};
+  const words = unwrapCommandWords(segWords);
+  const binary = basename(words.shift()?.text ?? '');
+  if (!binary) return res;
+  if (depth < 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
+    const inner = shellWords(words[1].text);
+    if (!inner) {
+      res.incomplete = true;
+      return res;
+    }
+    for (const innerSeg of splitShellSegments(inner.words)) {
+      const sub = evaluateShellSegment(innerSeg, depth + 1);
+      res.alerting ||= sub.alerting;
+      res.disk ||= sub.disk;
+      res.logrotate ||= sub.logrotate;
+      res.incomplete ||= sub.incomplete;
+    }
+    return res;
+  }
+  const args = words.map(word => word.text);
+  if (args.some(arg => arg === '--help' || arg === '--version') || (binary !== 'df' && args.includes('-h'))) {
+    return res;
+  }
+  if (binary === 'alertmanager') {
+    res.alerting = true;
+  } else if (['npm', 'pnpm'].includes(binary)) {
+    const target = npmScriptTarget(binary, args);
+    if (target === 'personal:watch') res.alerting = true;
+    if (target === 'personal:maintenance') res.disk = true;
+  } else if (binary === 'node') {
+    const script = basename(nodeScriptTarget(args));
+    if (/^personal-watch(?:\.[cm]?js)?$/.test(script)) res.alerting = true;
+    if (/^personal-maintenance(?:\.[cm]?js)?$/.test(script)) res.disk = true;
+  } else if (['curl', 'wget'].includes(binary)) {
+    if (args.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
+      res.alerting = true;
+    }
+  } else if (binary === 'df') {
+    for (const arg of args) {
+      if (arg === '--') break;
+      if (/^-[A-Za-z]*[Ph][A-Za-z]*$/i.test(arg) || /^--(?:portability|human-readable)$/.test(arg)) {
+        res.disk = true;
+        break;
       }
     }
-    parts.push(shellWordsUnquotedSurface(parsed.words));
+  } else if (binary === 'docker') {
+    if ((args[0] === 'system' || args[0] === 'builder') && args[1] === 'prune') {
+      res.disk = true;
+    }
+  } else if (binary === 'logrotate') {
+    if (args.some(arg => arg && !arg.startsWith('-'))) {
+      res.logrotate = true;
+    }
   }
-  return parts.join('\n');
+  return res;
+}
+
+function checkShellOperations(commands, onIncomplete) {
+  const res = {alerting: false, disk: false, logrotate: false};
+  for (const {command, line} of commands) {
+    const parsed = shellWords(command);
+    if (!parsed) continue;
+    for (const segWords of splitShellSegments(parsed.words)) {
+      const seg = evaluateShellSegment(segWords);
+      if (seg.incomplete) onIncomplete(line, 'comando de shell embutido com sintaxe não coberta');
+      res.alerting ||= seg.alerting;
+      res.disk ||= seg.disk;
+      res.logrotate ||= seg.logrotate;
+    }
+  }
+  return res;
 }
 
 function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
@@ -1747,30 +1968,22 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
       continue;
     }
     if (parsed.operator) {
-      const segments = [];
-      let current = [];
-      for (const word of parsed.words) {
-        if (word.operator) {
-          if (current.length) segments.push(current);
-          current = [];
-        } else {
-          current.push(word);
-        }
-      }
-      if (current.length) segments.push(current);
+      const segments = splitShellSegments(parsed.words);
       if (segments.some(isBackupCandidateSegment)) {
         onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
       }
       continue;
     }
-    const words = [...parsed.words];
-    while (!words[0]?.operator && /^(?:exec|command|(?:\S*\/)?env|[\w]+=.*)$/.test(words[0]?.text ?? '')) words.shift();
+    const words = unwrapCommandWords(parsed.words);
     const binary = basename(words.shift()?.text ?? '');
     const args = words.filter(word => !word.operator).map(word => word.text);
     const [subcommand, ...parameters] = binary === 'restic' ? resticCommand(args) : args;
-    const routine = ['npm', 'pnpm'].includes(binary) && /^run(?:-script)?$/.test(subcommand ?? '')
-      ? /^personal:(backup(?:-rotate)?|restore-(?:check|proof))$/.exec(parameters[0] ?? '')?.[1]
-      : binary === 'node' ? /^personal-(backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.exec(basename(subcommand ?? ''))?.[1] : undefined;
+    const npmTarget = npmScriptTarget(binary, args);
+    const routine = npmTarget
+      ? /^personal:(backup(?:-rotate)?|restore-(?:check|proof))$/.exec(npmTarget)?.[1]
+      : binary === 'node'
+        ? /^personal-(backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.exec(basename(nodeScriptTarget(args)))?.[1]
+        : undefined;
     if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
       onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
       continue;
@@ -2065,16 +2278,23 @@ export function auditRepositoryReadiness(repoRoot) {
     }
 
     const protectedEnv = isCommittedEnv(file.rel);
-    const onCommandIncomplete = (line, reason) => recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao');
-    const commands = [...operationalCommands(file, onCommandIncomplete)];
+    const onOperationalIncomplete = (line, reason) =>
+      recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao', 'alertas-logs', 'disco-memoria');
+    const onBackupIncomplete = (line, reason) =>
+      recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao');
+    const commands = [...operationalCommands(file, onOperationalIncomplete)];
     const shell = isShellScript(file);
-    const operationalText = shell ? shellCommandSurface(commands) : file.content;
-    const lowerOperationalText = shell ? operationalText.toLowerCase() : lowerContent;
-    if (!protectedEnv && (/logrotate/i.test(file.rel) || (/\brotate\s+\d+\b/.test(lowerOperationalText) && /\b(?:daily|weekly|maxsize|size)\b/.test(lowerOperationalText)))) {
+    const shellOps = shell && !protectedEnv
+      ? checkShellOperations(commands, onOperationalIncomplete)
+      : {alerting: false, disk: false, logrotate: false};
+    const fileLogrotate = !protectedEnv && (shell
+      ? shellOps.logrotate
+      : (/logrotate/i.test(file.rel) || (/\brotate\s+\d+\b/.test(lowerContent) && /\b(?:daily|weekly|maxsize|size)\b/.test(lowerContent))));
+    if (fileLogrotate) {
       hasLogrotate = true;
       checksApplied.push('logrotate');
     }
-    const routines = checkBackup(file, commands, findings, pillarCounts, onCommandIncomplete);
+    const routines = checkBackup(file, commands, findings, pillarCounts, onBackupIncomplete);
     if (routines.backup) checksApplied.push('backup');
     if (routines.restore) checksApplied.push('restore-declaration');
     if (routines.catalog) checksApplied.push('backup-catalog-check');
@@ -2083,11 +2303,17 @@ export function auditRepositoryReadiness(repoRoot) {
     hasRestoreRoutine ||= routines.restore;
     hasCatalogCheck ||= routines.catalog;
     hasBackupRotation ||= routines.rotation;
-    if (!protectedEnv && /(?:personal:watch|alertmanager|OnFailure=|deliverPersonalPush|sendAlert|alert_webhook|WEBHOOK_ALERT|SLACK_WEBHOOK|DISK_ALERT)/i.test(operationalText)) {
+    const fileAlerting = !protectedEnv && (shell
+      ? shellOps.alerting
+      : /(?:personal:watch|alertmanager|OnFailure=|deliverPersonalPush|sendAlert|alert_webhook|WEBHOOK_ALERT|SLACK_WEBHOOK|DISK_ALERT)/i.test(file.content));
+    if (fileAlerting) {
       hasAlerting = true;
       checksApplied.push('alerting');
     }
-    if (!protectedEnv && /(?:statfs|DISK_ALERT|diskUsedPercent|df\s+-[Ph]|docker\s+(?:system|builder)\s+prune|personal:maintenance)/i.test(operationalText)) {
+    const fileDiskMonitoring = !protectedEnv && (shell
+      ? shellOps.disk
+      : /(?:statfs|DISK_ALERT|diskUsedPercent|df\s+-[Ph]|docker\s+(?:system|builder)\s+prune|personal:maintenance)/i.test(file.content));
+    if (fileDiskMonitoring) {
       hasDiskMonitoring = true;
       checksApplied.push('disk-monitor');
     }
