@@ -15,6 +15,7 @@ import {prepareClaudeExamAccessToken} from '../src/exam-login.ts';
 import {Ledger, VERIFICATION_MODULES} from '../src/ledger.ts';
 import {moduleExamConnectHost, moduleExamSocket, monitorModuleExamEgress, startModuleExamEgress} from '../src/module-exam-egress.ts';
 import {moduleExamCodexBody, readModuleExamCodexOutput, readModuleExamCodexResponse} from '../src/module-exam-codex.ts';
+import {RECHECK_PROOF_VERSION} from '../src/module-recheck-measurement.ts';
 import {FUNCTION_COVERAGE_RULE} from '../src/module-recheck-regression.ts';
 import type {ModuleExamRuntime} from '../src/module-exam-native.ts';
 import {moduleExamClaudeArgs, readModuleExamClaudeOutput} from '../src/module-exam-worker.ts';
@@ -506,15 +507,15 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.deepEqual(await recheck([]), ['ACH-001 reaberto']);
       assert.equal(docker.logs.length, beforeRetry);
 
-      await t.test('CLI reverifica a mesma asserção no código original e corrigido e publica uma vez', async () => {
-        // The coverage rows are synthetic. The two regression results come from
-        // the CLI actually running the same Git test blob in two Node processes.
+      await t.test('CLI decide pelo V8 no mesmo alvo, recupera publicação e reabre com prova nova', async () => {
         const sourceFile = 'totals.ts';
         const testFile = 'tests/qa/ach-001.test.ts';
+        const baseTest = 'tests/qa/base.test.ts';
         await mkdir(join(repo, 'tests', 'qa'), {recursive: true});
         const source = (value: string) => `export function total() { return ${value}; }\nexport function other() { return 5; }\n`;
-        const moved = 'export function other() { return 5; }\n\nexport function total() {\n  return 43;\n}\n';
-        const title = "Total: pedido (R$ 43) — certo?";
+        const usualSource = source('42');
+        const moved = 'export function other() { return 5; }\n\nexport function total() {\n  return 42;\n}\n';
+        const title = 'Total… pedido (R$ 42) — certo?';
         const testBody = (expected: number, name = 'total') => "import test from 'node:test';\nimport assert from 'node:assert/strict';\n"
           + `import {${name}} from '../../totals.ts';\ntest('${title}', () => assert.equal(${name}(), ${expected}));\n`;
         const commitSource = async (label: string, code: string, probe?: string) => {
@@ -524,23 +525,61 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
           commitChanges(label);
           return git('rev-parse', 'HEAD').toString().trim();
         };
-        const originalHead = await commitSource('synthetic untested total', source('42'));
+        await writeFile(join(repo, baseTest), testBody(5, 'other'));
+        const originalHead = await commitSource('synthetic untested total', usualSource);
         const uncovered = {...opaqueFinding, file: sourceFile, rule: FUNCTION_COVERAGE_RULE, severity: 'alta' as const,
           message: "Função exportada 'total' sem execução medida pelo V8"};
         const image = `sha256:${'b'.repeat(64)}`;
         const recordCoverage = async (findings: ModuleCollectorOutput['findings'] = [], version = v8Coverage.version,
-          pin = image, partial = false) => {
+          pin = image, passDetails?: string[]) => {
           const pass = findings.length ? 'ramos 0/0, funções 1/2' : 'ramos 0/0, funções 2/2';
           const [id] = await runPersonalQaCli([installation, project], {image: pin, collectorOutput: {
             coverage: [{...v8Coverage, version, detail: 'Medição sintética da ferramenta'},
               {tool: `qa-arquivo:${sourceFile}`, status: 'ok', version,
-                detail: `V8 em três passadas: ${pass}; ${pass}; ${partial ? 'arquivo sem medição' : pass}`}],
+                detail: 'V8 em três passadas: ' + (passDetails ?? [pass, pass, pass]).join('; ')}],
             findings,
           }});
           assert.ok(id);
           return id;
         };
-        const originRun = await recordCoverage([uncovered]);
+        const recordMeasuredCoverage = async (...testFiles: string[]) => {
+          type V8File = {path: string; coveredBranchCount: number; totalBranchCount: number;
+            coveredFunctionCount: number; totalFunctionCount: number; functions: {name: string; line: number; count: number}[]};
+          const staged = await mkdtemp(join(root, 'synthetic-v8-'));
+          const driver = join(staged, 'driver.cjs');
+          try {
+            await mkdir(join(staged, 'tests', 'qa'), {recursive: true});
+            await writeFile(join(staged, 'package.json'), '{"type":"module"}');
+            for (const file of [sourceFile, ...testFiles]) {
+              await writeFile(join(staged, file), git('show', `HEAD:${file}`));
+            }
+            await writeFile(driver, `
+              const {run} = require('node:test');
+              (async () => {
+                for await (const {type, data} of run({files: process.argv.slice(2), coverage: true, execArgv: []})) {
+                  if (type === 'test:fail') process.exitCode = 1;
+                  if (type === 'test:coverage' && data.nesting === 0) console.log(JSON.stringify(data.summary.files));
+                }
+              })();`);
+            const passes: V8File[] = [];
+            for (let i = 0; i < 3; i++) {
+              const {stdout} = await promisify(execFile)(process.execPath, [driver, ...testFiles.map(file => join(staged, file))],
+                {cwd: staged, env: {LANG: 'C.UTF-8'}, timeout: 5_000});
+              const files = JSON.parse(stdout) as V8File[];
+              const measured = files.find(row => row.path === join(staged, sourceFile));
+              assert.ok(measured);
+              passes.push(measured);
+            }
+            const findings = passes[0]!.functions.flatMap(fn => passes.every(pass =>
+              pass.functions.some(hit => hit.name === fn.name && hit.line === fn.line && hit.count === 0))
+              ? [{...uncovered, line: fn.line, message: `Função exportada '${fn.name}' sem execução medida pelo V8`}] : []);
+            return await recordCoverage(findings, v8Coverage.version, image, passes.map(row =>
+              `ramos ${row.coveredBranchCount}/${row.totalBranchCount}, funções ${row.coveredFunctionCount}/${row.totalFunctionCount}`));
+          } finally {
+            await rm(staged, {recursive: true, force: true});
+          }
+        };
+        const originRun = await recordMeasuredCoverage(baseTest);
         const functionalArgs = [installation, project, '--reverificar', originRun, 'ACH-001'];
         const functionalRecheck = (seats: ModuleExamRuntime = runtime.slice(1)) =>
           runPersonalQaCli(functionalArgs, {moduleExamRuntime: async () => seats});
@@ -552,44 +591,44 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         const originFile = join(originDirectory, 'bruto', 'achados-brutos.json');
         const rawOrigin = await readFile(originFile, 'utf8');
         const unlaunched = docker.logs.length;
-        const expectPending = async (reason: string) => {
-          assert.match((await functionalRecheck())[0]!, new RegExp(`^ACH-001 pendente ${reason} \\(`));
-          assert.equal((await readModuleReport(dataDirectory, project, originRun, 'qa')).achados[0]?.status, 'provavel');
+        const expectPending = async (reason: string, status = 'provavel', seats = runtime.slice(1)) => {
+          assert.match((await functionalRecheck(seats))[0]!, new RegExp(`^ACH-001 pendente ${reason}(?: \\(.*\\))?$`));
+          assert.equal((await readModuleReport(dataDirectory, project, originRun, 'qa')).achados[0]?.status, status);
         };
         await expectPending('MODULE_RECHECK_SAME_COMMIT');
-        await commitSource('synthetic equivalent implementation', source('6 * 7'), testBody(42));
-        await recordCoverage();
-        const bothGreen = await runPublicCli();
-        assert.equal(bothGreen.stderr, '');
-        assert.match(bothGreen.stdout, /^ACH-001 pendente MODULE_RECHECK_ORIGINAL_TEST_PASSED \(/);
-        await expectPending('MODULE_RECHECK_ORIGINAL_TEST_PASSED');
-
         await commitSource('synthetic function replaced at old line', 'export function other() { return 43; }\n', testBody(43, 'other'));
         await recordCoverage();
         await expectPending('MODULE_RECHECK_FUNCTION_IDENTITY_UNPROVEN');
         await commitSource('synthetic wrong regression test', moved, testBody(5, 'other'));
         await recordCoverage();
         await expectPending('MODULE_RECHECK_FUNCTIONAL_TEST_UNAVAILABLE');
-        await commitSource('synthetic ambiguous function', moved + 'export function total() { return 43; }\n', testBody(43));
+        await commitSource('synthetic ambiguous function', moved + 'export function total() { return 43; }\n', testBody(42));
         await recordCoverage();
         await expectPending('MODULE_RECHECK_FUNCTION_IDENTITY_UNPROVEN');
         await commitSource('synthetic Node preparation failure', moved + 'export function default() { return 5; }\n');
-        await recordCoverage();
+        await recordCoverage([], v8Coverage.version, image, Array(3).fill('ramos 0/0, funções 3/3'));
         await expectPending('MODULE_RECHECK_FUNCTIONAL_EXECUTION_UNAVAILABLE');
         await commitSource('synthetic assertion still failing', source('41'));
         await recordCoverage();
         await expectPending('MODULE_RECHECK_CORRECTED_TEST_FAILED');
 
-        const correctedHead = await commitSource('synthetic correction with moved target', moved);
+        await commitSource('synthetic correction with moved target', moved);
         await recordCoverage([], v8Coverage.version, `sha256:${'c'.repeat(64)}`);
         await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
-        await recordCoverage([], v8Coverage.version, image, true);
+        await recordCoverage([], v8Coverage.version, image, ['ramos 0/0, funções 2/2', 'ramos 0/0, funções 2/2', 'arquivo sem medição']);
         await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
         await recordCoverage([], 'other-version');
         await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
-        await recordCoverage([{...uncovered, line: 3}]);
+        await recordCoverage([uncovered]); // Same function, stale location, another function on this line.
         await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
-        const proofRun = await recordCoverage([{...uncovered, line: 1, message: "Função exportada 'other' sem execução medida pelo V8"}]);
+        await recordCoverage([], v8Coverage.version, image, Array(3).fill('ramos 0/0, funções 1/2'));
+        await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
+        await recordCoverage([uncovered], v8Coverage.version, image, Array(3).fill('ramos 0/0, funções 2/2'));
+        await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
+        await recordMeasuredCoverage(testFile); // Other, now on the old line, is the only uncovered function.
+        await expectPending('MODULE_EXAM_REVIEWER_UNAVAILABLE', 'provavel', []);
+        const correctedHead = await commitSource('synthetic coverage-only correction', usualSource, testBody(42));
+        const proofRun = await recordMeasuredCoverage(baseTest, testFile);
         await ledger.pool.query('UPDATE ac_verify_runs SET collector_image=NULL WHERE id=$1', [originRun]);
         await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING');
         await ledger.pool.query('UPDATE ac_verify_runs SET collector_image=$2 WHERE id=$1', [originRun, image]);
@@ -597,33 +636,43 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
 
         type FunctionalTask = {
           binding: string; code: string; rule: string; regressionAssertion: string;
-          regressionProof: {observations: {original: {actual: string}; corrected: {actual: string}}};
+          regressionProof: {criterion: string; function: {name: string};
+            observations: {original: CoverageObservation; corrected: CoverageObservation}};
         };
-        const refute = (request: ReviewTaskFixture, changes: {rule?: string; binding?: string; reason?: string; actual?: string; omitCorrection?: boolean} = {}) => {
+        type CoverageObservation = {passes: {total: number; covered: number}[]; targetFinding: string | null};
+        const decide = (request: ReviewTaskFixture, changes: {rule?: string; binding?: string; reason?: string;
+          gaps?: number[]; omitCorrection?: boolean; status?: string} = {}) => {
           const task = request as unknown as FunctionalTask;
-          const {original, corrected} = task.regressionProof.observations;
-          const reason = `A regra \`${task.rule}\` aponta a função sem execução. \`${task.regressionAssertion}\` chama a mesma função diretamente: obteve \`${original.actual}\` na primeira revisão e passou com o valor esperado \`${corrected.actual}\` na segunda.`;
-          return JSON.stringify({kind: 'confirmacao', status: 'descartado', binding: changes.binding ?? task.binding,
+          const {criterion, function: fn, observations: {original, corrected}} = task.regressionProof;
+          const closes = corrected.targetFinding === null;
+          const gaps = (side: CoverageObservation) => side.passes.map(pass => pass.total - pass.covered);
+          const relation = closes ? 'os outros achados explicam todas as lacunas, portanto a função foi executada nas três passadas.'
+            : 'a mesma função voltou a registrar zero execuções nas três passadas.';
+          const reason = `A função \`${fn.name}\` teve zero execuções nas três passadas da origem. Na medição atual, ${relation}`;
+          return JSON.stringify({kind: 'confirmacao', status: changes.status ?? (closes ? 'descartado' : 'confirmado'),
+            binding: changes.binding ?? task.binding,
             proof: task.code, reason: changes.reason ?? reason, ...(changes.omitCorrection ? {} : {correction: {
-              rule: changes.rule ?? task.rule, assertion: task.regressionAssertion,
-              criterion: 'direct-call-meets-expected-value', original: {...original, actual: changes.actual ?? original.actual}, corrected,
+              rule: changes.rule ?? task.rule, criterion, function: fn.name, originalGaps: gaps(original),
+              currentGaps: changes.gaps ?? gaps(corrected), conclusion: closes ? 'coverage-added' : 'coverage-regressed',
             }})});
         };
-        recheckAnswer = task => refute(task, {omitCorrection: true,
+        recheckAnswer = task => decide(task, {omitCorrection: true,
           reason: 'O retorno anterior `42` passou a `43`. Veja `tests/qa/ach-001.test.ts`.'});
         await expectPending('MODULE_RECHECK_CORRECTION_UNEXPLAINED');
-        recheckAnswer = task => refute(task, {rule: 'OUTRA-REGRA'});
+        recheckAnswer = task => decide(task, {reason: '`QA-COBERTURA-FUNCAO-SEM-TESTE`, `assert.equal(total(), 42)`, `0`, `42`.'});
         await expectPending('MODULE_RECHECK_CORRECTION_UNEXPLAINED');
-        recheckAnswer = task => refute(task, {actual: '41'});
+        recheckAnswer = task => decide(task, {rule: 'OUTRA-REGRA'});
         await expectPending('MODULE_RECHECK_CORRECTION_UNEXPLAINED');
-        recheckAnswer = task => refute(task, {binding: '0'.repeat(64)});
+        recheckAnswer = task => decide(task, {gaps: [0, 1, 0]});
+        await expectPending('MODULE_RECHECK_CORRECTION_UNEXPLAINED');
+        recheckAnswer = task => decide(task, {binding: '0'.repeat(64)});
         assert.deepEqual(await functionalRecheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
 
         const findingsDir = join(originDirectory, 'achados');
         const savedFindings = join(originDirectory, 'achados-sinteticos');
         recheckAnswer = task => {
           renameSync(findingsDir, savedFindings);
-          return refute(task);
+          return decide(task);
         };
         const pendingPublication = await functionalRecheck();
         assert.equal(pendingPublication[0], 'ACH-001 fechado');
@@ -649,20 +698,24 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         assert.match(closed.detail.reviewerBinding, /^[a-f0-9]{64}$/);
         assert.equal(receipt.scope.runId, originRun);
         assert.equal(receipt.scope.rule, FUNCTION_COVERAGE_RULE);
+        assert.equal(receipt.proofVersion, RECHECK_PROOF_VERSION);
         assert.deepEqual(receipt.function, {name: 'total', signature: '()'});
         assert.deepEqual(receipt.observations, {
-          original: {commit: originalHead, status: 'assertion-failed', actual: '42', expected: '43'},
-          corrected: {commit: correctedHead, status: 'passed', actual: '43', expected: '43'},
+          original: {commit: originalHead, passes: Array(3).fill({covered: 1, total: 2}),
+            targetFinding: 'ACH-001', uncovered: [{id: 'ACH-001', name: 'total', line: 1}]},
+          corrected: {commit: correctedHead, passes: Array(3).fill({covered: 2, total: 2}),
+            targetFinding: null, uncovered: []},
         });
         assert.equal(receipt.original.blob, git('rev-parse', `${originalHead}:${sourceFile}`).toString().trim());
         assert.equal(receipt.corrected.blob, git('rev-parse', `${correctedHead}:${sourceFile}`).toString().trim());
+        assert.equal(receipt.original.blob, receipt.corrected.blob);
         assert.equal(receipt.testBlob, git('rev-parse', `${correctedHead}:${testFile}`).toString().trim());
         assert.equal(receipt.original.line, 1);
-        assert.equal(receipt.corrected.line, 3);
+        assert.equal(receipt.corrected.line, 1);
         assert.equal(receipt.testTitle, title);
         assert.equal(receipt.testLine, 4);
         assert.equal(receipt.testColumn, 1);
-        assert.equal(receipt.assertionDigest, digest('assert.equal(total(), 43)'));
+        assert.equal(receipt.assertionDigest, digest('assert.equal(total(), 42)'));
         assert.equal(receiptDigest, digest(receipt));
         const publication = await ledger.pool.query(`SELECT kind, count(*)::int AS count FROM ac_audit
           WHERE detail->>'intentId'=$1 AND (kind='module.finding_rechecked' OR kind LIKE 'module.recheck_report_%')
@@ -671,6 +724,53 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
           {kind: 'module.finding_rechecked', count: 1}, {kind: 'module.recheck_report_pending', count: 1},
           {kind: 'module.recheck_report_published', count: 1},
         ]);
+
+        const {rows: [journal]} = await ledger.pool.query(`SELECT id, detail FROM ac_audit
+          WHERE kind='module.recheck_report_pending' AND detail->>'intentId'=$1`, [closed.detail.intentId]);
+        const editJournal = (detail: unknown) => ledger.pool.query('UPDATE ac_audit SET detail=$2 WHERE id=$1', [journal.id, detail]);
+        const {proofVersion, receiptDigests, proofRunId, ...legacy} = journal.detail;
+        assert.equal(proofVersion, RECHECK_PROOF_VERSION);
+        assert.deepEqual(receiptDigests, {'ACH-001': receiptDigest});
+        assert.equal(proofRunId, proofRun);
+        await editJournal(legacy);
+        await expectPending('MODULE_EXAM_REVIEWER_UNAVAILABLE', 'fechado', []);
+        await editJournal({...journal.detail, proofVersion: RECHECK_PROOF_VERSION - 1});
+        await expectPending('MODULE_EXAM_REVIEWER_UNAVAILABLE', 'fechado', []);
+        await editJournal({...journal.detail, receiptDigests: {'ACH-001': '0'.repeat(64)}});
+        await expectPending('MODULE_EXAM_REVIEWER_UNAVAILABLE', 'fechado', []);
+        await editJournal(journal.detail);
+
+        await recordCoverage([{...uncovered, line: 3}]); // New contradictory record on the same commit.
+        await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING', 'fechado', []);
+        await ledger.pool.query(`DELETE FROM ac_audit WHERE kind='module.recheck_report_published' AND detail->>'intentId'=$1`,
+          [closed.detail.intentId]);
+        await expectPending('MODULE_RECHECK_MODULE_PROOF_MISSING', 'fechado', []);
+        const recovered = await ledger.pool.query(`SELECT 1 FROM ac_audit
+          WHERE kind='module.recheck_report_published' AND detail->>'intentId'=$1`, [closed.detail.intentId]);
+        assert.equal(recovered.rowCount, 1);
+
+        git('rm', testFile);
+        const regressedHead = await commitSource('synthetic reoccurrence with moved target', moved);
+        const regressedRun = await recordMeasuredCoverage(baseTest);
+        const originVerifier = {provider: 'codex', model: 'fixture-original'};
+        await ledger.pool.query("UPDATE ac_verify_findings SET payload=jsonb_set(payload, '{verifier}', $2::jsonb) WHERE run_id=$1",
+          [originRun, originVerifier]);
+        recheckAnswer = task => decide(task);
+        await expectPending('MODULE_EXAM_REVIEWER_UNAVAILABLE', 'fechado');
+        recheckAnswer = task => decide(task, {status: 'descartado'});
+        assert.deepEqual(await functionalRecheck(runtime.slice(0, 1)), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
+        recheckAnswer = task => decide(task);
+        assert.deepEqual(await functionalRecheck(runtime.slice(0, 1)), ['ACH-001 reaberto']);
+        assert.deepEqual(await functionalRecheck([]), ['ACH-001 reaberto']);
+        assert.equal((await readModuleReport(dataDirectory, project, originRun, 'qa')).achados[0]?.status, 'reaberto');
+        const {rows: [reopened]} = await ledger.pool.query(`SELECT detail FROM ac_audit WHERE kind='module.finding_rechecked'
+          AND detail->>'status'='reaberto' AND detail->>'runId'=$1`, [originRun]);
+        assert.equal(reopened.detail.reviewer.provider, 'claude');
+        assert.equal(reopened.detail.moduleProof.runId, regressedRun);
+        assert.deepEqual(reopened.detail.regressionProof.observations.corrected, {
+          commit: regressedHead, targetFinding: 'ACH-001', uncovered: [{id: 'ACH-001', name: 'total', line: 3}],
+          passes: Array(3).fill({covered: 1, total: 2}),
+        });
       });
       docker.check();
     } finally {
