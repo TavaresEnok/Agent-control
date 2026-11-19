@@ -26,6 +26,11 @@ type QaFinding = {
   evidence: string;
 };
 
+type QaTestAnalysis = {
+  validators: {line: number}[];
+  activeTests: {title: string; features: string[]; limitedFeatures: string[]}[];
+};
+
 const {collectQaModule, summarizeNodePasses, analyzeSourceFile, loadQaSyntax, analyzeTestFile, buildTraceability, measureValidatorCases} = (await import(
   new URL('../deploy/modules/qa/collect.mjs', import.meta.url).href
 )) as {
@@ -33,7 +38,7 @@ const {collectQaModule, summarizeNodePasses, analyzeSourceFile, loadQaSyntax, an
     coverage: QaCoverageRow[];
     findings: QaFinding[];
   }>;
-  analyzeTestFile: (file: string, source: string, parse: unknown) => {validators: {line: number}[]};
+  analyzeTestFile: (file: string, source: string, syntax: unknown) => QaTestAnalysis;
   analyzeSourceFile: (file: string, source: string, syntax: unknown) => unknown;
   loadQaSyntax: () => Promise<unknown>;
   buildTraceability: (options: Record<string, unknown>) => {extraRows: QaCoverageRow[]; findings: QaFinding[]};
@@ -75,6 +80,11 @@ test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e
   const lock = JSON.parse(readFileSync(join(qaModuleDir, 'qa-tools.lock.json'), 'utf8')) as {
     packageLockSha256: string;
     baseImage: {digest: string; tag: string};
+    languageRuntimes: {
+      python: {version: string; image: string};
+      go: {version: string; image: string};
+      coverage: {version: string; url: string; sha256: string};
+    };
   };
   assert.match(lock.baseImage.digest, /^sha256:[a-f0-9]{64}$/);
   assert.equal(dockerfile.includes(lock.baseImage.digest), true);
@@ -83,6 +93,13 @@ test('lockfiles e arquivo de imagem fixam versoes, integridade SHA-512/SHA-256 e
   assert.match(dockerfile, /sha256sum -c/);
   assert.match(dockerfile, /verify-lock\.mjs/);
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
+  const {python, go, coverage} = lock.languageRuntimes;
+  assert.ok(dockerfile.includes(`FROM ${python.image} AS qa-python`));
+  assert.ok(dockerfile.includes(`FROM ${go.image} AS qa-go`));
+  assert.ok(dockerfile.includes(`ADD --checksum=sha256:${coverage.sha256} ${coverage.url} `));
+  assert.ok(dockerfile.includes(`sys.version_info[:3] == (${python.version.split('.').join(', ')})`));
+  assert.ok(dockerfile.includes(`"go${go.version}"`));
+  assert.ok(dockerfile.includes(`coverage.__version__ == "${coverage.version}"`));
   assert.match(dockerfile, /USER 65532:65532/);
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/qa-entrypoint\.sh"\]/);
 });
@@ -167,8 +184,8 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
   assert.match(requirement?.detail ?? '', /vínculo estático.*calcularDescontoFidelidade.*tests\/clean-pricing\.test\.ts:5/);
   const untested = output.coverage.find(c => c.tool === 'qa-requisito:REQ-02');
   assert.match(untested?.detail ?? '', /estornarCobrancaDuplicada.*sem teste vinculado/);
-  assert.equal(toolStatus.get('qa-requisito:REQ-01'), 'ok');
-  assert.equal(toolStatus.get('qa-requisito:REQ-02'), 'ok');
+  assert.equal(toolStatus.get('qa-requisito:REQ-01'), 'skipped');
+  assert.equal(toolStatus.get('qa-requisito:REQ-02'), 'skipped');
   assert.equal(toolStatus.get('qa-rota:GET /api/desconto'), 'ok');
   assert.equal(toolStatus.get('qa-rota:POST /api/estorno'), 'ok');
 
@@ -693,9 +710,7 @@ async function runSyntheticPass(repo: string, files: string[]) {
 }
 
 async function readTestAst(file: string, content: string) {
-  const qaRequire = createRequire(join(qaModuleDir, 'package.json'));
-  const {parse} = await import(pathToFileURL(qaRequire.resolve('@babel/parser')).href);
-  return analyzeTestFile(file, content, parse);
+  return analyzeTestFile(file, content, await loadQaSyntax());
 }
 
 test('matriz lê o callback após opções, exige execução aprovada e reconhece skip e todo', realTools, async () => {
@@ -759,12 +774,157 @@ test('matriz exige uma asserção executada e atribuída a cada teste nas três 
       [['unobserved'], ['executed'], ['unobserved'], ['unsupported'], ['unsupported'], ['executed']]);
     const matrix = buildTraceability({workspace: repo, sourceAnalyses: [], reqFiles: ['requisitos.md'],
       testAnalyses: [await readTestAst(file, source)], runtimeTests, incomplete: false});
-    assert.deepEqual(matrix.findings.map(f => f.line), [1, 3, 4, 5]);
+    assert.deepEqual(matrix.findings.map(f => f.line), [1, 3]);
     assert.match(matrix.findings[0]!.evidence, /passed,passed,passed.*asserção não observada/);
-    assert.match(matrix.findings[2]!.evidence, /passed,passed,passed.*cobertura limitada/);
+    for (const id of ['REQ-14', 'REQ-15']) {
+      const coverage = coverageFor({coverage: matrix.extraRows}, `qa-requisito:${id}`);
+      assert.equal(coverage.status, 'skipped');
+      assert.match(coverage.detail, /passed,passed,passed.*cobertura limitada/);
+    }
     for (const id of ['REQ-12', 'REQ-16']) {
       assert.match(coverageFor({coverage: matrix.extraRows}, `qa-requisito:${id}`).detail, /asserção executada nas três passadas/);
     }
+  });
+});
+
+async function measureSyntheticRequirements(repo: string, requirements: string[], sources: Record<string, string>, tests: string[]) {
+  const file = 'trace.test.mjs';
+  writeFileSync(join(repo, 'requisitos.md'), requirements.join('\n'));
+  const syntax = await loadQaSyntax();
+  const testSource = tests.join('\n');
+  const testAnalysis = analyzeTestFile(file, testSource, syntax);
+  const options = {workspace: repo, reqFiles: ['requisitos.md'], incomplete: false, testAnalyses: [testAnalysis],
+    sourceAnalyses: Object.entries(sources).map(([path, source]) => analyzeSourceFile(path, source, syntax))};
+  const passes = [];
+  for (let index = 0; index < 3; index++) {
+    const scratch = join(repo, `run-${index}`);
+    mkdirSync(scratch);
+    for (const [path, source] of Object.entries({...sources, [file]: testSource})) writeFileSync(join(scratch, path), source);
+    passes.push(await runSyntheticPass(scratch, [file]));
+  }
+  assert.ok(passes.every(pass => pass.summary));
+  const runtimeTests = comparePasses(passes);
+  const matrix = buildTraceability({...options, runtimeTests});
+  const staticMatrix = buildTraceability(options);
+  return {runtimeTests, testAnalysis, findings: matrix.findings, staticFindings: staticMatrix.findings,
+    row: (id: number) => coverageFor({coverage: matrix.extraRows}, `qa-requisito:REQ-${id}`),
+    staticRow: (id: number) => coverageFor({coverage: staticMatrix.extraRows}, `qa-requisito:REQ-${id}`)};
+}
+
+test('matriz preserva o caminho de cada referência, aliases exportados e valores esperados como contexto', realTools, async () => {
+  await withSyntheticRepo('qa-referencias-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      'REQ-61: `primeira` de `./a.mjs` e `segunda` de `b.mjs`',
+      'REQ-62: `primeira` de `b.mjs` e `segunda` de `a.mjs`',
+      'REQ-63: `primeira` de `ausente.mjs`',
+      'REQ-64: `primeira` de `a.mjs` retorna `OK`',
+      'REQ-65: `cálculo$` de `aliases.mjs`',
+      'REQ-66: `interna` de `aliases.mjs`',
+      'REQ-67: `primeira`',
+      'REQ-68: retorna `OK`',
+      '- REQ-69: operação antiga (`listada`)',
+      'REQ-70: `primeira` de `a.mjs` e `2inválido`',
+    ], {
+      'a.mjs': "export function primeira() { return 'OK'; }\nexport function segunda() {}\nexport function OK() {}",
+      'b.mjs': 'export function segunda() { return 2; }\nexport function primeira() {}',
+      'aliases.mjs': 'export {interna as cálculo$, listada};\nfunction interna() { return 3; }\nfunction listada() { return 4; }',
+    }, [
+      "import {test} from 'node:test'; import assert from 'node:assert/strict';",
+      "import {primeira} from './a.mjs'; import {segunda} from './b.mjs';",
+      "import {cálculo$ as alias, listada} from './aliases.mjs';",
+      "test('REQ-63 caminho real diferente', () => assert.equal(primeira(), 'OK'));",
+      "test('segunda no caminho correto', () => assert.equal(segunda(), 2));",
+      "test('alias exportado', () => assert.equal(alias(), 3));",
+      "test('função exportada por lista', () => assert.equal(listada(), 4));",
+      "test('REQ-68 por título', () => assert.equal('OK', 'OK'));",
+    ]);
+    for (const id of [61, 64, 65, 68, 69]) {
+      assert.equal(result.row(id).status, 'ok', String(id));
+      assert.match(result.row(id).detail, /vínculo comprovado nas três passadas/);
+      assert.equal(result.staticRow(id).status, 'skipped', String(id));
+      assert.match(result.staticRow(id).detail, /prova não medida: somente análise estática/);
+    }
+    assert.match(result.row(61).detail, /primeira \(a\.mjs:1\), segunda \(b\.mjs:1\)/);
+    assert.match(result.row(62).detail, /primeira \(b\.mjs:2\), segunda \(a\.mjs:2\)/);
+    assert.match(result.row(64).detail, /contexto: .*retorna `OK`/);
+    assert.doesNotMatch(result.row(64).detail, /OK \(a\.mjs:/);
+    assert.match(result.row(65).detail, /cálculo\$ \(aliases\.mjs:2\)/);
+    for (const id of [63, 66, 70]) {
+      assert.equal(result.row(id).status, 'skipped', String(id));
+      assert.match(result.row(id).detail, /referência não resolvida/);
+    }
+    assert.match(result.row(63).detail, /primeira \(ausente\.mjs\) sem resolução/);
+    assert.doesNotMatch(result.row(63).detail, /primeira \(a\.mjs:/);
+    assert.deepEqual(result.findings.map(finding => finding.line), [2, 7]);
+    assert.equal(result.row(62).status, 'ok');
+    assert.match(result.row(62).detail, /vínculo sem prova nas três passadas/);
+    assert.equal(result.row(67).status, 'ok');
+    assert.match(result.row(67).detail, /vínculo sem prova nas três passadas/);
+  });
+});
+
+test('matriz e V8 concordam sobre operandos, spreads, chamadas opcionais e sombreamento', realTools, async () => {
+  await withSyntheticRepo('qa-operandos-', async repo => {
+    const result = await measureSyntheticRequirements(repo, [
+      'REQ-71: `texto` e `padrão`',
+      'REQ-72: `outroTexto` e `outroPadrão`',
+      'REQ-73: `mensagem`',
+      'REQ-74: `depoisDoSpread`',
+      'REQ-75: `antesDaMensagem`',
+      'REQ-76: `opcional`',
+      'REQ-77: `emAssertOpcional`',
+      'REQ-78: `sombreada`',
+      'REQ-79: `emAssertSombreado`',
+      'REQ-80: `somenteFora`',
+      'REQ-81: `emRegistroOpcional`',
+      'REQ-82: `trocaDeMetodo`',
+      'REQ-83: `dentroDoSpread`',
+    ], {
+      'features.mjs': [
+        "export function texto() { return 'sim'; }", 'export function padrão() { return /sim/; }',
+        "export function outroTexto() { return 'sim'; }", 'export function outroPadrão() { return /não/; }',
+        "export function mensagem() { return 'mensagem'; }", "export function depoisDoSpread() { return 'mensagem'; }",
+        ...['antesDaMensagem', 'opcional', 'emAssertOpcional', 'sombreada', 'emAssertSombreado', 'somenteFora',
+          'emRegistroOpcional', 'trocaDeMetodo', 'dentroDoSpread'].map(name => `export function ${name}() { return 1; }`),
+      ].join('\n'),
+    }, [
+      "import {test} from 'node:test'; import assert, {doesNotMatch as diferente} from 'node:assert/strict';",
+      "import * as features from './features.mjs'; import {sombreada} from './features.mjs';",
+      "test('REQ-71 ambos em match', () => assert['match'](features.texto(), features.padrão()));",
+      "test('REQ-72 ambos em doesNotMatch', () => diferente(features.outroTexto(), features['outroPadrão']()));",
+      "test('REQ-73 terceiro argumento em match', () => assert.match('sim', /sim/, features.mensagem()));",
+      "test('REQ-74 mensagem após spread', () => { const args = [1, 1]; assert.equal(...args, features.depoisDoSpread()); });",
+      "test('REQ-75 spread após os operandos', () => assert.equal(features.antesDaMensagem(), 1, ...['mensagem']));",
+      "test('REQ-76 função opcional', () => assert.equal(features?.opcional(), 1));",
+      "test('REQ-77 asserção opcional', () => assert.equal?.(features.emAssertOpcional(), 1));",
+      "test('REQ-78 função sombreada', () => { const sombreada = () => 1; assert.equal(sombreada(), 1); });",
+      "test('REQ-79 assert sombreado', () => { const assert = {equal() {}}; assert.equal(features.emAssertSombreado(), 1); });",
+      "test('REQ-80 chamada fora da asserção', () => { features.somenteFora(); assert.equal(1, 1); });",
+      "test?.('REQ-81 registro opcional', () => assert.equal(features.emRegistroOpcional(), 1));",
+      "test('REQ-82 método trocado', () => { const equal = assert.equal; assert.equal = assert.ok; try { assert.equal(1, features.trocaDeMetodo()); } finally { assert.equal = equal; } });",
+      "test('REQ-83 função em spread', () => { const args = [features.dentroDoSpread(), 1]; assert.equal(...args); });",
+    ]);
+    const names = [
+      ['texto', 'padrão'], ['outroTexto', 'outroPadrão'], [], [], ['antesDaMensagem'], [], [], [], [], [], [], ['trocaDeMetodo'], [],
+    ];
+    const identities = (names: string[]) => names.map(name => JSON.stringify(['features.mjs', name]));
+    assert.deepEqual(result.testAnalysis.activeTests.map(test => test.features), names.map(identities));
+    assert.deepEqual(result.testAnalysis.activeTests.flatMap(test => test.limitedFeatures),
+      identities(['depoisDoSpread', 'opcional', 'emAssertOpcional', 'emRegistroOpcional']));
+    assert.deepEqual(result.runtimeTests.map((test: {featurePasses: string[][]}) => test.featurePasses),
+      names.map(names => Array.from({length: 3}, () => identities(names.filter(name => name !== 'trocaDeMetodo')))));
+    for (const id of [71, 72, 75]) assert.equal(result.row(id).status, 'ok', String(id));
+    for (const id of [74, 76, 77, 79, 81, 83]) {
+      assert.equal(result.row(id).status, 'skipped', String(id));
+      assert.match(result.row(id).detail, /prova não medida: cobertura limitada/);
+    }
+    for (const id of [73, 78, 80, 82]) {
+      assert.equal(result.row(id).status, 'ok', String(id));
+      assert.match(result.row(id).detail, /vínculo sem prova nas três passadas/);
+    }
+    assert.deepEqual(result.findings.map(finding => finding.line), [3, 8, 10, 12]);
+    assert.ok(result.staticFindings.some(finding => finding.line === 3 && /execução não medida/.test(finding.message)));
+    assert.equal(result.staticRow(73).status, 'skipped');
   });
 });
 
@@ -905,4 +1065,166 @@ test('referência e mutantes executam com o mesmo preload e permissões V8', rea
     assert.equal(result.killedBy.name, 'fronteira do desconto');
     assert.throws(() => classifyMutant(changed, inocuous), /QA_MUTANT_BASELINE_INELIGIBLE/);
   });
+});
+
+const {decodePythonPass, decodeGoPass, decodeGoProfile, measureLanguageSuite, selectLanguageSuite} = await import(
+  new URL('../deploy/modules/qa/language-tests.mjs', import.meta.url).href
+);
+const languageFixtureDir = fileURLToPath(new URL('./fixtures/module-qa-languages/', import.meta.url));
+const pythonFiles = ['arithmetic.py', 'test_arithmetic.py'];
+const goFiles = ['go/go.mod', 'go/arithmetic.go', 'go/arithmetic_test.go'];
+const pythonSelection = selectLanguageSuite('python', pythonFiles, false);
+const goSelection = selectLanguageSuite('go', goFiles, false);
+const goModule = 'example.invalid/qa/arithmetic';
+const goProfile = `mode: set\n${goModule}/arithmetic.go:3.10,4.15 2 1\n${goModule}/arithmetic.go:4.15,5.15 1 0\n`;
+const pythonReport = {
+  tests: [
+    {file: 'test_arithmetic.py', name: 'ArithmeticTest.test_control', status: 'passed'},
+    {file: 'test_arithmetic.py', name: 'ArithmeticTest.test_defect', status: 'failed'},
+  ],
+  errors: 0, unavailable: 0, fixtureSkips: 0, coverage: {files: 1, statements: [3, 4], branches: [1, 2]},
+};
+
+test('entrypoint descobre Python e Go no snapshot sintético e reserva a execução à imagem', async () => {
+  const result = spawnSync('/bin/sh', [entrypointPath], {
+    encoding: 'utf8',
+    env: {PATH: process.env.PATH, QA_HOST_TEST_MODE: '1', QA_REPO_DIR: languageFixtureDir},
+    timeout: 10_000,
+  });
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+  const report = JSON.parse(result.stdout) as Awaited<ReturnType<typeof collectQaModule>>;
+  assert.match(coverageFor(report, 'qa-snapshot').detail, /^5 arquivos copiados/);
+  for (const tool of ['python-unittest-coverage', 'go-test-cover']) {
+    assert.equal(coverageFor(report, tool).status, 'skipped');
+    assert.match(coverageFor(report, tool).detail, /contêiner isolado/);
+    assert.ok(report.coverage.every(row => row.tool !== `${tool}-execucao`));
+    assert.ok(report.findings.every(finding => finding.tool !== tool));
+  }
+  const withoutLanguages = await collectQaModule({repoDir: cleanFixtureDir});
+  for (const tool of ['python-unittest-coverage', 'go-test-cover']) {
+    assert.match(coverageFor(withoutLanguages, tool).detail, /nenhum arquivo candidato/);
+  }
+  assert.match(coverageFor(withoutLanguages, 'qa-requisito:REQ-01').detail, /vínculo estático/);
+});
+
+test('seleção offline distingue snapshot parcial, nome Python inválido e módulos Go fora de escopo', () => {
+  assert.deepEqual(pythonSelection, {files: ['test_arithmetic.py'], sourceFiles: ['arithmetic.py'], omitted: 0});
+  assert.deepEqual(goSelection, {
+    files: ['go/arithmetic_test.go'], sourceFiles: ['go/arithmetic.go'], moduleFile: 'go/go.mod', moduleDir: 'go', omitted: 0,
+  });
+  assert.match(selectLanguageSuite('python', pythonFiles, true).reason, /escopo parcial/);
+  assert.match(selectLanguageSuite('python', ['test-arithmetic.py'], false).reason, /sem nome importável/);
+  assert.match(selectLanguageSuite('go', ['arithmetic_test.go'], false).reason, /módulo Go indisponível/);
+  assert.match(selectLanguageSuite('go', [...goFiles, 'second/go.mod'], false).reason, /vários módulos/);
+  assert.match(selectLanguageSuite('go', ['vendor/pkg/arithmetic_test.go'], false).reason, /nenhum arquivo candidato/);
+  const root = selectLanguageSuite('go', ['go.mod', 'arithmetic_test.go', ...goFiles, 'vendor/tool_test.go'], false);
+  assert.deepEqual(root.files, ['arithmetic_test.go']);
+  assert.equal(root.omitted, 1);
+});
+
+test('três passadas Python com controle, reprovação da fixture e cobertura de ramos', async () => {
+  let executed = 0;
+  const result = await measureLanguageSuite('python', pythonSelection, async () => {
+    executed++;
+    return decodePythonPass({code: 0, output: JSON.stringify(pythonReport)}, pythonSelection);
+  });
+  assert.equal(executed, 3);
+  assert.equal(result.coverageRow.status, 'ok');
+  for (let index = 0; index < 3; index++) {
+    assert.match(result.extraRows[index].detail, new RegExp(`execução ${index + 1}: reprovado; 1 aprovados, 1 reprovados`));
+  }
+  assert.equal(result.extraRows[3].status, 'ok');
+  assert.match(result.extraRows[3].detail, /abaixo de 100%.*statements 3\/4, ramos 1\/2/);
+  assert.deepEqual(result.findings.map(({file, rule, message}: QaFinding) => [file, rule, message]), [
+    ['test_arithmetic.py', 'QA-TESTE-FALHOU', "Teste 'ArithmeticTest.test_defect' falhou"],
+  ]);
+  assert.throws(() => decodePythonPass({code: 0, output: '{"limited":true}'}, pythonSelection), /QA_LANGUAGE_TEST_LIMIT/);
+  assert.throws(() => decodePythonPass({code: 1, output: JSON.stringify(pythonReport)}, pythonSelection), /QA_PYTHON_EXECUTION_FAILED/);
+});
+
+test('ausência, dependência indisponível e interrupção Python geram estados próprios sem inventar cobertura', async () => {
+  const execute = (report: Partial<typeof pythonReport>) => async () =>
+    decodePythonPass({code: 0, output: JSON.stringify({...pythonReport, tests: [], coverage: null, ...report})}, pythonSelection);
+  const empty = await measureLanguageSuite('python', pythonSelection, execute({}));
+  assert.equal(empty.coverageRow.status, 'skipped');
+  assert.match(empty.extraRows[0].detail, /nenhum teste executável/);
+  assert.match(empty.extraRows[3].detail, /sem medição/);
+  const missing = await measureLanguageSuite('python', pythonSelection, execute({unavailable: 1}));
+  assert.equal(missing.coverageRow.status, 'skipped');
+  assert.match(missing.coverageRow.detail, /dependência indisponível/);
+  const skipped = await measureLanguageSuite('python', pythonSelection, execute({fixtureSkips: 1}));
+  assert.match(skipped.extraRows[0].detail, /todos os casos pulados/);
+  const interrupted = await measureLanguageSuite('python', pythonSelection, async () => { throw new Error('QA_TEST_TIMEOUT'); });
+  assert.equal(interrupted.coverageRow.status, 'failed');
+  assert.match(interrupted.extraRows[2].detail, /QA_TEST_TIMEOUT/);
+  assert.deepEqual(interrupted.findings, []);
+});
+
+function goEvents(events: object[]): string {
+  return events.map(event => JSON.stringify(event)).join('\n');
+}
+
+test('Go conserva a reprovação e o controle por passada e pondera statements sem declarar ramos', async () => {
+  const output = goEvents([
+    {Action: 'pass', Package: goModule, Test: 'TestControl'},
+    {Action: 'fail', Package: goModule, Test: 'TestDefect'},
+    {Action: 'output', Package: goModule, Test: 'TestDefect', Output: 'mensagem sintética não publicada'},
+    {Action: 'fail', Package: goModule},
+  ]);
+  const result = await measureLanguageSuite('go', goSelection, async () =>
+    decodeGoPass({code: 1, output, diagnostics: ''}, goProfile, goSelection, goModule));
+  assert.equal(result.coverageRow.status, 'ok');
+  for (let index = 0; index < 3; index++) assert.match(result.extraRows[index].detail, /1 aprovados, 1 reprovados/);
+  assert.match(result.extraRows[3].detail, /statements 2\/3/);
+  assert.doesNotMatch(result.extraRows[3].detail, /ramos/);
+  assert.equal(result.findings[0].file, 'go/arithmetic_test.go');
+  assert.match(result.findings[0].message, /TestDefect/);
+  assert.doesNotMatch(JSON.stringify(result), /mensagem sintética/);
+  assert.deepEqual(decodeGoProfile(goProfile + `${goModule}/arithmetic.go:3.10,4.15 2 0\n`,
+    new Set([`${goModule}/arithmetic.go`])), {files: 1, statements: [2, 3]});
+});
+
+test('Go distingue ausência de casos, erro de compilação, dependência offline e cobertura parcial', async () => {
+  const run = (code: number, events: object[], profile: string | null = null, selection = goSelection) =>
+    measureLanguageSuite('go', selection, async () =>
+      decodeGoPass({code, output: goEvents(events), diagnostics: ''}, profile, selection, goModule));
+  const absent = await run(0, [{Action: 'skip', Package: goModule}], goProfile);
+  assert.equal(absent.coverageRow.status, 'skipped');
+  assert.match(absent.extraRows[0].detail, /nenhum teste executável/);
+  assert.match(absent.extraRows[3].detail, /sem medição/);
+  const failure = await run(1, [{Action: 'build-fail', ImportPath: goModule},
+    {Action: 'fail', Package: goModule, FailedBuild: goModule}]);
+  assert.equal(failure.coverageRow.status, 'failed');
+  assert.deepEqual(failure.findings, []);
+  const missing = await run(1, [
+    {Action: 'build-output', ImportPath: goModule, Output: 'module lookup disabled by GOPROXY=off'},
+    {Action: 'build-fail', ImportPath: goModule},
+    {Action: 'fail', Package: goModule, FailedBuild: goModule},
+  ]);
+  assert.equal(missing.coverageRow.status, 'skipped');
+  assert.match(missing.coverageRow.detail, /dependência indisponível/);
+  const mixed = await run(1, [
+    {Action: 'build-output', ImportPath: goModule, Output: 'no required module provides package'},
+    {Action: 'fail', Package: goModule, FailedBuild: goModule},
+    {Action: 'build-fail', ImportPath: `${goModule}/other`},
+    {Action: 'fail', Package: `${goModule}/other`, FailedBuild: `${goModule}/other`},
+  ]);
+  assert.equal(mixed.coverageRow.status, 'failed');
+  const interrupted = await run(1, [
+    {Action: 'fail', Package: goModule, Test: 'TestDefect'},
+    {Action: 'run', Package: goModule, Test: 'TestInterrupted'},
+    {Action: 'fail', Package: goModule},
+  ]);
+  assert.equal(interrupted.coverageRow.status, 'failed');
+  assert.equal(interrupted.findings.length, 1);
+  assert.match(interrupted.findings[0].message, /TestDefect/);
+  const passed = [{Action: 'pass', Package: goModule, Test: 'TestControl'}, {Action: 'pass', Package: goModule}];
+  const partial = await run(0, passed, goProfile,
+    selectLanguageSuite('go', [...goFiles, 'go/unmeasured.go'], false));
+  assert.equal(partial.coverageRow.status, 'ok');
+  assert.equal(partial.extraRows[3].status, 'skipped');
+  assert.match(partial.extraRows[3].detail, /escopo parcial.*statements 2\/3/);
+  const malformed = await run(0, passed, 'malformed');
+  assert.equal(malformed.coverageRow.status, 'ok');
+  assert.match(malformed.extraRows[3].detail, /sem medição/);
 });
