@@ -9,7 +9,7 @@ import {test} from 'node:test';
 import {digest, Refusal} from '../src/contracts.ts';
 import type {CollectorCriterion, ModuleExamCollectorContext} from '../src/module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewObservation} from '../src/module-exam-proof.ts';
-import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamCoverage, type ModuleExamSeat} from '../src/module-exam.ts';
+import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReadRequestBinding, moduleExamReviewEvidence, type ModuleExamCoverage, type ModuleExamSeat} from '../src/module-exam.ts';
 import {requestModuleCorrection, runVerificationModule, validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
 
 const commit = 'a'.repeat(40);
@@ -116,12 +116,13 @@ function context(row: Example, partial?: Partial<ModuleExamCollectorContext>): M
 }
 
 const candidate = (row: Example) => ({...moduleCollectorCandidate(row.raw), reviewCommit: commit});
-function examined(files: ReadonlyMap<string, string | null>, module: Example['module']) {
+function examined(files: ReadonlyMap<string, string | null>, module: Example['module'], readIntentId = intentId) {
   const rows = new Map<string, ModuleExamCoverage>();
   for (const [file, code] of files) {
     if (code === null) continue;
+    const read = {requestId: randomUUID(), commit, sourceDigest: digest(code), complete: true, promptDigest: digest('leitura sintética')};
     rows.set(file, {file, status: 'lido', examiner: seat('primeiro'), reason: null, checklist: [module],
-      read: {binding: digest({file, code}), commit, sourceDigest: digest(code), complete: true}});
+      read: {...read, binding: moduleExamReadRequestBinding({...read, module, intentId: readIntentId, file})}});
   }
   return rows;
 }
@@ -169,9 +170,7 @@ for (const row of examples) {
     const reason = moduleReviewProofReason(evidence, verdict);
     assert.ok(reason);
     assert.ok(hasModuleReviewProof(evidence, verdict));
-    assert.ok(hasModuleReviewProof(evidence, {...verdict, kind: undefined, reviewReason: verdict.reason}));
-    assert.equal(hasModuleReviewProof(evidence, {...verdict, kind: undefined, reviewReason: 'Os fatos contradizem a hipótese.'}), false);
-    assert.equal(hasModuleReviewProof(evidence, {...verdict, kind: undefined}), false);
+    assert.equal(hasModuleReviewProof(evidence, {...verdict, reason: 'Os fatos contradizem a hipótese.'}), false);
     assert.equal(moduleReviewProofReason(evidence, {...verdict, reason: 'A prova não sustenta a hipótese.'}), null);
     assert.equal(moduleReviewProofReason(evidence, {...verdict, reason: verdict.reason + ' Os fatos a contradizem.'}), null);
     assert.equal(moduleReviewProofReason(evidence, {...verdict, decision: 'contradiz'}), null);
@@ -215,10 +214,13 @@ test('rejeita troca de critério, de origem, de arquivo e de prova entre exames'
   }
   assert.equal(review(second)?.collectorCase, undefined);
   const otherIntent = randomUUID();
-  const otherEvidence = moduleExamReviewEvidence(second.module, candidate(second), second.source, second.raw, {
-    intentId: otherIntent, snapshot, collector: context(second, {intentId: otherIntent}),
-    coverage: examined(new Map([[second.raw.file, second.source]]), second.module),
-  })!;
+  const files = new Map([[second.raw.file, second.source]]);
+  const readForOtherIntent = (coverage: ReturnType<typeof examined>) =>
+    moduleExamReviewEvidence(second.module, candidate(second), second.source, second.raw, {
+      intentId: otherIntent, snapshot, collector: context(second, {intentId: otherIntent}), coverage,
+    });
+  assert.equal(readForOtherIntent(examined(files, second.module))?.collectorCase, undefined);
+  const otherEvidence = readForOtherIntent(examined(files, second.module, otherIntent))!;
   assert.ok(otherEvidence.collectorCase);
   assert.equal(moduleReviewProofReason(otherEvidence, measured), null);
   assert.equal(review(second, context(second), second.source + '\n' + ' '.repeat(16000)), null);
@@ -326,6 +328,8 @@ test('um ciclo exige o import de retorno, resolução única e leitura de cada a
     {...support, checklist: ['qa']},
     {...support, read: undefined},
     {...support, read: {...support.read!, binding: ''}},
+    {...support, read: {...support.read!, requestId: undefined}},
+    {...support, read: {...support.read!, promptDigest: digest('outro pedido')}},
     {...support, read: {...support.read!, complete: false}},
     {...support, read: {...support.read!, commit: 'b'.repeat(40)}},
     {...support, read: {...support.read!, sourceDigest: digest(betaSource + '\n')}},

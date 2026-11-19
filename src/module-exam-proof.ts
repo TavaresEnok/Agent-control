@@ -55,7 +55,7 @@ export type ModuleReviewDecision = z.infer<typeof ReviewDecision>;
 const decisionByStatus = {confirmado: 'sustenta', provavel: 'insuficiente', descartado: 'contradiz'} as const;
 const ReviewVerdict = ConfirmResult.extend({binding: Binding, observation: Observation.optional(), decision: ReviewDecision.optional()});
 type Verdict = Pick<z.infer<typeof ReviewVerdict>, 'status' | 'proof' | 'reason' | 'observation' | 'decision'>
-  & {binding?: string; kind?: 'confirmacao'; reviewReason?: string};
+  & {binding?: string};
 
 type CollectorInput = Pick<ReviewEvidence, 'module' | 'tool' | 'file' | 'line' | 'evidence'>;
 type Tokens = NonNullable<ReturnType<typeof scanModuleExamSource>>;
@@ -353,7 +353,6 @@ export function readModuleReviewVerdict(value: unknown) {
 export function moduleReviewProofReason(evidence: ReviewEvidence, verdict: Verdict): string | null {
   const context = reviewContext(evidence);
   const observation = verdict.observation;
-  const suppliedReason = verdict.kind === 'confirmacao' ? verdict.reason : verdict.reviewReason;
   if (!context.criterion || !observation
     || verdict.status === 'provavel' || verdict.decision !== decisionByStatus[verdict.status] || verdict.binding !== digest(context)
     || verdict.proof.trim() !== evidence.code || !evidence.code || evidence.code.length > 2000 || /[\r\n…]/u.test(evidence.code)
@@ -362,7 +361,7 @@ export function moduleReviewProofReason(evidence: ReviewEvidence, verdict: Verdi
   const measured = evidence.collectorCase;
   if (measured) {
     const {column, expression, facts} = observation;
-    return verdict.status === 'confirmado' && suppliedReason === measured.reason
+    return verdict.status === 'confirmado' && verdict.reason === measured.reason
       && column === measured.anchor.column && expression === measured.anchor.expression
       && facts?.length === measured.facts.length && facts.every((fact, index) => fact === measured.facts[index])
       ? measured.reason : null;
@@ -394,17 +393,16 @@ export function moduleReviewProofReason(evidence: ReviewEvidence, verdict: Verdi
     const reason = declaration.skipped
       ? legacyReason(skipReasonTemplate, observation.column, declaration.title, tokens[index + 2]!.text)
       : legacyReason(skipRemovalReasonTemplate, observation.column, declaration.title);
-    return suppliedReason === reason ? reason : null;
+    return verdict.reason === reason ? reason : null;
   }
 
   const call = callCriterion(tokens, index);
   if (verdict.status !== 'confirmado' || call?.criterion !== context.criterion || observation.expression !== located(call.end)
     || normalizeCollectorSnippet(material ?? evidence.evidence) !== normalizeCollectorSnippet(observation.expression)) return null;
   const reason = legacyReason(callReasonTemplate, observation.column);
-  return suppliedReason === reason ? reason : null;
+  return verdict.reason === reason ? reason : null;
 }
 
 export function hasModuleReviewProof(evidence: ReviewEvidence, verdict: Verdict): boolean {
-  const reason = moduleReviewProofReason(evidence, verdict);
-  return reason !== null && reason === verdict.reason;
+  return moduleReviewProofReason(evidence, verdict) !== null;
 }
