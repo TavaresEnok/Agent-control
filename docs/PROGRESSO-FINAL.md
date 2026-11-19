@@ -324,3 +324,12 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:13 UTC — Trabalhador encerrou C8-R6 em 96a7a766 (código 0). Gerente confere a entrega.
 - 19/11/2026 04:13 UTC — Trabalho C7-R6 iniciado por Sol high normal em final-c7.
 - 19/11/2026 04:13 UTC — Revisão independente por modelo distinto sobre a7808ccf. A matriz podia atribuir uma mensagem de asserção à prova e trocar os arquivos de duas funções. C2-R10 corrigirá o vínculo por operando e por arquivo após a ordem em curso no mesmo worktree. A integração de QA bc28bdb6 também passou nas 19 provas de limpeza, com três cenários no Docker.
+- 19/11/2026 04:14 UTC — Arquitetura em candidato isolado 68273d88, com apenas QA e arquitetura. A CLI do módulo 3 está em prova neste conjunto para verificar a aplicação incremental das entregas.
+- 19/11/2026 04:14 UTC — Suíte oficial de c2-r8-painel em faf0a7c9: 253 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 04:15 UTC — Os oito módulos em 9622ce0b e a arquitetura incremental em 68273d88 passaram nas seis provas da CLI em cada execução. Preparado o candidato incremental de dependências d130f2fb. A instalação viva continua na versão de A2.
+- 19/11/2026 04:15 UTC — Falha na validação de c2-r8-painel em complementares, código 1. Logs privados do gerente.
+- 19/11/2026 04:15 UTC — Validação de c2-r9-reverif-r2 em ace07a61 iniciada no checkout de integração.
+- 19/11/2026 04:15 UTC — Dependências incremental d130f2fb passou nas seis provas pela CLI. Banco em candidato incremental 3961ea53.
+- 19/11/2026 04:16 UTC — Revisor encerrou C-BASE-R8 em c7beedd2 (código 0). Gerente confere a entrega.
+- 19/11/2026 04:16 UTC — Revisão C-REVERIFICAR-R2 iniciada por Sol high normal somente leitura em 0e8ad897.
+- 19/11/2026 04:16 UTC — Documentação 96a7a766 passou em 21/21 com ferramentas fixadas locais e no contêiner. A primeira passagem correu sem a opção das ferramentas locais e pulou nove testes; a repetição executou todos. A CLI está em prova em 43378796.
