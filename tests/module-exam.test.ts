@@ -49,8 +49,10 @@ test('examinador e revisor distintos, só evidência no pedido e prova obrigató
     release: async (_seat, state) => { releases.push(state); },
     worker: {run: async call => {
       const task = JSON.parse(call.task); tasks.push({task, call});
-      if (task.code && task.checklist) return JSON.stringify({kind:'exame', filesRead:['src/routes.ts'], checklist:['qa'], findings:[{line:1, snippet:'app.get', title:'PONTO DO EXAMINADOR', severity:'baixa'}]});
-      return JSON.stringify({kind:'confirmacao', status:'confirmado', reason:'observação', proof: tasks.length === 2 ? '' : 'prova observada'});
+      if (task.checklist) return JSON.stringify({kind:'exame', filesRead:['src/routes.ts'], checklist:['qa'], routesReviewed: task.routes,
+        findings:[{line:1, snippet:'app.get', title:'PONTO DO EXAMINADOR', hypothesis:'O método recebe o handler diretamente?', severity:'baixa'}]});
+      return JSON.stringify({kind:'confirmacao', status:'confirmado', binding: task.binding,
+        reason:'O segundo argumento de `app.get` é o handler, sem chamada intermediária.', proof: tasks.length === 2 ? '' : task.code});
     }},
   });
   assert.equal(result.coverage[0]!.examiner?.profileId, examiner.profileId);
@@ -59,6 +61,10 @@ test('examinador e revisor distintos, só evidência no pedido e prova obrigató
   assert.equal(result.findings[0]!.status, 'provavel');
   assert.equal(result.findings[1]!.status, 'confirmado');
   assert.equal(result.findings[1]!.verifier?.profileId, reviewer.profileId);
+  assert.deepEqual(tasks.slice(1).map(({task}) => [task.file, task.line, task.rule, task.hypothesis]), [
+    ['src/routes.ts', 1, 'regra', 'O código neste ponto apresenta a condição investigada pela regra regra?'],
+    ['src/routes.ts', 1, 'exame-de-arquivo', 'O método recebe o handler diretamente?'],
+  ]);
   assert.ok(tasks.every(x=>x.call.role === 'specialist' && x.call.writePaths.length === 0));
   assert.doesNotMatch(JSON.stringify(tasks.slice(1)), /CONCLUSAO_DO_AUTOR|PONTO DO EXAMINADOR/);
   assert.deepEqual(releases, ['exited','exited','exited']);
@@ -129,13 +135,74 @@ test('limite na fase de leitura preserva cobertura anterior e impede consumo do 
   assert.equal(result.findings[0]?.failure, 'PROVIDER_USAGE_LIMIT');
 });
 
-test('coletores isolados identificam apenas a evidência determinística da linha', async () => {
-  const result = await examineFunctionalModule({module: 'qa', intentId, map, isolatedMeasurements: true, findings: [
+test('a evidência do coletor permanece provável mesmo se for toda a linha', async () => {
+  const result = await examineFunctionalModule({module: 'qa', intentId, map, findings: [
     {...finding, evidence: 'app.get("/pedidos", handler);'},
     {...finding, evidence: 'app.get("/ausente", handler);'},
   ]});
   assert.equal(result.mode, 'somente_ferramentas');
   assert.deepEqual(result.findings.map(candidate => [candidate.status, candidate.verifier?.model]),
-    [['confirmado', 'medição determinística'], ['provavel', undefined]]);
+    [['provavel', undefined], ['provavel', undefined]]);
   assert.ok(result.coverage.every(row => row.status === 'nao_julgado'));
+});
+
+test('a prova vincula hipótese e regra na mesma linha, e rejeita a linha de outro arquivo', async () => {
+  const examiner = seat('a'), reviewer = seat('b');
+  const alternative = 'app.get("/outro", handler);';
+  const otherFile = 'other.ts';
+  const sameCode = map.files[0]!.code!;
+  const inputFindings = [finding, {...finding, rule: 'outra-regra'}, {...finding, rule: 'terceira-regra'},
+    {...finding, file: otherFile}, {...finding, rule: 'subtrecho'}, {...finding, rule: 'sem-explicacao'}];
+  let initial: {binding: string; proof: string; reason: string; status: string; kind: string} | undefined;
+  const result = await examineFunctionalModule({module: 'qa', intentId, findings: inputFindings,
+    map: {...map, files: [...map.files, {file: otherFile, code: sameCode, reason: null},
+      {file: 'different.ts', code: alternative, reason: null}]},
+    reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      if (task.checklist) return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], findings: []});
+      if (!initial) {
+        initial = {kind: 'confirmacao', binding: task.binding, status: 'confirmado', proof: task.code,
+          reason: 'A chamada usa diretamente `handler` na rota de pedidos.'};
+        return JSON.stringify(initial);
+      }
+      assert.notEqual(task.binding, initial.binding);
+      if (task.rule === 'terceira-regra') return JSON.stringify({...initial, binding: task.binding, proof: alternative});
+      if (task.rule === 'subtrecho') return JSON.stringify({...initial, binding: task.binding, proof: 'handler'});
+      if (task.rule === 'sem-explicacao') return JSON.stringify({...initial, binding: task.binding, reason: 'Observação genérica que não cita a expressão examinada.'});
+      return JSON.stringify(initial);
+    }},
+  });
+  assert.deepEqual(result.findings.map(candidate => candidate.status),
+    ['confirmado', 'provavel', 'provavel', 'provavel', 'provavel', 'provavel']);
+  assert.ok(result.findings.slice(1).every(candidate => candidate.verifier === null));
+});
+
+test('somente atestados da declaração enviada contam mesmo quando o arquivo excede vinte rotas', async () => {
+  const examiner = seat('a');
+  const file = 'routes.ts';
+  const methods = Array.from({length: 22}, (_, index) => ({file, line: index + 1, method: 'GET', path: `/route-${index}`}));
+  const result = await examineFunctionalModule({module: 'qa', intentId, findings: [],
+    map: {
+      files: [{file, code: methods.map(route => `app.get("${route.path}", handler);`).join('\n'), reason: null},
+        {file: 'other.ts', code: 'app.get("/foreign", handler);', reason: null}],
+      routes: [methods[0]!, {file, line: 1, method: 'POST', path: '/route-0'}, ...methods.slice(1),
+        {file: 'other.ts', line: 1, method: 'GET', path: '/foreign'}],
+    },
+    reserve: async () => examiner, release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      const routesReviewed = task.file === file ? [
+        task.routes[0], task.routes[19], {...methods[1]!, line: 1}, {...methods[2]!, method: 'POST'},
+        {...methods[3]!, path: '/wrong'}, {file, line: 1, method: 'POST', path: '/route-0'},
+        methods[20], methods[21], {file: 'other.ts', line: 1, method: 'GET', path: '/foreign'},
+        ...Array.from({length: 20}, (_, index) => ({...methods[index], line: 0})),
+      ] : [];
+      if (task.file === file) assert.deepEqual(task.routes, methods.slice(0, 20));
+      return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], routesReviewed, findings: []});
+    }},
+  });
+  assert.ok(result.coverage.every(row => row.status === 'lido'));
+  assert.deepEqual(result.routes.filter(row => row.status === 'lido').map(({file, line}) => [file, line]), [[file, 1], [file, 20]]);
+  assert.equal(result.routes.length, 24);
 });

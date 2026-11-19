@@ -1,4 +1,4 @@
-import {request as httpRequest} from 'node:http';
+import {request as httpRequest, type IncomingMessage} from 'node:http';
 import {request as httpsRequest} from 'node:https';
 import {connect as connectTls, type TLSSocket} from 'node:tls';
 import {z} from 'zod';
@@ -79,6 +79,36 @@ function codexTunnel(signal: AbortSignal): Promise<TLSSocket> {
   });
 }
 
+export function readModuleExamCodexResponse(response: IncomingMessage, model: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fail = (code: string) => reject(new Refusal(code));
+    if (response.statusCode === 429) {
+      fail('PROVIDER_USAGE_LIMIT');
+      response.destroy();
+      return;
+    }
+    let bytes = 0;
+    const chunks: Buffer[] = [];
+    response.on('error', () => fail('MODULE_EXAM_PROVIDER_FAILED'));
+    response.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > maxResponseBytes) { fail('MODULE_EXAM_RESPONSE_INVALID'); response.destroy(); return; }
+      chunks.push(chunk);
+    });
+    response.once('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      if (response.statusCode !== 200 && codexLimitFromText([text])) { fail('PROVIDER_USAGE_LIMIT'); return; }
+      if (response.statusCode === 401 || response.statusCode === 403) { fail('PROVIDER_AUTH_FAILED'); return; }
+      if (response.statusCode !== 200 || !response.headers['content-type']?.startsWith('text/event-stream')) {
+        fail('MODULE_EXAM_PROVIDER_FAILED');
+        return;
+      }
+      try { resolve(readModuleExamCodexOutput(text, model)); }
+      catch (error) { reject(error); }
+    });
+  });
+}
+
 export async function requestModuleExamCodex(input: {
   accountId: string; accessToken: string; model: string; effort: Effort; task: string; sessionId: string; signal: AbortSignal;
 }): Promise<string> {
@@ -90,31 +120,7 @@ export async function requestModuleExamCodex(input: {
         createConnection: () => socket, signal: input.signal, headers: {
           'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Accept: 'text/event-stream',
           Authorization: 'Bearer ' + input.accessToken, 'ChatGPT-Account-ID': input.accountId, session_id: input.sessionId,
-        }}, response => {
-        let bytes = 0;
-        const chunks: Buffer[] = [];
-        const fail = (code: string) => reject(new Refusal(code));
-        response.on('error', () => fail('MODULE_EXAM_PROVIDER_FAILED'));
-        response.on('data', (chunk: Buffer) => {
-          bytes += chunk.length;
-          if (bytes > maxResponseBytes) { fail('MODULE_EXAM_RESPONSE_INVALID'); response.destroy(); return; }
-          chunks.push(chunk);
-        });
-        response.once('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8');
-          if (response.statusCode === 429 || (response.statusCode !== 200 && codexLimitFromText([text]))) {
-            fail('PROVIDER_USAGE_LIMIT');
-            return;
-          }
-          if (response.statusCode === 401 || response.statusCode === 403) { fail('PROVIDER_AUTH_FAILED'); return; }
-          if (response.statusCode !== 200 || !response.headers['content-type']?.startsWith('text/event-stream')) {
-            fail('MODULE_EXAM_PROVIDER_FAILED');
-            return;
-          }
-          try { resolve(readModuleExamCodexOutput(text, input.model)); }
-          catch (error) { reject(error); }
-        });
-      });
+        }}, response => { void readModuleExamCodexResponse(response, input.model).then(resolve, reject); });
       req.once('error', () => reject(new Refusal('MODULE_EXAM_PROVIDER_FAILED')));
       req.end(body);
     });

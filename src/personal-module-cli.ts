@@ -277,7 +277,6 @@ export async function runPersonalModuleCli(
     const runExam = createPersonalModuleExam({
       ledger, principal: project.owner, authority, commit,
       loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
-      isolatedMeasurements: !deps?.moduleExamRuntime && (deps?.collectorOutput !== undefined || deps?.runCollector !== undefined),
     });
     const runId = randomUUID();
     const collectorAbort = new AbortController();

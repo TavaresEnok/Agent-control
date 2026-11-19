@@ -1,26 +1,25 @@
 import assert from 'node:assert/strict';
 import {execFile, execFileSync} from 'node:child_process';
-import {generateKeyPairSync, randomUUID} from 'node:crypto';
-import {existsSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
-import {createServer, type IncomingMessage} from 'node:http';
+import {IncomingMessage} from 'node:http';
+import {Socket} from 'node:net';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {promisify} from 'node:util';
-import {AccountHomes} from '../src/account-homes.ts';
 import {Capacity} from '../src/capacity.ts';
 import {digest, Refusal} from '../src/contracts.ts';
 import {prepareClaudeExamAccessToken} from '../src/exam-login.ts';
 import {Ledger, VERIFICATION_MODULES} from '../src/ledger.ts';
-import {moduleExamConnectHost, moduleExamSocket, monitorModuleExamEgress, startModuleExamEgress, type ModuleExamProvider} from '../src/module-exam-egress.ts';
-import {moduleExamCodexBody, readModuleExamCodexOutput} from '../src/module-exam-codex.ts';
+import {moduleExamConnectHost, moduleExamSocket, monitorModuleExamEgress, startModuleExamEgress} from '../src/module-exam-egress.ts';
+import {moduleExamCodexBody, readModuleExamCodexOutput, readModuleExamCodexResponse} from '../src/module-exam-codex.ts';
 import type {ModuleExamRuntime} from '../src/module-exam-native.ts';
 import {moduleExamClaudeArgs, readModuleExamClaudeOutput} from '../src/module-exam-worker.ts';
-import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
 import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli, type PersonalModuleCliDeps} from '../src/personal-module-cli.ts';
 import {runPersonalQaCli} from '../src/personal-qa-cli.ts';
-import {readModuleReport, type VerificationModuleRunResult} from '../src/verification-modules.ts';
+import {readModuleReport, type ModuleCollectorOutput, type VerificationModuleRunResult} from '../src/verification-modules.ts';
+import {createModuleExamFixture, moduleExamFixtureAnswer} from './fixtures/module-exam-native.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('provedores recebem apenas HTTPS fixo e o Claude inicia sem ferramentas nem configuração externa', () => {
@@ -106,97 +105,19 @@ test('o fechamento do relay encerra a autorização de inferência do worker', a
   }
 });
 
-type Mount = {Type: 'bind'; Source: string; Destination: string; RW: boolean};
-type Config = {Image: string; Labels: Record<string, string>; Cmd: string[]; Env: string[]; Entrypoint: string[];
-  User: string; WorkingDir: string; HostConfig: {NetworkMode: string; Binds: string[]}};
-type Container = {Id: string; Image: string; Config: Config; HostConfig: Config['HostConfig'] & {PidMode: string; IpcMode: string; CapAdd: string[]; Devices: unknown[]; PortBindings: null}; Mounts: Mount[];
-  NetworkSettings: {Networks: Record<string, {NetworkID: string; IPAddress: string}>};
-  State: {Status: string; Running: boolean; FinishedAt: string; ExitCode: number}};
-type Launch = {jobId: string; provider: ModuleExamProvider; task: string; moduleExam: boolean; role: string; writePaths: string[]};
-
-async function fakeDocker(socket: string, answer: (launch: Launch) => {output: string; failureCode: string | null}) {
-  const containers = new Map<string, Container>();
-  const networks = new Map<string, {Name: string; Labels: Record<string, string>}>();
-  const id = () => digest(randomUUID());
-  const logs: Launch[] = [];
-  const observations: Container[] = [];
-  let releaseFailure: unknown;
-  const end = (container: Container, exitCode: number) => {
-    container.State = {Status: 'exited', Running: false, FinishedAt: new Date().toISOString(), ExitCode: exitCode};
-  };
-  async function body(req: IncomingMessage) {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(chunk);
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  }
-  const server = createServer((request, response) => {
-    const send = (status: number, data?: object) => {
-      response.writeHead(status);
-      response.end(data ? JSON.stringify(data) : '');
-    };
-    void (async () => {
-      const url = new URL(request.url!, 'http://docker.invalid');
-      const [kind, key, action] = url.pathname.split('/').slice(2);
-      const method = request.method;
-      if (kind === 'images') { send(200); return; }
-      if (kind === 'networks') {
-        if (key === 'create') {
-          const value = await body(request), net = id();
-          networks.set(net, {Name: value.Name, Labels: value.Labels});
-          send(201, {Id: net}); return;
-        }
-        if (method === 'DELETE') { networks.delete(key!); send(204); return; }
-        const network = networks.get(key!);
-        if (!network) { send(404); return; }
-        const peers = [...containers.values()].filter(c => c.HostConfig.NetworkMode === key);
-        send(200, {...network, Id: key, Internal: true, Containers: Object.fromEntries(peers.map(c =>
-          [c.Id, {IPv4Address: '172.20.0.3/16'}]))}); return;
-      }
-      if (kind !== 'containers') throw Error('unexpected fixture route');
-      if (key === 'create') {
-        const name = url.searchParams.get('name')!, config: Config = await body(request);
-        const cid = id(), host = config.HostConfig;
-        const mounts = host.Binds.map((bind): Mount => {
-          const [Source, Destination, mode] = bind.split(':');
-          return {Type: 'bind', Source: Source!, Destination: Destination!, RW: mode === 'rw'};
-        });
-        const attached: Container['NetworkSettings']['Networks'] = host.NetworkMode === 'none' ? {none: {NetworkID: '', IPAddress: ''}} : {job: {NetworkID: host.NetworkMode, IPAddress: '172.20.0.3'}};
-        const container: Container = {Id: cid, Image: config.Image, Config: config,
-          HostConfig: {...host, PidMode: '', IpcMode: 'private', CapAdd: [], Devices: [], PortBindings: null},
-          Mounts: mounts, NetworkSettings: {Networks: attached},
-          State: {Status: 'created', Running: false, FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0}};
-        containers.set(name, container);
-        observations.push(container);
-        send(201, {Id: cid}); return;
-      }
-      const entry = [...containers.entries()].find(([name, c]) => name === key || c.Id === key);
-      if (!entry) { send(404); return; }
-      const [name, c] = entry;
-      if (method === 'DELETE') { containers.delete(name); send(204); return; }
-      if (action === 'start') { c.State = {...c.State, Status: 'running', Running: true}; send(204); return; }
-      if (action === 'stop') { if (c.State.Running) end(c, 137); send(204); return; }
-      if (action === 'logs') { send(200); return; }
-      if (action !== 'json') throw Error('unexpected container operation');
-      const input = c.Mounts.find(m => m.Destination === '/input')?.Source;
-      const output = c.Mounts.find(m => m.Destination === '/output')?.Source;
-      if (input && output && c.State.Running && name === key && existsSync(join(input, 'launch.json'))) {
-        const launch: Launch = JSON.parse(await readFile(join(input, 'launch.json'), 'utf8')).payload;
-        const result = answer(launch);
-        logs.push(launch);
-        const exitCode = result.failureCode ? 1 : 0;
-        await writeFile(join(output, 'execution-result.json'), JSON.stringify({schemaVersion: 1, jobId: launch.jobId,
-          ...result, normalizedTokensUsed: null, usageWindows: null, nativeSessionId: null, exitCode}), {mode: 0o600});
-        end(c, exitCode);
-      }
-      send(200, c);
-    })().catch(error => { releaseFailure = error; send(500); });
-  });
-  await new Promise<void>(resolve => server.listen(socket, resolve));
-  return {logs, observations, containers, networks, check() { assert.equal(releaseFailure, undefined); },
-    close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))};
-}
-
 const base = process.env.AC_TEST_DATABASE_URL;
+test('status 429 prevalece com corpo vazio, excessivo ou sem fim', async () => {
+  for (const body of [null, Buffer.alloc(1024 * 1024 + 1), undefined]) {
+    const response = new IncomingMessage(new Socket());
+    response.statusCode = 429;
+    if (body !== undefined) response.push(body);
+    const verdict = readModuleExamCodexResponse(response, 'fixture');
+    assert.equal(response.listenerCount('data'), 0);
+    assert.equal(response.destroyed, true);
+    await assert.rejects(verdict, (error: unknown) => error instanceof Refusal && error.code === 'PROVIDER_USAGE_LIMIT');
+  }
+});
+
 test('as oito CLIs pessoais aceitam apenas identificadores de achado na reverificação', () => {
   const runId = randomUUID();
   for (const module of VERIFICATION_MODULES) {
@@ -214,22 +135,13 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
     const database = await isolatedDatabase(base!, 'moduleexam');
     const ledger = new Ledger(database.url);
     const root = await mkdtemp(join(tmpdir(), 'ac-module-native-test-'));
-    const socket = join(root, 'docker.sock');
     let exhaust = false;
-    let recheckAnswer: ((task: {code: string}) => string) | undefined;
-    const docker = await fakeDocker(socket, launch => {
-      const task = JSON.parse(launch.task);
-      if (task.commit && recheckAnswer) return {failureCode: null, output: recheckAnswer(task)};
-      if (launch.provider === 'claude') return {failureCode: null,
-        output: JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], findings: []})};
-      if (exhaust) return {output: 'diagnóstico privado descartado', failureCode: 'PROVIDER_USAGE_LIMIT'};
-      return {failureCode: null, output: JSON.stringify({kind: 'confirmacao', status: 'confirmado',
-        proof: 'return 42;', reason: 'Linha observada.'})};
-    });
+    let recheckAnswer: ((task: {code: string; binding: string}) => string) | undefined;
+    let fixture: Awaited<ReturnType<typeof createModuleExamFixture>> | undefined;
     try {
       await ledger.migrate();
-      const dataDirectory = join(root, 'data'), repo = join(root, 'repo'), hostRoot = join(root, 'spool'), accountRoot = join(root, 'accounts');
-      for (const path of [dataDirectory, repo, hostRoot, accountRoot]) await mkdir(path, {mode: 0o700});
+      const dataDirectory = join(root, 'data'), repo = join(root, 'repo');
+      for (const path of [dataDirectory, repo]) await mkdir(path, {mode: 0o700});
       const git = (...args: string[]) => execFileSync('/usr/bin/git', ['-C', repo, ...args], {stdio: 'pipe'});
       await writeFile(join(repo, 'index.ts'), 'return 42;\nconst password = "SEGREDO_SINTETICO_OMITIDO";\n');
       await writeFile(join(repo, 'other.ts'), 'return 7;\n');
@@ -248,38 +160,13 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       const context = await ledger.createContext(owner, project, randomUUID());
       const capacity = new Capacity(ledger);
       await capacity.configure(owner, {programmingLimit: 2, evaluationLimit: 2});
-      const image = 'sha256:' + 'd'.repeat(64);
-      const signingKeyPem = generateKeyPairSync('ed25519').privateKey.export({format: 'pem', type: 'pkcs8'}).toString();
-      const runtime: ModuleExamRuntime[number][] = [];
-      const profiles = [];
-      for (const provider of ['claude', 'codex'] as const) {
-        const accountId = randomUUID(), profileId = randomUUID(), model = provider + '-module-fixture';
-        const subject = 'account-synthetic-module-' + provider;
-        const subjectDigest = digest({provider, subject});
-        await capacity.registerModel(owner, {provider, model, efforts: ['medium'], roles: ['specialist'], source: 'synthetic://module-exam'});
-        await capacity.addAccount(owner, project, {id: accountId, provider, label: provider, resourceIdentity: provider + ':' + subjectDigest,
-          mode: 'subscription_cli', eligibility: 'documented_supported', eligibilitySource: 'synthetic://module-exam', maxConcurrent: 2});
-        await capacity.addProfile(owner, project, {id: profileId, accountId, model, role: 'specialist', effort: 'medium'});
-        await capacity.observeQuota(owner, accountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://module-exam'});
-
-        await new AccountHomes(ledger, accountRoot, [repo]).initialize(owner, project, accountId);
-        const account = join(accountRoot, accountId);
-        if (provider === 'claude') {
-          await writeFile(join(account, '.credentials.json'), JSON.stringify({claudeAiOauth: {
-            accessToken: 'synthetic-claude-access-only-fixture', refreshToken: 'synthetic-claude-refresh-only-fixture',
-            expiresAt: Date.now() + 3600_000}}), {mode: 0o600});
-        } else {
-          await mkdir(join(account, '.codex'), {mode: 0o700});
-          await writeFile(join(account, '.codex', 'auth.json'), JSON.stringify({auth_mode: 'chatgpt',
-            tokens: {account_id: subject, access_token: 'synthetic-codex-access-only-fixture', refresh_token: 'synthetic-codex-refresh-only-fixture'}}), {mode: 0o600});
-        }
-        runtime.push({provider, accountIds: new Set([accountId]), supervisor: new NativeExecutionSupervisor(ledger, {
-          id: 'fixture-' + provider, provider, workerImage: image, toolsImage: image, hostRoot, accountRoot,
-          protectedRepositories: [repo], signingKeyPem, providerNetworkId: 'e'.repeat(64), socketPath: socket,
-          accountSubjects: [{accountId, subjectDigest}], workerEnv: [], toolsEnv: [],
-        })});
-        profiles.push(profileId);
-      }
+      fixture = await createModuleExamFixture({root, repo, ledger, owner, project, answer(launch) {
+        const task = JSON.parse(launch.task);
+        if (task.commit && recheckAnswer) return {failureCode: null, output: recheckAnswer(task)};
+        if (launch.provider === 'codex' && exhaust) return {output: 'diagnóstico privado descartado', failureCode: 'PROVIDER_USAGE_LIMIT'};
+        return moduleExamFixtureAnswer(launch);
+      }});
+      const {docker, runtime, profiles} = fixture;
       const revision = await capacity.publish(owner, project, 0, {schemaVersion: 1, maxProgrammersPerContext: 1,
         maxEvaluatorsPerContext: 1, roles: {specialist: {regular: profiles, emergency: []}}});
       await capacity.assignPolicy(owner, context, revision);
@@ -289,7 +176,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         projects: [{id: otherProject, label: 'Outro projeto', repo: join(root, 'other-repo'), owner}],
         http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
         happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'}}), {mode: 0o600});
-      const collectorOutput = {coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'leitura local'}],
+      const collectorOutput: ModuleCollectorOutput = {coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'leitura local'}],
         findings: ['index.ts', 'other.ts'].map(file => ({tool: 'fixture', rule: 'FIXTURE-01', file, line: 1,
           severity: 'baixa', message: 'Conclusão sintética do autor', evidence: file === 'index.ts' ? 'return 42;' : 'return 7;'}))};
       let result: VerificationModuleRunResult | undefined;
@@ -297,8 +184,12 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         runPersonalModuleCli('qa', [installation, project], {collectorOutput, moduleExamRuntime,
           onResult(value) { result = value; }});
       await runPersonalModuleCli('qa', [installation, project], {collectorOutput, onResult(value) { result = value; }});
-      assert.ok(result?.achados.every(f => f.status === 'confirmado' && f.verifier?.model === 'medição determinística'));
-      assert.match(await readFile(join(result!.directory, 'cobertura.md'), 'utf8'), /medições do coletor isolado/);
+      assert.equal(result?.achados.length, 2);
+      assert.ok(result?.achados.every(f => f.status === 'provavel' && f.verifier === null));
+      await runPersonalModuleCli('qa', [installation, project], {runCollector: async () => collectorOutput,
+        onResult(value) { result = value; }});
+      assert.equal(result?.achados.length, 2);
+      assert.ok(result?.achados.every(f => f.status === 'provavel' && f.verifier === null));
 
       await run(async () => []);
       assert.equal(docker.logs.length, 0);
@@ -312,8 +203,33 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.ok(result?.achados.every(f => f.status === 'provavel' && f.verifier === null));
       assert.match(await readFile(join(result!.directory, 'cobertura.md'), 'utf8'), /Revisor de outro provedor indisponível/);
 
-      await run(async () => runtime);
+      const reviewer = runtime[1]!;
+      const reviewerSupervisor = reviewer.supervisor;
+      let checkedRelease = 0;
+      await run(async () => [runtime[0]!, {...reviewer, supervisor: {
+        start: reviewerSupervisor.start.bind(reviewerSupervisor), stop: reviewerSupervisor.stop.bind(reviewerSupervisor),
+        closeModuleExamEgress: reviewerSupervisor.closeModuleExamEgress.bind(reviewerSupervisor),
+        retireTerminal: reviewerSupervisor.retireTerminal.bind(reviewerSupervisor),
+        async reconcile(principal, authority, request) {
+          const outcome = await reviewerSupervisor.reconcile(principal, authority, request);
+          if (outcome.state === 'completed') {
+            const grant = async () => (await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [request.grantId])).rows[0];
+            const saved = await grant();
+            assert.equal(saved.state, 'released');
+            assert.ok(saved.physical_receipt.containerId);
+            const {rows: [job]} = await ledger.pool.query('SELECT receipt FROM ac_native_execution_jobs WHERE id=$1', [request.jobId]);
+            assert.equal(job.receipt.payload.physicalDigest, digest(saved.physical_receipt));
+            for (let retry = 0; retry < 2; retry++) {
+              await capacity.transition(principal, request.grantId, authority, 'released', {processId: request.grantId, state: 'exited'});
+              assert.deepEqual(await grant(), saved);
+            }
+            checkedRelease++;
+          }
+          return outcome;
+        },
+      }}]);
       assert.equal(docker.logs.length, 6);
+      assert.equal(checkedRelease, 2);
       assert.deepEqual(result?.achados.map(f => [f.status, f.verifier?.provider]), [['confirmado', 'codex'], ['confirmado', 'codex']]);
       assert.deepEqual((await ledger.pool.query('SELECT DISTINCT provenance FROM ac_verify_coverage WHERE run_id=$1', [result!.runId])).rows,
         [{provenance: 'examiner'}]);
@@ -356,6 +272,27 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       const reviewerAccount = [...runtime[1]!.accountIds][0]!;
       await ledger.pool.query('UPDATE ac_accounts SET exhausted_until=NULL WHERE id=$1', [reviewerAccount]);
       await capacity.observeQuota(owner, reviewerAccount, {status: 'available', ttlSeconds: 3600, source: 'synthetic://module-exam'});
+      let lostQuotaGrant: string | undefined;
+      await assert.rejects(run(async () => [runtime[0]!, {...reviewer, supervisor: {
+        async start(...args) {
+          lostQuotaGrant = args[2].grantId;
+          const reserved = (await ledger.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1', [lostQuotaGrant])).rows[0];
+          assert.equal(reserved.state, 'reserved');
+          await capacity.observeQuota(owner, reviewerAccount, {status: 'rate_limited', ttlSeconds: 3600, source: 'synthetic://module-exam'});
+          return reviewerSupervisor.start(...args);
+        },
+        stop: reviewerSupervisor.stop.bind(reviewerSupervisor), reconcile: reviewerSupervisor.reconcile.bind(reviewerSupervisor),
+        closeModuleExamEgress: reviewerSupervisor.closeModuleExamEgress.bind(reviewerSupervisor),
+        retireTerminal: reviewerSupervisor.retireTerminal.bind(reviewerSupervisor),
+      }}]), (error: unknown) => error instanceof Refusal && error.code === 'PROVIDER_USAGE_LIMIT');
+      assert.ok(lostQuotaGrant);
+      assert.equal(docker.logs.length, 13);
+      assert.equal((await ledger.pool.query('SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1', [lostQuotaGrant])).rowCount, 0);
+      const {rows: [unusedGrant]} = await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [lostQuotaGrant]);
+      assert.deepEqual(unusedGrant, {state: 'released', physical_receipt: {processId: lostQuotaGrant, state: 'not_started'}});
+      assert.ok(result?.achados.every(f => f.status === 'provavel' && f.verifier === null));
+      assert.match(await readFile(join(result!.directory, 'cobertura.md'), 'utf8'), /PROVIDER_USAGE_LIMIT/);
+      await capacity.observeQuota(owner, reviewerAccount, {status: 'available', ttlSeconds: 3600, source: 'synthetic://module-exam'});
       const args = [installation, project, '--reverificar', reviewRunId, 'ACH-001'];
       const recheck = (seats: ModuleExamRuntime = runtime) => runPersonalQaCli(args, {moduleExamRuntime: async () => seats});
       const findingStatus = async () => (await readModuleReport(dataDirectory, project, reviewRunId, 'qa')).achados[0]?.status;
@@ -385,14 +322,15 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       await writeFile(join(repo, 'index.ts'), 'return 43;\nconst password = "NOVA_CREDENCIAL_SINTETICA";\n');
       git('add', 'index.ts');
       git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic correction');
-      const verdict = (proof: string) => JSON.stringify({kind: 'confirmacao', status: 'descartado', proof, reason: 'Valor corrigido no trecho.'});
-      recheckAnswer = () => verdict('prova sem vínculo com o trecho');
+      const verdict = ({code, binding}: {code: string; binding: string}) => JSON.stringify({kind: 'confirmacao', status: 'descartado',
+        proof: code, binding, reason: 'O retorno apresenta `43` após a alteração.'});
+      recheckAnswer = task => verdict({...task, code: 'prova sem vínculo com o trecho'});
       assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
       assert.equal(await findingStatus(), 'confirmado');
 
       recheckAnswer = task => {
         git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'synthetic concurrent HEAD');
-        return verdict(task.code);
+        return verdict(task);
       };
       await assert.rejects(recheck(), refuses('VERIFY_RUN_CONFLICT'));
       assert.equal(await findingStatus(), 'confirmado');
@@ -400,7 +338,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
 
       recheckAnswer = task => {
         process.emit('SIGINT', 'SIGINT');
-        return verdict(task.code);
+        return verdict(task);
       };
       await assert.rejects(recheck(), refuses('EXAM_INTERRUPTED'));
       assert.equal(await findingStatus(), 'confirmado');
@@ -409,7 +347,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         ORDER BY i.manager_epoch DESC LIMIT 1`, [`recheck:${reviewRunId}`]);
       assert.deepEqual(cancelled, {state: 'failed', released: true});
 
-      recheckAnswer = task => verdict(task.code);
+      recheckAnswer = verdict;
       assert.deepEqual(await recheck(), ['ACH-001 fechado']);
       assert.equal(await findingStatus(), 'fechado');
       const launch = docker.logs.at(-1)!;
@@ -486,7 +424,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.ok((await lastGrant()).physical_receipt.containerId);
       docker.check();
     } finally {
-      await docker.close();
+      await fixture?.docker.close();
       await ledger.close();
       await database.close();
       await rm(root, {recursive: true, force: true});

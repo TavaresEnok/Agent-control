@@ -19,6 +19,33 @@ export function redactModuleExamText(text: string): string {
 
 const secretName = (file: string) => isSecretClassBasename(file) || /(^|[._-])(secret|secrets|credential|credentials|password|senha)([._-]|$)/i.test(file.split('/').at(-1)!) || /(^|\/)\.pypirc$/i.test(file);
 
+export function findModuleExamRoutes(file: string, code: string): ModuleExamRoute[] {
+  const routes: ModuleExamRoute[] = [];
+  for (const [index, line] of code.split('\n').entries()) {
+    const matches = line.matchAll(/\b(?:app|router|server)\.(get|post|put|patch|delete|options|head)\s*\(\s*(['"`])([^'"`$]{1,200})\2/gi);
+    for (const match of matches) routes.push({file, line: index + 1, method: match[1]!.toUpperCase(), path: match[3]!});
+  }
+  return routes;
+}
+
+export async function readModuleExamFile(absolute: string, file: string): Promise<ModuleExamFile> {
+  if (secretName(file)) return {file, code: null, reason: 'arquivo de credenciais omitido'};
+  let handle;
+  try {
+    handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const info = await handle.stat();
+    if (!info.isFile() || info.size > MAX_FILE_BYTES) return {file, code: null, reason: 'arquivo excede limite ou não é regular'};
+    const buffer = await handle.readFile();
+    if (buffer.length > MAX_FILE_BYTES || buffer.includes(0)) return {file, code: null, reason: 'arquivo binário ou excede limite'};
+    const decoded = new TextDecoder('utf-8', {fatal: true}).decode(buffer);
+    return {file, code: redactModuleExamText(decoded), reason: null};
+  } catch {
+    return {file, code: null, reason: 'leitura indisponível'};
+  } finally {
+    await handle?.close();
+  }
+}
+
 /** Does not follow symlinks or open secret-class files. Oversize, binary and unsafe paths remain visible as unjudged. */
 export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal): Promise<ModuleExamMap> {
   const files: ModuleExamFile[] = [];
@@ -42,24 +69,11 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal):
       if (!entry.isFile()) { files.push({file, code: null, reason: 'tipo não examinado'}); continue; }
       if (secretName(file)) { files.push({file, code: null, reason: 'arquivo de credenciais omitido'}); continue; }
       if (textFiles >= MAX_TEXT_FILES) { files.push({file, code: null, reason: 'limite de arquivos textuais atingido'}); continue; }
-      let handle;
-      try {
-        handle = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
-        const info = await handle.stat();
-        if (!info.isFile() || info.size > MAX_FILE_BYTES) { files.push({file, code: null, reason: 'arquivo excede limite ou não é regular'}); continue; }
-        const buffer = await handle.readFile();
-        if (buffer.length > MAX_FILE_BYTES || buffer.includes(0)) { files.push({file, code: null, reason: 'arquivo binário ou excede limite'}); continue; }
-        const decoded = new TextDecoder('utf-8', {fatal: true}).decode(buffer);
-        const code = redactModuleExamText(decoded);
-        files.push({file, code, reason: null});
-        textFiles++;
-        const lines = code.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const match = /\b(?:app|router|server)\.(get|post|put|patch|delete|options|head)\s*\(\s*['"`]([^'"`$]{1,200})['"`]/i.exec(lines[i]!);
-          if (match) routes.push({file, line: i + 1, method: match[1]!.toUpperCase(), path: match[2]!});
-        }
-      } catch { files.push({file, code: null, reason: 'leitura indisponível'}); }
-      finally { await handle?.close(); }
+      const mapped = await readModuleExamFile(absolute, file);
+      files.push(mapped);
+      if (mapped.code === null) continue;
+      textFiles++;
+      for (const route of findModuleExamRoutes(file, mapped.code)) routes.push(route);
     }
   }
   const root = await lstat(snapshot);

@@ -7,6 +7,8 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {promisify} from 'node:util';
 import {Capacity} from '../src/capacity.ts';
+import {keepPersonalVerifyLease} from '../src/personal-verify-cli.ts';
+import {createModuleExamFixture, moduleExamFixtureAnswer} from './fixtures/module-exam-native.ts';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger, VERIFICATION_MODULES, type VerificationModule} from '../src/ledger.ts';
 import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli} from '../src/personal-module-cli.ts';
@@ -362,7 +364,8 @@ test('buildModuleReviewPrompt exclui conclusões do autor/examinador dos pedidos
   assert.equal(prompt.includes('dependency-cruiser'), true);
   assert.equal(prompt.includes('no-circular'), true);
   assert.equal(prompt.includes('src/app.ts'), true);
-  assert.equal(prompt.includes('Linha: 12'), true);
+  assert.equal(JSON.parse(prompt).line, 12);
+  assert.match(JSON.parse(prompt).hypothesis, /no-circular/);
   assert.equal(prompt.includes('CONCLUSAO_DO_AUTOR_NAO_DEVE_ENTRAR'), false);
   assert.equal(prompt.includes('CENARIO_DO_AUTOR_SECRETO'), false);
   assert.equal(prompt.includes('SUGESTAO_DO_AUTOR_SECRETA'), false);
@@ -374,6 +377,8 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
   const db = new Ledger(database.url);
   const root = await mkdtemp(join(tmpdir(), 'ac-vmod-base-'));
   const dataDirectory = join(root, 'data');
+  let examFixture: Awaited<ReturnType<typeof createModuleExamFixture>> | undefined;
+  let stopMainLease: (() => void) | undefined;
   try {
     await mkdir(dataDirectory, {recursive: true, mode: 0o700});
     await db.migrate();
@@ -412,7 +417,18 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     await capacity.addAccount(principal, projectId, {id: accountId, provider: 'claude', label: 'Synthetic reviewer', resourceIdentity: `fixture-${accountId}`, mode: 'synthetic', eligibility: 'documented_supported', eligibilitySource: 'synthetic://module-test', maxConcurrent: 2});
     await capacity.addProfile(principal, projectId, {id: profileId, accountId, model: 'fixture-model', effort: 'medium', role: 'specialist'});
     await capacity.observeQuota(principal, accountId, {status: 'available', source: 'synthetic://module-test', ttlSeconds: 3600});
-    const policyRevision = await capacity.publish(principal, projectId, 0, {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {specialist: {regular: [profileId], emergency: []}}});
+    examFixture = await createModuleExamFixture({root, repo, ledger: db, owner: principal, project: projectId, answer(launch) {
+      const task = JSON.parse(launch.task);
+      if (launch.provider === 'codex') {
+        assert.equal(task.tool, `${task.module}-tool`);
+        assert.equal(task.rule, `${task.module}-rule-${task.file === 'src/app.ts' ? '01' : '02'}`);
+        assert.equal(task.code, task.file === 'src/app.ts' ? 'return 42;' : 'export const query = "SELECT * FROM users";');
+        assert.doesNotMatch(launch.task, /Defeito detectado|Ponto secundário/);
+      }
+      return moduleExamFixtureAnswer(launch);
+    }});
+    const {runtime, profiles, docker} = examFixture;
+    const policyRevision = await capacity.publish(principal, projectId, 0, {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {specialist: {regular: [...profiles, profileId], emergency: []}}});
 
     // Sem contexto principal ainda -> VERIFY_CONTEXT_REQUIRED
     await assert.rejects(
@@ -423,6 +439,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
     const mainContext = await db.createContext(principal, projectId, randomUUID());
     const otherMainContext = await db.createContext(stranger, otherProjectId, randomUUID());
     const mainAuthority = await db.acquire(principal, mainContext, randomUUID(), 'live-gateway-manager', 60);
+    stopMainLease = keepPersonalVerifyLease(db, mainAuthority, 5000, () => {});
 
     // Autorização em ensureExamContext: viewer e estranho são recusados com PROJECT_FORBIDDEN
     await assert.rejects(
@@ -560,9 +577,10 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         ],
       };
 
+      const deps = {collectorOutput: collectorSample, moduleExamRuntime: async () => runtime};
       const cliOut = mod === 'qa'
-        ? await runPersonalQaCli([installationPath, projectId], {collectorOutput: collectorSample})
-        : await runPersonalModuleCli(mod, [installationPath, 'ProjetoModulos'], {collectorOutput: collectorSample});
+        ? await runPersonalQaCli([installationPath, projectId], deps)
+        : await runPersonalModuleCli(mod, [installationPath, 'ProjetoModulos'], deps);
 
       const [runId, reportDir] = cliOut;
       assert.ok(runId && reportDir);
@@ -601,6 +619,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       assert.equal(readBack.summary.counts.media, 1);
       assert.equal(readBack.summary.toolFailures, 0);
       assert.equal(readBack.achados.length, 2);
+      assert.ok(readBack.achados.every(finding => finding.status === 'confirmado' && finding.verifier?.provider === 'codex'));
       assert.match(readBack.coverageMarkdown, /arquivo src\/app\.ts: 3 linhas verificadas/);
       assert.match(readBack.coverageMarkdown, /rota GET \/health: requisito R-01 verificado/);
       const achadoMd = await readModuleAchadoMarkdown(dataDirectory, projectId, runId, 'ACH-001', mod);
@@ -661,6 +680,32 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       assert.match(mainMsg?.text ?? '', new RegExp(REMEDIATION_ACCEPTANCE));
       // A tarefa de correção inclui a descrição; prompts de revisão omitem conclusões.
       assert.match(mainMsg?.text ?? '', /Defeito detectado pelo módulo/);
+    }
+    assert.equal(docker.logs.filter(launch => launch.provider === 'codex').length, 16);
+    docker.check();
+
+    const legacyAuthority = await db.acquire(principal, moduleContexts.get('arquitetura')!, randomUUID(), 'legacy-review-fixture', 60);
+    try {
+      const legacyCollector = {coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'leitura'}],
+        findings: ['RETORNO', 'OUTRA-REGRA', 'OUTRO-ARQUIVO'].map(rule => ({tool: 'fixture', rule, file: 'src/app.ts', line: 2,
+          severity: 'baixa', message: 'CONCLUSAO_NAO_ENVIADA', evidence: 'return 42;'}))};
+      let firstBinding: string | undefined;
+      const reviewed = await runVerificationModule({module: 'arquitetura', ledger: db, principal, authority: legacyAuthority,
+        projectId, repoPath: repo, dataDirectory, commit, collectorOutput: legacyCollector,
+        worker: {async run(call) {
+          const task = JSON.parse(call.task);
+          assert.equal(task.code, 'return 42;');
+          assert.doesNotMatch(call.task, /CONCLUSAO_NAO_ENVIADA/);
+          firstBinding ??= task.binding;
+          return JSON.stringify({kind: 'confirmacao', status: 'confirmado',
+            binding: task.rule === 'OUTRO-ARQUIVO' ? task.binding : firstBinding,
+            proof: task.rule === 'OUTRO-ARQUIVO' ? 'export const query = "SELECT * FROM users";' : task.code,
+            reason: 'A linha retorna diretamente o literal `42`.'});
+        }},
+      });
+      assert.deepEqual(reviewed.achados.map(finding => finding.status), ['confirmado', 'provavel', 'provavel']);
+    } finally {
+      await db.releaseLease(legacyAuthority);
     }
 
     // O gerente do contexto principal permanece intacto e com o mesmo epoch após rodar todos os 8 módulos
@@ -729,9 +774,11 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       const recheckInput = {module: 'dependencias' as const, runId: failedResultRunId,
         achadoIds: ['ACH-001'], dataDirectory, projectId};
       const reviewer = {provider: 'claude', model: 'fixture-model', profileId, accountId, grantId: randomUUID()};
-      const response = (status: 'confirmado' | 'descartado') => ({reviewer, output: JSON.stringify({kind: 'confirmacao',
-        status, reason: 'Linha observada.', proof: 'export function main() {'})});
-      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput, review: async () => response('descartado')}), /synthetic rollback/);
+      const response = (status: 'confirmado' | 'descartado', task: string) => ({reviewer, output: JSON.stringify({kind: 'confirmacao',
+        status, binding: JSON.parse(task).binding, reason: 'A declaração local de `main` não contém uma dependência.',
+        proof: 'export function main() {'})});
+      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput,
+        review: async ({task}) => response('descartado', task)}), /synthetic rollback/);
       assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, failedReport.achados[0]?.status);
       await db.pool.query('DROP TRIGGER synthetic_recheck_failure ON ac_verify_findings');
       await db.pool.query('DROP FUNCTION synthetic_recheck_failure()');
@@ -746,7 +793,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
         olderIntent = call.intentId;
         markOlderStarted();
         await olderMayFinish;
-        return response('confirmado');
+        return response('confirmado', call.task);
       }});
       const olderRejected = assert.rejects(older,
         (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_RUN_CONFLICT');
@@ -760,7 +807,7 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
             seenTasks.push(call.task);
             recheckIntent = call.intentId;
             assert.equal(call.examiner, null);
-            return response('descartado');
+            return response('descartado', call.task);
           },
         });
       } finally {
@@ -962,6 +1009,8 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       await db.releaseLease(otherAuth);
     }
   } finally {
+    stopMainLease?.();
+    await examFixture?.docker.close();
     await db.close();
     await database.close();
     await rm(root, {recursive: true, force: true});
