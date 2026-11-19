@@ -83,7 +83,9 @@ test('cenários sintéticos: isolamento, caminhos, processo e identidade do exam
     assert.ok((await listModuleReports(data, projectId)).some(item => item.id === ackRun));
 
     let workerCalls = 0;
-    await assert.rejects(() => runVerificationModule({...base, collectorOutput: output('app.ts'), worker: {run: async () => {workerCalls++; return '{}';}}}));
+    const withoutReviewer = await runVerificationModule({...base, collectorOutput: output('app.ts'), worker: {run: async () => {workerCalls++; return '{}';}}});
+    assert.equal(withoutReviewer.achados[0]?.status, 'provavel');
+    assert.equal(withoutReviewer.achados[0]?.verifier, null);
     assert.equal(workerCalls, 0, 'sem reserva comprovada, o worker não recebe identidade fabricada');
     // Perde o processo depois da preparação e antes do COMMIT, sem executar
     // a transação de compensação. Somente a reserva sobrevive no banco.

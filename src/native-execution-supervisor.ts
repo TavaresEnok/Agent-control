@@ -142,15 +142,21 @@ export class NativeExecutionSupervisor{
   const personal=Boolean((await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
   return personal&&(readonlyDesignExam(workflow,role)||readonlySecurityExam(workflow,role));
  }
- private async identity(c:pg.PoolClient,principal:string,authority:Authority,input:Input){
+ private assertQuota(input:Input,grant:{quota_status:string;quota_exhausted:boolean|null}){
+  if(input.moduleExam&&(grant.quota_exhausted||['exhausted','rate_limited'].includes(grant.quota_status)))
+   throw new Refusal('PROVIDER_USAGE_LIMIT');
+  if(grant.quota_status!=='available')throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+ }
+ private async identity(c:pg.PoolClient,principal:string,authority:Authority,input:Input,requireQuota=true){
   const context=await this.scope(c,principal,authority,input);
   const provider=this.config.syntheticFixture?.provider??this.config.provider??'codex',mode=this.config.syntheticFixture?'synthetic':'subscription_cli';
   await this.jobRepository(c,String(context.project_id));
   await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[input.grantId]);
-  const g=(await c.query(`SELECT g.*,a.provider,a.mode,a.enabled account_enabled,a.eligibility,a.resource_identity,p.enabled profile_enabled,p.model,p.effort,p.role profile_role
+  const g=(await c.query(`SELECT g.*,a.provider,a.mode,a.enabled account_enabled,a.eligibility,a.resource_identity,p.enabled profile_enabled,p.model,p.effort,p.role profile_role,
+   ac_profile_quota_status(a.id,p.model) quota_status,a.exhausted_until>clock_timestamp() quota_exhausted
    FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id AND p.account_id=a.id
    JOIN ac_account_access x ON x.account_id=a.id AND x.project_id=g.project_id JOIN ac_quota_observations q ON q.account_id=a.id
-   WHERE g.id=$1 AND ac_profile_quota_status(a.id,p.model)='available' FOR UPDATE OF g FOR SHARE OF a,p,x`,[input.grantId])).rows[0];
+   WHERE g.id=$1 FOR UPDATE OF g FOR SHARE OF a,p,x`,[input.grantId])).rows[0];
   if(!g||g.state!=='reserved'||g.resource_kind!=='model'||g.context_id!==authority.contextId||g.project_id!==context.project_id||g.intent_id!==input.intentId||Number(g.manager_epoch)!==authority.epoch||g.role!==input.role||g.profile_role!==input.role||g.provider!==provider||g.mode!==mode||g.eligibility!=='documented_supported'||!g.account_enabled||!g.profile_enabled||!this.subjects.has(g.account_id)||g.resource_identity!==provider+':'+this.subjects.get(g.account_id))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   if(input.moduleExam){
    const binding=(await c.query(`SELECT 1 FROM ac_verify_runs r JOIN ac_exam_contexts e
@@ -168,8 +174,10 @@ export class NativeExecutionSupervisor{
    if(!binding||this.config.syntheticFixture||!moduleExamProviders.some(candidate=>candidate===this.config.provider)||
     input.moduleExam.accountId!==g.account_id||input.moduleExam.profileId!==g.profile_id||input.moduleExam.model!==g.model)
     throw new Refusal('MODULE_EXAM_SCOPE_MISMATCH');
+   if(requireQuota)this.assertQuota(input,g);
    return g;
   }
+  if(requireQuota)this.assertQuota(input,g);
   if((input.role==='specialist'||input.role==='reviewer')&&await this.personalReadonlyExam(c,input.intentId,input.role))return g;
   const quality=(await c.query(`SELECT p.snapshot,p.digest FROM ac_execution_contracts x JOIN ac_quality_policies p ON p.project_id=x.project_id AND p.revision=x.quality_revision WHERE x.intent_id=$1 AND x.project_id=$2`,[input.intentId,context.project_id])).rows[0];
   if(!quality)throw new Refusal('NATIVE_EXECUTION_POLICY_REQUIRED');
@@ -207,18 +215,19 @@ export class NativeExecutionSupervisor{
   const job=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];
   if(!job||job.state!=='uncertain'||Number(job.manager_epoch)!==authority.epoch)throw new Refusal('NATIVE_EXECUTION_RECONCILE_REQUIRED');
   await c.query('SELECT a.id FROM ac_accounts a JOIN ac_capacity_grants g ON g.account_id=a.id WHERE g.id=$1 FOR SHARE OF a',[input.grantId]);
-  const grant=(await c.query(`SELECT g.*,p.model,p.effort FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
+  const grant=(await c.query(`SELECT g.*,p.model,p.effort,ac_profile_quota_status(a.id,p.model) quota_status,
+   a.exhausted_until>clock_timestamp() quota_exhausted FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
    JOIN ac_profiles p ON p.id=g.profile_id AND p.account_id=a.id JOIN ac_quota_observations q ON q.account_id=a.id
    LEFT JOIN ac_provider_eligibility_assessments e ON e.account_id=a.id AND e.revision=$2
    WHERE g.id=$1 AND g.state='uncertain' AND a.enabled AND p.enabled AND p.role=g.role AND a.provider=$5 AND a.mode=$6
-    AND a.eligibility='documented_supported' AND ac_profile_quota_status(a.id,p.model)='available'
+    AND a.eligibility='documented_supported'
    AND (ac_activation_personal() OR (e.status='documented_supported' AND e.expires_at>clock_timestamp() AND e.adapter_id=$3 AND e.adapter_version=$4
     AND e.revision=(SELECT max(revision) FROM ac_provider_eligibility_assessments WHERE account_id=a.id)))
    FOR UPDATE OF g FOR SHARE OF a,p,q`,[input.grantId,job.eligibility_revision,this.config.id,this.executorDigest,this.config.syntheticFixture?.provider??this.config.provider??'codex',this.config.syntheticFixture?'synthetic':'subscription_cli'])).rows[0];
   if(grant?.account_id)await c.query('SELECT account_id FROM ac_provider_eligibility_assessments WHERE account_id=$1 AND revision=$2 FOR SHARE',[grant.account_id,job.eligibility_revision]);
   if(!grant||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==input.role||grant.context_id!==authority.contextId||
    grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||this.profileDigest(grant)!==job.profile_digest)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
-  assertModelAllowed(grant.model);return fn();
+  this.assertQuota(input,grant);assertModelAllowed(grant.model);return fn();
  });}
  async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
@@ -243,7 +252,7 @@ export class NativeExecutionSupervisor{
     const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[input.grantId])).rows[0];
     if(!grant||grant.context_id!==authority.contextId||grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||!['reserved','uncertain'].includes(grant.state))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
     if(grant.state==='reserved'){
-     await this.identity(c,principal,authority,input);
+     await this.identity(c,principal,authority,input,!input.moduleExam);
     }else{
      const job=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];
      if(!job||job.state!=='uncertain'||job.worker_id||job.tools_id||job.network_id)throw new Refusal('NATIVE_EXECUTION_RECONCILE_REQUIRED');

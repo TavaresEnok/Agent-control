@@ -235,11 +235,9 @@ export type ModuleExamCallback = NonNullable<VerificationModuleRunInput['examina
 
 export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | 'runtime' | 'signal'> & {
   loadRuntime: () => Promise<ModuleExamRuntime>;
-  isolatedMeasurements?: boolean;
 }): ModuleExamCallback {
   return async ({intentId, snapshot, module, findings, signal}): Promise<ModuleExamResult> => {
     const map = await mapModuleSnapshot(snapshot, signal);
-    if (input.isolatedMeasurements) return examineFunctionalModule({intentId, module, map, findings, signal, isolatedMeasurements: true});
     let runtime: ModuleExamRuntime;
     try { runtime = await input.loadRuntime(); }
     catch { return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'}); }

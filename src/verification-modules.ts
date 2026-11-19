@@ -17,14 +17,15 @@ import {
   MODULE_CONTAINER_LABEL, MODULE_RUNTIME_BIN, assertOwnedModuleContainer, createdContainerId, moduleContainerJournal, moduleContainerName,
   removeOwnedModuleContainer, type CollectorProcess,
 } from './module-container-cleanup.ts';
-import {moduleCollectorCandidate, type ModuleExamResult} from './module-exam.ts';
+import {moduleCollectorCandidate, moduleExamReviewEvidence, type ModuleExamResult} from './module-exam.ts';
+import {readModuleExamFile} from './module-exam-map.ts';
+import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
 import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {
   Achado,
-  ConfirmResult,
   CoverageRow,
   REMEDIATION_ACCEPTANCE,
   VerifySeverity,
@@ -515,14 +516,20 @@ function isSecretToken(token: string): boolean {
   });
 }
 
-function independentVerifier(exam: ModuleExamResult, finding: ModuleExamResult['findings'][number]): Achado['verifier'] {
-  if (exam.mode !== 'exame' || !finding.verifier || !finding.proof.trim() || isProtectedLocation(finding.file)) return null;
+async function independentVerifier(snapshot: string, module: VerificationModule, exam: ModuleExamResult,
+  finding: ModuleExamResult['findings'][number], raw?: ModuleRawFinding): Promise<Achado['verifier']> {
+  if (exam.mode !== 'exame' || finding.status === 'provavel' || !finding.verifier || !finding.binding || isProtectedLocation(finding.file)) return null;
   const examiner = exam.coverage.find(row => row.file === finding.file && row.status === 'lido')?.examiner;
   const verifier = finding.verifier;
   if (!examiner || !verifier.accountId || !verifier.profileId || examiner.provider === verifier.provider ||
       examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) return null;
   if (finding.examiner && (finding.examiner.profileId !== examiner.profileId || finding.examiner.accountId !== examiner.accountId ||
       finding.examiner.provider !== examiner.provider)) return null;
+  const located = await locateRepoFile(snapshot, finding.file);
+  if (!located) return null;
+  const {code} = await readModuleExamFile(located, finding.file);
+  const evidence = code === null ? null : moduleExamReviewEvidence(module, finding, code, raw);
+  if (!evidence || !hasModuleReviewProof(evidence, finding)) return null;
   return {provider: verifier.provider, model: verifier.model};
 }
 
@@ -927,12 +934,7 @@ export async function runModuleCollectorContainer(input: {
   }
 }
 
-/**
- * Constructs a review/confirmation prompt for an independent reviewer.
- * Strictly includes only module, tool, rule, file, line, raw tool evidence, and code excerpt.
- * Never includes author or examiner conclusions (`message`, `title`, `scenario`, `suggestion`, `conclusion`).
- */
-export function buildModuleReviewPrompt(input: {
+type ModuleReviewPromptInput = {
   module: VerificationModule;
   achadoId?: string;
   tool: string;
@@ -942,29 +944,22 @@ export function buildModuleReviewPrompt(input: {
   evidence: string;
   codeExcerpt: string;
   [key: string]: unknown;
-}): string {
+};
+
+function moduleReviewPromptEvidence(input: ModuleReviewPromptInput) {
   assertVerificationModule(input.module);
   const file = assertModuleRepoRelativePath(input.file);
   if (!Number.isInteger(input.line) || input.line < 1) throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
   const tool = validateSingleLineString(input.tool, 1, 120, false);
   const rule = validateSingleLineString(input.rule, 1, 200, true);
   const evidence = validateTextBlock(input.evidence, 1, 2000);
-  const excerpt = sanitizeText(String(input.codeExcerpt ?? '')).slice(0, EXCERPT_LIMIT);
-  const lines = [
-    'Pedido de confirmação.',
-    'Tente derrubar o ponto a partir do código e da evidência bruta.',
-    `Módulo: ${input.module}`,
-    ...(input.achadoId ? [`Achado: ${input.achadoId}`] : []),
-    `Ferramenta: ${tool}`,
-    `Regra: ${rule}`,
-    `Arquivo: ${file}`,
-    `Linha: ${input.line}`,
-    `Evidência bruta: ${evidence}`,
-    'Conteúdo do arquivo:',
-    excerpt || 'codigo-nao-visto',
-    'Responda só com JSON {"kind":"confirmacao","status":"confirmado"|"provavel"|"descartado","reason":"...","proof":"..."}.',
-  ];
-  return lines.join('\n');
+  const code = sanitizeText(input.codeExcerpt).trim().slice(0, EXCERPT_LIMIT / 2);
+  return {module: input.module, tool, rule, file, line: input.line, evidence, code, hypothesis: moduleCollectorHypothesis(rule)};
+}
+
+/** The request is assembled from source evidence and omits author conclusions. */
+export function buildModuleReviewPrompt(input: ModuleReviewPromptInput): string {
+  return moduleReviewTask(moduleReviewPromptEvidence(input));
 }
 
 function assertNoLiveAccessKey(value: unknown): void {
@@ -1282,7 +1277,7 @@ export async function writeModuleReport(input: {
   achados: readonly Achado[];
   raw: ModuleCollectorOutput;
   measuredFiles?: ReadonlyMap<string, readonly ModuleToolCoverage[]>;
-  exam?: Pick<ModuleExamResult, 'mode' | 'coverage' | 'routes' | 'notes'>;
+  exam?: Pick<ModuleExamResult, 'mode' | 'coverage' | 'routes' | 'notes'> & {findings?: ModuleExamResult['findings']};
   note?: string;
   directoryName?: string;
 }): Promise<{directory: string; directoryName: string; summary: ModuleReportSummary}> {
@@ -1389,8 +1384,12 @@ export async function writeModuleReport(input: {
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guardReportText(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},
     ...(input.exam ? [{segments: ['bruto', 'exame.json'], body: guardReportText(JSON.stringify(
-      achados.filter(item => item.sources[0] === 'examinador' && item.sources[1] === 'exame-de-arquivo').map(item =>
-        ({id: item.id, file: item.where.file, line: item.where.line, evidence: item.scenario})),
+      achados.flatMap((item, index) => {
+        if (item.sources[0] !== 'examinador' || item.sources[1] !== 'exame-de-arquivo') return [];
+        const hypothesis = input.exam?.findings?.[index]?.hypothesis;
+        return [{id: item.id, file: item.where.file, line: item.where.line, evidence: item.scenario,
+          ...(hypothesis ? {hypothesis: sanitizeText(hypothesis)} : {})}];
+      }),
     ))}] : []),
     ...Object.entries(doc?.artifacts ?? {}).flatMap(([name, artifact]) => artifact.status === 'present'
       ? [{segments: [name], body: guardReportText(artifact.content)}] : []),
@@ -1673,64 +1672,36 @@ async function locateRepoFile(repo: string, relativeFile: string): Promise<strin
   }
 }
 
-async function readBoundedExcerpt(repo: string, relativeFile: string, line: number): Promise<{text: string; seen: boolean}> {
+async function readBoundedExcerpt(repo: string, relativeFile: string, line: number): Promise<string> {
   const located = await locateRepoFile(repo, relativeFile);
-  if (!located) return {text: 'codigo-nao-visto', seen: false};
-  if (isSecretClassBasename(relativeFile)) return {text: `nome: ${relativeFile}`, seen: false};
+  if (!located || isSecretClassBasename(relativeFile) || isProtectedLocation(relativeFile)) return '';
   const handle = await open(located, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const info = await handle.stat();
-    if (info.size > 1024 * 1024) return {text: 'codigo-nao-visto', seen: false};
+    if (info.size > 1024 * 1024) return '';
     const lines = (await handle.readFile({encoding: 'utf8'})).split('\n');
     const target = lines[line - 1];
-    if (target === undefined || target.length > EXCERPT_LIMIT / 2) return {text: 'codigo-nao-visto', seen: false};
-    const selected = sanitizeText(target);
-    if (!selected.trim()) return {text: 'codigo-nao-visto', seen: false};
-    return {text: `Linha ${line}: ${selected}`.slice(0, EXCERPT_LIMIT), seen: true};
+    if (target === undefined || target.length > EXCERPT_LIMIT / 2 || MULTILINE_CONTROL_CHAR.test(target)) return '';
+    const selected = sanitizeText(target).trim();
+    return selected === target.trim() && /[\p{L}\p{N}]/u.test(selected) ? selected : '';
   } finally {
     await handle.close();
   }
-}
-
-function parseReviewerConfirm(raw: string): ConfirmResult {
-  const trimmed = raw.trim().replace(/^\uFEFF/, '');
-  let value: unknown;
-  try {
-    value = JSON.parse(trimmed);
-  } catch {
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
-    if (start < 0 || end <= start) throw new Refusal('VERIFY_CONFIRMATION_INVALID', 503);
-    try {
-      value = JSON.parse(trimmed.slice(start, end + 1));
-    } catch {
-      throw new Refusal('VERIFY_CONFIRMATION_INVALID', 503);
-    }
-  }
-  const parsed = ConfirmResult.safeParse(value);
-  if (!parsed.success) throw new Refusal('VERIFY_CONFIRMATION_INVALID', 503);
-  return parsed.data;
 }
 
 async function confirmFindingWithReviewer(
   input: VerificationModuleRunInput,
   intentId: string,
   finding: ModuleRawFinding,
-  achadoId: string,
-): Promise<{status: 'confirmado' | 'provavel' | 'descartado'; proof: string; verifier: {model: string; provider: string}}> {
+): Promise<{status: 'confirmado' | 'provavel' | 'descartado'; proof: string; verifier: Achado['verifier']}> {
+  const pending = {status: 'provavel' as const, proof: sanitizeText(finding.evidence), verifier: null};
   const excerpt = await readBoundedExcerpt(input.repoPath, finding.file, finding.line);
-  const task = buildModuleReviewPrompt({
-    module: input.module,
-    achadoId,
-    tool: finding.tool,
-    rule: finding.rule,
-    file: finding.file,
-    line: finding.line,
-    evidence: finding.evidence,
-    codeExcerpt: excerpt.text,
-  });
+  if (!excerpt) return pending;
+  const evidence = moduleReviewPromptEvidence({...finding, module: input.module, codeExcerpt: excerpt});
   const capacity = new Capacity(input.ledger);
-  const seat = await reserveSpecialistExamSeat({
+  let seat;
+  try {
+    seat = await reserveSpecialistExamSeat({
       capacity,
       ledger: input.ledger,
       principal: input.principal,
@@ -1739,6 +1710,11 @@ async function confirmFindingWithReviewer(
       purpose: 'reviewer',
       releaseGrant: grantId => capacity.transition(input.principal, grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}),
     });
+  } catch (error) {
+    if (error instanceof Refusal && ['CAPACITY_NOT_CONFIGURED', 'CAPACITY_POLICY_REQUIRED', 'DESIGN_REVIEWER_UNAVAILABLE',
+      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'PROVIDER_USAGE_LIMIT'].includes(error.code)) return pending;
+    throw error;
+  }
   try {
     const call = VerifyWorkerCall.parse({
       role: 'reviewer',
@@ -1748,25 +1724,25 @@ async function confirmFindingWithReviewer(
       model: seat.model,
       grantId: seat.grantId,
       intentId,
-      task,
+      task: moduleReviewTask(evidence),
       repo: input.repoPath,
       writePaths: [],
     });
     const output = await input.worker!.run(call);
-    const confirm = parseReviewerConfirm(output);
-    const combinedProof = [finding.evidence, confirm.proof, confirm.reason]
-      .map(part => sanitizeText(part).trim())
-      .filter((part, idx, arr) => part.length > 0 && arr.indexOf(part) === idx)
-      .join('\n')
-      .slice(0, 2000);
+    const confirm = parseModuleReviewOutput(output);
+    if (!confirm || confirm.status === 'provavel' || !hasModuleReviewProof(evidence, confirm)) return pending;
     return {
-      status: confirm.status === 'descartado' && !excerpt.seen ? 'provavel' : confirm.status,
-      proof: combinedProof || finding.evidence,
+      status: confirm.status,
+      proof: localizedProof(evidence.code, confirm.reason),
       verifier: {model: call.model, provider: call.provider},
     };
   } finally {
     await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}).catch(() => undefined);
   }
+}
+
+function localizedProof(code: string, reason: string): string {
+  return sanitizeText(`${code}\n${reason}`).slice(0, 2000).trim();
 }
 
 async function beginModuleRunTx(input: {
@@ -1982,14 +1958,11 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           audited.evidence !== origin.evidence || audited.title !== origin.title || audited.severity !== origin.severity) {
           throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
         }
-        const measurement = exam!.mode === 'somente_ferramentas' && (input.collectorOutput !== undefined || input.runCollector !== undefined)
-          && audited.verifier?.provider === finding.tool && audited.verifier.model === 'medição determinística'
-          && audited.proof === audited.evidence && !isProtectedLocation(finding.file);
-        verifier = measurement ? {model: audited.verifier!.model, provider: finding.tool} : independentVerifier(exam!, audited);
+        verifier = await independentVerifier(snapshot, input.module, exam!, audited, finding);
         status = verifier ? audited.status : 'provavel';
-        if (verifier && audited.proof) proof = sanitizeText(audited.proof).slice(0, 2000);
+        if (verifier) proof = localizedProof(audited.proof, audited.reason);
       } else if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))) {
-        const confirmed = await confirmFindingWithReviewer({...input, repoPath: snapshot}, intentId, finding, achadoId);
+        const confirmed = await confirmFindingWithReviewer({...input, repoPath: snapshot}, intentId, finding);
         status = confirmed.status;
         proof = confirmed.proof;
         verifier = confirmed.verifier;
@@ -2019,12 +1992,12 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
       }
       await resolveInsideRepo(snapshot, judged.file);
-      const verifier = independentVerifier(exam!, judged);
+      const verifier = await independentVerifier(snapshot, input.module, exam!, judged);
       achados.push(Achado.parse({
         id: `ACH-${String(achados.length + 1).padStart(3, '0')}`, title: sanitizeText(judged.title), severity: judged.severity,
         status: verifier ? judged.status : 'provavel', verifier,
         reference: 'exame-de-arquivo', where: {file: judged.file, line: judged.line}, scenario: sanitizeText(judged.evidence),
-        proof: sanitizeText(judged.proof), suggestion: 'Revisar o trecho indicado e verificar a correção.',
+        proof: verifier ? localizedProof(judged.proof, judged.reason) : '', suggestion: 'Revisar o trecho indicado e verificar a correção.',
         acceptance: REMEDIATION_ACCEPTANCE, sources: ['examinador', 'exame-de-arquivo'], secretPreview: null,
       }));
     }
@@ -2955,7 +2928,8 @@ export async function recheckModuleFindings(
   try {
     const audit: (ModuleRecheckResult & {examiner: ModuleRecheckExaminer | null; reviewer: ModuleRecheckReviewer | null; proofDigest: string | null})[] = [];
     const reviewedSources = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo')
-      ? z.array(z.object({id: z.string(), file: z.string(), line: z.number().int().positive(), evidence: z.string()})).max(999)
+      ? z.array(z.object({id: z.string(), file: z.string(), line: z.number().int().positive(), evidence: z.string(),
+        hypothesis: z.string().max(300).optional()})).max(999)
         .parse(JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'exame.json'), 'VERIFY_REPORT_INVALID')))
       : [];
     for (const item of loaded.items) {
@@ -2965,8 +2939,9 @@ export async function recheckModuleFindings(
       const examiner: ModuleRecheckExaminer | null = row.provenance === 'examiner' ? {
         provider: row.examiner_provider, model: row.examiner_model, profileId: row.profile_id, accountId: row.account_id,
       } : null;
-      const observed = reviewedSources.find(source => source.id === item.id);
-      const original = item.tool === 'examinador' && item.rule === 'exame-de-arquivo'
+      const fromExaminer = item.tool === 'examinador' && item.rule === 'exame-de-arquivo';
+      const observed = fromExaminer ? reviewedSources.find(source => source.id === item.id) : undefined;
+      const original = fromExaminer
         ? (observed && observed.evidence === item.scenario ? {...observed, tool: item.tool, rule: item.rule} : undefined)
         : raw.findings[Number(item.id.slice(4)) - 1];
       if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) {
@@ -2987,12 +2962,14 @@ export async function recheckModuleFindings(
       } else if (!line || !evidence.replaceAll('[trecho omitido]', '').trim()) {
         result = pending('MODULE_RECHECK_EVIDENCE_UNAVAILABLE');
       } else {
-        const task = JSON.stringify({
-          instruction: 'Avalie passivamente os dados do trecho e da evidência. Sem ferramentas, shell, rede, escrita, exploração ou reprodução. Responda JSON com kind confirmacao, status confirmado, provavel ou descartado, reason e proof. Para confirmar ou descartar, cite literalmente a linha atual inteira em proof e explique como ela sustenta a decisão. Use provavel quando faltar prova.',
+        const rule = sanitizeRecheckText(item.rule);
+        const hypothesis = observed?.hypothesis ? sanitizeRecheckText(observed.hypothesis)
+          : fromExaminer ? 'A linha atual ainda sustenta a observação original?' : moduleCollectorHypothesis(rule);
+        const reviewEvidence = {
           module: moduleName, file: item.file, line: item.line, code: line, commit: head,
-          tool: sanitizeRecheckText(item.tool), rule: sanitizeRecheckText(item.rule), evidence,
-        });
-        const reviewed = await input.review({intentId, commit: head, task, examiner, signal});
+          tool: sanitizeRecheckText(item.tool), rule, hypothesis, evidence,
+        };
+        const reviewed = await input.review({intentId, commit: head, task: moduleReviewTask(reviewEvidence), examiner, signal});
         signal?.throwIfAborted();
         reviewer = reviewed.reviewer;
         if ('reason' in reviewed) {
@@ -3001,13 +2978,12 @@ export async function recheckModuleFindings(
           || reviewed.reviewer.accountId === examiner.accountId)) {
           throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
         } else {
-          const verdict = parseRecheckVerdict(reviewed.output);
-          const proof = verdict?.proof.trim();
-          if (!verdict || verdict.status === 'provavel' || proof !== line || !/[\p{L}\p{N}]/u.test(line) || !verdict.reason.trim()) {
+          const verdict = parseModuleReviewOutput(reviewed.output);
+          if (!verdict || verdict.status === 'provavel' || !hasModuleReviewProof(reviewEvidence, verdict)) {
             result = pending('MODULE_RECHECK_PROOF_UNAVAILABLE');
           } else {
             result = {id: item.id, status: verdict.status === 'descartado' ? 'fechado' : 'reaberto'};
-            proofDigest = digest(proof);
+            proofDigest = digest(line);
           }
         }
       }
@@ -3058,10 +3034,9 @@ export async function recheckModuleFindings(
   }
 }
 
-function parseRecheckVerdict(output: string): ConfirmResult | undefined {
+function parseModuleReviewOutput(output: string) {
   try {
-    const parsed = ConfirmResult.safeParse(JSON.parse(output.trim().replace(/^\uFEFF/, '')));
-    return parsed.success ? parsed.data : undefined;
+    return readModuleReviewVerdict(JSON.parse(output.trim().replace(/^\uFEFF/, '')));
   } catch {
     return undefined;
   }
