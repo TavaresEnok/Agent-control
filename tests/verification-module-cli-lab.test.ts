@@ -453,6 +453,13 @@ async function verifyModuleEndToEnd(
       [runId],
     )).rows;
     assert.ok(toolCovRows.length >= 1);
+    if (module === 'qa') {
+      const gap = toolCovRows.find(row => row.tool === 'qa-requisito:REQ-02');
+      assert.equal(gap?.status, 'ok');
+      assert.match(gap!.detail, /vínculo sem prova nas três passadas/);
+      assert.ok(report.achados.some(f => f.sources.includes('QA-REQUISITO-SEM-PROVA')
+        && f.where.file === 'requisitos.md' && f.where.line === 4));
+    }
     assert.equal(toolCovRows.some(r => r.status === 'failed'), false, `ferramenta falhou em ${module}: ${JSON.stringify(toolCovRows)}`);
     assert.equal(toolCovRows.some(r => r.status === 'ok'), true, `nenhuma ferramenta ok em ${module}`);
 
