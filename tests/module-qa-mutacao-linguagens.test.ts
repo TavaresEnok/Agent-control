@@ -125,7 +125,7 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
   const busyCompiler = 'go: fork/exec /go/pkg/tool/compile: resource temporarily unavailable\n';
   assert.equal(run(1, [compilerDiagnostic, ...buildFailure]).reason, 'go-build-failed');
   assert.equal(run(1, [buildOutput(sourceWithLiteral), ...buildFailure]).reason, 'go-build-failed');
-  assert.equal(run(1, buildFailure, sourceWithLiteral).reason, 'go-build-failed');
+  assert.equal(run(1, buildFailure, `# ${buildId}\n${sourceWithLiteral}`).reason, 'go-build-failed');
   assert.equal(run(1, [buildOutput('./arithmetic.go:3:14: cannot use "no required module provides package example.invalid" as int value\n'),
     ...buildFailure]).reason, 'go-build-failed');
   assert.equal(run(1, buildFailure).reason, 'go-build-execution');
@@ -138,6 +138,61 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
   assert.equal(run(1, []).reason, 'go-test-execution');
   assert.equal(run(0, [...start, event('pass')]).reason, 'go-test-execution');
   assert.equal(run(1, [], 'module lookup disabled by GOPROXY=off').reason, 'offline-dependency');
+});
+
+test('Go exige diagnóstico de código atribuído ao FailedBuild exato', async () => {
+  const pkg = 'qa.local/arithmetic';
+  const buildId = `${pkg} [${pkg}.test]`;
+  const other = `${pkg}/other`;
+  const failure = {Action: 'fail', Package: pkg, FailedBuild: buildId};
+  const buildFail = (ImportPath: string) => ({Action: 'build-fail', ImportPath});
+  const buildOutput = (Output: string, ImportPath = buildId) => ({Action: 'build-output', ImportPath, Output});
+  const run = (events: object[], diagnostics = '', code = 1) => decodeGoSuite(
+    {code, output: [...events, failure].map(value => JSON.stringify(value)).join('\n'), diagnostics}, new Set([pkg]),
+  );
+  const source = './arithmetic.go:3:14: undefined: amount\n';
+  const offline = './arithmetic.go:3:14: no required module provides package qa.local/offset\n';
+  const artifact = './arithmetic.go:3:14: could not import qa.local/offset (open /tmp/build/offset.a: no such file or directory)\n';
+  const interruptedRead = './arithmetic.go:3:14: could not import qa.local/offset (invalid export data)\n';
+
+  const uncertain = {reason: 'go-build-execution'};
+  assert.deepEqual(run([], source), uncertain);
+  assert.deepEqual(run([], `# ${other}\n${source}# ${buildId}\n`), uncertain);
+  assert.deepEqual(run([], `# ${pkg}\n${source}`), uncertain);
+  assert.deepEqual(run([buildOutput(source, other)]), uncertain);
+  assert.deepEqual(run([buildOutput(`# ${other}\n${source}`)]), uncertain);
+  assert.deepEqual(run([buildOutput(`# ${buildId}\n${source}`, other)]), uncertain);
+  assert.deepEqual(run([buildOutput(`# ${buildId}\n${source}`, '')]), uncertain);
+  assert.deepEqual(run([buildOutput(source)], '', 0), uncertain);
+  assert.deepEqual(run([buildOutput(artifact)]), uncertain);
+  assert.deepEqual(run([buildOutput(interruptedRead)]), uncertain);
+  assert.deepEqual(run([buildOutput(source), buildOutput(artifact)]), uncertain);
+  assert.deepEqual(run([], `# ${buildId}\n${artifact}`), uncertain);
+  assert.deepEqual(run([buildOutput(offline)]), {reason: 'offline-dependency'});
+  assert.deepEqual(run([buildOutput(`# ${other}\n${offline}`)]), uncertain);
+  const dependency = 'qa.local/offset';
+  const vendorMissing = `./arithmetic.go:3:14: cannot find module providing package ${dependency}: import lookup disabled by -mod=vendor\n`;
+  assert.deepEqual(run([buildOutput(`# ${pkg}\n${vendorMissing}`, dependency), buildFail(dependency)]),
+    {reason: 'offline-dependency'});
+
+  const confirmed = {reason: 'go-build-failed'};
+  assert.deepEqual(run([], `# ${other}\n${artifact}${offline}# ${buildId}\n${source}`), confirmed);
+  assert.deepEqual(run([buildOutput(source + './arithmetic.go:4:1: too many errors\n')]), confirmed);
+  assert.deepEqual(run([buildOutput(`# ${buildId}\n`), buildOutput(source), buildFail(other)],
+    `# ${other}\n${source}`), confirmed);
+
+  const plan = {edits: [{id: 'confirmed'}, {id: 'uncertain'}], truncated: false, omitted: []};
+  const result = await measurePlan(plan, async (edit?: {id: string}) => {
+    if (!edit) return passed;
+    return edit.id === 'confirmed' ? failed : run([buildOutput(artifact)]);
+  });
+  assert.equal(result.status, 'partial');
+  assert.equal(result.killed, 1);
+  assert.equal(result.notRun, 1);
+  assert.equal(result.score, 1);
+  assert.deepEqual(result.mutants.find((mutant: {id: string}) => mutant.id === 'uncertain'), {
+    id: 'uncertain', status: 'not-run', reason: 'go-build-execution',
+  });
 });
 
 test('limite Go acompanha eventos run entre blocos de saída', () => {
@@ -337,6 +392,10 @@ const planner = process.env.QA_MUTATION_SYNTHETIC_GO_PLANNER;
 test('go-mutesting e go test reais em cópia temporária da fixture', {skip: !go || !planner}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'qa-synthetic-go-'));
   try {
+    const lock = JSON.parse(readFileSync(new URL('../deploy/modules/qa/qa-tools.lock.json', import.meta.url), 'utf8'));
+    const version = invoke(go!, ['env', 'GOVERSION'], root, {GOENV: 'off', GOTOOLCHAIN: 'local'});
+    assert.equal(version.code, 0, version.diagnostics);
+    assert.equal(version.output.trim(), `go${lock.languageRuntimes.go.version}`);
     const project = join(root, 'project');
     const cache = join(root, 'cache');
     mkdirSync(cache);
