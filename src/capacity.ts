@@ -50,12 +50,15 @@ export const QuotaInput = z.object({ status: z.enum(['available','exhausted','ra
   source: z.string().min(1).max(200), ttlSeconds: z.number().int().min(1).max(3600) }).strict();
 export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: Id, role: Role,
   taskLevel: z.enum(['basic','standard']).optional(),
-  /** Accounts a verdict retry should not use again. Ignored when no other profile is eligible. */
+  /** Accounts a verdict retry or second high-finding reviewer should not use again. Ignored when no other profile is eligible. */
   avoidAccounts: z.array(Id).max(8).optional(),
-  /** Specific profile in this role's chain to try first. */
+  /** Specific profile in this role's chain to try first (keeps avoidAccounts precedence). */
   preferredProfileId: Id.optional(),
-  /** Ordered prepared profiles prioritized over avoidAccounts fallback while still preferring non-avoided accounts among them. */
-  preferredProfiles: z.array(Id).max(20).optional(),
+  /** Exam-reviewer-only contract: prepared specialist reviewer profiles prioritized over examiner-account avoidance while still preferring non-avoided accounts first. */
+  examReviewer: z.object({
+    preparedProfiles: z.array(Id).max(20),
+    avoidExaminerAccounts: z.array(Id).max(20).optional(),
+  }).strict().optional(),
   /** Profiles excluded for this reservation (never fallen back to). */
   avoidProfiles: z.array(Id).max(20).optional(),
   /** Restrict selection to profiles on this provider (never fallen back to another). */
@@ -76,7 +79,8 @@ export const LocalCompositorGrantRequest=z.object({attemptId:Id,intentId:Id,cont
 export type LocalCompositorGrant={id:string;attempt_id:string;intent_id:string;context_id:string;manager_epoch:string;
  resource_kind:'local_compositor';account_id:null;profile_id:null;role:'programmer';state:string;request_digest:string;emergency:false};
 
-type LoadedProfile = ChainProfileFacts & { accountId: string | null; maxConcurrent: number | null; provider: string | null };
+type LoadedProfile = ChainProfileFacts & { accountId: string | null; maxConcurrent: number | null; provider: string | null; model: string | null };
+export type ReservedSeatGrant = { grant: Grant; provider: string; model: string };
 const evaluations: Role[] = ['reviewer','qa','specialist','judge'];
 
 /** Only the PG ledger admits capacity. This service never advances a Cezar DAG. */
@@ -274,13 +278,20 @@ export class Capacity {
     const byId = new Map(found.rows.map(row => [row.profile_id, row]));
     return ids.map(profileId => {
       const row = byId.get(profileId);
-      if (!row) return { profileId, profilePresent: false, projectAccess: false, mode: null, accountEnabled: false, profileEnabled: false, eligibility: null, freshQuotaStatus: null, accountId: null, maxConcurrent: null, provider: null };
-      return { profileId, profilePresent: true, projectAccess: row.project_access, mode: row.mode, accountEnabled: row.account_enabled, profileEnabled: row.profile_enabled, modelDisabled:modelDisabledByPolicy(row.model), catalogValid:row.catalog_valid, eligibility: row.eligibility, freshQuotaStatus: row.fresh_quota, accountId: row.account_id, maxConcurrent: row.max_concurrent, provider: row.provider };
+      if (!row) return { profileId, profilePresent: false, projectAccess: false, mode: null, accountEnabled: false, profileEnabled: false, eligibility: null, freshQuotaStatus: null, accountId: null, maxConcurrent: null, provider: null, model: null };
+      return { profileId, profilePresent: true, projectAccess: row.project_access, mode: row.mode, accountEnabled: row.account_enabled, profileEnabled: row.profile_enabled, modelDisabled:modelDisabledByPolicy(row.model), catalogValid:row.catalog_valid, eligibility: row.eligibility, freshQuotaStatus: row.fresh_quota, accountId: row.account_id, maxConcurrent: row.max_concurrent, provider: row.provider, model: row.model };
     });
   }
   async reserve(principal: string, raw: z.input<typeof GrantRequest>, authority: Authority): Promise<Grant> {
+    return (await this.reserveModelGrant(principal, raw, authority, false)).grant;
+  }
+  /** Reserves a model grant and reads seat provider/model inside the same transaction to eliminate post-reserve lookup windows. */
+  async reserveWithSeat(principal: string, raw: z.input<typeof GrantRequest>, authority: Authority): Promise<ReservedSeatGrant> {
+    return this.reserveModelGrant(principal, raw, authority, true);
+  }
+  private async reserveModelGrant(principal: string, raw: z.input<typeof GrantRequest>, authority: Authority, requireSeatMetadata: boolean): Promise<ReservedSeatGrant> {
     const request = GrantRequest.parse(raw);
-    const result = await this.tx<Grant|{blockedCode:string}>(async c => {
+    const result = await this.tx<ReservedSeatGrant|{blockedCode:string}>(async c => {
       const context = await this.ledger.authorize(c, principal, request.contextId);
       if (request.contextId !== authority.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH',403);
       await this.ledger.fence(c, authority);
@@ -295,7 +306,13 @@ export class Capacity {
         if (Number(old.manager_epoch)!==authority.epoch) throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
         if(!(await c.query("SELECT 1 FROM ac_accounts WHERE id=$1 AND (mode='synthetic' OR ac_activation_personal())",[old.account_id])).rowCount)
           throw new Refusal('PROVIDER_RUNTIME_NOT_ACTIVATED');
-        return old;
+        if (!requireSeatMetadata) return { grant: old, provider: '', model: '' };
+        const seatRow = (await c.query<{provider:string;model:string}>(
+          'SELECT a.provider, p.model FROM ac_profiles p JOIN ac_accounts a ON a.id=p.account_id WHERE p.id=$1 AND a.id=$2',
+          [old.profile_id, old.account_id],
+        )).rows[0];
+        if (!seatRow?.provider || !seatRow.model || !old.account_id || !old.profile_id) throw new Refusal('GRANT_FORBIDDEN', 403);
+        return { grant: old, provider: String(seatRow.provider), model: String(seatRow.model) };
       }
       if (!(await c.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2', [request.intentId,request.contextId])).rowCount)
         throw new Refusal('INTENT_SCOPE_MISMATCH',403);
@@ -316,13 +333,13 @@ export class Capacity {
         [request.contextId,request.role,context.capacity_policy_revision])).rows[0]?.profile_id;
       const regular = preferred && chain.regular.includes(preferred) ? [preferred,...chain.regular.filter(p=>p!==preferred)] : chain.regular;
       const baseIds = [...regular,...chain.emergency];
-      const preferredOrder = [
+      const priorityOrder = [
         ...(request.preferredProfileId ? [request.preferredProfileId] : []),
-        ...(request.preferredProfiles ?? []),
+        ...(request.examReviewer?.preparedProfiles ?? []),
       ].filter((id, index, all) => baseIds.includes(id) && all.indexOf(id) === index);
-      const preferredSet = new Set(preferredOrder);
-      const ids = preferredOrder.length > 0
-        ? [...preferredOrder, ...baseIds.filter(p => !preferredSet.has(p))]
+      const prioritySet = new Set(priorityOrder);
+      const ids = priorityOrder.length > 0
+        ? [...priorityOrder, ...baseIds.filter(p => !prioritySet.has(p))]
         : baseIds;
       const loaded = await this.chainFacts(c, ids, context.project_id);
       // Saturation is a later gate. This path never writes quota and never leaves the chain.
@@ -344,13 +361,26 @@ export class Capacity {
         && !(request.provider&&row.provider!==request.provider)
         && !request.avoidProfiles?.includes(row.profileId)
         && row.accountId && row.maxConcurrent != null;
-      const preferredChoice = preferredSet.size > 0
-        ? (loaded.find(row => preferredSet.has(row.profileId) && usable(row) && !request.avoidAccounts?.includes(row.accountId!))
-          ?? loaded.find(row => preferredSet.has(row.profileId) && usable(row)))
-        : undefined;
-      const choice = preferredChoice
-        ?? loaded.find(row => usable(row) && !request.avoidAccounts?.includes(row.accountId!))
-        ?? loaded.find(usable);
+      const notAvoidedAccount = (row: LoadedProfile) => !request.avoidAccounts?.includes(row.accountId!);
+      let choice: LoadedProfile | undefined;
+      if (request.examReviewer) {
+        const preparedSet = new Set(request.examReviewer.preparedProfiles);
+        const examinerAccounts = request.examReviewer.avoidExaminerAccounts;
+        const notExaminerAccount = (row: LoadedProfile) => !examinerAccounts?.includes(row.accountId!);
+        choice =
+          loaded.find(row => usable(row) && notAvoidedAccount(row) && preparedSet.has(row.profileId) && notExaminerAccount(row))
+          ?? loaded.find(row => usable(row) && notAvoidedAccount(row) && preparedSet.has(row.profileId))
+          ?? loaded.find(row => usable(row) && notAvoidedAccount(row) && notExaminerAccount(row))
+          ?? loaded.find(row => usable(row) && notAvoidedAccount(row))
+          ?? loaded.find(row => usable(row) && preparedSet.has(row.profileId) && notExaminerAccount(row))
+          ?? loaded.find(row => usable(row) && preparedSet.has(row.profileId))
+          ?? loaded.find(row => usable(row) && notExaminerAccount(row))
+          ?? loaded.find(usable);
+      } else {
+        choice =
+          loaded.find(row => usable(row) && notAvoidedAccount(row))
+          ?? loaded.find(usable);
+      }
       if (!choice?.accountId || choice.maxConcurrent == null) {
         const exclusions = orderedProfileExclusions(loaded,{personal});
         await c.query("UPDATE ac_capacity_waits SET desired_profile=NULL,reason='NO_ELIGIBLE_CAPACITY',exclusions=$2::jsonb WHERE attempt_id=$1",[request.attemptId, JSON.stringify(exclusions)]);
@@ -446,12 +476,15 @@ export class Capacity {
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'reserved',$14::jsonb) RETURNING *`,
         [randomUUID(),request.attemptId,request.intentId,request.contextId,authority.epoch,selected.account_id,selected.id,request.role,
           context.project_id,context.capacity_policy_revision,config.revision,hash,emergency,JSON.stringify(selection)])).rows[0];
-      if (!emergency && !request.preferredProfileId && !request.preferredProfiles?.length && !request.avoidProfiles?.length) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
+      if (!emergency && !request.preferredProfileId && !request.examReviewer && !request.avoidProfiles?.length) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,
         [request.contextId,request.role,selected.id,context.capacity_policy_revision]);
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.reserved',$2)", [request.contextId,{grantId:grant.id,attemptId:request.attemptId,profileId:selected.id,emergency}]);
       await c.query('DELETE FROM ac_capacity_waits WHERE attempt_id=$1',[request.attemptId]);
-      return grant;
+      if (requireSeatMetadata && (!choice.provider || !choice.model || !grant.account_id || !grant.profile_id)) {
+        throw new Refusal('GRANT_FORBIDDEN', 403);
+      }
+      return { grant, provider: choice.provider ?? '', model: choice.model ?? '' };
     });
     if('blockedCode' in result)throw new Refusal(result.blockedCode);
     return result;

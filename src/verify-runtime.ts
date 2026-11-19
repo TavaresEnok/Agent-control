@@ -235,8 +235,8 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       reference,
       sources: [raw.tool, raw.rule, ...(raw.cwe ? [raw.cwe] : [])].map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
       examinerProvider: null,
-      examinerAccountId: null,
-      examinerProfileId: null,
+      examinerAccountId: mapAccountId,
+      examinerProfileId: mapProfileId,
     });
   }
 

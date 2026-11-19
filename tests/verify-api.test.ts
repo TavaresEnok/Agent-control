@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createApi} from '../src/api.ts';
 import {Refusal} from '../src/contracts.ts';
 import {readVerificationProgress} from '../src/verify-command.ts';
+import {VERIFY_RECHECK_NEW_EXAM_GUIDANCE, VERIFY_RECHECK_NEW_EXAM_REQUIRED} from '../src/verify-remediate.ts';
 import type {Control} from '../src/control.ts';
 import type {CezarRuntime} from '../src/cezar.ts';
 import type {Ledger} from '../src/ledger.ts';
@@ -157,6 +158,17 @@ test('reverificar chama o worker injetado e não existe sem ele',async()=>{
   assert.equal(overflow.status,400);
   assert.deepEqual(await overflow.json(),{error:'INVALID_CONTRACT'});
   assert.equal(called,false);
+  const historical=createApi(ledger,runtime,async request=>request.headers.get('authorization')==='Bearer owner'?'owner':null,()=>authority,{
+   configurationControl:{ledger} as Control,
+   personalPanel:{roots:[],projectRepos:[],installationPath:root,dataDirectory:root,projectId:primaryProjectId,scheduleRestart(){}},
+   personalVerification:{recheck:async()=>{throw new Refusal(VERIFY_RECHECK_NEW_EXAM_REQUIRED,409);}},
+  });
+  const historicalRes=await historical.request(path,{method:'POST',headers,body});
+  assert.equal(historicalRes.status,409);
+  assert.deepEqual(await historicalRes.json(),{
+   error:VERIFY_RECHECK_NEW_EXAM_REQUIRED,
+   guidance:VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
+  });
  }finally{await rm(root,{recursive:true,force:true});}
 });
 
