@@ -4,10 +4,11 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import {Capacity,CapacityPolicy,programmerChain} from '../src/capacity.ts';
+import {Capacity,CapacityPolicy,GrantRequest,programmerChain} from '../src/capacity.ts';
 import {reserveYieldReason} from '../src/capacity-exclusions.ts';
 import {projectCapacitySelection} from '../src/control.ts';
 import {Refusal, type Command} from '../src/contracts.ts';
+import {reserveSpecialistExamSeat} from '../src/exam-provider.ts';
 import {Ledger} from '../src/ledger.ts';
 import {applyPersonalCombo,writeOwnerCombo,type PersonalCombo} from '../src/personal-combos.ts';
 import {reserveAssumptionNotices,reserveAssumptionText} from '../src/personal-team-feed.ts';
@@ -171,9 +172,370 @@ test('preferredProfileId, avoidProfiles e provider selecionam perfil específico
   assert.ok(await selectionOf(preferredReviewer.id));
   await release(preferredReviewer.id);
 
+  // Contrato geral mantido: avoidAccounts continua vencendo preferredProfileId fora do contrato específico de revisor de exame.
+  const claudeB=randomUUID(),pSonnetB=randomUUID();
+  await capacity.addAccount(principal,project,{id:claudeB,provider:'claude',label:'claude-b',resourceIdentity:`claude:${claudeB}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://spec',maxConcurrent:4});
+  await capacity.observeQuota(principal,claudeB,{status:'available',source:'synthetic://spec',ttlSeconds:3600});
+  await capacity.addProfile(principal,project,{id:pSonnetB,accountId:claudeB,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  const revWithB=await capacity.publish(principal,project,rev,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   roles:{specialist:{regular:[pGrok,pOpus],emergency:[pSonnet,pSonnetB]}},
+  });
+  await capacity.assignPolicy(principal,context,revWithB);
+  const avoidWinsOverPreferred=await capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:context,role:'specialist',provider:'claude',preferredProfileId:pOpus,avoidAccounts:[claudeA]},authority);
+  assert.equal(avoidWinsOverPreferred.profile_id,pSonnetB);
+  assert.equal(avoidWinsOverPreferred.account_id,claudeB);
+  await release(avoidWinsOverPreferred.id);
+  await capacity.assignPolicy(principal,context,rev);
+
   await assert.rejects(
    capacity.reserve(principal,{attemptId:randomUUID(),intentId,contextId:context,role:'specialist',provider:'claude',avoidProfiles:[pOpus,pSonnet]},authority),
    (error:unknown)=>error instanceof Refusal&&error.code==='NO_ELIGIBLE_CAPACITY',
   );
+ }finally{await db.close();await database.close();}
+});
+
+test('examReviewer exige papel specialist e provedor Claude explícito',()=>{
+ const request={attemptId:randomUUID(),intentId:randomUUID(),contextId:randomUUID(),examReviewer:{preparedProfiles:[]}};
+ assert.equal(GrantRequest.safeParse({...request,role:'specialist',provider:'claude'}).success,true);
+ for(const scope of [{role:'reviewer',provider:'claude'},{role:'specialist',provider:'codex'},{role:'specialist'}]){
+  const parsed=GrantRequest.safeParse({...request,...scope});
+  assert.equal(parsed.success,false);
+  assert.deepEqual(parsed.error?.issues[0]?.path,['examReviewer']);
+ }
+});
+
+test('perfil revisor preparado vence preferência por outra conta e preserva alternativa legítima',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
+ const database=await isolatedDatabase(databaseUrl!,'revpref'),db=new Ledger(database.url);
+ try{
+  await db.migrate();
+  const principal='revpref-owner',project=randomUUID(),capacity=new Capacity(db);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Reviewer Preference']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
+  await capacity.registerModel(principal,{provider:'claude',model:'claude-opus-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://revpref'});
+  await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://revpref'});
+  const claudeA=randomUUID(),claudeB=randomUUID(),claudeC=randomUUID();
+  for(const [id,label] of [[claudeA,'claude-a'],[claudeB,'claude-b'],[claudeC,'claude-c']] as const){
+   await capacity.addAccount(principal,project,{id,provider:'claude',label,resourceIdentity:`claude:${id}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://revpref',maxConcurrent:id===claudeA?2:1});
+   await capacity.observeQuota(principal,id,{status:'available',source:'synthetic://revpref',ttlSeconds:3600});
+  }
+  const pCreateB=randomUUID(),pExaminerA=randomUUID(),pReviewerA=randomUUID(),pReviewerB=randomUUID(),pCreateC=randomUUID();
+  await capacity.addProfile(principal,project,{id:pCreateB,accountId:claudeB,model:'claude-opus-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pExaminerA,accountId:claudeA,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pReviewerA,accountId:claudeA,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pReviewerB,accountId:claudeB,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pCreateC,accountId:claudeC,model:'claude-opus-5-5',effort:'medium',role:'specialist'});
+  const rev1=await capacity.publish(principal,project,0,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   roles:{specialist:{regular:[pCreateB,pExaminerA],emergency:[pReviewerA]}},
+  });
+  const context=await db.createContext(principal,project,randomUUID());
+  await capacity.assignPolicy(principal,context,rev1);
+  const authority=await db.acquire(principal,context,randomUUID(),'revpref',60);
+  const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:rev1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'revpref'}};
+  const intentId=(await db.accept(principal,command,authority,'api')).id;
+  const release=async(id:string)=>capacity.transition(principal,id,authority,'released',{processId:'revpref',state:'not_started'});
+
+  // 1) Mesmo com pCreateB em outra conta (claudeB), o perfil revisor preparado pReviewerA (em claudeA) vence.
+  const onlyPreparedA=await reserveSpecialistExamSeat({
+   capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+   avoidProfileId:pExaminerA,avoidAccountId:claudeA,releaseGrant:release,
+  });
+  assert.equal(onlyPreparedA.profileId,pReviewerA);
+  assert.equal(onlyPreparedA.accountId,claudeA);
+  await release(onlyPreparedA.grantId);
+
+  // 2) Havendo dois revisores preparados, escolhe o revisor preparado em outra conta (pReviewerB).
+  const rev2=await capacity.publish(principal,project,rev1,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:4,
+   roles:{specialist:{regular:[pCreateB,pExaminerA,pCreateC],emergency:[pReviewerA,pReviewerB]}},
+  });
+  await capacity.assignPolicy(principal,context,rev2);
+  const preparedB=await reserveSpecialistExamSeat({
+   capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+   avoidProfileId:pExaminerA,avoidAccountId:claudeA,releaseGrant:release,
+  });
+  assert.equal(preparedB.profileId,pReviewerB);
+  assert.equal(preparedB.accountId,claudeB);
+  await release(preparedB.grantId);
+
+  // 3) Se pReviewerB ficar inelegível, cai no outro revisor preparado pReviewerA antes de usar pCreateB.
+  await capacity.setEnabled(principal,project,'profile',{id:pReviewerB,enabled:false,expectedRevision:1});
+  const fallbackPreparedA=await reserveSpecialistExamSeat({
+   capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+   avoidProfileId:pExaminerA,avoidAccountId:claudeA,releaseGrant:release,
+  });
+  assert.equal(fallbackPreparedA.profileId,pReviewerA);
+  await release(fallbackPreparedA.grantId);
+
+  // 4) Sem revisor preparado elegível, mantém a alternativa legítima em outra conta (pCreateB).
+  await capacity.setEnabled(principal,project,'profile',{id:pReviewerA,enabled:false,expectedRevision:1});
+  const regularFallbackB=await reserveSpecialistExamSeat({
+   capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+   avoidProfileId:pExaminerA,avoidAccountId:claudeA,releaseGrant:release,
+  });
+  assert.equal(regularFallbackB.profileId,pCreateB);
+  assert.equal(regularFallbackB.accountId,claudeB);
+  await release(regularFallbackB.grantId);
+
+  // 5) Reabilitando pReviewerA: no 2º revisor de achado alto, avoidReviewerAccountIds=[claudeA] prefere pCreateB (outra conta disponível), e sem pCreateB volta a claudeA.
+  await capacity.setEnabled(principal,project,'profile',{id:pReviewerA,enabled:true,expectedRevision:2});
+  const secondReviewerOtherAccount=await reserveSpecialistExamSeat({
+   capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+   avoidProfileId:pExaminerA,avoidAccountId:claudeA,avoidReviewerAccountIds:[claudeA],releaseGrant:release,
+  });
+  assert.equal(secondReviewerOtherAccount.profileId,pCreateB);
+  assert.equal(secondReviewerOtherAccount.accountId,claudeB);
+  await release(secondReviewerOtherAccount.grantId);
+
+  await capacity.setEnabled(principal,project,'profile',{id:pReviewerB,enabled:true,expectedRevision:2});
+  const preferredWhenFree=await capacity.reserve(principal,{
+   intentId,contextId:context,role:'specialist',provider:'claude',attemptId:randomUUID(),
+   avoidAccounts:[claudeA],avoidProfiles:[pExaminerA],examReviewer:{preparedProfiles:[pReviewerB,pReviewerA]},
+  },authority);
+  assert.equal(preferredWhenFree.profile_id,pReviewerB);
+  await release(preferredWhenFree.id);
+  // B está ocupada, C está livre e A não tem perfil permitido: espera em B.
+  const basicRequest={intentId,contextId:context,role:'specialist',provider:'claude'} as const;
+  const holdB=await capacity.reserve(principal,{...basicRequest,attemptId:randomUUID(),preferredProfileId:pCreateB},authority);
+  const noA={...basicRequest,attemptId:randomUUID(),avoidAccounts:[claudeA],avoidProfiles:[pExaminerA,pReviewerA],examReviewer:{preparedProfiles:[pReviewerB]}};
+  await assert.rejects(()=>capacity.reserve(principal,noA,authority),(error:unknown)=>error instanceof Refusal&&error.code==='CAPACITY_BUSY');
+  assert.deepEqual((await db.pool.query('SELECT desired_profile,reason FROM ac_capacity_waits WHERE attempt_id=$1',[noA.attemptId])).rows,
+   [{desired_profile:pReviewerB,reason:'CAPACITY_BUSY'}]);
+  await capacity.cancelWait(principal,noA.attemptId,authority);
+  const ordinary={...basicRequest,attemptId:randomUUID(),avoidAccounts:[claudeA],preferredProfileId:pCreateB};
+  await assert.rejects(()=>capacity.reserve(principal,ordinary,authority),(error:unknown)=>error instanceof Refusal&&error.code==='CAPACITY_BUSY');
+  assert.deepEqual((await db.pool.query('SELECT desired_profile,reason FROM ac_capacity_waits WHERE attempt_id=$1',[ordinary.attemptId])).rows,
+   [{desired_profile:pCreateB,reason:'CAPACITY_BUSY'}]);
+  await capacity.cancelWait(principal,ordinary.attemptId,authority);
+
+  // B continua cheia e A tem só uma vaga. Duas tentativas disputam essa vaga, com C livre.
+  const holdA=await capacity.reserve(principal,{...basicRequest,attemptId:randomUUID(),preferredProfileId:pReviewerA},authority);
+  assert.equal(holdB.account_id,claudeB);
+  assert.equal(holdA.account_id,claudeA);
+  const secondRequest={...basicRequest,avoidAccounts:[claudeA],avoidProfiles:[pExaminerA],examReviewer:{preparedProfiles:[pReviewerB,pReviewerA]}};
+  const otherContext=await db.createContext(principal,project,randomUUID());
+  await capacity.assignPolicy(principal,otherContext,rev2);
+  const otherAuthority=await db.acquire(principal,otherContext,randomUUID(),'revpref-other',60);
+  const otherIntent=(await db.accept(principal,{
+   ...command,contextId:otherContext,intentId:randomUUID(),deliveryAttemptId:randomUUID(),
+  },otherAuthority,'api')).id;
+  const requests=[
+   {request:{...secondRequest,attemptId:randomUUID()},authority},
+   {request:{...secondRequest,attemptId:randomUUID(),contextId:otherContext,intentId:otherIntent},authority:otherAuthority},
+  ];
+  const reserveSecond=(entry:(typeof requests)[number])=>capacity.reserveWithSeat(principal,entry.request,entry.authority);
+  const outcomes=await Promise.allSettled(requests.map(reserveSecond));
+  const granted=outcomes.find(outcome=>outcome.status==='fulfilled');
+  assert.ok(granted);
+  assert.equal(granted.value.grant.account_id,claudeA);
+  assert.equal(granted.value.grant.profile_id,pReviewerA);
+  const blockedIndex=outcomes.findIndex(outcome=>outcome.status==='rejected');
+  const blocked=outcomes[blockedIndex];
+  assert.ok(blocked?.status==='rejected'&&blocked.reason instanceof Refusal);
+  assert.equal(blocked.reason.code,'CAPACITY_BUSY');
+  const wait=()=>db.pool.query('SELECT attempt_id,desired_profile,reason FROM ac_capacity_waits WHERE context_id=ANY($1::uuid[])',[[context,otherContext]]);
+  assert.deepEqual((await wait()).rows,[{attempt_id:requests[blockedIndex].request.attemptId,desired_profile:pReviewerB,reason:'CAPACITY_BUSY'}]);
+
+  // A mesma tentativa troca de B para A quando abre vaga em A, mantendo B cheia.
+  await release(holdA.id);
+  const retried=await reserveSecond(requests[blockedIndex]);
+  assert.equal(retried.grant.account_id,claudeA);
+  assert.equal(retried.grant.profile_id,pReviewerA);
+  assert.deepEqual((await wait()).rows,[]);
+  for(const grant of [retried.grant,granted.value.grant]){
+   const manager=grant.context_id===context?authority:otherAuthority;
+   await capacity.transition(principal,grant.id,manager,'released',{processId:'revpref',state:'not_started'});
+  }
+  await release(holdB.id);
+
+  const revSingleAccount=await capacity.publish(principal,project,rev2,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   roles:{specialist:{regular:[pExaminerA],emergency:[pReviewerA]}},
+  });
+  await capacity.assignPolicy(principal,context,revSingleAccount);
+  const secondReviewerSameAccount=await reserveSpecialistExamSeat({
+   capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+   avoidProfileId:pExaminerA,avoidAccountId:claudeA,avoidReviewerAccountIds:[claudeA],releaseGrant:release,
+  });
+  assert.equal(secondReviewerSameAccount.profileId,pReviewerA);
+  assert.equal(secondReviewerSameAccount.accountId,claudeA);
+  await release(secondReviewerSameAccount.grantId);
+ }finally{await db.close();await database.close();}
+});
+
+test('reserveSpecialistExamSeat lê metadados na reserva (sem janela) e trata falha transitória e persistente de releaseGrant',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
+ const database=await isolatedDatabase(databaseUrl!,'seatleak'),db=new Ledger(database.url);
+ try{
+  await db.migrate();
+  const principal='leak-owner',project=randomUUID(),capacity=new Capacity(db);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Seat Leak']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
+  await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://leak'});
+  await capacity.registerModel(principal,{provider:'grok',model:'grok-4.7',efforts:['medium'],roles:['specialist'],source:'synthetic://leak'});
+  const claudeId=randomUUID(),grokId=randomUUID();
+  for(const [id,provider] of [[claudeId,'claude'],[grokId,'grok']] as const){
+   await capacity.addAccount(principal,project,{id,provider,label:provider,resourceIdentity:`${provider}:${id}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://leak',maxConcurrent:4});
+   await capacity.observeQuota(principal,id,{status:'available',source:'synthetic://leak',ttlSeconds:3600});
+  }
+  const pExaminer=randomUUID(),pReviewer=randomUUID(),pGrok=randomUUID();
+  await capacity.addProfile(principal,project,{id:pExaminer,accountId:claudeId,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pReviewer,accountId:claudeId,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  await capacity.addProfile(principal,project,{id:pGrok,accountId:grokId,model:'grok-4.7',effort:'medium',role:'specialist'});
+  const rev=await capacity.publish(principal,project,0,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   roles:{specialist:{regular:[pExaminer],emergency:[pReviewer]}},
+  });
+  const context=await db.createContext(principal,project,randomUUID());
+  await capacity.assignPolicy(principal,context,rev);
+  const authority=await db.acquire(principal,context,randomUUID(),'seatleak',60);
+  const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:rev,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'seatleak'}};
+  const intentId=(await db.accept(principal,command,authority,'api')).id;
+  const released:string[]=[];
+  const releaseGrant=async(grantId:string)=>{released.push(grantId);await capacity.transition(principal,grantId,authority,'released',{processId:'seatleak',state:'not_started'});};
+
+  // 1) Sem janela pós-reserva: não dispara consulta separada em ledger.pool para ler provider/model após reserve.
+  let separatePostReserveQueries=0;
+  const spyLedger={
+   pool:{
+    query:async(sql:string,params?:unknown[])=>{
+     if(sql.includes('FROM ac_capacity_grants g JOIN ac_profiles p'))separatePostReserveQueries+=1;
+     return db.pool.query(sql,params);
+    },
+   },
+  } as unknown as Ledger;
+  const seat=await reserveSpecialistExamSeat({capacity,ledger:spyLedger,principal,authority,intentId,purpose:'reviewer',avoidProfileId:pExaminer,releaseGrant});
+  assert.equal(seat.profileId,pReviewer);
+  assert.equal(separatePostReserveQueries,0);
+  await releaseGrant(seat.grantId);
+
+  // 2) Falha transitória em releaseGrant (após falha de validação EXAM_PROVIDER_UNSUPPORTED) é tentada de forma limitada e idempotente.
+  const revGrok=await capacity.publish(principal,project,rev,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   roles:{specialist:{regular:[pGrok],emergency:[]}},
+  });
+  await capacity.assignPolicy(principal,context,revGrok);
+  let transientAttempts=0;
+  await assert.rejects(
+   ()=>reserveSpecialistExamSeat({
+    capacity,ledger:db,principal,authority,intentId,purpose:'examiner',
+    releaseGrant:async(grantId)=>{
+     transientAttempts+=1;
+     if(transientAttempts===1)throw new Error('ECONNRESET_TRANSIENT');
+     await releaseGrant(grantId);
+     if(transientAttempts===2)throw new Error('POST_COMMIT_TRANSIENT');
+    },
+   }),
+   (error:unknown)=>error instanceof Refusal&&error.code==='EXAM_PROVIDER_UNSUPPORTED',
+  );
+  assert.equal(transientAttempts,3);
+
+  // 3) Falha persistente em releaseGrant não é engolida e preserva as duas causas em AggregateError.
+  let persistentAttempts=0;
+  await assert.rejects(
+   ()=>reserveSpecialistExamSeat({
+    capacity,ledger:db,principal,authority,intentId,purpose:'examiner',
+    releaseGrant:async()=>{
+     persistentAttempts+=1;
+     throw new Error('RELEASE_PERSISTENT_FAILURE');
+    },
+   }),
+   (error:unknown)=>{
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length,2);
+    assert.ok(error.errors[0] instanceof Refusal&&error.errors[0].code==='EXAM_PROVIDER_UNSUPPORTED');
+    assert.ok(error.errors[1] instanceof Error&&error.errors[1].message==='RELEASE_PERSISTENT_FAILURE');
+    return true;
+   },
+  );
+  assert.equal(persistentAttempts,3);
+
+  // 4) Falha determinística (Refusal) em releaseGrant falha rápido e preserva as duas causas.
+  let permanentAttempts=0;
+  await assert.rejects(
+   ()=>reserveSpecialistExamSeat({
+    capacity,ledger:db,principal,authority,intentId,purpose:'examiner',
+    releaseGrant:async()=>{
+     permanentAttempts+=1;
+     throw new Refusal('STALE_MANAGER',409);
+    },
+   }),
+   (error:unknown)=>{
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length,2);
+    assert.ok(error.errors[0] instanceof Refusal&&error.errors[0].code==='EXAM_PROVIDER_UNSUPPORTED');
+    assert.ok(error.errors[1] instanceof Refusal&&error.errors[1].code==='STALE_MANAGER');
+    return true;
+   },
+  );
+  assert.equal(permanentAttempts,1);
+
+  const unreleased=(await db.pool.query("SELECT count(*)::int AS n FROM ac_capacity_grants WHERE intent_id=$1 AND state<>'released'",[intentId])).rows[0].n;
+  assert.equal(unreleased,2); // os dois grants cujos releaseGrant falharam persistentemente não foram silenciosamente perdidos
+ }finally{await db.close();await database.close();}
+});
+
+test('reserveSpecialistExamSeat aceita até 20 exclusões completas e recusa lista maior antes de reservar',{skip:databaseUrl?false:'AC_TEST_DATABASE_URL is unset'},async()=>{
+ const database=await isolatedDatabase(databaseUrl!,'exclimit'),db=new Ledger(database.url);
+ try{
+  await db.migrate();
+  const principal='exclimit-owner',project=randomUUID(),capacity=new Capacity(db);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Exclusion Limit']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)',[principal]);
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  await capacity.configure(principal,{programmingLimit:10,evaluationLimit:4});
+  await capacity.registerModel(principal,{provider:'claude',model:'claude-sonnet-5-5',efforts:['medium'],roles:['specialist'],source:'synthetic://exclimit'});
+  const claudeId=randomUUID();
+  await capacity.addAccount(principal,project,{id:claudeId,provider:'claude',label:'claude-a',resourceIdentity:`claude:${claudeId}`,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://exclimit',maxConcurrent:4});
+  await capacity.observeQuota(principal,claudeId,{status:'available',source:'synthetic://exclimit',ttlSeconds:3600});
+  const regularProfiles=Array.from({length:20},()=>randomUUID());
+  const reviewer21=randomUUID();
+  for(const id of [...regularProfiles,reviewer21]){
+   await capacity.addProfile(principal,project,{id,accountId:claudeId,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
+  }
+  const rev=await capacity.publish(principal,project,0,{
+   schemaVersion:1,maxProgrammersPerContext:1,maxEvaluatorsPerContext:2,
+   roles:{specialist:{regular:regularProfiles,emergency:[reviewer21]}},
+  });
+  const context=await db.createContext(principal,project,randomUUID());
+  await capacity.assignPolicy(principal,context,rev);
+  const authority=await db.acquire(principal,context,randomUUID(),'exclimit',60);
+  const command:Command={schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:rev,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'exclimit'}};
+  const intentId=(await db.accept(principal,command,authority,'api')).id;
+  const release=async(id:string)=>capacity.transition(principal,id,authority,'released',{processId:'exclimit',state:'not_started'});
+
+  // 20 exclusões cabem no limite suportado e escolhem o 21º perfil sem truncar.
+  const seat=await reserveSpecialistExamSeat({
+   capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+   avoidProfileIds:regularProfiles,releaseGrant:release,
+  });
+  assert.equal(seat.profileId,reviewer21);
+  await release(seat.grantId);
+
+  // 21 exclusões são recusadas explicitamente antes de chamar reserve (não corta após 20).
+  await assert.rejects(
+   ()=>reserveSpecialistExamSeat({
+    capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+    avoidProfileIds:[...regularProfiles,reviewer21],releaseGrant:release,
+   }),
+   (error:unknown)=>error instanceof Refusal&&error.code==='EXAM_EXCLUSION_LIMIT'&&error.status===400,
+  );
+  // 9 contas em avoidReviewerAccountIds (> 8) também recusam explicitamente antes de reservar.
+  await assert.rejects(
+   ()=>reserveSpecialistExamSeat({
+    capacity,ledger:db,principal,authority,intentId,purpose:'reviewer',
+    avoidReviewerAccountIds:Array.from({length:9},()=>randomUUID()),releaseGrant:release,
+   }),
+   (error:unknown)=>error instanceof Refusal&&error.code==='EXAM_EXCLUSION_LIMIT'&&error.status===400,
+  );
+  const grantCount=(await db.pool.query('SELECT count(*)::int AS n FROM ac_capacity_grants WHERE intent_id=$1',[intentId])).rows[0].n;
+  assert.equal(grantCount,1);
  }finally{await db.close();await database.close();}
 });

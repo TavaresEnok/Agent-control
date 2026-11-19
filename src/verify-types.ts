@@ -84,6 +84,9 @@ export const VerifyWorkerCall = z.object({
   repo: z.string().min(1).max(500),
   writePaths: z.tuple([]),
   avoidProviders: z.array(z.string().min(1).max(80)).max(4).optional(),
+  avoidProfiles: z.array(Id).max(20).optional(),
+  avoidAccounts: z.array(Id).max(8).optional(),
+  avoidExaminerAccounts: z.array(Id).max(20).optional(),
 }).strict();
 export type VerifyWorkerCall = z.infer<typeof VerifyWorkerCall>;
 

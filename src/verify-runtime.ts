@@ -235,8 +235,8 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       reference,
       sources: [raw.tool, raw.rule, ...(raw.cwe ? [raw.cwe] : [])].map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
       examinerProvider: null,
-      examinerAccountId: null,
-      examinerProfileId: null,
+      examinerAccountId: mapAccountId,
+      examinerProfileId: mapProfileId,
     });
   }
 
@@ -317,11 +317,13 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   await input.ledger.tx(async c => {
     await input.ledger.authorize(c, input.principal, input.authority.contextId);
     await input.ledger.fence(c, input.authority);
-    for (const achado of achados) {
+    for (let index = 0; index < achados.length; index += 1) {
+      const achado = achados[index]!;
+      const source = open[index]!;
       await c.query(
-        `INSERT INTO ac_verify_findings (run_id, achado_id, status, severity, file, line, payload)
-         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-        [runId, achado.id, achado.status, achado.severity, achado.where.file, achado.where.line, JSON.stringify(achado)],
+        `INSERT INTO ac_verify_findings (run_id, achado_id, status, severity, file, line, payload, examiner_profile_id, examiner_account_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)`,
+        [runId, achado.id, achado.status, achado.severity, achado.where.file, achado.where.line, JSON.stringify(achado), source.examinerProfileId, source.examinerAccountId],
       );
     }
     for (const row of rows) {

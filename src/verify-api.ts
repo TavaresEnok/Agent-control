@@ -6,7 +6,12 @@ import {Authority, Id, Refusal} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
 import {listSecurityReports, readAchadoMarkdown, readSecurityReport, removeSecurityReport} from './verify-report.ts';
-import {recheckFindings, requestCorrection} from './verify-remediate.ts';
+import {
+  recheckFindings,
+  requestCorrection,
+  VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
+  VERIFY_RECHECK_NEW_EXAM_REQUIRED,
+} from './verify-remediate.ts';
 import {readVerificationProgress} from './verify-command.ts';
 
 type ManagerAuthority = z.infer<typeof Authority>;
@@ -229,10 +234,20 @@ export function registerVerificationRoutes(app: Hono<ApiEnv>, deps: Verification
     app.post('/api/v1/ac/personal/verificacoes/:runId/reverificar', async c => {
       c.header('Cache-Control', 'no-store');
       const {principal, panel, runId, achadoIds, authority} = await correctionRequest(c, deps);
-      const result = await recheck(principal, authority, {
-        runId, achadoIds, dataDirectory: panel.dataDirectory, projectId: panel.projectId,
-      });
-      return c.json(result);
+      try {
+        const result = await recheck(principal, authority, {
+          runId, achadoIds, dataDirectory: panel.dataDirectory, projectId: panel.projectId,
+        });
+        return c.json(result);
+      } catch (error) {
+        if (error instanceof Refusal && error.code === VERIFY_RECHECK_NEW_EXAM_REQUIRED) {
+          const guidance = 'guidance' in error && typeof error.guidance === 'string'
+            ? error.guidance
+            : VERIFY_RECHECK_NEW_EXAM_GUIDANCE;
+          return c.json({error: error.code, guidance}, error.status);
+        }
+        throw error;
+      }
     });
   }
 }

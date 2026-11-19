@@ -170,3 +170,8 @@ test('DESIGN_REVIEWER_UNAVAILABLE no validador orienta rodar preparar --aplicar'
   const text = verifyCliFailureText(new Refusal('DESIGN_REVIEWER_UNAVAILABLE', 409));
   assert.match(text, /npm run personal:design -- preparar .*--aplicar/);
 });
+
+test('VERIFY_RECHECK_NEW_EXAM_REQUIRED orienta novo exame de segurança', () => {
+  const text = verifyCliFailureText(new Refusal('VERIFY_RECHECK_NEW_EXAM_REQUIRED', 409));
+  assert.match(text, /novo exame de segurança/i);
+});

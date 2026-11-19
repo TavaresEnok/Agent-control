@@ -414,8 +414,18 @@ export async function resolvePersonalDesign(
     ): Promise<DesignSeat> => {
       void avoidProvider;
       const purpose = options?.purpose ?? (role === 'reviewer' ? 'reviewer' : 'examiner');
-      const avoidProfileId = purpose === 'reviewer' ? (options?.avoidProfileId ?? lastExaminerSeat?.profileId) : undefined;
-      const avoidAccountId = purpose === 'reviewer' ? (options?.avoidAccountId ?? lastExaminerSeat?.accountId) : undefined;
+      const hasExplicitProfiles = Boolean(options?.avoidProfileId || options?.avoidProfileIds?.length);
+      const hasExplicitAccounts = Boolean(options?.avoidAccountId || options?.avoidAccountIds?.length);
+      const avoidProfileIds = purpose === 'reviewer'
+        ? (hasExplicitProfiles
+            ? [...(options?.avoidProfileId ? [options.avoidProfileId] : []), ...(options?.avoidProfileIds ?? [])]
+            : lastExaminerSeat ? [lastExaminerSeat.profileId] : [])
+        : [];
+      const avoidAccountIds = purpose === 'reviewer'
+        ? (hasExplicitAccounts
+            ? [...(options?.avoidAccountId ? [options.avoidAccountId] : []), ...(options?.avoidAccountIds ?? [])]
+            : lastExaminerSeat ? [lastExaminerSeat.accountId] : [])
+        : [];
       const seat = await reserveSpecialistExamSeat({
         capacity,
         ledger,
@@ -423,8 +433,8 @@ export async function resolvePersonalDesign(
         authority: authority!,
         intentId: intentId!,
         purpose,
-        avoidProfileId,
-        avoidAccountId,
+        avoidProfileIds,
+        avoidAccountIds,
         releaseGrant: grantId => releaseGrant(grantId, 'not_started'),
       });
       if (purpose === 'examiner') {

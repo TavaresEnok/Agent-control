@@ -9,9 +9,20 @@ import {z} from 'zod';
 import {digest, Refusal, type Authority} from './contracts.ts';
 import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transport.ts';
 import type {Ledger} from './ledger.ts';
-import {assertPersonalActivation} from './verify-intent.ts';
+import {finishExamIntentTx, type ExamIntentTarget} from './exam-intent.ts';
+import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
 import {isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {REMEDIATION_ACCEPTANCE, VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
+
+export const VERIFY_RECHECK_NEW_EXAM_REQUIRED = 'VERIFY_RECHECK_NEW_EXAM_REQUIRED';
+export const VERIFY_RECHECK_NEW_EXAM_GUIDANCE =
+  'Não é possível comprovar a independência da reverificação porque o achado histórico não possui perfil examinador original registrado. O achado foi preservado; execute um novo exame de segurança.';
+
+export class VerifyRecheckRefusal extends Refusal {
+  constructor(code: string, public readonly guidance: string, status: 400 | 401 | 403 | 404 | 409 | 503 = 409) {
+    super(code, status);
+  }
+}
 
 const AchadoId = z.string().regex(/^ACH-\d{3}$/);
 const Uuid = z.uuid();
@@ -27,7 +38,18 @@ const CweToken = /^CWE-\d{1,5}$/;
 const AsvsToken = /^ASVS(?:-\d+){1,4}$/;
 const EXCERPT_LIMIT = 4000;
 
-type OpenFinding = {id: string; status: string; file: string; line: number | null; title: string; reference: string | null; severity: string; snippet: string};
+type OpenFinding = {
+  id: string;
+  status: string;
+  file: string;
+  line: number | null;
+  title: string;
+  reference: string | null;
+  severity: string;
+  snippet: string;
+  examinerProfileId: string | null;
+  examinerAccountId: string | null;
+};
 type ReviewerCall = VerifyWorkerCall & {reviewerProvider?: unknown; reviewerAccountId?: unknown; reviewerSessionId?: unknown};
 export type HighReview = {
   status: 'descartado' | 'confirmado';
@@ -187,13 +209,23 @@ async function projectRepo(client: pg.PoolClient, projectId: string): Promise<st
   return row ? String(row.repo) : null;
 }
 
+function optionalUuid(value: unknown): string | null {
+  return typeof value === 'string' && Uuid.safeParse(value).success ? value : null;
+}
+
 async function loadFindings(client: pg.PoolClient, runId: string, ids: readonly string[], eligibleOnly: boolean): Promise<OpenFinding[]> {
   const coveredRows = (await client.query('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runId])).rows as {file: string}[];
   const covered = new Set(coveredRows.map(row => String(row.file)));
   const rows = (await client.query(
-    'SELECT achado_id, status, file, line, severity, payload FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])',
+    `SELECT achado_id, status, file, line, severity, payload,
+      examiner_profile_id::text AS examiner_profile_id,
+      examiner_account_id::text AS examiner_account_id
+     FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])`,
     [runId, ids],
-  )).rows as {achado_id: string; status: string; file: string; line: number | null; severity?: unknown; payload: unknown}[];
+  )).rows as {
+    achado_id: string; status: string; file: string; line: number | null; severity?: unknown; payload: unknown;
+    examiner_profile_id?: unknown; examiner_account_id?: unknown;
+  }[];
   const byId = new Map(rows.map(row => [String(row.achado_id), row]));
   return ids.map(id => {
     const row = byId.get(id);
@@ -209,6 +241,8 @@ async function loadFindings(client: pg.PoolClient, runId: string, ids: readonly 
       reference: closedReference(row.payload),
       severity: severityOf(row.severity, row.payload),
       snippet: textField(row.payload, 'snippet'),
+      examinerProfileId: optionalUuid(row.examiner_profile_id),
+      examinerAccountId: optionalUuid(row.examiner_account_id),
     };
   });
 }
@@ -332,7 +366,23 @@ export function highFindingCloses(input: {
   return proof || agreed;
 }
 
-async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt: string, intentId: string, avoid?: readonly string[]): Promise<HighReview> {
+async function reviewFinding(
+  worker: VerifyWorker,
+  finding: OpenFinding,
+  excerpt: string,
+  intentId: string,
+  avoid?: {avoidProviders?: readonly string[]; avoidAccounts?: readonly string[]},
+): Promise<HighReview> {
+  if (!finding.examinerProfileId) {
+    throw new VerifyRecheckRefusal(VERIFY_RECHECK_NEW_EXAM_REQUIRED, VERIFY_RECHECK_NEW_EXAM_GUIDANCE, 409);
+  }
+  const avoidProfiles = [finding.examinerProfileId];
+  const avoidExaminerAccounts = finding.examinerAccountId ? [finding.examinerAccountId] : [];
+  const avoidAccounts = uniqueIds([
+    ...(avoid?.avoidAccounts ?? []),
+    ...(avoid?.avoidProviders ?? []),
+  ].filter(id => Uuid.safeParse(id).success));
+  if (avoidAccounts.length > 8) throw new Refusal('EXAM_EXCLUSION_LIMIT', 400);
   const call: ReviewerCall = VerifyWorkerCall.parse({
     role: 'reviewer',
     provider: 'recheck',
@@ -344,7 +394,10 @@ async function reviewFinding(worker: VerifyWorker, finding: OpenFinding, excerpt
     task: recheckTask(finding, excerpt),
     repo: 'sem-repositorio',
     writePaths: [],
-    ...(avoid && avoid.length ? {avoidProviders: [...avoid]} : {}),
+    ...(avoid?.avoidProviders?.length ? {avoidProviders: [...avoid.avoidProviders]} : {}),
+    avoidProfiles,
+    ...(avoidExaminerAccounts.length ? {avoidExaminerAccounts} : {}),
+    ...(avoidAccounts.length ? {avoidAccounts} : {}),
   });
   const verdict = parseVerdict(await worker.run(call));
   return {
@@ -648,6 +701,22 @@ export async function requestCorrection(ledger: Ledger, principal: string, autho
   });
 }
 
+async function finishRecheckIntent(ledger: Ledger, target: ExamIntentTarget, state: 'done' | 'failed') {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await ledger.tx(async client => {
+        await finishExamIntentTx(client, ledger, target, state);
+        await client.query('DELETE FROM ac_capacity_waits WHERE intent_id=$1 AND context_id=$2', [target.intentId, target.contextId]);
+      });
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts) throw error;
+      await new Promise(resolve => setTimeout(resolve, 15 * attempt));
+    }
+  }
+}
+
 export async function recheckFindings(ledger: Ledger, principal: string, authority: Authority, input: {
   runId: string; achadoIds: string[]; dataDirectory: string; projectId: string; worker: VerifyWorker;
 }): Promise<{results: {id: string; status: 'fechado' | 'reaberto'}[]}> {
@@ -656,35 +725,83 @@ export async function recheckFindings(ledger: Ledger, principal: string, authori
   const loaded = await ledger.tx(async client => {
     await ledger.authorize(client, principal, authority.contextId);
     const run = await loadRun(client, input.runId, input.projectId, authority.contextId);
-    return {run, findings: await loadFindings(client, run.id, requested, false), repo: await projectRepo(client, input.projectId)};
+    const intentRow = (await client.query<{state: string; policy_revision: number}>(
+      `SELECT i.state, x.policy_revision
+       FROM ac_contexts x
+       LEFT JOIN ac_intents i ON i.id = $1 AND i.context_id = x.id
+       WHERE x.id = $2`,
+      [run.intentId, authority.contextId],
+    )).rows[0];
+    const state = intentRow?.state ? String(intentRow.state) : 'done';
+    const intentTerminal = ['done', 'review', 'failed', 'canceled', 'cancelled'].includes(state);
+    return {
+      run,
+      intentTerminal,
+      policyRevision: Number(intentRow?.policy_revision ?? 1),
+      findings: await loadFindings(client, run.id, requested, false),
+      repo: await projectRepo(client, input.projectId),
+    };
   });
-  const decided: ReportUpdate[] = [];
-  // Provedor, conta e sessão vêm da reserva, não do texto do modelo.
-  for (const finding of loaded.findings) {
-    const excerpt = await excerptFor(loaded.repo, finding);
-    const first = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId);
-    let status: 'fechado' | 'reaberto';
-    if (finding.severity !== 'alta') {
-      status = first.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto';
-    } else {
-      const second = await reviewFinding(input.worker, finding, excerpt.text, loaded.run.intentId, avoidAccount(first.accountId));
-      const discarded = first.status === 'descartado' || second.status === 'descartado';
-      const gone = excerpt.seen && discarded ? await snippetGone(loaded.repo, finding, loaded.run.commitId) : false;
-      status = highFindingCloses({seen: excerpt.seen, snippetGone: gone, first, second}) ? 'fechado' : 'reaberto';
-    }
-    decided.push({id: finding.id, status, file: finding.file, line: finding.line, title: finding.title});
+  if (loaded.findings.some(finding => !finding.examinerProfileId)) {
+    throw new VerifyRecheckRefusal(VERIFY_RECHECK_NEW_EXAM_REQUIRED, VERIFY_RECHECK_NEW_EXAM_GUIDANCE, 409);
   }
-  await ledger.tx(async client => {
-    await ledger.authorize(client, principal, authority.contextId);
-    await ledger.fence(client, authority);
-    for (const result of decided) {
-      const updated = await client.query(
-        'UPDATE ac_verify_findings SET status=$3 WHERE run_id=$1 AND achado_id=$2',
-        [loaded.run.id, result.id, result.status],
-      );
-      if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
+  let activeIntentId = loaded.run.intentId;
+  let ownIntentId: string | undefined;
+  if (loaded.intentTerminal) {
+    const commit = /^[a-f0-9]{40}$/.test(loaded.run.commitId) ? loaded.run.commitId : '0'.repeat(40);
+    const created = await acceptSecurityVerification(ledger, principal, authority, {
+      projectId: input.projectId,
+      commit,
+      policyRevision: loaded.policyRevision,
+    });
+    activeIntentId = created.id;
+    ownIntentId = created.id;
+  }
+  const decided: ReportUpdate[] = [];
+  let succeeded = false;
+  let operationError: unknown;
+  try {
+    // Provedor, conta e sessão vêm da reserva, não do texto do modelo.
+    for (const finding of loaded.findings) {
+      const excerpt = await excerptFor(loaded.repo, finding);
+      const first = await reviewFinding(input.worker, finding, excerpt.text, activeIntentId);
+      let status: 'fechado' | 'reaberto';
+      if (finding.severity !== 'alta') {
+        status = first.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto';
+      } else {
+        const avoid = avoidAccount(first.accountId);
+        const second = await reviewFinding(input.worker, finding, excerpt.text, activeIntentId, avoid ? {avoidProviders: avoid, avoidAccounts: avoid} : undefined);
+        const discarded = first.status === 'descartado' || second.status === 'descartado';
+        const gone = excerpt.seen && discarded ? await snippetGone(loaded.repo, finding, loaded.run.commitId) : false;
+        status = highFindingCloses({seen: excerpt.seen, snippetGone: gone, first, second}) ? 'fechado' : 'reaberto';
+      }
+      decided.push({id: finding.id, status, file: finding.file, line: finding.line, title: finding.title});
     }
-  });
-  await updateReports(input.dataDirectory, input.projectId, loaded.run.id, decided);
+    await ledger.tx(async client => {
+      await ledger.authorize(client, principal, authority.contextId);
+      await ledger.fence(client, authority);
+      for (const result of decided) {
+        const updated = await client.query(
+          'UPDATE ac_verify_findings SET status=$3 WHERE run_id=$1 AND achado_id=$2',
+          [loaded.run.id, result.id, result.status],
+        );
+        if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
+      }
+    });
+    await updateReports(input.dataDirectory, input.projectId, loaded.run.id, decided);
+    succeeded = true;
+  } catch (error) {
+    operationError = error;
+    throw error;
+  } finally {
+    if (ownIntentId) {
+      try {
+        await finishRecheckIntent(ledger, {intentId: ownIntentId, contextId: authority.contextId}, succeeded ? 'done' : 'failed');
+      } catch (error) {
+        if (!succeeded) throw new AggregateError([operationError, error], 'VERIFY_RECHECK_INTENT_CLEANUP_FAILED');
+        throw error;
+      }
+    }
+  }
   return {results: decided.map(({id, status}) => ({id, status}))};
 }

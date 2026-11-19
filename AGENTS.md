@@ -44,3 +44,15 @@
 - **Telas:** geradas pelo próprio produto (`npm run personal:design -- criar`), que usa Claude Opus 5.5 médio. Nenhum outro modelo desenha telas.
 - **Supervisão:** Claude (sessão Claude Code) acompanha, confere e informa o titular.
 - Não substituir modelos em silêncio. Se um modelo ficar sem cota, esperar e tentar de novo; nunca comprar créditos.
+- **Modo rápido (titular, 19/11/2026):** todo uso do Codex roda no modo fast, com `-c service_tier="fast"` (gerente e revisores). Pode haver **até 2 revisores Sol** (`gpt-6.2-sol`, `high`, fast) ao mesmo tempo. Se precisar, o gerente pode subir para `gpt-6.2-astra` com esforço `high`, também fast.
+- **Equipe a partir de 19/11/2026 (titular), substitui os itens acima sobre trabalhadores, revisores e modo:** a cota do Gemini 4 Argon acabou (429, renovação estimada em ~167 h).
+  - **Gerente:** `gpt-6.2-astra`, esforço `high`, modo **fast** (`-c service_tier="fast"`).
+  - **Trabalhadores:** até **8** Codex `gpt-6.2-sol`, esforço `medium`, modo **normal** (sem `service_tier`), cada um no seu worktree, com itens que não tocam os mesmos arquivos. Trailer: `Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>`.
+  - **Revisores:** até **2** `gpt-6.2-sol`, esforço `high`, modo **normal**, só leitura; recebem a ordem e o diff, nunca a conclusão do autor.
+  - Os Gemini (Argon e Hydrogen) deixam de ser acionados; o trabalho parcial deles nos worktrees é aproveitado pelos trabalhadores Sol.
+  - Erro de cota de qualquer modelo é registrado na hora em `docs/PROGRESSO-FINAL.md` com a palavra `COTA`.
+- **Equipe a partir de 19/11/2026, 01:2x UTC (titular), substitui a anterior:**
+  - **Gerente:** `gpt-6.2-astra`, esforço `ultra`, modo fast.
+  - **Revisores:** até **2** `gpt-6.2-sol`, esforço `ultra`, modo normal, só leitura.
+  - **Trabalhadores:** até **4** `gpt-6.1-terra`, esforço `ultra`, modo normal. Trailer: `Co-Authored-By: GPT-6.1 Terra <noreply@openai.com>`.
+  - Trabalhadores Sol que já estão rodando terminam a ordem atual. Não lance outro Sol. Ordens novas só para Terra, e no máximo 4 trabalhadores ativos depois que os Sol terminarem.
