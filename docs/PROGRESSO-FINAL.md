@@ -757,3 +757,8 @@ PAUSADO-COTA
 - 19/11/2026 17:47 UTC — revisor-C2-MATRIZ-R14 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:48 UTC — C2-CARGA-REGRESSAO encerrado com código 0.
 - 19/11/2026 17:48 UTC — O parecer de prontidão sobre f485490c encontrou dois Compose incompletos classificados como conclusivos. A correção passa a validar a sintaxe antes de concluir sobre a política de reinício.
+- 19/11/2026 17:48 UTC — trabalho-C6-VALIDACAO-COMPOSE iniciado em final-c6-r2 por Sol medium normal.
+- 19/11/2026 17:48 UTC — C2-MATRIZ-R14 encerrado com código 0.
+- 19/11/2026 17:48 UTC — revisor-C-EXAME-VINCULO-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:49 UTC — Falha na validação de retomada-c3-atual em suite, código 1. Logs privados do gerente.
+- 19/11/2026 17:49 UTC — Homologação acumulada em ordem de C3 até C6, em 0b02cd90, 8d528ca5, 4f55934c e b4583c3d. O ramo de entrega de QA em cf046090 contém a prova de regressão de amd64/arm64. A revisão de cc2d5127 encontrou dois vínculos errados entre resultado esperado e função. Aberta correção para deixar explícito o limite da matriz.
