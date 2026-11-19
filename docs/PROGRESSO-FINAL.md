@@ -254,3 +254,7 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:32 UTC — Trabalhador encerrou C7-R5 em 5fbbbb9f (código 0). Gerente confere a entrega.
 - 19/11/2026 03:32 UTC — Trabalho C5-R5 iniciado por Sol high normal em final-c5.
 - 19/11/2026 03:34 UTC — A CLI de documentação passou 6/6 em 6737130b. A triagem SPDX passou nos 15 testes locais, incluindo as seis permutações das três classes e o limite de pares; a análise de fluxos pessoais continua em C9-R4. Matriz de provas atualizada.
+- 19/11/2026 03:35 UTC — Desempenho 5fbbbb9f chegou à homologação fb632787, com tratamento de recursos Docker e separação entre orçamento do projeto e medição histórica. A nova imagem entra no laboratório; persistência do histórico na CLI ainda pendente.
+- 19/11/2026 03:35 UTC — Revisor encerrou C4-R5 em 8669f900 (código 0). Gerente confere a entrega.
+- 19/11/2026 03:35 UTC — Revisão C-REVERIFICAR iniciada por Sol high normal somente leitura em 7c27cb7b.
+- 19/11/2026 03:36 UTC — A revisão independente de dependências 8669f900 encontrou proposta de downgrade indevida, perda de itens válidos e três falhas de validação de evidências. C4-R6 aberta. O laboratório de desempenho mede agora a nova localização da declaração de rota.
