@@ -6,12 +6,12 @@
 import {spawn, spawnSync} from 'node:child_process';
 import {existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {extname, join, resolve} from 'node:path';
+import {dirname, extname, isAbsolute, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {parseExpressionAt} from './cpu-parser/node_modules/acorn/dist/acorn.mjs';
+import {tokenizer, tokTypes} from './cpu-parser/node_modules/acorn/dist/acorn.mjs';
 import {setTimeout as delay} from 'node:timers/promises';
 import {collectCpuMetrics} from './cpu-metrics.mjs';
-import {startObserverHttpLink} from './http-link.mjs';
+import {startObserverHttpLink, watchObserverHttpLink} from './http-link.mjs';
 import {runPostgresMetrics} from './postgres-metrics.mjs';
 import {startStaticServer} from './static-server.mjs';
 import {compareDeclaredBudget, validatePerformanceMeasurement} from './references.mjs';
@@ -152,6 +152,11 @@ function fileExists(root, file) {
   catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false; throw error; }
 }
 
+function pagePath(file) {
+  const encoded = file.split('/').map(encodeURIComponent).join('/');
+  return '/' + encoded.replace(/(^|\/)index\.html$/, '$1');
+}
+
 function discoverStaticWeb(root, config) {
   const roots = [...new Set([config?.staticDir, 'public', 'dist', 'build', 'deploy/pwa', '.'].filter(Boolean))];
   for (const candidate of roots) {
@@ -160,8 +165,7 @@ function discoverStaticWeb(root, config) {
       ? readdirSync(rootDir, {withFileTypes: true}).filter(entry => entry.isFile() && isHtml(entry.name)).map(entry => entry.name).sort()
       : listFilesByExt(rootDir, ['.html', '.htm']);
     const routes = files.flatMap(file => {
-      const encoded = file.split('/').map(encodeURIComponent).join('/');
-      const path = safeRoutePath('/' + encoded.replace(/(^|\/)index\.html$/, '$1'));
+      const path = safeRoutePath(pagePath(file));
       return path ? [{path, file: candidate === '.' ? file : `${candidate}/${file}`, page: true}] : [];
     });
     if (routes.length) return {rootDir, routes};
@@ -169,25 +173,56 @@ function discoverStaticWeb(root, config) {
   return null;
 }
 
+// A sintaxe foi validada por JSON.parse. Percorra apenas os filhos diretos,
+// sem aplicar ao JSON as restrições de um literal de objeto JavaScript.
+function* jsonChildren(tokens, start) {
+  let depth = 0;
+  for (let i = start + 1; i < tokens.length; i++) {
+    const {type} = tokens[i];
+    const closing = type === tokTypes.bracketR || type === tokTypes.braceR;
+    if (!depth && closing) return;
+    if (!depth && (i === start + 1 || tokens[i - 1].type === tokTypes.comma)) yield i;
+    if (type === tokTypes.bracketL || type === tokTypes.braceL) depth++;
+    if (closing) depth--;
+  }
+}
+
+function jsonProperty(tokens, start, key) {
+  let last;
+  for (const i of jsonChildren(tokens, start)) {
+    if (tokens[i].value === key) last = i + 2;
+  }
+  return last;
+}
+
 function readRouteDeclarations(root) {
   const file = 'desempenho.config.json';
   const path = join(root, file);
   if (!fileExists(root, file) || lstatSync(path).size > 256 * 1024) return new Map();
   try {
-    const ast = parseExpressionAt(readFileSync(path, 'utf8'), 0, {ecmaVersion: 2022, locations: true});
-    const array = ast.properties?.findLast(property => property.key?.value === 'routes')?.value;
+    const tokens = Array.from(tokenizer(readFileSync(path, 'utf8'), {ecmaVersion: 2022, locations: true}));
+    const array = jsonProperty(tokens, 0, 'routes');
     const declarations = new Map();
-    for (const node of array?.elements?.slice(0, MAX_DECLARED_ROUTES) ?? []) {
-      const literal = node.type === 'ObjectExpression'
-        ? node.properties.findLast(property => property.key?.value === 'path')?.value : node;
-      const route = safeRoutePath(literal?.value);
-      if (route && !declarations.has(route)) declarations.set(route, {kind: 'declaration', file, line: literal.loc.start.line});
+    if (tokens[array]?.type !== tokTypes.bracketL) return declarations;
+    let index = 0;
+    for (const i of jsonChildren(tokens, array)) {
+      if (index >= MAX_DECLARED_ROUTES) break;
+      const token = tokens[tokens[i].type === tokTypes.braceL ? jsonProperty(tokens, i, 'path') : i];
+      if (token?.type === tokTypes.string) declarations.set(index, {
+        path: safeRoutePath(token.value), source: {kind: 'declaration', file, line: token.loc.start.line},
+      });
+      index++;
     }
     return declarations;
   } catch {
     // A coleta continua quando a declaração não pode ser localizada sem ambiguidade.
     return new Map();
   }
+}
+
+function declarationSource(declarations, route) {
+  const entry = declarations.get(route.declarationIndex);
+  return entry?.path === route.path ? entry.source : undefined;
 }
 
 function documentSource(root, file) {
@@ -225,6 +260,17 @@ function selectTargets(candidates, coverage) {
   return candidates.slice(0, MAX_HTTP_ROUTES);
 }
 
+function selectDeclaredRoutes(config, declarations, coverage, resolveRoute, unavailable) {
+  const selected = new Map();
+  for (const route of config?.routes ?? []) {
+    if (selected.has(route.path)) continue;
+    const target = resolveRoute(route);
+    if (target) selected.set(route.path, {path: route.path, ...target, source: declarationSource(declarations, route)});
+    else coverage.push(routeCoverage(route.path, unavailable));
+  }
+  return selected;
+}
+
 export function planStaticRoutes(root, config, declarations = readRouteDeclarations(root)) {
   const slice = discoverStaticWeb(root, config);
   const filesByUrl = new Map();
@@ -236,29 +282,51 @@ export function planStaticRoutes(root, config, declarations = readRouteDeclarati
     }
   }
   const coverage = [];
-  const targets = new Map();
-  const declared = new Set();
-  const configured = new Set();
-  for (const route of config?.routes ?? []) {
-    if (declared.has(route.path)) continue;
-    declared.add(route.path);
+  const configured = selectDeclaredRoutes(config, declarations, coverage, route => {
     const pathname = new URL(route.path, 'http://127.0.0.1').pathname;
-    const file = route.file ?? filesByUrl.get(pathname);
-    if (!file || !isHtml(file) || !fileExists(root, file)) {
-      coverage.push(routeCoverage(route.path, 'arquivo da declaração indisponível no recorte estático'));
-      continue;
-    }
-    configured.add(route.path);
-    targets.set(route.path, {path: route.path, file, page: route.page ?? true,
-      source: declarations.get(route.path)});
-  }
+    const file = route.file === undefined ? filesByUrl.get(pathname) : route.file;
+    if (file && isHtml(file) && fileExists(root, file)) return {file, page: route.page ?? true};
+  }, 'arquivo da declaração indisponível no recorte estático');
+  const targets = new Map(configured);
   for (const route of slice?.routes ?? []) {
-    if (!configured.has(route.path)) targets.set(route.path, route);
+    if (!targets.has(route.path)) targets.set(route.path, route);
   }
   const selected = selectTargets([...targets.values()], coverage).map(route =>
     route.source ? route : {...route, source: documentSource(root, route.file)});
   const selectedAliases = new Map(selected.filter(route => configured.has(route.path)).map(route => [route.path, route.file]));
   return {rootDir: slice?.rootDir ?? root, aliases: selectedAliases, targets: selected, coverage};
+}
+
+async function serveStaticPlan(root, plan) {
+  const servers = [];
+  async function serve(rootDir, options) {
+    const server = await startStaticServer(rootDir, options);
+    servers.push(server);
+    return server;
+  }
+  const close = () => Promise.all(servers.map(server => server.close()));
+  try {
+    const http = await serve(plan.rootDir, {aliasRoot: root, aliases: plan.aliases});
+    const canonicalOrigins = new Map();
+    if (!plan.aliases.size) canonicalOrigins.set(plan.rootDir, http.origin);
+    const targets = [];
+    for (const route of plan.targets) {
+      if (!route.page) { targets.push(route); continue; }
+      const file = join(root, route.file);
+      let webRoot = plan.rootDir;
+      const fromStaticRoot = relative(webRoot, file);
+      if (fromStaticRoot === '..' || fromStaticRoot.startsWith('../') || isAbsolute(fromStaticRoot)) webRoot = dirname(file);
+      if (!canonicalOrigins.has(webRoot)) canonicalOrigins.set(webRoot, (await serve(webRoot)).origin);
+      const queryIndex = route.path.indexOf('?');
+      const query = queryIndex < 0 ? '' : route.path.slice(queryIndex);
+      const pageUrl = canonicalOrigins.get(webRoot) + pagePath(relative(webRoot, file)) + query;
+      targets.push({...route, pageUrl});
+    }
+    return {origin: http.origin, close, targets};
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 async function openHttp(root, config, mode) {
@@ -269,18 +337,10 @@ async function openHttp(root, config, mode) {
     try {
       bridge = await startObserverHttpLink();
       if (await waitForHttpReady(new URL(config.server.readyPath, bridge.origin))) {
-        const targets = [];
-        const seen = new Set();
-        for (const route of config.routes) {
-          if (seen.has(route.path)) continue;
-          seen.add(route.path);
-          if (!route.file || !fileExists(root, route.file)) {
-            coverage.push(routeCoverage(route.path, 'arquivo da rota ausente no snapshot'));
-            continue;
-          }
-          targets.push({...route, page: route.page ?? isHtml(route.file), source: declarations.get(route.path)});
-        }
-        if (targets.length) return {...bridge, mode, targets: selectTargets(targets, coverage), coverage};
+        const targets = selectDeclaredRoutes(config, declarations, coverage, route => {
+          if (route.file && fileExists(root, route.file)) return {file: route.file, page: route.page ?? isHtml(route.file)};
+        }, 'arquivo da rota ausente no snapshot');
+        if (targets.size) return {...bridge, mode, targets: selectTargets([...targets.values()], coverage), coverage};
       }
     } catch {
       // A preparação do canal também pode falhar antes de uma resposta HTTP.
@@ -289,14 +349,15 @@ async function openHttp(root, config, mode) {
   }
   if (config?.server) coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '5', status: 'failed',
     detail: 'Backend isolado indisponível, sem resposta válida ou sem rotas associadas ao snapshot'}));
+  if (mode === 'isolated') return {mode: 'static', targets: [], coverage};
   const plan = planStaticRoutes(root, config, declarations);
   coverage.push(...plan.coverage);
   if (config?.server) {
     coverage.push(normalizeCoverageRow({tool: 'recorte-http-estatico', version: '5', status: plan.targets.length ? 'ok' : 'skipped',
       detail: `${plan.targets.length} rota(s) estática(s) selecionada(s); rotas dinâmicas e APIs fora deste recorte`}));
   }
-  const server = plan.targets.length ? await startStaticServer(plan.rootDir, {aliasRoot: root, aliases: plan.aliases}) : {};
-  return {...server, mode: 'static', targets: plan.targets, coverage};
+  const server = plan.targets.length ? await serveStaticPlan(root, plan) : {targets: []};
+  return {...server, mode: 'static', coverage};
 }
 
 function discoverSqlFiles(workRoot, config) {
@@ -388,12 +449,21 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   }
 
   const lhciDir = mkdtempSync(join(tmpdir(), 'ac-perf-lhci-'));
-  const urls = routes.map(r => { const url = new URL(r.path, origin); if (url.origin !== origin) throw new Error('origem de rota inválida'); return url.href; });
+  const routesByUrl = new Map();
+  for (const route of routes) {
+    const url = new URL(route.pageUrl ?? route.path, origin);
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || (!route.pageUrl && url.origin !== origin)) {
+      throw new Error('origem de rota inválida');
+    }
+    const matches = routesByUrl.get(url.href) ?? [];
+    matches.push(route);
+    routesByUrl.set(url.href, matches);
+  }
   const configPath = join(lhciDir, 'lighthouserc.json');
   const rc = {
     ci: {
       collect: {
-        url: urls,
+        url: [...routesByUrl.keys()],
         numberOfRuns: 1,
         settings: {
           chromeFlags: '--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-background-networking',
@@ -469,15 +539,17 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
       lhr = readJsonLimited(join(outDataDir, fileName), 16 * 1024 * 1024);
       requested = new URL(lhr.requestedUrl);
     } catch { continue; }
-    const routeInfo = routes.find(r => requested.href === new URL(r.path, origin).href);
-    if (!routeInfo || requested.origin !== origin || lhr.runtimeError ||
-        measuredMetrics.some(m => m.route === routeInfo.path)) continue;
+    const matchingRoutes = routesByUrl.get(requested.href);
+    if (!matchingRoutes || lhr.runtimeError) continue;
     try { if (new URL(lhr.finalDisplayedUrl ?? lhr.finalUrl).href !== requested.href) continue; } catch { continue; }
-    const evaluated = evaluateLighthouseLhr(lhr, routeInfo, thresholds);
-    const m = evaluated.metrics;
-    if (![m.score, m.lcp, m.cls, m.tbt].every(Number.isFinite)) continue;
-    measuredMetrics.push(m);
-    findings.push(...evaluated.findings);
+    for (const route of matchingRoutes) {
+      if (measuredMetrics.some(m => m.route === route.path)) continue;
+      const evaluated = evaluateLighthouseLhr(lhr, route, thresholds);
+      const m = evaluated.metrics;
+      if (![m.score, m.lcp, m.cls, m.tbt].every(Number.isFinite)) continue;
+      measuredMetrics.push(m);
+      findings.push(...evaluated.findings);
+    }
   }
   for (const route of routes) {
     const m = measuredMetrics.find(item => item.route === route.path);
@@ -664,6 +736,9 @@ export async function collectPerformance(root = REPO_ROOT, mode = process.env.PE
     measurement.httpMode = http.mode;
     measurement.versions = {'lighthouse-ci': versions.lhci, k6: versions.k6, pg_stat_statements: versions.pg};
     coverage.push(...http.coverage);
+    if (mode === 'isolated' && http.mode === 'static') {
+      return {...validateModuleOutput({coverage, findings}), measurement: validatePerformanceMeasurement(measurement)};
+    }
     try {
       for (const route of http.targets.filter(route => !route.page)) {
         coverage.push(routeCoverage(route.path, 'fora da seleção de páginas do Lighthouse CI'));
@@ -696,5 +771,7 @@ export async function collectPerformance(root = REPO_ROOT, mode = process.env.PE
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  process.stdout.write(`${JSON.stringify(await collectPerformance())}\n`);
+  const monitor = process.env.PERF_HTTP_MODE === 'isolated' ? watchObserverHttpLink(() => process.exit(1)) : undefined;
+  try { process.stdout.write(`${JSON.stringify(await collectPerformance())}\n`); }
+  finally { monitor?.close(); }
 }
