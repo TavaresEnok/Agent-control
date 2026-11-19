@@ -130,6 +130,12 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
     ...buildFailure]).reason, 'go-build-failed');
   assert.equal(run(1, buildFailure).reason, 'go-build-execution');
   assert.equal(run(1, [compilerDiagnostic, ...buildFailure], busyCompiler).reason, 'go-build-execution');
+  assert.equal(run(1, [compilerDiagnostic, ...buildFailure], `# ${pkg}/other\n${busyCompiler}`).reason,
+    'go-build-execution');
+  assert.equal(run(1, buildFailure, `# ${buildId}\n${sourceWithLiteral}# ${pkg}/other\n${busyCompiler}`).reason,
+    'go-build-execution');
+  assert.equal(run(1, [], `module lookup disabled by GOPROXY=off\n# ${pkg}/other\n${busyCompiler}`).reason,
+    'go-test-execution');
   assert.equal(run(1, [compilerDiagnostic, buildOutput(busyCompiler), ...buildFailure]).reason, 'go-build-execution');
   assert.equal(run(1, [buildOutput('./arithmetic.go:3:14: internal compiler error: synthetic\n'),
     ...buildFailure]).reason, 'go-build-execution');
@@ -154,9 +160,15 @@ test('Go exige diagnóstico de código atribuído ao FailedBuild exato', async (
   const offline = './arithmetic.go:3:14: no required module provides package qa.local/offset\n';
   const artifact = './arithmetic.go:3:14: could not import qa.local/offset (open /tmp/build/offset.a: no such file or directory)\n';
   const interruptedRead = './arithmetic.go:3:14: could not import qa.local/offset (invalid export data)\n';
+  const negativeIndex = 'invalid argument: index amount (constant -2 of type int) must not be negative';
+  const indexDiagnostic = `./arithmetic.go:3:14: ${negativeIndex}\n`;
 
   const uncertain = {reason: 'go-build-execution'};
   assert.deepEqual(run([], source), uncertain);
+  assert.deepEqual(run([], indexDiagnostic), uncertain);
+  assert.deepEqual(run([], `# ${other}\n${indexDiagnostic}`), uncertain);
+  assert.deepEqual(run([buildOutput(`${negativeIndex}\n`)]), uncertain);
+  assert.deepEqual(run([buildOutput(indexDiagnostic.replace('constant -2', 'variable'))]), uncertain);
   assert.deepEqual(run([], `# ${other}\n${source}# ${buildId}\n`), uncertain);
   assert.deepEqual(run([], `# ${pkg}\n${source}`), uncertain);
   assert.deepEqual(run([buildOutput(source, other)]), uncertain);
@@ -176,6 +188,8 @@ test('Go exige diagnóstico de código atribuído ao FailedBuild exato', async (
     {reason: 'offline-dependency'});
 
   const confirmed = {reason: 'go-build-failed'};
+  assert.deepEqual(run([buildOutput(indexDiagnostic)]), confirmed);
+  assert.deepEqual(run([], `# ${buildId}\n${indexDiagnostic}`), confirmed);
   assert.deepEqual(run([], `# ${other}\n${artifact}${offline}# ${buildId}\n${source}`), confirmed);
   assert.deepEqual(run([buildOutput(source + './arithmetic.go:4:1: too many errors\n')]), confirmed);
   assert.deepEqual(run([buildOutput(`# ${buildId}\n`), buildOutput(source), buildFail(other)],
@@ -184,7 +198,7 @@ test('Go exige diagnóstico de código atribuído ao FailedBuild exato', async (
   const plan = {edits: [{id: 'confirmed'}, {id: 'uncertain'}], truncated: false, omitted: []};
   const result = await measurePlan(plan, async (edit?: {id: string}) => {
     if (!edit) return passed;
-    return edit.id === 'confirmed' ? failed : run([buildOutput(artifact)]);
+    return edit.id === 'confirmed' ? failed : run([], `# ${other}\n${indexDiagnostic}`);
   });
   assert.equal(result.status, 'partial');
   assert.equal(result.killed, 1);
@@ -443,6 +457,8 @@ test('go-mutesting e go test reais em cópia temporária da fixture', {skip: !go
     assert.equal(result.mutants.find(mutant => mutant.line === 5)?.reason, 'go-build-failed');
 
     writeFileSync(path, source + '\nvar _ int = "permission denied"\n');
+    assert.deepEqual(await runSuite(), {reason: 'go-build-failed'});
+    writeFileSync(path, source + '\nvar _ = []int{1}[-1]\n');
     assert.deepEqual(await runSuite(), {reason: 'go-build-failed'});
     writeFileSync(path, source);
     writeFileSync(testPath, 'package arithmetic\nimport "testing"\nfunc TestAbort(t *testing.T) { panic("erro sintético") }\n');
