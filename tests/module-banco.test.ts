@@ -208,9 +208,9 @@ test('C5 laboratório por digest prova a migração, restauração e os três de
     assert.equal(clean.findings.some(row => row.rule === rule), false, rule);
   }
   const query = 'banco/queries/latency.sql';
-  const metrics = /^(queryid=-?[1-9]\d*; amostras=3; média=(\d+\.\d{3}) ms; blocos hit\/read=\d+\/\d+) \| SQL medido \(sha256:([0-9a-f]{64})\)$/;
+  const metrics = /^linha 2; (queryid=-?[1-9]\d*; amostras=3; média=(\d+\.\d{3}) ms; blocos hit\/read=\d+\/\d+) \| SQL medido \(sha256:([0-9a-f]{64})\)$/;
   for (const [variant, report] of [['defective', defective], ['clean', clean]] as const) {
-    const prefix = `pg_stat_statements:query:${query}: linha 2; `;
+    const prefix = `pg_stat_statements:query:${query}: `;
     const rows = report.coverage.filter(row => row.tool === 'pg_stat_statements' && row.detail.startsWith(prefix));
     assert.equal(rows.length, 1, variant);
     const [row] = rows;
