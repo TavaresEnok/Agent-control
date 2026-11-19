@@ -42,12 +42,14 @@ const TYPEDOC_DIAGNOSTIC_VERSION = '0.28.20';
 const MERMAID_DIAGNOSTIC_VERSION = '12.3.0';
 const DECLARATION_MAP = /\.d\.[cm]?ts\.map$/;
 const TYPEDOC_SIGNATURE_KINDS = new Set([4096, 16384, 524288, 1048576]);
+const TYPEDOC_MEMBER_CONTAINER_KINDS = new Set([8, 128, 256]); // Enum, Class, Interface
 const TYPEDOC_DOCUMENTATION_KINDS = new Map([
   ['Enum', 8], ['EnumMember', 16], ['Variable', 32], ['Function', 64], ['Class', 128],
   ['Interface', 256], ['Method', 2048], ['CallSignature', 4096], ['ConstructorSignature', 16384],
   ['Accessor', 262144], ['GetSignature', 524288], ['SetSignature', 1048576], ['TypeAlias', 2097152],
 ]);
 const TYPEDOC_LINK_TAGS = new Set(['@link', '@linkcode', '@linkplain']);
+const TYPEDOC_DIRECT_LINK_BLOCKS = new Set(['', '@see', '@returns', '@throws']);
 
 const SKIP_DIRS = new Set([
   '.git',
@@ -612,17 +614,22 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function canonicalTypedocTags(comment, startLine) {
+function canonicalTypedocTags(comment) {
   if (!comment.startsWith('/**') || !comment.endsWith('*/')) return null;
-  const lines = comment.slice(3, -2).split(/\r?\n/);
+  const lines = comment.slice(3, -2).split('\n');
   const tags = [];
-  // Only recognize constructs with proven single-line boundaries. An unsupported
-  // construct anywhere in the comment can change which tag TypeDoc reports.
+  // Keep only unambiguous source spans to corroborate the parser and reflection.
   const inline = /(?<!`)`[^`\\]+`(?!`)|\{(@link(?:code|plain)?)[ \t]+([^\s{}\\`]+)[ \t]*\}/g;
   let margin;
-  for (const [index, raw] of lines.entries()) {
+  let offset = 3;
+  let fenced = false;
+  let blockTag = '';
+  for (const [index, rawLine] of lines.entries()) {
+    const lineOffset = offset;
+    offset += rawLine.length + 1;
+    const raw = rawLine.replace(/\r$/, '');
     if (/[\\\r\u2028\u2029]/.test(raw)) return null;
-    const prefix = raw.match(index === 0 ? /^[ \t]*/ : /^([ \t]*)\*(?:[ \t]+|$)/);
+    const prefix = raw.match(index === 0 ? /^[ \t]*/ : /^([ \t]*)\*(?: |$)/);
     if (!prefix) {
       if (index === lines.length - 1 && /^[ \t]*$/.test(raw)) break;
       return null;
@@ -631,17 +638,49 @@ function canonicalTypedocTags(comment, startLine) {
       margin ??= prefix[1];
       if (margin !== prefix[1]) return null;
     }
-    const line = startLine + index;
-    const prose = raw.slice(prefix[0].length).replace(inline, (_, tag, text) => {
-      if (tag) tags.push({tag, text, line});
+    const body = raw.slice(prefix[0].length);
+    if (fenced) {
+      if (/^```[ \t]*$/.test(body)) fenced = false;
+      else if (body.includes('`')) return null;
+      continue;
+    }
+    if (index > 0 && /^```[ \t]*(?:[\w-]+[ \t]*)?$/.test(body)) {
+      fenced = true;
+      continue;
+    }
+    if (/^[ \t]+\S/.test(body)) return null;
+    const start = lineOffset + prefix[0].length;
+    const links = [];
+    const prose = body.replace(inline, (_, tag, text, column) => {
+      if (tag) links.push({tag, text, offset: start + column});
       return '\uFFFC'; // Keep inline content from exposing a block tag after it.
     });
     const param = prose.match(/^@param[ \t]+([A-Za-z_$][\w$]*)(?=[ \t]|$)/);
-    if (param) tags.push({tag: '@param', text: param[1], line});
-    const block = param ?? prose.match(/^@(?:see|returns?)(?=[ \t]|$)/);
-    if (/[@{}`]|~{3}/.test(prose.slice(block?.[0].length ?? 0))) return null;
+    const block = prose.match(/^(@see|@returns?|@throws)(?=[ \t]|$)/);
+    if (param) {
+      blockTag = '@param';
+      tags.push({tag: '@param', text: param[1], offset: start, blockTag});
+    } else if (block) {
+      blockTag = block[1] === '@return' ? '@returns' : block[1];
+    }
+    let description = prose.slice((param ?? block)?.[0].length ?? 0);
+    if (block?.[1] === '@throws') description = description.replace(/^[ \t]+\{[A-Za-z_$][\w$]*\}(?=[ \t]|$)/, '');
+    if (/[@{}`]|~{3}/.test(description)) return null;
+    for (const link of links) tags.push({...link, blockTag});
   }
-  return tags;
+  return fenced ? null : tags;
+}
+
+function matchesParsedJsDocTag(ts, source, comment, position, tag) {
+  const blocks = comment.tags ?? [];
+  if (tag.tag === '@param') {
+    return blocks.some(block => ts.isJSDocParameterTag(block) && block.tagName.text === 'param'
+      && block.getStart(source) === position && block.name.getText(source) === tag.text);
+  }
+  const parts = tag.blockTag ? blocks
+    .filter(block => `@${block.tagName.text === 'return' ? 'returns' : block.tagName.text}` === tag.blockTag)
+    .flatMap(block => Array.isArray(block.comment) ? block.comment : []) : comment.comment;
+  return Array.isArray(parts) && parts.some(part => ts.isJSDocLinkLike(part) && part.getStart(source) === position);
 }
 
 function findLineInText(text, matcher) {
@@ -747,7 +786,7 @@ export function extractTypedocSymbols(typedocData, repoRoot) {
       });
     }
     // Public enum, class and interface members have their own source locations.
-    if ([8, 128, 256].includes(kind) && Array.isArray(node.children)) {
+    if (TYPEDOC_MEMBER_CONTAINER_KINDS.has(kind) && Array.isArray(node.children)) {
       for (const child of node.children) visit(child, qualifiedName);
     }
   }
@@ -758,19 +797,19 @@ export function extractTypedocSymbols(typedocData, repoRoot) {
 
 function indexTypedocReflections(project) {
   const byName = new Map();
-  const visit = (node, parent, parentName) => {
+  const visit = (node, parent, grandparent, parentName) => {
     if (!node || node.flags?.isPrivate || node.flags?.isProtected) return;
     const signature = TYPEDOC_SIGNATURE_KINDS.has(node.kind);
     // TypeDoc's getFriendlyFullName omits the project prefix and the signature's own name.
     const name = signature ? parentName : parentName ? `${parentName}.${node.name}` : node.name;
     if (!byName.has(name)) byName.set(name, []);
-    byName.get(name).push({node, parent, signature});
-    for (const child of node.children ?? []) visit(child, node, name);
-    for (const sig of node.signatures ?? []) visit(sig, node, name);
-    visit(node.getSignature, node, name);
-    visit(node.setSignature, node, name);
+    byName.get(name).push({node, parent, container: signature ? grandparent : parent, signature});
+    for (const child of node.children ?? []) visit(child, node, parent, name);
+    for (const sig of node.signatures ?? []) visit(sig, node, parent, name);
+    visit(node.getSignature, node, parent, name);
+    visit(node.setSignature, node, parent, name);
   };
-  for (const child of project.children ?? []) visit(child, project, '');
+  for (const child of project.children ?? []) visit(child, project, null, '');
   return byName;
 }
 
@@ -797,7 +836,7 @@ function readTypedocDeclarationMap(file, repoRoot, repoFiles, readFileText, ts) 
     return null;
   }
   // TypeDoc uses sources[0] for the symbol ID and leaves the reflection coordinates in the declaration.
-  if (map?.version !== 3 || typeof map.mappings !== 'string' || !map.mappings
+  if (map?.version !== 3 || Object.hasOwn(map, 'sections') || typeof map.mappings !== 'string' || !map.mappings
     || typeof map.file !== 'string' || posix.join(posix.dirname(mapFile), map.file) !== file
     || !Array.isArray(map.sources) || map.sources.length !== 1
     || typeof map.sources[0] !== 'string' || !map.sources[0]
@@ -933,25 +972,48 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return pkg && pkg.name === id.packageName && posix.relative(pkg.directory, mappedFile) === id.packagePath
       ? source : null;
   };
-  const locateInComment = (candidates, text, expectedTag) => {
+  const mayReplaceMemberComment = (container, memberName, declaration) => {
+    if (!TYPEDOC_MEMBER_CONTAINER_KINDS.has(container?.kind)) return false;
+    const source = getSource(container);
+    const owner = source && findDeclaration(source, false);
+    if (!owner || owner.node !== declaration.node.parent) return true;
+    // TypeDoc removes @prop/@property from the serialized owner's comment.
+    // Its parser can recognize block tags even after prose on the same line.
+    const ranges = owner.ts.getLeadingCommentRanges(owner.source.text, owner.node.pos) ?? [];
+    return ranges.some(({pos, end}) => {
+      if (!owner.source.text.startsWith('/**', pos)) return false;
+      const properties = owner.source.text.slice(pos, end - 2)
+        .matchAll(/@prop(?:erty)?(?=[\s}]|$)(?:[ \t]+([A-Za-z_$][\w$]*)(?=\s|$))?/g);
+      for (const [, name] of properties) {
+        // Noncanonical names can target quoted, optional, or nested properties.
+        if (!name || name === memberName) return true;
+      }
+      return false;
+    });
+  };
+  const locateInComment = (candidates, text, expectedTag, expectedBlock = '@param') => {
     const occurrences = [];
-    for (const {node, signature} of candidates) {
+    for (const {node, parent, signature, container} of candidates) {
       const source = getSource(node);
       const declaration = source && findDeclaration(source, signature);
-      if (!declaration) return null;
+      if (!declaration || mayReplaceMemberComment(container, signature ? parent.name : node.name, declaration)) return null;
       const {ts, source: syntax, lineAt, node: declarationNode} = declaration;
       const comments = ts.getJSDocCommentsAndTags(declarationNode).filter(ts.isJSDoc);
       if (comments.length !== 1) return null;
       const [comment] = comments;
-      const tags = canonicalTypedocTags(comment.getText(syntax), lineAt(comment.getStart(syntax)));
+      const start = comment.getStart(syntax);
+      const tags = canonicalTypedocTags(comment.getText(syntax));
       if (!tags) return null;
       for (const tag of tags) {
         if (tag.text === text && (expectedTag === '@param' ? tag.tag === '@param' : TYPEDOC_LINK_TAGS.has(tag.tag))) {
-          occurrences.push({file: source.file, line: tag.line, name: node.name, tag: tag.tag});
+          const position = start + tag.offset;
+          if (tag.tag !== expectedTag || tag.blockTag !== expectedBlock
+            || !matchesParsedJsDocTag(ts, syntax, comment, position, tag)) return null;
+          occurrences.push({file: source.file, line: lineAt(position), name: node.name});
         }
       }
     }
-    return occurrences.length === 1 && occurrences[0].tag === expectedTag ? occurrences[0] : null;
+    return occurrences.length === 1 ? occurrences[0] : null;
   };
   const recordWarning = (rule, severity, message, evidence, location) => {
     if (!location) {
@@ -999,14 +1061,15 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
         ? targetLink.replace(/[.#~]/, '!') : undefined;
       if (suggestion !== expectedSuggestion) continue;
       const candidates = getReflections(symRef).flatMap(reflection => {
-        const {node} = reflection;
-        return [
-          ...(node.comment?.summary ?? []), ...(node.comment?.blockTags ?? []).flatMap(tag => tag.content ?? []),
-        ].filter(part => part.kind === 'inline-tag' && TYPEDOC_LINK_TAGS.has(part.tag) && !part.target
-          && part.text.trim() === targetLink).map(part => ({reflection, tag: part.tag}));
+        const {comment} = reflection.node;
+        const blocks = [{tag: '', content: comment?.summary}, ...(comment?.blockTags ?? [])];
+        return blocks.flatMap(block => (block.content ?? [])
+          .filter(part => part.kind === 'inline-tag' && TYPEDOC_LINK_TAGS.has(part.tag) && !part.target
+            && part.text.trim() === targetLink).map(part => ({reflection, tag: part.tag, blockTag: block.tag})));
       });
-      const location = uniqueWarning && candidates.length === 1
-        ? locateInComment([candidates[0].reflection], targetLink, candidates[0].tag)
+      const [candidate] = candidates;
+      const location = uniqueWarning && candidates.length === 1 && TYPEDOC_DIRECT_LINK_BLOCKS.has(candidate.blockTag)
+        ? locateInComment([candidate.reflection], targetLink, candidate.tag, candidate.blockTag)
         : null;
       recordWarning('DOC-TYPEDOC-LINK-QUEBRADO', 'media',
         `Comentário JSDoc de "${location?.name ?? symRef}" contém referência {@link ${targetLink}} para símbolo inexistente.`,
