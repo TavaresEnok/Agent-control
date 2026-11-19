@@ -33,6 +33,7 @@ import {collectLanguageSuite, hasLanguageTestCandidates, languageSuites} from '.
 import {collectLanguageMutation, collectPythonProperties, languageMeasurementTools} from './mutacao-linguagens/index.mjs';
 import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
 import {collectJsProperties, propertyLimits, propertyTool} from './js-properties.mjs';
+import {bancoLocalTool, collectQaBancoLocal} from './banco-local/index.mjs';
 import {functionalContractTools, maxContractDocuments, runFunctionalContract} from './contratos/index.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -1622,6 +1623,11 @@ export async function collectQaModule(options = {}) {
         name: 'qa-contrato-openapi',
         partial: sourcePartial,
         run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete: sourcePartial, failTool, validatedOpenApi}),
+      },
+      {
+        name: bancoLocalTool,
+        partial: incomplete,
+        run: () => collectQaBancoLocal({repoDir, workspace, copiedFiles, incomplete, row: coverageRow}),
       },
       ...Object.entries(functionalContractTools).map(([kind, name]) => ({
         name,
