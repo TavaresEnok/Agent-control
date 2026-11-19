@@ -40,7 +40,7 @@
   "runtimeTools": [
     {
       "name": "node-cpu-prof",
-      "description": "Profiler nativo V8 do Node.js (--cpu-prof)"
+      "description": "Profiler nativo V8 do Node.js, acionado pelo Inspector para uma função selecionada"
     },
     {
       "name": "pg_stat_statements",

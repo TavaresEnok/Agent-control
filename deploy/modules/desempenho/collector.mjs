@@ -4,70 +4,39 @@
  * Emite um único JSON UTF-8 em stdout: { coverage: [...], findings: [...] }.
  */
 import {spawn, spawnSync} from 'node:child_process';
+import {existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
+import {extname, join} from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
+import {collectCpuMetrics} from './cpu-metrics.mjs';
+import {startObserverHttpLink} from './http-link.mjs';
+import {runPostgresMetrics} from './postgres-metrics.mjs';
+import {startStaticServer} from './static-server.mjs';
 import {
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import {createServer} from 'node:net';
-import {basename, dirname, extname, join, relative, sep} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {
-  analyzeCpuProfile,
-  DEFAULT_THRESHOLDS,
-  evaluateBaselineRegression,
-  evaluateK6Summary,
-  evaluateLighthouseLhr,
-  normalizeCoverageRow,
-  normalizeRepoRelativePath,
-  validateConfig,
-  validateModuleOutput,
+  DEFAULT_THRESHOLDS, evaluateBaselineRegression, evaluateK6Summary, evaluateLighthouseLhr, loadConfig,
+  normalizeCoverageRow, normalizeFinding, readJsonLimited, safeRoutePath, validateModuleOutput,
 } from './lib.mjs';
 
 const REPO_ROOT = '/repo';
-const WORK_ROOT = '/tmp/work-repo';
-const MAX_COPY_FILES = 2500;
-const MAX_COPY_BYTES = 10 * 1024 * 1024;
-const SKIP_DIRS = new Set(['.git', 'node_modules', '.next', '.nuxt', 'coverage', '.lighthouseci']);
+const MAX_HTTP_ROUTES = 8;
+const K6_REQUESTS_PER_ROUTE = 3;
+const isHtml = path => /\.html?$/i.test(path);
 
-function copyRepoSafe(srcDir, dstDir, state = {files: 0, omissions: []}) {
-  mkdirSync(dstDir, {recursive: true});
-  let entries;
-  try {
-    entries = readdirSync(srcDir, {withFileTypes: true});
-  } catch {
-    state.omissions.push(`diretório ilegível: ${relative(REPO_ROOT, srcDir) || '.'}`);
-    return state;
-  }
-  for (const entry of entries) {
-    if (state.files >= MAX_COPY_FILES) { state.omissions.push('limite de 2500 arquivos'); break; }
-    if (entry.isSymbolicLink()) continue;
-    if (SKIP_DIRS.has(entry.name)) continue;
-    const srcPath = join(srcDir, entry.name);
-    const dstPath = join(dstDir, entry.name);
-    let info;
-    try { info = lstatSync(srcPath); } catch { state.omissions.push(`entrada ilegível: ${relative(REPO_ROOT, srcPath)}`); continue; }
-    if (info.isSymbolicLink()) continue;
-    if (info.isDirectory()) {
-      copyRepoSafe(srcPath, dstPath, state);
-    } else if (info.isFile() && info.size <= MAX_COPY_BYTES) {
-      try { copyFileSync(srcPath, dstPath); state.files += 1; } catch { state.omissions.push(`arquivo ilegível: ${relative(REPO_ROOT, srcPath)}`); }
-    } else if (info.isFile()) { state.omissions.push(`arquivo maior que 10 MiB: ${relative(REPO_ROOT, srcPath)}`); }
-  }
-  return state;
-}
-
-function readJsonLimited(filePath, maxBytes = 512 * 1024) {
-  const info = lstatSync(filePath);
-  if (info.isSymbolicLink() || !info.isFile() || info.size > maxBytes) {
-    throw new Error(`Arquivo JSON inválido ou grande demais: ${filePath}`);
-  }
-  return JSON.parse(readFileSync(filePath, 'utf8'));
+function toolExit(file, args, {timeout, ...options}) {
+  return new Promise(resolveExit => {
+    const child = spawn(file, args, {...options, detached: true, stdio: 'ignore'});
+    const killGroup = () => {
+      if (child.pid) {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch { /* grupo já terminou */ }
+      }
+    };
+    const timer = setTimeout(killGroup, timeout);
+    child.once('error', () => {}); // close também é emitido quando spawn falha.
+    child.once('close', code => {
+      clearTimeout(timer);
+      killGroup();
+      resolveExit(code);
+    });
+  });
 }
 
 function listFilesByExt(rootDir, exts, relDir = '', out = []) {
@@ -80,9 +49,8 @@ function listFilesByExt(rootDir, exts, relDir = '', out = []) {
   }
   entries.sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
-    if (entry.isSymbolicLink() || SKIP_DIRS.has(entry.name)) continue;
+    if (entry.isSymbolicLink()) continue;
     const rel = relDir ? `${relDir}/${entry.name}` : entry.name;
-    const full = join(rootDir, rel);
     if (entry.isDirectory()) {
       listFilesByExt(rootDir, exts, rel, out);
     } else if (entry.isFile() && exts.includes(extname(entry.name).toLowerCase())) {
@@ -120,22 +88,8 @@ function findChrome() {
 }
 
 function findPostgresBinDir() {
-  const base = '/usr/lib/postgresql';
-  try {
-    const versions = readdirSync(base, {withFileTypes: true})
-      .filter(d => d.isDirectory() && /^\d+$/.test(d.name))
-      .map(d => Number(d.name))
-      .sort((a, b) => b - a);
-    for (const ver of versions) {
-      const bin = join(base, String(ver), 'bin');
-      if (existsSync(join(bin, 'initdb')) && existsSync(join(bin, 'pg_ctl')) && existsSync(join(bin, 'postgres'))) {
-        return bin;
-      }
-    }
-  } catch {
-    /* ausente */
-  }
-  return null;
+  const bin = '/usr/lib/postgresql/16/bin';
+  return ['initdb', 'pg_ctl', 'postgres'].every(file => existsSync(join(bin, file))) ? bin : null;
 }
 
 function getToolVersions(pgBinDir) {
@@ -176,101 +130,91 @@ function getToolVersions(pgBinDir) {
   };
 }
 
-async function allocatePort() {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const srv = createServer();
-    srv.once('error', rejectPromise);
-    srv.listen(0, '127.0.0.1', () => {
-      const addr = srv.address();
-      const port = typeof addr === 'object' && addr ? addr.port : 0;
-      srv.close(err => (err ? rejectPromise(err) : resolvePromise(port)));
-    });
-  });
-}
-
-async function waitForHttpReady(url, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
+async function waitForHttpReady(url) {
+  const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, {signal: AbortSignal.timeout(1500)});
-      if (res.status < 500) return true;
-    } catch {
-      /* aguarda subir */
-    }
-    await new Promise(r => setTimeout(r, 150));
+      const response = await fetch(url, {redirect: 'manual', signal: AbortSignal.timeout(1200)});
+      await response.body?.cancel();
+      if (response.ok) return true;
+    } catch { /* aguarda o início do alvo */ }
+    await delay(150);
   }
   return false;
 }
 
-async function stopChildGracefully(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise(resolveStop => {
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
-      resolveStop();
-    }, 5000);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolveStop();
-    });
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      clearTimeout(timer);
-      resolveStop();
-    }
-  });
+function fileExists(root, file) {
+  try { return lstatSync(join(root, file)).isFile(); }
+  catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false; throw error; }
 }
 
-
-function discoverStaticWeb(workRoot, config) {
-  if (config?.staticDir) {
-    const dir = join(workRoot, config.staticDir);
-    if (existsSync(dir) && statSync(dir).isDirectory()) {
-      const htmls = listFilesByExt(dir, ['.html', '.htm']);
-      if (htmls.length > 0) {
-        const routes = htmls.map(h => ({
-          path: h === 'index.html' ? '/' : `/${h}`,
-          file: `${config.staticDir}/${h}`,
-        }));
-        return {rootDir: dir, routes};
-      }
-    }
-  }
-
-  for (const candidate of ['public', 'dist', 'build', 'deploy/pwa']) {
-    const dir = join(workRoot, candidate);
-    if (existsSync(dir) && statSync(dir).isDirectory()) {
-      const htmls = listFilesByExt(dir, ['.html', '.htm']);
-      if (htmls.length > 0) {
-        const routes = htmls.map(h => ({
-          path: h === 'index.html' ? '/' : `/${h}`,
-          file: `${candidate}/${h}`,
-        }));
-        return {rootDir: dir, routes};
-      }
-    }
-  }
-
-  if (existsSync(join(workRoot, 'index.html'))) {
-    const htmls = readdirSync(workRoot).filter(f => f.endsWith('.html') || f.endsWith('.htm'));
-    return {
-      rootDir: workRoot,
-      routes: htmls.map(h => ({path: h === 'index.html' ? '/' : `/${h}`, file: h})),
-    };
+function discoverStaticWeb(root, config) {
+  const roots = [...new Set([config?.staticDir, 'public', 'dist', 'build', 'deploy/pwa', '.'].filter(Boolean))];
+  for (const candidate of roots) {
+    const rootDir = join(root, candidate);
+    const files = candidate === '.'
+      ? readdirSync(rootDir, {withFileTypes: true}).filter(entry => entry.isFile() && isHtml(entry.name)).map(entry => entry.name).sort()
+      : listFilesByExt(rootDir, ['.html', '.htm']);
+    const routes = files.flatMap(file => {
+      const encoded = file.split('/').map(encodeURIComponent).join('/');
+      const path = safeRoutePath('/' + encoded.replace(/(^|\/)index\.html$/, '$1'));
+      return path ? [{path, file: candidate === '.' ? file : `${candidate}/${file}`, page: true}] : [];
+    });
+    if (routes.length) return {rootDir, routes};
   }
   return null;
+}
+
+async function openHttp(config) {
+  const coverage = [];
+  if (config?.server && process.env.PERF_HTTP_MODE === 'isolated') {
+    const bridge = await startObserverHttpLink();
+    if (await waitForHttpReady(new URL(config.server.readyPath, bridge.origin))) {
+      const targets = [];
+      for (const route of config.routes) {
+        if (targets.some(target => target.path === route.path)) continue;
+        if (!route.file || !fileExists(REPO_ROOT, route.file)) {
+          coverage.push(normalizeCoverageRow({tool: 'rota-http', version: '4', status: 'skipped',
+            detail: `rota=${route.path}; arquivo da rota ausente no snapshot`}));
+          continue;
+        }
+        targets.push({...route, page: route.page ?? isHtml(route.file)});
+      }
+      if (targets.length) return {...bridge, targets, coverage};
+    }
+    await bridge.close();
+    coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '4', status: 'failed',
+      detail: 'Backend isolado sem resposta válida ou sem rotas associadas a arquivos do snapshot'}));
+  } else if (config?.server) {
+    coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '4', status: 'skipped',
+      detail: 'Backend local indisponível para coleta isolada'}));
+  }
+
+  const slice = discoverStaticWeb(REPO_ROOT, config);
+  if (!slice) return {targets: [], coverage};
+  const server = await startStaticServer(slice.rootDir);
+  const aliases = new Map();
+  for (const route of slice.routes) {
+    aliases.set(route.path, route.file);
+    if (route.path.endsWith('/')) aliases.set(`${route.path}index.html`, route.file);
+  }
+  const extraRoutes = (config?.routes ?? []).flatMap(route => {
+    const file = aliases.get(new URL(route.path, server.origin).pathname);
+    return file && (!route.file || route.file === file) ? [{path: route.path, file, page: true}] : [];
+  });
+  const routes = [...new Map([...slice.routes, ...extraRoutes].map(route => [route.path, route])).values()];
+  if (config?.server) {
+    coverage.push(normalizeCoverageRow({tool: 'recorte-http-estatico', version: '4', status: 'ok',
+      detail: `${routes.length} página(s) estática(s) disponível(is); rotas dinâmicas e APIs fora deste recorte`}));
+  }
+  return {...server, targets: routes, coverage};
 }
 
 function discoverSqlFiles(workRoot, config) {
   const migrations = [];
   if (config?.migrations?.length) {
     for (const m of config.migrations) {
-      if (existsSync(join(workRoot, m))) migrations.push(m);
+      migrations.push(m);
     }
   } else if (config?.migrationsDir) {
     const base = join(workRoot, config.migrationsDir);
@@ -293,7 +237,7 @@ function discoverSqlFiles(workRoot, config) {
   const queries = [];
   if (config?.sqlQueries?.length) {
     for (const q of config.sqlQueries) {
-      if (existsSync(join(workRoot, q))) queries.push(q);
+      queries.push(q);
     }
   } else if (config?.sqlDir) {
     const base = join(workRoot, config.sqlDir);
@@ -362,7 +306,7 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
         url: urls,
         numberOfRuns: 1,
         settings: {
-          chromeFlags: '--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu',
+          chromeFlags: '--headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --disable-background-networking',
           throttlingMethod: 'provided',
           onlyCategories: ['performance'],
           formFactor: 'desktop',
@@ -390,12 +334,10 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
     LHCI_BUILD_CONTEXT__AUTHOR: 'desempenho <noreply@localhost>',
   };
 
-  const collectRes = spawnSync('lhci', ['collect', `--config=${configPath}`], {
+  const collectExit = await toolExit('lhci', ['collect', `--config=${configPath}`], {
     cwd: lhciDir,
     env,
-    encoding: 'utf8',
     timeout: 180_000,
-    maxBuffer: 16 * 1024 * 1024,
   });
 
   const outDataDir = join(lhciDir, '.lighthouseci');
@@ -408,14 +350,13 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
     lhrFiles = [];
   }
 
-  if (collectRes.status !== 0 || lhrFiles.length === 0) {
-    const errText = (collectRes.stderr || collectRes.stdout || `exit=${collectRes.status}`).trim();
+  if (collectExit !== 0 || lhrFiles.length === 0) {
     return {
       summary: normalizeCoverageRow({
         tool: 'lighthouse-ci',
         version,
         status: 'failed',
-        detail: `lhci collect falhou: ${errText.slice(0, 300)}`,
+        detail: `lhci collect sem relatório válido (exit=${collectExit ?? 'indisponível'})`,
       }),
       extraCoverage,
       findings,
@@ -424,12 +365,10 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   }
 
   // Também executa `lhci assert` para validar as asserções nativas do Lighthouse CI
-  const assertRes = spawnSync('lhci', ['assert', `--config=${configPath}`], {
+  const assertExit = await toolExit('lhci', ['assert', `--config=${configPath}`], {
     cwd: lhciDir,
     env,
-    encoding: 'utf8',
     timeout: 30_000,
-    maxBuffer: 8 * 1024 * 1024,
   });
 
   for (const fileName of lhrFiles) {
@@ -439,7 +378,8 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
       requested = new URL(lhr.requestedUrl);
     } catch { continue; }
     const routeInfo = routes.find(r => requested.href === new URL(r.path, origin).href);
-    if (!routeInfo || requested.origin !== origin || measuredMetrics.some(m => m.route === routeInfo.path)) continue;
+    if (!routeInfo || requested.origin !== origin || lhr.runtimeError ||
+        measuredMetrics.some(m => m.route === routeInfo.path)) continue;
     try { if (new URL(lhr.finalDisplayedUrl ?? lhr.finalUrl).href !== requested.href) continue; } catch { continue; }
     const evaluated = evaluateLighthouseLhr(lhr, routeInfo, thresholds);
     const m = evaluated.metrics;
@@ -450,15 +390,17 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   for (const route of routes) {
     const m = measuredMetrics.find(item => item.route === route.path);
     extraCoverage.push(normalizeCoverageRow({tool: `lighthouse-ci:rota:${route.path}`, version,
-      status: m ? 'ok' : 'failed', detail: m ? `arquivo=${m.file}; score=${m.score}; LCP=${m.lcp}ms; CLS=${m.cls}; TBT=${m.tbt}ms` : 'LHR correspondente com métricas completas ausente'}));
+      status: m ? 'ok' : 'failed', files: m ? [m.file] : [], detail: m ? `arquivo=${m.file}; score=${m.score}; LCP=${m.lcp}ms; CLS=${m.cls}; TBT=${m.tbt}ms` : 'LHR correspondente com métricas completas ausente'}));
   }
 
+  if (assertExit !== 0) extraCoverage.push(normalizeCoverageRow({tool: 'lighthouse-ci:assert', version,
+    status: 'failed', detail: `lhci assert exit=${assertExit ?? 'indisponível'}`}));
   return {
     summary: normalizeCoverageRow({
       tool: 'lighthouse-ci',
       version,
-      status: measuredMetrics.length === routes.length && assertRes.status === 0 ? 'ok' : 'failed',
-      detail: `assert exit=${assertRes.status}; ${measuredMetrics.length} tela(s) medida(s) (LCP, CLS, TBT, desempenho); ${findings.length} achado(s)`,
+      status: measuredMetrics.length ? 'ok' : 'failed',
+      detail: `assert exit=${assertExit}; ${measuredMetrics.length} tela(s) medida(s) (LCP, CLS, TBT, desempenho); ${findings.length} achado(s)`,
     }),
     extraCoverage,
     findings,
@@ -466,7 +408,7 @@ async function runLighthouseCi({origin, routes, chromePath, thresholds, version}
   };
 }
 
-function runK6LoadTest({origin, routeTargets, thresholds, version}) {
+async function runK6LoadTest({origin, routeTargets, thresholds, version}) {
   const extraCoverage = [];
   const findings = [];
   const routeMetrics = [];
@@ -496,14 +438,16 @@ function runK6LoadTest({origin, routeTargets, thresholds, version}) {
   for (const r of routeTargets) {
     routeThresholdLines[`http_req_duration{route:${r.path}}`] = [`p(95)<=${thresholds.k6P95Ms}`];
     routeThresholdLines[`http_req_failed{route:${r.path}}`] = [`rate<=${thresholds.k6FailRate}`];
+    routeThresholdLines[`http_reqs{route:${r.path}}`] = [`count==${K6_REQUESTS_PER_ROUTE}`];
   }
 
   const script = `import http from 'k6/http';
-import { check } from 'k6';
+import { sleep } from 'k6';
 
 export const options = {
-  vus: 2,
-  iterations: 2,
+  vus: 1,
+  iterations: ${K6_REQUESTS_PER_ROUTE},
+  discardResponseBodies: true,
   maxDuration: '45s',
   thresholds: ${JSON.stringify(routeThresholdLines)},
 };
@@ -511,61 +455,52 @@ export const options = {
 const ORIGIN = ${JSON.stringify(origin)};
 const ROUTES = ${JSON.stringify(routeTargets.map(r => r.path))};
 
+http.setResponseCallback(http.expectedStatuses({min: 200, max: 299}));
 export default function () {
   for (const route of ROUTES) {
-    const res = http.get(ORIGIN + route, { tags: { route }, timeout: '1s', redirects: 0 });
-    check(res, { 'status < 500': (r) => r.status < 500 });
+    http.get(ORIGIN + route, {tags: {route}, timeout: '1s', redirects: 0});
+    sleep(0.1);
   }
 }
 `;
   writeFileSync(scriptPath, script, 'utf8');
 
-  const res = spawnSync(
-    'k6',
-    ['run', '--no-usage-report', `--summary-export=${summaryPath}`, scriptPath],
-    {
-      cwd: k6Dir,
-      encoding: 'utf8',
-      timeout: 60_000,
-      maxBuffer: 8 * 1024 * 1024,
-    },
-  );
+  const exit = await toolExit('k6', ['run', '--no-usage-report', `--summary-export=${summaryPath}`, scriptPath],
+    {cwd: k6Dir, timeout: 60_000});
 
-  // k6 sai 0 quando passa todos os limites, e 99 quando um limite (threshold) é violado.
-  if ((res.status !== 0 && res.status !== 99) || !existsSync(summaryPath)) {
-    const errText = (res.stderr || res.stdout || `exit=${res.status}`).trim();
-    return {
-      summary: normalizeCoverageRow({
-        tool: 'k6',
-        version,
-        status: 'failed',
-        detail: `k6 falhou (exit=${res.status}): ${errText.slice(0, 300)}`,
-      }),
-      extraCoverage,
-      findings,
-      routeMetrics,
-    };
+  // 99 indica limite violado. Só aceite as séries completas da rota.
+  let summary;
+  if (exit === 0 || exit === 99) {
+    try { summary = readJsonLimited(summaryPath, 8 * 1024 * 1024); } catch { /* sem prova numérica */ }
   }
-
-  const summary = JSON.parse(readFileSync(summaryPath, 'utf8'));
-  const evaluated = evaluateK6Summary(summary, res.status, routeTargets, thresholds);
-  findings.push(...evaluated.findings);
-  routeMetrics.push(...evaluated.routeMetrics);
-
-  for (const rm of evaluated.routeMetrics) {
+  if (!summary) return {
+    summary: normalizeCoverageRow({tool: 'k6', version, status: 'failed',
+      detail: `k6 sem relatório válido (exit=${exit ?? 'indisponível'})`}),
+    extraCoverage, findings, routeMetrics,
+  };
+  const completed = routeTargets.filter(route => {
+    const metric = summary.metrics?.[`http_reqs{route:${route.path}}`];
+    return (metric?.values ?? metric)?.count === K6_REQUESTS_PER_ROUTE;
+  });
+  const evaluated = evaluateK6Summary(summary, exit, completed, thresholds);
+  for (const route of routeTargets) {
+    const metric = evaluated.routeMetrics.find(item => item.route === route.path);
+    const measured = metric && Number.isFinite(metric.p95) && Number.isFinite(metric.failRate);
     extraCoverage.push(normalizeCoverageRow({
-      tool: `k6:rota:${rm.route}`,
-      version,
-      status: rm.p95 !== null && rm.failRate !== null ? 'ok' : 'failed',
-      detail: `arquivo=${rm.file}; p95=${rm.p95 !== null ? rm.p95.toFixed(1) : 'n/a'}ms; avg=${rm.avg !== null ? rm.avg.toFixed(1) : 'n/a'}ms; max=${rm.max !== null ? rm.max.toFixed(1) : 'n/a'}ms; falhas=${rm.failRate === null ? 'n/a' : (rm.failRate * 100).toFixed(2) + '%'}`,
+      tool: `k6:rota:${route.path}`,
+      version, status: measured ? 'ok' : 'failed', files: measured ? [route.file] : [],
+      detail: measured ? `arquivo=${route.file}; requisições=${K6_REQUESTS_PER_ROUTE}; p95=${metric.p95.toFixed(1)}ms; falhas=${(metric.failRate * 100).toFixed(2)}%`
+        : 'Série ou contagem de requisições da rota incompleta',
     }));
+    if (measured) routeMetrics.push(metric);
   }
+  findings.push(...evaluated.findings);
 
   return {
     summary: normalizeCoverageRow({
       tool: 'k6',
       version,
-      status: routeMetrics.every(r => r.p95 !== null && r.failRate !== null) ? 'ok' : 'failed',
+      status: routeMetrics.length ? 'ok' : 'failed',
       detail: `${routeMetrics.length} rota(s) testada(s) com limites (p95<${thresholds.k6P95Ms}ms, falhas<${(thresholds.k6FailRate * 100).toFixed(1)}%); ${findings.length} achado(s)`,
     }),
     extraCoverage,
@@ -574,335 +509,105 @@ export default function () {
   };
 }
 
-function runCpuProfiling({cpuProfDir, workRoot, config, thresholds, version}) {
+async function runCpuFunctions(config, thresholds, version) {
   const extraCoverage = [];
   const findings = [];
-
-  const workloads = [...(config?.cpuWorkloads ?? [])];
-  if (workloads.length === 0) {
-    for (const dir of ['perf', 'benchmarks']) {
-      const full = join(workRoot, dir);
-      if (existsSync(full) && statSync(full).isDirectory()) {
-        for (const f of listFilesByExt(full, ['.mjs', '.js'])) {
-          workloads.push({file: `${dir}/${f}`, args: []});
-        }
-      }
-    }
-  }
-
-  let workloadFailures = 0;
-  for (const workload of workloads) {
-    const abs = join(workRoot, workload.file);
-    if (!existsSync(abs)) {
-      workloadFailures += 1;
-      extraCoverage.push(normalizeCoverageRow({
-        tool: `node-cpu-prof:arquivo:${workload.file}`,
-        version,
-        status: 'failed',
-        detail: `Workload ausente: ${workload.file}`,
-      }));
+  let measured = 0;
+  for (const {file, functionName} of config?.cpuFunctions ?? []) {
+    const result = await collectCpuMetrics({snapshotRoot: REPO_ROOT, file, functionName, thresholdMs: thresholds.cpuSelfMs});
+    const tool = 'node-cpu-prof:arquivo';
+    if (result.status !== 'measured') {
+      extraCoverage.push(normalizeCoverageRow({tool, version, status: 'skipped',
+        detail: `${file} (${functionName}): ${result.detail}`}));
       continue;
     }
-    const runRes = spawnSync(
-      process.execPath,
-      ['--cpu-prof', `--cpu-prof-dir=${cpuProfDir}`, '--cpu-prof-interval=1000', abs, ...(workload.args ?? [])],
-      {
-        cwd: workRoot,
-        env: {PATH: process.env.PATH, HOME: '/tmp', TMPDIR: '/tmp', NODE_ENV: 'test'},
-        encoding: 'utf8',
-        timeout: 20_000,
-        maxBuffer: 4 * 1024 * 1024,
-      },
-    );
-    if (runRes.status !== 0) {
-      workloadFailures += 1;
-      extraCoverage.push(normalizeCoverageRow({
-        tool: `node-cpu-prof:arquivo:${workload.file}`,
-        version,
-        status: 'failed',
-        detail: `Execução do workload falhou (exit=${runRes.status}): ${(runRes.stderr || '').trim().slice(0, 200)}`,
-      }));
-    }
+    measured++;
+    const evidence = `arquivo=${file}:${result.line}; função=${functionName}; tempo próprio amostral=${result.selfMs.toFixed(1)}ms; amostras próprias=${result.selfSamples}/${result.sampleCount}; limiar=${result.thresholdMs}ms`;
+    extraCoverage.push(normalizeCoverageRow({tool, version, status: 'ok', files: [file],
+      detail: `${evidence}; recorte: uma chamada isolada sem argumentos`}));
+    if (result.hotspot) findings.push(normalizeFinding({
+      tool: 'node-cpu-prof', rule: 'CPU-PROF-HOTSPOT', file, line: result.line,
+      severity: result.selfMs >= result.thresholdMs * 2 ? 'alta' : 'media',
+      message: 'Função ultrapassou o limite de tempo próprio no perfil amostral do V8.', evidence,
+    }));
   }
+  if (config?.cpuOmissions) {
+    extraCoverage.push(normalizeCoverageRow({tool: 'node-cpu-prof:selecao', version, status: 'skipped',
+      detail: `${config.cpuOmissions} seleção(ões) de CPU inválida(s), legada(s) ou acima do limite`}));
+  }
+  return {extraCoverage, findings, summary: normalizeCoverageRow({tool: 'node-cpu-prof', version,
+    status: measured ? 'ok' : 'skipped',
+    detail: measured ? `${measured} função(ões) em recorte autônomo sem argumentos; demais caminhos não cobertos`
+      : 'Nenhum recorte de função medido; informe cpuFunctions com arquivo e função autônoma no snapshot'})};
+}
 
-  let profileFiles = [];
+function compareBaseline(config, thresholds, coverage, findings, current) {
+  const file = config?.baselineFile ?? 'desempenho.baseline.json';
+  if (!config?.baselineFile && !fileExists(REPO_ROOT, file)) return;
+  let row;
   try {
-    profileFiles = readdirSync(cpuProfDir).filter(f => f.endsWith('.cpuprofile')).sort();
+    const baseline = readJsonLimited(join(REPO_ROOT, file), 2 * 1024 * 1024);
+    if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) throw new Error('baseline inválido');
+    const pairs = (kind, key, match) => current[kind].filter(cur => Number.isFinite(cur[key]) &&
+      Array.isArray(baseline[kind]) && baseline[kind].some(prev => prev && Number.isFinite(prev[key]) && prev[key] > 0 && match(cur, prev))).length;
+    const compared = pairs('k6Routes', 'p95', (cur, prev) => cur.route === prev.route)
+      + pairs('lighthouse', 'lcp', (cur, prev) => cur.route === prev.route && cur.formFactor === prev.formFactor)
+      + pairs('sqlQueries', 'meanMs', (cur, prev) => cur.file === prev.file && cur.line === prev.line);
+    const regressions = evaluateBaselineRegression(current, baseline, thresholds);
+    findings.push(...regressions);
+    row = {status: compared ? 'ok' : 'skipped', detail: `${compared} par(es) comparáveis; ${regressions.length} regressão(ões); referência declarada no snapshot`};
   } catch {
-    profileFiles = [];
+    row = {status: 'failed', detail: 'Baseline indisponível ou inválido'};
   }
-
-  if (profileFiles.length === 0 && workloadFailures === 0) {
-    return {
-      summary: normalizeCoverageRow({
-        tool: 'node-cpu-prof',
-        version,
-        status: 'skipped',
-        detail: 'Nenhum servidor Node.js ou workload configurado (desempenho.config.json ou perf/*.mjs) para perfilar com --cpu-prof',
-      }),
-      extraCoverage,
-      findings,
-    };
-  }
-
-  if (profileFiles.length === 0 && workloadFailures > 0) {
-    return {
-      summary: normalizeCoverageRow({
-        tool: 'node-cpu-prof',
-        version,
-        status: 'failed',
-        detail: `${workloadFailures} workload(s) falharam sem gerar .cpuprofile`,
-      }),
-      extraCoverage,
-      findings,
-    };
-  }
-
-  const seenFiles = new Set();
-  for (const profFile of profileFiles) {
-    const profJson = JSON.parse(readFileSync(join(cpuProfDir, profFile), 'utf8'));
-    const analysis = analyzeCpuProfile(profJson, workRoot, thresholds);
-    findings.push(...analysis.findings);
-
-    const topSpot = analysis.hotspots[0];
-    const filesInProf = [...new Set(analysis.hotspots.map(h => h.file))];
-    if (filesInProf.length === 0) {
-      extraCoverage.push(normalizeCoverageRow({
-        tool: `node-cpu-prof:perfil:${profFile}`,
-        version,
-        status: 'ok',
-        detail: `duração=${analysis.totalDurationMs.toFixed(1)}ms; amostras=${analysis.sampleCount}; sem hotspots no código do projeto`,
-      }));
-    } else {
-      for (const fileRel of filesInProf) {
-        if (seenFiles.has(fileRel)) continue;
-        seenFiles.add(fileRel);
-        const spot = analysis.hotspots.find(h => h.file === fileRel) ?? topSpot;
-        extraCoverage.push(normalizeCoverageRow({
-          tool: `node-cpu-prof:arquivo:${fileRel}`,
-          version,
-          status: 'ok',
-          detail: `duração=${analysis.totalDurationMs.toFixed(1)}ms; amostras=${analysis.sampleCount}; principal=${spot.functionName}@L${spot.line} (${spot.selfMs.toFixed(1)}ms / ${spot.pct.toFixed(1)}%)`,
-        }));
-      }
-    }
-  }
-
-  return {
-    summary: normalizeCoverageRow({
-      tool: 'node-cpu-prof',
-      version,
-      status: workloadFailures > 0 ? 'failed' : 'ok',
-      detail: `${profileFiles.length} perfil(is) .cpuprofile analisado(s); ${findings.length} hotspot(s) acima do limite (${thresholds.cpuSelfMs}ms)`,
-    }),
-    extraCoverage,
-    findings,
-  };
+  coverage.push(normalizeCoverageRow({tool: `baseline:${file}`, version: '1', ...row}));
 }
 
-async function runPgStatStatements({workRoot, sqlInfo, version}) {
-  const extraCoverage = [];
-  if (sqlInfo.snapshotFile) {
-    try {
-      const snapshot = readJsonLimited(join(workRoot, sqlInfo.snapshotFile), 5 * 1024 * 1024);
-      const rows = Array.isArray(snapshot) ? snapshot : snapshot?.rows;
-      if (!Array.isArray(rows)) throw new Error('snapshot deve conter array de registros');
-      extraCoverage.push(normalizeCoverageRow({tool: `pg_stat_statements:snapshot:${sqlInfo.snapshotFile}`, version, status: 'skipped', detail: `${rows.length} registro(s) externos, sem proveniência de medição local`}));
-    } catch (error) {
-      extraCoverage.push(normalizeCoverageRow({tool: `pg_stat_statements:snapshot:${sqlInfo.snapshotFile}`, version, status: 'failed', detail: `Snapshot inválido: ${error instanceof Error ? error.message : String(error)}`}));
-    }
-  }
-  const hasSql = sqlInfo.migrations.length || sqlInfo.queries.length;
-  return {
-    summary: normalizeCoverageRow({tool: 'pg_stat_statements', version, status: extraCoverage.some(row => row.status === 'failed') ? 'failed' : 'skipped',
-      detail: hasSql ? 'SQL não executado: PostgreSQL compartilha UID e privilégios com o coletor; isolamento de evidências indisponível' : 'Nenhuma medição SQL local disponível'}),
-    extraCoverage, findings: [], analyzedQueries: [],
-  };
+const coverage = [];
+const findings = [];
+function record(result) {
+  coverage.push(result.summary, ...result.extraCoverage);
+  if (result.summary.status === 'ok') findings.push(...result.findings);
 }
 
-const retained = {coverage: [], findings: []};
 async function main() {
-  if (!existsSync(REPO_ROOT)) {
-    throw new Error('Diretório /repo ausente');
-  }
-  const copyState = copyRepoSafe(REPO_ROOT, WORK_ROOT);
-
-  let config = null;
-  const configPath = join(WORK_ROOT, 'desempenho.config.json');
-  if (existsSync(configPath)) {
-    config = validateConfig(readJsonLimited(configPath, 256 * 1024));
-  }
+  const config = loadConfig(REPO_ROOT);
   const thresholds = config?.thresholds ?? DEFAULT_THRESHOLDS;
-
   const pgBinDir = findPostgresBinDir();
-  const chromePath = findChrome();
   const versions = getToolVersions(pgBinDir);
-
-  let serverChild = null;
-  let staticServer = null;
-  let origin = null;
-  let webRoutes = [];
-  let httpRouteTargets = [];
-  const unmappedRoutes = [];
-  let serverStartFailure = null;
-
-  const cpuProfDir = '/tmp/cpuprof';
-  mkdirSync(cpuProfDir, {recursive: true});
-
-  try {
-    if (config?.server && process.env.PERF_ISOLATED_TARGET === '1') {
-      // O orquestrador inicia o alvo em contêiner irmão, com outro PID e filesystem.
-      // O único endereço aceito é o loopback fixo do namespace sem rede externa.
-      origin = 'http://127.0.0.1:31873';
-      if (!await waitForHttpReady(new URL(config.server.readyPath, origin).href)) {
-        serverStartFailure = 'Servidor isolado não respondeu no prazo';
-        origin = null;
-      } else {
-        webRoutes = config.routes.filter(route => route.file);
-        for (const route of config.routes) if (!route.file) unmappedRoutes.push(route.path);
-        httpRouteTargets = webRoutes.map(route => ({path: route.path, file: route.file, line: 1}));
-      }
-    } else if (config?.server) {
-      serverStartFailure = 'Servidor do repositório não executado: UID compartilhado permite alterar evidências';
-    } else if (process.env.PERF_TARGET_URL) {
-      serverStartFailure = 'Alvo externo não permitido nesta coleta local';
-    } else {
-      const staticWeb = discoverStaticWeb(WORK_ROOT, config);
-      if (staticWeb) {
-        staticServer = spawn(process.execPath, [fileURLToPath(new URL('./static-server.mjs', import.meta.url)), staticWeb.rootDir], {stdio: ['ignore', 'pipe', 'ignore']});
-        origin = await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('servidor estático não iniciou')), 5000);
-          staticServer.stdout.once('data', data => { clearTimeout(timer); resolve(String(data).trim()); });
-          staticServer.once('exit', () => { clearTimeout(timer); reject(new Error('servidor estático terminou')); });
-        });
-        webRoutes = config?.routes?.length
-          ? config.routes.map(r => ({path: r.path, file: r.file ?? staticWeb.routes.find(candidate => candidate.path === new URL(r.path, origin).pathname)?.file})).filter(r => { if (!r.file) { unmappedRoutes.push(r.path); return false; } return true; })
-          : staticWeb.routes;
-        httpRouteTargets = webRoutes.map(r => ({path: r.path, file: r.file ?? 'index.html', line: 1}));
-      }
-    }
-
-    const serverCoverage = serverStartFailure ? [normalizeCoverageRow({tool: 'servidor-isolado', version: '1', status: 'failed', detail: serverStartFailure})] : [];
-    retained.coverage.push(...serverCoverage);
-    const lhResult = await runLighthouseCi({
-      origin,
-      routes: webRoutes,
-      chromePath,
-      thresholds,
-      version: versions.lhci,
-    });
-
-    retained.coverage.push(lhResult.summary, ...lhResult.extraCoverage);
-    retained.findings.push(...lhResult.findings);
-    const k6Result = runK6LoadTest({
-      origin,
-      routeTargets: httpRouteTargets,
-      thresholds,
-      version: versions.k6,
-    });
-
-    retained.coverage.push(k6Result.summary, ...k6Result.extraCoverage);
-    retained.findings.push(...k6Result.findings);
-
-    // Encerra o servidor antes de analisar o .cpuprofile para garantir flush completo do V8.
-    if (serverChild) {
-      await stopChildGracefully(serverChild);
-      serverChild = null;
-    }
-    if (staticServer) {
-      await stopChildGracefully(staticServer);
-      staticServer = null;
-    }
-
-    let cpuResult;
-    if (serverStartFailure) {
-      cpuResult = {
-        summary: normalizeCoverageRow({
-          tool: 'node-cpu-prof',
-          version: versions.node,
-          status: 'failed',
-          detail: serverStartFailure,
-        }),
-        extraCoverage: [],
-        findings: [],
-      };
-    } else if (config?.server?.cpuProfile || config?.cpuWorkloads?.length || existsSync(join(WORK_ROOT, 'perf')) || existsSync(join(WORK_ROOT, 'benchmarks'))) {
-      cpuResult = {summary: normalizeCoverageRow({tool: 'node-cpu-prof', version: versions.node, status: 'skipped', detail: 'Workloads não executados: UID compartilhado permite alterar evidências'}), extraCoverage: [], findings: []};
-    } else {
-      cpuResult = runCpuProfiling({
-        cpuProfDir,
-        workRoot: WORK_ROOT,
-        config,
-        thresholds,
-        version: versions.node,
-      });
-    }
-
-    retained.coverage.push(cpuResult.summary, ...cpuResult.extraCoverage);
-    retained.findings.push(...cpuResult.findings);
-    const sqlInfo = discoverSqlFiles(WORK_ROOT, config);
-    const pgResult = await runPgStatStatements({
-      workRoot: WORK_ROOT,
-      sqlInfo,
-      pgBinDir,
-      thresholds,
-      version: versions.pg,
-    });
-
-    retained.coverage.push(pgResult.summary, ...pgResult.extraCoverage);
-    retained.findings.push(...pgResult.findings);
-    const allFindings = [
-      ...lhResult.findings,
-      ...k6Result.findings,
-      ...cpuResult.findings,
-      ...pgResult.findings,
-    ];
-
-    const baselinePath = config?.baselineFile
-      ? join(WORK_ROOT, config.baselineFile)
-      : (existsSync(join(WORK_ROOT, 'desempenho.baseline.json')) ? join(WORK_ROOT, 'desempenho.baseline.json') : null);
-    const extraBaselineCoverage = [];
-    if (baselinePath) {
-      const baselineName = config?.baselineFile ?? 'desempenho.baseline.json';
-      try {
-        const baseline = readJsonLimited(baselinePath, 2 * 1024 * 1024);
-        if (!baseline || typeof baseline !== 'object' || Array.isArray(baseline)) throw new Error('baseline inválido');
-        const current = {lighthouse: lhResult.measuredMetrics, k6Routes: k6Result.routeMetrics, sqlQueries: pgResult.analyzedQueries};
-        const pairs = (current.k6Routes || []).filter(c => Number.isFinite(c.p95) && baseline.k6Routes?.some(b => b.route === c.route && Number.isFinite(b.p95) && b.p95 > 0)).length
-          + (current.lighthouse || []).filter(c => Number.isFinite(c.lcp) && baseline.lighthouse?.some(b => b.route === c.route && b.formFactor === c.formFactor && Number.isFinite(b.lcp) && b.lcp > 0)).length
-          + (current.sqlQueries || []).filter(c => Number.isFinite(c.meanMs) && baseline.sqlQueries?.some(b => b.file === c.file && b.line === c.line && Number.isFinite(b.meanMs) && b.meanMs > 0)).length;
-        const regressions = evaluateBaselineRegression(current, baseline, thresholds);
-        allFindings.push(...regressions);
-        extraBaselineCoverage.push(normalizeCoverageRow({tool: `baseline:${baselineName}`, version: '1.0', status: pairs ? 'ok' : 'skipped', detail: `${pairs} par(es) comparáveis; ${regressions.length} regressão(ões); comparação limitada aos pares presentes e valores anteriores positivos`}));
-      } catch (error) {
-        extraBaselineCoverage.push(normalizeCoverageRow({tool: `baseline:${baselineName}`, version: '1.0', status: 'failed', detail: `Baseline indisponível ou inválido: ${error instanceof Error ? error.message : String(error)}`}));
-      }
-    }
-
-    const coverage = [
-      normalizeCoverageRow({tool: 'copia-repositorio', version: '1', status: copyState.omissions.length ? 'failed' : 'ok', detail: `${copyState.files} arquivo(s); limites: 2500 arquivos, 10 MiB por arquivo; exclusões: .git, dependências, builds e symlinks; ${copyState.omissions.slice(0, 4).join('; ') || 'sem omissões adicionais'}`}),
-      ...serverCoverage,
-      ...unmappedRoutes.map(route => normalizeCoverageRow({tool: `rota:${route}`, version: '1', status: 'skipped', detail: 'Arquivo da rota não identificado; informe routes[].file'})),
-      lhResult.summary,
-      ...lhResult.extraCoverage,
-      k6Result.summary,
-      ...k6Result.extraCoverage,
-      cpuResult.summary,
-      ...cpuResult.extraCoverage,
-      pgResult.summary,
-      ...pgResult.extraCoverage,
-      ...extraBaselineCoverage,
-    ];
-
-    const validated = validateModuleOutput({coverage, findings: allFindings});
-    process.stdout.write(`${JSON.stringify(validated)}\n`);
-  } finally {
-    if (serverChild) await stopChildGracefully(serverChild);
-    if (staticServer) await stopChildGracefully(staticServer);
+  const http = await openHttp(config);
+  coverage.push(...http.coverage);
+  if (http.targets.length > MAX_HTTP_ROUTES) {
+    coverage.push(normalizeCoverageRow({tool: 'rota-http', version: '4', status: 'skipped',
+      detail: `${http.targets.length - MAX_HTTP_ROUTES} rota(s) além do limite de ${MAX_HTTP_ROUTES}`}));
   }
+  const routeTargets = http.targets.slice(0, MAX_HTTP_ROUTES);
+  let lighthouse, k6;
+  try {
+    lighthouse = await runLighthouseCi({origin: http.origin, routes: routeTargets.filter(route => route.page),
+      chromePath: findChrome(), thresholds, version: versions.lhci});
+    record(lighthouse);
+    k6 = await runK6LoadTest({origin: http.origin, routeTargets, thresholds, version: versions.k6});
+    record(k6);
+  } finally {
+    await http.close?.();
+  }
+
+  record(await runCpuFunctions(config, thresholds, versions.node));
+  const postgres = await runPostgresMetrics({workRoot: REPO_ROOT, sqlInfo: discoverSqlFiles(REPO_ROOT, config),
+    pgBinDir, thresholds, version: versions.pg});
+  record(postgres);
+
+  const staticFallback = http.coverage.some(row => row.tool === 'recorte-http-estatico');
+  compareBaseline(config, thresholds, coverage, findings, {
+    lighthouse: staticFallback ? [] : lighthouse.measuredMetrics,
+    k6Routes: staticFallback ? [] : k6.routeMetrics,
+    sqlQueries: postgres.summary.status === 'ok' ? postgres.analyzedQueries : [],
+  });
 }
 
-main().catch(error => {
-  retained.coverage.push(normalizeCoverageRow({tool: 'coletor', version: '1', status: 'failed', detail: error instanceof Error ? error.message : String(error)}));
-  process.stdout.write(`${JSON.stringify(validateModuleOutput(retained))}\n`);
-});
+try {
+  await main();
+} catch {
+  coverage.push(normalizeCoverageRow({tool: 'coletor', version: '4', status: 'failed', detail: 'Coleta interrompida antes de concluir todas as etapas'}));
+}
+process.stdout.write(`${JSON.stringify(validateModuleOutput({coverage, findings}))}\n`);

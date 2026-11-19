@@ -1,20 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {collectCpuMetrics} from '../deploy/modules/desempenho/cpu-metrics.mjs';
 
 const snapshotRoot = resolve('tests/fixtures/module-desempenho-cpu');
 
 test('profiler V8 mede defeito e controle sintéticos pela identidade de origem', async () => {
-  const defect = await collectCpuMetrics({snapshotRoot, file: 'defective.js', functionName: 'computeHeavyReport'});
-  const control = await collectCpuMetrics({snapshotRoot, file: 'clean.js', functionName: 'computeCachedReport'});
+  const root = resolve('tests/fixtures/module-desempenho');
+  const file = 'server.mjs';
+  const defectRoot = join(root, 'defective'), controlRoot = join(root, 'clean');
+  const defect = await collectCpuMetrics({snapshotRoot: defectRoot, file, functionName: 'computeHeavyReport'});
+  const control = await collectCpuMetrics({snapshotRoot: controlRoot, file, functionName: 'computeCachedReport'});
+  const defectSource = readFileSync(join(defectRoot, file), 'utf8').split('\n');
+  const declaration = defectSource.findIndex(line => line.includes('function computeHeavyReport(')) + 1;
+  const compute = defectSource.findIndex(line => line.includes('acc = (acc *')) + 1;
+  assert.ok(declaration > 0 && compute > 0);
   assert.equal(defect.status, 'measured', defect.detail);
   assert.equal(defect.coverage, 'partial');
-  assert.equal(defect.line, 2);
+  assert.equal(defect.line, declaration);
   assert.ok(defect.sampleCount > 0);
   assert.ok(defect.selfSamples > 0, JSON.stringify({selfMs: defect.selfMs, frames: defect.profile.nodes.filter(n => n.callFrame.url === 'cpu-snapshot.js')}));
-  assert.ok(defect.lineTicks.some(tick => tick.line === 7 && tick.ticks > 0), JSON.stringify(defect.lineTicks));
+  assert.ok(defect.lineTicks.some(tick => tick.line === compute && tick.ticks > 0), JSON.stringify(defect.lineTicks));
   assert.ok(defect.selfMs >= 80, `defect selfMs=${defect.selfMs}`);
   assert.equal(defect.hotspot, true);
   assert.equal(control.status, 'measured', control.detail);

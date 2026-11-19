@@ -3,7 +3,10 @@ import {readFileSync} from 'node:fs';
 import {join} from 'node:path';
 
 const html = readFileSync(join(import.meta.dirname, 'public', 'index.html'), 'utf8');
-const cachedPayload = JSON.stringify({total: 42, items: 42});
+function computeCachedReport() {
+  return {total: 42, items: 42};
+}
+const cachedPayload = JSON.stringify(computeCachedReport());
 
 const server = createServer((req, res) => {
   const url = (req.url ?? '/').split('?')[0];

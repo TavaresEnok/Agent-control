@@ -1,114 +1,237 @@
-/** Orquestra somente a coleta HTTP; CPU e SQL continuam declarados não medidos. */
-import {spawnSync} from 'node:child_process';
-import {randomBytes} from 'node:crypto';
-import {constants, closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, chmodSync} from 'node:fs';
-import {dirname, join, resolve} from 'node:path';
-import {fileURLToPath} from 'node:url';
-import {normalizeRepoRelativePath, validateConfig, validateModuleOutput} from './lib.mjs';
+/** Executa o módulo de desempenho a partir do snapshot oficial do exame. */
+import {execFile} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
+import {constants} from 'node:fs';
+import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {basename, dirname, isAbsolute, join, resolve} from 'node:path';
+import {setTimeout as delay} from 'node:timers/promises';
+import {loadConfig, normalizeCoverageRow, validateModuleOutput} from './lib.mjs';
 
-const moduleDir = dirname(fileURLToPath(import.meta.url));
-const workspace = resolve(moduleDir, '../../..');
-const excluded = new Set(['.git', 'node_modules', '.next', '.nuxt', 'coverage', '.lighthouseci']);
+const imageProtocol = 'org.agent-control.performance.protocol';
+const ignored = new Set(['.git', 'node_modules', '.next', '.nuxt', 'coverage', '.lighthouseci']);
 const sensitive = /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|\.ssh|\.aws|\.kube|.*\.(?:pem|key|p12|pfx))$/i;
 const maxFile = 10 * 1024 * 1024;
 const maxTotal = 128 * 1024 * 1024;
+const limits = ['--pull', 'never', '--network', 'none', '--read-only', '--user', '65532:65532', '--cap-drop', 'ALL',
+  '--security-opt', 'no-new-privileges', '--pids-limit', '256', '--memory', '2g', '--memory-swap', '2g',
+  '--cpus', '1', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=1g'];
 
-/** Falha fechada ao exceder os limites; nunca segue symlinks ou arquivos especiais. */
-export function snapshotRepository(source, destination, ignoredPath = '') {
-  const sourceRoot = realpathSync(source);
-  const destRoot = resolve(destination);
-  let files = 0, bytes = 0;
-  function copy(from, to, logical) {
-    const dir = openSync(from, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+async function officialSnapshot(path) {
+  const source = resolve(path);
+  const parent = dirname(source);
+  if (basename(source) !== 'repo' || !basename(parent).startsWith('ac-module-snapshot-') ||
+      dirname(parent) !== resolve(tmpdir()) || await realpath(source) !== join(await realpath(tmpdir()), basename(parent), 'repo')) {
+    throw new Error('snapshot oficial privado do exame exigido');
+  }
+  const directory = await lstat(parent);
+  const repo = await lstat(source);
+  if (!directory.isDirectory() || !repo.isDirectory() || directory.uid !== process.getuid() ||
+      repo.uid !== directory.uid || (directory.mode & 0o777) !== 0o700) {
+    throw new Error('snapshot oficial privado do exame exigido');
+  }
+  return source;
+}
+
+async function copySnapshot(source, destination, signal) {
+  const stats = {files: 0, bytes: 0, omitted: 0};
+  let entries = 0;
+  async function copy(from, to, depth) {
+    signal.throwIfAborted();
+    if (depth > 64) throw new Error('profundidade limite do snapshot excedida');
+    const dir = await open(from, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try {
-      mkdirSync(to, {recursive: true, mode: 0o755});
-      chmodSync(to, 0o755);
-      const anchored = `/proc/self/fd/${dir}`;
-      for (const entry of readdirSync(anchored, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
-        const input = join(anchored, entry.name), output = join(to, entry.name), path = join(logical, entry.name);
-        if (path === ignoredPath || excluded.has(entry.name) || entry.isSymbolicLink()) continue;
-        if (sensitive.test(entry.name)) throw new Error(`entrada potencialmente sensível no snapshot: ${entry.name}`);
-        if (entry.isDirectory()) { copy(input, output, path); continue; }
-        if (!entry.isFile()) continue;
-        const fd = openSync(input, constants.O_RDONLY | constants.O_NOFOLLOW);
+      await mkdir(to, {mode: 0o755});
+      await chmod(to, 0o755);
+      const anchored = `/proc/self/fd/${dir.fd}`;
+      for (const entry of await readdir(anchored, {withFileTypes: true})) {
+        signal.throwIfAborted();
+        if (++entries > 5_000) throw new Error('limite de entradas do snapshot excedido');
+        if (ignored.has(entry.name) || sensitive.test(entry.name) || (!entry.isDirectory() && !entry.isFile())) {
+          stats.omitted++;
+          continue;
+        }
+        const input = join(anchored, entry.name);
+        const output = join(to, entry.name);
+        if (entry.isDirectory()) {
+          await copy(input, output, depth + 1);
+          continue;
+        }
+        const file = await open(input, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
         try {
-          const info = fstatSync(fd);
-          if (!info.isFile() || info.size > maxFile || ++files > 2500 || (bytes += info.size) > maxTotal) throw new Error('limite ou tipo inválido no snapshot');
-          const data = readFileSync(fd);
-          if (data.length !== info.size) throw new Error('arquivo mudou durante o snapshot');
-          writeFileSync(output, data, {mode: 0o444, flag: 'wx'});
-          chmodSync(output, 0o444);
-        } finally { closeSync(fd); }
+          const info = await file.stat();
+          if (!info.isFile() || info.size > maxFile || ++stats.files > 2500 || (stats.bytes += info.size) > maxTotal) {
+            throw new Error('limite ou tipo inválido no snapshot');
+          }
+          const data = Buffer.alloc(info.size + 1);
+          let offset = 0;
+          while (offset < data.length) {
+            const read = await file.read(data, offset, data.length - offset, offset);
+            if (read.bytesRead === 0) break;
+            offset += read.bytesRead;
+          }
+          const after = await file.stat();
+          if (offset !== info.size || info.mtimeMs !== after.mtimeMs || info.ctimeMs !== after.ctimeMs) {
+            throw new Error('arquivo mudou durante a cópia do snapshot');
+          }
+          await writeFile(output, data.subarray(0, offset), {mode: 0o444, flag: 'wx', signal});
+          await chmod(output, 0o444);
+        } finally { await file.close(); }
       }
-    } finally { closeSync(dir); }
+    } finally { await dir.close(); }
   }
-  copy(sourceRoot, destRoot, sourceRoot);
-  return {files, bytes};
+  await copy(source, destination, 0);
+  return stats;
 }
 
-function bind(source, dest) {
-  if (source.includes(',') || source.includes('\n')) throw new Error('caminho incompatível com montagem Docker');
-  return `type=bind,src=${source},dst=${dest},readonly`;
+async function isSnapshotFile(snapshot, file) {
+  try { return (await lstat(join(snapshot, file))).isFile(); }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false;
+    throw error;
+  }
 }
 
-const limits = ['--read-only', '--user', '65532:65532', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '256', '--memory', '2g', '--memory-swap', '2g', '--cpus', '1', '--tmpfs', '/tmp:rw,exec,nosuid,nodev,size=1g'];
+function absent(error) {
+  return error?.code === 1 && /no such (?:container|object|volume)\b/i.test(error.stderr ?? '');
+}
 
-/**
- * Executa LHCI e k6 contra um servidor Node local em contêiner irmão.
- * A imagem deve corresponder ao digest indicado; código do coletor é montado desta árvore,
- * somente leitura. Não executa perfis CPU nem consultas SQL.
- * A chamada exige Docker local e uma configuração server explícita no snapshot.
- */
-export function runIsolatedPerformanceHttp({repoPath, imageDigest}) {
-  const pinned = readFileSync(join(moduleDir, 'digest.txt'), 'utf8').trim();
-  if (typeof imageDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(imageDigest) || imageDigest !== pinned) throw new Error('digest da imagem inválido ou diferente do fixado');
-  const repo = realpathSync(repoPath);
-  if (!lstatSync(repo).isDirectory()) throw new Error('repositório inválido');
-  const temp = mkdtempSync(join(workspace, '.perf-isolado-'));
-  chmodSync(temp, 0o755);
-  const dockerConfig = join(temp, 'docker-config');
-  mkdirSync(dockerConfig, {mode: 0o700});
-  const env = {PATH: process.env.PATH || '/usr/bin:/bin', HOME: temp, DOCKER_CONFIG: dockerConfig, DOCKER_HOST: 'unix:///var/run/docker.sock'};
-  const name = `ac-perf-${randomBytes(12).toString('hex')}`;
-  const observerName = `${name}-obs`;
-  let targetCreated = false, observerCreated = false;
-  function docker(args, timeout = 30_000) {
-    const result = spawnSync('docker', args, {env, encoding: 'utf8', timeout, maxBuffer: 16 * 1024 * 1024});
-    if (result.status !== 0) throw new Error(`Docker falhou (${args[0]}, exit=${result.status}): ${(result.stderr || result.error?.message || '').slice(0, 400)}`);
-    return result.stdout.trim();
+/** O chamador mantém vivo o snapshot de prepareModuleSnapshot e repassa o sinal do heartbeat. */
+export async function runPerformanceModule({snapshotPath, imageDigest, signal, timeoutMs = 480_000, maxStdoutBytes = 16 * 1024 * 1024},
+  {dockerBinary = 'docker'} = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 ||
+      !Number.isSafeInteger(maxStdoutBytes) || maxStdoutBytes < 1) throw new Error('limites de desempenho inválidos');
+  if (dockerBinary !== 'docker' && !isAbsolute(dockerBinary)) throw new Error('caminho local do Docker inválido');
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const active = signal ? AbortSignal.any([signal, deadline]) : deadline;
+  active.throwIfAborted();
+  const pinned = (await readFile(new URL('./digest.txt', import.meta.url), 'utf8')).trim();
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageDigest) || imageDigest !== pinned) throw new Error('digest da imagem inválido ou diferente do fixado');
+  const official = await officialSnapshot(snapshotPath);
+  const temp = await mkdtemp(join(tmpdir(), 'ac-perf-'));
+  const snapshot = join(temp, 'repo');
+  const resources = [];
+  const name = `ac-perf-${randomUUID()}`;
+  const env = {PATH: '/usr/local/bin:/usr/bin:/bin',
+    HOME: temp, DOCKER_CONFIG: join(temp, 'docker-config'), DOCKER_HOST: 'unix:///var/run/docker.sock', LC_ALL: 'C'};
+
+  function docker(args, {timeout = 15_000, limit = 8192, cancellable = true} = {}) {
+    if (cancellable) active.throwIfAborted();
+    return new Promise((ok, fail) => {
+      execFile(dockerBinary, args, {cwd: temp, env, encoding: 'utf8', timeout, maxBuffer: limit, killSignal: 'SIGKILL',
+        signal: cancellable ? active : undefined}, (error, stdout, stderr) => {
+        if (!error) return ok(stdout.trim());
+        error.stderr = stderr;
+        fail(error);
+      });
+    });
   }
-  try {
-    const snapshot = join(temp, 'repo');
-    const snapshotInfo = snapshotRepository(repo, snapshot, temp);
-    const config = validateConfig(JSON.parse(readFileSync(join(snapshot, 'desempenho.config.json'), 'utf8')));
-    if (!config.server) throw new Error('configuração de servidor ausente');
-    const entry = normalizeRepoRelativePath(config.server.entry);
-    if (!entry || !lstatSync(join(snapshot, entry)).isFile()) throw new Error('servidor ausente no snapshot');
-    const actualId = docker(['image', 'inspect', '--format', '{{.Id}}', imageDigest]);
-    if (actualId !== imageDigest) throw new Error('identidade da imagem divergente');
-    // O nome aleatório permite remover também um contêiner criado antes de timeout no cliente.
-    targetCreated = true;
-    docker(['run', '-d', '--name', name, '--pull', 'never', '--network', 'none', '--log-driver', 'none', ...limits,
-      '--mount', bind(snapshot, '/repo'), '--workdir', '/repo', '--env', `${config.server.portEnv}=31873`, '--entrypoint', 'node', imageDigest, `/repo/${entry}`]);
-    const mounts = ['collector.mjs', 'lib.mjs', 'static-server.mjs'].flatMap(file => ['--mount', bind(join(moduleDir, file), `/opt/desempenho-tools/${file}`)]);
-    mounts.push('--mount', bind(join(moduleDir, 'entrypoint.sh'), '/usr/local/bin/desempenho-entrypoint.sh'));
-    observerCreated = true;
-    const raw = docker(['run', '--rm', '--name', observerName, '--pull', 'never', '--network', `container:${name}`, ...limits,
-      '--mount', bind(snapshot, '/repo'), ...mounts, '--env', 'PERF_ISOLATED_TARGET=1', imageDigest], 300_000);
-    if (docker(['inspect', '--format', '{{.State.Running}} {{.Image}}', name]) !== `true ${imageDigest}`) throw new Error('alvo terminou ou mudou de imagem durante a medição');
-    const output = validateModuleOutput(JSON.parse(raw));
-    output.coverage.unshift({tool: 'isolamento-http', version: '1', status: 'ok', detail: `imagem=${actualId}; snapshot=${snapshotInfo.files} arquivos/${snapshotInfo.bytes} bytes; alvo e observador com PID e arquivos separados, loopback compartilhado`});
-    return output;
-  } finally {
-    let cleanupError = null;
-    for (const containerName of [observerCreated && observerName, targetCreated && name].filter(Boolean)) {
-      const removed = spawnSync('docker', ['rm', '-f', containerName], {env, encoding: 'utf8', timeout: 20_000});
-      if (removed.status !== 0) {
-        const inspect = spawnSync('docker', ['inspect', containerName], {env, encoding: 'utf8', timeout: 10_000});
-        if (inspect.status !== 1 || !/no such (object|container)/i.test(inspect.stderr || '')) cleanupError = new Error(`não foi possível confirmar remoção de ${containerName}`);
-      }
+
+  // O daemon pode continuar depois da saída do cliente. A criação é separada
+  // da partida, limitada no tempo e aguardada mesmo na perda da autoridade.
+  async function create(kind, resourceName, args) {
+    active.throwIfAborted();
+    const resource = {kind, name: resourceName, uncertain: true};
+    resources.push(resource);
+    try {
+      await docker(args, {cancellable: false});
+      resource.uncertain = false;
+    } catch (error) {
+      resource.uncertain = error.code !== 1 || !/error response from daemon:/i.test(error.stderr ?? '');
+      throw error;
     }
-    rmSync(temp, {recursive: true, force: true});
-    if (cleanupError) throw cleanupError;
+    active.throwIfAborted();
+    return resource;
+  }
+
+  async function remove(resource) {
+    const {kind, name: resourceName} = resource;
+    const removeArgs = kind === 'container' ? ['container', 'rm', '-f', resourceName] : ['volume', 'rm', resourceName];
+    const options = {cancellable: false, timeout: 5000};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let acknowledged = false;
+      try { await docker(removeArgs, options); acknowledged = true; } catch { /* confirme por inspeção */ }
+      try { await docker([kind, 'inspect', resourceName], {...options, limit: 64 * 1024}); }
+      catch (error) {
+        if (absent(error) && (acknowledged || !resource.uncertain)) {
+          resources.splice(resources.indexOf(resource), 1);
+          return;
+        }
+      }
+      if (attempt < 2) await delay(200);
+    }
+    throw new Error(`remoção Docker sem confirmação: ${kind} ${resourceName}`);
+  }
+
+  async function state(resource) {
+    return await docker(['container', 'inspect', '--format', '{{.State.Running}} {{.Image}} {{.State.ExitCode}}', resource.name]);
+  }
+
+  try {
+    const stats = await copySnapshot(official, snapshot, active);
+    if (/[\r\n,]/.test(snapshot)) throw new Error('caminho do snapshot incompatível com Docker');
+    const mountRepo = ['--mount', `type=bind,src=${snapshot},dst=/repo,readonly`];
+    const config = loadConfig(snapshot);
+    const identity = await docker(['image', 'inspect', '--format', `{{.Id}} {{index .Config.Labels "${imageProtocol}"}}`, imageDigest]);
+    if (identity !== `${imageDigest} 4`) throw new Error('imagem de desempenho incompatível com o coletor integrado R4');
+    const coverage = [normalizeCoverageRow({tool: 'copia-repositorio', version: '4', status: 'ok',
+      detail: `${stats.files} arquivo(s), ${stats.bytes} bytes; ${stats.omitted} entrada(s) excluída(s) por tipo ou nome`})];
+
+    async function observe(mode, observer, mounts = []) {
+      const resource = await create('container', observer, ['create', '--name', observer, ...limits,
+        '--log-driver', 'none', ...mountRepo, ...mounts, '--env', `PERF_HTTP_MODE=${mode}`, imageDigest]);
+      const raw = await docker(['start', '--attach', observer], {timeout: timeoutMs, limit: maxStdoutBytes});
+      if (await state(resource) !== `false ${imageDigest} 0`) throw new Error('estado ou imagem do observador divergente');
+      active.throwIfAborted();
+      return {resource, output: validateModuleOutput(JSON.parse(raw))};
+    }
+
+    let output;
+    if (config?.server) {
+      const {entry, portEnv} = config.server;
+      const routes = await Promise.all(config.routes.map(route => route.file && isSnapshotFile(snapshot, route.file)));
+      if (routes.some(Boolean) && /\.(?:cjs|mjs|js)$/i.test(entry) && await isSnapshotFile(snapshot, entry)) {
+        const volume = `${name}-link`;
+        const link = `type=volume,src=${volume},dst=/perf-link,volume-nocopy`;
+        const socket = await create('volume', volume, ['volume', 'create', '--driver', 'local',
+          '--opt', 'type=tmpfs', '--opt', 'device=tmpfs', '--opt', 'o=size=1m,nr_inodes=64,nosuid,nodev,noexec,mode=0733', volume]);
+        const target = await create('container', name, ['create', '--name', name, ...limits,
+          '--log-driver', 'none', ...mountRepo, '--mount', link, '--workdir', '/repo', '--entrypoint', 'node', imageDigest,
+          '/opt/desempenho-tools/http-link.mjs', `/repo/${entry}`, portEnv]);
+        const started = await docker(['start', name]).then(() => true, error => {
+          active.throwIfAborted();
+          if (error.code !== 1) throw error;
+          return false;
+        });
+        if (started && await state(target) === `true ${imageDigest} 0`) {
+          const observerName = `${name}-obs`;
+          const observed = await observe('isolated', observerName, ['--mount', `${link},readonly`]);
+          output = observed.output;
+          if (await state(target) !== `true ${imageDigest} 0` && !output.coverage.some(row => row.tool === 'recorte-http-estatico')) {
+            output = undefined;
+            await remove(observed.resource);
+          }
+        }
+        // Sem backend ativo, libere o alvo antes de servir a cópia estática.
+        if (!output) {
+          await remove(target);
+          await remove(socket);
+        }
+      }
+      const measuredOnTarget = output && !output.coverage.some(row => row.tool === 'servidor-isolado');
+      coverage.push(normalizeCoverageRow({tool: 'isolamento-http', version: '4', status: measuredOnTarget ? 'ok' : 'skipped',
+        detail: measuredOnTarget ? 'Imagem conferida; namespaces PID e rede separados; canal local limitado ao socket do alvo'
+          : 'Backend local indisponível para coleta; uso de recorte estático quando disponível'}));
+    }
+    output ??= (await observe('static', `${name}-obs-static`)).output;
+    return validateModuleOutput({coverage: [...coverage, ...output.coverage], findings: output.findings});
+  } finally {
+    const errors = [];
+    for (const resource of [...resources].reverse()) {
+      try { await remove(resource); } catch (error) { errors.push(error); }
+    }
+    try { await rm(temp, {recursive: true, force: true}); } catch (error) { errors.push(error); }
+    if (errors.length) throw new AggregateError(errors, errors.map(error => error.message).join(', '));
+    active.throwIfAborted();
   }
 }

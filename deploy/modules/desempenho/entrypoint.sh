@@ -29,20 +29,21 @@ if [ -S /var/run/docker.sock ] || [ -S /run/docker.sock ]; then
   exit 78
 fi
 
-if :; then
-  extra=0
-  for iface in /sys/class/net/*; do
-    base=${iface##*/}
-    if [ "$base" = lo ] || [ "$base" = '*' ]; then
-      continue
-    fi
-    extra=1
-  done
-  if [ "$extra" -eq 1 ]; then
+for iface in /sys/class/net/*; do
+  base=${iface##*/}
+  if [ "$base" != lo ] && [ "$base" != '*' ]; then
     printf '%s\n' PERF_NETWORK_FORBIDDEN >&2
     exit 78
   fi
-fi
+done
+
+case "${PERF_HTTP_MODE:-}" in
+  static|isolated) ;;
+  *)
+    printf '%s\n' PERF_COLLECTOR_MODE_REQUIRED >&2
+    exit 78
+    ;;
+esac
 
 if [ ! -d /repo ] || [ ! -w /tmp ]; then
   printf '%s\n' PERF_PATH_FORBIDDEN >&2

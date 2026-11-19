@@ -1,13 +1,17 @@
 {
   "server": {
     "entry": "server.mjs",
-    "readyPath": "/health",
-    "routes": ["/", "/api/relatorio"],
-    "cpuProfile": true
+    "readyPath": "/health"
   },
   "routes": [
-    { "path": "/", "file": "public/index.html" },
-    { "path": "/api/relatorio", "file": "server.mjs" }
+    {
+      "path": "/",
+      "file": "public/index.html"
+    },
+    {
+      "path": "/api/relatorio",
+      "file": "server.mjs"
+    }
   ],
   "migrationsDir": "migrations",
   "sqlDir": "queries",
@@ -19,9 +23,13 @@
     "k6P95Ms": 120,
     "k6FailRate": 0.01,
     "cpuSelfMs": 80,
-    "cpuTotalPct": 25,
     "sqlMeanMs": 25,
-    "sqlMaxMs": 60,
-    "sqlSeqScanCost": 50
-  }
+    "sqlMaxMs": 60
+  },
+  "cpuFunctions": [
+    {
+      "file": "server.mjs",
+      "functionName": "computeHeavyReport"
+    }
+  ]
 }

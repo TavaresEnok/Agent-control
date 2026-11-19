@@ -1,4 +1,7 @@
-/** Funções puras de validação, avaliação de limites e normalização de saída do módulo 7 (desempenho). */
+import {readFileSync, lstatSync} from 'node:fs';
+import {join} from 'node:path';
+
+/** Validação, avaliação de limites e normalização de saída do módulo 7. */
 
 export const VALID_STATUSES = new Set(['ok', 'failed', 'skipped']);
 export const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
@@ -11,10 +14,8 @@ export const DEFAULT_THRESHOLDS = {
   k6P95Ms: 200,
   k6FailRate: 0.01,
   cpuSelfMs: 80,
-  cpuTotalPct: 25,
   sqlMeanMs: 50,
   sqlMaxMs: 120,
-  sqlSeqScanCost: 100,
   regressionPct: 25,
 };
 
@@ -78,6 +79,9 @@ export function normalizeCoverageRow(input) {
     version: cleanText(input?.version, 'desconhecida', 80),
     status,
     detail: cleanText(input?.detail, status === 'failed' ? 'falha na execução' : 'sem detalhes', 500),
+    ...(status === 'ok' && Array.isArray(input?.files)
+      ? {files: [...new Set(input.files.map(file => normalizeRepoRelativePath(file, [])).filter(Boolean))]}
+      : {}),
   };
 }
 
@@ -119,21 +123,37 @@ export function validateThresholds(raw) {
     tbtMs: finiteNumber(src.tbtMs, DEFAULT_THRESHOLDS.tbtMs, 1),
     k6P95Ms: finiteNumber(src.k6P95Ms, DEFAULT_THRESHOLDS.k6P95Ms, 1),
     k6FailRate: finiteNumber(src.k6FailRate, DEFAULT_THRESHOLDS.k6FailRate, 0, 1),
-    cpuSelfMs: finiteNumber(src.cpuSelfMs, DEFAULT_THRESHOLDS.cpuSelfMs, 1),
-    cpuTotalPct: finiteNumber(src.cpuTotalPct, DEFAULT_THRESHOLDS.cpuTotalPct, 1, 100),
+    cpuSelfMs: finiteNumber(src.cpuSelfMs, DEFAULT_THRESHOLDS.cpuSelfMs, 1, 500),
     sqlMeanMs: finiteNumber(src.sqlMeanMs, DEFAULT_THRESHOLDS.sqlMeanMs, 0.1),
     sqlMaxMs: finiteNumber(src.sqlMaxMs, DEFAULT_THRESHOLDS.sqlMaxMs, 0.1),
-    sqlSeqScanCost: finiteNumber(src.sqlSeqScanCost, DEFAULT_THRESHOLDS.sqlSeqScanCost, 1),
     regressionPct: finiteNumber(src.regressionPct, DEFAULT_THRESHOLDS.regressionPct, 1, 1000),
   };
 }
 
-function safeRoutePath(value) {
+export function readJsonLimited(filePath, maxBytes) {
+  const info = lstatSync(filePath);
+  if (!info.isFile() || info.size > maxBytes) throw new Error('arquivo JSON inválido ou grande demais');
+  return JSON.parse(readFileSync(filePath, 'utf8'));
+}
+
+export function loadConfig(root) {
+  try {
+    return validateConfig(readJsonLimited(join(root, 'desempenho.config.json'), 256 * 1024));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+export function safeRoutePath(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('#') || /[{},]/.test(trimmed) || trimmed.length > 200 || trimmed.includes('..') || trimmed.includes('\\') || /[\s\u0000-\u001f\u007f]/.test(trimmed)) {
     return null;
   }
+  const base = 'http://127.0.0.1';
+  const url = new URL(trimmed, base);
+  if (url.origin !== base || url.href !== base + trimmed || /%(?:00|2f|5c)/i.test(url.pathname)) return null;
   return trimmed;
 }
 
@@ -145,7 +165,8 @@ export function validateConfig(raw) {
     staticDir: undefined,
     routes: [],
     server: undefined,
-    cpuWorkloads: [],
+    cpuFunctions: [],
+    cpuOmissions: 0,
     migrationsDir: undefined,
     migrations: [],
     sqlDir: undefined,
@@ -168,7 +189,8 @@ export function validateConfig(raw) {
       } else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
         const route = safeRoutePath(entry.path);
         const file = entry.file !== undefined ? normalizeRepoRelativePath(entry.file) : undefined;
-        if (route) out.routes.push({path: route, file: file ?? undefined});
+        if (route) out.routes.push({path: route, file: file ?? undefined,
+          ...(typeof entry.page === 'boolean' ? {page: entry.page} : {})});
       }
     }
   }
@@ -178,33 +200,29 @@ export function validateConfig(raw) {
     }
     const entry = normalizeRepoRelativePath(raw.server.entry);
     if (!entry) throw new Error('server.entry inválido');
-    const routes = Array.isArray(raw.server.routes)
-      ? raw.server.routes.map(safeRoutePath).filter(Boolean).slice(0, 40)
-      : ['/'];
     const readyPath = safeRoutePath(raw.server.readyPath ?? '/') ?? '/';
     const portEnv = typeof raw.server.portEnv === 'string' && /^[A-Z_][A-Z0-9_]{0,40}$/.test(raw.server.portEnv)
       ? raw.server.portEnv
       : 'PORT';
-    out.server = {
-      entry,
-      routes: routes.length > 0 ? routes : ['/'],
-      readyPath,
-      portEnv,
-      cpuProfile: raw.server.cpuProfile !== false,
-    };
+    out.server = {entry, readyPath, portEnv};
   }
-  if (Array.isArray(raw.cpuWorkloads)) {
-    for (const item of raw.cpuWorkloads.slice(0, 20)) {
-      const file = typeof item === 'string'
-        ? normalizeRepoRelativePath(item)
-        : (item && typeof item === 'object' ? normalizeRepoRelativePath(item.file) : null);
-      if (!file) continue;
-      const args = Array.isArray(item?.args)
-        ? item.args.filter(a => typeof a === 'string' && !a.includes('..') && !a.includes('\0') && a.length <= 120).slice(0, 10)
-        : [];
-      out.cpuWorkloads.push({file, args});
+  if (Array.isArray(raw.cpuFunctions)) {
+    out.cpuOmissions += Math.max(0, raw.cpuFunctions.length - 20);
+    for (const item of raw.cpuFunctions.slice(0, 20)) {
+      const file = normalizeRepoRelativePath(item?.file, []);
+      const functionName = item?.functionName;
+      if (!file || typeof functionName !== 'string' || !/^[A-Za-z_$][\w$]{0,79}$/.test(functionName)) {
+        out.cpuOmissions++;
+        continue;
+      }
+      if (!out.cpuFunctions.some(candidate => candidate.file === file && candidate.functionName === functionName)) {
+        out.cpuFunctions.push({file, functionName});
+      }
     }
+  } else if (raw.cpuFunctions !== undefined) {
+    out.cpuOmissions++;
   }
+  if (raw.server?.cpuProfile === true || raw.cpuWorkloads?.length) out.cpuOmissions++;
   if (raw.migrationsDir !== undefined) {
     const rel = normalizeRepoRelativePath(raw.migrationsDir);
     if (!rel) throw new Error('migrationsDir inválido');
@@ -331,19 +349,19 @@ export function evaluateK6Summary(summary, exitCode, routeTargets, thresholds) {
     const line = normalizePositiveLine(target.line ?? 1);
     const taggedKey = Object.keys(metrics).find(k => k === `http_req_duration{route:${route}}`);
     const durationValues = readK6Values(taggedKey ? metrics[taggedKey] : null);
-    const p95 = typeof durationValues?.['p(95)'] === 'number' ? durationValues['p(95)'] : null;
+    const p95 = Number.isFinite(durationValues?.['p(95)']) && durationValues['p(95)'] >= 0 ? durationValues['p(95)'] : null;
     const avg = typeof durationValues?.avg === 'number' ? durationValues.avg : null;
     const max = typeof durationValues?.max === 'number' ? durationValues.max : null;
 
     const failKey = Object.keys(metrics).find(k => k === `http_req_failed{route:${route}}`);
     const failValues = readK6Values(failKey ? metrics[failKey] : null);
-    const failRate = typeof failValues?.rate === 'number'
-      ? failValues.rate
-      : (typeof failValues?.value === 'number' ? failValues.value : null);
+    const rate = failValues?.rate ?? failValues?.value;
+    const failRate = Number.isFinite(rate) && rate >= 0 && rate <= 1 ? rate : null;
 
     routeMetrics.push({route, file, line, p95, avg, max, failRate});
+    if (p95 === null || failRate === null) continue;
 
-    if (p95 !== null && p95 > thresholds.k6P95Ms) {
+    if (p95 > thresholds.k6P95Ms) {
       findings.push(normalizeFinding({
         tool: 'k6',
         rule: 'K6-THRESHOLD-LATENCY-P95',
@@ -354,7 +372,7 @@ export function evaluateK6Summary(summary, exitCode, routeTargets, thresholds) {
         evidence: `rota=${route} p95=${p95.toFixed(1)}ms avg=${avg !== null ? avg.toFixed(1) : 'n/a'}ms max=${max !== null ? max.toFixed(1) : 'n/a'}ms exit=${exitCode}`,
       }));
     }
-    if (failRate !== null && failRate > thresholds.k6FailRate) {
+    if (failRate > thresholds.k6FailRate) {
       findings.push(normalizeFinding({
         tool: 'k6',
         rule: 'K6-THRESHOLD-ERROR-RATE',
@@ -368,185 +386,6 @@ export function evaluateK6Summary(summary, exitCode, routeTargets, thresholds) {
   }
 
   return {routeMetrics, findings};
-}
-
-/** Analisa um arquivo .cpuprofile V8 e identifica funções quentes no código do repositório. */
-export function analyzeCpuProfile(profileJson, workRoot, thresholds) {
-  if (!profileJson || typeof profileJson !== 'object' || !Array.isArray(profileJson.nodes)) {
-    throw new Error('Perfil .cpuprofile inválido');
-  }
-  const nodeMap = new Map();
-  for (const node of profileJson.nodes) {
-    if (node && typeof node.id === 'number') nodeMap.set(node.id, node);
-  }
-  const selfUsByNode = new Map();
-  const samples = Array.isArray(profileJson.samples) ? profileJson.samples : [];
-  const deltas = Array.isArray(profileJson.timeDeltas) ? profileJson.timeDeltas : [];
-
-  if (samples.length > 0 && samples.length === deltas.length) {
-    for (let i = 0; i < samples.length; i += 1) {
-      const id = samples[i];
-      const delta = typeof deltas[i] === 'number' && deltas[i] > 0 ? deltas[i] : 0;
-      selfUsByNode.set(id, (selfUsByNode.get(id) ?? 0) + delta);
-    }
-  } else {
-    for (const node of profileJson.nodes) {
-      const hits = typeof node.hitCount === 'number' && node.hitCount > 0 ? node.hitCount : 0;
-      if (hits > 0) selfUsByNode.set(node.id, hits * 1000);
-    }
-  }
-
-  const totalDurationMs = typeof profileJson.startTime === 'number' && typeof profileJson.endTime === 'number' && profileJson.endTime >= profileJson.startTime
-    ? (profileJson.endTime - profileJson.startTime) / 1000
-    : Array.from(selfUsByNode.values()).reduce((a, b) => a + b, 0) / 1000;
-
-  const prefixes = [
-    workRoot.endsWith('/') ? workRoot : `${workRoot}/`,
-    '/repo/',
-    '/tmp/work-repo/',
-  ];
-  const byFrame = new Map();
-  let userActiveUs = 0;
-
-  for (const [nodeId, us] of selfUsByNode.entries()) {
-    const node = nodeMap.get(nodeId);
-    const frame = node?.callFrame;
-    if (!frame || typeof frame.url !== 'string') continue;
-    if (frame.url.startsWith('node:') || frame.url.includes('/opt/desempenho-tools/') || frame.url === '') continue;
-    const rel = normalizeRepoRelativePath(frame.url, prefixes);
-    if (!rel) continue;
-    userActiveUs += us;
-    const fnName = cleanText(frame.functionName, '(anonymous)', 120);
-    const line = normalizePositiveLine((typeof frame.lineNumber === 'number' ? frame.lineNumber : 0) + 1);
-    const key = `${rel}:${line}:${fnName}`;
-    const prev = byFrame.get(key) ?? {file: rel, line, functionName: fnName, selfUs: 0};
-    prev.selfUs += us;
-    byFrame.set(key, prev);
-  }
-
-  const hotspots = Array.from(byFrame.values())
-    .map(item => {
-      const selfMs = item.selfUs / 1000;
-      const pct = userActiveUs > 0 ? (item.selfUs / userActiveUs) * 100 : 0;
-      return {...item, selfMs, pct};
-    })
-    .sort((a, b) => b.selfMs - a.selfMs);
-
-  const findings = [];
-  for (const spot of hotspots) {
-    if (spot.selfMs >= thresholds.cpuSelfMs && (spot.pct >= thresholds.cpuTotalPct || spot.selfMs >= thresholds.cpuSelfMs * 2)) {
-      findings.push(normalizeFinding({
-        tool: 'node-cpu-prof',
-        rule: 'CPU-PROF-HOTSPOT',
-        file: spot.file,
-        line: spot.line,
-        severity: spot.selfMs >= thresholds.cpuSelfMs * 2.5 ? 'alta' : 'media',
-        message: `Ponto quente de CPU em '${spot.functionName}': ${spot.selfMs.toFixed(1)}ms (${spot.pct.toFixed(1)}% do tempo de CPU no código do projeto)`,
-        evidence: `arquivo=${spot.file}:${spot.line} funcao=${spot.functionName} selfMs=${spot.selfMs.toFixed(1)}ms pct=${spot.pct.toFixed(1)}% duracaoTotal=${totalDurationMs.toFixed(1)}ms`,
-      }));
-    }
-  }
-
-  return {
-    totalDurationMs,
-    userActiveMs: userActiveUs / 1000,
-    sampleCount: samples.length,
-    hotspots,
-    findings,
-  };
-}
-
-/** Normaliza texto SQL para correspondência aproximada entre arquivo .sql e pg_stat_statements. */
-export function normalizeSqlFingerprint(sql) {
-  return String(sql ?? '')
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function findSqlLocation(queryText, sqlSources) {
-  const normQuery = normalizeSqlFingerprint(queryText);
-  const matches = sqlSources.filter(src => normalizeSqlFingerprint(src.sql) === normQuery);
-  return matches.length === 1 ? {file: matches[0].file, line: matches[0].line} : null;
-}
-
-function hasHighCostSeqScan(planNode, minCost) {
-  if (!planNode || typeof planNode !== 'object') return null;
-  if (planNode['Node Type'] === 'Seq Scan') {
-    const totalCost = Number(planNode['Total Cost'] ?? 0);
-    const actualRows = Number(planNode['Actual Rows'] ?? planNode['Plan Rows'] ?? 0);
-    if (totalCost >= minCost || actualRows >= 5000) {
-      return {
-        relation: cleanText(planNode['Relation Name'], 'tabela', 80),
-        totalCost,
-        rows: actualRows,
-      };
-    }
-  }
-  if (Array.isArray(planNode.Plans)) {
-    for (const child of planNode.Plans) {
-      const hit = hasHighCostSeqScan(child, minCost);
-      if (hit) return hit;
-    }
-  }
-  return null;
-}
-
-/** Avalia linhas de pg_stat_statements e planos EXPLAIN (FORMAT JSON). */
-export function evaluatePgStatStatements(rows, explainPlans, sqlSources, thresholds) {
-  const findings = [];
-  const analyzedQueries = [];
-
-  for (const row of rows) {
-    const query = String(row?.query ?? '');
-    const lower = query.toLowerCase();
-    if (!query || lower.includes('pg_stat_statements') || lower.startsWith('explain') || lower.startsWith('create extension') || lower.startsWith('begin') || lower.startsWith('commit') || lower.startsWith('set ')) {
-      continue;
-    }
-    const calls = Number(row?.calls ?? 0);
-    const meanMs = Number(row?.mean_exec_time ?? 0);
-    const maxMs = Number(row?.max_exec_time ?? 0);
-    const totalMs = Number(row?.total_exec_time ?? 0);
-    const loc = row?.file ? {file: row.file, line: row.line ?? 1} : findSqlLocation(query, sqlSources);
-    if (!loc) continue;
-    const file = normalizeRepoRelativePath(loc.file);
-    if (!file) continue;
-    const line = normalizePositiveLine(loc.line);
-
-    analyzedQueries.push({file, line, calls, meanMs, maxMs, totalMs, query: cleanText(query, '', 160)});
-
-    if (meanMs > thresholds.sqlMeanMs || maxMs > thresholds.sqlMaxMs) {
-      findings.push(normalizeFinding({
-        tool: 'pg_stat_statements',
-        rule: meanMs > thresholds.sqlMeanMs ? 'PG-QUERY-SLOW-MEAN' : 'PG-QUERY-SLOW-MAX',
-        file,
-        line,
-        severity: meanMs > thresholds.sqlMeanMs * 2 || maxMs > thresholds.sqlMaxMs * 2 ? 'alta' : 'media',
-        message: `Consulta SQL lenta em pg_stat_statements: mean=${meanMs.toFixed(2)}ms, max=${maxMs.toFixed(2)}ms (${calls} chamadas)`,
-        evidence: `arquivo=${file}:${line} calls=${calls} mean_exec_time=${meanMs.toFixed(2)}ms max_exec_time=${maxMs.toFixed(2)}ms query="${cleanText(query, '', 160)}"`,
-      }));
-    }
-  }
-
-  for (const planEntry of explainPlans) {
-    const hit = hasHighCostSeqScan(planEntry?.plan?.Plan, thresholds.sqlSeqScanCost);
-    if (!hit) continue;
-    const file = normalizeRepoRelativePath(planEntry.file) ?? 'queries.sql';
-    const line = normalizePositiveLine(planEntry.line);
-    findings.push(normalizeFinding({
-      tool: 'pg_stat_statements',
-      rule: 'PG-SEQ-SCAN-COST',
-      file,
-      line,
-      severity: 'media',
-      message: `Seq Scan de alto custo na tabela '${hit.relation}' (custo=${hit.totalCost.toFixed(1)}, linhas=${hit.rows})`,
-      evidence: `arquivo=${file}:${line} relation=${hit.relation} total_cost=${hit.totalCost.toFixed(1)} rows=${hit.rows}`,
-    }));
-  }
-
-  return {analyzedQueries, findings};
 }
 
 /** Compara métricas atuais contra baseline anterior para detectar piora (regressão). */

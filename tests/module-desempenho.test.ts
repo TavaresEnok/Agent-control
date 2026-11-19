@@ -24,8 +24,9 @@ type LibModule = {
   validateConfig: (raw: unknown) => {
     staticDir?: string;
     routes: {path: string; file?: string}[];
-    server?: {entry: string; routes: string[]; readyPath: string; portEnv: string; cpuProfile: boolean};
-    cpuWorkloads: {file: string; args: string[]}[];
+    server?: {entry: string; readyPath: string; portEnv: string};
+    cpuFunctions: {file: string; functionName: string}[];
+    cpuOmissions: number;
     migrationsDir?: string;
     migrations: string[];
     sqlDir?: string;
@@ -46,22 +47,6 @@ type LibModule = {
     thresholds: Record<string, number>,
   ) => {
     routeMetrics: {route: string; file: string; line: number; p95: number | null; avg: number | null; max: number | null; failRate: number | null}[];
-    findings: Finding[];
-  };
-  analyzeCpuProfile: (profileJson: unknown, workRoot: string, thresholds: Record<string, number>) => {
-    totalDurationMs: number;
-    userActiveMs: number;
-    sampleCount: number;
-    hotspots: {file: string; line: number; functionName: string; selfMs: number; pct: number}[];
-    findings: Finding[];
-  };
-  evaluatePgStatStatements: (
-    rows: unknown[],
-    explainPlans: unknown[],
-    sqlSources: {file: string; line: number; sql: string}[],
-    thresholds: Record<string, number>,
-  ) => {
-    analyzedQueries: {file: string; line: number; calls: number; meanMs: number; maxMs: number; totalMs: number; query: string}[];
     findings: Finding[];
   };
   evaluateBaselineRegression: (
@@ -93,6 +78,9 @@ test('Dockerfile e lockfiles de desempenho fixam base por digest, usuário 65532
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/desempenho-entrypoint\.sh"\]/);
   assert.match(dockerfile, /sha256sum -c checksums\.txt/);
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
+  assert.match(dockerfile, /LABEL org.agent-control.performance.protocol="4"/);
+  assert.match(dockerfile, /npm ci --prefix cpu-parser --omit=dev --ignore-scripts/);
+  assert.match(dockerfile, /^COPY .*http-link\.mjs .*cpu-metrics\.mjs postgres-metrics\.mjs /m);
 
   assert.equal(actualLockSha, lockJson.packageLockSha256);
   assert.match(lockJson.baseImage.digest, /^sha256:[a-f0-9]{64}$/);
@@ -172,11 +160,19 @@ test('validateConfig recusa caminhos fora do repositório e preserva limites vá
 
   assert.throws(() => lib.validateConfig({server: {entry: '../../etc/passwd'}}));
   assert.throws(() => lib.validateConfig({migrationsDir: '/abs/path'}));
+  const cpu = lib.validateConfig({cpuFunctions: [
+    {file: 'work.mjs', functionName: 'sample'},
+    {file: 'work.mjs', functionName: 'sample'},
+    {file: '../outside.js', functionName: 'sample'},
+    {file: 'work.mjs', functionName: 'not a name'},
+  ], cpuWorkloads: ['legacy.mjs']});
+  assert.deepEqual(cpu.cpuFunctions, [{file: 'work.mjs', functionName: 'sample'}]);
+  assert.equal(cpu.cpuOmissions, 3);
 });
 
-test('avaliadores de Lighthouse, k6, node --cpu-prof e pg_stat_statements detectam defeitos e ignoram controle limpo', async () => {
+test('avaliadores HTTP identificam limites e o baseline aponta regressões comparáveis', async () => {
   const lib = await import(libUrl) as LibModule;
-  const thresholds = {...lib.DEFAULT_THRESHOLDS, performanceScore: 0.85, k6P95Ms: 120, cpuSelfMs: 80, sqlMeanMs: 25, sqlMaxMs: 60, sqlSeqScanCost: 50};
+  const thresholds = {...lib.DEFAULT_THRESHOLDS, performanceScore: 0.85, k6P95Ms: 120};
 
   // Lighthouse
   const lhBad = lib.evaluateLighthouseLhr({
@@ -230,59 +226,6 @@ test('avaliadores de Lighthouse, k6, node --cpu-prof e pg_stat_statements detect
     {path: '/api/relatorio', file: 'server.mjs', line: 1},
   ], thresholds);
   assert.equal(k6Clean.findings.length, 0);
-
-  // node --cpu-prof
-  const cpuBad = lib.analyzeCpuProfile({
-    startTime: 0,
-    endTime: 1_500_000,
-    nodes: [
-      {id: 1, callFrame: {functionName: '(root)', url: '', lineNumber: -1}},
-      {id: 2, callFrame: {functionName: 'readFileSync', url: 'node:fs', lineNumber: 10}},
-      {id: 3, callFrame: {functionName: 'computeHeavyReport', url: 'file:///tmp/work-repo/server.mjs', lineNumber: 6}},
-    ],
-    samples: [2, 3, 3, 3, 3],
-    timeDeltas: [5000, 300000, 300000, 300000, 300000],
-  }, '/tmp/work-repo', thresholds);
-  assert.equal(cpuBad.findings.length, 1);
-  assert.equal(cpuBad.findings[0]?.rule, 'CPU-PROF-HOTSPOT');
-  assert.equal(cpuBad.findings[0]?.file, 'server.mjs');
-  assert.equal(cpuBad.findings[0]?.line, 7);
-
-  const cpuClean = lib.analyzeCpuProfile({
-    startTime: 0,
-    endTime: 50_000,
-    nodes: [
-      {id: 1, callFrame: {functionName: 'fastHandler', url: 'file:///tmp/work-repo/server.mjs', lineNumber: 9}},
-    ],
-    samples: [1],
-    timeDeltas: [2000],
-  }, '/tmp/work-repo', thresholds);
-  assert.equal(cpuClean.findings.length, 0);
-
-  // pg_stat_statements + EXPLAIN
-  const pgBad = lib.evaluatePgStatStatements(
-    [
-      {query: 'SELECT pg_stat_statements_reset()', calls: 1, mean_exec_time: 100, max_exec_time: 100, total_exec_time: 100},
-      {query: 'EXPLAIN (FORMAT JSON) SELECT 1', calls: 1, mean_exec_time: 100, max_exec_time: 100, total_exec_time: 100},
-      {query: 'SELECT count(*), max(md5(observacao)) FROM pedidos_audit WHERE observacao LIKE $1', calls: 5, mean_exec_time: 64.5, max_exec_time: 72.1, total_exec_time: 322.5},
-    ],
-    [
-      {file: 'queries/lenta.sql', line: 1, plan: {Plan: {'Node Type': 'Seq Scan', 'Relation Name': 'pedidos_audit', 'Total Cost': 1420, 'Actual Rows': 2941}}},
-    ],
-    [{file: 'queries/lenta.sql', line: 1, sql: 'SELECT count(*), max(md5(observacao)) FROM pedidos_audit WHERE observacao LIKE $1'}],
-    thresholds,
-  );
-  assert.equal(pgBad.analyzedQueries.length, 1);
-  assert.equal(pgBad.findings.length, 2);
-  assert.equal(pgBad.findings[0]?.file, 'queries/lenta.sql');
-
-  const pgClean = lib.evaluatePgStatStatements(
-    [{query: 'SELECT id, codigo, valor FROM pedidos_audit WHERE codigo = $1 LIMIT $2', calls: 5, mean_exec_time: 0.4, max_exec_time: 0.7, total_exec_time: 2.0}],
-    [{file: 'queries/rapida.sql', line: 1, plan: {Plan: {'Node Type': 'Index Scan', 'Relation Name': 'pedidos_audit', 'Total Cost': 8.4, 'Actual Rows': 1}}}],
-    [{file: 'queries/rapida.sql', line: 1, sql: 'SELECT id, codigo, valor FROM pedidos_audit WHERE codigo = $1 LIMIT $2'}],
-    thresholds,
-  );
-  assert.equal(pgClean.findings.length, 0);
 
   // Baseline regression ("se pioraram desde a última vez")
   const regressions = lib.evaluateBaselineRegression(
@@ -347,12 +290,14 @@ test('fixtures defeituosa e controle limpo têm configuração válida e simétr
   )));
   assert.deepEqual(defectiveCfg.thresholds, cleanCfg.thresholds);
   assert.deepEqual(defectiveCfg.routes, cleanCfg.routes);
+  assert.deepEqual(defectiveCfg.cpuFunctions, [{file: 'server.mjs', functionName: 'computeHeavyReport'}]);
+  assert.deepEqual(cleanCfg.cpuFunctions, [{file: 'server.mjs', functionName: 'computeCachedReport'}]);
 });
 
 
 test('rotas e séries exigem correspondência exata e limites incluem a igualdade', async () => {
   const lib = await import(libUrl) as LibModule;
-  const cfg = lib.validateConfig({routes: ['//outra-origem/a', '/pagina?modo=mobile', '/']});
+  const cfg = lib.validateConfig({routes: ['//outra-origem/a', '/%2e%2e/pagina', '/pagina?modo=mobile', '/']});
   assert.deepEqual(cfg.routes.map(r => r.path), ['/pagina?modo=mobile', '/']);
   const targets = [{path: '/', file: 'index.html'}, {path: '/produtos', file: 'produtos.html'}, {path: '/pagina?modo=mobile', file: 'pagina.html'}];
   const thresholds = {...lib.DEFAULT_THRESHOLDS, k6P95Ms: 100, k6FailRate: 0};
@@ -369,19 +314,6 @@ test('rotas e séries exigem correspondência exata e limites incluem a igualdad
   assert.equal(result.routeMetrics[2]?.p95, 100);
   assert.deepEqual(result.findings.map(f => f.file), ['produtos.html']);
 });
-
-test('estatísticas SQL sem origem exata e única não recebem arquivo arbitrário', async () => {
-  const lib = await import(libUrl) as LibModule;
-  const rows = [{query: 'select a, b, c, d, e, f from segunda', calls: 5, mean_exec_time: 100, max_exec_time: 100, total_exec_time: 500}];
-  const sources = [
-    {file: 'primeira.sql', line: 1, sql: 'select a, b, c, d, e, f from primeira'},
-    {file: 'segunda.sql', line: 3, sql: 'select a, b, c, d, e, f from segunda'},
-  ];
-  assert.equal(lib.evaluatePgStatStatements(rows, [], sources, lib.DEFAULT_THRESHOLDS).findings[0]?.file, 'segunda.sql');
-  assert.equal(lib.evaluatePgStatStatements(rows, [], sources.slice(0, 1), lib.DEFAULT_THRESHOLDS).findings.length, 0);
-  assert.equal(lib.evaluatePgStatStatements(rows, [], [...sources, sources[1]!], lib.DEFAULT_THRESHOLDS).findings.length, 0);
-});
-
 
 test('servidor estático responde enquanto o coletor aguarda processo síncrono', async () => {
   const script = fileURLToPath(new URL('../deploy/modules/desempenho/static-server.mjs', import.meta.url));

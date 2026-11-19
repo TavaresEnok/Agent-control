@@ -120,11 +120,14 @@ export function computeMeasurement(before, after, expected = SAMPLES) {
   return {calls, totalMs, meanMs: totalMs / calls, maxMs};
 }
 
-/** Retorno compatível com runPgStatStatements do coletor. Não consome snapshots externos. */
+/** Mede somente as consultas do snapshot que completaram a coleta local. */
 export async function runPostgresMetrics({workRoot, sqlInfo, pgBinDir, thresholds = DEFAULT_THRESHOLDS, version = '16'}) {
   const extraCoverage = [], findings = [], analyzedQueries = [];
-  const cover = (status, detail) => extraCoverage.push(normalizeCoverageRow({tool: TOOL, version, status, detail}));
+  const cover = (status, detail, file) => extraCoverage.push(normalizeCoverageRow({
+    tool: file ? `${TOOL}:consulta` : `${TOOL}:etapa`, version, status, detail, ...(file ? {files: [file]} : {}),
+  }));
   let summaryStatus = 'ok', summaryDetail = '', directory, started = false, admin, project;
+  let cleanupFailed = false;
   const finish = () => ({summary: normalizeCoverageRow({tool: TOOL, version, status: summaryStatus, detail: summaryDetail}), extraCoverage, findings, analyzedQueries});
   const migrations = sqlInfo?.migrations ?? [], queries = sqlInfo?.queries ?? [];
   if (sqlInfo?.snapshotFile) cover('skipped', 'Snapshot externo ignorado: sem proveniência de medição local.');
@@ -178,11 +181,11 @@ export async function runPostgresMetrics({workRoot, sqlInfo, pgBinDir, threshold
       return result.rows[0] ?? {calls: 0, total_exec_time: 0};
     };
     for (const file of queryFiles) {
-      if (!file.statements.length) cover('skipped', `${file.file}: arquivo sem instruções.`);
+      if (!file.statements.length) cover('skipped', `${file.file}: arquivo sem instruções.`, file.file);
       for (const statement of file.statements) {
         checkDeadline();
         const location = `${file.file}:${statement.line}`;
-        if (!allowed(statement.sql, false)) { cover('skipped', `${location}: somente SELECT ou WITH em transação somente leitura.`); continue; }
+        if (!allowed(statement.sql, false)) { cover('skipped', `${location}: somente SELECT ou WITH em transação somente leitura.`, file.file); continue; }
         try {
           await fixed(project, 'BEGIN READ ONLY');
           let plan;
@@ -205,20 +208,32 @@ export async function runPostgresMetrics({workRoot, sqlInfo, pgBinDir, threshold
           const evidence = `arquivo=${location}; sha256=${hash}; queryid=${identifier}`;
           const details = `${evidence}; antes=${Number(before.calls)} chamadas/${Number(before.total_exec_time).toFixed(3)}ms; depois=${Number(after.calls)} chamadas/${Number(after.total_exec_time).toFixed(3)}ms; média=${measurement.meanMs.toFixed(3)}ms; máximo=${measurement.maxMs.toFixed(3)}ms`;
           analyzedQueries.push({file: file.file, line: statement.line, ...measurement});
-          cover('ok', details);
+          cover('ok', details, file.file);
           if (measurement.meanMs > thresholds.sqlMeanMs || measurement.maxMs > thresholds.sqlMaxMs) findings.push(normalizeFinding({tool: TOOL, rule: measurement.meanMs > thresholds.sqlMeanMs ? 'PG-QUERY-SLOW-MEAN' : 'PG-QUERY-SLOW-MAX', file: file.file, line: statement.line, severity: measurement.meanMs > thresholds.sqlMeanMs * 2 || measurement.maxMs > thresholds.sqlMaxMs * 2 ? 'alta' : 'media', message: 'Consulta SQL lenta na medição local descartável.', evidence: details}));
-        } catch (error) { summaryStatus = 'failed'; cover('failed', `${location}: medição indisponível (${code(error)}).`); }
+        } catch (error) { cover('failed', `${location}: medição indisponível (${code(error)}).`, file.file); }
       }
     }
+    summaryStatus = analyzedQueries.length ? 'ok' : (extraCoverage.some(row => row.status === 'failed') ? 'failed' : 'skipped');
     summaryDetail = `${analyzedQueries.length} instrução(ões) medida(s) independentemente; ${findings.length} consulta(s) lenta(s).`;
   } catch (error) {
     summaryStatus = 'failed'; summaryDetail = `Coletor SQL indisponível: ${error instanceof Error ? error.message.slice(0, 180) : 'erro inesperado'}.`;
+    if (analyzedQueries.length) {
+      cover('failed', summaryDetail);
+      summaryStatus = 'ok';
+      summaryDetail = `${analyzedQueries.length} instrução(ões) medida(s) antes da interrupção.`;
+    }
   } finally {
-    if (project) try { await project.end(); } catch { summaryStatus = 'failed'; cover('failed', 'Falha ao fechar conexão de projeto.'); }
-    if (admin) try { await admin.end(); } catch { summaryStatus = 'failed'; cover('failed', 'Falha ao fechar conexão administrativa.'); }
+    if (project) try { await project.end(); } catch { cleanupFailed = true; cover('failed', 'Falha ao fechar conexão de projeto.'); }
+    if (admin) try { await admin.end(); } catch { cleanupFailed = true; cover('failed', 'Falha ao fechar conexão administrativa.'); }
     let stopped = !started;
-    if (started) try { run(join(pgBinDir, 'pg_ctl'), ['-D', join(directory, 'data'), '-m', 'immediate', '-w', '-t', '15', 'stop'], 20_000); stopped = true; } catch { summaryStatus = 'failed'; cover('failed', 'Falha ao encerrar servidor PostgreSQL descartável; diretório preservado para recuperação.'); }
-    if (directory && stopped) try { rmSync(directory, {recursive: true, force: true}); } catch { summaryStatus = 'failed'; cover('failed', 'Falha ao remover diretório temporário PostgreSQL.'); }
+    if (started) try { run(join(pgBinDir, 'pg_ctl'), ['-D', join(directory, 'data'), '-m', 'immediate', '-w', '-t', '15', 'stop'], 20_000); stopped = true; } catch { cleanupFailed = true; cover('failed', 'Falha ao confirmar parada do PostgreSQL descartável; contêiner será removido.'); }
+    if (directory && stopped) try { rmSync(directory, {recursive: true, force: true}); } catch { cleanupFailed = true; cover('failed', 'Falha ao remover diretório temporário PostgreSQL.'); }
+  }
+  if (cleanupFailed) {
+    summaryStatus = 'failed';
+    summaryDetail = 'Limpeza PostgreSQL não confirmada dentro do coletor.';
+    findings.length = 0;
+    analyzedQueries.length = 0;
   }
   return finish();
 }

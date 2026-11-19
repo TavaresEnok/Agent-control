@@ -1,6 +1,7 @@
 # Imagem do módulo 7 (desempenho). Contexto de build: deploy/modules/desempenho/.
 # Base fixa v1.65.1-noble por digest (mesma base de deploy/Dockerfile.design).
 FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
+LABEL org.agent-control.performance.protocol="4"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
@@ -33,15 +34,16 @@ RUN groupadd --system --gid 65532 desempenho \
 
 WORKDIR /opt/desempenho-tools
 COPY package.json package-lock.json ./
+COPY cpu-parser/package.json cpu-parser/package-lock.json ./cpu-parser/
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && npm ci --prefix cpu-parser --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm cache clean --force \
     && mv /tmp/desempenho-tools.lock.json /opt/desempenho-tools/desempenho-tools.lock.json
 
-COPY static-server.mjs lib.mjs collector.mjs /opt/desempenho-tools/
+COPY static-server.mjs lib.mjs collector.mjs http-link.mjs cpu-metrics.mjs postgres-metrics.mjs /opt/desempenho-tools/
 COPY entrypoint.sh /usr/local/bin/desempenho-entrypoint.sh
 RUN chmod 0444 /opt/desempenho-tools/package.json /opt/desempenho-tools/package-lock.json /opt/desempenho-tools/desempenho-tools.lock.json \
-    && chmod 0555 /opt/desempenho-tools/static-server.mjs /opt/desempenho-tools/lib.mjs /opt/desempenho-tools/collector.mjs /usr/local/bin/desempenho-entrypoint.sh /usr/local/bin/k6 \
-    && chown -R 65532:65532 /opt/desempenho-tools
+    && chmod 0555 /opt/desempenho-tools/*.mjs /usr/local/bin/desempenho-entrypoint.sh /usr/local/bin/k6
 
 USER 65532:65532
 WORKDIR /tmp

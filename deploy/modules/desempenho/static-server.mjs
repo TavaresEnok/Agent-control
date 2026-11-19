@@ -125,7 +125,10 @@ export async function startStaticServer(rootDir) {
   return {
     port,
     origin: `http://127.0.0.1:${port}`,
-    close: () => new Promise(resolveClose => server.close(() => resolveClose())),
+    close: () => new Promise(resolveClose => {
+      server.close(() => resolveClose());
+      server.closeAllConnections();
+    }),
   };
 }
 
