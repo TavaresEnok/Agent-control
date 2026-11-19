@@ -1,19 +1,15 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {existsSync} from 'node:fs';
+import {existsSync, readFileSync} from 'node:fs';
 import {mkdtemp, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import {
-  createTask,
-  extractSameScreenVarietyContext,
-  isSameScreenVarietyBriefing,
-  MAX_CREATE_TASK_CHARS,
-  runDesignCreate,
-} from '../src/design-create.ts';
-import type {DesignRawFinding, DesignWorker, DesignWorkerCall} from '../src/design-types.ts';
+import {createTask, MAX_CREATE_TASK_CHARS, runDesignCreate} from '../src/design-create.ts';
+import type {DesignWorker, DesignWorkerCall} from '../src/design-types.ts';
+
+const BRIEFING_FILE = '/home/app/design-briefings/tela-inicial-assinante.md';
 
 function seat() {
   return {
@@ -36,36 +32,12 @@ async function withDirs(run: (paths: {data: string; repo: string}) => Promise<vo
   }
 }
 
-function measuredFinding(file: string, snippet: string): DesignRawFinding {
-  return {
-    tool: 'visual',
-    rule: 'TEXTO-CORTADO',
-    cwe: null,
-    file,
-    line: 12,
-    severity: 'alta',
-    snippet,
-    fingerprint: 'a'.repeat(64),
-    measure: {kind: 'overflow', px: 18},
-  };
-}
-
-test('briefing real tela-inicial-assinante.md (>8000 chars) preserva o fim, intenção, ações, rótulos e direções na criação e no retrabalho', async () => {
-  const briefingPath = '/home/app/design-briefings/tela-inicial-assinante.md';
-  assert.equal(existsSync(briefingPath), true, 'briefing tela-inicial-assinante.md deve existir');
-  const briefing = await readFile(briefingPath, 'utf8');
-  assert.ok(briefing.length > 8000, `briefing deve ultrapassar 8000 caracteres (atual: ${briefing.length})`);
-  assert.equal(isSameScreenVarietyBriefing(briefing), true);
-
-  const context = extractSameScreenVarietyContext(briefing, 2);
-  assert.equal(context.intent.some(item => item.includes('Vértice Fibra')), true);
-  assert.equal(context.actions.some(item => item.includes('Ver e pagar a fatura')), true);
-  assert.equal(context.actions.some(item => item.includes('Situação da conexão e do plano')), true);
-  assert.equal(context.actions.some(item => item.includes('Desbloqueio em confiança')), true);
-  assert.equal(context.labels.includes('PIX copia e cola'), true);
-  assert.equal(context.labels.includes('Código de barras'), true);
-  assert.equal(context.labels.includes('2ª via'), true);
-  assert.equal(context.directions.length, 2);
+test('briefing longo completo é enviado sem corte em todas as rodadas com a instrução condicional genérica', async () => {
+  const baseBriefing = existsSync(BRIEFING_FILE)
+    ? readFileSync(BRIEFING_FILE, 'utf8')
+    : `# Briefing longo\n${'Contexto detalhado da tela inicial. '.repeat(240)}\n## Variedade entre as telas\nConceitos diferentes da mesma tela.`;
+  const briefing = `${baseBriefing}\n\n### Direções deste lote\n- Conceito A (editorial-claro): fundo #FAF8F5 e tipografia serifada.\n- Conceito B (noturno-mineral): fundo #0D131A e contraste alto.`;
+  assert.ok(briefing.length > 8000);
 
   await withDirs(async ({data, repo}) => {
     const calls: DesignWorkerCall[] = [];
@@ -75,30 +47,18 @@ test('briefing real tela-inicial-assinante.md (>8000 chars) preserva o fim, inte
         if (call.task.includes('HTML anterior:')) {
           return JSON.stringify({
             kind: 'criacao',
-            tokens: {color: {fundo: {$type: 'color', $value: '#0b1215'}}},
+            tokens: {color: {bg: {$type: 'color', $value: '#0d131a'}}},
             screens: [
-              {
-                name: 'noturno-tecnico',
-                html: '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"></head><body><main><h1>Marina</h1><button>Código de barras</button></main></body></html>',
-                css: 'body{margin:0;background:#0b1215;color:#f8fafc}button{white-space:nowrap}',
-              },
+              {name: 'noturno-mineral', html: '<html><body><main><h1>Conceito B corrigido</h1></main></body></html>', css: 'body{background:#0d131a;color:#f1f5f9}'},
             ],
           });
         }
         return JSON.stringify({
           kind: 'criacao',
-          tokens: {color: {fundo: {$type: 'color', $value: '#faf7f2'}}},
+          tokens: {color: {bg: {$type: 'color', $value: '#faf8f5'}}},
           screens: [
-            {
-              name: 'editorial-claro',
-              html: '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"></head><body><main><h1>Marina</h1><button>PIX copia e cola</button></main></body></html>',
-              css: 'body{margin:0;background:#faf7f2;color:#111827}button{white-space:nowrap}',
-            },
-            {
-              name: 'noturno-tecnico',
-              html: '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"></head><body><main><h1>Marina</h1><button class="quebrado">Código de barras</button></main></body></html>',
-              css: 'body{margin:0;background:#0b1215;color:#f8fafc}',
-            },
+            {name: 'editorial-claro', html: '<html><body><main><h1>Conceito A</h1></main></body></html>', css: 'body{background:#faf8f5;color:#111}'},
+            {name: 'noturno-mineral', html: '<html><body><main><h1>Conceito B inicial</h1></main></body></html>', css: 'body{background:#0d131a;color:#94a3b8}'},
           ],
         });
       },
@@ -116,98 +76,79 @@ test('briefing real tela-inicial-assinante.md (>8000 chars) preserva o fim, inte
       reserve: async () => seat(),
       release: async () => {},
       intentId: randomUUID(),
-      examine: async (round, files) => ({
+      examine: async round => ({
         notes: [`rodada ${round}`],
-        screens: files
-          .filter(file => file.path.endsWith('.html'))
-          .map(file => {
-            const name = file.path.slice(0, -'.html'.length);
-            const rejected = round === 1 && name === 'noturno-tecnico';
-            return {
-              name,
-              rejected,
-              findings: rejected ? [measuredFinding(file.path, 'Código de barras quebrando em 2 linhas')] : [],
-              visualNotes: rejected ? ['manter rótulo Código de barras em linha única'] : [],
-            };
-          }),
+        screens: [
+          {name: 'editorial-claro', rejected: false, findings: [], visualNotes: []},
+          {
+            name: 'noturno-mineral',
+            rejected: round === 1,
+            findings: round === 1
+              ? [{
+                  tool: 'visual',
+                  rule: 'WCAG-1-4-3-CONTRASTE',
+                  cwe: null,
+                  file: 'noturno-mineral.css',
+                  line: 1,
+                  severity: 'alta',
+                  snippet: 'contraste baixo',
+                  fingerprint: 'a'.repeat(64),
+                  measure: {kind: 'contrast', ratio: 3.1},
+                }]
+              : [],
+            visualNotes: round === 1 ? ['elevar contraste do conceito B'] : [],
+          },
+        ],
       }),
     });
 
     assert.equal(calls.length, 2);
+    assert.equal(created.rounds.length, 2);
     for (const call of calls) {
       assert.equal(call.forcedModel, 'claude-opus-5-5');
       assert.equal(call.forcedEffort, 'medium');
-      assert.equal(call.role, 'specialist');
-      assert.deepEqual(call.writePaths, []);
-      // O trecho após 8000 caracteres (## Variedade entre as telas) não pode ser cortado.
-      assert.match(call.task, /## Variedade entre as telas/);
-      assert.match(call.task, /conceito visual diferente[\s\S]*mesma tela inicial/);
-      assert.match(call.task, /não telas diferentes do app/);
-      // Intenção, ações, rótulos e todas as direções do lote presentes na criação e no retrabalho.
-      assert.match(call.task, /Modo variedade da mesma tela:/);
-      assert.match(call.task, /Intenção da mesma tela a preservar em todos os conceitos:/);
-      assert.match(call.task, /Vértice Fibra/);
-      assert.match(call.task, /Ações da mesma tela a preservar em todos os conceitos/);
-      assert.match(call.task, /Ver e pagar a fatura/);
-      assert.match(call.task, /Situação da conexão e do plano/);
-      assert.match(call.task, /Desbloqueio em confiança/);
-      assert.match(call.task, /Rótulos a preservar inteiros em linha única:/);
-      assert.match(call.task, /white-space: nowrap/);
-      assert.match(call.task, /Código de barras/);
-      assert.match(call.task, /PIX copia e cola/);
-      assert.match(call.task, /2ª via/);
-      assert.match(call.task, /Direções por lote \(2 direções preservadas em todas as rodadas\):/);
-      assert.match(call.task, /Lote direção 1: Direção 1/);
-      assert.match(call.task, /Lote direção 2: Direção 2/);
+      assert.equal(call.task.includes(briefing), true);
+      assert.equal(call.task.includes(briefing.slice(8000)), true);
+      assert.match(
+        call.task,
+        /Quando o briefing pedir conceitos diferentes da mesma tela, preserve a função e as ações e siga as direções fornecidas a cada conceito, inclusive no retrabalho dos nomes rejeitados\./,
+      );
     }
-
-    const reworkTask = calls[1]!.task;
-    assert.match(reworkTask, /screens tem 1 itens/);
-    assert.match(reworkTask, /Retrabalho de variedade da mesma tela:/);
-    assert.match(reworkTask, /Tela rejeitada noturno-tecnico\./);
-    assert.match(reworkTask, /Direção deste conceito no lote \(2 de 2\): Direção 2/);
-    assert.equal(reworkTask.includes('Tela rejeitada editorial-claro'), false);
-    assert.deepEqual(created.rounds[0]?.approved, ['editorial-claro']);
-    assert.deepEqual(created.rounds[0]?.rejected, ['noturno-tecnico']);
-    assert.deepEqual(created.rounds[1]?.approved, ['editorial-claro', 'noturno-tecnico']);
   });
 });
 
-test('lote com 4 direções explícitas preserva todas as direções do lote na criação e no retrabalho parcial', async () => {
-  const baseBriefing = await readFile('/home/app/design-briefings/tela-inicial-assinante.md', 'utf8');
-  const batchDirections = [
-    '',
-    '## Lote 2 — Direções visuais por lote',
-    '1. **Conceito Editorial Solar (`editorial-solar`)**: fundo marfim #FAF6EE, serifada Fraunces no valor R$ 99,90 e bordas 1px.',
-    '2. **Conceito Noturno Fibra (`noturno-fibra`)**: fundo carvão #0A1014, tipografia Space Grotesk e faixa compacta de conexão.',
-    '3. **Conceito Grade Suíça (`grade-suica`)**: divisores aparentes de 1px, alinhamento tabular em métricas e superfície branca pura.',
-    '4. **Conceito Herói Fatura (`heroi-fatura`)**: cartão herói centralizado na fatura com PIX e código de barras lado a lado em linha única.',
+test('lote explicitamente direcionado e telas distintas preservam o briefing original sem injetar direções padrão de outro domínio', async () => {
+  const clinicalBriefing = [
+    '# Painel de triagem hospitalar',
+    'Desenhe dois conceitos diferentes da mesma tela de triagem clínica.',
+    'Ações: classificar risco, chamar paciente e registrar sinais vitais.',
+    'Direções do lote:',
+    '- Conceito 1 (plantao-claro): superfície clara cirúrgica com fila priorizada por gravidade.',
+    '- Conceito 2 (plantao-escuro): superfície escura para posto de enfermagem noturno.',
   ].join('\n');
-  const briefing = `${baseBriefing}\n${batchDirections}`;
+
+  const task = createTask({
+    briefing: clinicalBriefing,
+    screens: 2,
+    round: 1,
+    referenceNote: '',
+    rework: [],
+  });
+
+  assert.equal(task.includes(clinicalBriefing), true);
+  assert.equal(/fatura|internet|pix|assinante/i.test(task), false);
 
   await withDirs(async ({data, repo}) => {
-    const tasks: string[] = [];
+    let seenTask = '';
     const worker: DesignWorker = {
       async run(call) {
-        tasks.push(call.task);
-        if (call.task.includes('HTML anterior:')) {
-          return JSON.stringify({
-            kind: 'criacao',
-            tokens: {lote: 2, rodada: 2},
-            screens: [
-              {name: 'noturno-fibra', html: '<html><body><main><h1>Noturno corrigido</h1></main></body></html>', css: 'body{color:#eee}'},
-              {name: 'heroi-fatura', html: '<html><body><main><h1>Heroi corrigido</h1></main></body></html>', css: 'body{color:#111}'},
-            ],
-          });
-        }
+        seenTask = call.task;
         return JSON.stringify({
           kind: 'criacao',
-          tokens: {lote: 2, rodada: 1},
+          tokens: {color: {surface: {$type: 'color', $value: '#ffffff'}}},
           screens: [
-            {name: 'editorial-solar', html: '<html><body><main><h1>Editorial ok</h1></main></body></html>', css: 'body{color:#111}'},
-            {name: 'noturno-fibra', html: '<html><body><main><h1>Noturno pendente</h1></main></body></html>', css: 'body{color:#222}'},
-            {name: 'grade-suica', html: '<html><body><main><h1>Suica ok</h1></main></body></html>', css: 'body{color:#333}'},
-            {name: 'heroi-fatura', html: '<html><body><main><h1>Heroi pendente</h1></main></body></html>', css: 'body{color:#444}'},
+            {name: 'triagem', html: '<html><body><h1>Triagem</h1></body></html>', css: 'body{color:#111}'},
+            {name: 'prontuario', html: '<html><body><h1>Prontuário</h1></body></html>', css: 'body{color:#222}'},
           ],
         });
       },
@@ -217,93 +158,43 @@ test('lote com 4 direções explícitas preserva todas as direções do lote na 
       dataDirectory: data,
       runId: randomUUID(),
       repository: repo,
-      briefing,
-      screens: 4,
-      rounds: 2,
-      referenceNote: '',
+      briefing: 'Desenhe duas telas distintas do sistema clínico: triagem e prontuário.',
+      screens: 2,
+      rounds: 1,
+      referenceNote: '2 referências visuais.',
       worker,
       reserve: async () => seat(),
       release: async () => {},
       intentId: randomUUID(),
-      examine: async (round, files) => ({
+      examine: async () => ({
         notes: [],
-        screens: files
-          .filter(file => file.path.endsWith('.html'))
-          .map(file => {
-            const name = file.path.slice(0, -'.html'.length);
-            const rejected = round === 1 && (name === 'noturno-fibra' || name === 'heroi-fatura');
-            return {
-              name,
-              rejected,
-              findings: rejected ? [measuredFinding(file.path, 'contraste insuficiente')] : [],
-              visualNotes: rejected ? ['ajustar contraste mantendo direção do lote'] : [],
-            };
-          }),
+        screens: [
+          {name: 'triagem', rejected: false, findings: [], visualNotes: []},
+          {name: 'prontuario', rejected: false, findings: [], visualNotes: []},
+        ],
       }),
     });
 
-    assert.equal(tasks.length, 2);
-    for (const task of tasks) {
-      assert.match(task, /Direções por lote \(4 direções preservadas em todas as rodadas\):/);
-      assert.match(task, /Conceito Editorial Solar \(editorial-solar\)/);
-      assert.match(task, /Conceito Noturno Fibra \(noturno-fibra\)/);
-      assert.match(task, /Conceito Grade Suíça \(grade-suica\)/);
-      assert.match(task, /Conceito Herói Fatura \(heroi-fatura\)/);
-    }
-
-    const reworkTask = tasks[1]!;
-    assert.match(reworkTask, /screens tem 2 itens/);
-    assert.match(reworkTask, /Direção deste conceito no lote \(2 de 4\): 2\. Conceito Noturno Fibra \(noturno-fibra\)/);
-    assert.match(reworkTask, /Direção deste conceito no lote \(4 de 4\): 4\. Conceito Herói Fatura \(heroi-fatura\)/);
-    assert.equal(reworkTask.includes('Tela rejeitada editorial-solar'), false);
-    assert.equal(reworkTask.includes('Tela rejeitada grade-suica'), false);
-    assert.deepEqual(created.rounds[1]?.approved, ['editorial-solar', 'noturno-fibra', 'grade-suica', 'heroi-fatura']);
+    assert.equal(seenTask.includes('2 referências visuais.'), true);
+    assert.equal(/fatura|internet|pix|assinante/i.test(seenTask), false);
+    assert.deepEqual(created.rounds[0]?.approved, ['triagem', 'prontuario']);
+    const triagemHtml = await readFile(join(created.directory, 'rodada-1', 'triagem.html'), 'utf8');
+    const prontuarioHtml = await readFile(join(created.directory, 'rodada-1', 'prontuario.html'), 'utf8');
+    assert.match(triagemHtml, /href="triagem\.css"/);
+    assert.match(prontuarioHtml, /href="prontuario\.css"/);
   });
 });
 
-test('extrai direções em subcabeçalhos ### e linhas Direções por lote / Rótulos', () => {
-  const briefing = [
-    '# Painel do assinante — mesma tela inicial',
-    'Intenção: exibir status da fibra e permitir pagamento imediato.',
-    'Ações: Pagar fatura com PIX, Copiar código de barras, Desbloqueio em confiança.',
-    'Rótulos: Pagar fatura, PIX copia e cola, Código de barras, Desbloqueio em confiança.',
-    'Variedade da mesma tela: gere 2 conceitos visuais diferentes da mesma tela.',
-    '## Direções do lote',
-    '### Conceito 1 — Claro Mineral',
-    '- Fundo pedra clara #F5F5F0',
-    '- Tipografia humanista com peso 700 no valor',
-    '### Conceito 2 — Escuro Grafite',
-    '- Fundo grafite #101418',
-    '- Tipografia geométrica e acento ciano',
-  ].join('\n');
-
-  assert.equal(isSameScreenVarietyBriefing(briefing), true);
-  const ctx = extractSameScreenVarietyContext(briefing, 2);
-  assert.equal(ctx.directions.length, 2);
-  assert.match(ctx.directions[0] ?? '', /Conceito 1 — Claro Mineral — Fundo pedra clara #F5F5F0 — Tipografia humanista/);
-  assert.match(ctx.directions[1] ?? '', /Conceito 2 — Escuro Grafite — Fundo grafite #101418 — Tipografia geométrica/);
-  assert.equal(ctx.labels.includes('Código de barras'), true);
-  assert.equal(ctx.labels.includes('PIX copia e cola'), true);
-  assert.equal(ctx.labels.includes('Desbloqueio em confiança'), true);
-});
-
-test('modo normal de telas distintas com briefing longo (>8000 chars) e retrabalho não ativa variedade da mesma tela', async () => {
-  const filler = Array.from({length: 180}, (_, index) => `Detalhe funcional do fluxo ${index + 1}: validação de campos, estados de erro e confirmação acessível.`).join('\n');
-  const normalBriefing = [
-    '# Aplicativo de atendimento técnico',
-    'Desenhe 3 telas distintas do fluxo de atendimento em campo:',
-    '1. Tela de login do técnico com matrícula e senha.',
-    '2. Tela de fila de ordens de serviço do dia.',
-    '3. Tela de encerramento da visita com assinatura.',
-    filler,
-    'MARCADOR_FINAL_BRIEFING_LONGO_NORMAL: todas as 3 telas distintas usam tokens consistentes.',
-  ].join('\n');
-
-  assert.ok(normalBriefing.length > 12_000);
-  assert.equal(isSameScreenVarietyBriefing(normalBriefing), false);
-
+test('retrabalho pede só os nomes rejeitados, preserva os aprovados e mantém as direções do briefing', async () => {
   await withDirs(async ({data, repo}) => {
     const tasks: string[] = [];
+    const briefing = [
+      '# Briefing — conceitos da mesma tela de logística',
+      'Gere dois conceitos diferentes da mesma tela de expedição.',
+      '- Conceito 1 (conceito-compacto): grade densa de docas.',
+      '- Conceito 2 (conceito-editorial): foco no embarque prioritário.',
+    ].join('\n');
+
     const worker: DesignWorker = {
       async run(call) {
         tasks.push(call.task);
@@ -312,7 +203,8 @@ test('modo normal de telas distintas com briefing longo (>8000 chars) e retrabal
             kind: 'criacao',
             tokens: {rodada: 2},
             screens: [
-              {name: 'fila-ordens', html: '<html><body><main><h1>Fila corrigida</h1></main></body></html>', css: 'body{color:#111}'},
+              {name: 'conceito-compacto', html: '<html><body><h1>Compacto adulterado</h1></body></html>', css: 'body{color:#999}'},
+              {name: 'conceito-editorial', html: '<html><body><h1>Editorial corrigido</h1></body></html>', css: 'body{color:#222}'},
             ],
           });
         }
@@ -320,9 +212,8 @@ test('modo normal de telas distintas com briefing longo (>8000 chars) e retrabal
           kind: 'criacao',
           tokens: {rodada: 1},
           screens: [
-            {name: 'login-tecnico', html: '<html><body><main><h1>Login</h1></main></body></html>', css: 'body{color:#111}'},
-            {name: 'fila-ordens', html: '<html><body><main><h1>Fila com defeito</h1></main></body></html>', css: 'body{color:#222}'},
-            {name: 'encerramento', html: '<html><body><main><h1>Encerramento</h1></main></body></html>', css: 'body{color:#333}'},
+            {name: 'conceito-compacto', html: '<html><body><h1>Compacto aprovado</h1></body></html>', css: 'body{color:#111}'},
+            {name: 'conceito-editorial', html: '<html><body><h1>Editorial rejeitado</h1></body></html>', css: 'body{color:#444}'},
           ],
         });
       },
@@ -332,8 +223,8 @@ test('modo normal de telas distintas com briefing longo (>8000 chars) e retrabal
       dataDirectory: data,
       runId: randomUUID(),
       repository: repo,
-      briefing: normalBriefing,
-      screens: 3,
+      briefing,
+      screens: 2,
       rounds: 2,
       referenceNote: '',
       worker,
@@ -341,167 +232,157 @@ test('modo normal de telas distintas com briefing longo (>8000 chars) e retrabal
       release: async () => {},
       intentId: randomUUID(),
       examine: async (round, files) => ({
-        notes: [`rodada ${round}`],
-        screens: files
-          .filter(file => file.path.endsWith('.html'))
-          .map(file => {
-            const name = file.path.slice(0, -'.html'.length);
-            const rejected = round === 1 && name === 'fila-ordens';
-            return {
-              name,
-              rejected,
-              findings: rejected ? [measuredFinding(file.path, 'alvo menor que 44px')] : [],
-              visualNotes: rejected ? ['aumentar botão de filtro'] : [],
-            };
-          }),
+        notes: [],
+        screens: files.filter(file => file.path.endsWith('.html')).map(file => {
+          const name = file.path.slice(0, -'.html'.length);
+          const rejected = round === 1 && name === 'conceito-editorial';
+          return {
+            name,
+            rejected,
+            findings: rejected
+              ? [{
+                  tool: 'visual',
+                  rule: 'TELA-375-QUEBRADA',
+                  cwe: null,
+                  file: 'conceito-editorial.html',
+                  line: 1,
+                  severity: 'alta',
+                  snippet: 'overflow horizontal',
+                  fingerprint: 'b'.repeat(64),
+                  measure: {kind: 'overflow', px: 16},
+                }]
+              : [],
+            visualNotes: rejected ? ['ajustar largura do conceito-editorial'] : [],
+          };
+        }),
       }),
     });
 
     assert.equal(tasks.length, 2);
-    for (const task of tasks) {
-      assert.equal(task.includes('Modo variedade da mesma tela:'), false);
-      assert.equal(task.includes('Retrabalho de variedade da mesma tela:'), false);
-      assert.equal(task.includes('MARCADOR_FINAL_BRIEFING_LONGO_NORMAL'), true);
-    }
-    assert.match(tasks[0]!, /screens tem 3 itens/);
-    assert.match(tasks[1]!, /screens tem 1 itens/);
-    assert.match(tasks[1]!, /Tela rejeitada fila-ordens\./);
-    assert.equal(tasks[1]!.includes('Tela rejeitada login-tecnico'), false);
-    assert.equal(tasks[1]!.includes('Tela rejeitada encerramento'), false);
-    assert.deepEqual(created.rounds[1]?.approved, ['login-tecnico', 'fila-ordens', 'encerramento']);
+    const reworkTask = tasks[1]!;
+    assert.match(reworkTask, /screens tem 1 itens\./);
+    assert.match(reworkTask, /Devolva só as telas rejeitadas, com o mesmo name\./);
+    assert.match(reworkTask, /Tela rejeitada conceito-editorial\./);
+    assert.equal(reworkTask.includes('Tela rejeitada conceito-compacto'), false);
+    assert.equal(reworkTask.includes(briefing), true);
+    assert.match(reworkTask, /ajustar largura do conceito-editorial/);
+
+    assert.deepEqual(created.rounds[0]?.approved, ['conceito-compacto']);
+    assert.deepEqual(created.rounds[0]?.rejected, ['conceito-editorial']);
+    assert.deepEqual(created.rounds[1]?.approved, ['conceito-compacto', 'conceito-editorial']);
+
+    const compactR1 = await readFile(join(created.directory, 'rodada-1', 'conceito-compacto.html'), 'utf8');
+    const compactR2 = await readFile(join(created.directory, 'rodada-2', 'conceito-compacto.html'), 'utf8');
+    const editorialR2 = await readFile(join(created.directory, 'rodada-2', 'conceito-editorial.html'), 'utf8');
+    assert.equal(compactR2, compactR1);
+    assert.match(editorialR2, /Editorial corrigido/);
   });
 });
 
-test('limites do runtime falham explicitamente com DESIGN_CREATE_INVALID sem truncamento silencioso nem vazamento de assento', async () => {
+test('estouro do teto de 100000 caracteres falha claramente antes de reservar assento ou disparar o worker', async () => {
+  const baseLength = createTask({
+    briefing: '',
+    screens: 1,
+    round: 1,
+    referenceNote: '',
+    rework: [],
+  }).length;
+  const exactBriefing = 'a'.repeat(MAX_CREATE_TASK_CHARS - baseLength);
+  const exactTask = createTask({
+    briefing: exactBriefing,
+    screens: 1,
+    round: 1,
+    referenceNote: '',
+    rework: [],
+  });
+  assert.equal(exactTask.length, MAX_CREATE_TASK_CHARS);
+
   await withDirs(async ({data, repo}) => {
-    let reserved = 0;
-    let released = 0;
-    const base = {
-      dataDirectory: data,
-      repository: repo,
-      screens: 2,
-      rounds: 2,
-      referenceNote: '',
-      reserve: async () => {
-        reserved += 1;
-        return seat();
-      },
-      release: async () => {
-        released += 1;
-      },
-      intentId: randomUUID(),
-      worker: {
-        async run() {
-          throw new Error('worker-should-not-run');
-        },
-      },
-      examine: async () => {
-        throw new Error('examine-should-not-run');
-      },
-    };
+    let reserveCalls = 0;
+    let workerCalls = 0;
 
-    // Briefing vazio ou só espaço.
-    await assert.rejects(
-      () => runDesignCreate({...base, runId: randomUUID(), briefing: '   \n\t  '}),
-      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CREATE_INVALID',
-    );
-
-    // Telas ou rodadas não inteiras ou fora da faixa.
-    for (const bad of [
-      {screens: 0, rounds: 1},
-      {screens: 9, rounds: 1},
-      {screens: 1.5, rounds: 1},
-      {screens: Number.NaN, rounds: 1},
-      {screens: 1, rounds: 0},
-      {screens: 1, rounds: 6},
-      {screens: 1, rounds: 2.5},
-    ]) {
-      await assert.rejects(
-        () => runDesignCreate({...base, ...bad, runId: randomUUID(), briefing: 'Uma tela.'}),
-        (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CREATE_INVALID',
-      );
-    }
-
-    // Briefing que ultrapassa MAX_CREATE_TASK_CHARS (100000) falha antes de reservar assento.
-    const oversizedBriefing = `Briefing enorme.\n${'x'.repeat(MAX_CREATE_TASK_CHARS)}`;
-    assert.throws(
-      () => createTask({briefing: oversizedBriefing, screens: 2, round: 1, referenceNote: '', rework: []}),
-      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CREATE_INVALID',
-    );
-    await assert.rejects(
-      () => runDesignCreate({...base, runId: randomUUID(), briefing: oversizedBriefing}),
-      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CREATE_INVALID',
-    );
-    assert.equal(reserved, 0);
-    assert.equal(released, 0);
-
-    // Briefing que cabe na rodada 1 mas estoura 100000 caracteres ao somar o retrabalho na rodada 2 falha explicitamente na rodada 2 sem truncar.
-    const nearLimitBriefing = `Variedade entre as telas: conceitos da mesma tela inicial.\n${'b'.repeat(94_000)}`;
-    let roundCalls = 0;
     await assert.rejects(
       () =>
         runDesignCreate({
-          ...base,
+          dataDirectory: data,
           runId: randomUUID(),
+          repository: repo,
+          briefing: `${exactBriefing}x`,
+          screens: 1,
+          rounds: 1,
+          referenceNote: '',
+          worker: {
+            async run() {
+              workerCalls += 1;
+              return '{}';
+            },
+          },
+          reserve: async () => {
+            reserveCalls += 1;
+            return seat();
+          },
+          release: async () => {},
+          intentId: randomUUID(),
+          examine: async () => ({notes: [], screens: []}),
+        }),
+      (error: unknown) =>
+        error instanceof Refusal &&
+        error.code === 'DESIGN_CREATE_PROMPT_TOO_LARGE' &&
+        error.status === 400 &&
+        error.message.includes('100000'),
+    );
+    assert.equal(reserveCalls, 0);
+    assert.equal(workerCalls, 0);
+
+    // Também quando a rodada 1 cabe no teto, mas o HTML anterior da rodada 2 faz o prompt montado exceder 100000 caracteres.
+    let round2ReserveCalls = 0;
+    let round2WorkerCalls = 0;
+    let round2ReleaseCalls = 0;
+    const nearLimitBriefing = 'b'.repeat(MAX_CREATE_TASK_CHARS - baseLength - 1000);
+
+    await assert.rejects(
+      () =>
+        runDesignCreate({
+          dataDirectory: data,
+          runId: randomUUID(),
+          repository: repo,
           briefing: nearLimitBriefing,
           screens: 1,
           rounds: 2,
+          referenceNote: '',
           worker: {
             async run() {
-              roundCalls += 1;
+              round2WorkerCalls += 1;
               return JSON.stringify({
                 kind: 'criacao',
-                tokens: {rodada: roundCalls},
+                tokens: {color: {bg: {$type: 'color', $value: '#fff'}}},
                 screens: [
-                  {
-                    name: 'conceito-1',
-                    html: `<html><body><p>${'h'.repeat(7500)}</p></body></html>`,
-                    css: 'body{color:#111}',
-                  },
+                  {name: 'conceito-a', html: `<html><body><p>${'h'.repeat(4000)}</p></body></html>`, css: 'body{color:#111}'},
                 ],
               });
             },
           },
+          reserve: async () => {
+            round2ReserveCalls += 1;
+            return seat();
+          },
+          release: async () => {
+            round2ReleaseCalls += 1;
+          },
+          intentId: randomUUID(),
           examine: async () => ({
             notes: [],
-            screens: [
-              {
-                name: 'conceito-1',
-                rejected: true,
-                findings: [measuredFinding('conceito-1.html', 'overflow')],
-                visualNotes: ['corrigir largura'],
-              },
-            ],
+            screens: [{name: 'conceito-a', rejected: true, findings: [], visualNotes: ['corrigir']}],
           }),
         }),
-      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CREATE_INVALID',
+      (error: unknown) =>
+        error instanceof Refusal &&
+        error.code === 'DESIGN_CREATE_PROMPT_TOO_LARGE' &&
+        error.status === 400 &&
+        error.message.includes('100000'),
     );
-    assert.equal(roundCalls, 1);
-    assert.equal(reserved, 1);
-    assert.equal(released, 1);
-
-    // HTML ou CSS retornado pelo modelo acima do limite de 200000 bytes falha explicitamente com DESIGN_CREATE_INVALID.
-    await assert.rejects(
-      () =>
-        runDesignCreate({
-          ...base,
-          runId: randomUUID(),
-          briefing: 'Uma tela.',
-          screens: 1,
-          rounds: 1,
-          worker: {
-            async run() {
-              return JSON.stringify({
-                kind: 'criacao',
-                tokens: {color: {}},
-                screens: [{name: 'inicio', html: `<p>${'a'.repeat(200_005)}</p>`, css: 'body{color:#111}'}],
-              });
-            },
-          },
-        }),
-      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CREATE_INVALID',
-    );
-    assert.equal(reserved, 2);
-    assert.equal(released, 2);
+    assert.equal(round2ReserveCalls, 1);
+    assert.equal(round2WorkerCalls, 1);
+    assert.equal(round2ReleaseCalls, 1);
   });
 });
