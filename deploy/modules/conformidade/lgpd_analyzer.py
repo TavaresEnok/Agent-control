@@ -3,8 +3,16 @@
 from bisect import bisect_right
 from collections import Counter
 from contextlib import contextmanager
+import json
 import logging
+import os
+from pathlib import Path
 import re
+from shutil import which
+import subprocess
+
+import lgpd_python
+from lgpd_sql import sql_origin
 
 TEXT_SUFFIXES = {
     ".c", ".cc", ".cfg", ".conf", ".cpp", ".cs", ".csv", ".env", ".go", ".graphql",
@@ -20,52 +28,13 @@ FIELD = re.compile(
     r"birthDate|dateOfBirth|nomeCompleto|fullName|endereco|postalAddress)\b",
     re.IGNORECASE,
 )
-SQL_WRITE = re.compile(r"\b(?:INSERT\s+INTO\b|UPDATE\s+[\w.\"\x60\[\]-]+\s+SET\b)", re.IGNORECASE)
-SINKS = [
-    ("LOG", re.compile(r"\b(?:console|logger|logging|log)\.(?:log|info|warn|error|debug|exception)\s*\(|\bprint\s*\(")),
-    ("NETWORK", re.compile(r"\b(?:fetch\s*\(|(?:axios|requests|httpx|httpxClient)\.(?:post|put|patch|request)\s*\()")),
-    ("STORAGE", re.compile(r"\blocalStorage\.setItem\s*\(|" + SQL_WRITE.pattern, re.IGNORECASE)),
-]
-JS_SUFFIXES = (".js", ".jsx", ".mjs", ".ts", ".tsx")
-JS_IDENTIFIER = r"[A-Za-z_$][\w$]*"
-JS_COMMENT = r"//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)"
-JS_TOKEN = re.compile(
-    rf"(?P<comment>{JS_COMMENT})|"
-    r'''(?P<string>"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*')|'''
-    rf"{JS_IDENTIFIER}|\d[\w.]*|\?\.|=>|\.\.\.|\+\+|--|[^\s]",
-)
-JS_GAP = re.compile(rf"(?:\s+|{JS_COMMENT})*")
-JS_REGEX = re.compile(r"/(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*\]|[^/\[\\\r\n])+/[a-zA-Z]*")
-JS_REGEX_AFTER = {
-    "", "(", "[", "{", ";", ",", ":", "=", "?", "!", "~", "+", "-", "*", "/", "%", "&", "|",
-    "^", ">", "=>", "return", "throw", "case", "yield", "await", "void", "typeof", "delete",
-    "in", "of", "instanceof", "else", "do",
-}
-JS_CONTROL_HEADERS = {"if", "while", "for", "with", "switch", "catch"}
-JS_BEFORE_ARRAY = JS_REGEX_AFTER | JS_CONTROL_HEADERS | {"const", "let", "var", "export"}
-JS_TEMPLATE = re.compile(r"\\[\s\S]|`|\$\{")
-JS_OBJECT_KEY = re.compile(r"\s*:")
-JS_SPACE = re.compile(r"\s*")
-JS_EQUALS = r"=(?![=>])"
-JS_INITIALIZER = re.compile(JS_EQUALS)
-JS_DECLARATION = rf"(?<![\w$.])(?:const|let|var)\s+(?:(?P<name>{JS_IDENTIFIER})|(?=[{{\[]))"
-JS_DECLARATOR_NAME = re.compile(JS_IDENTIFIER)
-JS_ASSIGNMENT = rf"(?<![\w$.])(?P<target>{JS_IDENTIFIER})\s*{JS_EQUALS}"
-JS_EVENTS = re.compile(
-    "|".join([f"(?P<declaration>{JS_DECLARATION})", f"(?P<assignment>{JS_ASSIGNMENT})",
-              r"(?P<block>[{}])", r"(?P<comma>,)", r"(?P<sql>\.\s*(?:query|execute)\s*\()"] +
-             [f"(?P<{kind}>(?{'i' if sink.flags & re.IGNORECASE else ''}:{sink.pattern}))"
-              for kind, sink in SINKS]),
-)
-JS_DELIMITERS = re.compile(r"[(){}\[\],;\n]")
-JS_TYPE_DELIMITERS = re.compile(r"=>|[<>(){}\[\],;=\n]")
-JS_REFERENCE = re.compile(rf"(?<!\.)\.\s*[\w$]+|(?<![\w$])(?P<name>{JS_IDENTIFIER})")
-JS_IDENTIFIER_CHAR = re.compile(r"[\w$]")
+JS_SUFFIXES = {".js", ".jsx", ".mjs", ".ts", ".tsx"}
+AST_SUFFIXES = JS_SUFFIXES | {".py"}
 JS_EXPRESSION_LIMIT = 4096
-JS_INCOMPLETE_EXPRESSION = "leituras de expressão incompletas (limite ou delimitadores)"
-JS_INCOMPLETE_LITERAL = "literais ou comentários incompletos"
-JS_UNMEASURED_DECLARATION = "declaradores fora do rastreamento"
-JS_UNMEASURED_SQL = "chamadas SQL sem comando literal analisável"
+JS_BATCH_FILES = 128
+JS_BATCH_BYTES = 1024 * 1024
+JS_UNAVAILABLE = "parser JavaScript/TypeScript indisponível ou interrompido"
+JS_WORKER = Path(__file__).resolve().with_name("lgpd_javascript.mjs")
 PRESIDIO_LOG = logging.getLogger("presidio-analyzer")
 PRESIDIO_TIMEOUT = "Regex pattern '%s' timed out after %s seconds, skipping."
 
@@ -81,304 +50,77 @@ def valid_cpf(value):
     return True
 
 
-def js_previous(code, position, start=0):
-    while position > start:
-        position -= 1
-        if not code[position].isspace():
-            return code[position]
-    return ""
+def javascript_batch(batch):
+    node = which("node")
+    try:
+        if node is None:
+            raise FileNotFoundError
+        payload = "".join(
+            json.dumps((source, Path(file).suffix.lower(), FIELD.pattern, JS_EXPRESSION_LIMIT)) + "\n"
+            for file, source in batch
+        )
+        process = subprocess.run(
+            [node, "--max-old-space-size=192", str(JS_WORKER)],
+            input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True,
+            encoding="utf-8", env={"PATH": os.defpath, "LANG": "C.UTF-8"},
+            cwd=JS_WORKER.parent, timeout=20,
+        )
+        results = [json.loads(line) for line in process.stdout.rstrip("\n").split("\n")]
+        if len(results) != len(batch):
+            raise ValueError
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {file: ({}, Counter({JS_UNAVAILABLE: 1})) for file, _ in batch}
+
+    parsed = {}
+    for (file, _), result in zip(batch, results):
+        destinations = {}
+        gaps = Counter(dict(result["gaps"]))
+        for line, kind, source in result["hits"]:
+            destinations.setdefault(line, {}).setdefault(kind, source)
+        for line, command, parameters in result["sql"]:
+            source = sql_origin(command, parameters, gaps)
+            if source is not None:
+                destinations.setdefault(line, {}).setdefault("STORAGE", source)
+        parsed[file] = destinations, gaps
+    return parsed
 
 
-def js_code(text, gaps):
-    """Mask trivia and literal bodies, retaining offsets and template substitutions."""
-    code = list(text)
-    literals = {}
-    templates = []  # (uninterpolated literal start, brace depth); None depth means template text.
-    headers = []
-    previous = ""
-    subscript = False
-    position = 0
-    while position < len(text):
-        if templates and templates[-1][1] is None:
-            literal_start, _ = templates[-1]
-            for token in JS_TEMPLATE.finditer(text, position):
-                if token.group() not in ("${", "`"):
-                    continue
-                end = token.end()
-                code[position:end] = " " * (end - position - 1) + (")" if token.group() == "`" else "(")
-                if token.group() == "`":
-                    if literal_start is not None:
-                        literals[literal_start] = end
-                    templates.pop()
-                    previous = "value"
-                else:
-                    templates[-1] = (None, 0)
-                    previous = "("
-                break
-            else:
-                code[position:] = " " * (len(text) - position)
-                break
-            position = end
+def javascript_destinations(texts):
+    results = {}
+    batch = []
+    size = 0
+    for file, source in texts:
+        if Path(file).suffix.lower() not in JS_SUFFIXES:
             continue
-
-        token = JS_TOKEN.search(text, position)
-        if token is None:
-            break
-        position = token.end()
-        value = token.group()
-        start = token.start()
-        if token.lastgroup == "comment":
-            if value.startswith("/*") and not value.endswith("*/", 2):
-                gaps[JS_INCOMPLETE_LITERAL] += 1
-            code[start:position] = re.sub(r"[^\n]", " ", value)
-            continue
-        if token.lastgroup == "string":
-            literals[start] = position
-            key = FIELD.fullmatch(value[1:-1])
-            next_token = JS_GAP.match(text, position).end() if key else position
-            following = text[next_token:next_token + 1]
-            if key and ((previous == "[" and subscript and following == "]") or
-                        (previous in ("{", ",") and following == ":")):
-                code[start:position] = " " + key.group() + " "
-            else:
-                code[start:position] = "0" + " " * (len(value) - 1)
-            value = "value"
-        elif value == "/" and previous in JS_REGEX_AFTER:
-            literal = JS_REGEX.match(text, start)
-            if literal is None:
-                gaps[JS_INCOMPLETE_LITERAL] += 1
-                position = text.find("\n", start)
-                if position == -1:
-                    position = len(text)
-            else:
-                position = literal.end()
-            code[start:position] = "0" + " " * (position - start - 1)
-            value = "value"
-        elif value in ('"', "'"):
-            gaps[JS_INCOMPLETE_LITERAL] += 1
-            position = text.find("\n", start)
-            if position == -1:
-                position = len(text)
-            code[start:position] = "0" + " " * (position - start - 1)
-            value = "value"
-        elif value == "`":
-            templates.append((start, None))
-            code[start] = "("
-        elif value == "{" and templates:
-            _, depth = templates[-1]
-            templates[-1] = (None, depth + 1)
-        elif value == "}" and templates:
-            _, depth = templates[-1]
-            if depth == 0:
-                templates[-1] = (None, None)
-                code[start] = ")"
-            else:
-                templates[-1] = (None, depth - 1)
-        elif value == "(":
-            headers.append(previous in JS_CONTROL_HEADERS)
-        elif value == ")" and headers:
-            if headers.pop():
-                value = ";"  # A control header can be followed by a regex expression statement.
-        elif value == "[":
-            subscript = (
-                previous in ("value", ")", "]", "?.") or
-                (previous not in JS_BEFORE_ARRAY and
-                 JS_DECLARATOR_NAME.fullmatch(previous) is not None)
-            )
-        elif previous in (".", "?.") and JS_DECLARATOR_NAME.fullmatch(value):
-            value = "value"
-        previous = value
-    if templates:
-        gaps[JS_INCOMPLETE_LITERAL] += len(templates)
-    return "".join(code), literals
+        length = len(source.encode("utf-8"))
+        if batch and (len(batch) >= JS_BATCH_FILES or size + length > JS_BATCH_BYTES):
+            results.update(javascript_batch(batch))
+            batch, size = [], 0
+        batch.append((file, source))
+        size += length
+    if batch:
+        results.update(javascript_batch(batch))
+    return results
 
 
-def js_expression_end(code, start, closing=None, mode=None, limit=None):
-    end = start + JS_EXPRESSION_LIMIT if limit is None else limit
-    stack = [closing] if closing else []
-    pairs = {"(": ")", "{": "}", "[": "]"}
-    delimiters = JS_DELIMITERS
-    if mode == "annotation":
-        delimiters = JS_TYPE_DELIMITERS
-        pairs["<"] = ">"
-    for match in delimiters.finditer(code, start, end + 1):
-        token = match.group()
-        if stack and token == stack[-1]:
-            stack.pop()
-            if closing and not stack:
-                return match.start(), False
-        elif token in pairs:
-            stack.append(pairs[token])
-        elif token == "," and mode == "first_argument" and len(stack) == 1:
-            return match.start(), False
-        elif token == "\n" and not stack and mode in ("annotation", "declarator"):
-            next_token = JS_SPACE.match(code, match.end()).end()
-            following = code[next_token:next_token + 1]
-            if mode == "annotation" and (following in ("|", "&", "=") or
-                                         js_previous(code, match.start(), start) in ("|", "&")):
-                continue
-            if following == ",":
-                continue
-            return match.start(), False
-        elif token in ("}", ")", "]") or (not stack and token in (",", ";", "\n", "=")):
-            return match.start(), bool(stack)
-    return min(end, len(code)), bool(stack) or end < len(code)
+def inspect_fields(text, file, report, parsed=None):
+    suffix = Path(file).suffix.lower()
+    if suffix in JS_SUFFIXES:
+        cross_line, gaps = parsed if parsed is not None else javascript_batch([(file, text)])[file]
+        lines = re.split(r"\r\n|[\r\n\u2028\u2029]", text)
+    elif suffix == ".py":
+        cross_line, gaps = lgpd_python.destinations(text, FIELD)
+        lines = text.split("\n")
+    else:
+        cross_line, gaps = {}, {}
+        lines = text.splitlines()
 
-
-def js_declarator(code, position):
-    position = JS_SPACE.match(code, position).end()
-    incomplete = False
-    if code[position:position + 1] == ":":
-        type_start = JS_SPACE.match(code, position + 1).end()
-        position, incomplete = js_expression_end(code, type_start, mode="annotation")
-        position = JS_SPACE.match(code, position).end()
-    expression = None
-    end = position
-    if not incomplete and JS_INITIALIZER.match(code, position):
-        start = JS_SPACE.match(code, position + 1).end()
-        end, incomplete = js_expression_end(code, start, mode="declarator")
-        expression = (start, end)
-    return position, end, expression, incomplete
-
-
-def js_events(code, root):
-    position = 0
-    scopes = [root]
-    # Revisit only top-level declarator commas, after handling events inside the initializer.
-    next_declarators = set()
-    while match := JS_EVENTS.search(code, position):
-        position = match.end()
-        kind = match.lastgroup
-        if kind == "block":
-            if match.group() == "{":
-                scope = set()
-                scopes.append(scope)
-                yield kind, match.start(), scope, None
-            elif len(scopes) > 1:
-                yield kind, match.start(), scopes.pop(), None
-        elif kind == "declaration" or (kind == "comma" and match.start() in next_declarators):
-            if kind == "comma":
-                next_declarators.remove(match.start())
-                position = JS_SPACE.match(code, position).end()
-                identifier = JS_DECLARATOR_NAME.match(code, position)
-                name = identifier.group() if identifier else None
-                if identifier:
-                    position = identifier.end()
-            else:
-                name = match.group("name")
-            if name is None:
-                yield "gap", None, None, JS_UNMEASURED_DECLARATION
-                closing = {"{": "}", "[": "]"}.get(code[position:position + 1])
-                if closing is None:
-                    continue
-                pattern_end, incomplete = js_expression_end(code, position + 1, closing=closing)
-                if incomplete:
-                    continue
-                position = pattern_end + 1
-            else:
-                scopes[-1].add(name)
-            position, end, expression, incomplete = js_declarator(code, position)
-            if not incomplete and code[end:end + 1] == ",":
-                next_declarators.add(end)
-            if name is not None:
-                yield "declaration", expression, name, JS_INCOMPLETE_EXPRESSION if incomplete else None
-        elif kind == "assignment":
-            if js_previous(code, match.start()) != ".":
-                start = JS_SPACE.match(code, position).end()
-                end, incomplete = js_expression_end(code, start)
-                yield kind, (start, end), match.group("target"), JS_INCOMPLETE_EXPRESSION if incomplete else None
-        elif match.group().endswith("("):
-            yield kind, position, match.start(), None
-
-
-def js_destinations(text):
-    gaps = Counter()
-    code, literals = js_code(text, gaps)
-    newlines = [match.start() for match in re.finditer("\n", text)]
-    # Collect declarations before evaluating statements, so inner declarations shadow
-    # throughout their blocks. Each name's active binding is the last entry in its stack.
-    root = set()
-    ordered = list(js_events(code, root))
-    bindings = {name: [None] for name in root}
-    destinations = {}
-
-    def line_at(position):
-        return bisect_right(newlines, position) + 1
-
-    def source(start, end, incomplete):
-        if incomplete and end < len(code) and JS_IDENTIFIER_CHAR.match(code, end):
-            while end > start and JS_IDENTIFIER_CHAR.match(code, end - 1):
-                end -= 1
-        field = FIELD.search(code, start, end)
-        if field:
-            return line_at(field.start())
-        for reference in JS_REFERENCE.finditer(code, start, end):
-            binding = bindings.get(reference.group("name"))
-            if not binding or binding[-1] is None:
-                continue
-            if JS_OBJECT_KEY.match(code, reference.end(), end) and js_previous(
-                code, reference.start(), start
-            ) in ("{", ","):
-                continue
-            return binding[-1]
-        return None
-
-    for kind, position, item, gap in ordered:
-        if gap:
-            gaps[gap] += 1
-        if kind == "gap":
-            continue
-        if kind == "block":
-            if code[position] == "{":
-                for name in item:
-                    bindings.setdefault(name, []).append(None)
-            else:
-                for name in item:
-                    bindings[name].pop()
-        elif kind in ("declaration", "assignment"):
-            line = source(*position, bool(gap)) if position is not None else None
-            binding = bindings.get(item)
-            if not binding:
-                binding = bindings[item] = [None]
-            binding[-1] = line
-        else:
-            end, incomplete = js_expression_end(code, position, closing=")")
-            if incomplete:
-                gaps[JS_INCOMPLETE_EXPRESSION] += 1
-            if kind == "sql":
-                start = JS_SPACE.match(code, position, end).end()
-                literal_end = literals.get(start)
-                if literal_end is None:
-                    gaps[JS_UNMEASURED_SQL] += 1
-                    continue
-                if literal_end > end:
-                    continue
-                separator = JS_SPACE.match(code, literal_end, end).end()
-                if separator < end and code[separator] != ",":
-                    gaps[JS_UNMEASURED_SQL] += 1
-                    continue
-                if separator == end or not SQL_WRITE.match(text[start + 1:literal_end - 1].lstrip()):
-                    continue
-                position = separator + 1
-                # The second argument holds the bound values. Later arguments may be callbacks or options.
-                end, incomplete = js_expression_end(code, position, closing=")", mode="first_argument", limit=end)
-                kind = "STORAGE"
-            line = source(position, end, incomplete)
-            if line is not None:
-                destinations.setdefault(line_at(item), {}).setdefault(kind, line)
-    return destinations, gaps
-
-
-def inspect_fields(text, file, report):
     sources = observations = 0
-    javascript = file.lower().endswith(JS_SUFFIXES)
-    cross_line, gaps = js_destinations(text) if javascript else ({}, {})
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(lines, 1):
+        # Field inventory remains a textual signal, independent of destination attribution.
         has_field = bool(FIELD.search(line))
         sources += has_field
-        destinations = cross_line.get(number, {}) if javascript else {
-            kind: number for kind, sink in SINKS if has_field and sink.search(line)
-        }
+        destinations = cross_line.get(number, {})
         for kind, origin in destinations.items():
             observations += 1
             report.find(
@@ -393,9 +135,13 @@ def inspect_fields(text, file, report):
                 "Termo associado a dado pessoal. Inspecionar origem e uso.",
             )
     detail = f"{file} | linhas com campos={sources}, indícios de destino={observations}"
-    if gaps:
+    if suffix not in AST_SUFFIXES:
+        report.cover("lgpd-static:file", "1", "skipped", detail + ". Sem parser de destinos para a extensão.")
+    elif gaps:
         detail += ". Cobertura parcial: " + ", ".join(f"{count} {reason}" for reason, count in sorted(gaps.items())) + "."
-    report.cover("lgpd-static:file", "1", "failed" if gaps else "ok", detail)
+        report.cover("lgpd-static:file", "1", "failed", detail)
+    else:
+        report.cover("lgpd-static:file", "1", "ok", detail)
     return not gaps
 
 

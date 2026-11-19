@@ -5,6 +5,14 @@ FROM --platform=linux/amd64 python@sha256:48d884813cf44e927cf64c5529dd630dd3b183
 ADD --checksum=sha256:69d6a8dda5e2d3ab517ec99b9c16e3f85d3fc74f8bdf373d515592126325e3b4 https://github.com/oss-review-toolkit/ort/releases/download/97.2.0/ort-97.2.0.tgz /tmp/ort.tgz
 RUN mkdir -p /opt/ort && tar -xzf /tmp/ort.tgz --strip-components=1 -C /opt/ort
 
+FROM --platform=linux/amd64 python@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20 AS parser-dist
+ADD --checksum=sha256:df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz /tmp/node.tar.xz
+ADD --checksum=sha256:10e108c9cf7d5f2879053dff18515fb405abf2ccef63eaaf017d9c571687a1d3 https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz /tmp/typescript.tgz
+RUN mkdir -p /opt/typescript \
+ && python3 -c "import tarfile; archive = tarfile.open('/tmp/node.tar.xz'); archive.extractall('/opt', (archive.getmember('node-v22.23.3-linux-x64/' + name) for name in ('bin/node', 'LICENSE')), filter='data')" \
+ && tar -xzf /tmp/typescript.tgz --strip-components=1 -C /opt/typescript \
+      package/lib/typescript.js package/package.json package/LICENSE.txt package/ThirdPartyNoticeText.txt
+
 # hadolint ignore=DL3029
 FROM --platform=linux/amd64 python@sha256:48d884813cf44e927cf64c5529dd630dd3b18338c6dc727991eef9b71e934a20
 
@@ -33,10 +41,14 @@ RUN python3 -m venv /opt/conformidade/venv \
 
 COPY --from=java25 /opt/java/openjdk /opt/java/openjdk
 COPY --from=ort-dist /opt/ort /opt/ort
+COPY --from=parser-dist /opt/node-v22.23.3-linux-x64/bin/node /usr/bin/node
+COPY --from=parser-dist /opt/node-v22.23.3-linux-x64/LICENSE /opt/conformidade/node-LICENSE
+COPY --from=parser-dist /opt/typescript /opt/conformidade/node_modules/typescript
 COPY ort_inventory.py /opt/conformidade/ort_inventory.py
 COPY tools.lock.json /opt/conformidade/tools.lock.json
 COPY license_policy.py /opt/conformidade/license_policy.py
 COPY lgpd_analyzer.py /opt/conformidade/lgpd_analyzer.py
+COPY lgpd_javascript.mjs lgpd_python.py lgpd_sql.py /opt/conformidade/
 COPY collector.py /opt/conformidade/collector.py
 COPY entrypoint.sh /usr/local/bin/conformidade-entrypoint.sh
 
@@ -49,8 +61,10 @@ RUN JAVA_HOME=/opt/java/openjdk /opt/ort/bin/ort --version >/dev/null \
  && chmod -R a+rX /opt/conformidade/venv \
  && cd /opt/conformidade \
  && /opt/conformidade/venv/bin/python3 -c "from lgpd_analyzer import create_presidio; create_presidio()" \
+ && [ "$(node --version)" = v22.23.3 ] \
+ && node /opt/conformidade/lgpd_javascript.mjs </dev/null \
  && chmod 0555 /usr/local/bin/conformidade-entrypoint.sh /opt/conformidade/collector.py \
- && chmod 0444 /opt/conformidade/license_policy.py /opt/conformidade/lgpd_analyzer.py /opt/conformidade/ort_inventory.py /opt/conformidade/tools.lock.json
+ && chmod 0444 /opt/conformidade/license_policy.py /opt/conformidade/lgpd_* /opt/conformidade/ort_inventory.py /opt/conformidade/tools.lock.json
 
 USER 65532:65532
 WORKDIR /tmp

@@ -80,6 +80,21 @@ test('laboratório C9 detecta licença forte e CPF plantados e verifica o contro
   }
 });
 
+test('laboratório C9 atribui apenas as chamadas e os valores armazenados da fixture R6', {skip: !enabled}, async () => {
+  const image = (await readFile(new URL('digest.txt', root), 'utf8')).trim();
+  assert.match(image, /^(?:[A-Za-z0-9._:/-]+@)?sha256:[a-f0-9]{64}$/);
+  const report = await collect(image, 'atribuicao/repo');
+  const expected = JSON.parse(await readFile(join(fixtures, 'atribuicao', 'expected.json'), 'utf8'));
+  for (const [file, locations] of Object.entries(expected)) {
+    assert.ok(report.coverage.some(row => row.tool === 'lgpd-static:file' && row.status === 'ok' &&
+      row.detail.startsWith(file + ' |')), file);
+    const destinations = report.findings.filter(row => row.file === file && row.rule.startsWith('PII_POSSIBLE_'))
+      .map(row => [row.rule.slice('PII_POSSIBLE_'.length), row.line, Number(row.evidence.match(/linha (\d+)\./)?.[1])]);
+    assert.deepEqual(destinations, locations, file);
+  }
+  assert.doesNotMatch(JSON.stringify(report), /SYNTHETIC_|syntheticRow|logger\.info|INSERT INTO/);
+});
+
 test('laboratório C9 carrega o índice empacotado do ScanCode com HOME sem escrita', {skip: !enabled}, async () => {
   const image = (await readFile(new URL('digest.txt', root), 'utf8')).trim();
   assert.match(image, /^(?:[A-Za-z0-9._:/-]+@)?sha256:[a-f0-9]{64}$/);

@@ -238,18 +238,21 @@ def inspect_privacy(selected, version, report):
             report.cover("lgpd:file", "1", "failed", f"{file} | leitura do texto falhou")
             continue
         texts.append((file, text))
-        if path.suffix.lower() in lgpd.CODE_SUFFIXES:
-            static_errors += not lgpd.inspect_fields(text, file, report)
-            static_count += 1
+    parsed = lgpd.javascript_destinations(texts)
+    for file, text in texts:
+        suffix = Path(file).suffix.lower()
+        if suffix in lgpd.CODE_SUFFIXES:
+            static_errors += not lgpd.inspect_fields(text, file, report, parsed.get(file))
+            static_count += suffix in lgpd.AST_SUFFIXES
         else:
             report.cover("lgpd-static:file", "1", "skipped", f"{file} | texto fora do recorte estático de código/config")
     static_status = "failed" if static_errors else ("ok" if static_count else "skipped")
     report.cover(
         "lgpd-static", "1", static_status,
-        f"{static_count} arquivos de código/config examinados, {static_errors} com cobertura parcial. "
-        "JS/TS: vínculos simples, sem fluxo entre funções, análise de ramos ou chaves dinâmicas. "
-        "SQL: parâmetros em chamadas diretas com INSERT/UPDATE literal. "
-        "Outras extensões: heurística por linha.",
+        f"{static_count} arquivos JS/TS/Python examinados, {static_errors} com cobertura parcial. "
+        "AST: vínculos simples, sem fluxo entre funções, análise de ramos ou chaves dinâmicas. "
+        "SQL: parâmetros vinculados a valores de INSERT/UPDATE literal no recorte. "
+        "Outras extensões de código/config: inventário textual de campos.",
     )
 
     if not texts:
