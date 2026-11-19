@@ -372,3 +372,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:35 UTC — Suíte oficial em ace07a61 aprovada com TypeScript, 253 arquivos, 52 complementares e laboratório. CLI incremental de arquitetura em 84f5e90b aprovada em 6/6. Nova ordem C5-R6 para impedir atribuição de uma rejeição de banco ao arquivo errado. QA 69fe35e3 recebido para reconstrução da imagem.
 - 19/11/2026 04:35 UTC — Trabalho C5-R6 iniciado por Sol high normal em final-c5.
 - 19/11/2026 04:37 UTC — QA R10 passou nos 43 testes do coletor e laboratório sem saltos. A prova usa a imagem 80c3c6ab, reconstruiu os casos de mutação e conferiu a relação entre requisito e arquivo.
+- 19/11/2026 04:38 UTC — Aberta a ordem de exame independente para estender aos demais módulos a validação da condição exata registrada pelo coletor. Um achado sem evidência suficiente continua provável.
