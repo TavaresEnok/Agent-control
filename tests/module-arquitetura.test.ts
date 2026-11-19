@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
-import {
+import fs, {
   chmodSync,
   cpSync,
   existsSync,
@@ -14,6 +14,7 @@ import {
   truncateSync,
   writeFileSync,
 } from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
 import {tmpdir} from 'node:os';
 import {delimiter, join} from 'node:path';
 import {test} from 'node:test';
@@ -225,12 +226,18 @@ test('origem e destino relativos usam a âncora local mesmo sem process.cwd()', 
     const cwd = t.mock.method(process, 'cwd', () => {
       throw new Error('a cópia relativa deve abrir o diretório atual diretamente');
     });
+    const open = t.mock.method(fs, 'openSync');
+    syncBuiltinESMExports();
     try {
       const snapshot = copyRepoSafely('entrada', 'saida');
+      const opened = open.mock.calls.map(call => call.arguments[0]);
+      assert.deepEqual(opened.filter(path => path === '.' || path === '/'), ['.', '.']);
       assert.equal(snapshot.failure, undefined);
       assert.deepEqual(snapshot.copiedFiles, ['controle.ts']);
       assert.equal(readFileSync('saida/controle.ts', 'utf8'), 'export const ok = 1;');
     } finally {
+      open.mock.restore();
+      syncBuiltinESMExports();
       cwd.mock.restore();
     }
   } finally {
