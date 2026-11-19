@@ -1336,3 +1336,11 @@ PAUSADO-COTA
 - 19/11/2026 22:42 UTC — revisor-C-ACEITE-CONFORMIDADE-VIVA-R6 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 22:42 UTC — C-PRONTIDAO-VIVA-R9 encerrado com código 0.
 - 19/11/2026 22:42 UTC — Correção pront-viva recebida em 42eac87f. Revisão Sol high somente leitura solicitada.
+- 19/11/2026 22:43 UTC — C-ACEITE-CONFORMIDADE-VIVA-R6 encerrado com código 0.
+- 19/11/2026 22:43 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA-R9 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 22:45 UTC — C-ACEITE-PRONTIDAO-VIVA-R9 encerrado com código 0.
+- 19/11/2026 22:45 UTC — Imagem de conformidade construída e arquivada por digest em b4e285f7.
+- 19/11/2026 22:46 UTC — Imagem de prontidao construída e arquivada por digest em d006ab75.
+- 19/11/2026 22:46 UTC — Conferido diretamente na imagem fixada de prontidão o GNU coreutils 9.7, distinto do 9.4 do host de trabalho. Com /bin/true inerte, os sinais numéricos 32, 33, 143, 160 e 271 foram aceitos, 30S e 30ss rejeitados e 0x1P2s aceito.
+- 19/11/2026 22:46 UTC — prontidao em d006ab75 publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 183, 'failed': 3, 'skipped': 7}; código do produto VERIFY_TOOLS_FAILED.
+- 19/11/2026 22:46 UTC — Alinha o analisador à imagem GNU 9.7 e respeita o fim das opções. Ordem C-PRONTIDAO-VIVA-R10 em worktree separado conforme 43f1c664.
