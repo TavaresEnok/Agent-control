@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
-import {readFile} from 'node:fs/promises';
+import {readFile, unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {mapModuleSnapshot} from '../src/module-exam-map.ts';
 import {examineFunctionalModule, type ModuleExamSeat} from '../src/module-exam.ts';
-import {runVerificationModule} from '../src/verification-modules.ts';
+import {recheckModuleFindings, runVerificationModule} from '../src/verification-modules.ts';
 import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
 
 const databaseUrl = process.env.AC_TEST_DATABASE_URL;
@@ -20,6 +20,7 @@ test('exame indisponível conserva a evidência do coletor sem atribuir confirma
     const withoutExam = await runVerificationModule({...input, collectorOutput});
     assert.equal(withoutExam.achados[0]?.status, 'provavel');
     assert.equal(withoutExam.achados[0]?.verifier, null);
+    assert.match(await readFile(join(withoutExam.directory, 'cobertura.md'), 'utf8'), /fixture@1/);
     const result = await runVerificationModule({...input, collectorOutput, async examinar(req) {
       const map = await mapModuleSnapshot(req.snapshot);
       return examineFunctionalModule({...req, map});
@@ -61,6 +62,18 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
     assert.match(await readFile(join(result.directory,'cobertura.md'),'utf8'), /fixture@1/);
     const recorded = JSON.parse(await readFile(join(result.directory,'bruto','exame.json'),'utf8'));
     assert.deepEqual(recorded, [{id:'ACH-002',file:'fixture.txt',line:1,evidence:'synthetic'}]);
+    await unlink(join(result.directory, 'bruto', 'exame.json'));
+    let reviewed = false;
+    const recheck = await recheckModuleFindings(input.ledger, input.principal, input.authority, {
+      projectId: input.projectId, dataDirectory: input.dataDirectory, runId: result.runId, achadoIds:['ACH-002'],
+      async review(request) {
+        assert.equal(JSON.parse(request.task).evidence, 'synthetic');
+        reviewed = true;
+        return {reason: 'MODULE_EXAM_REVIEWER_UNAVAILABLE'};
+      },
+    });
+    assert.equal(reviewed, true);
+    assert.equal(recheck.results[0]?.status, 'pendente');
     assert.match(await readFile(join(result.directory, 'mapa.md'), 'utf8'), /fixture\.txt \| lido/);
   });
 });

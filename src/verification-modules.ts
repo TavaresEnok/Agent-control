@@ -1352,12 +1352,14 @@ export async function writeModuleReport(input: {
   const discarded = achados.filter(item => item.status === 'descartado').length;
   let mapMarkdown = renderModuleMapMarkdown(input.module, fileCoverage.map(row => row.file), toolCoverage);
   let coverageBody = renderModuleCoverageMarkdown(toolCoverage, fileCoverage);
-  if (input.exam) {
-    const cell = (value: string) => sanitizeText(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+  const cell = (value: string) => sanitizeText(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;').replaceAll('|', '&#124;').replace(/[\r\n]+/g, ' ');
-    const measurements = [...(input.measuredFiles ?? [])].map(([file, rows]) =>
+  if (input.measuredFiles?.size) {
+    const measurements = [...input.measuredFiles].map(([file, rows]) =>
       `| ${cell(file)} | ${[...new Set(rows.map(row => cell(row.tool) + '@' + cell(row.version)))].join(', ')} |`);
     coverageBody += ['', '## Medições do coletor por arquivo', '', '| Arquivo | Ferramentas |', '|---|---|', ...measurements, ''].join('\n');
+  }
+  if (input.exam) {
     const files = input.exam.coverage.map(row =>
       `| ${cell(row.file)} | ${cell(row.status)} | ${cell(row.reason ?? row.examiner?.model ?? '')} |`);
     const routes = input.exam.routes.map(row =>
@@ -2024,7 +2026,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         id: `ACH-${String(achados.length + 1).padStart(3, '0')}`, title: sanitizeText(judged.title), severity: judged.severity,
         status: verifier ? judged.status : 'provavel', verifier,
         reference: 'exame-de-arquivo', where: {file: judged.file, line: judged.line}, scenario: sanitizeText(judged.evidence),
-        proof: sanitizeText(judged.proof), suggestion: 'Revisar o trecho indicado e verificar a correção.',
+        proof: sanitizeText(verifier ? judged.proof : judged.evidence), suggestion: 'Revisar o trecho indicado e verificar a correção.',
         acceptance: REMEDIATION_ACCEPTANCE, sources: ['examinador', 'exame-de-arquivo'], secretPreview: null,
       }));
     }
@@ -2888,13 +2890,13 @@ export async function recheckModuleFindings(
   const loaded = await ledger.tx(async client => {
     await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
     signal?.throwIfAborted();
-    const run = (await client.query<{id: string; module: string; report_dir: string; recheck_generation: string}>(
+    const run = (await client.query<{id: string; module: string; commit_id: string; report_dir: string; recheck_generation: string}>(
       `UPDATE ac_verify_runs r SET recheck_generation=r.recheck_generation+1
        FROM ac_exam_contexts e WHERE r.id=$1 AND r.project_id=$2 AND r.context_id=$3
        AND e.project_id=r.project_id AND e.context_id=r.context_id AND e.module=r.module
        AND ($4::text IS NULL OR r.module=$4) AND r.module <> 'verify' AND r.status IN ('done','failed')
        AND r.report_dir NOT IN ('pending','discarded') AND r.report_dir NOT LIKE 'discarded:%'
-       RETURNING r.id::text, r.module, r.report_dir, r.recheck_generation::text`,
+       RETURNING r.id::text, r.module, r.commit_id, r.report_dir, r.recheck_generation::text`,
       [input.runId, input.projectId, authority.contextId, input.module ?? null],
     )).rows[0];
     if (!run) throw new Refusal('VERIFY_RUN_MISSING', 404);
@@ -2954,10 +2956,15 @@ export async function recheckModuleFindings(
   let completed = false;
   try {
     const audit: (ModuleRecheckResult & {examiner: ModuleRecheckExaminer | null; reviewer: ModuleRecheckReviewer | null; proofDigest: string | null})[] = [];
-    const reviewedSources = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo')
+    const sourceFile = join(directory, 'bruto', 'exame.json');
+    const hasExamFindings = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo');
+    const archived = hasExamFindings && await lstat(sourceFile).then(() => true, error => {
+      if (isErrno(error, 'ENOENT')) return false;
+      throw error;
+    });
+    const reviewedSources = archived
       ? z.array(z.object({id: z.string(), file: z.string(), line: z.number().int().positive(), evidence: z.string()})).max(999)
-        .parse(JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'exame.json'), 'VERIFY_REPORT_INVALID')))
-      : [];
+        .parse(JSON.parse(await readTextInside(directory, sourceFile, 'VERIFY_REPORT_INVALID'))) : [];
     for (const item of loaded.items) {
       signal?.throwIfAborted();
       const row = byFile.get(item.file);
@@ -2965,16 +2972,21 @@ export async function recheckModuleFindings(
       const examiner: ModuleRecheckExaminer | null = row.provenance === 'examiner' ? {
         provider: row.examiner_provider, model: row.examiner_model, profileId: row.profile_id, accountId: row.account_id,
       } : null;
+      const logOrProtected = protectedRecheckFile(item.file);
+      const fromExaminer = item.tool === 'examinador' && item.rule === 'exame-de-arquivo';
       const observed = reviewedSources.find(source => source.id === item.id);
-      const original = item.tool === 'examinador' && item.rule === 'exame-de-arquivo'
-        ? (observed && observed.evidence === item.scenario ? {...observed, tool: item.tool, rule: item.rule} : undefined)
+      const historicalLine = fromExaminer && !archived && !logOrProtected && /^[0-9a-f]{40}$/.test(loaded.run.commit_id)
+        ? await readRecheckLine(loaded.repo, loaded.run.commit_id, item.file, item.line, signal) : '';
+      const legacyEvidence = historicalLine && item.scenario.trim() && historicalLine.includes(item.scenario.trim());
+      const original = fromExaminer
+        ? (archived ? observed : legacyEvidence ? {file: item.file, line: item.line, evidence: item.scenario} : undefined)
         : raw.findings[Number(item.id.slice(4)) - 1];
-      if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) {
+      if ((archived || !fromExaminer) && (!original || original.file !== item.file || original.line !== item.line ||
+          (fromExaminer ? original.evidence !== item.scenario : !('tool' in original) || original.tool !== item.tool || original.rule !== item.rule))) {
         throw new Refusal('VERIFY_REPORT_INVALID', 400);
       }
-      const logOrProtected = protectedRecheckFile(item.file);
-      const sourceKnown = examiner || (row.provenance === 'collector' && item.tool !== 'examinador');
-      const evidence = logOrProtected ? '' : sanitizeRecheckText(original.evidence);
+      const sourceKnown = original && (examiner || (row.provenance === 'collector' && !fromExaminer));
+      const evidence = !original || logOrProtected ? '' : sanitizeRecheckText(original.evidence);
       const line = !logOrProtected && sourceKnown ? await readRecheckLine(loaded.repo, head, item.file, item.line, signal) : '';
       let result: ModuleRecheckResult;
       let reviewer: ModuleRecheckReviewer | undefined;
