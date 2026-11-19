@@ -862,3 +862,10 @@ PAUSADO-COTA
 - 19/11/2026 18:29 UTC — C5-ACEITE-POSICAO encerrado com código 0.
 - 19/11/2026 18:30 UTC — C8-ORIGEM-LEXICA encerrado com código 0.
 - 19/11/2026 18:30 UTC — Nova rodada de QA para citação literal, herança PostgreSQL e diagnóstico isolado de Go. Banco recebeu aceite estático de posição, e arquitetura passou na suíte oficial, nos 52 testes complementares e no laboratório. Revisão de recuperação A3 encomendada para o fechamento.
+- 19/11/2026 18:30 UTC — trabalho-C2-MATRIZ-CITACAO iniciado em final-qa-matriz-r12 por Sol medium normal.
+- 19/11/2026 18:30 UTC — trabalho-C2-BANCO-HERANCA iniciado em final-qa-banco-local por Sol high normal.
+- 19/11/2026 18:30 UTC — trabalho-C2-GO-CABECALHOS iniciado em final-qa-mutacao-linguagens por Sol medium normal.
+- 19/11/2026 18:30 UTC — revisor-A3-RECUPERACAO-FECHAMENTO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:31 UTC — Aceite de entrega-qa-1 em 0d8198b6 passou em TypeScript, suíte oficial, complementares e laboratório.
+- 19/11/2026 18:31 UTC — Aceite de qa em 9a0b9fd6 iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
+- 19/11/2026 18:31 UTC — A base de QA 0d8198b6 passou nos 130 testes do laboratório, além da suíte oficial e complementares. Os ramos acumulados C4 a C8 receberam os controles de arquitetura e QA. A correção lexical e54dbc2a segue para reensaio com a imagem de documentação.
