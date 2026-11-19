@@ -395,3 +395,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:49 UTC — Revisor encerrou C8-R6 em 96a7a766 (código 0). Gerente confere a entrega.
 - 19/11/2026 04:49 UTC — Revisão C-EXAME-R4 iniciada por Sol high normal somente leitura em 3ec5a0fe.
 - 19/11/2026 04:49 UTC — QA visual recebeu ordem para medir contraste com Chromium e comparar somente referências versionadas no snapshot. A suíte de QA aceita a medição de requisitos sem esconder os defeitos funcionais; a verificação das oito CLIs foi concluída em homologação.
+- 19/11/2026 04:51 UTC — Banco de dados R6, imagem fixada em b39683af, passou nos 12 testes e laboratório com PostgreSQL, Dexter e Squawk. A rejeição do lote original é preservada nos casos ambíguos. Integração incremental C5 a8113f92, C6 d7f37795, C7 f154d09a, C8 20e1dce5, C9 b53f2fb4. Em QA, o teste nativo com TAP explícito passou em 8/8, incluindo antes e depois da correção funcional.
