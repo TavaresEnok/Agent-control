@@ -2616,7 +2616,36 @@ test('R12: posições possíveis de timeout e rotinas condicionais por pilar', (
       ['timeout -- -0x0p0 npm run personal:watch', null, true],
       ['timeout -- -0x0s npm run personal:watch', null, true],
       ['timeout -- 30s pg_dump -h db.example app', null, true],
+      ['pg_dump -h', null, false],
+      ['pg_restore -d app -h', null, false],
+      ['timeout -- 1,5s pg_dump -h', null, false],
+      ['timeout -- 1,5s pg_restore -d app -h', null, false],
+      ["find . -exec echo '-mtime' '+7' '-delete' '{}' +", null, false],
+      ["timeout -- 1,5s find . -exec echo '-mtime' '+7' '-delete' '{}' +", null, false],
+      ['timeout -s"$SINAL" npm run personal:watch', null, false],
+      ['timeout invalido"$OPCAO" 30s npm run personal:watch', null, false],
+      ['timeout 3"$LIMITE" npm run personal:watch', 0, false],
+      ['timeout -- 1,5s restic --help', null, false],
+      ['timeout -- 1,5s borg --help', null, false],
+      ['timeout --signal=$OPCOES TERM 30s df -P /', 1, false],
+      [`timeout -- 30s sh -c 'sh -c "pg_dump db"'`, null, true],
+      [`timeout -- 1,5s sh -c 'sh -c "pg_dump db"'`, 2, false],
+      [`timeout -- 30s sh -c 'sh -c "sh -c \"pg_dump db\""'`, 2, false],
+      ['timeout -- 1,5s pg_dump -h db.example app', 2, false],
+      ['pg_dump -h db.example app', null, true],
+
     ];
+    for (const [line, rule, present] of [
+      ['pg_restore -d app -h', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', true],
+      ['pg_restore -d app -h db.example', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE', false],
+      ["pg_dump db; find . -exec echo '-mtime' '+7' '-delete' '{}' +", 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', true],
+      ['pg_dump db\nfind . -mtime +7 -delete', 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', false],
+    ] as [string, string, boolean][]) {
+      // Separate declarations avoid treating a compound command as certain evidence.
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line.replace('; ', '\n')}\n`);
+      const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+      assert.equal(out.findings.some(f => f.rule === rule), present, line);
+    }
     for (const [line, partial, positive] of cases) {
       writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\n${line}\n`);
       const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
