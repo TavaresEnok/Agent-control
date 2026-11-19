@@ -122,9 +122,14 @@ test('a CLI de Docker identifica a ausência de um digest antes de criar o cont�
 }, async () => {
   await withModuleRecoveryFixture(process.env.AC_TEST_DATABASE_URL!, async input => {
     const image = 'sha256:' + randomUUID().replaceAll('-', '').repeat(2);
-    const result = await runVerificationModule({...input, image});
+    const operations: string[] = [];
+    const result = await runVerificationModule({...input, image, executeCollectorProcess: async (args, options) => {
+      operations.push(args.slice(1, 3).join(' '));
+      return runBoundedCollectorProcess(args, options);
+    }});
+    assert.deepEqual(operations, ['image inspect']);
     assert.equal(result.hasToolFailure, true);
-    assert.match(result.toolCoverage[0]!.detail, /VERIFY_MODULE_IMAGE_MISSING/);
+    assert.equal(result.toolCoverage[0]!.detail, 'Imagem fixada do módulo ausente no Docker local (VERIFY_MODULE_IMAGE_MISSING).');
     const {rows: [row]} = await input.ledger.pool.query(
       'SELECT collector_container_token FROM ac_verify_runs WHERE id=$1', [result.runId],
     );

@@ -2,7 +2,7 @@ import {lstatSync, readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
-import {parse, serialize} from 'parse5';
+import {parse} from 'parse5';
 import {chromium} from 'playwright-core';
 import {compareVisualPng, compatibleReference, staticPngSize} from './visual-reference.mjs';
 
@@ -31,45 +31,58 @@ const maxPageNodes = 6000;
 const maxContrastFindings = 40;
 const axeRule = 'color-contrast';
 
-function visualProfile(inImage) {
+function visualProfile() {
   return {
     schema: 1, ...viewport, deviceScaleFactor: presentation.deviceScaleFactor, playwright, chromium: browserVersion,
-    renderer: inImage ? `${baseImage.name}@${baseImage.digest}/${process.arch}` : `host/${process.platform}/${process.arch}`,
-    presentation: 'chromium-headless-css-light-reduced-motion-pt-BR-UTC-v1',
+    renderer: `${baseImage.name}@${baseImage.digest}/${process.arch}`,
+    presentation: 'chromium-headless-css-light-reduced-motion-pt-BR-UTC-v2',
   };
 }
 
-function prepareDocument(rawHtml) {
-  if (rawHtml.split('<', maxPageNodes + 1).length > maxPageNodes) throw new Error('QA_BROWSER_HTML_NODES');
-  const document = parse(rawHtml, {sourceCodeLocationInfo: true});
+function inspectHtmlBytes(raw) {
+  // Os encodings HTML são compatíveis com ASCII para estes tokens, ou UTF-16 com BOM.
+  const markup = raw.toString('latin1').replaceAll('\0', '');
+  if (markup.split('<', maxPageNodes + 1).length > maxPageNodes) throw new Error('QA_BROWSER_HTML_NODES');
+  return /http-equiv/i.test(markup);
+}
+
+function sourceLocations(raw, charset) {
   const locations = new Map();
-  let embedded = 0;
+  let html;
+  try {
+    html = new TextDecoder(charset).decode(raw);
+  } catch {
+    return locations;
+  }
+  const document = parse(html, {sourceCodeLocationInfo: true});
   let visited = 0;
 
   function visit(parent, parentPath = '', depth = 0) {
     if (depth > 100) throw new Error('QA_BROWSER_HTML_DEPTH');
     let childIndex = 0;
-    parent.childNodes = parent.childNodes.filter(node => {
+    let shadowTemplate = false;
+    for (const node of parent.childNodes) {
       if (++visited > maxPageNodes) throw new Error('QA_BROWSER_HTML_NODES');
-      if (!node.tagName) return true;
-      const attr = name => node.attrs.find(item => item.name === name)?.value.toLowerCase().trim();
-      const tag = node.tagName.toLowerCase();
-      if (['iframe', 'frame', 'object', 'embed', 'portal', 'video', 'audio'].includes(tag)) {
-        embedded++;
-        return false;
+      if (!node.tagName) continue;
+      if (node.tagName === 'template' && node.content) {
+        // O mesmo índice no DOM vivo ignora templates HTML, consumidos ou não pelo parser.
+        // Se o primeiro template declarativo gerar um ShadowRoot, este será seu caminho.
+        const mode = node.attrs.find(item => item.name === 'shadowrootmode')?.value.toLowerCase();
+        if (!shadowTemplate && (mode === 'open' || mode === 'closed')) {
+          shadowTemplate = true;
+          if (mode === 'open') visit(node.content, `${parentPath}/#shadow`, depth + 1);
+        }
+        continue;
       }
-      if (tag === 'script' || (tag === 'meta' && attr('http-equiv') !== undefined) ||
-          (tag === 'link' && !attr('rel')?.split(/\s+/).includes('stylesheet'))) return false;
-      const path = `${parentPath}/${childIndex++}`;
+      const path = `${parentPath}/${childIndex++}:${node.tagName}`;
       const line = node.sourceCodeLocation?.startLine;
-      if (line) locations.set(path, {tag, line});
+      if (line) locations.set(path, line);
       if (node.childNodes?.length) visit(node, path, depth + 1);
-      return true;
-    });
+    }
   }
 
   visit(document);
-  return {html: serialize(document), locations, embedded};
+  return locations;
 }
 
 function snapshotFile(workspace, files, file) {
@@ -91,13 +104,45 @@ function localResource(url) {
   return parts.join('/');
 }
 
-async function routeSnapshot(page, {workspace, files, file, html}) {
-  const documentUrl = urlFor(file);
+function htmlResponse(body, policy) {
+  return {body, contentType: 'text/html',
+    headers: {'content-security-policy': policy, 'x-dns-prefetch-control': 'off', 'x-content-type-options': 'nosniff'}};
+}
+
+async function hasMetaRefresh(context, documentUrl, html, timeout) {
+  // A prévia com sandbox impede refresh (inclusive imediato), scripts e recursos.
+  // A medição usa a política regular para permitir os temporizadores do axe via CDP.
+  const page = await context.newPage();
+  try {
+    let blockedRefresh = false;
+    page.on('console', message => {
+      if (message.text().includes("Refused to execute the redirect specified via '<meta http-equiv='refresh'")) {
+        blockedRefresh = true;
+      }
+    });
+    await page.route('**/*', route => {
+      const request = route.request();
+      if (request.resourceType() === 'document' && request.url() === documentUrl) {
+        return route.fulfill(htmlResponse(html, "sandbox allow-same-origin; default-src 'none'; base-uri 'none'"));
+      }
+      return route.abort('blockedbyclient');
+    });
+    const response = await page.goto(documentUrl, {waitUntil: 'load', timeout});
+    if (!response?.ok()) throw new Error('QA_BROWSER_RENDER');
+    const refreshInDocument = await page.evaluate(() => Boolean(document.querySelector('meta[http-equiv="refresh" i]')));
+    return blockedRefresh || refreshInDocument;
+  } finally {
+    await page.close();
+  }
+}
+
+async function routeSnapshot(page, {workspace, files, documentUrl, html}) {
   let requests = 0;
   let totalBytes = 0;
   let images = 0;
   let imagePixels = 0;
   let blocked = 0;
+  const pngs = new Map();
   const abort = route => {
     blocked++;
     return route.abort('blockedbyclient');
@@ -112,8 +157,7 @@ async function routeSnapshot(page, {workspace, files, file, html}) {
     const type = request.resourceType();
     const url = request.url();
     if (type === 'document' && requests === 1 && url === documentUrl) {
-      return route.fulfill({body: html, contentType: 'text/html; charset=utf-8',
-        headers: {'content-security-policy': csp, 'x-dns-prefetch-control': 'off', 'x-content-type-options': 'nosniff'}});
+      return route.fulfill(htmlResponse(html, csp));
     }
 
     let resource;
@@ -124,7 +168,7 @@ async function routeSnapshot(page, {workspace, files, file, html}) {
     }
     if (!resource) return abort(route);
     let contentType;
-    if (type === 'stylesheet' && /\.css$/i.test(resource)) contentType = 'text/css; charset=utf-8';
+    if (type === 'stylesheet' && /\.css$/i.test(resource)) contentType = 'text/css';
     if (type === 'image' && /\.png$/i.test(resource) && !/\.qa-visual\.png$/i.test(resource)) contentType = 'image/png';
     if (!contentType) return abort(route);
     const body = snapshotFile(workspace, files, resource);
@@ -134,11 +178,40 @@ async function routeSnapshot(page, {workspace, files, file, html}) {
       if (!size || images >= 16 || imagePixels + size.width * size.height > 4000000) return abort(route);
       images++;
       imagePixels += size.width * size.height;
+      if (!pngs.has(resource)) pngs.set(resource, {base64: body.toString('base64'), ...size});
     }
     totalBytes += body.length;
     return route.fulfill({body, contentType, headers: {'x-content-type-options': 'nosniff'}});
   });
-  return {documentUrl, blockedCount: () => blocked};
+  return {pngs, blockedCount: () => blocked};
+}
+
+async function inspectRender(page, pngs) {
+  return page.evaluate(async images => {
+    let missing = 0;
+    let embedded = 0;
+    const roots = [document];
+    for (const root of roots) {
+      for (const element of root.querySelectorAll('*')) {
+        if (element.shadowRoot) roots.push(element.shadowRoot);
+        if (element instanceof HTMLImageElement && element.currentSrc && (!element.complete || !element.naturalWidth)) missing++;
+        if (element.matches('link[rel~="stylesheet" i]') && !element.disabled && !element.sheet) missing++;
+        if (element.matches('iframe, frame, object, embed, portal, video, audio')) embedded++;
+      }
+    }
+    // Inclui PNGs de CSS, que não aparecem como elementos HTMLImageElement.
+    for (const {base64, width, height} of images) {
+      try {
+        const blob = new Blob([Uint8Array.fromBase64(base64)], {type: 'image/png'});
+        const bitmap = await createImageBitmap(blob);
+        if (bitmap.width !== width || bitmap.height !== height) missing++;
+        bitmap.close();
+      } catch {
+        missing++;
+      }
+    }
+    return {missing, embedded, charset: document.characterSet};
+  }, [...pngs.values()]);
 }
 
 async function measureContrast(page, source) {
@@ -146,21 +219,23 @@ async function measureContrast(page, source) {
     // Playwright executa apenas esta fonte confiável, via CDP. A CSP bloqueia scripts e handlers do documento.
     window.eval(source);
     const result = await window.axe.run(document, {
-      runOnly: {type: 'rule', values: [rule]}, iframes: false, resultTypes: ['violations', 'incomplete'],
+      runOnly: {type: 'rule', values: [rule]}, iframes: false, elementRef: true,
+      resultTypes: ['violations', 'incomplete'],
     });
     const violation = result.violations[0];
     const nodes = (violation?.nodes ?? []).slice(0, limit).map(node => {
-      const selector = node.target.length === 1 && node.target[0];
-      let element;
-      try {
-        if (typeof selector === 'string') element = document.querySelector(selector);
-      } catch { /* seletores sem correspondência recebem a localização do documento */ }
-      const indexes = [];
-      const tag = element?.localName;
-      for (let current = element; current; current = current.parentElement) {
-        indexes.unshift(Array.prototype.indexOf.call(current.parentNode.children, current));
+      const path = [];
+      for (let nodeElement = node.element; nodeElement; ) {
+        let index = 0;
+        for (let sibling = nodeElement.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+          if (!(sibling instanceof HTMLTemplateElement)) index++;
+        }
+        path.unshift(`${index}:${nodeElement.localName}`);
+        const parent = nodeElement.parentNode;
+        if (parent instanceof ShadowRoot) path.unshift('#shadow');
+        nodeElement = parent instanceof ShadowRoot ? parent.host : nodeElement.parentElement;
       }
-      return {path: `/${indexes.join('/')}`, tag, html: node.html.slice(0, 180),
+      return {path: `/${path.join('/')}`, html: node.html.slice(0, 180),
         ratio: node.any.find(check => Number.isFinite(check.data?.contrastRatio))?.data.contrastRatio};
     });
     return {nodes, total: violation?.nodes.length ?? 0, evaluated: Boolean(violation || result.passes.length),
@@ -209,7 +284,7 @@ export async function runBrowserQa({workspace, copiedFiles, htmlFiles, inImage, 
   const extraRows = [];
   const findings = [];
   const files = new Set(copiedFiles);
-  const profile = visualProfile(inImage);
+  const profile = inImage ? visualProfile() : undefined;
   let version = unmeasured;
   const fileRow = (prefix, file, status, detail, toolVersion = version) => {
     extraRows.push(row(key(prefix, file), toolVersion, status, `${file} / ${detail}`));
@@ -217,17 +292,20 @@ export async function runBrowserQa({workspace, copiedFiles, htmlFiles, inImage, 
   const regress = (file, status, detail) => fileRow('qa-regressao-visual', file, status, detail);
   const hasReference = file => files.has(`${file}.qa-visual.json`) || files.has(`${file}.qa-visual.png`);
   const missingReference = incomplete ? 'referência ausente no snapshot parcial' : 'sem referência versionada no snapshot';
-  const skipComparison = (file, reason) => regress(file, 'skipped', hasReference(file) ? reason : missingReference);
   const skipPage = (file, reason) => {
     fileRow(name, file, 'skipped', reason);
     fileRow('qa-contraste', file, 'skipped', reason);
-    skipComparison(file, `renderização indisponível: ${reason}`);
+    regress(file, 'skipped', `renderização indisponível: ${reason}${hasReference(file) ? '' : `; ${missingReference}`}`);
   };
 
   const selected = htmlFiles.slice(0, maxPages);
+  const excluded = htmlFiles.slice(maxPages);
+  const excludedDetail = `${excluded.length} fora do limite de ${maxPages}`;
+  excluded.forEach(file => skipPage(file, `fora do limite de ${maxPages} páginas`));
   const unavailable = reason => {
     selected.forEach(file => skipPage(file, reason));
-    return {coverageRow: row(name, version, 'skipped', `${reason}; 0/${htmlFiles.length} páginas renderizadas`), extraRows, findings};
+    return {coverageRow: row(name, version, 'skipped',
+      `${reason}; 0/${htmlFiles.length} páginas renderizadas, ${excludedDetail}`), extraRows, findings};
   };
   if (!allowed) return unavailable('isolamento offline do contêiner indisponível');
 
@@ -263,35 +341,36 @@ export async function runBrowserQa({workspace, copiedFiles, htmlFiles, inImage, 
         const result = await withDeadline(remaining, async () => {
           const raw = snapshotFile(workspace, files, file);
           if (!raw) throw new Error('QA_BROWSER_HTML_MISSING');
-          const prepared = prepareDocument(raw.toString('utf8'));
+          const checkRefresh = inspectHtmlBytes(raw);
+          const documentUrl = urlFor(file);
           context = await browser.newContext({...presentation, offline: true, serviceWorkers: 'block'});
           if (cancelled) return context.close();
+          if (checkRefresh && await hasMetaRefresh(context, documentUrl, raw, remaining)) {
+            throw new Error('QA_BROWSER_META_REFRESH');
+          }
           const page = await context.newPage();
-          const {documentUrl, blockedCount} = await routeSnapshot(page, {workspace, files, file, html: prepared.html});
+          const {pngs, blockedCount} = await routeSnapshot(page, {workspace, files, documentUrl, html: raw});
           const response = await page.goto(documentUrl, {waitUntil: 'load', timeout: remaining});
           if (!response?.ok() || page.url() !== documentUrl) throw new Error('QA_BROWSER_RENDER');
-          const missing = await page.evaluate(() => {
-            const images = Array.from(document.images).filter(img => img.currentSrc && (!img.complete || !img.naturalWidth));
-            const stylesheets = Array.from(document.querySelectorAll('link[rel~="stylesheet" i]'))
-              .filter(link => !link.disabled && !link.sheet);
-            return images.length + stylesheets.length;
-          });
+          const {missing, embedded, charset} = await inspectRender(page, pngs);
+          const locations = sourceLocations(raw, charset);
           const blocked = blockedCount() + missing;
-          const limited = blocked > 0 || prepared.embedded > 0;
+          const limited = blocked > 0 || embedded > 0;
           const contrast = limited ? undefined : await measureContrast(page, axe.source).catch(() => undefined);
           let visual = {status: 'skipped', detail: missingReference};
           if (hasReference(file)) {
-            visual = limited ? {status: 'skipped', detail: 'renderização parcial por recursos ou conteúdo incorporado'}
-              : await comparePage(page, {workspace, files, file, profile, timeout: remaining});
+            if (limited) visual.detail = 'renderização parcial por recursos ou conteúdo incorporado';
+            else if (!profile) visual.detail = 'a comparação visual exige o perfil da imagem OCI fixada';
+            else visual = await comparePage(page, {workspace, files, file, profile, timeout: remaining});
           }
-          return {prepared, blocked, limited, contrast, visual};
+          return {locations, embedded, blocked, limited, contrast, visual};
         });
 
         rendered++;
-        const {prepared, blocked, limited, contrast, visual} = result;
+        const {locations, embedded, blocked, limited, contrast, visual} = result;
         if (limited) partial++;
         fileRow(name, file, limited ? 'skipped' : 'ok', limited
-          ? `renderização parcial: ${blocked} bloqueios ou recursos indisponíveis e ${prepared.embedded} elementos incorporados fora do escopo`
+          ? `renderização parcial: ${blocked} bloqueios ou recursos indisponíveis e ${embedded} elementos incorporados fora do escopo`
           : 'HTML e CSS locais renderizados em Chromium offline, com scripts da página desativados');
         const measured = contrast?.evaluated && !contrast.incomplete && contrast.total <= maxContrastFindings;
         fileRow('qa-contraste', file, measured ? 'ok' : 'skipped', contrast?.evaluated || contrast?.incomplete
@@ -299,12 +378,12 @@ export async function runBrowserQa({workspace, copiedFiles, htmlFiles, inImage, 
           : limited ? 'contraste sem medição por renderização parcial'
             : contrast ? 'nenhum texto elegível para a regra color-contrast' : 'regra color-contrast indisponível na renderização', axe.version);
         for (const node of contrast?.nodes ?? []) {
-          const location = prepared.locations.get(node.path);
-          const line = location?.tag === node.tag ? location?.line ?? 1 : 1;
-          findings.push({tool: 'axe-core', rule: 'QA-AXE-COLOR-CONTRAST', file, line,
+          const line = locations.get(node.path);
+          const origin = line ? `${file}:${line}` : `${file} (linha do elemento indisponível)`;
+          findings.push({tool: 'axe-core', rule: 'QA-AXE-COLOR-CONTRAST', file, line: line ?? 1,
             severity: ['serious', 'critical'].includes(contrast.impact) ? 'alta' : contrast.impact === 'moderate' ? 'media' : 'baixa',
             message: `Violacao de acessibilidade axe-core (${axeRule}): ${contrast.help}`,
-            evidence: `elemento ${node.html} em ${file}:${line}${node.ratio === undefined ? '' : `, contraste ${node.ratio}:1`}`});
+            evidence: `elemento ${node.html} em ${origin}${node.ratio === undefined ? '' : `, contraste ${node.ratio}:1`}`});
         }
         regress(file, visual.status, visual.detail);
         if (visual.diff?.changed) {
@@ -314,7 +393,8 @@ export async function runBrowserQa({workspace, copiedFiles, htmlFiles, inImage, 
         }
       } catch (error) {
         const reason = /QA_BROWSER_HTML_(?:DEPTH|NODES)/.test(String(error)) ? 'HTML excede o limite de nós ou profundidade'
-          : /QA_BROWSER_DEADLINE|Timeout/i.test(String(error)) ? 'prazo de renderização atingido' : 'falha ao renderizar o HTML';
+          : String(error).includes('QA_BROWSER_META_REFRESH') ? 'redirecionamento por meta refresh fora do escopo'
+            : /QA_BROWSER_DEADLINE|Timeout/i.test(String(error)) ? 'prazo de renderização atingido' : 'falha ao renderizar o HTML';
         skipPage(file, reason);
       } finally {
         cancelled = true;
@@ -326,6 +406,6 @@ export async function runBrowserQa({workspace, copiedFiles, htmlFiles, inImage, 
   }
 
   return {coverageRow: row(name, version, rendered > partial ? 'ok' : 'skipped',
-    `${rendered - partial}/${htmlFiles.length} páginas renderizadas por inteiro no escopo, ${partial} parciais, ${selected.length - rendered} indisponíveis, ${htmlFiles.length - selected.length} fora do limite de ${maxPages}; Playwright ${playwright}, axe-core ${axe.version}, Chromium offline`),
+    `${rendered - partial}/${htmlFiles.length} páginas renderizadas por inteiro no escopo, ${partial} parciais, ${selected.length - rendered} indisponíveis, ${excludedDetail}; Playwright ${playwright}, axe-core ${axe.version}, Chromium offline`),
   extraRows, findings};
 }
