@@ -472,3 +472,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:34 UTC — Trabalhador encerrou C2-MUTACAO-INTEGRACAO em 9373c088 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:34 UTC — Trabalho C8-R8 iniciado por Sol high normal em final-c8.
 - 19/11/2026 05:37 UTC — Prova incremental das oito CLIs em 0c7ce4b6 com seis testes aprovados. Em bf5ff27a passaram 58 dos 60 testes na bateria principal e os dois testes opcionais também passaram com Python/coverage e Go habilitados na bateria separada de sete casos. Mutação e propriedades chegaram ao coletor em 9373c088, integradas em 21f41409 e reconstruídas para prova física.
+- 19/11/2026 05:38 UTC — Trabalhador encerrou C7-R7 em 9f22e01e (código 0). Gerente confere a entrega.
+- 19/11/2026 05:38 UTC — Trabalho C-REVERIFICAR-MODULOS iniciado por Sol high normal em final-recheck-modulos.
+- 19/11/2026 05:38 UTC — Revisor encerrou C6-R9 em 2cafe62b (código 0). Gerente confere a entrega.
+- 19/11/2026 05:38 UTC — Revisão C-EXAME-MEDICOES iniciada por Sol high normal somente leitura em 1b42a859.
+- 19/11/2026 05:39 UTC — Revisão independente por modelo distinto de 2cafe62b encontrou possível falso positivo de backup em here-doc e falhas de cobertura de configuração local. C6-R10 trata os casos em análise passiva de arquivos.
