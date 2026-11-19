@@ -874,8 +874,15 @@ const returnPredicate = /^\s+(?:retorna|devolve)\s+/i;
 const returnValue = /^(?:[^`()[\]]*\s+)?`[^`]+`$/;
 const qualifiedSubject = /^`[^`]+`\s+(?:de|from)\s+`[^`]+`\s+(?:retorna|devolve)\s+/i;
 const clauseConjunction = '(?:' + listConjunction + '|mas|ou)';
-const clauseTokens = new RegExp(/`[^`]*`|[()[\]]|;|[.!?](?=\s|$)/.source +
-  '|,\\s*(?:' + clauseConjunction + '\\s+)?|\\s+' + clauseConjunction + '\\s+', 'gi');
+const singleQuoteStart = /(?<![\p{L}\p{M}\p{N}])'/u.source;
+const quotedMessage = [
+  /"(?:\\.|[^"\\])*"/.source,
+  singleQuoteStart + /(?:\\.|[^'\\]|'(?=[\p{L}\p{M}\p{N}]))*'(?![\p{L}\p{M}\p{N}])/u.source,
+  /“[^”]*”|‘(?:[^’]|’(?=[\p{L}\p{M}\p{N}]))*’(?![\p{L}\p{M}\p{N}])|«[^»]*»/u.source,
+].join('|');
+const clauseTokens = new RegExp(/`[^`]*`/.source + `|(?<literal>${quotedMessage})|(?<openQuote>["“‘«]|${singleQuoteStart})|` +
+  /[()[\]]|;|[.!?](?=\s|$)/.source +
+  '|,\\s*(?:' + clauseConjunction + '\\s+)?|\\s+' + clauseConjunction + '\\s+', 'giu');
 
 function readTargetList(text) {
   const targets = [];
@@ -903,8 +910,12 @@ function readTargetList(text) {
 function* requirementClauses(body) {
   const brackets = [];
   let start = 0;
-  for (const {0: token, index} of body.matchAll(clauseTokens)) {
-    if (token.startsWith('`')) continue;
+  for (const {0: token, index, groups} of body.matchAll(clauseTokens)) {
+    if (token.startsWith('`') || groups.literal) continue;
+    if (groups.openQuote) {
+      yield null;
+      return;
+    }
     if (token === '(' || token === '[') {
       brackets.push(token);
       continue;
@@ -950,6 +961,10 @@ function requirementTargets(body) {
   const references = [];
   let first = true;
   for (const clause of requirementClauses(body)) {
+    if (clause === null) {
+      references.push({ambiguous: true});
+      break;
+    }
     const declared = first;
     first = false;
     if (!clause.includes('`')) continue;
