@@ -56,7 +56,7 @@ test('examinador e revisor distintos, só evidência no pedido e prova obrigató
     release: async (_seat, state) => { releases.push(state); },
     worker: {run: async call => {
       const task = JSON.parse(call.task); tasks.push({task, call});
-      if (task.checklist) return JSON.stringify({kind:'exame', filesRead:['src/routes.ts'], checklist:['qa'], routesReviewed: task.routes,
+      if (task.checklist) return JSON.stringify({kind:'exame', binding: task.binding, filesRead:['src/routes.ts'], checklist:['qa'], routesReviewed: task.routes,
         findings:[{line:2, snippet:skipped, title:'PONTO DO EXAMINADOR', hypothesis:skipQuestion, severity:'baixa'}]});
       const verdict = reviewFixtureVerdict(task, skipped);
       return JSON.stringify({...verdict, proof: tasks.length === 2 ? '' : verdict.proof});
@@ -83,7 +83,7 @@ test('não confirma com mesmo provedor, preserva cota ou indisponibilidade e nã
   const result = await examineFunctionalModule({module:'qa', intentId, map, findings:[finding],
     reserve: async purpose => purpose === 'examiner' ? examiner : reviewer,
     release: async (_seat, state) => { released.push(state); },
-    worker: {run: async () => JSON.stringify({kind:'exame', filesRead:['src/routes.ts'], checklist:['qa'], findings:[]})},
+    worker: {run: async call => JSON.stringify({kind:'exame', binding: JSON.parse(call.task).binding, filesRead:['src/routes.ts'], checklist:['qa'], findings:[]})},
   });
   assert.equal(result.findings[0]!.failure, 'MODULE_EXAM_PROVIDER_NOT_DISTINCT');
   assert.equal(result.findings[0]!.status, 'provavel');
@@ -102,7 +102,7 @@ test('falha de cota do revisor não inventa confirmação', async () => {
   const examiner = seat('a');
   const result = await examineFunctionalModule({module:'qa', intentId, map, findings:[finding],
     reserve: async purpose => { if (purpose === 'reviewer') throw new Refusal('PROVIDER_USAGE_LIMIT'); return examiner; },
-    release: async () => {}, worker:{run:async()=>JSON.stringify({kind:'exame',filesRead:['src/routes.ts'],checklist:['qa'],findings:[]})},
+    release: async () => {}, worker:{run:async call=>JSON.stringify({kind:'exame',binding:JSON.parse(call.task).binding,filesRead:['src/routes.ts'],checklist:['qa'],findings:[]})},
   });
   assert.equal(result.findings[0]!.failure, 'PROVIDER_USAGE_LIMIT');
   assert.equal(result.findings[0]!.verifier, null);
@@ -132,7 +132,7 @@ test('limite na fase de leitura preserva cobertura anterior e impede consumo do 
       calls++;
       assert.ok(!('repo' in call));
       if (calls === 2) throw new Refusal('PROVIDER_USAGE_LIMIT');
-      return JSON.stringify({kind: 'exame', filesRead: ['src/routes.ts'], checklist: ['qa'], findings: []});
+      return JSON.stringify({kind: 'exame', binding: JSON.parse(call.task).binding, filesRead: ['src/routes.ts'], checklist: ['qa'], findings: []});
     }},
   });
   assert.deepEqual(requests, ['examiner', 'examiner']);
@@ -175,7 +175,7 @@ test('somente atestados da declaração enviada contam mesmo quando o arquivo ex
       ] : [];
       if (task.file === file) assert.deepEqual(task.routes, methods.slice(0, 20).map((route, index) =>
         ({...route, column: index === 0 ? expressApp.length + 1 : 1})));
-      return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], routesReviewed, findings: []});
+      return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed, findings: []});
     }},
   });
   assert.ok(result.coverage.every(row => row.status === 'lido'));
@@ -200,7 +200,7 @@ test('atesta a coluna exata e só aceita o formato antigo quando a identidade é
     reserve: async () => examiner, release: async () => {},
     worker: {async run(call) {
       const task = JSON.parse(call.task);
-      return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], routesReviewed, findings: []});
+      return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed, findings: []});
     }},
   });
   const exact = await run([one!, two!, older(unique!), withUnknownDuplicate!],
@@ -230,14 +230,14 @@ test('confirma três condições distintas na mesma linha e rejeita observaçõe
     reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
     worker: {async run(call) {
       const task = JSON.parse(call.task);
-      if (task.checklist) return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], findings: []});
+      if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], findings: []});
       assert.doesNotMatch(call.task, /CONCLUSAO_DO_AUTOR/);
       assert.equal(task.commit, commit);
       const index = reviews++;
       if (index < 3) {
         const verdict = reviewFixtureVerdict(task, [skipped, random, wait][index]!);
         valid.push(verdict);
-        return JSON.stringify({...verdict, reason: 'Texto livre do revisor.'});
+        return JSON.stringify(verdict);
       }
       const original = valid[index === 4 ? 1 : 0]!;
       const transplanted = {...original, binding: task.binding};
@@ -260,7 +260,7 @@ test('confirma três condições distintas na mesma linha e rejeita observaçõe
   assert.match(result.findings[1]!.reason, /chamada direta no código/);
   assert.match(result.findings[2]!.reason, /chamada direta no código/);
   const [verified, second] = result.findings;
-  const evidence = moduleExamReviewEvidence('qa', verified!, code, disabled)!;
+  const evidence = moduleExamReviewEvidence('qa', verified!, code, disabled, undefined, result.coverage[0]?.read?.binding)!;
   assert.equal(hasModuleReviewProof(evidence, verified!), true);
   assert.equal(hasModuleReviewProof(evidence, {...verified!, reason: second!.reason}), false);
 });
@@ -283,9 +283,8 @@ test('nomes sombreados comprovam a grafia da chamada e deixam a hipótese funcio
     assert.equal(hasModuleReviewProof(evidence, {...observed, reason}), true);
     assert.equal(hasModuleReviewProof(evidence, {...observed, reason: hypothesis}), false);
     const reread = readModuleReviewVerdict({...observed, reason: hypothesis});
-    assert.equal(reread?.reason, reason);
-    assert.equal(readModuleReviewVerdict({...observed, reason: hypothesis}, {preserveReason: true})?.reason, hypothesis);
-    assert.equal(hasModuleReviewProof(evidence, reread!), true);
+    assert.equal(reread?.reason, hypothesis);
+    assert.equal(hasModuleReviewProof(evidence, reread!), false);
     for (const unproved of [hypothesis, 'A linha atual ainda sustenta a observação original?']) {
       const functional = {...evidence, hypothesis: unproved, rule: 'exame-de-arquivo', tool: 'examinador', evidence: expression};
       const pending = JSON.parse(moduleReviewTask(functional));
@@ -298,7 +297,7 @@ test('nomes sombreados comprovam a grafia da chamada e deixam a hipótese funcio
       worker: {async run(call) {
         const request = JSON.parse(call.task);
         if (!request.checklist) return JSON.stringify(reviewFixtureVerdict(request, expression));
-        return JSON.stringify({kind: 'exame', filesRead: [file], checklist: ['qa'], findings: [
+        return JSON.stringify({kind: 'exame', binding: request.binding, filesRead: [file], checklist: ['qa'], findings: [
           {line: 1, snippet: expression, title: hypothesis, hypothesis: task.hypothesis, severity: 'baixa'},
           {line: 1, snippet: expression, title: hypothesis, hypothesis, severity: 'baixa'},
         ]});
@@ -311,6 +310,38 @@ test('nomes sombreados comprovam a grafia da chamada e deixam a hipótese funcio
     assert.ok(result.findings.slice(0, 2).every(finding => finding.reason === reason));
     assert.equal(result.findings[2]!.title, hypothesis);
   }
+});
+
+test('a decisão contraditória impede a confirmação da chamada mesmo com a âncora e a linha válidas', async () => {
+  const examiner = seat('a'), reviewer = seat('b');
+  const file = 'pricing.test.ts';
+  const expression = 'Math.random()';
+  const code = `const sample = ${expression};`;
+  const raw = qaStaticFinding(file, 1, expression, 'nondeterminism');
+  const result = await examineFunctionalModule({module: 'qa', intentId, findings: [raw],
+    map: {files: [{file, code, reason: null}], routes: []},
+    reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      if (task.checklist) {
+        return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [file], checklist: ['qa'], findings: []});
+      }
+      const valid = reviewFixtureVerdict(task, expression);
+      return JSON.stringify({...valid, decision: 'contradiz', reason: 'A linha não contém a chamada direta.'});
+    }},
+  });
+  const [pending] = result.findings;
+  assert.equal(result.coverage[0]?.status, 'lido');
+  assert.equal(pending?.status, 'provavel');
+  assert.equal(pending?.verifier, null);
+  assert.equal(pending?.decision, undefined);
+  assert.equal(pending?.failure, 'MODULE_CONFIRMATION_INVALID');
+
+  const evidence = moduleExamReviewEvidence('qa', moduleCollectorCandidate(raw), code, raw)!;
+  const valid = reviewFixtureVerdict(JSON.parse(moduleReviewTask(evidence)), expression);
+  assert.equal(hasModuleReviewProof(evidence, valid), true);
+  assert.equal(hasModuleReviewProof(evidence, {...valid, decision: 'contradiz'}), false);
+  assert.equal(hasModuleReviewProof(evidence, {...valid, decision: undefined}), false);
 });
 
 test('o descarte exige o mesmo teste e grupo, comparados nos dois arquivos completos', () => {
@@ -330,8 +361,13 @@ test('o descarte exige o mesmo teste e grupo, comparados nos dois arquivos compl
   const withHistory = {...evidence, originalCommit: skipSnapshot.originalCommit,
     originalCode: 'const linhaHistoricaSintetica = 7;', regressionProof: null};
   const task = JSON.parse(moduleReviewTask(withHistory));
+  const discard = reviewFixtureVerdict(task, active, 'descartado');
+  assert.equal(readModuleReviewVerdict({...discard, decision: 'sustenta'}), undefined);
+  assert.equal(hasModuleReviewProof(withHistory, {...discard, decision: 'sustenta'}), false);
+  assert.equal(hasModuleReviewProof(withHistory, {...discard, reason: 'A grafia ainda inclui skip.'}), false);
   assert.deepEqual(Object.keys(task).sort(),
-    ['binding', 'code', 'commit', 'criterion', 'evidence', 'file', 'hypothesis', 'instruction', 'line', 'rule', 'skipRemoval', 'tool']);
+    ['binding', 'code', 'commit', 'criterion', 'discardReasonTemplate', 'evidence', 'file', 'hypothesis',
+      'instruction', 'line', 'reasonTemplate', 'rule', 'skipRemoval', 'tool']);
   assert.deepEqual(task.skipRemoval, {column: 1, expression: active});
   assert.equal(task.evidence, skipped);
   const unclassified = JSON.parse(moduleReviewTask({...withHistory, evidence: 'declaração indisponível'}));
@@ -410,7 +446,7 @@ test('linhas cortadas no limite não chegam à revisão nem viram rotas julgadas
       assert.ok(task.checklist);
       assert.equal(task.code, head);
       assert.deepEqual(task.routes, []);
-      return JSON.stringify({kind: 'exame', filesRead: [file], checklist: ['qa'], routesReviewed: [route],
+      return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [file], checklist: ['qa'], routesReviewed: [route],
         findings: [{line: 2, snippet: skipped, hypothesis: skipQuestion, title: 'Trecho incompleto', severity: 'media'}]});
     }},
   });
@@ -498,7 +534,7 @@ test('o mapa exige inicialização HTTP reconhecida e deixa chamadas com recepto
     worker: {async run(call) {
       const task = JSON.parse(call.task);
       assert.deepEqual(task.routes, declarations);
-      return JSON.stringify({kind: 'exame', filesRead: [file], checklist: ['qa'],
+      return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [file], checklist: ['qa'],
         routesReviewed: [...falseEntries, ...task.routes], findings: []});
     }},
   });
@@ -547,7 +583,7 @@ test('o mapa registra omissões indexadas e de métodos sobrescritos e impede at
         const routesReviewed = task.file === indexed ? [old(orders!), prices, old(bills!), indexedClaim]
           : task.file === mutated ? [overwrittenClaim, otherBills, otherPrices] : [];
         assert.deepEqual(task.routes, mapped.routes.filter(route => route.file === task.file));
-        return JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], findings: [], routesReviewed});
+        return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], findings: [], routesReviewed});
       }},
     });
     assert.equal(result.notes.filter(note => note.includes('com omissão por acesso indexado ou dinâmico')).length, 2);
@@ -567,7 +603,7 @@ test('cota devolvida por revisor reservado conserva os achados e não presume t�
     async release(_seat, state) { releases.push(state); },
     worker: {async run(call) {
       if (call.provider === reviewer.provider) throw new Refusal('PROVIDER_USAGE_LIMIT');
-      return JSON.stringify({kind: 'exame', filesRead: [finding.file], checklist: ['qa'], findings: []});
+      return JSON.stringify({kind: 'exame', binding: JSON.parse(call.task).binding, filesRead: [finding.file], checklist: ['qa'], findings: []});
     }},
   });
   assert.deepEqual(reservations, ['examiner', 'reviewer']);

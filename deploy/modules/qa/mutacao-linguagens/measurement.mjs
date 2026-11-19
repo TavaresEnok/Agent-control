@@ -11,6 +11,9 @@ const arithmetic = new Set(['+', '-', '*', '/', '//', '%', '**']);
 const caseStatuses = new Set(['passed', 'failed', 'skipped', 'error', 'pending']);
 const positive = value => Number.isSafeInteger(value) && value > 0;
 export const goDependencyMissing = /module lookup disabled by GOPROXY=off|import lookup disabled by -mod=vendor|inconsistent vendoring|no required module provides package|missing go\.sum entry|updates to go\.mod needed|requires go >= .*GOTOOLCHAIN=local/i;
+const goCompilerDiagnostic = /^.+?\.go:\d+(?::\d+)?: (.*)$/;
+const goSourceDependency = /^(?:no required module provides package|missing go\.sum entry|cannot find module providing package) /;
+const goBuildOperational = /fork\/exec|resource temporarily unavailable|cannot allocate memory|out of memory|permission denied|no space left on device|too many open files|read-only file system|input\/output error|signal: (?:killed|terminated)|internal compiler error/i;
 export const goListFormat = String.raw`{{range .GoFiles}}{{printf "S\t%s/%s\n" $.Dir .}}{{end}}{{if or .TestGoFiles .XTestGoFiles}}{{printf "P\t%s\n" .ImportPath}}{{end}}`;
 
 export function processJson({code, output}) {
@@ -103,24 +106,53 @@ export function decodePythonSuite(result, files, propertiesOnly = false) {
     (report.exitCode !== Number(failed) || tests.some(test => ['error', 'pending'].includes(test.status)));
   const reason = report.unavailable ? 'offline-dependency' : report.limited ? 'test-limit'
     : executionError ? 'python-test-execution' : undefined;
-  // Preserve other completed properties after a case-level error in a valid pytest report.
-  if (reason && propertiesOnly && report.exitCode === 1 && failed) return {reason, tests};
+  // Preserve the validated observations even if pytest was interrupted. The property
+  // summary counts only cases with examples and a passing or failing verdict.
+  if (reason && propertiesOnly) return {reason, tests};
   return reason ? {reason} : {tests};
 }
 
+function classifyGoBuildOutput(output) {
+  const result = {source: false, operational: false, unavailable: false};
+  for (const raw of output.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const located = goCompilerDiagnostic.exec(line);
+    if (located) {
+      // Source diagnostics can quote the same text emitted by system errors.
+      const message = located[1];
+      if (goSourceDependency.test(message) && goDependencyMissing.test(message)) result.unavailable = true;
+      else if (message.startsWith('internal compiler error:')) result.operational = true;
+      else result.source = true;
+    } else if (goDependencyMissing.test(line)) {
+      result.unavailable = true;
+    } else if (goBuildOperational.test(line)) {
+      result.operational = true;
+    }
+  }
+  return result;
+}
+
 export function decodeGoSuite({code, output, diagnostics}, testPackages) {
-  if (goDependencyMissing.test(diagnostics)) return {reason: 'offline-dependency'};
+  const stderr = classifyGoBuildOutput(diagnostics);
+  if (stderr.unavailable) return {reason: 'offline-dependency'};
   const tests = new Map();
   const packages = new Map();
   const completedFailures = new Set();
-  let buildFailure = false;
+  const failedBuilds = new Set();
+  const buildOutput = new Map();
   let executionFailure = false;
   for (const line of output.split('\n').filter(Boolean)) {
     const event = JSON.parse(line);
     const {Action: action, Package: pkg, Test: name, Output: message, OutputType: outputType} = event ?? {};
     if (typeof action !== 'string') throw new Error('invalid-go-event');
-    if (action === 'build-output' && goDependencyMissing.test(message)) return {reason: 'offline-dependency'};
-    if (action === 'build-fail' || (action === 'fail' && event.FailedBuild)) buildFailure = true;
+    if (action === 'build-output') {
+      if (typeof message !== 'string') throw new Error('invalid-go-event');
+      if (!buildOutput.has(event.ImportPath)) buildOutput.set(event.ImportPath, []);
+      buildOutput.get(event.ImportPath).push(message);
+    }
+    if (action === 'build-fail') failedBuilds.add(event.ImportPath);
+    if (action === 'fail' && event.FailedBuild) failedBuilds.add(event.FailedBuild);
     // The testing binary emits this frame when it finishes a failing suite. The go command
     // can also report a failed case and package after an abort, with only its FAIL\t... frame.
     if (action === 'output' && !name && outputType === 'frame' && message === 'FAIL\n' && packages.get(pkg) === 'pending') {
@@ -155,9 +187,17 @@ export function decodeGoSuite({code, output, diagnostics}, testPackages) {
       tests.get(id).status = status;
     }
   }
+  const buildDiagnostics = new Map([...buildOutput].map(([pkg, chunks]) => [pkg, classifyGoBuildOutput(chunks.join(''))]));
+  if ([...buildDiagnostics.values()].some(value => value.unavailable)) return {reason: 'offline-dependency'};
   const observed = [...tests.values()];
   const failedPackages = new Set(observed.filter(test => test.status === 'failed').map(test => test.package));
-  if (buildFailure) return {reason: 'go-build-failed'};
+  if (failedBuilds.size) {
+    const sourceFailures = !stderr.operational && [...failedBuilds].every(pkg => {
+      const diagnostic = buildDiagnostics.get(pkg);
+      return !diagnostic?.operational && (diagnostic?.source || (failedBuilds.size === 1 && stderr.source));
+    });
+    return {reason: sourceFailures ? 'go-build-failed' : 'go-build-execution'};
+  }
   if (executionFailure || !packages.size || observed.some(test => test.status === 'pending') ||
       [...testPackages].some(pkg => !packages.has(pkg)) ||
       [...packages].some(([pkg, status]) => status === 'pending' ||

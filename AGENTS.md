@@ -62,3 +62,7 @@
   - **Trabalhadores:** até 3 `gpt-6.2-sol`, esforço `high`. Trailer `Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>`.
   - Os Terra que já estão rodando terminam a ordem atual. Não lance outros Terra.
 - **Cota do Codex:** quando a cota acabar para os modelos da equipe (erro de limite de uso ou 429), pare todo o trabalho, escreva o relatório e encerre. Não volte a trabalhar até o titular pedir.
+- **Equipe a partir de 19/11/2026 ~11:10 UTC (titular), substitui a anterior.** Todos em modo **normal**, sem `service_tier`:
+  - **Gerente:** `gpt-6.2-astra`, esforço `high`.
+  - **Revisor:** 1 `gpt-6.2-sol`, esforço `high`, só leitura.
+  - **Trabalhadores:** até 4 `gpt-6.2-sol`, sendo 2 com esforço `high` e 2 com esforço `medium`. Os itens mais difíceis vão para os `high`.

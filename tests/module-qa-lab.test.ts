@@ -116,6 +116,10 @@ test('imagem pelo digest publica mutação aritmética e falsificação de propr
       assert.equal(passes.length, 3);
       assert.ok(passes.every(pass => pass.status === 'ok' && /aprovado/.test(pass.detail)));
     }
+    const pythonCoverage = row(control, 'python-unittest-coverage-cobertura');
+    assert.equal(pythonCoverage.status, 'skipped');
+    assert.match(pythonCoverage.detail, /escopo parcial/);
+    assert.match(row(control, 'python-unittest-coverage').detail, /formato pytest não suportado/);
     assert.equal(row(control, 'mutmut').status, 'ok');
     assert.match(row(control, 'mutmut').detail, /medição concluída.*2 candidatos enumerados, 1 mortos, 1 sobreviventes, 0 sem classificação/);
     assert.equal(row(control, 'go-mutesting').status, 'ok');

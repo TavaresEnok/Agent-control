@@ -1,0 +1,5 @@
+# C7 — cancelamento do histórico de desempenho
+
+Responsabilidade restrita à leitura das medições passadas no PostgreSQL, ao fim da enumeração no orquestrador de desempenho e aos testes correspondentes. Consulte /tmp/ac-final-3aDgqp8I/parecer-high-C7-HISTORICO-R3.txt. Prove em banco descartável que a consulta específica deixa de estar bloqueada enquanto o bloqueador ainda está ativo. Interrompa a aquisição pendente em pool saturado e a espera de fechamento de iterador no prazo. Preserve o fim normal sem return redundante e sem terminar sessões alheias. Sem carga em produção.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C7-HISTORICO-R4.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
