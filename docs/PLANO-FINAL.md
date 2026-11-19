@@ -39,6 +39,20 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
   - Nunca compre créditos.
   - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
 
+## Equipe atual (titular, 19/11/2026, substitui a seção seguinte e a parte de trabalhadores Gemini)
+
+- Gerente: `gpt-6.2-astra`, esforço `high`, fast.
+- Trabalhadores: até 8 Codex `gpt-6.2-sol`, esforço `medium`, modo normal, sem `service_tier`. Acione cada um no seu worktree assim (o bubblewrap do sandbox não funciona neste host):
+
+  ```
+  cd <worktree> && setsid nohup codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -m gpt-6.2-sol -c model_reasoning_effort=medium -C <worktree> "Execute a ordem em docs/<ORDEM>.md neste worktree e commite tudo." > <log> 2>&1 < /dev/null &
+  ```
+
+  As ordens continuam proibindo tocar a instalação viva, logins reais, a suíte completa e a reconstrução de imagens.
+- Revisores: até 2 `gpt-6.2-sol`, esforço `high`, modo normal, `--sandbox read-only` (ordem e diff pela entrada padrão, como você já faz).
+- Os Gemini não são mais acionados. Aproveite o trabalho parcial que eles deixaram nos worktrees.
+- Qualquer erro de cota vai na hora para `docs/PROGRESSO-FINAL.md`, com a palavra `COTA`.
+
 ## Mudança do titular (19/11/2026)
 
 - Todo uso do Codex no modo **fast**: `-c service_tier="fast"`.
