@@ -1,0 +1,5 @@
+# QA — referências explícitas existentes e guardas assíncronas
+
+No relatório /tmp/ac-retomada-8f5dddf3-JZR4mNOc/parecer-C2-MATRIZ-R13.txt há dois padrões relevantes. Preserve as formas qualificadas explicitamente documentadas em requisitos existentes e não confunda resultado esperado com símbolo. Reconheça a guarda manual com await como cobertura parcial quando o vínculo estático não basta. Evite ampliar a inferência de texto livre. Você possui a análise da matriz JS e seus testes.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-MATRIZ-R14.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
