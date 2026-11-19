@@ -627,3 +627,9 @@ PAUSADO-COTA
 - 19/11/2026 16:56 UTC — C7-RECONCILIACAO-R8 encerrado com código 0.
 - 19/11/2026 16:56 UTC — trabalho-C-EXAME-VINCULO iniciado em final-exame-vinculo por Sol high normal.
 - 19/11/2026 16:56 UTC — O primeiro envio da revisão de unicidade excedeu o tamanho de entrada por incluir os módulos antecedentes. A repetição usa apenas o diff de banco e o trecho do coletor. Enfileiradas revisões da matriz de QA, do registro de dependências e dos destinos de dados em C9.
+- 19/11/2026 16:56 UTC — revisor-C5-UNICIDADE-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:57 UTC — C5-UNICIDADE-R2 encerrado com código 0.
+- 19/11/2026 16:57 UTC — revisor-C2-MATRIZ-R12 iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:58 UTC — C8-R9 encerrado com código 0.
+- 19/11/2026 16:58 UTC — C3-R10 encerrado com código 0.
+- 19/11/2026 16:59 UTC — Banco 99817b08 passou 6/6 após a revisão do limiar arredondado e da unicidade. O QA já mede a execução poliglota, a mutação, o navegador e os contratos nominais; abertas as provas complementares de migrações num banco descartável e de recuperação de latência em homologação local.
