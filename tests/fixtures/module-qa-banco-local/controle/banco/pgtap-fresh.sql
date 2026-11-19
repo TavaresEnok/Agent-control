@@ -4,4 +4,4 @@ SELECT count(*) = 0
      WHERE table_schema = 'public' AND table_name = 'items'
        AND column_name = 'revision' AND is_nullable = 'NO'
    )
-FROM public.items;
+FROM public.items; -- Fim da assertiva do zero.
