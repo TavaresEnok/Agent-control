@@ -2788,10 +2788,81 @@ export async function reconcileModuleReports(
   await reconcileReports(ledger, principal, authority, dataDirectory, projectId);
 }
 
-/**
- * Rechecks findings for a module run using an independent reviewer worker.
- * The review task carries only the code excerpt, file, line, rule, and raw evidence — never the author's conclusion.
- */
+type ModuleRecheckExaminer = {provider: string; model: string; accountId: string | null; profileId: string | null};
+type ModuleRecheckReviewer = {provider: string; model: string; accountId: string; profileId: string; grantId: string};
+export type ModuleRecheckReview = (request: {
+  intentId: string;
+  commit: string;
+  task: string;
+  examiner: ModuleRecheckExaminer | null;
+  signal?: AbortSignal;
+}) => Promise<{output: string; reviewer: ModuleRecheckReviewer} | {reason: string; reviewer?: ModuleRecheckReviewer}>;
+
+type ModuleRecheckResult = {id: string} & ({status: 'fechado' | 'reaberto'} | {status: 'pendente'; reason: string});
+
+function recheckGit(repo: string, args: string[], signal?: AbortSignal) {
+  return execGit('/usr/bin/git', ['--no-replace-objects', '--literal-pathspecs', '-C', repo, ...args], {
+    env: {...GIT_ARCHIVE_ENV, GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: ''},
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024,
+    signal,
+  });
+}
+
+async function recheckHead(repo: string, signal?: AbortSignal): Promise<string> {
+  try {
+    const {stdout} = await recheckGit(repo, ['rev-parse', '--verify', 'HEAD^{commit}'], signal);
+    const commit = stdout.trim();
+    if (/^[a-f0-9]{40}$/.test(commit)) return commit;
+  } catch {
+    signal?.throwIfAborted();
+  }
+  throw new Refusal('VERIFY_COMMIT_INVALID', 400);
+}
+
+function protectedRecheckFile(file: string): boolean {
+  return isProtectedLocation(file) || /(?:^|\/)(?:logs?|\.ssh|\.aws|\.config)(?:\/|$)/i.test(file)
+    || /\.log(?:[.\d_-].*)?$|(?:^|[._-])(?:secrets?|credentials?|password|senha)(?:[._-]|$)|^\.pypirc$/i.test(basename(file))
+    || sanitizeRecheckText(file) !== file;
+}
+
+function sanitizeRecheckText(text: string): string {
+  // Drop lines containing old persisted secret previews or newly detected secrets.
+  return sanitizeText(text).split('\n').map(line =>
+    /…|\[REDACTED\]|\[removido: alta entropia\]/i.test(line) ? '[trecho omitido]' : line,
+  ).join('\n');
+}
+
+async function readRecheckLine(repo: string, head: string, file: string, line: number, signal?: AbortSignal): Promise<string> {
+  try {
+    const {stdout: entry} = await recheckGit(repo, ['ls-tree', '--full-tree', '-z', head, '--', file], signal);
+    const match = /^100(?:644|755) blob ([a-f0-9]{40})\t([^\0]+)\0$/.exec(entry);
+    if (!match || match[2] !== file) return '';
+    const {stdout: code} = await recheckGit(repo, ['cat-file', 'blob', match[1]!], signal);
+    if (code.includes('\0') || code.includes('\uFFFD')) return '';
+    const target = sanitizeRecheckText(code).split('\n')[line - 1]?.trim();
+    if (!target || target === '[trecho omitido]' || target.length > EXCERPT_LIMIT / 2 || MULTILINE_CONTROL_CHAR.test(target)) return '';
+    return target;
+  } catch {
+    signal?.throwIfAborted();
+    return '';
+  }
+}
+
+async function authorizeModuleRecheck(
+  client: pg.PoolClient, ledger: Ledger, principal: string, authority: Authority, projectId: string,
+) {
+  const context = await ledger.authorize(client, principal, authority.contextId);
+  await ledger.fence(client, authority);
+  if (context.project_id !== projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
+  const membership = await client.query(
+    "SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner' FOR SHARE", [projectId, principal],
+  );
+  if (!membership.rowCount) throw new Refusal('PROJECT_FORBIDDEN', 403);
+  return context;
+}
+
+/** Recheck only committed, sanitized evidence. A pending result preserves the persisted finding status. */
 export async function recheckModuleFindings(
   ledger: Ledger,
   principal: string,
@@ -2802,9 +2873,12 @@ export async function recheckModuleFindings(
     achadoIds: readonly string[];
     dataDirectory: string;
     projectId: string;
-    worker: VerifyWorker;
+    review: ModuleRecheckReview;
+    signal?: AbortSignal;
   },
-): Promise<{results: {id: string; status: 'fechado' | 'reaberto'}[]}> {
+): Promise<{results: ModuleRecheckResult[]}> {
+  const {signal} = input;
+  signal?.throwIfAborted();
   if (input.module !== undefined) assertVerificationModule(input.module);
   if (!Id.safeParse(input.runId).success || !Id.safeParse(input.projectId).success) {
     throw new Refusal('VERIFY_RUN_MISSING', 404);
@@ -2812,166 +2886,183 @@ export async function recheckModuleFindings(
   await assertPersonalActivation(ledger);
   const requested = uniqueSortedIds(input.achadoIds);
   const loaded = await ledger.tx(async client => {
-    const authContext = await ledger.authorize(client, principal, authority.contextId);
-    await ledger.fence(client, authority);
-    if (authContext.project_id !== input.projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
-    const runRow = (await client.query<{
-      id: string;
-      context_id: string;
-      module: string;
-      intent_id: string;
-      commit_id: string;
-      recheck_generation: string;
-    }>(
-      `UPDATE ac_verify_runs SET recheck_generation=recheck_generation+1
-       WHERE id=$1 AND project_id=$2 AND context_id=$3 AND ($4::text IS NULL OR module=$4)
-       AND module <> 'verify' AND status IN ('done','failed') AND report_dir NOT IN ('pending','discarded')
-       AND report_dir NOT LIKE 'discarded:%' RETURNING id::text, context_id::text, module, intent_id::text, commit_id, recheck_generation::text`,
+    await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
+    signal?.throwIfAborted();
+    const run = (await client.query<{id: string; module: string; report_dir: string; recheck_generation: string}>(
+      `UPDATE ac_verify_runs r SET recheck_generation=r.recheck_generation+1
+       FROM ac_exam_contexts e WHERE r.id=$1 AND r.project_id=$2 AND r.context_id=$3
+       AND e.project_id=r.project_id AND e.context_id=r.context_id AND e.module=r.module
+       AND ($4::text IS NULL OR r.module=$4) AND r.module <> 'verify' AND r.status IN ('done','failed')
+       AND r.report_dir NOT IN ('pending','discarded') AND r.report_dir NOT LIKE 'discarded:%'
+       RETURNING r.id::text, r.module, r.report_dir, r.recheck_generation::text`,
       [input.runId, input.projectId, authority.contextId, input.module ?? null],
     )).rows[0];
-    if (!runRow) throw new Refusal('VERIFY_RUN_MISSING', 404);
-    const coveredRows = (await client.query<{file: string}>('SELECT file FROM ac_verify_coverage WHERE run_id=$1', [runRow.id])).rows;
-    const covered = new Set(coveredRows.map(row => String(row.file)));
-    const rows = (await client.query<{
-      achado_id: string;
-      status: string;
-      file: string;
-      line: number | null;
-      severity: string;
-      payload: unknown;
-    }>(
-      'SELECT achado_id, status, file, line, severity, payload FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])',
-      [runRow.id, requested],
+    if (!run) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    const rows = (await client.query<{achado_id: string; file: string; line: number | null; payload: Achado}>(
+      'SELECT achado_id, file, line, payload FROM ac_verify_findings WHERE run_id=$1 AND achado_id = ANY($2::text[])',
+      [run.id, requested],
     )).rows;
-    const byId = new Map(rows.map(row => [String(row.achado_id), row]));
+    const byId = new Map(rows.map(row => [row.achado_id, row]));
     const items = requested.map(id => {
       const row = byId.get(id);
       if (!row) throw new Refusal('VERIFY_FINDING_MISSING', 404);
-      const candidate = String(row.file);
-      const file = runRow.module === 'prontidao' && isProtectedLocation(candidate)
-        ? protectedLocation(candidate) : assertModuleRepoRelativePath(candidate);
-      if (!covered.has(file)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-      const line = row.line !== null && Number.isInteger(Number(row.line)) && Number(row.line) >= 1 ? Number(row.line) : 1;
-      const payload = row.payload && typeof row.payload === 'object' ? (row.payload as Record<string, unknown>) : {};
-      const sources = Array.isArray(payload.sources) ? payload.sources.map(String) : [];
-      const tool = (sources[0] ?? runRow.module).slice(0, 120);
-      const rule = (sources[1] ?? (typeof payload.reference === 'string' ? payload.reference : id)).slice(0, 200);
-      return {id, file, line, tool, rule, excerpt: typeof payload.scenario === 'string' ? payload.scenario : ''};
+      const file = run.module === 'prontidao' && isProtectedLocation(row.file)
+        ? protectedLocation(row.file) : assertModuleRepoRelativePath(row.file);
+      const {sources, reference, scenario} = row.payload;
+      return {id, file, line: row.line ?? 1, tool: sources?.[0] ?? run.module,
+        rule: sources?.[1] ?? reference ?? id, scenario};
     });
-    const repoRow = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0];
-    return {run: runRow, items, repo: repoRow?.repo ?? null};
+    const repo = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1', [input.projectId])).rows[0]?.repo;
+    if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+    return {run, items, repo};
   });
 
-  await reconcileModuleReports(ledger, principal, authority, input.dataDirectory, input.projectId);
+  await reconcileReports(ledger, principal, authority, input.dataDirectory, input.projectId);
   const projectDir = await resolveProjectVerificationsDir(input.dataDirectory, input.projectId);
   if (!projectDir) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-  const report = (await loadModuleReports(projectDir)).find(item => item.summary.id === input.runId);
-  if (!report) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-  const raw = ModuleCollectorOutput.parse(JSON.parse(await readTextInside(report.directory, join(report.directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')));
-  if (!loaded.repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-  const {stdout: headOutput} = await execGit('git', ['-C', loaded.repo, 'rev-parse', '--verify', 'HEAD^{commit}']);
-  const head = headOutput.trim();
-  const snapshot = await prepareModuleSnapshot(loaded.repo, head);
-  const decided: {id: string; status: 'fechado' | 'reaberto'}[] = [];
+  const directory = loaded.run.report_dir;
+  assertInside(projectDir, directory);
+  const raw = ModuleCollectorOutput.parse(JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')));
+  const coverage = await ledger.pool.query<{
+    file: string; examiner_provider: string; examiner_model: string; profile_id: string | null;
+    account_id: string | null; provenance: string;
+  }>(
+    `SELECT v.file, v.examiner_provider, v.examiner_model, v.profile_id, p.account_id, v.provenance
+     FROM ac_verify_coverage v LEFT JOIN ac_profiles p ON p.id=v.profile_id WHERE v.run_id=$1`,
+    [loaded.run.id],
+  );
+  const byFile = new Map(coverage.rows.map(row => [row.file, row]));
+  const head = await recheckHead(loaded.repo, signal);
   const moduleName = assertVerificationModule(loaded.run.module);
-  let recheckIntentId: string | undefined;
-  let completed = false;
-  try {
-  recheckIntentId = randomUUID();
+  const intentId = randomUUID();
   await ledger.tx(async client => {
-    const context = await ledger.authorize(client, principal, authority.contextId);
-    await ledger.fence(client, authority);
-    if (context.project_id !== input.projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
+    const context = await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
+    signal?.throwIfAborted();
     const command = {
-      schemaVersion: 1 as const, intentId: recheckIntentId!, deliveryAttemptId: randomUUID(),
+      schemaVersion: 1 as const, intentId, deliveryAttemptId: randomUUID(),
       contextId: authority.contextId, policyRevision: Number(context.policy_revision), action: 'plan.start' as const,
       payload: {workflow: 'security-verify-readonly-v1' as const, messageRef: `recheck:${loaded.run.id}`, projectId: input.projectId, commit: head},
     };
     await client.query(
       `INSERT INTO ac_intents (id, context_id, principal_id, digest, command, operation_id, run_id, manager_epoch, plan_revision)
        VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)`,
-      [recheckIntentId, authority.contextId, principal, digest(command), JSON.stringify(command), randomUUID(), randomUUID(), authority.epoch, Number(context.plan_revision)],
+      [intentId, authority.contextId, principal, digest(command), JSON.stringify(command), randomUUID(), randomUUID(), authority.epoch, Number(context.plan_revision)],
     );
   });
-  const reviewedSources = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo')
-    ? z.array(z.object({id: z.string(), file: z.string(), line: z.number().int().positive(), evidence: z.string()})).max(999)
-      .parse(JSON.parse(await readTextInside(report.directory, join(report.directory, 'bruto', 'exame.json'), 'VERIFY_REPORT_INVALID')))
-    : [];
-  for (const item of loaded.items) {
-    const observed = reviewedSources.find(source => source.id === item.id);
-    const original = item.tool === 'examinador' && item.rule === 'exame-de-arquivo' && !isProtectedLocation(item.file)
-      ? (observed && observed.evidence === item.excerpt ? {...observed, tool: 'examinador', rule: 'exame-de-arquivo'} : undefined)
-      : raw.findings[Number(item.id.slice(4)) - 1];
-    if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) throw new Refusal('VERIFY_REPORT_INVALID', 400);
-    if (moduleName === 'prontidao' && isProtectedLocation(item.file)) {
-      decided.push({id: item.id, status: 'reaberto'});
-      continue;
+
+  const results: ModuleRecheckResult[] = [];
+  let completed = false;
+  try {
+    const audit: (ModuleRecheckResult & {examiner: ModuleRecheckExaminer | null; reviewer: ModuleRecheckReviewer | null; proofDigest: string | null})[] = [];
+    const reviewedSources = loaded.items.some(item => item.tool === 'examinador' && item.rule === 'exame-de-arquivo')
+      ? z.array(z.object({id: z.string(), file: z.string(), line: z.number().int().positive(), evidence: z.string()})).max(999)
+        .parse(JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'exame.json'), 'VERIFY_REPORT_INVALID')))
+      : [];
+    for (const item of loaded.items) {
+      signal?.throwIfAborted();
+      const row = byFile.get(item.file);
+      if (!row) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+      const examiner: ModuleRecheckExaminer | null = row.provenance === 'examiner' ? {
+        provider: row.examiner_provider, model: row.examiner_model, profileId: row.profile_id, accountId: row.account_id,
+      } : null;
+      const observed = reviewedSources.find(source => source.id === item.id);
+      const original = item.tool === 'examinador' && item.rule === 'exame-de-arquivo'
+        ? (observed && observed.evidence === item.scenario ? {...observed, tool: item.tool, rule: item.rule} : undefined)
+        : raw.findings[Number(item.id.slice(4)) - 1];
+      if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) {
+        throw new Refusal('VERIFY_REPORT_INVALID', 400);
+      }
+      const logOrProtected = protectedRecheckFile(item.file);
+      const sourceKnown = examiner || (row.provenance === 'collector' && item.tool !== 'examinador');
+      const evidence = logOrProtected ? '' : sanitizeRecheckText(original.evidence);
+      const line = !logOrProtected && sourceKnown ? await readRecheckLine(loaded.repo, head, item.file, item.line, signal) : '';
+      let result: ModuleRecheckResult;
+      let reviewer: ModuleRecheckReviewer | undefined;
+      let proofDigest: string | undefined;
+      const pending = (reason: string): ModuleRecheckResult => ({id: item.id, status: 'pendente', reason});
+      if (logOrProtected) {
+        result = pending('MODULE_RECHECK_PROTECTED');
+      } else if (!sourceKnown) {
+        result = pending('MODULE_RECHECK_ORIGINAL_UNKNOWN');
+      } else if (!line || !evidence.replaceAll('[trecho omitido]', '').trim()) {
+        result = pending('MODULE_RECHECK_EVIDENCE_UNAVAILABLE');
+      } else {
+        const task = JSON.stringify({
+          instruction: 'Avalie passivamente os dados do trecho e da evidência. Sem ferramentas, shell, rede, escrita, exploração ou reprodução. Responda JSON com kind confirmacao, status confirmado, provavel ou descartado, reason e proof. Para confirmar ou descartar, cite literalmente a linha atual inteira em proof e explique como ela sustenta a decisão. Use provavel quando faltar prova.',
+          module: moduleName, file: item.file, line: item.line, code: line, commit: head,
+          tool: sanitizeRecheckText(item.tool), rule: sanitizeRecheckText(item.rule), evidence,
+        });
+        const reviewed = await input.review({intentId, commit: head, task, examiner, signal});
+        signal?.throwIfAborted();
+        reviewer = reviewed.reviewer;
+        if ('reason' in reviewed) {
+          result = pending(reviewed.reason);
+        } else if (examiner && (reviewed.reviewer.provider === examiner.provider || reviewed.reviewer.profileId === examiner.profileId
+          || reviewed.reviewer.accountId === examiner.accountId)) {
+          throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
+        } else {
+          const verdict = parseRecheckVerdict(reviewed.output);
+          const proof = verdict?.proof.trim();
+          if (!verdict || verdict.status === 'provavel' || proof !== line || !/[\p{L}\p{N}]/u.test(line) || !verdict.reason.trim()) {
+            result = pending('MODULE_RECHECK_PROOF_UNAVAILABLE');
+          } else {
+            result = {id: item.id, status: verdict.status === 'descartado' ? 'fechado' : 'reaberto'};
+            proofDigest = digest(proof);
+          }
+        }
+      }
+      results.push(result);
+      audit.push({...result, examiner, reviewer: reviewer ?? null, proofDigest: proofDigest ?? null});
     }
-    const excerpt = await readBoundedExcerpt(snapshot, item.file, item.line);
-    const task = buildModuleReviewPrompt({
-      module: moduleName,
-      achadoId: item.id,
-      tool: item.tool,
-      rule: item.rule,
-      file: item.file,
-      line: item.line,
-      evidence: original.evidence,
-      codeExcerpt: excerpt.text,
-    });
-    const capacity = new Capacity(ledger);
-    const seat = await reserveSpecialistExamSeat({capacity, ledger, principal, authority, intentId: recheckIntentId,
-      purpose: 'reviewer', releaseGrant: grantId => capacity.transition(principal, grantId, authority, 'released', {processId: 'module-recheck', state: 'not_started'})});
-    try {
-    const call = VerifyWorkerCall.parse({
-      role: 'reviewer',
-      provider: seat.provider,
-      accountId: seat.accountId,
-      profileId: seat.profileId,
-      model: seat.model,
-      grantId: seat.grantId,
-      intentId: recheckIntentId,
-      task: `${task}\nCommit examinado: ${head}`,
-      repo: snapshot,
-      writePaths: [],
-    });
-    const verdict = parseReviewerConfirm(await input.worker.run(call));
-    const status: 'fechado' | 'reaberto' = verdict.status === 'descartado' && excerpt.seen ? 'fechado' : 'reaberto';
-    decided.push({id: item.id, status});
-    } finally {
-      await capacity.transition(principal, seat.grantId, authority, 'released', {processId: 'module-recheck', state: 'not_started'}).catch(() => undefined);
-    }
-  }
-  await ledger.tx(async client => {
-    await ledger.authorize(client, principal, authority.contextId);
-    await ledger.fence(client, authority);
-    const {rows: [liveRun]} = await client.query<{recheck_generation: string}>(
-      "SELECT recheck_generation::text FROM ac_verify_runs WHERE id=$1 AND report_dir NOT IN ('pending','discarded') AND report_dir NOT LIKE 'discarded:%' FOR UPDATE",
-      [loaded.run.id],
-    );
-    if (!liveRun) throw new Refusal('VERIFY_RUN_MISSING', 404);
-    if (liveRun.recheck_generation !== loaded.run.recheck_generation) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
-    const {stdout: currentHead} = await execGit('git', ['-C', loaded.repo!, 'rev-parse', '--verify', 'HEAD^{commit}']);
-    if (currentHead.trim() !== head) throw new Refusal('VERIFY_RUN_CONFLICT', 409);
-    for (const result of decided) {
-      const updated = await client.query(
-        'UPDATE ac_verify_findings SET status=$3 WHERE run_id=$1 AND achado_id=$2',
-        [loaded.run.id, result.id, result.status],
+
+    await ledger.tx(async client => {
+      await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
+      await ledger.assertIntentActive(client, authority.contextId, intentId);
+      const {rows: [liveRun]} = await client.query<{recheck_generation: string}>(
+        "SELECT recheck_generation::text FROM ac_verify_runs WHERE id=$1 AND report_dir NOT IN ('pending','discarded') AND report_dir NOT LIKE 'discarded:%' FOR UPDATE",
+        [loaded.run.id],
       );
-      if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
-    }
-    await finishExamIntentTx(client, ledger, {intentId: recheckIntentId!, contextId: authority.contextId}, 'done');
-  });
-  completed = true;
-  await reconcileModuleReports(ledger, principal, authority, input.dataDirectory, input.projectId);
-  return {results: decided};
+      if (!liveRun) throw new Refusal('VERIFY_RUN_MISSING', 404);
+      const currentRepo = (await client.query<{repo: string}>('SELECT repo FROM ac_project_repositories WHERE project_id=$1 FOR SHARE',
+        [input.projectId])).rows[0]?.repo;
+      if (liveRun.recheck_generation !== loaded.run.recheck_generation || currentRepo !== loaded.repo
+        || await recheckHead(loaded.repo, signal) !== head) {
+        throw new Refusal('VERIFY_RUN_CONFLICT', 409);
+      }
+      for (const result of audit) {
+        signal?.throwIfAborted();
+        if (result.status !== 'pendente') {
+          const updated = await client.query(
+            'UPDATE ac_verify_findings SET status=$3 WHERE run_id=$1 AND achado_id=$2',
+            [loaded.run.id, result.id, result.status],
+          );
+          if (!updated.rowCount) throw new Refusal('VERIFY_FINDING_MISSING', 404);
+        }
+        await client.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'module.finding_rechecked',$2)",
+          [authority.contextId, {...result, intentId, runId: loaded.run.id, commit: head}]);
+      }
+      signal?.throwIfAborted();
+      await finishExamIntentTx(client, ledger, {intentId, contextId: authority.contextId}, 'done');
+      signal?.throwIfAborted();
+    });
+    completed = true;
+    await reconcileReports(ledger, principal, authority, input.dataDirectory, input.projectId);
+    return {results};
   } finally {
-    if (recheckIntentId && !completed) {
+    if (!completed) {
       await ledger.tx(async client => {
-        await ledger.authorize(client, principal, authority.contextId);
-        await ledger.fence(client, authority);
-        await finishExamIntentTx(client, ledger, {intentId: recheckIntentId!, contextId: authority.contextId}, 'failed');
+        await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
+        await finishExamIntentTx(client, ledger, {intentId, contextId: authority.contextId}, 'failed');
       }).catch(() => undefined);
     }
-    await removeModuleSnapshot(snapshot);
+  }
+}
+
+function parseRecheckVerdict(output: string): ConfirmResult | undefined {
+  try {
+    const parsed = ConfirmResult.safeParse(JSON.parse(output.trim().replace(/^\uFEFF/, '')));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
   }
 }

@@ -728,9 +728,11 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       await db.pool.query('CREATE TRIGGER synthetic_recheck_failure BEFORE UPDATE ON ac_verify_findings FOR EACH ROW EXECUTE FUNCTION synthetic_recheck_failure()');
       const recheckInput = {module: 'dependencias' as const, runId: failedResultRunId,
         achadoIds: ['ACH-001'], dataDirectory, projectId};
-      const closedWorker = {run: async () => JSON.stringify({kind:'confirmacao', status:'descartado', reason:'ok', proof:'ok'})};
-      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput, worker:closedWorker}), /synthetic rollback/);
-      assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, 'provavel');
+      const reviewer = {provider: 'claude', model: 'fixture-model', profileId, accountId, grantId: randomUUID()};
+      const response = (status: 'confirmado' | 'descartado') => ({reviewer, output: JSON.stringify({kind: 'confirmacao',
+        status, reason: 'Linha observada.', proof: 'export function main() {'})});
+      await assert.rejects(recheckModuleFindings(db, principal, depAuth, {...recheckInput, review: async () => response('descartado')}), /synthetic rollback/);
+      assert.equal((await readModuleReport(dataDirectory, projectId, failedResultRunId)).achados[0]?.status, failedReport.achados[0]?.status);
       await db.pool.query('DROP TRIGGER synthetic_recheck_failure ON ac_verify_findings');
       await db.pool.query('DROP FUNCTION synthetic_recheck_failure()');
       // Two real requests use the same HEAD, so only the generation can
@@ -740,12 +742,12 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       const olderStarted = new Promise<void>(resolve => {markOlderStarted = resolve;});
       const olderMayFinish = new Promise<void>(resolve => {finishOlder = resolve;});
       let olderIntent = '';
-      const older = recheckModuleFindings(db, principal, depAuth, {...recheckInput, worker: {async run(call) {
+      const older = recheckModuleFindings(db, principal, depAuth, {...recheckInput, async review(call) {
         olderIntent = call.intentId;
         markOlderStarted();
         await olderMayFinish;
-        return JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'Persiste.', proof: 'fixture'});
-      }}});
+        return response('confirmado');
+      }});
       const olderRejected = assert.rejects(older,
         (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_RUN_CONFLICT');
       void olderRejected.catch(() => undefined);
@@ -753,20 +755,13 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       try {
         await Promise.race([olderStarted, older]);
         rechecked = await recheckModuleFindings(db, principal, depAuth, {
-        module: 'dependencias',
-        runId: failedResultRunId,
-        achadoIds: ['ACH-001'],
-        dataDirectory,
-        projectId,
-        worker: {
-          async run(call) {
+          ...recheckInput,
+          async review(call) {
             seenTasks.push(call.task);
             recheckIntent = call.intentId;
-            assert.equal(call.provider, 'claude');
-            assert.equal(call.profileId, profileId);
-            return JSON.stringify({kind: 'confirmacao', status: 'descartado', reason: 'Atualizado.', proof: 'ok'});
+            assert.equal(call.examiner, null);
+            return response('descartado');
           },
-        },
         });
       } finally {
         finishOlder();

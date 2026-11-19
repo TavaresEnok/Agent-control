@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import {execFile, execFileSync} from 'node:child_process';
 import {generateKeyPairSync, randomUUID} from 'node:crypto';
 import {existsSync} from 'node:fs';
 import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
@@ -7,18 +7,20 @@ import {createServer, type IncomingMessage} from 'node:http';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
+import {promisify} from 'node:util';
 import {AccountHomes} from '../src/account-homes.ts';
 import {Capacity} from '../src/capacity.ts';
 import {digest, Refusal} from '../src/contracts.ts';
 import {prepareClaudeExamAccessToken} from '../src/exam-login.ts';
-import {Ledger} from '../src/ledger.ts';
+import {Ledger, VERIFICATION_MODULES} from '../src/ledger.ts';
 import {moduleExamConnectHost, moduleExamSocket, monitorModuleExamEgress, startModuleExamEgress, type ModuleExamProvider} from '../src/module-exam-egress.ts';
 import {moduleExamCodexBody, readModuleExamCodexOutput} from '../src/module-exam-codex.ts';
 import type {ModuleExamRuntime} from '../src/module-exam-native.ts';
 import {moduleExamClaudeArgs, readModuleExamClaudeOutput} from '../src/module-exam-worker.ts';
 import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
-import {runPersonalModuleCli, type PersonalModuleCliDeps} from '../src/personal-module-cli.ts';
-import type {VerificationModuleRunResult} from '../src/verification-modules.ts';
+import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli, type PersonalModuleCliDeps} from '../src/personal-module-cli.ts';
+import {runPersonalQaCli} from '../src/personal-qa-cli.ts';
+import {readModuleReport, type VerificationModuleRunResult} from '../src/verification-modules.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('provedores recebem apenas HTTPS fixo e o Claude inicia sem ferramentas nem configuração externa', () => {
@@ -195,6 +197,18 @@ async function fakeDocker(socket: string, answer: (launch: Launch) => {output: s
 }
 
 const base = process.env.AC_TEST_DATABASE_URL;
+test('as oito CLIs pessoais aceitam apenas identificadores de achado na reverificação', () => {
+  const runId = randomUUID();
+  for (const module of VERIFICATION_MODULES) {
+    assert.deepEqual(parsePersonalModuleArgs(module, ['installation.json', 'Projeto', '--reverificar', runId, 'ACH-001', 'ACH-002']),
+      {kind: 'recheck', module, installationPath: 'installation.json', projectToken: 'Projeto', runId, achadoIds: ['ACH-001', 'ACH-002']});
+    for (const args of [[runId], [runId, 'ACH-1'], [runId, 'ACH-001', '--descartar'], ['invalid', 'ACH-001']]) {
+      assert.throws(() => parsePersonalModuleArgs(module, ['installation.json', 'Projeto', '--reverificar', ...args]), /VERIFY_USAGE/);
+    }
+    assert.match(moduleCliFailureText(new Refusal('VERIFY_USAGE'), module), /--reverificar/);
+  }
+});
+
 test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na cota e na indisponibilidade',
   {skip: !base}, async () => {
     const database = await isolatedDatabase(base!, 'moduleexam');
@@ -202,8 +216,10 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
     const root = await mkdtemp(join(tmpdir(), 'ac-module-native-test-'));
     const socket = join(root, 'docker.sock');
     let exhaust = false;
+    let recheckAnswer: ((task: {code: string}) => string) | undefined;
     const docker = await fakeDocker(socket, launch => {
       const task = JSON.parse(launch.task);
+      if (task.commit && recheckAnswer) return {failureCode: null, output: recheckAnswer(task)};
       if (launch.provider === 'claude') return {failureCode: null,
         output: JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: ['qa'], findings: []})};
       if (exhaust) return {output: 'diagnóstico privado descartado', failureCode: 'PROVIDER_USAGE_LIMIT'};
@@ -220,10 +236,13 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       await writeFile(join(repo, '.env'), 'CONTEUDO_SINTETICO_PROTEGIDO\n');
       git('init'); git('add', '.'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic');
 
-      const project = randomUUID(), owner = 'module-exam-owner';
+      const project = randomUUID(), owner = 'module-exam-owner', otherProject = randomUUID();
       await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Fixture']);
       await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, owner]);
       await ledger.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)', [project, repo]);
+      await ledger.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [otherProject, 'Outro projeto']);
+      await ledger.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [otherProject, owner]);
+      await ledger.createContext(owner, otherProject, randomUUID());
       await ledger.pool.query('INSERT INTO ac_control_admins VALUES($1)', [owner]);
       await ledger.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
       const context = await ledger.createContext(owner, project, randomUUID());
@@ -266,7 +285,8 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       await capacity.assignPolicy(owner, context, revision);
       const installation = join(dataDirectory, 'installation.json');
       await writeFile(installation, JSON.stringify({schemaVersion: 1, mode: 'administration-only', activation: 'personal',
-        databaseUrl: database.url, dataDirectory, project: {id: project, label: 'Fixture', repo, owner}, projects: [],
+        databaseUrl: database.url, dataDirectory, project: {id: project, label: 'Fixture', repo, owner},
+        projects: [{id: otherProject, label: 'Outro projeto', repo: join(root, 'other-repo'), owner}],
         http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
         happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'}}), {mode: 0o600});
       const collectorOutput = {coverage: [{tool: 'fixture', version: '1', status: 'ok', detail: 'leitura local'}],
@@ -297,6 +317,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.deepEqual(result?.achados.map(f => [f.status, f.verifier?.provider]), [['confirmado', 'codex'], ['confirmado', 'codex']]);
       assert.deepEqual((await ledger.pool.query('SELECT DISTINCT provenance FROM ac_verify_coverage WHERE run_id=$1', [result!.runId])).rows,
         [{provenance: 'examiner'}]);
+      const reviewRunId = result!.runId;
       for (const launch of docker.logs) {
         assert.equal(launch.moduleExam, true);
         assert.equal(launch.role, 'specialist');
@@ -330,6 +351,139 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       }
       assert.equal(docker.containers.size, 0);
       assert.equal(docker.networks.size, 0);
+      docker.check();
+
+      const reviewerAccount = [...runtime[1]!.accountIds][0]!;
+      await ledger.pool.query('UPDATE ac_accounts SET exhausted_until=NULL WHERE id=$1', [reviewerAccount]);
+      await capacity.observeQuota(owner, reviewerAccount, {status: 'available', ttlSeconds: 3600, source: 'synthetic://module-exam'});
+      const args = [installation, project, '--reverificar', reviewRunId, 'ACH-001'];
+      const recheck = (seats: ModuleExamRuntime = runtime) => runPersonalQaCli(args, {moduleExamRuntime: async () => seats});
+      const findingStatus = async () => (await readModuleReport(dataDirectory, project, reviewRunId, 'qa')).achados[0]?.status;
+      const refuses = (code: string) => (error: unknown) => error instanceof Refusal && error.code === code;
+      const count = docker.logs.length;
+      await assert.rejects(runPersonalModuleCli('arquitetura', args), refuses('VERIFY_RUN_MISSING'));
+      await assert.rejects(runPersonalQaCli([installation, otherProject, ...args.slice(2)]), refuses('VERIFY_RUN_MISSING'));
+      await ledger.pool.query("UPDATE ac_memberships SET role='viewer' WHERE project_id=$1 AND principal_id=$2", [project, owner]);
+      await assert.rejects(recheck(), refuses('PROJECT_FORBIDDEN'));
+      await ledger.pool.query("UPDATE ac_memberships SET role='owner' WHERE project_id=$1 AND principal_id=$2", [project, owner]);
+      const {contextId} = await ledger.ensureExamContext(owner, project, 'qa');
+      const existing = await ledger.acquire(owner, contextId, randomUUID(), 'fixture-manager', 60);
+      try { await assert.rejects(recheck(), refuses('VERIFY_ALREADY_RUNNING')); }
+      finally { await ledger.releaseLease(existing); }
+      assert.equal(docker.logs.length, count);
+
+      // The actual top-level command reaches the same route with no active native runtime.
+      const {stdout, stderr} = await promisify(execFile)(process.execPath, ['scripts/personal-qa.mjs', ...args], {
+        env: {PATH: '/usr/bin:/bin', HOME: root, LANG: 'C.UTF-8'}, timeout: 20_000,
+      });
+      assert.equal(stderr, '');
+      assert.equal(stdout.trim(), 'ACH-001 pendente MODULE_EXAM_REVIEWER_UNAVAILABLE');
+      assert.deepEqual(await recheck(runtime.slice(0, 1)), ['ACH-001 pendente MODULE_EXAM_REVIEWER_UNAVAILABLE']);
+      assert.equal(await findingStatus(), 'confirmado');
+      assert.equal(docker.logs.length, count);
+
+      await writeFile(join(repo, 'index.ts'), 'return 43;\nconst password = "NOVA_CREDENCIAL_SINTETICA";\n');
+      git('add', 'index.ts');
+      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic correction');
+      const verdict = (proof: string) => JSON.stringify({kind: 'confirmacao', status: 'descartado', proof, reason: 'Valor corrigido no trecho.'});
+      recheckAnswer = () => verdict('prova sem vínculo com o trecho');
+      assert.deepEqual(await recheck(), ['ACH-001 pendente MODULE_RECHECK_PROOF_UNAVAILABLE']);
+      assert.equal(await findingStatus(), 'confirmado');
+
+      recheckAnswer = task => {
+        git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'synthetic concurrent HEAD');
+        return verdict(task.code);
+      };
+      await assert.rejects(recheck(), refuses('VERIFY_RUN_CONFLICT'));
+      assert.equal(await findingStatus(), 'confirmado');
+      const correctedHead = git('rev-parse', 'HEAD').toString().trim();
+
+      recheckAnswer = task => {
+        process.emit('SIGINT', 'SIGINT');
+        return verdict(task.code);
+      };
+      await assert.rejects(recheck(), refuses('EXAM_INTERRUPTED'));
+      assert.equal(await findingStatus(), 'confirmado');
+      const {rows: [cancelled]} = await ledger.pool.query(`SELECT i.state, m.lease_until <= clock_timestamp() AS released
+        FROM ac_intents i JOIN ac_managers m USING (context_id) WHERE i.command->'payload'->>'messageRef'=$1
+        ORDER BY i.manager_epoch DESC LIMIT 1`, [`recheck:${reviewRunId}`]);
+      assert.deepEqual(cancelled, {state: 'failed', released: true});
+
+      recheckAnswer = task => verdict(task.code);
+      assert.deepEqual(await recheck(), ['ACH-001 fechado']);
+      assert.equal(await findingStatus(), 'fechado');
+      const launch = docker.logs.at(-1)!;
+      assert.equal(launch.provider, 'codex');
+      assert.equal(launch.moduleExam, true);
+      assert.deepEqual(launch.writePaths, []);
+      assert.deepEqual(JSON.parse(launch.task).code, 'return 43;');
+      assert.doesNotMatch(launch.task, /NOVA_CREDENCIAL_SINTETICA|Conclusão sintética do autor|\/tmp\//);
+      const {rows: [closed]} = await ledger.pool.query(`SELECT detail FROM ac_audit
+        WHERE kind='module.finding_rechecked' AND detail->>'status'='fechado' AND context_id=$1`, [contextId]);
+      assert.equal(closed.detail.commit, correctedHead);
+      assert.equal(closed.detail.proofDigest, digest('return 43;'));
+      assert.deepEqual(closed.detail.examiner, {provider: 'claude', model: 'claude-module-fixture',
+        accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0]});
+      assert.deepEqual(closed.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',
+        accountId: reviewerAccount, profileId: profiles[1], grantId: closed.detail.reviewer.grantId});
+      const {rows: [receipt]} = await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [closed.detail.reviewer.grantId]);
+      assert.equal(receipt.state, 'released');
+      assert.ok(receipt.physical_receipt.containerId);
+
+      await writeFile(join(repo, 'runtime.log'), 'REGISTRO_SINTETICO_PROTEGIDO\n');
+      git('add', 'runtime.log');
+      git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'synthetic log');
+      const protectedFindings = [
+        {tool: 'fixture', rule: 'LOG', file: 'runtime.log', line: 1, severity: 'baixa', message: 'Log', evidence: 'REGISTRO_SINTETICO_PROTEGIDO'},
+        {tool: 'prontidao-audit', rule: 'PRONTIDAO-SEGREDO-ARQUIVO-ENV', file: '.env', line: 1, severity: 'baixa',
+          message: 'Possível segredo em arquivo protegido.', evidence: 'Localização informada pelo coletor; conteúdo protegido.'},
+      ];
+      const [protectedRun] = await runPersonalModuleCli('prontidao', [installation, project], {collectorOutput: {
+        coverage: ['fixture', 'prontidao-audit'].map(tool => ({tool, version: '1', status: 'ok', detail: 'leitura local'})),
+        findings: protectedFindings,
+      }});
+      const protectedBefore = (await readModuleReport(dataDirectory, project, protectedRun!, 'prontidao')).achados;
+      assert.deepEqual(await runPersonalModuleCli('prontidao', [installation, project, '--reverificar', protectedRun!, 'ACH-001', 'ACH-002'], {
+        moduleExamRuntime: async () => { throw Error('protected findings must not call the runtime'); },
+      }), ['ACH-001 pendente MODULE_RECHECK_PROTECTED', 'ACH-002 pendente MODULE_RECHECK_PROTECTED']);
+      assert.deepEqual((await readModuleReport(dataDirectory, project, protectedRun!, 'prontidao')).achados, protectedBefore);
+      assert.doesNotMatch(JSON.stringify(docker.logs.slice(count)), /REGISTRO_SINTETICO_PROTEGIDO|CONTEUDO_SINTETICO_PROTEGIDO/);
+
+      const seat = runtime[1]!, supervisor = seat.supervisor;
+      const beforeLaunch = {...seat, supervisor: {
+        start: async () => { throw new Refusal('EXAM_LOGIN_STALE'); },
+        stop: supervisor.stop.bind(supervisor), reconcile: supervisor.reconcile.bind(supervisor),
+        retireTerminal: supervisor.retireTerminal.bind(supervisor), closeModuleExamEgress: supervisor.closeModuleExamEgress.bind(supervisor),
+      }};
+      assert.deepEqual(await recheck([beforeLaunch]), ['ACH-001 pendente EXAM_LOGIN_STALE']);
+      const lastGrant = async () => (await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants ORDER BY created_at DESC LIMIT 1')).rows[0];
+      assert.equal((await lastGrant()).state, 'released');
+      assert.equal((await lastGrant()).physical_receipt.state, 'not_started');
+
+      let recoveryRequest: Parameters<typeof supervisor.start>[2] | undefined;
+      const uncertain = {...beforeLaunch, supervisor: {...beforeLaunch.supervisor,
+        async start(...args: Parameters<typeof supervisor.start>) {
+          recoveryRequest = args[2];
+          return supervisor.start(...args);
+        },
+        stop: async () => { throw Error('synthetic stop unavailable'); },
+        reconcile: async () => { throw Error('synthetic result unavailable'); },
+      }};
+      assert.deepEqual(await recheck([uncertain]), ['ACH-001 pendente MODULE_RECHECK_RESULT_UNCERTAIN']);
+      assert.equal((await lastGrant()).state, 'running');
+      assert.equal((await lastGrant()).physical_receipt, null);
+      assert.equal(await findingStatus(), 'fechado');
+      assert.ok(recoveryRequest);
+      const recovery = await ledger.acquire(owner, contextId, randomUUID(), 'fixture-reconciler', 60);
+      try {
+        assert.equal((await supervisor.reconcile(owner, recovery, recoveryRequest)).state, 'uncertain');
+        assert.equal((await supervisor.reconcile(owner, recovery, recoveryRequest)).state, 'completed');
+        await supervisor.retireTerminal(owner, recovery, recoveryRequest.jobId);
+      } finally {
+        await ledger.releaseLease(recovery);
+      }
+      assert.equal((await lastGrant()).state, 'released');
+      assert.ok((await lastGrant()).physical_receipt.containerId);
       docker.check();
     } finally {
       await docker.close();

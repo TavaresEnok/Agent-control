@@ -155,9 +155,15 @@ export class NativeExecutionSupervisor{
   if(input.moduleExam){
    const binding=(await c.query(`SELECT 1 FROM ac_verify_runs r JOIN ac_exam_contexts e
     ON e.context_id=r.context_id AND e.project_id=r.project_id AND e.module=r.module
-    JOIN ac_intents i ON i.id=r.intent_id
-    WHERE r.intent_id=$1 AND r.context_id=$2 AND r.commit_id=$3 AND r.status='running'
-    AND i.command->'payload'->>'workflow'='security-verify-readonly-v1' AND ac_activation_personal()`,
+    JOIN ac_intents i ON i.id=$1 AND i.context_id=r.context_id
+    WHERE r.context_id=$2 AND i.state='accepted'
+    AND i.command->'payload'->>'workflow'='security-verify-readonly-v1' AND ac_activation_personal()
+    AND ((r.intent_id=i.id AND r.commit_id=$3 AND r.status='running') OR
+      (i.command->'payload'->>'messageRef'='recheck:'||r.id::text
+       AND i.command->'payload'->>'projectId'=r.project_id::text AND i.command->'payload'->>'commit'=$3
+       AND r.module <> 'verify' AND r.status IN ('done','failed') AND r.report_dir NOT IN ('pending','discarded')
+       AND EXISTS (SELECT 1 FROM ac_memberships m WHERE m.project_id=r.project_id AND m.principal_id=i.principal_id AND m.role='owner')
+       AND r.report_dir NOT LIKE 'discarded:%'))`,
     [input.intentId,authority.contextId,input.base])).rowCount;
    if(!binding||this.config.syntheticFixture||!moduleExamProviders.some(candidate=>candidate===this.config.provider)||
     input.moduleExam.accountId!==g.account_id||input.moduleExam.profileId!==g.profile_id||input.moduleExam.model!==g.model)

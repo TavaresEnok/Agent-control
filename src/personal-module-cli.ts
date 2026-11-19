@@ -17,6 +17,7 @@ import {
 import {
   assertVerificationModule,
   discardModuleReport,
+  recheckModuleFindings,
   reconcileModuleReports,
   requestModuleCorrection,
   runVerificationModule,
@@ -24,10 +25,12 @@ import {
   type ModuleCollectorOutput,
   type VerificationModuleRunResult,
 } from './verification-modules.ts';
-import {composePersonalModuleExamRuntime, createPersonalModuleExam, type ModuleExamRuntime} from './module-exam-native.ts';
+import {composePersonalModuleExamRuntime, createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamRuntime} from './module-exam-native.ts';
+import {assertPersonalActivation} from './verify-intent.ts';
 
+const moduleActions = '[--corrigir <runId> <ACH-001...> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
 const messages: Record<string, string> = {
-  VERIFY_USAGE: 'Uso: npm run personal:<modulo> -- <instalação.json> <projeto> [--corrigir <runId> <ACH-001...> | --descartar <runId>]',
+  VERIFY_USAGE: `Uso: npm run personal:<modulo> -- <instalação.json> <projeto> ${moduleActions}`,
   PERSONAL_ACTIVATION_REQUIRED: 'O módulo de verificação só roda numa instalação pessoal.',
   NOT_FOUND: 'Projeto não encontrado.',
   VERIFY_PROJECT_AMBIGUOUS: 'Há mais de um projeto com esse label.',
@@ -53,6 +56,9 @@ const messages: Record<string, string> = {
   VERIFY_TOO_MANY: 'A operação aceita no máximo 20 achados por vez.',
   VERIFY_FINDING_MISSING: 'Achado não encontrado ou não elegível para correção.',
   VERIFY_RUN_MISSING: 'Execução do módulo não encontrada neste projeto.',
+  VERIFY_RUN_CONFLICT: 'A execução ou o commit mudou durante a reverificação.',
+  VERIFY_RECHECK_FAILED: 'A reverificação falhou. Consulte o registro da execução.',
+  STALE_MANAGER: 'A autoridade sobre o contexto do módulo expirou.',
   VERIFY_REPORT_INSIDE_REPO: 'O diretório de dados não pode ficar dentro do repositório.',
   VERIFY_SECRET_IN_REPORT: 'Um segredo vivo apareceria no relatório.',
   PRONTIDAO_ORIGIN_INVALID: 'Origem HTTPS inválida; informe apenas esquema https:// sem usuário, caminho ou parâmetros.',
@@ -64,10 +70,8 @@ const messages: Record<string, string> = {
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   if (code === 'VERIFY_USAGE' && module) {
-    if (module === 'prontidao') {
-      return 'Uso: npm run personal:prontidao -- <instalação.json> <projeto> [--origem <https://...>] [--corrigir <runId> <ACH-001...> | --descartar <runId>]';
-    }
-    return `Uso: npm run personal:${module} -- <instalação.json> <projeto> [--corrigir <runId> <ACH-001...> | --descartar <runId>]`;
+    const origin = module === 'prontidao' ? ' [--origem <https://...>]' : '';
+    return `Uso: npm run personal:${module} -- <instalação.json> <projeto>${origin} ${moduleActions}`;
   }
   return messages[code] ?? (code || 'A execução do módulo falhou.');
 }
@@ -75,7 +79,7 @@ export function moduleCliFailureText(error: unknown, module?: VerificationModule
 export type ParsedPersonalModuleInvocation =
   | {kind: 'run'; module: VerificationModule; installationPath: string; projectToken: string; origin?: string}
   | {kind: 'discard'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
-  | {kind: 'remediate'; module: VerificationModule; installationPath: string; projectToken: string; runId: string; achadoIds: string[]};
+  | {kind: 'remediate' | 'recheck'; module: VerificationModule; installationPath: string; projectToken: string; runId: string; achadoIds: string[]};
 
 export function parsePersonalModuleArgs(
   module: VerificationModule,
@@ -117,16 +121,17 @@ export function parsePersonalModuleArgs(
     }
     return {kind: 'discard', module, installationPath, projectToken, runId};
   }
-  if (rest[0] === '--corrigir') {
+  if (rest[0] === '--corrigir' || rest[0] === '--reverificar') {
     const runId = rest[1];
     const achadoIds = rest.slice(2);
     if (!runId || runId.startsWith('--') || !Id.safeParse(runId).success || achadoIds.length === 0) {
       throw new Refusal('VERIFY_USAGE', 400);
     }
-    if (achadoIds.some(id => id.startsWith('--'))) {
+    const recheck = rest[0] === '--reverificar';
+    if (achadoIds.some(id => recheck ? !/^ACH-\d{3}$/.test(id) : id.startsWith('--'))) {
       throw new Refusal('VERIFY_USAGE', 400);
     }
-    return {kind: 'remediate', module, installationPath, projectToken, runId, achadoIds};
+    return {kind: recheck ? 'recheck' : 'remediate', module, installationPath, projectToken, runId, achadoIds};
   }
   throw new Refusal('VERIFY_USAGE', 400);
 }
@@ -209,15 +214,44 @@ export async function runPersonalModuleCli(
 
   const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
   let authority: Authority | undefined;
+  let stopRecheckLease: (() => void) | undefined;
+  const recheckAbort = parsed.kind === 'recheck' ? new AbortController() : undefined;
+  const interruptRecheck = () => recheckAbort?.abort(new Refusal('EXAM_INTERRUPTED'));
+  if (recheckAbort) {
+    process.on('SIGINT', interruptRecheck);
+    process.on('SIGTERM', interruptRecheck);
+  }
   try {
     if (parsed.kind === 'discard') {
       await discardModuleReport(ledger, project.owner, config.dataDirectory, project.id, module, parsed.runId);
       return ['Relatório descartado.'];
     }
+    if (recheckAbort) {
+      await assertPersonalActivation(ledger);
+      const membership = await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",
+        [project.id, project.owner]);
+      if (!membership.rowCount) throw new Refusal('PROJECT_FORBIDDEN', 403);
+      recheckAbort.signal.throwIfAborted();
+    }
     const exam = await ledger.ensureExamContext(project.owner, project.id, module);
     authority = await acquirePersonalModule(ledger, project.owner, exam.contextId, module);
+    if (recheckAbort) {
+      stopRecheckLease = keepPersonalVerifyLease(ledger, authority, 5000,
+        () => recheckAbort.abort(new Refusal('VERIFY_LEASE_LOST')));
+      recheckAbort.signal.throwIfAborted();
+    }
     if (exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
       await new Capacity(ledger).assignPolicy(project.owner, exam.contextId, exam.mainCapacityPolicyRevision);
+    }
+
+    if (parsed.kind === 'recheck') {
+      const {results} = await recheckModuleFindings(ledger, project.owner, authority, {
+        module, runId: parsed.runId, achadoIds: parsed.achadoIds, dataDirectory: config.dataDirectory, projectId: project.id,
+        signal: recheckAbort?.signal,
+        review: createPersonalModuleRecheck({ledger, principal: project.owner, authority,
+          loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger))}),
+      });
+      return results.map(result => `${result.id} ${result.status}${result.status === 'pendente' ? ` ${result.reason}` : ''}`);
     }
 
     if (parsed.kind === 'remediate') {
@@ -317,14 +351,25 @@ export async function runPersonalModuleCli(
         });
       }
     }
+  } catch (error) {
+    if (recheckAbort && !(error instanceof Refusal)) throw new Refusal('VERIFY_RECHECK_FAILED', 503);
+    throw error;
   } finally {
-    if (authority) {
-      await releasePersonalVerifyLease(
-        {pool: {query: (sql, params) => ledger.pool.query(sql, (params ?? []) as never[])}},
-        authority,
-      ).catch(() => undefined);
+    stopRecheckLease?.();
+    try {
+      if (authority) {
+        await releasePersonalVerifyLease(
+          {pool: {query: (sql, params) => ledger.pool.query(sql, (params ?? []) as never[])}},
+          authority,
+        ).catch(() => undefined);
+      }
+      await ledger.close();
+    } finally {
+      if (recheckAbort) {
+        process.off('SIGINT', interruptRecheck);
+        process.off('SIGTERM', interruptRecheck);
+      }
     }
-    await ledger.close();
   }
 }
 
