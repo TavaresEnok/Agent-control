@@ -1,5 +1,5 @@
 import {execFile, spawn} from 'node:child_process';
-import {randomBytes, randomUUID} from 'node:crypto';
+import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rename, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -1308,7 +1308,7 @@ export async function writeModuleReport(input: {
   exam?: Pick<ModuleExamResult, 'mode' | 'coverage' | 'routes' | 'notes'> & {findings?: ModuleExamResult['findings']};
   note?: string;
   directoryName?: string;
-}): Promise<{directory: string; directoryName: string; summary: ModuleReportSummary}> {
+}): Promise<{directory: string; directoryName: string; summary: ModuleReportSummary; examOriginSha256?: string}> {
   assertVerificationModule(input.module);
   assertSafeSegment(input.projectId);
   assertSafeSegment(input.runId);
@@ -1392,6 +1392,14 @@ export async function writeModuleReport(input: {
     coverageBody += ['', '## Exame independente', '', `Modo: ${cell(input.exam.mode)}`, '',
       '| Arquivo | Estado | Motivo ou modelo |','|---|---|---|', ...files, '', ...input.exam.notes.map(n => `- ${cell(n)}`), ''].join('\n');
   }
+  const examOrigin = input.exam ? guardReportText(JSON.stringify(
+      achados.flatMap((item, index) => {
+        if (item.sources[0] !== 'examinador' || item.sources[1] !== 'exame-de-arquivo') return [];
+        const hypothesis = input.exam?.findings?.[index]?.hypothesis;
+        return [{id: item.id, file: item.where.file, line: item.where.line, evidence: item.scenario,
+          ...(hypothesis ? {hypothesis: sanitizeText(hypothesis)} : {})}];
+      }),
+    )) : undefined;
   const planned: {segments: string[]; body: string}[] = [
     {
       segments: ['README.md'],
@@ -1413,14 +1421,7 @@ export async function writeModuleReport(input: {
     {segments: ['achados.json'], body: guardReportText(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guardReportText(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},
-    ...(input.exam ? [{segments: ['bruto', 'exame.json'], body: guardReportText(JSON.stringify(
-      achados.flatMap((item, index) => {
-        if (item.sources[0] !== 'examinador' || item.sources[1] !== 'exame-de-arquivo') return [];
-        const hypothesis = input.exam?.findings?.[index]?.hypothesis;
-        return [{id: item.id, file: item.where.file, line: item.where.line, evidence: item.scenario,
-          ...(hypothesis ? {hypothesis: sanitizeText(hypothesis)} : {})}];
-      }),
-    ))}] : []),
+    ...(examOrigin !== undefined ? [{segments: ['bruto', 'exame.json'], body: examOrigin}] : []),
     ...Object.entries(doc?.artifacts ?? {}).flatMap(([name, artifact]) => artifact.status === 'present'
       ? [{segments: [name], body: guardReportText(artifact.content)}] : []),
     {segments: [input.deferPublication ? '.run-pending.json' : 'run.json'], body: guardReportText(`${JSON.stringify(summary, null, 2)}\n`)},
@@ -1447,7 +1448,8 @@ export async function writeModuleReport(input: {
   }
   await Promise.all([syncReportDirectory(findingsDirectory), syncReportDirectory(rawDirectory)]);
   for (const ancestor of [directory, project, root, dataReal]) await syncReportDirectory(ancestor);
-  return {directory, directoryName, summary};
+  return {directory, directoryName, summary,
+    ...(examOrigin !== undefined ? {examOriginSha256: createHash('sha256').update(examOrigin).digest('hex')} : {})};
 }
 
 async function resolveProjectVerificationsDir(dataDirectory: string, projectId: string): Promise<string | null> {
@@ -2141,6 +2143,9 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         [runId, finalState, prepared.directory, input.authority.contextId, image ?? null],
       );
       if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
+      if (prepared.examOriginSha256) {
+        await c.query('UPDATE ac_verify_runs SET exam_origin_sha256=$2 WHERE id=$1', [runId, prepared.examOriginSha256]);
+      }
       await finishExamIntentTx(c, input.ledger, {intentId, contextId: input.authority.contextId}, finalState);
       return prepared;
     });
@@ -2891,13 +2896,13 @@ export async function recheckModuleFindings(
   const loaded = await ledger.tx(async client => {
     await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
     signal?.throwIfAborted();
-    const run = (await client.query<{id: string; module: string; commit_id: string; report_dir: string; recheck_generation: string}>(
+    const run = (await client.query<{id: string; module: string; commit_id: string; report_dir: string; exam_origin_sha256: string | null; recheck_generation: string}>(
       `UPDATE ac_verify_runs r SET recheck_generation=r.recheck_generation+1
        FROM ac_exam_contexts e WHERE r.id=$1 AND r.project_id=$2 AND r.context_id=$3
        AND e.project_id=r.project_id AND e.context_id=r.context_id AND e.module=r.module
        AND ($4::text IS NULL OR r.module=$4) AND r.module <> 'verify' AND r.status IN ('done','failed')
        AND r.report_dir NOT IN ('pending','discarded') AND r.report_dir NOT LIKE 'discarded:%'
-       RETURNING r.id::text, r.module, r.commit_id, r.report_dir, r.recheck_generation::text`,
+       RETURNING r.id::text, r.module, r.commit_id, r.report_dir, r.exam_origin_sha256, r.recheck_generation::text`,
       [input.runId, input.projectId, authority.contextId, input.module ?? null],
     )).rows[0];
     if (!run) throw new Refusal('VERIFY_RUN_MISSING', 404);
@@ -2963,9 +2968,23 @@ export async function recheckModuleFindings(
       if (isErrno(error, 'ENOENT')) return false;
       throw error;
     });
-    const reviewedSources = archived
-      ? z.array(z.object({id: z.string(), file: z.string(), line: z.number().int().positive(), evidence: z.string(), hypothesis: z.string().max(300).optional()})).max(999)
-        .parse(JSON.parse(await readTextInside(directory, sourceFile, 'VERIFY_REPORT_INVALID'))) : [];
+    if (hasExamFindings && loaded.run.exam_origin_sha256 && !archived) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    const originText = archived ? await readTextInside(directory, sourceFile, 'VERIFY_REPORT_INVALID') : undefined;
+    if (originText !== undefined && loaded.run.exam_origin_sha256 &&
+      createHash('sha256').update(originText).digest('hex') !== loaded.run.exam_origin_sha256) {
+      throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    }
+    const origin = z.object({id: ACHADO_ID, file: z.string(), line: z.number().int().positive(),
+      evidence: z.string(), hypothesis: z.string().max(300).optional()});
+    const reviewedSources = new Map<string, z.infer<typeof origin>>();
+    if (originText !== undefined) {
+      try {
+        for (const entry of z.array(origin).max(999).parse(JSON.parse(originText))) {
+          if (reviewedSources.has(entry.id)) throw new Error();
+          reviewedSources.set(entry.id, entry);
+        }
+      } catch { throw new Refusal('VERIFY_REPORT_INVALID', 400); }
+    }
     for (const item of loaded.items) {
       signal?.throwIfAborted();
       const row = byFile.get(item.file);
@@ -2975,7 +2994,7 @@ export async function recheckModuleFindings(
       } : null;
       const logOrProtected = protectedRecheckFile(item.file);
       const fromExaminer = item.tool === 'examinador' && item.rule === 'exame-de-arquivo';
-      const observed = fromExaminer ? reviewedSources.find(source => source.id === item.id) : undefined;
+      const observed = fromExaminer ? reviewedSources.get(item.id) : undefined;
       const historicalLine = fromExaminer && !archived && !logOrProtected && /^[0-9a-f]{40}$/.test(loaded.run.commit_id)
         ? await readRecheckLine(loaded.repo, loaded.run.commit_id, item.file, item.line, signal) : '';
       const legacyEvidence = historicalLine && item.scenario.trim() && historicalLine.trim() === item.scenario.trim();
