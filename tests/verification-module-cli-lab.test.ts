@@ -541,10 +541,10 @@ async function verifyModuleEndToEnd(
     if (verifyStdoutLimit) {
       await assert.rejects(
         () => runPersonalModuleCli(module, [installationPath, projectId], {maxStdoutBytes: 64}),
-        (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_STDOUT_LIMIT',
+        (err: unknown) => err instanceof Refusal && err.code === 'VERIFY_TOOLS_FAILED',
       );
-      const limitedRun = (await db.pool.query<{status: string; intent_state: string}>(
-        `SELECT r.status, i.state AS intent_state
+      const limitedRun = (await db.pool.query<{id: string; status: string; intent_state: string; report_dir: string}>(
+        `SELECT r.id, r.status, i.state AS intent_state, r.report_dir
          FROM ac_verify_runs r JOIN ac_intents i ON i.id = r.intent_id
          WHERE r.project_id = $1 AND r.module = $2 AND r.id <> $3
          ORDER BY r.created_at DESC LIMIT 1`,
@@ -552,6 +552,10 @@ async function verifyModuleEndToEnd(
       )).rows[0];
       assert.equal(limitedRun?.status, 'failed');
       assert.equal(limitedRun?.intent_state, 'failed');
+      assert.ok(limitedRun);
+      const failedCollector = JSON.parse(await readFile(join(limitedRun.report_dir, 'bruto', 'achados-brutos.json'), 'utf8'));
+      assert.ok(failedCollector.coverage.some((row: {tool: string; status: string; detail: string}) =>
+        row.tool === 'coletor' && row.status === 'failed' && row.detail.includes('VERIFY_STDOUT_LIMIT')));
     }
   } finally {
     try {

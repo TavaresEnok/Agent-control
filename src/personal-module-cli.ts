@@ -10,6 +10,12 @@ import {loadInstallation, type Installation} from './installation.ts';
 import {Ledger, type VerificationModule} from './ledger.ts';
 import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease} from './personal-verify-cli.ts';
 import {
+  authorizeProjectHttpsOrigin,
+  probePublishedHttpsOrigins,
+  type PassiveHttpsProbeOptions,
+  type ProntidaoPassiveEvidence,
+} from './prontidao-target.ts';
+import {
   assertVerificationModule,
   removeModuleReport,
   reconcileModuleReports,
@@ -48,19 +54,24 @@ const messages: Record<string, string> = {
   VERIFY_RUN_MISSING: 'Execução do módulo não encontrada neste projeto.',
   VERIFY_REPORT_INSIDE_REPO: 'O diretório de dados não pode ficar dentro do repositório.',
   VERIFY_SECRET_IN_REPORT: 'Um segredo vivo apareceria no relatório.',
+  PRONTIDAO_ORIGIN_INVALID: 'Origem HTTPS inválida; informe apenas esquema https:// sem usuário, caminho ou parâmetros.',
+  PRONTIDAO_ORIGIN_UNAUTHORIZED: 'A origem HTTPS informada não está declarada e autorizada na instalação ou no projeto.',
   EXAM_INTERRUPTED: 'A execução do módulo foi interrompida.',
 };
 
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   if (code === 'VERIFY_USAGE' && module) {
+    if (module === 'prontidao') {
+      return 'Uso: npm run personal:prontidao -- <instalação.json> <projeto> [--origem <https://...>] [--corrigir <runId> <ACH-001...> | --descartar <runId>]';
+    }
     return `Uso: npm run personal:${module} -- <instalação.json> <projeto> [--corrigir <runId> <ACH-001...> | --descartar <runId>]`;
   }
   return messages[code] ?? (code || 'A execução do módulo falhou.');
 }
 
 export type ParsedPersonalModuleInvocation =
-  | {kind: 'run'; module: VerificationModule; installationPath: string; projectToken: string}
+  | {kind: 'run'; module: VerificationModule; installationPath: string; projectToken: string; origin?: string}
   | {kind: 'discard'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
   | {kind: 'remediate'; module: VerificationModule; installationPath: string; projectToken: string; runId: string; achadoIds: string[]};
 
@@ -82,6 +93,20 @@ export function parsePersonalModuleArgs(
   const rest = argv.slice(2);
   if (rest.length === 0) {
     return {kind: 'run', module, installationPath, projectToken};
+  }
+  if (module === 'prontidao' && (rest[0] === '--origem' || rest[0]?.startsWith('--origem='))) {
+    let origin: string | undefined;
+    if (rest[0] === '--origem') {
+      if (rest.length !== 2 || !rest[1] || rest[1].startsWith('--')) {
+        throw new Refusal('VERIFY_USAGE', 400);
+      }
+      origin = rest[1];
+    } else {
+      if (rest.length !== 1) throw new Refusal('VERIFY_USAGE', 400);
+      origin = rest[0].slice('--origem='.length);
+      if (!origin || origin.startsWith('--')) throw new Refusal('VERIFY_USAGE', 400);
+    }
+    return {kind: 'run', module, installationPath, projectToken, origin};
   }
   if (rest[0] === '--descartar') {
     const runId = rest[1];
@@ -178,6 +203,7 @@ export type PersonalModuleCliDeps = {
   rootDir?: string;
   timeoutMs?: number;
   maxStdoutBytes?: number;
+  prontidaoProbeOptions?: PassiveHttpsProbeOptions;
   collectorOutput?: unknown;
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
   worker?: VerifyWorker;
@@ -193,6 +219,10 @@ export async function runPersonalModuleCli(
   const config = await loadInstallation(resolve(parsed.installationPath));
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = resolveProject(config, parsed.projectToken);
+
+  const authorizedOrigins = parsed.kind === 'run' && module === 'prontidao'
+    ? authorizeProjectHttpsOrigin(config, project.id, parsed.origin)
+    : [];
 
   const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
   let authority: Authority | undefined;
@@ -242,6 +272,11 @@ export async function runPersonalModuleCli(
       return [corrected.messageLocalId, ...corrected.writePaths];
     }
 
+    const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
+      module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
+        ? await probePublishedHttpsOrigins(authorizedOrigins, deps?.prontidaoProbeOptions)
+        : undefined;
+
     const commit = await readHead(project.repo);
     const runId = randomUUID();
     const collectorAbort = new AbortController();
@@ -283,6 +318,7 @@ export async function runPersonalModuleCli(
             ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
             ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
             ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),
+            ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
             ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
             ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
             ...(deps?.worker !== undefined ? {worker: deps.worker} : {}),

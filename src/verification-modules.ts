@@ -13,6 +13,8 @@ import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transp
 import {finishExamIntentTx} from './exam-intent.ts';
 import {reserveSpecialistExamSeat} from './exam-provider.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
+import {assembleDocumentationArtifacts} from './module-documentation-artifacts.ts';
+import {validatePassiveTlsEvidence, type ProntidaoPassiveEvidence} from './prontidao-target.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {
@@ -137,6 +139,7 @@ export type CollectorRunnerSpec = {
   timeoutMs: number;
   maxStdoutBytes: number;
   signal?: AbortSignal;
+  passiveTlsEvidence?: ProntidaoPassiveEvidence;
 };
 
 export type VerificationModuleRunInput = {
@@ -155,6 +158,7 @@ export type VerificationModuleRunInput = {
   timeoutMs?: number;
   maxStdoutBytes?: number;
   signal?: AbortSignal;
+  passiveTlsEvidence?: ProntidaoPassiveEvidence;
   collectorOutput?: unknown;
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
   /** Optional independent reviewer worker. When present, findings are confirmed without passing author conclusions. */
@@ -241,8 +245,49 @@ export function assertModuleRepoRelativePath(file: string): string {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
   const parts = trimmed.split('/');
-  if (parts.some(forbiddenSegment)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  if (parts.some(forbiddenSegment) || isSecretClassBasename(trimmed)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   return parts.join('/');
+}
+
+// Only the basename of a secret-class file may cross this boundary, and only
+// for a structured readiness secret finding. All parent segments remain strict.
+function protectedLocation(file: string): string {
+  if (typeof file !== 'string' || file !== file.trim() || file.includes('\\') || CONTROL_CHAR.test(file)
+    || file.length > 400 || !REPO_PATH.test(file) || file.startsWith('/') || file.startsWith('~')) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  }
+  const parts = file.split('/');
+  const name = parts.pop()!;
+  if (!isSecretClassBasename(name) || name.includes('..') || name === '.' || name === '..'
+    || (forbiddenSegment(name) && !name.startsWith('.env')) || parts.some(forbiddenSegment)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  return file;
+}
+
+function isProtectedFindingSource(tool: unknown, rule: unknown): boolean {
+  return typeof rule === 'string' && /^[A-Za-z0-9_-]{1,120}$/.test(rule)
+    && (tool === 'gitleaks' || tool === 'trivy'
+      || (tool === 'prontidao-audit' && (rule === 'PRONTIDAO-SEGREDO-ARQUIVO-ENV' || rule === 'PRONTIDAO-CHAVE-PRIVADA-NO-REPOSITORIO')));
+}
+
+function isProtectedLocation(file: string): boolean {
+  try { protectedLocation(file); return true; } catch { return false; }
+}
+
+function documentationCoverage(coverage: readonly ModuleToolCoverage[]) {
+  if (coverage.some(row => row.tool.endsWith(':artefato') && row.files !== undefined)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+  const artifacts = assembleDocumentationArtifacts(coverage);
+  const tools = new Set(['typedoc:artefato', 'dependency-cruiser:artefato']);
+  const result = coverage.filter(row => !tools.has(row.tool));
+  for (const [name, artifact] of Object.entries(artifacts)) {
+    const rows = coverage.filter(row => row.tool === (name === 'api.json' ? 'typedoc:artefato' : 'dependency-cruiser:artefato'));
+    if (!rows.length) continue;
+    result.push({tool: rows[0]!.tool, version: rows[0]!.version,
+      status: artifact.status === 'omitted' ? 'skipped' : 'ok',
+      detail: artifact.status === 'present'
+        ? `Artefato ${name} validado (${Buffer.byteLength(artifact.content)} bytes).`
+        : `Artefato ${name} omitido por limite de tamanho.`});
+  }
+  return {artifacts, coverage: result};
 }
 
 function assertNoForeignNetwork(value: string): void {
@@ -348,12 +393,17 @@ function cpusFromNano(nanoCpus: number): string {
 export function moduleCollectorArguments(input: {
   image: string;
   repository: string;
+  evidenceFile?: string;
   memoryBytes?: number;
   nanoCpus?: number;
   pidsLimit?: number;
 }): readonly string[] {
   assertPinnedModuleImage(input.image);
   const source = assertHostPath(input.repository);
+  const evidence = input.evidenceFile !== undefined ? assertHostPath(input.evidenceFile) : undefined;
+  if (evidence !== undefined && (evidence === source || evidence.startsWith(`${source}/`))) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  }
   const memoryBytes = input.memoryBytes ?? MODULE_MEMORY_BYTES;
   const nanoCpus = input.nanoCpus ?? MODULE_NANO_CPUS;
   const pidsLimit = input.pidsLimit ?? MODULE_PIDS_LIMIT;
@@ -392,6 +442,7 @@ export function moduleCollectorArguments(input: {
     '/tmp',
     '--mount',
     `type=bind,src=${source},dst=/repo,readonly`,
+    ...(evidence !== undefined ? ['--mount', `type=bind,src=${evidence},dst=/run/prontidao-evidence.json,readonly`] : []),
     input.image,
   ];
 }
@@ -478,7 +529,7 @@ function validateTextBlock(value: unknown, min: number, max: number): string {
  */
 export function parseModuleCollectorOutput(
   rawStdout: string | Buffer,
-  options?: {maxStdoutBytes?: number},
+  options?: {maxStdoutBytes?: number; module?: VerificationModule},
 ): ModuleCollectorOutput {
   const maxStdoutBytes = options?.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
   if (!Number.isInteger(maxStdoutBytes) || maxStdoutBytes < 1) throw new Refusal('VERIFY_LIMITS_INVALID', 400);
@@ -503,10 +554,10 @@ export function parseModuleCollectorOutput(
   } catch {
     throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
   }
-  return validateModuleCollectorObject(parsed);
+  return validateModuleCollectorObject(parsed, options?.module);
 }
 
-export function validateModuleCollectorObject(parsed: unknown): ModuleCollectorOutput {
+export function validateModuleCollectorObject(parsed: unknown, module?: VerificationModule): ModuleCollectorOutput {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
   }
@@ -547,7 +598,7 @@ export function validateModuleCollectorObject(parsed: unknown): ModuleCollectorO
       version: validateSingleLineString(row.version, 1, 120, false),
       status: statusParsed.data,
       detail: validateTextBlock(row.detail, 1, 2000).replace(/\s*\n\s*/g, ' '),
-      ...(Array.isArray(row.files) ? {files: row.files.map(file => assertModuleRepoRelativePath(file))} : {}),
+      ...(Array.isArray(row.files) ? {files: row.files.map(file => module === 'prontidao' && typeof file === 'string' && isProtectedLocation(file) ? protectedLocation(file) : assertModuleRepoRelativePath(file))} : {}),
     });
   });
 
@@ -569,12 +620,25 @@ export function validateModuleCollectorObject(parsed: unknown): ModuleCollectorO
       throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
     }
     const row = item as Record<string, unknown>;
-    const file = assertModuleRepoRelativePath(typeof row.file === 'string' ? row.file : '');
+    const candidate = typeof row.file === 'string' ? row.file : '';
+    const protectedFile = module === 'prontidao' && isProtectedLocation(candidate);
+    const file = protectedFile ? protectedLocation(candidate) : assertModuleRepoRelativePath(candidate);
     if (typeof row.line !== 'number' || !Number.isInteger(row.line) || row.line < 1 || row.line > 10_000_000) {
       throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
     }
     const severityParsed = VerifySeverity.safeParse(row.severity);
     if (!severityParsed.success) throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
+    if (protectedFile) {
+      if (!isProtectedFindingSource(row.tool, row.rule) || typeof row.message !== 'string'
+        || hasKnownSecret(row.message) || typeof row.evidence !== 'string'
+        || !((row.message === 'Possível segredo em arquivo protegido.' && row.evidence === 'Localização informada pelo coletor; conteúdo protegido.')
+          || (row.tool === 'gitleaks' ? row.evidence === `${row.rule}: match em ${file}:${row.line} [REDACTED]`
+          : row.tool === 'trivy' && row.evidence === `${row.rule} em ${file}:${row.line} [REDACTED]`))) {
+        throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
+      }
+      return ModuleRawFinding.parse({tool: row.tool, rule: row.rule, file, line: row.line, severity: severityParsed.data,
+        message: 'Possível segredo em arquivo protegido.', evidence: 'Localização informada pelo coletor; conteúdo protegido.'});
+    }
     return ModuleRawFinding.parse({
       tool: validateSingleLineString(row.tool, 1, 120, false),
       rule: validateSingleLineString(row.rule, 1, 200, true),
@@ -586,6 +650,12 @@ export function validateModuleCollectorObject(parsed: unknown): ModuleCollectorO
     });
   });
 
+  for (const row of coverage) {
+    for (const file of row.files ?? []) {
+      if (isProtectedLocation(file) && !findings.some(f => f.file === file && f.tool === row.tool))
+        throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+    }
+  }
   return {coverage, findings};
 }
 
@@ -761,8 +831,10 @@ export async function runModuleCollectorContainer(input: {
   image: string;
   repoPath: string;
   commit: string;
+  module?: VerificationModule;
   timeoutMs?: number;
   maxStdoutBytes?: number;
+  passiveTlsEvidence?: ProntidaoPassiveEvidence;
   signal?: AbortSignal;
   executeProcess?: (args: readonly string[], options: {timeoutMs: number; maxStdoutBytes: number; signal?: AbortSignal; containerName?: string}) => Promise<BoundedProcessResult>;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
@@ -772,9 +844,22 @@ export async function runModuleCollectorContainer(input: {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
   const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
+  let evidenceDir: string | undefined;
+  let evidenceFile: string | undefined;
   try {
+    if (input.passiveTlsEvidence !== undefined) {
+      const validated = validatePassiveTlsEvidence(input.passiveTlsEvidence);
+      evidenceDir = await mkdtemp(join(tmpdir(), 'ac-prontidao-evidence-'));
+      evidenceFile = join(evidenceDir, 'evidence.json');
+      await writeFile(evidenceFile, `${JSON.stringify(validated)}\n`, {encoding: 'utf8', mode: 0o644, flag: 'wx'});
+      await chmod(evidenceFile, 0o644);
+    }
     const containerName = `ac-module-${randomUUID()}`;
-    const baseArgs = moduleCollectorArguments({image: input.image, repository: snapshot});
+    const baseArgs = moduleCollectorArguments({
+      image: input.image,
+      repository: snapshot,
+      ...(evidenceFile !== undefined ? {evidenceFile} : {}),
+    });
     const run = input.executeProcess ?? runBoundedCollectorProcess;
     // Create before start: cancellation during creation can leave only a stopped
     // container, and removal racing with start cannot leave a running container.
@@ -784,7 +869,7 @@ export async function runModuleCollectorContainer(input: {
       if (created.code !== 0) throw new Refusal('VERIFY_TOOLS_FAILED', 503);
       const result = await run([MODULE_RUNTIME_BIN, 'start', '--attach', containerName],
         {timeoutMs, maxStdoutBytes, signal: input.signal, containerName});
-      const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes});
+      const output = parseModuleCollectorOutput(result.stdout, {maxStdoutBytes, module: input.module});
       return {code: result.code, output};
     } finally {
       if (!input.executeProcess) {
@@ -796,7 +881,11 @@ export async function runModuleCollectorContainer(input: {
       }
     }
   } finally {
-    await removeModuleSnapshot(snapshot);
+    try {
+      if (evidenceDir) await rm(evidenceDir, {recursive: true, force: true});
+    } finally {
+      await removeModuleSnapshot(snapshot);
+    }
   }
 }
 
@@ -1111,8 +1200,17 @@ async function createReportDir(parentReal: string, name: string): Promise<string
 async function writePrivate(path: string, root: string, content: string): Promise<void> {
   const lexical = resolve(path);
   assertInside(root, lexical);
-  await writeFile(lexical, content, {encoding: 'utf8', mode: 0o600, flag: 'wx'});
-  await chmod(lexical, 0o600);
+  const parent = dirname(lexical);
+  const parentInfo = await lstat(parent);
+  if (parentInfo.isSymbolicLink() || !parentInfo.isDirectory() || await realpath(parent) !== parent)
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
+  const handle = await open(lexical, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(content, {encoding: 'utf8'});
+    await handle.chmod(0o600);
+  } finally {
+    await handle.close();
+  }
   const info = await lstat(lexical);
   if (info.isSymbolicLink() || !info.isFile() || (info.mode & 0o777) !== 0o600) {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
@@ -1142,7 +1240,10 @@ export async function writeModuleReport(input: {
   assertSafeSegment(input.projectId);
   assertSafeSegment(input.runId);
   if (!/^[a-f0-9]{40}$/.test(input.commit)) throw new Refusal('VERIFY_COMMIT_INVALID', 400);
-  const toolCoverage = input.toolCoverage.map(row => ModuleToolCoverage.parse(row));
+  const sourceCoverage = input.toolCoverage.map(row => ModuleToolCoverage.parse(row));
+  const doc = input.module === 'documentacao' ? documentationCoverage(sourceCoverage) : undefined;
+  if (!doc && sourceCoverage.some(row => row.tool.endsWith(':artefato'))) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+  const toolCoverage = doc?.coverage ?? sourceCoverage;
   if (toolCoverage.length < 1) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   const fileCoverage = input.fileCoverage.map(row => CoverageRow.parse(row));
   const ids = new Set<string>();
@@ -1153,7 +1254,28 @@ export async function writeModuleReport(input: {
     return parsed.data;
   });
   assertNoLiveAccessKey(input.raw);
-  const rawBody = guardReportText(`${JSON.stringify(input.raw, null, 2)}\n`);
+  const raw = validateModuleCollectorObject(input.raw, input.module);
+  if (JSON.stringify(raw.coverage) !== JSON.stringify(sourceCoverage)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+  for (const row of fileCoverage) {
+    if (input.module === 'prontidao' && isProtectedLocation(row.file)) {
+      if (!raw.findings.some(finding => finding.file === row.file)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    } else assertModuleRepoRelativePath(row.file);
+  }
+  for (const achado of achados) {
+    if (!isProtectedLocation(achado.where.file)) {
+      assertModuleRepoRelativePath(achado.where.file);
+      continue;
+    }
+    const finding = raw.findings[Number(achado.id.slice(4)) - 1];
+    if (input.module !== 'prontidao' || !finding || finding.file !== achado.where.file
+      || finding.line !== achado.where.line || achado.scenario !== finding.message
+      || achado.proof !== finding.evidence || achado.sources[0] !== finding.tool || achado.sources[1] !== finding.rule)
+      throw new Refusal('VERIFY_REPORT_INVALID', 400);
+  }
+  const safeRaw = {...raw, coverage: toolCoverage};
+  assertNoLiveAccessKey(safeRaw);
+  assertNoLiveAccessKey(achados);
+  const rawBody = guardReportText(`${JSON.stringify(safeRaw, null, 2)}\n`);
   const reserved = typeof input.directoryName === 'string';
   const directoryName = reserved
     ? input.directoryName!
@@ -1201,6 +1323,8 @@ export async function writeModuleReport(input: {
     {segments: ['achados.json'], body: guardReportText(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guardReportText(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},
+    ...Object.entries(doc?.artifacts ?? {}).flatMap(([name, artifact]) => artifact.status === 'present'
+      ? [{segments: [name], body: guardReportText(artifact.content)}] : []),
     {segments: [input.deferPublication ? '.run-pending.json' : 'run.json'], body: guardReportText(`${JSON.stringify(summary, null, 2)}\n`)},
   ];
   for (const file of planned) {
@@ -1352,7 +1476,7 @@ export async function readModuleReport(
   const mapMarkdown = await readTextInside(report.directory, join(report.directory, 'mapa.md'), 'VERIFY_REPORT_INVALID');
   const readmeMarkdown = await readTextInside(report.directory, join(report.directory, 'README.md'), 'VERIFY_REPORT_INVALID');
   const rawJson = JSON.parse(await readTextInside(report.directory, join(report.directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')) as unknown;
-  const raw = validateModuleCollectorObject(rawJson);
+  const raw = validateModuleCollectorObject(rawJson, report.summary.module);
   return {summary: report.summary, achados, coverageMarkdown, mapMarkdown, readmeMarkdown, toolCoverage: raw.coverage};
 }
 
@@ -1690,16 +1814,23 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   let snapshot: string | undefined;
   let unpublishedReport: string | undefined;
   let databaseCommitted = false;
+  let sourceCoverage: ModuleToolCoverage[] | undefined;
   try {
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
     snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
+    const passiveTlsEvidence = input.passiveTlsEvidence !== undefined
+      ? (() => {
+          if (input.module !== 'prontidao') throw new Refusal('INVALID_CONTRACT', 400);
+          return validatePassiveTlsEvidence(input.passiveTlsEvidence);
+        })()
+      : undefined;
     let collectorCode = 0;
     let collectorData: ModuleCollectorOutput;
     try {
     if (input.collectorOutput !== undefined) {
       collectorData = typeof input.collectorOutput === 'string' || Buffer.isBuffer(input.collectorOutput)
-        ? parseModuleCollectorOutput(input.collectorOutput, {maxStdoutBytes})
-        : validateModuleCollectorObject(input.collectorOutput);
+        ? parseModuleCollectorOutput(input.collectorOutput, {maxStdoutBytes, module: input.module})
+        : validateModuleCollectorObject(input.collectorOutput, input.module);
     } else if (input.runCollector !== undefined) {
       const raw = await input.runCollector({
         module: input.module,
@@ -1709,23 +1840,33 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         timeoutMs,
         maxStdoutBytes,
         signal: input.signal,
+        ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
       });
       collectorData = typeof raw === 'string' || Buffer.isBuffer(raw)
-        ? parseModuleCollectorOutput(raw, {maxStdoutBytes})
-        : validateModuleCollectorObject(raw);
+        ? parseModuleCollectorOutput(raw, {maxStdoutBytes, module: input.module})
+        : validateModuleCollectorObject(raw, input.module);
     } else {
       const executed = await runModuleCollectorContainer({
         image: image!,
+        module: input.module,
         repoPath: input.repoPath,
         commit: input.commit,
         timeoutMs,
         maxStdoutBytes,
         signal: input.signal,
+        ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
       });
       collectorCode = executed.code;
       collectorData = executed.output;
     }
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+    if (input.module === 'documentacao') {
+      sourceCoverage = collectorData.coverage;
+      collectorData = {...collectorData, coverage: documentationCoverage(sourceCoverage).coverage};
+    } else if (collectorData.coverage.some(row => row.tool.endsWith(':artefato'))) {
+      throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    }
+    assertNoLiveAccessKey(collectorData);
     for (const finding of collectorData.findings) {
       await resolveInsideRepo(snapshot, finding.file);
       if (!collectorData.coverage.some(row => row.tool === finding.tool && row.status === 'ok')) {
@@ -1737,12 +1878,15 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     }
     } catch (error) {
       if (input.signal?.aborted) throw error;
+      sourceCoverage = undefined;
       const reason = error instanceof Refusal ? error.code : 'VERIFY_TOOLS_FAILED';
       collectorCode = 1;
       collectorData = {coverage: [{tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Falha de processo ou leitura da saída: ${reason}`}], findings: []};
     }
     if (collectorCode !== 0 && !collectorData.coverage.some(row => row.status === 'failed')) {
-      collectorData.coverage.push({tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Processo terminou com código ${collectorCode}.`});
+      const failure: ModuleToolCoverage = {tool: 'coletor', version: 'indisponível', status: 'failed', detail: `Processo terminou com código ${collectorCode}.`};
+      collectorData.coverage.push(failure);
+      sourceCoverage?.push(failure);
     }
 
     const toolVersions = new Map<string, string>();
@@ -1761,7 +1905,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         model: toolVersions.get(finding.tool)!.slice(0, 100),
         provider: finding.tool.slice(0, 80),
       };
-      if (input.worker) {
+      if (input.worker && !(input.module === 'prontidao' && isProtectedLocation(finding.file))) {
         const confirmed = await confirmFindingWithReviewer({...input, repoPath: snapshot}, intentId, finding, achadoId);
         status = confirmed.status;
         proof = confirmed.proof;
@@ -1777,7 +1921,9 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         where: {file: finding.file, line: finding.line},
         scenario: sanitizeText(finding.message).slice(0, 2000),
         proof,
-        suggestion: 'Corrigir o ponto indicado no arquivo, adicionar teste de regressão e executar novamente o módulo.',
+        suggestion: isProtectedLocation(finding.file) && input.module === 'prontidao'
+          ? 'O responsável deve tratar manualmente o arquivo protegido e executar novamente o módulo.'
+          : 'Corrigir o ponto indicado no arquivo, adicionar teste de regressão e executar novamente o módulo.',
         acceptance: REMEDIATION_ACCEPTANCE,
         sources: [finding.tool.slice(0, 200), finding.rule.slice(0, 200)],
         secretPreview: null,
@@ -1822,10 +1968,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       commit: input.commit,
       image,
       deferPublication: true,
-      toolCoverage: collectorData.coverage,
+      toolCoverage: sourceCoverage ?? collectorData.coverage,
       fileCoverage,
       achados,
-      raw: collectorData,
+      raw: {...collectorData, coverage: sourceCoverage ?? collectorData.coverage},
       ...(notes.length > 0 ? {note: notes.join(' ')} : {}),
     });
     unpublishedReport = report.directory;
@@ -1970,6 +2116,8 @@ function renderModuleRemediationTask(input: {
 }): string {
   const body = input.groups.map(group => [
     `Arquivo: ${group.file}`,
+    ...(input.module === 'prontidao' && isProtectedLocation(group.file)
+      ? ['Ação manual do responsável: tratar o arquivo protegido; não ler nem editar esse arquivo.'] : []),
     ...group.items.map(item => `- ${item.id} linha ${item.line ?? 'não informada'}: ${item.title}\n  Prova: ${item.snippet}`),
   ].join('\n')).join('\n');
   return [
@@ -2091,10 +2239,22 @@ export async function requestModuleCorrection(
       if (!row || (row.status !== 'confirmado' && row.status !== 'reaberto')) {
         throw new Refusal('VERIFY_FINDING_MISSING', 404);
       }
-      const file = assertModuleRepoRelativePath(String(row.file));
+      const candidate = String(row.file);
+      const file = runRow.module === 'prontidao' && isProtectedLocation(candidate)
+        ? protectedLocation(candidate) : assertModuleRepoRelativePath(candidate);
       if (!covered.has(file)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
       const lineNum = row.line !== null && Number.isInteger(Number(row.line)) && Number(row.line) >= 1 ? Number(row.line) : null;
       const payload = row.payload && typeof row.payload === 'object' ? (row.payload as Record<string, unknown>) : {};
+      if (isProtectedLocation(file)) {
+        const sources = Array.isArray(payload.sources) ? payload.sources : [];
+        if (runRow.module !== 'prontidao' || !isProtectedFindingSource(sources[0], sources[1])
+          || typeof sources[1] !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/.test(sources[1])
+          || payload.scenario !== 'Possível segredo em arquivo protegido.'
+          || payload.proof !== 'Localização informada pelo coletor; conteúdo protegido.')
+          throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+        return {id, file, line: lineNum, status: String(row.status), severity: String(row.severity),
+          title: 'Possível segredo em arquivo protegido', snippet: 'Localização informada pelo coletor; conteúdo protegido.'};
+      }
       const title = typeof payload.title === 'string' ? payload.title.slice(0, 200) : id;
       const snippet = typeof payload.snippet === 'string'
         ? payload.snippet
@@ -2112,9 +2272,11 @@ export async function requestModuleCorrection(
     }
 
     const groups = groupFindingsByFile(findings);
-    const writePaths = [...new Set([...groups.map(group => group.file), ...requested.map(id => moduleRegressionPath(runRow.module, id))])];
+    const writePaths = [...new Set([...groups.filter(group => !isProtectedLocation(group.file)).map(group => group.file), ...requested.map(id => moduleRegressionPath(runRow.module, id))])];
     const ids = findings.map(item => item.id);
-    const regression = moduleRegressionText(runRow.module, ids);
+    const regression = moduleRegressionText(runRow.module, ids)
+      + (findings.some(item => isProtectedLocation(item.file))
+        ? '\nUse dados sintéticos e teste um alvo seguro; não leia nem edite arquivos protegidos.' : '');
 
     const text = renderModuleRemediationTask({
       projectId: input.projectId,
@@ -2325,7 +2487,9 @@ export async function recheckModuleFindings(
     const items = requested.map(id => {
       const row = byId.get(id);
       if (!row) throw new Refusal('VERIFY_FINDING_MISSING', 404);
-      const file = assertModuleRepoRelativePath(String(row.file));
+      const candidate = String(row.file);
+      const file = runRow.module === 'prontidao' && isProtectedLocation(candidate)
+        ? protectedLocation(candidate) : assertModuleRepoRelativePath(candidate);
       if (!covered.has(file)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
       const line = row.line !== null && Number.isInteger(Number(row.line)) && Number(row.line) >= 1 ? Number(row.line) : 1;
       const payload = row.payload && typeof row.payload === 'object' ? (row.payload as Record<string, unknown>) : {};
@@ -2372,6 +2536,10 @@ export async function recheckModuleFindings(
   for (const item of loaded.items) {
     const original = raw.findings[Number(item.id.slice(4)) - 1];
     if (!original || original.file !== item.file || original.line !== item.line || original.tool !== item.tool || original.rule !== item.rule) throw new Refusal('VERIFY_REPORT_INVALID', 400);
+    if (moduleName === 'prontidao' && isProtectedLocation(item.file)) {
+      decided.push({id: item.id, status: 'reaberto'});
+      continue;
+    }
     const excerpt = await readBoundedExcerpt(snapshot, item.file, item.line);
     const task = buildModuleReviewPrompt({
       module: moduleName,
