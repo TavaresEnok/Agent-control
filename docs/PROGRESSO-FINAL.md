@@ -502,3 +502,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:51 UTC — Revisor encerrou C9-R5 em 86ec5e87 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:51 UTC — Revisão C-BASE-R10 iniciada por Sol high normal somente leitura em b01ca7b3.
 - 19/11/2026 05:51 UTC — Revisão independente por modelo distinto de 86ec5e87 identificou erros estáticos de atribuição de campos, argumentos e callbacks na análise de dados pessoais. Aberta C9-R6. A arquitetura em homologação passou nos 20 testes com Hadolint fixado e as ferramentas locais habilitadas. As CLIs de documentação e conformidade passaram nos seis testes após a integração de bd0211ec.
+- 19/11/2026 05:52 UTC — QA contratual já compara as rotas ao OpenAPI. C2-CONTRATOS acrescenta a prova funcional com exemplos positivos declarados e interações Pact entre componentes locais. A bancada usa dados artificiais e registra status e estrutura da resposta.
