@@ -281,7 +281,9 @@ export function assertModuleRepoRelativePath(file: string): string {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
   const parts = trimmed.split('/');
-  if (parts.some(forbiddenSegment) || isSecretClassBasename(trimmed)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  if (parts.some(part => forbiddenSegment(part) || isSecretClassBasename(part)) || hasKnownSecret(trimmed)) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  }
   return parts.join('/');
 }
 
@@ -295,7 +297,9 @@ function protectedLocation(file: string): string {
   const parts = file.split('/');
   const name = parts.pop()!;
   if (!isSecretClassBasename(name) || name.includes('..') || name === '.' || name === '..'
-    || (forbiddenSegment(name) && !name.startsWith('.env')) || parts.some(forbiddenSegment)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+    || (forbiddenSegment(name) && !name.toLowerCase().startsWith('.env'))
+    || parts.some(part => forbiddenSegment(part) || isSecretClassBasename(part))
+    || hasKnownSecret(file)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   return file;
 }
 
@@ -501,6 +505,7 @@ const REMOVED_HIGH_ENTROPY = '[removido: alta entropia]';
 const BASE64_SECRET = /[A-Za-z0-9+]{40,}={0,2}/;
 const SNAKE_IDENTIFIER = /^[a-z][a-z0-9_]{31,}$/;
 const SHORT_FILE_EXTENSION = /\.[A-Za-z0-9]{1,5}$/;
+const FRAMEWORK_SEGMENT = /^(?:\[+(?:\.\.\.)?[\p{L}][\p{L}\p{N}_-]*\]+|\([\p{L}][\p{L}\p{N}_-]*\))$/u;
 
 function isSnakeToken(token: string): boolean {
   if (SNAKE_IDENTIFIER.test(token)) return true;
@@ -513,8 +518,8 @@ function isPathToken(token: string): boolean {
   if (token.startsWith('/') || token.startsWith('./') || token.startsWith('../')) return true;
   const segments = token.split('/');
   if (segments.length <= 1) return false;
-  if (!segments.every(segment => segment.length < 32)) return false;
-  return segments.some(segment => SHORT_FILE_EXTENSION.test(segment));
+  if (!segments.every(segment => segment.length < 32 || FRAMEWORK_SEGMENT.test(segment))) return false;
+  return segments.some(segment => SHORT_FILE_EXTENSION.test(segment.replace(/(?::\d+(?:-\d+)?)?[,;:)]*$/, '')));
 }
 
 function isMaskToken(token: string): boolean {

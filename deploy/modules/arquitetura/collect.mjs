@@ -50,9 +50,39 @@ const SKIP_DIRS = new Set([
 ]);
 
 // The image is built from this directory. Keep this policy aligned with
-// assertModuleRepoRelativePath and isSecretClassBasename on the host.
+// assertModuleRepoRelativePath, isSecretClassBasename and hasKnownSecret on the host.
 const REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/()[\]-]+$/u;
 const RESERVED_NAMES = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok', '.npmrc', '.netrc', '.pgpass']);
+const NOT_A_MASK = String.raw`(?![^\s\u2026]*\u2026)`;
+const SECRET_VALUE = String.raw`(?:"[^"\r\n]*"|'[^'\r\n]*'|\S+)`;
+const ASSIGN_NAME = String.raw`pass|passwd|password|secret|token|(?<![A-Za-z])key(?!board)|auth|credential`;
+const KNOWN_SECRET_PATTERNS = [
+  /-----BEGIN(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----[\s\S]*?-----END(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----/,
+  /(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Z0-9])ASIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,400}(?![A-Za-z0-9_])/,
+  /(?<![A-Za-z0-9_])ghp_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])ghs_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])gho_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,400}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9])xox[a-z]-[A-Za-z0-9-]{10,400}(?![A-Za-z0-9-])/,
+  /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@\u2026]{1,200}:[^\s/@\u2026]{1,200}@/,
+  /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,255}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_])sk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])rk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*(?:bearer|basic)[ \t]+${NOT_A_MASK}${SECRET_VALUE}`, 'i'),
+  /(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]{0,39}[G-Zg-z+/])[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])/,
+  /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,128}\.[A-Za-z0-9_-]{16,128}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])--(?:${ASSIGN_NAME})\w*(?:["']?\s*[:=]\s*|[ \t]+)${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+  new RegExp(String.raw`(?:${ASSIGN_NAME})\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+];
+
+function hasKnownSecret(text) {
+  return KNOWN_SECRET_PATTERNS.some(pattern => pattern.test(text));
+}
 
 function excludedName(name) {
   const lower = name.toLowerCase();
@@ -60,7 +90,8 @@ function excludedName(name) {
     || RESERVED_NAMES.has(lower) || lower.startsWith('.env') || lower.startsWith('id_')
     || lower.startsWith('credentials') || lower.includes('kubeconfig')
     || (lower.startsWith('service-account') && lower.endsWith('.json'))
-    || /\.(?:pem|key|p12|pfx|jks|tfstate|tfvars)$/.test(lower);
+    || /\.(?:pem|key|p12|pfx|jks|tfstate|tfvars)$/.test(lower)
+    || hasKnownSecret(name);
 }
 
 const JS_TS_EXTS = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
@@ -249,7 +280,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
       }
       if (st.isDirectory() && SKIP_DIRS.has(entry.name)) {
         skipped.push({file: relPath, reason: 'diretorio_excluido'});
-      } else if (excludedName(entry.name)) {
+      } else if (excludedName(entry.name) || hasKnownSecret(relPath)) {
         skipped.push({file: relPath, reason: 'caminho_excluido'});
       } else if (st.isDirectory()) {
         walk(srcPath, relPath);
@@ -484,6 +515,28 @@ export function findImportLine(fileText, moduleSpecifier) {
   return getImportLines(fileText, 'source.tsx').get(moduleSpecifier) ?? 1;
 }
 
+const KNIP_CANDIDATE_EXTS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.d.ts', '.d.mts', '.d.cts', '.json'];
+const KNIP_TS_MAPPINGS = {
+  '.js': ['.ts', '.tsx', '.d.ts'],
+  '.jsx': ['.tsx', '.ts', '.d.ts'],
+  '.mjs': ['.mts', '.d.mts'],
+  '.cjs': ['.cts', '.d.cts'],
+};
+
+function relativeImportCandidates(target) {
+  const clean = target.replace(/\/+$/, '');
+  if (!clean || clean === '.') return [];
+  const candidates = [clean];
+  const ext = posix.extname(clean).toLowerCase();
+  const stem = ext ? clean.slice(0, -ext.length) : '';
+  for (const mapped of KNIP_TS_MAPPINGS[ext] ?? []) {
+    candidates.push(`${stem}${mapped}`);
+  }
+  for (const suffix of KNIP_CANDIDATE_EXTS) candidates.push(`${clean}${suffix}`);
+  for (const suffix of KNIP_CANDIDATE_EXTS) candidates.push(`${clean}/index${suffix}`);
+  return candidates;
+}
+
 export function parseKnipReport(rawJson, repoRoot, candidateFiles, includesFile = () => true, wasOmitted = () => false) {
   const isCandidate = candidateFiles === undefined
     ? file => includesFile(file) && /\.(?:[cm]?[jt]s|[jt]sx)$/i.test(file) && !isIgnoredByKnipConfig(file)
@@ -572,10 +625,12 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles, includesFile 
       for (const item of issue[key]) {
         const name = String(item?.name ?? 'desconhecido');
         if (key === 'unresolved' && /^\.\.?\//.test(name)) {
-          const target = normalizeRepoPath(posix.join(posix.dirname(relFile), name), repoRoot);
+          const spec = name.split(/[?#]/, 1)[0];
+          const target = normalizeRepoPath(posix.join(posix.dirname(relFile), spec), repoRoot);
+          const omittedTarget = relativeImportCandidates(target).find(candidate => wasOmitted(candidate));
           // A dependency removed from the analysis copy is not an unresolved import in the source.
-          if (wasOmitted(target)) {
-            includesFile(target);
+          if (omittedTarget) {
+            includesFile(omittedTarget);
             continue;
           }
         }
@@ -738,6 +793,7 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile, includes
   let orphansCount = 0;
   let totalDependencies = 0;
   let measuredModules = 0;
+  let omittedEdges = 0;
 
   const importCache = new Map();
   const getLines = relFile => {
@@ -760,9 +816,44 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile, includes
     if (mod.coreModule || mod.couldNotResolve || mod.matchesDoNotFollow) continue;
     const sourceFile = normalizeRepoPath(mod.source, repoRoot);
     if (!includesFile(sourceFile)) continue;
-    const deps = Array.isArray(mod.dependencies) ? mod.dependencies : [];
-    const dependents = Array.isArray(mod.dependents) ? mod.dependents : [];
-    totalDependencies += deps.length;
+    const rawDeps = Array.isArray(mod.dependencies) ? mod.dependencies : [];
+    const rawDependents = Array.isArray(mod.dependents) ? mod.dependents : [];
+    const copiedDeps = [];
+    const copiedDependents = [];
+    let modPartial = false;
+
+    for (const dep of rawDeps) {
+      if (!dep || typeof dep !== 'object') continue;
+      if (dep.coreModule || dep.matchesDoNotFollow) continue;
+      const spec = String(dep.module ?? '');
+      const resolved = normalizeRepoPath(dep.resolved || spec, repoRoot);
+      if (dep.couldNotResolve) {
+        if (/^\.\.?\//.test(spec)) {
+          modPartial = true;
+          omittedEdges += 1;
+        }
+        continue;
+      }
+      if (!includesFile(resolved)) {
+        modPartial = true;
+        omittedEdges += 1;
+        continue;
+      }
+      copiedDeps.push({dep, spec, resolved});
+    }
+
+    for (const dependent of rawDependents) {
+      const rawName = typeof dependent === 'string' ? dependent : dependent?.name ?? '';
+      const depFile = normalizeRepoPath(rawName, repoRoot);
+      if (!includesFile(depFile)) {
+        modPartial = true;
+        omittedEdges += 1;
+        continue;
+      }
+      copiedDependents.push(depFile);
+    }
+
+    totalDependencies += copiedDeps.length;
 
     let fileHasCycle = false;
     let fileHasLayer = false;
@@ -789,36 +880,38 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile, includes
       }
     }
 
-    for (const dep of deps) {
-      if (!dep || typeof dep !== 'object') continue;
+    for (const {dep, spec, resolved} of copiedDeps) {
       const rules = Array.isArray(dep.rules) ? dep.rules : [];
       const isCircular = dep.circular || rules.some(rule => rule?.name === 'no-circular');
       const layerRules = rules.filter(rule => typeof rule?.name === 'string' && rule.name.startsWith('layer-'));
       if (!isCircular && layerRules.length === 0) continue;
 
-      const spec = String(dep.module ?? '');
-      const resolved = normalizeRepoPath(dep.resolved || spec, repoRoot);
-      if (!includesFile(resolved)) continue;
       const cycle = Array.isArray(dep.cycle) ? dep.cycle.map(c => normalizeRepoPath(c?.name ?? '', repoRoot)) : undefined;
       const line = getLines(sourceFile).get(spec) ?? 1;
-      if (isCircular && (!cycle || cycle.map(includesFile).every(Boolean))) {
-        fileHasCycle = true;
-        const key = JSON.stringify(['cycle', sourceFile, resolved === '.' ? spec : resolved]);
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          cyclesCount += 1;
-          const chain = cycle
-            ? [sourceFile, ...cycle].join(' -> ')
-            : `${sourceFile} -> ${resolved}`;
-          findings.push({
-            tool: 'dependency-cruiser',
-            rule: 'DEPCRUISE-NO-CIRCULAR',
-            file: sourceFile,
-            line,
-            severity: 'alta',
-            message: `Dependência circular detectada a partir de ${sourceFile} para ${resolved}`,
-            evidence: `ciclo: ${chain}`,
-          });
+      if (isCircular) {
+        const cycleInCopy = !cycle || cycle.map(includesFile).every(Boolean);
+        if (!cycleInCopy) {
+          modPartial = true;
+          omittedEdges += 1;
+        } else {
+          fileHasCycle = true;
+          const key = JSON.stringify(['cycle', sourceFile, resolved === '.' ? spec : resolved]);
+          if (!seenKeys.has(key)) {
+            seenKeys.add(key);
+            cyclesCount += 1;
+            const chain = cycle
+              ? [sourceFile, ...cycle].join(' -> ')
+              : `${sourceFile} -> ${resolved}`;
+            findings.push({
+              tool: 'dependency-cruiser',
+              rule: 'DEPCRUISE-NO-CIRCULAR',
+              file: sourceFile,
+              line,
+              severity: 'alta',
+              message: `Dependência circular detectada a partir de ${sourceFile} para ${resolved}`,
+              evidence: `ciclo: ${chain}`,
+            });
+          }
         }
       }
 
@@ -844,14 +937,21 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile, includes
 
     measuredModules += 1;
     if (perFileCoverage.length < MAX_PER_FILE_COVERAGE) {
-      const instability = typeof mod.instability === 'number' ? mod.instability.toFixed(2) : 'n/a';
+      const hasMetrics = typeof mod.instability === 'number';
+      const edgeTotal = copiedDeps.length + copiedDependents.length;
+      const instability = modPartial || !hasMetrics
+        ? 'n/a'
+        : edgeTotal > 0
+          ? (copiedDeps.length / edgeTotal).toFixed(2)
+          : '0.00';
       perFileCoverage.push({
         file: sourceFile,
-        deps: deps.length,
-        dependents: dependents.length,
+        deps: copiedDeps.length,
+        dependents: copiedDependents.length,
         instability,
         cycle: fileHasCycle,
         layerViolation: fileHasLayer,
+        partial: modPartial,
       });
     }
   }
@@ -865,6 +965,8 @@ export function parseDepcruiseReport(rawJson, repoRoot, readSourceFile, includes
       cycles: cyclesCount,
       layerViolations: layerViolationsCount,
       orphans: orphansCount,
+      omittedEdges,
+      partial: omittedEdges > 0,
     },
   };
 }
@@ -1525,19 +1627,32 @@ export function runCollector(options = {}) {
           inventory.includesFile,
         );
         findings.push(...parsedDep.findings);
+        const snapshotOmittedSources = Boolean(snapshot.stoppedAt) || snapshot.skipped.some(
+          item => item.reason === 'diretorio_ilegivel' || item.reason === 'symlink'
+            || JS_TS_EXTS.has(extname(item.file).toLowerCase())
+            || (item.reason === 'caminho_excluido' && !extname(item.file)),
+        );
+        const omissionSuffix = inventory.omissionDetail();
+        const graphPartial = parsedDep.stats.partial || Boolean(omissionSuffix) || snapshotOmittedSources;
+        const partialSummary = graphPartial
+          ? `; metricas_grafo=parciais${omissionSuffix ? '' : '; cobertura_parcial=sim'}`
+          : '';
         coverage.push({
           tool: 'dependency-cruiser',
           version: versions.depcruise,
           status: parsedDep.stats.totalModules > 0 ? 'ok' : 'skipped',
-          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, ciclos=${parsedDep.stats.cycles}, violacoes_camada=${parsedDep.stats.layerViolations}, orfaos=${parsedDep.stats.orphans}; ${coverageLimit(parsedDep.stats.totalModules, parsedDep.perFileCoverage.length)}${inventory.omissionDetail()}`,
+          detail: `modulos=${parsedDep.stats.totalModules}, dependencias=${parsedDep.stats.totalDependencies}, ciclos=${parsedDep.stats.cycles}, violacoes_camada=${parsedDep.stats.layerViolations}, orfaos=${parsedDep.stats.orphans}; ${coverageLimit(parsedDep.stats.totalModules, parsedDep.perFileCoverage.length)}${omissionSuffix}${partialSummary}`,
         });
         for (const row of parsedDep.perFileCoverage) {
+          const rowPartial = row.partial || snapshotOmittedSources;
+          const instability = rowPartial ? 'n/a' : row.instability;
+          const rowPartialSuffix = rowPartial ? '; metricas_parciais=sim' : '';
           coverage.push({
             tool: 'dependency-cruiser:file',
             version: versions.depcruise,
             status: 'ok',
             files: [row.file],
-            detail: `arquivo=${row.file}; deps=${row.deps}; dependentes=${row.dependents}; instabilidade=${row.instability}; ciclo=${row.cycle ? 'sim' : 'nao'}; violacao_camada=${row.layerViolation ? 'sim' : 'nao'}`,
+            detail: `arquivo=${row.file}; deps=${row.deps}; dependentes=${row.dependents}; instabilidade=${instability}; ciclo=${row.cycle ? 'sim' : 'nao'}; violacao_camada=${row.layerViolation ? 'sim' : 'nao'}${rowPartialSuffix}`,
           });
         }
       } catch (err) {

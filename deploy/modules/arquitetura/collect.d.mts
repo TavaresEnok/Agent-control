@@ -87,8 +87,9 @@ export function parseDepcruiseReport(
     instability: string;
     cycle: boolean;
     layerViolation: boolean;
+    partial: boolean;
   }[];
-  stats: {totalModules: number; totalDependencies: number; cycles: number; layerViolations: number; orphans: number};
+  stats: {totalModules: number; totalDependencies: number; cycles: number; layerViolations: number; orphans: number; omittedEdges: number; partial: boolean};
 };
 export function analyzeAstComplexity(
   workRepoDir: string,

@@ -172,7 +172,7 @@ function importCycle(input: CaseInput): ExamCase | undefined {
     const prefix = `arquivo=${file}; `;
     const row = scopedRow(input, 'dependency-cruiser:file', row => row.detail.startsWith(prefix));
     if (!code || code.length > 16000 || !safeText(code) || (index > 0 && !input.wasExamined(file, code)) || !row
-      || !/^deps=[1-9]\d*; dependentes=[1-9]\d*; instabilidade=(?:n\/a|[01]\.\d\d); ciclo=sim; violacao_camada=(?:sim|nao)$/
+      || !/^deps=[1-9]\d*; dependentes=[1-9]\d*; instabilidade=(?:n\/a|[01]\.\d\d); ciclo=sim; violacao_camada=(?:sim|nao)(?:; metricas_parciais=sim)?$/
         .test(row.detail.slice(prefix.length))) return;
     const candidates = code.split('\n').slice(0, 40).flatMap((_, position) => {
       const line = position + 1;
