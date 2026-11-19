@@ -215,7 +215,7 @@ test('Lighthouse carrega recursos no caminho canônico e k6 mede o alias HTTP de
   assert.equal(output.measurement.k6Routes[0]?.p95, 20);
 });
 
-test('páginas fora da raiz estática resolvem recursos relativos e absolutos na mesma origem', async t => {
+test('Lighthouse conserva recursos das páginas externas e omite referências que saem do snapshot', async t => {
   const setup = await fixture(t);
   const {repo} = setup;
   await mkdir(join(repo, 'guias', 'introdução'), {recursive: true});
@@ -223,6 +223,10 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
   for (const [file, body] of Object.entries({
     'especial.html': '<h1>Externa</h1><link href="tema.css"><script src="/tema.css"></script>',
     'guias/introdução/index.html': '<h1>Aninhada</h1><link href="local.css"><script src="../comum.js"></script><link href="../../tema.css">',
+    'fora.html': '<h1>Externa ambígua</h1><link href="../tema.css">',
+    'guias/introdução/fora.html': '<h1>Aninhada ambígua</h1><script src=../../&#46;%2e/tema.css></script>',
+    'guias/introdução/base.html': '<base href="../"><h1>Base relativa</h1><img srcset="data:image/png;base64,AAAA 1x, ../../tema.css 2x">',
+    'esquema.html': '<h1>Mesmo esquema</h1><link href="http:../tema.css">',
     'guias/introdução/local.css': 'local',
     'guias/comum.js': 'pai',
     'tema.css': 'relativo',
@@ -232,12 +236,17 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
   await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({staticDir: 'recursos', routes: [
     {path: '/especial?modo=teste', file: 'especial.html'},
     {path: '/inicio/nested?modo=teste', file: 'guias/introdução/index.html'},
+    {path: '/fora?modo=teste', file: 'fora.html'},
+    {path: '/inicio/fora?modo=teste', file: 'guias/introdução/fora.html'},
+    {path: '/inicio/base?modo=teste', file: 'guias/introdução/base.html'},
+    {path: '/esquema?modo=teste', file: 'esquema.html'},
   ]}));
   const output = await collectSynthetic(setup, {
     lhci: `const assert = require('node:assert/strict');
       const fs = require('node:fs');
       if (process.argv[2] === 'collect') (async () => {
         const {ci} = JSON.parse(fs.readFileSync(process.argv[3].slice(9)));
+        assert.equal(ci.collect.url.length, 2);
         const [external, nested] = ci.collect.url;
         assert.ok(new URL(external).pathname.endsWith('/especial.html'));
         assert.ok(new URL(nested).pathname.endsWith('/guias/introdu%C3%A7%C3%A3o/'));
@@ -274,13 +283,15 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
       else (async () => {
         const script = fs.readFileSync(process.argv.at(-1), 'utf8');
         const origin = JSON.parse(/const ORIGIN = (.*);/.exec(script)[1]);
-        const routes = JSON.parse(/const ROUTES = (.*);/.exec(script)[1]).slice(0, 2);
-        assert.deepEqual(routes, ['/especial?modo=teste', '/inicio/nested?modo=teste']);
+        const routes = JSON.parse(/const ROUTES = (.*);/.exec(script)[1]);
+        assert.deepEqual(routes, ['/especial?modo=teste', '/inicio/nested?modo=teste', '/fora?modo=teste',
+          '/inicio/fora?modo=teste', '/inicio/base?modo=teste', '/esquema?modo=teste']);
+        const titles = [/Externa/, /Aninhada/, /Externa ambígua/, /Aninhada ambígua/, /Base relativa/, /Mesmo esquema/];
         const metrics = {};
         for (const [i, route] of routes.entries()) {
           const page = await fetch(origin + route);
           assert.equal(page.status, 200);
-          assert.match(await page.text(), i === 0 ? /Externa/ : /Aninhada/);
+          assert.match(await page.text(), titles[i]);
           assert.equal((await fetch(origin + route.split('?')[0])).status, 404);
           metrics['http_reqs{route:' + route + '}'] = {count: 3};
           metrics['http_req_duration{route:' + route + '}'] = {'p(95)': 20};
@@ -291,9 +302,163 @@ test('páginas fora da raiz estática resolvem recursos relativos e absolutos na
   });
   assert.deepEqual(output.findings, []);
   const measured = [['/especial?modo=teste', 'especial.html'], ['/inicio/nested?modo=teste', 'guias/introdução/index.html']];
-  for (const tool of ['lighthouse', 'k6Routes']) {
-    assert.deepEqual(output.measurement[tool].map(({route, file}) => [route, file]), measured);
+  const omitted = [['/fora?modo=teste', 'fora.html'], ['/inicio/fora?modo=teste', 'guias/introdução/fora.html'],
+    ['/inicio/base?modo=teste', 'guias/introdução/base.html'], ['/esquema?modo=teste', 'esquema.html']];
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => [route, file]), measured);
+  assert.deepEqual(output.measurement.k6Routes.map(({route, file}) => [route, file]), [...measured, ...omitted]);
+  for (const [route] of omitted) {
+    assert.ok(output.coverage.some(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+      row.detail === `rota=${route}; referência relativa sai da raiz do snapshot`));
   }
+});
+
+function syntheticLighthouse(check, ...args) {
+  return `const assert = require('node:assert/strict');
+    const fs = require('node:fs');
+    if (process.argv[2] === 'collect') (async () => {
+      const {ci} = JSON.parse(fs.readFileSync(process.argv[3].slice(9)));
+      const urls = ci.collect.url;
+      await (${check.toString()})(assert, urls, ...${JSON.stringify(args)});
+      fs.mkdirSync('.lighthouseci');
+      for (const [i, url] of urls.entries()) {
+        fs.writeFileSync('.lighthouseci/lhr-' + i + '.json', JSON.stringify({requestedUrl: url, finalUrl: url,
+          categories: {performance: {score: 1}}, audits: {
+            'largest-contentful-paint': {numericValue: 100}, 'cumulative-layout-shift': {numericValue: 0},
+            'total-blocking-time': {numericValue: 0}}}));
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });`;
+}
+
+test('Lighthouse seleciona a primeira base HTML com href e serve somente os arquivos do snapshot', async t => {
+  const setup = await fixture(t);
+  const {root, repo} = setup;
+  await mkdir(join(repo, 'recursos', 'tema'), {recursive: true});
+  await mkdir(join(repo, 'guias'));
+  const bases = {
+    relativa: '<base target="_self"><base href="../recursos/tema/">',
+    ausente: '<base target="_self">',
+    invalida: '<base href="http://["><base href="about:blank">',
+    data: '<base href="data:text/plain,base"><base href="about:blank">',
+    javascript: '<base href="javascript:"><base href="about:blank">',
+    vazia: '<base href=""><base href="about:blank">',
+    inerte: '<template><base href="about:blank"></template>',
+    semOrigem: '<base href="about:blank">',
+  };
+  const routes = Object.entries(bases).map(([name]) => ({path: `/${name}?modo=teste`, file: `guias/${name}.html`}));
+  for (const [name, base] of Object.entries(bases)) {
+    await writeFile(join(repo, `guias/${name}.html`), `<!doctype html>${base}<link rel="stylesheet" href="estilo.css"><h1>${name}</h1>`);
+  }
+  await writeFile(join(repo, 'guias', 'estilo.css'), '/* estilo do documento */');
+  await writeFile(join(repo, 'recursos', 'tema', 'estilo.css'), '/* estilo da base */');
+  await writeFile(join(root, 'avulso.css'), '/* fora do snapshot declarado */');
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({staticDir: 'recursos', routes}));
+
+  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls) => {
+    assert.equal(urls.length, 7);
+    for (const url of urls) {
+      const page = new URL(url);
+      assert.equal(page.hostname, '127.0.0.1');
+      assert.equal(page.search, '?modo=teste');
+      const name = page.pathname.split('/').at(-1).replace('.html', '');
+      const response = await fetch(page);
+      assert.equal(response.status, 200);
+      assert.match(await response.text(), new RegExp(`<h1>${name}</h1>`));
+      const assetBase = name === 'relativa' ? new URL('../recursos/tema/', page) : page;
+      const asset = await fetch(new URL('estilo.css', assetBase));
+      assert.equal(asset.status, 200);
+      assert.equal(await asset.text(), name === 'relativa' ? '/* estilo da base */' : '/* estilo do documento */');
+      assert.equal((await fetch(new URL('/avulso.css', page))).status, 404);
+      const segment = page.pathname.split('/')[1];
+      assert.equal((await fetch(new URL(`/${segment}/avulso.css`, page))).status, 404);
+    }
+  })});
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => ({path: route, file})), routes.slice(0, -1));
+  assert.ok(output.coverage.some(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+    row.detail === 'rota=/semOrigem?modo=teste; escopo parcial: base HTML fora da origem do servidor estático'));
+});
+
+test('Lighthouse registra escopo parcial para formas de documento embutido nas duas raízes estáticas', async t => {
+  const setup = await fixture(t);
+  const {repo} = setup;
+  const pages = [
+    ['public/controle.html', '<template><iframe srcdoc="<p>Inerte</p>"></iframe></template><iframe title="Vazio"></iframe>'],
+    ['public/inline.html', '<iframe srcdoc="&lt;p&gt;Documento&lt;/p&gt;" src="suporte.html"></iframe>', 'iframe[srcdoc]'],
+    ['public/vazio.html', '<iframe srcdoc=""></iframe>', 'iframe[srcdoc]'],
+    ['public/frame.html', '<!doctype html><frameset><frame src="suporte.html"></frameset>', 'frame[src]'],
+    ['externo.html', '<iframe src="public/suporte.html"></iframe>', 'iframe[src]'],
+    ['public/objeto.html', '<object data="suporte.html" type="text/html"></object>', 'object[data]'],
+    ['public/embed.html', '<embed src="suporte.html" type="text/html">', 'embed[src]'],
+  ];
+  const routes = pages.map(([file], i) => ({file, path: `/declarada-${i}`}));
+  for (const [file, html] of pages) await writeFile(join(repo, file), html);
+  await writeFile(join(repo, 'public', 'suporte.html'), '<p>Documento sintético de apoio</p>');
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({routes: [
+    ...routes, {path: '/suporte', file: 'public/suporte.html', page: false},
+  ]}));
+
+  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls) => {
+    assert.deepEqual(urls.map(url => new URL(url).pathname), ['/controle.html']);
+    const response = await fetch(urls[0]);
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /Inerte/);
+  })});
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => ({path: route, file})), routes.slice(0, 1));
+  const omissions = output.coverage.filter(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+    row.detail.includes('documento embutido'));
+  assert.deepEqual(omissions.map(row => row.detail), pages.slice(1).map(([, , element], i) =>
+    `rota=${routes[i + 1].path}; escopo parcial: documento embutido em ${element} fora da interpretação estática`));
+});
+
+test('Lighthouse mantém imagens raster confirmadas pelo servidor nas duas origens estáticas', async t => {
+  const setup = await fixture(t);
+  const {root, repo} = setup;
+  const pixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
+  await mkdir(join(repo, 'site'));
+  const pages = [
+    ['site/imagens.html', '<object data="pixel.png?tema=claro"></object><embed src="pixel.png" type="image/png">'],
+    ['galeria.html', '<base href="site/"><object data="pixel.png" type="image/png"></object>'],
+    ['site/ausente.html', '<object data="ausente.png" type="image/png"></object>'],
+    ['site/documento.html', '<object data="suporte.html" type="image/png"></object>'],
+    ['site/vetor.html', '<object data="vetor.svg" type="image/svg+xml"></object>'],
+  ];
+  const routes = pages.map(([file]) => ({file, path: '/' + file.replace(/^site\//, '')}));
+  for (const [file, html] of pages) await writeFile(join(repo, file), `<!doctype html>${html}`);
+  await writeFile(join(repo, 'site', 'pixel.png'), Buffer.from(pixelPng, 'base64'));
+  await writeFile(join(repo, 'site', 'suporte.html'), '<p>Documento sintético de apoio</p>');
+  await writeFile(join(repo, 'site', 'vetor.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
+  await writeFile(join(root, 'avulso.css'), '/* fora do snapshot declarado */');
+  await writeFile(join(repo, 'desempenho.config.json'), JSON.stringify({staticDir: 'site', routes: [
+    ...routes, {path: '/suporte.html', file: 'site/suporte.html', page: false},
+  ]}));
+
+  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls, pixelPng) => {
+    assert.equal(urls.length, 2);
+    const [canonical, mounted] = urls.map(url => new URL(url));
+    assert.equal(canonical.pathname, '/imagens.html');
+    assert.match(mounted.pathname, /^\/[^/]+\/galeria\.html$/);
+    assert.notEqual(canonical.origin, mounted.origin);
+    const expected = Buffer.from(pixelPng, 'base64');
+    for (const [page, assetPaths] of [
+      [canonical, ['pixel.png?tema=claro', 'pixel.png']],
+      [mounted, ['site/pixel.png']],
+    ]) {
+      assert.equal(page.hostname, '127.0.0.1');
+      assert.equal((await fetch(page)).status, 200);
+      for (const assetPath of assetPaths) {
+        const image = await fetch(new URL(assetPath, page));
+        assert.equal(image.status, 200);
+        assert.equal(image.headers.get('content-type'), 'image/png');
+        assert.deepEqual(Buffer.from(await image.arrayBuffer()), expected);
+      }
+      assert.equal((await fetch(new URL('/avulso.css', page))).status, 404);
+    }
+    assert.equal((await fetch(new URL('avulso.css', mounted))).status, 404);
+  }, pixelPng)});
+  assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => ({path: route, file})), routes.slice(0, 2));
+  const omissions = output.coverage.filter(row => row.tool === 'rota-http' && row.status === 'skipped' &&
+    row.detail.includes('documento embutido'));
+  assert.deepEqual(omissions.map(row => row.detail), routes.slice(2).map(({path}) =>
+    `rota=${path}; escopo parcial: documento embutido em object[data] fora da interpretação estática`));
 });
 
 test('identifica declarações excedentes mesmo depois do limite de leitura das rotas', async t => {

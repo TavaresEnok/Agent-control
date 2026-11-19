@@ -37,7 +37,7 @@ async function withAdmin(url: string, run: (query: (sql: string, params?: readon
 }
 
 async function ownedDatabase(): Promise<{url: string; close: () => Promise<void>}> {
-  const base = (await readFile('/tmp/ac-vordem5-base-url', 'utf8')).trim();
+  const base = process.env.AC_TEST_DATABASE_URL?.trim() || (await readFile('/tmp/ac-vordem5-base-url', 'utf8')).trim();
   const adminUrl = new URL(base);
   const baseName = decodeURIComponent(adminUrl.pathname.replace(/^\//, ''));
   if (baseName === 'ac_ispagent' || baseName === 'ac_personal' || !['127.0.0.1', 'localhost'].includes(adminUrl.hostname)) {

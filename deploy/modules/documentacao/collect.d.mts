@@ -54,9 +54,13 @@ export function copyRepoSafely(source: string, destination: string, options?: Co
 export function sanitizeTsConfigInWork(workRepoDir: string, codeFiles?: string[]): string;
 export function extractMermaidBlocks(files: string[], readFile?: ReadFile): Block[];
 export function createDefaultMermaidParser(toolsRoot?: string): Promise<MermaidParse>;
-export function parseTypedocReport(json: unknown, diagnostics: string, root: string, readFile?: ReadFile, toolsRoot?: string): {
+export function parseTypedocReport(
+  json: unknown, diagnostics: string, root: string, readFile?: ReadFile, toolsRoot?: string, repositoryFiles?: ReadonlySet<string>,
+): {
   findings: Finding[];
   symbols: Symbol[];
+  unlocated: number;
+  unlocatedWarnings: {rule: string; message: string}[];
 };
 export function crossCheckMarkdownAgainstTypedoc(files: string[], symbols: Symbol[], readFile?: ReadFile): Finding[];
 export function parseDepcruiseReport(
@@ -71,6 +75,7 @@ export function parseDepcruiseReport(
 };
 export function validateMermaidDocuments(
   files: string[], blocks: Block[], repositoryFiles: ReadonlySet<string>, parse: MermaidParse, generated?: string,
+  mermaidVersion?: string,
 ): Promise<{findings: Finding[]; documentReferences: DocumentReferences}>;
 export function runCollector(options?: CopyLimits & {
   repoDir?: string;

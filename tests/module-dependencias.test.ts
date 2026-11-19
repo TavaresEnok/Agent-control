@@ -700,20 +700,28 @@ test('consulta do registro termina em timeout ou limite de bytes com resposta si
     return req;
   };
   await assert.rejects(fetchLatestVersion('synthetic', {get: oversized, timeoutMs: 1000, maxBytes: 10}), /limite de bytes/);
-  for (const statusCode of [404, 503, 200]) {
-    let closed = false;
+  for (const [statusCode, body] of [
+    [404, ''], [503, ''], [200, '[]'],
+    [200, JSON.stringify({name: '', version: '1.2.3'})],
+    [200, JSON.stringify({name: '  ', version: '1.2.3'})],
+  ] as const) {
+    let responseClosed = false;
+    let requestClosed = false;
     const get: NonNullable<RegistryRequestOptions['get']> = (_url, respond) => {
-      const response = Object.assign(new EventEmitter(), {statusCode, destroy() { closed = true; }, resume() {}});
+      const response = Object.assign(new EventEmitter(), {statusCode, destroy() { responseClosed = true; }, resume() {}});
       queueMicrotask(() => {
         respond(response);
-        if (statusCode === 200) { response.emit('data', Buffer.from('[]')); response.emit('end'); }
+        if (statusCode === 200) { response.emit('data', Buffer.from(body)); response.emit('end'); }
       });
-      return Object.assign(new EventEmitter(), {destroy() {}});
+      return Object.assign(new EventEmitter(), {destroy() { requestClosed = true; }});
     };
     const request = fetchRegistryVersion('synthetic', '1.2.3', {get});
     if (statusCode === 404) assert.equal(await request, null);
     else await assert.rejects(request, statusCode === 503 ? /HTTP 503/ : /metadados de versão inválidos/);
-    if (statusCode !== 200) assert.equal(closed, true);
+    if (statusCode !== 200) {
+      assert.ok(responseClosed);
+      assert.ok(requestClosed);
+    }
   }
 });
 

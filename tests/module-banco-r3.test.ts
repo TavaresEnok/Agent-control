@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import test from 'node:test';
 
@@ -77,6 +78,187 @@ test('inventário conserva consultas válidas ao lado de entradas inválidas', (
       assert.ok(report.coverage.some(row => row.tool === tool && row.detail.includes('vazia.sql')));
     }
   } finally { rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('diagnóstico de migração separa contexto, início da instrução e cursor externo', {
+  skip: skipPostgres, timeout: 90_000,
+}, () => {
+  const reports = runIsolated<Record<string, Report>>(String.raw`
+    require 'pg'
+    require 'pg_query'
+
+    diagnostic = Struct.new(:fields) do
+      def error_field(field) = fields[field]
+    end
+    failure = Class.new(PG::Error) { attr_accessor :result }
+    source_sql = <<~'SQL'
+      SELECT 'ação 🌱';
+      DO $$ BEGIN
+        SET CONSTRAINTS
+          falta.child_fk IMMEDIATE;
+      END $$;
+    SQL
+    set_sql = "SET CONSTRAINTS\n  falta.child_fk IMMEDIATE"
+    set_frame = %Q(SQL statement "#{set_sql}")
+    inline = 'PL/pgSQL function inline_code_block line 42 at SQL statement'
+    cursor = (source_sql.index('falta') + 1).to_s
+    other_cursor = (source_sql.index('ação') + 1).to_s
+    select_sql = 'SELECT check_task()'
+    select_frame = %Q(SQL statement "#{select_sql}")
+    internal_sql = "SELECT check_task();\nSELECT 'ação 🌱';\n#{set_sql}"
+    internal_fields = {
+      context: inline, internal_position: (internal_sql.index('falta') + 1).to_s, internal_query: internal_sql
+    }
+    deferred_check = {
+      context: inline, sqlstate: '23503', source_function: nil, internal_query: 'SET CONSTRAINTS ALL IMMEDIATE'
+    }
+    malformed_frame = {
+      context: 'PL/pgSQL function inline_code_block line x at EXECUTE',
+      sqlstate: '42703', source_function: nil, statement_position: cursor
+    }
+    writer_fields = {
+      sqlstate: '23503', source_function: 'ri_ReportViolation',
+      schema_name: 'public', table_name: 'child', constraint_name: 'child_fk'
+    }
+    cases = {
+      start: {context: [set_frame, inline].join("\n")},
+      cursor: {context: [set_frame, inline].join("\n"), statement_position: cursor},
+      eof_cursor: {context: [set_frame, inline].join("\n"), statement_position: (source_sql.length + 1).to_s},
+      malformed_cursor: {context: [set_frame, inline].join("\n"), statement_position: "#{cursor}x"},
+      different_command_cursor: {context: [set_frame, inline].join("\n"), statement_position: other_cursor},
+      between_commands_cursor: {context: [set_frame, inline].join("\n"), statement_position: source_sql.index('DO').to_s},
+      internal_cursor: internal_fields,
+      corroborated_frame: internal_fields.merge(context: [set_frame, inline].join("\n"), statement_position: cursor),
+      corroborated_query: internal_fields.merge(context: [%Q(SQL statement "#{internal_sql}"), inline].join("\n")),
+      different_internal_query: internal_fields.merge(
+        context: [set_frame, inline].join("\n"), internal_query: select_sql, internal_position: '8', statement_position: cursor
+      ),
+      different_internal_position: internal_fields.merge(
+        context: [set_frame, inline].join("\n"), internal_position: '8', statement_position: cursor
+      ),
+      different_textual_frame: internal_fields.merge(context: [select_frame, inline].join("\n")),
+      internal_missing_routine: internal_fields.merge(source_function: nil),
+      internal_without_context: internal_fields.merge(context: nil),
+      internal_query_only: deferred_check,
+      internal_malformed_position: deferred_check.merge(internal_position: '2x', statement_position: cursor),
+      internal_out_of_range: deferred_check.merge(internal_position: (deferred_check[:internal_query].length + 1).to_s),
+      internal_position_only: internal_fields.merge(internal_query: nil),
+      internal_unparseable: internal_fields.merge(internal_query: 'SELECT FROM (', internal_position: '8'),
+      internal_unterminated_literal: internal_fields.merge(internal_query: "SELECT 'aberto", internal_position: '9'),
+      malformed_frame: malformed_frame,
+      malformed_frame_with_internal: internal_fields.merge(malformed_frame),
+      malformed_sql_suffix: {context: [set_frame, "#{inline} inesperado"].join("\n"), statement_position: cursor},
+      malformed_execute_suffix: {context: inline.sub(/SQL statement$/, 'EXECUTE inesperado'), statement_position: cursor},
+      missing_routine: {context: [set_frame, inline].join("\n"), source_function: nil},
+      missing_routine_cursor: {context: [set_frame, inline].join("\n"), source_function: nil, statement_position: cursor},
+      partial: {context: [set_frame, inline, 'contexto externo desconhecido'].join("\n")},
+      unterminated: {context: 'SQL statement "SET CONSTRAINTS ALL IMMEDIATE', statement_position: cursor},
+      ambiguous_name: {context: %Q(SQL function "task"\nSQL statement "SET CONSTRAINTS ALL IMMEDIATE"\n#{inline})},
+      competing: {context: %Q(SQL statement "SELECT check_task(); SET CONSTRAINTS ALL IMMEDIATE"\n#{inline})},
+      sql_statement: {context: [%q(SQL function "check"task" statement 2), set_frame, inline].join("\n")},
+      sql_startup: {context: [%Q(SQL function "check\ntask" during startup), set_frame, inline].join("\n")},
+      sql_inlining: {context: [%q(SQL function "check" during inlining), set_frame, inline].join("\n")},
+      sql_bare: {context: [%q(SQL function "a_long_but_ordinary_name_for_check_task"), set_frame, inline].join("\n")},
+      compilation: {context: [%q(compilation of PL/pgSQL function "check_task" near line 2), set_frame, inline].join("\n")},
+      expression: {context: [%q(SQL expression "'SET CONSTRAINTS ALL IMMEDIATE'"), inline].join("\n")},
+      assignment: {context: [%q(PL/pgSQL assignment "label := 'SET CONSTRAINTS ALL IMMEDIATE'"), inline].join("\n")},
+      writer_consistent: writer_fields,
+      writer_conflict: writer_fields.merge(
+        context: 'SQL statement "SET CONSTRAINTS ALL IMMEDIATE"', internal_query: select_sql, internal_position: '8'
+      )
+    }
+    reports = cases.to_h do |name, fields|
+      report = Banco::Report.new
+      db = Banco::Database.new('/tmp', report)
+      fields = {sqlstate: '3F000', source_function: 'get_namespace_oid'}.merge(fields)
+      fields = fields.to_h { |key, value| [PG::Result.const_get("PG_DIAG_#{key.upcase}"), value] }
+      error = failure.new('mensagem sintética privada')
+      error.result = diagnostic.new(fields)
+      prior_sql = 'SELECT 1;'
+      migration_sql = source_sql
+      if name.to_s.start_with?('writer_')
+        prior_sql = 'CREATE TABLE parent(id integer PRIMARY KEY); ' \
+          'CREATE TABLE child(id integer CONSTRAINT child_fk REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED); ' \
+          'INSERT INTO child VALUES (42);'
+        migration_sql = 'SET CONSTRAINTS ALL IMMEDIATE;'
+      end
+      applied = []
+      connection = Object.new
+      connection.define_singleton_method(:exec) do |sql|
+        applied << sql
+        raise error if sql == migration_sql
+      end
+      db.define_singleton_method(:connect) { |_name, &block| block.call(connection) }
+      prior = Banco::Source.new('db/migrations/001_prior.sql', prior_sql)
+      source = Banco::Source.new('db/migrations/002_diagnostic.sql', migration_sql)
+      next_source = Banco::Source.new('db/migrations/003_not_reached.sql', 'SELECT 3;')
+      raise 'migração deveria ser rejeitada' if db.migrate('fresh', [prior, source, next_source])
+      raise 'sequência inesperada' unless applied == ['BEGIN', prior.sql, source.sql, 'ROLLBACK']
+      [name, JSON.parse(report.to_json)]
+    end
+    puts JSON.generate(reports)
+  `);
+
+  for (const name of ['start', 'malformed_cursor', 'internal_cursor', 'corroborated_query', 'expression', 'assignment']) {
+    const [finding] = reports[name].findings;
+    assert.equal(finding.rule, 'BANCO-MIGRACAO-REJEITADA', name);
+    assert.equal(finding.line, 2, name);
+    assert.match(finding.evidence, /linha inicial da instrução; posição exata indisponível/, name);
+  }
+  for (const name of ['cursor', 'corroborated_frame']) {
+    const [finding] = reports[name].findings;
+    assert.equal(finding.rule, 'BANCO-MIGRACAO-REJEITADA', name);
+    assert.equal(finding.line, 4, name);
+    assert.match(finding.evidence, /linha indicada pelo cursor do servidor/, name);
+  }
+
+  for (const [names, detection] of [
+    [['partial', 'unterminated', 'ambiguous_name', 'malformed_frame', 'malformed_frame_with_internal',
+      'malformed_sql_suffix', 'malformed_execute_suffix'],
+      /contexto do PostgreSQL inconclusivo/],
+    [['eof_cursor', 'different_command_cursor', 'between_commands_cursor'], /cursor externo sem correspondência com o bloco inline/],
+    [['different_internal_query', 'different_internal_position', 'different_textual_frame', 'writer_conflict'],
+      /consulta ou posição interna diverge do quadro textual de SQL.*SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
+    [['competing', 'internal_without_context'], /SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
+    [['internal_query_only', 'internal_malformed_position', 'internal_out_of_range'],
+      /diagnóstico interno parcial.*SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
+    [['internal_position_only', 'internal_unparseable', 'internal_unterminated_literal'], /diagnóstico interno parcial/],
+    [['missing_routine', 'missing_routine_cursor', 'internal_missing_routine', 'sql_statement', 'sql_startup', 'sql_inlining', 'sql_bare', 'compilation'],
+      /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+  ] as const) {
+    for (const name of names) {
+      const [finding] = reports[name].findings;
+      assert.equal(finding.rule, 'BANCO-LOTE-MIGRACAO-REJEITADO', name);
+      assert.equal(finding.file, 'db/migrations/002_diagnostic.sql', name);
+      assert.equal(finding.line, 1, name);
+      assert.match(finding.evidence, detection, name);
+      assert.match(finding.evidence, /origem entre arquivos indeterminada/, name);
+      assert.match(finding.evidence, /arquivo e linha referenciam o início do último arquivo alcançado/, name);
+    }
+  }
+  for (const name of ['different_internal_query', 'different_internal_position', 'different_textual_frame',
+    'different_command_cursor', 'between_commands_cursor', 'eof_cursor', 'malformed_sql_suffix', 'malformed_execute_suffix']) {
+    const {coverage, findings: [finding]} = reports[name];
+    assert.match(finding.evidence, /cobertura parcial da origem/, name);
+    assert.doesNotMatch(finding.evidence, /linha indicada pelo cursor do servidor/, name);
+    assert.ok(coverage.some(row => row.status === 'ok' && /002_diagnostic.sql.*cobertura parcial da origem/.test(row.detail)), name);
+    assert.ok(coverage.some(row => row.status === 'skipped' && row.detail.includes('003_not_reached.sql')), name);
+  }
+  for (const name of ['unterminated', 'missing_routine_cursor', 'malformed_frame', 'malformed_frame_with_internal',
+    'internal_malformed_position', 'different_internal_query', 'different_internal_position',
+    'malformed_sql_suffix', 'malformed_execute_suffix']) {
+    assert.match(reports[name].findings[0].evidence, /cursor do servidor na linha 4/, name);
+  }
+  assert.match(reports.internal_query_only.findings[0].evidence, /consulta interna presente; posição interna ausente/);
+  assert.match(reports.internal_malformed_position.findings[0].evidence,
+    /consulta interna presente; posição interna presente, sem instrução identificável/);
+  assert.match(reports.internal_position_only.findings[0].evidence,
+    /consulta interna ausente; posição interna presente, sem instrução identificável/);
+  assert.match(reports.malformed_frame_with_internal.findings[0].evidence,
+    /consulta interna presente; posição interna identificou uma instrução na consulta interna/);
+  assert.equal(reports.writer_consistent.findings[0].file, 'db/migrations/001_prior.sql');
+  assert.match(reports.writer_consistent.findings[0].evidence, /único arquivo com inserções/);
+  assert.doesNotMatch(JSON.stringify(reports), /mensagem sintética privada|inline_code_block|falta\.child_fk|check_task\(\)|inesperado/);
 });
 
 test('PostgreSQL isolado preserva atribuição e medições após falhas sintéticas', {
@@ -195,6 +377,16 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
         db.instance_variable_set(:@report, rejected)
         db.migrate('upgraded', [source('db/migrations/001_ok.sql', 'CREATE TABLE t(id integer);'), source('db/migrations/002_bad.sql', "SELECT 1;\\nSELECT missing FROM t;"), source('db/migrations/003_next.sql', 'SELECT 1;')])
         reports[:rejected] = JSON.parse(rejected.to_json)
+        internal_column = Banco::Report.new
+        db.instance_variable_set(:@report, internal_column)
+        db.migrate('upgraded', [source('db/migrations/001_table.sql', 'CREATE TABLE task(id integer);'),
+          source('db/migrations/002_internal_column.sql', <<~'SQL')])
+            SELECT 1;
+            DO $$ BEGIN
+              PERFORM missing_task_column FROM task;
+            END $$;
+          SQL
+        reports[:internal_column] = JSON.parse(internal_column.to_json)
         app = Banco::Report.new
         db.instance_variable_set(:@report, app)
         db.migrate('fresh', [source('db/migrations/001_raise.sql', "DO $$ BEGIN RAISE EXCEPTION 'synthetic-private'; END $$;")])
@@ -247,7 +439,8 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
   assert.ok(positioned.findings.some(f => f.file.endsWith('003_direct.sql') && f.line === 2 && /SQLSTATE 42703/.test(f.evidence)));
   for (const [report, file, line] of [[missing_constraint, '003_missing.sql', 3], [missing_nested, '003_missing_nested.sql', 2]] as const) {
     assert.deepEqual(report.findings, [{rule: 'BANCO-MIGRACAO-REJEITADA', tool: 'pg-migrate', severity: 'alta',
-      file: `db/migrations/${file}`, line, message: 'A migração foi rejeitada no cenário fresh.', evidence: 'SQLSTATE 42704'}]);
+      file: `db/migrations/${file}`, line, message: 'A migração foi rejeitada no cenário fresh.',
+      evidence: 'SQLSTATE 42704; linha inicial da instrução; posição exata indisponível'}]);
   }
   assert.equal(result.missing_in_trigger.findings.length, 1);
   assert.ok(result.missing_in_trigger.findings.some(f => f.rule === 'BANCO-LOTE-MIGRACAO-REJEITADO'
@@ -270,12 +463,15 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
   assert.ok(rejected.findings.some(f => f.file.endsWith('002_bad.sql') && f.line === 2 && /SQLSTATE 42703/.test(f.evidence)));
   assert.ok(rejected.coverage.some(row => row.status === 'skipped' && /001_ok.sql.*não confirmada/.test(row.detail)));
   assert.ok(rejected.coverage.some(row => row.status === 'skipped' && row.detail.includes('003_next.sql')));
+  assert.deepEqual(result.internal_column.findings, [{tool: 'pg-migrate', rule: 'BANCO-MIGRACAO-REJEITADA', severity: 'alta',
+    file: 'db/migrations/002_internal_column.sql', line: 2, message: 'A migração foi rejeitada no cenário upgraded.',
+    evidence: 'SQLSTATE 42703; linha inicial da instrução; posição exata indisponível'}]);
   assert.ok(app.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && /SQLSTATE P0001/.test(f.evidence)));
   assert.ok(app.findings.some(f => f.rule === 'BANCO-INVARIANTE-HISTORICO' && /SQLSTATE P0001/.test(f.evidence)));
   assert.ok(app.coverage.every(row => row.status !== 'failed'));
   for (const [report, code] of [[result.strict_0, 'P0002'], [result.strict_2, 'P0003']] as const) {
     assert.ok(report.findings.some(f => f.rule === 'BANCO-MIGRACAO-REJEITADA' && f.file.endsWith('002_strict.sql')
-      && f.line === 2 && f.evidence === `SQLSTATE ${code}`));
+      && f.line === 2 && f.evidence === `SQLSTATE ${code}; linha inicial da instrução; posição exata indisponível`));
     assert.ok(report.coverage.every(row => row.status !== 'failed'));
   }
   assert.ok(syntax.findings.some(f => f.file.endsWith('001_syntax.sql') && f.line === 2 && /PgQuery::ParseError/.test(f.evidence)));
@@ -289,7 +485,7 @@ test('PostgreSQL isolado preserva atribuição e medições após falhas sintét
   assert.ok(workload.coverage.some(row => row.tool === 'pg_stat_statements' && row.status === 'ok' && row.detail.includes('valida.sql')));
   assert.ok(workload.coverage.some(row => row.tool === 'EXPLAIN' && /missing.sql.*SQLSTATE 42P01; linha 2/.test(row.detail)));
   assert.ok(workload.coverage.some(row => row.tool === 'EXPLAIN' && /invalid.sql.*linha 2/.test(row.detail)));
-  assert.doesNotMatch(JSON.stringify(result), /INSERT INTO|synthetic-private|424242|inline_code_block/);
+  assert.doesNotMatch(JSON.stringify(result), /INSERT INTO|synthetic-private|424242|inline_code_block|missing_task_column/);
 });
 
 test('coleta integrada separa seed histórico da carga final e mantém consultas individuais', {
@@ -565,6 +761,33 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
         SQL statement ""SELECT 1"""."falta.constraint" IMMEDIATE;$cmd$;
         END $$;
       SQL
+      nested_do: [pending, <<~'SQL'],
+        SELECT 1;
+        DO $$ BEGIN
+          EXECUTE $cmd$DO $inner$ BEGIN
+            SET CONSTRAINTS "falta""esquema".child_fk DEFERRED;
+          END $inner$;$cmd$;
+        END $$;
+      SQL
+      timeout_schema: [pending, <<~'SQL'],
+        SET LOCAL statement_timeout = '15s';
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+      SQL
+      repeated_names: [pending, <<~'SQL'],
+        SET LOCAL statement_timeout = '15s';
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+        SET CONSTRAINTS falta.child_fk IMMEDIATE;
+      SQL
+      repeated_blocks: [pending, <<~'SQL'],
+        SELECT 1;
+        DO $$ BEGIN SET CONSTRAINTS falta.child_fk IMMEDIATE; END $$;
+        DO $$ BEGIN SET CONSTRAINTS falta.child_fk IMMEDIATE; END $$;
+      SQL
+      unpositioned: [pending, <<~'SQL'],
+        -- referência no primeiro comando
+        SELECT 1;
+        CREATE TYPE falta.ty AS ENUM ('a');
+      SQL
       cursor: [pending, <<~'SQL'],
         SELECT 'ação';
         SELECT 'a'::falta.tipo;
@@ -595,6 +818,45 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
           SET /* resolução */ CONSTRAINTS public.child_fk IMMEDIATE;
         END $$;
       SQL
+      line_comment: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          EXECUTE $cmd$SET -- checagem da restrição "
+          CONSTRAINTS ALL IMMEDIATE;$cmd$;
+        END $$;
+      SQL
+      trailing_comment: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          EXECUTE $cmd$SET CONSTRAINTS ALL IMMEDIATE; -- checagem$cmd$;
+        END $$;
+      SQL
+      nested_check: [pending, <<~'SQL'],
+        DO $$ BEGIN
+          EXECUTE $cmd$DO $inner$ BEGIN
+            SET CONSTRAINTS ALL IMMEDIATE;
+          END $inner$;$cmd$;
+        END $$;
+      SQL
+      quoted_routine: [<<~'SQL', 'INSERT INTO task VALUES (1);', 'DO $$ BEGIN SET CONSTRAINTS ALL IMMEDIATE; END $$;'],
+        CREATE TABLE task (id integer);
+        CREATE FUNCTION "check""task"(integer) RETURNS integer LANGUAGE sql SET search_path = public AS $$
+          SELECT $1 / 0;
+        $$;
+        CREATE FUNCTION "check""task"(text) RETURNS integer LANGUAGE sql SET search_path = public AS $$
+          SELECT "check""task"($1::integer);
+        $$;
+        CREATE FUNCTION "check
+        task"(text) RETURNS integer LANGUAGE sql SET search_path = public AS $$
+          SELECT "check""task"($1);
+        $$;
+        CREATE FUNCTION check_task() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM "check
+        task"(NEW.id::text);
+          RETURN NEW;
+        END $$;
+        CREATE CONSTRAINT TRIGGER deferred_task AFTER INSERT ON task
+          DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_task();
+      SQL
       trigger_schema: [<<~'SQL', 'INSERT INTO task VALUES (1);', 'DO $$ BEGIN SET CONSTRAINTS ALL IMMEDIATE; END $$;'],
         CREATE TABLE task (id integer);
         CREATE FUNCTION check_task() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -608,17 +870,33 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
       mixed: [pending, "CREATE TYPE falta.ty AS ENUM ('a'); SET CONSTRAINTS ALL IMMEDIATE;"]
     }
     reports = {}
-    Dir.mktmpdir('c5-r7-', '/tmp') do |dir|
+    Dir.mktmpdir('c5-r8-', '/tmp') do |dir|
       db = Banco::Database.new(dir, Banco::Report.new)
       begin
         db.start
+        connections = []
+        executed = []
+        db.define_singleton_method(:connect) do |name, **options, &block|
+          connections << name
+          super(name, **options) do |connection|
+            connection.define_singleton_method(:exec) do |sql|
+              executed << sql
+              super(sql)
+            end
+            block.call(connection)
+          end
+        end
         cases.each do |name, commands|
           report = Banco::Report.new
           db.instance_variable_set(:@report, report)
           sources = commands.map.with_index(1) do |sql, index|
             Banco::Source.new(format('db/migrations/%03d_%s.sql', index, name), sql)
           end
+          connections.clear
+          executed.clear
           raise "unexpected commit for #{name}" if db.migrate('fresh', sources)
+          raise "unexpected connections for #{name}" unless connections == ['fresh']
+          raise "unexpected SQL execution sequence for #{name}" unless executed == ['BEGIN', *commands, 'ROLLBACK']
           reports[name] = JSON.parse(report.to_json)
         end
       ensure
@@ -631,16 +909,23 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
     ['schema', '3F000', 3], ['constraint', '42704', 2], ['catalog', '0A000', 1],
     ['schema_acl', '42501', 1], ['nondeferrable', '42809', 1],
     ['inline_schema', '3F000', 3], ['execute_schema', '3F000', 1], ['cursor', '3F000', 2],
+    ['nested_do', '3F000', 2], ['timeout_schema', '3F000', 2],
     ['raise_message', '3F000', 2], ['comment_frame', '3F000', 1],
   ] as const) {
     const report = result[scenario];
     const path = `db/migrations/002_${scenario}.sql`;
     assert.deepEqual(report.findings, [{rule: 'BANCO-MIGRACAO-REJEITADA', tool: 'pg-migrate', severity: 'alta',
-      file: path, line, message: 'A migração foi rejeitada no cenário fresh.', evidence: `SQLSTATE ${code}`}], scenario);
+      file: path, line, message: 'A migração foi rejeitada no cenário fresh.', evidence: scenario === 'cursor'
+        ? `SQLSTATE ${code}; linha indicada pelo cursor do servidor`
+        : `SQLSTATE ${code}; linha inicial da instrução; posição exata indisponível`}], scenario);
     assert.ok(report.coverage.some(row => row.status === 'ok' && row.detail.includes(`${path}: rejeitada (SQLSTATE ${code})`)), scenario);
   }
   for (const [scenario, file, code, detection] of [
     ['fk_check', '002_fk_check.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['line_comment', '002_line_comment.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['trailing_comment', '002_trailing_comment.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['nested_check', '002_nested_check.sql', '23503', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
+    ['quoted_routine', '003_quoted_routine.sql', '22012', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
     ['trigger_schema', '003_trigger_schema.sql', '3F000', /detecção em SET CONSTRAINTS chamado pelo arquivo/],
     ['mixed', '002_mixed.sql', '3F000', /SET CONSTRAINTS IMMEDIATE pode ter antecipado/],
   ] as const) {
@@ -652,6 +937,14 @@ test('diagnóstico de SET CONSTRAINTS distingue resolução direta, checagem dif
     assert.match(finding.evidence, new RegExp('SQLSTATE ' + code));
     assert.match(finding.evidence, detection);
     assert.match(finding.evidence, /origem entre arquivos indeterminada/);
+  }
+  for (const [scenario, reference] of [['repeated_names', 1], ['repeated_blocks', 1], ['unpositioned', 2]] as const) {
+    assert.equal(result[scenario].findings.length, 1, scenario);
+    const [finding] = result[scenario].findings;
+    assert.equal(finding.rule, 'BANCO-MIGRACAO-REJEITADA', scenario);
+    assert.equal(finding.file, `db/migrations/002_${scenario}.sql`);
+    assert.equal(finding.line, reference, scenario);
+    assert.match(finding.evidence, /SQLSTATE 3F000; posição exata indisponível; linha de referência do arquivo/);
   }
   for (const report of Object.values(result)) {
     assert.ok(report.coverage.every(row => row.status !== 'failed' && !row.files?.length));
@@ -678,6 +971,12 @@ test('coletor atribui as medições e o candidato Dexter e valida o controle lim
       }
     }
   }
+  const query = 'banco/queries/latency.sql';
+  const digest = createHash('sha256').update(readFileSync(join(fixtures, 'defective', query))).digest('hex');
+  const slow = defective.findings.find(f => f.rule === 'BANCO-CONSULTA-LENTA' && f.file === query);
+  assert.ok(slow);
+  assert.ok(defective.coverage.some(row => row.tool === 'pg_stat_statements' && row.status === 'ok'
+    && row.detail === `pg_stat_statements:query:${query}: linha ${slow.line}; ${slow.evidence} | SQL medido (sha256:${digest})`));
   assert.ok(defective.coverage.some(row => row.tool === 'dexter' && row.status === 'ok'
     && row.files?.includes('banco/queries/by-code.sql') && /by-code.sql: linha 2; planos hipotéticos comparados/.test(row.detail)));
   const finding = defective.findings.find(f => f.rule === 'BANCO-INDICE-CANDIDATO');
