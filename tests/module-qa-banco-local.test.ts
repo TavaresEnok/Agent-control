@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {readFileSync, readdirSync} from 'node:fs';
+import {existsSync, mkdtempSync, readFileSync, readdirSync, rmSync} from 'node:fs';
 import {moduleCollectorArguments, parseModuleCollectorOutput} from '../src/verification-modules.ts';
 import {join} from 'node:path';
 import test from 'node:test';
@@ -9,7 +9,7 @@ import {collectQaBancoLocal, measureBancoPlan} from '../deploy/modules/qa/banco-
 // @ts-expect-error Os coletores usam JavaScript nativo.
 import {manifestPath, planBancoLocal} from '../deploy/modules/qa/banco-local/plan.mjs';
 // @ts-expect-error Os coletores usam JavaScript nativo.
-import {createLocalPostgres, parseTap} from '../deploy/modules/qa/banco-local/postgres.mjs';
+import {attestPostgres, bancoLocalVersion, createLocalPostgres, parseTap, setupPostgres} from '../deploy/modules/qa/banco-local/postgres.mjs';
 
 function snapshot(name = 'controle') {
   const workspace = join(import.meta.dirname, 'fixtures', 'module-qa-banco-local', name);
@@ -116,6 +116,124 @@ test('pgTAP exige plano e resultado inequívocos', () => {
   for (const output of ['', 'ok 1 - invariante funcional', '1..0 # SKIP', '1..1\nok 1 - invariante funcional # TODO',
     '1..1\nok 1 - invariante funcional\nBail out!', '1..1\nok 1 - invariante funcional\n# resultado contraditório', '1..2\nok 1 - invariante funcional']) {
     assert.equal(parseTap(output), 'invalid');
+  }
+});
+
+test('o instalador fixa servidor, cliente e libpq no snapshot corrigido do Ubuntu', () => {
+  const install = readFileSync(join(import.meta.dirname, '../deploy/modules/qa/banco-local/install.sh'), 'utf8');
+  assert.match(install, /^snapshot=20261118T000000Z$/m);
+  assert.match(install, /^pg_release=16\.15$/m);
+  assert.match(install, /^pg_version=\$pg_release-0ubuntu0\.24\.04\.1$/m);
+  assert.match(install, /"libpq5=\$pg_version" "postgresql-16=\$pg_version" "postgresql-client-16=\$pg_version"/);
+  assert.match(install, /signed-by=\/usr\/share\/keyrings\/ubuntu-archive-keyring\.gpg/);
+  assert.equal(bancoLocalVersion, 'PostgreSQL 16.15 / pgTAP 1.3.2');
+});
+
+test('só encaminha ao pgTAP um booleano escalar validado na sessão de leitura', async () => {
+  const predicate = planBancoLocal(snapshot()).fresh.sql;
+  assert.match(predicate, /; -- Fim da assertiva do zero\.\n$/);
+
+  for (const [scalar, expected] of [
+    ['t\nt\n', 'passed'], ['t\nf\n', 'failed'], ['t\nt\nf\n', 'invalid'], ['f\nt|f\n', 'invalid'],
+    ['t\n', 'invalid'], ['t\n\n', 'invalid'], ['f\nt\n', 'invalid'],
+  ]) {
+    const roles: string[] = [];
+    const psql = async (db: string, commands: string[], user: string) => {
+      roles.push(user);
+      if (user === 'qa_reader') {
+        assert.equal(db, 'fresh');
+        assert.equal(commands[0], 'BEGIN READ ONLY');
+        assert.equal(commands[1], 'SET LOCAL ROLE pg_read_all_data');
+        assert.ok(commands.includes(`PREPARE qa_scalar AS\n${predicate}`));
+        assert.equal(commands.at(-1), 'ROLLBACK');
+        return scalar;
+      }
+      assert.equal(db, 'qa_attestation');
+      assert.deepEqual(commands, [
+        'BEGIN', 'SET LOCAL search_path TO pg_catalog, qa_tap, pg_temp', 'SELECT qa_tap.plan(1)',
+        `SELECT qa_tap.ok(${expected === 'passed' ? 'TRUE' : 'FALSE'}, 'invariante funcional')`,
+        'SELECT * FROM qa_tap.finish()', 'ROLLBACK',
+      ]);
+      return `1..1\n${expected === 'passed' ? 'ok' : 'not ok'} 1 - invariante funcional\n`;
+    };
+    assert.equal(await attestPostgres(psql, 'fresh', predicate), expected);
+    assert.deepEqual(roles, expected === 'invalid' ? ['qa_reader'] : ['qa_reader', 'qa_admin']);
+  }
+
+  const incompleteTap = async (_db: string, _commands: string[], user: string) =>
+    user === 'qa_reader' ? 't\nt\n' : '1..1\n';
+  assert.equal(await attestPostgres(incompleteTap, 'fresh', predicate), 'invalid');
+});
+
+const testPgBin = process.env.QA_BANCO_TEST_PG_BIN;
+
+test('PostgreSQL e pgTAP medem dados sintéticos e preservam os privilégios da sessão e do catálogo', {
+  skip: !testPgBin,
+  timeout: 30_000,
+}, async () => {
+  const directory = mkdtempSync('/tmp/qa-banco-r2-');
+  const data = join(directory, 'data');
+  const run = (binary: string, args: string[]) => execFileSync(join(testPgBin!, binary), args, {
+    cwd: directory, encoding: 'utf8', timeout: 12_000, env: {
+      PATH: '/usr/bin:/bin', HOME: directory, TMPDIR: directory, LANG: 'C.UTF-8', TZ: 'UTC',
+      LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? '',
+    },
+  });
+  const psql = async (db: string, commands: string[], user: string) => run('psql', [
+    '-XAtqw', '-v', 'ON_ERROR_STOP=1', '-h', directory, '-p', '5432', '-U', user, '-d', db,
+    ...commands.flatMap(sql => ['-c', sql]),
+  ]);
+  try {
+    run('initdb', ['-D', data, '-U', 'qa_admin', '--no-locale', '--encoding=UTF8', '--auth-local=trust', '--auth-host=reject']);
+    run('pg_ctl', ['-D', data, '-l', join(directory, 'postgres.log'), '-w', '-t', '8', '-o',
+      `-h '' -k ${directory} -c unix_socket_permissions=0700 -c statement_timeout=5000`, 'start']);
+    assert.equal(await psql('postgres', ['SHOW server_version_num'], 'qa_admin'), '160015\n');
+    await setupPostgres(psql);
+    assert.equal(await psql('postgres', [
+      "SELECT has_database_privilege('qa_project', 'qa_attestation', 'CONNECT'), " +
+      "has_database_privilege('qa_reader', 'qa_attestation', 'CONNECT')",
+    ], 'qa_admin'), 'f|f\n');
+
+    const plan = planBancoLocal(snapshot());
+    for (const {sql} of plan.migrations) {
+      await psql('fresh', [`SET client_min_messages = warning;\n${sql}`], 'qa_project');
+    }
+    const acl = () => psql('fresh', [
+      "SELECT nspname, nspacl FROM pg_catalog.pg_namespace WHERE nspname IN ('pg_catalog', 'information_schema', 'public') ORDER BY nspname",
+      "SELECT n.nspname, c.relname, c.relacl FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace " +
+      "WHERE n.nspname IN ('pg_catalog', 'information_schema', 'public') ORDER BY 1, 2",
+    ], 'qa_admin');
+    const originalAcl = await acl();
+    const readerPrivileges = "SELECT current_user, has_table_privilege('public.items', 'SELECT'), has_table_privilege('public.items', 'INSERT')";
+    const baseline = 'qa_reader|f|f\n';
+    assert.equal(await psql('fresh', [readerPrivileges], 'qa_reader'), baseline);
+
+    const psqlWithPrivilegeCheck = async (db: string, commands: string[], user: string) => {
+      if (user !== 'qa_reader') return psql(db, commands, user);
+      const output = await psql(db, [...commands, readerPrivileges], user);
+      assert.ok(output.endsWith(baseline));
+      return output.slice(0, -baseline.length);
+    };
+    for (const [predicate, expected] of [
+      [plan.fresh.sql, 'passed'],
+      ['SELECT TRUE', 'passed'],
+      ['SELECT TRUE; /* Fim da assertiva. */', 'passed'],
+      ['SELECT EXISTS (SELECT 1 FROM public.items);', 'failed'],
+      ['SELECT value FROM (VALUES (TRUE), (FALSE)) AS fixture(value);', 'invalid'],
+      ['SELECT TRUE, FALSE;', 'invalid'],
+      ['SELECT TRUE WHERE FALSE;', 'invalid'],
+      ['SELECT NULL::boolean;', 'invalid'],
+      ["SELECT 't'::text;", 'invalid'],
+    ]) {
+      assert.equal(await attestPostgres(psqlWithPrivilegeCheck, 'fresh', predicate), expected);
+    }
+    assert.equal(await acl(), originalAcl);
+  } finally {
+    try {
+      if (existsSync(join(data, 'postmaster.pid'))) run('pg_ctl', ['-D', data, '-m', 'fast', '-w', '-t', '8', 'stop']);
+    } finally {
+      rmSync(directory, {recursive: true, force: true});
+    }
   }
 });
 
