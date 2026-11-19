@@ -538,3 +538,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:17 UTC — Trabalhador encerrou C-REVERIFICAR-R4 em ced1deaf (código 0). Gerente confere a entrega.
 - 19/11/2026 06:17 UTC — Trabalho C2-CONTRATOS iniciado por Sol high normal em final-qa-contratos.
 - 19/11/2026 06:18 UTC — QA 1d357911: o fast-check executou 32 casos no controle e reproduziu a falsificação na imagem. A regra fixa agora preserva sua identidade no relatório; os três controles fora do catálogo continuaram saneados. Em 9b8f9850, passaram 26/26 exames e provas de persistência; a ordem de correção dos oito módulos foi lida na conversa principal do projeto correspondente. Faltam a rodada de fidelidade das rotas e o aceite.
+- 19/11/2026 06:19 UTC — Revisor encerrou C2-R11 em 2a440fd9 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:19 UTC — Revisão C7-HISTORICO-R3 iniciada por Sol high normal somente leitura em 004271d0.
+- 19/11/2026 06:19 UTC — C4 3e0bd99f: 36/36 com OpenRewrite, testes de atribuição do JDK e laboratório da imagem. A receita mediu a chamada de charset no arquivo Java e o controle corrigido; a fonte do projeto permaneceu íntegra.

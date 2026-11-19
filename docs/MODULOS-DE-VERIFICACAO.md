@@ -288,6 +288,8 @@ Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes c
 
 Em `fcbffe1e`, os 69 testes de QA passaram sem saltos. A imagem mediu contraste e pixels com Chromium, três passadas de Python e Go, mutantes mortos e sobreviventes com mutmut e go-mutesting e uma propriedade falsificada com Hypothesis. A prova de entradas nominais de contrato e as propriedades JavaScript por fast-check estão em desenvolvimento.
 
+Em `1d357911`, a imagem de QA executou fast-check 4.10.3 em um projeto sintético, mediu 32 chamadas no controle e reproduziu a propriedade falsificada. A prova distingue regras de catálogo e texto sensível.
+
 ### Prova do módulo 3
 
 **Arquitetura e dívida técnica.** Em homologação, a CLI `personal:arquitetura` mediu código JavaScript e TypeScript com Knip, complexidade no AST, duplicação com jscpd e dependências com dependency-cruiser. O laboratório da imagem fixada em `303b1b36` passou após conferir a contagem por arquivo com caminhos equivalentes e o controle limpo. A imagem de C3-R7 em `88229a82` passou nas 18 provas habilitadas e na CLI com a conferência de travessia de diretório. A revisão de `7fb2f861` apontou omissões no destino e na interpretação de componentes. Em C3-R8, a imagem `43b3ef40` passou nas 18 provas habilitadas e nas seis da CLI. Um teste opcional do laboratório foi pulado. Em R9, `70a8c7cc` passou nas 19 provas habilitadas e a CLI no ramo incremental passou em seis testes. A imagem conserva a origem de caminhos relativos e identifica entradas sem cobertura mesmo quando chega ao limite de arquivos.
@@ -300,17 +302,23 @@ A prova da arquitetura passou nos 20 testes, com Hadolint e as dependências loc
 
 A revisão independente por modelo distinto de `db55280f` identificou três casos de comprovação de versão. Na imagem da revisão `547fa8c9`, o módulo passou nos 30 testes com controles de lock, catálogo e propostas. A proveniência dos dez arquivos CycloneDX foi aferida pelos bytes da revisão original. A medição OpenRewrite para Java está em desenvolvimento.
 
+Em `3e0bd99f`, 36 testes passaram com OpenRewrite offline e sua imagem fixada. A receita local de Java 17 identifica o uso de Charset.forName para UTF-8, localiza a mudança e compara o controle corrigido.
+
 ### Prova do módulo 5
 
 **Banco de dados.** Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A imagem de C5-R4, fixada em `a3d02361`, passou nos dez testes de banco, incluindo falha no commit do lote, migração e restauração. A revisão independente de `5d494800` abriu C5-R5 para atribuição de falhas de transação e identificação de rejeições SQL. A imagem `e6b76eb4` passou nos onze testes de banco e pela CLI em `8bf6ed47`.
 
 Na amostra sintética de `a382ae45`, os 13 testes de banco passaram com PostgreSQL, Dexter e Squawk. O laboratório distingue erro do próprio comando SET CONSTRAINTS e rejeição do lote, incluindo resolução de esquema, e exige prova para atribuir a falha a uma migração.
 
+Em `a22546c0`, o laboratório mediu uma consulta com PostgreSQL real e vinculou o resultado aos bytes da fonte pelo SHA-256. O achado confirmado ficou persistido. A troca da consulta no Git com reapresentação da mesma medição produziu um achado provável. Os revisores deste ensaio são sintéticos.
+
 ### Prova do módulo 6
 
 **Prontidão para produção.** Em homologação, `personal:prontidao` registrou evidências locais de configuração, Gitleaks, Hadolint e Trivy em execução offline. O laboratório exerceu também a conversão de um achado em tarefa. A imagem fixada em `a2c2a68f` passou em 19 testes de prontidão e sondagem local. A revisão de `757eced2` identificou omissões na análise de Compose, dotenv e configuração por site, além de valores de cabeçalho que precisam ser removidos da evidência. O commit `01101716` guarda apenas as classes de proteção dos cabeçalhos e passou em 18 testes locais. A imagem `74133e4d` passou nas 29 provas dirigidas de prontidão e na CLI com HTTPS local. A confirmação independente é necessária antes de transformar um achado provável em tarefa.
 
 O coletor passivo de `2cafe62b` passou nos 32 testes de homologação. A imagem reconstruída ficou em `256589e2`. Sem revisão independente, uma observação TLS permanece provável e a CLI recusa convertê-la em tarefa.
+
+Em `049b33c9`, os 34 testes passaram com a imagem de prontidão e as regras atualizadas de análise estática de Compose e de scripts de backup.
 
 ### Prova do módulo 7
 
