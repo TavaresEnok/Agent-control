@@ -622,6 +622,7 @@ test('Here-docs distinguem delimitadores físicos, continuados e citados de coma
       ["cat <<'EOF'", 'text\\', 'EOF'],
       ['cat <<\\EOF', 'text\\', 'EOF'],
       ["cat <<'END${fixture:-with spaces}'", 'END${fixture:-with', 'pg_dump -f ignored.dump', 'END${fixture:-with spaces}'],
+      ["cat <<'END$[1 + 2]'", 'END$[1', 'pg_dump -f ignored.dump', 'END$[1 + 2]'],
       ['cat <<EOF # comentário com barra\\', 'pg_dump -f ignored.dump', 'EOF'],
     ]) {
       const result = audit([...lines, 'pg_dump -f declared.dump']);
@@ -639,6 +640,7 @@ test('Here-docs distinguem delimitadores físicos, continuados e citados de coma
       ['cat <<EOF', 'text\\', 'EOF', 'pg_dump -f fixture.dump'],
       ["cat <<$'EOF'", 'pg_dump -f fixture.dump', 'EOF'],
       compoundDelimiter,
+      ["cat <<'END'$[1 + 2]", 'END$[1', 'pg_dump -f fixture.dump', 'END$[1 + 2]'],
       ['cat <<EOF | wc -l', 'pg_dump -f fixture.dump', 'EOF'],
     ]) {
       const result = audit(lines);
@@ -1033,6 +1035,33 @@ test('Compose limita a cobertura de extensões de raiz às referências nos serv
   }
 });
 
+test('Compose deixa os serviços indeterminados quando a extensão de raiz contém YAML incompleto', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-compose-extensao-incompleta-'));
+  try {
+    const services = ['services:', '  api:', '    image: scratch'];
+    const audit = (lines: string[]) => {
+      writeFileSync(join(dir, 'compose.yaml'), [...lines, ''].join('\n'));
+      return auditRepositoryReadiness(dir);
+    };
+    const known = audit(['x-notes:', '  metadata: {enabled: true,', '    labels: [fixture]}', ...services]);
+    const restart = (out: ReturnType<typeof audit>) => out.coverage.find(c => c.tool === 'prontidao:requisito:reinicio-automatico');
+    assert.equal(restart(known)?.status, 'ok');
+    assert.ok(known.findings.some(f => f.rule === 'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE'));
+    for (const lines of [
+      ['x-notes:', '  metadata: {enabled: true', ...services],
+      [...services, 'x-notes:', '  - metadata: [fixture'],
+      ['x-notes:', '  metadata: "anotação', ...services],
+    ]) {
+      const result = audit(lines);
+      assert.ok(result.coverage.some(c => c.status === 'failed' && c.detail.startsWith('compose.yaml:')));
+      assert.equal(restart(result)?.status, 'failed');
+      assert.equal(result.findings.some(f => f.rule === 'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE'), false);
+    }
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
 test('Caddy e Nginx auditam o bloco efetivo e declaram imports ou rotas não resolvidos', () => {
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-proxy-'));
   try {
@@ -1161,14 +1190,17 @@ test('Redirecionamentos HTTPS validam a autoridade e preservam destinos literais
     const valid = ['https://fixture.invalid', 'https://[2001:db8::1]:8443/path?x=y', 'https://fixture.invalid/p%20q'];
     const invalidNginx = [...invalid, 'https://fixture.invalid:bad/$request_filename', 'https://[not:ipv6]/${request_filename}'];
     const nginxKnown = [...valid, 'https://${host}$request_uri'];
-    const nginxUnknown = ['https://fixture.invalid/$request_filename', 'https://$custom_host:bad/path', 'https://$host$request_uri?$custom_query'];
+    const nginxUnknown = [
+      'https://fixture.invalid/$request_filename', 'https://$custom_host:bad/path', 'https://$host$request_uri?$custom_query',
+      '$redirect_target', '${redirect_target}',
+    ];
     writeFileSync(join(dir, 'Caddyfile'), [...invalid, ...valid, 'https://{host}{uri}'].flatMap((target, i) => [
       'http://site' + i + '.invalid {',
       '  redir /* ' + target + ' 303',
       '}',
     ]).join('\n'));
     writeFileSync(join(dir, 'nginx.conf'), [...invalidNginx, ...nginxKnown, ...nginxUnknown].map((target, i) =>
-      'server { listen ' + (8000 + i) + '; return 303 "' + target + '"; }').join('\n'));
+      'server { listen ' + (8000 + i) + '; return 308 "' + target + '"; }').join('\n'));
     const out = auditRepositoryReadiness(dir);
     const findings = (file: string) => out.findings.filter(f => f.file === file && f.rule === 'PRONTIDAO-TLS-DESATIVADO').map(f => f.line);
     assert.deepEqual(findings('Caddyfile'), invalid.map((_, i) => i * 3 + 1));
@@ -1188,6 +1220,7 @@ test('Nginx considera o 301 da barra final antes do return da localização', ()
     const toHttps = 'return 308 https://fixture.invalid;';
     const root = `location / { ${toHttps} }`;
     const app = `location /app/ { ${toHttps} proxy_pass http://fixture.invalid; }`;
+    const repeated = 'location /app/// { proxy_pass http://fixture.invalid; }';
     writeFileSync(join(dir, 'nginx.conf'), [
       `server { listen 8000; ${root} ${app} }`,
       `server { listen 8001; absolute_redirect off; ${root} ${app} }`,
@@ -1197,11 +1230,19 @@ test('Nginx considera o 301 da barra final antes do return da localização', ()
       `server { listen 8005; ${root} location /app { ${toHttps} proxy_pass http://fixture.invalid; } }`,
       `server { listen 8006; error_page 301 /redirect; ${root} ${app} }`,
       `server { listen 8007; error_page 404 /redirect; ${root} location /app/ { internal; ${toHttps} proxy_pass http://fixture.invalid; } }`,
+      `server { listen 8008; ${root} ${repeated} }`,
+      `server { listen 8009; merge_slashes off; ${root} ${repeated} }`,
+      `server { listen 8010; merge_slashes on; ${root} ${repeated} }`,
+      `server { listen 8011; ${root} location /app// { ${toHttps} proxy_pass http://fixture.invalid; } }`,
+      `http { merge_slashes off; server { listen 8012; ${root} ${repeated} }`,
+      `  server { listen 8013; merge_slashes on; ${root} ${repeated} } }`,
+      `server { listen 8014; merge_slashes off; ${toHttps} }`,
+      `server { listen 8014; ${root} ${repeated} }`,
     ].join('\n'));
     const result = auditRepositoryReadiness(dir);
-    assert.deepEqual(result.findings.filter(f => f.rule === 'PRONTIDAO-TLS-DESATIVADO').map(f => f.line), [1, 2]);
+    assert.deepEqual(result.findings.filter(f => f.rule === 'PRONTIDAO-TLS-DESATIVADO').map(f => f.line), [1, 2, 10, 12, 13]);
     assert.deepEqual(result.coverage.filter(c => c.status === 'failed' && c.detail.startsWith('nginx.conf: linha '))
-      .map(c => Number(/^nginx\.conf: linha (\d+),/.exec(c.detail)?.[1])), [7, 8]);
+      .map(c => Number(/^nginx\.conf: linha (\d+),/.exec(c.detail)?.[1])), [7, 8, 16]);
   } finally {
     rmSync(dir, {recursive: true, force: true});
   }

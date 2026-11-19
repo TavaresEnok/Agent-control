@@ -194,6 +194,7 @@ function* composeLines(content, onIncomplete) {
   const endedWithNewline = lines.at(-1) === '';
   if (endedWithNewline) lines.pop();
   let rootIndent;
+  let inRootExtension = false;
   function* expand(text, indent, line, inFlow = false) {
     const property = yamlProperty(text, inFlow);
     const value = property && withoutYamlAnchor(property.value);
@@ -215,7 +216,7 @@ function* composeLines(content, onIncomplete) {
     if (raw.slice(0, indent).includes('\t')) onIncomplete();
     const text = raw.trim();
     if (text === '---' && line === 1) continue;
-    if (text === '...') {
+    if (text === '...' && indent === 0) {
       if (lines.slice(i + 1).some(rest => stripYamlComment(rest).trim())) onIncomplete();
       return;
     }
@@ -223,37 +224,35 @@ function* composeLines(content, onIncomplete) {
     if (/^(?:---|%|\?\s)/.test(text)) onIncomplete();
     if (text.startsWith('{')) raw = `__root__: ${text}`;
     const prop = yamlProperty(raw.trim());
-    const sequence = /^-\s+(.*)$/.exec(text);
-    const value = withoutYamlAnchor(prop?.value ?? sequence?.[1] ?? '');
-    if (prop && /^[{\[]/.test(value)) {
+    const sequence = /^-(?:\s+(.*)|$)/.exec(text);
+    const rootExtension = indent === rootIndent && prop && unquote(prop.key).startsWith('x-');
+    if (indent <= rootIndent && !(indent === rootIndent && sequence)) inRootExtension = Boolean(rootExtension);
+    const itemProperty = inRootExtension && sequence?.[1] && yamlProperty(sequence[1]);
+    const node = prop?.value ?? itemProperty?.value ?? sequence?.[1] ?? (inRootExtension ? text : '');
+    // Extension data is opaque, but node properties can precede a collection or a scalar.
+    const value = inRootExtension ? node.replace(/^(?:(?:&\S+|!\S*)(?:\s+|$))+/, '') : withoutYamlAnchor(node);
+    if ((prop || inRootExtension) && /^[{\[]/.test(value)) {
       const flow = flowEntries(value, () => i + 1 < lines.length ? stripYamlComment(lines[++i]) : undefined);
       if (!flow) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
-      raw = `${prop.key}: ${flow.value}`;
-    }
-    if (indent === rootIndent && prop && unquote(prop.key).startsWith('x-')) {
-      // Root extensions are metadata. Aliases and merges in services are checked at their use sites.
-      while (i + 1 < lines.length) {
-        const next = stripYamlComment(lines[i + 1]);
-        const nextIndent = next.search(/\S/);
-        if (nextIndent >= 0 && nextIndent <= indent && !(nextIndent === indent && /^-\s/.test(next.trimStart()))) break;
-        i++;
-      }
-      yield {key: prop.key, text, indent, line};
-      continue;
+      if (!inRootExtension) raw = `${prop.key}: ${flow.value}`;
     }
     if (YAML_BLOCK.test(value)) {
       let scalar = '';
-      let scalarIndent = Number(/\d/.exec(value)?.[0]) + indent;
+      const blockIndent = itemProperty ? indent + text.length - sequence[1].length : indent;
+      let scalarIndent = Number(/\d/.exec(value)?.[0]) + blockIndent;
       let written = false;
       let unresolved = false;
       while (i + 1 < lines.length) {
         const next = lines[i + 1];
         const nextIndent = next.search(/[^ ]/);
-        if (nextIndent >= 0 && nextIndent <= indent) break;
+        if (nextIndent >= 0 && nextIndent <= blockIndent) break;
         i++;
         if (nextIndent >= 0) {
           if (Number.isNaN(scalarIndent)) scalarIndent = nextIndent;
-          if (nextIndent < scalarIndent) onIncomplete();
+          if (nextIndent < scalarIndent) {
+            if (inRootExtension) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
+            onIncomplete();
+          }
           if (value.startsWith('>') && written) unresolved = true;
           written = true;
         }
@@ -262,26 +261,29 @@ function* composeLines(content, onIncomplete) {
       }
       if (value.includes('-')) scalar = scalar.replace(/\n+$/, '');
       else if (!value.includes('+')) scalar = written ? scalar.replace(/\n+$/, '\n') : '';
-      yield {key: prop?.key, value, text, indent, line, scalarBlock: scalar, scalarUnresolved: unresolved};
+      if (!inRootExtension) yield {key: prop?.key, value, text, indent, line, scalarBlock: scalar, scalarUnresolved: unresolved};
     } else {
       // Multiline quoted/plain scalars and YAML tags need a full YAML parser.
       if (/^[!&|>]/.test(value)
         || (value.startsWith('"') && !/^"(?:\\.|[^"\\])*"$/.test(value))
         || (value.startsWith("'") && !/^'(?:''|[^'])*'$/.test(value))) {
+        if (inRootExtension) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
         onIncomplete();
         if (/^['"]/.test(value)) {
           // Do not reinterpret lines inside a quoted value as separate declarations.
           while (i + 1 < lines.length && (!lines[i + 1].trim() || lines[i + 1].search(/\S/) > indent)) i++;
         }
       }
-      if (text.startsWith('{')) {
+      if (!inRootExtension && text.startsWith('{')) {
         const flow = flowEntries(yamlProperty(raw.trim())?.value ?? '');
         if (!flow) throw new Error('COMPOSE_ESTRUTURA_INVALIDA');
         for (const [index, entry] of flow.entries.entries()) yield* expand(entry, indent, line + flow.offsets[index], true);
-      } else {
+      } else if (!inRootExtension) {
         yield* expand(raw.trim(), indent, line);
       }
     }
+    // Keep the root declaration so the extension ends the services scope.
+    if (rootExtension) yield {key: prop.key, text, indent, line};
   }
 }
 
@@ -918,7 +920,7 @@ function nginxResponse(block) {
   return {};
 }
 
-function nginxHttpRedirect(server, policy, onIncomplete) {
+function nginxHttpRedirect(server, policy, mergeSlashes, onIncomplete) {
   const response = nginxResponse(server);
   if (policy.external || response.unknown) return null;
   if (response.status !== undefined) {
@@ -946,11 +948,15 @@ function nginxHttpRedirect(server, policy, onIncomplete) {
     const errorPages = nginxErrorPages(location, policy.errorPages, onIncomplete);
     const internal = location.directives.some(item => item.name === 'internal');
     const path = paths[index];
+    if (mergeSlashes === null && path.includes('//')) return null;
+    const withoutTrailingSlash = path.slice(0, -1);
     // Location lookup can append a slash before location-level rewrite directives run.
-    if (!internal && path.startsWith('/') && path.length > 1 && path.endsWith('/') && !pathSet.has('= ' + path.slice(0, -1))
+    if (!internal && path.startsWith('/') && path.length > 1 && path.endsWith('/')
+      && (!mergeSlashes || !withoutTrailingSlash.includes('//')) && !pathSet.has('= ' + withoutTrailingSlash)
       && location.directives.some(item => NGINX_SLASH_REDIRECT_HANDLERS.has(item.name))) {
       return nginxErrorPageAffects(errorPages, 301) ? null : false;
     }
+    if (mergeSlashes && path.includes('//')) return true; // The normalized URI cannot enter this location.
     const response = nginxResponse(location);
     if (response.unknown || nginxErrorPageAffects(errorPages, internal ? 404 : response.status)) return null;
     return !internal && response.redirectsHttps === true;
@@ -963,6 +969,13 @@ function nginxPort(address = '') {
   if (port !== undefined) return Number(port) > 0 && Number(port) <= 65535 ? Number(port) : null;
   if (/^(?:\*|\d{1,3}(?:\.\d{1,3}){3}|\[[\da-f:]+\])$/i.test(address)) return 80;
   return null;
+}
+
+function nginxMergeSlashes(block, inherited) {
+  const directives = block.directives.filter(item => item.name === 'merge_slashes');
+  if (!directives.length) return inherited;
+  const [value, ...extra] = directives[0].args;
+  return directives.length === 1 && !extra.length && /^(?:on|off)$/.test(value) ? value === 'on' : null;
 }
 
 function nginxHeadersForStatus(headers, status) {
@@ -1007,7 +1020,7 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
       }
     }
   };
-  const checkServer = (server, parentPolicy, parentProtocol, tlsPorts, contextUsesLegacySsl) => {
+  const checkServer = (server, parentPolicy, parentProtocol, tlsPorts, slashModesByPort, contextUsesLegacySsl) => {
     const policy = nginxHeaderPolicy(server, parentPolicy, onIncomplete);
     const protocol = protocolAt(server, parentProtocol);
     const listeners = server.directives.filter(item => item.name === 'listen');
@@ -1020,7 +1033,10 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
       else if (args.includes('ssl')) https = true;
       else if (tlsPorts.has(port)) onIncomplete(line, 'listener Nginx pode compartilhar a configuração TLS da porta');
       else {
-        const redirect = nginxHttpRedirect(server, policy, onIncomplete);
+        // The default server for the listener may control URI normalization.
+        const slashModes = slashModesByPort.get(port);
+        const mergeSlashes = slashModes.size === 1 ? slashModes.values().next().value : null;
+        const redirect = nginxHttpRedirect(server, policy, mergeSlashes, onIncomplete);
         if (redirect === null) onIncomplete(line, 'redirecionamento Nginx depende de reescrita ou configuração adicional');
         else if (!redirect) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
       }
@@ -1044,13 +1060,21 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
     const servers = context.children.filter(child => child.name === 'server');
     const contextUsesLegacySsl = context.directives.some(item => item.name === 'ssl');
     const tlsPorts = new Set();
+    const slashModesByPort = new Map();
+    const contextMergeSlashes = nginxMergeSlashes(context, true);
     for (const server of servers) {
-      for (const {name, args} of server.directives) {
-        if (name === 'listen' && args.includes('ssl')) tlsPorts.add(nginxPort(args[0]));
+      const mergeSlashes = nginxMergeSlashes(server, contextMergeSlashes);
+      const listeners = server.directives.filter(item => item.name === 'listen');
+      for (const {args} of listeners.length ? listeners : [{args: ['80']}]) {
+        const port = nginxPort(args[0]);
+        if (args.includes('ssl')) tlsPorts.add(port);
+        const modes = slashModesByPort.get(port) ?? new Set();
+        modes.add(mergeSlashes);
+        slashModesByPort.set(port, modes);
       }
     }
     foundServer ||= servers.length > 0;
-    for (const server of servers) checkServer(server, policy, protocolAt(context), tlsPorts, contextUsesLegacySsl);
+    for (const server of servers) checkServer(server, policy, protocolAt(context), tlsPorts, slashModesByPort, contextUsesLegacySsl);
   }
   if (!foundServer && root.sequence.length && !root.directives.some(item => item.name === 'include')) {
     onIncomplete(1, 'contexto HTTP dos blocos Nginx não encontrado no arquivo');
@@ -1185,11 +1209,12 @@ function shellHeredocs(parsed) {
   for (const [position, word] of parsed.words.entries()) {
     if (!word.operator || !/^\d*<<-?$/.test(word.text)) continue;
     const next = parsed.words[position + 1];
-    if (!next?.raw || /\$['"]/.test(next.raw)) return null;
-    // Spaces inside ${...} can belong to the same Bash word. A split token is unsafe as a delimiter.
-    const unquoted = next.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, ' ');
-    if (unquoted.includes('${')) return null;
-    const delimiter = next.raw.replace(/"(?:\\.|[^"\\])*"|'[^']*'|\\./g, part =>
+    if (!next?.raw) return null;
+    // An expansion opener can precede spaces that belong to the same Bash word.
+    // Skip literal quoted or escaped spans when testing the potentially truncated token.
+    const parts = /"(?:\\.|[^"\\])*"|'[^']*'|\\.|(\$(?:['"]|\{|\[|\()|\x60)/g;
+    if ([...next.raw.matchAll(parts)].some(([, expansion]) => expansion)) return null;
+    const delimiter = next.raw.replace(parts, part =>
       part.startsWith('"') ? part.slice(1, -1).replace(/\\([$"\\\x60])/g, '$1')
         : part.startsWith("'") ? part.slice(1, -1) : part.slice(1));
     docs.push({delimiter, quoted: /['"\\]/.test(next.raw), stripTabs: word.text.endsWith('-')});
