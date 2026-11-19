@@ -419,3 +419,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:06 UTC — Revisor encerrou C2-LINGUAGENS em 1af4e0b2 (código 0). Gerente confere a entrega.
 - 19/11/2026 05:06 UTC — Revisão C2-R10-INTEGRACAO iniciada por Sol high normal somente leitura em 3eead086.
 - 19/11/2026 05:07 UTC — Exame com reverificação R3 em d6aaf1c9 passou nos 31 testes dirigidos, incluindo publicação no Ledger para os oito módulos. O revisor identificou limites de execução e descoberta no coletor poliglota. C2-LINGUAGENS-R2 recebeu esses pontos e a prova já feita com os runtimes reais.
+- 19/11/2026 05:07 UTC — Revisor encerrou C2-R10-INTEGRACAO em 3eead086 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:07 UTC — Revisão C-EXAME-ORIGEM-R2 iniciada por Sol high normal somente leitura em 30af542f.
+- 19/11/2026 05:07 UTC — Base comum R10 b01ca7b3 passou em 26 testes sem saltos. Em Docker real, 12 MiB em stderr não impediram a publicação do JSON, e foram verificados cancelamento, prazo e excesso em stdout. Em PostgreSQL a troca concorrente de epoch foi bloqueada durante a partida do cliente anterior e a transferência só avançou após a limpeza.
