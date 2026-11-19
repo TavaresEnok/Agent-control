@@ -46,7 +46,9 @@ export function runBoundedNode(args, cwd, {timeoutMs = testTimeoutMs, maxBytes =
   return runBoundedProcess(process.execPath, args, cwd, {timeoutMs, maxBytes}).then(({code, output}) => ({code, output}));
 }
 
-export function runBoundedProcess(binary, args, cwd, {timeoutMs = testTimeoutMs, maxBytes = maxOutputBytes, env = {}} = {}) {
+export function runBoundedProcess(binary, args, cwd, {
+  timeoutMs = testTimeoutMs, maxBytes = maxOutputBytes, env = {}, stopOnStdout,
+} = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, {
       cwd, detached: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
@@ -67,11 +69,17 @@ export function runBoundedProcess(binary, args, cwd, {timeoutMs = testTimeoutMs,
     };
     const timer = setTimeout(() => stop('QA_TEST_TIMEOUT'), timeoutMs);
     child.stdout.on('data', chunk => {
+      if (problem) return;
       size += chunk.length;
       if (size > maxBytes) stop('QA_TEST_OUTPUT_LIMIT');
-      else output.push(chunk);
+      else {
+        output.push(chunk);
+        const reason = stopOnStdout?.(chunk);
+        if (reason) stop(reason);
+      }
     });
     child.stderr.on('data', chunk => {
+      if (problem) return;
       size += chunk.length;
       if (size > maxBytes) stop('QA_TEST_OUTPUT_LIMIT');
       else diagnostics.push(chunk);

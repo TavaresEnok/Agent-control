@@ -1,18 +1,21 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
+import {setTimeout as delay} from 'node:timers/promises';
 import {fileURLToPath} from 'node:url';
 // @ts-expect-error The collector modules are native JavaScript.
-import {collectLanguageMutation, collectPythonProperties} from '../deploy/modules/qa/mutacao-linguagens/index.mjs';
+import {collectLanguageMutation, collectPythonProperties, goScope, runGoSuite, verifyPinnedTool} from '../deploy/modules/qa/mutacao-linguagens/index.mjs';
+// @ts-expect-error The collector modules are native JavaScript.
+import {runBoundedProcess} from '../deploy/modules/qa/execute-tests.mjs';
 // @ts-expect-error The collector modules are native JavaScript.
 import * as measurement from '../deploy/modules/qa/mutacao-linguagens/measurement.mjs';
 
 const {
-  classifyTrial, decodeGoSuite, decodePlan, decodePythonSuite, goListFormat, measurePlan, patchSource,
-  seed, summarizeProperties,
+  classifyTrial, decodeGoSuite, decodePlan, decodePythonSuite, limits, measurePlan, patchSource,
+  seed, stopGoAtTestLimit, summarizeProperties,
 } = measurement;
 const fixture = fileURLToPath(new URL('./fixtures/module-qa-mutacao-linguagens/', import.meta.url));
 const pythonRunner = fileURLToPath(new URL('../deploy/modules/qa/mutacao-linguagens/python-runner.py', import.meta.url));
@@ -107,12 +110,38 @@ test('relatório Go distingue falha de caso, falha de build e dependência offli
     {code, output: events.map(value => JSON.stringify(value)).join('\n'), diagnostics}, testPackages,
   );
   const start = [event('start'), event('run', 'TestTotal')];
-  const baseline = run(0, [...start, event('pass', 'TestTotal'), event('pass')]);
-  assert.equal(classifyTrial(baseline, run(1, [...start, event('fail', 'TestTotal'), event('fail')])).status, 'killed');
+  const logged = {...event('output', 'TestTotal'), Output: 'panic: mensagem esperada\nfatal error: exemplo\n'};
+  const summary = {...event('output'), Output: 'FAIL\n', OutputType: 'frame'};
+  const baseline = run(0, [...start, logged, event('pass', 'TestTotal'), event('pass')]);
+  assert.equal(baseline.tests[0].status, 'passed');
+  const failure = [...start, logged, event('fail', 'TestTotal')];
+  assert.equal(classifyTrial(baseline, run(1, [...failure, summary, event('fail')])).status, 'killed');
+  assert.equal(run(1, [...failure, {...summary, OutputType: undefined}, event('fail')]).reason, 'go-test-execution');
   assert.equal(run(1, [event('build-fail'), event('fail')]).reason, 'go-build-failed');
   assert.equal(run(1, []).reason, 'go-test-execution');
   assert.equal(run(0, [...start, event('pass')]).reason, 'go-test-execution');
   assert.equal(run(1, [], 'module lookup disabled by GOPROXY=off').reason, 'offline-dependency');
+});
+
+test('limite Go acompanha eventos run entre blocos de saída', () => {
+  const monitor = stopGoAtTestLimit();
+  const line = (event: object) => Buffer.from(JSON.stringify(event) + '\n');
+  const event = line({Action: 'run', Test: 'TestOperação'});
+  const log = line({Action: 'output', Output: event.toString()});
+  assert.equal(monitor(Buffer.concat([...Array(limits.tests).fill(event), log])), undefined);
+  assert.equal(monitor(event.subarray(0, event.indexOf(0xc3) + 1)), undefined);
+  assert.equal(monitor(event.subarray(event.indexOf(0xc3) + 1)), 'QA_TEST_GO_CASE_LIMIT');
+});
+
+test('sondagem sem versão verificável indica ferramenta indisponível', async () => {
+  const matches = (value: unknown) => value === '1.0.0';
+  const unavailable = {status: 'unavailable', message: 'tool-unavailable'};
+  await verifyPinnedTool(async () => report('1.0.0'), matches);
+  for (const result of [report('2.0.0'), {code: 0, output: 'invalid'}, {code: 1, output: ''}]) {
+    await assert.rejects(verifyPinnedTool(async () => result, matches), unavailable);
+  }
+  await assert.rejects(verifyPinnedTool(async () => { throw new Error('QA_TEST_SPAWN_ENOEXEC'); }, matches), unavailable);
+  await assert.rejects(verifyPinnedTool(async () => { throw new Error('QA_TEST_TIMEOUT'); }, matches), /QA_TEST_TIMEOUT/);
 });
 
 test('propriedades sem exemplos e interrupções ficam sem medição', () => {
@@ -161,6 +190,23 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
     });
     assert.equal(result.status, 'measured');
     assert.deepEqual(result.mutants.sort((a, b) => a.line - b.line).map(mutant => mutant.status), ['killed', 'survived']);
+
+    const runtimeFile = 'runtime_math.py';
+    const runtimeTest = 'test_runtime_math.py';
+    const runtimeSource = 'def total(value):\n    return value * 0\n';
+    writeFileSync(join(project, runtimeFile), runtimeSource);
+    writeFileSync(join(project, runtimeTest), 'from runtime_math import total\ndef test_total():\n    assert total(3) == 0\n');
+    const runtimePlan = decodePlan(run('plan', runtimeFile), [runtimeFile], () => runtimeSource);
+    const runtimeMutation = await measurePlan(runtimePlan, async (edit?: Edit) => {
+      writeFileSync(join(project, runtimeFile), edit ? patchSource(runtimeSource, edit) : runtimeSource);
+      const result = run('suite', String(seed), runtimeTest);
+      if (edit) assert.match(result.diagnostics, /1 failed/);
+      return decodePythonSuite(result, [runtimeTest]);
+    });
+    assert.equal(runtimeMutation.status, 'measured');
+    assert.equal(runtimeMutation.mutants[0].status, 'killed');
+    assert.equal(runtimeMutation.mutants[0].killedBy.file, runtimeTest);
+
     const properties = () => summarizeProperties(decodePythonSuite(run('properties', String(seed), ...files), files, true));
     writeFileSync(path, source);
     const healthy = properties();
@@ -175,12 +221,29 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
     writeFileSync(join(project, ordinary), 'def test_hypothesis_name_only():\n    assert False\n');
     const withoutProperties = decodePythonSuite(run('properties', String(seed), ordinary), [ordinary], true);
     assert.equal(summarizeProperties(withoutProperties).reason, 'no-properties');
+
+    writeFileSync(join(root, 'conftest.py'), 'raise AssertionError("fixture fora do snapshot")\n');
+    writeFileSync(join(project, 'conftest.py'), [
+      'import pytest', '@pytest.fixture(scope="session")', 'def offset():', '    return 4',
+      '@pytest.fixture', 'def broken_setup():', '    raise RuntimeError("erro de setup sintetico")', '',
+    ].join('\n'));
+    const local = 'test_local_fixture.py';
+    writeFileSync(join(project, local), [
+      'from hypothesis import given, strategies as st', '@given(st.integers())',
+      'def test_local(offset, value):', '    assert (value + offset) - offset == value', '',
+    ].join('\n'));
+    const localFixture = summarizeProperties(decodePythonSuite(run('properties', String(seed), local), [local], true));
+    assert.equal(localFixture.status, 'measured');
+    assert.equal(localFixture.outcome, 'passed');
+    assert.equal(localFixture.properties[0].examples, 32);
+
     const partialFile = 'test_partial.py';
     writeFileSync(join(project, partialFile), [
       'from hypothesis import given, strategies as st', 'import os',
       '@given(st.just(2))', 'def test_bad_property(value):',
       "    os.write(1, b'log sintetico do teste\\n')", '    assert value == 0',
       '@given(st.just(3))', 'def test_runtime_error(value):', '    raise RuntimeError("erro sintetico")', '',
+      '@given(st.just(3))', 'def test_fixture_error(broken_setup, value):', '    assert value == 3', '',
     ].join('\n'));
     const partialRun = run('properties', String(seed), partialFile);
     assert.match(partialRun.diagnostics, /log sintetico/);
@@ -188,6 +251,7 @@ test('mutmut, pytest e Hypothesis reais em cópia temporária da fixture', {skip
     assert.equal(partial.status, 'partial');
     assert.equal(partial.outcome, 'failed');
     assert.equal(partial.reason, 'python-test-execution');
+    assert.deepEqual(partial.properties.map((property: {status: string}) => property.status), ['failed', 'failed', 'error']);
 
     // Mirror the runner layout in the image and give unittest only its coverage import path.
     const coveragePath = join(root, 'coverage-runtime');
@@ -221,26 +285,63 @@ test('go-mutesting e go test reais em cópia temporária da fixture', {skip: !go
     const cache = join(root, 'cache');
     mkdirSync(cache);
     cpSync(join(fixture, 'go'), project, {recursive: true});
-    const env = {PATH: '/usr/bin:/bin', HOME: root, TMPDIR: root, GOCACHE: cache, GOENV: 'off', GOWORK: 'off',
-      GOTOOLCHAIN: 'local', GOPROXY: 'off', GOSUMDB: 'off', GOTELEMETRY: 'off', GOVCS: '*:off', CGO_ENABLED: '0', GOMAXPROCS: '2'};
     const file = 'arithmetic.go';
     const path = join(project, file);
     const source = readFileSync(path, 'utf8');
-    assert.equal(invoke(go!, ['list', '-mod=readonly', '-f', goListFormat, './...'], project, env).output.trim(),
-      'S\t' + path + '\nP\tqa.local/arithmetic');
-    const plan = decodePlan(invoke(planner!, [file], project, env), [file], () => source);
+    const selection = {moduleDir: '.', sourceFiles: [file]};
+    const run = (_binary: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number,
+      stopOnStdout?: (chunk: Buffer) => string | undefined) =>
+      runBoundedProcess(go!, args, cwd, {env, timeoutMs, maxBytes: limits.outputBytes, stopOnStdout});
+    const discover = () => goScope(run, project, root, cache, selection);
+    const readonly = await discover();
+    assert.equal(readonly.mode, '-mod=readonly');
+    assert.deepEqual(readonly.sources, [file]);
+
+    const vendor = join(project, 'vendor');
+    const dependency = join(vendor, 'qa.local/offset');
+    mkdirSync(dependency, {recursive: true});
+    writeFileSync(join(project, 'go.mod'), 'module qa.local/arithmetic\n\ngo 1.27\n\nrequire qa.local/offset v1.0.0\n');
+    writeFileSync(join(vendor, 'modules.txt'), '# qa.local/offset v1.0.0\n## explicit; go 1.27\nqa.local/offset\n');
+    writeFileSync(join(dependency, 'offset.go'), 'package offset\nconst Value = 2\n');
+    const testPath = join(project, 'arithmetic_test.go');
+    writeFileSync(testPath, [
+      'package arithmetic', 'import ("fmt"; "testing"; "qa.local/offset")', 'func TestTotal(t *testing.T) {',
+      '    fmt.Println("panic: log esperado")',
+      '    if Total(4, offset.Value) != 6 { t.Error("incorrect addition") }', '}', '',
+    ].join('\n'));
+    const scope = await discover();
+    assert.deepEqual(scope, {...readonly, mode: '-mod=vendor'});
+    const runSuite = () => runGoSuite(run, project, root, cache, selection, scope);
+    const plan = decodePlan(invoke(planner!, [file], project, {}), [file], () => source);
     assert.deepEqual(plan.edits.map((edit: Edit) => [edit.line, edit.before, edit.after]),
       [[3, '+', '-'], [4, '*', '/'], [5, '*', '/']]);
     const result: FixtureResult = await measurePlan(plan, async (edit?: Edit) => {
       writeFileSync(path, edit ? patchSource(source, edit) : source);
-      const tests = invoke(go!, ['test', '-json', '-mod=readonly', '-count=1', '-p=2', '-parallel=1', '-vet=off',
-        '-timeout=8s', '-run', '^(Test|Example)', '-shuffle=' + seed, './...'], project, env);
-      return decodeGoSuite(tests, new Set(['qa.local/arithmetic']));
+      return runSuite();
     });
     assert.equal(result.status, 'partial');
     assert.deepEqual(result.mutants.sort((a, b) => a.line - b.line).map(mutant => mutant.status),
       ['killed', 'survived', 'not-run']);
     assert.equal(result.mutants.find(mutant => mutant.line === 5)?.reason, 'go-build-failed');
+
+    writeFileSync(path, source);
+    writeFileSync(testPath, 'package arithmetic\nimport "testing"\nfunc TestAbort(t *testing.T) { panic("erro sintético") }\n');
+    assert.deepEqual(await runSuite(), {reason: 'go-test-execution'});
+
+    writeFileSync(testPath, [
+      'package arithmetic', 'import ("fmt"; "os"; "testing"; "time")',
+      'func TestBudget(t *testing.T) {',
+      `    for i := 0; i < ${limits.tests}; i++ { t.Run(fmt.Sprint(i), func(t *testing.T) {}) }`,
+      '    time.Sleep(time.Second)', '    if err := os.WriteFile("after-budget", []byte("done"), 0600); err != nil { t.Fatal(err) }',
+      '}', '',
+    ].join('\n'));
+    assert.deepEqual(await runSuite(), {reason: 'test-limit'});
+    await delay(1_100);
+    assert.equal(existsSync(join(project, 'after-budget')), false);
+
+    writeFileSync(testPath, 'package arithmetic\nimport ("testing"; _ "qa.local/offset")\nfunc TestOffline(t *testing.T) {}\n');
+    rmSync(dependency, {recursive: true});
+    assert.deepEqual(await runSuite(), {reason: 'offline-dependency'});
   } finally {
     rmSync(root, {recursive: true, force: true});
   }
