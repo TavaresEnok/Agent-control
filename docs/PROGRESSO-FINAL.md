@@ -906,3 +906,8 @@ PAUSADO-COTA
 - 19/11/2026 18:48 UTC — O controle de aspas aninhadas dec242d9 entrou no candidato 4470ef01. O digest anterior do worktree foi preservado no ramo task/preservacao-digest-c2-r6. Revisão, imagem e provas do mesmo candidato em andamento.
 - 19/11/2026 18:48 UTC — revisor-C2-ACEITE-ASPAS iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:48 UTC — Recuperação A3 em 0734673c recebeu aceite estático dos quatro critérios após nove testes dirigidos. A nova origem de comentários TypeDoc 23b10b2e foi integrada em de70e99c para prova física e revisão das três regressões.
+- 19/11/2026 18:49 UTC — O candidato de fechamento f9e9e83e reúne os oito módulos e a recuperação A3 na bancada. O laboratório de design será executado com a imagem fixada e contas sintéticas.
+- 19/11/2026 18:49 UTC — C2-ACEITE-ASPAS encerrado com código 0.
+- 19/11/2026 18:49 UTC — revisor-C8-ACEITE-COMENTARIO iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:51 UTC — Suíte oficial de entrega-dependencias-1 em 05776a76: 269 arquivos aprovados, 0 falhas, 88 excluídos pelo executor.
+- 19/11/2026 18:51 UTC — A revisão de dec242d9 confirmou o tratamento de aspas curvas aninhadas e encontrou ambiguidade entre dois fragmentos de aspas retas. O contrato da matriz foi delimitado para impedir vínculo entre dois literais, independentemente dos espaços. O próximo aceite completo reunirá suíte e laboratório no mesmo candidato.
