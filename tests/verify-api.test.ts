@@ -58,6 +58,9 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   {tool: 'fixture', version: '1', status: 'ok' as const, detail: 'Medição sintética.'},
   {tool: 'fixture-seta', version: '1', status: 'ok' as const, detail: 'Origem: data/notes.txt-> revisão'},
   {tool: 'fixture-composto', version: '1', status: 'ok' as const, detail: 'Guia docs/notes.txt.md'},
+  {tool: 'fixture-reticencias', version: '1', status: 'ok' as const, detail: 'Confira...notes.txt'},
+  {tool: 'fixture-seta-literal', version: '1', status: 'ok' as const, detail: 'Origem: data/relatorio->interno.txt'},
+  {tool: 'fixture-mais', version: '1', status: 'ok' as const, detail: 'Guia docs/notes.txt.+md'},
   {tool: 'fixture-nome', version: '1', status: 'ok' as const, detail: 'Arquivo notes.txt citado sem diretório.'},
  ];
  const fileCoverage = [{file, examinerProvider: 'ferramenta', examinerModel: 'fixture', profileId: null, checklist: ['FIXTURE']}];
@@ -119,7 +122,7 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   const coverageFile = join(selected.directory, 'cobertura.md');
   await writeFile(coverageFile, (await readFile(coverageFile, 'utf8')) + `\npassword=${fakePassword}\n| ${protectedFile} | ${protectedMarker} |\n`);
   await writeFile(join(selected.directory, 'achados.json'), JSON.stringify({achados: [
-   {...fixed, proof: `${fixed.proof} token=${fakePassword}`}, likely, reopened,
+   {...fixed, proof: `${fixed.proof} token=${fakePassword}`}, {...likely, where: {file: "data/relatorio->interno.txt", line: 1}, secretPreview: preview}, reopened,
    {...fourth, where: {file: protectedFile, line: 1}, title: protectedMarker, proof: protectedMarker, secretPreview: preview},
   ]}));
 
@@ -170,8 +173,9 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   }
   const parsed = JSON.parse(body);
   assert.match(parsed.cobertura, /Medição sintética\./);
-  assert.doesNotMatch(parsed.cobertura, /fixture-seta|fixture-nome|docs\/publico\.md/);
+  assert.doesNotMatch(parsed.cobertura, /fixture-seta|fixture-reticencias|fixture-nome|docs\/publico\.md/);
   assert.match(parsed.cobertura, /docs\/notes\.txt\.md/);
+  assert.ok(parsed.cobertura.includes('docs/notes.txt.+md'));
   assert.match(parsed.cobertura, /Registro de arquivo protegido omitido/);
   assert.equal(parsed.achados[0].proof, `${fixed.proof} [redigido]`);
   assert.equal(parsed.achados[3].proof, 'Conteúdo protegido. Consulte a localização indicada.');
