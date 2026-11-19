@@ -621,3 +621,9 @@ PAUSADO-COTA
 - 19/11/2026 16:55 UTC — C2-LINGUAGENS-R3 encerrado com código 0.
 - 19/11/2026 16:55 UTC — trabalho-C6-R11 iniciado em final-c6-r2 por Sol high normal.
 - 19/11/2026 16:56 UTC — A revisão do exame c052f630 encontrou confirmação com decisão contraditória e leitura sem atestado do conteúdo. A correção parte de ffcd9ea5. C3 recebeu os dois apontamentos sobre inventário parcial e âncora relativa. Em banco, a correção da unicidade da série está em 1fc208e8 com 6/6 no laboratório físico.
+- 19/11/2026 16:56 UTC — trabalho-C3-R10 iniciado em final-c3 por Sol medium normal.
+- 19/11/2026 16:56 UTC — revisor-C5-UNICIDADE iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 16:56 UTC — C5-UNICIDADE encerrado com código 1.
+- 19/11/2026 16:56 UTC — C7-RECONCILIACAO-R8 encerrado com código 0.
+- 19/11/2026 16:56 UTC — trabalho-C-EXAME-VINCULO iniciado em final-exame-vinculo por Sol high normal.
+- 19/11/2026 16:56 UTC — O primeiro envio da revisão de unicidade excedeu o tamanho de entrada por incluir os módulos antecedentes. A repetição usa apenas o diff de banco e o trecho do coletor. Enfileiradas revisões da matriz de QA, do registro de dependências e dos destinos de dados em C9.
