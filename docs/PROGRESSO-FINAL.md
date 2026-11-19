@@ -1002,3 +1002,5 @@ PAUSADO-COTA
 - 19/11/2026 19:29 UTC — O laboratório e a CLI de conformidade passaram na imagem com a prova de negação composta e motivo exato da política npm. Digest fixado na integração.
 - 19/11/2026 19:30 UTC — C9 obteve aceite independente da negação e passou em 41/41 no laboratório e na CLI. A suíte da documentação usará checkout e PostgreSQL próprios, com o teste de recuperação atualizado, em paralelo ao banco e à prontidão. A ordem de promoção do produto continua de C2 a C9.
 - 19/11/2026 19:30 UTC — A matriz registra os merges efetivos de C2 a C4 e as provas finais das imagens de C8 e C9. O checkout de fechamento 5f81a3e5 já reúne C2 a C9 e a retirada A3; a instalação ainda aguarda a aplicação conjunta.
+- 19/11/2026 19:32 UTC — C5-ESPERA-INDEPENDENTE encerrado com código 0.
+- 19/11/2026 19:33 UTC — Em 97938e35 passaram três controles determinísticos de prazo e os nove cenários reais de SIGKILL. A mudança é exclusiva ao teste. O candidato de C8 virou 160dba62 e o de fechamento 6587e792. A suíte privada de C8 está autorizada a iniciar no mesmo código.
