@@ -666,3 +666,5 @@ PAUSADO-COTA
 - 19/11/2026 17:12 UTC — banco em 840a02a6 passou 20 testes com 0 falhas e 0 pulos. Digest sha256:7203e1ec1909 fixado no ramo. Revisões e promoção registradas separadamente.
 - 19/11/2026 17:12 UTC — documentacao em 782385cd passou 27 testes com 0 falhas e 0 pulos. Digest sha256:9b45c131679e fixado no ramo. Revisões e promoção registradas separadamente.
 - 19/11/2026 17:12 UTC — A revisão de banco e a de QA poliglota encontraram imprecisões na origem das medições. Ordens C5-R9 e C2-LINGUAGENS-R4 abertas. O pgTAP no entrypoint de QA já distinguiu a migração de controle do defeito após restauração, em banco temporário por socket.
+- 19/11/2026 17:12 UTC — trabalho-C5-R9 iniciado em final-c5 por Sol medium normal.
+- 19/11/2026 17:13 UTC — QA integrou pgTAP 786e6f0e (9/9 físico e confirmado o achado em banco/assert.sql:2), exame 2b23ebc2 e matriz f5c5bfea. Candidato em a55d7bcd.
