@@ -280,31 +280,31 @@ O repositório de exemplo com falhas plantadas, como injeção, segredo no hist�
 
 ## Provas da parte C em homologação
 
-A prova conjunta em `6797c1a9` usou Git, PostgreSQL e imagens fixadas por digest nas oito CLIs. Os seis testes de ponta a ponta passaram. No exame em `bfab53bd`, as oito publicações persistiram achados com respostas sintéticas de provedores distintos. Os candidatos aguardam a conclusão das revisões para aplicação no gateway.
+Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes com Git, PostgreSQL e imagens reais fixadas por digest. Na prova do exame em `1fd88007`, cada módulo persistiu um achado confirmado com dois perfis sintéticos distintos e criou o pedido de correção correspondente. A suíte oficial dessa revisão do QA passou em 256 arquivos, 52 testes complementares e no laboratório. Os candidatos seguem em revisão para promoção ao gateway.
 
 ### Prova do módulo 2
 
 **QA pesado.** Em homologação, a CLI `personal:qa` executou os testes Node três vezes, registrou os mutantes medidos pelo Stryker e analisou acessibilidade de HTML estático com axe. A imagem de `b1b254f3` passou no laboratório. A revisão de `211dc9aa` encontrou casos de asserção inalcançável e função impura contados como prova. Na rodada C2-R6, a imagem fixada em `b688989e` passou em 33 testes e um caso opcional ficou sem execução. Em `91a6c71a`, a CLI encontrou o defeito plantado e recusou a correção sem confirmação. A prova de idempotência usou uma medição sintética identificada no mesmo banco de teste. A rodada C2-R7, fixada em `6c4023fd`, passou em 35 testes, incluindo a prova de asserção e função no processo real. Na rodada C2-R8, a imagem de `b24d0335` passou em 35 testes, incluindo função não chamada em teste com o ID correto, função aguardada e declaração opcional de teste pulado. Na imagem `01038120`, os 35 testes de QA passaram com funções importadas por namespace, identificadores com cifrão e caminhos com codificação percentual. Na imagem poliglota de QA, três execuções detectaram o defeito aritmético em Python e Go; as mesmas quatro asserções passaram nas três execuções após corrigir apenas o código. A imagem de R10 fixada em `da2157cc` passou nos 43 testes do coletor e laboratório e repetiu a prova poliglota. A prova da CLI dessa revisão está em diagnóstico. Contraste visual e varreduras de entradas externas ficaram fora dessa execução.
 
-Em `6b312c2d`, oito testes físicos passaram. O Chromium mediu o baixo contraste na linha plantada e a diferença visual em pixels. A mutação em Python e Go e as propriedades Hypothesis estão em integração.
+Em `fcbffe1e`, os 69 testes de QA passaram sem saltos. A imagem mediu contraste e pixels com Chromium, três passadas de Python e Go, mutantes mortos e sobreviventes com mutmut e go-mutesting e uma propriedade falsificada com Hypothesis. A prova de entradas nominais de contrato e as propriedades JavaScript por fast-check estão em desenvolvimento.
 
 ### Prova do módulo 3
 
 **Arquitetura e dívida técnica.** Em homologação, a CLI `personal:arquitetura` mediu código JavaScript e TypeScript com Knip, complexidade no AST, duplicação com jscpd e dependências com dependency-cruiser. O laboratório da imagem fixada em `303b1b36` passou após conferir a contagem por arquivo com caminhos equivalentes e o controle limpo. A imagem de C3-R7 em `88229a82` passou nas 18 provas habilitadas e na CLI com a conferência de travessia de diretório. A revisão de `7fb2f861` apontou omissões no destino e na interpretação de componentes. Em C3-R8, a imagem `43b3ef40` passou nas 18 provas habilitadas e nas seis da CLI. Um teste opcional do laboratório foi pulado. Em R9, `70a8c7cc` passou nas 19 provas habilitadas e a CLI no ramo incremental passou em seis testes. A imagem conserva a origem de caminhos relativos e identifica entradas sem cobertura mesmo quando chega ao limite de arquivos.
 
-O coletor de `70a8c7cc` passou em 19 testes dirigidos, com um teste opcional pulado, e em seis testes da CLI. A revisão independente por modelo distinto registrou duas observações baixas sobre o limite de inventário e o teste da raiz relativa.
+A prova da arquitetura passou nos 20 testes, com Hadolint e as dependências locais fixadas, e nos seis testes da CLI. A revisão independente por modelo distinto de `70a8c7cc` registrou duas observações baixas. Ao atingir o limite do inventário, a cobertura informa o primeiro caminho interrompido e que as entradas posteriores ficaram fora da medição. O teste de caminho relativo também aceita a âncora anterior.
 
 ### Prova do módulo 4
 
 **Dependências e atualizações.** Em homologação, `personal:dependencias` comparou versões com o registro de teste offline, identificou chamadas a migrar, exercitou o codemod em uma cópia e comparou inventários de dependências. Os 20 testes dirigidos, incluindo o laboratório da imagem fixada em `ec1122ff`, passaram. A rodada C4-R5, fixada em `ea172fa4`, passou nas 26 provas dirigidas e nas seis da CLI. O parecer de `8669f900` abriu C4-R6 para impedir propostas de downgrade e reforçar a validação de saídas de ferramentas. Na imagem `8da07644`, passaram os 28 testes de dependências e laboratório. A prova incluiu codemods, direção de versões e validação de documentos pelo esquema da versão CycloneDX declarada. Atualizações disponíveis dependem da data do inventário fornecido.
 
-A rodada `db55280f` passou em 28 testes e seis da CLI. Os dez arquivos importados de CycloneDX tiveram os bytes comparados com a revisão original. A revisão independente por modelo distinto retornou três casos de comprovação inadequada de versão, na ordem C4-R7.
+A revisão independente por modelo distinto de `db55280f` identificou três casos de comprovação de versão. Na imagem da revisão `547fa8c9`, o módulo passou nos 30 testes com controles de lock, catálogo e propostas. A proveniência dos dez arquivos CycloneDX foi aferida pelos bytes da revisão original. A medição OpenRewrite para Java está em desenvolvimento.
 
 ### Prova do módulo 5
 
 **Banco de dados.** Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A imagem de C5-R4, fixada em `a3d02361`, passou nos dez testes de banco, incluindo falha no commit do lote, migração e restauração. A revisão independente de `5d494800` abriu C5-R5 para atribuição de falhas de transação e identificação de rejeições SQL. A imagem `e6b76eb4` passou nos onze testes de banco e pela CLI em `8bf6ed47`.
 
-A imagem reconstruída em `31b447bc` conserva a correção de atribuição de migrações. A prova anterior da mesma fonte passou nos 12 testes com PostgreSQL, Dexter e Squawk. Os laboratórios combinados de banco, prontidão e documentação passaram nos 68 testes das imagens reconstruídas.
+Na amostra sintética de `a382ae45`, os 13 testes de banco passaram com PostgreSQL, Dexter e Squawk. O laboratório distingue erro do próprio comando SET CONSTRAINTS e rejeição do lote, incluindo resolução de esquema, e exige prova para atribuir a falha a uma migração.
 
 ### Prova do módulo 6
 
@@ -318,7 +318,7 @@ O coletor passivo de `2cafe62b` passou nos 32 testes de homologação. A imagem 
 
 Na integração `e4680e65`, passaram os três laboratórios físicos de desempenho e 30 testes dirigidos do coletor e orquestrador. A CLI executou duas medições independentes e localizou a referência anterior, com seis testes aprovados. A rodada corrigiu a seleção quando há medições incomparáveis entre dois exames.
 
-A revisão independente por modelo distinto de `e3527238` identificou falhas na resolução de recursos locais e na recuperação de reservas de contêiner. A correção está na ordem C7-R7.
+Após a revisão independente por modelo distinto de `e3527238`, a integração `4e90e9c5` passou nos 62 testes com ferramentas físicas, na comparação entre execuções da CLI e na interrupção de conexão PostgreSQL bloqueada.
 
 ### Prova do módulo 8
 
@@ -326,10 +326,10 @@ A revisão independente por modelo distinto de `e3527238` identificou falhas na 
 
 A imagem de documentação fixada em `7e27197e` passou nos 21 testes com as ferramentas locais e nos seis testes da CLI na integração individual.
 
-A implementação de `c1d36024` passou em 21 testes com ferramentas reais. A imagem reconstruída está em `6daae927`.
+A rodada fixada em `bd0211ec` passou nos 25 testes de documentação, incluindo o tratamento de diretórios de comandos e a origem de arestas de Mermaid com frontmatter. As CLIs de documentação e conformidade passaram nos seis testes após essa integração.
 
 ### Prova do módulo 9
 
 **Conformidade (LGPD e licenças).** Em homologação, `personal:conformidade` analisou licenças e dados pessoais com ScanCode, ORT e Presidio em um projeto sintético. A imagem fixada em `6c3cddbf` passou nos nove testes, inclusive o laboratório que exige detectar o CPF artificial e a licença plantada e aprovar um controle limpo. Na rodada C9-R3 a imagem fixada em `381f577b` passou nos 16 testes e nas seis provas da CLI em `ffe86c74`. A revisão independente de `b433235e` apontou falhas de rastreamento de campos e de triagem entre licenças. Em `c0bb5637` a triagem manteve os pares nas seis permutações de classes e registrou o total omitido no limite. A imagem de C9-R4 fixada em `cb1c48ec` passou nos 20 testes e no laboratório com ScanCode, ORT e Presidio. A CLI passou nas seis provas na integração `3ede9a43`. A revisão desta versão está pendente.
 
-A imagem fixada em `e1798884` passou nos 22 testes, incluindo detecção da licença e do identificador pessoal artificiais. A CLI entrou na prova conjunta em `6797c1a9`.
+A imagem fixada em `e1798884` passou nos 22 testes, incluindo licença e identificador pessoal artificiais. O parecer independente por modelo distinto de `86ec5e87` identificou falsos positivos e omissões na associação entre uma propriedade lida e uma operação de armazenamento ou registro. Os casos estão em C9-R6.
