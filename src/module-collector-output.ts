@@ -20,7 +20,9 @@ export function collectorOutputWrapper(imageCommand: Buffer, token: string, maxS
       || (Array.isArray(part) && part.every(arg => typeof arg === 'string' && !arg.includes('\0'))))) {
       throw new Error();
     }
-    command = [...(config[0] ?? []), ...(config[1] ?? [])];
+    const [entrypoint, cmd] = config;
+    const effectiveEntrypoint = entrypoint?.length === 1 && entrypoint[0] === '' ? [] : entrypoint;
+    command = [...(effectiveEntrypoint ?? []), ...(cmd ?? [])];
     if (!command[0]) throw new Error();
   } catch {
     throw new Refusal('VERIFY_TOOLS_FAILED', 503);
@@ -32,7 +34,7 @@ capture=$(mktemp -d "\${AC_COLLECTOR_CAPTURE_DIR:-/tmp}/ac-collector-output.XXXX
 trap 'rm -rf "$capture"' EXIT
 mkfifo "$capture/pipe" || exit 125
 # Keep asynchronous commands' stdin equivalent to a container without -i.
-(exec "$@") > "$capture/pipe" < /dev/null &
+(exec "$@") > "$capture/pipe" 2>/dev/null < /dev/null &
 collector=$!
 # Stop reading as soon as the collector exceeds the limit. Exiting this
 # entrypoint also terminates the remaining processes of the container.
