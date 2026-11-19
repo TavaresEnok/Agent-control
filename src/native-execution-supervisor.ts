@@ -37,7 +37,13 @@ import {replaceSecretClassFiles} from './verify-redact.ts';
 import {rememberExamStripNote} from './exam-strip-note.ts';
 import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
 import {postgresAccountLoginLock,prepareClaudeExamAccessToken,renewClaudeLoginInPlace,safeFailureCode,writePrivateAtomic} from './exam-login.ts';
+import {finishExamIntentTx} from './exam-intent.ts';
 const Id=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/),GitId=z.string().regex(/^[a-f0-9]{40}$/);
+const PreLaunchExamReason=z.enum(['exam_login_stale','exam_login_busy','exam_login_restore_failed']);
+const PreLaunchExamPhysicalReceipt=z.object({executionStarted:z.literal(false),jobId:Id,containerId:z.null(),networkId:z.null(),synthetic:z.boolean(),modelInference:z.literal(false),reason:PreLaunchExamReason}).strict();
+export class UnstartedExamRetirementPending extends Refusal {
+ constructor(readonly jobId:string){super('NATIVE_PRELAUNCH_SETTLEMENT_PENDING',409);Id.parse(jobId);}
+}
 /** Specialist or reviewer of the readonly design exam. Programmer, qa and judge never match. */
 export function readonlyDesignExam(workflow: unknown, role: unknown): boolean {
   return workflow === 'design-readonly-v1' && (role === 'specialist' || role === 'reviewer');
@@ -55,6 +61,7 @@ export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,se
  if(v.role!=='programmer'&&(!v.artifactId||!v.outputSchema||v.writePaths.length))c.addIssue({code:'custom',message:'READONLY_ARTIFACT_REQUIRED'});
 });
 type Input=z.infer<typeof NativeExecutionRequest>;
+type PersonalExamRecoveryScope={projectId:string;repository:string;explicitDesignWithdrawal:boolean};
 export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsImage:string;hostRoot:string;accountRoot:string;repository?:string;
  protectedRepositories:readonly string[];signingKeyPem:string;providerNetworkId:string;provider?:'codex'|'claude'|'grok';socketPath?:string;resourceEnvelope?:NativeResourceEnvelope;accountSubjects:readonly {accountId:string;subjectDigest:string}[];
  workerEnv:readonly string[];toolsEnv:readonly string[];syntheticFixture?:NativeSyntheticFixture;
@@ -247,19 +254,45 @@ export class NativeExecutionSupervisor{
   const synthetic=Boolean(this.config.syntheticFixture);
   const releaseBeforeLaunch=async(reason:string)=>{
    const receipt={executionStarted:false,jobId:input.jobId,containerId:null,networkId:null,synthetic,modelInference:false,reason};
-   await this.ledger.tx(async c=>{
-    await this.scope(c,principal,authority,input,true);
+   const shouldSettle=await this.ledger.tx(async c=>{
+    const context=await this.scope(c,principal,authority,input,true);
     const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[input.grantId])).rows[0];
     if(!grant||grant.context_id!==authority.contextId||grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||!['reserved','uncertain'].includes(grant.state))throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
     if(grant.state==='reserved'){
      await this.identity(c,principal,authority,input,!input.moduleExam);
     }else{
      const job=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];
-     if(!job||job.state!=='uncertain'||job.worker_id||job.tools_id||job.network_id)throw new Refusal('NATIVE_EXECUTION_RECONCILE_REQUIRED');
+     if(!job||job.state!=='uncertain'||job.worker_id||job.tools_id||job.network_id||job.launch_digest||
+      job.grant_id!==input.grantId||job.intent_id!==input.intentId||job.context_id!==authority.contextId||
+      job.session_id!==input.sessionId||job.role!==input.role||Number(job.manager_epoch)!==authority.epoch||
+      job.input_digest!==hash||job.executor_digest!==this.executorDigest||job.key_fingerprint!==this.fingerprint||
+      grant.project_id!==context.project_id||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role)
+      throw new Refusal('NATIVE_EXECUTION_RECONCILE_REQUIRED');
      await cancelPreparedNativeResources(c,this.docker,input.jobId,input.grantId,authority);
     }
     await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
+    // The live call has the original request. Limit automatic settlement to
+    // exam login refusals that immediately terminate the caller's exam.
+    return grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model&&!input.effort&&!input.task.startsWith('Pedido de criação.');
    });
+   if(!shouldSettle)return;
+   // Commit the physical receipt before settlement so maintenance can retry
+   // even if inspection, a settlement write or its commit fails.
+   try{
+    await this.ledger.tx(async c=>{
+     const context=await this.scope(c,principal,authority,input,true);
+     const row=await this.loadUnstartedExam(c,authority,input.jobId);
+     this.validateUnstartedExam(row,context,principal,authority,false);
+     if(row.input_digest!==hash||row.grant_id!==input.grantId)throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+     await this.jobRepository(c,String(context.project_id));
+     await this.confirmUnstartedAbsence(input.jobId);
+     await this.settleUnstartedExam(c,authority,row);
+    });
+   }catch(error){
+    const code=safeFailureCode(error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code,'NATIVE_PRELAUNCH_SETTLEMENT_FAILED');
+    console.error(JSON.stringify({event:'NATIVE_PRELAUNCH_SETTLEMENT_PENDING',jobId:input.jobId,code}));
+    throw new UnstartedExamRetirementPending(input.jobId);
+   }
   };
   const p=this.paths(input.jobId);
   let jobDirCreated=false;
@@ -267,6 +300,7 @@ export class NativeExecutionSupervisor{
    try{
     await releaseBeforeLaunch(reason);
    }catch(releaseError){
+    if(releaseError instanceof UnstartedExamRetirementPending)throw releaseError;
     const code=safeFailureCode(releaseError instanceof Refusal?releaseError.code:(releaseError as NodeJS.ErrnoException)?.code,'NATIVE_RELEASE_BEFORE_LAUNCH_FAILED');
     console.error(JSON.stringify({event:'NATIVE_RELEASE_BEFORE_LAUNCH_FAILED',jobId:input.jobId,reason,code}));
     throw releaseError;
@@ -467,14 +501,238 @@ export class NativeExecutionSupervisor{
   * reconstructed from an agent message or stored as plaintext in PostgreSQL. */
  private async registeredInput(principal:string,authority:Authority,jobId:string){
   Id.parse(jobId);
-  await this.ledger.tx(async c=>{await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+  await this.ledger.tx(async c=>{
+   const context=await this.ledger.authorize(c,principal,authority.contextId);
+   if(this.config.syntheticFixture)assertNativeSyntheticFixture(this.config.syntheticFixture,this.config,{projectId:context.project_id,contextId:authority.contextId});
+   await this.ledger.fence(c,authority,true);
    const row=(await c.query('SELECT intent_id FROM ac_native_execution_jobs WHERE id=$1 AND context_id=$2',[jobId,authority.contextId])).rows[0];
    if(!row)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
-   const owner=(await c.query('SELECT principal_id FROM ac_intents WHERE id=$1',[row.intent_id])).rows[0];
+   const owner=(await c.query('SELECT principal_id FROM ac_intents WHERE id=$1 AND context_id=$2',[row.intent_id,authority.contextId])).rows[0];
    if(owner?.principal_id!==principal)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
   });
   const p=this.paths(jobId);await this.directory(p.root);const bytes=await readPrivateWorkerFile(join(p.root,'request.json'),512*1024);
   try{const input=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));if(input.jobId!==jobId)throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');return input;}finally{bytes.fill(0);}
+ }
+ private validPreLaunchExamReceipt(physical:unknown,jobId:string,synthetic:boolean){
+  const parsed=PreLaunchExamPhysicalReceipt.safeParse(physical);
+  return parsed.success&&parsed.data.jobId===jobId&&parsed.data.synthetic===synthetic;
+ }
+ private unstartedReceipt(job:Record<string,any>,physical:unknown){
+  const payload={schemaVersion:1,accountId:job.account_id,profileId:job.profile_id,profileDigest:job.profile_digest,jobId:job.id,intentId:job.intent_id,contextId:job.context_id,grantId:job.grant_id,sessionId:job.session_id,epoch:Number(job.manager_epoch),inputDigest:job.input_digest,executorDigest:this.executorDigest,outputDigest:digest(''),physicalDigest:digest(physical),workerExitCode:1,artifact:null,exitCode:1,executionStarted:false};
+  return {payload,signature:sign(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),this.key).toString('hex')};
+ }
+ private verifyUnstartedReceipt(job:Record<string,any>,grant:Record<string,any>,receipt:any,contextId:string){
+  const payload=receipt?.payload;
+  if(!payload||typeof receipt.signature!=='string'||!/^[a-f0-9]{128}$/.test(receipt.signature)||
+   !verify(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(receipt.signature,'hex'))||
+   payload.schemaVersion!==1||payload.jobId!==job.id||payload.intentId!==job.intent_id||payload.contextId!==contextId||payload.grantId!==job.grant_id||payload.sessionId!==job.session_id||
+   payload.epoch!==Number(job.manager_epoch)||payload.accountId!==job.account_id||payload.profileId!==job.profile_id||payload.profileDigest!==job.profile_digest||
+   payload.inputDigest!==job.input_digest||payload.executorDigest!==job.executor_digest||payload.outputDigest!==digest('')||
+   payload.executionStarted!==false||payload.exitCode!==1||payload.workerExitCode!==1||payload.artifact!==null||
+   grant?.state!=='released'||!grant.physical_receipt||payload.physicalDigest!==digest(grant.physical_receipt)||
+   job.state!=='failed'||job.worker_id||job.tools_id||job.network_id||job.launch_digest)
+   throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
+  return payload as Record<string,any>;
+ }
+ private unstartedRetirementBinding(row:Record<string,any>,receipt:unknown){
+  return {schemaVersion:1,kind:'native-unstarted-retired',jobId:row.id,contextId:row.context_id,intentId:row.intent_id,grantId:row.grant_id,sessionId:row.session_id,epoch:Number(row.manager_epoch),role:row.role,inputDigest:row.input_digest,terminalDigest:digest(receipt),physicalDigest:digest(row.physical_receipt),workerId:null,toolsId:null,networkId:null,executionStarted:false};
+ }
+ private async recordUnstartedRetirement(c:pg.PoolClient,authority:Authority,row:Record<string,any>,receipt:unknown){
+  const binding=this.unstartedRetirementBinding(row,receipt);
+  const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1 FOR UPDATE',[row.id])).rows[0];
+  if(saved?.state==='removed')return this.verifyUnstartedRetirement(saved,binding);
+  if(!saved){
+   await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[row.id,binding]);
+  }else if(saved.state!=='prepared'||digest(saved.binding)!==digest(binding)){
+   throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+  }
+  const proof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),this.key).toString('hex')};
+  await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[row.id,proof]);
+  await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.terminal_retired',$2)",[authority.contextId,{jobId:row.id,proofDigest:digest(proof)}]);
+ }
+ private verifyUnstartedRetirement(saved:Record<string,any>,binding:ReturnType<NativeExecutionSupervisor['unstartedRetirementBinding']>){
+  if(saved.state!=='removed'||digest(saved.binding)!==digest(binding)||!saved.proof?.payload||digest(saved.proof.payload)!==digest(binding)||
+   typeof saved.proof.signature!=='string'||!/^[a-f0-9]{128}$/.test(saved.proof.signature)||
+   !verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(saved.proof.payload)),createPublicKey(this.key),Buffer.from(saved.proof.signature,'hex')))
+   throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+ }
+ private async launchPendingExists(jobId:string){
+  const p=this.paths(jobId);
+  if(await this.launchPublished(jobId))return true;
+  try{
+   for(const entry of await readdir(p.input)){
+    if(entry==='launch.json'||entry==='launch.pending'||entry.startsWith('launch.pending.'))return true;
+   }
+  }catch(error){
+   if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+  }
+  return false;
+ }
+ private async confirmUnstartedAbsence(jobId:string){
+  await this.directory(this.config.hostRoot);
+  const p=this.paths(jobId);
+  const stat=async(path:string)=>lstat(path).catch(error=>{
+   if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+   throw error;
+  });
+  if(await stat(p.root)){
+   await this.directory(p.root);
+   if(await stat(p.input))await this.directory(p.input);
+   if(await stat(p.output)){
+    await this.directory(p.output);
+    if((await readdir(p.output)).length)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   }
+   if(await stat(join(p.root,'worker-terminal.log'))||await stat(join(p.root,'tools-terminal.log')))
+    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+  }
+  const [worker,tools,network]=await Promise.all([
+   this.docker.inspect('ac-native-worker-'+jobId),
+   this.docker.inspect('ac-native-tools-'+jobId),
+   this.docker.inspectNamedPrivateNetwork('ac-native-exec-'+jobId),
+  ]);
+  if(worker||tools||network||await this.launchPendingExists(jobId))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+ }
+ private async loadUnstartedExam(c:pg.PoolClient,authority:Authority,jobId:string){
+  return (await c.query(`SELECT j.*,
+   g.state grant_state,g.resource_kind grant_resource_kind,g.project_id grant_project_id,g.context_id grant_context_id,
+   g.intent_id grant_intent_id,g.manager_epoch grant_epoch,g.account_id grant_account_id,g.profile_id grant_profile_id,
+   g.role grant_role,g.physical_receipt,
+   i.principal_id,i.parent_intent_id,i.state intent_state,i.command intent_command,i.digest intent_digest,i.manager_epoch intent_epoch,
+   a.provider account_provider,a.mode account_mode,a.resource_identity account_resource_identity,
+   p.model profile_model,p.effort profile_effort,p.role profile_role,
+   EXISTS(SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal') personal,
+   EXISTS(SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=j.context_id) dedicated_context,
+   (SELECT x.id FROM ac_contexts x WHERE x.project_id=g.project_id AND NOT x.archived
+     AND NOT EXISTS(SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=x.id)
+     ORDER BY x.created_at,x.id LIMIT 1) main_context_id,
+   EXISTS(SELECT 1 FROM ac_plan_cancellations k WHERE k.intent_id=i.id) cancellation_requested,
+   EXISTS(SELECT 1 FROM ac_operations o WHERE o.id=j.id OR o.intent_id=i.id) has_operation,
+   EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id OR s.intent_id=i.id) has_stage_operation,
+   EXISTS(SELECT 1 FROM ac_native_resource_admissions r WHERE (r.job_id=j.id OR r.grant_id=g.id) AND r.state<>'canceled') has_active_admission,
+   (EXISTS(SELECT 1 FROM ac_native_execution_jobs other WHERE other.intent_id=i.id AND other.id<>j.id)
+    OR EXISTS(SELECT 1 FROM ac_native_qa_jobs q WHERE q.intent_id=i.id)
+    OR EXISTS(SELECT 1 FROM ac_native_planning_jobs pj JOIN ac_semantic_planning_calls pc ON pc.id=pj.id WHERE pc.intent_id=i.id)) has_other_job,
+   EXISTS(SELECT 1 FROM ac_intents child WHERE child.parent_intent_id=i.id) has_child_intent,
+   (EXISTS(SELECT 1 FROM ac_native_execution_jobs other WHERE other.intent_id=i.id AND other.id<>j.id AND other.state IN ('uncertain','running'))
+    OR EXISTS(SELECT 1 FROM ac_native_qa_jobs q WHERE q.intent_id=i.id AND q.state IN ('uncertain','running'))
+    OR EXISTS(SELECT 1 FROM ac_native_planning_jobs pj JOIN ac_semantic_planning_calls pc ON pc.id=pj.id
+      WHERE pc.intent_id=i.id AND pj.state IN ('prepared','uncertain','running'))) has_unresolved_job,
+   EXISTS(SELECT 1 FROM ac_capacity_grants other WHERE other.intent_id=i.id AND other.id<>g.id AND other.state<>'released') has_open_grant
+   FROM ac_native_execution_jobs j
+   JOIN ac_capacity_grants g ON g.id=j.grant_id
+   JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
+   JOIN ac_accounts a ON a.id=j.account_id
+   JOIN ac_profiles p ON p.id=j.profile_id AND p.account_id=a.id
+   WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g,i FOR SHARE OF a,p`,[jobId,authority.contextId])).rows[0];
+ }
+ private validateUnstartedExam(row:Record<string,any>|undefined,context:Record<string,any>,principal:string,authority:Authority,allowHistorical:boolean,allowRetiredExecutor=false):asserts row is Record<string,any>{
+  if(!row)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
+  if(!row.personal)throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+  const command=row.intent_command,payload=command?.payload,workflow=payload?.workflow;
+  const design=readonlyDesignExam(workflow,row.role),security=readonlySecurityExam(workflow,row.role);
+  if(row.principal_id!==principal||row.parent_intent_id!==null||(!design&&!security)||
+   !['accepted','failed'].includes(row.intent_state)||row.has_operation||row.has_stage_operation||
+   command?.schemaVersion!==1||command.action!=='plan.start'||command.intentId!==row.intent_id||command.contextId!==row.context_id||
+   payload.projectId!==context.project_id||payload.commit!==row.base_id||digest(command)!==row.intent_digest||
+   Number(row.intent_epoch)!==Number(row.manager_epoch))
+   throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+  if(row.cancellation_requested)throw new Refusal('PLAN_CANCELLATION_REQUESTED');
+  if((!allowRetiredExecutor&&row.executor_digest!==this.executorDigest)||row.key_fingerprint!==this.fingerprint||Number(row.manager_epoch)>authority.epoch)
+   throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+  if(!['uncertain','failed'].includes(row.state)||row.worker_id!==null||row.tools_id!==null||row.network_id!==null||row.launch_digest!==null||
+   row.has_active_admission||row.has_open_grant||row.has_unresolved_job||row.has_child_intent||(row.state==='uncertain'&&row.receipt!==null))
+   throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+  if(row.grant_state!=='released'||row.grant_resource_kind!=='model'||row.grant_project_id!==context.project_id||
+   row.grant_context_id!==row.context_id||row.grant_intent_id!==row.intent_id||Number(row.grant_epoch)!==Number(row.manager_epoch)||
+   row.grant_account_id!==row.account_id||row.grant_profile_id!==row.profile_id||row.grant_role!==row.role)
+   throw new Refusal('NATIVE_EXECUTION_GRANT_MISMATCH');
+  const fixture=this.config.syntheticFixture,provider=fixture?.provider??this.config.provider??'codex';
+  if(!this.subjects.has(row.account_id)||row.account_provider!==provider||row.account_mode!==(fixture?'synthetic':'subscription_cli')||
+   row.account_resource_identity!==provider+':'+this.subjects.get(row.account_id)||row.profile_role!==row.role||
+   this.profileDigest({account_id:row.account_id,profile_id:row.profile_id,model:row.profile_model,effort:row.profile_effort,role:row.profile_role})!==row.profile_digest)
+   throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
+  const physical=row.physical_receipt;
+  // Only Claude exam credential preparation emits these reasons. The
+  // synthetic fixture path skips that preparation entirely.
+  if(provider!=='claude'||fixture||!this.validPreLaunchExamReceipt(physical,row.id,false))
+   throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
+  const target=`${context.project_id}:${row.base_id}`;
+  const markedExam=payload.messageRef===(design?'design-exam:':'verify:')+target;
+  const historical=design&&row.role==='specialist'&&
+   !row.dedicated_context&&row.context_id===row.main_context_id&&!row.has_other_job&&
+   physical.reason==='exam_login_stale'&&payload.messageRef==='design:'+target;
+  if(allowHistorical&&!design)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+  if(!markedExam){
+   if(allowHistorical&&row.has_other_job)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   if(!historical)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+   if(!allowHistorical)throw new Refusal('NATIVE_EXECUTION_HISTORICAL_CONFIRMATION_REQUIRED');
+  }
+  if(row.state==='failed')this.verifyUnstartedReceipt(row,{state:row.grant_state,physical_receipt:physical},row.receipt,authority.contextId);
+ }
+ private async settleUnstartedExam(c:pg.PoolClient,authority:Authority,row:Record<string,any>){
+  let receipt=row.receipt;
+  if(row.state==='uncertain'){
+   receipt=this.unstartedReceipt(row,row.physical_receipt);
+   await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2 WHERE id=$1",[row.id,receipt]);
+  }
+  await this.recordUnstartedRetirement(c,authority,row,receipt);
+  await finishExamIntentTx(c,this.ledger,{intentId:row.intent_id,contextId:authority.contextId},'failed');
+  return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const,receipt};
+ }
+ private async validateOptionalUnstartedRequest(jobId:string,row:Record<string,any>,allowExplicitDesign:boolean){
+  await this.directory(this.config.hostRoot);
+  const p=this.paths(jobId);
+  if(!await lstat(p.root).catch(error=>{
+   if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+   throw error;
+  }))return;
+  await this.directory(p.root);
+  const bytes=await readPrivateWorkerFile(join(p.root,'request.json'),512*1024).catch(error=>{
+   if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+   throw error;
+  });
+  if(bytes)try{
+   const request=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));
+   if(digest(request)!==row.input_digest||request.jobId!==jobId||request.intentId!==row.intent_id||request.grantId!==row.grant_id||
+    request.sessionId!==row.session_id||request.role!==row.role||request.base!==row.base_id||
+    (!allowExplicitDesign&&(request.model||request.effort||request.task.startsWith('Pedido de criação.'))))
+    throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+  }finally{bytes.fill(0);}
+ }
+ /** Settle a single personal exam with a durable pre-launch refusal and no physical resources. */
+ async recoverUnstartedExam(principal:string,authority:Authority,jobId:string,localOwnerScope?:PersonalExamRecoveryScope){
+  return this.recoverUnstartedExamWithProof(principal,authority,jobId,localOwnerScope,false);
+ }
+ /** Verify an already retired design attempt even when its old image pair is no longer configured. */
+ async confirmRetiredUnstartedDesign(principal:string,authority:Authority,jobId:string,scope:PersonalExamRecoveryScope){
+  const {state,retirement,intentState}=await this.recoverUnstartedExamWithProof(principal,authority,jobId,scope,true);
+  return {state,retirement,intentState};
+ }
+ private async recoverUnstartedExamWithProof(principal:string,authority:Authority,jobId:string,localOwnerScope:PersonalExamRecoveryScope|undefined,requireRetirementProof:boolean){
+  Id.parse(jobId);
+  return this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
+   const context=await this.ledger.authorize(c,principal,authority.contextId);
+   if(this.config.syntheticFixture)assertNativeSyntheticFixture(this.config.syntheticFixture,this.config,{projectId:context.project_id,contextId:authority.contextId});
+   await this.ledger.fence(c,authority,true);
+   const repository=await this.jobRepository(c,String(context.project_id));
+   if(localOwnerScope&&(context.role!=='owner'||context.project_id!==localOwnerScope.projectId||
+    repository!==await realpath(localOwnerScope.repository)))
+    throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+   const row=await this.loadUnstartedExam(c,authority,jobId);
+   const explicitDesignWithdrawal=localOwnerScope?.explicitDesignWithdrawal===true;
+   this.validateUnstartedExam(row,context,principal,authority,explicitDesignWithdrawal,requireRetirementProof);
+   await this.validateOptionalUnstartedRequest(jobId,row,explicitDesignWithdrawal);
+   if(row.state==='failed'&&row.intent_state==='failed'){
+    const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1',[jobId])).rows[0];
+    if(saved?.state==='removed'){
+     this.verifyUnstartedRetirement(saved,this.unstartedRetirementBinding(row,row.receipt));
+     return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const,receipt:row.receipt};
+    }
+   }
+   if(requireRetirementProof)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   await this.confirmUnstartedAbsence(jobId);
+   return this.settleUnstartedExam(c,authority,row);
+  }));
  }
  async reconcileRegistered(principal:string,authority:Authority,jobId:string){
   try{return await this.reconcile(principal,authority,await this.registeredInput(principal,authority,jobId));}
@@ -636,7 +894,7 @@ export class NativeExecutionSupervisor{
   const locked=async(c:pg.PoolClient)=>{
    await this.scope(c,principal,authority,input,true);
    const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,g.manager_epoch grant_epoch,g.intent_id grant_intent,g.context_id grant_context,g.account_id grant_account,g.profile_id grant_profile,g.role grant_role,g.resource_kind,
-    i.parent_intent_id FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id
+    i.parent_intent_id FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
     WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
    const physical=row?.physical_receipt,receipt=row?.receipt,payload=receipt?.payload;
    if(!row||row.role!==input.role||(input.role==='programmer'&&row.parent_intent_id)||row.grant_state!=='released'||!['completed','failed'].includes(row.state)||
@@ -831,6 +1089,10 @@ export class NativeExecutionSupervisor{
     payload.epoch!==Number(job.manager_epoch)||payload.accountId!==job.account_id||payload.profileId!==job.profile_id||payload.profileDigest!==job.profile_digest||payload.inputDigest!==job.input_digest||payload.executorDigest!==this.executorDigest||
     grant?.state!=='released'||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role||!grant.physical_receipt||payload.physicalDigest!==digest(grant.physical_receipt)||
     ((payload.exitCode===0)!==(job.state==='completed')))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
+   if(payload.executionStarted===false&&this.validPreLaunchExamReceipt(grant.physical_receipt,job.id,Boolean(this.config.syntheticFixture))){
+    this.verifyUnstartedReceipt(job,grant,receipt,authority.contextId);
+    return {state:'failed',receipt,output:'',artifact:null,failureCode:grant.physical_receipt.reason};
+   }
    const result=await this.readResult(input,payload.exitCode);
    if(payload.outputDigest!==digest(result.output)||result.exitCode!==payload.workerExitCode||result.jobId!==input.jobId||
     (input.moduleExam&&grant.physical_receipt.failureCode!==result.failureCode))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
@@ -950,9 +1212,11 @@ export class NativeExecutionSupervisor{
  async recover(principal:string,authority:Authority,jobId:string){
   Id.parse(jobId);
   const loaded=await this.ledger.tx(async c=>{
-   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const context=await this.ledger.authorize(c,principal,authority.contextId);
+   if(this.config.syntheticFixture)assertNativeSyntheticFixture(this.config.syntheticFixture,this.config,{projectId:context.project_id,contextId:authority.contextId});
+   await this.ledger.fence(c,authority,true);
    const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,i.principal_id FROM ac_native_execution_jobs j
-    JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id
+    JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
     WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
    if(!row)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
    if(row.principal_id!==principal)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');

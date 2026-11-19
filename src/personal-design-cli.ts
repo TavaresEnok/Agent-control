@@ -8,6 +8,7 @@ import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {finishExamIntent, withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT, EXAM_LOGIN_RESTORE_FAILED_TEXT, EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
+import {UnstartedExamRetirementPending} from './native-execution-supervisor.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign, type ResolvedPersonalDesign} from './design-command.ts';
 import {DesignCreateModelFailure, MAX_CREATE_TASK_CHARS, runDesignCreate, type CreateExam} from './design-create.ts';
@@ -64,6 +65,7 @@ const messages: Record<string, string> = {
 
 /** Known codes keep their Portuguese line. Anything else is one fixed sentence, so a path or secret never reaches the terminal. */
 export function designCliFailureText(error: unknown): string {
+  if (error instanceof UnstartedExamRetirementPending) return `A retirada do job ${error.jobId} ficou pendente. Verifique o Docker e repita: npm run personal:maintenance -- <instalação.json> --abandonar-design ${error.jobId}`;
   if (error instanceof DesignCreateModelFailure) return `O modelo não devolveu as telas. Causa: ${error.causeCode}.`;
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
   return Object.hasOwn(messages, code) ? messages[code]! : 'O exame de design falhou.';
@@ -375,7 +377,7 @@ async function main() {
   let examStatus: {code: number; lines: string[]} = {code: 0, lines: []};
   let browser: Awaited<ReturnType<typeof openDesignBrowser>> | undefined;
   try {
-    const resolved = await resolvePersonalDesign(invocation.argv);
+    const resolved = await resolvePersonalDesign(invocation.argv, undefined, true);
     examStatus = await runDesignSession(
       resolved,
       async () => {
