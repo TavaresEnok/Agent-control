@@ -104,6 +104,7 @@ export function decodeNodeReport({code, output}, files, measure) {
   if (typeof report?.summary !== 'boolean' || !Array.isArray(report.tests) ||
       report.tests.some(t => !files.includes(t.file) || typeof t.name !== 'string' ||
         !testStatuses.has(t.status) || !isCount(t.line) || !isCount(t.column) ||
+        (t.features !== undefined && (!Array.isArray(t.features) || t.features.some(value => typeof value !== 'string'))) ||
         (t.assertionStatus !== undefined && !assertionStatuses.has(t.assertionStatus)))) {
     throw new Error('QA_NODE_TEST_REPORT_INVALID');
   }
@@ -151,10 +152,11 @@ export function comparePasses(passes) {
       repeats.set(identity, occurrence);
       const key = `${identity}:${occurrence}`;
       if (!results.has(key)) results.set(key, {...result, statuses: passes.map(() => 'absent'),
-        assertionStatuses: passes.map(() => 'unsupported')});
+        featurePasses: passes.map(() => []), assertionStatuses: passes.map(() => 'unsupported')});
       const test = results.get(key);
       test.statuses[index] = result.status;
       test.assertionStatuses[index] = result.assertionStatus ?? 'unsupported';
+      test.featurePasses[index] = result.features ?? [];
     }
   }
   return [...results.values()];

@@ -315,10 +315,10 @@ export function analyzeSourceFile(relFile, content, {parse, traverse}) {
       functions.push({name: node.id.name, startLine: node.loc.start.line, isExported,
         pure: isExported && binding?.constant === true && pureValidator(path)});
     },
-    CallExpression(path) {
+    'CallExpression|OptionalCallExpression'(path) {
       const callee = path.node.callee;
       if (callee.type === 'Identifier' && callee.name === 'eval') directEval = true;
-      if (callee.type !== 'MemberExpression' || !routeReceivers.has(callee.object.name?.toLowerCase())) return;
+      if (!['MemberExpression', 'OptionalMemberExpression'].includes(callee.type) || !routeReceivers.has(callee.object.name?.toLowerCase())) return;
       const method = (callee.computed ? staticString(callee.property) : callee.property.name)?.toLowerCase();
       if (!httpMethods.has(method)) return;
       const arg = path.node.arguments[0];
@@ -358,8 +358,18 @@ function visitAst(node, visitor) {
 }
 
 function member(node, object, property) {
-  return node?.type === 'MemberExpression' && !node.computed &&
-    node.object.name === object && node.property.name === property;
+  return ['MemberExpression', 'OptionalMemberExpression'].includes(node?.type) && node.object.name === object &&
+    (node.computed ? staticString(node.property) : node.property.name) === property;
+}
+
+// Node resolves ESM specifiers as URLs, including percent-encoding and dot segments.
+function localImportSource(file, specifier) {
+  if (!specifier?.startsWith('./') && !specifier?.startsWith('../')) return;
+  const root = '/qa-snapshot/';
+  try {
+    const path = fileURLToPath(new URL(specifier, pathToFileURL(root + file)));
+    if (path.startsWith(root)) return path.slice(root.length);
+  } catch {}
 }
 
 function importedBinding(path, name) {
@@ -410,7 +420,14 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
       const {callee} = path.node;
       const probe = `${prefix}${index++}`;
       const site = sites.get(registration.node) ?? {title: test.title, probes: []};
-      site.probes.push(probe);
+      const features = [];
+      for (const argument of path.get('arguments')) {
+        if (!argument.isCallExpression() || !argument.get('callee').isIdentifier()) continue;
+        const binding = importedBinding(argument, argument.node.callee.name);
+        const source = localImportSource(file, binding?.module);
+        if (source && binding.name) features.push(JSON.stringify([source, binding.name]));
+      }
+      site.probes.push({name: probe, features});
       sites.set(registration.node, site);
       edits.push({offset: callee.start, loc: callee.loc.start, text: `${prefix}(`},
         {offset: callee.end, loc: callee.loc.end, text: `, ${accepted.receiver}, function ${probe}() {})`});
@@ -448,10 +465,10 @@ function testCall(node, aliases) {
   if (node.type !== 'CallExpression') return;
   const {callee, arguments: args} = node;
   const localName = callee.type === 'Identifier' ? callee.name
-    : callee.type === 'MemberExpression' && !callee.computed ? callee.object.name : undefined;
+    : callee.type === 'MemberExpression' ? callee.object.name : undefined;
   const name = aliases.get(localName) ?? localName;
-  const method = callee.type === 'MemberExpression' ? callee.property.name : undefined;
-  if (!testNames.has(name) || (method && !skipMethods.has(method) && method !== 'only')) return;
+  const method = callee.type === 'MemberExpression' ? (callee.computed ? staticString(callee.property) : callee.property.name) : undefined;
+  if (!testNames.has(name) || (callee.type === 'MemberExpression' && !skipMethods.has(method) && method !== 'only')) return;
   const title = args[0]?.type === 'StringLiteral' ? args[0].value
     : args[0]?.type === 'TemplateLiteral' && !args[0].expressions.length ? args[0].quasis[0].value.cooked : undefined;
   if (title === undefined) return;
@@ -528,10 +545,8 @@ export function analyzeTestFile(relFile, content, parse) {
         playwrightBindings.add(local);
         aliases.set(local, 'test');
       }
-      if (path.startsWith('.') && name) {
-        const source = posix.normalize(posix.join(posix.dirname(relFile), path));
-        importedFunctions.set(local, {source, name});
-      }
+      const source = localImportSource(relFile, path);
+      if (source && name) importedFunctions.set(local, {source, name});
     }
   }
 
@@ -658,7 +673,13 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       const line = idx + 1;
       rows.push(coverageRow(`qa-requisito:${id}`, version, 'ok',
         `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`));
-      if (!matches.some(providesEvidence) && !incomplete) {
+      const proved = matches.some(test => {
+        if (!providesEvidence(test)) return false;
+        if (!runtimeTests || test.requirements.includes(id)) return true;
+        const observed = runtimeOf(test)?.featurePasses;
+        return features.some(feature => everyPass(observed, pass => pass.includes(JSON.stringify([feature.file, feature.name]))));
+      });
+      if (!proved && !incomplete) {
         findings.push({tool, rule: 'QA-REQUISITO-SEM-PROVA', file: reqFile, line, severity: 'alta',
           message: `Requisito ${id} sem ${runtimeTests ? 'teste vinculado aprovado com asserção executada nas três passadas' : 'vínculo estático com teste ativo que contenha asserção'}`,
           evidence: `${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${describe(matches)}`});
@@ -1063,7 +1084,7 @@ async function runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, 
       });
     }
     const key = route.path === undefined ? `qa-rota:${label} (${displayPath(route.file)}:${route.line})` : `qa-rota:${label}`;
-    extraRows.push(coverageRow(key, version, excluded ? 'skipped' : 'ok',
+    extraRows.push(coverageRow(abbreviateIdentity(key, 120), version, excluded ? 'skipped' : 'ok',
       `rota ${label} (${displayPath(route.file)}:${route.line}): ${excluded ??
         (inContract ? 'documentada e validada no contrato OpenAPI' : 'ausente no contrato OpenAPI')}`));
   }
