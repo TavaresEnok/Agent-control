@@ -381,16 +381,19 @@ export class Capacity {
           ?? candidates.find(notExaminerAccount)
           ?? candidates[0];
         choice = pick(eligible);
-        if (choice && request.avoidAccounts?.length) {
-          // The config lock also serializes grant transitions. Keep the original
-          // choice for the wait when all eligible accounts are full.
+        if (choice && notAvoidedAccount(choice) && request.avoidAccounts?.length) {
+          // Under the config lock, only a full first choice can yield to an
+          // eligible avoided account with room; all other waits keep that choice.
           const {rows} = await c.query<{account_id: string; occupied: string}>(
             `SELECT account_id, count(*) AS occupied FROM ac_capacity_grants
              WHERE state<>'released' AND account_id=ANY($1::uuid[]) GROUP BY account_id`,
             [eligible.map(row => row.accountId)],
           );
           const occupied = new Map(rows.map(row => [row.account_id, Number(row.occupied)]));
-          choice = pick(eligible.filter(row => (occupied.get(row.accountId!) ?? 0) < row.maxConcurrent!)) ?? choice;
+          if ((occupied.get(choice.accountId!) ?? 0) >= choice.maxConcurrent!) {
+            choice = pick(eligible.filter(row => !notAvoidedAccount(row)
+              && (occupied.get(row.accountId!) ?? 0) < row.maxConcurrent!)) ?? choice;
+          }
         }
       } else {
         choice =
