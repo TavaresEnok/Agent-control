@@ -5,7 +5,7 @@ import {readFile, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {mapModuleSnapshot} from '../src/module-exam-map.ts';
-import {examineFunctionalModule, type ModuleExamSeat} from '../src/module-exam.ts';
+import {examineFunctionalModule, type ModuleExamResult, type ModuleExamSeat} from '../src/module-exam.ts';
 import {recheckModuleFindings, runVerificationModule, type VerificationModuleRunInput} from '../src/verification-modules.ts';
 import {qaStaticFinding, qaStaticTool, reviewFixtureVerdict, skipQuestion} from './fixtures/module-exam-review.ts';
 import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
@@ -76,7 +76,7 @@ test('grava o examinador, o verificador distinto e a origem do achado da fatia',
       }, async release() {}, worker: {async run(call) {
         const task = JSON.parse(call.task);
         return JSON.stringify(call.provider === 'autor'
-          ? {kind: 'exame', filesRead: [task.file], checklist: ['qa'], routesReviewed: task.routes,
+          ? {kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed: task.routes,
             findings: task.file === testFile ? [{line: 1, snippet: skipped + ';', title: 'Trecho encontrado', severity: 'baixa',
               hypothesis: skipQuestion}] : []}
           : reviewFixtureVerdict(task, skipped));
@@ -162,29 +162,41 @@ test('runner revalida o vínculo e a prova antes da publicação', {skip: !datab
   await withExamFixture(async input => {
     const examiner: ModuleExamSeat = {provider: 'claude', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
     const reviewer: ModuleExamSeat = {provider: 'codex', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
-    const result = await runVerificationModule({...input,
+    const run = (alter: (result: ModuleExamResult) => void) => runVerificationModule({...input,
       collectorOutput: observedOutput,
       async examinar(req) {
         const map = await mapModuleSnapshot(req.snapshot);
-        const result = await examineFunctionalModule({...req, map,
+        const result = await examineFunctionalModule({...req, commit: input.commit, map,
           reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
           worker: {async run(call) {
             const task = JSON.parse(call.task);
             return JSON.stringify(task.checklist
-              ? {kind: 'exame', filesRead: [task.file], checklist: ['qa'], findings: []}
+              ? {kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], findings: []}
               : reviewFixtureVerdict(task, task.line === 1 ? skipped : task.criterion === 'math-random-call' ? random : wait));
           }},
         });
         assert.ok(result.findings.every(finding => finding.status === 'confirmado'));
-        result.findings[1]!.observation = result.findings[2]!.observation;
-        result.findings[2]!.proof = wait;
+        alter(result);
         return result;
       },
+    });
+    const result = await run(exam => {
+      exam.findings[1]!.decision = 'contradiz';
+      exam.findings[2]!.reviewReason = 'A chamada registrada contradiz a hipótese.';
     });
     assert.deepEqual(result.achados.map(finding => [finding.status, finding.verifier?.provider]),
       [['confirmado', 'codex'], ['provavel', undefined], ['provavel', undefined]]);
     assert.deepEqual(result.achados.slice(1).map(finding => finding.title),
       observedOutput.findings.slice(1).map(({rule, message}) => `${rule}: ${message}`));
+    const persisted = await input.ledger.pool.query('SELECT status, payload FROM ac_verify_findings WHERE run_id=$1 ORDER BY achado_id', [result.runId]);
+    assert.deepEqual(persisted.rows.map(row => [row.status, row.payload.verifier?.provider]),
+      [['confirmado', 'codex'], ['provavel', undefined], ['provavel', undefined]]);
+    const differentRead = await run(exam => {
+      const coverage = exam.coverage.find(row => row.file === testFile)!;
+      coverage.read!.binding = 'b'.repeat(64);
+    });
+    assert.deepEqual(differentRead.achados.map(finding => [finding.status, finding.verifier]),
+      [['provavel', null], ['provavel', null], ['provavel', null]]);
   });
 });
 

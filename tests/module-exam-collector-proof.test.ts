@@ -121,7 +121,7 @@ function examined(files: ReadonlyMap<string, string | null>, module: Example['mo
   for (const [file, code] of files) {
     if (code === null) continue;
     rows.set(file, {file, status: 'lido', examiner: seat('primeiro'), reason: null, checklist: [module],
-      read: {commit, sourceDigest: digest(code)}});
+      read: {binding: digest({file, code}), commit, sourceDigest: digest(code), complete: true}});
   }
   return rows;
 }
@@ -325,6 +325,8 @@ test('um ciclo exige o import de retorno, resolução única e leitura de cada a
     {...support, examiner: null},
     {...support, checklist: ['qa']},
     {...support, read: undefined},
+    {...support, read: {...support.read!, binding: ''}},
+    {...support, read: {...support.read!, complete: false}},
     {...support, read: {...support.read!, commit: 'b'.repeat(40)}},
     {...support, read: {...support.read!, sourceDigest: digest(betaSource + '\n')}},
   ]) {
@@ -355,7 +357,7 @@ test('o exame só confirma a latência com a identidade SQL emitida durante a me
       reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
       worker: {async run(call) {
         const task = JSON.parse(call.task);
-        return JSON.stringify(task.checklist ? {kind: 'exame', filesRead: [task.file], checklist: [row.module], findings: []}
+        return JSON.stringify(task.checklist ? {kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [row.module], findings: []}
           : response(task, row));
       }},
     });
@@ -372,8 +374,9 @@ test('o exame só confirma a latência com a identidade SQL emitida durante a me
 test('código disponível de apoio exige resposta de leitura completa do examinador', async () => {
   const canonical = context(cycle);
   const examiner = seat('primeiro'), reviewer = seat('segundo');
-  const run = async (betaRead: boolean, betaCode = betaSource) => {
+  const run = async (betaRead: boolean, betaCode = betaSource, replay?: string) => {
     const reviewed: Task[] = [];
+    let betaResponse: string | undefined;
     const result = await examineFunctionalModule({module: cycle.module, intentId, commit, findings: canonical.findings,
       collectorReview: {collector: canonical, intentId, snapshot},
       map: {files: [{file: alpha, code: alphaSource, reason: null}, {file: beta, code: betaCode, reason: null}], routes: []},
@@ -382,24 +385,39 @@ test('código disponível de apoio exige resposta de leitura completa do examina
         const task = JSON.parse(call.task);
         if (task.checklist) {
           assert.equal(task.commit, commit);
-          return JSON.stringify({kind: 'exame', filesRead: [task.file === beta && !betaRead ? alpha : task.file],
+          const response = JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file === beta && !betaRead ? alpha : task.file],
             checklist: [cycle.module], findings: []});
+          if (task.file !== beta) return response;
+          betaResponse = response;
+          return replay ?? response;
         }
         reviewed.push(task);
         return JSON.stringify(response(task, cycle));
       }},
     });
-    return {result, reviewed};
+    return {result, reviewed, betaResponse};
   };
   const accepted = await run(true);
   assert.equal(accepted.result.findings[0]?.status, 'confirmado');
   assert.equal(accepted.reviewed[0]?.collector?.relatedSources?.[0]?.file, beta);
-  for (const rejected of [await run(false), await run(true, betaSource + '\n' + ' '.repeat(16000))]) {
+  const changed = betaSource + '\nexport const limite = 3;';
+  assert.ok(accepted.betaResponse);
+  const {binding: _binding, ...historicalResponse} = JSON.parse(accepted.betaResponse);
+  for (const rejected of [await run(false), await run(true, changed, accepted.betaResponse),
+    await run(true, betaSource, accepted.betaResponse), await run(true, betaSource, JSON.stringify(historicalResponse))]) {
     assert.equal(rejected.result.findings[0]?.status, 'provavel');
     assert.equal(rejected.result.findings[0]?.verifier, null);
     assert.equal(rejected.result.coverage[1]?.read, undefined);
+    assert.equal(rejected.result.coverage[1]?.reason, 'MODULE_EXAM_RESPONSE_INVALID');
     assert.equal(rejected.reviewed[0]?.collector, undefined);
   }
+  const reread = await run(true, changed);
+  assert.equal(reread.result.findings[0]?.status, 'confirmado');
+  assert.equal(reread.result.coverage[1]?.read?.sourceDigest, digest(changed));
+  const partial = await run(true, betaSource + '\n' + ' '.repeat(16000));
+  assert.equal(partial.result.coverage[1]?.read?.complete, false);
+  assert.equal(partial.result.findings[0]?.status, 'provavel');
+  assert.equal(partial.reviewed[0]?.collector, undefined);
 });
 
 test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru', async () => {
@@ -417,7 +435,7 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
     worker: {run: async (call: {task: string; writePaths: string[]}) => {
       assert.deepEqual(call.writePaths, []);
       const task = JSON.parse(call.task);
-      if (task.checklist) return JSON.stringify({kind: 'exame', filesRead: [row.raw.file], checklist: [row.module], findings: []});
+      if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [row.raw.file], checklist: [row.module], findings: []});
       reviewCall = task;
       const result = response(task, row);
       return JSON.stringify(reviewReason ? {...result, reason: reviewReason} : result);
@@ -430,7 +448,7 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
   assert.equal(result.findings[0]?.verifier?.provider, reviewer.provider);
   assert.equal(result.findings[0]?.decision, 'sustenta');
   assert.equal(result.findings[0]?.reviewReason, result.findings[0]?.reason);
-  assert.ok(hasModuleReviewProof(review(row, canonical)!, result.findings[0]!));
+  assert.ok(hasModuleReviewProof({...review(row, canonical)!, readBinding: result.coverage[0]?.read?.binding}, result.findings[0]!));
   assert.deepEqual(canonical, original);
 
   reviewReason = 'A medição contradiz a hipótese. password=ardosia';
@@ -438,7 +456,7 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
   assert.equal(contradicted.findings[0]?.status, 'provavel');
   assert.equal(contradicted.findings[0]?.verifier, null);
   assert.equal(contradicted.findings[0]?.reviewReason, 'A medição contradiz a hipótese. …');
-  assert.equal(contradicted.findings[0]?.decision, 'sustenta');
+  assert.equal(contradicted.findings[0]?.decision, undefined);
 
   const pending = await examineFunctionalModule({...base, reserve: async purpose => {
     if (purpose === 'reviewer') throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
@@ -449,7 +467,7 @@ test('o exame envia e revalida o recorte do coletor sem modificar o retorno cru'
   assert.equal(pending.findings[0]?.failure, 'MODULE_EXAM_REVIEWER_UNAVAILABLE');
 
   const uncovered = await examineFunctionalModule({...base,
-    worker: {run: async () => JSON.stringify({kind: 'exame', filesRead: ['outro.mjs'], checklist: [row.module], findings: []})},
+    worker: {run: async call => JSON.stringify({kind: 'exame', binding: JSON.parse(call.task).binding, filesRead: ['outro.mjs'], checklist: [row.module], findings: []})},
     reserve: async purpose => { assert.equal(purpose, 'examiner'); return examiner; }});
   assert.equal(uncovered.findings[0]?.status, 'provavel');
 });
@@ -481,7 +499,7 @@ test('a publicação confirma uma medição funcional de cada módulo usando o s
             reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
             worker: {run: async call => {
               const task = JSON.parse(call.task);
-              return task.checklist ? JSON.stringify({kind: 'exame', filesRead: [task.file], checklist: [row.module], findings: []})
+              return task.checklist ? JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [row.module], findings: []})
                 : JSON.stringify(response(task, row));
             }},
           });
