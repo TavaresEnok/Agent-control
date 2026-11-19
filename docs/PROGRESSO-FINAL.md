@@ -954,3 +954,6 @@ PAUSADO-COTA
 - 19/11/2026 19:08 UTC — revisor-C9-ACEITE-CONTRATO-RESTRITO iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 19:09 UTC — C9-ACEITE-CONTRATO-RESTRITO encerrado com código 0.
 - 19/11/2026 19:10 UTC — O parecer conjunto C9 confirmou os casos literais e o contrato da lacuna. A nova rodada verifica a regra geral de junção lógica e a presença das ferramentas aplicáveis. A fixture sem manifesto deve registrar a ausência de aplicabilidade de ORT e da política npm, além do sucesso real de ScanCode e Presidio.
+- 19/11/2026 19:10 UTC — trabalho-C9-JUNCAO-LOGICA iniciado em final-c9 por Sol high normal.
+- 19/11/2026 19:10 UTC — trabalho-C9-LAB-FERRAMENTAS iniciado em final-c9-lab-parcial por Sol medium normal.
+- 19/11/2026 19:12 UTC — A sequência de entrega C5 a C8 contém o QA 53012d07 nos commits 839e7a64, 32f26c23, 997df122, a2e5f7f6. A comparação com cada candidato ensaiado mostrou apenas a atualização de QA ou árvores de produto idênticas. O banco continua a suíte no checkout isolado original.
