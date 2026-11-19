@@ -335,6 +335,527 @@ assert not re.search(r"SYNTHETIC_|syntheticRow|logger\.info|INSERT INTO", json.d
 `);
 });
 
+test('C9 atualiza propriedades e verifica o vínculo dos destinos com campos inventados', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields, javascript_destinations
+
+cases = [
+    ("properties.ts", '''const block = {tray: {slot: "R7_NEUTRAL"}};
+const tray = block.tray;
+tray.slot = mockRow.quartzSignal;
+logger.info(block.tray.slot);
+tray["slot"] = "R7_NEUTRAL";
+logger.info(tray.slot);
+tray["spare"] = mockRow.amberSignal;
+logger.info(block);
+delete tray.spare;
+logger.info(block);
+const entries = ["R7_NEUTRAL"];
+entries[0] = mockRow.quartzSignal;
+logger.info(...entries);
+entries[0] = "R7_NEUTRAL";
+logger.info(...entries);
+function stage(target: {slot: unknown}) {
+  target.slot = mockRow.amberSignal;
+  logger.info(target.slot);
+}''', [("LOG", 4, 3), ("LOG", 8, 7), ("LOG", 13, 12), ("LOG", 18, 17)], None),
+    ("identity.js", '''const genuine = logger;
+const record = genuine.info;
+{
+  const logger = {info() {}};
+  logger.info(mockRow.quartzSignal);
+}
+record(mockRow.quartzSignal);
+genuine.info = () => {};
+logger.info(mockRow.quartzSignal);
+function fetch() {}
+fetch(endpoint, mockRow.quartzSignal);
+const db = {query() {}};
+db.query("INSERT INTO sample VALUES ($1)", [mockRow.quartzSignal]);
+import transport from "axios";
+transport.post(endpoint, mockRow.amberSignal);''', [("LOG", 7, 7), ("NETWORK", 15, 15)], None),
+    ("properties.py", '''block = {"tray": {"slot": "R7_NEUTRAL"}}
+tray = block["tray"]
+tray["slot"] = mock_row.quartzSignal
+print(block["tray"]["slot"])
+tray["slot"] = "R7_NEUTRAL"
+print(tray["slot"])
+tray["spare"] = mock_row.amberSignal
+requests.post(endpoint, json={**tray})
+requests.post(endpoint, json={**tray, "spare": "R7_NEUTRAL"})
+del tray["spare"]
+requests.post(endpoint, json={"spare": mock_row.amberSignal, **tray})
+args = [mock_row.quartzSignal]
+print(*args)
+args[0] = "R7_NEUTRAL"
+print(*args)
+mock_box.slot = mock_row.amberSignal
+print(mock_box.slot)
+mock_box.slot = "R7_NEUTRAL"
+print(mock_box.slot)
+print(mock_row[
+    "quartzSignal"
+])
+print((mock_row
+      .amberSignal))
+def stage(target):
+    target["slot"] = mock_row.amberSignal
+    print(target["slot"])''', [("LOG", 4, 3), ("NETWORK", 8, 7), ("NETWORK", 11, 11),
+                               ("LOG", 13, 12), ("LOG", 17, 16), ("LOG", 20, 21), ("LOG", 23, 24),
+                               ("LOG", 27, 26)], None),
+    ("identity.py", '''genuine = print
+def print(*items): pass
+print(mock_row.quartzSignal)
+genuine(mock_row.quartzSignal)
+requests = {"post": lambda *items: None}
+requests.post(endpoint, mock_row.quartzSignal)
+from requests import post as deliver
+deliver(endpoint, mock_row.amberSignal)
+def sink(*items): pass
+cursor.execute = sink
+cursor.execute("INSERT INTO sample VALUES ($1)", [mock_row.quartzSignal])
+import logging as telemetry
+writer = telemetry.getLogger("R7_NEUTRAL")
+writer.info(mock_row.amberSignal)''', [("LOG", 4, 4), ("NETWORK", 8, 8), ("LOG", 14, 14)], None),
+    ("ambiguous.ts", '''const tray = {slot: mockRow.quartzSignal};
+tray[selector] = "R7_NEUTRAL";
+logger.info(tray.slot);
+const loggerAlias = chooseWriter();
+loggerAlias.info(mockRow.amberSignal);
+const fallback = {slot: mockRow.quartzSignal};
+if (enabled) fallback.slot = "R7_NEUTRAL";
+fetch(endpoint, fallback.slot);
+const cleanTray = {slot: "R7_NEUTRAL"};
+reflectiveWrite(cleanTray);
+logger.info(cleanTray.slot);''', [], ("mutações de propriedades", "destino sem vínculo", "fluxo condicional")),
+    ("ambiguous.py", '''tray = {"slot": mock_row.quartzSignal}
+tray[selector] = "R7_NEUTRAL"
+print(tray["slot"])
+print(*opaque)
+requests.post(endpoint, json={"slot": mock_row.quartzSignal, **opaque})
+requests.post(endpoint, json={**opaque, "slot": mock_row.amberSignal})
+writer = choose_writer()
+writer.info(mock_row.quartzSignal)
+pending = [mock_row.quartzSignal]
+if enabled:
+    pending[0] = "R7_NEUTRAL"
+print(*pending)
+suffix = {**opaque, "fixed": mock_row.quartzSignal}
+requests.post(endpoint, json={**suffix})
+visible = [*opaque, mock_row.amberSignal]
+print(*visible)''', [("NETWORK", 6, 6), ("NETWORK", 14, 13), ("LOG", 16, 15)],
+                    ("mutações de propriedades", "expansões de argumentos ou valores", "destino sem vínculo", "fluxo condicional")),
+    ("late_binding.py", '''def stage():
+    print(mock_row.quartzSignal)
+def print(*items): pass
+stage()''', [], ("destino sem vínculo",)),
+]
+with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
+    parsed = javascript_destinations((file, source) for file, source, _, _ in cases)
+    for file, source, expected, limits in cases:
+        report = Report()
+        inspect_fields(source, file, report, parsed.get(file))
+        output = report.output()
+        locations = [
+            (row["rule"].removeprefix("PII_POSSIBLE_"), row["line"],
+             int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+            for row in output["findings"] if row["rule"].startswith("PII_POSSIBLE_")
+        ]
+        assert locations == expected, (file, locations)
+        coverage, = output["coverage"]
+        assert coverage["status"] == ("failed" if limits else "ok"), coverage
+        assert all(reason in coverage["detail"] for reason in limits or ()), coverage
+        assert not re.search(r"R7_NEUTRAL|quartzSignal|amberSignal|mock[Rr_]|INSERT INTO|choose_writer",
+                             json.dumps(output)), file
+`);
+});
+
+test('C9 mede a ordem de leitura e os limites de efeitos entre funções e laços', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields, javascript_destinations
+
+cases = [
+    ('order.ts', '''const tray = {slot: mockRow.quartzSignal};
+logger.info(tray.slot, (tray.slot = "R8_NEUTRAL"));
+logger.info(tray.slot, (tray.slot = mockRow.amberSignal));
+logger.info({saved: tray.slot, changed: (tray.slot = "R8_NEUTRAL")});
+const spread = [mockRow.quartzSignal];
+logger.info(...spread, (spread[0] = "R8_NEUTRAL"));
+let values = [mockRow.amberSignal];
+db.query("INSERT INTO sample VALUES ($1)", values, (values = []));
+localStorage.setItem("sample", (tray.slot = mockRow.quartzSignal), (tray.slot = "R8_NEUTRAL"));
+logger.info(tray.slot);
+const emit = {send: logger.info};
+emit.send(mockRow.amberSignal, (emit.send = () => {}));
+emit.send(mockRow.quartzSignal);
+const referred = {slot: mockRow.quartzSignal};
+logger.info(referred, (referred.slot = "R8_NEUTRAL"));''',
+     [('LOG', 2, 1), ('LOG', 3, 3), ('LOG', 4, 3), ('LOG', 6, 5), ('STORAGE', 8, 7),
+      ('STORAGE', 9, 9), ('LOG', 12, 12)], ()),
+    ('order.py', '''slot = mock_row.quartzSignal
+print(slot, (slot := "R8_NEUTRAL"))
+print(slot)
+args = [mock_row.amberSignal]
+print(*args, (args := []))
+pending = [mock_row.quartzSignal]
+cursor.execute("INSERT INTO sample VALUES (?)", pending, (pending := []))''',
+     [('LOG', 2, 1), ('LOG', 5, 4), ('STORAGE', 7, 6)], ()),
+    ('effects.js', '''function clear(target) { target.inner.slot = "R8_NEUTRAL"; }
+function ignore(target) {}
+const tray = {inner: {slot: mockRow.quartzSignal}};
+const child = tray.inner;
+ignore(tray);
+logger.info(child.slot);
+const saved = child.slot;
+clear(tray);
+logger.info(tray.inner.slot);
+logger.info(child.slot);
+logger.info(saved);
+const other = {slot: mockRow.amberSignal};
+logger.info(other.slot);
+function neutralize(target) { target.quartzSignal = "R8_NEUTRAL"; }
+const opaque = readFixture();
+neutralize(opaque);
+opaque.quartzSignal = mockRow.amberSignal;
+neutralize(opaque);
+logger.info(opaque.quartzSignal);''',
+     [('LOG', 6, 3), ('LOG', 11, 3), ('LOG', 13, 12)], ('mutações de propriedades',)),
+    ('effects.py', '''def clear(target): target["inner"]["slot"] = "R8_NEUTRAL"
+def ignore(target): pass
+tray = {"inner": {"slot": mock_row.quartzSignal}}
+child = tray["inner"]
+ignore(tray)
+print(child["slot"])
+saved = child["slot"]
+clear(tray)
+print(tray["inner"]["slot"])
+print(child["slot"])
+print(saved)
+other = {"slot": mock_row.amberSignal}
+print(other["slot"])
+def neutralize(target): target.quartzSignal = "R8_NEUTRAL"
+opaque = read_fixture()
+neutralize(opaque)
+opaque.quartzSignal = mock_row.amberSignal
+neutralize(opaque)
+print(opaque.quartzSignal)''',
+     [('LOG', 6, 3), ('LOG', 11, 3), ('LOG', 13, 12)], ('mutações de propriedades',)),
+    ('captures.ts', '''let emit = logger.info;
+function toNeutral() { emit(mockRow.quartzSignal); }
+emit = () => {};
+toNeutral();
+function toLogger() { emit(mockRow.amberSignal); }
+emit = logger.info;
+toLogger();
+emit(mockRow.quartzSignal);
+const stable = logger.info;
+function independent() { stable(mockRow.amberSignal); }
+independent();''',
+     [('LOG', 8, 8), ('LOG', 10, 10)], ('vínculos externos a funções', 'destino sem vínculo')),
+    ('captures.py', '''emit = print
+def noop(*items): pass
+def to_neutral(): emit(mock_row.quartzSignal)
+emit = noop
+to_neutral()
+def to_logger(): emit(mock_row.amberSignal)
+emit = print
+to_logger()
+emit(mock_row.quartzSignal)
+def independent():
+    emit = print
+    emit(mock_row.amberSignal)
+independent()''',
+     [('LOG', 9, 9), ('LOG', 12, 12)], ('vínculos externos a funções', 'destino sem vínculo')),
+    ('modules.js', '''import first from "axios";
+import second from "axios";
+import {default as third} from "axios";
+const saved = second.post;
+second.post(endpoint, mockRow.quartzSignal);
+first.post = () => {};
+second.post(endpoint, mockRow.quartzSignal);
+third.post(endpoint, mockRow.quartzSignal);
+saved(endpoint, mockRow.amberSignal);''',
+     [('NETWORK', 5, 5), ('NETWORK', 9, 9)], ()),
+    ('modules.py', '''import requests as first
+from requests import post as saved
+def noop(*items, **options): pass
+first.post(endpoint, mock_row.quartzSignal)
+first.post = noop
+import requests as second
+second.post(endpoint, mock_row.quartzSignal)
+from requests import post as current
+current(endpoint, mock_row.quartzSignal)
+saved(endpoint, mock_row.amberSignal)
+import httpx as independent
+independent.post(endpoint, mock_row.quartzSignal)''',
+     [('NETWORK', 4, 4), ('NETWORK', 10, 10), ('NETWORK', 12, 12)], ()),
+    ('loops.js', '''const tray = {slot: mockRow.quartzSignal};
+const alias = tray;
+for (tray.slot of ["R8_NEUTRAL"]) {}
+logger.info(alias.slot);
+let scratch = mockRow.quartzSignal;
+for (scratch in {slot: "R8_NEUTRAL"}) {}
+logger.info(scratch);
+const empty = {slot: mockRow.quartzSignal};
+for (empty.slot of []) {}
+logger.info(empty.slot);
+const other = {slot: mockRow.amberSignal};
+logger.info(other.slot);''',
+     [('LOG', 12, 11)], ('fluxo condicional ou repetido',)),
+]
+with patch('lgpd_analyzer.FIELD', re.compile(r'\b(?:quartzSignal|amberSignal)\b')):
+    parsed = javascript_destinations((file, source) for file, source, _, _ in cases)
+    for file, source, expected, reasons in cases:
+        report = Report()
+        inspect_fields(source, file, report, parsed.get(file))
+        output = report.output()
+        locations = [(row['rule'].removeprefix('PII_POSSIBLE_'), row['line'],
+                      int(re.search(r'linha (\d+)\.', row['evidence'])[1]))
+                     for row in output['findings'] if row['rule'].startswith('PII_POSSIBLE_')]
+        assert locations == expected, (file, locations)
+        coverage, = output['coverage']
+        assert coverage['status'] == ('failed' if reasons else 'ok'), (file, coverage)
+        assert all(reason in coverage['detail'] for reason in reasons), (file, coverage)
+        assert not re.search(r'R8_NEUTRAL|quartzSignal|amberSignal|mockRow|mock_row|INSERT INTO', json.dumps(output)), file
+`);
+});
+
+test('C9 limita os efeitos de chamadas locais, incluindo métodos sem vínculo', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields, javascript_destinations
+
+cases = [
+    ("calls.ts", '''let emit = logger.info;
+const saved = emit;
+const stop = () => { emit = () => {}; };
+function neutral() { let emit = () => {}; emit = () => {}; }
+neutral();
+emit(mockRow.quartzSignal);
+function wrapper() { stop(); }
+wrapper();
+emit(mockRow.quartzSignal);
+saved(mockRow.amberSignal);
+emit = logger.info;
+emit(mockRow.quartzSignal);
+const tray = {slot: mockRow.amberSignal};
+const alias = tray;
+function clear() { tray.slot = "C9_NEUTRAL"; }
+clear();
+logger.info(alias.slot);''',
+     [("LOG", 6, 6), ("LOG", 10, 10), ("LOG", 12, 12)],
+     ("vínculos externos a funções", "mutações de propriedades")),
+    ("calls.py", '''emit = print
+saved = emit
+def stop():
+    global emit
+    emit = lambda *items: None
+def neutral():
+    emit = lambda *items: None
+neutral()
+emit(mock_row.quartzSignal)
+def wrapper(): stop()
+wrapper()
+emit(mock_row.quartzSignal)
+saved(mock_row.amberSignal)
+emit = print
+emit(mock_row.quartzSignal)
+tray = {"slot": mock_row.amberSignal}
+alias = tray
+def clear(): tray["slot"] = "C9_NEUTRAL"
+clear()
+print(alias["slot"])
+def outer():
+    emit = print
+    saved = emit
+    def stop():
+        nonlocal emit
+        emit = lambda *items: None
+    stop()
+    emit(mock_row.quartzSignal)
+    saved(mock_row.amberSignal)''',
+     [("LOG", 9, 9), ("LOG", 13, 13), ("LOG", 15, 15), ("LOG", 29, 29)],
+     ("vínculos externos a funções", "mutações de propriedades")),
+    ("methods.js", '''const receiver = readFixture();
+const alias = receiver;
+receiver.slot = mockRow.quartzSignal;
+receiver.send = logger.info;
+const saved = receiver.slot;
+receiver.cleanup();
+logger.info(alias.slot);
+alias.send(mockRow.amberSignal);
+logger.info(saved);
+receiver.slot = mockRow.amberSignal;
+logger.info(alias.slot);
+const independent = {send() {}, slot: mockRow.quartzSignal};
+independent.send();
+logger.info(independent.slot);
+function cleanup() { receiver.cleanup(); }
+cleanup();
+logger.info(alias.slot);''',
+     [("LOG", 9, 3), ("LOG", 11, 10), ("LOG", 14, 12)], ("mutações de propriedades",)),
+    ("methods.py", '''receiver = read_fixture()
+alias = receiver
+receiver.slot = mock_row.quartzSignal
+receiver.send = print
+saved = receiver.slot
+receiver.cleanup()
+print(alias.slot)
+alias.send(mock_row.amberSignal)
+print(saved)
+receiver.slot = mock_row.amberSignal
+print(alias.slot)
+independent = {"slot": mock_row.quartzSignal}
+independent.get("slot")
+print(independent["slot"])
+def cleanup(): receiver.cleanup()
+cleanup()
+print(alias.slot)''',
+     [("LOG", 9, 3), ("LOG", 11, 10), ("LOG", 14, 12)], ("mutações de propriedades",)),
+    ("unsupported.ts", '''let reading = mockRow.quartzSignal;
+reading *= 2;
+logger.info(reading);
+const changed = -mockRow.amberSignal;
+logger.info(changed);
+const independent = mockRow.quartzSignal;
+logger.info(independent);''',
+     [("LOG", 7, 6)], ("mutações de propriedades", "expressões JavaScript/TypeScript fora do rastreamento")),
+]
+with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
+    parsed = javascript_destinations((file, source) for file, source, _, _ in cases)
+    for file, source, expected, reasons in cases:
+        report = Report()
+        inspect_fields(source, file, report, parsed.get(file))
+        output = report.output()
+        hits = [(row["rule"].removeprefix("PII_POSSIBLE_"), row["line"],
+                 int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+                for row in output["findings"] if row["rule"].startswith("PII_POSSIBLE_")]
+        assert hits == expected, (file, hits)
+        coverage, = output["coverage"]
+        assert coverage["status"] == "failed", (file, coverage)
+        assert all(reason in coverage["detail"] for reason in reasons), (file, coverage)
+        assert not re.search(r"C9_NEUTRAL|quartzSignal|amberSignal|mockRow|mock_row", json.dumps(output)), file
+`);
+});
+
+test('C9 captura operandos Python no ponto da leitura e conserva o alvo da atribuição aumentada', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields
+
+sources = [
+    ('''label = mock_row.quartzSignal
+combined = label + (label := "C9_NEUTRAL")
+print(combined)
+print(label)
+label = mock_row.amberSignal
+print(f"{label}{(label := 'C9_NEUTRAL')}")
+print(label)
+label = mock_row.quartzSignal
+print((label, (label := "C9_NEUTRAL")))
+print(label)
+label = mock_row.amberSignal
+print({"slot": label, "other": (label := "C9_NEUTRAL")})
+print(label)''',
+     [(3, 1), (6, 5), (9, 8), (12, 11)], ()),
+    ('''tray = {"slot": "C9_NEUTRAL"}
+saved = tray
+other = {"slot": mock_row.quartzSignal,
+         "suffix": mock_row.amberSignal}
+tray["slot"] += (tray := other)["suffix"]
+print(saved["slot"])
+print(tray["slot"])
+def neutralize():
+    global tray
+    tray = {}
+    return "C9_NEUTRAL"
+tray["slot"] += neutralize()
+print(other["slot"])
+print(saved["slot"])''',
+     [(6, 4), (7, 3), (14, 4)], ("vínculos externos a funções", "reatribuições fora do rastreamento")),
+    ('''slot = mock_row.quartzSignal
+slot *= 2
+print(slot)
+slot = mock_row.amberSignal
+slot = slot.replace("C9_NEUTRAL", "C9_NEUTRAL")
+print(slot)
+message = mock_row.quartzSignal * 2
+print(message)''',
+     [], ("reatribuições fora do rastreamento", "expressões Python fora do rastreamento")),
+]
+with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
+    for source, expected, reasons in sources:
+        report = Report()
+        inspect_fields(source, "order.py", report)
+        output = report.output()
+        hits = [(row["line"], int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+                for row in output["findings"] if row["rule"] == "PII_POSSIBLE_LOG"]
+        assert hits == expected, hits
+        coverage, = output["coverage"]
+        assert coverage["status"] == ("failed" if reasons else "ok"), coverage
+        assert all(reason in coverage["detail"] for reason in reasons), coverage
+        assert not re.search(r"C9_NEUTRAL|quartzSignal|amberSignal|mock_row", json.dumps(output))
+`);
+});
+
+test('C9 mede a escrita em EXPLAIN que executa a instrução SQL', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields, javascript_destinations
+
+cases = [
+    ('EXPLAIN ANALYZE INSERT INTO sample (slot) VALUES ($1)', True, None),
+    ('EXPLAIN ANALYSE VERBOSE INSERT INTO sample (slot) VALUES ($1)', True, None),
+    ('EXPLAIN (VERBOSE, ANALYZE ON, FORMAT JSON) UPDATE sample SET slot = $1', True, None),
+    ('EXPLAIN (ANALYZE) WITH seed(v) AS (VALUES ($1)) INSERT INTO sample SELECT v FROM seed', True, None),
+    ('EXPLAIN INSERT INTO sample (slot) VALUES ($1)', False, None),
+    ('EXPLAIN (ANALYZE FALSE) INSERT INTO sample (slot) VALUES ($1)', False, None),
+    ('EXPLAIN ANALYZE SELECT $1', False, None),
+    ('EXPLAIN ANALYZE INSERT INTO sample VALUES (lower($1))', False, 'fora do recorte de escrita'),
+    ('EXPLAIN (ANALYZE $1) UPDATE sample SET slot = $1', False, 'fora do recorte de escrita'),
+    ('EXPLAIN ANALYZE UPDATE sample SET slot = $2', False, 'parâmetros SQL sem vínculo'),
+]
+texts = []
+for index, (command, hit, limit) in enumerate(cases):
+    for extension in ('ts', 'py'):
+        file = f'{index}.{extension}'
+        source = f'parameters = [mock_row.quartzSignal]\ncursor.execute("{command}", parameters)'
+        if extension == 'ts':
+            source = 'const ' + source
+        texts.append((file, source, hit, limit))
+with patch("lgpd_analyzer.FIELD", re.compile(r"\bquartzSignal\b")):
+    parsed = javascript_destinations((file, source) for file, source, _, _ in texts)
+    for file, source, expected, limit in texts:
+        report = Report()
+        inspect_fields(source, file, report, parsed.get(file))
+        output = report.output()
+        hits = [row for row in output['findings'] if row['rule'].startswith('PII_POSSIBLE_')]
+        assert [(row['rule'], row['line']) for row in hits] == ([('PII_POSSIBLE_STORAGE', 2)] if expected else []), file
+        assert all('linha 1.' in row['evidence'] for row in hits), file
+        coverage, = output['coverage']
+        assert coverage['status'] == ('failed' if limit else 'ok'), coverage
+        assert limit is None or limit in coverage['detail'], coverage
+        assert not re.search(r'EXPLAIN|sample|quartzSignal|mock_row', json.dumps(output)), file
+`);
+});
+
 test('C9 mede sintaxe, SQL e transformações fora do rastreamento sem inventar destinos', () => {
   python(String.raw`
 import json
