@@ -312,13 +312,13 @@ test('Lighthouse conserva recursos das páginas externas e omite referências qu
   }
 });
 
-function syntheticLighthouse(check) {
+function syntheticLighthouse(check, ...args) {
   return `const assert = require('node:assert/strict');
     const fs = require('node:fs');
     if (process.argv[2] === 'collect') (async () => {
       const {ci} = JSON.parse(fs.readFileSync(process.argv[3].slice(9)));
       const urls = ci.collect.url;
-      await (${check.toString()})(assert, urls);
+      await (${check.toString()})(assert, urls, ...${JSON.stringify(args)});
       fs.mkdirSync('.lighthouseci');
       for (const [i, url] of urls.entries()) {
         fs.writeFileSync('.lighthouseci/lhr-' + i + '.json', JSON.stringify({requestedUrl: url, finalUrl: url,
@@ -412,6 +412,7 @@ test('Lighthouse registra escopo parcial para formas de documento embutido nas d
 test('Lighthouse mantém imagens raster confirmadas pelo servidor nas duas origens estáticas', async t => {
   const setup = await fixture(t);
   const {root, repo} = setup;
+  const pixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
   await mkdir(join(repo, 'site'));
   const pages = [
     ['site/imagens.html', '<object data="pixel.png?tema=claro"></object><embed src="pixel.png" type="image/png">'],
@@ -422,8 +423,7 @@ test('Lighthouse mantém imagens raster confirmadas pelo servidor nas duas orige
   ];
   const routes = pages.map(([file]) => ({file, path: '/' + file.replace(/^site\//, '')}));
   for (const [file, html] of pages) await writeFile(join(repo, file), `<!doctype html>${html}`);
-  await writeFile(join(repo, 'site', 'pixel.png'), Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aPrsAAAAASUVORK5CYII=', 'base64'));
+  await writeFile(join(repo, 'site', 'pixel.png'), Buffer.from(pixelPng, 'base64'));
   await writeFile(join(repo, 'site', 'suporte.html'), '<p>Documento sintético de apoio</p>');
   await writeFile(join(repo, 'site', 'vetor.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
   await writeFile(join(root, 'avulso.css'), '/* fora do snapshot declarado */');
@@ -431,21 +431,29 @@ test('Lighthouse mantém imagens raster confirmadas pelo servidor nas duas orige
     ...routes, {path: '/suporte.html', file: 'site/suporte.html', page: false},
   ]}));
 
-  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls) => {
+  const output = await collectSynthetic(setup, {lhci: syntheticLighthouse(async (assert, urls, pixelPng) => {
     assert.equal(urls.length, 2);
     const [canonical, mounted] = urls.map(url => new URL(url));
     assert.equal(canonical.pathname, '/imagens.html');
     assert.match(mounted.pathname, /^\/[^/]+\/galeria\.html$/);
     assert.notEqual(canonical.origin, mounted.origin);
-    for (const [page, assetPath] of [[canonical, 'pixel.png?tema=claro'], [mounted, 'site/pixel.png']]) {
+    const expected = Buffer.from(pixelPng, 'base64');
+    for (const [page, assetPaths] of [
+      [canonical, ['pixel.png?tema=claro', 'pixel.png']],
+      [mounted, ['site/pixel.png']],
+    ]) {
       assert.equal(page.hostname, '127.0.0.1');
       assert.equal((await fetch(page)).status, 200);
-      const image = await fetch(new URL(assetPath, page));
-      assert.equal(image.status, 200);
-      assert.equal(image.headers.get('content-type'), 'image/png');
+      for (const assetPath of assetPaths) {
+        const image = await fetch(new URL(assetPath, page));
+        assert.equal(image.status, 200);
+        assert.equal(image.headers.get('content-type'), 'image/png');
+        assert.deepEqual(Buffer.from(await image.arrayBuffer()), expected);
+      }
       assert.equal((await fetch(new URL('/avulso.css', page))).status, 404);
     }
-  })});
+    assert.equal((await fetch(new URL('avulso.css', mounted))).status, 404);
+  }, pixelPng)});
   assert.deepEqual(output.measurement.lighthouse.map(({route, file}) => ({path: route, file})), routes.slice(0, 2));
   const omissions = output.coverage.filter(row => row.tool === 'rota-http' && row.status === 'skipped' &&
     row.detail.includes('documento embutido'));
