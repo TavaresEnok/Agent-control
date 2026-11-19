@@ -73,7 +73,7 @@ function assertValidCollectorContract(output: CollectorOutput): void {
     assert.equal(typeof item.file, 'string');
     assert.ok(item.file.length > 0);
     assert.equal(item.file.startsWith('/'), false, `file deve ser relativo: ${item.file}`);
-    assert.equal(item.file.includes('..'), false, `file não pode conter ..: ${item.file}`);
+    assert.equal(item.file.split('/').includes('..'), false, `file não pode conter segmento ..: ${item.file}`);
     assert.equal(Number.isInteger(item.line), true);
     assert.ok(item.line >= 1, `line deve ser >= 1: ${item.line}`);
     assert.ok(VALID_SEVERITIES.has(item.severity), `severity inválida: ${item.severity}`);
@@ -674,10 +674,13 @@ test('o host recusa o caminho no achado normalizado e publica a coleta com omiss
     assertValidCollectorContract(raw);
     const normalized = parseModuleCollectorOutput(JSON.stringify(raw), {module: 'documentacao'});
     assert.deepEqual(normalized.findings.map(finding => finding.file), [ordinaryFile]);
-    const legacy = parseModuleCollectorOutput(JSON.stringify({
+    const legacyPayload = {
       coverage: normalized.coverage,
       findings: [{...normalized.findings[0], file: protectedFile}],
-    }), {module: 'documentacao'});
+    };
+    assert.throws(() => parseModuleCollectorOutput(JSON.stringify(legacyPayload), {module: 'documentacao'}),
+      {code: 'VERIFY_PATH_FORBIDDEN'});
+    const legacy = {...normalized, findings: [{...normalized.findings[0], file: protectedFile}]};
     assert.equal(legacy.findings[0]?.file, protectedFile);
     assert.equal(hasKnownSecret(legacy.findings[0]!.message), false);
     assert.equal(hasKnownSecret(legacy.findings[0]!.evidence), false);
@@ -840,7 +843,8 @@ test('cobertura e achados acima do contrato são contabilizados na saída', asyn
     }));
     assert.equal(output.coverage.length, 5000);
     assert.equal(output.findings.length, 999);
-    assert.ok(output.findings.every(finding => finding.file === 'index.ts'));
+    assert.ok(output.findings.every(finding => finding.file === 'ação.ts' || finding.file === 'index.ts'));
+    assert.equal(output.findings.filter(finding => finding.file === 'ação.ts').length, 1);
     const limits = output.coverage.find(row => row.tool === 'documentacao:limites');
     assert.equal(limits?.status, 'failed');
     assert.match(limits?.detail ?? '', /linhas_cobertura_omitidas=[1-9]\d*; achados_omitidos=3/);
@@ -2208,6 +2212,300 @@ test('falha final da CLI com caminho protegido preserva documentacao:privacidade
       commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: parsed.coverage, fileCoverage: [],
       achados: [], raw: parsed,
     });
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('rotas com colchetes, parênteses e Unicode preservam achados e cobertura sem disparar documentacao:limites', async () => {
+  const {writeModuleReport} = await import('../src/verification-modules.ts');
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-route-paths-'));
+  const repoDir = join(tmp, 'repo');
+  const dataDirectory = join(tmp, 'data');
+  const routeFiles = Array.from({length: 18}, (_, index) =>
+    index % 3 === 0
+      ? `src/app/(portal)/users/[id_${index}]/page.tsx`
+      : index % 3 === 1
+        ? `src/app/(auth)/session-[...slug-${index}]/route.ts`
+        : `src/routes/ação (v${index})/[param].ts`,
+  );
+  try {
+    mkdirSync(dataDirectory, {mode: 0o700});
+    for (const rel of routeFiles) {
+      mkdirSync(dirname(join(repoDir, rel)), {recursive: true});
+      writeFileSync(join(repoDir, rel), `export function handler() { return 1; }\n`);
+    }
+    const reflection = {
+      kind: 1,
+      name: 'rotas',
+      children: routeFiles.map((file, index) => ({
+        kind: 64,
+        name: `handler_${index}`,
+        sources: [{fileName: file, line: 1}],
+      })),
+    };
+    const graph = {modules: routeFiles.map(source => ({source, dependencies: []}))};
+    const diagram = 'flowchart LR\nA["src"] --> B["app"]\n';
+    const raw = await runCollector({repoDir, ...syntheticTools(reflection, diagram, graph)});
+    assertValidCollectorContract(raw);
+    const validated = await validateWithBase(raw);
+    assert.equal(validated.findings.length, 18);
+    assert.deepEqual(new Set(validated.findings.map(f => f.file)), new Set(routeFiles));
+    assert.equal(validated.coverage.find(row => row.tool === 'documentacao:limites'), undefined);
+    assert.equal(validated.coverage.find(row => row.tool === 'documentacao:escopo'), undefined);
+    assert.equal(validated.coverage.find(row => row.tool === 'documentacao:privacidade'), undefined);
+    for (const file of routeFiles) {
+      assert.ok(validated.coverage.some(r => r.tool === 'typedoc:file' && r.detail.startsWith(`arquivo=${file};`)));
+      assert.ok(validated.coverage.some(r => r.tool === 'dependency-cruiser:file' && r.detail.startsWith(`arquivo=${file};`)));
+    }
+    const artifacts = assembleDocumentationArtifacts(validated.coverage);
+    assert.equal(artifacts['api.json'].status, 'present');
+    assert.equal(artifacts['dependencias.mmd'].status, 'present');
+    const report = await writeModuleReport({
+      dataDirectory, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+      runId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: validated.coverage, fileCoverage: [],
+      achados: [], raw: validated,
+    });
+    assert.equal(existsSync(join(report.directory, 'api.json')), true);
+    assert.equal(existsSync(join(report.directory, 'dependencias.mmd')), true);
+
+    if (!skipLocalTools) {
+      const realRaw = await runCollector({repoDir});
+      assertValidCollectorContract(realRaw);
+      const realValidated = await validateWithBase(realRaw);
+      assert.equal(realValidated.findings.length, 18);
+      assert.deepEqual(new Set(realValidated.findings.map(f => f.file)), new Set(routeFiles));
+      assert.equal(realValidated.coverage.find(row => row.tool === 'documentacao:limites'), undefined);
+      assert.equal(realValidated.coverage.find(row => row.tool === 'documentacao:escopo'), undefined);
+    }
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('separa omissões de escopo e privacidade de truncamento real preservando limites de achados e bytes', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-scope-privacy-limits-'));
+  try {
+    mkdirSync(join(tmp, 'src', 'app', '(portal)', '[id]'), {recursive: true});
+    const routeFile = 'src/app/(portal)/[id]/page.tsx';
+    const outOfScopeA = 'src/fora$escopo.ts';
+    const outOfScopeB = 'src/bad?route.ts';
+    const secretFile = 'src/credentials.ts';
+    writeFileSync(join(tmp, routeFile), 'export const route = 1;\n');
+    writeFileSync(join(tmp, outOfScopeA), 'export const outA = 1;\n');
+    writeFileSync(join(tmp, outOfScopeB), 'export const outB = 1;\n');
+    writeFileSync(join(tmp, secretFile), 'export const secret = 1;\n');
+    const missing = {module: './ausente', couldNotResolve: true};
+    const reflection = {
+      kind: 1, name: 'escopo',
+      children: [
+        {kind: 64, name: 'route', sources: [{fileName: routeFile, line: 1}], comment: {summary: [{text: 'Ok.'}]}},
+        {kind: 64, name: 'outA', sources: [{fileName: outOfScopeA, line: 1}]},
+        {kind: 64, name: 'outB', sources: [{fileName: outOfScopeB, line: 1}]},
+        {kind: 64, name: 'secret', sources: [{fileName: secretFile, line: 1}]},
+      ],
+    };
+    const diagram = 'flowchart LR\nA["src"] --> B["page.tsx"]\n';
+    const underLimits = await validateWithBase(await runCollector({
+      repoDir: tmp,
+      ...syntheticTools(reflection, diagram, {
+        modules: [
+          {source: routeFile, dependencies: [missing]},
+          {source: outOfScopeA, dependencies: []},
+          {source: outOfScopeB, dependencies: []},
+          {source: secretFile, dependencies: [missing]},
+        ],
+      }),
+    }));
+    assert.deepEqual(underLimits.findings.map(f => f.file), [routeFile]);
+    assert.equal(underLimits.coverage.find(row => row.tool === 'documentacao:limites'), undefined);
+    const scopeRow = underLimits.coverage.find(row => row.tool === 'documentacao:escopo');
+    assert.equal(scopeRow?.status, 'skipped');
+    assert.match(scopeRow?.detail ?? '', /achados_omitidos=2$/);
+    const privRow = underLimits.coverage.find(row => row.tool === 'documentacao:privacidade');
+    assert.equal(privRow?.status, 'skipped');
+    assert.match(privRow?.detail ?? '', /achados_omitidos=2;/);
+
+    // Com estouro real acima de 999 achados publicáveis, apenas o corte real vai para documentacao:limites.
+    const overLimits = await validateWithBase(await runCollector({
+      repoDir: tmp,
+      ...syntheticTools(reflection, diagram, {
+        modules: [
+          {source: routeFile, dependencies: Array.from({length: 1004}, () => missing)},
+          {source: outOfScopeA, dependencies: []},
+          {source: outOfScopeB, dependencies: []},
+          {source: secretFile, dependencies: [missing]},
+        ],
+      }),
+    }));
+    assert.equal(overLimits.findings.length, 999);
+    assert.match(overLimits.coverage.find(row => row.tool === 'documentacao:escopo')?.detail ?? '', /achados_omitidos=2$/);
+    assert.match(overLimits.coverage.find(row => row.tool === 'documentacao:privacidade')?.detail ?? '', /achados_omitidos=2;/);
+    const limitsRow = overLimits.coverage.find(row => row.tool === 'documentacao:limites');
+    assert.equal(limitsRow?.status, 'failed');
+    assert.equal(limitsRow?.detail, 'linhas_cobertura_omitidas=0; achados_omitidos=5');
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('regressão 1: grafo, erro_diagrama_gerado e api.json protegem nomes de classe secreta com controle positivo', async () => {
+  const {writeModuleReport} = await import('../src/verification-modules.ts');
+  const {catalogHasProtectedContent} = await import(pathToFileURL(join(MODULE_DEPLOY_DIR, 'report-privacy.mjs')).href) as {
+    catalogHasProtectedContent: (value: unknown) => boolean;
+  };
+  assert.equal(catalogHasProtectedContent([{name: 'a', file: 'src/credentials.ts'}]), true);
+  assert.equal(catalogHasProtectedContent([{name: 'b', file: 'src/id_token.ts'}]), true);
+  assert.equal(catalogHasProtectedContent([{name: 'c', file: 'src/identity.ts'}]), false);
+
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-reg1-secret-graph-'));
+  const posRepo = join(tmp, 'pos');
+  const protRepo = join(tmp, 'prot');
+  const dataPos = join(tmp, 'data-pos');
+  const dataProt = join(tmp, 'data-prot');
+  try {
+    mkdirSync(join(posRepo, 'src'), {recursive: true});
+    mkdirSync(join(protRepo, 'src'), {recursive: true});
+    mkdirSync(dataPos, {mode: 0o700});
+    mkdirSync(dataProt, {mode: 0o700});
+
+    // Controle positivo: src/app.ts importa src/identity.ts (não pertence à classe de segredos).
+    writeFileSync(join(posRepo, 'src/app.ts'), 'import "./identity";\nexport function run() {}\n');
+    writeFileSync(join(posRepo, 'src/identity.ts'), 'export function identity() {}\n');
+    const posReflection = {
+      kind: 1, name: 'positivo',
+      children: [
+        {kind: 64, name: 'run', sources: [{fileName: 'src/app.ts', line: 2}], comment: {summary: [{text: 'Run.'}]}},
+        {kind: 64, name: 'identity', sources: [{fileName: 'src/identity.ts', line: 1}], comment: {summary: [{text: 'Id.'}]}},
+      ],
+    };
+    const posGraph = {
+      modules: [
+        {source: 'src/app.ts', dependencies: [{resolved: 'src/identity.ts'}]},
+        {source: 'src/identity.ts', dependencies: []},
+      ],
+    };
+    const posDiagram = 'flowchart LR\nA["src/app.ts"] --> B["src/identity.ts"]\n';
+    const posOut = await validateWithBase(await runCollector({
+      repoDir: posRepo,
+      ...syntheticTools(posReflection, posDiagram, posGraph),
+      mermaidParseFn: async code => {
+        if (code === posDiagram) throw new Error('Parse error on line 2:\nA["src/app.ts"] --> B["src/identity.ts"]\n---^');
+        return {diagramType: 'flowchart-v2'};
+      },
+    }));
+    assert.equal(posOut.coverage.find(r => r.tool === 'documentacao:privacidade'), undefined);
+    assert.match(posOut.coverage.find(r => r.tool === 'mermaid')?.detail ?? '', /erro_diagrama_gerado=Parse error on line 2:.*identity\.ts/);
+    assert.deepEqual(assembleDocumentationArtifacts(posOut.coverage), {
+      'api.json': {status: 'present', content: JSON.stringify(parseTypedocReport(posReflection, '', posRepo).symbols, null, 2)},
+      'dependencias.mmd': {status: 'present', content: posDiagram},
+    });
+
+    // Controle protegido: src/app.ts importa src/credentials.ts e src/id_token.ts (achados omitidos, mas no grafo e catálogo).
+    writeFileSync(join(protRepo, 'src/app.ts'), 'import "./credentials";\nimport "./id_token";\nexport function run() {}\n');
+    writeFileSync(join(protRepo, 'src/credentials.ts'), 'export function loadCredentials() {}\n');
+    writeFileSync(join(protRepo, 'src/id_token.ts'), 'export function parseIdToken() {}\n');
+    const protReflection = {
+      kind: 1, name: 'protegido',
+      children: [
+        {kind: 64, name: 'run', sources: [{fileName: 'src/app.ts', line: 3}], comment: {summary: [{text: 'Run.'}]}},
+        {kind: 64, name: 'loadCredentials', sources: [{fileName: 'src/credentials.ts', line: 1}], comment: {summary: [{text: 'Cred.'}]}},
+        {kind: 64, name: 'parseIdToken', sources: [{fileName: 'src/id_token.ts', line: 1}], comment: {summary: [{text: 'Tok.'}]}},
+      ],
+    };
+    const protGraph = {
+      modules: [
+        {source: 'src/app.ts', dependencies: [{resolved: 'src/credentials.ts'}, {resolved: 'src/id_token.ts'}]},
+        {source: 'src/credentials.ts', dependencies: []},
+        {source: 'src/id_token.ts', dependencies: []},
+      ],
+    };
+    const protDiagram = 'flowchart LR\nA["src/app.ts"] --> B["credentials.ts"]\nA --> C["id_token.ts"]\n';
+    const protRaw = await runCollector({
+      repoDir: protRepo,
+      ...syntheticTools(protReflection, protDiagram, protGraph),
+      mermaidParseFn: async code => {
+        if (code === protDiagram) throw new Error('Parse error on line 2:\nA["src/app.ts"] --> B["credentials.ts"]\n---^');
+        return {diagramType: 'flowchart-v2'};
+      },
+    });
+    const protSerialized = JSON.stringify(protRaw);
+    assert.equal(protSerialized.includes('credentials.ts'), false);
+    assert.equal(protSerialized.includes('id_token.ts'), false);
+    const protOut = await validateWithBase(protRaw);
+    assert.match(protOut.coverage.find(r => r.tool === 'mermaid')?.detail ?? '',
+      /diagrama_codigo_valido=false; erro_diagrama_gerado=Detalhe omitido por proteção de conteúdo\.$/);
+    assert.match(protOut.coverage.find(r => r.tool === 'documentacao:privacidade')?.detail ?? '',
+      /artefatos_omitidos=api\.json, dependencias\.mmd$/);
+    assert.deepEqual(assembleDocumentationArtifacts(protOut.coverage), {
+      'api.json': {status: 'absent'},
+      'dependencias.mmd': {status: 'absent'},
+    });
+    const protReport = await writeModuleReport({
+      dataDirectory: dataProt, module: 'documentacao', projectId: '11111111-1111-4111-8111-111111111111',
+      runId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', createdAt: new Date('2026-11-19T00:00:00Z'),
+      commit: '0123456789abcdef0123456789abcdef01234567', toolCoverage: protOut.coverage, fileCoverage: [],
+      achados: [], raw: protOut,
+    });
+    assert.equal(existsSync(join(protReport.directory, 'api.json')), false);
+    assert.equal(existsSync(join(protReport.directory, 'dependencias.mmd')), false);
+    assert.equal(readFileSync(join(protReport.directory, 'cobertura.md'), 'utf8').includes('credentials.ts'), false);
+    assert.equal(readFileSync(join(protReport.directory, 'cobertura.md'), 'utf8').includes('id_token.ts'), false);
+  } finally {
+    rmSync(tmp, {recursive: true, force: true});
+  }
+});
+
+test('regressão 2: diretório de 40 caracteres seguido de / continua protegido enquanto authorizations permanece liberado', async () => {
+  const {hasProtectedReportText, isProtectedReportPath} = await import(
+    pathToFileURL(join(MODULE_DEPLOY_DIR, 'report-privacy.mjs')).href
+  ) as {
+    hasProtectedReportText: (text: string) => boolean;
+    isProtectedReportPath: (file: string) => boolean;
+  };
+  const dir40 = 'W'.repeat(40);
+
+  // Controle protegido: segmento único de 40 caracteres seguido de `/` (e ancestrais de classe secreta).
+  assert.equal(hasProtectedReportText(`${dir40}/ausente`), true);
+  assert.equal(hasProtectedReportText(`/tmp/prefix/${dir40}/ausente`), true);
+  assert.equal(hasProtectedReportText(`src/${dir40}/ausente.ts`), true);
+  assert.equal(isProtectedReportPath(`src/${dir40}/ausente.ts`), true);
+  assert.equal(isProtectedReportPath('src/credentials/helper.ts'), true);
+  assert.equal(isProtectedReportPath('app/(portal)/.npmrc/[id].ts'), true);
+
+  // Controle positivo: caminho legítimo multi-segmento com 40 caracteres entre barras.
+  const positiveAuth = 'src/components/authentication/authorizations/index.ts';
+  const positiveRouteAuth = 'src/(portal)/components/authentication/authorizations/[id].ts';
+  assert.equal(hasProtectedReportText(positiveAuth), false);
+  assert.equal(isProtectedReportPath(positiveAuth), false);
+  assert.equal(hasProtectedReportText(positiveRouteAuth), false);
+  assert.equal(isProtectedReportPath(positiveRouteAuth), false);
+
+  const tmp = mkdtempSync(join(tmpdir(), 'doc-reg2-dir40-'));
+  try {
+    mkdirSync(join(tmp, 'src', '(portal)', 'components', 'authentication', 'authorizations'), {recursive: true});
+    writeFileSync(join(tmp, positiveRouteAuth), 'export function checkAuth() {}\n');
+    const out = await validateWithBase(await runCollector({
+      repoDir: tmp,
+      ...syntheticTools(
+        {kind: 1, name: 'auth', children: [{kind: 64, name: 'checkAuth', sources: [{fileName: positiveRouteAuth, line: 1}]}]},
+        'flowchart LR\nA["src"] --> B["auth"]\n',
+        {modules: [{source: positiveRouteAuth, dependencies: []}]},
+      ),
+    }));
+    assert.equal(out.coverage.find(row => row.tool === 'documentacao:privacidade'), undefined);
+    assert.deepEqual(out.findings.map(f => f.file), [positiveRouteAuth]);
+
+    // Falha CLI com diretório de 40 caracteres no início do caminho (sem prefixo antes dele) também preserva privacidade.
+    const cli = spawnSync(process.execPath, [join(MODULE_DEPLOY_DIR, 'collect.mjs')], {
+      env: {...process.env, TMPDIR: join(tmp, dir40, 'ausente')},
+      encoding: 'utf8',
+    });
+    assert.equal(cli.status, 0, cli.stderr);
+    assert.equal(cli.stdout.includes(dir40), false);
+    const parsed = JSON.parse(cli.stdout) as CollectorOutput;
+    assert.ok(parsed.coverage.some(row => row.tool === 'documentacao:privacidade'));
   } finally {
     rmSync(tmp, {recursive: true, force: true});
   }

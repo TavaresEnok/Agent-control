@@ -37,8 +37,9 @@ const UNKNOWN_PATTERNS = [
 
 const REPORT_PATTERNS = UNKNOWN_PATTERNS.map(pattern => new RegExp(pattern.source, pattern.flags.replace('g', '')));
 // A tool may print an absolute path or a longer path. The host's 40-character
-// pattern also accepts slashes, so an added parent can mask a relative match,
-// but a slash immediately after 40 chars means the run is longer and not a match.
+// pattern also accepts slashes, so an added parent can mask a relative multi-segment
+// match, while a slash immediately after 40 chars means the run is longer and not a
+// match (single 40-char segments before `/` are checked separately via `segments`).
 const PATH_CANDIDATE = /[/\\](?=([A-Za-z0-9+/]{40})(?![A-Za-z0-9+/]))/g;
 const FORBIDDEN_REPORT_SEGMENTS = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 
@@ -63,11 +64,13 @@ export function hasForbiddenReportSegment(part) {
 }
 
 export function isProtectedReportPath(file) {
-  if (hasProtectedReportText(file) || isSecretClassBasename(file)) return true;
-  return file.split(/[/\\]/).some(hasForbiddenReportSegment);
+  if (typeof file !== 'string' || !file) return false;
+  if (hasProtectedReportText(file)) return true;
+  return file.split(/[/\\]/).some(part => hasForbiddenReportSegment(part) || isSecretClassBasename(part));
 }
 
 export function hasProtectedReportText(text) {
+  if (typeof text !== 'string' || !text) return false;
   if (hasKnownSecret(text)) return true;
   // Match a protected filename or directory even when a surrounding path
   // changes the pattern's boundary, or a renderer displays only that segment.
@@ -85,5 +88,8 @@ export function hasProtectedReportText(text) {
 export function catalogHasProtectedContent(value) {
   if (typeof value === 'string') return hasProtectedReportText(value);
   if (!value || typeof value !== 'object') return false;
-  return Object.entries(value).some(([key, child]) => hasProtectedReportText(key) || catalogHasProtectedContent(child));
+  return Object.entries(value).some(([key, child]) =>
+    hasProtectedReportText(key)
+    || (key === 'file' && typeof child === 'string' && isProtectedReportPath(child))
+    || catalogHasProtectedContent(child));
 }

@@ -1268,6 +1268,7 @@ export function crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readFileFn = 
           severity: 'media',
           message: `A assinatura documentada de "${name}" diverge da API exportada em ${symbol.file}:${symbol.line}.`,
           evidence: `documentado: ${name}(${args}) | código: ${name}(${actual.join(', ')})`,
+          ...(isProtectedReportPath(symbol.file) ? {protected: true} : {}),
         });
       }
     }
@@ -1495,14 +1496,18 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
           severity: 'alta',
           message: `Importação local "${depSpec}" em ${srcRel} ficou sem resolução no grafo estático.`,
           evidence: `dependency-cruiser couldNotResolve=true: ${srcRel} -> ${depSpec}`,
+          ...(isProtectedReportPath(depSpec) ? {protected: true} : {}),
         });
       }
 
       if (dep.circular) {
         circularCount += 1;
+        const cycleTargets = Array.isArray(dep.cycle)
+          ? dep.cycle.map(c => normalizeRepoPath(c?.name ?? c, repoRoot))
+          : [normalizeRepoPath(dep.resolved ?? depSpec, repoRoot)];
         const cyclePath = Array.isArray(dep.cycle)
-          ? dep.cycle.map(c => normalizeRepoPath(c?.name ?? c, repoRoot)).join(' -> ')
-          : `${srcRel} <-> ${normalizeRepoPath(dep.resolved ?? depSpec, repoRoot)}`;
+          ? cycleTargets.join(' -> ')
+          : `${srcRel} <-> ${cycleTargets[0]}`;
         const line = findLineInText(getFileText(), depSpec);
         findings.push({
           tool: 'dependency-cruiser',
@@ -1512,6 +1517,7 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
           severity: 'media',
           message: `Ciclo de dependência detectado pelo dependency-cruiser a partir de ${srcRel}: ${cyclePath}.`,
           evidence: `dependency-cruiser circular=true: ${cyclePath}`,
+          ...(cycleTargets.some(isProtectedReportPath) || isProtectedReportPath(depSpec) ? {protected: true} : {}),
         });
       }
     }
@@ -1545,6 +1551,9 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
       checkedEdgesByFile.set(block.file, checkedEdgesByFile.get(block.file) + 1);
       if (!realEdges.get(edge.from)?.has(edge.to)) {
         edgeMismatches += 1;
+        const realTargets = [...(realEdges.get(edge.from) ?? [])];
+        const protectedEdge = isProtectedReportPath(edge.from) || isProtectedReportPath(edge.to)
+          || realTargets.some(isProtectedReportPath);
         findings.push({
           tool: 'dependency-cruiser',
           rule: 'DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE',
@@ -1552,7 +1561,8 @@ export function parseDepcruiseReport(rawJson, generatedMermaid, repoRoot, mermai
           line: edge.line,
           severity: 'alta',
           message: `Diagrama em ${block.file} documenta a dependência "${edge.from} -> ${edge.to}", que não existe no grafo real extraído pelo dependency-cruiser.`,
-          evidence: `aresta documentada: ${edge.rawLine} | módulos reais de ${edge.from}: [${[...(realEdges.get(edge.from) ?? [])].join(', ')}]`,
+          evidence: `aresta documentada: ${edge.rawLine} | módulos reais de ${edge.from}: [${realTargets.join(', ')}]`,
+          ...(protectedEdge ? {protected: true} : {}),
         });
       }
     }
@@ -1668,6 +1678,7 @@ export async function validateMermaidDocuments(docFiles, mermaidBlocks, repoFile
           severity: 'media',
           message: `Diagrama Mermaid em ${block.file} referencia o arquivo/módulo "${nodeRef.modulePath}", que não existe no repositório.`,
           evidence: nodeRef.rawLine,
+          ...(isProtectedReportPath(nodeRef.modulePath) ? {protected: true} : {}),
         });
       }
     }
@@ -1717,9 +1728,16 @@ function appendArtifact(coverage, privacy, tool, version, file, text, protectedS
   }
 }
 
+const REPORTABLE_CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
+const REPORTABLE_PATH = /^[\p{L}\p{M}\p{N} ._@+\/()[\]-]+$/u;
+
 function isReportablePath(file) {
-  return file.length <= 400 && !/[^A-Za-z0-9._@+\/-]/.test(file) && file.split('/').every(part =>
-    part !== '' && part !== '.' && part !== '..' && !hasForbiddenReportSegment(part),
+  if (typeof file !== 'string' || !file || file !== file.trim()) return false;
+  if (file.includes('\\') || REPORTABLE_CONTROL.test(file)) return false;
+  if (file.length > 400 || file.startsWith('/') || file.startsWith('~') || /^[A-Za-z]:/.test(file)) return false;
+  if (!REPORTABLE_PATH.test(file)) return false;
+  return file.split('/').every(part =>
+    part !== '' && part === part.trim() && part !== '.' && part !== '..' && !hasForbiddenReportSegment(part),
   );
 }
 
@@ -1743,7 +1761,8 @@ function boundedReportText(value, limit = MAX_DETAIL_CHARS) {
 }
 
 function isCoverageSummary(row) {
-  return row.tool.endsWith(':artefato') || !row.tool.includes(':') || row.tool === 'documentacao:privacidade'
+  return row.tool.endsWith(':artefato') || !row.tool.includes(':')
+    || row.tool === 'documentacao:privacidade' || row.tool === 'documentacao:escopo'
     || (row.tool === 'documentacao:input' && row.status !== 'skipped');
 }
 
@@ -1756,21 +1775,37 @@ function formatPrivacyCoverageRow(protectedFindings, privacyCoverage, omittedArt
   };
 }
 
+function formatScopeCoverageRow(scopeOmittedFindings) {
+  return {
+    tool: 'documentacao:escopo',
+    version: '1',
+    status: 'skipped',
+    detail: `Omissões fora do contrato de caminhos de publicação. achados_omitidos=${scopeOmittedFindings}`,
+  };
+}
+
 function boundCollectorOutput(coverage, findings, privacy) {
   const publishableFindings = [];
   let protectedFindings = 0;
+  let scopeOmittedFindings = 0;
   for (const finding of findings) {
     const evidenceLimit = finding.rule === 'DOC-MERMAID-SINTAXE-INVALIDA' ? 240 : MAX_DETAIL_CHARS;
     const message = boundedReportText(finding.message);
     const evidence = boundedReportText(finding.evidence, evidenceLimit);
-    if (isProtectedReportPath(finding.file) || message === null || evidence === null) {
+    if (finding.protected || isProtectedReportPath(finding.file) || message === null || evidence === null) {
       protectedFindings += 1;
     } else if (isReportablePath(finding.file)) {
-      publishableFindings.push({...finding, line: Math.min(finding.line, 10_000_000), message, evidence});
+      const {protected: _protected, ...reportFinding} = finding;
+      publishableFindings.push({...reportFinding, line: Math.min(finding.line, 10_000_000), message, evidence});
+    } else {
+      scopeOmittedFindings += 1;
     }
   }
   if (privacy.coverage || protectedFindings || privacy.artifacts.length) {
     coverage.push(formatPrivacyCoverageRow(protectedFindings, privacy.coverage, privacy.artifacts));
+  }
+  if (scopeOmittedFindings) {
+    coverage.push(formatScopeCoverageRow(scopeOmittedFindings));
   }
 
   // Reserve espaço para pontuação do JSON e para uma linha que sinalize os cortes.
@@ -1792,13 +1827,13 @@ function boundCollectorOutput(coverage, findings, privacy) {
   const selectedCoverage = coverage.filter(row => {
     if (isCoverageSummary(row)) return true;
     const bytes = rowBytes(row);
-    if (coverageSlots === 0 || bytes > bytesRemaining) return false;
+    if (coverageSlots <= 0 || bytes > bytesRemaining) return false;
     coverageSlots -= 1;
     bytesRemaining -= bytes;
     return true;
   });
   const omittedCoverage = coverage.length - selectedCoverage.length;
-  const omittedFindings = findings.length - protectedFindings - retainedFindings.length;
+  const omittedFindings = publishableFindings.length - retainedFindings.length;
   if (omittedCoverage || omittedFindings) {
     selectedCoverage.push({
       tool: 'documentacao:limites', version: '1', status: omittedFindings ? 'failed' : 'skipped',
@@ -1926,7 +1961,7 @@ export async function runCollector(opts = {}) {
           basePath: workRepoDir,
           tsconfig: safeTsConfigPath,
           entryPointStrategy: 'resolve',
-          entryPoints: codeFiles.map(rel => join(workRepoDir, rel)),
+          entryPoints: codeFiles.map(rel => toPosix(join(workRepoDir, rel)).replace(/[?*()[\]\\{}]/g, '\\$&')),
           json: typedocOutPath,
           validation: {
             notExported: true,
@@ -1974,7 +2009,8 @@ export async function runCollector(opts = {}) {
         }
         findings.push(...tdFindings, ...mdFindings);
         appendArtifact(coverage, privacy, 'typedoc:artefato', versions.typedoc, 'api.json',
-          JSON.stringify(symbols, null, 2), catalogHasProtectedContent(symbols));
+          JSON.stringify(symbols, null, 2),
+          catalogHasProtectedContent(symbols) || symbols.some(symbol => isProtectedReportPath(symbol.file)));
 
         const documentedCount = symbols.filter(s => s.hasDoc).length;
         const undocumentedCount = symbols.length - documentedCount;
@@ -2076,13 +2112,21 @@ export async function runCollector(opts = {}) {
       }
     }
     // The renderer splits paths into folder and file labels. Check its source
-    // paths as well as the rendered text before emitting diagnostics or artifact parts.
+    // paths (including secret-class names) as well as the rendered text before emitting diagnostics or artifact parts.
+    const graphNodeProtected = value => {
+      if (typeof value !== 'string' || !value) return false;
+      const normalized = normalizeRepoPath(value, workRepoDir);
+      return isProtectedReportPath(value) || (normalized !== '.' && isProtectedReportPath(normalized));
+    };
     const graphHasProtectedPaths = Boolean(
       graphParseError
       || (Array.isArray(graphData?.modules) && graphData.modules.some(mod =>
-        (typeof mod?.source === 'string' && hasProtectedReportText(mod.source))
+        graphNodeProtected(mod?.source)
+        || (Array.isArray(mod?.dependents) && mod.dependents.some(graphNodeProtected))
         || (Array.isArray(mod?.dependencies) && mod.dependencies.some(dep =>
-          typeof dep?.resolved === 'string' && hasProtectedReportText(dep.resolved))),
+          graphNodeProtected(dep?.resolved)
+          || (dep?.couldNotResolve && typeof dep?.module === 'string' && dep.module.startsWith('.') && isProtectedReportPath(dep.module))
+          || (Array.isArray(dep?.cycle) && dep.cycle.some(c => graphNodeProtected(typeof c === 'string' ? c : c?.name))))),
       )),
     );
 
