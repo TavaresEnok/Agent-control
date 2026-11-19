@@ -1,0 +1,22 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "API de Faturamento do Assinante",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/desconto": {
+      "get": {
+        "summary": "Calcula desconto aplicavel na fatura",
+        "responses": {
+          "200": {
+            "description": "Desconto calculado com sucesso"
+          },
+          "400": {
+            "description": "Parametro de valor invalido"
+          }
+        }
+      }
+    }
+  }
+}

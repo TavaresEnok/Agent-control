@@ -1,0 +1,5 @@
+# Contexto de build: deploy/modules/qa/. O npm ci ocorre dentro da imagem.
+node_modules
+**/.git
+**/*.log
+*.log
