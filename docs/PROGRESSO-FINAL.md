@@ -826,3 +826,8 @@ PAUSADO-COTA
 - 19/11/2026 18:10 UTC — trabalho-C5-POSICAO-AMBIGUA iniciado em final-c5 por Sol medium normal.
 - 19/11/2026 18:10 UTC — O laboratório de pg_stat_statements voltou a confirmar no commit original e deixou a consulta alterada como provável após atualizar a resposta da fixture para o contrato de leitura. A medição veio do PostgreSQL da imagem.
 - 19/11/2026 18:11 UTC — Conformidade em 30cab4eb recebe 52b078d2 numa integração sem trabalhador concorrente. O candidato seguinte de QA recebeu Go 5f20bd42. O revisor de dependências não apontou defeitos no diff de aceite de 985c96b0; os testes físicos e a CLI já passaram em 42/42.
+- 19/11/2026 18:11 UTC — revisor-C3-DESCRITORES iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:12 UTC — C3-DESCRITORES encerrado com código 0.
+- 19/11/2026 18:12 UTC — revisor-C6-ACEITE-TAG iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 18:13 UTC — C2-BANCO-ACL-EFETIVA encerrado com código 0.
+- 19/11/2026 18:14 UTC — O ramo de entrega revisado de QA em e1ac3d05 inclui as concessões efetivas da rodada f96e9a22. A suíte oficial da revisão anterior continua. A revisão de C3 confirmou que o teste atualizado distingue a troca de descritor, e o gerente executou a prova e o TypeScript.
