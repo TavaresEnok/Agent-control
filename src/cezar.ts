@@ -733,14 +733,16 @@ export class CezarRuntime {
     }));
     if(this.nativeExecutions.length)await phase('NATIVE_EXECUTION_RECONCILIATION_FAILED',()=>history.run(authority,'native-execution','ac_native_execution_jobs',async (ids,retain)=>{
       if(!principal)throw new Refusal('NATIVE_EXECUTION_PRINCIPAL_REQUIRED');
-      const jobs=(await this.ledger.pool.query(`SELECT j.id,j.role,j.account_id,j.executor_digest,j.key_fingerprint,x.state cancellation_state FROM ac_native_execution_jobs j
+      const jobs=(await this.ledger.pool.query(`SELECT j.id,j.role,j.account_id,j.executor_digest,j.key_fingerprint,x.state cancellation_state,i.command->'payload'->>'workflow' workflow FROM ac_native_execution_jobs j
+        JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
+        JOIN ac_contexts cx ON cx.id=j.context_id AND NOT cx.archived
         LEFT JOIN ac_plan_cancellations x ON x.intent_id=j.intent_id AND x.context_id=j.context_id
         WHERE j.context_id=$1 AND j.id=ANY($2::uuid[]) AND (j.state IN ('uncertain','running') OR x.state='requested' OR
          (j.state='completed' AND j.role='programmer' AND j.receipt->'payload'->'artifact'->>'commit' IS NOT NULL AND
           NOT EXISTS(SELECT 1 FROM ac_artifacts a WHERE a.intent_id=j.intent_id AND a.commit_id=j.receipt->'payload'->'artifact'->>'commit')) OR
-         (j.state='completed' AND j.role IN ('reviewer','judge') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND (s.state<>'completed' OR (s.receipt->'verification' IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id))))) OR
-         (j.state IN ('completed','failed') AND ((j.role IN ('reviewer','judge') AND (j.state='failed' OR EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id) OR EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state='completed' AND (s.receipt->>'cancellation'='true' OR s.receipt->>'invalidVerdict'='true')))) OR (j.role='programmer' AND EXISTS(SELECT 1 FROM ac_intents i JOIN ac_operations o ON o.id=j.id WHERE i.id=j.intent_id AND i.parent_intent_id IS NULL AND o.state='completed'))) AND NOT EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed')) OR
-         (j.state IN ('completed','failed') AND j.role='programmer' AND EXISTS(SELECT 1 FROM ac_intents i JOIN ac_worktree_writers w ON w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id JOIN ac_operations o ON o.id=j.id WHERE i.id=j.intent_id AND w.state='held' AND (j.state='failed' OR o.receipt->>'cancellation'='true'))))
+         (j.state='completed' AND j.role IN ('reviewer','judge') AND COALESCE(i.command->'payload'->>'workflow','') NOT IN ('design-readonly-v1','security-verify-readonly-v1') AND EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND (s.state<>'completed' OR (s.receipt->'verification' IS NOT NULL AND NOT EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id))))) OR
+         (j.state IN ('completed','failed') AND ((j.role IN ('reviewer','judge') AND (j.state='failed' OR EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id) OR EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state='completed' AND (s.receipt->>'cancellation'='true' OR s.receipt->>'invalidVerdict'='true')) OR (j.state='completed' AND i.state IN ('done','failed','canceled','cancelled') AND i.command->'payload'->>'workflow' IN ('design-readonly-v1','security-verify-readonly-v1')))) OR (j.role='specialist' AND (j.state='failed' OR (j.state='completed' AND i.state IN ('done','failed','canceled','cancelled') AND i.command->'payload'->>'workflow' IN ('design-readonly-v1','security-verify-readonly-v1')))) OR (j.role='programmer' AND i.parent_intent_id IS NULL AND EXISTS(SELECT 1 FROM ac_operations o WHERE o.id=j.id AND o.state='completed'))) AND NOT EXISTS(SELECT 1 FROM ac_native_terminal_retirements t WHERE t.job_id=j.id AND t.state='removed')) OR
+         (j.state IN ('completed','failed') AND j.role='programmer' AND EXISTS(SELECT 1 FROM ac_worktree_writers w JOIN ac_operations o ON o.id=j.id WHERE w.parent_intent_id=i.parent_intent_id AND w.run_id=i.run_id AND w.state='held' AND (j.state='failed' OR o.receipt->>'cancellation'='true'))))
         ORDER BY j.created_at,j.id`,[authority.contextId,ids])).rows;
       retain(jobs.map(row=>row.id));
       for(const job of jobs){
@@ -754,16 +756,17 @@ export class CezarRuntime {
           if(outcome.state==='completed'&&job.role==='programmer'&&'artifact' in outcome&&outcome.artifact){
             if(!this.engineering)throw new Refusal('NATIVE_ARTIFACT_REGISTRY_UNAVAILABLE');
             await supervisor.registerArtifact(principal,authority,job.id,this.engineering.options.quality);
-          }else if(outcome.state==='completed'&&['reviewer','judge'].includes(job.role)&&!job.cancellation_state){
+          }else if(outcome.state==='completed'&&['reviewer','judge'].includes(job.role)&&!job.cancellation_state&&!['design-readonly-v1','security-verify-readonly-v1'].includes(String(job.workflow??''))){
             const verifier=this.engineering?.options.nativeVerification;if(!verifier)throw new Refusal('NATIVE_VERIFICATION_EXECUTOR_REQUIRED');
             await verifier.record(principal,authority,job.id);
           }
         }
         const terminalRetirement=(await this.ledger.pool.query(`SELECT 1 FROM ac_native_execution_jobs j
-          JOIN ac_intents i ON i.id=j.intent_id LEFT JOIN ac_native_terminal_retirements t ON t.job_id=j.id
-          WHERE j.id=$1 AND j.state IN ('completed','failed') AND (t.state IS DISTINCT FROM 'removed') AND
+          JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id LEFT JOIN ac_native_terminal_retirements t ON t.job_id=j.id
+          WHERE j.id=$1 AND j.context_id=$2 AND j.state IN ('completed','failed') AND (t.state IS DISTINCT FROM 'removed') AND
            ((j.role='programmer' AND i.parent_intent_id IS NULL AND EXISTS(SELECT 1 FROM ac_operations o WHERE o.id=j.id AND o.state='completed')) OR
-            (j.role IN ('reviewer','judge') AND (j.state='failed' OR EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id) OR EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state='completed' AND (s.receipt->>'cancellation'='true' OR s.receipt->>'invalidVerdict'='true')))))`,[job.id])).rowCount;
+            (j.role='specialist' AND (j.state='failed' OR (j.state='completed' AND i.state IN ('done','failed','canceled','cancelled') AND i.command->'payload'->>'workflow' IN ('design-readonly-v1','security-verify-readonly-v1')))) OR
+            (j.role IN ('reviewer','judge') AND (j.state='failed' OR EXISTS(SELECT 1 FROM ac_verification_evidence e WHERE e.session_id=j.session_id) OR EXISTS(SELECT 1 FROM ac_stage_operations s WHERE s.id=j.id AND s.state='completed' AND (s.receipt->>'cancellation'='true' OR s.receipt->>'invalidVerdict'='true')) OR (j.state='completed' AND i.state IN ('done','failed','canceled','cancelled') AND i.command->'payload'->>'workflow' IN ('design-readonly-v1','security-verify-readonly-v1')))))`,[job.id,authority.contextId])).rowCount;
         if(terminalRetirement)await supervisor.retireTerminal(principal,authority,job.id);
         if(job.role==='programmer'){
           const terminal=(await this.ledger.pool.query(`SELECT 1 FROM ac_native_execution_jobs j JOIN ac_operations o ON o.id=j.id
