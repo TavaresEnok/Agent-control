@@ -59,6 +59,8 @@ export function parseTypedocReport(
 ): {
   findings: Finding[];
   symbols: Symbol[];
+  unlocated: number;
+  unlocatedWarnings: {rule: string; message: string}[];
 };
 export function crossCheckMarkdownAgainstTypedoc(files: string[], symbols: Symbol[], readFile?: ReadFile): Finding[];
 export function parseDepcruiseReport(

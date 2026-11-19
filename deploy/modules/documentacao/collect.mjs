@@ -40,6 +40,14 @@ const FORBIDDEN_REPORT_SEGMENTS = new Set(['.mcp.json', '.claude', '.husky', '.c
 const TOOL_TIMEOUT_MS = 180_000;
 const TYPEDOC_DIAGNOSTIC_VERSION = '0.28.20';
 const MERMAID_DIAGNOSTIC_VERSION = '12.3.0';
+const DECLARATION_MAP = /\.d\.[cm]?ts\.map$/;
+const TYPEDOC_SIGNATURE_KINDS = new Set([4096, 16384, 524288, 1048576]);
+const TYPEDOC_DOCUMENTATION_KINDS = new Map([
+  ['Enum', 8], ['EnumMember', 16], ['Variable', 32], ['Function', 64], ['Class', 128],
+  ['Interface', 256], ['Method', 2048], ['CallSignature', 4096], ['ConstructorSignature', 16384],
+  ['Accessor', 262144], ['GetSignature', 524288], ['SetSignature', 1048576], ['TypeAlias', 2097152],
+]);
+const TYPEDOC_LINK_TAGS = new Set(['@link', '@linkcode', '@linkplain']);
 
 const SKIP_DIRS = new Set([
   '.git',
@@ -326,7 +334,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}, manifestScripts 
           UNTRUSTED_CONFIG_FILES.has(entry.name) ||
           entry.name.startsWith('.') ||
           entry.name === 'auth.json' ||
-          (!JS_TS_EXTS.has(ext) && !DOC_EXTS.has(ext) && ext !== '.json')
+          (!JS_TS_EXTS.has(ext) && !DOC_EXTS.has(ext) && ext !== '.json' && !DECLARATION_MAP.test(entry.name))
         ) {
           skipped.push(relPath);
           continue;
@@ -642,25 +650,32 @@ function commentProseLines(comment) {
   return prose.join('').split('\n');
 }
 
-function commentLinkLines(lines, target) {
+function commentLinkLines(lines, target, expectedTag) {
   const text = lines.join('\n');
-  const tag = /[ \t]*@([a-z][a-z0-9-]*)(?=\s|})/iy;
-  const targetPattern = new RegExp(String.raw`^\s*${escapeRegExp(target)}(?=[\s|]|$)`);
+  const tag = /[ \t]*(@[a-z][a-z0-9-]*)(?=\s|})/iy;
   const matches = [];
   let line = 0;
   let inlineTag;
-  for (const {0: token, index} of text.matchAll(/\\[\\{}@/`]|[{}\n]/g)) {
+  const finishTag = (end, closed) => {
+    const value = text.slice(inlineTag.start, end).replace(/\\([{}@/`])/g, '$1').replaceAll('\n', ' ').trim();
+    if (TYPEDOC_LINK_TAGS.has(inlineTag.name) && value === target) {
+      matches.push(closed && inlineTag.name === expectedTag ? inlineTag.line : null);
+    }
+    inlineTag = undefined;
+  };
+  // In TypeDoc's block lexer, a backslash can escape a brace but cannot escape another backslash.
+  for (const {0: token, index} of text.matchAll(/\\[{}@/`]|[{}\n]/g)) {
     if (token === '\n') line++;
     else if (token === '{' && !inlineTag) {
       tag.lastIndex = index + 1;
       const name = tag.exec(text)?.[1];
       if (name) inlineTag = {name, line, start: tag.lastIndex};
     } else if (token === '}' && inlineTag) {
-      if (['link', 'linkcode', 'linkplain'].includes(inlineTag.name)
-        && targetPattern.test(text.slice(inlineTag.start, index))) matches.push(inlineTag.line);
-      inlineTag = undefined;
+      finishTag(index, true);
     }
   }
+  // TypeDoc can serialize an unfinished inline tag and emit a warning for it.
+  if (inlineTag) finishTag(text.length, false);
   return matches;
 }
 
@@ -776,33 +791,54 @@ export function extractTypedocSymbols(typedocData, repoRoot) {
   return symbols;
 }
 
-function indexTypedocDiagnosticPaths(repoRoot, repoFiles, readFileText) {
-  const packages = new Map();
-  const packageAt = dir => {
-    if (packages.has(dir)) return packages.get(dir);
-    let manifest;
-    try {
-      manifest = JSON.parse(readFileText(posix.join(dir, 'package.json')));
-    } catch {
-      // TypeDoc continues searching parent directories without a valid manifest.
-    }
-    const pkg = typeof manifest?.name === 'string'
-      && (manifest.version === undefined || typeof manifest.version === 'string')
-      ? {name: manifest.name, dir}
-      : dir === '.' ? null : packageAt(posix.dirname(dir));
-    packages.set(dir, pkg);
-    return pkg;
+function indexTypedocReflections(project) {
+  const byName = new Map();
+  const visit = (node, parent, parentName) => {
+    if (!node || node.flags?.isPrivate || node.flags?.isProtected) return;
+    const signature = TYPEDOC_SIGNATURE_KINDS.has(node.kind);
+    // TypeDoc's getFriendlyFullName omits the project prefix and the signature's own name.
+    const name = signature ? parentName : parentName ? `${parentName}.${node.name}` : node.name;
+    if (!byName.has(name)) byName.set(name, []);
+    byName.get(name).push({node, parent, signature});
+    for (const child of node.children ?? []) visit(child, node, name);
+    for (const sig of node.signatures ?? []) visit(sig, node, name);
+    visit(node.getSignature, node, name);
+    visit(node.setSignature, node, name);
   };
+  for (const child of project.children ?? []) visit(child, project, '');
+  return byName;
+}
 
-  const filesByPath = new Map();
-  for (const file of repoFiles) {
-    if (!JS_TS_EXTS.has(extname(file).toLowerCase())) continue;
-    const pkg = packageAt(posix.dirname(file));
-    // TypeDoc 0.28.20 prints packageName/packagePath from its symbol ID.
-    const path = pkg ? `${pkg.name}/${posix.relative(pkg.dir, file)}` : `<unknown>/${toPosix(resolve(repoRoot, file))}`;
-    filesByPath.set(path, filesByPath.has(path) ? null : file);
+function hasTypedocComment(node) {
+  const comment = node?.comment;
+  return comment?.summary?.some(part => part.kind !== 'text' || part.text !== '') || comment?.blockTags?.length > 0;
+}
+
+function typedocDeclarationSource(node, repoRoot, repoFiles) {
+  if (node.sources?.length !== 1) return null;
+  const {fileName, line, character} = node.sources[0];
+  const file = normalizeRepoPath(fileName, repoRoot);
+  if (!isReportablePath(file) || (repoFiles.size && !repoFiles.has(file)) || !Number.isInteger(line) || line < 1) return null;
+  return {file, line, character};
+}
+
+function typedocMappedDeclaration(file, repoRoot, repoFiles, readFileText) {
+  const mapFile = file + '.map';
+  if (!DECLARATION_MAP.test(mapFile) || !repoFiles.has(mapFile)) return file;
+  let map;
+  try {
+    map = JSON.parse(readFileText(mapFile).replace(/^\uFEFF/, ''));
+  } catch {
+    return null;
   }
-  return filesByPath;
+  // TypeDoc uses only sources[0] to construct the symbol ID. Its sources coordinates stay in the declaration.
+  if (typeof map?.file !== 'string' || posix.join(posix.dirname(mapFile), map.file) !== file
+    || map.sources?.length !== 1 || !Array.isArray(map.sources)
+    || typeof map.sources[0] !== 'string' || !map.sources[0]
+    || (map.sourceRoot !== undefined && typeof map.sourceRoot !== 'string')) return null;
+  const source = map.sourceRoot === undefined ? map.sources[0] : posix.join(map.sourceRoot, map.sources[0].replace(/^\//, ''));
+  const mappedFile = normalizeRepoPath(resolve(repoRoot, posix.dirname(mapFile), source), repoRoot);
+  return isReportablePath(mappedFile) && repoFiles.has(mappedFile) ? mappedFile : null;
 }
 
 /**
@@ -815,15 +851,13 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   }
 
   const symbols = extractTypedocSymbols(data, repoRoot);
-  const resolveSymbol = (name, file) => {
-    const exact = symbols.filter(sym => sym.qualifiedName === name && (file === undefined || sym.file === file));
-    return exact.length === 1 ? exact[0] : null;
-  };
-
   const findings = [];
+  const unlocatedWarnings = [];
   const seenKeys = new Set();
+  const reportedUndocumented = new Set();
   const fileCache = new Map();
   const syntaxByFile = new Map();
+  const packageByDirectory = new Map();
 
   const getFileText = relFile => {
     if (!relFile || relFile === '.') return '';
@@ -838,46 +872,39 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     return content;
   };
 
-  const findInSymbolComment = (sym, findMatches) => {
+  const getPackage = directory => {
+    if (packageByDirectory.has(directory)) return packageByDirectory.get(directory);
+    let pkg;
+    const manifest = posix.join(directory, 'package.json');
+    if (repoFiles.has(manifest)) {
+      try {
+        const {name, version} = JSON.parse(getFileText(manifest));
+        if (typeof name === 'string' && (version === undefined || typeof version === 'string')) {
+          pkg = {name, directory};
+        }
+      } catch {
+        // TypeDoc searches for a valid named manifest in parent directories.
+      }
+    }
+    pkg ??= directory === '.' ? null : getPackage(posix.dirname(directory));
+    packageByDirectory.set(directory, pkg);
+    return pkg;
+  };
+
+  const findDeclaration = (sym, signature) => {
     const ts = loadTypeScript(toolsRoot);
-    const declarationLine = clampLine(sym.line);
-    if (!ts) return null;
+    if (!ts || !Number.isInteger(sym.character) || sym.character < 0) return null;
     if (!syntaxByFile.has(sym.file)) {
       const source = ts.createSourceFile(sym.file, getFileText(sym.file), ts.ScriptTarget.Latest, true);
       const lineAt = offset => source.getLineAndCharacterOfPosition(offset).line + 1;
-      const localDefaultNames = [];
-      for (const statement of source.statements) {
-        if (ts.isExportAssignment(statement) && !statement.isExportEquals && ts.isIdentifier(statement.expression)) {
-          localDefaultNames.push(statement.expression.text);
-        } else if (ts.isExportDeclaration(statement) && !statement.moduleSpecifier
-          && statement.exportClause && ts.isNamedExports(statement.exportClause)) {
-          for (const specifier of statement.exportClause.elements) {
-            if (specifier.name.text === 'default' && specifier.propertyName) localDefaultNames.push(specifier.propertyName.text);
-          }
-        }
-      }
-      const localDefaultDeclarations = localDefaultNames.length === 1
-        ? source.statements.filter(node => node.name?.text === localDefaultNames[0]) : [];
-      const localDefault = localDefaultDeclarations.length === 1 ? localDefaultDeclarations[0] : null;
       const declarations = new Map();
       const visit = node => {
-        const name = node.name?.text ?? (ts.isConstructorDeclaration(node) ? 'constructor' : null);
-        const names = typeof name === 'string' ? [name] : [];
-        const declarationWithDefault = ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node);
-        const defaultModifier = declarationWithDefault && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default);
-        const defaultEnumOrInterface = localDefault === node
-          && (ts.isEnumDeclaration(node) || ts.isInterfaceDeclaration(node));
-        if (name !== 'default' && (defaultModifier || defaultEnumOrInterface)) names.push('default');
-        const defaultExpression = ts.isExportAssignment(node) && !node.isExportEquals;
-        if (defaultExpression) names.push('default');
-        if (names.length && (ts.isDeclaration(node) || defaultExpression)) {
-          for (const line of new Set([lineAt(node.getStart(source)), lineAt((node.name ?? (defaultExpression ? node.expression : node)).getStart(source))])) {
-            for (const declarationName of names) {
-              const key = `${line}:${declarationName}`;
-              if (!declarations.has(key)) declarations.set(key, []);
-              declarations.get(key).push(node);
-            }
-          }
+        if (ts.isDeclaration(node) || ts.isFunctionLike(node)) {
+          // SourcePlugin records the start of the name, or of the node if it has no name.
+          const {line, character} = source.getLineAndCharacterOfPosition((node.name ?? node).getStart(source));
+          const key = `${line + 1}:${character}`;
+          if (!declarations.has(key)) declarations.set(key, []);
+          declarations.get(key).push(node);
         }
         ts.forEachChild(node, visit);
       };
@@ -885,24 +912,73 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       syntaxByFile.set(sym.file, {source, lineAt, declarations});
     }
     const {source, lineAt, declarations} = syntaxByFile.get(sym.file);
-    const matching = declarations.get(`${declarationLine}:${sym.name}`);
-    if (matching?.length !== 1) return null;
-    const commentLines = new Set();
-    for (const comment of ts.getJSDocCommentsAndTags(matching[0]).filter(ts.isJSDoc)) {
+    const matching = (declarations.get(`${sym.line}:${sym.character}`) ?? [])
+      .filter(node => !signature || ts.isFunctionLike(node));
+    if (matching.length !== 1) return null;
+    return {ts, source, lineAt, node: matching[0]};
+  };
+
+  const findInSymbolComment = (sym, signature, findMatches) => {
+    const declaration = findDeclaration(sym, signature);
+    if (!declaration) return null;
+    const {ts, source, lineAt, node} = declaration;
+    const commentLines = [];
+    for (const comment of ts.getJSDocCommentsAndTags(node).filter(ts.isJSDoc)) {
       const startLine = lineAt(comment.getStart(source));
       const lines = commentProseLines(comment.getText(source));
-      for (const index of findMatches(lines)) commentLines.add(startLine + index);
+      for (const index of findMatches(lines)) commentLines.push(index === null ? null : startLine + index);
     }
-    return commentLines.size === 1 ? commentLines.values().next().value : null;
+    return commentLines;
+  };
+
+  let reflectionsByName;
+  const getReflections = name => {
+    reflectionsByName ??= indexTypedocReflections(data);
+    return reflectionsByName.get(name) ?? [];
+  };
+  const getSource = node => {
+    const id = data.symbolIdMap?.[node.id];
+    const source = typedocDeclarationSource(node, repoRoot, repoFiles);
+    if (!source || typeof id?.packagePath !== 'string' || !id.packagePath) return null;
+    // The symbol ID is relative to the package of the declaration, even when a map points elsewhere.
+    const mappedFile = typedocMappedDeclaration(source.file, repoRoot, repoFiles, getFileText);
+    if (!mappedFile) return null;
+    if (id.packageName === '<unknown>') {
+      return posix.isAbsolute(toPosix(id.packagePath)) && normalizeRepoPath(id.packagePath, repoRoot) === mappedFile
+        ? source : null;
+    }
+    const pkg = getPackage(posix.dirname(source.file));
+    return pkg && pkg.name === id.packageName && posix.relative(pkg.directory, mappedFile) === id.packagePath
+      ? source : null;
+  };
+  const locateInComment = (candidates, findMatches) => {
+    const occurrences = [];
+    for (const {node, signature} of candidates) {
+      const source = getSource(node);
+      const lines = source && findInSymbolComment(source, signature, findMatches);
+      if (!lines) return null;
+      for (const line of lines) occurrences.push({file: source.file, line, name: node.name});
+    }
+    return occurrences.length === 1 && occurrences[0].line !== null ? occurrences[0] : null;
+  };
+  const recordWarning = (rule, severity, message, evidence, location) => {
+    if (!location) {
+      unlocatedWarnings.push({rule, message});
+      return;
+    }
+    const {file, line} = location;
+    findings.push({tool: 'typedoc', rule, file, line, severity, message, evidence});
   };
 
   const cliLines = readPackageVersion('typedoc', toolsRoot) === TYPEDOC_DIAGNOSTIC_VERSION ? String(rawCliOutput ?? '')
     .split(/\r?\n/)
     .map(l => l.replace(/\x1B\[[0-9;]*m/g, '').trim())
     .filter(Boolean) : [];
-  let filesByDiagnosticPath;
 
+  const diagnosticCounts = new Map();
+  for (const text of cliLines) diagnosticCounts.set(text, (diagnosticCounts.get(text) ?? 0) + 1);
   for (const lineText of cliLines) {
+    const uniqueWarning = diagnosticCounts.get(lineText) === 1;
     // 1. Parâmetro JSDoc @param desatualizado / inexistente na assinatura real
     const unusedParamMatch = lineText.match(
       /^\[warning\] The signature (\S+) has an @param with name "([^"]+)", which was not used$/,
@@ -910,24 +986,18 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     if (unusedParamMatch) {
       const sigName = unusedParamMatch[1];
       const paramName = unusedParamMatch[2];
-      const sym = resolveSymbol(sigName);
-      if (!sym) continue;
-      const file = sym.file;
       const paramTag = new RegExp(String.raw`^\s*@param\s+(?:\{[^}]+\}\s+)?\[?${escapeRegExp(paramName)}(?=\s|[\]=]|$)`);
-      const line = findInSymbolComment(sym, lines => lines.flatMap((text, index) => paramTag.test(text) ? [index] : []));
-      const dedupKey = `PARAM:${file}:${sigName}:${paramName}`;
-      if (!seenKeys.has(dedupKey)) {
-        seenKeys.add(dedupKey);
-        findings.push({
-          tool: 'typedoc',
-          rule: 'DOC-TYPEDOC-PARAM-DESATUALIZADO',
-          file,
-          line: line ?? sym.line,
-          severity: 'alta',
-          message: `JSDoc de "${sym.name}" documenta o parâmetro "@param ${paramName}", que não existe na assinatura real da função.${line === null ? ' Linha da tag indeterminada.' : ''}`,
-          evidence: lineText,
-        });
-      }
+      // TypeDoc removes unused @param tags before serializing comments.
+      const candidates = getReflections(sigName).filter(
+        ({signature, node}) => signature && !node.parameters?.some(param => param.name === paramName),
+      );
+      const location = uniqueWarning ? locateInComment(
+        candidates,
+        lines => lines.flatMap((text, index) => paramTag.test(text) ? [index] : []),
+      ) : null;
+      recordWarning('DOC-TYPEDOC-PARAM-DESATUALIZADO', 'alta',
+        `JSDoc de "${location?.name ?? sigName}" documenta o parâmetro "@param ${paramName}", que não existe na assinatura real da função.`,
+        lineText, location);
       continue;
     }
 
@@ -940,58 +1010,51 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
       const expectedSuggestion = targetLink.startsWith('@') && !targetLink.includes('!')
         ? targetLink.replace(/[.#~]/, '!') : undefined;
       if (suggestion !== expectedSuggestion) continue;
-      const sym = resolveSymbol(symRef);
-      if (!sym) continue;
-      const file = sym.file;
-      const line = findInSymbolComment(sym, lines => commentLinkLines(lines, targetLink));
-      const dedupKey = `LINK:${file}:${symRef}:${targetLink}`;
-      if (!seenKeys.has(dedupKey)) {
-        seenKeys.add(dedupKey);
-        findings.push({
-          tool: 'typedoc',
-          rule: 'DOC-TYPEDOC-LINK-QUEBRADO',
-          file,
-          line: line ?? sym.line,
-          severity: 'media',
-          message: `Comentário JSDoc de "${sym.name}" contém referência {@link ${targetLink}} para símbolo inexistente.${line === null ? ' Linha da tag indeterminada.' : ''}`,
-          evidence: lineText,
-        });
-      }
+      const candidates = getReflections(symRef).flatMap(reflection => {
+        const {node} = reflection;
+        return [
+          ...(node.comment?.summary ?? []), ...(node.comment?.blockTags ?? []).flatMap(tag => tag.content ?? []),
+        ].filter(part => part.kind === 'inline-tag' && TYPEDOC_LINK_TAGS.has(part.tag) && !part.target
+          && part.text.trim() === targetLink).map(part => ({reflection, tag: part.tag}));
+      });
+      const location = uniqueWarning && candidates.length === 1
+        ? locateInComment([candidates[0].reflection], lines => commentLinkLines(lines, targetLink, candidates[0].tag))
+        : null;
+      recordWarning('DOC-TYPEDOC-LINK-QUEBRADO', 'media',
+        `Comentário JSDoc de "${location?.name ?? symRef}" contém referência {@link ${targetLink}} para símbolo inexistente.`,
+        lineText, location,
+      );
       continue;
     }
 
     // 3. Símbolo exportado sem documentação reportado pela validação do TypeDoc
     const notDocMatch = lineText.match(
-      /^\[warning\] (\S+) \((?:Enum|EnumMember|Variable|Function|Class|Interface|Method|Accessor|TypeAlias|CallSignature|ConstructorSignature|GetSignature|SetSignature)\), defined in (.+), does not have any documentation$/,
+      /^\[warning\] (\S+) \(([A-Za-z]+)\), defined in (.+), does not have any documentation$/,
     );
     if (notDocMatch) {
-      const symRef = notDocMatch[1];
-      if (symRef.includes('.__type.')) continue;
-      filesByDiagnosticPath ??= indexTypedocDiagnosticPaths(repoRoot, repoFiles, getFileText);
-      const file = filesByDiagnosticPath.get(notDocMatch[2]);
-      if (!file) continue;
-      const sym = resolveSymbol(symRef, file);
-      const line = clampLine(sym?.line ?? 1);
-      const shortName = sym?.name ?? (symRef.includes('.') ? symRef.split('.').pop() : symRef);
-      const dedupKey = `NODOC:${file}:${sym?.qualifiedName ?? symRef}`;
-      if (!seenKeys.has(dedupKey)) {
-        seenKeys.add(dedupKey);
-        findings.push({
-          tool: 'typedoc',
-          rule: 'DOC-TYPEDOC-SIMBOLO-SEM-DOC',
-          file,
-          line,
-          severity: 'media',
-          message: `Símbolo público exportado "${shortName}" em ${file} não possui documentação JSDoc/TSDoc.${sym ? '' : ' Linha da declaração indeterminada.'}`,
-          evidence: lineText,
-        });
-      }
+      const [, symRef, kindName, reportedPath] = notDocMatch;
+      const kind = TYPEDOC_DOCUMENTATION_KINDS.get(kindName);
+      if (!kind || symRef.includes('.__type.')) continue;
+      reportedUndocumented.add(symRef);
+      const matches = getReflections(symRef).filter(({node, parent, signature}) => {
+        const id = data.symbolIdMap?.[node.id];
+        return node.kind === kind && id && `${id.packageName}/${id.packagePath}` === reportedPath
+          && !hasTypedocComment(node) && !(signature && hasTypedocComment(parent));
+      });
+      const source = uniqueWarning && matches.length === 1 ? getSource(matches[0].node) : null;
+      // TypeDoc may substitute the parent's coordinates for a signature, even within the same file.
+      const location = source && (!matches[0].signature || findDeclaration(source, true))
+        ? {file: source.file, line: source.line}
+        : null;
+      recordWarning('DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'media',
+        `Símbolo público exportado "${symRef}" (${kindName}) não possui documentação JSDoc/TSDoc.`,
+        lineText, location);
     }
   }
 
   // Fallback a partir do modelo de reflexão JSON para símbolos exportados sem comentário
   for (const sym of symbols) {
-    if (!sym.hasDoc) {
+    if (!sym.hasDoc && !reportedUndocumented.has(sym.qualifiedName)) {
       const dedupKey = `NODOC:${sym.file}:${sym.qualifiedName}`;
       if (!seenKeys.has(dedupKey)) {
         seenKeys.add(dedupKey);
@@ -1008,7 +1071,7 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
     }
   }
 
-  return {symbols, findings};
+  return {symbols, findings, unlocated: unlocatedWarnings.length, unlocatedWarnings};
 }
 
 /**
@@ -1724,8 +1787,16 @@ export async function runCollector(opts = {}) {
           tool: 'typedoc',
           version: versions.typedoc,
           status: 'ok',
-          detail: `arquivos_codigo=${codeFiles.length}, simbolos_exportados=${symbols.length}, documentados=${documentedCount}, sem_doc=${undocumentedCount}, achados_typedoc=${tdFindings.length + mdFindings.length}`,
+          detail: `arquivos_codigo=${codeFiles.length}, simbolos_exportados=${symbols.length}, documentados=${documentedCount}, sem_doc=${undocumentedCount}, achados_typedoc=${tdFindings.length + mdFindings.length}, avisos_sem_origem=${parsedTd.unlocated}`,
         });
+        for (const {rule, message} of parsedTd.unlocatedWarnings) {
+          coverage.push({
+            tool: 'typedoc:aviso',
+            version: versions.typedoc,
+            status: 'skipped',
+            detail: `${rule}. Linha indeterminada. ${message}`,
+          });
+        }
 
         const symbolsByFile = new Map();
         for (const symbol of symbols) {
