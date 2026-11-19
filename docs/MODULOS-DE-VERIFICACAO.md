@@ -282,7 +282,7 @@ O repositório de exemplo com falhas plantadas, como injeção, segredo no hist�
 
 ### Prova do módulo 2
 
-**QA pesado.** Em homologação, a CLI `personal:qa` executou os testes Node três vezes, registrou os mutantes medidos pelo Stryker e analisou acessibilidade de HTML estático com axe. A imagem de `b1b254f3` passou no laboratório. A revisão de `211dc9aa` encontrou casos de asserção inalcançável e função impura contados como prova. A rodada C2-R6 cobre esses casos. Contraste visual, testes Python e Go e varreduras de entradas externas ficam fora dessa prova.
+**QA pesado.** Em homologação, a CLI `personal:qa` executou os testes Node três vezes, registrou os mutantes medidos pelo Stryker e analisou acessibilidade de HTML estático com axe. A imagem de `b1b254f3` passou no laboratório. A revisão de `211dc9aa` encontrou casos de asserção inalcançável e função impura contados como prova. Na rodada C2-R6, a imagem fixada em `b688989e` passou em 33 testes e um caso opcional ficou sem execução. Em `91a6c71a`, a CLI encontrou o defeito plantado e recusou a correção sem confirmação. A prova de idempotência usou uma medição sintética identificada no mesmo banco de teste. Contraste visual, testes Python e Go e varreduras de entradas externas ficam fora dessa prova.
 
 ### Prova do módulo 3
 
@@ -294,19 +294,19 @@ O repositório de exemplo com falhas plantadas, como injeção, segredo no hist�
 
 ### Prova do módulo 5
 
-**Banco de dados.** Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A revisão abriu C5-R4 para atribuição de erros e cobertura do workload.
+**Banco de dados.** Em homologação, `personal:banco` usou PostgreSQL descartável para aplicar migrações, restaurar dados de teste e analisar consultas. A prova da imagem em `fbd1ed3f` teve nove testes aprovados. Um laboratório adicional excedeu o prazo de uma migração válida e verificou o SQLSTATE 57014 na cobertura. A imagem de C5-R4, fixada em `a3d02361`, passou nos dez testes de banco, incluindo falha no commit do lote, migração e restauração. A revisão independente está pendente.
 
 ### Prova do módulo 6
 
-**Prontidão para produção.** Em homologação, `personal:prontidao` registrou evidências locais de configuração, Gitleaks, Hadolint e Trivy em execução offline. O laboratório exerceu também a conversão de um achado em tarefa. A revisão da versão `bce4196c` abriu C6-R7 para corrigir a cobertura operacional e manter só a localização de segredos nos achados.
+**Prontidão para produção.** Em homologação, `personal:prontidao` registrou evidências locais de configuração, Gitleaks, Hadolint e Trivy em execução offline. O laboratório exerceu também a conversão de um achado em tarefa. A imagem fixada em `a2c2a68f` passou em 19 testes de prontidão e sondagem local. A revisão de `757eced2` identificou omissões na análise de Compose, dotenv e configuração por site, além de valores de cabeçalho que precisam ser removidos da evidência. A ordem C6-R8 cobre esses pontos.
 
 ### Prova do módulo 7
 
-**Desempenho.** Em homologação, a CLI pessoal mediu Lighthouse, k6, CPU e PostgreSQL no mesmo snapshot. A imagem de `f5f9a9ec` passou nos três laboratórios com defeito e controle, backend indisponível e projeto vazio. A prova de `db875596` conferiu a associação de amostras do V8 à função, ao arquivo e à linha. O PostgreSQL de teste registrou as contagens antes e depois do workload. O caso HTTP usou somente tráfego local entre contêineres isolados.
+**Desempenho.** Em homologação, a CLI pessoal mediu Lighthouse, k6, CPU e PostgreSQL no mesmo snapshot. A imagem de `f5f9a9ec` passou nos três laboratórios com defeito e controle, backend indisponível e projeto vazio. A prova de `db875596` conferiu a associação de amostras do V8 à função, ao arquivo e à linha. O PostgreSQL de teste registrou as contagens antes e depois do workload. O caso HTTP usou somente tráfego local entre contêineres isolados. A revisão independente de `9a7018c4` abriu C7-R5 para recuperação de recursos Docker, precedência das rotas, origem do baseline e continuidade da medição estática.
 
 ### Prova do módulo 8
 
-**Documentação viva.** Em homologação, `personal:documentacao` produziu `api.json` e `dependencias.mmd`, com verificação de conteúdo antes da publicação no relatório privado. Os 16 testes da imagem de `bdcaa6c6` passaram. A revisão abriu C8-R4 para variantes de arestas Mermaid e resolução de caminhos TypeScript.
+**Documentação viva.** Em homologação, `personal:documentacao` produziu `api.json` e `dependencias.mmd`, com verificação de conteúdo antes da publicação no relatório privado. Os 18 testes da imagem fixada em `da58dca6` passaram. A revisão de `9c2782fd` identificou problemas de atribuição de arestas, precedência de configuração TypeScript e leitura de JSDoc. A rodada C8-R5 está aberta.
 
 ### Prova do módulo 9
 
