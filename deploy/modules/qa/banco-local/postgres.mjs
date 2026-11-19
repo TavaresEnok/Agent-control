@@ -36,8 +36,18 @@ async function readerScopeConfirmed(psql, db, reader) {
     const result = await psql(db, [
       'BEGIN READ ONLY',
       'SET LOCAL search_path TO pg_catalog, pg_temp',
-      `WITH ${fixtureScope}
+      // O SELECT no pai pode alcançar descendentes sem consultar as ACLs deles.
+      `WITH RECURSIVE ${fixtureScope},
+      reachable_relations AS (
+        SELECT oid FROM fixture_relations
+        UNION
+        SELECT i.inhrelid FROM pg_catalog.pg_inherits i
+        JOIN reachable_relations r ON r.oid = i.inhparent
+      )
       SELECT NOT EXISTS (
+        SELECT 1 FROM reachable_relations r
+        WHERE NOT EXISTS (SELECT 1 FROM fixture_relations f WHERE f.oid = r.oid)
+      ) AND NOT EXISTS (
         SELECT 1 FROM pg_class c
         WHERE c.oid >= ${firstNormalObjectOid}
           AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
