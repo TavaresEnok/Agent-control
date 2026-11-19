@@ -12,6 +12,12 @@ const containerId = /^[a-f0-9]{64}$/;
 const ownerLabel = 'org.agent-control.performance.owner';
 const cleanupTimeout = 5000;
 const defaultDirectory = join(homedir(), '.local', 'state', 'agent-control', 'performance-docker');
+const failedSpawns = new WeakSet();
+
+function isSpawnError(error) {
+  return ['ENOENT', 'ENOTDIR', 'EACCES', 'ENOEXEC', 'EAGAIN'].includes(error?.code) &&
+    /^spawn(?: |$)/.test(error.syscall ?? '');
+}
 
 export function performanceDocker(dockerBinary, cwd) {
   if (dockerBinary !== 'docker' && !isAbsolute(dockerBinary)) throw new Error('caminho local do Docker inválido');
@@ -20,19 +26,26 @@ export function performanceDocker(dockerBinary, cwd) {
   return (args, {timeout = 15_000, limit = 8192, signal} = {}) => {
     signal?.throwIfAborted();
     return new Promise((ok, fail) => {
-      execFile(dockerBinary, args, {cwd, env, encoding: 'utf8', timeout, maxBuffer: limit, killSignal: 'SIGKILL', signal},
-        (error, stdout, stderr) => {
-          if (!error) return ok(stdout.trim());
-          error.stdout = stdout;
-          error.stderr = stderr;
-          fail(error);
-        });
+      try {
+        const child = execFile(dockerBinary, args,
+          {cwd, env, encoding: 'utf8', timeout, maxBuffer: limit, killSignal: 'SIGKILL', signal},
+          (error, stdout, stderr) => {
+            if (!error) return ok(stdout.trim());
+            error.stdout = stdout;
+            error.stderr = stderr;
+            if (!child.pid && isSpawnError(error)) failedSpawns.add(error);
+            fail(error);
+          });
+      } catch (error) {
+        if (isSpawnError(error)) failedSpawns.add(error);
+        fail(error);
+      }
     });
   };
 }
 
-export function creationRefused(error) {
-  if (['ENOENT', 'ENOTDIR', 'EACCES', 'ENOEXEC'].includes(error?.code) && error.syscall?.startsWith('spawn ')) return true;
+function creationRefused(error) {
+  if (failedSpawns.has(error)) return true;
   if (error?.code !== 1 || error.killed || error.signal || error.stdout?.trim()) return false;
   // Apenas recusas anteriores à criação. Uma mensagem genérica do daemon
   // também pode ocorrer quando o cliente perde a resposta da operação.
@@ -104,9 +117,11 @@ class RecoveryRun {
     this.directory = directory;
     this.name = name;
     this.state = state;
+    this.dirty = false;
   }
 
   async save() {
+    this.dirty = true;
     const next = anchored(this.directory, 'state.next');
     const file = await open(next, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
     try {
@@ -115,6 +130,7 @@ class RecoveryRun {
     } finally { await file.close(); }
     await rename(next, anchored(this.directory, 'state.json'));
     await this.directory.sync();
+    this.dirty = false;
   }
 
   socket(file) {
@@ -129,8 +145,16 @@ class RecoveryRun {
     if (!isContainerName(this.name, name) || Object.hasOwn(this.state.resources, name)) {
       throw new Error('reserva Docker inválida');
     }
-    this.state.resources[name] = false;
-    await this.save();
+    try {
+      await this.record(name, false);
+    } catch (error) {
+      // A reserva pode estar visível após o rename, mas nenhum comando saiu.
+      try { await this.record(name); }
+      catch (rollback) {
+        throw new AggregateError([error, rollback], 'falha ao gravar e desfazer a reserva Docker', {cause: error});
+      }
+      throw error;
+    }
     return ['--label', `${ownerLabel}=${this.state.owner}`];
   }
 
@@ -165,6 +189,12 @@ class RecoveryRun {
     return id;
   }
 
+  async recordFailedCreation(name, error) {
+    const id = error?.stdout?.trim();
+    if (id && containerId.test(id)) await this.record(name, {id});
+    else if (creationRefused(error)) await this.record(name);
+  }
+
   async clean(docker, {attempts = 1, signal} = {}) {
     const options = {timeout: cleanupTimeout, signal};
     const names = Object.keys(this.state.resources).reverse();
@@ -177,15 +207,17 @@ class RecoveryRun {
         signal?.throwIfAborted();
         try {
           const recorded = this.state.resources[name];
-          const reference = typeof recorded === 'string' ? recorded : name;
+          if (recorded === undefined) break;
+          const reference = typeof recorded === 'string' ? recorded : recorded?.id ?? name;
           const id = await this.ownedContainer(docker, reference, options);
           if (id) {
             if (id !== recorded) await this.record(name, id);
+            else if (this.dirty) await this.save();
             await docker(['container', 'rm', '-f', id], options);
             if (await this.ownedContainer(docker, id, options)) throw new Error('contêiner Docker ainda presente');
           }
-          // Ausência não encerra uma criação cuja resposta não foi confirmada.
-          if (this.state.resources[name]) {
+          // Um ID recebido com erro fixa a busca, mas a ausência ainda é inconclusiva.
+          if (id || recorded === true || typeof recorded === 'string') {
             await this.record(name);
             break;
           }
@@ -196,16 +228,18 @@ class RecoveryRun {
         if (attempt + 1 < attempts) await delay(200, undefined, {signal});
       }
     }
-    return this.pending;
+  }
+
+  async finish() {
+    if (!this.pending) {
+      await rm(anchored(this.registry, this.name), {recursive: true, force: true});
+      await this.registry.sync();
+    } else if (this.dirty) await this.save();
   }
 
   async close() {
-    try {
-      if (!this.pending) {
-        await rm(anchored(this.registry, this.name), {recursive: true, force: true});
-        await this.registry.sync();
-      }
-    } finally {
+    try { await this.finish(); }
+    finally {
       try { await this.directory.close(); }
       finally { await this.registry.close(); }
     }
@@ -215,21 +249,31 @@ class RecoveryRun {
 export async function openPerformanceRecoveryRun(name, recoveryDirectory) {
   if (!runName.test(name)) throw new Error('nome de execução Docker inválido');
   const registry = await openRegistry(recoveryDirectory);
-  let staging, directory;
+  let runPath, directory;
   try {
-    staging = await mkdtemp(anchored(registry, '.new-'));
-    directory = await privateDirectory(staging);
+    runPath = await mkdtemp(anchored(registry, '.new-'));
+    directory = await privateDirectory(runPath);
     if (!await tryLock(directory)) throw new Error('trava Docker inesperadamente ocupada');
     const run = new RecoveryRun(registry, directory, name, {owner: randomUUID(), resources: {}});
     run.path = join(resolve(recoveryDirectory ?? defaultDirectory), name);
     await run.save();
-    await rename(staging, anchored(registry, name));
+    const published = anchored(registry, name);
+    await rename(runPath, published);
+    runPath = published;
     await registry.sync();
     return run;
   } catch (error) {
-    if (directory) await directory.close();
-    if (staging) await rm(staging, {recursive: true, force: true});
-    await registry.close();
+    try {
+      if (runPath) {
+        await rm(runPath, {recursive: true, force: true});
+        await registry.sync();
+      }
+    } catch (rollback) {
+      throw new AggregateError([error, rollback], 'falha ao publicar e desfazer o registro Docker', {cause: error});
+    } finally {
+      try { await directory?.close(); }
+      finally { await registry.close(); }
+    }
     throw error;
   }
 }
@@ -245,7 +289,9 @@ async function readState(directory, name) {
         Object.entries(state.resources).some(([key, value]) => {
           if (key === legacyVolume(name)) return typeof value !== 'boolean';
           return !isContainerName(name, key) || !(typeof value === 'boolean' ||
-            (typeof value === 'string' && containerId.test(value)));
+            (typeof value === 'string' && containerId.test(value)) ||
+            (value && typeof value === 'object' && Object.keys(value).length === 1 &&
+              typeof value.id === 'string' && containerId.test(value.id)));
         })) {
       throw new Error('registro Docker inválido');
     }
@@ -272,12 +318,10 @@ export async function reconcilePerformanceResources({recoveryDirectory, signal} 
         // Outro reconciliador pode ter apagado o diretório antes da aquisição.
         const state = await readState(directory, name);
         const run = new RecoveryRun(registry, directory, name, state);
-        if (await run.clean(docker, {signal})) result.pending++;
-        else {
-          await rm(anchored(registry, name), {recursive: true, force: true});
-          await registry.sync();
-          result.cleaned++;
-        }
+        await run.clean(docker, {signal});
+        await run.finish();
+        if (run.pending) result.pending++;
+        else result.cleaned++;
       } catch (error) {
         signal?.throwIfAborted();
         if (error.code !== 'ENOENT') result.invalid++;

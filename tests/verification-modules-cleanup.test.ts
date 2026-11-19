@@ -689,6 +689,7 @@ test('rejeição de imagem ausente registra falha sem deixar uma reserva de cont
     };
     const result = await runVerificationModule({...base, image, executeCollectorProcess: execute});
     assert.equal(result.hasToolFailure, true);
+    assert.match(result.toolCoverage[0]!.detail, /VERIFY_MODULE_IMAGE_MISSING/);
     const {rows: [row]} = await base.ledger.pool.query('SELECT collector_container_token FROM ac_verify_runs WHERE id=$1', [result.runId]);
     assert.equal(row.collector_container_token, null);
     assert.equal((await runVerificationModule({...base, collectorOutput: output})).hasToolFailure, false);
