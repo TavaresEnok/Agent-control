@@ -51,16 +51,15 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
     expectedOkTools: [
       'node-test-v8',
       'stryker-mutator',
-      'fast-check',
-      'playwright-test-audit',
+      'qa-propriedades-funcionais',
+      'qa-auditoria-estatica-testes',
       'axe-core',
       'swagger-parser',
     ],
     matchFinding: f =>
       f.where.file === 'src/defective-pricing.ts'
       && (f.title.startsWith('QA-COBERTURA-FUNCAO-SEM-TESTE')
-        || f.title.startsWith('QA-STRYKER-MUTANTE-SOBREVIVENTE')
-        || f.title.startsWith('QA-FASTCHECK-PROPRIEDADE-VIOLADA')),
+        || f.title.startsWith('QA-STRYKER-MUTANTE-SOBREVIVENTE')),
     coverageDetailPattern: /qa-arquivo:src\/defective-pricing\.ts/,
   },
   arquitetura: {
