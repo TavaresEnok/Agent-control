@@ -737,10 +737,20 @@ function declaredJsProperty(path, file, content) {
 
 function isThrowingGuard(path) {
   const condition = path.find(parent => parent.key === 'test' && parent.parentPath?.isIfStatement());
-  if (!condition) return false;
+  if (!condition || condition.getFunctionParent() !== path.getFunctionParent()) return false;
   const {consequent, alternate} = condition.parentPath.node;
   return [consequent, alternate].some(branch => branch?.type === 'ThrowStatement' ||
     (branch?.type === 'BlockStatement' && branch.body.some(statement => statement.type === 'ThrowStatement')));
+}
+
+function hasManualCheck(path) {
+  if (isThrowingGuard(path)) return true;
+  const declaration = path.parentPath;
+  if (path.key !== 'init' || !declaration.isVariableDeclarator() || !declaration.get('id').isIdentifier()) return false;
+  const binding = declaration.scope.getBinding(declaration.node.id.name);
+  if (binding?.path !== declaration || !binding.constant) return false;
+  const owner = path.getFunctionParent();
+  return binding.referencePaths.some(ref => ref.getFunctionParent() === owner && isThrowingGuard(ref));
 }
 
 /** Levanta candidatos estáticos sem confundir opções do teste com seu callback. */
@@ -796,7 +806,7 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
 
       const {candidate} = enclosing;
       const imported = importedCall(path, relFile);
-      if (imported && isThrowingGuard(path)) candidate.limitedFeatures.push(featureIdentity(imported));
+      if (imported && hasManualCheck(path)) candidate.limitedFeatures.push(featureIdentity(imported));
       const {local, receiver, property, binding} = target;
       const context = owner.node.params[0]?.name;
       const isTestContext = enclosing.test.nodeRunner && context && receiver === context &&
@@ -878,17 +888,26 @@ function readTargetList(text) {
 function requirementTargets(body) {
   const spans = /`[^`]+`(?!`)/g;
   const references = [];
-  const ambiguous = body.startsWith('`') || /\(\s*`/.test(body);
+  let ambiguousQualified = false;
   for (let span; (span = spans.exec(body));) {
     const {targets, rest} = readTargetList(body.slice(span.index));
     spans.lastIndex = body.length - rest.length;
-    if (span.index === 0 && /^[.!?]?$/.test(rest.trim())) return {kind: 'symbols', targets};
-    if (targets.some(target => target.source !== undefined)) {
-      // Em prosa, referências qualificadas mantêm a origem e uma lista mista deixa os demais termos ambíguos.
-      references.push(...targets.map(target => target.source === undefined ? {ambiguous: true} : target));
+    const leading = span.index === 0;
+    if (leading && /^[.!?]?$/.test(rest.trim())) return {kind: 'symbols', targets};
+    if (!targets.some(target => target.source !== undefined)) continue;
+    const parenthesized = body.slice(0, span.index).trimEnd().endsWith('(') && rest.trimStart().startsWith(')');
+    // Em texto livre, a mesma qualificação pode indicar a origem de um valor esperado.
+    if (!leading && !parenthesized) {
+      ambiguousQualified = true;
+      continue;
     }
+    references.push(...targets.map(target => target.source === undefined ? {ambiguous: true} : target));
   }
-  if (references.length) return {kind: 'symbols', targets: references};
+  if (references.length) {
+    if (ambiguousQualified) references.push({ambiguous: true});
+    return {kind: 'symbols', targets: references};
+  }
+  const ambiguous = ambiguousQualified || body.startsWith('`') || /\(\s*`/.test(body);
   return {kind: ambiguous ? 'ambiguous' : 'title'};
 }
 
@@ -999,7 +1018,7 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       let verification = 'prova não medida: cobertura limitada';
       if (proved) verification = 'vínculo comprovado nas três passadas';
       else if (measured) verification = runtimeTests.length ? 'vínculo sem prova nas três passadas' : 'inventário completo: nenhum teste encontrado';
-      else if (outcomes.some(outcome => outcome.status === 'ambiguous')) verification = 'prova não medida: referência ambígua; informe `símbolo` de `arquivo`';
+      else if (outcomes.some(outcome => outcome.status === 'ambiguous')) verification = 'prova não medida: cobertura limitada por referência ambígua; informe `símbolo` de `arquivo`';
       else if (unresolved.length) verification = 'prova não medida: referência não resolvida';
       else if (noCandidate.length || outcomes.some(outcome => outcome.status === 'unavailable')) verification = 'prova não medida: somente análise estática';
       if (!measured && missing.length) verification += ', com lacuna medida';
