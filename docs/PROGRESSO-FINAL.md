@@ -891,3 +891,7 @@ PAUSADO-COTA
 - 19/11/2026 18:40 UTC — C9-ACEITE-ORIGEM encerrado com código 0.
 - 19/11/2026 18:40 UTC — revisor-C2-ACEITE-TRES-CONTROLES iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 18:41 UTC — Conformidade passou em 37/37 com CLI e ferramentas reais. A revisão indicou casos de alias, parâmetro padrão e junção nos quais a origem podia ficar incorreta. O próximo candidato deve indicar lacuna onde não demonstrar o fluxo. A suíte de prontidão foi reordenada para que o último QA tenha prioridade no banco de bancada.
+- 19/11/2026 18:42 UTC — C2-ACEITE-TRES-CONTROLES encerrado com código 0.
+- 19/11/2026 18:42 UTC — A3-REPLAY-PROVA encerrado com código 0.
+- 19/11/2026 18:42 UTC — trabalho-C9-ATRIBUICAO-CONSERVADORA iniciado em final-c9 por Sol high normal.
+- 19/11/2026 18:43 UTC — O revisor aceitou os dois controles de Go e PostgreSQL no candidato 69adc794. Restou uma atribuição de operação em mensagem com aspas tipográficas aninhadas. A ordem cobre aninhamento, fechamento e os positivos existentes.
