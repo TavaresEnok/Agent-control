@@ -1,0 +1,12 @@
+{
+  "name": "fixture-dependencias-limpo",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "hono": "^4.13.19",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

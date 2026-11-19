@@ -1,0 +1,9 @@
+id: express5-res-sendfile-lower-ts
+language: TypeScript
+severity: warning
+message: "res.sendfile() (minúsculo) pode usar API removida no Express 5; revise antes de substituir por res.sendFile()"
+rule:
+  pattern: $RES.sendfile($$$ARGS)
+constraints:
+  RES:
+    regex: "^(res|response)$"
