@@ -568,3 +568,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:34 UTC — Revisor encerrou C-BASE-IMAGEM em 53a37821 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:34 UTC — Revisão C7-R7 iniciada por Sol high normal somente leitura em 9f22e01e.
 - 19/11/2026 06:34 UTC — C4 4a35e97e: 29/29 nos testes das respostas HTTP sintéticas, sem tráfego ao registro. As respostas de erro encerram a conexão, catálogo inválido fica sem medição e uma proposta que recua no lock é descartada antes da consulta. A reconstrução da imagem e a prova física seguem.
+- 19/11/2026 06:35 UTC — Trabalhador encerrou C2-NAVEGADOR-R2 em 9eaeb0cb (código 0). Gerente confere a entrega.
+- 19/11/2026 06:35 UTC — Trabalho C2-MATRIZ-R12 iniciado por Sol high normal em final-qa-matriz-r12.
+- 19/11/2026 06:37 UTC — Trabalhador encerrou C2-MUTACAO-R2 em a386516b (código 0). Gerente confere a entrega.
+- 19/11/2026 06:37 UTC — Trabalho C7-HISTORICO-R4 iniciado por Sol high normal em final-c7-hist-r4.
+- 19/11/2026 06:37 UTC — C4 901dae24: 36/36 incluindo OpenRewrite na nova imagem. Base 918324f4: 28/28 com Docker e PostgreSQL, incluindo imagem realmente ausente e criação de resultado ambíguo mantida no diário. O primeiro disparo usava um digest antigo de QA que já havia saído do daemon; repetido com o digest disponível.
