@@ -577,3 +577,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:38 UTC — Revisão C5-R7 iniciada por Sol high normal somente leitura em 1cd11ad5.
 - 19/11/2026 06:38 UTC — QA: o laboratório da imagem executou quatro exemplos OpenAPI e duas interações Pact por socket local. Oito testes passaram sem saltos. Em b05e9d24, chegaram também a cobertura por HTML e o tratamento de estados de mutação/propriedades Python/Go. As duas correções recebem nova prova sobre a imagem integrada.
 - 19/11/2026 06:39 UTC — C7-R7 recebeu dois apontamentos independentes sobre recuperação por identidade e paginação estática do Lighthouse; a nova ordem é separada do cancelamento do histórico. QA e dependências contam agora com cópia privada das imagens em preparo para os aceites congelados.
+- 19/11/2026 06:42 UTC — Revisor encerrou C5-R7 em 1cd11ad5 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:42 UTC — Revisão C8-R8 iniciada por Sol high normal somente leitura em 79d499e8.
+- 19/11/2026 06:44 UTC — C5: a revisão de 1cd11ad5 apontou quatro casos de atribuição de erro em migrações; C5-R8 tratará os quadros ambíguos do PostgreSQL. C9: a imagem de 362efd58 passou em 31/31 com a CLI. As imagens atuais de QA e dependências foram exportadas e os arquivos gzip conferidos para recuperação do digest nos aceites em fila.
