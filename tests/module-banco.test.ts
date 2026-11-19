@@ -208,19 +208,23 @@ test('C5 laboratório por digest prova a migração, restauração e os três de
     assert.equal(clean.findings.some(row => row.rule === rule), false, rule);
   }
   const query = 'banco/queries/latency.sql';
-  const metrics = /^linha 2; (queryid=-?[1-9]\d*; amostras=3; média=(\d+\.\d{3}) ms; blocos hit\/read=\d+\/\d+) \| SQL medido \(sha256:([0-9a-f]{64})\)$/;
+  const metrics = /^ linha 2; (queryid=-?[1-9]\d*; amostras=3; média=(\d+\.\d{3}) ms; blocos hit\/read=\d+\/\d+) \| SQL medido \(sha256:([0-9a-f]{64})\)$/;
   for (const [variant, report] of [['defective', defective], ['clean', clean]] as const) {
-    const prefix = `pg_stat_statements:query:${query}: `;
-    const rows = report.coverage.filter(row => row.tool === 'pg_stat_statements' && row.detail.startsWith(prefix));
+    const prefix = `pg_stat_statements:query:${query}:`;
+    const rows = report.coverage.filter(row => row.tool === 'pg_stat_statements'
+      && (row.files?.includes(query) || row.detail.startsWith(prefix)));
     assert.equal(rows.length, 1, variant);
     const [row] = rows;
     assert.equal(row.status, 'ok', variant);
     assert.deepEqual(row.files, [query], variant);
+    assert.ok(row.detail.startsWith(prefix), variant);
     const measurement = metrics.exec(row.detail.slice(prefix.length));
     assert.ok(measurement, variant);
     const queryDigest = createHash('sha256').update(readFileSync(join(fixtures, variant, query))).digest('hex');
     assert.equal(measurement[3], queryDigest, variant);
-    assert.equal(Number(measurement[2]) >= 100, variant === 'defective', variant);
+    const mean = Number(measurement[2]);
+    // A média publicada tem três casas, enquanto o coletor decide antes do arredondamento.
+    assert.ok(variant === 'defective' ? mean >= 100 : mean <= 100, variant);
     const findings = report.findings.filter(item => item.rule === 'BANCO-CONSULTA-LENTA' && item.file === query);
     assert.deepEqual(findings.map(item => [item.tool, item.line, item.evidence]),
       variant === 'defective' ? [['pg_stat_statements', 2, measurement[1]]] : [], variant);
