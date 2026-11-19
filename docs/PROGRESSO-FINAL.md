@@ -450,3 +450,13 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:23 UTC — Revisão C5-R6 iniciada por Sol high normal somente leitura em dc0dff58.
 - 19/11/2026 05:24 UTC — Matriz dos módulos atualizada com os commits, números das provas físicas e resultados de revisão por módulo. A prova de prontidão distingue uma observação provável de um achado autorizado para correção.
 - 19/11/2026 05:24 UTC — Exame R5 integrado em 1fd88007. A prova com dois perfis sintéticos e PostgreSQL criou oito tarefas, uma para cada módulo, com o arquivo e o teste de regressão corretos. As verificações da CLI nativa e de cancelamento passaram. Tipo e persistência validados.
+- 19/11/2026 05:24 UTC — Trabalhador encerrou C2-R11 em 2a440fd9 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:24 UTC — Trabalho C2-MUTACAO-INTEGRACAO iniciado por Sol high normal em final-qa-mutacao-linguagens.
+- 19/11/2026 05:25 UTC — Suíte oficial de c2-medicoes-r3-base-r10 em 5805da0d: 255 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 05:26 UTC — Testes complementares de c2-medicoes-r3-base-r10 em 5805da0d: 52 aprovados.
+- 19/11/2026 05:26 UTC — Falha na validação de c2-medicoes-r3-base-r10 em laboratorio, código 1. Logs privados do gerente.
+- 19/11/2026 05:26 UTC — Validação de c2-chromium-r5 em 1fd88007 iniciada no checkout de integração.
+- 19/11/2026 05:26 UTC — QA R11 recebido em 2a440fd9 para prova física. A versão anterior do QA, 5805da0d, passou nos 255 arquivos da suíte oficial. A leitura de histórico de desempenho foi corrigida para reagir ao cancelamento durante uma página PostgreSQL e está em teste no ramo de integração de C7.
+- 19/11/2026 05:27 UTC — Revisor encerrou C5-R6 em dc0dff58 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:27 UTC — Revisão C8-R7 iniciada por Sol high normal somente leitura em c1d36024.
+- 19/11/2026 05:29 UTC — Histórico de desempenho corrigido em 004271d0. Os 23 testes do orquestrador passaram e uma conexão PostgreSQL bloqueada foi cancelada antes de soltar o bloqueio. A revisão independente de dc0dff58 achou casos adicionais de diagnóstico PostgreSQL; o refinamento está em C5-R7. Na suíte anterior 5805da0d passaram 255 arquivos e 52 complementares, e o laboratório confirmou a ausência do digest antigo. A suíte seguinte usa imagem etiquetada.
