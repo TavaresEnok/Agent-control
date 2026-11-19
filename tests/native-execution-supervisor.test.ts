@@ -109,7 +109,7 @@ class ExecutionRecoveryMemory{
   }
   if(text.includes('ac_provider_eligibility_assessments')){
    const grant=this.tables.ac_capacity_grants?.find(row=>row.id===params[0]&&row.state==='uncertain');
-   return grant?selected([{...grant,model:grant.model,effort:grant.effort}]):selected([]);
+   return grant?selected([{...grant,model:grant.model,effort:grant.effort,quota_status:'available',quota_exhausted:false}]):selected([]);
   }
   if(text.startsWith('INSERT INTO ac_native_execution_jobs')){
    this.insert('ac_native_execution_jobs',{id:params[0],grant_id:params[1],intent_id:params[2],context_id:params[3],manager_epoch:params[4],session_id:params[5],executor_digest:params[6],key_fingerprint:params[7],input_digest:params[8],base_id:params[9],role:params[10],account_id:params[11],profile_id:params[12],profile_digest:params[13],eligibility_revision:params[14],state:'uncertain',worker_id:null,tools_id:null,network_id:null,receipt:null});
