@@ -150,3 +150,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 02:27 UTC — Trabalhador encerrou C-BASE-R5 em b4668d56 (código 0). Gerente confere a entrega.
 - 19/11/2026 02:27 UTC — Trabalho C8-R4 iniciado por Sol high normal em final-c8.
 - 19/11/2026 02:29 UTC — C-BASE-R5 entregue em b4668d56. A preparação do exame incorporou a recuperação de relatórios antes da nova ordem. C4-R4 entregue em cbf83ce3, em construção e laboratório. As duas revisões independentes estão na fila. C3-FINAL identificou um achado baixo de contagem por arquivo para caminhos equivalentes.
+- 19/11/2026 02:30 UTC — C4-R4 passou 20 de 20 testes, incluindo o laboratório da imagem fixada em ec1122ff. C-BASE-R5 passou os três laboratórios Docker reais de limpeza física após perda de lease, tempo excedido e excesso de saída. O teste de runtime da suíte preliminar de QA passou ao disponibilizar os arquivos do frontend de Cezar no checkout descartável.
+- 19/11/2026 02:30 UTC — Revisor encerrou C2-R5 em 211dc9aa (código 0). Gerente confere a entrega.
+- 19/11/2026 02:30 UTC — Revisão C9 iniciada por Sol high normal somente leitura em a1e4ec28.
+- 19/11/2026 02:31 UTC — C9-R2 concluiu a construção da imagem e passou no laboratório de conformidade sobre a imagem final; o gerente segue com a revisão e a prova pela CLI.
+- 19/11/2026 02:31 UTC — Matriz C2-R5, Sol high normal, código 211dc9aa, revisão independente por modelo distinto do gerente. Dois altos, seis médios e um baixo. Aberta C2-R6 para registrar provas por execução, propriedade pura e erros por arquivo. Suíte preliminar de C2 em bc5fb353: 246 arquivos aprovados e dois com dependências ausentes nesse checkout. Os dois passaram na repetição após disponibilizar as dependências.
