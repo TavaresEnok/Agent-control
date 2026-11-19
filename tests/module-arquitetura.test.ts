@@ -226,17 +226,34 @@ test('origem e destino relativos usam a âncora local mesmo sem process.cwd()', 
     const cwd = t.mock.method(process, 'cwd', () => {
       throw new Error('a cópia relativa deve abrir o diretório atual diretamente');
     });
-    const open = t.mock.method(fs, 'openSync');
+    const nativeOpen = fs.openSync;
+    const anchors: number[] = [];
+    let reserved: number | undefined;
+    const open = t.mock.method(fs, 'openSync', (...args: Parameters<typeof nativeOpen>) => {
+      const [path, flags] = args;
+      // A primeira âncora já pode estar fechada. Reserve seu número para distinguir os dois retornos.
+      if (path === '.' && anchors.length === 1) reserved = nativeOpen('.', flags);
+      const fd = nativeOpen(...args);
+      if (path === '.') anchors.push(fd);
+      return fd;
+    });
     syncBuiltinESMExports();
     try {
       const snapshot = copyRepoSafely('entrada', 'saida');
       const opened = open.mock.calls.map(call => call.arguments[0]);
       assert.deepEqual(opened.filter(path => path === '.' || path === '/'), ['.', '.']);
+      assert.equal(anchors.length, 2);
+      assert.notEqual(anchors[0], anchors[1]);
+      assert.deepEqual(opened.filter(path => typeof path === 'string' && /\/(entrada|saida)$/.test(path)), [
+        `/proc/self/fd/${anchors[0]}/entrada`,
+        `/proc/self/fd/${anchors[1]}/saida`,
+      ]);
       assert.equal(snapshot.failure, undefined);
       assert.deepEqual(snapshot.copiedFiles, ['controle.ts']);
       assert.equal(readFileSync('saida/controle.ts', 'utf8'), 'export const ok = 1;');
     } finally {
       open.mock.restore();
+      if (reserved !== undefined) fs.closeSync(reserved);
       syncBuiltinESMExports();
       cwd.mock.restore();
     }
