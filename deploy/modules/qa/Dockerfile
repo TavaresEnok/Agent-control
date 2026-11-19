@@ -3,8 +3,13 @@ FROM docker.io/library/python:3.12.16-slim-bookworm@sha256:935c3c5b12357a7e10caa
 ADD --checksum=sha256:34b02417cf070e173989b3db962f7ed56d2f644307b2cf9d5a0f258e13084a61 https://files.pythonhosted.org/packages/9e/ee/a4cf96b8ce1e566ed238f0659ac2d3f007ed1d14b181bcb684e19561a69a/coverage-7.13.5-py3-none-any.whl /tmp/coverage-7.13.5-py3-none-any.whl
 RUN python3.12 -I -m pip install --disable-pip-version-check --no-index --no-deps \
     --target /opt/qa-coverage /tmp/coverage-7.13.5-py3-none-any.whl
+COPY mutacao-linguagens/install.sh mutacao-linguagens/requirements.lock /tmp/qa-mutation/
+RUN /tmp/qa-mutation/install.sh python /opt/qa-mutation-python
 
 FROM docker.io/library/golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS qa-go
+COPY mutacao-linguagens/install.sh /tmp/qa-mutation/
+COPY mutacao-linguagens/go-mutesting/ /tmp/qa-mutation/go-mutesting/
+RUN /tmp/qa-mutation/install.sh go /opt/go-mutesting-plan
 
 # Tag fixa v1.65.1-noble com digest OCI imutável conferido no registro MCR:
 # sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
@@ -30,6 +35,8 @@ RUN groupadd --system --gid 65532 qa \
 
 WORKDIR /opt/qa-tools
 COPY package.json package-lock.json qa-tools.lock.json verify-lock.mjs ./
+COPY mutacao-linguagens/requirements.lock ./mutacao-linguagens/
+COPY mutacao-linguagens/go-mutesting/go.mod mutacao-linguagens/go-mutesting/go.sum ./mutacao-linguagens/go-mutesting/
 RUN echo "fd08d53610a4d9e3cba811b3dbb94a25470d1def52728ac9d6521f579e3cabfd  package-lock.json" | sha256sum -c - \
     && node /opt/qa-tools/verify-lock.mjs \
     && npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
@@ -38,15 +45,19 @@ RUN echo "fd08d53610a4d9e3cba811b3dbb94a25470d1def52728ac9d6521f579e3cabfd  pack
 
 COPY entrypoint.sh /usr/local/bin/qa-entrypoint.sh
 COPY collect.mjs browser-qa.mjs visual-reference.mjs execute-tests.mjs language-tests.mjs node-test-runner.mjs python-test-runner.py /opt/qa-tools/
+COPY mutacao-linguagens/index.mjs mutacao-linguagens/measurement.mjs mutacao-linguagens/report.mjs mutacao-linguagens/python-runner.py /opt/qa-tools/mutacao-linguagens/
 COPY --from=qa-python /usr/local/bin/python3.12 /usr/local/bin/
 COPY --from=qa-python /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/
 COPY --from=qa-python /usr/local/lib/python3.12 /usr/local/lib/python3.12
 COPY --from=qa-python /opt/qa-coverage /opt/qa-coverage
+COPY --from=qa-python /opt/qa-mutation-python /opt/qa-tools/mutacao-linguagens/python-deps
 COPY --from=qa-go /usr/local/go /usr/local/go
+COPY --from=qa-go /opt/go-mutesting-plan /opt/qa-tools/mutacao-linguagens/go-mutesting-plan
 RUN chmod 0555 /usr/local/bin/qa-entrypoint.sh /opt/qa-tools/*.mjs \
     && chmod 0444 /opt/qa-tools/package.json /opt/qa-tools/package-lock.json /opt/qa-tools/qa-tools.lock.json /opt/qa-tools/python-test-runner.py \
     && /usr/local/bin/python3.12 -I -S -c 'import sqlite3, sys; sys.path.append("/opt/qa-coverage"); import coverage; assert sys.version_info[:3] == (3, 12, 16) and coverage.__version__ == "7.13.5"' \
-    && test "$(GOTOOLCHAIN=local /usr/local/go/bin/go env GOVERSION)" = "go1.27.4"
+    && test "$(GOTOOLCHAIN=local /usr/local/go/bin/go env GOVERSION)" = "go1.27.4" \
+    && node /opt/qa-tools/verify-lock.mjs --language-tools-installed
 
 USER 65532:65532
 WORKDIR /tmp
