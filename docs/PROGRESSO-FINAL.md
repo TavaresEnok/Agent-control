@@ -565,3 +565,6 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 06:32 UTC — Revisor encerrou C2-MUTACAO-INTEGRACAO em 9373c088 (código 0). Gerente confere a entrega.
 - 19/11/2026 06:32 UTC — Revisão C-BASE-IMAGEM iniciada por Sol high normal somente leitura em 53a37821.
 - 19/11/2026 06:33 UTC — C9 362efd58: 25/25 incluindo a fixture de atribuição de operações por AST, ScanCode, Presidio e controle sem identificação pessoal. Integração de homologação em b6229e11. As oito CLIs de 674c2dce passaram nos dez ensaios com banco e pedidos por escopo. A instalação viva segue em A2.
+- 19/11/2026 06:34 UTC — Revisor encerrou C-BASE-IMAGEM em 53a37821 (código 0). Gerente confere a entrega.
+- 19/11/2026 06:34 UTC — Revisão C7-R7 iniciada por Sol high normal somente leitura em 9f22e01e.
+- 19/11/2026 06:34 UTC — C4 4a35e97e: 29/29 nos testes das respostas HTTP sintéticas, sem tráfego ao registro. As respostas de erro encerram a conexão, catálogo inválido fica sem medição e uma proposta que recua no lock é descartada antes da consulta. A reconstrução da imagem e a prova física seguem.
