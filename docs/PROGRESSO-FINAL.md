@@ -776,3 +776,9 @@ PAUSADO-COTA
 - 19/11/2026 17:52 UTC — C5-R10 encerrado com código 0.
 - 19/11/2026 17:52 UTC — revisor-C9-R8 iniciado em agent-control por Sol high normal somente leitura.
 - 19/11/2026 17:53 UTC — QA no candidato 4c91bce3 integra o reparo do veredito 815e0ffd (6/6 com PostgreSQL) e a classificação de Go 9f23b190. A revisão do banco sobre fdfeb56e pediu evidência parcial quando o diagnóstico combina origens divergentes ou um quadro inline não reconhecido.
+- 19/11/2026 17:54 UTC — C7-FIXTURES-IMAGEM encerrado com código 0.
+- 19/11/2026 17:54 UTC — trabalho-C5-PROVENIENCIA-FINAL iniciado em final-c5 por Sol medium normal.
+- 19/11/2026 17:54 UTC — C2-BANCO-ESCOPO encerrado com código 0.
+- 19/11/2026 17:54 UTC — C9-R8 encerrado com código 0.
+- 19/11/2026 17:54 UTC — revisor-C8-VINCULO-FONTE iniciado em agent-control por Sol high normal somente leitura.
+- 19/11/2026 17:55 UTC — O conjunto de exame e reverificação passou em 67/67 no banco exclusivo. Na repetição dos cinco arquivos da suíte, o processo da CLI excedeu o limite especial de 2 s antes de verificar a recusa de FIFO. O teste passou com o mesmo prazo de 15 s usado pela CLI no restante do arquivo e com todas as asserções de recusa e integridade.
