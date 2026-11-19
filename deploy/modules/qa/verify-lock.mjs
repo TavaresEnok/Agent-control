@@ -25,6 +25,18 @@ export function verifyQaLockfiles(baseDir = dirname(fileURLToPath(import.meta.ur
     throw new Error('QA_BASE_IMAGE_DIGEST_INVALID');
   }
 
+  const {python, go, coverage} = pin.languageRuntimes ?? {};
+  for (const [name, runtime] of [['python', python], ['golang', go]]) {
+    if (!/^\d+\.\d+\.\d+$/.test(runtime?.version) ||
+        !runtime.image?.startsWith(`docker.io/library/${name}:${runtime.version}-`) ||
+        !/@sha256:[a-f0-9]{64}$/.test(runtime.image)) throw new Error('QA_LANGUAGE_RUNTIME_PIN_INVALID');
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(coverage?.version) || !/^[a-f0-9]{64}$/.test(coverage.sha256) ||
+      !coverage.url?.startsWith('https://files.pythonhosted.org/packages/') ||
+      !coverage.url.endsWith(`/coverage-${coverage.version}-py3-none-any.whl`)) {
+    throw new Error('QA_PYTHON_COVERAGE_PIN_INVALID');
+  }
+
   const declaredDeps = pkg.dependencies ?? {};
   const pinnedDeps = pin.dependencies ?? {};
   const lockPackages = lock.packages ?? {};

@@ -43,14 +43,19 @@ export function selectNodeSuite({manifest, testFiles, readTest, incomplete, nest
 }
 
 export function runBoundedNode(args, cwd, {timeoutMs = testTimeoutMs, maxBytes = maxOutputBytes} = {}) {
+  return runBoundedProcess(process.execPath, args, cwd, {timeoutMs, maxBytes}).then(({code, output}) => ({code, output}));
+}
+
+export function runBoundedProcess(binary, args, cwd, {timeoutMs = testTimeoutMs, maxBytes = maxOutputBytes, env = {}} = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawn(binary, args, {
       cwd, detached: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'],
-      env: {PATH: '/usr/bin:/bin', HOME: cwd, TMPDIR: '/tmp', LANG: 'C.UTF-8', TZ: 'UTC'},
+      env: {PATH: '/usr/bin:/bin', HOME: cwd, TMPDIR: '/tmp', LANG: 'C.UTF-8', TZ: 'UTC', ...env},
     });
     let size = 0;
     let problem;
     const output = [];
+    const diagnostics = [];
     const stop = reason => {
       problem ??= reason;
       if (!child.pid) return;
@@ -69,6 +74,7 @@ export function runBoundedNode(args, cwd, {timeoutMs = testTimeoutMs, maxBytes =
     child.stderr.on('data', chunk => {
       size += chunk.length;
       if (size > maxBytes) stop('QA_TEST_OUTPUT_LIMIT');
+      else diagnostics.push(chunk);
     });
     child.once('error', error => stop(`QA_TEST_SPAWN_${error.code ?? 'ERROR'}`));
     child.once('exit', () => {
@@ -85,7 +91,7 @@ export function runBoundedNode(args, cwd, {timeoutMs = testTimeoutMs, maxBytes =
       clearTimeout(timer);
       if (problem) reject(new Error(problem));
       else if (signal || (code !== 0 && code !== 1)) reject(new Error(`QA_TEST_PROCESS_EXIT ${signal ?? code}`));
-      else resolve({code, output: Buffer.concat(output).toString('utf8')});
+      else resolve({code, output: Buffer.concat(output).toString('utf8'), diagnostics: Buffer.concat(diagnostics).toString('utf8')});
     });
   });
 }

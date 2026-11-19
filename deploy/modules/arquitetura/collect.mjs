@@ -217,13 +217,13 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
     for (const entry of entries) {
       const srcPath = join(currentSrc, entry.name);
       const relPath = currentRel ? `${currentRel}/${entry.name}` : entry.name;
-      if (copiedFiles.length >= maxFiles) {
-        stoppedAt = relPath;
-        return;
-      }
       if (entry.name.includes('\\')) {
         skipped.push({file: relPath, reason: 'nome_nao_suportado'});
         continue;
+      }
+      if (copiedFiles.length >= maxFiles) {
+        stoppedAt = relPath;
+        return;
       }
       let st;
       try {
@@ -257,7 +257,10 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}) {
     }
   }
 
-  const initial = path => posix.isAbsolute(path) ? '/' : process.cwd();
+  const initial = path => {
+    if (!path) throw Object.assign(new Error('caminho vazio'), {code: 'ENOENT'});
+    return posix.isAbsolute(path) ? '/' : '.';
+  };
   let rootFd;
   try {
     rootFd = openDirectoryChain(initial(sourceRoot), sourceRoot);
