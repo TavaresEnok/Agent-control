@@ -33,6 +33,8 @@ import {collectLanguageSuite, hasLanguageTestCandidates, languageSuites} from '.
 import {collectLanguageMutation, collectPythonProperties, languageMeasurementTools} from './mutacao-linguagens/index.mjs';
 import {publishMutation, publishProperties} from './mutacao-linguagens/report.mjs';
 import {collectJsProperties, propertyLimits, propertyTool} from './js-properties.mjs';
+import {bancoLocalTool, collectQaBancoLocal} from './banco-local/index.mjs';
+import {localLoadTool, runLocalLoadQa} from './carga-local/index.mjs';
 import {functionalContractTools, maxContractDocuments, runFunctionalContract} from './contratos/index.mjs';
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -254,11 +256,12 @@ export async function loadQaSyntax() {
   return {version, parse, traverse: traversal.default};
 }
 
-function parseFile(file, content, parse) {
+function parseFile(file, content, parse, options) {
   return parse(content, {
     sourceType: 'unambiguous',
     plugins: [/\.(?:ts|mts|cts|tsx)$/.test(file) ? 'typescript' : null,
       /\.(?:js|jsx|tsx)$/.test(file) ? 'jsx' : null].filter(Boolean),
+    ...options,
   });
 }
 
@@ -474,7 +477,7 @@ function assertionFeatures(path, file, {method, optional}) {
     if (!call) return;
     const identity = featureIdentity(call);
     if (uncertain || optional || call.optional) limited.push(identity);
-    else if (takesCallback) callback = {arg, callPath, receiver: call.receiver, identity};
+    else if (takesCallback) callback = {arg, callPath, identity};
     else features.push(identity);
   }
   for (const [index, arg] of args.entries()) {
@@ -487,13 +490,20 @@ function assertionFeatures(path, file, {method, optional}) {
 
 /** Instrumenta chamadas diretas no callback registrado com node:test, preservando as linhas. */
 export function instrumentTestAssertions(file, content, {parse, traverse}) {
-  const ast = parseFile(file, content, parse);
+  const ast = parseFile(file, content, parse, {tokens: true});
+  const trailingCommas = new Set();
+  let previous;
+  for (const token of ast.tokens) {
+    const label = token.type.label;
+    if (!label) continue; // Comentários não alteram a pontuação dos argumentos.
+    if (label === ')' && previous === ',') trailingCommas.add(token.start);
+    previous = label;
+  }
   const sites = new Map();
   const edits = [];
   let prefix = '__qaAssertion';
   while (content.includes(prefix)) prefix += '_';
   const wrapCallback = `${prefix}Callback`;
-  const wrapTarget = `${prefix}Target`;
   const markTarget = `${prefix}Invoked`;
   let index = 0;
   function wrap(node, before, after) {
@@ -522,7 +532,12 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
       wrap(path.node.callee, `${prefix}(`, `, ${accepted.receiver}, ${JSON.stringify(accepted.method)}, ${markers.join(', ')})`);
       if (callback) {
         wrap(callback.arg.node, `${wrapCallback}(${markTarget} => (`, '))');
-        wrap(callback.callPath.node.callee, `${wrapTarget}(`, `, ${callback.receiver ?? 'void 0'}, ${markTarget})`);
+        const target = callback.callPath.node;
+        const offset = target.end - 1;
+        const loc = {line: target.loc.end.line, column: target.loc.end.column - 1};
+        const separator = target.arguments.length && !trailingCommas.has(offset) ? ', ' : '';
+        // A expansão vazia marca o despacho após os argumentos e mantém a chamada no callback.
+        edits.push({offset, loc, text: `${separator}...${markTarget}()`});
       }
     },
   });
@@ -543,7 +558,7 @@ export function instrumentTestAssertions(file, content, {parse, traverse}) {
   }
   const preload = posix.relative(posix.dirname(file), '.qa-v8-probe.mjs');
   const specifier = preload.startsWith('../') ? preload : `./${preload}`;
-  chunks.push(content.slice(cursor), `\nimport {captureAssertion as ${prefix}, captureAssertionCallback as ${wrapCallback}, captureTarget as ${wrapTarget}} from ${JSON.stringify(specifier)};\n`);
+  chunks.push(content.slice(cursor), `\nimport {captureAssertion as ${prefix}, captureAssertionCallback as ${wrapCallback}} from ${JSON.stringify(specifier)};\n`);
   return {content: chunks.join(''), proofs, originalColumn(line, column) {
     let shift = 0;
     for (const edit of editLines.get(line) ?? []) {
@@ -724,6 +739,25 @@ function declaredJsProperty(path, file, content) {
   return {...comparison, ...settings, integers, file, line, column: column + 1, testLine: registration.node.loc.start.line};
 }
 
+function isThrowingGuard(path) {
+  const condition = path.find(parent => parent.key === 'test' && parent.parentPath?.isIfStatement());
+  if (!condition || condition.getFunctionParent() !== path.getFunctionParent()) return false;
+  const {consequent, alternate} = condition.parentPath.node;
+  return [consequent, alternate].some(branch => branch?.type === 'ThrowStatement' ||
+    (branch?.type === 'BlockStatement' && branch.body.some(statement => statement.type === 'ThrowStatement')));
+}
+
+function hasManualCheck(path) {
+  if (isThrowingGuard(path)) return true;
+  const initializer = path.parentPath.isAwaitExpression() ? path.parentPath : path;
+  const declaration = initializer.parentPath;
+  if (initializer.key !== 'init' || !declaration.isVariableDeclarator() || !declaration.get('id').isIdentifier()) return false;
+  const binding = declaration.scope.getBinding(declaration.node.id.name);
+  if (binding?.path !== declaration || !binding.constant) return false;
+  const owner = path.getFunctionParent();
+  return binding.referencePaths.some(ref => ref.getFunctionParent() === owner && isThrowingGuard(ref));
+}
+
 /** Levanta candidatos estáticos sem confundir opções do teste com seu callback. */
 export function analyzeTestFile(relFile, content, {parse, traverse}) {
   const ast = parseFile(relFile, content, parse);
@@ -776,6 +810,8 @@ export function analyzeTestFile(relFile, content, {parse, traverse}) {
       if (!enclosing || enclosing.suppressed || enclosing.test.suite) return;
 
       const {candidate} = enclosing;
+      const imported = importedCall(path, relFile);
+      if (imported && hasManualCheck(path)) candidate.limitedFeatures.push(featureIdentity(imported));
       const {local, receiver, property, binding} = target;
       const context = owner.node.params[0]?.name;
       const isTestContext = enclosing.test.nodeRunner && context && receiver === context &&
@@ -828,8 +864,16 @@ const completedAssertions = test => everyPass(test?.assertionStatuses, status =>
 
 const identifier = /^[$_\p{ID_Start}][$\u200c\u200d\p{ID_Continue}]*$/u;
 const codeSpan = /^`([^`]+)`(?!`)/;
-const fileQualifier = /^\s+(?:de|from)\s+(?=`)/;
-const referenceSeparator = /^(?:\s*,\s*(?:(?:e|and)\s+)?|\s+(?:e|and)\s+)(?=`)/;
+const fileQualifier = /^\s+(?:de|from)\s+(?=`)/i;
+const referenceSeparator = /^(?:\s*,\s*(?:(?:e|and|além de|bem como|as well as)\s+)?|\s+(?:e|and|além de|bem como|as well as)\s+)(?=`)/i;
+const clauseBoundary = /;|[.!?](?=\s|$)|(?:,\s*(?:(?:e|mas|ou)\s+)?|\s+(?:e|mas|ou)\s+)(?=(?:calcular|conferir|retornar?|devolver?)\b)/i;
+const expectedBefore = /\b(?:saídas?|resultados?|valores?|textos?)\s+esperad[oa]s?\b|\b(?:retornar?|devolver?)(?:\s+(?:o\s+(?:texto|valor|resultado)|a\s+saída))?$/i;
+const expectedAfter = /^\s+(?:é|são)\s+(?:(?:[oa]s?|um|uma|dois|duas)\s+)*(?:saídas?|resultados?|valores?|textos?)\s+esperad[oa]s?\b/i;
+const roleQualifier = /^\s*,?\s*como\b/i;
+const returnPredicate = /^\s+(?:retorna|devolve)\b/i;
+const operationWith = /^(?:calcular|conferir)\s+com$/i;
+const parenthesizedOperation = /^(?:calcular|conferir)\b/i;
+const takesComplement = /(?:^|\s)(?:a|com|de|em|para|por|sobre)$/i;
 
 function readTargetList(text) {
   const targets = [];
@@ -849,27 +893,45 @@ function readTargetList(text) {
     }
     targets.push(target);
     const separator = referenceSeparator.exec(rest);
-    if (!separator) return {targets, rest: rest.trim()};
+    if (!separator) return {targets, rest};
     rest = rest.slice(separator[0].length);
   }
 }
 
 function requirementTargets(body) {
-  if (body.startsWith('`')) {
-    const {targets, rest} = readTargetList(body);
-    if (targets.length > 1 || targets[0].source !== undefined || targets[0].invalid || /^[.!?]?$/.test(rest)) {
-      return {kind: 'symbols', targets};
+  const spans = /`[^`]+`(?!`)/g;
+  // A pontuação dentro de símbolos e caminhos não delimita orações.
+  const prose = body.replace(spans, span => '_'.repeat(span.length));
+  const references = [];
+  let ambiguousQualified = false;
+  for (let span; (span = spans.exec(body));) {
+    const {targets, rest} = readTargetList(body.slice(span.index));
+    spans.lastIndex = body.length - rest.length;
+    if (span.index === 0 && /^[.!?]?$/.test(rest.trim())) return {kind: 'symbols', targets};
+    if (!targets.some(target => target.source !== undefined)) continue;
+    const prefix = prose.slice(0, span.index).split(clauseBoundary).at(-1).trim();
+    const suffix = prose.slice(spans.lastIndex);
+    const parenthesized = prefix.endsWith('(') && /^\s*\)/.test(suffix);
+    const before = parenthesized ? prefix.slice(0, -1).trimEnd() : prefix;
+    const after = parenthesized ? suffix.replace(/^\s*\)/, '') : suffix;
+    const endsClause = !after.split(clauseBoundary, 1)[0].trim();
+    const direct = !before && (endsClause || returnPredicate.test(after));
+    const explicitOperation = operationWith.test(before) || (parenthesized && parenthesizedOperation.test(before));
+    const annotation = parenthesized && endsClause && !takesComplement.test(before);
+    // Um papel declarado no contexto prevalece sobre os marcadores de referência.
+    if (expectedBefore.test(before) || expectedAfter.test(after) || roleQualifier.test(after) ||
+        !(direct || explicitOperation || annotation)) {
+      ambiguousQualified = true;
+      continue;
     }
-    return {kind: 'ambiguous'};
+    references.push(...targets.map(target => target.source === undefined ? {ambiguous: true} : target));
   }
-  // A bare code span in historical prose could be an expected value.
-  const historical = /\(((?:`[^`]+`|[^`()])+)\)\s*[.!?]?$/.exec(body);
-  if (!historical?.[1].trimStart().startsWith('`')) {
-    return {kind: /\(\s*`/.test(body) ? 'ambiguous' : 'title'};
+  if (references.length) {
+    if (ambiguousQualified) references.push({ambiguous: true});
+    return {kind: 'symbols', targets: references};
   }
-  const {targets, rest} = readTargetList(historical[1].trim());
-  if (rest || !targets.some(target => target.source !== undefined)) return {kind: 'ambiguous'};
-  return {kind: 'symbols', targets: targets.map(target => target.source === undefined ? {ambiguous: true} : target)};
+  const ambiguous = ambiguousQualified || body.startsWith('`') || /\(\s*`/.test(body);
+  return {kind: ambiguous ? 'ambiguous' : 'title'};
 }
 
 function displayTarget({name, source}) {
@@ -891,22 +953,33 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
     return everyPass(result?.statuses, status => status === 'passed') && completedAssertions(result) &&
       (!feature || everyPass(result.featurePasses, pass => pass.includes(feature.identity)));
   };
-  const mightPass = test => !everyPass(runtimeOf(test)?.statuses, status => ['failed', 'skipped', 'todo'].includes(status));
+  const mightPass = test => !runtimeOf(test)?.statuses.some(status => status === 'failed' || status === 'skipped' || status === 'todo');
   const runtimeLimited = test => {
     const result = runtimeOf(test);
-    return !everyPass(result?.statuses, status => status !== 'absent') ||
-      (mightPass(test) && !everyPass(result.assertionStatuses, status => status !== 'unsupported'));
+    return mightPass(test) && (!everyPass(result?.statuses, status => status !== 'absent') ||
+      !everyPass(result.assertionStatuses, status => status !== 'unsupported'));
   };
-  const describe = matches => matches.map(t => {
+  const describe = (matches, features = []) => [...new Set(matches)].map(t => {
     const result = runtimeOf(t);
     let detail = t.conditionalSkip ? 'skip/todo possível'
-      : t.hasAssertion ? 'asserção candidata; execução não medida' : 'asserção estática não identificada';
+      : t.hasAssertion ? 'asserção candidata; execução não medida'
+        : t.limitedFeatures.length ? 'verificação candidata fora da instrumentação' : 'asserção estática não identificada';
     if (result) {
-      const assertions = completedAssertions(result) ? 'asserção concluída nas três passadas'
-        : result.assertionStatuses?.includes('unsupported') ? 'cobertura limitada de asserções'
-          : result.assertionStatuses?.includes('failed') ? 'asserção reprovada em pelo menos uma passada'
-            : 'conclusão da asserção não observada em todas as passadas';
-      detail = `${result.statuses.join(',')}, ${assertions}`;
+      const linked = features.filter(({identity}) => t.features.includes(identity) || t.limitedFeatures.includes(identity));
+      const completed = linked.length ? linked.every(({identity, stable}) =>
+        stable && everyPass(result.featurePasses, pass => pass.includes(identity))) : completedAssertions(result);
+      const failed = linked.length ? linked.some(({identity, stable}) =>
+        stable && result.failedFeaturePasses?.some(pass => pass.includes(identity)))
+        : result.assertionStatuses?.includes('failed') || result.failedFeaturePasses?.some(pass => pass.length);
+      const limited = result.assertionStatuses?.includes('unsupported') ||
+        linked.some(({identity, stable}) => !stable || t.limitedFeatures.includes(identity));
+      const assertion = linked.length ? 'asserção do alvo' : 'asserção';
+      const outcomes = [];
+      if (failed) outcomes.push(`${assertion} reprovada em pelo menos uma passada`);
+      if (completed) outcomes.push(`${assertion} concluída nas três passadas`);
+      if (limited) outcomes.push(`cobertura limitada de ${assertion}`);
+      if (!outcomes.length) outcomes.push(`conclusão da ${assertion} não observada em todas as passadas`);
+      detail = `${result.statuses.join(',')}, ${outcomes.join(', ')}`;
     }
     return `${displayPath(t.file)}:${t.line} ${t.title} (${detail})`;
   }).join('; ') || 'sem teste vinculado';
@@ -917,13 +990,14 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
   })));
   for (const fn of functions) {
     rows.push(coverageRow(fileCoverageKey('qa-funcionalidade', fn.file, `:${fn.name}`), version, 'ok',
-      `vínculo estático ${abbreviateIdentity(displayPath(fn.file), 240)}:${fn.line} ${fn.name} → ${describe(fn.matches)}`));
+      `vínculo estático ${abbreviateIdentity(displayPath(fn.file), 240)}:${fn.line} ${fn.name} → ${describe([...fn.matches, ...fn.limited], [fn])}`));
   }
 
   function evaluateTarget(candidates, feature, qualified) {
     const limited = feature ? [...feature.limited, ...unknownSpreads] : [];
     const supported = !feature || (feature.stable && (qualified || !incomplete));
     if (supported && candidates.some(test => providesEvidence(test, feature))) return 'proved';
+    if (complete && hasRuntime && !runtimeTests.length && !tests.length) return 'missing';
     if (!complete || !supported || limited.some(mightPass)) return 'limited';
     if (!hasRuntime) {
       return candidates.some(test => test.hasAssertion && !test.conditionalSkip) ? 'unavailable' : 'no-candidate';
@@ -956,8 +1030,8 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
           label: `${feature.name} (${displayPath(feature.file)}:${feature.line})`};
       });
       if (requirement.kind === 'ambiguous') outcomes.push({status: 'ambiguous'});
-      const matches = byTitle ? titled : [...new Set(resolved.flatMap(target =>
-        target.functions.flatMap(fn => [...fn.matches, ...fn.limited])))];
+      const linked = resolved.flatMap(target => target.functions);
+      const matches = byTitle ? titled : linked.flatMap(fn => [...fn.matches, ...fn.limited]);
       const missing = outcomes.filter(outcome => outcome.status === 'missing');
       const noCandidate = outcomes.filter(outcome => outcome.status === 'no-candidate');
       const unresolved = outcomes.filter(outcome => outcome.status === 'unresolved');
@@ -967,14 +1041,14 @@ export function buildTraceability({workspace, sourceAnalyses, testAnalyses, reqF
       let verification = 'prova não medida: cobertura limitada';
       if (proved) verification = 'vínculo comprovado nas três passadas';
       else if (measured) verification = runtimeTests.length ? 'vínculo sem prova nas três passadas' : 'inventário completo: nenhum teste encontrado';
-      else if (outcomes.some(outcome => outcome.status === 'ambiguous')) verification = 'prova não medida: referência ambígua; informe `símbolo` de `arquivo`';
+      else if (outcomes.some(outcome => outcome.status === 'ambiguous')) verification = 'prova não medida: cobertura limitada por referência ambígua; informe `símbolo` de `arquivo`';
       else if (unresolved.length) verification = 'prova não medida: referência não resolvida';
       else if (noCandidate.length || outcomes.some(outcome => outcome.status === 'unavailable')) verification = 'prova não medida: somente análise estática';
       if (!measured && missing.length) verification += ', com lacuna medida';
       const identifiers = outcomes.map(({label, status}) => status === 'unresolved' ? `${label} sem resolução` : label).filter(Boolean).join(', ');
       const line = idx + 1;
       const context = body ? ` → contexto: ${body}` : '';
-      const detail = `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${verification} → ${describe(matches)}${context}`;
+      const detail = `vínculo estático ${displayPath(reqFile)}:${line} → ${identifiers || 'sem funcionalidade identificada'} → ${verification} → ${describe(matches, linked)}${context}`;
       rows.push(coverageRow(`qa-requisito:${id}`, version, status, detail));
       if (missing.length) {
         const labels = missing.map(outcome => outcome.label).filter(Boolean);
@@ -1502,7 +1576,7 @@ export async function collectQaModule(options = {}) {
     const matrixPartial = sourcePartial || !!parserError || omittedTestFiles > 0;
     const languageCandidates = hasLanguageTestCandidates(copiedFiles);
     context.emptyInventory &&= !matrixPartial && !languageCandidates;
-    const executionPartial = context.files?.length < testFiles.length || (!testFiles.length && languageCandidates);
+    const executionPartial = context.files?.length < testFiles.length || languageCandidates;
     const measurementPath = file => abbreviateIdentity(displayPath(file), 100);
     const toolRunners = [
       {
@@ -1522,7 +1596,7 @@ export async function collectQaModule(options = {}) {
       },
       {
         name: 'qa-matriz-estatica',
-        partial: matrixPartial,
+        partial: matrixPartial || executionPartial,
         run: () => buildTraceability({workspace, sourceAnalyses, testAnalyses, reqFiles,
           runtimeTests: runtime.tests, incomplete: matrixPartial, executionPartial}),
       },
@@ -1569,6 +1643,17 @@ export async function collectQaModule(options = {}) {
         name: 'qa-contrato-openapi',
         partial: sourcePartial,
         run: () => runSwaggerContractTool({workspace, openapiFiles, sourceAnalyses, incomplete: sourcePartial, failTool, validatedOpenApi}),
+      },
+      {
+        name: bancoLocalTool,
+        partial: incomplete,
+        run: () => collectQaBancoLocal({repoDir, workspace, copiedFiles, incomplete, row: coverageRow}),
+      },
+      {
+        name: localLoadTool,
+        partial: incomplete,
+        run: () => runLocalLoadQa({workspace, workRoot, copiedFiles, enabled: executionAllowed(repoDir),
+          row: coverageRow, key: fileCoverageKey}),
       },
       ...Object.entries(functionalContractTools).map(([kind, name]) => ({
         name,
@@ -1636,7 +1721,6 @@ export async function collectQaModule(options = {}) {
 
     coverage.push(
       coverageRow('qa-fuzz', unmeasured, 'skipped', 'geração aleatória de entradas não executada'),
-      coverageRow('qa-carga', unmeasured, 'skipped', 'carga ativa não executada no coletor offline'),
     );
 
     coverage.push(...extraCoverageRows);

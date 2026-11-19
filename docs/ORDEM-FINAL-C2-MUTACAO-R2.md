@@ -1,0 +1,5 @@
+# C2 — resultados observados dos adaptadores de mutação e propriedades
+
+Revise os sete casos de /tmp/ac-final-3aDgqp8I/parecer-high-C2-MUTACAO-LINGUAGENS.txt. Responsabilidade restrita aos adaptadores de Go/Python, seus testes e instruções de instalação pertinentes. Trate vendor offline, eventos go test -json, teto e cancelamento de testes, falha observada do mutante Python, fixtures Hypothesis locais e estado indisponível de ferramenta. Fixtures benignas e isoladas. Preserve medições existentes e a recusa de rede.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C2-MUTACAO-R2.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.

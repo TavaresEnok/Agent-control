@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {constants, closeSync, fstatSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join, posix, relative} from 'node:path';
@@ -21,8 +22,14 @@ const maxProfileBytes = 2 * 1024 * 1024;
 const passCount = 3;
 const unmeasured = 'não aferida';
 const partialSnapshot = 'escopo parcial por limites ou arquivos indisponíveis no snapshot';
-const excludedDirectories = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.state', '.next', '.cache']);
-const reservedNames = /^(?:\.env(?:\..*)?|\.credentials\.json|auth\.json|id_rsa|id_ed25519|\.netrc|\.npmrc|\.pypirc)$/;
+const protectedSnapshot = 'escopo parcial por insumos omitidos pela proteção do snapshot';
+const excludedDirectories = new Set(['node_modules', 'dist', 'build', 'coverage', '.state', '.next', '.cache']);
+const credentialNames = new Set([
+  '.aws', '.docker', '.git-credentials', '.gnupg', '.kube', '.netrc', '.npmrc', '.pypirc', '.ssh',
+  '.credentials.json', 'auth.json', 'credentials.json', 'application_default_credentials.json',
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+]);
+const credentialPatterns = /^\.env|^service-account.*\.json$|\.(?:key|pem|p12|pfx)$/;
 
 export const languageSuites = {
   python: {tool: 'python-unittest-coverage', version: `Python ${pins.python.version} / coverage.py ${pins.coverage.version}`},
@@ -78,28 +85,36 @@ export function loadLanguageSnapshot(repoDir) {
     const entries = readdirSync(join(repoDir, directory), {withFileTypes: true});
     entries.sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
-      if (reservedNames.test(entry.name)) continue;
-      if (entry.isDirectory() && excludedDirectories.has(entry.name)) continue;
+      const name = entry.name.toLowerCase();
+      // .git is checkout metadata and cannot be an entry in a Git tree.
+      if (name === '.git') continue;
+      if (credentialNames.has(name) || credentialPatterns.test(name) ||
+          (entry.isDirectory() && excludedDirectories.has(entry.name))) {
+        return protectedSnapshot;
+      }
       const file = posix.join(directory, entry.name);
       const source = join(repoDir, file);
       const stat = lstatSync(source);
       if (stat.isDirectory()) {
-        if (depth >= maxDepth || !walk(file, depth + 1)) return false;
+        if (depth >= maxDepth) return partialSnapshot;
+        const reason = walk(file, depth + 1);
+        if (reason) return reason;
         continue;
       }
       if (!stat.isFile() || stat.size > maxFileBytes || totalBytes + stat.size > maxSnapshotBytes || files.size >= maxFiles) {
-        return false;
+        return partialSnapshot;
       }
       const content = readFileSync(source, {flag: constants.O_RDONLY | constants.O_NOFOLLOW});
-      if (content.length !== stat.size) return false;
+      if (content.length !== stat.size) return partialSnapshot;
       files.set(file, {content, mode: 0o600 | (stat.mode & 0o100)});
       totalBytes += content.length;
     }
-    return true;
   }
 
   try {
-    if (!lstatSync(repoDir).isDirectory() || !walk('', 0)) return {reason: partialSnapshot};
+    if (!lstatSync(repoDir).isDirectory()) return {reason: partialSnapshot};
+    const reason = walk('', 0);
+    if (reason) return {reason};
   } catch {
     return {reason: partialSnapshot};
   }
@@ -252,12 +267,7 @@ function goCaseKey(pkg, name) {
 
 export function decodeGoPass({code, output, diagnostics}, profile, selection, moduleName, locations = new Map()) {
   const errorCode = 'QA_GO_REPORT_INVALID';
-  const filesByPackage = new Map();
-  for (const file of selection.files) {
-    const pkg = goImportPath(selection, moduleName, posix.dirname(file));
-    if (!filesByPackage.has(pkg)) filesByPackage.set(pkg, []);
-    filesByPackage.get(pkg).push(file);
-  }
+  const testPackages = new Set(selection.files.map(file => goImportPath(selection, moduleName, posix.dirname(file))));
   const tests = [];
   const running = new Map();
   const failedTests = new Set();
@@ -275,8 +285,7 @@ export function decodeGoPass({code, output, diagnostics}, profile, selection, mo
     if (typeof event.Test !== 'string') continue;
     const root = event.Test.split('/', 1)[0];
     if (!goTestName.test(root)) continue;
-    const candidates = filesByPackage.get(event.Package);
-    if (!candidates?.length) continue;
+    if (!testPackages.has(event.Package)) continue;
     const key = goCaseKey(event.Package, event.Test);
     const inFlight = running.get(key) ?? 0;
     if (event.Action === 'run') {
@@ -288,11 +297,10 @@ export function decodeGoPass({code, output, diagnostics}, profile, selection, mo
     if (inFlight > 1) running.set(key, inFlight - 1);
     else running.delete(key);
     if (status === 'failed') failedTests.add(event.Package);
-    const parent = locations.get(goCaseKey(event.Package, root));
-    const location = locations.get(key) ?? parent;
-    const file = location?.file ?? (candidates.length === 1 ? candidates[0] : null);
+    const location = locations.get(key);
+    const file = location?.file ?? null;
     if (!file) unattributed++;
-    tests.push({...testCase(file, `${event.Package}.${event.Test}`, status), line: location?.line ?? 1});
+    tests.push({...testCase(file, `${event.Package}.${event.Test}`, status), package: event.Package, line: location?.line ?? null});
     if (tests.length > maxTests) throw new Error('QA_LANGUAGE_TEST_LIMIT');
   }
   const unavailableDiagnostic = goUnavailable.test(diagnostics);
@@ -437,7 +445,7 @@ function goEnvironment(home) {
   };
 }
 
-async function executeLanguagePass(language, snapshot, selection) {
+export async function executeLanguagePass(language, snapshot, selection, goBinary = go) {
   const deadline = performance.now() + (language === 'go' ? goTimeoutMs : testTimeoutMs);
   function run(binary, args, cwd, env, limit) {
     const timeoutMs = Math.min(limit, Math.floor(deadline - performance.now()));
@@ -448,17 +456,22 @@ async function executeLanguagePass(language, snapshot, selection) {
   const scratch = mkdtempSync(join(tmpdir(), `qa-${language}-`));
   try {
     const cwd = join(scratch, 'project');
-    snapshot.copyTo(cwd);
     if (language === 'python') {
+      snapshot.copyTo(cwd);
       const plan = join(scratch, 'plan.json');
       writeFileSync(plan, JSON.stringify({...selection, maxTests, maxProfileBytes}));
       const result = await run(python, ['-I', '-S', '-B', pythonRunner, plan, join(scratch, 'coverage.json')],
         cwd, {HOME: scratch, TMPDIR: scratch}, testTimeoutMs);
       return decodePythonPass(result, selection);
     }
-    const moduleDir = join(cwd, selection.moduleDir);
     const env = goEnvironment(scratch);
-    const manifest = await run(go, ['mod', 'edit', '-json'], moduleDir, env, testTimeoutMs);
+    const version = await run(goBinary, ['env', 'GOVERSION'], scratch, env, testTimeoutMs);
+    if (version.code !== 0 || version.output.trim() !== `go${pins.go.version}`) {
+      return {tests: [], unavailable: 1, errors: 0, coverage: null, fixtureSkips: 0, reason: 'versão Go fixada indisponível'};
+    }
+    snapshot.copyTo(cwd);
+    const moduleDir = join(cwd, selection.moduleDir);
+    const manifest = await run(goBinary, ['mod', 'edit', '-json'], moduleDir, env, testTimeoutMs);
     if (manifest.code !== 0) throw new Error('QA_GO_MODULE_INVALID');
     const {Module, Replace} = readJson(manifest.output, 'QA_GO_MODULE_INVALID');
     if (typeof Module?.Path !== 'string' || !Module.Path) throw new Error('QA_GO_MODULE_INVALID');
@@ -466,8 +479,8 @@ async function executeLanguagePass(language, snapshot, selection) {
       return {tests: [], unavailable: 1, errors: 0, coverage: null, reason: 'replace local no go.mod fora do escopo offline', fixtureSkips: 0};
     }
     const profile = join(scratch, 'coverage.out');
-    const {overlayFile, cases} = prepareGoTestBudget(scratch, dirname(dirname(go)));
-    const result = await run(go, [
+    const {overlayFile, cases} = prepareGoTestBudget(scratch, dirname(dirname(goBinary)));
+    const result = await run(goBinary, [
       'test', '-json', '-mod=readonly', '-count=1', '-p=2', '-parallel=1', '-vet=off', '-timeout=8s',
       '-run', '^(Test|Example)', `-overlay=${overlayFile}`, '-covermode=set', `-coverprofile=${profile}`, './...',
     ], moduleDir, {...env, QA_GO_CASE_DIR: cases}, goTimeoutMs);
@@ -498,6 +511,25 @@ function passOutcome({tests, unavailable, errors, fixtureSkips, unsupported, una
   return `${outcome}; ${passed} aprovados, ${failed} reprovados, ${skipped} pulados${fixtures}${unsupportedDetail}${locations}`;
 }
 
+function caseSummary(count) {
+  return `${count} ${count === 1 ? 'caso' : 'casos'} com falha ou oscilação`;
+}
+
+function compareGoPasses(passes) {
+  const attribution = new Map();
+  for (const {tests} of passes) {
+    for (const test of tests) {
+      const key = goCaseKey(test.package, test.name);
+      const location = test.file && `${test.file}:${test.line}`;
+      if (!attribution.has(key)) attribution.set(key, location);
+      else if (attribution.get(key) !== location) attribution.set(key, null);
+    }
+  }
+  // A case with missing or inconsistent locations still has one identity in its package.
+  return comparePasses(passes.map(pass => ({...pass, tests: pass.tests.map(test =>
+    attribution.get(goCaseKey(test.package, test.name)) ? test : {...test, file: null, line: null})})));
+}
+
 export async function measureLanguageSuite(language, selection, executePass) {
   const {tool, version} = languageSuites[language];
   const extraRows = [];
@@ -517,32 +549,43 @@ export async function measureLanguageSuite(language, selection, executePass) {
     const status = pass.errors ? 'failed' : pass.tests.some(test => ['passed', 'failed'].includes(test.status)) && !pass.unavailable ? 'ok' : 'skipped';
     extraRows.push(row(`${tool}-execucao`, status, `execução ${i + 1}: ${passOutcome(pass)}${pass.reason ? `; ${pass.reason}` : ''}`));
   }
-  const completedPasses = passes.filter(pass => !pass.errors && !pass.unavailable);
-  const tests = comparePasses(completedPasses);
+  const packageCases = new Map();
+  let affectedCases = 0;
+  const tests = language === 'go' ? compareGoPasses(passes) : comparePasses(passes);
   for (const test of tests) {
-    const fluctuates = new Set(test.statuses).size > 1;
-    if (!test.file || (!fluctuates && !test.statuses.includes('failed'))) continue;
+    const completedStatuses = test.statuses.filter((_, index) => !passes[index].errors && !passes[index].unavailable);
+    const fluctuates = new Set(completedStatuses).size > 1;
+    const firstFailure = test.statuses.indexOf('failed');
+    if (!fluctuates && firstFailure === -1) continue;
+    affectedCases++;
+    if (!test.file) {
+      const pkg = test.package;
+      if (!packageCases.has(pkg)) packageCases.set(pkg, {affected: 0, failures: passes.map(() => 0)});
+      const facts = packageCases.get(pkg);
+      facts.affected++;
+      for (const [index, status] of test.statuses.entries()) {
+        if (status === 'failed') facts.failures[index]++;
+      }
+      continue;
+    }
+    const evidence = fluctuates || completedStatuses.includes('failed')
+      ? `passadas completas (${completedStatuses.length}/${passCount}): ${completedStatuses.join(', ')}`
+      : `caso reprovado na execução ${firstFailure + 1}, com escopo parcial`;
     findings.push({tool, rule: fluctuates ? 'QA-TESTE-OSCILANTE' : 'QA-TESTE-FALHOU',
       file: test.file, line: test.line, severity: 'alta',
       message: `Teste '${test.name}' ${fluctuates ? 'mudou de resultado' : 'falhou'}`,
-      evidence: `passadas completas (${completedPasses.length}/3): ${test.statuses.join(', ')}`});
-  }
-  for (const pass of passes.filter(item => item.errors || item.unavailable)) {
-    const index = passes.indexOf(pass) + 1;
-    for (const test of pass.tests.filter(item => item.file && item.status === 'failed')) {
-      if (findings.some(item => item.file === test.file && item.message === `Teste '${test.name}' falhou`)) continue;
-      findings.push({tool, rule: 'QA-TESTE-FALHOU', file: test.file, line: test.line, severity: 'alta',
-        message: `Teste '${test.name}' falhou`, evidence: `caso reprovado na execução ${index}, com escopo parcial`});
-    }
+      evidence});
   }
   const executed = passes.some(pass => pass.tests.some(test => ['passed', 'failed'].includes(test.status)));
   const status = passes.some(pass => pass.errors) ? 'failed' :
     passes.some(pass => pass.unavailable) || !executed ? 'skipped' : 'ok';
   const unsupported = passes.some(pass => pass.unsupported);
-  const unattributed = passes.some(pass => pass.unattributed);
+  const unattributed = tests.some(test => !test.file);
+  const casesDetail = caseSummary(affectedCases);
   let reason = status === 'failed' ? 'erro na execução' :
     passes.some(pass => pass.unavailable) ? 'dependência indisponível no ambiente offline' :
-      executed ? `${findings.length} casos com falha ou oscilação` : 'nenhum teste executado com resultado';
+      executed ? casesDetail : 'nenhum teste executado com resultado';
+  if (status !== 'ok' && affectedCases) reason += `; ${casesDetail}`;
   if (unsupported) reason += '; formato pytest não suportado';
   if (unattributed) reason += '; atribuição parcial dos casos Go';
   const describe = coverage => {
@@ -558,6 +601,13 @@ export async function measureLanguageSuite(language, selection, executePass) {
     .some(value => value && value[0] < value[1]));
   extraRows.push(row(`${tool}-cobertura`, anyCoverage && !partial ? 'ok' : 'skipped',
     `${scope}${belowFull ? ', abaixo de 100% no escopo medido' : ''}; ${passes.map((pass, index) => `${index + 1}: ${describe(pass.coverage)}`).join('; ')}`));
+  for (const [pkg, {affected, failures}] of packageCases) {
+    const key = createHash('sha256').update(pkg).digest('hex').slice(0, 24);
+    const counts = failures.map((count, index) =>
+      `${index + 1}: ${count}${passes[index].errors || passes[index].unavailable ? ' (parcial)' : ''}`).join(', ');
+    extraRows.push(row(`${tool}-pacote:${key}`, 'ok',
+      `pacote Go ${JSON.stringify(pkg.slice(0, 180))}; ${caseSummary(affected)} sem arquivo identificado; reprovações por execução (${counts})`));
+  }
   if (findings.length > maxFindings) {
     extraRows.push(row(`${tool}-limite`, 'skipped', `${findings.length - maxFindings} achados fora do limite de publicação`));
   }
@@ -567,9 +617,11 @@ export async function measureLanguageSuite(language, selection, executePass) {
 export async function collectLanguageSuite(language, context, copiedFiles, incomplete) {
   const {tool} = languageSuites[language];
   const skip = detail => ({coverageRow: {tool, version: unmeasured, status: 'skipped', detail}});
-  const preliminary = selectLanguageSuite(language, copiedFiles, incomplete);
-  if (preliminary.reason) return skip(preliminary.reason);
-  if (!executionAllowed(context.repoDir)) return skip('execução dinâmica reservada ao contêiner isolado');
+  if (incomplete) return skip(partialSnapshot);
+  if (!executionAllowed(context.repoDir)) {
+    const preliminary = selectLanguageSuite(language, copiedFiles, false);
+    return skip(preliminary.reason ?? 'execução dinâmica reservada ao contêiner isolado');
+  }
   const snapshot = loadLanguageSnapshot(context.repoDir);
   if (snapshot.reason) return skip(snapshot.reason);
   const selection = selectLanguageSuite(language, snapshot.files, false);

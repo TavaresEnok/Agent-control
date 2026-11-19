@@ -1,0 +1,5 @@
+# Desempenho, histórico pela CLI e recuperação do serviço
+
+No runtime pessoal, no módulo de verificação e na migração específica, persistir medições produzidas pelo observador isolado, selecionar apenas a medição concluída do mesmo projeto, contexto e imagem, anterior ao exame atual, com séries comparáveis. Identificar o exame anterior nos dados privados e no relatório. A reconciliação do diário privado deve funcionar na partida do serviço e periodicamente. Preservar a falha explícita no limite de saída do contêiner. Provar duas execuções reais via CLI no laboratório e conferir a integridade do diário ao final.
+
+Você trabalha em paralelo com outros colaboradores. Preserve as mudanças deles e trabalhe só neste worktree. Rode npx tsc --noEmit --skipLibCheck e só os testes dos arquivos alterados com dados sintéticos. Não rode a suíte completa nem o laboratório, não reconstrua imagens nem toque na instalação viva ou em qualquer login real. Escreva docs/RELATORIO-FINAL-C7-HISTORICO.md. Commite tudo da ordem com git -c user.name="Enok Tavares" -c user.email="migration@localhost" e trailer Co-Authored-By: GPT-6.2 Sol <noreply@openai.com>.
