@@ -312,3 +312,8 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:05 UTC — Trabalhador encerrou C-BASE-R8 em 01d258b4 (código 0). Gerente confere a entrega.
 - 19/11/2026 04:05 UTC — Trabalho C8-R6 iniciado por Sol high normal em final-c8.
 - 19/11/2026 04:07 UTC — Base comum recebida em 01d258b4. Foi iniciada a prova com o daemon Docker e a revisão independente. Aberta uma ordem de QA para executar também testes unitários offline Python e Go; a prova até aqui cobria Node.
+- 19/11/2026 04:08 UTC — Trabalhador encerrou C4-R6 em db55280f (código 0). Gerente confere a entrega.
+- 19/11/2026 04:08 UTC — Trabalho C2-LINGUAGENS iniciado por Sol high normal em final-c2.
+- 19/11/2026 04:08 UTC — Revisor encerrou C7-R5 em 5fbbbb9f (código 0). Gerente confere a entrega.
+- 19/11/2026 04:08 UTC — Revisão C2-R9 iniciada por Sol high normal somente leitura em a7808ccf.
+- 19/11/2026 04:09 UTC — A integração ace07a61 passou nas 18 provas de exame e persistência em PostgreSQL. A primeira prova de 01d258b4 no Docker detectou que um coletor com saída excessiva só parava no prazo. A leitura limitada durante a execução fez as três provas físicas passarem; duas simulações de cancelamento precisaram acompanhar a etapa de leitura. Desempenho recebeu C7-R6 após a revisão encontrar risco de remoção de volume homônimo e quatro defeitos médios.
