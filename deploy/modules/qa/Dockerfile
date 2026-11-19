@@ -15,6 +15,13 @@ RUN /tmp/qa-mutation/install.sh go /opt/go-mutesting-plan
 # sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
 # linux/amd64: sha256:766137e2d9caad4744187e53cdc89320ba6f2eb57cff097374020944b44dd0a9
 # linux/arm64: sha256:56be08aca06bf736a928da2e3235a3b63ef71ee97313beb18c6019fea791aba4
+FROM qa-python AS qa-carga
+ADD --checksum=sha256:5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87 https://github.com/grafana/k6/releases/download/v2.4.0/k6-v2.4.0-linux-amd64.tar.gz /tmp/k6.tar.gz
+ADD --checksum=sha256:556d891134a3c582dc1e1a3f7335fd55142e5965769855a00b944e13e48302fc https://github.com/Shopify/toxiproxy/releases/download/v2.12.0/toxiproxy-server-linux-amd64 /opt/qa-carga/toxiproxy-server
+RUN test "$(dpkg --print-architecture)" = amd64 \
+    && tar -xzOf /tmp/k6.tar.gz k6-v2.4.0-linux-amd64/k6 > /opt/qa-carga/k6 \
+    && chmod 0555 /opt/qa-carga/k6 /opt/qa-carga/toxiproxy-server
+
 FROM mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396791ca4f00df17beb56342d2447b3f106c306f525579
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
@@ -46,6 +53,8 @@ RUN echo "fd08d53610a4d9e3cba811b3dbb94a25470d1def52728ac9d6521f579e3cabfd  pack
 COPY entrypoint.sh /usr/local/bin/qa-entrypoint.sh
 COPY collect.mjs browser-qa.mjs visual-reference.mjs execute-tests.mjs language-tests.mjs node-test-runner.mjs python-test-runner.py js-properties.mjs /opt/qa-tools/
 COPY contratos/*.mjs /opt/qa-tools/contratos/
+COPY carga-local/*.mjs carga-local/tools.lock.json /opt/qa-tools/carga-local/
+COPY --from=qa-carga /opt/qa-carga/ /usr/local/bin/
 COPY mutacao-linguagens/index.mjs mutacao-linguagens/measurement.mjs mutacao-linguagens/report.mjs mutacao-linguagens/python-runner.py /opt/qa-tools/mutacao-linguagens/
 COPY --from=qa-python /usr/local/bin/python3.12 /usr/local/bin/
 COPY --from=qa-python /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/

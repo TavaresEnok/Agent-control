@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
+import {moduleCollectorArguments, parseModuleCollectorOutput} from '../src/verification-modules.ts';
 import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
@@ -229,4 +231,25 @@ test('prova controle, Toxiproxy e recuperação com os binários fixados e o sna
     assertProof(result);
     for (const row of result.extraRows) t.diagnostic(row.detail);
   });
+});
+
+test('a imagem de QA mede a degradação e a recuperação de cada rota declarada', {
+  skip: process.env.AC_MODULE_LAB !== '1',
+  timeout: 100_000,
+}, () => {
+  const image = readFileSync(join(import.meta.dirname, '../deploy/modules/qa/digest.txt'), 'utf8').trim();
+  const repository = join(import.meta.dirname, 'fixtures/module-qa-carga-local/snapshot');
+  const [runtime, ...args] = moduleCollectorArguments({image, repository});
+  const stdout = execFileSync(runtime!, args, {encoding: 'utf8', timeout: 80_000, maxBuffer: 16 * 1024 * 1024});
+  const report = parseModuleCollectorOutput(stdout, {module: 'qa'});
+  const summary = report.coverage.filter(row => row.tool === 'qa-carga');
+  assert.equal(summary.length, 1);
+  assert.equal(summary[0]!.status, 'ok');
+  assert.match(summary[0]!.detail, /2\/2 rotas com controle, degradação e recuperação comprovados/);
+  const routes = report.coverage.filter(row => row.tool.startsWith('qa-carga:'));
+  assert.deepEqual(routes.map(row => row.tool).sort(), ['qa-carga:/', 'qa-carga:/catalogo']);
+  for (const row of routes) {
+    assert.equal(row.status, 'ok');
+    assert.match(row.detail, /controle p95=.*degradada p95=.*recuperação p95=/);
+  }
 });
