@@ -256,6 +256,8 @@ test('as ferramentas fixadas encontram os defeitos e aprovam o controle limpo no
   const rules = new Set(defectiveResult.findings.map(f => `${f.tool}:${f.rule}:${f.file}`));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-PARAM-DESATUALIZADO:src/billing.ts'));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC:src/billing.ts'));
+  assert.match(defectiveResult.findings.find(item => item.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC')?.evidence ?? '',
+    /^\[warning\].* defined in .*\/src\/billing\.ts, does not have any documentation$/);
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-LINK-QUEBRADO:src/api.ts'));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA:README.md'));
   assert.ok(rules.has('dependency-cruiser:DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE:README.md'));
@@ -853,7 +855,7 @@ test('Mermaid localiza a aresta original após YAML e comentários com aspas HTM
   const document = [
     '# Arquitetura', '```mermaid', '---', 'title: |',
     "  A -->|<span title='x'>chama</span>| B", '---',
-    'flowchart LR', '  A["a.ts"]', '  B["b.ts"]', `%% ${edge}`, edge, '```',
+    'flowchart LR', '  A["a.ts"]', '  B["b.ts"]', `%% ${edge} Exemplo escrito: %%{...`, edge, '```',
   ];
   const inspect = async () => {
     const blocks = extractMermaidBlocks([file], () => document.join('\r\n'));
@@ -883,6 +885,41 @@ test('Mermaid localiza a aresta original após YAML e comentários com aspas HTM
   assert.deepEqual(ambiguous.compared.findings, []);
   assert.equal(ambiguous.compared.stats.checkedEdges, 0);
   assert.ok(ambiguous.compared.stats.unmeasured > 0);
+});
+
+test('Mermaid atribui a linha reportada de um diagrama de sequência com origem direta', {skip: skipLocalTools}, async () => {
+  const parse = await createDefaultMermaidParser();
+  const file = 'README.md';
+  const validCode = 'sequenceDiagram\nAlice->>Bob: Olá\nBob->>Alice: Resposta';
+  const invalidCode = 'sequenceDiagram\nAlice->>Bob: Olá\nAlice -? Bob';
+  const blocks = [validCode, invalidCode, `---\ntitle: Conversa\n---\n${invalidCode}`,
+    invalidCode.replace('\n', '\n%% Exemplo\n')].map((code, index) => ({file, startLine: 12 + index * 10, code}));
+  const output = await validateMermaidDocuments([file], blocks, new Set(), parse);
+  assert.deepEqual(output.documentReferences.get(blocks[0]), {moduleNodes: [], moduleEdges: [], unmeasured: 1});
+  assert.deepEqual(output.findings.map(finding => [finding.rule, finding.line, finding.message.includes('iniciado')]), [
+    ['DOC-MERMAID-SINTAXE-INVALIDA', 24, false],
+    ['DOC-MERMAID-SINTAXE-INVALIDA', 32, true],
+    ['DOC-MERMAID-SINTAXE-INVALIDA', 42, true],
+  ]);
+
+  const syntaxError = "Parse error on line 3:\n...Alice -? Bob\n--------^\nExpecting 'SOLID_ARROW', got 'INVALID'";
+  const lexicalError = 'Lexical error on line 3. Unrecognized text.\n...Alice -? Bob\n--------^';
+  for (const [message, line] of [
+    [syntaxError, 14], [lexicalError, 14], ['Parse error on line 3: Unexpected end of input', 14],
+    ['Parse error on line 3', 12], ['Parse error on line 3 em um exemplo', 12],
+    ['Parse error on line 3: trecho de um exemplo', 12],
+    [syntaxError.replace('line 3', 'line 30'), 12], [`Falha interna: ${syntaxError}`, 12],
+    [`${syntaxError} em um exemplo`, 12], [`${lexicalError}\nComentário adicional`, 12],
+  ] as const) {
+    const error = await validateMermaidDocuments([file], [blocks[0]], new Set(), async () => { throw new Error(message); });
+    assert.equal(error.findings[0].line, line, message);
+    assert.equal(error.findings[0].message.includes('Linha do erro indeterminada'), line === 12, message);
+  }
+  const unknownVersion = await validateMermaidDocuments([file], [blocks[0]], new Set(), async () => {
+    throw new Error(syntaxError);
+  }, '', '12.4.0');
+  assert.equal(unknownVersion.findings[0].line, 12);
+  assert.match(unknownVersion.findings[0].message, /Linha do erro indeterminada/);
 });
 
 test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com nomes repetidos', {skip: skipLocalTools}, () => {
@@ -916,6 +953,19 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => source,
   );
   assert.deepEqual(example.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+  const multilineCode = source.replace(' * ```js', ' * Inline ``example').replace(' * ```', ' * end``');
+  const multiline = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    '[warning] The signature sample has an @param with name "legacy", which was not used', root, () => multilineCode,
+  );
+  assert.deepEqual(multiline.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-PARAM-DESATUALIZADO', 5]]);
+  const onlyInline = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
+    '[warning] The signature sample has an @param with name "legacy", which was not used', root,
+    () => multilineCode.replace('@param legacy obsolete', 'See the example.'),
+  );
+  assert.equal(onlyInline.findings[0].line, 7);
+  assert.match(onlyInline.findings[0].message, /Linha da tag indeterminada/);
   const exampleWithOpener = source.replace(' * @param legacy\n', ' * const text = "/**";\n');
   const literal = parseTypedocReport(
     {kind: 1, name: 'x', children: [member('sample', 7, 64)]},
@@ -942,13 +992,98 @@ test('TypeDoc atribui avisos a membros e ao comentário do símbolo, mesmo com n
     () => ['/** Public function.', ' * See {@link Missing}.', ' * Compare {@link Missing}.', ' */', 'export function sample() {}'].join('\n'),
   );
   assert.deepEqual(ambiguous.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 5]]);
+  assert.match(ambiguous.findings[0].message, /Linha da tag indeterminada/);
+
+  const sameLine = parseTypedocReport(
+    {kind: 1, name: 'x', children: [member('sample', 4, 64)]},
+    '[warning] Failed to resolve link to "Missing" in comment for sample', root,
+    () => ['/** Public function.', ' * See {@link Missing} and {@linkplain Missing}.', ' */', 'export function sample() {}'].join('\n'),
+  );
+  assert.deepEqual(sameLine.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
+  assert.doesNotMatch(sameLine.findings[0].message, /Linha da tag indeterminada/);
+
+  const literalLink = ['/** Public function.', String.raw` * See \{@link Missing \}.`,
+    ' * Literal `{@link Missing}`.', ' */', 'export function sample() {}'].join('\n');
+  const reflectionWithLiteral = {kind: 1, name: 'x', children: [member('sample', 5, 64)]};
+  const diagnostic = 'Failed to resolve link to "Missing" in comment for sample';
+  const withoutLocation = parseTypedocReport(reflectionWithLiteral, `[warning] ${diagnostic}`, root, () => literalLink);
+  assert.equal(withoutLocation.findings[0].line, 5);
+  assert.match(withoutLocation.findings[0].message, /Linha da tag indeterminada/);
+  const unrelated = parseTypedocReport(reflectionWithLiteral, `[info] Exemplo: ${diagnostic}`, root, () => literalLink);
+  assert.deepEqual(unrelated.findings, []);
+
+  const packageLink = '[warning] Failed to resolve link to "@scope/pkg.Missing" in comment for sample';
+  const suggested = `${packageLink}. You may have wanted "@scope/pkg!Missing"`;
+  const readSuggested = () => ['/** Public function.', ' * See {@link @scope/pkg.Missing}.', ' * Example.', ' */',
+    'export function sample() {}'].join('\n');
+  assert.deepEqual(parseTypedocReport(reflectionWithLiteral, suggested, root, readSuggested).findings
+    .map(f => [f.rule, f.line]), [['DOC-TYPEDOC-LINK-QUEBRADO', 2]]);
+  for (const message of [`[warning] ${diagnostic}. You may have wanted qualquer coisa`,
+    `${packageLink}. You may have wanted "outro texto"`, `${suggested} em um exemplo`]) {
+    assert.deepEqual(parseTypedocReport(reflectionWithLiteral, message, root, readSuggested).findings, [], message);
+  }
+});
+
+test('TypeDoc exige um arquivo inequívoco quando o aviso aceita um prefixo de pacote', () => {
+  const root = FIXTURE_CLEAN_DIR;
+  const diagnostic = '[warning] Sample (Interface), defined in pkg/src/api.ts, does not have any documentation';
+  const reflection = {kind: 1, name: 'x', children: []};
+  const sources = new Map([
+    ['package.json', '{"name":"pkg"}'], ['pkg/package.json', '{"name":"pkg"}'],
+    ['pkg/src/api.ts', '\n\nexport interface Sample {}'], ['src/api.ts', '\nexport interface Sample {}'],
+  ]);
+  const read = (file: string) => sources.get(file) ?? '';
+  const parse = (report: object, warning = diagnostic) => parseTypedocReport(report, warning, root, read,
+    MODULE_DEPLOY_DIR, new Set(sources.keys())).findings;
+  const sample = (fileName: string, line: number) => ({name: 'Sample', kind: 256, sources: [{fileName, line}],
+    comment: {summary: [{text: 'Documentado.'}]}});
+  const partial = {...reflection, children: [sample('src/api.ts', 2)]};
+  assert.deepEqual(parse(reflection), []);
+  assert.deepEqual(parse(partial), []);
+
+  sources.set('package.json', '{"name":"root"}');
+  const knownFile = parse(partial);
+  assert.deepEqual(knownFile.map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 1]]);
+  assert.match(knownFile[0].message, /Linha da declaração indeterminada/);
+  const withSource = {...reflection, children: [...partial.children, sample('pkg/src/api.ts', 3)]};
+  assert.deepEqual(parse(withSource).map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 3]]);
+
+  sources.set('pkg/package.json', '{"name":"@scope/pkg"}');
+  assert.deepEqual(parse(withSource, diagnostic.replace('in pkg/', 'in @scope/pkg/'))
+    .map(finding => [finding.file, finding.line]), [['pkg/src/api.ts', 3]]);
+  sources.set('package.json', '{"name":"pkg"}');
+  assert.deepEqual(parse(withSource).map(finding => [finding.file, finding.line]), [['src/api.ts', 2]]);
+  assert.deepEqual(parse(withSource, `${diagnostic} em um exemplo`), []);
+
+  sources.delete('package.json');
+  const absolutePath = join(root, 'src/api.ts');
+  assert.deepEqual(parse(partial, diagnostic.replace('pkg/src/api.ts', `<unknown>/${absolutePath}`))
+    .map(finding => [finding.file, finding.line]), [['src/api.ts', 2]]);
+  assert.deepEqual(parse(partial, diagnostic), []);
+});
+
+test('TypeDoc preserva o catálogo sem interpretar mensagens de uma versão desconhecida', () => {
+  const tools = mkdtempSync(join(tmpdir(), 'doc-typedoc-version-'));
+  try {
+    mkdirSync(join(tools, 'node_modules', 'typedoc'), {recursive: true});
+    writeFileSync(join(tools, 'node_modules', 'typedoc', 'package.json'), '{"version":"0.29.0"}');
+    const reflection = {kind: 1, name: 'x', children: [{name: 'sample', kind: 64, sources: [{fileName: 'sample.ts', line: 2}]}]};
+    const output = parseTypedocReport(reflection, '[warning] Failed to resolve link to "Missing" in comment for sample',
+      FIXTURE_CLEAN_DIR, () => '/** See {@link Missing}. */\nexport function sample() {}', tools);
+    assert.equal(output.symbols[0].file, 'sample.ts');
+    assert.deepEqual(output.findings.map(f => [f.rule, f.line]), [['DOC-TYPEDOC-SIMBOLO-SEM-DOC', 2]]);
+  } finally {
+    rmSync(tools, {recursive: true, force: true});
+  }
 });
 
 test('TypeDoc localiza avisos reais de exports default e confere assinaturas documentadas inequívocas', {skip: skipLocalTools}, async () => {
   const root = mkdtempSync(join(tmpdir(), 'doc-default-exports-'));
   try {
     const files = {
-      'contract.ts': ['/** Configuração.', ' * Consulte {@link MissingContract}.', ' */', 'export default', 'interface Config {}'],
+      'contract.ts': ['/** Configuração.', String.raw` * Exemplo \{@linkcode MissingContract \}.`,
+        ' * Consulte {@linkcode', ' * MissingContract}.', ' * Literal `{@linkcode MissingContract}`.',
+        ' */', 'export default', 'interface Config {}'],
       'modes.ts': ['/** Modos.', ' * Consulte {@link MissingMode}.', ' */', 'enum Mode {', '  Active,', '}', 'export default Mode;'],
       'choice.ts': ['/** Escolhas.', ' * Consulte {@link MissingChoice}.', ' */', 'enum Choice {', '  /** Padrão. */ First,', '}', 'export { Choice as default };'],
       'control.ts': ['/** Controle. */', 'export default interface Control {}', '/** Formata. */', 'export function format(current: string) { return current; }',
@@ -960,7 +1095,7 @@ test('TypeDoc localiza avisos reais de exports default e confere assinaturas doc
     const result = await runCollector({repoDir: root, toolsRoot: MODULE_DEPLOY_DIR});
     assert.equal(result.coverage.find(row => row.tool === 'typedoc')?.status, 'ok');
     assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-LINK-QUEBRADO')
-      .map(finding => [finding.file, finding.line]).sort(), [['choice.ts', 2], ['contract.ts', 2], ['modes.ts', 2]]);
+      .map(finding => [finding.file, finding.line]).sort(), [['choice.ts', 2], ['contract.ts', 3], ['modes.ts', 2]]);
     assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC')
       .map(finding => [finding.file, finding.line]), [['modes.ts', 5]]);
     assert.deepEqual(result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA')
@@ -1162,6 +1297,7 @@ test('AST do manifesto isola o diretório de subshells e registra executáveis c
     for (const build of [
       'command cd app && tsc -p build.json', 'command -- cd app && tsc -p build.json',
       '(command cd app && tsc -p build.json)', 'cd app && (true); tsc -p build.json',
+      'command cd app && tsc -p build.json &',
       'TSC=${TSC:-tsc}; exec "$TSC" -p build.json', 'command "$TSC" -p build.json', 'command -p -- "$TSC" -p build.json',
     ]) {
       const result = await collect(build);
@@ -1175,6 +1311,8 @@ test('AST do manifesto isola o diretório de subshells e registra executáveis c
     for (const build of [
       '(command cd app); tsc -p build.json', '(cd app; (cd ..)); command tsc -p build.json',
       'printf "%s" "$(cd app)"; exec tsc -p build.json', 'command -v "$TSC"; tsc -p build.json',
+      'command cd app & tsc -p build.json', 'command cd app && true & tsc -p build.json',
+      'command ./helpers/cd app; tsc -p build.json', './helpers/cd app; tsc -p build.json',
     ]) {
       const result = await collect(build);
       assert.equal(result.coverage.find(row => row.tool === 'dependency-cruiser:resolucao'), undefined, build);
