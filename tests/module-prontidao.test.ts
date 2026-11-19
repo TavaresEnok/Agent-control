@@ -2289,3 +2289,52 @@ test('comando composto com wrapper sudo e opções aciona cobertura parcial mesm
     rmSync(dir, {recursive: true, force: true});
   }
 });
+
+test('consultas e argumentos de wrappers não se confundem com operações de prontidão', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r6-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    writeFileSync(join(dir, 'app.service'), '[Service]\nType=oneshot\nStandardOutput=append:/var/log/app.log\n');
+    const audit = (lines: string[]) => {
+      writeFileSync(join(dir, 'scripts', 'maintenance.sh'), ['#!/bin/sh', ...lines, ''].join('\n'));
+      return runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+    };
+    const has = (out: ReturnType<typeof runCollector>, rule: string) => out.findings.some(f => f.rule === rule);
+    const status = (out: ReturnType<typeof runCollector>, pillar: string) => out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status;
+
+    for (const line of ['./constructor --help', 'sudo -l -- pg_dump -Fc -f /tmp/app.dump', 'sudo -l -- pg_dump -Fc -f /tmp/app.dump && true']) {
+      const out = audit([line]);
+      assert.equal(status(out, 'backup-restauracao'), 'ok', line);
+      assert.equal(has(out, 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), false, line);
+      assert.equal(has(out, 'PRONTIDAO-BACKUP-AUSENTE'), true, line);
+    }
+    const execution = audit(['sudo -u postgres pg_dump -Fc -f /tmp/app.dump']);
+    assert.equal(has(execution, 'PRONTIDAO-BACKUP-DESTINO-INSEGURO'), true);
+    const ambiguous = audit(['sudo --opcao-desconhecida pg_dump -Fc -f /tmp/app.dump']);
+    assert.equal(status(ambiguous, 'backup-restauracao'), 'failed');
+    assert.equal(has(ambiguous, 'PRONTIDAO-BACKUP-AUSENTE'), false);
+
+    const wrapped = audit(['timeout 10s df -P /', 'timeout 30s npm run personal:watch']);
+    assert.equal(has(wrapped, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'), false);
+    assert.equal(has(wrapped, 'PRONTIDAO-ALERTA-AUSENTE'), false);
+    const invalid = audit(['timeout --help df -P /', 'timeout npm run personal:watch', 'timeout --kill-after=bad 30s npm run personal:watch']);
+    assert.equal(has(invalid, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'), true);
+    assert.equal(has(invalid, 'PRONTIDAO-ALERTA-AUSENTE'), true);
+    const timeoutOptions = audit(['timeout -k 5s -- 10s df -P /', 'timeout --signal=TERM 30s npm run personal:watch']);
+    assert.equal(has(timeoutOptions, 'PRONTIDAO-DISCO-SEM-MONITORAMENTO'), false);
+    assert.equal(has(timeoutOptions, 'PRONTIDAO-ALERTA-AUSENTE'), false);
+
+    const optionValues = audit(["curl -o '$WEBHOOK_ALERT' https://example.com/health", 'logrotate -s /var/lib/logrotate/status']);
+    assert.equal(has(optionValues, 'PRONTIDAO-ALERTA-AUSENTE'), true);
+    assert.equal(has(optionValues, 'PRONTIDAO-LOGROTATE-AUSENTE'), true);
+    const targets = audit(['curl -o /tmp/result --url "$WEBHOOK_ALERT"', 'logrotate -s /var/lib/logrotate/status /etc/logrotate.conf']);
+    assert.equal(has(targets, 'PRONTIDAO-ALERTA-AUSENTE'), false);
+    assert.equal(has(targets, 'PRONTIDAO-LOGROTATE-AUSENTE'), false);
+    const longOptions = audit(["curl --output='$WEBHOOK_ALERT' https://example.com/health", 'logrotate --state=/var/lib/logrotate/status']);
+    assert.equal(has(longOptions, 'PRONTIDAO-ALERTA-AUSENTE'), true);
+    assert.equal(has(longOptions, 'PRONTIDAO-LOGROTATE-AUSENTE'), true);
+  } finally {
+    rmSync(dir, {recursive: true, force: true});
+  }
+});

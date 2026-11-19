@@ -1674,30 +1674,97 @@ function resticCommand(args) {
 const BACKUP_CANDIDATE_RE = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
 
 const SHELL_CONTROL_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', '{', '!']);
-const WRAPPER_SPECS = {
-  exec: {flagChars: new Set(['c', 'l']), valueChars: new Set(['a']), longFlags: new Set(), longValues: new Set()},
+const TIMEOUT_DURATION_RE = /^(?:\d+(?:\.\d*)?|\.\d+)[smhd]?$/;
+const WRAPPER_SPECS = Object.assign(Object.create(null), {
+  exec: {
+    flagChars: new Set(['c', 'l']),
+    valueChars: new Set(['a']),
+    nonExecFlagChars: new Set(),
+    longFlags: new Set(),
+    nonExecLongFlags: new Set(),
+    longValues: new Set(),
+    longOptionalEquals: new Set(),
+  },
   env: {
     flagChars: new Set(['i', '0', 'v']),
     valueChars: new Set(['u', 'C', 'S']),
+    nonExecFlagChars: new Set(),
     longFlags: new Set(['--ignore-environment', '--null', '--debug']),
+    nonExecLongFlags: new Set(),
     longValues: new Set(['--unset', '--chdir', '--split-string', '--block-signal', '--default-signal', '--ignore-signal', '--argv0']),
+    longOptionalEquals: new Set(),
   },
   sudo: {
-    flagChars: new Set(['A', 'B', 'E', 'H', 'K', 'P', 'S', 'V', 'b', 'e', 'i', 'k', 'l', 'n', 's', 'v']),
+    flagChars: new Set(['A', 'B', 'E', 'H', 'P', 'S', 'b', 'i', 'k', 'n', 's']),
     valueChars: new Set(['C', 'D', 'R', 'T', 'U', 'a', 'c', 'g', 'h', 'p', 'r', 't', 'u']),
+    nonExecFlagChars: new Set(['K', 'V', 'e', 'l', 'v']),
     longFlags: new Set([
-      '--askpass', '--background', '--bell', '--edit', '--help', '--invalid', '--list', '--login',
-      '--non-interactive', '--preserve-env', '--remove-timestamp', '--reset-timestamp', '--set-home',
-      '--shell', '--stdin', '--validate', '--version',
+      '--askpass', '--background', '--bell', '--login', '--non-interactive', '--preserve-env',
+      '--reset-timestamp', '--set-home', '--shell', '--stdin',
+    ]),
+    nonExecLongFlags: new Set([
+      '--edit', '--help', '--list', '--remove-timestamp', '--validate', '--version',
     ]),
     longValues: new Set([
       '--chdir', '--chroot', '--close-from', '--command-timeout', '--group', '--host',
       '--login-class', '--other-user', '--prompt', '--role', '--type', '--user',
     ]),
+    longOptionalEquals: new Set(['--preserve-env']),
   },
-};
+  timeout: {
+    flagChars: new Set(['f', 'p', 'v']),
+    valueChars: new Set(['k', 's']),
+    nonExecFlagChars: new Set(),
+    longFlags: new Set(['--foreground', '--preserve-status', '--verbose']),
+    nonExecLongFlags: new Set(['--help', '--version']),
+    longValues: new Set(['--kill-after', '--signal']),
+    longOptionalEquals: new Set(),
+  },
+});
 
-function skipWrapperOptions(words, {flagChars, valueChars, longFlags, longValues}) {
+const OPERATIONAL_TARGET_SPECS = Object.assign(Object.create(null), {
+  curl: {
+    flagChars: new Set(['4', '6', 'a', 'B', 'f', 'g', 'G', 'i', 'I', 'j', 'J', 'k', 'l', 'L', 'n', 'N', 'O', 'q', 'R', 's', 'S', 'v', 'Z', '0', '1', '2', '3', '#', ':']),
+    valueChars: new Set(['A', 'b', 'c', 'C', 'd', 'D', 'e', 'E', 'F', 'H', 'K', 'm', 'o', 'P', 'Q', 'r', 't', 'T', 'u', 'U', 'w', 'x', 'X', 'Y', 'y', 'z']),
+    nonExecFlagChars: new Set(['V']),
+    longFlags: new Set([
+      '--anyauth', '--append', '--basic', '--compressed', '--create-dirs', '--digest', '--disable', '--fail',
+      '--fail-early', '--fail-with-body', '--get', '--globoff', '--head', '--http0.9', '--http1.0', '--http1.1',
+      '--http2', '--http2-prior-knowledge', '--http3', '--include', '--insecure', '--ipv4', '--ipv6',
+      '--junk-session-cookies', '--list-only', '--location', '--location-trusted', '--netrc', '--netrc-optional',
+      '--no-alpn', '--no-buffer', '--no-keepalive', '--no-npn', '--no-progress-meter', '--ntlm', '--parallel',
+      '--path-as-is', '--post301', '--post302', '--post303', '--progress-bar', '--raw', '--remote-name',
+      '--remote-name-all', '--remote-time', '--show-error', '--silent', '--ssl', '--ssl-reqd', '--tlsv1',
+      '--tlsv1.0', '--tlsv1.1', '--tlsv1.2', '--tlsv1.3', '--tr-encoding', '--verbose',
+    ]),
+    nonExecLongFlags: new Set(),
+    longValues: new Set([
+      '--abstract-unix-socket', '--cacert', '--capath', '--cert', '--cert-type', '--ciphers', '--config',
+      '--connect-timeout', '--connect-to', '--continue-at', '--cookie', '--cookie-jar', '--data', '--data-ascii',
+      '--data-binary', '--data-raw', '--data-urlencode', '--doh-url', '--dump-header', '--expect100-timeout',
+      '--form', '--form-string', '--header', '--interface', '--json', '--keepalive-time', '--key', '--key-type',
+      '--limit-rate', '--max-filesize', '--max-redirs', '--max-time', '--netrc-file', '--oauth2-bearer',
+      '--output', '--output-dir', '--pass', '--pinnedpubkey', '--proto', '--proto-redir', '--proxy',
+      '--proxy-header', '--proxy-user', '--quote', '--range', '--referer', '--request', '--resolve', '--retry',
+      '--retry-delay', '--retry-max-time', '--speed-limit', '--speed-time', '--time-cond', '--unix-socket',
+      '--upload-file', '--user', '--user-agent', '--write-out',
+    ]),
+    targetLongValues: new Set(['--url']),
+  },
+  logrotate: {
+    flagChars: new Set(['f', 'v']),
+    valueChars: new Set(['s', 'm', 'l']),
+    nonExecFlagChars: new Set(['d', '?']),
+    longFlags: new Set(['--force', '--verbose', '--skip-state-lock']),
+    nonExecLongFlags: new Set(['--debug', '--help', '--usage', '--version']),
+    longValues: new Set(['--state', '--mail', '--log']),
+    targetLongValues: new Set(),
+  },
+});
+
+function skipWrapperOptions(words, spec, binary) {
+  const {flagChars, valueChars, nonExecFlagChars, longFlags, nonExecLongFlags, longValues, longOptionalEquals} = spec;
+  const strict = binary === 'sudo' || binary === 'timeout';
   let i = 0;
   while (i < words.length && !words[i].operator) {
     const opt = words[i].text ?? '';
@@ -1709,26 +1776,62 @@ function skipWrapperOptions(words, {flagChars, valueChars, longFlags, longValues
     if (opt.startsWith('--')) {
       const eq = opt.indexOf('=');
       const name = eq === -1 ? opt : opt.slice(0, eq);
-      if (eq !== -1 && (longValues.has(name) || longFlags.has(name))) {
-        i++;
-        continue;
+      if (eq !== -1) {
+        if (longValues.has(name) || longOptionalEquals.has(name) || (!strict && longFlags.has(name))) {
+          if (strict && opt.slice(eq + 1) === '') return {words: [], query: false, ambiguous: true};
+          if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(opt.slice(eq + 1))) {
+            return {words: [], query: false, ambiguous: true};
+          }
+          i++;
+          continue;
+        }
+        return strict ? {words: [], query: false, ambiguous: true} : {words: words.slice(i), query: false, ambiguous: false};
       }
-      if (eq === -1 && longValues.has(name)) {
+      if (nonExecLongFlags.has(name)) {
+        return {words: [], query: true, ambiguous: false};
+      }
+      if (longValues.has(name)) {
+        const next = words[i + 1];
+        if (strict && (!next || next.operator || next.text === '--')) {
+          return {words: [], query: false, ambiguous: true};
+        }
+        if (binary === 'timeout' && name === '--kill-after' && !TIMEOUT_DURATION_RE.test(next?.text ?? '')) {
+          return {words: [], query: false, ambiguous: true};
+        }
         i += 2;
         continue;
       }
-      if (eq === -1 && longFlags.has(name)) {
+      if (longFlags.has(name)) {
         i++;
         continue;
       }
-      break;
+      return strict ? {words: [], query: false, ambiguous: true} : {words: words.slice(i), query: false, ambiguous: false};
+    }
+    if (binary === 'sudo' && opt === '-h' && (i + 1 >= words.length || words[i + 1].operator)) {
+      return {words: [], query: true, ambiguous: false};
     }
     let consumedValue = false;
     let valid = true;
     for (let j = 1; j < opt.length; j++) {
       const ch = opt[j];
+      if (nonExecFlagChars.has(ch)) {
+        return {words: [], query: true, ambiguous: false};
+      }
       if (valueChars.has(ch)) {
-        if (j === opt.length - 1) consumedValue = true;
+        const inlineValue = j < opt.length - 1;
+        const next = words[i + 1];
+        if (!inlineValue) {
+          if (strict && (!next || next.operator || next.text === '--')) {
+            return {words: [], query: false, ambiguous: true};
+          }
+          consumedValue = true;
+        }
+        if (binary === 'timeout' && ch === 'k') {
+          const val = inlineValue ? opt.slice(j + 1) : (next?.text ?? '');
+          if (!TIMEOUT_DURATION_RE.test(val)) {
+            return {words: [], query: false, ambiguous: true};
+          }
+        }
         break;
       }
       if (!flagChars.has(ch)) {
@@ -1736,10 +1839,22 @@ function skipWrapperOptions(words, {flagChars, valueChars, longFlags, longValues
         break;
       }
     }
-    if (!valid) break;
+    if (!valid) {
+      return strict ? {words: [], query: false, ambiguous: true} : {words: words.slice(i), query: false, ambiguous: false};
+    }
     i += consumedValue ? 2 : 1;
   }
-  return words.slice(i);
+  const rest = words.slice(i);
+  if (binary === 'timeout') {
+    if (rest.length === 0 || rest[0].operator) {
+      return {words: [], query: false, ambiguous: false};
+    }
+    if (!TIMEOUT_DURATION_RE.test(rest[0].text ?? '')) {
+      return {words: [], query: false, ambiguous: true};
+    }
+    return {words: rest.slice(1), query: false, ambiguous: false};
+  }
+  return {words: rest, query: false, ambiguous: false};
 }
 
 function unwrapCommandWords(segWords) {
@@ -1774,16 +1889,18 @@ function unwrapCommandWords(segWords) {
     const binary = basename(text);
     if (binary === 'command') {
       const next = words[1]?.text ?? '';
-      if (next === '-v' || next === '-V') break;
+      if (next === '-v' || next === '-V') return {words: [], query: true, ambiguous: false};
       words.shift();
       if (words[0]?.text === '-p') words.shift();
       if (words[0]?.text === '--') words.shift();
       continue;
     }
-    const spec = WRAPPER_SPECS[binary];
+    const spec = Object.hasOwn(WRAPPER_SPECS, binary) ? WRAPPER_SPECS[binary] : null;
     if (spec) {
       words.shift();
-      words = skipWrapperOptions(words, spec);
+      const unwrapped = skipWrapperOptions(words, spec, binary);
+      if (unwrapped.query || unwrapped.ambiguous) return unwrapped;
+      words = unwrapped.words;
       continue;
     }
     break;
@@ -1795,7 +1912,74 @@ function unwrapCommandWords(segWords) {
       words[words.length - 1] = {...last, text: last.text.slice(0, -1)};
     }
   }
-  return words;
+  return {words, query: false, ambiguous: false};
+}
+
+function extractOperationalTargets(args, {
+  flagChars,
+  valueChars,
+  nonExecFlagChars,
+  longFlags,
+  nonExecLongFlags,
+  longValues,
+  targetLongValues,
+}) {
+  const targets = [];
+  let afterDashDash = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    if (afterDashDash) {
+      if (arg !== '-') targets.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      afterDashDash = true;
+      continue;
+    }
+    if (arg.startsWith('--')) {
+      const eq = arg.indexOf('=');
+      const name = eq === -1 ? arg : arg.slice(0, eq);
+      if (nonExecLongFlags.has(name)) return [];
+      if (targetLongValues.has(name)) {
+        if (eq === -1 && args[i + 1] === '--') break;
+        const val = eq === -1 ? args[++i] : arg.slice(eq + 1);
+        if (val) targets.push(val);
+        continue;
+      }
+      if (eq !== -1) {
+        if (longValues.has(name)) continue;
+        break;
+      }
+      if (longValues.has(name)) {
+        i++;
+        continue;
+      }
+      if (longFlags.has(name)) continue;
+      break;
+    }
+    if (arg.startsWith('-') && arg !== '-') {
+      let consumedValue = false;
+      let valid = true;
+      for (let j = 1; j < arg.length; j++) {
+        const ch = arg[j];
+        if (nonExecFlagChars.has(ch)) return [];
+        if (valueChars.has(ch)) {
+          if (j === arg.length - 1) consumedValue = true;
+          break;
+        }
+        if (!flagChars.has(ch)) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid) break;
+      if (consumedValue) i++;
+      continue;
+    }
+    if (arg !== '-') targets.push(arg);
+  }
+  return targets;
 }
 
 function splitShellSegments(words) {
@@ -1821,7 +2005,7 @@ function splitShellSegments(words) {
 
 function unwrapShellDashC(parsed) {
   if (!parsed || parsed.operator) return null;
-  const words = unwrapCommandWords(parsed.words);
+  const {words} = unwrapCommandWords(parsed.words);
   const binary = basename(words[0]?.text ?? '');
   if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[1]?.text ?? '') && words[2]) {
     return words[2].text;
@@ -1858,7 +2042,8 @@ function nodeScriptTarget(args) {
 }
 
 function isBackupCandidateSegment(segWords) {
-  const words = unwrapCommandWords(segWords);
+  const {words, ambiguous} = unwrapCommandWords(segWords);
+  if (ambiguous) return segWords.some(word => BACKUP_CANDIDATE_RE.test(word.text ?? ''));
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return false;
   if (/^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find)$/.test(binary)) return true;
@@ -1879,7 +2064,7 @@ function isBackupCandidateSegment(segWords) {
 
 function evaluateShellSegment(segWords, depth = 0) {
   const res = {alerting: false, disk: false, logrotate: false, incomplete: false};
-  const words = unwrapCommandWords(segWords);
+  const {words} = unwrapCommandWords(segWords);
   const binary = basename(words.shift()?.text ?? '');
   if (!binary) return res;
   if (depth < 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
@@ -1911,8 +2096,9 @@ function evaluateShellSegment(segWords, depth = 0) {
     const script = basename(nodeScriptTarget(args));
     if (/^personal-watch(?:\.[cm]?js)?$/.test(script)) res.alerting = true;
     if (/^personal-maintenance(?:\.[cm]?js)?$/.test(script)) res.disk = true;
-  } else if (['curl', 'wget'].includes(binary)) {
-    if (args.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
+  } else if (binary === 'curl' || binary === 'wget') {
+    const targets = binary === 'curl' ? extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.curl) : args;
+    if (targets.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
       res.alerting = true;
     }
   } else if (binary === 'df') {
@@ -1928,7 +2114,7 @@ function evaluateShellSegment(segWords, depth = 0) {
       res.disk = true;
     }
   } else if (binary === 'logrotate') {
-    if (args.some(arg => arg && !arg.startsWith('-'))) {
+    if (extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.logrotate).length > 0) {
       res.logrotate = true;
     }
   }
@@ -1974,7 +2160,12 @@ function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
       }
       continue;
     }
-    const words = unwrapCommandWords(parsed.words);
+    const unwrapped = unwrapCommandWords(parsed.words);
+    if (unwrapped.ambiguous) {
+      onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
+      continue;
+    }
+    const words = unwrapped.words;
     const binary = basename(words.shift()?.text ?? '');
     const args = words.filter(word => !word.operator).map(word => word.text);
     const [subcommand, ...parameters] = binary === 'restic' ? resticCommand(args) : args;
