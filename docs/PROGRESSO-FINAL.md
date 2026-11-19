@@ -1109,3 +1109,6 @@ PAUSADO-COTA
 - 19/11/2026 21:03 UTC — C-DOCUMENTACAO-VIVA encerrado com código -15.
 - 19/11/2026 21:03 UTC — A arquitetura teve 35 achados em caminhos de framework com parênteses ou colchetes. Em prontidão, 29 achados dependiam da única cobertura agregada prontidao-audit, marcada failed. Documentação teve cinco campos de caminho bloqueados pela proteção de segredo. As ordens agora incluem esses diagnósticos; os valores sensíveis ficaram fora dos registros.
 - 19/11/2026 21:03 UTC — C-PRONTIDAO-VIVA encerrado com código -15.
+- 19/11/2026 21:03 UTC — trabalho-C-DOCUMENTACAO-VIVA-CAMPO iniciado em final-doc-viva por Sol high normal.
+- 19/11/2026 21:03 UTC — trabalho-C-PRONTIDAO-VIVA-CAMPO iniciado em final-pront-viva por Sol medium normal.
+- 19/11/2026 21:04 UTC — A repetição adicional da suíte em a69311d7 registrou 275 arquivos aprovados e uma falha de temporização na prova de renovação da CLI. Sol medium vai substituir a espera frágil por um sinal observável caso confirme a causa. O aceite das correções vivas repetirá a suíte completa.
