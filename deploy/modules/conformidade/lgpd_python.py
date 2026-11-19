@@ -1,7 +1,7 @@
 """Local binding and call analysis over Python's standard AST."""
 
 import ast
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 
 from lgpd_sql import sql_origin
@@ -31,7 +31,7 @@ class Value:
     invalidated: bool = False
     fixed_items: bool = False
     opaque_effects: bool = False
-    effects: tuple = ()
+    effects: "FunctionSummary | None" = None
 
 
 UNKNOWN = Value(unknown=True)
@@ -76,6 +76,19 @@ def item_key(node):
     return None
 
 
+def reference_names(node):
+    if isinstance(node, ast.Name):
+        yield node.id
+    elif isinstance(node, (ast.Attribute, ast.Subscript, ast.Starred)):
+        yield from reference_names(node.value)
+    elif isinstance(node, ast.IfExp):
+        yield from reference_names(node.body)
+        yield from reference_names(node.orelse)
+    elif isinstance(node, ast.BoolOp):
+        for value in node.values:
+            yield from reference_names(value)
+
+
 class LocalNames(ast.NodeVisitor):
     """Find lexical locals without including bindings from inner scopes."""
 
@@ -84,7 +97,9 @@ class LocalNames(ast.NodeVisitor):
         self.external = set()
         self.globals = set()
         self.receivers = set()
-        self.calls = set()
+        self.calls = []
+        self.functions = defaultdict(list)
+        self.aliases = defaultdict(set)
 
     def visit_Name(self, node):
         if isinstance(node.ctx, (ast.Store, ast.Del)):
@@ -92,8 +107,12 @@ class LocalNames(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         self.names.add(node.name)
+        self.functions[node.name].append(node)
 
-    visit_AsyncFunctionDef = visit_ClassDef = visit_FunctionDef
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node):
+        self.names.add(node.name)
 
     def visit_Lambda(self, node):
         pass
@@ -109,21 +128,30 @@ class LocalNames(ast.NodeVisitor):
 
     def visit_Attribute(self, node):
         if isinstance(node.ctx, (ast.Store, ast.Del)):
-            root = node.value
-            while isinstance(root, (ast.Attribute, ast.Subscript)):
-                root = root.value
-            if isinstance(root, ast.Name):
-                self.receivers.add(root.id)
+            self.receivers.update(reference_names(node.value))
         self.generic_visit(node)
 
     visit_Subscript = visit_Attribute
 
     def visit_Call(self, node):
-        if isinstance(node.func, ast.Name):
-            self.calls.add((node.func.id, ""))
-        elif isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-            self.calls.add((node.func.value.id, node.func.attr))
+        self.calls.append(node)
         self.generic_visit(node)
+
+    def assignment(self, node, targets):
+        for target in targets:
+            if isinstance(target, ast.Name):
+                self.aliases[target.id].update(reference_names(node.value))
+                if isinstance(node.value, ast.Lambda):
+                    self.functions[target.id].append(node.value)
+        self.generic_visit(node)
+
+    def visit_Assign(self, node):
+        self.assignment(node, node.targets)
+
+    def visit_AnnAssign(self, node):
+        self.assignment(node, (node.target,))
+
+    visit_NamedExpr = visit_AnnAssign
 
     def visit_Import(self, node):
         self.names.update(alias.asname or alias.name.split(".")[0] for alias in node.names)
@@ -148,6 +176,14 @@ class LocalNames(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+@dataclass
+class FunctionSummary:
+    body: list
+    local: LocalNames
+    bindings: dict
+    owners: dict
+
+
 class Analyzer(ast.NodeVisitor):
     def __init__(self, field):
         self.field = field
@@ -160,6 +196,7 @@ class Analyzer(ast.NodeVisitor):
         self.captures = None
         self.function = None
         self.owners = {}
+        self.summaries = {}
         self.hits = {}
         self.gaps = Counter()
 
@@ -174,13 +211,13 @@ class Analyzer(ast.NodeVisitor):
         self.module_names = collector.names
         self.generic_visit(node)
         # Function bodies have their own analysis state and no assumed call order.
-        for function, body, locals_, captures, owners in self.bodies:
+        for function, summary, captures in self.bodies:
             self.function = function
             self.captures = captures
-            self.owners = owners | dict.fromkeys(locals_, function)
-            self.scopes.append(locals_)
+            self.owners = summary.owners
+            self.scopes.append(summary.bindings.copy())
             self.mutations.append({})
-            for child in body:
+            for child in summary.body:
                 self.visit(child)
             self.scopes.pop()
             self.mutations.pop()
@@ -246,7 +283,7 @@ class Analyzer(ast.NodeVisitor):
             else:
                 items.extend(part.items)
                 unknown |= part.unknown
-        return Value(items=items, unknown=unknown, fixed_items=isinstance(node, ast.Tuple))
+        return Value(items=items, unknown=unknown, invalidated=unknown, fixed_items=isinstance(node, ast.Tuple))
 
     def dictionary(self, node):
         keys = {}
@@ -270,7 +307,7 @@ class Analyzer(ast.NodeVisitor):
             self.gaps[EXPANSION if key is None else "chaves de objetos sem vínculo estático"] += 1
             keys.clear()  # The missing keys may override any entry seen before this point.
             unknown = True
-        return Value(keys=keys, unknown=unknown)
+        return Value(keys=keys, unknown=unknown, invalidated=unknown)
 
     def value(self, node, used=True):
         if isinstance(node, ast.Constant):
@@ -296,8 +333,11 @@ class Analyzer(ast.NodeVisitor):
         if isinstance(node, ast.IfExp):
             self.value(node.test, used=False)
             yes, no = self.branches([node.body], [node.orelse],
-                                    evaluate=lambda choice: self.origin(self.value(choice[0])))
-            return Value(yes or no, unknown=True)
+                                    evaluate=lambda choice: self.branch_value(choice[0]))
+            if yes[1] or no[1]:
+                return CAPTURED
+            source = yes[0] or no[0]
+            return Value(source) if source is not None else CAPTURED
         if isinstance(node, ast.BoolOp):
             self.value(node.values[0], used=False)
             self.branches(node.values[1:])
@@ -324,10 +364,15 @@ class Analyzer(ast.NodeVisitor):
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             self.visit_ListComp(node)
         else:
-            self.generic_visit(node)
+            # Keep any discovered writes conditional when the expression is outside the model.
+            self.branches([node], evaluate=lambda branch: self.generic_visit(branch[0]))
             if used:
                 self.gaps[EXPRESSION] += 1
         return CAPTURED
+
+    def branch_value(self, node):
+        current = self.state(self.value(node))
+        return self.origin(current), bool(current and current.invalidated)
 
     def property_reference(self, target):
         reference = self.value(target.value)
@@ -348,8 +393,10 @@ class Analyzer(ast.NodeVisitor):
                 return receiver.items[key]
         if key is None and receiver and (receiver.items is not None or receiver.keys or receiver.attrs):
             self.gaps["leituras de propriedades sem chave estática"] += 1
-        if isinstance(key, str) and self.field.fullmatch(key) and receiver and receiver.unknown and not receiver.invalidated:
-            return Value(node.end_lineno if attribute else node.slice.lineno)
+        if isinstance(key, str) and self.field.fullmatch(key) and receiver and receiver.unknown:
+            if not receiver.invalidated:
+                return Value(node.end_lineno if attribute else node.slice.lineno)
+            self.gaps[EXPRESSION] += 1
         if receiver and receiver.invalidated:
             return CAPTURED
         return UNKNOWN if receiver and receiver.unknown else None
@@ -386,7 +433,7 @@ class Analyzer(ast.NodeVisitor):
         if delete and not unknown:
             entries.pop(key, None)
         else:
-            entries[key] = UNKNOWN if delete else value
+            entries[key] = CAPTURED if delete else value
 
     def invalidate(self, reference):
         self.mutations[-1][reference] = Value(unknown=True, invalidated=True, attrs={})
@@ -470,66 +517,118 @@ class Analyzer(ast.NodeVisitor):
         for default in (*node.args.defaults, *node.args.kw_defaults):
             if default is not None:
                 self.visit(default)
-        lambda_ = isinstance(node, ast.Lambda)
-        body = [node.body] if lambda_ else node.body
-        collector = LocalNames()
-        for child in body:
-            collector.visit(child)
-        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
-                     node.args.vararg, node.args.kwarg]
-        locals_ = dict.fromkeys(collector.names - collector.external, UNKNOWN)
-        locals_.update({arg.arg: Value(unknown=True, attrs={}) for arg in arguments if arg is not None})
-        captures = self.module_names | self.owners.keys() | collector.external
-        self.bodies.append((node, body, locals_, captures, self.owners))
-        # Keep possible effects on names outside the callable, with their lexical owner.
-        def owner(name):
-            return None if name in collector.globals else self.owners.get(name)
-
-        effects = (
-            tuple((name, owner(name)) for name in sorted(collector.names & collector.external)),
-            tuple((name, owner(name)) for name in sorted(collector.receivers - locals_.keys())),
-            tuple((name, owner(name), member) for name, member in sorted(collector.calls) if name not in locals_),
-        )
-        opaque = any(not (isinstance(child, (ast.Pass, ast.Constant)) or isinstance(child, ast.Expr) and
-                          isinstance(child.value, ast.Constant)) for child in body)
-        decorated = bool(getattr(node, "decorator_list", ()))
-        value = Value(opaque_effects=opaque or decorated, unknown=decorated, effects=effects)
-        if not lambda_:
+        value = self.function_summary(node, self.owners)
+        captures = self.module_names | self.owners.keys() | value.effects.local.external
+        self.bodies.append((node, value.effects, captures))
+        if not isinstance(node, ast.Lambda):
             self.scopes[-1][node.name] = value
         return value
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
+    def function_summary(self, node, parents):
+        if node in self.summaries:
+            return self.summaries[node]
+        body = [node.body] if isinstance(node, ast.Lambda) else node.body
+        collector = LocalNames()
+        for child in body:
+            collector.visit(child)
+        arguments = [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
+                     node.args.vararg, node.args.kwarg]
+        locals_ = dict.fromkeys(collector.names - collector.external, CAPTURED)
+        locals_.update({arg.arg: Value(unknown=True, attrs={}) for arg in arguments if arg is not None})
+        owners = parents | dict.fromkeys(locals_, node) | dict.fromkeys(collector.globals)
+        opaque = any(not (isinstance(child, (ast.Pass, ast.Constant)) or isinstance(child, ast.Expr) and
+                          isinstance(child.value, ast.Constant)) for child in body)
+        decorated = bool(getattr(node, "decorator_list", ()))
+        summary = FunctionSummary(body, collector, locals_, owners)
+        value = Value(opaque_effects=opaque or decorated, unknown=decorated, effects=summary)
+        self.summaries[node] = value
+        return value
+
     def apply_effects(self, callee):
         visited, writes, receivers = set(), set(), set()
 
         def resolve(name):
-            for scope in reversed(self.scopes):
+            scopes = self.scopes if self.function is None else self.scopes[1:]
+            for scope in reversed(scopes):
                 if name in scope:
                     return scope[name], True
+            if self.captures is not None and name in self.captures:
+                self.gaps[CAPTURE] += 1
+                return CAPTURED, False
             if name not in self.externals:
                 self.externals[name] = external(name)
             return self.externals[name], False
+
+        def visible(name, owner):
+            # Module writes affect the function's global view, even when it has a local state frame.
+            return self.owners.get(name) is owner and (owner is None or owner is self.function)
+
+        # Follow possible alias roots in lexical summaries without replaying local assignments.
+        def visit_root(name, owner, on_reference, on_callable=None, seen=None):
+            if visible(name, owner):
+                on_reference(*resolve(name))
+            elif owner is not None:
+                seen = set() if seen is None else seen
+                if (name, owner) in seen:
+                    return
+                seen.add((name, owner))
+                summary = self.summaries[owner].effects
+                if on_callable is not None:
+                    for definition in summary.local.functions.get(name, ()):
+                        on_callable(self.function_summary(definition, summary.owners))
+                for alias in sorted(summary.local.aliases.get(name, ())):
+                    visit_root(alias, summary.owners.get(alias), on_reference, on_callable, seen)
+
+        def affect(reference, _tracked=False):
+            receivers.add(reference)
 
         def collect(value):
             if not value or not value.effects or value in visited:
                 return
             visited.add(value)
-            bindings, mutations, calls = value.effects
-            writes.update(name for name, owner in bindings if owner is self.function)
-            receivers.update(resolve(name)[0] for name, owner in mutations if owner is self.function)
-            for name, owner, member in calls:
-                if owner is not self.function:
-                    continue
-                receiver, tracked = resolve(name)
-                if not member:
-                    collect(receiver)
-                    continue
-                data = self.state(receiver)
-                method = data.attrs.get(member) if data and data.attrs is not None else None
-                if self.receiver_may_change(receiver, member, method, tracked):
-                    receivers.add(receiver)
-                collect(method)
+            local, owners = value.effects.local, value.effects.owners
+            writes.update(name for name in local.names & local.external if visible(name, owners.get(name)))
+            for name in sorted(local.receivers):
+                visit_root(name, owners.get(name), affect)
+            for call in local.calls:
+                target = call.func
+                resolved, opaque = False, False
+
+                def visit_callee(callee, _tracked=False):
+                    nonlocal resolved, opaque
+                    collect(callee)
+                    resolved |= callee is not None
+                    opaque |= bool(callee and (callee.unknown or callee.opaque_effects))
+
+                def visit_receiver(receiver, tracked):
+                    data = self.state(receiver)
+                    method = data.attrs.get(target.attr) if data and data.attrs is not None else None
+                    if self.receiver_may_change(receiver, target.attr, method, tracked):
+                        affect(receiver, tracked)
+                    visit_callee(method)
+
+                def visit_argument(reference, _tracked):
+                    affect(reference)
+                    collect(reference)
+
+                if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                    name = target.value.id
+                    visit_root(name, owners.get(name), visit_receiver)
+                elif isinstance(target, ast.Attribute):
+                    for name in reference_names(target.value):
+                        visit_root(name, owners.get(name), affect)
+                elif isinstance(target, ast.Name):
+                    visit_root(target.id, owners.get(target.id), visit_callee, visit_callee)
+                elif isinstance(target, ast.Lambda):
+                    visit_callee(self.function_summary(target, owners))
+                if not resolved or opaque:
+                    for arg in (*call.args, *(keyword.value for keyword in call.keywords)):
+                        argument = arg.value if isinstance(arg, ast.Starred) else arg
+                        if isinstance(argument, ast.Name):
+                            name = argument.id
+                            visit_root(name, owners.get(name), visit_argument, collect)
 
         collect(callee)
         seen = set()
@@ -556,7 +655,7 @@ class Analyzer(ast.NodeVisitor):
             self.scopes.append({})
             self.mutations.append({})
             if loop_target is not None:
-                self.bind(loop_target, UNKNOWN)
+                self.bind(loop_target, CAPTURED)
             if evaluate is None:
                 for child in branch:
                     self.visit(child)
@@ -637,7 +736,7 @@ class Analyzer(ast.NodeVisitor):
         kind = callee.kind if callee else None
         arguments = args + keywords
         source = self.first(value for value, _ in arguments)
-        result = Value(unknown=True, attrs={})
+        result = Value(unknown=True, invalidated=True, attrs={})
         if kind == "STR" and args:
             at = self.origin(args[0][0])
             result = Value(at) if at is not None else None
@@ -658,7 +757,6 @@ class Analyzer(ast.NodeVisitor):
                     node.func.value.id in frame for frame in self.scopes)
                 if self.receiver_may_change(receiver, method, callee, tracked):
                     affected.add(receiver)
-                    uncertain = True
             if callee and (callee.unknown or callee.opaque_effects):
                 for value, expansion in arguments:
                     if expansion == "items":
@@ -670,7 +768,6 @@ class Analyzer(ast.NodeVisitor):
             seen = set()
             for reference in affected:
                 self.invalidate_reachable(reference, seen)
-            result.invalidated = uncertain
             return result
         if kind in ("STR", "LOGGER_FACTORY"):
             return result
