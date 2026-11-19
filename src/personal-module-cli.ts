@@ -285,17 +285,7 @@ export async function runPersonalModuleCli(
       return [corrected.messageLocalId, ...corrected.writePaths];
     }
 
-    const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
-      module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
-        ? await probePublishedHttpsOrigins(authorizedOrigins, deps?.prontidaoProbeOptions)
-        : undefined;
-
-    const commit = await readHead(project.repo);
     let providerLimited = false;
-    const runExam = createPersonalModuleExam({
-      ledger, principal: project.owner, authority, commit,
-      loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
-    });
     const runId = randomUUID();
     const collectorAbort = new AbortController();
     let rejectAbort: (error: unknown) => void = () => {};
@@ -317,34 +307,50 @@ export async function runPersonalModuleCli(
     });
 
     let runningTask: Promise<VerificationModuleRunResult> | undefined;
+    const execute = async (signal: AbortSignal) => {
+      const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
+        module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
+          ? await probePublishedHttpsOrigins(authorizedOrigins, {...deps?.prontidaoProbeOptions, signal})
+          : undefined;
+      signal.throwIfAborted();
+      const commit = await readHead(project.repo);
+      signal.throwIfAborted();
+      const runExam = createPersonalModuleExam({
+        ledger, principal: project.owner, authority: authority!, commit,
+        loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
+      });
+      return runVerificationModule({
+        module,
+        ledger,
+        principal: project.owner,
+        authority: authority!,
+        projectId: project.id,
+        repoPath: project.repo,
+        dataDirectory: config.dataDirectory,
+        commit,
+        runId,
+        signal,
+        ...(deps?.image !== undefined ? {image: deps.image} : {}),
+        ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
+        ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
+        ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),
+        ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
+        ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
+        ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
+        async examinar(request) {
+          const examined = await runExam(request);
+          providerLimited = examined.coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT')
+            || examined.findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT');
+          return examined;
+        },
+      });
+    };
     try {
       const result = await withExamSignals(
-        async () => {
-          const task = runningTask = runVerificationModule({
-            module,
-            ledger,
-            principal: project.owner,
-            authority: authority!,
-            projectId: project.id,
-            repoPath: project.repo,
-            dataDirectory: config.dataDirectory,
-            commit,
-            runId,
-            signal: collectorAbort.signal,
-            ...(deps?.image !== undefined ? {image: deps.image} : {}),
-            ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
-            ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
-            ...(deps?.maxStdoutBytes !== undefined ? {maxStdoutBytes: deps.maxStdoutBytes} : {}),
-            ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
-            ...(deps?.collectorOutput !== undefined ? {collectorOutput: deps.collectorOutput} : {}),
-            ...(deps?.runCollector !== undefined ? {runCollector: deps.runCollector} : {}),
-            async examinar(request) {
-              const examined = await runExam(request);
-              providerLimited = examined.coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT')
-                || examined.findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT');
-              return examined;
-            },
-          });
+        async signal => {
+          const runSignals = [signal, collectorAbort.signal];
+          if (deps?.prontidaoProbeOptions?.signal) runSignals.push(deps.prontidaoProbeOptions.signal);
+          const task = runningTask = execute(AbortSignal.any(runSignals));
           void task.catch(() => undefined);
           return await Promise.race([task, aborted]);
         },

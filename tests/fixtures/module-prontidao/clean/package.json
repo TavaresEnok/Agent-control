@@ -1,0 +1,10 @@
+{
+  "name": "prontidao-clean-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "backup": "sh scripts/backup.sh",
+    "restore-proof": "sh scripts/restore-proof.sh",
+    "watch": "sh scripts/watch.sh"
+  }
+}

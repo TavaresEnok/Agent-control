@@ -1,0 +1,7 @@
+[Unit]
+Description=App defeituoso para laboratorio
+
+[Service]
+Type=simple
+Environment="API_SECRET=lab-defective-systemd-secret-12345"
+ExecStart=/usr/bin/node /opt/app/src/tls-client.ts

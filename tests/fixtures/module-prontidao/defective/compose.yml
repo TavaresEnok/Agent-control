@@ -1,0 +1,9 @@
+services:
+  web:
+    image: node:22
+    environment:
+      NODE_ENV: production
+      DB_PASSWORD: lab-defective-db-pass-98765
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+    ports:
+      - "8080:8080"

@@ -671,7 +671,9 @@ export function validateModuleCollectorObject(parsed: unknown, module?: Verifica
     if (protectedFile) {
       if (!isProtectedFindingSource(row.tool, row.rule) || typeof row.message !== 'string'
         || hasKnownSecret(row.message) || typeof row.evidence !== 'string'
-        || !((row.message === 'Possível segredo em arquivo protegido.' && row.evidence === 'Localização informada pelo coletor; conteúdo protegido.')
+        || !(((row.message === 'Possível segredo em arquivo protegido.' || (row.tool === 'prontidao-audit'
+          && row.rule === 'PRONTIDAO-CHAVE-PRIVADA-NO-REPOSITORIO' && row.message === 'Possível chave privada em arquivo protegido.'))
+          && row.evidence === 'Localização informada pelo coletor; conteúdo protegido.')
           || (row.tool === 'gitleaks' ? row.evidence === `${row.rule}: match em ${file}:${row.line} [REDACTED]`
           : row.tool === 'trivy' && row.evidence === `${row.rule} em ${file}:${row.line} [REDACTED]`))) {
         throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);

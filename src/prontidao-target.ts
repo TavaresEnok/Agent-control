@@ -1,6 +1,7 @@
 import {request as httpsRequest, type RequestOptions} from 'node:https';
 import type {TLSSocket} from 'node:tls';
 import {z} from 'zod';
+import {passiveHeaderFacts} from '../deploy/modules/prontidao/header-facts.mjs';
 import {Refusal} from './contracts.ts';
 import type {Installation} from './installation.ts';
 
@@ -8,18 +9,7 @@ export const PRONTIDAO_USER_AGENT = 'agent-control-prontidao/1.0';
 export const DEFAULT_PRONTIDAO_TIMEOUT_MS = 10_000;
 export const DEFAULT_PRONTIDAO_MAX_BYTES = 65_536;
 export const MAX_PRONTIDAO_ORIGINS = 16;
-
-const ALLOWED_SECURITY_HEADERS = new Set([
-  'strict-transport-security',
-  'x-content-type-options',
-  'x-frame-options',
-  'content-security-policy',
-  'referrer-policy',
-  'permissions-policy',
-  'cross-origin-opener-policy',
-  'cross-origin-resource-policy',
-  'cache-control',
-]);
+const MAX_DECLARED_ORIGINS = 49; // publishedOrigin + 16 do projeto + 32 da instalação
 
 const TLS_ERROR_CODES = new Set([
   'DEPTH_ZERO_SELF_SIGNED_CERT',
@@ -67,6 +57,7 @@ export const PassiveTlsTargetObservation = z.object({
   errorCode: z.string().max(120).nullable(),
   errorMessage: z.string().max(500).nullable(),
   certificate: PassiveTlsCertificate.nullable(),
+  headerFacts: z.object({hsts: z.enum(['absent','invalid','insufficient','adequate']), noSniff: z.boolean(), antiFrame: z.boolean()}).strict().optional(),
   headers: z.record(z.string().max(80), z.string().max(1000)),
   redirectTargetOrigin: z.string().max(2048).nullable(),
   redirectCrossOrigin: z.boolean(),
@@ -82,6 +73,7 @@ export const ProntidaoPassiveEvidence = z.object({
   collectedBy: z.literal('agent-control-prontidao-adapter'),
   collectedAt: z.string().min(1).max(60),
   targets: z.array(PassiveTlsTargetObservation).min(1).max(MAX_PRONTIDAO_ORIGINS),
+  unmeasuredOrigins: z.array(z.string().min(8).max(2048)).max(MAX_DECLARED_ORIGINS - MAX_PRONTIDAO_ORIGINS).optional(),
 }).strict();
 export type ProntidaoPassiveEvidence = z.infer<typeof ProntidaoPassiveEvidence>;
 
@@ -90,6 +82,7 @@ export type PassiveHttpsProbeOptions = {
   maxResponseBytes?: number;
   ca?: string | Buffer | readonly (string | Buffer)[];
   now?: () => Date;
+  signal?: AbortSignal;
 };
 
 function cleanSingleLine(value: unknown, maxLen: number): string {
@@ -143,7 +136,6 @@ export function resolveProjectAuthorizedOrigins(config: Installation, projectId:
   for (const item of rawCandidates) {
     const normalized = parseAuthorizedHttpsOrigin(item);
     if (!unique.includes(normalized)) unique.push(normalized);
-    if (unique.length >= MAX_PRONTIDAO_ORIGINS) break;
   }
   return unique;
 }
@@ -165,39 +157,21 @@ export function authorizeProjectHttpsOrigin(
   return authorized;
 }
 
-function sanitizeHeaders(rawHeaders: Record<string, string | string[] | undefined>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(rawHeaders)) {
-    const lower = key.toLowerCase();
-    if (!ALLOWED_SECURITY_HEADERS.has(lower) || value === undefined) continue;
-    const joined = Array.isArray(value) ? value.join(', ') : value;
-    const cleaned = cleanSingleLine(joined, 1000);
-    if (cleaned.length > 0) out[lower] = cleaned;
-  }
-  return out;
-}
-
-function inspectRedirect(origin: string, statusCode: number | undefined, locationHeader: string | string[] | undefined): {
-  redirectTargetOrigin: string | null;
-  redirectCrossOrigin: boolean;
-  redirectDowngradeHttp: boolean;
-} {
+function inspectRedirect(origin: string, statusCode: number | undefined, locationHeader: string | string[] | undefined) {
+  const noRedirect = {redirectCrossOrigin: false, redirectDowngradeHttp: false};
   if (!statusCode || statusCode < 300 || statusCode >= 400 || !locationHeader) {
-    return {redirectTargetOrigin: null, redirectCrossOrigin: false, redirectDowngradeHttp: false};
+    return noRedirect;
   }
   const raw = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
-  if (!raw) return {redirectTargetOrigin: null, redirectCrossOrigin: false, redirectDowngradeHttp: false};
+  if (!raw?.trim()) return noRedirect;
   try {
     const dest = new URL(raw.trim(), origin);
-    const redirectDowngradeHttp = dest.protocol === 'http:';
-    const redirectCrossOrigin = dest.origin !== origin;
     return {
-      redirectTargetOrigin: cleanSingleLine(dest.origin, 2048),
-      redirectCrossOrigin,
-      redirectDowngradeHttp,
+      redirectCrossOrigin: dest.origin !== origin,
+      redirectDowngradeHttp: dest.protocol === 'http:',
     };
   } catch {
-    return {redirectTargetOrigin: null, redirectCrossOrigin: false, redirectDowngradeHttp: false};
+    return noRedirect;
   }
 }
 
@@ -221,17 +195,53 @@ export function probePublishedHttpsOrigin(
   }
   const nowFn = options?.now ?? (() => new Date());
   const startedAt = Date.now();
+  const signal = options?.signal;
+  signal?.throwIfAborted();
 
-  return new Promise(resolvePromise => {
+  return new Promise((resolvePromise, rejectPromise) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let req: ReturnType<typeof httpsRequest> | undefined;
 
-    const done = (obs: PassiveTlsTargetObservation) => {
-      if (settled) return;
+    const settle = () => {
       settled = true;
       if (timer) clearTimeout(timer);
-      resolvePromise(PassiveTlsTargetObservation.parse(obs));
+      signal?.removeEventListener('abort', cancel);
+    };
+    const cancel = () => {
+      if (settled) return;
+      settle();
+      req?.destroy();
+      rejectPromise(signal?.reason);
+    };
+    const done = (obs: PassiveTlsTargetObservation) => {
+      if (settled) return;
+      settle();
+      const validated = PassiveTlsTargetObservation.safeParse(obs);
+      if (validated.success) resolvePromise(validated.data);
+      else rejectPromise(new Refusal('VERIFY_COLLECTOR_INVALID'));
+    };
+    const fail = (errorCode: string, errorMessage: string) => {
+      done({
+        origin,
+        status: 'failed',
+        httpStatus: null,
+        tlsProtocol: null,
+        cipher: null,
+        tlsAuthorized: false,
+        tlsErrorCode: null,
+        tlsErrorMessage: null,
+        errorCode,
+        errorMessage,
+        certificate: null,
+        headers: {},
+        redirectTargetOrigin: null,
+        redirectCrossOrigin: false,
+        redirectDowngradeHttp: false,
+        bytesRead: 0,
+        truncated: false,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
     };
 
     const reqOptions: RequestOptions = {
@@ -273,7 +283,7 @@ export function probePublishedHttpsOrigin(
         };
       }
 
-      const headers = sanitizeHeaders(res.headers);
+      const headerFacts = passiveHeaderFacts(res.headers);
       const redirect = inspectRedirect(origin, res.statusCode, res.headers.location);
       let bytesRead = 0;
       let truncated = false;
@@ -291,10 +301,10 @@ export function probePublishedHttpsOrigin(
           errorCode: null,
           errorMessage: null,
           certificate,
-          headers,
-          redirectTargetOrigin: redirect.redirectTargetOrigin,
-          redirectCrossOrigin: redirect.redirectCrossOrigin,
-          redirectDowngradeHttp: redirect.redirectDowngradeHttp,
+          headers: {},
+          headerFacts,
+          redirectTargetOrigin: null,
+          ...redirect,
           bytesRead,
           truncated,
           durationMs: Math.max(0, Date.now() - startedAt),
@@ -314,33 +324,18 @@ export function probePublishedHttpsOrigin(
         }
         bytesRead += size;
       });
-      res.once('end', finishResponse);
-      res.once('close', finishResponse);
-      res.once('error', () => finishResponse());
+      const interrupted = () => fail('ECONNRESET', 'Resposta HTTPS interrompida antes do fim.');
+      res.once('end', () => {
+        if (res.complete) finishResponse();
+        else interrupted();
+      });
+      res.once('close', interrupted);
+      res.once('error', interrupted);
     });
 
     timer = setTimeout(() => {
       if (settled) return;
-      done({
-        origin,
-        status: 'failed',
-        httpStatus: null,
-        tlsProtocol: null,
-        cipher: null,
-        tlsAuthorized: false,
-        tlsErrorCode: null,
-        tlsErrorMessage: null,
-        errorCode: 'ETIMEDOUT',
-        errorMessage: `Tempo limite excedido (${timeoutMs} ms) na medição passiva de ${origin}.`,
-        certificate: null,
-        headers: {},
-        redirectTargetOrigin: null,
-        redirectCrossOrigin: false,
-        redirectDowngradeHttp: false,
-        bytesRead: 0,
-        truncated: false,
-        durationMs: Math.max(0, Date.now() - startedAt),
-      });
+      fail('ETIMEDOUT', `Tempo limite excedido (${timeoutMs} ms) na medição passiva.`);
       req?.destroy();
     }, timeoutMs);
 
@@ -371,29 +366,12 @@ export function probePublishedHttpsOrigin(
         });
         return;
       }
-      done({
-        origin,
-        status: 'failed',
-        httpStatus: null,
-        tlsProtocol: null,
-        cipher: null,
-        tlsAuthorized: false,
-        tlsErrorCode: null,
-        tlsErrorMessage: null,
-        errorCode: code,
-        errorMessage: message,
-        certificate: null,
-        headers: {},
-        redirectTargetOrigin: null,
-        redirectCrossOrigin: false,
-        redirectDowngradeHttp: false,
-        bytesRead: 0,
-        truncated: false,
-        durationMs: Math.max(0, Date.now() - startedAt),
-      });
+      fail(code, 'Falha na conexão HTTPS.');
     });
 
-    req.end();
+    signal?.addEventListener('abort', cancel, {once: true});
+    if (signal?.aborted) cancel();
+    else req.end();
   });
 }
 
@@ -402,21 +380,29 @@ export async function probePublishedHttpsOrigins(
   origins: readonly string[],
   options?: PassiveHttpsProbeOptions,
 ): Promise<ProntidaoPassiveEvidence> {
-  if (origins.length === 0 || origins.length > MAX_PRONTIDAO_ORIGINS) {
+  if (origins.length === 0 || origins.length > MAX_DECLARED_ORIGINS) {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
+  const authorized = origins.map(parseAuthorizedHttpsOrigin);
+  const unmeasuredOrigins = authorized.slice(MAX_PRONTIDAO_ORIGINS);
   const targets: PassiveTlsTargetObservation[] = [];
-  for (const origin of origins) {
+  for (const origin of authorized.slice(0, MAX_PRONTIDAO_ORIGINS)) {
     targets.push(await probePublishedHttpsOrigin(origin, options));
   }
-  return ProntidaoPassiveEvidence.parse({
+  const evidence = ProntidaoPassiveEvidence.parse({
     schemaVersion: 1,
     collectedBy: 'agent-control-prontidao-adapter',
     collectedAt: (options?.now ?? (() => new Date()))().toISOString(),
     targets,
+    ...(unmeasuredOrigins.length > 0 ? {unmeasuredOrigins} : {}),
   });
+  options?.signal?.throwIfAborted();
+  return evidence;
 }
 
 export function validatePassiveTlsEvidence(raw: unknown): ProntidaoPassiveEvidence {
-  return ProntidaoPassiveEvidence.parse(raw);
+  const evidence = ProntidaoPassiveEvidence.parse(raw);
+  return {...evidence, targets: evidence.targets.map(target => ({
+    ...target, headerFacts: target.headerFacts ?? passiveHeaderFacts(target.headers), headers: {}, redirectTargetOrigin: null,
+  }))};
 }
