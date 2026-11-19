@@ -368,6 +368,16 @@ test('a base pode passar e receber medição fora do snapshot pelo contrato do o
   assert.equal(second.findings[0]?.rule, 'DESEMPENHO-REGRESSAO-ROTA');
   assert.match(second.findings[0].evidence, /exame anterior=exame-1/);
   assert.equal(second.measurement.imageDigest, digest);
+  assert.equal(second.comparedExamId, 'exame-1');
+  async function* history() {
+    yield {examId: 'exame-2', measurement: {...prior, k6Routes: [], lighthouse: [], sqlQueries: []}};
+    yield {examId: 'exame-1', measurement: prior};
+    assert.fail('a comparação já encontrou o exame compatível');
+  }
+  const third = await fixture.run({previousMeasurements: history()});
+  assert.equal(third.comparedExamId, 'exame-1');
+  assert.equal(third.findings[0]?.rule, 'DESEMPENHO-REGRESSAO-ROTA');
+  assert.match(third.findings[0].evidence, /exame anterior=exame-1/);
 });
 
 async function abortWhile(fixture, reached) {

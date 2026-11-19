@@ -101,7 +101,7 @@ function socketMount(path, destination) {
 }
 
 /** O chamador mantém vivo o snapshot de prepareModuleSnapshot e repassa o sinal do heartbeat. */
-export async function runPerformanceModule({snapshotPath, imageDigest, signal, recoveryDirectory, previousMeasurement,
+export async function runPerformanceModule({snapshotPath, imageDigest, signal, recoveryDirectory, previousMeasurement, previousMeasurements,
   timeoutMs = 480_000, maxStdoutBytes = 16 * 1024 * 1024}, {dockerBinary = 'docker'} = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 ||
       !Number.isSafeInteger(maxStdoutBytes) || maxStdoutBytes < 1) throw new Error('limites de desempenho inválidos');
@@ -218,11 +218,26 @@ export async function runPerformanceModule({snapshotPath, imageDigest, signal, r
       coverage.push(normalizeCoverageRow({tool: 'servidor-isolado', version: '5', status: 'failed',
         detail: 'Backend indisponível para medição; consulte isolamento-http e o recorte estático'}));
     }
-    const historical = compareIndependentMeasurement(output.measurement, previousMeasurement, imageDigest);
+    let historical = compareIndependentMeasurement(output.measurement, previousMeasurement, imageDigest);
+    let comparedExamId = historical.coverage.status === 'ok' ? previousMeasurement.examId : undefined;
+    if (previousMeasurements) {
+      let latest;
+      for await (const candidate of previousMeasurements) {
+        active.throwIfAborted();
+        const comparison = compareIndependentMeasurement(output.measurement, candidate, imageDigest);
+        latest ??= comparison;
+        if (comparison.coverage.status === 'ok') {
+          historical = comparison;
+          comparedExamId = candidate.examId;
+          break;
+        }
+      }
+      if (!comparedExamId && latest) historical = latest;
+    }
     active.throwIfAborted();
     coverage.push(...output.coverage, historical.coverage);
     result = {...validateModuleOutput({coverage, findings: [...output.findings, ...historical.findings]}),
-      measurement: {...output.measurement, imageDigest}};
+      measurement: {...output.measurement, imageDigest}, comparedExamId};
   } catch (error) {
     active.throwIfAborted();
     throw error;

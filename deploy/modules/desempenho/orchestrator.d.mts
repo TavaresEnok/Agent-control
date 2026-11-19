@@ -5,10 +5,11 @@ export function runPerformanceModule(input: {
   imageDigest: string;
   recoveryDirectory: string;
   previousMeasurement?: PreviousPerformanceMeasurement;
+  previousMeasurements?: AsyncIterable<PreviousPerformanceMeasurement>;
   signal?: AbortSignal;
   timeoutMs?: number;
   maxStdoutBytes?: number;
-}): Promise<{coverage: unknown; findings: unknown; measurement: Record<string, unknown>}>;
+}): Promise<{coverage: unknown; findings: unknown; measurement: Record<string, unknown>; comparedExamId?: string}>;
 
 export function reconcilePerformanceResources(input: {
   recoveryDirectory: string;
