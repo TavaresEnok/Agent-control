@@ -3112,10 +3112,19 @@ export async function recheckModuleFindings(
         const rule = sanitizeRecheckText(item.rule);
         const hypothesis = observed?.hypothesis ? sanitizeRecheckText(observed.hypothesis)
           : fromExaminer ? 'A linha atual ainda sustenta a observação original?' : moduleCollectorHypothesis(rule);
+        let skipSnapshot: {originalCommit: string; original: string; current: string} | undefined;
+        if (sameHistory && moduleName === 'qa' && !regression && (fromExaminer || rule === 'QA-TESTE-PULADO')) {
+          const [original, current] = await Promise.all([originalCommit, head].map(commit =>
+            readRecheckBlob(loaded.repo, commit, item.file, signal)));
+          if (original && current && [original.text, current.text].every(text =>
+            Buffer.byteLength(text) <= 16000 && sanitizeRecheckText(text) === text)) {
+            skipSnapshot = {originalCommit, original: original.text, current: current.text};
+          }
+        }
         const reviewEvidence = {
           module: moduleName, file: item.file, line: regression?.after.line ?? item.line, code: line, commit: head,
           tool: sanitizeRecheckText(item.tool), rule, hypothesis, evidence,
-          originalCommit, originalCode: regression?.before.code ?? (historicalLine || null),
+          skipSnapshot, originalCommit, originalCode: regression?.before.code ?? (historicalLine || null),
           moduleProof: regression?.moduleProof ?? null, regressionProof: regression?.receipt ?? null,
           regressionAssertion: regression?.assertion ?? null,
         };
