@@ -1,94 +1,93 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {setImmediate} from 'node:timers/promises';
 import {Refusal, type Authority} from '../src/contracts.ts';
 import type {Ledger} from '../src/ledger.ts';
 import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease, verifyCliFailureText} from '../src/personal-verify-cli.ts';
 import {createCapacityNativeWorker, type SecurityExamSupervisor} from '../src/verify-native-launch.ts';
 import type {VerifyWorkerCall} from '../src/verify-types.ts';
 
-async function until(done: () => boolean) {
-  const start = Date.now();
-  while (!done()) {
-    if (Date.now() - start > 1000) throw new Error('a renovação não aconteceu a tempo');
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
-}
+const heartbeatInterval = 20;
 
-test('a locação do comando é renovada enquanto o exame corre e um erro de renovação não derruba o processo', async () => {
-  let beats = 0;
-  let markSecondHeartbeat!: () => void;
-  const secondHeartbeat = new Promise<void>(resolve => { markSecondHeartbeat = resolve; });
-  const stop = keepPersonalVerifyLease({
-    async heartbeat() {
-      beats += 1;
-      if (beats === 1) throw new Error('lease ocupada');
-      if (beats === 2) markSecondHeartbeat();
-    },
-  }, {contextId: 'contexto'}, 20);
-  let deadline: ReturnType<typeof setTimeout> | undefined;
+test('encerrar a locação ignora a terceira falha pendente e cancela os próximos heartbeats', async ({mock}) => {
+  mock.timers.enable({apis: ['setInterval']});
+  let rejectHeartbeat!: (error: Error) => void;
+  const pending = new Promise<void>((_, reject) => { rejectHeartbeat = reject; });
+  const heartbeat = mock.fn(() => Promise.reject<void>(new Error('lease ocupada')));
+  heartbeat.mock.mockImplementationOnce(() => pending, 2);
+  const onAbort = mock.fn();
+  const stop = keepPersonalVerifyLease({heartbeat}, {contextId: 'contexto'}, heartbeatInterval, onAbort);
   try {
-    await Promise.race([
-      secondHeartbeat,
-      new Promise<never>((_, reject) => {
-        deadline = setTimeout(() => reject(new Error('a segunda renovação não aconteceu a tempo')), 1000);
-      }),
-    ]);
-  } finally {
-    clearTimeout(deadline);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      mock.timers.tick(heartbeatInterval);
+      await setImmediate();
+    }
+    assert.equal(heartbeat.mock.callCount(), 3);
+    assert.equal(onAbort.mock.callCount(), 0);
+
     stop();
-  }
-  const settled = beats;
-  await new Promise(resolve => setTimeout(resolve, 40));
-  assert.ok(settled >= 2);
-  assert.equal(beats, settled);
-});
+    rejectHeartbeat(new Error('lease ocupada'));
+    await setImmediate();
+    assert.equal(onAbort.mock.callCount(), 0);
 
-test('três falhas seguidas de renovação abortam uma vez e a quarta não aborta de novo', async () => {
-  let beats = 0;
-  let aborts = 0;
-  let abortsAtBeat3 = -1;
-  let abortsAtBeat4 = -1;
-  let stop = () => {};
-  try {
-    stop = keepPersonalVerifyLease({
-      async heartbeat() {
-        beats += 1;
-        if (beats === 3) abortsAtBeat3 = aborts;
-        if (beats === 4) abortsAtBeat4 = aborts;
-        if (beats >= 4) stop();
-        throw new Error('lease ocupada');
-      },
-    }, {contextId: 'contexto'}, 20, () => { aborts += 1; });
-    await until(() => beats >= 4);
-    assert.equal(abortsAtBeat3, 0);
-    assert.equal(abortsAtBeat4, 1);
-    assert.equal(aborts, 1);
-    assert.ok(beats >= 4);
+    mock.timers.tick(heartbeatInterval);
+    assert.equal(heartbeat.mock.callCount(), 3);
   } finally {
     stop();
   }
 });
 
-test('falha, falha, sucesso, falha e falha não abortam a locação', async () => {
-  const steps = ['fail', 'fail', 'ok', 'fail', 'fail'];
-  const seen: string[] = [];
-  let aborts = 0;
-  let stop = () => {};
+test('três falhas seguidas de renovação abortam uma vez e as falhas seguintes mantêm uma chamada', async ({mock}) => {
+  mock.timers.enable({apis: ['setInterval']});
+  const heartbeat = mock.fn(async () => { throw new Error('lease ocupada'); });
+  const onAbort = mock.fn();
+  const stop = keepPersonalVerifyLease({heartbeat}, {contextId: 'contexto'}, heartbeatInterval, onAbort);
   try {
-    stop = keepPersonalVerifyLease({
-      async heartbeat() {
-        const step = steps[seen.length] ?? 'ok';
-        seen.push(step);
-        if (seen.length >= steps.length) stop();
-        if (step === 'fail') throw new Error('lease ocupada');
-      },
-    }, {contextId: 'contexto'}, 20, () => { aborts += 1; });
-    await until(() => seen.length >= steps.length);
-    assert.deepEqual(seen.slice(0, steps.length), steps);
-    assert.equal(aborts, 0);
+    for (const [index, expectedAborts] of [0, 0, 1, 1, 1].entries()) {
+      mock.timers.tick(heartbeatInterval);
+      await setImmediate();
+      assert.equal(heartbeat.mock.callCount(), index + 1);
+      assert.equal(onAbort.mock.callCount(), expectedAborts);
+    }
   } finally {
     stop();
+  }
+});
+
+test('o heartbeat aguarda o sucesso pendente e zera a série de falhas antes de renovar de novo', async ({mock}) => {
+  mock.timers.enable({apis: ['setInterval']});
+  let resolveHeartbeat!: () => void;
+  const pending = new Promise<void>(resolve => { resolveHeartbeat = resolve; });
+  const heartbeat = mock.fn(() => Promise.reject<void>(new Error('lease ocupada')));
+  heartbeat.mock.mockImplementationOnce(() => pending, 2);
+  const onAbort = mock.fn();
+  const stop = keepPersonalVerifyLease({heartbeat}, {contextId: 'contexto'}, heartbeatInterval, onAbort);
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      mock.timers.tick(heartbeatInterval);
+      await setImmediate();
+    }
+    assert.equal(heartbeat.mock.callCount(), 3);
+
+    for (let tick = 0; tick < 2; tick += 1) {
+      mock.timers.tick(heartbeatInterval);
+      await setImmediate();
+    }
+    assert.equal(heartbeat.mock.callCount(), 3);
+    assert.equal(onAbort.mock.callCount(), 0);
+
+    resolveHeartbeat();
+    await setImmediate();
+    for (let attempt = 4; attempt <= 5; attempt += 1) {
+      mock.timers.tick(heartbeatInterval);
+      await setImmediate();
+      assert.equal(heartbeat.mock.callCount(), attempt);
+      assert.equal(onAbort.mock.callCount(), 0);
+    }
+  } finally {
+    stop();
+    resolveHeartbeat();
   }
 });
 
@@ -113,7 +112,8 @@ test('soltar a locação zera lease_until filtrando contexto, instância e époc
   );
 });
 
-test('perder a locação pede stop e mantém VERIFY_LEASE_LOST quando stop falha', async () => {
+test('perder a locação pede stop e rejeita com VERIFY_LEASE_LOST quando stop falha', async ({mock}) => {
+  mock.timers.enable({apis: ['setInterval']});
   const accountId = randomUUID();
   const asked: VerifyWorkerCall = {
     role: 'specialist',
@@ -132,7 +132,7 @@ test('perder a locação pede stop e mantém VERIFY_LEASE_LOST quando stop falha
   const startedGate = new Promise<void>(resolve => { started = resolve; });
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  let stops = 0;
+  const stoppedJobs: string[] = [];
   let seenJob = '';
   const chosen: SecurityExamSupervisor = {
     active: true,
@@ -150,8 +150,7 @@ test('perder a locação pede stop e mantém VERIFY_LEASE_LOST quando stop falha
       return {state: 'removed'};
     },
     async stop(_principal, _authority, request) {
-      stops += 1;
-      assert.equal(request.jobId, seenJob);
+      stoppedJobs.push(request.jobId);
       throw new Error('stop-broke');
     },
   };
@@ -165,17 +164,34 @@ test('perder a locação pede stop e mantém VERIFY_LEASE_LOST quando stop falha
   });
   const pending = worker.run(asked);
   await startedGate;
-  let rejected: unknown;
   const stop = worker.stop;
   if (!stop) throw new Error('stop ausente');
-  await abortPersonalVerifyForLeaseLoss({
-    stopLease() {},
-    stopJob: () => stop(),
-    rejectAbort(error) { rejected = error; },
+  let rejectAbort!: (error: unknown) => void;
+  const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  void aborted.catch(() => undefined);
+  const reject = mock.fn(rejectAbort);
+  let aborting: Promise<void> | undefined;
+  const heartbeat = mock.fn(async () => { throw new Error('lease ocupada'); });
+  const stopLease = keepPersonalVerifyLease({heartbeat}, authority, heartbeatInterval, () => {
+    aborting = abortPersonalVerifyForLeaseLoss({stopLease, stopJob: stop, rejectAbort: reject});
   });
-  assert.equal(stops, 1);
-  assert.ok(rejected instanceof Refusal && rejected.code === 'VERIFY_LEASE_LOST');
-  release();
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      mock.timers.tick(heartbeatInterval);
+      await setImmediate();
+    }
+    assert.ok(aborting);
+    await aborting;
+    assert.equal(reject.mock.callCount(), 1);
+    await assert.rejects(aborted, (error: unknown) =>
+      error instanceof Refusal && error.code === 'VERIFY_LEASE_LOST');
+    mock.timers.tick(heartbeatInterval);
+    assert.equal(heartbeat.mock.callCount(), 3);
+    assert.deepEqual(stoppedJobs, [seenJob]);
+  } finally {
+    stopLease();
+    release();
+  }
   assert.equal(await pending, 'ok');
 });
 
