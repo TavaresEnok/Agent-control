@@ -749,6 +749,152 @@ with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b"
 `);
 });
 
+test('C9 publica apenas fluxos com origem preservada após chamadas, aliases e junções', () => {
+  python(String.raw`
+import json
+import re
+from unittest.mock import patch
+from collector import Report
+from lgpd_analyzer import inspect_fields, javascript_destinations
+
+cases = [
+    ("nested.ts", '''let emit = logger.info;
+const saved = emit;
+function outer() {
+  const stop = () => { emit = () => {}; };
+  function middle() { stop(); }
+  middle();
+}
+emit(mockRow.quartzSignal);
+outer();
+emit(mockRow.quartzSignal);
+saved(mockRow.amberSignal);''',
+     [(8, 8), (11, 11)], ("vínculos externos a funções",)),
+    ("nested.py", '''emit = print
+saved = emit
+def outer():
+    def stop():
+        global emit
+        emit = lambda: None
+    def middle(): stop()
+    middle()
+emit(mock_row.quartzSignal)
+outer()
+emit(mock_row.quartzSignal)
+saved(mock_row.amberSignal)''',
+     [(9, 9), (12, 12)], ("vínculos externos a funções",)),
+    ("alias.ts", '''const tray = {quartzSignal: mockRow.quartzSignal};
+const saved = tray.quartzSignal;
+const other = {slot: mockRow.amberSignal};
+function clear() {
+  const alias = tray;
+  alias.quartzSignal = "C9_NEUTRAL";
+}
+clear();
+logger.info(tray.quartzSignal);
+logger.info(other.slot);
+logger.info(saved);
+tray.quartzSignal = mockRow.amberSignal;
+logger.info(tray.quartzSignal);
+function forward() {
+  const alias = tray;
+  useFixture(alias);
+}
+forward();
+logger.info(tray.quartzSignal);
+logger.info(other.slot);''',
+     [(10, 3), (11, 1), (13, 12), (20, 3)], ("mutações de propriedades",)),
+    ("alias.py", '''tray = {"quartzSignal": mock_row.quartzSignal}
+saved = tray["quartzSignal"]
+other = {"slot": mock_row.amberSignal}
+def clear():
+    alias = tray
+    alias["quartzSignal"] = "C9_NEUTRAL"
+clear()
+print(tray["quartzSignal"])
+print(other["slot"])
+print(saved)
+tray["quartzSignal"] = mock_row.amberSignal
+print(tray["quartzSignal"])
+def forward():
+    alias = tray
+    use_fixture(alias)
+forward()
+print(tray["quartzSignal"])
+print(other["slot"])''',
+     [(9, 3), (10, 1), (12, 11), (18, 3)], ("mutações de propriedades",)),
+    ("global.py", '''def outer():
+    global emit
+    emit = print
+    saved = emit
+    def stop():
+        global emit
+        emit = lambda: None
+    stop()
+    emit(mock_row.quartzSignal)
+    saved(mock_row.amberSignal)
+def independent():
+    emit = print
+    def stop():
+        global emit
+        emit = lambda: None
+    stop()
+    emit(mock_row.quartzSignal)''',
+     [(10, 10), (17, 17)], ("vínculos externos a funções",)),
+    ("join.py", '''fixed = {"quartzSignal": "C9_NEUTRAL"}
+chosen = (fixed and fixed) if flag else fixed
+print(chosen["quartzSignal"])
+other = fixed if flag else fixed
+print(other["quartzSignal"])
+maybe = mock_row.amberSignal if flag else "C9_NEUTRAL"
+print(maybe)
+opaque = read_fixture()
+print(opaque.quartzSignal)
+opaque.quartzSignal = mock_row.quartzSignal
+print(opaque.quartzSignal)
+packed = {**opaque}
+print(packed["amberSignal"])
+draft = "C9_NEUTRAL"
+0 == 1 == (draft := mock_row.amberSignal)
+print(draft)''',
+     [(7, 6), (11, 10)], ("expressões Python fora do rastreamento", "fluxo condicional")),
+    ("join.ts", '''const fixed = {quartzSignal: "C9_NEUTRAL"};
+const chosen = flag ? fixed : fixed;
+logger.info(chosen.quartzSignal);
+const maybe = flag ? mockRow.amberSignal : "C9_NEUTRAL";
+logger.info(maybe);
+const opaque = readFixture();
+logger.info(opaque.quartzSignal);
+const joined = opaque || fixed;
+logger.info(joined.quartzSignal);
+opaque.quartzSignal = mockRow.quartzSignal;
+logger.info(opaque.quartzSignal);
+const packed = {...opaque};
+logger.info(packed.amberSignal);
+let draft = "C9_NEUTRAL";
+!(draft = mockRow.amberSignal);
+logger.info(draft);
+var emit = logger.info;
+if (flag) { var emit = () => {}; }
+emit(mockRow.quartzSignal);''',
+     [(5, 4), (11, 10)], ("expressões JavaScript/TypeScript fora do rastreamento", "fluxo condicional")),
+]
+with patch("lgpd_analyzer.FIELD", re.compile(r"\b(?:quartzSignal|amberSignal)\b")):
+    parsed = javascript_destinations((file, source) for file, source, _, _ in cases)
+    for file, source, expected, reasons in cases:
+        report = Report()
+        inspect_fields(source, file, report, parsed.get(file))
+        output = report.output()
+        hits = [(row["line"], int(re.search(r"linha (\d+)\.", row["evidence"])[1]))
+                for row in output["findings"] if row["rule"] == "PII_POSSIBLE_LOG"]
+        assert hits == expected, (file, hits)
+        coverage, = output["coverage"]
+        assert coverage["status"] == "failed", (file, coverage)
+        assert all(reason in coverage["detail"] for reason in reasons), (file, coverage)
+        assert not re.search(r"C9_NEUTRAL|quartzSignal|amberSignal|mockRow|mock_row", json.dumps(output)), file
+`);
+});
+
 test('C9 captura operandos Python no ponto da leitura e conserva o alvo da atribuição aumentada', () => {
   python(String.raw`
 import json
