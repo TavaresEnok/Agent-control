@@ -38,6 +38,10 @@ export async function measureBancoPlan(plan, database) {
       step(phase, 'ok', `${file}; pgTAP confirmou 1/1`);
       return true;
     }
+    if (result === 'scope-unconfirmed') {
+      step(phase, 'skipped', `${file}; cobertura inconclusiva por falta de confirmação do escopo dos privilégios efetivos`);
+      return false;
+    }
     if (result === 'failed') {
       step(phase, 'failed', `${file}; pgTAP reprovou 1/1`);
       findings.push({tool: bancoLocalTool, rule: 'QA-BANCO-PGTAP', file, line, severity: 'media',

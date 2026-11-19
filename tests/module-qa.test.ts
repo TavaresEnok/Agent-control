@@ -857,6 +857,23 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
       'REQ-158: O resultado esperado é positivo; calcular com (`primeira` de `a.mjs`) e conferir com (`segunda` de `b.mjs`).',
       'REQ-159: Calcular com (`primeira` de `a.mjs`); o resultado esperado é positivo.',
       'REQ-160: Anotação sobre (`primeira` de `a.mjs`).',
+      'REQ-163: Calcular com (`OK` de `a.mjs`) (resultado esperado).',
+      'REQ-164: A mensagem de sucesso deve ser (`OK` de `a.mjs`).',
+      'REQ-165: Para obter o resultado esperado, deve-se calcular com (`primeira` de `a.mjs`).',
+      'REQ-166: Calcular a saída esperada com (`primeira` de `a.mjs`).',
+      'REQ-167: O resultado esperado é `OK` de `a.mjs`, e `primeira` de `a.mjs` retorna esse texto.',
+      'REQ-168: Calcular com (`OK` de `a.mjs`, como resultado esperado).',
+      'REQ-169: Calcular com `OK` de `a.mjs`, (valor esperado).',
+      'REQ-170: `OK` de `a.mjs` [mensagem de sucesso].',
+      'REQ-171: Calcular com (`primeira` de `a.mjs` e `segunda` from `b.mjs`).',
+      'REQ-172: Calcular com (`OK` de `a.mjs`.',
+      'REQ-173: Calcular com `OK` de `a.mjs` (mensagem de sucesso) e conferir com `segunda` de `b.mjs`.',
+      'REQ-174: Calcular com (`OK` de `a.mjs`), e conferir como resultado esperado.',
+      'REQ-175: Calcular o valor que deve ser (`OK` de `a.mjs`).',
+      'REQ-176: O resultado esperado é `OK` de `a.mjs`, and `primeira` de `a.mjs` retorna esse texto.',
+      'REQ-177: Calcular com `primeira` de `a.mjs` e retornar o texto `OK`.',
+      'REQ-178: Calcular (`primeira` de `a.mjs`) em duas operações.',
+      'REQ-179: A mensagem de sucesso deve ser (`OK` de `a.mjs`; calcular com `primeira` de `a.mjs`).',
     ], {
       'a.mjs': ["export function primeira() { return 'OK'; }", 'export function segunda() {}',
         'export function OK() { return 2 + 2; }', 'export function zero() { return 0; }', 'export function um() { return 1; }'].join('\n'),
@@ -873,10 +890,11 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
       "test('REQ-68 por título', () => assert.equal('OK', 'OK'));",
       "test('função homônima ao valor esperado', () => assert.equal(OK(), 4));",
       "test('REQ-144 REQ-146 REQ-149 título com função homônima', () => assert.equal(OK(), 4));",
+      "test('REQ-163 REQ-164 REQ-168 REQ-169 REQ-170 REQ-172 REQ-173 REQ-174 REQ-175 REQ-176 REQ-179 título com função homônima', () => assert.equal(OK(), 4));",
       "test('REQ-86 título insuficiente para referência ambígua', () => assert.equal(listada(), 4));",
       "test('REQ-140 funções homônimas aos dois valores', () => { assert.equal(zero(), 0); assert.equal(um(), 1); });",
     ]);
-    for (const id of [61, 64, 65, 68, 69, 142, 156, 157, 158, 159]) {
+    for (const id of [61, 64, 65, 68, 69, 142, 156, 157, 158, 159, 165, 166, 171, 177, 178]) {
       assert.equal(result.row(id).status, 'ok', String(id));
       assert.match(result.row(id).detail, /vínculo comprovado nas três passadas/);
       assert.equal(result.staticRow(id).status, 'skipped', String(id));
@@ -913,7 +931,7 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
     assert.doesNotMatch(result.row(140).detail, /(?:zero|um) \(a\.mjs:|funções homônimas/);
     assert.match(result.functionRow('a.mjs', 'OK').detail,
       /REQ-144 REQ-146 REQ-149.*passed,passed,passed, asserção do alvo concluída nas três passadas/);
-    for (const id of [143, 144, 145, 146, 147, 148, 149, 160]) {
+    for (const id of [143, 144, 145, 146, 147, 148, 149, 160, 163, 164, 167, 168, 169, 170, 172, 173, 174, 175, 176, 179]) {
       for (const row of [result.row(id), result.staticRow(id)]) {
         assert.equal(row.status, 'skipped', String(id));
         assert.match(row.detail, /cobertura limitada.*referência ambígua/);
@@ -922,6 +940,10 @@ test('matriz preserva o caminho de cada referência, aliases exportados e valore
     }
     assert.match(result.row(145).detail, /primeira \(a\.mjs:1\)/);
     assert.match(result.row(147).detail, /primeira \(a\.mjs:1\)/);
+    assert.match(result.row(167).detail, /primeira \(a\.mjs:1\).*asserção do alvo concluída nas três passadas/);
+    assert.match(result.row(173).detail, /segunda \(b\.mjs:1\).*asserção do alvo concluída nas três passadas/);
+    assert.match(result.row(176).detail, /primeira \(a\.mjs:1\).*asserção do alvo concluída nas três passadas/);
+    assert.doesNotMatch(result.row(179).detail, /primeira \(a\.mjs:/);
     assert.doesNotMatch(result.row(148).detail, /primeira \(a\.mjs:/);
     assert.doesNotMatch(result.row(160).detail, /primeira \(a\.mjs:/);
     assert.match(result.row(85).detail, /primeira \(ausente\.mjs\) sem resolução/);
