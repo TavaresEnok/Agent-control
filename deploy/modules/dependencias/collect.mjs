@@ -577,6 +577,11 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
   let ncuRegistryPath;
   if (!onlineMode) {
     const validVersions = Object.fromEntries(Object.entries(registry.versions).filter(([, version]) => typeof version === 'string' && semver.valid(version)));
+    if (Object.keys(validVersions).length === 0) {
+      coverage.push({tool: 'npm-check-updates', version: ncuVersion, status: 'skipped',
+        detail: 'modo=offline-json; motivo=registro_sem_versoes_validas; prova_parcial=true'});
+      return {coverage, findings, ncuDetectedPackages};
+    }
     ncuRegistryPath = join(workRoot, 'valid-registry.json');
     await writeFile(ncuRegistryPath, JSON.stringify(validVersions), 'utf8');
   }
@@ -815,6 +820,10 @@ export async function runNcuCheck({manifests, workRoot, registry, ncuBin, ncuVer
         if (onlineMode) {
           if (!semver.valid(target.range)) {
             omit(pkg, entry.section, 'alvo_online_sem_versao_exata');
+            continue;
+          }
+          if (!semver.gt(target.range, version)) {
+            omit(pkg, entry.section, 'alvo_exato_nao_supera_lock');
             continue;
           }
           const confirmation = await lookupRelease(registryName, target.range);

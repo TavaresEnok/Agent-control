@@ -11,7 +11,7 @@ import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
-import {fetchLatestVersion, type RegistryRequestOptions} from '../deploy/modules/dependencias/fetch-registry.mjs';
+import {fetchLatestVersion, fetchRegistryVersion, type RegistryRequestOptions} from '../deploy/modules/dependencias/fetch-registry.mjs';
 import {
   analyzeLockfileAndSbom,
   classifySemverRisk,
@@ -700,6 +700,21 @@ test('consulta do registro termina em timeout ou limite de bytes com resposta si
     return req;
   };
   await assert.rejects(fetchLatestVersion('synthetic', {get: oversized, timeoutMs: 1000, maxBytes: 10}), /limite de bytes/);
+  for (const statusCode of [404, 503, 200]) {
+    let closed = false;
+    const get: NonNullable<RegistryRequestOptions['get']> = (_url, respond) => {
+      const response = Object.assign(new EventEmitter(), {statusCode, destroy() { closed = true; }, resume() {}});
+      queueMicrotask(() => {
+        respond(response);
+        if (statusCode === 200) { response.emit('data', Buffer.from('[]')); response.emit('end'); }
+      });
+      return Object.assign(new EventEmitter(), {destroy() {}});
+    };
+    const request = fetchRegistryVersion('synthetic', '1.2.3', {get});
+    if (statusCode === 404) assert.equal(await request, null);
+    else await assert.rejects(request, statusCode === 503 ? /HTTP 503/ : /metadados de versão inválidos/);
+    if (statusCode !== 200) assert.equal(closed, true);
+  }
 });
 
 test('manifestos e registro inválidos não apagam análises de outros arquivos', async () => {
@@ -1071,19 +1086,26 @@ test('ncu offline exige catálogo válido e omite propostas sem lock npm comprov
     f.evidence === 'invalid-lock/package-lock.json: lockfile_nao_utf8'));
   assert.ok(result.findings.some(f => f.rule === 'LOCKFILE-MISSING' && f.file === 'missing-lock/package.json'));
   assert.deepEqual(await readFile(join(invalidLock, 'package-lock.json')), lockBytes);
+  await writeFile(registryPath, '{"foo":"sem-versao"}');
+  const unusable = await runCollection({...options, ncuBin: join(root, 'nao-executar')});
+  assert.ok(unusable.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'skipped'
+    && row.detail.includes('registro_sem_versoes_validas')));
+  assert.equal(unusable.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'failed'), false);
+
 });
 
 test('ncu online confirma a publicação exata para npm e alias com catálogo local ausente ou desatualizado', async t => {
   const root = await mkdtemp(join(tmpdir(), 'dep-ncu-online-'));
   t.after(() => rm(root, {recursive: true, force: true}));
   const dependencies = {
-    ordinary: '^1.0.0', alias: 'npm:@synthetic/actual@>=1.0.0',
+    ordinary: '^1.0.0', regress: '^1.0.0', alias: 'npm:@synthetic/actual@>=1.0.0',
     identity: '1.0.0', unpublished: '1.0.0', error: '1.0.0', skipRange: '1.0.0',
     git: 'github:example/repo#semver:^1.0.0',
   };
   await writeFile(join(root, 'package.json'), JSON.stringify({dependencies}));
   const packages = Object.fromEntries(Object.keys(dependencies).map(pkg => [`node_modules/${pkg}`, {version: '1.0.0'}]));
   packages['node_modules/ordinary'] = {version: '1.8.0'};
+  packages['node_modules/regress'] = {version: '1.8.0'};
   await writeFile(join(root, 'package-lock.json'), JSON.stringify({lockfileVersion: 3, packages: {
     ...packages, 'node_modules/alias': {name: '@synthetic/actual', version: '3.1.0'},
   }}));
@@ -1097,7 +1119,7 @@ test('ncu online confirma a publicação exata para npm e alias com catálogo lo
     'if (arg("--registryType") !== "npm" || arg("--registry") !== "https://registry.npmjs.org/" ||',
     '  !args.includes("--removeRange") || dependencies.git || process.env.NPM_CONFIG_OFFLINE === "true" ||',
     '  config !== "@synthetic:registry=https://registry.npmjs.org/\\n") process.exit(2);',
-    'console.log(JSON.stringify({ordinary:"1.8.1",alias:"npm:@synthetic/actual@3.1.1",',
+    'console.log(JSON.stringify({ordinary:"1.8.1",regress:"1.7.0",alias:"npm:@synthetic/actual@3.1.1",',
     '  identity:"2.0.0",unpublished:"2.0.0",error:"2.0.0",skipRange:"^2.0.0"}));',
   ].join('\n'), {mode: 0o755});
   const queries: string[] = [];
@@ -1124,7 +1146,7 @@ test('ncu online confirma a publicação exata para npm e alias com catálogo lo
   ];
   const result = await runCollection(options);
   assert.deepEqual(result.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => [f.rule, f.evidence]), expected);
-  for (const [pkg, reason] of [['identity', 'alvo_nao_confirmado_no_registro'], ['unpublished', 'alvo_nao_confirmado_no_registro'],
+  for (const [pkg, reason] of [['identity', 'alvo_nao_confirmado_no_registro'], ['unpublished', 'alvo_nao_confirmado_no_registro'], ['regress', 'alvo_exato_nao_supera_lock'],
     ['skipRange', 'alvo_online_sem_versao_exata'], ['git', 'declaracao_nao_comparavel']]) {
     assert.ok(result.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'skipped' &&
       row.detail.includes(`pacote=${pkg}; secao=dependencies; motivo=${reason}`)), pkg);

@@ -28,7 +28,8 @@ function fetchRelease(pkg, release, {get = https.get, timeoutMs = 10_000, maxByt
         res.on('aborted', () => finish(new Error('resposta interrompida')));
         if (res.statusCode !== 200) {
           finish(Object.assign(new Error(`HTTP ${res.statusCode}`), {statusCode: res.statusCode}));
-          res.resume();
+          res.destroy();
+          request?.destroy();
           return;
         }
         const chunks = [];
@@ -64,7 +65,9 @@ export async function fetchLatestVersion(pkg, options) {
 export async function fetchRegistryVersion(pkg, version, options) {
   try {
     const metadata = await fetchRelease(pkg, version, options);
-    return metadata?.name === pkg && metadata?.version === version ? version : null;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
+      || typeof metadata.name !== 'string' || !semver.valid(metadata.version)) throw new Error('metadados de versão inválidos');
+    return metadata.name === pkg && metadata.version === version ? version : null;
   } catch (err) {
     if (err?.statusCode === 404) return null;
     throw err;
