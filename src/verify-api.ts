@@ -5,7 +5,7 @@ import {Hono} from 'hono';
 import {z} from 'zod';
 import {Authority, Id, Refusal} from './contracts.ts';
 import {VERIFICATION_MODULES, type Ledger, type VerificationModule} from './ledger.ts';
-import {listModuleReports, readModuleReport, requestModuleCorrection, type ModuleReportSummary} from './verification-modules.ts';
+import {listModuleReports, readModuleReport, renderModuleCoverageMarkdown, requestModuleCorrection, type ModuleReportSummary} from './verification-modules.ts';
 import {isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
 import {listSecurityReports, readAchadoMarkdown, readSecurityReport, removeSecurityReport} from './verify-report.ts';
@@ -187,12 +187,24 @@ function functionalFinding(achado: z.infer<typeof Achado>) {
   };
 }
 
-function functionalCoverage(markdown: string, findings: readonly z.infer<typeof Achado>[]) {
-  const protectedFiles = [...new Set(findings.map(item => item.where.file).filter(isSecretClassBasename))];
-  const visible = protectedFiles.length === 0 ? markdown : markdown.split('\n').map(line =>
-    protectedFiles.some(file => line.includes(file)) ? '[Registro de arquivo protegido omitido]' : line,
-  ).join('\n');
-  return reportText(visible);
+async function functionalCoverage(ledger: Ledger, runId: string, report: Awaited<ReturnType<typeof readModuleReport>>) {
+  const protectedFiles = new Set(report.achados.filter(item => item.secretPreview !== null || isSecretClassBasename(item.where.file))
+    .map(item => item.where.file));
+  const result = await ledger.pool.query(
+    `SELECT file, examiner_provider AS "examinerProvider", examiner_model AS "examinerModel",
+       profile_id AS "profileId", checklist FROM ac_verify_coverage WHERE run_id=$1 ORDER BY file`, [runId]);
+  const rows = CoverageRow.array().parse(result.rows);
+  for (const row of rows) if (isSecretClassBasename(row.file)) protectedFiles.add(row.file);
+  function mentionsProtected(text: string): boolean {
+    return [...protectedFiles].some(file => text.includes(file)) ||
+      (text.match(/[\p{L}\p{N}._@/+-]+/gu) ?? []).some(isSecretClassBasename);
+  }
+  const files = rows.filter(row => ![row.file, row.examinerProvider, row.examinerModel, ...row.checklist].some(mentionsProtected));
+  const tools = report.toolCoverage.filter(row => ![row.tool, row.version, row.detail, ...(row.files ?? [])].some(mentionsProtected));
+  const protectedCount = rows.length - files.length + report.toolCoverage.length - tools.length;
+  let markdown = renderModuleCoverageMarkdown(tools, files);
+  if (protectedCount) markdown += '\n[Registro de arquivo protegido omitido]\n';
+  return reportText(markdown);
 }
 
 async function publishedFunctionalReport(ledger: Ledger, dataDirectory: string, projectId: string, module: VerificationModule, runId: string) {
@@ -234,7 +246,7 @@ function registerFunctionalReports(app: Hono<ApiEnv>, deps: VerificationRouteDep
     const runId = Id.parse(c.req.param('runId'));
     const {report} = await publishedFunctionalReport(deps.ledger, dataDirectory, projectId, module, runId);
     return c.json({resumo: functionalSummary(report.summary), achados: report.achados.map(functionalFinding),
-      cobertura: functionalCoverage(report.coverageMarkdown, report.achados)});
+      cobertura: await functionalCoverage(deps.ledger, runId, report)});
   });
 
   app.post(`${reportPath}/corrigir`, async c => {

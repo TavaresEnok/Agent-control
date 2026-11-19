@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { Link, MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 const { fetcher } = vi.hoisted(() => ({ fetcher: vi.fn() }))
@@ -23,9 +23,10 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
 }
 
-function renderAt(path: string) {
+function renderAt(path: string, nextPath?: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
+      {nextPath && <Link to={nextPath}>Trocar de projeto</Link>}
       <Routes>
         <Route path="/verificacoes" element={<VerificacoesRoute />} />
         <Route path="/verificacoes/:runId" element={<VerificacoesRoute />} />
@@ -193,4 +194,34 @@ it('mostra mensagem fixa para relatório inacessível no projeto selecionado', a
   expect(fetcher).toHaveBeenCalledWith(`${FUNCTIONAL}/qa/${OTHER_RUN}`, expect.objectContaining({ cache: 'no-store' }))
   expect(view.container.innerHTML).not.toContain('erro-sintetico-com-conteudo-protegido')
   expect(screen.queryByRole('button', { name: 'Corrigir' })).toBeNull()
+})
+
+it('limpa as verificações anteriores ao trocar de projeto na mesma rota', async () => {
+  let reads = 0
+  let finishSecond!: (response: Response) => void
+  const pendingSecond = new Promise<Response>(resolve => { finishSecond = resolve })
+  fetcher.mockImplementation(async (url: string) => {
+    if (url !== FUNCTIONAL) return json({ verificacoes: [] })
+    if (++reads === 1) return json({ verificacoes: [
+      { id: RUN, module: 'qa', createdAt: summary.createdAt, counts: summary.counts, toolFailures: 0 },
+    ] })
+    return pendingSecond
+  })
+  renderAt(`/p/${PROJECT}/verificacoes`, `/p/${OTHER_RUN}/verificacoes`)
+  await screen.findByRole('link', { name: /QA/ })
+  fireEvent.click(screen.getByRole('link', { name: 'Trocar de projeto' }))
+  expect(screen.queryByRole('link', { name: /QA/ })).toBeNull()
+  expect(reads).toBe(2)
+  await act(async () => { finishSecond(json({ verificacoes: [] })) })
+  expect(screen.queryByRole('link', { name: /QA/ })).toBeNull()
+})
+
+it.each(['seguranca', ''])('abre um relatório de segurança com o filtro %s', async module => {
+  fetcher.mockImplementation(async (url: string) => {
+    if (url === `/api/v1/ac/personal/verificacoes/${RUN}`) return json({ resumo: summary, achados: [], cobertura: '' })
+    throw new Error('REQUEST_UNEXPECTED')
+  })
+  renderAt(`/p/${PROJECT}/verificacoes/${RUN}?modulo=${module}`)
+  expect(await screen.findByText('Nenhum achado.')).toBeTruthy()
+  expect(fetcher.mock.calls.some(([url]) => String(url).startsWith(FUNCTIONAL))).toBe(false)
 })

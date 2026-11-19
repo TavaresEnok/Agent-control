@@ -362,9 +362,9 @@ function VerificacaoDetalhe({ runId }: { runId: string }) {
 }
 
 export function VerificacoesRoute() {
-  const { runId } = useParams()
+  const { runId, projectId } = useParams()
   const [search] = useSearchParams()
   const module = search.get('modulo')
-  if (runId && module !== null) return <FunctionalReportDetail key={`${module}/${runId}`} module={module} runId={runId} />
-  return runId ? <VerificacaoDetalhe runId={runId} /> : <VerificacoesLista />
+  if (runId && module && Object.hasOwn(moduleLabels, module)) return <FunctionalReportDetail key={`${projectId}/${module}/${runId}`} module={module} runId={runId} />
+  return runId ? <VerificacaoDetalhe key={`${projectId}/${runId}`} runId={runId} /> : <VerificacoesLista key={projectId} />
 }

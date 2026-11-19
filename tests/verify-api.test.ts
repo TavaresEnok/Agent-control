@@ -106,6 +106,9 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   const protectedMarker = 'conteudo-protegido-sintetico';
   const preview = 'previa-protegida-sintetica';
   const fakePassword = 'valor-sintetico-para-redigir';
+  const onlyInCoverage = 'data/.env.historico';
+  await ledger.pool.query(`INSERT INTO ac_verify_coverage(run_id,file,examiner_provider,examiner_model,checklist)
+    VALUES($1,$2,'fixture','fixture',$3::jsonb)`, [selected.id, onlyInCoverage, JSON.stringify(['marcador-privado-da-cobertura'])]);
   const coverageFile = join(selected.directory, 'cobertura.md');
   await writeFile(coverageFile, (await readFile(coverageFile, 'utf8')) + `\npassword=${fakePassword}\n| ${protectedFile} | ${protectedMarker} |\n`);
   await writeFile(join(selected.directory, 'achados.json'), JSON.stringify({achados: [
@@ -155,7 +158,7 @@ test('relatórios funcionais seguem o projeto do gateway e corrigem com a reserv
   assert.equal(detail.status, 200);
   assert.equal(detail.headers.get('cache-control'), 'no-store');
   const body = await detail.text();
-  for (const privateText of [protectedMarker, preview, fakePassword, 'secretPreview', selected.directory, 'mapa', 'bruto']) {
+  for (const privateText of [protectedMarker, preview, fakePassword, 'secretPreview', selected.directory, 'mapa', 'bruto', onlyInCoverage, 'marcador-privado-da-cobertura']) {
    assert.ok(!body.includes(privateText), `unexpected field or text in functional report: ${privateText}`);
   }
   const parsed = JSON.parse(body);
