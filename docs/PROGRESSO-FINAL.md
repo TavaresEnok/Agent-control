@@ -356,3 +356,4 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 04:26 UTC — Revisor encerrou C3-R8 em aed61c1d (código 0). Gerente confere a entrega.
 - 19/11/2026 04:26 UTC — Revisão C5-R5 iniciada por Sol high normal somente leitura em d58c8e69.
 - 19/11/2026 04:26 UTC — Painel 7efe20f0 passou em sete testes da API, dez do navegador simulado e no build. O painel preservou a consulta da instalação durante a troca de projeto e descartou a resposta funcional tardia. Exame R4 recebido em 3ec5a0fe. O laboratório de linguagens está rodando no digest da imagem reconstruída.
+- 19/11/2026 04:28 UTC — QA poliglota passou em 41/41 e no laboratório adicional da imagem real com as duas linguagens. Um defeito aritmético e um controle por linguagem produziram uma falha e uma aprovação em cada uma das três passadas; após corrigir só as implementações, os quatro testes passaram três vezes. A medição registrou ramos no Python e statements no Go.
