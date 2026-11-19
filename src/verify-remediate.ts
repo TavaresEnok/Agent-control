@@ -6,13 +6,16 @@ import {basename, dirname, isAbsolute, join, relative, resolve, sep} from 'node:
 import {promisify} from 'node:util';
 import type pg from 'pg';
 import {z} from 'zod';
-import {digest, Refusal, type Authority} from './contracts.ts';
-import {enqueuePersonalOwner, readPersonalOwnerText} from './conversation-transport.ts';
+import {Refusal, type Authority} from './contracts.ts';
 import type {Ledger} from './ledger.ts';
 import {finishExamIntentTx, type ExamIntentTarget} from './exam-intent.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
 import {isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {REMEDIATION_ACCEPTANCE, VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
+import {
+  assertNoSymlinkAlongPath, correctionReceipt, groupCorrectionFindings, loadCorrectionRequests, saveCorrectionRequest,
+  type CorrectionReceipt,
+} from './verification-correction-requests.ts';
 
 export const VERIFY_RECHECK_NEW_EXAM_REQUIRED = 'VERIFY_RECHECK_NEW_EXAM_REQUIRED';
 export const VERIFY_RECHECK_NEW_EXAM_GUIDANCE =
@@ -150,37 +153,16 @@ function regressionText(ids: readonly string[]): string {
   return ids.map(id => `O teste ${regressionPath(id)} tem de falhar antes da correção e passar depois.`).join('\n');
 }
 
-function sameIdSet(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  const a = [...left].map(String).sort((x, y) => x.localeCompare(y));
-  const b = [...right].map(String).sort((x, y) => x.localeCompare(y));
-  return a.every((id, index) => id === b[index]);
-}
-
-function groupFindings(findings: readonly OpenFinding[]): {file: string; items: OpenFinding[]}[] {
-  const sorted = [...findings].sort((a, b) => a.file.localeCompare(b.file) || a.id.localeCompare(b.id));
-  const groups: {file: string; items: OpenFinding[]}[] = [];
-  for (const finding of sorted) {
-    const last = groups.at(-1);
-    if (last?.file === finding.file) last.items.push(finding);
-    else groups.push({file: finding.file, items: [finding]});
-  }
-  return groups;
-}
-
-function managerText(groups: readonly {file: string; items: OpenFinding[]}[], writePaths: readonly string[], regression: string): string {
-  const body = groups.map(group => [
-    `Arquivo: ${group.file}`,
-    ...group.items.map(item => `- ${item.id} linha ${item.line ?? 'não informada'}${item.reference ? ` ${item.reference}` : ''}`),
-  ].join('\n')).join('\n');
+function managerText(group: {file: string; items: OpenFinding[]}, regression: string): string {
   return [
     'Corrija os achados de segurança selecionados.',
     '',
     'O que corrigir:',
-    body,
+    `Arquivo: ${group.file}`,
+    ...group.items.map(item => `- ${item.id} linha ${item.line ?? 'não informada'}${item.reference ? ` ${item.reference}` : ''}`),
     '',
     'Caminhos de escrita:',
-    ...writePaths.map(file => `- ${file}`),
+    `- ${group.file}`,
     '',
     'Teste de regressão exigido:',
     regression,
@@ -658,46 +640,65 @@ async function updateReports(dataDirectory: string, projectId: string, runId: st
   }
 }
 
-async function existingRemediation(client: pg.PoolClient, runId: string, ids: readonly string[]): Promise<{messageLocalId: string; writePaths: string[]} | null> {
-  const rows = (await client.query(
-    'SELECT message_local_id, write_paths, finding_ids FROM ac_verify_remediations WHERE run_id=$1 FOR UPDATE',
-    [runId],
-  )).rows as {message_local_id: string; write_paths: string[]; finding_ids: string[]}[];
-  const match = rows.find(row => sameIdSet(row.finding_ids ?? [], ids));
-  if (!match) return null;
-  return {messageLocalId: String(match.message_local_id), writePaths: [...match.write_paths].map(String)};
-}
-
 export async function requestCorrection(ledger: Ledger, principal: string, authority: Authority, input: {
   runId: string; achadoIds: string[]; dataDirectory: string; projectId: string;
-}): Promise<{messageLocalId: string; writePaths: string[]}> {
+}): Promise<CorrectionReceipt> {
   await assertPersonalActivation(ledger);
-  const requested = normalizeIds(input.achadoIds);
+  const requested = normalizeIds(input.achadoIds).sort();
   return ledger.tx(async client => {
     await ledger.authorize(client, principal, authority.contextId);
-    const run = await loadRun(client, input.runId, input.projectId, authority.contextId);
-    const findings = (await loadFindings(client, run.id, requested, true)).sort((a, b) => a.id.localeCompare(b.id));
+    await ledger.fence(client, authority);
+    if (!Uuid.safeParse(input.runId).success || !Uuid.safeParse(input.projectId).success) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    const run = (await client.query<{id: string}>(
+      `SELECT r.id FROM ac_verify_runs r
+       WHERE r.id=$1 AND r.project_id=$2 AND r.module='verify'
+         AND r.report_dir <> 'discarded' AND r.report_dir NOT LIKE 'discarded:%'
+         AND (r.context_id=$3 OR (
+           EXISTS (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=r.context_id)
+           AND $3=(SELECT x.id FROM ac_contexts x
+             WHERE x.project_id=r.project_id AND NOT x.archived
+               AND NOT EXISTS (SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=x.id)
+             ORDER BY x.created_at, x.id LIMIT 1)
+         )) FOR UPDATE`,
+      [input.runId, input.projectId, authority.contextId],
+    )).rows[0];
+    if (!run) throw new Refusal('VERIFY_RUN_MISSING', 404);
+    const findings = await loadFindings(client, run.id, requested, true);
     const repo = await projectRepo(client, input.projectId);
     if (!repo) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
-    for (const finding of findings) {
-      if (!(await locateRepoFile(repo, finding.file))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+    const groups = groupCorrectionFindings(findings);
+    const allowedPaths = new Set(groups.map(group => group.file));
+    for (const {file} of groups) {
+      if (isSecretBasename(file) || !(await locateRepoFile(repo, file))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
     }
-    const groups = groupFindings(findings);
-    const writePaths = groups.map(group => group.file);
-    const ids = findings.map(finding => finding.id);
-    const existing = await existingRemediation(client, run.id, ids);
-    if (existing) return existing;
-    const regression = regressionText(ids);
-    const text = managerText(groups, writePaths, regression);
-    const messageLocalId = `verify-fix-${run.id}-${digest(ids).slice(0, 12)}`;
-    await client.query(
-      `INSERT INTO ac_verify_remediations(id,run_id,finding_ids,message_local_id,write_paths,regression_test,acceptance)
-       VALUES($1,$2,$3,$4,$5,$6,$7)`,
-      [randomUUID(), run.id, ids, messageLocalId, writePaths, regression, REMEDIATION_ACCEPTANCE],
-    );
-    await enqueuePersonalOwner(client, authority.contextId, messageLocalId, text);
-    if (await readPersonalOwnerText(client, authority.contextId, messageLocalId) !== text) throw new Refusal('CHAT_MESSAGE_CONFLICT');
-    return {messageLocalId, writePaths};
+    for (const id of requested) {
+      const path = regressionPath(id);
+      await assertNoSymlinkAlongPath(repo, path);
+      allowedPaths.add(path);
+    }
+    const findRequest = await loadCorrectionRequests(client, run.id, requested);
+    const exact = findRequest(requested);
+    if (exact) {
+      if (exact.writePaths.some(path => !allowedPaths.has(path))) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+      return correctionReceipt([exact]);
+    }
+    const plans = groups.map(group => {
+      const ids = group.items.map(item => item.id);
+      const existing = findRequest(ids);
+      if (existing?.writePaths.some(path => path !== group.file && !ids.some(id => regressionPath(id) === path))) {
+        throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+      }
+      return {group, ids, existing};
+    });
+    const requests = [];
+    for (const {group, ids, existing} of plans) {
+      const regressionTest = regressionText(ids);
+      requests.push(existing ?? await saveCorrectionRequest(client, {
+        runId: run.id, prefix: 'verify-fix', ids, writePaths: [group.file], regressionTest,
+        text: managerText(group, regressionTest), contextIds: [authority.contextId],
+      }));
+    }
+    return correctionReceipt(requests);
   });
 }
 

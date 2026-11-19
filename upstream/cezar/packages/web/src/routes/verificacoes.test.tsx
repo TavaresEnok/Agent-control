@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { Link, MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -148,6 +148,9 @@ it('filtra módulos, abre cobertura e prova e reenvia só achados elegíveis', a
     if (url === `${FUNCTIONAL}/qa/${RUN}/corrigir` && init?.method === 'POST') {
       posts.push(JSON.parse(String(init.body)))
       if (posts.length === 1) return json({ error: 'VERIFY_ALREADY_RUNNING', detail: 'omitir-erro-sintetico' }, 409)
+      if (posts.length === 3) return json({
+        messageLocalId: 'fixture-correcao-a', messageLocalIds: ['fixture-correcao-a', 'fixture-correcao-b'],
+      })
       return json({ messageLocalId: 'module-qa-fix-synthetic' })
     }
     throw new Error('REQUEST_UNEXPECTED')
@@ -181,7 +184,10 @@ it('filtra módulos, abre cobertura e prova e reenvia só achados elegíveis', a
   expect(await screen.findByRole('status')).toHaveProperty('textContent', 'Pedido de correção enviado ao gerente.')
   selectFindings()
   fireEvent.click(button)
-  await screen.findByRole('status')
+  const notice = await screen.findByRole('status')
+  expect(notice.textContent).toContain('2 pedidos de correção enviados ao gerente.')
+  expect(within(notice).getAllByRole('listitem').map((item) => item.textContent))
+    .toEqual(['fixture-correcao-a', 'fixture-correcao-b'])
   expect(posts).toEqual(Array.from({ length: 3 }, () => ({ achadoIds: ['ACH-001', 'ACH-003'] })))
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([path]) => path))
     .toEqual(Array(3).fill(`${FUNCTIONAL}/qa/${RUN}/corrigir`))

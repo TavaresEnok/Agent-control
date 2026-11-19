@@ -19,7 +19,7 @@ export function AchadoCorrecao({ runId, achados, correctionUrl }: AchadoCorrecao
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<string[] | null>(null)
   const escolhidos = selected.filter((id) => achados.some((achado) => achado.id === id && podeCorrigir(achado.status)))
 
   function toggle(id: string) {
@@ -27,14 +27,14 @@ export function AchadoCorrecao({ runId, achados, correctionUrl }: AchadoCorrecao
       if (current.includes(id)) return current.filter((item) => item !== id)
       return current.length < MAX_SELECTED ? [...current, id] : current
     })
-    setNotice('')
+    setNotice(null)
   }
 
   async function corrigir() {
     if (busy || escolhidos.length === 0) return
     setBusy(true)
     setError('')
-    setNotice('')
+    setNotice(null)
     try {
       const response = await agentControlFetch(correctionUrl ?? `/api/v1/ac/personal/verificacoes/${encodeURIComponent(runId)}/corrigir`, {
         method: 'POST',
@@ -52,8 +52,11 @@ export function AchadoCorrecao({ runId, achados, correctionUrl }: AchadoCorrecao
         setError('Não foi possível enviar o pedido de correção.')
         return
       }
+      const body = await response.json().catch(() => null) as { messageLocalIds?: unknown } | null
+      const ids = Array.isArray(body?.messageLocalIds)
+        ? body.messageLocalIds.filter((id): id is string => typeof id === 'string') : []
       setSelected([])
-      setNotice('Pedido de correção enviado ao gerente.')
+      setNotice(ids)
     } catch {
       setError('Não foi possível enviar o pedido de correção.')
     } finally {
@@ -97,12 +100,23 @@ export function AchadoCorrecao({ runId, achados, correctionUrl }: AchadoCorrecao
           })}
         </ul>
       )}
-      {escolhidos.length >= MAX_SELECTED ? <p>Limite de 20 achados por pedido.</p> : null}
+      {escolhidos.length >= MAX_SELECTED ? <p>Limite de 20 achados por seleção.</p> : null}
       <Button type="button" className="min-h-11 self-start" disabled={busy || escolhidos.length === 0} onClick={() => { void corrigir() }}>
         Corrigir
       </Button>
       {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
-      {notice ? <p role="status" className="text-sm text-muted-foreground">{notice}</p> : null}
+      {notice ? (
+        <div role="status" className="text-sm text-muted-foreground">
+          <p>{notice.length > 1
+            ? `${notice.length} pedidos de correção enviados ao gerente.`
+            : 'Pedido de correção enviado ao gerente.'}</p>
+          {notice.length > 1 ? (
+            <ul className="mt-1 space-y-1">
+              {notice.map((id) => <li key={id}><code className="break-all">{id}</code></li>)}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   )
 }
