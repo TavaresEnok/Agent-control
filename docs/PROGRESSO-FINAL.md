@@ -486,3 +486,11 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 05:43 UTC — Próximas ordens cobrem dois itens da especificação que ainda dependiam de execução real, OpenRewrite para fontes Java e fast-check para propriedades funcionais de JavaScript. A revisão das medições 1b42a859 encontrou problemas na identidade de uma consulta, no motivo do verificador e na cobertura do material de apoio; essas correções têm prioridade na fila.
 - 19/11/2026 05:44 UTC — Banco 1cd11ad5 reconstruído em homologação com PostgreSQL, Squawk e Dexter. Iniciado o laboratório dos casos de esquema, identificação de comando e origem inequívoca de erro.
 - 19/11/2026 05:45 UTC — O laboratório do QA com as montagens do produto executou mutmut, go-mutesting e Hypothesis por digest em 119 s. A passagem confirmou mutantes mortos e sobreviventes com localização, propriedade falsificada e controle limpo. Iniciada a bateria unificada com os adaptadores locais habilitados.
+- 19/11/2026 05:46 UTC — Banco a382ae45 aprovado nos 13 testes reais, sem saltos; desempenho 4e90e9c5 aprovado nos 62 testes, sem saltos, incluindo as duas medições da CLI e o cancelamento de consulta bloqueada.
+- 19/11/2026 05:46 UTC — Homologação incremental em 525f929e reuniu o laboratório de QA no runtime do produto, o diagnóstico de imagem ausente e as correções de atribuição em banco e de recuperação em desempenho. Iniciada nova passagem pelas oito CLIs.
+- 19/11/2026 05:46 UTC — Suíte oficial de c2-chromium-r5 em 1fd88007: 256 arquivos aprovados, 0 falhas, 86 excluídos pelo executor.
+- 19/11/2026 05:46 UTC — Revisor encerrou C-REVERIFICAR-R3 em 6e5edfd1 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:46 UTC — Revisão C9-R5 iniciada por Sol high normal somente leitura em 86ec5e87.
+- 19/11/2026 05:46 UTC — Trabalhador encerrou C8-R8 em 79d499e8 (código 0). Gerente confere a entrega.
+- 19/11/2026 05:46 UTC — Trabalho C-EXAME-MEDICOES-R2 iniciado por Sol high normal em final-exame-medicoes.
+- 19/11/2026 05:47 UTC — O revisor de 6e5edfd1 identificou que uma diferença numérica pode ter causa diferente de falta de cobertura V8 e que uma decisão legada pode ser reutilizada sem o novo recibo. C-REVERIFICAR-R4 fica no mesmo ramo da ampliação, para corrigir os cinco achados depois da ordem em andamento. Documentação 79d499e8 recebida para reconstrução.
