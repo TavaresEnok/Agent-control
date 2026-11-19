@@ -234,3 +234,9 @@ Mantido pelo gerente Astra. Uma linha por passo concluído.
 - 19/11/2026 03:19 UTC — Revisor encerrou C-EXAME-PERSISTENCIA-R2 em db4b5c40 (código 0). Gerente confere a entrega.
 - 19/11/2026 03:19 UTC — Revisão C3-R6 iniciada por Sol high normal somente leitura em 78a334bf.
 - 19/11/2026 03:19 UTC — QA R7 em a7783fba passou nos 35 testes sem omissões, incluindo a imagem pela entrada pública, a fixture histórica do relatório privado, rota opcional, nomes com espaço e %20, propriedade impura e vínculo de função morto. TypeScript aprovado. O digest do gerente foi commitado separadamente. Revisão solicitada sobre o código.
+- 19/11/2026 03:20 UTC — Trabalhador encerrou C-BASE-R7 em e372b57a (código 0). Gerente confere a entrega.
+- 19/11/2026 03:20 UTC — Trabalho C-EXAME-R3 iniciado por Sol high normal em final-c-exame-r3.
+- 19/11/2026 03:21 UTC — Revisor encerrou C3-R6 em 78a334bf (código 0). Gerente confere a entrega.
+- 19/11/2026 03:21 UTC — Revisão C5-R4-CODIGO iniciada por Sol high normal somente leitura em 5d494800.
+- 19/11/2026 03:21 UTC — Falha na validação de c2-r6-exame-nativo em suite, código 1. Logs privados do gerente.
+- 19/11/2026 03:21 UTC — A CLI pública de reverificação passou nas 16 provas da integração. O parecer da persistência apontou a ausência do arquivo de origem nos relatórios antigos, confirmação por substring, publicação de prova rejeitada e omissão de medições. Em 8576fe97 as três provas da compatibilidade e origem passaram. A remoção do modo de confirmação por substring está atribuída à rodada do exame. C4-R5 passou 6/6 pela CLI real.
