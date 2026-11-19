@@ -76,7 +76,7 @@ test('Dockerfile e lockfiles de desempenho fixam base por digest, usuário 65532
   assert.match(dockerfile, /ENTRYPOINT \["\/usr\/local\/bin\/desempenho-entrypoint\.sh"\]/);
   assert.match(dockerfile, /sha256sum -c checksums\.txt/);
   assert.match(dockerfile, /npm ci --omit=dev --ignore-scripts/);
-  assert.match(dockerfile, /LABEL org.agent-control.performance.protocol="5"/);
+  assert.match(dockerfile, /LABEL org.agent-control.performance.protocol="6"/);
   assert.match(dockerfile, /npm ci --prefix cpu-parser --omit=dev --ignore-scripts/);
   assert.match(dockerfile, /^COPY .*http-link\.mjs .*cpu-metrics\.mjs postgres-metrics\.mjs /m);
 
