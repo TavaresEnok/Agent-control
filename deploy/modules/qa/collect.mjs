@@ -58,6 +58,8 @@ const ALLOWED_EXTS = new Set([
   '.yml',
   '.html',
   '.htm',
+  '.css',
+  '.png',
   '.md',
   '.sql',
   '.py',
@@ -1296,6 +1298,19 @@ export async function collectQaModule(options = {}) {
         name: 'axe-core',
         partial: incomplete,
         run: () => runAxeCoreTool({workspace, htmlFiles, failTool}),
+      },
+      {
+        name: 'qa-navegador',
+        partial: incomplete,
+        run: async () => {
+          if (!htmlFiles.length) return {coverageRow: coverageRow('qa-navegador', unmeasured, 'skipped', 'nenhum arquivo HTML no snapshot')};
+          const {runBrowserQa} = await import('./browser-qa.mjs');
+          const {api, version} = await loadTool('axe-core', 'axe.js');
+          return runBrowserQa({workspace, copiedFiles, htmlFiles, incomplete,
+            inImage: runtimeInstalled,
+            allowed: runtimeInstalled ? executionAllowed(repoDir) : process.env.QA_HOST_TEST_MODE === '1',
+            axe: {source: (api.default ?? api).source, version}, row: coverageRow, key: fileCoverageKey, unmeasured});
+        },
       },
       {
         name: 'qa-contrato-openapi',

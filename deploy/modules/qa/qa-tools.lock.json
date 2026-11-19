@@ -3,7 +3,7 @@
   "module": "qa",
   "registry": "https://registry.npmjs.org",
   "lockfileVersion": 3,
-  "packageLockSha256": "28a00f552a3041e5e95492ce8913012ac5e75d197cab41b741b0790e691a9083",
+  "packageLockSha256": "fd08d53610a4d9e3cba811b3dbb94a25470d1def52728ac9d6521f579e3cabfd",
   "baseImage": {
     "name": "mcr.microsoft.com/playwright",
     "tag": "v1.65.1-noble",
@@ -56,11 +56,28 @@
       "license": "MIT",
       "integrity": "sha512-dkCuqCWh5U7u0aurmmc/qvel2KeKDxHTwVtUdYonndIpD7mXV6AVaWNdvaja2HAy628z7FT/Qdz8sCgzwhgwKg==",
       "resolved": "https://registry.npmjs.org/@apidevtools/swagger-parser/-/swagger-parser-13.1.0.tgz"
+    },
+    "parse5": {
+      "version": "8.1.1",
+      "license": "MIT",
+      "integrity": "sha512-EcR/6WDcU7b2N3vQSxKALCk9lXGtUMQxXio008OEMBE0kavu/7JLfBEeFPzi43nMqVDSbEn3QCK+BMCc9zO//w==",
+      "resolved": "https://registry.npmjs.org/parse5/-/parse5-8.1.1.tgz"
+    },
+    "playwright-core": {
+      "version": "1.65.1",
+      "license": "Apache-2.0",
+      "integrity": "sha512-hqPpz7blSMPxWVdoeE1yiBSzXsKiVOd2k+kjCvmUywD2GPO2Dd9HfcWnq9NN0GHbNZDFgZ9JfBFr+X5/BLo0qw==",
+      "resolved": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.65.1.tgz"
+    },
+    "pngjs": {
+      "version": "7.0.0",
+      "license": "MIT",
+      "integrity": "sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==",
+      "resolved": "https://registry.npmjs.org/pngjs/-/pngjs-7.0.0.tgz"
     }
   },
   "transitive": {
     "@babel/parser": "8.0.10",
-    "@babel/traverse": "8.0.10",
-    "playwright": "1.65.1"
+    "@babel/traverse": "8.0.10"
   }
 }
