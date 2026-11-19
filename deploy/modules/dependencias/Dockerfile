@@ -19,7 +19,11 @@ RUN node /opt/dependencias-tools/verify-lock.mjs /opt/dependencias-tools \
     && npm cache clean --force \
     && rm -rf /root/.npm /tmp/*
 
-COPY sgconfig.yml collect.mjs cyclonedx.mjs fetch-registry.mjs ./
+COPY openrewrite/install.mjs openrewrite/lock.json openrewrite/OfflineRewrite.java ./openrewrite/
+RUN node ./openrewrite/install.mjs ./openrewrite/runtime \
+    && chmod -R a-w /opt/dependencias-tools/openrewrite
+
+COPY sgconfig.yml collect.mjs collect-java.mjs cyclonedx.mjs fetch-registry.mjs ./
 COPY rules/ ./rules/
 COPY codemods/ ./codemods/
 COPY schemas/ ./schemas/
@@ -32,6 +36,7 @@ RUN chmod 0555 /usr/local/bin/dependencias-entrypoint.sh \
       /opt/dependencias-tools/offline-registry.json \
       /opt/dependencias-tools/sgconfig.yml \
       /opt/dependencias-tools/collect.mjs \
+      /opt/dependencias-tools/collect-java.mjs \
       /opt/dependencias-tools/cyclonedx.mjs \
       /opt/dependencias-tools/fetch-registry.mjs \
       /opt/dependencias-tools/verify-lock.mjs \

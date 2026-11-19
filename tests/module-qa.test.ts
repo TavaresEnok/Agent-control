@@ -200,7 +200,8 @@ test('coletor encontra defeitos estáticos na fixture e preserva o controle limp
 
   assert.equal(output.findings.some(f => ['node-test-v8', 'stryker-mutator'].includes(f.tool)), false);
   assert.equal(hasFinding('qa-matriz-estatica', 'QA-REQUISITO-SEM-CANDIDATO', 'requisitos.md', 4), true);
-  assert.ok(output.coverage.every(row => !/fast-check|playwright|k6/.test(row.tool)));
+  assert.ok(output.coverage.every(row => !/playwright|k6/.test(row.tool)));
+  assert.equal(toolStatus.get('fast-check'), 'skipped');
   assert.match(output.coverage.find(row => row.tool === 'qa-propriedades-funcionais')?.detail ?? '',
     /0 de 4 casos/);
   assert.equal(output.coverage.find(row => row.tool === 'qa-carga')?.version, 'não aferida');
