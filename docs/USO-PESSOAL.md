@@ -488,7 +488,7 @@ A prova mensal restaura o backup mais novo num banco descartável no mesmo servi
 
 ### Retenção de worktrees, imagens candidatas e temporários
 
-O registro, a prova e a remoção de worktrees de trabalhadores, imagens candidatas de módulo e pastas `/tmp/ac-*` de rodadas estão em [`RETENCAO-ARTEFATOS.md`](RETENCAO-ARTEFATOS.md), com os comandos `--registrar-worktree`, `--registrar-imagem`, `--registrar-temporario`, `--encerrar-rodada` e `--retencao-artefatos` de `personal:maintenance`.
+O registro e a retenção de worktrees de trabalhadores, imagens candidatas de módulo e pastas `/tmp/ac-*` de rodadas estão em [`RETENCAO-ARTEFATOS.md`](RETENCAO-ARTEFATOS.md), com os comandos `--registrar-worktree`, `--registrar-imagem`, `--registrar-temporario`, `--encerrar-rodada` e `--retencao-artefatos` de `personal:maintenance`. A remoção de imagens está bloqueada enquanto não houver prova dos pins das outras instalações no daemon.
 
 ## Testes do Agent Control
 

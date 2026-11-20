@@ -1,4 +1,3 @@
-import {withInstallationImageLock} from './personal-image-lock.ts';
 import {execFile,spawn} from 'node:child_process';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
@@ -36,7 +35,7 @@ const ref=z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).refi
 const absolutePath=z.string().max(4096).refine(value=>isAbsolute(value)&&resolve(value)===value&&!value.includes('\0'));
 const time=z.number().int().safe().nonnegative();
 const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string().optional(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
-const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(VERIFICATION_MODULES),imageId:z.string().regex(imageIdPattern),registeredAt:time}).strict();
+const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(VERIFICATION_MODULES),imageId:z.string().regex(imageIdPattern),daemonId:z.string().min(1).max(256).optional(),registeredAt:time}).strict();
 /** `removing` is the removal journal, written outside the directory before its contents start to go. The owner marker lives inside
  * the tree and may be deleted before an interruption; the journal (same identity plus the birth time taken right before) lets the
  * next run finish that exact directory, and nothing else. */
@@ -287,14 +286,17 @@ export async function registerWorkerWorktree(config:Installation,input:{projectI
 export async function registerCandidateImage(config:Installation,input:{projectId:string;module:(typeof VERIFICATION_MODULES)[number];imageId:string},deps:RetentionDeps={}){
  if(!imageIdPattern.test(input.imageId)||!(VERIFICATION_MODULES as readonly string[]).includes(input.module))throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  project(config,input.projectId);
- const inspected=await (deps.docker??defaultDocker)(['image','inspect','--format','{{.Id}}',input.imageId]);
- if(inspected.code!==0||inspected.stdout.trim()!==input.imageId)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
+ const docker=deps.docker??defaultDocker;
+ const daemonId=await dockerDaemonId(docker);
+ if(!daemonId)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
+ const inspected=await docker(['image','inspect','--format','{{.Id}}',input.imageId]);
+ if(inspected.code!==0||inspected.stdout.trim()!==input.imageId||await dockerDaemonId(docker)!==daemonId)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  const now=(deps.now??Date.now)();
  return mutateRegistry(config,registry=>{
   const same=registry.images.find(item=>item.imageId===input.imageId&&item.projectId===input.projectId);
-  if(same){if(same.module!==input.module)throw new Refusal('RETENTION_REGISTRATION_CONFLICT',409);return same.id;}
+  if(same){if(same.module!==input.module||same.daemonId!==daemonId)throw new Refusal('RETENTION_REGISTRATION_CONFLICT',409);return same.id;}
   const id=randomUUID();
-  registry.images.push({id,projectId:input.projectId,module:input.module,imageId:input.imageId,registeredAt:now});
+  registry.images.push({id,projectId:input.projectId,module:input.module,imageId:input.imageId,daemonId,registeredAt:now});
   return id;
  });
 }
@@ -359,8 +361,18 @@ async function protectedDigests(config:Installation,deps:RetentionDeps){
  return found;
 }
 
+async function dockerDaemonId(docker:NonNullable<RetentionDeps['docker']>){
+ const result=await docker(['info','--format','{{.ID}}']);
+ const id=result.stdout.trim();
+ return result.code===0&&/^[A-Za-z0-9][A-Za-z0-9:_.-]{0,255}$/.test(id)?id:undefined;
+}
+
 type ImageFacts={digests:string[]};
 async function proveImage(entry:ImageEntry,pinned:Set<string>,docker:NonNullable<RetentionDeps['docker']>,now:number):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
+ if(!entry.daemonId)return no('registro antigo sem identidade do daemon Docker');
+ const daemonId=await dockerDaemonId(docker);
+ if(!daemonId)return no('identidade do daemon Docker indisponível');
+ if(daemonId!==entry.daemonId)return no('daemon Docker diferente do registro');
  const inspected=await docker(['image','inspect',entry.imageId]);
  if(inspected.code!==0){
   const alive=await docker(['version','--format','{{.Server.Version}}']);
@@ -499,24 +511,10 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
    if(!pinned){kept('image',label,'não foi possível ler os digests fixados e os exames');continue;}
    try{
     const proof=await proveImage(entry,pinned,docker,now());
-    if(!proof.ok){
-     if('absent' in proof){
-      if(apply)await forget('image',entry.id,'dropped');
-      done('image');lines.push(`${label}: ${apply?'registro retirado':'registro seria retirado'} (${proof.reason}).`);
-     }else kept('image',label,proof.reason);
-     continue;
-    }
-    if(!apply){done('image');lines.push(`${label}: elegível (sem contêiner, sem digest fixado, sem exame que a cite).`);continue;}
-    const removed=await withInstallationImageLock(config.dataDirectory,false,async()=>{
-     const again=await proveImage(entry,await protectedDigests(config,deps),docker,now());
-     if(!again.ok)return 'mudou durante a retenção: '+again.reason;
-     const latest=await protectedDigests(config,deps);
-     if(again.facts.digests.some(digest=>latest.has(digest)))return 'digest fixado ou referenciado por exame';
-     return (await docker(['image','rm','--no-prune',entry.imageId])).code===0?undefined:'o Docker recusou a remoção';
-    });
-    if(removed){kept('image',label,removed);continue;}
-    await forget('image',entry.id,'removed');
-    done('image');lines.push(`${label}: removida.`);
+    if(!proof.ok){kept('image',label,proof.reason);continue;}
+    // There is no authoritative inventory and shared lock covering every installation on this daemon.
+    // Even a locally unpinned image can be pinned or selected by another installation.
+    kept('image',label,'pins de outras instalações no daemon não podem ser comprovados');
    }catch{kept('image',label,'falha ao verificar; repita depois');}
   }
  }

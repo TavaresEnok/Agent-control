@@ -37,6 +37,7 @@ async function lab(activation:'personal'|'other'='personal'):Promise<Lab>{
  const config={activation,dataDirectory:data,databaseUrl:'postgres://invalid.example/none',project:{id:projectId,label:'p',repo,owner:'owner'},projects:[]} as unknown as Installation;
  const removed:string[][]=[];
  const docker=async(args:string[])=>{
+  if(args[0]==='info')return {code:0,stdout:'daemon-test-1'};
   if(args[0]==='image'&&args[1]==='inspect'){
    const id=args.at(-1)!;
    if(id!==IMAGE&&id!==PINNED)return {code:1,stdout:''};
@@ -184,13 +185,13 @@ test('a candidate image is registered only when it exists locally, and a pinned 
   writeFileSync(join(l.product,'deploy','modules','qa','digest.txt'),PINNED+'\n');
   const later=Date.now()+3*HOUR;
   const preview=(await runArtifactCommand(l.config,['--retencao-artefatos'],l.deps(later))).join('\n');
-  assert.match(preview,/imagem sha256:c1c1c1c1c1c1 \(qa\): elegível/);
+  assert.match(preview,/imagem sha256:c1c1c1c1c1c1 \(qa\): preservado \(pins de outras instalações/);
   assert.match(preview,/imagem sha256:d2d2d2d2d2d2 \(qa\): preservado \(digest fixado/);
   assert.deepEqual(l.removed,[]);
   // Too recent to remove.
   assert.match((await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(Date.now()))).join('\n'),/registrada há 0 h \(mínimo 2 h\)/);
   await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(later));
-  assert.deepEqual(l.removed,[['image','rm','--no-prune',IMAGE]],'by id, never forced, never the pinned one');
+  assert.deepEqual(l.removed,[]);
  }finally{await done(l);}
 });
 

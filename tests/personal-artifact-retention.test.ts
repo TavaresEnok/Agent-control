@@ -46,6 +46,7 @@ async function lab():Promise<Lab>{
   docker:async args=>{
    dockerCalls.push(args);
    const [a,b]=args;
+   if(a==='info')return {code:docker.alive?0:1,stdout:'daemon-test-1\n'};
    if(a==='version')return {code:docker.alive?0:1,stdout:'27.0\n'};
    if(!docker.alive)return {code:1,stdout:''};
    if(a==='image'&&b==='inspect'){
@@ -290,21 +291,21 @@ test('a damaged or foreign registry stops the run before anything is touched',as
 
 const digestFile=(root:string,module:string,text:string)=>{mkdirSync(join(root,'deploy','modules',module),{recursive:true});writeFileSync(join(root,'deploy','modules',module,'digest.txt'),text+'\n');};
 
-test('an unused, unpinned candidate image is removed by id and nothing else is touched',async()=>{
+test('an unused candidate is preserved without proof of pins from other installations',async()=>{
  const l=await lab();
  try{
   l.docker.images.set(image('a'),{repoDigests:[]});l.docker.images.set(image('b'),{repoDigests:[]});
   await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('a')},{...l.deps,now:()=>Date.now()});
-  assert.match((await run(l,false)).join('\n'),/imagem sha256:aaaaaaaaaaaa \(qa\): elegível/);
+  assert.match((await run(l,false)).join('\n'),/imagem sha256:aaaaaaaaaaaa \(qa\): preservado \(pins de outras instalações/);
   assert.ok(l.docker.images.has(image('a')));
-  assert.match((await run(l,true)).join('\n'),/\(qa\): removida/);
-  assert.equal(l.docker.images.has(image('a')),false);
+  assert.match((await run(l,true)).join('\n'),/pins de outras instalações/);
+  assert.equal(l.docker.images.has(image('a')),true);
   assert.ok(l.docker.images.has(image('b')),'an unregistered image is never touched');
   const removals=l.dockerCalls.filter(args=>args[1]==='rm');
-  assert.deepEqual(removals,[['image','rm','--no-prune',image('a')]]);
+  assert.deepEqual(removals,[]);
   assert.equal(l.dockerCalls.some(args=>args.includes('prune')||args.includes('-f')||args.includes('--force')),false);
   const registry=JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8'));
-  assert.equal(registry.images.length,0);
+  assert.equal(registry.images.length,1);
  }finally{await cleanup(l);}
 });
 
@@ -332,12 +333,12 @@ test('an image stays when pinned by a product or project digest.txt, by the nati
   l.clock.now=Date.now()+5*HOUR;
   const later=(await run(l,true)).join('\n');
   assert.match(later,/sha256:555555555555 \(banco\): preservado \(há contêiner usando a imagem\)/);
-  assert.match(later,/sha256:666666666666 \(banco\): removida/);
-  assert.deepEqual([...l.docker.images.keys()].sort(),['1','2','3','4','5'].map(image));
+  assert.match(later,/sha256:666666666666 \(banco\): preservado \(pins de outras instalações/);
+  assert.deepEqual([...l.docker.images.keys()].sort(),['1','2','3','4','5','6'].map(image));
  }finally{await cleanup(l);}
 });
 
-test('an unreadable pin or an unreadable verification table keeps every image; Docker down keeps them too; a missing image only loses its record',async()=>{
+test('unreadable pins, unavailable Docker and absent images preserve their records',async()=>{
  const l=await lab();
  try{
   l.docker.images.set(image('a'),{repoDigests:[]});l.docker.images.set(image('b'),{repoDigests:[]});
@@ -351,16 +352,16 @@ test('an unreadable pin or an unreadable verification table keeps every image; D
   assert.match((await run(l,true)).join('\n'),/não foi possível ler os digests fixados/);
   await rm(l.deps.productRoot!,{recursive:true,force:true});
   l.docker.alive=false;
-  assert.match((await run(l,true)).join('\n'),/preservado \(Docker indisponível\)/);
+  assert.match((await run(l,true)).join('\n'),/preservado \(identidade do daemon Docker indisponível\)/);
   l.docker.alive=true;
   l.docker.refuseRemoval=true;
-  assert.match((await run(l,true)).join('\n'),/o Docker recusou a remoção/);
+  assert.match((await run(l,true)).join('\n'),/pins de outras instalações/);
   assert.equal(l.docker.images.size,2);
   l.docker.refuseRemoval=false;
   l.docker.images.delete(image('b'));
   const text=(await run(l,true)).join('\n');
-  assert.match(text,/sha256:bbbbbbbbbbbb \(qa\): registro retirado \(a imagem já não existe no Docker\)/);
-  assert.equal(l.docker.images.size,0);
+  assert.match(text,/sha256:bbbbbbbbbbbb \(qa\): preservado \(a imagem já não existe no Docker\)/);
+  assert.equal(l.docker.images.size,1);
  }finally{await cleanup(l);}
 });
 
@@ -374,6 +375,42 @@ test('a candidate image is registered only if Docker has exactly that id',async(
   const id=await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('c')},l.deps);
   assert.equal(await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('c')},l.deps),id);
   await assert.rejects(registerCandidateImage(l.config,{projectId:l.projectId,module:'banco',imageId:image('c')},l.deps),{code:'RETENTION_REGISTRATION_CONFLICT'});
+ }finally{await cleanup(l);}
+});
+
+
+test('registration refuses unavailable, malformed or changing daemon identities',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  const docker=l.deps.docker!;
+  for(const value of ['', 'bad id']){
+   l.deps.docker=async args=>args[0]==='info'?{code:0,stdout:value}:docker(args);
+   await assert.rejects(registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('a')},l.deps),{code:'RETENTION_REGISTRATION_INVALID'});
+  }
+  let count=0;
+  l.deps.docker=async args=>args[0]==='info'?{code:0,stdout:++count===1?'daemon-a':'daemon-b'}:docker(args);
+  await assert.rejects(registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('a')},l.deps),{code:'RETENTION_REGISTRATION_INVALID'});
+  assert.equal(existsSync(join(l.data,'artifact-retention','registry.json')),false);
+ }finally{await cleanup(l);}
+});
+
+test('daemon identity is bound to registration; legacy and changed daemons preserve the image',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('a')},l.deps);
+  const file=join(l.data,'artifact-retention','registry.json');
+  const registry=JSON.parse(await readFile(file,'utf8'));
+  assert.equal(registry.images[0].daemonId,'daemon-test-1');
+  const docker=l.deps.docker!;
+  l.deps.docker=async args=>args[0]==='info'?{code:0,stdout:'daemon-test-2'}:docker(args);
+  assert.match((await run(l,true)).join('\n'),/daemon Docker diferente do registro/);
+  delete registry.images[0].daemonId;
+  await writeFile(file,JSON.stringify(registry),{mode:0o600});
+  assert.match((await run(l,true)).join('\n'),/registro antigo sem identidade do daemon/);
+  assert.ok(l.docker.images.has(image('a')));
+  assert.equal(l.dockerCalls.some(args=>args[0]==='image'&&args[1]==='rm'),false);
  }finally{await cleanup(l);}
 });
 
@@ -547,7 +584,7 @@ test('preserves both directories if the temporary path changes during the final 
  }finally{await cleanup(l);}
 });
 
-test('concurrent candidate registrations persist and a digest selected during inspection is kept',async()=>{
+test('concurrent candidate registrations persist and images remain protected',async()=>{
  const l=await lab();
  try{
   const ids=['a','b','c','d'].map(image);
@@ -555,14 +592,8 @@ test('concurrent candidate registrations persist and a digest selected during in
   await Promise.all(ids.map(imageId=>registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId},{...l.deps,now:Date.now})));
   const reg=JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8'));
   assert.equal(reg.images.length,4);
-  const docker=l.deps.docker!;
-  let steps=0;
-  l.deps.docker=async args=>{
-   if(args[0]==='container'&&args.includes('ancestor='+ids[0])&&++steps===2)l.runImages=[ids[0]!];
-   return docker(args);
-  };
   await run(l,true);
-  assert.equal(steps,2);
+  assert.equal(l.dockerCalls.some(args=>args[0]==='image'&&args[1]==='rm'),false);
   assert.ok(l.docker.images.has(ids[0]!));
  }finally{await cleanup(l);}
 });
