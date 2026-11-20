@@ -2475,10 +2475,14 @@ function malformedShellPrefix(command) {
     }
     // Only remove active line continuations inside the unquoted operator spelling.
     // The surrounding scanner handles quoted text, escapes and comments separately.
-    if (/^(?:\d(?:\\\n)*)*<(?:\\\n)*</.test(command.slice(i))) {
-      fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
+    if (ch === '<' && /^<(?:\\\n)*</.test(command.slice(i))) {
+      if (wordStart >= 0 && /^(?=(?:\\\n)*\d)(?:\d|\\\n)+$/.test(fragment.slice(wordStart))) {
+        fragment = fragment.slice(0, wordStart);
+      }
+      emit(); return segments;
     }
-    const redirect = command.slice(i).match(SHELL_REDIRECT_AT_START);
+    const redirect = /\d/.test(ch) && (wordStart >= 0 || /^(?:\d|\\\n)+<(?:\\\n)*</.test(command.slice(i)))
+      ? null : command.slice(i).match(SHELL_REDIRECT_AT_START);
     if (redirect) {
       fragment += redirect[0]; i += redirect[0].length - 1; wordStart = -1; continue;
     }

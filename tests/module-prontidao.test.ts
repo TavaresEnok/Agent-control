@@ -3027,6 +3027,38 @@ test('R22: continuação ativa no operador de heredoc preserva somente o prefixo
     check("echo '<\\\n<'; df -P /; echo \"", 'disco-memoria');
     check('echo ok # <\\\n# <\ndf -P /; echo "', 'disco-memoria');
     check('echo \\<\\\n< /dev/null; df -P /; echo "', null);
+    check('echo \\<< /dev/null; df -P /; echo "', 'disco-memoria');
     for (const arg of ['*', '~']) check(`echo $(echo ${arg}); df -P /; echo "`, 'disco-memoria');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('R23: heredoc colado preserva palavras completas e somente descarta IO_NUMBER', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r23-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const check = (head: string, op: string, expected: string | null) => {
+      for (const inner of ['df -P /', 'npm run personal:backup', 'alertmanager']) {
+        const body = `${head}${op}EOF\n${inner}\nEOF\necho "`;
+        writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\nsh -c '${body.replace(/'/g, "'\\''")}'\n`);
+        const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+        for (const pillar of ['backup-restauracao', 'disco-memoria', 'alertas-logs']) {
+          assert.equal(out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status,
+            pillar === expected ? 'failed' : 'ok', `${body}: ${pillar}`);
+        }
+      }
+    };
+    for (const op of ['<<', '<\\\n<', '<<-', '<\\\n<-']) {
+      for (const head of ['alertmanager', 'alertmanager --config.file=example', 'alertmanager --config.file=example3', 'alertmanager 3x', 'alertmanager "3"', "alertmanager '3'", 'alertmanager \\3']) {
+        check(head, op, 'alertas-logs');
+      }
+      for (const fd of ['0', '3', '3\\\n']) {
+        check(`alertmanager ${fd}`, op, 'alertas-logs');
+        check(`cat ${fd}`, op, null);
+      }
+      check('df -P /', op, 'disco-memoria');
+      check('alertmanager3', op, null);
+      check('cat argumento3', op, null);
+    }
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
