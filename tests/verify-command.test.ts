@@ -520,10 +520,15 @@ test('o archive do commit não inclui arquivo uncommitted e não é o repo vivo'
         databases,
         output,
         commit,
+        staticPersonalExam: true,
       }, 5_000, async args => {
         const mount = args.find(item => item.startsWith('type=bind,src=') && item.includes(',dst=/repository,readonly'));
         mounted = mount?.slice('type=bind,src='.length).split(',')[0] ?? '';
         assert.notEqual(mounted, repo);
+        assert.equal((await stat(join(mounted, '..'))).mode & 0o777, 0o700);
+        assert.equal((await stat(mounted)).mode & 0o777, 0o755);
+        assert.equal((await stat(join(mounted, 'src'))).mode & 0o005, 0o005);
+        assert.equal((await stat(join(mounted, 'src/kept.txt'))).mode & 0o004, 0o004);
         assert.equal(await readFile(join(mounted, 'src', 'kept.txt'), 'utf8'), 'committed\n');
         await assert.rejects(stat(join(mounted, 'src', 'later.txt')));
         throw new Error('ferramentas falharam');

@@ -303,15 +303,15 @@ const GIT_ARCHIVE_ENV = {
   GIT_TERMINAL_PROMPT: '0',
 };
 
-function extractGitArchive(repo: string, commit: string, destination: string): Promise<void> {
+function extractGitArchive(repo: string, commit: string, destination: string, staticPersonalExam: boolean): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const git = spawn('/usr/bin/git', ['-C', repo, '-c', 'core.hooksPath=/dev/null', 'archive', '--format=tar', commit], {
+    const git = spawn('/usr/bin/git', ['-C', repo, '-c', 'core.hooksPath=/dev/null', ...(staticPersonalExam ? ['-c', 'tar.umask=0022'] : []), 'archive', '--format=tar', commit], {
       env: GIT_ARCHIVE_ENV,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const tar = spawn('/usr/bin/tar', ['-x', '-C', destination, '-f', '-'], {
+    const tar = spawn('/usr/bin/tar', ['-x', ...(staticPersonalExam ? ['--same-permissions'] : []), '-C', destination, '-f', '-'], {
       env: {PATH: '/usr/bin:/bin'},
       stdio: ['pipe', 'ignore', 'ignore'],
     });
@@ -349,7 +349,7 @@ function extractGitArchive(repo: string, commit: string, destination: string): P
 }
 
 /** Git archive of the examined commit. The directory is mode 0700 and is not the live tree. */
-export async function prepareExamSnapshot(repoPath: string, commit: string): Promise<string> {
+export async function prepareExamSnapshot(repoPath: string, commit: string, staticPersonalExam = false): Promise<string> {
   if (typeof repoPath !== 'string' || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)) {
     throw new Refusal('VERIFY_COMMIT_INVALID', 400);
   }
@@ -363,7 +363,11 @@ export async function prepareExamSnapshot(repoPath: string, commit: string): Pro
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   }
   try {
-    await extractGitArchive(repo, commit, snapshot);
+    // Docker mounts the inner checkout by path. The host keeps its enclosing directory private.
+    const checkout = staticPersonalExam ? join(snapshot, 'repository') : snapshot;
+    if (staticPersonalExam) await mkdir(checkout, {mode: 0o700});
+    await extractGitArchive(repo, commit, checkout, staticPersonalExam);
+    if (staticPersonalExam) await chmod(checkout, 0o755);
     await chmod(snapshot, 0o700);
     return snapshot;
   } catch (error) {
@@ -374,15 +378,15 @@ export async function prepareExamSnapshot(repoPath: string, commit: string): Pro
 
 /** The exam user is not the directory owner, so the mount is widened only while the process runs. */
 export async function defaultRunTools(
-  spec: {image: string; repository: string; databases: string; output: string; commit: string},
+  spec: {image: string; repository: string; databases: string; output: string; commit: string; staticPersonalExam?: true},
   timeLimitMs: number = EXAM_TIME_LIMIT_MS,
   execute?: (args: readonly string[]) => Promise<void>,
 ): Promise<void> {
-  const snapshot = await prepareExamSnapshot(spec.repository, spec.commit);
+  const snapshot = await prepareExamSnapshot(spec.repository, spec.commit, spec.staticPersonalExam);
   try {
     const args = verifyExamArguments({
       image: spec.image,
-      repository: snapshot,
+      repository: spec.staticPersonalExam ? join(snapshot, 'repository') : snapshot,
       databases: spec.databases,
       output: spec.output,
       memoryBytes: EXAM_MEMORY_BYTES,
@@ -518,7 +522,9 @@ async function runJob(input: {
   };
   try {
     try {
-      const runTools = ready.runTools ?? ((spec: {image: string; repository: string; databases: string; output: string}) => defaultRunTools({...spec, commit: ready.commit}, ready.timeLimitMs));
+      const runTools = ready.runTools ?? ((spec: {image: string; repository: string; databases: string; output: string}) => defaultRunTools({
+        ...spec, commit: ready.commit, ...(ready.staticPolicy ? {staticPersonalExam: true as const} : {}),
+      }, ready.timeLimitMs));
       assertExamDeadline(startedMs, ready.timeLimitMs);
       await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
       const collected = await collectToolFindings(output);
