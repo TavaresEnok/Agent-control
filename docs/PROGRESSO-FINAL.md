@@ -1670,3 +1670,13 @@ FIM
 - 20/11/2026 05:56 UTC — A manutenção confirmou a retirada do último job da arquitetura após o encerramento da intenção terminal. A conta Max passou a ter uma vaga ocupada pelo exame de design e uma disponível. Nova rodada de segurança iniciada pelo caminho estático.
 - 20/11/2026 05:59 UTC — Iniciada ordem design-cota em claude-sonnet-5-5 (ajust), no worktree próprio.
 - 20/11/2026 05:59 UTC — Primeiras inferências físicas no NexoISP confirmadas no diário nativo: examinador de design e as duas críticas visuais em Opus high na Enok Max, confirmações em Opus medium e exame estático de segurança em Sonnet high.
+- 20/11/2026 06:02 UTC — A releitura local das 47 respostas de QA da primeira rodada, usando a normalização corrigida, aceitou as 47. Na cobertura publicada pela própria CLI constam 45. O volume tinha 19 GiB livres; as duas cópias locais de cada execução de design/segurança ocupam cerca de 110 MiB. Consultado o titular sobre o arquivamento reversível dessas cópias de trabalhos encerrados.
+- 20/11/2026 06:04 UTC — Duas cópias de checkout foram testadas em um arquivo privado de 41.506.972 bytes. A comparação com a origem e a extração integral seguida de nova comparação passaram; os diretórios originais permanecem na instalação.
+- 20/11/2026 06:05 UTC — Ordem design-cota em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 06:07 UTC — Revisão independente revisao-design-cota concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 06:09 UTC — A CLI personal:design de design-nexo-opus-vivo encerrou com código 1.
+- 20/11/2026 06:09 UTC — Iniciada a CLI personal:design para design-nexo-lote-01.
+- 20/11/2026 06:09 UTC — A CLI personal:design de design-nexo-lote-01 encerrou com código 1.
+- 20/11/2026 06:09 UTC — Iniciada a CLI personal:design para design-nexo-telas-lote-01.
+- 20/11/2026 06:10 UTC — Correção design-cota-r2 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 06:10 UTC — A leitura do projeto encontrou 215 arquivos candidatos de tela e zero rotas. A CLI por URL havia capturado somente a raiz. O exame anterior foi interrompido entre reservas. Organizados os 42 destinos distintos em sete lotes de seis; o leitor e o enumerador da própria CLI confirmaram seis HTML e seis rotas em cada lote. A primeira invocação sem URL mostrou o uso da CLI; relançada com URL interna e --servir.
