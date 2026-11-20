@@ -1581,3 +1581,8 @@ FIM
 - 20/11/2026 04:27 UTC — A revisão encontrou duas falhas de comprovação de sessão na segunda opinião. Opus medium da conta dedicada recebeu a correção. A opção de retomada do exame passivo chegou para integração.
 - 20/11/2026 04:28 UTC — Iniciada ordem retomada em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
 - 20/11/2026 04:30 UTC — Iniciada ordem estatico em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 04:37 UTC — A integração de roteamento e retomada passou nos 31 testes do examinador e nos três testes de seleção de perfil. A correção de rastreabilidade acrescenta duas colunas de cobertura. Antes da migração, o novo backup do IspAgent passou no restore-check com 14.935 arquivos e dump legível.
+- 20/11/2026 04:43 UTC — Ordem retomada em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 04:43 UTC — Revisão independente revisao-sessoes-e-retomada concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:44 UTC — Iniciada a CLI personal:arquitetura para arquitetura-ispagent.
+- 20/11/2026 04:45 UTC — Arquitetura viva em `efd584fb-d18c-4dd4-9eea-dfd4d9b39b4d` confirmou o primeiro arquivo julgado. O recibo nativo corresponde a Sonnet 5.5 medium Enok Max. O leitor validou binding, arquivo e checklist. Iniciada a cópia central do NexoISP pela chave do titular.

@@ -28,3 +28,7 @@ Em 20/11/2026 às 04h25 UTC, o IspAgent recebeu o produto integrado em `8b3ffd31
 A prova viva consultou a conta, o modelo e o esforço registrados para cada reserva e liberou as quatro antes da inferência. O teste do supervisor conferiu esses campos no lançamento assinado de criação. O laboratório de design passou com a imagem fixada pelo projeto e o servidor de fixture em rede interna.
 
 A suíte de design executou 247 casos. Na primeira rodada, 246 passaram e o teste de login do laboratório falhou. O mesmo teste falhou no commit-base. O contêiner antigo montava um diretório de fixtures que havia sido removido. Com a fixture rastreada, a mesma imagem e uma rede interna separada, o caso passou em 384,6 segundos. O TypeScript e os 16 testes específicos da preparação também passaram.
+
+## Prova viva do examinador de arquitetura
+
+Após o segundo backup verificado, a migração 115 acrescentou os identificadores de reserva e sessão à cobertura. O gateway passou nos oito itens de `inspect`. Em 20/11/2026 04:45 UTC, a execução `efd584fb-d18c-4dd4-9eea-dfd4d9b39b4d` já tinha julgado o primeiro arquivo com Sonnet 5.5 medium na conta Enok Max. O retorno nativo passou pelo mesmo leitor da CLI e coincidiu com o arquivo, a lista de verificação e o identificador do pedido. A contagem é parcial.
