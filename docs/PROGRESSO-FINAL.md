@@ -1695,3 +1695,14 @@ FIM
 - 20/11/2026 06:38 UTC — Com 12 GiB livres, o primeiro par de design e a rodada estática continuam em execução. A próxima vaga vai para QA: os módulos por arquivo usam o caminho nativo sem cópias integrais do checkout. Os demais pares de design ficam na fila do gerente.
 - 20/11/2026 06:40 UTC — Interrompida no worktree do candidato a suíte geral de 380 arquivos iniciada pelo trabalhador, para reservar os recursos da instalação às CLIs em curso. O aceite deste candidato usa TypeScript, os testes de cota e o caminho de design alterado.
 - 20/11/2026 06:41 UTC — Atualizado o relatório com a situação dos dez módulos, a distinção entre a execução na Enok Max e a prova de criação, e o estado do ramo de entrega.
+- 20/11/2026 06:42 UTC — Ordem design-cota-r4 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 06:45 UTC — Revisão independente revisao-design-cota-r4 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 06:46 UTC — Correção design-cota-r5 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 06:52 UTC — A ordem design-cota-r5 do Opus encerrou com código 0.
+- 20/11/2026 06:55 UTC — Revisão independente revisao-design-cota-r5 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 06:55 UTC — A CLI personal:design de design-nexo-dupla-01 encerrou com código 0.
+- 20/11/2026 06:55 UTC — Iniciada a CLI personal:qa para fila-nexo-qa.
+- 20/11/2026 06:57 UTC — Iniciada ordem painel em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 06:57 UTC — Iniciada ordem anatel em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 06:57 UTC — Iniciada revisão de acessibilidade em sessão independente Opus 5.5 medium na Enok Max, com as 180 medidas altas do primeiro par e o código publicado.
+- 20/11/2026 06:57 UTC — Primeiro par publicado com 12 capturas e 244 ocorrências confirmadas de 254. As 180 altas vieram de ferramentas. O relatório distingue ocorrências e causas. QA já iniciou a nova rodada no ramo de revisão. No exame de segurança foram conferidas as assinaturas e os hashes de 103 chamadas, correspondentes ao mapa e a 102 fatias.

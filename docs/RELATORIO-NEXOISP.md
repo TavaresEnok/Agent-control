@@ -93,3 +93,16 @@ Na homologação do NexoISP, o navegador autenticado visitou 49 rotas do menu e 
 Às 05:59 UTC, o diário nativo do NexoISP já registrava uma execução concluída do examinador de design e duas de crítica visual com `claude-opus-5-5` em esforço `high` na conta Enok Max. Sete confirmações de achados terminaram com Opus `medium` na mesma conta. Na rodada estática de segurança `4957ad10`, o primeiro trabalho do examinador também terminou, com Sonnet `high` na Enok Max. São recibos de execução. As contagens de telas julgadas e os achados dependem da publicação dos relatórios.
 
 O leitor de código da CLI encontrou 215 arquivos candidatos de tela e nenhuma rota no checkout do NexoISP. A execução por URL capturou apenas a página inicial. Os recibos dessa execução provam a seleção e a execução dos modelos, mas não cobrem os demais destinos. O gerente a interrompeu entre reservas. Para o exame visual, os 42 destinos distintos foram reunidos em sete pastas de seis páginas com seus estilos. Para cada pasta, o leitor de HTML e o enumerador de rotas de `personal:design --servir` reconheceram todas as seis páginas.
+
+### Publicação do primeiro par de telas
+
+A CLI de design publicou o run `985f5433-a8e6-4740-aab4-eb2f633ea536` às 06:55 UTC. Examinou a página inicial e a página de administração Anatel. O relatório contém 12 capturas. Das 254 ocorrências, o produto confirmou 244, classificou cinco como prováveis e descartou cinco.
+
+| Gravidade confirmada | Ocorrências | Origem |
+|---|---:|---|
+| Alta | 180 | 112 medições do axe, 63 do pa11y e cinco de tokens. Há medidas repetidas por tema, viewport e ferramenta. |
+| Média | 56 | 34 medições do analisador de CSS e 22 confirmações de achados do examinador. |
+| Baixa | 6 | Confirmações de achados do examinador. |
+| Informativa | 2 | Confirmações de achados do examinador. |
+
+As 30 confirmações de achados do examinador registram Opus 5.5. Uma sessão independente de Opus 5.5 `medium` recebeu as 180 ocorrências altas para conferir as medidas no código e agrupar repetições. Duas ordens de correção cobrem os achados do painel inicial e da administração Anatel. O frontend em homologação serve de referência para distinguir defeitos da aplicação de diferenças introduzidas pelo retrato estático.
