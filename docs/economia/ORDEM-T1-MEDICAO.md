@@ -37,3 +37,9 @@ Hoje o produto não mede quanto cada modelo gasta.
    - as pastas lidas configuráveis por opção; o padrão é `~/.codex/sessions`, `/home/app/.claude-trabalhadores/*` e as contas da instalação;
    - nenhum conteúdo de mensagem, só números.
 4. **Testes** com fixtures sintéticos dos três formatos e um caso de período.
+
+## Divisão por cota (supervisor, 20/11/2026 ~15:00 UTC)
+
+**Parte A, agora com Gemini 3.8 Flash High:** só os itens 2 (leitores puros de `src/external-usage.ts`), 3 (CLI `personal:tokens`, só com os agentes externos e com a leitura de `ac_usage_observations` que já existe) e 4 (testes desses leitores). Não mexa em adaptadores, no supervisor nem em `src/usage.ts`.
+
+**Parte B, depois, com Claude:** o item 1, que é ligar os jobs nativos.

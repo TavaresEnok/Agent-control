@@ -34,3 +34,11 @@ Os agentes, tanto os jobs nativos de programação e revisão quanto os trabalha
    - o mapa por escopo (`apps/web`, `apps/api`);
    - a soma dos arquivos que ele resume.
 5. **Testes:** mapa de uma fixture em TS, Go e Python; respeito ao orçamento; cache por commit; falha do gerador sem quebrar o job.
+
+## Divisão por cota (supervisor, 20/11/2026 ~15:00 UTC)
+
+**Parte A, agora com Gemini 3.8 Flash High:** só os itens 1 (gerador `src/repo-map.ts` com cache), 2 (CLI `personal:mapa`), 4 (medição no NexoISP) e os testes do gerador. Não mexa nos pedidos dos jobs nem no examinador.
+
+**Parte B, depois, com Claude:** o item 3, que é a injeção nos jobs e no exame.
+
+Se já existirem mudanças no worktree, aproveite as úteis e descarte o resto.
