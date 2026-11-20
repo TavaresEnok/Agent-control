@@ -1,5 +1,6 @@
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
-import {examineWorkTree,type WorkIdentity} from './native-work-retention.ts';
+import {examineWorkTree,repositoryHasCommit,repositoryKeepsArtifact,type WorkIdentity,type WorkOperation} from './native-work-retention.ts';
+import {fenceInstallationContext} from './installation-authority-fence.ts';
 import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
 import {DesignPurpose} from './design-types.ts';
 import {requiredDesignProfile} from './design-model-reservation.ts';
@@ -15,7 +16,7 @@ import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts
 import {requireRecoveryInventory} from './recovery-inventory.ts';
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
 import {constants} from 'node:fs';
-import {mkdir,lstat,realpath,readdir,writeFile,open,rename,cp,rm} from 'node:fs/promises';
+import {mkdir,lstat,realpath,readdir,writeFile,open,rename,cp,rm,type FileHandle} from 'node:fs/promises';
 import {join,resolve,sep} from 'node:path';
 import {createPrivateKey,createPublicKey,sign,createHash,createHmac,randomBytes,verify} from 'node:crypto';
 import {z} from 'zod';
@@ -60,8 +61,14 @@ export type NativeModuleExamRecovery={state:'retired'|'preserved';reason:'proven
 export class ModuleExamRecoveryPreserved extends Refusal {
  constructor(readonly reason:ModuleExamRecoveryReason,readonly removed:string[]=[]){super('NATIVE_MODULE_EXAM_RECOVERY_PRESERVED',409);}
 }
-export type ModuleExamWorkRefusal='not_found'|'not_passive_exam'|'job_state'|'grant_state'|'supervisor_identity'|'receipt'|'retirement'|'directory_unsafe'|'work_unsafe';
+export type ModuleExamWorkRefusal='not_found'|'not_passive_exam'|'job_state'|'grant_state'|'supervisor_identity'|'receipt'|'retirement'|'directory_unsafe'|'work_unsafe'|'busy';
 export type ModuleExamWorkRelease={jobId:string;state:'eligible'|'released'|'absent';bytes?:number}|{jobId:string;state:'refused';reason:ModuleExamWorkRefusal};
+/** What a terminal job's `work` copy was for: a passive exam answer, a read-only evaluation of a snapshot, or a programmer's checkout (artifact). */
+export type TerminalWorkCategory='passive-exam'|'readonly-evaluator'|'programmer-artifact';
+export type TerminalWorkRefusal=ModuleExamWorkRefusal|'base_unpreserved'|'artifact_unpreserved';
+export type TerminalWorkRelease={jobId:string;state:'eligible'|'released'|'absent';bytes?:number;category?:TerminalWorkCategory}|{jobId:string;state:'refused';reason:TerminalWorkRefusal};
+type TerminalWorkOptions={principal:string;contextId:string;projectId?:string;repository?:string;categories:readonly TerminalWorkCategory[];failed:boolean;lease?:Authority};
+type TerminalWorkJudgment={category:TerminalWorkCategory;terminalDigest:string;checkOutput:(output:FileHandle)=>Promise<void>};
 export class UnstartedExamRetirementPending extends Refusal {
  constructor(readonly jobId:string){super('NATIVE_PRELAUNCH_SETTLEMENT_PENDING',409);Id.parse(jobId);}
 }
@@ -1280,28 +1287,41 @@ export class NativeExecutionSupervisor{
   * Runs under the context lease and the job row lock, so it serializes with reconcile and retirement. Idempotent: no `work` is `absent`.
   * `apply=false` only inspects. Programmer, design and any job without the full proof are refused. */
  async releaseModuleExamWork(principal:string,authority:Authority,jobId:string,apply:boolean):Promise<ModuleExamWorkRelease>{
-  Id.parse(jobId);const p=this.paths(jobId);
-  const refuse=(reason:ModuleExamWorkRefusal)=>({jobId,state:'refused' as const,reason});
-  const runPhase=(phase:'preview'|'prepare'|'release')=>this.ledger.tx(async c=>{
-   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
-   const owner=await c.query("SELECT 1 FROM ac_memberships m JOIN ac_contexts x ON x.project_id=m.project_id WHERE x.id=$1 AND m.principal_id=$2 AND m.role='owner' FOR SHARE OF m",[authority.contextId,principal]);
-   if(!owner.rowCount)return refuse('not_passive_exam');
-   const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,g.selection->>'designPurpose' design_purpose,g.manager_epoch grant_epoch,g.intent_id grant_intent,g.context_id grant_context,g.account_id grant_account,g.profile_id grant_profile,g.role grant_role,g.resource_kind,
-    i.parent_intent_id,i.principal_id,i.command->'payload'->>'workflow' workflow,r.state retirement_state,r.binding,r.proof,ac_activation_personal() personal
-    FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
-    LEFT JOIN ac_native_terminal_retirements r ON r.job_id=j.id
-    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
-   if(!row)return refuse('not_found');
-   const passive=readonlySecurityExam(row.workflow,row.role)||(readonlyDesignExam(row.workflow,row.role)&&['examiner','reviewer','visual'].includes(row.design_purpose));
-   if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||row.role!=='specialist'||!passive)return refuse('not_passive_exam');
-   if(row.state!=='completed')return refuse('job_state');
-   if(row.grant_state!=='released'||row.grant_intent!==row.intent_id||row.grant_context!==row.context_id||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||row.grant_role!==row.role||row.resource_kind!=='model'||Number(row.grant_epoch)!==Number(row.manager_epoch))return refuse('grant_state');
-   if(row.key_fingerprint!==this.fingerprint)return refuse('supervisor_identity');
-   const receipt=row.receipt,payload=receipt?.payload,physical=row.physical_receipt,binding=row.binding,proof=row.proof;
-   const receiptProven=this.receiptSignedByThisExecutor(receipt)&&payload.jobId===jobId&&payload.contextId===row.context_id&&payload.intentId===row.intent_id&&payload.grantId===row.grant_id&&payload.sessionId===row.session_id&&
-    payload.epoch===Number(row.manager_epoch)&&payload.inputDigest===row.input_digest&&payload.executorDigest===row.executor_digest&&payload.exitCode===0&&
-    Boolean(physical)&&payload.physicalDigest===digest(physical)&&physical.jobId===jobId&&physical.containerId===row.worker_id&&physical.toolsContainerId===row.tools_id&&physical.networkId===row.network_id;
-   if(!receiptProven)return refuse('receipt');
+  return await this.terminalWork(jobId,apply,{principal,contextId:authority.contextId,categories:['passive-exam'],failed:false,lease:authority}) as ModuleExamWorkRelease;
+ }
+ /** Automatic retention of the `work` copy of one terminal job, with no context lease and no stopped gateway.
+  * Safe because nothing here depends on the manager: a terminal job row is immutable (trigger), its grant is released, its receipt and
+  * retirement proof are signed, and replay reads only `output/` and `request.json`. Mutual exclusion is a per-job advisory lock on a dedicated
+  * session shared with the manual path; the tree is removed outside any transaction, and the helper dies with that session.
+  * Categories: passive exams (as above), read-only evaluators (qa, reviewer, judge, other specialists) when the base commit is still in the project
+  * repository, and non-managed programmers only when the registered artifact is reachable from a repository ref. Nothing else is freed. */
+ async retireTerminalWork(principal:string,jobId:string,apply:boolean,scope:{contextId:string;projectId:string;repository:string}):Promise<TerminalWorkRelease>{
+  return this.terminalWork(jobId,apply,{principal,contextId:scope.contextId,projectId:scope.projectId,repository:scope.repository,categories:['passive-exam','readonly-evaluator','programmer-artifact'],failed:true});
+ }
+ private async judgeTerminalWork(c:pg.PoolClient,jobId:string,o:TerminalWorkOptions):Promise<{refusal:TerminalWorkRefusal}|TerminalWorkJudgment>{
+  const refuse=(refusal:TerminalWorkRefusal)=>({refusal});
+  const owner=await c.query("SELECT 1 FROM ac_memberships m JOIN ac_contexts x ON x.project_id=m.project_id WHERE x.id=$1 AND m.principal_id=$2 AND m.role='owner' FOR SHARE OF m",[o.contextId,o.principal]);
+  if(!owner.rowCount)return refuse('not_passive_exam');
+  const row=(await c.query(`SELECT j.*,x.project_id,g.state grant_state,g.physical_receipt,g.selection->>'designPurpose' design_purpose,g.manager_epoch grant_epoch,g.intent_id grant_intent,g.context_id grant_context,g.account_id grant_account,g.profile_id grant_profile,g.role grant_role,g.resource_kind,
+   i.parent_intent_id,i.principal_id,i.command->'payload'->>'workflow' workflow,r.state retirement_state,r.binding,r.proof,ac_activation_personal() personal
+   FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
+   LEFT JOIN ac_native_terminal_retirements r ON r.job_id=j.id
+   WHERE j.id=$1 AND j.context_id=$2 FOR ${o.lease?'UPDATE':'SHARE'} OF j,g`,[jobId,o.contextId])).rows[0];
+  if(!row)return refuse('not_found');
+  if(o.projectId&&row.project_id!==o.projectId)return refuse('not_found');
+  const passive=row.role==='specialist'&&(readonlySecurityExam(row.workflow,row.role)||(readonlyDesignExam(row.workflow,row.role)&&['examiner','reviewer','visual'].includes(row.design_purpose)));
+  const category:TerminalWorkCategory=passive?'passive-exam':row.role==='programmer'?'programmer-artifact':'readonly-evaluator';
+  if(!row.personal||row.principal_id!==o.principal||row.parent_intent_id!==null||!o.categories.includes(category))return refuse('not_passive_exam');
+  if(row.state!=='completed'&&!(o.failed&&row.state==='failed'))return refuse('job_state');
+  if(row.grant_state!=='released'||row.grant_intent!==row.intent_id||row.grant_context!==row.context_id||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||row.grant_role!==row.role||row.resource_kind!=='model'||Number(row.grant_epoch)!==Number(row.manager_epoch))return refuse('grant_state');
+  if(row.key_fingerprint!==this.fingerprint)return refuse('supervisor_identity');
+  const receipt=row.receipt,payload=receipt?.payload,physical=row.physical_receipt,binding=row.binding,proof=row.proof;
+  const receiptProven=this.receiptSignedByThisExecutor(receipt)&&payload.jobId===jobId&&payload.contextId===row.context_id&&payload.intentId===row.intent_id&&payload.grantId===row.grant_id&&payload.sessionId===row.session_id&&
+   payload.epoch===Number(row.manager_epoch)&&payload.inputDigest===row.input_digest&&payload.executorDigest===row.executor_digest&&(payload.exitCode===0)===(row.state==='completed')&&payload.executionStarted!==false&&
+   Boolean(physical)&&payload.physicalDigest===digest(physical)&&physical.jobId===jobId&&physical.containerId===row.worker_id&&physical.toolsContainerId===row.tools_id&&physical.networkId===row.network_id;
+  if(!receiptProven)return refuse('receipt');
+  // Programmers keep no terminal journal unless managed (and managed ones are refused above); evaluators and exams need the signed removal proof.
+  if(category!=='programmer-artifact'){
    let retirementProven=false;
    try{
     retirementProven=row.retirement_state==='removed'&&Boolean(binding)&&digest(proof?.payload)===digest(binding)&&typeof proof.signature==='string'&&/^[a-f0-9]{128}$/.test(proof.signature)&&
@@ -1310,48 +1330,122 @@ export class NativeExecutionSupervisor{
      binding.terminalDigest===digest(receipt)&&binding.workerId===row.worker_id&&binding.toolsId===row.tools_id&&binding.networkId===row.network_id;
    }catch{retirementProven=false;}
    if(!retirementProven)return refuse('retirement');
-   try{await this.directory(this.config.hostRoot);await this.directory(p.root);}catch{return refuse('directory_unsafe');}
-   const planned='native.exam_work_release_planned',released='native.exam_work_released',unattributed='native.exam_work_absent_after_plan';
-   const terminalDigest=digest(receipt);
-   const audit=async(kind:string)=>(await c.query(
-    "SELECT detail FROM ac_audit WHERE context_id=$1 AND kind=$2 AND detail->>'jobId'=$3 LIMIT 1",
-    [authority.contextId,kind,jobId])).rows[0]?.detail;
-   const record=async(kind:string,snapshot:WorkIdentity)=>c.query('INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,$2,$3)',[authority.contextId,kind,{jobId,snapshot,terminalDigest}]);
-   const previous=await audit(planned);
-   const completed=await audit(released)??await audit(unattributed);
+  }
+  if(category!=='passive-exam'){
+   if(!o.repository)return refuse(category==='programmer-artifact'?'artifact_unpreserved':'base_unpreserved');
+   if(category==='readonly-evaluator'&&!await repositoryHasCommit(o.repository,row.base_id))return refuse('base_unpreserved');
+   if(category==='programmer-artifact'){
+    const artifact=payload.artifact;
+    if(row.state==='completed'){
+     if(!artifact||artifact.base!==row.base_id)return refuse('artifact_unpreserved');
+     const registered=await c.query('SELECT 1 FROM ac_artifacts WHERE intent_id=$1 AND implementation_grant_id=$2 AND implementation_session_id=$3 AND commit_id=$4 AND tree_id=$5 AND base_id=$6 LIMIT 1',
+      [row.intent_id,row.grant_id,row.session_id,artifact.commit,artifact.tree,artifact.base]);
+     if(!registered.rowCount||!await repositoryKeepsArtifact(o.repository,artifact.commit,artifact.tree))return refuse('artifact_unpreserved');
+    }else{
+     // A failed run has nothing to preserve, unless an artifact was finalized for it.
+     const finalized=await c.query("SELECT 1 FROM ac_native_artifact_finalizations WHERE job_id=$1 AND state<>'failed'",[jobId]);
+     if(artifact||finalized.rowCount)return refuse('artifact_unpreserved');
+    }
+   }
+  }
+  const state=row.state as 'completed'|'failed';
+  const checkOutput=async(output:FileHandle)=>{
+   try{
+    const bytes=await readPrivateWorkerFile(join('/proc/self/fd',String(output.fd),'execution-result.json'),2*1024*1024);
+    const result=Result.parse(JSON.parse(bytes.toString('utf8')));
+    const good=state==='completed'?result.exitCode===0&&result.failureCode===null:result.exitCode===payload.workerExitCode;
+    if(result.jobId!==jobId||!good||digest(result.output)!==payload.outputDigest)throw Error();
+   }catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
+  };
+  return {category,terminalDigest:digest(receipt),checkOutput};
+ }
+ private async terminalWork(jobId:string,apply:boolean,o:TerminalWorkOptions):Promise<TerminalWorkRelease>{
+  Id.parse(jobId);Id.parse(o.contextId);
+  const refuse=(reason:TerminalWorkRefusal)=>({jobId,state:'refused' as const,reason});
+  const planned='native.exam_work_release_planned',released='native.exam_work_released',unattributed='native.exam_work_absent_after_plan';
+  const lockKey='agent-control:terminal-work:'+jobId;
+  // Everything one phase needs from the database, read under the caller's transaction.
+  type Seen={judged:TerminalWorkJudgment;previous?:Record<string,any>;completed?:Record<string,any>;snapshot?:WorkIdentity};
+  const read=async(c:pg.PoolClient,phase:'preview'|'prepare'|'release'):Promise<{refusal:TerminalWorkRefusal}|Seen>=>{
+   const judged=await this.judgeTerminalWork(c,jobId,o);
+   if('refusal' in judged)return judged;
+   try{await this.directory(this.config.hostRoot);await this.directory(this.paths(jobId).root);}catch{return {refusal:'directory_unsafe'};}
+   const audit=async(kind:string)=>(await c.query("SELECT detail FROM ac_audit WHERE context_id=$1 AND kind=$2 AND detail->>'jobId'=$3 LIMIT 1",[o.contextId,kind,jobId])).rows[0]?.detail;
+   const previous=await audit(planned),completed=await audit(released)??await audit(unattributed);
    const snapshot=previous?.snapshot as WorkIdentity|undefined;
-   if(previous&&(previous.terminalDigest!==terminalDigest||!snapshot||!/^\d+:\d+$/.test(snapshot.job)||!/^\d+:\d+$/.test(snapshot.work)||!Number.isSafeInteger(snapshot.bytes)))return refuse('retirement');
-   if(phase==='release'&&(!snapshot||completed))return refuse('work_unsafe');
+   if(previous&&(previous.terminalDigest!==judged.terminalDigest||!snapshot||!/^\d+:\d+$/.test(snapshot.job)||!/^\d+:\d+$/.test(snapshot.work)||!Number.isSafeInteger(snapshot.bytes)))return {refusal:'retirement'};
+   if(phase==='release'&&(!snapshot||completed))return {refusal:'work_unsafe'};
+   return {judged,previous,completed,snapshot};
+  };
+  const examine=async(seen:Seen,phase:'preview'|'prepare'|'release',session:pg.PoolClient):Promise<WorkOperation|{refusal:TerminalWorkRefusal}>=>{
    const canceled=new AbortController();
    const disconnect=()=>canceled.abort();
-   c.once('error',disconnect);c.once('end',disconnect);
-   let operation;
-   try{
-    operation=await examineWorkTree(this.config.hostRoot,jobId,async output=>{
-     try{
-      const bytes=await readPrivateWorkerFile(join('/proc/self/fd',String(output.fd),'execution-result.json'),2*1024*1024);
-      const result=Result.parse(JSON.parse(bytes.toString('utf8')));
-      if(result.jobId!==jobId||result.exitCode!==0||result.failureCode!==null||digest(result.output)!==payload.outputDigest)throw Error();
-     }catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
-    },phase==='release'?snapshot:undefined,canceled.signal);
-   }catch(error){return refuse(error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe');}
-   finally{c.off('error',disconnect);c.off('end',disconnect);}
+   session.once('error',disconnect);session.once('end',disconnect);
+   try{return await examineWorkTree(this.config.hostRoot,jobId,seen.judged.checkOutput,phase==='release'?seen.snapshot:undefined,canceled.signal);}
+   catch(error){return {refusal:error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe'};}
+   finally{session.off('error',disconnect);session.off('end',disconnect);}
+  };
+  const conclude=async(c:pg.PoolClient,seen:Seen,phase:'preview'|'prepare'|'release',operation:WorkOperation):Promise<TerminalWorkRelease>=>{
+   const {previous,completed,snapshot,judged}=seen;
+   const record=async(kind:string,identity:WorkIdentity)=>c.query('INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,$2,$3)',[o.contextId,kind,{jobId,snapshot:identity,terminalDigest:judged.terminalDigest}]);
+   const category=judged.category;
    if(phase==='release'&&snapshot){
     if(operation.state==='present')return refuse('work_unsafe');
     await record(operation.state==='released'?released:unattributed,snapshot);
-    return {jobId,state:operation.state,bytes:operation.state==='released'?snapshot.bytes:0};
+    return {jobId,state:operation.state,bytes:operation.state==='released'?snapshot.bytes:0,category};
    }
    if(operation.state==='absent'){
-    if(phase==='prepare'&&snapshot&&!completed)return {jobId,state:'eligible' as const,bytes:snapshot.bytes};
+    if(phase==='prepare'&&snapshot&&!completed)return {jobId,state:'eligible' as const,bytes:snapshot.bytes,category};
     return {jobId,state:'absent' as const};
    }
    if(operation.state!=='present'||completed)return refuse('work_unsafe');
    if(snapshot&&(snapshot.job!==operation.snapshot.job||snapshot.work!==operation.snapshot.work))return refuse('work_unsafe');
    if(phase==='prepare'&&!previous)await record(planned,operation.snapshot);
-   return {jobId,state:'eligible' as const,bytes:operation.snapshot.bytes};
+   return {jobId,state:'eligible' as const,bytes:operation.snapshot.bytes,category};
+  };
+  const leased=async(phase:'preview'|'prepare'|'release')=>this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,o.principal,o.contextId);await this.ledger.fence(c,o.lease!,true);
+   if(!(await c.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) ok',[lockKey])).rows[0].ok)return refuse('busy');
+   const seen=await read(c,phase);
+   if('refusal' in seen)return refuse(seen.refusal);
+   const operation=await examine(seen,phase,c);
+   if('refusal' in operation)return refuse(operation.refusal);
+   return conclude(c,seen,phase,operation);
   });
-  const first=await runPhase(apply?'prepare':'preview');
-  return apply&&first.state==='eligible'?runPhase('release'):first;
+  if(o.lease){
+   const first=await leased(apply?'prepare':'preview');
+   return apply&&first.state==='eligible'?leased('release'):first;
+  }
+  // Lease-free: one dedicated session holds the per-job lock for the whole retirement; the database work is in short transactions around it.
+  const session=await this.ledger.pool.connect();
+  let broken=false;
+  const mark=()=>{broken=true;};
+  session.on('error',mark);
+  try{
+   if(!(await session.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) ok',[lockKey])).rows[0].ok)return refuse('busy');
+   const phase=async(name:'preview'|'prepare'|'release')=>{
+    const seen=await this.ledger.tx(async c=>{
+     await fenceInstallationContext(c,o.contextId,this.ledger.installationAuthority,true);
+     return read(c,name);
+    });
+    if('refusal' in seen)return refuse(seen.refusal);
+    const operation=await examine(seen,name,session);
+    if('refusal' in operation)return refuse(operation.refusal);
+    // Re-judge in the transaction that records the outcome: the proof must still hold when the audit row is written.
+    return this.ledger.tx(async c=>{
+     await fenceInstallationContext(c,o.contextId,this.ledger.installationAuthority,true);
+     const again=await read(c,name==='release'?'prepare':name);
+     if('refusal' in again||again.judged.terminalDigest!==seen.judged.terminalDigest)return refuse('retirement');
+     return conclude(c,{...again,snapshot:seen.snapshot,previous:again.previous,completed:again.completed},name,operation);
+    });
+   };
+   const first=await phase(apply?'prepare':'preview');
+   return apply&&first.state==='eligible'?await phase('release'):first;
+  }finally{
+   session.off('error',mark);
+   if(!broken)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lockKey]).catch(()=>{broken=true;});
+   session.release(broken);
+  }
  }
  async reconcileCancellation(principal:string,authority:Authority,jobId:string){
   const input=await this.registeredInput(principal,authority,jobId);
@@ -1574,16 +1668,22 @@ export class NativeExecutionSupervisor{
   const input=await this.registeredInput(principal,authority,jobId),outcome=await this.reconcile(principal,authority,input);
   if(outcome.state!=='completed'||!('artifact' in outcome)||!outcome.artifact||input.role!=='programmer')throw new Refusal('NATIVE_ARTIFACT_NOT_READY');
   const artifact=NativeArtifactIdentity.parse(outcome.artifact);
-  const secrets=await readNativeArtifactSecrets(this.paths(jobId).secretSnapshot,jobId,this.key);
-  await new GitArtifacts(this.paths(jobId).work).assertNoNewArtifactSecrets(artifact.commit,artifact.base,secrets);
+  const hash=digest({domain:'artifact-v1',intentId:input.intentId,commit:artifact.commit}),id=`${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
+  // Replay of a registration that already passed the secret scan and the import: the checkout may have been retired since, so the
+  // repository's own copy of the exact identity is the only source (automatic work retention frees `work` only after this row exists).
+  const already=(await this.ledger.pool.query('SELECT 1 FROM ac_artifacts WHERE id=$1 AND context_id=$2 AND intent_id=$3 AND commit_id=$4 AND tree_id=$5 AND base_id=$6',
+   [id,authority.contextId,input.intentId,artifact.commit,artifact.tree,artifact.base])).rowCount===1;
+  if(!already){
+   const secrets=await readNativeArtifactSecrets(this.paths(jobId).secretSnapshot,jobId,this.key);
+   await new GitArtifacts(this.paths(jobId).work).assertNoNewArtifactSecrets(artifact.commit,artifact.base,secrets);
+  }
   const revision=await this.ledger.tx(async c=>{const context=await this.scope(c,principal,authority,input,false);
    const contract=(await c.query('SELECT quality_revision,target_ref,digest FROM ac_execution_contracts WHERE intent_id=$1',[input.intentId])).rows[0];
    if(!contract||contract.digest!==digest({qualityRevision:contract.quality_revision,targetRef:contract.target_ref}))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
    const repository=await this.jobRepository(c,String(context.project_id));
-   const identity=await new GitArtifacts(repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
+   const identity=already?await new GitArtifacts(repository).identity(artifact.commit,artifact.base):await new GitArtifacts(repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
    if(identity.tree!==artifact.tree||identity.legacyDigest!==artifact.legacyDigest)throw new Refusal('NATIVE_ARTIFACT_IDENTITY_MISMATCH');return contract.quality_revision;
   });
-  const hash=digest({domain:'artifact-v1',intentId:input.intentId,commit:artifact.commit}),id=`${hash.slice(0,8)}-${hash.slice(8,12)}-5${hash.slice(13,16)}-a${hash.slice(17,20)}-${hash.slice(20,32)}`;
   const risk=await this.ledger.tx(c=>expectedArtifactRisk(c,input.intentId,authority.contextId,revision));
   return quality.register(principal,{id,contextId:authority.contextId,intentId:input.intentId,implementationGrantId:input.grantId,implementationSessionId:input.sessionId,policyRevision:revision,commit:artifact.commit,tree:artifact.tree,base:artifact.base,risk},authority);
  }
