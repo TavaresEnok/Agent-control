@@ -309,7 +309,7 @@ test('CLI personal:verify sem --url usa Sonnet 5.5 high na conta Max, Opus 5.5 m
       let pending = Promise.resolve();
       const begun = await beginPersonalVerification({
         ...resolved.input,
-        runTools: async () => {},
+        runTools: async spec => { assert.equal(spec.staticPersonalExam, true); },
         observe(job) {
           pending = job;
         },
@@ -693,7 +693,7 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
       let pending = Promise.resolve();
       await beginPersonalVerification({
         ...resUrl.input,
-        runTools: async () => {},
+        runTools: async spec => { assert.equal(spec.staticPersonalExam, undefined); },
         observe(job) { pending = job; },
       });
       await pending;

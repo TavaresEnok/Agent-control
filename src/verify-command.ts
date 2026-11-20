@@ -32,7 +32,7 @@ export const EXAM_TIME_LIMIT_MS = 21_600_000;
 export const NETWORK_COMMAND_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 60_000;
 
-export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string}) => Promise<void>;
+export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string; staticPersonalExam?: true}) => Promise<void>;
 type NetworkRunner = (args: readonly string[]) => Promise<{code: number; stdout: string}>;
 const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
 
@@ -522,11 +522,11 @@ async function runJob(input: {
   };
   try {
     try {
-      const runTools = ready.runTools ?? ((spec: {image: string; repository: string; databases: string; output: string}) => defaultRunTools({
-        ...spec, commit: ready.commit, ...(ready.staticPolicy ? {staticPersonalExam: true as const} : {}),
-      }, ready.timeLimitMs));
+      const runTools: ToolRun = ready.runTools ?? (spec => defaultRunTools({...spec, commit: ready.commit}, ready.timeLimitMs));
       assertExamDeadline(startedMs, ready.timeLimitMs);
-      await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
+      await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output,
+        ...(ready.staticPolicy ? {staticPersonalExam: true} : {}),
+      });
       const collected = await collectToolFindings(output);
       assertExamDeadline(startedMs, ready.timeLimitMs);
       const verification: SecurityVerificationInput & {modelCallBudget?: number} = {

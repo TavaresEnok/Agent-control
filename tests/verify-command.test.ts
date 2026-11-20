@@ -514,6 +514,13 @@ test('o archive do commit não inclui arquivo uncommitted e não é o repo vivo'
     const databases = await mkdtemp(join(tmpdir(), 'ac-verify-archive-db-'));
     let mounted = '';
     try {
+      await defaultRunTools({image: PINNED_IMAGE, repository: repo, databases, output, commit}, 5_000, async args => {
+        const mount = args.find(item => item.startsWith('type=bind,src=') && item.includes(',dst=/repository,readonly'))!;
+        const path = mount.slice('type=bind,src='.length).split(',')[0]!;
+        assert.equal((await stat(path)).mode & 0o777, 0o700);
+        mounted = path;
+      });
+      await assert.rejects(stat(mounted));
       await defaultRunTools({
         image: PINNED_IMAGE,
         repository: repo,
