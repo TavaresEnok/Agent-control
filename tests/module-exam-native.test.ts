@@ -137,6 +137,12 @@ test('extrator de JSON do worker aceita objeto puro ou cerca Markdown em linhas 
     resolveModuleExamClaudeResult({succeeded: true, output: externalText, diagnostics: []}, ['segredo-sintetico']),
     {output: externalText, failureCode: null, usageWindows: null},
   );
+  for (const [output, expected] of [
+    ['Failed to authenticate: token expired', 'PROVIDER_AUTH_FAILED'],
+    ['You’ve hit your usage limit. Try again at 14:30 UTC.', 'PROVIDER_USAGE_LIMIT'],
+  ]) {
+    assert.equal(resolveModuleExamClaudeResult({succeeded: true, output: output!, diagnostics: []}, []).failureCode, expected);
+  }
   const invalidNotice = '{"binding":"You hit your usage limit","binding":"outro"}';
   assert.equal(resolveModuleExamClaudeResult({succeeded: true, output: invalidNotice, diagnostics: []}, []).failureCode, null);
   const duplicateText = '{"binding":"a","\\u0062inding":"b"}';

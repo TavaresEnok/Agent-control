@@ -188,7 +188,7 @@ async function claudeText(input: Input, signal: AbortSignal, cwd: string) {
 
 /** Some CLI versions return a standalone terminal notice through their success channel. */
 export function isModuleExamTerminalNotice(text: string): boolean {
-  return /^(?:you(?:['’]ve)? hit your usage limit|(?:claude(?: ai)? )?usage limit reached(?:\s*\|\s*\d{9,16})?|usage_limit_reached|failed to authenticate|oauth session expired|PROVIDER_AUTH_FAILED)[.!]?$/i.test(text.trim());
+  return /^(?:you(?:['’]ve)? hit your usage limit(?:[.!]? (?:try again|resets?) at [0-9:apm -]+(?:UTC|GMT)?)?|(?:claude(?: ai)? )?usage limit reached(?:\s*\|\s*\d{9,16})?|usage_limit_reached|failed to authenticate(?:: (?:access |refresh |oauth )?token (?:has )?expired)?|oauth session expired|PROVIDER_AUTH_FAILED)[.!]?$/i.test(text.trim());
 }
 
 export function resolveModuleExamClaudeResult(
