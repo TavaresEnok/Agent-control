@@ -1,3 +1,4 @@
+import {installationVolumes} from './personal-disk.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -309,7 +310,7 @@ async function runPrepare(invocation: {installationPath: string; projectId: stri
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = [config.project, ...config.projects].find(item => item.id === invocation.projectId);
   if (!project) throw new Refusal('NOT_FOUND', 404);
-  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token, undefined, installationVolumes(config));
   try {
     const report = await prepareDesignSpecialist({
       ledger,
@@ -397,6 +398,7 @@ async function main() {
           repo: resolved.repo,
           targetUrl,
           dataDirectory: resolved.dataDirectory,
+          ...(resolved.ledger.launchVolumes ? {launchVolumes: resolved.ledger.launchVolumes} : {}),
           intentId: resolved.intentId,
           runId,
           createdAt: new Date(),
@@ -444,6 +446,7 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
     const pinnedImage = readPinnedImage();
     const created = await runDesignCreate({
       dataDirectory: resolved.dataDirectory,
+      ...(resolved.ledger.launchVolumes ? {launchVolumes: resolved.ledger.launchVolumes} : {}),
       runId,
       repository: resolved.repo,
       briefing,
@@ -462,6 +465,7 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
           repo,
           targetUrl: origin,
           dataDirectory: resolved.dataDirectory,
+          ...(resolved.ledger.launchVolumes ? {launchVolumes: resolved.ledger.launchVolumes} : {}),
           intentId: resolved.intentId,
           runId: randomUUID(),
           createdAt: new Date(),

@@ -1,3 +1,4 @@
+import {installationVolumes} from './personal-disk.ts';
 import {execFile} from 'node:child_process';
 import {constants} from 'node:fs';
 import {lstat, open, readdir, realpath} from 'node:fs/promises';
@@ -383,7 +384,7 @@ export async function resolvePersonalDesign(
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = [config.project, ...config.projects].find(item => item.id === parsed.projectId);
   if (!project) throw new Refusal('NOT_FOUND', 404);
-  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token, undefined, installationVolumes(config));
   let authority: Authority | undefined;
   let intentId: string | undefined;
   try {

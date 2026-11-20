@@ -1,3 +1,4 @@
+import {assertDiskSpaceForLaunch,launchVolumesOf} from './personal-disk.ts';
 import {chmod, mkdir, open, writeFile} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {join, relative, resolve} from 'node:path';
@@ -785,6 +786,8 @@ function stringList(values: readonly string[] | undefined, max: number): string[
  */
 export async function runDesignCreate(input: {
   dataDirectory: string;
+  /** Volumes the installation writes to; the launch gate measures all of them. */
+  launchVolumes?: readonly string[];
   runId: string;
   repository: string;
   briefing: string;
@@ -799,6 +802,7 @@ export async function runDesignCreate(input: {
 }): Promise<{directory: string; rounds: CreateRound[]; indexPath: string}> {
   if (input.screens < 1 || input.screens > 8 || input.rounds < 1 || input.rounds > 5) throw new Refusal('DESIGN_CREATE_INVALID', 400);
   const firstTask = createTask({briefing: input.briefing, screens: input.screens, round: 1, referenceNote: input.referenceNote, rework: []});
+  await assertDiskSpaceForLaunch(launchVolumesOf({launchVolumes: input.launchVolumes}, input.dataDirectory));
   const root = join(input.dataDirectory, 'design-criacoes', input.runId);
   outsideRepository(root, input.repository);
   await mkdir(root, {recursive: true, mode: 0o700});

@@ -1,3 +1,4 @@
+import {assertDiskSpaceForLaunch,installationVolumes,launchVolumesOf} from './personal-disk.ts';
 import {execFile, spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
@@ -8,6 +9,7 @@ import {Id, Refusal, type Authority} from './contracts.ts';
 import {examLoginBusyNote, examLoginStaleNote} from './exam-login.ts';
 import {loadInstallation, readPrivateFile, type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
+import {endRound, trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
 import {personalAccountRoot} from './personal-health.ts';
 import {collectToolFindings} from './verify-collect.ts';
 import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp} from './verify-db.ts';
@@ -32,7 +34,7 @@ export const EXAM_TIME_LIMIT_MS = 21_600_000;
 export const NETWORK_COMMAND_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 60_000;
 
-export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string; staticPersonalExam?: true}) => Promise<void>;
+export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string; staticPersonalExam?: true; retention?: RoundScope}) => Promise<void>;
 type NetworkRunner = (args: readonly string[]) => Promise<{code: number; stdout: string}>;
 const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
 
@@ -351,8 +353,11 @@ function extractGitArchive(repo: string, commit: string, destination: string, st
   });
 }
 
-/** Git archive of the examined commit. The directory is mode 0700 and is not the live tree. */
-export async function prepareExamSnapshot(repoPath: string, commit: string, staticPersonalExam = false): Promise<string> {
+/** Git archive of the examined commit. The directory is mode 0700 and is not the live tree.
+ * With `retention` the private parent folder is recorded for the round, so a crash that skips the cleanup does not leave it
+ * forever. Only the personal exam (`staticPersonalExam`) is recorded: there the mounted checkout is a child of the folder, so
+ * the owner marker never enters the examined tree. Recording never fails the snapshot. */
+export async function prepareExamSnapshot(repoPath: string, commit: string, staticPersonalExam = false, retention?: RoundScope): Promise<string> {
   if (typeof repoPath !== 'string' || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)) {
     throw new Refusal('VERIFY_COMMIT_INVALID', 400);
   }
@@ -365,6 +370,7 @@ export async function prepareExamSnapshot(repoPath: string, commit: string, stat
     await rm(snapshot, {recursive: true, force: true});
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   }
+  if (retention && staticPersonalExam) await trackRoundTemp(retention, snapshot);
   try {
     // Docker mounts the inner checkout by path. The host keeps its enclosing directory private.
     const checkout = staticPersonalExam ? join(snapshot, 'repository') : snapshot;
@@ -381,11 +387,11 @@ export async function prepareExamSnapshot(repoPath: string, commit: string, stat
 
 /** The exam user is not the directory owner, so the mount is widened only while the process runs. */
 export async function defaultRunTools(
-  spec: {image: string; repository: string; databases: string; output: string; commit: string; staticPersonalExam?: true},
+  spec: {image: string; repository: string; databases: string; output: string; commit: string; staticPersonalExam?: true; retention?: RoundScope},
   timeLimitMs: number = EXAM_TIME_LIMIT_MS,
   execute?: (args: readonly string[]) => Promise<void>,
 ): Promise<void> {
-  const snapshot = await prepareExamSnapshot(spec.repository, spec.commit, spec.staticPersonalExam);
+  const snapshot = await prepareExamSnapshot(spec.repository, spec.commit, spec.staticPersonalExam, spec.retention);
   try {
     const args = verifyExamArguments({
       image: spec.image,
@@ -529,6 +535,7 @@ async function runJob(input: {
       assertExamDeadline(startedMs, ready.timeLimitMs);
       await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output,
         ...(ready.staticPolicy ? {staticPersonalExam: true} : {}),
+        retention: {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id},
       });
       const collected = await collectToolFindings(output);
       assertExamDeadline(startedMs, ready.timeLimitMs);
@@ -575,6 +582,8 @@ async function runJob(input: {
       throw error;
     }
   } finally {
+    // The job reached its end (done or failed) and the snapshot was removed by the tool run: leftovers may now age out.
+    await endRound({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id});
     try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp, id); }
     catch { /* the exam result stays visible */ }
     try { await releaseRunningLock(input.lockPath, id); }
@@ -590,6 +599,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   const startedMs = Date.now();
   const plan = input.url !== undefined ? dynamicScanPlan(input.url) : undefined;
   const ready = requireReady(input);
+  await assertDiskSpaceForLaunch(launchVolumesOf(ready.ledger, ready.dataDirectory));
   await assertVerificationAvailable(ready);
   const id = randomUUID();
   const networkRunner = input.networkRunner ?? defaultNetworkRunner;
@@ -780,7 +790,7 @@ export async function resolvePersonalVerification(
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = projectOf(config, parsed.projectId);
   if (!project) throw new Refusal('NOT_FOUND', 404);
-  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token, undefined, installationVolumes(config));
   let authority: Authority | undefined;
   try {
     const commit = await readHead(project.repo);

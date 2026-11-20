@@ -1,3 +1,4 @@
+import {installationVolumes} from './personal-disk.ts';
 import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
@@ -31,6 +32,7 @@ import {assertPersonalActivation} from './verify-intent.ts';
 
 const moduleActions = '[--esperar-cota | --corrigir <runId> <ACH-001...> | --medir-correcao <runId> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
 const messages: Record<string, string> = {
+  PERSONAL_DISK_FULL: 'Disco em 95% ou mais. Libere espaço antes de iniciar outro exame.',
   VERIFY_USAGE: `Uso: npm run personal:<modulo> -- <instalação.json> <projeto> ${moduleActions}`,
   PERSONAL_ACTIVATION_REQUIRED: 'O módulo de verificação só roda numa instalação pessoal.',
   NOT_FOUND: 'Projeto não encontrado.',
@@ -254,7 +256,7 @@ export async function runPersonalModuleCli(
     ? authorizeProjectHttpsOrigin(config, project.id, parsed.origin)
     : [];
 
-  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token);
+  const ledger = new Ledger(config.databaseUrl, config.installationAuthority?.token, undefined, installationVolumes(config));
   let authority: Authority | undefined;
   let stopRecheckLease: (() => void) | undefined;
   const recheckAbort = parsed.kind === 'recheck' ? new AbortController() : undefined;

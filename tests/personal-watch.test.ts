@@ -10,7 +10,7 @@ import {gatewayDownNotice,gatewayUpNotice,imagesRebuiltNotice,personalWatchImage
 
 const digest=(char:string)=>'sha256:'+char.repeat(64);
 /** No journal, a roomy disk and no login problem, unless a test says otherwise. */
-const quiet={recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>[]};
+const quiet={retention:async()=>{},recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>[]};
 
 async function fixture(activation:'personal'|'locked'='personal'){
  const root=await mkdtemp(join(tmpdir(),'personal-watch-'));
@@ -147,7 +147,7 @@ test('repeated errors, a full disk and an expiring login notify at their own pac
  const env=await fixture();
  const sent:string[]=[];
  let now=new Date('2026-11-16T12:00:00Z'),log='',disk=50,logins:{key:string;text:string;repeatMs:number}[]=[];
- const run=()=>runPersonalWatch([env.file],{now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{sent.push(body);},images:()=>[],
+ const run=()=>runPersonalWatch([env.file],{retention:async()=>{},now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{sent.push(body);},images:()=>[],
   recentLog:async()=>log,diskUsedPercent:async()=>disk,logins:async()=>logins});
  try{
   const line='RECONCILIATION_FAILED NATIVE_JOB_RECONCILIATION_FAILED: d766dbd8-ebb9-4eb1-9c66-4445bdfd4481 NATIVE_EXECUTION_SUPERVISOR_UNAVAILABLE';
@@ -171,11 +171,79 @@ test('repeated errors, a full disk and an expiring login notify at their own pac
   // A notice that could not be sent is tried again on the next check.
   logins=[{key:'login:def',text:'O Grok está sem login válido.',repeatMs:24*3600_000}];
   let failing=true;
-  const flaky=()=>runPersonalWatch([env.file],{now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{if(failing)throw new Error('push down');sent.push(body);},images:()=>[],
+  const flaky=()=>runPersonalWatch([env.file],{retention:async()=>{},now:()=>now,probe:async()=>true,notify:async(_dir,body)=>{if(failing)throw new Error('push down');sent.push(body);},images:()=>[],
    recentLog:async()=>'',diskUsedPercent:async()=>50,logins:async()=>logins});
   assert.equal(await flaky(),'watch gateway=up failures=0 images=ok');
   failing=false;
   assert.equal(await flaky(),'watch gateway=up failures=0 images=ok notice=login');
   assert.equal(sent.at(-1),'O Grok está sem login válido.');
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('vigia executa manutenção e envia alerta no limite mesmo com imagem ausente',async()=>{
+ const env=await fixture();
+ try{
+  const calls:string[]=[];
+  const status=await runPersonalWatch([env.file],{...quiet,retention:async file=>{calls.push(file);},
+   probe:async()=>true,notify:async(_dir,message)=>{calls.push(message);},images:()=>[digest('a')],
+   inspectImage:async()=>false,rebuildImages:async()=>{assert.fail('rebuild com disco crítico');},diskUsedPercent:async()=>95});
+  assert.match(calls[0]!,/95%.*bloqueados/);
+  assert.equal(calls[1],env.file);
+  assert.match(status,/images=skipped/);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('vigia alerta e executa a retenção mesmo quando o estado não pode ser gravado (ENOSPC)',async()=>{
+ const env=await fixture();
+ try{
+  const calls:string[]=[];
+  // A read-only data directory fails every state write the way a full volume does.
+  await chmod(env.data,0o500);
+  const status=await runPersonalWatch([env.file],{...quiet,
+   retention:async()=>{calls.push('retention');},
+   diskUsedPercent:async()=>{calls.push('sample');return 97;},
+   probe:async()=>true,notify:async(_dir,message)=>{calls.push(message);},images:()=>[digest('a')],
+   inspectImage:async()=>false,rebuildImages:async()=>{assert.fail('rebuild com disco crítico');}});
+  assert.equal(calls[0],'sample');
+  assert.match(calls[1]!,/97%.*bloqueados/);
+  assert.equal(calls[2],'retention');
+  assert.equal(calls.length,3);
+  assert.match(status,/images=skipped/);
+  assert.match(status,/state=unsaved/);
+ }finally{await chmod(env.data,0o700);await rm(env.root,{recursive:true,force:true});}
+});
+
+test('sem estado gravável o vigia não reconstrói imagens e a falha da retenção não esconde o resto',async()=>{
+ const env=await fixture();
+ try{
+  await chmod(env.data,0o500);
+  const status=await runPersonalWatch([env.file],{...quiet,retention:async()=>{throw new Error('ENOSPC');},
+   probe:async()=>true,notify:async()=>{},images:()=>[digest('a')],inspectImage:async()=>false,
+   rebuildImages:async()=>{assert.fail('o limite de uma hora não pode ser registrado');}});
+  assert.equal(status,'watch gateway=up failures=0 images=skipped retention=failed state=unsaved');
+ }finally{await chmod(env.data,0o700);await rm(env.root,{recursive:true,force:true});}
+});
+
+test('uma falha ao ler o estado ainda deixa a retenção rodar e depois propaga o erro',async()=>{
+ const env=await fixture();
+ try{
+  await mkdir(join(env.data,'watch-state.json'));
+  const calls:string[]=[];
+  await assert.rejects(runPersonalWatch([env.file],{...quiet,diskUsedPercent:async()=>97,retention:async()=>{calls.push('limpeza');},
+   probe:async()=>true,notify:async(_dir,message)=>{calls.push(message);},images:()=>[]}),{code:'EISDIR'});
+  assert.match(calls[0]!,/97%.*bloqueados/);
+  assert.equal(calls[1],'limpeza');
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('automatic retention defaults to preview and only apply enables deletion',async()=>{
+ const env=await fixture();
+ try{
+  const observed:boolean[]=[];
+  const invoke=()=>runPersonalWatch([env.file],{...quiet,retention:async(_file,apply)=>{observed.push(apply);},probe:async()=>true,notify:async()=>{}});
+  await invoke();
+  const body=JSON.parse(await readFile(env.file,'utf8'));
+  for(const automatic of ['off','preview','apply']){body.retention={automatic};await writeFile(env.file,JSON.stringify(body));await invoke();}
+  assert.deepEqual(observed,[false,false,true]);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });

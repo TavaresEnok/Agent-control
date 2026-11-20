@@ -378,10 +378,16 @@ O comando pede `GET http://127.0.0.1:<porta>/api/v1/ac/health`. Uma falha só fi
 
 Se alguma imagem atual do `nativeBootstrap` (planejamento, worker, ferramentas ou QA) não existir no Docker, a vigia roda `npm run personal:images -- <instalação.json>`, reinicia `agent-control-gateway-<nome>` e manda "Imagens do Agent Control reconstruídas.". Há no máximo uma reconstrução por hora. O `<nome>` é o diretório da instalação, o mesmo critério de `personal:services`.
 
-O backup automático chama o mesmo backup, numa subpasta datada `AAAAMMDD-HHMMSS`, e fica com as 7 mais novas. As mais velhas são apagadas só quando o caminho, conferido por completo, é um diretório de verdade dentro da pasta pedida. Atalho não é apagado.
+O backup automático chama o mesmo backup, numa subpasta datada `AAAAMMDD-HHMMSS`, e em seguida roda o `restore-check` na cópia nova. Só depois que essa conferência passa (e a cópia externa, se houver, deu certo) as mais velhas são apagadas. Se a conferência falha, chega o aviso "A conferência do backup novo falhou. Nada foi apagado." e todas as cópias ficam.
+
+- **Destino padrão** (`/home/app/backups-agent-control/<nome>`, o dos timers): fica com as **3** mais novas. `npm run personal:backup-rotate -- <instalação.json>` (sem pasta) usa esse destino e `npm run personal:backup-rotate -- --destino-padrao <instalação.json>` só mostra o caminho.
+- **Destino explícito** (`... <instalação.json> /caminho/dos/backups`): mantém a regra antiga, as **7** mais novas.
+- Só são contadas e apagadas as subpastas datadas reconhecidas como backup **desta** instalação (uma pasta `agent-control-*` com `MANIFEST.txt` e um `installation.json` com o mesmo `project.id`). Backups de outra instalação, pastas feitas à mão, atalhos e relatórios não são tocados, mesmo na mesma pasta. O backup recém-feito nunca é apagado.
+- Uma pasta condenada é renomeada para `.removendo-<data>` antes de apagar, e restos de uma rodada interrompida são varridos na seguinte. Duas rotações na mesma pasta não rodam juntas (`.rotacao.lock`; a trava de um processo morto é retomada).
+- O backup não inclui `verify-db/` nem os caches do Grype e do Trivy (`.cache/grype`, `.cache/trivy`, `cache/grype`, `cache/trivy`); a manutenção semanal baixa as bases de novo.
 
 ```bash
-npm run personal:backup-rotate -- <instalação.json> /caminho/dos/backups
+npm run personal:backup-rotate -- <instalação.json> [/caminho/dos/backups]
 ```
 
 Para copiar o backup novo para outra máquina, grave uma linha `usuario@host:/caminho` em `<dataDirectory>/backup-offsite` (arquivo comum, modo `0600`). A cópia usa `rsync -a` por SSH, com a chave e o `known_hosts` de `<dataDirectory>/ssh`. Se a cópia falha, chega o aviso "Cópia do backup para fora do servidor falhou." e nada é apagado.
@@ -396,7 +402,7 @@ Isso grava e liga:
 
 - `agent-control-watch-<nome>.service` e `.timer`, a cada 2 minutos;
 - `agent-control-backup-<nome>.service` e `.timer`, todo dia às 03:30, na pasta `/home/app/backups-agent-control/<nome>`;
-- `agent-control-maintenance-<nome>.service` e `.timer`, todo domingo às 04:00 (`npm run personal:maintenance -- <instalação.json>`);
+- `agent-control-maintenance-<nome>.service` e `.timer`, todo domingo às 04:00 (retenção agendada, conforme `retention.automatic`);
 - `agent-control-restore-proof-<nome>.service` e `.timer`, todo dia 1 às 04:30 (`npm run personal:restore-proof -- <instalação.json> <pasta-dos-backups>`).
 
 A cada 2 minutos a vigia também manda um aviso ao celular quando:
@@ -446,9 +452,43 @@ Cada página consulta até 200 candidatos. Quando houver uma continuação, repi
 
 Para liberar `work/`, o supervisor confere a autorização do proprietário, a reserva liberada, o recibo de conclusão, o resultado em disco e a prova assinada da retirada dos contêineres e da rede. Nos jobs de design, as finalidades aceitas são exame, crítica e confirmação. A preparação da retirada é registrada antes da exclusão. Uma repetição pode concluir o registro de auditoria se o banco falhar depois da remoção. O supervisor percorre a cópia por descritores de diretório. Os relatórios, os arquivos de entrada e saída e `review-artifact/` continuam disponíveis.
 
+### Retenção automática das cópias `work/` de jobs terminados
+
+```bash
+npm run personal:maintenance -- <instalação.json> --retencao-automatica            # prévia
+npm run personal:maintenance -- <instalação.json> --retencao-automatica --aplicar
+```
+
+Não exige janela exclusiva nem gateway parado. O comando não pega a locação do contexto (por isso não muda a época nem disputa com o gateway). Ele usa o fato de a linha do job terminado ser imutável, a reserva estar liberada e o recibo e a prova de retirada serem assinados. Dois processos não agem sobre o mesmo job: há um bloqueio consultivo por execução e outro por job. O bloqueio por job é compartilhado com `--liberar-work-exames` e com o registro do artefato (`registerArtifact`), que espera por ele. Um único sinal de cancelamento acompanha a sessão que segura o bloqueio desde antes de pedi-lo. Antes de cada fase e durante a remoção, a sessão é sondada. Se ela cair ou perder o bloqueio, o auxiliar é morto e nada mais é apagado (`session_lost`). A rodada seguinte retoma pelo plano registrado.
+
+O inventário é uma leitura do diretório de jobs e um `lstat` por job. Um cursor em `<dataDirectory>/job-work-retention.cursor` faz as rodadas seguintes continuarem de onde a anterior parou. O limite por rodada (100) só conta jobs apagados, elegíveis ou com falha. Recusas e jobs já sem `work` não gastam o limite e não seguram os jobs que vêm depois. Repetir é seguro: um job só gera uma auditoria de retirada.
+
+A classificação é explícita (`terminalWorkClass`). Somente leitura: `qa`, `reviewer` e `judge` dos fluxos de engenharia (`baseline-synthetic-v1`, `engineering-synthetic-v1`, `engineering-native-v1`, `managed-synthetic-v1`), e `specialist` e `reviewer` dos exames `design-readonly-v1` e `security-verify-readonly-v1`. Programador: o `programmer` desses mesmos fluxos de engenharia. Qualquer outra combinação fica (`unclassified`), por exemplo um especialista que aconselha uma execução de engenharia.
+
+Todas as categorias exigem personal, recibo assinado por este executor, grant liberado e o resultado em `output/` conferindo com o recibo. Exigem também a **prova de modo**: o `request.json` com o digest gravado no job e no recibo, o mesmo papel, a mesma base e nenhum caminho de escrita (para quem não é programador), além de `launch_digest`, contêineres registrados e um lançamento que só acontece depois de a inspeção física recusar `/work` gravável para quem não é programador. Um job que nunca iniciou não tem checkout provado e fica.
+
+- **Exame passivo** (`security-verify-readonly-v1` e design examiner/reviewer/visual), concluído ou falho, com a retirada de contêineres e rede provada.
+- **Avaliador somente leitura**, só se a retirada estiver provada e o commit base ainda existir no repositório do projeto. A cópia é só um retrato desse commit.
+- **Programador**, só com prova física de terminalidade: a retirada assinada, ou, no filho gerenciado, a revogação assinada do escritor com a linha do escritor neutralizada. Concluído: o artefato registrado em `ac_artifacts` fica preso pela ref privada `refs/agent-control/retained/<job>`. Ela é criada uma vez por CAS no registro (ou na retirada, para registros antigos) e nunca é movida. A aplicação no ramo de destino não a toca, e ela sobrevive ao `git gc`. Falho: só sem artefato e com o checkout igual à base.
+- Em todo programador, o checkout precisa provar que não guarda nada que o repositório não tenha. A árvore de trabalho deve ser igual à árvore do artefato (ou da base), sem arquivo alterado, apagado ou não rastreado, nem mesmo ignorado. E todo objeto do `.git` da cópia (commits locais, stash, reflog, arquivos preparados) precisa existir no repositório do projeto. Senão fica (`unregistered_change`). A prova não usa a configuração, os hooks nem os filtros da cópia.
+- Não há regra genérica para jobs filhos: um filho de fluxo gerenciado passa pelas mesmas provas da sua categoria.
+
+`registerArtifact` repete com segurança depois da retirada: com o artefato já registrado, confere a identidade no repositório e não lê mais o `work/`. Duas chamadas simultâneas registram uma vez só.
+
+Ficam sempre: `request.json`, `input/`, `output/`, `planning/`, `review-artifact/`, logs, recibos, diário de retirada e banco. Para outras retenções (artefatos), use o ponto de integração `JobRetentionExtension` em `runPersonalJobRetention(config, apply, {extensions})`. A função é a mesma que o vigia chama.
+
+O mesmo comando também retém os artefatos registrados (worktrees de trabalhadores, imagens candidatas e temporários `ac-*` de rodadas). A ordem é a do AGENTS.md: primeiro o `work/` dos jobs, depois os artefatos. As etapas não dependem uma da outra. Se o registro de artefatos estiver danificado ou o banco cair, a outra etapa roda assim mesmo, e o comando informa a etapa que falhou e termina com erro. No vigia, isso aparece como `retention=failed`.
+
+- **Arquivos ignorados num worktree:** o nome (`dist`, `coverage`, `node_modules`) não prova que o conteúdo possa ser descartado. Só um link simbólico ignorado é aceito, porque a remoção apaga o link e não o destino. Qualquer arquivo ou pasta ignorada com conteúdo próprio mantém o worktree.
+- **Temporário com remoção interrompida:** antes de esvaziar a pasta, a retenção anota no registro privado, fora da pasta, a identidade e a hora de criação dela. Se a execução parar depois de apagar a marca de propriedade, a rodada seguinte termina a remoção dessa mesma pasta. Outra pasta no mesmo caminho é preservada.
+
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.
+
+### Retenção de worktrees, imagens candidatas e temporários
+
+O registro e a retenção de worktrees de trabalhadores, imagens candidatas de módulo e pastas `/tmp/ac-*` de rodadas estão em [`RETENCAO-ARTEFATOS.md`](RETENCAO-ARTEFATOS.md), com os comandos `--registrar-worktree`, `--registrar-imagem`, `--registrar-temporario`, `--encerrar-rodada` e `--retencao-artefatos` de `personal:maintenance`. A remoção de imagens está bloqueada enquanto não houver prova dos pins das outras instalações no daemon.
 
 ## Testes do Agent Control
 

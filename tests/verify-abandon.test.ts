@@ -4,6 +4,7 @@ import {mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile} from 'node:fs/pr
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {failAbandonedVerifyRuns, type VerifyRunLedger} from '../src/verify-abandon.ts';
+import {trackRoundTemp} from '../src/personal-artifact-hooks.ts';
 
 const delay = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms); });
 
@@ -52,6 +53,20 @@ test('runs running sem lease viram failed e o andamento é limpo', async () => {
     assert.equal(await readFile(join(dir, '.running-link'), 'utf8'), 'FORA\n');
   } finally {
     await rm(root, {recursive: true, force: true});
+  }
+});
+
+test('a recuperação fecha a rodada dos temporários de uma verificação abandonada', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ac-verify-data-'));
+  const temp = await mkdtemp(join(tmpdir(), 'ac-verify-round-'));
+  try {
+    assert.equal(await trackRoundTemp({dataDirectory:root,projectId:project,roundId:run},temp),true);
+    await failAbandonedVerifyRuns(ledger([{id:run,project_id:project}],{text:''}),root);
+    const registry=JSON.parse(await readFile(join(root,'artifact-retention','registry.json'),'utf8'));
+    assert.ok(registry.rounds.some((round:{roundId:string})=>round.roundId===run));
+  } finally {
+    await rm(root,{recursive:true,force:true});
+    await rm(temp,{recursive:true,force:true});
   }
 });
 

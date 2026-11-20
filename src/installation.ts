@@ -35,6 +35,7 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  activation:z.enum(['locked','personal']).default('locked'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
+ retention:z.object({automatic:z.enum(['off','preview','apply']).default('preview')}).strict().default({automatic:'preview'}),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  publishedOrigins:z.array(httpsOrigin()).max(32).optional(),
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),

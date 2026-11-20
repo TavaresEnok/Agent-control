@@ -1,3 +1,4 @@
+import {DISK_BLOCK_PERCENT} from './personal-disk.ts';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 
@@ -39,7 +40,7 @@ export function repeatedErrorNotices(log:string,threshold=ERROR_THRESHOLD):Healt
 
 export function diskNotice(usedPercent:number):HealthNotice|null{
  if(!Number.isFinite(usedPercent)||usedPercent<DISK_ALERT_PERCENT)return null;
- return {key:'disk',text:`Disco do servidor em ${Math.round(usedPercent)}%. Rode a limpeza: npm run personal:maintenance -- <instalação.json>.`,repeatMs:6*hourMs};
+ return {key:'disk',text:`Disco do servidor em ${Math.round(usedPercent)}%. ${usedPercent>=DISK_BLOCK_PERCENT?'Novos exames e trabalhadores estão bloqueados. ':''}Confira a retenção com npm run personal:maintenance -- <instalação.json> --retencao-automatica.`,repeatMs:6*hourMs};
 }
 
 const providerName:Record<string,string>={claude:'Claude',grok:'Grok',codex:'Codex'};
