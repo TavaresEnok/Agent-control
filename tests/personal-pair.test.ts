@@ -8,7 +8,7 @@ import {createApi} from '../src/api.ts';
 import type {Control} from '../src/control.ts';
 import type {CezarRuntime} from '../src/cezar.ts';
 import type {Ledger} from '../src/ledger.ts';
-import {createPairCode, pairClientIp, redeemPairCode} from '../src/personal-pair.ts';
+import {configuredTrustedProxies, createPairCode, pairClientIp, redeemPairCode, trustedProxyList} from '../src/personal-pair.ts';
 import {createProjectGateway} from '../src/projects-api.ts';
 
 const alphabet=/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/;
@@ -43,8 +43,10 @@ test('a pair code works once, expires, and then wrong attempts are limited',asyn
 test('one blocked address does not block another, and a hundred errors close the window',async()=>{
  const root=await directory();
  try{
-  assert.equal(pairClientIp('203.0.113.5, 10.0.0.8', '192.0.2.1'), '203.0.113.5');
+  // Default policy: only the connection address counts; a forwarded header from anyone is ignored.
+  assert.equal(pairClientIp('203.0.113.5, 10.0.0.8', '192.0.2.1'), '192.0.2.1');
   assert.equal(pairClientIp('not-an-ip, 203.0.113.5', '192.0.2.1'), '192.0.2.1');
+  assert.equal(pairClientIp('203.0.113.5', null), 'unknown');
   assert.equal(pairClientIp(null, null), 'unknown');
   const held=await createPairCode(root, 5_000_000);
   for(let index=0;index<5;index++)assert.equal(await redeemPairCode(root,'ZZZZZZZZ',5_000_000+index,'203.0.113.5'),'invalid');
@@ -90,4 +92,41 @@ test('the code route is public and does not ask for a session',async()=>{
   assert.equal(authenticated,false);
  }finally{await rm(root,{recursive:true,force:true});}
 });
+});
+
+test('the forwarded header is believed only when it comes from a listed proxy',()=>{
+ const caddy=trustedProxyList('127.0.0.1,::1');
+ // Direct: the connection address is the client, whatever the header says.
+ assert.equal(pairClientIp('198.51.100.9','203.0.113.5',caddy),'203.0.113.5');
+ assert.equal(pairClientIp('198.51.100.9','::ffff:203.0.113.5',caddy),'203.0.113.5');
+ // Behind the local Caddy: the address Caddy wrote is the client.
+ assert.equal(pairClientIp('203.0.113.5','127.0.0.1',caddy),'203.0.113.5');
+ assert.equal(pairClientIp('203.0.113.5','::ffff:127.0.0.1',caddy),'203.0.113.5');
+ assert.equal(pairClientIp('2001:db8::7','::1',caddy),'2001:db8::7');
+ // A client that writes its own header cannot pick its address: only the rightmost untrusted hop counts.
+ assert.equal(pairClientIp('198.51.100.9, 203.0.113.5','127.0.0.1',caddy),'203.0.113.5');
+ assert.equal(pairClientIp('198.51.100.9, 203.0.113.5, 127.0.0.1','127.0.0.1',caddy),'203.0.113.5');
+ // Missing or broken header behind a proxy falls back to the proxy address.
+ assert.equal(pairClientIp(null,'127.0.0.1',caddy),'127.0.0.1');
+ assert.equal(pairClientIp('garbage','127.0.0.1',caddy),'127.0.0.1');
+ // CIDR entries, and entries that are not addresses trust nothing.
+ const range=trustedProxyList(['10.0.0.0/8','nonsense','10.0.0.0/99']);
+ assert.equal(pairClientIp('203.0.113.5','10.1.2.3',range),'203.0.113.5');
+ assert.equal(pairClientIp('203.0.113.5','11.1.2.3',range),'11.1.2.3');
+ assert.equal(pairClientIp('203.0.113.5','127.0.0.1',trustedProxyList('nonsense')),'127.0.0.1');
+ // The installation sets the list through the environment; without it nothing is trusted.
+ assert.equal(pairClientIp('203.0.113.5','127.0.0.1',configuredTrustedProxies({})),'127.0.0.1');
+ assert.equal(pairClientIp('203.0.113.5','127.0.0.1',configuredTrustedProxies({AC_TRUSTED_PROXIES:'127.0.0.1, ::1'})),'203.0.113.5');
+});
+
+test('a spoofed forwarded header cannot dodge the per-address limit',async()=>{
+ const root=await directory();
+ try{
+  const held=await createPairCode(root,9_000_000);
+  for(let index=0;index<5;index++){
+   const address=pairClientIp(`198.51.100.${index+1}`,'203.0.113.5');
+   assert.equal(await redeemPairCode(root,'ZZZZZZZZ',9_000_000+index,address),'invalid');
+  }
+  assert.equal(await redeemPairCode(root,held.code,9_000_010,pairClientIp('198.51.100.77','203.0.113.5')),'limited');
+ }finally{await rm(root,{recursive:true,force:true});}
 });

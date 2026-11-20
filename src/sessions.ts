@@ -11,6 +11,9 @@ export class BrowserSessions{
   if(this.key.length!==32||options.maxAgeSeconds<60||options.maxAgeSeconds>2592000)throw Error('INVALID_BROWSER_SESSION_CONFIG');
   const origin=new URL(options.origin);if(origin.origin!==options.origin||(options.secure&&origin.protocol!=='https:')||(!options.secure&&(origin.protocol!=='http:'||!['127.0.0.1','localhost'].includes(origin.hostname))))throw Error('UNSAFE_BROWSER_ORIGIN');
  }
+ private credentialEpoch?:()=>Promise<number>;
+ /** Sessions created at or before the returned time (ms) are refused. Used when the owner changes or removes the panel password. */
+ bindCredentialEpoch(epoch:()=>Promise<number>){this.credentialEpoch=epoch;}
  private cookie(request:Request){
   const values=(request.headers.get('cookie')??'').split(';').map(x=>x.trim()).filter(x=>x.startsWith('ac_session='));
   if(values.length!==1)return null;
@@ -47,6 +50,12 @@ export class BrowserSessions{
   const id=this.cookie(request);if(!id)return null;
   const row=(await this.ledger.pool.query('SELECT * FROM ac_browser_sessions WHERE id_digest=$1 AND NOT revoked AND expires_at>clock_timestamp()',[this.idHash(id)])).rows[0];
   if(!row)return null;
+  if(this.credentialEpoch){
+   try{
+    const epoch=await this.credentialEpoch();
+    if(epoch>0&&!(new Date(row.created_at).getTime()>epoch))return null;
+   }catch{return null;}
+  }
   if(row.token_ciphertext==null||row.nonce==null||row.tag==null){
    if(row.token_ciphertext==null&&row.nonce==null&&row.tag==null)return {authorization:null,principal:row.principal_id as string};
    return null;

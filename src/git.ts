@@ -4,7 +4,8 @@ import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { Refusal } from './contracts.ts';
 import { isNormalizedProtectedGatePath } from './quality-gate-paths.ts';
-const GitId=z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+/** The product supports SHA-1 repositories only; SHA-256 object ids are refused at registration and here. */
+const GitId=z.string().regex(/^[a-f0-9]{40}$/);
 const Identity=z.object({commit:GitId,base:GitId,tree:GitId,legacyDigest:z.string().regex(/^[a-f0-9]{64}$/),
  source:z.literal('AcSafeGit+AcArtifactIdentity')}).strict();
 /** Repository is a controller configuration, never a path supplied by the worker. */

@@ -48,6 +48,10 @@ async function repository(root:ProjectRoot,relative:string){
  const result=await promisify(execFile)('git',['--no-optional-locks','-C',canonical,'rev-parse','--show-toplevel'],{encoding:'utf8',timeout:5000,
   env:{PATH:process.env.PATH??'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'}});
  if(result.stdout.trim()!==canonical)throw new Refusal('PROJECT_REPOSITORY_ROOT_REQUIRED');
+ // Only SHA-1 repositories are supported: snapshots, the git helper and every stored object id are 40 hex characters.
+ const format=await promisify(execFile)('git',['--no-optional-locks','-C',canonical,'rev-parse','--show-object-format'],{encoding:'utf8',timeout:5000,
+  env:{PATH:process.env.PATH??'/usr/bin:/bin',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'}});
+ if(format.stdout.trim()!=='sha1')throw new Refusal('PROJECT_REPOSITORY_SHA1_REQUIRED',400);
  return {repo:canonical,identity};
 }
 export class ProjectAdmin{

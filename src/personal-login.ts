@@ -51,20 +51,29 @@ export async function personalOwnerPrincipal(ledger:Ledger,config:Pick<LoginInst
  throw new Refusal('PROJECT_OWNER_REQUIRED',403);
 }
 
+/** Sessions issued before the last password change or removal stop working, whichever route the server mounts first. */
+function bindPasswordEpoch(dataDirectory:string,sessions:BrowserSessions){
+ sessions.bindCredentialEpoch(async()=>(await import('./personal-password.ts')).panelCredentialEpoch(dataDirectory));
+}
+
 /** Password login. Local transport issues the cookie from the ledger owner and does not read the token. */
 export function personalPasswordLogin(config:LoginInstallation,ledger:Ledger,sessions:BrowserSessions,verify:BearerVerifier){
+ bindPasswordEpoch(config.dataDirectory,sessions);
  return async(request:Request)=>{
   sessions.checkOrigin(request);
   const input=z.object({user:z.string().min(1).max(40),password:z.string().min(1).max(200)}).strict().parse(await request.json());
   if(!config.managerTransport)throw new Refusal('PERSONAL_CONNECT_REQUIRED',503);
-  const {verifyPanelLogin,panelLoginDenied,panelSessionSeconds}=await import('./personal-password.ts');
+  const {verifyPanelLogin,panelLoginDenied,panelSessionSeconds,panelCredentialEpoch}=await import('./personal-password.ts');
   const {pairClientIp}=await import('./personal-pair.ts');
   const ip=pairClientIp(request.headers.get('x-forwarded-for'),request.headers.get('x-agent-control-remote-address'));
   if(localManagerTransport(config)){
    const principal=await personalOwnerPrincipal(ledger,config);
+   const epoch=await panelCredentialEpoch(config.dataDirectory);
    const verdict=await verifyPanelLogin(config.dataDirectory,input.user,input.password,Date.now(),ip);
    if(verdict!=='accepted')return panelLoginDenied(verdict);
-   return sessions.issuePrincipal(new Request(request.url,{method:'POST',headers:request.headers}),principal,panelSessionSeconds);
+   const issued=await sessions.issuePrincipal(new Request(request.url,{method:'POST',headers:request.headers}),principal,panelSessionSeconds);
+   // A password change that landed while this login was being verified: the old credential must not leave a cookie behind.
+   return await panelCredentialEpoch(config.dataDirectory)===epoch?issued:panelLoginDenied('invalid');
   }
   const raw=await readPrivateFile(config.managerTransport.tokenFile,16384);
   try{
@@ -74,16 +83,19 @@ export function personalPasswordLogin(config:LoginInstallation,ledger:Ledger,ses
    const principal=await verify(new Request(config.http.publicOrigin+'/',{headers}));
    const owns=principal?(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[config.project.id,principal])).rowCount:0;
    if(!principal||!owns)throw new Refusal('PROJECT_OWNER_REQUIRED',403);
+   const epoch=await panelCredentialEpoch(config.dataDirectory);
    const verdict=await verifyPanelLogin(config.dataDirectory,input.user,input.password,Date.now(),ip);
    if(verdict!=='accepted')return panelLoginDenied(verdict);
    const issuedHeaders=new Headers(request.headers);issuedHeaders.set('authorization','Bearer '+token);
-   return await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}),panelSessionSeconds);
+   const issued=await sessions.issue(new Request(request.url,{method:'POST',headers:issuedHeaders}),panelSessionSeconds);
+   return await panelCredentialEpoch(config.dataDirectory)===epoch?issued:panelLoginDenied('invalid');
   }finally{raw.fill(0);}
  };
 }
 
 /** Pair-code login. The local branch spends the code and skips the Happier token. */
 export function personalCodeLogin(config:LoginInstallation,ledger:Ledger,sessions:BrowserSessions,verify:BearerVerifier){
+ bindPasswordEpoch(config.dataDirectory,sessions);
  return async(request:Request)=>{
   sessions.checkOrigin(request);
   const input=z.object({code:z.string().min(1).max(40)}).strict().parse(await request.json());

@@ -30,6 +30,7 @@ const attemptSchema=z.object({
  failures:z.array(z.object({ip:z.string().min(1).max(64),at:z.number().int().nonnegative()}).strict()).max(globalLimit),
  lockedUntil:z.number().int().nonnegative(),
 }).strict();
+const epochSchema=z.object({changedAt:z.number().int().positive()}).strict();
 type Credential=z.infer<typeof credentialSchema>;
 type Attempts=z.infer<typeof attemptSchema>;
 
@@ -42,7 +43,7 @@ function exclusive<T>(path:string,fn:()=>Promise<T>):Promise<T>{
 function paths(dataDirectory:string){
  const root=resolve(dataDirectory);
  if(root!==dataDirectory)throw new Refusal('NON_CANONICAL_PRIVATE_DIRECTORY');
- return {login:join(root,'panel-login.json'),attempts:join(root,'panel-login-attempts.json')};
+ return {login:join(root,'panel-login.json'),attempts:join(root,'panel-login-attempts.json'),epoch:join(root,'panel-login-epoch.json')};
 }
 function same(left:string,right:string){
  return timingSafeEqual(createHash('sha256').update(left).digest(),createHash('sha256').update(right).digest());
@@ -80,6 +81,23 @@ async function readAttempts(path:string):Promise<Attempts>{
  try{return attemptSchema.parse(JSON.parse(await readFile(path,'utf8')));}
  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return {failures:[],lockedUntil:0};throw error;}
 }
+/**
+ * Moment of the last password change or removal, in milliseconds, or 0 when the password never changed.
+ * A browser session created at or before it was issued under an older credential and must not be accepted.
+ * A damaged file answers Infinity so every older session fails closed until the password is saved again.
+ */
+export async function panelCredentialEpoch(dataDirectory:string){
+ try{return epochSchema.parse(JSON.parse(await readFile(paths(dataDirectory).epoch,'utf8'))).changedAt;}
+ catch(error){
+  if((error as NodeJS.ErrnoException).code==='ENOENT')return 0;
+  return Number.POSITIVE_INFINITY;
+ }
+}
+async function markCredentialChange(dataDirectory:string,now:number){
+ const previous=await panelCredentialEpoch(dataDirectory);
+ const changedAt=Math.max(now,Number.isFinite(previous)?previous+1:0);
+ await writePrivate(paths(dataDirectory).epoch,{changedAt});
+}
 /** Asks twice with readline output silenced, unless AC_PANEL_PASSWORD is already set. */
 export async function promptPanelPassword(ask:(label:string)=>Promise<string>=hiddenQuestion){
  if(process.env.AC_PANEL_PASSWORD!==undefined)return process.env.AC_PANEL_PASSWORD;
@@ -116,6 +134,8 @@ export async function savePanelLogin(dataDirectory:string,user:string,password:s
   const record:Credential={user:normalized,salt:salt.toString('hex'),hash:hash.toString('hex'),params:{N:params.N,r:params.r,p:params.p,length:params.length},updatedAt:new Date(now).toISOString()};
   await writePrivate(file.login,record);
   await writePrivate(file.attempts,{failures:[],lockedUntil:0});
+  // The credential is written first; the epoch then ends every session issued under the old one.
+  await markCredentialChange(dataDirectory,Date.now());
   return {user:normalized};
  });
 }
@@ -124,6 +144,7 @@ export async function removePanelLogin(dataDirectory:string){
  return exclusive(file.login,async()=>{
   await rm(file.login,{force:true});
   await rm(file.attempts,{force:true});
+  await markCredentialChange(dataDirectory,Date.now());
  });
 }
 export async function panelPasswordConfigured(dataDirectory:string){
