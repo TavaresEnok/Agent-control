@@ -48,3 +48,11 @@ A aplicação de homologação usa o frontend oficial, a API Go e um PostgreSQL 
 ### Correção confirmada na CI
 
 **Baixa.** O ramo de revisão recebeu `f4b1eca7` para corrigir a formatação de `apps/web/features/network/config-backups.tsx`. O Sol revisou o diff. A prova independente no contêiner do gerente aprovou Prettier, TypeScript, os 228 testes e o build. O backend também passou em `go build ./...` e `go vet ./...`.
+
+### Navegador e agente de rede
+
+O roteiro funcional `frontend-v0.mjs` concluiu 16 verificações no navegador do projeto contra a API e o banco de demonstração. Os 173 testes Python do agente passaram em contêiner sem rede externa.
+
+### Módulo 2 — primeira execução de QA
+
+Na revisão `993ecf9a`, a rodada `28c53d93-bedb-4d53-aa52-7f82664bb42a` publicou 45 arquivos julgados e dez achados prováveis (quatro médios, dois baixos e quatro informativos). Não houve achado confirmado nem falha do coletor. O Docker perdeu a confirmação da criação de um contêiner de ferramentas, e 1.948 arquivos ficaram com `DOCKER_UNCERTAIN`. Outras duas respostas ficaram fora do formato. Entre as exclusões de inventário constam 484 caminhos não permitidos, 327 arquivos fora do limite ou não regulares, 12 binários ou acima do limite e sete arquivos de credenciais omitidos. A recuperação do supervisor preservou a reserva por falta de prova terminal. A rodada de QA ficou incompleta.

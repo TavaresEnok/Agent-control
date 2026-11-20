@@ -1603,3 +1603,7 @@ FIM
 - 20/11/2026 04:58 UTC — Ordem estatico em gemini-4-hydrogen-high encerrou com código 0.
 - 20/11/2026 04:59 UTC — Ordem resposta em claude-sonnet-5-5 encerrou com código 0.
 - 20/11/2026 04:59 UTC — O ramo central do NexoISP integrou f4b1eca7 após revisão Sol. A checagem de formatação de todo o frontend, o TypeScript, os 228 testes e o build passaram nesse commit. Go build e vet também passaram.
+- 20/11/2026 05:00 UTC — A CLI personal:qa de qa-nexo encerrou com código 0.
+- 20/11/2026 05:01 UTC — Revisão independente revisao-perfil-e-alias-final concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:03 UTC — Iniciada ordem recuperacao em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 05:03 UTC — QA NexoISP 28c53d93 publicou 45 arquivos julgados, dez achados prováveis e zero confirmados. A resposta do Docker se perdeu e 1.948 arquivos ficaram sem julgamento por esse motivo. A recuperação do supervisor manteve a reserva. O navegador aprovou 16 verificações e o agente Python passou em 173 testes.
