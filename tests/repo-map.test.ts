@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -7,10 +8,12 @@ import { Refusal } from '../src/contracts.ts';
 import { parsePersonalMapaArgs } from '../src/personal-mapa-cli.ts';
 import {
   detectLanguage,
+  discoverFiles,
   estimateTokens,
   extractGoSignatures,
   extractPySignatures,
   extractTSSignatures,
+  formatRepoMap,
   generateRepoMap,
   generateRepoMapSafe,
 } from '../src/repo-map.ts';
@@ -131,7 +134,6 @@ test('fixture repo map: TS, Go, Python and unsupported language [não mapeada]',
 
     const result = await generateRepoMap({
       repoPath: root,
-      commit: 'test-commit-001',
       budgetTokens: 4000,
       useCache: false,
     });
@@ -193,7 +195,6 @@ test('budget limit and prioritization by incoming references', async () => {
     const budgetTokens = 50;
     const result = await generateRepoMap({
       repoPath: root,
-      commit: 'test-budget-commit',
       budgetTokens,
       useCache: false,
     });
@@ -212,10 +213,18 @@ test('commit cache storage and reuse with 0600 permissions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'repo-map-cache-repo-'));
   const dataDir = await mkdtemp(join(tmpdir(), 'repo-map-cache-data-'));
   try {
-    await writeFile(join(root, 'app.ts'), `export const APP_NAME = "TestApp";\n`);
+    git(root, 'init', '-q');
+    await writeFile(join(root, 'app.ts'), 'export const COMMITTED = true;\n');
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'first');
+    const commit = git(root, 'rev-parse', 'HEAD');
+    await writeFile(join(root, 'app.ts'), 'export const LATER = true;\n');
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'second');
+    await writeFile(join(root, 'app.ts'), 'export const DIRTY = true;\n');
+    await writeFile(join(root, 'untracked.ts'), 'export const UNTRACKED = true;\n');
 
     const projectId = '00000000-0000-0000-0000-000000000001';
-    const commit = 'a1b2c3d4e5f67890123456789012345678901234';
 
     // 1st run: writes cache
     const res1 = await generateRepoMap({
@@ -226,6 +235,8 @@ test('commit cache storage and reuse with 0600 permissions', async () => {
       useCache: true,
     });
     assert.equal(res1.fromCache, false, 'First run should not be from cache');
+    assert.match(res1.map, /export const COMMITTED/);
+    assert.doesNotMatch(res1.map, /LATER|DIRTY|UNTRACKED/);
 
     const expectedCacheFile = join(dataDir, 'mapas', projectId, `${commit}.json`);
     const fileStat = await stat(expectedCacheFile);
@@ -237,12 +248,16 @@ test('commit cache storage and reuse with 0600 permissions', async () => {
     const res2 = await generateRepoMap({
       repoPath: root,
       projectId,
-      commit,
+      commit: commit.slice(0, 12),
       dataDirectory: dataDir,
       useCache: true,
     });
     assert.equal(res2.fromCache, true, 'Second run must load from cache');
     assert.equal(res2.map, res1.map, 'Map output from cache must match original');
+    const head = await generateRepoMap({ repoPath: root, projectId, dataDirectory: dataDir, useCache: false });
+    assert.match(head.map, /export const LATER/);
+    assert.doesNotMatch(head.map, /COMMITTED|DIRTY|UNTRACKED/);
+    await assert.rejects(generateRepoMap({ repoPath: root, commit: '../arbitrary', dataDirectory: dataDir, projectId }), /commit/);
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(dataDir, { recursive: true, force: true });
@@ -268,22 +283,24 @@ test('scope filtering restricts output to specified folders or files', async () 
   try {
     await mkdir(join(root, 'apps/web'), { recursive: true });
     await mkdir(join(root, 'apps/api'), { recursive: true });
+    await mkdir(join(root, 'apps/web-tools'), { recursive: true });
     await mkdir(join(root, 'infra'), { recursive: true });
 
     await writeFile(join(root, 'apps/web/page.tsx'), `export default function Page() {}\n`);
+    await writeFile(join(root, 'apps/web-tools/tool.ts'), 'export const sibling = true;\n');
     await writeFile(join(root, 'apps/api/server.go'), `package main\nfunc main() {}\n`);
     await writeFile(join(root, 'infra/deploy.sh'), `#!/bin/bash\n`);
 
     const scopedRes = await generateRepoMap({
       repoPath: root,
       scope: ['apps/web'],
-      commit: 'scope-commit',
       useCache: false,
     });
 
     assert.equal(scopedRes.totalCandidateFiles, 1);
     assert.ok(scopedRes.map.includes('apps/web/page.tsx'));
     assert.ok(!scopedRes.map.includes('apps/api/server.go'));
+    assert.ok(!scopedRes.map.includes('apps/web-tools/tool.ts'));
     assert.ok(!scopedRes.map.includes('infra/deploy.sh'));
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -311,4 +328,141 @@ test('CLI argument parser handles valid and invalid arguments', () => {
   assert.throws(() => parsePersonalMapaArgs([]), (err: any) => err instanceof Refusal && err.code === 'MAPA_USAGE');
   // Invalid flag
   assert.throws(() => parsePersonalMapaArgs(['inst.json', 'proj', '--invalid']), (err: any) => err instanceof Refusal && err.code === 'MAPA_USAGE');
+});
+
+
+function git(root: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', root, '-c', 'user.name=Repo Map Test', '-c', 'user.email=fixture@example.invalid',
+    '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8' }).trim();
+}
+
+test('oversized signatures and tiny budgets respect the configured limit', () => {
+  const files = [
+    { path: 'app.ts', language: 'ts' as const, signatures: ['X'.repeat(10000), 'export function visible()'], references: 10 },
+    { path: 'a.ts', language: 'ts' as const, signatures: ['export const a'], references: 0 },
+  ];
+  for (const budget of [0, 1, 6, 15, 50, 200]) {
+    const result = formatRepoMap(files, budget, 'a'.repeat(40), files.length);
+    assert.equal(result.estimatedTokens, estimateTokens(result.text));
+    assert.ok(result.estimatedTokens <= budget);
+    assert.equal(result.includedCount + result.omittedCount, files.length);
+  }
+  const result = formatRepoMap(files, 50, 'a'.repeat(40), files.length);
+  assert.match(result.text, /app\.ts \[ts\]/);
+  assert.match(result.text, /export function visible\(\)/);
+  assert.doesNotMatch(result.text, /XXX/);
+});
+
+test('reads paths containing spaces, tabs, Unicode and line breaks from Git', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'repo-map-path-'));
+  try {
+    git(root, 'init', '-q');
+    const path = ' código\tcom\nquebra.ts';
+    await writeFile(join(root, path), 'export const ODD_PATH = true;\n');
+    assert.deepEqual(await discoverFiles(root), [path]);
+    git(root, 'add', '.');
+    git(root, 'commit', '-qm', 'odd path');
+    const result = await generateRepoMap({ repoPath: root, scope: [path] });
+    assert.equal(result.totalCandidateFiles, 1);
+    assert.match(result.map, /export const ODD_PATH/);
+    assert.ok(result.map.includes(JSON.stringify(path)));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('unversioned snapshots scope reads and skip symbolic links', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'repo-map-snapshot-'));
+  try {
+    git(root, 'init', '-q');
+    git(root, 'commit', '--allow-empty', '-qm', 'ancestor');
+    const snapshot = join(root, 'snapshot');
+    await mkdir(join(snapshot, 'src'), { recursive: true });
+    const outside = join(root, 'outside');
+    await mkdir(outside);
+    await writeFile(join(outside, 'secret.ts'), 'export const SECRET = true;\n');
+    await symlink(join(outside, 'secret.ts'), join(snapshot, 'src/secret.ts'));
+    await symlink(outside, join(snapshot, 'src/elsewhere'));
+    await writeFile(join(snapshot, 'src/core.ts'), 'export const CORE = true;\n');
+    await writeFile(join(snapshot, 'other.ts'), 'import { CORE } from "./src/core";\n');
+    const result = await generateRepoMap({
+      repoPath: snapshot, source: 'directory', scope: ['src'], projectId: 'test', dataDirectory: root,
+    });
+    assert.equal(result.commit, 'unversioned');
+    assert.equal(result.fromCache, false);
+    assert.equal(result.totalCandidateFiles, 1);
+    assert.match(result.map, /export const CORE/);
+    assert.doesNotMatch(result.map, /SECRET|refs:|elsewhere/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('extracts multiline signatures, nested parameters, exports and routes', () => {
+  const ts = extractTSSignatures(`
+export type { User } from './types';
+export {
+  App,
+  Service as API,
+} from './app';
+export * as routes from './routes';
+export const NAME = "body data";
+export const handler = async (
+  callback: (n: number) => void,
+): Promise<void> => callback(4);
+export class Service<T> {
+  public find(
+    filter: (item: T) => boolean,
+  ): T | undefined { return undefined; }
+}
+export function load<T extends Promise<string>>(
+  id: string,
+): { value: T } { return readFromDatabase(id); }
+router.get(
+  "/api/items",
+  handler,
+);
+`);
+  assert.ok(ts.includes("export type { User } from './types'"), ts.join('\n'));
+  assert.ok(ts.includes("export { App, Service as API, } from './app'"), ts.join('\n'));
+  assert.ok(ts.includes("export * as routes from './routes'"), ts.join('\n'));
+  assert.ok(ts.includes('export const NAME'));
+  assert.ok(ts.includes('export const handler = async (callback: (n: number) => void,): Promise<void>'));
+  assert.ok(ts.includes('  public find(filter: (item: T) => boolean,): T | undefined'));
+  assert.ok(ts.includes('export function load<T extends Promise<string>>(id: string,): { value: T }'));
+  assert.ok(ts.includes('ROUTE: GET /api/items'));
+  assert.doesNotMatch(ts.join('\n'), /body data|readFromDatabase/);
+
+  const go = extractGoSignatures(`
+package main
+func (s *Service) Find(
+  validate func(string) bool,
+) (string, error) { return "", nil }
+r.Get(
+  "/health",
+  health,
+)
+`);
+  assert.ok(go.includes('func (s *Service) Find(validate func(string) bool,) (string, error)'));
+  assert.ok(go.includes('ROUTE: GET /health'));
+
+  const py = extractPySignatures(`
+"""
+def fake(): ...
+"""
+@app.get(
+    "/api/items",
+)
+async def items(
+    name: str = default_name(),
+) -> dict[str, tuple[str, int]]:
+    return {}
+__all__ = [
+    'items',
+]
+`);
+  assert.ok(py.includes('async def items(name: str = default_name(),) -> dict[str, tuple[str, int]]'));
+  assert.ok(py.includes('ROUTE: GET /api/items'));
+  assert.ok(py.includes("__all__ = [ 'items', ]"));
+  assert.ok(!py.some(signature => signature.includes('fake')));
 });

@@ -780,3 +780,24 @@ test('leitor do examinador aceita só o alias code na ausência de snippet e man
   assert.equal(invented.result.coverage[0]?.status, 'lido');
   assert.equal(invented.result.findings.length, 0);
 });
+
+test('mapa opcional entra no pedido e falha registrada não impede exame', async () => {
+  for (const repoMap of [{map: 'src/routes.ts: function handler()'}, {map: null, reason: 'REPO_MAP_FAILED'}]) {
+    let task: any;
+    const result = await examineFunctionalModule({module: 'qa', intentId, map, findings: [], repoMap,
+      reserve: async () => seat('a'), release: async () => {},
+      worker: {run: async call => {
+        task = JSON.parse(call.task);
+        return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed: [], findings: []});
+      }},
+    });
+    assert.equal(result.coverage[0]!.status, 'lido');
+    if (repoMap.map) {
+      assert.match(task.repoMap.instruction, /Use o mapa antes de abrir arquivos/);
+      assert.equal(task.repoMap.content, repoMap.map);
+    } else {
+      assert.equal(task.repoMap, undefined);
+      assert.ok(result.notes.some(note => note.includes('REPO_MAP_FAILED')));
+    }
+  }
+});

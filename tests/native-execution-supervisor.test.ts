@@ -1,7 +1,7 @@
 import {mock,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync,createHash} from 'node:crypto';
-import {mkdtemp,mkdir,rm,writeFile,chmod} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,rm,writeFile,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
@@ -552,7 +552,7 @@ test('native execution recovery interrupts an in-flight create or start and lets
  const authority=Authority.parse({contextId:context,instanceId:instance,epoch:1});
  const keys=generateKeyPairSync('ed25519'),image='sha256:'+'c'.repeat(64);
  const codexAccount='fixture-codex-account',subject=digest({provider:'codex',subject:codexAccount});
- const config={id:'codex-native-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'d'.repeat(64),socketPath:'/no-operational-docker.sock',accountSubjects:[{accountId:account,subjectDigest:subject}],workerEnv:[],toolsEnv:[]};
+ const config={id:'codex-native-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'d'.repeat(64),socketPath:'/no-operational-docker.sock',accountSubjects:[{accountId:account,subjectDigest:subject}],workerEnv:[],toolsEnv:[],dataDirectory:area};
  const supervisor=new NativeExecutionSupervisor(db,config,{assertAdmission:async()=>{}});
  (supervisor as unknown as {identity:(client:unknown,principal:string,authority:unknown,input:{grantId:string})=>Promise<Record<string,unknown>>}).identity=async(_client,_principal,_authority,input)=>memory.one('ac_capacity_grants',input.grantId);
  const codexHome=join(accounts,account,'.codex');await mkdir(codexHome,{recursive:true,mode:0o700});await chmod(join(accounts,account),0o700);await chmod(codexHome,0o700);
@@ -578,7 +578,9 @@ test('native execution recovery interrupts an in-flight create or start and lets
  Object.defineProperty(supervisor,'docker',{value:docker});
  const viewed=mock.method(ProviderEligibility.prototype,'view',async()=>({accountId:account,latest:{fresh:true,effectiveStatus:'documented_supported',authenticationMode:'subscription_oauth',executionMode:'central_isolated_cli',adapterId:config.id,adapterVersion:supervisor.executorDigest,revision:1},history:[]}));
  const homes=mock.method(AccountHomes.prototype,'inspectGranted',async()=>({accountId:account,projectId:project,ownerId:principal,uid:'1',device:'1',inode:'1'}));
+ // The snapshot substitute leaves no work directory, causing the optional map to fail.
  const snaps=mock.method(GitArtifacts.prototype,'snapshot',async()=>({}));
+ const warning=mock.method(console,'warn',()=>{});
  const prepare=(jobId:string)=>{
   const grantId=randomUUID(),sessionId=randomUUID();
   memory.insert('ac_capacity_grants',{id:grantId,intent_id:intent,context_id:context,project_id:project,manager_epoch:authority.epoch,account_id:account,profile_id:profile,role:'programmer',model:'fixture-model',effort:'medium',resource_kind:'model',state:'reserved',physical_receipt:null});
@@ -595,6 +597,12 @@ test('native execution recovery interrupts an in-flight create or start and lets
  try{
   mode='hold-network';const lostJob=randomUUID(),lost=prepare(lostJob);
   const lostRecovery=await hold(supervisor.start(principal,authority,lost.input),lostJob);
+  assert.ok(warning.mock.calls.some(call=>{
+   const message=String(call.arguments[0]);
+   return message.includes('NATIVE_REPO_MAP_SKIPPED')&&message.includes(lostJob);
+  }));
+  assert.deepEqual(JSON.parse(await readFile(join(spool,lostJob,'request.json'),'utf8')),lost.input);
+  assert.equal(memory.one('ac_native_execution_jobs',lostJob).input_digest,digest(lost.input));
   assert.equal(lostRecovery.state,'uncertain');assert.equal(lostRecovery.interval,'network_unproven');assert.equal(lostRecovery.grant,'preserved');assert.equal(lostRecovery.replayed,false);
   assert.equal(creates,1);assert.equal(starts,0);assert.equal(removed.length,0);assert.equal(memory.one('ac_capacity_grants',lost.grantId).state,'uncertain');assert.equal(memory.one('ac_capacity_grants',lost.grantId).physical_receipt,null);
   const successor=new NativeExecutionSupervisor(db,config,{assertAdmission:async()=>{}});Object.defineProperty(successor,'docker',{value:docker});
@@ -615,5 +623,5 @@ test('native execution recovery interrupts an in-flight create or start and lets
   assert.equal(creates,beforeRelease+3);assert.equal(starts,startsAfterRun+1);
   const releasedAgain=await successor.recover(principal,authority,freshJob);
   assert.equal(releasedAgain.state,'released_unstarted');assert.equal(releasedAgain.replayed,false);assert.equal(creates,beforeRelease+3);assert.equal(starts,startsAfterRun+1);
- }finally{viewed.mock.restore();homes.mock.restore();snaps.mock.restore();await rm(area,{recursive:true,force:true});}
+ }finally{viewed.mock.restore();homes.mock.restore();snaps.mock.restore();warning.mock.restore();await rm(area,{recursive:true,force:true});}
 });
