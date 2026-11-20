@@ -1717,3 +1717,10 @@ FIM
 - 20/11/2026 07:04 UTC — Revisão independente revisao-contraste-01 concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 07:04 UTC — Ordem painel em claude-sonnet-5-5 encerrou com código 0.
 - 20/11/2026 07:04 UTC — Segurança encerrou entre reservas para preservar o disco, com 114 recibos conferidos e 113 fatias de 189. A fila iniciou arquitetura e mantém QA em execução. A revisão Opus das 180 ocorrências altas isolou o par de cores com 4,34:1 em 25 elementos. O candidato do Opus passou nos quatro testes de contraste. A correção Anatel voltou ao trabalhador para manter o contrato de download e corrigir três testes de renderização.
+- 20/11/2026 07:04 UTC — O Sol recalculou o contraste. A correção aprovada elevou a razão de 4,3439:1 para 4,5422:1. Integrada apenas no ramo local de revisão do NexoISP; os quatro testes específicos passaram no contêiner Node 22.
+- 20/11/2026 07:06 UTC — Revisão independente revisao-painel-01 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:07 UTC — Iniciada ordem painel-r2 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:07 UTC — Ordem anatel-r2 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:10 UTC — Revisão independente revisao-anatel-02 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:10 UTC — Iniciada ordem anatel-r3 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:11 UTC — O navegador com login real confirmou em 375/768/1440 px que as violações de contraste do axe caíram de 17/18/21 para zero nas duas páginas no tema claro. No tema escuro realmente ativo, as duas versões tiveram zero. O build corrigido foi restabelecido na homologação.

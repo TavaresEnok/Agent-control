@@ -112,3 +112,15 @@ As 30 confirmações de achados do examinador registram Opus 5.5. Uma sessão in
 Quando restavam aproximadamente 6 GiB no volume, o gerente encerrou a rodada estática entre reservas para evitar esgotar o disco da instalação. A CLI marcou a execução como falha. A conferência criptográfica do diário validou 114 assinaturas e os hashes de cada pedido e resposta: um mapa e 113 das 189 fatias. O módulo 1 ainda precisa concluir o julgamento e publicar o relatório. QA e arquitetura continuaram em paralelo pelo caminho que recebe apenas o arquivo em julgamento. O arquivamento das cópias de checkout dos trabalhos já encerrados depende da decisão do titular; a restauração de duas cópias em diretório separado passou na comparação integral.
 
 O revisor independente Opus 5.5 `medium` examinou as 180 ocorrências altas do primeiro par e o código da revisão `f4b1eca7`. Identificou um par de cores do tema claro que produz contraste de 4,34:1 em texto pequeno, usado em 25 elementos distintos das duas telas. Parte das ocorrências repete o mesmo elemento por ferramenta ou viewport. O retrato estático não permite afirmar que o aplicativo aplicou a classe de tema escuro, e algumas medidas de tokens não identificam um elemento reproduzível. A correção de contraste está no candidato `da11943`, com quatro testes dirigidos aprovados, à espera da revisão Sol e da verificação na aplicação.
+
+### Contraste na aplicação autenticada
+
+O ramo local de entrega recebeu `4b33170`, revisado pelo Sol. O CSS corrigido eleva a razão do par afetado de 4,3439:1 para 4,5422:1. O gerente compilou o frontend e comparou a versão anterior com a corrigida no aplicativo de homologação, com login real de demonstração e o axe no Chromium. A tabela conta ocorrências da regra de contraste de texto no tema claro.
+
+| Largura | Painel antes → depois | Anatel antes → depois |
+|---|---:|---:|
+| 375 px | 11 → 0 | 6 → 0 |
+| 768 px | 11 → 0 | 7 → 0 |
+| 1440 px | 11 → 0 | 10 → 0 |
+
+No tema escuro, o navegador confirmou que a aplicação ativou o tema e leu o token `#a1a1aa`. As duas versões tiveram zero violações dessa regra nas três larguras. Isso explica a repetição das medidas claras nas capturas escuras do retrato estático. A homologação voltou ao build corrigido depois da comparação.
