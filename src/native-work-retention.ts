@@ -1,6 +1,6 @@
-import {spawn} from 'node:child_process';
+import {execFile, spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {lstat, open, readFile, readdir, rmdir, type FileHandle} from 'node:fs/promises';
+import {lstat, open, readFile, readdir, rename, rmdir, unlink, writeFile, type FileHandle} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Id} from './contracts.ts';
@@ -115,4 +115,72 @@ export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(
       } finally {await work.close();}
     } finally {await job.close();}
   } finally {await root.close();}
+}
+
+/** Job directories that still have a `work` entry, in id order. One readdir of the host root plus one lstat per
+ * job: no database scan and no tree walk, so the cost follows the number of jobs, not the size of their copies.
+ * Only directory entries named like job ids are considered; whatever else lives in the root is ignored. */
+export async function inventoryJobWork(hostRoot:string):Promise<{ids:string[];scanned:number}> {
+  const root=await openRoot(hostRoot);
+  try {
+    await assertPrivate(root);
+    const names=(await readdir(anchored(root,'.'),{withFileTypes:true})).filter(entry=>entry.isDirectory()&&Id.safeParse(entry.name).success).map(entry=>entry.name).sort();
+    const ids:string[]=[];
+    for(let i=0;i<names.length;i+=32){
+      const page=names.slice(i,i+32);
+      const found=await Promise.all(page.map(name=>lstat(anchored(root,name+'/work')).then(()=>true,(error:NodeJS.ErrnoException)=>{
+        if(error.code==='ENOENT'||error.code==='ENOTDIR')return false;
+        throw error;
+      })));
+      page.forEach((name,index)=>{if(found[index])ids.push(name);});
+    }
+    return {ids,scanned:names.length};
+  } finally {await root.close();}
+}
+
+/** Continues after `cursor` and wraps around, so a prefix of jobs that cost budget without being freed cannot starve the rest. */
+export function rotateAfter<T extends string>(sorted:readonly T[],cursor:string|undefined):T[] {
+  if(!cursor)return [...sorted];
+  const at=sorted.findIndex(id=>id>cursor);
+  return at<0?[...sorted]:[...sorted.slice(at),...sorted.slice(0,at)];
+}
+
+/** The cursor is advisory: a missing, damaged or foreign file means "start from the beginning". */
+export async function readRetentionCursor(file:string):Promise<string|undefined> {
+  try {
+    const value=JSON.parse(await readFile(file,'utf8')) as {after?:unknown};
+    return typeof value.after==='string'&&Id.safeParse(value.after).success?value.after:undefined;
+  } catch {return undefined;}
+}
+
+export async function writeRetentionCursor(file:string,after:string|undefined):Promise<void> {
+  if(!after){await unlink(file).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;});return;}
+  const temporary=file+'.'+process.pid+'.tmp';
+  await writeFile(temporary,JSON.stringify({after})+'\n',{mode:0o600});
+  try {await rename(temporary,file);} catch (error) {await unlink(temporary).catch(()=>undefined);throw error;}
+}
+
+const gitEnvironment={PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'};
+function git(repository:string,args:string[]):Promise<{code:number;stdout:string}> {
+  return new Promise(done=>{
+    execFile('/usr/bin/git',['--no-optional-locks','-C',repository,...args],{env:gitEnvironment,timeout:15000,maxBuffer:65536},(error,stdout)=>{
+      done({code:error?(typeof (error as {code?:unknown}).code==='number'?(error as {code:number}).code:1):0,stdout:String(stdout)});
+    });
+  });
+}
+const gitId=/^[a-f0-9]{40}$/;
+
+/** True only when the commit object exists in the project repository (a snapshot of it can be rebuilt). Plumbing only, no hooks. */
+export async function repositoryHasCommit(repository:string,commit:string):Promise<boolean> {
+  return gitId.test(commit)&&(await git(repository,['cat-file','-e',commit+'^{commit}'])).code===0;
+}
+
+/** True only when the commit is reachable from a real ref and has the given tree. An object that only a fetch left
+ * unreferenced is not preserved: garbage collection may still drop it. */
+export async function repositoryKeepsArtifact(repository:string,commit:string,tree:string):Promise<boolean> {
+  if(!gitId.test(commit)||!gitId.test(tree))return false;
+  const found=await git(repository,['rev-parse','--verify','--quiet',commit+'^{tree}']);
+  if(found.code!==0||found.stdout.trim()!==tree)return false;
+  const refs=await git(repository,['for-each-ref','--count=1','--contains',commit,'--format=%(refname)']);
+  return refs.code===0&&refs.stdout.trim().length>0;
 }

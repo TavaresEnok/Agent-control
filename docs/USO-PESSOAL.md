@@ -446,6 +446,27 @@ Cada página consulta até 200 candidatos. Quando houver uma continuação, repi
 
 Para liberar `work/`, o supervisor confere a autorização do proprietário, a reserva liberada, o recibo de conclusão, o resultado em disco e a prova assinada da retirada dos contêineres e da rede. Nos jobs de design, as finalidades aceitas são exame, crítica e confirmação. A preparação da retirada é registrada antes da exclusão. Uma repetição pode concluir o registro de auditoria se o banco falhar depois da remoção. O supervisor percorre a cópia por descritores de diretório. Os relatórios, os arquivos de entrada e saída e `review-artifact/` continuam disponíveis.
 
+### Retenção automática das cópias `work/` de jobs terminados
+
+```bash
+npm run personal:maintenance -- <instalação.json> --retencao-automatica            # prévia
+npm run personal:maintenance -- <instalação.json> --retencao-automatica --aplicar
+```
+
+Não exige janela exclusiva nem gateway parado. O comando não pega a locação do contexto (por isso não muda a época nem disputa com o gateway). Ele usa o fato de a linha do job terminado ser imutável, a reserva estar liberada e o recibo e a prova de retirada serem assinados. Dois processos não agem sobre o mesmo job: há um bloqueio consultivo por execução e outro por job, compartilhados com `--liberar-work-exames`. A árvore é removida fora de transação, e o auxiliar morre junto com a sessão que mantém o bloqueio.
+
+O inventário é uma leitura do diretório de jobs e um `lstat` por job. Um cursor em `<dataDirectory>/job-work-retention.cursor` faz as rodadas seguintes continuarem de onde a anterior parou. O limite por rodada (100) só conta jobs apagados, elegíveis ou com falha. Recusas e jobs já sem `work` não gastam o limite e não seguram os jobs que vêm depois. Repetir é seguro: um job só gera uma auditoria de retirada.
+
+Categorias aceitas (todas exigem personal, recibo assinado por este executor, grant liberado e o resultado em `output/` conferindo com o recibo):
+
+- **Exame passivo** (`security-verify-readonly-v1` e design examiner/reviewer/visual), concluído ou falho, com a retirada de contêineres e rede provada.
+- **Avaliador somente leitura** (qa, reviewer, judge e outros specialists, como a criação de design), só se a retirada estiver provada e o commit base ainda existir no repositório do projeto. A cópia é só um retrato desse commit.
+- **Programador não gerenciado**, só se o artefato estiver registrado em `ac_artifacts` e o commit estiver alcançável a partir de um ref do repositório com a mesma árvore. Um objeto importado e sem ref não conta, porque o coletor de lixo do Git pode descartá-lo. Execução falha sem artefato também é liberada. Programadores gerenciados (com intenção-mãe) nunca são liberados, porque a composição pode ler a cópia deles.
+
+`registerArtifact` repete com segurança depois da retirada: com o artefato já registrado, confere a identidade no repositório e não lê mais o `work/`.
+
+Ficam sempre: `request.json`, `input/`, `output/`, `planning/`, `review-artifact/`, logs, recibos, diário de retirada e banco. Para outras retenções (artefatos), use o ponto de integração `JobRetentionExtension` em `runPersonalJobRetention(config, apply, {extensions})`. A função é a mesma que o vigia chama.
+
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.

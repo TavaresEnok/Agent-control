@@ -56,6 +56,15 @@ test('stopped native fixture finalizes exact scoped Git code, registers high-ris
   const successor=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
   assert.equal((await supervisor.registerArtifact(principal,successor,input.jobId,quality)).id,artifact.id);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_artifacts')).rows[0].n,1);
+  // Once registered, replay needs only the repository's own copy: automatic work retention may have freed the checkout since.
+  await rm(work,{recursive:true,force:true});
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+  const afterRetention=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
+  assert.equal((await supervisor.registerArtifact(principal,afterRetention,input.jobId,quality)).id,artifact.id);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_artifacts')).rows[0].n,1);
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+  const reviewAuthority=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
+  Object.assign(successor,reviewAuthority);
   const reviewProfile=randomUUID(),reviewGrant=randomUUID(),reviewId=randomUUID(),reviewSession=randomUUID(),reviewAttempt=randomUUID();
   await db.pool.query("INSERT INTO ac_profiles(id,account_id,model,effort,role,enabled) VALUES($1,$2,'fixture-model','medium','reviewer',false)",[reviewProfile,account]);
   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)

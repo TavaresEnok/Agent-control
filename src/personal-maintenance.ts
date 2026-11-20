@@ -8,6 +8,7 @@ import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRelease,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
+import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {refreshVerifyDatabases} from './verify-db.ts';
 
@@ -85,12 +86,17 @@ function parseWorkRetirementArgs(installationPath:string,rest:readonly string[])
  return {installationPath,releaseExamWork:selection};
 }
 
-type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;releaseExamWork?:WorkSelection};
+type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;releaseExamWork?:WorkSelection;jobRetention?:{apply:boolean}};
 function parseMaintenanceArgs(argv:readonly string[]):ParsedMaintenance{
  const [installationPath,command,jobId]=argv;
  if(!installationPath||installationPath.startsWith('-'))throw new Refusal('MAINTENANCE_USAGE');
  if(argv.length===1)return {installationPath};
  if(command==='--liberar-work-exames')return parseWorkRetirementArgs(installationPath,argv.slice(2));
+ if(command==='--retencao-automatica'){
+  const rest=argv.slice(2);
+  if(rest.length>1||(rest.length===1&&rest[0]!=='--aplicar'))throw new Refusal('MAINTENANCE_USAGE');
+  return {installationPath,jobRetention:{apply:rest.length===1}};
+ }
  if(argv.length!==3||!Id.safeParse(jobId).success)throw new Refusal('MAINTENANCE_USAGE');
  if(command==='--abandonar-design')return {installationPath,recoverExamJobId:jobId};
  if(command==='--recuperar-exame-passivo')return {installationPath,recoverModuleExamJobId:jobId};
@@ -258,6 +264,110 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
  }finally{await ledger.close();}
 }
 
+/** Hook for retention of other artifacts (owner-managed). It runs inside the same single-flight run as the job copies,
+ * receives the open ledger, and returns report lines. A failing extension never stops the others or the job retention. */
+export type JobRetentionExtension={name:string;run:(context:{config:Installation;apply:boolean;ledger:Ledger})=>Promise<string[]>};
+export type JobRetentionOptions={
+ /** Most jobs freed (or, in a preview, found eligible) or failed in one run. Refusals and jobs already without work never count. */
+ limit?:number;
+ /** The run stops starting new jobs after this long; the cursor lets the next run continue where this one stopped. */
+ deadlineMs?:number;
+ extensions?:readonly JobRetentionExtension[];
+};
+const JOB_RETENTION_LOCK='agent-control:job-work-retention';
+const RETENTION_PAGE=100;
+
+/** Automatic retention of `work/` of every terminal, reconciled and proven native job (passive exams, read-only evaluators, registered programmer artifacts).
+ * It needs no exclusive window and no stopped gateway: it takes no context lease (see NativeExecutionSupervisor.retireTerminalWork) and serializes
+ * on one advisory lock for the whole run plus one per job, so overlapping watch ticks and manual runs only skip each other.
+ * The inventory is one readdir of the job root plus one lstat per job; a persistent cursor makes consecutive runs walk the whole inventory
+ * round-robin, so jobs that never become eligible cannot hold back the ones behind them. Without `apply` nothing is removed.
+ * Receipts, results, reports, review artifacts, logs and the database are never touched. */
+export async function runPersonalJobRetention(config:Installation,apply:boolean,options:JobRetentionOptions={}):Promise<string[]>{
+ if(typeof apply!=='boolean')throw new Refusal('MAINTENANCE_USAGE');
+ const limit=options.limit??100,deadlineMs=options.deadlineMs??15*60*1000;
+ if(!Number.isInteger(limit)||limit<1||!Number.isFinite(deadlineMs)||deadlineMs<1)throw new Refusal('MAINTENANCE_USAGE');
+ const boot=config.nativeBootstrap;
+ if(!boot||boot.state!=='active')return ['Sem runtime nativo ativo: nenhuma cópia de job a retirar.'];
+ const projects=[config.project,...config.projects];
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+ const guard=await ledger.pool.connect();
+ let guardBroken=false;
+ guard.on('error',()=>{guardBroken=true;});
+ try{
+  if(!(await guard.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) ok',[JOB_RETENTION_LOCK])).rows[0].ok)
+   return ['Retenção de jobs já em execução em outro processo; nada a fazer agora.'];
+  const started=Date.now();
+  const cursorFile=join(config.dataDirectory,'job-work-retention.cursor');
+  const {ids:withWork,scanned}=await inventoryJobWork(boot.execution.hostRoot);
+  const candidates=new Set(withWork);
+  // A plan whose release never reached the journal only needs its audit row closed; its work is already gone.
+  if(apply)for(const row of (await ledger.pool.query<{id:string}>(
+   `SELECT DISTINCT p.detail->>'jobId' id FROM ac_audit p WHERE p.kind='native.exam_work_release_planned' AND NOT EXISTS(
+     SELECT 1 FROM ac_audit q WHERE q.context_id=p.context_id AND q.kind IN ('native.exam_work_released','native.exam_work_absent_after_plan') AND q.detail->>'jobId'=p.detail->>'jobId') LIMIT 200`)).rows)
+   if(Id.safeParse(row.id).success)candidates.add(row.id);
+  const order=rotateAfter([...candidates].sort(),await readRetentionCursor(cursorFile));
+  const supervisors=await composePersonalExecutionSupervisors(config,ledger);
+  const owners=new Map<string,string|undefined>();
+  const lines:string[]=[];
+  const refused=new Map<string,number>();
+  const totals={eligible:0,released:0,absent:0,busy:0,failed:0,unknown:0,bytes:0};
+  const byCategory=new Map<string,number>();
+  let spent=0,examined=0,lastId:string|undefined,stopped=false;
+  for(let from=0;from<order.length&&!stopped;from+=RETENTION_PAGE){
+   const page=order.slice(from,from+RETENTION_PAGE);
+   const rows=new Map((await ledger.pool.query<{id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string}>(
+    `SELECT j.id::text,j.context_id::text,x.project_id::text,j.account_id::text,j.key_fingerprint FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE j.id=ANY($1::uuid[])`,[page])).rows.map(row=>[row.id,row]));
+   for(const id of page){
+    if(spent>=limit||Date.now()-started>=deadlineMs){stopped=true;break;}
+    lastId=id;examined++;
+    const row=rows.get(id);
+    if(!row){totals.unknown++;continue;}
+    const refuse=(reason:string)=>refused.set(reason,(refused.get(reason)??0)+1);
+    const project=projects.find(item=>item.id===row.project_id);
+    if(!project){refuse('project');continue;}
+    if(!owners.has(project.id))owners.set(project.id,(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,project.owner])).rowCount?project.owner:undefined);
+    const principal=owners.get(project.id);
+    if(!principal){refuse('owner');continue;}
+    const supervisor=supervisors.find(item=>item.supportsAccount(row.account_id)&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
+    if(!supervisor){refuse('supervisor_identity');continue;}
+    try{
+     const result=await supervisor.retireTerminalWork(principal,id,apply,{contextId:row.context_id,projectId:project.id,repository:project.repo});
+     if(result.state==='refused'){
+      if(result.reason==='busy')totals.busy++;else refuse(result.reason);
+     }else if(result.state==='absent')totals.absent++;
+     else{
+      totals[result.state]++;totals.bytes+=result.bytes??0;spent++;
+      byCategory.set(result.category??'?',(byCategory.get(result.category??'?')??0)+1);
+      if(result.state==='released')lines.push(`${id}: work apagado (${result.bytes??0} bytes, ${result.category}).`);
+     }
+    }catch(error){
+     totals.failed++;spent++;
+     lines.push(`${id}: falhou (${error instanceof Refusal?error.code:'erro'}); repete na próxima rodada.`);
+    }
+   }
+  }
+  // Stopped early: continue after the last job looked at. A full pass starts over from the beginning.
+  if(apply)await writeRetentionCursor(cursorFile,stopped?lastId:undefined).catch(()=>undefined);
+  const mb=Math.round(totals.bytes/1048576);
+  const why=[...refused].sort(([a],[b])=>a<b?-1:1).map(([reason,n])=>`${reason}=${n}`).join(', ');
+  const kinds=[...byCategory].sort(([a],[b])=>a<b?-1:1).map(([kind,n])=>`${kind}=${n}`).join(', ');
+  const rest=stopped?` Parou no limite; ${order.length-examined} candidato(s) ficam para a próxima rodada.`:'';
+  lines.push(apply
+   ?`Retenção de work/ de jobs: ${totals.released} apagado(s) (${mb} MB${kinds?`; ${kinds}`:''}), ${totals.absent} já sem work, ${totals.busy} ocupado(s), ${totals.failed} com falha, ${totals.unknown} sem registro, recusados: ${why||'nenhum'}. Inventário: ${withWork.length} com work em ${scanned} job(s).${rest}`
+   :`Prévia de retenção, nada foi apagado: ${totals.eligible} elegível(is) (${mb} MB${kinds?`; ${kinds}`:''}), ${totals.busy} ocupado(s), ${totals.unknown} sem registro, recusados: ${why||'nenhum'}. Inventário: ${withWork.length} com work em ${scanned} job(s). Use --aplicar para apagar.${rest}`);
+  for(const extension of options.extensions??[]){
+   try{lines.push(...await extension.run({config,apply,ledger}));}
+   catch{lines.push(`Extensão de retenção ${extension.name} falhou; as demais seguem.`);}
+  }
+  return lines;
+ }finally{
+  if(!guardBroken)await guard.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[JOB_RETENTION_LOCK]).catch(()=>{guardBroken=true;});
+  guard.release(guardBroken);
+  await ledger.close();
+ }
+}
+
 /** Weekly: old Docker build cache goes, and retired images no job still needs leave the installation and Docker.
  * Volumes, containers and images of other projects are never touched. The gateway keeps running. */
 export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps={}){
@@ -267,6 +377,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
  if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
+ if(parsed.jobRetention)return runPersonalJobRetention(config,parsed.jobRetention.apply);
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
  const docker=deps.docker??(args=>run('docker',args,30*60*1000));
  const imageExists=deps.imageExists??(async image=>imageId.test(image)&&await run('docker',['image','inspect',image],30_000)===0);
