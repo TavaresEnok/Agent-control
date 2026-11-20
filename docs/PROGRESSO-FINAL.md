@@ -1563,3 +1563,16 @@ FIM
 - 20/11/2026 04:05 UTC — Iniciada ordem retomada em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
 - 20/11/2026 04:06 UTC — Revisão independente revisao-formato-r2 concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 04:07 UTC — Design em `f5643d47`. A reserva e o supervisor consultam a mesma política. Cinco testes do supervisor cobriram recusas antes de criar contêiner para conta, modelo e esforço incorretos, além da recuperação de trabalhos. Na rodada de design, 122 testes passaram. A revisão Sol do ajuste está em curso.
+- 20/11/2026 04:08 UTC — Revisão independente revisao-design-r2 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:08 UTC — Ordem perfis em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 04:11 UTC — Revisão independente revisao-perfis-r1 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:11 UTC — Revisão independente revisao-design-r3 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:12 UTC — Revisão independente revisao-formato-r3 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:14 UTC — A prévia da CLI viva na revisão 11 selecionou Enok Max para os dois perfis Opus. O candidato integrado passou em TypeScript e nos 36 testes de preparação, CLI e contexto. A revisão encontrou um risco de ampliar o esforço de outros papéis ao migrar um catálogo compartilhado. Opus medium da conta dedicada está corrigindo esse caso. O laboratório anterior também falhou no commit-base: o contêiner existente montava uma pasta já removida. A repetição usa a mesma imagem fixada, os arquivos rastreados e uma rede interna de teste separada. Os três digests nativos anteriores estão preservados por tag.
+- 20/11/2026 04:15 UTC — Revisão independente revisao-design-r4 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:18 UTC — Revisão independente revisao-design-aceite concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:22 UTC — Design, preparação e correção de formato integrados em `task/personal-activation` até `048f15b5`. A segunda rodada da preparação passou nos 16 testes dedicados; a prévia viva confirmou que ambos os modelos já têm os esforços necessários. A prova do lançamento assinado de criar conferiu conta, perfil, modelo e esforço. O laboratório com a imagem fixada passou em 384,6 s. Iniciada a reconstrução das imagens da instalação.
+- 20/11/2026 04:23 UTC — Revisão independente revisao-perfis-r2 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:25 UTC — A CLI publicou a política de design na instalação IspAgent e executou uma segunda prévia.
+- 20/11/2026 04:25 UTC — Gateway respondeu HTTP 200 após reinício e inspect terminou com êxito. Quatro reservas reais confirmaram Enok Max, Opus high para exame, visual e criação, e Opus medium para confirmação.
+- 20/11/2026 04:25 UTC — Ordem roteamento em gemini-4-hydrogen-high encerrou com código 0.
