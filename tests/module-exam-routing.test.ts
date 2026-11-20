@@ -689,7 +689,7 @@ test('achado alto do examinador exige sessÃµes distintas atestadas no livro-razÃ
           if (task.checklist) {
             return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: ['app.test.ts'], checklist: ['qa'], findings: highFinding});
           }
-          return 'You have reached your usage limit. Try again later.';
+          return 'Claude usage limit reached';
         },
       },
     });

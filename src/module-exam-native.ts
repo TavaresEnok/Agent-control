@@ -339,6 +339,10 @@ async function refreshClaudeExamQuotaForRetry(
   model: string,
 ): Promise<void> {
   await ledger.tx(async c => {
+    // Capacity writers take this lock before recording account and model observations.
+    // Read the observations in a new statement after any concurrent writer has committed.
+    const account = await c.query('SELECT id FROM ac_accounts WHERE id=$1 AND owner_id=$2 FOR UPDATE', [accountId, principal]);
+    if (!account.rowCount) return;
     const row = (await c.query<{
       id: string;
       provider: string;
@@ -364,8 +368,7 @@ async function refreshClaudeExamQuotaForRetry(
        FROM ac_accounts a
        LEFT JOIN ac_quota_observations q ON q.account_id = a.id
        LEFT JOIN ac_model_quota_observations mq ON mq.account_id = a.id AND mq.model = $2
-       WHERE a.id = $1
-       FOR UPDATE OF a`,
+       WHERE a.id = $1`,
       [accountId, model],
     )).rows[0];
 
