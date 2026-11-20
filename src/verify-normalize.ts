@@ -10,7 +10,14 @@ type Draft = {
   severity: VerifySeverity;
   snippet: string;
   secrets?: readonly string[];
+  /** Identidade do pacote (ecossistema, nome e versão). Entra na impressão digital para que duas versões do mesmo pacote no mesmo arquivo não se fundam. */
+  pkg?: string;
 };
+
+function packageIdentity(ecosystem: string | null, name: string | null, version: string | null): string | undefined {
+  if (!name) return undefined;
+  return [ecosystem ?? '', name, version ?? ''].join('\u0000');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -192,7 +199,9 @@ function materialize(tool: string, draft: Draft): RawFinding | null {
     line: draft.line,
     severity: draft.severity,
     snippet: finishSnippet(draft.snippet, draft.secrets ?? []),
-    fingerprint: digest({tool: name, rule, file, line: draft.line, cwe}),
+    fingerprint: digest(draft.pkg === undefined
+      ? {tool: name, rule, file, line: draft.line, cwe}
+      : {tool: name, rule, file, line: draft.line, cwe, package: draft.pkg}),
   };
 }
 
@@ -228,6 +237,7 @@ function parseOsv(body: unknown): Draft[] {
       const name = text(info.name) ?? 'pacote';
       const version = text(info.version);
       const label = version ? `${name}@${version}` : name;
+      const pkgId = packageIdentity(text(info.ecosystem), text(info.name) ?? 'pacote', version);
       const seen = new Set<string>();
       for (const vuln of asArray(pkg.vulnerabilities)) {
         if (!isRecord(vuln)) continue;
@@ -242,6 +252,7 @@ function parseOsv(body: unknown): Draft[] {
           line: null,
           severity: mapSeverity(specific.severity ?? ecosystem.severity ?? (typeof vuln.severity === 'string' ? vuln.severity : null)),
           snippet: [label, id, text(vuln.summary)].filter(Boolean).join(' '),
+          pkg: pkgId,
         });
       }
       for (const group of asArray(pkg.groups)) {
@@ -256,6 +267,7 @@ function parseOsv(body: unknown): Draft[] {
           line: null,
           severity: mapSeverity(group.max_severity ?? group.maxSeverity ?? group.severity),
           snippet: `${label} ${id}`,
+          pkg: pkgId,
         });
       }
     }
@@ -263,14 +275,18 @@ function parseOsv(body: unknown): Draft[] {
   return drafts;
 }
 
-function readVuln(row: Record<string, unknown>, parentFile: string | null): Draft {
+function readVuln(row: Record<string, unknown>, parentFile: string | null, parentType: unknown = null): Draft {
   const nested = isRecord(row.vulnerability) ? row.vulnerability : null;
   const artifact = isRecord(row.artifact) ? row.artifact : null;
   const location = artifact ? asArray(artifact.locations).find(isRecord) : undefined;
   const id = text(row.VulnerabilityID) ?? text(row.vulnerabilityID) ?? (nested ? text(nested.id) ?? text(nested.VulnerabilityID) : null) ?? 'sem-regra';
   const name = text(row.ArtifactName) ?? text(row.PkgName) ?? text(row.pkgName) ?? (artifact ? text(artifact.name) : null);
   const detail = text(row.Title) ?? text(row.title) ?? text(row.Description) ?? text(row.description) ?? (nested ? text(nested.description) ?? text(nested.summary) : null);
+  const pkgName = text(row.PkgName) ?? text(row.pkgName) ?? (artifact ? text(artifact.name) : null) ?? text(row.ArtifactName);
+  const pkgVersion = text(row.InstalledVersion) ?? text(row.installedVersion) ?? (artifact ? text(artifact.version) : null);
+  const pkgType = text(row.Type) ?? text(row.type) ?? (artifact ? text(artifact.type) : null) ?? text(parentType);
   return {
+    pkg: packageIdentity(pkgType, pkgName, pkgVersion),
     rule: id,
     cwe: cweToken(row.CweIDs ?? row.cweIDs ?? row.CWE ?? row.cwe ?? row.cwes, true) ?? (nested ? cweToken(nested.cwes ?? nested.CweIDs ?? nested.cwe, true) : null),
     file: text(row.Target) ?? text(row.target) ?? (location ? text(location.path) : null) ?? parentFile,
@@ -295,10 +311,10 @@ function parseVulnReport(body: unknown): Draft[] {
     const parent = text(result.Target) ?? text(result.target);
     const vulns = asArray(result.Vulnerabilities ?? result.vulnerabilities).filter(isRecord);
     if (vulns.length > 0) {
-      for (const vuln of vulns) drafts.push(readVuln(vuln, parent));
+      for (const vuln of vulns) drafts.push(readVuln(vuln, parent, result.Type ?? result.type));
       continue;
     }
-    if (hasVulnId(result)) drafts.push(readVuln(result, parent));
+    if (hasVulnId(result)) drafts.push(readVuln(result, parent, null));
   }
   return drafts;
 }

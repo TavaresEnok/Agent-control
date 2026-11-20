@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import {OffsiteCopyRefusal,RestoreCheckRefusal,offsiteFailedNotice,parseOffsiteDestination,personalBackupDefaultDestination,personalBackupRotateStamp,personalOffsiteRsyncPlan,restoreCheckFailedNotice,runPersonalBackupRotate,type RsyncPlan} from '../src/personal-backup-rotate.ts';
+import {OffsiteCopyRefusal,RestoreCheckRefusal,RetentionDegradedRefusal,backupRotateStatusFile,retentionDegradedNotice,retentionRepeatedNotice,offsiteFailedNotice,parseOffsiteDestination,personalBackupDefaultDestination,personalBackupRotateStamp,personalOffsiteRsyncPlan,restoreCheckFailedNotice,runPersonalBackupRotate,type RsyncPlan} from '../src/personal-backup-rotate.ts';
 
 async function fixture(){
  const root=await mkdtemp(join(tmpdir(),'personal-rotate-'));
@@ -352,4 +352,57 @@ test('retoma exclusão interrompida só para o inode comprovado da instalação'
   await assert.rejects(lstat(pending),{code:'ENOENT'});
   assert.ok((await lstat(foreign)).isDirectory());
  }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('retenção degradada em rodadas seguidas repete o alerta com a contagem e zera quando volta ao normal',async()=>{
+ const env=await fixture(),defaultRoot=join(env.root,'padrao'),dest=join(defaultRoot,'data');
+ await mkdir(dest,{recursive:true});
+ for(let day=1;day<=4;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
+ const sent:string[]=[];
+ const degradedRound=async(day:number)=>{
+  let checks=0;
+  const guardedList=async()=>{checks+=1;if(checks===1)return;await chmod(dest,0o500);};
+  await assert.rejects(runPersonalBackupRotate([env.file],{now:new Date(2026,10,day,3,30,0),dump,defaultRoot,listDump:guardedList,notify:async(_dir,body)=>{sent.push(body);}}),RetentionDegradedRefusal);
+  await chmod(dest,0o700);
+ };
+ try{
+  await degradedRound(20);await degradedRound(21);await degradedRound(22);
+  assert.deepEqual(sent,[retentionDegradedNotice,retentionRepeatedNotice(2),retentionRepeatedNotice(3)]);
+  assert.equal(JSON.parse(await readFile(join(env.data,backupRotateStatusFile),'utf8')).degradedRounds,3);
+  await runPersonalBackupRotate([env.file],{now:new Date(2026,10,23,3,30,0),dump,defaultRoot,listDump,notify:async()=>{}});
+  const status=JSON.parse(await readFile(join(env.data,backupRotateStatusFile),'utf8'));
+  assert.equal(status.retention,'ok');assert.equal(status.degradedRounds,0);
+ }finally{await chmod(dest,0o700).catch(()=>{});await rm(env.root,{recursive:true,force:true});}
+});
+
+test('backup novo íntegro com falha ao apagar os antigos: estados distintos, aviso e saída de degradação',async()=>{
+ const env=await fixture();
+ const defaultRoot=join(env.root,'padrao');
+ const dest=join(defaultRoot,'data');
+ await mkdir(dest,{recursive:true});
+ for(let day=1;day<=4;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
+ const sent:string[]=[];
+ const now=new Date(2026,10,20,3,30,0);
+ // Depois da conferência do backup novo a pasta pai fica só de leitura: a retirada dos antigos falha.
+ let checks=0;
+ const guardedList=async()=>{checks+=1;if(checks===1)return;await chmod(dest,0o500);};
+ try{
+  await assert.rejects(
+   runPersonalBackupRotate([env.file],{now,dump,defaultRoot,listDump:guardedList,notify:async(_dir,body)=>{sent.push(body);}}),
+   (error:unknown)=>error instanceof RetentionDegradedRefusal&&error.code==='BACKUP_RETENTION_DEGRADED'&&error.failed>=1
+    &&error.lines.some(line=>line.includes('cópia ok; envio externo não configurado; retenção degradada'))
+    &&error.lines.some(line=>line.startsWith('Alerta:'))&&error.lines.every(line=>!line.includes('s3cret')));
+  assert.deepEqual(sent,[retentionDegradedNotice]);
+  await chmod(dest,0o700);
+  const kept=await stampDirs(dest);
+  assert.equal(kept.includes(personalBackupRotateStamp(now)),true,'o backup novo continua lá');
+  assert.equal(kept.length,5,'nada antigo foi perdido nem meio apagado');
+  const status=JSON.parse(await readFile(join(env.data,backupRotateStatusFile),'utf8'));
+  assert.equal(status.copy,'ok');assert.equal(status.offsite,'not-configured');assert.equal(status.retention,'degraded');assert.ok(status.failed>=1);
+  // A rodada seguinte, com a pasta de novo gravável, termina o serviço e volta a zero.
+  const lines=await runPersonalBackupRotate([env.file],{now:new Date(2026,10,21,3,30,0),dump,defaultRoot,listDump,notify:async()=>{}});
+  assert.ok(lines.some(line=>line.includes('retenção ok')));
+  assert.equal((await stampDirs(dest)).length,3);
+  assert.equal(JSON.parse(await readFile(join(env.data,backupRotateStatusFile),'utf8')).retention,'ok');
+ }finally{await chmod(dest,0o700).catch(()=>{});await rm(env.root,{recursive:true,force:true});}
 });

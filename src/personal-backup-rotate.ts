@@ -17,6 +17,8 @@ const offsiteLine=/^([A-Za-z_][A-Za-z0-9._-]{0,31})@([A-Za-z0-9](?:[A-Za-z0-9.-]
 
 export const offsiteFailedNotice='Cópia do backup para fora do servidor falhou.';
 export const restoreCheckFailedNotice='A conferência do backup novo falhou. Nada foi apagado.';
+export const retentionDegradedNotice='O backup novo está íntegro, mas backups antigos não puderam ser apagados.';
+export const retentionRepeatedNotice=(rounds:number)=>`${retentionDegradedNotice} Já são ${rounds} rodadas seguidas com a retenção degradada: confira o espaço e as permissões da pasta de destino.`;
 
 export class OffsiteCopyRefusal extends Refusal{
  constructor(readonly lines:string[]){super('BACKUP_OFFSITE_FAILED');}
@@ -26,6 +28,24 @@ export class OffsiteCopyRefusal extends Refusal{
 export class RestoreCheckRefusal extends Refusal{
  constructor(readonly lines:string[],readonly cause:string){super('BACKUP_RESTORE_CHECK_FAILED');}
 }
+
+/** The backup is complete and checked, the offsite copy (if any) is done, but old folders could not be deleted.
+ * The command exits non-zero so the timer unit shows as failed; the next run retries the pending removals. */
+export class RetentionDegradedRefusal extends Refusal{
+ constructor(readonly lines:string[],readonly failed:number){super('BACKUP_RETENTION_DEGRADED');}
+}
+
+/** One state per stage, so one stage failing never hides another. */
+export type BackupRotateStatus={
+ copy:'ok'|'check-failed';
+ offsite:'not-configured'|'ok'|'failed'|'skipped';
+ retention:'ok'|'degraded'|'skipped';
+ removed:number;
+ failed:number;
+ /** Consecutive runs, this one included, that ended with the retention degraded; 0 when it is not. */
+ degradedRounds?:number;
+};
+export const backupRotateStatusFile='backup-rotate-status.json';
 
 export type OffsiteDestination={user:string;host:string;path:string};
 export type RsyncPlan={command:'rsync';args:string[]};
@@ -213,7 +233,37 @@ async function pruneBackups(parent:string,keep:number,newName:string,projectId:s
  return {kept:keepSet.size,removed,failed};
 }
 
-async function failOffsite(lines:string[],dataDirectory:string,notify:(dataDirectory:string,body:string)=>Promise<void>):Promise<never>{
+const stateText={
+ copy:{ok:'ok','check-failed':'conferência falhou'},
+ offsite:{'not-configured':'não configurado',ok:'ok',failed:'falhou',skipped:'não feito'},
+ retention:{ok:'ok',degraded:'degradada',skipped:'não feita'},
+} as const;
+function statusLine(status:BackupRotateStatus){
+ return `Estados: cópia ${stateText.copy[status.copy]}; envio externo ${stateText.offsite[status.offsite]}; retenção ${stateText.retention[status.retention]}.`;
+}
+
+/** Degraded rounds in a row up to the previous run; a run that did not reach retention keeps the count. */
+async function previousDegradedRounds(dataDirectory:string){
+ try{
+  const previous=JSON.parse(await readFile(join(dataDirectory,backupRotateStatusFile),'utf8')) as {degradedRounds?:unknown};
+  return typeof previous.degradedRounds==='number'&&Number.isInteger(previous.degradedRounds)&&previous.degradedRounds>0?previous.degradedRounds:0;
+ }catch{return 0;}
+}
+
+/** Last run, one state per stage. Best effort: a write problem never changes the outcome. */
+async function publishStatus(dataDirectory:string,at:Date,status:BackupRotateStatus){
+ const path=join(dataDirectory,backupRotateStatusFile);
+ const temporary=`${path}.${randomUUID()}.tmp`;
+ try{
+  await writeFile(temporary,JSON.stringify({at:at.toISOString(),...status})+'\n',{mode:0o600,flag:'wx'});
+  await rename(temporary,path);
+ }catch{await rm(temporary,{force:true}).catch(()=>{});}
+}
+
+async function failOffsite(lines:string[],dataDirectory:string,notify:(dataDirectory:string,body:string)=>Promise<void>,at:Date):Promise<never>{
+ const status:BackupRotateStatus={copy:'ok',offsite:'failed',retention:'skipped',removed:0,failed:0,degradedRounds:await previousDegradedRounds(dataDirectory)};
+ await publishStatus(dataDirectory,at,status);
+ lines.push(statusLine(status));
  try{await notify(dataDirectory,offsiteFailedNotice);}catch{/* pruning stays off either way */}
  throw new OffsiteCopyRefusal(lines);
 }
@@ -251,7 +301,8 @@ export async function runPersonalBackupRotate(argv:string[],options:PersonalBack
 
 async function rotateLocked(input:{installationFile:string;config:Awaited<ReturnType<typeof loadInstallation>>;parent:string;isDefault:boolean;keep:number;options:PersonalBackupRotateOptions}){
  const {installationFile,config,parent,isDefault,keep,options}=input;
- const stamp=personalBackupRotateStamp(options.now??new Date());
+ const at=options.now??new Date();
+ const stamp=personalBackupRotateStamp(at);
  const dated=join(parent,stamp);
  try{
   const info=await lstat(dated);
@@ -271,14 +322,16 @@ async function rotateLocked(input:{installationFile:string;config:Awaited<Return
   if(!inside(datedReal,copiedReal)||copiedReal===datedReal)throw new Refusal('RESTORE_NOT_A_BACKUP');
   await runPersonalRestoreCheck([copiedReal],options);
  }catch(error){
+  const status:BackupRotateStatus={copy:'check-failed',offsite:'skipped',retention:'skipped',removed:0,failed:0,degradedRounds:await previousDegradedRounds(config.dataDirectory)};
+  await publishStatus(config.dataDirectory,at,status);
   try{await notify(config.dataDirectory,restoreCheckFailedNotice);}catch{/* nothing is deleted either way */}
-  throw new RestoreCheckRefusal([...lines,`Destino: ${parent}`,retention],error instanceof Refusal?error.code:'RESTORE_CHECK_ERROR');
+  throw new RestoreCheckRefusal([...lines,`Destino: ${parent}`,retention,statusLine(status)],error instanceof Refusal?error.code:'RESTORE_CHECK_ERROR');
  }
  lines.push('Conferência do backup novo: ok.',`${isDefault?'Destino padrão':'Destino'}: ${parent}`,retention);
  let destination:string|null;
  try{destination=await readOffsite(config.dataDirectory);}
  catch(error){
-  if(error instanceof Refusal&&error.code==='BACKUP_OFFSITE_INVALID')return failOffsite(lines,config.dataDirectory,notify);
+  if(error instanceof Refusal&&error.code==='BACKUP_OFFSITE_INVALID')return failOffsite(lines,config.dataDirectory,notify,at);
   throw error;
  }
  if(destination){
@@ -289,13 +342,21 @@ async function rotateLocked(input:{installationFile:string;config:Awaited<Return
   catch{backupReal='';}
   const plan=inside(datedReal,backupReal)?personalOffsiteRsyncPlan(backupReal,destination,paths.identityFile,paths.knownHosts):null;
   const keys=await regularFile(paths.identityFile)&&await regularFile(paths.knownHosts);
-  if(!plan||!keys)return failOffsite(lines,config.dataDirectory,notify);
+  if(!plan||!keys)return failOffsite(lines,config.dataDirectory,notify,at);
   try{await rsync(plan);}
-  catch{return failOffsite(lines,config.dataDirectory,notify);}
+  catch{return failOffsite(lines,config.dataDirectory,notify,at);}
   lines.push('Cópia externa feita.');
  }
  const result=await pruneBackups(parent,keep,stamp,config.project.id,config.dataDirectory,options);
+ const degradedRounds=result.failed>0?await previousDegradedRounds(config.dataDirectory)+1:0;
+ const status:BackupRotateStatus={copy:'ok',offsite:destination?'ok':'not-configured',retention:result.failed>0?'degraded':'ok',removed:result.removed,failed:result.failed,degradedRounds};
+ await publishStatus(config.dataDirectory,at,status);
  if(result.removed>0)lines.push(`Removidos: ${result.removed}`);
- if(result.failed>0)lines.push(`Aviso: ${result.failed} pasta(s) antigas não puderam ser apagadas; ficam para a próxima rodada.`);
- return [...lines,`Mantidos: ${result.kept}`];
+ lines.push(statusLine(status),`Mantidos: ${result.kept}`);
+ if(result.failed>0){
+  lines.push(`Alerta: ${result.failed} pasta(s) antigas não puderam ser apagadas; a próxima rodada tenta de novo. O backup novo está íntegro.`);
+  try{await notify(config.dataDirectory,degradedRounds>1?retentionRepeatedNotice(degradedRounds):retentionDegradedNotice);}catch{/* the exit code reports it */}
+  throw new RetentionDegradedRefusal(lines,result.failed);
+ }
+ return lines;
 }

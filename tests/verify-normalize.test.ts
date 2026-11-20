@@ -118,8 +118,36 @@ test('normaliza SARIF e JSON sem duplicar fingerprint e sem vazar segredo', () =
     assert.equal(finding.cwe, item.cwe);
     assert.equal(finding.snippet, item.snippet);
     assert.ok(finding.snippet.length <= 180);
-    assert.equal(finding.fingerprint, digest({tool: finding.tool, rule: finding.rule, file: finding.file, line: finding.line, cwe: finding.cwe}));
+    const base = digest({tool: finding.tool, rule: finding.rule, file: finding.file, line: finding.line, cwe: finding.cwe});
+    if (['osv-scanner', 'grype', 'trivy'].includes(finding.tool)) assert.notEqual(finding.fingerprint, base, 'a identidade do pacote entra na impressão digital');
+    else assert.equal(finding.fingerprint, base);
   }
+});
+
+test('duas versões do mesmo pacote atingidas pelo mesmo aviso geram dois achados', () => {
+  const osv = (versions: string[], ecosystem = 'npm') => ({
+    results: [{
+      source: {path: 'package-lock.json', type: 'lockfile'},
+      packages: versions.map(version => ({
+        package: {name: 'minimist', version, ecosystem},
+        vulnerabilities: [{id: 'GHSA-fict-dupl-0001', summary: 'Poluição'}],
+      })),
+    }],
+  });
+  const two = normalizeToolOutput([{tool: 'osv-scanner', format: 'json', body: osv(['1.2.5', '0.2.1'])}]);
+  assert.equal(two.findings.length, 2);
+  assert.deepEqual(two.findings.map(item => item.snippet).sort(), ['minimist@0.2.1 GHSA-fict-dupl-0001 Poluição', 'minimist@1.2.5 GHSA-fict-dupl-0001 Poluição']);
+  assert.equal(new Set(two.findings.map(item => item.fingerprint)).size, 2);
+  // O mesmo pacote e versão repetido continua fundido; outro ecossistema não.
+  assert.equal(normalizeToolOutput([{tool: 'osv-scanner', format: 'json', body: osv(['1.2.5', '1.2.5'])}]).findings.length, 1);
+  const eco = normalizeToolOutput([
+    {tool: 'osv-scanner', format: 'json', body: osv(['1.2.5'], 'npm')},
+    {tool: 'osv-scanner', format: 'json', body: osv(['1.2.5'], 'PyPI')},
+  ]);
+  assert.equal(eco.findings.length, 2);
+  const trivy = (version: string) => ({Results: [{Target: 'package-lock.json', Type: 'npm', Vulnerabilities: [{VulnerabilityID: 'CVE-2024-0001', PkgName: 'lodash', InstalledVersion: version, Severity: 'HIGH'}]}]});
+  const two2 = normalizeToolOutput([{tool: 'trivy', format: 'json', body: {Results: [...trivy('4.17.1').Results, ...trivy('3.0.0').Results]}}]);
+  assert.equal(two2.findings.length, 2);
 });
 
 test('opengrep extra.lines é redigido', () => {

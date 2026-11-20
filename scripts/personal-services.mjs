@@ -6,6 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {mkdir,writeFile,rm,readFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve} from 'node:path';
 import {homedir} from 'node:os';
+import {systemdEnvironment,systemdExecStart,systemdPathValue} from './systemd-exec.mjs';
 const args=process.argv.slice(2),remove=args.includes('--remove'),[installation,given]=args.filter(a=>a!=='--remove');
 if(!installation){console.log('Uso: npm run personal:services -- <instalação.json> [nome] [--remove]');process.exit(0);}
 const file=resolve(installation),config=JSON.parse(await readFile(file,'utf8'));
@@ -21,13 +22,13 @@ if(remove){
 }
 if(config.activation!=='personal')throw Error('PERSONAL_ACTIVATION_REQUIRED');
 const path=[dirname(process.execPath),'/usr/local/bin','/usr/bin','/bin'].join(':');
-const unit=(description,exec,extra='')=>`[Unit]
+const unit=(description,argv,extra='')=>`[Unit]
 Description=${description} (${name})
 ${extra}
 [Service]
-WorkingDirectory=${root}
-Environment=PATH=${path}
-ExecStart=${exec}
+WorkingDirectory=${systemdPathValue(root)}
+Environment=${systemdEnvironment('PATH',path)}
+ExecStart=${systemdExecStart(argv)}
 Restart=always
 RestartSec=5
 UMask=0077
@@ -42,7 +43,7 @@ const localTransport=config.managerTransport?.transport==='local';
 const happierUnit=sharedFrom?`agent-control-happier-${basename(dirname(sharedFrom)).replace(/[^A-Za-z0-9_-]/g,'-')}.service`:happier;
 const withHappier=!sharedFrom&&!localTransport;
 await mkdir(units,{recursive:true});
-if(withHappier)await writeFile(join(units,happier),unit('Agent Control: Happier server',`${process.execPath} ${join(root,'scripts/personal-happier.mjs')} ${file}`));
-await writeFile(join(units,gateway),unit('Agent Control: gateway',`${process.execPath} --import tsx ${join(root,'src/server-main.ts')} serve ${file}`,localTransport?'':`After=${happierUnit}\nWants=${happierUnit}`));
+if(withHappier)await writeFile(join(units,happier),unit('Agent Control: Happier server',[process.execPath,join(root,'scripts/personal-happier.mjs'),file]));
+await writeFile(join(units,gateway),unit('Agent Control: gateway',[process.execPath,'--import','tsx',join(root,'src/server-main.ts'),'serve',file],localTransport?'':`After=${happierUnit}\nWants=${happierUnit}`));
 systemctl('daemon-reload');if(withHappier)systemctl('enable','--now',happier);systemctl('enable','--now',gateway);
 console.log(JSON.stringify({installed:withHappier?[happier,gateway]:[gateway],...(localTransport?{}:{happier:happierUnit}),logs:`journalctl --user -u ${gateway} -f`}));
