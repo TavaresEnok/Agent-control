@@ -18,7 +18,7 @@ import {moduleExamCodexBody, readModuleExamCodexOutput, readModuleExamCodexRespo
 import {RECHECK_PROOF_VERSION} from '../src/module-recheck-measurement.ts';
 import {FUNCTION_COVERAGE_RULE} from '../src/module-recheck-regression.ts';
 import type {ModuleExamRuntime} from '../src/module-exam-native.ts';
-import {moduleExamClaudeArgs, parseModuleExamJsonObject, readModuleExamClaudeOutput} from '../src/module-exam-worker.ts';
+import {moduleExamClaudeArgs, parseModuleExamJsonObject, readModuleExamClaudeOutput, resolveModuleExamClaudeResult} from '../src/module-exam-worker.ts';
 import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli, type PersonalModuleCliDeps} from '../src/personal-module-cli.ts';
 import {runPersonalQaCli} from '../src/personal-qa-cli.ts';
 import {readModuleReport, type ModuleCollectorOutput, type VerificationModuleRunResult} from '../src/verification-modules.ts';
@@ -75,28 +75,81 @@ test('Claude só entrega texto quando a sessão observada tem o modelo reservado
     errors: ['usage limit reached']}).diagnostics, ['', 'usage limit reached']);
 });
 
-test('extrator de JSON do worker aceita objeto puro ou em cerca Markdown única e rejeita múltiplos JSON ou lixo', () => {
+test('extrator de JSON do worker aceita objeto puro ou cerca Markdown em linhas próprias e rejeita chaves duplicadas ou lixo', () => {
   assert.deepEqual(parseModuleExamJsonObject('\uFEFF {"kind":"exame"} '), {text: '{"kind":"exame"}', value: {kind: 'exame'}});
   assert.deepEqual(parseModuleExamJsonObject('```json\n{"kind":"exame","note":"```"}\n```'), {
     text: '{"kind":"exame","note":"```"}', value: {kind: 'exame', note: '```'},
   });
+  assert.deepEqual(parseModuleExamJsonObject('```json  \t\r\n{"kind":"exame"}\r\n  ```'), {
+    text: '{"kind":"exame"}', value: {kind: 'exame'},
+  });
   assert.deepEqual(parseModuleExamJsonObject('```\n{"kind":"exame"}\n```'), {
     text: '{"kind":"exame"}', value: {kind: 'exame'},
+  });
+  const nestedValid = '{"kind":"exame","note":"{\\"a\\":1,\\"a\\":2}","items":[{"a":1},{"a":2}],"nested":{"kind":"interno"}}';
+  assert.deepEqual(parseModuleExamJsonObject(nestedValid), {
+    text: nestedValid,
+    value: {kind: 'exame', note: '{"a":1,"a":2}', items: [{a: 1}, {a: 2}], nested: {kind: 'interno'}},
   });
   for (const invalid of [
     'texto antes {"kind":"exame"}',
     '{"kind":"exame"} texto depois',
     'texto antes\n```json\n{"kind":"exame"}\n```',
     '```json\n{"kind":"exame"}\n```\ntexto depois',
+    '```json{"kind":"exame"}\n```',
+    '```{"kind":"exame"}\n```',
+    '```json {"kind":"exame"}\n```',
+    '```json\n{"kind":"exame"}```',
+    '```\n{"kind":"exame"} ```',
+    '```json{"kind":"exame"}```',
+    '```json extra\n{"kind":"exame"}\n```',
+    '```json\n{"kind":"exame"}\n``` extra',
     '```json\n{"kind":"exame"}\n```\n```json\n{"other":1}\n```',
     '{"kind":"exame"}{"other":1}',
     '```ts\n{"kind":"exame"}\n```',
     '```json\n[1,2,3]\n```',
     '```json\n{"kind":"exame"}',
     '```json\n```',
+    '{"binding":"a","binding":"b"}',
+    '{"binding":"a","\\u0062inding":"b"}',
+    '{"filesRead":["a.ts"],"\\u0066ilesRead":["b.ts"]}',
+    '{"checklist":["qa"],"\\u0063hecklist":["arquitetura"]}',
+    '{"a\\/b":1,"a/b":2}',
+    '{"\\uD83D\\uDE00":1,"😀":2}',
+    '{"":1,"":2}',
+    '{"findings":[{"line":1,"line":2}]}',
+    '{"findings":[{"line":1,"\\u006cine":2}]}',
+    '{"nested":{"deep":[{"k":1,"\\u006b":2}]}}',
+    '```json\n{"binding":"a","\\u0062inding":"b"}\n```',
   ]) {
     assert.equal(parseModuleExamJsonObject(invalid), null, invalid);
   }
+  assert.deepEqual(
+    resolveModuleExamClaudeResult({succeeded: true, output: ' {"kind":"exame"} ', diagnostics: []}, ['segredo-sintetico']),
+    {output: '{"kind":"exame"}', failureCode: null, usageWindows: null},
+  );
+  assert.deepEqual(
+    resolveModuleExamClaudeResult({succeeded: true, output: '```json\n{"kind":"exame"}\n```', diagnostics: []}, ['segredo-sintetico']),
+    {output: '{"kind":"exame"}', failureCode: null, usageWindows: null},
+  );
+  const externalText = 'texto antes\n```json\n{"kind":"exame"}\n```';
+  assert.deepEqual(
+    resolveModuleExamClaudeResult({succeeded: true, output: externalText, diagnostics: []}, ['segredo-sintetico']),
+    {output: externalText, failureCode: null, usageWindows: null},
+  );
+  const duplicateText = '{"binding":"a","\\u0062inding":"b"}';
+  assert.deepEqual(
+    resolveModuleExamClaudeResult({succeeded: true, output: duplicateText, diagnostics: []}, ['segredo-sintetico']),
+    {output: duplicateText, failureCode: null, usageWindows: null},
+  );
+  assert.equal(
+    resolveModuleExamClaudeResult({succeeded: true, output: 'You hit your usage limit', diagnostics: []}, ['segredo-sintetico']).failureCode,
+    'PROVIDER_USAGE_LIMIT',
+  );
+  assert.equal(
+    resolveModuleExamClaudeResult({succeeded: false, output: '', diagnostics: ['usage limit reached']}, ['segredo-sintetico']).failureCode,
+    'PROVIDER_USAGE_LIMIT',
+  );
 });
 
 test('credencial vencida interrompe o exame sem renovar ou alterar a conta', async () => {

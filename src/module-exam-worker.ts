@@ -18,9 +18,85 @@ type Input = {
   provider: ModuleExamProvider; task: string; timeoutMs: number; oauthAccessToken?: string;
 };
 const maxOutput = 200_000;
-const singleMarkdownJsonFence = /^```(?:json(?=[ \t\r\n{]))?[ \t\r\n]*([\s\S]*)```$/i;
+const singleMarkdownJsonFence = /^```(?:json)?[ \t]*\r?\n([\s\S]*)\r?\n[ \t]*```$/i;
 
-/** Extracts one JSON object from bare text or a single Markdown fence with no surrounding text. */
+type JsonContainerFrame = {kind: 'array'} | {kind: 'object'; expectKey: boolean; keys: Set<string>};
+
+function hasDuplicateJsonKeys(jsonText: string): boolean {
+  const stack: JsonContainerFrame[] = [];
+  for (let i = 0; i < jsonText.length;) {
+    const code = jsonText.charCodeAt(i);
+    if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+      i++;
+      continue;
+    }
+    if (code === 0x7b /* { */) {
+      stack.push({kind: 'object', expectKey: true, keys: new Set()});
+      i++;
+      continue;
+    }
+    if (code === 0x7d /* } */) {
+      stack.pop();
+      const parent = stack.at(-1);
+      if (parent?.kind === 'object') parent.expectKey = false;
+      i++;
+      continue;
+    }
+    if (code === 0x5b /* [ */) {
+      stack.push({kind: 'array'});
+      i++;
+      continue;
+    }
+    if (code === 0x5d /* ] */) {
+      stack.pop();
+      const parent = stack.at(-1);
+      if (parent?.kind === 'object') parent.expectKey = false;
+      i++;
+      continue;
+    }
+    if (code === 0x2c /* , */) {
+      const top = stack.at(-1);
+      if (top?.kind === 'object') top.expectKey = true;
+      i++;
+      continue;
+    }
+    if (code === 0x3a /* : */) {
+      const top = stack.at(-1);
+      if (top?.kind === 'object') top.expectKey = false;
+      i++;
+      continue;
+    }
+    if (code === 0x22 /* " */) {
+      const start = i;
+      i++;
+      while (i < jsonText.length) {
+        const c = jsonText.charCodeAt(i);
+        if (c === 0x5c /* \ */) {
+          i += 2;
+        } else if (c === 0x22 /* " */) {
+          i++;
+          break;
+        } else {
+          i++;
+        }
+      }
+      const top = stack.at(-1);
+      if (top?.kind === 'object' && top.expectKey) {
+        const key = JSON.parse(jsonText.slice(start, i)) as string;
+        if (top.keys.has(key)) return true;
+        top.keys.add(key);
+        top.expectKey = false;
+      }
+      continue;
+    }
+    const top = stack.at(-1);
+    if (top?.kind === 'object') top.expectKey = false;
+    i++;
+  }
+  return false;
+}
+
+/** Extracts one JSON object from bare text or a single Markdown fence on its own lines, rejecting duplicate keys. */
 export function parseModuleExamJsonObject(raw: string): {text: string; value: unknown} | null {
   const trimmed = raw.replace(/^\uFEFF/, '').trim();
   if (!trimmed) return null;
@@ -34,6 +110,7 @@ export function parseModuleExamJsonObject(raw: string): {text: string; value: un
   try {
     const value: unknown = JSON.parse(candidate);
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    if (hasDuplicateJsonKeys(candidate)) return null;
     return {text: candidate, value};
   } catch {
     return null;
@@ -109,6 +186,25 @@ async function claudeText(input: Input, signal: AbortSignal, cwd: string) {
     succeeded: result.succeeded && status === 0 && stdout.length + stderr.length <= maxOutput};
 }
 
+export function resolveModuleExamClaudeResult(
+  response: {succeeded: boolean; output: string; diagnostics: string[]},
+  secrets: string[],
+): {output: string; failureCode: string | null; usageWindows: UsageWindowsObservation | null} {
+  const redactedOutput = redactSecrets(response.output.trim(), secrets);
+  const parsed = response.succeeded ? parseModuleExamJsonObject(redactedOutput) : null;
+  const nonJson = response.succeeded && parsed === null;
+  const diagnostics = nonJson ? [...response.diagnostics, response.output.slice(-4000)] : response.diagnostics;
+  const limit = claudeLimitFromText(diagnostics);
+  if (response.succeeded && !limit && !diagnostics.some(providerFailureCode)) {
+    return {output: parsed?.text ?? redactedOutput, failureCode: null, usageWindows: null};
+  }
+  return {
+    output: '',
+    failureCode: limit?.failureCode ?? diagnostics.map(providerFailureCode).find(Boolean) ?? 'MODULE_EXAM_PROVIDER_FAILED',
+    usageWindows: limit?.usageWindows ?? null,
+  };
+}
+
 export async function runModuleExamWorker(input: Input) {
   const abort = new AbortController();
   const stop = () => abort.abort();
@@ -137,17 +233,7 @@ export async function runModuleExamWorker(input: Input) {
       Object.assign(process.env, {HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url, https_proxy: proxy.url, http_proxy: proxy.url});
       if (abort.signal.aborted) throw new Refusal('MODULE_EXAM_INTERRUPTED');
       const response = await claudeText(input, abort.signal, '/planning');
-      const redactedOutput = redactSecrets(response.output.trim(), [input.oauthAccessToken]);
-      const parsed = response.succeeded ? parseModuleExamJsonObject(redactedOutput) : null;
-      const nonJson = response.succeeded && parsed === null;
-      const diagnostics = nonJson ? [...response.diagnostics, response.output.slice(-4000)] : response.diagnostics;
-      const limit = claudeLimitFromText(diagnostics);
-      if (response.succeeded && !limit && !diagnostics.some(providerFailureCode)) {
-        output = parsed?.text ?? redactedOutput;
-      } else {
-        failureCode = limit?.failureCode ?? diagnostics.map(providerFailureCode).find(Boolean) ?? 'MODULE_EXAM_PROVIDER_FAILED';
-        usageWindows = limit?.usageWindows ?? null;
-      }
+      ({output, failureCode, usageWindows} = resolveModuleExamClaudeResult(response, [input.oauthAccessToken]));
     }
   } catch (error) {
     failureCode = abort.signal.aborted ? 'MODULE_EXAM_INTERRUPTED'
