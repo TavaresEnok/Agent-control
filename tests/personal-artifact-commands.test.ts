@@ -190,7 +190,7 @@ test('a candidate image is registered only when it exists locally, and a pinned 
   // Too recent to remove.
   assert.match((await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(Date.now()))).join('\n'),/registrada há 0 h \(mínimo 2 h\)/);
   await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(later));
-  assert.deepEqual(l.removed,[['image','rm',IMAGE]],'by id, never forced, never the pinned one');
+  assert.deepEqual(l.removed,[['image','rm','--no-prune',IMAGE]],'by id, never forced, never the pinned one');
  }finally{await done(l);}
 });
 
