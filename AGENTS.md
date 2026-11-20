@@ -130,3 +130,21 @@
   - Junte as verificações num só comando e leia só as últimas linhas dos logs (`tail -n 40`), nunca logs inteiros.
   - Delegue aos trabalhadores a leitura e a investigação longas, e receba só a conclusão no relatório deles.
   - Mantenha o histórico curto: o progresso fica em `docs/PROGRESSO-FINAL.md` e `docs/RELATORIO-NEXOISP.md`, não na memória da sessão.
+- **Segunda conta do Antigravity (titular, 20/11/2026 ~14:45 UTC).** A conta tavares.enok@gmail.com fica logada em `HOME=/home/app/.agy-enok`. Acionamento:
+  ```
+  HOME=/home/app/.agy-enok setsid nohup /home/app/.local/bin/agy -p "<ordem>" --model <modelo> --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &
+  ```
+  Ela tem `gemini-3.8-flash-high`, `claude-sonnet-4-6` e `claude-opus-4-6-thinking`. Os Gemini 4 e os Claude 5.5 não estão nessa conta. **A fila passa a ser esta**, substituindo a anterior:
+  - **Correções comuns:**
+    1. Hydrogen (ajust);
+    2. Argon (ajust);
+    3. Sonnet 5.5 alto (ajust, Antigravity);
+    4. **Sonnet 4.6 (enok, Antigravity)**;
+    5. Gemini 3.8 Flash alto, só para tarefas simples: primeiro na conta ajust, depois na conta enok;
+    6. Sonnet 5.5 alto na conta Claude Pro;
+    7. Sonnet 5.5 alto na conta Claude Max.
+  - **Correções graves:**
+    1. Opus 5.5 médio (ajust, Antigravity);
+    2. **Opus 4.6 Thinking (enok, Antigravity)**;
+    3. Opus 5.5 médio na conta Claude Max.
+  - **Trailers:** `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` e `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`.
