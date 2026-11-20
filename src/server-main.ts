@@ -284,10 +284,11 @@ async function main(){
       throw error;
      }
      const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
-     const {beginPersonalVerification}=await import('./verify-command.ts');
+     const {beginPersonalVerification,examRunOptions}=await import('./verify-command.ts');
+     const examOptions=examRunOptions(project.economy);
      const {personalAccountRoot}=await import('./personal-health.ts');
-     const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:project.economy?.managerDiscipline!==false});
-     return beginPersonalVerification({projectId:panel.projectId,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
+     const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:examOptions.pollBackoff});
+     return beginPersonalVerification({projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
     },
     recheck:async(principal,authority,input)=>{
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);

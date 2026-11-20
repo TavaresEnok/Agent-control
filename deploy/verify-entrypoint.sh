@@ -82,7 +82,23 @@ export TRIVY_CACHE_DIR=/databases/trivy
 cd /output
 
 # record_tool
-# 127 só quando command -v falha. Arquivo ausente, vazio, [] ou {} não é achado.
+# Guarda o código de saída REAL da ferramenta em NAME.code, a versão em NAME.version e a saída original em
+# NAME.stdout e NAME.stderr. Nada aqui troca um erro por zero: quem lê decide, por ferramenta, quais códigos
+# significam achado e quais significam erro (src/verify-collect.ts). 127 grava só quando command -v falha, ou
+# quando a ferramenta sai com 127 sem relatório. Com relatório de achados, 127 vira 1, como antes.
+record_version() {
+  name=$1
+  bin=$2
+  outdir=$3
+  version=''
+  if command -v timeout >/dev/null 2>&1; then
+    version=$(timeout 10 "$bin" --version 2>/dev/null) || version=$(timeout 10 "$bin" version 2>/dev/null) || version=''
+  else
+    version=$("$bin" --version 2>/dev/null) || version=$("$bin" version 2>/dev/null) || version=''
+  fi
+  printf '%s\n' "$version" | head -n 1 >"$outdir/${name}.version" || true
+}
+
 record_tool() {
   name=$1
   bin=$2
@@ -93,14 +109,11 @@ record_tool() {
     printf '%s\n' 127 >"$outdir/${name}.code"
     return 0
   fi
+  record_version "$name" "$bin" "$outdir"
   code=0
   "$@" >"$outdir/${name}.stdout" 2>"$outdir/${name}.stderr" || code=$?
-  if report_has_finding "$report"; then
-    if [ "$code" -eq 127 ]; then
-      code=1
-    fi
-  else
-    code=0
+  if [ "$code" -eq 127 ] && report_has_finding "$report"; then
+    code=1
   fi
   printf '%s\n' "$code" >"$outdir/${name}.code"
   return 0
@@ -175,6 +188,8 @@ for name in gitleaks osv-scanner syft grype opengrep hadolint trivy-config trivy
 done
 printf '\n}\n' >> /output/status.json
 
+# Só a ferramenta que não pôde rodar (127) derruba o exame. Um erro de outra ferramenta fica no código dela
+# e o relatório mostra a ferramenta como indisponível ou truncada, nunca como execução limpa.
 fail=0
 for name in gitleaks osv-scanner syft grype opengrep hadolint trivy-config trivy-fs checkov; do
   code=$(cat "/output/${name}.code")

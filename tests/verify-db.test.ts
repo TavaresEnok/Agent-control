@@ -474,7 +474,7 @@ test('um carimbo que resiste não desfaz o current e o seguinte ainda sai', asyn
   }
 });
 
-test('record_tool grava 127 só quando o binário não existe', async () => {
+test('record_tool guarda o código real da ferramenta e nunca troca erro por zero', async () => {
   const entry = await readFile('deploy/verify-entrypoint.sh', 'utf8');
   const start = entry.indexOf('# record_tool\n');
   const end = entry.indexOf('# end record_tool');
@@ -540,13 +540,18 @@ record_tool absent /bin/true "$OUT/nope.json" sh -c 'exit 4'
     const code = async (name: string) => (await readFile(join(dir, `${name}.code`), 'utf8')).trim();
     assert.equal(await code('missing'), '127');
     await assert.rejects(stat(join(dir, 'should-not-exist.json')));
-    assert.equal(await code('empty'), '0');
+    // Relatório vazio com saída 127 era trocado por 0 e virava "execução limpa". Agora o código real fica.
+    assert.equal(await code('empty'), '127');
     assert.equal(await readFile(join(dir, 'empty.json'), 'utf8'), '[]');
     assert.equal(await code('found'), '2');
     assert.equal(await code('killed'), '1');
-    assert.equal(await code('object'), '0');
-    assert.equal(await code('blank'), '0');
-    assert.equal(await code('absent'), '0');
+    assert.equal(await code('object'), '127');
+    assert.equal(await code('blank'), '3');
+    assert.equal(await code('absent'), '4');
+    // A versão e a saída original acompanham o código.
+    assert.equal(typeof (await readFile(join(dir, 'found.version'), 'utf8')), 'string');
+    await stat(join(dir, 'blank.stdout'));
+    await stat(join(dir, 'blank.stderr'));
   } finally {
     await rm(dir, {recursive: true, force: true});
   }

@@ -4,7 +4,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {hasKnownSecret} from './verify-redact.ts';
 import {batchReceiptsMarkdown, type BatchCallReceipt} from './exam-batch-proof.ts';
-import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
+import {Achado, CoverageRow, ReportSummary, ToolResult, type PartialStop} from './verify-types.ts';
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}(?:-[a-f0-9]{8})?-seguranca$/;
 const NEW_REPORT_DIRECTORY = /^\d{8}-\d{6}-[a-f0-9]{8}-seguranca$/;
@@ -171,21 +171,71 @@ function cell(value: string): string {
   return value.replace(/\r?\n/g, ' ');
 }
 
-function coverageMarkdown(rows: readonly CoverageRow[]): string {
+function coverageMarkdown(rows: readonly CoverageRow[], partial?: PartialStop): string {
   const lines = [
     '# Cobertura',
     '',
-    '| Arquivo | Examinador (provedor/modelo) | Itens da lista |',
-    '|---|---|---|',
-    ...rows.map(row => `| ${cell(row.file)} | ${cell(`${row.examinerProvider}/${row.examinerModel}`)} | ${cell(row.checklist.join(', '))} |`),
+    'Itens da lista são os que o examinador declarou para o arquivo. Pedidos são os que o plano pediu. Pendentes são os pedidos que ele não declarou.',
+    '',
+    '| Arquivo | Examinador (provedor/modelo) | Itens da lista | Pedidos | Pendentes |',
+    '|---|---|---|---|---|',
+    ...rows.map(row => `| ${cell(row.file)} | ${cell(`${row.examinerProvider}/${row.examinerModel}`)} | ${cell(row.checklist.join(', '))} | ${cell((row.requested ?? row.checklist).join(', '))} | ${cell((row.pending ?? []).join(', '))} |`),
     '',
   ];
+  if (partial) {
+    lines.push('## Arquivos pendentes', '', 'Sem julgamento do examinador. O exame parou antes deles por falta de orçamento.', '');
+    for (const file of partial.pendingFiles.slice(0, 500)) lines.push(`- ${cell(file)}`);
+    if (partial.pendingFiles.length > 500) lines.push(`- e mais ${partial.pendingFiles.length - 500} arquivos`);
+    if (partial.pendingFiles.length === 0) lines.push('- nenhum');
+    lines.push('');
+  }
   return lines.join('\n');
+}
+
+const TOOL_STATE_LABEL: Record<ToolResult['state'], string> = {
+  limpa: 'execução limpa',
+  achado: 'achado válido',
+  indisponivel: 'ferramenta indisponível',
+  truncada: 'saída truncada',
+};
+
+function toolStateCounts(tools: readonly ToolResult[]): NonNullable<ReportSummary['tools']> {
+  const counts = {limpa: 0, achado: 0, indisponivel: 0, truncada: 0};
+  for (const tool of tools) counts[tool.state] += 1;
+  return counts;
+}
+
+function toolsMarkdown(tools: readonly ToolResult[]): string[] {
+  if (tools.length === 0) return [];
+  return [
+    '## Execução das ferramentas',
+    '',
+    'Cada ferramenta tem o seu resultado. Só "execução limpa" vale como sem achados; "ferramenta indisponível" e "saída truncada" significam que ela não foi verificada.',
+    '',
+    '| Ferramenta | Versão | Código de saída | Arquivo esperado | Formato válido | Estado | Achados | Motivo |',
+    '|---|---|---|---|---|---|---|---|',
+    ...tools.map(tool => `| ${cell(tool.name)} | ${cell(tool.version ?? 'desconhecida')} | ${tool.exitCode ?? 'sem registro'} | ${cell(tool.expectedFile)}${tool.fileFound ? '' : ' (ausente)'} | ${tool.formatValid === null ? 'não se aplica' : tool.formatValid ? 'sim' : 'não'} | ${TOOL_STATE_LABEL[tool.state]} | ${tool.findings} | ${cell(tool.reason ?? '')} |`),
+    '',
+  ];
+}
+
+function partialMarkdown(partial: PartialStop): string[] {
+  return [
+    '## Relatório parcial',
+    '',
+    `O exame parou ${partial.point}: o orçamento de ${partial.budget} chamadas do modelo acabou (${partial.calls} usadas). O que foi concluído está neste relatório; o resto ficou pendente e nada foi promovido a confirmado sem revisão.`,
+    '',
+    `- Arquivos pendentes: ${partial.pendingFiles.length}. A lista está em cobertura.md.`,
+    `- Achados sem revisão independente: ${partial.unreviewed.length}.`,
+    ...partial.unreviewed.slice(0, 200).map(item => `  - ${item.replace(/\r?\n/g, ' ')}`),
+    '',
+  ];
 }
 
 function readme(input: {
   runId: string; directoryName: string; createdAt: Date; commit: string; note: string;
   total: number; counts: ReportSummary['counts']; discarded: number;
+  tools?: readonly ToolResult[]; partial?: PartialStop;
 }): string {
   const failing = input.counts.alta + input.counts.media + input.counts.baixa + input.counts.informativa;
   return [
@@ -200,6 +250,8 @@ function readme(input: {
     '',
     input.note,
     '',
+    ...(input.partial ? partialMarkdown(input.partial) : []),
+    ...toolsMarkdown(input.tools ?? []),
     '## Contagem por gravidade',
     '',
     'A contagem abaixo inclui só achados com situação confirmado ou reaberto.',
@@ -436,6 +488,10 @@ export async function writeSecurityReport(input: {
   directoryName?: string;
   /** Per-call batch receipts; appended to cobertura.md when present. */
   receipts?: readonly BatchCallReceipt[];
+  /** One result per exam tool. */
+  tools?: readonly ToolResult[];
+  /** Set when a budget stop ended the exam early. */
+  partial?: PartialStop;
 }): Promise<{directory: string; directoryName: string}> {
   assertSafeSegment(input.projectId);
   assertSafeSegment(input.runId);
@@ -447,12 +503,15 @@ export async function writeSecurityReport(input: {
   const directoryName = reserved ? givenName : directoryNameOf(input.createdAt, input.runId);
   if (!REPORT_DIRECTORY.test(directoryName)) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   const counts = failureCounts(achados);
+  const tools = (input.tools ?? []).map(item => ToolResult.parse(item));
   const summaryParsed = ReportSummary.safeParse({
     id: input.runId,
     directoryName,
     createdAt: input.createdAt.toISOString(),
     counts,
     note: input.note,
+    ...(input.partial ? {partial: true} : {}),
+    ...(tools.length ? {tools: toolStateCounts(tools)} : {}),
   });
   if (!summaryParsed.success) throw new Refusal('VERIFY_REPORT_INVALID', 400);
   const summary = summaryParsed.data;
@@ -467,9 +526,11 @@ export async function writeSecurityReport(input: {
       total: achados.length,
       counts,
       discarded,
+      tools,
+      ...(input.partial ? {partial: input.partial} : {}),
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
-    {segments: ['cobertura.md'], body: guard(`${coverageMarkdown(coverage)}${input.receipts?.length ? `\n${batchReceiptsMarkdown(input.receipts)}` : ''}`)},
+    {segments: ['cobertura.md'], body: guard(`${coverageMarkdown(coverage, input.partial)}${input.receipts?.length ? `\n${batchReceiptsMarkdown(input.receipts)}` : ''}`)},
     {segments: ['achados.json'], body: guard(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guard(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},

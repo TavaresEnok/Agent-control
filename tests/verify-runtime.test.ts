@@ -672,21 +672,22 @@ test('orçamento de chamadas barra a próxima e o padrão permite mais de uma', 
   try {
     await mkdir(join(ready.repo, 'src'), {recursive: true});
     await writeFile(join(ready.repo, 'src', 'app.ts'), 'export const q = "SQL concatenado";\n');
-    const budgetRefused = (error: unknown) => {
-      assert.equal(error instanceof Error, true);
-      assert.equal((error as Error).message, 'VERIFY_MODEL_BUDGET');
-      return true;
-    };
+    // O teto não derruba mais o exame: o que foi feito é publicado como relatório parcial com o ponto de parada.
     const first = {count: 0};
     calls.length = 0;
-    await assert.rejects(() => runSecurityVerification({...base, modelCalls: first, modelCallBudget: 1}), budgetRefused);
+    const afterMap = await runSecurityVerification({...base, modelCalls: first, modelCallBudget: 1});
     assert.equal(calls.length, 1);
     assert.equal(first.count, 1);
+    assert.equal(afterMap.partial?.phase, 'exame');
+    assert.deepEqual(afterMap.partial?.pendingFiles, ['src/app.ts']);
     const second = {count: 0};
     calls.length = 0;
-    await assert.rejects(() => runSecurityVerification({...base, modelCalls: second, modelCallBudget: 2}), budgetRefused);
+    const afterExam = await runSecurityVerification({...base, modelCalls: second, modelCallBudget: 2});
     assert.equal(calls.length, 2);
     assert.equal(second.count, 2);
+    assert.equal(afterExam.partial?.phase, 'confirmacao');
+    assert.equal(afterExam.achados.length, 1);
+    assert.equal(afterExam.achados[0]?.status, 'provavel');
     const open = {count: 0};
     calls.length = 0;
     const result = await runSecurityVerification({...base, modelCalls: open});

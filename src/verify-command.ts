@@ -35,7 +35,18 @@ export const EXAM_TIME_LIMIT_MS = 21_600_000;
 export const NETWORK_COMMAND_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 60_000;
 
-export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string; staticPersonalExam?: true; retention?: RoundScope}) => Promise<void>;
+/** Economy options of a project that shape one exam. The panel and the CLI both build them here, so the same project and inventory give the same map, tasks and slices. */
+export type ExamRunOptions = {mapEnabled: boolean; batch: SecurityBatch; pollBackoff: boolean};
+export function examRunOptions(economy: {map?: boolean; batch?: boolean; batchTokens?: number; batchFiles?: number; managerDiscipline?: boolean} | undefined): ExamRunOptions {
+  return {
+    mapEnabled: economy?.map !== false,
+    batch: economy?.batch === false ? false : {tokens: economy?.batchTokens ?? 40_000, files: economy?.batchFiles ?? 8},
+    pollBackoff: economy?.managerDiscipline !== false,
+  };
+}
+
+/** `snapshot` is the exam's single admitted snapshot (the private parent folder, as prepareExamSnapshot returns it). The caller owns and removes it. */
+export type ToolRun = (spec: {image: string; repository: string; databases: string; output: string; staticPersonalExam?: true; retention?: RoundScope; snapshot?: string}) => Promise<void>;
 type NetworkRunner = (args: readonly string[]) => Promise<{code: number; stdout: string}>;
 const STAMP_DIRECTORY = /^\d{8}-\d{6}(?:-\d+)?$/;
 
@@ -391,11 +402,13 @@ export async function prepareExamSnapshot(repoPath: string, commit: string, stat
 
 /** The exam user is not the directory owner, so the mount is widened only while the process runs. */
 export async function defaultRunTools(
-  spec: {image: string; repository: string; databases: string; output: string; commit: string; staticPersonalExam?: true; retention?: RoundScope},
+  spec: {image: string; repository: string; databases: string; output: string; commit: string; staticPersonalExam?: true; retention?: RoundScope; snapshot?: string},
   timeLimitMs: number = EXAM_TIME_LIMIT_MS,
   execute?: (args: readonly string[]) => Promise<void>,
 ): Promise<void> {
-  const snapshot = await prepareExamSnapshot(spec.repository, spec.commit, spec.staticPersonalExam, spec.retention);
+  // With a snapshot from the caller the tools read the very tree the runtime examines. Without one (direct use) this call makes and removes its own.
+  const own = spec.snapshot === undefined;
+  const snapshot = spec.snapshot ?? await prepareExamSnapshot(spec.repository, spec.commit, spec.staticPersonalExam, spec.retention);
   try {
     const args = verifyExamArguments({
       image: spec.image,
@@ -413,8 +426,13 @@ export async function defaultRunTools(
       await chmod(spec.output, 0o700);
     }
   } finally {
-    await rm(snapshot, {recursive: true, force: true});
+    if (own) await rm(snapshot, {recursive: true, force: true});
   }
+}
+
+/** The checkout inside a snapshot: the parent itself, or its `repository` child for the personal static exam. */
+export function examSnapshotRoot(snapshot: string, staticPersonalExam: boolean): string {
+  return staticPersonalExam ? join(snapshot, 'repository') : snapshot;
 }
 
 function claimableDatabaseStamp(dataDirectory: string, databasesDirectory: string): string | undefined {
@@ -527,8 +545,10 @@ async function runJob(input: {
   network?: string;
   container?: string;
   networkRunner: NetworkRunner;
+  /** The exam's single snapshot (parent folder). runJob removes it when the job ends. */
+  snapshot: string;
 }): Promise<void> {
-  const {ready, id, output, progressPath, state, modelCalls, startedMs} = input;
+  const {ready, id, output, progressPath, state, modelCalls, startedMs, snapshot} = input;
   const onPhase = async (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => {
     state.phase = phase;
     await writePrivateFile(progressPath, renderProgress(state));
@@ -537,9 +557,14 @@ async function runJob(input: {
     try {
       const runTools: ToolRun = ready.runTools ?? (spec => defaultRunTools({...spec, commit: ready.commit}, ready.timeLimitMs));
       assertExamDeadline(startedMs, ready.timeLimitMs);
+      const retention = {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id};
+      // The tools, the file list, the map, the hashes, the excerpts and the reviewer all read the one snapshot made when the
+      // exam began. The checkout the owner keeps editing is only asked for history bound to the commit.
+      const examRoot = examSnapshotRoot(snapshot, Boolean(ready.staticPolicy));
       await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output,
         ...(ready.staticPolicy ? {staticPersonalExam: true} : {}),
-        retention: {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id},
+        retention,
+        snapshot,
       });
       const collected = await collectToolFindings(output);
       assertExamDeadline(startedMs, ready.timeLimitMs);
@@ -549,11 +574,13 @@ async function runJob(input: {
         authority: ready.authority,
         projectId: ready.projectId,
         repoPath: ready.repoPath,
+        examRoot,
         dataDirectory: ready.dataDirectory,
         commit: ready.commit,
         policyRevision: ready.policyRevision,
         worker: workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs),
         rawFindings: collected.findings,
+        toolResults: collected.tools,
         runId: id,
         onPhase,
         modelCalls,
@@ -563,11 +590,12 @@ async function runJob(input: {
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
-      if (ready.staticPolicy) {
-        await runResolvedPersonalSecurityVerification(verification);
-      } else {
-        await runSecurityVerification(verification);
-      }
+      const result = ready.staticPolicy
+        ? await runResolvedPersonalSecurityVerification(verification)
+        : await runSecurityVerification(verification);
+      if (result.partial) state.note = `Relatório parcial: parou ${result.partial.point} por falta de orçamento de chamadas do modelo.${state.note ? ` ${state.note}` : ''}`;
+      const unavailable = collected.tools.filter(tool => tool.state === 'indisponivel' || tool.state === 'truncada');
+      if (unavailable.length) state.note = `${state.note ? `${state.note} ` : ''}Ferramentas sem resultado completo: ${unavailable.map(tool => tool.name).join(', ')}.`;
       state.status = 'done';
       state.phase = 'done';
       state.modelCalls = modelCalls.count;
@@ -587,7 +615,9 @@ async function runJob(input: {
       throw error;
     }
   } finally {
-    // The job reached its end (done or failed) and the snapshot was removed by the tool run: leftovers may now age out.
+    // The one snapshot lives for the whole exam and goes away here, done or failed.
+    await rm(snapshot, {recursive: true, force: true}).catch(() => undefined);
+    // The job reached its end (done or failed): leftovers may now age out.
     await endRound({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id});
     try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp, id); }
     catch { /* the exam result stays visible */ }
@@ -637,19 +667,24 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   }
   let started = false;
   let databaseStamp: string | undefined;
+  let snapshot: string | undefined;
   try {
     if (network && container) await attachHomologation(network, container, networkRunner);
     databaseStamp = await claimExamDatabase(ready.dataDirectory, ready.databasesDirectory, id);
     const output = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'ferramentas', id]);
     const progressPath = join(progressDir, `${id}.json`);
     await writePrivateFile(progressPath, renderProgress(state));
-    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner});
+    // ONE snapshot of the admitted commit per exam, made before any tool or model call and kept until the job ends.
+    snapshot = await prepareExamSnapshot(ready.repoPath, ready.commit, Boolean(ready.staticPolicy),
+      ready.staticPolicy ? {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id} : undefined);
+    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot});
     started = true;
     input.observe?.(job);
     void job.catch(() => undefined);
     return {id, status: 'running', phase: 'ferramentas'};
   } catch (error) {
     if (!started) {
+      if (snapshot) await rm(snapshot, {recursive: true, force: true}).catch(() => undefined);
       try { await releaseExamDatabase(ready.dataDirectory, databaseStamp, id); } catch { /* keep the original error */ }
       try { await releaseRunningLock(lockPath, id); } catch { /* keep the original error */ }
       if (network && container) {
@@ -818,7 +853,7 @@ export async function resolvePersonalVerification(
       authority,
       base: commit,
       releaseGrant: (grantId, how) => releaseCapacityGrant(ledger, principal, authority!, grantId, how),
-      pollBackoff: project.economy?.managerDiscipline !== false,
+      pollBackoff: examRunOptions(project.economy).pollBackoff,
     });
     const image = await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
@@ -830,8 +865,8 @@ export async function resolvePersonalVerification(
       input: {
         installationPath: resolve(parsed.installationPath),
         projectId: project.id,
-        mapEnabled: project.economy?.map,
-        batch: project.economy?.batch === false ? false : {tokens: project.economy?.batchTokens ?? 40_000, files: project.economy?.batchFiles ?? 8},
+        mapEnabled: examRunOptions(project.economy).mapEnabled,
+        batch: examRunOptions(project.economy).batch,
         url: parsed.url,
         dataDirectory: config.dataDirectory,
         accountRoot: personalAccountRoot(config),

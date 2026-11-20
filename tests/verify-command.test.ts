@@ -45,6 +45,16 @@ async function allowHomologation(root: string, containers: readonly string[]): P
   return file;
 }
 
+/** A real commit in `dir`. The exam makes one git-archive snapshot when it begins, so a fake repository no longer reaches the tools. */
+async function commitDirectory(dir: string): Promise<string> {
+  const env = {...process.env, GIT_AUTHOR_NAME: 'verify', GIT_AUTHOR_EMAIL: 'verify@example.com', GIT_COMMITTER_NAME: 'verify', GIT_COMMITTER_EMAIL: 'verify@example.com'};
+  await writeFile(join(dir, 'seed.txt'), 'seed\n');
+  await exec('git', ['init', '-q'], {cwd: dir, env});
+  await exec('git', ['add', 'seed.txt'], {cwd: dir, env});
+  await exec('git', ['commit', '-q', '-m', 'seed'], {cwd: dir, env});
+  return (await exec('git', ['rev-parse', 'HEAD'], {cwd: dir})).stdout.trim();
+}
+
 function blockedInput(dataDirectory: string, databases: string, extra: Record<string, unknown> = {}) {
   return {
     projectId: randomUUID(),
@@ -285,11 +295,12 @@ test('prazo esgotado não chama ferramentas nem o worker', async () => {
   let observed: Promise<void> | undefined;
   try {
     await db.migrate();
+    const seed = await commitDirectory(dataDirectory);
     const begun = await beginPersonalVerification({
       projectId,
       dataDirectory,
       repoPath: dataDirectory,
-      commit: 'a'.repeat(40),
+      commit: seed,
       ledger: db,
       principal: 'verify-owner',
       authority: {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1},
@@ -337,12 +348,13 @@ test('contêiner alvo entra na rede interna e o laço não varre', async () => {
   let network = '';
   try {
     const installationPath = await allowHomologation(installRoot, ['verify-alvo']);
+    const seed = await commitDirectory(dataDirectory);
     const begun = await beginPersonalVerification({
       projectId,
       url: 'http://verify-alvo:9/app',
       dataDirectory,
       repoPath: dataDirectory,
-      commit: 'ab'.repeat(20),
+      commit: seed,
       ledger: {} as Ledger,
       principal: 'verify-owner',
       authority: {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1},
@@ -442,6 +454,7 @@ test('contêiner fora da lista não cria rede; na lista, o rm acontece se as fer
   let tools = 0;
   let observed: Promise<void> | undefined;
   try {
+    const seed = await commitDirectory(dataDirectory);
     await assert.rejects(() => beginPersonalVerification({
       ...blockedInput(dataDirectory, databases, {
         url: 'http://verify-alvo:9/app',
@@ -467,6 +480,7 @@ test('contêiner fora da lista não cria rede; na lista, o rm acontece se as fer
         url: 'http://verify-alvo:9/app',
         installationPath: allowed,
         networkRunner: run,
+        commit: seed,
       }),
       runTools: async () => { tools += 1; throw new Error('ferramentas'); },
       observe: job => { observed = job; },
@@ -567,8 +581,9 @@ test('o carimbo da base é reivindicado no início e solto se o exame falha', as
   let toolsDir = '';
   try {
     await mkdir(databases, {recursive: true, mode: 0o700});
+    const seed = await commitDirectory(dataDirectory);
     const started = await beginPersonalVerification({
-      ...blockedInput(dataDirectory, databases, {projectId}),
+      ...blockedInput(dataDirectory, databases, {projectId, commit: seed}),
       runTools: async () => {
         const dir = join(dataDirectory, 'verify-db', 'in-use');
         const names = (await readdir(dir)).filter((name) => name.endsWith('.json')).sort();

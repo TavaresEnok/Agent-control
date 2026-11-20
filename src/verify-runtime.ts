@@ -29,6 +29,8 @@ import {
   RawFinding,
   VerifyWorkerCall,
   type ChecklistItem,
+  type PartialStop,
+  type ToolResult,
   type VerifySeverity,
   type VerifyWorker,
 } from './verify-types.ts';
@@ -38,12 +40,17 @@ export type SecurityVerificationInput = {
   principal: string;
   authority: Authority;
   projectId: string;
+  /** Origin repository. Only history queries bound to `commit` read it; the examined content comes from `examRoot`. */
   repoPath: string;
+  /** The one snapshot admitted for this exam (git archive of `commit`). Listing, map, hashes, excerpts and the reviewer read it. Absent keeps `repoPath`. */
+  examRoot?: string;
   dataDirectory: string;
   commit: string;
   policyRevision: number;
   worker: VerifyWorker;
   rawFindings?: RawFinding[];
+  /** One result per exam tool (version, exit code, file, format, state). Absent when the tools were not run by the entrypoint. */
+  toolResults?: readonly ToolResult[];
   checklist?: readonly ChecklistItem[];
   runId?: string;
   onPhase?: (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => void | Promise<void>;
@@ -103,6 +110,7 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   directory: string;
   achados: Achado[];
   coverage: CoverageRow[];
+  partial?: PartialStop;
 }> {
   return runVerificationWithPolicy(input);
 }
@@ -113,6 +121,7 @@ export async function runResolvedPersonalSecurityVerification(input: SecurityVer
   directory: string;
   achados: Achado[];
   coverage: CoverageRow[];
+  partial?: PartialStop;
 }> {
   const policy = authorizedStaticCliPolicy(input);
   if (!policy) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
@@ -127,6 +136,7 @@ async function runVerificationWithPolicy(
   directory: string;
   achados: Achado[];
   coverage: CoverageRow[];
+  partial?: PartialStop;
 }> {
   const modelCallBudget = resolveModelCallBudget(input.modelCallBudget);
   await assertPersonalActivation(input.ledger);
@@ -197,14 +207,19 @@ async function examine(
   if (input.notes?.length) notes.push(...input.notes);
   const rawFindings = (input.rawFindings ?? []).map(item => replaceRefusedRaw(RawFinding.parse(item), notes));
   const checklist = input.checklist ?? loadSecurityChecklist();
-  const files = await listExamFiles(input.repoPath);
+  const root = input.examRoot ?? input.repoPath;
+  const files = await listExamFiles(root);
   const allowedFiles = new Set(files);
-  const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(input.repoPath, files), input.batch);
+  const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(root, files), input.batch);
   const receipts: BatchCallReceipt[] = [];
   const pending = new Set<string>();
-  const compactMap = input.mapEnabled === false || !files.length ? null : await generateRepoMapSafe({repoPath: input.repoPath, source: 'directory', useCache: false});
+  const budgetLeft = () => modelCallBudget - trackedCalls.count;
+  let stop: {phase: PartialStop['phase']; point: string} | null = null;
+  const stopAt = (phase: PartialStop['phase'], point: string) => { if (!stop) stop = {phase, point}; };
+  const unreviewed: string[] = [];
+  const compactMap = input.mapEnabled === false || !files.length ? null : await generateRepoMapSafe({repoPath: root, source: 'directory', useCache: false});
   if (compactMap && !compactMap.map) notes.push('Mapa compacto do repositório indisponível.');
-  const history = await deletedHistoryExcerpt(input.repoPath);
+  const history = await deletedHistoryExcerpt(input.repoPath, input.examRoot ? input.commit : undefined);
   const coverage = new Map<string, CoverageRow>();
   const open: OpenFinding[] = [];
   const exams: unknown[] = [];
@@ -218,15 +233,21 @@ async function examine(
     notes.push('Nenhum arquivo para examinar.');
   } else {
     if (input.onPhase) await input.onPhase('mapa');
-    const mapped = await reserveAndRun(input, capacity, intent.id, 'examiner', mapTask(files), 'verify-map', modelCallBudget, trackedCalls, undefined, undefined, undefined, staticPolicy);
-    mapSeat = mapped.seat;
-    mapAccountId = mapped.seat.accountId;
-    mapProfileId = mapped.seat.profileId;
-    const parsed = MapResult.safeParse(coerceMapResult(parseJson(mapped.output)));
-    if (parsed.success) map = parsed.data;
-    else {
-      map = minimalMap(files);
-      notes.push('O mapa não veio em JSON válido. A lista de arquivos ficou no lugar.');
+    if (budgetLeft() < 1) {
+      // Out of calls before the map: nothing was judged, every file stays pending and the report says where it stopped.
+      stopAt('mapa', 'antes do mapa');
+      notes.push('O orçamento de chamadas do modelo acabou antes do mapa.');
+    } else {
+      const mapped = await reserveAndRun(input, capacity, intent.id, 'examiner', mapTask(files), 'verify-map', modelCallBudget, trackedCalls, undefined, undefined, undefined, staticPolicy);
+      mapSeat = mapped.seat;
+      mapAccountId = mapped.seat.accountId;
+      mapProfileId = mapped.seat.profileId;
+      const parsed = MapResult.safeParse(coerceMapResult(parseJson(mapped.output)));
+      if (parsed.success) map = parsed.data;
+      else {
+        map = minimalMap(files);
+        notes.push('O mapa não veio em JSON válido. A lista de arquivos ficou no lugar.');
+      }
     }
     mapMarkdown = redactUnknownSecrets(mapToMarkdown(map, files));
     if (input.onPhase) await input.onPhase('exame');
@@ -242,10 +263,10 @@ async function examine(
         scope: 'seguranca', callId: slice.id, intentId: intent.id,
         provider: examined.seat.provider, model: examined.seat.model, accountId: examined.seat.accountId,
         profileId: examined.seat.profileId, grantId: examined.seat.grantId, sessionId: examined.sessionId,
-        files: await Promise.all(slice.files.map(async file => ({file, sha256: await examFileSha256(input.repoPath, file), judged: read.has(file)}))),
+        files: await Promise.all(slice.files.map(async file => ({file, sha256: await examFileSha256(root, file), judged: read.has(file)}))),
       }));
-      const ids = checklistIds(slice.checklist, exam.success ? exam.data.checklist : []);
-      for (const file of judged) addCoverage(coverage, file, examined.seat, ids);
+      const declared = exam.success ? exam.data.checklist : [];
+      for (const file of judged) addCoverage(coverage, file, examined.seat, slice.checklist, declared);
       if (!exam.success) notes.push(`A fatia ${slice.id} não devolveu exame válido.`);
       else if (unjudged.length) notes.push(`O examinador não marcou como lido: ${unjudged.join(', ')}.`);
       if (!exam.success) return unjudged;
@@ -280,22 +301,30 @@ async function examine(
       }
       return unjudged;
     };
+    // Mandatory phase first: every slice, in order. A file a batch did not judge is queued for a single-file retry, which is optional.
+    const retryQueue: {file: string; sliceId: string}[] = [];
     for (const slice of slices) {
       if (!slice.files.length) continue;
+      if (budgetLeft() < 1) {
+        stopAt('exame', `antes da fatia ${slice.id}`);
+        for (const file of slice.files) pending.add(file);
+        continue;
+      }
       const unjudged = await examineSlice(slice, false);
-      // No file stays without a judgment silently: the model failed the batch, so each missing file is asked alone.
-      if (slice.files.length > 1) {
-        for (const file of unjudged) {
-          // Out of model calls: the file stays visible as pending instead of aborting the whole job.
-          if (trackedCalls.count >= modelCallBudget) {
-            pending.add(file);
-            if (!notes.includes(BUDGET_RETRY_NOTE)) notes.push(BUDGET_RETRY_NOTE);
-            continue;
-          }
-          const alone = await examineSlice(singleFileSlice(file, checklist, `${slice.id}-${file}`.slice(0, 80)), true);
-          if (alone.length) pending.add(file);
-        }
-      } else for (const file of unjudged) pending.add(file);
+      // No file stays without a judgment silently: the model failed the batch, so each missing file is asked alone, later and only with spare budget.
+      if (slice.files.length > 1) for (const file of unjudged) retryQueue.push({file, sliceId: slice.id});
+      else for (const file of unjudged) pending.add(file);
+    }
+    for (const item of retryQueue) {
+      // The retry may only spend what the confirmations of the findings already open (and of the tools) will not need.
+      const owed = open.length + rawFindings.length;
+      if (budgetLeft() - 1 < owed) {
+        pending.add(item.file);
+        if (!notes.includes(BUDGET_RETRY_NOTE)) notes.push(BUDGET_RETRY_NOTE);
+        continue;
+      }
+      const alone = await examineSlice(singleFileSlice(item.file, checklist, `${item.sliceId}-${item.file}`.slice(0, 80)), true);
+      if (alone.length) pending.add(item.file);
     }
     for (const file of [...pending].sort()) notes.push(`Arquivo pendente, sem julgamento do examinador: ${file}.`);
   }
@@ -323,10 +352,11 @@ async function examine(
   }
 
   if (mapSeat) {
-    const fallback = checklistIds(checklist.map(item => item.id), []);
+    const everything = checklist.map(item => item.id);
     for (const file of files) {
       if (coverage.has(file) || pending.has(file)) continue;
-      addCoverage(coverage, file, mapSeat, fallback);
+      // The map judges no checklist item: the file is listed with every item still pending.
+      addCoverage(coverage, file, mapSeat, everything, []);
       notes.push(`Arquivo fora das fatias, coberto pelo mapa: ${file}.`);
     }
   }
@@ -338,10 +368,34 @@ async function examine(
     if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
     const avoid = finding.examinerAccountId ?? mapAccountId;
     const avoidProfile = finding.examinerProfileId ?? mapProfileId;
+    if (budgetLeft() < 1) {
+      // Out of calls: the finding is kept as it came, never promoted. It is "provavel", without a verifier, and listed as unreviewed.
+      stopAt('confirmacao', `no achado ${achados.length + 1} de ${open.length}`);
+      const title = clipSecret(finding.title, 200) || 'Achado';
+      const snippet = clipSecret(finding.snippet, 240);
+      const where = `${finding.file}:${finding.line ?? '-'}`;
+      unreviewed.push(`ACH-${String(achados.length + 1).padStart(3, '0')} ${where} ${title}`.slice(0, 500));
+      achados.push(Achado.parse({
+        id: `ACH-${String(achados.length + 1).padStart(3, '0')}`,
+        title,
+        severity: finding.severity,
+        status: 'provavel',
+        verifier: null,
+        reference: clipSecret(finding.reference, 200) || title,
+        where: {file: finding.file, line: finding.line},
+        scenario: clipSecret(finding.scenario, 2000) || title,
+        proof: UNREVIEWED_PROOF,
+        suggestion: clipSecret(finding.suggestion, 2000) || 'Rever o ponto.',
+        acceptance: REMEDIATION_ACCEPTANCE,
+        sources: [...finding.sources, 'sem revisão'].map(source => clipSecret(source, 200)).filter(source => source.length > 0).slice(0, 20),
+        secretPreview: previewOf(snippet),
+      }));
+      continue;
+    }
     const highExaminerFinding = Boolean(
       staticPolicy && finding.examinerProvider !== null && finding.severity === 'alta',
     );
-    const content = await readRepoText(input.repoPath, finding.file, finding.line, allowedFiles);
+    const content = await readRepoText(root, finding.file, finding.line, allowedFiles);
     const reviewed = await reserveAndRun(
       input,
       capacity,
@@ -393,7 +447,26 @@ async function examine(
   const rows = orderedCoverage(files, coverage);
   const strip = takeExamStripNote(intent.id);
   if (strip) notes.push(strip);
-  const note = redactUnknownSecrets(notes.length ? notes.join(' ') : 'Verificação somente leitura concluída.').slice(0, 500);
+  const stopped = stop as {phase: PartialStop['phase']; point: string} | null;
+  const partial: PartialStop | undefined = stopped ? {
+    phase: stopped.phase,
+    reason: 'VERIFY_MODEL_BUDGET',
+    point: stopped.point,
+    budget: modelCallBudget,
+    calls: trackedCalls.count,
+    pendingFiles: [...pending].sort(),
+    unreviewed,
+  } : undefined;
+  // What matters most leads the note, because the stored summary is clipped.
+  const headline: string[] = [];
+  if (partial) headline.push(`Relatório parcial: parou ${partial.point} por falta de orçamento (${partial.calls} de ${partial.budget} chamadas); ${partial.pendingFiles.length} arquivos pendentes e ${partial.unreviewed.length} achados sem revisão.`);
+  const toolResults = input.toolResults ?? [];
+  for (const tool of toolResults) {
+    if (tool.state === 'indisponivel') headline.push(`Ferramenta ${tool.name} indisponível: ${tool.reason ?? 'sem motivo'}.`);
+    else if (tool.state === 'truncada') headline.push(`Ferramenta ${tool.name} com saída truncada: ${tool.reason ?? 'sem motivo'}.`);
+  }
+  const allNotes = [...headline, ...notes];
+  const note = redactUnknownSecrets(allNotes.length ? allNotes.join(' ') : 'Verificação somente leitura concluída.').slice(0, 500);
   if (input.onPhase) await input.onPhase('relatorio');
   const report = await writeSecurityReport({
     dataDirectory: input.dataDirectory,
@@ -404,10 +477,12 @@ async function examine(
     mapMarkdown: redactUnknownSecrets(mapMarkdown),
     coverage: rows,
     achados,
-    raw: redactPersisted({map, exams, rawFindings, confirmations: confirms, receipts}),
+    raw: redactPersisted({map, exams, rawFindings, confirmations: confirms, receipts, tools: toolResults, partial: partial ?? null}),
     receipts,
     note,
     directoryName,
+    tools: toolResults,
+    ...(partial ? {partial} : {}),
   });
   await input.ledger.tx(async c => {
     await input.ledger.authorize(c, input.principal, input.authority.contextId);
@@ -436,7 +511,7 @@ async function examine(
     if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
     await finishExamIntentTx(c, input.ledger, {intentId: intent.id, contextId: input.authority.contextId}, 'done');
   });
-  return {runId, directory: report.directory, achados, coverage: rows};
+  return {runId, directory: report.directory, achados, coverage: rows, ...(partial ? {partial} : {})};
 }
 
 type HighReviewCheck = {
@@ -450,6 +525,7 @@ function nonEmptySessionId(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+const UNREVIEWED_PROOF = 'Sem revisão independente: o orçamento de chamadas do modelo acabou antes da confirmação. Não é um achado confirmado.';
 const BUDGET_RETRY_NOTE = 'O orçamento de chamadas do modelo acabou antes do reexame individual de alguns arquivos; eles ficaram pendentes.';
 
 async function reserveAndRun(
@@ -525,7 +601,7 @@ async function reserveAndRun(
       grantId: seat.grantId,
       intentId,
       task: redactText(task, secrets).slice(0, 100_000),
-      repo: input.repoPath,
+      repo: input.examRoot ?? input.repoPath,
       writePaths: [] as const,
     });
     trackedCalls.count += 1;
@@ -921,19 +997,38 @@ function parseJson(text: string): unknown {
   }
 }
 
-function checklistIds(primary: readonly string[], fallback: readonly string[]): string[] {
-  const chosen = (primary.length ? primary : fallback).map(id => id.slice(0, 80)).filter(id => id.length > 0);
-  return (chosen.length ? chosen : ['SEM-ITEM']).slice(0, 80);
+function uniqueIds(ids: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = raw.slice(0, 80);
+    if (id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out.slice(0, 200);
 }
 
-function addCoverage(coverage: Map<string, CoverageRow>, file: string, seat: Seat, checklist: string[]) {
-  if (coverage.has(file)) return;
+/**
+ * Coverage is what the examiner declared, never what the plan asked. `requested` is the planned list, `checklist` the
+ * confirmed part of it (declared AND requested; with no planned list the declaration stands) and `pending` the rest.
+ * A second examination of the same file merges, so a gap stays visible after a re-examination.
+ */
+function addCoverage(coverage: Map<string, CoverageRow>, file: string, seat: Seat, requested: readonly string[], declared: readonly string[]) {
+  const planned = uniqueIds(requested);
+  const said = uniqueIds(declared);
+  const confirmed = planned.length ? said.filter(id => planned.includes(id)) : said;
+  const before = coverage.get(file);
+  const allRequested = uniqueIds([...(before?.requested ?? []), ...planned]);
+  const allConfirmed = uniqueIds([...(before?.checklist ?? []), ...confirmed]);
   coverage.set(file, CoverageRow.parse({
     file,
-    examinerProvider: seat.provider,
-    examinerModel: seat.model,
-    profileId: seat.profileId,
-    checklist,
+    examinerProvider: before?.examinerProvider ?? seat.provider,
+    examinerModel: before?.examinerModel ?? seat.model,
+    profileId: before ? before.profileId : seat.profileId,
+    checklist: allConfirmed,
+    requested: allRequested,
+    pending: allRequested.filter(id => !allConfirmed.includes(id)),
   }));
 }
 
@@ -947,7 +1042,7 @@ function orderedCoverage(files: readonly string[], coverage: Map<string, Coverag
 }
 
 /** Git log of deleted paths. The environment is not inherited, so account secrets never ride along. */
-export function buildHistoryGitInvocation(): {args: string[]; env: Record<string, string>} {
+export function buildHistoryGitInvocation(commit?: string): {args: string[]; env: Record<string, string>} {
   const path = typeof process.env.PATH === 'string' && process.env.PATH.length > 0 ? process.env.PATH : '/usr/bin:/bin';
   return {
     args: [
@@ -960,6 +1055,8 @@ export function buildHistoryGitInvocation(): {args: string[]; env: Record<string
       '--pretty=format:%h',
       '--no-ext-diff',
       '--no-textconv',
+      // Bound to the admitted commit, not to whatever HEAD became while the exam ran.
+      ...(commit && /^[a-f0-9]{40}$/.test(commit) ? [commit, '--'] : []),
     ],
     env: {
       PATH: path,
@@ -994,9 +1091,9 @@ function stripSecretClassDiffs(log: string): string {
 }
 
 /** The model mount has no .git. A short redacted log is the only view of a deleted credential. */
-export async function deletedHistoryExcerpt(repoPath: string): Promise<string> {
+export async function deletedHistoryExcerpt(repoPath: string, commit?: string): Promise<string> {
   try {
-    const invocation = buildHistoryGitInvocation();
+    const invocation = buildHistoryGitInvocation(commit);
     const result = await execGit('git', invocation.args, {
       cwd: repoPath,
       timeout: 8000,

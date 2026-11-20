@@ -112,14 +112,51 @@ export const Achado = z.object({
 }).strict();
 export type Achado = z.infer<typeof Achado>;
 
+/** `checklist` is the confirmed list: only what the examiner declared for the file. `requested` is what the plan asked and
+ * `pending` is the part of `requested` the examiner did not declare, so a gap stays visible after any re-examination. */
 export const CoverageRow = z.object({
   file: z.string().min(1).max(400),
   examinerProvider: z.string().min(1).max(80),
   examinerModel: z.string().min(1).max(100),
   profileId: Id.nullable(),
-  checklist: z.array(z.string().min(1).max(80)).min(1),
+  checklist: z.array(z.string().min(1).max(80)),
+  requested: z.array(z.string().min(1).max(80)).optional(),
+  pending: z.array(z.string().min(1).max(80)).optional(),
 }).strict();
 export type CoverageRow = z.infer<typeof CoverageRow>;
+
+/** clean run, valid findings, tool unavailable or failed, truncated or unreadable output. */
+export const ToolState = z.enum(['limpa', 'achado', 'indisponivel', 'truncada']);
+export type ToolState = z.infer<typeof ToolState>;
+
+/** One result per exam tool, kept next to the report. `reason` says why a tool was dismissed. */
+export const ToolResult = z.object({
+  name: z.string().min(1).max(40),
+  tool: z.string().min(1).max(40),
+  version: z.string().max(200).nullable(),
+  exitCode: z.number().int().nullable(),
+  expectedFile: z.string().min(1).max(100),
+  fileFound: z.boolean(),
+  formatValid: z.boolean().nullable(),
+  state: ToolState,
+  reason: z.string().max(300).nullable(),
+  findings: z.number().int().nonnegative(),
+  stdoutBytes: z.number().int().nonnegative().nullable(),
+  stderrTail: z.string().max(300),
+}).strict();
+export type ToolResult = z.infer<typeof ToolResult>;
+
+/** Where a budget stop left the exam. Absent when the exam ran to the end. */
+export const PartialStop = z.object({
+  phase: z.enum(['mapa', 'exame', 'confirmacao']),
+  reason: z.literal('VERIFY_MODEL_BUDGET'),
+  point: z.string().min(1).max(200),
+  budget: z.number().positive(),
+  calls: z.number().int().nonnegative(),
+  pendingFiles: z.array(z.string().min(1).max(400)).max(100000),
+  unreviewed: z.array(z.string().min(1).max(500)).max(100000),
+}).strict();
+export type PartialStop = z.infer<typeof PartialStop>;
 
 export const ReportSummary = z.object({
   id: Id,
@@ -127,6 +164,8 @@ export const ReportSummary = z.object({
   createdAt: z.string().min(1).max(40),
   counts: z.object({alta: z.number().int().nonnegative(), media: z.number().int().nonnegative(), baixa: z.number().int().nonnegative(), informativa: z.number().int().nonnegative()}).strict(),
   note: z.string().max(500),
+  partial: z.boolean().optional(),
+  tools: z.object({limpa: z.number().int().nonnegative(), achado: z.number().int().nonnegative(), indisponivel: z.number().int().nonnegative(), truncada: z.number().int().nonnegative()}).strict().optional(),
 }).strict();
 export type ReportSummary = z.infer<typeof ReportSummary>;
 
