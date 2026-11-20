@@ -11,6 +11,11 @@ const enabled = process.env.AC_MODULE_LAB === '1';
 const root = new URL('../deploy/modules/conformidade/', import.meta.url);
 const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
 const attributionFixture = 'atribuicao/repo';
+const manifestFileStates = [
+  ['package-lock.json', 'skipped'], ['package.json', 'skipped'],
+  ['src/telemetry.ts', 'ok'], ['vendor/widget.js', 'ok'],
+] as const;
+const manifestStaticFiles = ['src/telemetry.ts', 'vendor/widget.js'];
 const npmLicenseSkipDetail = 'Lockfiles npm v2/v3 classificados: 0; erros: 0. Licenças ausentes permanecem desconhecidas.';
 const isolated = [
   'run', '--pull=never', '--rm', '--network', 'none', '--read-only',
@@ -20,7 +25,7 @@ const isolated = [
 ];
 
 type Output = {
-  coverage: {tool: string; version: string; status: string; detail: string}[];
+  coverage: {tool: string; version: string; status: string; detail: string; files?: string[]}[];
   findings: {tool: string; rule: string; file: string; line: number; severity: string; message: string; evidence: string}[];
 };
 
@@ -54,7 +59,7 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
     attribution ? ['npm-license-policy', 'skipped', npmLicenseSkipDetail] :
       ['npm-license-policy', 'ok'],
     attribution ? ['ort', 'skipped', 'Nenhuma declaração SPDX elegível em lockfile npm.'] : ['ort', 'ok'],
-    ['lgpd-static', attribution ? 'failed' : 'ok'],
+    ...(!attribution ? [['lgpd-static', 'ok'] as [string, string]] : []),
   ];
   for (const [tool, status, skipDetail] of expectedCoverage) {
     const rows = report.coverage.filter(row => row.tool === tool);
@@ -67,19 +72,56 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
     assert.match(row.status, /^(ok|failed|skipped)$/);
     if (!attribution) assert.notEqual(row.status, 'failed', `${row.tool}: ${row.detail}`);
   }
+  const fileRows = report.coverage.filter(row => row.tool === 'lgpd-static:file');
+  const expectedFiles = attribution ? ['operations.js', 'operations.py', 'writes.ts'] :
+    ['package-lock.json', 'package.json', ...manifestStaticFiles];
+  assert.deepEqual(fileRows.map(row => row.detail.split(' | ')[0]).sort(), [...expectedFiles].sort(),
+    `Arquivos estáticos em ${fixture}`);
+  for (const row of fileRows) {
+    assert.equal(Object.hasOwn(row, 'files'), false, `files inesperado em ${row.detail}`);
+  }
+  if (!attribution) {
+    for (const [file, status] of manifestFileStates) {
+      const rows = fileRows.filter(row => row.detail.split(' | ')[0] === file);
+      assert.equal(rows.length, 1, `Cobertura estática de ${file} em ${fixture}`);
+      assert.equal(rows[0].status, status, `Estado estático de ${file} em ${fixture}`);
+    }
+    assert.deepEqual(report.coverage.find(row => row.tool === 'lgpd-static')?.files, manifestStaticFiles);
+    const destinations = report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_'))
+      .map(row => [row.tool, row.rule, row.file, row.line]);
+    assert.deepEqual(destinations, fixture === 'com-defeito' ?
+      [['lgpd-static', 'PII_POSSIBLE_LOG', 'src/telemetry.ts', 3]] : [], `Destinos em ${fixture}`);
+  }
   if (attribution) {
+    const staticRows = report.coverage.filter(row => row.tool === 'lgpd-static');
+    assert.equal(staticRows.length, 3, 'Grupos de cobertura lgpd-static');
+    const expectedGroups = [
+      {status: 'failed', detail: '3 arquivos JS/TS/Python examinados, 2 com cobertura parcial. AST: vínculos simples, sem fluxo entre funções, análise de ramos ou chaves dinâmicas. SQL: parâmetros vinculados a valores de INSERT/UPDATE literal no recorte. Outras extensões de código/config: inventário textual de campos.', files: undefined},
+      {status: 'ok', detail: 'Análise estática AST e inventário textual concluídos sem lacunas em 1 arquivo(s).', files: ['writes.ts']},
+      {status: 'ok', detail: 'Evidências locais (vínculos AST comprovados ou inventário textual de campos) confirmadas em 2 arquivo(s) com escopo parcial; trechos sem vínculo ou sem parser permanecem em falha ou pulados.', files: ['operations.js', 'operations.py']},
+    ];
+    for (const group of expectedGroups) {
+      const matches = staticRows.filter(row => row.detail === group.detail);
+      assert.equal(matches.length, 1, `Grupo lgpd-static: ${group.detail}`);
+      assert.equal(matches[0].version, '1');
+      assert.equal(matches[0].status, group.status);
+      assert.deepEqual(matches[0].files, group.files);
+    }
+    for (const file of ['operations.js', 'operations.py']) {
+      assert.ok(report.findings.some(row => row.tool === 'lgpd-static' && row.file === file),
+        `Evidência local sem achado estático em ${file}`);
+    }
     const failed = report.coverage.filter(row => row.status === 'failed');
     assert.equal(failed.length, 3, JSON.stringify(failed));
-    const summary = report.coverage.find(row => row.tool === 'lgpd-static');
-    assert.ok(summary);
-    assert.match(summary.detail, /^3 arquivos JS\/TS\/Python examinados, 2 com cobertura parcial\. /);
-    for (const [file, calls] of [['operations.js', 2], ['operations.py', 1], ['writes.ts', 0]] as const) {
+    assert.equal(report.coverage.filter(row => row.tool === 'lgpd-static:file').length, 3);
+    for (const [file, fields, destinations, calls] of [['operations.js', 13, 5, 2], ['operations.py', 8, 5, 1], ['writes.ts', 14, 6, 0]] as const) {
       const rows = report.coverage.filter(row => row.tool === 'lgpd-static:file' && row.detail.startsWith(`${file} | `));
       assert.equal(rows.length, 1, `Cobertura estática de ${file}`);
       const [row] = rows;
+      assert.equal(row.version, '1', file);
       assert.equal(row.status, calls ? 'failed' : 'ok', file);
-      if (calls) assert.equal(row.detail.match(/\. Cobertura parcial: .+$/)?.[0],
-        `. Cobertura parcial: ${calls} resultados de chamadas sem vínculo estático.`, file);
+      assert.equal(row.detail, `${file} | linhas com campos=${fields}, indícios de destino=${destinations}` +
+        (calls ? `. Cobertura parcial: ${calls} resultados de chamadas sem vínculo estático.` : ''), file);
     }
   }
   for (const row of report.findings) {
@@ -100,11 +142,12 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
     {tool: 'npm-license-policy', version: '1', status: 'skipped',
       detail: npmLicenseSkipDetail},
     {tool: 'ort', version: '1', status: 'skipped', detail: 'Nenhuma declaração SPDX elegível em lockfile npm.'},
-    {tool: 'lgpd-static', version: '1', status: 'failed',
-      detail: '3 arquivos JS/TS/Python examinados, 2 com cobertura parcial. AST: vínculos simples.'},
   ];
   const coverage: Output['coverage'] = [
     ...aggregate,
+    {tool: 'lgpd-static', version: '1', status: 'failed', detail: '3 arquivos JS/TS/Python examinados, 2 com cobertura parcial. AST: vínculos simples, sem fluxo entre funções, análise de ramos ou chaves dinâmicas. SQL: parâmetros vinculados a valores de INSERT/UPDATE literal no recorte. Outras extensões de código/config: inventário textual de campos.'},
+    {tool: 'lgpd-static', version: '1', status: 'ok', detail: 'Análise estática AST e inventário textual concluídos sem lacunas em 1 arquivo(s).', files: ['writes.ts']},
+    {tool: 'lgpd-static', version: '1', status: 'ok', detail: 'Evidências locais (vínculos AST comprovados ou inventário textual de campos) confirmadas em 2 arquivo(s) com escopo parcial; trechos sem vínculo ou sem parser permanecem em falha ou pulados.', files: ['operations.js', 'operations.py']},
     {tool: 'lgpd-static:file', version: '1', status: 'failed',
       detail: 'operations.js | linhas com campos=13, indícios de destino=5. Cobertura parcial: 2 resultados de chamadas sem vínculo estático.'},
     {tool: 'lgpd-static:file', version: '1', status: 'failed',
@@ -112,15 +155,45 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
     {tool: 'lgpd-static:file', version: '1', status: 'ok',
       detail: 'writes.ts | linhas com campos=14, indícios de destino=6'},
   ];
-  const report = {coverage, findings: []};
+  const findings: Output['findings'] = ['operations.js', 'operations.py'].map(file => ({
+    tool: 'lgpd-static', rule: 'PII_FIELD', file, line: 1, severity: 'informativa',
+    message: 'Referência sintética.', evidence: 'Campo sintético.',
+  }));
+  const report = {coverage, findings};
   const stdout = JSON.stringify(report);
   assert.deepEqual(parseCollectorOutput(attributionFixture, {stdout, code: 1}), report);
   assert.throws(() => parseCollectorOutput(attributionFixture, {stdout, code: 0}), /Código de saída/);
   assert.throws(() => parseCollectorOutput(attributionFixture, {stdout, code: 125}), /Código de saída/);
   assert.throws(() => parseCollectorOutput(attributionFixture, {stdout: 'inválido', code: 1}), SyntaxError);
   const checkCoverage = (rows: Output['coverage']) => parseCollectorOutput(attributionFixture, {
-    stdout: JSON.stringify({coverage: rows, findings: []}), code: 1,
+    stdout: JSON.stringify({coverage: rows, findings}), code: 1,
   });
+  for (const finding of findings) {
+    for (const replacement of [undefined, {...finding, tool: 'presidio-analyzer'}]) {
+      const altered = findings.filter(row => row !== finding);
+      if (replacement) altered.push(replacement);
+      assert.throws(() => parseCollectorOutput(attributionFixture, {
+        stdout: JSON.stringify({coverage, findings: altered}), code: 1,
+      }), /Evidência local sem achado estático/);
+    }
+  }
+  const groups = coverage.filter(row => row.tool === 'lgpd-static');
+  for (const group of groups) {
+    assert.throws(() => checkCoverage(coverage.filter(row => row !== group)), assert.AssertionError);
+    assert.throws(() => checkCoverage([...coverage, group]), assert.AssertionError);
+    assert.throws(() => checkCoverage(coverage.map(row => row === group ? {...row, status: row.status === 'ok' ? 'failed' : 'ok'} : row)), assert.AssertionError);
+  }
+  for (const [group, files] of [[groups[0], ['writes.ts']], [groups[1], ['operations.js']],
+    [groups[1], ['writes.ts', 'operations.js']], [groups[2], ['operations.js', 'writes.ts']],
+    [groups[2], ['operations.js']], [groups[2], undefined]] as const) {
+    assert.throws(() => checkCoverage(coverage.map(row => row === group ? {...row, files: files && [...files]} : row)), assert.AssertionError);
+  }
+  for (const row of coverage.filter(row => row.tool === 'lgpd-static:file')) {
+    assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, files: ['operations.js']} : item)), assert.AssertionError);
+    assert.throws(() => checkCoverage(coverage.filter(item => item !== row)), assert.AssertionError);
+    assert.throws(() => checkCoverage([...coverage, row]), assert.AssertionError);
+    assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, status: row.status === 'ok' ? 'failed' : 'ok'} : item)), assert.AssertionError);
+  }
   for (const entry of aggregate) {
     const otherRows = coverage.filter(row => row.tool !== entry.tool);
     const countError = new RegExp(`Cobertura agregada de ${entry.tool} em ${attributionFixture}`);
@@ -152,18 +225,51 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
 });
 
 test('C9 exige cobertura agregada ok para todas as ferramentas nas fixtures com manifesto', () => {
-  const coverage: Output['coverage'] = [
-    'conformidade:snapshot', 'scancode-toolkit', 'presidio-analyzer', 'npm-license-policy', 'ort', 'lgpd-static',
-  ].map(tool => ({tool, version: '1', status: 'ok', detail: 'Cobertura sintética.'}));
-  const report = {coverage, findings: []};
-  const stdout = JSON.stringify(report);
   for (const fixture of ['com-defeito', 'limpo']) {
+    const coverage: Output['coverage'] = [
+      'conformidade:snapshot', 'scancode-toolkit', 'presidio-analyzer', 'npm-license-policy', 'ort', 'lgpd-static',
+    ].map(tool => ({tool, version: '1', status: 'ok', detail: 'Cobertura sintética.',
+      ...(tool === 'lgpd-static' ? {files: ['src/telemetry.ts', 'vendor/widget.js']} : {})}));
+    coverage.push(...manifestFileStates.map(([file, status]) => ({
+      tool: 'lgpd-static:file', version: '1', status, detail: `${file} | sintético`,
+    })));
+    const findings: Output['findings'] = fixture === 'com-defeito' ? [{
+      tool: 'lgpd-static', rule: 'PII_POSSIBLE_LOG', file: 'src/telemetry.ts', line: 3,
+      severity: 'media', message: 'Destino sintético.', evidence: 'Origem sintética.',
+    }] : [];
+    const report = {coverage, findings};
+    const stdout = JSON.stringify(report);
     assert.deepEqual(parseCollectorOutput(fixture, {stdout, code: 0}), report);
     assert.throws(() => parseCollectorOutput(fixture, {stdout, code: 1}), /Código de saída/);
     const checkCoverage = (rows: Output['coverage']) => parseCollectorOutput(fixture, {
-      stdout: JSON.stringify({coverage: rows, findings: []}), code: 0,
+      stdout: JSON.stringify({coverage: rows, findings}), code: 0,
     });
-    for (const entry of coverage) {
+    const staticAggregate = coverage.find(row => row.tool === 'lgpd-static')!;
+    for (const files of [['inexistente.ts'], ['src/telemetry.ts'], ['src/telemetry.ts', 'inexistente.ts'], undefined]) {
+      assert.throws(() => checkCoverage(coverage.map(row => row === staticAggregate ? {...row, files} : row)), assert.AssertionError);
+    }
+    for (const row of coverage.filter(item => item.tool === 'lgpd-static:file')) {
+      assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, files: ['inexistente.ts']} : item)), assert.AssertionError);
+      assert.throws(() => checkCoverage(coverage.filter(item => item !== row)), assert.AssertionError);
+      assert.throws(() => checkCoverage([...coverage, row]), assert.AssertionError);
+      assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, detail: 'outro.ts | sintético'} : item)), assert.AssertionError);
+      assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, status: row.status === 'ok' ? 'skipped' : 'ok'} : item)), assert.AssertionError);
+    }
+    const telemetry = coverage.find(row => row.tool === 'lgpd-static:file' && row.detail.startsWith('src/telemetry.ts | '))!;
+    assert.throws(() => checkCoverage(coverage.map(row => row === telemetry ? {...row, status: 'skipped'} : row)),
+      /Estado estático/);
+    if (fixture === 'com-defeito') {
+      assert.throws(() => parseCollectorOutput(fixture, {
+        stdout: JSON.stringify({coverage, findings: [{...findings[0], tool: 'presidio-analyzer'}]}), code: 0,
+      }), /Destinos em com-defeito/);
+      assert.throws(() => parseCollectorOutput(fixture, {
+        stdout: JSON.stringify({coverage, findings: [...findings, findings[0]]}), code: 0,
+      }), /Destinos em com-defeito/);
+      assert.throws(() => parseCollectorOutput(fixture, {
+        stdout: JSON.stringify({coverage, findings: [...findings, {...findings[0], line: 1}]}), code: 0,
+      }), /Destinos em com-defeito/);
+    }
+    for (const entry of coverage.filter(row => !row.tool.endsWith(':file'))) {
       const otherRows = coverage.filter(row => row !== entry);
       const countError = new RegExp(`Cobertura agregada de ${entry.tool} em ${fixture}`);
       assert.throws(() => checkCoverage(otherRows), countError);
@@ -199,7 +305,7 @@ test('laboratório C9 detecta licença forte e CPF plantados e verifica o contro
       row.file === 'package-lock.json' && row.line === 7 && row.evidence.includes('GPL-3.0-only')), dirty);
     assert.equal(report.findings.some(row => row.rule === 'PII_BR_CPF' &&
       row.file === 'src/telemetry.ts' && row.line === 1), dirty);
-    assert.equal(report.findings.some(row => row.rule === 'PII_POSSIBLE_LOG' &&
+    assert.equal(report.findings.some(row => row.tool === 'lgpd-static' && row.rule === 'PII_POSSIBLE_LOG' &&
       row.file === 'src/telemetry.ts' && row.line === 3), dirty);
     if (!dirty) {
       assert.ok(report.findings.every(row =>
@@ -213,6 +319,9 @@ test('laboratório C9 atribui apenas as chamadas e os valores armazenados da fix
   assert.match(image, /^(?:[A-Za-z0-9._:/-]+@)?sha256:[a-f0-9]{64}$/);
   const report = await collect(image, attributionFixture);
   const expected = JSON.parse(await readFile(join(fixtures, 'atribuicao', 'expected.json'), 'utf8'));
+  assert.ok(report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_'))
+    .every(row => row.tool === 'lgpd-static' && Object.hasOwn(expected, row.file)),
+  'Destino atribuído a ferramenta ou arquivo inesperado');
   for (const [file, locations] of Object.entries(expected)) {
     const destinations = report.findings.filter(row => row.file === file && row.rule.startsWith('PII_POSSIBLE_'))
       .map(row => [row.rule.slice('PII_POSSIBLE_'.length), row.line, Number(row.evidence.match(/linha (\d+)\./)?.[1])]);
