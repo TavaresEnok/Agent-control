@@ -969,15 +969,18 @@ export class NativeExecutionSupervisor{
   * writes a signed journal. It never creates or starts a container, never launches a model and never touches the intent. */
  async recoverNeverStartedModuleExam(principal:string,authority:Authority,jobId:string,scope:ModuleExamRecoveryScope):Promise<NativeModuleExamRecovery>{
   Id.parse(jobId);
-  return this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
-   const evidence=await this.moduleExamEvidence(c,principal,authority,jobId,scope);
-   if(evidence.kind!=='ready')return evidence.recovery;
-   if(evidence.journal?.state==='removed')return evidence.keep('retirement_conflict').recovery;
-   const {row,toolsId}=evidence,removed:string[]=[];
-   let binding=evidence.saved?.binding;
-   try{
-    await this.ledger.fence(c,authority,true);
-    if(evidence.tools){
+  return this.serialEffect(jobId,async()=>{
+   const removed:string[]=[];
+   // Transaction 1: remove the verified Created tools container and COMMIT this supervisor's signed removal stage
+   // before anything else is touched. A failure before the confirmed DELETE writes no stage and keeps the grant.
+   const first=await this.ledger.tx(async c=>{
+    const evidence=await this.moduleExamEvidence(c,principal,authority,jobId,scope);
+    if(evidence.kind!=='ready')return evidence.recovery;
+    if(evidence.journal?.state==='removed')return evidence.keep('retirement_conflict').recovery;
+    if(!evidence.tools)return undefined;
+    const {row,toolsId}=evidence;
+    try{
+     await this.ledger.fence(c,authority,true);
      const live=await this.docker.inspect('ac-native-tools-'+jobId);
      if(!live||live.Id!==toolsId)return evidence.keep('tools_mismatch').recovery;
      const bad=this.moduleExamToolsMatches(live,row,jobId);
@@ -986,10 +989,8 @@ export class NativeExecutionSupervisor{
      await this.docker.remove(live.Id);removed.push(live.Id);
      const [byName,byId]=await Promise.all([this.docker.inspect('ac-native-tools-'+jobId),this.docker.inspect(toolsId)]);
      if(byName||byId)return evidence.keep('residual_resources',removed).recovery;
-     // The journal stage that proves the removal is written only now, after the confirmed DELETE, in this transaction.
-     // A crash before commit leaves no stage, and a resume then keeps the grant instead of trusting the absence.
-     // A legacy v1 journal (written before any DELETE) is promoted to the same signed stage, guarded on the exact
-     // saved v1 row, so a later network failure no longer leaves an absence without proof.
+     // The stage that proves the removal is written only now, after the confirmed DELETE, and committed on its own.
+     // A legacy v1 journal (written before any DELETE) is promoted to the same signed stage, guarded on the exact saved row.
      const signed=this.signModuleExamRemoval(this.moduleExamRetirementBinding(row,toolsId,toolsEvidence));
      if(!evidence.journal){
       await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[jobId,signed]);
@@ -998,29 +999,44 @@ export class NativeExecutionSupervisor{
       const promoted=await c.query("UPDATE ac_native_terminal_retirements SET binding=$2 WHERE job_id=$1 AND state='prepared' AND proof IS NULL AND binding=$3::jsonb",[jobId,signed,JSON.stringify(evidence.saved.binding)]);
       if(promoted.rowCount!==1)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
      }
-     binding=signed;
      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.module_exam_tools_removed',$2)",[authority.contextId,{jobId,toolsId,networkId:row.network_id,toolsEvidenceDigest:toolsEvidence,promotedLegacy:Boolean(evidence.journal)}]);
+     return undefined;
+    }catch(error){
+     if(dockerUncertain(error))return evidence.keep('docker_uncertain',removed).recovery;
+     throw error;
     }
-    if(!binding)return evidence.keep('removal_unproven',removed).recovery;
-    const [byName,byId,worker]=await Promise.all([this.docker.inspect('ac-native-tools-'+jobId),this.docker.inspect(toolsId),this.docker.inspect('ac-native-worker-'+jobId)]);
-    if(byName||byId||worker)return evidence.keep('residual_resources',removed).recovery;
-    await retireNativePrivateNetwork(this.docker,{networkId:row.network_id,providerNetworkId:this.config.providerNetworkId,jobId,inputDigest:row.input_digest});
-   }catch(error){
-    if(dockerUncertain(error))return evidence.keep('docker_uncertain',removed).recovery;
-    if(error instanceof Refusal&&error.code==='NATIVE_RETIREMENT_NETWORK_UNCONFIRMED')return evidence.keep('network_mismatch',removed).recovery;
-    throw error;
-   }
-   await this.ledger.fence(c,authority,true);
-   if(await this.launchPendingExists(jobId))return evidence.keep('launch_present',removed).recovery;
-   const physical=this.moduleExamPhysicalReceipt(row,toolsId),receipt=this.unstartedReceipt(row,physical);
-   const proof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),this.key).toString('hex')};
-   const job=await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2,tools_id=$3 WHERE id=$1 AND state='uncertain' AND worker_id IS NULL AND tools_id IS NULL AND launch_digest IS NULL AND receipt IS NULL",[jobId,receipt,toolsId]);
-   const grant=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[row.grant_id,physical]);
-   const closed=await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[jobId,proof]);
-   if(job.rowCount!==1||grant.rowCount!==1||closed.rowCount!==1)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
-   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.module_exam_never_started_retired',$2)",[authority.contextId,{jobId,toolsId,networkId:row.network_id,proofDigest:digest(proof)}]);
-   return {state:'retired' as const,reason:'proven_never_started' as const,grant:'released' as const,removed,replayed:false,receipt};
-  }));
+   });
+   if(first)return first;
+   // Transaction 2, still serialized on this job: re-read authority, the committed signed stage, the absence of both
+   // containers and the network's identity and state, then remove what is left and release the grant. A crash here
+   // leaves the committed stage, so a retry on any connection can conclude.
+   return this.ledger.tx(async c=>{
+    const evidence=await this.moduleExamEvidence(c,principal,authority,jobId,scope);
+    if(evidence.kind!=='ready')return evidence.recovery.replayed?evidence.recovery:{...evidence.recovery,removed:[...removed]};
+    if(evidence.journal?.state!=='prepared'||evidence.tools||!evidence.saved?.removalProven)return evidence.keep('retirement_conflict',removed).recovery;
+    const {row,toolsId}=evidence,binding=evidence.saved.binding;
+    try{
+     await this.ledger.fence(c,authority,true);
+     const [byName,byId,worker]=await Promise.all([this.docker.inspect('ac-native-tools-'+jobId),this.docker.inspect(toolsId),this.docker.inspect('ac-native-worker-'+jobId)]);
+     if(byName||byId||worker)return evidence.keep('residual_resources',removed).recovery;
+     await retireNativePrivateNetwork(this.docker,{networkId:row.network_id,providerNetworkId:this.config.providerNetworkId,jobId,inputDigest:row.input_digest});
+    }catch(error){
+     if(dockerUncertain(error))return evidence.keep('docker_uncertain',removed).recovery;
+     if(error instanceof Refusal&&error.code==='NATIVE_RETIREMENT_NETWORK_UNCONFIRMED')return evidence.keep('network_mismatch',removed).recovery;
+     throw error;
+    }
+    await this.ledger.fence(c,authority,true);
+    if(await this.launchPendingExists(jobId))return evidence.keep('launch_present',removed).recovery;
+    const physical=this.moduleExamPhysicalReceipt(row,toolsId),receipt=this.unstartedReceipt(row,physical);
+    const proof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),this.key).toString('hex')};
+    const job=await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2,tools_id=$3 WHERE id=$1 AND state='uncertain' AND worker_id IS NULL AND tools_id IS NULL AND launch_digest IS NULL AND receipt IS NULL",[jobId,receipt,toolsId]);
+    const grant=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[row.grant_id,physical]);
+    const closed=await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[jobId,proof]);
+    if(job.rowCount!==1||grant.rowCount!==1||closed.rowCount!==1)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.module_exam_never_started_retired',$2)",[authority.contextId,{jobId,toolsId,networkId:row.network_id,proofDigest:digest(proof)}]);
+    return {state:'retired' as const,reason:'proven_never_started' as const,grant:'released' as const,removed,replayed:false,receipt};
+   });
+  });
  }
  async reconcileRegistered(principal:string,authority:Authority,jobId:string){
   try{return await this.reconcile(principal,authority,await this.registeredInput(principal,authority,jobId));}

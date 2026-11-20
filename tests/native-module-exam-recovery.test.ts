@@ -22,7 +22,7 @@ const ZERO='0001-01-01T00:00:00Z';
 const RemovalDomain='agent-control:native-module-exam-tools-removed:v1\n';
 const companion=['node','-e','setInterval(() => {}, 60_000)'];
 type Body=Record<string,any>;
-type Fake={containers:Map<string,Body>;networks:Map<string,Body>;mutations:string[];forbidden:string[];unavailable:boolean;failNetworkDelete:number;failContainerDelete:boolean};
+type Fake={containers:Map<string,Body>;networks:Map<string,Body>;mutations:string[];forbidden:string[];unavailable:boolean;failNetworkDelete:number;failContainerDelete:boolean;beforeNetworkDelete?:(id:string)=>Promise<void>};
 
 /** A Docker that only answers inspects and DELETE of a container or network. Anything that could create or start is recorded as forbidden. */
 async function fakeDocker(socket:string,state:Fake){
@@ -48,8 +48,10 @@ async function fakeDocker(socket:string,state:Fake){
   }
   if(method==='DELETE'&&url.startsWith('/v1.44/networks/')){
    if(state.failNetworkDelete>0){state.failNetworkDelete--;res.statusCode=500;res.end(JSON.stringify({message:'boom'}));return;}
-   const id=url.slice('/v1.44/networks/'.length);state.mutations.push('DELETE network '+id);state.networks.delete(id);
-   res.statusCode=204;res.end();return;
+   const id=url.slice('/v1.44/networks/'.length);
+   void (state.beforeNetworkDelete?.(id)??Promise.resolve()).then(()=>{state.mutations.push('DELETE network '+id);state.networks.delete(id);res.statusCode=204;res.end();},
+    (error:unknown)=>{res.statusCode=500;res.end(JSON.stringify({message:String(error)}));});
+   return;
   }
   state.forbidden.push(method+' '+url);res.statusCode=500;res.end(JSON.stringify({message:'forbidden'}));
  });
@@ -158,7 +160,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    const journal=(await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[jobId])).rows[0];
    return {job,grant,intent,run,journal};
   };
-  const reset=()=>{docker.mutations.length=0;docker.forbidden.length=0;docker.unavailable=false;docker.failNetworkDelete=0;docker.failContainerDelete=false;};
+  const reset=()=>{docker.beforeNetworkDelete=undefined;docker.mutations.length=0;docker.forbidden.length=0;docker.unavailable=false;docker.failNetworkDelete=0;docker.failContainerDelete=false;};
   /** Evidence is insufficient: nothing physical or durable changes and the reason comes back. */
   const preserved=async(p:Awaited<ReturnType<typeof plant>>,reason:string,run=()=>supervisor.recoverNeverStartedModuleExam(owner,authority,p.jobId,scope))=>{
    const before=await snapshot(p.jobId,p.grantId,p.intentId),mutations=docker.mutations.length;
@@ -284,8 +286,8 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   reset();
   const legacyReplay=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyHere.jobId,scope);
   assert.equal(legacyReplay.state,'retired');assert.equal(legacyReplay.replayed,true);assert.deepEqual(docker.mutations,[]);
-  // Legacy v1 journal, container still there: the DELETE is confirmed, then the network delete fails. The same
-  // transaction promoted the v1 row to the signed v2 stage, so the retry accepts the absent container and completes.
+  // Legacy v1 journal, container still there: the DELETE is confirmed, then the network delete fails. The v1 row was
+  // already promoted to the signed v2 stage and committed, so the retry accepts the absent container and completes.
   reset();
   const legacyNet=await plant();
   const legacyNetV1=await legacyBinding(legacyNet);
@@ -309,6 +311,47 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const legacyNetReplay=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyNet.jobId,scope);
   assert.equal(legacyNetReplay.state,'retired');assert.equal(legacyNetReplay.replayed,true);assert.deepEqual(legacyNetReplay.receipt,legacyNetDone.receipt);
   assert.equal(docker.mutations.length,2);assert.deepEqual(docker.forbidden,[]);
+  // ── Crash right after the network disappears and before the final commit. The signed stage was committed before
+  // the network was touched, so a retry on another connection concludes; this holds for a fresh stage and for a
+  // promoted v1 journal. The crashing supervisor has its own pool whose final transaction dies before COMMIT.
+  for(const legacy of [false,true]){
+   reset();
+   const fall=await plant();
+   const fallV1=await legacyBinding(fall);
+   if(legacy)await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[fall.jobId,fallV1]);
+   const crashDb=new Ledger(fixture.url);
+   try{
+    crashDb.tx=async<T>(fn:(c:import('pg').PoolClient)=>Promise<T>):Promise<T>=>{
+     const c=await crashDb.pool.connect();
+     try{await c.query('BEGIN');const v=await fn(c);
+      if(docker.mutations.includes('DELETE network '+fall.networkId))throw Error('SIMULATED_CRASH_BEFORE_COMMIT');
+      await c.query('COMMIT');return v;}
+     catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
+    };
+    const crashing=new NativeExecutionSupervisor(crashDb,config(),{assertAdmission:async()=>{}});
+    // At the moment of the network DELETE, a distinct connection already sees the committed, signed removal stage.
+    const seen:Record<string,any>[]=[];
+    docker.beforeNetworkDelete=async()=>{seen.push((await db.pool.query('SELECT state,proof,binding FROM ac_native_terminal_retirements WHERE job_id=$1',[fall.jobId])).rows[0]);};
+    await assert.rejects(crashing.recoverNeverStartedModuleExam(owner,authority,fall.jobId,scope),/SIMULATED_CRASH_BEFORE_COMMIT/);
+    assert.equal(seen.length,1);assert.equal(seen[0].state,'prepared');assert.equal(seen[0].proof,null);
+    assert.equal(seen[0].binding.schemaVersion,2);assert.equal(seen[0].binding.stage,'tools_removed');assert.equal(seen[0].binding.toolsId,fall.toolsId);
+    const {removalSignature:fallSig,...fallUnsigned}=seen[0].binding;
+    assert.equal(verify(null,Buffer.from(RemovalDomain+canonical(fallUnsigned)),keys.publicKey,Buffer.from(fallSig,'hex')),true);
+    if(legacy){const {schemaVersion:_a,stage:_b,toolsEvidenceDigest:_c,...rest}=fallUnsigned;const {schemaVersion:_d,...v1rest}=fallV1;assert.deepEqual(rest,v1rest);}
+   }finally{docker.beforeNetworkDelete=undefined;await crashDb.close().catch(()=>undefined);}
+   assert.deepEqual(docker.mutations,['DELETE container '+fall.toolsId,'DELETE network '+fall.networkId]);
+   assert.equal(docker.containers.has(fall.toolsName),false);assert.equal(docker.networks.has(String(fall.networkId)),false);
+   const fallMid=await snapshot(fall.jobId,fall.grantId,fall.intentId);
+   assert.equal(fallMid.grant.state,'uncertain');assert.equal(fallMid.job.state,'uncertain');assert.equal(fallMid.journal.state,'prepared');
+   const fallDone=await supervisor.recoverNeverStartedModuleExam(owner,authority,fall.jobId,scope);
+   assert.equal(fallDone.state,'retired');assert.equal(fallDone.replayed,false);assert.equal(fallDone.grant,'released');assert.deepEqual(fallDone.removed,[]);
+   assert.equal(docker.mutations.length,2);
+   const fallAfter=await snapshot(fall.jobId,fall.grantId,fall.intentId);
+   assert.equal(fallAfter.grant.state,'released');assert.equal(fallAfter.job.state,'failed');assert.equal(fallAfter.journal.state,'removed');
+   const fallReplay=await supervisor.recoverNeverStartedModuleExam(owner,authority,fall.jobId,scope);
+   assert.equal(fallReplay.state,'retired');assert.equal(fallReplay.replayed,true);assert.deepEqual(fallReplay.removed,[]);assert.deepEqual(fallReplay.receipt,fallDone.receipt);
+   assert.equal(docker.mutations.length,2);assert.deepEqual(docker.forbidden,[]);
+  }
   // The database guard only allows that exact promotion: changing any v1 field, or a v2 row, stays immutable.
   const guarded=await plant();const guardedV1=await legacyBinding(guarded);
   await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[guarded.jobId,guardedV1]);
