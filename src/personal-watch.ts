@@ -174,7 +174,11 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  // A failed write (ENOSPC included) must not stop alerts or the cleanup that frees the space.
  const persist=async(value:WatchState)=>{try{await writeState(statePath,value);return true;}catch{stateUnsaved=true;return false;}};
  try{
- const state=await readState(statePath);
+ const state=await readState(statePath).catch(async error=>{
+  const alert=usedPercent===undefined?undefined:diskNotice(usedPercent);
+  if(alert)await notify(config.dataDirectory,alert.text).catch(()=>{});
+  throw error;
+ });
  const up=await probe(`http://127.0.0.1:${config.http.port}/api/v1/ac/health`);
  let healthNotice:string|null=null;
  if(up){

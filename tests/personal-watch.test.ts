@@ -228,8 +228,10 @@ test('uma falha ao ler o estado ainda deixa a retenção rodar e depois propaga 
  const env=await fixture();
  try{
   await mkdir(join(env.data,'watch-state.json'));
-  let ran=false;
-  await assert.rejects(runPersonalWatch([env.file],{...quiet,retention:async()=>{ran=true;},probe:async()=>true,notify:async()=>{},images:()=>[]}),{code:'EISDIR'});
-  assert.equal(ran,true);
+  const calls:string[]=[];
+  await assert.rejects(runPersonalWatch([env.file],{...quiet,diskUsedPercent:async()=>97,retention:async()=>{calls.push('limpeza');},
+   probe:async()=>true,notify:async(_dir,message)=>{calls.push(message);},images:()=>[]}),{code:'EISDIR'});
+  assert.match(calls[0]!,/97%.*bloqueados/);
+  assert.equal(calls[1],'limpeza');
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
