@@ -1795,3 +1795,39 @@ FIM
 - 20/11/2026 07:56 UTC — Revisão independente revisao-retencao-work concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 07:57 UTC — O candidato de retenção ab82623d passou pelo TypeScript com as dependências do projeto e em quatro testes sem skips, incluindo PostgreSQL descartável. O Sol identificou um risco alto na exclusão por caminho e solicitou ajustes antes de --aplicar. A instalação só recebeu uma prévia de um job concluído. O diretório work/ continua intacto.
 - 20/11/2026 07:58 UTC — O Sonnet Pro informou renovação estimada às 11:10 UTC e a Enok Max às 08:20 UTC. A agenda de 15 minutos mantém as ordens comuns e a correção alta da manutenção disponíveis para nova tentativa. O relatório inclui a prévia de 61.811.158 bytes e os critérios ainda pendentes das duas telas.
+- 20/11/2026 07:59 UTC — Correção retencao-segura-1 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 07:59 UTC — COTA — a conta Enok informou limite ao trabalhador da ordem retencao-segura-1.
+- 20/11/2026 08:07 UTC — COTA — Claude informou limite na execução fila-nexo-qa. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 08:07 UTC — COTA — Claude informou limite na execução fila-nexo-arquitetura. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 08:07 UTC — Inventário somente leitura dos jobs assinados recentes: work/ ocupa 5.520.064.512 bytes em 77 jobs do fluxo de design e 8.052.895.744 bytes em 521 jobs do fluxo de verificação. O lote final deve comprovar individualmente a elegibilidade. O diretório review-artifact/ ficou fora da ordem de retirada.
+- 20/11/2026 08:09 UTC — Iniciada ordem anatel-r8-tentativa-1 em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 08:14 UTC — Correção retencao-segura-2 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 08:14 UTC — COTA — a conta Enok informou limite ao trabalhador da ordem retencao-segura-2.
+- 20/11/2026 08:19 UTC — O Hydrogen voltou a executar a ordem da Anatel e informou que iniciou a verificação do ambiente. A prova de pintura do painel foi distribuída em paralelo ao segundo trabalhador, em outro worktree.
+- 20/11/2026 08:19 UTC — Iniciada ordem painel-pintura-tentativa-1 em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 08:22 UTC — COTA — Claude informou limite na execução fila-nexo-qa. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 08:22 UTC — COTA — Claude informou limite na execução fila-nexo-arquitetura. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 08:23 UTC — COTA — gemini-4-hydrogen-high (hydrogen) informou limite na ordem anatel-r8-tentativa-1.
+- 20/11/2026 08:23 UTC — COTA — gemini-4-hydrogen-high (hydrogen) informou limite na ordem painel-pintura-tentativa-1.
+- 20/11/2026 08:23 UTC — Iniciada ordem anatel-r8-tentativa-1 em gemini-4-argon-high (argon), no worktree próprio.
+- 20/11/2026 08:23 UTC — Iniciada ordem painel-pintura-tentativa-1 em gemini-4-argon-high (argon), no worktree próprio.
+- 20/11/2026 08:23 UTC — A tentativa de QA e arquitetura das 08:22 permaneceu na unidade pendente. A conta do examinador na instalação tem exhausted_until às 08:37:27 UTC. Esse horário corresponde à espera padrão de uma hora quando falta um instante de renovação utilizável na observação do provedor. O horário de 08:20 veio do login dedicado do trabalhador. A consulta foi somente leitura.
+- 20/11/2026 08:24 UTC — COTA — gemini-4-argon-high (argon) informou limite na ordem painel-pintura-tentativa-1.
+- 20/11/2026 08:24 UTC — COTA — gemini-4-argon-high (argon) informou limite na ordem anatel-r8-tentativa-1.
+- 20/11/2026 08:24 UTC — Iniciada ordem painel-pintura-tentativa-1 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 08:24 UTC — Iniciada ordem anatel-r8-tentativa-1 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 08:24 UTC — COTA — claude-sonnet-5-5 (ajust) informou limite na ordem painel-pintura-tentativa-1.
+- 20/11/2026 08:24 UTC — COTA — claude-sonnet-5-5 (ajust) informou limite na ordem anatel-r8-tentativa-1.
+- 20/11/2026 08:24 UTC — Iniciada ordem painel-pintura-tentativa-1 em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 08:24 UTC — Iniciada ordem anatel-r8-tentativa-1 em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 08:25 UTC — Ordem anatel-r8-tentativa-1 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 08:27 UTC — Ordem painel-pintura-tentativa-1 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 08:27 UTC — Recebida a ordem urgente 64bb0d6e. Suspensos novos trabalhadores e novos exames enquanto o volume estiver em 90% ou mais. Cancelada a repetição automática dos trabalhadores. As ordens já concluídas deixaram os commits daa3eb6 e 3348ed no NexoISP. A correção de segurança na manutenção de work/ passa a ter prioridade máxima.
+- 20/11/2026 08:32 UTC — Sob a ordem urgente, o gerente corrigiu a manutenção sem lançar novo trabalhador. O candidato percorre work/ por descritores privados, exige a resposta assinada e registra a preparação antes da exclusão. A recuperação de uma falha de auditoria foi testada em PostgreSQL descartável. Os quatro testes e o TypeScript passaram. Nenhuma exclusão viva foi executada.
+- 20/11/2026 08:34 UTC — Revisão independente revisao-retencao-ancorada concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 08:35 UTC — Com zero reservas em uso e as duas CLIs aguardando cota, suspensos os grupos de processos de QA e arquitetura. A suspensão impede que a tentativa de 08:37 abra novos jobs acima do limite de disco e preserva a memória das CLIs e os recibos. A validade dos leases será conferida na retomada.
+- 20/11/2026 08:40 UTC — Revisão independente revisao-retencao-confinada concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 08:43 UTC — A prova controlada tem um backup separado dos dois work/ e comparação integral. Antes da retirada, o supervisor reconciliou ambos os jobs e confirmou seus resultados. A última versão do auxiliar mantém o checkout no lugar e sua execução depende da sessão do gerente. TypeScript e os quatro testes, incluindo recuperação transacional e recusa de checkout substituído, passaram.
+- 20/11/2026 08:43 UTC — Correção do registro de horário: 64bb0d6e foi gravado às 07:41 UTC. O gerente identificou a instrução às 08:27 UTC; houve lançamentos de trabalhadores nesse intervalo. Às 08:27 os agendamentos foram bloqueados, e às 08:35 os exames em espera foram suspensos antes de a instalação voltar a admitir chamadas.
+- 20/11/2026 08:44 UTC — Revisão independente revisao-retencao-sessao concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 08:47 UTC — O último parecer sobre 4927e68d manteve um risco alto se outro processo da conta de serviço mover a cópia durante a exclusão. A prévia reconheceu 124.304.944 bytes em dois jobs. Nenhum work/ vivo foi removido. Solicitada janela exclusiva de manutenção ou ampliação do volume. Em paralelo, apenas testes de homologação e pareceres sobre os dois commits já entregues.

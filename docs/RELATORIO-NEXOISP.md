@@ -141,3 +141,12 @@ O painel em `8d6b587` passou no Chromium com navegação por teclado e série co
 ## Manutenção de espaço em disco
 
 O backup de 07h38 UTC, `ispagent-antes-retencao-20261120-dqhvMO/agent-control-ispagent-20261120-0738`, passou no `personal:restore-check` com 16.282 arquivos e dump legível. A prévia do candidato `ab82623d` identificou 61.811.158 bytes em um job estático real já reconciliado. Os quatro testes de manutenção passaram com PostgreSQL descartável e o TypeScript passou com as dependências do projeto. O parecer independente identificou uma corrida na resolução do caminho da exclusão. A instalação mantém a cópia de trabalho até que a correção passe em revisão. O supervisor registrou o limite de uso das duas contas Claude. Os exames em curso repetem as unidades pendentes a cada 15 minutos.
+
+
+### Bloqueio de disco em 20/11/2026 às 08h47 UTC
+
+O volume estava em 99%, com cerca de 4 GB disponíveis. A ordem `64bb0d6e`, registrada às 07h41 UTC, foi identificada pelo gerente às 08h27 UTC. Nesse intervalo houve novos lançamentos de trabalhadores. Às 08h27 foram bloqueados novos exames e trabalhadores, e às 08h35 os dois exames em espera foram suspensos com zero reservas em uso. Os recibos já existentes e a memória das duas CLIs foram preservados. A retomada exige conferir os leases e a liberação do disco abaixo de 90%.
+
+No candidato de manutenção `4927e68d`, quatro testes passaram com PostgreSQL descartável, além do TypeScript. O proprietário pode pré-visualizar a retirada de `work/` com base no recibo de conclusão, no resultado preservado e na prova assinada da retirada dos contêineres. A prévia viva reconheceu 124.304.944 bytes em dois jobs encerrados, um do exame estático e outro de design. Antes de qualquer exclusão, o gerente comparou as duas cópias contra um arquivo de backup e reconfirmou ambas as respostas pelo supervisor.
+
+O Sol identificou uma corrida remanescente se outro processo da conta de serviço mover uma árvore já aberta durante a exclusão. A instalação permanece com todas as cópias nativas. O gerente solicitou ao administrador uma janela com acesso exclusivo ao diretório de jobs ou capacidade adicional no volume. O candidato está no ramo `task/nexo-retencao-jobs`. A limpeza do cache OCI descrita acima foi aplicada.
