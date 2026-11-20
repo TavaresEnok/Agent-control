@@ -91,6 +91,22 @@ export function classifyExamReservation(
 type PolicySnapshotRow = {snapshot?: {roles?: {specialist?: {regular?: unknown; emergency?: unknown}}}};
 type SpecialistProfileRow = {id: string; model: string; effort?: string; provider: string; account_id?: string};
 
+/**
+ * The priority Claude account is the account of the first Claude profile in the raw policy
+ * order (regular, then emergency). Profiles of other providers may come before it. A policy
+ * entry whose profile or account cannot be resolved before that point leaves no priority
+ * account, so callers that require it refuse instead of moving on to a later Claude account.
+ */
+function firstClaudeAccountInPolicy(order: readonly string[], byId: ReadonlyMap<string, SpecialistProfileRow>): string | undefined {
+  for (const id of order) {
+    const item = byId.get(id);
+    if (!item || typeof item.provider !== 'string') return undefined;
+    if (item.provider !== 'claude') continue;
+    return typeof item.account_id === 'string' && item.account_id.length > 0 ? item.account_id : undefined;
+  }
+  return undefined;
+}
+
 /** Inspects the active policy's `roles.specialist` chain so exams pick the prepared seats without touching `roles.reviewer`. */
 export async function loadSpecialistExamPlan(
   pool: {query: (text: string, values?: unknown[]) => Promise<{rows: unknown[]}>},
@@ -123,9 +139,7 @@ export async function loadSpecialistExamPlan(
   for (const item of profiles) {
     if (typeof item.account_id === 'string' && item.account_id.length > 0) accountByProfileId[item.id] = item.account_id;
   }
-  const primaryClaudeAccountId = [...claudeRegular, ...claudeEmergency]
-    .map(id => accountByProfileId[id])
-    .find((id): id is string => typeof id === 'string' && id.length > 0);
+  const primaryClaudeAccountId = firstClaudeAccountInPolicy(all, byId);
   const orderedProfiles: SpecialistProfileDetail[] = [];
   for (const [chain, list] of [['regular', regular], ['emergency', emergency]] as const) {
     for (const id of list) {

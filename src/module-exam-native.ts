@@ -18,6 +18,7 @@ import {
   type ModuleExamWorker,
 } from './module-exam.ts';
 import {mapModuleSnapshot} from './module-exam-map.ts';
+import {attestDistinctExamSessions} from './module-exam-sessions.ts';
 import {NativeExecutionRequest, NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import {renewPersonalQuota} from './personal-runtime.ts';
 import type {ModuleRecheckReview, VerificationModuleRunInput} from './verification-modules.ts';
@@ -474,6 +475,9 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       reserve: reservations.reserve,
       release: reservations.release,
       ...(waitForClaudeQuota ? {waitForClaudeQuota} : {}),
+      attestSessions: ({examiner, reviewer}) => attestDistinctExamSessions(input.ledger.pool, {
+        contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer, reviewerIntentId: intentId,
+      }),
     });
   };
 }

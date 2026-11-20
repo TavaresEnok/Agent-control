@@ -12,6 +12,7 @@ import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './modul
 import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewObservationTitle, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewDecision, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 import {isModuleExamTerminalNotice, parseModuleExamJsonObject} from './module-exam-worker.ts';
+import {distinctExamSessions, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN} from './module-exam-sessions.ts';
 
 const checklist: Record<VerificationModule, string> = {
   qa: 'Comportamento funcional, tratamento de erros e testes existentes',
@@ -45,7 +46,7 @@ const ExamResponse = z.object({
     title: z.string().min(1).max(200), severity: ExamSeverity}).strict()).max(20),
 }).strict();
 export type ModuleExamSeat = {provider: string; model: string; accountId: string; profileId: string; grantId: string};
-export type ModuleExamCoverage = {file: string; status: 'lido' | 'nao_julgado'; reason: string | null; examiner: (Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string}) | null; checklist: string[];
+export type ModuleExamCoverage = {file: string; status: 'lido' | 'nao_julgado'; reason: string | null; examiner: ModuleExamExecution | null; checklist: string[];
   read?: {binding: string; commit?: string; sourceDigest: string; complete: boolean; requestId?: string; promptDigest?: string}};
 export type ModuleExamCandidate = {file: string; line: number; title: string; severity: 'alta'|'media'|'baixa'|'informativa'; evidence: string; source: string; hypothesis?: string; binding?: string; observation?: ModuleReviewObservation; reviewCommit?: string; status: 'confirmado'|'provavel'|'descartado'; reason: string; proof: string; verifier: {provider: string; model: string; accountId?: string; profileId?: string; grantId?: string; sessionId?: string} | null; examiner: {provider: string; accountId: string; profileId: string} | null; failure: string | null;
   decision?: ModuleReviewDecision; reviewReason?: string};
@@ -76,8 +77,12 @@ export type ModuleExamInput = {
   release?: (seat: ModuleExamSeat, state: 'not_started'|'exited') => Promise<void>;
   /** Optional explicit opt-in to wait and retry the same Claude account after PROVIDER_USAGE_LIMIT. */
   waitForClaudeQuota?: (context: ModuleExamClaudeQuotaWait) => Promise<boolean>;
+  /** Ledger proof that a high examiner finding was reviewed in a distinct native session.
+   * Without it, such a finding stays probable. */
+  attestSessions?: (pair: {examiner: ModuleExamExecution; reviewer: ModuleExamExecution}) => Promise<boolean>;
   signal?: AbortSignal;
 };
+export type ModuleExamExecution = Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string};
 export type ModuleExamCollectorReview = {collector: ModuleExamCollectorContext; intentId: string; snapshot: string;
   coverage?: ReadonlyMap<string, ModuleExamCoverage>;
   relatedSources?: ReadonlyMap<string, string | null>};
@@ -173,6 +178,9 @@ function unavailableText(code: string) {
   if (code === 'MODULE_EXAM_EXAMINER_UNAVAILABLE') return 'Examinador indisponível para o contexto.';
   if (code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') {
     return 'Revisor de achado alto (claude-opus-5-5) indisponível para o contexto.';
+  }
+  if (code === HIGH_SESSION_UNPROVEN) {
+    return 'Sessões distintas do examinador e do revisor de achado alto não comprovadas.';
   }
   if (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT') {
     return 'Revisor de outro provedor indisponível para o contexto.';
@@ -386,6 +394,17 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
         continue;
       }
+      // A high examiner finding needs the examiner's own native session before any
+      // reviewer seat is spent. Without it, or without a ledger check, it stays probable.
+      const examinerExecution = highExaminerFinding && row?.examiner
+        && row.examiner.provider === examiner.provider && row.examiner.accountId === examiner.accountId
+        && row.examiner.profileId === examiner.profileId ? row.examiner : null;
+      if (highExaminerFinding && (!examinerExecution?.grantId || !examinerExecution.sessionId || !input.attestSessions)) {
+        finding.failure = HIGH_SESSION_UNPROVEN;
+        finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
+        notes.add(unavailableText(HIGH_SESSION_UNPROVEN));
+        continue;
+      }
       for (;;) {
         checkAbort(input.signal);
         let seat: ModuleExamSeat | undefined;
@@ -396,8 +415,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           seat = await reserve('reviewer', examiner, {severity: finding.severity, source: finding.source, fromExaminer});
           checkAbort(input.signal);
           if (highExaminerFinding) {
-            const sameGrant = row?.examiner?.grantId !== undefined && seat.grantId === row.examiner.grantId;
-            if (seat.provider !== 'claude' || seat.model !== 'claude-opus-5-5' || seat.profileId === examiner.profileId || sameGrant) {
+            if (seat.provider !== HIGH_REVIEWER_PROVIDER || seat.model !== HIGH_REVIEWER_MODEL
+              || seat.profileId === examiner.profileId || seat.grantId === examinerExecution!.grantId) {
               throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
             }
           } else if (seat.provider === examiner.provider || seat.profileId === examiner.profileId || seat.accountId === examiner.accountId) {
@@ -410,11 +429,17 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           exited = true;
           checkAbort(input.signal);
           const reviewerSessionId = (call as {examSessionId?: string}).examSessionId;
-          if (highExaminerFinding && seat.accountId === examiner.accountId && row?.examiner?.sessionId
-            && (!reviewerSessionId || reviewerSessionId === row.examiner.sessionId)) {
-            throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+          // Parse first: a quota or login failure in the output keeps its own code.
+          const parsed = parsedJson(output);
+          if (highExaminerFinding) {
+            const reviewer = identity(seat, reviewerSessionId);
+            if (!distinctExamSessions(examinerExecution, reviewer)
+              || !await input.attestSessions!({examiner: examinerExecution!, reviewer})) {
+              throw new Refusal(HIGH_SESSION_UNPROVEN);
+            }
+            checkAbort(input.signal);
           }
-          const result = readModuleReviewVerdict(parsedJson(output));
+          const result = readModuleReviewVerdict(parsed);
           if (!result) throw new Refusal('MODULE_CONFIRMATION_INVALID');
           finding.reviewReason = clean(result.reason, 2000);
           const reason = moduleReviewProofReason(evidence, result);

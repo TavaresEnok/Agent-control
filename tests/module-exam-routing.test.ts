@@ -168,6 +168,30 @@ test('mapeia modelo Sonnet 5.5 e esforço correto para cada módulo de 2 a 9', (
   }
 });
 
+test('conta Claude prioritária segue a ordem bruta da política, aceita outro provedor antes e recusa entrada não resolvida', async () => {
+  const ids = {codex: randomUUID(), maxOpus: randomUUID(), maxSonnet: randomUUID(), proSonnet: randomUUID(), unknown: randomUUID()};
+  const accounts = {codex: randomUUID(), max: randomUUID(), pro: randomUUID()};
+  const rows = [
+    {id: ids.codex, model: 'gpt-6.2-sol', effort: 'medium', provider: 'codex', account_id: accounts.codex},
+    {id: ids.maxOpus, model: 'claude-opus-5-5', effort: 'medium', provider: 'claude', account_id: accounts.max},
+    {id: ids.maxSonnet, model: 'claude-sonnet-5-5', effort: 'medium', provider: 'claude', account_id: accounts.max},
+    {id: ids.proSonnet, model: 'claude-sonnet-5-5', effort: 'medium', provider: 'claude', account_id: accounts.pro},
+  ];
+  const planFor = (regular: string[], emergency: string[] = []) => loadSpecialistExamPlan({
+    async query(text: string, values?: unknown[]) {
+      if (text.includes('ac_policy_revisions')) return {rows: [{snapshot: {roles: {specialist: {regular, emergency}}}}]};
+      const wanted = new Set(values?.[0] as string[]);
+      return {rows: rows.filter(row => wanted.has(row.id))};
+    },
+  }, randomUUID());
+  assert.equal((await planFor([ids.codex, ids.maxOpus, ids.maxSonnet, ids.proSonnet])).primaryClaudeAccountId, accounts.max);
+  assert.equal((await planFor([ids.codex], [ids.maxSonnet, ids.proSonnet])).primaryClaudeAccountId, accounts.max);
+  assert.equal((await planFor([ids.proSonnet, ids.maxSonnet])).primaryClaudeAccountId, accounts.pro);
+  // An unresolved entry before the first Claude profile must not promote a later Claude account.
+  assert.equal((await planFor([ids.codex, ids.unknown, ids.proSonnet, ids.maxSonnet])).primaryClaudeAccountId, undefined);
+  assert.equal((await planFor([ids.codex])).primaryClaudeAccountId, undefined);
+});
+
 test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da cadeia, sem troca silenciosa nem rotação por cota, e encaminha achado alto do examinador para Opus 5.5 medium', {
   skip: !base, timeout: 120_000,
 }, async () => {
@@ -373,6 +397,23 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
       assert.equal(launch.profileId, pSonnetHighMax);
     }
 
+    // 2b) Arquitetura (medium) through the CLI uses Sonnet 5.5 medium on Max.
+    {
+      const before = docker.launches.length;
+      await runPersonalModuleCli('arquitetura', [installation, project], {
+        collectorOutput: {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'ok'}], findings: []},
+        moduleExamRuntime: async () => fullRuntime,
+      });
+      assert.ok(docker.launches.length > before);
+      for (const launch of docker.launches.slice(before)) {
+        assert.equal(launch.provider, 'claude');
+        assert.equal(launch.model, 'claude-sonnet-5-5');
+        assert.equal(launch.effort, 'medium');
+        assert.equal(launch.accountId, maxAccount);
+        assert.equal(launch.profileId, pSonnetMedMax);
+      }
+    }
+
     // 3) Check loadSpecialistExamPlan reflects DB chain priority without hardcoding UUIDs.
     const qaCtx = (await ledger.ensureExamContext(owner, project, 'qa')).contextId;
     const plan = await loadSpecialistExamPlan(ledger.pool, qaCtx);
@@ -484,6 +525,42 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
     assert.equal(recheckHigh!.profileId, pOpusMax);
     assert.equal(recheckMed!.provider, 'codex');
     assert.equal(recheckMed!.accountId, codexAccount);
+
+    // 9) The priority Claude account comes from the raw policy order. Other providers may
+    //    come first, but the first Claude account is the only one used, never a later one.
+    const publishSpecialist = async (expected: number, regular: string[], emergency: string[] = []) => {
+      const revision = await capacity.publish(owner, project, expected, {
+        schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
+        roles: {specialist: {regular, emergency}},
+      });
+      await capacity.assignPolicy(owner, mainContext, revision);
+      await capacity.assignPolicy(owner, qaCtx, revision);
+      return revision;
+    };
+    const examOnce = async (mod: VerificationModule) => {
+      const before = docker!.launches.length;
+      let directory = '';
+      await runPersonalModuleCli(mod, [installation, project], {
+        collectorOutput: {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'ok'}], findings: []},
+        moduleExamRuntime: async () => fullRuntime,
+        onResult(res) { directory = res.directory; },
+      });
+      return {launches: docker!.launches.slice(before), directory};
+    };
+    examinerFindingsMode = 'none';
+    const codexFirst = await publishSpecialist(revRestore,
+      [pCodexMed, pOpusMax, pSonnetMedMax, pSonnetHighMax, pSonnetMedPro, pSonnetHighPro]);
+    assert.equal((await loadSpecialistExamPlan(ledger.pool, qaCtx)).primaryClaudeAccountId, maxAccount);
+    const codexFirstRun = await examOnce('qa');
+    assert.deepEqual(codexFirstRun.launches.map(l => [l.accountId, l.profileId]), [[maxAccount, pSonnetMedMax]]);
+
+    // Max listed first but without the module's profile: Pro (listed after) is not a fallback.
+    await publishSpecialist(codexFirst, [pCodexMed, pOpusMax, pSonnetHighMax, pSonnetMedPro]);
+    assert.equal((await loadSpecialistExamPlan(ledger.pool, qaCtx)).primaryClaudeAccountId, maxAccount);
+    const noMediumRun = await examOnce('qa');
+    assert.equal(noMediumRun.launches.length, 0);
+    assert.match(await readFile(join(noMediumRun.directory, 'cobertura.md'), 'utf8'), /Examinador indisponível/);
+
   } finally {
     await docker?.close();
     await ledger.close();
@@ -492,8 +569,8 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
   }
 });
 
-test('host e module-exam rejeitam revisor inválido em achado alto do examinador e validam sessão/grant na mesma conta', {
-  skip: !base, timeout: 60_000,
+test('achado alto do examinador exige sessões distintas atestadas no livro-razão no exame, na publicação e na rechecagem', {
+  skip: !base, timeout: 90_000,
 }, async () => {
   const database = await isolatedDatabase(base!, 'hostcheck');
   const ledger = new Ledger(database.url);
@@ -529,112 +606,182 @@ test('host e module-exam rejeitam revisor inválido em achado alto do examinador
     const opusSeat: ModuleExamSeat = {
       provider: 'claude', model: 'claude-opus-5-5', accountId: maxAccount, profileId: randomUUID(), grantId: randomUUID(),
     };
-
-    // 1) Wrong reviewer model (sonnet instead of opus) for examiner high finding is rejected by module-exam.ts
-    const badModelMap = {files: [{file: 'app.test.ts', code: `${skipped}\n`, reason: null}], routes: []};
-    const badModelRes = await examineFunctionalModule({
-      module: 'qa', intentId: randomUUID(), map: badModelMap, findings: [], commit,
-      reserve: async purpose => purpose === 'examiner' ? examinerSeat : {...opusSeat, model: 'claude-sonnet-5-5'},
-      release: async () => {},
-      worker: {
-        async run(call) {
-          const task = JSON.parse(call.task);
-          if (task.checklist) {
-            return JSON.stringify({
-              kind: 'exame', binding: task.binding, filesRead: ['app.test.ts'], checklist: ['qa'],
-              findings: [{line: 1, snippet: skipped, hypothesis: skipQuestion, title: 'Alto', severity: 'alta'}],
-            });
-          }
-          return JSON.stringify(reviewFixtureVerdict(task, skipped));
-        },
+    const examinerSession = randomUUID();
+    const reviewerSession = randomUUID();
+    const map = {files: [{file: 'app.test.ts', code: `${skipped}\n`, reason: null}], routes: []};
+    const highFinding = [{line: 1, snippet: skipped, hypothesis: skipQuestion, title: 'Alto', severity: 'alta'}];
+    // The worker reports sessions the way the native worker does; `reviewerSessionFor` lets a case omit or reuse one.
+    const fakeWorker = (reviewerSessionFor: () => string | undefined) => ({
+      async run(call: {task: string}) {
+        const task = JSON.parse(call.task);
+        const session = task.checklist ? examinerSession : reviewerSessionFor();
+        if (session) (call as {examSessionId?: string}).examSessionId = session;
+        if (task.checklist) {
+          return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: ['app.test.ts'], checklist: ['qa'], findings: highFinding});
+        }
+        return JSON.stringify(reviewFixtureVerdict(task, skipped));
       },
     });
-    assert.equal(badModelRes.findings[0]?.status, 'provavel');
-    assert.equal(badModelRes.findings[0]?.failure, 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
-    assert.equal(badModelRes.findings[0]?.verifier, null);
+    const exam = async (options: {
+      reviewer?: ModuleExamSeat; reviewerSession?: () => string | undefined;
+      attest?: Parameters<typeof examineFunctionalModule>[0]['attestSessions'];
+    }) => {
+      const reserved: string[] = [];
+      const result = await examineFunctionalModule({
+        module: 'qa', intentId: randomUUID(), map, findings: [], commit,
+        reserve: async purpose => { reserved.push(purpose); return purpose === 'examiner' ? examinerSeat : options.reviewer ?? opusSeat; },
+        release: async () => {},
+        worker: fakeWorker(options.reviewerSession ?? (() => reviewerSession)),
+        ...(options.attest ? {attestSessions: options.attest} : {}),
+      });
+      return {finding: result.findings[0]!, reserved, coverage: result.coverage};
+    };
 
-    // 2) Same sessionId on same account is rejected by module-exam.ts
-    const sameSessionRes = await examineFunctionalModule({
-      module: 'qa', intentId: randomUUID(), map: badModelMap, findings: [], commit,
+    // 1) Exam: without a ledger attestation the reviewer seat is not even reserved.
+    const noAttest = await exam({});
+    assert.equal(noAttest.finding.status, 'provavel');
+    assert.equal(noAttest.finding.failure, 'MODULE_EXAM_HIGH_SESSION_UNPROVEN');
+    assert.deepEqual(noAttest.reserved, ['examiner']);
+    assert.equal(noAttest.coverage[0]?.examiner?.sessionId, examinerSession);
+    assert.equal(noAttest.coverage[0]?.examiner?.grantId, examinerSeat.grantId);
+
+    // 2) Exam: wrong reviewer model is still refused before launch.
+    const badModel = await exam({reviewer: {...opusSeat, model: 'claude-sonnet-5-5'}, attest: async () => true});
+    assert.equal(badModel.finding.failure, 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+    assert.equal(badModel.finding.verifier, null);
+
+    // 3) Exam: on the same account, an omitted or reused reviewer session is refused even if attestation would pass.
+    const attestCalls: unknown[] = [];
+    const permissive = async (pair: unknown) => { attestCalls.push(pair); return true; };
+    for (const reviewerSessionFor of [() => undefined, () => examinerSession]) {
+      const res = await exam({reviewerSession: reviewerSessionFor, attest: permissive});
+      assert.equal(res.finding.status, 'provavel');
+      assert.equal(res.finding.failure, 'MODULE_EXAM_HIGH_SESSION_UNPROVEN');
+      assert.equal(res.finding.verifier, null);
+    }
+    assert.equal(attestCalls.length, 0);
+
+    // 4) Exam: distinct sessions that the ledger does not bind stay probable.
+    const refused = await exam({attest: async () => false});
+    assert.equal(refused.finding.failure, 'MODULE_EXAM_HIGH_SESSION_UNPROVEN');
+    assert.equal(refused.finding.verifier, null);
+
+    // 5) Exam: distinct, attested sessions confirm and keep both identities.
+    const attested = await exam({attest: permissive});
+    assert.equal(attested.finding.status, 'confirmado');
+    assert.equal(attested.finding.verifier?.sessionId, reviewerSession);
+    assert.equal(attested.finding.verifier?.grantId, opusSeat.grantId);
+    assert.deepEqual(attestCalls.at(-1), {
+      examiner: {...examinerSeat, sessionId: examinerSession},
+      reviewer: {...opusSeat, sessionId: reviewerSession},
+    });
+
+    // 5b) Exam: a reviewer that ran out of quota keeps PROVIDER_USAGE_LIMIT, not a session code.
+    const limited = await examineFunctionalModule({
+      module: 'qa', intentId: randomUUID(), map, findings: [], commit,
       reserve: async purpose => purpose === 'examiner' ? examinerSeat : opusSeat,
       release: async () => {},
+      attestSessions: async () => false,
       worker: {
         async run(call) {
-          (call as {examSessionId?: string}).examSessionId = '11111111-1111-4111-8111-111111111111';
           const task = JSON.parse(call.task);
+          (call as {examSessionId?: string}).examSessionId = task.checklist ? examinerSession : reviewerSession;
           if (task.checklist) {
-            return JSON.stringify({
-              kind: 'exame', binding: task.binding, filesRead: ['app.test.ts'], checklist: ['qa'],
-              findings: [{line: 1, snippet: skipped, hypothesis: skipQuestion, title: 'Alto', severity: 'alta'}],
-            });
+            return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: ['app.test.ts'], checklist: ['qa'], findings: highFinding});
           }
-          return JSON.stringify(reviewFixtureVerdict(task, skipped));
+          return 'You have reached your usage limit. Try again later.';
         },
       },
     });
-    assert.equal(sameSessionRes.findings[0]?.status, 'provavel');
-    assert.equal(sameSessionRes.findings[0]?.failure, 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+    assert.equal(limited.findings[0]?.failure, 'PROVIDER_USAGE_LIMIT');
 
-    // 3) Host publication rejects tampered verifier (same grantId or wrong model) and accepts valid distinct session+grant Opus 5.5
+    // 6) Publication: the exam result's grants and sessions are claims. Without a native
+    //    execution in the ledger, distinct grants (with or without sessions) never confirm.
     const runWithTamper = (tamper: (res: Awaited<ReturnType<typeof examineFunctionalModule>>) => void) =>
       runVerificationModule({
         module: 'qa', ledger, principal, authority, projectId, repoPath: repo, dataDirectory, commit,
         collectorOutput: {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'ok'}], findings: []},
         async examinar(req) {
-          const map = await mapModuleSnapshot(req.snapshot);
-          let callSeq = 0;
+          const snapshotMap = await mapModuleSnapshot(req.snapshot);
           const res = await examineFunctionalModule({
-            ...req, map, commit,
+            ...req, map: snapshotMap, commit,
             reserve: async purpose => purpose === 'examiner' ? examinerSeat : opusSeat,
             release: async () => {},
-            worker: {
-              async run(call) {
-                callSeq += 1;
-                (call as {examSessionId?: string}).examSessionId = callSeq === 1
-                  ? '11111111-1111-4111-8111-111111111111'
-                  : '22222222-2222-4222-8222-222222222222';
-                const task = JSON.parse(call.task);
-                if (task.checklist) {
-                  return JSON.stringify({
-                    kind: 'exame', binding: task.binding, filesRead: ['app.test.ts'], checklist: ['qa'],
-                    findings: [{line: 1, snippet: skipped, hypothesis: skipQuestion, title: 'Alto', severity: 'alta'}],
-                  });
-                }
-                return JSON.stringify(reviewFixtureVerdict(task, skipped));
-              },
-            },
+            worker: fakeWorker(() => reviewerSession),
+            attestSessions: async () => true,
           });
           tamper(res);
           return res;
         },
       });
 
-    const validRun = await runWithTamper(() => {});
-    assert.equal(validRun.achados[0]?.status, 'confirmado');
-    assert.deepEqual(validRun.achados[0]?.verifier, {provider: 'claude', model: 'claude-opus-5-5'});
+    const unbound = await runWithTamper(() => {});
+    assert.equal(unbound.achados[0]?.status, 'provavel');
+    assert.equal(unbound.achados[0]?.verifier, null);
 
-    const tamperedSameSession = await runWithTamper(res => {
+    const grantsOnly = await runWithTamper(res => {
+      delete res.coverage[0]!.examiner!.sessionId;
+      delete res.findings[0]!.verifier!.sessionId;
+    });
+    assert.equal(grantsOnly.achados[0]?.status, 'provavel');
+    assert.equal(grantsOnly.achados[0]?.verifier, null);
+
+    const sameSession = await runWithTamper(res => {
       res.findings[0]!.verifier!.sessionId = res.coverage[0]!.examiner!.sessionId;
     });
-    assert.equal(tamperedSameSession.achados[0]?.status, 'provavel');
-    assert.equal(tamperedSameSession.achados[0]?.verifier, null);
+    assert.equal(sameSession.achados[0]?.verifier, null);
 
-    const tamperedSameGrant = await runWithTamper(res => {
-      res.findings[0]!.verifier!.grantId = res.coverage[0]!.examiner!.grantId;
+    const otherAccount = await runWithTamper(res => {
+      res.findings[0]!.verifier!.accountId = randomUUID();
+      delete res.coverage[0]!.examiner!.sessionId;
+      delete res.findings[0]!.verifier!.sessionId;
     });
-    assert.equal(tamperedSameGrant.achados[0]?.status, 'provavel');
-    assert.equal(tamperedSameGrant.achados[0]?.verifier, null);
+    assert.equal(otherAccount.achados[0]?.verifier, null);
 
-    const tamperedModel = await runWithTamper(res => {
-      res.findings[0]!.verifier!.model = 'claude-sonnet-5-5';
+    const coverageRow = async (runId: string) => (await ledger.pool.query(
+      'SELECT examiner_grant_id::text AS grant_id, examiner_session_id::text AS session_id FROM ac_verify_coverage WHERE run_id=$1 AND file=$2',
+      [runId, 'app.test.ts'])).rows[0];
+    assert.deepEqual(await coverageRow(unbound.runId), {grant_id: examinerSeat.grantId, session_id: examinerSession});
+    assert.deepEqual(await coverageRow(grantsOnly.runId), {grant_id: null, session_id: null});
+
+    // 7) Recheck: the examiner identity carries the original grant and session, and the
+    //    reviewer must prove a distinct native session. Otherwise the finding stays as it was.
+    const findingStatus = async (runId: string) => (await ledger.pool.query(
+      "SELECT status FROM ac_verify_findings WHERE run_id=$1 AND achado_id='ACH-001'", [runId])).rows[0]?.status;
+    const reviewerFor = (sessionId?: string) => ({
+      provider: 'claude', model: 'claude-opus-5-5', accountId: maxAccount, profileId: opusSeat.profileId, grantId: randomUUID(),
+      ...(sessionId ? {sessionId} : {}),
     });
-    assert.equal(tamperedModel.achados[0]?.status, 'provavel');
-    assert.equal(tamperedModel.achados[0]?.verifier, null);
+    for (const sessionId of [undefined, examinerSession, randomUUID()]) {
+      const seen: unknown[] = [];
+      const outcome = await recheckModuleFindings(ledger, principal, authority, {
+        module: 'qa', runId: unbound.runId, achadoIds: ['ACH-001'], dataDirectory, projectId,
+        async review(req) {
+          seen.push(req.examiner);
+          return {reviewer: reviewerFor(sessionId), output: JSON.stringify(reviewFixtureVerdict(JSON.parse(req.task), skipped))};
+        },
+      });
+      assert.deepEqual(outcome.results, [{id: 'ACH-001', status: 'pendente', reason: 'MODULE_EXAM_HIGH_SESSION_UNPROVEN'}]);
+      assert.deepEqual(seen, [{
+        provider: 'claude', model: 'claude-sonnet-5-5', profileId: examinerSeat.profileId, accountId: null,
+        grantId: examinerSeat.grantId, sessionId: examinerSession,
+      }]);
+      assert.equal(await findingStatus(unbound.runId), 'provavel');
+    }
 
-    // 4) Host recheck rejects wrong reviewer model for examiner high finding
+    // 8) Recheck: history without the examiner session fails closed and spends no reviewer seat.
+    let historyReviews = 0;
+    const history = await recheckModuleFindings(ledger, principal, authority, {
+      module: 'qa', runId: grantsOnly.runId, achadoIds: ['ACH-001'], dataDirectory, projectId,
+      async review() { historyReviews += 1; return {reason: 'UNEXPECTED'}; },
+    });
+    assert.deepEqual(history.results, [{id: 'ACH-001', status: 'pendente', reason: 'MODULE_RECHECK_EXAMINER_SESSION_UNPROVEN'}]);
+    assert.equal(historyReviews, 0);
+
+    // 9) Recheck still refuses a reviewer of the wrong model for a high examiner finding.
     await assert.rejects(
       () => recheckModuleFindings(ledger, principal, authority, {
-        module: 'qa', runId: validRun.runId, achadoIds: ['ACH-001'], dataDirectory, projectId,
+        module: 'qa', runId: unbound.runId, achadoIds: ['ACH-001'], dataDirectory, projectId,
         async review(req) {
           assert.equal(req.severity, 'alta');
           assert.equal(req.fromExaminer, true);
