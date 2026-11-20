@@ -1486,3 +1486,8 @@ PAUSADO-COTA
 - 20/11/2026 00:44 UTC — C-LAB-C9-ATRIBUICAO encerrado com código 1.
 - 20/11/2026 00:44 UTC — O gerente conferiu o recibo turn_context do trabalhador GPT-6.1 Terra high, os arquivos da ordem e o diff. O trabalhador havia deixado o commit para quem pudesse confirmar o modelo. Entrega registrada em 72edb3a5. C-LAB-C9-ATRIBUICAO encerrado com código 0.
 - 20/11/2026 00:44 UTC — Correção c9-lab-atribuicao recebida em 72edb3a5. Revisão Sol high somente leitura solicitada.
+- 20/11/2026 00:44 UTC — revisor-C-ACEITE-LAB-C9-ATRIBUICAO iniciado em agent-control por Sol high normal somente leitura.
+- 20/11/2026 00:45 UTC — O gerente conferiu o ajuste 72edb3a5 contra a imagem C9 fixada. TypeScript passou e os cinco casos do arquivo de laboratório passaram, com as três fixtures físicas habilitadas e zero casos pulados.
+- 20/11/2026 00:46 UTC — A prova da correção conjunta 7c1392d4 encerrou com código 1. Diagnóstico dos ensaios pendente.
+- 20/11/2026 00:46 UTC — C-ACEITE-LAB-C9-ATRIBUICAO encerrado com código 0.
+- 20/11/2026 00:47 UTC — Confere o escopo por arquivo e a atribuição exata das fixtures C9. Ordem C-LAB-C9-ATRIBUICAO-R2 em worktree separado conforme 43f1c664.
