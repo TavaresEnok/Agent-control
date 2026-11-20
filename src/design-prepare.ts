@@ -1,16 +1,20 @@
 import {randomUUID} from 'node:crypto';
 import {Capacity, CapacityPolicy, type CapacityPolicy as CapacityPolicyValue} from './capacity.ts';
-import {Refusal} from './contracts.ts';
+import {Id, Refusal} from './contracts.ts';
 import type {Effort} from './effort.ts';
 import type {Ledger} from './ledger.ts';
 import type pg from 'pg';
 
 const CREATE_MODEL = 'claude-opus-5-5';
-const CREATE_EFFORT = 'medium' as const;
+const CREATE_EFFORT = 'high' as const;
+const FUNCTIONAL_HIGH_REVIEW_EFFORT = 'medium' as const;
 const EXAMINER_MODEL = 'claude-sonnet-5-5';
+const EXAMINER_EFFORTS = ['medium', 'high'] as const;
+const REVIEWER_EFFORT = 'medium' as const;
 const CATALOG_SOURCE = 'personal://account-add';
-const CATALOG_EFFORTS = [CREATE_EFFORT] as const;
+const CATALOG_EFFORTS = ['medium', 'high'] as const;
 const CATALOG_ROLES = ['specialist'] as const;
+const MAX_CHAIN_PROFILES = 20;
 
 type ProfileRow = {
   id: string;
@@ -23,8 +27,17 @@ type ProfileRow = {
 
 type CatalogRow = {model: string; efforts: string[]; roles: string[]};
 
+export type DesignPreparePurpose =
+  | 'criar'
+  | 'examinador-high'
+  | 'examinador'
+  | 'examinador-secundario-high'
+  | 'examinador-secundario-medium'
+  | 'revisor-alto'
+  | 'revisor';
+
 export type DesignPrepareProfile = {
-  purpose: 'criar' | 'examinador' | 'revisor';
+  purpose: DesignPreparePurpose;
   accountId: string;
   model: string;
   effort: string;
@@ -36,7 +49,8 @@ export type DesignPrepareProfile = {
 export type DesignPrepareReport = {
   apply: boolean;
   unchanged: boolean;
-  catalogAction: 'presente' | 'registrar';
+  catalogAction: 'presente' | 'registrar' | 'atualizar';
+  primaryAccountId: string;
   profiles: DesignPrepareProfile[];
   chain: {regular: string[]; emergency: string[]};
   contexts: string[];
@@ -56,109 +70,119 @@ type PrepareFacts = {
   previous: CapacityPolicyValue | null;
   revision: number;
   contexts: ContextPolicyRow[];
-  opus: {efforts: string[]; roles: string[]} | null;
+  opus: CatalogRow | null;
+  sonnet: CatalogRow | null;
+};
+
+type CatalogModelPlan = {
+  model: string;
+  action: 'presente' | 'registrar' | 'atualizar';
+  nextEfforts: string[];
+};
+
+type PlannedItem = {
+  profile: DesignPrepareProfile;
+  inTargetChain: boolean;
+  targetChain: 'regular' | 'emergency';
+  accountRole: 'primary' | 'secondary';
 };
 
 type SeatPlan = {
-  criar: DesignPrepareProfile;
-  examinador: DesignPrepareProfile;
-  revisor: DesignPrepareProfile;
-  criarInChain: boolean;
-  examinerInChain: boolean;
-  reviewerInChain: boolean;
+  primaryAccountId: string;
+  items: PlannedItem[];
+  migratedOpusMediumId: string | null;
   chain: {regular: string[]; emergency: string[]};
   reusePolicy: boolean;
 };
 
 /**
  * Mostra ou publica a cadeia `roles.specialist` sem mexer nos outros papéis.
- * Sem `apply`, só lê. Com `apply`, cria perfis, registra o Opus se faltar e
- * atribui a revisão a todos os contextos não arquivados do projeto, na mesma transação.
+ * Sem `apply`, só lê. Com `apply`, registra ou migra o catálogo de Opus e Sonnet,
+ * garante os perfis `specialist` e atribui a revisão a todos os contextos não
+ * arquivados do projeto, na mesma transação.
+ *
+ * Como um consumidor distingue as variantes e a conta primária via cadeia (`roles.specialist` + `ac_profiles`):
+ * - **Conta primária (Max vs outras contas):** em `roles.specialist.regular`, todos os perfis Claude
+ *   da conta primária (`--conta-prioritaria <UUID>`) precedem os perfis de qualquer outra conta Claude.
+ *   O consumidor obtém o `account_id` primário pelo perfil `claude-opus-5-5` com `effort === 'high'`
+ *   em `regular` (ou pelo primeiro perfil Claude em `regular`).
+ * - **Duas variantes de Opus 5.5 (`claude-opus-5-5`):**
+ *   - `effort === 'high'` em `regular` (conta primária): exclusivo para criação, exame e crítica visual do módulo 10 (design).
+ *   - `effort === 'medium'` em `emergency` (conta primária, perfil distinto): exclusivo para segunda opinião de achados altos em módulos funcionais.
+ * - **Duas variantes de Sonnet 5.5 (`claude-sonnet-5-5`):**
+ *   - `effort === 'high'` em `regular` (conta primária primeiro, depois outra conta disponível): exames passivos de esforço alto (módulos 1, 5 e 9).
+ *   - `effort === 'medium'` em `regular` (conta primária primeiro, depois outra conta disponível): exames passivos de esforço médio (módulos 2, 3, 4, 6, 7 e 8).
+ * - **Revisor em conta/sessão distinta (`revisor`):** em `emergency` na conta secundária (ou em perfil/sessão distinta na conta primária quando só há uma conta Claude).
  */
 export async function prepareDesignSpecialist(input: {
   ledger: Ledger;
   owner: string;
   projectId: string;
   apply: boolean;
+  primaryAccountId?: string;
 }): Promise<DesignPrepareReport> {
+  if (input.primaryAccountId !== undefined && !Id.safeParse(input.primaryAccountId).success) {
+    throw new Refusal('DESIGN_USAGE', 400);
+  }
   return input.ledger.tx(async client => {
     const facts = await loadFacts(client, input.owner, input.projectId, input.apply);
-    if (facts.opus && (!facts.opus.efforts.includes(CREATE_EFFORT) || !facts.opus.roles.includes('specialist'))) {
-      throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
-    }
-    const plan = seatPlan(facts);
-    const catalogAction = facts.opus ? 'presente' as const : 'registrar' as const;
+    const catalog = planCatalog(facts);
+    const plan = seatPlan(facts, input.primaryAccountId);
     const contexts = (plan.reusePolicy
       ? facts.contexts.filter(item => item.capacityPolicyRevision !== facts.revision)
       : facts.contexts
     ).map(item => item.id);
-    const unchanged = plan.reusePolicy && catalogAction === 'presente' && contexts.length === 0
-      && plan.criar.action === 'reusar' && plan.examinador.action === 'reusar' && plan.revisor.action === 'reusar';
+    const unchanged = plan.reusePolicy && catalog.action === 'presente' && contexts.length === 0
+      && plan.items.every(item => item.profile.action === 'reusar');
     if (!input.apply || unchanged) {
       return {
         apply: input.apply,
         unchanged,
-        catalogAction,
-        profiles: [plan.criar, plan.examinador, plan.revisor],
+        catalogAction: catalog.action,
+        primaryAccountId: plan.primaryAccountId,
+        profiles: plan.items.map(item => item.profile),
         chain: plan.chain,
         contexts,
         revisionFrom: facts.revision,
         revisionTo: unchanged || plan.reusePolicy ? facts.revision : null,
       };
     }
+
     const capacity = new Capacity(input.ledger, client);
-    if (catalogAction === 'registrar') {
-      try {
-        await capacity.registerModel(input.owner, {
-          provider: 'claude',
-          model: CREATE_MODEL,
-          efforts: [...CATALOG_EFFORTS],
-          roles: [...CATALOG_ROLES],
-          source: CATALOG_SOURCE,
-        });
-      } catch (error) {
-        if (error instanceof Refusal && (error.code === 'CATALOG_ENTRY_CONFLICT' || error.code === 'ModelDisabledByPolicy')) {
-          throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
-        }
-        throw error;
-      }
-    }
+    await applyCatalog(capacity, client, input.owner, catalog.steps);
+
     const existingRegular = facts.previous?.roles.specialist?.regular ?? [];
     const existingEmergency = facts.previous?.roles.specialist?.emergency ?? [];
     const lockedIds = new Set([...existingRegular, ...existingEmergency]);
-    const criar = await ensureProfile(
-      capacity,
-      client,
-      input.owner,
-      input.projectId,
-      plan.criar,
-      [...lockedIds].filter(id => id !== plan.criar.profileId),
-    );
-    const examinador = await ensureProfile(
-      capacity,
-      client,
-      input.owner,
-      input.projectId,
-      plan.examinador,
-      [...new Set([...lockedIds, criar])].filter(id => id !== plan.examinador.profileId),
-    );
-    const revisor = await ensureProfile(
-      capacity,
-      client,
-      input.owner,
-      input.projectId,
-      plan.revisor,
-      [...new Set([...lockedIds, criar, examinador])].filter(id => id !== plan.revisor.profileId),
-    );
-    if (new Set([criar, examinador, revisor]).size !== 3) {
+    const assignedIds = new Set<string>();
+    const ensured: {item: PlannedItem; id: string}[] = [];
+
+    for (const item of plan.items) {
+      const avoid = [...new Set([...lockedIds, ...assignedIds])].filter(id => id !== item.profile.profileId);
+      const id = await ensureProfile(capacity, client, input.owner, input.projectId, item.profile, avoid);
+      assignedIds.add(id);
+      ensured.push({item, id});
+    }
+    if (assignedIds.size !== plan.items.length) {
       throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
     }
-    const regular = [...existingRegular];
-    if (!plan.criarInChain) regular.push(criar);
-    if (!plan.examinerInChain) regular.push(examinador);
-    const emergency = [...existingEmergency];
-    if (!plan.reviewerInChain) emergency.push(revisor);
-    const chain = {regular, emergency};
+
+    const profileMap = new Map(facts.profiles.map(row => [row.id, row]));
+    const chain = buildChain({
+      existingRegular,
+      existingEmergency,
+      migratedOpusMediumId: plan.migratedOpusMediumId,
+      primaryAccountId: plan.primaryAccountId,
+      profileMap,
+      resolved: ensured.map(({item, id}) => ({
+        purpose: item.profile.purpose,
+        inTargetChain: item.inTargetChain,
+        targetChain: item.targetChain,
+        accountRole: item.accountRole,
+        id,
+      })),
+    });
+
     const policy = CapacityPolicy.parse({
       ...(facts.previous ?? {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {}}),
       roles: {...(facts.previous?.roles ?? {}), specialist: chain},
@@ -171,12 +195,9 @@ export async function prepareDesignSpecialist(input: {
     return {
       apply: true,
       unchanged: false,
-      catalogAction,
-      profiles: [
-        {...plan.criar, profileId: criar},
-        {...plan.examinador, profileId: examinador},
-        {...plan.revisor, profileId: revisor},
-      ],
+      catalogAction: catalog.action,
+      primaryAccountId: plan.primaryAccountId,
+      profiles: ensured.map(({item, id}) => ({...item.profile, profileId: id})),
       chain,
       contexts,
       revisionFrom: facts.revision,
@@ -185,11 +206,21 @@ export async function prepareDesignSpecialist(input: {
   });
 }
 
-export function formatDesignPrepare(report: DesignPrepareReport): string {
+export function formatDesignPrepare(
+  report: Omit<DesignPrepareReport, 'primaryAccountId'> & {primaryAccountId?: string},
+): string {
   if (report.unchanged) return 'Nada a mudar.';
+  const catalogLine = report.catalogAction === 'presente'
+    ? `${CREATE_MODEL} e ${EXAMINER_MODEL} já estão no catálogo.`
+    : report.catalogAction === 'atualizar'
+      ? (report.apply ? 'Catálogo atualizado com esforço high para specialist.' : 'Catálogo receberia esforço high para specialist.')
+      : report.apply
+        ? `${CREATE_MODEL} entrou por ${CATALOG_SOURCE}.`
+        : `${CREATE_MODEL} entraria por ${CATALOG_SOURCE}.`;
   const lines = [
     report.apply ? 'Preparação aplicada.' : 'Preparação, sem gravar.',
-    `Catálogo: ${report.catalogAction === 'presente' ? `${CREATE_MODEL} já está no catálogo.` : report.apply ? `${CREATE_MODEL} entrou por ${CATALOG_SOURCE}.` : `${CREATE_MODEL} entraria por ${CATALOG_SOURCE}.`}`,
+    `Catálogo: ${catalogLine}`,
+    ...(report.primaryAccountId ? [`Conta prioritária: ${report.primaryAccountId}`] : []),
     'Perfis specialist:',
   ];
   for (const profile of report.profiles) {
@@ -245,10 +276,6 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
     'SELECT snapshot, revision FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',
     [projectId],
   )).rows[0];
-  const opus = (await client.query<{efforts: string[]; roles: string[]}>(
-    "SELECT efforts, roles FROM ac_model_catalog WHERE provider='claude' AND model=$1",
-    [CREATE_MODEL],
-  )).rows[0] ?? null;
   const contexts = (await client.query<{id: string; capacity_policy_revision: number | null}>(
     `SELECT id::text AS id, capacity_policy_revision FROM ac_contexts
      WHERE project_id=$1 AND NOT archived
@@ -258,9 +285,11 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
     id: row.id,
     capacityPolicyRevision: row.capacity_policy_revision === null ? null : Number(row.capacity_policy_revision),
   }));
-  const catalog = (await client.query<{model: string; efforts: string[]; roles: string[]}>(
+  const catalog = (await client.query<CatalogRow>(
     "SELECT model, efforts, roles FROM ac_model_catalog WHERE provider='claude' ORDER BY model",
   )).rows;
+  const opus = catalog.find(row => row.model === CREATE_MODEL) ?? null;
+  const sonnet = catalog.find(row => row.model === EXAMINER_MODEL) ?? null;
   return {
     accounts,
     profiles,
@@ -269,100 +298,388 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
     revision: stored ? Number(stored.revision) : 0,
     contexts,
     opus,
+    sonnet,
   };
 }
 
-function seatPlan(facts: PrepareFacts): SeatPlan {
-  const primary = facts.accounts[0];
-  const secondary = facts.accounts[1] ?? primary;
-  if (!primary || !secondary) throw new Refusal('DESIGN_PREPARE_NO_CLAUDE', 409);
+function planCatalog(facts: PrepareFacts): {
+  action: 'presente' | 'registrar' | 'atualizar';
+  steps: CatalogModelPlan[];
+} {
+  const steps: CatalogModelPlan[] = [];
+  if (!facts.opus) {
+    steps.push({model: CREATE_MODEL, action: 'registrar', nextEfforts: [...CATALOG_EFFORTS]});
+  } else {
+    if (!facts.opus.roles.includes('specialist') || !facts.opus.efforts.includes(FUNCTIONAL_HIGH_REVIEW_EFFORT)) {
+      throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
+    }
+    if (!facts.opus.efforts.includes(CREATE_EFFORT)) {
+      steps.push({model: CREATE_MODEL, action: 'atualizar', nextEfforts: [...facts.opus.efforts, CREATE_EFFORT]});
+    } else {
+      steps.push({model: CREATE_MODEL, action: 'presente', nextEfforts: facts.opus.efforts});
+    }
+  }
+
+  if (!facts.sonnet) {
+    steps.push({model: EXAMINER_MODEL, action: 'registrar', nextEfforts: [...CATALOG_EFFORTS]});
+  } else {
+    if (!facts.sonnet.roles.includes('specialist') || (!facts.sonnet.efforts.includes('medium') && !facts.sonnet.efforts.includes('high'))) {
+      throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
+    }
+    const missing = CATALOG_EFFORTS.filter(effort => !facts.sonnet!.efforts.includes(effort));
+    if (missing.length > 0) {
+      steps.push({model: EXAMINER_MODEL, action: 'atualizar', nextEfforts: [...facts.sonnet.efforts, ...missing]});
+    } else {
+      steps.push({model: EXAMINER_MODEL, action: 'presente', nextEfforts: facts.sonnet.efforts});
+    }
+  }
+
+  const action = steps.some(step => step.action === 'registrar')
+    ? 'registrar'
+    : steps.some(step => step.action === 'atualizar')
+      ? 'atualizar'
+      : 'presente';
+  return {action, steps};
+}
+
+async function applyCatalog(
+  capacity: Capacity,
+  client: pg.PoolClient,
+  owner: string,
+  steps: readonly CatalogModelPlan[],
+): Promise<void> {
+  for (const step of steps) {
+    if (step.action === 'registrar') {
+      try {
+        await capacity.registerModel(owner, {
+          provider: 'claude',
+          model: step.model,
+          efforts: [...step.nextEfforts],
+          roles: [...CATALOG_ROLES],
+          source: CATALOG_SOURCE,
+        });
+      } catch (error) {
+        if (error instanceof Refusal && (error.code === 'CATALOG_ENTRY_CONFLICT' || error.code === 'ModelDisabledByPolicy')) {
+          throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
+        }
+        throw error;
+      }
+      continue;
+    }
+    if (step.action === 'atualizar') {
+      const admin = await client.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1', [owner]);
+      if (!admin.rowCount) throw new Refusal('CONTROL_ADMIN_REQUIRED', 403);
+      await client.query(
+        "UPDATE ac_model_catalog SET efforts=$2 WHERE provider='claude' AND model=$1",
+        [step.model, step.nextEfforts],
+      );
+    }
+  }
+}
+
+function selectPrimaryAccount(
+  facts: PrepareFacts,
+  chainRegularRows: readonly ProfileRow[],
+  requestedPrimaryAccountId?: string,
+): {id: string} {
+  if (requestedPrimaryAccountId !== undefined) {
+    const chosen = facts.accounts.find(account => account.id === requestedPrimaryAccountId);
+    if (!chosen) throw new Refusal('DESIGN_PREPARE_ACCOUNT_UNAVAILABLE', 409);
+    return chosen;
+  }
+  const enabledIds = new Set(facts.accounts.map(account => account.id));
+  const fromOpusHigh = chainRegularRows.find(
+    row => row.model === CREATE_MODEL && row.effort === CREATE_EFFORT && enabledIds.has(row.accountId),
+  );
+  if (fromOpusHigh) {
+    return facts.accounts.find(account => account.id === fromOpusHigh.accountId)!;
+  }
+  const fromFirstClaude = chainRegularRows.find(row => enabledIds.has(row.accountId));
+  if (fromFirstClaude) {
+    return facts.accounts.find(account => account.id === fromFirstClaude.accountId)!;
+  }
+  return facts.accounts[0]!;
+}
+
+function seatPlan(facts: PrepareFacts, requestedPrimaryAccountId?: string): SeatPlan {
   const existing = facts.previous?.roles.specialist;
   const existingRegular = existing?.regular ?? [];
   const existingEmergency = existing?.emergency ?? [];
   const byId = new Map(facts.profiles.map(row => [row.id, row]));
   const chainRegularRows = existingRegular.map(id => byId.get(id)).filter((row): row is ProfileRow => row !== undefined);
   const chainEmergencyRows = existingEmergency.map(id => byId.get(id)).filter((row): row is ProfileRow => row !== undefined);
+
+  const primary = selectPrimaryAccount(facts, chainRegularRows, requestedPrimaryAccountId);
+  const otherAccounts = facts.accounts.filter(account => account.id !== primary.id);
+  const secondary = otherAccounts[0] ?? primary;
+
   const used = new Set<string>([...existingRegular, ...existingEmergency]);
+  const matchedRegular = new Set<string>();
+  const matchedEmergency = new Set<string>();
 
   const chainCriar = chainRegularRows.find(
     row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === CREATE_EFFORT,
   );
-  const chainExaminer = chainRegularRows.find(
-    row => row.accountId === primary.id && row.id !== chainCriar?.id,
-  );
-  const chainReviewer = chainEmergencyRows.find(
-    row => row.accountId === secondary.id && row.id !== chainCriar?.id && row.id !== chainExaminer?.id,
-  );
+  if (chainCriar) matchedRegular.add(chainCriar.id);
 
-  const examiner = examinerChoice(facts);
+  const chainExaminerHigh = chainRegularRows.find(
+    row => row.accountId === primary.id && row.model === EXAMINER_MODEL && row.effort === 'high' && !matchedRegular.has(row.id),
+  );
+  if (chainExaminerHigh) matchedRegular.add(chainExaminerHigh.id);
+
+  const chainExaminerMedium = chainRegularRows.find(
+    row => row.accountId === primary.id && row.model === EXAMINER_MODEL && row.effort === 'medium' && !matchedRegular.has(row.id),
+  );
+  if (chainExaminerMedium) matchedRegular.add(chainExaminerMedium.id);
+
+  let chainReviewerOpus = chainEmergencyRows.find(
+    row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === FUNCTIONAL_HIGH_REVIEW_EFFORT,
+  );
+  let migratedOpusMediumId: string | null = null;
+  if (chainReviewerOpus) {
+    matchedEmergency.add(chainReviewerOpus.id);
+  } else {
+    const legacyRegularOpusMedium = chainRegularRows.find(
+      row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === FUNCTIONAL_HIGH_REVIEW_EFFORT && !matchedRegular.has(row.id),
+    );
+    if (legacyRegularOpusMedium) {
+      chainReviewerOpus = legacyRegularOpusMedium;
+      migratedOpusMediumId = legacyRegularOpusMedium.id;
+    }
+  }
+
+  const chainReviewer =
+    chainEmergencyRows.find(
+      row => row.accountId === secondary.id && row.model !== CREATE_MODEL && row.effort === REVIEWER_EFFORT && !matchedEmergency.has(row.id),
+    )
+    ?? chainEmergencyRows.find(
+      row => row.accountId === secondary.id && row.model !== CREATE_MODEL && !matchedEmergency.has(row.id),
+    );
+  if (chainReviewer) matchedEmergency.add(chainReviewer.id);
+
+  const primaryMissingCount = [chainCriar, chainExaminerHigh, chainExaminerMedium].filter(item => item === undefined).length;
+  const baseRegularCount = existingRegular.filter(id => id !== migratedOpusMediumId).length + primaryMissingCount;
+
+  const secondaryChains: {
+    accountId: string;
+    highChain: ProfileRow | undefined;
+    mediumChain: ProfileRow | undefined;
+  }[] = [];
+  let projectedRegularCount = baseRegularCount;
+  for (const other of otherAccounts) {
+    const highChain = chainRegularRows.find(
+      row => row.accountId === other.id && row.model === EXAMINER_MODEL && row.effort === 'high' && !matchedRegular.has(row.id),
+    );
+    const mediumChain = chainRegularRows.find(
+      row => row.accountId === other.id && row.model === EXAMINER_MODEL && row.effort === 'medium' && !matchedRegular.has(row.id),
+    );
+    const needed = (highChain ? 0 : 1) + (mediumChain ? 0 : 1);
+    if (projectedRegularCount + needed > MAX_CHAIN_PROFILES) break;
+    if (highChain) matchedRegular.add(highChain.id);
+    if (mediumChain) matchedRegular.add(mediumChain.id);
+    projectedRegularCount += needed;
+    secondaryChains.push({accountId: other.id, highChain, mediumChain});
+  }
+
   const criarRow = chainCriar ?? take(
     facts.profiles,
     row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === CREATE_EFFORT,
     used,
   );
-  const examinerRow = chainExaminer ?? take(
+  const examinerHighRow = chainExaminerHigh ?? take(
     facts.profiles,
-    row => row.accountId === primary.id && row.model === examiner.model && row.effort === examiner.effort,
+    row => row.accountId === primary.id && row.model === EXAMINER_MODEL && row.effort === 'high',
+    used,
+  );
+  const examinerMediumRow = chainExaminerMedium ?? take(
+    facts.profiles,
+    row => row.accountId === primary.id && row.model === EXAMINER_MODEL && row.effort === 'medium',
+    used,
+  );
+
+  const secondaryPlanned = secondaryChains.map(entry => {
+    const highRow = entry.highChain ?? take(
+      facts.profiles,
+      row => row.accountId === entry.accountId && row.model === EXAMINER_MODEL && row.effort === 'high',
+      used,
+    );
+    const mediumRow = entry.mediumChain ?? take(
+      facts.profiles,
+      row => row.accountId === entry.accountId && row.model === EXAMINER_MODEL && row.effort === 'medium',
+      used,
+    );
+    return {
+      accountId: entry.accountId,
+      highInChain: entry.highChain !== undefined,
+      mediumInChain: entry.mediumChain !== undefined,
+      medium: entry.mediumChain
+        ? profileReport('examinador-secundario-medium', entry.mediumChain, 'outra conta')
+        : planned('examinador-secundario-medium', entry.accountId, EXAMINER_MODEL, 'medium', mediumRow, 'outra conta'),
+      high: entry.highChain
+        ? profileReport('examinador-secundario-high', entry.highChain, 'outra conta')
+        : planned('examinador-secundario-high', entry.accountId, EXAMINER_MODEL, 'high', highRow, 'outra conta'),
+    };
+  });
+
+  const reviewerOpusRow = chainReviewerOpus ?? take(
+    facts.profiles,
+    row => row.accountId === primary.id && row.model === CREATE_MODEL && row.effort === FUNCTIONAL_HIGH_REVIEW_EFFORT,
     used,
   );
   const reviewerRow = chainReviewer ?? take(
     facts.profiles,
-    row => row.accountId === secondary.id && row.model === examiner.model && row.effort === examiner.effort,
+    row => row.accountId === secondary.id && row.model === EXAMINER_MODEL && row.effort === REVIEWER_EFFORT,
     used,
   );
 
-  const criar = chainCriar
-    ? profileReport('criar', chainCriar, 'conta')
-    : planned('criar', primary.id, CREATE_MODEL, CREATE_EFFORT, criarRow, 'conta');
-  const examinador = chainExaminer
-    ? profileReport('examinador', chainExaminer, 'conta')
-    : planned('examinador', primary.id, examiner.model, examiner.effort, examinerRow, 'conta');
-  const reviewerSeat = secondary.id === primary.id ? 'outra sessão' : 'outra conta';
-  const revisor = chainReviewer
-    ? profileReport('revisor', chainReviewer, chainReviewer.accountId === primary.id ? 'outra sessão' : 'outra conta')
-    : planned('revisor', secondary.id, examiner.model, examiner.effort, reviewerRow, reviewerSeat);
+  const items: PlannedItem[] = [
+    {
+      profile: chainCriar
+        ? profileReport('criar', chainCriar, 'conta')
+        : planned('criar', primary.id, CREATE_MODEL, CREATE_EFFORT, criarRow, 'conta'),
+      inTargetChain: chainCriar !== undefined,
+      targetChain: 'regular',
+      accountRole: 'primary',
+    },
+    {
+      profile: chainExaminerMedium
+        ? profileReport('examinador', chainExaminerMedium, 'conta')
+        : planned('examinador', primary.id, EXAMINER_MODEL, EXAMINER_EFFORTS[0], examinerMediumRow, 'conta'),
+      inTargetChain: chainExaminerMedium !== undefined,
+      targetChain: 'regular',
+      accountRole: 'primary',
+    },
+    {
+      profile: chainExaminerHigh
+        ? profileReport('examinador-high', chainExaminerHigh, 'conta')
+        : planned('examinador-high', primary.id, EXAMINER_MODEL, EXAMINER_EFFORTS[1], examinerHighRow, 'conta'),
+      inTargetChain: chainExaminerHigh !== undefined,
+      targetChain: 'regular',
+      accountRole: 'primary',
+    },
+    ...secondaryPlanned.flatMap<PlannedItem>(entry => [
+      {
+        profile: entry.medium,
+        inTargetChain: entry.mediumInChain,
+        targetChain: 'regular',
+        accountRole: 'secondary',
+      },
+      {
+        profile: entry.high,
+        inTargetChain: entry.highInChain,
+        targetChain: 'regular',
+        accountRole: 'secondary',
+      },
+    ]),
+    {
+      profile: chainReviewer
+        ? profileReport('revisor', chainReviewer, chainReviewer.accountId === primary.id ? 'outra sessão' : 'outra conta')
+        : planned(
+            'revisor',
+            secondary.id,
+            EXAMINER_MODEL,
+            REVIEWER_EFFORT,
+            reviewerRow,
+            secondary.id === primary.id ? 'outra sessão' : 'outra conta',
+          ),
+      inTargetChain: chainReviewer !== undefined,
+      targetChain: 'emergency',
+      accountRole: 'secondary',
+    },
+    {
+      profile: chainReviewerOpus
+        ? profileReport('revisor-alto', chainReviewerOpus, 'outra sessão')
+        : planned('revisor-alto', primary.id, CREATE_MODEL, FUNCTIONAL_HIGH_REVIEW_EFFORT, reviewerOpusRow, 'outra sessão'),
+      inTargetChain: chainReviewerOpus !== undefined && migratedOpusMediumId === null,
+      targetChain: 'emergency',
+      accountRole: 'primary',
+    },
+  ];
 
-  const criarInChain = chainCriar !== undefined;
-  const examinerInChain = chainExaminer !== undefined;
-  const reviewerInChain = chainReviewer !== undefined;
-  const regular = [...existingRegular];
-  if (!criarInChain) regular.push(criar.profileId ?? `novo:${criar.purpose}`);
-  if (!examinerInChain) regular.push(examinador.profileId ?? `novo:${examinador.purpose}`);
-  const emergency = [...existingEmergency];
-  if (!reviewerInChain) emergency.push(revisor.profileId ?? `novo:${revisor.purpose}`);
+  const chain = buildChain({
+    existingRegular,
+    existingEmergency,
+    migratedOpusMediumId,
+    primaryAccountId: primary.id,
+    profileMap: byId,
+    resolved: items.map(item => ({
+      purpose: item.profile.purpose,
+      inTargetChain: item.inTargetChain,
+      targetChain: item.targetChain,
+      accountRole: item.accountRole,
+      id: item.profile.profileId ?? `novo:${item.profile.purpose}:${item.profile.accountId}`,
+    })),
+  });
 
   return {
-    criar,
-    examinador,
-    revisor,
-    criarInChain,
-    examinerInChain,
-    reviewerInChain,
-    chain: {regular, emergency},
-    reusePolicy: existing !== undefined && criarInChain && examinerInChain && reviewerInChain,
+    primaryAccountId: primary.id,
+    items,
+    migratedOpusMediumId,
+    chain,
+    reusePolicy: existing !== undefined && sameChain(existing, chain),
   };
 }
 
-function examinerChoice(facts: PrepareFacts): {model: string; effort: Effort} {
-  const offers = (model: string, effort: string) =>
-    facts.catalog.some(row => row.model === model && row.efforts.includes(effort) && row.roles.includes('specialist'));
-  if (offers(EXAMINER_MODEL, 'medium')) return {model: EXAMINER_MODEL, effort: 'medium'};
-  const other = facts.catalog.find(
-    row => row.model !== CREATE_MODEL && row.efforts.includes('medium') && row.roles.includes('specialist'),
+function buildChain(input: {
+  existingRegular: readonly string[];
+  existingEmergency: readonly string[];
+  migratedOpusMediumId: string | null;
+  primaryAccountId: string;
+  profileMap: ReadonlyMap<string, ProfileRow>;
+  resolved: readonly {
+    purpose: DesignPreparePurpose;
+    inTargetChain: boolean;
+    targetChain: 'regular' | 'emergency';
+    accountRole: 'primary' | 'secondary';
+    id: string;
+  }[];
+}): {regular: string[]; emergency: string[]} {
+  const regularPool = input.existingRegular.filter(id => id !== input.migratedOpusMediumId);
+  const nonClaudeRegular = regularPool.filter(id => !input.profileMap.has(id));
+  const existingPrimaryRegular = regularPool.filter(id => input.profileMap.get(id)?.accountId === input.primaryAccountId);
+  const existingOtherRegular = regularPool.filter(id => {
+    const row = input.profileMap.get(id);
+    return row !== undefined && row.accountId !== input.primaryAccountId;
+  });
+
+  const addedPrimaryCreate: string[] = [];
+  const addedPrimaryOther: string[] = [];
+  const addedSecondaryRegular: string[] = [];
+  const addedEmergency: string[] = [];
+
+  for (const item of input.resolved) {
+    if (item.inTargetChain) continue;
+    if (item.targetChain === 'emergency') {
+      addedEmergency.push(item.id);
+      continue;
+    }
+    if (item.accountRole === 'primary') {
+      if (item.purpose === 'criar') addedPrimaryCreate.push(item.id);
+      else addedPrimaryOther.push(item.id);
+    } else {
+      addedSecondaryRegular.push(item.id);
+    }
+  }
+
+  const hasExistingOpusInPrimary = existingPrimaryRegular.some(
+    id => input.profileMap.get(id)?.model === CREATE_MODEL,
   );
-  if (other) return {model: other.model, effort: 'medium'};
-  const opusReady = facts.opus === null
-    || (facts.opus.efforts.includes(CREATE_EFFORT) && facts.opus.roles.includes('specialist'));
-  if (opusReady) return {model: CREATE_MODEL, effort: 'medium'};
-  const any = facts.catalog.find(
-    row => row.roles.includes('specialist') && row.efforts.some(effort => effort === 'medium' || effort === 'high' || effort === 'low'),
-  );
-  const effort = any ? (['medium', 'high', 'low'] as const).find(item => any.efforts.includes(item)) : undefined;
-  if (!any || !effort) throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
-  return {model: any.model, effort};
+  const primaryRegular = hasExistingOpusInPrimary
+    ? [...addedPrimaryCreate, ...existingPrimaryRegular, ...addedPrimaryOther]
+    : [...existingPrimaryRegular, ...addedPrimaryCreate, ...addedPrimaryOther];
+  const otherRegular = [...existingOtherRegular, ...addedSecondaryRegular];
+
+  return {
+    regular: [...nonClaudeRegular, ...primaryRegular, ...otherRegular],
+    emergency: [...input.existingEmergency, ...addedEmergency],
+  };
 }
 
-function profileReport(purpose: DesignPrepareProfile['purpose'], row: ProfileRow, seat: DesignPrepareProfile['seat']): DesignPrepareProfile {
+function profileReport(
+  purpose: DesignPreparePurpose,
+  row: ProfileRow,
+  seat: DesignPrepareProfile['seat'],
+): DesignPrepareProfile {
   return {
     purpose,
     accountId: row.accountId,
@@ -375,7 +692,7 @@ function profileReport(purpose: DesignPrepareProfile['purpose'], row: ProfileRow
 }
 
 function planned(
-  purpose: DesignPrepareProfile['purpose'],
+  purpose: DesignPreparePurpose,
   accountId: string,
   model: string,
   effort: string,

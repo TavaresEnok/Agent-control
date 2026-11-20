@@ -101,7 +101,13 @@ test('preparar acrescenta só specialist, a segunda vez não muda, e sem Claude 
     assert.equal(preview.unchanged, false);
     assert.equal(preview.catalogAction, 'registrar');
     assert.equal(preview.profiles.find(item => item.purpose === 'criar')?.model, 'claude-opus-5-5');
-    assert.equal(preview.profiles.find(item => item.purpose === 'criar')?.effort, 'medium');
+    assert.equal(preview.profiles.find(item => item.purpose === 'criar')?.effort, 'high');
+    assert.equal(preview.profiles.find(item => item.purpose === 'examinador-high')?.model, 'claude-sonnet-5-5');
+    assert.equal(preview.profiles.find(item => item.purpose === 'examinador-high')?.effort, 'high');
+    assert.equal(preview.profiles.find(item => item.purpose === 'examinador')?.model, 'claude-sonnet-5-5');
+    assert.equal(preview.profiles.find(item => item.purpose === 'examinador')?.effort, 'medium');
+    assert.equal(preview.profiles.find(item => item.purpose === 'revisor-alto')?.model, 'claude-opus-5-5');
+    assert.equal(preview.profiles.find(item => item.purpose === 'revisor-alto')?.effort, 'medium');
     assert.equal(preview.profiles.find(item => item.purpose === 'revisor')?.accountId, secondary);
     assert.equal(preview.profiles.find(item => item.purpose === 'revisor')?.seat, 'outra conta');
     assert.deepEqual(preview.contexts.sort(), [fresh, kept].sort());
@@ -115,14 +121,14 @@ test('preparar acrescenta só specialist, a segunda vez não muda, e sem Claude 
     const after = await counts();
     assert.equal(after.revisions, before.revisions + 1);
     assert.equal(after.catalog, before.catalog + 1);
-    assert.equal(after.profiles, before.profiles + 3);
+    assert.equal(after.profiles, before.profiles + 7);
     const stored = (await db.pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision', [project])).rows.map(row => row.snapshot);
     assert.equal(stored.length, 2);
     const older = CapacityPolicy.parse(stored[0]);
     const newer = CapacityPolicy.parse(stored[1]);
     assert.equal(older.roles.specialist, undefined);
-    assert.equal(newer.roles.specialist?.regular.length, 2);
-    assert.equal(newer.roles.specialist?.emergency.length, 1);
+    assert.equal(newer.roles.specialist?.regular.length, 5);
+    assert.equal(newer.roles.specialist?.emergency.length, 2);
     const strip = (policy: ReturnType<typeof CapacityPolicy.parse>) => {
       const copy = structuredClone(policy);
       delete copy.roles.specialist;
@@ -132,7 +138,7 @@ test('preparar acrescenta só specialist, a segunda vez não muda, e sem Claude 
     assert.equal(newer.combo, 'economia');
     assert.equal(newer.maxProgrammersPerContext, 3);
     const ids = [...newer.roles.specialist!.regular, ...newer.roles.specialist!.emergency];
-    assert.equal(new Set(ids).size, 3);
+    assert.equal(new Set(ids).size, 7);
     const seats = (await db.pool.query<{id: string; account_id: string; model: string; effort: string; role: string; enabled: boolean}>(
       'SELECT id::text AS id, account_id::text AS account_id, model, effort, role, enabled FROM ac_profiles WHERE id=ANY($1::uuid[])',
       [ids],
@@ -140,16 +146,34 @@ test('preparar acrescenta só specialist, a segunda vez não muda, e sem Claude 
     const byId = new Map(seats.map(row => [row.id, row]));
     const criar = byId.get(newer.roles.specialist!.regular[0]!);
     const examinador = byId.get(newer.roles.specialist!.regular[1]!);
+    const examinadorHigh = byId.get(newer.roles.specialist!.regular[2]!);
+    const secMedium = byId.get(newer.roles.specialist!.regular[3]!);
+    const secHigh = byId.get(newer.roles.specialist!.regular[4]!);
     const revisor = byId.get(newer.roles.specialist!.emergency[0]!);
+    const revisorAlto = byId.get(newer.roles.specialist!.emergency[1]!);
     assert.equal(criar?.model, 'claude-opus-5-5');
-    assert.equal(criar?.effort, 'medium');
+    assert.equal(criar?.effort, 'high');
     assert.equal(criar?.account_id, primary);
     assert.equal(criar?.role, 'specialist');
     assert.equal(criar?.enabled, true);
+    assert.equal(examinadorHigh?.model, 'claude-sonnet-5-5');
+    assert.equal(examinadorHigh?.effort, 'high');
+    assert.equal(examinadorHigh?.account_id, primary);
     assert.equal(examinador?.model, 'claude-sonnet-5-5');
+    assert.equal(examinador?.effort, 'medium');
     assert.equal(examinador?.account_id, primary);
+    assert.equal(secHigh?.model, 'claude-sonnet-5-5');
+    assert.equal(secHigh?.effort, 'high');
+    assert.equal(secHigh?.account_id, secondary);
+    assert.equal(secMedium?.model, 'claude-sonnet-5-5');
+    assert.equal(secMedium?.effort, 'medium');
+    assert.equal(secMedium?.account_id, secondary);
     assert.equal(revisor?.account_id, secondary);
     assert.equal(revisor?.role, 'specialist');
+    assert.equal(revisorAlto?.model, 'claude-opus-5-5');
+    assert.equal(revisorAlto?.effort, 'medium');
+    assert.equal(revisorAlto?.account_id, primary);
+    assert.equal(revisorAlto?.role, 'specialist');
     assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [kept])).rows[0].capacity_policy_revision), applied.revisionTo);
     assert.equal(Number((await db.pool.query('SELECT capacity_policy_revision FROM ac_contexts WHERE id=$1', [fresh])).rows[0].capacity_policy_revision), applied.revisionTo);
 
@@ -160,7 +184,7 @@ test('preparar acrescenta só specialist, a segunda vez não muda, e sem Claude 
     const opusCatalog = (await db.pool.query<{efforts: string[]; roles: string[]; source: string}>(
       "SELECT efforts, roles, source FROM ac_model_catalog WHERE provider='claude' AND model='claude-opus-5-5'",
     )).rows[0];
-    assert.deepEqual(opusCatalog, {efforts: ['medium'], roles: ['specialist'], source: 'personal://account-add'});
+    assert.deepEqual(opusCatalog, {efforts: ['medium', 'high'], roles: ['specialist'], source: 'personal://account-add'});
   } finally {
     await db.close();
     await database.close();
@@ -197,7 +221,10 @@ test('preparar com uma conta Claude abre outra sessão para o revisor', {skip: d
     const applied = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
     assert.equal(applied.profiles.find(item => item.purpose === 'revisor')?.seat, 'outra sessão');
     assert.equal(applied.profiles.find(item => item.purpose === 'revisor')?.accountId, account);
-    assert.equal(new Set(applied.chain.regular.concat(applied.chain.emergency)).size, 3);
+    assert.equal(applied.profiles.find(item => item.purpose === 'revisor-alto')?.seat, 'outra sessão');
+    assert.equal(applied.profiles.find(item => item.purpose === 'revisor-alto')?.model, 'claude-opus-5-5');
+    assert.equal(applied.profiles.find(item => item.purpose === 'revisor-alto')?.effort, 'medium');
+    assert.equal(new Set(applied.chain.regular.concat(applied.chain.emergency)).size, 5);
     const again = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
     assert.equal(again.unchanged, true);
   } finally {
@@ -283,7 +310,7 @@ test('preparar não altera linha existente do Opus no catálogo e recusa se falt
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await capacity.configure(principal, {programmingLimit: 4, evaluationLimit: 4});
     await capacity.registerModel(principal, {
-      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'custom://sonnet',
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium', 'high'], roles: [...roles], source: 'custom://sonnet',
     });
     await capacity.registerModel(principal, {
       provider: 'claude', model: 'claude-opus-5-5', efforts: ['low', 'medium', 'high'], roles: ['manager', 'specialist'], source: 'custom://opus',
@@ -369,17 +396,17 @@ test('preparar acrescenta perfis que faltam à cadeia specialist existente sem s
     const preview = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: false});
     assert.equal(preview.unchanged, false);
     assert.deepEqual(preview.chain.regular.slice(0, 2), [oldGrokRegular, oldClaudeRegular]);
-    assert.equal(preview.chain.regular.length, 3);
+    assert.equal(preview.chain.regular.length, 4);
     assert.deepEqual(preview.chain.emergency.slice(0, 1), [oldGrokEmergency]);
-    assert.equal(preview.chain.emergency.length, 2);
+    assert.equal(preview.chain.emergency.length, 3);
 
     const applied = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
     assert.equal(applied.revisionFrom, revision1);
     assert.equal(applied.revisionTo, revision1 + 1);
     assert.deepEqual(applied.chain.regular.slice(0, 2), [oldGrokRegular, oldClaudeRegular]);
-    assert.equal(applied.chain.regular.length, 3);
+    assert.equal(applied.chain.regular.length, 4);
     assert.deepEqual(applied.chain.emergency.slice(0, 1), [oldGrokEmergency]);
-    assert.equal(applied.chain.emergency.length, 2);
+    assert.equal(applied.chain.emergency.length, 3);
 
     const stored = CapacityPolicy.parse((await db.pool.query(
       'SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1',
@@ -391,7 +418,7 @@ test('preparar acrescenta perfis que faltam à cadeia specialist existente sem s
       'SELECT model, effort FROM ac_profiles WHERE id=$1',
       [createdId],
     )).rows[0];
-    assert.deepEqual(createdRow, {model: 'claude-opus-5-5', effort: 'medium'});
+    assert.deepEqual(createdRow, {model: 'claude-opus-5-5', effort: 'high'});
 
     const again = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
     assert.equal(again.unchanged, true);

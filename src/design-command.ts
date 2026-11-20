@@ -470,7 +470,7 @@ export type DesignInvocation =
   | {kind: 'exam'; argv: string[]; references: string[]; threshold: number; serveDir?: string}
   | {kind: 'approve'; installationPath: string; projectId: string; runId: string}
   | {kind: 'create'; installationPath: string; projectId: string; briefing: string; references: string[]; screens: number; rounds: number}
-  | {kind: 'prepare'; installationPath: string; projectId: string; apply: boolean};
+  | {kind: 'prepare'; installationPath: string; projectId: string; apply: boolean; primaryAccountId?: string};
 
 /** O contêiner de exame não alcança o loopback do host. */
 function loopbackExamHost(url: string): boolean {
@@ -502,11 +502,23 @@ function takeValues(argv: readonly string[], flag: string): {rest: string[]; val
 export function parseDesignInvocation(argv: readonly string[]): DesignInvocation {
   if (argv[0] === 'preparar') {
     let apply = false;
+    let primaryAccountId: string | undefined;
     const positionals: string[] = [];
-    for (const token of argv.slice(1)) {
+    const tokens = argv.slice(1);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index] ?? '';
       if (token === '--aplicar') {
         if (apply) throw new Refusal('DESIGN_USAGE', 400);
         apply = true;
+        continue;
+      }
+      if (token === '--conta-prioritaria') {
+        const value = tokens[index + 1];
+        if (primaryAccountId !== undefined || value === undefined || value.startsWith('--') || !Id.safeParse(value).success) {
+          throw new Refusal('DESIGN_USAGE', 400);
+        }
+        primaryAccountId = value;
+        index += 1;
         continue;
       }
       if (token.startsWith('--')) throw new Refusal('DESIGN_USAGE', 400);
@@ -515,7 +527,13 @@ export function parseDesignInvocation(argv: readonly string[]): DesignInvocation
     const [installationPath, projectId] = positionals;
     if (!installationPath || !projectId || positionals.length !== 2) throw new Refusal('DESIGN_USAGE', 400);
     if (!Id.safeParse(projectId).success) throw new Refusal('NOT_FOUND', 404);
-    return {kind: 'prepare', installationPath, projectId, apply};
+    return {
+      kind: 'prepare',
+      installationPath,
+      projectId,
+      apply,
+      ...(primaryAccountId === undefined ? {} : {primaryAccountId}),
+    };
   }
   if (argv[0] === 'criar') {
     const briefing = takeValues(argv.slice(1), '--briefing');

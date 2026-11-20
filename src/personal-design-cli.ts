@@ -45,9 +45,10 @@ const messages: Record<string, string> = {
   DESIGN_IMAGE_FAILED: 'A imagem de design não entregou os achados.',
   DESIGN_IMAGE_TIMEOUT: 'A imagem de design passou do tempo.',
   DESIGN_IMAGE_UNPINNED: 'A imagem de design não está fixada pelo digest.',
-  DESIGN_CREATE_MODEL_UNAVAILABLE: 'A conta não tem Claude Opus 5.5 com esforço medium.',
+  DESIGN_CREATE_MODEL_UNAVAILABLE: 'O catálogo não tem Claude Opus 5.5 e Sonnet 5.5 nos esforços medium e high para specialist.',
   DESIGN_PREPARE_NO_CLAUDE: 'O projeto não tem conta Claude.',
-  CONTROL_ADMIN_REQUIRED: 'Falta o administrador de controle para registrar claude-opus-5-5 no catálogo.',
+  DESIGN_PREPARE_ACCOUNT_UNAVAILABLE: 'A conta prioritária informada não é uma conta Claude ativa deste projeto.',
+  CONTROL_ADMIN_REQUIRED: 'Falta o administrador de controle para registrar ou atualizar os modelos Claude no catálogo.',
   PROJECT_OWNER_REQUIRED: 'Só o dono do projeto prepara o exame.',
   DESIGN_CREATE_INVALID: 'O pedido de criação não tem telas ou rodadas válidas.',
   DESIGN_CREATE_PROMPT_TOO_LARGE: `O prompt de criação excedeu o limite de ${MAX_CREATE_TASK_CHARS} caracteres; reduza o briefing ou o retrabalho.`,
@@ -301,7 +302,7 @@ export function keepPersonalDesignLease<T>(ledger: {heartbeat: (authority: T) =>
   return () => clearInterval(timer);
 }
 
-async function runPrepare(invocation: {installationPath: string; projectId: string; apply: boolean}) {
+async function runPrepare(invocation: {installationPath: string; projectId: string; apply: boolean; primaryAccountId?: string}) {
   const config = await loadInstallation(resolve(invocation.installationPath));
   if (config.activation !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const project = [config.project, ...config.projects].find(item => item.id === invocation.projectId);
@@ -313,6 +314,7 @@ async function runPrepare(invocation: {installationPath: string; projectId: stri
       owner: project.owner,
       projectId: project.id,
       apply: invocation.apply,
+      ...(invocation.primaryAccountId === undefined ? {} : {primaryAccountId: invocation.primaryAccountId}),
     });
     console.log(formatDesignPrepare(report));
   } finally {
