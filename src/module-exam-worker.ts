@@ -18,6 +18,27 @@ type Input = {
   provider: ModuleExamProvider; task: string; timeoutMs: number; oauthAccessToken?: string;
 };
 const maxOutput = 200_000;
+const singleMarkdownJsonFence = /^```(?:json(?=[ \t\r\n{]))?[ \t\r\n]*([\s\S]*)```$/i;
+
+/** Extracts one JSON object from bare text or a single Markdown fence with no surrounding text. */
+export function parseModuleExamJsonObject(raw: string): {text: string; value: unknown} | null {
+  const trimmed = raw.replace(/^\uFEFF/, '').trim();
+  if (!trimmed) return null;
+  let candidate = trimmed;
+  if (candidate.startsWith('```')) {
+    const match = singleMarkdownJsonFence.exec(candidate);
+    if (!match?.[1]) return null;
+    candidate = match[1].trim();
+  }
+  if (!candidate.startsWith('{')) return null;
+  try {
+    const value: unknown = JSON.parse(candidate);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    return {text: candidate, value};
+  } catch {
+    return null;
+  }
+}
 
 export function moduleExamClaudeArgs(input: Pick<Input, 'model' | 'effort'>): string[] {
   return [
@@ -116,11 +137,13 @@ export async function runModuleExamWorker(input: Input) {
       Object.assign(process.env, {HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url, https_proxy: proxy.url, http_proxy: proxy.url});
       if (abort.signal.aborted) throw new Refusal('MODULE_EXAM_INTERRUPTED');
       const response = await claudeText(input, abort.signal, '/planning');
-      const nonJson = response.succeeded && !response.output.trimStart().startsWith('{');
+      const redactedOutput = redactSecrets(response.output.trim(), [input.oauthAccessToken]);
+      const parsed = response.succeeded ? parseModuleExamJsonObject(redactedOutput) : null;
+      const nonJson = response.succeeded && parsed === null;
       const diagnostics = nonJson ? [...response.diagnostics, response.output.slice(-4000)] : response.diagnostics;
       const limit = claudeLimitFromText(diagnostics);
       if (response.succeeded && !limit && !diagnostics.some(providerFailureCode)) {
-        output = redactSecrets(response.output.trim(), [input.oauthAccessToken]);
+        output = parsed?.text ?? redactedOutput;
       } else {
         failureCode = limit?.failureCode ?? diagnostics.map(providerFailureCode).find(Boolean) ?? 'MODULE_EXAM_PROVIDER_FAILED';
         usageWindows = limit?.usageWindows ?? null;

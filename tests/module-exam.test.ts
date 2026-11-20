@@ -610,3 +610,111 @@ test('cota devolvida por revisor reservado conserva os achados e não presume t�
   assert.deepEqual(releases, ['exited']);
   assert.deepEqual(result.findings.map(f => [f.status, f.failure]), Array(2).fill(['provavel', 'PROVIDER_USAGE_LIMIT']));
 });
+
+test('pedido do examinador comunica o contrato estrito e aceita JSON único em cerca Markdown única sem afrouxar vínculos', async () => {
+  const examiner = seat('a'), reviewer = seat('b');
+  const file = 'src/service.ts';
+  const line1 = 'export function handleOrder(id: string) {';
+  const line2 = '  return eval(id);';
+  const code = `${line1}\n${line2}\n}`;
+  const tasks: Record<string, any>[] = [];
+  const baseInput = {
+    module: 'arquitetura' as const,
+    intentId,
+    map: {files: [{file, code, reason: null}], routes: []},
+    findings: [],
+    reserve: async (purpose: 'examiner' | 'reviewer') => (purpose === 'examiner' ? examiner : reviewer),
+    release: async () => {},
+  };
+
+  const valid = await examineFunctionalModule({
+    ...baseInput,
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      tasks.push(task);
+      if (!task.checklist) {
+        return JSON.stringify({kind: 'confirmacao', status: 'provavel', binding: task.binding,
+          reason: 'Falta prova determinística para confirmar.', proof: ''});
+      }
+      const payload = JSON.stringify({
+        kind: 'exame',
+        binding: task.binding,
+        filesRead: [task.file],
+        checklist: [task.module],
+        routesReviewed: [],
+        findings: [{
+          line: 2,
+          snippet: 'return eval(id);',
+          hypothesis: 'O uso de eval acopla entrada externa à execução dinâmica?',
+          title: 'Execução dinâmica com ```eval``` acoplada ao fluxo',
+          severity: 'média',
+        }],
+      });
+      return `\uFEFF\`\`\`json\n${payload}\n\`\`\``;
+    }},
+  });
+
+  const examTask = tasks[0]!;
+  assert.match(examTask.instruction, /filesRead \(array JSON com exatamente 1 string igual ao campo file/);
+  assert.match(examTask.instruction, /checklist \(array JSON com exatamente 1 string igual ao campo module\/checklist\.id/);
+  assert.match(examTask.instruction, /"alta", "media", "baixa" ou "informativa", sem acento/);
+  assert.match(examTask.instruction, /até 20 itens/);
+  assert.equal(valid.coverage[0]?.status, 'lido');
+  assert.equal(valid.coverage[0]?.checklist[0], 'arquitetura');
+  assert.equal(valid.findings.length, 1);
+  assert.equal(valid.findings[0]?.severity, 'media');
+  assert.equal(valid.findings[0]?.status, 'provavel');
+
+  const plainFence = await examineFunctionalModule({
+    ...baseInput,
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      return '```\n' + JSON.stringify({
+        kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: [],
+      }) + '\n```';
+    }},
+  });
+  assert.equal(plainFence.coverage[0]?.status, 'lido');
+
+  const rejectCases: ((task: Record<string, any>) => string)[] = [
+    task => 'Segue o JSON:\n```json\n' + JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: []}) + '\n```',
+    task => '```json\n' + JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: []}) + '\n```\nFim.',
+    task => '```json\n' + JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: []}) + '\n```\n```json\n{"extra":true}\n```',
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: []}) + JSON.stringify({extra: 1}),
+    task => JSON.stringify({kind: 'exame', binding: '0'.repeat(64), filesRead: [task.file], checklist: [task.module], findings: []}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: task.file, checklist: [task.module], findings: []}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: ['outro.ts'], checklist: [task.module], findings: []}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.checklist.item], findings: []}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.checklist], findings: []}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], findings: []}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], extra: true, findings: []}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module]}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module],
+      findings: [{line: 2, snippet: 'return eval(id);', hypothesis: 'Falta ponto de interrogação.', title: 'Sem ?', severity: 'baixa'}]}),
+    task => JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module],
+      findings: [{line: 2, snippet: 'return eval(id);', hypothesis: 'Severidade desconhecida?', title: 'Invalida', severity: 'desconhecida'}]}),
+  ];
+
+  for (const build of rejectCases) {
+    const rejected = await examineFunctionalModule({
+      ...baseInput,
+      worker: {async run(call) { return build(JSON.parse(call.task)); }},
+    });
+    assert.equal(rejected.coverage[0]?.status, 'nao_julgado');
+    assert.equal(rejected.coverage[0]?.reason, 'MODULE_EXAM_RESPONSE_INVALID');
+    assert.equal(rejected.findings.length, 0);
+  }
+
+  const unprovedSnippet = await examineFunctionalModule({
+    ...baseInput,
+    worker: {async run(call) {
+      const task = JSON.parse(call.task);
+      return JSON.stringify({
+        kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], routesReviewed: [],
+        findings: [{line: 2, snippet: 'trecho inexistente na linha', hypothesis: 'Trecho inventado?', title: 'Inventado', severity: 'alta'}],
+      });
+    }},
+  });
+  assert.equal(unprovedSnippet.coverage[0]?.status, 'lido');
+  assert.equal(unprovedSnippet.findings.length, 0);
+});

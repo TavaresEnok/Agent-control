@@ -18,7 +18,7 @@ import {moduleExamCodexBody, readModuleExamCodexOutput, readModuleExamCodexRespo
 import {RECHECK_PROOF_VERSION} from '../src/module-recheck-measurement.ts';
 import {FUNCTION_COVERAGE_RULE} from '../src/module-recheck-regression.ts';
 import type {ModuleExamRuntime} from '../src/module-exam-native.ts';
-import {moduleExamClaudeArgs, readModuleExamClaudeOutput} from '../src/module-exam-worker.ts';
+import {moduleExamClaudeArgs, parseModuleExamJsonObject, readModuleExamClaudeOutput} from '../src/module-exam-worker.ts';
 import {moduleCliFailureText, parsePersonalModuleArgs, runPersonalModuleCli, type PersonalModuleCliDeps} from '../src/personal-module-cli.ts';
 import {runPersonalQaCli} from '../src/personal-qa-cli.ts';
 import {readModuleReport, type ModuleCollectorOutput, type VerificationModuleRunResult} from '../src/verification-modules.ts';
@@ -73,6 +73,30 @@ test('Claude só entrega texto quando a sessão observada tem o modelo reservado
   assert.equal(report(init, {type: 'assistant', message: {model: 'fixture', content: [{type: 'tool_use'}]}}, verdict).succeeded, false);
   assert.deepEqual(report(init, {type: 'result', subtype: 'error_during_execution', is_error: true,
     errors: ['usage limit reached']}).diagnostics, ['', 'usage limit reached']);
+});
+
+test('extrator de JSON do worker aceita objeto puro ou em cerca Markdown única e rejeita múltiplos JSON ou lixo', () => {
+  assert.deepEqual(parseModuleExamJsonObject('\uFEFF {"kind":"exame"} '), {text: '{"kind":"exame"}', value: {kind: 'exame'}});
+  assert.deepEqual(parseModuleExamJsonObject('```json\n{"kind":"exame","note":"```"}\n```'), {
+    text: '{"kind":"exame","note":"```"}', value: {kind: 'exame', note: '```'},
+  });
+  assert.deepEqual(parseModuleExamJsonObject('```\n{"kind":"exame"}\n```'), {
+    text: '{"kind":"exame"}', value: {kind: 'exame'},
+  });
+  for (const invalid of [
+    'texto antes {"kind":"exame"}',
+    '{"kind":"exame"} texto depois',
+    'texto antes\n```json\n{"kind":"exame"}\n```',
+    '```json\n{"kind":"exame"}\n```\ntexto depois',
+    '```json\n{"kind":"exame"}\n```\n```json\n{"other":1}\n```',
+    '{"kind":"exame"}{"other":1}',
+    '```ts\n{"kind":"exame"}\n```',
+    '```json\n[1,2,3]\n```',
+    '```json\n{"kind":"exame"}',
+    '```json\n```',
+  ]) {
+    assert.equal(parseModuleExamJsonObject(invalid), null, invalid);
+  }
 });
 
 test('credencial vencida interrompe o exame sem renovar ou alterar a conta', async () => {
