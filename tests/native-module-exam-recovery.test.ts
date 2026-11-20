@@ -97,7 +97,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const user=`${process.getuid?.()}:${process.getgid?.()}`;
 
   type Plant={workflow?:string;module?:string;intentState?:string;runStatus?:string;grantState?:string;state?:string;workerId?:string;launchDigest?:string;networkId?:string|null;
-   tools?:'created'|'running'|'absent';noNetwork?:boolean;noRequest?:boolean;plainRequest?:boolean;context?:string};
+   tools?:'created'|'running'|'absent';noNetwork?:boolean;noRequest?:boolean;plainRequest?:boolean;context?:string;siblings?:number};
   const insertIntent=async(contextId:string,workflow:string,module:string,state:string,runStatus:string)=>{
    const intentId=randomUUID();
    const command={schemaVersion:1 as const,intentId,deliveryAttemptId:randomUUID(),contextId,policyRevision:0,action:'plan.start' as const,payload:{workflow,messageRef:`${module}:${project}:${commit}`,projectId:project,commit}};
@@ -127,7 +127,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const plant=async(o:Plant={})=>{
    const contextId=o.context??examContext,epoch=await epochOf(contextId);
    const intentId=await insertIntent(contextId,o.workflow??'security-verify-readonly-v1',o.module??'qa',o.intentState??'failed',o.runStatus??'failed');
-   for(let i=0;i<3;i++){
+   for(let i=0;i<(o.siblings??3);i++){
     const sibling=randomUUID(),siblingGrant=await insertGrant(intentId,contextId,Number(epoch),'released',{executionStarted:true,jobId:sibling});
     await insertJob({jobId:sibling,intentId,grantId:siblingGrant,contextId,sessionId:randomUUID(),inputDigest:digest({sibling}),state:'failed',epoch:Number(epoch),networkId:hex(),workerId:hex(),receipt:{terminal:true}});
    }
@@ -231,15 +231,70 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   assert.equal(partial.state,'preserved');assert.equal(partial.reason,'docker_uncertain');assert.equal(partial.grant,'preserved');assert.deepEqual(partial.removed,[resume.toolsId]);
   let mid=await snapshot(resume.jobId,resume.grantId,resume.intentId);
   assert.equal(mid.grant.state,'uncertain');assert.equal(mid.job.state,'uncertain');assert.equal(mid.journal.state,'prepared');
+  // The journal stage was written only after the confirmed DELETE and carries the pre-removal evidence.
+  const stage=(await db.pool.query('SELECT binding FROM ac_native_terminal_retirements WHERE job_id=$1',[resume.jobId])).rows[0].binding;
+  assert.equal(stage.schemaVersion,2);assert.equal(stage.stage,'tools_removed');assert.equal(stage.toolsId,resume.toolsId);assert.match(stage.toolsEvidenceDigest,/^[a-f0-9]{64}$/);
+  assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='native.module_exam_tools_removed' AND detail->>'jobId'=$1",[resume.jobId])).rows[0].n,1);
   const done=await supervisor.recoverNeverStartedModuleExam(owner,authority,resume.jobId,scope);
   assert.equal(done.state,'retired');assert.equal(done.replayed,false);assert.deepEqual(done.removed,[]);
   assert.equal((await snapshot(resume.jobId,resume.grantId,resume.intentId)).grant.state,'released');
   assert.deepEqual(docker.forbidden,[]);
 
+  // ── Interruption between the decision and the DELETE: a failed DELETE writes no journal stage, so a container that
+  // then vanishes (it could have started and been removed by someone else) is never accepted as proof.
+  reset();
+  const lostDelete=await plant();docker.failContainerDelete=true;
+  const keptDelete=await supervisor.recoverNeverStartedModuleExam(owner,authority,lostDelete.jobId,scope);
+  assert.equal(keptDelete.state,'preserved');assert.equal(keptDelete.reason,'docker_uncertain');assert.deepEqual(keptDelete.removed,[]);
+  docker.failContainerDelete=false;
+  assert.equal((await snapshot(lostDelete.jobId,lostDelete.grantId,lostDelete.intentId)).journal,undefined);
+  docker.containers.delete(lostDelete.toolsName);
+  await preserved(lostDelete,'tools_absent');
+  // Retry after the same interruption with the container still Created completes normally.
+  const retried=await plant();docker.failContainerDelete=true;
+  assert.equal((await supervisor.recoverNeverStartedModuleExam(owner,authority,retried.jobId,scope)).state,'preserved');
+  docker.failContainerDelete=false;
+  const retriedOut=await supervisor.recoverNeverStartedModuleExam(owner,authority,retried.jobId,scope);
+  assert.equal(retriedOut.state,'retired');assert.deepEqual(retriedOut.removed,[retried.toolsId]);
+  assert.equal((await snapshot(retried.jobId,retried.grantId,retried.intentId)).grant.state,'released');
+  // A crash after the DELETE but before the commit leaves the same state as an absent container without a stage: preserved.
+  reset();
+  const crashed=await plant();docker.containers.delete(crashed.toolsName);
+  await preserved(crashed,'tools_absent');
+  // A legacy (v1) journal was written before any DELETE: it is honoured while the container is still there, but its
+  // absence is never proof, and the network alone cannot be missing either.
+  const legacyBinding=async(p:Awaited<ReturnType<typeof plant>>)=>({schemaVersion:1,kind:'native-module-exam-never-started-retired',jobId:p.jobId,contextId:p.contextId,intentId:p.intentId,grantId:p.grantId,sessionId:p.sessionId,
+   epoch:await epochOf(p.contextId),role:'specialist',inputDigest:p.inputDigest,toolsId:p.toolsId,networkId:p.networkId,toolsImage:image,workerId:null,executionStarted:false,moduleExam:true});
+  const legacyGone=await plant();
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[legacyGone.jobId,await legacyBinding(legacyGone)]);
+  docker.containers.delete(legacyGone.toolsName);
+  await preserved(legacyGone,'removal_unproven');
+  const legacyNoNet=await plant({noNetwork:true});
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[legacyNoNet.jobId,await legacyBinding(legacyNoNet)]);
+  await preserved(legacyNoNet,'network_unproven');
+  const legacyHere=await plant();
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[legacyHere.jobId,await legacyBinding(legacyHere)]);
+  const legacyOut=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyHere.jobId,scope);
+  assert.equal(legacyOut.state,'retired');assert.deepEqual(legacyOut.removed,[legacyHere.toolsId]);
+  reset();
+  const legacyReplay=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyHere.jobId,scope);
+  assert.equal(legacyReplay.state,'retired');assert.equal(legacyReplay.replayed,true);assert.deepEqual(docker.mutations,[]);
+  // A v2 stage that does not match this job, or whose container is back, is a conflict.
+  const forgedStage=await plant();docker.containers.delete(forgedStage.toolsName);
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[forgedStage.jobId,{...await legacyBinding(forgedStage),schemaVersion:2,stage:'tools_removed',toolsEvidenceDigest:'z'}]);
+  await preserved(forgedStage,'retirement_conflict');
+  const back=await plant();
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[back.jobId,{...await legacyBinding(back),schemaVersion:2,stage:'tools_removed',toolsEvidenceDigest:'c'.repeat(64)}]);
+  await preserved(back,'retirement_conflict');
+
   // ── Negative: insufficient evidence keeps the grant, changes nothing, returns the reason.
   reset();
   await preserved(await plant({tools:'running'}),'tools_started');
   const finished=await plant();finished.body.State.FinishedAt='2026-11-20T00:00:00Z';await preserved(finished,'tools_started');
+  // Both Docker timestamps must be exactly the zero time: empty, another year-1 date or garbage are not.
+  for(const [field,value] of [['FinishedAt',''],['FinishedAt','0001-01-01T00:00:01Z'],['FinishedAt','0001-garbage'],['FinishedAt','2026-11-20T00:00:00Z'],['StartedAt',''],['StartedAt','0001-12-31T23:59:59Z']] as const){
+   const odd=await plant();odd.body.State[field]=value;await preserved(odd,'tools_started');
+  }
   const noPid=await plant();delete noPid.body.State.Pid;await preserved(noPid,'tools_started');
   const exited=await plant();exited.body.State.Status='exited';await preserved(exited,'tools_started');
   await preserved(await plant({tools:'absent'}),'tools_absent');
@@ -250,7 +305,10 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const mounted=await plant();mounted.body.Mounts=[{Source:'/etc',Destination:'/work',RW:true}];await preserved(mounted,'tools_mismatch');
   const hostNet=await plant();hostNet.body.HostConfig.NetworkMode='host';await preserved(hostNet,'tools_mismatch');
   const privileged=await plant();privileged.body.HostConfig.Privileged=true;await preserved(privileged,'tools_mismatch');
-  const otherId=await plant();await db.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[otherId.jobId,hex()]);await preserved(otherId,'tools_mismatch');
+  const otherId=await plant();await db.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[otherId.jobId,hex()]);await preserved(otherId,'tools_registered');
+  // The create was answered and recorded, then the launch stopped before start: same Docker evidence, but not a lost
+  // create response, so this recovery does not sign it.
+  const registered=await plant();await db.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[registered.jobId,registered.toolsId]);await preserved(registered,'tools_registered');
   const withWorker=await plant();docker.containers.set('ac-native-worker-'+withWorker.jobId,{...withWorker.body,Id:hex()});await preserved(withWorker,'worker_present');
   const attached=await plant();attached.networkId&&(docker.networks.get(attached.networkId)!.Containers={[attached.toolsId]:{IPv4Address:'10.0.0.2/24'}});await preserved(attached,'network_attached');
   await preserved(await plant({noNetwork:true}),'network_unproven');
@@ -321,6 +379,8 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   await assert.rejects(runPersonalMaintenance(['/nonexistent.json','--outro',randomUUID()]),(error:unknown)=>error instanceof Refusal&&error.code==='MAINTENANCE_USAGE');
   assert.match(maintenanceCliFailureText(new ModuleExamRecoveryPreserved('tools_started',['a'])),/mantida.*iniciado ou terminou.*Contêineres já removidos: a/);
   assert.match(maintenanceCliFailureText(new Refusal('MAINTENANCE_USAGE')),/--recuperar-exame-passivo <jobId>/);
+  assert.match(maintenanceCliFailureText(new ModuleExamRecoveryPreserved('removal_unproven')),/sumiu sem prova/);
+  assert.match(maintenanceCliFailureText(new ModuleExamRecoveryPreserved('tools_registered')),/já estava registrado/);
 
   const planKeys=generateKeyPairSync('ed25519'),reviewKeys=generateKeyPairSync('ed25519');
   const fingerprintOf=(key:import('node:crypto').KeyObject)=>createHash('sha256').update(key.export({format:'der',type:'spki'})).digest('hex');
@@ -367,7 +427,8 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   });
 
   reset();
-  const viaCli=await plant();
+  // The aggregated real case: 47 terminal sibling attempts on the same intent.
+  const viaCli=await plant({siblings:47});
   // While another manager holds the exam context, the command refuses without touching anything.
   const holder=await db.acquire(owner,examContext,randomUUID(),'gateway-manager',60);
   const blocked=await cli('--recuperar-exame-passivo',viaCli.jobId);

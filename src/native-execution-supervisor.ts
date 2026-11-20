@@ -48,7 +48,9 @@ const PreLaunchExamPhysicalReceipt=z.object({executionStarted:z.literal(false),j
 const ModuleExamNeverStartedReceipt=z.object({executionStarted:z.literal(false),jobId:Id,containerId:z.null(),toolsContainerId:Hash,networkId:Hash,synthetic:z.literal(false),modelInference:z.literal(false),moduleExam:z.literal(true),reason:z.literal('module_exam_tools_create_lost')}).strict();
 /** Verification modules 2 to 9 only. The security module (verify) and design are never recovered here. */
 const PassiveExamModules=new Set(['qa','arquitetura','dependencias','banco','prontidao','desempenho','documentacao','conformidade']);
-export type ModuleExamRecoveryReason='supervisor_identity'|'docker_uncertain'|'intent_open'|'sibling_unresolved'|'job_state'|'journal_started'|'request_unproven'|'launch_present'|'spool_touched'|'worker_present'|'tools_absent'|'tools_mismatch'|'tools_started'|'network_unproven'|'network_mismatch'|'network_attached'|'grant_state'|'retirement_conflict'|'residual_resources';
+export type ModuleExamRecoveryReason='supervisor_identity'|'docker_uncertain'|'intent_open'|'sibling_unresolved'|'job_state'|'journal_started'|'request_unproven'|'launch_present'|'spool_touched'|'worker_present'|'tools_absent'|'tools_mismatch'|'tools_started'|'tools_registered'|'removal_unproven'|'network_unproven'|'network_mismatch'|'network_attached'|'grant_state'|'retirement_conflict'|'residual_resources';
+/** Docker's zero time for a container that was never started. Nothing else (empty, another 0001 date, any real date) is accepted. */
+const DockerZeroTime='0001-01-01T00:00:00Z';
 export type NativeModuleExamRecovery={state:'retired'|'preserved';reason:'proven_never_started'|ModuleExamRecoveryReason;grant:'released'|'preserved';removed:string[];replayed:boolean;receipt?:unknown};
 /** Thrown by callers that need a refusal: the grant was kept because the evidence did not prove the attempt never started. */
 export class ModuleExamRecoveryPreserved extends Refusal {
@@ -757,8 +759,31 @@ export class NativeExecutionSupervisor{
  private moduleExamPhysicalReceipt(row:Record<string,any>,toolsId:string){
   return {executionStarted:false,jobId:row.id,containerId:null,toolsContainerId:toolsId,networkId:row.network_id,synthetic:false,modelInference:false,moduleExam:true,reason:'module_exam_tools_create_lost'} as const;
  }
- private moduleExamRetirementBinding(row:Record<string,any>,toolsId:string){
-  return {schemaVersion:1,kind:'native-module-exam-never-started-retired',jobId:row.id,contextId:row.context_id,intentId:row.intent_id,grantId:row.grant_id,sessionId:row.session_id,epoch:Number(row.manager_epoch),role:'specialist',inputDigest:row.input_digest,toolsId,networkId:row.network_id,toolsImage:this.config.toolsImage,workerId:null,executionStarted:false,moduleExam:true};
+ /** Version 1 (legacy) was written before any DELETE and proves nothing about how the container went away.
+  * Version 2 is written only after this supervisor's DELETE of the verified Created container was confirmed, and binds
+  * the digest of that pre-removal evidence; it is the only journal stage that lets a resume accept an absent container. */
+ private moduleExamRetirementBinding(row:Record<string,any>,toolsId:string,toolsEvidenceDigest?:string){
+  const base={schemaVersion:1,kind:'native-module-exam-never-started-retired',jobId:row.id,contextId:row.context_id,intentId:row.intent_id,grantId:row.grant_id,sessionId:row.session_id,epoch:Number(row.manager_epoch),role:'specialist',inputDigest:row.input_digest,toolsId,networkId:row.network_id,toolsImage:this.config.toolsImage,workerId:null,executionStarted:false,moduleExam:true};
+  return toolsEvidenceDigest===undefined?base:{...base,schemaVersion:2,stage:'tools_removed',toolsEvidenceDigest};
+ }
+ /** Rebuilds the expected binding from a saved journal, or undefined if the saved one is not exactly a v1 or v2 binding of this job. */
+ private moduleExamSavedBinding(row:Record<string,any>,saved:unknown):{binding:Record<string,unknown>;toolsId:string;removalProven:boolean}|undefined{
+  const value=saved as Record<string,unknown>|null|undefined,toolsId=value?.toolsId;
+  if(!value||typeof value!=='object'||typeof toolsId!=='string'||!/^[a-f0-9]{64}$/.test(toolsId))return undefined;
+  if(value.schemaVersion===2){
+   const evidence=value.toolsEvidenceDigest;
+   if(typeof evidence!=='string'||!/^[a-f0-9]{64}$/.test(evidence))return undefined;
+   const binding=this.moduleExamRetirementBinding(row,toolsId,evidence);
+   return digest(value)===digest(binding)?{binding,toolsId,removalProven:true}:undefined;
+  }
+  const binding=this.moduleExamRetirementBinding(row,toolsId);
+  return value.schemaVersion===1&&digest(value)===digest(binding)?{binding,toolsId,removalProven:false}:undefined;
+ }
+ /** What was verified about the tools container right before this supervisor removed it. */
+ private moduleExamToolsEvidence(tools:NonNullable<Awaited<ReturnType<DockerDaemon['inspect']>>>){
+  const state=tools.State as Record<string,unknown>,labels=tools.Config.Labels;
+  return digest({id:tools.Id,image:tools.Image,job:labels['agent-control.job'],launch:labels['agent-control.launch'],networkMode:(tools.HostConfig as Record<string,unknown>).NetworkMode,
+   status:state.Status,running:state.Running,pid:state.Pid,startedAt:state.StartedAt,finishedAt:state.FinishedAt});
  }
  private verifyModuleExamNeverStartedReceipt(job:Record<string,any>,grant:Record<string,any>,receipt:any,contextId:string){
   const payload=receipt?.payload,physical=ModuleExamNeverStartedReceipt.safeParse(grant?.physical_receipt);
@@ -818,8 +843,7 @@ export class NativeExecutionSupervisor{
    !Array.isArray(host.SecurityOpt)||!host.SecurityOpt.some((item:unknown)=>item==='no-new-privileges'||item==='no-new-privileges:true')||!empty(host.CapAdd)||!empty(host.Devices)||
    Object.keys(host.PortBindings??{}).length!==0||tools.Mounts.length!==0)return 'tools_mismatch';
   const state=tools.State as Record<string,unknown>;
-  const zero=(value:unknown)=>value===''||(typeof value==='string'&&value.startsWith('0001-'));
-  if(!nativeContainerNeverStarted(state)||!zero(state.FinishedAt))return 'tools_started';
+  if(!nativeContainerNeverStarted(state)||state.StartedAt!==DockerZeroTime||state.FinishedAt!==DockerZeroTime)return 'tools_started';
   return undefined;
  }
  /** Locks and judges one never-started passive module-exam attempt. Every verdict other than `ready` or a verified replay keeps the grant. */
@@ -881,7 +905,9 @@ export class NativeExecutionSupervisor{
     // Replay: only a receipt and journal this supervisor signed, with every physical resource still gone.
     if(!row.tools_id||journal?.state!=='removed'||row.grant_state!=='released'||!ModuleExamNeverStartedReceipt.safeParse(row.physical_receipt).success)return keep('job_state');
     this.verifyModuleExamNeverStartedReceipt(row,{state:row.grant_state,physical_receipt:row.physical_receipt},row.receipt,authority.contextId);
-    this.verifyUnstartedRetirement(journal,this.moduleExamRetirementBinding(row,row.tools_id));
+    const savedBinding=this.moduleExamSavedBinding(row,journal.binding);
+    if(!savedBinding||savedBinding.toolsId!==row.tools_id)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+    this.verifyUnstartedRetirement(journal,savedBinding.binding);
     const [tools,byId,worker,network,named]=await Promise.all([this.docker.inspect(toolsName),this.docker.inspect(row.tools_id),this.docker.inspect(workerName),this.docker.inspectPrivateNetwork(row.network_id),this.docker.inspectNamedPrivateNetwork(networkName)]);
     if(tools||byId||worker||network||named)return keep('residual_resources');
     return {kind:'retired' as const,recovery:{state:'retired' as const,reason:'proven_never_started' as const,grant:'released' as const,removed:[],replayed:true,receipt:row.receipt}};
@@ -891,30 +917,38 @@ export class NativeExecutionSupervisor{
    if(!['reserved','uncertain'].includes(row.grant_state))return keep('grant_state');
    if(row.has_unresolved_job||row.has_open_grant)return keep('sibling_unresolved');
    if(row.worker_id!==null||row.launch_digest!==null||row.receipt!==null)return keep('journal_started');
+   // Only the lost create response is in scope: the launch never recorded a tools ID. A recorded ID means the create
+   // was answered and the launch stopped later, which this recovery does not judge.
+   if(row.tools_id!==null)return keep('tools_registered');
    if(!row.network_id||row.network_id===this.config.providerNetworkId)return keep('network_unproven');
    const spool=await this.moduleExamSpoolEvidence(row,jobId);
    if(spool)return keep(spool);
-   let pendingToolsId:string|undefined;
+   let saved:ReturnType<NativeExecutionSupervisor['moduleExamSavedBinding']>;
    if(journal){
-    const saved=journal.binding?.toolsId;
-    if(journal.state!=='prepared'||typeof saved!=='string'||!/^[a-f0-9]{64}$/.test(saved)||(row.tools_id&&row.tools_id!==saved)||
-     digest(journal.binding)!==digest(this.moduleExamRetirementBinding(row,saved)))return keep('retirement_conflict');
-    pendingToolsId=saved;
+    saved=journal.state==='prepared'?this.moduleExamSavedBinding(row,journal.binding):undefined;
+    if(!saved)return keep('retirement_conflict');
    }
    const [tools,worker,network,named]=await Promise.all([this.docker.inspect(toolsName),this.docker.inspect(workerName),this.docker.inspectPrivateNetwork(row.network_id),this.docker.inspectNamedPrivateNetwork(networkName)]);
    if(worker)return keep('worker_present');
    if(tools){
-    if((row.tools_id&&tools.Id!==row.tools_id)||(pendingToolsId&&tools.Id!==pendingToolsId))return keep('tools_mismatch');
+    // A container this supervisor already removed cannot be back under the same name.
+    if(saved?.removalProven)return keep('retirement_conflict');
+    if(saved&&tools.Id!==saved.toolsId)return keep('tools_mismatch');
     const bad=this.moduleExamToolsMatches(tools,row,jobId);
     if(bad)return keep(bad);
-   }else if(!pendingToolsId)return keep('tools_absent');
+   }else if(!saved)return keep('tools_absent');
+   else if(!saved.removalProven)return keep('removal_unproven');
+   else{
+    const byId=await this.docker.inspect(saved.toolsId);
+    if(byId)return keep('retirement_conflict');
+   }
    if(network){
     const labels=network.Labels,attached=network.Containers;
     if(network.Id!==row.network_id||network.Name!==networkName||network.Internal!==true||!labels||labels['agent-control.contract']!=='native-execution-v1'||
      labels['agent-control.job']!==jobId||labels['agent-control.launch']!==row.input_digest||named?.Id!==network.Id)return keep('network_mismatch');
     if(attached!=null&&(typeof attached!=='object'||Array.isArray(attached)||Object.keys(attached).length!==0))return keep('network_attached');
-   }else if(named||!pendingToolsId)return keep(named?'network_mismatch':'network_unproven');
-   return {kind:'ready' as const,row,tools:tools??null,toolsId:tools?.Id??pendingToolsId!,journal,keep};
+   }else if(named||!saved?.removalProven)return keep(named?'network_mismatch':'network_unproven');
+   return {kind:'ready' as const,row,tools:tools??null,toolsId:tools?.Id??saved!.toolsId,journal,saved,keep};
   }catch(error){
    if(dockerUncertain(error))return keep('docker_uncertain');
    throw error;
@@ -925,22 +959,12 @@ export class NativeExecutionSupervisor{
   * writes a signed journal. It never creates or starts a container, never launches a model and never touches the intent. */
  async recoverNeverStartedModuleExam(principal:string,authority:Authority,jobId:string,scope:ModuleExamRecoveryScope):Promise<NativeModuleExamRecovery>{
   Id.parse(jobId);
-  // Phase 1 commits the intent to retire (prepared journal) before any container is removed, so a crash resumes instead of guessing.
-  const prepared=await this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
-   const evidence=await this.moduleExamEvidence(c,principal,authority,jobId,scope);
-   if(evidence.kind!=='ready')return evidence.recovery;
-   if(!evidence.journal){
-    await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[jobId,this.moduleExamRetirementBinding(evidence.row,evidence.toolsId)]);
-    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.module_exam_retirement_prepared',$2)",[authority.contextId,{jobId,toolsId:evidence.toolsId,networkId:evidence.row.network_id}]);
-   }
-   return undefined;
-  }));
-  if(prepared)return prepared;
   return this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
    const evidence=await this.moduleExamEvidence(c,principal,authority,jobId,scope);
    if(evidence.kind!=='ready')return evidence.recovery;
    if(evidence.journal?.state==='removed')return evidence.keep('retirement_conflict').recovery;
    const {row,toolsId}=evidence,removed:string[]=[];
+   let binding=evidence.saved?.binding;
    try{
     await this.ledger.fence(c,authority,true);
     if(evidence.tools){
@@ -948,8 +972,19 @@ export class NativeExecutionSupervisor{
      if(!live||live.Id!==toolsId)return evidence.keep('tools_mismatch').recovery;
      const bad=this.moduleExamToolsMatches(live,row,jobId);
      if(bad)return evidence.keep(bad).recovery;
+     const toolsEvidence=this.moduleExamToolsEvidence(live);
      await this.docker.remove(live.Id);removed.push(live.Id);
+     const [byName,byId]=await Promise.all([this.docker.inspect('ac-native-tools-'+jobId),this.docker.inspect(toolsId)]);
+     if(byName||byId)return evidence.keep('residual_resources',removed).recovery;
+     // The journal stage that proves the removal is written only now, after the confirmed DELETE, in this transaction.
+     // A crash before commit leaves no stage, and a resume then keeps the grant instead of trusting the absence.
+     if(!evidence.journal){
+      binding=this.moduleExamRetirementBinding(row,toolsId,toolsEvidence);
+      await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[jobId,binding]);
+      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.module_exam_tools_removed',$2)",[authority.contextId,{jobId,toolsId,networkId:row.network_id,toolsEvidenceDigest:toolsEvidence}]);
+     }
     }
+    if(!binding)return evidence.keep('removal_unproven',removed).recovery;
     const [byName,byId,worker]=await Promise.all([this.docker.inspect('ac-native-tools-'+jobId),this.docker.inspect(toolsId),this.docker.inspect('ac-native-worker-'+jobId)]);
     if(byName||byId||worker)return evidence.keep('residual_resources',removed).recovery;
     await retireNativePrivateNetwork(this.docker,{networkId:row.network_id,providerNetworkId:this.config.providerNetworkId,jobId,inputDigest:row.input_digest});
@@ -960,9 +995,9 @@ export class NativeExecutionSupervisor{
    }
    await this.ledger.fence(c,authority,true);
    if(await this.launchPendingExists(jobId))return evidence.keep('launch_present',removed).recovery;
-   const physical=this.moduleExamPhysicalReceipt(row,toolsId),receipt=this.unstartedReceipt(row,physical),binding=this.moduleExamRetirementBinding(row,toolsId);
+   const physical=this.moduleExamPhysicalReceipt(row,toolsId),receipt=this.unstartedReceipt(row,physical);
    const proof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),this.key).toString('hex')};
-   const job=await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2,tools_id=$3 WHERE id=$1 AND state='uncertain' AND worker_id IS NULL AND launch_digest IS NULL AND receipt IS NULL",[jobId,receipt,toolsId]);
+   const job=await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2,tools_id=$3 WHERE id=$1 AND state='uncertain' AND worker_id IS NULL AND tools_id IS NULL AND launch_digest IS NULL AND receipt IS NULL",[jobId,receipt,toolsId]);
    const grant=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[row.grant_id,physical]);
    const closed=await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[jobId,proof]);
    if(job.rowCount!==1||grant.rowCount!==1||closed.rowCount!==1)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');

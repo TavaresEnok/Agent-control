@@ -41,6 +41,8 @@ const preservedReasons:Record<ModuleExamRecoveryReason,string>={
  tools_absent:'o contêiner de ferramentas esperado não existe',
  tools_mismatch:'o contêiner de ferramentas não confere com a identidade do launch',
  tools_started:'o contêiner de ferramentas já foi iniciado ou terminou',
+ tools_registered:'o ID do contêiner de ferramentas já estava registrado; não é perda da resposta de criação',
+ removal_unproven:'o contêiner de ferramentas sumiu sem prova de que esta recuperação o removeu',
  network_unproven:'a rede privada não está registrada ou não existe',
  network_mismatch:'a rede privada não confere com a identidade do job',
  network_attached:'a rede privada tem endpoints conectados',
