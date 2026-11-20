@@ -121,7 +121,7 @@ test('finished passive exam work copies are released only with the full proof, o
 
   const noOutput=await plant();
   await rm(join(noOutput.root,'output','execution-result.json'));
-  assert.deepEqual(await run(noOutput,true),{jobId:noOutput.jobId,state:'refused',reason:'receipt'});
+  assert.deepEqual(await run(noOutput,true),{jobId:noOutput.jobId,state:'refused',reason:'output_missing'});
   assert.ok(await exists(noOutput.work));
   const design=await plant({workflow:'design-readonly-v1'});
   await db.pool.query("UPDATE ac_capacity_grants SET selection=jsonb_set(coalesce(selection,'{}'::jsonb),'{designPurpose}',to_jsonb('examiner'::text)) WHERE id=(SELECT grant_id FROM ac_native_execution_jobs WHERE id=$1)",[design.jobId]);

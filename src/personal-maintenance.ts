@@ -367,6 +367,7 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
      const result=await supervisor.retireTerminalWork(principal,id,apply,{contextId:row.context_id,projectId:project.id,repository:project.repo});
      if(result.state==='refused'){
       if(result.reason==='busy')totals.busy++;else refuse(result.reason);
+      if(result.reason==='output_missing')lines.push(`${id}: work preservado (output_missing); resultado ausente, requer análise.`);
      }else if(result.state==='absent')totals.absent++;
      else{
       totals[result.state]++;totals.bytes+=result.bytes??0;spent++;

@@ -61,7 +61,7 @@ export type NativeModuleExamRecovery={state:'retired'|'preserved';reason:'proven
 export class ModuleExamRecoveryPreserved extends Refusal {
  constructor(readonly reason:ModuleExamRecoveryReason,readonly removed:string[]=[]){super('NATIVE_MODULE_EXAM_RECOVERY_PRESERVED',409);}
 }
-export type ModuleExamWorkRefusal='not_found'|'not_passive_exam'|'job_state'|'grant_state'|'supervisor_identity'|'receipt'|'retirement'|'directory_unsafe'|'work_unsafe'|'busy';
+export type ModuleExamWorkRefusal='not_found'|'not_passive_exam'|'job_state'|'grant_state'|'supervisor_identity'|'receipt'|'output_missing'|'retirement'|'directory_unsafe'|'work_unsafe'|'busy';
 export type ModuleExamWorkRelease={jobId:string;state:'eligible'|'released'|'absent';bytes?:number}|{jobId:string;state:'refused';reason:ModuleExamWorkRefusal};
 /** What a terminal job's `work` copy was for: a passive exam answer, a read-only evaluation of a snapshot, or a programmer's checkout (artifact). */
 export type TerminalWorkCategory='passive-exam'|'readonly-evaluator'|'programmer-artifact';
@@ -1438,7 +1438,10 @@ export class NativeExecutionSupervisor{
     const result=Result.parse(JSON.parse(bytes.toString('utf8')));
     const good=state==='completed'?result.exitCode===0&&result.failureCode===null:result.exitCode===payload.workerExitCode;
     if(result.jobId!==jobId||!good||digest(result.output)!==payload.outputDigest)throw Error();
-   }catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
+   }catch(error){
+    if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Refusal('NATIVE_EXECUTION_OUTPUT_MISSING');
+    throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+   }
   };
   return {category,terminalDigest:digest(receipt),checkOutput,...(checkWork?{checkWork}:{})};
  }
@@ -1484,7 +1487,7 @@ export class NativeExecutionSupervisor{
     if(operation.state==='present'&&!await workUnchanged(seen,operation.snapshot.work))return {refusal:canceled.signal.aborted?'session_lost':'unregistered_change'};
     return operation;
    }
-   catch(error){return {refusal:canceled.signal.aborted?'session_lost':error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe'};}
+   catch(error){return {refusal:canceled.signal.aborted?'session_lost':error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_MISSING'?'output_missing':error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe'};}
   };
   const conclude=async(c:pg.PoolClient,seen:Seen,phase:Phase,operation:WorkOperation):Promise<TerminalWorkRelease>=>{
    const {previous,completed,snapshot,judged}=seen;
