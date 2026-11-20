@@ -20,7 +20,7 @@ const isolated = [
 ];
 
 type Output = {
-  coverage: {tool: string; version: string; status: string; detail: string}[];
+  coverage: {tool: string; version: string; status: string; detail: string; files?: string[]}[];
   findings: {tool: string; rule: string; file: string; line: number; severity: string; message: string; evidence: string}[];
 };
 
@@ -54,7 +54,7 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
     attribution ? ['npm-license-policy', 'skipped', npmLicenseSkipDetail] :
       ['npm-license-policy', 'ok'],
     attribution ? ['ort', 'skipped', 'Nenhuma declaração SPDX elegível em lockfile npm.'] : ['ort', 'ok'],
-    ['lgpd-static', attribution ? 'failed' : 'ok'],
+    ...(!attribution ? [['lgpd-static', 'ok'] as [string, string]] : []),
   ];
   for (const [tool, status, skipDetail] of expectedCoverage) {
     const rows = report.coverage.filter(row => row.tool === tool);
@@ -68,18 +68,31 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
     if (!attribution) assert.notEqual(row.status, 'failed', `${row.tool}: ${row.detail}`);
   }
   if (attribution) {
+    const staticRows = report.coverage.filter(row => row.tool === 'lgpd-static');
+    assert.equal(staticRows.length, 3, 'Grupos de cobertura lgpd-static');
+    const expectedGroups = [
+      {status: 'failed', detail: '3 arquivos JS/TS/Python examinados, 2 com cobertura parcial. AST: vínculos simples, sem fluxo entre funções, análise de ramos ou chaves dinâmicas. SQL: parâmetros vinculados a valores de INSERT/UPDATE literal no recorte. Outras extensões de código/config: inventário textual de campos.', files: undefined},
+      {status: 'ok', detail: 'Análise estática AST e inventário textual concluídos sem lacunas em 1 arquivo(s).', files: ['writes.ts']},
+      {status: 'ok', detail: 'Evidências locais (vínculos AST comprovados ou inventário textual de campos) confirmadas em 2 arquivo(s) com escopo parcial; trechos sem vínculo ou sem parser permanecem em falha ou pulados.', files: ['operations.js', 'operations.py']},
+    ];
+    for (const group of expectedGroups) {
+      const matches = staticRows.filter(row => row.detail === group.detail);
+      assert.equal(matches.length, 1, `Grupo lgpd-static: ${group.detail}`);
+      assert.equal(matches[0].version, '1');
+      assert.equal(matches[0].status, group.status);
+      assert.deepEqual(matches[0].files, group.files);
+    }
     const failed = report.coverage.filter(row => row.status === 'failed');
     assert.equal(failed.length, 3, JSON.stringify(failed));
-    const summary = report.coverage.find(row => row.tool === 'lgpd-static');
-    assert.ok(summary);
-    assert.match(summary.detail, /^3 arquivos JS\/TS\/Python examinados, 2 com cobertura parcial\. /);
-    for (const [file, calls] of [['operations.js', 2], ['operations.py', 1], ['writes.ts', 0]] as const) {
+    assert.equal(report.coverage.filter(row => row.tool === 'lgpd-static:file').length, 3);
+    for (const [file, fields, destinations, calls] of [['operations.js', 13, 5, 2], ['operations.py', 8, 5, 1], ['writes.ts', 14, 6, 0]] as const) {
       const rows = report.coverage.filter(row => row.tool === 'lgpd-static:file' && row.detail.startsWith(`${file} | `));
       assert.equal(rows.length, 1, `Cobertura estática de ${file}`);
       const [row] = rows;
+      assert.equal(row.version, '1', file);
       assert.equal(row.status, calls ? 'failed' : 'ok', file);
-      if (calls) assert.equal(row.detail.match(/\. Cobertura parcial: .+$/)?.[0],
-        `. Cobertura parcial: ${calls} resultados de chamadas sem vínculo estático.`, file);
+      assert.equal(row.detail, `${file} | linhas com campos=${fields}, indícios de destino=${destinations}` +
+        (calls ? `. Cobertura parcial: ${calls} resultados de chamadas sem vínculo estático.` : ''), file);
     }
   }
   for (const row of report.findings) {
@@ -100,11 +113,12 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
     {tool: 'npm-license-policy', version: '1', status: 'skipped',
       detail: npmLicenseSkipDetail},
     {tool: 'ort', version: '1', status: 'skipped', detail: 'Nenhuma declaração SPDX elegível em lockfile npm.'},
-    {tool: 'lgpd-static', version: '1', status: 'failed',
-      detail: '3 arquivos JS/TS/Python examinados, 2 com cobertura parcial. AST: vínculos simples.'},
   ];
   const coverage: Output['coverage'] = [
     ...aggregate,
+    {tool: 'lgpd-static', version: '1', status: 'failed', detail: '3 arquivos JS/TS/Python examinados, 2 com cobertura parcial. AST: vínculos simples, sem fluxo entre funções, análise de ramos ou chaves dinâmicas. SQL: parâmetros vinculados a valores de INSERT/UPDATE literal no recorte. Outras extensões de código/config: inventário textual de campos.'},
+    {tool: 'lgpd-static', version: '1', status: 'ok', detail: 'Análise estática AST e inventário textual concluídos sem lacunas em 1 arquivo(s).', files: ['writes.ts']},
+    {tool: 'lgpd-static', version: '1', status: 'ok', detail: 'Evidências locais (vínculos AST comprovados ou inventário textual de campos) confirmadas em 2 arquivo(s) com escopo parcial; trechos sem vínculo ou sem parser permanecem em falha ou pulados.', files: ['operations.js', 'operations.py']},
     {tool: 'lgpd-static:file', version: '1', status: 'failed',
       detail: 'operations.js | linhas com campos=13, indícios de destino=5. Cobertura parcial: 2 resultados de chamadas sem vínculo estático.'},
     {tool: 'lgpd-static:file', version: '1', status: 'failed',
@@ -121,6 +135,22 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
   const checkCoverage = (rows: Output['coverage']) => parseCollectorOutput(attributionFixture, {
     stdout: JSON.stringify({coverage: rows, findings: []}), code: 1,
   });
+  const groups = coverage.filter(row => row.tool === 'lgpd-static');
+  for (const group of groups) {
+    assert.throws(() => checkCoverage(coverage.filter(row => row !== group)), assert.AssertionError);
+    assert.throws(() => checkCoverage([...coverage, group]), assert.AssertionError);
+    assert.throws(() => checkCoverage(coverage.map(row => row === group ? {...row, status: row.status === 'ok' ? 'failed' : 'ok'} : row)), assert.AssertionError);
+  }
+  for (const [group, files] of [[groups[0], ['writes.ts']], [groups[1], ['operations.js']],
+    [groups[1], ['writes.ts', 'operations.js']], [groups[2], ['operations.js', 'writes.ts']],
+    [groups[2], ['operations.js']], [groups[2], undefined]] as const) {
+    assert.throws(() => checkCoverage(coverage.map(row => row === group ? {...row, files: files && [...files]} : row)), assert.AssertionError);
+  }
+  for (const row of coverage.filter(row => row.tool === 'lgpd-static:file')) {
+    assert.throws(() => checkCoverage(coverage.filter(item => item !== row)), assert.AssertionError);
+    assert.throws(() => checkCoverage([...coverage, row]), assert.AssertionError);
+    assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, status: row.status === 'ok' ? 'failed' : 'ok'} : item)), assert.AssertionError);
+  }
   for (const entry of aggregate) {
     const otherRows = coverage.filter(row => row.tool !== entry.tool);
     const countError = new RegExp(`Cobertura agregada de ${entry.tool} em ${attributionFixture}`);
@@ -213,6 +243,8 @@ test('laboratório C9 atribui apenas as chamadas e os valores armazenados da fix
   assert.match(image, /^(?:[A-Za-z0-9._:/-]+@)?sha256:[a-f0-9]{64}$/);
   const report = await collect(image, attributionFixture);
   const expected = JSON.parse(await readFile(join(fixtures, 'atribuicao', 'expected.json'), 'utf8'));
+  assert.ok(report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_'))
+    .every(row => Object.hasOwn(expected, row.file)), 'Destino atribuído a arquivo inesperado');
   for (const [file, locations] of Object.entries(expected)) {
     const destinations = report.findings.filter(row => row.file === file && row.rule.startsWith('PII_POSSIBLE_'))
       .map(row => [row.rule.slice('PII_POSSIBLE_'.length), row.line, Number(row.evidence.match(/linha (\d+)\./)?.[1])]);
