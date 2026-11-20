@@ -1944,3 +1944,4 @@ FIM
 - 20/11/2026 14:46 UTC — Iniciada ordem disco-volumes em claude-sonnet-5-5 (enok), no worktree próprio.
 - 20/11/2026 14:47 UTC — Ordem grave-disco-protecao em claude-opus-5-5 encerrou com código 0.
 - 20/11/2026 14:48 UTC — Iniciada ordem disco-produtores-r2 em claude-sonnet-4-6 (agy-enok-sonnet), no worktree próprio.
+- 20/11/2026 14:51 UTC — NexoISP pausado pelo titular. O Astra foi parado. A economia de tokens passa a ser gerida pelo supervisor (Claude), com trabalhadores Gemini. A retenção de disco em curso (disco-jobs, sessão, produtores) termina e será integrada pelo supervisor.
