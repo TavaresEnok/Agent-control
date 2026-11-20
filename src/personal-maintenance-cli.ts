@@ -5,7 +5,7 @@ import {ModuleExamRecoveryPreserved,type ModuleExamRecoveryReason} from './nativ
 import {runPersonalMaintenance} from './personal-maintenance.ts';
 
 const messages:Record<string,string>={
- MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--abandonar-design <jobId> | --recuperar-exame-passivo <jobId>]',
+ MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--abandonar-design <jobId> | --recuperar-exame-passivo <jobId> | --liberar-work-exames (--projeto <id> [--limite N] [--apos <id>] | --job <id>...) [--aplicar]]',
  MAINTENANCE_PERSONAL_REQUIRED:'A manutenção só roda numa instalação pessoal.',
  MAINTENANCE_NATIVE_REQUIRED:'A instalação não tem runtime nativo ativo.',
  MAINTENANCE_EXAM_NOT_FOUND:'Tentativa de design não encontrada nesta instalação.',

@@ -1,3 +1,4 @@
+import {examineWorkTree,type WorkIdentity} from './native-work-retention.ts';
 import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
 import {DesignPurpose} from './design-types.ts';
 import {requiredDesignProfile} from './design-model-reservation.ts';
@@ -58,6 +59,8 @@ export type NativeModuleExamRecovery={state:'retired'|'preserved';reason:'proven
 export class ModuleExamRecoveryPreserved extends Refusal {
  constructor(readonly reason:ModuleExamRecoveryReason,readonly removed:string[]=[]){super('NATIVE_MODULE_EXAM_RECOVERY_PRESERVED',409);}
 }
+export type ModuleExamWorkRefusal='not_found'|'not_passive_exam'|'job_state'|'grant_state'|'supervisor_identity'|'receipt'|'retirement'|'directory_unsafe'|'work_unsafe';
+export type ModuleExamWorkRelease={jobId:string;state:'eligible'|'released'|'absent';bytes?:number}|{jobId:string;state:'refused';reason:ModuleExamWorkRefusal};
 export class UnstartedExamRetirementPending extends Refusal {
  constructor(readonly jobId:string){super('NATIVE_PRELAUNCH_SETTLEMENT_PENDING',409);Id.parse(jobId);}
 }
@@ -1268,6 +1271,85 @@ export class NativeExecutionSupervisor{
   });
   await this.removeLaunchFiles(jobId);
   return retired;
+ }
+ /** Frees only the `work` checkout copy of one finished passive security/module exam (specialist, `security-verify-readonly-v1`).
+  * The answer lives in output/execution-result.json and nothing reads `work` once the job is completed, its grant released and its
+  * terminal retirement signed as removed (containers and network gone). review-artifact, proofs, logs and sibling jobs are never touched.
+  * Runs under the context lease and the job row lock, so it serializes with reconcile and retirement. Idempotent: no `work` is `absent`.
+  * `apply=false` only inspects. Programmer, design and any job without the full proof are refused. */
+ async releaseModuleExamWork(principal:string,authority:Authority,jobId:string,apply:boolean):Promise<ModuleExamWorkRelease>{
+  Id.parse(jobId);const p=this.paths(jobId);
+  const refuse=(reason:ModuleExamWorkRefusal)=>({jobId,state:'refused' as const,reason});
+  const runPhase=(phase:'preview'|'prepare'|'release')=>this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const owner=await c.query("SELECT 1 FROM ac_memberships m JOIN ac_contexts x ON x.project_id=m.project_id WHERE x.id=$1 AND m.principal_id=$2 AND m.role='owner' FOR SHARE OF m",[authority.contextId,principal]);
+   if(!owner.rowCount)return refuse('not_passive_exam');
+   const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,g.selection->>'designPurpose' design_purpose,g.manager_epoch grant_epoch,g.intent_id grant_intent,g.context_id grant_context,g.account_id grant_account,g.profile_id grant_profile,g.role grant_role,g.resource_kind,
+    i.parent_intent_id,i.principal_id,i.command->'payload'->>'workflow' workflow,r.state retirement_state,r.binding,r.proof,ac_activation_personal() personal
+    FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
+    LEFT JOIN ac_native_terminal_retirements r ON r.job_id=j.id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
+   if(!row)return refuse('not_found');
+   const passive=readonlySecurityExam(row.workflow,row.role)||(readonlyDesignExam(row.workflow,row.role)&&['examiner','reviewer','visual'].includes(row.design_purpose));
+   if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||row.role!=='specialist'||!passive)return refuse('not_passive_exam');
+   if(row.state!=='completed')return refuse('job_state');
+   if(row.grant_state!=='released'||row.grant_intent!==row.intent_id||row.grant_context!==row.context_id||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||row.grant_role!==row.role||row.resource_kind!=='model'||Number(row.grant_epoch)!==Number(row.manager_epoch))return refuse('grant_state');
+   if(row.key_fingerprint!==this.fingerprint)return refuse('supervisor_identity');
+   const receipt=row.receipt,payload=receipt?.payload,physical=row.physical_receipt,binding=row.binding,proof=row.proof;
+   const receiptProven=this.receiptSignedByThisExecutor(receipt)&&payload.jobId===jobId&&payload.contextId===row.context_id&&payload.intentId===row.intent_id&&payload.grantId===row.grant_id&&payload.sessionId===row.session_id&&
+    payload.epoch===Number(row.manager_epoch)&&payload.inputDigest===row.input_digest&&payload.executorDigest===row.executor_digest&&payload.exitCode===0&&
+    Boolean(physical)&&payload.physicalDigest===digest(physical)&&physical.jobId===jobId&&physical.containerId===row.worker_id&&physical.toolsContainerId===row.tools_id&&physical.networkId===row.network_id;
+   if(!receiptProven)return refuse('receipt');
+   let retirementProven=false;
+   try{
+    retirementProven=row.retirement_state==='removed'&&Boolean(binding)&&digest(proof?.payload)===digest(binding)&&typeof proof.signature==='string'&&/^[a-f0-9]{128}$/.test(proof.signature)&&
+     verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(proof.payload)),createPublicKey(this.key),Buffer.from(proof.signature,'hex'))&&
+     binding.jobId===jobId&&binding.contextId===row.context_id&&binding.intentId===row.intent_id&&binding.grantId===row.grant_id&&binding.sessionId===row.session_id&&binding.inputDigest===row.input_digest&&
+     binding.terminalDigest===digest(receipt)&&binding.workerId===row.worker_id&&binding.toolsId===row.tools_id&&binding.networkId===row.network_id;
+   }catch{retirementProven=false;}
+   if(!retirementProven)return refuse('retirement');
+   try{await this.directory(this.config.hostRoot);await this.directory(p.root);}catch{return refuse('directory_unsafe');}
+   const planned='native.exam_work_release_planned',released='native.exam_work_released',unattributed='native.exam_work_absent_after_plan';
+   const terminalDigest=digest(receipt);
+   const audit=async(kind:string)=>(await c.query(
+    "SELECT detail FROM ac_audit WHERE context_id=$1 AND kind=$2 AND detail->>'jobId'=$3 LIMIT 1",
+    [authority.contextId,kind,jobId])).rows[0]?.detail;
+   const record=async(kind:string,snapshot:WorkIdentity)=>c.query('INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,$2,$3)',[authority.contextId,kind,{jobId,snapshot,terminalDigest}]);
+   const previous=await audit(planned);
+   const completed=await audit(released)??await audit(unattributed);
+   const snapshot=previous?.snapshot as WorkIdentity|undefined;
+   if(previous&&(previous.terminalDigest!==terminalDigest||!snapshot||!/^\d+:\d+$/.test(snapshot.job)||!/^\d+:\d+$/.test(snapshot.work)||!Number.isSafeInteger(snapshot.bytes)))return refuse('retirement');
+   if(phase==='release'&&(!snapshot||completed))return refuse('work_unsafe');
+   const canceled=new AbortController();
+   const disconnect=()=>canceled.abort();
+   c.once('error',disconnect);c.once('end',disconnect);
+   let operation;
+   try{
+    operation=await examineWorkTree(this.config.hostRoot,jobId,async output=>{
+     try{
+      const bytes=await readPrivateWorkerFile(join('/proc/self/fd',String(output.fd),'execution-result.json'),2*1024*1024);
+      const result=Result.parse(JSON.parse(bytes.toString('utf8')));
+      if(result.jobId!==jobId||result.exitCode!==0||result.failureCode!==null||digest(result.output)!==payload.outputDigest)throw Error();
+     }catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
+    },phase==='release'?snapshot:undefined,canceled.signal);
+   }catch(error){return refuse(error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe');}
+   finally{c.off('error',disconnect);c.off('end',disconnect);}
+   if(phase==='release'&&snapshot){
+    if(operation.state==='present')return refuse('work_unsafe');
+    await record(operation.state==='released'?released:unattributed,snapshot);
+    return {jobId,state:operation.state,bytes:operation.state==='released'?snapshot.bytes:0};
+   }
+   if(operation.state==='absent'){
+    if(phase==='prepare'&&snapshot&&!completed)return {jobId,state:'eligible' as const,bytes:snapshot.bytes};
+    return {jobId,state:'absent' as const};
+   }
+   if(operation.state!=='present'||completed)return refuse('work_unsafe');
+   if(snapshot&&(snapshot.job!==operation.snapshot.job||snapshot.work!==operation.snapshot.work))return refuse('work_unsafe');
+   if(phase==='prepare'&&!previous)await record(planned,operation.snapshot);
+   return {jobId,state:'eligible' as const,bytes:operation.snapshot.bytes};
+  });
+  const first=await runPhase(apply?'prepare':'preview');
+  return apply&&first.state==='eligible'?runPhase('release'):first;
  }
  async reconcileCancellation(principal:string,authority:Authority,jobId:string){
   const input=await this.registeredInput(principal,authority,jobId);

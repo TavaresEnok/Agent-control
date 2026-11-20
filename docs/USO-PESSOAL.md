@@ -433,6 +433,19 @@ O supervisor remove o contêiner (sem `force`) e, só depois de o Docker confirm
 
 Sem prova suficiente, o comando sai com erro, diz o motivo (por exemplo, "o contêiner de ferramentas já foi iniciado ou terminou") e mantém a reserva. Se o gateway estiver usando o contexto, pare-o temporariamente e repita, como na retirada de design.
 
+### Liberar o disco das cópias `work/` de exames passivos terminados
+
+O comando de manutenção recupera espaço nas cópias de trabalho dos exames passivos concluídos. Escolha o projeto ou forneça até 200 UUIDs de jobs. A prévia informa o tamanho lógico dos arquivos elegíveis.
+
+```bash
+npm run personal:maintenance -- <instalação.json> --liberar-work-exames --projeto <UUID> --limite 25
+npm run personal:maintenance -- <instalação.json> --liberar-work-exames --job <UUID> --aplicar
+```
+
+Cada página consulta até 200 candidatos. Quando houver uma continuação, repita o comando do projeto com o valor de `--apos` exibido. O proprietário pode aplicar uma página com `--aplicar`.
+
+Para liberar `work/`, o supervisor confere a autorização do proprietário, a reserva liberada, o recibo de conclusão, o resultado em disco e a prova assinada da retirada dos contêineres e da rede. Nos jobs de design, as finalidades aceitas são exame, crítica e confirmação. A preparação da retirada é registrada antes da exclusão. Uma repetição pode concluir o registro de auditoria se o banco falhar depois da remoção. O supervisor percorre a cópia por descritores de diretório. Os relatórios, os arquivos de entrada e saída e `review-artifact/` continuam disponíveis.
+
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.

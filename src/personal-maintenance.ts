@@ -1,13 +1,13 @@
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod,copyFile,readFile,rename,writeFile} from 'node:fs/promises';
-import {resolve} from 'node:path';
+import {chmod,copyFile,lstat,readFile,rename,writeFile} from 'node:fs/promises';
+import {join,resolve} from 'node:path';
 import pg from 'pg';
 import {Id,Refusal,type Authority} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
-import {readonlyDesignExam,type NativeModuleExamRecovery,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
+import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRelease,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {refreshVerifyDatabases} from './verify-db.ts';
 
@@ -63,10 +63,34 @@ async function writeInstallationAtomically(file:string,raw:unknown){
  await rename(temporary,file);
 }
 
-function parseMaintenanceArgs(argv:readonly string[]){
+type WorkSelection={apply:boolean;projectId?:string;after?:string;jobIds?:string[];limit:number};
+const MAX_WORK_BATCH=200;
+
+function parseWorkRetirementArgs(installationPath:string,rest:readonly string[]){
+ const selection:WorkSelection={apply:false,limit:50};
+ const seen=new Set<string>();
+ for(let i=0;i<rest.length;i++){
+  const flag=rest[i]!;
+  if(flag==='--aplicar'&&!seen.has(flag)){seen.add(flag);selection.apply=true;continue;}
+  const value=rest[++i];
+  if(flag==='--projeto'&&!seen.has(flag)&&Id.safeParse(value).success){seen.add(flag);selection.projectId=value;continue;}
+  if(flag==='--job'&&Id.safeParse(value).success){(selection.jobIds??=[]).push(value!);continue;}
+  if(flag==='--apos'&&!seen.has(flag)&&Id.safeParse(value).success){seen.add(flag);selection.after=value;continue;}
+  if(flag==='--limite'&&!seen.has(flag)&&/^[1-9][0-9]{0,2}$/.test(value??'')&&Number(value)<=MAX_WORK_BATCH){seen.add(flag);selection.limit=Number(value);continue;}
+  throw new Refusal('MAINTENANCE_USAGE');
+ }
+ // Exactly one scope: one project, or an explicit list of ids. Never the whole installation.
+ if(Boolean(selection.projectId)===Boolean(selection.jobIds)||(!selection.projectId&&selection.after)||(selection.jobIds&&(selection.jobIds.length>MAX_WORK_BATCH||seen.has('--limite'))))throw new Refusal('MAINTENANCE_USAGE');
+ if(selection.jobIds)selection.limit=selection.jobIds.length;
+ return {installationPath,releaseExamWork:selection};
+}
+
+type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;releaseExamWork?:WorkSelection};
+function parseMaintenanceArgs(argv:readonly string[]):ParsedMaintenance{
  const [installationPath,command,jobId]=argv;
  if(!installationPath||installationPath.startsWith('-'))throw new Refusal('MAINTENANCE_USAGE');
  if(argv.length===1)return {installationPath};
+ if(command==='--liberar-work-exames')return parseWorkRetirementArgs(installationPath,argv.slice(2));
  if(argv.length!==3||!Id.safeParse(jobId).success)throw new Refusal('MAINTENANCE_USAGE');
  if(command==='--abandonar-design')return {installationPath,recoverExamJobId:jobId};
  if(command==='--recuperar-exame-passivo')return {installationPath,recoverModuleExamJobId:jobId};
@@ -170,6 +194,70 @@ async function recoverNeverStartedModuleExamFromInstallation(config:Installation
  }
 }
 
+/** Owner-run retention of the `work` copy of finished passive exams (see NativeExecutionSupervisor.releaseModuleExamWork).
+ * Scope is one configured project or an explicit id list, never the installation. Without `apply` nothing is removed.
+ * Every job is judged again under its context lease and row lock, so a repeat run, a busy context or a bad id only changes that line. */
+export async function releaseExamWorkFromInstallation(config:Installation,selection:WorkSelection):Promise<string[]>{
+ if(typeof selection.apply!=='boolean'||!Number.isInteger(selection.limit)||selection.limit<1||selection.limit>MAX_WORK_BATCH||
+    Boolean(selection.projectId)===Boolean(selection.jobIds)||selection.projectId&&!Id.safeParse(selection.projectId).success||
+    selection.after&&(!selection.projectId||!Id.safeParse(selection.after).success)||
+    selection.jobIds&&(!Array.isArray(selection.jobIds)||!selection.jobIds.length||selection.jobIds.length>Math.min(selection.limit,MAX_WORK_BATCH)||selection.jobIds.some(id=>!Id.safeParse(id).success)))
+  throw new Refusal('MAINTENANCE_USAGE');
+ const boot=config.nativeBootstrap;
+ if(!boot||boot.state!=='active')throw new Refusal('MAINTENANCE_NATIVE_REQUIRED',409);
+ const projects=[config.project,...config.projects];
+ if(selection.projectId&&!projects.some(item=>item.id===selection.projectId))throw new Refusal('MAINTENANCE_EXAM_NOT_FOUND',404);
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+ const lines:string[]=[];
+ const totals={eligible:0,released:0,absent:0,refused:0,busy:0,failed:0,bytes:0};
+ try{
+  const columns='j.id::text,j.context_id::text,x.project_id::text,j.account_id::text,j.key_fingerprint';
+  type Candidate={id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string};
+  const found=selection.projectId
+   ?(await ledger.pool.query<Candidate>(`SELECT ${columns} FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id
+      JOIN ac_native_terminal_retirements r ON r.job_id=j.id AND r.state='removed'
+      WHERE x.project_id=$1 AND j.state='completed' AND j.role='specialist' AND ($2::uuid IS NULL OR j.id>$2) ORDER BY j.id LIMIT $3`,[selection.projectId,selection.after??null,MAX_WORK_BATCH])).rows
+   :(await ledger.pool.query<Candidate>(`SELECT ${columns} FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE j.id=ANY($1::uuid[])`,[selection.jobIds])).rows;
+  for(const id of selection.jobIds??[])if(!found.some(row=>row.id===id)){lines.push(`${id}: recusado (not_found).`);totals.refused++;}
+  const supervisors=await composePersonalExecutionSupervisors(config,ledger);
+  const owners=new Map<string,string|undefined>();
+  let handled=0,lastId:string|undefined;
+  for(const row of found){
+   if(selection.projectId&&handled>=selection.limit)break;
+   lastId=row.id;
+   const project=projects.find(item=>item.id===row.project_id);
+   if(!project){lines.push(`${row.id}: recusado (project).`);totals.refused++;continue;}
+   // The limit counts jobs actually freed (or eligible), so refusals never starve a repeated batch. Jobs without `work` are skipped without a lease.
+   if(selection.projectId){
+    const present=await lstat(join(boot.execution.hostRoot,row.id,'work')).then(()=>true,(e:NodeJS.ErrnoException)=>e.code==='ENOENT'?false:null);
+    if(present===null){totals.failed++;lines.push(row.id+': não foi possível inspecionar work.');continue;}
+    if(!present && !(await ledger.pool.query("SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind='native.exam_work_release_planned' AND NOT EXISTS(SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind IN ('native.exam_work_released','native.exam_work_absent_after_plan')) LIMIT 1",[row.context_id,row.id])).rowCount){totals.absent++;continue;}
+   }
+   const principal=project.owner;
+   if(!owners.has(project.id))owners.set(project.id,(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,principal])).rowCount?principal:undefined);
+   if(!owners.get(project.id)){lines.push(`${row.id}: recusado (owner).`);totals.refused++;continue;}
+   const supervisor=supervisors.find(item=>item.supportsAccount(row.account_id)&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
+   if(!supervisor){lines.push(`${row.id}: recusado (supervisor_identity).`);totals.refused++;continue;}
+   let authority:Authority|undefined;
+   try{
+    authority=await ledger.acquire(principal,row.context_id,randomUUID(),'personal-maintenance',60);
+    const result:ModuleExamWorkRelease=await supervisor.releaseModuleExamWork(principal,authority,row.id,selection.apply);
+    if(result.state==='refused'){totals.refused++;lines.push(`${row.id}: recusado (${result.reason}).`);}
+    else{totals[result.state]++;totals.bytes+=result.bytes??0;if(result.state!=='absent'){handled++;lines.push(`${row.id}: ${result.state==='released'?'work apagado':'elegível'} (${result.bytes??0} bytes).`);}}
+   }catch(error){
+    if(error instanceof Refusal&&error.code==='MANAGER_ACTIVE'){totals.busy++;lines.push(`${row.id}: contexto ocupado; repita depois.`);}
+    else{totals.failed++;lines.push(`${row.id}: falhou (${error instanceof Refusal?error.code:'erro'}); repita depois.`);}
+   }finally{if(authority)await ledger.releaseLease(authority).catch(()=>{});}
+  }
+  if(selection.projectId&&lastId&&(found.length===MAX_WORK_BATCH||lastId!==found.at(-1)?.id))lines.push('Continue com --apos '+lastId+'.');
+  const mb=Math.round(totals.bytes/1048576);
+  lines.push(selection.apply
+   ?`Retirada de work/: ${totals.released} apagado(s) (${mb} MB), ${totals.absent} já sem work, ${totals.refused} recusado(s), ${totals.busy} ocupado(s), ${totals.failed} com falha. Repita até não restar nenhum.`
+   :`Prévia, nada foi apagado: ${totals.eligible} elegível(is) (${mb} MB), ${totals.absent} já sem work, ${totals.refused} recusado(s). Use --aplicar para apagar.`);
+  return lines;
+ }finally{await ledger.close();}
+}
+
 /** Weekly: old Docker build cache goes, and retired images no job still needs leave the installation and Docker.
  * Volumes, containers and images of other projects are never touched. The gateway keeps running. */
 export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps={}){
@@ -178,6 +266,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  const config=await loadInstallation(file);
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
  if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
+ if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
  const docker=deps.docker??(args=>run('docker',args,30*60*1000));
  const imageExists=deps.imageExists??(async image=>imageId.test(image)&&await run('docker',['image','inspect',image],30_000)===0);
