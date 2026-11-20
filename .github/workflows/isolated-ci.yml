@@ -26,6 +26,6 @@ jobs:
       - run: docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/workspace" -w /workspace agent-control-lab:0.1.0 sh scripts/install-baseline.sh
       - run: docker compose -f deploy/compose.lab.yml up -d
       - run: docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'cd upstream/cezar && npm run typecheck && VITE_AGENT_CONTROL_MANAGED=1 npm run build'
-      - run: docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'npm run typecheck && node scripts/build-happier-boundary.mjs && node scripts/test-ci.mjs'
+      - run: docker compose -f deploy/compose.lab.yml exec -T runtime sh -c 'npm run typecheck && node scripts/build-happier-boundary.mjs && node scripts/test-ci.mjs --list > /tmp/test-ci-selection.json && node scripts/test-ci.mjs'
       - if: always()
         run: docker compose -f deploy/compose.lab.yml down
