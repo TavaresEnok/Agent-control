@@ -473,6 +473,11 @@ Categorias aceitas (todas exigem personal, recibo assinado por este executor, gr
 
 Ficam sempre: `request.json`, `input/`, `output/`, `planning/`, `review-artifact/`, logs, recibos, diário de retirada e banco. Para outras retenções (artefatos), use o ponto de integração `JobRetentionExtension` em `runPersonalJobRetention(config, apply, {extensions})`. A função é a mesma que o vigia chama.
 
+O mesmo comando também retém os artefatos registrados (worktrees de trabalhadores, imagens candidatas e temporários `ac-*` de rodadas). A ordem é a do AGENTS.md: primeiro o `work/` dos jobs, depois os artefatos. As etapas não dependem uma da outra. Se o registro de artefatos estiver danificado ou o banco cair, a outra etapa roda assim mesmo, e o comando informa a etapa que falhou e termina com erro. No vigia, isso aparece como `retention=failed`.
+
+- **Arquivos ignorados num worktree:** o nome (`dist`, `coverage`, `node_modules`) não prova que o conteúdo possa ser descartado. Só um link simbólico ignorado é aceito, porque a remoção apaga o link e não o destino. Qualquer arquivo ou pasta ignorada com conteúdo próprio mantém o worktree.
+- **Temporário com remoção interrompida:** antes de esvaziar a pasta, a retenção anota no registro privado, fora da pasta, a identidade e a hora de criação dela. Se a execução parar depois de apagar a marca de propriedade, a rodada seguinte termina a remoção dessa mesma pasta. Outra pasta no mesmo caminho é preservada.
+
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.

@@ -27,7 +27,36 @@ export type MaintenanceDeps={
  openPlanningJobs?:()=>Promise<number>;
  /** Publishes a new vulnerability database. Failure must leave the previous stamp in place. */
  refreshDatabases?:(dataDirectory:string)=>Promise<void>;
+ /** Retention of `work/` of terminal jobs. Tests replace it. */
+ jobRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** Retention of worker worktrees, candidate images and round temporaries. Tests replace it. */
+ artifactRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
 };
+
+/** Some retention stage failed. Every stage still ran; `lines` holds what each one reported, failures included. */
+export class RetentionIncomplete extends Error {
+ constructor(readonly lines:string[],readonly failed:string[]){super('Retention incomplete: '+failed.join(', '));}
+}
+
+/** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then worktrees,
+ * images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
+ * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
+export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'>={}):Promise<string[]>{
+ const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
+  ['jobs','work/ de jobs',deps.jobRetention??runPersonalJobRetention],
+  ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
+ ];
+ const lines:string[]=[],failed:string[]=[];
+ for(const [name,label,stage] of stages){
+  try{lines.push(...await stage(config,apply));}
+  catch(error){
+   failed.push(name);
+   lines.push(`Retenção de ${label} falhou (${error instanceof Refusal?error.code:'erro'}); as demais etapas seguiram.`);
+  }
+ }
+ if(failed.length)throw new RetentionIncomplete(lines,failed);
+ return lines;
+}
 
 /** A retired execution pair is kept while any job under it is unfinished, or a reviewer, judge or QA job has not had its containers removed. */
 export const OPEN_EXECUTION_JOBS_SQL=`SELECT count(*)::int n FROM ac_native_execution_jobs j WHERE j.executor_digest=$1 AND (j.state NOT IN ('completed','failed')
@@ -378,12 +407,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
  if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
- if(parsed.jobRetention){
-  const apply=parsed.jobRetention.apply;
-  const artifacts=await runPersonalArtifactRetention(config,apply);
-  const jobs=await runPersonalJobRetention(config,apply);
-  return [...artifacts,...jobs];
- }
+ if(parsed.jobRetention)return runRetentionStages(config,parsed.jobRetention.apply,deps);
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
  const docker=deps.docker??(args=>run('docker',args,30*60*1000));
  const imageExists=deps.imageExists??(async image=>imageId.test(image)&&await run('docker',['image','inspect',image],30_000)===0);

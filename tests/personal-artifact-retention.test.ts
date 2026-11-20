@@ -9,6 +9,7 @@ import {test} from 'node:test';
 import type {Installation} from '../src/installation.ts';
 import {closeRound,registerCandidateImage,registerRoundTemp,registerWorkerWorktree,runPersonalArtifactRetention,
  type CommandResult,type RetentionDeps} from '../src/personal-artifact-retention.ts';
+import {RetentionIncomplete,runRetentionStages} from '../src/personal-maintenance.ts';
 
 const HOUR=3600_000;
 const gitEnv={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0',LC_ALL:'C',
@@ -151,7 +152,7 @@ test('a worktree is kept for every unmet proof, and git never prunes, forces or 
   assert.match(lines,/detached: preservado \(o worktree não está no ramo registrado\)/);
   assert.match(lines,/locked: preservado \(worktree travado\)/);
   assert.match(lines,/alive: preservado \(há processo usando o diretório\)/);
-  assert.match(lines,/ignored: preservado \(há arquivos ignorados que não são regeneráveis\)/);
+  assert.match(lines,/ignored: preservado \(há arquivos ignorados com conteúdo próprio\)/);
   assert.match(lines,/merging: preservado \(operação do git em andamento\)/);
   assert.match(lines.split('\n').at(-1)!,/worktrees 0 removido\(s\) e 9 preservado/);
   const forbidden=l.calls.filter(args=>args.includes('prune')||args.includes('--force')||args.includes('-f')||args.includes('-D')||args.includes('-d')||(args[0]==='branch'));
@@ -549,5 +550,144 @@ test('concurrent candidate registrations persist and a digest selected during in
   await run(l,true);
   assert.equal(steps,2);
   assert.ok(l.docker.images.has(ids[0]!));
+ }finally{await cleanup(l);}
+});
+
+// ---- Ignored files, interrupted temporaries and independent stages ----
+
+/** A merged worker worktree whose .gitignore covers dist/, coverage/, node_modules and build/. */
+function ignoringWorktree(l:Lab,name:string){
+ const w=makeWorktree(l,name);
+ writeFileSync(join(w.path,'.gitignore'),'dist/\ncoverage/\nnode_modules\nbuild/\n');
+ git(w.path,'add','.');git(w.path,'commit','-q','--allow-empty','-m','ignore');git(l.repo,'merge','-q','--ff-only',w.branch);
+ return w;
+}
+
+test('a name such as dist, coverage or node_modules never proves that ignored contents are disposable',async()=>{
+ const l=await lab();
+ try{
+  const dist=ignoringWorktree(l,'dist');mkdirSync(join(dist.path,'cliente','dist'),{recursive:true});writeFileSync(join(dist.path,'cliente','dist','unico.bin'),'only copy');
+  const coverage=ignoringWorktree(l,'coverage');mkdirSync(join(coverage.path,'coverage'));writeFileSync(join(coverage.path,'coverage','lcov.info'),'x');
+  const modules=ignoringWorktree(l,'modules');mkdirSync(join(modules.path,'node_modules','pacote'),{recursive:true});writeFileSync(join(modules.path,'node_modules','pacote','patched.js'),'local edit');
+  const file=ignoringWorktree(l,'file');writeFileSync(join(file.path,'node_modules'),'a regular file named node_modules');
+  const all=[dist,coverage,modules,file];
+  for(const item of all)await register(l,item);
+  const lines=(await run(l,true)).join('\n');
+  for(const item of all){
+   assert.ok(existsSync(item.path),item.path+' must stay');
+   assert.match(lines,new RegExp(`wt/${item.path.split('/').at(-1)}: preservado \\(há arquivos ignorados com conteúdo próprio\\)`));
+  }
+  assert.ok(existsSync(join(dist.path,'cliente','dist','unico.bin')));
+  assert.ok(existsSync(join(modules.path,'node_modules','pacote','patched.js')));
+  assert.deepEqual(l.calls.filter(args=>args[0]==='worktree'&&args[1]==='remove'),[]);
+ }finally{await cleanup(l);}
+});
+
+test('an ignored symbolic link is the only ignored entry that may go, and its target is never touched',async()=>{
+ const l=await lab();
+ try{
+  const shared=join(l.base,'shared-node-modules');mkdirSync(join(shared,'pacote'),{recursive:true});writeFileSync(join(shared,'pacote','index.js'),'kept');
+  const linked=ignoringWorktree(l,'linked');symlinkSync(shared,join(linked.path,'node_modules'));
+  const mixed=ignoringWorktree(l,'mixed');symlinkSync(shared,join(mixed.path,'node_modules'));mkdirSync(join(mixed.path,'build'));writeFileSync(join(mixed.path,'build','out.bin'),'own');
+  await register(l,linked);await register(l,mixed);
+  const lines=(await run(l,true)).join('\n');
+  assert.match(lines,/wt\/linked: removido \(ramo task\/linked preservado\)/);
+  assert.match(lines,/wt\/mixed: preservado \(há arquivos ignorados com conteúdo próprio\)/);
+  assert.equal(existsSync(linked.path),false);
+  assert.ok(existsSync(join(mixed.path,'build','out.bin')));
+  assert.equal(await readFile(join(shared,'pacote','index.js'),'utf8'),'kept');
+ }finally{await cleanup(l);}
+});
+
+const registryPath=(l:Lab)=>join(l.data,'artifact-retention','registry.json');
+async function closedTemp(l:Lab,name:string){
+ const path=makeTemp(l,name);
+ const id=await registerTemp(l,path);
+ await closeRound(l.config,{projectId:l.projectId,roundId:'round-1'},{...l.deps,now:()=>Date.now()});
+ l.clock.now=Date.now()+25*HOUR;
+ return {path,id};
+}
+const birthOf=(path:string)=>String(statSync(path,{bigint:true}).birthtimeNs);
+
+test('a temporary whose removal stopped after its marker was deleted is finished by the next run from the external journal',async()=>{
+ const l=await lab();
+ try{
+  const {path}=await closedTemp(l,'ac-interrompido');
+  // A subdirectory the helper cannot empty makes the first removal stop midway, after the journal was written.
+  const stuck=join(path,'preso');mkdirSync(stuck);writeFileSync(join(stuck,'x'),'x');await chmod(stuck,0o500);
+  const first=(await run(l,true)).join('\n');
+  assert.match(first,/ac-interrompido: preservado \(falha ao remover; repita depois\)/);
+  assert.ok(existsSync(path));
+  const journal=JSON.parse(await readFile(registryPath(l),'utf8')).temps[0].removing;
+  assert.equal(journal.birth,birthOf(path));
+  // The interruption may have taken the marker with it: only the journal is left as proof.
+  await rm(join(path,'.ac-retention-owner'),{force:true});
+  await chmod(stuck,0o700);
+  assert.match((await run(l,false)).join('\n'),/ac-interrompido: elegível \(rodada round-1 encerrada há 25 h, retomando remoção interrompida\)/);
+  const second=(await run(l,true)).join('\n');
+  assert.match(second,/ac-interrompido: removido, retomando remoção interrompida/);
+  assert.equal(existsSync(path),false);
+  const after=JSON.parse(await readFile(registryPath(l),'utf8'));
+  assert.equal(after.temps.length,0);assert.equal(after.history.at(-1).action,'removed');
+ }finally{await chmod(join(l.tmp,'ac-interrompido','preso'),0o700).catch(()=>{});await cleanup(l);}
+});
+
+test('the removal journal never vouches for another directory, and without it a missing marker still keeps the directory',async()=>{
+ const l=await lab();
+ try{
+  const {path,id}=await closedTemp(l,'ac-jornal');
+  const registry=JSON.parse(await readFile(registryPath(l),'utf8'));
+  registry.temps[0].removing={since:Date.now(),birth:birthOf(path)};
+  await writeFile(registryPath(l),JSON.stringify(registry));
+  // Replaced by another directory at the same path: other identity, kept.
+  await rename(path,path+'-original');makeTemp(l,'ac-jornal');
+  assert.match((await run(l,true)).join('\n'),/ac-jornal: preservado \(o diretório não é o registrado\)/);
+  assert.ok(existsSync(join(path,'data.bin')));assert.ok(existsSync(join(path+'-original','data.bin')));
+  // Same identity but another birth time than the one journalled: kept.
+  await rm(path,{recursive:true});await rename(path+'-original',path);
+  registry.temps[0].removing.birth='1';
+  await writeFile(registryPath(l),JSON.stringify(registry));
+  await rm(join(path,'.ac-retention-owner'));
+  assert.match((await run(l,true)).join('\n'),/ac-jornal: preservado \(o diretório não é o que começou a ser removido\)/);
+  // No journal and no marker: no proof at all.
+  delete registry.temps[0].removing;
+  await writeFile(registryPath(l),JSON.stringify(registry));
+  assert.match((await run(l,true)).join('\n'),/ac-jornal: preservado \(marca de propriedade ausente\)/);
+  assert.ok(existsSync(join(path,'data.bin')));
+  // A journal with the right birth but a forged marker still fails on the marker.
+  registry.temps[0].removing={since:Date.now(),birth:birthOf(path)};
+  await writeFile(registryPath(l),JSON.stringify(registry));
+  await writeFile(join(path,'.ac-retention-owner'),JSON.stringify({schemaVersion:1,entryId:id,nonce:'guess'}));
+  assert.match((await run(l,true)).join('\n'),/ac-jornal: preservado \(marca de propriedade não confere\)/);
+  assert.ok(existsSync(join(path,'data.bin')));
+ }finally{await cleanup(l);}
+});
+
+test('work/ of jobs is retained first, and a damaged artifact registry never stops it',async()=>{
+ const l=await lab();
+ try{
+  const w=makeWorktree(l,'guarded');await register(l,w);
+  await writeFile(registryPath(l),'{"schemaVersion":1,"worktrees":[{"path":"/etc"}]}',{mode:0o600});
+  const order:string[]=[];
+  const jobRetention=async(_config:Installation,apply:boolean)=>{order.push('jobs');return [`jobs apply=${apply}`];};
+  const artifactRetention=async(config:Installation,apply:boolean)=>{order.push('artifacts');return runPersonalArtifactRetention(config,apply,l.deps);};
+  for(let pass=0;pass<2;pass++){
+   const failure=await runRetentionStages(l.config,true,{jobRetention,artifactRetention}).then(()=>undefined,error=>error);
+   assert.ok(failure instanceof RetentionIncomplete);
+   assert.deepEqual(failure.failed,['artifacts']);
+   assert.equal(failure.lines[0],'jobs apply=true');
+   assert.match(failure.lines.join('\n'),/Retenção de artefatos \(worktrees, imagens e temporários\) falhou \(RETENTION_REGISTRY_INVALID\); as demais etapas seguiram\./);
+  }
+  assert.deepEqual(order,['jobs','artifacts','jobs','artifacts']);
+  assert.ok(existsSync(w.path));
+  // The other way round: a failing job stage still lets artifacts run.
+  await rm(registryPath(l));
+  const failure=await runRetentionStages(l.config,false,{jobRetention:async()=>{throw new Error('database down');},artifactRetention}).then(()=>undefined,error=>error);
+  assert.ok(failure instanceof RetentionIncomplete);
+  assert.deepEqual(failure.failed,['jobs']);
+  assert.match(failure.lines[0]!,/Retenção de work\/ de jobs falhou \(erro\)/);
+  assert.match(failure.lines.at(-1)!,/Prévia, nada foi alterado/);
+  // Both healthy: plain lines, jobs first.
+  assert.deepEqual((await runRetentionStages(l.config,false,{jobRetention,artifactRetention})).slice(0,1),['jobs apply=false']);
  }finally{await cleanup(l);}
 });
