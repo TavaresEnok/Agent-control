@@ -3,7 +3,14 @@ import {closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, mkdte
 import {basename, join, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {stripVTControlCharacters} from 'node:util';
-import {AUDIT_VERSION, auditRepositoryReadiness, redactEvidence} from './audit-readiness.mjs';
+import {
+  AUDIT_VERSION,
+  auditRepositoryReadiness,
+  hasKnownSecret,
+  isProtectedReportPath,
+  isPublicReportPath,
+  redactEvidence,
+} from './audit-readiness.mjs';
 import {passiveHeaderFacts} from './header-facts.mjs';
 
 const VALID_SEVERITIES = new Set(['alta', 'media', 'baixa', 'informativa']);
@@ -67,6 +74,14 @@ function normalizeFinding(item, repoRoot, fallbackFile) {
   };
 }
 
+function canEmitToolFinding(finding) {
+  if (!finding || typeof finding.file !== 'string' || hasKnownSecret(finding.file)) return false;
+  if (isPublicReportPath(finding.file)) return true;
+  return (finding.tool === 'gitleaks' || finding.tool === 'trivy')
+    && finding.evidence === SECRET_EVIDENCE
+    && isProtectedReportPath(finding.file);
+}
+
 function normalizeCoverageRow(row) {
   const status = VALID_STATUSES.has(row.status) ? row.status : 'failed';
   return {
@@ -74,6 +89,7 @@ function normalizeCoverageRow(row) {
     version: String(row.version || 'desconhecida').slice(0, 80),
     status,
     detail: String(row.detail || '').slice(0, 500),
+    ...(row.files === undefined ? {} : {files: row.files}),
   };
 }
 
@@ -352,16 +368,22 @@ function findDockerfiles(repoRoot) {
   const files = [];
   let omitted = null;
   const asRelative = path => relative(repoRoot, path).split(sep).join('/') || '.';
+  const formatOmitted = (absPath, message, fallback) => {
+    const rel = asRelative(absPath);
+    return isPublicReportPath(rel) && !hasKnownSecret(rel) ? `${rel}: ${message}` : fallback;
+  };
   const walk = (dir, depth) => {
     if (depth > 8) {
-      omitted ??= `${asRelative(dir)}: limite de profundidade na busca de Dockerfiles.`;
+      omitted ??= formatOmitted(dir, 'limite de profundidade na busca de Dockerfiles.',
+        'Limite de profundidade atingido na busca de Dockerfiles (caminho omitido por restrição de publicação).');
       return;
     }
     let entries;
     try {
       entries = readdirSync(dir, {withFileTypes: true});
     } catch {
-      omitted ??= `${asRelative(dir)}: diretório ilegível na busca de Dockerfiles.`;
+      omitted ??= formatOmitted(dir, 'diretório ilegível na busca de Dockerfiles.',
+        'Diretório ilegível na busca de Dockerfiles (caminho omitido por restrição de publicação).');
       return;
     }
     entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -371,7 +393,8 @@ function findDockerfiles(repoRoot) {
       if (entry.isDirectory()) {
         if (entry.name === '.git' || entry.name === 'node_modules') continue;
         if (files.length >= 100) {
-          omitted ??= `${asRelative(abs)}: início de entradas omitidas pelo limite de 100 Dockerfiles.`;
+          omitted ??= formatOmitted(abs, 'início de entradas omitidas pelo limite de 100 Dockerfiles.',
+            'Limite de 100 Dockerfiles atingido (caminho omitido por restrição de publicação).');
           break;
         }
         walk(abs, depth + 1);
@@ -379,7 +402,8 @@ function findDockerfiles(repoRoot) {
         const name = entry.name;
         if ((name === 'Dockerfile' || name.startsWith('Dockerfile.') || name.endsWith('.Dockerfile')) && !name.endsWith('.dockerignore')) {
           if (files.length >= 100) {
-            omitted ??= `${asRelative(abs)}: início de entradas omitidas pelo limite de 100 Dockerfiles.`;
+            omitted ??= formatOmitted(abs, 'início de entradas omitidas pelo limite de 100 Dockerfiles.',
+              'Limite de 100 Dockerfiles atingido (caminho omitido por restrição de publicação).');
             break;
           }
           files.push({abs, rel: asRelative(abs)});
@@ -650,13 +674,23 @@ export function runCollector(options = {}) {
     } catch {
       scan = {detail: 'Falha ao preparar ou ler a varredura isolada do gitleaks.'};
     }
-    if (scan.findings) findings.push(...scan.findings);
+    let gitleaksOmitted = 0;
+    if (scan.findings) {
+      for (const finding of scan.findings) {
+        if (canEmitToolFinding(finding)) findings.push(finding);
+        else gitleaksOmitted++;
+      }
+    }
+    const gitleaksOk = Boolean(scan.findings) && gitleaksOmitted === 0;
     coverage.push(
       normalizeCoverageRow({
         tool: 'gitleaks',
         version: gitleaksVer,
-        status: scan.findings ? 'ok' : 'failed',
-        detail: scan.detail ?? `Varredura dos arquivos do snapshot concluída; ${scan.findings.length} segredo(s) encontrado(s).`,
+        status: gitleaksOk ? 'ok' : 'failed',
+        detail: scan.detail
+          ?? (gitleaksOmitted > 0
+            ? `Varredura concluída com ${gitleaksOmitted} achado(s) omitido(s) por restrição de caminho no contrato de publicação.`
+            : `Varredura dos arquivos do snapshot concluída; ${scan.findings.length} segredo(s) encontrado(s).`),
       }),
       normalizeCoverageRow({
         tool: 'gitleaks:historico',
@@ -710,20 +744,42 @@ export function runCollector(options = {}) {
       } else {
         try {
           const hlFindings = parseHadolintJson(hlRes.stdout, repoRoot, anchorFile);
-          findings.push(...hlFindings);
+          const keptHlFindings = [];
+          let hadolintOmitted = 0;
+          for (const finding of hlFindings) {
+            if (isPublicReportPath(finding.file)) keptHlFindings.push(finding);
+            else hadolintOmitted++;
+          }
+          findings.push(...keptHlFindings);
           coverage.push(normalizeCoverageRow({
             tool: 'hadolint',
             version: hadolintVer,
-            status: 'ok',
-            detail: `${dockerfiles.length} Dockerfile(s) analisado(s); ${hlFindings.length} achado(s).`,
+            status: hadolintOmitted > 0 ? 'failed' : 'ok',
+            detail: hadolintOmitted > 0
+              ? `${dockerfiles.length} Dockerfile(s) analisado(s); ${keptHlFindings.length} achado(s) emitido(s) e ${hadolintOmitted} omitido(s) por restrição de caminho no contrato de publicação.`
+              : `${dockerfiles.length} Dockerfile(s) analisado(s); ${keptHlFindings.length} achado(s).`,
           }));
+          let hadolintOmittedFiles = 0;
           for (const df of dockerfiles) {
-            const count = hlFindings.filter(f => f.file === df.rel).length;
+            const count = keptHlFindings.filter(f => f.file === df.rel).length;
+            const detail = `${df.rel}: ${count} achado(s).`;
+            if (!isPublicReportPath(df.rel) || hasKnownSecret(detail)) {
+              hadolintOmittedFiles++;
+              continue;
+            }
             coverage.push(normalizeCoverageRow({
               tool: 'hadolint:arquivo',
               version: hadolintVer,
               status: 'ok',
-              detail: `${df.rel}: ${count} achado(s).`,
+              detail,
+            }));
+          }
+          if (hadolintOmittedFiles > 0) {
+            coverage.push(normalizeCoverageRow({
+              tool: 'hadolint:limites',
+              version: hadolintVer,
+              status: 'skipped',
+              detail: `${hadolintOmittedFiles} Dockerfile(s) omitido(s) da listagem individual por conter caminho protegido ou incompatível com o contrato de publicação.`,
             }));
           }
         } catch {
@@ -754,26 +810,46 @@ export function runCollector(options = {}) {
     } else {
       try {
         const {findings: trFindings, targets: trTargets} = parseTrivyConfigJson(readFileSync(trivyOut, 'utf8'), repoRoot, anchorFile);
-        findings.push(...trFindings);
+        const keptTrFindings = [];
+        let trivyOmitted = 0;
+        for (const finding of trFindings) {
+          if (canEmitToolFinding(finding)) keptTrFindings.push(finding);
+          else trivyOmitted++;
+        }
+        findings.push(...keptTrFindings);
         coverage.push(normalizeCoverageRow({
           tool: 'trivy',
           version: trivyVer,
-          status: 'ok',
-          detail: `Trivy config offline em ${trTargets.length} alvo(s) IaC; ${trFindings.length} achado(s).`,
+          status: trivyOmitted > 0 ? 'failed' : 'ok',
+          detail: trivyOmitted > 0
+            ? `Trivy config offline em ${trTargets.length} alvo(s) IaC; ${keptTrFindings.length} achado(s) emitido(s) e ${trivyOmitted} omitido(s) por restrição de caminho no contrato de publicação.`
+            : `Trivy config offline em ${trTargets.length} alvo(s) IaC; ${keptTrFindings.length} achado(s).`,
         }));
+        let trivyOmittedTargets = 0;
         for (const target of trTargets.slice(0, 100)) {
-          const count = trFindings.filter(f => f.file === target).length;
+          const count = keptTrFindings.filter(f => f.file === target).length;
+          const detail = `${target}: ${count} achado(s) de configuração.`;
+          if (!isPublicReportPath(target) || hasKnownSecret(detail)) {
+            trivyOmittedTargets++;
+            continue;
+          }
           coverage.push(normalizeCoverageRow({
             tool: 'trivy:arquivo',
             version: trivyVer,
             status: 'ok',
-            detail: `${target}: ${count} achado(s) de configuração.`,
+            detail,
           }));
         }
         if (trTargets.length > 100) {
           coverage.push(normalizeCoverageRow({
             tool: 'trivy:limites', version: trivyVer, status: 'skipped',
             detail: `${trTargets.length - 100} alvo(s) analisado(s) sem linha de cobertura individual pelo limite de 100 linhas.`,
+          }));
+        }
+        if (trivyOmittedTargets > 0) {
+          coverage.push(normalizeCoverageRow({
+            tool: 'trivy:limites', version: trivyVer, status: 'skipped',
+            detail: `${trivyOmittedTargets} alvo(s) omitido(s) da listagem individual por conter caminho protegido ou incompatível com o contrato de publicação.`,
           }));
         }
       } catch {
@@ -794,8 +870,23 @@ export function runCollector(options = {}) {
           ? options.passiveTlsEvidence
           : readTrustedEvidenceFile(evidenceFile, repoRoot);
         const evaluated = evaluatePassiveTlsEvidence(evidence, repoRoot, tlsAnchorFile);
-        findings.push(...evaluated.findings);
-        coverage.push(...evaluated.coverage);
+        const keptTlsFindings = [];
+        let tlsOmitted = 0;
+        for (const finding of evaluated.findings) {
+          if (isPublicReportPath(finding.file) && existsSync(join(repoRoot, finding.file))) keptTlsFindings.push(finding);
+          else tlsOmitted++;
+        }
+        findings.push(...keptTlsFindings);
+        if (tlsOmitted > 0) {
+          coverage.push(normalizeCoverageRow({
+            tool: 'prontidao-tls-passivo',
+            version: AUDIT_VERSION,
+            status: 'failed',
+            detail: `Medição passiva TLS com ${tlsOmitted} achado(s) omitido(s) por restrição de caminho ou ausência de âncora pública no contrato de publicação.`,
+          }));
+        } else {
+          coverage.push(...evaluated.coverage);
+        }
       } catch {
         coverage.push(normalizeCoverageRow({
           tool: 'prontidao-tls-passivo',

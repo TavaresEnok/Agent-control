@@ -473,6 +473,40 @@ async function verifyModuleEndToEnd(
       assert.match(report.coverageMarkdown, spec.coverageDetailPattern);
     }
 
+    if (module === 'documentacao') {
+      const routes = [
+        {file: 'src/app/(portal)/users/[id_0]/page.tsx', line: 2, symbol: 'routePage'},
+        {file: 'src/routes/ação (v2)/[param].ts', line: 1, symbol: 'routeTarget'},
+      ];
+      for (const route of routes) {
+        const findings = report.achados.filter(f => f.where.file === route.file);
+        assert.equal(findings.length, 1, `achados inesperados em ${route.file}: ${JSON.stringify(findings)}`);
+        const finding = findings[0]!;
+        assert.equal(finding.status, 'provavel');
+        assert.deepEqual(finding.sources, ['typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC']);
+        assert.equal(finding.reference, 'typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC');
+        assert.equal(finding.where.file, route.file);
+        assert.equal(finding.where.line, route.line);
+        assert.match(finding.title, new RegExp(`\\b${route.symbol}\\b`));
+        for (const tool of ['typedoc:file', 'dependency-cruiser:file']) {
+          assert.ok(toolCovRows.some(row => row.tool === tool && row.status === 'ok'
+            && row.detail.startsWith(`arquivo=${route.file};`)), `cobertura ausente: ${tool} ${route.file}`);
+        }
+      }
+      for (const tool of ['documentacao:limites', 'documentacao:escopo', 'documentacao:privacidade']) {
+        assert.equal(toolCovRows.some(row => row.tool === tool), false, `recusa ou omissão global: ${tool}`);
+      }
+      assert.match(toolCovRows.find(row => row.tool === 'mermaid')?.detail ?? '', /diagrama_codigo_valido=true; erro_diagrama_gerado=$/);
+      const diagram = await readFile(join(reportDir, 'dependencias.mmd'), 'utf8');
+      const page = diagram.match(/^subgraph [A-Z0-9]+\["\[id_0\]"\]\n([A-Z0-9]+)\["page\.tsx"\]$/m)?.[1];
+      const target = diagram.match(/^subgraph [A-Z0-9]+\["ação \(v2\)"\]\n([A-Z0-9]+)\["\[param\]\.ts"\]$/m)?.[1];
+      assert.ok(page && target, diagram);
+      assert.match(diagram, new RegExp(`^${page}-->${target}$`, 'm'), diagram);
+      for (const label of ['(portal)', '[id_0]', 'page.tsx', 'ação (v2)', '[param].ts']) {
+        assert.ok(diagram.includes(label), `rótulo ausente: ${label}`);
+      }
+    }
+
     const measuredFinding = report.achados.find(item => item.status === 'provavel' && spec.matchFinding(item));
     assert.ok(
       measuredFinding,

@@ -45,26 +45,37 @@ function fail(error:unknown):never{
  throw error instanceof Error?error:new Error('A verificação falhou.');
 }
 
-/** The ledger refuses a lease longer than 60s. A model call outlasts that, so renew it until the exam returns. Three consecutive heartbeat failures abort once; a success clears that streak. */
+/**
+ * Renew the lease during long exams, skipping ticks while a heartbeat is pending.
+ * Three consecutive failures abort once. A successful heartbeat clears the streak.
+ */
 export function keepPersonalVerifyLease<T>(ledger:{heartbeat:(authority:T)=>Promise<unknown>},authority:T,everyMs=5000,onAbort?:()=>void){
  let consecutive=0;
  let aborted=false;
- const timer=setInterval(()=>{
-  void (async()=>{
-   try{
-    await ledger.heartbeat(authority);
-    consecutive=0;
-   }catch{
-    consecutive+=1;
-    if(!aborted&&consecutive>=3){
-     aborted=true;
-     onAbort?.();
-    }
+ let inFlight=false;
+ let stopped=false;
+ const timer=setInterval(async()=>{
+  if(stopped||inFlight)return;
+  inFlight=true;
+  try{
+   await ledger.heartbeat(authority);
+   consecutive=0;
+  }catch{
+   if(stopped)return;
+   consecutive+=1;
+   if(!aborted&&consecutive>=3){
+    aborted=true;
+    onAbort?.();
    }
-  })();
+  }finally{
+   inFlight=false;
+  }
  },everyMs);
  timer.unref();
- return ()=>clearInterval(timer);
+ return ()=>{
+  stopped=true;
+  clearInterval(timer);
+ };
 }
 
 const releaseLeaseSql='UPDATE ac_managers SET lease_until = clock_timestamp() WHERE context_id=$1 AND instance_id=$2 AND epoch=$3';

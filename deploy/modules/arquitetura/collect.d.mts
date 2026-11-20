@@ -6,6 +6,7 @@ export interface CoverageRow {
   version: string;
   status: CoverageStatus;
   detail: string;
+  files?: string[];
 }
 
 export interface FindingItem {
@@ -44,6 +45,8 @@ export function parseKnipReport(
   rawJson: unknown,
   repoRoot: string,
   candidateFiles?: Set<string>,
+  includesFile?: (file: string) => boolean,
+  wasOmitted?: (file: string) => boolean,
 ): {
   findings: FindingItem[];
   perFileCoverage: {tool: string; role: string; issues: number; file: string}[];
@@ -53,6 +56,7 @@ export function parseJscpdReport(
   rawJson: unknown,
   repoRoot: string,
   scannedBaseDir: string | null,
+  includesFile?: (file: string) => boolean,
 ): {
   findings: FindingItem[];
   duplicatedFiles: Set<string>;
@@ -63,6 +67,7 @@ export function parseJscpdComplexityReport(
   repoRoot: string,
   scannedBaseDir: string | null,
   coveredAstFiles?: Set<string>,
+  includesFile?: (file: string) => boolean,
 ): {
   findings: FindingItem[];
   fileMetrics: {file: string; complexity: number; lines: number; tokens: number; format: string}[];
@@ -72,6 +77,7 @@ export function parseDepcruiseReport(
   rawJson: unknown,
   repoRoot: string,
   readSourceFile?: (relFile: string) => string,
+  includesFile?: (file: string) => boolean,
 ): {
   findings: FindingItem[];
   perFileCoverage: {
@@ -81,8 +87,9 @@ export function parseDepcruiseReport(
     instability: string;
     cycle: boolean;
     layerViolation: boolean;
+    partial: boolean;
   }[];
-  stats: {totalModules: number; totalDependencies: number; cycles: number; layerViolations: number; orphans: number};
+  stats: {totalModules: number; totalDependencies: number; cycles: number; layerViolations: number; orphans: number; omittedEdges: number; partial: boolean};
 };
 export function analyzeAstComplexity(
   workRepoDir: string,

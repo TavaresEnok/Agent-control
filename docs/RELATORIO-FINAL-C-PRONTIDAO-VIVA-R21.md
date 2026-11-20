@@ -1,0 +1,9 @@
+# Prontidão R21
+
+Base do worktree: `32a97fb1`; titular indicado na ordem: `43f1c664`. A análise é estática e não executa as entradas examinadas.
+
+A recuperação atravessa uma substituição somente quando cada nível começa, após eventual espaço, tabulação ou quebra de linha, pela palavra literal e não citada `echo` ou `printf`, seguida de espaço, tabulação, quebra de linha ou `)`. Os argumentos aceitos são palavras lexicais com aspas, escapes e substituições aninhadas submetidas à mesma regra; comentários são aceitos. Uma quebra de linha sem aspas só é aceita quando o próximo elemento, após espaços, tabulações ou quebras de linha, é o fechamento `)`. Outras expansões, operadores e palavras iniciais não reconhecidas interrompem a recuperação antes da palavra externa afetada. Não se procuram palavras reservadas dentro de argumentos, e a análise não atribui semântica aos dados. O token completo de redirecionamento inicia uma barreira para `<<`, `<<-` e `<<<`, inclusive com descritor numérico, antes de consumir operando ou corpo. Segmentos externos completos anteriores permanecem disponíveis.
+
+As fixtures sintéticas verificam os três casos R20, variantes de heredoc e comandos internos nos três pilares, prefixos externos, início continuado ou não reconhecido, argumentos literais reservados, substituição aninhada e quebra de linha separadora. Os controles anteriores abrangem redirecionamentos, conteúdo opaco, comentários e publicação de relatórios. A prova demonstra fronteiras e estados de cobertura estáticos; não demonstra execução de shell nem publicação na instalação pessoal.
+
+Validação: `npx tsc --noEmit --skipLibCheck` passou; `node --import tsx --test tests/module-prontidao.test.ts` passou com 58 testes. Não houve revisão independente nesta execução. Não foram executados suíte completa, laboratório, reconstrução de imagens ou ações na instalação viva.

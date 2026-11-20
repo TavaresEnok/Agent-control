@@ -21,6 +21,84 @@ const COMPOSE_EXTERNAL_LOG_DRIVERS = new Set([
   'none', 'journald', 'syslog', 'gelf', 'fluentd', 'awslogs', 'splunk', 'etwlogs', 'gcplogs',
 ]);
 
+const NOT_A_MASK = String.raw`(?![^\s\u2026]*\u2026)`;
+const SECRET_VALUE = String.raw`(?:"[^"\r\n]*"|'[^'\r\n]*'|\S+)`;
+const ASSIGN_NAME = String.raw`pass|passwd|password|secret|token|(?<![A-Za-z])key(?!board)|auth|credential`;
+const KNOWN_SECRET_PATTERNS = [
+  /-----BEGIN(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----[\s\S]*?-----END(?: [A-Za-z0-9][A-Za-z0-9 -]{0,80})?-----/,
+  /(?<![A-Z0-9])AKIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Z0-9])ASIA[0-9A-Z]{16}(?![A-Z0-9])/,
+  /(?<![A-Za-z0-9_])github_pat_[A-Za-z0-9_]{20,400}(?![A-Za-z0-9_])/,
+  /(?<![A-Za-z0-9_])ghp_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])ghs_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])gho_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,400}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9])xox[a-z]-[A-Za-z0-9-]{10,400}(?![A-Za-z0-9-])/,
+  /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,31}:\/\/[^\s/:@\u2026]{1,200}:[^\s/@\u2026]{1,200}@/,
+  /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,255}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_])sk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])rk_live_[A-Za-z0-9]{20,255}(?![A-Za-z0-9])/,
+  /(?<![A-Za-z0-9_])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/,
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])authorization[ \t]*:[ \t]*(?:bearer|basic)[ \t]+${NOT_A_MASK}${SECRET_VALUE}`, 'i'),
+  /(?<![A-Za-z0-9+/])(?=[A-Za-z0-9+/]{0,39}[G-Zg-z+/])[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])/,
+  /(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,128}\.[A-Za-z0-9_-]{16,128}(?![A-Za-z0-9_-])/,
+  new RegExp(String.raw`(?<![A-Za-z0-9_])--(?:${ASSIGN_NAME})\w*(?:["']?\s*[:=]\s*|[ \t]+)${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+  new RegExp(String.raw`(?:${ASSIGN_NAME})\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'i'),
+];
+
+const REPO_PATH_RE = /^[\p{L}\p{M}\p{N} ._@+/-]+$/u;
+const CONTROL_CHAR_RE = /[\u0000-\u001F\u007F-\u009F]/;
+const PROTECTED_READINESS_RULES = new Set([
+  'PRONTIDAO-SEGREDO-ARQUIVO-ENV',
+  'PRONTIDAO-CHAVE-PRIVADA-NO-REPOSITORIO',
+]);
+
+/** Matches the host secret-value detector so collector outputs omit triggering paths before emission. */
+export function hasKnownSecret(text) {
+  return typeof text === 'string' && KNOWN_SECRET_PATTERNS.some(pattern => pattern.test(text));
+}
+
+function hasForbiddenSegment(part, allowDotEnvName = false) {
+  if (part === '' || part !== part.trim() || part === '.' || part === '..'
+    || part === '.git' || part === '.ai' || part === 'node_modules'
+    || /^(?:\.mcp\.json|\.claude|\.husky|\.codex|\.grok)$/i.test(part)) return true;
+  return !allowDotEnvName && part.startsWith('.env');
+}
+
+function isSecretClassName(file) {
+  const name = basename(file).toLowerCase();
+  return /^(?:\.env|id_|credentials)|^(?:\.npmrc|\.netrc|\.pgpass)$|\.(?:pem|key|p12|pfx|jks|tfstate|tfvars)$|^service-account.*\.json$|kubeconfig/.test(name);
+}
+
+/** Checks whether a repository path satisfies the public publication contract and passes secret detection. */
+export function isPublicReportPath(file) {
+  if (typeof file !== 'string' || file !== file.trim() || file.includes('\\') || CONTROL_CHAR_RE.test(file)) return false;
+  if (!file || file.length > 400 || file.startsWith('/') || file.startsWith('~') || /^[A-Za-z]:/.test(file)) return false;
+  if (!REPO_PATH_RE.test(file) || hasKnownSecret(file)) return false;
+  const parts = file.split('/');
+  return !parts.some(part => hasForbiddenSegment(part, false)) && !isSecretClassName(file);
+}
+
+/** Checks whether a secret-class path is allowed as a protected finding location without triggering secret detection. */
+export function isProtectedReportPath(file) {
+  if (typeof file !== 'string' || file !== file.trim() || file.includes('\\') || CONTROL_CHAR_RE.test(file)) return false;
+  if (!file || file.length > 400 || file.startsWith('/') || file.startsWith('~') || /^[A-Za-z]:/.test(file)) return false;
+  if (!REPO_PATH_RE.test(file) || hasKnownSecret(file)) return false;
+  const parts = file.split('/');
+  const name = parts.pop();
+  return Boolean(name && isSecretClassName(name) && !name.includes('..')
+    && !hasForbiddenSegment(name, true) && !parts.some(part => hasForbiddenSegment(part, false)));
+}
+
+function canEmitReadinessFinding(rule, file) {
+  if (isPublicReportPath(file)) return true;
+  return PROTECTED_READINESS_RULES.has(rule) && isProtectedReportPath(file);
+}
+
+const findingOmitHandlers = new WeakMap();
+
 /** Redacts secret values before placing text into finding evidence or messages. */
 export function redactEvidence(text) {
   let out = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -532,7 +610,7 @@ function isSecretValueExposed(key, parsedValue, interpolate = true) {
   return SECRET_KEY_RE.test(key);
 }
 
-function checkDotenv(file, findings, pillarCounts, onIncomplete) {
+function checkDotenv(file, findings, pillarCounts, onIncomplete, onMeasured) {
   for (let i = 0; i < file.lines.length; i++) {
     const first = file.lines[i].trim();
     if (!first || first.startsWith('#')) continue;
@@ -568,6 +646,7 @@ function checkDotenv(file, findings, pillarCounts, onIncomplete) {
     } else {
       value = rawValue.split(/[ \t]+#/, 1)[0].trim();
     }
+    onMeasured();
     if (isSecretValueExposed(key, value, quote !== "'" && quote !== '`')) {
       addSecretFinding(findings, pillarCounts, 'PRONTIDAO-SEGREDO-ARQUIVO-ENV', file.rel, line,
         'Possível segredo em arquivo protegido.');
@@ -576,6 +655,10 @@ function checkDotenv(file, findings, pillarCounts, onIncomplete) {
 }
 
 function addFinding(findings, pillarCounts, pillar, item) {
+  if (!canEmitReadinessFinding(item.rule, item.file)) {
+    findingOmitHandlers.get(findings)?.(pillar);
+    return false;
+  }
   pillarCounts[pillar] = (pillarCounts[pillar] ?? 0) + 1;
   findings.push({
     tool: 'prontidao-audit',
@@ -586,6 +669,7 @@ function addFinding(findings, pillarCounts, pillar, item) {
     message: item.message,
     evidence: redactEvidence(item.evidence),
   });
+  return true;
 }
 
 const PROTECTION_HEADERS = new Set([
@@ -712,7 +796,7 @@ function caddyAddress(raw) {
   return {http, local};
 }
 
-function checkCaddy(file, findings, pillarCounts, onIncomplete) {
+function checkCaddy(file, findings, pillarCounts, onIncomplete, onMeasured) {
   const entries = parseCaddy(file.content);
   const declarations = [];
   let globalUnknown = false;
@@ -804,8 +888,12 @@ function checkCaddy(file, findings, pillarCounts, onIncomplete) {
     if (routingUnknown) onIncomplete(line, 'rotas ou imports Caddy exigem avaliação adicional');
     if (headersUnknown) onIncomplete(line, 'política Caddy de cabeçalhos condicional ou dinâmica');
     const publicHttp = addresses.some(address => address.http && !address.local);
-    if (publicHttp && !redirect && !routingUnknown) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
+    if (addresses.some(address => address.http) && !routingUnknown) {
+      onMeasured();
+      if (publicHttp && !redirect) addProxyHttpFinding(file, line, 'Caddy', findings, pillarCounts);
+    }
     if (addresses.some(address => !address.http) && !routingUnknown && !headersUnknown) {
+      onMeasured();
       checkProxyHeaders(file, line, 'Caddy', headers, findings, pillarCounts);
     }
   }
@@ -1014,7 +1102,7 @@ function nginxHeadersForStatus(headers, status) {
   return active;
 }
 
-function checkNginx(file, findings, pillarCounts, onIncomplete) {
+function checkNginx(file, findings, pillarCounts, onIncomplete, onMeasured) {
   const root = parseNginx(file.content);
   const initial = {headers: new Map(), mode: 'on', unknown: false, external: false, errorPages: new Set()};
   const protocolAt = (block, inherited) => block.directives.find(item => item.name === 'ssl_protocols') ?? inherited;
@@ -1030,6 +1118,7 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
       if (errorPage) {
         onIncomplete(block.line, 'página de erro pode trocar o contexto dos cabeçalhos Nginx');
       } else if (response.status !== 444) {
+        onMeasured();
         if (signature !== parentHeaders) checkProxyHeaders(file, block.line, 'Nginx', headers, findings, pillarCounts);
         parentHeaders = signature;
       }
@@ -1064,18 +1153,23 @@ function checkNginx(file, findings, pillarCounts, onIncomplete) {
         const mergeSlashes = slashModes.size === 1 ? slashModes.values().next().value : null;
         const redirect = nginxHttpRedirect(server, policy, mergeSlashes, onIncomplete);
         if (redirect === null) onIncomplete(line, 'redirecionamento Nginx depende de reescrita ou configuração adicional');
-        else if (!redirect) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
+        else {
+          onMeasured();
+          if (!redirect) addProxyHttpFinding(file, line, 'Nginx', findings, pillarCounts);
+        }
       }
     }
     const localProtocol = server.directives.includes(protocol);
-    if (https && (localProtocol || !policy.external)
-      && protocol?.args.some(arg => /^(?:SSLv2|SSLv3|TLSv1(?:\.0|\.1)?)$/i.test(arg))) {
-      addFinding(findings, pillarCounts, 'tls-cabecalhos', {
-        rule: 'PRONTIDAO-TLS-PROTOCOLO-FRACO',
-        file: file.rel, line: localProtocol ? protocol.line : server.line, severity: 'alta',
-        message: 'Bloco HTTPS Nginx declara ou herda protocolo TLS/SSL legado.',
-        evidence: 'Diretiva ssl_protocols com protocolo legado.',
-      });
+    if (https && protocol && (localProtocol || !policy.external)) {
+      onMeasured();
+      if (protocol.args.some(arg => /^(?:SSLv2|SSLv3|TLSv1(?:\.0|\.1)?)$/i.test(arg))) {
+        addFinding(findings, pillarCounts, 'tls-cabecalhos', {
+          rule: 'PRONTIDAO-TLS-PROTOCOLO-FRACO',
+          file: file.rel, line: localProtocol ? protocol.line : server.line, severity: 'alta',
+          message: 'Bloco HTTPS Nginx declara ou herda protocolo TLS/SSL legado.',
+          evidence: 'Diretiva ssl_protocols com protocolo legado.',
+        });
+      }
     }
     if (https) checkHeaders(server, policy);
   };
@@ -1251,6 +1345,101 @@ function shellHeredocs(parsed) {
   return docs;
 }
 
+function isShellScript(file) {
+  const base = basename(file.rel);
+  return /\.(?:sh|bash)$/i.test(base) || /^#![^\n]*\b(?:ba|da|k|z)?sh\b/.test(file.content);
+}
+
+function scanShellLine(line, state) {
+  let {inSingleQuote, atWordStart} = state;
+  let inDoubleQuote = false;
+  let inComment = false;
+  let escaped = false;
+  let atWordStartBeforeEscape = atWordStart;
+  let prevDollar = false;
+  let indeterminate = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inComment) continue;
+    if (inSingleQuote) {
+      if (ch === "'") {
+        inSingleQuote = false;
+        atWordStart = false;
+      }
+      prevDollar = false;
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (inDoubleQuote) {
+      if (ch === '\\') escaped = true;
+      else if (ch === '"') {
+        inDoubleQuote = false;
+        atWordStart = false;
+      }
+      prevDollar = false;
+      continue;
+    }
+    if (ch === '\\') {
+      atWordStartBeforeEscape = atWordStart;
+      escaped = true;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (ch === '"') {
+      inDoubleQuote = true;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (ch === "'") {
+      if (prevDollar) {
+        // ANSI-C quoting ($'...') supports backslash escapes; keep multiline $'...' indeterminate.
+        let j = i + 1;
+        while (j < line.length && line[j] !== "'") {
+          if (line[j] === '\\') j++;
+          j++;
+        }
+        if (j >= line.length) {
+          indeterminate = true;
+          break;
+        }
+        i = j;
+        atWordStart = false;
+        prevDollar = false;
+        continue;
+      }
+      inSingleQuote = true;
+      atWordStart = false;
+      prevDollar = false;
+      continue;
+    }
+    if (ch === '#' && atWordStart) {
+      inComment = true;
+      prevDollar = false;
+      continue;
+    }
+    prevDollar = ch === '$';
+    if (ch === ' ' || ch === '\t' || ch === '\n' || '|;&<>'.includes(ch)) atWordStart = true;
+    else atWordStart = false;
+  }
+
+  return {
+    inSingleQuote,
+    inDoubleQuote,
+    inComment,
+    escaped,
+    atWordStartBeforeEscape,
+    indeterminate,
+  };
+}
+
 // Count executable declarations only. Documentation and command arguments alone are not evidence of a routine.
 function* operationalCommands(file, onIncomplete) {
   const base = basename(file.rel);
@@ -1278,7 +1467,7 @@ function* operationalCommands(file, onIncomplete) {
     return;
   }
 
-  const shell = /\.(?:sh|bash)$/i.test(base) || /^#![^\n]*\b(?:ba|da|k|z)?sh\b/.test(file.content);
+  const shell = isShellScript(file);
   const systemCron = /(?:^|\/)cron\.d\/[^/]+$/.test(file.rel) || /(?:^|\/)etc\/crontab$/.test(file.rel);
   const userCron = /(?:^|\/)(?:crontab|[^/]+\.crontab|(?:crontabs|spool\/cron)\/[^/]+)$/.test(file.rel);
   if (systemCron || userCron) {
@@ -1297,6 +1486,7 @@ function* operationalCommands(file, onIncomplete) {
   let bodyLine = '';
   let pending;
   let start = 1;
+  let shellState = {inSingleQuote: false, atWordStart: true};
   // Shell delimiters must preserve literal carriage returns and physical line boundaries.
   const lines = file.content.split('\n');
   if (lines.at(-1) === '') lines.pop();
@@ -1314,18 +1504,34 @@ function* operationalCommands(file, onIncomplete) {
       continue;
     }
     if (pending === undefined) start = index + 1;
-    const continued = SHELL_CONTINUATION.test(raw);
+    if (raw.includes('\r')) {
+      onIncomplete(start, 'delimitação de shell não interpretada');
+      return;
+    }
+    const scan = scanShellLine(raw, shellState);
+    if (scan.indeterminate || scan.inDoubleQuote) {
+      onIncomplete(start, 'delimitação de shell não interpretada');
+      return;
+    }
+    if (scan.inSingleQuote) {
+      pending = (pending ?? '') + raw + '\n';
+      shellState = {inSingleQuote: true, atWordStart: false};
+      continue;
+    }
+    const continued = scan.escaped && !scan.inComment;
     const command = (pending ?? '') + raw;
     const parsed = shellWords(continued ? command.slice(0, -1) : command);
-    if (!parsed || command.includes('\r')) {
+    if (!parsed) {
       onIncomplete(start, 'delimitação de shell não interpretada');
       return;
     }
     if (continued && !parsed.comment) {
       pending = command.slice(0, -1);
+      shellState = {inSingleQuote: false, atWordStart: scan.atWordStartBeforeEscape};
       continue;
     }
     pending = undefined;
+    shellState = {inSingleQuote: false, atWordStart: true};
     if (command.includes('<<')) {
       const docs = shellHeredocs(parsed);
       if (!docs) {
@@ -1340,17 +1546,27 @@ function* operationalCommands(file, onIncomplete) {
   if (pending !== undefined || heredocs[docIndex]) onIncomplete(start, 'declaração de shell incompleta');
 }
 
+// Longest first, shared by tokenization, operand consumption and recovery.
+const SHELL_REDIRECTS = ['<<<', '<<-', '&>>', '<<', '>>', '<>', '>|', '<&', '>&', '&>', '<', '>'];
+const SHELL_REDIRECT_PATTERN = `(?:\\d*(?:${SHELL_REDIRECTS.filter(op => !op.startsWith('&')).map(op => op.replace(/[|]/g, '\\$&')).join('|')})|${SHELL_REDIRECTS.filter(op => op.startsWith('&')).join('|')})`;
+const SHELL_REDIRECT_AT_START = new RegExp(`^${SHELL_REDIRECT_PATTERN}`);
+const SHELL_REDIRECT_TOKEN = new RegExp(`^${SHELL_REDIRECT_PATTERN}$`);
+
 // Literal command words and redirections. Expansion, shell control flow and scripts invoked
 // indirectly stay outside the static proof.
 function shellWords(command) {
-  const tokens = /#[^\r\n]*|\d*(?:<<<|<<-?)|(?:\d*>>?|[|;&<>])[&|]?|(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^ \t\n"'\\|;&<>])+|[ \t\n]+/gy;
+  const tokens = new RegExp(`#[^\\r\\n]*|${SHELL_REDIRECT_PATTERN}|[|;&][&|]?|(?:"(?:\\\\.|[^"\\\\])*"|'[^']*'|\\\\.|[^ \t\n"'\\\\|;&<>])+|[ \t]+|\n`, 'gy');
   const words = [];
   let operator = false;
   while (tokens.lastIndex < command.length) {
     const token = tokens.exec(command)?.[0];
     if (!token) return null;
-    if (token.startsWith('#')) return {words, operator, comment: true};
-    if (/^[ \t\n]/.test(token)) continue;
+    if (token.startsWith('#')) {
+      if (tokens.lastIndex === command.length) return {words, operator, comment: true};
+      continue;
+    }
+    if (token === '\n') { words.push({text: token, operator: true}); operator = true; continue; }
+    if (/^[ \t]/.test(token)) continue;
     if (/^\d*[|;&<>]/.test(token)) {
       operator ||= !/^1?>>?$/.test(token) && !/^2>>?$/.test(token);
       words.push({text: token, operator: true});
@@ -1438,7 +1654,8 @@ function resticRoutine(subcommand, args, onIncomplete) {
   return [...retention.values()].includes(true);
 }
 
-function dumpDestination(binary, words) {
+function dumpDestination(binary, words, pg) {
+  if (binary === 'pg_dump' && pg?.destination !== undefined) return pg.destination;
   for (const [index, word] of words.entries()) {
     if (word.operator && /^1?>>?$/.test(word.text)) return words[index + 1]?.text;
     const pattern = {
@@ -1446,7 +1663,7 @@ function dumpDestination(binary, words) {
       mysqldump: /^(?:-r(.*)|--result-file(?:=(.*))?)$/,
       mongodump: /^(?:--out(?:=(.*))?|--archive=(.*))$/,
     }[binary];
-    const option = !word.operator && pattern.exec(word.text);
+    const option = binary !== 'pg_dump' && !word.operator && pattern.exec(word.text);
     if (option) return option[1] || option[2] || words[index + 1]?.text;
   }
 }
@@ -1459,77 +1676,1036 @@ function resticCommand(args) {
     if (/^(?:-r|--repo|--repository-file|-p|--password-file)(?:=.+)?$/.test(option)) {
       if (!option.includes('=')) first++;
     } else {
-      return args;
+      return args.slice(first - 1);
     }
   }
   return args.slice(first);
 }
 
-function checkBackup(file, findings, pillarCounts, onIncomplete) {
+const BACKUP_CANDIDATE_RE = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
+
+const SHELL_CONTROL_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', '{', '!']);
+const TIMEOUT_DURATION_RE = /^[ \t]*\+?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|0[xX](?:[\da-fA-F]+(?:\.[\da-fA-F]*)?|\.[\da-fA-F]+)(?:[pP][+-]?\d+)?|[iI][nN][fF](?:[iI][nN][iI][tT][yY])?)[smhd]?$/;
+// GNU coreutils on the Linux image: traditional names, aliases and real-time signals.
+const LINUX_SIGNAL_NAMES = new Set('EXIT HUP INT QUIT ILL TRAP ABRT IOT BUS FPE KILL USR1 SEGV USR2 PIPE ALRM TERM STKFLT CHLD CLD CONT STOP TSTP TTIN TTOU URG XCPU XFSZ VTALRM PROF WINCH IO POLL PWR SYS'.split(' '));
+function timeoutSignal(value) {
+  if (/[$`*?\[\]]/.test(value)) return 'dynamic';
+  const signal = value.toUpperCase().replace(/^SIG/, '');
+  if (LINUX_SIGNAL_NAMES.has(signal)) return 'valid';
+  if (/^\d+$/.test(value)) {
+    const n = Number(value);
+    if (!Number.isSafeInteger(n) || n > 2147483647) return 'invalid';
+    const normalized = n & (n >= 255 ? 255 : 127);
+    return normalized <= 64 ? 'valid' : 'invalid';
+  }
+  const rt = /^RT(MIN|MAX)(?:([+-])(\d+))?$/.exec(signal);
+  if (rt) {
+    const offset = Number(rt[3] ?? 0) * (rt[2] === '-' ? -1 : 1);
+    const n = (rt[1] === 'MIN' ? 34 : 64) + offset;
+    return n >= 34 && n <= 64 ? 'valid' : 'invalid';
+  }
+  return 'invalid';
+}
+function timeoutDuration(value) {
+  if (/[$`*?\[\]]/.test(value)) return 'dynamic';
+  const normalized = value.replace(',', '.').replace(/^[ \t]+/, '');
+  const unsigned = normalized.startsWith('-') ? normalized.slice(1) : normalized;
+  if (!TIMEOUT_DURATION_RE.test(unsigned)) return 'invalid';
+  if (normalized.startsWith('-')) {
+    const hex = /^0[xX]([\da-fA-F]+(?:\.[\da-fA-F]*)?|\.[\da-fA-F]+)(?:[pP][+-]?\d+)?[smhd]?$/.exec(unsigned);
+    const mantissa = hex ? hex[1] : unsigned.replace(/[smhd]$/, '').replace(/[eE][+-]?\d+$/, '');
+    if (!/^[0.]+$/.test(mantissa)) return 'invalid';
+  }
+  return value.includes(',') ? 'dynamic' : 'valid';
+}
+function durationResult(value) {
+  const state = timeoutDuration(value);
+  return state === 'valid' ? null : {words: [], query: state === 'invalid', ambiguous: state === 'dynamic'};
+}
+// An unquoted expansion can disappear or split into multiple shell words.
+function mayChangeWordCount(word) {
+  const raw = word.raw ?? word.text ?? '';
+  let quote = '';
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "'" && quote !== '"') { quote = quote === "'" ? '' : "'"; continue; }
+    if (ch === '"' && quote !== "'") { quote = quote === '"' ? '' : '"'; continue; }
+    if (ch === '\\' && quote !== "'") { i++; continue; }
+    if (quote !== "'" && (raw.slice(i).match(/^\$(?:@|\{[^}]*\[@\]\})/) || (!quote && /[$`*?\[\]]/.test(ch)))) return true;
+  }
+  return false;
+}
+function signalResult(value) {
+  const state = timeoutSignal(value);
+  return state === 'valid' ? null : {words: [], query: state === 'invalid', ambiguous: state === 'dynamic'};
+}
+const WRAPPER_SPECS = Object.assign(Object.create(null), {
+  exec: {
+    flagChars: new Set(['c', 'l']),
+    valueChars: new Set(['a']),
+    nonExecFlagChars: new Set(),
+    longFlags: new Set(),
+    nonExecLongFlags: new Set(),
+    longValues: new Set(),
+    longOptionalEquals: new Set(),
+  },
+  env: {
+    flagChars: new Set(['i', '0', 'v']),
+    valueChars: new Set(['u', 'C', 'S']),
+    nonExecFlagChars: new Set(),
+    longFlags: new Set(['--ignore-environment', '--null', '--debug']),
+    nonExecLongFlags: new Set(),
+    longValues: new Set(['--unset', '--chdir', '--split-string', '--block-signal', '--default-signal', '--ignore-signal', '--argv0']),
+    longOptionalEquals: new Set(),
+  },
+  sudo: {
+    flagChars: new Set(['A', 'B', 'E', 'H', 'P', 'S', 'b', 'i', 'k', 'n', 's']),
+    valueChars: new Set(['C', 'D', 'R', 'T', 'U', 'a', 'c', 'g', 'h', 'p', 'r', 't', 'u']),
+    nonExecFlagChars: new Set(['K', 'V', 'e', 'l', 'v']),
+    longFlags: new Set([
+      '--askpass', '--background', '--bell', '--login', '--non-interactive', '--preserve-env',
+      '--reset-timestamp', '--set-home', '--shell', '--stdin',
+    ]),
+    nonExecLongFlags: new Set([
+      '--edit', '--help', '--list', '--remove-timestamp', '--validate', '--version',
+    ]),
+    longValues: new Set([
+      '--chdir', '--chroot', '--close-from', '--command-timeout', '--group', '--host',
+      '--login-class', '--other-user', '--prompt', '--role', '--type', '--user',
+    ]),
+    longOptionalEquals: new Set(['--preserve-env']),
+  },
+  timeout: {
+    flagChars: new Set(['f', 'p', 'v']),
+    valueChars: new Set(['k', 's']),
+    nonExecFlagChars: new Set(),
+    longFlags: new Set(['--foreground', '--preserve-status', '--verbose']),
+    nonExecLongFlags: new Set(['--help', '--version']),
+    longValues: new Set(['--kill-after', '--signal']),
+    longOptionalEquals: new Set(),
+  },
+});
+
+const OPERATIONAL_TARGET_SPECS = Object.assign(Object.create(null), {
+  curl: {
+    flagChars: new Set(['4', '6', 'a', 'B', 'f', 'g', 'G', 'i', 'I', 'j', 'J', 'k', 'l', 'L', 'n', 'N', 'O', 'q', 'R', 's', 'S', 'v', 'Z', '0', '1', '2', '3', '#', ':']),
+    valueChars: new Set(['A', 'b', 'c', 'C', 'd', 'D', 'e', 'E', 'F', 'H', 'K', 'm', 'o', 'P', 'Q', 'r', 't', 'T', 'u', 'U', 'w', 'x', 'X', 'Y', 'y', 'z']),
+    nonExecFlagChars: new Set(['V']),
+    longFlags: new Set([
+      '--anyauth', '--append', '--basic', '--compressed', '--create-dirs', '--digest', '--disable', '--fail',
+      '--fail-early', '--fail-with-body', '--get', '--globoff', '--head', '--http0.9', '--http1.0', '--http1.1',
+      '--http2', '--http2-prior-knowledge', '--http3', '--include', '--insecure', '--ipv4', '--ipv6',
+      '--junk-session-cookies', '--list-only', '--location', '--location-trusted', '--netrc', '--netrc-optional',
+      '--no-alpn', '--no-buffer', '--no-keepalive', '--no-npn', '--no-progress-meter', '--ntlm', '--parallel',
+      '--path-as-is', '--retry-connrefused', '--post301', '--post302', '--post303', '--progress-bar', '--raw', '--remote-name',
+      '--remote-name-all', '--remote-time', '--show-error', '--silent', '--ssl', '--ssl-reqd', '--tlsv1',
+      '--tlsv1.0', '--tlsv1.1', '--tlsv1.2', '--tlsv1.3', '--tr-encoding', '--verbose',
+    ]),
+    nonExecLongFlags: new Set(),
+    longValues: new Set([
+      '--abstract-unix-socket', '--cacert', '--capath', '--cert', '--cert-type', '--ciphers', '--config',
+      '--connect-timeout', '--connect-to', '--continue-at', '--cookie', '--cookie-jar', '--data', '--data-ascii',
+      '--data-binary', '--data-raw', '--data-urlencode', '--doh-url', '--dump-header', '--expect100-timeout',
+      '--form', '--form-string', '--header', '--interface', '--json', '--keepalive-time', '--key', '--key-type',
+      '--limit-rate', '--max-filesize', '--max-redirs', '--max-time', '--netrc-file', '--oauth2-bearer',
+      '--output', '--output-dir', '--pass', '--pinnedpubkey', '--proto', '--proto-redir', '--proxy',
+      '--proxy-header', '--proxy-user', '--quote', '--range', '--referer', '--request', '--resolve', '--retry',
+      '--retry-delay', '--retry-max-time', '--speed-limit', '--speed-time', '--time-cond', '--unix-socket',
+      '--upload-file', '--user', '--user-agent', '--write-out',
+    ]),
+    targetLongValues: new Set(['--url']),
+  },
+  logrotate: {
+    flagChars: new Set(['f', 'v']),
+    valueChars: new Set(['s', 'm', 'l']),
+    nonExecFlagChars: new Set(['d', '?']),
+    longFlags: new Set(['--force', '--verbose', '--skip-state-lock', '--wait-for-state-lock']),
+    nonExecLongFlags: new Set(['--debug', '--help', '--usage', '--version']),
+    longValues: new Set(['--state', '--mail', '--log']),
+    targetLongValues: new Set(),
+  },
+});
+
+// Model argv until the executable: options, an option value, duration, command.
+// A variable-width expansion may supply any number of these words, while a
+// quoted scalar supplies exactly one. Once command is reached, its arguments
+// cannot become executable positions.
+function timeoutDynamicPositions(words, spec) {
+  let states = new Set(['options']);
+  const positions = new Set();
+  let encountered = false;
+  for (const [index, word] of words.entries()) {
+    if (word.operator) break;
+    const value = word.text ?? '';
+    const dynamic = /[$`*?\[\]]/.test(value);
+    const variable = dynamic && mayChangeWordCount(word);
+    const next = new Set();
+    for (const state of states) {
+      if (dynamic) {
+        encountered = true;
+        if (state === 'command') {
+          if (variable) next.add('command');
+        } else if (state === 'options') {
+          // A literal option prefix constrains the first expanded word.
+          if (/^(?:--(?:signal|kill-after)=|-[fpv]*[sk])/.test(value)) {
+            next.add('options');
+            const mayNeedOperand = /^-[fpv]*([sk])[$`*?\[]/.exec(value);
+            if (mayNeedOperand) next.add(mayNeedOperand[1] === 's' ? 'signal' : 'kill-after');
+            if (variable) { next.add('command'); next.add('signal'); next.add('kill-after'); next.add('duration'); }
+          } else if (/^[^$`*?\[\]-]/.test(value)) {
+            // A concatenated literal prefix cannot disappear or become an option.
+            const prefix = value.split(/[$`*?\[\]]/, 1)[0];
+            if (/^[+0-9.iI]/.test(prefix)) next.add('command');
+          } else {
+            next.add('options'); // flag
+            next.add('duration'); // terminator
+            next.add('signal');  // option requiring an argument
+            next.add('kill-after');
+            next.add('command'); // duration
+          }
+        } else if (state === 'signal' || state === 'kill-after') {
+          next.add('options');
+          if (variable) { next.add(state); next.add('command'); }
+        } else if (state === 'duration') {
+          next.add('command');
+          if (variable) next.add('duration');
+        }
+        continue;
+      }
+      if (state === 'command') {
+        positions.add(index);
+      } else if (state === 'signal' || state === 'kill-after') {
+        if (value !== '--' && (state === 'signal' ? timeoutSignal(value) : timeoutDuration(value)) !== 'invalid') next.add('options');
+      } else if (state === 'duration') {
+        if (timeoutDuration(value) !== 'invalid') next.add('command');
+      } else if (value === '--') {
+        next.add('duration');
+      } else if (value.startsWith('--')) {
+        const eq = value.indexOf('=');
+        const name = eq < 0 ? value : value.slice(0, eq);
+        if (spec.longFlags.has(name) && eq < 0) next.add('options');
+        else if (spec.longValues.has(name)) {
+          if (eq < 0) next.add(name.slice(2));
+          else if ((name === '--signal' ? timeoutSignal(value.slice(eq + 1)) : timeoutDuration(value.slice(eq + 1))) !== 'invalid') next.add('options');
+        }
+      } else if (value.startsWith('-') && value !== '-') {
+        let valid = true;
+        let needsValue = '';
+        for (let i = 1; i < value.length; i++) {
+          if (spec.valueChars.has(value[i])) {
+            const inline = value.slice(i + 1);
+            if (!inline) needsValue = value[i] === 's' ? 'signal' : 'kill-after';
+            else if ((value[i] === 's' ? timeoutSignal(inline) : timeoutDuration(inline)) === 'invalid') valid = false;
+            break;
+          }
+          if (!spec.flagChars.has(value[i])) { valid = false; break; }
+        }
+        if (valid) next.add(needsValue || 'options');
+      } else if (timeoutDuration(value) !== 'invalid') {
+        next.add('command');
+      }
+    }
+    states = next;
+    if (!states.size) break;
+  }
+  return encountered ? [...positions] : null;
+}
+
+function skipWrapperOptions(words, spec, binary) {
+  if (binary === 'timeout') {
+    const positions = timeoutDynamicPositions(words, spec);
+    if (positions !== null) {
+      return {words: [], query: false, ambiguous: true, candidates: positions.map(position => words.slice(position))};
+    }
+  }
+  const {flagChars, valueChars, nonExecFlagChars, longFlags, nonExecLongFlags, longValues, longOptionalEquals} = spec;
+  const strict = binary === 'sudo' || binary === 'timeout';
+  let i = 0;
+  let uncertain = false;
+  let optionsEnded = false;
+  const acceptUncertain = result => {
+    if (!result) return true;
+    if (!result.ambiguous) return false;
+    uncertain = true;
+    return true;
+  };
+  while (i < words.length && !words[i].operator) {
+    const opt = words[i].text ?? '';
+    if (opt === '--') {
+      optionsEnded = true;
+      i++;
+      break;
+    }
+    if (!opt.startsWith('-') || opt === '-') break;
+    if (opt.startsWith('--')) {
+      const eq = opt.indexOf('=');
+      const name = eq === -1 ? opt : opt.slice(0, eq);
+      if (eq !== -1) {
+        if (longValues.has(name) || longOptionalEquals.has(name) || (!strict && longFlags.has(name))) {
+          if (strict && opt.slice(eq + 1) === '') return {words: [], query: binary === 'timeout', ambiguous: binary !== 'timeout'};
+          if (binary === 'timeout' && name === '--kill-after') {
+            const result = durationResult(opt.slice(eq + 1));
+            if (!acceptUncertain(result)) return result;
+          }
+          if (binary === 'timeout' && name === '--signal') {
+            const result = signalResult(opt.slice(eq + 1));
+            if (!acceptUncertain(result)) return result;
+          }
+          i++;
+          continue;
+        }
+        return strict ? {words: [], query: false, ambiguous: true} : {words: words.slice(i), query: false, ambiguous: false};
+      }
+      if (nonExecLongFlags.has(name)) {
+        return {words: [], query: true, ambiguous: false};
+      }
+      if (longValues.has(name)) {
+        const next = words[i + 1];
+        if (strict && (!next || next.operator || next.text === '--')) {
+          return {words: [], query: false, ambiguous: true};
+        }
+        if (binary === 'timeout' && name === '--kill-after') {
+          const result = durationResult(next?.text ?? '');
+          if (!acceptUncertain(result)) return result;
+        }
+        if (binary === 'timeout' && name === '--signal') {
+          const result = signalResult(next?.text ?? '');
+          if (!acceptUncertain(result)) return result;
+        }
+        i += 2;
+        continue;
+      }
+      if (longFlags.has(name)) {
+        i++;
+        continue;
+      }
+      return strict ? {words: [], query: false, ambiguous: true} : {words: words.slice(i), query: false, ambiguous: false};
+    }
+    if (binary === 'sudo' && opt === '-h' && (i + 1 >= words.length || words[i + 1].operator)) {
+      return {words: [], query: true, ambiguous: false};
+    }
+    let consumedValue = false;
+    let valid = true;
+    for (let j = 1; j < opt.length; j++) {
+      const ch = opt[j];
+      if (nonExecFlagChars.has(ch)) {
+        return {words: [], query: true, ambiguous: false};
+      }
+      if (valueChars.has(ch)) {
+        const inlineValue = j < opt.length - 1;
+        const next = words[i + 1];
+        if (!inlineValue) {
+          if (strict && (!next || next.operator || next.text === '--')) {
+            return {words: [], query: false, ambiguous: true};
+          }
+          consumedValue = true;
+        }
+        if (binary === 'timeout' && ch === 's') {
+          const result = signalResult(inlineValue ? opt.slice(j + 1) : (next?.text ?? ''));
+          if (!acceptUncertain(result)) return result;
+        }
+        if (binary === 'timeout' && ch === 'k') {
+          const val = inlineValue ? opt.slice(j + 1) : (next?.text ?? '');
+          const result = durationResult(val);
+          if (!acceptUncertain(result)) return result;
+        }
+        break;
+      }
+      if (!flagChars.has(ch)) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid) {
+      return strict ? {words: [], query: false, ambiguous: true} : {words: words.slice(i), query: false, ambiguous: false};
+    }
+    i += consumedValue ? 2 : 1;
+  }
+  const rest = words.slice(i);
+  if (binary === 'timeout') {
+    if (rest.length === 0 || rest[0].operator) {
+      return {words: [], query: false, ambiguous: false};
+    }
+    const duration = timeoutDuration(rest[0].text ?? '');
+    if (duration !== 'valid') {
+      // An unquoted expansion can vanish or split, even after --. Before --,
+      // a quoted expansion can also be an option preceding the duration.
+      if (duration === 'dynamic' && /[$`*?\[\]]/.test(rest[0].text ?? '') && (mayChangeWordCount(rest[0])
+        || (!optionsEnded && rest[1] && !rest[1].operator
+          && (timeoutDuration(rest[1].text ?? '') !== 'invalid' || (rest[1].text ?? '').startsWith('-'))))) {
+        return {words: [], query: false, ambiguous: true};
+      }
+      const result = durationResult(rest[0].text ?? '');
+      if (!acceptUncertain(result)) return result;
+    }
+    return {words: rest.slice(1), query: false, ambiguous: uncertain, knownPosition: uncertain};
+  }
+  return {words: rest, query: false, ambiguous: false};
+}
+
+function unwrapCommandWords(segWords) {
+  let words = segWords.map(word => ({...word}));
+  let openedCommandSub = false;
+  let uncertain = false;
+  while (words.length > 0) {
+    const first = words[0];
+    if (first.operator) break;
+    const text = first.text ?? '';
+    const unquoted = !first.raw || first.raw === text;
+    if (unquoted && SHELL_CONTROL_WORDS.has(text)) {
+      words.shift();
+      continue;
+    }
+    if (unquoted && text === 'time') {
+      words.shift();
+      if (words[0] && !words[0].operator && words[0].text === '-p') words.shift();
+      continue;
+    }
+    const rawText = first.raw ?? text;
+    const cmdSub = (!first.raw || (!first.raw.startsWith("'") && !first.raw.startsWith('"')))
+      && /^(?:[A-Za-z_][A-Za-z0-9_]*=)?\$\((.+)$/.exec(text);
+    if (cmdSub) {
+      words[0] = {...first, text: cmdSub[1]};
+      openedCommandSub = true;
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(text) && !/^(?:[A-Za-z_][A-Za-z0-9_]*=)?\$\(/.test(rawText)) {
+      words.shift();
+      continue;
+    }
+    const binary = basename(text);
+    if (binary === 'command') {
+      const next = words[1]?.text ?? '';
+      if (next === '-v' || next === '-V') return {words: [], query: true, ambiguous: false};
+      words.shift();
+      if (words[0]?.text === '-p') words.shift();
+      if (words[0]?.text === '--') words.shift();
+      continue;
+    }
+    const spec = Object.hasOwn(WRAPPER_SPECS, binary) ? WRAPPER_SPECS[binary] : null;
+    if (spec) {
+      words.shift();
+      const unwrapped = skipWrapperOptions(words, spec, binary);
+      if (unwrapped.query || (unwrapped.ambiguous && !unwrapped.knownPosition)) return unwrapped;
+      uncertain ||= unwrapped.ambiguous;
+      words = unwrapped.words;
+      continue;
+    }
+    break;
+  }
+  if (openedCommandSub && words.length > 0) {
+    const last = words[words.length - 1];
+    if (!last.operator && (!last.raw || (!last.raw.endsWith("'") && !last.raw.endsWith('"')))
+      && last.text.endsWith(')') && !last.text.includes('(')) {
+      words[words.length - 1] = {...last, text: last.text.slice(0, -1)};
+    }
+  }
+  return {words, query: false, ambiguous: uncertain, knownPosition: uncertain};
+}
+
+function extractOperationalTargets(args, {
+  flagChars,
+  valueChars,
+  nonExecFlagChars,
+  longFlags,
+  nonExecLongFlags,
+  longValues,
+  targetLongValues,
+}) {
+  const targets = [];
+  let afterDashDash = false;
+  let ambiguous = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    if (afterDashDash) {
+      if (arg !== '-') targets.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      afterDashDash = true;
+      continue;
+    }
+    if (arg.startsWith('--')) {
+      const eq = arg.indexOf('=');
+      const name = eq === -1 ? arg : arg.slice(0, eq);
+      if (nonExecLongFlags.has(name)) return {targets: [], ambiguous: false};
+      if (targetLongValues.has(name)) {
+        if (eq === -1 && args[i + 1] === '--') break;
+        const val = eq === -1 ? args[++i] : arg.slice(eq + 1);
+        if (val) targets.push(val);
+        continue;
+      }
+      if (eq !== -1) {
+        if (longValues.has(name)) { if (name === '--config') ambiguous = true; continue; }
+        ambiguous = true;
+        break;
+      }
+      if (longValues.has(name)) {
+        if (i + 1 >= args.length || args[i + 1] === '--') { ambiguous = true; break; }
+        if (name === '--config') ambiguous = true;
+        i++;
+        continue;
+      }
+      if (longFlags.has(name)) continue;
+      ambiguous = true;
+      break;
+    }
+    if (arg.startsWith('-') && arg !== '-') {
+      let consumedValue = false;
+      let valid = true;
+      for (let j = 1; j < arg.length; j++) {
+        const ch = arg[j];
+        if (nonExecFlagChars.has(ch)) return {targets: [], ambiguous: false};
+        if (valueChars.has(ch)) {
+          if (ch === 'K') ambiguous = true;
+          if (j === arg.length - 1) consumedValue = true;
+          break;
+        }
+        if (!flagChars.has(ch)) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid) { ambiguous = true; break; }
+      if (consumedValue) { if (i + 1 >= args.length || args[i + 1] === '--') { ambiguous = true; break; } i++; }
+      continue;
+    }
+    if (arg !== '-') targets.push(arg);
+  }
+  return {targets, ambiguous};
+}
+
+function splitShellSegments(words) {
+  const segments = [];
+  let current = [];
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (!word.operator) {
+      current.push(word);
+      continue;
+    }
+    if (SHELL_REDIRECT_TOKEN.test(word.text)) {
+      if (words[i + 1]?.operator && words[i + 1].text === '&') i++;
+      if (words[i + 1] && !words[i + 1].operator) i++;
+      continue;
+    }
+    if (current.length) segments.push(current);
+    current = [];
+  }
+  if (current.length) segments.push(current);
+  return segments;
+}
+
+function unwrapShellDashC(parsed) {
+  if (!parsed || parsed.operator) return null;
+  const {words, ambiguous} = unwrapCommandWords(parsed.words);
+  const binary = basename(words[0]?.text ?? '');
+  if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[1]?.text ?? '') && words[2]) {
+    return {command: words[2].text, ambiguous};
+  }
+  return null;
+}
+
+function npmScriptTarget(binary, args) {
+  if (!['npm', 'pnpm'].includes(binary)) return '';
+  let idx = 0;
+  while (idx < args.length && /^-(?:s|-silent|-if-present)$/.test(args[idx])) idx++;
+  const first = args[idx] ?? '';
+  if (/^run(?:-script)?$/.test(first)) {
+    let targetIdx = idx + 1;
+    while (targetIdx < args.length && /^-(?:s|-silent|-if-present)$/.test(args[targetIdx])) targetIdx++;
+    return args[targetIdx] ?? '';
+  }
+  return binary === 'pnpm' ? first : '';
+}
+
+function nodeScriptTarget(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return args[i + 1] ?? '';
+    if (arg === '-e' || arg === '--eval' || arg === '-p' || arg === '--print') return '';
+    if (/^(?:-r|--require|--import|--env-file|--conditions|-C)$/.test(arg)) {
+      i++;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    return arg;
+  }
+  return '';
+}
+
+function backupQuery(binary, args) {
+  return args.some(arg => arg === '--help' || arg === '--version' || (/^(?:pg_dump|pg_restore)$/.test(binary) && (arg === '-V' || arg === '-?')) || (arg === '-h' && !/^(?:pg_dump|pg_restore)$/.test(binary)));
+}
+
+// Options with operands in the supported PostgreSQL command subset.
+function postgresOperands(args) {
+  const values = new Set(['h', 'p', 'U', 'd', 'f', 'F', 'n', 'N', 't', 'T', 'j']);
+  const longValues = new Set(['--host', '--port', '--username', '--dbname', '--file', '--format', '--schema', '--exclude-schema', '--table', '--exclude-table', '--jobs']);
+  const options = [];
+  let db = false;
+  let destination;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') break;
+    if (arg.startsWith('--')) {
+      const name = arg.split('=', 1)[0];
+      if (longValues.has(name)) {
+        const value = arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : args[++i];
+        if (value === undefined || value === '') return {valid: false, db: false};
+        if (name === '--dbname') db = true;
+        if (name === '--file') destination = value;
+      } else options.push(arg);
+    } else if (arg.startsWith('-') && arg !== '-') {
+      for (let j = 1; j < arg.length; j++) {
+        const ch = arg[j];
+        if (values.has(ch)) {
+          const value = arg.slice(j + 1) || args[++i];
+          if (value === undefined || value === '') return {valid: false, db: false};
+          if (ch === 'd') db = true;
+          if (ch === 'f') destination = value;
+          break;
+        }
+        options.push(`-${ch}`);
+      }
+    }
+  }
+  return {valid: true, db, options, destination};
+}
+
+// Positive retention proof: a single -mtime +N and terminal -delete, at most one
+// simple ASCII basename -name/-iname and one -type, joined implicitly or by
+// -a/-and; -depth, -xdev and -mount are allowed. Other predicates/actions cannot
+// prove retention; a relevant unsupported deletion makes coverage partial.
+function isFindRetention(args, onIncomplete) {
+  const patterns = new Set(['-name', '-iname', '-path', '-ipath']);
+  const ages = new Set(['-mtime', '-atime', '-ctime', '-mmin', '-amin', '-cmin']);
+  const otherOperands = new Set(['-regex', '-iregex', '-user', '-group', '-perm', '-size', '-newer', '-maxdepth', '-mindepth']);
+  const printOperands = new Set(['-printf', '-fprint', '-fprint0', '-fls', '-fprintf']);
+  const flags = new Set(['-print', '-print0', '-depth', '-xdev', '-mount']);
+  let i = 0;
+  while (i < args.length && !/^(?:-|!|\()/.test(args[i])) i++;
+  let age = false, action = false, valid = true, needTerm = true, relevant = false;
+  let ageCount = 0, typeCount = 0, patternCount = 0;
+  while (i < args.length) {
+    const token = args[i++];
+    if (action) valid = false; // A terminal action is required; later tests cannot restrict it.
+    if (token === '-a' || token === '-and') {
+      if (needTerm) valid = false;
+      needTerm = true;
+      continue;
+    }
+    if (token === '-delete') {
+      relevant = true;
+      if (age) action = true;
+      else valid = false;
+    } else if (patterns.has(token) || ages.has(token) || token === '-type' || otherOperands.has(token) || printOperands.has(token)) {
+      const count = token === '-fprintf' ? 2 : 1;
+      if (i + count > args.length) { valid = false; break; }
+      const operand = args[i];
+      i += count;
+      if (ages.has(token)) {
+        if (++ageCount > 1 || !/^[+-]?\d+$/.test(operand) || Number(operand) > 365000 || Number(operand) < -365000 || token !== '-mtime') valid = false;
+        if (token === '-mtime' && /^\+\d+$/.test(operand)) age = true;
+      } else if (patterns.has(token)) {
+        // Only simple basename globs whose nonempty component is demonstrable.
+        // Paths, bracket expressions, escapes and other pattern dialects need more semantics.
+        if (++patternCount > 1 || token === '-path' || token === '-ipath'
+          || !/^[A-Za-z0-9_.?*+-]+$/.test(operand) || operand === '.' || operand === '..'
+          || operand.replace(/\*/g, '').length > 255) valid = false;
+      } else if (token === '-type') {
+        if (++typeCount > 1 || !/^[bcdflps]$/.test(operand)) valid = false;
+      } else if (otherOperands.has(token) || printOperands.has(token)) {
+        // These predicates need operand semantics beyond the positive grammar.
+        valid = false;
+      }
+    } else if (/^-(?:exec|execdir|ok|okdir)$/.test(token)) {
+      const command = args[i];
+      let terminated = false;
+      while (i < args.length) {
+        const part = args[i++];
+        if (part === ';' || (/^-(?:exec|execdir)$/.test(token) && part === '+' && args[i - 2] === '{}')) { terminated = true; break; }
+      }
+      if (!/^(?:echo|printf)$/.test(basename(command ?? ''))) relevant = true;
+      if (!terminated) valid = false;
+      // Other actions are not part of the positive grammar.
+      valid = false;
+    } else if (!flags.has(token) || token === '-print' || token === '-print0') {
+      valid = false;
+    }
+    needTerm = false;
+  }
+  if (needTerm && args.length) valid = false;
+  if (!valid && relevant) onIncomplete();
+  return valid && action;
+}
+
+function resticQuery(subcommand, parameters) {
+  if (backupQuery('restic', [subcommand])) return true;
+  for (let i = 0; i < parameters.length; i++) {
+    const arg = parameters[i];
+    if (arg === '--') break;
+    if (RESTIC_SHARED_VALUE_OPTIONS.test(arg) || RESTIC_RESTORE_VALUE_OPTIONS.test(arg)) { i++; continue; }
+    if (backupQuery('restic', [arg])) return true;
+  }
+  return false;
+}
+
+function classifyBackupOperation(binary, args, onIncomplete) {
+  const [subcommand, ...parameters] = binary === 'restic' ? resticCommand(args) : args;
+  const npmTarget = npmScriptTarget(binary, args);
+  const routine = npmTarget
+    ? /^personal:(backup(?:-rotate)?|restore-(?:check|proof))$/.exec(npmTarget)?.[1]
+    : binary === 'node'
+      ? /^personal-(backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.exec(basename(nodeScriptTarget(args)))?.[1]
+      : undefined;
+  const pg = /^(?:pg_dump|pg_restore)$/.test(binary) ? postgresOperands(args) : null;
+  if (pg && !pg.valid) return {};
+  const optionArgs = args.slice(0, args.indexOf('--') < 0 ? args.length : args.indexOf('--'));
+  if (binary === 'restic' ? resticQuery(subcommand, parameters) : binary !== 'find' && backupQuery(binary, pg?.options ?? optionArgs)) return {};
+  if (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-')) {
+    onIncomplete();
+    return {};
+  }
+  const dump = /^(?:pg_dump|mysqldump|mongodump)$/.test(binary);
+  const backup = dump || routine === 'backup' || (binary === 'restic' && subcommand === 'backup')
+    || (binary === 'borg' && subcommand === 'create')
+    || (binary === 'sqlite3' && args.some(arg => /^\.backup(?:\s|$)/.test(arg)));
+  const listOnly = binary === 'pg_restore' && pg.options.some(arg => arg === '--list' || arg === '-l');
+  const catalog = listOnly || ((binary === 'restic' || binary === 'borg') && subcommand === 'check');
+  const restoresDb = binary === 'pg_restore' && !listOnly && pg.db;
+  const dryRun = optionArgs.includes('--dry-run') || (binary === 'borg' && optionArgs.includes('-n'));
+  if (routine === 'restore-check') onIncomplete();
+  const resticDeclared = binary === 'restic' && !dryRun && /^(?:restore|forget)$/.test(subcommand ?? '')
+    && resticRoutine(subcommand, parameters, onIncomplete);
+  const restore = routine === 'restore-proof' || restoresDb || (subcommand === 'restore' && resticDeclared)
+    || (!dryRun && binary === 'borg' && subcommand === 'extract');
+  const rotation = routine === 'backup-rotate' || (subcommand === 'forget' && resticDeclared)
+    || (!dryRun && binary === 'borg' && subcommand === 'prune') || (binary === 'find' && isFindRetention(args, onIncomplete));
+  return {dump, backup, catalog, restore, rotation, pg};
+}
+
+// Recover only lexical top-level segments. Substitutions are opaque data: their
+// contents must never introduce commands or close an enclosing quote. A substitution
+// is skipped only if each level starts with the literal, unquoted command echo or
+// printf, followed by whitespace or ')'. Arguments may contain simple lexical words,
+// quotes, escapes, comments and nested substitutions obeying the same rule. An
+// unquoted newline may only precede the closing ')' (apart from whitespace); other
+// expansions and shell operators stop recovery. Glob and tilde characters in static
+// words are accepted only as lexical data and are never expanded. No command semantics are inferred.
+// Completed outer segments and an unambiguous prefix before the affected word remain.
+function malformedShellPrefix(command) {
+  const segments = [];
+  let fragment = '', quote = '', escaped = false, wordStart = -1;
+  const substitutionEnd = start => {
+    const stack = [{quote: '', wordStart: true, needCommand: true}];
+    for (let i = start + 2; i < command.length; i++) {
+      const frame = stack[stack.length - 1], ch = command[i];
+      if (frame.needCommand) {
+        if (/[ \t\n]/.test(ch)) continue;
+        const head = /^(?:echo|printf)(?=[ \t\n)])/.exec(command.slice(i));
+        if (!head) return -1;
+        frame.needCommand = false; frame.wordStart = false;
+        i += head[0].length - 1; continue;
+      }
+      if (ch === '\\' && frame.quote !== "'") {
+        if (i + 1 >= command.length) return -1;
+        if (command[i + 1] !== '\n') frame.wordStart = false;
+        i++; continue;
+      }
+      if (frame.quote === "'") { if (ch === "'") frame.quote = ''; continue; }
+      if (ch === '$' && command[i + 1] === '(') { frame.wordStart = false; stack.push({quote: '', wordStart: true, needCommand: true}); i++; continue; }
+      if (frame.quote === '"') {
+        if (ch === '`' || ch === '$') return -1; // Only nested $(...) is supported.
+        if (ch === '"') frame.quote = '';
+        continue;
+      }
+      if (ch === "'" || ch === '"') { frame.quote = ch; frame.wordStart = false; continue; }
+      if (ch === '`' || ch === '$') return -1; // Unsupported expansion.
+      if (ch === '#' && frame.wordStart) {
+        const newline = command.indexOf('\n', i);
+        if (newline < 0) return -1;
+        if (!/^[ \t\n]*\)/.test(command.slice(newline + 1))) return -1;
+        frame.wordStart = true; i = newline; continue;
+      }
+      if (ch === '\n' && !/^[ \t\n]*\)/.test(command.slice(i + 1))) return -1;
+      if (/[();|&<>${}]/.test(ch) && ch !== ')') return -1;
+      frame.wordStart = /[ \t\n]/.test(ch);
+      if (ch === ')') { stack.pop(); if (!stack.length) return i; }
+    }
+    return -1;
+  };
+  const emit = () => {
+    const parsed = shellWords(fragment);
+    if (!parsed) return false;
+    for (let i = 0; i < parsed.words.length; i++) {
+      if (SHELL_REDIRECT_TOKEN.test(parsed.words[i].text) && parsed.words[i].operator) {
+        if (!parsed.words[i + 1] || parsed.words[i + 1].operator) return false;
+        i++;
+      }
+    }
+    segments.push(...splitShellSegments(parsed.words));
+    fragment = ''; wordStart = -1;
+    return true;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) { fragment += ch; escaped = false; continue; }
+    if (ch === '\\' && quote !== "'") { if (wordStart < 0) wordStart = fragment.length; fragment += ch; escaped = true; continue; }
+    if (quote !== "'" && ch === '$' && command[i + 1] === '(') {
+      if (wordStart < 0) wordStart = fragment.length;
+      const end = substitutionEnd(i);
+      if (end < 0) { fragment = fragment.slice(0, wordStart); emit(); return segments; }
+      fragment += '$RECOVERED'; i = end; continue;
+    }
+    if (quote !== "'" && (ch === '`' || (ch === '$' && command[i + 1] === '{'))) {
+      fragment = fragment.slice(0, Math.max(0, wordStart)); emit(); return segments;
+    }
+    if (quote) { fragment += ch; if (ch === quote) quote = ''; continue; }
+    if (ch === "'" || ch === '"') { if (wordStart < 0) wordStart = fragment.length; quote = ch; fragment += ch; continue; }
+    if (ch === '#' && wordStart < 0) {
+      if (!emit()) return segments;
+      const newline = command.indexOf('\n', i);
+      if (newline < 0) return segments;
+      i = newline; continue;
+    }
+    if (ch === '(' || ch === ')') {
+      fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
+    }
+    // Only remove active line continuations inside the unquoted operator spelling.
+    // The surrounding scanner handles quoted text, escapes and comments separately.
+    if (ch === '<' && /^<(?:\\\n)*</.test(command.slice(i))) {
+      if (wordStart >= 0 && /^(?=(?:\\\n)*\d)(?:\d|\\\n)+$/.test(fragment.slice(wordStart))) {
+        fragment = fragment.slice(0, wordStart);
+      }
+      emit(); return segments;
+    }
+    const redirect = /\d/.test(ch) && (wordStart >= 0 || /^(?:\d|\\\n)+<(?:\\\n)*</.test(command.slice(i)))
+      ? null : command.slice(i).match(SHELL_REDIRECT_AT_START);
+    if (redirect) {
+      fragment += redirect[0]; i += redirect[0].length - 1; wordStart = -1; continue;
+    }
+    if (/[;|&\n]/.test(ch)) { if (!emit()) return segments; continue; }
+    if (/[ \t\n]/.test(ch)) wordStart = -1;
+    else if (wordStart < 0) wordStart = fragment.length;
+    fragment += ch;
+  }
+  if (quote || escaped) fragment = fragment.slice(0, Math.max(0, wordStart));
+  emit();
+  return segments;
+}
+
+function malformedShellCandidate(command, kind, depth = 0) {
+  return malformedShellPrefix(command).some(segment => {
+    if (kind === 'backup') return isBackupCandidateSegment(segment, depth);
+    const result = evaluateShellSegment(segment, depth);
+    return kind === 'disk' ? result.disk || result.partialDisk
+      : result.alerting || result.logrotate || result.partialAlert;
+  });
+}
+
+function isBackupCandidateSegment(segWords, depth = 0) {
+  const {words, ambiguous, knownPosition, candidates} = unwrapCommandWords(segWords);
+  if (candidates) return candidates.some(candidate => isBackupCandidateSegment(candidate, depth));
+  if (ambiguous && knownPosition) return isBackupCandidateSegment(words, depth);
+  if (ambiguous) return segWords.slice(1).some((word, i) =>
+    /^(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|find|npm|pnpm|node|(?:ba|da|k|z)?sh)$/.test(basename(word.text ?? ''))
+      && isBackupCandidateSegment(segWords.slice(i + 1), depth));
+  const binary = basename(words.shift()?.text ?? '');
+  if (!binary) return false;
+  const args = words.map(word => word.text);
+  if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(args[0] ?? '') && args[1]) {
+    const inner = shellWords(args[1]);
+    if (!inner) return malformedShellCandidate(args[1], 'backup', depth + 1);
+    return splitShellSegments(inner.words).some(segment => isBackupCandidateSegment(segment, depth + 1));
+  }
+  let incomplete = false;
+  const operation = classifyBackupOperation(binary, args, () => { incomplete = true; });
+  return incomplete || Boolean(operation.backup || operation.catalog || operation.restore || operation.rotation);
+}
+
+function evaluateShellSegment(segWords, depth = 0) {
+  const res = {alerting: false, disk: false, logrotate: false, incomplete: false, partialAlert: false, partialDisk: false};
+  const unwrapped = unwrapCommandWords(segWords);
+  if (unwrapped.ambiguous) {
+    if (unwrapped.candidates) {
+      for (const candidate of unwrapped.candidates) {
+        const sub = evaluateShellSegment(candidate, depth);
+        res.partialAlert ||= sub.alerting || sub.logrotate || sub.partialAlert;
+        res.partialDisk ||= sub.disk || sub.partialDisk;
+      }
+      return res;
+    }
+    if (unwrapped.knownPosition) {
+      const sub = evaluateShellSegment(unwrapped.words, depth);
+      res.partialAlert = sub.alerting || sub.logrotate || sub.partialAlert;
+      res.partialDisk = sub.disk || sub.partialDisk;
+      return res;
+    }
+    // Inspect possible command positions without treating option values as evidence.
+    for (let i = 1; i < segWords.length; i++) {
+      if (!/^(?:alertmanager|npm|pnpm|node|curl|wget|df|docker|logrotate|(?:ba|da|k|z)?sh)$/.test(basename(segWords[i].text ?? ''))) continue;
+      const sub = evaluateShellSegment(segWords.slice(i), depth);
+      res.partialAlert ||= sub.alerting || sub.logrotate || sub.partialAlert;
+      res.partialDisk ||= sub.disk || sub.partialDisk;
+    }
+    return res;
+  }
+  const {words} = unwrapped;
+  const binary = basename(words.shift()?.text ?? '');
+  if (!binary) return res;
+  if (depth >= 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
+    const inner = shellWords(words[1].text);
+    if (!inner) {
+      res.partialAlert = malformedShellCandidate(words[1].text, 'alert', depth + 1);
+      res.partialDisk = malformedShellCandidate(words[1].text, 'disk', depth + 1);
+    } else {
+      for (const segment of splitShellSegments(inner.words)) {
+        const sub = evaluateShellSegment(segment, depth + 1);
+        res.partialAlert ||= sub.alerting || sub.logrotate || sub.partialAlert;
+        res.partialDisk ||= sub.disk || sub.partialDisk;
+      }
+    }
+    return res;
+  }
+  if (depth < 2 && /^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(words[0]?.text ?? '') && words[1]) {
+    const inner = shellWords(words[1].text);
+    if (!inner) {
+      res.partialAlert = malformedShellCandidate(words[1].text, 'alert', depth + 1);
+      res.partialDisk = malformedShellCandidate(words[1].text, 'disk', depth + 1);
+      return res;
+    }
+    for (const innerSeg of splitShellSegments(inner.words)) {
+      const sub = evaluateShellSegment(innerSeg, depth + 1);
+      res.alerting ||= sub.alerting;
+      res.disk ||= sub.disk;
+      res.logrotate ||= sub.logrotate;
+      res.incomplete ||= sub.incomplete;
+      res.partialAlert ||= sub.partialAlert;
+      res.partialDisk ||= sub.partialDisk;
+    }
+    return res;
+  }
+  const args = words.map(word => word.text);
+  if (args.some(arg => arg === '--help' || arg === '--version') || (binary !== 'df' && args.includes('-h'))) {
+    return res;
+  }
+  if (binary === 'alertmanager') {
+    res.alerting = true;
+  } else if (['npm', 'pnpm'].includes(binary)) {
+    const target = npmScriptTarget(binary, args);
+    if (target === 'personal:watch') res.alerting = true;
+    if (target === 'personal:maintenance') res.disk = true;
+  } else if (binary === 'node') {
+    const script = basename(nodeScriptTarget(args));
+    if (/^personal-watch(?:\.[cm]?js)?$/.test(script)) res.alerting = true;
+    if (/^personal-maintenance(?:\.[cm]?js)?$/.test(script)) res.disk = true;
+  } else if (binary === 'curl') {
+    const {targets, ambiguous} = extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.curl);
+    res.partialAlert ||= ambiguous;
+    if (targets.some(arg => /[$`]/.test(arg) && !/\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) res.partialAlert = true;
+    if (!res.partialAlert && targets.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
+      res.alerting = true;
+    }
+  } else if (binary === 'wget') {
+    if (args.some(arg => /\$\{?(?:WEBHOOK_ALERT|SLACK_WEBHOOK|alert_webhook)\}?/i.test(arg))) {
+      res.alerting = true;
+    }
+  } else if (binary === 'df') {
+    for (const arg of args) {
+      if (arg === '--') break;
+      if (/^-[A-Za-z]*[Ph][A-Za-z]*$/i.test(arg) || /^--(?:portability|human-readable)$/.test(arg)) {
+        res.disk = true;
+        break;
+      }
+    }
+  } else if (binary === 'docker') {
+    if ((args[0] === 'system' || args[0] === 'builder') && args[1] === 'prune') {
+      res.disk = true;
+    }
+  } else if (binary === 'logrotate') {
+    const {targets, ambiguous} = extractOperationalTargets(args, OPERATIONAL_TARGET_SPECS.logrotate);
+    res.partialAlert ||= ambiguous || targets.some(arg => /[$`*?\[\]]/.test(arg));
+    if (!res.partialAlert && targets.length > 0) {
+      res.logrotate = true;
+    }
+  }
+  return res;
+}
+
+function checkShellOperations(commands, onIncomplete) {
+  const res = {alerting: false, disk: false, logrotate: false};
+  for (const {command, line} of commands) {
+    const parsed = shellWords(command);
+    if (!parsed) continue;
+    for (const segWords of splitShellSegments(parsed.words)) {
+      const seg = evaluateShellSegment(segWords);
+      if (seg.incomplete) onIncomplete(line, 'comando de shell embutido com sintaxe não coberta');
+      if (seg.partialAlert) onIncomplete(line, 'argumentos operacionais de alertas ou logs não resolvidos', 'alertas-logs');
+      if (seg.partialDisk) onIncomplete(line, 'argumentos operacionais de disco não resolvidos', 'disco-memoria');
+      res.alerting ||= seg.alerting;
+      res.disk ||= seg.disk;
+      res.logrotate ||= seg.logrotate;
+    }
+  }
+  return res;
+}
+
+function checkBackup(file, commands, findings, pillarCounts, onIncomplete) {
   let backup = false;
   let restore = false;
   let catalog = false;
   let rotation = false;
-  for (const {command, line} of operationalCommands(file, onIncomplete)) {
-    const shell = /^(?:\S*\/)?(?:ba|da|k|z)?sh\s+-[a-z]*c\s+(.+)$/i.exec(command);
-    const invocation = shell ? unquote(shell[1]) : command;
-    const candidates = /\b(?:pg_dump|mysqldump|mongodump|pg_restore|restic|borg|sqlite3|personal:(?:backup|restore)|personal-(?:backup|restore)|find)\b/;
-    if (!candidates.test(invocation)) continue;
-    const parsed = shellWords(invocation);
-    if (!parsed) {
-      onIncomplete(line, 'comando de backup ou restauração com sintaxe não coberta');
-      continue;
-    }
-    const words = [...parsed.words];
-    while (!words[0]?.operator && /^(?:exec|command|(?:\S*\/)?env|[\w]+=.*)$/.test(words[0]?.text ?? '')) words.shift();
-    const binary = basename(words.shift()?.text ?? '');
-    const args = words.filter(word => !word.operator).map(word => word.text);
-    const [subcommand, ...parameters] = binary === 'restic' ? resticCommand(args) : args;
-    const routine = ['npm', 'pnpm'].includes(binary) && /^run(?:-script)?$/.test(subcommand ?? '')
-      ? /^personal:(backup(?:-rotate)?|restore-(?:check|proof))$/.exec(parameters[0] ?? '')?.[1]
-      : binary === 'node' ? /^personal-(backup(?:-rotate)?|restore-(?:check|proof))(?:\.[cm]?js)?$/.exec(basename(subcommand ?? ''))?.[1] : undefined;
-    if (parsed.operator || (['restic', 'borg'].includes(binary) && subcommand?.startsWith('-'))) {
-      onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
-      continue;
-    }
-    if (args.some(arg => /^(?:--help|--version|-h)$/.test(arg))) continue;
-
-    const dump = /^(?:pg_dump|mysqldump|mongodump)$/.test(binary);
-    if (dump || routine === 'backup'
-      || (binary === 'restic' && subcommand === 'backup')
-      || (binary === 'borg' && subcommand === 'create')
-      || (binary === 'sqlite3' && args.some(arg => /^\.backup(?:\s|$)/.test(arg)))) {
-      backup = true;
-    }
-    if (dump) {
-      const destination = dumpDestination(binary, words);
-      if (destination && /^(?:\$|~)/.test(destination)) {
-        onIncomplete(line, 'destino de dump depende de expansão');
-      } else if (destination && destination !== '-' && (!destination.startsWith('/') || /^\/tmp(?:\/|$)/.test(destination))) {
-        addFinding(findings, pillarCounts, 'backup-restauracao', {
-          rule: 'PRONTIDAO-BACKUP-DESTINO-INSEGURO',
-          file: file.rel, line, severity: 'media',
-          message: 'Comando de backup grava saída em /tmp ou em caminho relativo ao diretório de trabalho.',
-          evidence: 'Detectado destino temporário ou relativo na rotina de backup.',
-        });
+  for (const {command, line} of commands) {
+    if (!BACKUP_CANDIDATE_RE.test(command)) continue;
+    const visit = (segment, depth = 0) => {
+      const unwrapped = unwrapCommandWords(segment);
+      if (unwrapped.ambiguous) {
+        if (isBackupCandidateSegment(segment, depth)) onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
+        return;
       }
-    }
-    const listOnly = binary === 'pg_restore' && args.some(arg => arg === '--list' || /^-[vl]*l[vl]*$/.test(arg));
-    catalog ||= listOnly || ((binary === 'restic' || binary === 'borg') && subcommand === 'check');
-    const restoresDb = binary === 'pg_restore' && !listOnly && args.some((arg, index) =>
-      /^(?:-d|--dbname=).+$/.test(arg)
-      || (/^(?:-d|--dbname)$/.test(arg) && args[index + 1] && !args[index + 1].startsWith('-')));
-    const dryRun = args.includes('--dry-run') || (binary === 'borg' && args.includes('-n'));
-    if (routine === 'restore-check') onIncomplete(line, 'nome da rotina não distingue catálogo de restauração');
-    const resticDeclared = binary === 'restic' && !dryRun && /^(?:restore|forget)$/.test(subcommand ?? '')
-      && resticRoutine(subcommand, parameters, () => onIncomplete(line, 'argumentos de restauração ou retenção Restic não resolvidos'));
-    restore ||= routine === 'restore-proof' || restoresDb
-      || (subcommand === 'restore' && resticDeclared)
-      || (!dryRun && binary === 'borg' && subcommand === 'extract');
-    rotation ||= routine === 'backup-rotate'
-      || (subcommand === 'forget' && resticDeclared)
-      || (!dryRun && binary === 'borg' && subcommand === 'prune')
-      || (binary === 'find' && /-mtime\s+\+\d+\s+.*-delete|-mtime\s+\+\d+\s+-delete/.test(invocation));
+      const words = unwrapped.words;
+      const binary = basename(words.shift()?.text ?? '');
+      const args = words.filter(word => !word.operator).map(word => word.text);
+      if (/^(?:ba|da|k|z)?sh$/.test(binary) && /^-[a-z]*c$/i.test(args[0] ?? '') && args[1]) {
+        if (depth >= 2) {
+          if (isBackupCandidateSegment(segment, depth)) onIncomplete(line, 'limite de shell aninhado impede avaliação de backup');
+          return;
+        }
+        const inner = shellWords(args[1]);
+        if (!inner) { if (isBackupCandidateSegment(segment, depth)) onIncomplete(line, 'comando de backup ou restauração com sintaxe não coberta'); return; }
+        if (inner.operator) {
+          if (splitShellSegments(inner.words).some(part => isBackupCandidateSegment(part, depth + 1))) onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
+          return;
+        }
+        visit(inner.words, depth + 1);
+        return;
+      }
+      const operation = classifyBackupOperation(binary, args, () => onIncomplete(line, 'argumentos de backup, restauração ou retenção não resolvidos'));
+      backup ||= Boolean(operation.backup);
+      catalog ||= Boolean(operation.catalog);
+      restore ||= Boolean(operation.restore);
+      rotation ||= Boolean(operation.rotation);
+      if (operation.dump) {
+        const destination = dumpDestination(binary, words, operation.pg);
+        if (destination && /^(?:\$|~)/.test(destination)) {
+          onIncomplete(line, 'destino de dump depende de expansão');
+        } else if (destination && destination !== '-' && (!destination.startsWith('/') || /^\/tmp(?:\/|$)/.test(destination))) {
+          addFinding(findings, pillarCounts, 'backup-restauracao', {
+            rule: 'PRONTIDAO-BACKUP-DESTINO-INSEGURO',
+            file: file.rel, line, severity: 'media',
+            message: 'Comando de backup grava saída em /tmp ou em caminho relativo ao diretório de trabalho.',
+            evidence: 'Detectado destino temporário ou relativo na rotina de backup.',
+          });
+        }
+      }
+    };
+    const parsed = shellWords(command);
+    if (!parsed) { onIncomplete(line, 'comando de backup ou restauração com sintaxe não coberta'); continue; }
+    if (parsed.operator) {
+      if (splitShellSegments(parsed.words).some(segment => isBackupCandidateSegment(segment))) onIncomplete(line, 'comando composto ou opções globais exigem avaliação adicional');
+    } else visit(parsed.words);
   }
   return {backup, restore, catalog, rotation};
 }
@@ -1540,17 +2716,29 @@ export function auditRepositoryReadiness(repoRoot) {
   const partialFiles = new Set();
   const partialPillars = new Set();
   let skipped = 0;
-  let failed = 0;
+  let skipFailed = 0;
+  let omittedProtectedSkipRows = 0;
+  let omittedProtectedSkipFailed = 0;
+  const omittedPaths = new Set();
+  let omittedFindings = 0;
   const recordSkip = (status, rel, reason) => {
     if (status === 'failed') {
-      failed++;
+      skipFailed++;
       partialFiles.add(rel);
     } else skipped++;
+    const detail = `${rel}: ${reason}.`;
+    if (!isPublicReportPath(rel) || hasKnownSecret(detail)) {
+      omittedProtectedSkipRows++;
+      omittedPaths.add(rel);
+      if (status === 'failed') omittedProtectedSkipFailed++;
+      return;
+    }
     if (skipCoverage.length < MAX_SKIP_ROWS) {
-      skipCoverage.push({tool: 'prontidao:arquivo', version: AUDIT_VERSION, status, detail: `${rel}: ${reason}.`});
+      skipCoverage.push({tool: 'prontidao:arquivo', version: AUDIT_VERSION, status, detail});
     }
   };
   const files = collectRepoFiles(repoRoot, recordSkip);
+  const collectionIncomplete = skipFailed > 0;
   const findings = [];
   const pillarCounts = {
     'tls-cabecalhos': 0,
@@ -1561,16 +2749,22 @@ export function auditRepositoryReadiness(repoRoot) {
     'segredos-fora-codigo': 0,
   };
   const fileCoverage = [];
-  if (failed) {
+  const measuredFiles = new Set();
+  if (collectionIncomplete) {
     for (const pillar of Object.keys(pillarCounts)) partialPillars.add(pillar);
   }
   const recordPartial = (file, reason, ...pillars) => {
     for (const pillar of pillars) partialPillars.add(pillar);
     recordSkip('failed', file, reason);
   };
+  const recordOmittedFinding = pillar => {
+    partialPillars.add(pillar);
+    omittedFindings++;
+  };
+  findingOmitHandlers.set(findings, recordOmittedFinding);
 
   let hasDeployable = false;
-  let hasStateful = false;
+  let deploymentFile = null;
   let hasBackup = false;
   let hasRestoreRoutine = false;
   let hasCatalogCheck = false;
@@ -1578,21 +2772,22 @@ export function auditRepositoryReadiness(repoRoot) {
   let hasLogrotate = false;
   let hasAlerting = false;
   let hasDiskMonitoring = false;
-  let systemdWritesFileLogs = false;
+  let hasFileLogService = false;
+  let fileLogService = null;
   let anchorFile = null;
   let tlsAnchorFile = null;
 
   for (const file of files) {
-    if (anchorFile === null && (basename(file.rel) === 'package.json' || isComposeFile(file.rel) || basename(file.rel) === 'Dockerfile')) {
+    if (anchorFile === null && isPublicReportPath(file.rel)
+      && (basename(file.rel) === 'package.json' || isComposeFile(file.rel) || basename(file.rel) === 'Dockerfile')) {
       anchorFile = file.rel;
     }
     const lowerContent = file.content.toLowerCase();
     const checksApplied = [];
     const findingsBeforeFile = findings.length;
+    let structuredIncomplete = false;
 
     if (isComposeFile(file.rel)) {
-      hasDeployable = true;
-      checksApplied.push('compose');
       let services = [];
       let incomplete = false;
       try {
@@ -1601,9 +2796,16 @@ export function auditRepositoryReadiness(repoRoot) {
         incomplete = true;
       }
       if (incomplete) {
-        checksApplied.pop();
+        structuredIncomplete = true;
         recordPartial(file.rel, 'estrutura Compose inválida ou referência YAML não resolvida',
-          'alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo');
+          'backup-restauracao', 'alertas-logs', 'reinicio-automatico', 'disco-memoria', 'segredos-fora-codigo');
+        if (services.some(service => service.environment.length > 0)) checksApplied.push('compose-environment-local');
+      } else {
+        checksApplied.push('compose');
+        if (services.length > 0) {
+          hasDeployable = true;
+          if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
+        }
       }
       for (const svc of services) {
         for (const {line} of svc.environment) {
@@ -1611,9 +2813,6 @@ export function auditRepositoryReadiness(repoRoot) {
             'Possível segredo literal no environment do Compose.');
         }
         if (incomplete) continue;
-        if (svc.hasVolumes || /postgres|mysql|mariadb|mongo|redis|minio/i.test(svc.image)) {
-          hasStateful = true;
-        }
         const restartVal = (svc.restart ?? '').toLowerCase();
         const restarts = svc.hasDeployRestart
           ? /^(?:any|on-failure)$/.test(svc.deployRestartCondition ?? 'any')
@@ -1680,43 +2879,57 @@ export function auditRepositoryReadiness(repoRoot) {
 
     const proxy = isCaddyFile(file.rel) ? 'Caddy' : isNginxFile(file.rel) ? 'Nginx' : null;
     if (proxy) {
-      hasDeployable = true;
-      if (tlsAnchorFile === null) tlsAnchorFile = file.rel;
+      if (tlsAnchorFile === null && isPublicReportPath(file.rel)) tlsAnchorFile = file.rel;
       let incomplete = false;
+      let measured = false;
       const onIncomplete = (line, reason) => {
         incomplete = true;
         recordPartial(file.rel, `linha ${line}, ${reason}`, 'tls-cabecalhos');
       };
       try {
         const check = proxy === 'Caddy' ? checkCaddy : checkNginx;
-        check(file, findings, pillarCounts, onIncomplete);
+        check(file, findings, pillarCounts, onIncomplete, () => { measured = true; });
       } catch {
         onIncomplete(1, `sintaxe ${proxy} inválida ou não coberta`);
       }
+      structuredIncomplete ||= incomplete;
+      if (measured) {
+        hasDeployable = true;
+        if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
+      }
       if (!incomplete) checksApplied.push(`${proxy.toLowerCase()}-tls-headers`);
+      else if (measured) checksApplied.push(`${proxy.toLowerCase()}-tls-headers-local`);
     }
 
     if (isSystemdService(file.rel)) {
       hasDeployable = true;
+      if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
       checksApplied.push('systemd');
       const res = checkSystemd(file, findings, pillarCounts);
-      if (res.writesFileLog) systemdWritesFileLogs = true;
+      if (res.writesFileLog) {
+        hasFileLogService = true;
+        if (isPublicReportPath(file.rel)) fileLogService ??= file.rel;
+      }
     }
 
     if (basename(file.rel) === 'Dockerfile' || basename(file.rel).startsWith('Dockerfile.') || file.rel.endsWith('.Dockerfile')) {
       hasDeployable = true;
+      if (isPublicReportPath(file.rel)) deploymentFile ??= file.rel;
       checksApplied.push('dockerfile');
     }
 
     if (isCommittedEnv(file.rel)) {
       let incomplete = false;
-      checkDotenv(file, findings, pillarCounts, () => { incomplete = true; });
-      if (incomplete) recordPartial(file.rel, 'sintaxe dotenv inválida ou não coberta', 'segredos-fora-codigo');
-      else checksApplied.push('env-secrets');
+      let measured = false;
+      checkDotenv(file, findings, pillarCounts, () => { incomplete = true; }, () => { measured = true; });
+      if (incomplete) {
+        recordPartial(file.rel, 'sintaxe dotenv inválida ou não coberta', 'segredos-fora-codigo');
+        if (measured) checksApplied.push('env-secrets-local');
+      } else checksApplied.push('env-secrets');
     }
 
     if (!isCommittedEnv(file.rel) && isCodeOrConfig(file.rel)) {
-      checksApplied.push('tls-verify');
+      if (!structuredIncomplete) checksApplied.push('tls-verify');
       for (let i = 0; i < file.lines.length; i++) {
         const line = file.lines[i];
         if (
@@ -1724,6 +2937,7 @@ export function auditRepositoryReadiness(repoRoot) {
           || /rejectUnauthorized\s*:\s*false\b/.test(line)
           || /InsecureSkipVerify\s*:\s*true\b/.test(line)
         ) {
+          if (structuredIncomplete) checksApplied.push('tls-verify-literal');
           addFinding(findings, pillarCounts, 'tls-cabecalhos', {
             rule: 'PRONTIDAO-TLS-VERIFICACAO-DESABILITADA',
             file: file.rel,
@@ -1738,17 +2952,29 @@ export function auditRepositoryReadiness(repoRoot) {
 
     const privateKeyLine = file.lines.findIndex(line => /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/.test(line));
     if (privateKeyLine >= 0) {
+      checksApplied.push('private-key-marker');
       addSecretFinding(findings, pillarCounts, 'PRONTIDAO-CHAVE-PRIVADA-NO-REPOSITORIO', file.rel, privateKeyLine + 1,
         'Possível chave privada em arquivo protegido.');
     }
 
     const protectedEnv = isCommittedEnv(file.rel);
-    if (!protectedEnv && (/logrotate/i.test(file.rel) || (/\brotate\s+\d+\b/.test(lowerContent) && /\b(?:daily|weekly|maxsize|size)\b/.test(lowerContent)))) {
+    const onOperationalIncomplete = (line, reason, ...pillars) =>
+      recordPartial(file.rel, `linha ${line}, ${reason}`, ...(pillars.length ? pillars : ['backup-restauracao', 'alertas-logs', 'disco-memoria']));
+    const onBackupIncomplete = (line, reason) =>
+      recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao');
+    const commands = [...operationalCommands(file, onOperationalIncomplete)];
+    const shell = isShellScript(file);
+    const shellOps = shell && !protectedEnv
+      ? checkShellOperations(commands, onOperationalIncomplete)
+      : {alerting: false, disk: false, logrotate: false};
+    const fileLogrotate = !protectedEnv && (shell
+      ? shellOps.logrotate
+      : (/logrotate/i.test(file.rel) || (/\brotate\s+\d+\b/.test(lowerContent) && /\b(?:daily|weekly|maxsize|size)\b/.test(lowerContent))));
+    if (fileLogrotate) {
       hasLogrotate = true;
       checksApplied.push('logrotate');
     }
-    const routines = checkBackup(file, findings, pillarCounts,
-      (line, reason) => recordPartial(file.rel, `linha ${line}, ${reason}`, 'backup-restauracao'));
+    const routines = checkBackup(file, commands, findings, pillarCounts, onBackupIncomplete);
     if (routines.backup) checksApplied.push('backup');
     if (routines.restore) checksApplied.push('restore-declaration');
     if (routines.catalog) checksApplied.push('backup-catalog-check');
@@ -1757,95 +2983,156 @@ export function auditRepositoryReadiness(repoRoot) {
     hasRestoreRoutine ||= routines.restore;
     hasCatalogCheck ||= routines.catalog;
     hasBackupRotation ||= routines.rotation;
-    if (!protectedEnv && /(?:personal:watch|alertmanager|OnFailure=|deliverPersonalPush|sendAlert|alert_webhook|WEBHOOK_ALERT|SLACK_WEBHOOK|DISK_ALERT)/i.test(file.content)) {
+    const fileAlerting = !protectedEnv && (shell
+      ? shellOps.alerting
+      : /(?:personal:watch|alertmanager|OnFailure=|deliverPersonalPush|sendAlert|alert_webhook|WEBHOOK_ALERT|SLACK_WEBHOOK|DISK_ALERT)/i.test(file.content));
+    if (fileAlerting) {
       hasAlerting = true;
       checksApplied.push('alerting');
     }
-    if (!protectedEnv && /(?:statfs|DISK_ALERT|diskUsedPercent|df\s+-[Ph]|docker\s+(?:system|builder)\s+prune|personal:maintenance)/i.test(file.content)) {
+    const fileDiskMonitoring = !protectedEnv && (shell
+      ? shellOps.disk
+      : /(?:statfs|DISK_ALERT|diskUsedPercent|df\s+-[Ph]|docker\s+(?:system|builder)\s+prune|personal:maintenance)/i.test(file.content));
+    if (fileDiskMonitoring) {
       hasDiskMonitoring = true;
       checksApplied.push('disk-monitor');
     }
 
     if (checksApplied.length > 0) {
+      // A local check can complete even when a different check leaves this file partial.
       const fileCount = findings.length - findingsBeforeFile;
-      fileCoverage.push({
-        tool: 'prontidao:arquivo',
-        version: AUDIT_VERSION,
-        status: partialFiles.has(file.rel) ? 'failed' : 'ok',
-        detail: `${file.rel}: verificações [${[...new Set(checksApplied)].join(', ')}], ${fileCount} achado(s).`,
-      });
+      const detail = `${file.rel}: verificações [${[...new Set(checksApplied)].join(', ')}], ${fileCount} achado(s).`;
+      const isPublic = isPublicReportPath(file.rel);
+      const hasProtectedFinding = fileCount > 0 && isProtectedReportPath(file.rel)
+        && findings.slice(findingsBeforeFile).every(f => canEmitReadinessFinding(f.rule, f.file));
+      if (isPublic || hasProtectedFinding) measuredFiles.add(file.rel);
+      if (!hasKnownSecret(detail) && (isPublic || hasProtectedFinding)) {
+        fileCoverage.push({
+          tool: 'prontidao:arquivo',
+          version: AUDIT_VERSION,
+          status: partialFiles.has(file.rel) ? 'failed' : 'ok',
+          detail,
+        });
+      } else {
+        omittedPaths.add(file.rel);
+      }
     }
   }
 
-  const fallbackFile = anchorFile ?? files[0]?.rel ?? 'package.json';
-  if (hasDeployable || hasStateful) {
-    if (!hasBackup) {
-      addFinding(findings, pillarCounts, 'backup-restauracao', {
-        rule: 'PRONTIDAO-BACKUP-AUSENTE',
-        file: fallbackFile,
-        line: 1,
-        severity: 'alta',
-        message: 'Sistema publicável ou com estado persistente sem script, rotina ou agendamento de backup identificado.',
-        evidence: 'Nenhum script/comando de backup (pg_dump, restic, borg, personal:backup) encontrado.',
-      });
+  const fallbackFile = anchorFile ?? files.find(file => isPublicReportPath(file.rel))?.rel ?? 'package.json';
+  if (hasDeployable) {
+    const backupMeasured = !partialPillars.has('backup-restauracao');
+    const alertingMeasured = !partialPillars.has('alertas-logs');
+    const diskMeasured = !partialPillars.has('disco-memoria');
+    if (backupMeasured && !hasBackup) {
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'backup-restauracao', {
+          rule: 'PRONTIDAO-BACKUP-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'alta',
+          message: 'Sistema publicável ou com estado persistente sem script, rotina ou agendamento de backup identificado.',
+          evidence: 'Nenhum script/comando de backup (pg_dump, restic, borg, personal:backup) encontrado.',
+        });
+      } else {
+        recordOmittedFinding('backup-restauracao');
+      }
     }
-    if (!hasRestoreRoutine) {
-      addFinding(findings, pillarCounts, 'backup-restauracao', {
-        rule: 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
-        file: fallbackFile,
-        line: 1,
-        severity: 'media',
-        message: 'Nenhuma rotina que restaure dados em um destino foi identificada no repositório.',
-        evidence: 'Verificações de catálogo ou de integridade não demonstram restauração dos dados.',
-      });
+    if (backupMeasured && !hasRestoreRoutine) {
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'backup-restauracao', {
+          rule: 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'media',
+          message: 'Nenhuma rotina que restaure dados em um destino foi identificada no repositório.',
+          evidence: 'Verificações de catálogo ou de integridade não demonstram restauração dos dados.',
+        });
+      } else {
+        recordOmittedFinding('backup-restauracao');
+      }
     }
-    if (hasBackup && !hasBackupRotation) {
-      addFinding(findings, pillarCounts, 'backup-restauracao', {
-        rule: 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE',
-        file: fallbackFile,
-        line: 1,
-        severity: 'baixa',
-        message: 'Backup identificado sem política explícita de rotação/retenção.',
-        evidence: 'Nenhuma diretiva de retenção/rotação de backups identificada.',
-      });
+    if (backupMeasured && hasBackup && !hasBackupRotation) {
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'backup-restauracao', {
+          rule: 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'baixa',
+          message: 'Backup identificado sem política explícita de rotação/retenção.',
+          evidence: 'Nenhuma diretiva de retenção/rotação de backups identificada.',
+        });
+      } else {
+        recordOmittedFinding('backup-restauracao');
+      }
     }
-    if (systemdWritesFileLogs && !hasLogrotate) {
-      addFinding(findings, pillarCounts, 'alertas-logs', {
-        rule: 'PRONTIDAO-LOGROTATE-AUSENTE',
-        file: fallbackFile,
-        line: 1,
-        severity: 'baixa',
-        message: 'Serviço grava logs em arquivo sem configuração de logrotate no repositório.',
-        evidence: 'StandardOutput ou StandardError com file:, append: ou truncate: sem configuração logrotate.',
-      });
+    if (alertingMeasured && hasFileLogService && !hasLogrotate) {
+      if (fileLogService !== null) {
+        addFinding(findings, pillarCounts, 'alertas-logs', {
+          rule: 'PRONTIDAO-LOGROTATE-AUSENTE',
+          file: fileLogService,
+          line: 1,
+          severity: 'baixa',
+          message: 'Serviço grava logs em arquivo sem configuração de logrotate no repositório.',
+          evidence: 'StandardOutput ou StandardError com file:, append: ou truncate: sem configuração logrotate.',
+        });
+      } else {
+        recordOmittedFinding('alertas-logs');
+      }
     }
-    if (!hasAlerting) {
-      addFinding(findings, pillarCounts, 'alertas-logs', {
-        rule: 'PRONTIDAO-ALERTA-AUSENTE',
-        file: fallbackFile,
-        line: 1,
-        severity: 'media',
-        message: 'Não há configuração de alertas operacionais ou vigia de falhas no repositório.',
-        evidence: 'Nenhuma rotina de alerta/vigia (watch, alert, OnFailure, webhook/push) identificada.',
-      });
+    if (alertingMeasured && !hasAlerting) {
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'alertas-logs', {
+          rule: 'PRONTIDAO-ALERTA-AUSENTE',
+          file: deploymentFile,
+          line: 1,
+          severity: 'media',
+          message: 'Não há configuração de alertas operacionais ou vigia de falhas no repositório.',
+          evidence: 'Nenhuma rotina de alerta/vigia (watch, alert, OnFailure, webhook/push) identificada.',
+        });
+      } else {
+        recordOmittedFinding('alertas-logs');
+      }
     }
-    if (!hasDiskMonitoring) {
-      addFinding(findings, pillarCounts, 'disco-memoria', {
-        rule: 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
-        file: fallbackFile,
-        line: 1,
-        severity: 'media',
-        message: 'Não há verificação de uso de disco ou limpeza periódica configurada.',
-        evidence: 'Nenhum monitoramento de disco ou rotina de limpeza (df, statfs, maintenance, prune) encontrado.',
-      });
+    if (diskMeasured && !hasDiskMonitoring) {
+      if (deploymentFile !== null) {
+        addFinding(findings, pillarCounts, 'disco-memoria', {
+          rule: 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+          file: deploymentFile,
+          line: 1,
+          severity: 'media',
+          message: 'Não há verificação de uso de disco ou limpeza periódica configurada.',
+          evidence: 'Nenhum monitoramento de disco ou rotina de limpeza (df, statfs, maintenance, prune) encontrado.',
+        });
+      } else {
+        recordOmittedFinding('disco-memoria');
+      }
     }
   }
 
-  const omittedSkipRows = skipped + failed - skipCoverage.length;
+  const failed = skipFailed + omittedFindings;
+  const omittedSkipRows = skipped + skipFailed - omittedProtectedSkipRows - skipCoverage.length;
   if (omittedSkipRows > 0) {
     skipCoverage.push({
-      tool: 'prontidao:limites', version: AUDIT_VERSION, status: failed ? 'failed' : 'skipped',
+      tool: 'prontidao:limites', version: AUDIT_VERSION, status: skipFailed ? 'failed' : 'skipped',
       detail: `${omittedSkipRows} registro(s) de entrada(s) omitida(s) sem linha de cobertura individual pelo limite de ${MAX_SKIP_ROWS}.`,
+    });
+  }
+  const omittedPathCount = omittedPaths.size;
+  if (omittedPathCount > 0) {
+    skipCoverage.push({
+      tool: 'prontidao:limites',
+      version: AUDIT_VERSION,
+      status: omittedProtectedSkipFailed ? 'failed' : 'skipped',
+      detail: `${omittedPathCount} caminho(s) omitido(s) dos relatórios por conter padrão protegido ou incompatível com o contrato de publicação.`,
+    });
+  }
+  if (omittedFindings > 0) {
+    skipCoverage.push({
+      tool: 'prontidao:limites',
+      version: AUDIT_VERSION,
+      status: 'failed',
+      detail: `${omittedFindings} achado(s) omitido(s) por restrição de caminho ou ausência de âncora no contrato de publicação.`,
     });
   }
 
@@ -1890,6 +3177,8 @@ export function auditRepositoryReadiness(repoRoot) {
     ? {...row, status: 'failed', detail: `${row.detail} Cobertura parcial. Consulte os avisos por arquivo.`}
     : row);
 
+  const findingFiles = new Set(findings.map(finding => finding.file));
+  const scopedFiles = [...measuredFiles].filter(file => !hasKnownSecret(file) && (isPublicReportPath(file) || findingFiles.has(file)));
   return {
     filesAnalyzed: files.length,
     anchorFile: fallbackFile,
@@ -1902,6 +3191,13 @@ export function auditRepositoryReadiness(repoRoot) {
         status: failed ? 'failed' : 'ok',
         detail: `Analisados ${files.length} arquivo(s) nos 6 requisitos estáticos de prontidão; ${findings.length} achado(s); ${failed} omissão(ões) por falha ou limite e ${skipped} exclusão(ões) de escopo.`,
       },
+      ...(failed && scopedFiles.length > 0 ? [{
+        tool: 'prontidao-audit',
+        version: AUDIT_VERSION,
+        status: 'ok',
+        detail: 'Verificações locais concluídas nos arquivos do escopo declarado. A cobertura estática geral permanece parcial.',
+        files: scopedFiles,
+      }] : []),
       ...requirementCoverage,
       ...fileCoverage,
       ...skipCoverage,

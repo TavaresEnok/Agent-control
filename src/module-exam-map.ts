@@ -3,7 +3,7 @@ import {constants} from 'node:fs';
 import {lstat, open, readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {assertModuleRepoRelativePath} from './verification-modules.ts';
-import {isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
+import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {isDirectIdentifier, isModuleExamScript, moduleExamCall, moduleExamDepths, scanModuleExamSource} from './module-exam-syntax.ts';
 
 /** Inventory is based only on a caller-owned, immutable git archive, never the live tree. */
@@ -14,7 +14,7 @@ type RouteOmission = 'linguagem não inventariada' | 'sintaxe não reconhecida' 
   | 'declaração ocultada pelo saneamento' | 'acesso indexado ou dinâmico' | 'método do receptor sobrescrito';
 type RouteInventory = {routes: LocatedRoute[]; omissions: RouteOmission[];
   ambiguousLegacyKeys?: Set<string>; ambiguousLegacyLines?: Set<number>};
-export type ModuleExamMap = {files: ModuleExamFile[]; routes: ModuleExamRoute[]; routeOmissions?: number;
+export type ModuleExamMap = {files: ModuleExamFile[]; routes: ModuleExamRoute[]; fileOmissions?: number; routeOmissions?: number;
   routeOmissionDetails?: {file: string; reason: RouteOmission}[]};
 const MAX_FILE_BYTES = 16000;
 const MAX_TEXT_FILES = 10000;
@@ -210,13 +210,19 @@ export async function readModuleExamFile(absolute: string, file: string, include
   }
 }
 
-/** Does not follow symlinks or open secret-class files. Oversize, binary and unsafe paths remain visible as unjudged. */
-export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal): Promise<ModuleExamMap> {
+/** Does not follow symlinks or open secret-class files. Can aggregate unavailable entries by count. */
+export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
+  options?: {aggregateOmissions?: boolean}): Promise<ModuleExamMap> {
   const files: ModuleExamFile[] = [];
   const routes: ModuleExamRoute[] = [];
   const routeOmissionDetails: NonNullable<ModuleExamMap['routeOmissionDetails']> = [];
+  let fileOmissions = 0;
   let routeOmissions = 0;
   let textFiles = 0;
+  function addFile(row: ModuleExamFile): void {
+    if (options?.aggregateOmissions && row.code === null) fileOmissions++;
+    else files.push(row);
+  }
   async function walk(dir: string, prefix: string): Promise<void> {
     const entries = await readdir(dir, {withFileTypes: true});
     entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -224,19 +230,23 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal):
       if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
       const file = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isDirectory() && SKIP.has(entry.name)) {
-        files.push({file, code: null, reason: 'diretório não examinado'});
+        addFile({file, code: null, reason: 'diretório não examinado'});
         continue;
       }
       try { assertModuleRepoRelativePath(file); }
-      catch { files.push({file: file.slice(0, 400), code: null, reason: 'caminho não permitido'}); continue; }
+      catch { addFile({file: file.slice(0, 400), code: null, reason: 'caminho não permitido'}); continue; }
       const absolute = join(dir, entry.name);
-      if (entry.isSymbolicLink()) { files.push({file, code: null, reason: 'link não seguido'}); continue; }
+      if (entry.isSymbolicLink()) { addFile({file, code: null, reason: 'link não seguido'}); continue; }
+      if (((entry.isFile() || options?.aggregateOmissions) && secretName(file))
+        || (options?.aggregateOmissions && hasKnownSecret(file))) {
+        addFile({file, code: null, reason: 'arquivo de credenciais omitido'});
+        continue;
+      }
       if (entry.isDirectory()) { await walk(absolute, file); continue; }
-      if (!entry.isFile()) { files.push({file, code: null, reason: 'tipo não examinado'}); continue; }
-      if (secretName(file)) { files.push({file, code: null, reason: 'arquivo de credenciais omitido'}); continue; }
-      if (textFiles >= MAX_TEXT_FILES) { files.push({file, code: null, reason: 'limite de arquivos textuais atingido'}); continue; }
+      if (!entry.isFile()) { addFile({file, code: null, reason: 'tipo não examinado'}); continue; }
+      if (textFiles >= MAX_TEXT_FILES) { addFile({file, code: null, reason: 'limite de arquivos textuais atingido'}); continue; }
       const {routeInventory, ...mapped} = await readModuleExamFile(absolute, file, true);
-      files.push(mapped);
+      addFile(mapped);
       if (mapped.code === null) continue;
       textFiles++;
       if (routeInventory?.omissions.length) routeOmissions++;
@@ -247,5 +257,5 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal):
   const root = await lstat(snapshot);
   if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('MODULE_EXAM_SNAPSHOT_INVALID');
   await walk(snapshot, '');
-  return {files, routes, routeOmissions, routeOmissionDetails};
+  return {files, routes, ...(fileOmissions ? {fileOmissions} : {}), routeOmissions, routeOmissionDetails};
 }

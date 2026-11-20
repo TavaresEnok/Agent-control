@@ -75,7 +75,8 @@ const DIGEST = /(?:^|@)sha256:[a-f0-9]{64}$/;
 const MUTABLE_LATEST = /(^|[/:])latest($|@)/i;
 const CONTROL_CHAR = /[\u0000-\u001F\u007F-\u009F]/;
 const MULTILINE_CONTROL_CHAR = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/;
-const REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/-]+$/u;
+const REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/()[\]-]+$/u;
+const PROTECTED_REPO_PATH = /^[\p{L}\p{M}\p{N} ._@+\/-]+$/u;
 const LOWER_FORBIDDEN = new Set(['.mcp.json', '.claude', '.husky', '.codex', '.grok']);
 const ACHADO_ID = z.string().regex(/^ACH-\d{3}$/);
 const ACHADO_FILE = /^ACH-\d{3}\.md$/;
@@ -280,7 +281,9 @@ export function assertModuleRepoRelativePath(file: string): string {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
   const parts = trimmed.split('/');
-  if (parts.some(forbiddenSegment) || isSecretClassBasename(trimmed)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  if (parts.some(part => forbiddenSegment(part) || isSecretClassBasename(part)) || hasKnownSecret(trimmed)) {
+    throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+  }
   return parts.join('/');
 }
 
@@ -288,13 +291,15 @@ export function assertModuleRepoRelativePath(file: string): string {
 // for a structured readiness secret finding. All parent segments remain strict.
 function protectedLocation(file: string): string {
   if (typeof file !== 'string' || file !== file.trim() || file.includes('\\') || CONTROL_CHAR.test(file)
-    || file.length > 400 || !REPO_PATH.test(file) || file.startsWith('/') || file.startsWith('~')) {
+    || file.length > 400 || !PROTECTED_REPO_PATH.test(file) || file.startsWith('/') || file.startsWith('~')) {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
   const parts = file.split('/');
   const name = parts.pop()!;
   if (!isSecretClassBasename(name) || name.includes('..') || name === '.' || name === '..'
-    || (forbiddenSegment(name) && !name.startsWith('.env')) || parts.some(forbiddenSegment)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
+    || (forbiddenSegment(name) && !name.toLowerCase().startsWith('.env'))
+    || parts.some(part => forbiddenSegment(part) || isSecretClassBasename(part))
+    || hasKnownSecret(file)) throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   return file;
 }
 
@@ -498,10 +503,74 @@ function shannonEntropy(value: string): number {
 
 const REMOVED_HIGH_ENTROPY = '[removido: alta entropia]';
 const BASE64_SECRET = /[A-Za-z0-9+]{40,}={0,2}/;
-const SNAKE_IDENTIFIER = /^[a-z][a-z0-9_]{31,}$/;
+const SNAKE_IDENTIFIER = /^(?=.*_)[a-z][a-z0-9_]{31,}$/;
 const SHORT_FILE_EXTENSION = /\.[A-Za-z0-9]{1,5}$/;
+const ROUTE_DELIMITER = /[\[\]()]/;
+const STATIC_ROUTE_SEGMENT = /^[A-Za-z0-9@._-]+$/;
+const INTERCEPT_PREFIX = /^(?:\(\.\)|\(\.\.\)(?:\(\.\.\))?|\(\.\.\.\))(.+)$/u;
+const ROUTE_IDENTIFIER = /^[\p{L}][\p{L}\p{N}_-]*$/u;
+const ROUTE_VERSION_SUFFIX = /(?:[-_]?[Vv]\d{1,2})$/;
+const APP_ROUTE_LEAF = /^(?:page|layout|template|loading|error|not-found|global-error|default|route)\.(?:[cm]?[jt]sx?)$/;
+
+function isDescriptiveRouteIdentifier(name: string): boolean {
+  if (!ROUTE_IDENTIFIER.test(name) || shannonEntropy(name) >= 4.3) return false;
+  const stem = name.replace(ROUTE_VERSION_SUFFIX, '');
+  const words = stem
+    .split(/[-_]+/)
+    .flatMap(part => part.split(/(?=\p{Lu}\p{Ll})/u))
+    .filter(Boolean);
+  if (words.length < 2 || words.some(word => !/^\p{Lu}?\p{Ll}+$/u.test(word))) return false;
+  const longWordChars = words
+    .filter(word => /^\p{Lu}?\p{Ll}{3,}$/u.test(word))
+    .reduce((sum, word) => sum + word.length, 0);
+  return longWordChars * 2 >= name.length;
+}
+
+function extractFrameworkRouteName(segment: string): string | null {
+  let body = segment;
+  let intercepted = false;
+  const interceptMatch = INTERCEPT_PREFIX.exec(segment);
+  if (interceptMatch) {
+    intercepted = true;
+    body = interceptMatch[1]!;
+  }
+
+  let inner: string | null = null;
+  if (body.startsWith('[[...') && body.endsWith(']]')) {
+    inner = body.slice(5, -2);
+  } else if (body.startsWith('[...') && body.endsWith(']')) {
+    inner = body.slice(4, -1);
+  } else if (body.startsWith('[') && body.endsWith(']')) {
+    inner = body.slice(1, -1);
+  } else if (!intercepted && body.startsWith('(') && body.endsWith(')')) {
+    inner = body.slice(1, -1);
+  } else if (intercepted) {
+    inner = body;
+  }
+
+  return inner && ROUTE_IDENTIFIER.test(inner) ? inner : null;
+}
+
+function isValidAppRoutePath(segments: readonly string[], cleanLeaf: string): boolean {
+  if (cleanLeaf.length >= 32 || !APP_ROUTE_LEAF.test(cleanLeaf)) return false;
+  const dirSegments = segments.slice(0, -1);
+  const appIndex = dirSegments.indexOf('app');
+  if (appIndex < 0 || appIndex >= dirSegments.length - 1) return false;
+  if (dirSegments.slice(0, appIndex).some(seg => seg.length >= 32 || seg === '.' || seg === '..' || !STATIC_ROUTE_SEGMENT.test(seg))) {
+    return false;
+  }
+  return dirSegments.slice(appIndex + 1).every(segment => {
+    if (segment === '.' || segment === '..') return false;
+    if (ROUTE_DELIMITER.test(segment) || segment.length >= 32) {
+      const routeName = extractFrameworkRouteName(segment);
+      return routeName !== null && (segment.length < 32 || isDescriptiveRouteIdentifier(routeName));
+    }
+    return STATIC_ROUTE_SEGMENT.test(segment);
+  });
+}
 
 function isSnakeToken(token: string): boolean {
+  if (token.includes('/') && ROUTE_DELIMITER.test(token)) return false;
   if (SNAKE_IDENTIFIER.test(token)) return true;
   const pieces = token.split(/[^A-Za-z0-9_]+/).filter(piece => piece.length > 0);
   if (pieces.length === 0 || pieces.some(piece => !/^[a-z][a-z0-9_]*$/.test(piece))) return false;
@@ -510,10 +579,14 @@ function isSnakeToken(token: string): boolean {
 
 function isPathToken(token: string): boolean {
   if (token.startsWith('/') || token.startsWith('./') || token.startsWith('../')) return true;
-  const segments = token.split('/');
+  const normalized = token.replace(/^(?:arquivo|modulo|pacote)=/, '');
+  const segments = normalized.split('/');
   if (segments.length <= 1) return false;
-  if (!segments.every(segment => segment.length < 32)) return false;
-  return segments.some(segment => SHORT_FILE_EXTENSION.test(segment));
+  const cleanLeaf = segments[segments.length - 1]!.replace(/(?::\d+(?:-\d+)?)?[,;:)]*$/, '');
+  if (segments.every(segment => segment.length < 32)) {
+    return segments.slice(0, -1).some(segment => SHORT_FILE_EXTENSION.test(segment)) || SHORT_FILE_EXTENSION.test(cleanLeaf);
+  }
+  return isValidAppRoutePath(segments, cleanLeaf);
 }
 
 function isMaskToken(token: string): boolean {
@@ -521,14 +594,14 @@ function isMaskToken(token: string): boolean {
 }
 
 function isSecretToken(token: string): boolean {
-  if (!token || isMaskToken(token) || isPathToken(token) || isSnakeToken(token)) return false;
+  if (!token || isMaskToken(token)) return false;
+  if (BASE64_SECRET.test(token)) return true;
+  if (isPathToken(token) || isSnakeToken(token)) return false;
   if (!token.includes('/')) {
-    if (BASE64_SECRET.test(token)) return true;
     return token.length >= 32 && shannonEntropy(token) >= 3.5;
   }
   return token.split('/').some(segment => {
     if (!segment || SNAKE_IDENTIFIER.test(segment)) return false;
-    if (BASE64_SECRET.test(segment)) return true;
     return segment.length >= 32 && shannonEntropy(segment) >= 3.5;
   });
 }
@@ -1842,6 +1915,19 @@ async function beginModuleRunTx(input: {
   return intentId;
 }
 
+export async function validateModuleCollectorPublication(snapshot: string, collector: ModuleCollectorOutput): Promise<void> {
+  for (const finding of collector.findings) {
+    await resolveInsideRepo(snapshot, finding.file);
+    if (!collector.coverage.some(row => row.tool === finding.tool && row.status === 'ok'
+      && (row.files === undefined || row.files.includes(finding.file)))) {
+      throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
+    }
+  }
+  for (const row of collector.coverage) {
+    for (const file of row.files ?? []) await resolveInsideRepo(snapshot, file);
+  }
+}
+
 /**
  * Full execution path for verification modules 2 to 9 (`qa`, `arquitetura`, `dependencias`,
  * `banco`, `prontidao`, `desempenho`, `documentacao`, `conformidade`).
@@ -1954,15 +2040,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       throw new Refusal('VERIFY_REPORT_INVALID', 400);
     }
     assertNoLiveAccessKey(collectorData);
-    for (const finding of collectorData.findings) {
-      await resolveInsideRepo(snapshot, finding.file);
-      if (!collectorData.coverage.some(row => row.tool === finding.tool && row.status === 'ok')) {
-        throw new Refusal('VERIFY_COLLECTOR_INVALID', 400);
-      }
-    }
-    for (const row of collectorData.coverage) {
-      for (const file of row.files ?? []) await resolveInsideRepo(snapshot, file);
-    }
+    await validateModuleCollectorPublication(snapshot, collectorData);
     } catch (error) {
       if (input.signal?.aborted || (error instanceof Refusal && error.code === 'VERIFY_CONTAINER_CLEANUP_PENDING')) throw error;
       sourceCoverage = undefined;

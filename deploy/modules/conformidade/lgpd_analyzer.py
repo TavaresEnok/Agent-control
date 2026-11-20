@@ -13,6 +13,7 @@ import subprocess
 
 import lgpd_python
 from lgpd_sql import sql_origin
+from license_policy import is_sensitive_path
 
 TEXT_SUFFIXES = {
     ".c", ".cc", ".cfg", ".conf", ".cpp", ".cs", ".csv", ".env", ".go", ".graphql",
@@ -104,6 +105,9 @@ def javascript_destinations(texts):
 
 
 def inspect_fields(text, file, report, parsed=None):
+    if is_sensitive_path(file):
+        report.cover("lgpd-static:file", "1", "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+        return True
     suffix = Path(file).suffix.lower()
     if suffix in JS_SUFFIXES:
         cross_line, gaps = parsed if parsed is not None else javascript_batch([(file, text)])[file]
@@ -211,6 +215,9 @@ def presidio_diagnostics():
 
 
 def inspect_entities(analyzer, text, file, version, report, diagnostics):
+    if is_sensitive_path(file):
+        report.cover("presidio-analyzer:file", version, "skipped", "Arquivo excluído, protegido ou com caminho incompatível.")
+        return True
     starts = [0] + [match.end() for match in re.finditer(r"\n", text)]
     entities = {}
     diagnostics.timed_out = False

@@ -167,6 +167,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   const findings = input.findings.map(raw => ({...moduleCollectorCandidate(raw), ...(input.commit ? {reviewCommit: input.commit} : {})}));
   const notes = new Set<string>();
   notes.add('O mapa inventaria chamadas diretas no nível do módulo em JS/TS, com caminho literal e argumento de handler. O receptor precisa ser uma constante local inicializada por uma importação HTTP reconhecida de Express, Hono ou Fastify. O subconjunto exige ponto e vírgula entre instruções e omite outras linguagens, JSX/TSX, sintaxe não reconhecida, declarações indexadas, dinâmicas, indiretas ou aninhadas e métodos com sobrescrita detectada no arquivo. Cada rota julgada exige atestado da declaração enviada. Limite de 20 rotas por arquivo.');
+  if (input.map.fileOmissions) notes.add(`Entradas omitidas do inventário de arquivos: ${input.map.fileOmissions}.`);
   if (input.map.routeOmissions) notes.add(`Arquivos com inventário de rotas parcial ou omitido: ${input.map.routeOmissions}.`);
   const omissions = input.map.routeOmissionDetails ?? [];
   for (const {file, reason} of omissions.slice(0, 20)) {
