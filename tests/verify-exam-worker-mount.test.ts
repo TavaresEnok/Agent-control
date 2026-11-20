@@ -1407,6 +1407,7 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       const req = NativeExecutionRequest.parse({
         jobId, intentId, grantId, sessionId: randomUUID(), base: 'e'.repeat(40),
         role: item.role, task: item.task, ...(designPurpose ? {designPurpose} : {}),
+        ...(designPurpose === 'create' ? {model: 'claude-opus-5-5', effort: 'high'} : {}),
         writePaths: item.role === 'programmer' ? ['src/a.ts'] : [],
         ...(item.role === 'programmer' ? {} : {artifactId: randomUUID(), outputSchema: {type: 'object'}}),
       });
@@ -1702,16 +1703,23 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     const job1 = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: grant1, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high', selection: {designPurpose: 'examiner'},
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high', selection: {designPurpose: 'create'},
       resource_kind: 'model', state: 'reserved',
     });
     const input1 = NativeExecutionRequest.parse({
       jobId: job1, intentId: intent, grantId: grant1, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', designPurpose: 'examiner', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'create', task: 'Pedido de criação. Tela sintética.', model: 'claude-opus-5-5', effort: 'high', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     lastJobId = job1;
     lastLaunchHash = digest(input1);
     await supervisor.start(principal, authority, input1);
+
+    const signedCreate = JSON.parse(await readFile(join(spool, job1, 'input', 'launch.json'), 'utf8'));
+    assert.equal(signedCreate.payload.accountId, account);
+    assert.equal(signedCreate.payload.profileId, profile);
+    assert.equal(signedCreate.payload.model, 'claude-opus-5-5');
+    assert.equal(signedCreate.payload.effort, 'high');
+    assert.match(signedCreate.signature, /^[0-9a-f]{128}$/);
 
     for (const item of createdConfigs) {
       assert.equal(JSON.stringify(item.configuration).includes(accessSecret), false);
