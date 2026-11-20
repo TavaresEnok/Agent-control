@@ -63,10 +63,10 @@ test('opção --esperar-cota é explícita na CLI dos módulos 2 a 9 e não alte
 
 test('examineFunctionalModule retoma no mesmo arquivo não julgado preservando contadores, vinculação e isolamento de provedores', async () => {
   const claudeSeat = (accountId: string): ModuleExamSeat => ({
-    provider: 'claude', model: 'claude-sonnet', accountId, profileId: randomUUID(), grantId: randomUUID(),
+    provider: 'claude', model: 'claude-sonnet-5-5', accountId, profileId: randomUUID(), grantId: randomUUID(),
   });
   const codexSeat: ModuleExamSeat = {
-    provider: 'codex', model: 'codex-model', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID(),
+    provider: 'codex', model: 'gpt-6.2-sol', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID(),
   };
   const intentId = randomUUID();
   const commit = 'a'.repeat(40);
@@ -263,14 +263,40 @@ test('CLI integrada espera renovação da mesma conta Claude em 15 min com reló
           return moduleExamFixtureAnswer(launch);
         },
       });
-      const {runtime, profiles, docker} = fixture;
-      const claudeAccountId = [...runtime[0]!.accountIds][0]!;
-      const codexAccountId = [...runtime[1]!.accountIds][0]!;
+      const {runtime: baseRuntime, profiles, highProfile, docker} = fixture;
+      const claudeAccountId = [...baseRuntime[0]!.accountIds][0]!;
+      const codexAccountId = [...baseRuntime[1]!.accountIds][0]!;
+      const opusProfile = randomUUID();
+      await capacity.registerModel(owner, {
+        provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium'],
+        roles: ['specialist'], source: 'synthetic://quota-wait',
+      });
+      await capacity.addProfile(owner, project, {
+        id: opusProfile, accountId: claudeAccountId, model: 'claude-opus-5-5', role: 'specialist', effort: 'medium',
+      });
+      const proAccountId = randomUUID();
+      const proSonnetMedProfile = randomUUID();
+      await capacity.addAccount(owner, project, {
+        id: proAccountId, provider: 'claude', label: 'claude-pro-reserve',
+        resourceIdentity: 'claude:synthetic-pro-' + proAccountId,
+        mode: 'subscription_cli', eligibility: 'documented_supported',
+        eligibilitySource: 'synthetic://quota-wait', maxConcurrent: 2,
+      });
+      await capacity.addProfile(owner, project, {
+        id: proSonnetMedProfile, accountId: proAccountId, model: 'claude-sonnet-5-5', role: 'specialist', effort: 'medium',
+      });
+      await capacity.observeQuota(owner, proAccountId, {
+        status: 'available', ttlSeconds: 3600, source: 'synthetic://pro-untouched',
+      });
+      const runtime = [
+        {...baseRuntime[0]!, accountIds: new Set([claudeAccountId, proAccountId])},
+        baseRuntime[1]!,
+      ];
       const revision = await capacity.publish(owner, project, 0, {
         schemaVersion: 1,
         maxProgrammersPerContext: 1,
         maxEvaluatorsPerContext: 1,
-        roles: {specialist: {regular: profiles, emergency: []}},
+        roles: {specialist: {regular: [opusProfile, profiles[0]!, highProfile, proSonnetMedProfile, profiles[1]!], emergency: []}},
       });
       await capacity.assignPolicy(owner, mainContext, revision);
 
@@ -315,8 +341,26 @@ test('CLI integrada espera renovação da mesma conta Claude em 15 min com reló
             onQuotaCallCount += 1;
             const openGrants = await ledger.pool.query("SELECT count(*)::int AS open FROM ac_capacity_grants WHERE state<>'released'");
             assert.equal(openGrants.rows[0].open, 0, 'todos os grants devem estar liberados antes da espera');
-            await baseClock.clock.sleep(ms, signal);
             if (activeSleepHook) await activeSleepHook();
+            await baseClock.clock.sleep(ms, signal);
+            await ledger.pool.query(
+              `UPDATE ac_accounts
+               SET exhausted_until = exhausted_until - ($1::bigint * interval '1 millisecond')
+               WHERE exhausted_until IS NOT NULL`,
+              [ms],
+            );
+            await ledger.pool.query(
+              `UPDATE ac_quota_observations
+               SET observed_at = observed_at - ($1::bigint * interval '1 millisecond'),
+                   expires_at  = expires_at  - ($1::bigint * interval '1 millisecond')`,
+              [ms],
+            );
+            await ledger.pool.query(
+              `UPDATE ac_model_quota_observations
+               SET observed_at = observed_at - ($1::bigint * interval '1 millisecond'),
+                   expires_at  = expires_at  - ($1::bigint * interval '1 millisecond')`,
+              [ms],
+            );
           },
         };
         return {clock: wrappedClock, waits: baseClock.waits};
@@ -345,34 +389,66 @@ test('CLI integrada espera renovação da mesma conta Claude em 15 min com reló
         assert.equal(report.achados[0]?.status, 'provavel');
       });
 
-      await t.test('personal:arquitetura --esperar-cota espera 15 min, retoma em src/beta.ts sem repetir src/alpha.ts e preserva contadores e vinculação', async () => {
+      await t.test('personal:arquitetura --esperar-cota espera 15 min sem apagar limite válido, retoma em src/beta.ts após vencer e preserva roteamento/contadores/outros provedores', async () => {
         await ledger.pool.query('UPDATE ac_accounts SET exhausted_until=NULL WHERE id=$1', [claudeAccountId]);
         await capacity.observeQuota(owner, claudeAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://quota-wait'});
+        await capacity.observeQuota(owner, codexAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://codex-untouched'});
+        await ledger.pool.query(
+          `UPDATE ac_quota_observations SET expires_at = observed_at + interval '3 hours' WHERE account_id=$1`,
+          [codexAccountId],
+        );
+        await capacity.observeQuota(owner, proAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://pro-untouched'});
+        const initialCodexObservedAt = (await ledger.pool.query<{observed_at: Date}>(
+          'SELECT observed_at FROM ac_quota_observations WHERE account_id=$1',
+          [codexAccountId],
+        )).rows[0]!.observed_at.getTime();
+        const initialProObservedAt = (await ledger.pool.query<{observed_at: Date}>(
+          'SELECT observed_at FROM ac_quota_observations WHERE account_id=$1',
+          [proAccountId],
+        )).rows[0]!.observed_at.getTime();
         mode = 'examiner-limit-twice';
         claudeFailuresLeft = 2;
         const {clock, waits} = makeClock();
         const logsBefore = docker.logs.length;
         const waitEvents: string[] = [];
+        let observedStillValidAfterRefresh = 0;
         let captured: VerificationModuleRunResult | undefined;
+        activeSleepHook = async () => {
+          if (waits.length === 0) return;
+          // At the start of a subsequent wait, the previous refresh already ran and reserve retried.
+          const row = (await ledger.pool.query<{still_valid: boolean; exhausted_until: Date | null}>(
+            `SELECT exhausted_until, (exhausted_until IS NOT NULL AND exhausted_until > clock_timestamp()) AS still_valid
+             FROM ac_accounts WHERE id=$1`,
+            [claudeAccountId],
+          )).rows[0]!;
+          if (row.still_valid) {
+            observedStillValidAfterRefresh += 1;
+            assert.ok(row.exhausted_until, 'exhausted_until ainda válido não pode ser apagado após 15 min');
+          }
+        };
 
-        const out = await runPersonalModuleCli('arquitetura', [installation, project, '--esperar-cota'], {
-          collectorOutput,
-          moduleExamRuntime: async () => runtime,
-          clock,
-          onQuotaWait(info) { waitEvents.push(`${info.purpose}:${info.file}:${info.delayMs}`); },
-          onResult(res) { captured = res; },
-        });
+        try {
+          const out = await runPersonalModuleCli('arquitetura', [installation, project, '--esperar-cota'], {
+            collectorOutput,
+            moduleExamRuntime: async () => runtime,
+            clock,
+            onQuotaWait(info) { waitEvents.push(`${info.purpose}:${info.file}:${info.delayMs}`); },
+            onResult(res) { captured = res; },
+          });
 
-        assert.equal(out[0], captured?.runId);
-        assert.deepEqual(waits, [CLAUDE_QUOTA_RETRY_INTERVAL_MS, CLAUDE_QUOTA_RETRY_INTERVAL_MS]);
-        assert.deepEqual(waitEvents, [
-          `examiner:src/beta.ts:${CLAUDE_QUOTA_RETRY_INTERVAL_MS}`,
-          `examiner:src/beta.ts:${CLAUDE_QUOTA_RETRY_INTERVAL_MS}`,
-        ]);
+          assert.equal(out[0], captured?.runId);
+        } finally {
+          activeSleepHook = undefined;
+        }
+        assert.equal(waits.length, 8);
+        assert.ok(waits.every(delayMs => delayMs === CLAUDE_QUOTA_RETRY_INTERVAL_MS));
+        assert.equal(waitEvents.length, 8);
+        assert.ok(waitEvents.every(ev => ev === `examiner:src/beta.ts:${CLAUDE_QUOTA_RETRY_INTERVAL_MS}`));
+        assert.ok(observedStillValidAfterRefresh >= 6, 'deve comprovar múltiplas janelas de 15 min sem apagar limite ainda válido');
         const newLogs = docker.logs.slice(logsBefore);
         const claudeFiles = newLogs
           .filter(log => log.provider === 'claude')
-          .map(log => ({file: JSON.parse(log.task).file, accountId: JSON.parse(log.task).module ? undefined : undefined, grantId: log.jobId}));
+          .map(log => ({file: JSON.parse(log.task).file}));
         assert.deepEqual(claudeFiles.map(item => item.file), [
           'src/alpha.ts',
           'src/beta.ts',
@@ -380,12 +456,28 @@ test('CLI integrada espera renovação da mesma conta Claude em 15 min com reló
           'src/beta.ts',
           'src/gamma.ts',
         ]);
-        const claudeGrants = (await ledger.pool.query<{account_id: string}>(
-          `SELECT account_id::text FROM ac_capacity_grants WHERE account_id=$1`,
+        const claudeGrants = (await ledger.pool.query<{account_id: string; model: string; effort: string; state: string}>(
+          `SELECT g.account_id::text, p.model, p.effort, g.state
+           FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id
+           WHERE g.account_id=$1`,
           [claudeAccountId],
         )).rows;
         assert.ok(claudeGrants.length >= 5);
+        assert.ok(claudeGrants.every(g => g.model === 'claude-sonnet-5-5' && g.effort === 'medium' && g.state === 'released'));
+        assert.equal((await ledger.pool.query('SELECT count(*)::int AS n FROM ac_capacity_grants WHERE account_id=$1', [proAccountId])).rows[0].n, 0);
         assert.equal((await ledger.pool.query("SELECT count(*)::int AS open FROM ac_capacity_grants WHERE state<>'released'")).rows[0].open, 0);
+        const codexObs = (await ledger.pool.query<{source: string; observed_at: Date}>(
+          'SELECT source, observed_at FROM ac_quota_observations WHERE account_id=$1',
+          [codexAccountId],
+        )).rows[0]!;
+        assert.equal(codexObs.source, 'synthetic://codex-untouched');
+        assert.equal(codexObs.observed_at.getTime(), initialCodexObservedAt - waits.length * CLAUDE_QUOTA_RETRY_INTERVAL_MS);
+        const proObs = (await ledger.pool.query<{source: string; observed_at: Date}>(
+          'SELECT source, observed_at FROM ac_quota_observations WHERE account_id=$1',
+          [proAccountId],
+        )).rows[0]!;
+        assert.equal(proObs.source, 'synthetic://pro-untouched');
+        assert.equal(proObs.observed_at.getTime(), initialProObservedAt - waits.length * CLAUDE_QUOTA_RETRY_INTERVAL_MS);
 
         const report = await readModuleReport(dataDirectory, project, captured!.runId, 'arquitetura');
         assert.match(report.coverageMarkdown, /src\/alpha\.ts \| lido/);
@@ -397,24 +489,114 @@ test('CLI integrada espera renovação da mesma conta Claude em 15 min com reló
         assert.equal(report.achados[0]?.verifier?.provider, 'codex');
       });
 
-      await t.test('outro módulo passivo (qa) com --esperar-cota retoma da fila quando conta Claude já estava em pausa', async () => {
-        await ledger.pool.query("UPDATE ac_accounts SET exhausted_until=clock_timestamp()+interval '1 hour' WHERE id=$1", [claudeAccountId]);
+      await t.test('outro módulo passivo (qa) com --esperar-cota retoma da fila ao vencer pausa sem apagar limite válido nem trocar conta', async () => {
+        await ledger.pool.query("UPDATE ac_accounts SET exhausted_until=clock_timestamp()+interval '25 minutes' WHERE id=$1", [claudeAccountId]);
+        await capacity.observeQuota(owner, claudeAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://quota-wait'});
+        await capacity.observeQuota(owner, codexAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://codex-untouched'});
+        await capacity.observeQuota(owner, proAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://pro-untouched'});
         mode = 'ok';
         const {clock, waits} = makeClock();
         const logsBefore = docker.logs.length;
-        const [runId] = await runPersonalQaCli([installation, project, '--esperar-cota'], {
-          collectorOutput: qaCollectorOutput,
-          moduleExamRuntime: async () => runtime,
-          clock,
-        });
+        let checkedAfterFirstInterval = false;
+        activeSleepHook = async () => {
+          if (waits.length === 1) {
+            checkedAfterFirstInterval = true;
+            const acc = (await ledger.pool.query<{still_valid: boolean}>(
+              `SELECT (exhausted_until IS NOT NULL AND exhausted_until > clock_timestamp()) AS still_valid
+               FROM ac_accounts WHERE id=$1`,
+              [claudeAccountId],
+            )).rows[0]!;
+            assert.equal(acc.still_valid, true, 'limite de 25 min deve permanecer válido após 15 min');
+            assert.equal(docker.logs.length, logsBefore, 'nenhum worker deve iniciar enquanto o limite ainda é válido');
+          }
+        };
+        let runId: string | undefined;
+        try {
+          [runId] = await runPersonalQaCli([installation, project, '--esperar-cota'], {
+            collectorOutput: qaCollectorOutput,
+            moduleExamRuntime: async () => runtime,
+            clock,
+          });
+        } finally {
+          activeSleepHook = undefined;
+        }
         assert.ok(runId);
-        assert.deepEqual(waits, [CLAUDE_QUOTA_RETRY_INTERVAL_MS]);
+        assert.equal(checkedAfterFirstInterval, true);
+        assert.deepEqual(waits, [CLAUDE_QUOTA_RETRY_INTERVAL_MS, CLAUDE_QUOTA_RETRY_INTERVAL_MS]);
         const claudeFiles = docker.logs.slice(logsBefore).filter(log => log.provider === 'claude').map(log => JSON.parse(log.task).file);
         assert.deepEqual(claudeFiles, ['src/alpha.ts', 'src/beta.ts', 'src/gamma.ts']);
+        const qaCtx = (await ledger.ensureExamContext(owner, project, 'qa')).contextId;
+        const qaGrants = (await ledger.pool.query<{account_id: string; model: string; effort: string; state: string}>(
+          `SELECT g.account_id::text, p.model, p.effort, g.state
+           FROM ac_capacity_grants g JOIN ac_profiles p ON p.id=g.profile_id
+           WHERE g.context_id=$1`,
+          [qaCtx],
+        )).rows;
+        assert.equal(qaGrants.length, 3);
+        assert.ok(qaGrants.every(g => g.account_id === claudeAccountId && g.model === 'claude-sonnet-5-5' && g.effort === 'medium' && g.state === 'released'));
+        assert.equal((await ledger.pool.query("SELECT count(*)::int AS open FROM ac_capacity_grants WHERE state<>'released'")).rows[0].open, 0);
+        assert.equal((await ledger.pool.query<{source: string}>('SELECT source FROM ac_quota_observations WHERE account_id=$1', [codexAccountId])).rows[0]!.source, 'synthetic://codex-untouched');
+        assert.equal((await ledger.pool.query<{source: string}>('SELECT source FROM ac_quota_observations WHERE account_id=$1', [proAccountId])).rows[0]!.source, 'synthetic://pro-untouched');
         const report = await readModuleReport(dataDirectory, project, runId, 'qa');
         assert.match(report.coverageMarkdown, /src\/alpha\.ts \| lido/);
         assert.match(report.coverageMarkdown, /src\/beta\.ts \| lido/);
         assert.match(report.coverageMarkdown, /src\/gamma\.ts \| lido/);
+      });
+
+      await t.test('escopo por modelo respeita limites individuais, não declara recuperação antes do vencimento e não toca outros modelos ou provedores', async () => {
+        await ledger.pool.query('UPDATE ac_accounts SET exhausted_until=NULL WHERE id=$1', [claudeAccountId]);
+        await capacity.observeQuota(owner, claudeAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://account-base'});
+        await capacity.observeModelQuota(owner, claudeAccountId, 'claude-sonnet-5-5', {status: 'exhausted', ttlSeconds: 1200, source: 'synthetic://sonnet-limit'});
+        await capacity.observeModelQuota(owner, claudeAccountId, 'claude-opus-5-5', {status: 'exhausted', ttlSeconds: 3600, source: 'synthetic://opus-limit'});
+        await capacity.observeQuota(owner, codexAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://codex-untouched'});
+        mode = 'ok';
+        const {clock, waits} = makeClock();
+        const logsBefore = docker.logs.length;
+        let verifiedStillExhaustedAt15Min = false;
+        activeSleepHook = async () => {
+          if (waits.length === 1) {
+            verifiedStillExhaustedAt15Min = true;
+            const rows = (await ledger.pool.query<{model: string; status: string; source: string; fresh: boolean}>(
+              `SELECT model, status, source, expires_at > clock_timestamp() AS fresh
+               FROM ac_model_quota_observations WHERE account_id=$1 ORDER BY model`,
+              [claudeAccountId],
+            )).rows;
+            assert.deepEqual(rows.map(r => [r.model, r.status, r.source, r.fresh]), [
+              ['claude-opus-5-5', 'exhausted', 'synthetic://opus-limit', true],
+              ['claude-sonnet-5-5', 'exhausted', 'synthetic://sonnet-limit', true],
+            ]);
+            assert.equal(docker.logs.length, logsBefore, 'nenhum worker deve rodar antes do vencimento do modelo');
+          }
+        };
+        let runId: string | undefined;
+        try {
+          [runId] = await runPersonalQaCli([installation, project, '--esperar-cota'], {
+            collectorOutput: qaCollectorOutput,
+            moduleExamRuntime: async () => runtime,
+            clock,
+          });
+        } finally {
+          activeSleepHook = undefined;
+        }
+        assert.ok(runId);
+        assert.equal(verifiedStillExhaustedAt15Min, true);
+        assert.deepEqual(waits, [CLAUDE_QUOTA_RETRY_INTERVAL_MS, CLAUDE_QUOTA_RETRY_INTERVAL_MS]);
+        const postRows = (await ledger.pool.query<{model: string; status: string; source: string; fresh: boolean}>(
+          `SELECT model, status, source, expires_at > clock_timestamp() AS fresh
+           FROM ac_model_quota_observations WHERE account_id=$1 ORDER BY model`,
+          [claudeAccountId],
+        )).rows;
+        assert.deepEqual(postRows.map(r => [r.model, r.status, r.source, r.fresh]), [
+          ['claude-opus-5-5', 'exhausted', 'synthetic://opus-limit', true],
+          ['claude-sonnet-5-5', 'available', 'personal://refresh', true],
+        ]);
+        assert.equal((await ledger.pool.query<{source: string}>('SELECT source FROM ac_quota_observations WHERE account_id=$1', [codexAccountId])).rows[0]!.source, 'synthetic://codex-untouched');
+        assert.equal((await ledger.pool.query("SELECT count(*)::int AS open FROM ac_capacity_grants WHERE state<>'released'")).rows[0].open, 0);
+
+        // Restore account scope cleanly for the remaining tests.
+        await ledger.pool.query("UPDATE ac_accounts SET quota_scope_mode='account' WHERE id=$1", [claudeAccountId]);
+        await ledger.pool.query('DELETE FROM ac_model_quota_observations WHERE account_id=$1', [claudeAccountId]);
+        await capacity.observeQuota(owner, claudeAccountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://quota-wait'});
       });
 
       await t.test('PROVIDER_USAGE_LIMIT no provedor Codex não espera mesmo com --esperar-cota', async () => {

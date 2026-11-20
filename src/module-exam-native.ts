@@ -2,7 +2,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
-import {moduleExaminerRequirement, reserveSpecialistExamSeat} from './exam-provider.ts';
+import {loadSpecialistExamPlan, moduleExaminerRequirement, reserveSpecialistExamSeat} from './exam-provider.ts';
 import type {Ledger, VerificationModule} from './ledger.ts';
 import {safeFailureCode} from './exam-login.ts';
 import {readPrivateFile, type Installation} from './installation.ts';
@@ -327,40 +327,97 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
 export type ModuleExamCallback = (request: Parameters<NonNullable<VerificationModuleRunInput['examinar']>>[0]
   & {collector?: ModuleExamCollectorContext}) => Promise<ModuleExamResult>;
 
-async function refreshClaudeExamQuotaForRetry(ledger: Ledger, accountIds: readonly string[]): Promise<void> {
-  if (!accountIds.length) return;
+const RECOVERABLE_QUOTA_STATUSES = new Set(['exhausted', 'rate_limited']);
+
+/** Refreshes expired personal/quota-limit observations only for the target Claude account and model,
+ * preserving active provider exhaustion deadlines, model-scoped isolation, and all other accounts/providers. */
+async function refreshClaudeExamQuotaForRetry(
+  ledger: Ledger,
+  principal: string,
+  accountId: string,
+  model: string,
+): Promise<void> {
   await ledger.tx(async c => {
-    await c.query(
-      `UPDATE ac_accounts SET exhausted_until=NULL
-       WHERE id=ANY($1::uuid[]) AND provider='claude' AND mode='subscription_cli'`,
-      [accountIds],
-    );
-    await c.query(
-      `INSERT INTO ac_quota_observations(account_id,status,source,observed_at,expires_at)
-       SELECT id,'available','personal://refresh',clock_timestamp(),clock_timestamp()+interval '1 hour'
-       FROM ac_accounts
-       WHERE id=ANY($1::uuid[]) AND enabled AND provider='claude' AND mode='subscription_cli'
-         AND (exhausted_until IS NULL OR exhausted_until<=clock_timestamp())
-       ON CONFLICT(account_id) DO UPDATE
-         SET status=excluded.status,source=excluded.source,observed_at=excluded.observed_at,expires_at=excluded.expires_at`,
-      [accountIds],
-    );
-    await c.query(
-      `UPDATE ac_model_quota_observations
-       SET status='available',source='personal://refresh',observed_at=clock_timestamp(),expires_at=clock_timestamp()+interval '1 hour'
-       WHERE account_id=ANY($1::uuid[])
-         AND EXISTS(SELECT 1 FROM ac_accounts a WHERE a.id=ac_model_quota_observations.account_id
-           AND a.enabled AND a.provider='claude' AND a.mode='subscription_cli'
-           AND (a.exhausted_until IS NULL OR a.exhausted_until<=clock_timestamp()))`,
-      [accountIds],
-    );
-    await c.query(
-      `UPDATE ac_quota_observations q
-       SET observed_at=clock_timestamp(),expires_at=clock_timestamp()+interval '1 hour'
+    const row = (await c.query<{
+      id: string;
+      provider: string;
+      mode: string;
+      enabled: boolean;
+      quota_scope_mode: 'account' | 'model';
+      account_exhausted: boolean;
+      account_quota_status: string | null;
+      account_quota_fresh: boolean | null;
+      account_quota_plenty: boolean | null;
+      model_quota_status: string | null;
+      model_quota_fresh: boolean | null;
+      model_quota_plenty: boolean | null;
+    }>(
+      `SELECT a.id, a.provider, a.mode, a.enabled, a.quota_scope_mode,
+              (a.exhausted_until IS NOT NULL AND a.exhausted_until > clock_timestamp()) AS account_exhausted,
+              q.status AS account_quota_status,
+              (q.expires_at IS NOT NULL AND q.expires_at > clock_timestamp()) AS account_quota_fresh,
+              (q.expires_at IS NOT NULL AND q.expires_at > clock_timestamp() + interval '15 minutes') AS account_quota_plenty,
+              mq.status AS model_quota_status,
+              (mq.expires_at IS NOT NULL AND mq.expires_at > clock_timestamp()) AS model_quota_fresh,
+              (mq.expires_at IS NOT NULL AND mq.expires_at > clock_timestamp() + interval '15 minutes') AS model_quota_plenty
        FROM ac_accounts a
-       WHERE a.id=q.account_id AND a.enabled AND a.mode='subscription_cli'
-         AND q.status='available' AND (a.exhausted_until IS NULL OR a.exhausted_until<=clock_timestamp())`,
-    );
+       LEFT JOIN ac_quota_observations q ON q.account_id = a.id
+       LEFT JOIN ac_model_quota_observations mq ON mq.account_id = a.id AND mq.model = $2
+       WHERE a.id = $1
+       FOR UPDATE OF a`,
+      [accountId, model],
+    )).rows[0];
+
+    if (!row || !row.enabled || row.provider !== 'claude' || row.mode !== 'subscription_cli') return;
+    if (row.account_exhausted) return;
+
+    const accountQuotaActiveNonAvailable =
+      row.account_quota_status !== null && row.account_quota_status !== 'available' && row.account_quota_fresh === true;
+    if (accountQuotaActiveNonAvailable) return;
+
+    const accountQuotaCanRefresh =
+      row.account_quota_status === null
+      || row.account_quota_status === 'available'
+      || (RECOVERABLE_QUOTA_STATUSES.has(row.account_quota_status) && row.account_quota_fresh !== true);
+    if (!accountQuotaCanRefresh) return;
+
+    const capacity = new Capacity(ledger, c);
+    if (row.quota_scope_mode === 'account') {
+      if (row.account_quota_status !== 'available' || row.account_quota_plenty !== true) {
+        await capacity.observeQuota(principal, accountId, {
+          status: 'available',
+          source: 'personal://refresh',
+          ttlSeconds: 3600,
+        });
+      }
+      return;
+    }
+
+    // In model scope, never call observeQuota (which invalidates all other model observations).
+    if (row.account_quota_status !== 'available' || row.account_quota_plenty !== true) {
+      await c.query(
+        `INSERT INTO ac_quota_observations(account_id, status, source, observed_at, expires_at)
+         VALUES ($1, 'available', 'personal://refresh', clock_timestamp(), clock_timestamp() + interval '1 hour')
+         ON CONFLICT(account_id) DO UPDATE
+           SET status = excluded.status,
+               source = excluded.source,
+               observed_at = excluded.observed_at,
+               expires_at = excluded.expires_at`,
+        [accountId],
+      );
+    }
+
+    if (row.model_quota_status === null) return;
+    const modelQuotaNeedsRefresh =
+      (row.model_quota_status === 'available' && row.model_quota_plenty !== true)
+      || (RECOVERABLE_QUOTA_STATUSES.has(row.model_quota_status) && row.model_quota_fresh !== true);
+    if (modelQuotaNeedsRefresh) {
+      await capacity.observeModelQuota(principal, accountId, model, {
+        status: 'available',
+        source: 'personal://refresh',
+        ttlSeconds: 3600,
+      });
+    }
   });
 }
 
@@ -388,10 +445,16 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
           const effectiveProvider = provider !== 'unknown' ? provider : (reservations.lastAttemptProvider() ?? 'unknown');
           if (effectiveProvider !== 'claude') return false;
           const claudeAccounts = supportedSeats.get('claude');
-          const targetAccounts = accountId
-            ? (claudeAccounts?.has(accountId) ? [accountId] : [])
-            : [...(claudeAccounts ?? [])];
-          if (!targetAccounts.length) return false;
+          if (!claudeAccounts?.size) return false;
+          let targetAccountId = accountId;
+          if (!targetAccountId) {
+            const plan = await loadSpecialistExamPlan(input.ledger.pool, input.authority.contextId);
+            targetAccountId = plan.primaryClaudeAccountId;
+          }
+          if (!targetAccountId || !claudeAccounts.has(targetAccountId)) return false;
+          const targetModel = purpose === 'examiner'
+            ? moduleExaminerRequirement(module).model
+            : 'claude-opus-5-5';
           input.onQuotaWait?.({purpose, file, delayMs: CLAUDE_QUOTA_RETRY_INTERVAL_MS});
           try {
             await clock.sleep(CLAUDE_QUOTA_RETRY_INTERVAL_MS, activeSignal);
@@ -400,7 +463,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
             throw error;
           }
           if (activeSignal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
-          await refreshClaudeExamQuotaForRetry(input.ledger, targetAccounts);
+          await refreshClaudeExamQuotaForRetry(input.ledger, input.principal, targetAccountId, targetModel);
           if (activeSignal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
           return true;
         }
