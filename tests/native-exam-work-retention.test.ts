@@ -135,7 +135,8 @@ test('finished passive exam work copies are released only with the full proof, o
   assert.equal(await exists(interrupted.work),false);
   assert.equal(await audits(interrupted.jobId),0);
   assert.equal((await run(interrupted,true)).state,'absent');
-  assert.equal(await audits(interrupted.jobId),1);
+  assert.equal(await audits(interrupted.jobId),0);
+  assert.equal((await db.pool.query("SELECT 1 FROM ac_audit WHERE kind='native.exam_work_absent_after_plan' AND detail->>'jobId'=$1",[interrupted.jobId])).rowCount,1);
   // 1. Inspection changes nothing; apply frees only work, leaves the journal and siblings alone, and is repeatable.
   const a=await plant(),neighbour=await plant();
   const before=await journal();

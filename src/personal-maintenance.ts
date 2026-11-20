@@ -81,6 +81,7 @@ function parseWorkRetirementArgs(installationPath:string,rest:readonly string[])
  }
  // Exactly one scope: one project, or an explicit list of ids. Never the whole installation.
  if(Boolean(selection.projectId)===Boolean(selection.jobIds)||(!selection.projectId&&selection.after)||(selection.jobIds&&(selection.jobIds.length>MAX_WORK_BATCH||seen.has('--limite'))))throw new Refusal('MAINTENANCE_USAGE');
+ if(selection.jobIds)selection.limit=selection.jobIds.length;
  return {installationPath,releaseExamWork:selection};
 }
 
@@ -200,7 +201,7 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
  if(typeof selection.apply!=='boolean'||!Number.isInteger(selection.limit)||selection.limit<1||selection.limit>MAX_WORK_BATCH||
     Boolean(selection.projectId)===Boolean(selection.jobIds)||selection.projectId&&!Id.safeParse(selection.projectId).success||
     selection.after&&(!selection.projectId||!Id.safeParse(selection.after).success)||
-    selection.jobIds&&(!Array.isArray(selection.jobIds)||!selection.jobIds.length||selection.jobIds.length>MAX_WORK_BATCH||selection.jobIds.some(id=>!Id.safeParse(id).success)))
+    selection.jobIds&&(!Array.isArray(selection.jobIds)||!selection.jobIds.length||selection.jobIds.length>Math.min(selection.limit,MAX_WORK_BATCH)||selection.jobIds.some(id=>!Id.safeParse(id).success)))
   throw new Refusal('MAINTENANCE_USAGE');
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')throw new Refusal('MAINTENANCE_NATIVE_REQUIRED',409);
@@ -230,7 +231,7 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
    if(selection.projectId){
     const present=await lstat(join(boot.execution.hostRoot,row.id,'work')).then(()=>true,(e:NodeJS.ErrnoException)=>e.code==='ENOENT'?false:null);
     if(present===null){totals.failed++;lines.push(row.id+': não foi possível inspecionar work.');continue;}
-    if(!present && !(await ledger.pool.query("SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind='native.exam_work_release_planned' AND NOT EXISTS(SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind='native.exam_work_released') LIMIT 1",[row.context_id,row.id])).rowCount){totals.absent++;continue;}
+    if(!present && !(await ledger.pool.query("SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind='native.exam_work_release_planned' AND NOT EXISTS(SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind IN ('native.exam_work_released','native.exam_work_absent_after_plan')) LIMIT 1",[row.context_id,row.id])).rowCount){totals.absent++;continue;}
    }
    const principal=project.owner;
    if(!owners.has(project.id))owners.set(project.id,(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,principal])).rowCount?principal:undefined);
