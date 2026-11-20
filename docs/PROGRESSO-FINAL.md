@@ -1746,3 +1746,19 @@ FIM
 - 20/11/2026 07:25 UTC — A CI do NexoISP exige que globals.css continue byte a byte igual à referência oficial. O ajuste aprovado pelo Sol passou para uma folha própria, carregada pelo ponto de entrada da aplicação. O candidato conjunto passou no Prettier, no TypeScript, nos 258 testes e no build. No E2E, a versão instalada de Recharts confirmou que os rótulos do eixo são irmãos do eixo SVG; o teste do painel está sendo corrigido para alcançar esses nós reais.
 - 20/11/2026 07:27 UTC — Ordem painel-r4 em claude-sonnet-5-5 encerrou com código 0.
 - 20/11/2026 07:28 UTC — A suíte de 258 testes passou com a folha de contraste da aplicação e a referência v0 intacta. Na homologação recompilada com essa folha, o axe confirmou zero violações de contraste no tema claro e no tema escuro realmente ativo a 1440 px.
+- 20/11/2026 07:30 UTC — Ordem anatel-r5 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:30 UTC — Revisão independente revisao-painel-dom concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:31 UTC — Iniciada ordem painel-r5 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:32 UTC — Revisão independente revisao-anatel-catalogo concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:33 UTC — Ordem painel-r5 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:34 UTC — Iniciada ordem anatel-r6 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:35 UTC — Correção retencao atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 07:36 UTC — Revisão independente revisao-painel-calibrado concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:37 UTC — Cumprida a ordem de disco de 7b208f82 no acervo OCI temporário. Removidos 54 índices superados e 714 blobs exclusivos (6.301.014.114 bytes). Os 18 índices protegidos e todas as suas camadas continuam presentes; a conferência considerou os digests da instalação, a história de aceitação, os relatórios e o Docker. A fila de novos exames passou a verificar o teto de 97%.
+- 20/11/2026 07:37 UTC — COTA — Claude informou limite na execução fila-nexo-qa. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 07:37 UTC — COTA — Claude informou limite na execução fila-nexo-arquitetura. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 07:37 UTC — Iniciada ordem painel-r6 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:39 UTC — Ordem anatel-r6 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:41 UTC — Ordem painel-r6 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:41 UTC — Concluída a cópia prévia à manutenção de work/ pelo personal:backup. O personal:restore-check validou o backup; a pasta native segue a política de exclusão do produto.
+- 20/11/2026 07:42 UTC — A rodada 3 passou nas duas suítes de navegador autenticado. No candidato seguinte, a correção do catálogo da Anatel passou nos 17 testes do componente, nos 278 testes de frontend, no TypeScript, no formatador e no build. Atualizada a tabela de cobertura no relatório, inclusive a pausa do Claude após 223 jobs de QA e 186 de arquitetura.

@@ -2,16 +2,17 @@
 
 Ordem do titular em `1e954d30`. A revisão começou pela qualificação do examinador no IspAgent.
 
-## Situação em 20/11/2026 às 06:41 UTC
+## Situação em 20/11/2026 às 07:41 UTC
 
 A política de design do IspAgent está na revisão 12. O examinador, a crítica visual e a criação reservam Opus 5.5 em esforço `high` na Enok Max. A confirmação independente de achados reserva Opus 5.5 `medium`. O diário do NexoISP já registra inferência real nas etapas de exame, crítica e confirmação. A criação foi comprovada por reserva na instalação e por teste de lançamento assinado. O backup, os testes e os recibos estão detalhados abaixo.
 
 | Módulo no NexoISP | Evidência disponível | Achados e cobertura |
 |---|---|---|
-| 1. Segurança | Coleta estática concluída. A rodada `4957ad10` segue em exame; às 06:41 UTC, havia 79 chamadas concluídas do examinador. | A publicação ainda está pendente. |
-| 2. QA | A primeira rodada publicou 45 arquivos julgados. A releitura das 47 respostas recebidas aceitou todas com o leitor corrigido. | Dez prováveis: quatro médios, dois baixos e quatro informativos. A rodada deixou 1.948 arquivos com falha de infraestrutura. |
-| 3 a 9. Arquitetura, dependências, banco, prontidão, desempenho, documentação e conformidade | Aguardam execução no NexoISP. A prova de arquitetura descrita abaixo usou o IspAgent. | Cobertura e gravidades pendentes. |
-| 10. Design | O navegador autenticado visitou 49 rotas, com 42 destinos únicos. O lote com seis páginas gerou 36 PNGs antes de atingir o limite de tempo do coletor. O primeiro par passou da coleta ao examinador. | Notas e achados do par aguardam publicação. |
+| 1. Segurança | A rodada estática `4957ad10` foi encerrada entre reservas por espaço em disco. | O diário assinado comprova o mapa e 113 de 189 fatias. Falta publicar o relatório. |
+| 2. QA | A primeira rodada publicou 45 arquivos julgados. O leitor corrigido aceitou as 47 respostas recebidas. A nova rodada chegou a 223 jobs e aguarda cota do examinador. | A primeira publicação registrou dez prováveis (quatro médios, dois baixos e quatro informativos) e 1.948 arquivos com falha de infraestrutura. |
+| 3. Arquitetura | A rodada no NexoISP chegou a 186 jobs e aguarda cota do examinador. | O total de arquivos julgados será conferido na publicação. A prova anterior no IspAgent está descrita abaixo. |
+| 4 a 9. Dependências, banco, prontidão, desempenho, documentação e conformidade | Na fila do NexoISP. | Sem resultado publicado. |
+| 10. Design | A navegação autenticada identificou 42 destinos. O módulo publicou o painel e a Anatel no relatório `985f5433`, com 12 capturas. | 244 ocorrências confirmadas, cinco prováveis e cinco descartadas. As 180 ocorrências altas foram revisadas por Opus medium. A correção de contraste foi integrada e medida em navegador nos dois temas. |
 
 Em separado, a CI confirmou uma falha de formatação de gravidade baixa. A correção está no commit local `f4b1eca7` do ramo `agent-control/revisao-20261119`. A entrega do ramo remoto aguarda o fechamento da revisão.
 
@@ -126,3 +127,9 @@ O ramo local de entrega recebeu `4b33170`, revisado pelo Sol. O CSS corrigido el
 No tema escuro, o navegador confirmou que a aplicação ativou o tema e leu o token `#a1a1aa`. As duas versões tiveram zero violações dessa regra nas três larguras. Isso explica a repetição das medidas claras nas capturas escuras do retrato estático. A homologação voltou ao build corrigido depois da comparação.
 
 A integração da suíte completa detectou que `apps/web/src/globals.css` deve ser idêntico à referência oficial v0. O commit local `8320946` preserva essa comparação e aplica os dois tokens por uma folha da aplicação importada pelo ponto de entrada. O candidato conjunto passou no Prettier, no TypeScript, nos 258 testes de frontend e no build. Com a folha definitiva, o axe no navegador autenticado voltou a registrar zero violações de contraste em ambas as páginas a 1440 px nos dois temas.
+
+### Rodada de homologação das telas
+
+O candidato conjunto com as mudanças do painel e da Anatel passou no formatador, no TypeScript, em 273 testes de frontend e nas duas suítes de navegação da homologação. O parecer independente identificou uma janela em que o catálogo em cache podia liberar o CSV antes da revalidação. A revisão `a70910b` vincula o catálogo e o relatório à montagem atual. O candidato atualizado passou nos 17 testes do componente, nos 278 testes de frontend, no TypeScript, no formatador e na compilação Vite. O aceite dessas mudanças continua em andamento.
+
+Às 07h37 UTC, QA e arquitetura receberam limite do Claude. As duas CLIs conservam a unidade pendente para a tentativa a cada 15 minutos. Na mesma rodada, a limpeza autorizada do cache OCI removeu 6.301.014.114 bytes de índices e camadas superados. As camadas dos 18 índices protegidos continuam disponíveis. A retirada de `work/` dos jobs concluídos e reconciliados está em implementação pelo caminho de manutenção do produto.
