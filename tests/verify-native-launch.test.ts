@@ -4,7 +4,12 @@ import {randomUUID} from 'node:crypto';
 import {Refusal, type Authority} from '../src/contracts.ts';
 import type {Ledger} from '../src/ledger.ts';
 import {readonlySecurityExam} from '../src/native-execution-supervisor.ts';
-import {createCapacityNativeWorker, createRecheckNativeWorker, type SecurityExamSupervisor} from '../src/verify-native-launch.ts';
+import {
+  createCapacityNativeWorker,
+  createRecheckNativeWorker,
+  readNativeExamSession,
+  type SecurityExamSupervisor,
+} from '../src/verify-native-launch.ts';
 import type {VerifyWorkerCall} from '../src/verify-types.ts';
 
 const base = 'a'.repeat(40);
@@ -399,19 +404,46 @@ test('createRecheckNativeWorker repassa avoidProviders e devolve o provedor da r
   assert.match((asked as {reviewerSessionId?: string}).reviewerSessionId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });
 
-test('createCapacityNativeWorker transporta examSessionId distinto em cada execução', async () => {
-  const askedFirst = call();
-  const askedSecond = call({accountId: askedFirst.accountId});
+test('createCapacityNativeWorker aceita entrada congelada sem mutar e vincula sessão apenas à conclusão do supervisor', async () => {
+  const askedFirst = Object.freeze(call());
+  const askedSecond = Object.freeze(call({accountId: askedFirst.accountId}));
+  const askedFailed = Object.freeze(call({accountId: askedFirst.accountId}));
+  const askedMismatchedReceipt = Object.freeze(call({accountId: askedFirst.accountId}));
+  const askedMismatchedSession = Object.freeze(call({accountId: askedFirst.accountId}));
+  const askedNotRetired = Object.freeze(call({accountId: askedFirst.accountId}));
   const startedSessions: string[] = [];
+  let mode: 'ok' | 'failed' | 'bad-receipt' | 'bad-session' | 'retire-throws' = 'ok';
   const chosen = supervisor(askedFirst.accountId, {
     async start(_principal, _authority, request) {
       startedSessions.push(request.sessionId);
       return {state: 'running'};
     },
-    async reconcile() {
-      return {state: 'completed', output: 'ok'};
+    async reconcile(_principal, _authority, request) {
+      if (mode === 'failed') {
+        return {state: 'failed', output: JSON.stringify({sessionId: randomUUID()})};
+      }
+      if (mode === 'bad-receipt') {
+        return {
+          state: 'completed',
+          output: JSON.stringify({sessionId: request.sessionId}),
+          receipt: {payload: {executionStarted: false, sessionId: request.sessionId}},
+        };
+      }
+      if (mode === 'bad-session') {
+        return {
+          state: 'completed',
+          output: 'ok',
+          sessionId: randomUUID(),
+        };
+      }
+      return {
+        state: 'completed',
+        output: 'ok',
+        receipt: {payload: {jobId: request.jobId, intentId: request.intentId, grantId: request.grantId, sessionId: request.sessionId}},
+      };
     },
     async retireTerminal() {
+      if (mode === 'retire-throws') throw new Error('retire-failed');
       return {state: 'removed'};
     },
   });
@@ -423,12 +455,34 @@ test('createCapacityNativeWorker transporta examSessionId distinto em cada execu
     base,
     wait: async () => {},
   });
+
   await worker.run(askedFirst);
   await worker.run(askedSecond);
-  const firstSession = (askedFirst as {examSessionId?: string}).examSessionId;
-  const secondSession = (askedSecond as {examSessionId?: string}).examSessionId;
+  assert.equal('examSessionId' in askedFirst, false);
+  assert.equal('examSessionId' in askedSecond, false);
+  assert.equal(Object.isFrozen(askedFirst), true);
+  assert.equal(Object.isFrozen(askedSecond), true);
+
+  const firstSession = readNativeExamSession(worker, askedFirst);
+  const secondSession = readNativeExamSession(worker, askedSecond);
   assert.equal(startedSessions.length, 2);
-  assert.equal(firstSession, startedSessions[0]);
-  assert.equal(secondSession, startedSessions[1]);
-  assert.notEqual(firstSession, secondSession);
+  assert.equal(firstSession?.sessionId, startedSessions[0]);
+  assert.equal(secondSession?.sessionId, startedSessions[1]);
+  assert.notEqual(firstSession?.sessionId, secondSession?.sessionId);
+
+  mode = 'failed';
+  await worker.run(askedFailed);
+  assert.equal(readNativeExamSession(worker, askedFailed), null);
+
+  mode = 'bad-receipt';
+  await worker.run(askedMismatchedReceipt);
+  assert.equal(readNativeExamSession(worker, askedMismatchedReceipt), null);
+
+  mode = 'bad-session';
+  await worker.run(askedMismatchedSession);
+  assert.equal(readNativeExamSession(worker, askedMismatchedSession), null);
+
+  mode = 'retire-throws';
+  await assert.rejects(() => worker.run(askedNotRetired), /retire-failed/);
+  assert.equal(readNativeExamSession(worker, askedNotRetired), null);
 });

@@ -242,7 +242,7 @@ test('CLI personal:verify sem --url usa Sonnet 5.5 high na conta Max, Opus 5.5 m
     const composeRuntime = async () => ({executions: [supervisor]}) as never;
     const resolved = await resolvePersonalVerification([env.installationPath, env.projectId], {composeRuntime});
     try {
-      assert.equal(resolved.input.staticModelPolicy, true);
+      assert.equal('staticModelPolicy' in resolved.input, false);
       let pending = Promise.resolve();
       const begun = await beginPersonalVerification({
         ...resolved.input,
@@ -369,23 +369,33 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
       await resolved.close();
     }
 
-    // 2) Mesma conta sem examSessionId no revisor -> MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE.
-    const authority = await env.db.acquire(env.principal, mainContext, randomUUID(), 'statpol2-session', 60);
-    const makeWorker = (mode: 'missing-reviewer-session' | 'same-session' | 'missing-examiner-session'): VerifyWorker => {
-      const sharedSession = randomUUID();
-      return {
-        async run(call) {
-          if (call.task.startsWith('Pedido de mapa.')) {
-            (call as {examSessionId?: string}).examSessionId = randomUUID();
-            return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
+    // 2) No caminho nativo da mesma conta, falha se sessão do supervisor faltar, repetir ou falhar na conclusão.
+    for (const mode of ['missing-reviewer-session', 'same-session', 'missing-examiner-session', 'failed-reviewer-execution'] as const) {
+      const jobs = new Map<string, {task: string; sessionId: string}>();
+      let examSessionId = '';
+      let confirmLaunched = false;
+      const faultySupervisor = {
+        active: true,
+        supportsAccount(accountId: string) {
+          return accountId === primaryMax;
+        },
+        async start(_principal: string, _authority: unknown, request: {jobId: string; sessionId: string; task: string}) {
+          jobs.set(request.jobId, {task: request.task, sessionId: request.sessionId});
+          if (request.task.startsWith('Pedido de exame.')) examSessionId = request.sessionId;
+          if (request.task.startsWith('Pedido de confirmação.')) confirmLaunched = true;
+          return {state: 'running'};
+        },
+        async reconcile(_principal: string, _authority: unknown, request: {jobId: string}) {
+          const job = jobs.get(request.jobId);
+          const task = job?.task ?? '';
+          if (task.startsWith('Pedido de mapa.')) {
+            return {state: 'completed', output: JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']})};
           }
-          if (call.task.startsWith('Pedido de exame.')) {
-            if (mode !== 'missing-examiner-session') {
-              (call as {examSessionId?: string}).examSessionId = sharedSession;
-            }
-            const items = (call.task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
-            return JSON.stringify({
+          if (task.startsWith('Pedido de exame.')) {
+            const items = (task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+            const output = JSON.stringify({
               kind: 'exame',
+              sessionId: randomUUID(),
               filesRead: ['src/app.ts'],
               checklist: items.length ? items : ['ASVS-5-V1'],
               findings: [{
@@ -400,33 +410,51 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
                 snippet: "return '/admin'",
               }],
             });
+            if (mode === 'missing-examiner-session') {
+              return {state: 'completed', output, receipt: {payload: {executionStarted: false}}};
+            }
+            return {state: 'completed', output};
+          }
+          const confirmOutput = JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'ok', proof: 'src/app.ts'});
+          if (mode === 'missing-reviewer-session') {
+            return {state: 'completed', output: confirmOutput, receipt: {payload: {executionStarted: false}}};
           }
           if (mode === 'same-session') {
-            (call as {examSessionId?: string}).examSessionId = sharedSession;
-          } else if (mode === 'missing-examiner-session') {
-            throw new Error('confirm worker should not launch without examinerSessionId');
+            return {state: 'completed', output: confirmOutput, receipt: {payload: {executionStarted: true, sessionId: examSessionId}}};
           }
-          return JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'ok', proof: 'src/app.ts'});
+          if (mode === 'failed-reviewer-execution') {
+            return {state: 'failed', output: confirmOutput};
+          }
+          return {state: 'completed', output: confirmOutput};
+        },
+        async retireTerminal() {
+          return {state: 'removed'};
         },
       };
-    };
-
-    for (const mode of ['missing-reviewer-session', 'same-session', 'missing-examiner-session'] as const) {
-      await assert.rejects(
-        () => runSecurityVerification({
-          ledger: env.db,
-          principal: env.principal,
-          authority,
-          projectId: env.projectId,
-          repoPath: env.repo,
-          dataDirectory: env.dataDirectory,
-          commit: env.commit,
-          policyRevision: rev,
-          worker: makeWorker(mode),
-          staticModelPolicy: true,
-        }),
-        (error: unknown) => error instanceof Refusal && error.code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
-      );
+      const faultyResolved = await resolvePersonalVerification([env.installationPath, env.projectId], {
+        composeRuntime: async () => ({executions: [faultySupervisor]}) as never,
+      });
+      try {
+        let pending = Promise.resolve();
+        await beginPersonalVerification({
+          ...faultyResolved.input,
+          runTools: async () => {},
+          observe(job) {
+            pending = job;
+          },
+        });
+        await assert.rejects(
+          pending,
+          (error: unknown) => error instanceof Refusal && error.code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
+        );
+        if (mode === 'missing-examiner-session') {
+          assert.equal(confirmLaunched, false);
+        } else {
+          assert.equal(confirmLaunched, true);
+        }
+      } finally {
+        await faultyResolved.close();
+      }
     }
     const unreleased = (await env.db.pool.query<{n: number}>(
       `SELECT count(*)::int AS n FROM ac_capacity_grants WHERE context_id=$1 AND state <> 'released'`,
@@ -560,13 +588,13 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
     const mainContext = await env.db.createContext(env.principal, env.projectId, randomUUID());
     await env.capacity.assignPolicy(env.principal, mainContext, rev);
 
-    // 1) CLI com --url não ativa staticModelPolicy e funciona com sonnet medium apenas.
+    // 1) CLI com --url não ativa política estática e funciona com sonnet medium apenas.
     const recUrl = createRecordingSupervisor(env.db, [accA, accB], [{title: 'Alto com url', severity: 'alta'}]);
     const resUrl = await resolvePersonalVerification([env.installationPath, env.projectId, '--url', 'http://127.0.0.1:9/app'], {
       composeRuntime: async () => ({executions: [recUrl.supervisor]}) as never,
     });
     try {
-      assert.equal(resUrl.input.staticModelPolicy, undefined);
+      assert.equal('staticModelPolicy' in resUrl.input, false);
       let pending = Promise.resolve();
       await beginPersonalVerification({
         ...resUrl.input,
@@ -574,15 +602,18 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
         observe(job) { pending = job; },
       });
       await pending;
+      assert.ok(recUrl.launches.some(l => l.phase === 'exam'));
+      assert.ok(recUrl.launches.some(l => l.phase === 'confirm'));
       assert.ok(recUrl.launches.every(l => l.model === 'claude-sonnet-5-5' && l.effort === 'medium'));
     } finally {
       await resUrl.close();
     }
 
-    // 2) beginPersonalVerification direto (sem url e sem staticModelPolicy) preserva comportamento anterior.
+    // 2) beginPersonalVerification direto (mesmo tentando forjar staticModelPolicy: true) preserva comportamento anterior.
     const authDirect = await env.db.acquire(env.principal, mainContext, randomUUID(), 'statpol4-direct', 60);
     const directWorker: VerifyWorker = {
       async run(call) {
+        (call as {examSessionId?: string}).examSessionId = randomUUID();
         if (call.task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']});
         if (call.task.startsWith('Pedido de confirmação.')) {
           return JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'ok', proof: 'src/app.ts'});
@@ -619,33 +650,43 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
       worker: directWorker,
       databasesDirectory: env.databasesDirectory,
       image: `sha256:${'ab'.repeat(32)}`,
-      runTools: async () => {},
-      observe(job) { directPending = job; },
-    });
-    await directPending;
-
-    // 3) Mesmo se staticModelPolicy: true fosse passado junto com url, url desabilita o roteamento estático.
-    let urlOverridePending = Promise.resolve();
-    await beginPersonalVerification({
-      projectId: env.projectId,
-      url: 'http://127.0.0.1:9/app',
-      dataDirectory: env.dataDirectory,
-      repoPath: env.repo,
-      commit: env.commit,
-      ledger: env.db,
-      principal: env.principal,
-      authority: authDirect,
-      policyRevision: rev,
-      worker: directWorker,
-      databasesDirectory: env.databasesDirectory,
-      image: `sha256:${'ab'.repeat(32)}`,
       staticModelPolicy: true,
       runTools: async () => {},
-      observe(job) { urlOverridePending = job; },
-    });
-    await urlOverridePending;
+      observe(job: Promise<void>) { directPending = job; },
+    } as never);
+    await directPending;
 
-    // 4) runSecurityVerification direto (sem staticModelPolicy) preserva comportamento anterior.
+    // 3) Mesmo a partir de resolvePersonalVerification sem --url, acrescentar url ou trocar worker desabilita a política estática.
+    const recWithoutUrl = createRecordingSupervisor(env.db, [accA, accB], [{title: 'Alto url sobreposto', severity: 'alta'}]);
+    const resWithoutUrl = await resolvePersonalVerification([env.installationPath, env.projectId], {
+      composeRuntime: async () => ({executions: [recWithoutUrl.supervisor]}) as never,
+    });
+    try {
+      let urlOverridePending = Promise.resolve();
+      await beginPersonalVerification({
+        ...resWithoutUrl.input,
+        url: 'http://127.0.0.1:9/app',
+        runTools: async () => {},
+        observe(job) { urlOverridePending = job; },
+      });
+      await urlOverridePending;
+      assert.ok(recWithoutUrl.launches.some(l => l.phase === 'exam'));
+      assert.ok(recWithoutUrl.launches.some(l => l.phase === 'confirm'));
+      assert.ok(recWithoutUrl.launches.every(l => l.model === 'claude-sonnet-5-5' && l.effort === 'medium'));
+
+      let swappedWorkerPending = Promise.resolve();
+      await beginPersonalVerification({
+        ...resWithoutUrl.input,
+        worker: directWorker,
+        runTools: async () => {},
+        observe(job) { swappedWorkerPending = job; },
+      });
+      await swappedWorkerPending;
+    } finally {
+      await resWithoutUrl.close();
+    }
+
+    // 4) runSecurityVerification direto (mesmo tentando staticModelPolicy: true) preserva comportamento anterior.
     const result = await runSecurityVerification({
       ledger: env.db,
       principal: env.principal,
@@ -656,7 +697,8 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
       commit: env.commit,
       policyRevision: rev,
       worker: directWorker,
-    });
+      staticModelPolicy: true,
+    } as never);
     assert.equal(result.achados.length, 1);
     assert.equal(result.achados[0]?.verifier?.model, 'claude-sonnet-5-5');
   } finally {

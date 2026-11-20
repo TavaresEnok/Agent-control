@@ -19,12 +19,39 @@ function sleep(ms: number): Promise<void> {
 
 export type SecurityExamRequest = ReturnType<typeof buildReadonlyExamRequest>;
 
+export type NativeCompletedSession = {
+  sessionId: string;
+  grantId: string;
+  accountId: string;
+  profileId: string;
+  intentId: string;
+};
+
+const nativeWorkerCompletedSessions = new WeakMap<VerifyWorker, WeakMap<object, NativeCompletedSession>>();
+
+export function isCapacityNativeWorker(worker: VerifyWorker): boolean {
+  return nativeWorkerCompletedSessions.has(worker);
+}
+
+export function readNativeExamSession(worker: VerifyWorker, call: object): NativeCompletedSession | null {
+  return nativeWorkerCompletedSessions.get(worker)?.get(call) ?? null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /** Structural view of NativeExecutionSupervisor. The daemon is not imported here. */
 export type SecurityExamSupervisor = {
   active: boolean;
   supportsAccount(accountId: string): boolean;
   start(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{state: string}>;
-  reconcile(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{state: string; output?: string}>;
+  reconcile(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{
+    state: string;
+    output?: string;
+    sessionId?: unknown;
+    receipt?: unknown;
+  }>;
   retireTerminal(principal: string, authority: Authority, jobId: string): Promise<unknown>;
   stop?(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{state: string}>;
 };
@@ -42,7 +69,7 @@ async function observeExam(
   authority: Authority,
   request: SecurityExamRequest,
   wait: Wait,
-): Promise<{state: string; output?: string}> {
+): Promise<{state: string; output?: string; sessionId?: unknown; receipt?: unknown}> {
   await supervisor.start(principal, authority, request);
   for (let attempt = 0; attempt < EXAM_ATTEMPTS; attempt += 1) {
     const outcome = await supervisor.reconcile(principal, authority, request);
@@ -55,6 +82,35 @@ async function observeExam(
 
 function examTimeout(error: unknown): boolean {
   return error instanceof Error && error.message === 'VERIFY_EXAM_TIMEOUT';
+}
+
+function matchesSupervisorReceipt(receipt: unknown, request: SecurityExamRequest): boolean {
+  if (!isRecord(receipt) || !isRecord(receipt.payload)) return false;
+  const payload = receipt.payload;
+  if (payload.executionStarted === false) return false;
+  if (typeof payload.sessionId !== 'string' || payload.sessionId !== request.sessionId) return false;
+  if ('jobId' in payload && payload.jobId !== undefined && payload.jobId !== request.jobId) return false;
+  if ('intentId' in payload && payload.intentId !== undefined && payload.intentId !== request.intentId) return false;
+  if ('grantId' in payload && payload.grantId !== undefined && payload.grantId !== request.grantId) return false;
+  return true;
+}
+
+function verifiedCompletedSession(
+  outcome: {state: string; output?: string; sessionId?: unknown; receipt?: unknown},
+  retired: unknown,
+  request: SecurityExamRequest,
+): string | null {
+  if (outcome.state !== 'completed') return null;
+  if ('sessionId' in outcome && outcome.sessionId !== undefined) {
+    if (typeof outcome.sessionId !== 'string' || outcome.sessionId !== request.sessionId) return null;
+  }
+  if ('receipt' in outcome && outcome.receipt !== undefined) {
+    if (!matchesSupervisorReceipt(outcome.receipt, request)) return null;
+  }
+  if (isRecord(retired) && 'state' in retired && retired.state !== undefined && retired.state !== 'removed') {
+    return null;
+  }
+  return request.sessionId;
 }
 
 async function confirmExamExit(
@@ -93,8 +149,8 @@ async function finishExam(
   releaseGrant: ReleaseGrant | undefined,
   grantId: string,
   wait: Wait,
-): Promise<string> {
-  let outcome: {state: string; output?: string};
+): Promise<{output: string; verifiedSessionId: string | null}> {
+  let outcome: {state: string; output?: string; sessionId?: unknown; receipt?: unknown};
   try {
     outcome = await observeExam(supervisor, principal, authority, request, wait);
   } catch (error) {
@@ -112,8 +168,11 @@ async function finishExam(
     if (releaseGrant) await releaseGrant(grantId, 'exited');
     throw error;
   }
-  await supervisor.retireTerminal(principal, authority, request.jobId);
-  return outcome.output ?? '';
+  const retired = await supervisor.retireTerminal(principal, authority, request.jobId);
+  return {
+    output: outcome.output ?? '',
+    verifiedSessionId: verifiedCompletedSession(outcome, retired, request),
+  };
 }
 
 export function createCapacityNativeWorker(input: {
@@ -127,8 +186,9 @@ export function createCapacityNativeWorker(input: {
   wait?: Wait;
 }): VerifyWorker {
   const {supervisors, principal, authority, base, releaseGrant, wait = sleep} = input;
+  const completedByCall = new WeakMap<object, NativeCompletedSession>();
   let active: {supervisor: SecurityExamSupervisor; request: SecurityExamRequest} | null = null;
-  return {
+  const worker: VerifyWorker = {
     async stop() {
       const current = active;
       const stop = current?.supervisor.stop?.bind(current.supervisor);
@@ -136,6 +196,7 @@ export function createCapacityNativeWorker(input: {
       await stop(principal, authority, current.request);
     },
     async run(call) {
+      completedByCall.delete(call);
       const parsed = VerifyWorkerCall.parse(call);
       const supervisor = supervisors.find(item => item.active && item.supportsAccount(parsed.accountId));
       if (!supervisor) throw new Refusal('VERIFY_WORKER_UNAVAILABLE');
@@ -149,15 +210,26 @@ export function createCapacityNativeWorker(input: {
         task: parsed.task,
         artifactId: randomUUID(),
       });
-      (call as {examSessionId?: string}).examSessionId = request.sessionId;
       active = {supervisor, request};
       try {
-        return await finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait);
+        const completed = await finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait);
+        if (completed.verifiedSessionId) {
+          completedByCall.set(call, {
+            sessionId: completed.verifiedSessionId,
+            grantId: parsed.grantId,
+            accountId: parsed.accountId,
+            profileId: parsed.profileId,
+            intentId: parsed.intentId,
+          });
+        }
+        return completed.output;
       } finally {
         if (active?.request === request) active = null;
       }
     },
   };
+  nativeWorkerCompletedSessions.set(worker, completedByCall);
+  return worker;
 }
 
 export type RecheckReserveExclusion = {
@@ -245,7 +317,7 @@ export function createRecheckNativeWorker(input: {
         if (releaseGrant) await releaseGrant(reserved.grantId, 'exited');
         throw error;
       }
-      return finishExam(supervisor, principal, authority, request, releaseGrant, reserved.grantId, wait);
+      return (await finishExam(supervisor, principal, authority, request, releaseGrant, reserved.grantId, wait)).output;
     },
   };
 }

@@ -14,7 +14,11 @@ import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDataba
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
 import {type SecurityExamSupervisor} from './verify-native-launch.ts';
-import {runSecurityVerification, type SecurityVerificationInput} from './verify-runtime.ts';
+import {
+  runResolvedPersonalSecurityVerification,
+  runSecurityVerification,
+  type SecurityVerificationInput,
+} from './verify-runtime.ts';
 import type {VerifyWorker} from './verify-types.ts';
 
 export const HOMOLOGATION_NOTE = 'Homologação declarada e não varrida: a imagem não tem ZAP, Nuclei nem Schemathesis.';
@@ -53,9 +57,17 @@ export type PersonalVerificationInput = {
   accountRoot?: string;
   timeLimitMs?: number;
   networkRunner?: NetworkRunner;
-  /** Enables module 1 static CLI model routing when `personal:verify` runs without `--url`. */
-  staticModelPolicy?: boolean;
 };
+
+type ResolvedStaticPolicyGrant = {
+  nativeWorker: VerifyWorker;
+  projectId: string;
+  contextId: string;
+  commit: string;
+};
+
+const RESOLVED_STATIC_POLICY = Symbol('personalVerifyStaticPolicy');
+const issuedStaticPolicies = new WeakMap<object, ResolvedStaticPolicyGrant>();
 
 export type VerificationProgress = {
   id: string;
@@ -85,7 +97,7 @@ type ReadyVerification = {
   modelCallBudget?: number;
   accountRoot?: string;
   timeLimitMs: number;
-  staticModelPolicy: boolean;
+  staticPolicy?: ResolvedStaticPolicyGrant;
 };
 
 type ProgressState = {
@@ -134,8 +146,25 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
     timeLimitMs: chosenTimeLimit(input.timeLimitMs),
-    staticModelPolicy: input.url === undefined && input.staticModelPolicy === true,
+    staticPolicy: resolveStaticPolicyGrant(input),
   };
+}
+
+function resolveStaticPolicyGrant(input: PersonalVerificationInput): ResolvedStaticPolicyGrant | undefined {
+  if (input.url !== undefined || !input.worker || !input.authority || !input.commit) return undefined;
+  const rawToken = (input as Record<PropertyKey, unknown>)[RESOLVED_STATIC_POLICY];
+  if (typeof rawToken !== 'object' || rawToken === null) return undefined;
+  const grant = issuedStaticPolicies.get(rawToken);
+  if (!grant) return undefined;
+  if (
+    grant.nativeWorker !== input.worker
+    || grant.projectId !== input.projectId
+    || grant.contextId !== input.authority.contextId
+    || grant.commit !== input.commit
+  ) {
+    return undefined;
+  }
+  return grant;
 }
 
 function chosenTimeLimit(value: number | undefined): number {
@@ -483,8 +512,11 @@ async function runJob(input: {
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
-      if (ready.staticModelPolicy && ready.url === undefined) verification.staticModelPolicy = true;
-      await runSecurityVerification(verification);
+      if (ready.staticPolicy && ready.url === undefined) {
+        await runResolvedPersonalSecurityVerification(verification, ready.staticPolicy.nativeWorker);
+      } else {
+        await runSecurityVerification(verification);
+      }
       state.status = 'done';
       state.phase = 'done';
       state.modelCalls = modelCalls.count;
@@ -736,6 +768,17 @@ export async function resolvePersonalVerification(
     const image = await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
     if (!databases) throw new Refusal('VERIFY_DB_REQUIRED', 409);
+    let staticPolicyAttachment: Record<symbol, ResolvedStaticPolicyGrant> | undefined;
+    if (parsed.url === undefined) {
+      const grant: ResolvedStaticPolicyGrant = Object.freeze({
+        nativeWorker: worker,
+        projectId: project.id,
+        contextId: exam.contextId,
+        commit,
+      });
+      issuedStaticPolicies.set(grant, grant);
+      staticPolicyAttachment = {[RESOLVED_STATIC_POLICY]: grant};
+    }
     return {
       input: {
         installationPath: resolve(parsed.installationPath),
@@ -753,7 +796,7 @@ export async function resolvePersonalVerification(
         databasesDirectory: databases.directory,
         image,
         modelCalls: {count: 0},
-        ...(parsed.url === undefined ? {staticModelPolicy: true} : {}),
+        ...(staticPolicyAttachment ?? {}),
       },
       close: async () => {
         await ledger.releaseLease(authority!).catch(() => undefined);

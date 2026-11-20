@@ -11,6 +11,7 @@ import {Ledger, type Intent} from './ledger.ts';
 import {readMountedCredentialSecrets} from './native-worker-security.ts';
 import {loadSecurityChecklist} from './verify-checklist.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
+import {isCapacityNativeWorker, readNativeExamSession} from './verify-native-launch.ts';
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
@@ -51,8 +52,10 @@ export type SecurityVerificationInput = {
   /** Accounts folder. Secrets are read only from the reserved account directory, after the seat exists. */
   accountRoot?: string;
   notes?: readonly string[];
-  /** Applies module 1 static CLI model routing (Sonnet 5.5 high on priority Max; Opus 5.5 medium in distinct session for high examiner findings). */
-  staticModelPolicy?: boolean;
+};
+
+type StaticCliPolicy = {
+  nativeWorker: VerifyWorker;
 };
 
 export const DEFAULT_MODEL_CALL_BUDGET = 600;
@@ -93,6 +96,32 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   achados: Achado[];
   coverage: CoverageRow[];
 }> {
+  return runVerificationWithPolicy(input);
+}
+
+/** Internal entry point for `personal:verify` resolved without `--url`, bound to a native capacity worker. */
+export async function runResolvedPersonalSecurityVerification(
+  input: SecurityVerificationInput,
+  nativeWorker: VerifyWorker,
+): Promise<{
+  runId: string;
+  directory: string;
+  achados: Achado[];
+  coverage: CoverageRow[];
+}> {
+  if (!isCapacityNativeWorker(nativeWorker)) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
+  return runVerificationWithPolicy(input, {nativeWorker});
+}
+
+async function runVerificationWithPolicy(
+  input: SecurityVerificationInput,
+  staticPolicy?: StaticCliPolicy,
+): Promise<{
+  runId: string;
+  directory: string;
+  achados: Achado[];
+  coverage: CoverageRow[];
+}> {
   const modelCallBudget = resolveModelCallBudget(input.modelCallBudget);
   await assertPersonalActivation(input.ledger);
   assertReportOutsideRepo(input.repoPath, input.dataDirectory);
@@ -111,7 +140,7 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   });
   try {
     await insertRun(input, intent, runId);
-    return await examine(input, intent, runId, createdAt, reserved.directoryName, modelCallBudget);
+    return await examine(input, intent, runId, createdAt, reserved.directoryName, modelCallBudget, staticPolicy);
   } catch (error) {
     try { await markFailed(input.ledger, runId); } catch { /* the original failure stays visible */ }
     try { await finishExamIntent(input.ledger, {intentId: intent.id, contextId: input.authority.contextId}, 'failed'); } catch { /* the original failure stays visible */ }
@@ -147,7 +176,15 @@ async function markFailed(ledger: Ledger, runId: string) {
   );
 }
 
-async function examine(input: SecurityVerificationInput, intent: Intent, runId: string, createdAt: Date, directoryName: string, modelCallBudget: number) {
+async function examine(
+  input: SecurityVerificationInput,
+  intent: Intent,
+  runId: string,
+  createdAt: Date,
+  directoryName: string,
+  modelCallBudget: number,
+  staticPolicy?: StaticCliPolicy,
+) {
   const capacity = new Capacity(input.ledger);
   const trackedCalls = input.modelCalls ?? {count: 0};
   const notes: string[] = [];
@@ -171,7 +208,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     notes.push('Nenhum arquivo para examinar.');
   } else {
     if (input.onPhase) await input.onPhase('mapa');
-    const mapped = await reserveAndRun(input, capacity, intent.id, 'examiner', mapTask(files), 'verify-map', modelCallBudget, trackedCalls);
+    const mapped = await reserveAndRun(input, capacity, intent.id, 'examiner', mapTask(files), 'verify-map', modelCallBudget, trackedCalls, undefined, undefined, undefined, staticPolicy);
     mapSeat = mapped.seat;
     mapAccountId = mapped.seat.accountId;
     mapProfileId = mapped.seat.profileId;
@@ -185,7 +222,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     if (input.onPhase) await input.onPhase('exame');
     for (const slice of slices) {
       if (!slice.files.length) continue;
-      const examined = await reserveAndRun(input, capacity, intent.id, 'examiner', examTask(slice, mapMarkdown, rawFindings, history), 'verify-exam', modelCallBudget, trackedCalls);
+      const examined = await reserveAndRun(input, capacity, intent.id, 'examiner', examTask(slice, mapMarkdown, rawFindings, history), 'verify-exam', modelCallBudget, trackedCalls, undefined, undefined, undefined, staticPolicy);
       const exam = ExamResult.safeParse(coerceExamResult(parseJson(examined.output)));
       exams.push(exam.success ? exam.data : {slice: slice.id, invalid: true});
       const read = new Set(exam.success ? exam.data.filesRead : []);
@@ -265,7 +302,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     const avoid = finding.examinerAccountId ?? mapAccountId;
     const avoidProfile = finding.examinerProfileId ?? mapProfileId;
     const highExaminerFinding = Boolean(
-      input.staticModelPolicy && finding.examinerProvider !== null && finding.severity === 'alta',
+      staticPolicy && finding.examinerProvider !== null && finding.severity === 'alta',
     );
     const content = await readRepoText(input.repoPath, finding.file, finding.line, allowedFiles);
     const reviewed = await reserveAndRun(
@@ -287,6 +324,7 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
             examinerSessionId: finding.examinerSessionId,
           }
         : undefined,
+      staticPolicy,
     );
     let confirm;
     try {
@@ -386,12 +424,13 @@ async function reserveAndRun(
   avoidAccounts?: readonly string[],
   avoidProfiles?: readonly string[],
   highReview?: HighReviewCheck,
+  staticPolicy?: StaticCliPolicy,
 ): Promise<{seat: Seat; output: string; sessionId: string | null}> {
   if (trackedCalls.count >= modelCallBudget) throw new Error('VERIFY_MODEL_BUDGET');
   const releaseGrant = (grantId: string) =>
     capacity.transition(input.principal, grantId, input.authority, 'released', {processId, state: 'not_started'});
-  const staticExaminer = Boolean(input.staticModelPolicy && purpose === 'examiner');
-  const staticHighReviewer = Boolean(input.staticModelPolicy && purpose === 'reviewer' && highReview);
+  const staticExaminer = Boolean(staticPolicy && purpose === 'examiner');
+  const staticHighReviewer = Boolean(staticPolicy && purpose === 'reviewer' && highReview);
   const seat = await reserveSpecialistExamSeat({
     capacity,
     ledger: input.ledger,
@@ -451,12 +490,18 @@ async function reserveAndRun(
     });
     trackedCalls.count += 1;
     const output = redactText(await input.worker.run(call), secrets);
-    const sessionId = nonEmptySessionId((call as {examSessionId?: unknown}).examSessionId);
+    const completed = staticPolicy ? readNativeExamSession(staticPolicy.nativeWorker, call) : null;
+    const sessionId = completed
+      && completed.grantId === seat.grantId
+      && completed.accountId === seat.accountId
+      && completed.profileId === seat.profileId
+      && completed.intentId === intentId
+      ? nonEmptySessionId(completed.sessionId)
+      : null;
     if (
       staticHighReviewer
       && highReview
-      && seat.accountId === highReview.examinerAccountId
-      && (!highReview.examinerSessionId || !sessionId || sessionId === highReview.examinerSessionId)
+      && (!sessionId || (seat.accountId === highReview.examinerAccountId && (!highReview.examinerSessionId || sessionId === highReview.examinerSessionId)))
     ) {
       throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE', 409);
     }
