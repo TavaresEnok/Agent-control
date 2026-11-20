@@ -56,6 +56,7 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
   preferredProfileId: Id.optional(),
   /** Only this profile in the published chain may fund the request. */
   requiredProfileId: Id.optional(),
+  designPurpose: z.enum(['examiner','visual','create','reviewer']).optional(),
   /** Exam-reviewer-only contract: prepared specialist reviewer profiles prioritized over examiner-account avoidance while still preferring non-avoided accounts first. */
   examReviewer: z.object({
     preparedProfiles: z.array(Id).max(20),
@@ -500,6 +501,7 @@ export class Capacity {
         configRevision: config.revision, chain: emergency ? 'emergency' : 'regular', position: pos + 1,
         reason: selectionReason, preferredProfileId: preferred ?? null,
       };
+      if (request.designPurpose) selection.designPurpose = request.designPurpose;
       if (skippedCandidates.length === pos) selection.skippedCandidates = skippedCandidates;
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants
         (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,selection)

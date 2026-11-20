@@ -361,7 +361,9 @@ export class NativeExecutionSupervisor{
    // Commit the uncertainty before files, Docker networks or processes exist.
    await this.ledger.tx(async c=>{const current=await this.identity(c,principal,authority,input);assertModelAllowed(current.model);
     if(personal && readonlyDesignExam(examWorkflowEarly,input.role)){
-     const purpose=input.task.startsWith('Pedido de confirmação.')?'reviewer':'examiner';
+     const purpose=designCreate?'create':input.task.startsWith('Pedido de confirmação.')?'reviewer':
+      input.task.startsWith('Pedido de crítica visual.')||input.task.startsWith('Pedido de crítica visual do revisor.')?'visual':'examiner';
+     if(current.selection?.designPurpose!==purpose)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
      const profile=await requiredDesignProfile(c,authority.contextId,purpose);
      if(this.config.provider!=='claude'||current.profile_id!==profile.id||current.account_id!==profile.account||
         current.model!==profile.model||current.effort!==profile.effort)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');

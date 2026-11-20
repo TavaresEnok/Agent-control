@@ -40,7 +40,7 @@ export async function reserveDesignModel(
   const profile = await requiredDesignProfile(ledger.pool, authority.contextId, purpose);
   const seat = await capacity.reserveWithSeat(principal, {
     attemptId: randomUUID(), intentId, contextId: authority.contextId, role: 'specialist',
-    provider: 'claude', requiredProfileId: profile.id, allowedAccounts: [profile.account],
+    provider: 'claude', requiredProfileId: profile.id, designPurpose: purpose, allowedAccounts: [profile.account],
   }, authority);
   if (seat.grant.profile_id !== profile.id || seat.grant.account_id !== profile.account || seat.model !== profile.model || seat.provider !== 'claude') {
     await capacity.transition(principal, seat.grant.id, authority, 'released', {processId: seat.grant.id, state: 'not_started'});
