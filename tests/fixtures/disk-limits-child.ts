@@ -1,7 +1,8 @@
 // Subprocess of tests/personal-disk-limits-entrypoints.test.ts. It runs with tests/fixtures/statfs-rules.mjs preloaded,
 // so every disk measurement is a fake table and no volume is filled. It drives the real entrypoints and prints one RESULT line.
 import {randomUUID} from 'node:crypto';
-import {mkdir, mkdtemp, readdir, rm} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {mkdir, mkdtemp, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Capacity} from '../../src/capacity.ts';
@@ -29,6 +30,11 @@ const planningHost = join(root, 'planejamento'), planningAccounts = join(root, '
 const executionHost = join(root, 'execucao'), executionAccounts = join(root, 'contas-execucao'), homes = join(root, 'homes');
 const secondRepo = join(root, 'repo-b'), projectsRoot = join(root, 'projetos'), dockerStorage = join(root, 'docker-dados');
 for (const dir of [data, repo, databases]) await mkdir(dir, {recursive: true, mode: 0o700});
+// O exame cria o snapshot do commit logo no começo: o repositório precisa ter um commit Git de verdade.
+await writeFile(join(repo, 'a.txt'), 'a\n');
+const gitIn = (...args: string[]) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], {stdio: 'pipe'}).toString().trim();
+gitIn('init', '-q'); gitIn('add', '.'); gitIn('commit', '-q', '-m', 'x');
+const examCommit = gitIn('rev-parse', 'HEAD');
 // A personal installation with two project repositories, one authorized project root and the local Docker daemon, whose storage is on its own volume.
 const installation = {dataDirectory: data, accountHomesDirectory: homes, nativeBootstrap: {
   planning: {hostRoot: planningHost, accountRoot: planningAccounts}, execution: {hostRoot: executionHost, accountRoot: executionAccounts}},
@@ -85,7 +91,7 @@ try {
     let job: Promise<void> | undefined;
     let begun = 'OK';
     try {
-      await beginPersonalVerification({projectId: project, dataDirectory: data, repoPath: repo, commit: 'ab'.repeat(20), ledger: db, principal, authority, policyRevision: 1,
+      await beginPersonalVerification({projectId: project, dataDirectory: data, repoPath: repo, commit: examCommit, ledger: db, principal, authority, policyRevision: 1,
         worker: {async run() { return ''; }}, databasesDirectory: databases, image: 'sha256:' + 'ab'.repeat(32),
         runTools: async () => { throw new Error(SENTINEL); }, observe: running => { job = running; }});
     } catch (error) { begun = error instanceof Refusal ? error.code : 'ERR:' + String((error as Error).message).slice(0, 80); }
