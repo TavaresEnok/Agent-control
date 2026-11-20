@@ -7,7 +7,7 @@ import {basename,dirname,isAbsolute,join,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import pg from 'pg';
 import {z} from 'zod';
-import {releaseRegisteredTemp} from './native-work-retention.ts';
+import {releaseRegisteredDirectory} from './native-work-retention.ts';
 import {Refusal} from './contracts.ts';
 import {privateDirectory,readPrivateFile,type Installation} from './installation.ts';
 import {VERIFICATION_MODULES} from './ledger.ts';
@@ -34,7 +34,7 @@ const token=z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/);
 const ref=z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).refine(value=>!value.includes('..')&&!value.endsWith('/')&&!value.endsWith('.lock')&&!value.includes('//'));
 const absolutePath=z.string().max(4096).refine(value=>isAbsolute(value)&&resolve(value)===value&&!value.includes('\0'));
 const time=z.number().int().safe().nonnegative();
-const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
+const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string().optional(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
 const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(VERIFICATION_MODULES),imageId:z.string().regex(imageIdPattern),registeredAt:time}).strict();
 const Temp=z.object({id:z.uuid(),projectId:z.uuid(),roundId:token,path:absolutePath,dev:z.string().regex(/^\d+$/),ino:z.string().regex(/^\d+$/),nonceDigest:z.string().regex(/^[a-f0-9]{64}$/),registeredAt:time}).strict();
 const Round=z.object({projectId:z.uuid(),roundId:token,endedAt:time}).strict();
@@ -514,7 +514,7 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
    if(!apply){done('temp');lines.push(`${label}: elegível (rodada ${entry.roundId} encerrada há ${proof.facts.idleHours} h).`);continue;}
    const again=await proveTemp(config,registry,entry,{now,processInside,docker,root});
    if(!again.ok){kept('temp',label,'mudou durante a retenção: '+again.reason);continue;}
-   await releaseRegisteredTemp(entry.path,entry);
+   await releaseRegisteredDirectory(entry.path,entry);
    await forget('temp',entry.id,'removed');
    done('temp');lines.push(`${label}: removido.`);
   }catch{kept('temp',label,'falha ao remover; repita depois');}

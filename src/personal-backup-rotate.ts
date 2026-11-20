@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {chmod,lstat,mkdir,open,readdir,readFile,realpath,rename,rm,unlink,writeFile} from 'node:fs/promises';
 import {join,relative,resolve,sep} from 'node:path';
 import {promisify} from 'node:util';
+import {releaseRegisteredDirectory} from './native-work-retention.ts';
 import {Refusal} from './contracts.ts';
 import {loadInstallation} from './installation.ts';
 import {assertPersonalBackupDestination,canonicalPath,runPersonalBackup,runPersonalRestoreCheck,type PersonalBackupOptions,type PersonalRestoreOptions} from './personal-backup.ts';
@@ -169,7 +170,7 @@ async function finishPending(root:string,marker:string,projectId:string,dataDire
  });
  if(entry){
   if(!entry.isDirectory()||String(entry.dev)!==proof.dev||String(entry.ino)!==proof.ino)return false;
-  await rm(condemned,{recursive:true,force:false});
+  await releaseRegisteredDirectory(condemned,{dev:String(entry.dev),ino:String(entry.ino)});
  }
  await unlink(join(root,marker));
  return !!entry;

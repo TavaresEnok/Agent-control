@@ -118,9 +118,9 @@ export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(
 }
 
 
-export async function releaseRegisteredTemp(path:string, expected:{dev:string;ino:string}){
+export async function releaseRegisteredDirectory(path:string, expected:{dev:string;ino:string}){
   const parent=dirname(path),name=basename(path);
-  if(!/^ac-[A-Za-z0-9._-]{1,120}$/.test(name)||parent==='/')throw Error('Invalid temporary directory');
+  if(!/^(?:ac-[A-Za-z0-9._-]{1,120}|\.removendo-[a-f0-9-]{36})$/.test(name)||parent==='/')throw Error('Invalid retention directory');
   const grandparent=dirname(parent);
   const root=grandparent==='/'?await open('/',directoryFlags):await openRoot(grandparent);
   try{

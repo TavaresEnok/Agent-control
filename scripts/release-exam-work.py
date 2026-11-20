@@ -5,6 +5,7 @@ import fcntl
 import signal
 import os
 import platform
+import re
 import stat
 import sys
 
@@ -74,7 +75,7 @@ def main():
     expected_parent, job_name, expected_job, expected_work, *leaf = sys.argv[1:]
     child_name = 'work'
     if leaf:
-        if len(leaf) != 1 or not leaf[0].startswith('ac-') or '/' in leaf[0]:
+        if len(leaf) != 1 or not re.fullmatch(r'(?:ac-[A-Za-z0-9._-]{1,120}|\.removendo-[a-f0-9-]{36})', leaf[0]):
             raise ValueError('Invalid temporary directory')
         child_name = leaf[0]
     checked(libc.prctl(1, signal.SIGKILL, 0, 0, 0))  # PR_SET_PDEATHSIG
