@@ -1586,3 +1586,5 @@ FIM
 - 20/11/2026 04:43 UTC — Revisão independente revisao-sessoes-e-retomada concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 04:44 UTC — Iniciada a CLI personal:arquitetura para arquitetura-ispagent.
 - 20/11/2026 04:45 UTC — Arquitetura viva em `efd584fb-d18c-4dd4-9eea-dfd4d9b39b4d` confirmou o primeiro arquivo julgado. O recibo nativo corresponde a Sonnet 5.5 medium Enok Max. O leitor validou binding, arquivo e checklist. Iniciada a cópia central do NexoISP pela chave do titular.
+- 20/11/2026 04:46 UTC — Revisão independente revisao-perfil-estatico concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:47 UTC — Clone Git central conferido em 993ecf9a, ramo de revisão criado. A origem tem 111 modificações rastreadas e 21 entradas não rastreadas. O IspAgent cadastrou o NexoISP e preparou sua política. A nova prévia foi idempotente e o gateway passou nas oito verificações.

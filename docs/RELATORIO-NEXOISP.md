@@ -32,3 +32,9 @@ A suíte de design executou 247 casos. Na primeira rodada, 246 passaram e o test
 ## Prova viva do examinador de arquitetura
 
 Após o segundo backup verificado, a migração 115 acrescentou os identificadores de reserva e sessão à cobertura. O gateway passou nos oito itens de `inspect`. Em 20/11/2026 04:45 UTC, a execução `efd584fb-d18c-4dd4-9eea-dfd4d9b39b4d` já tinha julgado o primeiro arquivo com Sonnet 5.5 medium na conta Enok Max. O retorno nativo passou pelo mesmo leitor da CLI e coincidiu com o arquivo, a lista de verificação e o identificador do pedido. A contagem é parcial.
+
+## Cópia central e cadastro
+
+O clone central está em `/home/app/projetos-externos/NexoISP`, no ramo `agent-control/revisao-20261119`, aberto sobre `993ecf9a2939d9e29680bbe4d23aeccaca35d274`. O ramo remoto de origem era `main`. Antes de abrir o ramo local, o clone estava limpo e ocupava 61.811.363 bytes. O acesso por chave confirmou 111 modificações rastreadas e 21 entradas não rastreadas no checkout remoto. A revisão usa o commit publicado. As alterações locais do titular continuam no computador de origem. O tamanho legível da origem era 1.891.925.296 bytes. Um diretório de dados de laboratório impediu uma medição completa.
+
+O cadastro por `personal:project -- --add` compartilha a instalação existente. A preparação publicou a política do projeto com Enok Max como conta Claude prioritária. A segunda prévia respondeu `Nada a mudar.`
