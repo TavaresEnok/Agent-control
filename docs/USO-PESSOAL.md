@@ -384,7 +384,7 @@ O backup automático chama o mesmo backup, numa subpasta datada `AAAAMMDD-HHMMSS
 - **Destino explícito** (`... <instalação.json> /caminho/dos/backups`): mantém a regra antiga, as **7** mais novas.
 - Só são contadas e apagadas as subpastas datadas reconhecidas como backup **desta** instalação (uma pasta `agent-control-*` com `MANIFEST.txt` e um `installation.json` com o mesmo `project.id`). Backups de outra instalação, pastas feitas à mão, atalhos e relatórios não são tocados, mesmo na mesma pasta. O backup recém-feito nunca é apagado.
 - Uma pasta condenada é renomeada para `.removendo-<data>` antes de apagar, e restos de uma rodada interrompida são varridos na seguinte. Duas rotações na mesma pasta não rodam juntas (`.rotacao.lock`; a trava de um processo morto é retomada).
-- O backup não inclui `verify-db/` nem os caches do Grype e do Trivy (`.cache/grype`, `.cache/trivy`, `cache/grype`, `cache/trivy`); a manutenção semanal baixa as bases de novo.
+- O backup não inclui `verify-db/` nem os caches do Grype e do Trivy (`.cache/grype`, `.cache/trivy`, `cache/grype`, `cache/trivy`); as bases são baixadas de novo pelo comando manual `personal:maintenance <instalação.json>` (o timer semanal não faz isso; veja a seção de manutenção).
 
 ```bash
 npm run personal:backup-rotate -- <instalação.json> [/caminho/dos/backups]
@@ -411,7 +411,7 @@ A cada 2 minutos a vigia também manda um aviso ao celular quando:
 - o disco passa de 90% (no máximo a cada 6 horas);
 - o login de uma conta está para vencer em até 3 dias ou falta no arquivo de login (no máximo uma vez por dia). O aviso já traz o comando `account-add` para entrar de novo.
 
-A manutenção semanal atualiza as bases de vulnerabilidade em `<dataDirectory>/verify-db/`. Se a busca falha, a base anterior permanece e o aviso diz isso. Em seguida ela apaga o cache de build do Docker com mais de 7 dias e tira da instalação as imagens aposentadas (`retiredImages` e `retiredImageIds`) que nenhum job aberto ainda usa, apagando-as do Docker. Antes de mudar a instalação, ela guarda `installation.json.before-maintenance`. Volumes, contêineres e imagens de outros projetos não são tocados.
+O timer de manutenção chama `personal:maintenance <instalação.json> --retencao-agendada`. Esse caminho executa só a retenção descrita adiante (jobs nativos, worktrees, imagens candidatas e temporários), conforme `retention.automatic`: `off`, `preview` (padrão, só relata) ou `apply`. **Ele não atualiza as bases de vulnerabilidade nem limpa o cache de build do Docker.** Isso faz o comando manual, sem opção: `npm run personal:maintenance -- <instalação.json>`. O comando atualiza as bases em `<dataDirectory>/verify-db/` (se a busca falha, a base anterior permanece e o aviso diz isso) e apaga o cache de build do Docker com mais de 7 dias. **As imagens aposentadas (`retiredImages` e `retiredImageIds`) e seus registros são preservados nos dois caminhos**, porque os pins de outras instalações no mesmo daemon não podem ser comprovados. Agende o comando manual por fora se quiser as bases atualizadas toda semana. Volumes, contêineres e imagens de outros projetos não são tocados. Estado e limitações: [ESTADO.md](ESTADO.md).
 
 ### Retirar uma tentativa de design que não iniciou
 
@@ -488,7 +488,7 @@ A prova mensal restaura o backup mais novo num banco descartável no mesmo servi
 
 ### Retenção de worktrees, imagens candidatas e temporários
 
-O registro e a retenção de worktrees de trabalhadores, imagens candidatas de módulo e pastas `/tmp/ac-*` de rodadas estão em [`RETENCAO-ARTEFATOS.md`](RETENCAO-ARTEFATOS.md), com os comandos `--registrar-worktree`, `--registrar-imagem`, `--registrar-temporario`, `--encerrar-rodada` e `--retencao-artefatos` de `personal:maintenance`. A remoção de imagens está bloqueada enquanto não houver prova dos pins das outras instalações no daemon.
+O registro e a retenção de worktrees de trabalhadores, imagens candidatas de módulo e pastas `/tmp/ac-*` de rodadas estão em [`RETENCAO-ARTEFATOS.md`](RETENCAO-ARTEFATOS.md), com os comandos `--registrar-worktree`, `--registrar-imagem`, `--registrar-temporario`, `--encerrar-rodada` e `--retencao-artefatos` de `personal:maintenance`. Em `apply`, a retenção remove só imagem candidata registrada pelo produto, com pelo menos 24 h, sem pin e sem contêiner, e a opção `economy.imageRetention` ligada (padrão). Imagens aposentadas e imagens fora do registro nunca são removidas. Regras e limites: [economia/RELATORIO-RET-IMAGENS.md](economia/RELATORIO-RET-IMAGENS.md). Em `preview`, nada é removido.
 
 ## Testes do Agent Control
 

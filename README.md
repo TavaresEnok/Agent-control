@@ -27,6 +27,7 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém c�
 
 ## Comece aqui
 
+- [Estado verificável, versão e limitações](docs/ESTADO.md)
 - [Estado e próximo trabalho](docs/STATUS.md)
 - [Incremento de implementação e limites](docs/implementation/I1-I4-IMPLEMENTACAO.md)
 - [Reprodução](docs/operations/LAB.md)
@@ -39,12 +40,12 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém c�
 
 Para uso pessoal de um único titular, com o modo `activation: personal`, o guia de instalação, pareamento, contas e o primeiro pedido está em [docs/USO-PESSOAL.md](docs/USO-PESSOAL.md). Sem esse opt-in o gateway continua administrativo e nenhuma conta real é usada.
 
-Uma mensagem comum do Happier é admitida pelo template sintético fixado. Isso não implementa ainda um gerente de IA que compreende e planeja solicitações arbitrárias. Os processos de teste são determinísticos e não utilizam assinaturas ou APIs de modelos.
+Uma mensagem comum do Happier é admitida pelo template sintético fixado. Nesse caminho administrativo (sem o opt-in pessoal) não há gerente de IA: os processos de teste são determinísticos e não utilizam assinaturas ou APIs de modelos. No modo pessoal o gerente semântico existe e usa as contas do titular; ver [docs/ESTADO.md](docs/ESTADO.md).
 
 
 ### Transporte administrativo do gerente
 
-O gateway aceita configuração privada opcional `managerTransport` para conectar sessões existentes usando o vault, sem ativar inferência/execução. Planejamento recebe a autoridade do registry, e Settings mostra o estado real da conexão. O gerente semântico e os adaptadores de CLIs reais continuam pendentes; não confundir conexão do transporte com desenvolvimento autônomo habilitado. Consulte `docs/implementation/CONFIGURED-MANAGER-TRANSPORT-20261102.md`.
+O gateway aceita configuração privada opcional `managerTransport` para conectar sessões existentes usando o vault, sem ativar inferência/execução. Planejamento recebe a autoridade do registry, e Settings mostra o estado real da conexão. Esse transporte sozinho não liga o gerente semântico nem as CLIs reais. Eles são ativados apenas no modo pessoal (`activation: personal` com bootstrap nativo ativo), pelo gateway; sem esse opt-in nada disso roda. O estado atual, o que foi provado e as limitações por recurso estão em [docs/ESTADO.md](docs/ESTADO.md). Consulte `docs/implementation/CONFIGURED-MANAGER-TRANSPORT-20261102.md`.
 
 ## Bancada focal isolada
 
