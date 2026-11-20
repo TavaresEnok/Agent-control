@@ -419,6 +419,20 @@ A opção é um pedido de retirada, não uma confirmação de que a tentativa er
 
 Se o gateway estiver usando o contexto, pare-o temporariamente, execute o comando e volte a iniciá-lo. Uma falha de inspeção deixa a retirada pendente: corrija a disponibilidade do Docker e repita. Quando isso ocorre durante a preparação do exame, o design informa a pendência e o UUID necessário ao comando acima; o aviso não indica esgotamento de quota. O sucesso informa `failed` para job e intenção e `removed` para a retirada, sem iniciar a tentativa. Depois que uma imagem aposentada sair da instalação, a repetição confere os recibos terminais assinados e, se houver `request.json`, seu conteúdo e vínculos com a prova e o job. A ausência do pedido é permitida; arquivo divergente, inválido, inacessível, link simbólico ou diretório inseguro impedem o sucesso. A indisponibilidade da pasta do spool também não equivale à ausência do pedido. A repetição não recria a imagem nem inicia o job.
 
+### Retirar uma tentativa de exame passivo que nunca iniciou
+
+Quando o Docker perde a resposta da criação do primeiro contêiner de ferramentas de um exame passivo dos módulos 2 a 9, a tentativa fica `uncertain`, a reserva fica `uncertain` e o contêiner fica só `Created`. O reconciliador genérico (`recover`) conserva a reserva com `before_terminal_evidence`, de propósito. O dono configurado na instalação pode retirar somente essa tentativa:
+
+```bash
+npm run personal:maintenance -- <instalação.json> --recuperar-exame-passivo <UUID-do-job>
+```
+
+O comando usa a locação de manutenção do contexto do exame (a mesma de `--abandonar-design`) e o supervisor da instalação com o mesmo digest e a mesma chave do job. Só retira quando todas as provas fecham: intenção e execução do módulo terminadas; as demais tentativas da intenção terminais e sem reserva aberta; job `uncertain`, sem worker, sem launch e sem recibo; pedido privado `request.json` do exame passivo conferindo com o job, a conta e o modelo; nenhum arquivo de launch, saída ou log; nenhum worker; contêiner de ferramentas com imagem, rótulos, usuário, entrypoint, rede e endurecimento do launch, sem montagens, em estado `created`, PID zero e `StartedAt`/`FinishedAt` zerados; rede privada interna do job, com rótulos conferidos e sem endpoints.
+
+O supervisor grava primeiro um diário assinado de retirada, remove o contêiner e a rede (sem `force`), e então grava o recibo assinado do job (`failed`, sem execução), libera a reserva e fecha o diário numa só transação. Se algo falhar no meio, a reserva continua e repetir o comando conclui. Repetir depois de concluído confere o recibo e o diário e não mexe em nada. O comando não cria nem inicia contêiner, não chama modelo, não altera a intenção, as outras tentativas, as permissões nem o launch, e não serve para design, para o módulo 1 (segurança) nem para outros jobs.
+
+Sem prova suficiente, o comando sai com erro, diz o motivo (por exemplo, "o contêiner de ferramentas já foi iniciado ou terminou") e mantém a reserva. Se o gateway estiver usando o contexto, pare-o temporariamente e repita, como na retirada de design.
+
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.

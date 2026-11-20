@@ -1,10 +1,11 @@
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
+import {ModuleExamRecoveryPreserved,type ModuleExamRecoveryReason} from './native-execution-supervisor.ts';
 import {runPersonalMaintenance} from './personal-maintenance.ts';
 
 const messages:Record<string,string>={
- MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--abandonar-design <jobId>]',
+ MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--abandonar-design <jobId> | --recuperar-exame-passivo <jobId>]',
  MAINTENANCE_PERSONAL_REQUIRED:'A manutenção só roda numa instalação pessoal.',
  MAINTENANCE_NATIVE_REQUIRED:'A instalação não tem runtime nativo ativo.',
  MAINTENANCE_EXAM_NOT_FOUND:'Tentativa de design não encontrada nesta instalação.',
@@ -26,7 +27,30 @@ const messages:Record<string,string>={
  DOCKER_NETWORK_UNCERTAIN:'O Docker não confirmou a ausência física da rede da tentativa.',
 };
 
+const preservedReasons:Record<ModuleExamRecoveryReason,string>={
+ supervisor_identity:'a chave ou o executor do supervisor não corresponde ao job',
+ docker_uncertain:'o Docker não respondeu de forma conclusiva',
+ intent_open:'a intenção do exame ou a execução do módulo ainda não terminou',
+ sibling_unresolved:'outra tentativa ou reserva do mesmo exame ainda está aberta',
+ job_state:'o job não está incerto nem retirado por esta recuperação',
+ journal_started:'o diário do job indica que um worker, um launch ou um recibo existe',
+ request_unproven:'o pedido privado do exame passivo não pôde ser comprovado',
+ launch_present:'há arquivo de launch publicado ou pendente',
+ spool_touched:'a pasta de trabalho da tentativa contém saída ou logs',
+ worker_present:'existe contêiner worker desta tentativa',
+ tools_absent:'o contêiner de ferramentas esperado não existe',
+ tools_mismatch:'o contêiner de ferramentas não confere com a identidade do launch',
+ tools_started:'o contêiner de ferramentas já foi iniciado ou terminou',
+ network_unproven:'a rede privada não está registrada ou não existe',
+ network_mismatch:'a rede privada não confere com a identidade do job',
+ network_attached:'a rede privada tem endpoints conectados',
+ grant_state:'a reserva não está aberta',
+ retirement_conflict:'o diário de retirada está em conflito com o job',
+ residual_resources:'restou algum recurso físico da tentativa',
+};
+
 export function maintenanceCliFailureText(error:unknown):string{
+ if(error instanceof ModuleExamRecoveryPreserved)return `A reserva da tentativa foi mantida: ${preservedReasons[error.reason]}.${error.removed.length?` Contêineres já removidos: ${error.removed.join(', ')}.`:''} Nada foi iniciado.`;
  const code=error instanceof Refusal?error.code:'';
  return messages[code]??'A manutenção falhou.';
 }
