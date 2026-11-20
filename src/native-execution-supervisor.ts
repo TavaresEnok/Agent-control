@@ -1,5 +1,5 @@
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
-import {examineWorkTree,repositoryHasCommit,repositoryKeepsArtifact,type WorkIdentity,type WorkOperation} from './native-work-retention.ts';
+import {examineWorkTree,pinRetainedArtifact,repositoryHasCommit,repositoryTreeOf,retainedArtifact,workHoldsNoUnregisteredChange,type WorkIdentity,type WorkOperation} from './native-work-retention.ts';
 import {fenceInstallationContext} from './installation-authority-fence.ts';
 import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
 import {DesignPurpose} from './design-types.ts';
@@ -20,7 +20,7 @@ import {mkdir,lstat,realpath,readdir,writeFile,open,rename,cp,rm,type FileHandle
 import {join,resolve,sep} from 'node:path';
 import {createPrivateKey,createPublicKey,sign,createHash,createHmac,randomBytes,verify} from 'node:crypto';
 import {z} from 'zod';
-import type pg from 'pg';
+import pg from 'pg';
 import {Ledger} from './ledger.ts';
 import {Authority,canonical,digest,Refusal} from './contracts.ts';
 import {DockerDaemon} from './sandbox-broker.ts';
@@ -65,10 +65,34 @@ export type ModuleExamWorkRefusal='not_found'|'not_passive_exam'|'job_state'|'gr
 export type ModuleExamWorkRelease={jobId:string;state:'eligible'|'released'|'absent';bytes?:number}|{jobId:string;state:'refused';reason:ModuleExamWorkRefusal};
 /** What a terminal job's `work` copy was for: a passive exam answer, a read-only evaluation of a snapshot, or a programmer's checkout (artifact). */
 export type TerminalWorkCategory='passive-exam'|'readonly-evaluator'|'programmer-artifact';
-export type TerminalWorkRefusal=ModuleExamWorkRefusal|'base_unpreserved'|'artifact_unpreserved';
+/** `unclassified`: workflow and role are not in the explicit read-only or programmer classification. `mode_unproven`: the signed request does not
+ * prove the mount mode (or the job never launched). `unregistered_change`: the checkout holds something the project repository does not keep.
+ * `session_lost`: the session holding the job lock went away; nothing more is removed. */
+export type TerminalWorkRefusal=ModuleExamWorkRefusal|'base_unpreserved'|'artifact_unpreserved'|'unclassified'|'mode_unproven'|'unregistered_change'|'session_lost';
 export type TerminalWorkRelease={jobId:string;state:'eligible'|'released'|'absent';bytes?:number;category?:TerminalWorkCategory}|{jobId:string;state:'refused';reason:TerminalWorkRefusal};
-type TerminalWorkOptions={principal:string;contextId:string;projectId?:string;repository?:string;categories:readonly TerminalWorkCategory[];failed:boolean;lease?:Authority};
-type TerminalWorkJudgment={category:TerminalWorkCategory;terminalDigest:string;checkOutput:(output:FileHandle)=>Promise<void>};
+/** Test and diagnostics hook: called with the job lock held, after the plan is recorded, and just before the tree is removed. */
+export type TerminalWorkObserver=(step:'locked'|'prepared'|'removing')=>Promise<void>;
+type TerminalWorkOptions={principal:string;contextId:string;projectId?:string;repository?:string;categories:readonly TerminalWorkCategory[];failed:boolean;lease?:Authority;automatic?:boolean;observe?:TerminalWorkObserver};
+type TerminalWorkJudgment={category:TerminalWorkCategory;terminalDigest:string;checkOutput:(output:FileHandle)=>Promise<void>;checkWork?:(signal:AbortSignal)=>Promise<boolean>};
+/** Explicit classification for automatic work retention. Read-only: the role never receives a writable `/work` (the physical launch inspection
+ * refuses it) and the workflow is one that runs such evaluators. Programmer: the workflows whose programmer finalizes a registered artifact.
+ * Anything else (for instance a specialist advising an engineering run) is unclassified and keeps its copy. */
+const readonlyTerminalWork:Readonly<Record<string,readonly string[]>>=Object.freeze({
+ 'baseline-synthetic-v1':['qa','reviewer','judge'],
+ 'engineering-synthetic-v1':['qa','reviewer','judge'],
+ 'engineering-native-v1':['qa','reviewer','judge'],
+ 'managed-synthetic-v1':['qa','reviewer','judge'],
+ 'design-readonly-v1':['specialist','reviewer'],
+ 'security-verify-readonly-v1':['specialist','reviewer'],
+});
+const programmerTerminalWork:ReadonlySet<string>=new Set(['baseline-synthetic-v1','engineering-synthetic-v1','engineering-native-v1','managed-synthetic-v1']);
+export function terminalWorkClass(workflow:unknown,role:unknown):'readonly'|'programmer'|undefined{
+ if(typeof workflow!=='string'||typeof role!=='string'||!Object.hasOwn(readonlyTerminalWork,workflow)&&!programmerTerminalWork.has(workflow))return undefined;
+ if(role==='programmer')return programmerTerminalWork.has(workflow)?'programmer':undefined;
+ return readonlyTerminalWork[workflow]?.includes(role)?'readonly':undefined;
+}
+/** One advisory lock per job, shared by every path that reads or frees its `work`: manual and automatic retention and artifact registration. */
+export function terminalWorkLockKey(jobId:string){Id.parse(jobId);return 'agent-control:terminal-work:'+jobId;}
 export class UnstartedExamRetirementPending extends Refusal {
  constructor(readonly jobId:string){super('NATIVE_PRELAUNCH_SETTLEMENT_PENDING',409);Id.parse(jobId);}
 }
@@ -1291,14 +1315,48 @@ export class NativeExecutionSupervisor{
  }
  /** Automatic retention of the `work` copy of one terminal job, with no context lease and no stopped gateway.
   * Safe because nothing here depends on the manager: a terminal job row is immutable (trigger), its grant is released, its receipt and
-  * retirement proof are signed, and replay reads only `output/` and `request.json`. Mutual exclusion is a per-job advisory lock on a dedicated
-  * session shared with the manual path; the tree is removed outside any transaction, and the helper dies with that session.
-  * Categories: passive exams (as above), read-only evaluators (qa, reviewer, judge, other specialists) when the base commit is still in the project
-  * repository, and non-managed programmers only when the registered artifact is reachable from a repository ref. Nothing else is freed. */
- async retireTerminalWork(principal:string,jobId:string,apply:boolean,scope:{contextId:string;projectId:string;repository:string}):Promise<TerminalWorkRelease>{
-  return this.terminalWork(jobId,apply,{principal,contextId:scope.contextId,projectId:scope.projectId,repository:scope.repository,categories:['passive-exam','readonly-evaluator','programmer-artifact'],failed:true});
+  * physical retirement proof are signed, and replay reads only `output/`, `request.json` and the project repository. Mutual exclusion is a
+  * per-job advisory lock on a dedicated session, shared with the manual path and with `registerArtifact`. One abort signal, created before
+  * the lock is requested, follows that session: if it is lost during preparation or removal, nothing more is removed.
+  * Only jobs the explicit classification (`terminalWorkClass`) names are candidates, and each needs its own proof:
+  * - read-only roles: the signed request proves a read-only mount mode, and the base commit is still in the project repository;
+  * - programmers: the registered artifact is pinned by a private, never-moved ref of this job, and the checkout holds no change the
+  *   repository does not keep. A failed programmer is freed only when its checkout equals its base exactly.
+  * Managed children are judged like any other job, with the physical proof of their own protocol (the signed writer revocation).
+  * A job that never started has no proven checkout and is kept. */
+ async retireTerminalWork(principal:string,jobId:string,apply:boolean,scope:{contextId:string;projectId:string;repository:string;observe?:TerminalWorkObserver}):Promise<TerminalWorkRelease>{
+  return this.terminalWork(jobId,apply,{principal,contextId:scope.contextId,projectId:scope.projectId,repository:scope.repository,categories:['passive-exam','readonly-evaluator','programmer-artifact'],failed:true,automatic:true,observe:scope.observe});
  }
- private async judgeTerminalWork(c:pg.PoolClient,jobId:string,o:TerminalWorkOptions):Promise<{refusal:TerminalWorkRefusal}|TerminalWorkJudgment>{
+ /** The signed request is the mode proof: it is bound to the job row and receipt by its digest, and the launch only happened after the physical
+  * inspection refused any writable `/work` for a role other than programmer (native-execution-isolation). */
+ private async requestProvesMode(jobId:string,row:Record<string,any>){
+  try{
+   const p=this.paths(jobId);await this.directory(p.root);
+   const bytes=await readPrivateWorkerFile(join(p.root,'request.json'),512*1024);
+   let input:Input;try{input=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));}finally{bytes.fill(0);}
+   const writes=row.role==='programmer';
+   return input.jobId===jobId&&input.intentId===row.intent_id&&input.grantId===row.grant_id&&input.sessionId===row.session_id&&input.role===row.role&&input.base===row.base_id&&
+    digest(input)===row.input_digest&&(writes?input.writePaths.length>0:input.writePaths.length===0)&&
+    /^[a-f0-9]{64}$/.test(String(row.launch_digest))&&/^[a-f0-9]{64}$/.test(String(row.worker_id))&&/^[a-f0-9]{64}$/.test(String(row.tools_id))&&row.worker_id!==row.tools_id;
+  }catch{return false;}
+ }
+ /** Physical terminality of a managed writer: its own signed revocation, bound to this receipt and containers, and the neutralized writer row. */
+ private async managedWriterRetired(c:pg.PoolClient,jobId:string,row:Record<string,any>){
+  const saved=(await c.query(`SELECT r.*,w.state writer_state,w.revocation_job_id,w.proof_digest FROM ac_native_writer_retirements r
+   JOIN ac_worktree_writers w ON w.parent_intent_id=r.parent_intent_id AND w.run_id=r.run_id AND w.holder_intent_id=r.holder_intent_id WHERE r.job_id=$1`,[jobId])).rows[0];
+  try{
+   const proof=saved?.proof,payload=proof?.payload;
+   return Boolean(saved)&&saved.state==='revoked'&&saved.parent_intent_id===row.parent_intent_id&&saved.holder_intent_id===row.intent_id&&
+    saved.writer_state==='neutralized'&&saved.revocation_job_id===jobId&&saved.proof_digest===digest(proof)&&
+    payload?.kind==='native-container-pair-removed'&&payload.jobId===jobId&&payload.contextId===row.context_id&&payload.grantId===row.grant_id&&payload.holderIntentId===row.intent_id&&
+    payload.terminalDigest===digest(row.receipt)&&payload.workerId===row.worker_id&&payload.toolsId===row.tools_id&&saved.terminal_digest===digest(row.receipt)&&
+    typeof proof.signature==='string'&&/^[a-f0-9]{128}$/.test(proof.signature)&&
+    verify(null,Buffer.from('agent-control:native-writer-retirement:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(proof.signature,'hex'));
+  }catch{return false;}
+ }
+ /** `artifacts`: 'preview' accepts an artifact the repository holds that a later prepare would pin; 'pin' creates the private ref by CAS;
+  * 'strict' requires the ref to exist already (release phase and the judgment that records the outcome). */
+ private async judgeTerminalWork(c:pg.PoolClient,jobId:string,o:TerminalWorkOptions,artifacts:'preview'|'pin'|'strict'):Promise<{refusal:TerminalWorkRefusal}|TerminalWorkJudgment>{
   const refuse=(refusal:TerminalWorkRefusal)=>({refusal});
   const owner=await c.query("SELECT 1 FROM ac_memberships m JOIN ac_contexts x ON x.project_id=m.project_id WHERE x.id=$1 AND m.principal_id=$2 AND m.role='owner' FOR SHARE OF m",[o.contextId,o.principal]);
   if(!owner.rowCount)return refuse('not_passive_exam');
@@ -1310,8 +1368,12 @@ export class NativeExecutionSupervisor{
   if(!row)return refuse('not_found');
   if(o.projectId&&row.project_id!==o.projectId)return refuse('not_found');
   const passive=row.role==='specialist'&&(readonlySecurityExam(row.workflow,row.role)||(readonlyDesignExam(row.workflow,row.role)&&['examiner','reviewer','visual'].includes(row.design_purpose)));
+  const kind=terminalWorkClass(row.workflow,row.role);
   const category:TerminalWorkCategory=passive?'passive-exam':row.role==='programmer'?'programmer-artifact':'readonly-evaluator';
-  if(!row.personal||row.principal_id!==o.principal||row.parent_intent_id!==null||!o.categories.includes(category))return refuse('not_passive_exam');
+  if(!row.personal||row.principal_id!==o.principal||!o.categories.includes(category))return refuse('not_passive_exam');
+  // The manual path keeps its historical scope (top-level passive exams). The automatic one has no generic parent rule: children need the same proofs.
+  if(!o.automatic&&row.parent_intent_id!==null)return refuse('not_passive_exam');
+  if(o.automatic&&!passive&&kind!==(category==='programmer-artifact'?'programmer':'readonly'))return refuse('unclassified');
   if(row.state!=='completed'&&!(o.failed&&row.state==='failed'))return refuse('job_state');
   if(row.grant_state!=='released'||row.grant_intent!==row.intent_id||row.grant_context!==row.context_id||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||row.grant_role!==row.role||row.resource_kind!=='model'||Number(row.grant_epoch)!==Number(row.manager_epoch))return refuse('grant_state');
   if(row.key_fingerprint!==this.fingerprint)return refuse('supervisor_identity');
@@ -1320,32 +1382,53 @@ export class NativeExecutionSupervisor{
    payload.epoch===Number(row.manager_epoch)&&payload.inputDigest===row.input_digest&&payload.executorDigest===row.executor_digest&&(payload.exitCode===0)===(row.state==='completed')&&payload.executionStarted!==false&&
    Boolean(physical)&&payload.physicalDigest===digest(physical)&&physical.jobId===jobId&&physical.containerId===row.worker_id&&physical.toolsContainerId===row.tools_id&&physical.networkId===row.network_id;
   if(!receiptProven)return refuse('receipt');
-  // Programmers keep no terminal journal unless managed (and managed ones are refused above); evaluators and exams need the signed removal proof.
-  if(category!=='programmer-artifact'){
+  if(o.automatic){try{await this.directory(this.config.hostRoot);await this.directory(this.paths(jobId).root);}catch{return refuse('directory_unsafe');}}
+  // A job that never launched has no checkout proven by a signed launch: it is kept.
+  if(o.automatic&&!await this.requestProvesMode(jobId,row))return refuse('mode_unproven');
+  // Physical terminality: the signed removal of containers and network, or, for a managed writer, its signed revocation.
+  const managedWriter=category==='programmer-artifact'&&row.parent_intent_id!==null;
+  if(managedWriter){
+   if(!await this.managedWriterRetired(c,jobId,row))return refuse('retirement');
+  }else{
    let retirementProven=false;
    try{
     retirementProven=row.retirement_state==='removed'&&Boolean(binding)&&digest(proof?.payload)===digest(binding)&&typeof proof.signature==='string'&&/^[a-f0-9]{128}$/.test(proof.signature)&&
      verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(proof.payload)),createPublicKey(this.key),Buffer.from(proof.signature,'hex'))&&
      binding.jobId===jobId&&binding.contextId===row.context_id&&binding.intentId===row.intent_id&&binding.grantId===row.grant_id&&binding.sessionId===row.session_id&&binding.inputDigest===row.input_digest&&
-     binding.terminalDigest===digest(receipt)&&binding.workerId===row.worker_id&&binding.toolsId===row.tools_id&&binding.networkId===row.network_id;
+     binding.terminalDigest===digest(receipt)&&binding.workerId===row.worker_id&&binding.toolsId===row.tools_id&&binding.networkId===row.network_id&&(!o.automatic||binding.role===row.role);
    }catch{retirementProven=false;}
    if(!retirementProven)return refuse('retirement');
   }
+  let checkWork:TerminalWorkJudgment['checkWork'];
   if(category!=='passive-exam'){
    if(!o.repository)return refuse(category==='programmer-artifact'?'artifact_unpreserved':'base_unpreserved');
    if(category==='readonly-evaluator'&&!await repositoryHasCommit(o.repository,row.base_id))return refuse('base_unpreserved');
    if(category==='programmer-artifact'){
-    const artifact=payload.artifact;
+    const artifact=payload.artifact,repository=o.repository;
+    let expected:string|undefined;
     if(row.state==='completed'){
      if(!artifact||artifact.base!==row.base_id)return refuse('artifact_unpreserved');
      const registered=await c.query('SELECT 1 FROM ac_artifacts WHERE intent_id=$1 AND implementation_grant_id=$2 AND implementation_session_id=$3 AND commit_id=$4 AND tree_id=$5 AND base_id=$6 LIMIT 1',
       [row.intent_id,row.grant_id,row.session_id,artifact.commit,artifact.tree,artifact.base]);
-     if(!registered.rowCount||!await repositoryKeepsArtifact(o.repository,artifact.commit,artifact.tree))return refuse('artifact_unpreserved');
+     if(!registered.rowCount)return refuse('artifact_unpreserved');
+     const pinned=await retainedArtifact(repository,jobId);
+     if(pinned===undefined&&artifacts==='pin'){
+      if(!['created','kept'].includes(await pinRetainedArtifact(repository,jobId,artifact.commit,artifact.tree)))return refuse('artifact_unpreserved');
+     }else if(pinned===undefined&&artifacts==='preview'){
+      if(await repositoryTreeOf(repository,artifact.commit)!==artifact.tree)return refuse('artifact_unpreserved');
+     }else if(pinned!==artifact.commit)return refuse('artifact_unpreserved');
+     if(artifacts!=='preview'&&(await retainedArtifact(repository,jobId)!==artifact.commit||await repositoryTreeOf(repository,artifact.commit)!==artifact.tree))return refuse('artifact_unpreserved');
+     expected=artifact.tree;
     }else{
-     // A failed run has nothing to preserve, unless an artifact was finalized for it.
+     // A failed run has no registered artifact: its checkout may go only when it is exactly its base.
      const finalized=await c.query("SELECT 1 FROM ac_native_artifact_finalizations WHERE job_id=$1 AND state<>'failed'",[jobId]);
      if(artifact||finalized.rowCount)return refuse('artifact_unpreserved');
+     expected=await repositoryTreeOf(repository,row.base_id);
+     if(!expected)return refuse('base_unpreserved');
     }
+    if(!expected)return refuse('artifact_unpreserved');
+    const tree=expected,work=this.paths(jobId).work;
+    checkWork=signal=>workHoldsNoUnregisteredChange(repository,work,tree,signal);
    }
   }
   const state=row.state as 'completed'|'failed';
@@ -1357,17 +1440,23 @@ export class NativeExecutionSupervisor{
     if(result.jobId!==jobId||!good||digest(result.output)!==payload.outputDigest)throw Error();
    }catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
   };
-  return {category,terminalDigest:digest(receipt),checkOutput};
+  return {category,terminalDigest:digest(receipt),checkOutput,...(checkWork?{checkWork}:{})};
  }
  private async terminalWork(jobId:string,apply:boolean,o:TerminalWorkOptions):Promise<TerminalWorkRelease>{
   Id.parse(jobId);Id.parse(o.contextId);
   const refuse=(reason:TerminalWorkRefusal)=>({jobId,state:'refused' as const,reason});
   const planned='native.exam_work_release_planned',released='native.exam_work_released',unattributed='native.exam_work_absent_after_plan';
-  const lockKey='agent-control:terminal-work:'+jobId;
+  const lockKey=terminalWorkLockKey(jobId);
+  // One abort signal for the whole retirement, created before any lock is requested. Every session that holds the job lock feeds it;
+  // once aborted it stays aborted, so no later phase and no removal can run unprotected.
+  const canceled=new AbortController();
+  const lost=()=>canceled.abort(new Refusal('NATIVE_WORK_SESSION_LOST'));
+  const follow=(session:pg.ClientBase)=>{session.on('error',lost);session.on('end',lost);return ()=>{session.off('error',lost);session.off('end',lost);};};
+  type Phase='preview'|'prepare'|'release';
   // Everything one phase needs from the database, read under the caller's transaction.
   type Seen={judged:TerminalWorkJudgment;previous?:Record<string,any>;completed?:Record<string,any>;snapshot?:WorkIdentity};
-  const read=async(c:pg.PoolClient,phase:'preview'|'prepare'|'release'):Promise<{refusal:TerminalWorkRefusal}|Seen>=>{
-   const judged=await this.judgeTerminalWork(c,jobId,o);
+  const read=async(c:pg.PoolClient,phase:Phase,artifacts:'preview'|'pin'|'strict'):Promise<{refusal:TerminalWorkRefusal}|Seen>=>{
+   const judged=await this.judgeTerminalWork(c,jobId,o,artifacts);
    if('refusal' in judged)return judged;
    try{await this.directory(this.config.hostRoot);await this.directory(this.paths(jobId).root);}catch{return {refusal:'directory_unsafe'};}
    const audit=async(kind:string)=>(await c.query("SELECT detail FROM ac_audit WHERE context_id=$1 AND kind=$2 AND detail->>'jobId'=$3 LIMIT 1",[o.contextId,kind,jobId])).rows[0]?.detail;
@@ -1377,15 +1466,27 @@ export class NativeExecutionSupervisor{
    if(phase==='release'&&(!snapshot||completed))return {refusal:'work_unsafe'};
    return {judged,previous,completed,snapshot};
   };
-  const examine=async(seen:Seen,phase:'preview'|'prepare'|'release',session:pg.PoolClient):Promise<WorkOperation|{refusal:TerminalWorkRefusal}>=>{
-   const canceled=new AbortController();
-   const disconnect=()=>canceled.abort();
-   session.once('error',disconnect);session.once('end',disconnect);
-   try{return await examineWorkTree(this.config.hostRoot,jobId,seen.judged.checkOutput,phase==='release'?seen.snapshot:undefined,canceled.signal);}
-   catch(error){return {refusal:error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe'};}
-   finally{session.off('error',disconnect);session.off('end',disconnect);}
+  // The checkout proof runs on the very directory that was (or is about to be) planned: same device and inode.
+  const workUnchanged=async(seen:Seen,identity:string|undefined)=>{
+   if(!seen.judged.checkWork)return true;
+   const current=await lstat(this.paths(jobId).work,{bigint:true}).catch(()=>undefined);
+   if(!current)return true; // Nothing left to protect; the removal step reports `absent`.
+   if(!current.isDirectory()||(identity&&current.dev+':'+current.ino!==identity))return false;
+   return seen.judged.checkWork(canceled.signal);
   };
-  const conclude=async(c:pg.PoolClient,seen:Seen,phase:'preview'|'prepare'|'release',operation:WorkOperation):Promise<TerminalWorkRelease>=>{
+  const examine=async(seen:Seen,phase:Phase):Promise<WorkOperation|{refusal:TerminalWorkRefusal}>=>{
+   if(canceled.signal.aborted)return {refusal:'session_lost'};
+   try{
+    if(phase==='release'&&!await workUnchanged(seen,seen.snapshot?.work))return {refusal:canceled.signal.aborted?'session_lost':'unregistered_change'};
+    if(phase==='release')await o.observe?.('removing');
+    if(canceled.signal.aborted)return {refusal:'session_lost'};
+    const operation=await examineWorkTree(this.config.hostRoot,jobId,seen.judged.checkOutput,phase==='release'?seen.snapshot:undefined,canceled.signal);
+    if(operation.state==='present'&&!await workUnchanged(seen,operation.snapshot.work))return {refusal:canceled.signal.aborted?'session_lost':'unregistered_change'};
+    return operation;
+   }
+   catch(error){return {refusal:canceled.signal.aborted?'session_lost':error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe'};}
+  };
+  const conclude=async(c:pg.PoolClient,seen:Seen,phase:Phase,operation:WorkOperation):Promise<TerminalWorkRelease>=>{
    const {previous,completed,snapshot,judged}=seen;
    const record=async(kind:string,identity:WorkIdentity)=>c.query('INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,$2,$3)',[o.contextId,kind,{jobId,snapshot:identity,terminalDigest:judged.terminalDigest}]);
    const category=judged.category;
@@ -1400,51 +1501,83 @@ export class NativeExecutionSupervisor{
    }
    if(operation.state!=='present'||completed)return refuse('work_unsafe');
    if(snapshot&&(snapshot.job!==operation.snapshot.job||snapshot.work!==operation.snapshot.work))return refuse('work_unsafe');
-   if(phase==='prepare'&&!previous)await record(planned,operation.snapshot);
+   if(phase==='prepare'&&!previous){
+    if(canceled.signal.aborted)return refuse('session_lost');
+    await record(planned,operation.snapshot);
+   }
    return {jobId,state:'eligible' as const,bytes:operation.snapshot.bytes,category};
   };
-  const leased=async(phase:'preview'|'prepare'|'release')=>this.ledger.tx(async c=>{
-   await this.ledger.authorize(c,o.principal,o.contextId);await this.ledger.fence(c,o.lease!,true);
-   if(!(await c.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) ok',[lockKey])).rows[0].ok)return refuse('busy');
-   const seen=await read(c,phase);
-   if('refusal' in seen)return refuse(seen.refusal);
-   const operation=await examine(seen,phase,c);
-   if('refusal' in operation)return refuse(operation.refusal);
-   return conclude(c,seen,phase,operation);
-  });
   if(o.lease){
+   const leased=async(phase:Phase)=>this.ledger.tx(async c=>{
+    const unfollow=follow(c);
+    try{
+     await this.ledger.authorize(c,o.principal,o.contextId);await this.ledger.fence(c,o.lease!,true);
+     if(!(await c.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) ok',[lockKey])).rows[0].ok)return refuse('busy');
+     const seen=await read(c,phase,phase==='preview'?'preview':phase==='prepare'?'pin':'strict');
+     if('refusal' in seen)return refuse(seen.refusal);
+     const operation=await examine(seen,phase);
+     if('refusal' in operation)return refuse(operation.refusal);
+     return conclude(c,seen,phase,operation);
+    }finally{unfollow();}
+   });
    const first=await leased(apply?'prepare':'preview');
    return apply&&first.state==='eligible'?leased('release'):first;
   }
   // Lease-free: one dedicated session holds the per-job lock for the whole retirement; the database work is in short transactions around it.
-  const session=await this.ledger.pool.connect();
-  let broken=false;
-  const mark=()=>{broken=true;};
-  session.on('error',mark);
+  // Created after the abort controller, before the lock is requested; it is followed from the first instant.
+  let session:pg.Client;
+  try{session=await this.workLockSession();}catch{return refuse('session_lost');}
+  const unfollow=follow(session);
+  let locked=false,heartbeat:ReturnType<typeof setInterval>|undefined;
+  // The lock must still be held by this very session; any failure aborts.
+  const protectedNow=async()=>{
+   if(canceled.signal.aborted)return false;
+   try{
+    const held=(await session.query(`SELECT count(*)::int n FROM pg_locks WHERE locktype='advisory' AND granted AND pid=pg_backend_pid()
+     AND ((classid::bigint<<32)|objid::bigint)=hashtextextended($1,0) AND objsubid=1`,[lockKey])).rows[0].n===1;
+    if(!held)lost();
+   }catch{lost();}
+   return !canceled.signal.aborted;
+  };
   try{
+   if(canceled.signal.aborted)return refuse('session_lost');
    if(!(await session.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) ok',[lockKey])).rows[0].ok)return refuse('busy');
-   const phase=async(name:'preview'|'prepare'|'release')=>{
+   locked=true;
+   await o.observe?.('locked');
+   const phase=async(name:Phase)=>{
+    if(!await protectedNow())return refuse('session_lost');
     const seen=await this.ledger.tx(async c=>{
      await fenceInstallationContext(c,o.contextId,this.ledger.installationAuthority,true);
-     return read(c,name);
+     return read(c,name,name==='preview'?'preview':name==='prepare'?'pin':'strict');
     });
     if('refusal' in seen)return refuse(seen.refusal);
-    const operation=await examine(seen,name,session);
+    if(name==='release'){
+     if(!await protectedNow())return refuse('session_lost');
+     // While the tree is removed the session is probed; a lost or released lock kills the helper.
+     heartbeat=setInterval(()=>{void protectedNow();},500);
+    }
+    let operation;
+    try{operation=await examine(seen,name);}finally{if(heartbeat){clearInterval(heartbeat);heartbeat=undefined;}}
     if('refusal' in operation)return refuse(operation.refusal);
     // Re-judge in the transaction that records the outcome: the proof must still hold when the audit row is written.
-    return this.ledger.tx(async c=>{
+    const result=await this.ledger.tx(async c=>{
      await fenceInstallationContext(c,o.contextId,this.ledger.installationAuthority,true);
-     const again=await read(c,name==='release'?'prepare':name);
+     const again=await read(c,name==='release'?'prepare':name,name==='preview'?'preview':'strict');
      if('refusal' in again||again.judged.terminalDigest!==seen.judged.terminalDigest)return refuse('retirement');
+     if(name!=='release'&&!await protectedNow())return refuse('session_lost');
      return conclude(c,{...again,snapshot:seen.snapshot,previous:again.previous,completed:again.completed},name,operation);
     });
+    if(name==='prepare'&&result.state==='eligible')await o.observe?.('prepared');
+    return result;
    };
    const first=await phase(apply?'prepare':'preview');
    return apply&&first.state==='eligible'?await phase('release'):first;
   }finally{
-   session.off('error',mark);
-   if(!broken)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lockKey]).catch(()=>{broken=true;});
-   session.release(broken);
+   if(heartbeat)clearInterval(heartbeat);
+   if(locked&&!canceled.signal.aborted)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lockKey]).catch(()=>undefined);
+   unfollow();
+   // Closing the dedicated connection releases whatever it still holds; it is never reused.
+   await session.end().catch(()=>undefined);
   }
  }
  async reconcileCancellation(principal:string,authority:Authority,jobId:string){
@@ -1663,8 +1796,46 @@ export class NativeExecutionSupervisor{
  }
  /** Register only the exact finalized artifact; Quality still requires
   * independent QA/review and authorized integration. No branch is changed. */
+ /** Dedicated connection, outside the ledger pool, that holds a per-job work lock: holding it never takes a pool slot that the
+  * transactions of the same operation need, so many jobs locked at once cannot starve the pool. Closing it releases the lock. */
+ private async workLockSession(){
+  const client=new pg.Client({connectionString:this.ledger.pool.options.connectionString});
+  client.on('error',()=>undefined); // Loss is observed through the abort signal; a late error never crashes the process.
+  await client.connect();
+  return client;
+ }
+ /** Runs `effect` holding the job's work lock on a dedicated session, waiting for it (work retention only ever tries it).
+  * `held()` is false once that session is lost: the caller must not start reading `work` after that. */
+ private async withTerminalWorkLock<T>(jobId:string,effect:(held:()=>boolean)=>Promise<T>,waitMs=10*60*1000):Promise<T>{
+  const key=terminalWorkLockKey(jobId);
+  const canceled=new AbortController(),lost=()=>canceled.abort();
+  const session=await this.workLockSession();
+  session.on('error',lost);session.on('end',lost);
+  let locked=false;
+  try{
+   const deadline=Date.now()+waitMs;
+   for(;;){
+    if(canceled.signal.aborted)throw new Refusal('NATIVE_ARTIFACT_LOCK_LOST');
+    if((await session.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) ok',[key])).rows[0].ok){locked=true;break;}
+    if(Date.now()>=deadline)throw new Refusal('NATIVE_ARTIFACT_BUSY',409);
+    await new Promise(done=>setTimeout(done,100));
+   }
+   return await effect(()=>!canceled.signal.aborted);
+  }finally{
+   if(locked&&!canceled.signal.aborted)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]).catch(()=>undefined);
+   session.off('error',lost);session.off('end',lost);
+   await session.end().catch(()=>undefined);
+  }
+ }
+ /** Serialized with every other registration of the same job and with work retention (same per-job lock): two concurrent calls register once,
+  * and the checkout cannot be retired while it is being scanned or imported. After the import, the job's private ref pins the artifact
+  * (created by CAS, never moved), so the repository keeps it whatever happens to branches or to `work`. */
  async registerArtifact(principal:string,authority:Authority,jobId:string,quality:Quality){
   if(quality.ledger!==this.ledger)throw new Refusal('EXECUTOR_LEDGER_MISMATCH');
+  Id.parse(jobId);
+  return this.withTerminalWorkLock(jobId,held=>this.registerArtifactLocked(principal,authority,jobId,quality,held));
+ }
+ private async registerArtifactLocked(principal:string,authority:Authority,jobId:string,quality:Quality,held:()=>boolean){
   const input=await this.registeredInput(principal,authority,jobId),outcome=await this.reconcile(principal,authority,input);
   if(outcome.state!=='completed'||!('artifact' in outcome)||!outcome.artifact||input.role!=='programmer')throw new Refusal('NATIVE_ARTIFACT_NOT_READY');
   const artifact=NativeArtifactIdentity.parse(outcome.artifact);
@@ -1673,6 +1844,7 @@ export class NativeExecutionSupervisor{
   // repository's own copy of the exact identity is the only source (automatic work retention frees `work` only after this row exists).
   const already=(await this.ledger.pool.query('SELECT 1 FROM ac_artifacts WHERE id=$1 AND context_id=$2 AND intent_id=$3 AND commit_id=$4 AND tree_id=$5 AND base_id=$6',
    [id,authority.contextId,input.intentId,artifact.commit,artifact.tree,artifact.base])).rowCount===1;
+  if(!held())throw new Refusal('NATIVE_ARTIFACT_LOCK_LOST');
   if(!already){
    const secrets=await readNativeArtifactSecrets(this.paths(jobId).secretSnapshot,jobId,this.key);
    await new GitArtifacts(this.paths(jobId).work).assertNoNewArtifactSecrets(artifact.commit,artifact.base,secrets);
@@ -1682,7 +1854,11 @@ export class NativeExecutionSupervisor{
    if(!contract||contract.digest!==digest({qualityRevision:contract.quality_revision,targetRef:contract.target_ref}))throw new Refusal('EXECUTION_CONTRACT_MISMATCH');
    const repository=await this.jobRepository(c,String(context.project_id));
    const identity=already?await new GitArtifacts(repository).identity(artifact.commit,artifact.base):await new GitArtifacts(repository).import(this.paths(jobId).work,artifact.commit,artifact.base);
-   if(identity.tree!==artifact.tree||identity.legacyDigest!==artifact.legacyDigest)throw new Refusal('NATIVE_ARTIFACT_IDENTITY_MISMATCH');return contract.quality_revision;
+   if(identity.tree!==artifact.tree||identity.legacyDigest!==artifact.legacyDigest)throw new Refusal('NATIVE_ARTIFACT_IDENTITY_MISMATCH');
+   const pinned=await pinRetainedArtifact(repository,jobId,artifact.commit,artifact.tree);
+   if(pinned!=='created'&&pinned!=='kept')throw new Refusal(pinned==='conflict'?'NATIVE_ARTIFACT_RETENTION_REF_CONFLICT':'NATIVE_ARTIFACT_IDENTITY_MISMATCH');
+   if(!held())throw new Refusal('NATIVE_ARTIFACT_LOCK_LOST');
+   return contract.quality_revision;
   });
   const risk=await this.ledger.tx(c=>expectedArtifactRisk(c,input.intentId,authority.contextId,revision));
   return quality.register(principal,{id,contextId:authority.contextId,intentId:input.intentId,implementationGrantId:input.grantId,implementationSessionId:input.sessionId,policyRevision:revision,commit:artifact.commit,tree:artifact.tree,base:artifact.base,risk},authority);
