@@ -1,119 +1,21 @@
-import { readFileSync, writeFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { compactarSaida } from './compactar-saida.mjs';
 
+// A mesma entrada é usada pelas duas técnicas. Sem filtro adequado, RTK passa a entrada.
 const samples = [
-  {
-    id: '01-tsc',
-    name: 'npx tsc --noEmit --skipLibCheck',
-    file: 'docs/economia/amostras-saida/01-tsc.txt',
-    hasError: true,
-    errorKeywords: ['error TS', 'src/cezar.ts'],
-    rtkCmd: 'cat docs/economia/amostras-saida/01-tsc.txt | rtk pipe -f tsc'
-  },
-  {
-    id: '02-test-usage',
-    name: 'node --import tsx --test tests/usage.test.ts (falha)',
-    file: 'docs/economia/amostras-saida/02-test-usage.txt',
-    hasError: true,
-    errorKeywords: ['ERR_MODULE_NOT_FOUND', 'tests/usage.test.ts'],
-    rtkCmd: 'rtk test node --import tsx --test tests/usage.test.ts 2>&1 || true'
-  },
-  {
-    id: '02-test-passing',
-    name: 'node --import tsx --test tests/auth-origins.test.ts (sucesso)',
-    file: 'docs/economia/amostras-saida/02-test-passing.txt',
-    hasError: false,
-    errorKeywords: [],
-    rtkCmd: 'rtk test node --import tsx --test tests/auth-origins.test.ts 2>&1 || true'
-  },
-  {
-    id: '03-git-log',
-    name: 'git log --stat -20',
-    file: 'docs/economia/amostras-saida/03-git-log.txt',
-    hasError: false,
-    errorKeywords: [],
-    rtkCmd: 'cat docs/economia/amostras-saida/03-git-log.txt | rtk pipe -f git-log'
-  },
-  {
-    id: '04-git-diff',
-    name: 'git diff HEAD~3 --stat',
-    file: 'docs/economia/amostras-saida/04-git-diff.txt',
-    hasError: false,
-    errorKeywords: [],
-    rtkCmd: 'cat docs/economia/amostras-saida/04-git-diff.txt | rtk pipe -f git-diff'
-  },
-  {
-    id: '05-npm-ls',
-    name: 'npm ls --depth=0',
-    file: 'docs/economia/amostras-saida/05-npm-ls.txt',
-    hasError: false,
-    errorKeywords: [],
-    rtkCmd: 'rtk deps 2>&1 || true'
-  },
-  {
-    id: '06-docker-ps',
-    name: 'docker ps -a',
-    file: 'docs/economia/amostras-saida/06-docker-ps.txt',
-    hasError: false,
-    errorKeywords: [],
-    rtkCmd: 'rtk docker ps -a 2>&1 || true'
-  },
-  {
-    id: '07-astra-log',
-    name: 'tail -n 300 astra.log',
-    file: 'docs/economia/amostras-saida/07-astra-log.txt',
-    hasError: true,
-    errorKeywords: ['Error:', 'personal-artifact-retention.ts'],
-    rtkCmd: 'cat docs/economia/amostras-saida/07-astra-log.txt | rtk pipe -f log'
-  }
+  ['01-tsc', 'tsc'], ['02-test-usage', 'vitest'], ['02-test-passing', 'vitest'],
+  ['03-git-log', 'git-log'], ['04-git-diff', 'git-diff'], ['05-npm-ls', null],
+  ['06-docker-ps', null], ['07-astra-log', 'log']
 ];
-
-function tokenEst(chars) {
-  return Math.ceil(chars / 4);
+const tokens = s => Math.ceil([...s].length / 4);
+for (const [name, filter] of samples) {
+  const raw = readFileSync(`docs/economia/amostras-saida/${name}.txt`, 'utf8');
+  const result = spawnSync('/home/app/.local/bin/rtk-1.2.1', ['pipe', ...(filter ? ['-f', filter] : ['--passthrough'])], {input: raw, encoding: 'utf8'});
+  if (result.status !== 0) throw new Error(`RTK ${name}: ${result.stderr}`);
+  const own = compactarSaida(raw, {maxLinhas: 50});
+  // Conta linhas de diagnóstico exatamente preservadas; não prova a preservação de contexto.
+  const diagnostics = raw.split(/\r?\n/).filter(l => /(?:error TS\d+|ERR_MODULE_NOT_FOUND|npm error|AssertionError|Error: connect ECONNREFUSED)/.test(l));
+  const retained = output => diagnostics.filter(l => output.includes(l.trim())).length;
+  console.log(JSON.stringify({name, filter: filter ?? 'passthrough', raw: tokens(raw), rtk: tokens(result.stdout), own: tokens(own), diagnostics: diagnostics.length, rtkRetained: retained(result.stdout), ownRetained: retained(own)}));
 }
-
-const results = [];
-
-for (const s of samples) {
-  const rawText = readFileSync(s.file, 'utf8');
-  const rawChars = rawText.length;
-  const rawTokens = tokenEst(rawChars);
-
-  // RTK
-  let rtkText = '';
-  try {
-    rtkText = execSync(s.rtkCmd, { shell: '/bin/bash', encoding: 'utf8' });
-  } catch (err) {
-    rtkText = err.stdout?.toString() ?? '';
-  }
-  const rtkChars = rtkText.length;
-  const rtkTokens = tokenEst(rtkChars);
-  const rtkRedPct = ((1 - rtkChars / rawChars) * 100).toFixed(1);
-
-  // Filtro próprio
-  const customText = compactarSaida(rawText, { maxLinhas: 50 });
-  const customChars = customText.length;
-  const customTokens = tokenEst(customChars);
-  const customRedPct = ((1 - customChars / rawChars) * 100).toFixed(1);
-
-  // Verificação de perda
-  const rtkLossOk = s.hasError ? s.errorKeywords.every(k => rtkText.includes(k)) : true;
-  const customLossOk = s.hasError ? s.errorKeywords.every(k => customText.includes(k)) : true;
-
-  results.push({
-    ...s,
-    rawChars,
-    rawTokens,
-    rtkChars,
-    rtkTokens,
-    rtkRedPct,
-    rtkLossOk,
-    customChars,
-    customTokens,
-    customRedPct,
-    customLossOk
-  });
-}
-
-console.log(JSON.stringify(results, null, 2));

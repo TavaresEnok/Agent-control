@@ -101,4 +101,15 @@ test at tests/usage.test.ts:1:1
     assert.match(linhas[0], /item #1/);
     assert.match(linhas[linhas.length - 1], /item #100/);
   });
+  it('preserva uma falha longa mesmo com limite pequeno', () => {
+    const raw = ['not ok 1 - exemplo', ...Array.from({length: 90}, (_, i) => `frame ${i}`), '# tests 1', '# pass 0', '# fail 1'].join('\n');
+    assert.equal(compactarSaida(raw, { maxLinhas: 2 }), raw);
+  });
+
+  it('trata TAP de sucesso e valida o limite', () => {
+    const raw = 'ok 1 - exemplo\n# tests 1\n# pass 1\n# fail 0';
+    assert.equal(compactarSaida(raw), '# tests 1\n# pass 1\n# fail 0');
+    assert.throws(() => compactarSaida('texto', { maxLinhas: 1 }));
+    assert.equal(compactarSaida('a\nb\nc', { maxLinhas: 2 }).split('\n').length, 2);
+  });
 });

@@ -82,15 +82,16 @@ export function agruparLinhasRepetidas(linhas) {
  */
 export function processarSaidaTestes(texto) {
   const linhas = texto.split(/\r?\n/);
+  const tap = linhas.some(l => /^# (?:tests|pass|fail) \d+/.test(l));
   const temIndicadorNodeTest = linhas.some(l => /ℹ\s+(tests|pass|fail)\s+\d+/.test(l) || /✔|✖/.test(l));
   const temIndicadorVitest = linhas.some(l => /Tests\s+\d+\s+passed/i.test(l) || /Test Files/i.test(l));
 
-  if (!temIndicadorNodeTest && !temIndicadorVitest) {
+  if (!temIndicadorNodeTest && !temIndicadorVitest && !tap) {
     return null;
   }
 
   // Verifica se houve falha
-  const temFalhaNode = linhas.some(l => /ℹ\s+fail\s+[1-9]\d*/.test(l) || /✖ failing tests:/.test(l) || /Error\s*(\[[^\]]+\])?:/.test(l));
+  const temFalhaNode = linhas.some(l => /(?:ℹ\s+|# )fail\s+[1-9]\d*/.test(l) || /^not ok\s/.test(l) || /✖ failing tests:/.test(l) || /Error\s*(\[[^\]]+\])?:/.test(l));
   const temFalhaVitest = linhas.some(l => /FAIL\s+/.test(l) || /failed\s+\([1-9]\d*\)/i.test(l));
   const falhou = temFalhaNode || temFalhaVitest;
 
@@ -109,9 +110,8 @@ export function processarSaidaTestes(texto) {
     // Mantém linhas de resumo (ℹ pass, ℹ tests, duration, ou último status)
     if (/ℹ\s+(tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\s+/.test(l)) {
       linhasResumo.push(l.trim());
-    } else if (/✔/.test(l) && linhasResumo.length < 5) {
-      // Guarda até 5 itens de teste com check
-      linhasResumo.push(encurtarCaminhos(l.trim()));
+    } else if (/^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\s+/.test(l)) {
+      linhasResumo.push(l.trim());
     } else if (/Tests\s+\d+\s+passed/i.test(l) || /Test Files/i.test(l) || /Duration\s+/i.test(l)) {
       linhasResumo.push(l.trim());
     }
@@ -134,6 +134,8 @@ export function compactarSaida(input, options = {}) {
   const maxLinhas = Number(options.maxLinhas ?? process.env.COMPACTAR_MAX_LINES ?? 50);
   const cwd = options.cwd ?? process.cwd();
 
+  if (!Number.isInteger(maxLinhas) || maxLinhas < 2) throw new Error('max-lines deve ser inteiro >= 2');
+
   // 1. Tenta tratar como teste primeiro
   const resultadoTeste = processarSaidaTestes(input);
   let linhas;
@@ -143,8 +145,8 @@ export function compactarSaida(input, options = {}) {
       // Testes passaram: resumo direto
       return resultadoTeste.linhas.join('\n');
     }
-    // Testes falharam: falha inteira preservada
-    linhas = resultadoTeste.linhas;
+    // Falhas têm prioridade sobre limite e deduplicação.
+    return resultadoTeste.linhas.join('\n');
   } else {
     // Saída genérica: encurtar caminhos e dividir em linhas
     linhas = encurtarCaminhos(input, cwd).split(/\r?\n/);
@@ -173,7 +175,7 @@ export function compactarSaida(input, options = {}) {
   const resultado = [
     ...linhas.slice(0, cabecalhoCount),
     `… ${omitidas} linhas omitidas`,
-    ...linhas.slice(linhas.length - rodapeCount)
+    ...(rodapeCount ? linhas.slice(-rodapeCount) : [])
   ];
 
   return resultado.join('\n');
