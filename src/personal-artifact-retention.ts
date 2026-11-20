@@ -36,7 +36,7 @@ const token=z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/);
 const ref=z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).refine(value=>!value.includes('..')&&!value.endsWith('/')&&!value.endsWith('.lock')&&!value.includes('//'));
 const absolutePath=z.string().max(4096).refine(value=>isAbsolute(value)&&resolve(value)===value&&!value.includes('\0'));
 const time=z.number().int().safe().nonnegative();
-const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string().optional(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
+const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string().optional(),quarantine:absolutePath.optional(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
 const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(VERIFICATION_MODULES),imageId:z.string().regex(imageIdPattern),daemonId:z.string().min(1).max(256).optional(),registeredAt:time}).strict();
 /** `removing` is the removal journal, written outside the directory before its contents start to go. The owner marker lives inside
  * the tree and may be deleted before an interruption; the journal (same identity plus the birth time taken right before) lets the
@@ -250,10 +250,12 @@ const defaultMountInfo=()=>readFile('/proc/self/mountinfo','utf8');
 
 type WorktreeFacts={tip:string;idleHours:number};
 /** Everything that must hold, in order, before `git worktree remove` may run. */
-async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Required<Pick<RetentionDeps,'git'|'now'|'processInside'|'mountInfo'>>):Promise<Verdict<WorktreeFacts>|{ok:false;reason:string;absent:true}>{
+async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Required<Pick<RetentionDeps,'git'|'now'|'processInside'|'mountInfo'|'docker'>>):Promise<Verdict<WorktreeFacts>|{ok:false;reason:string;absent:true}>{
  const owner=projectsOf(config).find(item=>item.id===entry.projectId);
  if(!owner)return no('projeto fora desta instalação');
  const repo=owner.repo;
+ const main=await deps.git(repo,['symbolic-ref','--quiet','--short','HEAD']);
+ if(main.code!==0||main.stdout.trim()!==entry.base)return no('base não corresponde ao ramo do checkout da instalação');
  let listed:Listed[];
  try{listed=await listWorktrees(deps.git,repo);}catch{return no('não foi possível ler os worktrees do repositório');}
  const found=listed.find(item=>item.path===entry.path);
@@ -293,6 +295,7 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
  const idle=deps.now()-last;
  if(idle<WORKTREE_IDLE_MS)return no(`atividade há ${hours(Math.max(idle,0))} h (mínimo ${hours(WORKTREE_IDLE_MS)} h)`);
  try{if(await deps.processInside(entry.path))return no('há processo usando o diretório');}catch{return no('não foi possível provar que nenhum processo usa o diretório');}
+ try{if(await mountedByContainer(deps.docker,entry.path))return no('há contêiner com este diretório montado');}catch{return no('não foi possível provar que nenhum contêiner monta o diretório');}
  try{if(mountedInside(await deps.mountInfo(),entry.path))return no('há montagem (inclusive bind mount) dentro do diretório');}catch{return no('não foi possível ler as montagens do sistema');}
  return {ok:true,facts:{tip:tipId,idleHours:hours(idle)}};
 }
@@ -302,9 +305,11 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
 /** Records a worker worktree so retention may later remove it. Also adopts an existing worktree: git itself must list it,
  * on a local branch, in the project's own repository, and the integration branch must exist. The caller names no prefix and no pattern. */
 export async function registerWorkerWorktree(config:Installation,input:{projectId:string;path:string;branch:string;base:string;adopt?:boolean},deps:RetentionDeps={}){
- const entryInput=Worktree.omit({id:true,registeredAt:true,origin:true,identity:true}).safeParse({projectId:input.projectId,path:input.path,branch:input.branch,base:input.base});
+ const entryInput=Worktree.omit({id:true,registeredAt:true,origin:true,identity:true,quarantine:true}).safeParse({projectId:input.projectId,path:input.path,branch:input.branch,base:input.base});
  if(!entryInput.success||input.branch===input.base)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  const owner=project(config,input.projectId),git=deps.git??defaultGit,now=(deps.now??Date.now)();
+ const main=await git(owner.repo,['symbolic-ref','--quiet','--short','HEAD']);
+ if(main.code!==0||main.stdout.trim()!==input.base)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  const listed=await listWorktrees(git,owner.repo).catch(()=>{throw new Refusal('RETENTION_REGISTRATION_INVALID',400);});
  const found=listed.find(item=>item.path===input.path);
  if(!found||found.main||found.bare||found.detached||found.branch!=='refs/heads/'+input.branch||await realpath(input.path).catch(()=>'')!==input.path)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
@@ -544,8 +549,9 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
 
  for(const entry of registry.worktrees){
   const label=`worktree ${entry.path}`;
+  if(entry.quarantine){kept('worktree',label,`quarentena registrada em ${entry.quarantine}; verificação manual necessária`);continue;}
   try{
-   const proof=await proveWorktree(config,entry,{git,now,processInside,mountInfo});
+   const proof=await proveWorktree(config,entry,{git,now,processInside,mountInfo,docker});
    if(!proof.ok){
     if('absent' in proof){
      if(apply)await forget('worktree',entry.id,'dropped');
@@ -555,7 +561,7 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
    }
    if(!apply){done('worktree');lines.push(`${label}: elegível (ramo ${entry.branch} integrado em ${entry.base}, limpo, ocioso há ${proof.facts.idleHours} h).`);continue;}
    // Judged again, so a change since the first look wins.
-   const again=await proveWorktree(config,entry,{git,now,processInside,mountInfo});
+   const again=await proveWorktree(config,entry,{git,now,processInside,mountInfo,docker});
    if(!again.ok){kept('worktree',label,'mudou durante a retenção: '+again.reason);continue;}
    const owner=project(config,entry.projectId);
    // Swap protection: the directory is first renamed (same parent, atomic) to a private name, so the path that was proved can no
@@ -563,10 +569,12 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
    // and only then removed. Any doubt moves it back and keeps it. No --force: git itself refuses a worktree with changes.
    const quarantine=join(dirname(entry.path),`.ac-retention-${randomUUID()}`);
    const before=await lstat(entry.path,{bigint:true});
+   await mutateRegistry(config,current=>{const stored=current.worktrees.find(item=>item.id===entry.id);if(!stored||stored.path!==entry.path||stored.quarantine)throw new Refusal('RETENTION_REGISTRY_CHANGED',409);stored.quarantine=quarantine;});
    const moved=await git(owner.repo,['worktree','move',entry.path,quarantine]);
-   if(moved.code!==0){kept('worktree',label,'não foi possível isolar o diretório antes da remoção');continue;}
+   if(moved.code!==0){await mutateRegistry(config,current=>{const stored=current.worktrees.find(item=>item.id===entry.id);if(stored?.quarantine===quarantine)delete stored.quarantine;});kept('worktree',label,'não foi possível isolar o diretório antes da remoção');continue;}
    const restore=async(reason:string)=>{
     const back=await git(owner.repo,['worktree','move',quarantine,entry.path]);
+    if(back.code===0)await mutateRegistry(config,current=>{const stored=current.worktrees.find(item=>item.id===entry.id);if(stored?.quarantine===quarantine)delete stored.quarantine;});
     kept('worktree',label,back.code===0?reason:`${reason}; ATENÇÃO: diretório preservado em ${quarantine}`);
    };
    let verdict:string|undefined;
@@ -575,6 +583,7 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
     if(info.isSymbolicLink()||!info.isDirectory()||info.dev!==before.dev||info.ino!==before.ino)verdict='o diretório isolado não é o provado';
     else if(await realpath(quarantine)!==quarantine)verdict='caminho isolado não é canônico';
     else if(mountedInside(await mountInfo(),quarantine))verdict='há montagem (inclusive bind mount) dentro do diretório';
+    else if(await mountedByContainer(docker,quarantine))verdict='há contêiner com este diretório montado';
     else if(await processInside(quarantine))verdict='há processo usando o diretório';
    }catch{verdict='não foi possível verificar o diretório isolado';}
    if(verdict){await restore(verdict);continue;}
@@ -587,6 +596,10 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
   }catch{kept('worktree',label,'falha ao verificar; repita depois');}
  }
 
+ let imageBytes=0,imageUnknown=0;
+ const imageIds=[...new Set(registry.images.map(item=>item.imageId))];
+ for(const id of imageIds){try{const size=await docker(['image','inspect','--format','{{.Size}}',id]);const value=Number(size.stdout.trim());if(size.code!==0||!Number.isSafeInteger(value)||value<0)throw Error();imageBytes+=value;}catch{imageUnknown++;}}
+ lines.push(`imagens: não implementado, preservadas; ${(imageBytes/1e9).toFixed(3)} GB de tamanho nominal não liberados${imageUnknown?`; ${imageUnknown} tamanho(s) desconhecido(s)`:''}.`);
  if(registry.images.length){
   let pinned:Set<string>|undefined;
   try{pinned=await protectedDigests(config,deps);}catch{pinned=undefined;}

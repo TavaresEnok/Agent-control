@@ -867,3 +867,53 @@ test('a round interrupted before its run row existed is closed only after 7 days
   assert.match((await runPersonalArtifactRetention(l.config,true,withStatus(l,'missing'))).join('\n'),/ac-retomada-eeee-5: removido/);
  }finally{await cleanup(l);}
 });
+
+test('worktree mounted by a container is preserved before and after isolation',async()=>{
+ const l=await lab();
+ try{
+  const w=makeWorktree(l,'container-mount');await register(l,w);
+  l.docker.mounts.set('container',[w.path]);
+  assert.match((await run(l,true)).join('\n'),/contêiner com este diretório montado/);
+  assert.ok(existsSync(w.path));
+  l.docker.mounts.clear();
+  const original=l.deps.git!;
+  l.deps.git=async(cwd,args)=>{const result=await original(cwd,args);if(args[0]==='worktree'&&args[1]==='move'&&result.code===0)l.docker.mounts.set('container',[args[3]!]);return result;};
+  assert.match((await run(l,true)).join('\n'),/contêiner com este diretório montado/);
+  assert.ok(existsSync(w.path));
+ }finally{await cleanup(l);}
+});
+
+test('rejects a base other than the installation checkout branch',async()=>{
+ const l=await lab();
+ try{
+  const w=makeWorktree(l,'other-base');git(l.repo,'branch','alternate');
+  await assert.rejects(registerWorkerWorktree(l.config,{projectId:l.projectId,...w,base:'alternate'},l.deps));
+  await register(l,w);
+  const file=join(l.data,'artifact-retention','registry.json');
+  const registry=JSON.parse(await readFile(file,'utf8'));registry.worktrees[0].base='alternate';await writeFile(file,JSON.stringify(registry));
+  assert.match((await run(l,true)).join('\n'),/base não corresponde/);assert.ok(existsSync(w.path));
+ }finally{await cleanup(l);}
+});
+
+test('interruption after worktree move leaves a durable reported quarantine',async()=>{
+ const l=await lab();
+ try{
+  const w=makeWorktree(l,'interrupted-move');await register(l,w);const original=l.deps.git!;
+  l.deps.git=async(cwd,args)=>{const result=await original(cwd,args);if(args[0]==='worktree'&&args[1]==='move'&&result.code===0)throw Error('crash');return result;};
+  await run(l,true);l.deps.git=original;
+  const registry=JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8'));
+  const quarantine=registry.worktrees[0].quarantine;assert.ok(existsSync(quarantine));
+  assert.ok((await run(l,true)).join('\n').includes(quarantine));assert.ok(existsSync(quarantine));
+ }finally{await cleanup(l);}
+});
+
+test('image report states preservation and known nominal gigabytes',async()=>{
+ const l=await lab();
+ try{
+  const id=image('b');l.docker.images.set(id,{repoDigests:[]});
+  await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:id},l.deps);
+  const original=l.deps.docker!;l.deps.docker=async args=>args.includes('{{.Size}}')?{code:0,stdout:'2500000000'}:original(args);
+  assert.match((await run(l,true)).join('\n'),/imagens: não implementado, preservadas; 2\.500 GB/);
+  assert.ok(l.docker.images.has(id));
+ }finally{await cleanup(l);}
+});

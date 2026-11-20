@@ -83,3 +83,5 @@ Itens `ac-*` no diretório temporário que não estão no registro são só cont
 raiz temporária apontada para uma pasta descartável e julga o resultado com a retenção real. Os testes que usam banco precisam de
 `AC_TEST_DATABASE_URL`. `tests/personal-artifact-commands.test.ts` chama `runArtifactCommand` com git real, pastas reais e só o
 Docker e a varredura de processos simulados. Nenhum teste remove nada fora da pasta descartável.
+
+A configuração `retention.automatic` no `installation.json` aceita `off`, `preview` e `apply` (padrão `preview`). O vigia não executa retenção em `off`; em `preview`, apenas relata; em `apply`, aplica. Comandos manuais com `--aplicar` continuam explícitos. O timer lê a configuração a cada execução e usa o mesmo modo. A base de um worktree deve ser o ramo atual do checkout do projeto na instalação. Uma quarentena interrompida permanece registrada e é relatada para verificação manual. Imagens candidatas são preservadas; o relatório mostra o tamanho nominal conhecido, que pode incluir camadas compartilhadas.

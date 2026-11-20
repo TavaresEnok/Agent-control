@@ -402,7 +402,7 @@ Isso grava e liga:
 
 - `agent-control-watch-<nome>.service` e `.timer`, a cada 2 minutos;
 - `agent-control-backup-<nome>.service` e `.timer`, todo dia às 03:30, na pasta `/home/app/backups-agent-control/<nome>`;
-- `agent-control-maintenance-<nome>.service` e `.timer`, todo domingo às 04:00 (`npm run personal:maintenance -- <instalação.json>`);
+- `agent-control-maintenance-<nome>.service` e `.timer`, todo domingo às 04:00 (retenção agendada, conforme `retention.automatic`);
 - `agent-control-restore-proof-<nome>.service` e `.timer`, todo dia 1 às 04:30 (`npm run personal:restore-proof -- <instalação.json> <pasta-dos-backups>`).
 
 A cada 2 minutos a vigia também manda um aviso ao celular quando:

@@ -396,6 +396,12 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
 /** Weekly: old Docker build cache goes, and retired images no job still needs leave the installation and Docker.
  * Volumes, containers and images of other projects are never touched. The gateway keeps running. */
 export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps={}){
+ if(argv.length===2&&argv[1]==='--retencao-agendada'){
+  const scheduled=await loadInstallation(resolve(argv[0]!));
+  if(scheduled.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
+  const mode=scheduled.retention?.automatic??'preview';
+  return mode==='off'?['Retenção automática desligada.']:runRetentionStages(scheduled,mode==='apply',deps);
+ }
  const parsed=parseMaintenanceArgs(argv);
  const file=resolve(parsed.installationPath);
  const config=await loadInstallation(file);

@@ -235,3 +235,15 @@ test('uma falha ao ler o estado ainda deixa a retenção rodar e depois propaga 
   assert.equal(calls[1],'limpeza');
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
+
+test('automatic retention defaults to preview and only apply enables deletion',async()=>{
+ const env=await fixture();
+ try{
+  const observed:boolean[]=[];
+  const invoke=()=>runPersonalWatch([env.file],{...quiet,retention:async(_file,apply)=>{observed.push(apply);},probe:async()=>true,notify:async()=>{}});
+  await invoke();
+  const body=JSON.parse(await readFile(env.file,'utf8'));
+  for(const automatic of ['off','preview','apply']){body.retention={automatic};await writeFile(env.file,JSON.stringify(body));await invoke();}
+  assert.deepEqual(observed,[false,false,true]);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});

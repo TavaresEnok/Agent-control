@@ -20,7 +20,7 @@ export const imagesRebuiltNotice='Imagens do Agent Control reconstruídas.';
 
 type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null;sent:Record<string,string>};
 export type PersonalWatchDeps={
- retention?:(file:string)=>Promise<unknown>;
+ retention?:(file:string,apply:boolean)=>Promise<unknown>;
  now?:()=>Date;
  probe?:(url:string)=>Promise<boolean>;
  notify?:(dataDirectory:string,body:string)=>Promise<void>;
@@ -238,8 +238,10 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  }finally{
   // Always, after the alerts: the figure above was taken before this frees anything.
   try{
-   if(deps.retention)await deps.retention(installationFile);
-   else await runPersonalMaintenance([installationFile,'--retencao-automatica','--aplicar']);
+   if((config.retention?.automatic??'preview')!=='off'){
+    if(deps.retention)await deps.retention(installationFile,config.retention?.automatic==='apply');
+    else await runPersonalMaintenance([installationFile,'--retencao-automatica',...(config.retention?.automatic==='apply'?['--aplicar']:[])]);
+   }
   }catch{retentionFailed=true;}
  }
  return `${summary}${retentionFailed?' retention=failed':''}${stateUnsaved?' state=unsaved':''}${tail}`;

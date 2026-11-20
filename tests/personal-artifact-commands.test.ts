@@ -126,7 +126,7 @@ test('a supervised worker worktree is registered, kept until its branch is integ
   assert.equal(JSON.parse(readFileSync(registryFile(l),'utf8')).worktrees.length,1);
   await assert.rejects(runArtifactCommand(l.config,[...args.slice(0,-1),'task/other'],l.deps()),refusal('RETENTION_REGISTRATION_INVALID'));
   git(l.repo,'branch','task/other');
-  await assert.rejects(runArtifactCommand(l.config,[...args.slice(0,-1),'task/other'],l.deps()),refusal('RETENTION_REGISTRATION_CONFLICT'));
+  await assert.rejects(runArtifactCommand(l.config,[...args.slice(0,-1),'task/other'],l.deps()),refusal('RETENTION_REGISTRATION_INVALID'));
 
   const later=Date.now()+3*HOUR;
   const before=readFileSync(registryFile(l),'utf8');

@@ -22,3 +22,9 @@ Na integração de R5, `npx tsc --noEmit --skipLibCheck` passou; a suíte de ret
 - **R5:** reconcilia rodadas terminais pelo banco e fecha órfãs sem linha após sete dias, aguardando mais 24 horas antes da remoção. Jobs nativos não são reconciliados por essa consulta; o prazo de sete dias não tem limite comprovado pelo produto e falta teste da consulta padrão com banco real. Veja [R5](RELATORIO-RET-R5.md).
 
 As limitações das rodadas e a revisão de segurança ainda impedem a ativação. Não houve aplicação na instalação viva; as saídas não rastreadas pré-existentes em `upstream/happier` foram preservadas.
+
+## Rodada 6
+
+A configuração `retention.automatic` tem padrão `preview`, além de `off` e `apply`. Vigia e timer consultam o valor a cada execução; o timer semanal agora executa a retenção agendada, em vez da manutenção geral (que continua disponível por comando manual). Worktrees exigem base igual ao ramo atual do checkout do projeto e verificação de montagens de contêiner antes e depois do isolamento. O caminho de quarentena é registrado antes da movimentação e, após interrupção, é preservado e relatado para análise manual. Imagens continuam preservadas; o relatório informa tamanho nominal conhecido em GB e quantidades desconhecidas. Tamanhos nominais podem compartilhar camadas e não são espaço recuperável comprovado.
+
+Validação com o banco sintético solicitado: `npx tsc --noEmit --skipLibCheck` passou. A suíte abrangente executou 131 testes: 130 passaram e um falhou por expectativa antiga de código de recusa; após corrigir essa expectativa, a reexecução dos testes afetados passou com 68 testes, nenhum skip. Não houve aplicação na instalação viva. A quarentena interrompida exige intervenção manual; permanece a janela entre as últimas verificações e a remoção.
