@@ -1724,3 +1724,25 @@ FIM
 - 20/11/2026 07:10 UTC — Revisão independente revisao-anatel-02 concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 07:10 UTC — Iniciada ordem anatel-r3 em claude-sonnet-5-5 (ajust), no worktree próprio.
 - 20/11/2026 07:11 UTC — O navegador com login real confirmou em 375/768/1440 px que as violações de contraste do axe caíram de 17/18/21 para zero nas duas páginas no tema claro. No tema escuro realmente ativo, as duas versões tiveram zero. O build corrigido foi restabelecido na homologação.
+- 20/11/2026 07:11 UTC — Ordem painel-r2 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:11 UTC — Correção design-cota-r6 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 07:13 UTC — Ordem anatel-r3 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:14 UTC — Revisão independente revisao-painel-02 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:15 UTC — Iniciada ordem painel-r3 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:17 UTC — Revisão independente revisao-anatel-03 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:17 UTC — Correção contraste-r2 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 07:17 UTC — A ordem design-cota-r6 do Opus encerrou com código 0.
+- 20/11/2026 07:17 UTC — Iniciada ordem anatel-r4 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:18 UTC — A ordem contraste-r2 do Opus encerrou com código 0.
+- 20/11/2026 07:19 UTC — Ordem painel-r3 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:20 UTC — Ordem anatel-r4 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:20 UTC — Revisão independente revisao-design-cota-r6 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:21 UTC — O candidato separado de espera de cota no design passou nos 41 testes dirigidos e no TypeScript. O Sol identificou duas falhas de interrupção durante a liberação de uma reserva ou a publicação parcial. O candidato segue no worktree, sem aplicação na instalação. As mudanças de modelo já em produção continuam verificadas; a equipe priorizou a validação das correções reais do NexoISP.
+- 20/11/2026 07:22 UTC — Revisão independente revisao-interface-r3 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:24 UTC — Revisão independente revisao-anatel-final concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:24 UTC — Iniciada ordem painel-r4 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:25 UTC — Iniciada ordem anatel-r5 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:25 UTC — Revisão independente revisao-contraste-folha concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:25 UTC — A CI do NexoISP exige que globals.css continue byte a byte igual à referência oficial. O ajuste aprovado pelo Sol passou para uma folha própria, carregada pelo ponto de entrada da aplicação. O candidato conjunto passou no Prettier, no TypeScript, nos 258 testes e no build. No E2E, a versão instalada de Recharts confirmou que os rótulos do eixo são irmãos do eixo SVG; o teste do painel está sendo corrigido para alcançar esses nós reais.
+- 20/11/2026 07:27 UTC — Ordem painel-r4 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:28 UTC — A suíte de 258 testes passou com a folha de contraste da aplicação e a referência v0 intacta. Na homologação recompilada com essa folha, o axe confirmou zero violações de contraste no tema claro e no tema escuro realmente ativo a 1440 px.

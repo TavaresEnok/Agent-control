@@ -124,3 +124,5 @@ O ramo local de entrega recebeu `4b33170`, revisado pelo Sol. O CSS corrigido el
 | 1440 px | 11 → 0 | 10 → 0 |
 
 No tema escuro, o navegador confirmou que a aplicação ativou o tema e leu o token `#a1a1aa`. As duas versões tiveram zero violações dessa regra nas três larguras. Isso explica a repetição das medidas claras nas capturas escuras do retrato estático. A homologação voltou ao build corrigido depois da comparação.
+
+A integração da suíte completa detectou que `apps/web/src/globals.css` deve ser idêntico à referência oficial v0. O commit local `8320946` preserva essa comparação e aplica os dois tokens por uma folha da aplicação importada pelo ponto de entrada. O candidato conjunto passou no Prettier, no TypeScript, nos 258 testes de frontend e no build. Com a folha definitiva, o axe no navegador autenticado voltou a registrar zero violações de contraste em ambas as páginas a 1440 px nos dois temas.
