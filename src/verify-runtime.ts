@@ -56,6 +56,7 @@ export type SecurityVerificationInput = {
 
 type StaticCliPolicy = {
   nativeWorker: VerifyWorker;
+  contextId: string;
 };
 
 export const DEFAULT_MODEL_CALL_BUDGET = 600;
@@ -99,18 +100,72 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   return runVerificationWithPolicy(input);
 }
 
-/** Internal entry point for `personal:verify` resolved without `--url`, bound to a native capacity worker. */
+/**
+ * Capability for module 1 static CLI routing. It exists only for `personal:verify` resolved without `--url`
+ * and is bound to the native capacity worker, project, context and commit it was issued for.
+ */
+export type StaticCliPolicyGrant = Readonly<{
+  nativeWorker: VerifyWorker;
+  projectId: string;
+  contextId: string;
+  commit: string;
+}>;
+
+const issuedStaticCliPolicies = new WeakMap<object, {grant: StaticCliPolicyGrant; workers: WeakSet<object>}>();
+
+export function issueStaticCliPolicyGrant(input: {
+  url?: string;
+  nativeWorker: VerifyWorker;
+  projectId: string;
+  contextId: string;
+  commit: string;
+}): StaticCliPolicyGrant {
+  if (input.url !== undefined) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
+  if (!isCapacityNativeWorker(input.nativeWorker)) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
+  const grant: StaticCliPolicyGrant = Object.freeze({
+    nativeWorker: input.nativeWorker,
+    projectId: input.projectId,
+    contextId: input.contextId,
+    commit: input.commit,
+  });
+  issuedStaticCliPolicies.set(grant, {grant, workers: new WeakSet<object>([input.nativeWorker])});
+  return grant;
+}
+
+export function isIssuedStaticCliPolicyGrant(grant: unknown): grant is StaticCliPolicyGrant {
+  return typeof grant === 'object' && grant !== null && issuedStaticCliPolicies.has(grant);
+}
+
+/** Registers a wrapper that forwards the very same call object to the granted native worker (for example a deadline guard). */
+export function wrapStaticCliPolicyWorker(grant: StaticCliPolicyGrant, wrapper: VerifyWorker): VerifyWorker {
+  const issued = issuedStaticCliPolicies.get(grant);
+  if (!issued) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
+  issued.workers.add(wrapper);
+  return wrapper;
+}
+
+/** Internal entry point for `personal:verify` resolved without `--url`. Refuses anything the grant was not issued for. */
 export async function runResolvedPersonalSecurityVerification(
   input: SecurityVerificationInput,
-  nativeWorker: VerifyWorker,
+  grant: StaticCliPolicyGrant,
 ): Promise<{
   runId: string;
   directory: string;
   achados: Achado[];
   coverage: CoverageRow[];
 }> {
-  if (!isCapacityNativeWorker(nativeWorker)) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
-  return runVerificationWithPolicy(input, {nativeWorker});
+  const issued = typeof grant === 'object' && grant !== null ? issuedStaticCliPolicies.get(grant) : undefined;
+  if (
+    !issued
+    || !issued.workers.has(input.worker)
+    || issued.grant.projectId !== input.projectId
+    || issued.grant.contextId !== input.authority.contextId
+    || issued.grant.commit !== input.commit
+    || !isCapacityNativeWorker(issued.grant.nativeWorker)
+  ) {
+    throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
+  }
+  return runVerificationWithPolicy(input, {nativeWorker: issued.grant.nativeWorker, contextId: issued.grant.contextId});
 }
 
 async function runVerificationWithPolicy(
@@ -496,6 +551,7 @@ async function reserveAndRun(
       && completed.accountId === seat.accountId
       && completed.profileId === seat.profileId
       && completed.intentId === intentId
+      && completed.contextId === staticPolicy?.contextId
       ? nonEmptySessionId(completed.sessionId)
       : null;
     if (

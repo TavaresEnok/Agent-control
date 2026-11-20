@@ -15,9 +15,13 @@ import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
 import {type SecurityExamSupervisor} from './verify-native-launch.ts';
 import {
+  isIssuedStaticCliPolicyGrant,
+  issueStaticCliPolicyGrant,
   runResolvedPersonalSecurityVerification,
   runSecurityVerification,
+  wrapStaticCliPolicyWorker,
   type SecurityVerificationInput,
+  type StaticCliPolicyGrant,
 } from './verify-runtime.ts';
 import type {VerifyWorker} from './verify-types.ts';
 
@@ -59,15 +63,7 @@ export type PersonalVerificationInput = {
   networkRunner?: NetworkRunner;
 };
 
-type ResolvedStaticPolicyGrant = {
-  nativeWorker: VerifyWorker;
-  projectId: string;
-  contextId: string;
-  commit: string;
-};
-
 const RESOLVED_STATIC_POLICY = Symbol('personalVerifyStaticPolicy');
-const issuedStaticPolicies = new WeakMap<object, ResolvedStaticPolicyGrant>();
 
 export type VerificationProgress = {
   id: string;
@@ -97,7 +93,7 @@ type ReadyVerification = {
   modelCallBudget?: number;
   accountRoot?: string;
   timeLimitMs: number;
-  staticPolicy?: ResolvedStaticPolicyGrant;
+  staticPolicy?: StaticCliPolicyGrant;
 };
 
 type ProgressState = {
@@ -150,12 +146,10 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
   };
 }
 
-function resolveStaticPolicyGrant(input: PersonalVerificationInput): ResolvedStaticPolicyGrant | undefined {
+function resolveStaticPolicyGrant(input: PersonalVerificationInput): StaticCliPolicyGrant | undefined {
   if (input.url !== undefined || !input.worker || !input.authority || !input.commit) return undefined;
-  const rawToken = (input as Record<PropertyKey, unknown>)[RESOLVED_STATIC_POLICY];
-  if (typeof rawToken !== 'object' || rawToken === null) return undefined;
-  const grant = issuedStaticPolicies.get(rawToken);
-  if (!grant) return undefined;
+  const grant = (input as Record<PropertyKey, unknown>)[RESOLVED_STATIC_POLICY];
+  if (!isIssuedStaticCliPolicyGrant(grant)) return undefined;
   if (
     grant.nativeWorker !== input.worker
     || grant.projectId !== input.projectId
@@ -494,6 +488,8 @@ async function runJob(input: {
       await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
       const collected = await collectToolFindings(output);
       assertExamDeadline(startedMs, ready.timeLimitMs);
+      const guardedWorker = workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs);
+      const staticPolicy = ready.url === undefined ? ready.staticPolicy : undefined;
       const verification: SecurityVerificationInput & {modelCallBudget?: number} = {
         ledger: ready.ledger,
         principal: ready.principal,
@@ -503,7 +499,7 @@ async function runJob(input: {
         dataDirectory: ready.dataDirectory,
         commit: ready.commit,
         policyRevision: ready.policyRevision,
-        worker: workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs),
+        worker: staticPolicy ? wrapStaticCliPolicyWorker(staticPolicy, guardedWorker) : guardedWorker,
         rawFindings: collected.findings,
         runId: id,
         onPhase,
@@ -512,8 +508,8 @@ async function runJob(input: {
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
-      if (ready.staticPolicy && ready.url === undefined) {
-        await runResolvedPersonalSecurityVerification(verification, ready.staticPolicy.nativeWorker);
+      if (staticPolicy) {
+        await runResolvedPersonalSecurityVerification(verification, staticPolicy);
       } else {
         await runSecurityVerification(verification);
       }
@@ -768,15 +764,15 @@ export async function resolvePersonalVerification(
     const image = await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
     if (!databases) throw new Refusal('VERIFY_DB_REQUIRED', 409);
-    let staticPolicyAttachment: Record<symbol, ResolvedStaticPolicyGrant> | undefined;
+    let staticPolicyAttachment: Record<symbol, StaticCliPolicyGrant> | undefined;
     if (parsed.url === undefined) {
-      const grant: ResolvedStaticPolicyGrant = Object.freeze({
+      const grant = issueStaticCliPolicyGrant({
+        url: parsed.url,
         nativeWorker: worker,
         projectId: project.id,
         contextId: exam.contextId,
         commit,
       });
-      issuedStaticPolicies.set(grant, grant);
       staticPolicyAttachment = {[RESOLVED_STATIC_POLICY]: grant};
     }
     return {

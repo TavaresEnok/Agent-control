@@ -404,53 +404,74 @@ test('createRecheckNativeWorker repassa avoidProviders e devolve o provedor da r
   assert.match((asked as {reviewerSessionId?: string}).reviewerSessionId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });
 
-test('createCapacityNativeWorker aceita entrada congelada sem mutar e vincula sessão apenas à conclusão do supervisor', async () => {
-  const askedFirst = Object.freeze(call());
-  const askedSecond = Object.freeze(call({accountId: askedFirst.accountId}));
-  const askedFailed = Object.freeze(call({accountId: askedFirst.accountId}));
-  const askedMismatchedReceipt = Object.freeze(call({accountId: askedFirst.accountId}));
-  const askedMismatchedSession = Object.freeze(call({accountId: askedFirst.accountId}));
-  const askedNotRetired = Object.freeze(call({accountId: askedFirst.accountId}));
+type CompletedFixture = 'ok' | 'no-receipt' | 'session-only-receipt' | 'unstarted' | 'wrong-session' | 'wrong-job' | 'wrong-intent'
+  | 'wrong-grant' | 'wrong-context' | 'wrong-account' | 'wrong-profile' | 'bad-exit' | 'bad-signature' | 'no-signature'
+  | 'wrong-outcome-session' | 'failed' | 'retire-undefined' | 'retire-not-removed' | 'retire-throws';
+
+test('createCapacityNativeWorker aceita entrada congelada sem mutar e só comprova a sessão com o recibo assinado do supervisor concluído', async () => {
+  const context = authority();
+  const accountId = randomUUID();
+  const profileId = randomUUID();
+  const frozen = () => Object.freeze(call({accountId, profileId}));
+  const askedFirst = frozen();
+  const askedSecond = frozen();
   const startedSessions: string[] = [];
-  let mode: 'ok' | 'failed' | 'bad-receipt' | 'bad-session' | 'retire-throws' = 'ok';
-  const chosen = supervisor(askedFirst.accountId, {
+  const modeByJob = new Map<string, CompletedFixture>();
+  let nextMode: CompletedFixture = 'ok';
+  const chosen = supervisor(accountId, {
     async start(_principal, _authority, request) {
       startedSessions.push(request.sessionId);
+      modeByJob.set(request.jobId, nextMode);
       return {state: 'running'};
     },
     async reconcile(_principal, _authority, request) {
-      if (mode === 'failed') {
-        return {state: 'failed', output: JSON.stringify({sessionId: randomUUID()})};
-      }
-      if (mode === 'bad-receipt') {
-        return {
-          state: 'completed',
-          output: JSON.stringify({sessionId: request.sessionId}),
-          receipt: {payload: {executionStarted: false, sessionId: request.sessionId}},
-        };
-      }
-      if (mode === 'bad-session') {
-        return {
-          state: 'completed',
-          output: 'ok',
-          sessionId: randomUUID(),
-        };
-      }
+      const mode = modeByJob.get(request.jobId)!;
+      const payload: Record<string, unknown> = {
+        schemaVersion: 1,
+        accountId,
+        profileId,
+        jobId: request.jobId,
+        intentId: request.intentId,
+        contextId: context.contextId,
+        grantId: request.grantId,
+        sessionId: request.sessionId,
+        exitCode: 0,
+        workerExitCode: 0,
+      };
+      const signature = 'ab'.repeat(64);
+      if (mode === 'failed') return {state: 'failed', output: 'x', receipt: {payload: {...payload, exitCode: 1}, signature}};
+      if (mode === 'no-receipt') return {state: 'completed', output: 'ok'};
+      if (mode === 'session-only-receipt') return {state: 'completed', output: 'ok', receipt: {payload: {sessionId: request.sessionId}}};
+      if (mode === 'unstarted') payload.executionStarted = false;
+      if (mode === 'wrong-session') payload.sessionId = randomUUID();
+      if (mode === 'wrong-job') payload.jobId = randomUUID();
+      if (mode === 'wrong-intent') payload.intentId = randomUUID();
+      if (mode === 'wrong-grant') payload.grantId = randomUUID();
+      if (mode === 'wrong-context') payload.contextId = randomUUID();
+      if (mode === 'wrong-account') payload.accountId = randomUUID();
+      if (mode === 'wrong-profile') payload.profileId = randomUUID();
+      if (mode === 'bad-exit') payload.exitCode = 1;
       return {
         state: 'completed',
         output: 'ok',
-        receipt: {payload: {jobId: request.jobId, intentId: request.intentId, grantId: request.grantId, sessionId: request.sessionId}},
+        ...(mode === 'wrong-outcome-session' ? {sessionId: randomUUID()} : {}),
+        receipt: mode === 'no-signature'
+          ? {payload}
+          : {payload, signature: mode === 'bad-signature' ? 'zz' : signature},
       };
     },
-    async retireTerminal() {
+    async retireTerminal(_principal, _authority, jobId) {
+      const mode = modeByJob.get(jobId);
       if (mode === 'retire-throws') throw new Error('retire-failed');
+      if (mode === 'retire-undefined') return undefined;
+      if (mode === 'retire-not-removed') return {state: 'retained'};
       return {state: 'removed'};
     },
   });
   const worker = createCapacityNativeWorker({
     supervisors: [chosen],
     principal: 'owner',
-    authority: authority(),
+    authority: context,
     ledger,
     base,
     wait: async () => {},
@@ -469,20 +490,24 @@ test('createCapacityNativeWorker aceita entrada congelada sem mutar e vincula se
   assert.equal(firstSession?.sessionId, startedSessions[0]);
   assert.equal(secondSession?.sessionId, startedSessions[1]);
   assert.notEqual(firstSession?.sessionId, secondSession?.sessionId);
+  assert.equal(firstSession?.contextId, context.contextId);
+  assert.equal(firstSession?.accountId, accountId);
+  assert.equal(firstSession?.profileId, profileId);
 
-  mode = 'failed';
-  await worker.run(askedFailed);
-  assert.equal(readNativeExamSession(worker, askedFailed), null);
+  const unproven: CompletedFixture[] = [
+    'no-receipt', 'session-only-receipt', 'unstarted', 'wrong-session', 'wrong-job', 'wrong-intent', 'wrong-grant',
+    'wrong-context', 'wrong-account', 'wrong-profile', 'bad-exit', 'bad-signature', 'no-signature', 'wrong-outcome-session',
+    'failed', 'retire-undefined', 'retire-not-removed',
+  ];
+  for (const mode of unproven) {
+    nextMode = mode;
+    const asked = frozen();
+    await worker.run(asked);
+    assert.equal(readNativeExamSession(worker, asked), null, mode);
+  }
 
-  mode = 'bad-receipt';
-  await worker.run(askedMismatchedReceipt);
-  assert.equal(readNativeExamSession(worker, askedMismatchedReceipt), null);
-
-  mode = 'bad-session';
-  await worker.run(askedMismatchedSession);
-  assert.equal(readNativeExamSession(worker, askedMismatchedSession), null);
-
-  mode = 'retire-throws';
+  nextMode = 'retire-throws';
+  const askedNotRetired = frozen();
   await assert.rejects(() => worker.run(askedNotRetired), /retire-failed/);
   assert.equal(readNativeExamSession(worker, askedNotRetired), null);
 });

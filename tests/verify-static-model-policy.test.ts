@@ -10,7 +10,14 @@ import {Capacity, CapacityPolicy} from '../src/capacity.ts';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {beginPersonalVerification, resolvePersonalVerification} from '../src/verify-command.ts';
-import {runSecurityVerification} from '../src/verify-runtime.ts';
+import {createCapacityNativeWorker} from '../src/verify-native-launch.ts';
+import {
+  issueStaticCliPolicyGrant,
+  runResolvedPersonalSecurityVerification,
+  runSecurityVerification,
+  wrapStaticCliPolicyWorker,
+  type SecurityVerificationInput,
+} from '../src/verify-runtime.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
@@ -110,6 +117,32 @@ async function setupEnvironment(label: string) {
   };
 }
 
+type FixtureRequest = {jobId: string; intentId: string; grantId: string; sessionId: string};
+
+/** Terminal receipt in the shape the signed native execution contract emits for a started, successful job. */
+async function terminalReceipt(db: Ledger, authority: unknown, request: FixtureRequest, over: Record<string, unknown> = {}) {
+  const row = (await db.pool.query<{account_id: string; profile_id: string}>(
+    'SELECT account_id::text AS account_id, profile_id::text AS profile_id FROM ac_capacity_grants WHERE id=$1',
+    [request.grantId],
+  )).rows[0]!;
+  return {
+    payload: {
+      schemaVersion: 1,
+      accountId: row.account_id,
+      profileId: row.profile_id,
+      jobId: request.jobId,
+      intentId: request.intentId,
+      contextId: (authority as {contextId: string}).contextId,
+      grantId: request.grantId,
+      sessionId: request.sessionId,
+      exitCode: 0,
+      workerExitCode: 0,
+      ...over,
+    },
+    signature: 'ab'.repeat(64),
+  };
+}
+
 function createRecordingSupervisor(
   db: Ledger,
   accountIds: readonly string[],
@@ -148,21 +181,24 @@ function createRecordingSupervisor(
       });
       return {state: 'running'};
     },
-    async reconcile(_principal: string, _authority: unknown, request: {jobId: string}) {
+    async reconcile(_principal: string, authority: unknown, request: FixtureRequest) {
       const job = jobs.get(request.jobId);
       const task = job?.task ?? '';
+      const receipt = await terminalReceipt(db, authority, request);
       if (task.startsWith('Pedido de mapa.')) {
-        return {state: 'completed', output: JSON.stringify({kind: 'mapa', routes: [{method: 'GET', path: '/admin', file: 'src/app.ts', line: 1}], surfaces: ['http']})};
+        return {state: 'completed', receipt, output: JSON.stringify({kind: 'mapa', routes: [{method: 'GET', path: '/admin', file: 'src/app.ts', line: 1}], surfaces: ['http']})};
       }
       if (task.startsWith('Pedido de confirmação.')) {
         return {
           state: 'completed',
+          receipt,
           output: JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'Confirmado.', proof: 'src/app.ts'}),
         };
       }
       const items = (task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
       return {
         state: 'completed',
+        receipt,
         output: JSON.stringify({
           kind: 'exame',
           filesRead: ['src/app.ts'],
@@ -370,7 +406,10 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
     }
 
     // 2) No caminho nativo da mesma conta, falha se sessão do supervisor faltar, repetir ou falhar na conclusão.
-    for (const mode of ['missing-reviewer-session', 'same-session', 'missing-examiner-session', 'failed-reviewer-execution'] as const) {
+    for (const mode of [
+      'missing-reviewer-session', 'same-session', 'missing-examiner-session', 'failed-reviewer-execution',
+      'session-only-examiner', 'session-only-reviewer', 'unstarted-reviewer', 'forged-reviewer-context', 'unretired-reviewer',
+    ] as const) {
       const jobs = new Map<string, {task: string; sessionId: string}>();
       let examSessionId = '';
       let confirmLaunched = false;
@@ -385,9 +424,10 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
           if (request.task.startsWith('Pedido de confirmação.')) confirmLaunched = true;
           return {state: 'running'};
         },
-        async reconcile(_principal: string, _authority: unknown, request: {jobId: string}) {
+        async reconcile(_principal: string, authority: unknown, request: FixtureRequest) {
           const job = jobs.get(request.jobId);
           const task = job?.task ?? '';
+          const receipt = await terminalReceipt(env.db, authority, request);
           if (task.startsWith('Pedido de mapa.')) {
             return {state: 'completed', output: JSON.stringify({kind: 'mapa', routes: [], surfaces: ['http']})};
           }
@@ -413,22 +453,34 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
             if (mode === 'missing-examiner-session') {
               return {state: 'completed', output, receipt: {payload: {executionStarted: false}}};
             }
-            return {state: 'completed', output};
+            if (mode === 'session-only-examiner') {
+              return {state: 'completed', output, receipt: {payload: {sessionId: request.sessionId}}};
+            }
+            return {state: 'completed', output, receipt};
           }
           const confirmOutput = JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'ok', proof: 'src/app.ts'});
           if (mode === 'missing-reviewer-session') {
-            return {state: 'completed', output: confirmOutput, receipt: {payload: {executionStarted: false}}};
+            return {state: 'completed', output: confirmOutput};
+          }
+          if (mode === 'session-only-reviewer') {
+            return {state: 'completed', output: confirmOutput, receipt: {payload: {sessionId: request.sessionId}}};
+          }
+          if (mode === 'unstarted-reviewer') {
+            return {state: 'completed', output: confirmOutput, receipt: {...receipt, payload: {...receipt.payload, executionStarted: false}}};
+          }
+          if (mode === 'forged-reviewer-context') {
+            return {state: 'completed', output: confirmOutput, receipt: {...receipt, payload: {...receipt.payload, contextId: randomUUID()}}};
           }
           if (mode === 'same-session') {
-            return {state: 'completed', output: confirmOutput, receipt: {payload: {executionStarted: true, sessionId: examSessionId}}};
+            return {state: 'completed', output: confirmOutput, receipt: {...receipt, payload: {...receipt.payload, sessionId: examSessionId}}};
           }
           if (mode === 'failed-reviewer-execution') {
             return {state: 'failed', output: confirmOutput};
           }
-          return {state: 'completed', output: confirmOutput};
+          return {state: 'completed', output: confirmOutput, receipt};
         },
         async retireTerminal() {
-          return {state: 'removed'};
+          return mode === 'unretired-reviewer' && confirmLaunched ? {state: 'retained'} : {state: 'removed'};
         },
       };
       const faultyResolved = await resolvePersonalVerification([env.installationPath, env.projectId], {
@@ -447,7 +499,7 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
           pending,
           (error: unknown) => error instanceof Refusal && error.code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
         );
-        if (mode === 'missing-examiner-session') {
+        if (mode === 'missing-examiner-session' || mode === 'session-only-examiner') {
           assert.equal(confirmLaunched, false);
         } else {
           assert.equal(confirmLaunched, true);
@@ -703,5 +755,74 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
     assert.equal(result.achados[0]?.verifier?.model, 'claude-sonnet-5-5');
   } finally {
     await env.close();
+  }
+});
+
+test('capability da política estática só ativa para o worker nativo, projeto, contexto e commit para os quais foi emitida', async () => {
+  const projectId = randomUUID();
+  const contextId = randomUUID();
+  const commit = 'c'.repeat(40);
+  const authority = {contextId, instanceId: randomUUID(), epoch: 1};
+  const nativeWorker = () => createCapacityNativeWorker({
+    supervisors: [],
+    principal: 'owner',
+    authority,
+    ledger: {} as Ledger,
+    base: commit,
+  });
+  const granted = nativeWorker();
+  const otherNative = nativeWorker();
+  const plainWorker: VerifyWorker = {async run() { return ''; }};
+  const issue = (over: Partial<Parameters<typeof issueStaticCliPolicyGrant>[0]> = {}) =>
+    issueStaticCliPolicyGrant({nativeWorker: granted, projectId, contextId, commit, ...over});
+  // A refused activation never reaches the ledger: an empty ledger would throw a different error.
+  const inputFor = (over: Partial<SecurityVerificationInput> = {}) => ({
+    ledger: {} as Ledger,
+    principal: 'owner',
+    authority,
+    projectId,
+    repoPath: '/nonexistent',
+    dataDirectory: '/nonexistent',
+    commit,
+    policyRevision: 1,
+    worker: granted,
+    ...over,
+  }) as SecurityVerificationInput;
+  const unauthorized = (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_STATIC_POLICY_UNAUTHORIZED';
+
+  // Emission: refused with a URL and for anything that is not a native capacity worker.
+  assert.throws(() => issue({url: 'http://127.0.0.1:9/app'}), unauthorized);
+  assert.throws(() => issue({nativeWorker: plainWorker}), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_WORKER_UNAVAILABLE');
+
+  // Verification: forged grant objects, even with identical fields, are refused.
+  const grant = issue();
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), {...grant}), unauthorized);
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), {} as never), unauthorized);
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), undefined as never), unauthorized);
+  // Another native worker (for example the one from the URL flow) is not the authorized one.
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({worker: otherNative}), grant), unauthorized);
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({worker: plainWorker}), grant), unauthorized);
+  // An unregistered wrapper of the authorized worker is also refused; a registered one passes the gate.
+  const wrapper: VerifyWorker = {run: call => granted.run(call)};
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({worker: wrapper}), grant), unauthorized);
+  assert.throws(() => wrapStaticCliPolicyWorker({...grant}, wrapper), unauthorized);
+  // Project, context and commit must match.
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({projectId: randomUUID()}), grant), unauthorized);
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({commit: 'd'.repeat(40)}), grant), unauthorized);
+  await assert.rejects(
+    runResolvedPersonalSecurityVerification(inputFor({authority: {...authority, contextId: randomUUID()}}), grant),
+    unauthorized,
+  );
+  // A grant issued for one worker does not authorize the other grant's worker.
+  const otherGrant = issue({nativeWorker: otherNative});
+  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), otherGrant), unauthorized);
+
+  // Matching input passes the gate and only then reaches the ledger (which here is an empty stub).
+  wrapStaticCliPolicyWorker(grant, wrapper);
+  for (const worker of [granted, wrapper]) {
+    await assert.rejects(
+      runResolvedPersonalSecurityVerification(inputFor({worker}), grant),
+      (error: unknown) => !unauthorized(error),
+    );
   }
 });
