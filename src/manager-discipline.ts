@@ -1,6 +1,11 @@
+import {execFile} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {estimateTokens,generateRepoMapSafe} from './repo-map.ts';
+import {fileURLToPath} from 'node:url';
+import {promisify} from 'node:util';
+import {estimateTokens,type RepoMapOptions} from './repo-map.ts';
+
+const execFileAsync=promisify(execFile);
 
 /**
  * Manager discipline (T6): the panel manager keeps its context small and deterministic.
@@ -28,7 +33,7 @@ const clip=(text:string,max:number)=>text.length<=max?text:text.slice(0,Math.max
  * The block never exceeds budgetChars; when lines must go, the oldest go first.
  */
 export function compactConversation(messages:readonly HistoryMessage[],options:CompactHistoryOptions={}):string{
- const recentFull=options.recentFull??4,fullChars=options.fullChars??1200,olderChars=options.olderChars??160,pendingChars=options.pendingChars??400,budget=options.budgetChars??6000;
+ const recentFull=options.recentFull??4,fullChars=options.fullChars??1200,olderChars=options.olderChars??160,pendingChars=options.pendingChars??400,budget=options.budgetChars??4000;
  const lines=messages.map((message,index)=>{
   const recent=index>=messages.length-recentFull;
   const text=recent?message.text.trim():oneLine(message.text);
@@ -45,25 +50,78 @@ export function compactConversation(messages:readonly HistoryMessage[],options:C
 /** Messages shown to the manager. The message being decided now is excluded: it is sent whole on its own. */
 export function historyBeforeCurrent(page:readonly {id:string;role:'owner'|'manager';text:string}[],current:{localId:string;text:string}):HistoryMessage[]{
  const rows=page.filter(row=>row.text.trim()&&!row.id.endsWith('|'+current.localId));
+ const foundById=rows.length<page.filter(row=>row.text.trim()).length;
+ // Fallback by text only when the current message was not found by id (stored under another id). Found by id, an earlier
+ // message with the same text is a real earlier message and stays.
  const last=rows.at(-1);
- if(last&&last.role==='owner'&&last.text.trim()===current.text.trim())rows.pop();
+ if(!foundById&&last&&last.role==='owner'&&last.text.trim()===current.text.trim())rows.pop();
  return rows.map(row=>({role:row.role,text:row.text}));
 }
 
+export type RepoMapChildResult={map:string|null;reason?:string};
+export type RepoMapGenerator=(options:RepoMapOptions)=>Promise<RepoMapChildResult>;
+/** Upper bound for a cold map build. A slower repository falls back to the legacy listing instead of stalling the manager. */
+export const MAP_CHILD_TIMEOUT_MS=10_000;
+const MAP_FAILURE_COOLDOWN_MS=60_000;
+
+/**
+ * Builds the map in a child process (same worker as native jobs). The map code reads git with execFileSync, which would
+ * block the server's event loop (lease heartbeats, HTTP, other projects) for seconds on a cold cache. Never throws.
+ */
+export async function generateRepoMapInChild(options:RepoMapOptions,timeoutMs=MAP_CHILD_TIMEOUT_MS):Promise<RepoMapChildResult>{
+ try{
+  const script=fileURLToPath(new URL('./repo-map-worker.ts',import.meta.url));
+  const {stdout}=await execFileAsync(process.execPath,['--import','tsx',script,JSON.stringify(options)],{timeout:timeoutMs,maxBuffer:256*1024,cwd:fileURLToPath(new URL('..',import.meta.url))});
+  const result=JSON.parse(stdout) as {map?:unknown};
+  return typeof result.map==='string'&&result.map?{map:result.map}:{map:null,reason:'EMPTY_MAP'};
+ }catch(error){
+  return {map:null,reason:(error as {killed?:boolean}).killed?'MAP_TIMEOUT':error instanceof Error?error.message:String(error)};
+ }
+}
+
+const mapMemo=new Map<string,string>();
+const mapFailures=new Map<string,number>();
+async function headOf(repo:string):Promise<string|null>{
+ try{return (await execFileAsync('git',['-C',repo,'rev-parse','--verify','HEAD'],{timeout:3000,maxBuffer:4096})).stdout.trim()||null;}catch{return null;}
+}
+/** Test hook: forget the in-memory memo and the failure cool-down. */
+export function resetManagerMapMemory():void{mapMemo.clear();mapFailures.clear();}
+
 /**
  * Compact repository context for the manager: README head and the cached repository map within a token budget.
- * Falls back to the caller's raw context when the map is unavailable.
+ * The map is built off the event loop (child process with a time limit), remembered per commit in memory, and a
+ * failed or slow build is not retried for a minute. Falls back to the caller's raw context when the map is unavailable.
  */
-export async function managerRepositoryContext(repo:string,discipline:ManagerDiscipline,fallback:()=>Promise<string>):Promise<string>{
+export async function managerRepositoryContext(repo:string,discipline:ManagerDiscipline,fallback:()=>Promise<string>,deps:{generate?:RepoMapGenerator;now?:()=>number}={}):Promise<string>{
  if(!discipline.enabled)return fallback();
+ const generate=deps.generate??generateRepoMapInChild,now=deps.now??Date.now;
  const budget=Math.max(500,discipline.contextTokens);
  let readme='';
  try{readme=(await readFile(join(repo,'README.md'),'utf8')).slice(0,1200).trim();}catch{readme='';}
  const mapBudget=Math.max(300,budget-estimateTokens(readme)-40);
- const result=await generateRepoMapSafe({repoPath:repo,projectId:discipline.projectId,dataDirectory:discipline.dataDirectory,budgetTokens:mapBudget,useCache:true});
- if(!result.map)return fallback();
- return 'Mapa compacto do repositório (assinaturas e arquivos mais referenciados; peça um arquivo específico se precisar do conteúdo):\n'+result.map+(readme?'\n\nREADME (início):\n'+readme:'');
+ const head=await headOf(repo);
+ const key=head?[repo,head,mapBudget,discipline.projectId??''].join('\0'):null;
+ let map=key?mapMemo.get(key)??null:null;
+ if(!map){
+  const failedAt=mapFailures.get(repo);
+  if(failedAt!==undefined&&now()-failedAt<MAP_FAILURE_COOLDOWN_MS)return fallback();
+  const result=await generate({repoPath:repo,projectId:discipline.projectId,dataDirectory:discipline.dataDirectory,budgetTokens:mapBudget,useCache:true});
+  if(!result.map){mapFailures.set(repo,now());return fallback();}
+  mapFailures.delete(repo);
+  map=result.map;
+  if(key){if(mapMemo.size>=16)mapMemo.delete(mapMemo.keys().next().value as string);mapMemo.set(key,map);}
+ }
+ return 'Mapa compacto do repositório (assinaturas e arquivos mais referenciados; peça um arquivo específico se precisar do conteúdo):\n'+map+(readme?'\n\nREADME (início):\n'+readme:'');
 }
+
+/** Resolves with the promise, or with `fallback` after `ms`. The slow promise is left to finish on its own. */
+export async function withinMs<T>(promise:Promise<T>,ms:number,fallback:T):Promise<T>{
+ let timer:NodeJS.Timeout|undefined;
+ try{return await Promise.race([promise.catch(()=>fallback),new Promise<T>(resolve=>{timer=setTimeout(()=>resolve(fallback),ms);timer.unref?.();})]);}
+ finally{if(timer)clearTimeout(timer);}
+}
+/** Longest wait for the panel history before the manager decides without it. */
+export const HISTORY_READ_TIMEOUT_MS=2500;
 
 /** Tokens the CLI reported, if its text output says so. Total only: the split is not exposed. */
 export function parseReportedTokens(provider:string,stdout:string,stderr:string):number|null{

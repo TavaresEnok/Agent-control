@@ -21,7 +21,7 @@ import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
 import {panelMessageFromRecord,type PanelMessage,type PanelPage} from './personal-panel-conversation.ts';
 import {reserveAssumptionNotices,teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
-import {historyBeforeCurrent,managerEconomyOf,managerRepositoryContext} from './manager-discipline.ts';
+import {HISTORY_READ_TIMEOUT_MS,historyBeforeCurrent,managerEconomyOf,managerRepositoryContext,withinMs} from './manager-discipline.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
 import {claudeLimitNotice} from './quota-exhaustion.ts';
@@ -461,7 +461,7 @@ export class HappierEndpoint {
       try{
        // Discipline: compact map context (cached by commit) and a short, summarized history. Off keeps the legacy prompt.
        const repositoryContext=await this.managerContext();
-       const history=economy.discipline?historyBeforeCurrent((await this.readPanelConversation(undefined,40).catch(()=>({messages:[]}))).messages,{localId:q.localId,text:q.text}):[];
+       const history=economy.discipline?historyBeforeCurrent((await withinMs(this.readPanelConversation(undefined,40),HISTORY_READ_TIMEOUT_MS,{messages:[]} as unknown as PanelPage)).messages,{localId:q.localId,text:q.text}):[];
        decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+repositoryContext,{compact:economy.discipline,history,measure:economy.measurement,projectId:this.runtime.projectId}).catch(()=>null)??null;
       }catch{decision=null;}
       finally{clearInterval(decisionLease);}

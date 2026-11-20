@@ -6,8 +6,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import {
-  backoffMs, compactConversation, historyBeforeCurrent, managerEconomyOf, managerRepositoryContext, managerUsage,
-  parseReportedTokens, pollSchedule, tailForModel,
+  backoffMs, compactConversation, generateRepoMapInChild, historyBeforeCurrent, managerEconomyOf, managerRepositoryContext, managerUsage,
+  parseReportedTokens, pollSchedule, resetManagerMapMemory, tailForModel, withinMs,
 } from '../src/manager-discipline.ts';
 import {PersonalManagerChat} from '../src/personal-manager-chat.ts';
 import {personalRepositoryContext} from '../src/personal-runtime.ts';
@@ -88,6 +88,76 @@ test('contexto do gerente: mapa compacto cabe no orçamento e é bem menor que o
   } finally {
     await rm(repo, {recursive: true, force: true});
     await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('historyBeforeCurrent: achada por id, mensagem anterior igual continua no histórico', () => {
+  const page = [
+    {id: 'c|a', role: 'owner' as const, text: 'faça o relatório'},
+    {id: 'c|b', role: 'manager' as const, text: 'qual período?'},
+    {id: 'c|panel-2', role: 'owner' as const, text: 'faça o relatório'},
+  ];
+  assert.deepEqual(historyBeforeCurrent(page, {localId: 'panel-2', text: 'faça o relatório'}).map(row => row.text), ['faça o relatório', 'qual período?']);
+});
+
+test('withinMs: não espera uma leitura lenta e devolve o valor padrão', async () => {
+  const slow = new Promise<string>(resolve => setTimeout(() => resolve('tarde'), 400));
+  const started = Date.now();
+  assert.equal(await withinMs(slow, 30, 'padrão'), 'padrão');
+  assert.ok(Date.now() - started < 300);
+  assert.equal(await withinMs(Promise.resolve('ok'), 500, 'padrão'), 'ok');
+  assert.equal(await withinMs(Promise.reject(new Error('rede')), 500, 'padrão'), 'padrão');
+});
+
+test('mapa do gerente: geração fria roda fora do laço de eventos, com limite de tempo', async () => {
+  const repo = await fixtureRepo();
+  const data = await mkdtemp(join(tmpdir(), 'ac-t6-data-'));
+  try {
+    let maxGap = 0, last = Date.now();
+    const timer = setInterval(() => { const at = Date.now(); maxGap = Math.max(maxGap, at - last); last = at; }, 10);
+    const started = Date.now();
+    const result = await generateRepoMapInChild({repoPath: repo, projectId: 'p1', dataDirectory: data, budgetTokens: 1200, useCache: true});
+    const ms = Date.now() - started;
+    clearInterval(timer);
+    assert.ok(result.map && result.map.length > 0, 'mapa gerado: ' + result.reason);
+    // Em processo o mesmo trabalho prendia o laço por segundos; no filho o laço segue girando.
+    assert.ok(maxGap < 400, `laço de eventos livre: maior intervalo ${maxGap} ms em ${ms} ms`);
+    console.log(`T6 medido: geração fria em processo filho, ${ms} ms, maior parada do laço ${maxGap} ms`);
+    const timedOut = await generateRepoMapInChild({repoPath: repo, projectId: 'p1', budgetTokens: 1200, useCache: false}, 1);
+    assert.equal(timedOut.map, null);
+    assert.equal(timedOut.reason, 'MAP_TIMEOUT');
+  } finally {
+    await rm(repo, {recursive: true, force: true});
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('mapa do gerente: memória por commit e pausa depois de falha ou lentidão', async () => {
+  const repo = await fixtureRepo();
+  resetManagerMapMemory();
+  try {
+    let calls = 0, mode: 'ok' | 'fail' = 'ok';
+    let clock = 1_000_000;
+    const deps = {now: () => clock, generate: async () => { calls += 1; return mode === 'ok' ? {map: 'MAPA-FALSO'} : {map: null, reason: 'MAP_TIMEOUT'}; }};
+    const discipline = {enabled: true, contextTokens: 1200, measure: false, projectId: 'p1'};
+    const first = await managerRepositoryContext(repo, discipline, async () => 'bruto', deps);
+    const second = await managerRepositoryContext(repo, discipline, async () => 'bruto', deps);
+    assert.match(first, /MAPA-FALSO/);
+    assert.equal(second, first);
+    assert.equal(calls, 1, 'mesmo commit: sem nova geração');
+    // Novo commit: nova geração; ela falha e a próxima mensagem não repete o custo.
+    execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '--allow-empty', '-q', '-m', 'um'], {stdio: 'ignore'});
+    mode = 'fail';
+    assert.equal(await managerRepositoryContext(repo, discipline, async () => 'bruto', deps), 'bruto');
+    assert.equal(calls, 2);
+    assert.equal(await managerRepositoryContext(repo, discipline, async () => 'bruto', deps), 'bruto');
+    assert.equal(calls, 2, 'dentro da pausa não gera de novo');
+    clock += 61_000; mode = 'ok';
+    assert.match(await managerRepositoryContext(repo, discipline, async () => 'bruto', deps), /MAPA-FALSO/);
+    assert.equal(calls, 3, 'depois da pausa tenta de novo');
+  } finally {
+    resetManagerMapMemory();
+    await rm(repo, {recursive: true, force: true});
   }
 });
 
