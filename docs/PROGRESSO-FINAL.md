@@ -1501,3 +1501,12 @@ PAUSADO-COTA
 - 20/11/2026 00:50 UTC — trabalho-C-LAB-C9-ATRIBUICAO-R3 iniciado em final-c9-lab-atribuicao por terra high.
 - 20/11/2026 00:51 UTC — C-LAB-C9-ATRIBUICAO-R3 encerrado com código 0.
 - 20/11/2026 00:51 UTC — Correção c9-lab-atribuicao recebida em cf57aecf. Revisão Sol high somente leitura solicitada.
+- 20/11/2026 00:51 UTC — revisor-C-ACEITE-LAB-C9-ATRIBUICAO-R3 iniciado em agent-control por Sol high normal somente leitura.
+- 20/11/2026 00:53 UTC — C-ACEITE-LAB-C9-ATRIBUICAO-R3 encerrado com código 0.
+- 20/11/2026 00:53 UTC — Sol high confirmou os dois cenários R2 e a coerência da medição. O gerente validou cf57aecf com TypeScript e os cinco testes da imagem real C9, sem pulos. O primeiro laboratório conjunto terminou com 199 aprovados e uma falha, reproduzida e corrigida na asserção.
+- 20/11/2026 00:53 UTC — O ajuste do laboratório C9 entrou na bancada em 18a36cbc. A árvore de produto e as oito imagens permanecem idênticas às do candidato 7c1392d4. Reiniciado o aceite completo.
+- 20/11/2026 00:53 UTC — Aceite de all em 18a36cbc iniciado na cópia do ramo do produto, com PostgreSQL próprio e descartável.
+- 20/11/2026 00:55 UTC — TypeScript passou no candidato 18a36cbc; a suíte oficial está em execução no mesmo commit. Os únicos arquivos que diferem do primeiro candidato conjunto são a prova C9 e os três relatórios dessa prova.
+- 20/11/2026 01:14 UTC — Suíte de instalacao-18a36cbc em 18a36cbc passou: 276 arquivos, 0 falhas, 95 excluídos pelo executor.
+- 20/11/2026 01:16 UTC — Os 53 testes complementares passaram novamente em 18a36cbc, sem pulos. O laboratório integrado está executando os 200 casos com os contêineres e a base descartável.
+- 20/11/2026 01:22 UTC — Aceite de instalacao-18a36cbc em 18a36cbc passou em TypeScript, suíte oficial, complementares e laboratório.
