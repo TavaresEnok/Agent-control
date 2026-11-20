@@ -1,6 +1,6 @@
 import {execFile,spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod,lstat,mkdir,open,readdir,readFile,realpath,rename,rm} from 'node:fs/promises';
+import {chmod,lstat,mkdir,open,readdir,readFile,realpath,rename,rm,unlink,writeFile} from 'node:fs/promises';
 import {join,relative,resolve,sep} from 'node:path';
 import {promisify} from 'node:util';
 import {Refusal} from './contracts.ts';
@@ -124,16 +124,18 @@ async function readSmallJson(path:string){
  * installation.json names this project. Anything else (other installations, hand-made
  * folders, damaged copies) is not recognized and is never counted or deleted.
  */
-async function recognizedBackup(dated:string,projectId:string,options:PersonalRestoreOptions){
+async function recognizedBackup(dated:string,projectId:string,dataDirectory:string,options:PersonalRestoreOptions){
  try{
+  const before=await lstat(dated,{bigint:true});
   const entries=await readdir(dated,{withFileTypes:true});
   const entry=entries[0];
   if(entries.length!==1||!entry?.isDirectory()||!entry.name.startsWith('agent-control-'))return false;
   const backup=join(dated,entry.name);
-  const raw=await readSmallJson(join(backup,'installation.json')) as {project?:{id?:unknown}}|null;
-  if(raw?.project?.id!==projectId)return false;
+  const raw=await readSmallJson(join(backup,'installation.json')) as {project?:{id?:unknown};dataDirectory?:unknown}|null;
+  if(raw?.project?.id!==projectId||raw.dataDirectory!==dataDirectory)return false;
   await runPersonalRestoreCheck([backup],options);
-  return true;
+  const after=await lstat(dated,{bigint:true});
+  return before.isDirectory()&&before.dev===after.dev&&before.ino===after.ino?before:false;
  }catch{return false;}
 }
 
@@ -150,36 +152,61 @@ async function acquireLock(parent:string){
  return ()=>handle.close();
 }
 
+// Persist the identity before renaming. On a later successful rotation only the
+// exact directory originally selected for deletion may be retired.
+const pendingName=/^\.retencao-([0-9a-f-]{36})\.json$/;
+async function finishPending(root:string,marker:string,projectId:string,dataDirectory:string){
+ const match=pendingName.exec(marker);
+ if(!match)return false;
+ const proof=await readSmallJson(join(root,marker)) as {
+  projectId?:unknown;dataDirectory?:unknown;dev?:unknown;ino?:unknown
+ }|null;
+ if(proof?.projectId!==projectId||proof.dataDirectory!==dataDirectory)return false;
+ const condemned=join(root,'.removendo-'+match[1]);
+ const entry=await lstat(condemned,{bigint:true}).catch((error:NodeJS.ErrnoException)=>{
+  if(error.code==='ENOENT')return null;
+  throw error;
+ });
+ if(entry){
+  if(!entry.isDirectory()||String(entry.dev)!==proof.dev||String(entry.ino)!==proof.ino)return false;
+  await rm(condemned,{recursive:true,force:false});
+ }
+ await unlink(join(root,marker));
+ return !!entry;
+}
+
 /**
  * Keep the new backup plus the newest recognized ones of this installation, `keep` in all.
  * A condemned folder is renamed first, so a half-deleted copy never looks like a backup.
  * Folders that are not recognized, symlinks and other files stay untouched.
  */
-async function pruneBackups(parent:string,keep:number,newName:string,projectId:string,options:PersonalRestoreOptions):Promise<PruneResult>{
+async function pruneBackups(parent:string,keep:number,newName:string,projectId:string,dataDirectory:string,options:PersonalRestoreOptions):Promise<PruneResult>{
  const root=await realpath(parent);
  let failed=0;
  const names:string[]=[];
  for(const entry of await readdir(root,{withFileTypes:true})){
   const literal=await realChild(root,entry.name,stampName);
-  if(literal&&(entry.name===newName||await recognizedBackup(literal,projectId,options)))names.push(entry.name);
+  if(literal&&(entry.name===newName||await recognizedBackup(literal,projectId,dataDirectory,options)))names.push(entry.name);
  }
  names.sort();
  if(!names.includes(newName))return {kept:names.length,removed:0,failed:failed+1};
- const keepSet=new Set([newName]);
- for(const name of [...names].reverse()){
-  if(keepSet.size>=keep)break;
-  keepSet.add(name);
- }
+ const keepSet=new Set(names.slice(-keep));
  let removed=0;
+ for(const marker of await readdir(root)){
+  if(!pendingName.test(marker))continue;
+  try{if(await finishPending(root,marker,projectId,dataDirectory))removed++;}catch{failed++;}
+ }
  for(const name of names){
   if(keepSet.has(name))continue;
   const literal=await realChild(root,name,stampName);
-  if(!literal||!await recognizedBackup(literal,projectId,options))continue;
-  const condemned=join(root,`.removendo-${name}-${randomUUID()}`);
+  const entry=literal&&await recognizedBackup(literal,projectId,dataDirectory,options);
+  if(!literal||!entry)continue;
+  const id=randomUUID(),marker=`.retencao-${id}.json`;
   try{
-   await rename(literal,condemned);
-   removed+=1;
-   await rm(condemned,{recursive:true,force:true});
+   await writeFile(join(root,marker),JSON.stringify({projectId,dataDirectory,dev:String(entry.dev),ino:String(entry.ino)}),{flag:'wx',mode:0o600});
+   await rename(literal,join(root,'.removendo-'+id));
+   if(await finishPending(root,marker,projectId,dataDirectory))removed++;
+   else failed++;
   }catch{failed+=1;}
  }
  return {kept:keepSet.size,removed,failed};
@@ -266,7 +293,7 @@ async function rotateLocked(input:{installationFile:string;config:Awaited<Return
   catch{return failOffsite(lines,config.dataDirectory,notify);}
   lines.push('Cópia externa feita.');
  }
- const result=await pruneBackups(parent,keep,stamp,config.project.id,options);
+ const result=await pruneBackups(parent,keep,stamp,config.project.id,config.dataDirectory,options);
  if(result.removed>0)lines.push(`Removidos: ${result.removed}`);
  if(result.failed>0)lines.push(`Aviso: ${result.failed} pasta(s) antigas não puderam ser apagadas; ficam para a próxima rodada.`);
  return [...lines,`Mantidos: ${result.kept}`];
