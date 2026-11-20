@@ -1351,8 +1351,10 @@ function countBy(items, key) {
 /**
  * Mantém a saída dentro dos limites do contrato sem inventar dados: os achados são
  * ordenados de forma determinística (gravidade maior primeiro), as linhas de cobertura
- * por arquivo dos achados retidos são sempre mantidas e a redução é declarada em uma
- * linha de cobertura parcial com as contagens do que foi omitido.
+ * por arquivo existentes dos achados retidos são sempre mantidas, achados retidos sem
+ * linha por arquivo são contados, as vagas restantes seguem a chave canônica da linha
+ * (independente da ordem de entrada) e a redução é declarada em uma linha de cobertura
+ * parcial com as contagens do que foi omitido.
  */
 export function boundCollectorOutput({coverage, findings}, limits = {}) {
   const maxCoverage = limits.maxCoverage ?? MAX_COLLECTOR_COVERAGE;
@@ -1372,21 +1374,42 @@ export function boundCollectorOutput({coverage, findings}, limits = {}) {
       byKey.set(key, [...(byKey.get(key) ?? []), index]);
     }
   });
-  const kept = new Set(fixed.slice(0, capacity));
+  // a escolha das linhas não pode depender da ordem de entrada: as candidatas são
+  // percorridas pela chave canônica da linha e só depois pela posição (empate exato)
+  const canonical = index => {
+    const row = coverage[index];
+    return [row.tool, (row.files ?? []).join('\0'), row.status, row.version, row.detail].map(String).join('\u0001');
+  };
+  const byCanonical = (left, right) => compareText(canonical(left), canonical(right)) || left - right;
+  const kept = new Set([...fixed].sort(byCanonical).slice(0, capacity));
   const ordered = findings.map((finding, index) => ({finding, index}))
     .sort((left, right) => compareFindings(left.finding, right.finding) || left.index - right.index);
-  const selected = [];
-  for (const {finding} of ordered) {
-    if (selected.length >= maxFindings) break;
-    const linked = (byKey.get(`${finding.tool}:file\0${finding.file}`) ?? []).filter(index => !kept.has(index));
-    if (kept.size + linked.length > capacity) break;
+  const selected = new Set();
+  let withoutFileRow = 0;
+  for (const entry of ordered) {
+    if (selected.size >= maxFindings) break;
+    const {finding} = entry;
+    const rows = byKey.get(`${finding.tool}:file\0${finding.file}`);
+    // sem linha por arquivo na própria coleta (ex.: lista por arquivo truncada pela ferramenta):
+    // o achado não ocupa vaga de cobertura, mas a falta do vínculo é contada e declarada
+    if (!rows) {
+      withoutFileRow += 1;
+      selected.add(entry);
+      continue;
+    }
+    const linked = rows.filter(index => !kept.has(index));
+    // um achado cuja cobertura não cabe é pulado; os seguintes continuam sendo avaliados
+    if (kept.size + linked.length > capacity) continue;
     for (const index of linked) kept.add(index);
-    selected.push(finding);
+    selected.add(entry);
   }
-  const omittedFindings = ordered.slice(selected.length).map(({finding}) => finding);
-  coverage.forEach((row, index) => {
-    if (kept.size < capacity && row.files?.length) kept.add(index);
-  });
+  const selectedFindings = ordered.filter(entry => selected.has(entry)).map(({finding}) => finding);
+  const omittedFindings = ordered.filter(entry => !selected.has(entry)).map(({finding}) => finding);
+  coverage.map((_, index) => index).filter(index => coverage[index].files?.length && !kept.has(index))
+    .sort(byCanonical)
+    .forEach(index => {
+      if (kept.size < capacity) kept.add(index);
+    });
   const retained = coverage.filter((_, index) => kept.has(index));
   const omittedCoverage = coverage.length - retained.length;
   retained.push({
@@ -1394,15 +1417,17 @@ export function boundCollectorOutput({coverage, findings}, limits = {}) {
     version: '1',
     status: 'skipped',
     detail: `cobertura_parcial=sim; limite_achados=${maxFindings}; achados_coletados=${findings.length}; ` +
-      `achados_retidos=${selected.length}; achados_omitidos=${omittedFindings.length}; ` +
+      `achados_retidos=${selectedFindings.length}; achados_omitidos=${omittedFindings.length}; ` +
+      `achados_retidos_sem_linha_por_arquivo=${withoutFileRow}; ` +
       `achados_omitidos_por_gravidade: ${countBy(omittedFindings, item => item.severity)}; ` +
       `achados_omitidos_por_ferramenta: ${countBy(omittedFindings, item => item.tool)}; ` +
       `limite_cobertura=${maxCoverage}; cobertura_coletada=${coverage.length}; cobertura_retida=${retained.length}; ` +
       `cobertura_omitida=${omittedCoverage}; ` +
       'criterio=gravidade_maior_primeiro_depois_ferramenta_arquivo_linha_regra; ' +
-      'vinculo_achado_cobertura=linhas_por_arquivo_dos_achados_retidos_mantidas',
+      'vinculo_achado_cobertura=linhas_por_arquivo_existentes_dos_achados_retidos_mantidas; ' +
+      'selecao_cobertura=chave_canonica_ferramenta_arquivos_independente_da_ordem',
   });
-  return {coverage: retained, findings: selected};
+  return {coverage: retained, findings: selectedFindings};
 }
 
 function snapshotCoverage({copiedFiles, skipped, stoppedAt, failure}) {
