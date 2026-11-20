@@ -597,7 +597,8 @@ export class HappierEndpoint {
       await this.ledger.refreshPending(c,intent.context_id);
     });
     this.notePersonalPush(localId,proposalText);
-    if(this.options.personalConversation)await this.recoverProposalStarts();
+    // Only this proposal: an older approval that keeps being refused must not fail this publication; tick() retries it.
+    if(this.options.personalConversation)await this.recoverProposalStarts(result.revision);
   }
   /** Repository context for the manager and the semantic planner: compact cached map under discipline, the legacy listing otherwise. */
   private async managerContext(){
@@ -695,12 +696,19 @@ export class HappierEndpoint {
    }
   }
   /** Starts every approved proposal that has no execution yet: auto-approvals interrupted after the publication
-   * commit, approvals that lost their answer, and approvals refused while the context was paused. */
-  private async recoverProposalStarts(){
+   * commit, approvals that lost their answer, and approvals refused while the context was paused. One approval that
+   * cannot be started never holds back the ones after it: every item is tried, and the first failure is reported at
+   * the end so the caller still sees it (and the next tick retries it). `onlyRevision` limits the pass to one proposal. */
+  private async recoverProposalStarts(onlyRevision?:number){
+   let failure:unknown;
    for(const decision of await unstartedProposals(this.ledger.pool,this.options.authority.contextId)){
-    await this.startDecidedProposal(decision);
-    if(decision.source==='manual')await this.say('approve-'+decision.revision,'Proposta '+decision.revision+' aprovada. A execução começou.');
+    if(onlyRevision!==undefined&&decision.revision!==onlyRevision)continue;
+    try{
+     await this.startDecidedProposal(decision);
+     if(decision.source==='manual')await this.say('approve-'+decision.revision,'Proposta '+decision.revision+' aprovada. A execução começou.');
+    }catch(error){failure??=error;}
    }
+   if(failure!==undefined)throw failure;
   }
   /** Decides the most recent proposal, once. The decision is one durable row per (context, revision): a repeat, a
    * concurrent opposite answer or a retry after a lost response reads the decision that already stands. */

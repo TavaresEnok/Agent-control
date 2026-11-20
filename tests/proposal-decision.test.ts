@@ -13,7 +13,7 @@ import {SemanticPlanning,planningReceiptMessage,type PlanningExecutor} from '../
 import {HappierEndpoint,type HappierBoundary} from '../src/happier.ts';
 import {LocalConversationTransport} from '../src/conversation-transport.ts';
 import {personalPanelLocalId} from '../src/personal-panel-conversation.ts';
-import {digest,type Authority} from '../src/contracts.ts';
+import {digest,Refusal,type Authority} from '../src/contracts.ts';
 import {decideProposal,proposalStartIntentId} from '../src/proposal-decision.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import type {CezarRuntime} from '../src/cezar.ts';
@@ -117,11 +117,12 @@ async function personalFixture(autoApprove:boolean){
  const managerChat={async decide(){return {kind:'plan' as const,answer:''};}} as unknown as PersonalManagerChat;
  const runtime={repo:folder,projectId:project,executionMode:'execution',async reconcileCancellations(){},async recoverManaged(){},async dispatch(){return undefined;},store:{listRuns:()=>[],updateRun(){},flush(){}}} as unknown as CezarRuntime;
  const boundary=new Proxy({} as HappierBoundary,{get(){throw Error('BOUNDARY_FORBIDDEN');}});
- const control={crash:false,startAttempts:0};
+ const control={crash:false,startAttempts:0,refuse:new Set<number>()};
  const realAccept=db.accept.bind(db);
  (db as unknown as {accept:unknown}).accept=async(p:string,command:{action:string;intentId:string;payload:{proposalRevision?:number;proposalDigest?:string}},...rest:unknown[])=>{
   if(command.action!=='plan.start')return (realAccept as (...args:unknown[])=>Promise<Intent>)(p,command,...rest);
   control.startAttempts++;if(control.crash)throw Error('PROCESS_DIED');
+  if(control.refuse.has(command.payload.proposalRevision!))throw new Refusal('MANAGED_PROPOSAL_MISMATCH');
   return startRow(db,contextId,p,command.intentId,command.payload.proposalRevision!,command.payload.proposalDigest!);};
  const open=async()=>{const transport=new LocalConversationTransport({ledger:db,contextId,principal});
   const endpoint=new HappierEndpoint(db,runtime,boundary,{baseUrl:'http://127.0.0.1',token:'',key,principal,sessionId:session,machineId:'local',authority:authority as Authority,personalConversation:true,managerChat,semanticPlanning:planner},transport);
@@ -195,5 +196,35 @@ test('manual approve/approve, approve/discard and a repeat after a lost response
   await answer('aprovar');await answer('aprovar');
   assert.equal(await executions(db,contextId),before+1);
   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_intents WHERE id=$1",[proposalStartIntentId(contextId,3)])).rows[0].n,1);
+ }finally{await f.close();}
+});
+
+test('an approval that is always refused does not hold back the approvals after it',{timeout:90000},async()=>{
+ const f=await personalFixture(true);
+ try{
+  const {db,contextId}=f;
+  const bridge=await f.open();
+  // tick() reads the owner's pending messages at most once a second
+  const tick=async()=>{await new Promise(done=>setTimeout(done,1100));return bridge.tick().then(()=>null,(error:unknown)=>error);};
+  // revisions 1 and 2 are auto-approved, but the creation of their executions is refused every time
+  f.control.refuse=new Set([1,2]);
+  await f.say(bridge,'primeiro pedido de mudança');assert.match(String(await tick()),/MANAGED_PROPOSAL_MISMATCH/);
+  await f.say(bridge,'segundo pedido de mudança');assert.match(String(await tick()),/MANAGED_PROPOSAL_MISMATCH/);
+  assert.deepEqual((await decisions(db,contextId)).map(row=>row.revision),[1,2]);
+  assert.equal(await executions(db,contextId),0);
+  // revision 1 stays refused for good; revision 2 becomes startable. It is recovered although revision 1 is in front of it.
+  f.control.refuse=new Set([1]);
+  assert.match(String(await tick()),/MANAGED_PROPOSAL_MISMATCH/);
+  assert.equal(await executions(db,contextId),1);
+  assert.equal((await db.pool.query("SELECT id FROM ac_intents WHERE context_id=$1 AND command->>'action'='plan.start'",[contextId])).rows[0].id,proposalStartIntentId(contextId,2));
+  // a new proposal published while revision 1 is still refused starts at once, and its publication does not fail
+  await f.say(bridge,'terceiro pedido de mudança');
+  const attempts=f.control.startAttempts;
+  await tick();
+  assert.equal(await executions(db,contextId),2);
+  assert.equal((await db.pool.query("SELECT state FROM ac_intents WHERE context_id=$1 AND command->>'action'='plan.propose' ORDER BY created_at DESC LIMIT 1",[contextId])).rows[0].state,'done');
+  assert.ok(f.control.startAttempts>attempts);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_intents WHERE id=$1',[proposalStartIntentId(contextId,3)])).rows[0].n,1);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_intents WHERE id=$1',[proposalStartIntentId(contextId,1)])).rows[0].n,0);
  }finally{await f.close();}
 });
