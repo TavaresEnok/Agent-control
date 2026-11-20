@@ -434,6 +434,10 @@ export async function runPersonalModuleCli(
   }
 }
 
+export function printClaudeQuotaWait({delayMs}: {delayMs: number}): void {
+  console.error(`PROVIDER_USAGE_LIMIT. Aguardando ${Math.round(delayMs / 60000)} minutos pela renovação da cota Claude para retomar o exame.`);
+}
+
 async function main(): Promise<void> {
   const rawModule = process.argv[2];
   let module: VerificationModule | undefined;
@@ -441,9 +445,7 @@ async function main(): Promise<void> {
     module = assertVerificationModule(rawModule);
     const printed: string[] = [];
     const lines = await runPersonalModuleCli(module, process.argv.slice(3), {
-      onQuotaWait({delayMs}) {
-        console.error(`PROVIDER_USAGE_LIMIT. Aguardando ${Math.round(delayMs / 60000)} minutos pela renovação da cota Claude para retomar o exame.`);
-      },
+      onQuotaWait: printClaudeQuotaWait,
       onResult(result) {
         printed.push(result.runId, result.directory);
         console.log(result.runId);

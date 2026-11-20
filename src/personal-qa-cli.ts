@@ -3,7 +3,7 @@ import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
-import {moduleCliFailureText,runPersonalModuleCli,type PersonalModuleCliDeps} from './personal-module-cli.ts';
+import {moduleCliFailureText,printClaudeQuotaWait,runPersonalModuleCli,type PersonalModuleCliDeps} from './personal-module-cli.ts';
 import {clearPersonalQaConfig,parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig,type PersonalQaConfig} from './personal-qa-config.ts';
 
 const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> [show|set|clear|--esperar-cota|--corrigir <runId> <ACH-001...>|--medir-correcao <runId>|--reverificar <runId> <ACH-001...>|--descartar <runId>]\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600] [--services \'{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}\']';
@@ -73,6 +73,7 @@ const messages:Record<string,string>={
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  const printed:string[]=[];
  runPersonalQaCli(process.argv.slice(2),{
+  onQuotaWait: printClaudeQuotaWait,
   onResult(result){printed.push(result.runId,result.directory);console.log(result.runId);console.log(result.directory);},
  }).then(lines=>{if(printed.length===0)for(const line of lines)console.log(line);},error=>{
   const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'QA_CONFIG_FAILED';
