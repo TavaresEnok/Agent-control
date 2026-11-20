@@ -78,19 +78,6 @@ Refeito imediatamente antes de remover; qualquer dúvida preserva e diz o motivo
 
 Itens `ac-*` no diretório temporário que não estão no registro são só contados e preservados.
 
-## Ligação em `personal-maintenance.ts` (gerente)
-
-O dispatcher é `runArtifactCommand(config, args)` em `src/personal-artifact-commands.ts` e `isArtifactCommand(args)`. `args` é o
-`argv` sem a instalação (`argv.slice(1)`); o comando vem primeiro.
-
-1. `ParsedMaintenance` ganha `artifactArgs?: string[]`; em `parseMaintenanceArgs`, antes de `argv.length!==3`:
-   `if(isArtifactCommand(argv.slice(1)))return {installationPath,artifactArgs:argv.slice(1)};`
-2. Em `runPersonalMaintenance`, logo depois da checagem de instalação pessoal:
-   `if(parsed.artifactArgs)return runArtifactCommand(config,parsed.artifactArgs);`
-3. Em `personal-maintenance-cli.ts`, junte `artifactCliMessages` à tabela de mensagens e acrescente `ARTIFACT_USAGE` ao texto de uso.
-
-Para o vigia e o `personal:backup`, o ponto de entrada da retenção é `runPersonalArtifactRetention(config, apply)`.
-
 ## Provas
 
 `tests/personal-artifact-producers.test.ts` chama os produtores reais (`prepareModuleSnapshot`, `runModuleCollectorContainer`,

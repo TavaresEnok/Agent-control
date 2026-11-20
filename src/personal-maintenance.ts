@@ -1,3 +1,4 @@
+import {isArtifactCommand,runArtifactCommand} from './personal-artifact-commands.ts';
 import {runPersonalArtifactRetention} from './personal-artifact-retention.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -87,11 +88,12 @@ function parseWorkRetirementArgs(installationPath:string,rest:readonly string[])
  return {installationPath,releaseExamWork:selection};
 }
 
-type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;releaseExamWork?:WorkSelection;jobRetention?:{apply:boolean}};
+type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;releaseExamWork?:WorkSelection;jobRetention?:{apply:boolean};artifactArgs?:string[]};
 function parseMaintenanceArgs(argv:readonly string[]):ParsedMaintenance{
  const [installationPath,command,jobId]=argv;
  if(!installationPath||installationPath.startsWith('-'))throw new Refusal('MAINTENANCE_USAGE');
  if(argv.length===1)return {installationPath};
+ if(isArtifactCommand(argv.slice(1)))return {installationPath,artifactArgs:argv.slice(1)};
  if(command==='--liberar-work-exames')return parseWorkRetirementArgs(installationPath,argv.slice(2));
  if(command==='--retencao-automatica'){
   const rest=argv.slice(2);
@@ -376,6 +378,7 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  const file=resolve(parsed.installationPath);
  const config=await loadInstallation(file);
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
+ if(parsed.artifactArgs)return runArtifactCommand(config,parsed.artifactArgs);
  if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
  if(parsed.jobRetention){
