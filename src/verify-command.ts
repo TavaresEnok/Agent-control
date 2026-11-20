@@ -668,15 +668,17 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   let started = false;
   let databaseStamp: string | undefined;
   let snapshot: string | undefined;
+  let progressPath: string | undefined;
   try {
     if (network && container) await attachHomologation(network, container, networkRunner);
     databaseStamp = await claimExamDatabase(ready.dataDirectory, ready.databasesDirectory, id);
     const output = await ensureTree(ready.dataDirectory, ['verificacoes', ready.projectId, 'ferramentas', id]);
-    const progressPath = join(progressDir, `${id}.json`);
-    await writePrivateFile(progressPath, renderProgress(state));
+    progressPath = join(progressDir, `${id}.json`);
     // ONE snapshot of the admitted commit per exam, made before any tool or model call and kept until the job ends.
+    // It comes before the progress file: a snapshot failure must not leave a 'running' file that blocks every later exam.
     snapshot = await prepareExamSnapshot(ready.repoPath, ready.commit, Boolean(ready.staticPolicy),
       ready.staticPolicy ? {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id} : undefined);
+    await writePrivateFile(progressPath, renderProgress(state));
     const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot});
     started = true;
     input.observe?.(job);
@@ -685,6 +687,8 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   } catch (error) {
     if (!started) {
       if (snapshot) await rm(snapshot, {recursive: true, force: true}).catch(() => undefined);
+      // Never leave a 'running' progress file behind when the job did not start (it would block every later exam).
+      if (progressPath) await rm(progressPath, {force: true}).catch(() => undefined);
       try { await releaseExamDatabase(ready.dataDirectory, databaseStamp, id); } catch { /* keep the original error */ }
       try { await releaseRunningLock(lockPath, id); } catch { /* keep the original error */ }
       if (network && container) {

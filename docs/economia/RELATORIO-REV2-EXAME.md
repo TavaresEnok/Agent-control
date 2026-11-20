@@ -66,6 +66,12 @@ Os testes de `verify-command.test.ts` que usavam `repoPath = dataDirectory` com 
 
 **Teste:** `examRunOptions` (padrões e opções desligadas), checagem estrutural das duas entradas e a execução do mesmo projeto com as opções de cada entrada: mesmas tarefas e fatias, e com `batch:false` uma chamada de exame por arquivo. Antes: o painel não passava `batch`.
 
+## Correções da revisão independente
+
+- **MEDIUM, andamento "running" órfão (corrigido).** `beginPersonalVerification` gravava o andamento antes de criar o snapshot. Se o snapshot falhava (commit ausente, `git archive` com timeout, disco cheio), o arquivo ficava `running` e todo exame seguinte recebia `VERIFY_ALREADY_RUNNING`. Agora o snapshot é criado antes de gravar o andamento e o `catch`, quando o job não começou, também remove o arquivo de andamento (cobre falha depois da gravação). Teste: "snapshot que falha não deixa andamento running nem bloqueia o exame seguinte" (`tests/verify-command.test.ts`): commit de 40 hex ausente, duas tentativas seguidas, nenhuma vira `VERIFY_ALREADY_RUNNING`, a pasta de andamento fica vazia e `readVerificationProgress` devolve `[]`. Antes da correção o teste falha (andamento `running` fica); depois passa.
+- **LOW, painel mostra só o confirmado (não alterado).** `src/verify-api.ts` (fora da lista desta frente) monta a linha de cobertura com `checklist`. Para mostrar pedidos e pendentes é preciso guardar os dois no banco (migração) e ajustar `coverageMarkdown`. Fica para a frente dona de `verify-api.ts` e do banco; as lacunas por arquivo seguem visíveis em `cobertura.md`.
+- **LOW, imagem fixada por digest (não alterado).** O novo `record_tool` só vale após reconstruir a imagem e fixar o novo digest; não há teste da imagem real sem Docker real. Já descrito em "Limites conhecidos".
+
 ## Provas
 
 - `npx tsc --noEmit`: sem erros.

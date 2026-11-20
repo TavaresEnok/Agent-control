@@ -335,6 +335,50 @@ test('prazo esgotado não chama ferramentas nem o worker', async () => {
   }
 });
 
+test('snapshot que falha não deixa andamento "running" nem bloqueia o exame seguinte', async () => {
+  const url = process.env.AC_TEST_DATABASE_URL;
+  assert.ok(url);
+  const database = await isolatedDatabase(url, 'verify_snap_fail');
+  const db = new Ledger(database.url);
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-snapfail-'));
+  const databases = await mkdtemp(join(tmpdir(), 'ac-verify-snapfail-db-'));
+  const projectId = randomUUID();
+  let toolsCalled = false;
+  try {
+    await db.migrate();
+    await commitDirectory(dataDirectory);
+    const attempt = () => beginPersonalVerification({
+      projectId,
+      dataDirectory,
+      repoPath: dataDirectory,
+      commit: 'e'.repeat(40), // valid shape, absent from the repository: git archive fails
+      ledger: db,
+      principal: 'verify-owner',
+      authority: {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1},
+      policyRevision: 1,
+      worker: {async run() { return ''; }},
+      databasesDirectory: databases,
+      image: PINNED_IMAGE,
+      runTools: async () => { toolsCalled = true; },
+    });
+    for (let round = 0; round < 2; round++) {
+      await assert.rejects(attempt, (error: unknown) => {
+        assert.equal(error instanceof Refusal && error.code === 'VERIFY_ALREADY_RUNNING', false, 'a falha do snapshot não pode virar VERIFY_ALREADY_RUNNING');
+        return true;
+      });
+      assert.deepEqual(await readVerificationProgress(dataDirectory, projectId), []);
+      const leftovers = await readdir(join(dataDirectory, 'verificacoes', projectId, 'andamento'));
+      assert.deepEqual(leftovers, []);
+    }
+    assert.equal(toolsCalled, false);
+  } finally {
+    await db.close();
+    await database.close();
+    await rm(dataDirectory, {recursive: true, force: true});
+    await rm(databases, {recursive: true, force: true});
+  }
+});
+
 test('contêiner alvo entra na rede interna e o laço não varre', async () => {
   const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-net-'));
   const databases = await mkdtemp(join(tmpdir(), 'ac-verify-netdb-'));
