@@ -42,7 +42,7 @@ export type ResolvedPersonalDesign = {
   authority: Authority;
   projectId: string;
   repo: string;
-  economy?: {map: boolean; measurement: boolean; managerDiscipline?: boolean};
+  economy?: {map: boolean; measurement: boolean; managerDiscipline?: boolean; batch?: boolean; batchTokens?: number; batchFiles?: number};
   dataDirectory: string;
   commit: string;
   intentId: string;
