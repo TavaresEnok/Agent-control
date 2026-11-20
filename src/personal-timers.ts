@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {homedir} from 'node:os';
 import {Refusal} from './contracts.ts';
 import {loadInstallation} from './installation.ts';
+import {personalBackupRoot} from './personal-backup-paths.ts';
 import {personalServiceName} from './personal-watch.ts';
 
 export type PersonalTimerUnit={file:string;text:string};
@@ -46,7 +47,7 @@ WantedBy=timers.target
 /** Unit text for the 2-minute watch, the 03:30 backup, Sunday's maintenance and the monthly restore proof. No systemd calls. */
 export function personalTimerUnits(input:{name:string;root:string;installationFile:string;execPath:string}){
  const {name,root,installationFile,execPath}=input;
- const backupDirectory=`/home/app/backups-agent-control/${name}`;
+ const backupDirectory=join(personalBackupRoot,name);
  const watchService=`agent-control-watch-${name}.service`;
  const watchTimer=`agent-control-watch-${name}.timer`;
  const backupService=`agent-control-backup-${name}.service`;
