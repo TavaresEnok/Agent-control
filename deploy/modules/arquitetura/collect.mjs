@@ -1386,21 +1386,25 @@ export function boundCollectorOutput({coverage, findings}, limits = {}) {
     .sort((left, right) => compareFindings(left.finding, right.finding) || left.index - right.index);
   const selected = new Set();
   let withoutFileRow = 0;
+  // vínculo aceito pelo hospedeiro (validateModuleCollectorPublication): linha ok da mesma
+  // ferramenta, sem lista de arquivos (já retida) ou com a lista contendo o arquivo do achado
+  const linkedTools = new Set([...kept].filter(index => coverage[index].status === 'ok').map(index => coverage[index].tool));
   for (const entry of ordered) {
     if (selected.size >= maxFindings) break;
     const {finding} = entry;
-    const rows = byKey.get(`${finding.tool}:file\0${finding.file}`);
+    const own = linkedTools.has(finding.tool) ? []
+      : (byKey.get(`${finding.tool}\0${finding.file}`) ?? []).filter(index => coverage[index].status === 'ok').slice(0, 1);
+    // sem vínculo válido no conjunto limitado o achado é omitido (contado entre as omissões)
+    // e não ocupa vaga: os elegíveis seguintes continuam sendo selecionados
+    if (!linkedTools.has(finding.tool) && !own.length) continue;
     // sem linha por arquivo na própria coleta (ex.: lista por arquivo truncada pela ferramenta):
-    // o achado não ocupa vaga de cobertura, mas a falta do vínculo é contada e declarada
-    if (!rows) {
-      withoutFileRow += 1;
-      selected.add(entry);
-      continue;
-    }
-    const linked = rows.filter(index => !kept.has(index));
+    // o achado não ocupa vaga de cobertura, mas a falta da linha por arquivo é contada e declarada
+    const rows = byKey.get(`${finding.tool}:file\0${finding.file}`);
+    const linked = [...new Set([...(rows ?? []), ...own])].filter(index => !kept.has(index));
     // um achado cuja cobertura não cabe é pulado; os seguintes continuam sendo avaliados
     if (kept.size + linked.length > capacity) continue;
     for (const index of linked) kept.add(index);
+    if (!rows) withoutFileRow += 1;
     selected.add(entry);
   }
   const selectedFindings = ordered.filter(entry => selected.has(entry)).map(({finding}) => finding);
