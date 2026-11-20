@@ -1576,3 +1576,8 @@ FIM
 - 20/11/2026 04:25 UTC — A CLI publicou a política de design na instalação IspAgent e executou uma segunda prévia.
 - 20/11/2026 04:25 UTC — Gateway respondeu HTTP 200 após reinício e inspect terminou com êxito. Quatro reservas reais confirmaram Enok Max, Opus high para exame, visual e criação, e Opus medium para confirmação.
 - 20/11/2026 04:25 UTC — Ordem roteamento em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 04:26 UTC — Revisão independente revisao-roteamento-r1 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:26 UTC — Ordem retomada em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 04:27 UTC — A revisão encontrou duas falhas de comprovação de sessão na segunda opinião. Opus medium da conta dedicada recebeu a correção. A opção de retomada do exame passivo chegou para integração.
+- 20/11/2026 04:28 UTC — Iniciada ordem retomada em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 04:30 UTC — Iniciada ordem estatico em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
