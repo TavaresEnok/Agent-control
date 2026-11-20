@@ -107,3 +107,9 @@
     2. depois Claude Code `claude-opus-5-5` esforço `medium` no login Enok (Max).
   - **Acionamento pelo Antigravity:** `setsid nohup agy -p "<ordem>" --model <modelo> --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Trailer conforme o modelo: `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` ou `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
   - O examinador dos módulos continua nas contas Claude da instalação (Enok Max e ajustconsulting), com os esforços já definidos. O Antigravity serve só aos trabalhadores.
+- **Retenção automática de disco (titular, 20/11/2026).** Implemente no produto, com teste e pelo caminho do produto (`personal:maintenance` e o vigia), e aplique na instalação viva com backup:
+  1. **Cópias de job:** o `work/` de todo job nativo terminado, reconciliado e já provado é retirado automaticamente, usando o mesmo mecanismo seguro que você criou hoje (`4ec9fd9c`). Recibos, resultados e relatórios ficam.
+  2. **Backups:** `personal:backup` mantém os **3 backups mais recentes** de cada instalação no destino padrão e apaga os mais antigos depois que o novo passar no `restore-check`. Backups não incluem as bases de vulnerabilidades (`verify-db`, Grype e Trivy), que podem ser baixadas de novo.
+  3. **Worktrees:** worktrees de trabalhadores cujo ramo já foi integrado e que estão sem mudanças há mais de 2 horas são removidos com `git worktree remove`. O ramo continua.
+  4. **Imagens e temporários:** imagens candidatas de módulo que não são o digest fixado nem estão em uso, e pastas temporárias de rodadas encerradas (`/tmp/ac-*`) com mais de 24 horas, são removidas.
+  5. **Alerta:** o vigia avisa a partir de 90% de disco e bloqueia novos exames e trabalhadores a partir de 95%.
