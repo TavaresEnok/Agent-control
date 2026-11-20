@@ -721,29 +721,23 @@ function buildChain(input: {
 /**
  * Põe os perfis Claude, já na ordem nova, nos lugares que eram de perfis Claude
  * (incluindo o do Opus medium que saiu para `emergency`). Os outros provedores
- * ficam onde estavam. Perfis Claude a mais entram logo depois do último lugar
- * Claude; sem nenhum, vão para o fim.
+ * conservam sua precedência. Novos perfis que excedem os lugares disponíveis entram no fim.
  */
 function fillClaudeSlots(
   existing: readonly string[],
   profileMap: ReadonlyMap<string, ProfileRow>,
   claudeOrdered: readonly string[],
 ): string[] {
-  const lastSlot = existing.reduce((last, id, index) => (profileMap.has(id) ? index : last), -1);
   const result: string[] = [];
   let next = 0;
-  existing.forEach((id, index) => {
+  for (const id of existing) {
     if (!profileMap.has(id)) {
       result.push(id);
     } else if (next < claudeOrdered.length) {
       result.push(claudeOrdered[next]!);
       next += 1;
     }
-    if (index === lastSlot) {
-      result.push(...claudeOrdered.slice(next));
-      next = claudeOrdered.length;
-    }
-  });
+  }
   result.push(...claudeOrdered.slice(next));
   return result;
 }

@@ -565,10 +565,11 @@ test('preparar migra política antiga com outros provedores intercalados e vári
     assert.equal(snapshot.combo, 'intermediário');
 
     const {regular, emergency} = snapshot.roles.specialist!;
-    // Provedores não Claude mantêm os lugares: primeiro, terceiro e último.
+    // Os novos perfis conservam as posições dos demais provedores.
     assert.equal(regular[0], grokFirst);
     assert.equal(regular[2], geminiMiddle);
-    assert.equal(regular.at(-1), grokLast);
+    assert.equal(regular[4], grokLast);
+    assert.equal(preview.chain.regular[4], grokLast);
     const rows = new Map((await db.pool.query<{id: string; account_id: string; model: string; effort: string}>(
       'SELECT id::text AS id, account_id::text AS account_id, model, effort FROM ac_profiles WHERE id=ANY($1::uuid[])',
       [[...regular, ...emergency]],
