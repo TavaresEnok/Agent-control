@@ -158,3 +158,9 @@ A última rodada offline reuniu `daa3eb6` e `3348edc`. O formatador, o TypeScrip
 Com a janela exclusiva autorizada, o gerente confirmou que as duas CLIs estavam suspensas e que não havia reservas ativas. A manutenção integrada em `4ec9fd9c` retirou as cópias de trabalho pela CLI `personal:maintenance`. Nos dois jobs do piloto, o supervisor reconciliou de novo os resultados e confirmou os mesmos hashes de pedido e resposta. Uma segunda retirada dos mesmos jobs confirmou a ausência das cópias.
 
 Dos 188 candidatos ainda presentes depois do piloto, 68 conservavam a cópia no fim da janela. Os três últimos lotes registraram a retirada de 90 cópias, somando 5.585.015.814 bytes, com zero falhas e zero recusas. O disco passou de 96% para 89%, com 40 GiB disponíveis. A limpeza terminou ao atingir a meta.
+
+### Integração e retomada dos exames às 13h35 UTC
+
+O ramo local `agent-control/revisao-20261119` chegou a `21f692d`. Na Anatel, o retorno à aba consome a revalidação que ficou pendente durante a desconexão. No painel, o teste visual mede o recorte da última barra mesmo acima do cartão e exige capturas estáveis antes de atribuir a falha à perda de pixels. O Sol medium revisou os diffs em modo de leitura. Na homologação, passaram o formatador, o TypeScript, 286 testes do frontend, o build, cinco testes da prova de pintura e os três roteiros de Chromium (Anatel, preferências do painel e navegação geral).
+
+A primeira tentativa de QA e arquitetura sobre essa revisão liberou as duas reservas antes da inferência, pelo motivo `exam_login_stale`. A renovação da conta examinadora Enok Max pelo produto confirmou `renewed`. A nova rodada de QA chegou à inferência. Em paralelo, a medição de arquitetura na imagem instalada produziu 1.515 entradas de cobertura e 3.047 achados brutos. O contrato admite até 999 achados por publicação. O parecer de arquitetura continua pendente.

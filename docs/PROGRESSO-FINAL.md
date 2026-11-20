@@ -1858,3 +1858,15 @@ FIM
 - 20/11/2026 13:27 UTC — Revisão independente revisao-painel-posjanela concluída pelo Sol medium em modo somente leitura.
 - 20/11/2026 13:28 UTC — Anatel 4913021 aceita pelo Sol medium e integrada no ramo de entrega até c13be7f. Formatador, TypeScript, 286 testes, build e Chromium Anatel passaram. O Sol confirmou a correção do painel em 88465d5 e pediu fortalecer o controle negativo.
 - 20/11/2026 13:28 UTC — Iniciada ordem painel-controle-final em claude-sonnet-5-5-high (agy-sonnet), no worktree próprio.
+- 20/11/2026 13:29 UTC — Ordem painel-controle-final em claude-sonnet-5-5-high encerrou com código 0.
+- 20/11/2026 13:29 UTC — Revisão independente revisao-controle-final concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 13:30 UTC — Painel 7cc7b44 aceito pelo Sol medium. Passaram os cinco testes da prova de pintura e o Chromium com os controles negativos. Integração local de ambas as séries concluída em 21f692d.
+- 20/11/2026 13:30 UTC — Iniciada a CLI personal:qa para posjanela-exame-qa.
+- 20/11/2026 13:30 UTC — Iniciada a CLI personal:arquitetura para posjanela-exame-arquitetura.
+- 20/11/2026 13:30 UTC — A CLI personal:qa de posjanela-exame-qa encerrou com código 0.
+- 20/11/2026 13:30 UTC — A CLI personal:arquitetura de posjanela-exame-arquitetura encerrou com código 1.
+- 20/11/2026 13:32 UTC — O roteiro geral do frontend passou no Chromium. Na revisão 21f692d, os dois primeiros jobs de QA e arquitetura ficaram sem inferência por exam_login_stale. As reservas foram liberadas. Arquitetura registrou ainda VERIFY_COLLECTOR_INVALID. Titular informado sobre autenticação.
+- 20/11/2026 13:34 UTC — Iniciada ordem limite-arquitetura em claude-sonnet-5-5-high (agy-sonnet), no worktree próprio.
+- 20/11/2026 13:34 UTC — Isolada a falha independente de arquitetura: o coletor devolveu 3.047 achados para um contrato de até 999. Correção e teste atribuídos a trabalhador na bancada do produto.
+- 20/11/2026 13:34 UTC — A função de renovação do produto confirmou renewed na conta examinadora Enok Max, sob lock da conta. Renovação manual dispensada. QA retomado na revisão integrada; arquitetura aguarda a imagem corrigida.
+- 20/11/2026 13:34 UTC — Iniciada a CLI personal:qa para qa-renovado-posjanela.
