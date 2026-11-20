@@ -8,7 +8,8 @@ import {Capacity} from '../../src/capacity.ts';
 import {Refusal, type Command} from '../../src/contracts.ts';
 import {runDesignModule} from '../../src/design-module.ts';
 import {Ledger} from '../../src/ledger.ts';
-import {installationVolumes} from '../../src/personal-disk.ts';
+import {useDockerStorageProbeForTests} from '../../src/docker-storage.ts';
+import {DOCKER_STORAGE_VOLUME, diskUsedPercent, installationVolumes} from '../../src/personal-disk.ts';
 import {beginPersonalVerification, readVerificationProgress} from '../../src/verify-command.ts';
 import {isolatedDatabase} from './isolated-database.ts';
 
@@ -26,18 +27,27 @@ const root = await mkdtemp(join(tmpdir(), 'ac-disk-limits-'));
 const data = join(root, 'dados'), repo = join(root, 'repo'), databases = join(root, 'bases');
 const planningHost = join(root, 'planejamento'), planningAccounts = join(root, 'contas-planejamento');
 const executionHost = join(root, 'execucao'), executionAccounts = join(root, 'contas-execucao'), homes = join(root, 'homes');
+const secondRepo = join(root, 'repo-b'), projectsRoot = join(root, 'projetos'), dockerStorage = join(root, 'docker-dados');
 for (const dir of [data, repo, databases]) await mkdir(dir, {recursive: true, mode: 0o700});
-const volumes = installationVolumes({dataDirectory: data, accountHomesDirectory: homes, nativeBootstrap: {
-  planning: {hostRoot: planningHost, accountRoot: planningAccounts}, execution: {hostRoot: executionHost, accountRoot: executionAccounts}}});
+// A personal installation with two project repositories, one authorized project root and the local Docker daemon, whose storage is on its own volume.
+const installation = {dataDirectory: data, accountHomesDirectory: homes, nativeBootstrap: {
+  planning: {hostRoot: planningHost, accountRoot: planningAccounts}, execution: {hostRoot: executionHost, accountRoot: executionAccounts}},
+  project: {repo}, projects: [{repo: secondRepo}], projectRoots: [{path: projectsRoot}]};
+const volumes = installationVolumes({...installation, activation: 'personal'});
+const nonPersonalVolumes = installationVolumes({...installation, activation: 'locked'});
+let dockerAsked = 0;
+useDockerStorageProbeForTests(async () => { dockerAsked += 1; return dockerStorage; });
+// The Docker entry stands for a directory only the daemon knows; the fake statfs table is keyed by that directory.
+const measuredPath = (volume: string) => volume === DOCKER_STORAGE_VOLUME ? dockerStorage : volume;
 
 function setRules(used: (volume: string) => number, rootUsed: number): void {
-  globals.__statfsRules = [{prefix: '/', used: rootUsed}, ...volumes.map(volume => ({prefix: volume, used: used(volume)}))];
+  globals.__statfsRules = [{prefix: '/', used: rootUsed}, ...volumes.map(volume => ({prefix: measuredPath(volume), used: used(volume)}))];
   globals.__statfsCalls = [];
 }
 
 const fixture = await isolatedDatabase(base, 'disklimit');
 const db = new Ledger(fixture.url, undefined, undefined, volumes);
-const out: Record<string, unknown> = {volumes};
+const out: Record<string, unknown> = {volumes, nonPersonalVolumes, dockerStorage};
 try {
   await db.migrate();
   await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
@@ -99,10 +109,11 @@ try {
     const before = await counts();
     const worker = await reserve(), exam = await newExam(), design = await newDesign();
     const after = await counts(), measured = [...globals.__statfsCalls];
+    const watch = await diskUsedPercent(volumes);
     setRules(volume => volume === hot ? 94.99 : 10, 10);
     const admitted = await reserve();
     if (admitted.grantId) await release(admitted.grantId);
-    single.push({hot, worker: worker.result, exam, design, unchanged: JSON.stringify(before) === JSON.stringify(after), measuredHot: measured.includes(hot), edgeWorker: admitted.result});
+    single.push({hot, worker: worker.result, exam, design, unchanged: JSON.stringify(before) === JSON.stringify(after), watch, measuredHot: measured.includes(measuredPath(hot)), edgeWorker: admitted.result});
   }
   out.single = single;
   out.noExamDirectoryBeforeAdmission = !(await verificationDirectory());
@@ -123,8 +134,21 @@ try {
   const edgeWorker = await reserve();
   if (edgeWorker.grantId) await release(edgeWorker.grantId);
   const edgeExam = await newExam(), edgeDesign = await newDesign();
-  out.edge = {worker: edgeWorker.result, exam: edgeExam, design: edgeDesign, measuredRoot: globals.__statfsCalls.includes('/'), measuredAll: volumes.every(volume => globals.__statfsCalls.includes(volume)),
+  out.edge = {worker: edgeWorker.result, exam: edgeExam, design: edgeDesign, measuredRoot: globals.__statfsCalls.includes('/'), measuredAll: volumes.every(volume => globals.__statfsCalls.includes(measuredPath(volume))),
     examDirectory: await verificationDirectory()};
+
+  // The Docker daemon was asked about its storage once for the whole run, not at every reservation.
+  out.dockerAsked = dockerAsked;
+
+  // No local daemon (remote server, test machine): the entry is ignored even if some directory by that name were full; the other volumes still decide.
+  useDockerStorageProbeForTests(async () => undefined);
+  setRules(volume => volume === DOCKER_STORAGE_VOLUME ? 99 : 94.99, 10);
+  const noDaemonWorker = await reserve();
+  const dockerMeasured = globals.__statfsCalls.includes(dockerStorage);
+  if (noDaemonWorker.grantId) await release(noDaemonWorker.grantId);
+  setRules(volume => volume === data ? 95 : 10, 10);
+  const noDaemonFull = await reserve();
+  out.noDaemon = {worker: noDaemonWorker.result, dockerMeasured, fullElsewhere: noDaemonFull.result};
 
   // Without a list on the Ledger the capacity gate falls back to the root volume, which is the only place it should.
   const bare = new Ledger(fixture.url);
