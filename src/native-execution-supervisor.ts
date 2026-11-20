@@ -58,6 +58,8 @@ export type NativeModuleExamRecovery={state:'retired'|'preserved';reason:'proven
 export class ModuleExamRecoveryPreserved extends Refusal {
  constructor(readonly reason:ModuleExamRecoveryReason,readonly removed:string[]=[]){super('NATIVE_MODULE_EXAM_RECOVERY_PRESERVED',409);}
 }
+export type ModuleExamWorkRefusal='not_found'|'not_passive_exam'|'job_state'|'grant_state'|'supervisor_identity'|'receipt'|'retirement'|'directory_unsafe'|'work_unsafe';
+export type ModuleExamWorkRelease={jobId:string;state:'eligible'|'released'|'absent';bytes?:number}|{jobId:string;state:'refused';reason:ModuleExamWorkRefusal};
 export class UnstartedExamRetirementPending extends Refusal {
  constructor(readonly jobId:string){super('NATIVE_PRELAUNCH_SETTLEMENT_PENDING',409);Id.parse(jobId);}
 }
@@ -1268,6 +1270,52 @@ export class NativeExecutionSupervisor{
   });
   await this.removeLaunchFiles(jobId);
   return retired;
+ }
+ /** Frees only the `work` checkout copy of one finished passive security/module exam (specialist, `security-verify-readonly-v1`).
+  * The answer lives in output/execution-result.json and nothing reads `work` once the job is completed, its grant released and its
+  * terminal retirement signed as removed (containers and network gone). review-artifact, proofs, logs and sibling jobs are never touched.
+  * Runs under the context lease and the job row lock, so it serializes with reconcile and retirement. Idempotent: no `work` is `absent`.
+  * `apply=false` only inspects. Programmer, design and any job without the full proof are refused. */
+ async releaseModuleExamWork(principal:string,authority:Authority,jobId:string,apply:boolean):Promise<ModuleExamWorkRelease>{
+  Id.parse(jobId);const p=this.paths(jobId);
+  const refuse=(reason:ModuleExamWorkRefusal)=>({jobId,state:'refused' as const,reason});
+  return this.ledger.tx(async c=>{
+   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+   const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,g.manager_epoch grant_epoch,g.intent_id grant_intent,g.context_id grant_context,g.account_id grant_account,g.profile_id grant_profile,g.role grant_role,g.resource_kind,
+    i.parent_intent_id,i.principal_id,i.command->'payload'->>'workflow' workflow,r.state retirement_state,r.binding,r.proof,ac_activation_personal() personal
+    FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
+    LEFT JOIN ac_native_terminal_retirements r ON r.job_id=j.id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
+   if(!row)return refuse('not_found');
+   if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||row.role!=='specialist'||!readonlySecurityExam(row.workflow,row.role))return refuse('not_passive_exam');
+   if(row.state!=='completed')return refuse('job_state');
+   if(row.grant_state!=='released'||row.grant_intent!==row.intent_id||row.grant_context!==row.context_id||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||row.grant_role!==row.role||row.resource_kind!=='model'||Number(row.grant_epoch)!==Number(row.manager_epoch))return refuse('grant_state');
+   if(row.key_fingerprint!==this.fingerprint)return refuse('supervisor_identity');
+   const receipt=row.receipt,payload=receipt?.payload,physical=row.physical_receipt,binding=row.binding,proof=row.proof;
+   const receiptProven=this.receiptSignedByThisExecutor(receipt)&&payload.jobId===jobId&&payload.contextId===row.context_id&&payload.intentId===row.intent_id&&payload.grantId===row.grant_id&&payload.sessionId===row.session_id&&
+    payload.epoch===Number(row.manager_epoch)&&payload.inputDigest===row.input_digest&&payload.executorDigest===row.executor_digest&&payload.exitCode===0&&
+    Boolean(physical)&&payload.physicalDigest===digest(physical)&&physical.jobId===jobId&&physical.containerId===row.worker_id&&physical.toolsContainerId===row.tools_id&&physical.networkId===row.network_id;
+   if(!receiptProven)return refuse('receipt');
+   let retirementProven=false;
+   try{
+    retirementProven=row.retirement_state==='removed'&&Boolean(binding)&&digest(proof?.payload)===digest(binding)&&typeof proof.signature==='string'&&/^[a-f0-9]{128}$/.test(proof.signature)&&
+     verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(proof.payload)),createPublicKey(this.key),Buffer.from(proof.signature,'hex'))&&
+     binding.jobId===jobId&&binding.contextId===row.context_id&&binding.intentId===row.intent_id&&binding.grantId===row.grant_id&&binding.sessionId===row.session_id&&binding.inputDigest===row.input_digest&&
+     binding.terminalDigest===digest(receipt)&&binding.workerId===row.worker_id&&binding.toolsId===row.tools_id&&binding.networkId===row.network_id;
+   }catch{retirementProven=false;}
+   if(!retirementProven)return refuse('retirement');
+   try{await this.directory(this.config.hostRoot);await this.directory(p.root);}catch{return refuse('directory_unsafe');}
+   let stat;
+   try{stat=await lstat(p.work);}catch(error){return (error as NodeJS.ErrnoException).code==='ENOENT'?{jobId,state:'absent' as const}:refuse('work_unsafe');}
+   // A link, a plain file or a directory reached through a link is never followed or removed.
+   if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==process.getuid?.()||await realpath(p.work).catch(()=>'')!==p.work)return refuse('work_unsafe');
+   const size=async(path:string):Promise<number>=>{let total=0;for(const entry of await readdir(path,{withFileTypes:true})){const child=join(path,entry.name);total+=entry.isDirectory()?await size(child):(await lstat(child)).size;}return total;};
+   const bytes=await size(p.work).catch(()=>0);
+   if(!apply)return {jobId,state:'eligible' as const,bytes};
+   await rm(p.work,{recursive:true});
+   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.exam_work_released',$2)",[authority.contextId,{jobId,bytes}]);
+   return {jobId,state:'released' as const,bytes};
+  });
  }
  async reconcileCancellation(principal:string,authority:Authority,jobId:string){
   const input=await this.registeredInput(principal,authority,jobId);

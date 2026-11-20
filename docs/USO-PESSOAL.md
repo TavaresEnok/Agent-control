@@ -433,6 +433,21 @@ O supervisor remove o contêiner (sem `force`) e, só depois de o Docker confirm
 
 Sem prova suficiente, o comando sai com erro, diz o motivo (por exemplo, "o contêiner de ferramentas já foi iniciado ou terminou") e mantém a reserva. Se o gateway estiver usando o contexto, pare-o temporariamente e repita, como na retirada de design.
 
+### Liberar o disco das cópias `work/` de exames passivos terminados
+
+Cada exame passivo de segurança (`security-verify-readonly-v1`, papel `specialist`) deixa em `<execution-host>/<job>/work/` uma cópia do projeto que ninguém lê depois do exame: a resposta fica em `output/`. Para liberar esse espaço, escolha **um projeto** ou **uma lista de jobs**; nunca a instalação inteira:
+
+```bash
+# prévia, não apaga nada
+npm run personal:maintenance -- <instalação.json> --liberar-work-exames --projeto <UUID-do-projeto> [--limite N]
+# apaga (repita até a prévia não listar mais nada)
+npm run personal:maintenance -- <instalação.json> --liberar-work-exames --projeto <UUID-do-projeto> [--limite N] --aplicar
+# ou jobs escolhidos (até 200)
+npm run personal:maintenance -- <instalação.json> --liberar-work-exames --job <UUID> --job <UUID> --aplicar
+```
+
+Um job só é elegível com todas as provas: job `completed`, reserva `released`, recibo assinado pelo executor da instalação, diário de retirada terminal em `removed` com prova assinada e ligada a esse recibo (os contêineres e a rede já foram removidos), dono do projeto e locação do contexto. O supervisor apaga só o filho literal `work`, sob o bloqueio da linha do job. `review-artifact`, `input`, `output`, logs, provas e outros jobs ficam intactos; um `work` que seja link simbólico ou arquivo, ou uma pasta do job que não seja privada, é recusado e nada é apagado. Links dentro de `work` são removidos como links, sem seguir o destino. Jobs de design, programador, falhos ou sem a prova completa são recusados com o motivo na linha do job. O comando é idempotente: sem `work` o job aparece como "já sem work", e `--limite` (padrão 50, máximo 200) conta só os jobs liberados, então repetir o comando avança pelo histórico. Um contexto em uso pelo gateway aparece como "ocupado" e é tentado de novo na próxima execução. Cada remoção grava um registro `native.exam_work_released` na auditoria.
+
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.
