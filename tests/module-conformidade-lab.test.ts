@@ -11,6 +11,10 @@ const enabled = process.env.AC_MODULE_LAB === '1';
 const root = new URL('../deploy/modules/conformidade/', import.meta.url);
 const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
 const attributionFixture = 'atribuicao/repo';
+const manifestFileStates = [
+  ['package-lock.json', 'skipped'], ['package.json', 'skipped'],
+  ['src/telemetry.ts', 'ok'], ['vendor/widget.js', 'ok'],
+] as const;
 const manifestStaticFiles = ['src/telemetry.ts', 'vendor/widget.js'];
 const npmLicenseSkipDetail = 'Lockfiles npm v2/v3 classificados: 0; erros: 0. Licenças ausentes permanecem desconhecidas.';
 const isolated = [
@@ -77,11 +81,16 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
     assert.equal(Object.hasOwn(row, 'files'), false, `files inesperado em ${row.detail}`);
   }
   if (!attribution) {
+    for (const [file, status] of manifestFileStates) {
+      const rows = fileRows.filter(row => row.detail.split(' | ')[0] === file);
+      assert.equal(rows.length, 1, `Cobertura estática de ${file} em ${fixture}`);
+      assert.equal(rows[0].status, status, `Estado estático de ${file} em ${fixture}`);
+    }
     assert.deepEqual(report.coverage.find(row => row.tool === 'lgpd-static')?.files, manifestStaticFiles);
     const destinations = report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_'))
-      .map(row => [row.rule, row.file, row.line]);
+      .map(row => [row.tool, row.rule, row.file, row.line]);
     assert.deepEqual(destinations, fixture === 'com-defeito' ?
-      [['PII_POSSIBLE_LOG', 'src/telemetry.ts', 3]] : [], `Destinos em ${fixture}`);
+      [['lgpd-static', 'PII_POSSIBLE_LOG', 'src/telemetry.ts', 3]] : [], `Destinos em ${fixture}`);
   }
   if (attribution) {
     const staticRows = report.coverage.filter(row => row.tool === 'lgpd-static');
@@ -221,8 +230,8 @@ test('C9 exige cobertura agregada ok para todas as ferramentas nas fixtures com 
       'conformidade:snapshot', 'scancode-toolkit', 'presidio-analyzer', 'npm-license-policy', 'ort', 'lgpd-static',
     ].map(tool => ({tool, version: '1', status: 'ok', detail: 'Cobertura sintética.',
       ...(tool === 'lgpd-static' ? {files: ['src/telemetry.ts', 'vendor/widget.js']} : {})}));
-    coverage.push(...['package-lock.json', 'package.json', 'src/telemetry.ts', 'vendor/widget.js'].map(file => ({
-      tool: 'lgpd-static:file', version: '1', status: 'ok', detail: `${file} | sintético`,
+    coverage.push(...manifestFileStates.map(([file, status]) => ({
+      tool: 'lgpd-static:file', version: '1', status, detail: `${file} | sintético`,
     })));
     const findings: Output['findings'] = fixture === 'com-defeito' ? [{
       tool: 'lgpd-static', rule: 'PII_POSSIBLE_LOG', file: 'src/telemetry.ts', line: 3,
@@ -241,8 +250,21 @@ test('C9 exige cobertura agregada ok para todas as ferramentas nas fixtures com 
     }
     for (const row of coverage.filter(item => item.tool === 'lgpd-static:file')) {
       assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, files: ['inexistente.ts']} : item)), assert.AssertionError);
+      assert.throws(() => checkCoverage(coverage.filter(item => item !== row)), assert.AssertionError);
+      assert.throws(() => checkCoverage([...coverage, row]), assert.AssertionError);
+      assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, detail: 'outro.ts | sintético'} : item)), assert.AssertionError);
+      assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, status: row.status === 'ok' ? 'skipped' : 'ok'} : item)), assert.AssertionError);
     }
+    const telemetry = coverage.find(row => row.tool === 'lgpd-static:file' && row.detail.startsWith('src/telemetry.ts | '))!;
+    assert.throws(() => checkCoverage(coverage.map(row => row === telemetry ? {...row, status: 'skipped'} : row)),
+      /Estado estático/);
     if (fixture === 'com-defeito') {
+      assert.throws(() => parseCollectorOutput(fixture, {
+        stdout: JSON.stringify({coverage, findings: [{...findings[0], tool: 'presidio-analyzer'}]}), code: 0,
+      }), /Destinos em com-defeito/);
+      assert.throws(() => parseCollectorOutput(fixture, {
+        stdout: JSON.stringify({coverage, findings: [...findings, findings[0]]}), code: 0,
+      }), /Destinos em com-defeito/);
       assert.throws(() => parseCollectorOutput(fixture, {
         stdout: JSON.stringify({coverage, findings: [...findings, {...findings[0], line: 1}]}), code: 0,
       }), /Destinos em com-defeito/);
@@ -283,7 +305,7 @@ test('laboratório C9 detecta licença forte e CPF plantados e verifica o contro
       row.file === 'package-lock.json' && row.line === 7 && row.evidence.includes('GPL-3.0-only')), dirty);
     assert.equal(report.findings.some(row => row.rule === 'PII_BR_CPF' &&
       row.file === 'src/telemetry.ts' && row.line === 1), dirty);
-    assert.equal(report.findings.some(row => row.rule === 'PII_POSSIBLE_LOG' &&
+    assert.equal(report.findings.some(row => row.tool === 'lgpd-static' && row.rule === 'PII_POSSIBLE_LOG' &&
       row.file === 'src/telemetry.ts' && row.line === 3), dirty);
     if (!dirty) {
       assert.ok(report.findings.every(row =>
@@ -298,7 +320,8 @@ test('laboratório C9 atribui apenas as chamadas e os valores armazenados da fix
   const report = await collect(image, attributionFixture);
   const expected = JSON.parse(await readFile(join(fixtures, 'atribuicao', 'expected.json'), 'utf8'));
   assert.ok(report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_'))
-    .every(row => Object.hasOwn(expected, row.file)), 'Destino atribuído a arquivo inesperado');
+    .every(row => row.tool === 'lgpd-static' && Object.hasOwn(expected, row.file)),
+  'Destino atribuído a ferramenta ou arquivo inesperado');
   for (const [file, locations] of Object.entries(expected)) {
     const destinations = report.findings.filter(row => row.file === file && row.rule.startsWith('PII_POSSIBLE_'))
       .map(row => [row.rule.slice('PII_POSSIBLE_'.length), row.line, Number(row.evidence.match(/linha (\d+)\./)?.[1])]);
