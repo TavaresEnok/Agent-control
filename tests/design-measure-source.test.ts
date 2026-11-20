@@ -122,6 +122,10 @@ test('a medida guardada é a do axe, não a razão inventada pelo modelo', async
     finding: modelFinding(rule),
     rawFindings: [
       designRawFinding({
+        tool: 'axe', rule, file: screen.file, line: 18, severity: 'alta', snippet: 'outro botão',
+        measure: {kind: 'contrast', ratio: 1.5},
+      }),
+      designRawFinding({
         tool: 'stylelint',
         rule,
         file: screen.file,

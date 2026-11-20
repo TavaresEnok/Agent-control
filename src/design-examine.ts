@@ -198,22 +198,23 @@ const MEASURE_TOOL_RANK: Record<string, number> = {
   régua: 5,
 };
 
-function examMeasure(
+function examMeasurementSource(
   finding: DesignExamFinding,
   rawFindings: readonly DesignRawFinding[],
   captures: readonly DesignScreenCapture[] | undefined,
-): DesignMeasureValue | undefined {
-  let best: DesignMeasureValue | undefined;
+): DesignRawFinding | undefined {
+  let best: DesignRawFinding | undefined;
   let bestRank = Number.POSITIVE_INFINITY;
   for (const raw of rawFindings) {
     if (raw.measure === undefined) continue;
     if (raw.file !== finding.file) continue;
+    if (raw.measure.kind !== 'empty' && raw.line !== finding.line) continue;
     const named = finding.reference === raw.rule || finding.reference.includes(raw.rule) || finding.title.includes(raw.rule);
     if (!named) continue;
     if (raw.measure.kind === 'empty' && !emptyCaptureListed(raw.measure.capture, captures)) continue;
     const rank = MEASURE_TOOL_RANK[raw.tool] ?? 100;
     if (rank < bestRank) {
-      best = raw.measure;
+      best = raw;
       bestRank = rank;
     }
   }
@@ -496,6 +497,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   confirmations: {
     finding: DesignExamFinding;
     confirm: DesignConfirmResult;
+    measurementFingerprint?: string;
     verifier: {model: string; provider: string} | null;
   }[];
   notes: string[];
@@ -509,6 +511,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   const confirmations: {
     finding: DesignExamFinding;
     confirm: DesignConfirmResult;
+    measurementFingerprint?: string;
     verifier: {model: string; provider: string} | null;
   }[] = [];
   const notes: string[] = [];
@@ -619,7 +622,8 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       let reviewerAsked = false;
       let reviewerJudged = false;
       for (const finding of exam.data.findings) {
-        const measure = examMeasure(finding, input.rawFindings, screen.captures);
+        const source = examMeasurementSource(finding, input.rawFindings, screen.captures);
+        const measure = source?.measure;
         const clamped = DesignExamFinding.parse({
           title: finding.title,
           severity: clampHighSeverity(finding.severity, measure),
@@ -636,6 +640,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         if (measure !== undefined && finding.severity !== 'alta') {
           confirmations.push({
             finding: clamped,
+            measurementFingerprint: source?.fingerprint,
             confirm: {
               kind: 'confirmacao',
               status: 'confirmado',
@@ -665,6 +670,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           }
           confirmations.push({
             finding: clamped,
+            measurementFingerprint: source?.fingerprint,
             confirm: reviewed.confirm,
             verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
           });

@@ -386,23 +386,20 @@ function assembleAchados(
   confirmations: readonly {
     finding: DesignExamFinding;
     confirm: DesignConfirmResult;
+    measurementFingerprint?: string;
     verifier: {model: string; provider: string} | null;
   }[],
 ): DesignAchadoValue[] {
   const achados: DesignAchadoValue[] = [];
-  const covered: string[] = [];
+  const covered = new Set<string>();
   for (const item of confirmations) {
     achados.push(toAchado(achados.length + 1, item.finding, item.confirm, item.verifier));
-    if (item.finding.measure !== undefined) covered.push(`${item.finding.file}\u0000${item.finding.reference}`);
+    if (item.measurementFingerprint) covered.add(item.measurementFingerprint);
   }
   for (const raw of rawFindings) {
     const routeDown = raw.tool === 'navegacao' && raw.rule === 'DESIGN-ROTA-INDISPONIVEL';
     if (raw.measure === undefined && !routeDown) continue;
-    const already = covered.some(entry => {
-      const split = entry.indexOf('\u0000');
-      return entry.slice(0, split) === raw.file && entry.slice(split + 1).includes(raw.rule);
-    });
-    if (already) continue;
+    if (covered.has(raw.fingerprint)) continue;
     achados.push(raw.measure === undefined ? routeDownAchado(achados.length + 1, raw) : measuredRawAchado(achados.length + 1, raw));
   }
   return achados;
