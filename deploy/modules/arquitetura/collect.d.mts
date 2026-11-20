@@ -24,6 +24,7 @@ export interface CollectorOutput {
   findings: FindingItem[];
 }
 
+export function boundCollectorOutput(output: CollectorOutput, limits?: {maxCoverage?: number; maxFindings?: number}): CollectorOutput;
 export function normalizeRepoPath(filePath: string, repoRoot?: string): string;
 export function clampLine(value: unknown): number;
 export function copyRepoSafely(

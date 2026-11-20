@@ -36,6 +36,7 @@ import {hasKnownSecret, redactUnknownSecrets} from '../src/verify-redact.ts';
 import {REMEDIATION_ACCEPTANCE} from '../src/verify-types.ts';
 import {
   analyzeAstComplexity,
+  boundCollectorOutput,
   buildKnipConfig,
   clampLine,
   copyRepoSafely,
@@ -873,6 +874,121 @@ test('snapshot registra omissões e cobertura sinaliza o corte de 500 linhas em 
       assert.match(out.coverage.find(row => row.tool === tool)?.detail ?? '', /linhas_por_arquivo=500\/501; limite_linhas=500; cobertura_truncada=sim/);
       assert.equal(out.coverage.filter(row => row.tool === `${tool}:file`).length, 500);
     }
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+type BoundFinding = {tool: string; rule: string; file: string; line: number; severity: string; message: string; evidence: string};
+type BoundRow = {tool: string; version: string; status: string; detail: string; files?: string[]};
+
+function syntheticBoundInput(coverageFiles: number, findingCount: number) {
+  const coverage: BoundRow[] = [{tool: 'snapshot', version: '1', status: 'ok', detail: 'copiados=1'},
+    {tool: 'knip', version: '1', status: 'ok', detail: 'arquivos=1'}];
+  for (const tool of ['knip:file', 'jscpd:file']) {
+    for (let index = 0; index < coverageFiles; index += 1) {
+      coverage.push({tool, version: '1', status: 'ok', files: [`src/m${index}.ts`], detail: `arquivo=src/m${index}.ts`});
+    }
+  }
+  const severities = ['informativa', 'baixa', 'media', 'alta'];
+  const findings: BoundFinding[] = Array.from({length: findingCount}, (_, index) => ({
+    tool: index % 2 ? 'jscpd' : 'knip', rule: `R-${index % 7}`, file: `src/m${(index * 7) % coverageFiles}.ts`,
+    line: (index % 50) + 1, severity: severities[(index * 5) % 4]!, message: `achado ${index}`, evidence: `evidencia ${index}`,
+  }));
+  return {coverage, findings};
+}
+
+test('limites do contrato: achados excedentes são selecionados por gravidade, de forma determinística e com a omissão declarada', () => {
+  const {coverage, findings} = syntheticBoundInput(1500, 3047);
+  assert.ok(coverage.length > 999 && findings.length > 999);
+  const out = boundCollectorOutput({coverage, findings});
+  const reversed = boundCollectorOutput({coverage: [...coverage], findings: [...findings].reverse()});
+  assert.deepEqual(reversed, out);
+  assert.equal(out.findings.length, 999);
+  assert.ok(out.coverage.length <= 5000);
+  const rank = (severity: string) => ['alta', 'media', 'baixa', 'informativa'].indexOf(severity);
+  const worstKept = Math.max(...out.findings.map(item => rank(item.severity)));
+  const omitted = findings.filter(item => !out.findings.includes(item));
+  assert.equal(omitted.length, 3047 - 999);
+  assert.ok(omitted.every(item => rank(item.severity) >= worstKept));
+  assert.equal(out.findings.filter(item => item.severity === 'alta').length, Math.min(999, findings.filter(item => item.severity === 'alta').length));
+  // cada achado retido continua ligado à linha de cobertura por arquivo da própria ferramenta
+  for (const item of out.findings) {
+    assert.ok(out.coverage.some(row => row.tool === `${item.tool}:file` && row.files?.includes(item.file)), `${item.tool} ${item.file}`);
+    assert.ok(findings.includes(item), 'nenhum achado inventado');
+  }
+  const limit = out.coverage.at(-1)!;
+  assert.equal(limit.tool, 'limites-do-coletor');
+  assert.equal(limit.status, 'skipped');
+  assert.match(limit.detail, /cobertura_parcial=sim; limite_achados=999; achados_coletados=3047; achados_retidos=999; achados_omitidos=2048;/);
+  const omittedBySeverity = (severity: string) => omitted.filter(item => item.severity === severity).length;
+  for (const severity of ['media', 'baixa', 'informativa']) {
+    if (omittedBySeverity(severity)) assert.match(limit.detail, new RegExp(`${severity}=${omittedBySeverity(severity)}`));
+  }
+  const parsed = parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
+  assert.equal(parsed.findings.length, 999);
+  const untouched = syntheticBoundInput(10, 20);
+  assert.equal(boundCollectorOutput(untouched), untouched);
+});
+
+test('limites do contrato: cobertura acima de 5000 descarta linhas sem achado, mantém os vínculos e declara as contagens', () => {
+  const {coverage, findings} = syntheticBoundInput(3000, 3047);
+  assert.equal(coverage.length, 6002);
+  const out = boundCollectorOutput({coverage, findings});
+  assert.ok(out.coverage.length <= 5000);
+  assert.equal(out.findings.length, 999);
+  for (const item of out.findings) {
+    assert.ok(out.coverage.some(row => row.tool === `${item.tool}:file` && row.files?.includes(item.file)));
+  }
+  assert.deepEqual(out.coverage.filter(row => !row.files).map(row => row.tool), ['snapshot', 'knip', 'limites-do-coletor']);
+  assert.match(out.coverage.at(-1)!.detail, /limite_cobertura=5000; cobertura_coletada=6002; cobertura_retida=4999; cobertura_omitida=1003;/);
+  parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
+
+  const few = syntheticBoundInput(3000, 5);
+  const fewOut = boundCollectorOutput(few);
+  assert.equal(fewOut.findings.length, 5);
+  assert.equal(fewOut.coverage.length, 5000);
+  assert.match(fewOut.coverage.at(-1)!.detail, /achados_omitidos=0;.*cobertura_omitida=1003;/);
+  // com o limite apertado, um achado só entra se a cobertura dele couber
+  const tight = boundCollectorOutput(syntheticBoundInput(10, 40), {maxCoverage: 6, maxFindings: 999});
+  assert.ok(tight.coverage.length <= 6);
+  for (const item of tight.findings) assert.ok(tight.coverage.some(row => row.tool === `${item.tool}:file` && row.files?.includes(item.file)));
+  assert.match(tight.coverage.at(-1)!.detail, /cobertura_parcial=sim/);
+});
+
+test('runCollector entrega no máximo 999 achados quando a ferramenta reporta milhares e valida no hospedeiro', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-findings-limit-'));
+  try {
+    const files = Array.from({length: 1100}, (_, index) => `module-${String(index).padStart(4, '0')}.ts`);
+    for (const file of files) writeFileSync(join(repo, file), 'export const synthetic = 1;\n');
+    const out = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: (_cmd, args) => {
+        const argv = args as string[];
+        if (argv[0]?.endsWith('/knip-worker.mjs')) {
+          const issues = files.map(file => ({file, files: [{name: file}], exports: [{name: 'a', line: 1}, {name: 'b', line: 1}]}));
+          return {status: 0, stderr: '', stdout: JSON.stringify({issues, analyzedFiles: files, entryFiles: []})};
+        }
+        if (argv.includes('--output-to')) {
+          writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({modules: files.map(source => ({source}))}));
+        } else {
+          const outDir = argv[argv.indexOf('--output') + 1];
+          writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+          writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({summary: {files: files.map(path => ({path}))}}));
+        }
+        return {status: 0, stderr: '', stdout: ''};
+      },
+    });
+    assert.equal(out.findings.length, 999);
+    assert.ok(out.coverage.length <= 5000);
+    const limit = out.coverage.find(row => row.tool === 'limites-do-coletor');
+    assert.match(limit?.detail ?? '', /achados_coletados=3300; achados_retidos=999; achados_omitidos=2301;/);
+    assert.ok(out.coverage.some(row => row.tool === 'snapshot'));
+    assertValidOutputContract(out);
+    const parsed = parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
+    assert.equal(parsed.findings.length, 999);
+    assert.equal(parsed.coverage.length, out.coverage.length);
   } finally {
     rmSync(repo, {recursive: true, force: true});
   }
