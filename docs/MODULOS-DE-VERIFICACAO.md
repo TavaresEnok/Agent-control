@@ -239,6 +239,10 @@ A homologação deve conferir o reconhecedor de CPF com dados artificiais e vali
 
 ### 10. Design e experiência de uso
 
+O examinador, as duas sessões da crítica visual e o modo `criar` usam Claude Opus 5.5 com esforço `high`. A confirmação de um achado alto usa Opus 5.5 com esforço `medium` em outra sessão, inclusive quando existe uma medida de ferramenta.
+
+Na instalação do titular, a conta prioritária é Enok Max. Para conferir a cadeia antes de publicá-la, rode `npm run personal:design -- preparar <instalação.json> <projeto> --conta-prioritaria <UUID-da-conta-Max>`. A prévia identifica conta, modelo e esforço. A opção `--aplicar` publica a revisão da política. O supervisor confere o perfil e a finalidade da reserva antes de abrir a sessão.
+
 Mede cada rota descoberta no código em 375, 768 e 1440 px, nos temas claro e escuro quando o projeto declara `prefers-color-scheme`, `data-theme` ou `color-scheme`. A imagem `ac-design` roda na rede `design-homologation`, com usuário 65532, raiz só de leitura e o digest gravado em `deploy/design-image-digest.txt`. O script da imagem é `deploy/design-tools/run-exam.mjs`. Ele não executa código do repositório. A tabela de cobertura lista ferramenta, versão, o que rodou, achados e falha. Ferramenta que quebra permanece na tabela com o código da falha.
 
 Estados além do padrão vêm de `design.config.json` na raiz do repositório: vazio, carregando, erro e logado. Sem declaração, o relatório diz "não capturado". Rota com `:param` só abre com o exemplo concreto desse arquivo.
