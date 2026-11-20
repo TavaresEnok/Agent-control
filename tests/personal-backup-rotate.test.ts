@@ -210,7 +210,7 @@ test('the default destination keeps the 3 newest of this installation, after res
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
-test('a new backup older than the others by clock is still kept',async()=>{
+test('an older clock stamp does not displace a newer verified backup',async()=>{
  const env=await fixture();
  const defaultRoot=join(env.root,'padrao');
  const dest=join(defaultRoot,'data');
@@ -220,7 +220,7 @@ test('a new backup older than the others by clock is still kept',async()=>{
  try{
   await runPersonalBackupRotate([env.file],{now,dump,defaultRoot,listDump});
   const kept=await stampDirs(dest);
-  assert.equal(kept.includes(personalBackupRotateStamp(now)),true);
+  assert.equal(kept.includes(personalBackupRotateStamp(now)),false);
   assert.equal(kept.length,3);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
@@ -332,5 +332,24 @@ test('dois dumps ilegíveis e arquivos alheios não expulsam as três cópias re
   await runPersonalBackupRotate([env.file],{defaultRoot,dump,listDump,now:new Date(2026,10,20)});
   assert.equal((await stampDirs(dest)).length,6);
   assert.equal(await readFile(join(dest,'20200101-000000','dados-alheios'),'utf8'),'preservar');
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+
+test('retoma exclusão interrompida só para o inode comprovado da instalação',async()=>{
+ const env=await fixture(),defaultRoot=join(env.root,'padrao'),dest=join(defaultRoot,'data');
+ try{
+  await mkdir(dest,{recursive:true});
+  const setup=async(matches:boolean)=>{
+   const id=randomUUID(),dir=join(dest,'.removendo-'+id),marker=join(dest,'.retencao-'+id+'.json');
+   await mkdir(dir);
+   const info=await lstat(dir,{bigint:true});
+   await writeFile(marker,JSON.stringify({projectId:env.id,dataDirectory:env.data,dev:String(info.dev),ino:matches?String(info.ino):'0'}));
+   return dir;
+  };
+  const pending=await setup(true),foreign=await setup(false);
+  await runPersonalBackupRotate([env.file],{defaultRoot,dump,listDump});
+  await assert.rejects(lstat(pending),{code:'ENOENT'});
+  assert.ok((await lstat(foreign)).isDirectory());
  }finally{await rm(env.root,{recursive:true,force:true});}
 });

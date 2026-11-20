@@ -126,6 +126,7 @@ async function readSmallJson(path:string){
  */
 async function recognizedBackup(dated:string,projectId:string,dataDirectory:string,options:PersonalRestoreOptions){
  try{
+  const before=await lstat(dated,{bigint:true});
   const entries=await readdir(dated,{withFileTypes:true});
   const entry=entries[0];
   if(entries.length!==1||!entry?.isDirectory()||!entry.name.startsWith('agent-control-'))return false;
@@ -133,7 +134,8 @@ async function recognizedBackup(dated:string,projectId:string,dataDirectory:stri
   const raw=await readSmallJson(join(backup,'installation.json')) as {project?:{id?:unknown};dataDirectory?:unknown}|null;
   if(raw?.project?.id!==projectId||raw.dataDirectory!==dataDirectory)return false;
   await runPersonalRestoreCheck([backup],options);
-  return true;
+  const after=await lstat(dated,{bigint:true});
+  return before.isDirectory()&&before.dev===after.dev&&before.ino===after.ino?before:false;
  }catch{return false;}
 }
 
@@ -188,11 +190,7 @@ async function pruneBackups(parent:string,keep:number,newName:string,projectId:s
  }
  names.sort();
  if(!names.includes(newName))return {kept:names.length,removed:0,failed:failed+1};
- const keepSet=new Set([newName]);
- for(const name of [...names].reverse()){
-  if(keepSet.size>=keep)break;
-  keepSet.add(name);
- }
+ const keepSet=new Set(names.slice(-keep));
  let removed=0;
  for(const marker of await readdir(root)){
   if(!pendingName.test(marker))continue;
@@ -201,10 +199,10 @@ async function pruneBackups(parent:string,keep:number,newName:string,projectId:s
  for(const name of names){
   if(keepSet.has(name))continue;
   const literal=await realChild(root,name,stampName);
-  if(!literal||!await recognizedBackup(literal,projectId,dataDirectory,options))continue;
+  const entry=literal&&await recognizedBackup(literal,projectId,dataDirectory,options);
+  if(!literal||!entry)continue;
   const id=randomUUID(),marker=`.retencao-${id}.json`;
   try{
-   const entry=await lstat(literal,{bigint:true});
    await writeFile(join(root,marker),JSON.stringify({projectId,dataDirectory,dev:String(entry.dev),ino:String(entry.ino)}),{flag:'wx',mode:0o600});
    await rename(literal,join(root,'.removendo-'+id));
    if(await finishPending(root,marker,projectId,dataDirectory))removed++;
