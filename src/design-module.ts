@@ -1,4 +1,4 @@
-import {assertDiskSpaceForLaunch} from './personal-disk.ts';
+import {assertDiskSpaceForLaunch,launchVolumesOf} from './personal-disk.ts';
 import {constants, existsSync} from 'node:fs';
 import {mkdtemp, open, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -62,6 +62,8 @@ export type DesignModuleInput = {
   repo: string;
   targetUrl: string;
   dataDirectory: string;
+  /** Volumes the installation writes to; the launch gate measures all of them. */
+  launchVolumes?: readonly string[];
   intentId: string;
   runId: string;
   createdAt: Date;
@@ -118,7 +120,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     throw new Refusal('DESIGN_MODULE_INVALID', 400);
   }
   const target = assertDesignTarget(input.targetUrl);
-  await assertDiskSpaceForLaunch(input.dataDirectory);
+  await assertDiskSpaceForLaunch(launchVolumesOf({launchVolumes: input.launchVolumes}, input.dataDirectory));
   const rawDesignConfig = await readRepoDesignConfig(input.repo, input.files);
   const projectConfig = parseDesignProjectConfig(rawDesignConfig);
   const hasProjectConfig = rawDesignConfig !== undefined && rawDesignConfig.trim().length > 0;

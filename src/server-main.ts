@@ -1,3 +1,4 @@
+import {installationVolumes} from './personal-disk.ts';
 // Configured administration gateway. Native adapters stay disabled unless a
 // discriminated opt-in is valid. Configured opt-in does not activate accounts
 // or inference. Bench mode is refused here because it requires injected substitutes.
@@ -139,7 +140,7 @@ async function main(){
  // Happier service. Pin it to this installation's server before that client is loaded, so nothing leaves the host.
  process.env.HAPPIER_SERVER_URL=config.happier.upstreamOrigin;process.env.HAPPIER_LOCAL_SERVER_URL=config.happier.upstreamOrigin;delete process.env.HAPPIER_PUBLIC_SERVER_URL;
  const localWorkflowRuntime=command==='serve'?await prepareWorkflowRuntimeRegistration(config.workflowRuntime):undefined;
- const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token,localWorkflowRuntime?.identity);
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token,localWorkflowRuntime?.identity,installationVolumes(config));
  let workflowRegistration:Awaited<ReturnType<typeof startWorkflowRuntimeRegistration>>|undefined;
  const managerTransports=new Map<string,ManagerRegistry>();
  const configurationControls=new Map<string,Control>();

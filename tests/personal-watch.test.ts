@@ -192,3 +192,44 @@ test('vigia executa manutenção e envia alerta no limite mesmo com imagem ausen
   assert.match(status,/images=skipped/);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
+
+test('vigia alerta e executa a retenção mesmo quando o estado não pode ser gravado (ENOSPC)',async()=>{
+ const env=await fixture();
+ try{
+  const calls:string[]=[];
+  // A read-only data directory fails every state write the way a full volume does.
+  await chmod(env.data,0o500);
+  const status=await runPersonalWatch([env.file],{...quiet,
+   retention:async()=>{calls.push('retention');},
+   diskUsedPercent:async()=>{calls.push('sample');return 97;},
+   probe:async()=>true,notify:async(_dir,message)=>{calls.push(message);},images:()=>[digest('a')],
+   inspectImage:async()=>false,rebuildImages:async()=>{assert.fail('rebuild com disco crítico');}});
+  assert.equal(calls[0],'sample');
+  assert.match(calls[1]!,/97%.*bloqueados/);
+  assert.equal(calls[2],'retention');
+  assert.equal(calls.length,3);
+  assert.match(status,/images=skipped/);
+  assert.match(status,/state=unsaved/);
+ }finally{await chmod(env.data,0o700);await rm(env.root,{recursive:true,force:true});}
+});
+
+test('sem estado gravável o vigia não reconstrói imagens e a falha da retenção não esconde o resto',async()=>{
+ const env=await fixture();
+ try{
+  await chmod(env.data,0o500);
+  const status=await runPersonalWatch([env.file],{...quiet,retention:async()=>{throw new Error('ENOSPC');},
+   probe:async()=>true,notify:async()=>{},images:()=>[digest('a')],inspectImage:async()=>false,
+   rebuildImages:async()=>{assert.fail('o limite de uma hora não pode ser registrado');}});
+  assert.equal(status,'watch gateway=up failures=0 images=skipped retention=failed state=unsaved');
+ }finally{await chmod(env.data,0o700);await rm(env.root,{recursive:true,force:true});}
+});
+
+test('uma falha ao ler o estado ainda deixa a retenção rodar e depois propaga o erro',async()=>{
+ const env=await fixture();
+ try{
+  await mkdir(join(env.data,'watch-state.json'));
+  let ran=false;
+  await assert.rejects(runPersonalWatch([env.file],{...quiet,retention:async()=>{ran=true;},probe:async()=>true,notify:async()=>{},images:()=>[]}),{code:'EISDIR'});
+  assert.equal(ran,true);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});

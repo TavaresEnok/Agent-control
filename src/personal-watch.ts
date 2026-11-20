@@ -1,4 +1,4 @@
-import {DISK_BLOCK_PERCENT,diskUsedPercent} from './personal-disk.ts';
+import {DISK_BLOCK_PERCENT,diskUsedPercent,installationVolumes} from './personal-disk.ts';
 import {runPersonalMaintenance} from './personal-maintenance.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -30,7 +30,7 @@ export type PersonalWatchDeps={
  restartGateway?:(unit:string)=>Promise<void>;
  /** Gateway log lines from the last few minutes. */
  recentLog?:(unit:string,minutes:number)=>Promise<string>;
- /** Percent of the root disk in use. */
+ /** Highest percent in use among the installation's volumes. */
  diskUsedPercent?:()=>Promise<number>;
  /** Health notices about logins. */
  logins?:(config:Installation,installationFile:string,now:Date)=>Promise<HealthNotice[]>;
@@ -167,6 +167,13 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  const rebuild=deps.rebuildImages??defaultRebuild;
  const restart=deps.restartGateway??defaultRestart;
  const statePath=join(config.dataDirectory,'watch-state.json');
+ // Sampled first: a full disk can break every write below, and the figure must predate the cleanup.
+ let usedPercent:number|undefined;
+ try{usedPercent=await (deps.diskUsedPercent?.()??diskUsedPercent(installationVolumes(config)));}catch{/* health checks can continue while a volume is unavailable */}
+ let retentionFailed=false,stateUnsaved=false,summary='',tail='';
+ // A failed write (ENOSPC included) must not stop alerts or the cleanup that frees the space.
+ const persist=async(value:WatchState)=>{try{await writeState(statePath,value);return true;}catch{stateUnsaved=true;return false;}};
+ try{
  const state=await readState(statePath);
  const up=await probe(`http://127.0.0.1:${config.http.port}/api/v1/ac/health`);
  let healthNotice:string|null=null;
@@ -184,9 +191,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   try{await notify(config.dataDirectory,healthNotice);}
   catch{state.downNotified=healthNotice===gatewayUpNotice;healthNotice=null;/* not sent: the next check tries again, and the later checks still run */}
  }
- await writeState(statePath,state);
- let usedPercent:number|undefined;
- try{usedPercent=await (deps.diskUsedPercent?.()??diskUsedPercent(config.dataDirectory));}catch{/* health checks can continue while a volume is unavailable */}
+ await persist(state);
  const wanted=(deps.images??personalWatchImages)(config).filter(image=>imageId.test(image));
  let imageStatus:'ok'|'skipped'|'rebuilt'|'failed'='ok';
  if(wanted.length>0){
@@ -200,8 +205,9 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   else if(usedPercent===undefined||usedPercent>=DISK_BLOCK_PERCENT||!due(state.lastImageRebuildAt,now))imageStatus='skipped';
   else{
    state.lastImageRebuildAt=now.toISOString();
-   await writeState(statePath,state);
-   try{
+   // Without a recorded attempt the hourly limit cannot hold, so no rebuild.
+   if(!await persist(state))imageStatus='skipped';
+   else try{
     await rebuild(installationFile);
     await restart(`agent-control-gateway-${personalServiceName(installationFile)}`);
     try{await notify(config.dataDirectory,imagesRebuiltNotice);}catch{/* rebuild already happened */}
@@ -221,13 +227,16 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   try{await notify(config.dataDirectory,item.text);state.sent[item.key]=now.toISOString();delivered.push(item);}
   catch{/* not recorded, so the next check tries again */}
  }
- await writeState(statePath,state);
- let retentionFailed=false;
- try {
-  if(deps.retention)await deps.retention(installationFile);
-  else await runPersonalMaintenance([installationFile,'--retencao-automatica','--aplicar']);
- } catch {retentionFailed=true;}
+ await persist(state);
  const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'?'images':'',...delivered.map(item=>item.key.split(':')[0]!)].filter(Boolean);
  const notice=tags.length?` notice=${tags.join('+')}`:'';
- return `watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${retentionFailed?' retention=failed':''}${notice}`;
+ summary=`watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}`;tail=notice;
+ }finally{
+  // Always, after the alerts: the figure above was taken before this frees anything.
+  try{
+   if(deps.retention)await deps.retention(installationFile);
+   else await runPersonalMaintenance([installationFile,'--retencao-automatica','--aplicar']);
+  }catch{retentionFailed=true;}
+ }
+ return `${summary}${retentionFailed?' retention=failed':''}${stateUnsaved?' state=unsaved':''}${tail}`;
 }

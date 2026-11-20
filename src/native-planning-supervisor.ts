@@ -1,3 +1,4 @@
+import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {pinNativeProtocolForNewAttempt} from './native-protocol-compatibility.ts';
 import {proveUncreatedNativeResources,cancelPreparedNativeResources,reconcileNativeResourceAdmissions,admitNativeResources,nativeDockerDaemon,type NativeResourceEnvelope} from './native-resource-envelope.ts';
@@ -71,6 +72,8 @@ export class NativePlanningSupervisor{
    return {principal:g.principal_id,subjectDigest:this.subjects.get(g.account_id)!,projectId:g.project_id,exists:Boolean(previous)};
   });
   if(identity.exists){const result=await this.reconcile(input);if(!result)throw new Refusal('PLANNING_RESULT_UNCERTAIN');return result;}
+  // Only a new planning job is admitted here; the replay above already reconciled.
+  await assertDiskSpaceForLaunch([this.config.hostRoot,this.config.accountRoot]);
   assertModelAllowed(input.profile.model);
   const personal=Boolean((await this.ledger.pool.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'")).rowCount);
   if(!personal||this.config.syntheticFixture){
