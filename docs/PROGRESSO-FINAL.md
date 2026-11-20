@@ -1892,3 +1892,55 @@ FIM
 - 20/11/2026 13:50 UTC — Revisão independente revisao-arquitetura-r4 concluída pelo Sol medium em modo somente leitura.
 - 20/11/2026 13:51 UTC — Arquitetura integrada em f49769c4, com digest sha256:c608f169df6b. TypeScript, 41 testes, laboratório e publicação do contrato sobre o checkout real passaram. Sol medium aceitou 33a951b8. Iniciada nova CLI na instalação.
 - 20/11/2026 13:51 UTC — Iniciada a CLI personal:arquitetura para arquitetura-integrada-posjanela.
+- 20/11/2026 13:57 UTC — As duas rodadas da instalação viva geraram recibos de Sonnet 5.5 medium na conta Enok Max. Na prévia local sem examinador da revisão 21f692d, os contratos de dependências (1.507 medições, seis achados brutos) e banco (318 medições, 656 achados brutos) passaram. Esses números ainda aguardam julgamento.
+- 20/11/2026 14:00 UTC — Conferência parcial do formato: QA tinha cinco respostas cujo trecho excedia 240 caracteres (278 a 453); nenhuma correspondia literalmente à linha indicada. Os cinco casos permanecem sem aceite. Arquitetura tinha 35 arquivos com respostas aceitas nessa amostra.
+- 20/11/2026 14:00 UTC — Iniciada ordem exame-trechos em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:03 UTC — A CLI personal:qa de qa-renovado-posjanela encerrou com código 1.
+- 20/11/2026 14:03 UTC — A CLI personal:arquitetura de arquitetura-integrada-posjanela encerrou com código 1.
+- 20/11/2026 14:04 UTC — Ordem exame-trechos em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 14:05 UTC — Revisão independente revisao-exame-trechos concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 14:05 UTC — Às 14h03 UTC, QA e arquitetura perderam o PostgreSQL por comando administrativo (SQLSTATE 57P01). O banco voltou a responder; o produto marcou as rodadas como falhas com 139 e 53 jobs. A fila também recebeu ECONNREFUSED enquanto o banco reiniciava. Nenhuma cobertura foi publicada.
+- 20/11/2026 14:06 UTC — Iniciada ordem exame-trechos-vinculo em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:06 UTC — Iniciada a CLI personal:verify para seguranca-estatica-depois-banco.
+- 20/11/2026 14:06 UTC — Depois da volta do banco, a recuperação pelo produto liberou a reserva de arquitetura por ack_lost. A de QA foi preservada como uncertain por falta de prova de rede. Reativados os quatro contêineres próprios da homologação, identificados por rótulo. Iniciada segurança estática após a liberação da trava do projeto.
+- 20/11/2026 14:06 UTC — A CLI personal:verify de seguranca-estatica-depois-banco encerrou com código 1.
+- 20/11/2026 14:08 UTC — Ordem exame-trechos-vinculo em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 14:09 UTC — Iniciada ordem trava-estatica em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:09 UTC — A reserva pendente foi liberada e não há execução ativa. A recusa da segurança estática persiste porque o marcador .running aponta para a rodada terminal 4957ad10. O conteúdo e os resultados originais estão preservados. Aberta correção de recuperação da trava pelo produto. O novo backup integral passou no restore-check com 16.981 arquivos e dump legível.
+- 20/11/2026 14:09 UTC — Revisão independente revisao-exame-trechos-r2 concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 14:10 UTC — Iniciada ordem exame-trechos-identidade em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:11 UTC — Ordem exame-trechos-identidade em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 14:14 UTC — Iniciada ordem disco-backups em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:14 UTC — Iniciada ordem disco-artefatos em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:14 UTC — Iniciada ordem disco-jobs em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:19 UTC — Ordem cf1d85e9 em bancada. O vigia usa o volume da instalação para alertar a 90%; a admissão consulta espaço a cada lançamento e recusa a partir de 95%. Os 13 testes de disco, saúde e vigia passaram na primeira rodada.
+- 20/11/2026 14:20 UTC — Ordem disco-backups em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 14:22 UTC — Iniciada ordem disco-admissao-r2 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:23 UTC — Backup anterior à ativação da retenção conferido em /home/app/backups-agent-control/ispagent-antes-retencao-cf1d85e9-YnLo6SLd/agent-control-ispagent-20261120-1422. O restore-check validou o manifesto e o dump, e o manifesto não contém as bases regeneráveis.
+- 20/11/2026 14:23 UTC — Ordem disco-artefatos em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 14:23 UTC — Rotação ajustada após revisão Sol: flock no diretório e validação das cópias anteriores antes de contar ou excluir. CLI personal:backup usa rotação no destino padrão.
+- 20/11/2026 14:24 UTC — Iniciada ordem disco-produtores em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:27 UTC — O Sol encontrou janelas de concorrência em temporários, imagens e registro. A bancada agora usa descritores e IDs de montagem durante a retirada dos temporários, revalida os digests e vincula cada worktree à identidade com que foi registrado.
+- 20/11/2026 14:27 UTC — Ordem disco-jobs em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 14:28 UTC — Iniciada ordem disco-prova em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 14:29 UTC — Prévia da CLI na instalação viva em 7dcde891: 1.262 jobs inventariados, 246 com work, 73 candidatos (4.062 MB), 72 temporários sem prova preservados. Nenhuma exclusão na prévia. Revisor pediu reforçar a prova de avaliadores e programadores antes da ativação.
+- 20/11/2026 14:30 UTC — COTA — claude-sonnet-5-5 (ajust) informou limite na ordem disco-produtores.
+- 20/11/2026 14:30 UTC — Iniciada ordem disco-produtores em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 14:30 UTC — Na bancada integrada, 57 testes de retenção, concorrência, backup, vigia e limites passaram com PostgreSQL descartável, sem skips.
+- 20/11/2026 14:30 UTC — COTA — claude-sonnet-5-5 (ajust) informou limite na ordem disco-prova.
+- 20/11/2026 14:30 UTC — Iniciada ordem disco-prova em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 14:33 UTC — COTA — claude-sonnet-5-5 (ajust) informou limite na ordem disco-admissao-r2.
+- 20/11/2026 14:33 UTC — Iniciada ordem disco-admissao-r2 em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 14:34 UTC — Priorizada a correção grave de retenção de jobs. A rodada extra de testes em disco-prova foi interrompida para liberar uma das três vagas. Os 57 testes de bancada já executados têm recibos.
+- 20/11/2026 14:34 UTC — Ordem disco-prova em claude-sonnet-5-5 encerrou com código 143.
+- 20/11/2026 14:34 UTC — Iniciada ordem grave-disco-jobs em claude-opus-5-5-medium (agy-opus), no worktree próprio.
+- 20/11/2026 14:35 UTC — COTA — claude-opus-5-5-medium (agy-opus) informou limite na ordem grave-disco-jobs.
+- 20/11/2026 14:35 UTC — Iniciada ordem grave-disco-jobs em claude-opus-5-5 (enok), no worktree próprio.
+- 20/11/2026 14:36 UTC — Os 22 testes de artefatos passaram. Casos novos reproduzem a troca do temporário durante a prova, a recriação do worktree no mesmo caminho e ramo e a fixação de uma imagem durante a inspeção. A suíte contínua segue em execução.
+- 20/11/2026 14:36 UTC — Ordem disco-admissao-r2 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 14:37 UTC — Iniciada ordem disco-limites em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 14:42 UTC — Iniciada ordem grave-disco-protecao em claude-opus-5-5 (enok), no worktree próprio.
+- 20/11/2026 14:45 UTC — Retomada em 65da60b9, bancada fbe7a9c2. Disco em 85%; Docker, instalação, temporários e cópia do NexoISP ocupam o mesmo volume. Revisor Sol medium pediu proteger arquivos ignorados de worktrees, isolar falhas de inventário e recuperar temporários interrompidos. Ordem grave-disco-protecao enfileirada. Na bancada equipada, 176 testes de módulos e reconstrução passaram, 4 foram pulados. A instalação continua na versão anterior.
+- 20/11/2026 14:46 UTC — Iniciada ordem disco-volumes em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 14:47 UTC — Ordem grave-disco-protecao em claude-opus-5-5 encerrou com código 0.
+- 20/11/2026 14:48 UTC — Iniciada ordem disco-produtores-r2 em claude-sonnet-4-6 (agy-enok-sonnet), no worktree próprio.
