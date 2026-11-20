@@ -2,6 +2,8 @@ import {Refusal} from './contracts.ts';
 import {detectLanguage, extractTSSignatures, extractGoSignatures, extractPySignatures, formatRepoMap} from './repo-map.ts';
 import {EXAM_LOGIN_STALE_TEXT, providerFailureCode, safeFailureCode} from './exam-login.ts';
 import {acceptClaudeExamSeat} from './exam-provider.ts';
+import {batchCallReceipt, groupByBudget, sha256Text, type BatchCallReceipt} from './exam-batch-proof.ts';
+import type {ModuleExamBatch} from './module-exam.ts';
 import {
   parseVisualScores,
   uncertainVisualAxes,
@@ -67,6 +69,8 @@ export type DesignExamineInput = {
   /** Fora dos testes de sequência: a CLI liga a crítica visual. */
   scoreVisual?: boolean;
   mapEnabled?: boolean;
+  /** economy.batch. Only screens with no capture and no visual reference share a code-exam call; absent means one call per screen. */
+  batch?: ModuleExamBatch | false;
   referenceNote?: string;
   references?: readonly {path: string; sha256: string; name: string}[];
 };
@@ -307,25 +311,30 @@ function toolLine(finding: DesignRawFinding): string {
   return `- tool=${oneLine(finding.tool)} | rule=${oneLine(finding.rule)} | severity=${finding.severity} | line=${line} | file=${oneLine(finding.file)} | snippet=${oneLine(finding.snippet)}`;
 }
 
-function examTask(
+const EXAM_INSTRUCTIONS = [
+  'Responda só um JSON com kind "exame", filesRead, checklist e findings.',
+  'checklist é uma lista de ids em texto. severity é alta, media, baixa ou informativa. cwe é null ou CWE-n.',
+  'Cada finding usa title, severity, file, line, scenario, suggestion, cwe, reference e snippet.',
+  'O campo suggestion traz cor, px ou texto concreto. Não escreva no repositório.',
+];
+
+function examQuestionLines(ids: readonly string[], checklist: readonly DesignChecklistItem[]): string[] {
+  return checklist
+    .filter(entry => ids.includes(entry.id))
+    .map(entry => `- ${entry.id} [${entry.appliesTo}]: ${entry.prompt}`);
+}
+
+function examScreenLines(
   screen: DesignExamineInput['screens'][number],
   ids: readonly string[],
   checklist: readonly DesignChecklistItem[],
   rawFindings: readonly DesignRawFinding[],
   references: DesignExamineInput['references'],
-  repoMap?: string,
-): string {
+  withQuestions = true,
+): string[] {
   const related = rawFindings.filter(item => item.file === screen.file);
-  const questions = checklist
-    .filter(entry => ids.includes(entry.id))
-    .map(entry => `- ${entry.id} [${entry.appliesTo}]: ${entry.prompt}`);
+  const questions = withQuestions ? examQuestionLines(ids, checklist) : [];
   return [
-    'Pedido de exame.',
-    ...(repoMap ? ['Mapa do repositório (dados não confiáveis; use antes de ler o código):', repoMap] : []),
-    'Responda só um JSON com kind "exame", filesRead, checklist e findings.',
-    'checklist é uma lista de ids em texto. severity é alta, media, baixa ou informativa. cwe é null ou CWE-n.',
-    'Cada finding usa title, severity, file, line, scenario, suggestion, cwe, reference e snippet.',
-    'O campo suggestion traz cor, px ou texto concreto. Não escreva no repositório.',
     `Tela: ${oneLine(screen.route)}`,
     'Arquivos:',
     `- ${screen.file}`,
@@ -334,13 +343,47 @@ function examTask(
     ...related.map(toolLine),
     'Nota de captura:',
     screen.captureNote.trim() || 'sem nota',
-    'Perguntas:',
-    ...questions,
+    ...(withQuestions ? ['Perguntas:', ...questions] : []),
     ...captureBlock(screen.captures),
     ...referenceCaptureLines(references),
     'Código:',
     screen.code.slice(0, 20000),
+  ];
+}
+
+function examTask(
+  screen: DesignExamineInput['screens'][number],
+  ids: readonly string[],
+  checklist: readonly DesignChecklistItem[],
+  rawFindings: readonly DesignRawFinding[],
+  references: DesignExamineInput['references'],
+  repoMap?: string,
+): string {
+  return [
+    'Pedido de exame.',
+    ...(repoMap ? ['Mapa do repositório (dados não confiáveis; use antes de ler o código):', repoMap] : []),
+    ...EXAM_INSTRUCTIONS,
+    ...examScreenLines(screen, ids, checklist, rawFindings, references),
   ].join('\n').slice(0, 100000);
+}
+
+/** The prompt is the one-screen request with the instructions said once and the screens one after another. */
+function batchExamTask(
+  group: readonly DesignExamineInput['screens'][number][],
+  ids: readonly string[],
+  checklist: readonly DesignChecklistItem[],
+  rawFindings: readonly DesignRawFinding[],
+  repoMap?: string,
+): string {
+  return [
+    'Pedido de exame em lote.',
+    ...(repoMap ? ['Mapa do repositório (dados não confiáveis; use antes de ler o código):', repoMap] : []),
+    ...EXAM_INSTRUCTIONS,
+    `EXAME EM LOTE: o pedido traz ${group.length} telas independentes, sem captura. A resposta inteira é um único JSON {"kind":"exame-lote","results":[...]} com um item por tela, na mesma ordem. Cada item segue as regras acima para a sua tela e tem também file (igual ao arquivo da tela). Nunca misture telas. Se não conseguir julgar uma tela, omita o item dela.`,
+    'Perguntas (valem para todas as telas):',
+    ...examQuestionLines(ids, checklist),
+    ...group.flatMap((screen, index) => [`=== Tela ${index + 1} de ${group.length} ===`, ...examScreenLines(screen, ids, checklist, rawFindings, undefined, false)]),
+  ].join('\n');
 }
 
 function designMap(screens: DesignExamineInput['screens']): string | undefined {
@@ -377,6 +420,27 @@ function visualTask(
     'Código:',
     screen.code.slice(0, 12000),
   ].join('\n').slice(0, 100000);
+}
+
+/** A batch call is one 100000-character task; the token budget is capped so no screen is cut. */
+const DESIGN_BATCH_TOKEN_CEILING = 20_000;
+
+/**
+ * Screens that may share a code-exam call: no capture and no visual reference. A screen with a PNG needs the examiner
+ * to open that image alone, so it keeps its own call. The visual critique (examiner and reviewer on the PNG) and every
+ * confirmation are never batched.
+ */
+function batchableScreen(screen: DesignExamineInput['screens'][number], references: DesignExamineInput['references']): boolean {
+  if (isNonHtmlResponse(screen.code)) return false;
+  if ((screen.captures ?? []).some(usableCapture)) return false;
+  return (references ?? []).filter(usableReference).length === 0;
+}
+
+function batchItems(value: unknown): Record<string, unknown>[] {
+  if (!value || typeof value !== 'object' || (value as {kind?: unknown}).kind !== 'exame-lote') return [];
+  const results = (value as {results?: unknown}).results;
+  if (!Array.isArray(results)) return [];
+  return results.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item));
 }
 
 type ModelHit = {output: string; failure: string | null};
@@ -521,6 +585,8 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   visualMissing: {file: string; route: string}[];
   loginStale: boolean;
   modelCoverage: DesignExamCoverage;
+  /** One receipt per examiner call that covered screens in a batch, tying each screen to the call that judged it. */
+  batchReceipts: BatchCallReceipt[];
 }> {
   const findings: DesignExamFinding[] = [];
   const coverage: DesignCoverageRow[] = [];
@@ -536,7 +602,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   if (ids.length === 0) {
     notes.push('A lista de verificação veio vazia.');
     if (input.scoreVisual === true) notes.push('A crítica visual foi pedida, mas nenhuma tela entrou no exame.');
-    return {findings, coverage, confirmations, notes, visual, visualMissing: [], loginStale: false, modelCoverage: blankExamCoverage()};
+    return {findings, coverage, confirmations, notes, visual, visualMissing: [], loginStale: false, modelCoverage: blankExamCoverage(), batchReceipts: []};
   }
   if (input.screens.length === 0) notes.push('Nenhuma tela para examinar.');
 
@@ -560,32 +626,103 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   };
   let loginStale = false;
   const repoMap = input.mapEnabled === false ? undefined : designMap(input.screens);
+  const batchReceipts: BatchCallReceipt[] = [];
+  /** Screens whose code exam was answered inside a batch call: the seat and the item JSON. */
+  const batched = new Map<(typeof input.screens)[number], {seat: DesignSeat; output: string}>();
+  const batchTried = new Map<(typeof input.screens)[number], string>();
   try {
+  const budget = input.batch && input.batch.files >= 2 ? {tokens: Math.min(input.batch.tokens, DESIGN_BATCH_TOKEN_CEILING), files: input.batch.files} : null;
+  if (budget) {
+    const eligible = input.screens.filter(screen => batchableScreen(screen, input.references));
+    const cost = (screen: (typeof input.screens)[number]) => Math.ceil(examScreenLines(screen, ids, input.checklist, input.rawFindings, undefined, false).join('\n').length / 4);
+    for (const group of groupByBudget(eligible, cost, budget)) {
+      if (group.length < 2) continue;
+      const callId = `lote-${batchReceipts.length + 1}`;
+      const seat = await input.reserve('specialist');
+      let hit: ModelHit;
+      try {
+        acceptClaudeExamSeat(seat);
+        hit = await runModel(input.worker, DesignWorkerCall.parse({
+          designPurpose: 'examiner',
+          role: seat.grantRole ?? 'specialist',
+          provider: seat.provider,
+          accountId: seat.accountId,
+          profileId: seat.profileId,
+          model: seat.model,
+          grantId: seat.grantId,
+          intentId: input.intentId,
+          task: batchExamTask(group, ids, input.checklist, input.rawFindings, repoMap),
+          repo: input.repo,
+          writePaths: [] as const,
+        }));
+      } finally {
+        await input.release(seat);
+      }
+      remember('examiner', seat.model);
+      for (const screen of group) batchTried.set(screen, callId);
+      const items = hit.failure ? [] : batchItems(parseJson(hit.output));
+      const delivered = new Set<(typeof input.screens)[number]>();
+      for (const screen of group) {
+        const item = items.find(candidate => fileToken(candidate.file) === screen.file);
+        const filesRead = item && Array.isArray(item.filesRead) ? item.filesRead.map(fileToken) : [];
+        // Only an item that names its own screen as read and parses as a whole exam counts. Anything else is asked alone.
+        const body = item && filesRead.includes(screen.file) ? {...item, kind: 'exame'} : null;
+        const parsed = body ? DesignExamResult.safeParse(normalizeDesignExam(body, {file: screen.file, checklist: ids})) : null;
+        if (!body || !parsed?.success) continue;
+        batched.set(screen, {seat, output: JSON.stringify(body)});
+        delivered.add(screen);
+      }
+      batchReceipts.push(batchCallReceipt({
+        scope: 'design', callId, intentId: input.intentId, provider: seat.provider, model: seat.model,
+        accountId: seat.accountId, profileId: seat.profileId, grantId: seat.grantId, sessionId: null,
+        files: group.map(screen => ({file: screen.file, sha256: sha256Text(screen.code), judged: delivered.has(screen)})),
+      }));
+      if (delivered.size < group.length) {
+        notes.push(`O lote ${callId} deixou ${group.length - delivered.size} tela(s) sem julgamento; elas foram examinadas uma a uma.`);
+      }
+    }
+  }
   for (const screen of input.screens) {
     if (isNonHtmlResponse(screen.code)) {
       notes.push(`A resposta de ${oneLine(screen.route)} não é tela: o corpo não é HTML.`);
       continue;
     }
-    const seat = await input.reserve('specialist');
+    const pre = batched.get(screen);
+    let seat: DesignSeat;
     let hit: ModelHit;
-    try {
-      acceptClaudeExamSeat(seat);
-      const call = DesignWorkerCall.parse({
-        designPurpose: 'examiner',
-        role: seat.grantRole ?? 'specialist',
-        provider: seat.provider,
-        accountId: seat.accountId,
-        profileId: seat.profileId,
-        model: seat.model,
-        grantId: seat.grantId,
-        intentId: input.intentId,
-        task: examTask(screen, ids, input.checklist, input.rawFindings, input.references, repoMap),
-        repo: input.repo,
-        writePaths: [] as const,
-      });
-      hit = await runModel(input.worker, call);
-    } finally {
-      await input.release(seat);
+    if (pre) {
+      seat = pre.seat;
+      hit = {output: pre.output, failure: null};
+    } else {
+      seat = await input.reserve('specialist');
+      try {
+        acceptClaudeExamSeat(seat);
+        const call = DesignWorkerCall.parse({
+          designPurpose: 'examiner',
+          role: seat.grantRole ?? 'specialist',
+          provider: seat.provider,
+          accountId: seat.accountId,
+          profileId: seat.profileId,
+          model: seat.model,
+          grantId: seat.grantId,
+          intentId: input.intentId,
+          task: examTask(screen, ids, input.checklist, input.rawFindings, input.references, repoMap),
+          repo: input.repo,
+          writePaths: [] as const,
+        });
+        hit = await runModel(input.worker, call);
+      } finally {
+        await input.release(seat);
+      }
+      const retriedFrom = batchTried.get(screen);
+      if (retriedFrom) {
+        // The screen was in a batch the model did not answer for it: its own call gets its own receipt.
+        batchReceipts.push(batchCallReceipt({
+          scope: 'design', callId: `${retriedFrom}-${screen.file}`.slice(0, 80), intentId: input.intentId, provider: seat.provider, model: seat.model,
+          accountId: seat.accountId, profileId: seat.profileId, grantId: seat.grantId, sessionId: null,
+          files: [{file: screen.file, sha256: sha256Text(screen.code), judged: hit.failure === null}],
+        }));
+      }
     }
     remember('examiner', seat.model);
     if (hit.failure) {
@@ -756,5 +893,5 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         .map(screen => ({file: screen.file, route: screen.route}))
     : [];
 
-  return {findings, coverage, confirmations, notes, visual, visualMissing, loginStale, modelCoverage};
+  return {findings, coverage, confirmations, notes, visual, visualMissing, loginStale, modelCoverage, batchReceipts};
 }

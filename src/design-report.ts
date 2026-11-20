@@ -4,6 +4,7 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments, type DesignRunInput} from './design-image.ts';
 import {captureProof} from './design-mark.ts';
+import {batchReceiptsMarkdown, type BatchCallReceipt} from './exam-batch-proof.ts';
 import {DesignAchado, DesignCoverageRow, DesignReportSummary, type DesignExamCoverage} from './design-types.ts';
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}-design$/;
@@ -58,6 +59,8 @@ export type DesignReportWriteInput = {
   files?: readonly {name: string; body: string}[];
   /** Examiner and reviewer rows. Absent, cobertura.md stays the file table only. */
   modelCoverage?: DesignExamCoverage;
+  /** Batch call receipts; appended to cobertura.md when present. */
+  batchReceipts?: readonly BatchCallReceipt[];
 };
 
 function hasLiveAccessKey(text: string): boolean {
@@ -208,7 +211,7 @@ function modelCoverageTable(exam: DesignExamCoverage): string {
   ].join('\n');
 }
 
-function coverageMarkdown(rows: readonly DesignCoverageRow[], exam?: DesignExamCoverage): string {
+function coverageMarkdown(rows: readonly DesignCoverageRow[], exam?: DesignExamCoverage, receipts?: readonly BatchCallReceipt[]): string {
   const lines = [
     '# Cobertura',
     '',
@@ -218,7 +221,8 @@ function coverageMarkdown(rows: readonly DesignCoverageRow[], exam?: DesignExamC
     '',
   ];
   const fileTable = lines.join('\n');
-  return exam === undefined ? fileTable : `${fileTable}${modelCoverageTable(exam)}`;
+  const base = exam === undefined ? fileTable : `${fileTable}${modelCoverageTable(exam)}`;
+  return receipts && receipts.length > 0 ? `${base}\n${batchReceiptsMarkdown(receipts)}` : base;
 }
 
 const PROBE_RUN: Omit<DesignRunInput, 'memoryBytes' | 'nanoCpus' | 'pidsLimit'> = {
@@ -812,7 +816,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
       sections,
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
-    {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage, input.modelCoverage))},
+    {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage, input.modelCoverage, input.batchReceipts))},
     {segments: ['achados.json'], body: guard(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guard(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},

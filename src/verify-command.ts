@@ -22,6 +22,7 @@ import {
   type SecurityVerificationInput,
 } from './verify-runtime.ts';
 import type {VerifyWorker} from './verify-types.ts';
+import type {SecurityBatch} from './verify-slices.ts';
 
 export const HOMOLOGATION_NOTE = 'Homologação declarada e não varrida: a imagem não tem ZAP, Nuclei nem Schemathesis.';
 
@@ -57,6 +58,7 @@ export type PersonalVerificationInput = {
   modelCalls?: {count: number};
   modelCallBudget?: number;
   mapEnabled?: boolean;
+  batch?: SecurityBatch;
   accountRoot?: string;
   timeLimitMs?: number;
   networkRunner?: NetworkRunner;
@@ -139,6 +141,7 @@ type ReadyVerification = {
   modelCalls?: {count: number};
   modelCallBudget?: number;
   mapEnabled?: boolean;
+  batch?: SecurityBatch;
   accountRoot?: string;
   timeLimitMs: number;
   staticPolicy?: StaticCliPolicyGrant;
@@ -188,6 +191,7 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     image: input.image,
     modelCalls: input.modelCalls,
     mapEnabled: input.mapEnabled,
+    batch: input.batch,
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
     timeLimitMs: chosenTimeLimit(input.timeLimitMs),
@@ -554,6 +558,7 @@ async function runJob(input: {
         onPhase,
         modelCalls,
         mapEnabled: ready.mapEnabled,
+        batch: ready.batch,
         notes: state.note ? [state.note] : undefined,
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
@@ -825,6 +830,7 @@ export async function resolvePersonalVerification(
         installationPath: resolve(parsed.installationPath),
         projectId: project.id,
         mapEnabled: project.economy?.map,
+        batch: project.economy?.batch === false ? false : {tokens: project.economy?.batchTokens ?? 40_000, files: project.economy?.batchFiles ?? 8},
         url: parsed.url,
         dataDirectory: config.dataDirectory,
         accountRoot: personalAccountRoot(config),

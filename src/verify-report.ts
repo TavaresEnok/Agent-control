@@ -3,6 +3,7 @@ import {chmod, lstat, mkdir, readFile, readdir, realpath, rm, writeFile} from 'n
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {Refusal} from './contracts.ts';
 import {hasKnownSecret} from './verify-redact.ts';
+import {batchReceiptsMarkdown, type BatchCallReceipt} from './exam-batch-proof.ts';
 import {Achado, CoverageRow, ReportSummary} from './verify-types.ts';
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}(?:-[a-f0-9]{8})?-seguranca$/;
@@ -433,6 +434,8 @@ export async function writeSecurityReport(input: {
   dataDirectory: string; projectId: string; runId: string; createdAt: Date; commit: string;
   mapMarkdown: string; coverage: CoverageRow[]; achados: Achado[]; raw: unknown; note: string;
   directoryName?: string;
+  /** Per-call batch receipts; appended to cobertura.md when present. */
+  receipts?: readonly BatchCallReceipt[];
 }): Promise<{directory: string; directoryName: string}> {
   assertSafeSegment(input.projectId);
   assertSafeSegment(input.runId);
@@ -466,7 +469,7 @@ export async function writeSecurityReport(input: {
       discarded,
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
-    {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage))},
+    {segments: ['cobertura.md'], body: guard(`${coverageMarkdown(coverage)}${input.receipts?.length ? `\n${batchReceiptsMarkdown(input.receipts)}` : ''}`)},
     {segments: ['achados.json'], body: guard(`${JSON.stringify({achados}, null, 2)}\n`)},
     ...achados.map(achado => ({segments: ['achados', `${achado.id}.md`], body: guard(achadoMarkdown(achado))})),
     {segments: ['bruto', 'achados-brutos.json'], body: rawBody},

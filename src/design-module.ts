@@ -1,3 +1,4 @@
+import type {ModuleExamBatch} from './module-exam.ts';
 import {assertDiskSpaceForLaunch,launchVolumesOf} from './personal-disk.ts';
 import {constants, existsSync} from 'node:fs';
 import {mkdtemp, open, readFile, rm} from 'node:fs/promises';
@@ -71,6 +72,8 @@ export type DesignModuleInput = {
   files: readonly DesignSourceFile[];
   worker: DesignWorker;
   mapEnabled?: boolean;
+  /** economy.batch for the code exam of screens without capture. Absent: one call per screen. */
+  batch?: ModuleExamBatch | false;
   reserve: DesignExamineInput['reserve'];
   release: (seat: DesignSeat) => Promise<void>;
   tools?: DesignToolReports;
@@ -250,6 +253,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       intentId: input.intentId,
       screens,
       mapEnabled: input.mapEnabled,
+      ...(input.batch === undefined ? {} : {batch: input.batch}),
       checklist: loadDesignChecklist(),
       rawFindings: findings,
       worker: input.worker,
@@ -325,6 +329,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     mapMarkdown,
     coverage: examined.coverage,
     modelCoverage: examined.modelCoverage,
+    batchReceipts: examined.batchReceipts,
     achados,
     raw,
     note,

@@ -1,6 +1,13 @@
-import {lstat, readdir, realpath} from 'node:fs/promises';
+import {lstat, readdir, readFile, realpath} from 'node:fs/promises';
+import {groupByBudget, sha256Text} from './exam-batch-proof.ts';
 import {basename, extname, isAbsolute, join, relative, sep} from 'node:path';
 import type {ChecklistItem} from './verify-types.ts';
+
+/** Input-token budget and file count per examiner call. `false` means one file per call. Absent keeps the historical slice of 15. */
+export type SecurityBatch = {tokens: number; files: number} | false;
+/** Module 1 files are read by the examiner with its own tools, not embedded in the prompt, so the project token budget is scaled. */
+export const SECURITY_READ_FACTOR = 4;
+const MAX_HASHED_BYTES = 8_000_000;
 
 const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', '.ai', 'verificacoes']);
 const SLICE_SIZE = 15;
@@ -101,4 +108,56 @@ function isSecretName(base: string): boolean {
   if (/\.(pem|key|p12|pfx)$/i.test(name)) return true;
   if (/^(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.|$)/i.test(name)) return true;
   return /(^|[._-])(secret|secrets|credential|credentials|password|senha)([._-]|$)/i.test(name);
+}
+
+/** Estimated tokens per file (bytes / 4) from the file system. An unreadable file counts as zero, so it is never isolated by size. */
+export async function examFileTokens(repo: string, files: readonly string[]): Promise<Map<string, number>> {
+  const sizes = new Map<string, number>();
+  let root: string;
+  try { root = await realpath(repo); } catch { return sizes; }
+  for (const file of files) {
+    try {
+      const info = await lstat(join(root, file));
+      sizes.set(file, Math.ceil(info.size / 4));
+    } catch { sizes.set(file, 0); }
+  }
+  return sizes;
+}
+
+/** SHA-256 of the file content as examined. Null when the file is missing, outside the repository, a non-file or too large. */
+export async function examFileSha256(repo: string, file: string): Promise<string | null> {
+  try {
+    const root = await realpath(repo);
+    const real = await realpath(join(root, file));
+    if (!isInside(root, real)) return null;
+    const info = await lstat(real);
+    if (!info.isFile() || info.size > MAX_HASHED_BYTES) return null;
+    return sha256Text(await readFile(real));
+  } catch { return null; }
+}
+
+type Slice = {id: string; files: string[]; checklist: string[]};
+
+/**
+ * Slices for the security examiner. `false` is one file per call; an object groups files while the estimated read size
+ * stays within the budget (a larger file stays alone) and the group stays within the historical limit of 15 files.
+ * Without a setting the historical fixed slice applies.
+ */
+export function planSecuritySlices(files: readonly string[], checklist: readonly ChecklistItem[], tokens: ReadonlyMap<string, number>, batch: SecurityBatch | undefined): Slice[] {
+  if (batch === undefined) return sliceExamFiles(files, checklist);
+  const groups = batch === false
+    ? files.map(file => [file])
+    : groupByBudget(files, file => tokens.get(file) ?? 0, {tokens: batch.tokens * SECURITY_READ_FACTOR, files: SLICE_SIZE});
+  return groups.map((group, index) => ({id: `fatia-${index + 1}`, files: [...group], checklist: checklistFor(group, checklist)}));
+}
+
+/** One file as its own slice, used to retry a file the batch call did not judge. */
+export function singleFileSlice(file: string, checklist: readonly ChecklistItem[], id: string): Slice {
+  return {id, files: [file], checklist: checklistFor([file], checklist)};
+}
+
+function checklistFor(files: readonly string[], checklist: readonly ChecklistItem[]): string[] {
+  const kinds = new Set<string>();
+  for (const file of files) for (const kind of kindsOf(file)) kinds.add(kind);
+  return checklist.filter(item => kinds.has(item.appliesTo)).map(item => item.id);
 }

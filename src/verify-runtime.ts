@@ -16,7 +16,8 @@ import {readNativeExamSession} from './verify-native-launch.ts';
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
-import {listExamFiles, sliceExamFiles} from './verify-slices.ts';
+import {examFileSha256, examFileTokens, listExamFiles, planSecuritySlices, singleFileSlice, type SecurityBatch} from './verify-slices.ts';
+import {batchCallReceipt, type BatchCallReceipt} from './exam-batch-proof.ts';
 import {generateRepoMapSafe} from './repo-map.ts';
 import {
   Achado,
@@ -56,6 +57,8 @@ export type SecurityVerificationInput = {
   notes?: readonly string[];
   /** Include the compact repository map in examiner tasks. Enabled by default. */
   mapEnabled?: boolean;
+  /** Examiner batching (economy.batch). Absent keeps the historical slice of 15 files; `false` is one file per call. */
+  batch?: SecurityBatch;
 };
 
 type StaticCliPolicy = {
@@ -196,7 +199,9 @@ async function examine(
   const checklist = input.checklist ?? loadSecurityChecklist();
   const files = await listExamFiles(input.repoPath);
   const allowedFiles = new Set(files);
-  const slices = sliceExamFiles(files, checklist);
+  const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(input.repoPath, files), input.batch);
+  const receipts: BatchCallReceipt[] = [];
+  const pending = new Set<string>();
   const compactMap = input.mapEnabled === false || !files.length ? null : await generateRepoMapSafe({repoPath: input.repoPath, source: 'directory', useCache: false});
   if (compactMap && !compactMap.map) notes.push('Mapa compacto do repositório indisponível.');
   const history = await deletedHistoryExcerpt(input.repoPath);
@@ -225,19 +230,27 @@ async function examine(
     }
     mapMarkdown = redactUnknownSecrets(mapToMarkdown(map, files));
     if (input.onPhase) await input.onPhase('exame');
-    for (const slice of slices) {
-      if (!slice.files.length) continue;
+    /** One examiner call over a slice. Returns the files it did not judge; a valid batch with gaps is retried file by file by the caller. */
+    const examineSlice = async (slice: {id: string; files: string[]; checklist: string[]}, retry: boolean): Promise<string[]> => {
       const examined = await reserveAndRun(input, capacity, intent.id, 'examiner', examTask(slice, mapMarkdown, rawFindings, history, compactMap?.map), 'verify-exam', modelCallBudget, trackedCalls, undefined, undefined, undefined, staticPolicy);
       const exam = ExamResult.safeParse(coerceExamResult(parseJson(examined.output)));
       exams.push(exam.success ? exam.data : {slice: slice.id, invalid: true});
       const read = new Set(exam.success ? exam.data.filesRead : []);
+      const judged = slice.files.filter(file => read.has(file));
+      const unjudged = slice.files.filter(file => !read.has(file));
+      receipts.push(batchCallReceipt({
+        scope: 'seguranca', callId: slice.id, intentId: intent.id,
+        provider: examined.seat.provider, model: examined.seat.model, accountId: examined.seat.accountId,
+        profileId: examined.seat.profileId, grantId: examined.seat.grantId, sessionId: examined.sessionId,
+        files: await Promise.all(slice.files.map(async file => ({file, sha256: await examFileSha256(input.repoPath, file), judged: read.has(file)}))),
+      }));
       const ids = checklistIds(slice.checklist, exam.success ? exam.data.checklist : []);
-      for (const file of slice.files) addCoverage(coverage, file, examined.seat, ids);
-      const missing = slice.files.filter(file => !read.has(file));
+      for (const file of judged) addCoverage(coverage, file, examined.seat, ids);
       if (!exam.success) notes.push(`A fatia ${slice.id} não devolveu exame válido.`);
-      else if (missing.length) notes.push(`O examinador não marcou como lido: ${missing.join(', ')}.`);
-      if (!exam.success) continue;
+      else if (unjudged.length) notes.push(`O examinador não marcou como lido: ${unjudged.join(', ')}.`);
+      if (!exam.success) return unjudged;
       for (const finding of exam.data.findings) {
+        if (retry && open.some(item => item.file === finding.file && item.line === finding.line && item.title === clipSecret(replaceSecretTokens(finding.title), 200))) continue;
         const titleText = replaceSecretTokens(finding.title);
         const snippetText = replaceSecretTokens(finding.snippet);
         const tokenRemoved = titleText !== finding.title
@@ -265,7 +278,20 @@ async function examine(
           examinerSessionId: examined.sessionId,
         });
       }
+      return unjudged;
+    };
+    for (const slice of slices) {
+      if (!slice.files.length) continue;
+      const unjudged = await examineSlice(slice, false);
+      // No file stays without a judgment silently: the model failed the batch, so each missing file is asked alone.
+      if (slice.files.length > 1) {
+        for (const file of unjudged) {
+          const alone = await examineSlice(singleFileSlice(file, checklist, `${slice.id}-${file}`.slice(0, 80)), true);
+          if (alone.length) pending.add(file);
+        }
+      } else for (const file of unjudged) pending.add(file);
     }
+    for (const file of [...pending].sort()) notes.push(`Arquivo pendente, sem julgamento do examinador: ${file}.`);
   }
 
   for (const raw of rawFindings) {
@@ -293,7 +319,7 @@ async function examine(
   if (mapSeat) {
     const fallback = checklistIds(checklist.map(item => item.id), []);
     for (const file of files) {
-      if (coverage.has(file)) continue;
+      if (coverage.has(file) || pending.has(file)) continue;
       addCoverage(coverage, file, mapSeat, fallback);
       notes.push(`Arquivo fora das fatias, coberto pelo mapa: ${file}.`);
     }
@@ -372,7 +398,8 @@ async function examine(
     mapMarkdown: redactUnknownSecrets(mapMarkdown),
     coverage: rows,
     achados,
-    raw: redactPersisted({map, exams, rawFindings, confirmations: confirms}),
+    raw: redactPersisted({map, exams, rawFindings, confirmations: confirms, receipts}),
+    receipts,
     note,
     directoryName,
   });

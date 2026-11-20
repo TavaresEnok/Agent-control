@@ -468,4 +468,27 @@ Exame em lotes (módulos 2 a 9): `"economy": {"batch": false}` desliga; `batchTo
 com a lista de checagem uma vez; a resposta, o recibo de leitura (`requestId`,
 `promptDigest`, `binding`) e a cobertura continuam por arquivo. Um arquivo
 inválido ou com achado alto repete sozinho, com a sessão nativa ligada ao arquivo;
-um arquivo maior que o orçamento vai sozinho. Os módulos 1 e 10 ainda não usam lote.
+um arquivo maior que o orçamento vai sozinho.
+
+Exame em lotes nos módulos 1 e 10 (mesma opção `economy.batch`):
+
+- **Módulo 1 (segurança).** O exame já era por fatias de até 15 arquivos. Com a
+  opção ligada, a fatia fecha também pelo tamanho estimado de leitura
+  (`batchTokens` x 4, pois o examinador abre os arquivos com as próprias
+  ferramentas) e um arquivo maior que isso vai sozinho; `batchFiles` não se
+  aplica, o teto continua 15. Com `"batch": false` cada arquivo é uma chamada.
+  Cada chamada gera um recibo (SHA-256 do registro: chamada, sessão nativa,
+  perfil, arquivos, hash do conteúdo e se o arquivo foi julgado). Os recibos vão
+  em `cobertura.md` ("Recibos das chamadas") e em `bruto/achados-brutos.json`.
+  Arquivo que a resposta não marcou como lido é pedido sozinho; se continuar sem
+  julgamento fica `pendente` (sem linha de cobertura, sem cobertura pelo mapa) e
+  entra na nota do relatório. Resposta inválida do lote repete todos os arquivos
+  sozinhos.
+- **Módulo 10 (design).** Só o exame de código das telas sem captura PNG e sem
+  referência visual entra no lote (resposta `{"kind":"exame-lote"}` com um item
+  por tela). Tela com captura continua com chamada própria, porque o examinador
+  precisa abrir a imagem. A crítica visual (examinador e revisor, Opus alto, uma
+  tela por vez) e toda confirmação de achado nunca entram em lote. O recibo do
+  lote lista cada tela com o hash do código e se foi julgada; tela omitida ou
+  inválida é examinada sozinha e ganha o próprio recibo. Envelope errado: todas
+  as telas caem para chamadas individuais.
