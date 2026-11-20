@@ -69,6 +69,20 @@ export function dumpProcessEnv(base:NodeJS.ProcessEnv,db:DatabaseEndpoint):NodeJ
 
 function loopback(host:string){return host==='localhost'||host==='127.0.0.1'||host==='::1';}
 
+/** The one place that decides which PostgreSQL instance a database address means.
+ * A local container counts only when the address is loopback and the container publishes that port; any other host is reached over the network.
+ * Dump, list, restore, validation and cleanup all take the answer from here. */
+export async function resolvePgInstance(db:DatabaseEndpoint,dockerPs?:()=>Promise<string>):Promise<string|null>{
+ if(!loopback(db.host))return null;
+ return personalPgContainer(await dockerListing(dockerPs),db.port);
+}
+
+/** Loads a dump from stdin into an empty database of the same instance that `resolvePgInstance` named. */
+export function databaseRestorePlan(container:string|null,db:DatabaseEndpoint,database:string){
+ if(container)return {command:'docker',args:['exec','-i','-e','PGPASSWORD',container,'pg_restore','--no-owner','--exit-on-error','-w','-U',db.user,'-d',database]};
+ return {command:'pg_restore',args:['--no-owner','--exit-on-error','-w','-h',db.host,'-p',db.port,'-U',db.user,'-d',database]};
+}
+
 function safeLabel(label:string){
  const clean=label.replace(/[^A-Za-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,60);
  return clean||'instalacao';
@@ -223,8 +237,7 @@ async function writeDump(file:string,db:DatabaseEndpoint,options:PersonalBackupO
   await chmod(file,0o600);
   return;
  }
- const listing=loopback(db.host)?await dockerListing(options.dockerPs):'';
- const container=loopback(db.host)?personalPgContainer(listing,db.port):null;
+ const container=await resolvePgInstance(db,options.dockerPs);
  const plan=databaseDumpPlan(container,db);
  if(db.password&&plan.args.some(arg=>arg.includes(db.password)||arg.includes(encodeURIComponent(db.password))))throw new Refusal('BACKUP_DUMP_FAILED');
  await writeFile(file,Buffer.alloc(0),{mode:0o600,flag:'wx'});
@@ -356,7 +369,7 @@ async function listArchive(backup:string,dumpFile:string,options:PersonalRestore
   if(typeof raw.databaseUrl==='string'){
    const db=databaseEndpoint(raw.databaseUrl);
    secret=db.password;
-   if(loopback(db.host))container=personalPgContainer(await dockerListing(options.dockerPs),db.port);
+   container=await resolvePgInstance(db,options.dockerPs);
   }
  }catch(error){
   if(error instanceof Refusal&&error.code==='BACKUP_DATABASE_URL')throw error;

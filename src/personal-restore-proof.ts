@@ -4,10 +4,11 @@ import {join,resolve} from 'node:path';
 import pg from 'pg';
 import {Refusal} from './contracts.ts';
 import {loadInstallation} from './installation.ts';
-import {databaseEndpoint,dockerListing,dumpProcessEnv,personalPgContainer,spawnCollected,verifyBackupManifest} from './personal-backup.ts';
+import {databaseEndpoint,databaseRestorePlan,dumpProcessEnv,resolvePgInstance,spawnCollected,verifyBackupManifest} from './personal-backup.ts';
 import {deliverPersonalPush} from './personal-push.ts';
 
 export const restoreProofFailedNotice='A prova mensal de restauração do backup falhou.';
+export const restoreProofCleanupFailedNotice='A prova de restauração terminou, mas o banco descartável não foi removido.';
 const stamp=/^\d{8}-\d{6}$/;
 
 export type RestoreProofDeps={
@@ -16,7 +17,38 @@ export type RestoreProofDeps={
  dockerPs?:()=>Promise<string>;
  /** Loads database.dump into the named empty database. */
  restore?:(dumpFile:string,database:string)=>Promise<void>;
+ /** Runs the restore command. The default spawns the command with the dump on stdin. */
+ run?:(command:string,args:string[],env:NodeJS.ProcessEnv,dumpFile:string)=>Promise<{code:number;stderr:string}>;
+ /** The server that holds the throwaway database. Create, count and drop all go through it. */
+ server?:ProofServer;
 };
+
+export type ProofServer={
+ create:(database:string)=>Promise<void>;
+ count:(database:string)=>Promise<{projects:number;contexts:number;intents:number}>;
+ drop:(database:string)=>Promise<void>;
+ close:()=>Promise<void>;
+};
+
+function postgresProofServer(databaseUrl:string):ProofServer{
+ const admin=new URL(databaseUrl);admin.pathname='/postgres';
+ const pool=new pg.Pool({connectionString:admin.href,max:1,connectionTimeoutMillis:10_000});
+ return {
+  create:async database=>{await pool.query(`CREATE DATABASE "${database}"`);},
+  count:async database=>{
+   const target=new URL(databaseUrl);target.pathname='/'+database;
+   const restored=new pg.Client({connectionString:target.href,connectionTimeoutMillis:10_000});
+   await restored.connect();
+   try{
+    const row=(await restored.query('SELECT (SELECT count(*) FROM ac_projects)::int projects,(SELECT count(*) FROM ac_contexts)::int contexts,(SELECT count(*) FROM ac_intents)::int intents')).rows[0];
+    return {projects:Number(row.projects),contexts:Number(row.contexts),intents:Number(row.intents)};
+   }finally{await restored.end();}
+  },
+  drop:async database=>{await pool.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);},
+  close:async()=>{await pool.end();},
+ };
+}
+
 
 /** The newest dated backup folder, then the single backup folder inside it. */
 export async function newestBackup(root:string){
@@ -41,7 +73,8 @@ async function writeResult(dataDirectory:string,result:unknown){
 }
 
 /** Restores the newest backup into a new, throwaway database on the same server, counts the main tables, and drops it.
- * The installation's own database is only read for its address. A failure sends one phone notice. */
+ * One instance (see `resolvePgInstance`) serves create, restore, count and drop. The installation's own database is only read for its address.
+ * A failure sends one phone notice. A failed drop is recorded apart from the proof result. */
 export async function runPersonalRestoreProof(argv:string[],deps:RestoreProofDeps={}){
  const [installationArg,backupRootArg]=argv;
  if(!installationArg||!backupRootArg||argv.length!==2||argv.some(arg=>arg.startsWith('--')))throw new Refusal('RESTORE_PROOF_USAGE');
@@ -52,43 +85,51 @@ export async function runPersonalRestoreProof(argv:string[],deps:RestoreProofDep
  const db=databaseEndpoint(config.databaseUrl);
  const database=proofDatabaseName(now);
  if(database===db.database)throw new Refusal('RESTORE_PROOF_DATABASE_CONFLICT');
- const admin=new URL(config.databaseUrl);admin.pathname='/postgres';
- const target=new URL(config.databaseUrl);target.pathname='/'+database;
  let created=false,backup='';
- const pool=new pg.Pool({connectionString:admin.href,max:1,connectionTimeoutMillis:10_000});
+ const server=deps.server??postgresProofServer(config.databaseUrl);
+ let failure:unknown=null;
+ let proved:{files:number;counts:{projects:number;contexts:number;intents:number}}|null=null;
  try{
   const root=resolve(backupRootArg);
   const info=await lstat(root).catch(()=>null);
   if(!info||info.isSymbolicLink()||!info.isDirectory())throw new Refusal('RESTORE_PROOF_NO_BACKUP');
   backup=await newestBackup(root);
   const files=await verifyBackupManifest(backup);
-  await pool.query(`CREATE DATABASE "${database}"`);created=true;
+  await server.create(database);created=true;
   const dumpFile=join(backup,'database.dump');
   if(deps.restore)await deps.restore(dumpFile,database);
   else{
-   const container=personalPgContainer(await dockerListing(deps.dockerPs),db.port);
-   const plan=container?{command:'docker',args:['exec','-i','-e','PGPASSWORD',container,'pg_restore','--no-owner','--exit-on-error','-w','-U',db.user,'-d',database]}
-    :{command:'pg_restore',args:['--no-owner','--exit-on-error','-w','-h',db.host,'-p',db.port,'-U',db.user,'-d',database]};
-   const result=await spawnCollected(plan.command,plan.args,dumpProcessEnv(process.env,db),dumpFile,null,30*60*1000);
+   const container=await resolvePgInstance(db,deps.dockerPs);
+   const plan=databaseRestorePlan(container,db,database);
+   const env=dumpProcessEnv(process.env,db);
+   const result=await (deps.run?deps.run(plan.command,plan.args,env,dumpFile):spawnCollected(plan.command,plan.args,env,dumpFile,null,30*60*1000));
    if(result.code!==0)throw new Refusal('RESTORE_PROOF_RESTORE_FAILED');
   }
-  const restored=new pg.Client({connectionString:target.href,connectionTimeoutMillis:10_000});
-  await restored.connect();
-  let counts:{projects:number;contexts:number;intents:number};
-  try{
-   const row=(await restored.query('SELECT (SELECT count(*) FROM ac_projects)::int projects,(SELECT count(*) FROM ac_contexts)::int contexts,(SELECT count(*) FROM ac_intents)::int intents')).rows[0];
-   counts={projects:Number(row.projects),contexts:Number(row.contexts),intents:Number(row.intents)};
-  }finally{await restored.end();}
+  const counts=await server.count(database);
   if(counts.projects<1||counts.contexts<1)throw new Refusal('RESTORE_PROOF_EMPTY');
-  await writeResult(config.dataDirectory,{at:now.toISOString(),ok:true,backup,files,...counts});
-  return [`Backup ${backup} restaurado num banco descartável.`,`${files} arquivos conferidos; ${counts.projects} projetos, ${counts.contexts} conversas e ${counts.intents} pedidos.`];
- }catch(error){
-  const code=error instanceof Refusal?error.code:'RESTORE_PROOF_FAILED';
-  try{await writeResult(config.dataDirectory,{at:now.toISOString(),ok:false,backup,code});}catch{/* the notice still goes */}
-  try{await notify(config.dataDirectory,restoreProofFailedNotice);}catch{/* reported by the exit code */}
-  throw error instanceof Refusal?error:new Refusal(code);
- }finally{
-  if(created)await pool.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`).catch(()=>{});
-  await pool.end();
+  proved={files,counts};
+ }catch(error){failure=error;}
+ let cleanupFailed=false;
+ if(created){
+  try{await server.drop(database);}catch{cleanupFailed=true;}
  }
+ await server.close().catch(()=>{});
+ const cleanup=created?(cleanupFailed?{ok:false,database,code:'RESTORE_PROOF_CLEANUP_FAILED'}:{ok:true}):undefined;
+ if(failure===null&&proved){
+  try{
+   await writeResult(config.dataDirectory,{at:now.toISOString(),ok:true,backup,files:proved.files,...proved.counts,...(cleanup?{cleanup}:{})});
+  }catch(error){failure=error;}
+ }
+ if(failure===null&&proved){
+  const lines=[`Backup ${backup} restaurado num banco descartável.`,`${proved.files} arquivos conferidos; ${proved.counts.projects} projetos, ${proved.counts.contexts} conversas e ${proved.counts.intents} pedidos.`];
+  if(cleanupFailed){
+   try{await notify(config.dataDirectory,restoreProofCleanupFailedNotice);}catch{/* the line below still reports it */}
+   lines.push(`ATENÇÃO: o banco descartável ${database} não foi removido. Remova-o à mão.`);
+  }
+  return lines;
+ }
+ const code=failure instanceof Refusal?failure.code:'RESTORE_PROOF_FAILED';
+ try{await writeResult(config.dataDirectory,{at:now.toISOString(),ok:false,backup,code,...(cleanup?{cleanup}:{})});}catch{/* the notice still goes */}
+ try{await notify(config.dataDirectory,restoreProofFailedNotice);}catch{/* reported by the exit code */}
+ throw failure instanceof Refusal?failure:new Refusal(code);
 }
