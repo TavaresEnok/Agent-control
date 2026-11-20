@@ -390,6 +390,12 @@ test('automatic job retention frees only proven categories, with the gateway run
   await refused('grant not released','grant_state',async()=>undefined,{grantState:'reserved'});
   await refused('work is a symlink','work_unsafe',async p=>{await rm(p.work,{recursive:true});await symlink(outside,p.work);});
   await refused('result no longer matches the receipt','receipt',p=>writeFile(join(p.root,'output','execution-result.json'),JSON.stringify({schemaVersion:1,jobId:p.jobId,output:'other',exitCode:0,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null})));
+  const missingResult=await plant();
+  await rm(join(missingResult.root,'output','execution-result.json'));
+  assert.deepEqual(await retire(missingResult,true),{jobId:missingResult.jobId,state:'refused',reason:'output_missing'});
+  assert.ok(await exists(missingResult.work));
+  assert.equal(await audits(missingResult.jobId),0);
+  assert.deepEqual(await retire(missingResult,true),{jobId:missingResult.jobId,state:'refused',reason:'output_missing'});
   await refused('job root is not private','directory_unsafe',p=>chmod(p.root,0o755));
   await outsideIntact();
   const stranger=await plant();
@@ -433,6 +439,7 @@ test('automatic job retention frees only proven categories, with the gateway run
   const before=await journal();
   const preview=(await runPersonalJobRetention(config,false)).join('\n');
   assert.match(preview,/Prévia de retenção, nada foi apagado: 4 elegível\(is\)/);assert.ok(Number(/retirement=(\d+)/.exec(preview)?.[1])>=6);
+  assert.ok(preview.includes(`${missingResult.jobId}: work preservado (output_missing)`));
   assert.deepEqual(await workIds(),start);
   assert.equal(await exists(join(data,'job-work-retention.cursor')),false,'a preview leaves no cursor');
   // Budget of one: the six refused jobs never spend it, so every run still frees exactly one eligible job.
