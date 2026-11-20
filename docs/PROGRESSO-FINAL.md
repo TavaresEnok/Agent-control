@@ -1846,3 +1846,15 @@ FIM
 - 20/11/2026 13:24 UTC — COTA — gemini-4-hydrogen-high (hydrogen) informou limite na ordem painel-posjanela.
 - 20/11/2026 13:24 UTC — Iniciada ordem painel-posjanela em gemini-4-argon-high (argon), no worktree próprio.
 - 20/11/2026 13:24 UTC — Iniciada ordem anatel-posjanela em gemini-4-argon-high (argon), no worktree próprio.
+- 20/11/2026 13:24 UTC — COTA — gemini-4-argon-high (argon) informou limite na ordem painel-posjanela.
+- 20/11/2026 13:24 UTC — Iniciada ordem painel-posjanela em claude-sonnet-5-5-high (agy-sonnet), no worktree próprio.
+- 20/11/2026 13:24 UTC — COTA — gemini-4-argon-high (argon) informou limite na ordem anatel-posjanela.
+- 20/11/2026 13:24 UTC — Iniciada ordem anatel-posjanela em claude-sonnet-5-5-high (agy-sonnet), no worktree próprio.
+- 20/11/2026 13:25 UTC — O banco já marcou como failed as rodadas suspensas de QA (223 jobs) e arquitetura (186 jobs). Encerrados os dois grupos suspensos verificados pelo projeto e módulo. Os recibos continuam disponíveis.
+- 20/11/2026 13:26 UTC — Ordem anatel-posjanela em claude-sonnet-5-5-high encerrou com código 0.
+- 20/11/2026 13:27 UTC — Revisão independente revisao-anatel-posjanela concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 13:27 UTC — Ordem painel-posjanela em claude-sonnet-5-5-high encerrou com código 0.
+- 20/11/2026 13:27 UTC — Conferidos assinatura e hashes de 222 resultados concluídos de QA e 185 de arquitetura. O leitor aceitou respostas para 217 e 179 arquivos distintos, respectivamente. Esses números são da revisão anterior; as rodadas interrompidas não publicaram cobertura.
+- 20/11/2026 13:27 UTC — Revisão independente revisao-painel-posjanela concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 13:28 UTC — Anatel 4913021 aceita pelo Sol medium e integrada no ramo de entrega até c13be7f. Formatador, TypeScript, 286 testes, build e Chromium Anatel passaram. O Sol confirmou a correção do painel em 88465d5 e pediu fortalecer o controle negativo.
+- 20/11/2026 13:28 UTC — Iniciada ordem painel-controle-final em claude-sonnet-5-5-high (agy-sonnet), no worktree próprio.

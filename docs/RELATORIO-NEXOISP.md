@@ -2,15 +2,15 @@
 
 Ordem do titular em `1e954d30`. A revisão começou pela qualificação do examinador no IspAgent.
 
-## Situação em 20/11/2026 às 07:41 UTC
+## Situação em 20/11/2026 às 13:29 UTC
 
 A política de design do IspAgent está na revisão 12. O examinador, a crítica visual e a criação reservam Opus 5.5 em esforço `high` na Enok Max. A confirmação independente de achados reserva Opus 5.5 `medium`. O diário do NexoISP já registra inferência real nas etapas de exame, crítica e confirmação. A criação foi comprovada por reserva na instalação e por teste de lançamento assinado. O backup, os testes e os recibos estão detalhados abaixo.
 
 | Módulo no NexoISP | Evidência disponível | Achados e cobertura |
 |---|---|---|
 | 1. Segurança | A rodada estática `4957ad10` foi encerrada entre reservas por espaço em disco. | O diário assinado comprova o mapa e 113 de 189 fatias. Falta publicar o relatório. |
-| 2. QA | A primeira rodada publicou 45 arquivos julgados. O leitor corrigido aceitou as 47 respostas recebidas. A nova rodada chegou a 223 jobs e aguarda cota do examinador. | A primeira publicação registrou dez prováveis (quatro médios, dois baixos e quatro informativos) e 1.948 arquivos com falha de infraestrutura. |
-| 3. Arquitetura | A rodada no NexoISP chegou a 186 jobs e aguarda cota do examinador. | O total de arquivos julgados será conferido na publicação. A prova anterior no IspAgent está descrita abaixo. |
+| 2. QA | A primeira rodada publicou 45 arquivos julgados. O leitor corrigido aceitou as 47 respostas recebidas. A segunda rodada terminou como falha com 223 jobs. A conferência validou 222 recibos assinados e o leitor aceitou respostas para 217 arquivos distintos. | A primeira publicação registrou dez prováveis (quatro médios, dois baixos e quatro informativos) e 1.948 arquivos com falha de infraestrutura. |
+| 3. Arquitetura | A rodada interrompida terminou como falha com 186 jobs. A conferência validou 185 recibos assinados e o leitor aceitou respostas para 179 arquivos distintos. | Essa rodada não publicou cobertura. A prova anterior no IspAgent está descrita abaixo. |
 | 4 a 9. Dependências, banco, prontidão, desempenho, documentação e conformidade | Na fila do NexoISP. | Sem resultado publicado. |
 | 10. Design | A navegação autenticada identificou 42 destinos. O módulo publicou o painel e a Anatel no relatório `985f5433`, com 12 capturas. | 244 ocorrências confirmadas, cinco prováveis e cinco descartadas. As 180 ocorrências altas foram revisadas por Opus medium. A correção de contraste foi integrada e medida em navegador nos dois temas. |
 
