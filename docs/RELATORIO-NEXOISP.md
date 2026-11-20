@@ -106,3 +106,9 @@ A CLI de design publicou o run `985f5433-a8e6-4740-aab4-eb2f633ea536` às 06:55 
 | Informativa | 2 | Confirmações de achados do examinador. |
 
 As 30 confirmações de achados do examinador registram Opus 5.5. Uma sessão independente de Opus 5.5 `medium` recebeu as 180 ocorrências altas para conferir as medidas no código e agrupar repetições. Duas ordens de correção cobrem os achados do painel inicial e da administração Anatel. O frontend em homologação serve de referência para distinguir defeitos da aplicação de diferenças introduzidas pelo retrato estático.
+
+### Capacidade de disco e revisão dos achados altos
+
+Quando restavam aproximadamente 6 GiB no volume, o gerente encerrou a rodada estática entre reservas para evitar esgotar o disco da instalação. A CLI marcou a execução como falha. A conferência criptográfica do diário validou 114 assinaturas e os hashes de cada pedido e resposta: um mapa e 113 das 189 fatias. O módulo 1 ainda precisa concluir o julgamento e publicar o relatório. QA e arquitetura continuaram em paralelo pelo caminho que recebe apenas o arquivo em julgamento. O arquivamento das cópias de checkout dos trabalhos já encerrados depende da decisão do titular; a restauração de duas cópias em diretório separado passou na comparação integral.
+
+O revisor independente Opus 5.5 `medium` examinou as 180 ocorrências altas do primeiro par e o código da revisão `f4b1eca7`. Identificou um par de cores do tema claro que produz contraste de 4,34:1 em texto pequeno, usado em 25 elementos distintos das duas telas. Parte das ocorrências repete o mesmo elemento por ferramenta ou viewport. O retrato estático não permite afirmar que o aplicativo aplicou a classe de tema escuro, e algumas medidas de tokens não identificam um elemento reproduzível. A correção de contraste está no candidato `da11943`, com quatro testes dirigidos aprovados, à espera da revisão Sol e da verificação na aplicação.
