@@ -25,8 +25,8 @@ import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
 import {isPublicModuleRule, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewObservationTitle, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob, recheckHead, sameRecheckHistory} from './module-recheck-git.ts';
-import {attestDistinctExamSessions, distinctExamSessions, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN,
-  type ExamExecutionIdentity} from './module-exam-sessions.ts';
+import {attestDistinctExamSessions, attestExamExecution, distinctExamSessions, examSubjectDigest, HIGH_REVIEWER_MODEL,
+  HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN, type ExamExecutionIdentity} from './module-exam-sessions.ts';
 import {moduleMeasurementCriterion} from './module-recheck-criteria.ts';
 import {measureLocalRegression} from './module-recheck-local.ts';
 import {latestModuleMeasurement, RECHECK_PROOF_VERSION, type MeasurementScope} from './module-recheck-measurement.ts';
@@ -608,7 +608,8 @@ function isSecretToken(token: string): boolean {
   });
 }
 
-type HighSessionAttestation = (examiner: ExamExecutionIdentity, verifier: ExamExecutionIdentity) => Promise<boolean>;
+type HighSessionAttestation = (examiner: ExamExecutionIdentity, verifier: ExamExecutionIdentity,
+  subject: {file: string; line: number}) => Promise<boolean>;
 
 async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamResult['findings'][number],
   collectorReview: ModuleExamCollectorReview, raw?: ModuleRawFinding, attestHigh?: HighSessionAttestation): Promise<Achado['verifier']> {
@@ -627,7 +628,8 @@ async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamRe
     // Grants and sessions in the result are claims. Publication accepts them only when the
     // ledger binds each one to a distinct completed native execution, on any account.
     if (verifier.provider !== HIGH_REVIEWER_PROVIDER || verifier.model !== HIGH_REVIEWER_MODEL
-      || !distinctExamSessions(examiner, verifier) || !attestHigh || !await attestHigh(examiner, verifier)) {
+      || !distinctExamSessions(examiner, verifier) || !attestHigh
+      || !await attestHigh(examiner, verifier, {file: finding.file, line: finding.line})) {
       return null;
     }
   } else if (examiner.provider === verifier.provider || examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) {
@@ -2091,8 +2093,12 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       .map(file => [file.file, file.code] as const)) : undefined;
     const coverage = new Map(exam?.coverage.map(row => [row.file, row] as const));
     const collectorReview = {collector, intentId, snapshot, relatedSources, coverage};
-    const attestHigh: HighSessionAttestation = (examiner, verifier) => attestDistinctExamSessions(input.ledger.pool, {
+    // Each job must be the one the host launched for this finding's file, so the subjects
+    // come from the host's own run, never from the result.
+    const attestHigh: HighSessionAttestation = (examiner, verifier, {file, line}) => attestDistinctExamSessions(input.ledger.pool, {
       contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer: verifier, reviewerIntentId: intentId,
+      examinerSubject: examSubjectDigest({purpose: 'examiner', module: input.module, intentId, commit: input.commit, file}),
+      reviewerSubject: examSubjectDigest({purpose: 'reviewer', module: input.module, intentId, commit: input.commit, file, line}),
     });
     const achados: Achado[] = [];
     for (const finding of collectorData.findings) {
@@ -2935,6 +2941,8 @@ export type ModuleRecheckReview = (request: {
   examiner: ModuleRecheckExaminer | null;
   severity?: Achado['severity'];
   fromExaminer?: boolean;
+  /** Host digest of what the reviewer job examines; the native worker binds its session to it. */
+  subject?: string;
   signal?: AbortSignal;
 }) => Promise<{output: string; reviewer: ModuleRecheckReviewer} | {reason: string; reviewer?: ModuleRecheckReviewer}>;
 
@@ -3404,13 +3412,24 @@ export async function recheckModuleFindings(
         } else if (regression) {
           task.instruction = COVERAGE_REVIEW_INSTRUCTION;
         }
-        // History without the examiner's native session cannot prove a distinct reviewer session,
-        // so it stays pending and no reviewer seat is spent.
-        const reviewed = !regression && task.criterion === null && head !== originalCommit
+        // History without a ledger-bound examiner execution for this file cannot prove a distinct
+        // reviewer session, so it stays pending and no reviewer seat is spent. Reports before
+        // migration 115 or before the per-file session binding need a new exam.
+        const examinerSubject = highExaminer && examinerIntentId ? examSubjectDigest({purpose: 'examiner', module: moduleName,
+          intentId: examinerIntentId, commit: originalCommit, file: item.file}) : undefined;
+        const reviewerSubject = examSubjectDigest({purpose: 'reviewer', module: moduleName, intentId, commit: head,
+          file: item.file, line: item.line});
+        const unsupported = !regression && task.criterion === null && head !== originalCommit;
+        const examinerProven = unsupported || !highExaminer || Boolean(examiner?.grantId && examiner.sessionId && examinerSubject
+          && await attestExamExecution(ledger.pool, {contextId: authority.contextId, intentId: examinerIntentId!,
+            execution: examiner, subject: examinerSubject}));
+        signal?.throwIfAborted();
+        const reviewed = unsupported
           ? {reason: 'MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED'}
-          : highExaminer && (!examiner?.grantId || !examiner.sessionId || !examinerIntentId)
+          : !examinerProven
             ? {reason: 'MODULE_RECHECK_EXAMINER_SESSION_UNPROVEN'}
-          : await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, severity: item.severity, fromExaminer, signal});
+          : await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, severity: item.severity, fromExaminer,
+            subject: reviewerSubject, signal});
         signal?.throwIfAborted();
         reviewer = 'reviewer' in reviewed ? reviewed.reviewer : undefined;
         if ('reason' in reviewed) {
@@ -3430,7 +3449,8 @@ export async function recheckModuleFindings(
           if (verdict) reviewerReason = sanitizedRecheckReason(verdict.reason);
           const sessionsProven = !highExaminer || (distinctExamSessions(examiner, reviewed.reviewer)
             && await attestDistinctExamSessions(ledger.pool, {
-              contextId: authority.contextId, examiner, examinerIntentId: examinerIntentId!, reviewer: reviewed.reviewer, reviewerIntentId: intentId,
+              contextId: authority.contextId, examiner, examinerIntentId: examinerIntentId!, examinerSubject: examinerSubject!,
+              reviewer: reviewed.reviewer, reviewerIntentId: intentId, reviewerSubject,
             }));
           signal?.throwIfAborted();
           if (!sessionsProven) {

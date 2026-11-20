@@ -18,7 +18,7 @@ import {
   type ModuleExamWorker,
 } from './module-exam.ts';
 import {mapModuleSnapshot} from './module-exam-map.ts';
-import {attestDistinctExamSessions} from './module-exam-sessions.ts';
+import {attestDistinctExamSessions, examSessionFor, examSubjectDigest} from './module-exam-sessions.ts';
 import {NativeExecutionRequest, NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import {renewPersonalQuota} from './personal-runtime.ts';
 import type {ModuleRecheckReview, VerificationModuleRunInput} from './verification-modules.ts';
@@ -162,7 +162,7 @@ export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 
 }): ModuleRecheckReview {
   let runtimePromise: Promise<ModuleExamRuntime> | undefined;
   let blocked: string | undefined;
-  return async ({intentId, commit, task, examiner, severity, fromExaminer, signal}) => {
+  return async ({intentId, commit, task, examiner, severity, fromExaminer, subject, signal}) => {
     signal?.throwIfAborted();
     if (blocked) return {reason: blocked};
     runtimePromise ??= input.loadRuntime();
@@ -194,7 +194,8 @@ export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 
     }
     try {
       const worker = createModuleExamNativeWorker({...input, intentId, commit, signal, runtime});
-      const call = {...reviewer, role: 'specialist' as const, task, intentId, writePaths: [] as []};
+      const call = {...reviewer, role: 'specialist' as const, task, intentId, writePaths: [] as [],
+        ...(subject ? {examSubject: subject} : {})};
       const output = await worker.run(call);
       const sessionId = (call as {examSessionId?: string}).examSessionId;
       return {output, reviewer: {...reviewer, ...(highExaminer && sessionId ? {sessionId} : {})}};
@@ -279,7 +280,9 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
       try {
         if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
         if (!supervisor) throw new Refusal('MODULE_EXAM_PROVIDER_UNAVAILABLE');
-        const sessionId = randomUUID();
+        // A host subject digest binds the session, and so the journal row, to the examined file.
+        const subject = (call as {examSubject?: string}).examSubject;
+        const sessionId = subject ? examSessionFor(jobId, subject) : randomUUID();
         const request = NativeExecutionRequest.parse({
           jobId, intentId: call.intentId, grantId: call.grantId, sessionId, base: input.commit,
           role: 'specialist', task: call.task, writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
@@ -478,8 +481,10 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       reserve: reservations.reserve,
       release: reservations.release,
       ...(waitForClaudeQuota ? {waitForClaudeQuota} : {}),
-      attestSessions: ({examiner, reviewer}) => attestDistinctExamSessions(input.ledger.pool, {
+      attestSessions: ({examiner, reviewer, file, line}) => attestDistinctExamSessions(input.ledger.pool, {
         contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer, reviewerIntentId: intentId,
+        examinerSubject: examSubjectDigest({purpose: 'examiner', module, intentId, commit: input.commit, file}),
+        reviewerSubject: examSubjectDigest({purpose: 'reviewer', module, intentId, commit: input.commit, file, line}),
       }),
     });
   };

@@ -506,7 +506,13 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.equal(pending.detail.reason, 'MODULE_RECHECK_PROOF_UNAVAILABLE');
       assert.equal(pending.detail.proofDigest, null);
       assert.deepEqual(pending.detail.examiner, {provider: 'claude', model: 'claude-sonnet-5-5',
-        accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0]});
+        accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0],
+        grantId: pending.detail.examiner.grantId, sessionId: pending.detail.examiner.sessionId});
+      // The recheck carries the original examiner execution, as recorded by the supervisor.
+      const {rows: [examinerJob]} = await ledger.pool.query(
+        'SELECT session_id::text AS session_id, profile_id::text AS profile_id, state FROM ac_native_execution_jobs WHERE grant_id=$1',
+        [pending.detail.examiner.grantId]);
+      assert.deepEqual(examinerJob, {session_id: pending.detail.examiner.sessionId, profile_id: profiles[0], state: 'completed'});
       assert.deepEqual(pending.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',
         accountId: reviewerAccount, profileId: profiles[1], grantId: pending.detail.reviewer.grantId});
       const {rows: [receipt]} = await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [pending.detail.reviewer.grantId]);

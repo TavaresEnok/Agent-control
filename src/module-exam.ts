@@ -12,7 +12,7 @@ import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './modul
 import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewObservationTitle, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewDecision, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 import {isModuleExamTerminalNotice, parseModuleExamJsonObject} from './module-exam-worker.ts';
-import {distinctExamSessions, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN} from './module-exam-sessions.ts';
+import {distinctExamSessions, examSubjectDigest, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN} from './module-exam-sessions.ts';
 
 const checklist: Record<VerificationModule, string> = {
   qa: 'Comportamento funcional, tratamento de erros e testes existentes',
@@ -87,7 +87,7 @@ export type ModuleExamInput = {
   waitForClaudeQuota?: (context: ModuleExamClaudeQuotaWait) => Promise<boolean>;
   /** Ledger proof that a high examiner finding was reviewed in a distinct native session.
    * Without it, such a finding stays probable. */
-  attestSessions?: (pair: {examiner: ModuleExamExecution; reviewer: ModuleExamExecution}) => Promise<boolean>;
+  attestSessions?: (pair: {examiner: ModuleExamExecution; reviewer: ModuleExamExecution; file: string; line: number}) => Promise<boolean>;
   signal?: AbortSignal;
 };
 export type ModuleExamExecution = Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string};
@@ -311,6 +311,9 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           seat = await reserve('examiner');
           checkAbort(input.signal);
           const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
+          // The native worker derives the job session from this host digest, binding the job to the file.
+          (call as {examSubject?: string}).examSubject = examSubjectDigest({purpose: 'examiner', module: input.module,
+            intentId: input.intentId, commit: input.commit ?? null, file: file.file});
           launched = true;
           const output = await worker.run(call);
           exited = true;
@@ -432,6 +435,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           }
           const task = moduleReviewTask(evidence);
           const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
+          (call as {examSubject?: string}).examSubject = examSubjectDigest({purpose: 'reviewer', module: input.module,
+            intentId: input.intentId, commit: input.commit ?? null, file: finding.file, line: finding.line});
           launched = true;
           const output = await worker.run(call);
           exited = true;
@@ -442,7 +447,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           if (highExaminerFinding) {
             const reviewer = identity(seat, reviewerSessionId);
             if (!distinctExamSessions(examinerExecution, reviewer)
-              || !await input.attestSessions!({examiner: examinerExecution!, reviewer})) {
+              || !await input.attestSessions!({examiner: examinerExecution!, reviewer, file: finding.file, line: finding.line})) {
               throw new Refusal(HIGH_SESSION_UNPROVEN);
             }
             checkAbort(input.signal);

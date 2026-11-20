@@ -674,6 +674,7 @@ test('achado alto do examinador exige sessÃµes distintas atestadas no livro-razÃ
     assert.deepEqual(attestCalls.at(-1), {
       examiner: {...examinerSeat, sessionId: examinerSession},
       reviewer: {...opusSeat, sessionId: reviewerSession},
+      file: 'app.test.ts', line: 1,
     });
 
     // 5b) Exam: a reviewer that ran out of quota keeps PROVIDER_USAGE_LIMIT, not a session code.
@@ -744,8 +745,9 @@ test('achado alto do examinador exige sessÃµes distintas atestadas no livro-razÃ
     assert.deepEqual(await coverageRow(unbound.runId), {grant_id: examinerSeat.grantId, session_id: examinerSession});
     assert.deepEqual(await coverageRow(grantsOnly.runId), {grant_id: null, session_id: null});
 
-    // 7) Recheck: the examiner identity carries the original grant and session, and the
-    //    reviewer must prove a distinct native session. Otherwise the finding stays as it was.
+    // 7) Recheck: the coverage keeps the original grant and session, but the ledger has no
+    //    native execution for them (and no account for the profile). The original cannot be
+    //    attested, so no reviewer seat is spent, whatever the reviewer would report.
     const findingStatus = async (runId: string) => (await ledger.pool.query(
       "SELECT status FROM ac_verify_findings WHERE run_id=$1 AND achado_id='ACH-001'", [runId])).rows[0]?.status;
     const reviewerFor = (sessionId?: string) => ({
@@ -761,11 +763,8 @@ test('achado alto do examinador exige sessÃµes distintas atestadas no livro-razÃ
           return {reviewer: reviewerFor(sessionId), output: JSON.stringify(reviewFixtureVerdict(JSON.parse(req.task), skipped))};
         },
       });
-      assert.deepEqual(outcome.results, [{id: 'ACH-001', status: 'pendente', reason: 'MODULE_EXAM_HIGH_SESSION_UNPROVEN'}]);
-      assert.deepEqual(seen, [{
-        provider: 'claude', model: 'claude-sonnet-5-5', profileId: examinerSeat.profileId, accountId: null,
-        grantId: examinerSeat.grantId, sessionId: examinerSession,
-      }]);
+      assert.deepEqual(outcome.results, [{id: 'ACH-001', status: 'pendente', reason: 'MODULE_RECHECK_EXAMINER_SESSION_UNPROVEN'}]);
+      assert.deepEqual(seen, []);
       assert.equal(await findingStatus(unbound.runId), 'provavel');
     }
 
@@ -778,21 +777,20 @@ test('achado alto do examinador exige sessÃµes distintas atestadas no livro-razÃ
     assert.deepEqual(history.results, [{id: 'ACH-001', status: 'pendente', reason: 'MODULE_RECHECK_EXAMINER_SESSION_UNPROVEN'}]);
     assert.equal(historyReviews, 0);
 
-    // 9) Recheck still refuses a reviewer of the wrong model for a high examiner finding.
-    await assert.rejects(
-      () => recheckModuleFindings(ledger, principal, authority, {
-        module: 'qa', runId: unbound.runId, achadoIds: ['ACH-001'], dataDirectory, projectId,
-        async review(req) {
-          assert.equal(req.severity, 'alta');
-          assert.equal(req.fromExaminer, true);
-          return {
-            reviewer: {provider: 'codex', model: 'gpt-6.2-sol', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()},
-            output: JSON.stringify(reviewFixtureVerdict(JSON.parse(req.task), skipped)),
-          };
-        },
-      }),
-      (err: unknown) => err instanceof Refusal && err.code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
-    );
+    // 9) A reviewer of the wrong model is not even asked when the original is unattested.
+    let wrongModelReviews = 0;
+    const wrongModel = await recheckModuleFindings(ledger, principal, authority, {
+      module: 'qa', runId: unbound.runId, achadoIds: ['ACH-001'], dataDirectory, projectId,
+      async review(req) {
+        wrongModelReviews += 1;
+        return {
+          reviewer: {provider: 'codex', model: 'gpt-6.2-sol', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()},
+          output: JSON.stringify(reviewFixtureVerdict(JSON.parse(req.task), skipped)),
+        };
+      },
+    });
+    assert.deepEqual(wrongModel.results, [{id: 'ACH-001', status: 'pendente', reason: 'MODULE_RECHECK_EXAMINER_SESSION_UNPROVEN'}]);
+    assert.equal(wrongModelReviews, 0);
   } finally {
     await ledger.close();
     await database.close();

@@ -119,6 +119,24 @@ export async function loadSpecialistExamPlan(
      WHERE x.id=$1`,
     [contextId],
   )).rows[0] as PolicySnapshotRow | undefined;
+  return specialistExamPlanFrom(pool, row);
+}
+
+/** The plan of an immutable policy revision, such as the one a grant was reserved under. */
+export async function loadSpecialistExamPlanAtRevision(
+  pool: {query: (text: string, values?: unknown[]) => Promise<{rows: unknown[]}>},
+  projectId: string,
+  revision: number,
+): Promise<SpecialistExamPlan> {
+  const row = (await pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',
+    [projectId, revision])).rows[0] as PolicySnapshotRow | undefined;
+  return specialistExamPlanFrom(pool, row);
+}
+
+async function specialistExamPlanFrom(
+  pool: {query: (text: string, values?: unknown[]) => Promise<{rows: unknown[]}>},
+  row: PolicySnapshotRow | undefined,
+): Promise<SpecialistExamPlan> {
   const specialist = row?.snapshot?.roles?.specialist;
   const regular = Array.isArray(specialist?.regular) ? specialist.regular.filter((id): id is string => typeof id === 'string') : [];
   const emergency = Array.isArray(specialist?.emergency) ? specialist.emergency.filter((id): id is string => typeof id === 'string') : [];

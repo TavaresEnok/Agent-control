@@ -73,6 +73,8 @@ const messages: Record<string, string> = {
 const recheckGuidance: Record<string, string> = {
   MODULE_RECHECK_ORIGINAL_UNKNOWN: 'Recupere o relatório e a cobertura originais para identificar a origem do achado.',
   MODULE_RECHECK_SAME_COMMIT: 'Integre a correção e rode o módulo no novo commit.',
+  MODULE_RECHECK_EXAMINER_SESSION_UNPROVEN: 'O diário não prova a execução original do examinador para este arquivo. '
+    + 'Relatórios anteriores à migração 115 ou ao vínculo da sessão por arquivo exigem um novo exame do módulo.',
   MODULE_RECHECK_CHANGE_UNPROVEN: 'Confira a linhagem do commit e a alteração no ponto original do achado.',
   MODULE_RECHECK_MODULE_PROOF_MISSING: 'Use --medir-correcao com o ID original e confira a cobertura da ferramenta no commit atual.',
   MODULE_RECHECK_MEASUREMENT_UNPROVEN: 'Confira a identidade do objeto, os registros por arquivo e o critério da regra nas duas revisões.',
