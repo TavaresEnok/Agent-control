@@ -1762,3 +1762,36 @@ FIM
 - 20/11/2026 07:41 UTC — Ordem painel-r6 em claude-sonnet-5-5 encerrou com código 0.
 - 20/11/2026 07:41 UTC — Concluída a cópia prévia à manutenção de work/ pelo personal:backup. O personal:restore-check validou o backup; a pasta native segue a política de exclusão do produto.
 - 20/11/2026 07:42 UTC — A rodada 3 passou nas duas suítes de navegador autenticado. No candidato seguinte, a correção do catálogo da Anatel passou nos 17 testes do componente, nos 278 testes de frontend, no TypeScript, no formatador e no build. Atualizada a tabela de cobertura no relatório, inclusive a pausa do Claude após 223 jobs de QA e 186 de arquitetura.
+- 20/11/2026 07:42 UTC — Revisão independente revisao-anatel-confirmado concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:42 UTC — Iniciada ordem anatel-r7 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:43 UTC — Iniciada ordem painel-r7 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:44 UTC — Anatel a70910b em Chromium a 375 px: o catálogo vazio real bloqueou a consulta e o CSV. Em uma segunda sessão autenticada, GETs simulados de catálogo e relatório comprovaram que editar o mês mantém a origem da consulta, bloqueia o download e só muda o relatório após o envio. O CSV de zero acessos fica habilitado com ready:true. A alternância rápida entre empresas ainda está sob revisão.
+- 20/11/2026 07:44 UTC — Revisão independente revisao-painel-superficie concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:44 UTC — O lançador da manutenção duplicou o prefixo do caminho do worktree e encerrou antes de iniciar o trabalhador. Corrigido o caminho e reenviada a mesma ordem ao Opus medium no login dedicado Enok.
+- 20/11/2026 07:44 UTC — Correção retencao-viva atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 07:44 UTC — A ordem retencao-viva do Opus encerrou com código 1.
+- 20/11/2026 07:44 UTC — COTA — o trabalhador Claude Opus 5.5 medium da conta Enok informou limite de cinco horas às 07:44 UTC; o provedor prevê retorno às 08:20 UTC. A manutenção de work/ aguarda. A fila dá prioridade ao examinador e ao revisor dos achados altos.
+- 20/11/2026 07:45 UTC — Ordem painel-r7 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:45 UTC — A retirada solicitada em 7b208f82 é manutenção do supervisor e não corresponde a um achado alto do exame. A ordem de implementação segue a fila comum, hoje no Sonnet Pro após os limites dos Gemini. A Enok Max fica reservada ao examinador e ao revisor dos achados altos. Cancelada a repetição do trabalhador Opus para evitar duplicar a ordem.
+- 20/11/2026 07:45 UTC — Iniciada ordem retencao-manutencao em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:46 UTC — Iniciada ordem painel-r8 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:47 UTC — O personal:restore-check confirmou 16.282 arquivos e a legibilidade do dump no backup pré-manutenção. Na consulta somente leitura ao NexoISP, 644 jobs de especialista tinham recibo, reserva liberada e registro de retirada de contêineres; outro tinha recibo sem esse registro. O caminho de manutenção deve decidir a elegibilidade de cada work/ antes de removê-lo.
+- 20/11/2026 07:47 UTC — Ordem painel-r8 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:49 UTC — IspAgent reinspecionado às 07:49 UTC. A preparação de design com a Enok Max retornou “Nada a mudar” e a instalação passou novamente nas oito verificações de inspect. Na rodada 6 do navegador, a suíte do painel passou com a série controlada 0/1/10000, o recorte do SVG e a navegação por teclado.
+- 20/11/2026 07:49 UTC — Revisão independente revisao-painel-recorte concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:50 UTC — Iniciada ordem painel-r9 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:51 UTC — Ordem anatel-r7 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:52 UTC — Ordem painel-r9 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:52 UTC — COTA — Claude informou limite na execução fila-nexo-qa. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 07:52 UTC — COTA — Claude informou limite na execução fila-nexo-arquitetura. A CLI aguarda 15 minutos antes de tentar novamente a unidade pendente.
+- 20/11/2026 07:53 UTC — Revisão independente revisao-anatel-fluxo concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:54 UTC — Iniciada ordem anatel-r8 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 07:54 UTC — Ordem retencao-manutencao em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 07:54 UTC — COTA — claude-sonnet-5-5 (ajust) informou limite na ordem anatel-r8.
+- 20/11/2026 07:54 UTC — Iniciada ordem anatel-r8 em claude-sonnet-5-5 (enok), no worktree próprio.
+- 20/11/2026 07:54 UTC — No candidato 6891986 da Anatel, o formatador, TypeScript, os 280 testes e o build passaram. O teste em Chromium confirmou, numa montagem, a troca A→B→A, resposta atrasada, erro e recuperação. A rodada do painel em 8d6b587 também passou. O parecer sobre a Anatel solicitou preservar a revalidação ao retornar à aba e descartar respostas antigas na remontagem.
+- 20/11/2026 07:54 UTC — COTA — claude-sonnet-5-5 (enok) informou limite na ordem anatel-r8.
+- 20/11/2026 07:54 UTC — Revisão independente revisao-painel-geometria concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:56 UTC — Revisão independente revisao-retencao-work concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 07:57 UTC — O candidato de retenção ab82623d passou pelo TypeScript com as dependências do projeto e em quatro testes sem skips, incluindo PostgreSQL descartável. O Sol identificou um risco alto na exclusão por caminho e solicitou ajustes antes de --aplicar. A instalação só recebeu uma prévia de um job concluído. O diretório work/ continua intacto.
+- 20/11/2026 07:58 UTC — O Sonnet Pro informou renovação estimada às 11:10 UTC e a Enok Max às 08:20 UTC. A agenda de 15 minutos mantém as ordens comuns e a correção alta da manutenção disponíveis para nova tentativa. O relatório inclui a prévia de 61.811.158 bytes e os critérios ainda pendentes das duas telas.
