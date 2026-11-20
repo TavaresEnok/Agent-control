@@ -1,5 +1,5 @@
-import {withInstallationImageLock} from './personal-image-lock.ts';
-import {assertDiskSpaceForLaunch} from './personal-disk.ts';
+import {withInstallationImageLock} from "./personal-image-lock.ts";
+import {assertDiskSpaceForLaunch,launchVolumesOf} from "./personal-disk.ts";
 import {spawn} from 'node:child_process';
 import {createHash, randomBytes, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
@@ -1968,7 +1968,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   if (!parsedRunId.success) throw new Refusal('INVALID_CONTRACT', 400);
   const runId = parsedRunId.data.toLowerCase();
   const createdAt = input.createdAt ?? new Date();
-  await assertDiskSpaceForLaunch(input.dataDirectory);
+  await assertDiskSpaceForLaunch(launchVolumesOf(input.ledger, input.dataDirectory));
   const preparedDir = join(await requireDataDirectory(input.dataDirectory), 'verificacoes', input.projectId,
     moduleReportDirectoryName(createdAt, runId, input.module));
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;

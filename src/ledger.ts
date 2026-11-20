@@ -34,7 +34,7 @@ export type Intent = { id: string; context_id: string; operation_id: string; run
   manager_epoch: string; plan_revision: number; state: string; command: Command; parent_intent_id?:string|null;parent_unit_id?:string|null };
 export class Ledger {
   readonly pool: pg.Pool;
-  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8 }); }
+  constructor(connectionString: string,readonly installationAuthority?:InstallationFenceToken,readonly runtimeIdentity?:RuntimeIdentity,/** Volumes the installation writes to; the capacity gate measures these before admitting a new worker. */readonly launchVolumes?:readonly string[]) { if(runtimeIdentity)RuntimeIdentity.parse(runtimeIdentity);this.pool = new pg.Pool({ connectionString, max: 8 }); }
   async tx<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
     const c = await this.pool.connect();
     try { await c.query('BEGIN'); const v = await fn(c); await c.query('COMMIT'); return v; }

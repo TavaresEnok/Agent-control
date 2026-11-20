@@ -358,7 +358,8 @@ export class Capacity {
       // profile is the emergency reserve when every regular profile yielded. The plan is refused
       // only when the reserve is missing or itself ineligible — not because the titular is out.
       const personal=await this.personal(c);
-      if(personal)await assertDiskSpaceForLaunch('/');
+      // A new attempt only: the replay above returns before this gate, so reconciliation never waits on disk.
+      if(personal)await assertDiskSpaceForLaunch(this.ledger.launchVolumes??['/']);
       // Personal mode keeps the reviewer off the provider that wrote the change, including the reserve.
       let writerProvider:string|null=null;
       if(personal&&(request.role==='reviewer'||request.role==='judge')){
