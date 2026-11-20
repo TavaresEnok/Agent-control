@@ -15,6 +15,10 @@ test('o texto da preparação distingue prévia e gravação do catálogo', () =
   const base = {
     unchanged: false,
     catalogAction: 'registrar' as const,
+    catalog: [
+      {model: 'claude-opus-5-5', action: 'registrar' as const, efforts: ['medium', 'high'], missing: ['medium', 'high'], sharedRoles: []},
+      {model: 'claude-sonnet-5-5', action: 'registrar' as const, efforts: ['medium', 'high'], missing: ['medium', 'high'], sharedRoles: []},
+    ],
     profiles: [],
     chain: {regular: ['novo:criar'], emergency: ['novo:revisor']},
     contexts: [],
@@ -22,6 +26,7 @@ test('o texto da preparação distingue prévia e gravação do catálogo', () =
     revisionTo: null,
   };
   assert.match(formatDesignPrepare({...base, apply: false}), /entraria por personal:\/\/account-add/);
+  assert.match(formatDesignPrepare({...base, apply: false}), /claude-sonnet-5-5: entraria por personal:\/\/account-add com medium, high/);
   assert.match(formatDesignPrepare({...base, apply: true, revisionTo: 2}), /entrou por personal:\/\/account-add/);
   assert.equal(formatDesignPrepare({...base, apply: true, unchanged: true, catalogAction: 'presente', revisionTo: 2}), 'Nada a mudar.');
 });
@@ -263,7 +268,7 @@ test('preparar recusa projeto sem conta Claude e não grava', {skip: databaseUrl
   }
 });
 
-test('preparar recusa Opus no catálogo sem esforço medium', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+test('preparar não alarga Opus compartilhado sem esforço medium', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
   const database = await isolatedDatabase(databaseUrl!, 'prepopus');
   const db = new Ledger(database.url);
   try {
@@ -285,11 +290,20 @@ test('preparar recusa Opus no catálogo sem esforço medium', {skip: databaseUrl
       eligibility: 'documented_supported', eligibilitySource: 'synthetic://prepare', maxConcurrent: 2,
     });
     const before = Number((await db.pool.query('SELECT count(*)::int AS n FROM ac_profiles')).rows[0].n);
+    // Registro compartilhado com outros papéis: a prévia aponta o bloqueio e aplicar recusa sem gravar.
+    const preview = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: false});
+    assert.equal(preview.catalogAction, 'bloqueado');
+    assert.deepEqual(preview.catalog[0], {
+      model: 'claude-opus-5-5', action: 'bloqueado', efforts: ['low'], missing: ['high', 'medium'],
+      sharedRoles: ['manager', 'programmer', 'reviewer', 'qa', 'judge'],
+    });
     await assert.rejects(
-      prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: false}),
-      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CREATE_MODEL_UNAVAILABLE',
+      prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true}),
+      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CATALOG_SHARED_EFFORT',
     );
     assert.equal(Number((await db.pool.query('SELECT count(*)::int AS n FROM ac_profiles')).rows[0].n), before);
+    const opus = (await db.pool.query<{efforts: string[]}>("SELECT efforts FROM ac_model_catalog WHERE model='claude-opus-5-5'")).rows[0];
+    assert.deepEqual(opus?.efforts, ['low']);
   } finally {
     await db.close();
     await database.close();
@@ -442,7 +456,7 @@ test('preparar lê o plano e aplica na mesma transação', {skip: databaseUrl ? 
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await capacity.configure(principal, {programmingLimit: 4, evaluationLimit: 4});
     await capacity.registerModel(principal, {
-      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium', 'high'], roles: [...roles], source: 'personal://account-add',
     });
     const account = randomUUID();
     await capacity.addAccount(principal, project, {

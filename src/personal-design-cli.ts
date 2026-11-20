@@ -47,6 +47,7 @@ const messages: Record<string, string> = {
   DESIGN_IMAGE_UNPINNED: 'A imagem de design não está fixada pelo digest.',
   DESIGN_CREATE_MODEL_UNAVAILABLE: 'Confira o catálogo e os perfis Claude da conta prioritária. O design exige Opus 5.5 high para criar, examinar e fazer a crítica visual.',
   DESIGN_PREPARE_NO_CLAUDE: 'O projeto não tem conta Claude.',
+  DESIGN_CATALOG_SHARED_EFFORT: 'O catálogo de Claude Opus 5.5 ou Sonnet 5.5 é compartilhado com outros papéis e não tem todos os esforços de specialist; nada foi gravado. Rode a prévia (sem --aplicar) para ver o modelo, os esforços e os papéis afetados.',
   DESIGN_PREPARE_ACCOUNT_UNAVAILABLE: 'A conta prioritária informada não é uma conta Claude ativa deste projeto.',
   CONTROL_ADMIN_REQUIRED: 'Falta o administrador de controle para registrar ou atualizar os modelos Claude no catálogo.',
   PROJECT_OWNER_REQUIRED: 'Só o dono do projeto prepara o exame.',

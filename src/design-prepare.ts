@@ -14,6 +14,11 @@ const REVIEWER_EFFORT = 'medium' as const;
 const CATALOG_SOURCE = 'personal://account-add';
 const CATALOG_EFFORTS = ['medium', 'high'] as const;
 const CATALOG_ROLES = ['specialist'] as const;
+/** Esforços que cada modelo precisa ter no catálogo para os perfis specialist. */
+const REQUIRED_EFFORTS: Record<string, readonly string[]> = {
+  [CREATE_MODEL]: [CREATE_EFFORT, FUNCTIONAL_HIGH_REVIEW_EFFORT],
+  [EXAMINER_MODEL]: EXAMINER_EFFORTS,
+};
 const MAX_CHAIN_PROFILES = 20;
 
 type ProfileRow = {
@@ -42,14 +47,29 @@ export type DesignPrepareProfile = {
   model: string;
   effort: string;
   profileId: string | null;
-  action: 'reusar' | 'criar' | 'habilitar';
+  action: 'reusar' | 'criar' | 'habilitar' | 'mover';
   seat: 'conta' | 'outra conta' | 'outra sessão';
+};
+
+export type DesignCatalogAction = 'presente' | 'registrar' | 'atualizar' | 'bloqueado';
+
+/** O que acontece (ou aconteceria) com o registro de um modelo no catálogo global. */
+export type DesignCatalogModel = {
+  model: string;
+  action: DesignCatalogAction;
+  /** Esforços do registro depois da ação; em `bloqueado`, os atuais. */
+  efforts: string[];
+  /** Esforços acrescentados (`registrar`/`atualizar`) ou que faltam (`bloqueado`). */
+  missing: string[];
+  /** Outros papéis que compartilham o registro. Só em `bloqueado`. */
+  sharedRoles: string[];
 };
 
 export type DesignPrepareReport = {
   apply: boolean;
   unchanged: boolean;
-  catalogAction: 'presente' | 'registrar' | 'atualizar';
+  catalogAction: DesignCatalogAction;
+  catalog: DesignCatalogModel[];
   primaryAccountId: string;
   profiles: DesignPrepareProfile[];
   chain: {regular: string[]; emergency: string[]};
@@ -74,11 +94,6 @@ type PrepareFacts = {
   sonnet: CatalogRow | null;
 };
 
-type CatalogModelPlan = {
-  model: string;
-  action: 'presente' | 'registrar' | 'atualizar';
-  nextEfforts: string[];
-};
 
 type PlannedItem = {
   profile: DesignPrepareProfile;
@@ -134,11 +149,17 @@ export async function prepareDesignSpecialist(input: {
     ).map(item => item.id);
     const unchanged = plan.reusePolicy && catalog.action === 'presente' && contexts.length === 0
       && plan.items.every(item => item.profile.action === 'reusar');
+    if (input.apply && catalog.action === 'bloqueado') {
+      // O registro é global e compartilhado com outros papéis: acrescentar o esforço
+      // ampliaria esses papéis sem decisão explícita. Nada é gravado.
+      throw new Refusal('DESIGN_CATALOG_SHARED_EFFORT', 409);
+    }
     if (!input.apply || unchanged) {
       return {
         apply: input.apply,
         unchanged,
         catalogAction: catalog.action,
+        catalog: catalog.steps,
         primaryAccountId: plan.primaryAccountId,
         profiles: plan.items.map(item => item.profile),
         chain: plan.chain,
@@ -155,13 +176,13 @@ export async function prepareDesignSpecialist(input: {
     const existingEmergency = facts.previous?.roles.specialist?.emergency ?? [];
     const lockedIds = new Set([...existingRegular, ...existingEmergency]);
     const assignedIds = new Set<string>();
-    const ensured: {item: PlannedItem; id: string}[] = [];
+    const ensured: {item: PlannedItem; id: string; action: DesignPrepareProfile['action']}[] = [];
 
     for (const item of plan.items) {
       const avoid = [...new Set([...lockedIds, ...assignedIds])].filter(id => id !== item.profile.profileId);
-      const id = await ensureProfile(capacity, client, input.owner, input.projectId, item.profile, avoid);
+      const {id, action} = await ensureProfile(capacity, client, input.owner, input.projectId, item.profile, avoid);
       assignedIds.add(id);
-      ensured.push({item, id});
+      ensured.push({item, id, action: item.profile.action === 'mover' && action === 'reusar' ? 'mover' : action});
     }
     if (assignedIds.size !== plan.items.length) {
       throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
@@ -196,8 +217,9 @@ export async function prepareDesignSpecialist(input: {
       apply: true,
       unchanged: false,
       catalogAction: catalog.action,
+      catalog: catalog.steps,
       primaryAccountId: plan.primaryAccountId,
-      profiles: ensured.map(({item, id}) => ({...item.profile, profileId: id})),
+      profiles: ensured.map(({item, id, action}) => ({...item.profile, profileId: id, action})),
       chain,
       contexts,
       revisionFrom: facts.revision,
@@ -210,16 +232,11 @@ export function formatDesignPrepare(
   report: Omit<DesignPrepareReport, 'primaryAccountId'> & {primaryAccountId?: string},
 ): string {
   if (report.unchanged) return 'Nada a mudar.';
-  const catalogLine = report.catalogAction === 'presente'
-    ? `${CREATE_MODEL} e ${EXAMINER_MODEL} já estão no catálogo.`
-    : report.catalogAction === 'atualizar'
-      ? (report.apply ? 'Catálogo atualizado com esforço high para specialist.' : 'Catálogo receberia esforço high para specialist.')
-      : report.apply
-        ? `${CREATE_MODEL} entrou por ${CATALOG_SOURCE}.`
-        : `${CREATE_MODEL} entraria por ${CATALOG_SOURCE}.`;
   const lines = [
     report.apply ? 'Preparação aplicada.' : 'Preparação, sem gravar.',
-    `Catálogo: ${catalogLine}`,
+    'Catálogo:',
+    ...report.catalog.map(item => `- ${catalogLine(item, report.apply)}`),
+    ...catalogBlockedLines(report.catalog),
     ...(report.primaryAccountId ? [`Conta prioritária: ${report.primaryAccountId}`] : []),
     'Perfis specialist:',
   ];
@@ -237,6 +254,31 @@ export function formatDesignPrepare(
     lines.push(`Revisão atual: ${report.revisionFrom}`);
   }
   return lines.join('\n');
+}
+
+function catalogLine(item: DesignCatalogModel, apply: boolean): string {
+  const missing = item.missing.join(', ');
+  switch (item.action) {
+    case 'presente':
+      return `${item.model}: já tem ${item.efforts.join(', ')}; nada muda.`;
+    case 'registrar':
+      return `${item.model}: ${apply ? 'entrou' : 'entraria'} por ${CATALOG_SOURCE} com ${missing} para specialist.`;
+    case 'atualizar':
+      return `${item.model}: ${apply ? 'recebeu' : 'receberia'} ${missing} (registro só de specialist).`;
+    case 'bloqueado':
+      return `${item.model}: bloqueado; falta ${missing} e o registro também serve ${item.sharedRoles.join(', ')}.`;
+  }
+}
+
+function catalogBlockedLines(catalog: readonly DesignCatalogModel[]): string[] {
+  const blocked = catalog.filter(item => item.action === 'bloqueado');
+  if (blocked.length === 0) return [];
+  return [
+    'Restrição: o catálogo é global e compartilhado; acrescentar o esforço liberaria esse esforço também para os outros papéis. --aplicar não grava nada.',
+    'Para seguir, um administrador de controle decide e acrescenta, ciente de que os papéis listados também passam a usar:',
+    ...blocked.map(item => `- ${item.model}: ${item.missing.join(', ')} (papéis afetados: ${item.sharedRoles.join(', ')})`),
+    'Depois, repita a prévia.',
+  ];
 }
 
 async function loadFacts(client: pg.PoolClient, owner: string, projectId: string, apply: boolean): Promise<PrepareFacts> {
@@ -303,50 +345,40 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
 }
 
 function planCatalog(facts: PrepareFacts): {
-  action: 'presente' | 'registrar' | 'atualizar';
-  steps: CatalogModelPlan[];
+  action: DesignCatalogAction;
+  steps: DesignCatalogModel[];
 } {
-  const steps: CatalogModelPlan[] = [];
-  if (!facts.opus) {
-    steps.push({model: CREATE_MODEL, action: 'registrar', nextEfforts: [...CATALOG_EFFORTS]});
-  } else {
-    if (!facts.opus.roles.includes('specialist') || !facts.opus.efforts.includes(FUNCTIONAL_HIGH_REVIEW_EFFORT)) {
-      throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
-    }
-    if (!facts.opus.efforts.includes(CREATE_EFFORT)) {
-      steps.push({model: CREATE_MODEL, action: 'atualizar', nextEfforts: [...facts.opus.efforts, CREATE_EFFORT]});
-    } else {
-      steps.push({model: CREATE_MODEL, action: 'presente', nextEfforts: facts.opus.efforts});
-    }
-  }
-
-  if (!facts.sonnet) {
-    steps.push({model: EXAMINER_MODEL, action: 'registrar', nextEfforts: [...CATALOG_EFFORTS]});
-  } else {
-    if (!facts.sonnet.roles.includes('specialist') || (!facts.sonnet.efforts.includes('medium') && !facts.sonnet.efforts.includes('high'))) {
-      throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
-    }
-    const missing = CATALOG_EFFORTS.filter(effort => !facts.sonnet!.efforts.includes(effort));
-    if (missing.length > 0) {
-      steps.push({model: EXAMINER_MODEL, action: 'atualizar', nextEfforts: [...facts.sonnet.efforts, ...missing]});
-    } else {
-      steps.push({model: EXAMINER_MODEL, action: 'presente', nextEfforts: facts.sonnet.efforts});
-    }
-  }
-
-  const action = steps.some(step => step.action === 'registrar')
-    ? 'registrar'
-    : steps.some(step => step.action === 'atualizar')
-      ? 'atualizar'
-      : 'presente';
+  const steps = [planCatalogModel(CREATE_MODEL, facts.opus), planCatalogModel(EXAMINER_MODEL, facts.sonnet)];
+  const action = (['bloqueado', 'registrar', 'atualizar'] as const).find(candidate => steps.some(step => step.action === candidate))
+    ?? 'presente';
   return {action, steps};
+}
+
+/**
+ * Um registro só de specialist pode ganhar os esforços que faltam. Um registro
+ * compartilhado com outros papéis só serve se já tiver todos: acrescentar ali
+ * ampliaria os outros papéis, então fica `bloqueado` e nada é gravado.
+ */
+function planCatalogModel(model: string, row: CatalogRow | null): DesignCatalogModel {
+  const required = REQUIRED_EFFORTS[model]!;
+  if (!row) {
+    return {model, action: 'registrar', efforts: [...CATALOG_EFFORTS], missing: [...CATALOG_EFFORTS], sharedRoles: []};
+  }
+  if (!row.roles.includes('specialist')) throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE', 409);
+  const missing = required.filter(effort => !row.efforts.includes(effort));
+  if (missing.length === 0) return {model, action: 'presente', efforts: [...row.efforts], missing: [], sharedRoles: []};
+  const sharedRoles = row.roles.filter(role => role !== 'specialist');
+  if (sharedRoles.length > 0) {
+    return {model, action: 'bloqueado', efforts: [...row.efforts], missing, sharedRoles};
+  }
+  return {model, action: 'atualizar', efforts: [...row.efforts, ...missing], missing, sharedRoles: []};
 }
 
 async function applyCatalog(
   capacity: Capacity,
   client: pg.PoolClient,
   owner: string,
-  steps: readonly CatalogModelPlan[],
+  steps: readonly DesignCatalogModel[],
 ): Promise<void> {
   for (const step of steps) {
     if (step.action === 'registrar') {
@@ -354,7 +386,7 @@ async function applyCatalog(
         await capacity.registerModel(owner, {
           provider: 'claude',
           model: step.model,
-          efforts: [...step.nextEfforts],
+          efforts: [...step.efforts],
           roles: [...CATALOG_ROLES],
           source: CATALOG_SOURCE,
         });
@@ -369,10 +401,12 @@ async function applyCatalog(
     if (step.action === 'atualizar') {
       const admin = await client.query('SELECT 1 FROM ac_control_admins WHERE principal_id=$1', [owner]);
       if (!admin.rowCount) throw new Refusal('CONTROL_ADMIN_REQUIRED', 403);
-      await client.query(
-        "UPDATE ac_model_catalog SET efforts=$2 WHERE provider='claude' AND model=$1",
-        [step.model, step.nextEfforts],
+      // Só grava se o registro continuar exclusivo de specialist.
+      const updated = await client.query(
+        "UPDATE ac_model_catalog SET efforts=$2 WHERE provider='claude' AND model=$1 AND roles <@ ARRAY['specialist']::text[]",
+        [step.model, step.efforts],
       );
+      if (updated.rowCount !== 1) throw new Refusal('DESIGN_CATALOG_SHARED_EFFORT', 409);
     }
   }
 }
@@ -393,6 +427,13 @@ function selectPrimaryAccount(
   );
   if (fromOpusHigh) {
     return facts.accounts.find(account => account.id === fromOpusHigh.accountId)!;
+  }
+  // Política antiga: o Opus medium em `regular` era o criador e marca a primária anterior.
+  const fromLegacyOpusMedium = chainRegularRows.find(
+    row => row.model === CREATE_MODEL && row.effort === FUNCTIONAL_HIGH_REVIEW_EFFORT && enabledIds.has(row.accountId),
+  );
+  if (fromLegacyOpusMedium) {
+    return facts.accounts.find(account => account.id === fromLegacyOpusMedium.accountId)!;
   }
   const fromFirstClaude = chainRegularRows.find(row => enabledIds.has(row.accountId));
   if (fromFirstClaude) {
@@ -588,7 +629,10 @@ function seatPlan(facts: PrepareFacts, requestedPrimaryAccountId?: string): Seat
     },
     {
       profile: chainReviewerOpus
-        ? profileReport('revisor-alto', chainReviewerOpus, 'outra sessão')
+        ? {
+            ...profileReport('revisor-alto', chainReviewerOpus, 'outra sessão'),
+            ...(migratedOpusMediumId !== null && chainReviewerOpus.enabled ? {action: 'mover' as const} : {}),
+          }
         : planned('revisor-alto', primary.id, CREATE_MODEL, FUNCTIONAL_HIGH_REVIEW_EFFORT, reviewerOpusRow, 'outra sessão'),
       inTargetChain: chainReviewerOpus !== undefined && migratedOpusMediumId === null,
       targetChain: 'emergency',
@@ -635,7 +679,6 @@ function buildChain(input: {
   }[];
 }): {regular: string[]; emergency: string[]} {
   const regularPool = input.existingRegular.filter(id => id !== input.migratedOpusMediumId);
-  const nonClaudeRegular = regularPool.filter(id => !input.profileMap.has(id));
   const existingPrimaryRegular = regularPool.filter(id => input.profileMap.get(id)?.accountId === input.primaryAccountId);
   const existingOtherRegular = regularPool.filter(id => {
     const row = input.profileMap.get(id);
@@ -670,9 +713,39 @@ function buildChain(input: {
   const otherRegular = [...existingOtherRegular, ...addedSecondaryRegular];
 
   return {
-    regular: [...nonClaudeRegular, ...primaryRegular, ...otherRegular],
+    regular: fillClaudeSlots(input.existingRegular, input.profileMap, [...primaryRegular, ...otherRegular]),
     emergency: [...input.existingEmergency, ...addedEmergency],
   };
+}
+
+/**
+ * Põe os perfis Claude, já na ordem nova, nos lugares que eram de perfis Claude
+ * (incluindo o do Opus medium que saiu para `emergency`). Os outros provedores
+ * ficam onde estavam. Perfis Claude a mais entram logo depois do último lugar
+ * Claude; sem nenhum, vão para o fim.
+ */
+function fillClaudeSlots(
+  existing: readonly string[],
+  profileMap: ReadonlyMap<string, ProfileRow>,
+  claudeOrdered: readonly string[],
+): string[] {
+  const lastSlot = existing.reduce((last, id, index) => (profileMap.has(id) ? index : last), -1);
+  const result: string[] = [];
+  let next = 0;
+  existing.forEach((id, index) => {
+    if (!profileMap.has(id)) {
+      result.push(id);
+    } else if (next < claudeOrdered.length) {
+      result.push(claudeOrdered[next]!);
+      next += 1;
+    }
+    if (index === lastSlot) {
+      result.push(...claudeOrdered.slice(next));
+      next = claudeOrdered.length;
+    }
+  });
+  result.push(...claudeOrdered.slice(next));
+  return result;
 }
 
 function profileReport(
@@ -727,13 +800,14 @@ async function ensureProfile(
   projectId: string,
   profile: DesignPrepareProfile,
   avoid: readonly string[] = [],
-): Promise<string> {
+): Promise<{id: string; action: 'reusar' | 'criar' | 'habilitar'}> {
   if (profile.profileId && profile.action !== 'criar' && !avoid.includes(profile.profileId)) {
     if (profile.action === 'habilitar') {
       const revision = Number((await client.query('SELECT revision FROM ac_profiles WHERE id=$1', [profile.profileId])).rows[0]?.revision);
       await capacity.setEnabled(owner, projectId, 'profile', {id: profile.profileId, enabled: true, expectedRevision: revision});
+      return {id: profile.profileId, action: 'habilitar'};
     }
-    return profile.profileId;
+    return {id: profile.profileId, action: 'reusar'};
   }
   const existing = (await client.query<{id: string; enabled: boolean; revision: number}>(
     `SELECT id::text AS id, enabled, revision FROM ac_profiles
@@ -744,8 +818,9 @@ async function ensureProfile(
   if (existing) {
     if (!existing.enabled) {
       await capacity.setEnabled(owner, projectId, 'profile', {id: existing.id, enabled: true, expectedRevision: Number(existing.revision)});
+      return {id: existing.id, action: 'habilitar'};
     }
-    return existing.id;
+    return {id: existing.id, action: 'reusar'};
   }
   const id = randomUUID();
   await capacity.addProfile(owner, projectId, {
@@ -755,7 +830,7 @@ async function ensureProfile(
     effort: profile.effort as Effort,
     role: 'specialist',
   });
-  return id;
+  return {id, action: 'criar'};
 }
 
 function sameChain(

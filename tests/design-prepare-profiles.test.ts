@@ -195,84 +195,176 @@ test('preparar com --conta-prioritaria prioriza Max na cadeia regular, distingue
   }
 });
 
-test('preparar migra catálogo pré-existente medium sem alterar outros papéis nem modelos alheios', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
-  const database = await isolatedDatabase(databaseUrl!, 'prepmigcat');
+async function catalogFixture(label: string) {
+  const database = await isolatedDatabase(databaseUrl!, label);
   const db = new Ledger(database.url);
-  try {
-    await db.migrate();
-    const principal = 'prepare-mig-owner';
-    const project = randomUUID();
-    const capacity = new Capacity(db);
-    await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'MigCatalog']);
-    await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
-    await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
-    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
-    await capacity.configure(principal, {programmingLimit: 4, evaluationLimit: 4});
+  await db.migrate();
+  const principal = `${label}-owner`;
+  const project = randomUUID();
+  const capacity = new Capacity(db);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, label]);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, principal]);
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
+  await capacity.configure(principal, {programmingLimit: 10, evaluationLimit: 6});
+  const account = randomUUID();
+  const addClaude = async () => capacity.addAccount(principal, project, {
+    id: account, provider: 'claude', label: 'claude', resourceIdentity: `claude:${account}`, mode: 'synthetic',
+    eligibility: 'documented_supported', eligibilitySource: `synthetic://${label}`, maxConcurrent: 4,
+  });
+  const catalogRows = async () => (await db.pool.query<{provider: string; model: string; efforts: string[]; roles: string[]; source: string}>(
+    'SELECT provider, model, efforts, roles, source FROM ac_model_catalog ORDER BY provider, model',
+  )).rows;
+  const counts = async () => ({
+    profiles: Number((await db.pool.query('SELECT count(*)::int AS n FROM ac_profiles')).rows[0].n),
+    revisions: Number((await db.pool.query('SELECT count(*)::int AS n FROM ac_policy_revisions')).rows[0].n),
+  });
+  return {
+    database, db, principal, project, capacity, account, addClaude, catalogRows, counts,
+    close: async () => { await db.close(); await database.close(); },
+  };
+}
 
-    // Catálogo pré-existente apenas com 'medium' (como gravado por versões anteriores), preservando outros papéis e source.
-    await capacity.registerModel(principal, {
+test('preparar não alarga catálogo misto: prévia aponta modelo, esforço e papéis; aplicar recusa sem gravar', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const fx = await catalogFixture('prepmixed');
+  try {
+    // Registros antigos com um só esforço, compartilhados com outros papéis.
+    await fx.capacity.registerModel(fx.principal, {
       provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium'], roles: ['manager', 'specialist'], source: 'custom://opus-legacy',
     });
-    await capacity.registerModel(principal, {
+    await fx.capacity.registerModel(fx.principal, {
       provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: ['programmer', 'specialist'], source: 'custom://sonnet-legacy',
     });
-    await capacity.registerModel(principal, {
+    await fx.capacity.registerModel(fx.principal, {
       provider: 'grok', model: 'grok-4.7', efforts: ['low'], roles: ['programmer'], source: 'custom://grok',
     });
+    await fx.addClaude();
+    const catalogBefore = await fx.catalogRows();
+    const countsBefore = await fx.counts();
 
-    const claudeAccount = randomUUID();
-    await capacity.addAccount(principal, project, {
-      id: claudeAccount, provider: 'claude', label: 'claude', resourceIdentity: `claude:${claudeAccount}`, mode: 'synthetic',
-      eligibility: 'documented_supported', eligibilitySource: 'synthetic://migcat', maxConcurrent: 4,
-    });
+    const preview = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: false});
+    assert.equal(preview.catalogAction, 'bloqueado');
+    assert.deepEqual(preview.catalog, [
+      {model: 'claude-opus-5-5', action: 'bloqueado', efforts: ['medium'], missing: ['high'], sharedRoles: ['manager']},
+      {model: 'claude-sonnet-5-5', action: 'bloqueado', efforts: ['medium'], missing: ['high'], sharedRoles: ['programmer']},
+    ]);
+    const text = formatDesignPrepare(preview);
+    assert.match(text, /claude-opus-5-5: bloqueado; falta high e o registro também serve manager/);
+    assert.match(text, /claude-sonnet-5-5: bloqueado; falta high e o registro também serve programmer/);
+    assert.match(text, /--aplicar não grava nada/);
+    assert.match(text, /- claude-opus-5-5: high \(papéis afetados: manager\)/);
 
-    // Prévia detecta atualização sem alterar o banco.
-    const preview = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: false});
-    assert.equal(preview.catalogAction, 'atualizar');
-    assert.match(formatDesignPrepare(preview), /receberia esforço high/);
-    const opusBefore = (await db.pool.query<{efforts: string[]; roles: string[]; source: string}>(
-      "SELECT efforts, roles, source FROM ac_model_catalog WHERE provider='claude' AND model='claude-opus-5-5'",
-    )).rows[0];
-    assert.deepEqual(opusBefore, {efforts: ['medium'], roles: ['manager', 'specialist'], source: 'custom://opus-legacy'});
-
-    // Sem admin de controle, recusa atualizar sem alterar o catálogo.
-    await db.pool.query('DELETE FROM ac_control_admins WHERE principal_id=$1', [principal]);
     await assert.rejects(
-      prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true}),
+      prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true}),
+      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CATALOG_SHARED_EFFORT',
+    );
+    assert.match(designCliFailureText(new Refusal('DESIGN_CATALOG_SHARED_EFFORT', 409)), /compartilhado.*nada foi gravado.*prévia/);
+    assert.deepEqual(await fx.catalogRows(), catalogBefore);
+    assert.deepEqual(await fx.counts(), countsBefore);
+
+    // Só um modelo misto incompleto já bloqueia; o outro, só de specialist, não é gravado sozinho.
+    await fx.db.pool.query("UPDATE ac_model_catalog SET roles=ARRAY['specialist']::text[] WHERE provider='claude' AND model='claude-sonnet-5-5'");
+    const partial = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: false});
+    assert.deepEqual(partial.catalog.map(item => [item.model, item.action]), [
+      ['claude-opus-5-5', 'bloqueado'],
+      ['claude-sonnet-5-5', 'atualizar'],
+    ]);
+    await assert.rejects(
+      prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true}),
+      (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CATALOG_SHARED_EFFORT',
+    );
+    const sonnet = (await fx.catalogRows()).find(row => row.model === 'claude-sonnet-5-5');
+    assert.deepEqual(sonnet?.efforts, ['medium']);
+    assert.deepEqual((await fx.counts()), countsBefore);
+
+    // Decisão explícita do administrador (fora da preparação): o registro misto passa a ter os dois esforços.
+    await fx.db.pool.query("UPDATE ac_model_catalog SET efforts=ARRAY['medium','high']::text[] WHERE provider='claude' AND model='claude-opus-5-5'");
+    const unblocked = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true});
+    assert.deepEqual(unblocked.catalog.map(item => [item.model, item.action]), [
+      ['claude-opus-5-5', 'presente'],
+      ['claude-sonnet-5-5', 'atualizar'],
+    ]);
+    const after = await fx.catalogRows();
+    assert.deepEqual(after.find(row => row.model === 'claude-opus-5-5'), {
+      provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium', 'high'], roles: ['manager', 'specialist'], source: 'custom://opus-legacy',
+    });
+    assert.deepEqual(after.find(row => row.provider === 'grok'), catalogBefore.find(row => row.provider === 'grok'));
+  } finally {
+    await fx.close();
+  }
+});
+
+test('preparar migra catálogo só de specialist e relata por modelo; prévia e aplicação idempotentes', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const fx = await catalogFixture('prepspec');
+  try {
+    // Opus antigo só com medium; Sonnet só com low (nenhum dos esforços novos).
+    await fx.capacity.registerModel(fx.principal, {
+      provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium'], roles: ['specialist'], source: 'custom://opus-legacy',
+    });
+    await fx.capacity.registerModel(fx.principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['low'], roles: ['specialist'], source: 'custom://sonnet-legacy',
+    });
+    await fx.addClaude();
+
+    const preview = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: false});
+    assert.deepEqual(preview.catalog, [
+      {model: 'claude-opus-5-5', action: 'atualizar', efforts: ['medium', 'high'], missing: ['high'], sharedRoles: []},
+      {model: 'claude-sonnet-5-5', action: 'atualizar', efforts: ['low', 'medium', 'high'], missing: ['medium', 'high'], sharedRoles: []},
+    ]);
+    const previewText = formatDesignPrepare(preview);
+    assert.match(previewText, /claude-opus-5-5: receberia high \(registro só de specialist\)/);
+    assert.match(previewText, /claude-sonnet-5-5: receberia medium, high \(registro só de specialist\)/);
+    assert.deepEqual((await fx.catalogRows()).map(row => row.efforts), [['medium'], ['low']]);
+
+    // Sem admin de controle, recusa sem alterar o catálogo.
+    await fx.db.pool.query('DELETE FROM ac_control_admins WHERE principal_id=$1', [fx.principal]);
+    await assert.rejects(
+      prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true}),
       (error: unknown) => error instanceof Refusal && error.code === 'CONTROL_ADMIN_REQUIRED',
     );
-    const opusStillBefore = (await db.pool.query<{efforts: string[]}>(
-      "SELECT efforts FROM ac_model_catalog WHERE provider='claude' AND model='claude-opus-5-5'",
-    )).rows[0];
-    assert.deepEqual(opusStillBefore?.efforts, ['medium']);
+    assert.deepEqual((await fx.catalogRows()).map(row => row.efforts), [['medium'], ['low']]);
+    await fx.db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [fx.principal]);
 
-    // Com admin de controle, aplica a migração preservando papéis, source e grok-4.7.
-    await db.pool.query('INSERT INTO ac_control_admins VALUES($1)', [principal]);
-    const applied = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
-    assert.equal(applied.catalogAction, 'atualizar');
-    assert.match(formatDesignPrepare(applied), /atualizado com esforço high/);
+    const applied = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true});
+    const appliedText = formatDesignPrepare(applied);
+    assert.match(appliedText, /claude-opus-5-5: recebeu high/);
+    assert.match(appliedText, /claude-sonnet-5-5: recebeu medium, high/);
+    assert.deepEqual(await fx.catalogRows(), [
+      {provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium', 'high'], roles: ['specialist'], source: 'custom://opus-legacy'},
+      {provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['low', 'medium', 'high'], roles: ['specialist'], source: 'custom://sonnet-legacy'},
+    ]);
+    assert.ok(applied.profiles.every(profile => profile.action === 'criar'));
 
-    const opusAfter = (await db.pool.query<{efforts: string[]; roles: string[]; source: string}>(
-      "SELECT efforts, roles, source FROM ac_model_catalog WHERE provider='claude' AND model='claude-opus-5-5'",
-    )).rows[0];
-    assert.deepEqual(opusAfter, {efforts: ['medium', 'high'], roles: ['manager', 'specialist'], source: 'custom://opus-legacy'});
-
-    const sonnetAfter = (await db.pool.query<{efforts: string[]; roles: string[]; source: string}>(
-      "SELECT efforts, roles, source FROM ac_model_catalog WHERE provider='claude' AND model='claude-sonnet-5-5'",
-    )).rows[0];
-    assert.deepEqual(sonnetAfter, {efforts: ['medium', 'high'], roles: ['programmer', 'specialist'], source: 'custom://sonnet-legacy'});
-
-    const grokAfter = (await db.pool.query<{efforts: string[]; roles: string[]; source: string}>(
-      "SELECT efforts, roles, source FROM ac_model_catalog WHERE provider='grok' AND model='grok-4.7'",
-    )).rows[0];
-    assert.deepEqual(grokAfter, {efforts: ['low'], roles: ['programmer'], source: 'custom://grok'});
-
-    const repeat = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
+    const repeatPreview = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: false});
+    assert.equal(repeatPreview.unchanged, true);
+    const repeat = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true});
     assert.equal(repeat.unchanged, true);
-    assert.equal(repeat.catalogAction, 'presente');
+    assert.deepEqual(repeat.catalog.map(item => item.action), ['presente', 'presente']);
   } finally {
-    await db.close();
-    await database.close();
+    await fx.close();
+  }
+});
+
+test('preparar com catálogo misto completo (instalação viva) funciona sem mexer no catálogo', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const fx = await catalogFixture('prepfull');
+  try {
+    await fx.capacity.registerModel(fx.principal, {
+      provider: 'claude', model: 'claude-opus-5-5', efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add',
+    });
+    await fx.capacity.registerModel(fx.principal, {
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add',
+    });
+    await fx.addClaude();
+    const before = await fx.catalogRows();
+    const applied = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true});
+    assert.equal(applied.catalogAction, 'presente');
+    assert.match(formatDesignPrepare(applied), /claude-opus-5-5: já tem low, medium, high; nada muda\./);
+    assert.equal(applied.revisionTo, 1);
+    assert.deepEqual(await fx.catalogRows(), before);
+    const repeat = await prepareDesignSpecialist({ledger: fx.db, owner: fx.principal, projectId: fx.project, apply: true});
+    assert.equal(repeat.unchanged, true);
+  } finally {
+    await fx.close();
   }
 });
 
@@ -393,5 +485,119 @@ test('preparar migra política antiga com Pro na frente e Opus medium em regular
   } finally {
     await db.close();
     await database.close();
+  }
+});
+
+test('preparar migra política antiga com outros provedores intercalados e vários papéis, achando a primária anterior pelo Opus medium', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+  const fx = await catalogFixture('prepinter');
+  try {
+    const {db, capacity, principal, project} = fx;
+    // Catálogo misto completo (como a instalação viva) e dois provedores não Claude que também servem specialist.
+    for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5']) {
+      await capacity.registerModel(principal, {provider: 'claude', model, efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add'});
+    }
+    await capacity.registerModel(principal, {provider: 'grok', model: 'grok-4.7', efforts: ['medium', 'high'], roles: ['specialist', 'programmer'], source: 'custom://grok'});
+    await capacity.registerModel(principal, {provider: 'gemini', model: 'gemini-4-hydrogen-high', efforts: ['high'], roles: ['specialist'], source: 'custom://gemini'});
+
+    // Pro tem UUID menor: sem a regra da primária anterior, cairia como primária.
+    const proAccount = `00000000-0000-4000-8000-${randomUUID().slice(24)}`;
+    const maxAccount = `ffffffff-ffff-4fff-8fff-${randomUUID().slice(24)}`;
+    const grokAccount = randomUUID();
+    const geminiAccount = randomUUID();
+    for (const [id, provider] of [[proAccount, 'claude'], [maxAccount, 'claude'], [grokAccount, 'grok'], [geminiAccount, 'gemini']] as const) {
+      await capacity.addAccount(principal, project, {
+        id, provider, label: `${provider}-${id.slice(0, 4)}`, resourceIdentity: `${provider}:${id}`, mode: 'synthetic',
+        eligibility: 'documented_supported', eligibilitySource: 'synthetic://prepinter', maxConcurrent: 4,
+      });
+    }
+    const profile = async (accountId: string, model: string, effort: 'medium' | 'high', role: (typeof roles)[number] = 'specialist') => {
+      const id = randomUUID();
+      await capacity.addProfile(principal, project, {id, accountId, model, effort, role});
+      return id;
+    };
+    const grokFirst = await profile(grokAccount, 'grok-4.7', 'high');
+    const proSonnet = await profile(proAccount, 'claude-sonnet-5-5', 'medium');
+    const geminiMiddle = await profile(geminiAccount, 'gemini-4-hydrogen-high', 'high');
+    const maxOpusMedium = await profile(maxAccount, 'claude-opus-5-5', 'medium');
+    const grokLast = await profile(grokAccount, 'grok-4.7', 'medium');
+    const proReviewer = await profile(proAccount, 'claude-sonnet-5-5', 'medium');
+    const grokEmergency = await profile(grokAccount, 'grok-4.7', 'medium');
+    const manager = await profile(maxAccount, 'claude-sonnet-5-5', 'high', 'manager');
+    const programmer = await profile(grokAccount, 'grok-4.7', 'high', 'programmer');
+
+    const rev1 = await capacity.publish(principal, project, 0, CapacityPolicy.parse({
+      schemaVersion: 1,
+      maxProgrammersPerContext: 2,
+      maxEvaluatorsPerContext: 3,
+      roles: {
+        manager: {regular: [manager], emergency: []},
+        programmer: {regular: [programmer], emergency: []},
+        specialist: {regular: [grokFirst, proSonnet, geminiMiddle, maxOpusMedium, grokLast], emergency: [grokEmergency, proReviewer]},
+      },
+      combo: 'intermediário',
+    }));
+    const catalogBefore = await fx.catalogRows();
+
+    const preview = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: false});
+    assert.equal(preview.primaryAccountId, maxAccount);
+    assert.equal(preview.revisionTo, null);
+    const previewMoved = preview.profiles.find(item => item.purpose === 'revisor-alto');
+    assert.deepEqual(previewMoved && {id: previewMoved.profileId, action: previewMoved.action}, {id: maxOpusMedium, action: 'mover'});
+    assert.match(formatDesignPrepare(preview), new RegExp(`revisor-alto: claude-opus-5-5 medium conta ${maxAccount} perfil ${maxOpusMedium} \\(mover`));
+    assert.equal((await fx.counts()).revisions, 1);
+
+    const applied = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
+    assert.equal(applied.primaryAccountId, maxAccount);
+    assert.equal(applied.revisionTo, rev1 + 1);
+    // A prévia mostra a mesma forma da cadeia gravada; só os perfis novos trocam o marcador pelo id.
+    const novos = new Map(preview.profiles.filter(item => item.profileId === null).map((item, index) => [
+      `novo:${item.purpose}:${item.accountId}`, applied.profiles.filter(other => other.action === 'criar')[index]?.profileId,
+    ]));
+    assert.deepEqual(applied.chain.regular, preview.chain.regular.map(id => novos.get(id) ?? id));
+    assert.deepEqual(await fx.catalogRows(), catalogBefore);
+
+    const snapshot = CapacityPolicy.parse((await db.pool.query(
+      'SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 ORDER BY revision DESC LIMIT 1', [project],
+    )).rows[0].snapshot);
+    // Outros papéis e o resto da política ficam iguais.
+    assert.deepEqual(snapshot.roles.manager, {regular: [manager], emergency: []});
+    assert.deepEqual(snapshot.roles.programmer, {regular: [programmer], emergency: []});
+    assert.equal(snapshot.combo, 'intermediário');
+
+    const {regular, emergency} = snapshot.roles.specialist!;
+    // Provedores não Claude mantêm os lugares: primeiro, terceiro e último.
+    assert.equal(regular[0], grokFirst);
+    assert.equal(regular[2], geminiMiddle);
+    assert.equal(regular.at(-1), grokLast);
+    const rows = new Map((await db.pool.query<{id: string; account_id: string; model: string; effort: string}>(
+      'SELECT id::text AS id, account_id::text AS account_id, model, effort FROM ac_profiles WHERE id=ANY($1::uuid[])',
+      [[...regular, ...emergency]],
+    )).rows.map(row => [row.id, row]));
+    const claudeRegular = regular.filter(id => !([grokFirst, geminiMiddle, grokLast] as string[]).includes(id)).map(id => rows.get(id)!);
+    const firstPro = claudeRegular.findIndex(row => row.account_id === proAccount);
+    assert.ok(firstPro > 0);
+    assert.ok(claudeRegular.slice(0, firstPro).every(row => row.account_id === maxAccount));
+    assert.ok(claudeRegular.slice(firstPro).every(row => row.account_id === proAccount));
+    assert.ok(claudeRegular.some(row => row.id === proSonnet));
+    assert.deepEqual(
+      claudeRegular.filter(row => row.model === 'claude-opus-5-5').map(row => [row.account_id, row.effort]),
+      [[maxAccount, 'high']],
+    );
+    // Opus medium antigo migra para emergency sem perder os perfis que já estavam lá.
+    assert.equal(regular.includes(maxOpusMedium), false);
+    assert.deepEqual(emergency.slice(0, 2), [grokEmergency, proReviewer]);
+    assert.ok(emergency.includes(maxOpusMedium));
+    assert.equal(new Set([...regular, ...emergency]).size, regular.length + emergency.length);
+    const appliedMoved = applied.profiles.find(item => item.purpose === 'revisor-alto');
+    assert.equal(appliedMoved?.action, 'mover');
+
+    const repeatPreview = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: false});
+    assert.equal(repeatPreview.unchanged, true);
+    assert.deepEqual(repeatPreview.chain, snapshot.roles.specialist);
+    const repeat = await prepareDesignSpecialist({ledger: db, owner: principal, projectId: project, apply: true});
+    assert.equal(repeat.unchanged, true);
+    assert.equal(repeat.revisionTo, rev1 + 1);
+  } finally {
+    await fx.close();
   }
 });

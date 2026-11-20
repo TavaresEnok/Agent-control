@@ -352,7 +352,7 @@ test('preparar --aplicar atribui a revisão nova ao contexto principal e ao cont
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
     await capacity.registerModel(principal, {
-      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium', 'high'], roles: [...roles], source: 'personal://account-add',
     });
     const claude = randomUUID();
     await capacity.addAccount(principal, projectId, {
