@@ -1,3 +1,4 @@
+import {withInstallationImageLock} from './personal-image-lock.ts';
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {spawn} from 'node:child_process';
 import {createHash, randomBytes, randomUUID} from 'node:crypto';
@@ -1871,6 +1872,7 @@ async function beginModuleRunTx(input: {
   runId: string;
   repoPath: string;
   preparedDir: string;
+  image: string | undefined;
 }): Promise<string> {
   const intentId = randomUUID();
   await input.ledger.tx(async c => {
@@ -1926,9 +1928,9 @@ async function beginModuleRunTx(input: {
       ],
     );
     await c.query(
-      `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module, report_prepared_dir)
-       VALUES ($1,$2,$3,$4,$5,$6,'running','pending',$7,$8)`,
-      [input.runId, input.projectId, input.authority.contextId, intentId, input.principal, input.commit, input.module, input.preparedDir],
+      `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module, report_prepared_dir, collector_image)
+       VALUES ($1,$2,$3,$4,$5,$6,'running','pending',$7,$8,$9)`,
+      [input.runId, input.projectId, input.authority.contextId, intentId, input.principal, input.commit, input.module, input.preparedDir, input.image ?? null],
     );
   });
   return intentId;
@@ -1972,22 +1974,26 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
   const maxStdoutBytes = input.maxStdoutBytes ?? MAX_COLLECTOR_STDOUT_BYTES;
   const needImage = input.collectorOutput === undefined && input.runCollector === undefined;
-  const image = input.image !== undefined
-    ? assertPinnedModuleImage(input.image)
-    : needImage
-      ? await readPinnedModuleImage(input.module, input.rootDir)
-      : undefined;
+  const {image,intentId}=await withInstallationImageLock(input.dataDirectory,true,async()=>{
+    const image = input.image !== undefined
+      ? assertPinnedModuleImage(input.image)
+      : needImage
+        ? await readPinnedModuleImage(input.module, input.rootDir)
+        : undefined;
 
-  const intentId = await beginModuleRunTx({
-    ledger: input.ledger,
-    principal: input.principal,
-    authority: input.authority,
-    projectId: input.projectId,
-    module: input.module,
-    commit: input.commit,
-    runId,
-    repoPath: input.repoPath,
-    preparedDir,
+    const intentId = await beginModuleRunTx({
+      ledger: input.ledger,
+      principal: input.principal,
+      authority: input.authority,
+      projectId: input.projectId,
+      module: input.module,
+      commit: input.commit,
+      runId,
+      repoPath: input.repoPath,
+      preparedDir,
+      image,
+    });
+    return {image,intentId};
   });
 
   let snapshot: string | undefined;

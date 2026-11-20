@@ -1,3 +1,4 @@
+import {withInstallationImageLock} from './personal-image-lock.ts';
 import {execFile,spawn} from 'node:child_process';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
@@ -485,12 +486,14 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
      continue;
     }
     if(!apply){done('image');lines.push(`${label}: elegível (sem contêiner, sem digest fixado, sem exame que a cite).`);continue;}
-    const again=await proveImage(entry,await protectedDigests(config,deps),docker,now());
-    if(!again.ok){kept('image',label,'mudou durante a retenção: '+again.reason);continue;}
-    // By id, never forced: Docker refuses an image that a container or a child image still needs.
-    const latest=await protectedDigests(config,deps);
-    if(again.facts.digests.some(digest=>latest.has(digest))){kept('image',label,'digest fixado ou referenciado por exame');continue;}
-    if((await docker(['image','rm','--no-prune',entry.imageId])).code!==0){kept('image',label,'o Docker recusou a remoção');continue;}
+    const removed=await withInstallationImageLock(config.dataDirectory,false,async()=>{
+     const again=await proveImage(entry,await protectedDigests(config,deps),docker,now());
+     if(!again.ok)return 'mudou durante a retenção: '+again.reason;
+     const latest=await protectedDigests(config,deps);
+     if(again.facts.digests.some(digest=>latest.has(digest)))return 'digest fixado ou referenciado por exame';
+     return (await docker(['image','rm','--no-prune',entry.imageId])).code===0?undefined:'o Docker recusou a remoção';
+    });
+    if(removed){kept('image',label,removed);continue;}
     await forget('image',entry.id,'removed');
     done('image');lines.push(`${label}: removida.`);
    }catch{kept('image',label,'falha ao verificar; repita depois');}
