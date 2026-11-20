@@ -5,28 +5,36 @@ import {Authority,Id,digest,Refusal} from './contracts.ts';
 
 // Each value is cumulative for one attempt, as reported by its adapter.
 // Cache and reasoning may overlap input/output; never add them into a total.
-const Counters=z.object({input:z.number().int().nonnegative().safe().nullable(),output:z.number().int().nonnegative().safe().nullable(),
+export const UsageCounters=z.object({input:z.number().int().nonnegative().safe().nullable(),output:z.number().int().nonnegative().safe().nullable(),
  cache:z.number().int().nonnegative().safe().nullable(),reasoning:z.number().int().nonnegative().safe().nullable()}).strict();
-const Observation=z.object({grantId:Id,eventId:Id,seq:z.number().int().positive().safe(),counters:Counters}).strict();
+const Observation=z.object({grantId:Id,eventId:Id,seq:z.number().int().positive().safe(),counters:UsageCounters}).strict();
 export class Usage {
  constructor(readonly ledger:Ledger){}
  async record(principal:string,authority:Authority,raw:z.input<typeof Observation>){
+  return this.ledger.tx(c=>this.recordInTransaction(c,principal,authority,raw));
+ }
+ // Native reconciliation may be performed by a successor. The locked job binds
+ // the observation to its original grant; the current manager is still fenced.
+ async recordInTransaction(c:import('pg').PoolClient,principal:string,authority:Authority,raw:z.input<typeof Observation>,nativeJobId?:string){
   const value=Observation.parse(raw),hash=digest(value);
-  return this.ledger.tx(async c=>{
-   await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
-   const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 FOR UPDATE',[value.grantId,authority.contextId])).rows[0];
-   if(!grant||grant.resource_kind!=='model'||Number(grant.manager_epoch)!==authority.epoch)throw new Refusal('USAGE_GRANT_FORBIDDEN',403);
-   const prior=(await c.query('SELECT digest,seq FROM ac_usage_observations WHERE grant_id=$1 AND event_id=$2',[value.grantId,value.eventId])).rows[0];
-   if(prior){if(prior.digest!==hash)throw new Refusal('USAGE_EVENT_CONFLICT');return {duplicate:true};}
-   const last=(await c.query('SELECT seq,counters FROM ac_usage_observations WHERE grant_id=$1 ORDER BY seq DESC LIMIT 1',[value.grantId])).rows[0];
-   if(last){
-    if(value.seq<=Number(last.seq))throw new Refusal('USAGE_SEQUENCE_STALE');
-    for(const k of ['input','output','cache','reasoning'] as const){const old=last.counters[k],next=value.counters[k];
-     if(old!==null&&(next===null||next<old))throw new Refusal('USAGE_COUNTER_REGRESSION');}
-   }
-   await c.query('INSERT INTO ac_usage_observations(grant_id,event_id,seq,counters,digest) VALUES($1,$2,$3,$4,$5)',[value.grantId,value.eventId,value.seq,value.counters,hash]);
-   return {duplicate:false};
-  });
+  await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
+  const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 FOR UPDATE',[value.grantId,authority.contextId])).rows[0];
+  let epochAllowed=grant&&Number(grant.manager_epoch)===authority.epoch;
+  if(!epochAllowed&&nativeJobId===value.eventId&&grant&&Number(grant.manager_epoch)<authority.epoch){
+   const job=(await c.query("SELECT id FROM ac_native_execution_jobs WHERE id=$1 AND grant_id=$2 AND context_id=$3 AND manager_epoch=$4 AND state IN ('running','uncertain') FOR UPDATE",[nativeJobId,value.grantId,authority.contextId,grant.manager_epoch])).rows[0];
+   epochAllowed=Boolean(job);
+  }
+  if(!grant||grant.resource_kind!=='model'||!epochAllowed)throw new Refusal('USAGE_GRANT_FORBIDDEN',403);
+  const prior=(await c.query('SELECT digest,seq FROM ac_usage_observations WHERE grant_id=$1 AND event_id=$2',[value.grantId,value.eventId])).rows[0];
+  if(prior){if(prior.digest!==hash)throw new Refusal('USAGE_EVENT_CONFLICT');return {duplicate:true};}
+  const last=(await c.query('SELECT seq,counters FROM ac_usage_observations WHERE grant_id=$1 ORDER BY seq DESC LIMIT 1',[value.grantId])).rows[0];
+  if(last){
+   if(value.seq<=Number(last.seq))throw new Refusal('USAGE_SEQUENCE_STALE');
+   for(const k of ['input','output','cache','reasoning'] as const){const old=last.counters[k],next=value.counters[k];
+    if(old!==null&&(next===null||next<old))throw new Refusal('USAGE_COUNTER_REGRESSION');}
+  }
+  await c.query('INSERT INTO ac_usage_observations(grant_id,event_id,seq,counters,digest) VALUES($1,$2,$3,$4,$5)',[value.grantId,value.eventId,value.seq,value.counters,hash]);
+  return {duplicate:false};
  }
  async report(principal:string,projectId:string,contextId:string,query:UsageReportQuery){
   return new UsageReports(this.ledger).report(principal,projectId,contextId,query);

@@ -41,7 +41,8 @@
     "personal:prontidao": "node scripts/personal-prontidao.mjs",
     "personal:desempenho": "node scripts/personal-desempenho.mjs",
     "personal:documentacao": "node scripts/personal-documentacao.mjs",
-    "personal:conformidade": "node scripts/personal-conformidade.mjs"
+    "personal:conformidade": "node scripts/personal-conformidade.mjs",
+    "personal:tokens": "node --import tsx src/personal-tokens-cli.ts"
   },
   "dependencies": {
     "@hono/node-server": "1.19.9",

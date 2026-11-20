@@ -1,3 +1,4 @@
+import type {UsageCountersValue} from './native-usage.ts';
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
 import {mkdtemp, open} from 'node:fs/promises';
@@ -160,6 +161,20 @@ export function readModuleExamClaudeOutput(stdout: string, model: string) {
     succeeded: safe && initialized && output !== undefined};
 }
 
+/** Only result.usage is cumulative across Claude's calls. Missing fields stay unknown. */
+export function readModuleExamClaudeUsage(stdout:string):UsageCountersValue|null {
+ let result:UsageCountersValue|null=null;
+ const count=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>=0?v:null;
+ for(const line of stdout.split('\n')){
+  try{
+   const event=JSON.parse(line);if(event?.type!=='result'||!event.usage||typeof event.usage!=='object')continue;
+   const u=event.usage,read=count(u.cache_read_input_tokens),write=count(u.cache_creation_input_tokens);
+   result={input:count(u.input_tokens),output:count(u.output_tokens),cache:read!==null&&write!==null&&Number.isSafeInteger(read+write)?read+write:null,reasoning:null};
+  }catch{/* malformed output is rejected by the normal protocol validation */}
+ }
+ return result;
+}
+
 async function claudeText(input: Input, signal: AbortSignal, cwd: string) {
   const child = spawn('/usr/local/bin/claude', moduleExamClaudeArgs(input), {
     cwd, signal, env: {
@@ -182,7 +197,7 @@ async function claudeText(input: Input, signal: AbortSignal, cwd: string) {
     child.once('error', () => resolve(null));
   });
   const result = readModuleExamClaudeOutput(stdout, input.model);
-  return {...result, diagnostics: [...result.diagnostics, stderr],
+  return {...result, counters:readModuleExamClaudeUsage(stdout), diagnostics: [...result.diagnostics, stderr],
     succeeded: result.succeeded && status === 0 && stdout.length + stderr.length <= maxOutput};
 }
 
@@ -217,6 +232,7 @@ export async function runModuleExamWorker(input: Input) {
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
   let output = '', failureCode: string | null = null, usageWindows: UsageWindowsObservation | null = null;
+  let usageCounters:UsageCountersValue|null=null;
   let closeProxy: (() => void) | undefined;
   let closeMonitor: (() => void) | undefined;
   try {
@@ -239,6 +255,7 @@ export async function runModuleExamWorker(input: Input) {
       if (abort.signal.aborted) throw new Refusal('MODULE_EXAM_INTERRUPTED');
       const response = await claudeText(input, abort.signal, '/planning');
       ({output, failureCode, usageWindows} = resolveModuleExamClaudeResult(response, [input.oauthAccessToken]));
+      usageCounters=response.counters;
     }
   } catch (error) {
     failureCode = abort.signal.aborted ? 'MODULE_EXAM_INTERRUPTED'
@@ -254,7 +271,7 @@ export async function runModuleExamWorker(input: Input) {
   const result = await open('/output/execution-result.json', constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   try {
     await result.writeFile(JSON.stringify({schemaVersion: 1, jobId: input.jobId, output, normalizedTokensUsed: null,
-      usageWindows, nativeSessionId: null, failureCode, exitCode}));
+      usageCounters, usageWindows, nativeSessionId: null, failureCode, exitCode}));
     await result.sync();
   } finally { await result.close(); }
   process.exit(exitCode);

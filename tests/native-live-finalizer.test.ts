@@ -40,7 +40,7 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
   await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'programmer','running',$14,$15,$16)`,[input.jobId,grant,intent.id,context,authority.epoch,input.sessionId,account,profile,digest({fixture:true}),supervisor.executorDigest,fingerprint,digest(input),base,worker,tools,'2'.repeat(64)]);
   const root=join(spool,input.jobId),work=join(root,'work');await mkdir(root,{mode:0o700});await mkdir(join(root,'output'),{mode:0o700});await new GitArtifacts(repo).snapshot(base,base,work);
-  await writeFile(join(root,'request.json'),JSON.stringify(input),{mode:0o600});await writeFile(join(root,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:input.jobId,output:'fixture',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
+  await writeFile(join(root,'request.json'),JSON.stringify(input),{mode:0o600});await writeFile(join(root,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:input.jobId,output:'fixture',normalizedTokensUsed:117,usageCounters:{input:100,output:17,cache:12,reasoning:3},usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
   const labels={'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':digest(input)},finished=new Date().toISOString();
   const physical=(id:string)=>({Id:id,Image:image,Config:{Labels:labels},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:finished}});
   Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>name===worker||name.startsWith('ac-native-worker-')?physical(worker):physical(tools),stop:async()=>{}}});
@@ -124,6 +124,8 @@ for(const namespace of ['same','different','legacy','otherboot','controllercrash
    const result=await supervisor.reconcileCancellation(principal,authority,input.jobId);
    if(result.state==='reconciled'){settled=true;break;}await new Promise(r=>setTimeout(r,20));
   }
+  const observed=(await db.pool.query('SELECT counters FROM ac_usage_observations WHERE grant_id=$1',[grant])).rows;
+  assert.deepEqual(observed.map(row=>row.counters),[{input:100,output:17,cache:12,reasoning:3}]);
   assert(settled);if(namespace!=='controllercrash'&&namespace!=='rubycrash'&&namespace!=='rubywriting')await closed;else orphanPid=undefined;
   const final=(await db.pool.query('SELECT j.state,j.receipt,g.state grant_state,o.receipt operation_receipt,f.state finalizer_state,f.receipt finalizer_receipt FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_operations o ON o.id=j.id JOIN ac_native_artifact_finalizations f ON f.job_id=j.id WHERE j.id=$1',[input.jobId])).rows[0];
   assert.equal(final.state,'failed');assert.equal(final.grant_state,'released');assert.equal(final.operation_receipt.cancellation,true);

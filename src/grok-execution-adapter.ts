@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import type {UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
+import type {UsageCountersValue} from './native-usage.ts';
 import {Effort,cliEffort} from './effort.ts';
 import {extractJsonObject} from './codex-personal.ts';
 
@@ -17,7 +18,7 @@ export function grokProgrammerArgs(model:string,effort:string,task:string,role?:
  return args;
 }
 export class GrokExecutionFailure extends Refusal{
- constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null){super(code);}
+ constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null,readonly counters:UsageCountersValue|null=null){super(code);}
 }
 /** Runs Grok for any role. The isolated worker invokes the Grok CLI already authenticated in the account home.
  * An evaluator (reviewer, QA) is asked for one JSON object and only that object is returned. */
@@ -39,5 +40,5 @@ export async function runGrokProgrammer(raw:unknown,signal?:AbortSignal){
  let output=stdout.slice(0,256*1024);
  // An unreadable verdict is returned as is: the worker asks once more, and verification rejects it if it stays unreadable.
  if(evaluator){const parsed=extractJsonObject(output);if(parsed!==undefined)output=JSON.stringify(parsed);}
- return {output,tokensUsed:null,usageWindows:null,nativeSessionId:null};
+ return {output,tokensUsed:null,counters:null,usageWindows:null,nativeSessionId:null};
 }
