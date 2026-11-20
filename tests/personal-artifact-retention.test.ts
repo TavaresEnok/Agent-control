@@ -496,3 +496,58 @@ test('the default process check sees a real process whose working directory is i
   assert.equal(existsSync(path),false);
  }finally{child?.kill();await cleanup(l);}
 });
+
+test('preserves a different worktree recreated on the registered branch and path',async()=>{
+ const l=await lab();
+ try{
+  const worker=makeWorktree(l,'recreated');
+  await register(l,worker);
+  git(l.repo,'worktree','remove',worker.path);
+  git(l.repo,'worktree','add',worker.path,worker.branch);
+  assert.match((await run(l,true)).join('\n'),/identidade do worktree mudou/);
+  assert.ok(existsSync(worker.path));
+ }finally{await cleanup(l);}
+});
+
+test('preserves both directories if the temporary path changes during the final Docker check',async()=>{
+ const l=await lab();
+ try{
+  const dir=makeTemp(l,'ac-swap-final');
+  await registerTemp(l,dir);
+  await closeRound(l.config,{projectId:l.projectId,roundId:'round-1'},{...l.deps,now:Date.now});
+  l.clock.now=Date.now()+25*HOUR;
+  const docker=l.deps.docker!;
+  let checks=0;
+  l.deps.docker=async args=>{
+   if(args[0]==='container'&&args[1]==='ls'&&++checks===2){
+    await rename(dir,dir+'.original');
+    makeTemp(l,'ac-swap-final');
+   }
+   return docker(args);
+  };
+  await run(l,true);
+  assert.equal(checks,2);
+  assert.ok(existsSync(join(dir,'data.bin')));
+  assert.ok(existsSync(join(dir+'.original','data.bin')));
+ }finally{await cleanup(l);}
+});
+
+test('concurrent candidate registrations persist and a digest selected during inspection is kept',async()=>{
+ const l=await lab();
+ try{
+  const ids=['a','b','c','d'].map(image);
+  for(const id of ids)l.docker.images.set(id,{repoDigests:[]});
+  await Promise.all(ids.map(imageId=>registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId},{...l.deps,now:Date.now})));
+  const reg=JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8'));
+  assert.equal(reg.images.length,4);
+  const docker=l.deps.docker!;
+  let steps=0;
+  l.deps.docker=async args=>{
+   if(args[0]==='container'&&args.includes('ancestor='+ids[0])&&++steps===2)l.runImages=[ids[0]!];
+   return docker(args);
+  };
+  await run(l,true);
+  assert.equal(steps,2);
+  assert.ok(l.docker.images.has(ids[0]!));
+ }finally{await cleanup(l);}
+});
