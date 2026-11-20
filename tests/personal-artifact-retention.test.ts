@@ -108,6 +108,20 @@ test('an integrated, clean, idle registered worktree is proposed in the preview 
  }finally{await cleanup(l);}
 });
 
+test('preserves tracked edits hidden by either index flag',async()=>{
+ const l=await lab();
+ try{
+  for(const [name,flag] of [['assumed','--assume-unchanged'],['skipped','--skip-worktree']]){
+   const w=makeWorktree(l,name);
+   await register(l,w);
+   git(w.path,'update-index',flag,name+'.txt');
+   writeFileSync(join(w.path,name+'.txt'),'local change');
+   assert.match((await run(l,true)).join('\n'),/índice contém arquivos ocultos/);
+   assert.equal(await readFile(join(w.path,name+'.txt'),'utf8'),'local change');
+  }
+ }finally{await cleanup(l);}
+});
+
 test('the preview never changes the registry, git or the disk',async()=>{
  const l=await lab();
  try{

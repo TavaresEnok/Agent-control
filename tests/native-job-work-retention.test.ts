@@ -96,6 +96,9 @@ test('repository proofs: a commit must exist, and an artifact must hang from a r
   execFileSync('git',['clone','-q','--no-local',repo,work]);
   const inWork=(...args:string[])=>execFileSync('git',['-c','user.name=F','-c','user.email=f@invalid','-C',work,...args],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();
   assert.equal(await workHoldsNoUnregisteredChange(repo,work,tree),true);
+  inWork('rm','--cached','-q','a.txt');
+  assert.equal(await workHoldsNoUnregisteredChange(repo,work,tree),false,'staged deletion is preserved even with an unchanged working file');
+  inWork('reset','-q','HEAD','--','a.txt');
   assert.equal(await workHoldsNoUnregisteredChange(repo,work,'e'.repeat(40)),false);
   await writeFile(join(work,'a.txt'),'changed');
   assert.equal(await workHoldsNoUnregisteredChange(repo,work,tree),false);

@@ -1,6 +1,6 @@
 import {execFile, spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {lstat, mkdtemp, open, readFile, readdir, rename, rm, rmdir, unlink, writeFile, type FileHandle} from 'node:fs/promises';
+import {copyFile, lstat, mkdtemp, open, readFile, readdir, rename, rm, rmdir, unlink, writeFile, type FileHandle} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -269,6 +269,12 @@ export async function workHoldsNoUnregisteredChange(repository:string,work:strin
     for(const dir of [trusted,scan])if((await git('',['init','--bare','-q',dir],{},signal)).code!==0)return false;
     await writeFile(join(trusted,'objects','info','alternates'),repositoryObjects+'\n',{mode:0o600});
     await writeFile(join(scan,'objects','info','alternates'),join(work,'.git','objects')+'\n',{mode:0o600});
+    const realIndex=join(work,'.git','index');
+    if(!(await lstat(realIndex).catch(()=>undefined))?.isFile())return false;
+    const copiedIndex=join(area,'original-index');
+    await copyFile(realIndex,copiedIndex);
+    const staged=await git('',['write-tree'],{GIT_DIR:scan,GIT_INDEX_FILE:copiedIndex},signal);
+    if(staged.code!==0||staged.stdout.trim()!==tree)return false;
     const inTree={GIT_DIR:trusted,GIT_WORK_TREE:work,GIT_INDEX_FILE:join(area,'index')};
     if((await git('',['read-tree',tree],inTree,signal)).code!==0)return false;
     await git('',['update-index','-q','--refresh'],inTree,signal);

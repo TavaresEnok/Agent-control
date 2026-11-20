@@ -241,7 +241,10 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
  if(!gitDir||!isAbsolute(gitDir))return no('git dir ilegível');
  if(await worktreeIdentity(entry.path,gitDir)!==entry.identity)return no('identidade do worktree mudou');
  for(const name of inProgress)if(await lstat(join(gitDir,name)).then(()=>true,()=>false))return no('operação do git em andamento');
- const status=await deps.git(entry.path,['status','--porcelain=v1','-z','--untracked-files=all','--ignored=matching']);
+ // Git status and worktree remove can both overlook files hidden by index flags.
+ const index=await deps.git(entry.path,['ls-files','-v','-z']);
+ if(index.code!==0||index.stdout.split('\0').some(line=>line&&!line.startsWith('H ')))return no('índice contém arquivos ocultos ou não pôde ser verificado');
+ const status=await deps.git(entry.path,['status','--porcelain=v1','-z','--untracked-files=all','--ignored=matching','--ignore-submodules=none']);
  if(status.code!==0)return no('não foi possível ler o estado do worktree');
  for(const line of status.stdout.split('\0')){
   if(!line)continue;

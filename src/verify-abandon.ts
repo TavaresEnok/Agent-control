@@ -1,6 +1,7 @@
 import {constants} from 'node:fs';
 import {lstat, open, rm} from 'node:fs/promises';
 import {join, resolve, sep} from 'node:path';
+import {endRound} from './personal-artifact-hooks.ts';
 
 const Uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -73,6 +74,7 @@ export async function failAbandonedVerifyRuns(ledger: VerifyRunLedger, dataDirec
     const id = typeof row.id === 'string' ? row.id : '';
     const projectId = typeof row.project_id === 'string' ? row.project_id : '';
     await clearProgress(dataDirectory, projectId, id);
+    await endRound({dataDirectory,projectId,roundId:id});
   }
 }
 
