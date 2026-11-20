@@ -1,3 +1,4 @@
+import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {examineWorkTree,type WorkIdentity} from './native-work-retention.ts';
 import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
 import {DesignPurpose} from './design-types.ts';
@@ -261,6 +262,7 @@ export class NativeExecutionSupervisor{
  async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(prior){await this.validateReplay(principal,authority,input,prior);return this.reconcile(principal,authority,input);}
+  await assertDiskSpaceForLaunch(this.config.hostRoot);
   if(!this.active)throw new Refusal('NATIVE_EXECUTOR_RETIRED');
   const checkAbort=()=>{if(signal?.aborted)throw new Refusal('EXAM_INTERRUPTED');};
   checkAbort();

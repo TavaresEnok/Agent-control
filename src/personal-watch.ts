@@ -1,6 +1,8 @@
+import {DISK_BLOCK_PERCENT,diskUsedPercent} from './personal-disk.ts';
+import {runPersonalMaintenance} from './personal-maintenance.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {chmod, readFile, rename, statfs, writeFile} from 'node:fs/promises';
+import {chmod, readFile, rename, writeFile} from 'node:fs/promises';
 import pg from 'pg';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -18,6 +20,7 @@ export const imagesRebuiltNotice='Imagens do Agent Control reconstruídas.';
 
 type WatchState={consecutiveFailures:number;downNotified:boolean;lastImageRebuildAt:string|null;sent:Record<string,string>};
 export type PersonalWatchDeps={
+ retention?:(file:string)=>Promise<unknown>;
  now?:()=>Date;
  probe?:(url:string)=>Promise<boolean>;
  notify?:(dataDirectory:string,body:string)=>Promise<void>;
@@ -134,12 +137,6 @@ async function defaultRecentLog(unit:string,minutes:number){
  });
 }
 
-async function defaultDiskUsedPercent(){
- const info=await statfs('/');
- const total=info.blocks*info.bsize,free=info.bavail*info.bsize;
- return total>0?100*(total-free)/total:0;
-}
-
 async function defaultLogins(config:Installation,installationFile:string,now:Date){
  const accountRoot=personalAccountRoot(config);
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
@@ -188,6 +185,8 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   catch{state.downNotified=healthNotice===gatewayUpNotice;healthNotice=null;/* not sent: the next check tries again, and the later checks still run */}
  }
  await writeState(statePath,state);
+ let usedPercent:number|undefined;
+ try{usedPercent=await (deps.diskUsedPercent?.()??diskUsedPercent(config.dataDirectory));}catch{/* health checks can continue while a volume is unavailable */}
  const wanted=(deps.images??personalWatchImages)(config).filter(image=>imageId.test(image));
  let imageStatus:'ok'|'skipped'|'rebuilt'|'failed'='ok';
  if(wanted.length>0){
@@ -198,7 +197,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
    if(!present)missing=true;
   }
   if(!missing)imageStatus='ok';
-  else if(!due(state.lastImageRebuildAt,now))imageStatus='skipped';
+  else if(usedPercent===undefined||usedPercent>=DISK_BLOCK_PERCENT||!due(state.lastImageRebuildAt,now))imageStatus='skipped';
   else{
    state.lastImageRebuildAt=now.toISOString();
    await writeState(statePath,state);
@@ -213,7 +212,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  // Repeated errors, a full disk and logins about to expire. Each notice repeats at most at its own pace.
  const health:HealthNotice[]=[];
  try{health.push(...repeatedErrorNotices(await (deps.recentLog??defaultRecentLog)(`agent-control-gateway-${personalServiceName(installationFile)}`,ERROR_WINDOW_MINUTES)));}catch{/* no log, no notice */}
- try{const disk=diskNotice(await (deps.diskUsedPercent??defaultDiskUsedPercent)());if(disk)health.push(disk);}catch{/* no disk figure */}
+ if(usedPercent!==undefined){const disk=diskNotice(usedPercent);if(disk)health.push(disk);}
  try{health.push(...await (deps.logins??defaultLogins)(config,installationFile,now));}catch{/* database or files unavailable */}
  const planned=dueNotices(health,state.sent,now);
  state.sent=planned.sent;
@@ -223,7 +222,12 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
   catch{/* not recorded, so the next check tries again */}
  }
  await writeState(statePath,state);
+ let retentionFailed=false;
+ try {
+  if(deps.retention)await deps.retention(installationFile);
+  else await runPersonalMaintenance([installationFile,'--retencao-automatica','--aplicar']);
+ } catch {retentionFailed=true;}
  const tags=[healthNotice===gatewayDownNotice?'down':'',healthNotice===gatewayUpNotice?'up':'',imageStatus==='rebuilt'?'images':'',...delivered.map(item=>item.key.split(':')[0]!)].filter(Boolean);
  const notice=tags.length?` notice=${tags.join('+')}`:'';
- return `watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${notice}`;
+ return `watch gateway=${up?'up':'down'} failures=${state.consecutiveFailures} images=${imageStatus}${retentionFailed?' retention=failed':''}${notice}`;
 }

@@ -1,3 +1,4 @@
+import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {execFile, spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {chmod, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile} from 'node:fs/promises';
@@ -586,6 +587,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
   const startedMs = Date.now();
   const plan = input.url !== undefined ? dynamicScanPlan(input.url) : undefined;
   const ready = requireReady(input);
+  await assertDiskSpaceForLaunch(ready.dataDirectory);
   await assertVerificationAvailable(ready);
   const id = randomUUID();
   const networkRunner = input.networkRunner ?? defaultNetworkRunner;

@@ -1,3 +1,4 @@
+import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {constants, existsSync} from 'node:fs';
 import {mkdtemp, open, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -117,6 +118,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     throw new Refusal('DESIGN_MODULE_INVALID', 400);
   }
   const target = assertDesignTarget(input.targetUrl);
+  await assertDiskSpaceForLaunch(input.dataDirectory);
   const rawDesignConfig = await readRepoDesignConfig(input.repo, input.files);
   const projectConfig = parseDesignProjectConfig(rawDesignConfig);
   const hasProjectConfig = rawDesignConfig !== undefined && rawDesignConfig.trim().length > 0;
