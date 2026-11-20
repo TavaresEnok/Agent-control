@@ -487,3 +487,21 @@ test('configured resource attachment maps explicit database identity and keeps n
 
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
+
+test('weekly maintenance preserves retired images and records when installations may share Docker',async()=>{
+ const env=await layout();
+ try{
+  const initial=configured(env);
+  assert.ok(initial.nativeBootstrap&&initial.nativeBootstrap.state==='configured');
+  const boot=initial.nativeBootstrap;
+  const config={...initial,activation:'personal',nativeBootstrap:{...boot,planning:{...boot.planning,retiredImageIds:['sha256:'+hash('retired')]}}};
+  const file=join(env.data,'installation.json');
+  await writeFile(file,JSON.stringify(config),{mode:0o600});
+  const before=await readFile(file,'utf8'),calls:string[][]=[];
+  const {runPersonalMaintenance}=await import('../src/personal-maintenance.ts');
+  const lines=await runPersonalMaintenance([file],{docker:async args=>{calls.push(args);return 0;},refreshDatabases:async()=>{}});
+  assert.match(lines.join('\n'),/Imagens aposentadas e seus registros preservados/);
+  assert.equal(await readFile(file,'utf8'),before);
+  assert.equal(calls.some(args=>args[0]==='image'&&args[1]==='rm'),false);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});

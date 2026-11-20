@@ -51,8 +51,7 @@ npm run personal:maintenance -- <instalação.json> --retencao-artefatos [--apli
 - `--registrar-worktree`: o git do projeto precisa listar o diretório como worktree, num ramo local, e o ramo de integração
   (`--base`) precisa existir. Registre na criação do worktree. `--adotar` marca como existente um worktree que já estava aberto.
   O worktree principal e um diretório que o git não conhece são recusados.
-- `--registrar-imagem`: a imagem precisa existir no Docker local com exatamente esse id. Ser o digest fixado em
-  `deploy/modules/<modulo>/digest.txt` (do produto ou do projeto), da instalação ou de um exame é verificado de novo na remoção.
+- `--registrar-imagem`: a imagem precisa existir no Docker com exatamente esse id e o ID do daemon precisa permanecer igual durante o registro. Registros antigos sem ID de daemon são preservados.
 - `--registrar-temporario`: a pasta precisa ser filha direta do diretório temporário do sistema, chamar-se `ac-*`, ser do mesmo
   usuário e não ser link simbólico. O comando planta nela uma marca de propriedade; sem a marca e sem a identidade (dispositivo
   e inode) registrada, a pasta não é removida.
@@ -71,8 +70,7 @@ Refeito imediatamente antes de remover; qualquer dúvida preserva e diz o motivo
   (`merge-base --is-ancestor`), não há operação do git em andamento, nem mudança, nem arquivo não rastreado, nem ignorado que não
   seja regenerável (`node_modules`, `dist`, `coverage`), a última atividade tem mais de 2 h e nenhum processo usa o diretório.
   Remove com `git worktree remove` sem `--force`; o ramo nunca é tocado e a prova de que continua na mesma ponta é impressa.
-- **Imagem:** existe com o id registrado, não é digest fixado nem citada por exame, tem mais de 2 h de registro e nenhum
-  contêiner, parado ou não, a usa. Remove por id, sem `-f`; o Docker ainda recusa se uma imagem filha precisa dela.
+- **Imagem:** a remoção está bloqueada: ainda não há prova dos pins de todas as instalações que compartilham o daemon. Imagens e registros são preservados, inclusive quando a imagem não é encontrada.
 - **Temporário:** é o diretório registrado (dispositivo, inode, dono, caminho canônico), a marca confere, a rodada foi
   encerrada há mais de 24 h, não há montagem nem árvore enorme dentro, nenhum processo e nenhum contêiner o usa ou monta.
 

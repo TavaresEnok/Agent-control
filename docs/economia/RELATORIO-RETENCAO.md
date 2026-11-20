@@ -18,7 +18,7 @@ A revisão identificou riscos ainda não resolvidos, apesar dos testes aprovados
 - A prova de avaliadores não vincula o checkout à identidade criada no lançamento nem detecta conteúdo acrescentado pelo host antes da primeira inspeção; a prova dos programadores também precisa confirmar conteúdo sem depender da normalização de atributos Git.
 - Uma interrupção depois de iniciada a remoção de `work/` de programador pode impedir a retomada por exigir novamente uma árvore intacta. Execuções reconciliadas sem `execution-result.json` também ficam preservadas indefinidamente.
 - A remoção de worktree precisa recusar montagens descendentes, inclusive bind mounts, com proteção contra troca concorrente.
-- A prova de imagens não vincula o registro ao mesmo daemon Docker nem protege os pins de outras instalações que compartilhem o daemon.
+- R4 vincula novos registros ao ID do daemon e bloqueia a remoção de imagens candidatas e aposentadas; ainda faltam inventário e sincronização que comprovem os pins de outras instalações no daemon. Veja [RELATORIO-RET-R4.md](RELATORIO-RET-R4.md).
 - A recuperação de temporários precisa reconciliar durablemente rodadas terminais, inclusive interrupções antes da criação da linha de execução e entre a transição terminal e o fechamento. O fechamento adicionado cobre somente as execuções efetivamente retornadas pela recuperação.
 
 Essas pendências exigem correção, testes de regressão e nova revisão antes de ativar a limpeza automática. As saídas não rastreadas pré-existentes em `upstream/happier` foram preservadas.
