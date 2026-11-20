@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
 import {lstat, open, readFile, readdir, rmdir, type FileHandle} from 'node:fs/promises';
-import {join, resolve} from 'node:path';
+import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Id} from './contracts.ts';
 
@@ -65,9 +65,9 @@ async function treeSize(dir: FileHandle, mount: string): Promise<number> {
 export type WorkIdentity = {job: string; work: string; bytes: number};
 export type WorkOperation = {state:'absent'|'released'} | {state:'present'; snapshot:WorkIdentity};
 
-async function release(root:FileHandle,job:FileHandle,work:FileHandle,jobId:string,planned:WorkIdentity,signal?:AbortSignal):Promise<WorkOperation> {
+async function release(root:FileHandle,job:FileHandle,work:FileHandle,jobId:string,planned:WorkIdentity,signal?:AbortSignal,temporaryName?:string):Promise<WorkOperation> {
   signal?.throwIfAborted();
-  const child=spawn('/usr/bin/python3',['-I',helper,String(process.pid),jobId,planned.job,planned.work],{
+  const child=spawn('/usr/bin/python3',['-I',helper,String(process.pid),jobId,planned.job,planned.work,...(temporaryName?[temporaryName]:[])],{
     stdio:['ignore','pipe','ignore',root.fd,job.fd,work.fd],env:{PATH:'/usr/bin:/bin'},signal,killSignal:'SIGKILL'
   });
   let output='';
@@ -78,7 +78,7 @@ async function release(root:FileHandle,job:FileHandle,work:FileHandle,jobId:stri
   });
   if(output.trim()!=='emptied')throw Error('Invalid work retirement result');
   signal?.throwIfAborted();
-  const path=anchored(job,'work');
+  const path=anchored(job,temporaryName??'work');
   const current=await lstat(path,{bigint:true});
   if(!current.isDirectory()||current.dev+':'+current.ino!==planned.work)throw Error('Checkout changed');
   await rmdir(path); // Requires the literal job child to be an empty directory.
@@ -115,4 +115,23 @@ export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(
       } finally {await work.close();}
     } finally {await job.close();}
   } finally {await root.close();}
+}
+
+
+export async function releaseRegisteredTemp(path:string, expected:{dev:string;ino:string}){
+  const parent=dirname(path),name=basename(path);
+  if(!/^ac-[A-Za-z0-9._-]{1,120}$/.test(name)||parent==='/')throw Error('Invalid temporary directory');
+  const grandparent=dirname(parent);
+  const root=grandparent==='/'?await open('/',directoryFlags):await openRoot(grandparent);
+  try{
+    const directory=await open(anchored(root,basename(parent)),directoryFlags);
+    try{
+      const temp=await open(anchored(directory,name),directoryFlags);
+      try{
+        const work=expected.dev+':'+expected.ino;
+        if(await identity(temp)!==work)throw Error('Temporary directory changed');
+        await release(root,directory,temp,basename(parent),{job:await identity(directory),work,bytes:0},undefined,name);
+      }finally{await temp.close();}
+    }finally{await directory.close();}
+  }finally{await root.close();}
 }

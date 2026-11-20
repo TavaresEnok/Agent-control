@@ -7,6 +7,7 @@ import {basename,dirname,isAbsolute,join,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import pg from 'pg';
 import {z} from 'zod';
+import {releaseRegisteredTemp} from './native-work-retention.ts';
 import {Refusal} from './contracts.ts';
 import {privateDirectory,readPrivateFile,type Installation} from './installation.ts';
 import {VERIFICATION_MODULES} from './ledger.ts';
@@ -505,7 +506,7 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
    if(!apply){done('temp');lines.push(`${label}: elegível (rodada ${entry.roundId} encerrada há ${proof.facts.idleHours} h).`);continue;}
    const again=await proveTemp(config,registry,entry,{now,processInside,docker,root});
    if(!again.ok){kept('temp',label,'mudou durante a retenção: '+again.reason);continue;}
-   await rm(entry.path,{recursive:true,force:false});
+   await releaseRegisteredTemp(entry.path,entry);
    await forget('temp',entry.id,'removed');
    done('temp');lines.push(`${label}: removido.`);
   }catch{kept('temp',label,'falha ao remover; repita depois');}
