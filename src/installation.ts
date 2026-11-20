@@ -29,7 +29,8 @@ const httpsOrigin=()=>z.string().transform(value=>{
  return url.origin;
 });
 const absolute=z.string().refine(isAbsolute,'Absolute path required');
-const projectDefinition=z.object({id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
+export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:z.boolean().default(true)}).strict();
+const projectDefinition=z.object({economy:ProjectEconomy.optional(),id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
 export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  activation:z.enum(['locked','personal']).default('locked'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),

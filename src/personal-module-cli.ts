@@ -353,6 +353,7 @@ export async function runPersonalModuleCli(
       signal.throwIfAborted();
       const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
+        mapEnabled: project.economy?.map,
         loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
         ...(waitForClaudeQuota ? {waitForClaudeQuota: true} : {}),
         ...(deps?.clock ? {clock: deps.clock} : {}),

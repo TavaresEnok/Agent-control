@@ -429,6 +429,7 @@ async function refreshClaudeExamQuotaForRetry(
 }
 
 export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | 'runtime' | 'signal'> & {
+  mapEnabled?: boolean;
   loadRuntime: () => Promise<ModuleExamRuntime>;
   waitForClaudeQuota?: boolean;
   clock?: ModuleExamClock;
@@ -475,7 +476,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
           return true;
         }
       : undefined;
-    return examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal,
+    return examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal, mapEnabled: input.mapEnabled,
       ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
       worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
       reserve: reservations.reserve,

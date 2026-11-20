@@ -452,3 +452,13 @@ A imagem da fonte `ee77a916`, fixada em `5e9bdd29`, passou em 27/27 com dados si
 A imagem fixada em `e1798884` passou nos 22 testes, incluindo licença e identificador pessoal artificiais. O parecer independente por modelo distinto de `86ec5e87` identificou falsos positivos e omissões na associação entre uma propriedade lida e uma operação de armazenamento ou registro. Os casos estão em C9-R6.
 
 Na rodada de conformidade `362efd58`, 25 testes passaram sem saltos. O laboratório da imagem avaliou a atribuição por AST em dados artificiais, além de licença e identificação pessoal. A revisão da rodada está na fila.
+
+### Opções de economia por projeto
+
+No arquivo de instalação, cada entrada de `project` ou `projects` pode incluir
+`"economy": {"map": false, "measurement": false}`. Ambas as opções são
+independentes e ligadas por padrão quando omitidas. `map` controla o mapa
+compacto enviado ao examinador dos módulos 1 a 10. `measurement` controla o
+registro de observações de tokens de jobs nativos desse projeto; os recibos
+físicos permanecem preservados. A mudança exige reiniciar o runtime para ser
+aplicada aos supervisores. A configuração de lotes ainda não está disponível.

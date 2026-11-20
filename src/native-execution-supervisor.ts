@@ -92,7 +92,7 @@ export type NativeExecutionSupervisorConfig={id:string;workerImage:string;toolsI
  /** Writable-account renewal used before a Claude exam copy. Tests inject this and never spawn a real CLI. */
  examLoginRenew?:(accountDir:string)=>Promise<void>;
  /** false: kept only to reconcile and retire jobs started under a replaced image pair; it never launches. */
- active?:boolean};
+ active?:boolean; disabledMeasurementProjects?:readonly string[]};
 export type NativeExecutionOutcome={state:'running'|'uncertain'}|{state:'completed'|'failed';receipt:{payload:Record<string,any>;signature:string};output:string;artifact:z.infer<typeof NativeArtifactIdentity>|null;failureCode:string|null};
 const Result=z.object({schemaVersion:z.literal(1),jobId:Id,output:z.string().max(262144),normalizedTokensUsed:z.number().int().safe().nonnegative().nullable(),usageCounters:UsageCounters.nullable().optional(),usageWindows:usageWindowsObservationSchema.nullable(),nativeSessionId:z.string().nullable(),failureCode:z.string().nullable(),exitCode:z.number().int()}).strict();
 export {nativeExecutionExecutorDigest};
@@ -1568,7 +1568,7 @@ export class NativeExecutionSupervisor{
   await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);const saved=(await c.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1 FOR UPDATE',[input.jobId])).rows[0];if(['completed','failed'].includes(saved.state)){if(digest(saved.receipt)!==digest(receipt))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');return;}
    const grant=(await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 FOR UPDATE',[input.grantId])).rows[0];
    if(!grant||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role||grant.resource_kind!=='model'||grant.intent_id!==input.intentId||grant.context_id!==authority.contextId||Number(grant.manager_epoch)!==Number(job.manager_epoch)||!['uncertain','running'].includes(grant.state))throw new Refusal('NATIVE_EXECUTION_GRANT_MISMATCH');
-   await new Usage(this.ledger).recordInTransaction(c,principal,authority,{grantId:input.grantId,eventId:input.jobId,seq:1,counters:result.usageCounters??{input:null,output:null,cache:null,reasoning:null}},input.jobId);
+   if(!this.config.disabledMeasurementProjects?.includes(grant.project_id)) await new Usage(this.ledger).recordInTransaction(c,principal,authority,{grantId:input.grantId,eventId:input.jobId,seq:1,counters:result.usageCounters??{input:null,output:null,cache:null,reasoning:null}},input.jobId);
    await c.query("UPDATE ac_native_execution_jobs SET state=$2,worker_id=$3,tools_id=$4,receipt=$5 WHERE id=$1",[input.jobId,effectiveExitCode===0?'completed':'failed',worker.Id,tools.Id,receipt]);
    await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1",[input.grantId,physical]);
    if(input.role==='programmer'&&!cancellation){

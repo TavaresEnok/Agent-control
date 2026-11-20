@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {Installation,initializeInstallation,sessionKey,loadInstallation,prepareInstallationOperator,readPrivateFile} from '../src/installation.ts';
+import {ProjectEconomy,Installation,initializeInstallation,sessionKey,loadInstallation,prepareInstallationOperator,readPrivateFile} from '../src/installation.ts';
 import {Ledger} from '../src/ledger.ts';
 import {Projects,ProjectRuntimes} from '../src/projects.ts';
 import {createProjectGateway} from '../src/projects-api.ts';
@@ -52,4 +52,10 @@ test('private installation initializes without fixtures, manager or worker; keys
   assert.throws(()=>Installation.parse({...config,verifyHomologationContainers:['app.local']}));
   assert.throws(()=>Installation.parse({...config,verifyHomologationContainers:Array.from({length:33},(_,index)=>`c${index}`)}));
  }finally{await ledger.close();await isolated.close();await rm(root,{recursive:true,force:true});}
+});
+
+test('project economy options are independent and validated', () => {
+ assert.deepEqual(ProjectEconomy.parse({map:false,measurement:false}),{map:false,measurement:false});
+ assert.deepEqual(ProjectEconomy.parse({}),{map:true,measurement:true});
+ assert.equal(ProjectEconomy.safeParse({map:'false'}).success,false);
 });

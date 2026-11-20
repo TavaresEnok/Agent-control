@@ -393,6 +393,7 @@ async function main() {
         const examAt = (targetUrl: string, routes?: readonly {route: string}[], servedFiles?: readonly {path: string; text: string}[]) => runDesignModule({
           activation: 'personal',
           projectId: resolved.projectId,
+          mapEnabled: resolved.economy?.map,
           repo: resolved.repo,
           targetUrl,
           dataDirectory: resolved.dataDirectory,
@@ -457,6 +458,7 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
         const exam = await withCreatedServer(pinnedImage, files, (origin, repo) => runDesignModule({
           activation: 'personal',
           projectId: resolved.projectId,
+          mapEnabled: resolved.economy?.map,
           repo,
           targetUrl: origin,
           dataDirectory: resolved.dataDirectory,

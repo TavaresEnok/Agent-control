@@ -41,6 +41,7 @@ export type ResolvedPersonalDesign = {
   authority: Authority;
   projectId: string;
   repo: string;
+  economy?: {map: boolean; measurement: boolean};
   dataDirectory: string;
   commit: string;
   intentId: string;
@@ -415,6 +416,7 @@ export async function resolvePersonalDesign(
       authority,
       projectId: project.id,
       repo: project.repo,
+      economy: project.economy,
       dataDirectory: config.dataDirectory,
       commit,
       intentId,

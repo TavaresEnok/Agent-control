@@ -801,3 +801,20 @@ test('mapa opcional entra no pedido e falha registrada não impede exame', async
     }
   }
 });
+
+
+test('mapa desativado não é gerado nem enviado ao examinador', async () => {
+  for (const repoMap of [undefined, {map: 'mapa fornecido'}]) {
+    let task: any;
+    const result = await examineFunctionalModule({module: 'qa', intentId, map, findings: [], repoMap, mapEnabled: false,
+      reserve: async () => seat('a'), release: async () => {},
+      worker: {run: async call => {
+        task = JSON.parse(call.task);
+        return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], findings: []});
+      }},
+    });
+    assert.equal(result.coverage[0]!.status, 'lido');
+    assert.equal(task.repoMap, undefined);
+    assert.ok(!result.notes.some(note => note.includes('Mapa do repositório indisponível')));
+  }
+});

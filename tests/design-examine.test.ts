@@ -671,3 +671,18 @@ test('crítica visual e confirmações excluem todos os perfis que examinaram a 
   assert.equal(result.confirmations.length, 2);
   assert.equal(result.visual.length, 1);
 });
+
+test('mapa compacto pode ser desligado no exame de design', async () => {
+  const kit = harness();
+  const tasks: string[] = [];
+  for (const mapEnabled of [true, false]) {
+    await examineDesignScreens({
+      repo: '/tmp/repo-design', intentId: randomUUID(), screens: [screen],
+      checklist: loadDesignChecklist(), rawFindings: [], mapEnabled,
+      reserve: kit.reserve, release: kit.release,
+      worker: {async run(call) { tasks.push(call.task); return designBenchWorker().run(call); }},
+    });
+  }
+  assert.match(tasks[0]!, /Mapa do repositório/);
+  assert.doesNotMatch(tasks[1]!, /Mapa do repositório/);
+});

@@ -1066,3 +1066,27 @@ test('segredo da conta não segue na task do outro provedor', async () => {
     await ready.close();
   }
 });
+
+test('mapa compacto é opcional nas tarefas do examinador de segurança', async () => {
+  const ready = await bootVerify('verify_rt_map');
+  const tasks: string[] = [];
+  try {
+    await writeFile(join(ready.repo, 'identity.ts'), 'export function saudacao() { return 1; }\n');
+    const worker: VerifyWorker = {async run(call) {
+      if (call.task.startsWith('Pedido de mapa.')) return JSON.stringify({kind: 'mapa', routes: [], surfaces: []});
+      if (call.task.startsWith('Pedido de exame.')) {
+        tasks.push(call.task);
+        const checklist = (call.task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+        return JSON.stringify({kind: 'exame', filesRead: ['identity.ts'], checklist, findings: []});
+      }
+      throw new Error('task inesperada');
+    }};
+    const base = {ledger: ready.db, principal: ready.principal, authority: ready.authority, projectId: ready.project,
+      repoPath: ready.repo, dataDirectory: ready.dataDirectory, commit: '0123456789abcdef0123456789abcdef01234567', policyRevision: 1, worker};
+    await runSecurityVerification(base);
+    await runSecurityVerification({...base, mapEnabled: false});
+    assert.equal(tasks.length, 2);
+    assert.match(tasks[0], /Mapa compacto do repositório/);
+    assert.doesNotMatch(tasks[1], /Mapa compacto do repositório/);
+  } finally { await ready.close(); }
+});

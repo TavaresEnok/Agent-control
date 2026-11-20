@@ -54,6 +54,7 @@ export type PersonalVerificationInput = {
   image?: string;
   modelCalls?: {count: number};
   modelCallBudget?: number;
+  mapEnabled?: boolean;
   accountRoot?: string;
   timeLimitMs?: number;
   networkRunner?: NetworkRunner;
@@ -135,6 +136,7 @@ type ReadyVerification = {
   image: string;
   modelCalls?: {count: number};
   modelCallBudget?: number;
+  mapEnabled?: boolean;
   accountRoot?: string;
   timeLimitMs: number;
   staticPolicy?: StaticCliPolicyGrant;
@@ -183,6 +185,7 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     databasesDirectory: input.databasesDirectory,
     image: input.image,
     modelCalls: input.modelCalls,
+    mapEnabled: input.mapEnabled,
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
     timeLimitMs: chosenTimeLimit(input.timeLimitMs),
@@ -543,6 +546,7 @@ async function runJob(input: {
         runId: id,
         onPhase,
         modelCalls,
+        mapEnabled: ready.mapEnabled,
         notes: state.note ? [state.note] : undefined,
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
@@ -810,6 +814,7 @@ export async function resolvePersonalVerification(
       input: {
         installationPath: resolve(parsed.installationPath),
         projectId: project.id,
+        mapEnabled: project.economy?.map,
         url: parsed.url,
         dataDirectory: config.dataDirectory,
         accountRoot: personalAccountRoot(config),

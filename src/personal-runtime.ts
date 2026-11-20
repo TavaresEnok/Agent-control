@@ -88,17 +88,18 @@ export async function composePersonalExecutionSupervisors(
  const rows=accountRows??(await ledger.pool.query<{id:string;provider:string}>('SELECT id,provider FROM ac_accounts WHERE id = ANY($1::uuid[])',[boot.accounts.map(account=>account.accountId)])).rows;
  const subjects=(provider:string)=>boot.accounts.filter(account=>rows.some(row=>row.id===account.accountId&&row.provider===provider)).map(account=>({accountId:account.accountId,subjectDigest:account.subjectDigest}));
  const protectedRepositories=[config.project.repo,...config.projects.map(project=>project.repo)];
+ const disabledMeasurementProjects=[config.project,...config.projects].filter(project=>project.economy?.measurement===false).map(project=>project.id);
  const executions:NativeExecutionSupervisor[]=[];
  for(const provider of ['codex','claude','grok'] as const){
   const accountSubjects=subjects(provider);
   if(!accountSubjects.length)continue;
   executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:boot.execution.workerImage,toolsImage:boot.execution.toolsImage,
    hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,dataDirectory:config.dataDirectory,
-   providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects}));
+   providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects}));
   for(const pair of (boot.execution.retiredImages??[]).filter(x=>x.workerImage!==boot.execution.workerImage||x.toolsImage!==boot.execution.toolsImage))
    executions.push(new NativeExecutionSupervisor(ledger,{id:boot.execution.id+'-'+provider,workerImage:pair.workerImage,toolsImage:pair.toolsImage,active:false,
     hostRoot:boot.execution.hostRoot,accountRoot:boot.execution.accountRoot,protectedRepositories,signingKeyPem:executionPem,
-    providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects}));
+    providerNetworkId:boot.execution.providerNetworkId,provider,workerEnv:boot.execution.workerEnv,toolsEnv:boot.execution.toolsEnv,accountSubjects,disabledMeasurementProjects}));
  }
  return executions;
 }

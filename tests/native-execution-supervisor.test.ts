@@ -30,7 +30,7 @@ test('native execution retains uncertain capacity, fences takeover and replays o
   await db.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)",[project,'b'.repeat(64),principal]);
   const intent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.start',payload:{workflow:'baseline-synthetic-v1',messageRef:'encrypted:fixture'}},authority,'api');
   const grant=randomUUID(),keys=generateKeyPairSync('ed25519'),image='sha256:'+'c'.repeat(64);
-  const config={id:'codex-native-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'d'.repeat(64),socketPath:'/no-operational-docker.sock',accountSubjects:[{accountId:account,subjectDigest:subject}],workerEnv:[],toolsEnv:[]};
+  const config={disabledMeasurementProjects:[project],id:'codex-native-execution',workerImage:image,toolsImage:image,hostRoot:spool,accountRoot:accounts,repository:repo,protectedRepositories:[],signingKeyPem:keys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),providerNetworkId:'d'.repeat(64),socketPath:'/no-operational-docker.sock',accountSubjects:[{accountId:account,subjectDigest:subject}],workerEnv:[],toolsEnv:[]};
   const supervisor=new NativeExecutionSupervisor(db,config),input=NativeExecutionRequest.parse({jobId:intent.operation_id,intentId:intent.id,grantId:grant,sessionId:randomUUID(),base:'e'.repeat(40),role:'programmer',task:'synthetic metadata only',writePaths:['src/example.ts']});
   await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state)
    VALUES($1,$2,$3,$4,$5,$6,$7,'programmer',$8,1,1,$9,false,'reserved')`,[grant,randomUUID(),intent.id,context,authority.epoch,account,profile,project,digest(input)]);
@@ -65,6 +65,7 @@ test('native execution retains uncertain capacity, fences takeover and replays o
   await supervisor.stop(principal,successor,input);assert.equal(stops,2);
   assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[grant])).rows[0].state,'uncertain');
   const terminal=await supervisor.reconcile(principal,successor,input);assert.equal(terminal.state,'failed');assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[grant])).rows[0].state,'released');
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_usage_observations WHERE grant_id=$1',[grant])).rows[0].n,0);
   assert.deepEqual(await supervisor.reconcileRegistered(principal,successor,input.jobId),terminal);
   await db.pool.query("UPDATE ac_operations SET state='uncertain',grant_id=$2 WHERE id=$1",[input.jobId,grant]);
   await db.pool.query('INSERT INTO ac_plan_cancellations(intent_id,context_id,requested_by,plan_revision) VALUES($1,$2,$3,$4)',[intent.id,context,principal,intent.plan_revision]);

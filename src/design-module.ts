@@ -67,6 +67,7 @@ export type DesignModuleInput = {
   commit: string;
   files: readonly DesignSourceFile[];
   worker: DesignWorker;
+  mapEnabled?: boolean;
   reserve: DesignExamineInput['reserve'];
   release: (seat: DesignSeat) => Promise<void>;
   tools?: DesignToolReports;
@@ -244,6 +245,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       repo: input.repo,
       intentId: input.intentId,
       screens,
+      mapEnabled: input.mapEnabled,
       checklist: loadDesignChecklist(),
       rawFindings: findings,
       worker: input.worker,
