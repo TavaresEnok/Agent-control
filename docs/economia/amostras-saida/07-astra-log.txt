@@ -1,0 +1,300 @@
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  AssertionError [ERR_ASSERTION]: by id, never forced, never the pinned one
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  + actual - expected
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    [
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      [
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-        'image',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-        'rm',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  +     '--no-prune',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-        'sha256:c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1'
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      ]
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    ]
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      at TestContext.<anonymous> (/home/app/projects/ac-wt/disco-integracao-cf1d/tests/personal-artifact-commands.test.ts:193:10)
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      at async Test.run (node:internal/test_runner/test:1409:7)
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    generatedMessage: false,
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    code: 'ERR_ASSERTION',
+--
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log:test at tests/personal-artifact-producers.test.ts:1:7397
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-✖ runVerificationModule ends its round on success, and the next recovery ends the round of an abandoned run (37.288257ms)
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  Error: connect ECONNREFUSED 127.0.0.1:54333
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16) {
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    errno: -111,
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    code: 'ECONNREFUSED',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    syscall: 'connect',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    address: '127.0.0.1',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    port: 54333
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  }
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log:test at tests/personal-artifact-producers.test.ts:3:2947
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-✖ an exam job ends its round when it finishes, and a snapshot left behind then ages out (35.720849ms)
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  Error: connect ECONNREFUSED 127.0.0.1:54333
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16) {
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    errno: -111,
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    code: 'ECONNREFUSED',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    syscall: 'connect',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    address: '127.0.0.1',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    port: 54333
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  }
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log:test at tests/personal-disk-limits-entrypoints.test.ts:1:803
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-✖ novos exames e novos trabalhadores recusam a 95% nos entrypoints reais; replay e reconciliação seguem; 94,99 admite (2725.73348ms)
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  Error: Command failed: /home/app/.local/share/node24/bin/node --import tsx --import /home/app/projects/ac-wt/disco-integracao-cf1d/tests/fixtures/statfs-rules.mjs /home/app/projects/ac-wt/disco-integracao-cf1d/tests/fixtures/disk-limits-child.ts
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  node:internal/modules/run_main:107
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      triggerUncaughtException(
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      ^
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  Error: connect ECONNREFUSED 127.0.0.1:54333
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      at TCPConnectWrap.afterConnect [as oncomplete] (node:net:2083:16) {
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    errno: -111,
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    code: 'ECONNREFUSED',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    syscall: 'connect',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    address: '127.0.0.1',
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-    port: 54333
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  }
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  Node.js v24.22.1
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-  
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-sessao-provas.log-      at genericNodeError (node:internal/errors:986:15)
+--
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-banco-sessao.log:test at tests/personal-artifact-commands.test.ts:1:10472
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-banco-sessao.log-✖ a candidate image is registered only when it exists locally, and a pinned digest is never removed (68.19475ms)
+/tmp/ac-nexo-1e954d30-eVyed0RH/disco-integrado-banco-sessao.log-  AssertionError [ERR_ASSERTION]: by id, never forced, never the pinned one
+39: const docker=async(args:string[])=>{
+50:  deps:(now=Date.now())=>({git:realGit,docker,now:()=>now,tmpRoot:tmp,productRoot:product,processInside:async()=>false,verifyRunImages:async()=>[]})};
+174:test('a candidate image is registered only when it exists locally, and a pinned digest is never removed',async()=>{
+273: const inspected=await (deps.docker??defaultDocker)(['image','inspect','--format','{{.Id}}',input.imageId]);
+347: const inspected=await docker(['image','inspect',entry.imageId]);
+349:  const alive=await docker(['version','--format','{{.Server.Version}}']);
+354:  const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoDigests?:string[]}[];
+361: const containers=await docker(['container','ls','-a','--no-trunc','-q','--filter','ancestor='+entry.imageId]);
+387: const listed=await docker(['container','ls','-a','--no-trunc','-q']);
+391: const inspected=await docker(['container','inspect','--format','{{range .Mounts}}{{println .Source}}{{end}}',...ids]);
+494:     return (await docker(['image','rm','--no-prune',entry.imageId])).code===0?undefined:'o Docker recusou a remoção';
+**A ordem `cf1d85e9` fica sem aprovação.** A revisão está limitada ao diff fornecido. O sandbox bloqueou a leitura do Git antes de executar o comando, então não pude confirmar se o recorte cobre todo o intervalo `fbe7a9c2..eba601ba`. Também não pude confirmar o modelo e o esforço da sessão. A revisão foi estática, sem executar testes ou acessar a instalação, a rede ou segredos.
+
+1. **P1 — Temporários de rodadas já terminadas podem ficar indefinidamente.** Em `runVerificationModule`, o estado terminal é gravado antes de `reconcileReports` e `endRound`. Se o processo cair nessa janela, ou se a reconciliação falhar antes do fechamento, a recuperação adicionada só fecha rodadas que ela própria transicionou de `running` para `failed`. A rodada já terminal fica de fora. A mesma lacuna existe se a própria recuperação cair depois do commit e antes de `endRound`. Como a retenção exige prova de encerramento, a cópia fica preservada indefinidamente. O fechamento precisa ser reexecutável a partir do estado terminal persistido. O teste cobre a recuperação a partir de `running`, mas deixa essa janela sem cobertura. [verification-modules.ts](/home/app/projects/ac-wt/disco-integracao-cf1d/src/verification-modules.ts:2315)
+
+2. **P1 — A retenção de worktrees e imagens depende de um registro que o fluxo externo ainda precisa fazer.** O diff expõe `--registrar-worktree` e `--registrar-imagem`, e os testes chamam esses comandos explicitamente. Nenhum trecho fornecido conecta o registro ao lançamento normal dos trabalhadores ou à criação das imagens candidatas. Para temporários externos, o próprio teste confirma que uma pasta sem registro é preservada. Assim, os caminhos mostrados deixam de fora artefatos elegíveis que já existam ou que sejam criados pelo fluxo habitual sem essa etapa. Falta evidência de integração com os produtores e de adoção segura dos artefatos existentes. [personal-artifact-commands.ts](/home/app/projects/ac-wt/disco-integracao-cf1d/src/personal-artifact-commands.ts:23)
+
+3. **P2 — O teste de disco deixa parte do requisito sem prova.** A fixture verifica a reserva de capacidade e as entradas de segurança e design a 95%. No design a 94,99%, ela espera `OK`, mas não verifica se a função `reserve` foi realmente alcançada. O teste também não passa pelo vigia para verificar o alerta a 90%, nem exercita um lançamento de trabalhador externo. [disk-limits-child.ts](/home/app/projects/ac-wt/disco-integracao-cf1d/tests/fixtures/disk-limits-child.ts:95)
+
+O recorte também deixa sem verificação a retirada automática de `work/` pelo vigia, a retenção dos três backups após `restore-check`, a exclusão das bases de vulnerabilidades dos backups e a aplicação na instalação viva com backup. O código que decide a remoção de worktrees, imagens e temporários também ficou fora do recorte, por isso o risco de exclusão indevida continua em aberto.
+
+exec
+/bin/bash -lc "w=../ac-wt/disco-integracao-cf1d
+sed -n '36,53p;182,196p' \""'$w/tests/personal-artifact-commands.test.ts"
+rg -n '"'reconcileModuleReports|endRound|abandonedRound' \""'$w/src/verification-modules.ts"
+rg -n '"'beginRound|endRound' \""'$w/src/verify-command.ts"
+ls /tmp/ac-nexo-1e954d30-eVyed0RH/*-worker.pid | tail -3
+ps -C claude -o pid,etime,stat,comm' in /home/app/projects/agent-control
+ succeeded in 0ms:
+ const projectId=randomUUID();
+ const config={activation,dataDirectory:data,databaseUrl:'postgres://invalid.example/none',project:{id:projectId,label:'p',repo,owner:'owner'},projects:[]} as unknown as Installation;
+ const removed:string[][]=[];
+ const docker=async(args:string[])=>{
+  if(args[0]==='image'&&args[1]==='inspect'){
+   const id=args.at(-1)!;
+   if(id!==IMAGE&&id!==PINNED)return {code:1,stdout:''};
+   return args.includes('--format')?{code:0,stdout:id+'\n'}:{code:0,stdout:JSON.stringify([{Id:id,RepoDigests:[]}])};
+  }
+  if(args[0]==='image'&&args[1]==='rm'){removed.push(args);return {code:0,stdout:''};}
+  if(args[0]==='version')return {code:0,stdout:'x'};
+  return {code:0,stdout:''};
+ };
+ return {base,repo,data,tmp,product,projectId,config,removed,
+  deps:(now=Date.now())=>({git:realGit,docker,now:()=>now,tmpRoot:tmp,productRoot:product,processInside:async()=>false,verifyRunImages:async()=>[]})};
+}
+const done=(l:Lab)=>rm(l.base,{recursive:true,force:true});
+const registryFile=(l:Lab)=>join(l.data,'artifact-retention','registry.json');
+  await assert.rejects(runArtifactCommand(l.config,['--registrar-imagem','--projeto',l.projectId,'--modulo','banco','--imagem',IMAGE],l.deps()),refusal('RETENTION_REGISTRATION_CONFLICT'));
+  mkdirSync(join(l.product,'deploy','modules','qa'),{recursive:true});
+  writeFileSync(join(l.product,'deploy','modules','qa','digest.txt'),PINNED+'\n');
+  const later=Date.now()+3*HOUR;
+  const preview=(await runArtifactCommand(l.config,['--retencao-artefatos'],l.deps(later))).join('\n');
+  assert.match(preview,/imagem sha256:c1c1c1c1c1c1 \(qa\): elegível/);
+  assert.match(preview,/imagem sha256:d2d2d2d2d2d2 \(qa\): preservado \(digest fixado/);
+  assert.deepEqual(l.removed,[]);
+  // Too recent to remove.
+  assert.match((await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(Date.now()))).join('\n'),/registrada há 0 h \(mínimo 2 h\)/);
+  await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(later));
+  assert.deepEqual(l.removed,[['image','rm',IMAGE]],'by id, never forced, never the pinned one');
+ }finally{await done(l);}
+});
+
+44:import {endRound, trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
+2317:    await endRound(retention);
+2345:      await endRound(retention);
+2953:  if (dataDirectory !== undefined) for (const roundId of abandonedRuns) await endRound({dataDirectory, projectId, roundId});
+2960:export async function reconcileModuleReports(
+12:import {endRound, trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
+582:    await endRound({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id});
+/tmp/ac-nexo-1e954d30-eVyed0RH/grave-limite-arquitetura-r2-worker.pid
+/tmp/ac-nexo-1e954d30-eVyed0RH/limite-arquitetura-worker.pid
+/tmp/ac-nexo-1e954d30-eVyed0RH/trava-estatica-worker.pid
+    PID     ELAPSED STAT COMMAND
+2548048       12:59 Ssl  claude
+2603275       01:35 Ssl  claude
+
+exec
+/bin/bash -lc 'set -e
+d=/tmp/ac-nexo-1e954d30-eVyed0RH; w=../ac-wt/nexo-disco-produtores-r2
+git worktree add -b task/disco-produtores-r2 "$w" eba601ba
+ln -s "$PWD/node_modules" "$w/node_modules"
+cat > "$d/disco-produtores-r2.txt" <<'"'EOF'
+Complete as integrações com os produtores normais: itens P1 da revisão disco-rev-produtores-sessao.md. Recuperar rodadas terminais após interrupção sem varredura ilimitada no banco nem apagar sem prova. Vincular o registro de imagens ao fluxo real da criação e de worktrees à criação/adoção comprovada pelo produto. Documente como usar com os trabalhadores externos, teste com recursos descartáveis. Limite de 5000: elimine com segurança registros de rodadas encerradas sem temporários, mantendo fechamento idempotente. Você é dono dos hooks, verification-modules, verify-command, produtores, CLI de registro e respectivos testes. Nos consumidores personal-artifact-retention acrescente só a poda, haverá integração com colegas trabalhando em outros métodos. Sem instalação viva nem segredos, sem exames. Faça commit e reporte.
+EOF
+python3 \""'$d/worker-fila-atual.py" disco-produtores-r2 disco-produtores-r2' in /home/app/projects/agent-control
+exec
+/bin/bash -lc "set -e
+cd ../ac-wt/disco-integracao-cf1d
+sed -i \"s/\\[\\['image','rm',IMAGE\\]\\]/[['image','rm','--no-prune',IMAGE]]/\" tests/personal-artifact-commands.test.ts
+git add tests/personal-artifact-commands.test.ts
+git -c user.name='Agent Control' -c user.email='agent-control@localhost' commit -m 'Require no-prune when the artifact command retires a candidate'
+d=/tmp/ac-nexo-1e954d30-eVyed0RH; tail -n 16 \""'$d/grave-disco-protecao-enok.log"
+git log -1 --format='"'%h %s' task/disco-protecao
+git status --short --untracked-files=no
+node --import tsx --test tests/personal-artifact-commands.test.ts > \""'$d/disco-comandos-no-prune.test" 2>&1
+tail -n 8 "$d/disco-comandos-no-prune.test"' in /home/app/projects/agent-control
+ succeeded in 2033ms:
+[task/disco-integracao-cf1d f47859c8] Require no-prune when the artifact command retires a candidate
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+- Antes de esvaziar a pasta, a retenção grava no registro privado, fora da pasta, um jornal com a identidade dela e a hora de criação.
+- Se a execução parar depois de apagar a marca de propriedade, a rodada seguinte termina a remoção dessa mesma pasta e informa "retomando remoção interrompida".
+- Continuam preservadas: outra pasta no mesmo caminho, uma pasta com hora de criação diferente da anotada, uma pasta sem marca e sem jornal, e uma marca falsificada.
+- O teste interrompe uma remoção de verdade com uma subpasta que não pode ser esvaziada e depois a retoma.
+
+**Arquivos alterados:** `src/personal-artifact-retention.ts`, `src/personal-maintenance.ts`, `src/personal-maintenance-cli.ts` (ele mostra as linhas das etapas quando uma falha), `tests/personal-artifact-retention.test.ts` e uma seção em `docs/USO-PESSOAL.md`. Produtores, admissão, supervisor e o repositório vivo não foram tocados, e nenhum exame foi lançado.
+
+**Testes vizinhos:** retenção de `work/` de exames e de jobs, rotação de backup, saúde, manutenção e vigia. Passaram 36 e 2 foram ignorados por precisarem de PostgreSQL; o banco não foi testado.
+
+**Riscos que continuam:**
+- Entre a última verificação e o `git worktree remove`, alguém pode trocar o link por uma pasta real. Isso só acontece se o worktree ficar 2 h parado sem nenhum processo dentro, mas a janela existe.
+- Num sistema de arquivos que não informa a hora de criação, a retomada do temporário só confere a identidade da pasta, o mesmo nível de prova que a rotação de backups já usa.
+
+**Notas da bancada:**
+- Para os testes carregarem, criei no worktree um link ignorado `upstream/cezar/packages/cezar/dist` apontando para o checkout principal, a mesma convenção das outras bancadas. Ele não entrou no commit.
+- O git não tinha identidade de autor configurada. Fiz o commit como `Agent Control <agent-control@localhost>`, igual aos commits anteriores, só nesse comando e sem mexer na configuração.
+3ca832ce Retenção: ignorados só se forem links, jornal externo para temporário interrompido e etapas independentes
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2025.9762
+
+exec
+/bin/bash -lc "cd ../ac-wt/disco-integracao-cf1d
+git -c user.name='Agent Control' -c user.email='agent-control@localhost' merge --no-edit 3ca832ce
+git diff --name-only --diff-filter=U
+rg -n '<<<<<<<|=======|>>>>>>>' src/personal-maintenance{,-cli}.ts docs/USO-PESSOAL.md" in /home/app/projects/agent-control
+ exited 1 in 0ms:
+Auto-merging docs/USO-PESSOAL.md
+Auto-merging src/personal-maintenance-cli.ts
+Auto-merging src/personal-maintenance.ts
+Merge made by the 'ort' strategy.
+ docs/USO-PESSOAL.md                       |   5 ++
+ src/personal-artifact-retention.ts        |  53 ++++++++---
+ src/personal-maintenance-cli.ts           |   4 +-
+ src/personal-maintenance.ts               |  36 ++++++--
+ tests/personal-artifact-retention.test.ts | 142 +++++++++++++++++++++++++++++-
+ 5 files changed, 220 insertions(+), 20 deletions(-)
+
+exec
+/bin/bash -lc 'd=/tmp/ac-nexo-1e954d30-eVyed0RH
+python3 "$d/revisar-disco.py" disco-rev-protecao-sessao "$PWD/../ac-wt/disco-integracao-cf1d" fbe7a9c2 3ca832ce
+rc=$?; test ! -f "$d/disco-rev-protecao-sessao.md" || tail -n 20 "$d/disco-rev-protecao-sessao.md"; exit "$rc"' in /home/app/projects/agent-control
+exec
+/bin/bash -lc 'd=/tmp/ac-nexo-1e954d30-eVyed0RH
+tail -n 9 "$d/disco-ci.log"; rg '"'"'^FAIL'"' \""'$d/disco-ci.log"; rg -A7 '"'"'^ℹ tests'"' \""'$d/disco-integrado-banco-sessao.log"
+git -C ../ac-wt/disco-integracao-cf1d log -1 --oneline
+head -n 22 ../ac-wt/disco-integracao-cf1d/src/personal-artifact-hooks.ts
+ls -l "$d"/disco-produtores-r2-*.log
+cat "$d/disco-rev-sessao-base.stderr" | tail -2
+rg '"'codex|COTA' docs/PROGRESSO-FINAL.md | tail -2 | cut -c1-240" in /home/app/projects/agent-control
+ succeeded in 0ms:
+ok usage.test.ts 4s
+ok verification-module-cli-lab.test.ts 3s
+ok verification-modules-cleanup.lab.test.ts 2s
+ok verification-modules-cleanup.test.ts 57s
+ok verification-modules-coverage-r3.test.ts 2s
+ok verification-modules-interop.test.ts 4s
+ok verification-modules-persistence-r3.test.ts 6s
+ok verification-modules-r2.test.ts 3s
+ok verification-modules-scenarios-r3.test.ts 5s
+FAIL capacity-aging.test.ts 1s
+FAIL capacity-wait-resources.test.ts 2s
+FAIL design-reconstruction.test.ts 1s
+FAIL module-arquitetura.test.ts 6s
+FAIL module-conformidade.test.ts 13s
+FAIL module-dependencias-java.test.ts 0s
+FAIL module-dependencias.test.ts 1s
+FAIL module-prontidao.test.ts 1s
+FAIL native-model-policy-admission.test.ts 1s
+FAIL runtime.test.ts 6s
+ℹ tests 20
+ℹ suites 0
+ℹ pass 19
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 15097.750511
+fe0deec5 Merge commit '3ca832ce' into task/disco-integracao-cf1d
+import {join} from 'node:path';
+import {readPrivateFile, type Installation} from './installation.ts';
+import {closeRound,registerRoundTemp,type RetentionDeps} from './personal-artifact-retention.ts';
+
+/**
+ * Registration of round temporaries by the code that creates them (module snapshots, evidence folders).
+ *
+ * The producers know only the data directory of the installation and the project; they never hold the whole
+ * `Installation`. `registerRoundTemp` and `closeRound` read exactly two things from it: `dataDirectory` (where the
+ * private registry lives) and the project ids. The same removal later runs with the real `Installation`, which judges
+ * every entry again (project membership, directory identity, owner marker, round end, idle time, processes, containers).
+ *
+ * Registration is best effort by design: a failure to record a temporary must never fail the examination that creates it.
+ * An unrecorded directory is simply never removed; retention reports how many such `ac-*` items it preserved.
+ */
+
+export type RoundScope={dataDirectory:string;projectId:string;roundId:string};
+
+/** Minimal structural view of an installation, enough for the registry calls above and nothing else. */
+function scopeInstallation(scope:Pick<RoundScope,'dataDirectory'|'projectId'>):Installation{
+ return {activation:'personal',dataDirectory:scope.dataDirectory,project:{id:scope.projectId,label:'retention',repo:'/',owner:'retention'},projects:[]} as unknown as Installation;
+}
+-rw-rw-r-- 1 app app 0 Nov 20 14:48 /tmp/ac-nexo-1e954d30-eVyed0RH/disco-produtores-r2-agy-enok-sonnet.log
+- 20/11/2026 14:33 UTC — COTA — claude-sonnet-5-5 (ajust) informou limite na ordem disco-admissao-r2.
+- 20/11/2026 14:35 UTC — COTA — claude-opus-5-5-medium (agy-opus) informou limite na ordem grave-disco-jobs.
+
+exec
+/bin/bash -lc 'd=/tmp/ac-nexo-1e954d30-eVyed0RH
+cat > "$d/testar-retencao-sessao.sh" <<'"'SH'
+#"'!/usr/bin/env bash
+set -eu
+d=/tmp/ac-nexo-1e954d30-eVyed0RH
+cd /home/app/projects/ac-wt/disco-integracao-cf1d
+log="$d/$1"; shift
+export POSTGRES_PASSWORD="$(openssl rand -hex 20)"
+pgid=$(docker run -d --rm --label agent-control.purpose=retention-verification -e POSTGRES_PASSWORD -e POSTGRES_DB=ac_implementation_test -p 127.0.0.1::5432 postgres:16-alpine)
+trap '"'docker stop \""'$pgid" >/dev/null'"' EXIT
+until docker exec \""'$pgid" pg_isready -h 127.0.0.1 -d ac_implementation_test >/dev/null 2>&1; do sleep 1; done
+port=$(docker port "$pgid" 5432/tcp | cut -d: -f2)
+export AC_TEST_DATABASE_URL="postgresql://postgres:$POSTGRES_PASSWORD@127.0.0.1:$port/ac_implementation_test"
+if test "$1" = --ci; then AC_CI_LOG_DIR="$log-files" npm test > "$log" 2>&1; else node --import tsx --test --test-concurrency=1 "$@" > "$log" 2>&1; fi
+SH
+bash "$d/testar-retencao-sessao.sh" disco-protecao-integrada.test tests/{personal-artifact-{commands,producers,retention},personal-disk-limits-entrypoints,native-model-policy-admission,runtime}.test.ts
+rc=$?; tail -n 10 "$d/disco-protecao-integrada.test" | cut -c1-300; exit "$rc"' in /home/app/projects/agent-control
+ succeeded in 34560ms:
+**Solicito correções antes de aprovar a ordem `cf1d85e9`.** O diff fornecido permite que a limpeza prossiga com uma marca de propriedade inválida e deixa uma corrida entre a verificação e a remoção de worktrees.
+
+- **[P1] Uma marca inválida pode autorizar a exclusão de um temporário.** Em [`proveTemp`](/home/app/projects/ac-wt/disco-integracao-cf1d/src/personal-artifact-retention.ts:428), `JSON.parse` aceita `null`, `false`, `0` e `""`. Como a conferência seguinte usa `if (marker && ...)`, esses valores pulam a validação de `entryId` e do nonce. Se as demais condições passarem, a pasta pode ser apagada mesmo sem journal. Valide o formato de toda marca lida e aceite a ausência apenas no `ENOENT` coberto pelo journal.
+- **[P1] Um arquivo ignorado pode entrar no worktree depois da última conferência e ser apagado.** [`disposableIgnored`](/home/app/projects/ac-wt/disco-integracao-cf1d/src/personal-artifact-retention.ts:194) comprova que a entrada é um link apenas no instante do `lstat`. Antes de `git worktree remove`, outro processo pode trocar o link por um arquivo regular ignorado ou criar outro arquivo ignorado. O Git pode remover esses arquivos mesmo sem `--force`. O teste cobre arquivos que já estavam presentes na conferência e deixa essa corrida sem cobertura.
+- **[P2] O journal pode registrar a identidade de uma pasta diferente da que passou pela prova.** Em [`runPersonalArtifactRetention`](/home/app/projects/ac-wt/disco-integracao-cf1d/src/personal-artifact-retention.ts:541), o código obtém `birthtimeNs` com um novo `lstat` depois de `proveTemp`. Se o diretório for substituído nesse intervalo e o inode for reutilizado, o journal pode guardar o nascimento da pasta substituta. Na próxima rodada, esse registro pode dispensar a marca ausente. Obtenha a identidade completa na prova e exija a mesma identidade na remoção.
+- **[P2] O CLI pode truncar o relatório de falha parcial.** Em [`personal-maintenance-cli.ts`](/home/app/projects/ac-wt/disco-integracao-cf1d/src/personal-maintenance-cli.ts:62), o caminho de `RetentionIncomplete` escreve as linhas e chama `process.exit(1)` imediatamente. Com stdout redirecionado ou em pipe, a saída pendente pode se perder. Use `process.exitCode = 1` para deixar a saída ser drenada.
+
+O diff mostra que `personal:maintenance` chama a retenção de jobs primeiro e ainda executa a etapa de artefatos se a primeira falhar. A seleção dos jobs elegíveis, a política de três backups após `restore-check`, a retenção de imagens, a ligação com o vigia e os limiares de 90% e 95% ficaram sem verificação. O executor local falhou ao iniciar, então a revisão do intervalo `fbe7a9c2..3ca832ce` ficou limitada ao diff fornecido. A instalação viva ficou fora da revisão.
+
