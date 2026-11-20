@@ -2392,7 +2392,8 @@ function classifyBackupOperation(binary, args, onIncomplete) {
 // printf, followed by whitespace or ')'. Arguments may contain simple lexical words,
 // quotes, escapes, comments and nested substitutions obeying the same rule. An
 // unquoted newline may only precede the closing ')' (apart from whitespace); other
-// expansions and shell operators stop recovery. No command semantics are inferred.
+// expansions and shell operators stop recovery. Glob and tilde characters in static
+// words are accepted only as lexical data and are never expanded. No command semantics are inferred.
 // Completed outer segments and an unambiguous prefix before the affected word remain.
 function malformedShellPrefix(command) {
   const segments = [];
@@ -2472,11 +2473,13 @@ function malformedShellPrefix(command) {
     if (ch === '(' || ch === ')') {
       fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
     }
+    // Only remove active line continuations inside the unquoted operator spelling.
+    // The surrounding scanner handles quoted text, escapes and comments separately.
+    if (/^(?:\d(?:\\\n)*)*<(?:\\\n)*</.test(command.slice(i))) {
+      fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
+    }
     const redirect = command.slice(i).match(SHELL_REDIRECT_AT_START);
     if (redirect) {
-      if (/^\d*<</.test(redirect[0])) {
-        fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
-      }
       fragment += redirect[0]; i += redirect[0].length - 1; wordStart = -1; continue;
     }
     if (/[;|&\n]/.test(ch)) { if (!emit()) return segments; continue; }

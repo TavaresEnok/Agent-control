@@ -3006,3 +3006,27 @@ test('R21: heredocs e substituições só atravessam fronteiras comprovadas', ()
     check('echo $(echo data\ndf -P /); alertmanager; echo "', null);
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
+
+test('R22: continuação ativa no operador de heredoc preserva somente o prefixo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r22-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const check = (body: string, expected: string | null) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\nsh -c '${body.replace(/'/g, "'\\''")}'\n`);
+      const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+      for (const pillar of ['backup-restauracao', 'disco-memoria', 'alertas-logs']) {
+        assert.equal(out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status,
+          pillar === expected ? 'failed' : 'ok', `${body}: ${pillar}`);
+      }
+    };
+    for (const op of ['<<', '<\\\n<', '0<\\\n<', '3<\\\n<-', '3\\\n<\\\n<-']) {
+      check(`df -P / ${op}EOF\nalertmanager\nEOF\necho "`, 'disco-memoria');
+      check(`cat ${op}EOF\nalertmanager\nEOF\necho "`, null);
+    }
+    check("echo '<\\\n<'; df -P /; echo \"", 'disco-memoria');
+    check('echo ok # <\\\n# <\ndf -P /; echo "', 'disco-memoria');
+    check('echo \\<\\\n< /dev/null; df -P /; echo "', null);
+    for (const arg of ['*', '~']) check(`echo $(echo ${arg}); df -P /; echo "`, 'disco-memoria');
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});
