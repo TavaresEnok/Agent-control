@@ -1,32 +1,19 @@
-// Runs every tests/*.test.ts that has no host side effects, one process per file.
-// Files that drive Docker, SSH or a live Happier server are listed as excluded,
-// never silently dropped; they belong to their own compose profiles.
+// Runs the tests that scripts/test-ci-classification.json marks as "executar", one process per file.
+// The classification is explicit and versioned: a test file nobody classified is an error, and every
+// file left out is listed with its reason (laboratório, excluído, pulado), never silently dropped.
+// Laboratory files drive Docker, SSH or a live Happier server and belong to their own compose profiles.
 import {spawn} from 'node:child_process';
 import pg from 'pg';
-import {existsSync} from 'node:fs';
-import {mkdir,readFile,readdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
+import {selectTests,selectionReport} from './test-ci-selection.mjs';
 
 const root=resolve(import.meta.dirname,'..');
 const timeoutMs=Number(process.env.AC_CI_TEST_TIMEOUT_MS??180_000);
 const logDir=process.env.AC_CI_LOG_DIR?resolve(process.env.AC_CI_LOG_DIR):null;
 const listOnly=process.argv.includes('--list');
-// Opt-in: also run files that start their own Docker or SSH fixtures.
+// Opt-in: also run the laboratory files that start their own Docker or SSH fixtures.
 const includeHost=process.env.AC_CI_INCLUDE_HOST==='1';
-const hostEffect=[
-  /\bphysical\b/i,
-  /['"`]docker['"`]/,
-  /\bdocker\s+(?:run|rm|compose|exec|network|volume|inspect|ps|kill|stop)\b/,
-  /['"`]ssh(?:d|-keygen)?['"`]/,
-  /compose\.[a-z0-9-]+\.yml/,
-  /remoteDevelopmentLab/,
-  /AC_TEST_HAPPIER_URL/,
-  /\/tmp\/ac-close-base/,
-  /r4-notifications-cli-happier/,
-];
-// These load the Happier boundary at runtime and need the built workspace packages.
-const happierWorkspaceBuilt=existsSync(join(root,'upstream/happier/packages/cli-common/dist/providers/index.js'));
-const needsHappierBuild=new Set(['notifications.test.ts','r3-secret-surfaces.test.ts','r4-notifications-cli-happier.test.ts']);
 // Files that refuse the shared database and demand their own disposable one.
 const privateDatabases={
   'diagnostics.test.ts':['AC_TEST_DATABASE_URL','ac_diagnostics_test_c1'],
@@ -52,17 +39,6 @@ async function databaseEnvironment(name){
   return {[variable]:base.href};
 }
 
-export async function classify(){
-  const names=(await readdir(join(root,'tests'))).filter(name=>name.endsWith('.test.ts')).sort();
-  const included=[],excluded=[];
-  for(const name of names){
-    const source=await readFile(join(root,'tests',name),'utf8');
-    const blocked=(!includeHost&&hostEffect.some(pattern=>pattern.test(name)||pattern.test(source)))||source.includes('AC_TEST_HAPPIER_URL')||(needsHappierBuild.has(name)&&!happierWorkspaceBuilt);
-    (blocked?excluded:included).push(name);
-  }
-  return {included,excluded};
-}
-
 async function runFile(name){
   const env={...process.env,...await databaseEnvironment(name)};
   return new Promise(done=>{
@@ -75,9 +51,19 @@ async function runFile(name){
   });
 }
 
-const {included,excluded}=await classify();
+const plan=await selectTests(root,{includeHost});
+if(plan.errors.length){
+  console.error('Classificação de testes inválida (scripts/test-ci-classification.json):');
+  for(const error of plan.errors)console.error('  '+error);
+  console.error('Classifique cada arquivo novo como executar, laboratorio ou excluido (os dois últimos com motivo).');
+  process.exit(2);
+}
+// AC_CI_ONLY=a.test.ts,b.test.ts runs just those files (still checked against the classification), to validate a candidate before promoting it.
+const only=process.env.AC_CI_ONLY?new Set(process.env.AC_CI_ONLY.split(',').map(name=>name.trim()).filter(Boolean)):null;
+const included=only?plan.executed.filter(name=>only.has(name)):plan.executed;
+const excluded=[...plan.skipped,...plan.laboratory,...plan.excluded].map(item=>item.name).sort();
 if(listOnly){
-  console.log(JSON.stringify({included,excluded},null,1));
+  console.log(JSON.stringify({included,excluded,skipped:plan.skipped,laboratory:plan.laboratory,excludedWithReason:plan.excluded},null,1));
   process.exit(0);
 }
 if(!process.env.AC_TEST_DATABASE_URL){
@@ -96,5 +82,6 @@ for(const name of included){
   if(logDir)await writeFile(join(logDir,name+'.log'),result.output);
   if(status!=='ok')failures.push(name);
 }
-console.log(JSON.stringify({passed:included.length-failures.length,failed:failures,excluded}));
+console.log(selectionReport(plan,{failed:failures,ran:included.length}));
+console.log(JSON.stringify({passed:included.length-failures.length,failed:failures,excluded,skipped:plan.skipped.map(item=>item.name),laboratory:plan.laboratory.map(item=>item.name)}));
 process.exitCode=failures.length?1:0;
