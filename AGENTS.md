@@ -148,3 +148,15 @@
     2. **Opus 4.6 Thinking (enok, Antigravity)**;
     3. Opus 5.5 médio na conta Claude Max.
   - **Trailers:** `Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>` e `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`.
+- **Economia de tokens como padrão do produto (titular, 20/11/2026).** Vale para todo fluxo: criação de sistemas novos, verificação pelos módulos e melhoria de sistemas existentes.
+  - **Ligado por padrão:**
+    - medição de tokens por modelo, papel e módulo (`personal:tokens`);
+    - mapa compacto do projeto no pedido dos jobs (`personal:mapa`);
+    - exame em lotes;
+    - retenção automática de disco;
+    - fila de modelos do mais barato ao mais caro;
+    - disciplina do gerente: limite e resumo automático de contexto, espera sem consulta repetida, leitura só do fim dos logs.
+  - **Opção por projeto:** cada otimização tem uma opção para desligar naquele projeto.
+  - **Desligado até nova prova:** compressão geral da saída de comandos (T4 reprovou: escondeu informação) e grafo ou índice de código como resposta autônoma (T5 reprovou: 1 acerto em 5).
+  - **Critério para entrar no padrão:** só entra o que provar economia sem perda de qualidade, medido antes e depois.
+  - **T6:** levar a disciplina do gerente para dentro do produto, no gerente semântico do painel e no examinador.
