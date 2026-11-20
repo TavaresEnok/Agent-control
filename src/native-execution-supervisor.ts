@@ -1,3 +1,4 @@
+import {examineWorkTree} from './native-work-retention.ts';
 import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
 import {DesignPurpose} from './design-types.ts';
 import {requiredDesignProfile} from './design-model-reservation.ts';
@@ -1279,15 +1280,16 @@ export class NativeExecutionSupervisor{
  async releaseModuleExamWork(principal:string,authority:Authority,jobId:string,apply:boolean):Promise<ModuleExamWorkRelease>{
   Id.parse(jobId);const p=this.paths(jobId);
   const refuse=(reason:ModuleExamWorkRefusal)=>({jobId,state:'refused' as const,reason});
-  return this.ledger.tx(async c=>{
+  const runPhase=(phase:'preview'|'prepare'|'release')=>this.ledger.tx(async c=>{
    await this.ledger.authorize(c,principal,authority.contextId);await this.ledger.fence(c,authority,true);
-   const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,g.manager_epoch grant_epoch,g.intent_id grant_intent,g.context_id grant_context,g.account_id grant_account,g.profile_id grant_profile,g.role grant_role,g.resource_kind,
+   const row=(await c.query(`SELECT j.*,g.state grant_state,g.physical_receipt,g.selection->>'designPurpose' design_purpose,g.manager_epoch grant_epoch,g.intent_id grant_intent,g.context_id grant_context,g.account_id grant_account,g.profile_id grant_profile,g.role grant_role,g.resource_kind,
     i.parent_intent_id,i.principal_id,i.command->'payload'->>'workflow' workflow,r.state retirement_state,r.binding,r.proof,ac_activation_personal() personal
     FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
     LEFT JOIN ac_native_terminal_retirements r ON r.job_id=j.id
     WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g`,[jobId,authority.contextId])).rows[0];
    if(!row)return refuse('not_found');
-   if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||row.role!=='specialist'||!readonlySecurityExam(row.workflow,row.role))return refuse('not_passive_exam');
+   const passive=readonlySecurityExam(row.workflow,row.role)||(readonlyDesignExam(row.workflow,row.role)&&['examiner','reviewer','visual'].includes(row.design_purpose));
+   if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||row.role!=='specialist'||!passive)return refuse('not_passive_exam');
    if(row.state!=='completed')return refuse('job_state');
    if(row.grant_state!=='released'||row.grant_intent!==row.intent_id||row.grant_context!==row.context_id||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||row.grant_role!==row.role||row.resource_kind!=='model'||Number(row.grant_epoch)!==Number(row.manager_epoch))return refuse('grant_state');
    if(row.key_fingerprint!==this.fingerprint)return refuse('supervisor_identity');
@@ -1305,17 +1307,32 @@ export class NativeExecutionSupervisor{
    }catch{retirementProven=false;}
    if(!retirementProven)return refuse('retirement');
    try{await this.directory(this.config.hostRoot);await this.directory(p.root);}catch{return refuse('directory_unsafe');}
-   let stat;
-   try{stat=await lstat(p.work);}catch(error){return (error as NodeJS.ErrnoException).code==='ENOENT'?{jobId,state:'absent' as const}:refuse('work_unsafe');}
-   // A link, a plain file or a directory reached through a link is never followed or removed.
-   if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==process.getuid?.()||await realpath(p.work).catch(()=>'')!==p.work)return refuse('work_unsafe');
-   const size=async(path:string):Promise<number>=>{let total=0;for(const entry of await readdir(path,{withFileTypes:true})){const child=join(path,entry.name);total+=entry.isDirectory()?await size(child):(await lstat(child)).size;}return total;};
-   const bytes=await size(p.work).catch(()=>0);
-   if(!apply)return {jobId,state:'eligible' as const,bytes};
-   await rm(p.work,{recursive:true});
-   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.exam_work_released',$2)",[authority.contextId,{jobId,bytes}]);
-   return {jobId,state:'released' as const,bytes};
+   try {
+    const output=await this.readResult({jobId},0);
+    if(output.jobId!==jobId||output.exitCode!==0||output.failureCode!==null||digest(output.output)!==payload.outputDigest)return refuse('receipt');
+   } catch {return refuse('receipt');}
+   const planned='native.exam_work_release_planned',completed='native.exam_work_released';
+   const hasAudit=async(kind:string)=>Boolean((await c.query(
+    "SELECT 1 FROM ac_audit WHERE context_id=$1 AND kind=$2 AND detail->>'jobId'=$3 LIMIT 1",
+    [authority.contextId,kind,jobId])).rowCount);
+   const record=async(kind:string,bytes:number)=>c.query('INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,$2,$3)',[authority.contextId,kind,{jobId,bytes,terminalDigest:digest(receipt)}]);
+   const deleting=phase==='release';
+   const alreadyReleased=await hasAudit(completed);
+   if(deleting&&alreadyReleased)return refuse('work_unsafe');
+   if(deleting&&!await hasAudit(planned))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   let bytes:number|null;
+   try{bytes=await examineWorkTree(this.config.hostRoot,jobId,deleting);}catch{return refuse('work_unsafe');}
+   if(bytes===null){
+    if(phase!=='preview'&&await hasAudit(planned)&&!alreadyReleased)await record(completed,0);
+    return {jobId,state:'absent' as const};
+   }
+   if(alreadyReleased)return refuse('work_unsafe');
+   if(phase==='prepare'&&!await hasAudit(planned))await record(planned,bytes);
+   if(deleting)await record(completed,bytes);
+   return {jobId,state:deleting?'released' as const:'eligible' as const,bytes};
   });
+  const first=await runPhase(apply?'prepare':'preview');
+  return apply&&first.state==='eligible'?runPhase('release'):first;
  }
  async reconcileCancellation(principal:string,authority:Authority,jobId:string){
   const input=await this.registeredInput(principal,authority,jobId);
@@ -1422,7 +1439,7 @@ export class NativeExecutionSupervisor{
   await this.docker.start(toolsId);await this.docker.start(workerId);
   return {resumed:true};
  }
- private async readResult(input:Input,exitCode:number){
+ private async readResult(input:Pick<Input,'jobId'>,exitCode:number){
   const p=this.paths(input.jobId);await this.directory(p.root);await this.directory(p.output);
   let result:z.infer<typeof Result>;
   try{const file=await open(join(p.output,'execution-result.json'),constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);try{const stat=await file.stat();if(!stat.isFile()||stat.nlink!==1||stat.uid!==process.getuid?.()||(stat.mode&0o077)!==0||stat.size>2*1024*1024)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');const bytes=await file.readFile();if(bytes.length>2*1024*1024)throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');result=Result.parse(JSON.parse(bytes.toString('utf8')));}finally{await file.close();}}

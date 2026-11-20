@@ -435,18 +435,16 @@ Sem prova suficiente, o comando sai com erro, diz o motivo (por exemplo, "o cont
 
 ### Liberar o disco das cópias `work/` de exames passivos terminados
 
-Cada exame passivo de segurança (`security-verify-readonly-v1`, papel `specialist`) deixa em `<execution-host>/<job>/work/` uma cópia do projeto que ninguém lê depois do exame: a resposta fica em `output/`. Para liberar esse espaço, escolha **um projeto** ou **uma lista de jobs**; nunca a instalação inteira:
+O comando de manutenção recupera espaço nas cópias de trabalho dos exames passivos concluídos. Escolha o projeto ou forneça até 200 UUIDs de jobs. A prévia informa o tamanho lógico dos arquivos elegíveis.
 
 ```bash
-# prévia, não apaga nada
-npm run personal:maintenance -- <instalação.json> --liberar-work-exames --projeto <UUID-do-projeto> [--limite N]
-# apaga (repita até a prévia não listar mais nada)
-npm run personal:maintenance -- <instalação.json> --liberar-work-exames --projeto <UUID-do-projeto> [--limite N] --aplicar
-# ou jobs escolhidos (até 200)
-npm run personal:maintenance -- <instalação.json> --liberar-work-exames --job <UUID> --job <UUID> --aplicar
+npm run personal:maintenance -- <instalação.json> --liberar-work-exames --projeto <UUID> --limite 25
+npm run personal:maintenance -- <instalação.json> --liberar-work-exames --job <UUID> --aplicar
 ```
 
-Um job só é elegível com todas as provas: job `completed`, reserva `released`, recibo assinado pelo executor da instalação, diário de retirada terminal em `removed` com prova assinada e ligada a esse recibo (os contêineres e a rede já foram removidos), dono do projeto e locação do contexto. O supervisor apaga só o filho literal `work`, sob o bloqueio da linha do job. `review-artifact`, `input`, `output`, logs, provas e outros jobs ficam intactos; um `work` que seja link simbólico ou arquivo, ou uma pasta do job que não seja privada, é recusado e nada é apagado. Links dentro de `work` são removidos como links, sem seguir o destino. Jobs de design, programador, falhos ou sem a prova completa são recusados com o motivo na linha do job. O comando é idempotente: sem `work` o job aparece como "já sem work", e `--limite` (padrão 50, máximo 200) conta só os jobs liberados, então repetir o comando avança pelo histórico. Um contexto em uso pelo gateway aparece como "ocupado" e é tentado de novo na próxima execução. Cada remoção grava um registro `native.exam_work_released` na auditoria.
+Cada página consulta até 200 candidatos. Quando houver uma continuação, repita o comando do projeto com o valor de `--apos` exibido. O proprietário pode aplicar uma página com `--aplicar`.
+
+Para liberar `work/`, o supervisor confere a autorização do proprietário, a reserva liberada, o recibo de conclusão, o resultado em disco e a prova assinada da retirada dos contêineres e da rede. Nos jobs de design, as finalidades aceitas são exame, crítica e confirmação. A preparação da retirada é registrada antes da exclusão. Uma repetição pode concluir o registro de auditoria se o banco falhar depois da remoção. O supervisor percorre a cópia por descritores de diretório. Os relatórios, os arquivos de entrada e saída e `review-artifact/` continuam disponíveis.
 
 A prova mensal restaura o backup mais novo num banco descartável no mesmo servidor, confere o `MANIFEST.txt`, conta projetos, conversas e pedidos, e apaga esse banco. O resultado fica em `<dataDirectory>/restore-proof.json`. Se falhar, chega "A prova mensal de restauração do backup falhou.".
 

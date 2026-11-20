@@ -63,7 +63,7 @@ async function writeInstallationAtomically(file:string,raw:unknown){
  await rename(temporary,file);
 }
 
-type WorkSelection={apply:boolean;projectId?:string;jobIds?:string[];limit:number};
+type WorkSelection={apply:boolean;projectId?:string;after?:string;jobIds?:string[];limit:number};
 const MAX_WORK_BATCH=200;
 
 function parseWorkRetirementArgs(installationPath:string,rest:readonly string[]){
@@ -75,11 +75,12 @@ function parseWorkRetirementArgs(installationPath:string,rest:readonly string[])
   const value=rest[++i];
   if(flag==='--projeto'&&!seen.has(flag)&&Id.safeParse(value).success){seen.add(flag);selection.projectId=value;continue;}
   if(flag==='--job'&&Id.safeParse(value).success){(selection.jobIds??=[]).push(value!);continue;}
+  if(flag==='--apos'&&!seen.has(flag)&&Id.safeParse(value).success){seen.add(flag);selection.after=value;continue;}
   if(flag==='--limite'&&!seen.has(flag)&&/^[1-9][0-9]{0,2}$/.test(value??'')&&Number(value)<=MAX_WORK_BATCH){seen.add(flag);selection.limit=Number(value);continue;}
   throw new Refusal('MAINTENANCE_USAGE');
  }
  // Exactly one scope: one project, or an explicit list of ids. Never the whole installation.
- if(Boolean(selection.projectId)===Boolean(selection.jobIds)||(selection.jobIds&&(selection.jobIds.length>MAX_WORK_BATCH||seen.has('--limite'))))throw new Refusal('MAINTENANCE_USAGE');
+ if(Boolean(selection.projectId)===Boolean(selection.jobIds)||(!selection.projectId&&selection.after)||(selection.jobIds&&(selection.jobIds.length>MAX_WORK_BATCH||seen.has('--limite'))))throw new Refusal('MAINTENANCE_USAGE');
  return {installationPath,releaseExamWork:selection};
 }
 
@@ -196,6 +197,11 @@ async function recoverNeverStartedModuleExamFromInstallation(config:Installation
  * Scope is one configured project or an explicit id list, never the installation. Without `apply` nothing is removed.
  * Every job is judged again under its context lease and row lock, so a repeat run, a busy context or a bad id only changes that line. */
 export async function releaseExamWorkFromInstallation(config:Installation,selection:WorkSelection):Promise<string[]>{
+ if(typeof selection.apply!=='boolean'||!Number.isInteger(selection.limit)||selection.limit<1||selection.limit>MAX_WORK_BATCH||
+    Boolean(selection.projectId)===Boolean(selection.jobIds)||selection.projectId&&!Id.safeParse(selection.projectId).success||
+    selection.after&&(!selection.projectId||!Id.safeParse(selection.after).success)||
+    selection.jobIds&&(!Array.isArray(selection.jobIds)||!selection.jobIds.length||selection.jobIds.length>MAX_WORK_BATCH||selection.jobIds.some(id=>!Id.safeParse(id).success)))
+  throw new Refusal('MAINTENANCE_USAGE');
  const boot=config.nativeBootstrap;
  if(!boot||boot.state!=='active')throw new Refusal('MAINTENANCE_NATIVE_REQUIRED',409);
  const projects=[config.project,...config.projects];
@@ -209,20 +215,22 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
   const found=selection.projectId
    ?(await ledger.pool.query<Candidate>(`SELECT ${columns} FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id
       JOIN ac_native_terminal_retirements r ON r.job_id=j.id AND r.state='removed'
-      WHERE x.project_id=$1 AND j.state='completed' AND j.role='specialist' ORDER BY j.created_at,j.id`,[selection.projectId])).rows
+      WHERE x.project_id=$1 AND j.state='completed' AND j.role='specialist' AND ($2::uuid IS NULL OR j.id>$2) ORDER BY j.id LIMIT $3`,[selection.projectId,selection.after??null,MAX_WORK_BATCH])).rows
    :(await ledger.pool.query<Candidate>(`SELECT ${columns} FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE j.id=ANY($1::uuid[])`,[selection.jobIds])).rows;
   for(const id of selection.jobIds??[])if(!found.some(row=>row.id===id)){lines.push(`${id}: recusado (not_found).`);totals.refused++;}
   const supervisors=await composePersonalExecutionSupervisors(config,ledger);
   const owners=new Map<string,string|undefined>();
-  let handled=0;
+  let handled=0,lastId:string|undefined;
   for(const row of found){
    if(selection.projectId&&handled>=selection.limit)break;
+   lastId=row.id;
    const project=projects.find(item=>item.id===row.project_id);
    if(!project){lines.push(`${row.id}: recusado (project).`);totals.refused++;continue;}
    // The limit counts jobs actually freed (or eligible), so refusals never starve a repeated batch. Jobs without `work` are skipped without a lease.
    if(selection.projectId){
-    const present=await lstat(join(boot.execution.hostRoot,row.id,'work')).then(()=>true,()=>false);
-    if(!present){totals.absent++;continue;}
+    const present=await lstat(join(boot.execution.hostRoot,row.id,'work')).then(()=>true,(e:NodeJS.ErrnoException)=>e.code==='ENOENT'?false:null);
+    if(present===null){totals.failed++;lines.push(row.id+': não foi possível inspecionar work.');continue;}
+    if(!present && !(await ledger.pool.query("SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind='native.exam_work_release_planned' AND NOT EXISTS(SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind='native.exam_work_released') LIMIT 1",[row.context_id,row.id])).rowCount){totals.absent++;continue;}
    }
    const principal=project.owner;
    if(!owners.has(project.id))owners.set(project.id,(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,principal])).rowCount?principal:undefined);
@@ -240,6 +248,7 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
     else{totals.failed++;lines.push(`${row.id}: falhou (${error instanceof Refusal?error.code:'erro'}); repita depois.`);}
    }finally{if(authority)await ledger.releaseLease(authority).catch(()=>{});}
   }
+  if(selection.projectId&&lastId&&(found.length===MAX_WORK_BATCH||lastId!==found.at(-1)?.id))lines.push('Continue com --apos '+lastId+'.');
   const mb=Math.round(totals.bytes/1048576);
   lines.push(selection.apply
    ?`Retirada de work/: ${totals.released} apagado(s) (${mb} MB), ${totals.absent} já sem work, ${totals.refused} recusado(s), ${totals.busy} ocupado(s), ${totals.failed} com falha. Repita até não restar nenhum.`

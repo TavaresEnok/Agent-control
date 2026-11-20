@@ -91,7 +91,7 @@ test('finished passive exam work copies are released only with the full proof, o
    const root=join(spool,jobId),work=join(root,'work');
    await mkdir(root,{mode:0o700});await chmod(root,o.rootMode??0o700);
    for(const dir of ['input','output','planning','review-artifact'])await mkdir(join(root,dir),{mode:0o700});
-   await writeFile(join(root,'output','execution-result.json'),'{"ok":true}');
+   await writeFile(join(root,'output','execution-result.json'),JSON.stringify({schemaVersion:1,jobId,output:'',exitCode:0,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null}),{mode:0o600});
    await writeFile(join(root,'review-artifact','a.txt'),'artifact');
    await writeFile(join(root,'worker-terminal.log'),'log');
    if(o.work==='symlink')await symlink(outside,work);
@@ -111,7 +111,7 @@ test('finished passive exam work copies are released only with the full proof, o
   };
   const intact=async(p:Planted)=>{
    for(const name of ['input','output','planning','review-artifact'])assert.ok(await exists(join(p.root,name)),name+' kept');
-   assert.equal(await readFile(join(p.root,'output','execution-result.json'),'utf8'),'{"ok":true}');
+   assert.equal(JSON.parse(await readFile(join(p.root,'output','execution-result.json'),'utf8')).jobId,p.jobId);
    assert.equal(await readFile(join(p.root,'review-artifact','a.txt'),'utf8'),'artifact');
    assert.equal(await readFile(join(p.root,'worker-terminal.log'),'utf8'),'log');
   };
@@ -119,6 +119,23 @@ test('finished passive exam work copies are released only with the full proof, o
   const journal=async()=>JSON.stringify((await db.pool.query('SELECT job_id,state,binding,proof FROM ac_native_terminal_retirements ORDER BY job_id')).rows);
   const audits=async(jobId:string)=>(await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='native.exam_work_released' AND detail->>'jobId'=$1",[jobId])).rows[0].n as number;
 
+  const noOutput=await plant();
+  await rm(join(noOutput.root,'output','execution-result.json'));
+  assert.deepEqual(await run(noOutput,true),{jobId:noOutput.jobId,state:'refused',reason:'receipt'});
+  assert.ok(await exists(noOutput.work));
+  const design=await plant({workflow:'design-readonly-v1'});
+  await db.pool.query("UPDATE ac_capacity_grants SET selection=jsonb_set(coalesce(selection,'{}'::jsonb),'{designPurpose}',to_jsonb('examiner'::text)) WHERE id=(SELECT grant_id FROM ac_native_execution_jobs WHERE id=$1)",[design.jobId]);
+  assert.equal((await run(design,true)).state,'released');
+  await intact(design);
+  const interrupted=await plant();
+  await db.pool.query(`CREATE FUNCTION fail_retention_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='native.exam_work_released' THEN RAISE EXCEPTION 'synthetic audit failure'; END IF; RETURN NEW; END $$;
+    CREATE TRIGGER retention_audit_failure BEFORE INSERT ON ac_audit FOR EACH ROW EXECUTE FUNCTION fail_retention_audit()`);
+  try{await assert.rejects(run(interrupted,true),/synthetic audit failure/);}
+  finally{await db.pool.query('DROP TRIGGER retention_audit_failure ON ac_audit; DROP FUNCTION fail_retention_audit()');}
+  assert.equal(await exists(interrupted.work),false);
+  assert.equal(await audits(interrupted.jobId),0);
+  assert.equal((await run(interrupted,true)).state,'absent');
+  assert.equal(await audits(interrupted.jobId),1);
   // 1. Inspection changes nothing; apply frees only work, leaves the journal and siblings alone, and is repeatable.
   const a=await plant(),neighbour=await plant();
   const before=await journal();
@@ -172,6 +189,8 @@ test('finished passive exam work copies are released only with the full proof, o
   const projectScope=async(apply:boolean,limit=50)=>(await releaseExamWorkFromInstallation(config,{apply,projectId:project,limit})).join('\n');
   const workCount=async()=>(await Promise.all((await readdir(spool)).map(name=>exists(join(spool,name,'work'))))).filter(Boolean).length;
   const start=await workCount();
+  await assert.rejects(releaseExamWorkFromInstallation(config,{apply:true,jobIds:[batchA.jobId],projectId:project,limit:1}), (e:unknown)=>e instanceof Refusal&&e.code==='MAINTENANCE_USAGE');
+  await assert.rejects(releaseExamWorkFromInstallation(config,{apply:true,jobIds:Array(201).fill(batchA.jobId),limit:1}), (e:unknown)=>e instanceof Refusal&&e.code==='MAINTENANCE_USAGE');
   const state=await journal();
   const previewText=await projectScope(false);
   assert.match(previewText,/Prévia, nada foi apagado/);
