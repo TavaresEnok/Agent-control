@@ -10,6 +10,7 @@ import {type ModuleExamProvider, moduleExamProviders} from './module-exam-egress
 import type {ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {
   examineFunctionalModule,
+  CLAUDE_QUOTA_RETRY_INTERVAL_MS,
   type ModuleExamInput,
   type ModuleExamResult,
   type ModuleExamReviewTarget,
@@ -29,13 +30,32 @@ type ReservationInput = {
   supportedSeats: ReadonlyMap<ModuleExamProvider, ReadonlySet<string>>;
 };
 
+export type ModuleExamClock = {
+  now: () => number;
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+};
+
+const defaultExamClock: ModuleExamClock = {
+  now: () => Date.now(),
+  async sleep(ms, signal) {
+    try {
+      await delay(ms, undefined, {signal});
+    } catch (error) {
+      if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+      throw error;
+    }
+  },
+};
+
 export function createModuleExamReservations(input: ReservationInput): Pick<Required<ModuleExamInput>, 'reserve'|'release'> & {
   reserveReviewer: (
     avoid: {provider: string; profileId: string | null; accountId: string | null} | null,
     target?: ModuleExamReviewTarget,
   ) => Promise<ModuleExamSeat>;
+  lastAttemptProvider: () => string | undefined;
 } {
   const capacity = new Capacity(input.ledger);
+  let lastProvider: string | undefined;
   const release = async (seat: ModuleExamSeat, state: 'not_started'|'exited') => {
     await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId: seat.grantId, state});
   };
@@ -47,6 +67,7 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
     target?: ModuleExamReviewTarget,
   ) => {
     if (target?.fromExaminer && target.severity === 'alta') {
+      lastProvider = 'claude';
       const accounts = input.supportedSeats.get('claude');
       if (!accounts?.size) throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
       const seat = await reserveSpecialistExamSeat({
@@ -75,6 +96,7 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
     }
     for (const [provider, accounts] of input.supportedSeats) {
       if (provider === avoid?.provider || !accounts.size) continue;
+      lastProvider = provider;
       try {
         const seat = await capacity.reserveWithSeat(input.principal, {attemptId: randomUUID(), intentId: input.intentId,
           contextId: input.authority.contextId, role: 'specialist', provider, allowedAccounts: [...accounts],
@@ -100,12 +122,14 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
   return {
     release,
     reserveReviewer,
+    lastAttemptProvider: () => lastProvider,
     async reserve(purpose, avoid, target) {
       if (purpose === 'reviewer') {
         if (!avoid) throw new Refusal('MODULE_EXAM_EXAMINER_REQUIRED');
         return reserveReviewer(avoid, target);
       }
       if (!input.module) throw new Refusal('MODULE_EXAM_EXAMINER_UNAVAILABLE');
+      lastProvider = 'claude';
       const accounts = input.supportedSeats.get('claude');
       if (!accounts?.size) throw new Refusal('MODULE_EXAM_EXAMINER_UNAVAILABLE');
       const requirement = moduleExaminerRequirement(input.module);
@@ -303,8 +327,48 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
 export type ModuleExamCallback = (request: Parameters<NonNullable<VerificationModuleRunInput['examinar']>>[0]
   & {collector?: ModuleExamCollectorContext}) => Promise<ModuleExamResult>;
 
+async function refreshClaudeExamQuotaForRetry(ledger: Ledger, accountIds: readonly string[]): Promise<void> {
+  if (!accountIds.length) return;
+  await ledger.tx(async c => {
+    await c.query(
+      `UPDATE ac_accounts SET exhausted_until=NULL
+       WHERE id=ANY($1::uuid[]) AND provider='claude' AND mode='subscription_cli'`,
+      [accountIds],
+    );
+    await c.query(
+      `INSERT INTO ac_quota_observations(account_id,status,source,observed_at,expires_at)
+       SELECT id,'available','personal://refresh',clock_timestamp(),clock_timestamp()+interval '1 hour'
+       FROM ac_accounts
+       WHERE id=ANY($1::uuid[]) AND enabled AND provider='claude' AND mode='subscription_cli'
+         AND (exhausted_until IS NULL OR exhausted_until<=clock_timestamp())
+       ON CONFLICT(account_id) DO UPDATE
+         SET status=excluded.status,source=excluded.source,observed_at=excluded.observed_at,expires_at=excluded.expires_at`,
+      [accountIds],
+    );
+    await c.query(
+      `UPDATE ac_model_quota_observations
+       SET status='available',source='personal://refresh',observed_at=clock_timestamp(),expires_at=clock_timestamp()+interval '1 hour'
+       WHERE account_id=ANY($1::uuid[])
+         AND EXISTS(SELECT 1 FROM ac_accounts a WHERE a.id=ac_model_quota_observations.account_id
+           AND a.enabled AND a.provider='claude' AND a.mode='subscription_cli'
+           AND (a.exhausted_until IS NULL OR a.exhausted_until<=clock_timestamp()))`,
+      [accountIds],
+    );
+    await c.query(
+      `UPDATE ac_quota_observations q
+       SET observed_at=clock_timestamp(),expires_at=clock_timestamp()+interval '1 hour'
+       FROM ac_accounts a
+       WHERE a.id=q.account_id AND a.enabled AND a.mode='subscription_cli'
+         AND q.status='available' AND (a.exhausted_until IS NULL OR a.exhausted_until<=clock_timestamp())`,
+    );
+  });
+}
+
 export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | 'runtime' | 'signal'> & {
   loadRuntime: () => Promise<ModuleExamRuntime>;
+  waitForClaudeQuota?: boolean;
+  clock?: ModuleExamClock;
+  onQuotaWait?: (info: {purpose: 'examiner' | 'reviewer'; file: string; delayMs: number}) => void;
 }): ModuleExamCallback {
   return async ({intentId, snapshot, module, findings, collector, signal}): Promise<ModuleExamResult> => {
     const map = await mapModuleSnapshot(snapshot, signal, {aggregateOmissions: module === 'arquitetura'});
@@ -314,10 +378,39 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
     if (!runtime.some(seat => seat.provider === 'claude')) {
       return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE'});
     }
+    const supportedSeats = new Map(runtime.map(seat => [seat.provider, seat.accountIds]));
+    const reservations = createModuleExamReservations({...input, intentId, module, supportedSeats});
+    const clock = input.clock ?? defaultExamClock;
+    const waitForClaudeQuota = input.waitForClaudeQuota
+      ? async ({purpose, provider, accountId, file, signal: waitSignal}: Parameters<NonNullable<ModuleExamInput['waitForClaudeQuota']>>[0]) => {
+          const activeSignal = waitSignal ?? signal;
+          if (activeSignal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+          const effectiveProvider = provider !== 'unknown' ? provider : (reservations.lastAttemptProvider() ?? 'unknown');
+          if (effectiveProvider !== 'claude') return false;
+          const claudeAccounts = supportedSeats.get('claude');
+          const targetAccounts = accountId
+            ? (claudeAccounts?.has(accountId) ? [accountId] : [])
+            : [...(claudeAccounts ?? [])];
+          if (!targetAccounts.length) return false;
+          input.onQuotaWait?.({purpose, file, delayMs: CLAUDE_QUOTA_RETRY_INTERVAL_MS});
+          try {
+            await clock.sleep(CLAUDE_QUOTA_RETRY_INTERVAL_MS, activeSignal);
+          } catch (error) {
+            if (activeSignal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+            throw error;
+          }
+          if (activeSignal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+          await refreshClaudeExamQuotaForRetry(input.ledger, targetAccounts);
+          if (activeSignal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+          return true;
+        }
+      : undefined;
     return examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal,
       ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
       worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
-      ...createModuleExamReservations({...input, intentId, module, supportedSeats: new Map(runtime.map(seat => [seat.provider, seat.accountIds]))}),
+      reserve: reservations.reserve,
+      release: reservations.release,
+      ...(waitForClaudeQuota ? {waitForClaudeQuota} : {}),
     });
   };
 }
