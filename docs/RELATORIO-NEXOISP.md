@@ -2,6 +2,19 @@
 
 Ordem do titular em `1e954d30`. A revisão começou pela qualificação do examinador no IspAgent.
 
+## Situação em 20/11/2026 às 06:41 UTC
+
+A política de design do IspAgent está na revisão 12. O examinador, a crítica visual e a criação reservam Opus 5.5 em esforço `high` na Enok Max. A confirmação independente de achados reserva Opus 5.5 `medium`. O diário do NexoISP já registra inferência real nas etapas de exame, crítica e confirmação. A criação foi comprovada por reserva na instalação e por teste de lançamento assinado. O backup, os testes e os recibos estão detalhados abaixo.
+
+| Módulo no NexoISP | Evidência disponível | Achados e cobertura |
+|---|---|---|
+| 1. Segurança | Coleta estática concluída. A rodada `4957ad10` segue em exame; às 06:41 UTC, havia 79 chamadas concluídas do examinador. | A publicação ainda está pendente. |
+| 2. QA | A primeira rodada publicou 45 arquivos julgados. A releitura das 47 respostas recebidas aceitou todas com o leitor corrigido. | Dez prováveis: quatro médios, dois baixos e quatro informativos. A rodada deixou 1.948 arquivos com falha de infraestrutura. |
+| 3 a 9. Arquitetura, dependências, banco, prontidão, desempenho, documentação e conformidade | Aguardam execução no NexoISP. A prova de arquitetura descrita abaixo usou o IspAgent. | Cobertura e gravidades pendentes. |
+| 10. Design | O navegador autenticado visitou 49 rotas, com 42 destinos únicos. O lote com seis páginas gerou 36 PNGs antes de atingir o limite de tempo do coletor. O primeiro par passou da coleta ao examinador. | Notas e achados do par aguardam publicação. |
+
+Em separado, a CI confirmou uma falha de formatação de gravidade baixa. A correção está no commit local `f4b1eca7` do ramo `agent-control/revisao-20261119`. A entrega do ramo remoto aguarda o fechamento da revisão.
+
 ## Diagnóstico inicial de arquitetura no IspAgent
 
 Na execução `42225b53-7049-4935-96a9-f99b2a03965b`, a tabela de cobertura contém 29 linhas com `MODULE_EXAM_RESPONSE_INVALID` e 221 com `PROVIDER_USAGE_LIMIT`. O banco da instalação vincula 29 trabalhos nativos a essa execução. A contagem de 56 citada na ordem não corresponde a 56 respostas independentes nos recibos disponíveis.

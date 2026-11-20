@@ -1680,3 +1680,18 @@ FIM
 - 20/11/2026 06:09 UTC — Iniciada a CLI personal:design para design-nexo-telas-lote-01.
 - 20/11/2026 06:10 UTC — Correção design-cota-r2 atribuída ao Opus 5.5 medium no login dedicado Enok.
 - 20/11/2026 06:10 UTC — A leitura do projeto encontrou 215 arquivos candidatos de tela e zero rotas. A CLI por URL havia capturado somente a raiz. O exame anterior foi interrompido entre reservas. Organizados os 42 destinos distintos em sete lotes de seis; o leitor e o enumerador da própria CLI confirmaram seis HTML e seis rotas em cada lote. A primeira invocação sem URL mostrou o uso da CLI; relançada com URL interna e --servir.
+- 20/11/2026 06:13 UTC — Removidas as duas imagens candidatas de login que o gerente criou para a homologação e que a revisão reteve. Ambas tinham IDs e digests distintos da imagem aceita, sem contêiner associado.
+- 20/11/2026 06:15 UTC — A ordem design-cota-r2 do Opus encerrou com código 0.
+- 20/11/2026 06:17 UTC — Revisão independente revisao-design-cota-r2 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 06:19 UTC — Iniciada ordem design-cota-r3 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 06:19 UTC — Lote visual 1: a imagem real da CLI gerou 36 PNGs, seis para cada uma das seis rotas, nos três tamanhos e dois temas. A publicação das notas ainda depende do exame.
+- 20/11/2026 06:21 UTC — Ordem design-cota-r3 em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 06:24 UTC — Revisão independente revisao-design-cota-r3 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 06:25 UTC — Iniciada ordem design-cota-r4 em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 06:27 UTC — Recuperados cerca de 3,4 GiB com checkout esparso em oito worktrees temporários de trabalhadores encerrados. Apenas upstream/happier/apps, inteiramente rastreado e sem mudanças ou arquivos extras, saiu dessas cópias; git status permaneceu idêntico. git sparse-checkout disable recompõe cada árvore. O módulo estático tem 2.825 arquivos no inventário inicial, divididos em 189 fatias antes das confirmações.
+- 20/11/2026 06:30 UTC — A CLI personal:design de design-nexo-telas-lote-01 encerrou com código 1.
+- 20/11/2026 06:31 UTC — O primeiro lote excedeu o prazo de 20 minutos da imagem antes da publicação do JSON. As 36 capturas reais foram preservadas com SHA-256. O contêiner remanescente foi identificado pelo digest e pela montagem exclusiva para encerramento. O exame continua em pares para caber no tempo da CLI sem alterar o limite da instalação.
+- 20/11/2026 06:31 UTC — Iniciada a CLI personal:design para design-nexo-dupla-01.
+- 20/11/2026 06:38 UTC — Com 12 GiB livres, o primeiro par de design e a rodada estática continuam em execução. A próxima vaga vai para QA: os módulos por arquivo usam o caminho nativo sem cópias integrais do checkout. Os demais pares de design ficam na fila do gerente.
+- 20/11/2026 06:40 UTC — Interrompida no worktree do candidato a suíte geral de 380 arquivos iniciada pelo trabalhador, para reservar os recursos da instalação às CLIs em curso. O aceite deste candidato usa TypeScript, os testes de cota e o caminho de design alterado.
+- 20/11/2026 06:41 UTC — Atualizado o relatório com a situação dos dez módulos, a distinção entre a execução na Enok Max e a prova de criação, e o estado do ramo de entrega.
