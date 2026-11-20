@@ -1390,6 +1390,8 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
     ];
 
     for (const item of cases) {
+      const purposes = {'design-revisor':'reviewer', 'design-critica':'visual', 'design-criar':'create', 'design-examinador':'examiner'} as const;
+      const designPurpose = purposes[item.label as keyof typeof purposes];
       const intentId = randomUUID();
       const grantId = randomUUID();
       const jobId = randomUUID();
@@ -1397,19 +1399,19 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       memory.insert('ac_capacity_grants', {
         id: grantId, intent_id: intentId, context_id: context, project_id: project, manager_epoch: authority.epoch,
         account_id: account, profile_id: item.label === 'design-revisor' ? mediumProfile : profile, role: item.role,
-        selection: {designPurpose: {'design-revisor':'reviewer', 'design-critica':'visual', 'design-criar':'create', 'design-examinador':'examiner'}[item.label]},
+        selection: {designPurpose},
         model: item.workflow === 'design-readonly-v1' ? 'claude-opus-5-5' : 'fixture-model',
         effort: item.workflow === 'design-readonly-v1' && item.label !== 'design-revisor' ? 'high' : 'medium',
         resource_kind: 'model', state: 'reserved',
       });
       const req = NativeExecutionRequest.parse({
         jobId, intentId, grantId, sessionId: randomUUID(), base: 'e'.repeat(40),
-        role: item.role, task: item.task,
+        role: item.role, task: item.task, ...(designPurpose ? {designPurpose} : {}),
         writePaths: item.role === 'programmer' ? ['src/a.ts'] : [],
         ...(item.role === 'programmer' ? {} : {artifactId: randomUUID(), outputSchema: {type: 'object'}}),
       });
       if (item.workflow === 'design-readonly-v1') {
-        for (const wrong of [{selection: {designPurpose: 'wrong'}}, {account_id: randomUUID()}, {model: 'claude-sonnet-5-5'}, {effort: item.label === 'design-revisor' ? 'high' : 'medium'}]) {
+        for (const wrong of [{selection: {designPurpose: designPurpose === 'visual' ? 'examiner' : 'visual'}}, {account_id: randomUUID()}, {model: 'claude-sonnet-5-5'}, {effort: item.label === 'design-revisor' ? 'high' : 'medium'}]) {
           const badGrant = randomUUID();
           const badJob = randomUUID();
           memory.insert('ac_capacity_grants', {...memory.one('ac_capacity_grants', grantId), ...wrong, id: badGrant});
@@ -1705,7 +1707,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     });
     const input1 = NativeExecutionRequest.parse({
       jobId: job1, intentId: intent, grantId: grant1, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     lastJobId = job1;
     lastLaunchHash = digest(input1);
@@ -1763,7 +1765,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     });
     const failInput = NativeExecutionRequest.parse({
       jobId: failJob, intentId: intent, grantId: failGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     await assert.rejects(() => supervisor.start(principal, authority, failInput), /EISDIR/);
     assert.equal(memory.one('ac_capacity_grants', failGrant).state, 'released');
@@ -1777,7 +1779,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     const unstartedSession = randomUUID();
     const unstartedInput = NativeExecutionRequest.parse({
       jobId: unstartedJob, intentId: intent, grantId: unstartedGrant, sessionId: unstartedSession, base: 'e'.repeat(40),
-      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     const unstartedHash = digest(unstartedInput);
     const createdState = {Status: 'created', Running: false, ExitCode: 0, FinishedAt: '0001-01-01T00:00:00Z', StartedAt: '0001-01-01T00:00:00Z', Pid: 0};
@@ -2594,7 +2596,7 @@ test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBefo
     });
     const diskInput = NativeExecutionRequest.parse({
       jobId: diskJob, intentId: intent, grantId: diskGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     await assert.rejects(
       () => supervisor.start(principal, authority, diskInput),
@@ -2615,7 +2617,7 @@ test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBefo
     });
     const inspectInput = NativeExecutionRequest.parse({
       jobId: inspectJob, intentId: intent, grantId: inspectGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     await assert.rejects(
       () => supervisor.start(principal, authority, inspectInput),
@@ -2635,7 +2637,7 @@ test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBefo
     });
     const releaseFailInput = NativeExecutionRequest.parse({
       jobId: releaseFailJob, intentId: intent, grantId: releaseFailGrant, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Pedido de exame.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     let identityCalls = 0;
     const secretInReleaseErr = 'secret-release-err-never-logged-123';
@@ -2864,7 +2866,7 @@ rl.once('line', () => {
     });
     const req = NativeExecutionRequest.parse({
       jobId, intentId: intent, grantId, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Exame erro comum e gravação pelo supervisor.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Exame erro comum e gravação pelo supervisor.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     lastJobId = jobId;
     lastLaunchHash = digest(req);
@@ -2948,7 +2950,7 @@ rl.once('line', () => {
     });
     const req2 = NativeExecutionRequest.parse({
       jobId: job2, intentId: intent, grantId: grant2, sessionId: randomUUID(), base: 'e'.repeat(40),
-      role: 'specialist', task: 'Exame falha escrita launch.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
+      role: 'specialist', designPurpose: 'examiner', task: 'Exame falha escrita launch.', writePaths: [], artifactId: randomUUID(), outputSchema: {type: 'object'},
     });
     lastJobId = job2;
     lastLaunchHash = digest(req2);

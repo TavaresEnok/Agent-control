@@ -85,6 +85,9 @@ export const DesignConfirmResult = z.object({
 }).strict();
 export type DesignConfirmResult = z.infer<typeof DesignConfirmResult>;
 
+export const DesignPurpose = z.enum(['examiner', 'visual', 'create', 'reviewer']);
+export type DesignPurpose = z.infer<typeof DesignPurpose>;
+
 export const DesignWorkerCall = z.object({
   role: z.enum(['specialist', 'reviewer']),
   provider: z.string().min(1).max(80),
@@ -96,6 +99,7 @@ export const DesignWorkerCall = z.object({
   task: z.string().min(1).max(100000),
   repo: z.string().min(1).max(500),
   writePaths: z.tuple([]),
+  designPurpose: DesignPurpose.optional(),
   /** Só o modo criar. O exame de leitura não preenche. */
   forcedModel: z.literal('claude-opus-5-5').optional(),
   forcedEffort: z.literal('high').optional(),

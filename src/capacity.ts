@@ -6,6 +6,7 @@ import { Authority, digest, Id, Refusal } from './contracts.ts';
 import { ChainProfileFacts, classifyProfileExclusion, orderedProfileExclusions } from './capacity-exclusions.ts';
 import { Ledger } from './ledger.ts';
 import {ManagedRecipe} from './managed-plan.ts';
+import {DesignPurpose} from './design-types.ts';
 import {Effort} from './effort.ts';
 
 export const Role = z.enum(['manager', 'programmer', 'reviewer', 'qa', 'specialist', 'judge']);
@@ -56,7 +57,7 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
   preferredProfileId: Id.optional(),
   /** Only this profile in the published chain may fund the request. */
   requiredProfileId: Id.optional(),
-  designPurpose: z.enum(['examiner','visual','create','reviewer']).optional(),
+  designPurpose: DesignPurpose.optional(),
   /** Exam-reviewer-only contract: prepared specialist reviewer profiles prioritized over examiner-account avoidance while still preferring non-avoided accounts first. */
   examReviewer: z.object({
     preparedProfiles: z.array(Id).max(20),

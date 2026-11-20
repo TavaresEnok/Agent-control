@@ -1,4 +1,5 @@
 import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
+import {DesignPurpose} from './design-types.ts';
 import {requiredDesignProfile} from './design-model-reservation.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {redactNativeLogsOrWithhold,assertNoNativeTaskSecrets} from './native-execution-redaction.ts';
@@ -53,6 +54,7 @@ const Path=z.string().min(1).max(240).refine(p=>!p.startsWith('/')&&!p.includes(
 export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,sessionId:Id,base:GitId,
  role:z.enum(['programmer','qa','reviewer','judge','specialist']),task:z.string().min(1).max(100000),writePaths:z.array(Path).max(64),
  artifactId:Id.optional(),outputSchema:z.record(z.string(),z.unknown()).optional(),timeoutMs:z.number().int().min(1000).max(1800000).default(900000),
+ designPurpose:DesignPurpose.optional(),
  moduleExam:z.object({accountId:Id,profileId:Id,model:z.string().min(1).max(100)}).strict().optional(),
  model:z.string().min(1).max(100).optional(),effort:z.enum(['low','medium','high','xhigh','max']).optional()}).strict().superRefine((v,c)=>{
  if(v.moduleExam&&(v.role!=='specialist'||v.model!==undefined||v.effort!==undefined))c.addIssue({code:'custom',message:'MODULE_EXAM_SCOPE_MISMATCH'});
@@ -274,7 +276,7 @@ export class NativeExecutionSupervisor{
     await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
     // The live call has the original request. Limit automatic settlement to
     // exam login refusals that immediately terminate the caller's exam.
-    return grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model&&!input.effort&&!input.task.startsWith('Pedido de criação.');
+    return grant.state==='uncertain'&&PreLaunchExamReason.safeParse(reason).success&&!input.model&&!input.effort&&input.designPurpose!=='create'&&!input.task.startsWith('Pedido de criação.');
    });
    if(!shouldSettle)return;
    // Commit the physical receipt before settlement so maintenance can retry
@@ -351,19 +353,19 @@ export class NativeExecutionSupervisor{
    await failBeforeLaunch('native_image_missing');
    throw new Refusal('NATIVE_IMAGE_MISSING');
   }
-  // Stored workflow is the signal; the task prefix only separates create from the readonly exam.
+  // The grant carries the authorized design purpose. Prompt text is not an authorization signal.
   const askedModel=input.model!==undefined||input.effort!==undefined;
-  const designCreate=personal&&input.role==='specialist'&&examWorkflowEarly==='design-readonly-v1'&&input.task.startsWith('Pedido de criação.');
+  const designCreate=personal&&input.role==='specialist'&&examWorkflowEarly==='design-readonly-v1'&&input.designPurpose==='create';
   try{
+   if(input.designPurpose&&!(personal&&readonlyDesignExam(examWorkflowEarly,input.role)))throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
    if(askedModel&&(!designCreate||input.model!=='claude-opus-5-5'||input.effort!=='high'))throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
    checkAbort();
    await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
    // Commit the uncertainty before files, Docker networks or processes exist.
    await this.ledger.tx(async c=>{const current=await this.identity(c,principal,authority,input);assertModelAllowed(current.model);
     if(personal && readonlyDesignExam(examWorkflowEarly,input.role)){
-     const purpose=designCreate?'create':input.task.startsWith('Pedido de confirmação.')?'reviewer':
-      input.task.startsWith('Pedido de crítica visual.')||input.task.startsWith('Pedido de crítica visual do revisor.')?'visual':'examiner';
-     if(current.selection?.designPurpose!==purpose)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
+     const purpose=input.designPurpose;
+     if(!purpose||current.selection?.designPurpose!==purpose)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
      const profile=await requiredDesignProfile(c,authority.contextId,purpose);
      if(this.config.provider!=='claude'||current.profile_id!==profile.id||current.account_id!==profile.account||
         current.model!==profile.model||current.effort!==profile.effort)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
@@ -700,7 +702,7 @@ export class NativeExecutionSupervisor{
    const request=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));
    if(digest(request)!==row.input_digest||request.jobId!==jobId||request.intentId!==row.intent_id||request.grantId!==row.grant_id||
     request.sessionId!==row.session_id||request.role!==row.role||request.base!==row.base_id||
-    (!allowExplicitDesign&&(request.model||request.effort||request.task.startsWith('Pedido de criação.'))))
+    (!allowExplicitDesign&&(request.model||request.effort||request.designPurpose==='create'||request.task.startsWith('Pedido de criação.'))))
     throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
   }finally{bytes.fill(0);}
  }

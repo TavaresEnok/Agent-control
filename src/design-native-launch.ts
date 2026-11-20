@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {Refusal, type Authority} from './contracts.ts';
 import {safeFailureCode} from './exam-login.ts';
 import type {Ledger} from './ledger.ts';
-import {DesignWorkerCall, type DesignWorker} from './design-types.ts';
+import {DesignWorkerCall, type DesignWorker, type DesignPurpose} from './design-types.ts';
 import {NativeExecutionRequest} from './native-execution-supervisor.ts';
 
 // The native job may run until its 15 minute timeout. Polling every 2s has to outlast that.
@@ -48,6 +48,7 @@ export function buildDesignExamRequest(input: {
   role: 'specialist' | 'reviewer';
   task: string;
   artifactId: string;
+  designPurpose?: DesignPurpose;
   forcedModel?: 'claude-opus-5-5';
   forcedEffort?: 'high';
 }) {
@@ -59,6 +60,7 @@ export function buildDesignExamRequest(input: {
     base: input.base,
     role: input.role,
     task: input.task,
+    ...(input.designPurpose ? {designPurpose: input.designPurpose} : {}),
     writePaths: [],
     artifactId: input.artifactId,
     outputSchema,
@@ -128,6 +130,7 @@ export function createDesignNativeWorker(input: {
         base,
         role: parsed.role,
         task: parsed.task,
+        designPurpose: parsed.designPurpose,
         artifactId: randomUUID(),
         ...(parsed.forcedModel === undefined ? {} : {forcedModel: parsed.forcedModel, forcedEffort: parsed.forcedEffort ?? 'high'}),
       });

@@ -13,6 +13,7 @@ import {
   DesignExamFinding,
   DesignExamResult,
   DesignWorkerCall,
+  type DesignPurpose,
   type DesignExamCoverage,
   clampHighSeverity,
   type DesignChecklistItem,
@@ -22,7 +23,7 @@ import {
 } from './design-types.ts';
 
 export type DesignReserveOptions = {
-  purpose?: 'create' | 'examiner' | 'reviewer' | 'visual';
+  purpose?: DesignPurpose;
   avoidProfileId?: string;
   avoidProfileIds?: readonly string[];
   avoidAccountId?: string;
@@ -397,6 +398,7 @@ async function askVisual(
   try {
     acceptClaudeExamSeat(seat);
     const call = DesignWorkerCall.parse({
+      designPurpose: 'visual',
       role: seat.grantRole ?? role,
       provider: seat.provider,
       accountId: seat.accountId,
@@ -464,6 +466,7 @@ async function confirmFinding(
     acceptClaudeExamSeat(seat);
     noteModel(seat.model);
     const call = DesignWorkerCall.parse({
+      designPurpose: 'reviewer',
       role: seat.grantRole ?? 'reviewer',
       provider: seat.provider,
       accountId: seat.accountId,
@@ -548,6 +551,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
     try {
       acceptClaudeExamSeat(seat);
       const call = DesignWorkerCall.parse({
+        designPurpose: 'examiner',
         role: seat.grantRole ?? 'specialist',
         provider: seat.provider,
         accountId: seat.accountId,

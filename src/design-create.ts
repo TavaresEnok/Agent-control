@@ -814,6 +814,7 @@ export async function runDesignCreate(input: {
     let output = '';
     try {
       const call = DesignWorkerCall.parse({
+        designPurpose: 'create',
         role: 'specialist',
         provider: seat.provider,
         accountId: seat.accountId,
