@@ -1463,3 +1463,8 @@ PAUSADO-COTA
 - 20/11/2026 00:06 UTC — trabalho-C-PRONTIDAO-VIVA-R22 iniciado em final-pront-viva por terra high.
 - 20/11/2026 00:09 UTC — C-PRONTIDAO-VIVA-R22 encerrado com código 0.
 - 20/11/2026 00:09 UTC — Correção pront-viva recebida em 4504ffb7. Revisão Sol high somente leitura solicitada.
+- 20/11/2026 00:09 UTC — revisor-C-ACEITE-PRONTIDAO-VIVA-R22 iniciado em agent-control por Sol high normal somente leitura.
+- 20/11/2026 00:10 UTC — Imagem de prontidao construída e arquivada por digest em 715d1b8c.
+- 20/11/2026 00:10 UTC — prontidao em 715d1b8c publicou sobre o snapshot real em banco descartável. Cobertura {'ok': 183, 'failed': 3, 'skipped': 7}; código do produto VERIFY_TOOLS_FAILED.
+- 20/11/2026 00:10 UTC — C-ACEITE-PRONTIDAO-VIVA-R22 encerrado com código 0.
+- 20/11/2026 00:11 UTC — Preserva a palavra completa encostada no redirecionamento. Ordem C-PRONTIDAO-VIVA-R23 em worktree separado conforme 43f1c664.
