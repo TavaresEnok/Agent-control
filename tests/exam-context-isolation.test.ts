@@ -415,7 +415,7 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
     await capacity.registerModel(principal, {
-      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: ['specialist', 'reviewer'], source: 'synthetic://verifyctx',
+      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium', 'high'], roles: ['specialist', 'reviewer'], source: 'synthetic://verifyctx',
     });
     const addClaude = async () => {
       const id = randomUUID();
@@ -426,7 +426,7 @@ test('verificação pessoal via CLI usa contexto dedicado verify, convive com ge
       await capacity.observeQuota(principal, id, {status: 'available', source: 'fixture', ttlSeconds: 3600});
       const spec = randomUUID();
       const rev = randomUUID();
-      await capacity.addProfile(principal, projectId, {id: spec, accountId: id, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+      await capacity.addProfile(principal, projectId, {id: spec, accountId: id, model: 'claude-sonnet-5-5', effort: 'high', role: 'specialist'});
       await capacity.addProfile(principal, projectId, {id: rev, accountId: id, model: 'claude-sonnet-5-5', effort: 'medium', role: 'reviewer'});
       return {id, spec, rev};
     };

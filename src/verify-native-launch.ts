@@ -149,6 +149,7 @@ export function createCapacityNativeWorker(input: {
         task: parsed.task,
         artifactId: randomUUID(),
       });
+      (call as {examSessionId?: string}).examSessionId = request.sessionId;
       active = {supervisor, request};
       try {
         return await finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait);

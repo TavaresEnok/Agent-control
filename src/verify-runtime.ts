@@ -51,6 +51,8 @@ export type SecurityVerificationInput = {
   /** Accounts folder. Secrets are read only from the reserved account directory, after the seat exists. */
   accountRoot?: string;
   notes?: readonly string[];
+  /** Applies module 1 static CLI model routing (Sonnet 5.5 high on priority Max; Opus 5.5 medium in distinct session for high examiner findings). */
+  staticModelPolicy?: boolean;
 };
 
 export const DEFAULT_MODEL_CALL_BUDGET = 600;
@@ -79,6 +81,8 @@ type OpenFinding = {
   examinerProvider: string | null;
   examinerAccountId: string | null;
   examinerProfileId: string | null;
+  examinerGrantId: string | null;
+  examinerSessionId: string | null;
 };
 
 const FILE_TEXT_LIMIT = 20_000;
@@ -215,6 +219,8 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
           examinerProvider: examined.seat.provider,
           examinerAccountId: examined.seat.accountId,
           examinerProfileId: examined.seat.profileId,
+          examinerGrantId: examined.seat.grantId,
+          examinerSessionId: examined.sessionId,
         });
       }
     }
@@ -237,6 +243,8 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       examinerProvider: null,
       examinerAccountId: mapAccountId,
       examinerProfileId: mapProfileId,
+      examinerGrantId: null,
+      examinerSessionId: null,
     });
   }
 
@@ -256,6 +264,9 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
     if (achados.length >= 999) throw new Refusal('VERIFY_FINDING_LIMIT');
     const avoid = finding.examinerAccountId ?? mapAccountId;
     const avoidProfile = finding.examinerProfileId ?? mapProfileId;
+    const highExaminerFinding = Boolean(
+      input.staticModelPolicy && finding.examinerProvider !== null && finding.severity === 'alta',
+    );
     const content = await readRepoText(input.repoPath, finding.file, finding.line, allowedFiles);
     const reviewed = await reserveAndRun(
       input,
@@ -268,6 +279,14 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
       trackedCalls,
       avoid ? [avoid] : undefined,
       avoidProfile ? [avoidProfile] : undefined,
+      highExaminerFinding
+        ? {
+            examinerAccountId: finding.examinerAccountId,
+            examinerProfileId: finding.examinerProfileId,
+            examinerGrantId: finding.examinerGrantId,
+            examinerSessionId: finding.examinerSessionId,
+          }
+        : undefined,
     );
     let confirm;
     try {
@@ -344,6 +363,17 @@ async function examine(input: SecurityVerificationInput, intent: Intent, runId: 
   return {runId, directory: report.directory, achados, coverage: rows};
 }
 
+type HighReviewCheck = {
+  examinerAccountId: string | null;
+  examinerProfileId: string | null;
+  examinerGrantId: string | null;
+  examinerSessionId: string | null;
+};
+
+function nonEmptySessionId(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 async function reserveAndRun(
   input: SecurityVerificationInput,
   capacity: Capacity,
@@ -355,8 +385,13 @@ async function reserveAndRun(
   trackedCalls: {count: number},
   avoidAccounts?: readonly string[],
   avoidProfiles?: readonly string[],
-): Promise<{seat: Seat; output: string}> {
+  highReview?: HighReviewCheck,
+): Promise<{seat: Seat; output: string; sessionId: string | null}> {
   if (trackedCalls.count >= modelCallBudget) throw new Error('VERIFY_MODEL_BUDGET');
+  const releaseGrant = (grantId: string) =>
+    capacity.transition(input.principal, grantId, input.authority, 'released', {processId, state: 'not_started'});
+  const staticExaminer = Boolean(input.staticModelPolicy && purpose === 'examiner');
+  const staticHighReviewer = Boolean(input.staticModelPolicy && purpose === 'reviewer' && highReview);
   const seat = await reserveSpecialistExamSeat({
     capacity,
     ledger: input.ledger,
@@ -365,11 +400,42 @@ async function reserveAndRun(
     intentId,
     purpose,
     avoidProfileId: avoidProfiles?.[0],
-    avoidAccountId: avoidAccounts?.[0],
-    releaseGrant: grantId => capacity.transition(input.principal, grantId, input.authority, 'released', {processId, state: 'not_started'}),
+    ...(staticExaminer
+      ? {
+          requiredModel: 'claude-sonnet-5-5',
+          requiredEffort: 'high',
+          firstAccountOnly: true,
+          unavailableCode: 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
+        }
+      : staticHighReviewer
+        ? {
+            requiredModel: 'claude-opus-5-5',
+            requiredEffort: 'medium',
+            firstAccountOnly: true,
+            allowSameAccount: true,
+            preferEmergencyFirst: true,
+            unavailableCode: 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
+          }
+        : {
+            avoidAccountId: avoidAccounts?.[0],
+          }),
+    releaseGrant,
   });
   let thrown: unknown;
   try {
+    if (staticExaminer && (seat.provider !== 'claude' || seat.model !== 'claude-sonnet-5-5')) {
+      throw new Refusal('MODULE_EXAM_EXAMINER_UNAVAILABLE', 409);
+    }
+    if (staticHighReviewer && highReview) {
+      const sameProfile = Boolean(highReview.examinerProfileId && seat.profileId === highReview.examinerProfileId);
+      const sameGrant = Boolean(highReview.examinerGrantId && seat.grantId === highReview.examinerGrantId);
+      if (seat.provider !== 'claude' || seat.model !== 'claude-opus-5-5' || sameProfile || sameGrant) {
+        throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE', 409);
+      }
+      if (seat.accountId === highReview.examinerAccountId && (!highReview.examinerGrantId || !highReview.examinerSessionId)) {
+        throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE', 409);
+      }
+    }
     const secrets = await reservedAccountSecrets(input.accountRoot, seat.accountId, input.accountSecrets);
     const call = VerifyWorkerCall.parse({
       role: 'specialist',
@@ -385,7 +451,16 @@ async function reserveAndRun(
     });
     trackedCalls.count += 1;
     const output = redactText(await input.worker.run(call), secrets);
-    return {seat, output};
+    const sessionId = nonEmptySessionId((call as {examSessionId?: unknown}).examSessionId);
+    if (
+      staticHighReviewer
+      && highReview
+      && seat.accountId === highReview.examinerAccountId
+      && (!highReview.examinerSessionId || !sessionId || sessionId === highReview.examinerSessionId)
+    ) {
+      throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE', 409);
+    }
+    return {seat, output, sessionId};
   } catch (error) {
     thrown = error;
     throw error;

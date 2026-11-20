@@ -398,3 +398,37 @@ test('createRecheckNativeWorker repassa avoidProviders e devolve o provedor da r
   assert.equal((asked as {reviewerAccountId?: string}).reviewerAccountId, accountId);
   assert.match((asked as {reviewerSessionId?: string}).reviewerSessionId ?? '', /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 });
+
+test('createCapacityNativeWorker transporta examSessionId distinto em cada execução', async () => {
+  const askedFirst = call();
+  const askedSecond = call({accountId: askedFirst.accountId});
+  const startedSessions: string[] = [];
+  const chosen = supervisor(askedFirst.accountId, {
+    async start(_principal, _authority, request) {
+      startedSessions.push(request.sessionId);
+      return {state: 'running'};
+    },
+    async reconcile() {
+      return {state: 'completed', output: 'ok'};
+    },
+    async retireTerminal() {
+      return {state: 'removed'};
+    },
+  });
+  const worker = createCapacityNativeWorker({
+    supervisors: [chosen],
+    principal: 'owner',
+    authority: authority(),
+    ledger,
+    base,
+    wait: async () => {},
+  });
+  await worker.run(askedFirst);
+  await worker.run(askedSecond);
+  const firstSession = (askedFirst as {examSessionId?: string}).examSessionId;
+  const secondSession = (askedSecond as {examSessionId?: string}).examSessionId;
+  assert.equal(startedSessions.length, 2);
+  assert.equal(firstSession, startedSessions[0]);
+  assert.equal(secondSession, startedSessions[1]);
+  assert.notEqual(firstSession, secondSession);
+});

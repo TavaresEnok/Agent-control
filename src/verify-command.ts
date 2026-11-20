@@ -53,6 +53,8 @@ export type PersonalVerificationInput = {
   accountRoot?: string;
   timeLimitMs?: number;
   networkRunner?: NetworkRunner;
+  /** Enables module 1 static CLI model routing when `personal:verify` runs without `--url`. */
+  staticModelPolicy?: boolean;
 };
 
 export type VerificationProgress = {
@@ -83,6 +85,7 @@ type ReadyVerification = {
   modelCallBudget?: number;
   accountRoot?: string;
   timeLimitMs: number;
+  staticModelPolicy: boolean;
 };
 
 type ProgressState = {
@@ -131,6 +134,7 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
     timeLimitMs: chosenTimeLimit(input.timeLimitMs),
+    staticModelPolicy: input.url === undefined && input.staticModelPolicy === true,
   };
 }
 
@@ -479,6 +483,7 @@ async function runJob(input: {
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
+      if (ready.staticModelPolicy && ready.url === undefined) verification.staticModelPolicy = true;
       await runSecurityVerification(verification);
       state.status = 'done';
       state.phase = 'done';
@@ -748,6 +753,7 @@ export async function resolvePersonalVerification(
         databasesDirectory: databases.directory,
         image,
         modelCalls: {count: 0},
+        ...(parsed.url === undefined ? {staticModelPolicy: true} : {}),
       },
       close: async () => {
         await ledger.releaseLease(authority!).catch(() => undefined);
