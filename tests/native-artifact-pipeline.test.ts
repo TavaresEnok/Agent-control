@@ -1,8 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {randomUUID,randomBytes,generateKeyPairSync,createHash} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile,rm,readFile,symlink} from 'node:fs/promises';
+import {randomUUID,randomBytes,generateKeyPairSync,createHash,sign} from 'node:crypto';
+import {mkdtemp,mkdir,writeFile,rm,readFile,symlink,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
@@ -12,7 +12,7 @@ import {GitArtifacts} from '../src/git.ts';
 import {writeNativeSecretSnapshot} from '../src/native-execution-secret-snapshot.ts';
 import {NativeExecutionSupervisor,NativeExecutionRequest} from '../src/native-execution-supervisor.ts';
 import {NativeVerification,nativeReviewRequest,nativeReviewVerifierDigest} from '../src/native-verification.ts';
-import {digest} from '../src/contracts.ts';
+import {canonical,digest} from '../src/contracts.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 test('stopped native fixture finalizes exact scoped Git code, registers high-risk artifact and does not approve it',async()=>{
@@ -40,27 +40,34 @@ test('stopped native fixture finalizes exact scoped Git code, registers high-ris
   await db.pool.query("UPDATE ac_operations SET state='uncertain',grant_id=$2,native_session_id=$3 WHERE id=$1",[input.jobId,grant,input.sessionId]);
   const frozen={base,writePaths:input.writePaths};await db.pool.query('INSERT INTO ac_managed_delivery_inputs VALUES($1,$2,$3,$4)',[intent.id,base,frozen,digest(frozen)]);
   const workerId='f'.repeat(64),toolsId='1'.repeat(64),network='2'.repeat(64),fingerprint=createHash('sha256').update(keys.publicKey.export({format:'der',type:'spki'})).digest('hex');
-  await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'programmer','running',$14,$15,$16)`,[input.jobId,grant,intent.id,context,authority.epoch,input.sessionId,account,profile,digest({fixture:true}),supervisor.executorDigest,fingerprint,digest(input),base,workerId,toolsId,network]);
+  await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,worker_id,tools_id,network_id,launch_digest)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,1,$10,$11,$12,$13,'programmer','running',$14,$15,$16,$17)`,[input.jobId,grant,intent.id,context,authority.epoch,input.sessionId,account,profile,digest({fixture:true}),supervisor.executorDigest,fingerprint,digest(input),base,workerId,toolsId,network,digest({launch:input.jobId})]);
   const root=join(spool,input.jobId),work=join(root,'work');await mkdir(root,{mode:0o700});await mkdir(join(root,'output'),{mode:0o700});await writeNativeSecretSnapshot(join(root,'redaction.enc'),input.jobId,keys.privateKey,['fixture-secret-snapshot']);await artifacts.snapshot(base,base,work);
   await writeFile(join(root,'request.json'),JSON.stringify(input),{mode:0o600});await writeFile(join(work,'src/example.ts'),'export const value = 2;\n');
   await writeFile(join(root,'output/execution-result.json'),JSON.stringify({schemaVersion:1,jobId:input.jobId,output:'synthetic turn result',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null,exitCode:0}),{mode:0o600});
   const physical=(id:string)=>({Id:id,Image:image,Config:{Labels:{'agent-control.contract':'native-execution-v1','agent-control.job':input.jobId,'agent-control.launch':digest(input)}},State:{Status:'exited',Running:false,ExitCode:0,FinishedAt:new Date().toISOString()}});
   const w=physical(workerId),t=physical(toolsId);Object.defineProperty(supervisor,'docker',{value:{inspect:async(name:string)=>name===workerId||name.startsWith('ac-native-worker-')?w:t},configurable:true});
   const done=await supervisor.reconcile(principal,authority,input);assert.equal(done.state,'completed');assert('artifact' in done&&done.artifact);
-  const artifact=await supervisor.registerArtifact(principal,authority,input.jobId,quality);assert.equal(artifact.risk,'high');assert.equal(artifact.base_id,base);
+  // Two registrations at once are serialized by the job's work lock: one import, one row, one private ref created by CAS.
+  const [artifact,twin]=await Promise.all([supervisor.registerArtifact(principal,authority,input.jobId,quality),supervisor.registerArtifact(principal,authority,input.jobId,quality)]);
+  assert.equal(twin.id,artifact.id);assert.equal(artifact.risk,'high');assert.equal(artifact.base_id,base);
+  assert.equal(git('rev-parse','refs/agent-control/retained/'+input.jobId),artifact.commit_id);
+  // Whoever holds that lock (work retention, another registration) makes a registration wait, not fail.
+  const holder=await db.pool.connect();
+  try{
+   await holder.query('SELECT pg_advisory_lock(hashtextextended($1,0))',['agent-control:terminal-work:'+input.jobId]);
+   let settled=false;const waiting=supervisor.registerArtifact(principal,authority,input.jobId,quality).finally(()=>{settled=true;});
+   await new Promise(done=>setTimeout(done,500));
+   assert.equal(settled,false,'registration waits for the job lock');
+   await holder.query('SELECT pg_advisory_unlock_all()');
+   assert.equal((await waiting).id,artifact.id);
+  }finally{await holder.query('SELECT pg_advisory_unlock_all()').catch(()=>undefined);holder.release();}
   assert.equal(git('show',`${artifact.commit_id}:src/example.ts`),'export const value = 2;');assert.equal(git('rev-parse','refs/heads/protected'),base);
   await assert.rejects(db.tx(c=>quality.assertReady(c,artifact.id,authority)),/QA_MISSING/);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_native_artifact_finalizations')).rows[0].n,1);
   await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
   const successor=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
   assert.equal((await supervisor.registerArtifact(principal,successor,input.jobId,quality)).id,artifact.id);
-  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_artifacts')).rows[0].n,1);
-  // Once registered, replay needs only the repository's own copy: automatic work retention may have freed the checkout since.
-  await rm(work,{recursive:true,force:true});
-  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
-  const afterRetention=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
-  assert.equal((await supervisor.registerArtifact(principal,afterRetention,input.jobId,quality)).id,artifact.id);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_artifacts')).rows[0].n,1);
   await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
   const reviewAuthority=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
@@ -105,6 +112,34 @@ test('stopped native fixture finalizes exact scoped Git code, registers high-ris
   assert.equal((await db.pool.query("SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1",[slipId])).rows[0]?.state,'removed');
   assert.equal(await verifier.record(principal,successor,slipId),null);
   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_verification_evidence WHERE session_id=$1",[slipSession])).rows[0].n,0);
+  // Collection after concurrent registrations: the programmer's checkout is freed only with the physical proof, and only once its
+  // artifact is pinned. A registration racing with the collection either runs first or replays from the repository afterwards.
+  await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
+  const job=(await db.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
+  assert.equal(job.state,'completed');
+  const binding={schemaVersion:1,jobId:input.jobId,contextId:context,intentId:intent.id,grantId:grant,sessionId:input.sessionId,epoch:Number(job.manager_epoch),role:'programmer',inputDigest:digest(input),
+   terminalDigest:digest(job.receipt),workerId,toolsId,networkId:network,workerLogSha256:'7'.repeat(64),toolsLogSha256:'8'.repeat(64)};
+  const retirementProof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),keys.privateKey).toString('hex')};
+  const scope={contextId:context,projectId:project,repository:repo};
+  assert.equal((await supervisor.retireTerminalWork(principal,input.jobId,true,scope) as {reason?:string}).reason,'retirement','no physical proof yet: kept');
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[input.jobId,binding]);
+  await db.pool.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1",[input.jobId,retirementProof]);
+  assert.equal((await supervisor.retireTerminalWork(principal,input.jobId,false,scope)).state,'eligible');
+  await db.pool.query("UPDATE ac_managers SET lease_until=clock_timestamp()-interval '1 second' WHERE context_id=$1",[context]);
+  const collector=await db.acquire(principal,context,randomUUID(),'fixture-manager',60);
+  const [first,second,collected]=await Promise.all([supervisor.registerArtifact(principal,collector,input.jobId,quality),supervisor.registerArtifact(principal,collector,input.jobId,quality),
+   supervisor.retireTerminalWork(principal,input.jobId,true,scope)]);
+  assert.equal(first.id,artifact.id);assert.equal(second.id,artifact.id);
+  assert.ok(collected.state==='released'||(collected.state==='refused'&&collected.reason==='busy'),JSON.stringify(collected));
+  if(collected.state!=='released')assert.equal((await supervisor.retireTerminalWork(principal,input.jobId,true,scope)).state,'released');
+  assert.equal(await lstat(work).then(()=>true,()=>false),false,'the checkout is gone');
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_artifacts')).rows[0].n,1);
+  // After the retirement the repository alone keeps the artifact: the private ref survives garbage collection and replay still works.
+  git('reflog','expire','--expire=now','--all');git('gc','-q','--prune=now');
+  assert.equal(git('rev-parse','refs/agent-control/retained/'+input.jobId),artifact.commit_id);
+  assert.equal(git('show',`${artifact.commit_id}:src/example.ts`),'export const value = 2;');
+  assert.equal((await supervisor.registerArtifact(principal,collector,input.jobId,quality)).id,artifact.id);
+  assert.equal((await supervisor.retireTerminalWork(principal,input.jobId,true,scope)).state,'absent');
   // A separate direct helper fixture proves refusal of writes outside scope.
   const badId=randomUUID(),bad=join(spool,badId);await mkdir(bad,{mode:0o700});await artifacts.snapshot(base,base,join(bad,'work'));await writeFile(join(bad,'work/outside.txt'),'unauthorized');
   execFileSync('/usr/bin/ruby',[new URL('../services/agent-control-git/native_finalize.rb',import.meta.url).pathname],{input:JSON.stringify({jobId:badId,inputDigest:'a'.repeat(64),scopeDigest:digest(['src/example.ts']),base,writePaths:['src/example.ts'],work:join(bad,'work'),output:join(bad,'finalizer-result.json')}),stdio:['pipe','ignore','pipe']});
