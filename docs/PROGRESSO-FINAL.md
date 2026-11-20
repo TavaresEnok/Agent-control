@@ -1541,3 +1541,10 @@ PAUSADO-COTA
 - 20/11/2026 01:34 UTC — Encerradas as bases descartáveis do aceite após conferir ausência de clientes. A conferência final confirmou os identificadores das oito execuções no relatório e na matriz e a igualdade da árvore de produto com o candidato aprovado.
 
 FIM
+
+## Parte E — NexoISP
+
+- 20/11/2026 03:43 UTC — Ordem 1e954d30 recebida. Aberta a preparação dos perfis e o diagnóstico do exame de arquitetura em dois worktrees. O fechamento anterior permanece registrado acima.
+- 20/11/2026 03:43 UTC — Iniciada ordem preparar em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 03:43 UTC — Iniciada ordem resposta em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 03:47 UTC — Rodada 42225b53: 29 trabalhos nativos vinculados, 29 linhas de cobertura com MODULE_EXAM_RESPONSE_INVALID e 221 com PROVIDER_USAGE_LIMIT. Em 28 retornos foi possível comparar o objeto com o pedido: todos repetiram o objeto checklist enviado, mas o contrato esperava um vetor com o identificador do módulo. Quatorze tinham só uma cerca Markdown, 13 também continham texto exterior, um era JSON puro e um estava vazio. Registrados apenas contadores.
