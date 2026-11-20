@@ -60,7 +60,7 @@ async function lab():Promise<Lab>{
    }
    if(a==='image'&&b==='rm'){
     if(docker.refuseRemoval)return {code:1,stdout:''};
-    docker.images.delete(args[2]!);return {code:0,stdout:''};
+    docker.images.delete(args.at(-1)!);return {code:0,stdout:''};
    }
    return {code:1,stdout:''};
   },
@@ -286,7 +286,7 @@ test('an unused, unpinned candidate image is removed by id and nothing else is t
   assert.equal(l.docker.images.has(image('a')),false);
   assert.ok(l.docker.images.has(image('b')),'an unregistered image is never touched');
   const removals=l.dockerCalls.filter(args=>args[1]==='rm');
-  assert.deepEqual(removals,[['image','rm',image('a')]]);
+  assert.deepEqual(removals,[['image','rm','--no-prune',image('a')]]);
   assert.equal(l.dockerCalls.some(args=>args.includes('prune')||args.includes('-f')||args.includes('--force')),false);
   const registry=JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8'));
   assert.equal(registry.images.length,0);

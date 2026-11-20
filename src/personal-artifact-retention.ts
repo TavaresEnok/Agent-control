@@ -1,4 +1,4 @@
-import {execFile} from 'node:child_process';
+import {execFile,spawn} from 'node:child_process';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {lstat,open,readFile,readdir,readlink,realpath,rename,rm,stat,unlink,writeFile} from 'node:fs/promises';
@@ -34,7 +34,7 @@ const token=z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/);
 const ref=z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).refine(value=>!value.includes('..')&&!value.endsWith('/')&&!value.endsWith('.lock')&&!value.includes('//'));
 const absolutePath=z.string().max(4096).refine(value=>isAbsolute(value)&&resolve(value)===value&&!value.includes('\0'));
 const time=z.number().int().safe().nonnegative();
-const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,registeredAt:time,origin:z.enum(['new','existing'])}).strict();
+const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
 const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(VERIFICATION_MODULES),imageId:z.string().regex(imageIdPattern),registeredAt:time}).strict();
 const Temp=z.object({id:z.uuid(),projectId:z.uuid(),roundId:token,path:absolutePath,dev:z.string().regex(/^\d+$/),ino:z.string().regex(/^\d+$/),nonceDigest:z.string().regex(/^[a-f0-9]{64}$/),registeredAt:time}).strict();
 const Round=z.object({projectId:z.uuid(),roundId:token,endedAt:time}).strict();
@@ -131,32 +131,25 @@ async function saveRegistry(config:Installation,registry:ArtifactRegistry){
  await writeFile(temporary,JSON.stringify(Registry.parse(registry),null,1)+'\n',{mode:0o600,flag:'wx'});
  await rename(temporary,file);
 }
-async function sleep(ms:number){await new Promise(done=>setTimeout(done,ms));}
-/** Read-modify-write under a lock file. A lock whose owner process is gone is replaced. */
 async function mutateRegistry<T>(config:Installation,change:(registry:ArtifactRegistry)=>T):Promise<T>{
  await privateDirectory(config.dataDirectory);
  await privateDirectory(registryDirectory(config));
- const lock=join(registryDirectory(config),'registry.lock');
- for(let attempt=0;;attempt++){
-  try{
-   const handle=await open(lock,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
-   try{await handle.writeFile(String(process.pid));}finally{await handle.close();}
-   break;
-  }catch(error){
-   if(!errno(error,'EEXIST'))throw error;
-   const owner=Number(await readFile(lock,'utf8').catch(()=>''));
-   const alive=Number.isInteger(owner)&&owner>0&&(()=>{try{process.kill(owner,0);return true;}catch(e){return !errno(e,'ESRCH');}})();
-   if(!alive&&attempt<50){await unlink(lock).catch(()=>{});continue;}
-   if(attempt>=50)throw new Refusal('RETENTION_REGISTRY_BUSY',409);
-   await sleep(100);
-  }
- }
+ const directory=await open(registryDirectory(config),constants.O_DIRECTORY|constants.O_NOFOLLOW|constants.O_RDONLY);
  try{
+  await new Promise<void>((ok,fail)=>{
+   const flock=spawn('/usr/bin/flock',['--exclusive','--wait','5','3'],{stdio:['ignore','ignore','ignore',directory.fd]});
+   flock.on('error',fail);
+   flock.on('close',code=>code===0?ok():fail(new Refusal('RETENTION_REGISTRY_BUSY',409)));
+  });
   const registry=await loadRegistry(config);
   const result=change(registry);
+  const active=new Set(registry.temps.map(temp=>temp.projectId+':'+temp.roundId));
+  const referenced=registry.rounds.filter(round=>active.has(round.projectId+':'+round.roundId));
+  const recent=registry.rounds.filter(round=>!active.has(round.projectId+':'+round.roundId));
+  registry.rounds=referenced.concat(recent.slice(Math.max(0,recent.length-Math.min(HISTORY_MAX,5000-referenced.length))));
   await saveRegistry(config,registry);
   return result;
- }finally{await unlink(lock).catch(()=>{});}
+ }finally{await directory.close();}
 }
 function project(config:Installation,projectId:string){
  const found=projectsOf(config).find(item=>item.id===projectId);
@@ -194,6 +187,15 @@ const inProgress=['MERGE_HEAD','CHERRY_PICK_HEAD','REVERT_HEAD','REBASE_HEAD','B
 type Verdict<T>={ok:true;facts:T}|{ok:false;reason:string};
 const no=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
 
+async function worktreeIdentity(path:string,gitDir:string){
+ const ids=await Promise.all([path,gitDir].map(async dir=>{
+  const stat=await lstat(dir,{bigint:true});
+  if(!stat.isDirectory()||!isAbsolute(dir)||dir!==await realpath(dir))throw Error('Invalid worktree identity');
+  return [stat.dev,stat.ino,stat.birthtimeNs].join(':');
+ }));
+ return ids.join('/');
+}
+
 type WorktreeFacts={tip:string;idleHours:number};
 /** Everything that must hold, in order, before `git worktree remove` may run. */
 async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Required<Pick<RetentionDeps,'git'|'now'|'processInside'>>):Promise<Verdict<WorktreeFacts>|{ok:false;reason:string;absent:true}>{
@@ -222,6 +224,7 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
  if(ancestor.code!==0)return no(ancestor.code===1?`ramo ainda não integrado em ${entry.base}`:'não foi possível provar a integração');
  const gitDir=(await deps.git(entry.path,['rev-parse','--absolute-git-dir'])).stdout.trim();
  if(!gitDir||!isAbsolute(gitDir))return no('git dir ilegível');
+ if(await worktreeIdentity(entry.path,gitDir)!==entry.identity)return no('identidade do worktree mudou');
  for(const name of inProgress)if(await lstat(join(gitDir,name)).then(()=>true,()=>false))return no('operação do git em andamento');
  const status=await deps.git(entry.path,['status','--porcelain=v1','-z','--untracked-files=all','--ignored=matching']);
  if(status.code!==0)return no('não foi possível ler o estado do worktree');
@@ -243,18 +246,21 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
 /** Records a worker worktree so retention may later remove it. Also adopts an existing worktree: git itself must list it,
  * on a local branch, in the project's own repository, and the integration branch must exist. The caller names no prefix and no pattern. */
 export async function registerWorkerWorktree(config:Installation,input:{projectId:string;path:string;branch:string;base:string;adopt?:boolean},deps:RetentionDeps={}){
- const entryInput=Worktree.omit({id:true,registeredAt:true,origin:true}).safeParse({projectId:input.projectId,path:input.path,branch:input.branch,base:input.base});
+ const entryInput=Worktree.omit({id:true,registeredAt:true,origin:true,identity:true}).safeParse({projectId:input.projectId,path:input.path,branch:input.branch,base:input.base});
  if(!entryInput.success||input.branch===input.base)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  const owner=project(config,input.projectId),git=deps.git??defaultGit,now=(deps.now??Date.now)();
  const listed=await listWorktrees(git,owner.repo).catch(()=>{throw new Refusal('RETENTION_REGISTRATION_INVALID',400);});
  const found=listed.find(item=>item.path===input.path);
  if(!found||found.main||found.bare||found.detached||found.branch!=='refs/heads/'+input.branch||await realpath(input.path).catch(()=>'')!==input.path)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  if((await git(owner.repo,['rev-parse','--verify','--quiet','refs/heads/'+input.base+'^{commit}'])).code!==0)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
+ const gitDir=await git(input.path,['rev-parse','--absolute-git-dir']);
+ if(gitDir.code!==0)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
+ const identity=await worktreeIdentity(input.path,gitDir.stdout.trim());
  return mutateRegistry(config,registry=>{
   const same=registry.worktrees.find(item=>item.path===input.path&&item.projectId===input.projectId);
-  if(same){if(same.branch!==input.branch||same.base!==input.base)throw new Refusal('RETENTION_REGISTRATION_CONFLICT',409);return same.id;}
+  if(same){if(same.identity!==identity||same.branch!==input.branch||same.base!==input.base)throw new Refusal('RETENTION_REGISTRATION_CONFLICT',409);return same.id;}
   const id=randomUUID();
-  registry.worktrees.push({id,projectId:input.projectId,path:input.path,branch:input.branch,base:input.base,registeredAt:now,origin:input.adopt?'existing':'new'});
+  registry.worktrees.push({id,identity,projectId:input.projectId,path:input.path,branch:input.branch,base:input.base,registeredAt:now,origin:input.adopt?'existing':'new'});
   return id;
  });
 }
@@ -479,10 +485,12 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
      continue;
     }
     if(!apply){done('image');lines.push(`${label}: elegível (sem contêiner, sem digest fixado, sem exame que a cite).`);continue;}
-    const again=await proveImage(entry,pinned,docker,now());
+    const again=await proveImage(entry,await protectedDigests(config,deps),docker,now());
     if(!again.ok){kept('image',label,'mudou durante a retenção: '+again.reason);continue;}
     // By id, never forced: Docker refuses an image that a container or a child image still needs.
-    if((await docker(['image','rm',entry.imageId])).code!==0){kept('image',label,'o Docker recusou a remoção');continue;}
+    const latest=await protectedDigests(config,deps);
+    if(again.facts.digests.some(digest=>latest.has(digest))){kept('image',label,'digest fixado ou referenciado por exame');continue;}
+    if((await docker(['image','rm','--no-prune',entry.imageId])).code!==0){kept('image',label,'o Docker recusou a remoção');continue;}
     await forget('image',entry.id,'removed');
     done('image');lines.push(`${label}: removida.`);
    }catch{kept('image',label,'falha ao verificar; repita depois');}
