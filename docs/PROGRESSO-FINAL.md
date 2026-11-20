@@ -1631,3 +1631,19 @@ FIM
 - 20/11/2026 05:28 UTC — Revisão independente revisao-estatico-r4 concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 05:29 UTC — Módulo 1 estático integrado até e77e64bd. O digest local coincide com o da imagem de verificação previamente aceita; os hashes do coletor, do buscador de bases e do lock coincidem com o checkout. A instalação carecia da imagem configurada e da base; iniciada a preparação para o exame sem URL.
 - 20/11/2026 05:29 UTC — Iniciada ordem design em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 05:30 UTC — A CLI personal:arquitetura de arquitetura-ispagent encerrou com código 1.
+- 20/11/2026 05:31 UTC — A ordem recuperacao-r2 do Opus encerrou com código 0.
+- 20/11/2026 05:32 UTC — Arquitetura do IspAgent encerrou por expiração da autoridade. Houve 216 jobs, dos quais 215 produziram resposta: o leitor anterior aceitou 187 e recusou 28; o leitor integrado aceitou as 215. O run não publicou cobertura. O último contêiner de ferramentas permaneceu em Created. A recuperação padrão preservou a segunda reserva.
+- 20/11/2026 05:33 UTC — Revisão independente revisao-recuperacao-r2 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:34 UTC — Correção recuperacao-r3 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 05:34 UTC — Ordem design em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 05:36 UTC — Revisão independente revisao-design-login-imagem concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:36 UTC — Iniciada ordem design em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 05:36 UTC — Correção captura-r2 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 05:36 UTC — A base de consultas do módulo 1 foi publicada pelo produto com 659 entradas. A prova usará a CLI sem URL, o checkout do ramo de revisão em leitura e os coletores estáticos sem rede.
+- 20/11/2026 05:36 UTC — Iniciada a CLI personal:verify para seguranca-nexo-estatica.
+- 20/11/2026 05:37 UTC — A CLI personal:verify de seguranca-nexo-estatica encerrou com código 1.
+- 20/11/2026 05:37 UTC — Revisão independente revisao-vinculo-por-achado concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:39 UTC — Revisão independente revisao-campos-originais concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:40 UTC — Módulo 1: a rodada e60dd009 falhou nos coletores estáticos. Em uma fixture neutra, o uid 65532 da imagem não conseguiu ler o snapshot 0700. Com checkout interno legível sob diretório pai 0700, a leitura passou. O ajuste está em revisão.
+- 20/11/2026 05:40 UTC — O vínculo individual da revisão Opus de cada achado alto foi integrado até 742fc07b. Dois achados na mesma linha são separados na publicação e na rechecagem. Os 40 testes do candidato passaram; o teste complementar conferiu os campos do pedido original no commit novo.
