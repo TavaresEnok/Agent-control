@@ -25,6 +25,7 @@ import {HISTORY_READ_TIMEOUT_MS,historyBeforeCurrent,managerEconomyOf,managerRep
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
 import {claudeLimitNotice} from './quota-exhaustion.ts';
+import {decideProposal,proposalStartIntentId,unstartedProposals,type ProposalDecision} from './proposal-decision.ts';
 import {bindPersonalOwnerMessage,enqueuePersonalOwner,readPersonalOwnerText,type ConversationTransport} from './conversation-transport.ts';
 
 /** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
@@ -587,13 +588,16 @@ export class HappierEndpoint {
       await c.query("UPDATE ac_outbox SET state='dispatched' WHERE intent_id=$1",[intent.id]);
       await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered'",[intent.operation_id,{kind:'semantic-proposal',callId,revision:result.revision,digest:result.digest}]);
       await this.activeConversation().publishManagerText(localId,proposalText,message,c,0);
+      // Auto-approval is decided in the same commit as the publication: a crash after it leaves a durable
+      // approved decision with a fixed execution id, which the recovery in tick() turns into exactly one execution.
+      if(this.options.personalConversation){
+       const project=(await c.query('SELECT p.auto_approve_plans FROM ac_projects p JOIN ac_contexts x ON x.project_id=p.id WHERE x.id=$1',[intent.context_id])).rows[0];
+       if(project?.auto_approve_plans)await decideProposal(c,{contextId:intent.context_id,revision:result.revision,digest:result.digest,decision:'approved',source:'auto'});
+      }
       await this.ledger.refreshPending(c,intent.context_id);
     });
     this.notePersonalPush(localId,proposalText);
-    if(this.options.personalConversation){
-     const project=(await this.ledger.pool.query('SELECT p.auto_approve_plans FROM ac_projects p JOIN ac_contexts x ON x.project_id=p.id WHERE x.id=$1',[intent.context_id])).rows[0];
-     if(project?.auto_approve_plans)await this.startProposal(result.revision,result.digest);
-    }
+    if(this.options.personalConversation)await this.recoverProposalStarts();
   }
   /** Repository context for the manager and the semantic planner: compact cached map under discipline, the legacy listing otherwise. */
   private async managerContext(){
@@ -673,24 +677,51 @@ export class HappierEndpoint {
     'Proponha um plano corrigido que conclua o pedido original, considerando o que já pode ter sido integrado.\n\nPedido original:\n'+(original||'(indisponível)');
    await this.accept({localId:'replan-'+parentIntentId,text:text.slice(0,100000)});
   }
-  private async startProposal(revision:number,proposalDigest:string){
-   const context=(await this.ledger.pool.query('SELECT policy_revision FROM ac_contexts WHERE id=$1',[this.options.authority.contextId])).rows[0];
-   await this.ledger.accept(this.options.principal,{schemaVersion:1,contextId:this.options.authority.contextId,intentId:randomUUID(),deliveryAttemptId:randomUUID(),policyRevision:context.policy_revision,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'approved:'+proposalDigest.slice(0,32),proposalRevision:revision,proposalDigest,native:true}},this.options.authority,'happier');
+  /** Creates the execution of an approved proposal. The intent id comes from the decision, so a retry, a recovery
+   * after a crash and a concurrent attempt all land on the same single intent. */
+  private async startDecidedProposal(decision:ProposalDecision){
+   if(decision.decision!=='approved'||!decision.intentId)return;
+   const intentId=decision.intentId;
+   if(intentId!==proposalStartIntentId(decision.contextId,decision.revision))throw new Refusal('PROPOSAL_DECISION_INVALID');
+   const exists=async()=>Boolean((await this.ledger.pool.query('SELECT 1 FROM ac_intents WHERE id=$1',[intentId])).rowCount);
+   if(await exists())return;
+   const context=(await this.ledger.pool.query('SELECT policy_revision FROM ac_contexts WHERE id=$1',[decision.contextId])).rows[0];
+   try{
+    await this.ledger.accept(this.options.principal,{schemaVersion:1,contextId:decision.contextId,intentId,deliveryAttemptId:stableId('proposal-start-delivery\0'+intentId),policyRevision:context.policy_revision,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'approved:'+decision.digest.slice(0,32),proposalRevision:decision.revision,proposalDigest:decision.digest,native:true}},this.options.authority,'happier');
+   }catch(error){
+    // A concurrent starter (or one that lost its answer) already created it, possibly under another policy revision.
+    if(error instanceof Refusal&&error.code==='INTENT_PAYLOAD_CONFLICT'&&await exists())return;
+    throw error;
+   }
   }
-  /** Decides the most recent proposal, once. A proposal already started or discarded is never decided again. */
+  /** Starts every approved proposal that has no execution yet: auto-approvals interrupted after the publication
+   * commit, approvals that lost their answer, and approvals refused while the context was paused. */
+  private async recoverProposalStarts(){
+   for(const decision of await unstartedProposals(this.ledger.pool,this.options.authority.contextId)){
+    await this.startDecidedProposal(decision);
+    if(decision.source==='manual')await this.say('approve-'+decision.revision,'Proposta '+decision.revision+' aprovada. A execução começou.');
+   }
+  }
+  /** Decides the most recent proposal, once. The decision is one durable row per (context, revision): a repeat, a
+   * concurrent opposite answer or a retry after a lost response reads the decision that already stands. */
   private async resolveLatestProposal(approve:boolean){
    const context=this.options.authority.contextId;
    const row=(await this.ledger.pool.query("SELECT result FROM ac_semantic_planning_calls WHERE context_id=$1 AND state='published' ORDER BY created_at DESC,id DESC LIMIT 1",[context])).rows[0];
    if(!row){await this.say('proposal-missing','Não há proposta para decidir.');return;}
    const result=managerPlanPublishedSchema.parse(row.result);
-   const decided=(await this.ledger.pool.query(`SELECT 1 WHERE EXISTS(SELECT 1 FROM ac_intents WHERE context_id=$1 AND command->>'action'='plan.start' AND (command->'payload'->>'proposalRevision')::int=$2)
-     OR EXISTS(SELECT 1 FROM ac_audit WHERE context_id=$1 AND kind='proposal.discarded' AND (detail->>'revision')::int=$2)`,[context,result.revision])).rowCount;
-   if(decided){await this.say('proposal-decided-'+randomUUID(),'A proposta '+result.revision+' já foi decidida. Não há proposta pendente.');return;}
-   if(!approve){
-    await this.ledger.pool.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'proposal.discarded',$2)",[context,{revision:result.revision}]);
-    await this.say('discard-'+result.revision,'Proposta '+result.revision+' descartada.');return;
+   const outcome=await this.ledger.tx(async c=>{
+    await this.ledger.authorize(c,this.options.principal,context);await this.ledger.fence(c,this.options.authority,true);
+    const decided=await decideProposal(c,{contextId:context,revision:result.revision,digest:result.digest,decision:approve?'approved':'discarded',source:'manual'});
+    if(decided.created&&!approve)await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'proposal.discarded',$2)",[context,{revision:result.revision}]);
+    return decided;
+   });
+   if(!outcome.created){
+    // The standing decision wins. If it approved a proposal whose execution was never created, finish that now.
+    await this.startDecidedProposal(outcome.decision);
+    await this.say('proposal-decided-'+randomUUID(),'A proposta '+result.revision+' já foi decidida. Não há proposta pendente.');return;
    }
-   await this.startProposal(result.revision,result.digest);
+   if(!approve){await this.say('discard-'+result.revision,'Proposta '+result.revision+' descartada.');return;}
+   await this.startDecidedProposal(outcome.decision);
    await this.say('approve-'+result.revision,'Proposta '+result.revision+' aprovada. A execução começou.');
   }
   async tick() {
@@ -701,6 +732,7 @@ export class HappierEndpoint {
     let recoveryFailure:unknown;
     try{await this.runtime.reconcileCancellations(this.options.authority,this.options.principal);}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure=error;}
     try{await this.runtime.recoverManaged(this.options.authority);}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure??=error;}
+    if(this.options.personalConversation){try{await this.recoverProposalStarts();}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure??=error;}}
     this.socket.emit('session-alive', { sid: this.options.sessionId, time: Date.now(), thinking: false, mode: 'remote' });
     if (Date.now() - this.lastPendingAt >= 1000) {
       this.lastPendingAt = Date.now();

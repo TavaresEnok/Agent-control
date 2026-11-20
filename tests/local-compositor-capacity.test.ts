@@ -27,12 +27,14 @@ test('local compositor capacity remains fenced and bounded without model quota',
   const contextA=await db.createContext(principal,project,randomUUID()),contextB=await db.createContext(principal,project,randomUUID());
   const authA=await db.acquire(principal,contextA,randomUUID(),'fixture-manager',60),authB=await db.acquire(principal,contextB,randomUUID(),'fixture-manager',60);
   await capacity.assignPolicy(principal,contextA,revision);await capacity.assignPolicy(principal,contextB,revision);
-  const publish=async(contextId:string,authority:typeof authA)=>{
+  const publish=async(contextId:string,authority:typeof authA,expected=0)=>{
    const task=(id:string)=>({id,objectiveRef:`message:${id}`,acceptanceRefs:['acceptance:synthetic-effect-v1'],inputRefs:[],outputRefs:[`output:${id}`],dependsOn:[],writePaths:[`src/${id}.txt`],qualityRevision:1,targetRef:'refs/heads/main',maxCorrections:0});
    const plan:ManagerPlan={schemaVersion:1,contextId,objectiveRef:'message:goal',sourceMessageRef:'message:request',constraintRefs:[],tasks:[task('one'),task('two')]};
-   return new ManagerPlans(db).publish(principal,authority,0,plan);
+   return new ManagerPlans(db).publish(principal,authority,expected,plan);
   };
   const proposalA=await publish(contextA,authA),proposalB=await publish(contextB,authB);
+  // A second execution in the same context starts a second proposal: one proposal has one execution.
+  const proposalA2=await publish(contextA,authA,1);
   const create=async(contextId:string,authority:typeof authA,proposal:typeof proposalA)=>{
    const parent=await db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start',
     payload:{workflow:'managed-synthetic-v1',messageRef:'message:request',proposalRevision:proposal.revision,proposalDigest:proposal.digest}},authority,'api');
@@ -41,7 +43,7 @@ test('local compositor capacity remains fenced and bounded without model quota',
    const local=rows.find(r=>r.parent_unit_id==='compose-0'),task=rows.find(r=>r.parent_unit_id==='task-one');assert(local&&task);
    return {local:{attemptId:local.execution_attempt_id,intentId:local.id,contextId},task:{attemptId:task.execution_attempt_id,intentId:task.id,contextId}};
   };
-  const a=await create(contextA,authA,proposalA),anotherA=await create(contextA,authA,proposalA),b=await create(contextB,authB,proposalB);
+  const a=await create(contextA,authA,proposalA),anotherA=await create(contextA,authA,proposalA2),b=await create(contextB,authB,proposalB);
   await assert.rejects(capacity.reserve(principal,{...a.task,role:'programmer'},authA),/NO_ELIGIBLE_CAPACITY/);
   const grant=await capacity.reserveLocalCompositor(principal,a.local,authA);
   assert.equal(grant.resource_kind,'local_compositor');assert.equal(grant.account_id,null);assert.equal(grant.profile_id,null);
