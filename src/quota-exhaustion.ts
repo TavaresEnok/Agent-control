@@ -58,40 +58,40 @@ export function claudeLimitNotice(until:Date){
  return `Limite do Claude atingido. Retomo sozinho às ${hour}:${minute}.`;
 }
 
-/** Earliest future reset instant carried on the observation, in epoch milliseconds. */
+/** Wait applied only when the observation carries no usable reset instant. */
+export const NO_RESET_WAIT_MS=60*60*1000;
+
+/**
+ * The single reading of a provider observation. Every reset-looking field with a usable future instant counts.
+ * A window the provider reports as blocked (status or 100% used) is what holds the account, so the limit lifts
+ * when the last blocked window resets. Without any blocked window with a usable reset the earliest future reset
+ * is used. No usable reset at all returns null; the caller decides the fallback.
+ */
 export function futureResetMs(usage:unknown,now=Date.now()){
- let found:number|null=null;
+ const all:number[]=[],blocked:number[]=[];
  const visit=(value:unknown,depth:number)=>{
   if(!value||typeof value!=='object'||depth>6)return;
-  for(const [key,item] of Object.entries(value as Record<string,unknown>)){
+  const record=value as Record<string,unknown>;
+  const holds=record.status==='blocked'||(typeof record.usedPercent==='number'&&record.usedPercent>=100);
+  for(const [key,item] of Object.entries(record)){
    if(/reset/i.test(key)&&(typeof item==='number'||typeof item==='string')){
     const parsed=typeof item==='number'?item:Date.parse(item);
-    if(Number.isFinite(parsed)){const ms=parsed>1e12?parsed:parsed>1e9?parsed*1000:NaN;if(usableReset(ms,now))found=found===null?ms:Math.min(found,ms);}
+    if(Number.isFinite(parsed)){const ms=parsed>1e12?parsed:parsed>1e9?parsed*1000:NaN;if(usableReset(ms,now)){all.push(ms);if(holds)blocked.push(ms);}}
    }else if(item&&typeof item==='object')visit(item,depth+1);
   }
  };
  visit(usage,0);
- return found;
+ if(blocked.length)return Math.max(...blocked);
+ return all.length?Math.min(...all):null;
 }
 
-/** Prefer a reset instant carried by the provider observation. Otherwise wait one hour. */
-export function resetFromUsage(usage:unknown){
- let reset=Date.now()+60*60*1000;
- const visit=(value:unknown,depth:number)=>{
-  if(!value||typeof value!=='object'||depth>6)return;
-  for(const [key,item] of Object.entries(value as Record<string,unknown>)){
-   if(/reset/i.test(key)&&(typeof item==='number'||typeof item==='string')){
-    const parsed=typeof item==='number'?item:Date.parse(item);
-    if(Number.isFinite(parsed)){const ms=parsed>1e12?parsed:parsed>1e9?parsed*1000:NaN;if(ms>Date.now())reset=Math.min(reset,ms);}
-   }else if(item&&typeof item==='object')visit(item,depth+1);
-  }
- };
- visit(usage,0);
- return new Date(reset);
+/** Reset instant to persist: the observed one, or one hour only when the observation has none usable. */
+export function resetFromUsage(usage:unknown,now=Date.now()){
+ return new Date(futureResetMs(usage,now)??now+NO_RESET_WAIT_MS);
 }
 
-export async function noteProviderExhaustion(ledger:Ledger,accountId:string,usage?:unknown){
- const until=resetFromUsage(usage);
+export async function noteProviderExhaustion(ledger:Ledger,accountId:string,usage?:unknown,now=Date.now()){
+ const until=resetFromUsage(usage,now);
  await ledger.pool.query('UPDATE ac_accounts SET exhausted_until=$2 WHERE id=$1 AND (exhausted_until IS NULL OR exhausted_until<$2)',[accountId,until.toISOString()]);
 }
 
