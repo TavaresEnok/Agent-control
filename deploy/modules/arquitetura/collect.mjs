@@ -31,6 +31,10 @@ const require = createRequire(import.meta.url);
 const MAX_COPY_FILES = 10_000;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_PER_FILE_COVERAGE = 500;
+// Limites do contrato do hospedeiro (validateModuleCollectorObject).
+const MAX_COLLECTOR_COVERAGE = 5000;
+const MAX_COLLECTOR_FINDINGS = 999;
+const SEVERITY_RANK = {alta: 0, media: 1, baixa: 2, informativa: 3};
 const TOOL_TIMEOUT_MS = 180_000;
 
 const SKIP_DIRS = new Set([
@@ -1329,6 +1333,112 @@ function coverageLimit(total, listed) {
   return `linhas_por_arquivo=${listed}/${total}; limite_linhas=${MAX_PER_FILE_COVERAGE}; cobertura_truncada=${total > listed ? 'sim' : 'nao'}`;
 }
 
+const compareText = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+
+function compareFindings(left, right) {
+  return (SEVERITY_RANK[left.severity] ?? 99) - (SEVERITY_RANK[right.severity] ?? 99)
+    || compareText(left.tool, right.tool) || compareText(left.file, right.file)
+    || (left.line - right.line) || compareText(left.rule, right.rule)
+    || compareText(left.message, right.message) || compareText(left.evidence, right.evidence);
+}
+
+function countBy(items, key) {
+  const counts = new Map();
+  for (const item of items) counts.set(key(item), (counts.get(key(item)) ?? 0) + 1);
+  return [...counts].sort(([a], [b]) => compareText(a, b)).map(([name, count]) => `${name}=${count}`).join(', ') || 'nenhuma';
+}
+
+/**
+ * Mantém a saída dentro dos limites do contrato sem inventar dados: os achados são
+ * ordenados de forma determinística (gravidade maior primeiro), as linhas de cobertura
+ * por arquivo existentes dos achados retidos são sempre mantidas, achados retidos sem
+ * linha por arquivo são contados, as vagas restantes seguem a chave canônica da linha
+ * (independente da ordem de entrada) e a redução é declarada em uma linha de cobertura
+ * parcial com as contagens do que foi omitido.
+ */
+export function boundCollectorOutput({coverage, findings}, limits = {}) {
+  const maxCoverage = limits.maxCoverage ?? MAX_COLLECTOR_COVERAGE;
+  const maxFindings = limits.maxFindings ?? MAX_COLLECTOR_FINDINGS;
+  if (coverage.length <= maxCoverage && findings.length <= maxFindings) return {coverage, findings};
+
+  const capacity = maxCoverage - 1; // uma linha fica reservada para a declaração de parcialidade
+  const fixed = [];
+  const byKey = new Map();
+  coverage.forEach((row, index) => {
+    if (!row.files?.length) {
+      fixed.push(index);
+      return;
+    }
+    for (const file of row.files) {
+      const key = `${row.tool}\0${file}`;
+      byKey.set(key, [...(byKey.get(key) ?? []), index]);
+    }
+  });
+  // a escolha das linhas não pode depender da ordem de entrada: as candidatas são
+  // percorridas pela chave canônica da linha e só depois pela posição (empate exato)
+  const canonical = index => {
+    const row = coverage[index];
+    return [row.tool, (row.files ?? []).join('\0'), row.status, row.version, row.detail].map(String).join('\u0001');
+  };
+  const byCanonical = (left, right) => compareText(canonical(left), canonical(right)) || left - right;
+  const kept = new Set([...fixed].sort(byCanonical).slice(0, capacity));
+  const ordered = findings.map((finding, index) => ({finding, index}))
+    .sort((left, right) => compareFindings(left.finding, right.finding) || left.index - right.index);
+  const selected = new Set();
+  let withoutFileRow = 0;
+  // vínculo aceito pelo hospedeiro (validateModuleCollectorPublication): linha ok da mesma
+  // ferramenta, sem lista de arquivos (já retida) ou com a lista contendo o arquivo do achado
+  // (`files: []` é lista presente e vazia: não cobre arquivo algum, só `files` ausente é genérico)
+  const linkedTools = new Set([...kept]
+    .filter(index => coverage[index].status === 'ok' && coverage[index].files === undefined)
+    .map(index => coverage[index].tool));
+  for (const entry of ordered) {
+    if (selected.size >= maxFindings) break;
+    const {finding} = entry;
+    // linha própria válida: prefere uma já retida (compartilhada); senão a primeira pela ordem canônica
+    const candidates = linkedTools.has(finding.tool) ? []
+      : (byKey.get(`${finding.tool}\0${finding.file}`) ?? []).filter(index => coverage[index].status === 'ok');
+    const own = candidates.length ? [candidates.find(index => kept.has(index)) ?? [...candidates].sort(byCanonical)[0]] : [];
+    // sem vínculo válido no conjunto limitado o achado é omitido (contado entre as omissões)
+    // e não ocupa vaga: os elegíveis seguintes continuam sendo selecionados
+    if (!linkedTools.has(finding.tool) && !own.length) continue;
+    // sem linha por arquivo na própria coleta (ex.: lista por arquivo truncada pela ferramenta):
+    // o achado não ocupa vaga de cobertura, mas a falta da linha por arquivo é contada e declarada
+    const rows = byKey.get(`${finding.tool}:file\0${finding.file}`);
+    const linked = [...new Set([...(rows ?? []), ...own])].filter(index => !kept.has(index));
+    // um achado cuja cobertura não cabe é pulado; os seguintes continuam sendo avaliados
+    if (kept.size + linked.length > capacity) continue;
+    for (const index of linked) kept.add(index);
+    if (!rows) withoutFileRow += 1;
+    selected.add(entry);
+  }
+  const selectedFindings = ordered.filter(entry => selected.has(entry)).map(({finding}) => finding);
+  const omittedFindings = ordered.filter(entry => !selected.has(entry)).map(({finding}) => finding);
+  coverage.map((_, index) => index).filter(index => coverage[index].files?.length && !kept.has(index))
+    .sort(byCanonical)
+    .forEach(index => {
+      if (kept.size < capacity) kept.add(index);
+    });
+  const retained = coverage.filter((_, index) => kept.has(index));
+  const omittedCoverage = coverage.length - retained.length;
+  retained.push({
+    tool: 'limites-do-coletor',
+    version: '1',
+    status: 'skipped',
+    detail: `cobertura_parcial=sim; limite_achados=${maxFindings}; achados_coletados=${findings.length}; ` +
+      `achados_retidos=${selectedFindings.length}; achados_omitidos=${omittedFindings.length}; ` +
+      `achados_retidos_sem_linha_por_arquivo=${withoutFileRow}; ` +
+      `achados_omitidos_por_gravidade: ${countBy(omittedFindings, item => item.severity)}; ` +
+      `achados_omitidos_por_ferramenta: ${countBy(omittedFindings, item => item.tool)}; ` +
+      `limite_cobertura=${maxCoverage}; cobertura_coletada=${coverage.length}; cobertura_retida=${retained.length}; ` +
+      `cobertura_omitida=${omittedCoverage}; ` +
+      'criterio=gravidade_maior_primeiro_depois_ferramenta_arquivo_linha_regra; ' +
+      'vinculo_achado_cobertura=linhas_por_arquivo_existentes_dos_achados_retidos_mantidas; ' +
+      'selecao_cobertura=chave_canonica_ferramenta_arquivos_independente_da_ordem',
+  });
+  return {coverage: retained, findings: selectedFindings};
+}
+
 function snapshotCoverage({copiedFiles, skipped, stoppedAt, failure}) {
   const reasons = new Map();
   for (const {reason} of skipped) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
@@ -1731,7 +1841,7 @@ export function runCollector(options = {}) {
       }
     }
 
-    return {coverage, findings};
+    return boundCollectorOutput({coverage, findings});
   } finally {
     rmSync(workRoot, {recursive: true, force: true});
   }

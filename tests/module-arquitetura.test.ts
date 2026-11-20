@@ -36,6 +36,7 @@ import {hasKnownSecret, redactUnknownSecrets} from '../src/verify-redact.ts';
 import {REMEDIATION_ACCEPTANCE} from '../src/verify-types.ts';
 import {
   analyzeAstComplexity,
+  boundCollectorOutput,
   buildKnipConfig,
   clampLine,
   copyRepoSafely,
@@ -873,6 +874,213 @@ test('snapshot registra omissões e cobertura sinaliza o corte de 500 linhas em 
       assert.match(out.coverage.find(row => row.tool === tool)?.detail ?? '', /linhas_por_arquivo=500\/501; limite_linhas=500; cobertura_truncada=sim/);
       assert.equal(out.coverage.filter(row => row.tool === `${tool}:file`).length, 500);
     }
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
+  }
+});
+
+type BoundFinding = import('../deploy/modules/arquitetura/collect.mjs').FindingItem;
+type BoundRow = import('../deploy/modules/arquitetura/collect.mjs').CoverageRow;
+
+function syntheticBoundInput(coverageFiles: number, findingCount: number) {
+  const coverage: BoundRow[] = [{tool: 'snapshot', version: '1', status: 'ok', detail: 'copiados=1'},
+    {tool: 'knip', version: '1', status: 'ok', detail: 'arquivos=1'},
+    {tool: 'jscpd', version: '1', status: 'ok', detail: 'arquivos=1'}];
+  for (const tool of ['knip:file', 'jscpd:file']) {
+    for (let index = 0; index < coverageFiles; index += 1) {
+      coverage.push({tool, version: '1', status: 'ok', files: [`src/m${index}.ts`], detail: `arquivo=src/m${index}.ts`});
+    }
+  }
+  const severities: BoundFinding['severity'][] = ['informativa', 'baixa', 'media', 'alta'];
+  const findings: BoundFinding[] = Array.from({length: findingCount}, (_, index) => ({
+    tool: index % 2 ? 'jscpd' : 'knip', rule: `R-${index % 7}`, file: `src/m${(index * 7) % coverageFiles}.ts`,
+    line: (index % 50) + 1, severity: severities[(index * 5) % 4]!, message: `achado ${index}`, evidence: `evidencia ${index}`,
+  }));
+  return {coverage, findings};
+}
+
+test('limites do contrato: achados excedentes são selecionados por gravidade, de forma determinística e com a omissão declarada', () => {
+  const {coverage, findings} = syntheticBoundInput(1500, 3047);
+  assert.ok(coverage.length > 999 && findings.length > 999);
+  const out = boundCollectorOutput({coverage, findings});
+  const reversed = boundCollectorOutput({coverage: [...coverage], findings: [...findings].reverse()});
+  assert.deepEqual(reversed, out);
+  assert.equal(out.findings.length, 999);
+  assert.ok(out.coverage.length <= 5000);
+  const rank = (severity: string) => ['alta', 'media', 'baixa', 'informativa'].indexOf(severity);
+  const worstKept = Math.max(...out.findings.map(item => rank(item.severity)));
+  const omitted = findings.filter(item => !out.findings.includes(item));
+  assert.equal(omitted.length, 3047 - 999);
+  assert.ok(omitted.every(item => rank(item.severity) >= worstKept));
+  assert.equal(out.findings.filter(item => item.severity === 'alta').length, Math.min(999, findings.filter(item => item.severity === 'alta').length));
+  // cada achado retido continua ligado à linha de cobertura por arquivo da própria ferramenta
+  for (const item of out.findings) {
+    assert.ok(out.coverage.some(row => row.tool === `${item.tool}:file` && row.files?.includes(item.file)), `${item.tool} ${item.file}`);
+    assert.ok(findings.includes(item), 'nenhum achado inventado');
+  }
+  const limit = out.coverage.at(-1)!;
+  assert.equal(limit.tool, 'limites-do-coletor');
+  assert.equal(limit.status, 'skipped');
+  assert.match(limit.detail, /cobertura_parcial=sim; limite_achados=999; achados_coletados=3047; achados_retidos=999; achados_omitidos=2048;/);
+  const omittedBySeverity = (severity: string) => omitted.filter(item => item.severity === severity).length;
+  for (const severity of ['media', 'baixa', 'informativa']) {
+    if (omittedBySeverity(severity)) assert.match(limit.detail, new RegExp(`${severity}=${omittedBySeverity(severity)}`));
+  }
+  const parsed = parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
+  assert.equal(parsed.findings.length, 999);
+  const untouched = syntheticBoundInput(10, 20);
+  assert.deepEqual(boundCollectorOutput(untouched), untouched);
+});
+
+test('limites do contrato: cobertura acima de 5000 descarta linhas sem achado, mantém os vínculos e declara as contagens', () => {
+  const {coverage, findings} = syntheticBoundInput(3000, 3047);
+  assert.equal(coverage.length, 6003);
+  const out = boundCollectorOutput({coverage, findings});
+  assert.ok(out.coverage.length <= 5000);
+  assert.equal(out.findings.length, 999);
+  for (const item of out.findings) {
+    assert.ok(out.coverage.some(row => row.tool === `${item.tool}:file` && row.files?.includes(item.file)));
+  }
+  assert.deepEqual(out.coverage.filter(row => !row.files).map(row => row.tool), ['snapshot', 'knip', 'jscpd', 'limites-do-coletor']);
+  assert.match(out.coverage.at(-1)!.detail, /limite_cobertura=5000; cobertura_coletada=6003; cobertura_retida=4999; cobertura_omitida=1004;/);
+  parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
+
+  const few = syntheticBoundInput(3000, 5);
+  const fewOut = boundCollectorOutput(few);
+  assert.equal(fewOut.findings.length, 5);
+  assert.equal(fewOut.coverage.length, 5000);
+  assert.match(fewOut.coverage.at(-1)!.detail, /achados_omitidos=0;.*cobertura_omitida=1004;/);
+  // com o limite apertado, um achado só entra se a cobertura dele couber
+  const tight = boundCollectorOutput(syntheticBoundInput(10, 40), {maxCoverage: 6, maxFindings: 999});
+  assert.ok(tight.coverage.length <= 6);
+  for (const item of tight.findings) assert.ok(tight.coverage.some(row => row.tool === `${item.tool}:file` && row.files?.includes(item.file)));
+  assert.match(tight.coverage.at(-1)!.detail, /cobertura_parcial=sim/);
+});
+
+test('limites do contrato: amostra com as contagens do NexoISP (1515 linhas de cobertura e 3047 achados)', () => {
+  const {coverage, findings} = syntheticBoundInput(756, 3047);
+  assert.equal(coverage.length, 1515);
+  const out = boundCollectorOutput({coverage, findings});
+  assert.equal(out.findings.length, 999);
+  assert.equal(out.coverage.length, 1516);
+  assert.match(out.coverage.at(-1)!.detail, /achados_coletados=3047; achados_retidos=999; achados_omitidos=2048; achados_retidos_sem_linha_por_arquivo=0;/);
+  assert.match(out.coverage.at(-1)!.detail, /cobertura_coletada=1515; cobertura_retida=1515; cobertura_omitida=0;/);
+  parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
+});
+
+test('limites do contrato: a cobertura retida acima de 5000 linhas não depende da ordem de entrada', () => {
+  const {coverage, findings} = syntheticBoundInput(3000, 5);
+  const key = (rows: BoundRow[]) => rows.map(row => JSON.stringify(row)).sort();
+  const base = boundCollectorOutput({coverage, findings});
+  const permutations = [
+    [...coverage].reverse(),
+    coverage.map((row, index) => ({row, rank: (index * 7919) % coverage.length})).sort((a, b) => a.rank - b.rank).map(({row}) => row),
+  ];
+  for (const permuted of permutations) {
+    const out = boundCollectorOutput({coverage: permuted, findings: [...findings].reverse()});
+    assert.deepEqual(key(out.coverage), key(base.coverage));
+    assert.deepEqual(out.findings, base.findings);
+  }
+  // troca só duas linhas sem achados na fronteira do corte
+  const swapped = [...coverage];
+  const lastKept = coverage.findIndex(row => !base.coverage.includes(row)) - 1;
+  [swapped[lastKept], swapped[lastKept + 1]] = [swapped[lastKept + 1]!, swapped[lastKept]!];
+  assert.deepEqual(key(boundCollectorOutput({coverage: swapped, findings}).coverage), key(base.coverage));
+});
+
+test('limites do contrato: um achado cuja cobertura não cabe não interrompe a avaliação dos seguintes', () => {
+  const row = (files: string[]): BoundRow => ({tool: 'knip:file', version: '1', status: 'ok', files, detail: `arquivos=${files.join(',')}`});
+  const coverage: BoundRow[] = [{tool: 'knip', version: '1', status: 'ok', detail: 'arquivos=4'}, row(['a.ts', 'c.ts']), row(['b.ts']), row(['d.ts'])];
+  const finding = (file: string) => ({tool: 'knip', rule: 'R', file, line: 1, severity: 'alta' as const, message: `m ${file}`, evidence: `e ${file}`});
+  const out = boundCollectorOutput({coverage, findings: [finding('a.ts'), finding('b.ts'), finding('c.ts')]}, {maxCoverage: 3, maxFindings: 999});
+  assert.deepEqual(out.findings.map(item => item.file), ['a.ts', 'c.ts']);
+  assert.deepEqual(out.coverage.map(item => item.files ?? item.tool), ['knip', ['a.ts', 'c.ts'], 'limites-do-coletor']);
+  assert.match(out.coverage.at(-1)!.detail, /achados_retidos=2; achados_omitidos=1; achados_retidos_sem_linha_por_arquivo=0;/);
+});
+
+test('limites do contrato: achado sem vínculo válido é omitido e não ocupa a vaga de um elegível', () => {
+  const row = (file: string): BoundRow => ({tool: 'knip:file', version: '1', status: 'ok', files: [file], detail: `arquivo=${file}`});
+  const coverage: BoundRow[] = [{tool: 'knip', version: '1', status: 'ok', detail: 'arquivos=3'}, row('a.ts'), row('b.ts'), row('c.ts')];
+  const finding = (tool: string, file: string, severity: 'alta' | 'media' = 'alta') =>
+    ({tool, rule: 'R', file, line: 1, severity, message: `m ${file}`, evidence: `e ${file}`});
+  // jscpd não tem linha ok da própria ferramenta: omitido, mesmo sendo o primeiro na prioridade
+  const out = boundCollectorOutput({coverage, findings: [finding('knip', 'z.ts'), finding('knip', 'a.ts'), finding('jscpd', 'b.ts')]}, {maxCoverage: 3, maxFindings: 999});
+  assert.deepEqual(out.findings.map(item => `${item.tool}:${item.file}`), ['knip:a.ts', 'knip:z.ts']);
+  const detail = out.coverage.at(-1)!.detail;
+  assert.match(detail, /achados_retidos=2; achados_omitidos=1; achados_retidos_sem_linha_por_arquivo=1;/);
+  assert.match(detail, /achados_omitidos_por_ferramenta: jscpd=1;/);
+  assert.match(detail, /vinculo_achado_cobertura=linhas_por_arquivo_existentes_dos_achados_retidos_mantidas/);
+  assert.ok(out.coverage.some(item => item.files?.includes('a.ts')));
+  // com uma única vaga, o achado alto sem vínculo cede a vaga ao médio que tem cobertura
+  const single = boundCollectorOutput({coverage, findings: [finding('jscpd', 'a.ts'), finding('knip', 'b.ts', 'media')]}, {maxCoverage: 3, maxFindings: 1});
+  assert.deepEqual(single.findings.map(item => `${item.tool}:${item.file}`), ['knip:b.ts']);
+  assert.match(single.coverage.at(-1)!.detail, /achados_retidos=1; achados_omitidos=1;/);
+  // vínculo por linha da própria ferramenta com lista de arquivos contendo o arquivo
+  const own: BoundRow[] = [{tool: 'snapshot', version: '1', status: 'ok', detail: 'x'},
+    {tool: 'jscpd', version: '1', status: 'ok', files: ['a.ts'], detail: 'a'}, {tool: 'jscpd', version: '1', status: 'ok', files: ['q.ts'], detail: 'q'}, {tool: 'jscpd', version: '1', status: 'ok', files: ['r.ts'], detail: 'r'}];
+  const byOwn = boundCollectorOutput({coverage: own, findings: [finding('jscpd', 'a.ts'), finding('jscpd', 'b.ts')]}, {maxCoverage: 3, maxFindings: 999});
+  assert.deepEqual(byOwn.findings.map(item => item.file), ['a.ts']);
+  assert.ok(byOwn.coverage.some(item => item.files?.includes('a.ts')));
+});
+
+test('limites do contrato: linha compartilhada já retida é preferida e a saída independe da ordem das linhas', () => {
+  const row = (tool: string, files: string[]): BoundRow => ({tool, version: '1', status: 'ok', files, detail: `arquivos=${files.join(',')}`});
+  const rows = [row('knip', ['b.ts']), row('knip', ['a.ts', 'b.ts']), row('jscpd', ['z.ts'])];
+  const finding = (file: string, severity: 'alta' | 'media') => ({tool: 'knip', rule: 'R', file, line: 1, severity, message: `m ${file}`, evidence: `e ${file}`});
+  const findings = [finding('b.ts', 'media'), finding('a.ts', 'alta')];
+  const permutations = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+  const outputs = permutations.map(order => boundCollectorOutput({coverage: order.map(index => rows[index]), findings}, {maxCoverage: 2, maxFindings: 999}));
+  for (const out of outputs) {
+    assert.deepEqual(out.findings.map(item => item.file), ['a.ts', 'b.ts']);
+    assert.deepEqual(out.coverage.map(item => item.files ?? item.tool), [['a.ts', 'b.ts'], 'limites-do-coletor']);
+    assert.match(out.coverage.at(-1)!.detail, /achados_retidos=2; achados_omitidos=0;/);
+  }
+  assert.deepEqual(outputs.map(out => JSON.stringify(out)), outputs.map(() => JSON.stringify(outputs[0])));
+});
+
+test('limites do contrato: files vazio não vincula achados; só a linha ok sem files é genérica', () => {
+  const empty: BoundRow = {tool: 'knip', version: '1', status: 'ok', files: [], detail: 'arquivos=0'};
+  const coverage: BoundRow[] = [empty, {tool: 'knip', version: '1', status: 'ok', files: ['b.ts'], detail: 'b'},
+    {tool: 'jscpd', version: '1', status: 'ok', files: ['c.ts'], detail: 'c'}, {tool: 'jscpd', version: '1', status: 'ok', files: ['d.ts'], detail: 'd'}];
+  const finding = (file: string) => ({tool: 'knip', rule: 'R', file, line: 1, severity: 'alta' as const, message: `m ${file}`, evidence: `e ${file}`});
+  const out = boundCollectorOutput({coverage, findings: [finding('a.ts'), finding('b.ts')]}, {maxCoverage: 3, maxFindings: 999});
+  assert.deepEqual(out.findings.map(item => item.file), ['b.ts']);
+  assert.match(out.coverage.at(-1)!.detail, /achados_retidos=1; achados_omitidos=1;/);
+});
+
+test('runCollector entrega no máximo 999 achados quando a ferramenta reporta milhares e valida no hospedeiro', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'arch-findings-limit-'));
+  try {
+    const files = Array.from({length: 1100}, (_, index) => `module-${String(index).padStart(4, '0')}.ts`);
+    for (const file of files) writeFileSync(join(repo, file), 'export const synthetic = 1;\n');
+    const out = runCollector({
+      repoDir: repo,
+      toolsRoot: moduleDir,
+      spawnSync: (_cmd, args) => {
+        const argv = args as string[];
+        if (argv[0]?.endsWith('/knip-worker.mjs')) {
+          const issues = files.map(file => ({file, files: [{name: file}], exports: [{name: 'a', line: 1}, {name: 'b', line: 1}]}));
+          return {status: 0, stderr: '', stdout: JSON.stringify({issues, analyzedFiles: files, entryFiles: []})};
+        }
+        if (argv.includes('--output-to')) {
+          writeFileSync(argv[argv.indexOf('--output-to') + 1], JSON.stringify({modules: files.map(source => ({source}))}));
+        } else {
+          const outDir = argv[argv.indexOf('--output') + 1];
+          writeFileSync(join(outDir, 'jscpd-report.json'), JSON.stringify({duplicates: []}));
+          writeFileSync(join(outDir, 'jscpd-complexity.json'), JSON.stringify({summary: {files: files.map(path => ({path}))}}));
+        }
+        return {status: 0, stderr: '', stdout: ''};
+      },
+    });
+    assert.equal(out.findings.length, 999);
+    assert.ok(out.coverage.length <= 5000);
+    const limit = out.coverage.find(row => row.tool === 'limites-do-coletor');
+    assert.match(limit?.detail ?? '', /achados_coletados=3300; achados_retidos=999; achados_omitidos=2301;/);
+    assert.ok(out.coverage.some(row => row.tool === 'snapshot'));
+    assertValidOutputContract(out);
+    const parsed = parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
+    assert.equal(parsed.findings.length, 999);
+    assert.equal(parsed.coverage.length, out.coverage.length);
   } finally {
     rmSync(repo, {recursive: true, force: true});
   }
