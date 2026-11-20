@@ -363,7 +363,7 @@ function toAchado(
     .slice(0, 2000);
   const sources = verifier === null
     ? ['medida', finding.reference]
-    : ['examinador', finding.reference, verifier.provider];
+    : ['examinador', finding.reference, verifier.provider, ...(finding.measure ? ['medida'] : [])];
   return DesignAchado.parse({
     id: `ACH-${String(index).padStart(3, '0')}`,
     title: finding.title.slice(0, 200),

@@ -112,6 +112,9 @@ class MountMemory {
       const intent = this.tables.ac_intents?.find(row => row.id === params[0]);
       return selected(intent ? [{command: intent.command}] : []);
     }
+    if (text.startsWith('SELECT p.id, p.account_id AS account, p.model, p.effort,')) {
+      return selected((this.tables.design_policy_profiles ?? []).filter(row => row.context === params[0]));
+    }
     if (text.startsWith('SELECT 1 FROM ac_model_catalog')) return selected([{one: 1}]);
     if (text.startsWith('SELECT repo FROM ac_project_repositories WHERE project_id=$1')) {
       const row = this.tables.ac_project_repositories?.find(item => item.project_id === params[0]);
@@ -347,6 +350,14 @@ class MountMemory {
     }
     throw new Error(`UNHANDLED_SQL ${text}`);
   }
+}
+
+function fixtureDesignPolicy(memory: MountMemory, context: string, account: string, profile: string) {
+  const medium = randomUUID();
+  for (const [id, effort] of [[profile, 'high'], [medium, 'medium']]) {
+    memory.insert('design_policy_profiles', {context, account, id, effort, model: 'claude-opus-5-5', regular: effort === 'high', enabled: true});
+  }
+  return medium;
 }
 
 function substituteLedger() {
@@ -1367,11 +1378,13 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       },
     });
 
+    const mediumProfile = fixtureDesignPolicy(memory, context, account, profile);
     const cases = [
       {label: 'validador-examinador', workflow: 'security-verify-readonly-v1', role: 'specialist' as const, task: 'Exame de segurança.', exam: true},
       {label: 'validador-revisor', workflow: 'security-verify-readonly-v1', role: 'reviewer' as const, task: 'Revisão de segurança.', exam: true},
       {label: 'design-examinador', workflow: 'design-readonly-v1', role: 'specialist' as const, task: 'Pedido de exame.', exam: true},
       {label: 'design-revisor', workflow: 'design-readonly-v1', role: 'reviewer' as const, task: 'Pedido de confirmação.', exam: true},
+      {label: 'design-critica', workflow: 'design-readonly-v1', role: 'specialist' as const, task: 'Pedido de crítica visual.', exam: true},
       {label: 'design-criar', workflow: 'design-readonly-v1', role: 'specialist' as const, task: 'Pedido de criação. Tela inicial.', exam: true},
       {label: 'programador', workflow: 'engineering-native-v1', role: 'programmer' as const, task: 'Edite src/a.ts.', exam: false},
     ];
@@ -1383,7 +1396,9 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       memory.insert('ac_intents', {id: intentId, context_id: context, principal_id: principal, command: {payload: {workflow: item.workflow}}});
       memory.insert('ac_capacity_grants', {
         id: grantId, intent_id: intentId, context_id: context, project_id: project, manager_epoch: authority.epoch,
-        account_id: account, profile_id: profile, role: item.role, model: 'fixture-model', effort: 'medium',
+        account_id: account, profile_id: item.label === 'design-revisor' ? mediumProfile : profile, role: item.role,
+        model: item.workflow === 'design-readonly-v1' ? 'claude-opus-5-5' : 'fixture-model',
+        effort: item.workflow === 'design-readonly-v1' && item.label !== 'design-revisor' ? 'high' : 'medium',
         resource_kind: 'model', state: 'reserved',
       });
       const req = NativeExecutionRequest.parse({
@@ -1392,6 +1407,15 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
         writePaths: item.role === 'programmer' ? ['src/a.ts'] : [],
         ...(item.role === 'programmer' ? {} : {artifactId: randomUUID(), outputSchema: {type: 'object'}}),
       });
+      if (item.workflow === 'design-readonly-v1') {
+        for (const wrong of [{account_id: randomUUID()}, {model: 'claude-sonnet-5-5'}, {effort: item.label === 'design-revisor' ? 'high' : 'medium'}]) {
+          const badGrant = randomUUID();
+          const badJob = randomUUID();
+          memory.insert('ac_capacity_grants', {...memory.one('ac_capacity_grants', grantId), ...wrong, id: badGrant});
+          await assert.rejects(() => supervisor.start(principal, authority, {...req, grantId: badGrant, jobId: badJob}), /DESIGN_CREATE_MODEL_UNAVAILABLE/);
+          assert.ok(!created.some(c => c.name.endsWith(badJob)));
+        }
+      }
       await assert.rejects(() => supervisor.start(principal, authority, req), /STOP_AFTER_CREATE/);
       const w = created.find(c => c.name === `ac-native-worker-${jobId}`);
       assert.ok(w, item.label);
@@ -1591,6 +1615,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
     memory.insert('ac_admission_control', {id: 1, enabled: true});
     memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    fixtureDesignPolicy(memory, context, account, profile);
     const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
     const keys = generateKeyPairSync('ed25519');
     const image = 'sha256:' + 'c'.repeat(64);
@@ -1674,7 +1699,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     const job1 = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: grant1, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'reserved',
     });
     const input1 = NativeExecutionRequest.parse({
@@ -1732,7 +1757,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     const failJob = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: failGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'reserved',
     });
     const failInput = NativeExecutionRequest.parse({
@@ -1763,7 +1788,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     containers.set(`ac-native-tools-${unstartedJob}`, {Id: tUnstarted, Image: image, Config: {Labels: uLabels}, State: createdState});
     memory.insert('ac_capacity_grants', {
       id: unstartedGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'uncertain',
     });
     memory.insert('ac_native_execution_jobs', {
@@ -2522,6 +2547,7 @@ test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBefo
     memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
     memory.insert('ac_admission_control', {id: 1, enabled: true});
     memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    fixtureDesignPolicy(memory, context, account, profile);
     const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
     const keys = generateKeyPairSync('ed25519');
     const image = 'sha256:' + 'c'.repeat(64);
@@ -2562,7 +2588,7 @@ test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBefo
     const diskJob = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: diskGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'reserved',
     });
     const diskInput = NativeExecutionRequest.parse({
@@ -2583,7 +2609,7 @@ test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBefo
     const inspectJob = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: inspectGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'reserved',
     });
     const inspectInput = NativeExecutionRequest.parse({
@@ -2603,7 +2629,7 @@ test('falha em diskGuard.assertAdmission antes do try libera o grant, e failBefo
     const releaseFailJob = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: releaseFailGrant, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'reserved',
     });
     const releaseFailInput = NativeExecutionRequest.parse({
@@ -2762,6 +2788,7 @@ rl.once('line', () => {
     memory.insert('ac_managers', {context_id: context, instance_id: instance, epoch: 1, lease_until: Date.now() + 60_000});
     memory.insert('ac_admission_control', {id: 1, enabled: true});
     memory.insert('ac_intents', {id: intent, context_id: context, principal_id: principal, command: {payload: {workflow: 'design-readonly-v1'}}});
+    fixtureDesignPolicy(memory, context, account, profile);
     const authority = Authority.parse({contextId: context, instanceId: instance, epoch: 1});
     const keys = generateKeyPairSync('ed25519');
     const image = 'sha256:' + 'c'.repeat(64);
@@ -2831,7 +2858,7 @@ rl.once('line', () => {
     const jobId = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: grantId, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'reserved',
     });
     const req = NativeExecutionRequest.parse({
@@ -2915,7 +2942,7 @@ rl.once('line', () => {
     const job2 = randomUUID();
     memory.insert('ac_capacity_grants', {
       id: grant2, intent_id: intent, context_id: context, project_id: project, manager_epoch: authority.epoch,
-      account_id: account, profile_id: profile, role: 'specialist', model: 'fixture-model', effort: 'medium',
+      account_id: account, profile_id: profile, role: 'specialist', model: 'claude-opus-5-5', effort: 'high',
       resource_kind: 'model', state: 'reserved',
     });
     const req2 = NativeExecutionRequest.parse({

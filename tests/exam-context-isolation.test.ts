@@ -761,7 +761,7 @@ test('exame de design e criar reservam Opus high na conta prioritária para cria
     });
     const revision = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
       schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
-      roles: {specialist: {regular: specialist, emergency: []}, reviewer: {regular: [codexReviewerProfile], emergency: []}},
+      roles: {specialist: {regular: [specialist[1], specialist[3]], emergency: [specialist[0], specialist[2]]}, reviewer: {regular: [codexReviewerProfile], emergency: []}},
     }));
     const mainContext = await db.createContext(principal, projectId, randomUUID());
     await capacity.assignPolicy(principal, mainContext, revision);

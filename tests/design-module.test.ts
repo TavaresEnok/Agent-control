@@ -99,10 +99,14 @@ test('a régua confirmada entra no relatório e as telas corretas ficam sem alta
         assert.ok(hit, item.relative);
         assert.equal(hit.severity, raw.severity);
         assert.equal(hit.status, 'confirmado');
-        if (raw.measure === undefined) assert.equal(hit.verifier?.provider, 'claude');
+        if (raw.measure === undefined || raw.severity === 'alta') assert.equal(hit.verifier?.provider, 'claude');
         else {
           assert.equal(hit.verifier, null);
           assert.equal(hit.sources.includes('medida'), true);
+        }
+        if (raw.measure && raw.severity === 'alta') {
+          assert.ok(hit.sources.includes('medida'));
+          assert.equal(result.achados.filter(row => row.reference === item.rule && row.where.file.endsWith(item.relative)).length, 1);
         }
       } else {
         assert.equal(hit, undefined, item.rule);

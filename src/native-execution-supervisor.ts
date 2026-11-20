@@ -1,4 +1,5 @@
 import {moduleExamProviders, moduleExamSocket, startModuleExamEgress} from './module-exam-egress.ts';
+import {requiredDesignProfile} from './design-model-reservation.ts';
 import {assertModelAllowed} from './model-policy.ts';
 import {redactNativeLogsOrWithhold,assertNoNativeTaskSecrets} from './native-execution-redaction.ts';
 import {readNativeSecretSnapshot,writeNativeSecretSnapshot,quarantineNativeLegacyLog,readNativeArtifactSecrets} from './native-execution-secret-snapshot.ts';
@@ -56,7 +57,7 @@ export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,se
  model:z.string().min(1).max(100).optional(),effort:z.enum(['low','medium','high','xhigh','max']).optional()}).strict().superRefine((v,c)=>{
  if(v.moduleExam&&(v.role!=='specialist'||v.model!==undefined||v.effort!==undefined))c.addIssue({code:'custom',message:'MODULE_EXAM_SCOPE_MISMATCH'});
  if((v.model===undefined)!==(v.effort===undefined))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
- if(v.model!==undefined&&(v.model!=='claude-opus-5-5'||v.effort!=='high'))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
+ if(v.model!==undefined&&(v.model!=='claude-opus-5-5'||(v.effort!=='high'&&v.effort!=='medium')))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
  if(v.role==='programmer'&&!v.writePaths.length)c.addIssue({code:'custom',message:'PROGRAMMER_SCOPE_REQUIRED'});
  if(v.role!=='programmer'&&(!v.artifactId||!v.outputSchema||v.writePaths.length))c.addIssue({code:'custom',message:'READONLY_ARTIFACT_REQUIRED'});
 });
@@ -355,15 +356,16 @@ export class NativeExecutionSupervisor{
   const designCreate=personal&&input.role==='specialist'&&examWorkflowEarly==='design-readonly-v1'&&input.task.startsWith('Pedido de criação.');
   try{
    if(askedModel&&(!designCreate||input.model!=='claude-opus-5-5'||input.effort!=='high'))throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
-   if(askedModel){
-    if(g.model!=='claude-opus-5-5'||g.effort!=='high')throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
-    const catalog=await this.ledger.pool.query(`SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider WHERE a.id=$1 AND a.provider='claude' AND m.model=$2 AND $3=ANY(m.efforts) AND 'specialist'=ANY(m.roles)`,[g.account_id,g.model,g.effort]);
-    if(!catalog.rowCount)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
-   }
    checkAbort();
    await admitNativeResources({docker:this.docker,ledger:this.ledger,principal,authority,intentId:input.intentId,grantId:input.grantId,jobId:input.jobId,names:['ac-native-tools-'+input.jobId,'ac-native-worker-'+input.jobId]});
    // Commit the uncertainty before files, Docker networks or processes exist.
    await this.ledger.tx(async c=>{const current=await this.identity(c,principal,authority,input);assertModelAllowed(current.model);
+    if(personal && readonlyDesignExam(examWorkflowEarly,input.role)){
+     const purpose=input.task.startsWith('Pedido de confirmação.')?'reviewer':'examiner';
+     const profile=await requiredDesignProfile(c,authority.contextId,purpose);
+     if(this.config.provider!=='claude'||current.profile_id!==profile.id||current.account_id!==profile.account||
+        current.model!==profile.model||current.effort!==profile.effort)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
+    }
     if(!synthetic&&!await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'").then(r=>Boolean(r.rowCount)))await pinNativeProtocolForNewAttempt(c,{kind:'execution',jobId:input.jobId,executorDigest:this.executorDigest,model:current.model,effort:current.effort});
     if(input.role==='programmer')await requireProjectEnvironmentLaunch(c,{intentId:input.intentId,base:input.base});
     await c.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,executor_digest,key_fingerprint,input_digest,base_id,role,account_id,profile_id,profile_digest,eligibility_revision,state)
