@@ -11,6 +11,7 @@ const enabled = process.env.AC_MODULE_LAB === '1';
 const root = new URL('../deploy/modules/conformidade/', import.meta.url);
 const fixtures = fileURLToPath(new URL('./fixtures/module-conformidade/', import.meta.url));
 const attributionFixture = 'atribuicao/repo';
+const manifestStaticFiles = ['src/telemetry.ts', 'vendor/widget.js'];
 const npmLicenseSkipDetail = 'Lockfiles npm v2/v3 classificados: 0; erros: 0. Licenças ausentes permanecem desconhecidas.';
 const isolated = [
   'run', '--pull=never', '--rm', '--network', 'none', '--read-only',
@@ -67,6 +68,21 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
     assert.match(row.status, /^(ok|failed|skipped)$/);
     if (!attribution) assert.notEqual(row.status, 'failed', `${row.tool}: ${row.detail}`);
   }
+  const fileRows = report.coverage.filter(row => row.tool === 'lgpd-static:file');
+  const expectedFiles = attribution ? ['operations.js', 'operations.py', 'writes.ts'] :
+    ['package-lock.json', 'package.json', ...manifestStaticFiles];
+  assert.deepEqual(fileRows.map(row => row.detail.split(' | ')[0]).sort(), [...expectedFiles].sort(),
+    `Arquivos estáticos em ${fixture}`);
+  for (const row of fileRows) {
+    assert.equal(Object.hasOwn(row, 'files'), false, `files inesperado em ${row.detail}`);
+  }
+  if (!attribution) {
+    assert.deepEqual(report.coverage.find(row => row.tool === 'lgpd-static')?.files, manifestStaticFiles);
+    const destinations = report.findings.filter(row => row.rule.startsWith('PII_POSSIBLE_'))
+      .map(row => [row.rule, row.file, row.line]);
+    assert.deepEqual(destinations, fixture === 'com-defeito' ?
+      [['PII_POSSIBLE_LOG', 'src/telemetry.ts', 3]] : [], `Destinos em ${fixture}`);
+  }
   if (attribution) {
     const staticRows = report.coverage.filter(row => row.tool === 'lgpd-static');
     assert.equal(staticRows.length, 3, 'Grupos de cobertura lgpd-static');
@@ -81,6 +97,10 @@ function parseCollectorOutput(fixture: string, {stdout, code}: {stdout: string; 
       assert.equal(matches[0].version, '1');
       assert.equal(matches[0].status, group.status);
       assert.deepEqual(matches[0].files, group.files);
+    }
+    for (const file of ['operations.js', 'operations.py']) {
+      assert.ok(report.findings.some(row => row.tool === 'lgpd-static' && row.file === file),
+        `Evidência local sem achado estático em ${file}`);
     }
     const failed = report.coverage.filter(row => row.status === 'failed');
     assert.equal(failed.length, 3, JSON.stringify(failed));
@@ -126,15 +146,28 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
     {tool: 'lgpd-static:file', version: '1', status: 'ok',
       detail: 'writes.ts | linhas com campos=14, indícios de destino=6'},
   ];
-  const report = {coverage, findings: []};
+  const findings: Output['findings'] = ['operations.js', 'operations.py'].map(file => ({
+    tool: 'lgpd-static', rule: 'PII_FIELD', file, line: 1, severity: 'informativa',
+    message: 'Referência sintética.', evidence: 'Campo sintético.',
+  }));
+  const report = {coverage, findings};
   const stdout = JSON.stringify(report);
   assert.deepEqual(parseCollectorOutput(attributionFixture, {stdout, code: 1}), report);
   assert.throws(() => parseCollectorOutput(attributionFixture, {stdout, code: 0}), /Código de saída/);
   assert.throws(() => parseCollectorOutput(attributionFixture, {stdout, code: 125}), /Código de saída/);
   assert.throws(() => parseCollectorOutput(attributionFixture, {stdout: 'inválido', code: 1}), SyntaxError);
   const checkCoverage = (rows: Output['coverage']) => parseCollectorOutput(attributionFixture, {
-    stdout: JSON.stringify({coverage: rows, findings: []}), code: 1,
+    stdout: JSON.stringify({coverage: rows, findings}), code: 1,
   });
+  for (const finding of findings) {
+    for (const replacement of [undefined, {...finding, tool: 'presidio-analyzer'}]) {
+      const altered = findings.filter(row => row !== finding);
+      if (replacement) altered.push(replacement);
+      assert.throws(() => parseCollectorOutput(attributionFixture, {
+        stdout: JSON.stringify({coverage, findings: altered}), code: 1,
+      }), /Evidência local sem achado estático/);
+    }
+  }
   const groups = coverage.filter(row => row.tool === 'lgpd-static');
   for (const group of groups) {
     assert.throws(() => checkCoverage(coverage.filter(row => row !== group)), assert.AssertionError);
@@ -147,6 +180,7 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
     assert.throws(() => checkCoverage(coverage.map(row => row === group ? {...row, files: files && [...files]} : row)), assert.AssertionError);
   }
   for (const row of coverage.filter(row => row.tool === 'lgpd-static:file')) {
+    assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, files: ['operations.js']} : item)), assert.AssertionError);
     assert.throws(() => checkCoverage(coverage.filter(item => item !== row)), assert.AssertionError);
     assert.throws(() => checkCoverage([...coverage, row]), assert.AssertionError);
     assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, status: row.status === 'ok' ? 'failed' : 'ok'} : item)), assert.AssertionError);
@@ -182,18 +216,38 @@ test('C9 aceita somente a cobertura parcial prevista para a fixture de atribuiç
 });
 
 test('C9 exige cobertura agregada ok para todas as ferramentas nas fixtures com manifesto', () => {
-  const coverage: Output['coverage'] = [
-    'conformidade:snapshot', 'scancode-toolkit', 'presidio-analyzer', 'npm-license-policy', 'ort', 'lgpd-static',
-  ].map(tool => ({tool, version: '1', status: 'ok', detail: 'Cobertura sintética.'}));
-  const report = {coverage, findings: []};
-  const stdout = JSON.stringify(report);
   for (const fixture of ['com-defeito', 'limpo']) {
+    const coverage: Output['coverage'] = [
+      'conformidade:snapshot', 'scancode-toolkit', 'presidio-analyzer', 'npm-license-policy', 'ort', 'lgpd-static',
+    ].map(tool => ({tool, version: '1', status: 'ok', detail: 'Cobertura sintética.',
+      ...(tool === 'lgpd-static' ? {files: ['src/telemetry.ts', 'vendor/widget.js']} : {})}));
+    coverage.push(...['package-lock.json', 'package.json', 'src/telemetry.ts', 'vendor/widget.js'].map(file => ({
+      tool: 'lgpd-static:file', version: '1', status: 'ok', detail: `${file} | sintético`,
+    })));
+    const findings: Output['findings'] = fixture === 'com-defeito' ? [{
+      tool: 'lgpd-static', rule: 'PII_POSSIBLE_LOG', file: 'src/telemetry.ts', line: 3,
+      severity: 'media', message: 'Destino sintético.', evidence: 'Origem sintética.',
+    }] : [];
+    const report = {coverage, findings};
+    const stdout = JSON.stringify(report);
     assert.deepEqual(parseCollectorOutput(fixture, {stdout, code: 0}), report);
     assert.throws(() => parseCollectorOutput(fixture, {stdout, code: 1}), /Código de saída/);
     const checkCoverage = (rows: Output['coverage']) => parseCollectorOutput(fixture, {
-      stdout: JSON.stringify({coverage: rows, findings: []}), code: 0,
+      stdout: JSON.stringify({coverage: rows, findings}), code: 0,
     });
-    for (const entry of coverage) {
+    const staticAggregate = coverage.find(row => row.tool === 'lgpd-static')!;
+    for (const files of [['inexistente.ts'], ['src/telemetry.ts'], ['src/telemetry.ts', 'inexistente.ts'], undefined]) {
+      assert.throws(() => checkCoverage(coverage.map(row => row === staticAggregate ? {...row, files} : row)), assert.AssertionError);
+    }
+    for (const row of coverage.filter(item => item.tool === 'lgpd-static:file')) {
+      assert.throws(() => checkCoverage(coverage.map(item => item === row ? {...item, files: ['inexistente.ts']} : item)), assert.AssertionError);
+    }
+    if (fixture === 'com-defeito') {
+      assert.throws(() => parseCollectorOutput(fixture, {
+        stdout: JSON.stringify({coverage, findings: [...findings, {...findings[0], line: 1}]}), code: 0,
+      }), /Destinos em com-defeito/);
+    }
+    for (const entry of coverage.filter(row => !row.tool.endsWith(':file'))) {
       const otherRows = coverage.filter(row => row !== entry);
       const countError = new RegExp(`Cobertura agregada de ${entry.tool} em ${fixture}`);
       assert.throws(() => checkCoverage(otherRows), countError);
