@@ -51,6 +51,8 @@ const PassiveExamModules=new Set(['qa','arquitetura','dependencias','banco','pro
 export type ModuleExamRecoveryReason='supervisor_identity'|'docker_uncertain'|'intent_open'|'sibling_unresolved'|'job_state'|'journal_started'|'request_unproven'|'launch_present'|'spool_touched'|'worker_present'|'tools_absent'|'tools_mismatch'|'tools_started'|'tools_registered'|'removal_unproven'|'network_unproven'|'network_mismatch'|'network_attached'|'grant_state'|'retirement_conflict'|'residual_resources';
 /** Docker's zero time for a container that was never started. Nothing else (empty, another 0001 date, any real date) is accepted. */
 const DockerZeroTime='0001-01-01T00:00:00Z';
+/** Signature domain of the passive module-exam `tools_removed` journal stage; distinct from every other signed record. */
+const ModuleExamRemovalDomain='agent-control:native-module-exam-tools-removed:v1\n';
 export type NativeModuleExamRecovery={state:'retired'|'preserved';reason:'proven_never_started'|ModuleExamRecoveryReason;grant:'released'|'preserved';removed:string[];replayed:boolean;receipt?:unknown};
 /** Thrown by callers that need a refusal: the grant was kept because the evidence did not prove the attempt never started. */
 export class ModuleExamRecoveryPreserved extends Refusal {
@@ -761,20 +763,28 @@ export class NativeExecutionSupervisor{
  }
  /** Version 1 (legacy) was written before any DELETE and proves nothing about how the container went away.
   * Version 2 is written only after this supervisor's DELETE of the verified Created container was confirmed, and binds
-  * the digest of that pre-removal evidence; it is the only journal stage that lets a resume accept an absent container. */
+  * the digest of that pre-removal evidence and this supervisor's removal signature; it is the only journal stage that
+  * lets a resume accept an absent container. A v1 journal is promoted to v2 right after the confirmed DELETE. */
  private moduleExamRetirementBinding(row:Record<string,any>,toolsId:string,toolsEvidenceDigest?:string){
   const base={schemaVersion:1,kind:'native-module-exam-never-started-retired',jobId:row.id,contextId:row.context_id,intentId:row.intent_id,grantId:row.grant_id,sessionId:row.session_id,epoch:Number(row.manager_epoch),role:'specialist',inputDigest:row.input_digest,toolsId,networkId:row.network_id,toolsImage:this.config.toolsImage,workerId:null,executionStarted:false,moduleExam:true};
   return toolsEvidenceDigest===undefined?base:{...base,schemaVersion:2,stage:'tools_removed',toolsEvidenceDigest};
+ }
+ /** The v2 stage is signed by this supervisor under its own domain over every field, so a well-formed row written by
+  * anyone else (or by another key) is never accepted as proof that this supervisor removed the container. */
+ private signModuleExamRemoval(unsigned:Record<string,unknown>){
+  return {...unsigned,removalSignature:sign(null,Buffer.from(ModuleExamRemovalDomain+canonical(unsigned)),this.key).toString('hex')};
  }
  /** Rebuilds the expected binding from a saved journal, or undefined if the saved one is not exactly a v1 or v2 binding of this job. */
  private moduleExamSavedBinding(row:Record<string,any>,saved:unknown):{binding:Record<string,unknown>;toolsId:string;removalProven:boolean}|undefined{
   const value=saved as Record<string,unknown>|null|undefined,toolsId=value?.toolsId;
   if(!value||typeof value!=='object'||typeof toolsId!=='string'||!/^[a-f0-9]{64}$/.test(toolsId))return undefined;
   if(value.schemaVersion===2){
-   const evidence=value.toolsEvidenceDigest;
-   if(typeof evidence!=='string'||!/^[a-f0-9]{64}$/.test(evidence))return undefined;
-   const binding=this.moduleExamRetirementBinding(row,toolsId,evidence);
-   return digest(value)===digest(binding)?{binding,toolsId,removalProven:true}:undefined;
+   const evidence=value.toolsEvidenceDigest,signature=value.removalSignature;
+   if(typeof evidence!=='string'||!/^[a-f0-9]{64}$/.test(evidence)||typeof signature!=='string'||!/^[a-f0-9]{128}$/.test(signature))return undefined;
+   const unsigned=this.moduleExamRetirementBinding(row,toolsId,evidence),binding={...unsigned,removalSignature:signature};
+   if(digest(value)!==digest(binding)||
+    !verify(null,Buffer.from(ModuleExamRemovalDomain+canonical(unsigned)),createPublicKey(this.key),Buffer.from(signature,'hex')))return undefined;
+   return {binding,toolsId,removalProven:true};
   }
   const binding=this.moduleExamRetirementBinding(row,toolsId);
   return value.schemaVersion===1&&digest(value)===digest(binding)?{binding,toolsId,removalProven:false}:undefined;
@@ -978,11 +988,18 @@ export class NativeExecutionSupervisor{
      if(byName||byId)return evidence.keep('residual_resources',removed).recovery;
      // The journal stage that proves the removal is written only now, after the confirmed DELETE, in this transaction.
      // A crash before commit leaves no stage, and a resume then keeps the grant instead of trusting the absence.
+     // A legacy v1 journal (written before any DELETE) is promoted to the same signed stage, guarded on the exact
+     // saved v1 row, so a later network failure no longer leaves an absence without proof.
+     const signed=this.signModuleExamRemoval(this.moduleExamRetirementBinding(row,toolsId,toolsEvidence));
      if(!evidence.journal){
-      binding=this.moduleExamRetirementBinding(row,toolsId,toolsEvidence);
-      await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[jobId,binding]);
-      await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.module_exam_tools_removed',$2)",[authority.contextId,{jobId,toolsId,networkId:row.network_id,toolsEvidenceDigest:toolsEvidence}]);
+      await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[jobId,signed]);
+     }else{
+      if(evidence.saved?.removalProven!==false||evidence.saved.toolsId!==toolsId)return evidence.keep('retirement_conflict',removed).recovery;
+      const promoted=await c.query("UPDATE ac_native_terminal_retirements SET binding=$2 WHERE job_id=$1 AND state='prepared' AND proof IS NULL AND binding=$3::jsonb",[jobId,signed,JSON.stringify(evidence.saved.binding)]);
+      if(promoted.rowCount!==1)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
      }
+     binding=signed;
+     await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.module_exam_tools_removed',$2)",[authority.contextId,{jobId,toolsId,networkId:row.network_id,toolsEvidenceDigest:toolsEvidence,promotedLegacy:Boolean(evidence.journal)}]);
     }
     if(!binding)return evidence.keep('removal_unproven',removed).recovery;
     const [byName,byId,worker]=await Promise.all([this.docker.inspect('ac-native-tools-'+jobId),this.docker.inspect(toolsId),this.docker.inspect('ac-native-worker-'+jobId)]);

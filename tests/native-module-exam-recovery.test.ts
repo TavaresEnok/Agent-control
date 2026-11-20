@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash,generateKeyPairSync,randomUUID} from 'node:crypto';
+import {createHash,generateKeyPairSync,randomUUID,sign,verify} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {chmod,mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
@@ -15,10 +15,11 @@ import {nativePlanningExecutorDigest} from '../src/native-planning-contract.ts';
 import {nativeExecutionExecutorDigest} from '../src/native-execution-contract.ts';
 import {NativeQaContract,nativeQaContractDigest} from '../src/native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from '../src/native-review-contract.ts';
-import {Authority,Refusal,digest} from '../src/contracts.ts';
+import {Authority,Refusal,canonical,digest} from '../src/contracts.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const ZERO='0001-01-01T00:00:00Z';
+const RemovalDomain='agent-control:native-module-exam-tools-removed:v1\n';
 const companion=['node','-e','setInterval(() => {}, 60_000)'];
 type Body=Record<string,any>;
 type Fake={containers:Map<string,Body>;networks:Map<string,Body>;mutations:string[];forbidden:string[];unavailable:boolean;failNetworkDelete:number;failContainerDelete:boolean};
@@ -234,6 +235,10 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   // The journal stage was written only after the confirmed DELETE and carries the pre-removal evidence.
   const stage=(await db.pool.query('SELECT binding FROM ac_native_terminal_retirements WHERE job_id=$1',[resume.jobId])).rows[0].binding;
   assert.equal(stage.schemaVersion,2);assert.equal(stage.stage,'tools_removed');assert.equal(stage.toolsId,resume.toolsId);assert.match(stage.toolsEvidenceDigest,/^[a-f0-9]{64}$/);
+  // Signed by this supervisor's key under its own domain, over every other field of the stage.
+  const {removalSignature:stageSignature,...stageUnsigned}=stage;
+  assert.equal(verify(null,Buffer.from(RemovalDomain+canonical(stageUnsigned)),keys.publicKey,Buffer.from(stageSignature,'hex')),true);
+  assert.equal(verify(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(stageUnsigned)),keys.publicKey,Buffer.from(stageSignature,'hex')),false);
   assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='native.module_exam_tools_removed' AND detail->>'jobId'=$1",[resume.jobId])).rows[0].n,1);
   const done=await supervisor.recoverNeverStartedModuleExam(owner,authority,resume.jobId,scope);
   assert.equal(done.state,'retired');assert.equal(done.replayed,false);assert.deepEqual(done.removed,[]);
@@ -279,6 +284,76 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   reset();
   const legacyReplay=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyHere.jobId,scope);
   assert.equal(legacyReplay.state,'retired');assert.equal(legacyReplay.replayed,true);assert.deepEqual(docker.mutations,[]);
+  // Legacy v1 journal, container still there: the DELETE is confirmed, then the network delete fails. The same
+  // transaction promoted the v1 row to the signed v2 stage, so the retry accepts the absent container and completes.
+  reset();
+  const legacyNet=await plant();
+  const legacyNetV1=await legacyBinding(legacyNet);
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[legacyNet.jobId,legacyNetV1]);
+  docker.failNetworkDelete=1;
+  const legacyNetOut=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyNet.jobId,scope);
+  assert.equal(legacyNetOut.state,'preserved');assert.equal(legacyNetOut.reason,'docker_uncertain');assert.deepEqual(legacyNetOut.removed,[legacyNet.toolsId]);
+  assert.equal(docker.containers.has(legacyNet.toolsName),false);
+  const promotedRow=(await db.pool.query('SELECT state,proof,binding FROM ac_native_terminal_retirements WHERE job_id=$1',[legacyNet.jobId])).rows[0];
+  assert.equal(promotedRow.state,'prepared');assert.equal(promotedRow.proof,null);
+  const {removalSignature:promotedSignature,schemaVersion:_v,stage:_s,toolsEvidenceDigest:promotedEvidence,...promotedRest}=promotedRow.binding;
+  const {schemaVersion:_v1,...legacyRest}=legacyNetV1;
+  assert.deepEqual(promotedRest,legacyRest);assert.equal(_v,2);assert.equal(_s,'tools_removed');assert.match(promotedEvidence,/^[a-f0-9]{64}$/);
+  const {removalSignature:_sig,...promotedUnsigned}=promotedRow.binding;
+  assert.equal(verify(null,Buffer.from(RemovalDomain+canonical(promotedUnsigned)),keys.publicKey,Buffer.from(promotedSignature,'hex')),true);
+  assert.equal((await db.pool.query("SELECT count(*)::int n FROM ac_audit WHERE kind='native.module_exam_tools_removed' AND detail->>'jobId'=$1 AND detail->>'promotedLegacy'='true'",[legacyNet.jobId])).rows[0].n,1);
+  assert.equal((await snapshot(legacyNet.jobId,legacyNet.grantId,legacyNet.intentId)).grant.state,'uncertain');
+  const legacyNetDone=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyNet.jobId,scope);
+  assert.equal(legacyNetDone.state,'retired');assert.equal(legacyNetDone.replayed,false);assert.deepEqual(legacyNetDone.removed,[]);
+  assert.deepEqual(docker.mutations,['DELETE container '+legacyNet.toolsId,'DELETE network '+legacyNet.networkId]);
+  const legacyNetReplay=await supervisor.recoverNeverStartedModuleExam(owner,authority,legacyNet.jobId,scope);
+  assert.equal(legacyNetReplay.state,'retired');assert.equal(legacyNetReplay.replayed,true);assert.deepEqual(legacyNetReplay.receipt,legacyNetDone.receipt);
+  assert.equal(docker.mutations.length,2);assert.deepEqual(docker.forbidden,[]);
+  // The database guard only allows that exact promotion: changing any v1 field, or a v2 row, stays immutable.
+  const guarded=await plant();const guardedV1=await legacyBinding(guarded);
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[guarded.jobId,guardedV1]);
+  const {schemaVersion:_g,...guardedRest}=guardedV1;
+  const guardedV2={...guardedRest,schemaVersion:2,stage:'tools_removed',toolsEvidenceDigest:'c'.repeat(64),removalSignature:'d'.repeat(128)};
+  await assert.rejects(db.pool.query('UPDATE ac_native_terminal_retirements SET binding=$2 WHERE job_id=$1',[guarded.jobId,{...guardedV2,toolsId:hex()}]),/NATIVE_TERMINAL_RETIREMENT_IMMUTABLE/);
+  await assert.rejects(db.pool.query('UPDATE ac_native_terminal_retirements SET binding=$2 WHERE job_id=$1',[guarded.jobId,{...guardedV2,extra:true}]),/NATIVE_TERMINAL_RETIREMENT_IMMUTABLE/);
+  await db.pool.query('UPDATE ac_native_terminal_retirements SET binding=$2 WHERE job_id=$1',[guarded.jobId,guardedV2]);
+  await assert.rejects(db.pool.query('UPDATE ac_native_terminal_retirements SET binding=$2 WHERE job_id=$1',[guarded.jobId,{...guardedV2,removalSignature:'e'.repeat(128)}]),/NATIVE_TERMINAL_RETIREMENT_IMMUTABLE/);
+  // That row is well formed but its signature is fake: with the container gone it proves nothing.
+  docker.containers.delete(guarded.toolsName);
+  await preserved(guarded,'retirement_conflict');
+  // A v2 stage with a correct digest and every field right, but a fake signature or another key's signature, is a conflict.
+  const stageFor=async(p:Awaited<ReturnType<typeof plant>>,evidence='c'.repeat(64))=>{const {schemaVersion:_x,...rest}=await legacyBinding(p);return {...rest,schemaVersion:2,stage:'tools_removed',toolsEvidenceDigest:evidence};};
+  const fakeSig=await plant();docker.containers.delete(fakeSig.toolsName);
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[fakeSig.jobId,{...await stageFor(fakeSig),removalSignature:'a'.repeat(128)}]);
+  await preserved(fakeSig,'retirement_conflict');
+  const otherKey=await plant();docker.containers.delete(otherKey.toolsName);
+  const otherUnsigned=await stageFor(otherKey);
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[otherKey.jobId,{...otherUnsigned,removalSignature:sign(null,Buffer.from(RemovalDomain+canonical(otherUnsigned)),otherKeys.privateKey).toString('hex')}]);
+  await preserved(otherKey,'retirement_conflict');
+  // The right key under another domain (the final retirement proof's) is not a removal signature either.
+  const otherDomain=await plant();docker.containers.delete(otherDomain.toolsName);
+  const otherDomainUnsigned=await stageFor(otherDomain);
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[otherDomain.jobId,{...otherDomainUnsigned,removalSignature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(otherDomainUnsigned)),keys.privateKey).toString('hex')}]);
+  await preserved(otherDomain,'retirement_conflict');
+  // A genuine signature over another evidence digest does not cover the saved one.
+  const swapped=await plant();docker.containers.delete(swapped.toolsName);
+  const swappedSigned=await stageFor(swapped,'b'.repeat(64));
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[swapped.jobId,{...await stageFor(swapped),removalSignature:sign(null,Buffer.from(RemovalDomain+canonical(swappedSigned)),keys.privateKey).toString('hex')}]);
+  await preserved(swapped,'retirement_conflict');
+  // Control: the same stage correctly signed by this supervisor's key is accepted.
+  const genuine=await plant();docker.containers.delete(genuine.toolsName);
+  const genuineUnsigned=await stageFor(genuine);
+  await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[genuine.jobId,{...genuineUnsigned,removalSignature:sign(null,Buffer.from(RemovalDomain+canonical(genuineUnsigned)),keys.privateKey).toString('hex')}]);
+  assert.equal((await supervisor.recoverNeverStartedModuleExam(owner,authority,genuine.jobId,scope)).state,'retired');
+  // Replay re-verifies the removal signature: a closed journal whose stage signature is swapped, even with a final
+  // proof re-signed over it by the right key, is refused.
+  const closedRow=(await db.pool.query('SELECT binding FROM ac_native_terminal_retirements WHERE job_id=$1',[genuine.jobId])).rows[0].binding;
+  const tamperedBinding={...closedRow,removalSignature:sign(null,Buffer.from(RemovalDomain+canonical(genuineUnsigned)),otherKeys.privateKey).toString('hex')};
+  const tamperedProof={payload:tamperedBinding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(tamperedBinding)),keys.privateKey).toString('hex')};
+  await db.pool.query('ALTER TABLE ac_native_terminal_retirements DISABLE TRIGGER ac_native_terminal_retirement_guard');
+  try{await db.pool.query('UPDATE ac_native_terminal_retirements SET binding=$2,proof=$3 WHERE job_id=$1',[genuine.jobId,tamperedBinding,tamperedProof]);}
+  finally{await db.pool.query('ALTER TABLE ac_native_terminal_retirements ENABLE TRIGGER ac_native_terminal_retirement_guard');}
+  await assert.rejects(supervisor.recoverNeverStartedModuleExam(owner,authority,genuine.jobId,scope),(error:unknown)=>error instanceof Refusal&&error.code==='NATIVE_RETIREMENT_UNCONFIRMED');
   // A v2 stage that does not match this job, or whose container is back, is a conflict.
   const forgedStage=await plant();docker.containers.delete(forgedStage.toolsName);
   await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[forgedStage.jobId,{...await legacyBinding(forgedStage),schemaVersion:2,stage:'tools_removed',toolsEvidenceDigest:'z'}]);
