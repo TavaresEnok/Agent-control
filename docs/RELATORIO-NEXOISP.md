@@ -51,7 +51,7 @@ A aplicação de homologação usa o frontend oficial, a API Go e um PostgreSQL 
 
 ### Navegador e agente de rede
 
-O roteiro funcional `frontend-v0.mjs` concluiu 16 verificações no navegador do projeto contra a API e o banco de demonstração. Os 173 testes Python do agente passaram em contêiner sem rede externa.
+O roteiro funcional `frontend-v0.mjs` concluiu 16 verificações no navegador do projeto contra a API e o banco de demonstração. Os 173 testes Python do agente passaram em contêiner sem rede externa. A suíte operacional passou nos 38 testes com um clone descartável, Git e Go.
 
 ### Módulo 2 — primeira execução de QA
 

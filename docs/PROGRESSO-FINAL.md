@@ -1609,3 +1609,11 @@ FIM
 - 20/11/2026 05:03 UTC — QA NexoISP 28c53d93 publicou 45 arquivos julgados, dez achados prováveis e zero confirmados. A resposta do Docker se perdeu e 1.948 arquivos ficaram sem julgamento por esse motivo. A recuperação do supervisor manteve a reserva. O navegador aprovou 16 verificações e o agente Python passou em 173 testes.
 - 20/11/2026 05:03 UTC — Iniciada ordem estatico em claude-sonnet-5-5 (ajust), no worktree próprio.
 - 20/11/2026 05:11 UTC — O alias aprovado em revisão foi integrado em d0cf2760. Na releitura local, as 98 respostas reais disponíveis passaram pelo novo leitor. A suíte operacional do NexoISP aprovou os 38 testes com o clone, Git e Go disponíveis na bancada.
+- 20/11/2026 05:11 UTC — Revisão independente revisao-estatico-final-r3 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:12 UTC — Iniciada ordem estatico em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 05:13 UTC — Iniciada a CLI personal:design para design-nexo.
+- 20/11/2026 05:14 UTC — A CLI personal:design de design-nexo encerrou com código 1.
+- 20/11/2026 05:19 UTC — Ordem recuperacao em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 05:19 UTC — Ordem estatico em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 05:19 UTC — Iniciada a CLI personal:design para design-nexo-login.
+- 20/11/2026 05:19 UTC — O navegador local da primeira execução de design não resolveu o nome Docker da homologação. A segunda execução usa uma tabela de nomes privada do processo. A resolução e o HTTP 200 foram confirmados antes da CLI.
