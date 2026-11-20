@@ -677,6 +677,8 @@ test('pedido do examinador comunica o contrato estrito e aceita JSON único em c
   assert.equal(plainFence.coverage[0]?.status, 'lido');
 
   const rejectCases: ((task: Record<string, any>) => string)[] = [
+    () => '{"binding":"You hit your usage limit","binding":"outro"}',
+    () => 'Failed to authenticate: exemplo citado no texto do arquivo.',
     task => 'Segue o JSON:\n```json\n' + JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: []}) + '\n```',
     task => '```json\n' + JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: []}) + '\n```\nFim.',
     task => '```json\n' + JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], findings: []}) + '\n```\n```json\n{"extra":true}\n```',

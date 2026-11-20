@@ -186,14 +186,19 @@ async function claudeText(input: Input, signal: AbortSignal, cwd: string) {
     succeeded: result.succeeded && status === 0 && stdout.length + stderr.length <= maxOutput};
 }
 
+/** Some CLI versions return a standalone terminal notice through their success channel. */
+export function isModuleExamTerminalNotice(text: string): boolean {
+  return /^(?:you(?:['’]ve)? hit your usage limit|(?:claude(?: ai)? )?usage limit reached(?:\s*\|\s*\d{9,16})?|usage_limit_reached|failed to authenticate|oauth session expired|PROVIDER_AUTH_FAILED)[.!]?$/i.test(text.trim());
+}
+
 export function resolveModuleExamClaudeResult(
   response: {succeeded: boolean; output: string; diagnostics: string[]},
   secrets: string[],
 ): {output: string; failureCode: string | null; usageWindows: UsageWindowsObservation | null} {
   const redactedOutput = redactSecrets(response.output.trim(), secrets);
   const parsed = response.succeeded ? parseModuleExamJsonObject(redactedOutput) : null;
-  const nonJson = response.succeeded && parsed === null;
-  const diagnostics = nonJson ? [...response.diagnostics, response.output.slice(-4000)] : response.diagnostics;
+  const diagnostics = response.succeeded && isModuleExamTerminalNotice(response.output)
+    ? [...response.diagnostics, response.output] : response.diagnostics;
   const limit = claudeLimitFromText(diagnostics);
   if (response.succeeded && !limit && !diagnostics.some(providerFailureCode)) {
     return {output: parsed?.text ?? redactedOutput, failureCode: null, usageWindows: null};

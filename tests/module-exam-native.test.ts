@@ -137,6 +137,8 @@ test('extrator de JSON do worker aceita objeto puro ou cerca Markdown em linhas 
     resolveModuleExamClaudeResult({succeeded: true, output: externalText, diagnostics: []}, ['segredo-sintetico']),
     {output: externalText, failureCode: null, usageWindows: null},
   );
+  const invalidNotice = '{"binding":"You hit your usage limit","binding":"outro"}';
+  assert.equal(resolveModuleExamClaudeResult({succeeded: true, output: invalidNotice, diagnostics: []}, []).failureCode, null);
   const duplicateText = '{"binding":"a","\\u0062inding":"b"}';
   assert.deepEqual(
     resolveModuleExamClaudeResult({succeeded: true, output: duplicateText, diagnostics: []}, ['segredo-sintetico']),
