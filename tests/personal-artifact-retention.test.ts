@@ -7,7 +7,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
 import type {Installation} from '../src/installation.ts';
-import {closeRound,registerCandidateImage,registerRoundTemp,registerWorkerWorktree,runPersonalArtifactRetention,
+import {mountPoints,mountedInside,closeRound,registerCandidateImage,registerRoundTemp,registerWorkerWorktree,runPersonalArtifactRetention,
  type CommandResult,type RetentionDeps} from '../src/personal-artifact-retention.ts';
 import {RetentionIncomplete,runRetentionStages} from '../src/personal-maintenance.ts';
 
@@ -41,6 +41,7 @@ async function lab():Promise<Lab>{
    try{return {code:0,stdout:execFileSync('git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',...args],{cwd,env:{...gitEnv,GIT_OPTIONAL_LOCKS:'0'},encoding:'utf8',stdio:['ignore','pipe','ignore']})};}
    catch(error){return {code:(error as {status?:number}).status??1,stdout:''};}
   },
+  mountInfo:async()=>mountinfo.text,
   processInside:async path=>[...busy].some(item=>path===item||path.startsWith(item+'/')),
   verifyRunImages:async()=>{if(result.runImages instanceof Error)throw result.runImages;return result.runImages;},
   docker:async args=>{
@@ -68,6 +69,7 @@ async function lab():Promise<Lab>{
  };
  return result;
 }
+const mountinfo={text:'22 1 8:1 / / rw - ext4 /dev/sda1 rw\n'};
 const cleanup=(l:Lab)=>rm(l.base,{recursive:true,force:true});
 
 /** A worker worktree on its own branch, by default with a commit already merged into `main`. */
@@ -482,7 +484,7 @@ test('one failing artifact does not stop the others',async()=>{
   const a=makeWorktree(l,'first'),b=makeWorktree(l,'second');
   await register(l,a);await register(l,b);
   const failing:RetentionDeps={...l.deps,git:async(cwd,args)=>{
-   if(args[0]==='worktree'&&args[1]==='remove'&&args.at(-1)===a.path)return {code:1,stdout:''};
+   if(args[0]==='worktree'&&args[1]==='remove'&&args.at(-1)!.startsWith(join(l.base,'wt','.ac-retention-'))&&!existsSync(join(args.at(-1)!,'second.txt')))return {code:1,stdout:''};
    return l.deps.git!(cwd,args);
   }};
   const lines=(await runPersonalArtifactRetention(l.config,true,failing)).join('\n');
@@ -704,4 +706,71 @@ test('work/ of jobs is retained first, and a damaged artifact registry never sto
   // Both healthy: plain lines, jobs first.
   assert.deepEqual((await runRetentionStages(l.config,false,{jobRetention,artifactRetention})).slice(0,1),['jobs apply=false']);
  }finally{await cleanup(l);}
+});
+
+const row=(point:string)=>`99 22 8:2 /x ${point} rw - ext4 /dev/sdb rw\n`;
+
+test('a worktree with a mount or bind mount below it is kept, in preview and apply; escaped names and unreadable mountinfo too',async()=>{
+ const l=await lab();
+ try{
+  const w=makeWorktree(l,'mnt');await register(l,w);
+  const base='22 1 8:1 / / rw - ext4 /dev/sda1 rw\n';
+  for(const text of [base+row(w.path+'/node_modules'),base+row(w.path),base+row(w.path.replace(/wt\/mnt$/,'wt/mnt'))+row(w.path+'/a\\040b'),'','garbage line\n']){
+   mountinfo.text=text;
+   assert.match((await run(l,false)).join('\n'),/mnt: preservado \((há montagem|não foi possível ler as montagens)/);
+   assert.match((await run(l,true)).join('\n'),/mnt: preservado/);
+   assert.ok(existsSync(w.path));
+  }
+  assert.deepEqual(l.calls.filter(a=>a[0]==='worktree'&&(a[1]==='remove'||a[1]==='move')),[]);
+  // a sibling with the same prefix, or a mount above, does not count
+  mountinfo.text=base+row(w.path+'-other')+row(join(l.base,'wt'));
+  assert.match((await run(l,true)).join('\n'),/mnt: removido/);
+  assert.equal(existsSync(w.path),false);
+ }finally{mountinfo.text='22 1 8:1 / / rw - ext4 /dev/sda1 rw\n';await cleanup(l);}
+});
+
+test('a mount that appears after the proof, between isolation and removal, restores the directory and removes nothing',async()=>{
+ const l=await lab();
+ try{
+  const w=makeWorktree(l,'race');await register(l,w);
+  const racing:RetentionDeps={...l.deps,git:async(cwd,args)=>{
+   const result=await l.deps.git!(cwd,args);
+   if(args[0]==='worktree'&&args[1]==='move'&&args[2]===w.path)mountinfo.text+=row(args[3]+'/dist');
+   return result;
+  }};
+  const lines=(await runPersonalArtifactRetention(l.config,true,racing)).join('\n');
+  assert.match(lines,/race: preservado \(há montagem/);
+  assert.ok(existsSync(w.path));
+  assert.match(git(l.repo,'worktree','list'),/wt\/race/);
+  assert.deepEqual(l.calls.filter(a=>a[0]==='worktree'&&a[1]==='remove'),[]);
+ }finally{mountinfo.text='22 1 8:1 / / rw - ext4 /dev/sda1 rw\n';await cleanup(l);}
+});
+
+test('a directory swapped for another during isolation is not removed',async()=>{
+ const l=await lab();
+ try{
+  const w=makeWorktree(l,'swap');await register(l,w);
+  const swapping:RetentionDeps={...l.deps,git:async(cwd,args)=>{
+   if(args[0]==='worktree'&&args[1]==='move'&&args[2]===w.path){
+    const result=await l.deps.git!(cwd,args);
+    // the isolated name is replaced by a symbolic link to somewhere else
+    const target=args[3];await rm(target,{recursive:true,force:true});mkdirSync(join(l.base,'elsewhere'));
+    const {symlinkSync}=await import('node:fs');symlinkSync(join(l.base,'elsewhere'),target);
+    return result;
+   }
+   return l.deps.git!(cwd,args);
+  }};
+  const lines=(await runPersonalArtifactRetention(l.config,true,swapping)).join('\n');
+  assert.match(lines,/swap: preservado/);
+  assert.ok(existsSync(join(l.base,'elsewhere')));
+  assert.deepEqual(l.calls.filter(a=>a[0]==='worktree'&&a[1]==='remove'),[]);
+ }finally{await cleanup(l);}
+});
+
+test('mountinfo parsing: octal escapes decode and prefix siblings are not descendants',()=>{
+ assert.deepEqual(mountPoints('1 0 8:1 / /a\\040b rw - ext4 x rw\n'),['/a b']);
+ assert.equal(mountedInside(row('/w/x'),'/w'),true);
+ assert.equal(mountedInside(row('/w'),'/w'),true);
+ assert.equal(mountedInside(row('/wx'),'/w'),false);
+ assert.throws(()=>mountPoints(''));
 });
