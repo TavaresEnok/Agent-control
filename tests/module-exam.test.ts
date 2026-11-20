@@ -720,3 +720,63 @@ test('pedido do examinador comunica o contrato estrito e aceita JSON único em c
   assert.equal(unprovedSnippet.coverage[0]?.status, 'lido');
   assert.equal(unprovedSnippet.findings.length, 0);
 });
+
+test('leitor do examinador aceita só o alias code na ausência de snippet e mantém os demais limites', async () => {
+  const examiner = seat('a'), reviewer = seat('b');
+  const file = 'src/service.ts';
+  const code = 'export function handleOrder(id: string) {\n  return eval(id);\n}';
+  const base = {line: 2, hypothesis: 'O uso de eval acopla entrada externa à execução dinâmica?', title: 'Execução dinâmica', severity: 'baixa'};
+  const run = async (finding: Record<string, unknown>) => {
+    const tasks: Record<string, any>[] = [];
+    const result = await examineFunctionalModule({
+      module: 'arquitetura', intentId, map: {files: [{file, code, reason: null}], routes: []}, findings: [],
+      reserve: async (purpose: 'examiner' | 'reviewer') => (purpose === 'examiner' ? examiner : reviewer),
+      release: async () => {},
+      worker: {async run(call) {
+        const task = JSON.parse(call.task);
+        tasks.push(task);
+        if (!task.checklist) return JSON.stringify({kind: 'confirmacao', status: 'provavel', binding: task.binding, reason: 'Sem prova.', proof: ''});
+        return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: [task.module], routesReviewed: [], findings: [finding]});
+      }},
+    });
+    return {result, tasks};
+  };
+  const accepted = await run({...base, code: 'return eval(id);'});
+  assert.match(accepted.tasks[0]!.instruction, /o nome da chave é exatamente "snippet"/);
+  assert.match(accepted.tasks[0]!.instruction, /nunca objeto nem cerca Markdown/);
+  assert.equal(accepted.result.coverage[0]?.status, 'lido');
+  assert.equal(accepted.result.findings.length, 1);
+  assert.equal(accepted.result.findings[0]?.evidence, 'return eval(id);');
+  assert.equal(accepted.result.findings[0]?.line, 2);
+  const sameAsSnippet = await run({...base, snippet: 'return eval(id);'});
+  assert.equal(sameAsSnippet.result.findings.length, 1);
+
+  const invalid: Record<string, unknown>[] = [
+    {...base, snippet: 'return eval(id);', code: 'return eval(id);'},
+    {...base, snippet: 'return eval(id);', code: 'outro'},
+    {...base, code: ''},
+    {...base, code: 'x'.repeat(241)},
+    {...base, code: 42},
+    {...base, code: {text: 'return eval(id);'}},
+    {...base, code: ['return eval(id);']},
+    {...base, code: 'return eval(id);', extra: true},
+    {...base, code: 'return eval(id);', hypothesis: 'Sem interrogação.'},
+    {...base, code: 'return eval(id);', severity: 'desconhecida'},
+    {...base, code: 'return eval(id);', line: 0},
+    base,
+    {...base, text: 'return eval(id);'},
+  ];
+  for (const finding of invalid) {
+    const {result} = await run(finding);
+    assert.equal(result.coverage[0]?.status, 'nao_julgado', JSON.stringify(finding));
+    assert.equal(result.coverage[0]?.reason, 'MODULE_EXAM_RESPONSE_INVALID');
+    assert.equal(result.findings.length, 0);
+  }
+
+  const offLine = await run({...base, code: 'export function handleOrder'});
+  assert.equal(offLine.result.coverage[0]?.status, 'lido');
+  assert.equal(offLine.result.findings.length, 0);
+  const invented = await run({...base, code: 'trecho inexistente na linha'});
+  assert.equal(invented.result.coverage[0]?.status, 'lido');
+  assert.equal(invented.result.findings.length, 0);
+});
