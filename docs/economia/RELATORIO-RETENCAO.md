@@ -11,22 +11,14 @@ Foram integrados o acionamento pela manutenção e pelo vigia, limites de 90% e 
 - Reexecução das provas de jobs e artefatos após os ajustes: 33 testes passaram; recuperação de verificações abandonadas: 4 testes passaram.
 - Revisão independente somente leitura por `gpt-6.2-sol`, esforço medium, sobre a integração derivada de `cf1d85e9`; não é revisão humana.
 
-## Pendências que impedem ativação
+Na integração de R5, `npx tsc --noEmit --skipLibCheck` passou; a suíte de retenção, disco, backup, vigia, manutenção, limites e artefatos passou com 124 testes e nenhum skip usando o banco sintético da bancada.
 
-A revisão identificou riscos ainda não resolvidos, apesar dos testes aprovados:
+## Rodadas R1–R5 e pendências
 
-- A prova de avaliadores não vincula o checkout à identidade criada no lançamento nem detecta conteúdo acrescentado pelo host antes da primeira inspeção; a prova dos programadores também precisa confirmar conteúdo sem depender da normalização de atributos Git.
-- Uma interrupção depois de iniciada a remoção de `work/` de programador pode impedir a retomada por exigir novamente uma árvore intacta. Execuções reconciliadas sem `execution-result.json` também ficam preservadas indefinidamente.
-- A remoção de worktree precisa recusar montagens descendentes, inclusive bind mounts, com proteção contra troca concorrente.
-- R4 vincula novos registros ao ID do daemon e bloqueia a remoção de imagens candidatas e aposentadas; ainda faltam inventário e sincronização que comprovem os pins de outras instalações no daemon. Veja [RELATORIO-RET-R4.md](RELATORIO-RET-R4.md).
-- A recuperação de temporários precisa reconciliar durablemente rodadas terminais, inclusive interrupções antes da criação da linha de execução e entre a transição terminal e o fechamento. O fechamento adicionado cobre somente as execuções efetivamente retornadas pela recuperação.
+- **R1:** vinculou o checkout dos avaliadores à identidade assinada no lançamento e verifica sua árvore. Jobs antigos e capturas não registradas são preservados; falta testar a gravação no lançamento e persiste a janela entre prova e remoção. Veja [R1](RELATORIO-RET-R1.md).
+- **R2:** compara diretamente os bytes do checkout de programadores e preserva jobs sem resultado com o motivo `output_missing`. Falta retomada segura de remoção interrompida, incluindo diário e prova das entradas remanescentes; a janela entre prova e remoção continua aberta. Veja [R2](RELATORIO-RET-R2.md).
+- **R3:** recusa montagens descendentes e isola worktrees antes da remoção. Persiste a janela após a última verificação e montagens em outros namespaces podem não ser vistas. Veja [R3](RELATORIO-RET-R3.md).
+- **R4:** vincula novos registros ao ID do daemon e preserva imagens candidatas e aposentadas. A exclusão continua bloqueada até haver inventário e sincronização dos pins entre instalações; registros acumulados podem exigir intervenção. Veja [R4](RELATORIO-RET-R4.md).
+- **R5:** reconcilia rodadas terminais pelo banco e fecha órfãs sem linha após sete dias, aguardando mais 24 horas antes da remoção. Jobs nativos não são reconciliados por essa consulta; o prazo de sete dias não tem limite comprovado pelo produto e falta teste da consulta padrão com banco real. Veja [R5](RELATORIO-RET-R5.md).
 
-Essas pendências exigem correção, testes de regressão e nova revisão antes de ativar a limpeza automática. As saídas não rastreadas pré-existentes em `upstream/happier` foram preservadas.
-
-## Rodada 2 — progresso parcial, ativação ainda bloqueada
-
-A prova de programadores passou a comparar diretamente os bytes dos arquivos e links com os blobs da árvore, sem depender da normalização do Git. O teste de regressão cobre CRLF ocultado por atributos. A leitura de arquivos é em blocos; nomes inválidos, entradas não suportadas e listagens acima de 64 MiB são recusados. Uma revisão independente somente leitura por `gpt-6.2-sol`, esforço medium, apontou limites de memória e trocas de caminho: os arquivos agora são abertos sem seguir links, com ancestrais abertos por descritor, e a listagem admite até 64 MiB. A revisão também identificou uma janela preexistente entre a prova e a remoção em que o host pode alterar o conteúdo sem trocar o inode; ela continua pendente. A revisão antecede os últimos ajustes e não equivale a revisão externa de segurança.
-
-Permanecem abertas todas as demais pendências listadas acima: vínculo e integridade do checkout de avaliadores; retomada de `work/` e resultados ausentes; montagens e concorrência em worktrees; identidade do daemon e pins de outras instalações; e recuperação durável das rodadas terminais. A correção parcial não autoriza ativação nem aplicação na instalação viva.
-
-Validação: `npx tsc --noEmit --skipLibCheck` passou. A suíte de retenção, disco, backup, vigia, manutenção e limites, mais comandos de artefatos e recuperação de execuções abandonadas, passou com 111 testes e nenhum skip usando `AC_TEST_DATABASE_URL` da bancada indicada. A suíte ampla começou antes dos últimos ajustes na leitura; depois deles foram reexecutadas as duas provas de repositório e normalização, ambas aprovadas, e o TypeScript passou novamente.
+As limitações das rodadas e a revisão de segurança ainda impedem a ativação. Não houve aplicação na instalação viva; as saídas não rastreadas pré-existentes em `upstream/happier` foram preservadas.
