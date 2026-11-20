@@ -68,3 +68,11 @@ A aplicação de homologação respondeu pelo nome interno da rede Docker. Com l
 ### Módulo 1 — preparação do exame estático
 
 O caminho de `personal:verify` sem URL seleciona Sonnet 5.5 high para o examinador e Opus 5.5 medium para os achados altos. O supervisor confere a assinatura do recibo de revisão. O ramo integrado chegou a `e77e64bd`. O revisor Sol examinou a alteração, o TypeScript passou no candidato e os 15 testes dirigidos passaram com PostgreSQL descartável. A imagem disponível na instalação tem o digest aceito `sha256:3b677f6f20a5fc0cb29044a3939a2d172ba59724a5532e79255ae5bdaf0670cb`. Os arquivos de coleta e o lock das ferramentas correspondem ao checkout. O produto publicou a base de 659 entradas em 20/11/2026, com manifesto `4552d6681075b3de897905ae4bed6c062e4cea830a7e196a1dc50f14fae80a73`. A CLI sem URL iniciou a rodada `e60dd009-bc29-4455-9fd9-4595e89c3f7e` e falhou durante a coleta, antes de chamar o examinador. Uma fixture de leitura com o usuário da imagem confirmou que o diretório do snapshot no modo 0700 impedia a leitura do checkout.
+
+### Retomada dos exames na instalação viva
+
+O checkout do coletor estático passou a ficar em uma subpasta legível pelo usuário do contêiner, dentro de um diretório privado do host. A rodada seguinte de segurança concluiu a coleta e encontrou as duas vagas da conta Enok Max ocupadas ao solicitar o examinador.
+
+O backup das 05:21 UTC contém 14.957 arquivos no manifesto. Antes de aplicar a migração 116, foi feita uma cópia adicional do PostgreSQL de 8.958.649 bytes, legível pelo `pg_restore --list`. O gateway reiniciou e os oito itens da inspeção passaram. A manutenção do produto verificou que as tentativas pendentes de QA e arquitetura não haviam iniciado a execução do modelo, removeu os contêineres residuais e liberou as duas reservas.
+
+Na homologação do NexoISP, o navegador autenticado visitou 49 rotas do menu e chegou a 42 destinos distintos. As páginas renderizadas foram servidas em rede interna, com HTML e estilos, para a CLI de design. Esse exame cobre o aspecto visual dos estados capturados. A interação com o aplicativo foi exercitada separadamente nos 16 casos de navegador.

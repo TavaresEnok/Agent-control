@@ -1647,3 +1647,24 @@ FIM
 - 20/11/2026 05:39 UTC — Revisão independente revisao-campos-originais concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 05:40 UTC — Módulo 1: a rodada e60dd009 falhou nos coletores estáticos. Em uma fixture neutra, o uid 65532 da imagem não conseguiu ler o snapshot 0700. Com checkout interno legível sob diretório pai 0700, a leitura passou. O ajuste está em revisão.
 - 20/11/2026 05:40 UTC — O vínculo individual da revisão Opus de cada achado alto foi integrado até 742fc07b. Dois achados na mesma linha são separados na publicação e na rechecagem. Os 40 testes do candidato passaram; o teste complementar conferiu os campos do pedido original no commit novo.
+- 20/11/2026 05:41 UTC — Ordem design em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 05:41 UTC — Revisão independente revisao-snapshot-passivo concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:41 UTC — A ordem recuperacao-r3 do Opus encerrou com código 0.
+- 20/11/2026 05:43 UTC — Revisão independente revisao-diario-assinado concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:43 UTC — Correção limpeza-login atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 05:43 UTC — Correção recuperacao-r4 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 05:44 UTC — A ordem captura-r2 do Opus encerrou com código 0.
+- 20/11/2026 05:45 UTC — Revisão independente revisao-snapshot-selecao concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:45 UTC — A ordem limpeza-login do Opus encerrou com código 0.
+- 20/11/2026 05:46 UTC — A imagem candidata autenticou no NexoISP com o cookie próprio da aplicação e gravou o estado em 0600. A rota /assinantes gerou uma captura logada na rede interna. Esta prova de captura não consultou modelos.
+- 20/11/2026 05:47 UTC — Revisão independente revisao-login-e-captura concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:47 UTC — A ordem recuperacao-r4 do Opus encerrou com código 0.
+- 20/11/2026 05:48 UTC — Revisão independente revisao-snapshot-conjunto concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:48 UTC — Iniciada a CLI personal:verify para seguranca-nexo-coleta.
+- 20/11/2026 05:49 UTC — Revisão independente revisao-limpeza-login concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:50 UTC — Revisão independente revisao-retirada-transacoes concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:51 UTC — A CLI personal:verify de seguranca-nexo-coleta encerrou com código 1.
+- 20/11/2026 05:52 UTC — Após dump legível de 8.958.649 bytes e migração 115→116, o gateway reiniciou. A manutenção retirou sem execução o job 15328840 e liberou a reserva de QA. Para fc3c3a04 manteve a reserva porque a intenção ainda não está encerrada. A prova de design usa 49 rotas renderizadas após login válido, com 42 destinos distintos, servidas em rede interna como HTML e CSS sem script ou formulário ativo.
+- 20/11/2026 05:52 UTC — Iniciada a CLI personal:design para design-nexo-opus-vivo.
+- 20/11/2026 05:56 UTC — Iniciada a CLI personal:verify para seguranca-nexo-reserva.
+- 20/11/2026 05:56 UTC — A manutenção confirmou a retirada do último job da arquitetura após o encerramento da intenção terminal. A conta Max passou a ter uma vaga ocupada pelo exame de design e uma disponível. Nova rodada de segurança iniciada pelo caminho estático.
