@@ -129,14 +129,23 @@ export async function createModuleExamFixture(input: {
   const signingKeyPem = generateKeyPairSync('ed25519').privateKey.export({format: 'pem', type: 'pkcs8'}).toString();
   const runtime: ModuleExamRuntime[number][] = [];
   const profiles = [];
+  let highProfile = '';
   for (const provider of ['claude', 'codex'] as const) {
-    const accountId = randomUUID(), profileId = randomUUID(), model = provider + '-module-fixture';
+    const accountId = randomUUID(), profileId = randomUUID();
+    const model = provider === 'claude' ? 'claude-sonnet-5-5' : `${provider}-module-fixture`;
     const subject = 'account-synthetic-module-' + provider;
     const subjectDigest = digest({provider, subject});
-    await capacity.registerModel(owner, {provider, model, efforts: ['medium'], roles: ['specialist'], source: 'synthetic://module-exam'});
+    await capacity.registerModel(owner, {
+      provider, model, efforts: provider === 'claude' ? ['medium', 'high'] : ['medium'],
+      roles: ['specialist'], source: 'synthetic://module-exam',
+    });
     await capacity.addAccount(owner, project, {id: accountId, provider, label: provider, resourceIdentity: provider + ':' + subjectDigest,
       mode: 'subscription_cli', eligibility: 'documented_supported', eligibilitySource: 'synthetic://module-exam', maxConcurrent: 2});
     await capacity.addProfile(owner, project, {id: profileId, accountId, model, role: 'specialist', effort: 'medium'});
+    if (provider === 'claude') {
+      highProfile = randomUUID();
+      await capacity.addProfile(owner, project, {id: highProfile, accountId, model, role: 'specialist', effort: 'high'});
+    }
     await capacity.observeQuota(owner, accountId, {status: 'available', ttlSeconds: 3600, source: 'synthetic://module-exam'});
 
     await new AccountHomes(ledger, accountRoot, [repo]).initialize(owner, project, accountId);
@@ -158,5 +167,5 @@ export async function createModuleExamFixture(input: {
     profiles.push(profileId);
   }
   const docker = await fakeDocker(socket, input.answer ?? moduleExamFixtureAnswer);
-  return {runtime, profiles, docker};
+  return {runtime, profiles, highProfile, docker};
 }

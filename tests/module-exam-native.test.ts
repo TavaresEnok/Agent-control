@@ -505,7 +505,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
           AND detail->>'commit'=$2`, [contextId, correctedHead]);
       assert.equal(pending.detail.reason, 'MODULE_RECHECK_PROOF_UNAVAILABLE');
       assert.equal(pending.detail.proofDigest, null);
-      assert.deepEqual(pending.detail.examiner, {provider: 'claude', model: 'claude-module-fixture',
+      assert.deepEqual(pending.detail.examiner, {provider: 'claude', model: 'claude-sonnet-5-5',
         accountId: [...runtime[0]!.accountIds][0], profileId: profiles[0]});
       assert.deepEqual(pending.detail.reviewer, {provider: 'codex', model: 'codex-module-fixture',
         accountId: reviewerAccount, profileId: profiles[1], grantId: pending.detail.reviewer.grantId});

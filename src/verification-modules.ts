@@ -617,8 +617,24 @@ async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamRe
   const coverage = exam.coverage.find(row => row.file === finding.file && row.status === 'lido');
   const examiner = coverage?.examiner;
   const verifier = finding.verifier;
-  if (!examiner || !verifier.accountId || !verifier.profileId || examiner.provider === verifier.provider ||
-      examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) return null;
+  if (!examiner || !verifier.accountId || !verifier.profileId) return null;
+  const highExaminerFinding = raw === undefined && finding.source === 'examinador' && finding.severity === 'alta';
+  if (highExaminerFinding) {
+    if (verifier.provider !== 'claude' || verifier.model !== 'claude-opus-5-5' || verifier.profileId === examiner.profileId) {
+      return null;
+    }
+    if (verifier.accountId === examiner.accountId) {
+      const hasGrantPair = Boolean(examiner.grantId && verifier.grantId);
+      const hasSessionPair = Boolean(examiner.sessionId && verifier.sessionId);
+      if ((examiner.grantId || verifier.grantId) && !hasGrantPair) return null;
+      if ((examiner.sessionId || verifier.sessionId) && !hasSessionPair) return null;
+      if (hasGrantPair && examiner.grantId === verifier.grantId) return null;
+      if (hasSessionPair && examiner.sessionId === verifier.sessionId) return null;
+      if (!hasGrantPair && !hasSessionPair) return null;
+    }
+  } else if (examiner.provider === verifier.provider || examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) {
+    return null;
+  }
   if (finding.examiner && (finding.examiner.profileId !== examiner.profileId || finding.examiner.accountId !== examiner.accountId ||
       finding.examiner.provider !== examiner.provider)) return null;
   const located = await locateRepoFile(snapshot, finding.file);
@@ -2900,12 +2916,14 @@ export async function reconcileModuleReports(
 }
 
 type ModuleRecheckExaminer = {provider: string; model: string; accountId: string | null; profileId: string | null};
-type ModuleRecheckReviewer = {provider: string; model: string; accountId: string; profileId: string; grantId: string};
+type ModuleRecheckReviewer = {provider: string; model: string; accountId: string; profileId: string; grantId: string; sessionId?: string};
 export type ModuleRecheckReview = (request: {
   intentId: string;
   commit: string;
   task: string;
   examiner: ModuleRecheckExaminer | null;
+  severity?: Achado['severity'];
+  fromExaminer?: boolean;
   signal?: AbortSignal;
 }) => Promise<{output: string; reviewer: ModuleRecheckReviewer} | {reason: string; reviewer?: ModuleRecheckReviewer}>;
 
@@ -2925,7 +2943,7 @@ type ModuleRecheckPublication = z.infer<typeof ModuleRecheckPublication>;
 const RecheckAuditProof = z.object({
   id: ACHADO_ID, status: z.enum(['fechado', 'reaberto']), commit: RecheckCommit, reviewerBinding: RecheckDigest,
   proofDigest: RecheckDigest, reviewerReason: z.string().min(1),
-  reviewer: z.object({provider: z.string().min(1), model: z.string().min(1), accountId: Id, profileId: Id, grantId: Id}),
+  reviewer: z.object({provider: z.string().min(1), model: z.string().min(1), accountId: Id, profileId: Id, grantId: Id, sessionId: Id.optional()}),
   source: z.object({file: z.string(), line: z.number().int().positive(), tool: z.string(), rule: z.string(),
     origin: z.literal('collector'), commit: RecheckCommit, evidenceDigest: RecheckDigest}),
   moduleProof: z.object({runId: Id, tool: z.string(), version: z.string().min(1), origin: z.literal('collector'), collectorImage: z.string()}),
@@ -3369,15 +3387,21 @@ export async function recheckModuleFindings(
         }
         const reviewed = !regression && task.criterion === null && head !== originalCommit
           ? {reason: 'MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED'}
-          : await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, signal});
+          : await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, severity: item.severity, fromExaminer, signal});
         signal?.throwIfAborted();
         reviewer = 'reviewer' in reviewed ? reviewed.reviewer : undefined;
         if ('reason' in reviewed) {
           result = pending(/^[A-Z][A-Z0-9_]{0,79}$/.test(reviewed.reason) ? reviewed.reason : 'MODULE_RECHECK_PROOF_UNAVAILABLE');
-        } else if (examiner && (reviewed.reviewer.provider === examiner.provider || reviewed.reviewer.profileId === examiner.profileId
-          || reviewed.reviewer.accountId === examiner.accountId)) {
-          throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
         } else {
+          if (fromExaminer && item.severity === 'alta') {
+            if (reviewed.reviewer.provider !== 'claude' || reviewed.reviewer.model !== 'claude-opus-5-5'
+              || (examiner && reviewed.reviewer.profileId === examiner.profileId)) {
+              throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+            }
+          } else if (examiner && (reviewed.reviewer.provider === examiner.provider || reviewed.reviewer.profileId === examiner.profileId
+            || reviewed.reviewer.accountId === examiner.accountId)) {
+            throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
+          }
           const parsed = parseModuleReviewJson(reviewed.output);
           const verdict = regression ? readFunctionalRecheckVerdict(parsed) : readModuleReviewVerdict(parsed);
           if (verdict) reviewerReason = sanitizedRecheckReason(verdict.reason);

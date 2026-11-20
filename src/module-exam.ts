@@ -45,11 +45,12 @@ const ExamResponse = z.object({
     title: z.string().min(1).max(200), severity: ExamSeverity}).strict()).max(20),
 }).strict();
 export type ModuleExamSeat = {provider: string; model: string; accountId: string; profileId: string; grantId: string};
-export type ModuleExamCoverage = {file: string; status: 'lido' | 'nao_julgado'; reason: string | null; examiner: Omit<ModuleExamSeat, 'grantId'> | null; checklist: string[];
+export type ModuleExamCoverage = {file: string; status: 'lido' | 'nao_julgado'; reason: string | null; examiner: (Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string}) | null; checklist: string[];
   read?: {binding: string; commit?: string; sourceDigest: string; complete: boolean; requestId?: string; promptDigest?: string}};
-export type ModuleExamCandidate = {file: string; line: number; title: string; severity: 'alta'|'media'|'baixa'|'informativa'; evidence: string; source: string; hypothesis?: string; binding?: string; observation?: ModuleReviewObservation; reviewCommit?: string; status: 'confirmado'|'provavel'|'descartado'; reason: string; proof: string; verifier: {provider: string; model: string; accountId?: string; profileId?: string} | null; examiner: {provider: string; accountId: string; profileId: string} | null; failure: string | null;
+export type ModuleExamCandidate = {file: string; line: number; title: string; severity: 'alta'|'media'|'baixa'|'informativa'; evidence: string; source: string; hypothesis?: string; binding?: string; observation?: ModuleReviewObservation; reviewCommit?: string; status: 'confirmado'|'provavel'|'descartado'; reason: string; proof: string; verifier: {provider: string; model: string; accountId?: string; profileId?: string; grantId?: string; sessionId?: string} | null; examiner: {provider: string; accountId: string; profileId: string} | null; failure: string | null;
   decision?: ModuleReviewDecision; reviewReason?: string};
 export type ModuleExamResult = {mode: 'exame' | 'somente_ferramentas'; coverage: ModuleExamCoverage[]; routes: (ModuleExamMap['routes'][number] & {status: 'lido'|'nao_julgado'})[]; findings: ModuleExamCandidate[]; notes: string[]};
+export type ModuleExamReviewTarget = {severity: ModuleExamCandidate['severity']; source: string; fromExaminer: boolean};
 
 /** Reservations must enforce policy, project access and quota. The reviewer excludes the examiner provider. */
 const ModuleExamCall = VerifyWorkerCall.omit({repo: true, avoidProviders: true, avoidProfiles: true, avoidAccounts: true, avoidExaminerAccounts: true});
@@ -61,7 +62,7 @@ export type ModuleExamInput = {
   collectorReview?: Omit<ModuleExamCollectorReview, 'coverage' | 'relatedSources'>;
   worker?: ModuleExamWorker;
   unavailable?: string;
-  reserve?: (purpose: 'examiner'|'reviewer', avoid?: {provider: string; profileId: string; accountId: string}) => Promise<ModuleExamSeat>;
+  reserve?: (purpose: 'examiner'|'reviewer', avoid?: {provider: string; profileId: string; accountId: string}, target?: ModuleExamReviewTarget) => Promise<ModuleExamSeat>;
   /** Release only if launch did not start or the native supervisor has proved it exited. */
   release?: (seat: ModuleExamSeat, state: 'not_started'|'exited') => Promise<void>;
   signal?: AbortSignal;
@@ -159,6 +160,9 @@ export function moduleExamReviewEvidence(module: VerificationModule, finding: Mo
 
 function unavailableText(code: string) {
   if (code === 'MODULE_EXAM_EXAMINER_UNAVAILABLE') return 'Examinador indisponível para o contexto.';
+  if (code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') {
+    return 'Revisor de achado alto (claude-opus-5-5) indisponível para o contexto.';
+  }
   if (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT') {
     return 'Revisor de outro provedor indisponível para o contexto.';
   }
@@ -166,7 +170,12 @@ function unavailableText(code: string) {
   return `Exame ou confirmação indisponível. Código ${code}.`;
 }
 
-function identity(seat: ModuleExamSeat) { return {provider: seat.provider, model: seat.model, accountId: seat.accountId, profileId: seat.profileId}; }
+function identity(seat: ModuleExamSeat, sessionId?: string) {
+  return {
+    provider: seat.provider, model: seat.model, accountId: seat.accountId, profileId: seat.profileId,
+    grantId: seat.grantId, ...(sessionId ? {sessionId} : {}),
+  };
+}
 
 /** Each call receives one bounded, sanitized file. The snapshot path stays on the host. */
 export async function examineFunctionalModule(input: ModuleExamInput): Promise<ModuleExamResult> {
@@ -278,7 +287,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           || result.data.checklist[0] !== input.module) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
         row.status = 'lido';
         row.reason = null;
-        row.examiner = identity(seat);
+        row.examiner = identity(seat, (call as {examSessionId?: string}).examSessionId);
         row.checklist = [input.module];
         row.read = {...read, binding};
         for (const attestation of result.data.routesReviewed) {
@@ -318,6 +327,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     if (limitedFiles) notes.add(`Arquivos com envio limitado a linhas completas: ${limitedFiles}.`);
 
     let stopReview = stopExam === 'PROVIDER_USAGE_LIMIT' ? stopExam : null;
+    let stopStandardReview: string | null = null;
+    let stopHighReview: string | null = null;
     const collectorReview = input.collectorReview?.intentId === input.intentId ? {
       ...input.collectorReview, coverage: coverageByFile,
       relatedSources: input.module === 'arquitetura' ? new Map(input.map.files.map(file => [file.file, file.code])) : undefined,
@@ -327,10 +338,13 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       const file = filesByName.get(finding.file);
       const row = coverageByFile.get(finding.file);
       const examiner = finding.examiner ?? (row?.status === 'lido' ? row.examiner : null);
+      const fromExaminer = index >= input.findings.length && finding.source === 'examinador';
+      const highExaminerFinding = fromExaminer && finding.severity === 'alta';
+      const laneStop = stopReview ?? (highExaminerFinding ? stopHighReview : stopStandardReview);
       const binding = file?.code ? moduleExamReadBinding(row, input, finding.file, file.code) : undefined;
       const evidence = file?.code && binding ? moduleExamReviewEvidence(input.module, finding, file.code, input.findings[index], collectorReview, binding) : null;
-      if (stopReview || !evidence || !examiner) {
-        finding.failure = stopReview ?? stopExam ?? 'MODULE_EXAM_EVIDENCE_UNAVAILABLE';
+      if (laneStop || !evidence || !examiner) {
+        finding.failure = laneStop ?? stopExam ?? 'MODULE_EXAM_EVIDENCE_UNAVAILABLE';
         finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
         continue;
       }
@@ -338,9 +352,14 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       let launched = false;
       let exited = false;
       try {
-        seat = await reserve('reviewer', examiner);
+        seat = await reserve('reviewer', examiner, {severity: finding.severity, source: finding.source, fromExaminer});
         checkAbort(input.signal);
-        if (seat.provider === examiner.provider || seat.profileId === examiner.profileId || seat.accountId === examiner.accountId) {
+        if (highExaminerFinding) {
+          const sameGrant = row?.examiner?.grantId !== undefined && seat.grantId === row.examiner.grantId;
+          if (seat.provider !== 'claude' || seat.model !== 'claude-opus-5-5' || seat.profileId === examiner.profileId || sameGrant) {
+            throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+          }
+        } else if (seat.provider === examiner.provider || seat.profileId === examiner.profileId || seat.accountId === examiner.accountId) {
           throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
         }
         const task = moduleReviewTask(evidence);
@@ -349,6 +368,11 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         const output = await worker.run(call);
         exited = true;
         checkAbort(input.signal);
+        const reviewerSessionId = (call as {examSessionId?: string}).examSessionId;
+        if (highExaminerFinding && seat.accountId === examiner.accountId && row?.examiner?.sessionId
+          && (!reviewerSessionId || reviewerSessionId === row.examiner.sessionId)) {
+          throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+        }
         const result = readModuleReviewVerdict(parsedJson(output));
         if (!result) throw new Refusal('MODULE_CONFIRMATION_INVALID');
         finding.reviewReason = clean(result.reason, 2000);
@@ -363,7 +387,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           finding.proof = evidence.code;
           finding.binding = result.binding;
           finding.observation = result.observation;
-          finding.verifier = identity(seat);
+          finding.verifier = identity(seat, reviewerSessionId);
         } else {
           finding.reason = 'Sem prova localizada suficiente para decidir a hipótese.';
         }
@@ -373,8 +397,10 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         finding.failure = code;
         finding.reason = `Confirmação indisponível. Código ${code}.`;
         notes.add(unavailableText(code));
-        if (code === 'PROVIDER_USAGE_LIMIT' || code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
-          || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT' || (launched && !exited)) stopReview = code;
+        if (code === 'PROVIDER_USAGE_LIMIT' || (launched && !exited)) stopReview = code;
+        else if (highExaminerFinding && code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') stopHighReview = code;
+        else if (!highExaminerFinding && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
+          || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT')) stopStandardReview = code;
       } finally {
         if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
       }

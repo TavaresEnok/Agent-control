@@ -429,8 +429,8 @@ test('migração 104, ensureExamContext, isolamento de contexto, relatórios, fa
       }
       return moduleExamFixtureAnswer(launch);
     }});
-    const {runtime, profiles, docker} = examFixture;
-    const policyRevision = await capacity.publish(principal, projectId, 0, {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {specialist: {regular: [...profiles, profileId], emergency: []}}});
+    const {runtime, profiles, highProfile, docker} = examFixture;
+    const policyRevision = await capacity.publish(principal, projectId, 0, {schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2, roles: {specialist: {regular: [...profiles, highProfile, profileId], emergency: []}}});
 
     // Sem contexto principal ainda -> VERIFY_CONTEXT_REQUIRED
     await assert.rejects(
