@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {createHash,generateKeyPairSync,randomUUID,sign} from 'node:crypto';
-import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,rename,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
@@ -181,7 +181,7 @@ test('automatic job retention frees only proven categories, with the gateway run
   type Role='specialist'|'reviewer'|'qa'|'judge'|'programmer';
   type Plant={role?:Role;workflow?:string;state?:'completed'|'failed';retirement?:'removed'|'none';base?:string;
    artifact?:'registered'|'unregistered'|'conflict';managed?:boolean;writerRevoked?:boolean;work?:'tree'|'none';grantState?:string;
-   change?:'modified'|'untracked'|'ignored'|'commit'|'stash';request?:'good'|'tampered'|'missing';launched?:boolean;started?:boolean};
+   change?:'modified'|'untracked'|'ignored'|'commit'|'stash';request?:'good'|'tampered'|'missing';launched?:boolean;started?:boolean;checkout?:'good'|'added'|'no-identity'|'replaced'|'forged'|'other-base'};
   const intoWork=(work:string,...args:string[])=>execFileSync('git',['-c','user.name=Fixture','-c','user.email=fixture@invalid','-C',work,...args],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();
   const plant=async(o:Plant={})=>{
    const role=o.role??'specialist',state=o.state??'completed',failed=state==='failed',programmer=role==='programmer';
@@ -227,6 +227,15 @@ test('automatic job retention frees only proven categories, with the gateway run
     if(o.change==='commit'){await writeFile(join(work,'a.txt'),'local');intoWork(work,'commit','-qam','local only');intoWork(work,'reset','-q','--hard','HEAD~1');}
     if(o.change==='stash'){await writeFile(join(work,'a.txt'),'stashed');intoWork(work,'stash','-q');}
    }
+   if(!programmer&&o.checkout){
+    // An evaluator checkout as launch leaves it: the base snapshot plus a signed identity of that very directory.
+    execFileSync('git',['clone','-q','--no-local',repo,work],{stdio:'ignore'});
+    const st=await lstat(work,{bigint:true});
+    const identity={jobId,base:o.checkout==='other-base'?'f'.repeat(40):baseId,tree,dev:String(st.dev),ino:String(st.ino)};
+    if(o.checkout!=='no-identity')await writeFile(join(root,'checkout-identity.json'),JSON.stringify({payload:identity,signature:o.checkout==='forged'?'0'.repeat(128):signWith('agent-control:native-checkout-identity:v1\n',identity)}),{mode:0o600});
+    if(o.checkout==='added')await writeFile(join(work,'planted-by-host.txt'),'added before the first inspection');
+    if(o.checkout==='replaced'){execFileSync('git',['clone','-q','--no-local',repo,work+'.new'],{stdio:'ignore'});await rm(work,{recursive:true});await rename(work+'.new',work);}
+   }
    const payload={schemaVersion:1,accountId:account,profileId:profile,profileDigest,jobId,intentId,contextId,grantId,sessionId,epoch:1,inputDigest,executorDigest:supervisor.executorDigest,outputDigest:digest(''),physicalDigest:digest(physical),workerExitCode:code,artifact,exitCode:code,...(o.started===false?{executionStarted:false}:{})};
    const receipt={payload,signature:signWith('agent-control:native-execution-receipt:v1\n',payload)};
    await db.pool.query(`INSERT INTO ac_native_execution_jobs(id,grant_id,intent_id,context_id,manager_epoch,session_id,account_id,profile_id,profile_digest,eligibility_revision,executor_digest,key_fingerprint,input_digest,base_id,role,state,network_id,worker_id,tools_id,launch_digest,receipt)
@@ -252,7 +261,7 @@ test('automatic job retention frees only proven categories, with the gateway run
    if(o.request!=='missing')await writeFile(join(root,'request.json'),JSON.stringify(o.request==='tampered'?{...request,task:'another task'}:request),{mode:0o600});
    await writeFile(join(root,'review-artifact','a.txt'),'artifact');
    await writeFile(join(root,'worker-terminal.log'),'log');
-   if(!programmer&&o.work!=='none'){
+   if(!programmer&&o.work!=='none'&&!o.checkout){
     await mkdir(join(work,'src'),{recursive:true});await writeFile(join(work,'src','index.ts'),'x'.repeat(1000));
     await mkdir(join(work,'.git'));await writeFile(join(work,'.git','HEAD'),'ref');
     await symlink(outside,join(work,'link-out'));await symlink(join(outside,'precious.txt'),join(work,'link-file'));
@@ -278,12 +287,18 @@ test('automatic job retention frees only proven categories, with the gateway run
   const cases:{label:string;o:Plant;expect:string}[]=[
    {label:'passive exam',o:{},expect:'released:passive-exam'},
    {label:'failed passive exam',o:{state:'failed'},expect:'released:passive-exam'},
-   {label:'reviewer with its base commit kept',o:{role:'reviewer'},expect:'released:readonly-evaluator'},
-   {label:'qa, failed',o:{role:'qa',state:'failed'},expect:'released:readonly-evaluator'},
-   {label:'judge',o:{role:'judge'},expect:'released:readonly-evaluator'},
-   {label:'qa of an engineering run',o:{role:'qa',workflow:'engineering-native-v1'},expect:'released:readonly-evaluator'},
-   {label:'design create specialist',o:{workflow:'design-readonly-v1'},expect:'released:readonly-evaluator'},
-   {label:'managed child reviewer: no generic parent rule, same proofs',o:{role:'reviewer',managed:true,workflow:'engineering-native-v1'},expect:'released:readonly-evaluator'},
+   {label:'reviewer with its base commit kept',o:{role:'reviewer',checkout:'good'},expect:'released:readonly-evaluator'},
+   {label:'qa, failed',o:{role:'qa',state:'failed',checkout:'good'},expect:'released:readonly-evaluator'},
+   {label:'judge',o:{role:'judge',checkout:'good'},expect:'released:readonly-evaluator'},
+   {label:'reviewer checkout bound to its launch identity',o:{role:'reviewer',checkout:'good'},expect:'released:readonly-evaluator'},
+   {label:'reviewer checkout with host content added',o:{role:'reviewer',checkout:'added'},expect:'refused:unregistered_change'},
+   {label:'reviewer checkout without identity',o:{role:'reviewer',checkout:'no-identity'},expect:'refused:unregistered_change'},
+   {label:'reviewer checkout replaced after launch',o:{role:'reviewer',checkout:'replaced'},expect:'refused:unregistered_change'},
+   {label:'reviewer identity with a forged signature',o:{role:'reviewer',checkout:'forged'},expect:'refused:unregistered_change'},
+   {label:'reviewer identity for another base',o:{role:'reviewer',checkout:'other-base'},expect:'refused:unregistered_change'},
+   {label:'qa of an engineering run',o:{role:'qa',workflow:'engineering-native-v1',checkout:'good'},expect:'released:readonly-evaluator'},
+   {label:'design create specialist',o:{workflow:'design-readonly-v1',checkout:'good'},expect:'released:readonly-evaluator'},
+   {label:'managed child reviewer: no generic parent rule, same proofs',o:{role:'reviewer',managed:true,workflow:'engineering-native-v1',checkout:'good'},expect:'released:readonly-evaluator'},
    {label:'specialist advising an engineering run is not classified',o:{workflow:'engineering-native-v1'},expect:'refused:unclassified'},
    {label:'qa of an unknown workflow is not classified',o:{role:'qa',workflow:'remote-development-session-v1'},expect:'refused:unclassified'},
    {label:'request no longer matches its digest',o:{role:'reviewer',request:'tampered'},expect:'refused:mode_unproven'},
@@ -352,7 +367,7 @@ test('automatic job retention frees only proven categories, with the gateway run
    await new Promise(done=>setTimeout(done,200));
   };
   for(const step of ['locked','prepared','removing'] as const){
-   for(const o of [{role:'reviewer' as const},{role:'programmer' as const,artifact:'registered' as const}]){
+   for(const o of [{role:'reviewer' as const,checkout:'good' as const},{role:'programmer' as const,artifact:'registered' as const}]){
     const p=await plant(o);
     const result=await supervisor.retireTerminalWork(owner,p.jobId,true,{...scope(p),observe:async seen=>{if(seen===step)await terminateHolder(p.jobId);}});
     assert.deepEqual(result,{jobId:p.jobId,state:'refused',reason:'session_lost'},step+' '+o.role);
@@ -383,7 +398,7 @@ test('automatic job retention frees only proven categories, with the gateway run
   assert.ok(await exists(stranger.work));
 
   // 3. The service keeps running: its context lease is held, yet retention works and never touches the lease.
-  const withGateway=await plant(),otherGateway=await plant({role:'reviewer'});
+  const withGateway=await plant(),otherGateway=await plant({role:'reviewer',checkout:'good'});
   const gateway=await db.acquire(owner,withGateway.contextId,randomUUID(),'gateway',60);
   const leaseBefore=JSON.stringify((await db.pool.query('SELECT context_id,instance_id,epoch,lease_until FROM ac_managers WHERE context_id=$1',[withGateway.contextId])).rows);
   assert.equal((await retire(withGateway,true)).state,'released');
@@ -413,7 +428,7 @@ test('automatic job retention frees only proven categories, with the gateway run
   // Free whatever the earlier cases left eligible, so the counts below are about this section only.
   await runPersonalJobRetention(config,true);
   const stuck=[];for(let i=0;i<6;i++)stuck.push(await plant({role:'reviewer',retirement:'none'}));
-  const good=[];for(let i=0;i<4;i++)good.push(await plant(i%2?{role:'reviewer'}:{}));
+  const good=[];for(let i=0;i<4;i++)good.push(await plant(i%2?{role:'reviewer',checkout:'good'}:{}));
   const start=await workIds();
   const before=await journal();
   const preview=(await runPersonalJobRetention(config,false)).join('\n');
@@ -437,7 +452,7 @@ test('automatic job retention frees only proven categories, with the gateway run
   assert.equal(await exists(join(data,'job-work-retention.cursor')).then(async yes=>yes?await readRetentionCursor(join(data,'job-work-retention.cursor')):undefined),undefined,'a full pass resets the cursor');
 
   // Concurrent runs and a service that reconciles at the same time: each job is released exactly once, nothing fails.
-  const racers=[];for(let i=0;i<6;i++)racers.push(await plant(i%2?{role:'reviewer'}:{}));
+  const racers=[];for(let i=0;i<6;i++)racers.push(await plant(i%2?{role:'reviewer',checkout:'good'}:{}));
   const outputs=await Promise.all([runPersonalJobRetention(config,true),runPersonalJobRetention(config,true),runPersonalJobRetention(config,true)]);
   const joined=outputs.map(lines=>lines.join('\n'));
   assert.ok(joined.some(text=>/6 apagado\(s\)/.test(text)||/já em execução/.test(text)),joined.join('\n---\n'));

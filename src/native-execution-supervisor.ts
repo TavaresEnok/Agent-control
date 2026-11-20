@@ -455,6 +455,7 @@ export class NativeExecutionSupervisor{
    await mkdir(p.root,{mode:0o700});jobDirCreated=true;
    await writeFile(join(p.root,'request.json'),JSON.stringify(input),{mode:0o600,flag:'wx'});for(const path of [p.input,p.output,p.planning])await mkdir(path,{mode:0o700});
    if(repository)await new GitArtifacts(repository).snapshot(input.base,input.base,p.work);
+   if(repository&&input.role!=='programmer')await this.writeCheckoutIdentity(repository,input.jobId,input.base,p.work);
    const examWorkflow=(await this.ledger.pool.query('SELECT command FROM ac_intents WHERE id=$1',[input.intentId])).rows[0]?.command?.payload?.workflow;
    if(repository&&stageDesignExamCaptures(personal,examWorkflow,input.role))await stageDesignCapturesForJob(repository,[p.planning,p.work]);
    await writeFile(p.key,this.publicKey,{mode:0o600,flag:'wx'});token=randomBytes(32).toString('hex');
@@ -1329,6 +1330,30 @@ export class NativeExecutionSupervisor{
  }
  /** The signed request is the mode proof: it is bound to the job row and receipt by its digest, and the launch only happened after the physical
   * inspection refused any writable `/work` for a role other than programmer (native-execution-isolation). */
+ /** Signed at launch, right after the snapshot: which directory the evaluator's checkout is, and the tree it must hold. */
+ private async writeCheckoutIdentity(repository:string,jobId:string,base:string,work:string){
+  const tree=await repositoryTreeOf(repository,base);
+  if(!tree)return;
+  const st=await lstat(work,{bigint:true});
+  const payload={jobId,base,tree,dev:String(st.dev),ino:String(st.ino)};
+  const signature=sign(null,Buffer.from('agent-control:native-checkout-identity:v1\n'+canonical(payload)),this.key).toString('hex');
+  await writeFile(join(this.paths(jobId).root,'checkout-identity.json'),JSON.stringify({payload,signature}),{mode:0o600,flag:'wx'});
+ }
+ /** The tree an evaluator checkout must hold, or undefined when the identity is missing, forged, for another job/base, or the directory was replaced. */
+ private async checkoutIdentityTree(repository:string,jobId:string,base:string,work:string):Promise<string|undefined>{
+  try{
+   const bytes=await readPrivateWorkerFile(join(this.paths(jobId).root,'checkout-identity.json'),64*1024);
+   let saved:any;try{saved=JSON.parse(bytes.toString('utf8'));}finally{bytes.fill(0);}
+   const payload=saved?.payload;
+   if(!payload||typeof saved.signature!=='string'||!/^[a-f0-9]{128}$/.test(saved.signature))return undefined;
+   if(!verify(null,Buffer.from('agent-control:native-checkout-identity:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(saved.signature,'hex')))return undefined;
+   if(payload.jobId!==jobId||payload.base!==base||!/^[a-f0-9]{40}$/.test(String(payload.tree)))return undefined;
+   if(await repositoryTreeOf(repository,base)!==payload.tree)return undefined;
+   const st=await lstat(work,{bigint:true});
+   if(!st.isDirectory()||String(st.dev)!==payload.dev||String(st.ino)!==payload.ino)return undefined;
+   return payload.tree as string;
+  }catch{return undefined;}
+ }
  private async requestProvesMode(jobId:string,row:Record<string,any>){
   try{
    const p=this.paths(jobId);await this.directory(p.root);
@@ -1429,6 +1454,14 @@ export class NativeExecutionSupervisor{
     if(!expected)return refuse('artifact_unpreserved');
     const tree=expected,work=this.paths(jobId).work;
     checkWork=signal=>workHoldsNoUnregisteredChange(repository,work,tree,signal);
+   }
+   else if(category==='readonly-evaluator'){
+    // An evaluator's checkout is the snapshot made at launch: the same directory (signed identity) holding exactly the base tree, nothing the host added.
+    const repository=o.repository,work=this.paths(jobId).work,base=row.base_id as string;
+    checkWork=async signal=>{
+     const tree=await this.checkoutIdentityTree(repository,jobId,base,work);
+     return tree!==undefined&&await workHoldsNoUnregisteredChange(repository,work,tree,signal);
+    };
    }
   }
   const state=row.state as 'completed'|'failed';
