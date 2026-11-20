@@ -520,7 +520,8 @@ test('o archive do commit não inclui arquivo uncommitted e não é o repo vivo'
         assert.equal((await stat(path)).mode & 0o777, 0o700);
         mounted = path;
       });
-      await assert.rejects(stat(mounted));
+      assert.notEqual(mounted, '');
+      await assert.rejects(stat(mounted), {code: 'ENOENT'});
       await defaultRunTools({
         image: PINNED_IMAGE,
         repository: repo,
@@ -544,7 +545,8 @@ test('o archive do commit não inclui arquivo uncommitted e não é o repo vivo'
     } catch (error) {
       assert.equal(error instanceof Error && error.message === 'ferramentas falharam', true);
       assert.notEqual(mounted, '');
-      await assert.rejects(stat(mounted));
+      await assert.rejects(stat(mounted), {code: 'ENOENT'});
+      await assert.rejects(stat(join(mounted, '..')), {code: 'ENOENT'});
     } finally {
       await rm(output, {recursive: true, force: true});
       await rm(databases, {recursive: true, force: true});
