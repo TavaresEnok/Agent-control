@@ -113,3 +113,20 @@
   3. **Worktrees:** worktrees de trabalhadores cujo ramo já foi integrado e que estão sem mudanças há mais de 2 horas são removidos com `git worktree remove`. O ramo continua.
   4. **Imagens e temporários:** imagens candidatas de módulo que não são o digest fixado nem estão em uso, e pastas temporárias de rodadas encerradas (`/tmp/ac-*`) com mais de 24 horas, são removidas.
   5. **Alerta:** o vigia avisa a partir de 90% de disco e bloqueia novos exames e trabalhadores a partir de 95%.
+- **Fila de trabalhadores (titular, 20/11/2026 ~14:40 UTC), substitui a fila anterior.** O objetivo é esgotar a conta do Antigravity antes das contas Claude próprias.
+  - **Correções comuns**, nesta ordem:
+    1. `agy --model gemini-4-hydrogen-high`;
+    2. `agy --model gemini-4-argon-high`;
+    3. `agy --model claude-sonnet-5-5-high`;
+    4. **`agy --model gemini-3.8-flash-high`**, só para tarefas simples: gravidade baixa ou média, poucos arquivos, formatação, testes de algo já definido, documentação, ajustes mecânicos;
+    5. Claude Sonnet alto, conta ajustconsulting (Pro);
+    6. Claude Sonnet alto, conta Enok (Max).
+
+    Tarefas complexas pulam o Flash e vão direto para o item 5.
+  - **Correções graves:** `agy --model claude-opus-5-5-medium` e depois Opus médio na conta Enok (Max). O Flash nunca recebe correção grave.
+  - **Trailer do Flash:** `Co-Authored-By: Gemini 3.8 Flash <noreply@google.com>`.
+- **Economia do gerente (titular, 20/11/2026).** O gerente fazia cerca de 435 chamadas por hora, cada uma relendo cerca de 134 mil tokens de contexto, para acompanhar os trabalhadores passo a passo. A partir de agora:
+  - Espere trabalhadores, exames e revisões com **um único comando bloqueante**, por exemplo `while pgrep -f ...; do sleep 120; done`, ou esperando o arquivo de saída. Não consulte várias vezes seguidas.
+  - Junte as verificações num só comando e leia só as últimas linhas dos logs (`tail -n 40`), nunca logs inteiros.
+  - Delegue aos trabalhadores a leitura e a investigação longas, e receba só a conclusão no relatório deles.
+  - Mantenha o histórico curto: o progresso fica em `docs/PROGRESSO-FINAL.md` e `docs/RELATORIO-NEXOISP.md`, não na memória da sessão.
