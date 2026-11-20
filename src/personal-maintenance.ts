@@ -340,7 +340,7 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
      else{
       totals[result.state]++;totals.bytes+=result.bytes??0;spent++;
       byCategory.set(result.category??'?',(byCategory.get(result.category??'?')??0)+1);
-      if(result.state==='released')lines.push(`${id}: work apagado (${result.bytes??0} bytes, ${result.category}).`);
+      lines.push(`${id}: ${result.state==='released'?'work apagado':'work elegível'} (${result.bytes??0} bytes, ${result.category}).`);
      }
     }catch(error){
      totals.failed++;spent++;
