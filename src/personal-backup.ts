@@ -8,7 +8,9 @@ import {Refusal} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 
 /** Top-level data directories that are large, disposable, or rebuilt by git clone. */
-const excludedDirectories=new Set(['native','qa-cache','remote']);
+const excludedDirectories=new Set(['native','qa-cache','remote','verify-db']);
+/** Vulnerability-database caches (Grype, Trivy) in their conventional places inside the data directory. Downloaded again by maintenance. */
+const excludedCachePaths=new Set(['.cache/grype','.cache/trivy','cache/grype','cache/trivy']);
 
 export type DatabaseEndpoint={user:string;password:string;host:string;port:string;database:string};
 export type PersonalBackupOptions={
@@ -82,7 +84,7 @@ function isInside(parent:string,child:string){
  return child===base||child.startsWith(base+sep);
 }
 
-async function canonicalPath(input:string){
+export async function canonicalPath(input:string){
  let current=resolve(input);
  const missing:string[]=[];
  for(;;){
@@ -148,13 +150,15 @@ async function ownsHappier(data:string){
  }
 }
 
-async function copyData(source:string,dest:string,depth:number,includeHappier:boolean){
+async function copyData(source:string,dest:string,depth:number,includeHappier:boolean,rel=''){
  await privateDir(dest);
  for(const entry of await readdir(source,{withFileTypes:true})){
   if(entry.isSymbolicLink())continue;
   if(depth===0&&entry.isDirectory()&&(excludedDirectories.has(entry.name)||(!includeHappier&&entry.name==='happier')))continue;
   const from=join(source,entry.name),to=join(dest,entry.name);
-  if(entry.isDirectory())await copyData(from,to,depth+1,includeHappier);
+  const entryRel=rel?`${rel}/${entry.name}`:entry.name;
+  if(entry.isDirectory()&&excludedCachePaths.has(entryRel))continue;
+  if(entry.isDirectory())await copyData(from,to,depth+1,includeHappier,entryRel);
   else if(entry.isFile()){
    await copyFile(from,to,constants.COPYFILE_EXCL);
    await chmod(to,0o600);
@@ -241,7 +245,7 @@ Este backup contém segredos: a chave da conta Happier, os logins e a chave SSH.
 3. Crie um banco vazio e carregue \`database.dump\` com \`pg_restore\`. No contêiner: \`docker exec -i ac-personal-pg pg_restore --clean --if-exists -U USUARIO -d BANCO\`, com o arquivo na stdin.
 4. Suba de novo o gateway e o Happier desta instalação.
 
-Ficaram de fora, de propósito: \`native/\`, \`qa-cache/\` e \`remote/\`. As cópias remotas se refazem com \`git clone\`.
+Ficaram de fora, de propósito: \`native/\`, \`qa-cache/\`, \`remote/\`, \`verify-db/\` e os caches do Grype e do Trivy. As cópias remotas se refazem com \`git clone\` e as bases de vulnerabilidades se baixam de novo na manutenção semanal.
 `;
 
 async function treeBytes(root:string){

@@ -378,10 +378,16 @@ O comando pede `GET http://127.0.0.1:<porta>/api/v1/ac/health`. Uma falha só fi
 
 Se alguma imagem atual do `nativeBootstrap` (planejamento, worker, ferramentas ou QA) não existir no Docker, a vigia roda `npm run personal:images -- <instalação.json>`, reinicia `agent-control-gateway-<nome>` e manda "Imagens do Agent Control reconstruídas.". Há no máximo uma reconstrução por hora. O `<nome>` é o diretório da instalação, o mesmo critério de `personal:services`.
 
-O backup automático chama o mesmo backup, numa subpasta datada `AAAAMMDD-HHMMSS`, e fica com as 7 mais novas. As mais velhas são apagadas só quando o caminho, conferido por completo, é um diretório de verdade dentro da pasta pedida. Atalho não é apagado.
+O backup automático chama o mesmo backup, numa subpasta datada `AAAAMMDD-HHMMSS`, e em seguida roda o `restore-check` na cópia nova. Só depois que essa conferência passa (e a cópia externa, se houver, deu certo) as mais velhas são apagadas. Se a conferência falha, chega o aviso "A conferência do backup novo falhou. Nada foi apagado." e todas as cópias ficam.
+
+- **Destino padrão** (`/home/app/backups-agent-control/<nome>`, o dos timers): fica com as **3** mais novas. `npm run personal:backup-rotate -- <instalação.json>` (sem pasta) usa esse destino e `npm run personal:backup-rotate -- --destino-padrao <instalação.json>` só mostra o caminho.
+- **Destino explícito** (`... <instalação.json> /caminho/dos/backups`): mantém a regra antiga, as **7** mais novas.
+- Só são contadas e apagadas as subpastas datadas reconhecidas como backup **desta** instalação (uma pasta `agent-control-*` com `MANIFEST.txt` e um `installation.json` com o mesmo `project.id`). Backups de outra instalação, pastas feitas à mão, atalhos e relatórios não são tocados, mesmo na mesma pasta. O backup recém-feito nunca é apagado.
+- Uma pasta condenada é renomeada para `.removendo-<data>` antes de apagar, e restos de uma rodada interrompida são varridos na seguinte. Duas rotações na mesma pasta não rodam juntas (`.rotacao.lock`; a trava de um processo morto é retomada).
+- O backup não inclui `verify-db/` nem os caches do Grype e do Trivy (`.cache/grype`, `.cache/trivy`, `cache/grype`, `cache/trivy`); a manutenção semanal baixa as bases de novo.
 
 ```bash
-npm run personal:backup-rotate -- <instalação.json> /caminho/dos/backups
+npm run personal:backup-rotate -- <instalação.json> [/caminho/dos/backups]
 ```
 
 Para copiar o backup novo para outra máquina, grave uma linha `usuario@host:/caminho` em `<dataDirectory>/backup-offsite` (arquivo comum, modo `0600`). A cópia usa `rsync -a` por SSH, com a chave e o `known_hosts` de `<dataDirectory>/ssh`. Se a cópia falha, chega o aviso "Cópia do backup para fora do servidor falhou." e nada é apagado.

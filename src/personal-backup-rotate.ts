@@ -1,27 +1,38 @@
 import {execFile} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {lstat,chmod,mkdir,readdir,readFile,realpath,rm} from 'node:fs/promises';
+import {chmod,lstat,mkdir,open,readdir,readFile,realpath,rename,rm,unlink} from 'node:fs/promises';
 import {join,relative,resolve,sep} from 'node:path';
 import {promisify} from 'node:util';
 import {Refusal} from './contracts.ts';
 import {loadInstallation} from './installation.ts';
-import {assertPersonalBackupDestination,runPersonalBackup,type PersonalBackupOptions} from './personal-backup.ts';
+import {assertPersonalBackupDestination,canonicalPath,runPersonalBackup,runPersonalRestoreCheck,type PersonalBackupOptions,type PersonalRestoreOptions} from './personal-backup.ts';
+import {defaultBackupRetention,explicitBackupRetention,personalBackupRoot,personalDefaultBackupDirectory} from './personal-backup-paths.ts';
 import {deliverPersonalPush} from './personal-push.ts';
 import {personalSshPaths,shellSingleQuote,sshOptionArgs} from './personal-ssh.ts';
 
 const exec=promisify(execFile);
 const stampName=/^\d{8}-\d{6}$/;
+const removingName=/^\.removendo-\d{8}-\d{6}$/;
+const lockName='.rotacao.lock';
 const offsiteLine=/^([A-Za-z_][A-Za-z0-9._-]{0,31})@([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?):(\/[A-Za-z0-9._~/-]+)$/;
 
 export const offsiteFailedNotice='Cópia do backup para fora do servidor falhou.';
+export const restoreCheckFailedNotice='A conferência do backup novo falhou. Nada foi apagado.';
 
 export class OffsiteCopyRefusal extends Refusal{
  constructor(readonly lines:string[]){super('BACKUP_OFFSITE_FAILED');}
 }
 
+/** The new backup did not pass restore-check. Nothing was deleted. `lines` is the backup report so far. */
+export class RestoreCheckRefusal extends Refusal{
+ constructor(readonly lines:string[],readonly cause:string){super('BACKUP_RESTORE_CHECK_FAILED');}
+}
+
 export type OffsiteDestination={user:string;host:string;path:string};
 export type RsyncPlan={command:'rsync';args:string[]};
-export type PersonalBackupRotateOptions=PersonalBackupOptions&{
+export type PersonalBackupRotateOptions=PersonalBackupOptions&PersonalRestoreOptions&{
+ /** Test hook. Replaces `/home/app/backups-agent-control` as the parent of the default destination. */
+ defaultRoot?:string;
  rsync?:(plan:RsyncPlan)=>Promise<void>;
  notify?:(dataDirectory:string,body:string)=>Promise<void>;
 };
@@ -85,8 +96,8 @@ async function regularFile(path:string){
 }
 
 /** Delete only a direct child whose real path is that literal directory. Symlinks are left alone. */
-async function deletableChild(root:string,name:string){
- if(!stampName.test(name))return null;
+async function realChild(root:string,name:string,pattern:RegExp){
+ if(!pattern.test(name))return null;
  const literal=join(root,name);
  let info;
  try{info=await lstat(literal);}catch{return null;}
@@ -97,19 +108,111 @@ async function deletableChild(root:string,name:string){
  return literal;
 }
 
-async function pruneOldest(parent:string,keep:number){
+/** Where the timers write this installation's backups. Retention is 3 here. */
+export function personalBackupDefaultDestination(installationArg:string,defaultRoot:string=personalBackupRoot){
+ return personalDefaultBackupDirectory(resolve(installationArg),defaultRoot);
+}
+
+async function readSmallJson(path:string){
+ try{
+  const info=await lstat(path);
+  if(!info.isFile()||info.isSymbolicLink()||info.size>1024*1024)return null;
+  return JSON.parse(await readFile(path,'utf8')) as unknown;
+ }catch{return null;}
+}
+
+/**
+ * A dated folder holding exactly one `agent-control-*` backup with a MANIFEST.txt whose
+ * installation.json names this project. Anything else (other installations, hand-made
+ * folders, damaged copies) is not recognized and is never counted or deleted.
+ */
+async function recognizedBackup(dated:string,projectId:string){
+ try{
+  const inner:string[]=[];
+  for(const entry of await readdir(dated,{withFileTypes:true})){
+   if(entry.isDirectory()&&!entry.isSymbolicLink()&&entry.name.startsWith('agent-control-'))inner.push(entry.name);
+  }
+  if(inner.length!==1)return false;
+  const backup=join(dated,inner[0]!);
+  const manifest=await lstat(join(backup,'MANIFEST.txt'));
+  if(!manifest.isFile()||manifest.isSymbolicLink())return false;
+  const raw=await readSmallJson(join(backup,'installation.json')) as {project?:{id?:unknown}}|null;
+  return typeof raw?.project?.id==='string'&&raw.project.id===projectId;
+ }catch{return false;}
+}
+
+type PruneResult={kept:number;removed:number;failed:number};
+
+/** Only one rotation per destination folder at a time. A lock left by a dead process is taken over. */
+async function acquireLock(parent:string){
+ const path=join(parent,lockName);
+ for(let attempt=0;attempt<2;attempt++){
+  try{
+   const handle=await open(path,'wx',0o600);
+   try{await handle.writeFile(`${process.pid}\n`);}finally{await handle.close();}
+   return async()=>{
+    try{
+     if((await readFile(path,'utf8')).trim()===String(process.pid))await unlink(path);
+    }catch{/* already gone */}
+   };
+  }catch(error){
+   if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;
+   let alive=true;
+   try{
+    const info=await lstat(path);
+    const pid=Number((await readFile(path,'utf8')).trim());
+    if(Number.isInteger(pid)&&pid>0){
+     try{process.kill(pid,0);}catch(killError){if((killError as NodeJS.ErrnoException).code==='ESRCH')alive=false;}
+    }else alive=Date.now()-info.mtimeMs<10*60*1000;
+   }catch(readError){
+    if((readError as NodeJS.ErrnoException).code==='ENOENT')continue;
+    throw readError;
+   }
+   if(alive)throw new Refusal('BACKUP_ROTATE_BUSY');
+   await unlink(path).catch(()=>undefined);
+  }
+ }
+ throw new Refusal('BACKUP_ROTATE_BUSY');
+}
+
+/**
+ * Keep the new backup plus the newest recognized ones of this installation, `keep` in all.
+ * A condemned folder is renamed first, so a half-deleted copy never looks like a backup.
+ * Folders that are not recognized, symlinks and other files stay untouched.
+ */
+async function pruneBackups(parent:string,keep:number,newName:string,projectId:string):Promise<PruneResult>{
  const root=await realpath(parent);
+ let failed=0;
+ for(const entry of await readdir(root,{withFileTypes:true})){
+  const leftover=await realChild(root,entry.name,removingName);
+  if(!leftover)continue;
+  try{await rm(leftover,{recursive:true,force:true});}catch{failed+=1;}
+ }
  const names:string[]=[];
  for(const entry of await readdir(root,{withFileTypes:true})){
-  if(await deletableChild(root,entry.name))names.push(entry.name);
+  const literal=await realChild(root,entry.name,stampName);
+  if(literal&&await recognizedBackup(literal,projectId))names.push(entry.name);
  }
  names.sort();
- const extra=names.slice(0,Math.max(0,names.length-keep));
- for(const name of extra){
-  const literal=await deletableChild(root,name);
-  if(literal)await rm(literal,{recursive:true,force:false});
+ if(!names.includes(newName))return {kept:names.length,removed:0,failed:failed+1};
+ const keepSet=new Set([newName]);
+ for(const name of [...names].reverse()){
+  if(keepSet.size>=keep)break;
+  keepSet.add(name);
  }
- return names.length-extra.length;
+ let removed=0;
+ for(const name of names){
+  if(keepSet.has(name))continue;
+  const literal=await realChild(root,name,stampName);
+  if(!literal||!await recognizedBackup(literal,projectId))continue;
+  const condemned=join(root,`.removendo-${name}`);
+  try{
+   await rename(literal,condemned);
+   removed+=1;
+   await rm(condemned,{recursive:true,force:true});
+  }catch{failed+=1;}
+ }
+ return {kept:keepSet.size,removed,failed};
 }
 
 async function failOffsite(lines:string[],dataDirectory:string,notify:(dataDirectory:string,body:string)=>Promise<void>):Promise<never>{
@@ -117,13 +220,19 @@ async function failOffsite(lines:string[],dataDirectory:string,notify:(dataDirec
  throw new OffsiteCopyRefusal(lines);
 }
 
-/** Same backup as personal:backup, in a dated folder. Keeps 7. A failed offsite copy deletes nothing. */
+/**
+ * Same backup as personal:backup, in a dated folder, then restore-check on the new copy.
+ * Nothing is deleted unless that check passes (and the offsite copy, when configured, succeeded).
+ * Default destination (`/home/app/backups-agent-control/<nome>`): keeps the 3 newest. Explicit
+ * destination: keeps 7. Only dated folders recognized as this installation's are ever counted or deleted.
+ */
 export async function runPersonalBackupRotate(argv:string[],options:PersonalBackupRotateOptions={}){
  const [installationArg,destinationArg]=argv;
- if(!installationArg||!destinationArg||installationArg.startsWith('--')||destinationArg.startsWith('--')||argv.length!==2)throw new Refusal('BACKUP_ROTATE_USAGE');
+ if(!installationArg||installationArg.startsWith('--')||argv.length>2||(destinationArg!==undefined&&(!destinationArg||destinationArg.startsWith('--'))))throw new Refusal('BACKUP_ROTATE_USAGE');
  const installationFile=resolve(installationArg);
  const config=await loadInstallation(installationFile);
- const requested=resolve(destinationArg);
+ const defaultDirectory=personalDefaultBackupDirectory(installationFile,options.defaultRoot);
+ const requested=resolve(destinationArg??defaultDirectory);
  try{
   const info=await lstat(requested);
   if(info.isSymbolicLink()||!info.isDirectory())throw new Refusal('BACKUP_ROTATE_NOT_A_DIRECTORY');
@@ -131,10 +240,21 @@ export async function runPersonalBackupRotate(argv:string[],options:PersonalBack
   if(error instanceof Refusal)throw error;
   if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
  }
- const parent=await assertPersonalBackupDestination(config,destinationArg);
+ const parent=await assertPersonalBackupDestination(config,requested);
+ const isDefault=parent===await canonicalPath(defaultDirectory);
+ const keep=isDefault?defaultBackupRetention:explicitBackupRetention;
  await mkdir(parent,{recursive:true,mode:0o700});
  await chmod(parent,0o700);
- const dated=join(parent,personalBackupRotateStamp(options.now??new Date()));
+ const release=await acquireLock(parent);
+ try{
+  return await rotateLocked({installationFile,config,parent,isDefault,keep,options});
+ }finally{await release();}
+}
+
+async function rotateLocked(input:{installationFile:string;config:Awaited<ReturnType<typeof loadInstallation>>;parent:string;isDefault:boolean;keep:number;options:PersonalBackupRotateOptions}){
+ const {installationFile,config,parent,isDefault,keep,options}=input;
+ const stamp=personalBackupRotateStamp(options.now??new Date());
+ const dated=join(parent,stamp);
  try{
   const info=await lstat(dated);
   if(info)throw new Refusal('BACKUP_DESTINATION_NOT_EMPTY');
@@ -146,6 +266,17 @@ export async function runPersonalBackupRotate(argv:string[],options:PersonalBack
  const copied=lines[0]?.startsWith('Backup em ')?lines[0].slice('Backup em '.length):'';
  const notify=options.notify??defaultNotify;
  const rsync=options.rsync??defaultRsync;
+ const retention=`Retenção: ${keep} mais recentes${isDefault?' (destino padrão)':''}.`;
+ try{
+  const datedReal=await realpath(dated);
+  const copiedReal=copied?await realpath(copied):'';
+  if(!inside(datedReal,copiedReal)||copiedReal===datedReal)throw new Refusal('RESTORE_NOT_A_BACKUP');
+  await runPersonalRestoreCheck([copiedReal],options);
+ }catch(error){
+  try{await notify(config.dataDirectory,restoreCheckFailedNotice);}catch{/* nothing is deleted either way */}
+  throw new RestoreCheckRefusal([...lines,`Destino: ${parent}`,retention],error instanceof Refusal?error.code:'RESTORE_CHECK_ERROR');
+ }
+ lines.push('Conferência do backup novo: ok.',`${isDefault?'Destino padrão':'Destino'}: ${parent}`,retention);
  let destination:string|null;
  try{destination=await readOffsite(config.dataDirectory);}
  catch(error){
@@ -163,9 +294,10 @@ export async function runPersonalBackupRotate(argv:string[],options:PersonalBack
   if(!plan||!keys)return failOffsite(lines,config.dataDirectory,notify);
   try{await rsync(plan);}
   catch{return failOffsite(lines,config.dataDirectory,notify);}
-  const kept=await pruneOldest(parent,7);
-  return [...lines,'Cópia externa feita.',`Mantidos: ${kept}`];
+  lines.push('Cópia externa feita.');
  }
- const kept=await pruneOldest(parent,7);
- return [...lines,`Mantidos: ${kept}`];
+ const result=await pruneBackups(parent,keep,stamp,config.project.id);
+ if(result.removed>0)lines.push(`Removidos: ${result.removed}`);
+ if(result.failed>0)lines.push(`Aviso: ${result.failed} pasta(s) antigas não puderam ser apagadas; ficam para a próxima rodada.`);
+ return [...lines,`Mantidos: ${result.kept}`];
 }
