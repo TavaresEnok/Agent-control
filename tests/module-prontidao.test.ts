@@ -2974,3 +2974,35 @@ test('R20: fronteiras conservadoras em redirecionamentos e substituições', () 
     check(`echo ok # comment\ndf -P /; echo "`, disk);
   } finally { rmSync(dir, {recursive: true, force: true}); }
 });
+
+test('R21: heredocs e substituições só atravessam fronteiras comprovadas', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'prontidao-r21-'));
+  try {
+    mkdirSync(join(dir, 'scripts'), {recursive: true});
+    writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
+    const check = (body: string, expected: string | null) => {
+      writeFileSync(join(dir, 'scripts', 'fixture.sh'), `#!/bin/sh\nsh -c '${body.replace(/'/g, "'\\''")}'\n`);
+      const out = runCollector({repoRoot: dir, evidenceFile: '', runBin: (bin, args) => stubCollectorBins(bin, args)});
+      for (const pillar of ['backup-restauracao', 'disco-memoria', 'alertas-logs']) {
+        assert.equal(out.coverage.find(c => c.tool === `prontidao:requisito:${pillar}`)?.status,
+          pillar === expected ? 'failed' : 'ok', `${body}: ${pillar}`);
+      }
+    };
+    for (const op of ['<<', '0<<', '3<<-', '<<-']) {
+      for (const inner of ['df -P /', 'npm run personal:backup', 'alertmanager']) {
+        check(`cat ${op}EOF\n${inner}\nEOF\necho "`, null);
+      }
+      check(`df -P /; cat ${op}EOF\nalertmanager\nEOF\necho "`, 'disco-memoria');
+    }
+    check('echo $(ca\\\nse x i\\\nn y) :; df -P /;; esac); echo "', null);
+    for (const head of ['ca\\\nse', 'ec\\\nho', 'printf\\\n', 'cat', '"echo"', 'env echo']) {
+      check(`echo $(${head} x) :; df -P /; echo "`, null);
+    }
+    for (const arg of ['in', 'case', 'if', "'in'", 'x\\ #']) {
+      check(`echo "$(printf '%s' ${arg})"; df -P /; echo "`, 'disco-memoria');
+    }
+    check(`echo "$(echo $(printf '%s' in))"; df -P /; echo "`, 'disco-memoria');
+    check('echo $(echo $var); df -P /; echo "', null);
+    check('echo $(echo data\ndf -P /); alertmanager; echo "', null);
+  } finally { rmSync(dir, {recursive: true, force: true}); }
+});

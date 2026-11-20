@@ -2388,40 +2388,50 @@ function classifyBackupOperation(binary, args, onIncomplete) {
 
 // Recover only lexical top-level segments. Substitutions are opaque data: their
 // contents must never introduce commands or close an enclosing quote. A substitution
-// is skipped only when its interior consists of simple words, quotes, escapes,
-// comments and nested substitutions; shell operators and compound syntax stop recovery.
+// is skipped only if each level starts with the literal, unquoted command echo or
+// printf, followed by whitespace or ')'. Arguments may contain simple lexical words,
+// quotes, escapes, comments and nested substitutions obeying the same rule. An
+// unquoted newline may only precede the closing ')' (apart from whitespace); other
+// expansions and shell operators stop recovery. No command semantics are inferred.
 // Completed outer segments and an unambiguous prefix before the affected word remain.
 function malformedShellPrefix(command) {
   const segments = [];
   let fragment = '', quote = '', escaped = false, wordStart = -1;
   const substitutionEnd = start => {
-    const stack = [{quote: '', parens: 1, wordStart: true}];
+    const stack = [{quote: '', wordStart: true, needCommand: true}];
     for (let i = start + 2; i < command.length; i++) {
       const frame = stack[stack.length - 1], ch = command[i];
+      if (frame.needCommand) {
+        if (/[ \t\n]/.test(ch)) continue;
+        const head = /^(?:echo|printf)(?=[ \t\n)])/.exec(command.slice(i));
+        if (!head) return -1;
+        frame.needCommand = false; frame.wordStart = false;
+        i += head[0].length - 1; continue;
+      }
       if (ch === '\\' && frame.quote !== "'") {
         if (i + 1 >= command.length) return -1;
         if (command[i + 1] !== '\n') frame.wordStart = false;
         i++; continue;
       }
       if (frame.quote === "'") { if (ch === "'") frame.quote = ''; continue; }
-      if (ch === '$' && command[i + 1] === '(') { frame.wordStart = false; stack.push({quote: '', parens: 1, wordStart: true}); i++; continue; }
+      if (ch === '$' && command[i + 1] === '(') { frame.wordStart = false; stack.push({quote: '', wordStart: true, needCommand: true}); i++; continue; }
       if (frame.quote === '"') {
         if (ch === '`' || ch === '$') return -1; // Only nested $(...) is supported.
         if (ch === '"') frame.quote = '';
         continue;
       }
       if (ch === "'" || ch === '"') { frame.quote = ch; frame.wordStart = false; continue; }
-      if (ch === '`' || (ch === '$' && command[i + 1] === '{')) return -1; // Unsupported nesting.
+      if (ch === '`' || ch === '$') return -1; // Unsupported expansion.
       if (ch === '#' && frame.wordStart) {
         const newline = command.indexOf('\n', i);
         if (newline < 0) return -1;
+        if (!/^[ \t\n]*\)/.test(command.slice(newline + 1))) return -1;
         frame.wordStart = true; i = newline; continue;
       }
-      // Compound commands and shell operators require a grammar, not parenthesis counting.
-      if (frame.wordStart && /^(?:case|esac|if|then|elif|else|fi|for|while|until|do|done|in|select|function|time|coproc|\{|\})(?=$|[ \t\n;|&()<>])/.test(command.slice(i))) return -1;
+      if (ch === '\n' && !/^[ \t\n]*\)/.test(command.slice(i + 1))) return -1;
       if (/[();|&<>${}]/.test(ch) && ch !== ')') return -1;
       frame.wordStart = /[ \t\n]/.test(ch);
-      if (ch === ')' && --frame.parens === 0) { stack.pop(); if (!stack.length) return i; }
+      if (ch === ')') { stack.pop(); if (!stack.length) return i; }
     }
     return -1;
   };
@@ -2459,11 +2469,16 @@ function malformedShellPrefix(command) {
       if (newline < 0) return segments;
       i = newline; continue;
     }
-    if (ch === '(' || ch === ')' || (ch === '<' && command[i + 1] === '<')) {
+    if (ch === '(' || ch === ')') {
       fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
     }
     const redirect = command.slice(i).match(SHELL_REDIRECT_AT_START);
-    if (redirect) { fragment += redirect[0]; i += redirect[0].length - 1; wordStart = -1; continue; }
+    if (redirect) {
+      if (/^\d*<</.test(redirect[0])) {
+        fragment = fragment.slice(0, wordStart < 0 ? fragment.length : wordStart); emit(); return segments;
+      }
+      fragment += redirect[0]; i += redirect[0].length - 1; wordStart = -1; continue;
+    }
     if (/[;|&\n]/.test(ch)) { if (!emit()) return segments; continue; }
     if (/[ \t\n]/.test(ch)) wordStart = -1;
     else if (wordStart < 0) wordStart = fragment.length;
