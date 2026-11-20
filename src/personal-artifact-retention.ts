@@ -25,7 +25,7 @@ import {VERIFICATION_MODULES} from './ledger.ts';
  */
 
 export const WORKTREE_IDLE_MS=2*60*60*1000;
-export const IMAGE_MIN_AGE_MS=2*60*60*1000;
+export const IMAGE_MIN_AGE_MS=24*60*60*1000;
 export const TEMP_IDLE_MS=24*60*60*1000;
 /** A round with registered temporaries but no run row at all (interrupted before the row existed) is only judged ended after this long. */
 export const ORPHAN_ROUND_MS=7*24*60*60*1000;
@@ -391,18 +391,23 @@ export async function closeRound(config:Installation,input:{projectId:string;rou
 const digestsIn=(text:string)=>new Set(text.match(/sha256:[a-f0-9]{64}/g)??[]);
 const here=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 
-/** Every digest the installation or any of its project checkouts pins, or that a verification run recorded. Any read failure other than a missing file throws. */
+/** Digests that protect an image. `pinned`: the installation or any of its project checkouts pins them, or a verification run recorded them.
+ * `retired`: images the native bootstrap still lists as retired (`execution.retiredImages`, `planning.retiredImageIds`) because a job may still need them.
+ * Any read failure other than a missing file throws. */
 async function protectedDigests(config:Installation,deps:RetentionDeps){
- const found=new Set<string>(digestsIn(JSON.stringify(config.nativeBootstrap??null)));
+ const pinned=new Set<string>(digestsIn(JSON.stringify(config.nativeBootstrap??null)));
+ const retired=new Set<string>();
+ const boot=config.nativeBootstrap as {planning?:{retiredImageIds?:string[]};execution?:{retiredImages?:{workerImage?:string;toolsImage?:string}[]}}|undefined;
+ for(const text of [...(boot?.planning?.retiredImageIds??[]),...(boot?.execution?.retiredImages??[]).flatMap(pair=>[pair.workerImage??'',pair.toolsImage??''])])for(const digest of digestsIn(text))retired.add(digest);
  const roots=new Set([deps.productRoot??here,...projectsOf(config).map(item=>item.repo)]);
  for(const root of roots)for(const module of VERIFICATION_MODULES){
   let text:string;
   try{text=await readFile(join(root,'deploy','modules',module,'digest.txt'),'utf8');}
   catch(error){if(errno(error,'ENOENT')||errno(error,'ENOTDIR'))continue;throw error;}
-  for(const digest of digestsIn(text))found.add(digest);
+  for(const digest of digestsIn(text))pinned.add(digest);
  }
- for(const image of await (deps.verifyRunImages??defaultVerifyRunImages)(config))for(const digest of digestsIn(image))found.add(digest);
- return found;
+ for(const image of await (deps.verifyRunImages??defaultVerifyRunImages)(config))for(const digest of digestsIn(image))pinned.add(digest);
+ return {pinned,retired};
 }
 
 async function dockerDaemonId(docker:NonNullable<RetentionDeps['docker']>){
@@ -411,8 +416,9 @@ async function dockerDaemonId(docker:NonNullable<RetentionDeps['docker']>){
  return result.code===0&&/^[A-Za-z0-9][A-Za-z0-9:_.-]{0,255}$/.test(id)?id:undefined;
 }
 
-type ImageFacts={digests:string[]};
-async function proveImage(entry:ImageEntry,pinned:Set<string>,docker:NonNullable<RetentionDeps['docker']>,now:number):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
+type ImageFacts={digests:string[];size:number|undefined};
+/** Judged again right before removal. Every doubt preserves; `docker image rm` is later run by id and never forced. */
+async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set<string>},docker:NonNullable<RetentionDeps['docker']>,now:number):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
  if(!entry.daemonId)return no('registro antigo sem identidade do daemon Docker');
  const daemonId=await dockerDaemonId(docker);
  if(!daemonId)return no('identidade do daemon Docker indisponível');
@@ -422,19 +428,31 @@ async function proveImage(entry:ImageEntry,pinned:Set<string>,docker:NonNullable
   const alive=await docker(['version','--format','{{.Server.Version}}']);
   return alive.code===0?{ok:false,reason:'a imagem já não existe no Docker',absent:true}:no('Docker indisponível');
  }
- let digests:string[];
+ let digests:string[],size:number|undefined;
  try{
-  const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoDigests?:string[]}[];
+  const [image]=JSON.parse(inspected.stdout) as {Id?:string;RepoDigests?:string[];Size?:number}[];
   if(image?.Id!==entry.imageId)return no('o id da imagem não é o registrado');
   digests=[image.Id,...(image.RepoDigests??[]).flatMap(item=>[...digestsIn(item)])];
+  size=Number.isSafeInteger(image.Size)&&image.Size!>=0?image.Size:undefined;
  }catch{return no('resposta ilegível do Docker');}
- if(digests.some(digest=>pinned.has(digest)))return no('digest fixado ou referenciado por exame');
+ if(digests.some(digest=>guard.retired.has(digest)))return no('imagem aposentada ainda referenciada pela instalação');
+ if(digests.some(digest=>guard.pinned.has(digest)))return no('digest fixado ou referenciado por exame');
  const age=now-entry.registeredAt;
  if(age<IMAGE_MIN_AGE_MS)return no(`registrada há ${hours(Math.max(age,0))} h (mínimo ${hours(IMAGE_MIN_AGE_MS)} h)`);
+ // Any container, running or stopped, created from this image or from one built on it.
  const containers=await docker(['container','ls','-a','--no-trunc','-q','--filter','ancestor='+entry.imageId]);
  if(containers.code!==0)return no('não foi possível listar contêineres');
  if(containers.stdout.trim())return no('há contêiner usando a imagem');
- return {ok:true,facts:{digests}};
+ // Second, independent look: the image id every existing container was created from.
+ const every=await docker(['container','ls','-a','--no-trunc','-q']);
+ if(every.code!==0)return no('não foi possível listar contêineres');
+ const ids=every.stdout.split('\n').map(line=>line.trim()).filter(Boolean);
+ if(ids.length){
+  const used=await docker(['container','inspect','--format','{{.Image}}',...ids]);
+  if(used.code!==0)return no('não foi possível inspecionar contêineres');
+  if(used.stdout.split('\n').some(line=>line.trim()===entry.imageId))return no('há contêiner usando a imagem');
+ }
+ return {ok:true,facts:{digests,size}};
 }
 
 // ---- Temporaries ---------------------------------------------------------------------------------------------
@@ -596,25 +614,41 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
   }catch{kept('worktree',label,'falha ao verificar; repita depois');}
  }
 
- let imageBytes=0,imageUnknown=0;
- const imageIds=[...new Set(registry.images.map(item=>item.imageId))];
- for(const id of imageIds){try{const size=await docker(['image','inspect','--format','{{.Size}}',id]);const value=Number(size.stdout.trim());if(size.code!==0||!Number.isSafeInteger(value)||value<0)throw Error();imageBytes+=value;}catch{imageUnknown++;}}
- lines.push(`imagens: não implementado, preservadas; ${(imageBytes/1e9).toFixed(3)} GB de tamanho nominal não liberados${imageUnknown?`; ${imageUnknown} tamanho(s) desconhecido(s)`:''}.`);
+ let imageBytes=0;
  if(registry.images.length){
-  let pinned:Set<string>|undefined;
-  try{pinned=await protectedDigests(config,deps);}catch{pinned=undefined;}
+  let guard:{pinned:Set<string>;retired:Set<string>}|undefined;
+  try{guard=await protectedDigests(config,deps);}catch{guard=undefined;}
   for(const entry of registry.images){
    const label=`imagem ${entry.imageId.slice(0,19)} (${entry.module})`;
-   if(!pinned){kept('image',label,'não foi possível ler os digests fixados e os exames');continue;}
+   if(!guard){kept('image',label,'não foi possível ler os digests fixados e os exames');continue;}
    try{
-    const proof=await proveImage(entry,pinned,docker,now());
-    if(!proof.ok){kept('image',label,proof.reason);continue;}
-    // There is no authoritative inventory and shared lock covering every installation on this daemon.
-    // Even a locally unpinned image can be pinned or selected by another installation.
-    kept('image',label,'pins de outras instalações no daemon não podem ser comprovados');
+    if(project(config,entry.projectId).economy?.imageRetention===false){kept('image',label,'retenção de imagens desligada neste projeto');continue;}
+    const proof=await proveImage(entry,guard,docker,now());
+    if(!proof.ok){
+     if('absent' in proof){
+      if(apply)await forget('image',entry.id,'dropped');
+      done('image');lines.push(`${label}: ${apply?'registro retirado':'registro seria retirado'} (${proof.reason}).`);
+     }else kept('image',label,proof.reason);
+     continue;
+    }
+    const nominal=proof.facts.size===undefined?'tamanho desconhecido':`${(proof.facts.size/1e9).toFixed(3)} GB nominais`;
+    if(!apply){done('image');imageBytes+=proof.facts.size??0;lines.push(`${label}: elegível (sem pin, sem contêiner, registrada há mais de ${hours(IMAGE_MIN_AGE_MS)} h; ${nominal}).`);continue;}
+    // Judged again with fresh pins and containers, so a change since the first look wins.
+    const fresh=await protectedDigests(config,deps);
+    const again=await proveImage(entry,fresh,docker,now());
+    if(!again.ok){kept('image',label,'mudou durante a retenção: '+again.reason);continue;}
+    // By id, no --force: Docker itself refuses an image that has children, several tags or a container.
+    const removed=await docker(['image','rm',entry.imageId]);
+    if(removed.code!==0){kept('image',label,'o Docker recusou a remoção');continue;}
+    const gone=await docker(['image','inspect','--format','{{.Id}}',entry.imageId]);
+    if(gone.code===0){kept('image',label,'a imagem continua no Docker após a remoção');continue;}
+    await forget('image',entry.id,'removed');
+    done('image');imageBytes+=again.facts.size??0;
+    lines.push(`${label}: removida (${again.facts.size===undefined?'tamanho desconhecido':`${(again.facts.size/1e9).toFixed(3)} GB nominais`}).`);
    }catch{kept('image',label,'falha ao verificar; repita depois');}
   }
  }
+ lines.push(`imagens: ${apply?'removidas':'elegíveis'} ${total.image.done}, ${(imageBytes/1e9).toFixed(3)} GB de tamanho nominal (camadas compartilhadas podem liberar menos).`);
 
  let root:string|undefined;
  try{root=await realpath(tempRoot(deps));}catch{root=undefined;}

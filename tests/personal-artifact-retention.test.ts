@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {existsSync,mkdirSync,realpathSync,statSync,symlinkSync,writeFileSync} from 'node:fs';
+import {existsSync,mkdirSync,realpathSync,rmSync,statSync,symlinkSync,writeFileSync} from 'node:fs';
 import {chmod,mkdtemp,readFile,rename,rm,utimes,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -18,7 +18,7 @@ const git=(cwd:string,...args:string[])=>execFileSync('git',['-c','core.hooksPat
 const image=(c:string)=>'sha256:'+c.repeat(64);
 
 type Lab={base:string;repo:string;data:string;tmp:string;config:Installation;projectId:string;calls:string[][];dockerCalls:string[][];deps:RetentionDeps;
- clock:{now:number};docker:{images:Map<string,{repoDigests:string[]}>;containers:Set<string>;mounts:Map<string,string[]>;alive:boolean;refuseRemoval:boolean};busy:Set<string>;runImages:string[]|Error};
+ clock:{now:number};docker:{images:Map<string,{repoDigests:string[];size?:number}>;hidden:Map<string,string>;containers:Set<string>;mounts:Map<string,string[]>;alive:boolean;refuseRemoval:boolean};busy:Set<string>;runImages:string[]|Error};
 
 async function lab():Promise<Lab>{
  const base=realpathSync(await mkdtemp(join(tmpdir(),'artifact-retention-')));
@@ -30,7 +30,7 @@ async function lab():Promise<Lab>{
  const projectId=randomUUID();
  const config={activation:'personal',dataDirectory:data,databaseUrl:'postgres://invalid.example/none',project:{id:projectId,label:'p',repo,owner:'owner'},projects:[]} as unknown as Installation;
  const calls:string[][]=[],dockerCalls:string[][]=[];
- const docker={images:new Map<string,{repoDigests:string[]}>(),containers:new Set<string>(),mounts:new Map<string,string[]>(),alive:true,refuseRemoval:false};
+ const docker={images:new Map<string,{repoDigests:string[];size?:number}>(),hidden:new Map<string,string>(),containers:new Set<string>(),mounts:new Map<string,string[]>(),alive:true,refuseRemoval:false};
  const busy=new Set<string>();
  const clock={now:Date.now()+3*HOUR};
  const result:Lab={base,repo,data,tmp,config,projectId,calls,dockerCalls,clock,docker,busy,runImages:[],deps:{},} as Lab;
@@ -53,9 +53,10 @@ async function lab():Promise<Lab>{
    if(a==='image'&&b==='inspect'){
     const id=args.at(-1)!,found=docker.images.get(id);
     if(!found)return {code:1,stdout:''};
-    return {code:0,stdout:args.includes('--format')?id+'\n':JSON.stringify([{Id:id,RepoDigests:found.repoDigests}])};
+    return {code:0,stdout:args.includes('--format')?id+'\n':JSON.stringify([{Id:id,RepoDigests:found.repoDigests,Size:found.size}])};
    }
-   if(a==='container'&&b==='ls'&&args.at(-1)==='-q')return {code:0,stdout:[...docker.mounts.keys()].join('\n')+'\n'};
+   if(a==='container'&&b==='ls'&&args.at(-1)==='-q')return {code:0,stdout:[...docker.mounts.keys(),...docker.hidden.keys()].join('\n')+'\n'};
+   if(a==='container'&&b==='inspect'&&args.includes('{{.Image}}'))return {code:0,stdout:args.slice(4).map(id=>docker.hidden.get(id)??'sha256:'+'f'.repeat(64)).join('\n')+'\n'};
    if(a==='container'&&b==='inspect')return {code:0,stdout:args.slice(4).flatMap(id=>docker.mounts.get(id)??[]).join('\n')+'\n'};
    if(a==='container'&&b==='ls'){
     const id=args.at(-1)!.replace('ancestor=','');
@@ -293,59 +294,93 @@ test('a damaged or foreign registry stops the run before anything is touched',as
 
 const digestFile=(root:string,module:string,text:string)=>{mkdirSync(join(root,'deploy','modules',module),{recursive:true});writeFileSync(join(root,'deploy','modules',module,'digest.txt'),text+'\n');};
 
-test('an unused candidate is preserved without proof of pins from other installations',async()=>{
+const DAY=24*HOUR;
+const registerOld=(l:Lab,id:string,module:'qa'|'banco'='qa',ageMs=3*DAY)=>registerCandidateImage(l.config,{projectId:l.projectId,module,imageId:id},{...l.deps,now:()=>l.clock.now-ageMs});
+const removals=(l:Lab)=>l.dockerCalls.filter(args=>args[0]==='image'&&args[1]==='rm');
+
+test('an unused, unpinned registered candidate older than 24 h is listed in the preview and removed on apply by id, never forced',async()=>{
  const l=await lab();
  try{
-  l.docker.images.set(image('a'),{repoDigests:[]});l.docker.images.set(image('b'),{repoDigests:[]});
-  await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('a')},{...l.deps,now:()=>Date.now()});
-  assert.match((await run(l,false)).join('\n'),/imagem sha256:aaaaaaaaaaaa \(qa\): preservado \(pins de outras instalações/);
+  l.docker.images.set(image('a'),{repoDigests:[],size:2_500_000_000});l.docker.images.set(image('b'),{repoDigests:[]});
+  await registerOld(l,image('a'));
+  const preview=(await run(l,false)).join('\n');
+  assert.match(preview,/imagem sha256:aaaaaaaaaaaa \(qa\): elegível \(.*2\.500 GB nominais/);
+  assert.match(preview,/imagens: elegíveis 1, 2\.500 GB/);
   assert.ok(l.docker.images.has(image('a')));
-  assert.match((await run(l,true)).join('\n'),/pins de outras instalações/);
-  assert.equal(l.docker.images.has(image('a')),true);
+  assert.deepEqual(removals(l),[]);
+  const applied=(await run(l,true)).join('\n');
+  assert.match(applied,/imagem sha256:aaaaaaaaaaaa \(qa\): removida \(2\.500 GB nominais\)/);
+  assert.match(applied,/imagens: removidas 1, 2\.500 GB/);
+  assert.match(applied,/imagens 1 removido\(s\) e 0 preservada\(s\)/);
+  assert.equal(l.docker.images.has(image('a')),false);
   assert.ok(l.docker.images.has(image('b')),'an unregistered image is never touched');
-  const removals=l.dockerCalls.filter(args=>args[1]==='rm');
-  assert.deepEqual(removals,[]);
-  assert.equal(l.dockerCalls.some(args=>args.includes('prune')||args.includes('-f')||args.includes('--force')),false);
+  assert.deepEqual(removals(l),[['image','rm',image('a')]]);
+  assert.equal(l.dockerCalls.some(args=>args.includes('prune')||args.includes('-f')||args.includes('--force')||args.includes('rmi')),false);
   const registry=JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8'));
-  assert.equal(registry.images.length,1);
+  assert.equal(registry.images.length,0);
+  assert.equal(registry.history.at(-1).action,'removed');
  }finally{await cleanup(l);}
 });
 
-test('an image stays when pinned by a product or project digest.txt, by the native bootstrap, by a verification run, by a container or when too young',async()=>{
+test('an image stays when pinned by a product or project digest.txt, by the native bootstrap, by a retired entry, by a verification run, by a container (running, stopped or hidden from the ancestor filter) or when younger than 24 h',async()=>{
  const l=await lab();
  try{
-  const kinds=['1','2','3','4','5','6'];
-  for(const k of kinds)l.docker.images.set(image(k),{repoDigests:k==='2'?['registry.example/mod@'+image('9')]:[]});
-  for(const k of kinds)await registerCandidateImage(l.config,{projectId:l.projectId,module:'banco',imageId:image(k)},{...l.deps,now:()=>Date.now()-(k==='6'?0:3*HOUR)});
+  const kinds=['1','2','3','4','5','6','7','8','9'];
+  for(const k of kinds)l.docker.images.set(image(k),{repoDigests:k==='2'?['registry.example/mod@'+image('c')]:[]});
+  for(const k of kinds)await registerOld(l,image(k),'banco',k==='6'?DAY-HOUR:3*DAY);
   digestFile(l.deps.productRoot!,'qa',image('1'));
-  digestFile(l.repo,'banco','registry.example/mod@'+image('9'));
-  (l.config as unknown as {nativeBootstrap:unknown}).nativeBootstrap={qa:{image:image('3')}};
+  digestFile(l.repo,'banco','registry.example/mod@'+image('c'));
+  (l.config as unknown as {nativeBootstrap:unknown}).nativeBootstrap={qa:{image:image('3')},planning:{imageId:image('d'),retiredImageIds:[image('7')]},
+   execution:{workerImage:image('d'),toolsImage:image('e'),retiredImages:[{workerImage:image('8'),toolsImage:image('e')}]}};
   l.runImages=[image('4')];
   l.docker.containers.add(image('5'));
-  l.clock.now=Date.now()+HOUR/2;
+  l.docker.hidden.set('stopped1',image('9'));
   const text=(await run(l,true)).join('\n');
-  assert.equal(l.docker.images.size,6);
+  assert.equal(l.docker.images.size,9);
+  assert.deepEqual(removals(l),[]);
   assert.match(text,/sha256:111111111111 \(banco\): preservado \(digest fixado ou referenciado por exame\)/);
   assert.match(text,/sha256:222222222222 \(banco\): preservado \(digest fixado/);
   assert.match(text,/sha256:333333333333 \(banco\): preservado \(digest fixado/);
   assert.match(text,/sha256:444444444444 \(banco\): preservado \(digest fixado/);
-  assert.match(text,/sha256:555555555555 \(banco\): preservado \(há contêiner|preservado \(registrada há/);
-  assert.match(text,/sha256:666666666666 \(banco\): preservado \(registrada há 0 h/);
-  // With enough age, only the container still protects image 5.
-  l.clock.now=Date.now()+5*HOUR;
-  const later=(await run(l,true)).join('\n');
-  assert.match(later,/sha256:555555555555 \(banco\): preservado \(há contêiner usando a imagem\)/);
-  assert.match(later,/sha256:666666666666 \(banco\): preservado \(pins de outras instalações/);
-  assert.deepEqual([...l.docker.images.keys()].sort(),['1','2','3','4','5','6'].map(image));
+  assert.match(text,/sha256:555555555555 \(banco\): preservado \(há contêiner usando a imagem\)/);
+  assert.match(text,/sha256:666666666666 \(banco\): preservado \(registrada há 23 h \(mínimo 24 h\)\)/);
+  assert.match(text,/sha256:777777777777 \(banco\): preservado \(imagem aposentada ainda referenciada/);
+  assert.match(text,/sha256:888888888888 \(banco\): preservado \(imagem aposentada ainda referenciada/);
+  assert.match(text,/sha256:999999999999 \(banco\): preservado \(há contêiner usando a imagem\)/);
+  assert.match(text,/imagens 0 removido\(s\) e 9 preservada\(s\)/);
+  // Once the blockers are gone, only the three that were never blocked by anything else go.
+  l.docker.containers.delete(image('5'));l.docker.hidden.clear();l.runImages=[];
+  (l.config as unknown as {nativeBootstrap:unknown}).nativeBootstrap=undefined;
+  rmSync(join(l.deps.productRoot!,'deploy'),{recursive:true,force:true});rmSync(join(l.repo,'deploy'),{recursive:true,force:true});
+  l.clock.now+=2*HOUR;
+  await run(l,true);
+  assert.deepEqual([...l.docker.images.keys()],[]);
  }finally{await cleanup(l);}
 });
 
-test('unreadable pins, unavailable Docker and absent images preserve their records',async()=>{
+test('the per-project switch economy.imageRetention=false keeps that project images, and the preview never changes anything',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  await registerOld(l,image('a'));
+  (l.config.project as unknown as {economy:{imageRetention:boolean}}).economy={imageRetention:false};
+  const text=(await run(l,true)).join('\n');
+  assert.match(text,/preservado \(retenção de imagens desligada neste projeto\)/);
+  assert.ok(l.docker.images.has(image('a')));
+  assert.deepEqual(removals(l),[]);
+  (l.config.project as unknown as {economy:{imageRetention:boolean}}).economy={imageRetention:true};
+  const registryBefore=await readFile(join(l.data,'artifact-retention','registry.json'),'utf8');
+  await run(l,false);
+  assert.equal(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8'),registryBefore);
+  assert.ok(l.docker.images.has(image('a')));
+ }finally{await cleanup(l);}
+});
+
+test('unreadable pins, unavailable Docker, a refusal by Docker and absent images never remove an image',async()=>{
  const l=await lab();
  try{
   l.docker.images.set(image('a'),{repoDigests:[]});l.docker.images.set(image('b'),{repoDigests:[]});
-  await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('a')},{...l.deps,now:()=>0});
-  await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:image('b')},{...l.deps,now:()=>0});
+  await registerOld(l,image('a'));await registerOld(l,image('b'));
   l.runImages=new Error('db down');
   assert.match((await run(l,true)).join('\n'),/preservado \(não foi possível ler os digests fixados e os exames\)/);
   l.runImages=[];
@@ -357,13 +392,33 @@ test('unreadable pins, unavailable Docker and absent images preserve their recor
   assert.match((await run(l,true)).join('\n'),/preservado \(identidade do daemon Docker indisponível\)/);
   l.docker.alive=true;
   l.docker.refuseRemoval=true;
-  assert.match((await run(l,true)).join('\n'),/pins de outras instalações/);
+  assert.match((await run(l,true)).join('\n'),/preservado \(o Docker recusou a remoção\)/);
   assert.equal(l.docker.images.size,2);
   l.docker.refuseRemoval=false;
   l.docker.images.delete(image('b'));
+  const text=(await run(l,false)).join('\n');
+  assert.match(text,/sha256:bbbbbbbbbbbb \(qa\): registro seria retirado \(a imagem já não existe no Docker\)/);
+  const applied=(await run(l,true)).join('\n');
+  assert.match(applied,/sha256:bbbbbbbbbbbb \(qa\): registro retirado \(a imagem já não existe no Docker\)/);
+  assert.equal(l.docker.images.size,0,'image a was removed only once nothing blocked it');
+ }finally{await cleanup(l);}
+});
+
+test('a change between the proof and the removal (a container appears) keeps the image',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  await registerOld(l,image('a'));
+  const original=l.deps.docker!;
+  let looks=0;
+  l.deps.docker=async args=>{
+   if(args[0]==='container'&&args[1]==='ls'&&args.includes('--filter')&&++looks===2)l.docker.containers.add(image('a'));
+   return original(args);
+  };
   const text=(await run(l,true)).join('\n');
-  assert.match(text,/sha256:bbbbbbbbbbbb \(qa\): preservado \(a imagem já não existe no Docker\)/);
-  assert.equal(l.docker.images.size,1);
+  assert.match(text,/preservado \(mudou durante a retenção: há contêiner usando a imagem\)/);
+  assert.ok(l.docker.images.has(image('a')));
+  assert.deepEqual(removals(l),[]);
  }finally{await cleanup(l);}
 });
 
@@ -907,13 +962,3 @@ test('interruption after worktree move leaves a durable reported quarantine',asy
  }finally{await cleanup(l);}
 });
 
-test('image report states preservation and known nominal gigabytes',async()=>{
- const l=await lab();
- try{
-  const id=image('b');l.docker.images.set(id,{repoDigests:[]});
-  await registerCandidateImage(l.config,{projectId:l.projectId,module:'qa',imageId:id},l.deps);
-  const original=l.deps.docker!;l.deps.docker=async args=>args.includes('{{.Size}}')?{code:0,stdout:'2500000000'}:original(args);
-  assert.match((await run(l,true)).join('\n'),/imagens: não implementado, preservadas; 2\.500 GB/);
-  assert.ok(l.docker.images.has(id));
- }finally{await cleanup(l);}
-});
