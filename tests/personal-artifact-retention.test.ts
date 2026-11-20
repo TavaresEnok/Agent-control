@@ -705,3 +705,65 @@ test('work/ of jobs is retained first, and a damaged artifact registry never sto
   assert.deepEqual((await runRetentionStages(l.config,false,{jobRetention,artifactRetention})).slice(0,1),['jobs apply=false']);
  }finally{await cleanup(l);}
 });
+
+type RoundState='terminal'|'running'|'missing';
+const withStatus=(l:Lab,state:RoundState|Error,roundId='round-1'):RetentionDeps=>({...l.deps,roundStatus:async(_c,rounds)=>{
+ if(state instanceof Error)throw state;
+ assert.ok(rounds.every(r=>r.projectId===l.projectId));
+ return new Map(rounds.map(r=>[r.projectId+':'+r.roundId,r.roundId===roundId?state:'running' as RoundState]));
+}});
+const roundsIn=async(l:Lab)=>JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8')).rounds as {roundId:string;endedAt:number}[];
+
+test('a round whose run is terminal in the database but was never closed is closed durably, then ages 24 h before removal',async()=>{
+ const l=await lab();
+ try{
+  const path=makeTemp(l,'ac-retomada-cccc-3');
+  await registerTemp(l,path);
+  const old=new Date(Date.now()-72*HOUR);await utimes(path,old,old);
+  // Preview reports and writes nothing.
+  assert.match((await runPersonalArtifactRetention(l.config,false,withStatus(l,'terminal'))).join('\n'),/rodada round-1: encerramento seria registrado/);
+  assert.equal((await roundsIn(l)).length,0);
+  // Apply closes the round at "now" and still preserves the directory.
+  const first=(await runPersonalArtifactRetention(l.config,true,withStatus(l,'terminal'))).join('\n');
+  assert.match(first,/encerramento registrado/);
+  assert.match(first,/preservado \(rodada encerrada há 0 h/);
+  assert.ok(existsSync(path));
+  assert.equal((await roundsIn(l)).length,1);
+  l.clock.now+=25*HOUR;
+  assert.match((await runPersonalArtifactRetention(l.config,true,withStatus(l,'terminal'))).join('\n'),/ac-retomada-cccc-3: removido/);
+  assert.equal(existsSync(path),false);
+ }finally{await cleanup(l);}
+});
+
+test('a round still running, unreadable, or without a run row for less than 7 days is never closed by reconciliation',async()=>{
+ const l=await lab();
+ try{
+  const path=makeTemp(l,'ac-retomada-dddd-4');
+  await registerTemp(l,path);
+  l.clock.now=Date.now()+30*HOUR;
+  for(const state of ['running','missing',new Error('db down')] as const){
+   const out=(await runPersonalArtifactRetention(l.config,true,withStatus(l,state))).join('\n');
+   assert.match(out,/rodada round-1: sem encerramento registrado, preservada/);
+   assert.equal((await roundsIn(l)).length,0);
+   assert.ok(existsSync(path));
+  }
+  assert.match((await runPersonalArtifactRetention(l.config,true,{...l.deps,roundStatus:async()=>new Map()})).join('\n'),/estado desconhecido/);
+ }finally{await cleanup(l);}
+});
+
+test('a round interrupted before its run row existed is closed only after 7 days, and its temporary then waits 24 h more',async()=>{
+ const l=await lab();
+ try{
+  const path=makeTemp(l,'ac-retomada-eeee-5');
+  await registerTemp(l,path);
+  const base=Date.now();
+  l.clock.now=base+6*24*HOUR;
+  assert.match((await runPersonalArtifactRetention(l.config,true,withStatus(l,'missing'))).join('\n'),/sem linha de execução, aguardando 168 h/);
+  l.clock.now=base+8*24*HOUR;
+  const out=(await runPersonalArtifactRetention(l.config,true,withStatus(l,'missing'))).join('\n');
+  assert.match(out,/encerramento registrado \(sem linha de execução\)/);
+  assert.ok(existsSync(path));
+  l.clock.now+=25*HOUR;
+  assert.match((await runPersonalArtifactRetention(l.config,true,withStatus(l,'missing'))).join('\n'),/ac-retomada-eeee-5: removido/);
+ }finally{await cleanup(l);}
+});

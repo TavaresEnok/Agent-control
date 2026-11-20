@@ -28,6 +28,8 @@ import {VERIFICATION_MODULES} from './ledger.ts';
 export const WORKTREE_IDLE_MS=2*60*60*1000;
 export const IMAGE_MIN_AGE_MS=2*60*60*1000;
 export const TEMP_IDLE_MS=24*60*60*1000;
+/** A round with registered temporaries but no run row at all (interrupted before the row existed) is only judged ended after this long. */
+export const ORPHAN_ROUND_MS=7*24*60*60*1000;
 const HISTORY_MAX=200;
 const MARKER='.ac-retention-owner';
 const imageIdPattern=/^sha256:[a-f0-9]{64}$/;
@@ -63,6 +65,9 @@ export type RetentionDeps={
  processInside?:(path:string)=>Promise<boolean>;
  /** Images named by verification runs (`ac_verify_runs.collector_image`). Failure keeps every image. */
  verifyRunImages?:(config:Installation)=>Promise<string[]>;
+ /** What the database says about each round id of a project: `terminal` (done/failed), `running`, or `missing` (no run row).
+  * Failure or any other answer keeps everything. The default reads `ac_verify_runs` scoped to the project. */
+ roundStatus?:(config:Installation,rounds:{projectId:string;roundId:string}[])=>Promise<Map<string,'terminal'|'running'|'missing'>>;
  /** Directory that holds round temporaries. Defaults to the canonical system temporary directory. */
  tmpRoot?:string;
  /** Root of this product checkout, where `deploy/modules/<modulo>/digest.txt` pins the module images. */
@@ -117,6 +122,21 @@ async function defaultVerifyRunImages(config:Installation){
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
  try{return (await pool.query<{collector_image:string}>('SELECT DISTINCT collector_image FROM ac_verify_runs WHERE collector_image IS NOT NULL')).rows.map(row=>row.collector_image);}
  finally{await pool.end();}
+}
+
+async function defaultRoundStatus(config:Installation,rounds:{projectId:string;roundId:string}[]){
+ const result=new Map<string,'terminal'|'running'|'missing'>();
+ const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
+ try{
+  for(const round of rounds){
+   if(!z.uuid().safeParse(round.roundId).success)continue; // not a run id: nobody can vouch for it
+   const row=(await pool.query<{project_id:string;status:string}>('SELECT project_id::text AS project_id,status FROM ac_verify_runs WHERE id=$1',[round.roundId])).rows[0];
+   if(!row)result.set(round.projectId+':'+round.roundId,'missing');
+   else if(row.project_id!==round.projectId)continue; // another project's run: unknown here
+   else result.set(round.projectId+':'+round.roundId,row.status==='done'||row.status==='failed'?'terminal':'running');
+  }
+  return result;
+ }finally{await pool.end();}
 }
 
 // ---- Registry ------------------------------------------------------------------------------------------------
@@ -451,8 +471,34 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
  if(typeof apply!=='boolean')throw new Refusal('MAINTENANCE_USAGE');
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
  const git=deps.git??defaultGit,docker=deps.docker??defaultDocker,now=deps.now??Date.now,processInside=deps.processInside??defaultProcessInside;
- const registry=await loadRegistry(config);
+ let registry=await loadRegistry(config);
  const lines:string[]=[];
+ // Durable end of rounds: a crash between the terminal transition and `endRound`, or before the run row existed, leaves
+ // temporaries whose round was never closed. The database, not the process memory, decides; any doubt keeps them.
+ const unclosed=new Map<string,{projectId:string;roundId:string;first:number}>();
+ for(const temp of registry.temps){
+  const key=temp.projectId+':'+temp.roundId;
+  if(registry.rounds.some(round=>round.projectId===temp.projectId&&round.roundId===temp.roundId))continue;
+  const seen=unclosed.get(key);
+  if(!seen||temp.registeredAt<seen.first)unclosed.set(key,{projectId:temp.projectId,roundId:temp.roundId,first:temp.registeredAt});
+ }
+ if(unclosed.size){
+  let states:Map<string,'terminal'|'running'|'missing'>|undefined;
+  try{states=await (deps.roundStatus??defaultRoundStatus)(config,[...unclosed.values()].map(({projectId,roundId})=>({projectId,roundId})));}catch{states=undefined;}
+  for(const [key,round] of unclosed){
+   const label=`rodada ${round.roundId}`;
+   const state=states?.get(key);
+   const orphan=state==='missing'&&now()-round.first>=ORPHAN_ROUND_MS;
+   if(state!=='terminal'&&!orphan){
+    lines.push(`${label}: sem encerramento registrado, preservada (${!states?'banco indisponível':state==='running'?'execução ainda em andamento':state==='missing'?'sem linha de execução, aguardando '+hours(ORPHAN_ROUND_MS)+' h':'estado desconhecido'}).`);
+    continue;
+   }
+   if(!apply){lines.push(`${label}: encerramento seria registrado (${state==='terminal'?'execução terminal no banco':'sem linha de execução há mais de '+hours(ORPHAN_ROUND_MS)+' h'}).`);continue;}
+   try{await closeRound(config,{projectId:round.projectId,roundId:round.roundId},{now});lines.push(`${label}: encerramento registrado (${state==='terminal'?'execução terminal no banco':'sem linha de execução'}); os temporários envelhecem 24 h a partir de agora.`);}
+   catch{lines.push(`${label}: encerramento não pôde ser registrado, preservada.`);}
+  }
+  if(apply)registry=await loadRegistry(config);
+ }
  const total={worktree:{done:0,kept:0},image:{done:0,kept:0},temp:{done:0,kept:0}};
  const done=(kind:keyof typeof total)=>{total[kind].done++;};
  const kept=(kind:keyof typeof total,label:string,reason:string)=>{total[kind].kept++;lines.push(`${label}: preservado (${reason}).`);};
