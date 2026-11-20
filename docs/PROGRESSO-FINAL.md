@@ -1870,3 +1870,25 @@ FIM
 - 20/11/2026 13:34 UTC — Isolada a falha independente de arquitetura: o coletor devolveu 3.047 achados para um contrato de até 999. Correção e teste atribuídos a trabalhador na bancada do produto.
 - 20/11/2026 13:34 UTC — A função de renovação do produto confirmou renewed na conta examinadora Enok Max, sob lock da conta. Renovação manual dispensada. QA retomado na revisão integrada; arquitetura aguarda a imagem corrigida.
 - 20/11/2026 13:34 UTC — Iniciada a CLI personal:qa para qa-renovado-posjanela.
+- 20/11/2026 13:37 UTC — Ordem limite-arquitetura em claude-sonnet-5-5-high encerrou com código 0.
+- 20/11/2026 13:39 UTC — Revisão independente revisao-limite-arquitetura concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 13:39 UTC — Iniciada ordem grave-limite-arquitetura-r2 em claude-opus-5-5-medium (agy-opus), no worktree próprio.
+- 20/11/2026 13:39 UTC — Arquitetura 066494af passou no laboratório com imagem candidata. O Sol apontou falha no teste abaixo do limite e casos de escolha das evidências sob truncamento. Segunda rodada enviada ao Opus medium via Antigravity. A imagem instalada segue no digest anterior.
+- 20/11/2026 13:41 UTC — No checkout integrado 21f692d, passaram a compilação Go, go vet, go test -race ./... e os 38 testes operacionais. O primeiro ensaio operacional usou /tmp sem permissão de execução e falhou no script de teste; a repetição em contêiner com a permissão correta passou.
+- 20/11/2026 13:41 UTC — Iniciada a CLI personal:verify para seguranca-estatica-posjanela.
+- 20/11/2026 13:41 UTC — A CLI personal:verify de seguranca-estatica-posjanela encerrou com código 1.
+- 20/11/2026 13:43 UTC — Ordem grave-limite-arquitetura-r2 em claude-opus-5-5-medium encerrou com código 0.
+- 20/11/2026 13:44 UTC — Revisão independente revisao-arquitetura-r2 concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 13:45 UTC — Iniciada ordem arq-vinculo-final em claude-sonnet-5-5-high (agy-sonnet), no worktree próprio.
+- 20/11/2026 13:45 UTC — COTA — claude-sonnet-5-5-high (agy-sonnet) informou limite na ordem arq-vinculo-final.
+- 20/11/2026 13:45 UTC — Iniciada ordem arq-vinculo-final em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 13:46 UTC — Homologação 21f692d recapturada após a integração. As 49 rotas abriram com a sessão de demonstração e corresponderam a 42 destinos. Os 21 pares usam HTML e assets da compilação atual. Segurança estática aguardará QA liberar o projeto, conforme a trava da própria CLI.
+- 20/11/2026 13:47 UTC — Ordem arq-vinculo-final em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 13:48 UTC — Revisão independente revisao-arquitetura-r3 concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 13:49 UTC — A imagem candidata sobre 34ce0ce6 passou no contrato do NexoISP com 1.516 medições de cobertura e 999 achados, além do laboratório. O Sol identificou uma seleção dependente da ordem em linhas compartilhadas; aberta regressão para o caso.
+- 20/11/2026 13:49 UTC — Iniciada ordem arq-cobertura-compartilhada em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 13:50 UTC — Ordem arq-cobertura-compartilhada em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 13:50 UTC — Antes da troca de imagem de arquitetura, guardados o digest anterior e o inventário de camadas em nexo-antes-imagem-arquitetura-20261120-Z8WidL. Docker confirmou a presença da imagem anterior para a reversão. O backup integral da instalação já teve a restauração conferida.
+- 20/11/2026 13:50 UTC — Revisão independente revisao-arquitetura-r4 concluída pelo Sol medium em modo somente leitura.
+- 20/11/2026 13:51 UTC — Arquitetura integrada em f49769c4, com digest sha256:c608f169df6b. TypeScript, 41 testes, laboratório e publicação do contrato sobre o checkout real passaram. Sol medium aceitou 33a951b8. Iniciada nova CLI na instalação.
+- 20/11/2026 13:51 UTC — Iniciada a CLI personal:arquitetura para arquitetura-integrada-posjanela.
