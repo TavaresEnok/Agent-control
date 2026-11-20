@@ -1494,3 +1494,7 @@ PAUSADO-COTA
 - 20/11/2026 00:47 UTC — trabalho-C-LAB-C9-ATRIBUICAO-R2 iniciado em final-c9-lab-atribuicao por terra high.
 - 20/11/2026 00:48 UTC — C-LAB-C9-ATRIBUICAO-R2 encerrado com código 0.
 - 20/11/2026 00:48 UTC — Correção c9-lab-atribuicao recebida em 72095cb0. Revisão Sol high somente leitura solicitada.
+- 20/11/2026 00:48 UTC — revisor-C-ACEITE-LAB-C9-ATRIBUICAO-R2 iniciado em agent-control por Sol high normal somente leitura.
+- 20/11/2026 00:49 UTC — C-ACEITE-LAB-C9-ATRIBUICAO-R2 encerrado com código 0.
+- 20/11/2026 00:50 UTC — Em 72095cb0, o gerente voltou a executar TypeScript e o arquivo completo do laboratório sobre a imagem C9 fixada. Os cinco casos passaram sem pulos, com conferência dos escopos e dos achados por arquivo e linha.
+- 20/11/2026 00:50 UTC — Concilia a cobertura por arquivo com o escopo e a ferramenta da fixture. Ordem C-LAB-C9-ATRIBUICAO-R3 em worktree separado conforme 43f1c664.
