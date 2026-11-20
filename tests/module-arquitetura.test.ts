@@ -1023,6 +1023,31 @@ test('limites do contrato: achado sem vínculo válido é omitido e não ocupa a
   assert.ok(byOwn.coverage.some(item => item.files?.includes('a.ts')));
 });
 
+test('limites do contrato: linha compartilhada já retida é preferida e a saída independe da ordem das linhas', () => {
+  const row = (tool: string, files: string[]): BoundRow => ({tool, version: '1', status: 'ok', files, detail: `arquivos=${files.join(',')}`});
+  const rows = [row('knip', ['b.ts']), row('knip', ['a.ts', 'b.ts']), row('jscpd', ['z.ts'])];
+  const finding = (file: string, severity: 'alta' | 'media') => ({tool: 'knip', rule: 'R', file, line: 1, severity, message: `m ${file}`, evidence: `e ${file}`});
+  const findings = [finding('b.ts', 'media'), finding('a.ts', 'alta')];
+  const permutations = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+  const outputs = permutations.map(order => boundCollectorOutput({coverage: order.map(index => rows[index]), findings}, {maxCoverage: 2, maxFindings: 999}));
+  for (const out of outputs) {
+    assert.deepEqual(out.findings.map(item => item.file), ['a.ts', 'b.ts']);
+    assert.deepEqual(out.coverage.map(item => item.files ?? item.tool), [['a.ts', 'b.ts'], 'limites-do-coletor']);
+    assert.match(out.coverage.at(-1)!.detail, /achados_retidos=2; achados_omitidos=0;/);
+  }
+  assert.deepEqual(outputs.map(out => JSON.stringify(out)), outputs.map(() => JSON.stringify(outputs[0])));
+});
+
+test('limites do contrato: files vazio não vincula achados; só a linha ok sem files é genérica', () => {
+  const empty: BoundRow = {tool: 'knip', version: '1', status: 'ok', files: [], detail: 'arquivos=0'};
+  const coverage: BoundRow[] = [empty, {tool: 'knip', version: '1', status: 'ok', files: ['b.ts'], detail: 'b'},
+    {tool: 'jscpd', version: '1', status: 'ok', files: ['c.ts'], detail: 'c'}, {tool: 'jscpd', version: '1', status: 'ok', files: ['d.ts'], detail: 'd'}];
+  const finding = (file: string) => ({tool: 'knip', rule: 'R', file, line: 1, severity: 'alta' as const, message: `m ${file}`, evidence: `e ${file}`});
+  const out = boundCollectorOutput({coverage, findings: [finding('a.ts'), finding('b.ts')]}, {maxCoverage: 3, maxFindings: 999});
+  assert.deepEqual(out.findings.map(item => item.file), ['b.ts']);
+  assert.match(out.coverage.at(-1)!.detail, /achados_retidos=1; achados_omitidos=1;/);
+});
+
 test('runCollector entrega no máximo 999 achados quando a ferramenta reporta milhares e valida no hospedeiro', () => {
   const repo = mkdtempSync(join(tmpdir(), 'arch-findings-limit-'));
   try {

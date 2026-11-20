@@ -1388,12 +1388,17 @@ export function boundCollectorOutput({coverage, findings}, limits = {}) {
   let withoutFileRow = 0;
   // vínculo aceito pelo hospedeiro (validateModuleCollectorPublication): linha ok da mesma
   // ferramenta, sem lista de arquivos (já retida) ou com a lista contendo o arquivo do achado
-  const linkedTools = new Set([...kept].filter(index => coverage[index].status === 'ok').map(index => coverage[index].tool));
+  // (`files: []` é lista presente e vazia: não cobre arquivo algum, só `files` ausente é genérico)
+  const linkedTools = new Set([...kept]
+    .filter(index => coverage[index].status === 'ok' && coverage[index].files === undefined)
+    .map(index => coverage[index].tool));
   for (const entry of ordered) {
     if (selected.size >= maxFindings) break;
     const {finding} = entry;
-    const own = linkedTools.has(finding.tool) ? []
-      : (byKey.get(`${finding.tool}\0${finding.file}`) ?? []).filter(index => coverage[index].status === 'ok').slice(0, 1);
+    // linha própria válida: prefere uma já retida (compartilhada); senão a primeira pela ordem canônica
+    const candidates = linkedTools.has(finding.tool) ? []
+      : (byKey.get(`${finding.tool}\0${finding.file}`) ?? []).filter(index => coverage[index].status === 'ok');
+    const own = candidates.length ? [candidates.find(index => kept.has(index)) ?? [...candidates].sort(byCanonical)[0]] : [];
     // sem vínculo válido no conjunto limitado o achado é omitido (contado entre as omissões)
     // e não ocupa vaga: os elegíveis seguintes continuam sendo selecionados
     if (!linkedTools.has(finding.tool) && !own.length) continue;
