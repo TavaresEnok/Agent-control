@@ -461,4 +461,11 @@ independentes e ligadas por padrão quando omitidas. `map` controla o mapa
 compacto enviado ao examinador dos módulos 1 a 10. `measurement` controla o
 registro de observações de tokens de jobs nativos desse projeto; os recibos
 físicos permanecem preservados. A mudança exige reiniciar o runtime para ser
-aplicada aos supervisores. A configuração de lotes ainda não está disponível.
+aplicada aos supervisores. 
+
+Exame em lotes (módulos 2 a 9): `"economy": {"batch": false}` desliga; `batchTokens`
+(padrão 40000) e `batchFiles` (padrão 8) ajustam o lote. Um lote é uma só chamada
+com a lista de checagem uma vez; a resposta, o recibo de leitura (`requestId`,
+`promptDigest`, `binding`) e a cobertura continuam por arquivo. Um arquivo
+inválido ou com achado alto repete sozinho, com a sessão nativa ligada ao arquivo;
+um arquivo maior que o orçamento vai sozinho. Os módulos 1 e 10 ainda não usam lote.

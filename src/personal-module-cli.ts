@@ -354,6 +354,7 @@ export async function runPersonalModuleCli(
       const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
         mapEnabled: project.economy?.map,
+        batch: project.economy?.batch === false ? false : {tokens: project.economy?.batchTokens ?? 40_000, files: project.economy?.batchFiles ?? 8},
         loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
         ...(waitForClaudeQuota ? {waitForClaudeQuota: true} : {}),
         ...(deps?.clock ? {clock: deps.clock} : {}),

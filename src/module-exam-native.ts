@@ -12,6 +12,8 @@ import {
   examineFunctionalModule,
   CLAUDE_QUOTA_RETRY_INTERVAL_MS,
   type ModuleExamInput,
+  DEFAULT_MODULE_EXAM_BATCH,
+  type ModuleExamBatch,
   type ModuleExamResult,
   type ModuleExamReviewTarget,
   type ModuleExamSeat,
@@ -430,6 +432,8 @@ async function refreshClaudeExamQuotaForRetry(
 
 export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | 'runtime' | 'signal'> & {
   mapEnabled?: boolean;
+  /** Batch limits; `false` disables batching. Defaults to the product limits. */
+  batch?: ModuleExamBatch | false;
   loadRuntime: () => Promise<ModuleExamRuntime>;
   waitForClaudeQuota?: boolean;
   clock?: ModuleExamClock;
@@ -477,6 +481,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
         }
       : undefined;
     return examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal, mapEnabled: input.mapEnabled,
+      ...(input.batch === false ? {} : {batch: input.batch ?? DEFAULT_MODULE_EXAM_BATCH}),
       ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
       worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
       reserve: reservations.reserve,

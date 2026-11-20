@@ -75,6 +75,12 @@ export type ModuleExamClaudeQuotaWait = {
   signal?: AbortSignal;
 };
 
+type Prepared = {file: ModuleExamMap['files'][number]; row: ModuleExamCoverage; code: string; limited: boolean;
+  sent: unknown[]; sentRoutes: Set<string>; prompt: Record<string, unknown>; sourceDigest: string; complete: boolean; promptDigest: string; lines: string[]};
+/** Batch limits for the functional examiner: input-token budget and file count per call. Absent or files < 2 means one call per file. */
+export type ModuleExamBatch = {tokens: number; files: number};
+export const DEFAULT_MODULE_EXAM_BATCH: ModuleExamBatch = {tokens: 40_000, files: 8};
+
 export type ModuleExamInput = {
   module: VerificationModule; intentId: string; map: ModuleExamMap; findings: readonly ModuleRawFinding[]; commit?: string;
   /** Validated by the host, from this run's collector before publication. */
@@ -92,6 +98,7 @@ export type ModuleExamInput = {
     finding: string}) => Promise<boolean>;
   repoMap?: {map: string | null; reason?: string};
   mapEnabled?: boolean;
+  batch?: ModuleExamBatch;
   signal?: AbortSignal;
 };
 export type ModuleExamExecution = Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string};
@@ -262,7 +269,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     }
   }
 
-  let stopExam: string | null = null;
+  let stopExam = null as string | null;
   if (worker && reserve && release) {
     const evidenceByFile = new Map<string, ModuleRawFinding[]>();
     for (const finding of input.findings) {
@@ -270,12 +277,12 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       evidenceByFile.get(finding.file)!.push(finding);
     }
     let excludedRoutes = 0;
+    const prepared: Prepared[] = [];
     let limitedFiles = 0;
     for (const [index, file] of input.map.files.entries()) {
       checkAbort(input.signal);
       if (file.code === null) continue;
       const row = coverage[index]!;
-      if (stopExam) { row.reason = stopExam; continue; }
       // Names reach the model only when sanitizing leaves them unchanged, so a response
       // can always be bound to the real inventory entry.
       if (clean(file.file, 400) !== file.file) { row.reason = 'nome protegido'; continue; }
@@ -308,13 +315,53 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         verificationQuestions: moduleExamQuestions, routes: sent,
         toolEvidence: (evidenceByFile.get(file.file) ?? []).slice(0, 12).map(f => ({line: f.line, evidence: clean(f.evidence, 300)})),
       };
-      const commit = input.commit ? {commit: input.commit} : {};
       const sourceDigest = digest(code);
       const complete = !limited && code === file.code;
       // Keep the digest of the rest of the prompt so publication can bind the
       // code from the snapshot without storing a second copy of the prompt.
       const promptDigest = digest(prompt);
       const lines = code.split('\n');
+      prepared.push({file, row, code, limited, sent, sentRoutes, prompt, sourceDigest, complete, promptDigest, lines});
+    }
+    const commit = input.commit ? {commit: input.commit} : {};
+    const stopCodes = new Set(['PROVIDER_USAGE_LIMIT', 'EXAM_LOGIN_STALE', 'PROVIDER_AUTH_FAILED', 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
+      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'NATIVE_IMAGE_MISSING', 'MODULE_EXAM_EGRESS_UNAVAILABLE']);
+    const requestFor = (p: Prepared) => {
+      const read = {requestId: randomUUID(), sourceDigest: p.sourceDigest, complete: p.complete, promptDigest: p.promptDigest, ...commit};
+      const binding = moduleExamReadRequestBinding({...read, module: input.module, intentId: input.intentId, file: p.file.file});
+      return {read, binding};
+    };
+    /** Applies one validated per-file response. The receipt (read binding, requestId, promptDigest) is always per file. */
+    const accept = (p: Prepared, data: z.infer<typeof ExamResponse>, req: ReturnType<typeof requestFor>, seat: ModuleExamSeat, sessionId?: string) => {
+      p.row.status = 'lido';
+      p.row.reason = null;
+      p.row.examiner = identity(seat, sessionId);
+      p.row.checklist = [input.module];
+      p.row.read = {...req.read, binding: req.binding};
+      for (const attestation of data.routesReviewed) {
+        const attested = RouteAttestation.safeParse(attestation);
+        if (!attested.success) continue;
+        const route = declarations.get(p.file.file)?.(attested.data);
+        if (!route) continue;
+        const key = moduleExamRouteKey(route);
+        if (p.sentRoutes.has(key)) reviewedRoutes.add(key);
+      }
+      for (const finding of data.findings) {
+        if (findings.length >= 999) { notes.add('Limite de 999 achados. Candidatos adicionais do examinador foram omitidos.'); break; }
+        if (!p.lines[finding.line - 1]?.includes(finding.snippet)) continue;
+        const title = clean(finding.title, 200).trim();
+        if (!title) continue;
+        findings.push({file: p.file.file, line: finding.line, title, severity: finding.severity,
+          evidence: clean(finding.snippet, 240), source: 'examinador', hypothesis: clean(finding.hypothesis, 300),
+          ...(input.commit ? {reviewCommit: input.commit} : {}),
+          status: 'provavel', reason: 'Sem confirmação independente.',
+          proof: '', verifier: null, examiner: {provider: seat.provider, accountId: seat.accountId, profileId: seat.profileId}, failure: null});
+      }
+    };
+    /** Reserve, call, release and quota-wait around one worker call. `use` returns the files that must still run alone. */
+    const attempt = async (group: Prepared[], use: (seat: ModuleExamSeat) => Promise<{call: Record<string, unknown>; output: string}>,
+      onOutput: (output: string, seat: ModuleExamSeat, call: Record<string, unknown>) => Prepared[] | Promise<Prepared[]>,
+      onError: 'stop' | 'alone'): Promise<Prepared[]> => {
       for (;;) {
         checkAbort(input.signal);
         let seat: ModuleExamSeat | undefined;
@@ -322,60 +369,27 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         let exited = false;
         let waitQuota = false;
         try {
-          const read = {requestId: randomUUID(), sourceDigest, complete, promptDigest, ...commit};
-          const binding = moduleExamReadRequestBinding({...read, module: input.module, intentId: input.intentId, file: file.file});
-          const task = JSON.stringify({...prompt, module: input.module, file: file.file, code, ...commit, binding});
           seat = await reserve('examiner');
           checkAbort(input.signal);
-          const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
-          // The native worker derives the job session from this host digest, binding the job to the file.
-          (call as {examSubject?: string}).examSubject = examSubjectDigest({purpose: 'examiner', module: input.module,
-            intentId: input.intentId, commit: input.commit ?? null, file: file.file});
+          const prepare = await use(seat);
           launched = true;
-          const output = await worker.run(call);
+          const output = await worker.run(prepare.call as never);
           exited = true;
           checkAbort(input.signal);
-          const result = ExamResponse.safeParse(parsedJson(output));
-          if (!result.success || result.data.binding !== binding || result.data.filesRead[0] !== file.file
-            || result.data.checklist[0] !== input.module) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
-          row.status = 'lido';
-          row.reason = null;
-          row.examiner = identity(seat, (call as {examSessionId?: string}).examSessionId);
-          row.checklist = [input.module];
-          row.read = {...read, binding};
-          for (const attestation of result.data.routesReviewed) {
-            const attested = RouteAttestation.safeParse(attestation);
-            if (!attested.success) continue;
-            const route = declarations.get(file.file)?.(attested.data);
-            if (!route) continue;
-            const key = moduleExamRouteKey(route);
-            if (sentRoutes.has(key)) reviewedRoutes.add(key);
-          }
-          for (const finding of result.data.findings) {
-            if (findings.length >= 999) { notes.add('Limite de 999 achados. Candidatos adicionais do examinador foram omitidos.'); break; }
-            if (!lines[finding.line - 1]?.includes(finding.snippet)) continue;
-            const title = clean(finding.title, 200).trim();
-            if (!title) continue;
-            findings.push({file: file.file, line: finding.line, title, severity: finding.severity,
-              evidence: clean(finding.snippet, 240), source: 'examinador', hypothesis: clean(finding.hypothesis, 300),
-              ...(input.commit ? {reviewCommit: input.commit} : {}),
-              status: 'provavel', reason: 'Sem confirmação independente.',
-              proof: '', verifier: null, examiner: {provider: seat.provider, accountId: seat.accountId, profileId: seat.profileId}, failure: null});
-          }
-          break;
+          return await onOutput(output, seat, prepare.call);
         } catch (error) {
           if (fatal(error) || input.signal?.aborted) throw error;
           const code = failure(error);
           if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
             waitQuota = true;
+          } else if (onError === 'alone' && !stopCodes.has(code) && !(launched && !exited)) {
+            // A batch that failed as a whole returns every file to an isolated call.
+            return group;
           } else {
-            row.reason = code;
+            for (const p of group) p.row.reason = code;
             notes.add(unavailableText(code));
-            if (code === 'PROVIDER_USAGE_LIMIT' || code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED'
-              || code === 'MODULE_EXAM_EXAMINER_UNAVAILABLE' || code === 'NO_ELIGIBLE_CAPACITY' || code === 'ROLE_NOT_CONFIGURED'
-              || code === 'NATIVE_IMAGE_MISSING' || code === 'MODULE_EXAM_EGRESS_UNAVAILABLE'
-              || (launched && !exited)) stopExam = code;
-            break;
+            if (stopCodes.has(code) || (launched && !exited)) stopExam = code;
+            return [];
           }
         } finally {
           if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
@@ -385,17 +399,87 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
             purpose: 'examiner',
             provider: seat?.provider ?? 'claude',
             accountId: seat?.accountId,
-            file: file.file,
+            file: group[0]!.file.file,
             signal: input.signal,
           });
           if (!resumed) {
-            row.reason = 'PROVIDER_USAGE_LIMIT';
+            for (const p of group) p.row.reason = 'PROVIDER_USAGE_LIMIT';
             notes.add(unavailableText('PROVIDER_USAGE_LIMIT'));
             stopExam = 'PROVIDER_USAGE_LIMIT';
-            break;
+            return [];
           }
         }
       }
+    };
+    const runAlone = async (p: Prepared) => {
+      if (stopExam) { p.row.reason = stopExam; return; }
+      const req = requestFor(p);
+      await attempt([p], async seat => {
+        const task = JSON.stringify({...p.prompt, module: input.module, file: p.file.file, code: p.code, ...commit, binding: req.binding});
+        const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []}) as Record<string, unknown>;
+        // The native worker derives the job session from this host digest, binding the job to the file.
+        call.examSubject = examSubjectDigest({purpose: 'examiner', module: input.module,
+          intentId: input.intentId, commit: input.commit ?? null, file: p.file.file});
+        return {call, output: ''};
+      }, (output, seat, call) => {
+        const result = ExamResponse.safeParse(parsedJson(output));
+        if (!result.success || result.data.binding !== req.binding || result.data.filesRead[0] !== p.file.file
+          || result.data.checklist[0] !== input.module) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
+        accept(p, result.data, req, seat, call.examSessionId as string | undefined);
+        return [];
+      }, 'stop');
+    };
+    /** One call for several small files. Receipt, binding and coverage stay per file; an invalid or high-severity file runs alone. */
+    const runBatch = async (group: Prepared[]) => {
+      if (stopExam) { for (const p of group) p.row.reason = stopExam; return; }
+      const reqs = new Map(group.map(p => [p, requestFor(p)]));
+      const alone = await attempt(group, async seat => {
+        const first = group[0]!.prompt as {instruction: string; checklist: unknown; verificationQuestions: unknown};
+        const task = JSON.stringify({
+          instruction: `EXAME EM LOTE. O pedido traz ${group.length} arquivos independentes em files. Responda somente com um único objeto JSON {"kind":"exame-lote","results":[...]} com exatamente um item por arquivo, na mesma ordem; cada item segue as regras abaixo aplicadas ao seu próprio arquivo (binding, filesRead, checklist, routesReviewed e findings do arquivo). Nunca misture arquivos. ${first.instruction}`,
+          module: input.module, ...commit, checklist: first.checklist, verificationQuestions: first.verificationQuestions,
+          files: group.map(p => ({file: p.file.file, binding: reqs.get(p)!.binding, code: p.code,
+            routes: (p.prompt as {routes: unknown}).routes, toolEvidence: (p.prompt as {toolEvidence: unknown}).toolEvidence,
+            ...((p.prompt as {repoMap?: unknown}).repoMap ? {repoMap: (p.prompt as {repoMap: unknown}).repoMap} : {})})),
+        });
+        const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []}) as Record<string, unknown>;
+        // A batch job has no per-file subject: it never carries a per-file session proof.
+        return {call, output: ''};
+      }, (output, seat) => {
+        const envelope = z.object({kind: z.literal('exame-lote'), results: z.array(z.unknown())}).strict().safeParse(parsedJson(output));
+        if (!envelope.success) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
+        const retry: Prepared[] = [];
+        for (const p of group) {
+          const req = reqs.get(p)!;
+          const item = envelope.data.results.find(candidate => (candidate as {binding?: unknown} | null)?.binding === req.binding);
+          const result = ExamResponse.safeParse(item);
+          // A high finding needs its own native session, so that file is examined alone.
+          if (!result.success || result.data.filesRead[0] !== p.file.file || result.data.checklist[0] !== input.module
+            || result.data.findings.some(finding => finding.severity === 'alta')) { retry.push(p); continue; }
+          accept(p, result.data, req, seat);
+        }
+        return retry;
+      }, 'alone');
+      for (const p of alone) await runAlone(p);
+    };
+    const batchBudget = input.batch && input.batch.files >= 2 ? input.batch : null;
+    const estimate = (p: Prepared) => Math.ceil((p.code.length + JSON.stringify(p.prompt).length) / 4);
+    for (let at = 0; at < prepared.length;) {
+      checkAbort(input.signal);
+      const group: Prepared[] = [];
+      let tokens = 0;
+      while (at + group.length < prepared.length) {
+        const next = prepared[at + group.length]!;
+        const cost = estimate(next);
+        if (!batchBudget) { if (group.length) break; group.push(next); break; }
+        // A file over the budget stays alone; others join while both limits hold.
+        if (group.length && (cost > batchBudget.tokens || tokens + cost > batchBudget.tokens || group.length >= batchBudget.files)) break;
+        group.push(next);
+        tokens += cost;
+        if (cost > batchBudget.tokens) break;
+      }
+      at += group.length;
+      if (group.length > 1) await runBatch(group); else await runAlone(group[0]!);
     }
     if (excludedRoutes) notes.add(`Rotas fora dos limites de envio ao examinador: ${excludedRoutes}.`);
     if (limitedFiles) notes.add(`Arquivos com envio limitado a linhas completas: ${limitedFiles}.`);
