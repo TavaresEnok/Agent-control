@@ -1,0 +1,228 @@
+commit 189c8e5c94057778b58f2417276c955d96731136
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 15:05:23 2026 +0000
+
+    Token economy orders T4 (command output) and T5 (code index pilot).
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ docs/economia/ORDEM-T4-SAIDA.md | 46 +++++++++++++++++++++++++++++++++++++++++
+ docs/economia/ORDEM-T5-GRAFO.md | 36 ++++++++++++++++++++++++++++++++
+ 2 files changed, 82 insertions(+)
+
+commit ea94ffc826200ae6a7ad2dfd876482c38507b269
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 14:57:20 2026 +0000
+
+    Split token-economy orders by quota: Flash does the self-contained parts now.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ docs/economia/ORDEM-T1-MEDICAO.md | 6 ++++++
+ docs/economia/ORDEM-T2-MAPA.md    | 8 ++++++++
+ 2 files changed, 14 insertions(+)
+
+commit d10b6913bfe5712caa485e460d9bd0dfa749c6da
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 14:51:41 2026 +0000
+
+    Token economy orders T1 (measurement) and T2 (project map).
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ docs/economia/ORDEM-T1-MEDICAO.md | 39 +++++++++++++++++++++++++++++++++++++++
+ docs/economia/ORDEM-T2-MAPA.md    | 36 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 75 insertions(+)
+
+commit 3b961cc127c6d628242565fe823b59000ca90392
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 14:51:06 2026 +0000
+
+    Pause NexoISP for the token-economy work.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ docs/PROGRESSO-FINAL.md | 1 +
+ 1 file changed, 1 insertion(+)
+
+commit 177e9e045f91fdee3021136896ba000773a923be
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 14:51:06 2026 +0000
+
+    Record manager progress before the token-economy pause.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ docs/PROGRESSO-FINAL.md | 52 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+commit bc6366ff8e28f828da5707fdce1eb3bee9207dfa
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 14:44:14 2026 +0000
+
+    Second Antigravity account (Sonnet 4.6, Opus 4.6, Flash) before the Claude Pro and Max accounts.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ AGENTS.md | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+commit 65da60b949bb0901d2afecc906320c084192a9d3
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 14:38:15 2026 +0000
+
+    Worker queue: exhaust Antigravity (Sonnet, Flash for simple tasks) before Pro and Max; manager waits with blocking commands.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ AGENTS.md | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+commit cf1d85e9bf2507176ad0ab8b45e348ee29b6c387
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 14:06:46 2026 +0000
+
+    Owner order: automatic disk retention for job copies, backups, worktrees, images and temp folders.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ AGENTS.md | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+commit a391806f78b7aece6c553eff506602ec3eea844a
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:52:13 2026 +0000
+
+    Registra validação da nova imagem e homologação integrada
+
+ docs/PROGRESSO-FINAL.md   | 22 ++++++++++++++++++++++
+ docs/RELATORIO-NEXOISP.md |  6 ++++++
+ 2 files changed, 28 insertions(+)
+
+commit f49769c4ce06500f6d0045f6f75dc08aaf818b71
+Merge: 8419048b 8efa7975
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:51:44 2026 +0000
+
+    Merge branch 'task/nexo-limite-arquitetura' into task/personal-activation
+
+commit 8efa7975886165ea34963fc99b32c8595d055b87
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:51:44 2026 +0000
+
+    Fixa imagem do coletor de arquitetura validada no NexoISP
+
+ deploy/modules/arquitetura/digest.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+commit 33a951b82ef9cd4ebdfeec4e5f1192b2053fc24c
+Author: Claude Sonnet 5.5 <noreply@anthropic.com>
+Date:   Fri Nov 20 13:50:00 2026 +0000
+
+    Prefere linha de cobertura já retida e restringe o vínculo genérico a files ausente no coletor de arquitetura
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ deploy/modules/arquitetura/collect.mjs | 11 ++++++++---
+ tests/module-arquitetura.test.ts       | 25 +++++++++++++++++++++++++
+ 2 files changed, 33 insertions(+), 3 deletions(-)
+
+commit 34ce0ce6ba40854d4015ce9e3b7b90ac520b117d
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:47:48 2026 +0000
+
+    Omite achados sem vínculo válido de cobertura na seleção limitada do coletor de arquitetura
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ deploy/modules/arquitetura/collect.mjs | 20 ++++++++++++--------
+ tests/module-arquitetura.test.ts       | 33 +++++++++++++++++++++++----------
+ 2 files changed, 35 insertions(+), 18 deletions(-)
+
+commit bd12812ec28da70696805ddf785c8962f6c43dd8
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:43:23 2026 +0000
+
+    Corrige a seleção limitada do coletor de arquitetura conforme o parecer
+    
+    - Achado cuja cobertura não cabe é pulado sem interromper a avaliação dos
+      seguintes (antes um break descartava achados já cobertos).
+    - As vagas restantes de cobertura seguem a chave canônica da linha, sem
+      depender da ordem de entrada.
+    - Achado sem linha por arquivo correspondente não conta como vínculo: é
+      retido sem ocupar vaga e declarado em achados_retidos_sem_linha_por_arquivo.
+    - Teste abaixo dos limites compara conteúdo (deepEqual); novos testes para a
+      ordem de entrada, o achado que não cabe, o vínculo ausente e a amostra com
+      as contagens do NexoISP (1515 linhas de cobertura e 3047 achados).
+    - Tipos dos dados sintéticos passam a usar CoverageRow e FindingItem.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ deploy/modules/arquitetura/collect.mjs | 57 ++++++++++++++++++++++---------
+ tests/module-arquitetura.test.ts       | 62 +++++++++++++++++++++++++++++++---
+ 2 files changed, 99 insertions(+), 20 deletions(-)
+
+commit 066494af6e91fe37803dda407745f47d224252f3
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:37:30 2026 +0000
+
+    Limita a saída do coletor de arquitetura aos contratos do hospedeiro
+    
+    Seleciona achados de forma determinística (gravidade maior primeiro), mantém as
+    linhas de cobertura por arquivo dos achados retidos e declara a cobertura
+    parcial com as contagens de omissões, inclusive acima de 5000 linhas.
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+ deploy/modules/arquitetura/collect.d.mts |   1 +
+ deploy/modules/arquitetura/collect.mjs   |  78 ++++++++++++++++++++-
+ tests/module-arquitetura.test.ts         | 116 +++++++++++++++++++++++++++++++
+ 3 files changed, 194 insertions(+), 1 deletion(-)
+
+commit 8419048b2076ae0a37bfec87b907562d80cc1a5d
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:36:02 2026 +0000
+
+    Registra aceite das correções visuais e retomada do examinador
+
+ docs/PROGRESSO-FINAL.md   | 12 ++++++++++++
+ docs/RELATORIO-NEXOISP.md |  6 ++++++
+ 2 files changed, 18 insertions(+)
+
+commit 80e2ac1e3aa86bded21fed827be34a9d13447ba9
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:29:06 2026 +0000
+
+    Documenta resultados assinados das rodadas interrompidas e integração da Anatel
+
+ docs/PROGRESSO-FINAL.md   | 12 ++++++++++++
+ docs/RELATORIO-NEXOISP.md |  6 +++---
+ 2 files changed, 15 insertions(+), 3 deletions(-)
+
+commit 9be9b1149b621c8cd41ad435e9e2a002403f7ae3
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:24:15 2026 +0000
+
+    Registra manutenção exclusiva e conferência dos resultados do NexoISP
+
+ docs/PROGRESSO-FINAL.md   | 11 +++++++++++
+ docs/RELATORIO-NEXOISP.md |  6 ++++++
+ 2 files changed, 17 insertions(+)
+
+commit 1a2a881743408dcfd35fc71422091dbf9e511eed
+Author: Enok Tavares <migration@localhost>
+Date:   Fri Nov 20 13:20:17 2026 +0000
+
+    Astra and Sol at medium; workers use Claude via Antigravity quota before the Pro and Max accounts.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+ AGENTS.md | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+commit 4ec9fd9c6bf97d60ff5e8c210a4cfb8bb30ecdfe
+Merge: 54884d17 4927e68d
+Author: Agent Control <agent-control@localhost>
+Date:   Fri Nov 20 13:11:38 2026 +0000
+
+    Integra a manutenção de work de jobs reconciliados para a janela exclusiva

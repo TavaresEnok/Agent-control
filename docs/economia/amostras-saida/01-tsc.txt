@@ -1,0 +1,133 @@
+src/api.ts(609,52): error TS7006: Parameter 'run' implicitly has an 'any' type.
+src/api.ts(610,37): error TS7006: Parameter 'run' implicitly has an 'any' type.
+src/api.ts(613,50): error TS7006: Parameter 'run' implicitly has an 'any' type.
+src/cezar.ts(16,28): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/run.js' or its corresponding type declarations.
+src/cezar.ts(17,34): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workspace/semaphore.js' or its corresponding type declarations.
+src/cezar.ts(18,26): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/runs/store.js' or its corresponding type declarations.
+src/cezar.ts(19,27): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/server/server.js' or its corresponding type declarations.
+src/cezar.ts(20,46): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/runner-factory.js' or its corresponding type declarations.
+src/cezar.ts(21,33): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/dispatch/engine.js' or its corresponding type declarations.
+src/cezar.ts(22,76): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/cezar.ts(118,24): error TS7006: Parameter 'workflow' implicitly has an 'any' type.
+src/cezar.ts(118,34): error TS7006: Parameter 'input' implicitly has an 'any' type.
+src/cezar.ts(118,41): error TS7006: Parameter 'graphOwned' implicitly has an 'any' type.
+src/cezar.ts(147,20): error TS7006: Parameter 'runId' implicitly has an 'any' type.
+src/cezar.ts(147,26): error TS7006: Parameter 'nodeId' implicitly has an 'any' type.
+src/cezar.ts(147,33): error TS7006: Parameter 'cancelled' implicitly has an 'any' type.
+src/cezar.ts(149,32): error TS7006: Parameter 'run' implicitly has an 'any' type.
+src/cezar.ts(167,40): error TS7006: Parameter 'step' implicitly has an 'any' type.
+src/cezar.ts(391,50): error TS2339: Property 'qualityRevision' does not exist on type '{ workflow: "baseline-synthetic-v1"; } | { workflow: "engineering-synthetic-v1" | "semantic-proposal-v1"; qualityRevision: number; targetRef: string; } | { workflow: "engineering-native-v1"; qualityRevision: number; targetRef: string; writePaths: string[]; execution?: "plan" | ... 1 more ... | undefined; }'.
+  Property 'qualityRevision' does not exist on type '{ workflow: "baseline-synthetic-v1"; }'.
+src/cezar.ts(391,85): error TS2339: Property 'targetRef' does not exist on type '{ workflow: "baseline-synthetic-v1"; } | { workflow: "engineering-synthetic-v1" | "semantic-proposal-v1"; qualityRevision: number; targetRef: string; } | { workflow: "engineering-native-v1"; qualityRevision: number; targetRef: string; writePaths: string[]; execution?: "plan" | ... 1 more ... | undefined; }'.
+  Property 'targetRef' does not exist on type '{ workflow: "baseline-synthetic-v1"; }'.
+src/cezar.ts(673,66): error TS7006: Parameter 'step' implicitly has an 'any' type.
+src/cezar.ts(958,40): error TS7006: Parameter 'step' implicitly has an 'any' type.
+src/cezar.ts(986,93): error TS7006: Parameter 'step' implicitly has an 'any' type.
+src/cezar.ts(997,91): error TS7006: Parameter 'step' implicitly has an 'any' type.
+src/cezar.ts(1041,42): error TS7006: Parameter 'step' implicitly has an 'any' type.
+src/cezar.ts(1091,20): error TS7006: Parameter 'spec' implicitly has an 'any' type.
+src/cezar.ts(1091,26): error TS7006: Parameter 'onEvent' implicitly has an 'any' type.
+src/claude-execution-adapter.ts(3,29): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+src/claude-execution-adapter.ts(4,58): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/claude-execution-adapter.ts(46,19): error TS7006: Parameter 'value' implicitly has an 'any' type.
+src/claude-execution-adapter.ts(56,42): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/claude-planning-adapter.ts(2,58): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/claude-planning-adapter.ts(3,49): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+src/claude-planning-adapter.ts(81,19): error TS7006: Parameter 'value' implicitly has an 'any' type.
+src/claude-planning-adapter.ts(96,42): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/codex-execution-adapter.ts(2,29): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+src/codex-execution-adapter.ts(3,58): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/codex-execution-adapter.ts(40,19): error TS7006: Parameter 'value' implicitly has an 'any' type.
+src/codex-execution-adapter.ts(47,42): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/codex-planning-adapter.ts(2,58): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/codex-planning-adapter.ts(26,19): error TS7006: Parameter 'value' implicitly has an 'any' type.
+src/codex-planning-adapter.ts(37,42): error TS7006: Parameter 'event' implicitly has an 'any' type.
+src/config-export.ts(10,60): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/graph.js' or its corresponding type declarations.
+src/config-export.ts(100,557): error TS7006: Parameter 'node' implicitly has an 'any' type.
+src/engineering.ts(24,61): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/isolated-implementation.ts(12,57): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/managed-plan.ts(10,50): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/types.js' or its corresponding type declarations.
+src/managed-plan.ts(11,70): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/graph.js' or its corresponding type declarations.
+src/module-exam-worker.ts(7,29): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+src/native-execution-redaction.ts(1,29): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+src/native-execution-supervisor.ts(8,35): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+src/native-execution-worker.ts(12,49): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+src/native-execution-worker.ts(17,36): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js' or its corresponding type declarations.
+src/native-execution-worker.ts(18,31): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js' or its corresponding type declarations.
+src/native-implementation.ts(16,57): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+src/native-planning-worker.ts(8,36): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js' or its corresponding type declarations.
+src/native-planning-worker.ts(9,31): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js' or its corresponding type declarations.
+src/planning.ts(6,33): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/types.js' or its corresponding type declarations.
+src/planning.ts(7,70): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/graph.js' or its corresponding type declarations.
+src/workflow-graph-contract.ts(3,60): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/graph.js' or its corresponding type declarations.
+src/workflow-graph-files.ts(8,35): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/types.js' or its corresponding type declarations.
+src/workflow-graph-files.ts(9,40): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/templates.js' or its corresponding type declarations.
+src/workflow-graph-service.ts(8,60): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/graph.js' or its corresponding type declarations.
+src/workflow-versions.ts(1,51): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/types.js' or its corresponding type declarations.
+src/workflows.ts(1,35): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/types.js' or its corresponding type declarations.
+src/workflows.ts(38,43): error TS7006: Parameter 'item' implicitly has an 'any' type.
+src/workspace-stream.ts(1,27): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/server/run-frames.js' or its corresponding type declarations.
+src/workspace-stream.ts(34,41): error TS7006: Parameter 'run' implicitly has an 'any' type.
+src/workspace-stream.ts(34,45): error TS7006: Parameter 'frames' implicitly has an 'any' type.
+tests/claude-quota-wait.test.ts(16,58): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+tests/claude-quota-wait.test.ts(39,91): error TS7006: Parameter '_spec' implicitly has an 'any' type.
+tests/claude-quota-wait.test.ts(39,97): error TS7006: Parameter 'onEvent' implicitly has an 'any' type.
+tests/codex-execution-adapter.test.ts(5,56): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+tests/codex-execution-adapter.test.ts(7,99): error TS7006: Parameter 'spec' implicitly has an 'any' type.
+tests/codex-execution-adapter.test.ts(7,104): error TS7006: Parameter 'onEvent' implicitly has an 'any' type.
+tests/codex-planning-adapter.test.ts(5,58): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+tests/codex-planning-adapter.test.ts(10,16): error TS7006: Parameter 'spec' implicitly has an 'any' type.
+tests/codex-planning-adapter.test.ts(10,21): error TS7006: Parameter 'onEvent' implicitly has an 'any' type.
+tests/config-export.test.ts(38,44): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/graph.js' or its corresponding type declarations.
+tests/fixtures/interrupted-completed-node.ts(24,73): error TS7006: Parameter 'error' implicitly has an 'any' type.
+tests/fixtures/interrupted-completed-node.ts(40,43): error TS7006: Parameter 'value' implicitly has an 'any' type.
+tests/fixtures/r3-secret-surfaces.ts(11,24): error TS2307: Cannot find module '../../upstream/cezar/packages/cezar/dist/runs/store.js' or its corresponding type declarations.
+tests/fixtures/r3-secret-surfaces.ts(21,45): error TS2307: Cannot find module '../../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+tests/fixtures/r3-secret-surfaces.ts(47,97): error TS7006: Parameter 'event' implicitly has an 'any' type.
+tests/fixtures/r3-secret-surfaces.ts(65,153): error TS7006: Parameter 'spec' implicitly has an 'any' type.
+tests/fixtures/r3-secret-surfaces.ts(65,158): error TS7006: Parameter 'onEvent' implicitly has an 'any' type.
+tests/fixtures/r6-planning-worker/planning.ts(3,36): error TS2307: Cannot find module '../../../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js' or its corresponding type declarations.
+tests/fixtures/restored-runtime-smoke.ts(26,41): error TS7006: Parameter 'run' implicitly has an 'any' type.
+tests/fixtures/restored-runtime-smoke.ts(27,48): error TS7006: Parameter 'run' implicitly has an 'any' type.
+tests/happier.test.ts(178,42): error TS7006: Parameter 'r' implicitly has an 'any' type.
+tests/managed-corrections.test.ts(23,79): error TS7006: Parameter 'edge' implicitly has an 'any' type.
+tests/managed-corrections.test.ts(24,43): error TS7006: Parameter 'edge' implicitly has an 'any' type.
+tests/native-correction-order.test.ts(18,84): error TS7006: Parameter 'item' implicitly has an 'any' type.
+tests/native-correction-order.test.ts(29,86): error TS7006: Parameter 'item' implicitly has an 'any' type.
+tests/native-corrections.test.ts(58,55): error TS7006: Parameter 'item' implicitly has an 'any' type.
+tests/native-corrections.test.ts(65,27): error TS7006: Parameter 'node' implicitly has an 'any' type.
+tests/native-corrections.test.ts(67,26): error TS7006: Parameter 'item' implicitly has an 'any' type.
+tests/native-dispatch.test.ts(73,494): error TS7006: Parameter 's' implicitly has an 'any' type.
+tests/native-dispatch.test.ts(74,271): error TS7006: Parameter 's' implicitly has an 'any' type.
+tests/native-graph-physical-recovery.test.ts(161,91): error TS7006: Parameter 'step' implicitly has an 'any' type.
+tests/native-multitask.test.ts(90,32): error TS7006: Parameter 'node' implicitly has an 'any' type.
+tests/native-multitask.test.ts(93,26): error TS7006: Parameter 'edge' implicitly has an 'any' type.
+tests/native-multitask.test.ts(94,26): error TS7006: Parameter 'edge' implicitly has an 'any' type.
+tests/native-multitask.test.ts(95,27): error TS7006: Parameter 'edge' implicitly has an 'any' type.
+tests/native-multitask.test.ts(282,91): error TS7006: Parameter 'step' implicitly has an 'any' type.
+tests/native-pause.test.ts(45,35): error TS7006: Parameter 'step' implicitly has an 'any' type.
+tests/native-worker-security.test.ts(74,242): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/codex-app-server-transport.js' or its corresponding type declarations.
+tests/planning.test.ts(11,37): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/workflows/graph.js' or its corresponding type declarations.
+tests/r2-graph-physical.test.ts(158,91): error TS7006: Parameter 'step' implicitly has an 'any' type.
+tests/r5-codex-runner-redaction.test.ts(6,36): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js' or its corresponding type declarations.
+tests/r5-codex-runner-redaction.test.ts(8,32): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+tests/r5-codex-runner-redaction.test.ts(21,127): error TS7006: Parameter 'spec' implicitly has an 'any' type.
+tests/r5-codex-runner-redaction.test.ts(21,132): error TS7006: Parameter 'onEvent' implicitly has an 'any' type.
+tests/r5-codex-runner-redaction.test.ts(21,140): error TS7006: Parameter 'options' implicitly has an 'any' type.
+tests/r5-execution-capability-counterproof.test.ts(5,32): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/agent-runner.js' or its corresponding type declarations.
+tests/r5-execution-capability-counterproof.test.ts(9,117): error TS7006: Parameter 'spec' implicitly has an 'any' type.
+tests/r5-execution-capability-counterproof.test.ts(9,122): error TS7006: Parameter 'onEvent' implicitly has an 'any' type.
+tests/r5-external-auth-runner.test.ts(2,36): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js' or its corresponding type declarations.
+tests/r5-external-auth-runner.test.ts(4,31): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/runs/stream-redaction.js' or its corresponding type declarations.
+tests/r5-external-auth-runner.test.ts(12,108): error TS7006: Parameter 'token' implicitly has an 'any' type.
+tests/r5-external-auth-runner.test.ts(13,5): error TS7006: Parameter 'event' implicitly has an 'any' type.
+tests/r5-external-auth-runner.test.ts(13,79): error TS7006: Parameter 'event' implicitly has an 'any' type.
+tests/verify-exam-worker-mount.test.ts(19,31): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js' or its corresponding type declarations.
+tests/verify-exam-worker-mount.test.ts(20,35): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js' or its corresponding type declarations.
+tests/verify-exam-worker-mount.test.ts(1211,28): error TS2698: Spread types may only be created from object types.
+tests/verify-exam-worker-mount.test.ts(1217,37): error TS2698: Spread types may only be created from object types.
+tests/verify-exam-worker-mount.test.ts(2399,28): error TS2698: Spread types may only be created from object types.
+tests/verify-exam-worker-mount.test.ts(2403,37): error TS2698: Spread types may only be created from object types.
+tests/verify-exam-worker-mount.test.ts(2899,28): error TS2698: Spread types may only be created from object types.
+tests/verify-exam-worker-mount.test.ts(2903,37): error TS2698: Spread types may only be created from object types.
+tests/workspace-stream.test.ts(9,24): error TS2307: Cannot find module '../upstream/cezar/packages/cezar/dist/runs/store.js' or its corresponding type declarations.

@@ -1,0 +1,5 @@
+ docs/economia/ORDEM-T1-MEDICAO.md | 45 ++++++++++++++++++++++++++++++++++++++
+ docs/economia/ORDEM-T2-MAPA.md    | 44 +++++++++++++++++++++++++++++++++++++
+ docs/economia/ORDEM-T4-SAIDA.md   | 46 +++++++++++++++++++++++++++++++++++++++
+ docs/economia/ORDEM-T5-GRAFO.md   | 36 ++++++++++++++++++++++++++++++
+ 4 files changed, 171 insertions(+)

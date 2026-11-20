@@ -1,0 +1,103 @@
+agent-control@0.1.0 /home/app/projects/ac-wt/econ-t4
+├── UNMET DEPENDENCY @agent-control/conformidade-parser@file:/home/app/projects/ac-wt/econ-t4/deploy/modules/conformidade
+├── @esbuild/linux-x64@0.27.7 extraneous -> ./../../agent-control/node_modules/@esbuild/linux-x64
+├── @hono/node-server@1.19.9 -> ./../../agent-control/node_modules/@hono/node-server
+├── @socket.io/component-emitter@3.1.2 extraneous -> ./../../agent-control/node_modules/@socket.io/component-emitter
+├── @types/node@22.19.15 -> ./../../agent-control/node_modules/@types/node
+├── @types/pg@8.15.6 -> ./../../agent-control/node_modules/@types/pg
+├── @types/web-push@3.6.4 -> ./../../agent-control/node_modules/@types/web-push
+├── @typescript/typescript-linux-x64@7.0.2 extraneous -> ./../../agent-control/node_modules/@typescript/typescript-linux-x64
+├── agent-base@7.1.4 extraneous -> ./../../agent-control/node_modules/agent-base
+├── asn1.js@5.4.1 extraneous -> ./../../agent-control/node_modules/asn1.js
+├── bn.js@4.12.5 extraneous -> ./../../agent-control/node_modules/bn.js
+├── buffer-equal-constant-time@1.0.1 extraneous -> ./../../agent-control/node_modules/buffer-equal-constant-time
+├── debug@4.4.3 extraneous -> ./../../agent-control/node_modules/debug
+├── ecdsa-sig-formatter@1.0.11 extraneous -> ./../../agent-control/node_modules/ecdsa-sig-formatter
+├── engine.io-client@6.6.7 extraneous -> ./../../agent-control/node_modules/engine.io-client
+├── engine.io-parser@5.2.3 extraneous -> ./../../agent-control/node_modules/engine.io-parser
+├── entities@6.0.1 extraneous -> ./../../agent-control/node_modules/entities
+├── esbuild@0.27.7 extraneous -> ./../../agent-control/node_modules/esbuild
+├── get-tsconfig@4.14.3 extraneous -> ./../../agent-control/node_modules/get-tsconfig
+├── hono@4.12.0 -> ./../../agent-control/node_modules/hono
+├── http_ece@1.2.0 extraneous -> ./../../agent-control/node_modules/http_ece
+├── https-proxy-agent@7.0.6 extraneous -> ./../../agent-control/node_modules/https-proxy-agent
+├── inherits@2.0.4 extraneous -> ./../../agent-control/node_modules/inherits
+├── jwa@2.0.1 extraneous -> ./../../agent-control/node_modules/jwa
+├── jws@4.0.1 extraneous -> ./../../agent-control/node_modules/jws
+├── minimalistic-assert@1.0.1 extraneous -> ./../../agent-control/node_modules/minimalistic-assert
+├── minimist@1.2.8 extraneous -> ./../../agent-control/node_modules/minimist
+├── ms@2.1.3 extraneous -> ./../../agent-control/node_modules/ms
+├── parse5@7.3.0 -> ./../../agent-control/node_modules/parse5
+├── pg-cloudflare@1.4.1 extraneous -> ./../../agent-control/node_modules/pg-cloudflare
+├── pg-connection-string@2.14.1 extraneous -> ./../../agent-control/node_modules/pg-connection-string
+├── pg-int8@1.0.1 extraneous -> ./../../agent-control/node_modules/pg-int8
+├── pg-pool@3.14.0 extraneous -> ./../../agent-control/node_modules/pg-pool
+├── pg-protocol@1.16.1 extraneous -> ./../../agent-control/node_modules/pg-protocol
+├── pg-types@2.2.0 extraneous -> ./../../agent-control/node_modules/pg-types
+├── pg@8.16.3 -> ./../../agent-control/node_modules/pg
+├── pgpass@1.0.5 extraneous -> ./../../agent-control/node_modules/pgpass
+├── postgres-array@2.0.0 extraneous -> ./../../agent-control/node_modules/postgres-array
+├── postgres-bytea@1.0.1 extraneous -> ./../../agent-control/node_modules/postgres-bytea
+├── postgres-date@1.0.7 extraneous -> ./../../agent-control/node_modules/postgres-date
+├── postgres-interval@1.2.0 extraneous -> ./../../agent-control/node_modules/postgres-interval
+├── resolve-pkg-maps@1.0.0 extraneous -> ./../../agent-control/node_modules/resolve-pkg-maps
+├── safe-buffer@5.2.1 extraneous -> ./../../agent-control/node_modules/safe-buffer
+├── safer-buffer@2.1.2 extraneous -> ./../../agent-control/node_modules/safer-buffer
+├── socket.io-client@4.8.3 -> ./../../agent-control/node_modules/socket.io-client
+├── socket.io-parser@4.2.7 extraneous -> ./../../agent-control/node_modules/socket.io-parser
+├── split2@4.2.0 extraneous -> ./../../agent-control/node_modules/split2
+├── tsx@4.21.0 -> ./../../agent-control/node_modules/tsx
+├── tweetnacl@1.0.3 -> ./../../agent-control/node_modules/tweetnacl
+├── typescript@7.0.2 -> ./../../agent-control/node_modules/typescript
+├── undici-types@6.21.0 extraneous -> ./../../agent-control/node_modules/undici-types
+├── web-push@3.6.7 -> ./../../agent-control/node_modules/web-push
+├── ws@8.21.3 extraneous -> ./../../agent-control/node_modules/ws
+├── xmlhttprequest-ssl@2.1.2 extraneous -> ./../../agent-control/node_modules/xmlhttprequest-ssl
+├── xtend@4.0.2 extraneous -> ./../../agent-control/node_modules/xtend
+└── zod@4.4.3 -> ./../../agent-control/node_modules/zod
+
+npm error code ELSPROBLEMS
+npm error missing: @agent-control/conformidade-parser@file:/home/app/projects/ac-wt/econ-t4/deploy/modules/conformidade, required by agent-control@0.1.0
+npm error extraneous: @esbuild/linux-x64@0.27.7 /home/app/projects/ac-wt/econ-t4/node_modules/@esbuild/linux-x64
+npm error extraneous: @socket.io/component-emitter@3.1.2 /home/app/projects/ac-wt/econ-t4/node_modules/@socket.io/component-emitter
+npm error extraneous: @typescript/typescript-linux-x64@7.0.2 /home/app/projects/ac-wt/econ-t4/node_modules/@typescript/typescript-linux-x64
+npm error extraneous: agent-base@7.1.4 /home/app/projects/ac-wt/econ-t4/node_modules/agent-base
+npm error extraneous: asn1.js@5.4.1 /home/app/projects/ac-wt/econ-t4/node_modules/asn1.js
+npm error extraneous: bn.js@4.12.5 /home/app/projects/ac-wt/econ-t4/node_modules/bn.js
+npm error extraneous: buffer-equal-constant-time@1.0.1 /home/app/projects/ac-wt/econ-t4/node_modules/buffer-equal-constant-time
+npm error extraneous: debug@4.4.3 /home/app/projects/ac-wt/econ-t4/node_modules/debug
+npm error extraneous: ecdsa-sig-formatter@1.0.11 /home/app/projects/ac-wt/econ-t4/node_modules/ecdsa-sig-formatter
+npm error extraneous: engine.io-client@6.6.7 /home/app/projects/ac-wt/econ-t4/node_modules/engine.io-client
+npm error extraneous: engine.io-parser@5.2.3 /home/app/projects/ac-wt/econ-t4/node_modules/engine.io-parser
+npm error extraneous: entities@6.0.1 /home/app/projects/ac-wt/econ-t4/node_modules/entities
+npm error extraneous: esbuild@0.27.7 /home/app/projects/ac-wt/econ-t4/node_modules/esbuild
+npm error extraneous: get-tsconfig@4.14.3 /home/app/projects/ac-wt/econ-t4/node_modules/get-tsconfig
+npm error extraneous: http_ece@1.2.0 /home/app/projects/ac-wt/econ-t4/node_modules/http_ece
+npm error extraneous: https-proxy-agent@7.0.6 /home/app/projects/ac-wt/econ-t4/node_modules/https-proxy-agent
+npm error extraneous: inherits@2.0.4 /home/app/projects/ac-wt/econ-t4/node_modules/inherits
+npm error extraneous: jwa@2.0.1 /home/app/projects/ac-wt/econ-t4/node_modules/jwa
+npm error extraneous: jws@4.0.1 /home/app/projects/ac-wt/econ-t4/node_modules/jws
+npm error extraneous: minimalistic-assert@1.0.1 /home/app/projects/ac-wt/econ-t4/node_modules/minimalistic-assert
+npm error extraneous: minimist@1.2.8 /home/app/projects/ac-wt/econ-t4/node_modules/minimist
+npm error extraneous: ms@2.1.3 /home/app/projects/ac-wt/econ-t4/node_modules/ms
+npm error extraneous: pg-cloudflare@1.4.1 /home/app/projects/ac-wt/econ-t4/node_modules/pg-cloudflare
+npm error extraneous: pg-connection-string@2.14.1 /home/app/projects/ac-wt/econ-t4/node_modules/pg-connection-string
+npm error extraneous: pg-int8@1.0.1 /home/app/projects/ac-wt/econ-t4/node_modules/pg-int8
+npm error extraneous: pg-pool@3.14.0 /home/app/projects/ac-wt/econ-t4/node_modules/pg-pool
+npm error extraneous: pg-protocol@1.16.1 /home/app/projects/ac-wt/econ-t4/node_modules/pg-protocol
+npm error extraneous: pg-types@2.2.0 /home/app/projects/ac-wt/econ-t4/node_modules/pg-types
+npm error extraneous: pgpass@1.0.5 /home/app/projects/ac-wt/econ-t4/node_modules/pgpass
+npm error extraneous: postgres-array@2.0.0 /home/app/projects/ac-wt/econ-t4/node_modules/postgres-array
+npm error extraneous: postgres-bytea@1.0.1 /home/app/projects/ac-wt/econ-t4/node_modules/postgres-bytea
+npm error extraneous: postgres-date@1.0.7 /home/app/projects/ac-wt/econ-t4/node_modules/postgres-date
+npm error extraneous: postgres-interval@1.2.0 /home/app/projects/ac-wt/econ-t4/node_modules/postgres-interval
+npm error extraneous: resolve-pkg-maps@1.0.0 /home/app/projects/ac-wt/econ-t4/node_modules/resolve-pkg-maps
+npm error extraneous: safe-buffer@5.2.1 /home/app/projects/ac-wt/econ-t4/node_modules/safe-buffer
+npm error extraneous: safer-buffer@2.1.2 /home/app/projects/ac-wt/econ-t4/node_modules/safer-buffer
+npm error extraneous: socket.io-parser@4.2.7 /home/app/projects/ac-wt/econ-t4/node_modules/socket.io-parser
+npm error extraneous: split2@4.2.0 /home/app/projects/ac-wt/econ-t4/node_modules/split2
+npm error extraneous: undici-types@6.21.0 /home/app/projects/ac-wt/econ-t4/node_modules/undici-types
+npm error extraneous: ws@8.21.3 /home/app/projects/ac-wt/econ-t4/node_modules/ws
+npm error extraneous: xmlhttprequest-ssl@2.1.2 /home/app/projects/ac-wt/econ-t4/node_modules/xmlhttprequest-ssl
+npm error extraneous: xtend@4.0.2 /home/app/projects/ac-wt/econ-t4/node_modules/xtend
+npm error A complete log of this run can be found in: /home/app/.agy-enok/.npm/_logs/2026-11-20T15_07_00_102Z-debug-0.log
