@@ -1592,3 +1592,14 @@ FIM
 - 20/11/2026 04:49 UTC — Iniciada a CLI personal:qa para qa-nexo.
 - 20/11/2026 04:55 UTC — Iniciada ordem formatacao em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
 - 20/11/2026 04:55 UTC — O frontend do NexoISP passou em TypeScript, nos 228 testes e no build com Node 22.23.4. A checagem Prettier da CI recusou um arquivo. A correção de formatação foi atribuída ao Hydrogen. Os 24 pacotes Go com testes passaram com -race na cópia completa. A aplicação de homologação respondeu HTTP 200 e emitiu cookie em login real usando apenas o banco de demonstração em rede interna.
+- 20/11/2026 04:56 UTC — Ordem formatacao em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 04:56 UTC — Iniciada ordem resposta em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 04:57 UTC — A amostra de arquitetura chegou a 50 arquivos aceitos. Seis respostas usaram code como nome do trecho em um achado. O Hydrogen recebeu a correção desse alias com recusa de nomes concorrentes e a mesma validação de linha e vínculo. A revisão Sol da correção de formatação do NexoISP começou.
+- 20/11/2026 04:57 UTC — Revisão independente revisao-formatacao-nexo concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:57 UTC — COTA — gemini-4-hydrogen-high (hydrogen) informou limite na ordem resposta.
+- 20/11/2026 04:57 UTC — Iniciada ordem resposta em gemini-4-argon-high (argon), no worktree próprio.
+- 20/11/2026 04:58 UTC — COTA — gemini-4-argon-high (argon) informou limite na ordem resposta.
+- 20/11/2026 04:58 UTC — Iniciada ordem resposta em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 04:58 UTC — Ordem estatico em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 04:59 UTC — Ordem resposta em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 04:59 UTC — O ramo central do NexoISP integrou f4b1eca7 após revisão Sol. A checagem de formatação de todo o frontend, o TypeScript, os 228 testes e o build passaram nesse commit. Go build e vet também passaram.

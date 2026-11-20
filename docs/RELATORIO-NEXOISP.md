@@ -44,3 +44,7 @@ O cadastro por `personal:project -- --add` compartilha a instalação existente.
 O frontend passou na checagem TypeScript, nos 228 testes e no build com Node 22.23.4 e npm 10.9.9. O comando de formatação da CI falhou em `apps/web/features/network/config-backups.tsx`. A suíte `go test -race ./...` passou nos 24 pacotes com testes. Na primeira execução, o contêiner recebeu apenas a pasta da API e não encontrou as fixtures. A execução registrada como aprovada recebeu a árvore completa.
 
 A aplicação de homologação usa o frontend oficial, a API Go e um PostgreSQL descartável com o seed de demonstração. Em rede interna, a página respondeu HTTP 200 e o login respondeu HTTP 200 com cookie de sessão.
+
+### Correção confirmada na CI
+
+**Baixa.** O ramo de revisão recebeu `f4b1eca7` para corrigir a formatação de `apps/web/features/network/config-backups.tsx`. O Sol revisou o diff. A prova independente no contêiner do gerente aprovou Prettier, TypeScript, os 228 testes e o build. O backend também passou em `go build ./...` e `go vet ./...`.
