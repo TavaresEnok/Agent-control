@@ -35,15 +35,15 @@ async function lab(activation:'personal'|'other'='personal'):Promise<Lab>{
  writeFileSync(join(repo,'a.txt'),'a\n');git(repo,'add','.');git(repo,'commit','-q','-m','first');
  const projectId=randomUUID();
  const config={activation,dataDirectory:data,databaseUrl:'postgres://invalid.example/none',project:{id:projectId,label:'p',repo,owner:'owner'},projects:[]} as unknown as Installation;
- const removed:string[][]=[];
+ const removed:string[][]=[],gone=new Set<string>();
  const docker=async(args:string[])=>{
   if(args[0]==='info')return {code:0,stdout:'daemon-test-1'};
   if(args[0]==='image'&&args[1]==='inspect'){
    const id=args.at(-1)!;
-   if(id!==IMAGE&&id!==PINNED)return {code:1,stdout:''};
+   if((id!==IMAGE&&id!==PINNED)||gone.has(id))return {code:1,stdout:''};
    return args.includes('--format')?{code:0,stdout:id+'\n'}:{code:0,stdout:JSON.stringify([{Id:id,RepoDigests:[]}])};
   }
-  if(args[0]==='image'&&args[1]==='rm'){removed.push(args);return {code:0,stdout:''};}
+  if(args[0]==='image'&&args[1]==='rm'){removed.push(args);gone.add(args[2]!);return {code:0,stdout:''};}
   if(args[0]==='version')return {code:0,stdout:'x'};
   return {code:0,stdout:''};
  };
@@ -128,7 +128,7 @@ test('a supervised worker worktree is registered, kept until its branch is integ
   git(l.repo,'branch','task/other');
   await assert.rejects(runArtifactCommand(l.config,[...args.slice(0,-1),'task/other'],l.deps()),refusal('RETENTION_REGISTRATION_INVALID'));
 
-  const later=Date.now()+3*HOUR;
+  const later=Date.now()+30*HOUR;
   const before=readFileSync(registryFile(l),'utf8');
   assert.match((await runArtifactCommand(l.config,['--retencao-artefatos'],l.deps(later))).join('\n'),/ramo ainda não integrado em main/);
   assert.equal(readFileSync(registryFile(l),'utf8'),before,'the preview changes nothing, not even the registry');
@@ -183,15 +183,15 @@ test('a candidate image is registered only when it exists locally, and a pinned 
   await assert.rejects(runArtifactCommand(l.config,['--registrar-imagem','--projeto',l.projectId,'--modulo','banco','--imagem',IMAGE],l.deps()),refusal('RETENTION_REGISTRATION_CONFLICT'));
   mkdirSync(join(l.product,'deploy','modules','qa'),{recursive:true});
   writeFileSync(join(l.product,'deploy','modules','qa','digest.txt'),PINNED+'\n');
-  const later=Date.now()+3*HOUR;
+  const later=Date.now()+30*HOUR;
   const preview=(await runArtifactCommand(l.config,['--retencao-artefatos'],l.deps(later))).join('\n');
-  assert.match(preview,/imagem sha256:c1c1c1c1c1c1 \(qa\): preservado \(pins de outras instalações/);
+  assert.match(preview,/imagem sha256:c1c1c1c1c1c1 \(qa\): elegível/);
   assert.match(preview,/imagem sha256:d2d2d2d2d2d2 \(qa\): preservado \(digest fixado/);
   assert.deepEqual(l.removed,[]);
   // Too recent to remove.
-  assert.match((await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(Date.now()))).join('\n'),/registrada há 0 h \(mínimo 2 h\)/);
+  assert.match((await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(Date.now()))).join('\n'),/registrada há 0 h \(mínimo 24 h\)/);
   await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(later));
-  assert.deepEqual(l.removed,[]);
+  assert.deepEqual(l.removed,[['image','rm',IMAGE]],'only the unpinned candidate goes, by id');
  }finally{await done(l);}
 });
 

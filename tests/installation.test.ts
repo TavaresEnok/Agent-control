@@ -55,7 +55,8 @@ test('private installation initializes without fixtures, manager or worker; keys
 });
 
 test('project economy options are independent and validated', () => {
- assert.deepEqual(ProjectEconomy.parse({map:false,measurement:false,batch:false}),{map:false,measurement:false,batch:false,batchTokens:40000,batchFiles:8});
- assert.deepEqual(ProjectEconomy.parse({}),{map:true,measurement:true,batch:true,batchTokens:40000,batchFiles:8});
+ assert.deepEqual(ProjectEconomy.parse({map:false,measurement:false,batch:false}),{map:false,measurement:false,batch:false,imageRetention:true,batchTokens:40000,batchFiles:8});
+ assert.deepEqual(ProjectEconomy.parse({}),{map:true,measurement:true,batch:true,imageRetention:true,batchTokens:40000,batchFiles:8});
  assert.equal(ProjectEconomy.safeParse({map:'false'}).success,false);
+ assert.equal(ProjectEconomy.parse({imageRetention:false}).imageRetention,false);
 });
