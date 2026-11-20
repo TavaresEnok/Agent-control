@@ -29,10 +29,10 @@ const dump=async(file:string)=>{await writeFile(file,'PGDMP-fake',{mode:0o600});
 const listDump=async()=>{};
 
 /** A dated folder in the shape personal:backup-rotate writes, owned by the installation `id`. */
-async function legacyBackup(dest:string,stamp:string,id:string){
+async function legacyBackup(dest:string,stamp:string,id:string,dataDirectory:string){
  const inner=join(dest,stamp,'agent-control-IspAgent-202001010330');
  await mkdir(inner,{recursive:true});
- await writeFile(join(inner,'installation.json'),JSON.stringify({project:{id}}));
+ await writeFile(join(inner,'installation.json'),JSON.stringify({project:{id},dataDirectory}));
  const config=await readFile(join(inner,'installation.json'));
  const hash=(data:string|Buffer)=>createHash('sha256').update(data).digest('hex');
  await writeFile(join(inner,'MANIFEST.txt'),hash(config)+'  installation.json\n'+hash('old')+'  database.dump\n');
@@ -58,7 +58,7 @@ test('rotation keeps seven dated backups of this installation and deletes only r
  await writeFile(join(outside,'keep'),'stay');
  await writeFile(join(dest,'notes.txt'),'keep-me');
  await symlink(outside,join(dest,'19990101-000000'));
- await legacyBackup(dest,'20190101-000000',env.id);
+ await legacyBackup(dest,'20190101-000000',env.id,env.data);
  await symlink(join(outside,'keep'),join(dest,'20190101-000000','agent-control-IspAgent-202001010330','leak'));
  await mkdir(join(dest,'20180101-000000'));
  try{
@@ -96,7 +96,7 @@ test('a failed offsite copy notifies and deletes nothing',async()=>{
  await mkdir(outside,{recursive:true});
  await writeFile(join(outside,'keep'),'stay');
  await symlink(outside,join(dest,'19990101-000000'));
- for(let day=1;day<=7;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id);
+ for(let day=1;day<=7;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
  await writeFile(join(env.data,'backup-offsite'),'usuario@backup.example:/srv/agent-control\n',{mode:0o600});
  await mkdir(join(env.data,'ssh'),{mode:0o700});
  await writeFile(join(env.data,'ssh/id_ed25519'),'BEGIN KEY s3cret',{mode:0o600});
@@ -121,7 +121,7 @@ test('a successful offsite copy prunes to seven and the rsync plan carries the i
  const env=await fixture();
  const dest=join(env.root,'backups');
  await mkdir(dest,{recursive:true});
- for(let day=1;day<=7;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id);
+ for(let day=1;day<=7;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
  await writeFile(join(env.data,'backup-offsite'),'usuario@backup.example:/srv/agent-control\n',{mode:0o600});
  await mkdir(join(env.data,'ssh'),{mode:0o700});
  await writeFile(join(env.data,'ssh/id_ed25519'),'BEGIN KEY',{mode:0o600});
@@ -186,8 +186,8 @@ test('the default destination keeps the 3 newest of this installation, after res
  await mkdir(dest,{recursive:true});
  await mkdir(outside,{recursive:true});
  await writeFile(join(outside,'keep'),'stay');
- for(let day=1;day<=5;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id);
- await legacyBackup(dest,'20191231-000000','id-de-outra-instalacao');
+ for(let day=1;day<=5;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
+ await legacyBackup(dest,'20191231-000000',env.id,join(env.root,'outra-instalacao'));
  await mkdir(join(dest,'20191230-000000','agent-control-X'),{recursive:true});
  await symlink(outside,join(dest,'20191229-000000'));
  await writeFile(join(dest,'relatorio.txt'),'report');
@@ -215,7 +215,7 @@ test('a new backup older than the others by clock is still kept',async()=>{
  const defaultRoot=join(env.root,'padrao');
  const dest=join(defaultRoot,'data');
  await mkdir(dest,{recursive:true});
- for(let day=1;day<=4;day++)await legacyBackup(dest,`2030010${day}-000000`,env.id);
+ for(let day=1;day<=4;day++)await legacyBackup(dest,`2030010${day}-000000`,env.id,env.data);
  const now=new Date(2026,10,20,3,30,0);
  try{
   await runPersonalBackupRotate([env.file],{now,dump,defaultRoot,listDump});
@@ -230,7 +230,7 @@ test('a failed restore-check keeps every backup, including the new one, and noti
  const defaultRoot=join(env.root,'padrao');
  const dest=join(defaultRoot,'data');
  await mkdir(dest,{recursive:true});
- for(let day=1;day<=4;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id);
+ for(let day=1;day<=4;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
  const sent:string[]=[];
  const now=new Date(2026,10,20,3,30,0);
  try{
@@ -247,8 +247,8 @@ test('an explicit destination only prunes this installation and keeps 7',async()
  const env=await fixture();
  const dest=join(env.root,'compartilhada');
  await mkdir(dest,{recursive:true});
- for(let day=1;day<=8;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id);
- for(let day=1;day<=6;day++)await legacyBackup(dest,`2019010${day}-000000`,'outra-instalacao');
+ for(let day=1;day<=8;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
+ for(let day=1;day<=6;day++)await legacyBackup(dest,`2019010${day}-000000`,'outra-instalacao',env.data);
  try{
   const lines=await runPersonalBackupRotate([env.file,dest],{now:new Date(2026,10,20,3,30,2),dump,listDump,defaultRoot:join(env.root,'padrao')});
   assert.equal(lines.includes(`Destino: ${dest}`),true);
@@ -282,7 +282,7 @@ test('a folder of uncertain ownership is preserved and never counted',async()=>{
  const defaultRoot=join(env.root,'padrao');
  const dest=join(defaultRoot,'data');
  await mkdir(join(dest,'.removendo-20200101-000000','agent-control-IspAgent-1'),{recursive:true});
- await legacyBackup(dest,'20200102-000000',env.id);
+ await legacyBackup(dest,'20200102-000000',env.id,env.data);
  try{
   await runPersonalBackupRotate([env.file],{now:new Date(2026,10,20,3,30,4),dump,listDump,defaultRoot});
   assert.equal((await readdir(dest)).some(name=>name.startsWith('.removendo-')),true);
@@ -326,7 +326,7 @@ test('the CLI prints the default destination without running a backup',async()=>
 test('dois dumps ilegíveis e arquivos alheios não expulsam as três cópias recuperáveis',async()=>{
  const env=await fixture(),defaultRoot=join(env.root,'padrao'),dest=join(defaultRoot,'data');
  try{
-  for(let day=1;day<=5;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id);
+  for(let day=1;day<=5;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id,env.data);
   for(const day of [4,5])await writeFile(join(dest,`2020010${day}-000000`,'agent-control-IspAgent-202001010330','database.dump'),'corrupt');
   await writeFile(join(dest,'20200101-000000','dados-alheios'),'preservar');
   await runPersonalBackupRotate([env.file],{defaultRoot,dump,listDump,now:new Date(2026,10,20)});
