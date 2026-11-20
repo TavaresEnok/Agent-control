@@ -6,7 +6,7 @@ import {Ledger} from './ledger.ts';
 import {moduleCliFailureText,runPersonalModuleCli,type PersonalModuleCliDeps} from './personal-module-cli.ts';
 import {clearPersonalQaConfig,parsePersonalQaConfig,readPersonalQaConfig,writePersonalQaConfig,type PersonalQaConfig} from './personal-qa-config.ts';
 
-const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> [show|set|clear|--corrigir <runId> <ACH-001...>|--medir-correcao <runId>|--reverificar <runId> <ACH-001...>|--descartar <runId>]\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600] [--services \'{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}\']';
+const usage='Uso: npm run personal:qa -- <instalação.json> <projeto> [show|set|clear|--esperar-cota|--corrigir <runId> <ACH-001...>|--medir-correcao <runId>|--reverificar <runId> <ACH-001...>|--descartar <runId>]\n  set --prepare \'["corepack","pnpm","install","--frozen-lockfile"]\' --test \'["corepack","pnpm","test"]\' [--timeout 600] [--services \'{"postgres":{"image":"postgres:16-alpine","database":"qa_test"}}\']';
 
 function flag(args:string[],name:string){const index=args.indexOf(name);return index<0?undefined:args[index+1];}
 
@@ -26,7 +26,7 @@ function restart(config:Installation){
 /** show prints the file, set validates and writes it mode 600, clear deletes it; without a config action, runs the qa verification module. */
 export async function runPersonalQaCli(argv:string[],deps?:PersonalModuleCliDeps){
  const [file,token,action,...rest]=argv;
- if(file&&token&&!file.startsWith('--')&&!token.startsWith('--')&&(action===undefined||action==='--corrigir'||action==='--medir-correcao'||action==='--reverificar'||action==='--descartar')){
+ if(file&&token&&!file.startsWith('--')&&!token.startsWith('--')&&(action===undefined||action==='--esperar-cota'||action==='--corrigir'||action==='--medir-correcao'||action==='--reverificar'||action==='--descartar')){
   return runPersonalModuleCli('qa',argv,deps);
  }
  if(!file||!token||!action||file.startsWith('--')||token.startsWith('--')||!['show','set','clear'].includes(action))throw new Refusal('QA_USAGE');

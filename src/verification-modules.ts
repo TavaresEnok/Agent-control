@@ -25,6 +25,8 @@ import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
 import {isPublicModuleRule, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewObservationTitle, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob, recheckHead, sameRecheckHistory} from './module-recheck-git.ts';
+import {attestDistinctExamSessions, distinctExamSessions, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN,
+  type ExamExecutionIdentity} from './module-exam-sessions.ts';
 import {moduleMeasurementCriterion} from './module-recheck-criteria.ts';
 import {measureLocalRegression} from './module-recheck-local.ts';
 import {latestModuleMeasurement, RECHECK_PROOF_VERSION, type MeasurementScope} from './module-recheck-measurement.ts';
@@ -606,8 +608,10 @@ function isSecretToken(token: string): boolean {
   });
 }
 
+type HighSessionAttestation = (examiner: ExamExecutionIdentity, verifier: ExamExecutionIdentity) => Promise<boolean>;
+
 async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamResult['findings'][number],
-  collectorReview: ModuleExamCollectorReview, raw?: ModuleRawFinding): Promise<Achado['verifier']> {
+  collectorReview: ModuleExamCollectorReview, raw?: ModuleRawFinding, attestHigh?: HighSessionAttestation): Promise<Achado['verifier']> {
   const {snapshot, collector} = collectorReview;
   const {module, commit} = collector;
   if (exam.mode !== 'exame' || finding.reviewCommit !== commit || finding.status === 'provavel'
@@ -617,8 +621,18 @@ async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamRe
   const coverage = exam.coverage.find(row => row.file === finding.file && row.status === 'lido');
   const examiner = coverage?.examiner;
   const verifier = finding.verifier;
-  if (!examiner || !verifier.accountId || !verifier.profileId || examiner.provider === verifier.provider ||
-      examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) return null;
+  if (!examiner || !verifier.accountId || !verifier.profileId) return null;
+  const highExaminerFinding = raw === undefined && finding.source === 'examinador' && finding.severity === 'alta';
+  if (highExaminerFinding) {
+    // Grants and sessions in the result are claims. Publication accepts them only when the
+    // ledger binds each one to a distinct completed native execution, on any account.
+    if (verifier.provider !== HIGH_REVIEWER_PROVIDER || verifier.model !== HIGH_REVIEWER_MODEL
+      || !distinctExamSessions(examiner, verifier) || !attestHigh || !await attestHigh(examiner, verifier)) {
+      return null;
+    }
+  } else if (examiner.provider === verifier.provider || examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) {
+    return null;
+  }
   if (finding.examiner && (finding.examiner.profileId !== examiner.profileId || finding.examiner.accountId !== examiner.accountId ||
       finding.examiner.provider !== examiner.provider)) return null;
   const located = await locateRepoFile(snapshot, finding.file);
@@ -2077,6 +2091,9 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       .map(file => [file.file, file.code] as const)) : undefined;
     const coverage = new Map(exam?.coverage.map(row => [row.file, row] as const));
     const collectorReview = {collector, intentId, snapshot, relatedSources, coverage};
+    const attestHigh: HighSessionAttestation = (examiner, verifier) => attestDistinctExamSessions(input.ledger.pool, {
+      contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer: verifier, reviewerIntentId: intentId,
+    });
     const achados: Achado[] = [];
     for (const finding of collectorData.findings) {
       const achadoId = `ACH-${String(achados.length + 1).padStart(3, '0')}`;
@@ -2093,7 +2110,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           audited.evidence !== origin.evidence || audited.title !== origin.title || audited.severity !== origin.severity) {
           throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
         }
-        verifier = await independentVerifier(exam!, audited, collectorReview, finding);
+        verifier = await independentVerifier(exam!, audited, collectorReview, finding, attestHigh);
         status = verifier ? audited.status : 'provavel';
         if (verifier) {
           proof = localizedProof(audited.proof, audited.reason);
@@ -2131,7 +2148,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
       }
       await resolveInsideRepo(snapshot, judged.file);
-      const verifier = await independentVerifier(exam!, judged, collectorReview);
+      const verifier = await independentVerifier(exam!, judged, collectorReview, undefined, attestHigh);
       achados.push(Achado.parse({
         id: `ACH-${String(achados.length + 1).padStart(3, '0')}`, title: sanitizeText(judged.title), severity: judged.severity,
         status: verifier ? judged.status : 'provavel', verifier,
@@ -2160,11 +2177,17 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }),
     );
 
+    // The examiner's native execution per file, kept so a recheck can prove a distinct session.
+    const examinerExecutions = new Map<string, {grantId: string; sessionId: string}>();
     if (exam) {
       const byFile = new Map(fileCoverage.map(row => [row.file, row]));
       for (const row of exam.coverage) {
         if (row.status !== 'lido' || !row.examiner) continue;
         await resolveInsideRepo(snapshot, assertModuleRepoRelativePath(row.file));
+        const {grantId, sessionId} = row.examiner;
+        if (grantId && sessionId && Id.safeParse(grantId).success && Id.safeParse(sessionId).success) {
+          examinerExecutions.set(row.file, {grantId, sessionId});
+        }
         byFile.set(row.file, CoverageRow.parse({file: row.file, examinerProvider: row.examiner.provider,
           examinerModel: row.examiner.model, profileId: row.examiner.profileId, checklist: row.checklist}));
       }
@@ -2229,10 +2252,13 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       }
       for (const row of fileCoverage) {
         await c.query(
-          `INSERT INTO ac_verify_coverage (run_id, file, examiner_provider, examiner_model, profile_id, checklist, provenance, collector_measurements)
-           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb)`,
+          `INSERT INTO ac_verify_coverage (run_id, file, examiner_provider, examiner_model, profile_id, checklist, provenance, collector_measurements,
+             examiner_grant_id, examiner_session_id)
+           VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8::jsonb,$9,$10)`,
           [runId, row.file, row.examinerProvider, row.examinerModel, row.profileId, JSON.stringify(row.checklist), row.profileId === null ? 'collector' : 'examiner',
-            JSON.stringify((measured.get(row.file) ?? []).map(({tool, version}) => ({tool, version})))],
+            JSON.stringify((measured.get(row.file) ?? []).map(({tool, version}) => ({tool, version}))),
+            row.profileId === null ? null : examinerExecutions.get(row.file)?.grantId ?? null,
+            row.profileId === null ? null : examinerExecutions.get(row.file)?.sessionId ?? null],
         );
       }
       for (let index = 0; index < collectorData.coverage.length; index += 1) {
@@ -2899,13 +2925,16 @@ export async function reconcileModuleReports(
   await reconcileReports(ledger, principal, authority, dataDirectory, projectId);
 }
 
-type ModuleRecheckExaminer = {provider: string; model: string; accountId: string | null; profileId: string | null};
-type ModuleRecheckReviewer = {provider: string; model: string; accountId: string; profileId: string; grantId: string};
+type ModuleRecheckExaminer = {provider: string; model: string; accountId: string | null; profileId: string | null;
+  grantId?: string; sessionId?: string};
+type ModuleRecheckReviewer = {provider: string; model: string; accountId: string; profileId: string; grantId: string; sessionId?: string};
 export type ModuleRecheckReview = (request: {
   intentId: string;
   commit: string;
   task: string;
   examiner: ModuleRecheckExaminer | null;
+  severity?: Achado['severity'];
+  fromExaminer?: boolean;
   signal?: AbortSignal;
 }) => Promise<{output: string; reviewer: ModuleRecheckReviewer} | {reason: string; reviewer?: ModuleRecheckReviewer}>;
 
@@ -2925,7 +2954,7 @@ type ModuleRecheckPublication = z.infer<typeof ModuleRecheckPublication>;
 const RecheckAuditProof = z.object({
   id: ACHADO_ID, status: z.enum(['fechado', 'reaberto']), commit: RecheckCommit, reviewerBinding: RecheckDigest,
   proofDigest: RecheckDigest, reviewerReason: z.string().min(1),
-  reviewer: z.object({provider: z.string().min(1), model: z.string().min(1), accountId: Id, profileId: Id, grantId: Id}),
+  reviewer: z.object({provider: z.string().min(1), model: z.string().min(1), accountId: Id, profileId: Id, grantId: Id, sessionId: Id.optional()}),
   source: z.object({file: z.string(), line: z.number().int().positive(), tool: z.string(), rule: z.string(),
     origin: z.literal('collector'), commit: RecheckCommit, evidenceDigest: RecheckDigest}),
   moduleProof: z.object({runId: Id, tool: z.string(), version: z.string().min(1), origin: z.literal('collector'), collectorImage: z.string()}),
@@ -2944,6 +2973,7 @@ type ModuleRecheckOutcome = {
 type RecheckCoverage = {
   file: string; examiner_provider: string; examiner_model: string; profile_id: string | null;
   account_id: string | null; provenance: string; checklist: string[];
+  examiner_grant_id: string | null; examiner_session_id: string | null;
 };
 
 function protectedRecheckFile(file: string): boolean {
@@ -3205,11 +3235,15 @@ export async function recheckModuleFindings(
   assertInside(projectDir, directory);
   const raw = ModuleCollectorOutput.parse(JSON.parse(await readTextInside(directory, join(directory, 'bruto', 'achados-brutos.json'), 'VERIFY_REPORT_INVALID')));
   const coverage = await ledger.pool.query<RecheckCoverage>(
-    `SELECT v.file, v.examiner_provider, v.examiner_model, v.profile_id, p.account_id, v.provenance, v.checklist
+    `SELECT v.file, v.examiner_provider, v.examiner_model, v.profile_id, p.account_id, v.provenance, v.checklist,
+            v.examiner_grant_id::text AS examiner_grant_id, v.examiner_session_id::text AS examiner_session_id
      FROM ac_verify_coverage v LEFT JOIN ac_profiles p ON p.id=v.profile_id WHERE v.run_id=$1`,
     [loaded.run.id],
   );
   const byFile = new Map(coverage.rows.map(row => [row.file, row]));
+  const examinerIntentId = (await ledger.pool.query<{intent_id: string}>(
+    'SELECT intent_id::text AS intent_id FROM ac_verify_runs WHERE id=$1 AND context_id=$2', [loaded.run.id, authority.contextId],
+  )).rows[0]?.intent_id;
   const head = await recheckHead(repo, signal);
   const originalCommit = loaded.run.commit_id;
   const sameHistory = head !== originalCommit && await sameRecheckHistory(repo, originalCommit, head, signal);
@@ -3272,9 +3306,12 @@ export async function recheckModuleFindings(
       const row = byFile.get(item.file);
       const examiner: ModuleRecheckExaminer | null = row?.provenance === 'examiner' ? {
         provider: row.examiner_provider, model: row.examiner_model, profileId: row.profile_id, accountId: row.account_id,
+        ...(row.examiner_grant_id && row.examiner_session_id
+          ? {grantId: row.examiner_grant_id, sessionId: row.examiner_session_id} : {}),
       } : item.verifier ? {...item.verifier, profileId: null, accountId: null} : null;
       const logOrProtected = protectedRecheckFile(item.file);
       const fromExaminer = item.tool === 'examinador' && item.rule === 'exame-de-arquivo';
+      const highExaminer = fromExaminer && item.severity === 'alta';
       const observed = fromExaminer ? reviewedSources.get(item.id) : undefined;
       const historicalLine = !logOrProtected && (sameHistory || (fromExaminer && !archived)) && /^[0-9a-f]{40}$/.test(originalCommit)
         ? await readRecheckLine(repo, originalCommit, item.file, item.line, signal) : '';
@@ -3367,21 +3404,39 @@ export async function recheckModuleFindings(
         } else if (regression) {
           task.instruction = COVERAGE_REVIEW_INSTRUCTION;
         }
+        // History without the examiner's native session cannot prove a distinct reviewer session,
+        // so it stays pending and no reviewer seat is spent.
         const reviewed = !regression && task.criterion === null && head !== originalCommit
           ? {reason: 'MODULE_RECHECK_FUNCTIONAL_RULE_UNSUPPORTED'}
-          : await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, signal});
+          : highExaminer && (!examiner?.grantId || !examiner.sessionId || !examinerIntentId)
+            ? {reason: 'MODULE_RECHECK_EXAMINER_SESSION_UNPROVEN'}
+          : await input.review({intentId, commit: head, task: JSON.stringify(task), examiner, severity: item.severity, fromExaminer, signal});
         signal?.throwIfAborted();
         reviewer = 'reviewer' in reviewed ? reviewed.reviewer : undefined;
         if ('reason' in reviewed) {
           result = pending(/^[A-Z][A-Z0-9_]{0,79}$/.test(reviewed.reason) ? reviewed.reason : 'MODULE_RECHECK_PROOF_UNAVAILABLE');
-        } else if (examiner && (reviewed.reviewer.provider === examiner.provider || reviewed.reviewer.profileId === examiner.profileId
-          || reviewed.reviewer.accountId === examiner.accountId)) {
-          throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
         } else {
+          if (highExaminer) {
+            if (reviewed.reviewer.provider !== HIGH_REVIEWER_PROVIDER || reviewed.reviewer.model !== HIGH_REVIEWER_MODEL
+              || (examiner && reviewed.reviewer.profileId === examiner.profileId)) {
+              throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+            }
+          } else if (examiner && (reviewed.reviewer.provider === examiner.provider || reviewed.reviewer.profileId === examiner.profileId
+            || reviewed.reviewer.accountId === examiner.accountId)) {
+            throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
+          }
           const parsed = parseModuleReviewJson(reviewed.output);
           const verdict = regression ? readFunctionalRecheckVerdict(parsed) : readModuleReviewVerdict(parsed);
           if (verdict) reviewerReason = sanitizedRecheckReason(verdict.reason);
-          if (regression) {
+          const sessionsProven = !highExaminer || (distinctExamSessions(examiner, reviewed.reviewer)
+            && await attestDistinctExamSessions(ledger.pool, {
+              contextId: authority.contextId, examiner, examinerIntentId: examinerIntentId!, reviewer: reviewed.reviewer, reviewerIntentId: intentId,
+            }));
+          signal?.throwIfAborted();
+          if (!sessionsProven) {
+            result = pending(HIGH_SESSION_UNPROVEN);
+            reviewerReason = undefined;
+          } else if (regression) {
             const status = 'verdict' in regression ? regression.verdict : 'fechado';
             if (!verdict || verdict.status !== (status === 'fechado' ? 'descartado' : 'confirmado')
               || verdict.binding !== task.binding || verdict.proof.trim() !== line) {

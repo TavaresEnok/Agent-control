@@ -12,6 +12,7 @@ import {buildCollectorReviewCase, type ModuleExamCollectorContext} from './modul
 import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewObservationTitle, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewDecision, type ModuleReviewEvidence, type ModuleReviewObservation} from './module-exam-proof.ts';
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 import {isModuleExamTerminalNotice, parseModuleExamJsonObject} from './module-exam-worker.ts';
+import {distinctExamSessions, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN} from './module-exam-sessions.ts';
 
 const checklist: Record<VerificationModule, string> = {
   qa: 'Comportamento funcional, tratamento de erros e testes existentes',
@@ -45,15 +46,25 @@ const ExamResponse = z.object({
     title: z.string().min(1).max(200), severity: ExamSeverity}).strict()).max(20),
 }).strict();
 export type ModuleExamSeat = {provider: string; model: string; accountId: string; profileId: string; grantId: string};
-export type ModuleExamCoverage = {file: string; status: 'lido' | 'nao_julgado'; reason: string | null; examiner: Omit<ModuleExamSeat, 'grantId'> | null; checklist: string[];
+export type ModuleExamCoverage = {file: string; status: 'lido' | 'nao_julgado'; reason: string | null; examiner: ModuleExamExecution | null; checklist: string[];
   read?: {binding: string; commit?: string; sourceDigest: string; complete: boolean; requestId?: string; promptDigest?: string}};
-export type ModuleExamCandidate = {file: string; line: number; title: string; severity: 'alta'|'media'|'baixa'|'informativa'; evidence: string; source: string; hypothesis?: string; binding?: string; observation?: ModuleReviewObservation; reviewCommit?: string; status: 'confirmado'|'provavel'|'descartado'; reason: string; proof: string; verifier: {provider: string; model: string; accountId?: string; profileId?: string} | null; examiner: {provider: string; accountId: string; profileId: string} | null; failure: string | null;
+export type ModuleExamCandidate = {file: string; line: number; title: string; severity: 'alta'|'media'|'baixa'|'informativa'; evidence: string; source: string; hypothesis?: string; binding?: string; observation?: ModuleReviewObservation; reviewCommit?: string; status: 'confirmado'|'provavel'|'descartado'; reason: string; proof: string; verifier: {provider: string; model: string; accountId?: string; profileId?: string; grantId?: string; sessionId?: string} | null; examiner: {provider: string; accountId: string; profileId: string} | null; failure: string | null;
   decision?: ModuleReviewDecision; reviewReason?: string};
 export type ModuleExamResult = {mode: 'exame' | 'somente_ferramentas'; coverage: ModuleExamCoverage[]; routes: (ModuleExamMap['routes'][number] & {status: 'lido'|'nao_julgado'})[]; findings: ModuleExamCandidate[]; notes: string[]};
+export type ModuleExamReviewTarget = {severity: ModuleExamCandidate['severity']; source: string; fromExaminer: boolean};
 
 /** Reservations must enforce policy, project access and quota. The reviewer excludes the examiner provider. */
 const ModuleExamCall = VerifyWorkerCall.omit({repo: true, avoidProviders: true, avoidProfiles: true, avoidAccounts: true, avoidExaminerAccounts: true});
 export type ModuleExamWorker = {run(call: z.infer<typeof ModuleExamCall>): Promise<string>};
+
+export const CLAUDE_QUOTA_RETRY_INTERVAL_MS = 15 * 60 * 1000;
+export type ModuleExamClaudeQuotaWait = {
+  purpose: 'examiner' | 'reviewer';
+  provider: string;
+  accountId?: string;
+  file: string;
+  signal?: AbortSignal;
+};
 
 export type ModuleExamInput = {
   module: VerificationModule; intentId: string; map: ModuleExamMap; findings: readonly ModuleRawFinding[]; commit?: string;
@@ -61,11 +72,17 @@ export type ModuleExamInput = {
   collectorReview?: Omit<ModuleExamCollectorReview, 'coverage' | 'relatedSources'>;
   worker?: ModuleExamWorker;
   unavailable?: string;
-  reserve?: (purpose: 'examiner'|'reviewer', avoid?: {provider: string; profileId: string; accountId: string}) => Promise<ModuleExamSeat>;
+  reserve?: (purpose: 'examiner'|'reviewer', avoid?: {provider: string; profileId: string; accountId: string}, target?: ModuleExamReviewTarget) => Promise<ModuleExamSeat>;
   /** Release only if launch did not start or the native supervisor has proved it exited. */
   release?: (seat: ModuleExamSeat, state: 'not_started'|'exited') => Promise<void>;
+  /** Optional explicit opt-in to wait and retry the same Claude account after PROVIDER_USAGE_LIMIT. */
+  waitForClaudeQuota?: (context: ModuleExamClaudeQuotaWait) => Promise<boolean>;
+  /** Ledger proof that a high examiner finding was reviewed in a distinct native session.
+   * Without it, such a finding stays probable. */
+  attestSessions?: (pair: {examiner: ModuleExamExecution; reviewer: ModuleExamExecution}) => Promise<boolean>;
   signal?: AbortSignal;
 };
+export type ModuleExamExecution = Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string};
 export type ModuleExamCollectorReview = {collector: ModuleExamCollectorContext; intentId: string; snapshot: string;
   coverage?: ReadonlyMap<string, ModuleExamCoverage>;
   relatedSources?: ReadonlyMap<string, string | null>};
@@ -159,6 +176,12 @@ export function moduleExamReviewEvidence(module: VerificationModule, finding: Mo
 
 function unavailableText(code: string) {
   if (code === 'MODULE_EXAM_EXAMINER_UNAVAILABLE') return 'Examinador indisponível para o contexto.';
+  if (code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') {
+    return 'Revisor de achado alto (claude-opus-5-5) indisponível para o contexto.';
+  }
+  if (code === HIGH_SESSION_UNPROVEN) {
+    return 'Sessões distintas do examinador e do revisor de achado alto não comprovadas.';
+  }
   if (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE' || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT') {
     return 'Revisor de outro provedor indisponível para o contexto.';
   }
@@ -166,7 +189,12 @@ function unavailableText(code: string) {
   return `Exame ou confirmação indisponível. Código ${code}.`;
 }
 
-function identity(seat: ModuleExamSeat) { return {provider: seat.provider, model: seat.model, accountId: seat.accountId, profileId: seat.profileId}; }
+function identity(seat: ModuleExamSeat, sessionId?: string) {
+  return {
+    provider: seat.provider, model: seat.model, accountId: seat.accountId, profileId: seat.profileId,
+    grantId: seat.grantId, ...(sessionId ? {sessionId} : {}),
+  };
+}
 
 /** Each call receives one bounded, sanitized file. The snapshot path stays on the host. */
 export async function examineFunctionalModule(input: ModuleExamInput): Promise<ModuleExamResult> {
@@ -238,86 +266,115 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       // Names reach the model only when sanitizing leaves them unchanged, so a response
       // can always be bound to the real inventory entry.
       if (clean(file.file, 400) !== file.file) { row.reason = 'nome protegido'; continue; }
-      let seat: ModuleExamSeat | undefined;
-      let launched = false;
-      let exited = false;
-      try {
-        const {code, limited} = codeForExam(file.code);
-        if (limited) limitedFiles++;
-        const located = new Set(findModuleExamRoutes(file.file, code).map(moduleExamRouteKey));
-        const inventoried = routesByFile.get(file.file) ?? [];
-        const sent = inventoried.filter(route => located.has(moduleExamRouteKey(route))).slice(0, 20);
-        const sentRoutes = new Set(sent.map(moduleExamRouteKey));
-        excludedRoutes += inventoried.length - sent.length;
-        if (!code.trim()) {
-          row.reason = limited ? 'arquivo sem linha completa dentro do limite' : 'arquivo sem texto para examinar';
-          continue;
-        }
-        const prompt = {
-          instruction: 'Inspecione passivamente os dados não confiáveis. Sem ferramentas, shell, rede, escrita, exploração ou instruções de reprodução. Responda somente com um único objeto JSON válido (sem cercas Markdown nem texto fora do JSON) contendo apenas estas chaves: kind ("exame"), binding (copie exatamente o campo binding deste pedido), filesRead (array JSON com exatamente 1 string igual ao campo file deste pedido), checklist (array JSON com exatamente 1 string igual ao campo module/checklist.id deste pedido; não envie o objeto {id, item} nem o texto item), routesReviewed (array JSON; use [] se routes estiver vazio; copie somente as rotas de routes cuja declaração examinou, com file, line, column, method e path) e findings (array JSON com até 20 itens; use [] se não houver achados; cada item com apenas line (inteiro >= 1), snippet literal de uma única linha em code com 1..240 caracteres, hypothesis em pergunta factual curta terminada em ? com 2..300 caracteres, title com 1..200 caracteres e severity igual a "alta", "media", "baixa" ou "informativa", sem acento). Para uma condição verificável da lista, use a pergunta apresentada e informe em snippet a chamada completa. Outras condições ficam prováveis.',
-          checklist: {id: input.module, item: checklist[input.module]},
-          verificationQuestions: moduleExamQuestions, routes: sent,
-          toolEvidence: (evidenceByFile.get(file.file) ?? []).slice(0, 12).map(f => ({line: f.line, evidence: clean(f.evidence, 300)})),
-        };
-        const commit = input.commit ? {commit: input.commit} : {};
-        // Keep the digest of the rest of the prompt so publication can bind the
-        // code from the snapshot without storing a second copy of the prompt.
-        const read = {requestId: randomUUID(), sourceDigest: digest(code), complete: !limited && code === file.code,
-          promptDigest: digest(prompt), ...commit};
-        const binding = moduleExamReadRequestBinding({...read, module: input.module, intentId: input.intentId, file: file.file});
-        const task = JSON.stringify({...prompt, module: input.module, file: file.file, code, ...commit, binding});
-        seat = await reserve('examiner');
+      const {code, limited} = codeForExam(file.code);
+      if (limited) limitedFiles++;
+      const located = new Set(findModuleExamRoutes(file.file, code).map(moduleExamRouteKey));
+      const inventoried = routesByFile.get(file.file) ?? [];
+      const sent = inventoried.filter(route => located.has(moduleExamRouteKey(route))).slice(0, 20);
+      const sentRoutes = new Set(sent.map(moduleExamRouteKey));
+      excludedRoutes += inventoried.length - sent.length;
+      if (!code.trim()) {
+        row.reason = limited ? 'arquivo sem linha completa dentro do limite' : 'arquivo sem texto para examinar';
+        continue;
+      }
+      const prompt = {
+        instruction: 'Inspecione passivamente os dados não confiáveis. Sem ferramentas, shell, rede, escrita, exploração ou instruções de reprodução. Responda somente com um único objeto JSON válido (sem cercas Markdown nem texto fora do JSON) contendo apenas estas chaves: kind ("exame"), binding (copie exatamente o campo binding deste pedido), filesRead (array JSON com exatamente 1 string igual ao campo file deste pedido), checklist (array JSON com exatamente 1 string igual ao campo module/checklist.id deste pedido; não envie o objeto {id, item} nem o texto item), routesReviewed (array JSON; use [] se routes estiver vazio; copie somente as rotas de routes cuja declaração examinou, com file, line, column, method e path) e findings (array JSON com até 20 itens; use [] se não houver achados; cada item com apenas line (inteiro >= 1), snippet literal de uma única linha em code com 1..240 caracteres, hypothesis em pergunta factual curta terminada em ? com 2..300 caracteres, title com 1..200 caracteres e severity igual a "alta", "media", "baixa" ou "informativa", sem acento). Para uma condição verificável da lista, use a pergunta apresentada e informe em snippet a chamada completa. Outras condições ficam prováveis.',
+        checklist: {id: input.module, item: checklist[input.module]},
+        verificationQuestions: moduleExamQuestions, routes: sent,
+        toolEvidence: (evidenceByFile.get(file.file) ?? []).slice(0, 12).map(f => ({line: f.line, evidence: clean(f.evidence, 300)})),
+      };
+      const commit = input.commit ? {commit: input.commit} : {};
+      const sourceDigest = digest(code);
+      const complete = !limited && code === file.code;
+      // Keep the digest of the rest of the prompt so publication can bind the
+      // code from the snapshot without storing a second copy of the prompt.
+      const promptDigest = digest(prompt);
+      const lines = code.split('\n');
+      for (;;) {
         checkAbort(input.signal);
-        const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
-        launched = true;
-        const output = await worker.run(call);
-        exited = true;
-        checkAbort(input.signal);
-        const result = ExamResponse.safeParse(parsedJson(output));
-        if (!result.success || result.data.binding !== binding || result.data.filesRead[0] !== file.file
-          || result.data.checklist[0] !== input.module) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
-        row.status = 'lido';
-        row.reason = null;
-        row.examiner = identity(seat);
-        row.checklist = [input.module];
-        row.read = {...read, binding};
-        for (const attestation of result.data.routesReviewed) {
-          const attested = RouteAttestation.safeParse(attestation);
-          if (!attested.success) continue;
-          const route = declarations.get(file.file)?.(attested.data);
-          if (!route) continue;
-          const key = moduleExamRouteKey(route);
-          if (sentRoutes.has(key)) reviewedRoutes.add(key);
+        let seat: ModuleExamSeat | undefined;
+        let launched = false;
+        let exited = false;
+        let waitQuota = false;
+        try {
+          const read = {requestId: randomUUID(), sourceDigest, complete, promptDigest, ...commit};
+          const binding = moduleExamReadRequestBinding({...read, module: input.module, intentId: input.intentId, file: file.file});
+          const task = JSON.stringify({...prompt, module: input.module, file: file.file, code, ...commit, binding});
+          seat = await reserve('examiner');
+          checkAbort(input.signal);
+          const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
+          launched = true;
+          const output = await worker.run(call);
+          exited = true;
+          checkAbort(input.signal);
+          const result = ExamResponse.safeParse(parsedJson(output));
+          if (!result.success || result.data.binding !== binding || result.data.filesRead[0] !== file.file
+            || result.data.checklist[0] !== input.module) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
+          row.status = 'lido';
+          row.reason = null;
+          row.examiner = identity(seat, (call as {examSessionId?: string}).examSessionId);
+          row.checklist = [input.module];
+          row.read = {...read, binding};
+          for (const attestation of result.data.routesReviewed) {
+            const attested = RouteAttestation.safeParse(attestation);
+            if (!attested.success) continue;
+            const route = declarations.get(file.file)?.(attested.data);
+            if (!route) continue;
+            const key = moduleExamRouteKey(route);
+            if (sentRoutes.has(key)) reviewedRoutes.add(key);
+          }
+          for (const finding of result.data.findings) {
+            if (findings.length >= 999) { notes.add('Limite de 999 achados. Candidatos adicionais do examinador foram omitidos.'); break; }
+            if (!lines[finding.line - 1]?.includes(finding.snippet)) continue;
+            const title = clean(finding.title, 200).trim();
+            if (!title) continue;
+            findings.push({file: file.file, line: finding.line, title, severity: finding.severity,
+              evidence: clean(finding.snippet, 240), source: 'examinador', hypothesis: clean(finding.hypothesis, 300),
+              ...(input.commit ? {reviewCommit: input.commit} : {}),
+              status: 'provavel', reason: 'Sem confirmação independente.',
+              proof: '', verifier: null, examiner: {provider: seat.provider, accountId: seat.accountId, profileId: seat.profileId}, failure: null});
+          }
+          break;
+        } catch (error) {
+          if (fatal(error) || input.signal?.aborted) throw error;
+          const code = failure(error);
+          if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
+            waitQuota = true;
+          } else {
+            row.reason = code;
+            notes.add(unavailableText(code));
+            if (code === 'PROVIDER_USAGE_LIMIT' || code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED'
+              || code === 'MODULE_EXAM_EXAMINER_UNAVAILABLE' || code === 'NO_ELIGIBLE_CAPACITY' || code === 'ROLE_NOT_CONFIGURED'
+              || code === 'NATIVE_IMAGE_MISSING' || code === 'MODULE_EXAM_EGRESS_UNAVAILABLE'
+              || (launched && !exited)) stopExam = code;
+            break;
+          }
+        } finally {
+          if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
         }
-        const lines = code.split('\n');
-        for (const finding of result.data.findings) {
-          if (findings.length >= 999) { notes.add('Limite de 999 achados. Candidatos adicionais do examinador foram omitidos.'); break; }
-          if (!lines[finding.line - 1]?.includes(finding.snippet)) continue;
-          const title = clean(finding.title, 200).trim();
-          if (!title) continue;
-          findings.push({file: file.file, line: finding.line, title, severity: finding.severity,
-            evidence: clean(finding.snippet, 240), source: 'examinador', hypothesis: clean(finding.hypothesis, 300),
-            ...(input.commit ? {reviewCommit: input.commit} : {}),
-            status: 'provavel', reason: 'Sem confirmação independente.',
-            proof: '', verifier: null, examiner: {provider: seat.provider, accountId: seat.accountId, profileId: seat.profileId}, failure: null});
+        if (waitQuota) {
+          const resumed = await input.waitForClaudeQuota!({
+            purpose: 'examiner',
+            provider: seat?.provider ?? 'claude',
+            accountId: seat?.accountId,
+            file: file.file,
+            signal: input.signal,
+          });
+          if (!resumed) {
+            row.reason = 'PROVIDER_USAGE_LIMIT';
+            notes.add(unavailableText('PROVIDER_USAGE_LIMIT'));
+            stopExam = 'PROVIDER_USAGE_LIMIT';
+            break;
+          }
         }
-      } catch (error) {
-        if (fatal(error) || input.signal?.aborted) throw error;
-        const code = failure(error);
-        row.reason = code;
-        notes.add(unavailableText(code));
-        if (code === 'PROVIDER_USAGE_LIMIT' || code === 'EXAM_LOGIN_STALE' || code === 'PROVIDER_AUTH_FAILED'
-          || code === 'MODULE_EXAM_EXAMINER_UNAVAILABLE' || code === 'NO_ELIGIBLE_CAPACITY' || code === 'ROLE_NOT_CONFIGURED'
-          || code === 'NATIVE_IMAGE_MISSING' || code === 'MODULE_EXAM_EGRESS_UNAVAILABLE'
-          || (launched && !exited)) stopExam = code;
-      } finally {
-        if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
       }
     }
     if (excludedRoutes) notes.add(`Rotas fora dos limites de envio ao examinador: ${excludedRoutes}.`);
     if (limitedFiles) notes.add(`Arquivos com envio limitado a linhas completas: ${limitedFiles}.`);
 
     let stopReview = stopExam === 'PROVIDER_USAGE_LIMIT' ? stopExam : null;
+    let stopStandardReview: string | null = null;
+    let stopHighReview: string | null = null;
     const collectorReview = input.collectorReview?.intentId === input.intentId ? {
       ...input.collectorReview, coverage: coverageByFile,
       relatedSources: input.module === 'arquitetura' ? new Map(input.map.files.map(file => [file.file, file.code])) : undefined,
@@ -327,56 +384,114 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       const file = filesByName.get(finding.file);
       const row = coverageByFile.get(finding.file);
       const examiner = finding.examiner ?? (row?.status === 'lido' ? row.examiner : null);
+      const fromExaminer = index >= input.findings.length && finding.source === 'examinador';
+      const highExaminerFinding = fromExaminer && finding.severity === 'alta';
+      const laneStop = stopReview ?? (highExaminerFinding ? stopHighReview : stopStandardReview);
       const binding = file?.code ? moduleExamReadBinding(row, input, finding.file, file.code) : undefined;
       const evidence = file?.code && binding ? moduleExamReviewEvidence(input.module, finding, file.code, input.findings[index], collectorReview, binding) : null;
-      if (stopReview || !evidence || !examiner) {
-        finding.failure = stopReview ?? stopExam ?? 'MODULE_EXAM_EVIDENCE_UNAVAILABLE';
+      if (laneStop || !evidence || !examiner) {
+        finding.failure = laneStop ?? stopExam ?? 'MODULE_EXAM_EVIDENCE_UNAVAILABLE';
         finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
         continue;
       }
-      let seat: ModuleExamSeat | undefined;
-      let launched = false;
-      let exited = false;
-      try {
-        seat = await reserve('reviewer', examiner);
+      // A high examiner finding needs the examiner's own native session before any
+      // reviewer seat is spent. Without it, or without a ledger check, it stays probable.
+      const examinerExecution = highExaminerFinding && row?.examiner
+        && row.examiner.provider === examiner.provider && row.examiner.accountId === examiner.accountId
+        && row.examiner.profileId === examiner.profileId ? row.examiner : null;
+      if (highExaminerFinding && (!examinerExecution?.grantId || !examinerExecution.sessionId || !input.attestSessions)) {
+        finding.failure = HIGH_SESSION_UNPROVEN;
+        finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
+        notes.add(unavailableText(HIGH_SESSION_UNPROVEN));
+        continue;
+      }
+      for (;;) {
         checkAbort(input.signal);
-        if (seat.provider === examiner.provider || seat.profileId === examiner.profileId || seat.accountId === examiner.accountId) {
-          throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
-        }
-        const task = moduleReviewTask(evidence);
-        const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
-        launched = true;
-        const output = await worker.run(call);
-        exited = true;
-        checkAbort(input.signal);
-        const result = readModuleReviewVerdict(parsedJson(output));
-        if (!result) throw new Refusal('MODULE_CONFIRMATION_INVALID');
-        finding.reviewReason = clean(result.reason, 2000);
-        const reason = moduleReviewProofReason(evidence, result);
-        if (reason) {
-          if (evidence.tool === 'examinador' && result.status === 'confirmado') {
-            finding.title = moduleReviewObservationTitle(result.observation) ?? finding.title;
+        let seat: ModuleExamSeat | undefined;
+        let launched = false;
+        let exited = false;
+        let waitQuota = false;
+        try {
+          seat = await reserve('reviewer', examiner, {severity: finding.severity, source: finding.source, fromExaminer});
+          checkAbort(input.signal);
+          if (highExaminerFinding) {
+            if (seat.provider !== HIGH_REVIEWER_PROVIDER || seat.model !== HIGH_REVIEWER_MODEL
+              || seat.profileId === examiner.profileId || seat.grantId === examinerExecution!.grantId) {
+              throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+            }
+          } else if (seat.provider === examiner.provider || seat.profileId === examiner.profileId || seat.accountId === examiner.accountId) {
+            throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
           }
-          finding.status = result.status;
-          if (result.decision) finding.decision = result.decision;
-          finding.reason = reason;
-          finding.proof = evidence.code;
-          finding.binding = result.binding;
-          finding.observation = result.observation;
-          finding.verifier = identity(seat);
-        } else {
-          finding.reason = 'Sem prova localizada suficiente para decidir a hipótese.';
+          const task = moduleReviewTask(evidence);
+          const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
+          launched = true;
+          const output = await worker.run(call);
+          exited = true;
+          checkAbort(input.signal);
+          const reviewerSessionId = (call as {examSessionId?: string}).examSessionId;
+          // Parse first: a quota or login failure in the output keeps its own code.
+          const parsed = parsedJson(output);
+          if (highExaminerFinding) {
+            const reviewer = identity(seat, reviewerSessionId);
+            if (!distinctExamSessions(examinerExecution, reviewer)
+              || !await input.attestSessions!({examiner: examinerExecution!, reviewer})) {
+              throw new Refusal(HIGH_SESSION_UNPROVEN);
+            }
+            checkAbort(input.signal);
+          }
+          const result = readModuleReviewVerdict(parsed);
+          if (!result) throw new Refusal('MODULE_CONFIRMATION_INVALID');
+          finding.reviewReason = clean(result.reason, 2000);
+          const reason = moduleReviewProofReason(evidence, result);
+          if (reason) {
+            if (evidence.tool === 'examinador' && result.status === 'confirmado') {
+              finding.title = moduleReviewObservationTitle(result.observation) ?? finding.title;
+            }
+            finding.status = result.status;
+            if (result.decision) finding.decision = result.decision;
+            finding.reason = reason;
+            finding.proof = evidence.code;
+            finding.binding = result.binding;
+            finding.observation = result.observation;
+            finding.verifier = identity(seat, reviewerSessionId);
+          } else {
+            finding.reason = 'Sem prova localizada suficiente para decidir a hipótese.';
+          }
+          break;
+        } catch (error) {
+          if (fatal(error) || input.signal?.aborted) throw error;
+          const code = failure(error);
+          if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
+            waitQuota = true;
+          } else {
+            finding.failure = code;
+            finding.reason = `Confirmação indisponível. Código ${code}.`;
+            notes.add(unavailableText(code));
+            if (code === 'PROVIDER_USAGE_LIMIT' || (launched && !exited)) stopReview = code;
+            else if (highExaminerFinding && code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') stopHighReview = code;
+            else if (!highExaminerFinding && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
+              || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT')) stopStandardReview = code;
+            break;
+          }
+        } finally {
+          if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
         }
-      } catch (error) {
-        if (fatal(error) || input.signal?.aborted) throw error;
-        const code = failure(error);
-        finding.failure = code;
-        finding.reason = `Confirmação indisponível. Código ${code}.`;
-        notes.add(unavailableText(code));
-        if (code === 'PROVIDER_USAGE_LIMIT' || code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
-          || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT' || (launched && !exited)) stopReview = code;
-      } finally {
-        if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
+        if (waitQuota) {
+          const resumed = await input.waitForClaudeQuota!({
+            purpose: 'reviewer',
+            provider: seat?.provider ?? 'unknown',
+            accountId: seat?.accountId,
+            file: finding.file,
+            signal: input.signal,
+          });
+          if (!resumed) {
+            finding.failure = 'PROVIDER_USAGE_LIMIT';
+            finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
+            notes.add(unavailableText('PROVIDER_USAGE_LIMIT'));
+            stopReview = 'PROVIDER_USAGE_LIMIT';
+            break;
+          }
+        }
       }
     }
   }

@@ -26,10 +26,10 @@ import {
   type ModuleCollectorOutput,
   type VerificationModuleRunResult,
 } from './verification-modules.ts';
-import {composePersonalModuleExamRuntime, createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamRuntime} from './module-exam-native.ts';
+import {composePersonalModuleExamRuntime, createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamClock, type ModuleExamRuntime} from './module-exam-native.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 
-const moduleActions = '[--corrigir <runId> <ACH-001...> | --medir-correcao <runId> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
+const moduleActions = '[--esperar-cota | --corrigir <runId> <ACH-001...> | --medir-correcao <runId> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
 const messages: Record<string, string> = {
   VERIFY_USAGE: `Uso: npm run personal:<modulo> -- <instalação.json> <projeto> ${moduleActions}`,
   PERSONAL_ACTIVATION_REQUIRED: 'O módulo de verificação só roda numa instalação pessoal.',
@@ -96,7 +96,7 @@ export function moduleCliFailureText(error: unknown, module?: VerificationModule
 }
 
 export type ParsedPersonalModuleInvocation =
-  | {kind: 'run'; module: VerificationModule; installationPath: string; projectToken: string; origin?: string}
+  | {kind: 'run'; module: VerificationModule; installationPath: string; projectToken: string; origin?: string; waitForQuota?: boolean}
   | {kind: 'discard'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
   | {kind: 'measure'; module: VerificationModule; installationPath: string; projectToken: string; runId: string}
   | {kind: 'remediate' | 'recheck'; module: VerificationModule; installationPath: string; projectToken: string; runId: string; achadoIds: string[]};
@@ -120,20 +120,6 @@ export function parsePersonalModuleArgs(
   if (rest.length === 0) {
     return {kind: 'run', module, installationPath, projectToken};
   }
-  if (module === 'prontidao' && (rest[0] === '--origem' || rest[0]?.startsWith('--origem='))) {
-    let origin: string | undefined;
-    if (rest[0] === '--origem') {
-      if (rest.length !== 2 || !rest[1] || rest[1].startsWith('--')) {
-        throw new Refusal('VERIFY_USAGE', 400);
-      }
-      origin = rest[1];
-    } else {
-      if (rest.length !== 1) throw new Refusal('VERIFY_USAGE', 400);
-      origin = rest[0].slice('--origem='.length);
-      if (!origin || origin.startsWith('--')) throw new Refusal('VERIFY_USAGE', 400);
-    }
-    return {kind: 'run', module, installationPath, projectToken, origin};
-  }
   if (rest[0] === '--descartar' || rest[0] === '--medir-correcao') {
     const runId = rest[1];
     if (rest.length !== 2 || !runId || runId.startsWith('--') || !Id.safeParse(runId).success) {
@@ -153,7 +139,38 @@ export function parsePersonalModuleArgs(
     }
     return {kind: recheck ? 'recheck' : 'remediate', module, installationPath, projectToken, runId, achadoIds};
   }
-  throw new Refusal('VERIFY_USAGE', 400);
+  let origin: string | undefined;
+  let waitForQuota = false;
+  for (let index = 0; index < rest.length; index += 1) {
+    const arg = rest[index]!;
+    if (arg === '--esperar-cota') {
+      if (waitForQuota) throw new Refusal('VERIFY_USAGE', 400);
+      waitForQuota = true;
+      continue;
+    }
+    if (module === 'prontidao' && (arg === '--origem' || arg.startsWith('--origem='))) {
+      if (origin !== undefined) throw new Refusal('VERIFY_USAGE', 400);
+      if (arg === '--origem') {
+        const value = rest[index + 1];
+        if (!value || value.startsWith('--')) throw new Refusal('VERIFY_USAGE', 400);
+        origin = value;
+        index += 1;
+      } else {
+        origin = arg.slice('--origem='.length);
+        if (!origin || origin.startsWith('--')) throw new Refusal('VERIFY_USAGE', 400);
+      }
+      continue;
+    }
+    throw new Refusal('VERIFY_USAGE', 400);
+  }
+  return {
+    kind: 'run',
+    module,
+    installationPath,
+    projectToken,
+    ...(origin !== undefined ? {origin} : {}),
+    ...(waitForQuota ? {waitForQuota: true} : {}),
+  };
 }
 
 function resolveProject(config: Installation, token: string) {
@@ -215,6 +232,9 @@ export type PersonalModuleCliDeps = {
   runCollector?: (spec: CollectorRunnerSpec) => Promise<string | Buffer | ModuleCollectorOutput>;
   /** Tests supply a synthetic native supervisor and an isolated collector. */
   moduleExamRuntime?: () => Promise<ModuleExamRuntime>;
+  clock?: ModuleExamClock;
+  leaseHeartbeatMs?: number;
+  onQuotaWait?: (info: {purpose: 'examiner' | 'reviewer'; file: string; delayMs: number}) => void;
   onResult?: (result: VerificationModuleRunResult) => void;
 };
 
@@ -304,7 +324,7 @@ export async function runPersonalModuleCli(
     });
     void aborted.catch(() => undefined);
     let stopLease: () => void = () => {};
-    stopLease = keepPersonalVerifyLease(ledger, authority, 5000, () => {
+    stopLease = keepPersonalVerifyLease(ledger, authority, deps?.leaseHeartbeatMs ?? 5000, () => {
       void abortPersonalVerifyForLeaseLoss({
         stopLease() {
           stopLease();
@@ -317,6 +337,7 @@ export async function runPersonalModuleCli(
     });
 
     let runningTask: Promise<VerificationModuleRunResult> | undefined;
+    const waitForClaudeQuota = parsed.kind === 'run' && parsed.waitForQuota === true;
     const execute = async (signal: AbortSignal) => {
       const passiveTlsEvidence: ProntidaoPassiveEvidence | undefined =
         module === 'prontidao' && authorizedOrigins.length > 0 && deps?.collectorOutput === undefined
@@ -331,6 +352,9 @@ export async function runPersonalModuleCli(
       const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
         loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
+        ...(waitForClaudeQuota ? {waitForClaudeQuota: true} : {}),
+        ...(deps?.clock ? {clock: deps.clock} : {}),
+        ...(deps?.onQuotaWait ? {onQuotaWait: deps.onQuotaWait} : {}),
       });
       return runVerificationModule({
         module,
@@ -343,6 +367,7 @@ export async function runPersonalModuleCli(
         commit,
         runId,
         signal,
+        ...(deps?.clock ? {createdAt: new Date(deps.clock.now())} : {}),
         image: measurement?.image ?? deps?.image,
         ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),
         ...(deps?.timeoutMs !== undefined ? {timeoutMs: deps.timeoutMs} : {}),
@@ -416,6 +441,9 @@ async function main(): Promise<void> {
     module = assertVerificationModule(rawModule);
     const printed: string[] = [];
     const lines = await runPersonalModuleCli(module, process.argv.slice(3), {
+      onQuotaWait({delayMs}) {
+        console.error(`PROVIDER_USAGE_LIMIT. Aguardando ${Math.round(delayMs / 60000)} minutos pela renovação da cota Claude para retomar o exame.`);
+      },
       onResult(result) {
         printed.push(result.runId, result.directory);
         console.log(result.runId);
