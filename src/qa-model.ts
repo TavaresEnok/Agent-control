@@ -1,3 +1,4 @@
+import {tailForModel} from './manager-discipline.ts';
 import {CapacityPolicy} from './capacity.ts';
 import {Refusal} from './contracts.ts';
 import {managedId} from './managed-plan.ts';
@@ -45,7 +46,7 @@ export function parseQaModelVerdict(raw:unknown){
 }
 
 export function qaModelExecutionRequest(input:{stageId:string;sessionId:string;intentId:string;grantId:string;artifact:{id:string;policy_revision:number;commit_id:string;tree_id:string;base_id:string};diff:string;truncated?:boolean;ownerRequest?:string;testTail:string}){
- const task=JSON.stringify({instruction:QA_MODEL_INSTRUCTION,...(input.ownerRequest?{ownerRequest:input.ownerRequest}:{}),kind:'review',diff:input.diff.slice(0,20000),diffTruncated:Boolean(input.truncated),testTail:input.testTail.slice(0,8000),artifactId:input.artifact.id,policyRevision:input.artifact.policy_revision,commit:input.artifact.commit_id,tree:input.artifact.tree_id,base:input.artifact.base_id});
+ const task=JSON.stringify({instruction:QA_MODEL_INSTRUCTION,...(input.ownerRequest?{ownerRequest:input.ownerRequest}:{}),kind:'review',diff:input.diff.slice(0,20000),diffTruncated:Boolean(input.truncated),testTail:tailForModel(input.testTail,'qa-logs.bin do estágio '+input.stageId,40,8000),artifactId:input.artifact.id,policyRevision:input.artifact.policy_revision,commit:input.artifact.commit_id,tree:input.artifact.tree_id,base:input.artifact.base_id});
  return {jobId:input.stageId,intentId:input.intentId,grantId:input.grantId,sessionId:input.sessionId,base:input.artifact.commit_id,role:'qa' as const,task,writePaths:[] as string[],artifactId:input.artifact.id,outputSchema:structuredClone(nativeReviewOutputSchema)};
 }
 

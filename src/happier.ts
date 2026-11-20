@@ -21,6 +21,7 @@ import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
 import {panelMessageFromRecord,type PanelMessage,type PanelPage} from './personal-panel-conversation.ts';
 import {reserveAssumptionNotices,teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
+import {historyBeforeCurrent,managerEconomyOf,managerRepositoryContext} from './manager-discipline.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
 import {claudeLimitNotice} from './quota-exhaustion.ts';
@@ -274,7 +275,7 @@ export class HappierEndpoint {
   recoveredMessages: unknown[] = [];
   readonly seal: (value: unknown) => string;
   constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; dataDirectory?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
+    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; dataDirectory?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
     this.conversation = conversation ?? this.createHappierConversation();
@@ -456,7 +457,13 @@ export class HappierEndpoint {
       // The decision is a model call that can outlast the 15 s manager lease, above all at high effort: keep the lease alive meanwhile.
       let renewingDecision=false;const decisionLease=setInterval(()=>{if(!renewingDecision&&!this.lifecycle.signal.aborted){renewingDecision=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewingDecision=false;});}},4000);decisionLease.unref?.();
       let decision;
-      try{decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+await personalRepositoryContext(this.runtime.repo)).catch(()=>null)??null;}
+      const economy=this.options.managerEconomy??managerEconomyOf();
+      try{
+       // Discipline: compact map context (cached by commit) and a short, summarized history. Off keeps the legacy prompt.
+       const repositoryContext=await this.managerContext();
+       const history=economy.discipline?historyBeforeCurrent((await this.readPanelConversation(undefined,40).catch(()=>({messages:[]}))).messages,{localId:q.localId,text:q.text}):[];
+       decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+repositoryContext,{compact:economy.discipline,history,measure:economy.measurement,projectId:this.runtime.projectId}).catch(()=>null)??null;
+      }catch{decision=null;}
       finally{clearInterval(decisionLease);}
       if(!decision){const notice=await this.claudeLimitAnnouncement();if(notice){await this.say(notice.localId,notice.text);throw new Refusal('NO_ELIGIBLE_CAPACITY');}}
       const kind=decision?.kind??classifyPersonalText(q.text);
@@ -553,7 +560,7 @@ export class HappierEndpoint {
     // not a second scheduler; the same callId remains authoritative after failure.
     let renewing=false;const timer=setInterval(()=>{if(!renewing&&!this.lifecycle.signal.aborted&&this.connectionState()==='connected'){renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});}},4000);timer.unref?.();
     let result:z.infer<typeof managerPlanPublishedSchema>;
-    const contextText=this.options.personalConversation?await personalRepositoryContext(this.runtime.repo)+'\n\nPedido:\n'+sourceText:sourceText;
+    const contextText=this.options.personalConversation?await this.managerContext()+'\n\nPedido:\n'+sourceText:sourceText;
     try{result=managerPlanPublishedSchema.parse(await planner.plan(this.options.principal,{id:callId,intentId:intent.id,contextId:intent.context_id,
       expectedRevision:revision,sourceMessageRef:payload.messageRef,qualityRevision:payload.qualityRevision,targetRef:payload.targetRef,text:contextText.slice(0,100000)},this.options.authority));}
     finally{clearInterval(timer);}
@@ -587,6 +594,11 @@ export class HappierEndpoint {
      const project=(await this.ledger.pool.query('SELECT p.auto_approve_plans FROM ac_projects p JOIN ac_contexts x ON x.project_id=p.id WHERE x.id=$1',[intent.context_id])).rows[0];
      if(project?.auto_approve_plans)await this.startProposal(result.revision,result.digest);
     }
+  }
+  /** Repository context for the manager and the semantic planner: compact cached map under discipline, the legacy listing otherwise. */
+  private async managerContext(){
+   const economy=this.options.managerEconomy??managerEconomyOf();
+   return managerRepositoryContext(this.runtime.repo,{enabled:economy.discipline,contextTokens:economy.contextTokens,measure:economy.measurement,projectId:this.runtime.projectId,dataDirectory:this.options.dataDirectory},()=>personalRepositoryContext(this.runtime.repo));
   }
   private async claudeLimitAnnouncement(){
    if(!this.options.personalConversation)return null;

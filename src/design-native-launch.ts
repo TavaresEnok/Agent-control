@@ -1,3 +1,4 @@
+import {pollSchedule} from './manager-discipline.ts';
 import {randomUUID} from 'node:crypto';
 import {Refusal, type Authority} from './contracts.ts';
 import {safeFailureCode} from './exam-login.ts';
@@ -7,6 +8,8 @@ import {NativeExecutionRequest} from './native-execution-supervisor.ts';
 
 // The native job may run until its 15 minute timeout. Polling every 2s has to outlast that.
 const EXAM_ATTEMPTS = 480;
+const EXAM_DEADLINE_MS = (EXAM_ATTEMPTS - 1) * 2000;
+const EXAM_WAIT_MAX_MS = 10_000;
 const EXAM_WAIT_MS = 2000;
 
 const outputSchema = {
@@ -27,6 +30,9 @@ export type DesignExamSupervisor = {
 
 type ReleaseGrant = (grantId: string, reason: 'exited') => Promise<void> | void;
 type Wait = (ms: number) => Promise<void>;
+type Poll = {attempts: number; waitMs: (attempt: number) => number};
+const LEGACY_POLL: Poll = pollSchedule({backoff: false, baseMs: EXAM_WAIT_MS, maxMs: EXAM_WAIT_MS, deadlineMs: EXAM_DEADLINE_MS});
+const BACKOFF_POLL: Poll = pollSchedule({backoff: true, baseMs: EXAM_WAIT_MS, maxMs: EXAM_WAIT_MAX_MS, deadlineMs: EXAM_DEADLINE_MS});
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => {
@@ -74,13 +80,14 @@ async function observeExam(
   authority: Authority,
   request: DesignExamRequest,
   wait: Wait,
+  poll: Poll = LEGACY_POLL,
 ): Promise<{state: string; output?: string; failureCode?: string | null}> {
   await supervisor.start(principal, authority, request);
-  for (let attempt = 0; attempt < EXAM_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < poll.attempts; attempt += 1) {
     const outcome = await supervisor.reconcile(principal, authority, request);
     if (terminal(outcome.state)) return outcome;
-    if (attempt === EXAM_ATTEMPTS - 1) throw new Error('DESIGN_EXAM_TIMEOUT');
-    await wait(EXAM_WAIT_MS);
+    if (attempt === poll.attempts - 1) throw new Error('DESIGN_EXAM_TIMEOUT');
+    await wait(poll.waitMs(attempt));
   }
   throw new Error('DESIGN_EXAM_TIMEOUT');
 }
@@ -93,10 +100,11 @@ async function finishExam(
   releaseGrant: ReleaseGrant | undefined,
   grantId: string,
   wait: Wait,
+  poll: Poll = LEGACY_POLL,
 ): Promise<string> {
   let outcome: {state: string; output?: string; failureCode?: string | null};
   try {
-    outcome = await observeExam(supervisor, principal, authority, request, wait);
+    outcome = await observeExam(supervisor, principal, authority, request, wait, poll);
   } catch (error) {
     if (releaseGrant) await releaseGrant(grantId, 'exited');
     throw error;
@@ -115,8 +123,11 @@ export function createDesignNativeWorker(input: {
   base: string;
   releaseGrant?: ReleaseGrant;
   wait?: Wait;
+  /** Poll with a growing wait (default). False keeps the fixed 2 s wait. The total deadline is the same. */
+  pollBackoff?: boolean;
 }): DesignWorker {
   const {supervisors, principal, authority, base, releaseGrant, wait = sleep} = input;
+  const poll = input.pollBackoff === false ? LEGACY_POLL : BACKOFF_POLL;
   return {
     async run(call) {
       const parsed = DesignWorkerCall.parse(call);
@@ -134,7 +145,7 @@ export function createDesignNativeWorker(input: {
         artifactId: randomUUID(),
         ...(parsed.forcedModel === undefined ? {} : {forcedModel: parsed.forcedModel, forcedEffort: parsed.forcedEffort ?? 'high'}),
       });
-      return finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait);
+      return finishExam(supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait, poll);
     },
   };
 }

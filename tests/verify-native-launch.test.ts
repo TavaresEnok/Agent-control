@@ -654,3 +654,43 @@ test('o supervisor nativo real só atesta recibo assinado com a própria chave e
     await rm(area, {recursive: true, force: true});
   }
 });
+
+test('espera cresce com recuo e mantém o mesmo prazo total que a espera fixa', async () => {
+  for (const [pollBackoff, expectFewer] of [[true, true], [false, false]] as const) {
+    const asked = call();
+    const waits: number[] = [];
+    let reconciles = 0;
+    const chosen = supervisor(asked.accountId, {
+      async start() {
+        return {state: 'running'};
+      },
+      async reconcile() {
+        reconciles += 1;
+        return {state: 'running'};
+      },
+      async retireTerminal() {
+        return {state: 'removed'};
+      },
+      async stop() {
+        return {state: 'stop_requested'};
+      },
+    });
+    const worker = createCapacityNativeWorker({
+      supervisors: [chosen], principal: 'owner', authority: authority(), ledger, base, pollBackoff,
+      wait: async ms => {
+        waits.push(ms);
+      },
+    });
+    await assert.rejects(() => worker.run(asked), /VERIFY_EXAM_TIMEOUT/);
+    assert.equal(waits[0], 2000);
+    if (expectFewer) {
+      assert.deepEqual(waits.slice(0, 4), [2000, 3000, 4500, 6750]);
+      assert.ok(Math.max(...waits) <= 10_000);
+      assert.ok(reconciles < 150, 'com recuo: ' + reconciles);
+    } else {
+      assert.ok(waits.every(ms => ms === 2000));
+      assert.ok(reconciles >= 479, 'sem recuo: ' + reconciles);
+    }
+    assert.ok(waits.reduce((sum, ms) => sum + ms, 0) >= 950_000, 'prazo total preservado');
+  }
+});

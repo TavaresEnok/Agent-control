@@ -42,7 +42,7 @@ export type ResolvedPersonalDesign = {
   authority: Authority;
   projectId: string;
   repo: string;
-  economy?: {map: boolean; measurement: boolean};
+  economy?: {map: boolean; measurement: boolean; managerDiscipline?: boolean};
   dataDirectory: string;
   commit: string;
   intentId: string;
@@ -406,6 +406,7 @@ export async function resolvePersonalDesign(
       authority,
       base: commit,
       releaseGrant,
+      pollBackoff: project.economy?.managerDiscipline !== false,
     });
     const capacity = new Capacity(ledger);
     const reserve = (role: 'specialist' | 'reviewer', _avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat> => {

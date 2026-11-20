@@ -26,6 +26,7 @@ import {prepareWorkflowRuntimeRegistration,startWorkflowRuntimeRegistration} fro
 import {Control} from './control.ts';
 import {bootstrapRecoveryInventory} from './recovery-bootstrap.ts';
 import {nativeReviewVerifierDigest} from './native-verification.ts';
+import {managerEconomyOf} from './manager-discipline.ts';
 import {startConfiguredManagerTransport} from './manager-transport.ts';
 import type {ManagerRegistry} from './managers.ts';
 /** The primary project keeps today's active-bootstrap gate. Any other project
@@ -221,7 +222,7 @@ async function main(){
    try{
     await runtime.start(execute?'execution':'administration-only');
     const control=new Control(ledger,quotaRegistry.adapters,project.id,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
-    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:personalRuntime?.semantic,managerChat:personalRuntime?.managerChat,...(config.activation==='personal'?{dataDirectory:config.dataDirectory,projectLabel:[config.project,...config.projects].find(item=>item.id===runtime.projectId)?.label}:{})});
+    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:personalRuntime?.semantic,managerChat:personalRuntime?.managerChat,...(config.activation==='personal'?{dataDirectory:config.dataDirectory,projectLabel:[config.project,...config.projects].find(item=>item.id===runtime.projectId)?.label,managerEconomy:managerEconomyOf([config.project,...config.projects].find(item=>item.id===runtime.projectId)?.economy)}:{})});
     configurationControls.set(project.id,control);if(registry)managerTransports.set(project.id,registry);return runtime;
    }catch(error){await runtime.close();throw error;}
   });
@@ -285,7 +286,7 @@ async function main(){
      const {createCapacityNativeWorker}=await import('./verify-native-launch.ts');
      const {beginPersonalVerification}=await import('./verify-command.ts');
      const {personalAccountRoot}=await import('./personal-health.ts');
-     const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how)});
+     const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:project.economy?.managerDiscipline!==false});
      return beginPersonalVerification({projectId:panel.projectId,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
     },
     recheck:async(principal,authority,input)=>{

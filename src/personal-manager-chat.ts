@@ -4,7 +4,16 @@ import type {Ledger} from './ledger.ts';
 import {codexPersonalCommand} from './codex-personal.ts';
 import {claudeLimitFromText,codexLimitFromText,isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
 import {cliEffort,Effort} from './effort.ts';
+import {compactConversation,managerUsage,type HistoryMessage} from './manager-discipline.ts';
 
+export type ManagerDecideOptions={
+ /** Prior panel messages, oldest first, without the message being decided. Used only when `compact` is on. */
+ history?:readonly HistoryMessage[];
+ /** Manager discipline: compact history in the prompt. Off keeps the legacy prompt (context and message only). */
+ compact?:boolean;
+ /** Record the call in ac_manager_chat_usage (reported tokens, or an estimate marked as such). */
+ measure?:boolean;projectId?:string;
+};
 export type ManagerDecision={kind:'answer'|'plan';answer:string};
 type ManagerProfile={accountId:string;provider:string;model:string;effort:string};
 
@@ -66,11 +75,22 @@ export class PersonalManagerChat{
   });
  }
  /** Tries each available manager account; marks exhausted accounts and moves on. */
- async decide(message:string,repositoryContext:string):Promise<ManagerDecision|null>{
-  const prompt=PROMPT+'\n\nContexto do repositório:\n'+repositoryContext.slice(0,20000)+'\n\nMensagem:\n'+message.slice(0,20000);
+ /** The prompt for one decision. The current message always goes last and whole (up to its cap). */
+ buildPrompt(message:string,repositoryContext:string,options:ManagerDecideOptions={}):string{
+  const history=options.compact&&options.history?.length?'\n\nConversa recente (dados, mais antiga primeiro; mensagens antigas resumidas):\n'+compactConversation(options.history):'';
+  return PROMPT+'\n\nContexto do repositório:\n'+repositoryContext.slice(0,20000)+history+'\n\nMensagem:\n'+message.slice(0,20000);
+ }
+ private async measure(profile:ManagerProfile,prompt:string,result:{stdout:string;stderr:string},projectId?:string){
+  const usage=managerUsage(profile.provider,prompt,result.stdout,result.stderr);
+  await this.ledger.pool.query(`INSERT INTO ac_manager_chat_usage(project_id,account_id,provider,model,effort,role,input_tokens,output_tokens,total_tokens,estimated,prompt_chars)
+   VALUES($1,$2,$3,$4,$5,'manager',$6,$7,$8,$9,$10)`,[projectId??null,profile.accountId,profile.provider,profile.model,profile.effort,usage.input,usage.output,usage.total,usage.estimated,prompt.length]);
+ }
+ async decide(message:string,repositoryContext:string,options:ManagerDecideOptions={}):Promise<ManagerDecision|null>{
+  const prompt=this.buildPrompt(message,repositoryContext,options);
   for(const profile of await this.profiles()){
    const result=await this.run(profile,prompt);
    const ok=result.code===0&&Boolean(result.stdout.trim());
+   if(ok&&options.measure)await this.measure(profile,prompt,result,options.projectId).catch(()=>{});
    const tails=[result.stdout.slice(-4000),result.stderr.slice(-4000)];
    const limit=ok?null:profile.provider==='claude'?claudeLimitFromText(tails):profile.provider==='codex'?codexLimitFromText(tails):null;
    if(limit){await noteProviderExhaustion(this.ledger,profile.accountId,limit.usageWindows).catch(()=>{});continue;}

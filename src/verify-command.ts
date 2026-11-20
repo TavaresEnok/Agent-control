@@ -813,6 +813,7 @@ export async function resolvePersonalVerification(
       authority,
       base: commit,
       releaseGrant: (grantId, how) => releaseCapacityGrant(ledger, principal, authority!, grantId, how),
+      pollBackoff: project.economy?.managerDiscipline !== false,
     });
     const image = await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);

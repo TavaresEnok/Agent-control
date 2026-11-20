@@ -17,6 +17,7 @@ import {QualityPolicy} from './quality-policy.ts';
 import {diskGuardFromEnvironment,type DiskGuard} from './disk-admission.ts';
 import {provisionNativeQaDatabase,redactQaDatabaseSecrets,removeNativeQaService} from './native-qa-database.ts';
 import {NativeQaContract as NativeQaSchema,nativeQaContractDigest,type NativeQaContract as NativeQaValue} from './native-qa-contract.ts';
+import {backoffMs} from './manager-discipline.ts';
 import {continueAfterScriptQa,contextQaModel,qaLogTail,qaModelIds} from './qa-model.ts';
 export const NativeQaContract=NativeQaSchema;
 export type NativeQaContract=NativeQaValue;
@@ -139,9 +140,10 @@ export class NativeQa{
   try{
    if(isCanceled())throw new Refusal('STAGE_CANCELED');
    let status=await this.start(principal,authority,intent.id,stage,grantId,artifact,isCanceled);
+   let polls=0;
    while(status.state!=='completed'&&status.state!=='failed'){
     if(isCanceled()){await this.stop(principal,authority,stage.id,'canceled');throw new Refusal('STAGE_CANCELED');}
-    await new Promise(resolve=>setTimeout(resolve,1000));status=await this.reconcile(principal,authority,stage.id);
+    await new Promise(resolve=>setTimeout(resolve,backoffMs(polls++,1000,5000)));status=await this.reconcile(principal,authority,stage.id);
    }
    // The hook runs only after a passed script. A throw leaves the stage unrecorded so the next run asks again.
    return await continueAfterScriptQa({scriptState:status.state,scriptStatus:status.receipt?.status,qaModel:Boolean(beforeRecord),evaluate:async()=>{if(beforeRecord)await beforeRecord(status);},record:()=>this.record(principal,authority,stage.id)});

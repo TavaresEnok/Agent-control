@@ -1,3 +1,4 @@
+import {pollSchedule} from './manager-discipline.ts';
 import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
@@ -8,6 +9,8 @@ import {VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
 
 // The native job may run until its 15 minute timeout. Polling every 2s has to outlast that.
 const EXAM_ATTEMPTS = 480;
+const EXAM_DEADLINE_MS = (EXAM_ATTEMPTS - 1) * 2000;
+const EXAM_WAIT_MAX_MS = 10_000;
 const EXAM_WAIT_MS = 2000;
 const STOP_CONFIRM_ATTEMPTS = 4;
 
@@ -61,6 +64,9 @@ export type SecurityExamSupervisor = {
 
 type ReleaseGrant = (grantId: string, reason: 'exited') => Promise<void> | void;
 type Wait = (ms: number) => Promise<void>;
+type Poll = {attempts: number; waitMs: (attempt: number) => number};
+const LEGACY_POLL: Poll = pollSchedule({backoff: false, baseMs: EXAM_WAIT_MS, maxMs: EXAM_WAIT_MS, deadlineMs: EXAM_DEADLINE_MS});
+const BACKOFF_POLL: Poll = pollSchedule({backoff: true, baseMs: EXAM_WAIT_MS, maxMs: EXAM_WAIT_MAX_MS, deadlineMs: EXAM_DEADLINE_MS});
 
 function terminal(state: string): boolean {
   return state === 'completed' || state === 'failed';
@@ -72,13 +78,14 @@ async function observeExam(
   authority: Authority,
   request: SecurityExamRequest,
   wait: Wait,
+  poll: Poll = LEGACY_POLL,
 ): Promise<{state: string; output?: string; sessionId?: unknown; receipt?: unknown}> {
   await supervisor.start(principal, authority, request);
-  for (let attempt = 0; attempt < EXAM_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < poll.attempts; attempt += 1) {
     const outcome = await supervisor.reconcile(principal, authority, request);
     if (terminal(outcome.state)) return outcome;
-    if (attempt === EXAM_ATTEMPTS - 1) throw new Error('VERIFY_EXAM_TIMEOUT');
-    await wait(EXAM_WAIT_MS);
+    if (attempt === poll.attempts - 1) throw new Error('VERIFY_EXAM_TIMEOUT');
+    await wait(poll.waitMs(attempt));
   }
   throw new Error('VERIFY_EXAM_TIMEOUT');
 }
@@ -175,10 +182,11 @@ async function finishExam(
   grantId: string,
   wait: Wait,
   identity?: {accountId: string; profileId: string},
+  poll: Poll = LEGACY_POLL,
 ): Promise<{output: string; verifiedSessionId: string | null}> {
   let outcome: {state: string; output?: string; sessionId?: unknown; receipt?: unknown};
   try {
-    outcome = await observeExam(supervisor, principal, authority, request, wait);
+    outcome = await observeExam(supervisor, principal, authority, request, wait, poll);
   } catch (error) {
     if (examTimeout(error)) {
       // The grant stays reserved unless stop and a terminal output both confirm the job is gone.
@@ -212,8 +220,11 @@ export function createCapacityNativeWorker(input: {
   base: string;
   releaseGrant?: ReleaseGrant;
   wait?: Wait;
+  /** Poll with a growing wait (default). False keeps the fixed 2 s wait. The total deadline is the same. */
+  pollBackoff?: boolean;
 }): VerifyWorker {
   const {supervisors, principal, authority, base, releaseGrant, wait = sleep} = input;
+  const poll = input.pollBackoff === false ? LEGACY_POLL : BACKOFF_POLL;
   const completedByCall = new WeakMap<object, NativeCompletedSession>();
   let active: {supervisor: SecurityExamSupervisor; request: SecurityExamRequest} | null = null;
   const worker: VerifyWorker = {
@@ -242,7 +253,7 @@ export function createCapacityNativeWorker(input: {
       try {
         const completed = await finishExam(
           supervisor, principal, authority, request, releaseGrant, parsed.grantId, wait,
-          {accountId: parsed.accountId, profileId: parsed.profileId},
+          {accountId: parsed.accountId, profileId: parsed.profileId}, poll,
         );
         if (completed.verifiedSessionId) {
           completedByCall.set(call, {
@@ -311,8 +322,10 @@ export function createRecheckNativeWorker(input: {
   ): Promise<{grantId: string; accountId: string; provider: string; role?: 'specialist' | 'reviewer'}>;
   releaseGrant?: ReleaseGrant;
   wait?: Wait;
+  pollBackoff?: boolean;
 }): VerifyWorker {
   const {supervisors, principal, authority, base, reserveReviewer, releaseGrant, wait = sleep} = input;
+  const poll = input.pollBackoff === false ? LEGACY_POLL : BACKOFF_POLL;
   return {
     async run(call) {
       const parsed = VerifyWorkerCall.parse(call);
@@ -349,7 +362,7 @@ export function createRecheckNativeWorker(input: {
         if (releaseGrant) await releaseGrant(reserved.grantId, 'exited');
         throw error;
       }
-      return (await finishExam(supervisor, principal, authority, request, releaseGrant, reserved.grantId, wait)).output;
+      return (await finishExam(supervisor, principal, authority, request, releaseGrant, reserved.grantId, wait, undefined, poll)).output;
     },
   };
 }

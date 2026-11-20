@@ -14,7 +14,7 @@ async function main(){
  const config=JSON.parse(await readFile(resolve(path),'utf8'));if(typeof config.databaseUrl!=='string')throw Error('Instalação sem databaseUrl');
  const codex=opts['--codex']??[join(homedir(),'.codex','sessions')];
  const claude=opts['--claude']??['/home/app/.claude-trabalhadores',config.accountHomesDirectory??join(config.dataDirectory,'accounts')];
- const seen=new Set<string>(),rows:(UsageRow & {source:string})[]=[];
+ const seen=new Set<string>(),rows:(UsageRow & {source:string;total?:number|null})[]=[];
  for(const [roots,parser] of [[codex,readCodex],[claude,readClaude]] as const)for(const root of roots)for(const f of await files(root)){const canonical=await realpath(f);if(seen.has(canonical))continue;seen.add(canonical);rows.push(...parser(await readFile(f,'utf8'),w).map(r=>({...r,source:'externo'})));}
  rows.push(...readAntigravity().map(r=>({...r,source:'externo'})));
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
@@ -24,9 +24,14 @@ async function main(){
  LEFT JOIN LATERAL (SELECT counters FROM ac_usage_observations WHERE grant_id=g.id AND observed_at<$1::timestamptz ORDER BY seq DESC LIMIT 1) b ON true
  WHERE g.resource_kind='model' AND ($2::timestamptz IS NULL OR g.created_at<$2) AND ($1::timestamptz IS NULL OR g.created_at >= $1 OR EXISTS (SELECT 1 FROM ac_usage_observations o WHERE o.grant_id=g.id AND o.observed_at >= $1 AND ($2::timestamptz IS NULL OR o.observed_at<$2)))`,[w.from??null,w.to??null]);
  for(const r of result.rows){const value=(k:string):number|null=>{const n=r.counters?.[k];if(typeof n!=='number')return null;if(!w.from||new Date(r.created_at).getTime()>=Date.parse(w.from))return n;const b=r.baseline?.[k];return typeof b==='number'&&n>=b?n-b:null;};rows.push({source:'nativo',provider:r.provider??'desconhecido',model:r.model??'desconhecido',effort:r.effort??'desconhecido',role:r.role??'desconhecido',input:value('input'),cache:value('cache'),output:value('output'),calls:1});}
+ // Panel manager calls: reported totals are native; size-based estimates are kept apart and marked.
+ const managerRows=await pool.query(`SELECT provider,model,effort,role,input_tokens,output_tokens,total_tokens,estimated FROM ac_manager_chat_usage
+  WHERE ($1::timestamptz IS NULL OR observed_at>=$1) AND ($2::timestamptz IS NULL OR observed_at<$2)`,[w.from??null,w.to??null]).catch(()=>({rows:[]}));
+ const big=(v:unknown):number|null=>v===null||v===undefined?null:Number(v);
+ for(const r of managerRows.rows)rows.push({source:r.estimated?'estimado':'nativo',provider:String(r.provider),model:String(r.model),effort:String(r.effort),role:String(r.role),input:big(r.input_tokens),cache:null,output:big(r.output_tokens),calls:1,total:big(r.total_tokens)});
  }finally{await pool.end();}
- const grouped=new Map<string,UsageRow & {source:string}>();for(const row of rows){const key=JSON.stringify([row.source,row.provider,row.model,row.effort,row.role]);const prev=grouped.get(key);if(!prev){grouped.set(key,{...row});continue;}for(const k of ['input','cache','output','calls'] as const)prev[k]=prev[k]===null||row[k]===null?null:prev[k]!+row[k]!;}
+ const grouped=new Map<string,UsageRow & {source:string;total?:number|null}>();for(const row of rows){const key=JSON.stringify([row.source,row.provider,row.model,row.effort,row.role]);const prev=grouped.get(key);if(!prev){grouped.set(key,{...row});continue;}for(const k of ['input','cache','output','calls'] as const)prev[k]=prev[k]===null||row[k]===null?null:prev[k]!+row[k]!;prev.total=prev.total==null||row.total==null?null:prev.total+row.total;}
  console.log('As fontes nativa e externa podem conter os mesmos jobs; não some as duas.');
- console.log('fonte\tprovedor\tmodelo\tesforço\tpapel\tentrada\tcache\tsaída\tchamadas');for(const r of grouped.values())console.log([r.source,r.provider,r.model,r.effort,r.role,r.input,r.cache,r.output,r.calls].map(v=>v??'não medido').join('\t'));
+ console.log('fonte\tprovedor\tmodelo\tesforço\tpapel\tentrada\tcache\tsaída\tchamadas\ttotal informado');for(const r of grouped.values())console.log([r.source,r.provider,r.model,r.effort,r.role,r.input,r.cache,r.output,r.calls,r.total].map(v=>v??'não medido').join('\t'));
 }
 main().catch((e:unknown)=>{console.error(e instanceof Error?e.message:'Falha ao ler uso');process.exitCode=1;});

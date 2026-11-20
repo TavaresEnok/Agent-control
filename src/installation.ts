@@ -29,7 +29,7 @@ const httpsOrigin=()=>z.string().transform(value=>{
  return url.origin;
 });
 const absolute=z.string().refine(isAbsolute,'Absolute path required');
-export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:z.boolean().default(true),batch:z.boolean().default(true),batchTokens:z.number().int().min(1000).max(200000).default(40000),batchFiles:z.number().int().min(1).max(32).default(8)}).strict();
+export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:z.boolean().default(true),batch:z.boolean().default(true),batchTokens:z.number().int().min(1000).max(200000).default(40000),batchFiles:z.number().int().min(1).max(32).default(8),managerDiscipline:z.boolean().default(true),managerContextTokens:z.number().int().min(500).max(20000).default(2500)}).strict();
 const projectDefinition=z.object({economy:ProjectEconomy.optional(),id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
 export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  activation:z.enum(['locked','personal']).default('locked'),

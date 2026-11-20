@@ -20,6 +20,7 @@ import type {NativeQa} from './native-qa.ts';
 import type {NativeVerification} from './native-verification.ts';
 import {IsolatedAdvice} from './isolated-advice.ts';
 import {assertPreimplementationAdvice,signPreimplementationAdvice,PreimplementationAdviceReceipt} from './preimplementation-advice.ts';
+import {backoffMs} from './manager-discipline.ts';
 import {managedId,readManagedInput,readManagedUnit,type ManagedUnit} from './managed-plan.ts';
 import type { AgentRunSpec, AgentSession, AgentEvent } from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
 export type EngineeringOptions={nativeQa?:NativeQa;nativeVerification?:NativeVerification;quality:Quality;git:GitArtifacts;qualityRevision?:number;targetRef?:string;allowedTargets?:readonly string[];verifierKey:Uint8Array;isolatedVerification?:IsolatedVerification;isolatedAdvice?:IsolatedAdvice;
@@ -545,7 +546,7 @@ export class EngineeringStages{
      const worker=async()=>{
       for(;;){
        const index=next++;if(index>=policy.requiredReviews)return;
-       let announced=false;
+       let announced=false,reviewerWaits=0;
        for(;;){
         if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
         const reviewer=this.start(intent,authority,'review',{...spec,sessionId:reviewSession(sessionId,index)},undefined,true);
@@ -554,7 +555,7 @@ export class EngineeringStages{
         catch(error){
          if(!(error instanceof Refusal)||!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
          if(!announced){onEvent?.({type:'text',text:`Synthetic reviewer ${index+1} waiting for an authorized slot.`});announced=true;}
-         await new Promise(resolve=>setTimeout(resolve,2000));
+         await new Promise(resolve=>setTimeout(resolve,backoffMs(reviewerWaits++,1000,5000)));
         }finally{nested.delete(reviewer);}
        }
       }
@@ -648,7 +649,7 @@ export class EngineeringStages{
    if(node==='judge')await this.ledger.tx(c=>this.options.quality.assertReady(c,artifact.id,authority,{ignoreJudge:true}));
    if(node==='integrate'){
     const prepare=()=>this.options.quality.prepareIntegration(principal,artifact.id,authority,contract.target_ref);
-    let integration:Awaited<ReturnType<typeof prepare>>,announced=false;
+    let integration:Awaited<ReturnType<typeof prepare>>,announced=false,integrationWaits=0;
     for(;;){
      if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
      try{integration=await prepare();admissionWait(null);break;}
@@ -656,7 +657,7 @@ export class EngineeringStages{
       if(!(error instanceof Refusal)||!['INTEGRATION_APPROVAL_REQUIRED','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
       admissionWait(error.code);
       if(!announced){onEvent?.({type:'text',text:'Integration is waiting for an authorized approval or admission. No Git effect started.'});announced=true;}
-      await new Promise(resolve=>setTimeout(resolve,1000));
+      await new Promise(resolve=>setTimeout(resolve,backoffMs(integrationWaits++,1000,5000)));
      }
     }
     await this.ledger.tx(async c=>{await this.ledger.fence(c,authority);await this.ledger.assertIntentActive(c,authority.contextId,intent.id);
@@ -674,7 +675,7 @@ export class EngineeringStages{
      role:node==='qa'?'qa':node==='judge'?'judge':'reviewer',...(avoidAccounts.length?{avoidAccounts}:{})},authority);
     // Capacity exhaustion is an admission wait in this same native session,
     // not failed verification. Reuse the persisted stage/attempt on every poll.
-    let grant:Awaited<ReturnType<typeof reserve>>;let waitReason:string|undefined;
+    let grant:Awaited<ReturnType<typeof reserve>>;let waitReason:string|undefined;let capacityWaits=0;
     for(;;){
      if(canceled||!this.running)throw new Refusal('STAGE_CANCELED');
      try{grant=await reserve();admissionWait(null);break;}
@@ -682,7 +683,7 @@ export class EngineeringStages{
       if(!(error instanceof Refusal)||!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','HUMAN_PAUSED','ADMISSION_CLOSED'].includes(error.code))throw error;
       admissionWait(error.code);
       if(waitReason!==error.code){onEvent?.({type:'text',text:`Stage ${node} waiting: ${error.code}. No verifier launched.`});waitReason=error.code;}
-      await new Promise(resolve=>setTimeout(resolve,1000));
+      await new Promise(resolve=>setTimeout(resolve,backoffMs(capacityWaits++,1000,5000)));
      }
     }
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
