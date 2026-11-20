@@ -69,3 +69,18 @@
 - **Trabalhadores a partir de 19/11/2026 ~20:30 UTC (titular):** a cota do Gemini 4 Argon voltou. Os trabalhadores passam a ser até **6** `agy` com `gemini-4-argon-high`, cada um no seu worktree. Trailer: `Co-Authored-By: Gemini 4 Argon <noreply@google.com>`. Acionamento: `setsid nohup agy -p "<ordem>" --model gemini-4-argon-high --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Os trabalhadores Sol que estão rodando terminam a ordem atual. O gerente (Astra high) e o revisor (1 Sol high) continuam. Se o Argon devolver 429, volte para os trabalhadores Sol (2 high e 2 medium), sem parar o trabalho.
 - **Trabalhadores a partir de 19/11/2026 ~21:15 UTC (titular):** o Argon está sem cota de novo (429, reposição em ~146 h). Os trabalhadores passam a ser até **4** `agy` com `gemini-4-hydrogen-high`. Trailer: `Co-Authored-By: Gemini 4 Hydrogen <noreply@google.com>`. Acionamento: `setsid nohup agy -p "<ordem>" --model gemini-4-hydrogen-high --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Se o Hydrogen devolver 429, volte para os trabalhadores Sol, sem parar. Registre qualquer cota esgotada com a palavra `COTA`.
 - **Reserva dos trabalhadores (titular, 19/11/2026):** se o Hydrogen também ficar sem cota, os trabalhadores passam a ser até 4 Codex `gpt-6.1-terra`, esforço `high`, modo normal: `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -m gpt-6.1-terra -c model_reasoning_effort=high -C <worktree> "..."`. Trailer `Co-Authored-By: GPT-6.1 Terra <noreply@openai.com>`. Os Sol entram só se o Terra também falhar.
+- **Equipe para o NexoISP (titular, 20/11/2026), substitui as regras de trabalhadores acima.**
+  - **Gerente:** Astra 6.2 `high`, modo normal.
+  - **Revisor:** 1 Sol 6.2 `high`, modo normal, só leitura.
+  - **Trabalhadores:** até **3** ao mesmo tempo, sempre na ordem abaixo, passando ao seguinte quando a cota do anterior acabar (429 ou limite de uso):
+    1. `agy` com `gemini-4-hydrogen-high`;
+    2. `agy` com `gemini-4-argon-high`;
+    3. Claude Code com `claude-sonnet-5-5` esforço `high`, login dedicado da conta ajustconsulting (plano Pro):
+       ```
+       CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/ajust claude -p "<ordem>" --model claude-sonnet-5-5 --effort high --dangerously-skip-permissions
+       ```
+    4. o mesmo com o login dedicado da conta Enok (plano Max): `CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok`.
+  - **Logins dos trabalhadores:** usam só as pastas de `/home/app/.claude-trabalhadores/`, nunca as contas da instalação viva, para não disputar a renovação do login.
+  - **Trailers:** Gemini `Co-Authored-By: Gemini 4 Hydrogen|Argon <noreply@google.com>`; Claude `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
+  - **Examinador dos módulos:** Claude Sonnet 5.5, esforço **high**, com examinador e revisor em contas diferentes (Enok Max e ajustconsulting).
+  - **Cota do Max apertada:** quando a cota da conta Enok Max ficar apertada, a prioridade é do examinador, não dos trabalhadores.

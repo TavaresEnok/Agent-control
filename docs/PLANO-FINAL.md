@@ -39,7 +39,19 @@ Você trabalha sem tela e sem titular presente. Decida sozinho as dúvidas de im
   - Nunca compre créditos.
   - Se o Hydrogen acabar, use o Argon, e vice-versa. Diga isso no progresso.
 
-## Ordem do titular (19/11/2026 ~19:20 UTC): só os módulos
+## Ordem do titular (20/11/2026): parte E, NexoISP
+
+Os módulos estão concluídos (`FIM` de 20/11 01:34). Agora vale a parte E (NexoISP), descrita mais abaixo. Use a equipe e a ordem de trabalhadores do `AGENTS.md` (seção "Equipe para o NexoISP").
+
+**Antes de começar o NexoISP:**
+
+1. **Esforço do examinador.** Faça `personal:design -- preparar` aceitar o esforço do examinador e do revisor, com padrão `high`. Os perfis especialistas de exame passam a usar `high`; o perfil de criação continua Opus `medium`. Reordene a cadeia `specialist` para pôr os perfis da conta de maior cota (Enok Max, `85790410-…`) antes dos da conta Pro (`de7d4c47-…`), mantendo examinador e revisor em contas diferentes. Prove com teste e aplique na instalação viva com backup. O IspAgent já está na revisão 11 da política, com a conta Enok Max.
+2. **Leitura das respostas do examinador.** Corrija `MODULE_EXAM_RESPONSE_INVALID`. Na prova de arquitetura de 20/11 02:24 (run `42225b53-…`), 56 respostas do examinador foram recusadas por formato. Descubra se o modelo respondeu fora do formato ou se a leitura está rígida demais. Corrija com teste.
+3. **Prova do exame.** Rode `personal:arquitetura` no IspAgent e confirme que o examinador julga arquivos. Se a cota acabar no meio, isso é aceitável; registre quantos foram julgados.
+
+Depois, siga a parte E: cópia central, cadastro, os 10 módulos, correções no ramo `agent-control/revisao-20261119`, entrega e relatório. A regra de cota não muda: se a cota do Codex acabar, pause, escreva `docs/RELATORIO-PAUSA.md` e `PAUSADO-COTA`, e encerre. As 20 telas (parte B) continuam em espera.
+
+## Ordem do titular (19/11/2026 ~19:20 UTC): só os módulos (concluída)
 
 **Esqueça o NexoISP (parte E) e as 20 telas (parte B) por enquanto.** Termine apenas os módulos.
 
