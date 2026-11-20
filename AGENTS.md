@@ -93,3 +93,17 @@
 - **Design, módulo 10 (titular, 20/11/2026), substitui o que está acima para esse módulo.** O examinador, a crítica visual e o modo `criar` usam **Claude Opus 5.5, esforço `high`**, na conta Enok Max. O modo `criar` hoje força `claude-opus-5-5` com esforço `medium` (supervisor e `design-create`); mude para `high` pelo caminho do produto, com teste, e aplique na instalação viva com backup. Os outros módulos seguem a regra anterior.
 - **URGENTE — disco (supervisor, 20/11/2026 06:50 UTC):** o disco chegou a 98% (cerca de 10 GB livres). O crescimento vem de `/home/app/.agent-control/ispagent/native/execution-host`: 611 diretórios de job, 23 GB, cada um com uma cópia `work/` do projeto examinado, e de `/tmp/ac-retomada-8f5dddf3-JZR4mNOc/oci` (11 GB). Antes de lançar novos exames, aplique pelo caminho do produto a retirada dos jobs terminados (remover `work/` de job concluído e já reconciliado) e apague os arquivos OCI temporários que não são mais prova aceita. Se o disco passar de 97%, não lance novos exames até liberar espaço.
 - **URGENTE 2 — disco a 99% (supervisor, 20/11/2026 07:42 UTC):** restam menos de 4 GB. **Não lance novos exames nem novos trabalhadores** até o disco ficar abaixo de 90%. Primeiro libere espaço pelo caminho do produto: retire e reconcilie os jobs nativos concluídos e remova o `work/` dos jobs já terminados em `/home/app/.agent-control/ispagent/native/execution-host` (são 23 GB). Se o produto não tiver esse caminho, implemente agora a limpeza dos `work/` de jobs terminais, com teste, como prioridade máxima. O banco da instalação viva fica em risco se o disco encher.
+- **Esforço e cota do Antigravity (titular, 20/11/2026), substitui os itens correspondentes acima.**
+  - **Gerente:** Astra 6.2, esforço **`medium`**, modo normal.
+  - **Revisor:** Sol 6.2, esforço **`medium`**, modo normal, só leitura.
+  - **Trabalhadores das correções comuns**, até 3, nesta ordem, passando ao seguinte quando a cota acabar:
+    1. `agy --model gemini-4-hydrogen-high`;
+    2. `agy --model gemini-4-argon-high`;
+    3. **`agy --model claude-sonnet-5-5-high`**, que é o Claude pela cota do Antigravity e vem antes das contas Claude próprias;
+    4. Claude Code `claude-sonnet-5-5` esforço `high` no login `/home/app/.claude-trabalhadores/ajust` (Pro);
+    5. o mesmo no login `/home/app/.claude-trabalhadores/enok` (Max).
+  - **Trabalhadores das correções de gravidade alta:**
+    1. **`agy --model claude-opus-5-5-medium`**, pela cota do Antigravity;
+    2. depois Claude Code `claude-opus-5-5` esforço `medium` no login Enok (Max).
+  - **Acionamento pelo Antigravity:** `setsid nohup agy -p "<ordem>" --model <modelo> --dangerously-skip-permissions --print-timeout 0 > <log> 2>&1 < /dev/null &`. Trailer conforme o modelo: `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` ou `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+  - O examinador dos módulos continua nas contas Claude da instalação (Enok Max e ajustconsulting), com os esforços já definidos. O Antigravity serve só aos trabalhadores.
