@@ -54,6 +54,8 @@ export type SecurityExamSupervisor = {
     receipt?: unknown;
   }>;
   retireTerminal(principal: string, authority: Authority, jobId: string): Promise<unknown>;
+  /** Authenticates a receipt under this supervisor's own key. A supervisor that cannot vouch for a receipt proves nothing. */
+  receiptSignedByThisExecutor?(receipt: unknown): boolean;
   stop?(principal: string, authority: Authority, request: SecurityExamRequest): Promise<{state: string}>;
 };
 
@@ -87,8 +89,17 @@ function examTimeout(error: unknown): boolean {
 
 const SIGNATURE_HEX = /^[a-f0-9]{128}$/;
 
-/** Positive proof from the signed native execution contract: a completed terminal receipt that binds this very request. */
+function authenticReceipt(supervisor: SecurityExamSupervisor, receipt: unknown): boolean {
+  try {
+    return supervisor.receiptSignedByThisExecutor?.(receipt) === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Positive proof from the signed native execution contract: a completed terminal receipt, signed by the supervisor that ran it, that binds this very request. */
 function matchesSupervisorReceipt(
+  supervisor: SecurityExamSupervisor,
   receipt: unknown,
   request: SecurityExamRequest,
   authority: Authority,
@@ -98,6 +109,7 @@ function matchesSupervisorReceipt(
   if (!isRecord(receipt) || typeof receipt.signature !== 'string' || !SIGNATURE_HEX.test(receipt.signature)) return false;
   const payload = receipt.payload;
   if (!isRecord(payload)) return false;
+  if (!authenticReceipt(supervisor, receipt)) return false;
   if (payload.schemaVersion !== 1) return false;
   if ('executionStarted' in payload && payload.executionStarted !== true) return false;
   return payload.sessionId === request.sessionId
@@ -111,6 +123,7 @@ function matchesSupervisorReceipt(
 }
 
 function verifiedCompletedSession(
+  supervisor: SecurityExamSupervisor,
   outcome: {state: string; output?: string; sessionId?: unknown; receipt?: unknown},
   retired: unknown,
   request: SecurityExamRequest,
@@ -120,7 +133,7 @@ function verifiedCompletedSession(
 ): string | null {
   if (outcome.state !== 'completed') return null;
   if ('sessionId' in outcome && outcome.sessionId !== undefined && outcome.sessionId !== request.sessionId) return null;
-  if (!matchesSupervisorReceipt(outcome.receipt, request, authority, accountId, profileId)) return null;
+  if (!matchesSupervisorReceipt(supervisor, outcome.receipt, request, authority, accountId, profileId)) return null;
   if (!isRecord(retired) || retired.state !== 'removed') return null;
   return request.sessionId;
 }
@@ -185,7 +198,7 @@ async function finishExam(
   return {
     output: outcome.output ?? '',
     verifiedSessionId: identity
-      ? verifiedCompletedSession(outcome, retired, request, authority, identity.accountId, identity.profileId)
+      ? verifiedCompletedSession(supervisor, outcome, retired, request, authority, identity.accountId, identity.profileId)
       : null,
   };
 }

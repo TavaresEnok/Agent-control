@@ -13,15 +13,11 @@ import {collectToolFindings} from './verify-collect.ts';
 import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
-import {type SecurityExamSupervisor} from './verify-native-launch.ts';
+import {isCapacityNativeWorker, type SecurityExamSupervisor} from './verify-native-launch.ts';
 import {
-  isIssuedStaticCliPolicyGrant,
-  issueStaticCliPolicyGrant,
   runResolvedPersonalSecurityVerification,
   runSecurityVerification,
-  wrapStaticCliPolicyWorker,
   type SecurityVerificationInput,
-  type StaticCliPolicyGrant,
 } from './verify-runtime.ts';
 import type {VerifyWorker} from './verify-types.ts';
 
@@ -63,7 +59,55 @@ export type PersonalVerificationInput = {
   networkRunner?: NetworkRunner;
 };
 
-const RESOLVED_STATIC_POLICY = Symbol('personalVerifyStaticPolicy');
+/**
+ * Static CLI policy capability for module 1. It is issued only by `resolvePersonalVerification` without `--url`,
+ * to the native capacity worker built there, and the only wrapper created for it is the deadline guard in `runJob`.
+ * The runtime can ask whether a worker holds it, never issue it.
+ */
+type StaticCliPolicyGrant = Readonly<{nativeWorker: VerifyWorker; projectId: string; contextId: string; commit: string}>;
+const staticPolicyWorkers = new WeakMap<VerifyWorker, StaticCliPolicyGrant>();
+
+function issueStaticCliPolicy(input: {url?: string} & StaticCliPolicyGrant): void {
+  if (input.url !== undefined) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
+  if (!isCapacityNativeWorker(input.nativeWorker)) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
+  staticPolicyWorkers.set(input.nativeWorker, Object.freeze({
+    nativeWorker: input.nativeWorker,
+    projectId: input.projectId,
+    contextId: input.contextId,
+    commit: input.commit,
+  }));
+}
+
+/** Grant held by this worker for exactly this project, context and commit, or null. */
+function heldStaticCliPolicy(input: {
+  worker: VerifyWorker;
+  projectId: string;
+  commit: string;
+  authority: {contextId: string};
+}): StaticCliPolicyGrant | null {
+  const grant = staticPolicyWorkers.get(input.worker);
+  if (
+    !grant
+    || grant.projectId !== input.projectId
+    || grant.contextId !== input.authority.contextId
+    || grant.commit !== input.commit
+    || !isCapacityNativeWorker(grant.nativeWorker)
+  ) {
+    return null;
+  }
+  return grant;
+}
+
+/** The only thing the runtime imports about the capability: the native worker and context a worker is authorized for. */
+export function authorizedStaticCliPolicy(input: {
+  worker: VerifyWorker;
+  projectId: string;
+  commit: string;
+  authority: {contextId: string};
+}): {nativeWorker: VerifyWorker; contextId: string} | null {
+  const grant = heldStaticCliPolicy(input);
+  return grant ? {nativeWorker: grant.nativeWorker, contextId: grant.contextId} : null;
+}
 
 export type VerificationProgress = {
   id: string;
@@ -142,23 +186,10 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
     timeLimitMs: chosenTimeLimit(input.timeLimitMs),
-    staticPolicy: resolveStaticPolicyGrant(input),
+    staticPolicy: input.url === undefined
+      ? heldStaticCliPolicy({worker: input.worker, projectId: input.projectId, commit: input.commit, authority: input.authority}) ?? undefined
+      : undefined,
   };
-}
-
-function resolveStaticPolicyGrant(input: PersonalVerificationInput): StaticCliPolicyGrant | undefined {
-  if (input.url !== undefined || !input.worker || !input.authority || !input.commit) return undefined;
-  const grant = (input as Record<PropertyKey, unknown>)[RESOLVED_STATIC_POLICY];
-  if (!isIssuedStaticCliPolicyGrant(grant)) return undefined;
-  if (
-    grant.nativeWorker !== input.worker
-    || grant.projectId !== input.projectId
-    || grant.contextId !== input.authority.contextId
-    || grant.commit !== input.commit
-  ) {
-    return undefined;
-  }
-  return grant;
 }
 
 function chosenTimeLimit(value: number | undefined): number {
@@ -171,13 +202,17 @@ function assertExamDeadline(startedMs: number, limitMs: number): void {
   if (Date.now() >= startedMs + limitMs) throw new Error('VERIFY_EXAM_TIMEOUT');
 }
 
+/** Deadline guard. When the worker holds the static policy, the guard it returns inherits it, and no other wrapper does. */
 function workerWithDeadline(worker: VerifyWorker, startedMs: number, limitMs: number): VerifyWorker {
-  return {
+  const guard: VerifyWorker = {
     async run(call) {
       assertExamDeadline(startedMs, limitMs);
       return worker.run(call);
     },
   };
+  const grant = staticPolicyWorkers.get(worker);
+  if (grant) staticPolicyWorkers.set(guard, grant);
+  return guard;
 }
 
 async function ensureTree(root: string, segments: readonly string[]): Promise<string> {
@@ -488,8 +523,6 @@ async function runJob(input: {
       await runTools({image: ready.image, repository: ready.repoPath, databases: ready.databasesDirectory, output});
       const collected = await collectToolFindings(output);
       assertExamDeadline(startedMs, ready.timeLimitMs);
-      const guardedWorker = workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs);
-      const staticPolicy = ready.url === undefined ? ready.staticPolicy : undefined;
       const verification: SecurityVerificationInput & {modelCallBudget?: number} = {
         ledger: ready.ledger,
         principal: ready.principal,
@@ -499,7 +532,7 @@ async function runJob(input: {
         dataDirectory: ready.dataDirectory,
         commit: ready.commit,
         policyRevision: ready.policyRevision,
-        worker: staticPolicy ? wrapStaticCliPolicyWorker(staticPolicy, guardedWorker) : guardedWorker,
+        worker: workerWithDeadline(ready.worker, startedMs, ready.timeLimitMs),
         rawFindings: collected.findings,
         runId: id,
         onPhase,
@@ -508,8 +541,8 @@ async function runJob(input: {
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
-      if (staticPolicy) {
-        await runResolvedPersonalSecurityVerification(verification, staticPolicy);
+      if (ready.staticPolicy) {
+        await runResolvedPersonalSecurityVerification(verification);
       } else {
         await runSecurityVerification(verification);
       }
@@ -764,16 +797,8 @@ export async function resolvePersonalVerification(
     const image = await readPinnedImage(config.dataDirectory);
     const databases = await readCurrentVerifyDatabase(config.dataDirectory);
     if (!databases) throw new Refusal('VERIFY_DB_REQUIRED', 409);
-    let staticPolicyAttachment: Record<symbol, StaticCliPolicyGrant> | undefined;
     if (parsed.url === undefined) {
-      const grant = issueStaticCliPolicyGrant({
-        url: parsed.url,
-        nativeWorker: worker,
-        projectId: project.id,
-        contextId: exam.contextId,
-        commit,
-      });
-      staticPolicyAttachment = {[RESOLVED_STATIC_POLICY]: grant};
+      issueStaticCliPolicy({nativeWorker: worker, projectId: project.id, contextId: exam.contextId, commit});
     }
     return {
       input: {
@@ -792,7 +817,6 @@ export async function resolvePersonalVerification(
         databasesDirectory: databases.directory,
         image,
         modelCalls: {count: 0},
-        ...(staticPolicyAttachment ?? {}),
       },
       close: async () => {
         await ledger.releaseLease(authority!).catch(() => undefined);

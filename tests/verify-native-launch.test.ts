@@ -1,9 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createPublicKey, generateKeyPairSync, randomUUID, sign, verify} from 'node:crypto';
+import {mkdir, mkdtemp, rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {canonical} from '../src/contracts.ts';
 import {Refusal, type Authority} from '../src/contracts.ts';
 import type {Ledger} from '../src/ledger.ts';
-import {readonlySecurityExam} from '../src/native-execution-supervisor.ts';
+import {Ledger as LedgerClass} from '../src/ledger.ts';
+import {NativeExecutionSupervisor, readonlySecurityExam} from '../src/native-execution-supervisor.ts';
 import {
   createCapacityNativeWorker,
   createRecheckNativeWorker,
@@ -41,6 +46,7 @@ function supervisor(accountId: string, hooks: {
   retireTerminal: SecurityExamSupervisor['retireTerminal'];
   stop?: SecurityExamSupervisor['stop'];
   active?: boolean;
+  receiptSignedByThisExecutor?: SecurityExamSupervisor['receiptSignedByThisExecutor'];
 }): SecurityExamSupervisor {
   return {
     active: hooks.active !== false,
@@ -51,6 +57,28 @@ function supervisor(accountId: string, hooks: {
     reconcile: hooks.reconcile,
     retireTerminal: hooks.retireTerminal,
     ...(hooks.stop ? {stop: hooks.stop} : {}),
+    ...(hooks.receiptSignedByThisExecutor ? {receiptSignedByThisExecutor: hooks.receiptSignedByThisExecutor} : {}),
+  };
+}
+
+const RECEIPT_DOMAIN = 'agent-control:native-execution-receipt:v1\n';
+
+/** Same contract as NativeExecutionSupervisor.receiptSignedByThisExecutor, over a test key. */
+function executorKey() {
+  const keys = generateKeyPairSync('ed25519');
+  const publicKey = createPublicKey(keys.privateKey);
+  return {
+    signed: (payload: unknown) => ({
+      payload,
+      signature: sign(null, Buffer.from(RECEIPT_DOMAIN + canonical(payload)), keys.privateKey).toString('hex'),
+    }),
+    vouches: (receipt: unknown): boolean => {
+      const saved = receipt as {payload?: unknown; signature?: unknown} | undefined;
+      return Boolean(saved?.payload)
+        && typeof saved?.signature === 'string'
+        && /^[a-f0-9]{128}$/.test(saved.signature)
+        && verify(null, Buffer.from(RECEIPT_DOMAIN + canonical(saved.payload)), publicKey, Buffer.from(saved.signature, 'hex'));
+    },
   };
 }
 
@@ -406,6 +434,7 @@ test('createRecheckNativeWorker repassa avoidProviders e devolve o provedor da r
 
 type CompletedFixture = 'ok' | 'no-receipt' | 'session-only-receipt' | 'unstarted' | 'wrong-session' | 'wrong-job' | 'wrong-intent'
   | 'wrong-grant' | 'wrong-context' | 'wrong-account' | 'wrong-profile' | 'bad-exit' | 'bad-signature' | 'no-signature'
+  | 'forged-signature' | 'tampered-payload' | 'foreign-key' | 'mismatched-signature'
   | 'wrong-outcome-session' | 'failed' | 'retire-undefined' | 'retire-not-removed' | 'retire-throws';
 
 test('createCapacityNativeWorker aceita entrada congelada sem mutar e só comprova a sessão com o recibo assinado do supervisor concluído', async () => {
@@ -418,7 +447,10 @@ test('createCapacityNativeWorker aceita entrada congelada sem mutar e só compro
   const startedSessions: string[] = [];
   const modeByJob = new Map<string, CompletedFixture>();
   let nextMode: CompletedFixture = 'ok';
+  const executor = executorKey();
+  const foreign = executorKey();
   const chosen = supervisor(accountId, {
+    receiptSignedByThisExecutor: executor.vouches,
     async start(_principal, _authority, request) {
       startedSessions.push(request.sessionId);
       modeByJob.set(request.jobId, nextMode);
@@ -439,7 +471,7 @@ test('createCapacityNativeWorker aceita entrada congelada sem mutar e só compro
         workerExitCode: 0,
       };
       const signature = 'ab'.repeat(64);
-      if (mode === 'failed') return {state: 'failed', output: 'x', receipt: {payload: {...payload, exitCode: 1}, signature}};
+      if (mode === 'failed') return {state: 'failed', output: 'x', receipt: executor.signed({...payload, exitCode: 1})};
       if (mode === 'no-receipt') return {state: 'completed', output: 'ok'};
       if (mode === 'session-only-receipt') return {state: 'completed', output: 'ok', receipt: {payload: {sessionId: request.sessionId}}};
       if (mode === 'unstarted') payload.executionStarted = false;
@@ -451,13 +483,20 @@ test('createCapacityNativeWorker aceita entrada congelada sem mutar e só compro
       if (mode === 'wrong-account') payload.accountId = randomUUID();
       if (mode === 'wrong-profile') payload.profileId = randomUUID();
       if (mode === 'bad-exit') payload.exitCode = 1;
+      const authentic = executor.signed(payload);
+      let receipt: unknown = authentic;
+      // Every id, the exit code and a 128 hex digit signature are right; only the key is not the supervisor's.
+      if (mode === 'forged-signature') receipt = {payload, signature};
+      if (mode === 'foreign-key') receipt = foreign.signed(payload);
+      if (mode === 'tampered-payload') receipt = {payload: {...payload, workerExitCode: 1}, signature: authentic.signature};
+      if (mode === 'mismatched-signature') receipt = {payload, signature: executor.signed({...payload, outputDigest: 'x'}).signature};
+      if (mode === 'no-signature') receipt = {payload};
+      if (mode === 'bad-signature') receipt = {payload, signature: 'zz'};
       return {
         state: 'completed',
         output: 'ok',
         ...(mode === 'wrong-outcome-session' ? {sessionId: randomUUID()} : {}),
-        receipt: mode === 'no-signature'
-          ? {payload}
-          : {payload, signature: mode === 'bad-signature' ? 'zz' : signature},
+        receipt,
       };
     },
     async retireTerminal(_principal, _authority, jobId) {
@@ -498,6 +537,7 @@ test('createCapacityNativeWorker aceita entrada congelada sem mutar e só compro
     'no-receipt', 'session-only-receipt', 'unstarted', 'wrong-session', 'wrong-job', 'wrong-intent', 'wrong-grant',
     'wrong-context', 'wrong-account', 'wrong-profile', 'bad-exit', 'bad-signature', 'no-signature', 'wrong-outcome-session',
     'failed', 'retire-undefined', 'retire-not-removed',
+    'forged-signature', 'tampered-payload', 'foreign-key', 'mismatched-signature',
   ];
   for (const mode of unproven) {
     nextMode = mode;
@@ -510,4 +550,107 @@ test('createCapacityNativeWorker aceita entrada congelada sem mutar e só compro
   const askedNotRetired = frozen();
   await assert.rejects(() => worker.run(askedNotRetired), /retire-failed/);
   assert.equal(readNativeExamSession(worker, askedNotRetired), null);
+});
+
+test('o supervisor nativo real só atesta recibo assinado com a própria chave e a conferência recusa o falso recibo com todos os ids', async () => {
+  const area = await mkdtemp(join(tmpdir(), 'ac-receipt-signature-'));
+  // A pool never connects until queried, so no database is needed to authenticate a receipt.
+  const db = new LedgerClass('postgresql://receipt-signature.invalid/none');
+  try {
+    const hostRoot = join(area, 'spool');
+    const accountRoot = join(area, 'accounts');
+    const repository = join(area, 'repo');
+    for (const path of [hostRoot, accountRoot, repository]) await mkdir(path, {mode: 0o700});
+    const accountId = randomUUID();
+    const profileId = randomUUID();
+    const keys = generateKeyPairSync('ed25519');
+    const image = `sha256:${'c'.repeat(64)}`;
+    const real = new NativeExecutionSupervisor(db, {
+      id: 'receipt-signature',
+      workerImage: image,
+      toolsImage: image,
+      hostRoot,
+      accountRoot,
+      repository,
+      protectedRepositories: [],
+      signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
+      providerNetworkId: 'd'.repeat(64),
+      socketPath: '/no-operational-docker.sock',
+      accountSubjects: [{accountId, subjectDigest: 'a'.repeat(64)}],
+      workerEnv: [],
+      toolsEnv: [],
+    });
+    const signWith = (key: typeof keys.privateKey, payload: unknown) => ({
+      payload,
+      signature: sign(null, Buffer.from(RECEIPT_DOMAIN + canonical(payload)), key).toString('hex'),
+    });
+    const payload = {schemaVersion: 1, accountId, profileId, jobId: randomUUID(), exitCode: 0};
+
+    // Direct validation.
+    assert.equal(real.receiptSignedByThisExecutor(signWith(keys.privateKey, payload)), true);
+    assert.equal(real.receiptSignedByThisExecutor({payload, signature: 'ab'.repeat(64)}), false);
+    assert.equal(real.receiptSignedByThisExecutor({payload: {...payload, exitCode: 1}, signature: signWith(keys.privateKey, payload).signature}), false);
+    assert.equal(real.receiptSignedByThisExecutor(signWith(generateKeyPairSync('ed25519').privateKey, payload)), false);
+    for (const odd of [undefined, null, 'x', 7, {}, {payload}, {payload, signature: 'zz'}, {payload: 1, signature: 'ab'.repeat(64)}]) {
+      assert.equal(real.receiptSignedByThisExecutor(odd), false);
+    }
+
+    // Through the worker: only the receipt signed under the supervisor's key proves the session.
+    const context = authority();
+    let forge = false;
+    let foreignKey = false;
+    const chosen: SecurityExamSupervisor = {
+      active: true,
+      supportsAccount: id => id === accountId,
+      async start() { return {state: 'running'}; },
+      async reconcile(_principal, _authority, request) {
+        const bound = {
+          schemaVersion: 1,
+          accountId,
+          profileId,
+          jobId: request.jobId,
+          intentId: request.intentId,
+          contextId: context.contextId,
+          grantId: request.grantId,
+          sessionId: request.sessionId,
+          exitCode: 0,
+        };
+        const receipt = forge
+          ? {payload: bound, signature: 'ab'.repeat(64)}
+          : signWith(foreignKey ? generateKeyPairSync('ed25519').privateKey : keys.privateKey, bound);
+        return {state: 'completed', output: 'ok', receipt};
+      },
+      async retireTerminal() { return {state: 'removed'}; },
+      receiptSignedByThisExecutor: receipt => real.receiptSignedByThisExecutor(receipt),
+    };
+    const worker = createCapacityNativeWorker({supervisors: [chosen], principal: 'owner', authority: context, ledger, base, wait: async () => {}});
+
+    const genuine = call({accountId, profileId});
+    await worker.run(genuine);
+    assert.ok(readNativeExamSession(worker, genuine));
+
+    forge = true;
+    const forged = call({accountId, profileId});
+    await worker.run(forged);
+    assert.equal(readNativeExamSession(worker, forged), null);
+
+    forge = false;
+    foreignKey = true;
+    const foreign = call({accountId, profileId});
+    await worker.run(foreign);
+    assert.equal(readNativeExamSession(worker, foreign), null);
+
+    // A supervisor that cannot vouch for receipts, or whose check throws, never proves a session.
+    for (const vouch of [undefined, () => { throw new Error('boom'); }] as const) {
+      foreignKey = false;
+      const mute = {...chosen, receiptSignedByThisExecutor: vouch} as SecurityExamSupervisor;
+      const muteWorker = createCapacityNativeWorker({supervisors: [mute], principal: 'owner', authority: context, ledger, base, wait: async () => {}});
+      const asked = call({accountId, profileId});
+      await muteWorker.run(asked);
+      assert.equal(readNativeExamSession(muteWorker, asked), null);
+    }
+  } finally {
+    await db.close();
+    await rm(area, {recursive: true, force: true});
+  }
 });

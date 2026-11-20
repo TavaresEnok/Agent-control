@@ -1,21 +1,19 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
-import {randomUUID} from 'node:crypto';
+import {createPublicKey, generateKeyPairSync, randomUUID, sign, verify} from 'node:crypto';
 import {chmod, mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
 import {Capacity, CapacityPolicy} from '../src/capacity.ts';
-import {Refusal} from '../src/contracts.ts';
+import {canonical, Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
-import {beginPersonalVerification, resolvePersonalVerification} from '../src/verify-command.ts';
+import {authorizedStaticCliPolicy, beginPersonalVerification, resolvePersonalVerification} from '../src/verify-command.ts';
 import {createCapacityNativeWorker} from '../src/verify-native-launch.ts';
 import {
-  issueStaticCliPolicyGrant,
   runResolvedPersonalSecurityVerification,
   runSecurityVerification,
-  wrapStaticCliPolicyWorker,
   type SecurityVerificationInput,
 } from '../src/verify-runtime.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
@@ -119,14 +117,30 @@ async function setupEnvironment(label: string) {
 
 type FixtureRequest = {jobId: string; intentId: string; grantId: string; sessionId: string};
 
+const RECEIPT_DOMAIN = 'agent-control:native-execution-receipt:v1\n';
+const executorKeys = generateKeyPairSync('ed25519');
+const executorPublicKey = createPublicKey(executorKeys.privateKey);
+const strangerKeys = generateKeyPairSync('ed25519');
+
+const signReceiptPayload = (payload: unknown, key = executorKeys.privateKey) =>
+  sign(null, Buffer.from(RECEIPT_DOMAIN + canonical(payload)), key).toString('hex');
+
+/** Same contract as NativeExecutionSupervisor.receiptSignedByThisExecutor, over the fixture key. */
+function fixtureVouches(receipt: unknown): boolean {
+  const saved = receipt as {payload?: unknown; signature?: unknown} | undefined;
+  return Boolean(saved?.payload)
+    && typeof saved?.signature === 'string'
+    && /^[a-f0-9]{128}$/.test(saved.signature)
+    && verify(null, Buffer.from(RECEIPT_DOMAIN + canonical(saved.payload)), executorPublicKey, Buffer.from(saved.signature, 'hex'));
+}
+
 /** Terminal receipt in the shape the signed native execution contract emits for a started, successful job. */
 async function terminalReceipt(db: Ledger, authority: unknown, request: FixtureRequest, over: Record<string, unknown> = {}) {
   const row = (await db.pool.query<{account_id: string; profile_id: string}>(
     'SELECT account_id::text AS account_id, profile_id::text AS profile_id FROM ac_capacity_grants WHERE id=$1',
     [request.grantId],
   )).rows[0]!;
-  return {
-    payload: {
+  const payload = {
       schemaVersion: 1,
       accountId: row.account_id,
       profileId: row.profile_id,
@@ -138,9 +152,8 @@ async function terminalReceipt(db: Ledger, authority: unknown, request: FixtureR
       exitCode: 0,
       workerExitCode: 0,
       ...over,
-    },
-    signature: 'ab'.repeat(64),
   };
+  return {payload, signature: signReceiptPayload(payload)};
 }
 
 function createRecordingSupervisor(
@@ -152,6 +165,7 @@ function createRecordingSupervisor(
   const launches: LaunchRecord[] = [];
   const supervisor = {
     active: true,
+    receiptSignedByThisExecutor: fixtureVouches,
     supportsAccount(accountId: string) {
       return accountIds.includes(accountId);
     },
@@ -279,6 +293,19 @@ test('CLI personal:verify sem --url usa Sonnet 5.5 high na conta Max, Opus 5.5 m
     const resolved = await resolvePersonalVerification([env.installationPath, env.projectId], {composeRuntime});
     try {
       assert.equal('staticModelPolicy' in resolved.input, false);
+      {
+        const held = {
+          worker: resolved.input.worker!, projectId: env.projectId, commit: env.commit, authority: resolved.input.authority!,
+        };
+        const policy = authorizedStaticCliPolicy(held);
+        assert.equal(policy?.nativeWorker, resolved.input.worker);
+        assert.equal(policy?.contextId, resolved.input.authority!.contextId);
+        assert.equal(authorizedStaticCliPolicy({...held, projectId: randomUUID()}), null);
+        assert.equal(authorizedStaticCliPolicy({...held, commit: 'd'.repeat(40)}), null);
+        assert.equal(authorizedStaticCliPolicy({...held, authority: {...held.authority, contextId: randomUUID()}}), null);
+        // A wrapper written by hand does not inherit the capability.
+        assert.equal(authorizedStaticCliPolicy({...held, worker: {run: call => held.worker.run(call)}}), null);
+      }
       let pending = Promise.resolve();
       const begun = await beginPersonalVerification({
         ...resolved.input,
@@ -409,12 +436,14 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
     for (const mode of [
       'missing-reviewer-session', 'same-session', 'missing-examiner-session', 'failed-reviewer-execution',
       'session-only-examiner', 'session-only-reviewer', 'unstarted-reviewer', 'forged-reviewer-context', 'unretired-reviewer',
+      'forged-reviewer-signature', 'tampered-reviewer-receipt', 'foreign-key-reviewer-receipt',
     ] as const) {
       const jobs = new Map<string, {task: string; sessionId: string}>();
       let examSessionId = '';
       let confirmLaunched = false;
       const faultySupervisor = {
         active: true,
+        receiptSignedByThisExecutor: fixtureVouches,
         supportsAccount(accountId: string) {
           return accountId === primaryMax;
         },
@@ -466,13 +495,23 @@ test('conta Claude única Max confirma achado alto em sessão distinta comprovad
             return {state: 'completed', output: confirmOutput, receipt: {payload: {sessionId: request.sessionId}}};
           }
           if (mode === 'unstarted-reviewer') {
-            return {state: 'completed', output: confirmOutput, receipt: {...receipt, payload: {...receipt.payload, executionStarted: false}}};
+            return {state: 'completed', output: confirmOutput, receipt: await terminalReceipt(env.db, authority, request, {executionStarted: false})};
           }
           if (mode === 'forged-reviewer-context') {
-            return {state: 'completed', output: confirmOutput, receipt: {...receipt, payload: {...receipt.payload, contextId: randomUUID()}}};
+            return {state: 'completed', output: confirmOutput, receipt: await terminalReceipt(env.db, authority, request, {contextId: randomUUID()})};
+          }
+          // Every id, the exit code and 128 hex digits are right, but the signature is not the supervisor's.
+          if (mode === 'forged-reviewer-signature') {
+            return {state: 'completed', output: confirmOutput, receipt: {...receipt, signature: 'ab'.repeat(64)}};
+          }
+          if (mode === 'tampered-reviewer-receipt') {
+            return {state: 'completed', output: confirmOutput, receipt: {...receipt, payload: {...receipt.payload, workerExitCode: 1}}};
+          }
+          if (mode === 'foreign-key-reviewer-receipt') {
+            return {state: 'completed', output: confirmOutput, receipt: {...receipt, signature: signReceiptPayload(receipt.payload, strangerKeys.privateKey)}};
           }
           if (mode === 'same-session') {
-            return {state: 'completed', output: confirmOutput, receipt: {...receipt, payload: {...receipt.payload, sessionId: examSessionId}}};
+            return {state: 'completed', output: confirmOutput, receipt: await terminalReceipt(env.db, authority, request, {sessionId: examSessionId})};
           }
           if (mode === 'failed-reviewer-execution') {
             return {state: 'failed', output: confirmOutput};
@@ -647,6 +686,10 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
     });
     try {
       assert.equal('staticModelPolicy' in resUrl.input, false);
+      // The resolver issues the capability only without --url.
+      assert.equal(authorizedStaticCliPolicy({
+        worker: resUrl.input.worker!, projectId: env.projectId, commit: env.commit, authority: resUrl.input.authority!,
+      }), null);
       let pending = Promise.resolve();
       await beginPersonalVerification({
         ...resUrl.input,
@@ -758,25 +801,16 @@ test('chamadores com --url, beginPersonalVerification direto e runSecurityVerifi
   }
 });
 
-test('capability da política estática só ativa para o worker nativo, projeto, contexto e commit para os quais foi emitida', async () => {
+test('o runtime só importa o verificador: nenhum worker sem concessão emitida pelo resolvedor ativa a política estática', async () => {
   const projectId = randomUUID();
   const contextId = randomUUID();
   const commit = 'c'.repeat(40);
   const authority = {contextId, instanceId: randomUUID(), epoch: 1};
-  const nativeWorker = () => createCapacityNativeWorker({
-    supervisors: [],
-    principal: 'owner',
-    authority,
-    ledger: {} as Ledger,
-    base: commit,
-  });
-  const granted = nativeWorker();
-  const otherNative = nativeWorker();
-  const plainWorker: VerifyWorker = {async run() { return ''; }};
-  const issue = (over: Partial<Parameters<typeof issueStaticCliPolicyGrant>[0]> = {}) =>
-    issueStaticCliPolicyGrant({nativeWorker: granted, projectId, contextId, commit, ...over});
+  const native = createCapacityNativeWorker({supervisors: [], principal: 'owner', authority, ledger: {} as Ledger, base: commit});
+  const plain: VerifyWorker = {async run() { return ''; }};
+  const wrapper: VerifyWorker = {run: call => native.run(call)};
   // A refused activation never reaches the ledger: an empty ledger would throw a different error.
-  const inputFor = (over: Partial<SecurityVerificationInput> = {}) => ({
+  const inputFor = (worker: VerifyWorker) => ({
     ledger: {} as Ledger,
     principal: 'owner',
     authority,
@@ -785,44 +819,16 @@ test('capability da política estática só ativa para o worker nativo, projeto,
     dataDirectory: '/nonexistent',
     commit,
     policyRevision: 1,
-    worker: granted,
-    ...over,
+    worker,
   }) as SecurityVerificationInput;
   const unauthorized = (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_STATIC_POLICY_UNAUTHORIZED';
 
-  // Emission: refused with a URL and for anything that is not a native capacity worker.
-  assert.throws(() => issue({url: 'http://127.0.0.1:9/app'}), unauthorized);
-  assert.throws(() => issue({nativeWorker: plainWorker}), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_WORKER_UNAVAILABLE');
-
-  // Verification: forged grant objects, even with identical fields, are refused.
-  const grant = issue();
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), {...grant}), unauthorized);
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), {} as never), unauthorized);
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), undefined as never), unauthorized);
-  // Another native worker (for example the one from the URL flow) is not the authorized one.
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({worker: otherNative}), grant), unauthorized);
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({worker: plainWorker}), grant), unauthorized);
-  // An unregistered wrapper of the authorized worker is also refused; a registered one passes the gate.
-  const wrapper: VerifyWorker = {run: call => granted.run(call)};
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({worker: wrapper}), grant), unauthorized);
-  assert.throws(() => wrapStaticCliPolicyWorker({...grant}, wrapper), unauthorized);
-  // Project, context and commit must match.
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({projectId: randomUUID()}), grant), unauthorized);
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor({commit: 'd'.repeat(40)}), grant), unauthorized);
-  await assert.rejects(
-    runResolvedPersonalSecurityVerification(inputFor({authority: {...authority, contextId: randomUUID()}}), grant),
-    unauthorized,
-  );
-  // A grant issued for one worker does not authorize the other grant's worker.
-  const otherGrant = issue({nativeWorker: otherNative});
-  await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(), otherGrant), unauthorized);
-
-  // Matching input passes the gate and only then reaches the ledger (which here is an empty stub).
-  wrapStaticCliPolicyWorker(grant, wrapper);
-  for (const worker of [granted, wrapper]) {
-    await assert.rejects(
-      runResolvedPersonalSecurityVerification(inputFor({worker}), grant),
-      (error: unknown) => !unauthorized(error),
-    );
+  for (const worker of [native, plain, wrapper]) {
+    assert.equal(authorizedStaticCliPolicy(inputFor(worker)), null);
+    await assert.rejects(runResolvedPersonalSecurityVerification(inputFor(worker)), unauthorized);
   }
+  // The runtime module exposes no way to issue or register the capability.
+  const exported = Object.keys(await import('../src/verify-runtime.ts'));
+  assert.deepEqual(exported.filter(name => /grant|issue|wrap|register/i.test(name)), []);
 });
+

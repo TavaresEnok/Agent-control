@@ -11,7 +11,8 @@ import {Ledger, type Intent} from './ledger.ts';
 import {readMountedCredentialSecrets} from './native-worker-security.ts';
 import {loadSecurityChecklist} from './verify-checklist.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
-import {isCapacityNativeWorker, readNativeExamSession} from './verify-native-launch.ts';
+import {authorizedStaticCliPolicy} from './verify-command.ts';
+import {readNativeExamSession} from './verify-native-launch.ts';
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
@@ -100,72 +101,16 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   return runVerificationWithPolicy(input);
 }
 
-/**
- * Capability for module 1 static CLI routing. It exists only for `personal:verify` resolved without `--url`
- * and is bound to the native capacity worker, project, context and commit it was issued for.
- */
-export type StaticCliPolicyGrant = Readonly<{
-  nativeWorker: VerifyWorker;
-  projectId: string;
-  contextId: string;
-  commit: string;
-}>;
-
-const issuedStaticCliPolicies = new WeakMap<object, {grant: StaticCliPolicyGrant; workers: WeakSet<object>}>();
-
-export function issueStaticCliPolicyGrant(input: {
-  url?: string;
-  nativeWorker: VerifyWorker;
-  projectId: string;
-  contextId: string;
-  commit: string;
-}): StaticCliPolicyGrant {
-  if (input.url !== undefined) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
-  if (!isCapacityNativeWorker(input.nativeWorker)) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
-  const grant: StaticCliPolicyGrant = Object.freeze({
-    nativeWorker: input.nativeWorker,
-    projectId: input.projectId,
-    contextId: input.contextId,
-    commit: input.commit,
-  });
-  issuedStaticCliPolicies.set(grant, {grant, workers: new WeakSet<object>([input.nativeWorker])});
-  return grant;
-}
-
-export function isIssuedStaticCliPolicyGrant(grant: unknown): grant is StaticCliPolicyGrant {
-  return typeof grant === 'object' && grant !== null && issuedStaticCliPolicies.has(grant);
-}
-
-/** Registers a wrapper that forwards the very same call object to the granted native worker (for example a deadline guard). */
-export function wrapStaticCliPolicyWorker(grant: StaticCliPolicyGrant, wrapper: VerifyWorker): VerifyWorker {
-  const issued = issuedStaticCliPolicies.get(grant);
-  if (!issued) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
-  issued.workers.add(wrapper);
-  return wrapper;
-}
-
-/** Internal entry point for `personal:verify` resolved without `--url`. Refuses anything the grant was not issued for. */
-export async function runResolvedPersonalSecurityVerification(
-  input: SecurityVerificationInput,
-  grant: StaticCliPolicyGrant,
-): Promise<{
+/** Internal entry point for `personal:verify` resolved without `--url`. Refuses any worker the resolver did not authorize. */
+export async function runResolvedPersonalSecurityVerification(input: SecurityVerificationInput): Promise<{
   runId: string;
   directory: string;
   achados: Achado[];
   coverage: CoverageRow[];
 }> {
-  const issued = typeof grant === 'object' && grant !== null ? issuedStaticCliPolicies.get(grant) : undefined;
-  if (
-    !issued
-    || !issued.workers.has(input.worker)
-    || issued.grant.projectId !== input.projectId
-    || issued.grant.contextId !== input.authority.contextId
-    || issued.grant.commit !== input.commit
-    || !isCapacityNativeWorker(issued.grant.nativeWorker)
-  ) {
-    throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
-  }
-  return runVerificationWithPolicy(input, {nativeWorker: issued.grant.nativeWorker, contextId: issued.grant.contextId});
+  const policy = authorizedStaticCliPolicy(input);
+  if (!policy) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
+  return runVerificationWithPolicy(input, policy);
 }
 
 async function runVerificationWithPolicy(

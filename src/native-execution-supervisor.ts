@@ -1084,6 +1084,14 @@ export class NativeExecutionSupervisor{
   catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT'||exitCode===0)throw error;result={schemaVersion:1,jobId:input.jobId,output:'',normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:'WORKER_EXITED_WITHOUT_RESULT',exitCode:exitCode};}
   return result;
  }
+ /** Validation only: true when the receipt carries this executor's own Ed25519 signature. It cannot launch, write, explore or connect. */
+ receiptSignedByThisExecutor(receipt:unknown):boolean{
+  try{
+   const saved=receipt as {payload?:unknown;signature?:unknown}|null|undefined,payload=saved?.payload;
+   return !!payload&&typeof payload==='object'&&typeof saved?.signature==='string'&&/^[a-f0-9]{128}$/.test(saved.signature)&&
+    verify(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),createPublicKey(this.key),Buffer.from(saved.signature,'hex'));
+  }catch{return false;}
+ }
  async reconcile(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>):Promise<NativeExecutionOutcome>{
   const input=NativeExecutionRequest.parse(raw),job=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);await this.validateReplay(principal,authority,input,job);
