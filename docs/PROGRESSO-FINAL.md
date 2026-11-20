@@ -1548,3 +1548,18 @@ FIM
 - 20/11/2026 03:43 UTC — Iniciada ordem preparar em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
 - 20/11/2026 03:43 UTC — Iniciada ordem resposta em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
 - 20/11/2026 03:47 UTC — Rodada 42225b53: 29 trabalhos nativos vinculados, 29 linhas de cobertura com MODULE_EXAM_RESPONSE_INVALID e 221 com PROVIDER_USAGE_LIMIT. Em 28 retornos foi possível comparar o objeto com o pedido: todos repetiram o objeto checklist enviado, mas o contrato esperava um vetor com o identificador do módulo. Quatorze tinham só uma cerca Markdown, 13 também continham texto exterior, um era JSON puro e um estava vazio. Registrados apenas contadores.
+- 20/11/2026 03:52 UTC — Ordem preparar em gemini-4-hydrogen-high encerrou com código 1.
+- 20/11/2026 03:53 UTC — Iniciada ordem perfis em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 03:53 UTC — Iniciada ordem roteamento em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 03:54 UTC — Ordem perfis em gemini-4-hydrogen-high encerrou com código 1.
+- 20/11/2026 03:54 UTC — Ordens 9ff9e8fc e 2d49716b incorporadas. A preparação distingue os perfis Sonnet por esforço e os perfis Opus medium e high. A reserva de design e a autorização no executor serão verificadas separadamente. As ordens de preparação antigas foram interrompidas pelo gerente por mudança de escopo.
+- 20/11/2026 03:54 UTC — Iniciada ordem perfis em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 03:55 UTC — Ordem resposta em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 03:58 UTC — Revisão independente revisao-formato-r1 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 03:58 UTC — Iniciada ordem resposta em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 04:01 UTC — Backup anterior à alteração de perfis em `ispagent-antes-opus-high-20261120-035847/agent-control-ispagent-20261120-0358`, com 544.280.517 bytes. O restore-check conferiu 14.934 arquivos e a leitura do dump. O primeiro teste integrado registrou no PostgreSQL os perfis efetivamente reservados para criar, examinar, criticar e confirmar.
+- 20/11/2026 04:03 UTC — Revisão independente revisao-design-r1 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:04 UTC — Ordem resposta em gemini-4-hydrogen-high encerrou com código 0.
+- 20/11/2026 04:05 UTC — Iniciada ordem retomada em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 04:06 UTC — Revisão independente revisao-formato-r2 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 04:07 UTC — Design em `f5643d47`. A reserva e o supervisor consultam a mesma política. Cinco testes do supervisor cobriram recusas antes de criar contêiner para conta, modelo e esforço incorretos, além da recuperação de trabalhos. Na rodada de design, 122 testes passaram. A revisão Sol do ajuste está em curso.
