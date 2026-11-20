@@ -286,6 +286,12 @@ async function examine(
       // No file stays without a judgment silently: the model failed the batch, so each missing file is asked alone.
       if (slice.files.length > 1) {
         for (const file of unjudged) {
+          // Out of model calls: the file stays visible as pending instead of aborting the whole job.
+          if (trackedCalls.count >= modelCallBudget) {
+            pending.add(file);
+            if (!notes.includes(BUDGET_RETRY_NOTE)) notes.push(BUDGET_RETRY_NOTE);
+            continue;
+          }
           const alone = await examineSlice(singleFileSlice(file, checklist, `${slice.id}-${file}`.slice(0, 80)), true);
           if (alone.length) pending.add(file);
         }
@@ -443,6 +449,8 @@ type HighReviewCheck = {
 function nonEmptySessionId(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
+
+const BUDGET_RETRY_NOTE = 'O orçamento de chamadas do modelo acabou antes do reexame individual de alguns arquivos; eles ficaram pendentes.';
 
 async function reserveAndRun(
   input: SecurityVerificationInput,

@@ -193,3 +193,19 @@ test('envelope inválido cai para chamadas individuais e o arquivo que nunca é 
   } finally { await ready.close(); }
 });
 
+
+test('orçamento de chamadas esgotado no reexame deixa o arquivo pendente em vez de abortar o job', async () => {
+  const ready = await bootVerify('vrt_batch_budget');
+  try {
+    await seed(ready.repo, 4);
+    const tasks: string[] = [];
+    // map + batch exam use the whole budget; the file left unjudged cannot be asked alone.
+    const result = await run(ready, worker(tasks, {unreadFirst: ['src/m02.ts']}), {batch: {tokens: 40_000, files: 8}, modelCallBudget: 2});
+    assert.equal(tasks.filter(task => task.startsWith('Pedido de exame.')).length, 1);
+    assert.deepEqual(result.coverage.map(row => row.file), ['src/m00.ts', 'src/m01.ts', 'src/m03.ts']);
+    const blob = await reportBlob(result.directory);
+    assert.match(blob, /Arquivo pendente, sem julgamento do examinador: src\/m02\.ts/);
+    assert.match(blob, /orçamento de chamadas do modelo acabou/);
+    assert.match(blob, /src\/m02\.ts \| [a-f0-9]{16} \| pendente/);
+  } finally { await ready.close(); }
+});

@@ -571,6 +571,12 @@ async function confirmFinding(
   }
 }
 
+function soloJudged(hit: ModelHit, file: string, ids: string[]): boolean {
+  if (hit.failure) return false;
+  const parsed = DesignExamResult.safeParse(normalizeDesignExam(parseJson(hit.output), {file, checklist: ids}));
+  return parsed.success && parsed.data.filesRead.map(fileToken).includes(file);
+}
+
 export async function examineDesignScreens(input: DesignExamineInput): Promise<{
   findings: DesignExamFinding[];
   coverage: DesignCoverageRow[];
@@ -720,7 +726,8 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         batchReceipts.push(batchCallReceipt({
           scope: 'design', callId: `${retriedFrom}-${screen.file}`.slice(0, 80), intentId: input.intentId, provider: seat.provider, model: seat.model,
           accountId: seat.accountId, profileId: seat.profileId, grantId: seat.grantId, sessionId: null,
-          files: [{file: screen.file, sha256: sha256Text(screen.code), judged: hit.failure === null}],
+          // Judged only when the answer is a whole valid exam that names this screen as read, the same bar the batch uses.
+          files: [{file: screen.file, sha256: sha256Text(screen.code), judged: soloJudged(hit, screen.file, ids)}],
         }));
       }
     }

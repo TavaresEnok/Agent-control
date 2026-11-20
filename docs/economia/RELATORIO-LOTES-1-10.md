@@ -58,17 +58,44 @@ Testes: `tests/verify-runtime-batch.test.ts`, `tests/design-examine-batch.test.t
 | Segurança: 6 arquivos pequenos, chamadas de exame | 6 | 1 |
 | Segurança: caracteres de entrada | 8 004 | 1 399 (-83%) |
 
-Em repositórios reais o ganho do módulo 1 é menor que na fixture, pois o pedido
-já listava só nomes e o custo dominante é a leitura feita pelo examinador. A
-economia do módulo 1 em relação ao que existia hoje (fatia de 15) é nula no padrão;
-o ganho está na prova por arquivo, no reexame de arquivo sem julgamento e na opção
-de desligar. No design a economia vem da checklist enviada uma vez.
+**Leitura correta dos números.** Os -83% e -79% comparam o lote com `batch: false`
+(um arquivo ou uma tela por chamada), não com o que existia antes. No módulo 1 o
+comportamento anterior era a fatia fixa de 15 arquivos; contra ele:
+
+| Módulo 1, 20 arquivos | fatia de 15 (antes) | com lote (agora) |
+|---|---|---|
+| arquivos pequenos | 2 chamadas (15 + 5) | 2 chamadas (15 + 5) |
+| um arquivo acima do orçamento de leitura (640 KB estimados) | 2 chamadas | 4 chamadas (3, 1, 15, 1) |
+
+Ou seja: **o módulo 1 não economiza nada sobre o que já existia; no padrão custa o
+mesmo e, só num repositório com arquivo muito grande, faz até 2 chamadas a mais**,
+de propósito, para esse arquivo não estourar a leitura do examinador junto de
+outros. O que o módulo 1 ganha ligado é a prova por arquivo, o reexame do arquivo
+sem julgamento e a opção de desligar; quem quiser a fatia antiga exata, sem a
+divisão por tamanho, usa a biblioteca sem `batch`. No design a economia vem da
+checklist enviada uma vez (8 chamadas e 169 696 caracteres viram 1 chamada e
+36 396 para telas sem captura).
+
+## Correções da revisão independente
+
+- **Design, reexame individual (MEDIO).** O recibo da chamada individual de uma tela
+  que estava num lote sem resposta marcava `judged: true` sempre que o provedor não
+  falhava. Agora só vale se a saída é um exame completo e válido e se `filesRead`
+  cita a própria tela, o mesmo critério do lote; senão a tela fica pendente no
+  recibo e no `cobertura.md`. Teste: `reexame individual com saída inválida ou sem
+  a tela em filesRead fica pendente no recibo`.
+- **Segurança, orçamento de chamadas (BAIXO).** Se o orçamento de chamadas do modelo
+  acabar durante o reexame individual, o arquivo restante vira pendente, com nota no
+  relatório, em vez de abortar o job com `VERIFY_MODEL_BUDGET`. Teste: `orçamento
+  de chamadas esgotado no reexame deixa o arquivo pendente em vez de abortar o job`.
+- **Números do módulo 1 (BAIXO).** Tabela acima separa a comparação com `batch:
+  false` da comparação com a fatia de 15, e admite o custo extra possível.
 
 ## Testes
 
 - `npx tsc --noEmit`: sem erros.
-- `tests/verify-runtime-batch.test.ts` (4) e `tests/design-examine-batch.test.ts`
-  (6): passaram. Cobrem lote válido com recibo por arquivo e hash, recibo
+- `tests/verify-runtime-batch.test.ts` (5) e `tests/design-examine-batch.test.ts`
+  (7): passaram. Cobrem lote válido com recibo por arquivo e hash, recibo
   adulterado, opção desligada, arquivo omitido, envelope inválido, arquivo nunca
   lido pendente, captura individual, crítica visual intacta e medição.
 - Suítes existentes tocadas (design-examine, design-module, design-report,

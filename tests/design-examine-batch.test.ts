@@ -126,3 +126,27 @@ test('a crítica visual segue uma por tela, com examinador e revisor, mesmo em l
   assert.equal(tasks.filter(task => task.startsWith('Pedido de crítica visual do revisor.')).length, 4);
   assert.equal(tasks.filter(task => task.startsWith('Pedido de exame em lote.')).length, 1);
 });
+
+test('reexame individual com saída inválida ou sem a tela em filesRead fica pendente no recibo', async () => {
+  const solo = (mode: 'lixo' | 'sem-tela'): DesignWorker => ({
+    async run(call) {
+      if (call.task.startsWith('Pedido de exame em lote.')) return JSON.stringify({kind: 'exame', filesRead: ['x'], checklist: ['x'], findings: []});
+      if (call.task.startsWith('Pedido de exame.')) {
+        if (mode === 'lixo') return 'isto não é JSON';
+        const items = (call.task.match(/^Itens: (.*)$/m)?.[1] ?? '').split(',').map(item => item.trim()).filter(Boolean);
+        return JSON.stringify({kind: 'exame', filesRead: ['src/Outra.tsx'], checklist: items, findings: []});
+      }
+      return designBenchWorker().run(call);
+    },
+  });
+  for (const mode of ['lixo', 'sem-tela'] as const) {
+    const k = kit();
+    const result = await examineDesignScreens({...base, intentId: randomUUID(), screens: screens(2), batch: BATCH, worker: solo(mode), reserve: k.reserve, release: k.release});
+    const singles = result.batchReceipts.filter(receipt => receipt.callId !== 'lote-1');
+    assert.equal(singles.length, 2, mode);
+    for (const receipt of singles) {
+      assert.equal(receipt.files[0]!.judged, false, mode);
+      assert.equal(batchReceiptIntact(receipt), true);
+    }
+  }
+});
