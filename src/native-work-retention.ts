@@ -1,6 +1,7 @@
 import {execFile, spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {copyFile, lstat, mkdtemp, open, readFile, readdir, rename, rm, rmdir, unlink, writeFile, type FileHandle} from 'node:fs/promises';
+import {copyFile, lstat, mkdtemp, open, readFile, readdir, readlink, rename, rm, rmdir, unlink, writeFile, type FileHandle} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {basename, dirname, join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -183,9 +184,9 @@ export async function writeRetentionCursor(file:string,after:string|undefined):P
 const gitEnvironment={PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0',GIT_NO_REPLACE_OBJECTS:'1',GIT_OPTIONAL_LOCKS:'0'};
 // Hooks (reference-transaction included) and fsmonitor never run, whatever the repository says.
 const gitOptions=['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false','-c','protocol.ext.allow=never'];
-function git(repository:string,args:string[],extra:Record<string,string>={},signal?:AbortSignal):Promise<{code:number;stdout:string}> {
+function git(repository:string,args:string[],extra:Record<string,string>={},signal?:AbortSignal,maxBuffer=1024*1024):Promise<{code:number;stdout:string}> {
   return new Promise(done=>{
-    execFile('/usr/bin/git',[...gitOptions,...(repository?['-C',repository]:[]),...args],{env:{...gitEnvironment,...extra},timeout:120000,maxBuffer:1024*1024,signal,killSignal:'SIGKILL'},(error,stdout)=>{
+    execFile('/usr/bin/git',[...gitOptions,...(repository?['-C',repository]:[]),...args],{env:{...gitEnvironment,...extra},timeout:120000,maxBuffer,signal,killSignal:'SIGKILL'},(error,stdout)=>{
       done({code:error?(typeof (error as {code?:unknown}).code==='number'?(error as {code:number}).code:1):0,stdout:String(stdout)});
     });
   });
@@ -279,11 +280,51 @@ export async function workHoldsNoUnregisteredChange(repository:string,work:strin
     if((await git('',['read-tree',tree],inTree,signal)).code!==0)return false;
     await git('',['update-index','-q','--refresh'],inTree,signal);
     if((await git('',['diff-files','--quiet','--ignore-submodules=none'],inTree,signal)).code!==0)return false;
+    if(!await rawTreeMatches(work,tree,inTree,signal))return false;
     const untracked=await git('',['ls-files','--others','-z'],inTree,signal);
     if(untracked.code!==0||untracked.stdout.length)return false;
     return await objectsAllKnown(scan,trusted,signal);
   } catch {return false;}
   finally {await rm(area,{recursive:true,force:true});}
+}
+
+/** Compare bytes to Git blobs directly: diff-files may normalize CRLF or apply attributes before comparing. */
+async function rawTreeMatches(work:string,tree:string,env:Record<string,string>,signal?:AbortSignal):Promise<boolean> {
+  const listing=await git('',['ls-tree','-r','-z','--full-tree',tree],env,signal,64*1024*1024);
+  if(listing.code!==0)return false;
+  for(const item of listing.stdout.split('\0')){
+    if(!item)continue;
+    const match=/^(100644|100755|120000) blob ([a-f0-9]{40})\t(.+)$/s.exec(item);
+    if(!match)return false;
+    const [,mode,id,name]=match;
+    if(!name||name.includes('\ufffd')||name.split('/').some(part=>!part||part==='.'||part==='..'||part==='.git'))return false;
+    // Refuse symlinked ancestors; do not follow paths outside the checkout.
+    const parts=name.split('/'); let parent=await openRoot(work);
+    try {
+    for(const part of parts.slice(0,-1)){
+      const next=await open(anchored(parent,part),directoryFlags);await parent.close();parent=next;
+    }
+    const path=anchored(parent,parts[parts.length-1]!); const stat=await lstat(path);
+    let hash:string;
+    if(mode==='120000'){
+      if(!stat.isSymbolicLink())return false;
+      const bytes=await readlink(path,{encoding:'buffer'});
+      hash=createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+    }else{
+      if(!stat.isFile()||Boolean(stat.mode&0o111)!==(mode==='100755'))return false;
+      const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+      try{
+        const opened=await file.stat();if(!opened.isFile()||opened.dev!==stat.dev||opened.ino!==stat.ino||opened.size!==stat.size)return false;
+        const digest=createHash('sha1').update(`blob ${opened.size}\0`);let total=0;const buffer=Buffer.allocUnsafe(64*1024);
+        for(;;){signal?.throwIfAborted();const {bytesRead}=await file.read(buffer,0,buffer.length,null);if(!bytesRead)break;total+=bytesRead;if(total>opened.size)return false;digest.update(buffer.subarray(0,bytesRead));}
+        if(total!==opened.size)return false;hash=digest.digest('hex');
+      }
+      finally{await file.close();}
+    }
+    if(hash!==id)return false;
+    } finally {await parent.close();}
+  }
+  return true;
 }
 
 /** Streams every object id of `scan` (its alternates: the checkout) into a lookup against `trusted` (the project). */

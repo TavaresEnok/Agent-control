@@ -120,6 +120,19 @@ test('repository proofs: a commit must exist, and an artifact must hang from a r
  }finally{await rm(area,{recursive:true,force:true});}
 });
 
+test('a prova do programador compara bytes mesmo quando atributos normalizam CRLF',async()=>{
+ const area=await mkdtemp(join(tmpdir(),'ac-raw-proof-'));
+ try{
+  const repo=join(area,'repo'),work=join(area,'work');await mkdir(repo);
+  const git=(...args:string[])=>execFileSync('git',['-c','user.name=F','-c','user.email=f@invalid','-C',repo,...args],{encoding:'utf8'}).trim();
+  git('init','-q');await writeFile(join(repo,'.gitattributes'),'a.txt text\n');await writeFile(join(repo,'a.txt'),'one\ntwo\n');git('add','.');git('commit','-qm','base');
+  const tree=git('rev-parse','HEAD^{tree}');execFileSync('git',['clone','-q','--no-local',repo,work]);
+  assert.equal(await workHoldsNoUnregisteredChange(repo,work,tree),true);
+  await writeFile(join(work,'a.txt'),'one\r\ntwo\r\n');
+  assert.equal(await workHoldsNoUnregisteredChange(repo,work,tree),false);
+ }finally{await rm(area,{recursive:true,force:true});}
+});
+
 test('the classification of read-only and programmer work is explicit',()=>{
  for(const [workflow,role] of [['engineering-native-v1','qa'],['engineering-native-v1','reviewer'],['engineering-native-v1','judge'],['managed-synthetic-v1','qa'],
   ['baseline-synthetic-v1','judge'],['design-readonly-v1','specialist'],['design-readonly-v1','reviewer'],['security-verify-readonly-v1','specialist'],['security-verify-readonly-v1','reviewer']])
