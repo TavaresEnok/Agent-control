@@ -18,3 +18,11 @@ Antigravity: o esquema local examinado tem bancos de conversas com metadados em 
 ## Pendente
 
 A ordem não está completa: novas tentativas de veredito podem perder o consumo da tentativa anterior; os caminhos de exame Codex e Grok não extraem contadores separados. Papéis dos agentes externos não são atribuídos quando faltam metadados confiáveis, e chamadas Codex não são inferidas dos totais cumulativos. A identificação e deduplicação de logs externos que correspondem a jobs nativos continuam pendentes; não some as duas fontes como se fossem independentes. Não houve aplicação na instalação viva.
+
+## Correção da T1
+
+Os bancos simulados dos testes de montagem e do supervisor agora suportam as consultas e a gravação de `ac_usage_observations`; a reconciliação continua transacional e o teste de montagem confere a gravação e a repetição idempotente. Em novas tentativas de veredito, os contadores de chamadas independentes são somados apenas quando conhecidos; valores ausentes ou fora do intervalo seguro permanecem desconhecidos. O exame Codex extrai os contadores separados disponíveis no evento de conclusão, sem alterar a interface pública.
+
+Continuam pendentes a extração Grok sem formato de contadores comprovado, a atribuição de papéis externos sem metadados confiáveis, a inferência de chamadas Codex a partir de totais cumulativos e a identificação e deduplicação de logs externos correspondentes a jobs nativos. Não se deve somar as fontes como independentes. Não houve aplicação na instalação viva.
+
+Verificação da correção: os sete arquivos solicitados, mais `evaluator-output`, passaram (42 testes) com `AC_TEST_DATABASE_URL` indicado; `npx tsc --noEmit --skipLibCheck` passou.

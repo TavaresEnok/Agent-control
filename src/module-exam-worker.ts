@@ -241,7 +241,7 @@ export async function runModuleExamWorker(input: Input) {
     if (input.provider === 'codex') {
       const account = await assertCodexSubscriptionIdentity(input.providerSubjectDigest);
       const response = await requestModuleExamCodex({...input, accountId: account.accountId,
-        accessToken: account.accessToken, signal: abort.signal});
+        accessToken: account.accessToken, signal: abort.signal, onUsage: counters => { usageCounters = counters; }});
       if (Buffer.byteLength(response) > maxOutput) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
       output = redactSecrets(response.trim(), account.secrets);
     } else {

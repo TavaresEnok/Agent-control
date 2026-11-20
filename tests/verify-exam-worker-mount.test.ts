@@ -89,6 +89,16 @@ class MountMemory {
     const text = sql.replace(/\s+/g, ' ').trim();
     const selected = (rows: Row[]) => ({rows, rowCount: rows.length});
     const wrote = (count: number) => ({rows: [] as Row[], rowCount: count});
+    if (text === 'SELECT digest,seq FROM ac_usage_observations WHERE grant_id=$1 AND event_id=$2') {
+      return selected((this.tables.ac_usage_observations ?? []).filter(row => row.grant_id === params[0] && row.event_id === params[1]));
+    }
+    if (text === 'SELECT seq,counters FROM ac_usage_observations WHERE grant_id=$1 ORDER BY seq DESC LIMIT 1') {
+      return selected((this.tables.ac_usage_observations ?? []).filter(row => row.grant_id === params[0]).sort((a, b) => Number(b.seq) - Number(a.seq)).slice(0, 1));
+    }
+    if (text === 'INSERT INTO ac_usage_observations(grant_id,event_id,seq,counters,digest) VALUES($1,$2,$3,$4,$5)') {
+      this.insert('ac_usage_observations', {grant_id: params[0], event_id: params[1], seq: params[2], counters: params[3], digest: params[4]});
+      return wrote(1);
+    }
     if (text === 'BEGIN') {
       assert.equal(this.beforeTransaction, undefined);
       this.beforeTransaction = structuredClone(this.tables);
@@ -1736,6 +1746,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     }), {mode: 0o600});
 
     const outcome1 = await supervisor.reconcile(principal, authority, input1);
+    assert.equal(memory.tables.ac_usage_observations?.filter(row => row.grant_id === input1.grantId && row.event_id === input1.jobId).length, 1);
     assert.equal(outcome1.state, 'completed');
     await assert.rejects(() => lstat(launchPath1), {code: 'ENOENT'});
 
@@ -1744,6 +1755,7 @@ test('launch.json é apagado ao terminar, retirar, falhar antes do launch e no r
     const restarted = new NativeExecutionSupervisor(ledger, supervisorConfig, {assertAdmission: async () => {}});
     Object.defineProperty(restarted, 'doc' + 'ker', {value: makeDaemon()});
     const replayed = await restarted.reconcile(principal, authority, input1);
+    assert.equal(memory.tables.ac_usage_observations?.filter(row => row.grant_id === input1.grantId && row.event_id === input1.jobId).length, 1);
     assert.equal(replayed.state, 'completed');
     await assert.rejects(() => lstat(launchPath1), {code: 'ENOENT'});
 

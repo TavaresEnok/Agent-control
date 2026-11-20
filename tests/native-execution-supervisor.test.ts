@@ -89,6 +89,9 @@ class ExecutionRecoveryMemory{
   const text=sql.replace(/\s+/g,' ').trim();
   const selected=(rows:MemoryRow[])=>({rows,rowCount:rows.length});
   const wrote=(count:number)=>({rows:[],rowCount:count});
+  if(text==='SELECT digest,seq FROM ac_usage_observations WHERE grant_id=$1 AND event_id=$2')return selected((this.tables.ac_usage_observations??[]).filter(row=>row.grant_id===params[0]&&row.event_id===params[1]));
+  if(text==='SELECT seq,counters FROM ac_usage_observations WHERE grant_id=$1 ORDER BY seq DESC LIMIT 1')return selected((this.tables.ac_usage_observations??[]).filter(row=>row.grant_id===params[0]).sort((a,b)=>Number(b.seq)-Number(a.seq)).slice(0,1));
+  if(text==='INSERT INTO ac_usage_observations(grant_id,event_id,seq,counters,digest) VALUES($1,$2,$3,$4,$5)'){this.insert('ac_usage_observations',{grant_id:params[0],event_id:params[1],seq:params[2],counters:params[3],digest:params[4]});return wrote(1);}
   if(text==='BEGIN'){this.snap=JSON.stringify(this.tables);return selected([]);}
   if(text==='COMMIT'){this.snap=null;return selected([]);}
   if(text==='ROLLBACK'){if(this.snap!==null)this.tables=JSON.parse(this.snap);this.snap=null;return selected([]);}

@@ -14,6 +14,7 @@ import {CodexExecutionAdapter,CodexExecutionFailure} from './codex-execution-ada
 import {ClaudeExecutionAdapter,ClaudeExecutionFailure} from './claude-execution-adapter.ts';
 import {GrokExecutionFailure,runGrokProgrammer} from './grok-execution-adapter.ts';
 import {runWithVerdictRetry} from './evaluator-output.ts';
+import {sumUsageAttempts} from './native-usage.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
 import {Effort} from './effort.ts';
@@ -139,8 +140,20 @@ async function main(){
   // An evaluator must return one JSON verdict. A model sometimes slips (a stray bracket); ask once more
   // instead of failing the whole plan on a typo.
   const evaluator=input.role!=='programmer'&&Boolean(input.outputSchema);
-  const ran=await runWithVerdictRetry(evaluator,()=>abort.signal.aborted,runOnce);result=ran.result;failure=ran.failure;
- }catch(error){if(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure){failedUsage=error;failure=error.code;}else failure='EXECUTION_FAILED';}
+  let previous:UsageCountersValue|null|undefined;
+  const ran=await runWithVerdictRetry(evaluator,()=>abort.signal.aborted,async()=>{
+   try {
+    const current=await runOnce();
+    if(previous!==undefined)current.result.counters=sumUsageAttempts(previous,current.result.counters??null);
+    previous=current.result.counters??null;
+    return current;
+   } catch(error) {
+    if(previous!==undefined&&(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure))
+     failedUsage={...error,counters:sumUsageAttempts(previous,error.counters)} as typeof error;
+    throw error;
+   }
+  });result=ran.result;failure=ran.failure;
+ }catch(error){if(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure){failedUsage??=error;failure=error.code;}else failure='EXECUTION_FAILED';}
  finally{forwarder.close();}
  const usage=result?.usageWindows??failedUsage?.usageWindows??null,safeUsage=Buffer.byteLength(JSON.stringify(usage))<=32768?usage:null;
  const output=await open('/output/execution-result.json',constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
