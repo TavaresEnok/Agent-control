@@ -1320,6 +1320,9 @@ export class NativeExecutionSupervisor{
    const snapshot=previous?.snapshot as WorkIdentity|undefined;
    if(previous&&(previous.terminalDigest!==terminalDigest||!snapshot||!/^\d+:\d+$/.test(snapshot.job)||!/^\d+:\d+$/.test(snapshot.work)||!Number.isSafeInteger(snapshot.bytes)))return refuse('retirement');
    if(phase==='release'&&(!snapshot||completed))return refuse('work_unsafe');
+   const canceled=new AbortController();
+   const disconnect=()=>canceled.abort();
+   c.once('error',disconnect);c.once('end',disconnect);
    let operation;
    try{
     operation=await examineWorkTree(this.config.hostRoot,jobId,async output=>{
@@ -1328,8 +1331,9 @@ export class NativeExecutionSupervisor{
       const result=Result.parse(JSON.parse(bytes.toString('utf8')));
       if(result.jobId!==jobId||result.exitCode!==0||result.failureCode!==null||digest(result.output)!==payload.outputDigest)throw Error();
      }catch{throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');}
-    },phase==='release'?snapshot:undefined);
+    },phase==='release'?snapshot:undefined,canceled.signal);
    }catch(error){return refuse(error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe');}
+   finally{c.off('error',disconnect);c.off('end',disconnect);}
    if(phase==='release'&&snapshot){
     if(operation.state==='present')return refuse('work_unsafe');
     await record(operation.state==='released'?released:unattributed,snapshot);

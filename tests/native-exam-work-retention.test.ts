@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,generateKeyPairSync,randomUUID,sign} from 'node:crypto';
-import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,lstat,mkdir,mkdtemp,readFile,readdir,rename,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
@@ -127,6 +127,16 @@ test('finished passive exam work copies are released only with the full proof, o
   await db.pool.query("UPDATE ac_capacity_grants SET selection=jsonb_set(coalesce(selection,'{}'::jsonb),'{designPurpose}',to_jsonb('examiner'::text)) WHERE id=(SELECT grant_id FROM ac_native_execution_jobs WHERE id=$1)",[design.jobId]);
   assert.equal((await run(design,true)).state,'released');
   await intact(design);
+  // An interrupted plan must not apply to a checkout that was subsequently replaced.
+  const replaced=await plant();
+  const previous=(await db.pool.query('SELECT receipt FROM ac_native_execution_jobs WHERE id=$1',[replaced.jobId])).rows[0].receipt;
+  const identify=async(path:string)=>{const st=await lstat(path,{bigint:true});return st.dev+':'+st.ino;};
+  await db.pool.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.exam_work_release_planned',$2)",[replaced.contextId,{jobId:replaced.jobId,terminalDigest:digest(previous),snapshot:{job:await identify(replaced.root),work:await identify(replaced.work),bytes:10}}]);
+  await rename(replaced.work,join(replaced.root,'saved'));
+  await mkdir(replaced.work);await writeFile(join(replaced.work,'keep'),'replacement');
+  assert.equal((await run(replaced,true)).state,'refused');
+  assert.equal(await readFile(join(replaced.work,'keep'),'utf8'),'replacement');
+  assert.ok(await exists(join(replaced.root,'saved','src','index.ts')));
   const interrupted=await plant();
   await db.pool.query(`CREATE FUNCTION fail_retention_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.kind='native.exam_work_released' THEN RAISE EXCEPTION 'synthetic audit failure'; END IF; RETURN NEW; END $$;
     CREATE TRIGGER retention_audit_failure BEFORE INSERT ON ac_audit FOR EACH ROW EXECUTE FUNCTION fail_retention_audit()`);

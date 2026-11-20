@@ -1,6 +1,6 @@
 import {spawn} from 'node:child_process';
 import {constants} from 'node:fs';
-import {lstat, open, readFile, readdir, type FileHandle} from 'node:fs/promises';
+import {lstat, open, readFile, readdir, rmdir, type FileHandle} from 'node:fs/promises';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {Id} from './contracts.ts';
@@ -65,9 +65,10 @@ async function treeSize(dir: FileHandle, mount: string): Promise<number> {
 export type WorkIdentity = {job: string; work: string; bytes: number};
 export type WorkOperation = {state:'absent'|'released'} | {state:'present'; snapshot:WorkIdentity};
 
-async function release(root: FileHandle, job: FileHandle, planned: WorkIdentity): Promise<WorkOperation> {
-  const child=spawn('/usr/bin/python3',['-I',helper,planned.job,planned.work],{
-    stdio:['ignore','pipe','ignore',root.fd,job.fd],env:{PATH:'/usr/bin:/bin'}
+async function release(root:FileHandle,job:FileHandle,work:FileHandle,jobId:string,planned:WorkIdentity,signal?:AbortSignal):Promise<WorkOperation> {
+  signal?.throwIfAborted();
+  const child=spawn('/usr/bin/python3',['-I',helper,String(process.pid),jobId,planned.job,planned.work],{
+    stdio:['ignore','pipe','ignore',root.fd,job.fd,work.fd],env:{PATH:'/usr/bin:/bin'},signal,killSignal:'SIGKILL'
   });
   let output='';
   child.stdout!.setEncoding('utf8').on('data', data=>{output+=data;});
@@ -75,12 +76,16 @@ async function release(root: FileHandle, job: FileHandle, planned: WorkIdentity)
     child.on('error',fail);
     child.on('close',code=>code===0?done():fail(Error('Incomplete work retirement')));
   });
-  const state=output.trim();
-  if(state!=='released'&&state!=='absent')throw Error('Invalid work retirement result');
-  return {state};
+  if(output.trim()!=='emptied')throw Error('Invalid work retirement result');
+  signal?.throwIfAborted();
+  const path=anchored(job,'work');
+  const current=await lstat(path,{bigint:true});
+  if(!current.isDirectory()||current.dev+':'+current.ino!==planned.work)throw Error('Checkout changed');
+  await rmdir(path); // Requires the literal job child to be an empty directory.
+  return {state:'released'};
 }
 
-export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(dir:FileHandle)=>Promise<void>,planned?:WorkIdentity):Promise<WorkOperation> {
+export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(dir:FileHandle)=>Promise<void>,planned?:WorkIdentity,signal?:AbortSignal):Promise<WorkOperation> {
   Id.parse(jobId);
   const root=await openRoot(hostRoot);
   try {
@@ -91,8 +96,8 @@ export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(
       const mount=await mountId(job);
       if(mount!==await mountId(root))throw Error('Unexpected job mount');
       const output=await open(anchored(job,'output'),directoryFlags);
-      try {await assertPrivate(output);await checkOutput(output);} finally {await output.close();}
-      if(planned)return await release(root,job,planned);
+      try {await assertPrivate(output);if(await mountId(output)!==mount)throw Error('Unexpected output mount');await checkOutput(output);} finally {await output.close();}
+      if(planned&&await identity(job)!==planned.job)throw Error('Job changed');
       let work:FileHandle;
       try {work=await open(anchored(job,'work'),directoryFlags);}
       catch(error){
@@ -102,6 +107,10 @@ export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(
       try {
         const stat=await work.stat();
         if(stat.uid!==process.getuid?.()||await mountId(work)!==mount)throw Error('Unsafe work directory');
+        if(planned){
+          if(await identity(work)!==planned.work)throw Error('Checkout changed');
+          return await release(root,job,work,jobId,planned,signal);
+        }
         return {state:'present',snapshot:{job:await identity(job),work:await identity(work),bytes:await treeSize(work,mount)}};
       } finally {await work.close();}
     } finally {await job.close();}
