@@ -450,6 +450,10 @@ A prova mensal restaura o backup mais novo num banco descartável no mesmo servi
 
 `--remove` desliga e apaga esses oito units. Não mexe no gateway. Os timers voltam depois de um reboot se `loginctl enable-linger` estiver ativo para o seu usuário.
 
+### Retenção de worktrees, imagens candidatas e temporários
+
+O registro, a prova e a remoção de worktrees de trabalhadores, imagens candidatas de módulo e pastas `/tmp/ac-*` de rodadas estão em [`RETENCAO-ARTEFATOS.md`](RETENCAO-ARTEFATOS.md), com os comandos `--registrar-worktree`, `--registrar-imagem`, `--registrar-temporario`, `--encerrar-rodada` e `--retencao-artefatos` de `personal:maintenance`.
+
 ## Testes do Agent Control
 
 `npm test` roda o executor de CI (`scripts/test-ci.mjs`): um processo por arquivo, com bancos descartáveis. Ele precisa de `AC_TEST_DATABASE_URL` apontando para um Postgres descartável. Os arquivos que precisam do laboratório (Docker, SSH, Happier ou `sudo`) ficam fora e aparecem na lista `excluded` do resultado. Para rodar tudo, no laboratório: `npm run test:all`.

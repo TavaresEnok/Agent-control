@@ -39,6 +39,7 @@ import {
   assertNoSymlinkAlongPath, correctionReceipt, groupCorrectionFindings, loadCorrectionRequests, saveCorrectionRequest,
   type CorrectionReceipt,
 } from './verification-correction-requests.ts';
+import {endRound, trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 import {hasKnownSecret, isSecretClassBasename, redactUnknownSecrets} from './verify-redact.ts';
 import {
@@ -882,8 +883,13 @@ async function widenSnapshotForUnprivilegedContainer(dir: string): Promise<void>
   }
 }
 
-/** Git archive snapshot of the examined commit, outside the live repository and readable by container uid 65532. */
-export async function prepareModuleSnapshot(repoPath: string, commit: string): Promise<string> {
+/** Where a module run records its temporaries for retention: the installation data directory, the project and the run (the round). */
+export type ModuleRetention = RoundScope;
+
+/** Git archive snapshot of the examined commit, outside the live repository and readable by container uid 65532.
+ * With `retention`, the private parent folder is recorded for the round so a crash that skips the cleanup below
+ * does not leave it forever. Recording never fails the snapshot. */
+export async function prepareModuleSnapshot(repoPath: string, commit: string, retention?: ModuleRetention): Promise<string> {
   if (typeof repoPath !== 'string' || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)) {
     throw new Refusal('VERIFY_COMMIT_INVALID', 400);
   }
@@ -897,6 +903,7 @@ export async function prepareModuleSnapshot(repoPath: string, commit: string): P
     await rm(parent, {recursive: true, force: true});
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 403);
   }
+  if (retention) await trackRoundTemp(retention, parent);
   try {
     await extractGitArchive(repo, commit, snapshot);
     await widenSnapshotForUnprivilegedContainer(snapshot);
@@ -952,6 +959,7 @@ export async function runModuleCollectorContainer(input: {
   signal?: AbortSignal;
   executeProcess?: CollectorProcess;
   journal: ReturnType<typeof moduleContainerJournal>;
+  retention?: ModuleRetention;
 }): Promise<{code: number; output: ModuleCollectorOutput}> {
   if (!input.journal) throw new Refusal('VERIFY_CONTAINER_JOURNAL_REQUIRED', 503);
   const timeoutMs = input.timeoutMs ?? DEFAULT_COLLECTOR_TIMEOUT_MS;
@@ -962,13 +970,14 @@ export async function runModuleCollectorContainer(input: {
     || maxStdoutBytes < 1 || !Number.isSafeInteger(captureBytes)) {
     throw new Refusal('VERIFY_LIMITS_INVALID', 400);
   }
-  const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
+  const snapshot = await prepareModuleSnapshot(input.repoPath, input.commit, input.retention);
   let evidenceDir: string | undefined;
   let evidenceFile: string | undefined;
   try {
     if (input.passiveTlsEvidence !== undefined) {
       const validated = validatePassiveTlsEvidence(input.passiveTlsEvidence);
       evidenceDir = await mkdtemp(join(tmpdir(), 'ac-prontidao-evidence-'));
+      if (input.retention) await trackRoundTemp(input.retention, evidenceDir);
       evidenceFile = join(evidenceDir, 'evidence.json');
       await writeFile(evidenceFile, `${JSON.stringify(validated)}\n`, {encoding: 'utf8', mode: 0o644, flag: 'wx'});
       await chmod(evidenceFile, 0o644);
@@ -1959,11 +1968,13 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   await assertPersonalActivation(input.ledger);
   await assertReportOutsideRepo(input.repoPath, input.dataDirectory);
   const execute = input.executeCollectorProcess ?? runBoundedCollectorProcess;
-  await recoverModuleContainers(input.ledger, input.principal, input.authority, input.projectId, execute, input.module);
+  await recoverModuleContainers(input.ledger, input.principal, input.authority, input.projectId, execute, input.module, input.dataDirectory);
   await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId);
   const parsedRunId = Id.safeParse(input.runId ?? randomUUID());
   if (!parsedRunId.success) throw new Refusal('INVALID_CONTRACT', 400);
   const runId = parsedRunId.data.toLowerCase();
+  // The run is the round of its temporaries. The round is closed only where this function proves the run ended.
+  const retention: ModuleRetention = {dataDirectory: input.dataDirectory, projectId: input.projectId, roundId: runId};
   const createdAt = input.createdAt ?? new Date();
   const preparedDir = join(await requireDataDirectory(input.dataDirectory), 'verificacoes', input.projectId,
     moduleReportDirectoryName(createdAt, runId, input.module));
@@ -1992,7 +2003,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
   let sourceCoverage: ModuleToolCoverage[] | undefined;
   try {
     if (input.signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
-    snapshot = await prepareModuleSnapshot(input.repoPath, input.commit);
+    snapshot = await prepareModuleSnapshot(input.repoPath, input.commit, retention);
     const passiveTlsEvidence = input.passiveTlsEvidence !== undefined
       ? (() => {
           if (input.module !== 'prontidao') throw new Refusal('INVALID_CONTRACT', 400);
@@ -2045,6 +2056,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         signal: input.signal,
         executeProcess: execute,
         journal: moduleContainerJournal(input.ledger, input.principal, input.authority, runId, execute),
+        retention,
         ...(passiveTlsEvidence !== undefined ? {passiveTlsEvidence} : {}),
       });
       collectorCode = executed.code;
@@ -2293,6 +2305,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       return prepared;
     });
     await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId, runId);
+    // The run is committed as finished: its snapshot is removed below, and any leftover now has proof of round end.
+    await endRound(retention);
 
     return {
       runId,
@@ -2319,8 +2333,11 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     } catch { /* preserve original failure */ }
     // Only a confirmed failure transition permits cleanup here. After an
     // ambiguous COMMIT recovery consults the persisted reservation and outcome.
-    if (rolledBackRun) await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId)
-      .catch(() => undefined);
+    if (rolledBackRun) {
+      await endRound(retention);
+      await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId)
+        .catch(() => undefined);
+    }
     throw error;
   } finally {
     if (snapshot) await removeModuleSnapshot(snapshot);
@@ -2899,8 +2916,11 @@ async function reconcileReports(
 
 async function recoverModuleContainers(
   ledger: Ledger, principal: string, authority: Authority, projectId: string, execute: CollectorProcess, module?: VerificationModule,
+  dataDirectory?: string,
 ): Promise<void> {
+  const abandonedRuns: string[] = [];
   const pending = await ledger.tx(async client => {
+    abandonedRuns.length = 0;
     const context = await ledger.authorize(client, principal, authority.contextId);
     await ledger.fence(client, authority);
     if (context.project_id !== projectId) throw new Refusal('PROJECT_SCOPE_MISMATCH', 403);
@@ -2914,12 +2934,15 @@ async function recoverModuleContainers(
     );
     for (const row of abandoned.rows) {
       await finishExamIntentTx(client, ledger, {intentId: row.intent_id, contextId: authority.contextId}, 'failed');
+      abandonedRuns.push(row.id);
     }
     return (await client.query<{id: string; collector_container_token: string}>(
       `SELECT id, collector_container_token FROM ac_verify_runs WHERE context_id=$1 AND module <> 'verify'
        AND status IN ('done','failed') AND collector_container_token IS NOT NULL ORDER BY id`, [authority.contextId],
     )).rows;
   });
+  // A run the product itself moved from running to failed has ended: its leftover temporaries may now age out.
+  if (dataDirectory !== undefined) for (const roundId of abandonedRuns) await endRound({dataDirectory, projectId, roundId});
   for (const row of pending) {
     await moduleContainerJournal(ledger, principal, authority, row.id, execute).cleanup(row.collector_container_token, undefined, {recovering: true});
   }
@@ -2930,7 +2953,7 @@ export async function reconcileModuleReports(
   ledger: Ledger, principal: string, authority: Authority, dataDirectory: string, projectId: string,
 ): Promise<void> {
   await assertPersonalActivation(ledger);
-  await recoverModuleContainers(ledger, principal, authority, projectId, runBoundedCollectorProcess);
+  await recoverModuleContainers(ledger, principal, authority, projectId, runBoundedCollectorProcess, undefined, dataDirectory);
   await reconcileReports(ledger, principal, authority, dataDirectory, projectId);
 }
 
