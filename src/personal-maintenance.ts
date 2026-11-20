@@ -1,3 +1,4 @@
+import {runPersonalArtifactRetention} from './personal-artifact-retention.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {chmod,copyFile,lstat,readFile,rename,writeFile} from 'node:fs/promises';
@@ -377,7 +378,12 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  if(config.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
  if(parsed.recoverExamJobId)return recoverInterruptedExamFromInstallation(config,parsed.recoverExamJobId,true);
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
- if(parsed.jobRetention)return runPersonalJobRetention(config,parsed.jobRetention.apply);
+ if(parsed.jobRetention){
+  const apply=parsed.jobRetention.apply;
+  const artifacts=await runPersonalArtifactRetention(config,apply);
+  const jobs=await runPersonalJobRetention(config,apply);
+  return [...artifacts,...jobs];
+ }
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
  const docker=deps.docker??(args=>run('docker',args,30*60*1000));
  const imageExists=deps.imageExists??(async image=>imageId.test(image)&&await run('docker',['image','inspect',image],30_000)===0);
