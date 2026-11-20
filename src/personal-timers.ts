@@ -44,7 +44,7 @@ WantedBy=timers.target
 `;
 }
 
-/** Unit text for the 2-minute watch, the 03:30 backup, Sunday's maintenance and the monthly restore proof. No systemd calls. */
+/** Unit text for the 2-minute watch, the 03:30 backup, Sunday's maintenance (databases, retention and dedicated cache as separate stages) and the monthly restore proof. No systemd calls. */
 export function personalTimerUnits(input:{name:string;root:string;installationFile:string;execPath:string}){
  const {name,root,installationFile,execPath}=input;
  const backupDirectory=join(personalBackupRoot,name);
@@ -58,7 +58,7 @@ export function personalTimerUnits(input:{name:string;root:string;installationFi
  const maintenanceTimer=`agent-control-maintenance-${name}.timer`;
  const restoreService=`agent-control-restore-proof-${name}.service`;
  const restoreTimer=`agent-control-restore-proof-${name}.timer`;
- const maintenanceExec=`${execPath} ${join(root,'scripts/personal-maintenance.mjs')} ${installationFile} --retencao-agendada`;
+ const maintenanceExec=`${execPath} ${join(root,'scripts/personal-maintenance.mjs')} ${installationFile} --manutencao-agendada`;
  const restoreExec=`${execPath} ${join(root,'scripts/personal-restore-proof.mjs')} ${installationFile} ${backupDirectory}`;
  const units:PersonalTimerUnit[]=[
   {file:watchService,text:serviceUnit('Agent Control: watch',name,root,execPath,watchExec)},

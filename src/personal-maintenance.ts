@@ -2,8 +2,8 @@ import {isArtifactCommand,runArtifactCommand} from './personal-artifact-commands
 import {runPersonalArtifactRetention} from './personal-artifact-retention.ts';
 import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
-import {lstat} from 'node:fs/promises';
-import {join,resolve} from 'node:path';
+import {chmod,lstat,readFile,rename,writeFile} from 'node:fs/promises';
+import {basename,dirname,join,resolve} from 'node:path';
 import {Id,Refusal,type Authority} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
@@ -11,7 +11,7 @@ import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRelease,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
-import {refreshVerifyDatabases} from './verify-db.ts';
+import {readCurrentVerifyDatabase,refreshVerifyDatabases} from './verify-db.ts';
 
 const imageId=/^sha256:[a-f0-9]{64}$/;
 type Pair={workerImage:string;toolsImage:string};
@@ -31,12 +31,18 @@ export type MaintenanceDeps={
  jobRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** Retention of worker worktrees, candidate images and round temporaries. Tests replace it. */
  artifactRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** The published vulnerability database, or null when none. Used only to show its age. */
+ currentDatabase?:(dataDirectory:string)=>Promise<{fetchedAt:string}|null>;
+ now?:()=>Date;
 };
 
 /** Some retention stage failed. Every stage still ran; `lines` holds what each one reported, failures included. */
 export class RetentionIncomplete extends Error {
  constructor(readonly lines:string[],readonly failed:string[]){super('Retention incomplete: '+failed.join(', '));}
 }
+
+/** A scheduled maintenance stage failed. Every stage still ran; `lines` holds what each one reported. */
+export class MaintenanceIncomplete extends RetentionIncomplete{}
 
 /** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then worktrees,
  * images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
@@ -393,14 +399,116 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
  }
 }
 
-/** Weekly: old Docker build cache goes, and retired images no job still needs leave the installation and Docker.
- * Volumes, containers and images of other projects are never touched. The gateway keeps running. */
+// ---- Weekly maintenance: three separate stages ----------------------------------------------------------------
+// bases (vulnerability databases), retention (work copies, worktrees, images, temporaries) and a build cache that is cleaned ONLY
+// on a builder dedicated to this installation. The Docker daemon is shared with other projects: its own cache is never pruned.
+
+type StageKey='bases'|'retention'|'cache';
+type StageStatus={lastRun?:string;lastSuccess?:string;outcome?:'ok'|'failed'|'skipped'};
+type MaintenanceStatus={schemaVersion:1;stages:Partial<Record<StageKey,StageStatus>>};
+const STATUS_FILE='maintenance-status.json';
+const DATABASE_STALE_DAYS=14;
+const iso=(value:unknown)=>typeof value==='string'&&!Number.isNaN(Date.parse(value))?value:undefined;
+
+async function readMaintenanceStatus(dataDirectory:string):Promise<MaintenanceStatus>{
+ const status:MaintenanceStatus={schemaVersion:1,stages:{}};
+ try{
+  const raw=JSON.parse(await readFile(join(dataDirectory,STATUS_FILE),'utf8')) as {stages?:Record<string,Record<string,unknown>>};
+  for(const key of ['bases','retention','cache'] as const){
+   const entry=raw.stages?.[key];
+   if(!entry)continue;
+   const outcome=entry.outcome==='ok'||entry.outcome==='failed'||entry.outcome==='skipped'?entry.outcome:undefined;
+   status.stages[key]={lastRun:iso(entry.lastRun),lastSuccess:iso(entry.lastSuccess),outcome};
+  }
+ }catch{/* absent or damaged: the state starts again */}
+ return status;
+}
+async function writeMaintenanceStatus(dataDirectory:string,status:MaintenanceStatus){
+ const file=join(dataDirectory,STATUS_FILE),temporary=`${file}.${randomUUID()}.tmp`;
+ try{
+  await writeFile(temporary,JSON.stringify(status,null,1)+'\n',{mode:0o600,flag:'wx'});
+  await chmod(temporary,0o600);
+  await rename(temporary,file);
+ }catch{/* a full disk must not hide the report of the stages themselves */}
+}
+
+/** Builder name reserved for one installation: `agent-control-<directory name>`. Same sanitising as the service name. */
+const dedicatedBuilder=(installationFile:string)=>'agent-control-'+(basename(dirname(resolve(installationFile))).replace(/[^A-Za-z0-9_-]/g,'-')||'installation');
+
+async function describeStatus(config:Installation,status:MaintenanceStatus,deps:MaintenanceDeps,now:Date,mode:string):Promise<string[]>{
+ const stage=(key:StageKey)=>`última execução ${status.stages[key]?.lastRun??'nunca'}, último sucesso ${status.stages[key]?.lastSuccess??'nunca'}`;
+ let age:string,stale=false;
+ try{
+  const current=await (deps.currentDatabase??readCurrentVerifyDatabase)(config.dataDirectory);
+  if(!current)age='nenhuma base publicada';
+  else{
+   const days=Math.max(0,Math.floor((now.getTime()-Date.parse(current.fetchedAt))/86_400_000));
+   age=`idade da base publicada ${days} dia(s) (de ${current.fetchedAt})`;
+   stale=days>DATABASE_STALE_DAYS;
+  }
+ }catch{age='idade da base publicada indisponível';}
+ const lines=[`Bases: ${stage('bases')}, ${age}.`,`Retenção: modo ${mode}, ${stage('retention')}.`,`Cache de build dedicado: ${stage('cache')}.`];
+ if(stale)lines.push(`ATENÇÃO: base de vulnerabilidades com mais de ${DATABASE_STALE_DAYS} dias; os exames de segurança usam dados antigos.`);
+ return lines;
+}
+
+async function runMaintenanceStages(config:Installation,file:string,deps:MaintenanceDeps,options:{retention:boolean}):Promise<string[]>{
+ const now=(deps.now??(()=>new Date()))();
+ const status=await readMaintenanceStatus(config.dataDirectory);
+ const docker=deps.docker??(args=>run('docker',args,30*60*1000));
+ const mode=config.retention?.automatic??'preview';
+ const lines:string[]=[],failed:string[]=[];
+ const stage=async(key:StageKey,action:()=>Promise<{outcome:'ok'|'failed'|'skipped';lines:string[]}>)=>{
+  const at=now.toISOString();
+  const entry=status.stages[key]={...status.stages[key],lastRun:at};
+  let result:{outcome:'ok'|'failed'|'skipped';lines:string[]};
+  try{result=await action();}
+  catch(error){
+   result={outcome:'failed',lines:error instanceof RetentionIncomplete?error.lines:[`Etapa ${key} falhou (${error instanceof Refusal?error.code:'erro'}).`]};
+  }
+  entry.outcome=result.outcome;
+  if(result.outcome==='ok')entry.lastSuccess=at;
+  if(result.outcome==='failed')failed.push(key);
+  lines.push(...result.lines);
+ };
+ await stage('bases',async()=>{
+  try{
+   await (deps.refreshDatabases??(()=>refreshVerifyDatabases({dataDirectory:config.dataDirectory}).then(()=>undefined)))(config.dataDirectory);
+   return {outcome:'ok',lines:['Bases de vulnerabilidade atualizadas.']};
+  }catch{return {outcome:'failed',lines:['Bases de vulnerabilidade não atualizadas. A base anterior permanece.']};}
+ });
+ if(options.retention)await stage('retention',async()=>{
+  if(mode==='off')return {outcome:'skipped',lines:['Retenção automática desligada (modo off).']};
+  const out=await runRetentionStages(config,mode==='apply',deps);
+  return {outcome:'ok',lines:mode==='apply'?out:[...out,'Retenção em modo prévia: nada é apagado. Use retention.automatic=apply para liberar espaço.']};
+ });
+ await stage('cache',async()=>{
+  const builder=dedicatedBuilder(file);
+  // Only a builder that belongs to this installation is ever pruned. Without one, the daemon's shared cache is left alone.
+  if(await docker(['buildx','inspect',builder])!==0)return {outcome:'skipped',lines:['Cache de build dedicado: sem builder dedicado desta instalação; o cache do daemon não foi tocado.']};
+  const code=await docker(['buildx','prune','--builder',builder,'-f','--filter','until=168h']);
+  return code===0?{outcome:'ok',lines:[`Cache de build dedicado: cache com mais de 7 dias apagado no builder ${builder}.`]}:{outcome:'failed',lines:[`Cache de build dedicado: o builder ${builder} não pôde ser limpo.`]};
+ });
+ await writeMaintenanceStatus(config.dataDirectory,status);
+ lines.push(...await describeStatus(config,status,deps,now,mode));
+ if(failed.length)throw new MaintenanceIncomplete(lines,failed);
+ return lines;
+}
+
+/** Weekly: the vulnerability databases, the retention of the installation and the dedicated build cache, each as its own stage.
+ * Volumes, containers and images of other projects are never touched, and the shared daemon's cache is never pruned. The gateway keeps running. */
 export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps={}){
  if(argv.length===2&&argv[1]==='--retencao-agendada'){
   const scheduled=await loadInstallation(resolve(argv[0]!));
   if(scheduled.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
   const mode=scheduled.retention?.automatic??'preview';
   return mode==='off'?['Retenção automática desligada.']:runRetentionStages(scheduled,mode==='apply',deps);
+ }
+ if(argv.length===2&&(argv[1]==='--manutencao-agendada'||argv[1]==='--estado-manutencao')){
+  const scheduled=await loadInstallation(resolve(argv[0]!));
+  if(scheduled.activation!=='personal')throw new Refusal('MAINTENANCE_PERSONAL_REQUIRED');
+  if(argv[1]==='--manutencao-agendada')return runMaintenanceStages(scheduled,resolve(argv[0]!),deps,{retention:true});
+  return describeStatus(scheduled,await readMaintenanceStatus(scheduled.dataDirectory),deps,(deps.now??(()=>new Date()))(),scheduled.retention?.automatic??'preview');
  }
  const parsed=parseMaintenanceArgs(argv);
  const file=resolve(parsed.installationPath);
@@ -411,20 +519,14 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
  if(parsed.jobRetention)return runRetentionStages(config,parsed.jobRetention.apply,deps);
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
- const docker=deps.docker??(args=>run('docker',args,30*60*1000));
- const lines:string[]=[];
- const refresh=deps.refreshDatabases??(()=>refreshVerifyDatabases({dataDirectory:config.dataDirectory}).then(()=>undefined));
- try{
-  await refresh(config.dataDirectory);
-  lines.push('Bases de vulnerabilidade atualizadas.');
- }catch{
-  lines.push('Bases de vulnerabilidade não atualizadas. A base anterior permanece.');
- }
- const cache=await docker(['builder','prune','-f','--filter','until=168h']);
- lines.push(cache===0?'Cache de build com mais de 7 dias apagado.':'Cache de build não pôde ser limpo.');
+ // Manual run without a flag: databases and the dedicated cache. Retention keeps its own commands and the watch.
+ const lines=await runMaintenanceStages(config,file,deps,{retention:false}).catch(error=>{
+  if(error instanceof MaintenanceIncomplete)return error.lines;// a manual run reports a failed stage and still finishes
+  throw error;
+ });
  const boot=config.nativeBootstrap;
  if(!boot||boot.state==='disabled'||boot.state==='bench'){lines.push('Sem runtime nativo: nenhuma imagem aposentada.');return lines;}
  // Retired image records and images remain until pins across the shared daemon can be proved.
- lines.push('Imagens aposentadas e seus registros preservados: pins de outras instalações no daemon não podem ser comprovados.');
+ lines.push('Imagens aposentadas e seus registros preservados; só uma imagem registrada como candidata é removida, por id, pela retenção de artefatos, e só se nenhuma instalação do daemon a fixar.');
  return lines;
 }

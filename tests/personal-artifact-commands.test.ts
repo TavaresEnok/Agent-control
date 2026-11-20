@@ -48,7 +48,7 @@ async function lab(activation:'personal'|'other'='personal'):Promise<Lab>{
   return {code:0,stdout:''};
  };
  return {base,repo,data,tmp,product,projectId,config,removed,
-  deps:(now=Date.now())=>({git:realGit,docker,now:()=>now,tmpRoot:tmp,productRoot:product,processInside:async()=>false,verifyRunImages:async()=>[]})};
+  deps:(now=Date.now())=>({git:realGit,docker,now:()=>now,tmpRoot:tmp,productRoot:product,sharedRefsRoot:join(base,'shared-refs'),freeBytes:async()=>undefined,processInside:async()=>false,verifyRunImages:async()=>[]})};
 }
 const done=(l:Lab)=>rm(l.base,{recursive:true,force:true});
 const registryFile=(l:Lab)=>join(l.data,'artifact-retention','registry.json');
@@ -244,5 +244,14 @@ test('items named ac-* without a registry proof are counted and never touched',a
   const lines=(await runArtifactCommand(l.config,['--retencao-artefatos','--aplicar'],l.deps(Date.now()+1000*HOUR))).join('\n');
   assert.match(lines,/1 item\(ns\) ac-\* no diretório temporário sem registro de propriedade: preservado/);
   assert.ok(existsSync(join(l.tmp,'ac-stranger')));
+ }finally{await done(l);}
+});
+
+test('the runtime images that personal:images replaces are registered with their own kind',async()=>{
+ const l=await lab();
+ try{
+  const out=await runArtifactCommand(l.config,['--registrar-imagem','--projeto',l.projectId,'--modulo','native-runtime','--imagem',IMAGE],l.deps());
+  assert.match(out[0]!,/Imagem candidata sha256:c1c1c1c1c1c1 \(native-runtime\) registrada/);
+  await assert.rejects(runArtifactCommand(l.config,['--registrar-imagem','--projeto',l.projectId,'--modulo','runtime','--imagem',IMAGE],l.deps()),refusal('MAINTENANCE_USAGE'));
  }finally{await done(l);}
 });

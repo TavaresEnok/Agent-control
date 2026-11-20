@@ -18,7 +18,7 @@ const git=(cwd:string,...args:string[])=>execFileSync('git',['-c','core.hooksPat
 const image=(c:string)=>'sha256:'+c.repeat(64);
 
 type Lab={base:string;repo:string;data:string;tmp:string;config:Installation;projectId:string;calls:string[][];dockerCalls:string[][];deps:RetentionDeps;
- clock:{now:number};docker:{images:Map<string,{repoDigests:string[];size?:number}>;hidden:Map<string,string>;containers:Set<string>;mounts:Map<string,string[]>;alive:boolean;refuseRemoval:boolean};busy:Set<string>;runImages:string[]|Error};
+ clock:{now:number};docker:{images:Map<string,{repoDigests:string[];size?:number}>;hidden:Map<string,string>;containers:Set<string>;mounts:Map<string,string[]>;alive:boolean;refuseRemoval:boolean;inspectError:boolean;free:number;reclaimPerRemoval:number};busy:Set<string>;runImages:string[]|Error};
 
 async function lab():Promise<Lab>{
  const base=realpathSync(await mkdtemp(join(tmpdir(),'artifact-retention-')));
@@ -30,12 +30,12 @@ async function lab():Promise<Lab>{
  const projectId=randomUUID();
  const config={activation:'personal',dataDirectory:data,databaseUrl:'postgres://invalid.example/none',project:{id:projectId,label:'p',repo,owner:'owner'},projects:[]} as unknown as Installation;
  const calls:string[][]=[],dockerCalls:string[][]=[];
- const docker={images:new Map<string,{repoDigests:string[];size?:number}>(),hidden:new Map<string,string>(),containers:new Set<string>(),mounts:new Map<string,string[]>(),alive:true,refuseRemoval:false};
+ const docker={images:new Map<string,{repoDigests:string[];size?:number}>(),hidden:new Map<string,string>(),containers:new Set<string>(),mounts:new Map<string,string[]>(),alive:true,refuseRemoval:false,inspectError:false,free:100e9,reclaimPerRemoval:0};
  const busy=new Set<string>();
  const clock={now:Date.now()+3*HOUR};
  const result:Lab={base,repo,data,tmp,config,projectId,calls,dockerCalls,clock,docker,busy,runImages:[],deps:{},} as Lab;
  result.deps={
-  now:()=>clock.now,tmpRoot:tmp,productRoot:join(base,'no-product'),
+  now:()=>clock.now,tmpRoot:tmp,productRoot:join(base,'no-product'),sharedRefsRoot:join(base,'shared-refs'),freeBytes:async()=>docker.free,
   git:async(cwd,args):Promise<CommandResult>=>{
    calls.push(args);
    try{return {code:0,stdout:execFileSync('git',['-c','core.hooksPath=/dev/null','-c','core.fsmonitor=false',...args],{cwd,env:{...gitEnv,GIT_OPTIONAL_LOCKS:'0'},encoding:'utf8',stdio:['ignore','pipe','ignore']})};}
@@ -50,9 +50,11 @@ async function lab():Promise<Lab>{
    if(a==='info')return {code:docker.alive?0:1,stdout:'daemon-test-1\n'};
    if(a==='version')return {code:docker.alive?0:1,stdout:'27.0\n'};
    if(!docker.alive)return {code:1,stdout:''};
+   if(a==='image'&&b==='ls')return {code:0,stdout:[...docker.images.keys()].join('\n')+'\n'};
    if(a==='image'&&b==='inspect'){
     const id=args.at(-1)!,found=docker.images.get(id);
-    if(!found)return {code:1,stdout:''};
+    if(docker.inspectError)return {code:1,stdout:'',stderr:'error during connect: context deadline exceeded'};
+    if(!found)return {code:1,stdout:'',stderr:'Error response from daemon: No such image: '+id};
     return {code:0,stdout:args.includes('--format')?id+'\n':JSON.stringify([{Id:id,RepoDigests:found.repoDigests,Size:found.size}])};
    }
    if(a==='container'&&b==='ls'&&args.at(-1)==='-q')return {code:0,stdout:[...docker.mounts.keys(),...docker.hidden.keys()].join('\n')+'\n'};
@@ -64,7 +66,7 @@ async function lab():Promise<Lab>{
    }
    if(a==='image'&&b==='rm'){
     if(docker.refuseRemoval)return {code:1,stdout:''};
-    docker.images.delete(args.at(-1)!);return {code:0,stdout:''};
+    docker.images.delete(args.at(-1)!);docker.free+=docker.reclaimPerRemoval;return {code:0,stdout:''};
    }
    return {code:1,stdout:''};
   },
@@ -962,3 +964,90 @@ test('interruption after worktree move leaves a durable reported quarantine',asy
  }finally{await cleanup(l);}
 });
 
+
+
+// ---- Findings 6a, 6b, 6c: shared daemon pins, transient inspection errors, nominal and effective size ----
+
+const otherInstallation=(l:Lab,name:string,pinned:string[])=>({...l.config,dataDirectory:join(l.base,name),nativeBootstrap:{planning:{imageId:pinned[0]},execution:{workerImage:pinned[1]??pinned[0]}}}) as unknown as Installation;
+
+test('an image pinned by another installation on the same Docker daemon is never removed by this one',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[],size:1_000_000_000});
+  await registerOld(l,image('a'));
+  const other=otherInstallation(l,'data-b',[image('a')]);
+  // B has no container and no registered candidate; its pin is only known through the per-daemon reference registry.
+  await runPersonalArtifactRetention(other,false,l.deps);
+  const kept=(await run(l,true)).join('\n');
+  assert.match(kept,/preservado \(digest fixado por outra instalação neste daemon\)/);
+  assert.ok(l.docker.images.has(image('a')));
+  assert.deepEqual(removals(l),[]);
+  // B stops pinning it and publishes again: only then may A remove it.
+  await runPersonalArtifactRetention(otherInstallation(l,'data-b',[image('b')]),false,l.deps);
+  assert.match((await run(l,true)).join('\n'),/removida/);
+  assert.equal(l.docker.images.has(image('a')),false);
+ }finally{await cleanup(l);}
+});
+
+test('an unreadable reference file of another installation keeps every candidate',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  await registerOld(l,image('a'));
+  await run(l,false);
+  const {readdirSync,writeFileSync:write}=await import('node:fs');
+  const dir=join(l.deps.sharedRefsRoot!,'daemon-test-1');
+  assert.equal(readdirSync(dir).filter(name=>name.endsWith('.json')).length,1,'this installation publishes its own pins');
+  write(join(dir,'other.json'),'{not json');
+  assert.match((await run(l,true)).join('\n'),/preservado \(referências compartilhadas do daemon ilegíveis\)/);
+  assert.ok(l.docker.images.has(image('a')));
+ }finally{await cleanup(l);}
+});
+
+test('a transient inspection failure keeps the image and its registry entry; only an unequivocal answer drops the record',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  await registerOld(l,image('a'));
+  const registryFile=join(l.data,'artifact-retention','registry.json');
+  l.docker.inspectError=true;
+  const applied=(await run(l,true)).join('\n');
+  assert.match(applied,/preservado \(falha operacional ao inspecionar a imagem\)/);
+  assert.doesNotMatch(applied,/registro retirado/);
+  assert.equal(JSON.parse(await readFile(registryFile,'utf8')).images.length,1,'the registration survives the failed inspection');
+  l.docker.inspectError=false;
+  // The daemon says "No such image" but still lists the id: contradiction, so nothing is forgotten.
+  const real=l.deps.docker!;
+  l.deps.docker=async args=>args[0]==='image'&&args[1]==='inspect'?{code:1,stdout:'',stderr:'Error response from daemon: No such image: x'}:real(args);
+  assert.doesNotMatch((await run(l,true)).join('\n'),/registro retirado/);
+  assert.equal(JSON.parse(await readFile(registryFile,'utf8')).images.length,1);
+  l.deps.docker=real;
+  l.docker.images.delete(image('a'));
+  assert.match((await run(l,true)).join('\n'),/registro retirado \(a imagem já não existe no Docker\)/);
+  assert.equal(JSON.parse(await readFile(registryFile,'utf8')).images.length,0);
+ }finally{await cleanup(l);}
+});
+
+test('nominal image size and the space actually recovered are reported separately',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[],size:2_500_000_000});
+  await registerOld(l,image('a'));
+  l.docker.reclaimPerRemoval=400_000_000;
+  const preview=(await run(l,false)).join('\n');
+  assert.match(preview,/2\.500 GB de tamanho nominal/);
+  assert.match(preview,/espaço efetivamente recuperado: não medido \(prévia\)/);
+  const applied=(await run(l,true)).join('\n');
+  assert.match(applied,/2\.500 GB de tamanho nominal \(camadas compartilhadas podem liberar menos\); espaço efetivamente recuperado: 0\.400 GB/);
+ }finally{await cleanup(l);}
+});
+
+test('the product registers the runtime images it replaces as candidates',async()=>{
+ const l=await lab();
+ try{
+  l.docker.images.set(image('a'),{repoDigests:[]});
+  const id=await registerCandidateImage(l.config,{projectId:l.projectId,module:'native-runtime',imageId:image('a')},l.deps);
+  assert.match(id,/^[0-9a-f-]{36}$/);
+  assert.equal(JSON.parse(await readFile(join(l.data,'artifact-retention','registry.json'),'utf8')).images[0].module,'native-runtime');
+ }finally{await cleanup(l);}
+});
