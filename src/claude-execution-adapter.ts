@@ -8,6 +8,7 @@ import {providerFailureCode} from './exam-login.ts';
 import {claudeLimitFromText,preferredLimitUsage} from './quota-exhaustion.ts';
 import {claudeExitFailureCode,claudeSpawnFailureCode,extractJsonObject,logClaudeAdapterFailure} from './claude-planning-adapter.ts';
 import {Effort,runnerEffort} from './effort.ts';
+import {usageCountersFromEvent, type UsageCountersValue} from './native-usage.ts';
 
 const Path=z.string().min(1).max(240).refine(path=>!path.startsWith('/')&&!path.includes('\\')&&
  !path.split('/').some(part=>!part||part==='.'||part==='..'||part==='.git'||part==='.ai')&&!/[\x00-\x1f*?\[\]{}]/.test(path));
@@ -20,7 +21,7 @@ const Input=z.object({sessionId:z.uuid(),model:z.string().regex(/^[A-Za-z0-9][A-
  if(v.role!=='programmer'&&(!v.artifactCommit||v.writePaths.length||!v.outputSchema))ctx.addIssue({code:'custom',message:'READONLY_ARTIFACT_AND_VERDICT_REQUIRED'});
 });
 export class ClaudeExecutionFailure extends Refusal{
- constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null){super(code);}
+ constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null,readonly counters:UsageCountersValue|null=null){super(code);}
 }
 /** Adapter for an already-admitted isolated worker. The supervisor MUST verify
  * the account, container, remote environment, mounts, network, role and scope
@@ -32,6 +33,7 @@ export class ClaudeExecutionAdapter{
   if(process.env.AC_DEBUG_QUOTA_EXHAUSTED==='1')throw new ClaudeExecutionFailure('PROVIDER_USAGE_LIMIT',null,null);
   const input=Input.parse(raw);if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
   await assertAuthorized();if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
+  let counters:UsageCountersValue|null=null;
   let usage:UsageWindowsObservation|null=null,tokens:number|null=null,failed=false,completed=false,timedOut=false,providerText='';
   // /work exists in the worker only in personal mode: the programmer's checkout, or a reviewer's read-only copy
   // without Git metadata plus `.agent-control-review.diff`. Reading files is the only tool an evaluator gets; no shell.
@@ -57,28 +59,28 @@ export class ClaudeExecutionAdapter{
     if(event.type==='error'){failed=true;providerText+='\n'+event.message;}
     if(event.type==='turn-end'){if(event.reason)failed=true;else completed=true;}
     if(event.type==='token-usage'&&Number.isSafeInteger(event.tokensUsed)&&event.tokensUsed>=0)tokens=event.tokensUsed;
-   },{autoEndAfterFirstTurn:true});
+   },{autoEndAfterFirstTurn:true,onUiEvent:event=>{if(event.type==='usage.updated'){counters=usageCountersFromEvent(event.usage);if(counters.input===0)counters.input=null;if(counters.output===0)counters.output=null;}}});
    if(signal?.aborted)stop();
    const result=await Promise.race([session.result,stopped]);
    if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');if(timedOut)throw new Refusal('EXECUTION_TIMEOUT');
    const limit=failed||!completed?claudeLimitFromText([providerText,result.text]):null;
    if(limit){
     logClaudeAdapterFailure(limit.failureCode,[providerText,result.text].map(s=>s.trim()).filter(Boolean).join(' '),secrets);
-    throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
+    throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows),counters);
    }
    if(failed||!completed){
     const joined=[providerText,result.text].map(s=>s.trim()).filter(Boolean).join(' ');
     const auth=providerFailureCode(joined);
     if(auth){
      logClaudeAdapterFailure(auth,joined,secrets);
-     throw new ClaudeExecutionFailure(auth,tokens,usage);
+     throw new ClaudeExecutionFailure(auth,tokens,usage,counters);
     }
     throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
    }
    const extracted=input.outputSchema?extractJsonObject(result.text):undefined;
    const text=extracted===undefined?result.text:JSON.stringify(extracted);
    if(Buffer.byteLength(text)>256*1024)throw new Refusal('EXECUTION_OUTPUT_TOO_LARGE');
-   return {output:redactSecrets(text,secrets),tokensUsed:tokens,usageWindows:usage,nativeSessionId:result.sessionId??null};
+   return {output:redactSecrets(text,secrets),tokensUsed:tokens,counters,usageWindows:usage,nativeSessionId:result.sessionId??null};
   }catch(error){
    if(error instanceof ClaudeExecutionFailure)throw error;
    const rawMsg=error instanceof Error?error.message:String(error??'');
@@ -86,16 +88,16 @@ export class ClaudeExecutionAdapter{
    const limit=claudeLimitFromText([providerText,rawMsg]);
    if(limit){
     logClaudeAdapterFailure(limit.failureCode,joined,secrets);
-    throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows));
+    throw new ClaudeExecutionFailure(limit.failureCode,tokens,preferredLimitUsage(usage,limit.usageWindows),counters);
    }
    const auth=providerFailureCode(joined);
    if(auth){
     logClaudeAdapterFailure(auth,joined,secrets);
-    throw new ClaudeExecutionFailure(auth,tokens,usage);
+    throw new ClaudeExecutionFailure(auth,tokens,usage,counters);
    }
    const code=error instanceof Refusal?error.code:claudeSpawnFailureCode(error)??claudeExitFailureCode(error,joined)??'EXECUTION_NATIVE_FAILED';
    logClaudeAdapterFailure(code,joined,secrets);
-   throw new ClaudeExecutionFailure(code,tokens,usage);
+   throw new ClaudeExecutionFailure(code,tokens,usage,counters);
   }
   finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
  }

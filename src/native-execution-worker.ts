@@ -14,9 +14,11 @@ import {CodexExecutionAdapter,CodexExecutionFailure} from './codex-execution-ada
 import {ClaudeExecutionAdapter,ClaudeExecutionFailure} from './claude-execution-adapter.ts';
 import {GrokExecutionFailure,runGrokProgrammer} from './grok-execution-adapter.ts';
 import {runWithVerdictRetry} from './evaluator-output.ts';
+import {sumUsageAttempts} from './native-usage.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
 import {Effort} from './effort.ts';
+import type {UsageCountersValue} from './native-usage.ts';
 import type {UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 const UUID=z.uuid(),Hash=z.string().regex(/^[a-f0-9]{64}$/);
 const Launch=z.object({schemaVersion:z.literal(1),jobId:UUID,contextId:UUID,intentId:UUID,grantId:UUID,accountId:UUID,profileId:UUID,sessionId:UUID,
@@ -112,7 +114,7 @@ async function main(){
  }
  const forwarder=await startToolForwarder(input.toolsAddress);
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
- let result:{output:string;tokensUsed:number|null;usageWindows:UsageWindowsObservation|null;nativeSessionId:string|null}|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|ClaudeExecutionFailure|GrokExecutionFailure|undefined;
+ let result:{output:string;tokensUsed:number|null;counters?:UsageCountersValue|null;usageWindows:UsageWindowsObservation|null;nativeSessionId:string|null}|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|ClaudeExecutionFailure|GrokExecutionFailure|undefined;
  try{
   const request={sessionId:input.sessionId,model:input.model,effort:input.effort,role:input.role,task:input.task,writePaths:input.writePaths,
    artifactCommit:input.artifactCommit,outputSchema:input.outputSchema,timeoutMs:input.timeoutMs,
@@ -138,13 +140,25 @@ async function main(){
   // An evaluator must return one JSON verdict. A model sometimes slips (a stray bracket); ask once more
   // instead of failing the whole plan on a typo.
   const evaluator=input.role!=='programmer'&&Boolean(input.outputSchema);
-  const ran=await runWithVerdictRetry(evaluator,()=>abort.signal.aborted,runOnce);result=ran.result;failure=ran.failure;
- }catch(error){if(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure){failedUsage=error;failure=error.code;}else failure='EXECUTION_FAILED';}
+  let previous:UsageCountersValue|null|undefined;
+  const ran=await runWithVerdictRetry(evaluator,()=>abort.signal.aborted,async()=>{
+   try {
+    const current=await runOnce();
+    if(previous!==undefined)current.result.counters=sumUsageAttempts(previous,current.result.counters??null);
+    previous=current.result.counters??null;
+    return current;
+   } catch(error) {
+    if(previous!==undefined&&(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure))
+     failedUsage={...error,counters:sumUsageAttempts(previous,error.counters)} as typeof error;
+    throw error;
+   }
+  });result=ran.result;failure=ran.failure;
+ }catch(error){if(error instanceof CodexExecutionFailure||error instanceof ClaudeExecutionFailure||error instanceof GrokExecutionFailure){failedUsage??=error;failure=error.code;}else failure='EXECUTION_FAILED';}
  finally{forwarder.close();}
  const usage=result?.usageWindows??failedUsage?.usageWindows??null,safeUsage=Buffer.byteLength(JSON.stringify(usage))<=32768?usage:null;
  const output=await open('/output/execution-result.json',constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
  try{await output.writeFile(JSON.stringify({schemaVersion:1,jobId:input.jobId,output:result?.output??'',normalizedTokensUsed:result?.tokensUsed??failedUsage?.tokensUsed??null,
-  usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0}));await output.sync();}finally{await output.close();}
+  usageCounters:result?.counters??failedUsage?.counters??null,usageWindows:safeUsage,nativeSessionId:result?.nativeSessionId??null,failureCode:failure,exitCode:failure?1:0}));await output.sync();}finally{await output.close();}
  process.exit(failure?1:0);
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){

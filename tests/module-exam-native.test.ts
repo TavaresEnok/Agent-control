@@ -57,6 +57,11 @@ test('Codex solicita somente texto e confere o modelo e os tipos de saída', () 
   const output = [{type: 'reasoning'}, {type: 'message', role: 'assistant', content: [{type: 'output_text', text: verdict}]}];
   const completed = frame({type: 'response.completed', response: {model: 'fixture', status: 'completed', output}});
   assert.equal(readModuleExamCodexOutput(completed, 'fixture'), verdict);
+  let usage: unknown;
+  const measured = frame({type: 'response.completed', response: {model: 'fixture', status: 'completed', output,
+    usage: {input_tokens: 20, output_tokens: 4, input_tokens_details: {cached_tokens: 3}, output_tokens_details: {reasoning_tokens: 2}}}});
+  assert.equal(readModuleExamCodexOutput(measured, 'fixture', value => { usage = value; }), verdict);
+  assert.deepEqual(usage, {input: 20, output: 4, cache: 3, reasoning: 2});
   assert.throws(() => readModuleExamCodexOutput(completed, 'alternate'), /MODULE_EXAM_RESPONSE_INVALID/);
   const unexpected = frame({type: 'response.output_item.added', item: {type: 'function_call'}});
   assert.throws(() => readModuleExamCodexOutput(unexpected + completed, 'fixture'), /MODULE_EXAM_RESPONSE_INVALID/);

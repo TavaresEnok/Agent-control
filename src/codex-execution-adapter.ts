@@ -4,6 +4,7 @@ import type {AgentRunner,AgentRunSpec,AgentSession} from '../upstream/cezar/pack
 import {usageWindowsObservationSchema,type UsageWindowsObservation} from '../upstream/cezar/packages/contract/src/usage-windows.ts';
 import {Refusal} from './contracts.ts';
 import {Effort,runnerEffort} from './effort.ts';
+import {usageCountersFromEvent, type UsageCountersValue} from './native-usage.ts';
 
 const Path=z.string().min(1).max(240).refine(path=>!path.startsWith('/')&&!path.includes('\\')&&
  !path.split('/').some(part=>!part||part==='.'||part==='..'||part==='.git'||part==='.ai')&&!/[\x00-\x1f*?\[\]{}]/.test(path));
@@ -16,7 +17,7 @@ const Input=z.object({sessionId:z.uuid(),model:z.string().regex(/^[A-Za-z0-9][A-
  if(v.role!=='programmer'&&(!v.artifactCommit||v.writePaths.length||!v.outputSchema))ctx.addIssue({code:'custom',message:'READONLY_ARTIFACT_AND_VERDICT_REQUIRED'});
 });
 export class CodexExecutionFailure extends Refusal{
- constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null){super(code);}
+ constructor(code:string,readonly tokensUsed:number|null,readonly usageWindows:UsageWindowsObservation|null,readonly counters:UsageCountersValue|null=null){super(code);}
 }
 /** Adapter for an already-admitted isolated worker. The supervisor MUST verify
  * the account, container, remote environment, mounts, network, role and scope
@@ -28,6 +29,7 @@ export class CodexExecutionAdapter{
   if(process.env.AC_DEBUG_QUOTA_EXHAUSTED==='1')throw new CodexExecutionFailure('PROVIDER_USAGE_LIMIT',null,null);
   const input=Input.parse(raw);if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
   await assertAuthorized();if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');
+  let counters:UsageCountersValue|null=null;
   let usage:UsageWindowsObservation|null=null,tokens:number|null=null,failed=false,completed=false,timedOut=false;
   const instruction=input.role==='programmer'
    ?'Implement the requested change within the authorized paths. The controller will verify the resulting artifact and conduct independent review. Do not access credentials or approve, integrate, publish or deploy your work.'
@@ -48,14 +50,14 @@ export class CodexExecutionAdapter{
     if(event.type==='error')failed=true;
     if(event.type==='turn-end'){if(event.reason)failed=true;else completed=true;}
     if(event.type==='token-usage'&&Number.isSafeInteger(event.tokensUsed)&&event.tokensUsed>=0)tokens=event.tokensUsed;
-   },{autoEndAfterFirstTurn:true});
+   },{autoEndAfterFirstTurn:true,onUiEvent:event=>{if(event.type==='usage.updated')counters=usageCountersFromEvent(event.usage,true);}});
    if(signal?.aborted)stop();
    const result=await Promise.race([session.result,stopped]);
    if(signal?.aborted)throw new Refusal('EXECUTION_CANCELED');if(timedOut)throw new Refusal('EXECUTION_TIMEOUT');
    if(failed||!completed)throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
    if(Buffer.byteLength(result.text)>256*1024)throw new Refusal('EXECUTION_OUTPUT_TOO_LARGE');
-   return {output:redactSecrets(result.text,secrets),tokensUsed:tokens,usageWindows:usage,nativeSessionId:result.sessionId??null};
-  }catch(error){throw new CodexExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage);}
+   return {output:redactSecrets(result.text,secrets),tokensUsed:tokens,counters,usageWindows:usage,nativeSessionId:result.sessionId??null};
+  }catch(error){throw new CodexExecutionFailure(error instanceof Refusal?error.code:'EXECUTION_NATIVE_FAILED',tokens,usage,counters);}
   finally{clearTimeout(timer);signal?.removeEventListener('abort',stop);}
  }
 }
