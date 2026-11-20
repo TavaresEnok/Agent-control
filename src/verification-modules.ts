@@ -25,7 +25,7 @@ import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
 import {isPublicModuleRule, type ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewObservationTitle, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob, recheckHead, sameRecheckHistory} from './module-recheck-git.ts';
-import {attestDistinctExamSessions, attestExamExecution, distinctExamSessions, examSubjectDigest, HIGH_REVIEWER_MODEL,
+import {attestDistinctExamSessions, attestExamExecution, distinctExamSessions, examFindingIdentity, examSubjectDigest, HIGH_REVIEWER_MODEL,
   HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN, type ExamExecutionIdentity} from './module-exam-sessions.ts';
 import {moduleMeasurementCriterion} from './module-recheck-criteria.ts';
 import {measureLocalRegression} from './module-recheck-local.ts';
@@ -609,9 +609,9 @@ function isSecretToken(token: string): boolean {
 }
 
 type HighSessionAttestation = (examiner: ExamExecutionIdentity, verifier: ExamExecutionIdentity,
-  subject: {file: string; line: number}) => Promise<boolean>;
+  subject: {file: string; line: number; finding: string}) => Promise<boolean>;
 
-async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamResult['findings'][number],
+async function independentVerifier(exam: ModuleExamResult, id: string, finding: ModuleExamResult['findings'][number],
   collectorReview: ModuleExamCollectorReview, raw?: ModuleRawFinding, attestHigh?: HighSessionAttestation): Promise<Achado['verifier']> {
   const {snapshot, collector} = collectorReview;
   const {module, commit} = collector;
@@ -629,7 +629,9 @@ async function independentVerifier(exam: ModuleExamResult, finding: ModuleExamRe
     // ledger binds each one to a distinct completed native execution, on any account.
     if (verifier.provider !== HIGH_REVIEWER_PROVIDER || verifier.model !== HIGH_REVIEWER_MODEL
       || !distinctExamSessions(examiner, verifier) || !attestHigh
-      || !await attestHigh(examiner, verifier, {file: finding.file, line: finding.line})) {
+      || !await attestHigh(examiner, verifier, {file: finding.file, line: finding.line,
+        finding: examFindingIdentity({id, source: finding.source, file: finding.file, line: finding.line,
+          severity: finding.severity, evidence: finding.evidence, hypothesis: finding.hypothesis})})) {
       return null;
     }
   } else if (examiner.provider === verifier.provider || examiner.accountId === verifier.accountId || examiner.profileId === verifier.profileId) {
@@ -2095,10 +2097,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     const collectorReview = {collector, intentId, snapshot, relatedSources, coverage};
     // Each job must be the one the host launched for this finding's file, so the subjects
     // come from the host's own run, never from the result.
-    const attestHigh: HighSessionAttestation = (examiner, verifier, {file, line}) => attestDistinctExamSessions(input.ledger.pool, {
+    const attestHigh: HighSessionAttestation = (examiner, verifier, {file, line, finding}) => attestDistinctExamSessions(input.ledger.pool, {
       contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer: verifier, reviewerIntentId: intentId,
       examinerSubject: examSubjectDigest({purpose: 'examiner', module: input.module, intentId, commit: input.commit, file}),
-      reviewerSubject: examSubjectDigest({purpose: 'reviewer', module: input.module, intentId, commit: input.commit, file, line}),
+      reviewerSubject: examSubjectDigest({purpose: 'reviewer', module: input.module, intentId, commit: input.commit, file, line, finding}),
     });
     const achados: Achado[] = [];
     for (const finding of collectorData.findings) {
@@ -2116,7 +2118,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
           audited.evidence !== origin.evidence || audited.title !== origin.title || audited.severity !== origin.severity) {
           throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
         }
-        verifier = await independentVerifier(exam!, audited, collectorReview, finding, attestHigh);
+        verifier = await independentVerifier(exam!, achadoId, audited, collectorReview, finding, attestHigh);
         status = verifier ? audited.status : 'provavel';
         if (verifier) {
           proof = localizedProof(audited.proof, audited.reason);
@@ -2154,9 +2156,10 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
         throw new Refusal('MODULE_EXAM_FINDINGS_INVALID', 400);
       }
       await resolveInsideRepo(snapshot, judged.file);
-      const verifier = await independentVerifier(exam!, judged, collectorReview, undefined, attestHigh);
+      const judgedId = `ACH-${String(achados.length + 1).padStart(3, '0')}`;
+      const verifier = await independentVerifier(exam!, judgedId, judged, collectorReview, undefined, attestHigh);
       achados.push(Achado.parse({
-        id: `ACH-${String(achados.length + 1).padStart(3, '0')}`, title: sanitizeText(judged.title), severity: judged.severity,
+        id: judgedId, title: sanitizeText(judged.title), severity: judged.severity,
         status: verifier ? judged.status : 'provavel', verifier,
         reference: 'exame-de-arquivo', where: {file: judged.file, line: judged.line}, scenario: sanitizeText(judged.evidence),
         proof: verifier ? localizedProof(judged.proof, judged.reason) : '', suggestion: 'Revisar o trecho indicado e verificar a correção.',
@@ -3417,8 +3420,11 @@ export async function recheckModuleFindings(
         // migration 115 or before the per-file session binding need a new exam.
         const examinerSubject = highExaminer && examinerIntentId ? examSubjectDigest({purpose: 'examiner', module: moduleName,
           intentId: examinerIntentId, commit: originalCommit, file: item.file}) : undefined;
+        // The reviewer is bound to the original finding, not only to its line, by immutable fields
+        // of the original request, so it holds when the commit changed and the title was rewritten.
         const reviewerSubject = examSubjectDigest({purpose: 'reviewer', module: moduleName, intentId, commit: head,
-          file: item.file, line: item.line});
+          file: item.file, line: item.line, finding: examFindingIdentity({id: item.id, source: item.tool, file: item.file,
+            line: item.line, severity: item.severity, evidence, hypothesis: observed?.hypothesis ?? null})});
         const unsupported = !regression && task.criterion === null && head !== originalCommit;
         const examinerProven = unsupported || !highExaminer || Boolean(examiner?.grantId && examiner.sessionId && examinerSubject
           && await attestExamExecution(ledger.pool, {contextId: authority.contextId, intentId: examinerIntentId!,

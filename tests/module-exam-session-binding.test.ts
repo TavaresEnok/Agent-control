@@ -4,16 +4,19 @@ import {randomUUID} from 'node:crypto';
 import {Capacity} from '../src/capacity.ts';
 import {digest, Id} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
-import {attestDistinctExamSessions, attestExamExecution, examSessionFor, examSubjectDigest,
-  type ExamExecutionIdentity} from '../src/module-exam-sessions.ts';
+import {attestDistinctExamSessions, attestExamExecution, examFindingIdentity, examSessionFor, examSubjectDigest,
+  type ExamExecutionIdentity, type ExamFindingOrigin} from '../src/module-exam-sessions.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const base = process.env.AC_TEST_DATABASE_URL;
+const origin = (file: string, line: number, overrides: Partial<ExamFindingOrigin> = {}): ExamFindingOrigin => ({
+  id: 'ACH-001', source: 'examinador', file, line, severity: 'alta', evidence: 'test.skip("a")', hypothesis: 'Pulado?', ...overrides});
 
 test('a sessão derivada do assunto é um UUID válido, estável e distinto por arquivo e por job', () => {
   const job = randomUUID();
   const subject = (file: string, line?: number) => examSubjectDigest({purpose: line ? 'reviewer' : 'examiner', module: 'qa',
-    intentId: '00000000-0000-4000-8000-000000000001', commit: 'a'.repeat(40), file, ...(line ? {line} : {})});
+    intentId: '00000000-0000-4000-8000-000000000001', commit: 'a'.repeat(40), file,
+    ...(line ? {line, finding: examFindingIdentity(origin(file, line))} : {})});
   const session = examSessionFor(job, subject('a.ts'));
   assert.ok(Id.safeParse(session).success);
   assert.equal(session, examSessionFor(job, subject('a.ts')));
@@ -22,6 +25,30 @@ test('a sessão derivada do assunto é um UUID válido, estável e distinto por 
   assert.notEqual(subject('a.ts', 3), subject('a.ts', 4));
   assert.notEqual(subject('a.ts'), subject('a.ts', 1));
   assert.throws(() => examSessionFor('não-uuid', subject('a.ts')));
+});
+
+test('a identidade do achado é canônica, ignora o título e separa achados da mesma linha', () => {
+  const identity = examFindingIdentity(origin('a.ts', 7));
+  assert.match(identity, /^[a-f0-9]{64}$/);
+  // Key order and an absent hypothesis versus null are canonical.
+  const {hypothesis: _h, ...withoutHypothesis} = origin('a.ts', 7);
+  assert.equal(examFindingIdentity({...withoutHypothesis, hypothesis: null}), examFindingIdentity(withoutHypothesis));
+  assert.equal(examFindingIdentity({hypothesis: 'Pulado?', evidence: 'test.skip("a")', severity: 'alta', line: 7, file: 'a.ts',
+    source: 'examinador', id: 'ACH-001'}), identity);
+  assert.equal(examFindingIdentity({...origin('a.ts', 7), title: 'Reescrito pelo revisor'} as ExamFindingOrigin), identity);
+  for (const change of [{id: 'ACH-002'}, {source: 'outro'}, {severity: 'media'}, {evidence: 'test.skip("b")'}, {hypothesis: 'Outra?'}]) {
+    assert.notEqual(examFindingIdentity(origin('a.ts', 7, change)), identity, JSON.stringify(change));
+  }
+  const reviewer = (finding?: string) => examSubjectDigest({purpose: 'reviewer', module: 'qa',
+    intentId: '00000000-0000-4000-8000-000000000001', commit: 'a'.repeat(40), file: 'a.ts', line: 7, finding});
+  assert.notEqual(reviewer(identity), reviewer(examFindingIdentity(origin('a.ts', 7, {id: 'ACH-002'}))));
+  // A reviewer subject without the finding identity is not derivable.
+  assert.throws(() => reviewer(undefined), /MODULE_EXAM_SUBJECT_INVALID/);
+  assert.throws(() => reviewer('x'), /MODULE_EXAM_SUBJECT_INVALID/);
+  // The examiner subject ignores line and finding, so earlier examiner journals still attest.
+  assert.equal(examSubjectDigest({purpose: 'examiner', module: 'qa', intentId: '00000000-0000-4000-8000-000000000001',
+    commit: 'a'.repeat(40), file: 'a.ts', line: 7, finding: identity}), examSubjectDigest({purpose: 'examiner', module: 'qa',
+    intentId: '00000000-0000-4000-8000-000000000001', commit: 'a'.repeat(40), file: 'a.ts'}));
 });
 
 test('o host recusa job de outro arquivo, conta posterior da cadeia e histórico incompleto', {skip: !base}, async () => {
@@ -58,7 +85,8 @@ test('o host recusa job de outro arquivo, conta posterior da cadeia e histórico
       policyRevision: 1, action: 'plan.start', payload: {workflow: 'baseline-synthetic-v1', messageRef: 'encrypted:fixture'}}, authority, 'api');
     const intentId = intent.id, commit = 'c'.repeat(40);
     const examinerSubject = (file: string) => examSubjectDigest({purpose: 'examiner', module: 'qa', intentId, commit, file});
-    const reviewerSubject = (file: string, line: number) => examSubjectDigest({purpose: 'reviewer', module: 'qa', intentId, commit, file, line});
+    const reviewerSubject = (file: string, line: number, overrides: Partial<ExamFindingOrigin> = {}) => examSubjectDigest({
+      purpose: 'reviewer', module: 'qa', intentId, commit, file, line, finding: examFindingIdentity(origin(file, line, overrides))});
 
     // Completed specialist jobs as the supervisor journals them, each session derived by the host from its own subject.
     const job = async (input: {account: string; profile: string; model: string; subject: string; revision?: number;
@@ -78,9 +106,10 @@ test('o host recusa job de outro arquivo, conta posterior da cadeia e histórico
     const examinerB = await job({account: primary, profile: sonnet, model: 'claude-sonnet-5-5', subject: examinerSubject('b.ts')});
     const reviewerA = await job({account: primary, profile: opus, model: 'claude-opus-5-5', subject: reviewerSubject('a.ts', 7)});
     const reviewerB = await job({account: primary, profile: opus, model: 'claude-opus-5-5', subject: reviewerSubject('b.ts', 7)});
-    const pair = (examiner: ExamExecutionIdentity, reviewer: ExamExecutionIdentity, file = 'a.ts', line = 7) =>
+    const pair = (examiner: ExamExecutionIdentity, reviewer: ExamExecutionIdentity, file = 'a.ts', line = 7,
+      finding: Partial<ExamFindingOrigin> = {}) =>
       attestDistinctExamSessions(db.pool, {contextId, examiner, examinerIntentId: intentId, examinerSubject: examinerSubject(file),
-        reviewer, reviewerIntentId: intentId, reviewerSubject: reviewerSubject(file, line)});
+        reviewer, reviewerIntentId: intentId, reviewerSubject: reviewerSubject(file, line, finding)});
 
     assert.equal(await pair(examinerA, reviewerA), true);
     assert.equal(await pair(examinerB, reviewerB, 'b.ts'), true);
@@ -88,6 +117,15 @@ test('o host recusa job de outro arquivo, conta posterior da cadeia e histórico
     assert.equal(await pair(examinerA, reviewerB), false);
     assert.equal(await pair(examinerB, reviewerA), false);
     assert.equal(await pair(examinerA, reviewerA, 'a.ts', 8), false);
+    // Two different findings on the same line: each reviewer attests only its own finding.
+    const second = {id: 'ACH-002', evidence: 'test.skip("b")', hypothesis: 'Outra?'};
+    const reviewerA2 = await job({account: primary, profile: opus, model: 'claude-opus-5-5', subject: reviewerSubject('a.ts', 7, second)});
+    assert.equal(await pair(examinerA, reviewerA2, 'a.ts', 7, second), true);
+    assert.equal(await pair(examinerA, reviewerA2), false);
+    assert.equal(await pair(examinerA, reviewerA, 'a.ts', 7, second), false);
+    for (const change of [{id: 'ACH-002'}, {severity: 'media'}, {evidence: 'test.skip("b")'}, {hypothesis: 'Outra?'}]) {
+      assert.equal(await pair(examinerA, reviewerA, 'a.ts', 7, change), false, JSON.stringify(change));
+    }
     // A claimed session that the host did not derive for this job is refused even if it is journaled.
     const unbound = await job({account: primary, profile: opus, model: 'claude-opus-5-5', subject: reviewerSubject('a.ts', 7),
       session: randomUUID()});

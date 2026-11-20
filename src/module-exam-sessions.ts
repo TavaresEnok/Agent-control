@@ -11,8 +11,9 @@ import {loadSpecialistExamPlanAtRevision} from './exam-provider.ts';
  *
  * Each job is also bound to the file it read. The host derives the session it assigns
  * to a native job from the job id and the digest of the request subject (purpose, module,
- * intent, commit, file and, for a reviewer, the finding line). The journal keeps job id
- * and session immutable, so a job that read file B cannot be attested for file A.
+ * intent, commit, file and, for a reviewer, the finding line and identity). The journal keeps
+ * job id and session immutable, so a job that read file B cannot be attested for file A, and a
+ * reviewer that confirmed one finding cannot be attested for another finding on the same line.
  */
 export const HIGH_REVIEWER_PROVIDER = 'claude';
 export const HIGH_REVIEWER_MODEL = 'claude-opus-5-5';
@@ -29,13 +30,43 @@ export type ExamSubject = {
   commit?: string | null;
   file: string;
   line?: number | null;
+  /** Reviewer only: `examFindingIdentity` of the original finding. */
+  finding?: string | null;
 };
+
+export type ExamFindingOrigin = {
+  /** Report id of the finding, `ACH-NNN`, from its position in the original exam. */
+  id: string;
+  source: string;
+  file: string;
+  line: number;
+  severity: string;
+  evidence: string;
+  hypothesis?: string | null;
+};
+
+/**
+ * Stable identity of the original finding: only fields of the original request that no
+ * confirmation changes (the title may be rewritten by the reviewer, so it is left out).
+ */
+export function examFindingIdentity(origin: ExamFindingOrigin): string {
+  return digest({schema: 'module-exam-finding-v1', id: origin.id, source: origin.source, file: origin.file,
+    line: origin.line, severity: origin.severity, evidence: origin.evidence, hypothesis: origin.hypothesis ?? null});
+}
+
+/** Report id of the finding at a 0-based position of the exam findings. */
+export function examFindingId(index: number): string {
+  return `ACH-${String(index + 1).padStart(3, '0')}`;
+}
 
 /** Digest of what one native job was asked to examine. Computed by the host only. */
 export function examSubjectDigest(subject: ExamSubject): string {
-  return digest({schema: 'module-exam-subject-v1', purpose: subject.purpose, module: subject.module,
-    intentId: subject.intentId, commit: subject.commit ?? null, file: subject.file,
-    line: subject.purpose === 'reviewer' ? subject.line ?? null : null});
+  const base = {purpose: subject.purpose, module: subject.module, intentId: subject.intentId,
+    commit: subject.commit ?? null, file: subject.file};
+  // The examiner subject is unchanged, so journals of earlier examiner executions still attest.
+  if (subject.purpose === 'examiner') return digest({schema: 'module-exam-subject-v1', ...base, line: null});
+  if (!subject.finding || !DIGEST.test(subject.finding)) throw new Error('MODULE_EXAM_SUBJECT_INVALID');
+  return digest({schema: 'module-exam-subject-v2', ...base, line: subject.line ?? null, finding: subject.finding});
 }
 
 /** The session the host assigns to a job for one subject, as a UUIDv8. */

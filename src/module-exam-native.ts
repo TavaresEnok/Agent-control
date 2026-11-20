@@ -481,10 +481,10 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       reserve: reservations.reserve,
       release: reservations.release,
       ...(waitForClaudeQuota ? {waitForClaudeQuota} : {}),
-      attestSessions: ({examiner, reviewer, file, line}) => attestDistinctExamSessions(input.ledger.pool, {
+      attestSessions: ({examiner, reviewer, file, line, finding}) => attestDistinctExamSessions(input.ledger.pool, {
         contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer, reviewerIntentId: intentId,
         examinerSubject: examSubjectDigest({purpose: 'examiner', module, intentId, commit: input.commit, file}),
-        reviewerSubject: examSubjectDigest({purpose: 'reviewer', module, intentId, commit: input.commit, file, line}),
+        reviewerSubject: examSubjectDigest({purpose: 'reviewer', module, intentId, commit: input.commit, file, line, finding}),
       }),
     });
   };

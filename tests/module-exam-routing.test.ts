@@ -15,6 +15,7 @@ import {Ledger, VERIFICATION_MODULES, type VerificationModule} from '../src/ledg
 import {mapModuleSnapshot} from '../src/module-exam-map.ts';
 import {createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamRuntime} from '../src/module-exam-native.ts';
 import {examineFunctionalModule, type ModuleExamSeat} from '../src/module-exam.ts';
+import {examFindingIdentity} from '../src/module-exam-sessions.ts';
 import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
 import {runPersonalModuleCli} from '../src/personal-module-cli.ts';
 import {readModuleReport, recheckModuleFindings, runVerificationModule} from '../src/verification-modules.ts';
@@ -675,6 +676,8 @@ test('achado alto do examinador exige sess√µes distintas atestadas no livro-raz√
       examiner: {...examinerSeat, sessionId: examinerSession},
       reviewer: {...opusSeat, sessionId: reviewerSession},
       file: 'app.test.ts', line: 1,
+      finding: examFindingIdentity({id: 'ACH-001', source: 'examinador', file: 'app.test.ts', line: 1, severity: 'alta',
+        evidence: skipped, hypothesis: skipQuestion}),
     });
 
     // 5b) Exam: a reviewer that ran out of quota keeps PROVIDER_USAGE_LIMIT, not a session code.
