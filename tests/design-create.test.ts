@@ -112,7 +112,7 @@ test('briefing longo completo é enviado sem corte em todas as rodadas com a ins
     assert.equal(created.rounds.length, 2);
     for (const call of calls) {
       assert.equal(call.forcedModel, 'claude-opus-5-5');
-      assert.equal(call.forcedEffort, 'medium');
+      assert.equal(call.forcedEffort, 'high');
       assert.equal(call.task.includes(briefing), true);
       assert.equal(call.task.includes(directions), true);
       assert.equal(call.task.includes(briefing.slice(8000)), true);

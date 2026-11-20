@@ -393,7 +393,7 @@ function assembleAchados(
   const covered: string[] = [];
   for (const item of confirmations) {
     achados.push(toAchado(achados.length + 1, item.finding, item.confirm, item.verifier));
-    if (item.verifier === null) covered.push(`${item.finding.file}\u0000${item.finding.reference}`);
+    if (item.finding.measure !== undefined) covered.push(`${item.finding.file}\u0000${item.finding.reference}`);
   }
   for (const raw of rawFindings) {
     const routeDown = raw.tool === 'navegacao' && raw.rule === 'DESIGN-ROTA-INDISPONIVEL';

@@ -22,7 +22,7 @@ import {
 } from './design-types.ts';
 
 export type DesignReserveOptions = {
-  purpose?: 'create' | 'examiner' | 'reviewer';
+  purpose?: 'create' | 'examiner' | 'reviewer' | 'visual';
   avoidProfileId?: string;
   avoidProfileIds?: readonly string[];
   avoidAccountId?: string;
@@ -393,7 +393,7 @@ async function askVisual(
   role: 'specialist' | 'reviewer',
   avoid?: DesignReserveOptions,
 ): Promise<{scores: VisualScore[] | null; failure: string | null; model: string; seat: DesignSeat}> {
-  const seat = await input.reserve(role, undefined, avoid);
+  const seat = await input.reserve(role, undefined, {...avoid, purpose: 'visual'});
   try {
     acceptClaudeExamSeat(seat);
     const call = DesignWorkerCall.parse({
@@ -430,6 +430,7 @@ function confirmationTask(
     `Linha: ${finding.line ?? 'não informada'}`,
     `Título: ${oneLine(finding.title)}`,
     `Regra: ${oneLine(finding.reference)}`,
+    ...(finding.measure ? [measureProof(finding.measure, finding.snippet)] : []),
     `Trecho: ${oneLine(finding.snippet)}`,
     'Código:',
     code.slice(0, 20000),
@@ -628,7 +629,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           ...(measure === undefined ? {} : {measure}),
         });
         findings.push(clamped);
-        if (measure !== undefined) {
+        if (measure !== undefined && finding.severity !== 'alta') {
           confirmations.push({
             finding: clamped,
             confirm: {
@@ -648,7 +649,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         try {
           const reviewed = await confirmFinding(
             input,
-            finding,
+            clamped,
             screen.code,
             screen.captures,
             model => remember('reviewer', model),
@@ -664,7 +665,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
             verifier: {model: reviewed.seat.model, provider: reviewed.seat.provider},
           });
         } catch (error) {
-          if (rethrowReviewer(error)) throw error;
+          if (finding.severity === 'alta' || rethrowReviewer(error)) throw error;
           const code = error instanceof Refusal ? safeFailureCode(error.code) : 'EXECUTION_NATIVE_FAILED';
           noteFailure('reviewer', code);
           notes.push(`O revisor falhou em ${screen.file} com ${code}.`);

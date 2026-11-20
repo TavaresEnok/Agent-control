@@ -780,7 +780,7 @@ function stringList(values: readonly string[] | undefined, max: number): string[
 
 /**
  * Gera telas fora do repositório e devolve cada rodada para o exame injetado.
- * O modelo de produção é claude-opus-5-5 com esforço medium, forçado no worker.
+ * O modelo de produção é claude-opus-5-5 com esforço high, forçado no worker.
  * Aprovação é por tela: só a rejeitada volta no pedido seguinte.
  */
 export async function runDesignCreate(input: {
@@ -825,7 +825,7 @@ export async function runDesignCreate(input: {
         repo: input.repository,
         writePaths: [],
         forcedModel: 'claude-opus-5-5',
-        forcedEffort: 'medium',
+        forcedEffort: 'high',
       });
       try {
         output = await input.worker.run(call);

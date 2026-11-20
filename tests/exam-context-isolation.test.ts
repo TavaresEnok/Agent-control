@@ -706,7 +706,7 @@ test('selectForNew do projeto não é bloqueado por intenção accepted em conte
   }
 });
 
-test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist usam perfis distintos e nunca criam grant reviewer', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
+test('exame de design e criar reservam Opus high na conta prioritária para criação, exame e crítica visual, e Opus medium para confirmação', {skip: databaseUrl ? false : 'AC_TEST_DATABASE_URL is unset'}, async () => {
   const database = await isolatedDatabase(databaseUrl!, 'designspec');
   const db = new Ledger(database.url);
   const root = await mkdtemp(join(tmpdir(), 'ac-design-spec-'));
@@ -723,7 +723,7 @@ test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
     await capacity.registerModel(principal, {
-      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['low', 'medium', 'high'], roles: [...roles], source: 'personal://account-add',
+      provider: 'claude', model: 'claude-opus-5-5', efforts: ['medium', 'high'], roles: [...roles], source: 'personal://account-add',
     });
     await capacity.registerModel(principal, {
       provider: 'codex', model: 'gpt-6.1-sol', efforts: ['medium', 'high'], roles: [...roles], source: 'personal://account-add',
@@ -741,23 +741,30 @@ test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist
     await capacity.observeQuota(principal, claudeId, {status: 'available', source: 'fixture', ttlSeconds: 3600});
     await capacity.observeQuota(principal, codexId, {status: 'available', source: 'fixture', ttlSeconds: 3600});
 
-    // Cadeia reviewer do projeto é Codex; cadeia specialist ganha 3 perfis Claude via preparar (mesma conta, outra sessão para o revisor).
+    const otherClaude = randomUUID();
+    await capacity.addAccount(principal, projectId, {
+      id: otherClaude, provider: 'claude', label: 'outra conta', resourceIdentity: `claude:${otherClaude}`, mode: 'synthetic',
+      eligibility: 'documented_supported', eligibilitySource: 'synthetic://designspec', maxConcurrent: 4,
+    });
+    await capacity.observeQuota(principal, otherClaude, {status: 'available', source: 'fixture', ttlSeconds: 3600});
+    const specialist: string[] = [];
+    for (const accountId of [claudeId, otherClaude]) {
+      for (const effort of ['medium', 'high'] as const) {
+        const id = randomUUID();
+        await capacity.addProfile(principal, projectId, {id, accountId, model: 'claude-opus-5-5', effort, role: 'specialist'});
+        specialist.push(id);
+      }
+    }
     const codexReviewerProfile = randomUUID();
     await capacity.addProfile(principal, projectId, {
       id: codexReviewerProfile, accountId: codexId, model: 'gpt-6.1-sol', effort: 'high', role: 'reviewer',
     });
-    await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
+    const revision = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
       schemaVersion: 1, maxProgrammersPerContext: 1, maxEvaluatorsPerContext: 2,
-      roles: {reviewer: {regular: [codexReviewerProfile], emergency: []}},
+      roles: {specialist: {regular: specialist, emergency: []}, reviewer: {regular: [codexReviewerProfile], emergency: []}},
     }));
     const mainContext = await db.createContext(principal, projectId, randomUUID());
-    const prepared = await prepareDesignSpecialist({ledger: db, owner: principal, projectId, apply: true});
-    const createProfileId = prepared.profiles.find(p => p.purpose === 'criar')?.profileId;
-    const examinerProfileId = prepared.profiles.find(p => p.purpose === 'examinador')?.profileId;
-    const reviewerProfileId = prepared.profiles.find(p => p.purpose === 'revisor')?.profileId;
-    assert.ok(createProfileId && examinerProfileId && reviewerProfileId);
-    assert.equal(new Set([createProfileId, examinerProfileId, reviewerProfileId]).size, 3);
-
+    await capacity.assignPolicy(principal, mainContext, revision);
     const repo = await initRepo(root);
     const installationPath = await writeInstallation(root, {databaseUrl: database.url, projectId, repo, owner: principal, dataDirectory});
     const jobs = new Map<string, {task: string; role: string; grantId: string}>();
@@ -765,12 +772,19 @@ test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist
       'hierarquia', 'tipografia', 'cor', 'ritmo', 'grade', 'densidade', 'componentes', 'marca', 'polimento',
     ].map(axis => ({axis, score: 9, region: 'topo', suggestion: 'Manter #1b1917 e 16px.'}));
     const orderedRoles: string[] = [];
+    const sessions = new Set<string>();
     const supervisor = {
       active: true,
       supportsAccount(accountId: string) {
         return accountId === claudeId;
       },
-      async start(_principal: string, _authority: unknown, request: {jobId: string; task: string; role: string; grantId: string}) {
+      async start(_principal: string, _authority: unknown, request: {jobId: string; task: string; role: string; grantId: string; sessionId: string; model?: string; effort?: string}) {
+        assert.ok(request.sessionId && !sessions.has(request.sessionId));
+        sessions.add(request.sessionId);
+        if (request.task.startsWith('Pedido de criação.')) {
+          assert.equal(request.model, 'claude-opus-5-5');
+          assert.equal(request.effort, 'high');
+        }
         jobs.set(request.jobId, {task: request.task, role: request.role, grantId: request.grantId});
         return {state: 'running'};
       },
@@ -794,11 +808,11 @@ test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist
           return {state: 'completed', output: JSON.stringify({kind: 'confirmacao', status: 'confirmado', reason: 'Baixo contraste.', proof: 'color:#777'})};
         }
         if (task.startsWith('Pedido de crítica visual do revisor.')) {
-          orderedRoles.push('reviewer');
+          orderedRoles.push('visual-reviewer');
           return {state: 'completed', output: JSON.stringify({kind: 'visual', scores: visualScores})};
         }
         if (task.startsWith('Pedido de crítica visual.')) {
-          orderedRoles.push('examiner');
+          orderedRoles.push('visual-examiner');
           return {state: 'completed', output: JSON.stringify({kind: 'visual', scores: visualScores})};
         }
         orderedRoles.push('examiner');
@@ -872,9 +886,9 @@ test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist
           };
         },
       });
-      const grants = (await db.pool.query<{role: string; profile_id: string; provider: string}>(
-        `SELECT g.role, g.profile_id::text AS profile_id, a.provider
-         FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id
+      const grants = (await db.pool.query<{role: string; account: string; model: string; effort: string; provider: string}>(
+        `SELECT g.role, g.account_id AS account, p.model, p.effort, a.provider
+         FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id JOIN ac_profiles p ON p.id=g.profile_id
          WHERE g.intent_id=$1 ORDER BY g.created_at`,
         [resolved.intentId],
       )).rows;
@@ -882,11 +896,12 @@ test('exame de design e criar com reviewer Codex e 3 perfis Claude em specialist
       assert.equal(grants.length, orderedRoles.length);
       assert.ok(grants.length >= 5);
       assert.ok(grants.every(g => g.role === 'specialist' && g.provider === 'claude'));
-      const expectedByPurpose = {create: createProfileId, examiner: examinerProfileId, reviewer: reviewerProfileId};
+      assert.deepEqual(new Set(orderedRoles), new Set(['create', 'examiner', 'visual-examiner', 'visual-reviewer', 'reviewer']));
       orderedRoles.forEach((purpose, index) => {
-        assert.equal(grants[index]?.profile_id, expectedByPurpose[purpose as keyof typeof expectedByPurpose]);
+        assert.equal(grants[index]?.account, claudeId);
+        assert.equal(grants[index]?.model, 'claude-opus-5-5');
+        assert.equal(grants[index]?.effort, purpose === 'reviewer' ? 'medium' : 'high');
       });
-      assert.notEqual(examinerProfileId, reviewerProfileId);
     } finally {
       await resolved.close();
     }
@@ -915,7 +930,7 @@ test('exame de design sem segundo perfil Claude em specialist recusa com DESIGN_
     await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
     await capacity.configure(principal, {programmingLimit: 6, evaluationLimit: 6});
     await capacity.registerModel(principal, {
-      provider: 'claude', model: 'claude-sonnet-5-5', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
+      provider: 'claude', model: 'claude-opus-5-5', efforts: ['high'], roles: [...roles], source: 'personal://account-add',
     });
     await capacity.registerModel(principal, {
       provider: 'codex', model: 'gpt-6.1-sol', efforts: ['medium'], roles: [...roles], source: 'personal://account-add',
@@ -936,7 +951,7 @@ test('exame de design sem segundo perfil Claude em specialist recusa com DESIGN_
     const specClaude = randomUUID();
     const specGrok = randomUUID();
     const codexRev = randomUUID();
-    await capacity.addProfile(principal, projectId, {id: specClaude, accountId: claudeId, model: 'claude-sonnet-5-5', effort: 'medium', role: 'specialist'});
+    await capacity.addProfile(principal, projectId, {id: specClaude, accountId: claudeId, model: 'claude-opus-5-5', effort: 'high', role: 'specialist'});
     await capacity.addProfile(principal, projectId, {id: specGrok, accountId: grokId, model: 'grok-4.7', effort: 'medium', role: 'specialist'});
     await capacity.addProfile(principal, projectId, {id: codexRev, accountId: codexId, model: 'gpt-6.1-sol', effort: 'medium', role: 'reviewer'});
     const rev = await capacity.publish(principal, projectId, 0, CapacityPolicy.parse({
@@ -954,30 +969,32 @@ test('exame de design sem segundo perfil Claude em specialist recusa com DESIGN_
     const composeRuntime = async () => ({executions: [benchDesignSupervisor([claudeId])]}) as never;
     const resolved = await resolvePersonalDesign([], {installationPath, projectId, composeRuntime});
     try {
+      await runDesignModule({
+        activation: 'personal',
+        projectId: resolved.projectId,
+        repo: resolved.repo,
+        targetUrl: 'http://127.0.0.1:4173',
+        dataDirectory: resolved.dataDirectory,
+        intentId: resolved.intentId,
+        runId: randomUUID(),
+        createdAt: new Date(),
+        commit: resolved.commit,
+        files: [{path: 'src/index.html', text: '<!doctype html><html><body><h1>Painel</h1></body></html>'}],
+        worker: resolved.worker,
+        reserve: resolved.reserve,
+        release: resolved.release,
+        scoreVisual: true,
+        tools: {},
+      });
       await assert.rejects(
-        () => runDesignModule({
-          activation: 'personal',
-          projectId: resolved.projectId,
-          repo: resolved.repo,
-          targetUrl: 'http://127.0.0.1:4173',
-          dataDirectory: resolved.dataDirectory,
-          intentId: resolved.intentId,
-          runId: randomUUID(),
-          createdAt: new Date(),
-          commit: resolved.commit,
-          files: [{path: 'src/index.html', text: '<!doctype html><html><body><h1>Painel</h1></body></html>'}],
-          worker: resolved.worker,
-          reserve: resolved.reserve,
-          release: resolved.release,
-          scoreVisual: true,
-          tools: {},
-        }),
+        () => resolved.reserve('reviewer'),
         (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_REVIEWER_UNAVAILABLE',
       );
       const grants = (await db.pool.query<{role: string; profile_id: string}>(
         'SELECT role, profile_id::text AS profile_id FROM ac_capacity_grants WHERE intent_id=$1',
         [resolved.intentId],
       )).rows;
+      assert.ok(grants.length >= 3);
       assert.equal(grants.some(g => g.role === 'reviewer'), false);
       assert.ok(grants.every(g => g.role === 'specialist' && g.profile_id === specClaude));
     } finally {

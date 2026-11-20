@@ -6,7 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
 import {finishExamIntent} from './exam-intent.ts';
-import {reserveSpecialistExamSeat} from './exam-provider.ts';
+import {reserveDesignModel} from './design-model-reservation.ts';
 import {assertDesignTarget} from './design-image.ts';
 import {publicLoginRecord, type DesignLogin, type PublicLoginRecord} from './design-discover.ts';
 import type {DesignSourceFile} from './design-collect.ts';
@@ -405,42 +405,10 @@ export async function resolvePersonalDesign(
       base: commit,
       releaseGrant,
     });
-    let lastExaminerSeat: {profileId: string; accountId: string} | undefined;
     const capacity = new Capacity(ledger);
-    const reserve = async (
-      role: 'specialist' | 'reviewer',
-      avoidProvider?: string,
-      options?: DesignReserveOptions,
-    ): Promise<DesignSeat> => {
-      void avoidProvider;
+    const reserve = (role: 'specialist' | 'reviewer', _avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat> => {
       const purpose = options?.purpose ?? (role === 'reviewer' ? 'reviewer' : 'examiner');
-      const hasExplicitProfiles = Boolean(options?.avoidProfileId || options?.avoidProfileIds?.length);
-      const hasExplicitAccounts = Boolean(options?.avoidAccountId || options?.avoidAccountIds?.length);
-      const avoidProfileIds = purpose === 'reviewer'
-        ? (hasExplicitProfiles
-            ? [...(options?.avoidProfileId ? [options.avoidProfileId] : []), ...(options?.avoidProfileIds ?? [])]
-            : lastExaminerSeat ? [lastExaminerSeat.profileId] : [])
-        : [];
-      const avoidAccountIds = purpose === 'reviewer'
-        ? (hasExplicitAccounts
-            ? [...(options?.avoidAccountId ? [options.avoidAccountId] : []), ...(options?.avoidAccountIds ?? [])]
-            : lastExaminerSeat ? [lastExaminerSeat.accountId] : [])
-        : [];
-      const seat = await reserveSpecialistExamSeat({
-        capacity,
-        ledger,
-        principal,
-        authority: authority!,
-        intentId: intentId!,
-        purpose,
-        avoidProfileIds,
-        avoidAccountIds,
-        releaseGrant: grantId => releaseGrant(grantId, 'not_started'),
-      });
-      if (purpose === 'examiner') {
-        lastExaminerSeat = {profileId: seat.profileId, accountId: seat.accountId};
-      }
-      return {...seat, grantRole: 'specialist'};
+      return reserveDesignModel(ledger, capacity, principal, authority!, intentId!, purpose);
     };
     return {
       ledger,

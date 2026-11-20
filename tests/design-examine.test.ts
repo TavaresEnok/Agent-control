@@ -229,10 +229,10 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
   assert.equal(planted?.confirm.status, 'confirmado');
   assert.equal(planted?.finding.severity, 'alta');
   assert.deepEqual(planted?.finding.measure, {kind: 'contrast', ratio: 4.478089453577214});
-  assert.equal(planted?.verifier, null);
+  assert.deepEqual(planted?.verifier, {provider: 'claude', model: 'modelo-revisor'});
   assert.equal(result.coverage[0]?.examinerProvider, 'claude');
   assert.match(planted?.confirm.proof ?? '', /color:#777/);
-  assert.match(planted?.confirm.proof ?? '', /Medido/);
+  assert.ok(tasks.some(task => task.startsWith('Pedido de confirmação.') && task.includes('Medido: razão 4.478')));
   assert.equal(taste?.confirm.status, 'descartado');
   assert.equal(taste?.finding.severity, 'media');
   assert.equal(opinion?.confirm.status, 'provavel');
@@ -247,8 +247,8 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
   ]);
   const reviewerTasks = tasks.filter(task => task.startsWith('Pedido de confirmação.'));
   const examTask = tasks.find(task => task.startsWith('Pedido de exame.'));
-  assert.equal(reviewerTasks.length, 2);
-  assert.equal(reviewerTasks.some(task => task.includes(DESIGN_PLANTED_RULES.contrast)), false);
+  assert.equal(reviewerTasks.length, 3);
+  assert.equal(reviewerTasks.some(task => task.includes(DESIGN_PLANTED_RULES.contrast)), true);
   assert.match(examTask ?? '', /Arquivos:\n- src\/Tela\.tsx/);
   assert.match(examTask ?? '', /Itens: DESIGN-NIELSEN-H1-ESTADO/);
   assert.match(examTask ?? '', new RegExp(`- tool=axe \\| rule=${DESIGN_PLANTED_RULES.contrast} \\| severity=alta`));
@@ -262,7 +262,7 @@ test('exame confirma regra plantada, descarta gosto e esconde a sugestão', asyn
       assert.equal(task.includes(finding.scenario), false);
     }
   }
-  assert.match(reviewerTasks[0] ?? '', /GOSTO-PREFERENCIA/);
+  assert.ok(reviewerTasks.some(task => task.includes('GOSTO-PREFERENCIA')));
 });
 
 test('dois papéis Claude são aceitos e grok ou codex são recusados', async () => {
@@ -296,7 +296,7 @@ test('dois papéis Claude são aceitos e grok ou codex são recusados', async ()
     reserve: allowed.reserve,
     release: allowed.release,
   });
-  assert.equal(passed.confirmations[0]?.verifier, null);
+  assert.equal(passed.confirmations[0]?.verifier?.provider, 'claude');
   assert.equal(passed.confirmations.find(item => item.verifier !== null)?.verifier?.provider, 'claude');
   assert.equal(passed.coverage[0]?.examinerProvider, 'claude');
   assert.ok(allowed.events.includes('run:reviewer'));
@@ -468,8 +468,8 @@ test('captura falsa entra no exame e na confirmação com o mesmo caminho e o me
   assert.match(reviewTask, new RegExp(`arquivo=${path.replaceAll('/', '\\/')} viewport=375 tema=claro estado=padrao sha256=${sha256}`));
   assert.equal(reviewTask.includes('suggestion'), false);
   assert.equal(result.confirmations[0]?.finding.reference, DESIGN_PLANTED_RULES.contrast);
-  assert.equal(result.confirmations[0]?.verifier, null);
-  assert.match(reviewTask, /GOSTO-PREFERENCIA|BONITO|radius 13px|sombra/);
+  assert.equal(result.confirmations[0]?.verifier?.provider, 'claude');
+  assert.match(reviewTask, /Medido: razão 4.478/);
   const bare = tasks.length;
   const without = await examineDesignScreens({
     repo: '/tmp/repo-design',

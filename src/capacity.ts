@@ -54,6 +54,8 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
   avoidAccounts: z.array(Id).max(8).optional(),
   /** Specific profile in this role's chain to try first (keeps avoidAccounts precedence). */
   preferredProfileId: Id.optional(),
+  /** Only this profile in the published chain may fund the request. */
+  requiredProfileId: Id.optional(),
   /** Exam-reviewer-only contract: prepared specialist reviewer profiles prioritized over examiner-account avoidance while still preferring non-avoided accounts first. */
   examReviewer: z.object({
     preparedProfiles: z.array(Id).max(20),
@@ -363,6 +365,7 @@ export class Capacity {
       }
       const matchesRequest = (row: LoadedProfile) => !(writerProvider&&row.provider===writerProvider)
         && !(request.provider&&row.provider!==request.provider)
+        && (!request.requiredProfileId || request.requiredProfileId === row.profileId)
         && !request.avoidProfiles?.includes(row.profileId)
         && (!request.allowedAccounts || (row.accountId !== null && request.allowedAccounts.includes(row.accountId)));
       const usable = (row: LoadedProfile) => matchesRequest(row)
@@ -503,7 +506,7 @@ export class Capacity {
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'reserved',$14::jsonb) RETURNING *`,
         [randomUUID(),request.attemptId,request.intentId,request.contextId,authority.epoch,selected.account_id,selected.id,request.role,
           context.project_id,context.capacity_policy_revision,config.revision,hash,emergency,JSON.stringify(selection)])).rows[0];
-      if (!emergency && !request.preferredProfileId && !request.examReviewer && !request.avoidProfiles?.length) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
+      if (!emergency && !request.preferredProfileId && !request.requiredProfileId && !request.examReviewer && !request.avoidProfiles?.length) await c.query(`INSERT INTO ac_regular_selections VALUES($1,$2,$3,$4)
         ON CONFLICT(context_id,role) DO UPDATE SET profile_id=excluded.profile_id,policy_revision=excluded.policy_revision`,
         [request.contextId,request.role,selected.id,context.capacity_policy_revision]);
       await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'capacity.reserved',$2)", [request.contextId,{grantId:grant.id,attemptId:request.attemptId,profileId:selected.id,emergency}]);

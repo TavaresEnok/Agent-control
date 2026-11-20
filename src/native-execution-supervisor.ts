@@ -56,7 +56,7 @@ export const NativeExecutionRequest=z.object({jobId:Id,intentId:Id,grantId:Id,se
  model:z.string().min(1).max(100).optional(),effort:z.enum(['low','medium','high','xhigh','max']).optional()}).strict().superRefine((v,c)=>{
  if(v.moduleExam&&(v.role!=='specialist'||v.model!==undefined||v.effort!==undefined))c.addIssue({code:'custom',message:'MODULE_EXAM_SCOPE_MISMATCH'});
  if((v.model===undefined)!==(v.effort===undefined))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
- if(v.model!==undefined&&(v.model!=='claude-opus-5-5'||v.effort!=='medium'))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
+ if(v.model!==undefined&&(v.model!=='claude-opus-5-5'||v.effort!=='high'))c.addIssue({code:'custom',message:'DESIGN_CREATE_MODEL_UNAVAILABLE'});
  if(v.role==='programmer'&&!v.writePaths.length)c.addIssue({code:'custom',message:'PROGRAMMER_SCOPE_REQUIRED'});
  if(v.role!=='programmer'&&(!v.artifactId||!v.outputSchema||v.writePaths.length))c.addIssue({code:'custom',message:'READONLY_ARTIFACT_REQUIRED'});
 });
@@ -354,9 +354,10 @@ export class NativeExecutionSupervisor{
   const askedModel=input.model!==undefined||input.effort!==undefined;
   const designCreate=personal&&input.role==='specialist'&&examWorkflowEarly==='design-readonly-v1'&&input.task.startsWith('Pedido de criação.');
   try{
-   if(askedModel&&(!designCreate||input.model!=='claude-opus-5-5'||input.effort!=='medium'))throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
+   if(askedModel&&(!designCreate||input.model!=='claude-opus-5-5'||input.effort!=='high'))throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
    if(askedModel){
-    const catalog=await this.ledger.pool.query(`SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider WHERE a.id=$1 AND a.provider='claude' AND m.model='claude-opus-5-5' AND 'medium'=ANY(m.efforts) AND (($2='claude-opus-5-5' AND $3='medium') OR EXISTS (SELECT 1 FROM ac_profiles p WHERE p.account_id=a.id AND p.model='claude-opus-5-5' AND p.effort='medium'))`,[g.account_id,g.model,g.effort]);
+    if(g.model!=='claude-opus-5-5'||g.effort!=='high')throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
+    const catalog=await this.ledger.pool.query(`SELECT 1 FROM ac_model_catalog m JOIN ac_accounts a ON a.provider=m.provider WHERE a.id=$1 AND a.provider='claude' AND m.model=$2 AND $3=ANY(m.efforts) AND 'specialist'=ANY(m.roles)`,[g.account_id,g.model,g.effort]);
     if(!catalog.rowCount)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
    }
    checkAbort();
@@ -487,7 +488,7 @@ export class NativeExecutionSupervisor{
   const rules={state:'running',workerEntrypoint,toolsEntrypoint:companion,workerCmd:[],toolsCmd:[],workerEnv:[...workerEnv],toolsEnv,workerWorkingDir:'/planning',toolsWorkingDir:toolsDirectory,workerMemory:512*1024*1024,toolsMemory:512*1024*1024,workerPids:96,toolsPids:96,workerNanoCpus:1e9,toolsNanoCpus:1e9};
   await inspectNativeExecutionPair(dockerReadOnly(this.config.socketPath??'/var/run/docker.sock'),{worker,tools,network},expected,rules);
   const launchProvider=personal?this.config.provider:this.config.provider&&this.config.provider!=='codex'?this.config.provider:undefined;
-  const effectiveModel=askedModel?'claude-opus-5-5':g.model,effectiveEffort=askedModel?'medium':g.effort;
+  const effectiveModel=g.model,effectiveEffort=g.effort;
   const tagSecrets=claudeExam&&examAccessToken?[examAccessToken]:accountSecrets;
   const launch={schemaVersion:1,jobId:input.jobId,contextId:authority.contextId,intentId:input.intentId,grantId:input.grantId,accountId:g.account_id,profileId:g.profile_id,sessionId:input.sessionId,epoch:authority.epoch,providerSubjectDigest:this.subjects.get(g.account_id)!,credentialSnapshotTag:createHmac('sha256',token).update(canonical(tagSecrets)).digest('hex'),executorDigest:this.executorDigest,inputDigest:hash,proxyUrl:'http://provider-egress:8080',model:effectiveModel,effort:effectiveEffort,role:input.role,task:input.task,writePaths:input.writePaths,...(input.role!=='programmer'?{artifactCommit:input.base,outputSchema:input.outputSchema}:input.outputSchema?{outputSchema:input.outputSchema}:{}),environmentId:'native_tools',toolsAddress:address,...(input.moduleExam?{moduleExam:true as const}:{}),timeoutMs:input.timeoutMs,expiresAt:Date.now()+60000,...(launchProvider?{provider:launchProvider}:{}),...(synthetic?{synthetic:true}:{}),...(claudeExam&&examAccessToken?{oauthAccessToken:examAccessToken}:{})};
   const signed={payload:launch,signature:sign(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(launch)),this.key).toString('hex')};

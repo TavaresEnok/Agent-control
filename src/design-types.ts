@@ -98,7 +98,7 @@ export const DesignWorkerCall = z.object({
   writePaths: z.tuple([]),
   /** Só o modo criar. O exame de leitura não preenche. */
   forcedModel: z.literal('claude-opus-5-5').optional(),
-  forcedEffort: z.literal('medium').optional(),
+  forcedEffort: z.literal('high').optional(),
 }).strict();
 export type DesignWorkerCall = z.infer<typeof DesignWorkerCall>;
 
