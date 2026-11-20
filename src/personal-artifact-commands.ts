@@ -1,8 +1,7 @@
 import {isAbsolute} from 'node:path';
 import {Id,Refusal} from './contracts.ts';
 import type {Installation} from './installation.ts';
-import {VERIFICATION_MODULES} from './ledger.ts';
-import {closeRound,registerCandidateImage,registerRoundTemp,registerWorkerWorktree,runPersonalArtifactRetention,type RetentionDeps} from './personal-artifact-retention.ts';
+import {CANDIDATE_IMAGE_KINDS,closeRound,registerCandidateImage,registerRoundTemp,registerWorkerWorktree,runPersonalArtifactRetention,type CandidateImageKind,type RetentionDeps} from './personal-artifact-retention.ts';
 
 /**
  * Owner commands of `npm run personal:maintenance` for the artifacts that the product does not create itself:
@@ -24,7 +23,7 @@ type ArtifactCommand=(typeof ARTIFACT_COMMANDS)[number];
 
 export const ARTIFACT_USAGE=[
  '--registrar-worktree --projeto <id> --caminho <dir> --ramo <ramo> --base <ramo> [--adotar]',
- '--registrar-imagem --projeto <id> --modulo <modulo> --imagem <sha256:id>',
+ '--registrar-imagem --projeto <id> --modulo <modulo|native-runtime> --imagem <sha256:id>',
  '--registrar-temporario --projeto <id> --rodada <rodada> --caminho </tmp/ac-...>',
  '--encerrar-rodada --projeto <id> --rodada <rodada>',
  '--retencao-artefatos [--aplicar]',
@@ -85,8 +84,8 @@ export async function runArtifactCommand(config:Installation,args:readonly strin
   }
   case '--registrar-imagem':{
    const get=required(flags(rest,['--projeto','--modulo','--imagem'],[]),['--projeto','--modulo','--imagem']);
-   const module=get('--modulo') as (typeof VERIFICATION_MODULES)[number];
-   if(!(VERIFICATION_MODULES as readonly string[]).includes(module)||!imageId.test(get('--imagem')))throw usage();
+   const module=get('--modulo') as CandidateImageKind;
+   if(!(CANDIDATE_IMAGE_KINDS as readonly string[]).includes(module)||!imageId.test(get('--imagem')))throw usage();
    const input={projectId:project(get('--projeto')),module,imageId:get('--imagem')};
    run=async()=>[`Imagem candidata ${input.imageId.slice(0,19)} (${module}) registrada. Registro: ${await registerCandidateImage(config,input,deps)}.`];
    break;

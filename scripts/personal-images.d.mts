@@ -1,0 +1,9 @@
+export type RunResult={status:number|null;stdout?:string;error?:Error};
+export type Run=(command:string,args:string[],options?:Record<string,unknown>)=>RunResult;
+export type BuildItem={tag:string;context:string;kind:string};
+export type BuiltImage={tag:string;kind:string;previous:string|undefined;current:string|undefined};
+export function discardContext(context:string,stateRoot:string,remove?:(path:string,options:{recursive:boolean;force:boolean})=>void):boolean;
+export function buildImages(input:{builds:BuildItem[];stateRoot:string;run:Run;remove?:(path:string,options:{recursive:boolean;force:boolean})=>void}):BuiltImage[];
+export function replacedImages(built:BuiltImage[]):{tag:string;imageId:string}[];
+export function registerReplaced(input:{run:Run;root:string;installationFile:string;projectId:string;replaced:{tag:string;imageId:string}[]}):{registered:string[];failed:string[]};
+export function readProjectId(installationFile:string):string;

@@ -1,8 +1,8 @@
 import {execFile,spawn} from 'node:child_process';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
-import {lstat,open,readFile,readdir,readlink,realpath,rename,rm,stat,unlink,writeFile} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
+import {lstat,mkdir,open,readFile,readdir,readlink,realpath,rename,rm,stat,statfs,unlink,writeFile} from 'node:fs/promises';
+import {homedir,tmpdir} from 'node:os';
 import {basename,dirname,isAbsolute,join,resolve,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import pg from 'pg';
@@ -37,7 +37,10 @@ const ref=z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*$/).refi
 const absolutePath=z.string().max(4096).refine(value=>isAbsolute(value)&&resolve(value)===value&&!value.includes('\0'));
 const time=z.number().int().safe().nonnegative();
 const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string().optional(),quarantine:absolutePath.optional(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
-const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(VERIFICATION_MODULES),imageId:z.string().regex(imageIdPattern),daemonId:z.string().min(1).max(256).optional(),registeredAt:time}).strict();
+/** Kinds of candidate image: the verification modules plus the native runtime images (planning, execution, tools) that `personal:images` replaces. */
+export const CANDIDATE_IMAGE_KINDS=[...VERIFICATION_MODULES,'native-runtime'] as const;
+export type CandidateImageKind=(typeof CANDIDATE_IMAGE_KINDS)[number];
+const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(CANDIDATE_IMAGE_KINDS),imageId:z.string().regex(imageIdPattern),daemonId:z.string().min(1).max(256).optional(),registeredAt:time}).strict();
 /** `removing` is the removal journal, written outside the directory before its contents start to go. The owner marker lives inside
  * the tree and may be deleted before an interruption; the journal (same identity plus the birth time taken right before) lets the
  * next run finish that exact directory, and nothing else. */
@@ -53,7 +56,7 @@ type WorktreeEntry=z.infer<typeof Worktree>;
 type ImageEntry=z.infer<typeof Image>;
 type TempEntry=z.infer<typeof Temp>;
 
-export type CommandResult={code:number;stdout:string};
+export type CommandResult={code:number;stdout:string;stderr?:string};
 export type RetentionDeps={
  /** Runs `git` in `cwd` with a sanitized environment. Tests record and fake it. */
  git?:(cwd:string,args:string[])=>Promise<CommandResult>;
@@ -73,6 +76,11 @@ export type RetentionDeps={
  tmpRoot?:string;
  /** Root of this product checkout, where `deploy/modules/<modulo>/digest.txt` pins the module images. */
  productRoot?:string;
+ /** Directory of the per-daemon reference registry that every installation sharing one Docker daemon publishes its pins to.
+  * Defaults to `AC_DOCKER_REFS_DIR` or `~/.agent-control-docker-refs`. */
+ sharedRefsRoot?:string;
+ /** Free bytes of the file system that holds Docker's data, or undefined when it cannot be measured. Used only to report the space actually recovered. */
+ freeBytes?:()=>Promise<number|undefined>;
 };
 
 const empty=():ArtifactRegistry=>({schemaVersion:1,worktrees:[],images:[],temps:[],rounds:[],history:[]});
@@ -85,9 +93,9 @@ const hours=(ms:number)=>Math.floor(ms/3600000);
 
 function run(command:string,args:string[],options:{cwd?:string;env:NodeJS.ProcessEnv;timeout:number}){
  return new Promise<CommandResult>(done=>{
-  execFile(command,args,{...options,encoding:'utf8',maxBuffer:64*1024*1024,windowsHide:true},(error,stdout)=>{
+  execFile(command,args,{...options,encoding:'utf8',maxBuffer:64*1024*1024,windowsHide:true},(error,stdout,stderr)=>{
    const code=error?(typeof (error as {code?:unknown}).code==='number'?(error as unknown as {code:number}).code:1):0;
-   done({code,stdout:stdout??''});
+   done({code,stdout:stdout??'',stderr:(stderr??'').slice(0,4000)});
   });
  });
 }
@@ -327,8 +335,8 @@ export async function registerWorkerWorktree(config:Installation,input:{projectI
 }
 
 /** Records a module image built as a candidate. The image must exist locally with exactly this id. Being pinned is checked again at removal. */
-export async function registerCandidateImage(config:Installation,input:{projectId:string;module:(typeof VERIFICATION_MODULES)[number];imageId:string},deps:RetentionDeps={}){
- if(!imageIdPattern.test(input.imageId)||!(VERIFICATION_MODULES as readonly string[]).includes(input.module))throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
+export async function registerCandidateImage(config:Installation,input:{projectId:string;module:CandidateImageKind;imageId:string},deps:RetentionDeps={}){
+ if(!imageIdPattern.test(input.imageId)||!(CANDIDATE_IMAGE_KINDS as readonly string[]).includes(input.module))throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  project(config,input.projectId);
  const docker=deps.docker??defaultDocker;
  const daemonId=await dockerDaemonId(docker);
@@ -393,8 +401,9 @@ const here=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 
 /** Digests that protect an image. `pinned`: the installation or any of its project checkouts pins them, or a verification run recorded them.
  * `retired`: images the native bootstrap still lists as retired (`execution.retiredImages`, `planning.retiredImageIds`) because a job may still need them.
- * Any read failure other than a missing file throws. */
-async function protectedDigests(config:Installation,deps:RetentionDeps){
+ * `foreign`: digests pinned by OTHER installations on the same Docker daemon, read from the per-daemon reference registry.
+ * Any read failure other than a missing file throws, including an unreadable reference file of another installation. */
+async function protectedDigests(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>){
  const pinned=new Set<string>(digestsIn(JSON.stringify(config.nativeBootstrap??null)));
  const retired=new Set<string>();
  const boot=config.nativeBootstrap as {planning?:{retiredImageIds?:string[]};execution?:{retiredImages?:{workerImage?:string;toolsImage?:string}[]}}|undefined;
@@ -407,7 +416,62 @@ async function protectedDigests(config:Installation,deps:RetentionDeps){
   for(const digest of digestsIn(text))pinned.add(digest);
  }
  for(const image of await (deps.verifyRunImages??defaultVerifyRunImages)(config))for(const digest of digestsIn(image))pinned.add(digest);
- return {pinned,retired};
+ let foreign:Set<string>;
+ try{foreign=await shareDaemonReferences(config,deps,docker,[...pinned],[...retired]);}catch{throw new SharedReferencesUnreadable();}
+ return {pinned,retired,foreign};
+}
+
+// ---- Per-daemon reference registry -----------------------------------------------------------------------------
+// Several installations may share one Docker daemon. An image that installation B pins (without a container) is invisible to A's
+// own pins and containers. Every installation therefore publishes the digests it pins under `<root>/<daemonId>/<installation>.json`
+// on each retention run, and a removal also honours everything the OTHER files list. An unreadable file keeps every image.
+
+class SharedReferencesUnreadable extends Error{constructor(){super('shared daemon references unreadable');}}
+const SharedRefs=z.object({schemaVersion:z.literal(1),dataDirectory:absolutePath,publishedAt:time,pinned:z.array(z.string().regex(imageIdPattern)).max(5000)}).strict();
+const SHARED_REFS_REFRESH_MS=60*60*1000;
+const sharedRefsRoot=(deps:RetentionDeps)=>deps.sharedRefsRoot??process.env.AC_DOCKER_REFS_DIR??join(homedir(),'.agent-control-docker-refs');
+const installationKey=(config:Installation)=>createHash('sha256').update(resolve(config.dataDirectory)).digest('hex').slice(0,32);
+
+async function shareDaemonReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>,pinned:string[],retired:string[]){
+ const daemonId=await dockerDaemonId(docker);
+ if(!daemonId)return new Set<string>();// no daemon identity: proveImage refuses every image anyway
+ const directory=join(sharedRefsRoot(deps),daemonId),own=installationKey(config)+'.json';
+ await mkdir(directory,{recursive:true,mode:0o755});
+ const mine=[...new Set([...pinned,...retired])].filter(digest=>imageIdPattern.test(digest)).sort();
+ const file=join(directory,own);
+ const now=(deps.now??Date.now)();
+ let fresh=false;
+ try{
+  const current=SharedRefs.parse(JSON.parse(await readFile(file,'utf8')));
+  fresh=current.dataDirectory===resolve(config.dataDirectory)&&now-current.publishedAt<SHARED_REFS_REFRESH_MS&&now>=current.publishedAt&&JSON.stringify(current.pinned)===JSON.stringify(mine);
+ }catch{fresh=false;}
+ if(!fresh){
+  const temporary=`${file}.${randomUUID()}.tmp`;
+  await writeFile(temporary,JSON.stringify({schemaVersion:1,dataDirectory:resolve(config.dataDirectory),publishedAt:now,pinned:mine})+'\n',{mode:0o644,flag:'wx'});
+  await rename(temporary,file);
+ }
+ const foreign=new Set<string>();
+ for(const name of await readdir(directory)){
+  if(name===own||!name.endsWith('.json'))continue;
+  // Any entry that is not a well-formed inventory means an owner without a usable inventory: nothing may be removed.
+  const parsed=SharedRefs.parse(JSON.parse(await readFile(join(directory,name),'utf8')));
+  for(const digest of parsed.pinned)foreign.add(digest);
+ }
+ return foreign;
+}
+
+/** Keeps this installation's published pins fresh even when it has no candidate image of its own, so others can see them. */
+async function publishOwnReferences(config:Installation,deps:RetentionDeps,docker:NonNullable<RetentionDeps['docker']>){
+ try{await protectedDigests(config,deps,docker);}catch{/* best effort: a failed publication only means others keep treating this installation as unknown */}
+}
+
+/** Free bytes where Docker keeps its data (`docker info`'s DockerRootDir), measured with statfs. Undefined when unreadable (rootless, remote daemon). */
+async function defaultFreeBytes(docker:NonNullable<RetentionDeps['docker']>){
+ const info=await docker(['info','--format','{{.DockerRootDir}}']);
+ const dir=info.stdout.trim();
+ if(info.code!==0||!isAbsolute(dir))return undefined;
+ const fs=await statfs(dir);
+ return Number(fs.bavail)*Number(fs.bsize);
 }
 
 async function dockerDaemonId(docker:NonNullable<RetentionDeps['docker']>){
@@ -418,15 +482,20 @@ async function dockerDaemonId(docker:NonNullable<RetentionDeps['docker']>){
 
 type ImageFacts={digests:string[];size:number|undefined};
 /** Judged again right before removal. Every doubt preserves; `docker image rm` is later run by id and never forced. */
-async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set<string>},docker:NonNullable<RetentionDeps['docker']>,now:number):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
+async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set<string>;foreign:Set<string>},docker:NonNullable<RetentionDeps['docker']>,now:number):Promise<Verdict<ImageFacts>|{ok:false;reason:string;absent:true}>{
  if(!entry.daemonId)return no('registro antigo sem identidade do daemon Docker');
  const daemonId=await dockerDaemonId(docker);
  if(!daemonId)return no('identidade do daemon Docker indisponível');
  if(daemonId!==entry.daemonId)return no('daemon Docker diferente do registro');
  const inspected=await docker(['image','inspect',entry.imageId]);
  if(inspected.code!==0){
-  const alive=await docker(['version','--format','{{.Server.Version}}']);
-  return alive.code===0?{ok:false,reason:'a imagem já não existe no Docker',absent:true}:no('Docker indisponível');
+  // Only an unequivocal answer from the daemon means "no such image": its own not-found message AND a successful full listing without the id.
+  // A timeout, a broken connection or any other operational error says nothing about the image, so the record stays and the next run tries again.
+  if(!/no such image/i.test(inspected.stderr??''))return no('falha operacional ao inspecionar a imagem');
+  const listing=await docker(['image','ls','-a','-q','--no-trunc']);
+  if(listing.code!==0)return no('falha operacional ao listar as imagens');
+  if(listing.stdout.split('\n').some(line=>line.trim()===entry.imageId))return no('o Docker respondeu que a imagem não existe, mas a listagem a mostra');
+  return {ok:false,reason:'a imagem já não existe no Docker',absent:true};
  }
  let digests:string[],size:number|undefined;
  try{
@@ -436,6 +505,7 @@ async function proveImage(entry:ImageEntry,guard:{pinned:Set<string>;retired:Set
   size=Number.isSafeInteger(image.Size)&&image.Size!>=0?image.Size:undefined;
  }catch{return no('resposta ilegível do Docker');}
  if(digests.some(digest=>guard.retired.has(digest)))return no('imagem aposentada ainda referenciada pela instalação');
+ if(digests.some(digest=>guard.foreign.has(digest)))return no('digest fixado por outra instalação neste daemon');
  if(digests.some(digest=>guard.pinned.has(digest)))return no('digest fixado ou referenciado por exame');
  const age=now-entry.registeredAt;
  if(age<IMAGE_MIN_AGE_MS)return no(`registrada há ${hours(Math.max(age,0))} h (mínimo ${hours(IMAGE_MIN_AGE_MS)} h)`);
@@ -614,13 +684,17 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
   }catch{kept('worktree',label,'falha ao verificar; repita depois');}
  }
 
- let imageBytes=0;
+ let imageBytes=0,freeBefore:number|undefined,freeAfter:number|undefined;
+ const measure=async()=>{try{return await (deps.freeBytes??(()=>defaultFreeBytes(docker)))();}catch{return undefined;}};
+ if(!registry.images.length)await publishOwnReferences(config,deps,docker);
  if(registry.images.length){
-  let guard:{pinned:Set<string>;retired:Set<string>}|undefined;
-  try{guard=await protectedDigests(config,deps);}catch{guard=undefined;}
+  let guard:{pinned:Set<string>;retired:Set<string>;foreign:Set<string>}|undefined,sharedFailed=false;
+  try{guard=await protectedDigests(config,deps,docker);}
+  catch(error){guard=undefined;sharedFailed=error instanceof SharedReferencesUnreadable;}
+  if(apply)freeBefore=await measure();
   for(const entry of registry.images){
    const label=`imagem ${entry.imageId.slice(0,19)} (${entry.module})`;
-   if(!guard){kept('image',label,'não foi possível ler os digests fixados e os exames');continue;}
+   if(!guard){kept('image',label,sharedFailed?'referências compartilhadas do daemon ilegíveis':'não foi possível ler os digests fixados e os exames');continue;}
    try{
     if(project(config,entry.projectId).economy?.imageRetention===false){kept('image',label,'retenção de imagens desligada neste projeto');continue;}
     const proof=await proveImage(entry,guard,docker,now());
@@ -634,7 +708,7 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
     const nominal=proof.facts.size===undefined?'tamanho desconhecido':`${(proof.facts.size/1e9).toFixed(3)} GB nominais`;
     if(!apply){done('image');imageBytes+=proof.facts.size??0;lines.push(`${label}: elegível (sem pin, sem contêiner, registrada há mais de ${hours(IMAGE_MIN_AGE_MS)} h; ${nominal}).`);continue;}
     // Judged again with fresh pins and containers, so a change since the first look wins.
-    const fresh=await protectedDigests(config,deps);
+    const fresh=await protectedDigests(config,deps,docker);
     const again=await proveImage(entry,fresh,docker,now());
     if(!again.ok){kept('image',label,'mudou durante a retenção: '+again.reason);continue;}
     // By id, no --force: Docker itself refuses an image that has children, several tags or a container.
@@ -647,8 +721,11 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
     lines.push(`${label}: removida (${again.facts.size===undefined?'tamanho desconhecido':`${(again.facts.size/1e9).toFixed(3)} GB nominais`}).`);
    }catch{kept('image',label,'falha ao verificar; repita depois');}
   }
+  if(apply&&total.image.done)freeAfter=await measure();
  }
- lines.push(`imagens: ${apply?'removidas':'elegíveis'} ${total.image.done}, ${(imageBytes/1e9).toFixed(3)} GB de tamanho nominal (camadas compartilhadas podem liberar menos).`);
+ const effective=!apply?'não medido (prévia)':freeBefore===undefined||freeAfter===undefined?(total.image.done?'não medido (espaço livre do Docker indisponível)':'0.000 GB (nada removido)')
+  :freeAfter>=freeBefore?`${((freeAfter-freeBefore)/1e9).toFixed(3)} GB (diferença do espaço livre medida em torno das remoções)`:'não mensurável (o espaço livre diminuiu por outra atividade)';
+ lines.push(`imagens: ${apply?'removidas':'elegíveis'} ${total.image.done}, ${(imageBytes/1e9).toFixed(3)} GB de tamanho nominal (camadas compartilhadas podem liberar menos); espaço efetivamente recuperado: ${effective}.`);
 
  let root:string|undefined;
  try{root=await realpath(tempRoot(deps));}catch{root=undefined;}

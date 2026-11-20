@@ -51,7 +51,7 @@ test('timer units schedule the watch every two minutes and the backup at 03:30',
   const restoreService=await readFile(join(dir,'agent-control-restore-proof-ispagent.service'),'utf8');
   assert.match(maintenance,/OnCalendar=Sun \*-\*-\* 04:00:00/);
   assert.match(restore,/OnCalendar=\*-\*-01 04:30:00/);
-  assert.ok(maintenanceService.includes(`/usr/bin/node ${join(root,'scripts/personal-maintenance.mjs')} ${env.file}`));
+  assert.ok(maintenanceService.includes(`/usr/bin/node ${join(root,'scripts/personal-maintenance.mjs')} ${env.file} --manutencao-agendada`));
   assert.ok(restoreService.includes(`/usr/bin/node ${join(root,'scripts/personal-restore-proof.mjs')} ${env.file} /home/app/backups-agent-control/ispagent`));
   for(const text of [watchService,backupService,maintenanceService,restoreService]){
    assert.match(text,/Type=oneshot/);

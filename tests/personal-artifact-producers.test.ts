@@ -50,7 +50,7 @@ async function lab():Promise<Lab>{
  process.env.TMPDIR=tmp;
  const config={activation:'personal',dataDirectory:data,databaseUrl:'postgres://invalid.example/none',project:{id:projectId,label:'p',repo,owner:'owner'},projects:[]} as unknown as Installation;
  return {base,repo,data,tmp,commit:git(repo,'rev-parse','HEAD'),projectId,config,
-  deps:now=>({now:()=>now,tmpRoot:tmp,productRoot:join(base,'no-product'),processInside:async()=>false,docker:async()=>({code:0,stdout:''}),verifyRunImages:async()=>[]})};
+  deps:now=>({now:()=>now,tmpRoot:tmp,productRoot:join(base,'no-product'),sharedRefsRoot:join(base,'shared-refs'),freeBytes:async()=>undefined,processInside:async()=>false,docker:async()=>({code:0,stdout:''}),verifyRunImages:async()=>[]})};
 }
 const cleanup=async(l:Lab)=>{
  if(previousTmpdir===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=previousTmpdir;

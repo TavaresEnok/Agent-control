@@ -1,4 +1,8 @@
 # Uso pessoal, um titular. Sobe de novo sozinho depois de um reboot.
+#
+# Antes de subir, defina uma senha própria do banco, sem valor padrão conhecido:
+#   export AC_PERSONAL_DB_PASSWORD="$(openssl rand -hex 24)"
+# O compose recusa subir sem ela e a mesma senha precisa estar na databaseUrl da instalação.
 name: agent-control-personal
 services:
   db:
@@ -6,8 +10,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ac
-      POSTGRES_PASSWORD: ${AC_PERSONAL_DB_PASSWORD:-personal-local-only}
+      POSTGRES_PASSWORD: ${AC_PERSONAL_DB_PASSWORD:?defina AC_PERSONAL_DB_PASSWORD com uma senha própria; não existe senha padrão}
       POSTGRES_DB: agent_control
+    # Só o gateway alcança o banco. O broker do Docker não está nesta rede.
+    networks: [data]
     volumes: [pg-data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ac -d agent_control"]
@@ -17,9 +23,17 @@ services:
   broker:
     image: alpine/socat
     restart: unless-stopped
-    # Uso pessoal: o socket real do Docker entra só no broker, como no laboratório.
-    # Os workers não recebem esse socket. Para um único titular isso é aceitável.
+    # LIMITAÇÃO CONHECIDA: este broker é só um encaminhador TCP para o socket do Docker. Ele não autentica quem chama e
+    # não filtra operações: quem alcançar a porta 2375 controla o daemon inteiro (criar contêineres com qualquer imagem,
+    # montagem ou rede). Para um único titular isso é aceitável porque:
+    #   - a porta não é publicada no host e só a rede interna `control` a alcança, onde só o gateway está;
+    #   - o broker não está na rede do banco, nem na rede de saída, e não recebe credenciais;
+    #   - os workers não recebem o socket.
+    # Não ligue outro serviço à rede `control`. Um broker que valide imagem, montagem, rede e dono de cada job exige código
+    # próprio e ainda não existe; até lá, a proteção é o isolamento de rede acima.
     command: ["TCP-LISTEN:2375,fork,reuseaddr", "UNIX-CONNECT:/var/run/docker.sock"]
+    networks: [control]
+    security_opt: [no-new-privileges:true]
     volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
   gateway:
     build: {context: .., dockerfile: deploy/Dockerfile.personal}
@@ -28,6 +42,8 @@ services:
     command: ["node", "--import", "tsx", "src/server-main.ts", "serve", "/data/installation.json"]
     environment:
       DOCKER_HOST: tcp://broker:2375
+    # Único serviço nas duas redes internas: banco (data) e broker (control). A rede padrão mantém a saída para fora.
+    networks: [default, data, control]
     volumes:
       - ..:/workspace
       - ac-data:/data
@@ -52,3 +68,8 @@ networks:
     name: ac-native-provider
     internal: true
   outbound: {}
+  # Redes internas e separadas: nenhuma sai para fora e nenhum serviço, além do gateway, está em mais de uma.
+  data:
+    internal: true
+  control:
+    internal: true
