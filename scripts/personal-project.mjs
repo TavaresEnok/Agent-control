@@ -23,13 +23,19 @@ import {homedir} from 'node:os';
 import {basename,join,resolve,sep} from 'node:path';
 import net from 'node:net';
 
+// A step succeeded only if it started (no spawn error), was not ended by a signal, and exited with exactly 0.
+// `status` is null after a signal, and falsy-looking checks let that pass as success.
+const exitCodeOf=result=>result.error||result.signal||typeof result.status!=='number'?1:result.status===0?0:result.status;
+const cleanups=[];
+// Every early exit goes through here, so a Happier server this script started is always stopped first.
+const finish=code=>{for(const cleanup of cleanups.splice(0)){try{cleanup();}catch{}}process.exit(code);};
 const args=process.argv.slice(2),flag=name=>{const i=args.indexOf(name);return i<0?undefined:args[i+1];};
 if(args[0]==='--add'){
  const file=args[1],repo=args[2],label=flag('--label');
  if(!file||!repo||!label||file.startsWith('--')||repo.startsWith('--')){console.log('Uso: npm run personal:project -- --add <instalação.json> <repositório> --label <nome>');process.exit(1);}
  const root=resolve(import.meta.dirname,'..');
  const result=spawnSync(process.execPath,['--import','tsx','src/personal-project-add.ts',file,repo,'--label',label],{cwd:root,stdio:'inherit'});
- process.exit(result.status??1);
+ process.exit(exitCodeOf(result));
 }
 const repoArg=args[0]&&!args[0].startsWith('--')?args[0]:undefined,db=flag('--db'),importLogins=args.includes('--import-logins'),shareFrom=flag('--share-happier');
 if(!repoArg||!db){console.log('Uso: npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins] [--share-happier <instalação.json>] [--local]');process.exit(repoArg||db?1:0);}
@@ -41,8 +47,8 @@ const label=(flag('--label')??basename(repo)).replace(/[^A-Za-z0-9_-]/g,'-').sli
 const data=join(homedir(),'.agent-control',label),installation=join(data,'installation.json');
 if(data===repo||data.startsWith(repo+sep)||repo.startsWith(data+sep))throw Error('DATA_DIRECTORY_MUST_BE_OUTSIDE_REPOSITORY');
 const say=line=>console.log('» '+line);
-const run=(command,argv,env={})=>{const result=spawnSync(command,argv,{cwd:root,stdio:'inherit',env:{...process.env,...env}});if(result.status)process.exit(result.status??1);};
-const capture=(command,argv,env={})=>{const result=spawnSync(command,argv,{cwd:root,encoding:'utf8',env:{...process.env,...env}});if(result.status)throw Error(String(result.stderr||result.stdout).trim().split('\n').pop());return result.stdout.trim().split('\n').pop();};
+const run=(command,argv,env={})=>{const result=spawnSync(command,argv,{cwd:root,stdio:'inherit',env:{...process.env,...env}});const code=exitCodeOf(result);if(code)finish(code);};
+const capture=(command,argv,env={})=>{const result=spawnSync(command,argv,{cwd:root,encoding:'utf8',env:{...process.env,...env}});if(exitCodeOf(result))throw Error(String(result.stderr||result.stdout||result.error?.message||(result.signal?`ended by ${result.signal}`:'')).trim().split('\n').pop()||'STEP_FAILED');return result.stdout.trim().split('\n').pop();};
 const freePort=()=>new Promise(done=>{const server=net.createServer();server.listen(0,'127.0.0.1',()=>{const {port}=server.address();server.close(()=>done(port));});});
 const exists=path=>access(path).then(()=>true,()=>false);
 
@@ -111,12 +117,14 @@ if(!useLocal){
  if(sharedFrom&&!await up())throw Error('SHARED_HAPPIER_NOT_RUNNING: suba o Happier de '+sharedFrom);
  if(!await up()){
   server=spawn(process.execPath,['scripts/personal-happier.mjs',installation],{cwd:root,stdio:'ignore',detached:true});
+  server.on('error',()=>{}); // a failed start is reported by the check below, not by an unhandled event
+  cleanups.push(()=>{if(server?.pid)process.kill(-server.pid,'SIGTERM');});
   for(let i=0;i<90&&!await up();i++)await new Promise(done=>setTimeout(done,1000));
-  if(!await up()){try{process.kill(-server.pid,'SIGTERM');}catch{}throw Error('HAPPIER_SERVER_DID_NOT_START');}
+  if(!await up())throw Error('HAPPIER_SERVER_DID_NOT_START');
  }
 }
 try{run('node',gateway('personal-connect',installation,...(useLocal?['--local']:[])),images);}
-finally{if(server)try{process.kill(-server.pid,'SIGTERM');}catch{}}
+finally{for(const cleanup of cleanups.splice(0)){try{cleanup();}catch{}}}
 
 if(useLocal)console.log(`
 Pronto. A conversa fica no banco desta instalação; o processo Happier não é necessário.
