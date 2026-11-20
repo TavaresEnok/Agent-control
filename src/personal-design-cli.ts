@@ -27,6 +27,7 @@ const messages: Record<string, string> = {
   NOT_FOUND: 'Projeto não encontrado.',
   DESIGN_CONTEXT_REQUIRED: 'O projeto não tem um contexto para o exame.',
   DESIGN_BUSY: 'Já existe uma execução de design em andamento neste projeto.',
+  CAPACITY_BUSY: 'As vagas de execução para o design estão ocupadas. Repita o exame quando houver uma vaga.',
   DESIGN_WORKER_UNAVAILABLE: 'O runtime pessoal não está ativo.',
   DESIGN_EXTERNAL_TARGET: 'A URL tem que ficar em localhost, 127.0.0.1 ou num host .local.',
   DESIGN_TARGET_ESCAPE: 'A URL aponta para outro destino.',

@@ -33,6 +33,12 @@ test('DESIGN_BUSY dá mensagem clara e não vaza MANAGER_ACTIVE', () => {
   assert.equal(text.includes('MANAGER_ACTIVE'), false);
 });
 
+test('CAPACITY_BUSY informa quando repetir o exame sem divulgar detalhes da reserva', () => {
+  const error = new Refusal('CAPACITY_BUSY');
+  error.message = leaked;
+  assert.equal(designCliFailureText(error), 'As vagas de execução para o design estão ocupadas. Repita o exame quando houver uma vaga.');
+});
+
 test('DESIGN_REVIEWER_UNAVAILABLE orienta rodar preparar --aplicar e não cai em EXAM_PROVIDER_UNSUPPORTED', () => {
   const text = designCliFailureText(new Refusal('DESIGN_REVIEWER_UNAVAILABLE', 409));
   assert.match(text, /npm run personal:design -- preparar .*--aplicar/);
