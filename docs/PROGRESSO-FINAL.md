@@ -1617,3 +1617,17 @@ FIM
 - 20/11/2026 05:19 UTC — Ordem estatico em claude-sonnet-5-5 encerrou com código 0.
 - 20/11/2026 05:19 UTC — Iniciada a CLI personal:design para design-nexo-login.
 - 20/11/2026 05:19 UTC — O navegador local da primeira execução de design não resolveu o nome Docker da homologação. A segunda execução usa uma tabela de nomes privada do processo. A resolução e o HTTP 200 foram confirmados antes da CLI.
+- 20/11/2026 05:20 UTC — Revisão independente revisao-atestacao-final concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:21 UTC — Encerrado o processo Gemini residual da ordem estática antiga. O trabalhador Claude segue com a revisão atual no worktree.
+- 20/11/2026 05:22 UTC — Revisão independente revisao-recuperacao-qa concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:22 UTC — A CLI personal:design de design-nexo-login encerrou com código 1.
+- 20/11/2026 05:23 UTC — Correção recuperacao-r2 atribuída ao Opus 5.5 medium no login dedicado Enok.
+- 20/11/2026 05:23 UTC — Iniciada a CLI personal:design para design-nexo-telas.
+- 20/11/2026 05:24 UTC — O terceiro backup da instalação passou no restore-check, com 14.957 arquivos no manifesto e dump legível. O TypeScript e os 41 testes dirigidos do candidato passaram. A retirada da reserva continua pendente das correções apontadas pelo Sol. A releitura do examinador com o alias aceitou 185 respostas reais de arquitetura em 185 analisadas.
+- 20/11/2026 05:24 UTC — A CLI personal:design de design-nexo-telas encerrou com código 1.
+- 20/11/2026 05:26 UTC — Sem login adicional, a imagem de design chegou ao pedido de reserva do examinador; o código da recusa foi CAPACITY_BUSY. Das duas vagas Enok Max, uma atende a arquitetura e a outra está reservada para o job de QA incerto. Não houve julgamento de design nessa tentativa.
+- 20/11/2026 05:27 UTC — Ordem estatico em claude-sonnet-5-5 encerrou com código 0.
+- 20/11/2026 05:27 UTC — Revisão independente revisao-design-vagas concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:28 UTC — Revisão independente revisao-estatico-r4 concluída pelo Sol high em modo somente leitura.
+- 20/11/2026 05:29 UTC — Módulo 1 estático integrado até e77e64bd. O digest local coincide com o da imagem de verificação previamente aceita; os hashes do coletor, do buscador de bases e do lock coincidem com o checkout. A instalação carecia da imagem configurada e da base; iniciada a preparação para o exame sem URL.
+- 20/11/2026 05:29 UTC — Iniciada ordem design em claude-sonnet-5-5 (ajust), no worktree próprio.

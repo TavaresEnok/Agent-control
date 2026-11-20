@@ -60,3 +60,11 @@ Na revisão `993ecf9a`, a rodada `28c53d93-bedb-4d53-aa52-7f82664bb42a` publicou
 ### Leitura das respostas com trecho em `code`
 
 O commit `d0cf2760` passou a aceitar `code` como nome alternativo de `snippet` quando a resposta contém apenas um dos dois. O trecho continua sujeito ao mesmo limite e à conferência na linha do arquivo. Os dois testes dirigidos passaram no ramo integrado. A releitura local de 98 respostas reais da arquitetura aceitou as 98, sem nova inferência. A execução já em andamento mantém sua contagem original de cobertura.
+
+### Módulo 10 — exame das telas do NexoISP
+
+A aplicação de homologação respondeu pelo nome interno da rede Docker. Com login de demonstração, a primeira tentativa da CLI falhou na resolução desse nome pelo navegador do host. Na execução sem login, a imagem chegou à reserva do examinador e recebeu `CAPACITY_BUSY`. As duas vagas Enok Max estavam ocupadas pela arquitetura do IspAgent e pela tentativa incerta de QA. Essas tentativas não produziram nota visual. O commit `e7d21433` passou a informar a ocupação de vagas na CLI. Os sete testes de mensagens passaram após a integração.
+
+### Módulo 1 — preparação do exame estático
+
+O caminho de `personal:verify` sem URL seleciona Sonnet 5.5 high para o examinador e Opus 5.5 medium para os achados altos. O supervisor confere a assinatura do recibo de revisão. O ramo integrado chegou a `e77e64bd`. O revisor Sol examinou a alteração, o TypeScript passou no candidato e os 15 testes dirigidos passaram com PostgreSQL descartável. A imagem disponível na instalação tem o digest aceito `sha256:3b677f6f20a5fc0cb29044a3939a2d172ba59724a5532e79255ae5bdaf0670cb`. Os arquivos de coleta e o lock das ferramentas correspondem ao checkout. A preparação das bases de consulta precede o exame do NexoISP.
