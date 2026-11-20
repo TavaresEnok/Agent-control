@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {ModuleExamRecoveryPreserved,type ModuleExamRecoveryReason} from './native-execution-supervisor.ts';
-import {runPersonalMaintenance} from './personal-maintenance.ts';
+import {RetentionIncomplete,runPersonalMaintenance} from './personal-maintenance.ts';
 
 const messages:Record<string,string>={
  ...artifactCliMessages,
@@ -54,6 +54,7 @@ const preservedReasons:Record<ModuleExamRecoveryReason,string>={
 };
 
 export function maintenanceCliFailureText(error:unknown):string{
+ if(error instanceof RetentionIncomplete)return 'A retenção terminou com etapa(s) em falha; as demais etapas rodaram. Veja as linhas acima.';
  if(error instanceof ModuleExamRecoveryPreserved)return `A reserva da tentativa foi mantida: ${preservedReasons[error.reason]}.${error.removed.length?` Contêineres já removidos: ${error.removed.join(', ')}.`:''} Nada foi iniciado.`;
  const code=error instanceof Refusal?error.code:'';
  return messages[code]??'A manutenção falhou.';
@@ -61,6 +62,7 @@ export function maintenanceCliFailureText(error:unknown):string{
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
  runPersonalMaintenance(process.argv.slice(2)).then(lines=>{for(const line of lines)console.log(line);},error=>{
+  if(error instanceof RetentionIncomplete)for(const line of error.lines)console.log(line);
   console.error(maintenanceCliFailureText(error));
   process.exit(1);
  });

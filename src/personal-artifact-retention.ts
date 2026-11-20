@@ -37,7 +37,12 @@ const absolutePath=z.string().max(4096).refine(value=>isAbsolute(value)&&resolve
 const time=z.number().int().safe().nonnegative();
 const Worktree=z.object({id:z.uuid(),projectId:z.uuid(),path:absolutePath,branch:ref,base:ref,identity:z.string().optional(),registeredAt:time,origin:z.enum(['new','existing'])}).strict();
 const Image=z.object({id:z.uuid(),projectId:z.uuid(),module:z.enum(VERIFICATION_MODULES),imageId:z.string().regex(imageIdPattern),registeredAt:time}).strict();
-const Temp=z.object({id:z.uuid(),projectId:z.uuid(),roundId:token,path:absolutePath,dev:z.string().regex(/^\d+$/),ino:z.string().regex(/^\d+$/),nonceDigest:z.string().regex(/^[a-f0-9]{64}$/),registeredAt:time}).strict();
+/** `removing` is the removal journal, written outside the directory before its contents start to go. The owner marker lives inside
+ * the tree and may be deleted before an interruption; the journal (same identity plus the birth time taken right before) lets the
+ * next run finish that exact directory, and nothing else. */
+const Removing=z.object({since:time,birth:z.string().regex(/^\d+$/)}).strict();
+const Temp=z.object({id:z.uuid(),projectId:z.uuid(),roundId:token,path:absolutePath,dev:z.string().regex(/^\d+$/),ino:z.string().regex(/^\d+$/),nonceDigest:z.string().regex(/^[a-f0-9]{64}$/),registeredAt:time,
+ removing:Removing.optional()}).strict();
 const Round=z.object({projectId:z.uuid(),roundId:token,endedAt:time}).strict();
 const History=z.object({at:time,kind:z.enum(['worktree','image','temp']),id:z.uuid(),action:z.enum(['removed','dropped'])}).strict();
 const Registry=z.object({schemaVersion:z.literal(1),worktrees:z.array(Worktree).max(5000),images:z.array(Image).max(5000),temps:z.array(Temp).max(5000),
@@ -182,8 +187,17 @@ async function listWorktrees(git:NonNullable<RetentionDeps['git']>,repo:string):
   return item;
  });
 }
-const regenerableIgnored=new Set(['node_modules','dist','coverage']);
 const inProgress=['MERGE_HEAD','CHERRY_PICK_HEAD','REVERT_HEAD','REBASE_HEAD','BISECT_LOG','rebase-merge','rebase-apply','sequencer','index.lock'];
+
+/** An ignored entry is disposable only when removing it cannot lose data: a symbolic link, whose removal deletes the link and never
+ * its target (git removes links without following them). Its name proves nothing: `dist/`, `coverage/` or `node_modules/` may hold the
+ * only copy of something. Any ignored regular file or directory keeps the worktree; git lists an ignored directory with a final `/`. */
+async function disposableIgnored(root:string,relative:string){
+ if(!relative||relative.endsWith('/')||relative.startsWith('/')||relative.split('/').some(part=>!part||part==='.'||part==='..'))return false;
+ const full=join(root,relative);
+ if(dirname(full)!==root&&await realpath(dirname(full)).catch(()=>'')!==dirname(full))return false;
+ return (await lstat(full).catch(()=>undefined))?.isSymbolicLink()===true;
+}
 
 type Verdict<T>={ok:true;facts:T}|{ok:false;reason:string};
 const no=(reason:string):{ok:false;reason:string}=>({ok:false,reason});
@@ -232,7 +246,7 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
  for(const line of status.stdout.split('\0')){
   if(!line)continue;
   if(!line.startsWith('!! '))return no('há mudanças ou arquivos não rastreados');
-  if(!line.slice(3).split('/').some(segment=>regenerableIgnored.has(segment)))return no('há arquivos ignorados que não são regeneráveis');
+  if(!await disposableIgnored(entry.path,line.slice(3)))return no('há arquivos ignorados com conteúdo próprio');
  }
  let last=Math.max(entry.registeredAt,Number(await deps.git(repo,['log','-1','--format=%ct',tipId]).then(r=>r.stdout.trim()).catch(()=>'0'))*1000||0);
  for(const name of ['HEAD','index','logs/HEAD'])last=Math.max(last,(await stat(join(gitDir,name)).catch(()=>undefined))?.mtimeMs??0);
@@ -393,15 +407,16 @@ async function mountedByContainer(docker:NonNullable<RetentionDeps['docker']>,pa
  return inspected.stdout.split('\n').some(source=>source===path||source.startsWith(path+sep)||(source!==''&&path.startsWith(source+sep)));
 }
 
-async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:TempEntry,deps:Required<Pick<RetentionDeps,'now'|'processInside'|'docker'>>&{root:string}):Promise<Verdict<{idleHours:number}>|{ok:false;reason:string;absent:true}>{
+async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:TempEntry,deps:Required<Pick<RetentionDeps,'now'|'processInside'|'docker'>>&{root:string}):Promise<Verdict<{idleHours:number;resumed:boolean}>|{ok:false;reason:string;absent:true}>{
  if(!projectsOf(config).some(item=>item.id===entry.projectId))return no('projeto fora desta instalação');
  if(!validTempPath(entry.path,deps.root))return no('caminho fora do diretório temporário');
- const info=await lstat(entry.path).catch(error=>errno(error,'ENOENT')?null:undefined);
+ const info=await lstat(entry.path,{bigint:true}).catch(error=>errno(error,'ENOENT')?null:undefined);
  if(info===null)return {ok:false,reason:'o diretório já não existe',absent:true};
  if(!info)return no('não foi possível inspecionar o diretório');
  const id=identity(info);
- if(info.isSymbolicLink()||!info.isDirectory()||info.uid!==process.getuid?.()||id.dev!==entry.dev||id.ino!==entry.ino||await realpath(entry.path)!==entry.path)return no('o diretório não é o registrado');
- let marker:{entryId?:unknown;nonce?:unknown};
+ if(info.isSymbolicLink()||!info.isDirectory()||info.uid!==BigInt(process.getuid?.()??-1)||id.dev!==entry.dev||id.ino!==entry.ino||await realpath(entry.path)!==entry.path)return no('o diretório não é o registrado');
+ if(entry.removing&&String(info.birthtimeNs)!==entry.removing.birth)return no('o diretório não é o que começou a ser removido');
+ let marker:{entryId?:unknown;nonce?:unknown}|undefined;
  try{
   const handle=await open(join(entry.path,MARKER),constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try{
@@ -409,8 +424,11 @@ async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:Tem
    if(!markerInfo.isFile()||markerInfo.uid!==process.getuid?.()||markerInfo.size>4096)return no('marca de propriedade inválida');
    marker=JSON.parse(await handle.readFile('utf8'));
   }finally{await handle.close();}
- }catch{return no('marca de propriedade ausente');}
- if(marker.entryId!==entry.id||typeof marker.nonce!=='string'||createHash('sha256').update(marker.nonce).digest('hex')!==entry.nonceDigest)return no('marca de propriedade não confere');
+ }catch(error){
+  // Only the journal of an interrupted removal of this very directory stands in for a marker that the removal itself deleted.
+  if(!(entry.removing&&errno(error,'ENOENT')))return no('marca de propriedade ausente');
+ }
+ if(marker&&(marker.entryId!==entry.id||typeof marker.nonce!=='string'||createHash('sha256').update(marker.nonce).digest('hex')!==entry.nonceDigest))return no('marca de propriedade não confere');
  const round=registry.rounds.find(item=>item.projectId===entry.projectId&&item.roundId===entry.roundId);
  if(!round)return no('rodada sem prova de encerramento');
  if(round.endedAt<entry.registeredAt)return no('encerramento anterior ao registro');
@@ -419,7 +437,7 @@ async function proveTemp(config:Installation,registry:ArtifactRegistry,entry:Tem
  try{if(!await sameDeviceTree(entry.path,entry.dev))return no('há montagem ou árvore grande demais dentro do diretório');}catch{return no('não foi possível varrer o diretório');}
  try{if(await deps.processInside(entry.path))return no('há processo usando o diretório');}catch{return no('não foi possível provar que nenhum processo usa o diretório');}
  try{if(await mountedByContainer(deps.docker,entry.path))return no('há contêiner com este diretório montado');}catch{return no('não foi possível provar que nenhum contêiner monta o diretório');}
- return {ok:true,facts:{idleHours:hours(idle)}};
+ return {ok:true,facts:{idleHours:hours(idle),resumed:!!entry.removing}};
 }
 
 // ---- Entry point ---------------------------------------------------------------------------------------------
@@ -514,12 +532,23 @@ export async function runPersonalArtifactRetention(config:Installation,apply:boo
     }else kept('temp',label,proof.reason);
     continue;
    }
-   if(!apply){done('temp');lines.push(`${label}: elegível (rodada ${entry.roundId} encerrada há ${proof.facts.idleHours} h).`);continue;}
+   const resumed=proof.facts.resumed?', retomando remoção interrompida':'';
+   if(!apply){done('temp');lines.push(`${label}: elegível (rodada ${entry.roundId} encerrada há ${proof.facts.idleHours} h${resumed}).`);continue;}
    const again=await proveTemp(config,registry,entry,{now,processInside,docker,root});
    if(!again.ok){kept('temp',label,'mudou durante a retenção: '+again.reason);continue;}
+   if(!entry.removing){
+    // Journal first, outside the tree: from here on an interruption can be resumed even after the marker is gone.
+    const birth=String((await lstat(entry.path,{bigint:true})).birthtimeNs);
+    const journal=await mutateRegistry(config,current=>{
+     const stored=current.temps.find(item=>item.id===entry.id);
+     if(!stored||stored.dev!==entry.dev||stored.ino!==entry.ino)throw new Refusal('RETENTION_REGISTRY_CHANGED',409);
+     return stored.removing??={since:now(),birth};
+    });
+    if(journal.birth!==birth)throw new Refusal('RETENTION_REGISTRY_CHANGED',409);
+   }
    await releaseRegisteredDirectory(entry.path,entry);
    await forget('temp',entry.id,'removed');
-   done('temp');lines.push(`${label}: removido.`);
+   done('temp');lines.push(`${label}: removido${resumed}.`);
   }catch{kept('temp',label,'falha ao remover; repita depois');}
  }
  // Directories that look like ours but carry no registry proof are never touched. Only their number is reported.
