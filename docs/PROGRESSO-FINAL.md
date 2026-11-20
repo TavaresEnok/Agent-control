@@ -1835,3 +1835,14 @@ FIM
 - 20/11/2026 08:49 UTC — Revisão independente revisao-painel-pintura concluída pelo Sol high em modo somente leitura.
 - 20/11/2026 08:49 UTC — Em homologação, os commits daa3eb6 (Anatel) e 3348edc (painel) passaram no formatador, TypeScript, nos 283 testes de frontend, no build e nas duas suítes de navegador da rodada 8. O Sol pediu ajustar a revalidação quando a conexão volta com a aba da Anatel oculta. A ordem foi preservada para depois da liberação do disco.
 - 20/11/2026 08:51 UTC — Encerrada a revisão dos commits já entregues. O Sol também identificou um recorte acima do cartão que a prova de pintura ainda pode omitir. Os dois pareceres aguardam a liberação do disco. As duas CLIs permanecem suspensas, sem reservas em uso. Bloqueio atual: disco a 99% e ausência de uma janela exclusiva confirmada para retirar work/ com segurança.
+- 20/11/2026 13:11 UTC — O titular concedeu janela exclusiva. Confirmados zero reservas ativas e os grupos de QA e arquitetura suspensos. O disco começou a janela em 96%. Integrada a manutenção de 4927e68d. O primeiro lote usa dois jobs com backup individual e conferência pelo supervisor.
+- 20/11/2026 13:12 UTC — A CLI retirou os dois work/ do lote piloto. A repetição confirmou ausência nos dois jobs. O supervisor reconciliou novamente os dois resultados, com os mesmos hashes de pedido e resposta. O inventário atualizado identificou outros 188 candidatos com work/ presente.
+- 20/11/2026 13:21 UTC — Confirmada a ordem 1a2a8817. O próximo parecer usará Sol medium somente leitura. Para correções comuns e graves, os respectivos Claude via Antigravity precedem as contas próprias. O disco está em 92%; exames e trabalhadores aguardam o fim da manutenção.
+- 20/11/2026 13:21 UTC — Manutenção de work/ passou pelo lote de 30 de 158 candidatos. Variação de espaço disponível desde o início: 2.124.648.448 bytes. A CLI decide individualmente quais cópias pode liberar.
+- 20/11/2026 13:23 UTC — Janela encerrada com o disco em 89% e 40 GiB disponíveis. A retirada parou na meta. Retomados os dois ajustes do parecer em worktrees independentes.
+- 20/11/2026 13:23 UTC — Iniciada ordem anatel-posjanela em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 13:23 UTC — Iniciada ordem painel-posjanela em gemini-4-hydrogen-high (hydrogen), no worktree próprio.
+- 20/11/2026 13:24 UTC — COTA — gemini-4-hydrogen-high (hydrogen) informou limite na ordem anatel-posjanela.
+- 20/11/2026 13:24 UTC — COTA — gemini-4-hydrogen-high (hydrogen) informou limite na ordem painel-posjanela.
+- 20/11/2026 13:24 UTC — Iniciada ordem painel-posjanela em gemini-4-argon-high (argon), no worktree próprio.
+- 20/11/2026 13:24 UTC — Iniciada ordem anatel-posjanela em gemini-4-argon-high (argon), no worktree próprio.

@@ -152,3 +152,9 @@ No candidato de manutenção `4927e68d`, quatro testes passaram com PostgreSQL d
 O Sol identificou uma corrida remanescente se outro processo da conta de serviço mover uma árvore já aberta durante a exclusão. A instalação permanece com todas as cópias nativas. O gerente solicitou ao administrador uma janela com acesso exclusivo ao diretório de jobs ou capacidade adicional no volume. O candidato está no ramo `task/nexo-retencao-jobs`. A limpeza do cache OCI descrita acima foi aplicada.
 
 A última rodada offline reuniu `daa3eb6` e `3348edc`. O formatador, o TypeScript, o build e os 283 testes do frontend passaram. As duas suítes dirigidas em Chromium também passaram na homologação. O Sol pediu mais duas correções antes da integração. Na Anatel, a reconexão enquanto a aba está oculta pode deixar uma revalidação pendente. Na prova do gráfico, um recorte aplicado acima do cartão pode esconder parte da última barra sem que a comparação de imagens o detecte. Os dois commits permanecem nos ramos de trabalho. O ramo local de entrega conserva a correção de formatação e a correção de contraste já medidas.
+
+### Manutenção de 20/11/2026 às 13h23 UTC
+
+Com a janela exclusiva autorizada, o gerente confirmou que as duas CLIs estavam suspensas e que não havia reservas ativas. A manutenção integrada em `4ec9fd9c` retirou as cópias de trabalho pela CLI `personal:maintenance`. Nos dois jobs do piloto, o supervisor reconciliou de novo os resultados e confirmou os mesmos hashes de pedido e resposta. Uma segunda retirada dos mesmos jobs confirmou a ausência das cópias.
+
+Dos 188 candidatos ainda presentes depois do piloto, 68 conservavam a cópia no fim da janela. Os três últimos lotes registraram a retirada de 90 cópias, somando 5.585.015.814 bytes, com zero falhas e zero recusas. O disco passou de 96% para 89%, com 40 GiB disponíveis. A limpeza terminou ao atingir a meta.
