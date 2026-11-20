@@ -278,11 +278,30 @@ O exame de leitura continua só com Claude. Achado `alta` sem medida estruturada
 
 O repositório de exemplo com falhas plantadas, como injeção, segredo no histórico, rota sem autorização e dependência vulnerável, é a régua do módulo. A taxa de acerto do validador é medida nele antes de usá-lo em sistema real.
 
+## Entrega dos módulos 2 a 9 na instalação IspAgent
+
+A versão aplicada em `735ec92a` passou pelo aceite do candidato `18a36cbc`. As oito execuções usaram a instalação viva após o backup, a aplicação das imagens e o reinício do gateway.
+
+| Módulo | Merge inicial | Correção com digest | Execução viva | Saída |
+| --- | --- | --- | --- | ---: |
+| 2. `personal:qa` | `7902cc97` | — | `1fa596e8-79ea-469f-979d-1cf02291b30e` | 0 |
+| 3. `personal:arquitetura` | `cd878d0d` | `615c1f9f` | `45ab8dad-87e1-4448-b8cd-0579589f9c02` | 0 |
+| 4. `personal:dependencias` | `ce591992` | — | `338fe06f-d5ed-4406-8a06-ade6f9468f7b` | 0 |
+| 5. `personal:banco` | `d7f7a189` | — | `3451d2a4-85c9-424d-a92b-bdde74377f5e` | 0 |
+| 6. `personal:prontidao` | `ff7e75b0` | `bf7a1e81` | `7bc68163-6a10-491b-a231-66ac9d4b6fce` | 1 |
+| 7. `personal:desempenho` | `35417201` | — | `11f34043-bf45-4ec9-b130-b7d612916f5b` | 0 |
+| 8. `personal:documentacao` | `cfb05729` | `a9e3aa63` | `e93e82d5-34d0-4a8f-b5f7-89793a19b20f` | 0 |
+| 9. `personal:conformidade` | `cf3f5010` | `b4e285f7` | `ecd10e28-effe-40f4-a86d-838ee6a51364` | 1 |
+
+O aceite incluiu revisão independente por modelo distinto (GPT-6.2 Sol high, somente leitura) e conferência das CLIs pelo gerente. O relatório registra os números de cobertura e as limitações do exame de cada módulo. [Relatório final](RELATORIO-FINAL.md)
+
 ## Provas da parte C em homologação
 
-Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes com Git, PostgreSQL e imagens reais fixadas por digest. Na prova do exame em `1fd88007`, cada módulo persistiu um achado confirmado com dois perfis sintéticos distintos e criou o pedido de correção correspondente. A suíte oficial dessa revisão do QA passou em 256 arquivos, 52 testes complementares e no laboratório. Os candidatos seguem em revisão para promoção ao gateway.
+Na homologação conjunta em `525f929e`, as oito CLIs passaram nos seis testes com Git, PostgreSQL e imagens reais fixadas por digest. Na prova do exame em `1fd88007`, cada módulo persistiu um achado confirmado com dois perfis sintéticos distintos e criou o pedido de correção correspondente. A suíte oficial dessa revisão do QA passou em 256 arquivos, 52 testes complementares e no laboratório. Naquela revisão, a promoção ao gateway ainda estava pendente. A seção de entrega acima registra a aplicação concluída.
 
 ### Prova do módulo 2
+
+Na instalação viva, QA publicou 123 medições e 20 itens pulados. O laboratório de QA cobriu testes locais e mutação. Fuzz permaneceu registrado como pulado.
 
 O ramo do produto recebeu `53012d07` pelo merge `7902cc97`. TypeScript, 266 arquivos da suíte oficial, 52 testes complementares e 136 testes do laboratório passaram. O laboratório exerceu os binários fixados neste host amd64.
 
@@ -304,6 +323,8 @@ Na versão `e245fca3`, passaram os 94 testes de QA com os adaptadores habilitado
 
 ### Prova do módulo 3
 
+Na instalação viva, arquitetura publicou 508 medições e um item pulado. A proteção de caminhos também oculta parâmetros de rota descritivos que atingem o limiar de redação.
+
 A arquitetura entrou no ramo do produto pelo merge `cd878d0d`. A CLI foi exercida com o digest final de QA e o coletor de arquitetura em uma instalação de bancada.
 
 A suíte oficial de `38e9984c` aprovou 267 arquivos, além dos 52 testes complementares e do laboratório da CLI. Os controles de descritores de `57888e81` passaram em revisão estática independente por Sol 6.2 high.
@@ -317,6 +338,8 @@ A imagem da fonte `56177e90` passou nos 21 testes dirigidos, incluindo Hadolint.
 A prova da arquitetura passou nos 20 testes, com Hadolint e as dependências locais fixadas, e nos seis testes da CLI. A revisão independente por modelo distinto de `70a8c7cc` registrou duas observações baixas. Ao atingir o limite do inventário, a cobertura informa o primeiro caminho interrompido e que as entradas posteriores ficaram fora da medição. O teste de caminho relativo também aceita a âncora anterior.
 
 ### Prova do módulo 4
+
+Na instalação viva, dependências publicou 432 medições e 29 itens pulados.
 
 O módulo entrou no ramo do produto em `ce591992`. As CLIs de QA, arquitetura e dependências passaram juntas nos seis controles em `da2c8bc4`.
 
@@ -336,6 +359,8 @@ Em `3e0bd99f`, 36 testes passaram com OpenRewrite offline e sua imagem fixada. A
 
 ### Prova do módulo 5
 
+Na instalação viva, os seis itens de banco foram pulados porque o snapshot não continha migrações no diretório examinado. A execução de migração e restauração foi verificada em PostgreSQL de laboratório.
+
 O módulo de banco entrou em `d7f7a189`. Em `35db707f`, passaram TypeScript, 270 arquivos da suíte oficial, 52 testes complementares e 21 testes do laboratório. Em `97938e35`, a confirmação de SIGKILL recebeu três controles adicionais de prazo e passou nos nove pontos de interrupção, com revisão independente.
 
 A imagem fixada em `2b2a0a5e` passou em 21/21 com a CLI, banco de teste e exames sobre SQL original e substituído. A revisão de `77d9a1d4` aceitou a distinção entre uma linha demonstrada e a posição parcial de um bloco SQL.
@@ -351,6 +376,8 @@ Na amostra sintética de `a382ae45`, os 13 testes de banco passaram com PostgreS
 Em `a22546c0`, o laboratório mediu uma consulta com PostgreSQL real e vinculou o resultado aos bytes da fonte pelo SHA-256. O achado confirmado ficou persistido. A troca da consulta no Git com reapresentação da mesma medição produziu um achado provável. Os revisores deste ensaio são sintéticos.
 
 ### Prova do módulo 6
+
+Na instalação viva, prontidão publicou 183 medições e sete itens pulados. Três linhas registraram a mesma limitação de alertas no arquivo, no requisito e no resumo. A análise estática não determinou o destino montado em tempo de execução.
 
 Prontidão entrou em `ff7e75b0`. Em `0976b46a`, passaram a suíte oficial em 273 arquivos, os 52 testes complementares e o laboratório com a CLI em 43/43. A análise de configuração e a coleta de evidências de prontidão são passivas.
 
@@ -368,6 +395,8 @@ Em `049b33c9`, os 34 testes passaram com a imagem de prontidão e as regras atua
 
 ### Prova do módulo 7
 
+Na instalação viva, desempenho publicou uma medição e cinco itens pulados.
+
 Desempenho entrou no produto em `35417201`. No candidato `dab29e0d`, passaram 275 arquivos da suíte oficial, 52 testes complementares e 70 testes do laboratório, incluindo a CLI e o histórico das medições.
 
 A imagem fixada em `51d9a17b` passou em 68/68, incluindo o perfil de CPU e a CLI. Os controles de PNG e HTTP 404 em `ac495948` passaram na revisão estática por Sol 6.2 high.
@@ -383,6 +412,8 @@ Na integração `e4680e65`, passaram os três laboratórios físicos de desempen
 Após a revisão independente por modelo distinto de `e3527238`, a integração `4e90e9c5` passou nos 62 testes com ferramentas físicas, na comparação entre execuções da CLI e na interrupção de conexão PostgreSQL bloqueada.
 
 ### Prova do módulo 8
+
+Na instalação viva, documentação publicou 333 medições e 62 itens pulados. A prova dedicada conferiu os artefatos do TypeDoc e do grafo Mermaid.
 
 Documentação entrou em `cfb05729`. O candidato `160dba62` passou nos 275 arquivos da suíte, nos 52 testes complementares e em 46 testes de ferramentas, integridade de artefatos e CLI.
 
@@ -401,6 +432,8 @@ A imagem de documentação fixada em `7e27197e` passou nos 21 testes com as ferr
 A rodada fixada em `bd0211ec` passou nos 25 testes de documentação, incluindo o tratamento de diretórios de comandos e a origem de arestas de Mermaid com frontmatter. As CLIs de documentação e conformidade passaram nos seis testes após essa integração.
 
 ### Prova do módulo 9
+
+Conformidade entrou no ramo do produto em `cf3f5010`. A correção da recusa de contrato permitiu publicar 480 medições e 999 achados na instalação viva. Houve 49 itens pulados e 171 linhas de cobertura em falha. Destas, 169 correspondem a arquivos com análise estática parcial, uma resume esse limite e uma registra o teto que deixou 3.528 achados de fora.
 
 A imagem fixada em `72fc96fd` passou em 41/41, incluindo a CLI. Em `696d81a9`, o revisor aceitou as provas da negação composta e do motivo exato da cobertura npm. Na fixture de atribuição, ScanCode e Presidio são aplicáveis. ORT e a política npm registram ausência de manifesto aplicável. O analisador local identifica as chamadas de origem indeterminada como cobertura parcial.
 

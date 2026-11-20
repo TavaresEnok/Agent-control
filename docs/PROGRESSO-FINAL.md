@@ -1510,3 +1510,34 @@ PAUSADO-COTA
 - 20/11/2026 01:14 UTC — Suíte de instalacao-18a36cbc em 18a36cbc passou: 276 arquivos, 0 falhas, 95 excluídos pelo executor.
 - 20/11/2026 01:16 UTC — Os 53 testes complementares passaram novamente em 18a36cbc, sem pulos. O laboratório integrado está executando os 200 casos com os contêineres e a base descartável.
 - 20/11/2026 01:22 UTC — Aceite de instalacao-18a36cbc em 18a36cbc passou em TypeScript, suíte oficial, complementares e laboratório.
+- 20/11/2026 01:22 UTC — As quatro correções e a renovação da CLI entraram em task/personal-activation no merge 735ec92a. A árvore do produto corresponde ao candidato 18a36cbc aprovado em TypeScript, suíte, complementares e laboratório.
+- 20/11/2026 01:22 UTC — Iniciado backup imediatamente anterior a personal:images, com os oito módulos no checkout.
+- 20/11/2026 01:22 UTC — Backup final validado em /home/app/backups-agent-control/ispagent-antes-correcoes-vivas-20261120-012232/agent-control-ispagent-20261120-0122. MANIFEST.txt confere (11955 arquivos) e 153 entradas TABLE DATA no catálogo do dump.
+- 20/11/2026 01:22 UTC — Iniciada personal:images para as imagens nativas e as migrações no fluxo de setup da instalação.
+- 20/11/2026 01:24 UTC — personal:images terminou com sucesso no checkout de fechamento.
+- 20/11/2026 01:24 UTC — Gateway reiniciado e ativo. O painel utiliza o bundle verificado com Vite. Segue a conferência de saúde da versão corrigida.
+- 20/11/2026 01:25 UTC — Na primeira amostra após o reinício, o serviço estava ativo, mas o socket HTTP ainda recusou a conexão. O gateway publicou personal_ready e passou a responder HTTP 200. Repetida apenas a conferência de saúde antes das oito CLIs, sem outro reinício.
+- 20/11/2026 01:26 UTC — Aplicação viva concluída após as correções das CLIs. O inspect aprovou oito verificações, o HTTP local respondeu 200 e o gateway permaneceu ativo. A janela posterior à retirada do job não registrou nova divergência de escopo.
+- 20/11/2026 01:26 UTC — Iniciada personal:qa na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:26 UTC — personal:qa encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:26 UTC — Iniciada personal:arquitetura na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:26 UTC — personal:arquitetura encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:26 UTC — Iniciada personal:dependencias na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:28 UTC — personal:dependencias encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:28 UTC — Iniciada personal:banco na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:28 UTC — personal:banco encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:28 UTC — Iniciada personal:prontidao na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:28 UTC — personal:prontidao encerrou com código 1. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:28 UTC — A saída parcial de personal:prontidao foi comparada com o candidato bf7a1e81. As causas registradas por ferramenta coincidem com a bancada e o relatório foi publicado.
+- 20/11/2026 01:28 UTC — Iniciada personal:desempenho na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:29 UTC — personal:desempenho encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:29 UTC — Iniciada personal:documentacao na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:29 UTC — personal:documentacao encerrou com código 0. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:29 UTC — Iniciada personal:conformidade na instalação viva, pelo fluxo normal do projeto IspAgent.
+- 20/11/2026 01:32 UTC — personal:conformidade encerrou com código 1. O relatório vivo foi lido pelo produto; foram conferidos commit, digest, mapa, cobertura e achados.
+- 20/11/2026 01:32 UTC — A saída parcial de personal:conformidade foi comparada com o candidato b4e285f7. As causas registradas por ferramenta coincidem com a bancada e o relatório foi publicado.
+- 20/11/2026 01:34 UTC — Encerradas as oito execuções vivas. Seis CLIs saíram com código zero. Prontidão e conformidade publicaram relatórios parciais com código 1, conforme as medições de bancada. Após a última CLI, HTTP 200, gateway ativo e as oito verificações de inspect aprovadas. Os oito recibos do exame por Claude registraram exam_login_stale.
+- 20/11/2026 01:34 UTC — Atualizados docs/MODULOS-DE-VERIFICACAO.md e docs/RELATORIO-FINAL.md com os dois backups, o aceite, as oito execuções, os limites de cobertura e o estado do examinador.
+- 20/11/2026 01:34 UTC — Encerradas as bases descartáveis do aceite após conferir ausência de clientes. A conferência final confirmou os identificadores das oito execuções no relatório e na matriz e a igualdade da árvore de produto com o candidato aprovado.
+
+FIM
