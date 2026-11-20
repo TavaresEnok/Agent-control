@@ -160,3 +160,4 @@
   - **Desligado até nova prova:** compressão geral da saída de comandos (T4 reprovou: escondeu informação) e grafo ou índice de código como resposta autônoma (T5 reprovou: 1 acerto em 5).
   - **Critério para entrar no padrão:** só entra o que provar economia sem perda de qualidade, medido antes e depois.
   - **T6:** levar a disciplina do gerente para dentro do produto, no gerente semântico do painel e no examinador.
+- **Registro de imagens candidatas (titular, 20/11/2026).** Toda imagem candidata de módulo que for construída deve ser registrada logo depois do build com `npm run personal:maintenance -- <instalação.json> --registrar-imagem --projeto <id> --modulo <módulo> --imagem <sha256:id>`, para a retenção automática (agora em `apply`) poder removê-la depois de 24 h se não for o digest fixado nem estiver em uso. Imagem não registrada nunca é removida.
