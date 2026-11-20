@@ -1,14 +1,15 @@
 import {refreshPersonalTemplates} from './personal-policies.ts';
 import {nativePlanningExecutorDigest} from './native-planning-contract.ts';
 import {appendFileSync,readFileSync} from 'node:fs';
-import {execFileSync} from 'node:child_process';
+import {execFile,execFileSync} from 'node:child_process';
+import {promisify} from 'node:util';
 import {readFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {GitArtifacts} from './git.ts';
 import {assertSshOutsideMountRoots,pushIntegratedRemote,registerPersonalRemote,retryPendingRemotePushes} from './personal-ssh.ts';
 import type {Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
-import {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
+import {NativeExecutionSupervisor,openGrantLaunchLockSession,releaseGrantLaunchLock,tryGrantLaunchLock} from './native-execution-supervisor.ts';
 import {NativeImplementation} from './native-implementation.ts';
 import {NativePlanningSupervisor} from './native-planning-supervisor.ts';
 import {NativeQa} from './native-qa.ts';
@@ -32,25 +33,61 @@ export async function renewPersonalQuota(ledger:Ledger){
   ON CONFLICT(account_id) DO UPDATE SET status=excluded.status,source=excluded.source,observed_at=excluded.observed_at,expires_at=excluded.expires_at`);
 }
 
+const JOB_CONTAINER_PREFIXES=['ac-native-plan-','ac-native-worker-','ac-native-tools-','ac-native-qa-','ac-native-qa-prepare-','ac-native-qa-db-'];
+const JOB_TABLES=['ac_native_planning_jobs','ac_native_execution_jobs','ac_native_qa_jobs'] as const;
+const execFileAsync=promisify(execFile);
+/** Every container name Docker knows, or null when it cannot be listed (then nothing is released). */
+async function dockerContainerNames():Promise<string[]|null>{
+ try{return (await execFileAsync('docker',['ps','-a','--format','{{.Names}}'],{encoding:'utf8',timeout:15000})).stdout.split('\n').filter(Boolean);}catch{return null;}
+}
+export type DeadGrantSweepOptions={
+ /** Lists container names. Called per grant, after its locks are held, so it is never older than the decision it supports. */
+ containers?:()=>Promise<string[]|null>;
+ /** Observation points for tests: candidates chosen, per-grant locks held, containers re-read. */
+ observe?:(step:'candidates'|'locked'|'probed',grantId?:string)=>Promise<void>;
+};
 /**
- * Personal mode, at startup only. The runtime holds the exclusive repository lock, so a grant
- * left reserved, running or uncertain by an earlier process is dead once none of its job
- * containers exists any more. Without this, two crashed stages block an account for good.
- * If Docker cannot be listed, nothing is released.
+ * Personal mode: a grant left reserved, running or uncertain is dead once its launch is gone and none of its job containers
+ * exists. The sweep never trusts an earlier inventory. Candidates are only grants old enough; each one is then taken under
+ * the same exclusion a launch uses (the grant's launch lock, then row locks on the grant and its job rows), and only then
+ * are the containers listed. A launch that is alive holds the launch lock, so it is skipped; one that appeared after the
+ * candidate query is seen by the later listing; a job row younger than the threshold may belong to a supervisor that does
+ * not take the launch lock, so it is kept. If Docker cannot be listed, nothing is released.
  */
-export async function releaseDeadPersonalGrants(ledger:Ledger,olderThanMinutes=1){
- let names:string[];
- try{names=execFileSync('docker',['ps','-a','--format','{{.Names}}'],{encoding:'utf8',timeout:15000}).split('\n').filter(Boolean);}catch{return 0;}
- const rows=(await ledger.pool.query(`SELECT g.id,array_remove(array[pj.id::text,ej.id::text,qj.id::text],NULL) jobs FROM ac_capacity_grants g
-  LEFT JOIN ac_native_planning_jobs pj ON pj.grant_id=g.id LEFT JOIN ac_native_execution_jobs ej ON ej.grant_id=g.id LEFT JOIN ac_native_qa_jobs qj ON qj.grant_id=g.id
-  WHERE g.state<>'released' AND g.resource_kind='model' AND g.created_at<clock_timestamp()-make_interval(mins=>$1)`,[olderThanMinutes])).rows;
+export async function releaseDeadPersonalGrants(ledger:Ledger,olderThanMinutes=1,options:DeadGrantSweepOptions={}){
+ const containers=options.containers??dockerContainerNames;
+ const candidates=(await ledger.pool.query<{id:string}>(`SELECT id FROM ac_capacity_grants WHERE state<>'released' AND resource_kind='model'
+  AND created_at<clock_timestamp()-make_interval(mins=>$1) ORDER BY created_at`,[olderThanMinutes])).rows;
+ await options.observe?.('candidates');
+ if(!candidates.length)return 0;
+ const session=await openGrantLaunchLockSession(ledger);
  let released=0;
- for(const row of rows){
-  const jobs=row.jobs as string[];
-  if(jobs.some(job=>['ac-native-plan-','ac-native-worker-','ac-native-tools-','ac-native-qa-','ac-native-qa-prepare-','ac-native-qa-db-'].some(prefix=>names.includes(prefix+job))))continue;
-  released+=Number((await ledger.pool.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2::jsonb WHERE id=$1 AND state<>'released'",
-   [row.id,JSON.stringify({source:'personal-startup-sweep',containersAbsent:true,jobs})])).rowCount??0);
- }
+ try{
+  for(const {id} of candidates){
+   if(session&&!await tryGrantLaunchLock(session,id))continue;
+   try{
+    released+=await ledger.tx(async c=>{
+     const grant=(await c.query(`SELECT id FROM ac_capacity_grants WHERE id=$1 AND state<>'released' AND resource_kind='model'
+      AND created_at<clock_timestamp()-make_interval(mins=>$2) FOR UPDATE`,[id,olderThanMinutes])).rows[0];
+     if(!grant)return 0;
+     const jobs:string[]=[];
+     for(const table of JOB_TABLES){
+      for(const row of (await c.query(`SELECT id,created_at<clock_timestamp()-make_interval(mins=>$2) settled FROM ${table} WHERE grant_id=$1 FOR UPDATE`,[id,olderThanMinutes])).rows){
+       if(!row.settled)return 0;
+       jobs.push(String(row.id));
+      }
+     }
+     await options.observe?.('locked',id);
+     const names=await containers();
+     if(!names)return 0;
+     await options.observe?.('probed',id);
+     if(jobs.some(job=>JOB_CONTAINER_PREFIXES.some(prefix=>names.includes(prefix+job))))return 0;
+     return Number((await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2::jsonb WHERE id=$1 AND state<>'released'",
+      [id,JSON.stringify({source:'personal-startup-sweep',containersAbsent:true,jobs})])).rowCount??0);
+    });
+   }finally{if(session)await releaseGrantLaunchLock(session,id);}
+  }
+ }finally{await session?.end().catch(()=>undefined);}
  return released;
 }
 
@@ -112,7 +149,12 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  await releaseDeadPersonalGrants(ledger);
  setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
  // A stage that fails before its container exists leaves its reservation behind; without this it would hold an evaluator slot until the next restart.
- setInterval(()=>{releaseDeadPersonalGrants(ledger,5).catch(()=>{});},2*60*1000).unref();
+ let sweepingGrants=false;
+ setInterval(()=>{
+  if(sweepingGrants)return;
+  sweepingGrants=true;
+  releaseDeadPersonalGrants(ledger,5).catch(()=>{}).finally(()=>{sweepingGrants=false;});
+ },2*60*1000).unref();
  const {readPrivateFile}=await import('./installation.ts');
  const planningPem=(await readPrivateFile(boot.planning.signingKeyFile)).toString('utf8');
  const reviewKey=await readPrivateFile(boot.review.signingKeyFile);

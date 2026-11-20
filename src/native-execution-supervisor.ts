@@ -95,6 +95,46 @@ export function terminalWorkClass(workflow:unknown,role:unknown):'readonly'|'pro
 }
 /** One advisory lock per job, shared by every path that reads or frees its `work`: manual and automatic retention and artifact registration. */
 export function terminalWorkLockKey(jobId:string){Id.parse(jobId);return 'agent-control:terminal-work:'+jobId;}
+/**
+ * Exclusion between a launch in preparation and every recovery that could free the same reservation (the periodic sweep of dead
+ * grants and the supervisor's own recovery). One advisory lock per job grant, held on a dedicated session: it exists exactly as long
+ * as the launching process is alive, so a crashed launch releases it by itself and a live one can never be reclaimed.
+ * The grant (1:1 with the job) is the key because it is known before the job row exists.
+ */
+export function grantLaunchLockKey(grantId:string){Id.parse(grantId);return 'agent-control:grant-launch:'+grantId;}
+/** Dedicated connection outside the ledger pool. Null when the ledger has no connection string to open one from. */
+export async function openGrantLaunchLockSession(ledger:{pool:{options?:{connectionString?:string}}}){
+ const connectionString=ledger.pool.options?.connectionString;
+ if(!connectionString)return null;
+ const client=new pg.Client({connectionString});
+ client.on('error',()=>undefined); // A lost session only drops the lock it held; a late error never crashes the process.
+ await client.connect();
+ return client;
+}
+export async function tryGrantLaunchLock(session:pg.Client,grantId:string){
+ return Boolean((await session.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) ok',[grantLaunchLockKey(grantId)])).rows[0]?.ok);
+}
+export async function releaseGrantLaunchLock(session:pg.Client,grantId:string){
+ await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[grantLaunchLockKey(grantId)]).catch(()=>undefined);
+}
+/** Runs `effect` holding the grant's launch lock. The sweep only ever tries the lock, so a short wait here is enough. */
+export async function withGrantLaunchLock<T>(ledger:{pool:{options?:{connectionString?:string}}},grantId:string,effect:()=>Promise<T>,waitMs=30000):Promise<T>{
+ const session=await openGrantLaunchLockSession(ledger);
+ if(!session)return effect();
+ let locked=false;
+ try{
+  const deadline=Date.now()+waitMs;
+  for(;;){
+   if(await tryGrantLaunchLock(session,grantId)){locked=true;break;}
+   if(Date.now()>=deadline)throw new Refusal('NATIVE_EXECUTION_BUSY',409);
+   await new Promise(done=>setTimeout(done,50));
+  }
+  return await effect();
+ }finally{
+  if(locked)await releaseGrantLaunchLock(session,grantId);
+  await session.end().catch(()=>undefined);
+ }
+}
 export class UnstartedExamRetirementPending extends Refusal {
  constructor(readonly jobId:string){super('NATIVE_PRELAUNCH_SETTLEMENT_PENDING',409);Id.parse(jobId);}
 }
@@ -292,7 +332,12 @@ export class NativeExecutionSupervisor{
    grant.intent_id!==input.intentId||Number(grant.manager_epoch)!==authority.epoch||this.profileDigest(grant)!==job.profile_digest)throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   this.assertQuota(input,grant);assertModelAllowed(grant.model);return fn();
  });}
+ /** The launch holds the grant's launch lock from the first check to the running state, so a recovery sweep never frees a reservation that is being prepared. */
  async start(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
+  const requested=NativeExecutionRequest.parse(raw);
+  return withGrantLaunchLock(this.ledger,requested.grantId,()=>this.startLocked(principal,authority,raw,signal));
+ }
+ private async startLocked(principal:string,authority:Authority,raw:z.input<typeof NativeExecutionRequest>,signal?:AbortSignal){
   const input=NativeExecutionRequest.parse(raw),hash=digest(input),prior=(await this.ledger.pool.query('SELECT * FROM ac_native_execution_jobs WHERE id=$1',[input.jobId])).rows[0];
   if(prior){await this.validateReplay(principal,authority,input,prior);return this.reconcile(principal,authority,input);}
   await assertDiskSpaceForLaunch([...(this.ledger.launchVolumes??[]),this.config.hostRoot,this.config.accountRoot]);
@@ -1951,6 +1996,15 @@ export class NativeExecutionSupervisor{
    if(row.principal_id!==principal)throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    return row;
   });
+  // Recovery takes the same per-grant launch lock as the launch: a launch still preparing is preserved, never recovered underneath.
+  const session=await openGrantLaunchLockSession(this.ledger);
+  if(!session)return this.recoverLoaded(principal,authority,jobId,loaded);
+  try{
+   if(!await tryGrantLaunchLock(session,String(loaded.grant_id)))return {state:'uncertain' as const,interval:'before_terminal_evidence' as const,grant:'preserved' as const,removed:[] as string[],replayed:false as const};
+   try{return await this.recoverLoaded(principal,authority,jobId,loaded);}finally{await releaseGrantLaunchLock(session,String(loaded.grant_id));}
+  }finally{await session.end().catch(()=>undefined);}
+ }
+ private async recoverLoaded(principal:string,authority:Authority,jobId:string,loaded:Record<string,any>){
   const preserved=(interval:NativeExecutionRecovery['interval'],grant:NativeExecutionRecovery['grant']=loaded.grant_state==='released'?'released':'preserved'):NativeExecutionRecovery=>({state:'uncertain',interval,grant,removed:[],replayed:false});
   if(loaded.key_fingerprint!==this.fingerprint||loaded.executor_digest!==this.executorDigest)return preserved('supervisor_identity');
   if(['completed','failed'].includes(loaded.state)){
