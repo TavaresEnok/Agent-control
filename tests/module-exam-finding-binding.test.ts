@@ -10,7 +10,7 @@ import {digest} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {mapModuleSnapshot} from '../src/module-exam-map.ts';
 import {examineFunctionalModule, type ModuleExamSeat} from '../src/module-exam.ts';
-import {attestDistinctExamSessions, examSessionFor, examSubjectDigest} from '../src/module-exam-sessions.ts';
+import {attestDistinctExamSessions, examFindingIdentity, examSessionFor, examSubjectDigest} from '../src/module-exam-sessions.ts';
 import {recheckModuleFindings, runVerificationModule} from '../src/verification-modules.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import {qaStaticTool, reviewFixtureVerdict, skipQuestion} from './fixtures/module-exam-review.ts';
@@ -148,7 +148,15 @@ test('a confirmação de um achado alto não vale para outro achado na mesma lin
         async review(req) {
           assert.equal(req.commit, head);
           const own = seat('reviewer');
-          const sessionId = await journal(own, req.intentId, req.subject!);
+          const original = highFindings[issued.length]!;
+          const expectedFinding = examFindingIdentity({
+            id: ['ACH-001', 'ACH-002'][issued.length]!, source: 'examinador', file: 'app.test.ts',
+            line: original.line, severity: original.severity, evidence: original.snippet, hypothesis: original.hypothesis,
+          });
+          const expectedSubject = examSubjectDigest({purpose: 'reviewer', module: 'qa', intentId: req.intentId,
+            commit: head, file: 'app.test.ts', line: original.line, finding: expectedFinding});
+          assert.equal(req.subject, expectedSubject);
+          const sessionId = await journal(own, req.intentId, expectedSubject);
           const chosen = pick({seat: own, sessionId}, issued.length, issued);
           issued.push({seat: own, sessionId});
           const {grantId, ...identity} = chosen.seat;
