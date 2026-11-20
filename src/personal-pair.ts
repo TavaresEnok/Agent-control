@@ -1,6 +1,6 @@
 import {createHash, randomInt, randomUUID, timingSafeEqual} from 'node:crypto';
 import {chmod, readFile, rename, writeFile} from 'node:fs/promises';
-import {isIP} from 'node:net';
+import {BlockList,isIP} from 'node:net';
 import {join, resolve} from 'node:path';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
@@ -49,13 +49,50 @@ function clientKey(ip:string){
  if(clean==='legacy'||clean==='unknown')return clean;
  return isIP(clean)?clean:'unknown';
 }
-/** First address Caddy puts in x-forwarded-for, otherwise the connection address. */
-export function pairClientIp(forwardedFor:string|null|undefined,connectionAddress?:string|null){
- const first=forwardedFor?.split(',')[0]?.trim()??'';
- if(isIP(first))return first.toLowerCase();
- const remote=connectionAddress?.trim()??'';
- if(isIP(remote))return remote.toLowerCase();
- return 'unknown';
+function plainAddress(value:string){
+ const clean=value.trim().toLowerCase();
+ const mapped=/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(clean);
+ const address=mapped?mapped[1]!:clean;
+ return isIP(address)?address:'';
+}
+/** Trusted proxies are exact addresses or CIDR ranges ("127.0.0.1", "::1", "10.0.0.0/8"). Invalid entries are dropped, never trusted. */
+export function trustedProxyList(value:string|readonly string[]|undefined|null){
+ const list=new BlockList();
+ const items=typeof value==='string'?value.split(','):[...(value??[])];
+ for(const raw of items){
+  const item=raw.trim();if(!item)continue;
+  const [host,prefix,...rest]=item.split('/');
+  const address=plainAddress(host??'');
+  if(!address||rest.length)continue;
+  const family=isIP(address)===4?'ipv4':'ipv6';
+  try{
+   if(prefix===undefined)list.addAddress(address,family);
+   else if(/^\d{1,3}$/.test(prefix)&&Number(prefix)<=(family==='ipv4'?32:128))list.addSubnet(address,Number(prefix),family);
+  }catch{/* ignored: an unparseable entry trusts nothing */}
+ }
+ return list;
+}
+function trusted(list:BlockList,address:string){
+ return list.check(address,isIP(address)===4?'ipv4':'ipv6');
+}
+/** Proxies the installation trusts to report the client in x-forwarded-for. Empty by default: only the connection address counts. */
+export function configuredTrustedProxies(env:NodeJS.ProcessEnv=process.env){return trustedProxyList(env.AC_TRUSTED_PROXIES);}
+/**
+ * Address that owns a login attempt. The connection address is used unless it belongs to a
+ * trusted proxy; only then is x-forwarded-for read, from the right, skipping further trusted
+ * proxies, so a client-written entry on the left is never believed.
+ */
+export function pairClientIp(forwardedFor:string|null|undefined,connectionAddress?:string|null,trustedProxies:BlockList=configuredTrustedProxies()){
+ const remote=plainAddress(connectionAddress??'');
+ if(!remote)return 'unknown';
+ if(!trusted(trustedProxies,remote))return remote;
+ const hops=(forwardedFor??'').split(',').map(item=>item.trim()).filter(Boolean);
+ for(let index=hops.length-1;index>=0;index--){
+  const hop=plainAddress(hops[index]!);
+  if(!hop)return remote;
+  if(!trusted(trustedProxies,hop))return hop;
+ }
+ return remote;
 }
 async function readStore(path:string):Promise<Store>{
  try{
