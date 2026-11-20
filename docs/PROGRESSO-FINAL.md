@@ -1668,3 +1668,5 @@ FIM
 - 20/11/2026 05:52 UTC — Iniciada a CLI personal:design para design-nexo-opus-vivo.
 - 20/11/2026 05:56 UTC — Iniciada a CLI personal:verify para seguranca-nexo-reserva.
 - 20/11/2026 05:56 UTC — A manutenção confirmou a retirada do último job da arquitetura após o encerramento da intenção terminal. A conta Max passou a ter uma vaga ocupada pelo exame de design e uma disponível. Nova rodada de segurança iniciada pelo caminho estático.
+- 20/11/2026 05:59 UTC — Iniciada ordem design-cota em claude-sonnet-5-5 (ajust), no worktree próprio.
+- 20/11/2026 05:59 UTC — Primeiras inferências físicas no NexoISP confirmadas no diário nativo: examinador de design e as duas críticas visuais em Opus high na Enok Max, confirmações em Opus medium e exame estático de segurança em Sonnet high.
