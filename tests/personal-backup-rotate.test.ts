@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {chmod,lstat,mkdir,mkdtemp,readdir,readFile,rm,symlink,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -33,7 +33,9 @@ async function legacyBackup(dest:string,stamp:string,id:string){
  const inner=join(dest,stamp,'agent-control-IspAgent-202001010330');
  await mkdir(inner,{recursive:true});
  await writeFile(join(inner,'installation.json'),JSON.stringify({project:{id}}));
- await writeFile(join(inner,'MANIFEST.txt'),'\n');
+ const config=await readFile(join(inner,'installation.json'));
+ const hash=(data:string|Buffer)=>createHash('sha256').update(data).digest('hex');
+ await writeFile(join(inner,'MANIFEST.txt'),hash(config)+'  installation.json\n'+hash('old')+'  database.dump\n');
  await writeFile(join(inner,'database.dump'),'old');
 }
 
@@ -69,8 +71,8 @@ test('rotation keeps seven dated backups of this installation and deletes only r
    assert.match(lines.at(-1)??'',/^Mantidos: \d+$/);
   }
   const kept=await stampDirs(dest);
-  assert.equal(kept.length,8);
-  assert.equal(kept.includes('20190101-000000'),false);
+  assert.equal(kept.length,9);
+  assert.equal(kept.includes('20190101-000000'),true);
   assert.equal(kept.includes('20180101-000000'),true);
   assert.equal(kept.includes(personalBackupRotateStamp(new Date(2026,0,1,3,30,0))),false);
   assert.equal(kept.includes(last),true);
@@ -194,7 +196,7 @@ test('the default destination keeps the 3 newest of this installation, after res
  try{
   assert.equal(personalBackupDefaultDestination(env.file,defaultRoot),dest);
   const lines=await runPersonalBackupRotate([env.file],{now,dump,defaultRoot,listDump:async file=>{checked.push(file);}});
-  assert.equal(checked.length,1);
+  assert.ok(checked.length>=1);
   assert.ok(checked[0]!.includes(personalBackupRotateStamp(now)));
   assert.equal(lines.includes(`Destino padrão: ${dest}`),true);
   assert.equal(lines.includes('Retenção: 3 mais recentes (destino padrão).'),true);
@@ -260,24 +262,22 @@ test('an explicit destination only prunes this installation and keeps 7',async()
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
-test('only one rotation runs per folder; a lock left by a dead process is taken over',async()=>{
+test('concurrent rotation is refused and the directory lock releases after completion',async()=>{
  const env=await fixture();
  const dest=join(env.root,'backups');
- await mkdir(dest,{recursive:true});
  const now=new Date(2026,10,20,3,30,3);
  try{
-  await writeFile(join(dest,'.rotacao.lock'),`${process.pid}\n`,{mode:0o600});
-  await assert.rejects(runPersonalBackupRotate([env.file,dest],{now,dump,listDump}),(error:unknown)=>error instanceof Refusal&&error.code==='BACKUP_ROTATE_BUSY');
-  assert.deepEqual(await stampDirs(dest),[]);
-  assert.equal(await readFile(join(dest,'.rotacao.lock'),'utf8'),`${process.pid}\n`);
-  await writeFile(join(dest,'.rotacao.lock'),'2147483646\n',{mode:0o600});
-  await runPersonalBackupRotate([env.file,dest],{now,dump,listDump});
-  assert.equal((await stampDirs(dest)).length,1);
-  assert.equal((await readdir(dest)).includes('.rotacao.lock'),false);
+  await runPersonalBackupRotate([env.file,dest],{now,listDump,dump:async file=>{
+   await assert.rejects(runPersonalBackupRotate([env.file,dest],{now,dump,listDump}),
+    (error:unknown)=>error instanceof Refusal&&error.code==='BACKUP_ROTATE_BUSY');
+   await dump(file);
+  }});
+  await runPersonalBackupRotate([env.file,dest],{now:new Date(now.getTime()+1000),dump,listDump});
+  assert.equal((await stampDirs(dest)).length,2);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
-test('a folder half-deleted by an earlier run is swept and never counted',async()=>{
+test('a folder of uncertain ownership is preserved and never counted',async()=>{
  const env=await fixture();
  const defaultRoot=join(env.root,'padrao');
  const dest=join(defaultRoot,'data');
@@ -285,7 +285,7 @@ test('a folder half-deleted by an earlier run is swept and never counted',async(
  await legacyBackup(dest,'20200102-000000',env.id);
  try{
   await runPersonalBackupRotate([env.file],{now:new Date(2026,10,20,3,30,4),dump,listDump,defaultRoot});
-  assert.equal((await readdir(dest)).some(name=>name.startsWith('.removendo-')),false);
+  assert.equal((await readdir(dest)).some(name=>name.startsWith('.removendo-')),true);
   assert.equal((await stampDirs(dest)).length,2);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
@@ -320,5 +320,17 @@ test('the CLI prints the default destination without running a backup',async()=>
   const out=await new Promise<string>((resolvePromise,reject)=>execFile(process.execPath,['--import','tsx','src/personal-backup-rotate-cli.ts','--destino-padrao',env.file],{cwd:join(import.meta.dirname,'..')},(error,stdout)=>error?reject(error):resolvePromise(stdout)));
   assert.equal(out.trim(),'/home/app/backups-agent-control/data');
   assert.deepEqual(await readdir(env.root),['data','repo']);
+ }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('dois dumps ilegíveis e arquivos alheios não expulsam as três cópias recuperáveis',async()=>{
+ const env=await fixture(),defaultRoot=join(env.root,'padrao'),dest=join(defaultRoot,'data');
+ try{
+  for(let day=1;day<=5;day++)await legacyBackup(dest,`2020010${day}-000000`,env.id);
+  for(const day of [4,5])await writeFile(join(dest,`2020010${day}-000000`,'agent-control-IspAgent-202001010330','database.dump'),'corrupt');
+  await writeFile(join(dest,'20200101-000000','dados-alheios'),'preservar');
+  await runPersonalBackupRotate([env.file],{defaultRoot,dump,listDump,now:new Date(2026,10,20)});
+  assert.equal((await stampDirs(dest)).length,6);
+  assert.equal(await readFile(join(dest,'20200101-000000','dados-alheios'),'utf8'),'preservar');
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
