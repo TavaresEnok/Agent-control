@@ -1,5 +1,7 @@
 # Atualizações agrupadas no chat existente
 
+> **21/11/2026:** o Happier foi retirado. A conversa usa o transporte local e as atualizações entram na conversa do projeto em `ac_personal_messages`, mostrada no painel. A política de agrupamento abaixo continua. As partes sobre cifra, ACK e deduplicação do Happier descrevem a implementação anterior e ficam como registro.
+
 RF-35 parcial: atualizações do controlador usam a mesma conversa Happier
 cifrada do projeto/contexto. Não há outro transcript, scheduler, serviço de
 push ou conta de IA. O heartbeat já existente do `HappierEndpoint.tick()`

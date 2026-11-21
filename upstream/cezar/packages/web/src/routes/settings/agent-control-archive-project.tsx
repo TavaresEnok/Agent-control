@@ -71,7 +71,7 @@ export function AgentControlArchiveProject({ projectId }: { projectId: string })
   }
 
   return (
-    <SettingsField title="Arquivar projeto" hint="Some da lista. Nenhum arquivo é apagado e a conversa do Happier fica.">
+    <SettingsField title="Arquivar projeto" hint="Some da lista. Nenhum arquivo é apagado e a conversa fica guardada.">
       <Button type="button" variant="outline" className="min-h-11 w-fit text-danger" disabled={busy} onClick={() => setConfirm(true)}>Arquivar projeto</Button>
       {confirm ? (
         <div className="flex flex-wrap items-center gap-2">

@@ -1,6 +1,6 @@
 # Uso pessoal
 
-Um titular, no servidor, pelo Happier. Sem este opt-in o sistema continua bloqueado.
+Um titular, no servidor. A conversa fica no banco da instalação e aparece na tela Conversa do painel. O Happier foi retirado: não há transporte Happier, serviço Happier nem rota pública do Happier. Sem este opt-in o sistema continua bloqueado.
 
 ## Ligar um repositório em um comando
 
@@ -12,7 +12,7 @@ npm run personal:project -- /caminho/do/repositorio --db postgresql://usuario:se
 
 O comando cria `~/.agent-control/<label>/installation.json` (fora do repositório, modo `0600`), inicializa o ledger, registra as contas, ativa o runtime nativo e cria a conversa. `--import-logins` copia, sem mover, os logins que já existem no seu usuário (`~/.claude/.credentials.json`, `~/.grok/auth.json`, `~/.codex/auth.json`). Sem essa opção ele para e mostra os comandos `account-add` para um login novo por código; depois rode o mesmo comando de novo. Pode ser repetido sem duplicar nada.
 
-Depois, deixe os dois serviços permanentes (systemd do usuário; voltam depois de um reboot se `loginctl enable-linger $USER` estiver ativo):
+Depois, deixe os serviços permanentes (systemd do usuário; voltam depois de um reboot se `loginctl enable-linger $USER` estiver ativo):
 
 ```bash
 npm run personal:services -- ~/.agent-control/meuprojeto/installation.json meuprojeto
@@ -20,15 +20,15 @@ npm run personal:services -- ~/.agent-control/meuprojeto/installation.json meupr
 
 Para remover: o mesmo comando com `--remove`. Os passos abaixo são o caminho manual, peça por peça.
 
-### Mais um projeto no mesmo app
+### Mais um projeto no mesmo painel
 
-Para o outro repositório aparecer como mais uma conversa no app que você já usa (mesmo banco, mesmos logins, mesma conta Happier, mesmo token e a mesma máquina):
+Para o outro repositório aparecer como mais um projeto no painel que você já usa (mesmo banco, mesmos logins e a mesma máquina):
 
 ```bash
 npm run personal:project -- --add ~/.agent-control/ispagent/installation.json /caminho/do/outro --label outro
 ```
 
-O comando acrescenta o projeto em `projects[]` com um id novo e o caminho absoluto do repositório, registra o projeto, o dono e o repositório no banco que já existe, dá acesso às contas desse dono e publica a primeira política de capacidade e a de qualidade. Em seguida abre a conversa na mesma conta. O título da sessão no app é o nome passado em `--label`.
+O comando acrescenta o projeto em `projects[]` com um id novo e o caminho absoluto do repositório, registra o projeto, o dono e o repositório no banco que já existe, dá acesso às contas desse dono e publica a primeira política de capacidade e a de qualidade. Em seguida abre a conversa do projeto. O nome do projeto no painel é o passado em `--label`.
 
 Antes de reescrever `installation.json`, o comando confere se `nativeBootstrap` aceita o repositório em `projects[]`. O arquivo anterior fica ao lado, em `installation.json.before-add-<label>`. Rodar de novo não duplica.
 
@@ -39,8 +39,6 @@ No fim ele pede o reinício do gateway que já está no ar. O nome do serviço �
 ```bash
 systemctl --user restart agent-control-gateway-<nome>
 ```
-
-O app não abre projeto novo sozinho: "nova sessão" numa pasta pede um daemon do Happier na máquina, e o Agent Control não roda um. Por isso a máquina "agent-control" aparece offline. As conversas dos projetos ligados aqui funcionam mesmo assim.
 
 ### Pastas que o painel pode abrir
 
@@ -61,7 +59,7 @@ No painel, em "Novo projeto", escolha "Outro servidor (SSH)". Copie a chave púb
 ## Instalar
 
 1. PostgreSQL e Docker no servidor.
-2. Crie um arquivo de instalação fora do repositório, modo `0600`, com `activation` igual a `personal`, `accountHomesDirectory` dentro de `dataDirectory`, o `databaseUrl` e o bloco `happier`.
+2. Crie um arquivo de instalação fora do repositório, modo `0600`, com `activation` igual a `personal`, `accountHomesDirectory` dentro de `dataDirectory`, e o `databaseUrl`.
 3. `npm run personal:setup -- /caminho/instalacao.json`
 
 O comando inicializa o ledger, o operador, o cofre se estiver no arquivo, e o `native-setup`. Se as imagens nativas ainda não existirem, rode `npm run personal:images -- /caminho/instalacao.json` (seção abaixo) e reinicie o gateway com o comando que ele imprimir.
@@ -144,25 +142,20 @@ npm run personal:combo -- <instalação.json> <projeto> apply intermediário
 
 Na conversa, `equipe` mostra o combo atual. `use o combo <nome>` aplica e responde com o resumo. No painel gerenciado, a tela Equipe fica no menu depois de Tarefas: a lista, o botão "Usar este" e o editor, só para o dono da instalação.
 
-## Ligar a conversa (Happier)
+## Ligar a conversa
 
-A conversa passa por um servidor Happier local. São três comandos, uma vez só:
+A conversa fica no banco da instalação, na tabela `ac_personal_messages`. Não há servidor de conversa para subir. São dois comandos, uma vez só:
 
 ```bash
-npm run personal:happier -- <instalacao>          # servidor Happier; deixe rodando (tmux, systemd)
-npm run gateway -- personal-connect <instalacao>  # cria sua conta Happier, a conversa do projeto e o cofre
+npm run gateway -- personal-connect <instalacao>  # cria a conversa do projeto e o cofre
 npm run gateway -- serve <instalacao>             # o gateway; deixe rodando
 ```
-
-Se o `yarn` reclamar de `.prisma/client`, rode uma vez `yarn -s generate:providers` em `upstream/happier/apps/server`.
-
-O `personal-connect` grava em `dataDirectory` o segredo da conta (`happier-account.key`) e o token. Faça backup desse arquivo: ele é a sua conta e a chave da conversa. Rodar o comando de novo só renova o token.
 
 ### Conversar pelo terminal
 
 Quando o revisor termina sem um veredito legível (por exemplo, JSON quebrado), a etapa fecha como "veredito inutilizável", sem contar como aprovação, e o revisor é chamado de novo. A primeira nova tentativa usa o mesmo revisor; a segunda evita as contas que já falharam nessa etapa e cai na reserva, se houver. Depois de duas novas tentativas sem veredito, a tarefa falha.
 
-A conversa mostra cada papel pelo nome, com provedor, modelo e esforço: o gerente montando o plano, o programador começando e terminando (com o que ele disse, o commit e os arquivos alterados), o resultado do QA e o veredito do revisor com os apontamentos. O histórico fica na própria conversa, então aparece também no app.
+A conversa mostra cada papel pelo nome, com provedor, modelo e esforço: o gerente montando o plano, o programador começando e terminando (com o que ele disse, o commit e os arquivos alterados), o resultado do QA e o veredito do revisor com os apontamentos. O histórico fica na própria conversa, então aparece também no painel.
 
 ```bash
 npm run gateway -- say <instalacao> "o que este repositório faz?"
@@ -174,38 +167,19 @@ npm run gateway -- chat-log <instalacao> 600                       # acompanha a
 npm run gateway -- chat-log <instalacao>                           # histórico
 ```
 
-A mensagem é cifrada com a sua chave e entra na fila do Happier como no aplicativo. O gateway avisa cada etapa (programação, review, qa, integrate) e o resultado. Ao integrar no branch que está aberto no repositório, os arquivos no disco avançam junto; se você tiver uma edição local no mesmo arquivo, o disco não é tocado e o `git status` mostra a diferença.
-
-### Aplicativo Happier
-
-O aplicativo é o Happier oficial: iOS na App Store, Android no Google Play, desktop (Windows, macOS, Linux) em happier.dev/download e web em cloud.happier.dev. Ele precisa alcançar o **seu** servidor Happier, que só escuta em `127.0.0.1` no servidor.
-
-1. Mostre a chave da conta (só no seu terminal; ela é a conta e a chave da conversa):
-   ```bash
-   npm run gateway -- app-key <instalacao>
-   ```
-   A saída traz o endereço do servidor (por exemplo `http://127.0.0.1:38343`) e a chave no formato `XXXXX-XXXXX-…`.
-2. Leve o servidor até o aparelho:
-   - **Computador (Windows):** abra um túnel SSH e deixe-o aberto: `ssh -N -L 38343:127.0.0.1:38343 usuario@servidor`.
-   - **Celular, com subdomínio seu (recomendado aqui):** aponte um registro A do subdomínio para o IP do servidor e rode `npm run personal:public -- <instalacao> <subdominio>`. O comando confere o DNS, cria o site no Caddy do servidor (`/home/app/infra/caddy/sites/happier-<nome>.caddy`, certificado Let's Encrypt automático), recarrega o Caddy, fecha o cadastro anônimo do Happier (a sua conta continua entrando; contas novas são recusadas) e testa o endereço HTTPS. Com `--check` ele só confere o DNS.
-   - **Celular, sem subdomínio:** o celular não alcança `127.0.0.1` do servidor. Use uma rede privada como o Tailscale (instalado no servidor e no celular; no servidor, `tailscale serve --bg http://127.0.0.1:38343` publica em HTTPS só para a sua rede) ou um proxy HTTPS seu.
-3. No app, em **Servidor**, adicione o endereço (`http://127.0.0.1:38343` pelo túnel, ou o endereço HTTPS do Tailscale) e selecione-o.
-4. Escolha **Restaurar conta → Restaurar com chave secreta** e cole a chave.
-5. A conversa do projeto aparece na lista de sessões. Escreva nela como no terminal: pergunta, pedido, `aprovar`, `descartar`, `pare`, `equipe`, `use o combo <nome>`.
-
-Este caminho segue a documentação do Happier, mas ainda não foi testado num aparelho de verdade.
+A mensagem entra na conversa do projeto, como se fosse escrita no painel. O gateway avisa cada etapa (programação, review, qa, integrate) e o resultado. Ao integrar no branch que está aberto no repositório, os arquivos no disco avançam junto; se você tiver uma edição local no mesmo arquivo, o disco não é tocado e o `git status` mostra a diferença.
 
 ### Painel no celular (Cezar)
 
-O gateway serve a tela do Cezar presa ao projeto: as execuções, o fluxo de cada uma (programar, revisar, QA, integrar), o relato de cada papel e os commits. Os pedidos, `aprovar` e `pare` continuam pela conversa do Happier. A tela Equipe, no menu depois de Tarefas, lista os combos, mostra o atual e deixa o dono aplicar ou editar um combo. Para abrir no celular e instalar como app:
+O gateway serve a tela do Cezar presa ao projeto: as execuções, o fluxo de cada uma (programar, revisar, QA, integrar), o relato de cada papel e os commits. Os pedidos, `aprovar` e `pare` vão pela tela Conversa do painel ou pelo terminal. A tela Equipe, no menu depois de Tarefas, lista os combos, mostra o atual e deixa o dono aplicar ou editar um combo. Para abrir no celular e instalar como app:
 
 ```bash
 npm run personal:cockpit -- ~/.agent-control/meuprojeto/installation.json painel.seudominio.com
 ```
 
-Precisa de um registro DNS A próprio (diferente do Happier) e do Happier já publicado (`personal:public`). O script cria o site no Caddy, aponta a instalação para o endereço HTTPS e reinicia o gateway. No celular: abra o endereço, toque em "Entrar pelo Happier", depois em "Autorizar no aplicativo Happier", aprove no app e volte; no menu do navegador use "Adicionar à tela inicial". Cada projeto tem o próprio painel.
+Precisa de um registro DNS A próprio. O script cria o site no Caddy, aponta a instalação para o endereço HTTPS e reinicia o gateway. No celular: abra o endereço e entre com usuário e senha (seção abaixo) ou com um código; no menu do navegador use "Adicionar à tela inicial". Cada projeto tem o próprio painel.
 
-### Entrar sem o app Happier
+### Entrar com código
 
 No servidor, com o gateway parado ou em outro terminal:
 
@@ -213,7 +187,7 @@ No servidor, com o gateway parado ou em outro terminal:
 npm run gateway -- pair <instalação.json>
 ```
 
-O comando imprime um código de 8 caracteres, válido por 10 minutos e de uso único. No painel, "Entrar com código" abre a sessão do dono. "Entrar pelo Happier" continua disponível. Depois de cinco códigos errados em um minuto, a entrada espera um minuto.
+O comando imprime um código de 8 caracteres, válido por 10 minutos e de uso único. No painel, "Entrar com código" abre a sessão do dono. Depois de cinco códigos errados em um minuto, a entrada espera um minuto.
 
 ### Entrar com usuário e senha
 
@@ -223,7 +197,7 @@ No servidor, com o gateway parado ou em outro terminal:
 npm run gateway -- password <instalação.json> <usuário>
 ```
 
-O comando pede a senha duas vezes e não a mostra. Ele grava só o hash em `panel-login.json`, no diretório de dados da instalação, com modo `0600`. O usuário tem de 3 a 40 caracteres (`a-z`, `0-9`, `.`, `_` e `-`) e não diferencia maiúsculas. A senha tem de 12 a 200 caracteres. No painel, o formulário aparece primeiro, com o botão "Entrar". "Entrar com código" e "Entrar pelo Happier" ficam abaixo. A sessão deste login dura 30 dias. Depois de cinco erros em um minuto, aquele endereço espera um minuto.
+O comando pede a senha duas vezes e não a mostra. Ele grava só o hash em `panel-login.json`, no diretório de dados da instalação, com modo `0600`. O usuário tem de 3 a 40 caracteres (`a-z`, `0-9`, `.`, `_` e `-`) e não diferencia maiúsculas. A senha tem de 12 a 200 caracteres. No painel, o formulário aparece primeiro, com o botão "Entrar". "Entrar com código" fica abaixo. A sessão deste login dura 30 dias. Depois de cinco erros em um minuto, aquele endereço espera um minuto.
 
 Se a variável `AC_PANEL_PASSWORD` já existir, o comando usa esse valor e não pergunta. Para apagar a credencial:
 
@@ -235,66 +209,13 @@ npm run gateway -- password <instalação.json> --remove
 
 Na Conversa, o sino pede permissão e inscreve o aparelho em "Ativar avisos neste aparelho". "Enviar teste" manda "Teste do Agent Control". O aviso abre a conversa do projeto. No iPhone, os avisos só chegam com o painel instalado na tela inicial (iOS 16.4 ou mais novo); fora do app instalado a tela explica isso. O service worker não guarda páginas nem respostas da API.
 
-## Conversar sem o Happier
+## Onde fica a conversa
 
-O campo opcional `managerTransport.transport` escolhe onde a conversa fica. Sem o campo, ou com `"happier"`, vale a seção anterior, igual a hoje. `"local"` grava a conversa na tabela `ac_personal_messages`. Só uma instalação com `activation` `personal` aceita `"local"`. O bloco `happier`, o `tokenFile` e o `machineId` continuam no JSON; o transporte local não lê o token nem a máquina.
+A conversa de cada projeto fica na tabela `ac_personal_messages` do banco da instalação. O banco precisa das migrações `db/migrations/097_personal_messages.sql` e `098_browser_session_local.sql`. O `serve` não as aplica.
 
-Instalação nova:
+No painel, a senha e o código emitem o cookie sem consultar nenhum serviço externo. `GET /api/v1/ac/auth/config` responde `enabled: false`.
 
-```bash
-npm run personal:project -- <repositório> --db <postgresql://...> --local
-```
-
-Numa instalação que já existe:
-
-```bash
-npm run gateway -- personal-connect <instalação.json> --local
-```
-
-`npm run personal:services -- <instalação.json>` sobe só o gateway. Não desliga um unit Happier que já exista. Não apague `happier-account.key`, o SQLite do Happier nem o bloco `happier`.
-
-No painel, a senha e o código emitem o cookie sem consultar o Happier. "Entrar pelo Happier" não aparece. `GET /api/v1/ac/auth/config` responde `enabled: false`.
-
-### Passar uma conversa que já está no Happier
-
-Rode o importador **antes** de gravar `"local"`, com o Happier ainda no ar. Ele copia cada contexto de `managerTransport.contexts`, na ordem cronológica, sem abrir pedido novo. Rodar de novo não duplica. Se o transporte já estiver `local`, a repetição continua válida, mas o lugar dela é antes da troca.
-
-O banco precisa das migrações `db/migrations/097_personal_messages.sql` e `098_browser_session_local.sql`. O `serve` não as aplica. Não use `initialize` numa instalação já em uso para obtê-las: esse comando também registra o projeto pelo `project.owner`, que pode não ser o principal do Happier.
-
-No exemplo em que o diretório de dados se chama `ispagent`, os units são `agent-control-gateway-ispagent` e `agent-control-happier-ispagent`. Troque o nome se o diretório for outro.
-
-```bash
-npm run personal:backup -- <instalação.json> /caminho/vazio
-npm run gateway -- import-conversation <instalação.json>
-```
-
-Confira, ainda com o painel no Happier, a contagem e uma frase conhecida. A tabela `ac_personal_messages` tem de bater com essa contagem.
-
-No JSON, grave `"transport": "local"` dentro de `managerTransport`. Não apague `happier`, `tokenFile`, `machineId`, a chave nem o SQLite.
-
-```bash
-systemctl --user restart agent-control-gateway-ispagent
-```
-
-Faça um pedido curto no painel. A linha do titular entra na tabela, o gerente responde, e o Happier não precisa responder.
-
-Antes de parar o Happier, procure nas outras instalações um arquivo `happier-shared-from` apontando para esta. Se não houver:
-
-```bash
-systemctl --user disable --now agent-control-happier-ispagent
-```
-
-Não use `npm run personal:services -- <instalação.json> --remove`: esse comando também para o gateway.
-
-### Voltar ao Happier
-
-Enquanto a chave e o SQLite continuam no disco:
-
-1. Grave `"transport": "happier"`, ou retire a chave `transport` (o padrão é `happier`).
-2. `systemctl --user enable --now agent-control-happier-ispagent`
-3. `systemctl --user restart agent-control-gateway-ispagent`
-
-O histórico antigo continua no SQLite. O que foi escrito só na tabela nova não volta sozinho para o Happier. Se não houve conversa nova depois do corte, a volta é o histórico anterior. Não há reexportação. O Caddy de `personal:public` deixa de ver o Happier em `/v1`; isso não derruba o painel. Não recrie o site.
+O histórico que estava no Happier foi copiado para essa tabela em 13/11/2026, com as datas originais. O Happier foi retirado depois disso. Não há volta ao Happier.
 
 ## Adicionar contas
 
@@ -325,7 +246,7 @@ O projeto do arquivo de instalação já entra no ledger. Um projeto novo nasce 
 
 ## Verificar a segurança
 
-A verificação é só leitura: não altera o repositório e não abre caminho de escrita. O Cezar não despacha esse pedido. A conversa do Happier não inicia o exame. Quem pede é o dono da instalação, pelo comando ou pelo botão do painel.
+A verificação é só leitura: não altera o repositório e não abre caminho de escrita. O Cezar não despacha esse pedido. A conversa não inicia o exame. Quem pede é o dono da instalação, pelo comando ou pelo botão do painel.
 
 ```bash
 npm run personal:verify -- <instalação.json> <projectId>
@@ -357,7 +278,7 @@ O botão Corrigir manda achados `confirmado` ou `reaberto` ao gerente, como pedi
 
 ## Backup
 
-O backup leva a chave da conta Happier, os logins, a chave SSH, o cofre, o banco e o resto do diretório de dados (sem `native/`, `qa-cache/` nem `remote/`). Ele contém segredos. Guarde-o fora do servidor e fora do repositório.
+O backup leva os logins, a chave SSH, o cofre, o banco e o resto do diretório de dados (sem `native/`, `qa-cache/` nem `remote/`). Ele contém segredos. Guarde-o fora do servidor e fora do repositório.
 
 ```bash
 npm run personal:backup -- ~/.agent-control/meuprojeto/installation.json /caminho/vazio
@@ -492,7 +413,7 @@ O registro e a retenção de worktrees de trabalhadores, imagens candidatas de m
 
 ## Testes do Agent Control
 
-`npm test` roda o executor de CI (`scripts/test-ci.mjs`): um processo por arquivo, com bancos descartáveis. Ele precisa de `AC_TEST_DATABASE_URL` apontando para um Postgres descartável. Os arquivos que precisam do laboratório (Docker, SSH, Happier ou `sudo`) ficam fora e aparecem na lista `excluded` do resultado. Para rodar tudo, no laboratório: `npm run test:all`.
+`npm test` roda o executor de CI (`scripts/test-ci.mjs`): um processo por arquivo, com bancos descartáveis. Ele precisa de `AC_TEST_DATABASE_URL` apontando para um Postgres descartável. Os arquivos que precisam do laboratório (Docker, SSH ou `sudo`) ficam fora e aparecem na lista `excluded` do resultado. Para rodar tudo, no laboratório: `npm run test:all`.
 
 ## Logs e atualização
 

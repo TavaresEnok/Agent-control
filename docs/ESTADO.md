@@ -7,7 +7,7 @@ Página curta do estado vigente. Atualize este texto quando a árvore mudar; nã
 ## Versão
 
 - Árvore descrita: ramo `task/personal-activation`, commit base `62506567` (21/11/2026). Na instalação ativa, o commit em uso vem de `git log -1` do diretório do produto e do merge registrado em `docs/PROGRESSO-FINAL.md`.
-- Arquitetura: Cezar + Happier + PostgreSQL.
+- Arquitetura: Cezar + PostgreSQL. A conversa usa o transporte local, no banco da instalação. O Happier foi retirado em 21/11/2026: não há transporte Happier, serviço Happier nem rota pública do Happier.
 
 ## Modos de instalação
 
@@ -16,7 +16,7 @@ Página curta do estado vigente. Atualize este texto quando a árvore mudar; nã
 | Administrativo | padrão, sem opt-in | Gateway autenticado, ledger, painel. Nenhuma conta real, nenhuma inferência. |
 | Pessoal | `activation: personal` e `nativeBootstrap.state: active` | Um titular. O gateway compõe o runtime pessoal (`src/server-main.ts`): gerente semântico, execução nativa e as CLIs com as contas do próprio titular. Guia: [USO-PESSOAL.md](USO-PESSOAL.md). |
 | Bancada | `nativeBootstrap.state: bench` | Só testes, com injeção. Recusada fora deles. |
-| Laboratório | `deploy/compose.lab.yml` | Docker, SSH e Happier de fixture, contas sintéticas. |
+| Laboratório | `deploy/compose.lab.yml` | Docker e SSH de fixture, contas sintéticas. |
 
 ## Última prova registrada
 
@@ -30,9 +30,8 @@ Página curta do estado vigente. Atualize este texto quando a árvore mudar; nã
 | Recurso | Situação | Limitação |
 |---|---|---|
 | Gerente semântico e CLIs reais | Ativos no modo pessoal | Dependem das contas e logins do titular. Sem opt-in, não existem. O gateway administrativo não os liga. |
-| Fluxo pedido, proposta, decisão, QA, revisão, integração | Cada etapa tem testes próprios | **Não há teste ponta a ponta com contas sintéticas que atravesse todo o caminho no modo pessoal**, nem com queda depois de publicar a proposta ou depois de atualizar o Git. O mais próximo é `tests/r3-conversation-flow.test.ts`, de laboratório (Happier e Docker reais), fora do CI. |
+| Fluxo pedido, proposta, decisão, QA, revisão, integração | Cada etapa tem testes próprios | **Não há teste ponta a ponta com contas sintéticas que atravesse todo o caminho no modo pessoal**, nem com queda depois de publicar a proposta ou depois de atualizar o Git. |
 | Adaptadores Cezar | Importam o `dist` compilado | `tests/cezar-dist-contract.test.ts` confere que cada exportação usada por `src/` existe no artefato (pula com motivo se faltar o `dist`). Ainda **não há teste que inicie cada adaptador** com o artefato distribuído. |
-| Adaptador Happier | Carrega o workspace compilado em execução | **Sem teste de contrato com o artefato distribuído.** Os testes que o usam exigem o workspace compilado ou um servidor Happier real. |
 | Módulo 1 (segurança) | Relatórios publicados | **Os relatórios ainda não têm valor de atestado** até as correções da frente de exame (achados da auditoria de 20/11/2026). |
 | Módulos 2 a 10 | CLIs e relatórios existem | Valem como evidência por módulo, não como aceite de requisito ([STATUS.md](STATUS.md): 22 aceitos, 89 não aceitos). |
 | Manutenção agendada | O timer de domingo às 04:00 chama `personal:maintenance <instalação> --manutencao-agendada` (`src/personal-timers.ts`) | Três etapas separadas (`src/personal-maintenance.ts`): atualiza as bases de vulnerabilidade, faz a retenção (jobs, worktrees, imagens candidatas, temporários) e limpa o cache com mais de 7 dias do builder dedicado da instalação. A retenção segue `retention.automatic` (`preview` por padrão: nada é apagado). Sem builder dedicado, o cache do daemon não é tocado. `--estado-manutencao` mostra a última execução de cada etapa e avisa quando a base está velha. A opção antiga `--retencao-agendada` ainda existe e faz só a retenção. |

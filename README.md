@@ -1,23 +1,22 @@
 # Agent Control — implementação isolada 0.1.0
 
-Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém o gateway administrativo, a fatia sintética integrada e o modo pessoal de um único titular (`activation: personal`), que usa as contas e as CLIs reais desse titular. Não está homologado para piloto ou produção.
+Base selecionada: **Cezar + PostgreSQL**. O Happier foi retirado: não há transporte Happier, serviço Happier nem rota pública do Happier. A conversa fica no banco da instalação (transporte local) e o painel entra por usuário e senha ou por código de uso único. Este repositório contém o gateway administrativo, a fatia sintética integrada e o modo pessoal de um único titular (`activation: personal`), que usa as contas e as CLIs reais desse titular. Não está homologado para piloto ou produção.
 
 ## Código executável
 
 - `upstream/cezar/`: snapshot Cezar fixado, com patches históricos conferidos e composer canônico no build Agent Control.
-- `upstream/happier/`: snapshot e patch de workspace fixados; servidor, protocolo, criptografia e cliente existentes.
 - `src/contracts.ts`: contratos Zod, identidades distintas e digest canônico.
 - `src/ledger.ts` + `db/migrations/`: PostgreSQL, RBAC por projeto/contexto, épocas, leases, pausa, checkpoints, intenções, entregas e outbox.
 - `src/cezar.ts`: admissão do RunManager/RunStore existentes, snapshot congelado, exclusão mútua do runtime e executor de fixture Git.
-- `src/happier.ts` + `adapters/happier-entry.ts`: fronteira versionada com as implementações nativas de RPC, fila, transporte e E2EE.
+- `src/conversation-transport.ts` + `src/personal-panel-conversation.ts`: transporte local da conversa, gravada em `ac_personal_messages` e mostrada na tela Conversa do painel.
 - `src/api.ts`: gateway autenticado; rotas não integradas recusadas. Escrita nativa Cezar, terminal, MCP e WS não são expostos.
 - `src/capacity.ts` + `src/control.ts`: contas sintéticas, catálogo, políticas versionadas, seleção regular, concessões PG e comandos administrativos idempotentes.
-- `src/context-keys.ts`: autorização, versionamento e revogação de fingerprints de chave por contexto, preservando a criptografia Happier.
+- `src/context-keys.ts`: autorização, versionamento e revogação de fingerprints de chave por contexto.
 - `src/quality.ts` + `src/integration.ts`: evidência independente, dispensa QA e integração CAS, conectadas ao grafo sintético com recuperação de recibos. No modo pessoal, QA e revisão rodam de verdade, com as CLIs do titular (`src/native-qa.ts`, `src/engineering.ts`). Ainda não há teste que derrube cada passo do fluxo e confira o que sobrou.
 - `services/agent-control-git/` + `src/git.ts`: helpers AcSafeGit/AcArtifactIdentity preservados e wrapper controlado de identidade/CAS.
 - Settings → Agent Control: contas/perfis/políticas, propostas de planos e grafo nativo, cotas, métricas, aprovação do artefato e operação assinada por dispositivo.
-- `src/auth-relay.ts` + `src/sessions.ts`: login pelo pareamento Happier V3, cookie opaco e vínculo de conversa E2EE existente, sem entregar chave de conteúdo ao controlador.
-- `src/planning.ts`: propostas imutáveis com contratos/dependências, comparação e restauração como nova revisão. No modo pessoal, a proposta aprovada (pelo titular, ou sozinha quando o projeto tem `auto_approve_plans`) inicia a execução nativa uma única vez (`src/proposal-decision.ts`, `src/happier.ts`). No modo administrativo nada é executado.
+- `src/sessions.ts` + `src/personal-password.ts` + `src/personal-pair.ts`: login do painel por usuário e senha ou por código de uso único (`npm run gateway -- pair`), com cookie opaco.
+- `src/planning.ts`: propostas imutáveis com contratos/dependências, comparação e restauração como nova revisão. No modo pessoal, a proposta aprovada (pelo titular, ou sozinha quando o projeto tem `auto_approve_plans`) inicia a execução nativa uma única vez (`src/proposal-decision.ts`). No modo administrativo nada é executado.
 - `src/providers.ts`: coletores sintéticos versionados com TTL, vínculo assinado e alimentação da capacidade existente; nenhum coletor de assinatura real homologado.
 - `src/disk-admission.ts` + `src/storage.ts`: espera recuperável por disco e retenção opt-in de descartáveis registrados, preservando worktrees, conversas e efeitos incertos. No modo pessoal, `personal:maintenance` e o timer semanal também fazem a retenção automática da instalação (`src/personal-maintenance.ts`), em modo `preview` por padrão.
 - `src/observability.ts`: métricas administrativas agregadas/read-only em JSON e Prometheus, sem transcrições ou identificadores de contas.
@@ -44,12 +43,12 @@ Base selecionada: **Cezar + Happier + PostgreSQL**. Este repositório contém o 
 
 Para uso pessoal de um único titular, com o modo `activation: personal`, o guia de instalação, pareamento, contas e o primeiro pedido está em [docs/USO-PESSOAL.md](docs/USO-PESSOAL.md). Sem esse opt-in o gateway continua administrativo e nenhuma conta real é usada.
 
-Uma mensagem comum do Happier é admitida pelo template sintético fixado. Nesse caminho administrativo (sem o opt-in pessoal) não há gerente de IA: os processos de teste são determinísticos e não utilizam assinaturas ou APIs de modelos. No modo pessoal o gerente semântico existe e usa as contas do titular; ver [docs/ESTADO.md](docs/ESTADO.md).
+Uma mensagem comum da conversa é admitida pelo template sintético fixado. Nesse caminho administrativo (sem o opt-in pessoal) não há gerente de IA: os processos de teste são determinísticos e não utilizam assinaturas ou APIs de modelos. No modo pessoal o gerente semântico existe e usa as contas do titular; ver [docs/ESTADO.md](docs/ESTADO.md).
 
 
 ### Transporte administrativo do gerente
 
-O gateway aceita configuração privada opcional `managerTransport` para conectar sessões existentes usando o vault, sem ativar inferência/execução. Planejamento recebe a autoridade do registry, e Settings mostra o estado real da conexão. Esse transporte sozinho não liga o gerente semântico nem as CLIs reais. Eles são ativados apenas no modo pessoal (`activation: personal` com bootstrap nativo ativo), pelo gateway; sem esse opt-in nada disso roda. O estado atual, o que foi provado e as limitações por recurso estão em [docs/ESTADO.md](docs/ESTADO.md). Consulte `docs/implementation/CONFIGURED-MANAGER-TRANSPORT-20261102.md`.
+O gateway aceita configuração privada opcional `managerTransport`, que liga cada contexto à sua conversa local e ao vault, sem ativar inferência/execução. Planejamento recebe a autoridade do registry, e Settings mostra o estado real da conexão. Esse transporte sozinho não liga o gerente semântico nem as CLIs reais. Eles são ativados apenas no modo pessoal (`activation: personal` com bootstrap nativo ativo), pelo gateway; sem esse opt-in nada disso roda. O estado atual, o que foi provado e as limitações por recurso estão em [docs/ESTADO.md](docs/ESTADO.md). Consulte `docs/implementation/CONFIGURED-MANAGER-TRANSPORT-20261102.md`.
 
 ## Testes
 
@@ -57,4 +56,4 @@ O gateway aceita configuração privada opcional `managerTransport` para conecta
 
 ## Bancada focal isolada
 
-`npm run test:isolated` exercita Happier light real, importação e exportação de contexto usando PostgreSQL/SQLite e portas loopback próprios. Não substitui a suíte inteira. Pré-requisitos, dependências reversíveis, limites e limpeza estão em [R2-HARNESS](docs/implementation/R2-HARNESS.md); resultados e impedimentos atuais em [continuidade R2](docs/implementation/CONTINUACAO-R2-20261105.md). Nenhuma conta de provedor ou inferência real é ativada.
+`npm run test:isolated` exercitava o Happier light real, a importação e a exportação de contexto, com PostgreSQL/SQLite e portas loopback próprios. Com a retirada do Happier, essa bancada deixa de valer. Não substituía a suíte inteira. Pré-requisitos, dependências reversíveis, limites e limpeza estão em [R2-HARNESS](docs/implementation/R2-HARNESS.md); resultados e impedimentos atuais em [continuidade R2](docs/implementation/CONTINUACAO-R2-20261105.md). Nenhuma conta de provedor ou inferência real é ativada.
