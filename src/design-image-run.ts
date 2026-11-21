@@ -6,6 +6,8 @@ import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
 import type {DesignToolReports} from './design-collect.ts';
 import {DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
+import {parseFocusWalks, type FocusWalk} from './design-keyboard.ts';
+import {parseRenderCells, type DesignRenderCell} from './design-render.ts';
 import {stylelintConfig} from './design-stylelint.ts';
 import {designRawFinding, type DesignRawFinding} from './design-types.ts';
 
@@ -27,9 +29,22 @@ export type DesignComputedSample = {
   transitionDuration?: string;
   width?: string;
   height?: string;
+  /** Link no meio de uma frase. A regra de alvo de toque não vale para ele. */
+  inText?: boolean;
+};
+
+/** Amostras de uma célula, com a rota. O teto de 2000 amostras é dividido entre os blocos. */
+export type DesignComputedBlock = {
+  route: string;
+  viewport: number;
+  theme: 'claro' | 'escuro';
+  state: string;
+  samples: DesignComputedSample[];
 };
 
 const REQUIRED_TOOLS = ['axe-core', 'pa11y', 'lighthouse', 'stylelint', 'css-analyzer'] as const;
+const SAMPLE_MAX = 2000;
+const BLOCK_MAX = 400;
 const VIEWPORTS = [375, 768, 1440] as const;
 const SHA = /^sha256:[a-f0-9]{64}$/;
 const CONTAINER_UID = Number(DESIGN_USER.split(':')[0]);
@@ -63,6 +78,11 @@ export type DesignImageExecution = {
   notes: string[];
   document: unknown;
   declaredFindings: DesignRawFinding[];
+  /** Régua da página renderizada. Entra pelo collect, com a rota trocada pelo arquivo. */
+  render: DesignRenderCell[];
+  /** Caminho real do Tab, uma rota por item. */
+  keyboard: FocusWalk[];
+  computedBlocks: DesignComputedBlock[];
 };
 
 function text(value: unknown, fallback: string, max = 240): string {
@@ -142,10 +162,11 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
   const computed: DesignComputedSample[] = [];
   for (const block of listOf(root.computed)) {
     for (const sample of listOf(block.samples)) {
-      if (computed.length >= 2000) break;
+      if (computed.length >= SAMPLE_MAX) break;
       computed.push(sample as DesignComputedSample);
     }
   }
+  const computedBlocks = computedBlocksOf(root.computed);
   const notes = Array.isArray(root.notes) ? root.notes.filter((item): item is string => typeof item === 'string').map(item => item.slice(0, 300)) : [];
   const declared = routeFindings(root, notes);
   const shotMeta = listOf(root.screenshots).flatMap(item => {
@@ -161,7 +182,45 @@ export function interpretDesignImageDocument(document: unknown): Omit<DesignImag
       state: text(item.state, 'padrao', 40),
     }];
   });
-  return {tools, coverage, computed, notes, document, shotMeta, declaredFindings: declared};
+  return {
+    tools,
+    coverage,
+    computed,
+    notes,
+    document,
+    shotMeta,
+    declaredFindings: declared,
+    render: parseRenderCells(reports.render),
+    keyboard: parseFocusWalks(reports.keyboard),
+    computedBlocks,
+  };
+}
+
+/**
+ * Blocos de amostra com rota, largura, tema e estado. Cada bloco leva até ceil(2000 / blocos),
+ * e o total não passa de 2000. Bloco sem rota ou com largura estranha sai.
+ */
+export function computedBlocksOf(value: unknown): DesignComputedBlock[] {
+  const valid = listOf(value).slice(0, BLOCK_MAX).flatMap(block => {
+    const route = typeof block.route === 'string' && /^\/\S{0,199}$/.test(block.route) ? block.route : '';
+    const viewport = block.viewport === 320 || block.viewport === 375 || block.viewport === 768 || block.viewport === 1440 ? block.viewport : 0;
+    if (route === '' || viewport === 0) return [];
+    return [{
+      route,
+      viewport,
+      theme: block.theme === 'escuro' ? 'escuro' as const : 'claro' as const,
+      state: text(block.state, 'padrao', 40),
+      samples: listOf(block.samples) as DesignComputedSample[],
+    }];
+  });
+  if (valid.length === 0) return [];
+  const share = Math.ceil(SAMPLE_MAX / valid.length);
+  let left = SAMPLE_MAX;
+  return valid.map(block => {
+    const take = Math.max(0, Math.min(share, left));
+    left -= Math.min(take, block.samples.length);
+    return {...block, samples: block.samples.slice(0, take)};
+  });
 }
 
 /** HTTP ≥ 400 vira achado de navegação. A folha do css-analyzer segue em tools.cssAnalyzer. */
@@ -337,6 +396,9 @@ export async function executeDesignImage(input: {
       notes,
       document: interpreted.document,
       declaredFindings: interpreted.declaredFindings,
+      render: interpreted.render,
+      keyboard: interpreted.keyboard,
+      computedBlocks: interpreted.computedBlocks,
       shots,
     };
   } finally {
@@ -384,5 +446,8 @@ function emptyExecution(code: string): Omit<DesignImageExecution, 'ok' | 'code' 
     notes: [],
     document: null,
     declaredFindings: [],
+    render: [],
+    keyboard: [],
+    computedBlocks: [],
   };
 }
