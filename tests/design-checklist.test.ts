@@ -43,3 +43,38 @@ test('lista de design cobre fontes, números e leis', () => {
   assert.ok(items.some(entry => entry.source === 'SMALL-SCREEN' && entry.prompt.includes('768') && entry.prompt.includes('1440')));
   assert.deepEqual(loadDesignChecklist().map(entry => entry.id), items.map(entry => entry.id));
 });
+
+test('lista de design cobre formulário, URL, tema, Intl e imagem', () => {
+  const items = loadDesignChecklist();
+  assert.ok(items.length <= 120);
+  assert.equal(items.filter(entry => entry.source === 'NIELSEN').length, 10);
+  const sources = new Set(items.map(entry => entry.source));
+  for (const source of SOURCES) assert.ok(sources.has(source), source);
+  const byId = (id: string) => {
+    const found = items.find(entry => entry.id === id);
+    assert.ok(found, id);
+    assert.ok([...SOURCES, 'VISUAL'].includes(found.source), found.source);
+    return found;
+  };
+  const url = byId('DESIGN-ESTADOS-URL');
+  assert.match(url.prompt, /\?status=/);
+  assert.match(url.prompt, /não se aplica/);
+  const envio = byId('DESIGN-ESTADOS-ENVIO');
+  assert.match(envio.prompt, /Enter/);
+  assert.match(envio.prompt, /type="submit"/);
+  assert.match(envio.prompt, /onPaste/);
+  assert.match(envio.prompt, /foco vai ao primeiro campo com erro/);
+  const proposito = byId('DESIGN-WCAG-135-PROPOSITO');
+  assert.ok(proposito.prompt.includes('autocomplete'));
+  assert.ok(proposito.prompt.includes('1.3.5'));
+  const tema = byId('DESIGN-TOKENS-TEMA');
+  assert.ok(tema.prompt.includes('color-scheme'));
+  assert.ok(tema.prompt.includes('não se aplica'));
+  assert.equal(tema.appliesTo, 'style');
+  const formato = byId('DESIGN-TEXTO-FORMATO');
+  assert.ok(formato.prompt.includes('Intl.NumberFormat'));
+  assert.ok(formato.prompt.includes('pt-BR'));
+  assert.equal(formato.appliesTo, 'any');
+  assert.ok(byId('DESIGN-TELA-TECLADO').prompt.includes('inputmode'));
+  assert.ok(byId('DESIGN-TELA-IMAGEM-ESPACO').prompt.includes('aspect-ratio'));
+});
