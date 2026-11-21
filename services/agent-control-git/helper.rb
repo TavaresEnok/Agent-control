@@ -40,7 +40,7 @@ begin
     when 'verify-composition' then %w[action base candidate repo sourceRepo sources]
     when 'import' then %w[action base candidate repo sourceRepo]
     when 'compose' then %w[action base destination repo sources]
-    when 'identity', 'diff' then %w[action base candidate repo]
+    when 'identity', 'diff', 'qa-evidence' then %w[action base candidate repo]
     when 'protected-paths' then %w[action base candidate paths repo]
     when 'scan-new-secrets' then %w[action base candidate repo secrets]
     when 'observe' then %w[action base candidate repo targetRef]
@@ -49,7 +49,7 @@ begin
     else raise 'INVALID_ACTION'
   end
   raise 'INVALID_REQUEST' unless input.keys.sort == expected.sort
-  raise 'INVALID_ACTION' unless %w[head identity diff protected-paths scan-new-secrets observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
+  raise 'INVALID_ACTION' unless %w[head identity diff qa-evidence protected-paths scan-new-secrets observe snapshot cas compose import verify-composition identity-at].include?(input['action'])
   if input['action'] == 'head'
     ref = input.fetch('targetRef')
     raise 'INVALID_REQUEST' unless ref.is_a?(String) && ref.match?(/\Arefs\/heads\/[A-Za-z0-9][A-Za-z0-9\/_-]*\z/)
@@ -212,6 +212,28 @@ begin
     _, _, status = AcSafeGit.capture('-C', repo, 'diff', '--quiet', '--no-ext-diff', '--no-textconv', '--no-renames', base, candidate, '--', *specs)
     raise 'GIT_OPERATION_FAILED' unless [0, 1].include?(status.exitstatus)
     puts JSON.generate(identity.merge({protectedChanged: status.exitstatus == 1}))
+  elsif input['action'] == 'qa-evidence'
+    # Facts the QA verdict must not ignore: test files this change deletes, and focus markers that make a runner skip the rest.
+    test_path = %r{(?:\A|/)(?:tests?|__tests__|specs?)/|\.(?:test|spec)\.[cm]?[jt]sx?\z|_test\.(?:py|go)\z|(?:\A|/)test_[^/]*\.py\z}
+    names, _, name_status = AcSafeGit.capture('-C', repo, 'diff', '--name-status', '--no-renames', '-z', base, candidate, '--')
+    raise 'GIT_OPERATION_FAILED' unless name_status.success?
+    deleted = []
+    names.split("\0").each_slice(2) do |code, path|
+      deleted << path.dup.force_encoding('UTF-8').scrub if code == 'D' && path&.match?(test_path) && deleted.length < 50
+    end
+    focus = '(^|[^A-Za-z0-9_$.])((describe|it|test|context|suite)\.only|fit|fdescribe)[[:space:]]*\('
+    out, _, grep_status = AcSafeGit.capture('-C', repo, 'grep', '-I', '-n', '-z', '-E', '-e', focus, candidate)
+    raise 'GIT_OPERATION_FAILED' unless [0, 1].include?(grep_status.exitstatus)
+    focused = []
+    out.each_line("\n") do |line|
+      # `git grep -z <tree>` prints `<tree>:<path>\0<line>\0<text>`.
+      named, number = line.split("\0", 3)
+      path = named&.delete_prefix("#{candidate}:")
+      next unless path && number && path != named && path.match?(test_path)
+      focused << { path: path.dup.force_encoding('UTF-8').scrub, line: number.to_i }
+      break if focused.length >= 50
+    end
+    puts JSON.generate(identity.merge({deletedTests: deleted, focused: focused}))
   elsif input['action'] == 'diff'
     diff = git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', base, candidate, '--')
     # The changed-file list travels whole whenever it fits, so a judge of a cut diff knows what it did not see.

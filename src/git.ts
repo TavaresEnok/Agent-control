@@ -111,6 +111,14 @@ export class GitArtifacts{
   if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
   return value;
  }
+ /** Test files the change deletes and focus markers (.only, fit, fdescribe) in test files of the candidate tree. */
+ async qaEvidence(candidate:string,base:string){
+  GitId.parse(candidate);GitId.parse(base);
+  const value=Identity.extend({deletedTests:z.array(z.string().min(1).max(4096)).max(50),focused:z.array(z.object({path:z.string().min(1).max(4096),line:z.number().int().positive()}).strict()).max(50)}).strict()
+   .parse(await this.invoke({action:'qa-evidence',candidate,base}));
+  if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
+  return value;
+ }
  /** Inspect bounded, uncompressed new Git objects; no secret values leave the helper. */
  async assertNoNewArtifactSecrets(candidate:string,base:string,secrets:readonly string[]){
   GitId.parse(candidate);GitId.parse(base);

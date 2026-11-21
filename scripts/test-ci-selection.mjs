@@ -67,6 +67,36 @@ export function selectionReport(plan,results={}){
   for(const item of plan.laboratory)lines.push(`  laboratório ${item.name}: ${item.reason}`);
   lines.push(`Excluídos com motivo: ${plan.excluded.length}`);
   for(const item of plan.excluded)lines.push(`  excluído ${item.name}: ${item.reason}`);
+  if(results.skippedTests)lines.push(`Testes pulados dentro dos arquivos executados: ${results.skippedTests}${results.skippedFiles?.length?' ('+results.skippedFiles.join(', ')+')':''}`);
+  if(results.empty?.length)lines.push(`Sem nenhum teste aprovado (VAZIO): ${results.empty.join(', ')}`);
   if(results.failed?.length)lines.push(`Falharam: ${results.failed.join(', ')}`);
   return lines.join('\n');
+}
+
+/** Counts from the node:test TAP summary (`# tests 5`, `# pass 5`, ...). Null when the file printed no summary. */
+export function tapSummary(output){
+  const read=key=>{
+    const found=[...String(output).matchAll(new RegExp(`^# ${key} (\\d+)\\s*$`,'gm'))].at(-1);
+    return found?Number(found[1]):null;
+  };
+  const summary={tests:read('tests'),pass:read('pass'),fail:read('fail'),skipped:read('skipped'),todo:read('todo'),cancelled:read('cancelled')};
+  return summary.tests===null||summary.pass===null?null:summary;
+}
+
+/** ok only when the process exited 0 and at least one test really passed. A file whose tests were all
+ * skipped, or that printed no summary, is VAZIO: "exit 0" alone does not prove anything ran. */
+export function fileVerdict(result){
+  if(result.timedOut)return 'TIMEOUT';
+  if(result.code!==0)return 'FAIL';
+  const summary=tapSummary(result.output);
+  if(!summary||summary.pass===0)return 'VAZIO';
+  if(summary.fail||summary.cancelled)return 'FAIL';
+  return 'ok';
+}
+
+/** AC_CI_ONLY names that are not executable files here. A typo must not turn into a green run of nothing. */
+export function unknownOnlyNames(only,executed){
+  if(!only)return [];
+  const known=new Set(executed);
+  return [...only].filter(name=>!known.has(name)).sort();
 }

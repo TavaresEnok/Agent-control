@@ -4,7 +4,7 @@ import {copyFileSync,mkdirSync,mkdtempSync,rmSync,symlinkSync,writeFileSync} fro
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import test from 'node:test';
-import {listTestFiles,planSelection,selectTests,selectionReport} from '../scripts/test-ci-selection.mjs';
+import {fileVerdict,listTestFiles,planSelection,selectTests,selectionReport,tapSummary,unknownOnlyNames} from '../scripts/test-ci-selection.mjs';
 
 const root=resolve(import.meta.dirname,'..');
 const cleanEnv=()=>{const env={...process.env};delete env.AC_CI_ONLY;delete env.AC_CI_INCLUDE_HOST;return env;};
@@ -89,4 +89,31 @@ test('the runner refuses to start when a new test file has no classification',()
     assert.equal(fixed.status,0);
     assert.deepEqual(JSON.parse(fixed.stdout).included,['conhecido.test.ts','novo.test.ts']);
   }finally{rmSync(sandbox,{recursive:true,force:true});}
+});
+
+const tap=(pass:number,skipped=0,fail=0)=>`TAP version 13\nok 1 - x\n1..${pass+skipped+fail}\n# tests ${pass+skipped+fail}\n# suites 0\n# pass ${pass}\n# fail ${fail}\n# cancelled 0\n# skipped ${skipped}\n# todo 0\n# duration_ms 5\n`;
+
+test('a file counts as ok only when at least one test really passed',()=>{
+ assert.deepEqual(tapSummary(tap(3,1)),{tests:4,pass:3,fail:0,skipped:1,todo:0,cancelled:0});
+ assert.equal(fileVerdict({code:0,timedOut:false,output:tap(3,1)}),'ok');
+ assert.equal(fileVerdict({code:0,timedOut:false,output:tap(0,2)}),'VAZIO');
+ assert.equal(fileVerdict({code:0,timedOut:false,output:tap(0,0)}),'VAZIO');
+ assert.equal(fileVerdict({code:0,timedOut:false,output:'no summary at all'}),'VAZIO');
+ assert.equal(fileVerdict({code:1,timedOut:false,output:tap(2,0,1)}),'FAIL');
+ assert.equal(fileVerdict({code:0,timedOut:false,output:tap(2,0,1)}),'FAIL');
+ assert.equal(fileVerdict({code:null,timedOut:true,output:''}),'TIMEOUT');
+ // A test that prints a fake summary line before the real one does not win: the last summary counts.
+ assert.equal(fileVerdict({code:0,timedOut:false,output:'# pass 9\n'+tap(0,1)}),'VAZIO');
+});
+
+test('AC_CI_ONLY names outside the executable list are reported, so a typo cannot pass as a green run',()=>{
+ assert.deepEqual(unknownOnlyNames(null,['a.test.ts']),[]);
+ assert.deepEqual(unknownOnlyNames(new Set(['a.test.ts','typo.test.ts','c.test.ts']),['a.test.ts','b.test.ts']),['c.test.ts','typo.test.ts']);
+});
+
+test('the report sums skipped tests and names the empty files',()=>{
+ const plan=planSelection(['a.test.ts','b.test.ts','c.test.ts','d.test.ts'],base,{});
+ const report=selectionReport(plan,{ran:2,failed:['b.test.ts'],empty:['b.test.ts'],skippedTests:3,skippedFiles:['a.test.ts']});
+ assert.match(report,/Testes pulados dentro dos arquivos executados: 3 \(a\.test\.ts\)/);
+ assert.match(report,/Sem nenhum teste aprovado \(VAZIO\): b\.test\.ts/);
 });

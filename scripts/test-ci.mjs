@@ -6,7 +6,7 @@ import {spawn} from 'node:child_process';
 import pg from 'pg';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
-import {selectTests,selectionReport} from './test-ci-selection.mjs';
+import {fileVerdict,selectTests,selectionReport,tapSummary,unknownOnlyNames} from './test-ci-selection.mjs';
 
 const root=resolve(import.meta.dirname,'..');
 const timeoutMs=Number(process.env.AC_CI_TEST_TIMEOUT_MS??180_000);
@@ -61,6 +61,11 @@ if(plan.errors.length){
 // AC_CI_ONLY=a.test.ts,b.test.ts runs just those files (still checked against the classification), to validate a candidate before promoting it.
 const only=process.env.AC_CI_ONLY?new Set(process.env.AC_CI_ONLY.split(',').map(name=>name.trim()).filter(Boolean)):null;
 const included=only?plan.executed.filter(name=>only.has(name)):plan.executed;
+const unknown=unknownOnlyNames(only,plan.executed);
+if(unknown.length){
+  console.error('AC_CI_ONLY cita arquivos que não estão na lista "executar" desta máquina: '+unknown.join(', '));
+  process.exit(2);
+}
 const excluded=[...plan.skipped,...plan.laboratory,...plan.excluded].map(item=>item.name).sort();
 if(listOnly){
   console.log(JSON.stringify({included,excluded,skipped:plan.skipped,laboratory:plan.laboratory,excludedWithReason:plan.excluded},null,1));
@@ -74,14 +79,18 @@ if(!process.env.AC_TEST_DATABASE_URL){
 // Project admission refuses group-writable paths, so a permissive host umask fails valid fixtures.
 process.umask(0o022);
 if(logDir)await mkdir(logDir,{recursive:true});
-const failures=[];
+const failures=[],empty=[],skippedFiles=[];
+let skippedTests=0,testsPassed=0;
 for(const name of included){
   const started=Date.now(),result=await runFile(name);
-  const status=result.timedOut?'TIMEOUT':result.code===0?'ok':'FAIL';
-  console.log(`${status} ${name} ${Math.round((Date.now()-started)/1000)}s`);
+  const status=fileVerdict(result),summary=tapSummary(result.output);
+  const counts=summary?` (${summary.pass}/${summary.tests} aprovados${summary.skipped||summary.todo?`, ${summary.skipped+summary.todo} pulados`:''})`:'';
+  console.log(`${status} ${name} ${Math.round((Date.now()-started)/1000)}s${counts}`);
   if(logDir)await writeFile(join(logDir,name+'.log'),result.output);
+  if(summary){testsPassed+=summary.pass;if(summary.skipped+summary.todo){skippedTests+=summary.skipped+summary.todo;skippedFiles.push(name);}}
+  if(status==='VAZIO')empty.push(name);
   if(status!=='ok')failures.push(name);
 }
-console.log(selectionReport(plan,{failed:failures,ran:included.length}));
-console.log(JSON.stringify({passed:included.length-failures.length,failed:failures,excluded,skipped:plan.skipped.map(item=>item.name),laboratory:plan.laboratory.map(item=>item.name)}));
+console.log(selectionReport(plan,{failed:failures,ran:included.length,empty,skippedTests,skippedFiles}));
+console.log(JSON.stringify({passed:included.length-failures.length,failed:failures,empty,testsPassed,skippedTests,excluded,skipped:plan.skipped.map(item=>item.name),laboratory:plan.laboratory.map(item=>item.name)}));
 process.exitCode=failures.length?1:0;

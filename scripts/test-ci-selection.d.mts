@@ -5,4 +5,8 @@ export function planSelection(names:string[],classification:Classification,conte
 export function loadClassification(file:string):Promise<Classification>;
 export function listTestFiles(root:string):Promise<string[]>;
 export function selectTests(root:string,context?:{includeHost?:boolean;happierBuilt?:boolean;env?:Record<string,string|undefined>}):Promise<Plan>;
-export function selectionReport(plan:Plan,results?:{failed?:string[];ran?:number}):string;
+export function selectionReport(plan:Plan,results?:{failed?:string[];ran?:number;empty?:string[];skippedTests?:number;skippedFiles?:string[]}):string;
+export interface TapSummary{tests:number|null;pass:number|null;fail:number|null;skipped:number|null;todo:number|null;cancelled:number|null}
+export function tapSummary(output:string):TapSummary|null;
+export function fileVerdict(result:{code:number|null;timedOut:boolean;output:string}):'ok'|'FAIL'|'TIMEOUT'|'VAZIO';
+export function unknownOnlyNames(only:Set<string>|null,executed:string[]):string[];

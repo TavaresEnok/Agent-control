@@ -234,6 +234,7 @@
   "provider-dormant.test.ts",
   "provider-eligibility.test.ts",
   "providers.test.ts",
+  "qa-evidence.test.ts",
   "qa-model-gate.test.ts",
   "qa-waiver-binding.test.ts",
   "qa-waiver-stage.test.ts",

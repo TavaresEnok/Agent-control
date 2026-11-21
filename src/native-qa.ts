@@ -1,3 +1,4 @@
+import {demuxDockerLogs,qaEvidenceLogLine,qaGitIssues,qaLogIssues,type QaEvidenceIssue} from './qa-evidence.ts';
 import {assertDiskSpaceForLaunch} from './personal-disk.ts';
 import {envMatches} from './native-execution-docker-observation.ts';
 import {setQaSnapshotPermissions} from './native-qa-snapshot.ts';
@@ -74,6 +75,13 @@ export class NativeQa{
   for(const name of ['home','npm','pnpm','corepack','xdg']){const child=join(cache,name);await mkdir(child,{recursive:true,mode:0o700});await chmod(child,0o700);}
   const info=await lstat(cache);
   if(!info.isDirectory()||info.isSymbolicLink()||info.uid!==process.getuid?.()||(info.mode&0o777)!==0o700||await realpath(cache)!==cache)throw new Refusal('NATIVE_QA_CACHE_UNSAFE');
+ }
+ /** Off only when the project policy says qaEvidenceGate:false. Git facts come from the trusted helper, never from the container. */
+ private async evidenceIssues(job:Record<string,any>,logs:Buffer):Promise<QaEvidenceIssue[]>{
+  const row=(await this.ledger.pool.query('SELECT a.commit_id,a.base_id,p.snapshot FROM ac_artifacts a JOIN ac_quality_policies p ON p.project_id=a.project_id AND p.revision=a.policy_revision WHERE a.id=$1',[job.artifact_id])).rows[0];
+  if(!row||row.snapshot?.qaEvidenceGate===false)return [];
+  const facts=await new GitArtifacts(this.repository).qaEvidence(String(row.commit_id),String(row.base_id));
+  return [...qaLogIssues(demuxDockerLogs(logs)),...qaGitIssues(facts)];
  }
  private frameQaText(text:string){const payload=Buffer.from(text.endsWith('\n')||text.length===0?text:text+'\n');const header=Buffer.alloc(8);header[0]=1;header.writeUInt32BE(payload.length,4);return Buffer.concat([header,payload]);}
  private async writeQaLog(jobId:string,logs:Buffer){
@@ -360,7 +368,11 @@ export class NativeQa{
   if(physical.State.Running){const started=Date.parse(String((physical.State as {StartedAt?:string}).StartedAt??''));if(job.deadline_elapsed||(this.contract.prepareArgv&&Number.isFinite(started)&&Date.now()-started>this.contract.timeoutMs))await this.stop(principal,authority,id,'timeout');return {state:'running' as const};}
   if(physical.State.Status!=='exited'||!Number.isFinite(Date.parse(physical.State.FinishedAt))||physical.State.FinishedAt.startsWith('0001-'))return {state:'uncertain' as const};
   const collected=await collectQaLogs(()=>this.docker.logs(physical.Id,this.contract.prepareArgv?40:undefined));
-  const logs=this.contract.services&&collected.logsAvailable?redactQaDatabaseSecrets(collected.logs):collected.logs,logsAvailable=collected.logsAvailable;
+  let logs=this.contract.services&&collected.logsAvailable?redactQaDatabaseSecrets(collected.logs):collected.logs;const logsAvailable=collected.logsAvailable;
+  let status:'canceled'|'missing_result'|'passed'|'failed'=job.stop_reason==='canceled'?'canceled':!logsAvailable||job.stop_reason==='timeout'||Date.parse(physical.State.FinishedAt)>new Date(job.deadline_at).getTime()||physical.State.OOMKilled===true||[126,127,137,143].includes(physical.State.ExitCode)?'missing_result':physical.State.ExitCode===0?'passed':'failed';
+  // Exit 0 is necessary, not sufficient: zero tests, all skipped, failure text, focused tests or deleted test files downgrade the pass.
+  let evidence:QaEvidenceIssue[]|undefined;
+  if(status==='passed'){const issues=await this.evidenceIssues(job,logs);if(issues.length){evidence=issues;status='failed';logs=Buffer.concat([logs,this.frameQaText(qaEvidenceLogLine(issues))]);}}
   const logSha256=createHash('sha256').update(logs).digest('hex');
   const pending=join(this.paths(id).area,'qa-logs-'+randomUUID()+'.pending');
   const file=await open(pending,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
@@ -368,8 +380,8 @@ export class NativeQa{
   await rename(pending,join(this.paths(id).area,'qa-logs.bin'));
   const directory=await open(this.paths(id).area,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{await directory.sync();}finally{await directory.close();}
 
-  const status=job.stop_reason==='canceled'?'canceled':!logsAvailable||job.stop_reason==='timeout'||Date.parse(physical.State.FinishedAt)>new Date(job.deadline_at).getTime()||physical.State.OOMKilled===true||[126,127,137,143].includes(physical.State.ExitCode)?'missing_result':physical.State.ExitCode===0?'passed':'failed';
-  const receipt={schemaVersion:1,jobId:id,artifactId:job.artifact_id,grantId:job.grant_id,sessionId:job.session_id,contractDigest:this.verifierDigest,containerId:physical.Id,exitCode:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,status,logSha256,logsAvailable,synthetic:false,modelInference:false};
+
+  const receipt={schemaVersion:1,jobId:id,artifactId:job.artifact_id,grantId:job.grant_id,sessionId:job.session_id,contractDigest:this.verifierDigest,containerId:physical.Id,exitCode:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,status,logSha256,logsAvailable,synthetic:false,modelInference:false,...(evidence?{evidence}:{})};
   await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,job.intent_id,true);const saved=(await c.query('SELECT * FROM ac_native_qa_jobs WHERE id=$1 FOR UPDATE',[id])).rows[0];
    if(['completed','failed'].includes(saved.state)){if(digest(saved.receipt)!==digest(receipt))throw new Refusal('NATIVE_QA_RECEIPT_CONFLICT');return;}
