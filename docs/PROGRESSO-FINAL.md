@@ -1971,4 +1971,10 @@ FIM
     - laboratórios: endurecimento com a imagem nova, 9/9; filtro com o Docker real, 9/9.
   - **Suíte completa:** 325 arquivos ok e nenhuma falha. As 9 falhas antigas foram corrigidas.
   - **Risco aceito pelo titular:** o gateway continua no grupo `docker` ("só eu vou usar").
+  - **17:35 UTC: saída em bloqueio (`egress: enforce`).** A lista ficou com os 9 destinos dos binários mais `ab.chatgpt.com`.
+    - Provas em bloqueio, pelo código do gerente, com o filtro e a rede interna: Codex `gpt-6.1-sol` respondeu "ok" (código 0) e Claude `claude-sonnet-5-5` respondeu "ok" (código 0, sem erro).
+    - A telemetria `http-intake.logs.us5.datadoghq.com` foi recusada (`egress-denied`).
+    - O Grok não foi provado, porque nenhum perfil de gerente dele está ativo. Se um destino dele faltar, ele aparece como `egress-denied` no log do `ac-provider-egress`.
+  - **Exame de prova do módulo 1:** fez 49 chamadas do examinador pelo caminho novo e parou com `VERIFY_EXAM_TIMEOUT`. A causa foi o limite de 5 horas da conta Claude do exame (106%, bloqueado, renovação por volta de 20:30 UTC), não as mudanças: o job ficou esperando a cota além do prazo por chamada.
+  - **Sobras antigas, anteriores a esta rodada:** 19 jobs `specialist` em `uncertain` de 19 e 20/11 e a trava `verificacoes/88a255f9…/andamento/.running` de 20/11 05:56, sem processo nem contêiner.
 

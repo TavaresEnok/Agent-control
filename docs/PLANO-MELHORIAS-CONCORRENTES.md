@@ -35,7 +35,7 @@ Cada item abaixo foi conferido de novo no código em 21/11/2026, antes deste pla
 | 8 | Saída dos agentes só para os provedores | alerta de rede | **sim: rede Docker e contêiner de saída** | código [x] `61df0908`; aplicação: com o titular |
 | 9 | Gateway sem o Docker inteiro | alerta de Docker | **sim: usuário e serviço (sudo)** | levantamento [x]; código: próxima rodada |
 | 10 | Bons hábitos nas ordens, sem pacotes | ideias do Superpowers, BMAD e OpenSpec | não | próxima rodada (replay) |
-| 11 | Integração, suíte e aplicação | — | sim, com backup | [ ] |
+| 11 | Integração, suíte e aplicação | — | sim, com backup | [x] aplicado em 21/11 (ver PROGRESSO-FINAL) |
 
 Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As frentes 1 a 3 fecham os furos da prova e vêm primeiro. As frentes 8 e 9 precisam de decisões do titular antes de ir para a instalação viva, mas o código pode ser feito antes.
 
@@ -215,7 +215,7 @@ São endereços que aparecem no texto dos binários, não tráfego observado. Po
 
 **Feito no código (commit `61df0908`):** o proxy aceita `AC_EGRESS_ALLOW` e `AC_EGRESS_MODE` (observe ou enforce, com o nome do destino recusado no log). Sem as variáveis, o padrão do modo travado continua igual. Com `AC_PERSONAL_EGRESS=1` no gateway, o worker de execução, o planejamento e o gerente passam pelo proxy. Testes: `provider-egress-proxy.test.ts`, 5/5.
 
-- [ ] 8.8 Na instalação viva, com o sim do titular, sem trabalho rodando:
+- [x] 8.8 Na instalação viva, com o sim do titular, sem trabalho rodando:
   - backup;
   - criar `ac-native-provider-v2` (internal) e o `provider-egress`;
   - apontar a instalação para a nova rede;
@@ -286,13 +286,13 @@ Só as ideias, em poucas linhas nossas:
   - o laboratório com o CLI real não roda no CI;
   - a folga do limite de 65.536 caracteres do helper Git encolheu.)
   Corrigir os achados válidos e rodar de novo os testes tocados.
-- [ ] 11.4 **Antes de juntar:** as imagens de execução e de planejamento já construídas não têm `/usr/local/bin/ac-claude-*`. Juntar e reiniciar o gateway sem reconstruir as imagens faz todo job Claude falhar com código 127. Reconstruir as duas imagens, refixar e só então reiniciar.
+- [x] 11.4 **Antes de juntar:** as imagens de execução e de planejamento já construídas não têm `/usr/local/bin/ac-claude-*`. Juntar e reiniciar o gateway sem reconstruir as imagens faz todo job Claude falhar com código 127. Reconstruir as duas imagens, refixar e só então reiniciar.
   Juntar `melhorias/concorrentes` em `task/personal-activation`.
-- [ ] 11.5 Backup da instalação (`npm run personal:backup -- <instalação.json>`) e `restore-check`.
-- [ ] 11.6 Reiniciar o gateway e conferir a saúde (`personal:health`), o vigia e uma tarefa de prova.
-- [ ] 11.7 Frente 4: reconstruir e refixar a imagem verify.
-- [ ] 11.8 Frentes 8 e 9: só com o sim do titular, cada uma na sua janela.
-- [ ] 11.9 Registrar em `docs/PROGRESSO-FINAL.md` e relatar ao titular.
+- [x] 11.5 Backup da instalação (`npm run personal:backup -- <instalação.json>`) e `restore-check`.
+- [x] 11.6 Reiniciar o gateway e conferir a saúde (`personal:health`), o vigia e uma tarefa de prova.
+- [x] 11.7 Frente 4: reconstruir e refixar a imagem verify.
+- [x] 11.8 Frentes 8 e 9: só com o sim do titular, cada uma na sua janela.
+- [x] 11.9 Registrar em `docs/PROGRESSO-FINAL.md` e relatar ao titular.
 
 ## Fora desta rodada (próximas)
 
