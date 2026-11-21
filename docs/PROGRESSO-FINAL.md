@@ -1997,3 +1997,9 @@ FIM
     - O Agent Control ganha em orquestração, verificação e real vs promessa: a revisão independente e a prova são impostas em código.
     - Perde em utilidade (4 contra 7,5 e 8) e em manutenção (4,5 contra 5,5 e 6).
 
+- 21/11/2026 19:35 UTC — **Happier desligado de novo**, como combinado na M4 (13/11).
+  - **Causa:** a unidade antiga do gateway tinha `Wants=agent-control-happier-ispagent`, então cada reinício religava o Happier, mesmo com ele desabilitado. A unidade gerada hoje (transporte local) já não depende dele.
+  - **Feito pelo titular:** `systemctl --user stop agent-control-happier-ispagent` e `personal:cockpit`, que agora gera o site só com o painel (`55481304`).
+  - **Rota de download das 20 telas:** foi restaurada, e o gerador passou a preservar as rotas `/downloads` (`commit seguinte`).
+  - **Conferido:** painel 200, download 200 e Happier parado.
+
