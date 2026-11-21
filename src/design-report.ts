@@ -5,7 +5,8 @@ import {Refusal} from './contracts.ts';
 import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_USER, designRunArguments, type DesignRunInput} from './design-image.ts';
 import {captureProof} from './design-mark.ts';
 import {batchReceiptsMarkdown, type BatchCallReceipt} from './exam-batch-proof.ts';
-import {DesignAchado, DesignCoverageRow, DesignReportSummary, type DesignExamCoverage} from './design-types.ts';
+import {z} from 'zod';
+import {DesignAchado, DesignCoverageRow, DesignRawFinding, DesignReportSummary, type DesignBasis, type DesignExamCoverage} from './design-types.ts';
 
 const REPORT_DIRECTORY = /^\d{8}-\d{6}-design$/;
 const ACHADO_FILE = /^ACH-\d{3}\.md$/;
@@ -32,6 +33,63 @@ const STATUS_LABEL: Record<DesignAchado['status'], string> = {
 };
 
 export type DesignReportCapture = {fileName: string; bytes: Buffer};
+
+const GAP_KINDS = ['rota', 'estado', 'viewport', 'ferramenta', 'arquivo', 'exame', 'visual'] as const;
+const GAP_TEXT = z.string().transform(value => cell(value).slice(0, 200)).pipe(z.string().min(1).max(200));
+
+/** Uma lacuna da rodada: o que o plano pedia e não foi medido ou julgado. */
+export const DesignReportGap = z.object({
+  kind: z.enum(GAP_KINDS),
+  item: GAP_TEXT,
+  reason: GAP_TEXT,
+}).strict();
+export type DesignReportGap = z.input<typeof DesignReportGap>;
+
+const GAP_TITLE: Record<(typeof GAP_KINDS)[number], string> = {
+  rota: 'Rotas sem captura',
+  estado: 'Estados sem captura',
+  viewport: 'Larguras e temas sem captura',
+  ferramenta: 'Ferramentas que falharam ou não rodaram',
+  arquivo: 'Arquivos fora do exame',
+  exame: 'Exame por modelo incompleto',
+  visual: 'Telas sem crítica visual',
+};
+
+const MAX_GAP_LINES = 40;
+
+/** Limites de toda rodada, mesmo sem lacuna. */
+export const DESIGN_LIMITS_TEXT = [
+  'Limites desta verificação:',
+  '- As ferramentas medem só as rotas, larguras, temas e estados do plano.',
+  '- O exame por modelo é julgamento. Não substitui teste com usuário.',
+  '- Leitor de tela real, voz, toque em aparelho e rede lenta não foram testados.',
+].join('\n');
+
+const BASIS_LABEL = {
+  medido: 'Medido',
+  'medido-examinador': 'Medido (título do examinador)',
+  julgado: 'Julgado e revisado',
+  'julgado-medida': 'Julgado com medida',
+  preferencia: 'Preferência',
+} as const;
+
+export type DesignAchadoKind = keyof typeof BASIS_LABEL;
+
+/** Base do achado. Relatório antigo sem o campo: sem verificador e com medida é 'medido'; o resto é 'hipotese'. */
+export function achadoBasis(achado: Pick<DesignAchado, 'basis' | 'verifier' | 'sources'>): DesignBasis {
+  if (achado.basis !== undefined) return achado.basis;
+  return achado.verifier === null && achado.sources.includes('medida') ? 'medido' : 'hipotese';
+}
+
+/** Tipo do achado no relatório. Lê a base antes de olhar o verificador. */
+export function achadoKind(achado: Pick<DesignAchado, 'basis' | 'verifier' | 'sources'>): DesignAchadoKind {
+  const basis = achadoBasis(achado);
+  if (basis === 'preferencia') return 'preferencia';
+  if (basis === 'medido' && achado.verifier === null) {
+    return achado.sources.includes('examinador') ? 'medido-examinador' : 'medido';
+  }
+  return basis === 'medido' || achado.sources.includes('medida') ? 'julgado-medida' : 'julgado';
+}
 
 export type DesignReportEmptyState = {
   route: string;
@@ -61,6 +119,10 @@ export type DesignReportWriteInput = {
   modelCoverage?: DesignExamCoverage;
   /** Batch call receipts; appended to cobertura.md when present. */
   batchReceipts?: readonly BatchCallReceipt[];
+  /** Lacunas da rodada, em 'O que não foi possível verificar'. */
+  gaps?: readonly DesignReportGap[];
+  /** Mostra os blocos Auditoria técnica, Crítica de design e Preferências. */
+  trust?: boolean;
 };
 
 function hasLiveAccessKey(text: string): boolean {
@@ -180,6 +242,7 @@ function achadoMarkdown(achado: DesignAchado): string {
     `# ${achado.id}: ${achado.title}`,
     `- Gravidade: ${SEVERITY_LABEL[achado.severity]}`,
     `- Situação: ${situacao}`,
+    `- Base: ${BASIS_LABEL[achadoKind(achado)]}`,
     `- Referência: ${achado.reference}`,
     `- Onde: ${where}`,
     `- Cenário: ${achado.scenario}`,
@@ -193,6 +256,145 @@ function achadoMarkdown(achado: DesignAchado): string {
 
 function cell(value: string): string {
   return value.replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
+}
+
+function whereOf(achado: DesignAchado): string {
+  return achado.where.line === null ? achado.where.file : `${achado.where.file}:${achado.where.line}`;
+}
+
+function isFailing(achado: DesignAchado): boolean {
+  return achado.status === 'confirmado' || achado.status === 'reaberto';
+}
+
+const TRUST_BLOCKS: readonly {title: string; intro: string; kinds: readonly DesignAchadoKind[]}[] = [
+  {
+    title: 'Auditoria técnica',
+    intro: 'A medida é a prova. Linhas com (examinador) têm título escrito por modelo.',
+    kinds: ['medido', 'medido-examinador'],
+  },
+  {
+    title: 'Crítica de design',
+    intro: 'Julgado por modelo e conferido pelo revisor. Linhas com (com medida) têm também um número da ferramenta.',
+    kinds: ['julgado', 'julgado-medida'],
+  },
+  {
+    title: 'Preferências',
+    intro: 'Gosto, sem falha. Não entra na nota.',
+    kinds: ['preferencia'],
+  },
+];
+
+const MAX_SAME_REFERENCE = 5;
+
+function trustRow(achado: DesignAchado): string {
+  const kind = achadoKind(achado);
+  const tag = kind === 'medido-examinador' ? ' (examinador)' : kind === 'julgado-medida' ? ' (com medida)' : '';
+  return `| ${achado.id} | ${SEVERITY_LABEL[achado.severity]} | ${STATUS_LABEL[achado.status]} | ${cell(achado.title)}${tag} | ${cell(whereOf(achado))} |`;
+}
+
+function trustRows(items: readonly DesignAchado[], collapse: boolean): string[] {
+  if (!collapse) return items.map(trustRow);
+  const byReference = new Map<string, DesignAchado[]>();
+  for (const item of items) {
+    const list = byReference.get(item.reference);
+    if (list === undefined) byReference.set(item.reference, [item]);
+    else list.push(item);
+  }
+  const rows: string[] = [];
+  const done = new Set<string>();
+  for (const item of items) {
+    const group = byReference.get(item.reference) ?? [item];
+    if (group.length <= MAX_SAME_REFERENCE) {
+      rows.push(trustRow(item));
+      continue;
+    }
+    if (done.has(item.reference)) continue;
+    done.add(item.reference);
+    rows.push(`| ${item.id} e mais ${group.length - 1} | ${SEVERITY_LABEL[item.severity]} | ${STATUS_LABEL[item.status]} | ${cell(item.reference)} | ${group.length} ocorrências |`);
+  }
+  return rows;
+}
+
+/** Três blocos: o que foi medido, o que foi julgado e o que é gosto. Descartados ficam fora. */
+export function trustBlocksMarkdown(achados: readonly DesignAchado[]): string {
+  const failing = achados.filter(isFailing);
+  const measured = failing.filter(item => achadoBasis(item) === 'medido' && item.verifier === null).length;
+  const lines = [`A nota vem de ${pt(measured, 'achado medido', 'achados medidos')} e ${pt(failing.length - measured, 'julgado', 'julgados')}.`, ''];
+  for (const block of TRUST_BLOCKS) {
+    const items = achados.filter(item => item.status !== 'descartado' && block.kinds.includes(achadoKind(item)));
+    lines.push(`## ${block.title}`, '', block.intro, '');
+    if (items.length === 0) {
+      lines.push('Nenhum achado nesta parte.', '');
+      continue;
+    }
+    const counts = {alta: 0, media: 0, baixa: 0, informativa: 0};
+    for (const item of items) counts[item.severity] += 1;
+    lines.push(
+      '| Gravidade | Nesta parte |',
+      '|---|---|',
+      ...(['alta', 'media', 'baixa', 'informativa'] as const).map(severity => `| ${SEVERITY_LABEL[severity]} | ${counts[severity]} |`),
+      '',
+      '| Achado | Gravidade | Situação | Título | Onde |',
+      '|---|---|---|---|---|',
+      ...trustRows(items, block.title === 'Auditoria técnica'),
+      '',
+    );
+  }
+  return lines.join('\n').trimEnd();
+}
+
+const MIN_PATTERN_FILES = 3;
+const MAX_PATTERN_GROUPS = 8;
+const MAX_PATTERN_IDS = 6;
+
+/** Mesma referência em 3 ou mais arquivos. A contagem não muda; só aponta o componente comum. */
+export function repeatedPatternsMarkdown(achados: readonly DesignAchado[]): string {
+  const groups = new Map<string, {ids: string[]; files: Set<string>}>();
+  for (const item of achados) {
+    if (item.status === 'descartado') continue;
+    const group = groups.get(item.reference) ?? {ids: [], files: new Set<string>()};
+    group.ids.push(item.id);
+    group.files.add(item.where.file);
+    groups.set(item.reference, group);
+  }
+  const repeated = [...groups]
+    .filter(([, group]) => group.files.size >= MIN_PATTERN_FILES)
+    .sort((a, b) => b[1].files.size - a[1].files.size || a[0].localeCompare(b[0]))
+    .slice(0, MAX_PATTERN_GROUPS);
+  if (repeated.length === 0) return '';
+  return repeated.map(([reference, group]) => {
+    const ids = group.ids.slice(0, MAX_PATTERN_IDS).join(', ');
+    const more = group.ids.length > MAX_PATTERN_IDS ? ` e mais ${group.ids.length - MAX_PATTERN_IDS}` : '';
+    return `- ${cell(reference)}: ${group.files.size} arquivos (${ids}${more}). Corrija no componente comum.`;
+  }).join('\n');
+}
+
+function parseGaps(value: readonly DesignReportGap[] | undefined): z.output<typeof DesignReportGap>[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+  return value.map(item => {
+    const parsed = DesignReportGap.safeParse(item);
+    if (!parsed.success) throw new Refusal('DESIGN_REPORT_INVALID', 400);
+    return parsed.data;
+  });
+}
+
+/** Lacunas em grupos de ordem fixa, até 40 linhas por grupo. */
+export function gapsMarkdown(gaps: readonly z.output<typeof DesignReportGap>[]): string {
+  if (gaps.length === 0) return 'Nenhuma lacuna medida nesta rodada.';
+  const parts: string[] = [];
+  for (const kind of GAP_KINDS) {
+    const items = gaps.filter(gap => gap.kind === kind);
+    if (items.length === 0) continue;
+    parts.push(`${GAP_TITLE[kind]}:`, ...items.slice(0, MAX_GAP_LINES).map(gap => `- ${gap.item}: ${gap.reason}`));
+    if (items.length > MAX_GAP_LINES) parts.push(`- e mais ${items.length - MAX_GAP_LINES}.`);
+    parts.push('');
+  }
+  return parts.join('\n').trimEnd();
+}
+
+export function designFailureCode(value: string): string {
+  return failureCell(value);
 }
 
 function failureCell(value: string): string {
@@ -419,6 +621,9 @@ function readme(input: {
   emptyState?: 'capturado' | 'não deu';
   emptyStates?: readonly DesignReportEmptyState[];
   sections?: readonly {title: string; markdown: string}[];
+  trust?: string;
+  patterns?: string;
+  gaps?: string;
 }): string {
   const failing = input.counts.alta + input.counts.media + input.counts.baixa + input.counts.informativa;
   const lines = [
@@ -444,6 +649,8 @@ function readme(input: {
     `| baixa | ${input.counts.baixa} |`,
     `| informativa | ${input.counts.informativa} |`,
     '',
+    ...(input.trust ? [input.trust, ''] : []),
+    ...(input.patterns ? ['## Padrões repetidos', '', input.patterns, ''] : []),
     '## Nota de falha',
     '',
     failureNote(input.counts),
@@ -462,6 +669,9 @@ function readme(input: {
     '## O que não foi possível verificar',
     '',
     input.note,
+    '',
+    ...(input.gaps === undefined ? [] : [input.gaps, '']),
+    DESIGN_LIMITS_TEXT,
     '',
     emptyStateBody(input.emptyState, input.emptyStates).trimEnd(),
     '',
@@ -761,6 +971,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     throw new Refusal('DESIGN_REPORT_INVALID', 400);
   }
   const emptyState = parseEmptyState(input.emptyState);
+  const gaps = parseGaps(input.gaps);
   const sections = (input.sections ?? []).map(section => {
     if (!section || typeof section.title !== 'string' || !SECTION_TITLE.test(section.title) || typeof section.markdown !== 'string') {
       throw new Refusal('DESIGN_REPORT_INVALID', 400);
@@ -784,6 +995,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     sections,
     extras,
     modelCoverage: input.modelCoverage ?? null,
+    gaps: gaps ?? null,
   });
   const rawBody = serializedRaw(input.raw);
   const achados = parseAchados(input.achados);
@@ -814,6 +1026,9 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
       emptyState,
       emptyStates: input.emptyStates,
       sections,
+      ...(input.trust === true ? {trust: trustBlocksMarkdown(achados)} : {}),
+      patterns: repeatedPatternsMarkdown(achados),
+      ...(gaps === undefined ? {} : {gaps: gapsMarkdown(gaps)}),
     }))},
     {segments: ['mapa.md'], body: guard(input.mapMarkdown)},
     {segments: ['cobertura.md'], body: guard(coverageMarkdown(coverage, input.modelCoverage, input.batchReceipts))},
@@ -856,6 +1071,40 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
     await writePrivate(path, directory, file.body);
   }
   return {directory, directoryName};
+}
+
+/** Nome da pasta que writeDesignReport cria para esta data. */
+export function designReportDirectoryName(createdAt: Date): string {
+  return directoryNameOf(createdAt);
+}
+
+const PreviousRawDocument = z.object({
+  findings: z.array(DesignRawFinding).max(20_000),
+  ferramentas: z.array(z.string().min(1).max(40)).max(100).optional(),
+}).passthrough();
+
+/**
+ * Achados brutos do último relatório antes de `beforeDirectoryName`.
+ * Sem relatório anterior: directoryName null. Qualquer erro, symlink ou JSON inválido: null.
+ */
+export async function previousRawFindings(
+  dataDirectory: string,
+  projectId: string,
+  beforeDirectoryName: string,
+): Promise<{directoryName: string | null; findings: DesignRawFinding[]; tools: string[] | null} | null> {
+  try {
+    const project = await resolveProject(dataDirectory, projectId);
+    if (project === null) return {directoryName: null, findings: [], tools: null};
+    const earlier = (await loadReports(project)).filter(item => item.summary.directoryName < beforeDirectoryName);
+    const last = earlier.at(-1);
+    if (last === undefined) return {directoryName: null, findings: [], tools: null};
+    const text = await readTextInside(last.directory, join(last.directory, 'bruto', 'achados-brutos.json'), 'DESIGN_REPORT_INVALID');
+    const parsed = PreviousRawDocument.safeParse(JSON.parse(text));
+    if (!parsed.success) return null;
+    return {directoryName: last.summary.directoryName, findings: parsed.data.findings, tools: parsed.data.ferramentas ?? null};
+  } catch {
+    return null;
+  }
 }
 
 export async function readDesignCaptureFiles(dataDirectory: string, projectId: string, runId: string): Promise<{fileName: string; bytes: Buffer}[]> {
