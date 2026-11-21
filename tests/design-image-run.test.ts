@@ -7,7 +7,7 @@ import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {Refusal} from '../src/contracts.ts';
 import {designBenchWorker} from '../src/design-bench.ts';
-import {coverageRow, readRebuildImagePin, toolCoverageMarkdown} from '../src/design-image-run.ts';
+import {computedBlocksOf, coverageRow, interpretDesignImageDocument, readRebuildImagePin, toolCoverageMarkdown} from '../src/design-image-run.ts';
 import {runDesignModule, type DesignModuleInput} from '../src/design-module.ts';
 import type {DesignWorker} from '../src/design-types.ts';
 
@@ -71,4 +71,62 @@ test('imagem que não grava JSON vira falha na tabela e recusa o exame', async (
   } finally {
     await rm(data, {recursive: true, force: true});
   }
+});
+
+test('documento sem render, teclado ou blocos dá listas vazias', () => {
+  for (const document of [{}, {reports: {}}, {reports: {render: 'x', keyboard: 3}, computed: 'nada'}, null]) {
+    const read = interpretDesignImageDocument(document);
+    assert.deepEqual(read.render, []);
+    assert.deepEqual(read.keyboard, []);
+    assert.deepEqual(read.computedBlocks, []);
+  }
+});
+
+test('render e teclado passam pelos parsers: limites valem e NaN sai', () => {
+  const read = interpretDesignImageDocument({
+    reports: {
+      render: [
+        {file: '/a 375 claro padrao', route: '/a', viewport: 375, theme: 'claro', state: 'padrao', overflow: {px: 37, clip: false, offenders: []}},
+        {route: '/a', viewport: 375, theme: 'claro', state: 'padrao', overflow: {px: Number.NaN, clip: false, offenders: []}},
+        {route: '/a', viewport: Number.NaN, theme: 'claro', state: 'padrao'},
+      ],
+      keyboard: [
+        {file: '/a 1440 claro padrao', steps: [
+          {selector: 'a', index: 0, outlineWidth: '2px', outlineStyle: 'solid', visible: true, covered: 1, x: 0, y: 0},
+          {selector: 'b', index: 1, outlineWidth: '2px', outlineStyle: 'solid', visible: true, covered: Number.NaN, x: 0, y: 0},
+        ]},
+      ],
+    },
+  });
+  assert.equal(read.render.length, 2);
+  assert.deepEqual(read.render[0]?.overflow, {px: 37, clip: false, offenders: []});
+  assert.equal(read.render[1]?.overflow, undefined);
+  assert.equal(read.keyboard.length, 1);
+  assert.equal(read.keyboard[0]?.steps.length, 1);
+});
+
+test('o teto de 2000 amostras é dividido entre os blocos', () => {
+  const sample = (index: number) => ({selector: 'p', color: `rgb(${index % 255}, 0, 0)`});
+  const block = (route: string, viewport: number, count: number) => ({
+    route, viewport, theme: 'claro', state: 'padrao', samples: Array.from({length: count}, (_item, index) => sample(index)),
+  });
+  const blocks = computedBlocksOf([
+    block('/a', 375, 1500),
+    block('/b', 375, 1500),
+    block('/c', 1440, 10),
+    {route: 'sem-barra', viewport: 375, samples: [sample(1)]},
+    {route: '/d', viewport: 999, samples: [sample(1)]},
+  ]);
+  assert.deepEqual(blocks.map(item => [item.route, item.samples.length]), [['/a', 667], ['/b', 667], ['/c', 10]]);
+  const total = blocks.reduce((sum, item) => sum + item.samples.length, 0);
+  assert.ok(total <= 2000);
+  const five = computedBlocksOf(Array.from({length: 5}, (_item, index) => block(`/r${index}`, 768, 900)));
+  assert.deepEqual(five.map(item => item.samples.length), [400, 400, 400, 400, 400]);
+  const three = computedBlocksOf(Array.from({length: 3}, (_item, index) => block(`/r${index}`, 768, 900)));
+  assert.equal(three.reduce((sum, item) => sum + item.samples.length, 0), 2000);
+  const read = interpretDesignImageDocument({reports: {}, computed: [block('/a', 375, 1500), block('/b', 375, 1500)]});
+  assert.equal(read.computed.length, 2000);
+  assert.deepEqual(read.computedBlocks.map(item => item.samples.length), [1000, 1000]);
+  assert.equal(read.computedBlocks[0]?.theme, 'claro');
+  assert.deepEqual(computedBlocksOf('x'), []);
 });

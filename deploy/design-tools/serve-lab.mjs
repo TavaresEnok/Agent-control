@@ -12,6 +12,55 @@ const STATE_PAGES = {
   '/estado/erro': 'Não foi possível carregar',
 };
 
+/*
+ * Páginas plantadas da régua e do teclado. Cada defeito tem uma regra que precisa disparar.
+ * /lab/sonda junta os defeitos medidos na página; os outros dois são páginas que não são o produto.
+ */
+const PROBE_PAGE = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sonda do laboratório</title>
+  <style>
+    body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1b1b1b; background: #ffffff; }
+    main { padding: 96px 16px 16px; }
+    .topo { position: fixed; top: 0; left: 0; right: 0; height: 80px; background: #ffffff; border-bottom: 1px solid #d0d0d0; }
+    .atalho { position: absolute; top: 24px; left: 16px; }
+    .largo { width: 520px; height: 40px; background: #e8eefc; }
+    .corte { display: inline-block; width: 80px; white-space: nowrap; overflow: hidden; }
+    .claro { color: #ffffff; background: #1d4ed8; border: 0; padding: 12px 20px; font-size: 16px; }
+    .claro:hover { color: #ffffff; background: #ffffff; }
+    .gira { width: 64px; height: 64px; background: #1d4ed8; animation: pulsa 2s linear infinite; }
+    @keyframes pulsa { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <a class="atalho" href="#fim">Pular para o fim</a>
+  <header class="topo"><p>Topo fixo</p></header>
+  <main>
+    <h1>Sonda</h1>
+    <div class="largo">Faixa de 520px</div>
+    <p><span class="corte">Nome muito comprido do cliente</span></p>
+    <img src="/lab/sumiu.png" alt="Foto do cliente" width="120" height="80">
+    <p>Olá, {{cliente.nome}}</p>
+    <canvas width="300" height="150"></canvas>
+    <p><button class="claro" type="button">Assinar</button></p>
+    <div class="gira"></div>
+    <p id="fim">Fim</p>
+  </main>
+</body>
+</html>`;
+
+const LOGIN_PAGE = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Entrar</title></head><body><main><h1>Entrar</h1><p>Entre para continuar.</p></main></body></html>';
+
+const OVERLAY_PAGE = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>Painel</title></head><body><main><h1>Painel</h1></main><vite-error-overlay></vite-error-overlay></body></html>';
+
+function sendHtml(res, status, html) {
+  res.writeHead(status, {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store'});
+  res.end(html);
+}
+
 function stateHtml(text) {
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>${text}</title></head><body><main><h1>${text}</h1><p>${text}</p></main></body></html>`;
 }
@@ -115,6 +164,23 @@ const server = createServer((req, res) => {
       res.writeHead(401, {'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store'});
       res.end('não entrou');
     });
+    return;
+  }
+  if (url.pathname === '/lab/sonda') {
+    sendHtml(res, 200, PROBE_PAGE);
+    return;
+  }
+  if (url.pathname === '/lab/privado') {
+    res.writeHead(302, {location: '/entrar', 'cache-control': 'no-store'});
+    res.end();
+    return;
+  }
+  if (req.method === 'GET' && url.pathname === '/entrar') {
+    sendHtml(res, 200, LOGIN_PAGE);
+    return;
+  }
+  if (url.pathname === '/lab/erro-dev') {
+    sendHtml(res, 200, OVERLAY_PAGE);
     return;
   }
   if (url.pathname === '/conta') {

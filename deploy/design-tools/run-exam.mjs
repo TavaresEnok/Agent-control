@@ -15,6 +15,544 @@ const VIEWPORTS = new Set([375, 768, 1440]);
 const STATE_NAMES = new Set(['padrao', 'vazio', 'carregando', 'erro', 'logado']);
 const SHOT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,140}\.png$/;
 const LOGIN_STATE = '/login/state.json';
+const PROBE_TIMEOUT_MS = 5000;
+const RENDER_CELL_MAX = 400;
+const TAB_STEPS_MAX = 40;
+const CONTROL_MAX = 20;
+// Teto de tempo por célula para o passo de hover e foco, e por rota para o Tab.
+const STATES_BUDGET_MS = 15000;
+const TAB_BUDGET_MS = 20000;
+const DEV_OVERLAY = 'vite-error-overlay, #webpack-dev-server-client-overlay';
+
+/**
+ * Sobra de texto na tela. O padrão vai como texto e vira RegExp dentro da página.
+ * 'NÃO', 'R$ 10,00' e 'nullable' não casam. 'null' e 'TODO' ficam de fora: dão ruído demais.
+ */
+export const RESIDUE_PATTERNS = [
+  {kind: 'lorem', source: '\\blorem ipsum\\b', flags: 'i'},
+  {kind: 'modelo', source: '\\{\\{\\s*[\\w.$-]+\\s*\\}\\}', flags: ''},
+  {kind: 'interpolacao', source: '\\$\\{[\\w.]+\\}', flags: ''},
+  {kind: 'objeto', source: '\\[object (?:Object|Promise)\\]', flags: ''},
+  {kind: 'valor', source: '(?:^|[^\\w])(?:undefined|NaN|Invalid Date)(?!\\w)', flags: ''},
+  {kind: 'codificacao', source: '\\u00C3[\\u00A0-\\u00BF]|\\u00E2\\u20AC[\\u0098-\\u009D\\u2122\\u0153\\u201C\\u201D]|\\uFFFD', flags: ''},
+];
+
+/** Primeiro tipo de sobra que casa com o texto, ou null. */
+export function residueKind(text, patterns = RESIDUE_PATTERNS) {
+  const value = String(text ?? '');
+  for (const pattern of patterns) {
+    if (new RegExp(pattern.source, pattern.flags).test(value)) return pattern.kind;
+  }
+  return null;
+}
+
+/*
+ * Funções da página. Cada uma é declarada sozinha e vai para o navegador por inPage().
+ * Não usam variável de fora: o texto da função é o que roda lá dentro.
+ */
+export function parseColor(value) {
+  if (!value) return null;
+  const text = String(value).trim().toLowerCase();
+  if (text === 'transparent') return {r: 0, g: 0, b: 0, a: 0};
+  const comma = /^rgba?\(\s*([+-]?[\d.]+)\s*,\s*([+-]?[\d.]+)\s*,\s*([+-]?[\d.]+)\s*(?:,\s*([+-]?[\d.]+%?)\s*)?\)$/.exec(text);
+  const space = /^rgba?\(\s*([+-]?[\d.]+)\s+([+-]?[\d.]+)\s+([+-]?[\d.]+)\s*(?:\/\s*([+-]?[\d.]+%?)\s*)?\)$/.exec(text);
+  const match = comma || space;
+  if (!match) return null;
+  const channel = (raw) => {
+    const number = Number(raw);
+    if (!Number.isFinite(number)) return null;
+    return Math.min(255, Math.max(0, number));
+  };
+  const red = channel(match[1]);
+  const green = channel(match[2]);
+  const blue = channel(match[3]);
+  if (red === null || green === null || blue === null) return null;
+  let alpha = 1;
+  if (match[4] !== undefined) {
+    const token = match[4];
+    alpha = token.endsWith('%') ? Number(token.slice(0, -1)) / 100 : Number(token);
+  }
+  if (!Number.isFinite(alpha)) return null;
+  return {r: red, g: green, b: blue, a: Math.min(1, Math.max(0, alpha))};
+}
+
+export function over(src, dst) {
+  const outA = src.a + dst.a * (1 - src.a);
+  if (outA <= 0) return {r: 255, g: 255, b: 255, a: 1};
+  const mix = (srcChannel, dstChannel) => (srcChannel * src.a + dstChannel * dst.a * (1 - src.a)) / outA;
+  return {r: mix(src.r, dst.r), g: mix(src.g, dst.g), b: mix(src.b, dst.b), a: outA};
+}
+
+export function rgb(color) {
+  const channel = (value) => Math.max(0, Math.min(255, Math.round(value)));
+  return `rgb(${channel(color.r)}, ${channel(color.g)}, ${channel(color.b)})`;
+}
+
+// Canvas sem cor opaca compõe sobre branco. Imagem ou gradiente não vira preto: devolve null.
+export function effectiveColor(el) {
+  const layers = [];
+  let node = el;
+  while (node && node.nodeType === 1) {
+    const background = getComputedStyle(node);
+    if (background.backgroundImage && background.backgroundImage !== 'none') return null;
+    const color = parseColor(background.backgroundColor);
+    if (!color) return null;
+    if (color.a > 0) layers.push(color);
+    if (color.a >= 0.999) break;
+    node = node.parentElement;
+  }
+  let acc = {r: 255, g: 255, b: 255, a: 1};
+  for (let index = layers.length - 1; index >= 0; index -= 1) acc = over(layers[index], acc);
+  return acc;
+}
+
+export function effective(el) {
+  const color = effectiveColor(el);
+  return color ? rgb(color) : null;
+}
+
+export function contrastRatio(foreground, background) {
+  const channel = (value) => {
+    const unit = Math.max(0, Math.min(255, value)) / 255;
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = (color) => 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
+  const one = luminance(foreground);
+  const two = luminance(background);
+  return (Math.max(one, two) + 0.05) / (Math.min(one, two) + 0.05);
+}
+
+export function hasText(el) {
+  const nodes = el.childNodes;
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    if (node.nodeType === 3 && node.textContent && node.textContent.trim().length > 0) return true;
+  }
+  return false;
+}
+
+/** Tag, #id e a primeira classe. Texto da página: só serve de trecho. */
+export function selectorOf(el) {
+  if (!el || el.nodeType !== 1) return '';
+  let out = el.tagName.toLowerCase();
+  if (el.id) out += `#${el.id}`;
+  const classes = String(el.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean);
+  if (classes.length > 0) out += `.${classes[0]}`;
+  return out.replace(/\s+/g, ' ').slice(0, 120);
+}
+
+export function shown(el) {
+  if (!el || el.nodeType !== 1 || !el.isConnected) return false;
+  const style = getComputedStyle(el);
+  const opacity = Number(style.opacity);
+  if (style.display === 'none' || style.visibility !== 'visible' || (Number.isFinite(opacity) && opacity === 0)) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width >= 1 && rect.height >= 1;
+}
+
+/** Texto de exemplo com no máximo `max` letras, sem espaço sobrando. */
+export function snippetOf(value, max) {
+  return String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+/** Monta o texto que roda na página: as funções de apoio e depois a chamada com o argumento em JSON. */
+export function inPage(fn, helpers, arg) {
+  const support = helpers.map(helper => helper.toString()).join('\n');
+  return `(() => {\n${support}\nreturn (${fn.toString()})(${JSON.stringify(arg ?? null)});\n})()`;
+}
+
+const SAMPLE_HELPERS = [parseColor, over, rgb, effectiveColor, effective, hasText];
+const RENDER_HELPERS = [selectorOf, shown, snippetOf];
+const CONTROL_HELPERS = [parseColor, over, effectiveColor, contrastRatio, selectorOf, shown, snippetOf];
+const FOCUS_HELPERS = [selectorOf];
+const MOTION_HELPERS = [selectorOf];
+
+/** Estilo calculado de até 500 elementos. Link dentro de frase leva inText. */
+export function sampleProbe() {
+  const out = [];
+  const seen = new Set();
+  const root = document.body;
+  if (!root) return out;
+  const nodes = [root, ...root.querySelectorAll('*')];
+  for (const el of nodes) {
+    if (!el || out.length >= 500) break;
+    const style = getComputedStyle(el);
+    const opacity = Number(style.opacity);
+    if (style.display === 'none' || style.visibility !== 'visible' || (Number.isFinite(opacity) && opacity === 0)) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) continue;
+    const record = {
+      selector: el.tagName.toLowerCase(),
+      color: style.color,
+      borderColor: style.borderTopColor,
+      fontFamily: style.fontFamily,
+      fontSize: style.fontSize,
+      fontWeight: style.fontWeight,
+      lineHeight: style.lineHeight,
+      letterSpacing: style.letterSpacing,
+      margin: style.margin,
+      padding: style.padding,
+      gap: style.gap,
+      borderRadius: style.borderRadius,
+      boxShadow: style.boxShadow,
+      transitionDuration: style.transitionDuration,
+      width: `${Math.round(rect.width)}px`,
+      height: `${Math.round(rect.height)}px`,
+    };
+    if (hasText(el)) {
+      const background = effective(el);
+      if (background) record.backgroundColor = background;
+      else record.contrastNote = 'nao-medido';
+    } else if (!(style.backgroundImage && style.backgroundImage !== 'none')) {
+      const own = parseColor(style.backgroundColor);
+      if (own && own.a >= 0.999) record.backgroundColor = rgb(own);
+    }
+    // Link no meio do texto: a regra de alvo de toque não vale para ele.
+    if (record.selector === 'a' && style.display === 'inline' && el.parentElement && hasText(el.parentElement)) record.inText = true;
+    const key = JSON.stringify(record);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(record);
+  }
+  return out;
+}
+
+/** Leitura da tela renderizada. Não muda a página. */
+export function renderProbe(options) {
+  const out = {};
+  const width = window.innerWidth;
+  const root = document.documentElement;
+  const body = document.body;
+  if (!root || !body) return out;
+  const all = Array.from(body.querySelectorAll('*')).slice(0, 6000);
+  const clips = (value) => value === 'hidden' || value === 'clip';
+  const scrolls = (value) => value === 'auto' || value === 'scroll' || clips(value);
+  // Fixo ou deslocado de lado de propósito: menu fora da tela, gaveta, aviso. Não conta como transbordo.
+  const parked = (style) => {
+    if (style.position === 'fixed') return true;
+    const shift = String(style.translate || 'none');
+    if (shift !== 'none' && Math.abs(Number.parseFloat(shift)) >= 1) return true;
+    const matrix = /^matrix(3d)?\((.*)\)$/.exec(String(style.transform || 'none'));
+    if (!matrix) return false;
+    const values = matrix[2].split(',').map(Number);
+    const x = matrix[1] ? values[12] : values[4];
+    return Number.isFinite(x) && Math.abs(x) >= 1;
+  };
+  if (options.overflow) {
+    const clip = clips(getComputedStyle(root).overflowX) || clips(getComputedStyle(body).overflowX);
+    const offenders = [];
+    const listed = [];
+    for (const el of all) {
+      if (offenders.length >= 3) break;
+      if (listed.some(item => item.contains(el))) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 1 || rect.height < 1 || rect.right <= width + 1) continue;
+      if (parked(getComputedStyle(el))) continue;
+      let contained = false;
+      for (let node = el.parentElement; node && node !== body && node !== root; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (scrolls(style.overflowX) || parked(style)) {
+          contained = true;
+          break;
+        }
+      }
+      if (contained || !shown(el)) continue;
+      listed.push(el);
+      offenders.push({sel: selectorOf(el), right: Math.round(rect.right)});
+    }
+    // Com html e body escondidos, o body vira a caixa de rolagem e guarda a sobra.
+    const scrollWidth = clip ? Math.max(root.scrollWidth, body.scrollWidth) : root.scrollWidth;
+    out.overflow = {px: Math.max(0, Math.round(scrollWidth - root.clientWidth)), clip, offenders};
+  }
+  if (options.clipped) {
+    const clipped = [];
+    for (const el of all) {
+      if (clipped.length >= 10) break;
+      const own = Array.from(el.childNodes).filter(node => node.nodeType === 3).map(node => node.textContent || '').join(' ');
+      if (own.trim().length === 0) continue;
+      const style = getComputedStyle(el);
+      if (!clips(style.overflowX) || style.textOverflow === 'ellipsis') continue;
+      if (el.closest('[aria-hidden="true"]')) continue;
+      const rect = el.getBoundingClientRect();
+      const hiddenPattern = style.position === 'absolute' && (rect.width <= 1 || rect.height <= 1 || style.clip.startsWith('rect(0') || style.clipPath.startsWith('inset(50%'));
+      if (hiddenPattern || !shown(el)) continue;
+      const px = el.scrollWidth - el.clientWidth;
+      if (px < 2) continue;
+      clipped.push({sel: selectorOf(el), text40: snippetOf(own, 40), px: Math.round(px)});
+    }
+    out.clipped = clipped;
+  }
+  if (options.images) {
+    const images = [];
+    const timing = typeof performance.getEntriesByType === 'function' ? performance.getEntriesByType('resource') : [];
+    for (const img of Array.from(document.images)) {
+      if (images.length >= 10) break;
+      if (!img.complete || img.naturalWidth !== 0 || !img.currentSrc) continue;
+      let url;
+      try {
+        url = new URL(img.currentSrc, location.href);
+      } catch {
+        continue;
+      }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') continue;
+      // SVG sem tamanho próprio pode ter naturalWidth 0. Só conta com resposta de erro.
+      if (/\.svg$/i.test(url.pathname)) {
+        const entry = timing.find(item => item.name === url.href);
+        if (!entry || !(entry.responseStatus >= 400)) continue;
+      }
+      images.push({path: snippetOf(url.pathname, 120)});
+    }
+    out.images = images;
+  }
+  if (options.inputs) {
+    const inputs = [];
+    const textual = new Set(['text', 'email', 'tel', 'url', 'search', 'password', 'number']);
+    for (const el of Array.from(body.querySelectorAll('input, select, textarea'))) {
+      if (inputs.length >= 20) break;
+      const tag = el.tagName.toLowerCase();
+      const type = tag === 'input' ? String(el.type || 'text').toLowerCase() : tag;
+      if (tag === 'input' && !textual.has(type)) continue;
+      if (!shown(el)) continue;
+      const fontPx = Number.parseFloat(getComputedStyle(el).fontSize);
+      if (!Number.isFinite(fontPx) || fontPx <= 0) continue;
+      inputs.push({sel: selectorOf(el), type, fontPx: Math.round(fontPx * 100) / 100});
+    }
+    out.inputs = inputs;
+  }
+  if (options.residue) {
+    const residue = [];
+    const patterns = [];
+    for (const item of options.patterns || []) {
+      try {
+        patterns.push({kind: item.kind, re: new RegExp(item.source, item.flags)});
+      } catch {
+        /* padrão inválido fica de fora */
+      }
+    }
+    const skip = 'script, style, code, pre, textarea, input, noscript, [contenteditable], [contenteditable=""], [contenteditable="true"]';
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    let visited = 0;
+    for (let node = walker.nextNode(); node && residue.length < 10 && visited < 20000; node = walker.nextNode()) {
+      visited += 1;
+      const text = node.textContent || '';
+      if (text.trim().length === 0) continue;
+      const parent = node.parentElement;
+      if (!parent || parent.closest(skip) || !shown(parent)) continue;
+      for (const pattern of patterns) {
+        const match = pattern.re.exec(text);
+        if (!match) continue;
+        const start = Math.max(0, match.index - 10);
+        residue.push({kind: pattern.kind, text40: snippetOf(text.slice(start, start + 40), 40), sel: selectorOf(parent)});
+        break;
+      }
+    }
+    out.residue = residue;
+  }
+  if (options.charts) {
+    const charts = [];
+    const named = (el) => {
+      if (!el) return false;
+      const label = (el.getAttribute('aria-label') || '').trim() || (el.getAttribute('title') || '').trim();
+      if (label.length > 0) return true;
+      const by = (el.getAttribute('aria-labelledby') || '').trim();
+      if (by.length > 0 && by.split(/\s+/).some(id => (document.getElementById(id)?.textContent || '').trim().length > 0)) return true;
+      if (el.tagName.toLowerCase() === 'svg') {
+        const title = el.querySelector(':scope > title');
+        if (title && (title.textContent || '').trim().length > 0) return true;
+      }
+      return false;
+    };
+    const found = Array.from(body.querySelectorAll('canvas, svg.recharts-surface, svg.highcharts-root, svg.apexcharts-svg, [_echarts_instance_] canvas'));
+    for (const el of found) {
+      if (charts.length >= 10) break;
+      if (!shown(el)) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 120 || rect.height < 80) continue;
+      if (el.closest('[aria-hidden="true"]')) continue;
+      if (el.tagName.toLowerCase() === 'canvas' && (el.textContent || '').trim().length > 0) continue;
+      const figure = el.closest('figure');
+      const holder = el.closest('[role="img"], [role="figure"]');
+      const echarts = el.closest('[_echarts_instance_]');
+      if (named(el) || named(figure) || named(holder) || named(echarts)) continue;
+      if (figure && figure.querySelector('figcaption')) continue;
+      const box = figure || el.closest('section') || el.parentElement;
+      if (box && box.querySelector('table')) continue;
+      charts.push({sel: selectorOf(el), w: Math.round(rect.width), h: Math.round(rect.height)});
+    }
+    out.charts = charts;
+  }
+  if (options.title) out.title = snippetOf(document.title, 120);
+  return out;
+}
+
+/** Passo que muda a página: tira transição, marca até 20 controles com texto. Devolve quantos. */
+export function markControls(max) {
+  const css = '*,*::before,*::after{transition:none!important;animation:none!important}';
+  try {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(css);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+  } catch {
+    const style = document.createElement('style');
+    style.textContent = css;
+    (document.head || document.documentElement).appendChild(style);
+  }
+  const query = 'a[href], button, [role="button"], input[type="submit"], input[type="button"], input[type="reset"], summary, [role="tab"], [role="menuitem"]';
+  let count = 0;
+  for (const el of Array.from(document.querySelectorAll(query))) {
+    if (count >= max) break;
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true' || !shown(el)) continue;
+    const text = el.tagName.toLowerCase() === 'input' ? String(el.value || '') : String(el.innerText || '');
+    if (text.trim().length === 0) continue;
+    el.setAttribute('data-ac-sonda', String(count));
+    count += 1;
+  }
+  return count;
+}
+
+/** Cor do texto do controle sobre o fundo efetivo, no estado em que ele está agora. */
+export function readControl(index) {
+  const el = document.querySelector(`[data-ac-sonda="${index}"]`);
+  if (!el || !shown(el)) return null;
+  const style = getComputedStyle(el);
+  const background = effectiveColor(el);
+  const text = parseColor(style.color);
+  if (!background || !text) return null;
+  const foreground = over(text, background);
+  const size = Number.parseFloat(style.fontSize);
+  const weight = Number.parseInt(style.fontWeight, 10);
+  const large = size >= 24 || (size >= 18.66 && weight >= 700);
+  const label = el.tagName.toLowerCase() === 'input' ? String(el.value || '') : String(el.innerText || '');
+  return {
+    key: `${Math.round(foreground.r)},${Math.round(foreground.g)},${Math.round(foreground.b)}/${Math.round(background.r)},${Math.round(background.g)},${Math.round(background.b)}`,
+    ratio: contrastRatio(foreground, background),
+    need: large ? 3 : 4.5,
+    label40: snippetOf(label, 40) || selectorOf(el),
+  };
+}
+
+/** Um passo do Tab: o elemento com foco, o contorno e quanto dele está sob algo fixo. */
+export function focusRead(index) {
+  const el = document.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return {body: true};
+  const store = window;
+  if (index === 0 || !store.__acTabFirst) store.__acTabFirst = el;
+  else if (store.__acTabFirst === el) return {repeat: true};
+  const style = getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const visible = rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.top < height && rect.left < width;
+  let covered = 0;
+  if (visible) {
+    const clampX = (value) => Math.max(0, Math.min(width - 1, value));
+    const clampY = (value) => Math.max(0, Math.min(height - 1, value));
+    const points = [
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      [rect.left + 1, rect.top + 1],
+      [rect.right - 1, rect.top + 1],
+      [rect.left + 1, rect.bottom - 1],
+      [rect.right - 1, rect.bottom - 1],
+    ];
+    let hits = 0;
+    for (const [x, y] of points) {
+      const hit = document.elementFromPoint(clampX(x), clampY(y));
+      if (!hit || hit === el || el.contains(hit)) continue;
+      let pinned = null;
+      for (let node = hit; node && node.nodeType === 1; node = node.parentElement) {
+        const position = getComputedStyle(node).position;
+        if (position === 'fixed' || position === 'sticky') {
+          pinned = node;
+          break;
+        }
+      }
+      if (pinned && pinned !== el && !pinned.contains(el)) hits += 1;
+    }
+    covered = hits / points.length;
+  }
+  return {
+    step: {
+      selector: selectorOf(el),
+      index,
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      boxShadow: style.boxShadow,
+      visible,
+      covered,
+      x: Math.round(rect.left),
+      y: Math.round(rect.top + window.scrollY),
+    },
+  };
+}
+
+/** Animação infinita que segue rodando com movimento reduzido, em alvo de pelo menos 48x48. */
+export function motionProbe() {
+  const running = [];
+  const seen = new Set();
+  const list = typeof document.getAnimations === 'function' ? document.getAnimations() : [];
+  for (const animation of list) {
+    if (running.length >= 5) break;
+    if (animation.playState !== 'running' || !animation.effect || typeof animation.effect.getTiming !== 'function') continue;
+    if (animation.effect.getTiming().iterations !== Infinity) continue;
+    const target = animation.effect.target;
+    if (!target || target.nodeType !== 1 || seen.has(target)) continue;
+    seen.add(target);
+    if (target.closest('[role="progressbar"], [aria-busy="true"]')) continue;
+    let busy = false;
+    for (let node = target, depth = 0; node && node.nodeType === 1 && depth < 4; node = node.parentElement, depth += 1) {
+      if (/spin|load|skeleton|progress/i.test(String(node.getAttribute('class') || ''))) {
+        busy = true;
+        break;
+      }
+    }
+    if (busy) continue;
+    const rect = target.getBoundingClientRect();
+    if (rect.width < 48 || rect.height < 48) continue;
+    running.push({sel: selectorOf(target), w: Math.round(rect.width), h: Math.round(rect.height)});
+  }
+  return {running};
+}
+
+/** Tela de erro do servidor de desenvolvimento. O diálogo do Next fica na sombra do portal. */
+export function overlayProbe(query) {
+  if (document.querySelector(query)) return true;
+  const portal = document.querySelector('nextjs-portal');
+  if (!portal) return false;
+  return Boolean(portal.querySelector('[data-nextjs-dialog]') || (portal.shadowRoot && portal.shadowRoot.querySelector('[data-nextjs-dialog]')));
+}
+
+/** Corrida contra o relógio. Quem perde não fica sem tratamento: race assina as duas promessas. */
+export async function bounded(promise, ms = PROBE_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`sem resposta em ${ms}ms`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Caminho sem a barra do fim. A raiz fica '/'. */
+export function plainPath(value) {
+  try {
+    const path = new URL(value).pathname.replace(/\/+$/, '');
+    return path.length > 0 ? path : '/';
+  } catch {
+    return '';
+  }
+}
+
+/** Mesmo origin, outro caminho: a página aberta não é a pedida. */
+export function redirectedTo(requested, landed) {
+  const from = plainPath(requested);
+  const to = plainPath(landed);
+  if (from === '' || to === '' || from === to) return null;
+  return to.slice(0, 120);
+}
 
 function writtenHost(value) {
   const match = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(value);
@@ -155,6 +693,7 @@ export function failureText(items) {
 }
 
 function viewportHeight(width) {
+  if (width === 320) return 568;
   if (width === 375) return 812;
   if (width === 768) return 1024;
   return 900;
@@ -367,7 +906,7 @@ function safeJson(value) {
   });
 }
 
-function slimLighthouse(lhr) {
+export function slimLighthouse(lhr) {
   if (!lhr || typeof lhr !== 'object') return null;
   const categories = {};
   for (const [key, value] of Object.entries(lhr.categories ?? {})) {
@@ -375,7 +914,8 @@ function slimLighthouse(lhr) {
     categories[key] = {id: key, title: value.title ?? key, score: value.score ?? null};
   }
   const audits = {};
-  for (const id of ['cumulative-layout-shift', 'largest-contentful-paint', 'first-contentful-paint', 'total-blocking-time', 'speed-index', 'interactive']) {
+  // viewport e font-size: o host só olha no relatório mobile.
+  for (const id of ['cumulative-layout-shift', 'largest-contentful-paint', 'first-contentful-paint', 'total-blocking-time', 'speed-index', 'interactive', 'viewport', 'font-size']) {
     const audit = lhr.audits?.[id];
     if (!audit || typeof audit !== 'object') continue;
     audits[id] = {id, title: audit.title ?? id, score: audit.score ?? null, numericValue: audit.numericValue ?? null, displayValue: audit.displayValue ?? null};
@@ -468,10 +1008,11 @@ async function main() {
   const unavailable = [];
   const findings = [];
   const seenFindings = new Set();
-  const markUnavailable = (cell, status) => {
+  const markUnavailable = (cell, status, reason) => {
     const code = Number.isInteger(status) && status > 0 ? status : 0;
     unavailable.push({route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state, status: code});
-    note(`rota indisponível (${code}) ${cell.route} ${cell.viewport} ${cell.theme} ${cell.state}`);
+    const why = typeof reason === 'string' && reason.length > 0 ? reason : String(code);
+    note(`rota indisponível (${why}) ${cell.route} ${cell.viewport} ${cell.theme} ${cell.state}`);
     const key = `${cell.route}\u0000${code}`;
     if (seenFindings.has(key)) return;
     seenFindings.add(key);
@@ -505,13 +1046,14 @@ async function main() {
   const loginReady = loginRequested && loginFileReady();
   if (loginRequested && !loginReady) note('logado não capturado');
 
-  const cells = [];
+  const routeCells = [];
   for (const route of plan.routes) {
+    const list = [];
     for (const theme of route.themes) {
       for (const state of route.states) {
         if (state.auth && !loginReady) continue;
         for (const viewport of plan.viewports) {
-          cells.push({
+          list.push({
             route: route.route,
             theme,
             state: state.name,
@@ -523,6 +1065,7 @@ async function main() {
         }
       }
     }
+    routeCells.push({route: route.route, cells: list});
   }
 
   const pageStyles = [];
@@ -533,6 +1076,236 @@ async function main() {
       if (text.trim().length === 0 || seenStyles.has(text) || pageStyles.length >= 40) continue;
       seenStyles.add(text);
       pageStyles.push(text);
+    }
+  };
+
+  const renderCells = [];
+  const keyboardWalks = [];
+  const renderFailures = [];
+  const keyboardFailures = [];
+  let renderMeasured = 0;
+  const cellLabel = (cell) => `${cell.route} ${cell.viewport} ${cell.theme} ${cell.state}`;
+  // Cada leitura da página tem 5s. Falha vira linha na cobertura, não derruba a célula.
+  const probe = async (page, fn, helpers, arg, failures, label) => {
+    try {
+      return await bounded(page.evaluate(inPage(fn, helpers, arg)));
+    } catch (error) {
+      failures.push(`${label} ${shortError(error)}`);
+      return null;
+    }
+  };
+  const pushRender = (entry) => {
+    const same = renderCells.find(item => item.file === entry.file);
+    if (same) {
+      Object.assign(same, entry);
+      return;
+    }
+    if (renderCells.length < RENDER_CELL_MAX) renderCells.push(entry);
+  };
+
+  // Passo que muda a página. Vem por último na célula; a célula seguinte abre a página de novo.
+  const probeStates = async (page, label) => {
+    const start = page.url();
+    const deadline = Date.now() + STATES_BUDGET_MS;
+    const count = await probe(page, markControls, RENDER_HELPERS, CONTROL_MAX, renderFailures, label);
+    const out = [];
+    if (!Number.isInteger(count) || count <= 0) return out;
+    try {
+      await page.mouse.move(0, 0);
+      for (let index = 0; index < count; index += 1) {
+        if (page.url() !== start || Date.now() > deadline) break;
+        const rest = await probe(page, readControl, CONTROL_HELPERS, index, renderFailures, label);
+        if (!rest) continue;
+        const locator = page.locator(`[data-ac-sonda="${index}"]`);
+        const judged = [];
+        try {
+          await locator.hover({timeout: 1000});
+          judged.push(['hover', await probe(page, readControl, CONTROL_HELPERS, index, renderFailures, label)]);
+        } catch {
+          /* controle coberto ou fora de alcance */
+        }
+        await page.mouse.move(0, 0);
+        if (page.url() !== start) break;
+        try {
+          await locator.focus({timeout: 1000});
+          judged.push(['foco', await probe(page, readControl, CONTROL_HELPERS, index, renderFailures, label)]);
+          await locator.blur({timeout: 1000});
+        } catch {
+          /* sem foco */
+        }
+        for (const [state, read] of judged) {
+          // Mesma cor do repouso: o axe já mede. Aqui só entra o estado que muda e reprova.
+          if (!read || read.key === rest.key || !(read.ratio < read.need)) continue;
+          out.push({label40: read.label40, state, ratio: Math.floor(read.ratio * 100) / 100, need: read.need});
+        }
+      }
+    } catch (error) {
+      renderFailures.push(`${label} estados ${shortError(error)}`);
+    }
+    return out;
+  };
+
+  const walkTab = async (page, label) => {
+    const steps = [];
+    const start = page.url();
+    const deadline = Date.now() + TAB_BUDGET_MS;
+    let bodyHits = 0;
+    for (let press = 0; press < TAB_STEPS_MAX && Date.now() <= deadline; press += 1) {
+      await bounded(page.keyboard.press('Tab'));
+      if (page.url() !== start) break;
+      const read = await probe(page, focusRead, FOCUS_HELPERS, steps.length, keyboardFailures, label);
+      if (!read || read.repeat) break;
+      if (read.body) {
+        bodyHits += 1;
+        if (bodyHits >= 2) break;
+        continue;
+      }
+      if (read.step) steps.push(read.step);
+    }
+    return steps;
+  };
+
+  // Abre a rota sem estado, tema claro. Erro, redirecionamento ou tela de erro: não mede.
+  const openPlain = async (page, route, viewport) => {
+    await page.setViewportSize({width: viewport, height: viewportHeight(viewport)});
+    await page.emulateMedia({colorScheme: 'light'});
+    const url = routeUrl(target.origin, route);
+    const response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
+    const status = response && Number.isInteger(response.status()) ? response.status() : 0;
+    const landed = new URL(page.url());
+    if (status >= 400 || status === 0 || landed.origin !== target.origin) return false;
+    if (redirectedTo(url, landed.href) !== null) return false;
+    return await probe(page, overlayProbe, [], DEV_OVERLAY, renderFailures, route) !== true;
+  };
+
+  const runRoutePasses = async (page, route) => {
+    const narrow = `${route} 320 claro padrao`;
+    try {
+      if (renderCells.length < RENDER_CELL_MAX && await openPlain(page, route, 320)) {
+        const read = await probe(page, renderProbe, RENDER_HELPERS, {overflow: true}, renderFailures, narrow);
+        if (read && read.overflow) {
+          pushRender({file: narrow, route, viewport: 320, theme: 'claro', state: 'padrao', overflow: read.overflow});
+          renderMeasured += 1;
+        }
+      }
+    } catch (error) {
+      renderFailures.push(`${narrow} ${shortError(error)}`);
+    }
+    const wide = `${route} 1440 claro padrao`;
+    try {
+      if (await openPlain(page, route, 1440)) {
+        const steps = await walkTab(page, wide);
+        if (steps.length > 0) keyboardWalks.push({file: wide, steps});
+      }
+    } catch (error) {
+      keyboardFailures.push(`${wide} ${shortError(error)}`);
+    }
+    try {
+      await page.emulateMedia({colorScheme: 'light', reducedMotion: 'reduce'});
+      if (await openPlain(page, route, 1440)) {
+        await page.waitForTimeout(1000);
+        const read = await probe(page, motionProbe, MOTION_HELPERS, null, renderFailures, `${wide} movimento`);
+        if (read && Array.isArray(read.running)) pushRender({file: wide, route, viewport: 1440, theme: 'claro', state: 'padrao', motion: read});
+      }
+    } catch (error) {
+      renderFailures.push(`${wide} movimento ${shortError(error)}`);
+    } finally {
+      await page.emulateMedia({reducedMotion: null}).catch(() => undefined);
+    }
+  };
+
+  const runCell = async (page, cell) => {
+    const fileName = routeShotName(cell.route, cell.viewport, cell.theme, cell.state);
+    const label = cellLabel(cell);
+    try {
+      await page.setViewportSize({width: cell.viewport, height: viewportHeight(cell.viewport)});
+      await page.emulateMedia({colorScheme: cell.theme === 'escuro' ? 'dark' : 'light'});
+      const url = cell.href ?? routeUrl(target.origin, cell.route);
+      let response;
+      try {
+        response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
+      } catch {
+        markUnavailable(cell, 0);
+        return;
+      }
+      const status = response && Number.isInteger(response.status()) ? response.status() : 0;
+      let landed = null;
+      try {
+        landed = new URL(page.url());
+      } catch {
+        landed = null;
+      }
+      if (status >= 400 || status === 0 || !landed || landed.origin !== target.origin) {
+        markUnavailable(cell, status >= 400 ? status : 0);
+        return;
+      }
+      // Sem sessão, outro caminho costuma ser a tela de entrar. Os tokens e a régua não usam essa página.
+      const moved = cell.auth ? null : redirectedTo(url, landed.href);
+      if (moved !== null) note(`rota ${cell.route} redirecionou para ${moved}`);
+      const overlay = () => probe(page, overlayProbe, [], DEV_OVERLAY, renderFailures, label);
+      if (await overlay() === true) {
+        markUnavailable(cell, 0, 'tela de erro do servidor de desenvolvimento');
+        return;
+      }
+      rememberStyles(await readStyleBlocks(page));
+      try {
+        const acted = await runActions(page, cell.actions);
+        if (!acted) {
+          note(`estado ${cell.state} não capturado`);
+          return;
+        }
+      } catch {
+        note(`estado ${cell.state} não capturado`);
+        return;
+      }
+      if (cell.actions.length > 0 && await overlay() === true) {
+        markUnavailable(cell, 0, 'tela de erro do servidor de desenvolvimento');
+        return;
+      }
+      rememberStyles(await readStyleBlocks(page));
+      const shot = join('/output/capturas', fileName);
+      await page.screenshot({path: shot, fullPage: true, type: 'png'});
+      screenshots.push({fileName, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state});
+      const samples = await page.evaluate(inPage(sampleProbe, SAMPLE_HELPERS));
+      if (moved === null) computed.push({route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state, samples});
+      try {
+        const results = await new AxeBuilder({page}).withTags(AXE_TAGS).analyze();
+        const violations = Array.isArray(results?.violations) ? results.violations.length : 0;
+        axeFindings += violations;
+        axeFinished += 1;
+        axeReports.push({
+          file: label,
+          route: cell.route,
+          viewport: cell.viewport,
+          theme: cell.theme,
+          state: cell.state,
+          json: results,
+        });
+      } catch (error) {
+        axeFailures.push(`DESIGN_AXE_FAILED ${label} ${shortError(error)}`);
+      }
+      if (moved !== null || renderCells.length >= RENDER_CELL_MAX) return;
+      const wide = cell.viewport === 1440;
+      const read = await probe(page, renderProbe, RENDER_HELPERS, {
+        overflow: true,
+        clipped: true,
+        images: true,
+        inputs: cell.viewport === 375,
+        residue: wide,
+        charts: wide,
+        title: wide && cell.theme === 'claro' && cell.state === 'padrao',
+        patterns: RESIDUE_PATTERNS,
+      }, renderFailures, label);
+      const entry = {file: label, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state};
+      if (read && typeof read === 'object') {
+        Object.assign(entry, read);
+        renderMeasured += 1;
+      }
+      if (wide && cell.state === 'padrao') entry.states = await probeStates(page, label);
+      pushRender(entry);
+    } catch (error) {
+      axeFailures.push(`DESIGN_AXE_FAILED ${label} ${shortError(error)}`);
+      note(`captura falhou ${cell.route} ${cell.viewport} ${cell.state}`);
     }
   };
 
@@ -554,177 +1327,17 @@ async function main() {
           authPage = null;
         }
       }
-      for (const cell of cells) {
-        const page = cell.auth ? authPage : anonPage;
-        if (!page) {
-          note('logado não capturado');
-          continue;
+      for (const group of routeCells) {
+        for (const cell of group.cells) {
+          const page = cell.auth ? authPage : anonPage;
+          if (!page) {
+            note('logado não capturado');
+            continue;
+          }
+          await runCell(page, cell);
         }
-        const fileName = routeShotName(cell.route, cell.viewport, cell.theme, cell.state);
-        try {
-          await page.setViewportSize({width: cell.viewport, height: viewportHeight(cell.viewport)});
-          await page.emulateMedia({colorScheme: cell.theme === 'escuro' ? 'dark' : 'light'});
-          const url = cell.href ?? routeUrl(target.origin, cell.route);
-          let response;
-          try {
-            response = await page.goto(url, {waitUntil: 'load', timeout: 20000});
-          } catch {
-            markUnavailable(cell, 0);
-            continue;
-          }
-          const status = response && Number.isInteger(response.status()) ? response.status() : 0;
-          let landed = null;
-          try {
-            landed = new URL(page.url());
-          } catch {
-            landed = null;
-          }
-          if (status >= 400 || status === 0 || !landed || landed.origin !== target.origin) {
-            markUnavailable(cell, status >= 400 ? status : 0);
-            continue;
-          }
-          rememberStyles(await readStyleBlocks(page));
-          try {
-            const acted = await runActions(page, cell.actions);
-            if (!acted) {
-              note(`estado ${cell.state} não capturado`);
-              continue;
-            }
-          } catch {
-            note(`estado ${cell.state} não capturado`);
-            continue;
-          }
-          rememberStyles(await readStyleBlocks(page));
-          const shot = join('/output/capturas', fileName);
-          await page.screenshot({path: shot, fullPage: true, type: 'png'});
-          screenshots.push({fileName, route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state});
-          const samples = await page.evaluate(() => {
-            function parseColor(value) {
-              if (!value) return null;
-              const text = String(value).trim().toLowerCase();
-              if (text === 'transparent') return {r: 0, g: 0, b: 0, a: 0};
-              const comma = /^rgba?\(\s*([+-]?[\d.]+)\s*,\s*([+-]?[\d.]+)\s*,\s*([+-]?[\d.]+)\s*(?:,\s*([+-]?[\d.]+%?)\s*)?\)$/.exec(text);
-              const space = /^rgba?\(\s*([+-]?[\d.]+)\s+([+-]?[\d.]+)\s+([+-]?[\d.]+)\s*(?:\/\s*([+-]?[\d.]+%?)\s*)?\)$/.exec(text);
-              const match = comma || space;
-              if (!match) return null;
-              const channel = (raw) => {
-                const number = Number(raw);
-                if (!Number.isFinite(number)) return null;
-                return Math.min(255, Math.max(0, number));
-              };
-              const red = channel(match[1]);
-              const green = channel(match[2]);
-              const blue = channel(match[3]);
-              if (red === null || green === null || blue === null) return null;
-              let alpha = 1;
-              if (match[4] !== undefined) {
-                const token = match[4];
-                alpha = token.endsWith('%') ? Number(token.slice(0, -1)) / 100 : Number(token);
-              }
-              if (!Number.isFinite(alpha)) return null;
-              return {r: red, g: green, b: blue, a: Math.min(1, Math.max(0, alpha))};
-            }
-            function over(src, dst) {
-              const outA = src.a + dst.a * (1 - src.a);
-              if (outA <= 0) return {r: 255, g: 255, b: 255, a: 1};
-              const mix = (srcChannel, dstChannel) => (srcChannel * src.a + dstChannel * dst.a * (1 - src.a)) / outA;
-              return {r: mix(src.r, dst.r), g: mix(src.g, dst.g), b: mix(src.b, dst.b), a: outA};
-            }
-            function rgb(color) {
-              const channel = (value) => Math.max(0, Math.min(255, Math.round(value)));
-              return `rgb(${channel(color.r)}, ${channel(color.g)}, ${channel(color.b)})`;
-            }
-            // Canvas sem cor opaca compõe sobre branco. Imagem ou gradiente não vira preto.
-            function effective(el) {
-              const layers = [];
-              let node = el;
-              while (node && node.nodeType === 1) {
-                const background = getComputedStyle(node);
-                if (background.backgroundImage && background.backgroundImage !== 'none') return null;
-                const color = parseColor(background.backgroundColor);
-                if (!color) return null;
-                if (color.a > 0) layers.push(color);
-                if (color.a >= 0.999) break;
-                node = node.parentElement;
-              }
-              let acc = {r: 255, g: 255, b: 255, a: 1};
-              for (let index = layers.length - 1; index >= 0; index -= 1) acc = over(layers[index], acc);
-              return rgb(acc);
-            }
-            function hasText(el) {
-              const nodes = el.childNodes;
-              for (let index = 0; index < nodes.length; index += 1) {
-                const node = nodes[index];
-                if (node.nodeType === 3 && node.textContent && node.textContent.trim().length > 0) return true;
-              }
-              return false;
-            }
-            const out = [];
-            const seen = new Set();
-            const root = document.body;
-            if (!root) return out;
-            const nodes = [root, ...root.querySelectorAll('*')];
-            for (const el of nodes) {
-              if (!el || out.length >= 500) break;
-              const style = getComputedStyle(el);
-              const opacity = Number(style.opacity);
-              if (style.display === 'none' || style.visibility !== 'visible' || (Number.isFinite(opacity) && opacity === 0)) continue;
-              const rect = el.getBoundingClientRect();
-              if (rect.width < 1 || rect.height < 1) continue;
-              const record = {
-                selector: el.tagName.toLowerCase(),
-                color: style.color,
-                borderColor: style.borderTopColor,
-                fontFamily: style.fontFamily,
-                fontSize: style.fontSize,
-                fontWeight: style.fontWeight,
-                lineHeight: style.lineHeight,
-                letterSpacing: style.letterSpacing,
-                margin: style.margin,
-                padding: style.padding,
-                gap: style.gap,
-                borderRadius: style.borderRadius,
-                boxShadow: style.boxShadow,
-                transitionDuration: style.transitionDuration,
-                width: `${Math.round(rect.width)}px`,
-                height: `${Math.round(rect.height)}px`,
-              };
-              if (hasText(el)) {
-                const background = effective(el);
-                if (background) record.backgroundColor = background;
-                else record.contrastNote = 'nao-medido';
-              } else if (!(style.backgroundImage && style.backgroundImage !== 'none')) {
-                const own = parseColor(style.backgroundColor);
-                if (own && own.a >= 0.999) record.backgroundColor = rgb(own);
-              }
-              const key = JSON.stringify(record);
-              if (seen.has(key)) continue;
-              seen.add(key);
-              out.push(record);
-            }
-            return out;
-          });
-          computed.push({route: cell.route, viewport: cell.viewport, theme: cell.theme, state: cell.state, samples});
-          try {
-            const results = await new AxeBuilder({page}).withTags(AXE_TAGS).analyze();
-            const violations = Array.isArray(results?.violations) ? results.violations.length : 0;
-            axeFindings += violations;
-            axeFinished += 1;
-            axeReports.push({
-              file: `${cell.route} ${cell.viewport} ${cell.theme} ${cell.state}`,
-              route: cell.route,
-              viewport: cell.viewport,
-              theme: cell.theme,
-              state: cell.state,
-              json: results,
-            });
-          } catch (error) {
-            axeFailures.push(`DESIGN_AXE_FAILED ${cell.route} ${cell.viewport} ${cell.theme} ${cell.state} ${shortError(error)}`);
-          }
-        } catch (error) {
-          axeFailures.push(`DESIGN_AXE_FAILED ${cell.route} ${cell.viewport} ${cell.theme} ${cell.state} ${shortError(error)}`);
-          note(`captura falhou ${cell.route} ${cell.viewport} ${cell.state}`);
-        }
+        // Uma vez por rota, depois das células: 320px, Tab e movimento reduzido.
+        if (group.cells.length > 0) await runRoutePasses(anonPage, group.route);
       }
     } catch (error) {
       axeFailures.push(`DESIGN_AXE_FAILED ${shortError(error)}`);
@@ -733,6 +1346,9 @@ async function main() {
       anonContext = null;
       authContext = null;
     }
+  } else {
+    renderFailures.push('DESIGN_RENDER_FAILED sem navegador');
+    keyboardFailures.push('DESIGN_KEYBOARD_FAILED sem navegador');
   }
   let pa11yFindings = 0;
   let pa11yCells = 0;
@@ -946,6 +1562,12 @@ async function main() {
     },
   }));
 
+  // A régua e o teclado não estão entre as obrigatórias do host.
+  coverage.push(
+    row('régua', packageVersion('playwright'), `${renderMeasured} células`, 0, failureText(renderFailures)),
+    row('teclado', packageVersion('playwright'), `${keyboardWalks.length} rotas`, 0, failureText(keyboardFailures)),
+  );
+
   const required = ['axe-core', 'pa11y', 'lighthouse', 'stylelint', 'css-analyzer'];
   for (const tool of required) {
     if (!coverage.some(item => item.tool === tool)) coverage.push(row(tool, 'desconhecida', '0', 0, 'DESIGN_TOOL_MISSING'));
@@ -962,6 +1584,8 @@ async function main() {
       lighthouse: lighthouseReports,
       stylelint: stylelintReports,
       cssAnalyzer: analyzerReports,
+      render: renderCells,
+      keyboard: keyboardWalks,
     },
     computed,
     screenshots,

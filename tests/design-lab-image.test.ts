@@ -86,7 +86,7 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     const readme = await readFile(join(result.directory, 'README.md'), 'utf8');
     const raw = await readFile(join(result.directory, 'bruto', 'achados-brutos.json'), 'utf8');
     const coverage = await readFile(join(result.directory, 'cobertura-ferramentas.md'), 'utf8');
-    const parsed = JSON.parse(raw) as {findings: {tool: string; rule: string; severity: string; snippet: string; measure?: {kind?: string; px?: number}}[]};
+    const parsed = JSON.parse(raw) as {findings: {tool: string; file?: string; rule: string; severity: string; snippet: string; measure?: {kind?: string; px?: number}}[]};
     const rules = parsed.findings.map(item => `${item.tool} ${item.rule} ${item.severity} ${item.snippet}`);
     const summaryPath = join(data, 'lab-summary.json');
     await writeFile(summaryPath, JSON.stringify({
@@ -155,6 +155,24 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     assert.match(coverage, /axe-core/);
     assert.match(coverage, /css-analyzer/);
     assert.equal(result.achados.some(item => item.reference.includes('WCAG') || item.reference.startsWith('DESIGN-')), true);
+    // Régua e Tab real: /lab/sonda planta um defeito por regra. Depende da ligação no collect e no módulo.
+    const onProbe = (tool: string, rule: string) => parsed.findings.filter(item => item.tool === tool && item.rule === rule);
+    const scroll = onProbe('régua', 'DESIGN-TELA-ROLAGEM-HORIZONTAL');
+    assert.equal(scroll.some(item => item.severity === 'alta' && item.measure?.kind === 'overflow'), true, rules.join('\n'));
+    for (const rule of ['DESIGN-TEXTO-CORTADO-MEDIDO', 'DESIGN-IMAGEM-QUEBRADA', 'DESIGN-TEXTO-SOBRA', 'DESIGN-GRAFICO-SEM-ALTERNATIVA', 'DESIGN-CONTRASTE-ESTADO', 'DESIGN-MOVIMENTO-REDUZIDO']) {
+      assert.equal(onProbe('régua', rule).length > 0, true, `${rule}\n${rules.join('\n')}`);
+    }
+    assert.equal(onProbe('régua', 'DESIGN-CONTRASTE-ESTADO').some(item => item.severity === 'alta' && item.measure?.kind === 'contrast'), true, rules.join('\n'));
+    assert.equal(onProbe('teclado', 'WCAG-2-4-11-FOCO-ENCOBERTO').length > 0, true, rules.join('\n'));
+    // As telas corretas do laboratório (/painel e /item/42) não disparam nenhuma regra da régua ou do Tab.
+    const correct = (file: string) => file === 'app/painel/page.tsx' || file === 'public/painel.html' || file === 'public/item.html'
+      || file.startsWith('/painel ') || file.startsWith('/item/42 ');
+    const onCorrect = parsed.findings.filter(item => (item.tool === 'régua' || item.tool === 'teclado') && correct(item.file ?? ''));
+    assert.deepEqual(onCorrect.map(item => `${item.tool} ${item.rule} ${item.file} ${item.snippet}`), []);
+    assert.match(readme, /redirecionou para \/entrar/);
+    assert.match(readme, /indisponível \(tela de erro do servidor de desenvolvimento\)/);
+    assert.match(coverage, /\| régua \|/);
+    assert.match(coverage, /\| teclado \|/);
   } finally {
     await rm(data, {recursive: true, force: true});
     await rm(loginDir, {recursive: true, force: true}).catch(() => undefined);
