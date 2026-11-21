@@ -86,7 +86,7 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     const readme = await readFile(join(result.directory, 'README.md'), 'utf8');
     const raw = await readFile(join(result.directory, 'bruto', 'achados-brutos.json'), 'utf8');
     const coverage = await readFile(join(result.directory, 'cobertura-ferramentas.md'), 'utf8');
-    const parsed = JSON.parse(raw) as {findings: {tool: string; rule: string; severity: string; snippet: string; measure?: {kind?: string; px?: number}}[]};
+    const parsed = JSON.parse(raw) as {findings: {tool: string; file?: string; rule: string; severity: string; snippet: string; measure?: {kind?: string; px?: number}}[]};
     const rules = parsed.findings.map(item => `${item.tool} ${item.rule} ${item.severity} ${item.snippet}`);
     const summaryPath = join(data, 'lab-summary.json');
     await writeFile(summaryPath, JSON.stringify({
@@ -164,6 +164,11 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     }
     assert.equal(onProbe('régua', 'DESIGN-CONTRASTE-ESTADO').some(item => item.severity === 'alta' && item.measure?.kind === 'contrast'), true, rules.join('\n'));
     assert.equal(onProbe('teclado', 'WCAG-2-4-11-FOCO-ENCOBERTO').length > 0, true, rules.join('\n'));
+    // As telas corretas do laboratório (/painel e /item/42) não disparam nenhuma regra da régua ou do Tab.
+    const correct = (file: string) => file === 'app/painel/page.tsx' || file === 'public/painel.html' || file === 'public/item.html'
+      || file.startsWith('/painel ') || file.startsWith('/item/42 ');
+    const onCorrect = parsed.findings.filter(item => (item.tool === 'régua' || item.tool === 'teclado') && correct(item.file ?? ''));
+    assert.deepEqual(onCorrect.map(item => `${item.tool} ${item.rule} ${item.file} ${item.snippet}`), []);
     assert.match(readme, /redirecionou para \/entrar/);
     assert.match(readme, /indisponível \(tela de erro do servidor de desenvolvimento\)/);
     assert.match(coverage, /\| régua \|/);
