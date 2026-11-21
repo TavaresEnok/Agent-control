@@ -1956,3 +1956,19 @@ FIM
 - **Fixação:** `verify-image.json` aponta para o digest novo. Cópias anteriores: `verify-image.json.before-rev2` e `installation.json.before-rev2`. Gateway reiniciado: ativo, painel 200.
 - **Prova:** execução com os argumentos reais do produto (`--read-only`, usuário 65532, `/tmp` com `exec`, rede `none`, bases de vulnerabilidade atuais) sobre um repositório pequeno: os nove programas (gitleaks, osv-scanner, syft, grype, opengrep, hadolint, trivy-config, trivy-fs, checkov) gravaram `.code`, `.version` e `status.json` com código de saída 0. Uma primeira tentativa com `/tmp` sem `exec` deu 127 no checkov; era erro do meu comando de teste, não da imagem.
 - **Limite:** não rodei um exame completo do produto, só a imagem. A imagem `ac-verify:ordem2` continua no Docker (não registrada para retenção).
+
+- 21/11/2026 16:40 UTC — **Melhorias da análise dos concorrentes aplicadas na instalação viva** (supervisor Claude, plano `docs/PLANO-MELHORIAS-CONCORRENTES.md`; ramo `melhorias/concorrentes` juntado em `task/personal-activation` até `c99b15a8`).
+  - **Antes:** backup `/home/app/backups-agent-control/ispagent/20261121-155954`, conferido. Cópias: `installation.json.before-melhorias`, `verify-image.json.before-melhorias` e a unidade antiga do gateway.
+  - **Imagens:**
+    - execução `sha256:00d66f48753c…` e planejamento `sha256:5474266f5e86…`, ambas com os invólucros `ac-claude-evaluator` e `ac-claude-programmer`, iguais aos do repositório;
+    - verify `ac-verify:rev3` `sha256:394c91afd798…`, com entrypoint igual ao do repositório e as 9 ferramentas com código 0;
+    - as anteriores ficaram registradas para a retenção.
+  - **Saída restrita:** `egress: observe`. A rede `ac-native-provider` passou a ser interna (id `11a9facb55c4…`), com o proxy `ac-provider-egress`. No modo observação apareceram dois destinos fora da lista: `http-intake.logs.us5.datadoghq.com`, a telemetria do CLI, que fica bloqueada, e `ab.chatgpt.com`, que entra na lista.
+  - **Filtro do Docker:** a unidade `agent-control-docker-filter-ispagent` está ativa, e o gateway roda com `AC_DOCKER_SOCKET` e `AC_PERSONAL_EGRESS=1`. Painel 200, Happier 401 sem login, nenhuma recusa do filtro.
+  - **Provas reais pelo caminho novo:**
+    - exame do módulo 1 no IspAgent, com mais de 45 chamadas do examinador Claude pelo filtro e pelo proxy;
+    - uma chamada do gerente Codex: código 0, resposta "ok";
+    - laboratórios: endurecimento com a imagem nova, 9/9; filtro com o Docker real, 9/9.
+  - **Suíte completa:** 325 arquivos ok e nenhuma falha. As 9 falhas antigas foram corrigidas.
+  - **Risco aceito pelo titular:** o gateway continua no grupo `docker` ("só eu vou usar").
+
