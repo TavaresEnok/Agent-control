@@ -386,7 +386,7 @@ export async function defaultRunTools(
       await chmod(spec.output, 0o700);
     }
   } finally {
-    if (own) await rm(snapshot, {recursive: true, force: true});
+    if (own) { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}); }
   }
 }
 
@@ -576,7 +576,7 @@ async function runJob(input: {
     }
   } finally {
     // The one snapshot lives for the whole exam and goes away here, done or failed.
-    await rm(snapshot, {recursive: true, force: true}).catch(() => undefined);
+    { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined); }
     // The job reached its end (done or failed): leftovers may now age out.
     await endRound({dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id});
     try { await releaseExamDatabase(ready.dataDirectory, input.databaseStamp, id); }
@@ -646,7 +646,7 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     return {id, status: 'running', phase: 'ferramentas'};
   } catch (error) {
     if (!started) {
-      if (snapshot) await rm(snapshot, {recursive: true, force: true}).catch(() => undefined);
+      if (snapshot) { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined); }
       // Never leave a 'running' progress file behind when the job did not start (it would block every later exam).
       if (progressPath) await rm(progressPath, {force: true}).catch(() => undefined);
       try { await releaseExamDatabase(ready.dataDirectory, databaseStamp, id); } catch { /* keep the original error */ }

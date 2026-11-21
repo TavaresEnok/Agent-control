@@ -40,6 +40,7 @@ test('zero tests, all skipped and failure text under exit 0 are caught', () => {
   assert.deepEqual(codes('===== 2 skipped in 0.02s =====\n'), ['QA_ALL_SKIPPED']);
   assert.deepEqual(codes('===== 1 failed, 2 passed in 0.10s =====\n'), ['QA_FAILURE_TEXT']);
   assert.deepEqual(codes('collected 0 items\n\n===== no tests ran in 0.01s =====\n'), ['QA_ZERO_TESTS']);
+  assert.deepEqual(codes('===== 4 deselected in 0.02s =====\n'), ['QA_ALL_SKIPPED']);
   assert.deepEqual(codes('--- FAIL: TestX (0.00s)\nFAIL\texample.com/x\t0.01s\n'), ['QA_FAILURE_TEXT']);
 });
 
@@ -67,9 +68,13 @@ test('the Git helper reports deleted test files and focus markers in test files 
     await mkdir(join(repo, 'src'));
     await writeFile(join(repo, 'tests', 'old.test.ts'), 'test("x",()=>{});\n');
     await writeFile(join(repo, 'tests', 'kept.test.ts'), 'test("y",()=>{});\n');
+    await writeFile(join(repo, 'tests', 'untouched.test.ts'), 'it.only("old focus, not this change",()=>{});\n');
+    await writeFile(join(repo, 'tests', 'moved.test.ts'), 'test("moved",()=>{});\n');
     git('add', '.'); git('commit', '-m', 'base');
     const base = git('rev-parse', 'HEAD');
     git('rm', '-q', 'tests/old.test.ts');
+    await mkdir(join(repo, 'tests', 'unit'));
+    git('mv', 'tests/moved.test.ts', 'tests/unit/moved.test.ts');
     await writeFile(join(repo, 'tests', 'kept.test.ts'), 'test("y",()=>{});\ndescribe.only("z",()=>{});\n  fit("w",()=>{});\n');
     await writeFile(join(repo, 'src', 'lint.ts'), 'export const rule = "it.only(";\nit.only("not a test file", () => {});\n');
     git('add', '.'); git('commit', '-m', 'change');
@@ -79,4 +84,14 @@ test('the Git helper reports deleted test files and focus markers in test files 
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test('a downgraded pass is a failed verdict the correction gates accept, with the container code kept', async () => {
+  const {readFile} = await import('node:fs/promises');
+  const qa = await readFile(new URL('../src/native-qa.ts', import.meta.url), 'utf8');
+  assert.ok(qa.includes('exitCode:evidence?1:physical.State.ExitCode'));
+  assert.ok(qa.includes('...(evidence?{evidence,containerExitCode:physical.State.ExitCode}:{})'));
+  // Both correction gates refuse exitCode<=0; the downgraded receipt carries 1.
+  for (const file of ['../src/quality.ts', '../src/engineering.ts'])
+    assert.match(await readFile(new URL(file, import.meta.url), 'utf8'), /exitCode<=0/);
 });

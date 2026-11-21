@@ -1,4 +1,8 @@
-import {spawn} from 'node:child_process';
+import {execFile, spawn} from 'node:child_process';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {promisify} from 'node:util';
 import {Refusal} from './contracts.ts';
 
 /** One Git environment for every exam snapshot: no system or global config, no lazy fetch from a promisor remote, no transport. */
@@ -20,11 +24,33 @@ export const ARCHIVE_TIMEOUT_MS = 60_000;
  * `keepPermissions` pins `tar.umask=0022` and `--same-permissions` (the personal static exam reads as another user).
  * A failed archive or extraction is VERIFY_COMMIT_INVALID; a spawn error or the timeout is VERIFY_TOOLS_FAILED.
  */
-export function extractGitArchive(repo: string, commit: string, destination: string, options: {keepPermissions?: boolean; timeoutMs?: number} = {}): Promise<void> {
+export async function extractGitArchive(repo: string, commit: string, destination: string, options: {keepPermissions?: boolean; timeoutMs?: number} = {}): Promise<void> {
+  // The examined commit's own .gitattributes must not shape what is examined: `export-ignore` would hide a file from every
+  // scanner and `export-subst` would rewrite content. The archive is read through an empty bare repository that borrows the
+  // objects (alternates) and whose info/attributes, the highest-precedence source, turns both off. Its refs and config are
+  // empty too, so no replace ref, hook or filter of the examined repository applies.
+  let common: string;
+  try {
+    common = (await promisify(execFile)('/usr/bin/git', ['-C', repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'], {env: GIT_ARCHIVE_ENV, timeout: 10_000})).stdout.trim();
+  } catch {
+    throw new Refusal('VERIFY_COMMIT_INVALID', 400);
+  }
+  const neutral = await mkdtemp(join(tmpdir(), 'ac-archive-git-'));
+  try {
+    await promisify(execFile)('/usr/bin/git', ['init', '--bare', '-q', neutral], {env: GIT_ARCHIVE_ENV, timeout: 10_000});
+    await writeFile(join(neutral, 'objects', 'info', 'alternates'), join(common, 'objects') + '\n', {mode: 0o600});
+    await writeFile(join(neutral, 'info', 'attributes'), '* -export-ignore -export-subst\n', {mode: 0o600});
+    await archiveInto(neutral, commit, destination, options);
+  } finally {
+    await rm(neutral, {recursive: true, force: true});
+  }
+}
+
+function archiveInto(gitDir: string, commit: string, destination: string, options: {keepPermissions?: boolean; timeoutMs?: number}): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const git = spawn('/usr/bin/git', ['--no-replace-objects', '-C', repo, '-c', 'core.hooksPath=/dev/null', ...(options.keepPermissions ? ['-c', 'tar.umask=0022'] : []), 'archive', '--format=tar', commit], {
+    const git = spawn('/usr/bin/git', ['--no-replace-objects', `--git-dir=${gitDir}`, '-c', 'core.hooksPath=/dev/null', ...(options.keepPermissions ? ['-c', 'tar.umask=0022'] : []), 'archive', '--format=tar', commit], {
       env: GIT_ARCHIVE_ENV,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
@@ -92,5 +118,5 @@ export async function stripScannerSuppressions(root: string): Promise<string[]> 
 export function suppressionNote(removed: readonly string[]): string | undefined {
   if (!removed.length) return undefined;
   const shown = removed.slice(0, 20).join(', ');
-  return `Arquivos de supressão do próprio projeto foram ignorados no exame (${removed.length}): ${shown}${removed.length > 20 ? ` e mais ${removed.length - 20}` : ''}. As marcas gitleaks:allow e nosemgrep também não valem.`;
+  return `Arquivos de supressão do próprio projeto foram ignorados no exame (${removed.length}): ${shown}${removed.length > 20 ? ` e mais ${removed.length - 20}` : ''}. As marcas gitleaks:allow e nosemgrep também não valem; checkov:skip, hadolint ignore e trivy:ignore no próprio código ainda valem.`;
 }

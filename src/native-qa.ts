@@ -371,6 +371,7 @@ export class NativeQa{
   let logs=this.contract.services&&collected.logsAvailable?redactQaDatabaseSecrets(collected.logs):collected.logs;const logsAvailable=collected.logsAvailable;
   let status:'canceled'|'missing_result'|'passed'|'failed'=job.stop_reason==='canceled'?'canceled':!logsAvailable||job.stop_reason==='timeout'||Date.parse(physical.State.FinishedAt)>new Date(job.deadline_at).getTime()||physical.State.OOMKilled===true||[126,127,137,143].includes(physical.State.ExitCode)?'missing_result':physical.State.ExitCode===0?'passed':'failed';
   // Exit 0 is necessary, not sufficient: zero tests, all skipped, failure text, focused tests or deleted test files downgrade the pass.
+  // A downgraded pass is a failed verdict: exitCode 1 (what the correction gates require), the container's own 0 kept in containerExitCode.
   let evidence:QaEvidenceIssue[]|undefined;
   if(status==='passed'){const issues=await this.evidenceIssues(job,logs);if(issues.length){evidence=issues;status='failed';logs=Buffer.concat([logs,this.frameQaText(qaEvidenceLogLine(issues))]);}}
   const logSha256=createHash('sha256').update(logs).digest('hex');
@@ -381,7 +382,7 @@ export class NativeQa{
   const directory=await open(this.paths(id).area,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{await directory.sync();}finally{await directory.close();}
 
 
-  const receipt={schemaVersion:1,jobId:id,artifactId:job.artifact_id,grantId:job.grant_id,sessionId:job.session_id,contractDigest:this.verifierDigest,containerId:physical.Id,exitCode:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,status,logSha256,logsAvailable,synthetic:false,modelInference:false,...(evidence?{evidence}:{})};
+  const receipt={schemaVersion:1,jobId:id,artifactId:job.artifact_id,grantId:job.grant_id,sessionId:job.session_id,contractDigest:this.verifierDigest,containerId:physical.Id,exitCode:evidence?1:physical.State.ExitCode,finishedAt:physical.State.FinishedAt,status,logSha256,logsAvailable,synthetic:false,modelInference:false,...(evidence?{evidence,containerExitCode:physical.State.ExitCode}:{})};
   await this.ledger.tx(async c=>{
    await this.authorize(c,principal,authority,job.intent_id,true);const saved=(await c.query('SELECT * FROM ac_native_qa_jobs WHERE id=$1 FOR UPDATE',[id])).rows[0];
    if(['completed','failed'].includes(saved.state)){if(digest(saved.receipt)!==digest(receipt))throw new Refusal('NATIVE_QA_RECEIPT_CONFLICT');return;}

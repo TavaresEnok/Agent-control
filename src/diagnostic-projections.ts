@@ -15,7 +15,7 @@ export function nativeQaDiagnostic(row:{id:string;intent_id:string;state:string;
  const status=coherent?receipt?.status:undefined;
  const code=receipt?.exitCode;
  const semantics=status==='passed'?row.state==='completed'&&row.stop_reason===null&&code===0&&receipt?.logsAvailable===true
-  :status==='failed'?row.state==='failed'&&row.stop_reason===null&&(code!==0||Array.isArray(receipt?.evidence)&&receipt.evidence.length>0)&&![126,127,137,143].includes(code as number)&&receipt?.logsAvailable===true
+  :status==='failed'?row.state==='failed'&&row.stop_reason===null&&code!==0&&![126,127,137,143].includes(code as number)&&receipt?.logsAvailable===true
   :status==='canceled'?row.state==='failed'&&row.stop_reason==='canceled'
   :status==='missing_result'?row.state==='failed'&&row.stop_reason!=='canceled':false;
  const evidence:Finding['evidence']=[{kind:'native_qa_job',id:row.id},{kind:'intent',id:row.intent_id}];

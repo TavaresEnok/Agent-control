@@ -7,7 +7,7 @@ export type ReviewChange = {
   filesTotal?: number;
 };
 
-export const INCOMPLETE_REVIEW_RULE = 'If the diff is cut, read every changed file it does not show in the current directory before judging. If you cannot judge a changed file, do not approve: reject and say "revisão incompleta".';
+export const INCOMPLETE_REVIEW_RULE = 'If the diff is cut, read every changed file it does not show in the current directory before judging. Agent configuration files and symbolic links are not in the copy; judge those from the diff. If you still cannot judge a changed file, do not approve: reject and say "revisão incompleta".';
 
 /** Header lines. Never empty: the file list, or the honest statement that no list was available. */
 export function changedFilesSummary(change: ReviewChange): string[] {
@@ -25,12 +25,13 @@ export function changedFilesSummary(change: ReviewChange): string[] {
 }
 
 /** The `.agent-control-review.diff` file in the evaluator copy. */
-export function reviewDiffDocument(change: ReviewChange, stripped?: {config: readonly string[]; configCount: number}): string {
+export function reviewDiffDocument(change: ReviewChange, stripped?: {config: readonly string[]; configCount: number; count?: number; paths?: readonly string[]}): string {
   const lines = ['# Agent Control review package', ...changedFilesSummary(change)];
   if (stripped && stripped.configCount > 0) {
     const more = stripped.configCount > stripped.config.length ? ` (and ${stripped.configCount - stripped.config.length} more)` : '';
     lines.push(`Agent configuration was removed from this copy so it cannot instruct the evaluator: ${stripped.config.join(', ')}${more}. Changes to those files, if any, are in the diff.`);
   }
+  if (stripped?.count) lines.push(`Symbolic links were removed from this copy (${stripped.count}): ${(stripped.paths ?? []).join(', ')}. A changed file you cannot find may be one of them or an agent configuration file: judge it from the diff, and say so instead of rejecting for that alone.`);
   lines.push('--- diff ---', change.diff + (change.truncated ? '\n[diff truncated]' : ''));
   return lines.join('\n') + '\n';
 }

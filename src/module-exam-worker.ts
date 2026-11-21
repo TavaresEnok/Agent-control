@@ -122,7 +122,7 @@ export function moduleExamClaudeArgs(input: Pick<Input, 'model' | 'effort'>): st
   return [
     '--print', '--output-format', 'stream-json', '--verbose', '--model', input.model, '--effort', runnerEffort('claude', input.effort),
     '--tools', '', '--disallowedTools', '*', '--disable-slash-commands', '--setting-sources', 'user',
-    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--settings', '{"disableClaudeAiConnectors":true}',
+    '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--settings', '{"disableClaudeAiConnectors":true,"disableAllHooks":true}',
     '--permission-mode', 'dontAsk', '--no-session-persistence',
   ];
 }

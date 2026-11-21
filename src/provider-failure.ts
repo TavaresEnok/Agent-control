@@ -35,7 +35,12 @@ export async function runWithTransientRetry<T extends {failure: string | null}>(
   now?: () => number;
   random?: () => number;
 }): Promise<T> {
-  const sleep = input.sleep ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  // The default wait ends early when the job is stopped: a SIGTERM must not sit out a two-minute pause.
+  const sleep = input.sleep ?? (ms => new Promise<void>(resolve => {
+    const timer = setTimeout(resolve, ms);
+    const poll = setInterval(() => { if (input.aborted()) { clearTimeout(timer); clearInterval(poll); resolve(); } }, 500);
+    setTimeout(() => clearInterval(poll), ms + 10);
+  }));
   const now = input.now ?? Date.now;
   for (let attempt = 0; ; attempt++) {
     let outcome: {value: T} | {error: unknown};

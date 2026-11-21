@@ -47,7 +47,7 @@ export function qaLogIssues(text: string): QaEvidenceIssue[] {
   if (pytestLine) {
     const count = (word: string) => Number(new RegExp(`(\\d+) ${word}\\b`).exec(pytestLine)?.[1] ?? 0);
     if (count('failed') || count('errors?') || count('error')) issues.push({code: 'QA_FAILURE_TEXT', detail: 'pytest relata falhas ou erros'});
-    else if (count('passed') === 0 && count('skipped') > 0) issues.push({code: 'QA_ALL_SKIPPED', detail: 'pytest pulou todos os testes'});
+    else if (count('passed') === 0 && (count('skipped') > 0 || count('deselected') > 0)) issues.push({code: 'QA_ALL_SKIPPED', detail: 'pytest pulou ou desmarcou todos os testes'});
     else if (/\bno tests ran\b/.test(pytestLine)) issues.push({code: 'QA_ZERO_TESTS', detail: 'pytest não rodou nenhum teste'});
   } else if (/^collected 0 items\b/m.test(text)) issues.push({code: 'QA_ZERO_TESTS', detail: 'pytest não coletou nenhum teste'});
   // Go: a failing package prints FAIL at column 0.

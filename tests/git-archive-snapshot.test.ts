@@ -29,6 +29,29 @@ test('a refs/replace entry in the examined repository cannot swap the archived c
   }
 });
 
+test('the examined commit\'s own export-ignore and export-subst do not change what is examined', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ac-archive-attr-')), repo = join(root, 'repo');
+  try {
+    execFileSync('git', ['init', repo], {stdio: 'ignore'});
+    const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore']}).trim();
+    git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@invalid');
+    await writeFile(join(repo, '.gitattributes'), 'evil.js export-ignore\nversion.txt export-subst\n');
+    await writeFile(join(repo, 'evil.js'), 'eval(userInput);\n');
+    await writeFile(join(repo, 'version.txt'), 'v $Format:%H$\n');
+    git('add', '.'); git('commit', '-m', 'attrs');
+    const commit = git('rev-parse', 'HEAD');
+    const plain = join(root, 'plain'); await mkdir(plain);
+    execFileSync('sh', ['-c', `git -C "${repo}" archive --format=tar ${commit} | tar -x -C "${plain}"`]);
+    assert.deepEqual((await readdir(plain)).sort(), ['.gitattributes', 'version.txt']);
+    const out = join(root, 'out'); await mkdir(out);
+    await extractGitArchive(repo, commit, out);
+    assert.deepEqual((await readdir(out)).sort(), ['.gitattributes', 'evil.js', 'version.txt']);
+    assert.equal(await readFile(join(out, 'version.txt'), 'utf8'), 'v $Format:%H$\n');
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('an unknown commit is VERIFY_COMMIT_INVALID', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ac-archive-bad-')), repo = join(root, 'repo');
   try {
@@ -53,6 +76,7 @@ test('suppression files are removed at any depth and named in the report note', 
     assert.deepEqual((await readdir(join(root, 'svc', 'api'))).sort(), ['main.go']);
     assert.equal(await readFile(join(root, 'gitleaks.md'), 'utf8'), 'not a suppression\n');
     assert.match(suppressionNote(removed)!, /^Arquivos de supressão do próprio projeto foram ignorados no exame \(6\): \.gitleaks\.toml, /);
+    assert.match(suppressionNote(removed)!, /checkov:skip, hadolint ignore e trivy:ignore no próprio código ainda valem\.$/);
     assert.equal(suppressionNote([]), undefined);
   } finally {
     await rm(root, {recursive: true, force: true});

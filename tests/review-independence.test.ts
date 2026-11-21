@@ -30,11 +30,12 @@ test('a reviewer of another provider passes, and so does a plan with no real pro
 test('a cut diff carries the whole file list, the size and the incomplete-review rule', () => {
   const doc = reviewDiffDocument({diff: 'diff --git a/a.ts b/a.ts', truncated: true, diffBytes: 54321,
     files: [{status: 'M', path: 'a.ts'}, {status: 'A', path: 'db/migrations/115.sql'}, {status: 'D', path: 'tests/old.test.ts'}], filesTotal: 3},
-    {config: ['sub/CLAUDE.md'], configCount: 1});
+    {config: ['sub/CLAUDE.md'], configCount: 1, count: 1, paths: ['docs/link']});
   assert.match(doc, /^# Agent Control review package\nChanged files \(3\):\nM\ta\.ts\nA\tdb\/migrations\/115\.sql\nD\ttests\/old\.test\.ts\n/);
   assert.match(doc, /cut at 20000 of 54321 bytes/);
   assert.match(doc, /revisão incompleta/);
   assert.match(doc, /removed from this copy so it cannot instruct the evaluator: sub\/CLAUDE\.md\./);
+  assert.match(doc, /Symbolic links were removed from this copy \(1\): docs\/link\./);
   assert.ok(doc.endsWith('--- diff ---\ndiff --git a/a.ts b/a.ts\n[diff truncated]\n'));
 });
 

@@ -38,7 +38,7 @@ export async function prepareNativeImage(kind,binaryPath,expected){
  if(kind==='execution'||kind==='planning')for(const wrapper of ['ac-claude-evaluator.cjs','ac-claude-programmer.cjs']){await copyFile(join(repo,'deploy',wrapper),join(context,wrapper));await chmod(join(context,wrapper),0o755);}
  const bundle=await readFile(bundlePath),dockerfile=await readFile(join(context,'Dockerfile'));
  await writeFile(join(context,'MANIFEST.json'),JSON.stringify({schemaVersion:1,kind,publicCodexSha256:expected,extraBinarySha256:extra,bundleSha256:createHash('sha256').update(bundle).digest('hex'),
-  dockerfileSha256:createHash('sha256').update(dockerfile).digest('hex'),sourceCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),
+  dockerfileSha256:createHash('sha256').update(dockerfile).digest('hex'),wrapperSha256:Object.fromEntries(await Promise.all(['ac-exam-claude.cjs','ac-claude-evaluator.cjs','ac-claude-programmer.cjs'].map(async name=>[name,await readFile(join(context,name)).then(data=>createHash('sha256').update(data).digest('hex'),()=>null)]))),sourceCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),
   worktreeChangesPresent:execFileSync('git',['status','--porcelain'],{cwd:repo,encoding:'utf8'}).trim().length>0,credentialFilesIncluded:false,inferencePerformed:false},null,2)+'\n',{mode:0o600,flag:'wx'});
  return {context,prepared:true,built:false,activated:false};
 }

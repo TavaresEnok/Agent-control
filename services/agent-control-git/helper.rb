@@ -215,11 +215,23 @@ begin
   elsif input['action'] == 'qa-evidence'
     # Facts the QA verdict must not ignore: test files this change deletes, and focus markers that make a runner skip the rest.
     test_path = %r{(?:\A|/)(?:tests?|__tests__|specs?)/|\.(?:test|spec)\.[cm]?[jt]sx?\z|_test\.(?:py|go)\z|(?:\A|/)test_[^/]*\.py\z}
-    names, _, name_status = AcSafeGit.capture('-C', repo, 'diff', '--name-status', '--no-renames', '-z', base, candidate, '--')
+    # Renames are detected (-M), so moving a test is not deleting it. Only test files this change adds or edits are searched
+    # for focus markers: an old marker elsewhere is not this change's doing.
+    names, _, name_status = AcSafeGit.capture('-C', repo, 'diff', '--name-status', '-M', '-z', base, candidate, '--')
     raise 'GIT_OPERATION_FAILED' unless name_status.success?
     deleted = []
-    names.split("\0").each_slice(2) do |code, path|
-      deleted << path.dup.force_encoding('UTF-8').scrub if code == 'D' && path&.match?(test_path) && deleted.length < 50
+    touched = {}
+    fields = names.split("\0")
+    until fields.empty?
+      code = fields.shift.to_s
+      paths = code.start_with?('R', 'C') ? [fields.shift, fields.shift] : [fields.shift]
+      path = paths.last
+      next if path.nil?
+      if code == 'D'
+        deleted << path.dup.force_encoding('UTF-8').scrub if path.match?(test_path) && deleted.length < 50
+      elsif path.match?(test_path)
+        touched[path] = true
+      end
     end
     focus = '(^|[^A-Za-z0-9_$.])((describe|it|test|context|suite)\.only|fit|fdescribe)[[:space:]]*\('
     out, _, grep_status = AcSafeGit.capture('-C', repo, 'grep', '-I', '-n', '-z', '-E', '-e', focus, candidate)
@@ -229,7 +241,7 @@ begin
       # `git grep -z <tree>` prints `<tree>:<path>\0<line>\0<text>`.
       named, number = line.split("\0", 3)
       path = named&.delete_prefix("#{candidate}:")
-      next unless path && number && path != named && path.match?(test_path)
+      next unless path && number && path != named && touched[path]
       focused << { path: path.dup.force_encoding('UTF-8').scrub, line: number.to_i }
       break if focused.length >= 50
     end
