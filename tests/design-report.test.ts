@@ -5,8 +5,17 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import {DESIGN_IMAGE, DESIGN_NETWORK, DESIGN_RUNTIME_BIN, DESIGN_USER, designRunArguments} from '../src/design-image.ts';
-import {readDesignReport, writeDesignReport} from '../src/design-report.ts';
-import {DESIGN_ACCEPTANCE, DesignReportSummary, type DesignAchado, type DesignCoverageRow} from '../src/design-types.ts';
+import {compareDesignRuns, deltaMarkdown} from '../src/design-delta.ts';
+import {
+  DESIGN_LIMITS_TEXT,
+  achadoBasis,
+  achadoKind,
+  previousRawFindings,
+  readDesignReport,
+  repeatedPatternsMarkdown,
+  writeDesignReport,
+} from '../src/design-report.ts';
+import {DESIGN_ACCEPTANCE, DesignReportSummary, designRawFinding, type DesignAchado, type DesignCoverageRow} from '../src/design-types.ts';
 
 const projectId = '11111111-1111-4111-8111-111111111111';
 const runId = '33333333-3333-4333-8333-333333333333';
@@ -535,5 +544,239 @@ test('registra usuário, limites e rede da imagem sem afirmar execução', async
       refused('DESIGN_REPORT_INVALID'),
     );
     assert.deepEqual(await readdir(data), []);
+  });
+});
+
+function achadoWith(id: string, overrides: Partial<DesignAchado> = {}): DesignAchado {
+  return {
+    id,
+    title: `achado ${id}`,
+    severity: 'media',
+    status: 'confirmado',
+    verifier: null,
+    reference: 'WCAG-1-4-3-CONTRASTE',
+    where: {file: 'html/a.html', line: 1},
+    scenario: 'cenario',
+    proof: 'prova',
+    suggestion: 'corrigir',
+    acceptance: DESIGN_ACCEPTANCE,
+    sources: ['medida', 'axe'],
+    secretPreview: null,
+    ...overrides,
+  };
+}
+
+test('a linha Base sai depois da Situação e o relatório antigo cai na base certa', async () => {
+  const legacyMeasured = achadoWith('ACH-001');
+  const legacyJudged = achadoWith('ACH-002', {verifier: {model: 'm', provider: 'p'}, sources: ['examinador', 'X']});
+  const legacyJudgedMeasure = achadoWith('ACH-003', {verifier: {model: 'm', provider: 'p'}, sources: ['examinador', 'X', 'p', 'medida']});
+  const examinerTitle = achadoWith('ACH-004', {basis: 'medido', sources: ['medida', 'X', 'examinador']});
+  const preference = achadoWith('ACH-005', {basis: 'preferencia', severity: 'informativa', status: 'provavel', sources: ['preferencia', 'X']});
+  assert.equal(achadoBasis(legacyMeasured), 'medido');
+  assert.equal(achadoBasis(legacyJudged), 'hipotese');
+  assert.equal(achadoKind(legacyMeasured), 'medido');
+  assert.equal(achadoKind(legacyJudged), 'julgado');
+  assert.equal(achadoKind(legacyJudgedMeasure), 'julgado-medida');
+  assert.equal(achadoKind(examinerTitle), 'medido-examinador');
+  assert.equal(achadoKind(preference), 'preferencia');
+  assert.equal(achadoKind({...legacyMeasured, basis: 'preferencia'}), 'preferencia', 'a base vem antes do verificador');
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {
+      achados: [legacyMeasured, legacyJudged, legacyJudgedMeasure, examinerTitle, preference],
+      captures: [],
+    }));
+    const read = async (id: string) => readFile(join(written.directory, 'achados', `${id}.md`), 'utf8');
+    assert.match(await read('ACH-001'), /^- Situação: confirmado \(medido\)\n- Base: Medido\n/m);
+    assert.match(await read('ACH-002'), /^- Base: Julgado e revisado$/m);
+    assert.match(await read('ACH-003'), /^- Base: Julgado com medida$/m);
+    assert.match(await read('ACH-004'), /^- Base: Medido \(título do examinador\)$/m);
+    assert.match(await read('ACH-005'), /^- Base: Preferência$/m);
+    const situacao = /^([ \t]*-[ \t]*Situação:[ \t]*)(\S+)/m;
+    assert.equal(situacao.test(await read('ACH-001')), true);
+    const parsed = await readDesignReport(data, projectId, runId);
+    assert.equal(parsed.achados[0]?.basis, undefined);
+    assert.equal(parsed.achados[4]?.basis, 'preferencia');
+  });
+});
+
+test('os blocos de confiança separam medido, julgado e preferência', async () => {
+  const measured = Array.from({length: 7}, (_, index) => achadoWith(`ACH-00${index + 1}`, {
+    basis: 'medido',
+    where: {file: `html/t${index}.html`, line: 1},
+  }));
+  const rows = [
+    ...measured,
+    achadoWith('ACH-008', {basis: 'medido', reference: 'LH-CLS', sources: ['medida', 'LH-CLS', 'examinador'], title: 'CLS alto'}),
+    achadoWith('ACH-009', {basis: 'hipotese', verifier: {model: 'm', provider: 'p'}, sources: ['examinador', 'H1'], reference: 'H1', title: 'Hierarquia fraca'}),
+    achadoWith('ACH-010', {basis: 'medido', verifier: {model: 'm', provider: 'p'}, sources: ['examinador', 'C', 'p', 'medida'], reference: 'C', title: 'Contraste julgado'}),
+    achadoWith('ACH-011', {basis: 'preferencia', severity: 'informativa', status: 'provavel', sources: ['preferencia', 'P'], reference: 'P', title: 'Azul mais frio'}),
+    achadoWith('ACH-012', {basis: 'hipotese', status: 'descartado', verifier: {model: 'm', provider: 'p'}, sources: ['examinador', 'D'], reference: 'D', title: 'Descartado fica fora'}),
+  ];
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {achados: rows, captures: [], trust: true}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    const at = (title: string) => readme.indexOf(title);
+    assert.ok(at('## Contagem por gravidade') < at('## Auditoria técnica'));
+    assert.ok(at('## Auditoria técnica') < at('## Crítica de design'));
+    assert.ok(at('## Crítica de design') < at('## Preferências'));
+    assert.ok(at('## Preferências') < at('## Nota de falha'));
+    assert.match(readme, /A medida é a prova\. Linhas com \(examinador\) têm título escrito por modelo\./);
+    assert.match(readme, /Gosto, sem falha\. Não entra na nota\./);
+    assert.match(readme, /A nota vem de 8 achados medidos e 2 julgados\./);
+    const audit = readme.slice(at('## Auditoria técnica'), at('## Crítica de design'));
+    const critique = readme.slice(at('## Crítica de design'), at('## Preferências'));
+    const preferences = readme.slice(at('## Preferências'), at('## Nota de falha'));
+    assert.match(audit, /\| ACH-001 e mais 6 \| média \| confirmado \| WCAG-1-4-3-CONTRASTE \| 7 ocorrências \|/);
+    assert.doesNotMatch(audit, /\| ACH-002 \|/);
+    assert.match(audit, /\| ACH-008 \| média \| confirmado \| CLS alto \(examinador\) \|/);
+    assert.match(critique, /\| ACH-009 \| média \| confirmado \| Hierarquia fraca \| html\/a\.html:1 \|/);
+    assert.match(critique, /Contraste julgado \(com medida\)/);
+    assert.doesNotMatch(critique, /Azul mais frio/);
+    assert.match(preferences, /\| ACH-011 \| informativa \| provável \| Azul mais frio \|/);
+    assert.doesNotMatch(readme, /Descartado fica fora/);
+    assert.doesNotMatch(readme, /Medidos:/);
+  });
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {achados: [], captures: [], trust: true}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    assert.equal(readme.split('Nenhum achado nesta parte.').length - 1, 3);
+    assert.match(readme, /A nota vem de 0 achados medidos e 0 julgados\./);
+  });
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {captures: []}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    assert.doesNotMatch(readme, /## Auditoria técnica/, 'sem trust o README fica como antes');
+  });
+});
+
+test('padrões repetidos pedem 3 arquivos, ignoram descartado e cortam ids depois de 6', () => {
+  const two = [achadoWith('ACH-001'), achadoWith('ACH-002', {where: {file: 'html/b.html', line: 1}})];
+  assert.equal(repeatedPatternsMarkdown(two), '');
+  const withDiscarded = [...two, achadoWith('ACH-003', {status: 'descartado', where: {file: 'html/c.html', line: 1}})];
+  assert.equal(repeatedPatternsMarkdown(withDiscarded), '');
+  const three = [...two, achadoWith('ACH-003', {where: {file: 'html/c.html', line: 1}})];
+  assert.equal(repeatedPatternsMarkdown(three), '- WCAG-1-4-3-CONTRASTE: 3 arquivos (ACH-001, ACH-002, ACH-003). Corrija no componente comum.');
+  const many = Array.from({length: 8}, (_, index) => achadoWith(`ACH-00${index + 1}`, {where: {file: `html/${index}.html`, line: 1}}));
+  assert.match(repeatedPatternsMarkdown(many), /8 arquivos \(ACH-001, ACH-002, ACH-003, ACH-004, ACH-005, ACH-006 e mais 2\)/);
+});
+
+test('o README mostra Padrões repetidos só quando há grupo', async () => {
+  await withTemp(async data => {
+    const rows = ['a', 'b', 'c'].map((name, index) => achadoWith(`ACH-00${index + 1}`, {where: {file: `html/${name}.html`, line: 1}}));
+    const written = await writeDesignReport(reportInput(data, {achados: rows, captures: []}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    assert.match(readme, /## Padrões repetidos\n\n- WCAG-1-4-3-CONTRASTE: 3 arquivos/);
+    assert.match(readme, /\| média \| 3 \|/, 'a contagem não muda');
+  });
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {captures: []}));
+    assert.doesNotMatch(await readFile(join(written.directory, 'README.md'), 'utf8'), /## Padrões repetidos/);
+  });
+});
+
+test('as lacunas saem entre a nota e o estado vazio, em grupos de ordem fixa', async () => {
+  await withTemp(async data => {
+    const gaps = [
+      {kind: 'visual' as const, item: '/ (index.html)', reason: 'sem crítica visual completa'},
+      {kind: 'rota' as const, item: '/painel', reason: 'nenhuma captura'},
+      ...Array.from({length: 42}, (_, index) => ({kind: 'arquivo' as const, item: `src/T${index}.tsx`, reason: 'fora do limite'})),
+      {kind: 'ferramenta' as const, item: 'lighthouse | x', reason: `falhou:\n${'a'.repeat(300)}`},
+    ];
+    const written = await writeDesignReport(reportInput(data, {gaps, captures: []}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    assert.match(readme, /## O que não foi possível verificar\n\nNão foi possível verificar o tema escuro desta rodada\./);
+    const section = readme.slice(readme.indexOf('## O que não foi possível verificar'), readme.indexOf('## Estado vazio'));
+    assert.ok(section.indexOf(note) < section.indexOf('Rotas sem captura:'));
+    assert.ok(section.indexOf('Rotas sem captura:') < section.indexOf('Ferramentas que falharam'));
+    assert.ok(section.indexOf('Ferramentas que falharam') < section.indexOf('Arquivos fora do exame:'));
+    assert.ok(section.indexOf('Arquivos fora do exame:') < section.indexOf('Telas sem crítica visual:'));
+    assert.ok(section.indexOf('Telas sem crítica visual:') < section.indexOf(DESIGN_LIMITS_TEXT));
+    assert.match(section, /- src\/T39\.tsx: fora do limite\n- e mais 2\./);
+    assert.doesNotMatch(section, /src\/T40\.tsx/);
+    assert.match(section, /- lighthouse \/ x: falhou: a+\n/);
+    assert.doesNotMatch(section, /a{200}/);
+  });
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {gaps: [], captures: []}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    assert.match(readme, /Nenhuma lacuna medida nesta rodada\./);
+    assert.ok(readme.includes(DESIGN_LIMITS_TEXT));
+  });
+  await withTemp(async data => {
+    await assert.rejects(writeDesignReport(reportInput(data, {gaps: [{kind: 'outra' as 'rota', item: 'x', reason: 'y'}]})), refused('DESIGN_REPORT_INVALID'));
+    await assert.rejects(writeDesignReport(reportInput(data, {gaps: [{kind: 'rota', item: '   ', reason: 'y'}]})), refused('DESIGN_REPORT_INVALID'));
+    await assert.rejects(writeDesignReport(reportInput(data, {gaps: [{kind: 'rota', item: fullKey, reason: 'y'}]})), refused('DESIGN_SECRET_IN_REPORT'));
+    assert.deepEqual(await readdir(data), []);
+  });
+});
+
+test('as seções novas da P2 passam pelo título aceito', async () => {
+  await withTemp(async data => {
+    const sections = ['Sinais de modelo genérico', 'Tokens do projeto', 'Consistência entre telas', 'Desde o último relatório']
+      .map(title => ({title, markdown: `texto de ${title}`}));
+    const written = await writeDesignReport(reportInput(data, {sections, captures: []}));
+    const readme = await readFile(join(written.directory, 'README.md'), 'utf8');
+    for (const section of sections) assert.ok(readme.includes(`## ${section.title}\n\n${section.markdown}`), section.title);
+  });
+});
+
+function rawOf(tool: string, rule: string, file: string, line: number | null, snippet = 'trecho', measure?: {kind: 'contrast'; ratio: number}) {
+  return designRawFinding({tool, rule, file, line, severity: 'media', snippet, ...(measure ? {measure} : {})});
+}
+
+test('a comparação usa ferramenta, regra, arquivo e linha e nunca diz fechado', () => {
+  const kept = rawOf('axe', 'WCAG-1-4-3-CONTRASTE', 'a.html', 3, 'antes', {kind: 'contrast', ratio: 2.1});
+  const keptNow = rawOf('axe', 'WCAG-1-4-3-CONTRASTE', 'a.html', 3, 'depois', {kind: 'contrast', ratio: 3.9});
+  const gone = rawOf('stylelint', 'declaration-no-important', 'a.css', 9);
+  const fresh = rawOf('stylelint', 'color-no-hex', 'a.css', 2);
+  const missingTool = rawOf('lighthouse', 'LH-CLS', '/ 375 claro padrao', null);
+  const model = rawOf('examinador', 'H1', 'a.html', 1);
+  const delta = compareDesignRuns(
+    {findings: [kept, gone, missingTool, model]},
+    {findings: [keptNow, fresh, model], tools: ['axe', 'stylelint']},
+  );
+  assert.deepEqual(delta.mantidos.map(item => item.rule), ['WCAG-1-4-3-CONTRASTE']);
+  assert.deepEqual(delta.novos.map(item => item.rule), ['color-no-hex']);
+  assert.deepEqual(delta.ausentes.map(item => item.rule), ['declaration-no-important']);
+  assert.deepEqual(delta.notCompared, ['lighthouse']);
+  const text = deltaMarkdown({directoryName: '20261116-030405-design', findings: [kept, gone, missingTool]}, {findings: [keptNow, fresh], tools: ['axe', 'stylelint']});
+  assert.match(text, /- Novos: 1\n- Não apareceram: 1\n- Mantidos: 1/);
+  assert.match(text, /Ferramentas não comparadas, porque faltaram em uma das rodadas: lighthouse\./);
+  assert.match(text, /Não apareceu não quer dizer fechado/);
+  assert.doesNotMatch(text.replace('quer dizer fechado', ''), /fechado/);
+  assert.equal(deltaMarkdown({directoryName: null, findings: [], tools: null}, {findings: []}), 'Primeira rodada deste projeto.');
+  assert.match(deltaMarkdown(null, {findings: []}), /não pôde ser lido/);
+});
+
+test('o relatório anterior é lido com as travas e erro vira null', async () => {
+  const later = new Date(Date.UTC(2026, 10, 17, 3, 4, 5));
+  const finding = rawOf('axe', 'WCAG-1-4-3-CONTRASTE', 'a.html', 3);
+  await withTemp(async data => {
+    assert.deepEqual(await previousRawFindings(data, projectId, '20261117-030405-design'), {directoryName: null, findings: [], tools: null});
+    const written = await writeDesignReport(reportInput(data, {raw: {schema: 'design-achados-brutos-1', target: 'x', findings: [finding], ferramentas: ['axe']}, captures: []}));
+    const previous = await previousRawFindings(data, projectId, '20261117-030405-design');
+    assert.equal(previous?.directoryName, written.directoryName);
+    assert.deepEqual(previous?.findings, [finding]);
+    assert.deepEqual(previous?.tools, ['axe']);
+    assert.deepEqual(await previousRawFindings(data, projectId, written.directoryName), {directoryName: null, findings: [], tools: null}, 'a própria rodada não conta');
+    await writeDesignReport(reportInput(data, {runId: otherRunId, createdAt: later, raw: {findings: [], schema: 'x'}, captures: []}));
+    assert.equal((await previousRawFindings(data, projectId, '20261118-000000-design'))?.directoryName, '20261117-030405-design');
+    const rawPath = join(written.directory, 'bruto', 'achados-brutos.json');
+    await rm(rawPath);
+    await writeFile(rawPath, '{nao e json', {mode: 0o600});
+    assert.equal(await previousRawFindings(data, projectId, '20261117-000000-design'), null);
+  });
+  await withPair(async ({data, outside}) => {
+    const written = await writeDesignReport(reportInput(data, {raw: {findings: [finding]}, captures: []}));
+    const rawPath = join(written.directory, 'bruto', 'achados-brutos.json');
+    await writeFile(join(outside, 'x.json'), JSON.stringify({findings: [finding]}), {mode: 0o600});
+    await rm(rawPath);
+    await symlink(join(outside, 'x.json'), rawPath);
+    assert.equal(await previousRawFindings(data, projectId, '20261117-000000-design'), null);
+  });
+  await withTemp(async data => {
+    const written = await writeDesignReport(reportInput(data, {raw: {findings: [{tool: 'axe'}]}, captures: []}));
+    assert.ok(written);
+    assert.equal(await previousRawFindings(data, projectId, '20261117-000000-design'), null);
   });
 });
