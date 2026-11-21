@@ -155,6 +155,19 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     assert.match(coverage, /axe-core/);
     assert.match(coverage, /css-analyzer/);
     assert.equal(result.achados.some(item => item.reference.includes('WCAG') || item.reference.startsWith('DESIGN-')), true);
+    // Régua e Tab real: /lab/sonda planta um defeito por regra. Depende da ligação no collect e no módulo.
+    const onProbe = (tool: string, rule: string) => parsed.findings.filter(item => item.tool === tool && item.rule === rule);
+    const scroll = onProbe('régua', 'DESIGN-TELA-ROLAGEM-HORIZONTAL');
+    assert.equal(scroll.some(item => item.severity === 'alta' && item.measure?.kind === 'overflow'), true, rules.join('\n'));
+    for (const rule of ['DESIGN-TEXTO-CORTADO-MEDIDO', 'DESIGN-IMAGEM-QUEBRADA', 'DESIGN-TEXTO-SOBRA', 'DESIGN-GRAFICO-SEM-ALTERNATIVA', 'DESIGN-CONTRASTE-ESTADO', 'DESIGN-MOVIMENTO-REDUZIDO']) {
+      assert.equal(onProbe('régua', rule).length > 0, true, `${rule}\n${rules.join('\n')}`);
+    }
+    assert.equal(onProbe('régua', 'DESIGN-CONTRASTE-ESTADO').some(item => item.severity === 'alta' && item.measure?.kind === 'contrast'), true, rules.join('\n'));
+    assert.equal(onProbe('teclado', 'WCAG-2-4-11-FOCO-ENCOBERTO').length > 0, true, rules.join('\n'));
+    assert.match(readme, /redirecionou para \/entrar/);
+    assert.match(readme, /indisponível \(tela de erro do servidor de desenvolvimento\)/);
+    assert.match(coverage, /\| régua \|/);
+    assert.match(coverage, /\| teclado \|/);
   } finally {
     await rm(data, {recursive: true, force: true});
     await rm(loginDir, {recursive: true, force: true}).catch(() => undefined);
