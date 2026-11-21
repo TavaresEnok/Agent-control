@@ -26,6 +26,8 @@ const happierData=sharedFrom?JSON.parse(await readFile(sharedFrom,'utf8')).dataD
 const happierPublic=(await readFile(join(happierData,'happier-public-url'),'utf8').catch(()=>'')).trim();
 if(!happierPublic)throw Error('HAPPIER_NOT_PUBLISHED: rode antes npm run personal:public para o Happier');
 const sameName=new URL(happierPublic).hostname===domain;
+// Local transport (managerTransport.transport="local") retired Happier: the site serves only the panel, with no /v1 route.
+const routeHappier=sameName&&config.managerTransport?.transport!=='local';
 const label=basename(dirname(file)).replace(/[^A-Za-z0-9_-]/g,'-');
 const sites=process.env.AC_CADDY_SITES??'/home/app/infra/caddy/sites',container=process.env.AC_CADDY_CONTAINER??'edge_caddy';
 
@@ -42,7 +44,7 @@ if(check){step('verificação concluída; nada foi alterado');process.exit(0);}
 const happierLabel=sharedFrom?basename(dirname(sharedFrom)).replace(/[^A-Za-z0-9_-]/g,'-'):label;
 const happierUpstream=new URL((sharedFrom?JSON.parse(await readFile(sharedFrom,'utf8')):config).happier.upstreamOrigin).host;
 const site=join(sites,sameName?`happier-${happierLabel}.caddy`:`cockpit-${label}.caddy`);
-const body=sameName?`# Happier (${happierLabel}) e cockpit (${label}) no mesmo nome — gerado por personal:cockpit.
+const body=routeHappier?`# Happier (${happierLabel}) e cockpit (${label}) no mesmo nome — gerado por personal:cockpit.
 ${domain} {
 \timport seguranca
 \t@happier path /v1/* /v2/* /v3/* /health /ready /.well-known/*
@@ -82,7 +84,7 @@ catch{step(`reinicie o gateway desta instalação (serviço ${unit} não encontr
 // 3. End-to-end: certificate issued, the page and its app manifest load through the public name.
 let status=0;
 for(let i=0;i<30&&status!==200;i++){status=await fetch(`https://${domain}/manifest.webmanifest`,{signal:AbortSignal.timeout(8000)}).then(r=>r.status,()=>0);if(status!==200)await new Promise(done=>setTimeout(done,5000));}
-if(sameName&&status===200){
+if(routeHappier&&status===200){
  const happier=await fetch(`https://${domain}/v1/account/profile`,{signal:AbortSignal.timeout(8000)}).then(r=>r.status,()=>0);
  if(happier!==401)throw Error(`HAPPIER_ROUTE_BROKEN: https://${domain}/v1 respondeu ${happier}; restaure ${site} com o conteúdo anterior`);
  step('o Happier continua respondendo em /v1');
@@ -92,6 +94,6 @@ step(`https://${domain} responde com certificado válido`);
 console.log(`
 Pronto. No celular:
   1. Abra https://${domain} no navegador (Chrome no Android, Safari no iPhone)
-  2. Toque em "Entrar pelo Happier" e depois em "Autorizar no aplicativo Happier"; aprove no app e volte
+  2. ${routeHappier?'Toque em "Entrar pelo Happier" e depois em "Autorizar no aplicativo Happier"; aprove no app e volte':'Entre com usuário e senha (transporte local, sem o Happier)'}
   3. Instale: menu do navegador → "Adicionar à tela inicial" / "Instalar app"
 Para despublicar: ${sameName?'rode de novo npm run personal:public para o Happier (o site volta a ser só dele)':'apague '+site+' e recarregue o Caddy'} e restaure ${file}.before-cockpit.`);
