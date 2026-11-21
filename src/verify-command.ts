@@ -1,3 +1,4 @@
+import {extractGitArchive,stripScannerSuppressions,suppressionNote} from './git-archive-snapshot.ts';
 import {assertDiskSpaceForLaunch,installationVolumes,launchVolumesOf} from './personal-disk.ts';
 import {execFile, spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -315,57 +316,15 @@ function defaultNetworkRunner(args: readonly string[]): Promise<{code: number; s
   return runBoundedCommand(args, NETWORK_COMMAND_TIMEOUT_MS);
 }
 
-const GIT_ARCHIVE_ENV = {
-  PATH: '/usr/bin:/bin',
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  HOME: '/nonexistent',
-  GIT_TERMINAL_PROMPT: '0',
-};
 
-function extractGitArchive(repo: string, commit: string, destination: string, staticPersonalExam: boolean): Promise<void> {
-  return new Promise((resolvePromise, reject) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const git = spawn('/usr/bin/git', ['-C', repo, '-c', 'core.hooksPath=/dev/null', ...(staticPersonalExam ? ['-c', 'tar.umask=0022'] : []), 'archive', '--format=tar', commit], {
-      env: GIT_ARCHIVE_ENV,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const tar = spawn('/usr/bin/tar', ['-x', ...(staticPersonalExam ? ['--same-permissions'] : []), '-C', destination, '-f', '-'], {
-      env: {PATH: '/usr/bin:/bin'},
-      stdio: ['pipe', 'ignore', 'ignore'],
-    });
-    const stop = () => {
-      git.kill('SIGKILL');
-      tar.kill('SIGKILL');
-    };
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      stop();
-      reject(error);
-    };
-    const succeed = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolvePromise();
-    };
-    timer = setTimeout(() => fail(new Refusal('VERIFY_TOOLS_FAILED')), ARCHIVE_TIMEOUT_MS);
-    git.stdout?.pipe(tar.stdin);
-    git.once('error', () => fail(new Refusal('VERIFY_TOOLS_FAILED')));
-    tar.once('error', () => fail(new Refusal('VERIFY_TOOLS_FAILED')));
-    let gitCode: number | null = null;
-    let tarCode: number | null = null;
-    const maybe = () => {
-      if (settled || gitCode === null || tarCode === null) return;
-      if (gitCode === 0 && tarCode === 0) succeed();
-      else fail(new Refusal('VERIFY_COMMIT_INVALID', 400));
-    };
-    git.once('close', code => { gitCode = code ?? 1; maybe(); });
-    tar.once('close', code => { tarCode = code ?? 1; maybe(); });
-  });
+/** Suppression files removed from each live snapshot, for the report note. Cleared when the note is taken. */
+const snapshotSuppressions = new Map<string, string[]>();
+
+/** The note for a snapshot made by prepareExamSnapshot, once. */
+export function takeSuppressionNote(snapshot: string): string | undefined {
+  const removed = snapshotSuppressions.get(snapshot);
+  snapshotSuppressions.delete(snapshot);
+  return removed ? suppressionNote(removed) : undefined;
 }
 
 /** Git archive of the examined commit. The directory is mode 0700 and is not the live tree.
@@ -390,7 +349,8 @@ export async function prepareExamSnapshot(repoPath: string, commit: string, stat
     // Docker mounts the inner checkout by path. The host keeps its enclosing directory private.
     const checkout = staticPersonalExam ? join(snapshot, 'repository') : snapshot;
     if (staticPersonalExam) await mkdir(checkout, {mode: 0o700});
-    await extractGitArchive(repo, commit, checkout, staticPersonalExam);
+    await extractGitArchive(repo, commit, checkout, {keepPermissions: staticPersonalExam, timeoutMs: ARCHIVE_TIMEOUT_MS});
+    snapshotSuppressions.set(snapshot, await stripScannerSuppressions(checkout));
     if (staticPersonalExam) await chmod(checkout, 0o755);
     await chmod(snapshot, 0o700);
     return snapshot;
@@ -586,7 +546,7 @@ async function runJob(input: {
         modelCalls,
         mapEnabled: ready.mapEnabled,
         batch: ready.batch,
-        notes: state.note ? [state.note] : undefined,
+        notes: (() => { const notes = [state.note, takeSuppressionNote(snapshot)].filter((note): note is string => Boolean(note)); return notes.length ? notes : undefined; })(),
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;

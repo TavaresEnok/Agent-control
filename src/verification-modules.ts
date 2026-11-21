@@ -1,3 +1,4 @@
+import {extractGitArchive} from './git-archive-snapshot.ts';
 import {withInstallationImageLock} from "./personal-image-lock.ts";
 import {assertDiskSpaceForLaunch,launchVolumesOf} from "./personal-disk.ts";
 import {spawn} from 'node:child_process';
@@ -815,60 +816,6 @@ export function validateModuleCollectorObject(parsed: unknown, module?: Verifica
   return {coverage, findings};
 }
 
-const GIT_ARCHIVE_ENV = {
-  PATH: '/usr/bin:/bin',
-  GIT_CONFIG_NOSYSTEM: '1',
-  GIT_CONFIG_GLOBAL: '/dev/null',
-  HOME: '/nonexistent',
-  GIT_TERMINAL_PROMPT: '0',
-  GIT_NO_LAZY_FETCH: '1',
-  GIT_ALLOW_PROTOCOL: '',
-};
-
-function extractGitArchive(repo: string, commit: string, destination: string): Promise<void> {
-  return new Promise((resolvePromise, reject) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const git = spawn('/usr/bin/git', ['--no-replace-objects', '-C', repo, '-c', 'core.hooksPath=/dev/null', 'archive', '--format=tar', commit], {
-      env: GIT_ARCHIVE_ENV,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const tar = spawn('/usr/bin/tar', ['-x', '-C', destination, '-f', '-'], {
-      env: {PATH: '/usr/bin:/bin'},
-      stdio: ['pipe', 'ignore', 'ignore'],
-    });
-    const stop = () => {
-      git.kill('SIGKILL');
-      tar.kill('SIGKILL');
-    };
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      stop();
-      reject(error);
-    };
-    const succeed = () => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      resolvePromise();
-    };
-    timer = setTimeout(() => fail(new Refusal('VERIFY_TOOLS_FAILED')), ARCHIVE_TIMEOUT_MS);
-    git.stdout?.pipe(tar.stdin);
-    git.once('error', () => fail(new Refusal('VERIFY_TOOLS_FAILED')));
-    tar.once('error', () => fail(new Refusal('VERIFY_TOOLS_FAILED')));
-    let gitCode: number | null = null;
-    let tarCode: number | null = null;
-    const maybe = () => {
-      if (settled || gitCode === null || tarCode === null) return;
-      if (gitCode === 0 && tarCode === 0) succeed();
-      else fail(new Refusal('VERIFY_COMMIT_INVALID', 400));
-    };
-    git.once('close', code => { gitCode = code ?? 1; maybe(); });
-    tar.once('close', code => { tarCode = code ?? 1; maybe(); });
-  });
-}
 
 async function widenSnapshotForUnprivilegedContainer(dir: string): Promise<void> {
   await chmod(dir, 0o755);
@@ -907,7 +854,7 @@ export async function prepareModuleSnapshot(repoPath: string, commit: string, re
   }
   if (retention) await trackRoundTemp(retention, parent);
   try {
-    await extractGitArchive(repo, commit, snapshot);
+    await extractGitArchive(repo, commit, snapshot, {timeoutMs: ARCHIVE_TIMEOUT_MS});
     await widenSnapshotForUnprivilegedContainer(snapshot);
     return snapshot;
   } catch (error) {

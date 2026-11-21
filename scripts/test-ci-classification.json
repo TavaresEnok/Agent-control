@@ -78,6 +78,7 @@
   "exam-provider.test.ts",
   "exam-strip-note.test.ts",
   "external-usage.test.ts",
+  "git-archive-snapshot.test.ts",
   "git-cas-concurrency.test.ts",
   "git-compose.test.ts",
   "happier-access-boundary.test.ts",
@@ -337,10 +338,14 @@
  "requer": {
   "happier.test.ts": "env:AC_TEST_HAPPIER_URL",
   "import.test.ts": "env:AC_TEST_HAPPIER_URL",
+  "module-banco-exame.lab.test.ts": "env:AC_MODULE_LAB",
+  "module-qa-contracts-lab.test.ts": "env:AC_MODULE_LAB",
+  "module-qa-languages-lab.test.ts": "env:AC_MODULE_LAB",
   "notifications.test.ts": "happier-build",
   "r3-chat-config.test.ts": "env:AC_TEST_HAPPIER_URL",
   "r3-conversation-flow.test.ts": "env:AC_TEST_HAPPIER_URL",
-  "r3-secret-surfaces.test.ts": "happier-build"
+  "r3-secret-surfaces.test.ts": "happier-build",
+  "verification-modules-cleanup.lab.test.ts": "env:AC_MODULE_CLEANUP_LAB"
  },
  "laboratorio": {
   "account-homes.test.ts": "exige o banco do laboratório com nome /ac_implementation_test (falha ISOLATED_DATABASE_REQUIRED fora dele); PENDENTE DE VALIDAÇÃO: candidato a executar, rodar no laboratório antes de promover",

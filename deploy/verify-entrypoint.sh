@@ -134,13 +134,16 @@ report_has_finding() {
 
 if [ -d /repository/.git ]; then
   record_tool gitleaks gitleaks /output/gitleaks.json gitleaks detect --source /repository --report-format json --report-path /output/gitleaks.json \
-    --exit-code 0 --no-banner --redact --log-level error
+    --exit-code 0 --no-banner --redact --log-level error --ignore-gitleaks-allow --gitleaks-ignore-path /dev/null
 else
   record_tool gitleaks gitleaks /output/gitleaks.json gitleaks detect --no-git --source /repository --report-format json --report-path /output/gitleaks.json \
-    --exit-code 0 --no-banner --redact --log-level error
+    --exit-code 0 --no-banner --redact --log-level error --ignore-gitleaks-allow --gitleaks-ignore-path /dev/null
 fi
 
-record_tool osv-scanner osv-scanner /output/osv.json osv-scanner scan source --offline --recursive --allow-no-lockfiles --no-resolve \
+# The examined repository must not grade itself: its own suppression files and inline markers do not count.
+# The host also removes suppression files from the snapshot (src/git-archive-snapshot.ts).
+: > /tmp/osv-empty.toml
+record_tool osv-scanner osv-scanner /output/osv.json osv-scanner scan source --offline --recursive --allow-no-lockfiles --no-resolve --config /tmp/osv-empty.toml \
   --format json --output-file /output/osv.json --verbosity error /repository
 
 record_tool syft syft /output/syft.cdx.json syft scan dir:/repository -q -o cyclonedx-json=/output/syft.cdx.json
@@ -148,7 +151,7 @@ record_tool syft syft /output/syft.cdx.json syft scan dir:/repository -q -o cycl
 record_tool grype grype /output/grype.json grype dir:/repository -q -o json --file /output/grype.json
 
 record_tool opengrep opengrep /output/opengrep.json opengrep scan --disable-version-check --no-error --quiet --jobs=2 \
-  --json --json-output=/output/opengrep.json --config /opt/agent-control/rules /repository
+  --json --json-output=/output/opengrep.json --config /opt/agent-control/rules --disable-nosem /repository
 
 find /repository -type f \( -name Dockerfile -o -name 'Dockerfile.*' -o -name '*.Dockerfile' \) ! -name '*.dockerignore' -print > /tmp/dockerfiles
 if [ -s /tmp/dockerfiles ]; then
@@ -159,7 +162,7 @@ else
   record_tool hadolint hadolint /output/hadolint.json /bin/true
 fi
 
-record_tool trivy-config trivy /output/trivy-config.json trivy config --skip-check-update --skip-version-check --disable-telemetry --quiet \
+record_tool trivy-config trivy /output/trivy-config.json trivy config --skip-check-update --skip-version-check --disable-telemetry --quiet --ignorefile '' --config '' \
   --cache-dir /databases/trivy --format json --output /output/trivy-config.json --timeout 10m /repository
 
 scanners=secret
@@ -167,7 +170,7 @@ if [ -f /databases/trivy/db/trivy.db ]; then
   scanners=vuln,secret
 fi
 record_tool trivy-fs trivy /output/trivy-fs.json trivy fs --scanners "$scanners" --offline-scan --skip-db-update --skip-java-db-update \
-  --skip-check-update --skip-version-check --disable-telemetry --quiet \
+  --skip-check-update --skip-version-check --disable-telemetry --quiet --ignorefile '' --config '' \
   --cache-dir /databases/trivy --format json --output /output/trivy-fs.json --timeout 15m /repository
 
 record_tool checkov checkov /output/results_json.json checkov --directory /repository --output json --output-file-path /output \
