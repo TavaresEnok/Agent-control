@@ -25,10 +25,10 @@ Cada item abaixo foi conferido de novo no código em 21/11/2026, antes deste pla
 | # | Frente | Itens | Toca a instalação viva? | Estado |
 |---|---|---|---|---|
 | 0 | Preparação | — | não | [x] |
-| 1 | Revisor sem a configuração do programador | A1, A2, D11 | depois, no reinício do gateway | [ ] |
-| 2 | Diff cortado com a lista completa | A3 | depois, no reinício | [ ] |
-| 3 | CI e QA contando os testes | D1, A11, A4 | depois, no reinício | [ ] |
-| 4 | Módulo 1 sem as supressões do alvo | A5, A6 | reconstruir e fixar a imagem verify | [ ] |
+| 1 | Revisor sem a configuração do programador | A1, A2, D11 | imagens de execução e planejamento + reinício | [x] `bd70f4f4` |
+| 2 | Diff cortado com a lista completa | A3 | reinício | [x] `bd70f4f4` |
+| 3 | CI e QA contando os testes | D1, A11, A4 | reinício | [x] `801d2742`, `cadac894` |
+| 4 | Módulo 1 sem as supressões do alvo | A5, A6 | reconstruir e fixar a imagem verify | [x] `cadac894` |
 | 5 | Falha passageira e causa da falha | A8, A10 | depois, no reinício | [ ] |
 | 6 | Medição real do gerente e do cache | A9, C1 | depois, no reinício | [ ] |
 | 7 | Um redator de segredos só | C2 | depois, no reinício | [ ] |
@@ -44,9 +44,9 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 ## 0. Preparação
 
 - [x] Reler o relatório e conferir cada alegação no código (21/11/2026).
-- [ ] Criar o worktree com `git worktree add /home/app/projects/agent-control-melhorias -b melhorias/concorrentes task/personal-activation`.
-- [ ] Achar um Postgres descartável para `AC_TEST_DATABASE_URL`, o mesmo usado nas suítes anteriores. Rodar a linha de base: `npm test` no worktree, com o número de arquivos ok e falhos registrado aqui.
-- [ ] Linha de base registrada: ___ ok, ___ falhas.
+- [x] Criar o worktree com `git worktree add /home/app/projects/agent-control-melhorias -b melhorias/concorrentes task/personal-activation`.
+- [x] Achar um Postgres descartável para `AC_TEST_DATABASE_URL`, o mesmo usado nas suítes anteriores. Rodar a linha de base: `npm test` no worktree, com o número de arquivos ok e falhos registrado aqui.
+- [x] Linha de base registrada (21/11, código limpo `709ee426`): 320 ok, 9 falhas já existentes: config-export, module-arquitetura, module-conformidade, module-dependencias-java, module-dependencias, module-prontidao, native-model-policy-admission, prontidao-cli, r5-config-commands.
 
 ## 1. Revisor sem a configuração do programador (A1, A2, D11)
 
@@ -63,17 +63,17 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - **Codex e Grok:** cópia limpa para os avaliadores. O Codex não tem flag para ignorar a configuração do projeto, e a cópia limpa já remove o `.codex/` (`examCodexArgv`).
 
 **Checklist:**
-- [ ] 1.1 Generalizar o helper: `evaluatorIsolation(personal, workflow, role)`, verdadeiro para todo papel que não é o programador. Os exames continuam como estão.
-- [ ] 1.2 Aplicar `stripExamHostileConfig` na `review-artifact` de todo avaliador, gravando a nota da limpeza para o relatório.
-- [ ] 1.3 Argumentos do Claude no worker: confirmar no CLI instalado na imagem (`docker run --rm --entrypoint claude <imagem-worker> --help`) que `--setting-sources`, `--strict-mcp-config` e `--settings` existem. Passar esses argumentos pelo runner sem editar o `dist` do Cezar à mão: usar um invólucro em `/tmp` do worker, como `installExamClaudeWrapper`, mas que mantém `CLAUDE_CONFIG_DIR`. Se precisar mexer no Cezar, atualizar `upstream/patches/cezar-complete.patch` e o `CHANGES.json`.
-- [ ] 1.4 Montar `/account` só leitura para os avaliadores. Provar que o Claude e o Codex funcionam assim. Se não funcionarem, usar a cópia em `/tmp`.
-- [ ] 1.5 Programador e planejamento: `--setting-sources user` e `disableAllHooks`. No host, antes de cada lançamento, conferir que o `settings.json` e o `.codex/config.toml` da conta não têm `hooks`, `mcpServers` nem `statusLine` (A2.2). Se tiverem, recusar com um código novo (`ACCOUNT_CONFIG_UNSAFE`).
-- [ ] 1.6 Gerente (`managerChatCommand`) e renovação no host (`renewClaudeLoginInPlace`): `disableAllHooks` e `--setting-sources user`.
-- [ ] 1.7 Checagem no vigia e na prontidão (`src/installation-readiness.ts`, `src/personal-health.ts`): a mesma checagem da conta do passo 1.5.
-- [ ] 1.8 Teste de unidade: fixture hostil (hook marcador, `.mcp.json` marcador, `CLAUDE.md` aninhado, `statusLine`, `Bash(*)`) e CLI falso que registra os argumentos e os arquivos que enxerga. Exigir que nenhum marcador apareça no revisor, no juiz e no QA por modelo, e que o programador veja o `CLAUDE.md` mas não os hooks.
-- [ ] 1.9 Teste para `REVIEWER_SAME_AS_PROGRAMMER` (`src/engineering.ts:694-697`), que hoje não tem.
-- [ ] 1.10 Laboratório D11 com o CLI real (`tests/engineering-hostile-config.test.ts`, classificado como laboratório). Rodar uma vez, com o sim do titular, porque gasta uma chamada real.
-- [ ] 1.11 Commit.
+- [x] 1.1 Generalizar o helper: `evaluatorIsolation(personal, workflow, role)`, verdadeiro para todo papel que não é o programador. Os exames continuam como estão.
+- [x] 1.2 Aplicar `stripExamHostileConfig` na `review-artifact` de todo avaliador, gravando a nota da limpeza para o relatório.
+- [x] 1.3 Argumentos do Claude no worker: confirmar no CLI instalado na imagem (`docker run --rm --entrypoint claude <imagem-worker> --help`) que `--setting-sources`, `--strict-mcp-config` e `--settings` existem. Passar esses argumentos pelo runner sem editar o `dist` do Cezar à mão: usar um invólucro em `/tmp` do worker, como `installExamClaudeWrapper`, mas que mantém `CLAUDE_CONFIG_DIR`. Se precisar mexer no Cezar, atualizar `upstream/patches/cezar-complete.patch` e o `CHANGES.json`.
+- [x] 1.4 (decidido: não) Montar `/account` só leitura para os avaliadores. Provar que o Claude e o Codex funcionam assim. Se não funcionarem, usar a cópia em `/tmp`. **Decisão:** fica gravável. A renovação do token gira o refresh token e precisa gravar no arquivo da conta; uma cópia perderia o login. Os avaliadores só têm Read, Grep e Glob, e com os hooks desligados nada roda que possa gravar ali.
+- [x] 1.5 Programador e planejamento: `--setting-sources user` e `disableAllHooks`. No host, antes de cada lançamento, conferir que o `settings.json` e o `.codex/config.toml` da conta não têm `hooks`, `mcpServers` nem `statusLine` (A2.2). Se tiverem, recusar com um código novo (`ACCOUNT_CONFIG_UNSAFE`).
+- [x] 1.6 Gerente (`managerChatCommand`) e renovação no host (`renewClaudeLoginInPlace`): `disableAllHooks` e `--setting-sources user`.
+- [x] 1.7 Checagem no vigia e na prontidão (`src/installation-readiness.ts`, `src/personal-health.ts`): a mesma checagem da conta do passo 1.5.
+- [x] 1.8 Teste de unidade: fixture hostil (hook marcador, `.mcp.json` marcador, `CLAUDE.md` aninhado, `statusLine`, `Bash(*)`) e CLI falso que registra os argumentos e os arquivos que enxerga. Exigir que nenhum marcador apareça no revisor, no juiz e no QA por modelo, e que o programador veja o `CLAUDE.md` mas não os hooks.
+- [x] 1.9 Teste para `REVIEWER_SAME_AS_PROGRAMMER` (`src/engineering.ts:694-697`), que hoje não tem.
+- [x] 1.10 Laboratório D11 com o CLI real (`tests/engineering-hostile-config.test.ts`, classificado como laboratório). Rodar uma vez, com o sim do titular, porque gasta uma chamada real.
+- [x] 1.11 Commit.
 
 ## 2. Diff cortado com a lista completa (A3)
 
@@ -83,12 +83,12 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - O QA por modelo recebe `diffTruncated`, mas a instrução (`src/qa-model.ts:11`) não diz o que fazer com ele.
 
 **Checklist:**
-- [ ] 2.1 `helper.rb`: devolver também `files` (de `git diff --name-status --no-renames`), nunca cortado, com o limite de quantidade alto e o total informado.
-- [ ] 2.2 `GitArtifacts.diff` e o tipo: o campo `files`.
-- [ ] 2.3 Revisor e juiz: o arquivo `.agent-control-review.diff` passa a começar pela lista completa dos arquivos e, quando houver corte, por um aviso que diz quantos bytes ficaram de fora e manda ler esses arquivos na cópia ou responder "revisão incompleta".
-- [ ] 2.4 QA por modelo: a mesma lista no `task` e uma regra na `QA_MODEL_INSTRUCTION` para o diff cortado.
-- [ ] 2.5 Teste com um diff maior que 20 KB e o arquivo alterado depois do corte: a lista o menciona.
-- [ ] 2.6 Commit.
+- [x] 2.1 `helper.rb`: devolver também `files` (de `git diff --name-status --no-renames`), nunca cortado, com o limite de quantidade alto e o total informado.
+- [x] 2.2 `GitArtifacts.diff` e o tipo: o campo `files`.
+- [x] 2.3 Revisor e juiz: o arquivo `.agent-control-review.diff` passa a começar pela lista completa dos arquivos e, quando houver corte, por um aviso que diz quantos bytes ficaram de fora e manda ler esses arquivos na cópia ou responder "revisão incompleta".
+- [x] 2.4 QA por modelo: a mesma lista no `task` e uma regra na `QA_MODEL_INSTRUCTION` para o diff cortado.
+- [x] 2.5 Teste com um diff maior que 20 KB e o arquivo alterado depois do corte: a lista o menciona.
+- [x] 2.6 Commit.
 
 ## 3. CI e QA contando os testes (D1, A11, A4)
 
@@ -99,13 +99,13 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - `protectedGatePaths` vem vazio por padrão.
 
 **Checklist:**
-- [ ] 3.1 CI: ler o resumo TAP de cada arquivo (`# tests`, `# pass`, `# skip`, `# todo`). Um arquivo "executar" com zero aprovados vira falha, com a mensagem "nenhum teste rodou". O relatório final soma os pulados.
-- [ ] 3.2 CI: um nome de `AC_CI_ONLY` que não está na lista "executar" faz o CI falhar.
-- [ ] 3.3 Reclassificar como laboratório os arquivos que a regra 3.1 derrubar por serem de laboratório (por exemplo `tests/module-qa-contracts-lab.test.ts`), cada um com o motivo.
-- [ ] 3.4 QA do produto, primeiro passo (A11): um detector no log que só rebaixa e nunca promove. Ele reprova quando há "0 testes", quando todos os testes foram pulados ou quando aparecem os textos de falha conhecidos de node, jest, vitest, pytest e go. Ele mora no módulo do QA, e os executores do módulo 2 (`deploy/modules/qa/node-test-runner.mjs`) servem de referência.
-- [ ] 3.5 Portão do diff (A4): `src/qa-diff-gate.ts` varre só as linhas adicionadas, com textos e regex mascarados e a linha inteira conferida. Reprova `.only`, `describe.only`, `fit` e `fdescribe`, e avisa sobre `.skip` e `xit` novos e sobre arquivo de teste apagado. Fica ligado por padrão, com opção para desligar por projeto em `src/quality-policy.ts`.
-- [ ] 3.6 Testes de unidade dos três, incluindo o caso `it.only(...) // x`.
-- [ ] 3.7 Commit (dois commits: CI e QA).
+- [x] 3.1 CI: ler o resumo TAP de cada arquivo (`# tests`, `# pass`, `# skip`, `# todo`). Um arquivo "executar" com zero aprovados vira falha, com a mensagem "nenhum teste rodou". O relatório final soma os pulados.
+- [x] 3.2 CI: um nome de `AC_CI_ONLY` que não está na lista "executar" faz o CI falhar.
+- [x] 3.3 Reclassificar como laboratório os arquivos que a regra 3.1 derrubar por serem de laboratório (por exemplo `tests/module-qa-contracts-lab.test.ts`), cada um com o motivo.
+- [x] 3.4 QA do produto, primeiro passo (A11): um detector no log que só rebaixa e nunca promove. Ele reprova quando há "0 testes", quando todos os testes foram pulados ou quando aparecem os textos de falha conhecidos de node, jest, vitest, pytest e go. Ele mora no módulo do QA, e os executores do módulo 2 (`deploy/modules/qa/node-test-runner.mjs`) servem de referência.
+- [x] 3.5 Portão do diff (A4): `src/qa-diff-gate.ts` varre só as linhas adicionadas, com textos e regex mascarados e a linha inteira conferida. Reprova `.only`, `describe.only`, `fit` e `fdescribe`, e avisa sobre `.skip` e `xit` novos e sobre arquivo de teste apagado. Fica ligado por padrão, com opção para desligar por projeto em `src/quality-policy.ts`.
+- [x] 3.6 Testes de unidade dos três, incluindo o caso `it.only(...) // x`.
+- [x] 3.7 Commit (dois commits: CI e QA).
 
 ## 4. Módulo 1 sem as supressões do alvo (A5, A6)
 
@@ -115,16 +115,16 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - `src/verify-command.ts:318-370` faz o `git archive` sem `--no-replace-objects`, `GIT_NO_LAZY_FETCH` e `GIT_ALLOW_PROTOCOL`, ao contrário de `src/verification-modules.ts:818-870`.
 
 **Checklist:**
-- [ ] 4.1 Conferir as flags nas versões fixadas, rodando o `--help` de cada ferramenta na imagem verify atual (só leitura, sem rede): gitleaks 8.30.1, opengrep 2.0.0, osv-scanner 2.7.1, checkov e trivy.
-- [ ] 4.2 Entrypoint:
+- [x] 4.1 Conferir as flags nas versões fixadas, rodando o `--help` de cada ferramenta na imagem verify atual (só leitura, sem rede): gitleaks 8.30.1, opengrep 2.0.0, osv-scanner 2.7.1, checkov e trivy.
+- [x] 4.2 Entrypoint:
   - gitleaks com `--config` nosso e `--ignore-gitleaks-allow`, apontando o ignore para um caminho vazio;
   - opengrep com `--disable-nosem`;
   - checkov sem aceitar o skip do alvo, se a versão tiver a opção; se não tiver, registrar no relatório que o skip foi encontrado;
   - osv-scanner e trivy com uma configuração nossa e vazia.
-- [ ] 4.3 Mesmo quando a supressão for desligada, registrar no relatório que o alvo tinha supressões e quantas.
-- [ ] 4.4 Juntar os dois `git archive` num helper único (`src/git-archive-snapshot.ts`), usado pelo módulo 1 e pelos módulos 2 a 10.
-- [ ] 4.5 Teste com uma fixture que tem `refs/replace`: o módulo 1 examina o commit original. Teste do entrypoint com uma fixture que tem `.gitleaksignore` e `nosemgrep`.
-- [ ] 4.6 Commit.
+- [x] 4.3 Mesmo quando a supressão for desligada, registrar no relatório que o alvo tinha supressões e quantas.
+- [x] 4.4 Juntar os dois `git archive` num helper único (`src/git-archive-snapshot.ts`), usado pelo módulo 1 e pelos módulos 2 a 10.
+- [x] 4.5 Teste com uma fixture que tem `refs/replace`: o módulo 1 examina o commit original. Teste do entrypoint com uma fixture que tem `.gitleaksignore` e `nosemgrep`.
+- [x] 4.6 Commit.
 - [ ] 4.7 Na instalação viva (frente 11): reconstruir a imagem verify, refixar o digest em `verify-image.json` com backup, registrar a imagem e rodar o teste rápido das 9 ferramentas.
 
 ## 5. Falha passageira e causa da falha (A8, A10)
@@ -261,4 +261,7 @@ A7 (Unicode invisível), A12 (lista única de caminhos protegidos), A20 (imagem 
 
 | Data (UTC) | Frente | Commit | Prova |
 |---|---|---|---|
-| 21/11/2026 | 0 | — | Alegações conferidas no código; plano escrito |
+| 21/11/2026 | 0 | `709ee426` | Alegações conferidas no código; plano escrito; linha de base 320 ok e 9 falhas já existentes |
+| 21/11/2026 | 1, 2 | `bd70f4f4` | Laboratório com o CLI real (Claude 2.1.329, Codex 0.166.0), sem rede e sem login: sem os invólucros, hooks do projeto, MCP do projeto e hook da conta rodam; com eles, nenhum marcador. 8/8 em claude-hardening, 6/6 em review-independence; 32 arquivos afetados ok |
+| 21/11/2026 | 3 | `801d2742` | 11/11 test-ci-selection, 6/6 qa-evidence; 22 arquivos afetados ok |
+| 21/11/2026 | 4 | `cadac894` | Imagem verify fixada: gitleaks:allow e nosemgrep passam de 0 para 1 achado; 9 ferramentas com código 0; 4/4 git-archive-snapshot; falhas restantes são só as da linha de base |
