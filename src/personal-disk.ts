@@ -77,7 +77,10 @@ export function launchVolumesOf(source: {launchVolumes?: readonly string[]} | un
 
 /** Gate for a new worker or exam only. Replays and reconciliation of existing jobs must not call it. */
 export async function assertDiskSpaceForLaunch(paths: string | readonly string[], measure: (paths: string | readonly string[]) => Promise<number> = diskUsedPercent): Promise<void> {
-  const used = await measure(paths);
+  // Only configured volumes are measured. A supervisor without a host root (a unit fixture) has nothing to fill.
+  const known = (typeof paths === 'string' ? [paths] : paths).filter((path): path is string => typeof path === 'string' && path.length > 0);
+  if (!known.length) return;
+  const used = await measure(known);
   if (!Number.isFinite(used)) throw new Refusal('PERSONAL_DISK_UNAVAILABLE', 503);
   if (used >= DISK_BLOCK_PERCENT) throw new Refusal('PERSONAL_DISK_FULL', 503);
 }
