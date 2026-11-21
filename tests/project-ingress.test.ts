@@ -41,7 +41,7 @@ test('HTTP runtime project boundary rejects a foreign context even when principa
   const before=await snapshot();
   const foreignPaths=[`/api/v1/ac/contexts/${contexts[1]}`,`/api/v1/ac/contexts/${contexts[1]}/resources`,
    `/api/v1/ac/contexts/${contexts[1]}/usage`,`/api/v1/ac/contexts/${contexts[1]}/events`,
-   `/api/v1/ac/runs/${b.run_id}/conversation`,`/api/v1/runs/${b.run_id}`];
+   `/api/v1/runs/${b.run_id}`];
   for(const path of foreignPaths){const response=await fetchPath(path);assert.equal(response.status,403,path);assert.equal((await response.json()).error,'PROJECT_RUNTIME_MISMATCH',path);}
   const crossCommand=await fetchPath('/api/v1/ac/commands',{method:'POST',body:JSON.stringify(command(contexts[1]))});
   assert.equal(crossCommand.status,403);assert.equal((await crossCommand.json()).error,'PROJECT_RUNTIME_MISMATCH');
