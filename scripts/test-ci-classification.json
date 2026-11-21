@@ -72,6 +72,7 @@
   "docker-create-refused.test.ts",
   "docker-filter.test.ts",
   "docker-storage.test.ts",
+  "economy-trial.test.ts",
   "effort-cli.test.ts",
   "evaluator-output.test.ts",
   "exam-context-isolation.test.ts",

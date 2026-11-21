@@ -1,0 +1,20 @@
+{
+ "experimento": "T5: índice e grafo (codebase-memory-mcp v0.12.1) contra busca rg + leitura integral",
+ "fonte": "docs/economia/RELATORIO-T5.md, tabela por pergunta. Tokens estimados (caracteres / 4) do contexto lido; não houve saída de modelo nem cache, por isso só \"entrada\". Uma repetição por pergunta. Acerto da candidata conforme a coluna Acerto. Acerto da base: nas perguntas 1 a 4 a base foi o gabarito da conferência; na 5 o relatório diz que a base também é incompleta.",
+ "variantes": {"base": "rg -n -H + arquivos inteiros", "candidata": "search_code do codebase-memory-mcp"},
+ "portoes": {
+  "alfa": 0.05,
+  "margemQualidade": 0.10,
+  "economiaMinima": 0,
+  "repeticoesMinimas": 3,
+  "mecanismo": "o índice devolve trechos em vez de arquivos inteiros"
+ },
+ "bootstrap": {"semente": 20261121, "reamostras": 10000},
+ "casos": [
+  {"id": "1-login-api", "base": [{"entrada": 13623, "acerto": true}], "candidata": [{"entrada": 2919, "acerto": true}]},
+  {"id": "2-tabela-clientes", "base": [{"entrada": 86821, "acerto": true}], "candidata": [{"entrada": 2949, "acerto": false, "nota": "incompleta"}]},
+  {"id": "3-painel-hooks", "base": [{"entrada": 8701, "acerto": true}], "candidata": [{"entrada": 210, "acerto": false, "nota": "incompleta"}]},
+  {"id": "4-rotas-anatel", "base": [{"entrada": 40936, "acerto": true}], "candidata": [{"entrada": 840, "acerto": false, "nota": "incompleta"}]},
+  {"id": "5-escritas-agente", "base": [{"entrada": 1097, "acerto": false, "nota": "base incompleta segundo o relatório"}], "candidata": [{"entrada": 2268, "acerto": false, "nota": "incompleta"}]}
+ ]
+}
