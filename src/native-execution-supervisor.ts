@@ -625,6 +625,11 @@ export class NativeExecutionSupervisor{
   await this.ledger.tx(async c=>{await this.scope(c,principal,authority,input,true);await c.query("UPDATE ac_native_execution_jobs SET state='running',launch_digest=$2 WHERE id=$1 AND state='uncertain'",[input.jobId,digest(launch)]);await c.query("UPDATE ac_capacity_grants SET state='running',selection=COALESCE(selection,'{}'::jsonb)||$2::jsonb WHERE id=$1 AND state='uncertain'",[input.grantId,JSON.stringify({effectiveModel,effectiveEffort})]);});
   return {state:'running' as const,jobId:input.jobId};
  }
+ /** The request this job was launched with, so a caller rebuilding it after a restart replays the same text
+  * even when the instruction wording changed since (new wording applies only to new jobs). */
+ async storedRequest(principal:string,authority:Authority,jobId:string){return this.registeredInput(principal,authority,jobId);}
+ /** Execution host directory: job results live under it (team feed, failure facts). */
+ get hostRoot(){return this.config.hostRoot;}
  /** Read the original private request after a controller restart. It is never
   * reconstructed from an agent message or stored as plaintext in PostgreSQL. */
  private async registeredInput(principal:string,authority:Authority,jobId:string){

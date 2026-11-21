@@ -74,3 +74,30 @@ test('the Git helper lists every changed file even when the diff is cut, includi
     await rm(root, {recursive: true, force: true});
   }
 });
+
+test('new review jobs get the triage wording; the replay check still accepts jobs launched with the old one', async () => {
+  const {nativeReviewRequest, REVIEW_TRIAGE_TEXT} = await import('../src/native-verification.ts');
+  const {digest} = await import('../src/contracts.ts');
+  const {randomUUID} = await import('node:crypto');
+  const artifact = {id: randomUUID(), policy_revision: 1, commit_id: 'a'.repeat(40), tree_id: 'b'.repeat(40), base_id: 'c'.repeat(40)} as any;
+  const stage = {id: randomUUID(), session_id: randomUUID()};
+  const old = nativeReviewRequest(stage, randomUUID(), randomUUID(), artifact, 'review', 'faça X');
+  const fresh = nativeReviewRequest(stage, old.intentId, old.grantId, artifact, 'review', 'faça X', undefined, true);
+  assert.ok(!old.task.includes(REVIEW_TRIAGE_TEXT.trim()));
+  assert.ok(fresh.task.includes(REVIEW_TRIAGE_TEXT.trim()));
+  assert.notEqual(digest(old), digest(fresh));
+  const {readFile} = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/native-verification.ts', import.meta.url), 'utf8');
+  assert.match(source, /replayed\(\),replayed\(asked\),replayed\(asked,scope\),replayed\(undefined,undefined,true\),replayed\(asked,undefined,true\),replayed\(asked,scope,true\)/);
+  assert.match(source, /const request=previous\?await supervisor\.storedRequest\(/);
+});
+
+test('new programmer jobs get the habits and, in a correction, the recorded failure; existing jobs replay their stored request', async () => {
+  const {PROGRAMMER_HABITS_TEXT} = await import('../src/native-implementation.ts');
+  assert.match(PROGRAMMER_HABITS_TEXT, /fail before the fix and pass after it/);
+  const {readFile} = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/native-implementation.ts', import.meta.url), 'utf8');
+  assert.match(source, /const task=existing\?\(await supervisor\.storedRequest\(owner,authority,intent\.operation_id\)\)\.task:fresh;/);
+  assert.match(source, /\.\.\.\(failure\?\{previousFailure:failure\}:\{\}\)/);
+  assert.match(source, /if\(!existing&&correction\)/);
+});
