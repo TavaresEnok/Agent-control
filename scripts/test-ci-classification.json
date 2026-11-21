@@ -70,6 +70,7 @@
   "diagnostics.test.ts",
   "disk-admission.test.ts",
   "docker-create-refused.test.ts",
+  "docker-filter.test.ts",
   "docker-storage.test.ts",
   "effort-cli.test.ts",
   "evaluator-output.test.ts",

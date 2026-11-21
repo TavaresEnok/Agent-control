@@ -70,6 +70,16 @@ test('the real personal-services script writes units whose ExecStart keeps a rep
   assert.deepEqual(parseExecStart(line(happier,'ExecStart')),[process.execPath,join(root,'scripts/personal-happier.mjs'),installation]);
   assert.equal(line(gateway,'WorkingDirectory'),root);
   assert.match(line(gateway,'Environment'),/^"PATH=.*"$/);
+  // The gateway reaches Docker through the filter unit, which starts first and allows mounts only under the installation.
+  const filter=await readFile(join(units,'agent-control-docker-filter-espaco.service'),'utf8');
+  const filterArgv=parseExecStart(line(filter,'ExecStart'));
+  assert.deepEqual(filterArgv.slice(0,6),[process.execPath,'--import','tsx',join(root,'src/docker-filter.ts'),join(data,'docker-filter.sock'),'/var/run/docker.sock']);
+  assert.deepEqual(filterArgv[6]!.split(':'),[data,'/tmp']);
+  assert.ok(gateway.includes('Environment="AC_DOCKER_SOCKET='+join(data,'docker-filter.sock')+'"'));
+  assert.match(gateway,/^Requires=agent-control-docker-filter-espaco\.service$/m);
+  assert.doesNotMatch(gateway,/AC_PERSONAL_EGRESS/);
+  execFileSync(process.execPath,[join(root,'scripts/personal-services.mjs'),installation,'espaco','--egress'],{env:{...process.env,HOME:home,PATH:`${bin}:${process.env.PATH}`},stdio:'pipe'});
+  assert.match(await readFile(join(units,'agent-control-gateway-espaco.service'),'utf8'),/^Environment="AC_PERSONAL_EGRESS=1"$/m);
  }finally{await rm(base,{recursive:true,force:true});}
 });
 });

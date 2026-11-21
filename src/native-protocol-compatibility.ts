@@ -1,3 +1,4 @@
+import {dockerHostEnv} from './docker-env.ts';
 import {spawn,execFile,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {promisify} from 'node:util';
 import {randomUUID} from 'node:crypto';
@@ -20,7 +21,7 @@ const Spec=z.discriminatedUnion('kind',[
 ]);
 export type NativeProtocolSpec=z.infer<typeof Spec>;
 const protocol='codex-app-server-initialize-model-list-v1';
-const env={PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'};
+const env={PATH:'/usr/local/bin:/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8',...dockerHostEnv()};
 type Probe={id:string;executor_digest:string;worker_image:string;phase:'version'|'rpc';container_name:string;container_id:string|null;deadline_ms:string|number;retired:boolean};
 /** Create/start and expiry are owned by a detached trusted host process. The
  * parent binds the immutable daemon ID durably before acknowledging any start. */

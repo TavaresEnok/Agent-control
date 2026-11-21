@@ -58,7 +58,7 @@ const InspectPrivateNetwork=z.object({Id:z.string().regex(/^[a-f0-9]{64}$/),Name
  Labels:z.record(z.string(),z.string()).nullish(),Containers:z.record(z.string(),z.object({IPv4Address:z.string().optional()}).passthrough()).nullish()}).passthrough();
 /** Fixed Docker API operations. No caller-controlled URL, image, shell or mount is accepted. */
 export class DockerDaemon{
- constructor(private readonly socket='/var/run/docker.sock'){}
+ constructor(private readonly socket=process.env.AC_DOCKER_SOCKET??'/var/run/docker.sock'){}
  private call(method:string,path:string,body?:unknown):Promise<{status:number;body:Buffer}>{
   return new Promise((ok,fail)=>{
    const payload=body===undefined?undefined:Buffer.from(JSON.stringify(body));

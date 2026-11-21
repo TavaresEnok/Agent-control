@@ -1,3 +1,4 @@
+import {useDockerFilterSocket} from './docker-env.ts';
 import {installationVolumes} from './personal-disk.ts';
 // Configured administration gateway. Native adapters stay disabled unless a
 // discriminated opt-in is valid. Configured opt-in does not activate accounts
@@ -40,6 +41,8 @@ async function personalProjectMayExecute(ledger:Ledger,projectId:string,primary:
  return Boolean(ready.rowCount);
 }
 async function main(){
+ // AC_DOCKER_SOCKET: the API client and every Docker CLI child go through the filter (src/docker-filter.ts).
+ useDockerFilterSocket();
  const [command,path,...extra]=process.argv.slice(2);
  // Retention planning must be dispatched before any installation file is opened.
  if(command==='retention-plan'){

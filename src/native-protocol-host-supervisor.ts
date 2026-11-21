@@ -5,7 +5,7 @@ const {spawn,execFile}=require('node:child_process');
 const {promisify}=require('node:util');const run=promisify(execFile);
 const op=JSON.parse(process.argv[1]);
 if(!/^[a-f0-9-]{36}$/.test(op.id)||!/^sha256:[a-f0-9]{64}$/.test(op.worker_image)||!['version','rpc'].includes(op.phase)||op.container_name!=='ac-protocol-'+op.phase+'-'+op.id||!Number.isSafeInteger(Number(op.deadline_ms)))process.exit(70);
-const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'};
+const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8',...(String(process.env.DOCKER_HOST||'').startsWith('unix://')?{DOCKER_HOST:process.env.DOCKER_HOST}:{})};
 let terminalCode=null;let id=null,created=false,stopped=false,started=false,attached,cleaning;
 const send=value=>{if(process.connected)try{process.send(value,()=>{});}catch{}};
 const inspect=async name=>{try{return JSON.parse((await run('/usr/bin/docker',['inspect',name],{env,timeout:10000,maxBuffer:262144})).stdout)[0];}catch(error){if(/(?:no such object|no such container)/i.test(String(error.stderr??'')))return null;throw error;}};

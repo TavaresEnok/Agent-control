@@ -1,3 +1,4 @@
+import {dockerHostEnv} from './docker-env.ts';
 import {spawn,execFile,type ChildProcess} from 'node:child_process';
 import {promisify} from 'node:util';
 import {randomUUID} from 'node:crypto';
@@ -13,7 +14,7 @@ export class CodexQuotaDockerSupervisor implements CodexReadonlySupervisor{
  constructor(private readonly ledger:Ledger,private readonly binding:{accountId:string;subjectDigest:string},private readonly image:string){
   if(!/^sha256:[a-f0-9]{64}$/.test(image))throw new TypeError('QUOTA_IMAGE_DIGEST_REQUIRED');
  }
- private async docker(args:string[]){return (await exec('docker',args,{timeout:5000,maxBuffer:512*1024,env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'}})).stdout;}
+ private async docker(args:string[]){return (await exec('docker',args,{timeout:5000,maxBuffer:512*1024,env:{...dockerHostEnv(),PATH:'/usr/bin:/bin',HOME:'/nonexistent'}})).stdout;}
  async launch(input:{home:string;homeFd:number}):Promise<ChildProcess>{
   const id=randomUUID(),name='ac-r3-quota-'+id;
   const homeStat=fstatSync(input.homeFd,{bigint:true});
@@ -33,7 +34,7 @@ export class CodexQuotaDockerSupervisor implements CodexReadonlySupervisor{
    await c.query('UPDATE ac_readonly_quota_runs SET resource_id=$2 WHERE id=$1 AND state=\'uncertain\'',[id,container]);
    });
    const container=(await this.ledger.pool.query('SELECT resource_id FROM ac_readonly_quota_runs WHERE id=$1',[id])).rows[0].resource_id;
-   return spawn('docker',['start','--attach','--interactive',container],{stdio:['pipe','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'}});
+   return spawn('docker',['start','--attach','--interactive',container],{stdio:['pipe','pipe','pipe'],env:{...dockerHostEnv(),PATH:'/usr/bin:/bin',HOME:'/nonexistent'}});
   }catch{await this.stop();throw new Refusal('QUOTA_LAUNCH_UNAVAILABLE');}
  }
  async stop():Promise<boolean>{return this.runId?this.reconcile(this.runId,true):false;}
