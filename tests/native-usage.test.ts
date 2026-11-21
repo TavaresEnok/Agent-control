@@ -9,8 +9,8 @@ test('separate verdict attempts sum known counters without inventing missing val
 });
 
 test('native usage preserves reported counters and leaves incomplete cache unknown',()=>{
- assert.deepEqual(usageCountersFromEvent({input:100,output:12,cacheRead:20,cacheWrite:4,reasoning:3}),{input:100,output:12,cache:24,reasoning:3});
- assert.deepEqual(usageCountersFromEvent({input:5,output:0,cacheRead:2}),{input:5,output:0,cache:null,reasoning:null});
+ assert.deepEqual(usageCountersFromEvent({input:100,output:12,cacheRead:20,cacheWrite:4,reasoning:3}),{input:100,output:12,cache:24,reasoning:3,cacheRead:20,cacheWrite:4});
+ assert.deepEqual(usageCountersFromEvent({input:5,output:0,cacheRead:2}),{input:5,output:0,cache:null,reasoning:null,cacheRead:2,cacheWrite:null});
  assert.equal(usageCountersFromEvent({input:5,output:0,cacheRead:2},true).cache,2);
 });
 

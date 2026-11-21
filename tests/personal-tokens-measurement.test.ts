@@ -231,3 +231,18 @@ test('the report shows cache read, cache write and the share of input served fro
   assert.match(text, /\tmedição\tcache lido\tcache gravado\tacerto do cache\n/);
   assert.match(text, /\tinformado\t1800\t200\t82%$/m);
 });
+
+test('native Claude counters keep cache read and cache write apart and sum them across attempts', async () => {
+  const {usageCountersFromEvent, sumUsageAttempts} = await import('../src/native-usage.ts');
+  const {UsageCounters} = await import('../src/usage.ts');
+  const one = usageCountersFromEvent({input: 10, output: 5, cacheRead: 900, cacheWrite: 100});
+  assert.deepEqual(one, {input: 10, output: 5, cache: 1000, reasoning: null, cacheRead: 900, cacheWrite: 100});
+  assert.deepEqual(UsageCounters.parse(one), one);
+  const both = sumUsageAttempts(one, usageCountersFromEvent({input: 1, output: 1, cacheRead: 50, cacheWrite: 0}));
+  assert.equal(both.cacheRead, 950);
+  assert.equal(both.cacheWrite, 100);
+  // Codex reports cache read only: no split fields, as before.
+  assert.equal('cacheRead' in usageCountersFromEvent({input: 10, output: 5, cacheRead: 4}, true), false);
+  // An older observation without the split keeps the sum and leaves the split unknown.
+  assert.equal(sumUsageAttempts({input: 1, output: 1, cache: 2, reasoning: null}, one).cacheRead, null);
+});

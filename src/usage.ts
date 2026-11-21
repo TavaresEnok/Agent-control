@@ -6,7 +6,9 @@ import {Authority,Id,digest,Refusal} from './contracts.ts';
 // Each value is cumulative for one attempt, as reported by its adapter.
 // Cache and reasoning may overlap input/output; never add them into a total.
 export const UsageCounters=z.object({input:z.number().int().nonnegative().safe().nullable(),output:z.number().int().nonnegative().safe().nullable(),
- cache:z.number().int().nonnegative().safe().nullable(),reasoning:z.number().int().nonnegative().safe().nullable()}).strict();
+ cache:z.number().int().nonnegative().safe().nullable(),reasoning:z.number().int().nonnegative().safe().nullable(),
+ // Claude only: cache read (cheap) and cache write (dear), apart. `cache` keeps their sum. Absent in older observations.
+ cacheRead:z.number().int().nonnegative().safe().nullable().optional(),cacheWrite:z.number().int().nonnegative().safe().nullable().optional()}).strict();
 const Observation=z.object({grantId:Id,eventId:Id,seq:z.number().int().positive().safe(),counters:UsageCounters}).strict();
 export class Usage {
  constructor(readonly ledger:Ledger){}
