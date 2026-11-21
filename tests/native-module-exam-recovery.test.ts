@@ -68,7 +68,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   await db.migrate();
   await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
   const capacity=new Capacity(db);
-  const project=randomUUID(),owner='app-'+randomUUID(),gateway='happier:owner-'+randomUUID(),account=randomUUID(),profile=randomUUID();
+  const project=randomUUID(),owner='app-'+randomUUID(),gateway='gateway:owner-'+randomUUID(),account=randomUUID(),profile=randomUUID();
   const repo=join(area,'repo'),dataDir=join(area,'data'),spool=join(dataDir,'exec-host'),accounts=join(dataDir,'accounts');
   const planHost=join(dataDir,'plan-host'),planAccounts=join(dataDir,'plan-accounts'),keysDir=join(dataDir,'keys'),vaultDir=join(dataDir,'vault');
   for(const dir of [repo,dataDir,spool,accounts,planHost,planAccounts,keysDir,vaultDir]){await mkdir(dir,{recursive:true,mode:0o700});await chmod(dir,0o700);}
@@ -506,7 +506,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   await writeFile(planKeyFile,planKeys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),{mode:0o600});
   await writeFile(execKeyFile,pem,{mode:0o600});
   await writeFile(reviewKeyFile,reviewKeys.privateKey.export({format:'pem',type:'pkcs8'}).toString(),{mode:0o600});
-  const vaultMaster=join(dataDir,'vault-master'),tokenFile=join(dataDir,'happier-token');
+  const vaultMaster=join(dataDir,'vault-master'),tokenFile=join(dataDir,'manager-token');
   await writeFile(vaultMaster,'master-fixture',{mode:0o600});await writeFile(tokenFile,'token-fixture',{mode:0o600});
   const qaContract=NativeQaContract.parse({schemaVersion:1,id:'qa-synthetic',image,argv:['/bin/true'],environment:[],timeoutMs:15000,memoryBytes:268435456,pids:64,nanoCpus:1000000000});
   const installationFile=join(area,'installation.json');
@@ -524,7 +524,6 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
     review:{signingKeyFile:reviewKeyFile,keyFingerprint:fingerprintOf(reviewKeys.publicKey),verifierDigest:nativeReviewVerifierDigest},
    },
    http:{listen:'127.0.0.1',port:43111,publicOrigin:'http://127.0.0.1:43111'},
-   happier:{upstreamOrigin:'http://127.0.0.1:43112',webOrigin:'http://127.0.0.1:43113',publicServerOrigin:'http://127.0.0.1:43114'},
   }),{mode:0o600});
   // Only the Docker transport is redirected, to the fake socket. The entry point, installation, lease and supervisor are real.
   const preload=join(area,'fake-docker.cjs');

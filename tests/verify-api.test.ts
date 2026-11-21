@@ -510,7 +510,7 @@ test('reverificar chama o worker injetado e não existe sem ele',async()=>{
   });
   const hidden=await absent.request(path,{method:'POST',headers,body});
   assert.equal(hidden.status,403);
-  assert.deepEqual(await hidden.json(),{error:'CANONICAL_HAPPIER_REQUIRED'});
+  assert.deepEqual(await hidden.json(),{error:'CANONICAL_CONVERSATION_REQUIRED'});
   const app=createApi(ledger,runtime,async request=>request.headers.get('authorization')==='Bearer owner'?'owner':null,()=>authority,{
    configurationControl:{ledger} as Control,
    personalPanel:{roots:[],projectRepos:[],installationPath:root,dataDirectory:root,projectId:primaryProjectId,scheduleRestart(){}},

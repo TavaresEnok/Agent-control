@@ -45,7 +45,7 @@ test('recovery CLI consults the actual admin table before accepting adapters',as
 
   await assert.rejects(executeRecoveryCommand(config,ledger,file),/CONTROL_ADMIN_REQUIRED/);
   const installFile=join(dir,'installation.json');
-  await writeFile(installFile,JSON.stringify({...config,schemaVersion:1,mode:'administration-only',dataDirectory:join(dir,'state'),project:{id:randomUUID(),label:'fixture',repo:join(dir,'repo'),owner:principal},http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'}}),{mode:0o600});
+  await writeFile(installFile,JSON.stringify({...config,schemaVersion:1,mode:'administration-only',dataDirectory:join(dir,'state'),project:{id:randomUUID(),label:'fixture',repo:join(dir,'repo'),owner:principal},http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'}}),{mode:0o600});
   const cli=()=>promisify(execFile)(process.execPath,['--import','tsx','src/server-main.ts','recovery',installFile,file]);
   await assert.rejects(cli(),(error:any)=>error.code===1&&error.stderr.includes('INSTALLATION_COMMAND_FAILED'));
   await ledger.pool.query('INSERT INTO ac_control_admins(principal_id) VALUES($1)',[principal]);

@@ -10,7 +10,7 @@ import {QualityPolicies} from '../src/quality-policy.ts';
 import {Templates} from '../src/templates.ts';
 import {ContextKeys,keyFingerprint} from '../src/context-keys.ts';
 import {SemanticPlanning,planningReceiptMessage,type PlanningExecutor} from '../src/semantic-planning.ts';
-import {HappierEndpoint,type HappierBoundary} from '../src/happier.ts';
+import {ConversationEndpoint} from '../src/conversation.ts';
 import {LocalConversationTransport} from '../src/conversation-transport.ts';
 import {personalPanelLocalId} from '../src/personal-panel-conversation.ts';
 import {digest,Refusal,type Authority} from '../src/contracts.ts';
@@ -88,7 +88,7 @@ test('approve and approve, approve and discard, and a repeat after a lost respon
  * managed execution is the intent row the ledger writes, so executions can be counted, and a crash can be injected. */
 async function personalFixture(autoApprove:boolean){
   const database=await testDatabase('propfix'),db=new Ledger(database.url),folder=await mkdtemp(join(tmpdir(),'ac-proposal-repo-'));
- const key=randomBytes(32),endpoints:HappierEndpoint[]=[];
+ const key=randomBytes(32),endpoints:ConversationEndpoint[]=[];
  await db.migrate();
  const project=randomUUID(),principal='proposal-auto-'+randomUUID(),account=randomUUID(),profile=randomUUID(),session=randomUUID();
  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'auto approve']);await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
@@ -116,7 +116,6 @@ async function personalFixture(autoApprove:boolean){
  const planner=new SemanticPlanning(db,executor);
  const managerChat={async decide(){return {kind:'plan' as const,answer:''};}} as unknown as PersonalManagerChat;
  const runtime={repo:folder,projectId:project,executionMode:'execution',async reconcileCancellations(){},async recoverManaged(){},async dispatch(){return undefined;},store:{listRuns:()=>[],updateRun(){},flush(){}}} as unknown as CezarRuntime;
- const boundary=new Proxy({} as HappierBoundary,{get(){throw Error('BOUNDARY_FORBIDDEN');}});
  const control={crash:false,startAttempts:0,refuse:new Set<number>()};
  const realAccept=db.accept.bind(db);
  (db as unknown as {accept:unknown}).accept=async(p:string,command:{action:string;intentId:string;payload:{proposalRevision?:number;proposalDigest?:string}},...rest:unknown[])=>{
@@ -125,9 +124,9 @@ async function personalFixture(autoApprove:boolean){
   if(control.refuse.has(command.payload.proposalRevision!))throw new Refusal('MANAGED_PROPOSAL_MISMATCH');
   return startRow(db,contextId,p,command.intentId,command.payload.proposalRevision!,command.payload.proposalDigest!);};
  const open=async()=>{const transport=new LocalConversationTransport({ledger:db,contextId,principal});
-  const endpoint=new HappierEndpoint(db,runtime,boundary,{baseUrl:'http://127.0.0.1',token:'',key,principal,sessionId:session,machineId:'local',authority:authority as Authority,personalConversation:true,managerChat,semanticPlanning:planner},transport);
+  const endpoint=new ConversationEndpoint(db,runtime,{key,principal,sessionId:session,authority:authority as Authority,personalConversation:true,managerChat,semanticPlanning:planner},transport);
   await transport.start();endpoints.push(endpoint);return endpoint;};
- const say=async(endpoint:HappierEndpoint,text:string)=>endpoint.enqueueOwnerMessage(text,personalPanelLocalId('m'+randomUUID().slice(0,10)));
+ const say=async(endpoint:ConversationEndpoint,text:string)=>endpoint.enqueueOwnerMessage(text,personalPanelLocalId('m'+randomUUID().slice(0,10)));
  return {db,contextId,control,open,say,async close(){for(const endpoint of endpoints)endpoint.close();key.fill(0);await db.close();await database.close();await rm(folder,{recursive:true,force:true});}};
 }
 
@@ -135,7 +134,7 @@ test('auto-approval survives a crash right after the publication commit: restart
  const f=await personalFixture(true);
  try{
   const {db,contextId}=f;
-  const say=(endpoint:HappierEndpoint,text:string)=>f.say(endpoint,text);
+  const say=(endpoint:ConversationEndpoint,text:string)=>f.say(endpoint,text);
   // The first process dies when it asks for the execution, which is right after the publication commit.
   f.control.crash=true;
   const first=await f.open();await f.say(first,'crie o módulo de faturas');

@@ -179,7 +179,6 @@ for (const fixture of cases) {
           project: {id: projectId, label: 'Fixture', repo: repoPath, owner: principal,
             publishedOrigins: ['https://127.0.0.1:1']},
           http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
-          happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'}
         }), {mode: 0o600});
         await ledger.releaseLease(authority);
         let [proofRun] = await runPersonalModuleCli(module, [installation, projectId, '--medir-correcao', origin.runId], {

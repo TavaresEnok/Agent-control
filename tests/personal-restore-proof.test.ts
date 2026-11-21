@@ -16,8 +16,7 @@ async function fixture(databaseUrl:string){
  const file=join(data,'installation.json');
  const body={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl,dataDirectory:data,accountHomesDirectory:join(data,'accounts'),
   project:{id:randomUUID(),label:'Prova',repo,owner:'owner@example.com'},projects:[],
-  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},
-  happier:{upstreamOrigin:'http://127.0.0.1:8766',webOrigin:'http://127.0.0.1:8766',publicServerOrigin:'http://127.0.0.1:8765'}};
+  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'}};
  await writeFile(file,JSON.stringify(body,null,2)+'\n',{mode:0o600});await chmod(file,0o600);
  const backups=join(root,'backups');
  await runPersonalBackup([file,join(backups,'20261112-090530')],{now:new Date(2026,10,12,9,5,30),dump:async dumpFile=>{await writeFile(dumpFile,'PGDMP-test');}});

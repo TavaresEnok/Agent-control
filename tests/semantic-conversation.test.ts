@@ -9,11 +9,12 @@ import {Templates} from '../src/templates.ts';
 import {ContextKeys,keyFingerprint} from '../src/context-keys.ts';
 import {SemanticPlanning,planningReceiptMessage,type PlanningExecutor} from '../src/semantic-planning.ts';
 import {CezarRuntime} from '../src/cezar.ts';
-import {HappierEndpoint,loadHappier,stableId} from '../src/happier.ts';
+import {ConversationEndpoint,stableId} from '../src/conversation.ts';
+import {LocalConversationTransport} from '../src/conversation-transport.ts';
 import {digest} from '../src/contracts.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
-test('encrypted chat requests produce one durable proposal across ACK loss and pause, without dispatching an implementation',async()=>{
+test('conversation requests produce one durable proposal across ACK loss and pause, without dispatching an implementation',async()=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
  const database=await isolatedDatabase(base,'conversation'),db=new Ledger(database.url),capacity=new Capacity(db);
  try{
@@ -38,13 +39,12 @@ test('encrypted chat requests produce one durable proposal across ACK loss and p
     const payload={callId:input.callId,intentId:input.intentId,contextId:context,grantId:input.grantId,profileId:input.profile.id,sessionId:input.sessionId,epoch:input.executionEpoch,executorDigest:this.digest,inputDigest:input.inputDigest,profileDigest:digest(input.profile),outputDigest:createHash('sha256').update(output).digest('hex'),physicalDigest:digest(physical),exitCode:0};
     pending={output,receipt:{payload,signature:sign(null,planningReceiptMessage(payload),keys.privateKey).toString('hex')}};throw Error('FIXTURE_ACK_LOST');},
    async reconcile(input){await input.assertAuthorized();reconciliations++;return pending;}};
-  const planner=new SemanticPlanning(db,executor),boundary=await loadHappier();
-  const endpoint=Object.create(HappierEndpoint.prototype) as HappierEndpoint;
-  const options={baseUrl:'http://127.0.0.1',token:'synthetic',key,principal,sessionId:session,machineId:'synthetic',authority,semanticPlanning:planner};
+  const planner=new SemanticPlanning(db,executor),transport=new LocalConversationTransport({ledger:db,contextId:context,principal});await transport.start();
+  const endpoint=Object.create(ConversationEndpoint.prototype) as ConversationEndpoint;
+  const options={key,principal,sessionId:session,authority,semanticPlanning:planner};
   let dispatches=0,waiting=0;
-  Object.defineProperties(endpoint,{ledger:{value:db},runtime:{value:{projectId:project,executionMode:'execution',dispatch:async()=>{dispatches++;},reconcileCancellations:async()=>{},recoverManaged:async()=>{}}},boundary:{value:boundary},options:{value:options},lifecycle:{value:new AbortController()},socket:{value:{connected:true,emit:()=>{}}},
-   notifications:{value:{observe:async()=>{waiting++;}}},receivePending:{value:async()=>{}},flushNotifications:{value:async()=>{}},deliverQueuedMessages:{value:async()=>{}},
-   seal:{value:(v:unknown)=>boundary.encodeBase64(boundary.encrypt(key,'legacy',v))}});
+  Object.defineProperties(endpoint,{ledger:{value:db},runtime:{value:{projectId:project,executionMode:'execution',dispatch:async()=>{dispatches++;},reconcileCancellations:async()=>{},recoverManaged:async()=>{}}},options:{value:options},lifecycle:{value:new AbortController()},conversation:{value:transport},
+   notifications:{value:{observe:async()=>{waiting++;}}},receivePending:{value:async()=>{}},flushNotifications:{value:async()=>{}}});
   const text='PRIVATE SYNTHETIC PLANNING REQUEST',localId='request-'+randomUUID();
   const first=await endpoint.accept({text,localId}),repeat=await endpoint.accept({text,localId});assert.equal(first.result.intentId,repeat.result.intentId);
   await assert.rejects(endpoint.accept({text:'different',localId}),/INTENT_PAYLOAD_CONFLICT/);
@@ -52,21 +52,20 @@ test('encrypted chat requests produce one durable proposal across ACK loss and p
   assert.equal(intent.command.payload.workflow,'semantic-proposal-v1');assert.equal(intent.command.action,'plan.propose');assert(!JSON.stringify(intent).includes(text));
   const protectedRuntime=Object.create(CezarRuntime.prototype) as CezarRuntime;Object.defineProperty(protectedRuntime,'executionEnabled',{value:true});
   await assert.rejects(protectedRuntime.dispatch(intent,authority),/PLANNING_INTENT_NOT_EXECUTION/);
-  const message=(await db.pool.query('SELECT ciphertext FROM ac_chat_messages WHERE session_id=$1',[session])).rows[0];assert(!JSON.stringify(message).includes(text));
+  const owner=(await db.pool.query("SELECT text,accepted FROM ac_personal_messages WHERE context_id=$1 AND role='owner'",[context])).rows;assert.deepEqual(owner,[{text,accepted:true}]);
   await assert.rejects(db.accept(principal,{schemaVersion:1,intentId:randomUUID(),deliveryAttemptId:randomUUID(),contextId:context,policyRevision:1,action:'plan.propose',payload:{workflow:'semantic-proposal-v1',localId:'forged',messageRef:'message:forged',messageDigest:digest('forged'),qualityRevision:quality,targetRef:'refs/heads/other'}},authority,'api'),/TEMPLATE_WORKFLOW_MISMATCH/);
   await endpoint.tick();assert.equal(invocations,1);assert.equal(dispatches,0);assert.equal(waiting,1);
   await db.pause(principal,context,true);await assert.rejects(endpoint.tick(),/HUMAN_PAUSED/);assert.equal(invocations,1);assert.equal(reconciliations,1);
   await db.pause(principal,context,false);
-  const collisionId=session+'|proposal-'+stableId('semantic-proposal-v1\0'+intent.id);
-  const collision=boundary.encodeBase64(boundary.encrypt(key,'legacy',{role:'user',content:{type:'text',text:'collision fixture'}}));
-  await db.pool.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext) VALUES($1,$2,$3)',[collisionId,session,collision]);
+  const collisionLocalId='proposal-'+stableId('semantic-proposal-v1\0'+intent.id),collisionId=context+'|'+collisionLocalId;
+  await db.pool.query("INSERT INTO ac_personal_messages(id,context_id,role,text,local_id,accepted) VALUES($1,$2,'manager','collision fixture',$3,true)",[collisionId,context,collisionLocalId]);
   await assert.rejects(endpoint.tick(),/CHAT_MESSAGE_CONFLICT/);assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[intent.id])).rows[0].state,'accepted');
-  await db.pool.query('DELETE FROM ac_chat_messages WHERE id=$1',[collisionId]);
+  await db.pool.query('DELETE FROM ac_personal_messages WHERE id=$1',[collisionId]);
   await endpoint.tick();await endpoint.tick();assert.equal(dispatches,0);
   assert.equal(invocations,1);assert.equal(reconciliations,1);
   assert.equal((await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[intent.id])).rows[0].state,'done');
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_manager_plans WHERE context_id=$1',[context])).rows[0].n,1);
-  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_chat_messages WHERE id=$1',[session+'|proposal-'+stableId('semantic-proposal-v1\0'+intent.id)])).rows[0].n,1);
+  assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_personal_messages WHERE id=$1',[collisionId])).rows[0].n,1);
   assert.equal((await db.pool.query('SELECT count(*)::int n FROM ac_sandbox_jobs')).rows[0].n,0);
   assert(!JSON.stringify((await db.pool.query('SELECT * FROM ac_semantic_planning_calls')).rows).includes(text));
   // Cancellation of a ready result closes the call, freeing the single-call

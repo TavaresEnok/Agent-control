@@ -10,7 +10,7 @@ export const expectedSecretSurfaces = [
  'managed-api-/api/v1/runs','managed-api-/api/v1/runs/:runId','managed-api-/api/v1/runs/:runId/history',
  'private-route-denied-/api/v1/runs/:runId/logs','private-route-denied-/api/v1/ac/private/vault/master',
  'private-route-denied-/api/v1/workspace/secrets','portable-metadata','metadata-download-API',
- 'encrypted-conversation-export','provider-failure-public-code','execution-user-and-system-prompts',
+ 'provider-failure-public-code','execution-user-and-system-prompts',
  'git-artifact-bundle-reachable-objects','durable-history-after-reopen','durable-history-reconstructed-after-reopen','durable-run-after-reopen',
 ].sort();
 

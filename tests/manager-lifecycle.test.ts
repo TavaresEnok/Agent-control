@@ -1,45 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
-import {EventEmitter} from 'node:events';
 import {Ledger} from '../src/ledger.ts';
 import {ManagerRegistry} from '../src/managers.ts';
 import {ContextKeys,keyFingerprint} from '../src/context-keys.ts';
-import {HappierEndpoint,recoverHistory,type HappierBoundary} from '../src/happier.ts';
-import type {CezarRuntime} from '../src/cezar.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import {provisionCapacity} from './fixtures/provision-capacity.ts';
-
-test('history bounds fetch and response body even if transport ignores abort',async()=>{
- const boundary={} as HappierBoundary;let signal:AbortSignal|undefined;
- const hung=(async(_url:unknown,init?:RequestInit)=>{signal=init?.signal??undefined;return new Response(new ReadableStream({start(){}}));}) as typeof fetch;
- await assert.rejects(recoverHistory('http://localhost','synthetic','token',new Uint8Array(32),boundary,hung,'legacy',async()=>{},{timeoutMs:30}),/HAPPIER_TRANSPORT_TIMEOUT/);
- assert.equal(signal?.aborted,true);
-});
-
-test('late synthetic transport connection is disconnected after startup timeout',async()=>{
- const originalFetch=globalThis.fetch;let resolveConnect!:()=>void,disconnects=0;
- const connecting=new Promise<void>(resolve=>{resolveConnect=resolve;});
- class Socket extends EventEmitter {onAny(){} disconnect(){disconnects++;return this;}}
- const socket=new Socket();
- class Rpc {onSocketConnect(){} onSocketDisconnect(){} async handleRequest(){} async invokeLocal(){} async waitForRegisteredHandlers(){return {status:'ready'};}}
- const boundary={createSessionSocketTransport:()=>({socket,transport:{connect:()=>connecting}}),RpcHandlerManager:Rpc,
-  registerSessionUserMessageSendHandler:()=>{}} as unknown as HappierBoundary;
- const ledger={recoverCheckpoint:async()=>null} as unknown as Ledger;
- const endpoint=new HappierEndpoint(ledger,{repo:'/synthetic'} as CezarRuntime,boundary,{baseUrl:'http://localhost',token:'synthetic',key:new Uint8Array(32),principal:'owner',sessionId:'session',machineId:'machine',authority:{contextId:randomUUID(),instanceId:randomUUID(),epoch:1},transportTimeoutMs:30});
- endpoint.validateLink=async()=>{};endpoint.validateKey=async()=>{};
- globalThis.fetch=async input=>String(input).includes('/profile')?Response.json({id:'owner'}):Response.json({messages:[],hasMore:false,nextBeforeSeq:null});
- try{
-  await assert.rejects(endpoint.start(),/HAPPIER_TRANSPORT_TIMEOUT/);const before=disconnects;
-  resolveConnect();await new Promise(resolve=>setTimeout(resolve,10));assert(disconnects>before);
-  socket.emit('connect');assert(disconnects>before+1);
-  class HungRpc extends Rpc {override async waitForRegisteredHandlers():Promise<{status:string}>{return new Promise(()=>{});}}
-  const rpcBoundary={...boundary,RpcHandlerManager:HungRpc,createSessionSocketTransport:()=>({socket,transport:{connect:async()=>{}}})} as unknown as HappierBoundary;
-  const rpcEndpoint=new HappierEndpoint(ledger,{repo:'/synthetic'} as CezarRuntime,rpcBoundary,{...endpoint.options,transportTimeoutMs:30});
-  rpcEndpoint.validateLink=async()=>{};rpcEndpoint.validateKey=async()=>{};
-  try{await assert.rejects(rpcEndpoint.start(),/HAPPIER_TRANSPORT_TIMEOUT/);}finally{rpcEndpoint.close();}
- }finally{globalThis.fetch=originalFetch;endpoint.close();}
-});
 
 test('stuck manager start times out or stops; successor remains fenced and keys isolated',async()=>{
  const url=process.env.AC_TEST_DATABASE_URL;if(!url)throw Error('ISOLATED_DATABASE_REQUIRED');

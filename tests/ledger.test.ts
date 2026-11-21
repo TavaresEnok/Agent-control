@@ -2,6 +2,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { Ledger } from '../src/ledger.ts';
+import {CONVERSATION_CHANNEL} from '../src/conversation-transport.ts';
 import { Command, Refusal } from '../src/contracts.ts';
 const database = process.env.AC_TEST_DATABASE_URL;
 if (!database || !database.includes('/ac_implementation_test')) throw Error('ISOLATED_TEST_DATABASE_REQUIRED');
@@ -42,7 +43,7 @@ test('RF-45/53/T27: concurrency, semantic retry, payload and cross-context confl
   const command: Command = { schemaVersion: 1, intentId: randomUUID(), deliveryAttemptId: randomUUID(),
     contextId: two, policyRevision: 1, action: 'plan.start', payload: { workflow: 'baseline-synthetic-v1', messageRef: 'encrypted:message' } };
   const result = await Promise.all(Array.from({ length: 12 }, (_, i) => (i % 2 ? db : second).accept('owner',
-    { ...command, deliveryAttemptId: randomUUID() }, a, i % 2 ? 'cockpit' : 'happier')));
+    { ...command, deliveryAttemptId: randomUUID() }, a, i % 2 ? 'cockpit' : CONVERSATION_CHANNEL)));
   assert.equal(new Set(result.map(r => r.run_id)).size, 1);
   assert.equal((await db.pool.query('SELECT * FROM ac_outbox WHERE intent_id=$1', [command.intentId])).rowCount, 1);
   assert.equal((await db.pool.query('SELECT * FROM ac_deliveries WHERE intent_id=$1', [command.intentId])).rowCount, 12);

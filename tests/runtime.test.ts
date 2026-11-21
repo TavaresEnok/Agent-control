@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { Ledger, type Intent } from '../src/ledger.ts';
+import {CONVERSATION_CHANNEL} from '../src/conversation-transport.ts';
 import { Command, Refusal, Projection } from '../src/contracts.ts';
 import { CezarRuntime } from '../src/cezar.ts';
 import { createApi } from '../src/api.ts';
@@ -18,7 +19,7 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
   const project = randomUUID();
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'Runtime fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,'owner','owner')", [project]);
-  const context = await db.createContext('owner', project, 'happier-' + randomUUID());
+  const context = await db.createContext('owner', project, 'session-' + randomUUID());
   const capacity = await provisionCapacity(db, 'owner', project);
   await capacity.service.assignPolicy('owner', context, capacity.revision);
   await mkdir('.state/projects', { recursive: true });
@@ -43,7 +44,7 @@ test('C03/C05/C07/C08: process takeover, actual Cezar DAG, Git, retries and ingr
   try {
     const body: Command = { schemaVersion: 1, intentId: randomUUID(), deliveryAttemptId: randomUUID(), contextId: context,
       policyRevision: 1, action: 'plan.start', payload: { workflow: 'baseline-synthetic-v1', messageRef: 'encrypted:fixture' } };
-    const intent = await db.accept('owner', body, authority, 'happier');
+    const intent = await db.accept('owner', body, authority, CONVERSATION_CHANNEL);
     const receipt = { operationId: intent.operation_id, base: 'a'.repeat(40), commit: 'b'.repeat(40), tree: 'c'.repeat(40), exitCode: 0, synthetic: true };
     await assert.rejects(runtime.recordReceipt(intent, old, receipt), /STALE_MANAGER/);
     await assert.rejects(runtime.recordReceipt(intent, authority, { ...receipt, operationId: randomUUID() }), /INVALID_SYNTHETIC_RECEIPT/);

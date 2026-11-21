@@ -1,7 +1,7 @@
 // Runs the tests that scripts/test-ci-classification.json marks as "executar", one process per file.
 // The classification is explicit and versioned: a test file nobody classified is an error, and every
 // file left out is listed with its reason (laboratório, excluído, pulado), never silently dropped.
-// Laboratory files drive Docker, SSH or a live Happier server and belong to their own compose profiles.
+// Laboratory files drive Docker or SSH and belong to their own compose profiles.
 import {spawn} from 'node:child_process';
 import pg from 'pg';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -73,7 +73,7 @@ if(listOnly){
 }
 if(!process.env.AC_TEST_DATABASE_URL){
   console.error('Defina AC_TEST_DATABASE_URL com um Postgres descartável (postgresql://usuario:senha@127.0.0.1:porta/banco).');
-  console.error('Os arquivos que precisam do laboratório (Docker, SSH, Happier, sudo) ficam fora e aparecem em "excluded"; rode-os com npm run test:all no laboratório.');
+  console.error('Os arquivos que precisam do laboratório (Docker, SSH, sudo) ficam fora e aparecem em "excluded"; rode-os com npm run test:all no laboratório.');
   process.exit(1);
 }
 // Project admission refuses group-writable paths, so a permissive host umask fails valid fixtures.

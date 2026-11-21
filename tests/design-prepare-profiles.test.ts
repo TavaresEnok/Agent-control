@@ -102,11 +102,6 @@ test('preparar com --conta-prioritaria prioriza Max na cadeia regular, distingue
       dataDirectory,
       project: {id: project, label: 'Max Priority', repo, owner: principal},
       http: {listen: '127.0.0.1', port: 43123, publicOrigin: 'http://127.0.0.1:43123'},
-      happier: {
-        upstreamOrigin: 'http://127.0.0.1:43124',
-        webOrigin: 'http://127.0.0.1:43125',
-        publicServerOrigin: 'http://127.0.0.1:43126',
-      },
     }), {mode: 0o600});
     await chmod(installationPath, 0o600);
 

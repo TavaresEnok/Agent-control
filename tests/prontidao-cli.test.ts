@@ -254,11 +254,6 @@ test('Installation, parsePersonalModuleArgs e moduleCollectorArguments validam o
     },
     publishedOrigins: ['https://status.example.com:8443'],
     http: {listen: '127.0.0.1' as const, port: 18425, publicOrigin: 'http://127.0.0.1:18425'},
-    happier: {
-      upstreamOrigin: 'http://127.0.0.1:18421',
-      webOrigin: 'http://127.0.0.1:18420',
-      publicServerOrigin: 'http://127.0.0.1:18421',
-    },
   };
   const parsed = Installation.parse(baseInstall);
   assert.equal(parsed.project.publishedOrigin, 'https://app.example.com');
@@ -462,7 +457,6 @@ test('config-export projeta publishedOrigin/publishedOrigins como Binding endpoi
       },
       publishedOrigins: ['https://global.exemplo.internal'],
       http: {listen: '127.0.0.1', port: 18426, publicOrigin: 'http://127.0.0.1:18426'},
-      happier: {upstreamOrigin: 'http://127.0.0.1:18421', webOrigin: 'http://127.0.0.1:18420', publicServerOrigin: 'http://127.0.0.1:18421'},
     });
     await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)', [project, 'ExportProj']);
     await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')", [project, owner]);
@@ -524,11 +518,6 @@ test('fluxo completo da CLI personal:prontidao com servidor HTTPS sintético (TL
         ...(opts.publishedOrigins ? {publishedOrigins: opts.publishedOrigins} : {}),
       },
       http: {listen: '127.0.0.1', port: 18427, publicOrigin: 'http://127.0.0.1:18427'},
-      happier: {
-        upstreamOrigin: 'http://127.0.0.1:18421',
-        webOrigin: 'http://127.0.0.1:18420',
-        publicServerOrigin: 'http://127.0.0.1:18421',
-      },
     }), {mode: 0o600});
     await chmod(file, 0o600);
     return file;

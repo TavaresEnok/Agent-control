@@ -293,8 +293,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       await writeFile(installation, JSON.stringify({schemaVersion: 1, mode: 'administration-only', activation: 'personal',
         databaseUrl: database.url, dataDirectory, project: {id: project, label: 'Fixture', repo, owner, economy: {map: true, measurement: true, batch: false, batchTokens: 40000, batchFiles: 8}},
         projects: [{id: otherProject, label: 'Outro projeto', repo: join(root, 'other-repo'), owner}],
-        http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
-        happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'}}), {mode: 0o600});
+        http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'}}), {mode: 0o600});
       const collectorOutput: ModuleCollectorOutput = {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'leitura local'}],
         findings: [qaStaticFinding('index.ts', 1, skippedIndex + ';'), qaStaticFinding('other.ts', 1, skippedOther)]};
       let result: VerificationModuleRunResult | undefined;

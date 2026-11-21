@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {Installation} from '../src/installation.ts';
 import {Ledger} from '../src/ledger.ts';
 import {ContextKeys,keyFingerprint} from '../src/context-keys.ts';
-import {HappierEndpoint,type HappierBoundary} from '../src/happier.ts';
+import {ConversationEndpoint} from '../src/conversation.ts';
 import {LocalConversationTransport} from '../src/conversation-transport.ts';
 import {personalPanelLocalId} from '../src/personal-panel-conversation.ts';
 import type {CezarRuntime} from '../src/cezar.ts';
@@ -20,32 +20,32 @@ function installation(extra:Record<string,unknown>={}){
  return {schemaVersion:1,mode:'administration-only',databaseUrl:'postgresql://localhost/ac',dataDirectory:data,
   project:{id:project,label:'Local',repo:'/srv/ac-local-repo',owner:'owner'},
   contextVault:{directory:data+'/vault',masterFile:data+'/vault-master'},
-  managerTransport:{principal:'owner',tokenFile:data+'/token',machineId:'machine',contexts:[{projectId:project,contextId:randomUUID(),sessionId:'session',profileId:'profile',keyVersion:1,encryptionVariant:'legacy'}]},
+  managerTransport:{principal:'owner',contexts:[{projectId:project,contextId:randomUUID(),sessionId:'session',profileId:'profile',keyVersion:1,encryptionVariant:'legacy'}]},
   http:{listen:'127.0.0.1',port:8080,publicOrigin:'http://127.0.0.1:8080'},
-  happier:{upstreamOrigin:'http://127.0.0.1:8081',webOrigin:'http://127.0.0.1:8082',publicServerOrigin:'http://127.0.0.1:8083'},
   ...extra};
 }
 
-test('an installation without a transport field stays on happier',()=>{
+test('an installation without a transport field is local',()=>{
  const parsed=Installation.parse(installation());
- assert.equal(parsed.managerTransport?.transport,'happier');
+ assert.equal(parsed.managerTransport?.transport,'local');
  assert.equal(parsed.activation,'locked');
 });
 
-test('local transport is refused unless activation is personal',()=>{
- assert.throws(()=>Installation.parse(installation({managerTransport:{...(installation().managerTransport as object),transport:'local'}})),/LOCAL_TRANSPORT_REQUIRES_PERSONAL/);
- const personal=Installation.parse(installation({activation:'personal',managerTransport:{...(installation().managerTransport as object),transport:'local'}}));
- assert.equal(personal.managerTransport?.transport,'local');
- assert.equal(personal.activation,'personal');
+test('only the local transport is accepted; legacy token and machine fields still load',()=>{
+ const transport=installation().managerTransport as object;
+ assert.throws(()=>Installation.parse(installation({managerTransport:{...transport,transport:'remote'}})));
+ const legacy=Installation.parse(installation({activation:'personal',managerTransport:{...transport,transport:'local',tokenFile:data+'/token',machineId:'machine'}}));
+ assert.equal(legacy.managerTransport?.transport,'local');
+ assert.equal(legacy.activation,'personal');
 });
 
 test('one local owner message is accepted once and a repeated clientId does not duplicate',async()=>{
  const base=process.env.AC_TEST_DATABASE_URL;if(!base)throw Error('ISOLATED_DATABASE_REQUIRED');
  const fixture=await isolatedDatabase(base,'localtransport'),db=new Ledger(fixture.url);
  const folder=await mkdtemp(join(tmpdir(),'ac-local-repo-'));
- const key=randomBytes(32);let endpoint:HappierEndpoint|undefined;
+ const key=randomBytes(32);let endpoint:ConversationEndpoint|undefined;
  const originalFetch=globalThis.fetch;let fetches=0;
- globalThis.fetch=async()=>{fetches++;throw Error('HAPPIER_FETCH_FORBIDDEN');};
+ globalThis.fetch=async()=>{fetches++;throw Error('NETWORK_FETCH_FORBIDDEN');};
  try{
   await db.migrate();
   const project=randomUUID(),principal='owner-'+randomUUID(),sessionId=randomUUID();
@@ -58,8 +58,7 @@ test('one local owner message is accepted once and a repeated clientId does not 
   const managerChat={async decide(){decisions++;return {kind:'answer' as const,answer:'Resposta local do gerente.'};}} as unknown as PersonalManagerChat;
   const runtime={repo:folder,projectId:project,executionMode:'administration-only',async reconcileCancellations(){},async recoverManaged(){},store:{listRuns:()=>[],updateRun(){},flush(){}}} as unknown as CezarRuntime;
   const transport=new LocalConversationTransport({ledger:db,contextId:context,principal});
-  endpoint=new HappierEndpoint(db,runtime,new Proxy({} as HappierBoundary,{get(){throw Error('BOUNDARY_FORBIDDEN');}}),{
-   baseUrl:'http://127.0.0.1',token:'',key,principal,sessionId,machineId:'local',authority,personalConversation:true,managerChat},transport);
+  endpoint=new ConversationEndpoint(db,runtime,{key,principal,sessionId,authority,personalConversation:true,managerChat},transport);
   await transport.start();
   const localId=personalPanelLocalId('clientId1');
   await endpoint.enqueueOwnerMessage('qual é o estado deste projeto?',localId);

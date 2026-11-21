@@ -24,8 +24,7 @@ test('readiness reports local facts without writing or exposing configuration',a
   await writeFile(join(web,'index.html'),'<script type="module" src="/assets/app.js"></script>');await writeFile(join(web,'assets/app.js'),'fixture');
   const config=Installation.parse({schemaVersion:1,mode:'administration-only',databaseUrl:'postgresql://private-user:private-password@localhost/private-db',dataDirectory:privateDir,
    project:{id:randomUUID(),label:'Secret label',repo,owner:'private-owner'},
-   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},
-   happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'}});
+   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'}});
   const folder=new URL('../db/migrations/',import.meta.url),files=(await readdir(folder)).filter(f=>/^\d+_.+\.sql$/.test(f));
   const migrations=await Promise.all(files.map(async file=>({version:Number(file.split('_')[0]),digest:digest(await readFile(new URL(file,folder),'utf8'))})));
   const calls:string[]=[];let altered=false,offline=false,registeredRepo=repo,closed=0;
@@ -74,8 +73,7 @@ test('readiness and CLI inspect a newly initialized isolated PostgreSQL database
   execFileSync('/usr/bin/git',['-C',repo,'init','-q']);await chmod(join(repo,'.git'),0o755);
   const config=Installation.parse({schemaVersion:1,mode:'administration-only',databaseUrl:database.url,dataDirectory:privateDir,
    project:{id:randomUUID(),label:'Readiness fixture',repo,owner:'synthetic-readiness-owner'},
-   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},
-   happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'}});
+   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'}});
   await initializeInstallation(config,ledger);
   const counts=async()=>Object.fromEntries(await Promise.all(['ac_intents','ac_capacity_grants','ac_outbox'].map(async table=>
    [table,Number((await ledger.pool.query(`SELECT count(*) AS n FROM ${table}`)).rows[0].n)])));

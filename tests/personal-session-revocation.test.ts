@@ -22,15 +22,14 @@ test('a password change or removal ends the sessions issued under the old creden
  const folder=await realpath(await mkdtemp(join(tmpdir(),'ac-session-revoke-')));
  try{
   await db.migrate();
-  const project=randomUUID(),principal='happier-'+randomUUID();
+  const project=randomUUID(),principal='owner-'+randomUUID();
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Revoke']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[project,principal]);
   await db.createContext(principal,project,randomUUID());
   const config={dataDirectory:folder,project:{id:project,owner:'config-owner'},
-   managerTransport:{principal,transport:'local' as const,tokenFile:join(folder,'token')},
-   happier:{upstreamOrigin:'http://127.0.0.1:8081'},http:{publicOrigin:origin}};
+   managerTransport:{principal}};
   const sessions=new BrowserSessions(db,randomBytes(32),verify,{origin,secure:false,maxAgeSeconds:300});
-  const login=personalPasswordLogin(config,db,sessions,verify);
+  const login=personalPasswordLogin(config,db,sessions);
   const attempt=(user:string,password:string)=>login(new Request(origin+'/api/v1/ac/auth/password',{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify({user,password})}));
 
   await savePanelLogin(folder,'alice','correct-horse-12');
@@ -53,7 +52,7 @@ test('a password change or removal ends the sessions issued under the old creden
 
   // A pair-code session issued after the removal is a new credential and works.
   const {code}=await createPairCode(folder);
-  const coded=await personalCodeLogin(config,db,sessions,verify)(new Request(origin+'/api/v1/ac/auth/code',{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify({code})}));
+  const coded=await personalCodeLogin(config,db,sessions)(new Request(origin+'/api/v1/ac/auth/code',{method:'POST',headers:{'content-type':'application/json',origin},body:JSON.stringify({code})}));
   assert.equal(coded.status,200);
   assert.equal(await sessions.authenticate(probe(cookieOf(coded))),principal);
  }finally{await db.close();await fixture.close();await rm(folder,{recursive:true,force:true});}

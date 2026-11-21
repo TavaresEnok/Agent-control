@@ -32,14 +32,14 @@ test('a classified file that no longer exists, a duplicate and a missing reason 
 });
 
 test('a requirement that is unmet puts the file in the skipped list with its reason',()=>{
-  const classification={...base,requer:{'a.test.ts':'happier-build','b.test.ts':'env:AC_TEST_HAPPIER_URL'}};
+  const classification={...base,requer:{'a.test.ts':'env:AC_TEST_FIXTURE_URL','b.test.ts':'env:AC_TEST_OTHER_URL'}};
   const names=['a.test.ts','b.test.ts','c.test.ts','d.test.ts'];
-  const without=planSelection(names,classification,{happierBuilt:false,env:{}});
+  const without=planSelection(names,classification,{env:{}});
   assert.deepEqual(without.executed,[]);
   assert.deepEqual(without.skipped.map(item=>item.name),['a.test.ts','b.test.ts']);
-  assert.match(without.skipped[0]!.reason,/Happier/);
-  assert.match(without.skipped[1]!.reason,/AC_TEST_HAPPIER_URL/);
-  const withEverything=planSelection(names,classification,{happierBuilt:true,env:{AC_TEST_HAPPIER_URL:'http://127.0.0.1:1'}});
+  assert.match(without.skipped[0]!.reason,/AC_TEST_FIXTURE_URL/);
+  assert.match(without.skipped[1]!.reason,/AC_TEST_OTHER_URL/);
+  const withEverything=planSelection(names,classification,{env:{AC_TEST_FIXTURE_URL:'http://127.0.0.1:1',AC_TEST_OTHER_URL:'http://127.0.0.1:2'}});
   assert.deepEqual(withEverything.executed,['a.test.ts','b.test.ts']);
   assert.deepEqual(withEverything.skipped,[]);
 });
@@ -53,17 +53,17 @@ test('laboratory files run only with the host option and never the excluded ones
 });
 
 test('the report lists what ran, what was skipped and what depends on the laboratory',()=>{
-  const plan=planSelection(['a.test.ts','b.test.ts','c.test.ts','d.test.ts'],{...base,requer:{'b.test.ts':'happier-build'}},{happierBuilt:false});
+  const plan=planSelection(['a.test.ts','b.test.ts','c.test.ts','d.test.ts'],{...base,requer:{'b.test.ts':'env:AC_TEST_FIXTURE_URL'}},{env:{}});
   const report=selectionReport(plan,{failed:['a.test.ts']});
   assert.match(report,/Executados: 1/);
-  assert.match(report,/pulado b\.test\.ts: workspace do Happier/);
+  assert.match(report,/pulado b\.test\.ts: variável AC_TEST_FIXTURE_URL ausente/);
   assert.match(report,/laboratório c\.test\.ts: precisa de Docker real/);
   assert.match(report,/excluído d\.test\.ts: obsoleto/);
   assert.match(report,/Falharam: a\.test\.ts/);
 });
 
 test('every test file in this checkout is classified, and the examples the audit named now run',async()=>{
-  const plan=await selectTests(root,{happierBuilt:true,env:{}});
+  const plan=await selectTests(root,{env:{}});
   assert.deepEqual(plan.errors,[]);
   const files=await listTestFiles(root);
   const accounted=new Set([...plan.executed,...plan.skipped.map(item=>item.name),...plan.laboratory.map(item=>item.name),...plan.excluded.map(item=>item.name)]);

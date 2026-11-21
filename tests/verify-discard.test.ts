@@ -21,7 +21,6 @@ async function installation(activation:'personal'|'locked'='personal'){
   dataDirectory:data,
   project:{id:projectId,label:'Descartar',repo,owner:'owner@example.com'},
   http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},
-  happier:{upstreamOrigin:'http://127.0.0.1:8766',webOrigin:'http://127.0.0.1:8766',publicServerOrigin:'http://127.0.0.1:8765'},
  })+'\n',{mode:0o600});
  await chmod(file,0o600);
  return {root,data,file,projectId};

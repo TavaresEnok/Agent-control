@@ -39,8 +39,7 @@ async function layout(){
  const planningImage='sha256:'+hash('planning-image'),workerImage='sha256:'+hash('worker-image'),toolsImage='sha256:'+hash('tools-image');
  const base={schemaVersion:1 as const,mode:'administration-only' as const,databaseUrl:'postgres://localhost/native_bootstrap',dataDirectory:data,
   project:{id:projectId,label:'Bootstrap project',repo,owner:'synthetic-owner'},
-  http:{listen:'127.0.0.1' as const,port:18443,publicOrigin:'http://127.0.0.1:18443'},
-  happier:{upstreamOrigin:'http://127.0.0.1:18441',webOrigin:'http://127.0.0.1:18440',publicServerOrigin:'http://127.0.0.1:18441'}};
+  http:{listen:'127.0.0.1' as const,port:18443,publicOrigin:'http://127.0.0.1:18443'}};
  return {root:canonical,data,repo,dirs,keys,material,projectId,contextId,instanceId,accountId,planningImage,workerImage,toolsImage,base};
 }
 

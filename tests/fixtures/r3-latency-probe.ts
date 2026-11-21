@@ -18,7 +18,7 @@ export async function measureCommandRequests(request:(command:Record<string,unkn
   const server=timingHeader(response.headers.get('server-timing'));
   metrics.authentication.push(server.authentication);metrics.application.push(server.application);
  }
- const measured=report(metrics,{transport:'production Hono handler → real Happier authentication → PostgreSQL',network:'in-process handler invocation; not a network benchmark',
+ const measured=report(metrics,{transport:'production Hono handler → personal session authentication → PostgreSQL',network:'in-process handler invocation; not a network benchmark',
   commandMix:{newIntents:1,idempotentDeliveryRetries:samples-1},thresholds:{commandAcceptanceMs:2000}});
  assert(measured.metrics.commandAcceptance.maxMs<=2000,'SYNTHETIC_COMMAND_ACCEPTANCE_OVER_2S');
  return {response:response!,report:measured};

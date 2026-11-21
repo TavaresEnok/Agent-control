@@ -1,7 +1,7 @@
 import {describe,test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {chmod,copyFile,mkdir,mkdtemp,readFile,realpath,rm,writeFile} from 'node:fs/promises';
+import {chmod,copyFile,mkdir,mkdtemp,readFile,readdir,realpath,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 // @ts-expect-error plain ES module without declarations
@@ -60,14 +60,13 @@ test('the real personal-services script writes units whose ExecStart keeps a rep
   await writeFile(join(bin,'systemctl'),'#!/bin/sh\nexit 0\n');await chmod(join(bin,'systemctl'),0o755);
   const installation=join(base,'My Installation','installation.json');
   await mkdir(join(base,'My Installation'));
-  await writeFile(installation,JSON.stringify({activation:'personal',dataDirectory:data,managerTransport:{transport:'happier'}}));
+  await writeFile(installation,JSON.stringify({activation:'personal',dataDirectory:data,managerTransport:{transport:'local'}}));
   execFileSync(process.execPath,[join(root,'scripts/personal-services.mjs'),installation,'espaco'],{env:{...process.env,HOME:home,PATH:`${bin}:${process.env.PATH}`},stdio:'pipe'});
   const units=join(home,'.config/systemd/user');
   const gateway=await readFile(join(units,'agent-control-gateway-espaco.service'),'utf8');
-  const happier=await readFile(join(units,'agent-control-happier-espaco.service'),'utf8');
   const line=(text:string,key:string)=>text.split('\n').find(l=>l.startsWith(key+'='))!.slice(key.length+1);
   assert.deepEqual(parseExecStart(line(gateway,'ExecStart')),[process.execPath,'--import','tsx',join(root,'src/server-main.ts'),'serve',installation]);
-  assert.deepEqual(parseExecStart(line(happier,'ExecStart')),[process.execPath,join(root,'scripts/personal-happier.mjs'),installation]);
+  assert.deepEqual((await readdir(units)).filter(name=>name.endsWith('.service')).sort(),['agent-control-docker-filter-espaco.service','agent-control-gateway-espaco.service']);
   assert.equal(line(gateway,'WorkingDirectory'),root);
   assert.match(line(gateway,'Environment'),/^"PATH=.*"$/);
   // The gateway reaches Docker through the filter unit, which starts first and allows mounts only under the installation.

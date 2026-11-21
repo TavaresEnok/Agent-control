@@ -26,8 +26,7 @@ async function installation(){
  const file=join(data,'installation.json');
  await writeFile(file,JSON.stringify({schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:dbFixture.url,dataDirectory:data,
   project:{id,label:'IspAgent',repo,owner:'owner@example.com'},projects:[{id:randomUUID(),label:'outro',repo:join(root,'other'),owner:'owner@example.com'}],
-  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},
-  happier:{upstreamOrigin:'http://127.0.0.1:8766',webOrigin:'http://127.0.0.1:8766',publicServerOrigin:'http://127.0.0.1:8765'}},null,2)+'\n',{mode:0o600});
+  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'}},null,2)+'\n',{mode:0o600});
  return {root,data,file,id,db,async close(){await db.close();await dbFixture.close();await rm(root,{recursive:true,force:true});}};
 }
 

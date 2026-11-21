@@ -308,7 +308,6 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
       project: {id: project, label: 'Roteamento', repo, owner},
       projects: [],
       http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
-      happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'},
     }), {mode: 0o600});
 
     let examinerFindingsMode: 'high-and-med' | 'none' = 'high-and-med';

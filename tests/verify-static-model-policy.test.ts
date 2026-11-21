@@ -88,11 +88,6 @@ async function setupEnvironment(label: string) {
       dataDirectory,
       project: {id: projectId, label: `Project ${label}`, repo, owner: principal},
       http: {listen: '127.0.0.1', port: 18425, publicOrigin: 'http://127.0.0.1:18425'},
-      happier: {
-        upstreamOrigin: 'http://127.0.0.1:18421',
-        webOrigin: 'http://127.0.0.1:18420',
-        publicServerOrigin: 'http://127.0.0.1:18421',
-      },
     }),
     {mode: 0o600},
   );

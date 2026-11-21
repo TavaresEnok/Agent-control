@@ -73,11 +73,6 @@ async function writeInstallation(root: string, opts: {
       dataDirectory: opts.dataDirectory,
       project: {id: opts.projectId, label: 'Projeto Teste', repo: opts.repo, owner: opts.owner},
       http: {listen: '127.0.0.1', port: 18415, publicOrigin: 'http://127.0.0.1:18415'},
-      happier: {
-        upstreamOrigin: 'http://127.0.0.1:18411',
-        webOrigin: 'http://127.0.0.1:18410',
-        publicServerOrigin: 'http://127.0.0.1:18411',
-      },
     }),
     {mode: 0o600},
   );

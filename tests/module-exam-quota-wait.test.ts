@@ -310,7 +310,6 @@ test('CLI integrada espera renovação da mesma conta Claude em 15 min com reló
         project: {id: project, label: 'Quota Wait Fixture', repo, owner, economy: {map: true, measurement: true, batch: false, batchTokens: 40000, batchFiles: 8}},
         projects: [],
         http: {listen: '127.0.0.1', port: 8765, publicOrigin: 'http://127.0.0.1:8765'},
-        happier: {upstreamOrigin: 'http://127.0.0.1:8766', webOrigin: 'http://127.0.0.1:8766', publicServerOrigin: 'http://127.0.0.1:8765'},
       }), {mode: 0o600});
 
       const collectorOutput: ModuleCollectorOutput = {

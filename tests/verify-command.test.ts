@@ -34,11 +34,6 @@ async function allowHomologation(root: string, containers: readonly string[]): P
     dataDirectory: data,
     project: {id: randomUUID(), label: 'Alvo', repo, owner: 'owner'},
     http: {listen: '127.0.0.1', port: 18405, publicOrigin: 'http://127.0.0.1:18405'},
-    happier: {
-      upstreamOrigin: 'http://127.0.0.1:18401',
-      webOrigin: 'http://127.0.0.1:18400',
-      publicServerOrigin: 'http://127.0.0.1:18401',
-    },
     verifyHomologationContainers: containers,
   }), {mode: 0o600});
   await chmod(file, 0o600);

@@ -32,8 +32,7 @@ test('descarte retoma publicação parcial e não aceita caminhos fora do projet
    VALUES($1,$2,$3,$4,$5,$6,'done',$7,'qa')`,[run,project,contextId,intent,owner,'a'.repeat(40),dir]);
   const file=join(data,'installation.json');
   await writeFile(file,JSON.stringify({schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:fixture.url,dataDirectory:data,
-   project:{id:project,label:'Projeto',repo,owner},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},
-   happier:{upstreamOrigin:'http://127.0.0.1:8766',webOrigin:'http://127.0.0.1:8766',publicServerOrigin:'http://127.0.0.1:8765'}}),{mode:0o600});
+   project:{id:project,label:'Projeto',repo,owner},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'}}),{mode:0o600});
   const discard=()=>runPersonalModuleCli('qa',[file,project,'--descartar',run]);
   // Simulates termination after the tombstone commit, before filesystem cleanup.
   await db.pool.query('UPDATE ac_verify_runs SET report_dir=$2 WHERE id=$1',[run,'discarded:'+dir]);

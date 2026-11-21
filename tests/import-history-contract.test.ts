@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
 import {ImportBundle} from '../src/import.ts';
 import {digest} from '../src/contracts.ts';
-import {historicalBundle} from './fixtures/import-v2-bundle.ts';
-import type {HappierBoundary} from '../src/happier.ts';
+import {historicalBundle,type MessageSealer} from './fixtures/import-v2-bundle.ts';
 
-const boundary={encrypt:()=>new Uint8Array([1,2,3]),encodeBase64:(b:Uint8Array)=>Buffer.from(b).toString('base64')} as unknown as HappierBoundary;
+const boundary={encrypt:()=>new Uint8Array([1,2,3]),encodeBase64:(b:Uint8Array)=>Buffer.from(b).toString('base64')} satisfies MessageSealer;
 async function fixture(){return historicalBundle(randomUUID(),'session-1',randomBytes(32),boundary);}
 test('v2 retains typed historical plan and evidence as untrusted source claims',async()=>{
  const input=await fixture(), parsed=ImportBundle.parse(input);

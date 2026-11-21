@@ -17,11 +17,11 @@ class Packaging(TestCase):
     return package.git(root,'rev-parse','HEAD').decode().strip()
    for name,value in {'package.json':json.dumps({'name':'fixture','version':'1'}),
     'package-lock.json':json.dumps({'name':'fixture','version':'1','lockfileVersion':3}),
-    'upstream/cezar/package-lock.json':'{}','upstream/happier/yarn.lock':'# synthetic',
-    'upstream/PROVENANCE.json':json.dumps({name:{'commit':'a'*40,'patch_sha256':package.sha(('synthetic '+name).encode())} for name in ['cezar','happier']}),
-    'upstream/CHANGES.json':json.dumps({'cezar':[],'happier':[]}),
-    'upstream/happier/apps/cli/.env.dev':'PUBLIC_FIXTURE_SECRET=not-distributed',
-    'upstream/patches/cezar-complete.patch':'synthetic cezar','upstream/patches/happier-complete.patch':'synthetic happier',
+    'upstream/cezar/package-lock.json':'{}',
+    'upstream/PROVENANCE.json':json.dumps({name:{'commit':'a'*40,'patch_sha256':package.sha(('synthetic '+name).encode())} for name in ['cezar']}),
+    'upstream/CHANGES.json':json.dumps({'cezar':[]}),
+    'upstream/cezar/apps/cli/.env.dev':'PUBLIC_FIXTURE_SECRET=not-distributed',
+    'upstream/patches/cezar-complete.patch':'synthetic cezar',
     'docs/validation/ACCEPTANCE-I0-I2.md':'synthetic criteria','docs/operations/DISTRIBUTION.md':'synthetic instructions',
     'src/fixture.ts':'export const synthetic=true;\n'}.items():put(name,value)
    def provenance():
@@ -36,7 +36,7 @@ class Packaging(TestCase):
    with tarfile.open(outputs[0]) as archive:
     names=archive.getnames();self.assertFalse(any('.state' in name for name in names));self.assertFalse(any(name.endswith('/.env.dev') for name in names))
     manifest=json.load(archive.extractfile('agent-control/SOURCE-MANIFEST.json'))
-    self.assertEqual(manifest['excluded'][0]['path'],'upstream/happier/apps/cli/.env.dev')
+    self.assertEqual(manifest['excluded'][0]['path'],'upstream/cezar/apps/cli/.env.dev')
     self.assertEqual(manifest['excluded'][0]['reason'],'upstream_environment_configuration_not_distributed')
     for record in manifest['files']:
      self.assertEqual(package.sha(archive.extractfile('agent-control/'+record['path']).read()),record['sha256'])

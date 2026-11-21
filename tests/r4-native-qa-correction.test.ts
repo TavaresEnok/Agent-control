@@ -26,7 +26,7 @@ import {cleanupGraphResources} from './fixtures/native-graph-cleanup.ts';
 import {provisionFlowResources,retireFlowResources,assertFlowResourceLimits,type FlowResourceEnvelope} from './fixtures/r3-flow-resources.ts';
 
 /** Actual effects; only model behavior and subnet allocation are deterministic.
- * No Happier/planner/cancellation duplicate, provider login or official inference. */
+ * No conversation/planner/cancellation duplicate, provider login or official inference. */
 test('T21 physical QA reproduces defect after initial review, then normal correction needs new review and QA',{timeout:180000},async()=>{
  const base=process.env.AC_TEST_DATABASE_URL,image=process.env.AC_R3_FLOW_IMAGE,network=process.env.AC_R3_FLOW_NETWORK,label=process.env.AC_R3_FLOW_LABEL;
  if(!base||!image||!network||!label||process.env.AC_R3_FLOW_TOOLS_KIND!=='codex-exec-server')throw Error('R4_CORRECTION_ISOLATED_RUNNER_REQUIRED');

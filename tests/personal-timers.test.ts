@@ -17,8 +17,7 @@ async function fixture(){
  const body={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://ac:s3cret@127.0.0.1:54329/agent_control',dataDirectory:data,
   accountHomesDirectory:join(data,'accounts'),
   project:{id,label:'IspAgent',repo,owner:'owner@example.com'},projects:[],
-  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},
-  happier:{upstreamOrigin:'http://127.0.0.1:8766',webOrigin:'http://127.0.0.1:8766',publicServerOrigin:'http://127.0.0.1:8765'}};
+  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'}};
  await writeFile(file,JSON.stringify(body)+'\n',{mode:0o600});
  await chmod(file,0o600);
  return {root,data,file,home};

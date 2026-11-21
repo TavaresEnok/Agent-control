@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import {databaseDumpPlan,databaseEndpoint,databaseListPlan,dumpProcessEnv,personalPgContainer,runPersonalBackup,runPersonalRestoreCheck} from '../src/personal-backup.ts';
+import {ACCOUNT_KEY_FILE} from '../src/personal-connect.ts';
 
 const now=new Date(2026,10,12,9,5,30);
 
@@ -17,12 +18,11 @@ async function tree(){
  const body={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://ac:s3cret@127.0.0.1:54329/agent_control',dataDirectory:data,
   accountHomesDirectory:join(data,'accounts'),
   project:{id,label:'IspAgent',repo,owner:'owner@example.com'},projects:[],
-  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'},
-  happier:{upstreamOrigin:'http://127.0.0.1:8766',webOrigin:'http://127.0.0.1:8766',publicServerOrigin:'http://127.0.0.1:8765'}};
+  http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://127.0.0.1:8765'}};
  await writeFile(file,JSON.stringify(body,null,2)+'\n',{mode:0o600});
  await chmod(file,0o600);
  const secrets:Record<string,string>={
-  'happier-account.key':'happier-secret',
+  [ACCOUNT_KEY_FILE]:'conversation-secret',
   'vault/item.txt':'vault-secret',
   'vault-master':'master-secret',
   'ssh/id_ed25519':'ssh-secret',
@@ -30,7 +30,6 @@ async function tree(){
   'qa/check.json':'{"test":["npm","test"]}\n',
   'remote-hosts.json':'{"hosts":[]}\n',
   'remote-projects.json':'{"projects":[]}\n',
-  'happier/server.sqlite':'sqlite-secret',
   'accounts/claude/.credentials.json':'login-secret',
   'browser-session.key':'session-secret',
  };
@@ -92,7 +91,7 @@ test('personal backup copies secrets, skips disposable directories and refuses a
   assert.equal((await stat(backup)).mode&0o777,0o700);
   assert.deepEqual(seen,['s3cret','ac','agent_control','54329']);
   const manifest=await readFile(join(backup,'MANIFEST.txt'),'utf8');
-  assert.match(manifest,/data\/happier-account\.key/);
+  assert(manifest.includes('data/'+ACCOUNT_KEY_FILE));
   assert.match(manifest,/data\/vault\/item\.txt/);
   assert.match(manifest,/data\/vault-master/);
   assert.match(manifest,/data\/ssh\/id_ed25519/);
@@ -100,11 +99,10 @@ test('personal backup copies secrets, skips disposable directories and refuses a
   assert.match(manifest,/data\/qa\/check\.json/);
   assert.match(manifest,/data\/remote-hosts\.json/);
   assert.match(manifest,/data\/remote-projects\.json/);
-  assert.match(manifest,/data\/happier\/server\.sqlite/);
   assert.match(manifest,/data\/accounts\/claude\/\.credentials\.json/);
   assert.doesNotMatch(manifest,/native\/|qa-cache\/|data\/remote\/|\/leak/);
   assert.equal(await readFile(join(backup,'database.dump'),'utf8'),'PGDMP-fake');
-  assert.match(await readFile(join(backup,'RESTAURAR.md'),'utf8'),/chave da conta Happier/);
+  assert.match(await readFile(join(backup,'RESTAURAR.md'),'utf8'),/chave da conversa/);
   const files=manifest.trim().split('\n');
   for(const line of files){
    const hash=line.slice(0,64),rel=line.slice(66);
@@ -115,23 +113,10 @@ test('personal backup copies secrets, skips disposable directories and refuses a
    assert.equal((await readFile(absolute)).includes(Buffer.from('CACHE-SHOULD-STAY')),false);
    assert.equal((await readFile(absolute)).includes(Buffer.from('REMOTE-SHOULD-STAY')),false);
   }
-  const directories=['data','data/ssh','data/vault','data/push','data/qa','data/happier','data/accounts','data/accounts/claude'];
+  const directories=['data','data/ssh','data/vault','data/push','data/qa','data/accounts','data/accounts/claude'];
   for(const rel of directories)assert.equal((await stat(join(backup,rel))).mode&0o777,0o700);
   await assert.rejects(runPersonalBackup([env.file,destination],{now,dump}),(error:unknown)=>error instanceof Refusal&&error.code==='BACKUP_DESTINATION_NOT_EMPTY');
   assert.equal((await readdir(destination)).length,1);
- }finally{await rm(env.root,{recursive:true,force:true});}
-});
-
-test('personal backup omits happier data that belongs to another installation',async()=>{
- const env=await tree();
- await writeFile(join(env.data,'happier-shared-from'),'/other/installation.json\n',{mode:0o600});
- const dump=async(file:string)=>{await writeFile(file,'PGDMP-fake',{mode:0o600});};
- try{
-  const destination=join(env.root,'empty');
-  await runPersonalBackup([env.file,destination],{now,dump});
-  const manifest=await readFile(join(destination,'agent-control-IspAgent-20261112-0905','MANIFEST.txt'),'utf8');
-  assert.match(manifest,/happier-shared-from/);
-  assert.doesNotMatch(manifest,/data\/happier\//);
  }finally{await rm(env.root,{recursive:true,force:true});}
 });
 
@@ -149,7 +134,7 @@ test('restore check matches every sha256 and does not restore when the dump is u
   assert.match(lines[0]??'',/MANIFEST\.txt confere \(\d+ arquivos\)\./);
   assert.equal(lines[1],'database.dump é legível.');
   assert.deepEqual(listed,[join(backup,'database.dump')]);
-  await writeFile(join(backup,'data','happier-account.key'),'tampered\n',{mode:0o600});
+  await writeFile(join(backup,'data',ACCOUNT_KEY_FILE),'tampered\n',{mode:0o600});
   await assert.rejects(runPersonalRestoreCheck([backup],{listDump:async()=>{listed.push('again');}}),(error:unknown)=>error instanceof Refusal&&error.code==='RESTORE_MANIFEST_MISMATCH');
   assert.deepEqual(listed,[join(backup,'database.dump')]);
   await assert.rejects(runPersonalRestoreCheck([join(env.root,'missing')]),(error:unknown)=>error instanceof Refusal&&error.code==='RESTORE_NOT_A_BACKUP');

@@ -28,7 +28,7 @@ try{
  assert.deepEqual(await identity(),before);
  const result={result:'passed',synthetic:true,admissionClosed:true,runsPreserved:ids.length,
   operationsAndGrantsUnchanged:true,noHttpListener:true,noConversationEndpoint:true,noWorkerDispatched:true,
-  limitation:'Managed runtime only; canonical Happier UI, live physical effects, provider accounts and full disaster recovery are not exercised.'};
+  limitation:'Managed runtime only; conversation UI, live physical effects, provider accounts and full disaster recovery are not exercised.'};
  await writeFile(resolve('docs/validation/evidence/restored-runtime-smoke.json'),JSON.stringify(result,null,2)+'\n');
  console.log(JSON.stringify(result));
 }finally{await runtime?.close();await ledger.close();}

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EGRESS_CONTAINER, EgressConfig, ensurePersonalEgress, PERSONAL_EGRESS_HOSTS, PROVIDER_NETWORK} from '../src/personal-egress.ts';
-import {Installation} from '../src/installation.ts';
+import {InstallationObject} from '../src/installation.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 function fakeDocker(state: {internal: boolean | null; attached: string[]; label?: string}) {
@@ -27,7 +27,7 @@ test('off does nothing; the installation accepts the egress block and refuses un
   assert.equal(EgressConfig.parse({mode: 'observe'}).mode, 'observe');
   assert.throws(() => EgressConfig.parse({mode: 'observe', open: true}));
   assert.throws(() => EgressConfig.parse({mode: 'enforce', allow: ['not a host']}));
-  assert.equal(Installation.shape.egress !== undefined, true);
+  assert.equal(InstallationObject.shape.egress !== undefined, true);
 });
 
 test('a non-internal provider network with nothing attached becomes internal and gets the proxy with the provider list', () => {

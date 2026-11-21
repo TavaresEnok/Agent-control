@@ -128,11 +128,11 @@ test('historical interrupted exam in main context is recovered explicitly via pe
   await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
   const capacity=new Capacity(db);
   const project=randomUUID(),otherProject=randomUUID();
-  const appPrincipal='app',gatewayPrincipal='happier:owner-'+randomUUID(),thirdCoOwner='coowner-'+randomUUID(),operatorPrincipal='operator-'+randomUUID();
+  const appPrincipal='app',gatewayPrincipal='gateway:owner-'+randomUUID(),thirdCoOwner='coowner-'+randomUUID(),operatorPrincipal='operator-'+randomUUID();
   const account=randomUUID(),profile=randomUUID(),foreignAccount=randomUUID();
   const repo=join(area,'repo'),otherRepo=join(area,'other-repo'),dataDir=join(area,'data');
   const spool=join(dataDir,'exec-host'),accounts=join(dataDir,'accounts'),planHost=join(dataDir,'plan-host'),planAccounts=join(dataDir,'plan-accounts');
-  const keysDir=join(dataDir,'keys'),vaultDir=join(dataDir,'vault'),vaultMaster=join(dataDir,'vault-master'),tokenFile=join(dataDir,'happier-token');
+  const keysDir=join(dataDir,'keys'),vaultDir=join(dataDir,'vault'),vaultMaster=join(dataDir,'vault-master'),tokenFile=join(dataDir,'manager-token');
   for(const dir of [repo,otherRepo,dataDir,spool,accounts,planHost,planAccounts,keysDir,vaultDir]){
    await mkdir(dir,{recursive:true,mode:0o700});await chmod(dir,0o700);
   }
@@ -214,7 +214,6 @@ test('historical interrupted exam in main context is recovered explicitly via pe
     review:{signingKeyFile:reviewKeyFile,keyFingerprint:fingerprintOf(reviewKeys.publicKey),verifierDigest:nativeReviewVerifierDigest},
    },
    http:{listen:'127.0.0.1',port:43111,publicOrigin:'http://127.0.0.1:43111'},
-   happier:{upstreamOrigin:'http://127.0.0.1:43112',webOrigin:'http://127.0.0.1:43113',publicServerOrigin:'http://127.0.0.1:43114'},
   }),{mode:0o600});
 
   // 1) Automatic gateway reconciliation must match selection and execution scope: never throw SCOPE_MISMATCH and never retain app-owned job.

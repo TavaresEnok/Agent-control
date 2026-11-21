@@ -6,12 +6,13 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Command, Refusal, digest, type Command as DesignCommand} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
+import {CONVERSATION_CHANNEL} from '../src/conversation-transport.ts';
 import {Capacity} from '../src/capacity.ts';
 import {NativeExecutionSupervisor, readonlyDesignExam} from '../src/native-execution-supervisor.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const commit = '0123456789abcdef0123456789abcdef01234567';
-const channels = ['cockpit', 'happier', 'api', 'mcp', 'automation'] as const;
+const channels = ['cockpit', CONVERSATION_CHANNEL, 'api', 'mcp', 'automation'] as const;
 const blockedRoles = ['programmer', 'qa', 'judge'] as const;
 const examRoles = ['specialist', 'reviewer'] as const;
 
@@ -128,7 +129,7 @@ test('public accept of design-readonly-v1 is refused and leaves no intent', asyn
     });
     assert.equal(Command.parse((await db.pool.query('SELECT command FROM ac_intents WHERE id=$1', [ownedId])).rows[0].command).payload.workflow, 'design-readonly-v1');
     await assert.rejects(
-      () => db.accept(principal, {...owned, deliveryAttemptId: randomUUID()}, authority, 'happier'),
+      () => db.accept(principal, {...owned, deliveryAttemptId: randomUUID()}, authority, CONVERSATION_CHANNEL),
       refusal('DESIGN_INTENT_NOT_PUBLIC', 403),
     );
     assert.equal((await db.pool.query('SELECT id FROM ac_intents WHERE id=$1', [ownedId])).rowCount, 1);

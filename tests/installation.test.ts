@@ -19,8 +19,7 @@ test('private installation initializes without fixtures, manager or worker; keys
   const repo=join(root,'repo'),repo2=join(root,'repo2'),state=join(root,'private');await mkdir(repo);await mkdir(repo2);execFileSync('git',['-C',repo,'init','-q']);execFileSync('git',['-C',repo2,'init','-q']);
   const config=Installation.parse({schemaVersion:1,mode:'administration-only',databaseUrl:isolated.url,dataDirectory:state,
    project:{id:randomUUID(),label:'Disposable installation',repo,owner:'synthetic-installation-owner'},projects:[{id:randomUUID(),label:'Second project',repo:repo2,owner:'synthetic-second-owner'}],
-   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},
-   happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'}});
+   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'}});
   const file=join(root,'config.json');await writeFile(file,JSON.stringify(config),{mode:0o600});
   assert.deepEqual(await loadInstallation(file),config);
   await initializeInstallation(config,ledger);await initializeInstallation(config,ledger);

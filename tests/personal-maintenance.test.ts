@@ -45,7 +45,7 @@ test('scheduled retention reads the current switch for each run',async()=>{
  try{
   const file=join(root,'installation.json');
   const repo=join(root,'repo');await mkdir(repo);
-  const body:any={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://x:x@localhost/db',dataDirectory:root,project:{id:randomUUID(),label:'test',repo,owner:'test'},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://localhost:8765'},happier:{upstreamOrigin:'http://localhost:8766',webOrigin:'http://localhost:8766',publicServerOrigin:'http://localhost:8765'}};
+  const body:any={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://x:x@localhost/db',dataDirectory:root,project:{id:randomUUID(),label:'test',repo,owner:'test'},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://localhost:8765'}};
   const observed:boolean[]=[];const deps={jobRetention:async(_config:any,apply:boolean)=>{observed.push(apply);return [];},artifactRetention:async()=>[]};
   for(const automatic of [undefined,'off','preview','apply']){if(automatic)body.retention={automatic};await writeFile(file,JSON.stringify(body),{mode:0o600});await runPersonalMaintenance([file,'--retencao-agendada'],deps);}
   assert.deepEqual(observed,[false,false,true]);
@@ -60,7 +60,7 @@ async function scheduledFixture(automatic?:'off'|'preview'|'apply'){
  const directory=join(base,'ispagent'),repo=join(base,'repo');
  await mkdir(directory,{recursive:true,mode:0o700});await mkdir(repo);
  const file=join(directory,'installation.json');
- const body:any={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://x:x@localhost/db',dataDirectory:directory,project:{id:randomUUID(),label:'test',repo,owner:'test'},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://localhost:8765'},happier:{upstreamOrigin:'http://localhost:8766',webOrigin:'http://localhost:8766',publicServerOrigin:'http://localhost:8765'}};
+ const body:any={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://x:x@localhost/db',dataDirectory:directory,project:{id:randomUUID(),label:'test',repo,owner:'test'},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://localhost:8765'}};
  if(automatic)body.retention={automatic};
  await writeFile(file,JSON.stringify(body),{mode:0o600});
  return {base,directory,file};

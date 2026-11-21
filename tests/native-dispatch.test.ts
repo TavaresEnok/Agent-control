@@ -15,14 +15,15 @@ import {NativeVerification,nativeReviewVerifierDigest} from '../src/native-verif
 import {NativeQa,NativeQaContract,nativeQaContractDigest} from '../src/native-qa.ts';
 import {ContextKeys,keyFingerprint} from '../src/context-keys.ts';
 import {Templates} from '../src/templates.ts';
-import {HappierEndpoint,loadHappier} from '../src/happier.ts';
+import {ConversationEndpoint} from '../src/conversation.ts';
+import {CONVERSATION_CHANNEL} from '../src/conversation-transport.ts';
 import {digest} from '../src/contracts.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import {DockerDaemon} from '../src/sandbox-broker.ts';
 
 test('canonical encrypted request follows the native Cezar graph through real QA and exact controlled integration',async()=>{
  const root=process.env.AC_NATIVE_DISPATCH_ROOT,base=process.env.AC_TEST_DATABASE_URL;if(!root||!base)throw Error('ISOLATED_NATIVE_CONTROLLER_REQUIRED');
- const fixture=await isolatedDatabase(base,'nativedispatch'),db=new Ledger(fixture.url),area=await mkdtemp(join(root,'fixture-'));let runtime:CezarRuntime|undefined,endpoint:HappierEndpoint|undefined;
+ const fixture=await isolatedDatabase(base,'nativedispatch'),db=new Ledger(fixture.url),area=await mkdtemp(join(root,'fixture-'));let runtime:CezarRuntime|undefined,endpoint:ConversationEndpoint|undefined;
  try{
   await db.migrate();const project=randomUUID(),principal='native-'+randomUUID(),account=randomUUID(),profiles={programmer:randomUUID(),qa:randomUUID(),reviewer:randomUUID()},session=randomUUID(),chatKey=randomBytes(32),signer=randomBytes(32);
   const repo=join(area,'repo'),spool=join(area,'native'),qaRoot=join(area,'qa'),accounts=join(area,'accounts');for(const p of [spool,qaRoot,accounts])await mkdir(p,{mode:0o700});
@@ -67,8 +68,8 @@ test('canonical encrypted request follows the native Cezar graph through real QA
   const registry=[unrelated,supervisor];
   const native=new NativeImplementation(db,repo,quality,registry),nativeQa=new NativeQa(db,quality,repo,qaRoot,qaContract,signer),nativeVerification=new NativeVerification(db,quality,registry,signer);
   runtime=new CezarRuntime(db,repo,project,{quality,git:artifacts,verifierKey:signer,allowedTargets:['refs/heads/protected'],nativeQa,nativeVerification},undefined,undefined,{nativeExecutions:registry,nativeImplementation:native});await runtime.start();
-  const boundary=await loadHappier();endpoint=Object.create(HappierEndpoint.prototype) as HappierEndpoint;
-  Object.defineProperties(endpoint,{ledger:{value:db},runtime:{value:runtime},boundary:{value:boundary},options:{value:{baseUrl:'http://127.0.0.1',token:'synthetic',key:chatKey,principal,sessionId:session,machineId:'fixture',authority}},lifecycle:{value:new AbortController()},socket:{value:{connected:true,emit:()=>{},disconnect:()=>{}}},notifications:{value:{observe:async()=>{}}},receivePending:{value:async()=>{}},flushNotifications:{value:async()=>{}},deliverQueuedMessages:{value:async()=>{}},seal:{value:(v:unknown)=>boundary.encodeBase64(boundary.encrypt(chatKey,'legacy',v))}});
+  endpoint=Object.create(ConversationEndpoint.prototype) as ConversationEndpoint;
+  Object.defineProperties(endpoint,{ledger:{value:db},runtime:{value:runtime},options:{value:{key:chatKey,principal,sessionId:session,authority}},lifecycle:{value:new AbortController()},conversation:{value:{connectionState:()=>'connected',close:()=>{}}},notifications:{value:{observe:async()=>{}}},receivePending:{value:async()=>{}},flushNotifications:{value:async()=>{}}});
   const request={localId:'native-'+randomUUID(),text:marker};const accepted=await endpoint.accept(request);assert.equal((await endpoint.accept(request)).result.intentId,accepted.result.intentId);await assert.rejects(endpoint.accept({...request,text:'collision'}),/INTENT_PAYLOAD_CONFLICT/);
   let terminal=false;for(let i=0;i<150;i++){await endpoint.tick();const row=(await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[accepted.result.intentId])).rows[0];if(['done','failed','review'].includes(row.state)){if(row.state!=='done'){const i=(await db.pool.query('SELECT * FROM ac_intents WHERE id=$1',[accepted.result.intentId])).rows[0];const r=runtime.store.getRun(i.run_id);console.log(JSON.stringify({state:row.state,runStatus:r?.status,error:r?.error,steps:r?.steps.map(s=>({id:s.id,status:s.status,error:s.error})),operation:(await db.pool.query('SELECT state,receipt FROM ac_operations WHERE id=$1',[i.operation_id])).rows[0]}));}assert.equal(row.state,'done');terminal=true;break;}await new Promise(r=>setTimeout(r,200));}
   if(!terminal){const i=(await db.pool.query('SELECT * FROM ac_intents WHERE id=$1',[accepted.result.intentId])).rows[0];const run=runtime.store.getRun(i.run_id);console.log(JSON.stringify({intentState:i.state,runStatus:run?.status,error:run?.error,steps:run?.steps.map(s=>({id:s.id,status:s.status,error:s.error}))}));}
@@ -85,7 +86,7 @@ test('canonical encrypted request follows the native Cezar graph through real QA
   // A missing target is a preparation failure, not a launched worker. Ensure
   // it cannot strand a global programmer slot or fabricate a QA verdict.
   const failedCommand={...recorded.command,intentId:randomUUID(),deliveryAttemptId:randomUUID()};
-  const failedIntent=await db.accept(principal,failedCommand,successor,'happier',async()=>{});
+  const failedIntent=await db.accept(principal,failedCommand,successor,CONVERSATION_CHANNEL,async()=>{});
   native.bindSource(successor,async()=>marker);git('update-ref','-d','refs/heads/protected');
   const failed=native.start(failedIntent,successor,{sessionId:randomUUID()} as Parameters<NativeImplementation['start']>[2]);
   await assert.rejects(failed.result);assert.equal(launches,2);

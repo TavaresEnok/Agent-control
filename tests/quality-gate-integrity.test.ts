@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { digest, Refusal } from '../src/contracts.ts';
 import type { Ledger } from '../src/ledger.ts';
+import {CONVERSATION_CHANNEL} from '../src/conversation-transport.ts';
 import { isolatedDatabase } from './fixtures/isolated-database.ts';
 
 const skip = process.env.AC_TEST_DATABASE_URL ? false : 'AC_TEST_DATABASE_URL ausente; prova PG reservada ao laboratório isolado';
@@ -178,7 +179,7 @@ describe('quality gate integrity', { skip }, () => {
       const authority = await db.acquire(owner, context, randomUUID(), 'fixture-manager', 60);
       const text = 'authorized request ' + writePaths.join(',');
       native.bindSource(authority, async () => text);
-      const intent = await db.accept(owner, { schemaVersion: 1, intentId: randomUUID(), deliveryAttemptId: randomUUID(), contextId: context, policyRevision: 1, action: 'plan.start', payload: { workflow: 'engineering-native-v1', messageRef: 'message:gate', localId: 'local-' + randomUUID(), messageDigest: digest(text), qualityRevision: env.revision, targetRef: 'refs/heads/protected', writePaths } }, authority, 'happier', async () => {});
+      const intent = await db.accept(owner, { schemaVersion: 1, intentId: randomUUID(), deliveryAttemptId: randomUUID(), contextId: context, policyRevision: 1, action: 'plan.start', payload: { workflow: 'engineering-native-v1', messageRef: 'message:gate', localId: 'local-' + randomUUID(), messageDigest: digest(text), qualityRevision: env.revision, targetRef: 'refs/heads/protected', writePaths } }, authority, CONVERSATION_CHANNEL, async () => {});
       const before = starts;
       const session = native.start(intent, authority, { sessionId: randomUUID() } as never);
       let error: unknown;

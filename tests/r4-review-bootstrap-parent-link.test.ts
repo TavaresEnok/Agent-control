@@ -15,7 +15,6 @@ test('review regression: configured canonical verifier read rejects symlink pare
   const config={schemaVersion:1,mode:'administration-only',databaseUrl:'postgres://localhost/ac_implementation_test',dataDirectory:privateRoot,
    project:{id:projectId,label:'fixture',repo,owner:'owner'},projectRoots:[{id:'allowed',path:projects,label:'Projects'}],
    http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},
-   happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'},
    remoteDevelopment:{mode:'synthetic-fixed-task-v1',transport:{allowedHosts:['localhost'],credentials:[{id:randomUUID(),path:join(privateRoot,'ssh')}]},projects:[{projectId,verifierKeyFile:join(privateRoot,'link','verifier'),tmpfsRoot:'/dev/shm/ac-review-key',profiles:[{profileId:randomUUID(),hostId:randomUUID(),taskId:'fixed',writePaths:['src/']}]}]}};
   assert.equal(Installation.safeParse(config).success,true);
   await assert.rejects(readPrivateFile(config.remoteDevelopment.projects[0].verifierKeyFile,32,{canonical:true}),/NON_CANONICAL_PRIVATE_FILE/);

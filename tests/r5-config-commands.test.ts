@@ -24,8 +24,7 @@ test('configured CLI exports and reads private usable configuration without init
   const recoveryInventory={directory:join(folder,'external-catalog'),installationId:randomUUID(),catalogId:randomUUID(),manifestHash:'a'.repeat(64),epoch:2};
   const config={recoveryInventory,schemaVersion:1,mode:'administration-only',databaseUrl:fixture.url,dataDirectory:join(folder,'private'),projectRoots:[],
    project:{id:projectId,label:'CLI semantic label',repo:join(folder,'repo'),owner},
-   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},
-   happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'}};
+   http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'}};
   await writeFile(configPath,JSON.stringify(config),{mode:0o600});
   const request=async(action:'export'|'read')=>writeFile(descriptor,JSON.stringify({action,projectId,artifactFile,keyFile}),{mode:0o600});
   const run=(command:string)=>execute(process.execPath,['--import','tsx','src/server-main.ts',command,configPath,descriptor],{cwd:root,env:{...process.env,HOME:join(folder,'empty-home'),DO_NOT_TRACK:'1'},timeout:15000,maxBuffer:4*1024*1024});

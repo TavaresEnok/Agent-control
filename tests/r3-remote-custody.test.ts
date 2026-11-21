@@ -11,8 +11,7 @@ import {OpenSshTransport,type RemoteHost} from '../src/remote.ts';
 test('SSH return configuration separates credentials from every writable project root',()=>{
  const id=randomUUID(),config={schemaVersion:1,mode:'administration-only',databaseUrl:'postgres://localhost/ac_implementation_test',dataDirectory:'/private/ac',
  project:{id,label:'fixture',repo:'/projects/one',owner:'owner'},projects:[],projectRoots:[{id:'allowed',path:'/projects',label:'Projects'}],
- http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'},
- happier:{upstreamOrigin:'http://127.0.0.1:18401',webOrigin:'http://127.0.0.1:18400',publicServerOrigin:'http://127.0.0.1:18401'}};
+ http:{listen:'127.0.0.1',port:18405,publicOrigin:'http://127.0.0.1:18405'}};
  const withKey=(path:string)=>({...config,remoteReturn:{allowedHosts:['localhost'],credentials:[{id:randomUUID(),path}]}});
  assert(Installation.safeParse(withKey('/private/ac/ssh-key')).success);
  for(const path of ['/projects/one/key','/projects/future/key','/projects','/private/ac/../key'])assert.equal(Installation.safeParse(withKey(path)).success,false,path);
