@@ -1,4 +1,5 @@
 import {CLAUDE_HOOKS_OFF_SETTINGS} from './claude-hardening.ts';
+import {readFile as readAccountFile} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {constants} from 'node:fs';
@@ -372,6 +373,22 @@ export async function ensureExamLoginFresh(input: {
  * waits 5s, sends SIGKILL to the group, and always waits for `exit` before removing the temp dir
  * or releasing the caller's lock.
  */
+const HOST_UNSAFE_SETTINGS = ['apiKeyHelper', 'env', 'hooks', 'statusLine', 'mcpServers', 'enabledPlugins', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper'];
+
+/** Refuses an account whose settings would run something on the host during a renewal. Unreadable or absent files say nothing. */
+export async function assertAccountSettingsInert(accountDir: string): Promise<void> {
+  for (const file of ['settings.json', join('.claude', 'settings.json'), 'settings.local.json']) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(await readAccountFile(join(accountDir, file), 'utf8')); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const found = HOST_UNSAFE_SETTINGS.filter(key => {
+      const value = (parsed as Record<string, unknown>)[key];
+      return value !== undefined && value !== null && !(typeof value === 'object' && Object.keys(value as object).length === 0) && value !== '';
+    });
+    if (found.length) throw Error('EXAM_LOGIN_ACCOUNT_SETTINGS_UNSAFE');
+  }
+}
+
 export async function renewClaudeLoginInPlace(
   accountDir: string,
   options?: {timeoutMs?: number; killGraceMs?: number},
@@ -380,6 +397,9 @@ export async function renewClaudeLoginInPlace(
   const bin = typeof configured === 'string' && configured.startsWith('/') && !configured.includes('\0') ? configured : 'claude';
   const timeoutMs = options?.timeoutMs ?? EXAM_LOGIN_RENEW_TIMEOUT_MS;
   const killGraceMs = options?.killGraceMs ?? EXAM_LOGIN_RENEW_KILL_GRACE_MS;
+  // The renewal runs on the host with the account directory as CLAUDE_CONFIG_DIR, so account settings that run a command
+  // or change the environment (apiKeyHelper, env, hooks, statusLine, MCP, plugins) would run here, outside any container.
+  await assertAccountSettingsInert(accountDir);
   const scratch = await mkdtemp(join(tmpdir(), 'ac-claude-renew-'));
   try {
     await chmod(scratch, 0o700);

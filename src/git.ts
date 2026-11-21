@@ -39,7 +39,7 @@ export class GitArtifacts{
    let output='',failure:string|undefined;
    const terminate=(reason:string)=>{failure??=reason;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}};
    const timeout=setTimeout(()=>terminate('GIT_HELPER_TIMEOUT'),10000);
-   child.stdout.on('data',chunk=>{output+=String(chunk);if(output.length>65536)terminate('GIT_HELPER_OUTPUT_LIMIT');});
+   child.stdout.on('data',chunk=>{output+=String(chunk);if(output.length>262144)terminate('GIT_HELPER_OUTPUT_LIMIT');});
    child.stderr.resume();
    child.once('error',()=>{clearTimeout(timeout);reject(new Refusal('GIT_HELPER_UNAVAILABLE'));});
    child.once('close',code=>{clearTimeout(timeout);if(failure){reject(new Refusal(failure));return;}code===0?resolve(output):reject(new Refusal('GIT_IDENTITY_REFUSED'));});

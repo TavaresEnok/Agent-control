@@ -30,6 +30,9 @@ export function qaLogIssues(text: string): QaEvidenceIssue[] {
   // node:test, TAP (`# pass 3`) or spec (`ℹ pass 3`).
   const nodePass = last(text, /^(?:#|ℹ) pass (\d+)\s*$/gm), nodeTests = last(text, /^(?:#|ℹ) tests (\d+)\s*$/gm);
   const nodeFail = last(text, /^(?:#|ℹ) fail (\d+)\s*$/gm), nodeSkipped = (last(text, /^(?:#|ℹ) skipped (\d+)\s*$/gm) ?? 0) + (last(text, /^(?:#|ℹ) todo (\d+)\s*$/gm) ?? 0);
+  // Two runners in sequence (`a && b`) print two summaries: any summary with zero tests is a runner that tested nothing.
+  if ([...text.matchAll(/^(?:#|ℹ) tests (\d+)\s*$/gm)].length > 1 && [...text.matchAll(/^(?:#|ℹ) tests (\d+)\s*$/gm)].some(found => Number(found[1]) === 0))
+    issues.push({code: 'QA_ZERO_TESTS', detail: 'um dos executores node:test não rodou nenhum teste'});
   if (nodeTests !== null && nodePass !== null) {
     if (nodeFail) issues.push({code: 'QA_FAILURE_TEXT', detail: `node:test relata ${nodeFail} falha(s)`});
     else if (nodeTests === 0) issues.push({code: 'QA_ZERO_TESTS', detail: 'node:test não rodou nenhum teste'});

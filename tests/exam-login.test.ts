@@ -883,3 +883,26 @@ setTimeout(() => process.exit(0), 60);
     await rm(area, {recursive: true, force: true});
   }
 });
+
+test('a host renewal refuses an account whose settings would run something on the host', async () => {
+  const {assertAccountSettingsInert} = await import('../src/exam-login.ts');
+  const {mkdtemp, mkdir, writeFile, rm} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'ac-renew-settings-'));
+  try {
+    await assertAccountSettingsInert(dir);
+    await writeFile(join(dir, 'settings.json'), JSON.stringify({theme: 'dark', hooks: {}, env: {}}));
+    await assertAccountSettingsInert(dir);
+    for (const unsafe of [{apiKeyHelper: '/tmp/x.sh'}, {env: {NODE_OPTIONS: '--require /tmp/x.js'}}, {enabledPlugins: {x: true}}, {hooks: {SessionStart: []}}]) {
+      await writeFile(join(dir, 'settings.json'), JSON.stringify(unsafe));
+      await assert.rejects(assertAccountSettingsInert(dir), /EXAM_LOGIN_ACCOUNT_SETTINGS_UNSAFE/);
+    }
+    await writeFile(join(dir, 'settings.json'), '{"theme":"dark"}');
+    await mkdir(join(dir, '.claude'));
+    await writeFile(join(dir, '.claude', 'settings.json'), JSON.stringify({statusLine: {type: 'command', command: 'x'}}));
+    await assert.rejects(assertAccountSettingsInert(dir), /EXAM_LOGIN_ACCOUNT_SETTINGS_UNSAFE/);
+  } finally {
+    await rm(dir, {recursive: true, force: true});
+  }
+});

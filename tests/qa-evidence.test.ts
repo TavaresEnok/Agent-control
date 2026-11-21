@@ -40,7 +40,9 @@ test('zero tests, all skipped and failure text under exit 0 are caught', () => {
   assert.deepEqual(codes('===== 2 skipped in 0.02s =====\n'), ['QA_ALL_SKIPPED']);
   assert.deepEqual(codes('===== 1 failed, 2 passed in 0.10s =====\n'), ['QA_FAILURE_TEXT']);
   assert.deepEqual(codes('collected 0 items\n\n===== no tests ran in 0.01s =====\n'), ['QA_ZERO_TESTS']);
-  assert.deepEqual(codes('===== 4 deselected in 0.02s =====\n'), ['QA_ALL_SKIPPED']);
+  assert.deepEqual(codes('===== 4 deselected in 0.02s =====\n'), ['QA_ZERO_TESTS'.replace('ZERO_TESTS','ALL_SKIPPED')]);
+  // a && b: the first runner tested nothing, the second passed; the last summary alone would hide it.
+  assert.deepEqual(codes('# tests 0\n# pass 0\n# fail 0\n# tests 5\n# pass 5\n# fail 0\n'), ['QA_ZERO_TESTS']);
   assert.deepEqual(codes('--- FAIL: TestX (0.00s)\nFAIL\texample.com/x\t0.01s\n'), ['QA_FAILURE_TEXT']);
 });
 
