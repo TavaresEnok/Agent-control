@@ -19,6 +19,7 @@ import {Quality} from './quality.ts';
 import {SemanticPlanning} from './semantic-planning.ts';
 import {PersonalManagerChat} from './personal-manager-chat.ts';
 import type {EngineeringOptions} from './engineering.ts';
+import {containFailure} from './failure-log.ts';
 
 /** Real Codex and Claude supervisors for an installation whose bootstrap is active. */
 /**
@@ -87,7 +88,7 @@ export async function releaseDeadPersonalGrants(ledger:Ledger,olderThanMinutes=1
     });
    }finally{if(session)await releaseGrantLaunchLock(session,id);}
   }
- }finally{await session?.end().catch(()=>undefined);}
+ }finally{await session?.end().catch(()=>undefined/* the session is discarded; its locks drop with it */);}
  return released;
 }
 
@@ -147,13 +148,13 @@ export async function composePersonalRuntime(config:Installation,ledger:Ledger){
  assertSshOutsideMountRoots(join(config.dataDirectory,'ssh'),[boot.planning.hostRoot,boot.planning.accountRoot,boot.execution.hostRoot,boot.execution.accountRoot]);
  await renewPersonalQuota(ledger);
  await releaseDeadPersonalGrants(ledger);
- setInterval(()=>{renewPersonalQuota(ledger).catch(()=>{});},10*60*1000).unref();
+ setInterval(()=>{renewPersonalQuota(ledger).catch(containFailure('PERSONAL_QUOTA_RENEWAL_FAILED',undefined));},10*60*1000).unref();
  // A stage that fails before its container exists leaves its reservation behind; without this it would hold an evaluator slot until the next restart.
  let sweepingGrants=false;
  setInterval(()=>{
   if(sweepingGrants)return;
   sweepingGrants=true;
-  releaseDeadPersonalGrants(ledger,5).catch(()=>{}).finally(()=>{sweepingGrants=false;});
+  releaseDeadPersonalGrants(ledger,5).catch(containFailure('PERSONAL_GRANT_SWEEP_FAILED',undefined)).finally(()=>{sweepingGrants=false;});
  },2*60*1000).unref();
  const {readPrivateFile}=await import('./installation.ts');
  const planningPem=(await readPrivateFile(boot.planning.signingKeyFile)).toString('utf8');

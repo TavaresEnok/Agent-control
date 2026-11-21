@@ -15,6 +15,7 @@ import {NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import {nativeManagedTaskText,readManagedInput,readManagedUnit} from './managed-plan.ts';
 import {ManagerPlan} from './planning.ts';
 import type {AgentRunSpec,AgentSession,AgentEvent} from '../upstream/cezar/packages/cezar/dist/core/agent-runner.js';
+import {logContainedFailure} from './failure-log.ts';
 const execFileAsync=promisify(execFile);
 type Source=(intent:Intent,authority:Authority)=>Promise<string>;
 type Binding={authority:Authority;resolve:Source};
@@ -218,7 +219,7 @@ export class NativeImplementation{
     }
     await new Promise(resolve=>setTimeout(resolve,1000));
    }
-  })().catch(async error=>{try{await this.releaseUnstarted(intent,authority,error);}catch{}throw error;}).finally(()=>{opened=false;});
+  })().catch(async error=>{try{await this.releaseUnstarted(intent,authority,error);}catch(releaseError){logContainedFailure('NATIVE_UNSTARTED_RELEASE_FAILED',releaseError);}throw error;}).finally(()=>{opened=false;});
   return {result,get open(){return opened;},sendMessage(){return false;},end(){},interrupt:stop,hardStop:stop};
  }
 }

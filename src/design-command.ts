@@ -17,6 +17,7 @@ import {loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {composePersonalRuntime} from './personal-runtime.ts';
 import type {DesignWorker} from './design-types.ts';
+import {containFailure} from './failure-log.ts';
 
 const MAX_DESIGN_FILES = 400;
 const MAX_DESIGN_FILE_BYTES = 200_000;
@@ -245,7 +246,7 @@ async function takeFile(
   const rel = relative(root, path).split(sep).join('/');
   if (!rel || rel.startsWith('../') || rel === '..' || skipped(rel) || !SOURCE.test(rel)) return;
   if (size > MAX_DESIGN_FILE_BYTES || size + budget.total > MAX_DESIGN_TOTAL_BYTES) return;
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => undefined);
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => undefined /* unreadable files are skipped from the design sample */);
   if (!file) return;
   try {
     const info = await file.stat();
@@ -426,13 +427,13 @@ export async function resolvePersonalDesign(
       reserve,
       release: seat => releaseDesignGrant(ledger, principal, authority!, seat.grantId, 'not_started'),
       close: async () => {
-        await ledger.releaseLease(authority!).catch(() => undefined);
+        await ledger.releaseLease(authority!).catch(() => undefined /* an unreleased lease expires by itself */);
         await ledger.close();
       },
     };
   } catch (error) {
-    if (intentId && authority) await finishExamIntent(ledger, {intentId, contextId: authority.contextId}, 'failed').catch(() => undefined);
-    if (authority) await ledger.releaseLease(authority).catch(() => undefined);
+    if (intentId && authority) await finishExamIntent(ledger, {intentId, contextId: authority.contextId}, 'failed').catch(containFailure('EXAM_INTENT_NOT_CLOSED', undefined));
+    if (authority) await ledger.releaseLease(authority).catch(() => undefined /* an unreleased lease expires by itself */);
     await ledger.close();
     throw error;
   }

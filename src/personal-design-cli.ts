@@ -21,6 +21,7 @@ import {approveDesignBaseline} from './design-regression.ts';
 import {readDesignCaptureFiles} from './design-report.ts';
 import {loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
+import {containFailure} from './failure-log.ts';
 
 const messages: Record<string, string> = {
   DESIGN_USAGE: 'Uso: npm run personal:design -- <instalação.json> <projectId> --url <url> [--login-file <arquivo>]',
@@ -147,11 +148,11 @@ export async function routesFromStaticFolder(root: string): Promise<{route: stri
       const segments = rel.split('/').length;
       if (segments > 4) continue;
       const path = join(directory, name);
-      const listed = await lstat(path).catch(() => undefined);
+      const listed = await lstat(path).catch(() => undefined /* absent or unreadable means not present here */);
       if (!listed) continue;
       const real = await realpath(path).catch(() => '');
       if (!real || !pathInside(root, real) || seen.has(real)) continue;
-      const info = await lstat(real).catch(() => undefined);
+      const info = await lstat(real).catch(() => undefined /* absent or unreadable means not present here */);
       if (!info) continue;
       if (info.isDirectory()) {
         if (segments >= 4) continue;
@@ -174,7 +175,7 @@ async function servedRoot(folder: string): Promise<string> {
   if (folder.length < 1 || folder.length > 400 || folder.includes('\0')) throw new Refusal('DESIGN_SERVE_INVALID', 400);
   const real = await realpath(resolve(folder)).catch(() => '');
   if (!real) throw new Refusal('DESIGN_SERVE_INVALID', 400);
-  const info = await stat(real).catch(() => undefined);
+  const info = await stat(real).catch(() => undefined /* absent or unreadable means not present here */);
   if (!info?.isDirectory()) throw new Refusal('DESIGN_SERVE_INVALID', 400);
   if (/[,:\r\n]/.test(real)) throw new Refusal('DESIGN_SERVE_INVALID', 400);
   return real;
@@ -214,7 +215,7 @@ async function withCreatedServer<T>(
       await writeFile(path, file.text, {mode: 0o644});
       await chmod(path, 0o644);
     }
-    await dockerFinished(['rm', '-f', name]).catch(() => undefined);
+    await dockerFinished(['rm', '-f', name]).catch(() => undefined /* removes a stale container of the same name, if any */);
     await dockerFinished([
       'run', '-d', '--name', name,
       '--network', 'design-homologation',
@@ -241,7 +242,7 @@ async function withCreatedServer<T>(
     ]);
     return await run('http://design-create.local:8080', root);
   } finally {
-    await dockerFinished(['rm', '-f', name]).catch(() => undefined);
+    await dockerFinished(['rm', '-f', name]).catch(() => undefined /* container cleanup is best effort */);
     await rm(root, {recursive: true, force: true});
   }
 }
@@ -259,7 +260,7 @@ async function withServedDirectory<T>(
   const name = `ac-design-servir-${randomUUID().slice(0, 8)}`;
   const probe = routes.find(item => item.route === '/')?.route ?? routes[0]?.route ?? '/';
   try {
-    await dockerFinished(['rm', '-f', name]).catch(() => undefined);
+    await dockerFinished(['rm', '-f', name]).catch(() => undefined /* container cleanup is best effort */);
     await dockerFinished([
       'run', '-d', '--name', name,
       '--network', 'design-homologation',
@@ -286,7 +287,7 @@ async function withServedDirectory<T>(
     ]);
     return await run('http://design-servir.local:8080', routes, servedFiles);
   } finally {
-    await dockerFinished(['rm', '-f', name]).catch(() => undefined);
+    await dockerFinished(['rm', '-f', name]).catch(() => undefined /* container cleanup is best effort */);
   }
 }
 
@@ -299,7 +300,7 @@ function fail(error: unknown): never {
 /** The ledger refuses a lease longer than 60s. A model call outlasts that, so renew it until the exam returns. */
 export function keepPersonalDesignLease<T>(ledger: {heartbeat: (authority: T) => Promise<unknown>}, authority: T, everyMs = 5000) {
   const timer = setInterval(() => {
-    void Promise.resolve(ledger.heartbeat(authority)).catch(() => undefined);
+    void Promise.resolve(ledger.heartbeat(authority)).catch(() => undefined /* a lost lease is refused at the next fenced write */);
   }, everyMs);
   timer.unref();
   return () => clearInterval(timer);
@@ -344,12 +345,12 @@ export async function runDesignSession<T>(
     throw error;
   } finally {
     stopLease();
-    if (cleanup) await cleanup().catch(() => undefined);
+    if (cleanup) await cleanup().catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */);
     await finishExamIntent(
       resolved.ledger,
       {intentId: resolved.intentId, contextId: resolved.authority.contextId},
       outcome,
-    ).catch(() => undefined);
+    ).catch(containFailure('EXAM_INTENT_NOT_CLOSED', undefined));
     try {
       await resolved.close();
     } catch (error) {
