@@ -29,12 +29,12 @@ Cada item abaixo foi conferido de novo no código em 21/11/2026, antes deste pla
 | 2 | Diff cortado com a lista completa | A3 | reinício | [x] `bd70f4f4` |
 | 3 | CI e QA contando os testes | D1, A11, A4 | reinício | [x] `801d2742`, `cadac894` |
 | 4 | Módulo 1 sem as supressões do alvo | A5, A6 | reconstruir e fixar a imagem verify | [x] `cadac894` |
-| 5 | Falha passageira e causa da falha | A8, A10 | depois, no reinício | [ ] |
-| 6 | Medição real do gerente e do cache | A9, C1 | depois, no reinício | [ ] |
-| 7 | Um redator de segredos só | C2 | depois, no reinício | [ ] |
-| 8 | Saída dos agentes só para os provedores | alerta de rede | **sim: rede Docker e contêiner de saída** | [ ] |
-| 9 | Gateway sem o Docker inteiro | alerta de Docker | **sim: usuário e serviço (sudo)** | [ ] |
-| 10 | Bons hábitos nas ordens, sem pacotes | ideias do Superpowers, BMAD e OpenSpec | não | [ ] |
+| 5 | Falha passageira e causa da falha | A8, A10 | reinício | [x] `2ed93cca`, `63dbe146` (correção com os achados: próxima rodada) |
+| 6 | Medição real do gerente e do cache | A9, C1 | reinício | [x] `fd002dfe`, `d380e3cf` (contadores nativos: próxima rodada) |
+| 7 | Um redator de segredos só | C2 | reinício | [x] `e6f870af` |
+| 8 | Saída dos agentes só para os provedores | alerta de rede | **sim: rede Docker e contêiner de saída** | código [x] `61df0908`; aplicação: com o titular |
+| 9 | Gateway sem o Docker inteiro | alerta de Docker | **sim: usuário e serviço (sudo)** | levantamento [x]; código: próxima rodada |
+| 10 | Bons hábitos nas ordens, sem pacotes | ideias do Superpowers, BMAD e OpenSpec | não | próxima rodada (replay) |
 | 11 | Integração, suíte e aplicação | — | sim, com backup | [ ] |
 
 Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As frentes 1 a 3 fecham os furos da prova e vêm primeiro. As frentes 8 e 9 precisam de decisões do titular antes de ir para a instalação viva, mas o código pode ser feito antes.
@@ -138,15 +138,15 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - A correção (`src/native-implementation.ts:169`) repete a tarefa original.
 
 **Checklist:**
-- [ ] 5.1 Ler o classificador do Cezar e decidir se basta usá-lo; a preferência é usar, não escrever outro.
-- [ ] 5.2 Separar três casos:
+- [x] 5.1 Ler o classificador do Cezar e decidir se basta usá-lo; a preferência é usar, não escrever outro.
+- [x] 5.2 Separar três casos:
   - sobrecarga (529, overloaded, 5xx, falha de rede): nova tentativa curta, com espera aleatória, no máximo 2 vezes;
   - limite passageiro (rate limit sem cota esgotada): janela curta, de 5 minutos;
   - cota esgotada: espera até o horário real ou, sem horário, a 1 hora de hoje.
-- [ ] 5.3 Código de falha novo para sobrecarga (`EXECUTION_PROVIDER_OVERLOADED`), que não gasta o replanejamento.
-- [ ] 5.4 Replanejamento: enviar o código da falha, o fim do log do QA (`tailForModel`), os achados do revisor e os commits já integrados, marcados como dado não confiável.
-- [ ] 5.5 Correção: enviar os achados do revisor, marcados como dado não confiável.
-- [ ] 5.6 Testes de cada caso.
+- [x] 5.3 Código de falha novo para sobrecarga (`EXECUTION_PROVIDER_OVERLOADED`), que não gasta o replanejamento.
+- [x] 5.4 Replanejamento: enviar o código da falha, o fim do log do QA (`tailForModel`), os achados do revisor e os commits já integrados, marcados como dado não confiável.
+- [ ] 5.5 Correção: enviar os achados do revisor, marcados como dado não confiável. (Próxima rodada: a tarefa da correção também entra no digest de replay.)
+- [x] 5.6 Testes de cada caso.
 - [ ] 5.7 Commit (dois commits).
 
 ## 6. Medição real do gerente e do cache (A9, C1)
@@ -158,11 +158,11 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - O cache lido e o gravado são somados em `cache` (`src/native-usage.ts:11-15` e `src/external-usage.ts:60-61`).
 
 **Checklist:**
-- [ ] 6.1 Gerente Claude com `--output-format json`: ler `result`, `usage` (com o cache lido e o gravado) e o modelo que respondeu. Recusar se o modelo for outro.
-- [ ] 6.2 Gravar o uso também nas tentativas que falharam, quando houver número.
-- [ ] 6.3 Contadores: acrescentar `cacheRead` e `cacheWrite` ao `UsageCounters`, opcionais, guardados no jsonb, mantendo `cache` para compatibilidade.
-- [ ] 6.4 `personal:tokens` mostra a taxa de acerto do cache por modelo, papel e conta.
-- [ ] 6.5 Testes.
+- [x] 6.1 Gerente Claude com `--output-format json`: ler `result`, `usage` (com o cache lido e o gravado) e o modelo que respondeu. Recusar se o modelo for outro.
+- [x] 6.2 Gravar o uso também nas tentativas que falharam, quando houver número.
+- [ ] 6.3 (feito só no relatório externo, `d380e3cf`; os jobs nativos ficam para a próxima rodada) Contadores: acrescentar `cacheRead` e `cacheWrite` ao `UsageCounters`, opcionais, guardados no jsonb, mantendo `cache` para compatibilidade.
+- [x] 6.4 `personal:tokens` mostra a taxa de acerto do cache por modelo, papel e conta.
+- [x] 6.5 Testes.
 - [ ] 6.6 Commit.
 
 ## 7. Um redator de segredos só (C2)
@@ -174,9 +174,9 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - `src/module-exam-map.ts:23`.
 
 **Checklist:**
-- [ ] 7.1 Listar os padrões de cada um e a cobertura que falta: PEM, credencial em URL (`postgres://u:senha@`), JWT, Bearer, Cookie e chaves de provedores (`sk-`, `sk-ant-`, `xai-`, `AIza`, `ghp_` e outras).
-- [ ] 7.2 Criar `src/secret-patterns.ts` com os padrões nomeados, num lugar só. Os quatro redatores passam a usá-lo. No Cezar, por patch, se ele for alterado.
-- [ ] 7.3 Corpus de testes: cada padrão com um caso positivo e um negativo, e o caso `postgres://` do NexoISP.
+- [x] 7.1 Listar os padrões de cada um e a cobertura que falta: PEM, credencial em URL (`postgres://u:senha@`), JWT, Bearer, Cookie e chaves de provedores (`sk-`, `sk-ant-`, `xai-`, `AIza`, `ghp_` e outras).
+- [x] 7.2 (decidido: o conjunto de `src/verify-redact.ts` já é o mais completo e passa a ser o único; não precisou de arquivo novo) Criar `src/secret-patterns.ts` com os padrões nomeados, num lugar só. Os quatro redatores passam a usá-lo. No Cezar, por patch, se ele for alterado.
+- [x] 7.3 Corpus de testes: cada padrão com um caso positivo e um negativo, e o caso `postgres://` do NexoISP.
 - [ ] 7.4 Commit.
 
 ## 8. Saída dos agentes só para os provedores (alerta de rede)
@@ -213,7 +213,7 @@ São endereços que aparecem no texto dos binários, não tráfego observado. Po
 5. Rodar tarefas reais por um dia e ler `egress-observe <destino>` nos logs do contêiner. Acrescentar à lista só o que for de provedor.
 6. Trocar para `AC_EGRESS_MODE=enforce`, rodar uma tarefa de prova de cada provedor e só então retirar a rede antiga.
 
-**Feito no código (`4ab5c3b6`… este commit):** o proxy aceita `AC_EGRESS_ALLOW` e `AC_EGRESS_MODE` (observe ou enforce, com o nome do destino recusado no log). Sem as variáveis, o padrão do modo travado continua igual. Com `AC_PERSONAL_EGRESS=1` no gateway, o worker de execução, o planejamento e o gerente passam pelo proxy. Testes: `provider-egress-proxy.test.ts`, 5/5.
+**Feito no código (commit `61df0908`):** o proxy aceita `AC_EGRESS_ALLOW` e `AC_EGRESS_MODE` (observe ou enforce, com o nome do destino recusado no log). Sem as variáveis, o padrão do modo travado continua igual. Com `AC_PERSONAL_EGRESS=1` no gateway, o worker de execução, o planejamento e o gerente passam pelo proxy. Testes: `provider-egress-proxy.test.ts`, 5/5.
 
 - [ ] 8.8 Na instalação viva, com o sim do titular, sem trabalho rodando:
   - backup;
@@ -234,7 +234,17 @@ São endereços que aparecem no texto dos binários, não tráfego observado. Po
 **Decisão necessária do titular:** um filtro só protege se o gateway não conseguir falar direto com `/var/run/docker.sock`. Isso exige rodar o gateway com outro usuário, fora do grupo `docker`. Esse passo precisa de sudo, e o sudo pede senha, então é o titular quem aplica.
 
 **Checklist:**
-- [ ] 9.1 Levantar, no código, todas as chamadas que o gateway faz ao Docker (`src/docker*.ts`, o cliente que monta `/containers/create`): rotas, imagens, montagens, redes e opções.
+**Levantamento (21/11):**
+- O cliente `DockerDaemon` (`src/sandbox-broker.ts:60`) é bem fechado: rotas fixas da API v1.44 (`containers/create|start|stop|json|logs`, `images/<id>/json`, `networks/create|<id>`, `DELETE`), com nomes validados por expressão.
+- O gateway também chama o comando `docker` diretamente em 17 lugares:
+  - `docker run` do gerente (`src/personal-manager-chat.ts`) e do módulo 1 (`src/verify-command.ts`);
+  - `docker build` das imagens de módulo e de design;
+  - `docker network` no `native-setup`;
+  - e outros.
+- O filtro precisa entender também essas chamadas, por `DOCKER_HOST` apontando para o socket do filtro, incluindo `attach` e `wait`, que sequestram a conexão, e `build`, que envia o contexto. E precisa ler o corpo de cada `containers/create` para recusar `Privileged`, `CapAdd`, montagens de `/`, de `/var/run/docker.sock` e de `/etc`, `NetworkMode=host` e `PidMode=host`.
+- **Decisão:** não cabe nesta rodada. Fica como a primeira frente da próxima, junto com a decisão do titular de criar o usuário `ac-gateway` fora do grupo `docker` (exige sudo).
+
+- [x] 9.1 Levantar, no código, todas as chamadas que o gateway faz ao Docker (`src/docker*.ts`, o cliente que monta `/containers/create`): rotas, imagens, montagens, redes e opções.
 - [ ] 9.2 Escrever `src/docker-api-filter.ts`, um proxy de socket Unix nosso, pequeno, sem dependência. Ele permite só essas rotas e recusa `Privileged`, `CapAdd`, montagem de `/`, `/var/run/docker.sock`, `/etc` e `/home` fora das raízes da instalação, `NetworkMode=host`, `PidMode=host` e imagem fora da lista.
 - [ ] 9.3 Testes: cada pedido proibido é recusado, e os pedidos reais do produto passam (gravados a partir dos testes existentes).
 - [ ] 9.4 Plano de aplicação (texto em `docs/`):
@@ -249,6 +259,8 @@ São endereços que aparecem no texto dos binários, não tráfego observado. Po
 ## 10. Bons hábitos nas ordens, sem pacotes (ideias)
 
 Só as ideias, em poucas linhas nossas:
+**Adiado (21/11):** a instrução do revisor entra no digest de replay (`nativeReviewRequest`, conferido em `src/native-verification.ts`). Mudar o texto recusaria com `NATIVE_VERIFICATION_REQUEST_MISMATCH` os jobs que já estão rodando. Esta frente precisa de uma variante compatível no replay, como as que já existem para `ownerRequest` e `scope`, e vai para a próxima rodada.
+
 - [ ] 10.1 No modelo da tarefa do programador (`src/native-implementation.ts`):
   - teste antes ou junto do código;
   - para correção de bug, o teste falha antes e passa depois;
