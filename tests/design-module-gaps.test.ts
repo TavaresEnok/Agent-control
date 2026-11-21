@@ -104,6 +104,7 @@ test('ferramenta, arquivo, exame, visual e achado sem tela viram lacuna', () => 
       {tool: 'axe-core', version: '4', executed: '6', findings: '1', failure: 'nenhuma'},
       {tool: 'lighthouse', version: '13', executed: '0', findings: '0', failure: 'nenhuma'},
       {tool: 'pa11y', version: '10', executed: '0', findings: '0', failure: 'DESIGN_TOOL_MISSING'},
+      {tool: 'stylelint', version: '16', executed: '0', findings: '0', failure: 'Erro: /home/app/segredo não existe'},
     ],
     omittedFiles: ['src/Z.tsx'],
     modelCoverage: {
@@ -117,6 +118,7 @@ test('ferramenta, arquivo, exame, visual e achado sem tela viram lacuna', () => 
   assert.deepEqual(gaps, [
     {kind: 'ferramenta', item: 'lighthouse', reason: 'não executou'},
     {kind: 'ferramenta', item: 'pa11y', reason: 'falhou: DESIGN_TOOL_MISSING'},
+    {kind: 'ferramenta', item: 'stylelint', reason: 'falhou: EXECUTION_NATIVE_FAILED'},
     {kind: 'arquivo', item: 'src/Z.tsx', reason: 'fora do limite de 40 telas do exame'},
     {kind: 'exame', item: 'examinador opus', reason: '3 de 4 julgadas, falha EXECUTION_NATIVE_FAILED'},
     {kind: 'visual', item: '/ (index.html)', reason: 'sem crítica visual completa'},
@@ -202,6 +204,8 @@ test('cada regra medida tem frase própria; regra desconhecida usa o texto de an
 test('color-scheme só conta como escuro quando cita dark', () => {
   assert.equal(filesDark([{text: ':root { color-scheme: light; }'}]), false);
   assert.equal(filesDark([{text: ':root { color-scheme: light dark; }'}]), true);
+  assert.equal(filesDark([{text: ':root{color-scheme:light}.dark-toggle{color:red}'}]), false);
+  assert.equal(filesDark([{text: ':root{color-scheme:light dark}'}]), true);
   assert.equal(filesDark([{text: '@media (prefers-color-scheme: dark) {}'}]), true);
   assert.equal(filesDark([{text: '<html data-theme="x">'}]), true);
 });

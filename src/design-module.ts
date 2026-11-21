@@ -578,7 +578,7 @@ export function collectDesignGaps(input: {
   for (const row of input.toolRows) {
     const failed = row.failure !== 'nenhuma';
     if (!failed && row.executed !== '0') continue;
-    gaps.push({kind: 'ferramenta', item: row.tool, reason: failed ? `falhou: ${row.failure}` : 'não executou'});
+    gaps.push({kind: 'ferramenta', item: row.tool, reason: failed ? `falhou: ${designFailureCode(row.failure)}` : 'não executou'});
   }
   for (const file of input.omittedFiles) {
     gaps.push({kind: 'arquivo', item: file, reason: `fora do limite de ${MAX_SCREENS} telas do exame`});
@@ -852,7 +852,7 @@ function attributeDesignFindings(
 
 /** O projeto tem tema escuro. `color-scheme: light` sozinho não conta. */
 export function filesDark(files: readonly {text: string}[]): boolean {
-  return files.some(file => /prefers-color-scheme\s*:\s*dark|data-theme|color-scheme\s*:[^;]*dark/i.test(file.text));
+  return files.some(file => /prefers-color-scheme\s*:\s*dark|data-theme|color-scheme\s*:[^;}]*dark/i.test(file.text));
 }
 
 const DESIGN_CONFIG_FILE = 'design.config.json';
@@ -1037,6 +1037,6 @@ async function writeImageFailure(input: DesignModuleInput, origin: string, image
     files: [{name: 'cobertura-ferramentas.md', body: toolCoverageMarkdown(image.coverage)}],
     gaps: image.coverage
       .filter(row => row.failure !== 'nenhuma' || row.executed === '0')
-      .map(row => ({kind: 'ferramenta' as const, item: row.tool, reason: row.failure !== 'nenhuma' ? `falhou: ${row.failure}` : 'não executou'})),
+      .map(row => ({kind: 'ferramenta' as const, item: row.tool, reason: row.failure !== 'nenhuma' ? `falhou: ${designFailureCode(row.failure)}` : 'não executou'})),
   });
 }
