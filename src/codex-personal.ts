@@ -1,3 +1,4 @@
+import {EXECUTION_PROVIDER_OVERLOADED,PLANNING_PROVIDER_OVERLOADED,isTransientProviderFailure} from './provider-failure.ts';
 import {spawn} from 'node:child_process';
 import {cliEffort,Effort} from './effort.ts';
 import {codexLimitFromText} from './quota-exhaustion.ts';
@@ -73,6 +74,7 @@ export async function runCodexExec(input:{args:readonly string[];timeoutMs:numbe
  if(limit)return {output:'',failureCode:limit.failureCode,usageWindows:limit.usageWindows};
  if(input.signal?.aborted)return {output:'',failureCode:cancelCode,usageWindows:null};
  if(timedOut)return {output:'',failureCode:timeoutCode,usageWindows:null};
+ if((failed||code!==0)&&isTransientProviderFailure([stdout,stderr]))return {output:'',failureCode:input.kind==='planning'?PLANNING_PROVIDER_OVERLOADED:EXECUTION_PROVIDER_OVERLOADED,usageWindows:null};
  if(failed||code!==0)return {output:'',failureCode:failCode,usageWindows:null};
  let output=stdout.slice(0,256*1024);
  if(input.json){const parsed=extractJsonObject(output);if(parsed!==undefined)output=JSON.stringify(parsed);}

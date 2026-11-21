@@ -234,6 +234,7 @@
   "provider-collector-parsers.test.ts",
   "provider-dormant.test.ts",
   "provider-eligibility.test.ts",
+  "provider-failure.test.ts",
   "providers.test.ts",
   "qa-evidence.test.ts",
   "qa-model-gate.test.ts",

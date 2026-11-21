@@ -1,3 +1,4 @@
+import {runWithTransientRetry} from './provider-failure.ts';
 import {runModuleExamWorker} from './module-exam-worker.ts';
 import {constants} from 'node:fs';
 import {waitForNativeLaunch} from './native-worker-gate.ts';
@@ -114,6 +115,7 @@ async function main(){
    process.env.HOME=homes.grokHome;
   }
  }
+ const startedMs=Date.now();
  const forwarder=await startToolForwarder(input.toolsAddress);
  const abort=new AbortController();const stop=()=>abort.abort();process.once('SIGTERM',stop);process.once('SIGINT',stop);
  let result:{output:string;tokensUsed:number|null;counters?:UsageCountersValue|null;usageWindows:UsageWindowsObservation|null;nativeSessionId:string|null}|undefined,failure:string|null=null,failedUsage:CodexExecutionFailure|ClaudeExecutionFailure|GrokExecutionFailure|undefined;
@@ -143,9 +145,11 @@ async function main(){
   // instead of failing the whole plan on a typo.
   const evaluator=input.role!=='programmer'&&Boolean(input.outputSchema);
   let previous:UsageCountersValue|null|undefined;
+  // A passing provider outage gets up to two more tries, evaluators only, inside the job's own time.
+  const deadlineMs=startedMs+input.timeoutMs;
   const ran=await runWithVerdictRetry(evaluator,()=>abort.signal.aborted,async()=>{
    try {
-    const current=await runOnce();
+    const current=await runWithTransientRetry({enabled:input.role!=='programmer',deadlineMs,aborted:()=>abort.signal.aborted,once:runOnce});
     if(previous!==undefined)current.result.counters=sumUsageAttempts(previous,current.result.counters??null);
     previous=current.result.counters??null;
     return current;

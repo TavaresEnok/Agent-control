@@ -1,3 +1,4 @@
+import {EXECUTION_PROVIDER_OVERLOADED,isTransientProviderFailure} from './provider-failure.ts';
 import {z} from 'zod';
 import {existsSync} from 'node:fs';
 import {redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
@@ -75,6 +76,8 @@ export class ClaudeExecutionAdapter{
      logClaudeAdapterFailure(auth,joined,secrets);
      throw new ClaudeExecutionFailure(auth,tokens,usage,counters);
     }
+    // A passing outage (529 overloaded, upstream 5xx) is not a failed turn: the worker may retry an evaluator.
+    if(isTransientProviderFailure([joined]))throw new ClaudeExecutionFailure(EXECUTION_PROVIDER_OVERLOADED,tokens,usage,counters);
     throw new Refusal('EXECUTION_NATIVE_TURN_FAILED');
    }
    const extracted=input.outputSchema?extractJsonObject(result.text):undefined;

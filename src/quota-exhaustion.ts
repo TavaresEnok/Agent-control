@@ -32,11 +32,22 @@ function isClaudeLimitText(text:string){return CLAUDE_MARKER.test(text)||LIMIT_P
 const CODEX_LIMIT=/you(?:'|’)ve hit your usage limit|\bcodex\b[^\n]{0,48}\busage\s+limit\b|\busage_limit_reached\b/i;
 function isCodexLimitText(text:string){return CODEX_LIMIT.test(text)||LIMIT_PHRASE.test(text)||(/\blimit\b/i.test(text)&&RESET_AT.test(text));}
 
+/** A per-minute rate limit (429, rate_limit_error) that names no usage window passes in minutes, not hours. */
+const SHORT_RATE=/\brate[_-]?limit(?:_error|ed)?\b|\b429\b|\btoo many requests\b/i;
+const LONG_LIMIT=/\b(?:usage|session|weekly|hourly|daily|monthly)[\s-]?limits?\b|\bquota\b|\bcredits?\b|\b\d+[\s-]hours?\s+limit\b|usage_limit_reached|hit your usage limit|claude(?:\s+ai)?\s+usage\s+limit/i;
+export const SHORT_RATE_LIMIT_WAIT_MS=5*60*1000;
+/** Reset for a limit text: the one it states, else five minutes for a bare rate limit, else none (one hour downstream). */
+function limitReset(text:string,now:number){
+ const stated=readReset(text,now);
+ if(stated!==null)return stated;
+ return SHORT_RATE.test(text)&&!LONG_LIMIT.test(text)?now+SHORT_RATE_LIMIT_WAIT_MS:null;
+}
+
 /** Claude CLI limit text from a result, stderr tail, or error event. No reset means wait one hour. */
 export function claudeLimitFromText(texts:readonly (string|null|undefined)[],now=Date.now()):{failureCode:'PROVIDER_USAGE_LIMIT';usageWindows:UsageWindowsObservation|null}|null{
  const text=texts.filter((item):item is string=>typeof item==='string'&&item.trim().length>0).join('\n');
  if(!text||!isClaudeLimitText(text))return null;
- const resetsAt=readReset(text,now);
+ const resetsAt=limitReset(text,now);
  const usageWindows=resetsAt===null?null:{provider:'claude' as const,source:'claude-stream' as const,observedAt:now,windows:[{id:'terminal-limit',kind:'other' as const,applicability:'all' as const,models:[],resetsAt,durationMinutes:null,usedPercent:100,status:'blocked' as const,observedAt:now}]};
  return {failureCode:'PROVIDER_USAGE_LIMIT',usageWindows};
 }
@@ -45,7 +56,7 @@ export function claudeLimitFromText(texts:readonly (string|null|undefined)[],now
 export function codexLimitFromText(texts:readonly (string|null|undefined)[],now=Date.now()):{failureCode:'PROVIDER_USAGE_LIMIT';usageWindows:UsageWindowsObservation|null}|null{
  const text=texts.filter((item):item is string=>typeof item==='string'&&item.trim().length>0).join('\n');
  if(!text||!isCodexLimitText(text))return null;
- const resetsAt=readReset(text,now);
+ const resetsAt=limitReset(text,now);
  const usageWindows=resetsAt===null?null:{provider:'codex' as const,source:'codex-notification' as const,observedAt:now,windows:[{id:'terminal-limit',kind:'other' as const,applicability:'all' as const,models:[],resetsAt,durationMinutes:null,usedPercent:100,status:'blocked' as const,observedAt:now}]};
  return {failureCode:'PROVIDER_USAGE_LIMIT',usageWindows};
 }
