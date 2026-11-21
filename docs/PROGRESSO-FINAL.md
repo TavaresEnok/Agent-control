@@ -2003,3 +2003,22 @@ FIM
   - **Rota de download das 20 telas:** foi restaurada, e o gerador passou a preservar as rotas `/downloads` (`commit seguinte`).
   - **Conferido:** painel 200, download 200 e Happier parado.
 
+- 21/11/2026 21:10 UTC — **Happier retirado por completo** (supervisor Claude; 2 frentes com revisão independente por modelo Claude distinto, Claude Sonnet 5.5 médio, só leitura; junção `remover-happier/integra`, `dccd8cc7`, e `c4ecee78`).
+  - **Código e cópia:**
+    - removidos `upstream/happier` (cerca de 22.300 arquivos), o patch dele e 52 arquivos de src, tests, scripts e adapters;
+    - removidas as rotas `/auth/pair`, `/contexts` com `happierSessionId`, `/conversation-entry` e o redirecionamento de conversa;
+    - removida a dependência `socket.io-client`;
+    - `src/happier.ts` virou `src/conversation.ts`, só com o transporte local, com comportamento conferido igual.
+  - **Painel:** o login ficou só por usuário e senha e por código de pareamento. O patch do Cezar foi regenerado e confere com a árvore, e o web foi recompilado.
+  - **Instalação viva** (backup `20261121-210146` e `installation.json.before-sem-happier`):
+    - removido o bloco `happier` da configuração;
+    - removida a unidade `agent-control-happier-ispagent`;
+    - removidos os dados do servidor Happier (9 MB) e as sobras de `upstream/happier` (5,8 GB).
+    - Mantido `happier-account.key`: é a chave da conversa local, e o nome ficou para não mudar a impressão digital nem o cofre.
+  - **Restos intencionais do nome:**
+    - o canal `'happier'` em `ac_deliveries`, preso ao CHECK da migração 001;
+    - a tolerância ao bloco antigo da instalação;
+    - os caminhos `.state/happier` para verificar backups antigos.
+  - **Provas:** suíte completa com 322 arquivos ok e nenhuma falha. Na instalação viva: gateway `personal_ready`, painel 200, `auth/config` só com senha e `chat-log` lendo a conversa local.
+  - **Efeito colateral:** sessões de navegador abertas com o token do Happier deixam de valer. Basta entrar de novo com usuário e senha.
+
