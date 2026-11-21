@@ -239,9 +239,9 @@ export abstract class NativeExecutionSupervisorCore{
    }
    return await effect(()=>!canceled.signal.aborted);
   }finally{
-   if(locked&&!canceled.signal.aborted)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]).catch(()=>undefined);
+   if(locked&&!canceled.signal.aborted)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[key]).catch(()=>undefined/* the lock dies with the session ended next */);
    session.off('error',lost);session.off('end',lost);
-   await session.end().catch(()=>undefined);
+   await session.end().catch(()=>undefined/* the lock dies with the session ended next */);
   }
  }
  protected async launchPublished(jobId:string){

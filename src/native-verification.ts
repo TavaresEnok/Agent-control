@@ -1,3 +1,4 @@
+import {containFailure} from './failure-log.ts';
 import {ownerRequest} from './personal-owner-request.ts';
 import {createHash,createHmac} from 'node:crypto';
 import {z} from 'zod';
@@ -21,7 +22,7 @@ const SCOPE_TEXT:Record<NativeReviewScope,string>={
  composition:' This artifact combines every task of that plan: reject when a part of ownerRequest is missing.'};
 export async function nativeReviewScope(ledger:Ledger,intentId:string):Promise<NativeReviewScope|undefined>{
  const row=(await ledger.pool.query('SELECT * FROM ac_intents WHERE id=$1',[intentId])).rows[0];if(!row?.parent_intent_id)return undefined;
- const bound=await readManagedUnit(ledger,row as Intent).catch(()=>null);
+ const bound=await readManagedUnit(ledger,row as Intent).catch(containFailure('NATIVE_REVIEW_SCOPE_UNAVAILABLE',null));
  return bound?.unit.kind==='task'?'task':bound?.unit.kind==='composition'?'composition':undefined;
 }
 /** BMAD-style triage before a verdict. Appended for new jobs only; jobs launched before keep their recorded wording. */

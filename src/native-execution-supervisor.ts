@@ -114,7 +114,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
     console.error(JSON.stringify({event:'NATIVE_RELEASE_BEFORE_LAUNCH_FAILED',jobId:input.jobId,reason,code}));
     throw releaseError;
    }finally{
-    if(jobDirCreated)await rm(p.root,{recursive:true,force:true}).catch(()=>undefined);
+    if(jobDirCreated)await rm(p.root,{recursive:true,force:true}).catch(()=>undefined/* best-effort removal of a job dir that never launched */);
    }
   };
   let personal=false;
@@ -311,7 +311,7 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
     const updated=await c.query("UPDATE ac_capacity_grants SET state='released',physical_receipt=$2 WHERE id=$1 AND state IN ('reserved','uncertain')",[input.grantId,receipt]);
     return updated.rowCount===1;
    });
-   if(released&&jobDirCreated)await rm(p.root,{recursive:true,force:true}).catch(()=>undefined);
+   if(released&&jobDirCreated)await rm(p.root,{recursive:true,force:true}).catch(()=>undefined/* best-effort removal of a job dir that never launched */);
    if(!released)throw error;
    throw error;
   }

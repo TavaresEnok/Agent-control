@@ -180,12 +180,12 @@ async function judgeTool(
   if (!spec.parsed) return result('limpa', null, null, 0);
 
   const path = examFilePath(root, spec.file);
-  const text = path ? await readRegularExam(path).catch(() => null) : null;
+  const text = path ? await readRegularExam(path).catch(() => null /* unreadable report: counted as rejected below */) : null;
   if (text === null) {
     counter.rejected += 1;
     return result('indisponivel', 'relatório recusado (link ou acima de 50 MB)', null, 0);
   }
-  const redacted = path ? await rewriteRedactedExam(path, text).catch(() => null) : null;
+  const redacted = path ? await rewriteRedactedExam(path, text).catch(() => null /* redaction refused: counted as rejected below */) : null;
   if (redacted === null) {
     counter.rejected += 1;
     return result('indisponivel', 'relatório recusado na redação', null, 0);
@@ -220,8 +220,8 @@ export async function collectToolFindings(outputDirectory: string): Promise<{fin
   // The older checkov basename stays accepted. An unreadable one adds nothing and was never counted as a clean run.
   if (present.has('checkov.json') && !files.includes('results_json.json')) {
     const path = examFilePath(root, 'checkov.json');
-    const text = path ? await readRegularExam(path).catch(() => null) : null;
-    const redacted = path && text !== null ? await rewriteRedactedExam(path, text).catch(() => null) : null;
+    const text = path ? await readRegularExam(path).catch(() => null /* unreadable report: counted as rejected below */) : null;
+    const redacted = path && text !== null ? await rewriteRedactedExam(path, text).catch(() => null /* redaction refused: counted as rejected below */) : null;
     if (redacted === null) counter.rejected += 1;
     else {
       try {

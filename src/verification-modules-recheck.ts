@@ -1,3 +1,4 @@
+import {containFailure} from './failure-log.ts';
 import type pg from 'pg';
 import {randomUUID} from 'node:crypto';
 import {lstat, realpath} from 'node:fs/promises';
@@ -629,7 +630,7 @@ export async function recheckModuleFindings(
       await ledger.tx(async client => {
         await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
         await finishExamIntentTx(client, ledger, {intentId, contextId: authority.contextId}, 'failed');
-      }).catch(() => undefined);
+      }).catch(containFailure('EXAM_INTENT_NOT_CLOSED', undefined));
     }
   }
 }

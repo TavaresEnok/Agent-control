@@ -68,17 +68,17 @@ export abstract class NativeExecutionReconciler extends NativeExecutionExamRecov
     payload.oauthAccessToken=prepared.accessToken;
     payload.credentialSnapshotTag=createHmac('sha256',token).update(canonical([prepared.accessToken])).digest('hex');
     let existingSecrets:string[]=[];
-    try{existingSecrets=await readNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key);}catch{}
+    try{existingSecrets=await readNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key);}catch{/* no prior snapshot on a first launch; the new one below is written whole */}
     const tempSnap=p.secretSnapshot+'.pending.'+randomBytes(6).toString('hex');
     try{
      await writeNativeSecretSnapshot(tempSnap,input.jobId,this.key,[...new Set([...existingSecrets,...prepared.secrets])]);
      await rename(tempSnap,p.secretSnapshot);
     }catch(snapError){
-     await rm(tempSnap,{force:true}).catch(()=>undefined);
+     await rm(tempSnap,{force:true}).catch(()=>undefined/* best-effort removal of a pending temp file */);
      throw snapError;
     }
    }catch(error){
-    await this.removeLaunchFiles(input.jobId).catch(()=>undefined);
+    await this.removeLaunchFiles(input.jobId).catch(()=>undefined/* launch files are retried by the next reconcile */);
     const code=error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code;
     return {resumed:false,failureCode:safeFailureCode(code,'EXAM_LOGIN_TOKEN_FAILED')};
    }
@@ -89,8 +89,8 @@ export abstract class NativeExecutionReconciler extends NativeExecutionExamRecov
    await writeFile(pending,JSON.stringify({payload,signature:sign(null,Buffer.from('agent-control:native-execution-launch:v1\n'+canonical(payload)),this.key).toString('hex')}),{mode:0o600,flag:'wx'});
    await rename(pending,path);
   }catch(error){
-   await rm(pending,{force:true}).catch(()=>undefined);
-   await this.removeLaunchFiles(input.jobId).catch(()=>undefined);
+   await rm(pending,{force:true}).catch(()=>undefined/* best-effort removal of a pending temp file */);
+   await this.removeLaunchFiles(input.jobId).catch(()=>undefined/* launch files are retried by the next reconcile */);
    const code=error instanceof Refusal?error.code:(error as NodeJS.ErrnoException)?.code;
    return {resumed:false,failureCode:safeFailureCode(code,'NATIVE_EXECUTION_RESUME_FAILED')};
   }
@@ -234,7 +234,7 @@ export abstract class NativeExecutionReconciler extends NativeExecutionExamRecov
   try{
    if(!await tryGrantLaunchLock(session,String(loaded.grant_id)))return {state:'uncertain' as const,interval:'before_terminal_evidence' as const,grant:'preserved' as const,removed:[] as string[],replayed:false as const};
    try{return await this.recoverLoaded(principal,authority,jobId,loaded);}finally{await releaseGrantLaunchLock(session,String(loaded.grant_id));}
-  }finally{await session.end().catch(()=>undefined);}
+  }finally{await session.end().catch(()=>undefined/* closing a lock session that may already be gone */);}
  }
  protected async recoverLoaded(principal:string,authority:Authority,jobId:string,loaded:Record<string,any>){
   const preserved=(interval:NativeExecutionRecovery['interval'],grant:NativeExecutionRecovery['grant']=loaded.grant_state==='released'?'released':'preserved'):NativeExecutionRecovery=>({state:'uncertain',interval,grant,removed:[],replayed:false});

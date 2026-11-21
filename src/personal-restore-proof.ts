@@ -91,7 +91,7 @@ export async function runPersonalRestoreProof(argv:string[],deps:RestoreProofDep
  let proved:{files:number;counts:{projects:number;contexts:number;intents:number}}|null=null;
  try{
   const root=resolve(backupRootArg);
-  const info=await lstat(root).catch(()=>null);
+  const info=await lstat(root).catch(()=>null/* absent → null, the caller handles it */);
   if(!info||info.isSymbolicLink()||!info.isDirectory())throw new Refusal('RESTORE_PROOF_NO_BACKUP');
   backup=await newestBackup(root);
   const files=await verifyBackupManifest(backup);

@@ -81,7 +81,7 @@ export async function tryGrantLaunchLock(session:pg.Client,grantId:string){
  return Boolean((await session.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) ok',[grantLaunchLockKey(grantId)])).rows[0]?.ok);
 }
 export async function releaseGrantLaunchLock(session:pg.Client,grantId:string){
- await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[grantLaunchLockKey(grantId)]).catch(()=>undefined);
+ await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[grantLaunchLockKey(grantId)]).catch(()=>undefined/* the lock dies with the session ended next */);
 }
 /** Runs `effect` holding the grant's launch lock. The sweep only ever tries the lock, so a short wait here is enough. */
 export async function withGrantLaunchLock<T>(ledger:{pool:{options?:{connectionString?:string}}},grantId:string,effect:()=>Promise<T>,waitMs=30000):Promise<T>{
@@ -98,7 +98,7 @@ export async function withGrantLaunchLock<T>(ledger:{pool:{options?:{connectionS
   return await effect();
  }finally{
   if(locked)await releaseGrantLaunchLock(session,grantId);
-  await session.end().catch(()=>undefined);
+  await session.end().catch(()=>undefined/* closing a lock session that may already be gone */);
  }
 }
 export class UnstartedExamRetirementPending extends Refusal {

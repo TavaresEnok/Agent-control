@@ -2,6 +2,7 @@
 // programmer, QA and reviewer — with the provider, model and effort that ran it, what the programmer
 // said and changed, the QA log line and the reviewer's verdict and findings. Read-only over the ledger
 // and the private execution-host directory; every message has a stable id, so restarts never repeat one.
+import {containFailure} from './failure-log.ts';
 import type pg from 'pg';
 import {CapacityPolicy} from './capacity.ts';
 import {reserveYieldReason} from './capacity-exclusions.ts';
@@ -119,7 +120,7 @@ export async function failureFacts(pool:pg.Pool,contextId:string,intentIds:reado
  const lines:string[]=[];
  for(const job of jobs){
   const failed=job.state==='failed'||(job.kind==='qa'&&job.receipt?.status!=='passed');
-  const message=await teamMessage(job,options).catch(()=>null);
+  const message=await teamMessage(job,options).catch(containFailure('TEAM_FAILURE_FACT_UNAVAILABLE',null));
   if(!message)continue;
   if(failed||/ rejeitou\b/.test(message.text))lines.push(message.text);
  }
@@ -222,5 +223,5 @@ export function registerStageReporter(pool:pg.Pool,options:TeamFeedOptions){
 }
 export async function stageReport(intentId:string,node:string){
  if(!stageReporter)return null;
- return stageReporter(intentId,node).catch(()=>null);
+ return stageReporter(intentId,node).catch(containFailure('TEAM_STAGE_REPORT_UNAVAILABLE',null));
 }

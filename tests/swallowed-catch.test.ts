@@ -5,8 +5,6 @@ import {test} from 'node:test';
 
 /** Files left out while another front rewrites them. Each entry needs a reason. */
 const EXCLUDED: Record<string, string> = {
-  'verification-modules.ts': 'em refatoração na rodada 2',
-  'native-execution-supervisor.ts': 'em refatoração na rodada 2',
 };
 
 /** Blanks comments, string and template text and regex bodies, keeping offsets and newlines. */
@@ -79,7 +77,8 @@ function unjustifiedCatches(src: string): number[] {
   }
   // A handler has no block of its own: a comment inside it, on its line or on the line just above justifies it.
   const lines = src.split('\n');
-  const promise = /\.catch\(\s*(?:async\s*)?\(\s*\)\s*=>\s*(?:\{\s*\}|undefined\b|void\s+0\b)\s*\)/g;
+  // Any parameter list (none, _, e, (e)) and any empty result: {}, undefined, void 0, null, false, [], or a function(){}.
+  const promise = /\.catch\(\s*(?:async\s*)?(?:\(\s*[\w$]*\s*\)|[\w$]+)\s*=>\s*(?:\{\s*;?\s*\}|undefined\b|void\s+0\b|null\b|false\b|\[\s*\])\s*\)|\.catch\(\s*(?:async\s+)?function\s*\w*\s*\([^)]*\)\s*\{\s*\}\s*\)/g;
   for (let m; (m = promise.exec(masked));) {
     const line = lineOf(m.index);
     const near = src.slice(m.index, m.index + m[0].length) + '\n' + lines[line - 1] + '\n' + (lines[line - 2] ?? '');
@@ -99,7 +98,10 @@ test('o detector acha catch vazio e .catch sem motivo, e aceita os justificados'
   assert.deepEqual(unjustifiedCatches('// motivo\nawait p.catch(()=>{});\nawait q.catch(()=>{}); // motivo\n'), []);
   assert.deepEqual(unjustifiedCatches('// motivo\nx;\nawait p.catch(()=>{});\n'), [3]);
   assert.deepEqual(unjustifiedCatches('// motivo\ntry{a()}catch{}\n'), [2]);
-  assert.deepEqual(unjustifiedCatches('try{a()}catch{return null;}\np.catch(()=>null);\np.catch(e=>log(e));\n'), []);
+  assert.deepEqual(unjustifiedCatches('try{a()}catch{return null;}\np.catch(e=>log(e));\n'), []);
+  // An empty result with any parameter list still swallows: e=>{}, _=>undefined, ()=>null, ()=>false, ()=>[], function(){}.
+  assert.deepEqual(unjustifiedCatches('p.catch(e=>{});\np.catch(_=>undefined);\np.catch(()=>null);\np.catch(()=>false);\np.catch(()=>[]);\np.catch(function(){});\np.catch(()=>{;});\n'), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(unjustifiedCatches('p.catch(()=>null /* ausente é válido aqui */);\n'), []);
   assert.deepEqual(unjustifiedCatches('const s = "catch{}"; const t = `${x} .catch(()=>{})`; // catch{}\n'), []);
   assert.deepEqual(unjustifiedCatches('const r = /catch{}/; try{a()}catch{}\n'), [1]);
 });

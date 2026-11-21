@@ -209,7 +209,7 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
   // The checkout proof runs on the very directory that was (or is about to be) planned: same device and inode.
   const workUnchanged=async(seen:Seen,identity:string|undefined)=>{
    if(!seen.judged.checkWork)return true;
-   const current=await lstat(this.paths(jobId).work,{bigint:true}).catch(()=>undefined);
+   const current=await lstat(this.paths(jobId).work,{bigint:true}).catch(()=>undefined/* absent work dir is a valid state, judged below */);
    if(!current)return true; // Nothing left to protect; the removal step reports `absent`.
    if(!current.isDirectory()||(identity&&current.dev+':'+current.ino!==identity))return false;
    return seen.judged.checkWork(canceled.signal);
@@ -314,7 +314,7 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
    return apply&&first.state==='eligible'?await phase('release'):first;
   }finally{
    if(heartbeat)clearInterval(heartbeat);
-   if(locked&&!canceled.signal.aborted)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lockKey]).catch(()=>undefined);
+   if(locked&&!canceled.signal.aborted)await session.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lockKey]).catch(()=>undefined/* the lock dies with the session ended next */);
    unfollow();
    // Closing the dedicated connection releases whatever it still holds; it is never reused.
    await session.end().catch(()=>undefined);

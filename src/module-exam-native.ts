@@ -169,7 +169,7 @@ export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 
     signal?.throwIfAborted();
     if (blocked) return {reason: blocked};
     runtimePromise ??= input.loadRuntime();
-    const runtime = await runtimePromise.catch(() => null);
+    const runtime = await runtimePromise.catch(containFailure('MODULE_EXAM_RUNTIME_LOAD_FAILED', null));
     signal?.throwIfAborted();
     if (!runtime) return {reason: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'};
     const reservations = createModuleExamReservations({...input, intentId,

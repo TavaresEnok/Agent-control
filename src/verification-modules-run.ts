@@ -1,3 +1,4 @@
+import {containFailure} from './failure-log.ts';
 import {withInstallationImageLock} from './personal-image-lock.ts';
 import {assertDiskSpaceForLaunch, launchVolumesOf} from './personal-disk.ts';
 import {randomUUID} from 'node:crypto';
@@ -134,7 +135,7 @@ async function confirmFindingWithReviewer(
       verifier: {model: call.model, provider: call.provider},
     };
   } finally {
-    await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}).catch(() => undefined);
+    await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}).catch(containFailure('MODULE_EXAM_GRANT_NOT_RELEASED', undefined));
   }
 }
 
@@ -615,7 +616,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     if (rolledBackRun) {
       await endRound(retention);
       await reconcileReports(input.ledger, input.principal, input.authority, input.dataDirectory, input.projectId)
-        .catch(() => undefined);
+        .catch(containFailure('MODULE_REPORT_RECONCILE_FAILED', undefined));
     }
     throw error;
   } finally {

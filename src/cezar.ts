@@ -555,7 +555,7 @@ export class CezarRuntime {
        return claimWorktreeWriter(c,{parentIntentId:parent.id,runId:unit.runId,intentId:unit.intentId,epoch:authority.epoch});
       });
       const cwd=join(parentDir,unit.runId);
-      const existing=await lstat(cwd).catch(()=>null);
+      const existing=await lstat(cwd).catch(()=>null/* absent → null, the caller handles it */);
       if(existing&&(claim.acquired==='new'||existing.isSymbolicLink()||!existing.isDirectory()))throw new Refusal('WORKTREE_RESIDUE');
       if(!existing){
        await mkdir(cwd,{mode:0o700});
@@ -645,7 +645,7 @@ export class CezarRuntime {
        return claimWorktreeWriter(c,{parentIntentId:parent.id,runId:unit.runId,intentId:unit.intentId,epoch:authority.epoch});
       });
       const cwd=join(parentDir,unit.runId);
-      const existing=await lstat(cwd).catch(()=>null);
+      const existing=await lstat(cwd).catch(()=>null/* absent → null, the caller handles it */);
       if(existing&&(claim.acquired==='new'||existing.isSymbolicLink()||!existing.isDirectory()))throw new Refusal('WORKTREE_RESIDUE');
       const env={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_NO_REPLACE_OBJECTS:'1'};
       if(!existing){

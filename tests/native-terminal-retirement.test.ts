@@ -33,6 +33,10 @@ test('terminal retirement journals logs before deletion and recovers a lost Dock
   if(sql.startsWith('UPDATE ac_native_terminal_retirements')){saved={...saved,state:'removed',proof:args[1]};return {rows:[]};}
   if(sql.startsWith('INSERT INTO ac_audit'))return {rows:[]};
   if(sql.startsWith('SELECT project_id FROM ac_contexts'))return {rows:[]};
+  // The scope check asks the intent's workflow; an engineering reviewer is not a readonly exam.
+  // Not a personal installation: the locked retirement path under test.
+  if(sql.startsWith('SELECT 1 FROM ac_installation_activation'))return {rowCount:0,rows:[]};
+  if(sql.startsWith('SELECT command FROM ac_intents'))return {rows:[{command:{payload:{workflow:'engineering-native-v1'}}}]};
   throw new Error('unexpected SQL '+sql);
  }};
  const supervisor:any=Object.create(NativeExecutionSupervisor.prototype);
