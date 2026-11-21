@@ -113,7 +113,7 @@ export async function runPersonalRestoreProof(argv:string[],deps:RestoreProofDep
  if(created){
   try{await server.drop(database);}catch{cleanupFailed=true;}
  }
- await server.close().catch(()=>{});
+ await server.close().catch(()=>{/* best-effort close; the result was already decided */});
  const cleanup=created?(cleanupFailed?{ok:false,database,code:'RESTORE_PROOF_CLEANUP_FAILED'}:{ok:true}):undefined;
  if(failure===null&&proved){
   try{

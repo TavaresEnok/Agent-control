@@ -64,7 +64,7 @@ export async function backupContextVault(options:{installationId:string;root:str
   try{await file.writeFile(archive);await file.sync();}finally{await file.close();}
   try{await link(temp,archiveFile);}catch(error){if((error as NodeJS.ErrnoException).code==='EEXIST')throw new Refusal('VAULT_BACKUP_ALREADY_EXISTS');throw error;}
   await unlink(temp);temp=undefined;await syncDir(dirname(archiveFile));return {state:'backed_up' as const,entries:files.length-1};
- }finally{key.fill(0);plain?.fill(0);archive?.fill(0);if(temp)await unlink(temp).catch(()=>{});}
+ }finally{key.fill(0);plain?.fill(0);archive?.fill(0);if(temp)await unlink(temp).catch(()=>{/* best-effort removal of a temporary file */});}
 }
 export async function restoreContextVault(options:{installationId:string;sourceRoot:string;sourceMasterFile:string;backupKeyFile:string;archiveFile:string;destinationDirectory:string;repositories:readonly string[]}){
  Id.parse(options.installationId);const {sourceRoot,sourceMasterFile,backupKeyFile,archiveFile,destinationDirectory,repositories}=options;
@@ -90,5 +90,5 @@ export async function restoreContextVault(options:{installationId:string;sourceR
   for(const item of payload.files){const bytes=Buffer.from(item.data,'base64');try{const file=await open(join(staging,item.name),constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}}finally{bytes.fill(0);}}
   await syncDir(staging);await rename(staging,join(destinationDirectory,'vault'));await syncDir(destinationDirectory);await syncDir(dirname(destinationDirectory));
   owned=false;return {state:'restored_inactive' as const,entries:payload.files.length-1};
- }finally{key.fill(0);input?.fill(0);plain?.fill(0);if(owned)await rm(destinationDirectory,{recursive:true,force:true}).catch(()=>{});}
+ }finally{key.fill(0);input?.fill(0);plain?.fill(0);if(owned)await rm(destinationDirectory,{recursive:true,force:true}).catch(()=>{/* best-effort removal of a partial restore; the error is rethrown */});}
 }

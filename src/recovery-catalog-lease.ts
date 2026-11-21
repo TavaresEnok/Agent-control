@@ -23,5 +23,5 @@ export async function acquireRecoveryCatalogLease(request:RecoveryCatalogLeaseRe
   if(result.state!=='pending')throw new Refusal(typeof result.error==='string'&&/^CATALOG_[A-Z0-9_]+$/.test(result.error)?result.error:'CATALOG_LEASE_UNCERTAIN');
   if(controller.signal.aborted)throw new Refusal('CATALOG_LEASE_UNCERTAIN');
   return {signal:controller.signal,async release(){if(released)return;released=true;child.stdin.end();const code=await exit;lines.close();if(code!==0)throw new Refusal('CATALOG_LEASE_UNCERTAIN');}};
- }catch(error){child.stdin.destroy();if(!ended)child.kill('SIGKILL');await exit.catch(()=>{});lines.close();throw error;}
+ }catch(error){child.stdin.destroy();if(!ended)child.kill('SIGKILL');await exit.catch(()=>{/* waits for exit only; the original error is rethrown */});lines.close();throw error;}
 }

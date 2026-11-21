@@ -623,7 +623,7 @@ export async function generateRepoMap(options: RepoMapOptions): Promise<RepoMapR
         await writeFile(tempFile, JSON.stringify(payload), { mode: 0o600, flag: 'wx' });
         await rename(tempFile, cacheFile);
       } catch {
-        await rm(tempFile, { force: true }).catch(() => {});
+        await rm(tempFile, { force: true }).catch(() => {/* best-effort removal of a temporary file */});
       }
     }
   }

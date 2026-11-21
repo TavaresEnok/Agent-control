@@ -16,9 +16,9 @@ export function createImportPreviewApi(ledger:Ledger,projectId:string){
   const length=c.req.header('content-length');if(length&&(!/^\d+$/.test(length)||Number(length)>IMPORT_PREVIEW_MAX_BYTES))throw new Refusal('IMPORT_PREVIEW_TOO_LARGE',400);
   const reader=c.req.raw.body?.getReader();if(!reader)throw new Refusal('INVALID_IMPORT_JSON',400);
   const chunks:Uint8Array[]=[];let total=0,timedOut=false,timer:ReturnType<typeof setTimeout>|undefined;
-  const deadline=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{timedOut=true;void reader.cancel().catch(()=>{});reject(new Refusal('IMPORT_PREVIEW_TIMEOUT',400));},10000);});
+  const deadline=new Promise<never>((_,reject)=>{timer=setTimeout(()=>{timedOut=true;void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});reject(new Refusal('IMPORT_PREVIEW_TIMEOUT',400));},10000);});
   try{
-   for(;;){const part=await Promise.race([reader.read(),deadline]);if(timedOut)throw new Refusal('IMPORT_PREVIEW_TIMEOUT',400);if(part.done)break;total+=part.value.byteLength;if(total>IMPORT_PREVIEW_MAX_BYTES){void reader.cancel().catch(()=>{});throw new Refusal('IMPORT_PREVIEW_TOO_LARGE',400);}chunks.push(part.value);}
+   for(;;){const part=await Promise.race([reader.read(),deadline]);if(timedOut)throw new Refusal('IMPORT_PREVIEW_TIMEOUT',400);if(part.done)break;total+=part.value.byteLength;if(total>IMPORT_PREVIEW_MAX_BYTES){void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});throw new Refusal('IMPORT_PREVIEW_TOO_LARGE',400);}chunks.push(part.value);}
   }finally{clearTimeout(timer);reader.releaseLock();}
   return c.json(await new ImportPreview(ledger,projectId).inspect(principal,Buffer.concat(chunks)));
  });

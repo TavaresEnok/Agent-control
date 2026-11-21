@@ -137,7 +137,7 @@ async function claimLockDirectory(directory:string,uid:number,intentId:string){
   const info=await lstat(ownerPath);
   if(info.isSymbolicLink()||!info.isFile()||await readFile(ownerPath,'utf8')!==body)throw new Refusal('REMOTE_SOURCE_MATERIALIZATION_BUSY');
  }catch(error){
-  await removeSecureDirectory(directory,uid).catch(()=>{});
+  await removeSecureDirectory(directory,uid).catch(()=>{/* best-effort cleanup; the original error is what the caller sees */});
   throw error;
  }
  return token;
@@ -226,7 +226,7 @@ async function checkout(bare:string,staging:string,commit:string,tree:string,uid
   await fchmodDirectory(staging,0o700);
   await fchmodDirectory(join(staging,'.git'),0o700);
  }catch(error){
-  await removeSecureDirectory(staging,uid).catch(()=>{});
+  await removeSecureDirectory(staging,uid).catch(()=>{/* best-effort cleanup; the original error is what the caller sees */});
   if(error instanceof Refusal)throw error;
   throw new Refusal('REMOTE_GIT_MATERIALIZATION_FAILED');
  }
@@ -241,7 +241,7 @@ async function publishTree(staging:string,destination:string,uid:number,commit:s
  }
  try{await rename(staging,destination);}
  catch(error){
-  await removeSecureDirectory(staging,uid).catch(()=>{});
+  await removeSecureDirectory(staging,uid).catch(()=>{/* best-effort cleanup; the original error is what the caller sees */});
   if((error as NodeJS.ErrnoException).code!=='EEXIST'&&(error as NodeJS.ErrnoException).code!=='ENOTEMPTY')throw error;
   if(await classify(destination,uid)!=='ok'||await publishedState(destination,commit,tree)!=='match')throw new Refusal('REMOTE_SOURCE_DESTINATION_CONFLICT');
  }

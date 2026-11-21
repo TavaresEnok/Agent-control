@@ -70,7 +70,7 @@ export async function exportContext(config:Installation,ledger:Ledger,descriptor
   const serialized=Buffer.from(canonical({...envelope,digest:digest(envelope)}));
   if(serialized.length>MAX_BYTES)throw new Refusal('CONTEXT_EXPORT_TOO_LARGE');
   const file=await open(descriptor.outputFile,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);let complete=false;
-  try{await file.writeFile(serialized);await file.sync();complete=true;}finally{await file.close();if(!complete)await unlink(descriptor.outputFile).catch(()=>{});}
+  try{await file.writeFile(serialized);await file.sync();complete=true;}finally{await file.close();if(!complete)await unlink(descriptor.outputFile).catch(()=>{/* best-effort removal of a temporary file */});}
   return {state:'exported',contextId:descriptor.contextId,messageCount:messages.length,metadataTruncated:metadata.truncated,keysIncluded:false,restorable:false};
  }finally{bytes.fill(0);tokenBytes?.fill(0);}
 }

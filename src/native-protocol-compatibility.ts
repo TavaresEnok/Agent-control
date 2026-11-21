@@ -37,7 +37,7 @@ async function launchProbe(ledger:Ledger,op:Probe){
     writes=writes.then(async()=>{const row=(await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET container_id=$2 WHERE id=$1 AND (container_id IS NULL OR container_id=$2) RETURNING *',[op.id,message.id])).rows[0];if(!row)throw new Refusal('NATIVE_PROTOCOL_PROBE_IDENTITY_MISMATCH');op.container_id=message.id!;creationSettled=true;resolve();child.send?.({start:true,id:message.id});}).catch(error=>{creationSettled=true;child.send?.({stop:true});reject(error);});
    }else if(message.type==='retired'){
     if(message.id!==null&&op.container_id&&message.id!==op.container_id)return;
-    terminalCode=Number.isInteger(message.exitCode)?message.exitCode!:null;op.retired=true;writes=writes.then(async()=>{await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);});void writes.catch(()=>{});
+    terminalCode=Number.isInteger(message.exitCode)?message.exitCode!:null;op.retired=true;writes=writes.then(async()=>{await ledger.pool.query('UPDATE ac_native_protocol_probe_operations SET retired=true WHERE id=$1',[op.id]);});void writes.catch(()=>{/* marks the rejection handled; flush() and stopAndWait() await writes */});
    }
   });
  });

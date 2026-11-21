@@ -721,7 +721,7 @@ const MAX_DESIGN_CONFIG_BYTES = 200_000;
 async function readRepoDesignConfig(repo: string, files: readonly DesignSourceFile[]): Promise<string | undefined> {
   const fromFiles = files.find(file => file.path === DESIGN_CONFIG_FILE || file.path.endsWith(`/${DESIGN_CONFIG_FILE}`))?.text;
   if (fromFiles !== undefined) return fromFiles;
-  const handle = await open(join(repo, DESIGN_CONFIG_FILE), constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => undefined);
+  const handle = await open(join(repo, DESIGN_CONFIG_FILE), constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => undefined /* missing config file means defaults */);
   if (handle === undefined) return undefined;
   try {
     const info = await handle.stat();

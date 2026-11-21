@@ -72,7 +72,7 @@ export function examLoginFreshAfterRenew(expiresAt: number | null, now: number, 
 
 /** Read only `expiresAt`. A missing file, a symlink, or unreadable JSON means the login needs renewal. */
 export async function readClaudeExpiresAt(accountDir: string): Promise<number | null> {
-  const text = await readCredentialText(join(accountDir, '.credentials.json')).catch(() => undefined);
+  const text = await readCredentialText(join(accountDir, '.credentials.json')).catch(() => undefined /* missing or unreadable login means renewal is needed */);
   if (text === undefined) return null;
   try {
     const parsed: unknown = JSON.parse(text);
@@ -191,8 +191,8 @@ export async function writePrivateAtomic(file: string, body: string, options?: {
     }
     await rename(temp, file);
   } catch (error) {
-    if (handle) await handle.close().catch(() => undefined);
-    await unlink(temp).catch(() => undefined);
+    if (handle) await handle.close().catch(() => undefined /* best-effort close; the result was already decided */);
+    await unlink(temp).catch(() => undefined /* best-effort removal of a temporary file */);
     throw error;
   }
 }

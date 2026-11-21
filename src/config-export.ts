@@ -130,7 +130,7 @@ export async function writeConfiguration(ledger:Ledger,principal:string,projectI
  await safe(keyPath,true);await safe(outputPath,false);if(keyPath===outputPath)throw new Refusal('CONFIG_EXPORT_KEY_CUSTODY',403);
  for(const directory of [dirname(outputPath),dirname(keyPath)]){const parent=await stat(directory);if(await realpath(directory)!==directory||!parent.isDirectory()||(parent.mode&0o077)!==0||parent.uid!==process.getuid?.())throw new Refusal('UNSAFE_PRIVATE_DIRECTORY',403);}
  const key=await readPrivateFile(keyPath,32,{canonical:true});try{if(key.length!==32)throw new Refusal('CONFIG_EXPORT_INVALID_KEY');const dto=await collectConfiguration(ledger,principal,projectId,config);const serialized=Buffer.from(canonical(sealConfiguration(dto,key)));let file;let complete=false;
-  try{file=await open(outputPath,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);await file.writeFile(serialized);await file.sync();complete=true;}finally{await file?.close();if(file&&!complete)await unlink(outputPath).catch(()=>{});serialized.fill(0);}
+  try{file=await open(outputPath,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);await file.writeFile(serialized);await file.sync();complete=true;}finally{await file?.close();if(file&&!complete)await unlink(outputPath).catch(()=>{/* best-effort removal of a temporary file */});serialized.fill(0);}
   return {state:'exported' as const,projectId,restorable:false as const};
  }finally{key.fill(0);}
 }

@@ -34,18 +34,18 @@ async function readJsonBody(request:Request,limit:number,timeoutMs:number,noStor
    if(request.signal.aborted)reject(aborted);
    else request.signal.addEventListener('abort',onAbort,{once:true});
   });
-  void cancellation.catch(()=>{});
+  void cancellation.catch(()=>{/* marks the rejection handled; raced below */});
   try{
    for(;;){
-    if(request.signal.aborted){void reader.cancel().catch(()=>{});return jsonError('REQUEST_ABORTED',400,noStore);}
+    if(request.signal.aborted){void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});return jsonError('REQUEST_ABORTED',400,noStore);}
     const part=await Promise.race([reader.read(),timeout,cancellation]);
     if(part.done)break;
     total+=part.value.byteLength;
-    if(total>limit){void reader.cancel().catch(()=>{});return jsonError('REQUEST_BODY_TOO_LARGE',413,noStore);}
+    if(total>limit){void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});return jsonError('REQUEST_BODY_TOO_LARGE',413,noStore);}
     chunks.push(part.value);
    }
   }catch(error){
-   void reader.cancel().catch(()=>{});
+   void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});
    if(error===deadline)return jsonError('REQUEST_BODY_TIMEOUT',408,noStore);
    if(error===aborted)return jsonError('REQUEST_ABORTED',400,noStore);
    throw error;

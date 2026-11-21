@@ -642,11 +642,11 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot});
     started = true;
     input.observe?.(job);
-    void job.catch(() => undefined);
+    void job.catch(() => undefined /* marks the rejection handled; the owner awaits it and reports */);
     return {id, status: 'running', phase: 'ferramentas'};
   } catch (error) {
     if (!started) {
-      if (snapshot) { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined); }
+      if (snapshot) { snapshotSuppressions.delete(snapshot); await rm(snapshot, {recursive: true, force: true}).catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */); }
       // Never leave a 'running' progress file behind when the job did not start (it would block every later exam).
       if (progressPath) await rm(progressPath, {force: true}).catch(() => undefined);
       try { await releaseExamDatabase(ready.dataDirectory, databaseStamp, id); } catch { /* keep the original error */ }
@@ -846,12 +846,12 @@ export async function resolvePersonalVerification(
         modelCalls: {count: 0},
       },
       close: async () => {
-        await ledger.releaseLease(authority!).catch(() => undefined);
+        await ledger.releaseLease(authority!).catch(() => undefined /* an unreleased lease expires by itself */);
         await ledger.close();
       },
     };
   } catch (error) {
-    if (authority) await ledger.releaseLease(authority).catch(() => undefined);
+    if (authority) await ledger.releaseLease(authority).catch(() => undefined /* an unreleased lease expires by itself */);
     await ledger.close();
     throw error;
   }

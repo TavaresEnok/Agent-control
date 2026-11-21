@@ -46,18 +46,18 @@ export async function withExamSignals<T>(
   const interrupted = new Promise<never>((_, reject) => {
     rejectInterrupt = reject;
   });
-  void interrupted.catch(() => undefined);
+  void interrupted.catch(() => undefined /* marks the rejection handled; raced below */);
   const trigger = () => {
     if (controller.signal.aborted) return;
     controller.abort();
-    if (onSignal) void Promise.resolve(onSignal()).catch(() => undefined);
+    if (onSignal) void Promise.resolve(onSignal()).catch(() => undefined /* the signal hook is advisory; the abort already happened */);
     rejectInterrupt(new Refusal('EXAM_INTERRUPTED'));
   };
   process.on('SIGINT', trigger);
   process.on('SIGTERM', trigger);
   try {
     const task = work(controller.signal);
-    void task.catch(() => undefined);
+    void task.catch(() => undefined /* marks the rejection handled; raced below */);
     return await Promise.race([task, interrupted]);
   } finally {
     process.off('SIGINT', trigger);

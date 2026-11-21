@@ -178,7 +178,7 @@ export async function writeRetentionCursor(file:string,after:string|undefined):P
   if(!after){await unlink(file).catch((error:NodeJS.ErrnoException)=>{if(error.code!=='ENOENT')throw error;});return;}
   const temporary=file+'.'+process.pid+'.tmp';
   await writeFile(temporary,JSON.stringify({after})+'\n',{mode:0o600});
-  try {await rename(temporary,file);} catch (error) {await unlink(temporary).catch(()=>undefined);throw error;}
+  try {await rename(temporary,file);} catch (error) {await unlink(temporary).catch(()=>undefined/* best-effort removal of a temporary file */);throw error;}
 }
 
 const gitEnvironment={PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0',GIT_NO_REPLACE_OBJECTS:'1',GIT_OPTIONAL_LOCKS:'0'};
@@ -257,13 +257,13 @@ export async function pinRetainedArtifact(repository:string,jobId:string,commit:
  * empty Git directories that only borrow objects through alternates. Any doubt (missing `.git`, odd layout, error) is `false`. */
 export async function workHoldsNoUnregisteredChange(repository:string,work:string,tree:string,signal?:AbortSignal):Promise<boolean> {
   if(!gitId.test(tree)||resolve(work)!==work)return false;
-  const dotGit=await lstat(join(work,'.git')).catch(()=>undefined);
+  const dotGit=await lstat(join(work,'.git')).catch(()=>undefined/* absent or unreadable means not present here */);
   if(!dotGit?.isDirectory())return false;
-  const objects=await lstat(join(work,'.git','objects')).catch(()=>undefined);
+  const objects=await lstat(join(work,'.git','objects')).catch(()=>undefined/* absent or unreadable means not present here */);
   if(!objects?.isDirectory())return false;
   const common=await git(repository,['rev-parse','--path-format=absolute','--git-common-dir'],{},signal);
   const repositoryObjects=join(common.stdout.trim(),'objects');
-  if(common.code!==0||!(await lstat(repositoryObjects).catch(()=>undefined))?.isDirectory())return false;
+  if(common.code!==0||!(await lstat(repositoryObjects).catch(()=>undefined/* absent or unreadable means not present here */))?.isDirectory())return false;
   const area=await mkdtemp(join(tmpdir(),'ac-workproof-'));
   try {
     const trusted=join(area,'trusted.git'),scan=join(area,'scan.git');
@@ -271,7 +271,7 @@ export async function workHoldsNoUnregisteredChange(repository:string,work:strin
     await writeFile(join(trusted,'objects','info','alternates'),repositoryObjects+'\n',{mode:0o600});
     await writeFile(join(scan,'objects','info','alternates'),join(work,'.git','objects')+'\n',{mode:0o600});
     const realIndex=join(work,'.git','index');
-    if(!(await lstat(realIndex).catch(()=>undefined))?.isFile())return false;
+    if(!(await lstat(realIndex).catch(()=>undefined/* absent or unreadable means not present here */))?.isFile())return false;
     const copiedIndex=join(area,'original-index');
     await copyFile(realIndex,copiedIndex);
     const staged=await git('',['write-tree'],{GIT_DIR:scan,GIT_INDEX_FILE:copiedIndex},signal);

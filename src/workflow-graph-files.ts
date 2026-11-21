@@ -32,7 +32,7 @@ async function withDirectory<T>(repo:string,identity:unknown,name:string,create:
   }
   return await fn(dir);
  }catch(e){if(e instanceof Refusal)throw e;throw new Refusal('WORKFLOW_FILESYSTEM_UNAVAILABLE',409);}
- finally{for(const h of handles.reverse())await h.close().catch(()=>{});}
+ finally{for(const h of handles.reverse())await h.close().catch(()=>{/* best-effort close; the result was already decided */});}
 }
 /** Inspect only bounded regular legacy leaves before invoking the native parser. */
 export async function legacyWorkflowNames(repo:string,identity:unknown){
@@ -57,7 +57,7 @@ export async function legacyWorkflowNames(repo:string,identity:unknown){
   }
   return names;
  }catch(e){if(e instanceof Refusal)throw e;throw new Refusal('WORKFLOW_LEGACY_CATALOG_UNAVAILABLE',409);}
- finally{for(const handle of handles.reverse())await handle.close().catch(()=>{});}
+ finally{for(const handle of handles.reverse())await handle.close().catch(()=>{/* best-effort close; the result was already decided */});}
 }
 const leaf=(dir:FileHandle,revision:number,fileDigest:string)=>`/proc/self/fd/${dir.fd}/${revision}-${fileDigest}.yaml`;
 async function readLeaf(path:string){
@@ -79,6 +79,6 @@ export async function reconcileWorkflowFile(repo:string,identity:unknown,name:st
    try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}
    try{await link(temp,target);}catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;const other=await readLeaf(target);if(!other||!other.equals(bytes))throw new Refusal('WORKFLOW_FILE_CONFLICT',409);}
    await unlink(temp);await dir.sync();
-  }finally{await unlink(temp).catch(()=>{});}
+  }finally{await unlink(temp).catch(()=>{/* best-effort removal of a temporary file */});}
  });
 }
