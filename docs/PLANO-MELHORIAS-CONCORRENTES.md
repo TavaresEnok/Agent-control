@@ -276,9 +276,17 @@ Só as ideias, em poucas linhas nossas:
 ## 11. Integração, suíte e aplicação
 
 - [ ] 11.1 Suíte completa (`npm test`) no worktree, comparada com a linha de base da frente 0.
-- [ ] 11.2 Revisão independente: um subagente Claude Sonnet 5.5, esforço médio, só leitura, recebe o diff de cada frente e este plano, sem a conclusão do autor (AGENTS.md, "Revisão independente com Claude"). Registrar o modelo e a versão revisada.
-- [ ] 11.3 Corrigir os achados válidos e rodar de novo os testes tocados.
-- [ ] 11.4 Juntar `melhorias/concorrentes` em `task/personal-activation`.
+- [x] 11.2 (frentes 1 a 7, feita em 21/11 sobre `709ee426..e6f870af`: revisão independente por modelo Claude distinto, Claude Sonnet 5.5, esforço médio, só leitura; não equivale a revisão humana nem de outro provedor) Revisão independente: um subagente Claude Sonnet 5.5, esforço médio, só leitura, recebe o diff de cada frente e este plano, sem a conclusão do autor (AGENTS.md, "Revisão independente com Claude"). Registrar o modelo e a versão revisada.
+- [x] 11.3 (`e58d1faa`: corrigidos os 2 altos, o recibo do QA rebaixado e o export-ignore no git archive, e os médios e baixos confirmados. **Ficaram registrados, sem correção:**
+  - o resumo de dois executores seguidos (`a && b`) conta só o último;
+  - no modo programador, `apiKeyHelper` e `env` do `.claude/settings.json` do projeto ainda valem, porque as configurações do projeto ficam ligadas para carregar o `CLAUDE.md`;
+  - a renovação no host não neutraliza `apiKeyHelper`, `env` e `enabledPlugins` da conta (o vigia avisa);
+  - os ramos `CodexAppServerRunner`, hoje sem uso, não têm o endurecimento;
+  - o laboratório com o CLI real não roda no CI;
+  - a folga do limite de 65.536 caracteres do helper Git encolheu.)
+  Corrigir os achados válidos e rodar de novo os testes tocados.
+- [ ] 11.4 **Antes de juntar:** as imagens de execução e de planejamento já construídas não têm `/usr/local/bin/ac-claude-*`. Juntar e reiniciar o gateway sem reconstruir as imagens faz todo job Claude falhar com código 127. Reconstruir as duas imagens, refixar e só então reiniciar.
+  Juntar `melhorias/concorrentes` em `task/personal-activation`.
 - [ ] 11.5 Backup da instalação (`npm run personal:backup -- <instalação.json>`) e `restore-check`.
 - [ ] 11.6 Reiniciar o gateway e conferir a saúde (`personal:health`), o vigia e uma tarefa de prova.
 - [ ] 11.7 Frente 4: reconstruir e refixar a imagem verify.
