@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
-import {isDesignTokensPath, parseDesignProjectConfig} from '../src/design-project-config.ts';
+import {isDesignTokensPath, parseDesignProjectConfig, type DesignProjectConfig} from '../src/design-project-config.ts';
 
 function isConfigRefusal(error: unknown): boolean {
   return error instanceof Refusal && error.code === 'DESIGN_CONFIG_INVALID';
@@ -16,9 +16,10 @@ test('tokens e sinaisGenericos entram no config', () => {
 });
 
 test('sem as chaves novas o config fica igual', () => {
-  const config = parseDesignProjectConfig(JSON.stringify({routes: {'/': {dark: true}}}));
-  assert.deepEqual(config, {routes: {'/': {dark: true, bareStates: [], reaches: [], loginState: false}}});
+  const config: DesignProjectConfig = parseDesignProjectConfig(JSON.stringify({routes: {'/': {dark: true}}}));
   assert.equal(config.genericSignals, undefined);
+  assert.equal(config.tokens, undefined);
+  assert.deepEqual(config, {routes: {'/': {dark: true, bareStates: [], reaches: [], loginState: false}}});
   assert.deepEqual(parseDesignProjectConfig(undefined), {routes: {}});
 });
 
