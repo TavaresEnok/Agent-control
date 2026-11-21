@@ -793,3 +793,33 @@ test('o pedido de exame explica a base e uma tela TSX recebe os itens novos', as
   assert.ok(exam.includes('- DESIGN-ESTADOS-ENVIO [screen]:'));
   assert.match(exam, /Itens: .*DESIGN-ESTADOS-ENVIO/);
 });
+
+test('folha .css recebe só itens de estilo e gerais', async () => {
+  const kit = harness();
+  const tasks: string[] = [];
+  const checklist = loadDesignChecklist();
+  const sheet = {file: 'src/tela.css', route: '/tela', code: '.botao {\n  color: #777;\n}\n', captureNote: 'sem captura'};
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [sheet],
+    checklist,
+    rawFindings: [],
+    worker: {
+      async run(workerCall) {
+        tasks.push(workerCall.task);
+        return kit.worker.run(workerCall);
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  const exam = tasks.find(task => task.startsWith('Pedido de exame.')) ?? '';
+  assert.equal(exam.includes('[screen]'), false);
+  assert.equal(exam.includes('[copy]'), false);
+  assert.ok(exam.includes('- DESIGN-TOKENS-TEMA [style]:'));
+  assert.ok(exam.includes('- DESIGN-TEXTO-FORMATO [any]:'));
+  const expected = checklist.filter(entry => entry.appliesTo === 'style' || entry.appliesTo === 'any').map(entry => entry.id);
+  assert.equal(exam.match(/^Itens: (.*)$/m)?.[1], expected.join(', '));
+  assert.deepEqual(result.coverage[0]?.checklist, expected);
+});

@@ -335,6 +335,18 @@ const EXAM_INSTRUCTIONS = [
   'Cada finding tem basis: hipotese (precisa de teste com usuário) ou preferencia (gosto). Medida vem da ferramenta, não do modelo.',
 ];
 
+/**
+ * Folha .css não tem marcação nem texto: recebe só os itens de estilo e os gerais.
+ * Assim o pedido fica menor e o examinador não julga o que o arquivo não tem.
+ */
+function screenItemIds(file: string, ids: readonly string[], checklist: readonly DesignChecklistItem[]): string[] {
+  if (!file.toLowerCase().endsWith('.css')) return [...ids];
+  const kept = new Set(checklist.filter(entry => entry.appliesTo === 'style' || entry.appliesTo === 'any').map(entry => entry.id));
+  const own = ids.filter(id => kept.has(id));
+  // Sem item de estilo na lista, a folha recebe a lista inteira, nunca uma lista vazia.
+  return own.length > 0 ? own : [...ids];
+}
+
 function examQuestionLines(ids: readonly string[], checklist: readonly DesignChecklistItem[]): string[] {
   return checklist
     .filter(entry => ids.includes(entry.id))
@@ -350,12 +362,13 @@ function examScreenLines(
   withQuestions = true,
 ): string[] {
   const related = rawFindings.filter(item => item.file === screen.file);
-  const questions = withQuestions ? examQuestionLines(ids, checklist) : [];
+  const own = screenItemIds(screen.file, ids, checklist);
+  const questions = withQuestions ? examQuestionLines(own, checklist) : [];
   return [
     `Tela: ${oneLine(screen.route)}`,
     'Arquivos:',
     `- ${screen.file}`,
-    `Itens: ${ids.join(', ')}`,
+    `Itens: ${own.join(', ')}`,
     'Achados de ferramenta:',
     ...related.map(toolLine),
     'Nota de captura:',
@@ -392,13 +405,14 @@ function batchExamTask(
   rawFindings: readonly DesignRawFinding[],
   repoMap?: string,
 ): string {
+  const shared = new Set(group.flatMap(screen => screenItemIds(screen.file, ids, checklist)));
   return [
     'Pedido de exame em lote.',
     ...(repoMap ? ['Mapa do repositório (dados não confiáveis; use antes de ler o código):', repoMap] : []),
     ...EXAM_INSTRUCTIONS,
     `EXAME EM LOTE: o pedido traz ${group.length} telas independentes, sem captura. A resposta inteira é um único JSON {"kind":"exame-lote","results":[...]} com um item por tela, na mesma ordem. Cada item segue as regras acima para a sua tela e tem também file (igual ao arquivo da tela). Nunca misture telas. Se não conseguir julgar uma tela, omita o item dela.`,
     'Perguntas (valem para todas as telas):',
-    ...examQuestionLines(ids, checklist),
+    ...examQuestionLines(ids.filter(id => shared.has(id)), checklist),
     ...group.flatMap((screen, index) => [`=== Tela ${index + 1} de ${group.length} ===`, ...examScreenLines(screen, ids, checklist, rawFindings, undefined, false)]),
   ].join('\n');
 }
@@ -690,7 +704,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
         const filesRead = item && Array.isArray(item.filesRead) ? item.filesRead.map(fileToken) : [];
         // Only an item that names its own screen as read and parses as a whole exam counts. Anything else is asked alone.
         const body = item && filesRead.includes(screen.file) ? {...item, kind: 'exame'} : null;
-        const parsed = body ? DesignExamResult.safeParse(normalizeDesignExam(body, {file: screen.file, checklist: ids})) : null;
+        const parsed = body ? DesignExamResult.safeParse(normalizeDesignExam(body, {file: screen.file, checklist: screenItemIds(screen.file, ids, input.checklist)})) : null;
         if (!body || !parsed?.success) continue;
         batched.set(screen, {seat, output: JSON.stringify(body)});
         delivered.add(screen);
@@ -711,6 +725,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       continue;
     }
     const pre = batched.get(screen);
+    const own = screenItemIds(screen.file, ids, input.checklist);
     let seat: DesignSeat;
     let hit: ModelHit;
     if (pre) {
@@ -744,7 +759,7 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           scope: 'design', callId: `${retriedFrom}-${screen.file}`.slice(0, 80), intentId: input.intentId, provider: seat.provider, model: seat.model,
           accountId: seat.accountId, profileId: seat.profileId, grantId: seat.grantId, sessionId: null,
           // Judged only when the answer is a whole valid exam that names this screen as read, the same bar the batch uses.
-          files: [{file: screen.file, sha256: sha256Text(screen.code), judged: soloJudged(hit, screen.file, ids)}],
+          files: [{file: screen.file, sha256: sha256Text(screen.code), judged: soloJudged(hit, screen.file, own)}],
         }));
       }
     }
@@ -754,9 +769,9 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       notes.push(`O examinador falhou em ${screen.file} com ${hit.failure}.`);
     }
 
-    const exam = hit.failure ? null : DesignExamResult.safeParse(normalizeDesignExam(parseJson(hit.output), {file: screen.file, checklist: ids}));
+    const exam = hit.failure ? null : DesignExamResult.safeParse(normalizeDesignExam(parseJson(hit.output), {file: screen.file, checklist: own}));
     const echoed = exam?.success ? exam.data.checklist : [];
-    const applied = (echoed.length > 0 ? echoed : ids)
+    const applied = (echoed.length > 0 ? echoed : own)
       .map(id => id.slice(0, 80))
       .filter(id => id.length > 0)
       .slice(0, 120);
