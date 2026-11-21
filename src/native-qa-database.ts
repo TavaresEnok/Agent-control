@@ -1,3 +1,4 @@
+import {redactUnknownSecrets} from './verify-redact.ts';
 import {randomBytes} from 'node:crypto';
 import {z} from 'zod';
 import {Refusal} from './contracts.ts';
@@ -71,7 +72,10 @@ export async function withNativeQaDatabase<T>(docker:DockerDaemon,jobId:string,s
 /** Rewrite multiplexed Docker logs so a printed database URL does not keep its password. */
 export function redactQaDatabaseSecrets(logs:Buffer){
  const parts:Buffer[]=[];let offset=0;
- const hide=(text:string)=>text.replace(/postgresql:\/\/([^:\s/]+):([^@\s/]+)@/g,'postgresql://$1:***@').replace(/POSTGRES_PASSWORD=\S+/g,'POSTGRES_PASSWORD=***');
+ // The database URL and POSTGRES_PASSWORD first, then the shared secret patterns (src/verify-redact.ts).
+ // The ellipsis marks a value as already masked, so the shared patterns leave it; it becomes *** at the end.
+ const hide=(text:string)=>redactUnknownSecrets(text.replace(/postgresql:\/\/([^:\s/]+):([^@\s/]+)@/g,'postgresql://$1:\u2026@').replace(/POSTGRES_PASSWORD=\S+/g,'POSTGRES_PASSWORD=\u2026'))
+  .replace(/(postgresql:\/\/[^:\s/]+:)\u2026@/g,'$1***@').replace(/POSTGRES_PASSWORD=\u2026/g,'POSTGRES_PASSWORD=***');
  while(offset+8<=logs.length){
   const length=logs.readUInt32BE(offset+4);
   if(length>logs.length-offset-8)return logs;

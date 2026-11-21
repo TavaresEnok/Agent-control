@@ -39,3 +39,20 @@ test('legacy quarantine recovers interrupted publish and post-encryption cuts',a
 test('known credential in task is refused before launch; safe task remains valid',()=>{const secret='synthetic-'+randomBytes(24).toString('hex');assert.throws(()=>assertNoNativeTaskSecrets('please use '+secret,[secret]),/NATIVE_EXECUTION_SECRET_IN_TASK/);assert.doesNotThrow(()=>assertNoNativeTaskSecrets('safe request',[secret]));});
 
 test('legacy artifact without redaction snapshot is held with explicit diagnostic',async()=>{const {generateKeyPairSync}=await import('node:crypto'),{readNativeArtifactSecrets}=await import('../src/native-execution-secret-snapshot.ts');await assert.rejects(readNativeArtifactSecrets('/tmp/ac-absent-'+randomBytes(16).toString('hex'),'job',generateKeyPairSync('ed25519').privateKey),/NATIVE_ARTIFACT_SECRET_SCAN_UNAVAILABLE/);});
+
+test('native and QA logs mask secrets nobody declared: URL passwords, provider keys, JWTs and Bearer tokens', async () => {
+ const {redactNativeDockerLogs} = await import('../src/native-execution-redaction.ts');
+ const {redactQaDatabaseSecrets} = await import('../src/native-qa-database.ts');
+ const frame = (text: string) => {const body = Buffer.from(text), head = Buffer.alloc(8); head[0] = 1; head.writeUInt32BE(body.length, 4); return Buffer.concat([head, body]);};
+ const body = (logs: Buffer) => logs.subarray(8).toString('utf8');
+ const key = 'sk-ant-' + 'a1B2c3D4e5F6g7H8i9J0'.repeat(2);
+ const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJub21lIn0.c2lnbmF0dXJlLWFxdWktYmVt';
+ const printed = `DATABASE_URL=postgres://nexo:SenhaDoBanco123@db:5432/isp\nANTHROPIC=${key}\nAuthorization: Bearer ${jwt}\nlinha comum 42\n`;
+ const native = body(redactNativeDockerLogs(frame(printed), []));
+ for (const leaked of ['SenhaDoBanco123', key, jwt]) assert.ok(!native.includes(leaked), leaked);
+ assert.match(native, /linha comum 42/);
+ const qa = body(redactQaDatabaseSecrets(frame(`conectando em postgresql://qa:segredo-qa@ac-db:5432/t\nPOSTGRES_PASSWORD=outro\ntoken=${key}\n`)));
+ assert.match(qa, /postgresql:\/\/qa:\*\*\*@ac-db:5432\/t/);
+ assert.match(qa, /POSTGRES_PASSWORD=\*\*\*/);
+ assert.ok(!qa.includes(key) && !qa.includes('segredo-qa') && !qa.includes('outro'));
+});

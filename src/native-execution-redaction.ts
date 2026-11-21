@@ -1,5 +1,6 @@
 import {redactSecrets} from '../upstream/cezar/packages/cezar/dist/core/secret-redaction.js';
 import {Refusal} from './contracts.ts';
+import {redactUnknownSecrets} from './verify-redact.ts';
 
 /** Docker non-TTY multiplex stream. Validate every frame before emitting any
  * bytes; redact on complete per-stream text so a value split across frames
@@ -24,7 +25,9 @@ export function redactNativeDockerLogs(bytes:Buffer,secrets:readonly string[]):B
  for(let stream=0;stream<streams.length;stream++){
   if(!streams[stream]!.length)continue;
   let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(streams[stream]!));}catch{throw new Refusal('NATIVE_RETIREMENT_LOG_INVALID');}
-  const redacted=redactSecrets(text,secrets);redactedStreams.push(redacted);const payload=Buffer.from(redacted),header=Buffer.alloc(8);header[0]=stream+1;header.writeUInt32BE(payload.length,4);result.push(header,payload);
+  // Known values first (the job's own credentials), then the shared patterns (src/verify-redact.ts): a key, token or
+  // URL password the agent printed from the project (an .env, a config) is masked even though nobody declared it.
+  const redacted=redactUnknownSecrets(redactSecrets(text,secrets));redactedStreams.push(redacted);const payload=Buffer.from(redacted),header=Buffer.alloc(8);header[0]=stream+1;header.writeUInt32BE(payload.length,4);result.push(header,payload);
  }
  if(secrets.some(secret=>secret.length>0&&redactedStreams.join('').includes(secret)))return frameDiagnostic('NATIVE_LOGS_WITHHELD_CROSS_STREAM_SECRET');
  const safe=Buffer.concat(result);if(safe.length>1048576)throw new Refusal('NATIVE_RETIREMENT_LOG_INVALID');return safe;
