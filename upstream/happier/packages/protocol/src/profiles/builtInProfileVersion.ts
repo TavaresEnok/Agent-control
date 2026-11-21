@@ -1,1 +1,0 @@
-export const BUILT_IN_BACKEND_PROFILE_VERSION = '1.0.0';

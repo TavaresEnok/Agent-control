@@ -1,1 +1,0 @@
-ALTER TABLE `SessionMessage` ADD COLUMN `rowRevision` BIGINT NOT NULL DEFAULT 0;

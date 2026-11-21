@@ -1,1 +1,0 @@
-export const COMMAND_SUGGESTION_ROW_HEIGHT = 52;

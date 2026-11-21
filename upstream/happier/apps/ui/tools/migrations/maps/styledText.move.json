@@ -1,9 +1,0 @@
-{
-  "moves": [
-    {
-      "from": "apps/ui/sources/components/ui/text/StyledText.tsx",
-      "to": "apps/ui/sources/components/ui/text/Text.tsx"
-    }
-  ]
-}
-
