@@ -19,7 +19,7 @@ export function createInstallationAuthorityApi(service:InstallationAuthority){
    if(reader){const decoder=new TextDecoder();let timer:ReturnType<typeof setTimeout>|undefined;
     const timeout=new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new HttpFailure('REQUEST_BODY_TIMEOUT',408)),3000);});
     try{for(;;){const part=await Promise.race([reader.read(),timeout]);if(part.done)break;bytes+=part.value.byteLength;if(bytes>8192)throw new HttpFailure('REQUEST_BODY_TOO_LARGE',413);body+=decoder.decode(part.value,{stream:true});}body+=decoder.decode();}
-    finally{clearTimeout(timer);void reader.cancel().catch(()=>{});}}
+    finally{clearTimeout(timer);void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});}}
    return Response.json(await service.execute(principal,JSON.parse(body),proof),{headers});
   }catch(error){const status=(error instanceof Refusal||error instanceof HttpFailure)?error.status:error instanceof z.ZodError||error instanceof SyntaxError?400:500;
    return Response.json({error:(error instanceof Refusal||error instanceof HttpFailure)?error.code:status===400?'INVALID_CONTRACT':'INTERNAL_ERROR'},{status,headers});}

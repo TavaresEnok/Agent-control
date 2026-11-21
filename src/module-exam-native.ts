@@ -24,6 +24,7 @@ import {attestDistinctExamSessions, examSessionFor, examSubjectDigest} from './m
 import {NativeExecutionRequest, NativeExecutionSupervisor} from './native-execution-supervisor.ts';
 import {renewPersonalQuota} from './personal-runtime.ts';
 import type {ModuleRecheckReview, VerificationModuleRunInput} from './verification-modules.ts';
+import {containFailure} from './failure-log.ts';
 
 /** Uses the dedicated exam context and Capacity's project, profile and quota policy.
  * A reviewer is never silently downgraded to the examiner's provider. */
@@ -309,7 +310,7 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
         }
         // A signed terminal outcome already sealed the physical receipt and released the grant.
         // Retirement can be resumed from the journal if housekeeping fails.
-        await supervisor.retireTerminal(principal, authority, jobId).catch(() => undefined);
+        await supervisor.retireTerminal(principal, authority, jobId).catch(() => undefined /* resumed from the journal by the retirement sweep */);
         if (outcome.state === 'failed') throw new Refusal(safeFailureCode(outcome.failureCode, 'MODULE_EXAM_PROVIDER_FAILED'));
         return outcome.output;
       } catch (error) {
@@ -318,7 +319,7 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
         const journal = await ledger.pool.query('SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1', [call.grantId]);
         if (!journal.rowCount) {
           await new Capacity(ledger).transition(principal, call.grantId, authority, 'released',
-            {processId: call.grantId, state: 'not_started'}).catch(() => undefined);
+            {processId: call.grantId, state: 'not_started'}).catch(containFailure('MODULE_EXAM_GRANT_NOT_RELEASED', undefined));
         }
         if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
         throw error;

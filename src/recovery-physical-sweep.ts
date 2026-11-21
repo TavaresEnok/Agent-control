@@ -90,7 +90,7 @@ export async function sweepRestoredPhysicalInventory(input:{ledger:Ledger;princi
   const pending:string[]=[];
   for(const authority of authorities){try{await releaseAuthority(authority,input,recoveryId,advanced.epoch);}catch{pending.push(authority.kind+':'+authority.id);}}
   return {state:pending.length?'reconciled-host-release-pending' as const:'reconciled' as const,epoch:advanced.epoch,checkpoint:recorded.checkpoint,proofDigest,admissionRevision:revision,pending};
- }finally{child.stdin.end();lines.close();if(!exited){const timer=setTimeout(()=>child.kill('SIGKILL'),5000);await closed.catch(()=>{});clearTimeout(timer);}}
+ }finally{child.stdin.end();lines.close();if(!exited){const timer=setTimeout(()=>child.kill('SIGKILL'),5000);await closed.catch(()=>{/* waits for exit only; the kill timer covers a hang */});clearTimeout(timer);}}
 }
 
 /** Retry a partial host release only after the durable PG proof and admission

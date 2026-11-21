@@ -81,14 +81,14 @@ export class GitArtifacts{
   const child=spawn(this.rubyBinary,[new URL('../services/agent-control-git/helper.rb',import.meta.url).pathname],{
    env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'},stdio:['pipe','pipe','pipe'],detached:true});
   let output='',overflow=false;
-  child.stdout!.on('data',chunk=>{output+=String(chunk);if(output.length>65536){overflow=true;try{process.kill(-child.pid!,'SIGKILL');}catch{}}});
+  child.stdout!.on('data',chunk=>{output+=String(chunk);if(output.length>65536){overflow=true;try{process.kill(-child.pid!,'SIGKILL');}catch{/* the process may already be gone */}}});
   child.stderr!.resume();child.stdin!.on('error',()=>{});
   const finished=new Promise<{code:number|null;signal:NodeJS.Signals|null}>((ok,fail)=>{child.once('close',(code,signal)=>ok({code,signal}));child.once('error',fail);});
-  void finished.catch(()=>{});
-  try{await onStart(child);}catch(error){try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{}throw error;}
+  void finished.catch(()=>{/* marks the rejection handled; the promise is awaited below */});
+  try{await onStart(child);}catch(error){try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{/* the process may already be gone */}throw error;}
   child.stdin!.end(JSON.stringify({action:'compose',base,sources,destination:requested,repo}));
   let timedOut=false;
-  const timeout=setTimeout(()=>{timedOut=true;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{}},30000);
+  const timeout=setTimeout(()=>{timedOut=true;try{if(child.pid)process.kill(-child.pid,'SIGKILL');}catch{/* the process may already be gone */}},30000);
   let outcome:{code:number|null;signal:NodeJS.Signals|null};
   try{outcome=await finished;}finally{clearTimeout(timeout);}
   if(outcome.code!==0||outcome.signal||overflow||timedOut)throw new Refusal('GIT_COMPOSITION_UNCERTAIN');

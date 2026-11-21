@@ -1258,7 +1258,7 @@ export class CezarRuntime {
             completion=new Promise<number|null>((resolve,reject)=>{
               child!.once('exit',resolve);child!.once('error',reject);
             });
-            void completion.catch(()=>{});
+            void completion.catch(()=>{/* marks the rejection handled; the promise is awaited below */});
             runtime.children.add(child);
             child.once('exit',()=>runtime.children.delete(child!));
             // Observe spawn before recording a running handle; spawn errors remain uncertain.

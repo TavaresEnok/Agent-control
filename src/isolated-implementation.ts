@@ -62,7 +62,7 @@ export class IsolatedImplementation{
  }
  start(intent:Intent,authority:Authority,spec:AgentRunSpec,onEvent?:(e:AgentEvent)=>void,unit?:ManagedUnit):AgentSession{
   let open=true,canceled=false,grantId:string|undefined,execution:z.infer<typeof Launch>|undefined;
-  const stop=()=>{if(canceled)return;canceled=true;if(grantId&&execution)void this.client.perform('stop',intent.operation_id,grantId,authority,execution).catch(()=>{});};
+  const stop=()=>{if(canceled)return;canceled=true;if(grantId&&execution)void this.client.perform('stop',intent.operation_id,grantId,authority,execution).catch(()=>{/* stop is advisory; reconciliation observes the real state */});};
   this.stops.add(stop);
   const result=(async()=>{
    const binding=await readManagedUnit(this.ledger,intent);

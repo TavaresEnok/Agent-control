@@ -63,9 +63,9 @@ export class NativeArtifactFinalizer{
    await assertPhysical();
    const child=spawn('/usr/bin/ruby',[new URL('../services/agent-control-git/native_finalize.rb',import.meta.url).pathname],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',LANG:'C.UTF-8'},stdio:['pipe','ignore','ignore'],detached:true});
    child.stdin!.on('error',()=>{});
-   const finished=new Promise<{code:number|null;signal:NodeJS.Signals|null}>((ok,fail)=>{child.once('close',(code,signal)=>ok({code,signal}));child.once('error',fail);});void finished.catch(()=>{});
+   const finished=new Promise<{code:number|null;signal:NodeJS.Signals|null}>((ok,fail)=>{child.once('close',(code,signal)=>ok({code,signal}));child.once('error',fail);});void finished.catch(()=>{/* marks the rejection handled; the promise is awaited below */});
    let timer:ReturnType<typeof setTimeout>|undefined,monitor:ReturnType<typeof setInterval>|undefined;
-   const stop=()=>{if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch{}};
+   const stop=()=>{if(child.pid)try{process.kill(-child.pid,'SIGKILL');}catch{/* the process may already be gone */}};
    try{
     await new Promise<void>((ok,fail)=>{child.once('spawn',ok);child.once('error',fail);});
     if(!child.pid)throw new Refusal('NATIVE_FINALIZER_PROCESS_UNAVAILABLE');

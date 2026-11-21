@@ -24,7 +24,7 @@ export async function managedWorkspaceStream(ledger:Ledger,runtime:Pick<CezarRun
     const remaining=(connections.get(connectionKey)??1)-1;
     if(remaining)connections.set(connectionKey,remaining);else connections.delete(connectionKey);
     request.signal.removeEventListener('abort',close);
-    try{controller.close();}catch{}
+    try{controller.close();}catch{/* already closed by the reader */}
    };
    const send=(event:string,data:string)=>{
     if(closed)return;

@@ -235,7 +235,7 @@ async function waitForPaint(page: DesignPage): Promise<void> {
     () => (document.querySelector('#root')?.textContent ?? '').trim().length > 0,
     undefined,
     {timeout: 15000},
-  ).catch(() => undefined);
+  ).catch(() => undefined /* paint wait is best effort; the capture checks judge the page */);
 }
 
 /**
@@ -273,7 +273,7 @@ export async function writeDesignLoginState(targetUrl: string, login: DesignLogi
     await rm(directory, {recursive: true, force: true});
     throw error;
   } finally {
-    await browser.close().catch(() => undefined);
+    await browser.close().catch(() => undefined /* best-effort close; the result was already decided */);
   }
 }
 
@@ -327,7 +327,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
     await rm(directory, {recursive: true, force: true});
     throw error;
   } finally {
-    await commandCode('setfacl', ['-b', cred]).catch(() => undefined);
+    await commandCode('setfacl', ['-b', cred]).catch(() => undefined /* ACL reset is best effort; the credential directory is private anyway */);
   }
 }
 
@@ -382,7 +382,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
           () => document.querySelector('input[name="password"]') === null,
           undefined,
           {timeout: 15000},
-        ).catch(() => undefined);
+        ).catch(() => undefined /* a login form that stays is caught by the next capture check */);
         // Login can navigate while the password field disappears.
         guard.afterLogin();
       },
@@ -396,7 +396,7 @@ export async function openDesignBrowser(targetUrl: string): Promise<{driver: Des
       },
     };
   } catch (error) {
-    await browser.close().catch(() => undefined);
+    await browser.close().catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */);
     throw error;
   }
 }

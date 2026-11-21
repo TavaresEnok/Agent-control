@@ -8,6 +8,7 @@ import {DockerDaemon} from './sandbox-broker.ts';
 import {digest,Refusal} from './contracts.ts';
 import {requireRecoveryInventory,type RecoveryInventoryCapability} from './recovery-inventory.ts';
 import pg from 'pg';
+import {logContainedFailure} from './failure-log.ts';
 /** Trusted injection only. Provisioning is a separate disposable-lab action.
  * Every group shares the same kernel parent across controllers/state roots. */
 export const NativeResourceEnvelope=z.object({stateRoot:z.string().refine(p=>resolve(p)===p),
@@ -37,7 +38,7 @@ export class NativeResourceDockerDaemon extends DockerDaemon{
    // domain transaction concurrently waits for a nested physical operation.
    const c=new pg.Client(ledger.pool.options);await c.connect();
    try{await c.query('BEGIN');const inventory=await requireRecoveryInventory(c,ledger);if(inventory)this.bindRecoveryInventory(inventory);else this.inventory=undefined;const result=await this.callResourceFenced(action,value);await c.query('COMMIT');return result;}
-   catch(error){await c.query('ROLLBACK').catch(()=>{});throw error;}finally{await c.end();}
+   catch(error){await c.query('ROLLBACK').catch(()=>{/* the transaction error is rethrown; the connection ends below */});throw error;}finally{await c.end();}
   }
   return this.callResourceFenced(action,value);
  }
@@ -133,11 +134,11 @@ export async function admitNativeResources(input:{docker:DockerDaemon;ledger:imp
    await validate(c,false);
    const row=(await c.query('SELECT * FROM ac_native_resource_admissions WHERE job_id=$1 AND grant_id=$2 AND context_id=$3 AND manager_epoch=$4 AND admission_id=$5 FOR UPDATE',[input.jobId,input.grantId,input.authority.contextId,input.authority.epoch,token])).rows[0];
    if(!row)throw new Refusal('NATIVE_RESOURCE_ADMISSION_UNCERTAIN');
-   let proof;try{proof=await docker.cancelAdmission(input.names,token);}catch{}
+   let proof;try{proof=await docker.cancelAdmission(input.names,token);}catch{/* no proof: the admission and grant are recorded as uncertain below */}
    await c.query("UPDATE ac_native_resource_admissions SET state=$2,reason=$2,proof=$3,updated_at=clock_timestamp() WHERE job_id=$1",[input.jobId,proof?'canceled':'uncertain',proof??null]);
    if(proof)await recoverNeverCreatedManagedWriter(c,{jobId:input.jobId,grantId:input.grantId,authority:input.authority,admission:row,proof});
    await c.query("UPDATE ac_capacity_grants SET state=$2,physical_receipt=$3 WHERE id=$1",[input.grantId,proof?'released':'uncertain',proof??null]);
-  });}catch{}
+  });}catch(recordError){logContainedFailure('NATIVE_RESOURCE_CANCEL_NOT_RECORDED',recordError);}
   throw error;
  }
 }

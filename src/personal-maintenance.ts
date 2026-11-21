@@ -183,7 +183,7 @@ async function recoverInterruptedExamFromInstallation(config:Installation,jobId:
   }
   return [`Tentativa de design ${jobId} retirada sem execução (estado: failed, retirada: removed, intenção: failed).`];
  }finally{
-  if(authority)await ledger.releaseLease(authority).catch(()=>{});
+  if(authority)await ledger.releaseLease(authority).catch(()=>{/* an unreleased lease expires by itself */});
   await ledger.close();
  }
 }
@@ -225,7 +225,7 @@ async function recoverNeverStartedModuleExamFromInstallation(config:Installation
    ?`Tentativa de exame ${jobId} já estava retirada sem execução (job: failed, reserva: liberada). Nada foi alterado.`
    :`Tentativa de exame ${jobId} retirada sem execução (job: failed, reserva: liberada, contêiner de ferramentas removido: ${result.removed.join(', ')||'nenhum'}).`];
  }finally{
-  if(authority)await ledger.releaseLease(authority).catch(()=>{});
+  if(authority)await ledger.releaseLease(authority).catch(()=>{/* an unreleased lease expires by itself */});
   await ledger.close();
  }
 }
@@ -283,7 +283,7 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
    }catch(error){
     if(error instanceof Refusal&&error.code==='MANAGER_ACTIVE'){totals.busy++;lines.push(`${row.id}: contexto ocupado; repita depois.`);}
     else{totals.failed++;lines.push(`${row.id}: falhou (${error instanceof Refusal?error.code:'erro'}); repita depois.`);}
-   }finally{if(authority)await ledger.releaseLease(authority).catch(()=>{});}
+   }finally{if(authority)await ledger.releaseLease(authority).catch(()=>{/* an unreleased lease expires by itself */});}
   }
   if(selection.projectId&&lastId&&(found.length===MAX_WORK_BATCH||lastId!==found.at(-1)?.id))lines.push('Continue com --apos '+lastId+'.');
   const mb=Math.round(totals.bytes/1048576);
@@ -379,7 +379,7 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
    }
   }
   // Stopped early: continue after the last job looked at. A full pass starts over from the beginning.
-  if(apply)await writeRetentionCursor(cursorFile,stopped?lastId:undefined).catch(()=>undefined);
+  if(apply)await writeRetentionCursor(cursorFile,stopped?lastId:undefined).catch(()=>undefined/* without a cursor the next pass starts from the beginning */);
   const mb=Math.round(totals.bytes/1048576);
   const why=[...refused].sort(([a],[b])=>a<b?-1:1).map(([reason,n])=>`${reason}=${n}`).join(', ');
   const kinds=[...byCategory].sort(([a],[b])=>a<b?-1:1).map(([kind,n])=>`${kind}=${n}`).join(', ');

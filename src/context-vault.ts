@@ -163,7 +163,7 @@ export class ContextVault{
    await unlink(temp);temp=undefined;
    const directory=await open(this.root,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
    try{await directory.sync();}finally{await directory.close();}
-  }finally{key.fill(0);master?.fill(0);envelope?.fill(0);if(temp)await unlink(temp).catch(()=>{});}
+  }finally{key.fill(0);master?.fill(0);envelope?.fill(0);if(temp)await unlink(temp).catch(()=>{/* best-effort removal of a temporary file */});}
  }
  async load(raw:ManagerKeyRequest):Promise<Uint8Array>{
   const input=Request.parse(raw);let plain:Buffer|undefined;

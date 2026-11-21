@@ -59,7 +59,7 @@ export async function provisionNativeQaDatabase(docker:DockerDaemon,jobId:string
   await waitQaDatabase(docker,container,user,service.database,log);
   safeQaLog(log,'qa-service ready '+container);
   return `postgresql://${user}:${password}@${container}:5432/${service.database}`;
- }catch(error){await removeNativeQaService(docker,jobId).catch(()=>{});throw error;}
+ }catch(error){await removeNativeQaService(docker,jobId).catch(()=>{/* best-effort cleanup; the original error is what the caller sees */});throw error;}
 }
 
 /** Provision, run the test, and always remove the database and the network. */

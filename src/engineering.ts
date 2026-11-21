@@ -734,7 +734,7 @@ export class EngineeringStages{
       child=spawn(process.execPath,[verifierPath,snapshot.snapshot,intent.operation_id,node],
        {cwd:snapshot.snapshot,env:{PATH:'/usr/local/bin:/usr/bin:/bin',HOME:temporary},stdio:['ignore','pipe','pipe'],detached:true});
       this.children.add(child);child.once('exit',()=>this.children.delete(child!));
-      completion=new Promise((ok,fail)=>{child!.once('exit',ok);child!.once('error',fail);});void completion.catch(()=>{});
+      completion=new Promise((ok,fail)=>{child!.once('exit',ok);child!.once('error',fail);});void completion.catch(()=>{/* marks the rejection handled; the promise is awaited below */});
       const append=(chunk:Buffer)=>{output+=chunk.toString();if(output.length>65536){overLimit=true;stop(child);}};
       child.stdout!.on('data',append);child.stderr!.on('data',append);
       await new Promise<void>((ok,fail)=>{child!.once('spawn',ok);child!.once('error',fail);});

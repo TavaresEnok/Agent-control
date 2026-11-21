@@ -524,7 +524,7 @@ export class SandboxBroker{
     return {jobId:value.jobId,state:inspected.State.Running?'running':'uncertain'};
    const probeSchema=z.object({visible:z.array(z.string()),network:z.boolean(),uid:z.number()}).strict();
    let probe:z.infer<typeof probeSchema>|null=null;
-   try{const decoded=probeSchema.safeParse(JSON.parse(await readFile(join(work,'probe-result.json'),'utf8')));if(decoded.success)probe=decoded.data;}catch{}
+   try{const decoded=probeSchema.safeParse(JSON.parse(await readFile(join(work,'probe-result.json'),'utf8')));if(decoded.success)probe=decoded.data;}catch{/* no valid probe result reads as probe=null, judged below */}
    let implementation:unknown=null,bundle:string|undefined,verification:unknown=null,verificationIsolation:unknown=null,advice:unknown=null,adviceIsolation:unknown=null;
    if(value.advice){
     const resultPath=join(this.config.hostRoot,value.jobId,'output','advice-result.json');
@@ -749,12 +749,12 @@ export class SandboxBroker{
    if(checking)return;checking=true;
    let timeout:ReturnType<typeof setTimeout>|undefined;
    const deadline=new Promise<never>((_,fail)=>{timeout=setTimeout(()=>fail(new Error('FENCE_TIMEOUT')),2000);});
-   void Promise.race([this.ledger.tx(c=>this.ledger.fence(c,authority,true)),deadline]).catch(()=>this.docker.stop(id).catch(()=>{}))
+   void Promise.race([this.ledger.tx(c=>this.ledger.fence(c,authority,true)),deadline]).catch(()=>this.docker.stop(id).catch(()=>{/* the next monitor tick stops it again */}))
     .finally(()=>{if(timeout)clearTimeout(timeout);checking=false;});
   },1000);
   this.monitors.set(id,timer);
  }
- async close(){for(const timer of this.monitors.values())clearInterval(timer);for(const id of this.active)try{await this.docker.stop(id);}catch{}await this.ledger.close();}
+ async close(){for(const timer of this.monitors.values())clearInterval(timer);for(const id of this.active)try{await this.docker.stop(id);}catch{/* shutdown is best effort; containers are fenced by epoch */}await this.ledger.close();}
 }
 export async function brokerMain(config:SandboxBrokerConfig){
  const directory=resolve(config.socketPath,'..');await mkdir(directory,{recursive:true,mode:0o750});
@@ -794,7 +794,7 @@ export async function brokerMain(config:SandboxBrokerConfig){
   expectedShutdown=true;
   return stopping??=(async()=>{
   await new Promise<void>(resolve=>server.close(()=>resolve()));
-  try{await lock.query('SELECT pg_advisory_unlock(189234,19)');}catch{}
+  try{await lock.query('SELECT pg_advisory_unlock(189234,19)');}catch{/* release(true) destroys the connection, which drops the lock */}
   lock.release(true);await broker.close();
   })();
  };

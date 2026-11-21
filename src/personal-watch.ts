@@ -10,6 +10,7 @@ import {Refusal} from './contracts.ts';
 import {loadInstallation, type Installation} from './installation.ts';
 import {deliverPersonalPush} from './personal-push.ts';
 import {diskNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,agentConfigNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
+import {containFailure} from './failure-log.ts';
 
 const hourMs=60*60*1000;
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -176,7 +177,7 @@ export async function runPersonalWatch(argv:string[],deps:PersonalWatchDeps={}){
  try{
  const state=await readState(statePath).catch(async error=>{
   const alert=usedPercent===undefined?undefined:diskNotice(usedPercent);
-  if(alert)await notify(config.dataDirectory,alert.text).catch(()=>{});
+  if(alert)await notify(config.dataDirectory,alert.text).catch(containFailure('WATCH_DISK_ALERT_NOT_SENT',undefined));
   throw error;
  });
  const up=await probe(`http://127.0.0.1:${config.http.port}/api/v1/ac/health`);

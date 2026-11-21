@@ -7,6 +7,7 @@ import {z} from 'zod';
 import {Refusal} from './contracts.ts';
 import {privateDirectory} from './installation.ts';
 import {withPersonalProjectCreation} from './personal-panel-projects.ts';
+import {containFailure} from './failure-log.ts';
 
 const run = promisify(execFile);
 const hostName = /^(?=.{1,253}$)(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9])$/;
@@ -302,7 +303,7 @@ export async function confirmPersonalHost(dataDirectory: string, input: {host: s
   }
   try { await writeHosts(dataDirectory, [...hosts, record]); }
   catch (error) {
-   if (added) await writeKnownHostLines(dataDirectory, lines.filter(item => item !== line)).catch(() => undefined);
+   if (added) await writeKnownHostLines(dataDirectory, lines.filter(item => item !== line)).catch(containFailure('SSH_KNOWN_HOST_ROLLBACK_FAILED', undefined));
    throw error;
   }
   return record;
@@ -532,14 +533,14 @@ export async function createRemotePersonalProject(input: {
   try {
    await run('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', 'clone', '--', remoteGitUrl(host, path), dest],
     {encoding: 'utf8', timeout: 120000, env: gitEnv(input.dataDirectory)});
-  } catch { await rm(dest, {recursive: true, force: true}).catch(() => undefined); throw new Refusal('SSH_FAILED', 503); }
+  } catch { await rm(dest, {recursive: true, force: true}).catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */); throw new Refusal('SSH_FAILED', 503); }
   let branch = '';
   try {
    branch = (await run('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-C', dest, 'symbolic-ref', '--short', 'HEAD'],
     {encoding: 'utf8', timeout: 15000, env: {PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0'}})).stdout.trim();
   } catch { branch = ''; }
   if (!branchName.test(branch) || branch.split('/').includes('..')) {
-   await rm(dest, {recursive: true, force: true}).catch(() => undefined);
+   await rm(dest, {recursive: true, force: true}).catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */);
    throw new Refusal('REPOSITORY_BRANCH_REQUIRED', 409);
   }
   let created: {projectId: string};
@@ -555,13 +556,13 @@ export async function createRemotePersonalProject(input: {
      return added;
     } catch (error) {
      const kept = await projectIdForRepository(input.installationPath, dest);
-     if (kept) await rememberRemoteLocked(input.dataDirectory, {projectId: kept, hostId: hostNow.id, path, branch}).catch(() => undefined);
+     if (kept) await rememberRemoteLocked(input.dataDirectory, {projectId: kept, hostId: hostNow.id, path, branch}).catch(containFailure('SSH_REMOTE_LINK_NOT_RECORDED', undefined));
      throw error;
     }
    });
   } catch (error) {
    const kept = await projectIdForRepository(input.installationPath, dest);
-   if (!kept) await rm(dest, {recursive: true, force: true}).catch(() => undefined);
+   if (!kept) await rm(dest, {recursive: true, force: true}).catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */);
    rethrowAdd(error);
   }
   const restarting = input.underSystemd;

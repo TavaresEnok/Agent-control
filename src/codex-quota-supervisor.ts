@@ -6,6 +6,7 @@ import {fstatSync} from 'node:fs';
 import type {Ledger} from './ledger.ts';
 import {Refusal} from './contracts.ts';
 import type {CodexReadonlySupervisor} from './codex-readonly-quota-source.ts';
+import {logContainedFailure} from './failure-log.ts';
 const exec=promisify(execFile);
 /** Container identity and journal survive controller death. No Docker socket is mounted.
  * Fixed image/command only; network disabled deliberately limits this executor to lab fixtures. */
@@ -65,7 +66,7 @@ export class CodexQuotaDockerSupervisor implements CodexReadonlySupervisor{
      await c.query('UPDATE ac_provider_bindings SET probe_uncertain=false,lease_id=NULL,lease_until=NULL WHERE account_id=$1',[row.account_id]);
     }
    }return true;
-  }catch{return false;}
+  }catch(error){logContainedFailure('QUOTA_RUN_RECONCILE_FAILED',error);return false;}
   });
  }
  async reconcilePending():Promise<number>{

@@ -42,6 +42,7 @@ import {registerVerificationRoutes,type VerificationRouteDeps} from './verify-ap
 import {listSecurityReports,readAchadoMarkdown,readSecurityReport} from './verify-report.ts';
 import {recheckFindings,requestCorrection} from './verify-remediate.ts';
 import {archivedInView,childRunTaskId,clipPanelTitle,planTaskDisplayTitle,type PlanTaskSummary} from './personal-run-title.ts';
+import {containFailure} from './failure-log.ts';
 
 // Only immutable public UI files are served without a session. Never delegate an
 // unauthenticated request to the embedded server, which owns privileged routes.
@@ -62,7 +63,8 @@ function localNativeRequest(url:URL,raw:Request){
 }
 const seenRuns=new Map<string,string>();
 const planTaskList=z.array(z.object({id:z.string(),title:z.string().optional(),summary:z.string().optional(),name:z.string().optional(),writePaths:z.array(z.string()).optional()}).passthrough());
-async function planTasksByRun(ledger:Ledger,runIds:readonly string[]):Promise<Map<string,PlanTaskSummary[]>>{
+/** Plan tasks per child run, for panel titles. A failed read is logged and leaves the default titles. */
+export async function planTasksByRun(ledger:Pick<Ledger,'pool'>,runIds:readonly string[]):Promise<Map<string,PlanTaskSummary[]>>{
   const ids=runIds.filter(id=>z.uuid().safeParse(id).success);
   const found=new Map<string,PlanTaskSummary[]>();
   if(!ids.length)return found;
@@ -71,7 +73,7 @@ async function planTasksByRun(ledger:Ledger,runIds:readonly string[]):Promise<Ma
     JOIN ac_manager_plans p ON p.context_id=i.context_id
     LEFT JOIN ac_managed_executions m ON m.parent_intent_id=COALESCE(i.parent_intent_id,i.id) AND m.context_id=i.context_id
     WHERE i.run_id = ANY($1::uuid[])
-    ORDER BY i.run_id, CASE WHEN (m.recipe->>'proposalRevision') ~ '^[0-9]+$' AND p.revision=(m.recipe->>'proposalRevision')::int THEN 0 ELSE 1 END, p.revision DESC`,[ids]).catch(()=>({rows:[] as {run_id:string;tasks:unknown}[]}))).rows;
+    ORDER BY i.run_id, CASE WHEN (m.recipe->>'proposalRevision') ~ '^[0-9]+$' AND p.revision=(m.recipe->>'proposalRevision')::int THEN 0 ELSE 1 END, p.revision DESC`,[ids]).catch(containFailure('PANEL_PLAN_TASKS_UNAVAILABLE',{rows:[] as {run_id:string;tasks:unknown}[]}))).rows;
   for(const row of rows){
     const parsed=planTaskList.safeParse(row.tasks);
     found.set(String(row.run_id),parsed.success?parsed.data:[]);
@@ -83,7 +85,7 @@ async function ownerTitled<T extends {title?:unknown}>(ledger:Ledger,run:T,tasks
   const title=typeof run.title==='string'?run.title:'';
   const match=/^Intent ([0-9a-f-]{36})$/.exec(title);
   if(match){
-    const row=(await ledger.pool.query('SELECT context_id FROM ac_intents WHERE id=$1',[match[1]]).catch(()=>({rows:[]}))).rows[0];
+    const row=(await ledger.pool.query('SELECT context_id FROM ac_intents WHERE id=$1',[match[1]]).catch(containFailure('PANEL_TITLE_INTENT_UNAVAILABLE',{rows:[]}))).rows[0];
     const text=row?await ownerRequest(String(row.context_id),match[1]):undefined;
     if(text)run={...run,title:clipPanelTitle(text)};
   }else if(childRunTaskId(title)){

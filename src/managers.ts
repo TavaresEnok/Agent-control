@@ -146,11 +146,11 @@ export class ManagerRegistry{
    entry.authority=Object.freeze(await this.ledger.acquire(entry.input.principal,entry.input.contextId,randomUUID(),entry.input.profileId));
    if(entry.cancelled||this.closed)throw new Refusal('MANAGER_STOPPED');
    const creating=Promise.resolve().then(()=>this.factory({...entry.input,key:entry.key,authority:{...entry.authority!}}));
-   void creating.then(endpoint=>{if(entry.cancelled)void Promise.resolve().then(()=>endpoint.close()).catch(()=>{});},()=>{});
+   void creating.then(endpoint=>{if(entry.cancelled)void Promise.resolve().then(()=>endpoint.close()).catch(()=>{/* the endpoint of a cancelled manager is discarded */});},()=>{});
    entry.endpoint=await this.bounded(creating,this.options.startupTimeoutMs??15000,entry.abort.signal);
    if(entry.cancelled||this.closed)throw new Refusal('MANAGER_STOPPED');
    const starting=entry.endpoint.start();
-   void starting.then(()=>{if(entry.cancelled)void Promise.resolve().then(()=>entry.endpoint?.close()).catch(()=>{});},()=>{});
+   void starting.then(()=>{if(entry.cancelled)void Promise.resolve().then(()=>entry.endpoint?.close()).catch(()=>{/* the endpoint of a cancelled manager is discarded */});},()=>{});
    await this.bounded(starting,this.options.startupTimeoutMs??15000,entry.abort.signal);
    await this.validate(entry,entry.authority);
    if(entry.cancelled||this.closed)throw new Refusal('MANAGER_STOPPED');

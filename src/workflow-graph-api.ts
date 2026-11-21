@@ -45,6 +45,6 @@ async function readBoundedJson(request:Request,timeoutMs:number):Promise<unknown
   for(;;){const chunk=await Promise.race([reader.read(),deadline,aborted]);if(chunk.done)break;total+=chunk.value.byteLength;if(total>262144)throw new WorkflowBodyError(413,'REQUEST_BODY_TOO_LARGE');chunks.push(chunk.value);}
   const data=new Uint8Array(total);let offset=0;for(const chunk of chunks){data.set(chunk,offset);offset+=chunk.byteLength;}
   return JSON.parse(new TextDecoder().decode(data));
- }catch(error){void reader.cancel().catch(()=>{});throw error;}
+ }catch(error){void reader.cancel().catch(()=>{/* best-effort cancel of a stream that is abandoned anyway */});throw error;}
  finally{clearTimeout(timer);request.signal.removeEventListener('abort',onAbort);}
 }

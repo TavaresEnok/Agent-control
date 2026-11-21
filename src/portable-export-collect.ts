@@ -30,5 +30,5 @@ export async function collectPortableMetadata(ledger:Ledger,principal:string,pro
    return {...envelope,digest:digest(envelope)};
   }
   throw new Refusal('PORTABLE_EXPORT_PAGE_LIMIT');
- }finally{if(exportId)await service.release(principal,projectId,contextId,exportId).catch(()=>{});}
+ }finally{if(exportId)await service.release(principal,projectId,contextId,exportId).catch(()=>{/* an unreleased export reservation expires by itself */});}
 }

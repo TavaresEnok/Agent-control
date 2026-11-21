@@ -326,7 +326,7 @@ export async function runPersonalModuleCli(
     const aborted = new Promise<never>((_, reject) => {
       rejectAbort = reject;
     });
-    void aborted.catch(() => undefined);
+    void aborted.catch(() => undefined /* marks the rejection handled; raced below */);
     let stopLease: () => void = () => {};
     stopLease = keepPersonalVerifyLease(ledger, authority, deps?.leaseHeartbeatMs ?? 5000, () => {
       void abortPersonalVerifyForLeaseLoss({
@@ -395,7 +395,7 @@ export async function runPersonalModuleCli(
           const runSignals = [signal, collectorAbort.signal];
           if (deps?.prontidaoProbeOptions?.signal) runSignals.push(deps.prontidaoProbeOptions.signal);
           const task = runningTask = execute(AbortSignal.any(runSignals));
-          void task.catch(() => undefined);
+          void task.catch(() => undefined /* marks the rejection handled; raced below */);
           return await Promise.race([task, aborted]);
         },
         () => {
@@ -428,7 +428,7 @@ export async function runPersonalModuleCli(
         await releasePersonalVerifyLease(
           {pool: {query: (sql, params) => ledger.pool.query(sql, (params ?? []) as never[])}},
           authority,
-        ).catch(() => undefined);
+        ).catch(() => undefined /* an unreleased lease expires by itself */);
       }
       await ledger.close();
     } finally {

@@ -92,7 +92,7 @@ export class NativeQa{
   const directory=await open(this.paths(jobId).area,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{await directory.sync();}finally{await directory.close();}
  }
  private async failUnstarted(principal:string,authority:Authority,job:Record<string,any>,failureCode:string,exitCode:number,logs:Buffer){
-  if(this.contract.services)await removeNativeQaService(this.docker,job.id).catch(()=>{});
+  if(this.contract.services)await removeNativeQaService(this.docker,job.id).catch(()=>{/* service removal is retried by reconciliation */});
   let stored=logs.length?logs:this.frameQaText(failureCode);
   try{assertCompleteQaLogs(stored);}catch{stored=this.frameQaText((stored.toString('utf8').split('\n').filter(Boolean).slice(-40).join('\n'))||failureCode);}
   if(this.contract.services)stored=redactQaDatabaseSecrets(stored);
@@ -232,7 +232,7 @@ export class NativeQa{
   catch(error){
    // A received create refusal proves no container exists. A lost start response stays uncertain.
    if(!(error instanceof Refusal)||error.code!=='DOCKER_CREATE_REFUSED')throw error;
-   if(extra.length)await removeNativeQaService(this.docker,stage.id).catch(()=>{});
+   if(extra.length)await removeNativeQaService(this.docker,stage.id).catch(()=>{/* service removal is retried by reconciliation */});
    const diagnostic=Buffer.from(JSON.stringify({source:'controller',error:'DOCKER_CREATE_REFUSED'}));
    const receipt={schemaVersion:1,jobId:stage.id,artifactId:artifact.id,grantId,sessionId:stage.session_id,contractDigest:this.verifierDigest,executionStarted:false,exitCode:-1,status:'missing_result',logSha256:createHash('sha256').update(diagnostic).digest('hex'),logsAvailable:false,synthetic:false,modelInference:false,failureCode:'DOCKER_CREATE_REFUSED'};
    await this.ledger.tx(async c=>{await this.authorize(c,principal,authority,intentId,true);
@@ -274,7 +274,7 @@ export class NativeQa{
   * a second provisioning would replace the first database and network under the test it already started. */
  private async launchPreparedTest(principal:string,authority:Authority,job:Record<string,any>){
   const prior=this.launching.get(job.id);
-  if(prior){await prior.catch(()=>{});return {state:'running' as const};}
+  if(prior){await prior.catch(()=>{/* only waits for the prior pass; that pass reports its own failure */});return {state:'running' as const};}
   if(await this.docker.inspect('ac-native-qa-'+job.id))return {state:'running' as const};
   const run=this.launchPreparedTestOnce(principal,authority,job);
   this.launching.set(job.id,run);
@@ -300,7 +300,7 @@ export class NativeQa{
   }
   await this.rememberContainer(principal,authority,job,id);
   const prep=await this.docker.inspect('ac-native-qa-prepare-'+job.id);
-  if(prep&&!prep.State.Running)await this.docker.remove(prep.Id).catch(()=>{});
+  if(prep&&!prep.State.Running)await this.docker.remove(prep.Id).catch(()=>{/* container removal is retried by reconciliation */});
   return 'launched' as const;
  }
  /** Advance a configured QA job from the prepare container to the test container. */
@@ -328,7 +328,7 @@ export class NativeQa{
   const oom=(prep.State as {OOMKilled?:boolean}).OOMKilled===true;
   const canceled=job.stop_reason==='canceled';
   if(canceled||job.stop_reason==='timeout'||phaseOver||oom||prep.State.ExitCode!==0){
-   await this.docker.remove(prep.Id).catch(()=>{});
+   await this.docker.remove(prep.Id).catch(()=>{/* container removal is retried by reconciliation */});
    return this.failUnstarted(principal,authority,job,canceled?'QA_CANCELED':'QA_PREPARE_FAILED',prep.State.ExitCode||1,logs);
   }
   return this.launchPreparedTest(principal,authority,job);
@@ -337,7 +337,7 @@ export class NativeQa{
   * at the same time for one job, or both create the same container and the loser fails the stage. */
  private readonly reconciling=new Map<string,Promise<unknown>>();
  async reconcile(principal:string,authority:Authority,id:string):Promise<{state:'completed'|'failed'|'running'|'uncertain';receipt?:any}>{
-  const next=(this.reconciling.get(id)??Promise.resolve()).catch(()=>{}).then(()=>this.reconcileOnce(principal,authority,id));
+  const next=(this.reconciling.get(id)??Promise.resolve()).catch(()=>{/* only serializes passes; each pass reports its own failure */}).then(()=>this.reconcileOnce(principal,authority,id));
   this.reconciling.set(id,next);
   try{return await next;}finally{if(this.reconciling.get(id)===next)this.reconciling.delete(id);}
  }

@@ -102,7 +102,7 @@ export async function teamMessage(job:Job,options:TeamFeedOptions):Promise<TeamM
    :`${name} falhou${result?.failureCode?' ('+result.failureCode+')':''}.${said?'\n«'+said+'»':''}`};
  }
  let verdict:{verdict?:string;findings?:{severity:string;summary:string}[]}|null=null;
- try{verdict=result?.output?JSON.parse(result.output):null;}catch{}
+ try{verdict=result?.output?JSON.parse(result.output):null;}catch{/* unparsable output reads as no verdict, reported below */}
  if(!ok||!verdict?.verdict)return {id,text:`${name} não concluiu a revisão${result?.failureCode?' ('+result.failureCode+')':''}.`};
  const findings=(verdict.findings??[]).slice(0,10).map(f=>`• [${f.severity}] ${clip(f.summary,300)}`).join('\n');
  return {id,text:`${name} ${verdict.verdict==='pass'?'aprovou':'rejeitou'}${findings?':\n'+findings:' sem apontamentos'}.`};

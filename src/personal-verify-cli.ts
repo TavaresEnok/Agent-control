@@ -145,7 +145,7 @@ export async function runPersonalVerifySession(
  let runId:string|undefined;
  let rejectAbort:(error:unknown)=>void=()=>{};
  const aborted=new Promise<never>((_,reject)=>{rejectAbort=reject;});
- void aborted.catch(()=>undefined);
+ void aborted.catch(()=>undefined/* marks the rejection handled; raced below */);
  let stopLease:()=>void=()=>{};
  stopLease=keepPersonalVerifyLease(ledger,authority,5000,()=>{
   void abortPersonalVerifyForLeaseLoss({
@@ -162,7 +162,7 @@ export async function runPersonalVerifySession(
      ...resolved.input,
      observe(pending){
       job=pending;
-      void job.catch(()=>undefined);
+      void job.catch(()=>undefined/* marks the rejection handled; the owner awaits it and reports */);
      },
     });
     runId=started.id;
@@ -172,7 +172,7 @@ export async function runPersonalVerifySession(
     return started.id;
    },
    ()=>{
-    void worker?.stop?.().catch(()=>undefined);
+    void worker?.stop?.().catch(()=>undefined/* stop is advisory on the way out */);
    },
   );
  }catch(error){

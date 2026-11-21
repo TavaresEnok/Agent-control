@@ -225,7 +225,7 @@ async function disposableIgnored(root:string,relative:string){
  if(!relative||relative.endsWith('/')||relative.startsWith('/')||relative.split('/').some(part=>!part||part==='.'||part==='..'))return false;
  const full=join(root,relative);
  if(dirname(full)!==root&&await realpath(dirname(full)).catch(()=>'')!==dirname(full))return false;
- return (await lstat(full).catch(()=>undefined))?.isSymbolicLink()===true;
+ return (await lstat(full).catch(()=>undefined/* absent or unreadable means not present here */))?.isSymbolicLink()===true;
 }
 
 type Verdict<T>={ok:true;facts:T}|{ok:false;reason:string};
@@ -299,7 +299,7 @@ async function proveWorktree(config:Installation,entry:WorktreeEntry,deps:Requir
   if(!await disposableIgnored(entry.path,line.slice(3)))return no('há arquivos ignorados com conteúdo próprio');
  }
  let last=Math.max(entry.registeredAt,Number(await deps.git(repo,['log','-1','--format=%ct',tipId]).then(r=>r.stdout.trim()).catch(()=>'0'))*1000||0);
- for(const name of ['HEAD','index','logs/HEAD'])last=Math.max(last,(await stat(join(gitDir,name)).catch(()=>undefined))?.mtimeMs??0);
+ for(const name of ['HEAD','index','logs/HEAD'])last=Math.max(last,(await stat(join(gitDir,name)).catch(()=>undefined/* absent or unreadable means not present here */))?.mtimeMs??0);
  const idle=deps.now()-last;
  if(idle<WORKTREE_IDLE_MS)return no(`atividade há ${hours(Math.max(idle,0))} h (mínimo ${hours(WORKTREE_IDLE_MS)} h)`);
  try{if(await deps.processInside(entry.path))return no('há processo usando o diretório');}catch{return no('não foi possível provar que nenhum processo usa o diretório');}
@@ -362,7 +362,7 @@ export async function registerRoundTemp(config:Installation,input:{projectId:str
  const root=await realpath(tempRoot(deps));
  if(!token.safeParse(input.roundId).success||!validTempPath(input.path,root))throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  project(config,input.projectId);
- const info=await lstat(input.path).catch(()=>undefined);
+ const info=await lstat(input.path).catch(()=>undefined/* absent path is refused just below */);
  if(!info||info.isSymbolicLink()||!info.isDirectory()||info.uid!==process.getuid?.()||await realpath(input.path)!==input.path)throw new Refusal('RETENTION_REGISTRATION_INVALID',400);
  const {dev,ino}=identity(info),now=(deps.now??Date.now)();
  const id=randomUUID(),nonce=randomBytes(32).toString('hex');
@@ -377,7 +377,7 @@ export async function registerRoundTemp(config:Installation,input:{projectId:str
   await mutateRegistry(config,registry=>{
    registry.temps.push({id,projectId:input.projectId,roundId:input.roundId,path:input.path,dev,ino,nonceDigest:createHash('sha256').update(nonce).digest('hex'),registeredAt:now});
   });
- }catch(error){await unlink(join(input.path,MARKER)).catch(()=>{});throw error;}
+ }catch(error){await unlink(join(input.path,MARKER)).catch(()=>{/* best-effort cleanup; the original error is what the caller sees */});throw error;}
  return id;
 }
 

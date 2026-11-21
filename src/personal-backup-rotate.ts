@@ -257,7 +257,7 @@ async function publishStatus(dataDirectory:string,at:Date,status:BackupRotateSta
  try{
   await writeFile(temporary,JSON.stringify({at:at.toISOString(),...status})+'\n',{mode:0o600,flag:'wx'});
   await rename(temporary,path);
- }catch{await rm(temporary,{force:true}).catch(()=>{});}
+ }catch{/* status is best effort (see above) */await rm(temporary,{force:true}).catch(()=>{/* best-effort removal of a temporary file */});}
 }
 
 async function failOffsite(lines:string[],dataDirectory:string,notify:(dataDirectory:string,body:string)=>Promise<void>,at:Date):Promise<never>{

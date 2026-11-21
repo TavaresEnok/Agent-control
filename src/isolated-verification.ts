@@ -43,7 +43,7 @@ export class IsolatedVerification{
   await this.diskGuard?.assertAdmission();
   const parent=resolve('.state/isolated-artifacts');await mkdir(parent,{recursive:true,mode:0o700});const temporary=await mkdtemp(join(parent,'verify-'));
   let launch:z.infer<typeof Launch>|undefined,stopped=false;
-  const stop=()=>{if(stopped)return;stopped=true;if(launch)void this.client.perform('stop',stageId,grantId,authority,launch).catch(()=>{});};
+  const stop=()=>{if(stopped)return;stopped=true;if(launch)void this.client.perform('stop',stageId,grantId,authority,launch).catch(()=>{/* stop is advisory; reconciliation observes the real state */});};
   this.stops.add(stop);
   try{
    if(await git(cwd,['rev-parse','HEAD'])!==artifact.commit||await git(cwd,['rev-parse','HEAD^{tree}'])!==artifact.tree)

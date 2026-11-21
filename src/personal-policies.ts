@@ -5,6 +5,7 @@ import {QualityPolicies, QualityPolicy} from './quality-policy.ts';
 import {Templates} from './templates.ts';
 import {nativeReviewVerifierDigest} from './native-review-contract.ts';
 import {applyPersonalCombo} from './personal-combos.ts';
+import {containFailure} from './failure-log.ts';
 
 /** Gives the target project access to the accounts the owner already uses on the source project. */
 export async function shareProjectAccounts(ledger:Ledger, owner:string, sourceProjectId:string, targetProjectId:string){
@@ -33,11 +34,17 @@ export async function publishFirstPersonalPolicies(ledger:Ledger, owner:string, 
  }
 }
 
-/** Moves each live conversation template onto the project's latest quality revision. */
-export async function refreshPersonalTemplates(ledger:Ledger, projectId:string){
+/** Moves each live conversation template onto the project's latest quality revision.
+ * One failed template does not block the others; it is logged and counted in the result. */
+export async function refreshPersonalTemplates(ledger:Ledger, projectId:string):Promise<{refreshed:number;failed:number}>{
  const qualityNow=Number((await ledger.pool.query('SELECT max(revision) r FROM ac_quality_policies WHERE project_id=$1',[projectId])).rows[0].r);
- if(!qualityNow)return;
+ if(!qualityNow)return {refreshed:0,failed:0};
  const stale=(await ledger.pool.query(`SELECT t.context_id,t.revision,t.snapshot,t.published_by FROM ac_context_templates t JOIN ac_contexts x ON x.id=t.context_id
   WHERE x.project_id=$1 AND NOT x.archived AND t.revision=(SELECT max(revision) FROM ac_context_templates WHERE context_id=t.context_id) AND (t.snapshot->>'qualityRevision')::int<>$2`,[projectId,qualityNow])).rows;
- for(const row of stale)await new Templates(ledger).publish(String(row.published_by),String(row.context_id),Number(row.revision),{...row.snapshot,qualityRevision:qualityNow}).catch(()=>{});
+ let refreshed=0,failed=0;
+ for(const row of stale){
+  const ok=await new Templates(ledger).publish(String(row.published_by),String(row.context_id),Number(row.revision),{...row.snapshot,qualityRevision:qualityNow}).then(()=>true,containFailure('PERSONAL_TEMPLATE_REFRESH_FAILED',false));
+  if(ok)refreshed++;else failed++;
+ }
+ return {refreshed,failed};
 }

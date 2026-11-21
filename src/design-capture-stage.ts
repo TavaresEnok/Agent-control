@@ -105,7 +105,7 @@ export async function writeDesignExamCaptures(
   const written = new Map<string, string>();
   const cleanup = async () => {
     await removePrivateRun(dir, parent);
-    await rmdir(parent).catch(() => undefined);
+    await rmdir(parent).catch(() => undefined /* the parent may still hold other runs */);
   };
   try {
     for (const item of held) {

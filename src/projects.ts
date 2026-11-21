@@ -54,9 +54,9 @@ export class Projects {
    try{
     if(await realpath(row.repo)===row.repo){
      status='not-git';
-     try{const git=await promisify(execFile)('git',['-C',row.repo,'rev-parse','--show-toplevel'],{encoding:'utf8',timeout:5000});if(git.stdout.trim()===row.repo)status='ok';}catch{}
+     try{const git=await promisify(execFile)('git',['-C',row.repo,'rev-parse','--show-toplevel'],{encoding:'utf8',timeout:5000});if(git.stdout.trim()===row.repo)status='ok';}catch{/* status stays 'not-git' */}
     }
-   }catch{}
+   }catch{/* status stays 'missing' */}
    const addedAt=(row.registered_at as Date).toISOString();
    return {id:row.id as string,name:row.label as string,root:row.repo as string,addedAt,lastOpenedAt:addedAt,source:'local' as const,status};
   }));
