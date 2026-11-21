@@ -1,29 +1,49 @@
-import {cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react'
+import {cleanup,fireEvent,render,screen} from '@testing-library/react'
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query'
 import {afterEach,expect,it,vi} from 'vitest'
-const mock=vi.hoisted(()=>({pair:vi.fn(),authentication:vi.fn()}))
-vi.mock('@agent-control/happier-browser-auth',()=>({nacl:{box:{keyPair:mock.pair}},createTerminalPairingAuthentication:mock.authentication,
- applyTerminalAuthRequestExpiry:vi.fn(),openTerminalProvisioningResponse:vi.fn(),buildTerminalConnectLinks:vi.fn()}))
 import {AgentControlAuthGate} from './agent-control-auth-gate'
-afterEach(()=>{cleanup();vi.unstubAllEnvs();vi.unstubAllGlobals();vi.resetAllMocks()})
-it.each(['keypair','pairing'])('restores login and wipes partial secrets when %s initialization fails',async failure=>{
+afterEach(()=>{cleanup();vi.unstubAllEnvs();vi.unstubAllGlobals()})
+function view(config:unknown,login:(path:string,init?:RequestInit)=>Response){
  vi.stubEnv('VITE_AGENT_CONTROL_MANAGED','1')
- vi.stubGlobal('crypto',{subtle:{},getRandomValues:(value:Uint8Array)=>value.fill(7)})
- const secret=new Uint8Array(32).fill(9)
- mock.pair.mockImplementation(()=>{if(failure==='keypair')throw Error('ENTROPY_UNAVAILABLE');return {secretKey:secret,publicKey:new Uint8Array(32)}})
- mock.authentication.mockImplementation(()=>{throw Error('PAIRING_ENTROPY_UNAVAILABLE')})
- const request=vi.fn(async(path:string)=>path.endsWith('/status')?new Response('{}',{status:401}):
-  Response.json({enabled:true,webUrl:'https://chat.example',serverUrl:'https://happier.example',passwordLogin:false}))
+ let authenticated=false
+ const request=vi.fn(async(path:string,init?:RequestInit)=>{
+  if(path.endsWith('/auth/status'))return authenticated?Response.json({authenticated:true,principalId:'owner'}):new Response('{}',{status:401})
+  if(path.endsWith('/auth/config'))return Response.json(config)
+  const response=login(path,init);if(response.ok)authenticated=true;return response
+ })
  vi.stubGlobal('fetch',request)
  const cache=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}})
  render(<QueryClientProvider client={cache}><AgentControlAuthGate><p>Private cockpit</p></AgentControlAuthGate></QueryClientProvider>)
- const button=await screen.findByRole('button',{name:'Entrar pelo Happier'})
- await waitFor(()=>expect(button.hasAttribute('disabled')).toBe(false))
- fireEvent.click(button)
- await screen.findByRole('alert')
- await waitFor(()=>expect(button.hasAttribute('disabled')).toBe(false))
+ return request
+}
+it('signs in with user and password and offers no external login',async()=>{
+ const request=view({enabled:false,passwordLogin:true},()=>Response.json({ok:true}))
+ fireEvent.change(await screen.findByLabelText('Usuário'),{target:{value:'dono'}})
+ fireEvent.change(screen.getByLabelText('Senha'),{target:{value:'segredo-longo'}})
+ expect(screen.queryByText(/Happier/)).toBeNull()
+ fireEvent.click(screen.getByRole('button',{name:'Entrar'}))
+ await screen.findByText('Private cockpit')
+ const login=request.mock.calls.find(([path])=>path==='/api/v1/ac/auth/password')
+ expect(JSON.parse(String(login?.[1]?.body))).toEqual({user:'dono',password:'segredo-longo'})
  expect(request.mock.calls.every(([path])=>!path.includes('/pair'))).toBe(true)
- if(failure==='pairing')expect([...secret]).toEqual(Array(32).fill(0))
+})
+it('keeps the one-time code when password login is not configured',async()=>{
+ const request=view({enabled:true,webUrl:'https://legacy.example',serverUrl:'https://legacy.example',passwordLogin:false},()=>Response.json({ok:true}))
+ await screen.findByText('O login por usuário e senha precisa ser configurado nesta instalação.')
+ expect(screen.queryByLabelText('Senha')).toBeNull()
+ expect(screen.queryByText(/Happier/)).toBeNull()
+ fireEvent.click(screen.getByRole('button',{name:'Entrar com código'}))
+ await screen.findByText(/npm run gateway -- pair/)
+ fireEvent.change(screen.getByLabelText('Código'),{target:{value:'ABCD1234'}})
+ fireEvent.click(screen.getByRole('button',{name:'Entrar'}))
+ await screen.findByText('Private cockpit')
+ expect(request.mock.calls.some(([path])=>path==='/api/v1/ac/auth/code')).toBe(true)
+})
+it('reports a wrong password without opening the cockpit',async()=>{
+ view({enabled:false,passwordLogin:true},()=>new Response('{}',{status:401}))
+ fireEvent.change(await screen.findByLabelText('Usuário'),{target:{value:'dono'}})
+ fireEvent.change(screen.getByLabelText('Senha'),{target:{value:'errada'}})
+ fireEvent.click(screen.getByRole('button',{name:'Entrar'}))
+ expect((await screen.findByRole('alert')).textContent).toBe('Usuário ou senha incorretos.')
  expect(screen.queryByText('Private cockpit')).toBeNull()
- cache.clear()
 })
