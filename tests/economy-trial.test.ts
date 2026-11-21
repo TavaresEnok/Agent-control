@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {analyzeTrial, bootstrapInterval, formatTrialReport, mcnemarExact, normalQuantile, parseTrialInput, seededRandom, TrialInputError, type Run, type TrialCase} from '../src/economy-trial.ts';
+import {analyzeTrial, bootstrapInterval, fmtDec, formatTrialReport, mcnemarExact, normalQuantile, parseTrialInput, seededRandom, TrialInputError, type Run, type TrialCase} from '../src/economy-trial.ts';
 import {runPersonalEconomia} from '../src/personal-economia-cli.ts';
 
 /** Casos sintéticos: custo por caso e acerto por repetição gerados de forma determinística, sem modelo. */
@@ -50,14 +50,15 @@ test('quantil da normal', () => {
 });
 
 test('economia real sem perda de qualidade: entra no padrão', () => {
-  const casos = synth({cases: 12, reps: 3, baseCost: (i, r) => 10000 + i * 500 + r * 37, candCost: (i, r) => 6000 + i * 300 + ((i * 7 + r) % 5) * 40, baseOk: (i) => i !== 3, candOk: (i) => i !== 3});
+  const casos = synth({cases: 30, reps: 3, baseCost: (i, r) => 10000 + i * 500 + r * 37, candCost: (i, r) => 6000 + i * 300 + ((i * 7 + r) % 5) * 40, baseOk: (i) => i !== 3, candOk: (i) => i !== 3});
   const r = analyzeTrial({experimento: 'sintético', casos});
   assert.equal(r.veredito, 'entra no padrão', formatTrialReport(r));
   assert.equal(r.qualidade.b, 0);
   assert.equal(r.qualidade.c, 0);
   assert.equal(r.qualidade.pValor, 1);
   assert.ok(r.custo.intervaloRelativo[0] > 0.3);
-  assert.equal(r.pares, 36);
+  assert.equal(r.casos, 30);
+  assert.equal(r.execucoesPareadas, 90);
   // Os quatro contadores entram no custo com peso 1.
   assert.equal(r.base.custoTotal, r.base.tokens.entrada + r.base.tokens.saida + r.base.tokens.cacheLido + r.base.tokens.cacheGravado);
   assert.equal(r.casosNecessarios, null);
@@ -66,12 +67,13 @@ test('economia real sem perda de qualidade: entra no padrão', () => {
 });
 
 test('economia com perda de qualidade significativa: não entra', () => {
-  const casos = synth({cases: 10, reps: 3, baseCost: () => 10000, candCost: (i) => 4000 + i * 10, baseOk: () => true, candOk: (i, r) => !(r === 0 || (r === 1 && i < 4))});
+  // Candidata erra a maioria das repetições em 7 de 10 casos (e acerta uma repetição em cada um deles).
+  const casos = synth({cases: 10, reps: 3, baseCost: () => 10000, candCost: (i) => 4000 + i * 10, baseOk: () => true, candOk: (i, r) => i >= 7 || r === 0});
   const r = analyzeTrial({casos});
   assert.equal(r.veredito, 'não entra', formatTrialReport(r));
-  assert.equal(r.qualidade.b, 14);
+  assert.equal(r.qualidade.b, 7);
   assert.equal(r.qualidade.c, 0);
-  assert.ok(r.qualidade.pValor < 0.001);
+  assert.equal(r.qualidade.pValor, 0.015625);
   assert.match(r.motivos[0], /qualidade piorou/);
 });
 
@@ -99,28 +101,30 @@ test('poucas repetições ou poucos pares: inconclusivo mesmo com economia limpa
   const r = analyzeTrial({casos});
   assert.equal(r.veredito, 'inconclusivo');
   assert.ok(r.motivos.some(m => /repetições por caso: 1/.test(m)));
-  assert.ok(r.motivos.some(m => /pares de qualidade: 12/.test(m)));
-  assert.equal(r.casosNecessarios, 10); // 30 pares (regra de três para 10%) / 3 repetições
+  assert.ok(r.motivos.some(m => /precisos ao menos 30 casos distintos/.test(m)));
+  assert.equal(r.casosNecessarios, 30); // regra de três para 10%, em casos distintos
+  assert.equal(r.casosFaltando, 18);
 });
 
 test('não medido conta como reprovado; acerto não medido conta como erro', () => {
-  const casos = synth({cases: 12, reps: 3, baseCost: () => 10000, candCost: () => 5000, baseOk: () => true, candOk: () => true});
+  const casos = synth({cases: 30, reps: 3, baseCost: () => 10000, candCost: () => 5000, baseOk: () => true, candOk: () => true});
   casos[2].candidata[1] = {entrada: null, acerto: true};
   const r = analyzeTrial({casos});
   assert.equal(r.veredito, 'não entra');
   assert.match(r.motivos[0], /não medido/);
 
-  const casos2 = synth({cases: 12, reps: 3, baseCost: () => 10000, candCost: () => 5000, baseOk: () => true, candOk: () => true});
+  const casos2 = synth({cases: 30, reps: 3, baseCost: () => 10000, candCost: () => 5000, baseOk: () => true, candOk: () => true});
   delete casos2[0].candidata[0].acerto;
   casos2[1].candidata = casos2[1].candidata.slice(0, 2);
   const r2 = analyzeTrial({casos: casos2});
   assert.equal(r2.veredito, 'não entra');
-  assert.equal(r2.qualidade.b, 1);
+  assert.equal(r2.qualidade.b, 0); // 2 de 3 repetições certas: o caso continua certo pela maioria
+  assert.equal(r2.candidata.acertos, 88);
   assert.ok(r2.naoMedido.some(m => /acerto da candidata não medido/.test(m)));
   assert.ok(r2.naoMedido.some(m => /c1: base com 3 repetições e candidata com 2/.test(m)));
 
   // saida null é não medido; saida ausente não se aplica.
-  const casos3 = synth({cases: 12, reps: 3, baseCost: () => 10000, candCost: () => 5000, baseOk: () => true, candOk: () => true});
+  const casos3 = synth({cases: 30, reps: 3, baseCost: () => 10000, candCost: () => 5000, baseOk: () => true, candOk: () => true});
   casos3[0].base[0].saida = null;
   assert.equal(analyzeTrial({casos: casos3}).veredito, 'não entra');
   for (const c of casos3) for (const run of [...c.base, ...c.candidata]) delete run.saida;
@@ -129,7 +133,7 @@ test('não medido conta como reprovado; acerto não medido conta como erro', () 
 
 test('pesos e economia mínima dos portões', () => {
   // Candidata troca entrada por cache lido: com peso 1 economiza, com cache tão caro quanto a entrada (peso 1) e entrada barata não.
-  const casos: TrialCase[] = Array.from({length: 12}, (_, i) => ({id: 'p' + i,
+  const casos: TrialCase[] = Array.from({length: 30}, (_, i) => ({id: 'p' + i,
     base: [0, 1, 2].map(r => ({entrada: 10000 + i * 10 + r, acerto: true})),
     candidata: [0, 1, 2].map(r => ({entrada: 2000 + r, cacheLido: 6000 + i * 10, acerto: true}))}));
   assert.equal(analyzeTrial({casos}).veredito, 'entra no padrão');
@@ -157,15 +161,90 @@ test('CLI lê o arquivo e o exemplo T5 sai inconclusivo com os números do relat
   assert.equal(result.qualidade.c, 0);
   assert.equal(result.qualidade.pValor, 0.25);
   assert.match(output, /VEREDITO: inconclusivo/);
+  assert.match(output, /relativa 93,9% \(IC 95% 72,3% a 97,3%\)/);
+  assert.match(output, /tokens entrada 151\.178,/);
+  assert.match(output, /casos distintos: 5, o mínimo do portão é 10 \(faltam 5\)/);
+  assert.match(output, /McNemar exato bilateral p=0,25;/);
 
   const dir = await mkdtemp(join(tmpdir(), 'ac-economia-'));
   try {
     const file = join(dir, 'r.json');
-    await writeFile(file, JSON.stringify({casos: synth({cases: 12, reps: 3, baseCost: () => 9000, candCost: () => 3000, baseOk: () => true, candOk: () => true})}));
+    await writeFile(file, JSON.stringify({casos: synth({cases: 30, reps: 3, baseCost: () => 9000, candCost: () => 3000, baseOk: () => true, candOk: () => true})}));
     const json = await runPersonalEconomia([file, '--json']);
     assert.equal(JSON.parse(json.output).veredito, 'entra no padrão');
     await writeFile(file, '{');
     await assert.rejects(runPersonalEconomia([file]), TrialInputError);
     await assert.rejects(runPersonalEconomia([]), /uso:/);
   } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
+test('1, 2 ou 3 casos com muitas repetições nunca entram: inconclusivo dizendo quantos faltam', () => {
+  for (const k of [1, 2, 3]) {
+    const casos = synth({cases: k, reps: 30, baseCost: () => 100, candCost: () => 50, baseOk: () => true, candOk: () => true});
+    const r = analyzeTrial({casos});
+    assert.equal(r.veredito, 'inconclusivo', formatTrialReport(r));
+    assert.ok(r.motivos.some(m => m.includes('casos distintos: ' + k + ', o mínimo do portão é 10 (faltam ' + (10 - k) + ')')), r.motivos.join('\n'));
+    assert.equal(r.casosNecessarios, 30);
+    assert.equal(r.casosFaltando, 30 - k);
+  }
+  // Com minCasos maior que a regra de três, ele manda na conta.
+  const casos = synth({cases: 3, reps: 3, baseCost: () => 100, candCost: () => 50, baseOk: () => true, candOk: () => true});
+  const r = analyzeTrial({casos, portoes: {margemQualidade: 0.5, minCasos: 12}});
+  assert.equal(r.veredito, 'inconclusivo');
+  assert.equal(r.casosNecessarios, 12);
+  assert.equal(r.casosFaltando, 9);
+});
+
+test('McNemar na unidade caso: repetições não viram pares independentes; empate conta como erro', () => {
+  // 3 casos x 10 repetições, candidata sempre erra: por repetição seriam b=30 (p minúsculo); por caso b=3, p=0,25.
+  const casos = synth({cases: 3, reps: 10, baseCost: () => 100, candCost: () => 50, baseOk: () => true, candOk: () => false});
+  const r = analyzeTrial({casos});
+  assert.equal(r.qualidade.b, 3);
+  assert.equal(r.qualidade.pValor, 0.25);
+  assert.equal(r.veredito, 'inconclusivo');
+  // Empate (1 de 2 repetições certas) é erro do caso.
+  const tie = synth({cases: 10, reps: 2, baseCost: () => 100, candCost: () => 50, baseOk: () => true, candOk: (_i, rep) => rep === 0});
+  const t = analyzeTrial({casos: tie});
+  assert.equal(t.candidata.casosAcertados, 0);
+  assert.equal(t.qualidade.b, 10);
+  assert.equal(t.qualidade.pValor, 2 / 1024);
+  assert.equal(t.veredito, 'não entra');
+});
+
+test('validação estrita: tipos errados são erro de formato, não "não medido"', () => {
+  const ok = () => [{id: 'a', base: [{entrada: 10, acerto: true}], candidata: [{entrada: 5, acerto: true}]}];
+  const bad: [unknown, RegExp][] = [
+    [{portoes: {alfa: '0.05'}, casos: ok()}, /portoes\.alfa precisa ser número/],
+    [{portoes: [], casos: ok()}, /"portoes" precisa ser um objeto/],
+    [{portoes: {pesos: [1]}, casos: ok()}, /portoes\.pesos precisa ser um objeto/],
+    [{portoes: {pesos: {entrada: '1'}}, casos: ok()}, /portoes\.pesos\.entrada/],
+    [{portoes: {pesos: {tokens: 1}}, casos: ok()}, /não existe/],
+    [{portoes: {pesos: {entrada: 0, saida: 0, cacheLido: 0, cacheGravado: 0}}, casos: ok()}, /pesos são todos zero/],
+    [{portoes: {minCasos: 1}, casos: ok()}, /minCasos/],
+    [{bootstrap: 'x', casos: ok()}, /"bootstrap" precisa ser um objeto/],
+    [{bootstrap: {semente: -1}, casos: ok()}, /semente/],
+    [{bootstrap: {semente: 2 ** 60}, casos: ok()}, /semente/],
+    [{bootstrap: {semente: '7'}, casos: ok()}, /semente/],
+    [{casos: [{id: 'a', base: [{entrada: 'abc', acerto: true}], candidata: [{entrada: 5, acerto: true}]}]}, /"entrada" precisa ser número >= 0 ou null/],
+    [{casos: [{id: 'a', base: [{entrada: -3, acerto: true}], candidata: [{entrada: 5, acerto: true}]}]}, /"entrada"/],
+    [{casos: [{id: 'a', base: [{entrada: 1, saida: '2', acerto: true}], candidata: [{entrada: 5, acerto: true}]}]}, /"saida"/],
+    [{casos: [{id: 'a', base: [{entrada: 1, acerto: 'sim'}], candidata: [{entrada: 5, acerto: true}]}]}, /"acerto" precisa ser true, false ou null/],
+    [{experimento: 3, casos: ok()}, /"experimento" precisa ser texto/],
+  ];
+  for (const [input, re] of bad) assert.throws(() => analyzeTrial(input), (e: unknown) => e instanceof TrialInputError && re.test((e as Error).message), JSON.stringify(input));
+  // Custo da base zero: mensagem explícita.
+  assert.throws(() => analyzeTrial({casos: [{id: 'a', base: [{entrada: 0, acerto: true}], candidata: [{entrada: 0, acerto: true}]}]}), /custo da base é zero/);
+  assert.throws(() => analyzeTrial({portoes: {pesos: {entrada: 0}}, casos: ok()}), /custo da base é zero/);
+  // null continua sendo não medido, não erro de formato.
+  assert.equal(analyzeTrial({casos: [{id: 'a', base: [{entrada: null, acerto: true}], candidata: [{entrada: 5, acerto: true}]}]}).veredito, 'não entra');
+});
+
+test('formatação com vírgula decimal sem depender do ICU', () => {
+  assert.equal(fmtDec(151178), '151.178');
+  assert.equal(fmtDec(30235.62), '30.235,6');
+  assert.equal(fmtDec(-1234567.25, 2), '-1.234.567,25');
+  assert.equal(fmtDec(0.25, 5), '0,25');
+  assert.equal(fmtDec(10), '10');
+  assert.equal(fmtDec(-0.01), '0');
+  assert.equal(fmtDec(NaN), 'indefinido');
 });
