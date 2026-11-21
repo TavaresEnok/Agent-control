@@ -1,6 +1,5 @@
 // Installs systemd user services for one installation file, so they restart on failure and come back
-// after a reboot (needs `loginctl enable-linger <user>` once). Happier transport installs the Happier
-// server and the gateway. Local transport installs only the gateway and does not stop an existing Happier unit.
+// after a reboot (needs `loginctl enable-linger <user>` once). Installs the Docker filter and the gateway.
 // Usage: npm run personal:services -- <instalação.json> [nome]      remove: ... --remove
 import {execFileSync} from 'node:child_process';
 import {mkdir,writeFile,rm,readFile} from 'node:fs/promises';
@@ -14,12 +13,11 @@ const name=(given??basename(dirname(file))).replace(/[^A-Za-z0-9_-]/g,'-');
 if(!name)throw Error('INVALID_SERVICE_NAME');
 const root=resolve(import.meta.dirname,'..'),units=join(homedir(),'.config/systemd/user');
 const systemctl=(...a)=>execFileSync('systemctl',['--user',...a],{stdio:'inherit'});
-const happier=`agent-control-happier-${name}.service`,gateway=`agent-control-gateway-${name}.service`;
+const gateway=`agent-control-gateway-${name}.service`;
 const dockerFilter=`agent-control-docker-filter-${name}.service`;
 if(remove){
- const ownsHappier=!await readFile(join(config.dataDirectory,'happier-shared-from'),'utf8').then(()=>true,()=>false);
- for(const unit of ownsHappier?[gateway,dockerFilter,happier]:[gateway,dockerFilter]){try{systemctl('disable','--now',unit);}catch{}await rm(join(units,unit),{force:true});}
- systemctl('daemon-reload');console.log(JSON.stringify({removed:[gateway,happier]}));process.exit(0);
+ for(const unit of [gateway,dockerFilter]){try{systemctl('disable','--now',unit);}catch{}await rm(join(units,unit),{force:true});}
+ systemctl('daemon-reload');console.log(JSON.stringify({removed:[gateway,dockerFilter]}));process.exit(0);
 }
 if(config.activation!=='personal')throw Error('PERSONAL_ACTIVATION_REQUIRED');
 const path=[dirname(process.execPath),'/usr/local/bin','/usr/bin','/bin'].join(':');
@@ -37,14 +35,7 @@ UMask=0077
 [Install]
 WantedBy=default.target
 `;
-// A project that shares another installation's Happier only gets a gateway, started after that Happier.
-// Local transport also gets only a gateway, and it does not order itself after Happier or disable that unit.
-const sharedFrom=await readFile(join(config.dataDirectory,'happier-shared-from'),'utf8').then(t=>t.trim(),()=>null);
-const localTransport=config.managerTransport?.transport==='local';
-const happierUnit=sharedFrom?`agent-control-happier-${basename(dirname(sharedFrom)).replace(/[^A-Za-z0-9_-]/g,'-')}.service`:happier;
-const withHappier=!sharedFrom&&!localTransport;
 await mkdir(units,{recursive:true});
-if(withHappier)await writeFile(join(units,happier),unit('Agent Control: Happier server',[process.execPath,join(root,'scripts/personal-happier.mjs'),file]));
 // The gateway reaches Docker only through the filter (src/docker-filter.ts): fixed routes, no privileged create, host mounts
 // only under the installation, the project roots, the registered repositories and /tmp (read from the installation on every check). It protects fully once the gateway
 // user is outside the docker group; until then it still refuses what the product never asks for.
@@ -53,6 +44,6 @@ await writeFile(join(units,dockerFilter),unit('Agent Control: filtro do Docker',
 // --egress turns on the allowlist proxy for every personal worker, planner and manager call (AC_PERSONAL_EGRESS=1).
 const egress=args.includes('--egress')||['observe','enforce'].includes(config.egress?.mode);
 const gatewayEnvironment=[['AC_DOCKER_SOCKET',filterSocket],...(egress?[['AC_PERSONAL_EGRESS','1']]:[])];
-await writeFile(join(units,gateway),unit('Agent Control: gateway',[process.execPath,'--import','tsx',join(root,'src/server-main.ts'),'serve',file],(localTransport?'':`After=${happierUnit}\nWants=${happierUnit}\n`)+`After=${dockerFilter}\nRequires=${dockerFilter}`,gatewayEnvironment));
-systemctl('daemon-reload');if(withHappier)systemctl('enable','--now',happier);systemctl('enable','--now',dockerFilter);systemctl('enable','--now',gateway);
-console.log(JSON.stringify({installed:withHappier?[happier,dockerFilter,gateway]:[dockerFilter,gateway],egress,...(localTransport?{}:{happier:happierUnit}),logs:`journalctl --user -u ${gateway} -f`}));
+await writeFile(join(units,gateway),unit('Agent Control: gateway',[process.execPath,'--import','tsx',join(root,'src/server-main.ts'),'serve',file],`After=${dockerFilter}\nRequires=${dockerFilter}`,gatewayEnvironment));
+systemctl('daemon-reload');systemctl('enable','--now',dockerFilter);systemctl('enable','--now',gateway);
+console.log(JSON.stringify({installed:[dockerFilter,gateway],egress,logs:`journalctl --user -u ${gateway} -f`}));

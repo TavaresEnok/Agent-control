@@ -40,6 +40,6 @@ if(process.argv[2]==='--before'){
  // Never let TypeScript follow a runtime link back into the checkout.
  for(const name of ['upstream','db','scripts','services'])removeRuntimeLinks(join(output,name),join(root,name));
 }else if(process.argv.length===2){
- for(const name of ['upstream/cezar/packages/cezar','upstream/happier','db','scripts','services'])
+ for(const name of ['upstream/cezar/packages/cezar','db','scripts','services'])
   overlayRuntime(join(root,name),join(output,name));
 }else throw Error('BUILD_PREPARATION_MODE_INVALID');

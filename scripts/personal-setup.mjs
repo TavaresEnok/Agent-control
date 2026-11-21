@@ -8,7 +8,7 @@ function run(args){
 if(!installation){
  console.log(`Uso: npm run personal:setup -- <instalação.json>
 O arquivo precisa existir, com mode 0600, activation "personal" e databaseUrl.
-Depois deste comando: pareie o Happier e adicione as contas com
+Depois deste comando: adicione as contas com
   npm run gateway -- account-add <instalação.json> codex "Codex"
   npm run gateway -- account-add <instalação.json> claude "Claude"`);
  process.exit(0);
@@ -21,4 +21,4 @@ run(['initialize',installation]);
 run(['operator-bootstrap',installation]);
 if(raw.contextVault)run(['vault-initialize',installation]);
 run(['native-setup',installation]);
-console.log('Próximo passo: pareie o Happier e adicione as contas com npm run gateway -- account-add.');
+console.log('Próximo passo: adicione as contas com npm run gateway -- account-add.');

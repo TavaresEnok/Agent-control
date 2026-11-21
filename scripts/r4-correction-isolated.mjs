@@ -1,4 +1,4 @@
-// Minimal two-attempt physical correction bench: no Happier or planner service.
+// Minimal two-attempt physical correction bench: no conversation or planner service.
 import {buildFlowImage} from './r3-flow-build-image.mjs';
 import {spawnSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
@@ -14,8 +14,8 @@ try{
  if(!process.env.AC_R3_FLOW_PUBLIC_CODEX_BINARY||!/^[a-f0-9]{64}$/.test(process.env.AC_R3_FLOW_PUBLIC_CODEX_SHA256??''))throw Error('R3_FLOW_PINNED_PUBLIC_CODEX_REQUIRED');
  scratch=await mkdtemp(join(tmpdir(),'ac-r4-correction-runner-'));const logs=await mkdtemp(join(process.env.AC_ISOLATED_LOG_DIR??tmpdir(),'ac-r4-correction-logs-'));
  env={HOME:scratch,PATH:process.env.PATH??'/usr/bin:/bin',LANG:'C.UTF-8',TZ:'UTC'};
- console.log('R4_CORRECTION_LAB '+JSON.stringify({label,scratch,logs,officialAccounts:false,inference:'deterministic',happier:false}));
- for(const name of ['src','tests','db','adapters','upstream','node_modules','package.json','scripts','services'])await symlink(join(root,name),join(scratch,name));
+ console.log('R4_CORRECTION_LAB '+JSON.stringify({label,scratch,logs,officialAccounts:false,inference:'deterministic'}));
+ for(const name of ['src','tests','db','upstream','node_modules','package.json','scripts','services'])await symlink(join(root,name),join(scratch,name));
  await mkdir(join(scratch,'.state/projects'),{recursive:true});
  pgId=run('docker',['run','-d','--pull=never','--name',label+'-pg','--label','agent-control.correction-lab='+label,'--tmpfs','/var/lib/postgresql/data:rw,nosuid,nodev,size=256m','-e','POSTGRES_PASSWORD=synthetic-r4-correction','-e','POSTGRES_DB=ac_implementation_test','-p','127.0.0.1::5432','postgres:16-alpine']);
  const info=JSON.parse(run('docker',['inspect',pgId]))[0],port=info.NetworkSettings.Ports['5432/tcp'][0].HostPort,url='postgresql://postgres:synthetic-r4-correction@127.0.0.1:'+port+'/ac_implementation_test';

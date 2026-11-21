@@ -52,7 +52,7 @@ async function scan(relative){
  files.push({path:relative,size:info.size,sha256:hash.digest('hex')});
 }
 try{
- const sources=['.state/happier','.state/projects','.state/browser-fixture.json'],missingOptional=[];
+ const sources=['.state/projects','.state/browser-fixture.json'],missingOptional=[];
  try{await lstat(join(root,'.state/keys'));sources.push('.state/keys');}
  catch(error){if(error.code!=='ENOENT')throw error;missingOptional.push('.state/keys');}
  for(const source of sources)await scan(source);
