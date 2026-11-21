@@ -6,6 +6,7 @@ import {codexPersonalCommand} from './codex-personal.ts';
 import {claudeLimitFromText,codexLimitFromText,isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
 import {cliEffort,Effort} from './effort.ts';
 import {claudeAnsweredWith,compactConversation,managerUsage,parseClaudeJsonResult,type HistoryMessage} from './manager-discipline.ts';
+import {containFailure} from './failure-log.ts';
 
 export type ManagerDecideOptions={
  /** Prior panel messages, oldest first, without the message being decided. Used only when `compact` is on. */
@@ -131,9 +132,9 @@ export class PersonalManagerChat{
    const limit=ok?null:profile.provider==='claude'?claudeLimitFromText(tails):profile.provider==='codex'?codexLimitFromText(tails):null;
    const limited=!ok&&(limit!==null||isProviderLimit(tails[1])||isProviderLimit(tails[0])||/usage limit|rate limit|quota/i.test(tails[1]));
    if(options.measure)await this.measure(profile,prompt,result,ok?'sucesso':limited?'limite':'falha',options.projectId);
-   if(limit){await noteProviderExhaustion(this.ledger,profile.accountId,limit.usageWindows).catch(()=>{});continue;}
+   if(limit){await noteProviderExhaustion(this.ledger,profile.accountId,limit.usageWindows).catch(containFailure('PROVIDER_EXHAUSTION_NOT_RECORDED',undefined));continue;}
    if(ok)return parseManagerDecision(answer);
-   if(limited)await noteProviderExhaustion(this.ledger,profile.accountId).catch(()=>{});
+   if(limited)await noteProviderExhaustion(this.ledger,profile.accountId).catch(containFailure('PROVIDER_EXHAUSTION_NOT_RECORDED',undefined));
   }
   return null;
  }

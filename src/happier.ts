@@ -27,12 +27,13 @@ import {bindOwnerRequest} from './personal-owner-request.ts';
 import {claudeLimitNotice} from './quota-exhaustion.ts';
 import {decideProposal,proposalStartIntentId,unstartedProposals,type ProposalDecision} from './proposal-decision.ts';
 import {bindPersonalOwnerMessage,enqueuePersonalOwner,readPersonalOwnerText,type ConversationTransport} from './conversation-transport.ts';
+import {containFailure,logContainedFailure} from './failure-log.ts';
 
 /** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
 function httpFailureSuffix(error:Error){
  const e=error as {response?:{status?:number};config?:{method?:string;url?:string}};
  if(!e.config?.url)return '';
- let path='';try{path=new URL(e.config.url,'http://x').pathname.replace(/[^A-Za-z0-9/_.-]/g,'').slice(0,120);}catch{}
+ let path='';try{path=new URL(e.config.url,'http://x').pathname.replace(/[^A-Za-z0-9/_.-]/g,'').slice(0,120);}catch{/* unparsable URL: the suffix keeps status and method only */}
  return ':'+String(e.response?.status??'no-response')+':'+String(e.config.method??'').toUpperCase()+' '+path;
 }
 type Rpc = {
@@ -405,7 +406,7 @@ export class HappierEndpoint {
   private armTick(){
     // Personal mode: one long model call or a busy startup must not cost the 15 s manager lease.
     // The tick still renews it; this timer only covers the stretches in between.
-    if(this.options.personalConversation){let renewing=false;this.leaseTimer=setInterval(()=>{if(renewing||this.lifecycle.signal.aborted)return;renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});},4000);this.leaseTimer.unref?.();}
+    if(this.options.personalConversation){let renewing=false;this.leaseTimer=setInterval(()=>{if(renewing||this.lifecycle.signal.aborted)return;renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{/* a lost lease surfaces as STALE_MANAGER on the next fenced tick */}).finally(()=>{renewing=false;});},4000);this.leaseTimer.unref?.();}
     this.timer = setInterval(() => { if (this.busy) return; this.busy = true;
       void this.tick().then(async() => {
         if(this.lastError)await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
@@ -416,10 +417,10 @@ export class HappierEndpoint {
           ? 'CONTRACT_ERROR:' + error.issues.map(issue => issue.path.join('.')).join(',') : error instanceof Error ? error.name+httpFailureSuffix(error) : 'UNKNOWN_ERROR';
         if (code !== this.lastError) void this.ledger.pool.query(
           "INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'manager.blocked',$2)",
-          [this.options.authority.contextId, { code }]).catch(() => {});
+          [this.options.authority.contextId, { code }]).catch(error => logContainedFailure('MANAGER_BLOCKED_AUDIT_NOT_RECORDED', error));
         this.lastError = code;
         if (['STALE_MANAGER','CONTEXT_FORBIDDEN','PROJECT_RUNTIME_MISMATCH','CONTEXT_KEY_UNAUTHORIZED','SESSION_CONTEXT_MISMATCH'].includes(this.lastError)) this.close();
-        else if(code==='NATIVE_IMAGE_MISSING'){try{await this.say('native-images-missing',nativeImagesRemovedNotice);await this.deliverQueuedMessages();}catch{}}
+        else if(code==='NATIVE_IMAGE_MISSING'){try{await this.say('native-images-missing',nativeImagesRemovedNotice);await this.deliverQueuedMessages();}catch(error){logContainedFailure('NATIVE_IMAGES_NOTICE_NOT_SENT',error);}}
         else if(!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','PROVIDER_USAGE_LIMIT'].includes(code)){
           // Critical controller blockers do not wait for the completion window.
           // Failure to publish preserves the same encrypted outbox for retry.
@@ -427,7 +428,7 @@ export class HappierEndpoint {
             await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
               {entityId:this.options.authority.contextId,source:'manager',planRevision:0,seq:0,status:'blocked',reason:notificationReason(error)});
             await this.flushNotifications();await this.deliverQueuedMessages();
-          }catch{}
+          }catch(error){logContainedFailure('MANAGER_BLOCKED_NOTICE_DEFERRED',error);}
         }
       }).finally(() => { this.busy = false; }); }, 300);
   }
@@ -454,17 +455,17 @@ export class HappierEndpoint {
      if(!q.localId.startsWith('replan-')){
       // The manager model decides; keywords are only a fallback when no manager account answers.
       // The manager also knows its own team, so "who is the reviewer?" gets the real answer.
-      const team=this.options.teamFeedRoot?await teamStatus(this.ledger.pool,this.options.authority.contextId,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}).catch(()=>''):'';
+      const team=this.options.teamFeedRoot?await teamStatus(this.ledger.pool,this.options.authority.contextId,{executionHost:this.options.teamFeedRoot,repo:this.runtime.repo}).catch(containFailure('MANAGER_TEAM_CONTEXT_UNAVAILABLE','')):'';
       // The decision is a model call that can outlast the 15 s manager lease, above all at high effort: keep the lease alive meanwhile.
-      let renewingDecision=false;const decisionLease=setInterval(()=>{if(!renewingDecision&&!this.lifecycle.signal.aborted){renewingDecision=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewingDecision=false;});}},4000);decisionLease.unref?.();
+      let renewingDecision=false;const decisionLease=setInterval(()=>{if(!renewingDecision&&!this.lifecycle.signal.aborted){renewingDecision=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{/* a lost lease surfaces as STALE_MANAGER on the next fenced write */}).finally(()=>{renewingDecision=false;});}},4000);decisionLease.unref?.();
       let decision;
       const economy=this.options.managerEconomy??managerEconomyOf();
       try{
        // Discipline: compact map context (cached by commit) and a short, summarized history. Off keeps the legacy prompt.
        const repositoryContext=await this.managerContext();
        const history=economy.discipline?historyBeforeCurrent((await withinMs(this.readPanelConversation(undefined,40),HISTORY_READ_TIMEOUT_MS,{messages:[]} as unknown as PanelPage)).messages,{localId:q.localId,text:q.text}):[];
-       decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+repositoryContext,{compact:economy.discipline,history,measure:economy.measurement,projectId:this.runtime.projectId}).catch(()=>null)??null;
-      }catch{decision=null;}
+       decision=await this.options.managerChat?.decide(q.text,(team?'Agent Control (o sistema que você gerencia; o dono pode digitar equipe para ver isto):\n'+team+'\n\n':'')+repositoryContext,{compact:economy.discipline,history,measure:economy.measurement,projectId:this.runtime.projectId}).catch(containFailure('MANAGER_DECISION_FAILED',null))??null;
+      }catch(error){logContainedFailure('MANAGER_DECISION_FAILED',error);decision=null;}
       finally{clearInterval(decisionLease);}
       if(!decision){const notice=await this.claudeLimitAnnouncement();if(notice){await this.say(notice.localId,notice.text);throw new Refusal('NO_ELIGIBLE_CAPACITY');}}
       const kind=decision?.kind??classifyPersonalText(q.text);
@@ -559,7 +560,7 @@ export class HappierEndpoint {
     const revision=previous?.expected_revision??Number((await this.ledger.pool.query('SELECT COALESCE(max(revision),0) revision FROM ac_manager_plans WHERE context_id=$1',[intent.context_id])).rows[0].revision);
     // A long model call must not starve the manager lease. This is lease renewal,
     // not a second scheduler; the same callId remains authoritative after failure.
-    let renewing=false;const timer=setInterval(()=>{if(!renewing&&!this.lifecycle.signal.aborted&&this.connectionState()==='connected'){renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{}).finally(()=>{renewing=false;});}},4000);timer.unref?.();
+    let renewing=false;const timer=setInterval(()=>{if(!renewing&&!this.lifecycle.signal.aborted&&this.connectionState()==='connected'){renewing=true;void this.ledger.heartbeat(this.options.authority).catch(()=>{/* a lost lease surfaces as STALE_MANAGER on the next fenced write */}).finally(()=>{renewing=false;});}},4000);timer.unref?.();
     let result:z.infer<typeof managerPlanPublishedSchema>;
     const contextText=this.options.personalConversation?await this.managerContext()+'\n\nPedido:\n'+sourceText:sourceText;
     try{result=managerPlanPublishedSchema.parse(await planner.plan(this.options.principal,{id:callId,intentId:intent.id,contextId:intent.context_id,
@@ -616,7 +617,7 @@ export class HappierEndpoint {
   }
   private async say(localId:string,text:string){
    if(this.options.personalConversation&&isRepeatablePersonalNotice(text,localId)){
-    const recent=await recentPersonalNotices(this.ledger.pool,this.options.authority.contextId).catch(()=>[]);
+    const recent=await recentPersonalNotices(this.ledger.pool,this.options.authority.contextId).catch(containFailure('PERSONAL_NOTICE_HISTORY_UNAVAILABLE',[]));
     if(suppressRepeatedPersonalNotice({text,localId,recent})){
      console.error(JSON.stringify({event:'PERSONAL_NOTICE_SUPPRESSED',text}));
      return;
@@ -677,8 +678,8 @@ export class HappierEndpoint {
    // The cause travels with the request: the failed QA tail, the reviewer's findings, the programmer's failure code.
    let facts='';
    if(this.options.teamFeedRoot){
-    const children=(await this.ledger.pool.query('SELECT id FROM ac_intents WHERE parent_intent_id=$1',[parentIntentId]).catch(()=>({rows:[]}))).rows.map(row=>String(row.id));
-    facts=await failureFacts(this.ledger.pool,this.options.authority.contextId,[parentIntentId,...children],{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool}).catch(()=>'');
+    const children=(await this.ledger.pool.query('SELECT id FROM ac_intents WHERE parent_intent_id=$1',[parentIntentId]).catch(containFailure('REPLAN_CHILDREN_UNAVAILABLE',{rows:[]}))).rows.map(row=>String(row.id));
+    facts=await failureFacts(this.ledger.pool,this.options.authority.contextId,[parentIntentId,...children],{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool}).catch(containFailure('REPLAN_FACTS_UNAVAILABLE',''));
    }
    const text='Replanejamento automático. A tarefa "'+unitId+'" do plano '+(Number.isSafeInteger(revision)?revision:'anterior')+' falhou na execução, QA ou revisão. '+
     'Proponha um plano corrigido que conclua o pedido original, considerando o que já pode ter sido integrado.'+
@@ -826,7 +827,7 @@ export class HappierEndpoint {
         const label=labels[step.status];if(!label||this.announced.get(run.id+'|'+step.id)===label)continue;
         this.announced.set(run.id+'|'+step.id,label);
         const name=step.kind==='check'?step.name+': programação':step.name;
-        await this.say('step-'+stableId(run.id+'|'+step.id+'|'+step.status),'Etapa '+name.slice(0,120)+' '+label+'.').catch(()=>{});
+        await this.say('step-'+stableId(run.id+'|'+step.id+'|'+step.status),'Etapa '+name.slice(0,120)+' '+label+'.').catch(containFailure('PERSONAL_STEP_MESSAGE_NOT_PUBLISHED',undefined));
        }
       }
       const seq = Number(run.lastSeq ?? 0);
@@ -848,7 +849,7 @@ export class HappierEndpoint {
       if(!match||this.titled.has(run.id))continue;
       this.titled.add(run.id);
       const own=(await this.ledger.pool.query('SELECT 1 FROM ac_intents WHERE id=$1 AND context_id=$2',[match[1],this.options.authority.contextId])).rowCount;
-      const text=own?(await this.originalRequest(match[1]).catch(()=>({text:''}))).text:'';
+      const text=own?(await this.originalRequest(match[1]).catch(containFailure('RUN_TITLE_REQUEST_UNAVAILABLE',{text:''}))).text:'';
       const line=String(text??'').trim().split('\n')[0]!.trim();
       if(line){this.runtime.store.updateRun(run.id,{title:line.length>90?line.slice(0,90).trimEnd()+'…':line});this.runtime.store.flush({throwOnError:false});}
      }
@@ -859,8 +860,8 @@ export class HappierEndpoint {
      // Each role's own report: who ran it (provider, model, effort), what it said, changed or found.
      for(const job of await teamJobs(this.ledger.pool,this.options.authority.contextId)){
       if(this.announced.get('team|'+job.id)===job.state)continue;
-      const message=await teamMessage(job,{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool}).catch(()=>null);
-      if(message)await this.say(message.id,message.text).catch(()=>{});
+      const message=await teamMessage(job,{executionHost:this.options.teamFeedRoot,pool:this.ledger.pool}).catch(containFailure('TEAM_MESSAGE_UNAVAILABLE',null));
+      if(message)await this.say(message.id,message.text).catch(containFailure('TEAM_MESSAGE_NOT_PUBLISHED',undefined));
       this.announced.set('team|'+job.id,job.state);
      }
     }
@@ -898,11 +899,11 @@ export class HappierEndpoint {
       await this.replan(id,'do plano').catch(async()=>{await this.say('replan-failed-'+id,'Não consegui pedir o replanejamento. Envie o pedido de novo com a correção.');});
      }
     }
-    const claudeLimit=await this.claudeLimitAnnouncement();if(claudeLimit)await this.say(claudeLimit.localId,claudeLimit.text).catch(()=>{});
+    const claudeLimit=await this.claudeLimitAnnouncement();if(claudeLimit)await this.say(claudeLimit.localId,claudeLimit.text).catch(containFailure('CLAUDE_LIMIT_NOTICE_NOT_PUBLISHED',undefined));
     if(this.options.personalConversation){
-     for(const notice of await reserveAssumptionNotices(this.ledger.pool,this.options.authority.contextId).catch(()=>[])){
+     for(const notice of await reserveAssumptionNotices(this.ledger.pool,this.options.authority.contextId).catch(containFailure('RESERVE_NOTICES_UNAVAILABLE',[]))){
       if(this.announced.get(notice.localId)==='said')continue;
-      await this.say(notice.localId,notice.text).catch(()=>{});
+      await this.say(notice.localId,notice.text).catch(containFailure('RESERVE_NOTICE_NOT_PUBLISHED',undefined));
       this.announced.set(notice.localId,'said');
      }
     }
@@ -956,7 +957,7 @@ export class HappierEndpoint {
       method: 'POST', headers: {authorization: 'Bearer ' + this.options.token, 'content-type': 'application/json'},
       body: JSON.stringify(body), redirect: 'error', signal,
     }), this.options.transportTimeoutMs ?? 10000, this.lifecycle.signal);
-    await response.body?.cancel().catch(() => {});
+    await response.body?.cancel().catch(() => {/* only the status is read; an unread body is dropped */});
     return response.status;
   }
   /** Queue the text as the owner, the way the Happier app does, so receivePending accepts it.
