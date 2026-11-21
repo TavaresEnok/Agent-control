@@ -44,7 +44,7 @@ if(check){step('verificação concluída; nada foi alterado');process.exit(0);}
 const happierLabel=sharedFrom?basename(dirname(sharedFrom)).replace(/[^A-Za-z0-9_-]/g,'-'):label;
 const happierUpstream=new URL((sharedFrom?JSON.parse(await readFile(sharedFrom,'utf8')):config).happier.upstreamOrigin).host;
 const site=join(sites,sameName?`happier-${happierLabel}.caddy`:`cockpit-${label}.caddy`);
-const body=routeHappier?`# Happier (${happierLabel}) e cockpit (${label}) no mesmo nome — gerado por personal:cockpit.
+let body=routeHappier?`# Happier (${happierLabel}) e cockpit (${label}) no mesmo nome — gerado por personal:cockpit.
 ${domain} {
 \timport seguranca
 \t@happier path /v1/* /v2/* /v3/* /health /ready /.well-known/*
@@ -62,6 +62,9 @@ ${domain} {
 }
 `;
 const previous=await readFile(site,'utf8').catch(()=>null);
+// Download routes added by hand to this site (handle_path /downloads/...) survive a regeneration.
+const downloads=(previous??'').match(/\n\thandle_path \/downloads\/[^\n]*\{\n(?:\t\t[^\n]*\n)*\t\}\n/g)??[];
+if(downloads.length)body=body.replace('\timport seguranca\n','\timport seguranca'+downloads.join(''));
 await writeFile(site+'.tmp',body,{mode:0o664});await rename(site+'.tmp',site);
 const caddy=(...a)=>execFileSync('docker',['exec',container,'caddy',...a],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
 try{caddy('validate','--config','/etc/caddy/Caddyfile','--adapter','caddyfile');caddy('reload','--config','/etc/caddy/Caddyfile','--adapter','caddyfile');}
