@@ -254,7 +254,8 @@ São endereços que aparecem no texto dos binários, não tráfego observado. Po
   - permissões das pastas da instalação;
   - como voltar atrás.
 - [ ] 9.5 Commit.
-- [ ] 9.6 Na instalação viva: só com o titular, que roda os comandos com sudo.
+- [x] 9.2 a 9.5: filtro próprio (`src/docker-filter.ts`, commits `8de91b4c` e `dd817504`), ligado pelo `personal:services` e provado com o Docker real.
+- [x] 9.6 **Risco aceito pelo titular (21/11/2026): "só eu vou usar".** O gateway continua com o usuário `app`, que está no grupo `docker`. O filtro recusa o que o produto nunca pede, mas quem tomasse o gateway poderia falar direto com `/var/run/docker.sock`. Para fechar isso é preciso rodar o gateway com outro usuário, fora do grupo `docker`, e isso exige sudo e um roteiro próprio, já que o `app` também roda o Docker dos outros projetos. Reavaliar se o Agent Control passar a ter outros usuários ou clientes. A senha de sudo enviada no chat não foi usada nem guardada, e o titular deve trocá-la.
 
 ## 10. Bons hábitos nas ordens, sem pacotes (ideias)
 
