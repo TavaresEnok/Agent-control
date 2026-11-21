@@ -24,6 +24,7 @@ import {
   type DesignComputedSample,
   type DesignImageExecution,
   type DesignImageSpawn,
+  type ToolCoverageRow,
 } from './design-image-run.ts';
 import {parseDesignProjectConfig, planDesignRoutes, type DesignProjectConfig} from './design-project-config.ts';
 import {stageDesignReferences} from './design-reference-files.ts';
@@ -32,13 +33,25 @@ import {stylelintConfig} from './design-stylelint.ts';
 import {analyzeDesignTokens, loadDesignReferences, tokenReportMarkdown} from './design-tokens.ts';
 import {visualReportMarkdown} from './design-visual.ts';
 import {markPngRect} from './design-mark.ts';
-import {readDesignReport, writeDesignReport, type DesignReportCapture} from './design-report.ts';
+import {
+  designFailureCode,
+  designReportDirectoryName,
+  previousRawFindings,
+  readDesignReport,
+  writeDesignReport,
+  type DesignReportCapture,
+  type DesignReportGap,
+} from './design-report.ts';
+import {deltaMarkdown} from './design-delta.ts';
+import {suggestionFor} from './design-suggestions.ts';
 import {loadDesignChecklist} from './design-checklist.ts';
 import {
   DESIGN_ACCEPTANCE,
   DesignAchado,
+  designBasis,
   type DesignAchado as DesignAchadoValue,
   type DesignConfirmResult,
+  type DesignExamCoverage,
   type DesignExamFinding,
   type DesignRawFinding,
   type DesignWorker,
@@ -144,13 +157,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       loginNote = 'O estado logado não foi capturado: o login no host falhou.';
     }
   }
-  const image = await (async () => {
-    try {
-      return input.image === undefined ? undefined : await executeDesignImage({
-    image: input.image.pinnedImage,
-    repository: input.repo,
-    targetUrl: input.targetUrl,
-    plan: input.routes !== undefined
+  const imagePlan = input.image === undefined
+    ? undefined
+    : input.routes !== undefined
       ? {
           routes: input.routes.slice(0, 40).map(route => ({
             route: route.route,
@@ -170,7 +179,14 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
           })),
           viewports: [375, 768, 1440],
           stylelint: stylelintConfig(),
-        },
+        };
+  const image = await (async () => {
+    try {
+      return input.image === undefined || imagePlan === undefined ? undefined : await executeDesignImage({
+    image: input.image.pinnedImage,
+    repository: input.repo,
+    targetUrl: input.targetUrl,
+    plan: imagePlan,
     ...(input.image.run === undefined ? {} : {run: input.image.run}),
     ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
     ...(loginState === undefined ? {} : {loginState}),
@@ -234,8 +250,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     else if (!list.includes(route.route)) list.push(route.route);
   }
   let examined: Awaited<ReturnType<typeof examineDesignScreens>>;
+  let chosen: ReturnType<typeof chooseScreens>;
   try {
-    const chosen = chooseScreens(input.files, routes, findings);
+    chosen = chooseScreens(input.files, routes, findings);
     if (chosen.omitted > 0) notes.push(`O exame cobriu ${chosen.screens.length} de ${chosen.screens.length + chosen.omitted} arquivos de tela.`);
     const screens = chosen.screens.map(screen => {
       const related = routesByFile.get(screen.file) ?? [screen.route];
@@ -293,7 +310,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     '',
     screenCoverageMarkdown(coverageRows),
   ].join('\n');
-  const raw = designRawDocument(target.origin, findings);
+  const ranTools = toolsThatRan(input.files, image, imageRows, tokens !== undefined, findings);
+  const raw = {...designRawDocument(target.origin, findings), ferramentas: ranTools};
   const note = [input.note, ...notes].filter(part => part && part.trim().length > 0).join(' ').replace(/\s+/g, ' ').trim().slice(0, 500)
     || 'Verificação de design somente leitura concluída.';
   const referenceMarkdown = referenceSection(reference?.note, staged.references);
@@ -308,9 +326,24 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     stateNotes,
     hasProjectConfig,
   );
-  const split = measuredJudgedMarkdown(achados);
-  if (split.length > 0) extras.sections = [...(extras.sections ?? []), {title: 'Medido e julgado', markdown: split}];
+  const previous = await previousRawFindings(input.dataDirectory, input.projectId, designReportDirectoryName(input.createdAt));
+  extras.sections = [
+    ...(extras.sections ?? []),
+    {title: 'Desde o último relatório', markdown: deltaMarkdown(previous, {findings, tools: ranTools})},
+  ];
+  const gaps = collectDesignGaps({
+    plan: imagePlan,
+    imageRan: image !== undefined,
+    shots: image?.shots ?? [],
+    toolRows: imageRows,
+    omittedFiles: chosen.omittedFiles,
+    modelCoverage: examined.modelCoverage,
+    visualMissing: examined.visualMissing,
+    rawFindings: findings,
+    screenFiles: chosen.screens.map(screen => screen.file),
+  });
   assertPasswordAbsent(input.login?.password, {
+    gaps,
     mapMarkdown,
     raw,
     note,
@@ -335,6 +368,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     note,
     captures: captured.files,
     emptyStates: captured.emptyStates,
+    gaps,
+    trust: true,
     ...extras,
   });
   const read = await readDesignReport(input.dataDirectory, input.projectId, input.runId);
@@ -372,11 +407,17 @@ function toAchado(
     .filter((part, at, all) => part.length > 0 && all.indexOf(part) === at)
     .join('\n')
     .slice(0, 2000);
+  const basis = designBasis(finding.basis, finding.measure);
   const sources = verifier === null
-    ? ['medida', finding.reference]
+    ? basis === 'preferencia'
+      ? ['preferencia', finding.reference]
+      : finding.measure
+        ? ['medida', finding.reference, 'examinador']
+        : ['medida', finding.reference]
     : ['examinador', finding.reference, verifier.provider, ...(finding.measure ? ['medida'] : [])];
   return DesignAchado.parse({
     id: `ACH-${String(index).padStart(3, '0')}`,
+    basis,
     title: finding.title.slice(0, 200),
     severity: finding.severity,
     status: confirm.status,
@@ -392,7 +433,8 @@ function toAchado(
   });
 }
 
-function assembleAchados(
+/** Junta confirmações e medidas e numera por prioridade. Exportada para os testes. */
+export function assembleAchados(
   rawFindings: readonly DesignRawFinding[],
   confirmations: readonly {
     finding: DesignExamFinding;
@@ -413,7 +455,20 @@ function assembleAchados(
     if (covered.has(raw.fingerprint)) continue;
     achados.push(raw.measure === undefined ? routeDownAchado(achados.length + 1, raw) : measuredRawAchado(achados.length + 1, raw));
   }
-  return achados;
+  return byPriority(achados);
+}
+
+const SEVERITY_ORDER: Record<DesignAchadoValue['severity'], number> = {alta: 0, media: 1, baixa: 2, informativa: 3};
+const STATUS_ORDER: Record<DesignAchadoValue['status'], number> = {confirmado: 0, reaberto: 0, provavel: 1, fechado: 2, descartado: 3};
+
+/** Gravidade, depois situação. A ordem de chegada desempata. ACH-001 é o primeiro a corrigir. */
+function byPriority(achados: readonly DesignAchadoValue[]): DesignAchadoValue[] {
+  return achados
+    .map((achado, at) => ({achado, at}))
+    .sort((left, right) => SEVERITY_ORDER[left.achado.severity] - SEVERITY_ORDER[right.achado.severity]
+      || STATUS_ORDER[left.achado.status] - STATUS_ORDER[right.achado.status]
+      || left.at - right.at)
+    .map(({achado}, index) => ({...achado, id: `ACH-${String(index + 1).padStart(3, '0')}`}));
 }
 
 function measuredRawAchado(index: number, finding: DesignRawFinding): DesignAchadoValue {
@@ -434,10 +489,11 @@ function measuredRawAchado(index: number, finding: DesignRawFinding): DesignAcha
     where: {file: finding.file.slice(0, 400), line: finding.line},
     scenario: `Medido por ${finding.tool}. ${finding.snippet}`.slice(0, 2000),
     proof: `Medido: ${detail}. ${finding.snippet}`.replace(/\s+/g, ' ').trim().slice(0, 2000),
-    suggestion: 'A medida confirma o achado. A correção precisa mudar o valor medido.',
+    suggestion: suggestionFor(finding.rule),
     acceptance: DESIGN_ACCEPTANCE,
     sources: ['medida', finding.tool],
     secretPreview: null,
+    basis: 'medido',
   });
 }
 
@@ -456,6 +512,7 @@ function routeDownAchado(index: number, finding: DesignRawFinding): DesignAchado
     acceptance: DESIGN_ACCEPTANCE,
     sources: ['medida', finding.tool],
     secretPreview: null,
+    basis: 'medido',
   });
 }
 
@@ -466,18 +523,103 @@ function referenceSection(note: string | undefined, references: readonly {name: 
   return lines.length === 0 ? undefined : lines.join('\n');
 }
 
-function measuredJudgedMarkdown(achados: readonly DesignAchadoValue[]): string {
-  if (achados.length === 0) return '';
-  const measured = achados.filter(item => item.verifier === null && item.sources.includes('medida'));
-  const judged = achados.filter(item => item.verifier !== null);
-  const line = (item: DesignAchadoValue) => `- ${item.id} ${item.reference} (${item.status})`;
-  return [
-    `Medidos: ${measured.length}. A medida confirma, sem modelo.`,
-    ...measured.map(line),
-    '',
-    `Julgados: ${judged.length}. O revisor confirmou.`,
-    ...judged.map(line),
-  ].join('\n');
+type GapPlan = {
+  routes: readonly {route: string; themes: readonly string[]; states: readonly unknown[]}[];
+  viewports: readonly number[];
+};
+
+function stateName(state: unknown): string {
+  if (typeof state === 'string') return state;
+  if (state && typeof state === 'object' && typeof (state as {name?: unknown}).name === 'string') return (state as {name: string}).name;
+  return 'padrao';
+}
+
+const ROUTE_DOWN = (finding: DesignRawFinding) => finding.tool === 'navegacao' && finding.rule === 'DESIGN-ROTA-INDISPONIVEL';
+
+/**
+ * Lacunas da rodada, para 'O que não foi possível verificar'. Função pura.
+ * Rota sem captura dá uma linha e nenhuma linha de largura. Estado sem captura em nenhuma largura também.
+ */
+export function collectDesignGaps(input: {
+  plan?: GapPlan;
+  imageRan: boolean;
+  shots: readonly {route: string; viewport: number; theme: string; state: string}[];
+  toolRows: readonly ToolCoverageRow[];
+  omittedFiles: readonly string[];
+  modelCoverage?: DesignExamCoverage;
+  visualMissing: readonly {file: string; route: string}[];
+  rawFindings: readonly DesignRawFinding[];
+  screenFiles: readonly string[];
+}): DesignReportGap[] {
+  const gaps: DesignReportGap[] = [];
+  if (!input.imageRan) gaps.push({kind: 'ferramenta', item: 'imagem', reason: 'não executada'});
+  if (input.imageRan && input.plan !== undefined) {
+    const shot = new Set(input.shots.map(item => `${item.route}\u001f${item.viewport}\u001f${item.theme}\u001f${item.state}`));
+    for (const route of input.plan.routes) {
+      const own = input.shots.filter(item => item.route === route.route);
+      if (own.length === 0) {
+        gaps.push({kind: 'rota', item: route.route, reason: 'nenhuma captura'});
+        continue;
+      }
+      for (const state of [...new Set(route.states.map(stateName))]) {
+        if (!own.some(item => item.state === state)) {
+          gaps.push({kind: 'estado', item: `${route.route} ${state}`, reason: 'sem captura em nenhuma largura'});
+          continue;
+        }
+        for (const theme of route.themes) {
+          for (const viewport of input.plan.viewports) {
+            if (shot.has(`${route.route}\u001f${viewport}\u001f${theme}\u001f${state}`)) continue;
+            gaps.push({kind: 'viewport', item: `${route.route} ${viewport}px ${theme} ${state}`, reason: 'sem captura'});
+          }
+        }
+      }
+    }
+  }
+  for (const row of input.toolRows) {
+    const failed = row.failure !== 'nenhuma';
+    if (!failed && row.executed !== '0') continue;
+    gaps.push({kind: 'ferramenta', item: row.tool, reason: failed ? `falhou: ${row.failure}` : 'não executou'});
+  }
+  for (const file of input.omittedFiles) {
+    gaps.push({kind: 'arquivo', item: file, reason: `fora do limite de ${MAX_SCREENS} telas do exame`});
+  }
+  if (input.modelCoverage) {
+    for (const [role, row] of [['examinador', input.modelCoverage.examiner], ['revisor', input.modelCoverage.reviewer]] as const) {
+      if (row.judged >= row.requested) continue;
+      gaps.push({kind: 'exame', item: `${role} ${row.model}`, reason: `${row.judged} de ${row.requested} julgadas, falha ${designFailureCode(row.failure)}`});
+    }
+  }
+  for (const item of input.visualMissing) {
+    gaps.push({kind: 'visual', item: `${item.route} (${item.file})`, reason: 'sem crítica visual completa'});
+  }
+  const screens = new Set(input.screenFiles);
+  const orphan = input.rawFindings.filter(item => item.measure === undefined && !ROUTE_DOWN(item) && !screens.has(item.file)).length;
+  if (orphan > 0) gaps.push({kind: 'exame', item: 'achados de ferramenta', reason: `${orphan} achados de ferramenta sem tela para conferir`});
+  return gaps.map(gap => ({kind: gap.kind, item: gap.item.trim() || '-', reason: gap.reason.trim() || '-'}));
+}
+
+const COVERAGE_TOOL: Record<string, string> = {'axe-core': 'axe'};
+
+/** Ferramentas que rodaram nesta rodada. A próxima rodada só compara o que as duas mediram. */
+function toolsThatRan(
+  files: readonly DesignSourceFile[],
+  image: DesignImageExecution | undefined,
+  rows: readonly ToolCoverageRow[],
+  tokens: boolean,
+  findings: readonly DesignRawFinding[],
+): string[] {
+  const ran = new Set(findings.map(item => item.tool));
+  if (files.some(file => /\.(?:html?|tsx|jsx|vue)$/i.test(file.path))) ran.add('html');
+  if (files.some(file => /\.css$/i.test(file.path))) {
+    ran.add('inventario');
+    ran.add('teclado');
+  }
+  if (tokens) ran.add('tokens');
+  if (image?.ok) ran.add('navegacao');
+  for (const row of rows) {
+    if (row.failure === 'nenhuma' && row.executed !== '0') ran.add(COVERAGE_TOOL[row.tool] ?? row.tool);
+  }
+  return [...ran].map(tool => tool.slice(0, 40)).sort((a, b) => a.localeCompare(b)).slice(0, 100);
 }
 
 /** Liga cada rota servida ao HTML de mesmo caminho. `/` usa `index.html`. */
@@ -508,7 +650,7 @@ function chooseScreens(
   files: readonly DesignSourceFile[],
   routes: readonly {file: string; route: string}[],
   findings: readonly DesignRawFinding[],
-): {screens: DesignExamineInput['screens']; omitted: number} {
+): {screens: DesignExamineInput['screens']; omitted: number; omittedFiles: string[]} {
   const routeOf = new Map<string, string>();
   for (const route of routes) {
     const key = route.file.slice(0, 400);
@@ -526,6 +668,7 @@ function chooseScreens(
   const picked = ranked.slice(0, MAX_SCREENS);
   return {
     omitted: ranked.length - picked.length,
+    omittedFiles: ranked.slice(MAX_SCREENS).map(file => file.path.slice(0, 400)),
     screens: picked.map(file => {
       const key = file.path.slice(0, 400);
       return {
@@ -707,8 +850,9 @@ function attributeDesignFindings(
   });
 }
 
-function filesDark(files: readonly {text: string}[]): boolean {
-  return files.some(file => /prefers-color-scheme\s*:\s*dark|data-theme|color-scheme\s*:/i.test(file.text));
+/** O projeto tem tema escuro. `color-scheme: light` sozinho não conta. */
+export function filesDark(files: readonly {text: string}[]): boolean {
+  return files.some(file => /prefers-color-scheme\s*:\s*dark|data-theme|color-scheme\s*:[^;]*dark/i.test(file.text));
 }
 
 const DESIGN_CONFIG_FILE = 'design.config.json';
@@ -891,5 +1035,8 @@ async function writeImageFailure(input: DesignModuleInput, origin: string, image
       {title: 'Execução da imagem', markdown: `O contêiner não entregou achados. Código ${image.code}.`},
     ],
     files: [{name: 'cobertura-ferramentas.md', body: toolCoverageMarkdown(image.coverage)}],
+    gaps: image.coverage
+      .filter(row => row.failure !== 'nenhuma' || row.executed === '0')
+      .map(row => ({kind: 'ferramenta' as const, item: row.tool, reason: row.failure !== 'nenhuma' ? `falhou: ${row.failure}` : 'não executou'})),
   });
 }

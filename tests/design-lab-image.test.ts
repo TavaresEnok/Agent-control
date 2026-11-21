@@ -113,7 +113,7 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     assert.doesNotMatch(readme, /\/: estado vazio, carregando, erro e logado não capturado/);
     assert.match(readme, /rota indisponível \(404\)/);
     assert.match(readme, /examinador \d+\/10, revisor /);
-    assert.match(readme, /Medidos:/);
+    assert.match(readme, /## Auditoria técnica/);
     assert.match(readme, /Esta rodada executou o contêiner/);
     assert.match(coverage, /css-analyzer/);
     const imageDoc = JSON.parse(await readFile(join(result.directory, 'imagem-achados-brutos.json'), 'utf8')) as {
