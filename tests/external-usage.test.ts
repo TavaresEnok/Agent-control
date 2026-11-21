@@ -12,7 +12,7 @@ test('Codex last cumulative reading and period difference',()=>{
 test('Claude sums unique assistant messages, excludes synthetic and preserves unknown counters',()=>{
  const msg=(id:string,model:string,input:number)=>({type:'assistant',timestamp:'2026-01-02T00:00:00Z',message:{id,model,usage:{input_tokens:input,output_tokens:5,cache_read_input_tokens:2,cache_creation_input_tokens:3}}});
  const result=readClaude(jsonl([msg('a','claude-test',10),msg('a','claude-test',12),msg('b','claude-test',4),msg('x','<synthetic>',100)]));
- deepStrictEqual(result[0],{provider:'claude',model:'claude-test',effort:'desconhecido',role:'desconhecido',input:16,cache:10,output:10,calls:2});
+ deepStrictEqual(result[0],{provider:'claude',model:'claude-test',effort:'desconhecido',role:'desconhecido',input:16,cache:10,output:10,calls:2,cacheRead:4,cacheWrite:6});
  strictEqual(readClaude(jsonl([msg('a','claude-test',10)]),{to:'2026-01-01T00:00:00Z'}).length,0);
 });
 test('Antigravity has no fabricated numbers',()=>{strictEqual(readAntigravity()[0]?.input,null);strictEqual(readAntigravity()[0]?.calls,null);});

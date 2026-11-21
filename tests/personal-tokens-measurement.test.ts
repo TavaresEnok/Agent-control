@@ -220,3 +220,14 @@ test('banco real: o gerente grava a tentativa de ponta a ponta (informado do Cod
     await rm(ok.dir, {recursive: true, force: true}); await rm(bad.dir, {recursive: true, force: true});
   }
 });
+
+test('the report shows cache read, cache write and the share of input served from the cache', async () => {
+  const {cacheColumns} = await import('../src/personal-tokens-cli.ts');
+  const claude: Row = {source: 'externo', provider: 'claude', model: 'm', effort: 'high', role: 'desconhecido', input: 100, cache: 1000, output: 10, calls: 2, cacheRead: 900, cacheWrite: 100};
+  assert.deepEqual(cacheColumns(claude), {read: 900, write: 100, hit: '82%'});
+  const codex: Row = {source: 'externo', provider: 'codex', model: 'm', effort: 'high', role: 'desconhecido', input: 1000, cache: 600, output: 10, calls: 1};
+  assert.deepEqual(cacheColumns(codex), {read: 600, write: null, hit: '60%'});
+  const text = renderReport(groupRows([claude, {...claude}]), [], []).join('\n');
+  assert.match(text, /\tmedição\tcache lido\tcache gravado\tacerto do cache\n/);
+  assert.match(text, /\tinformado\t1800\t200\t82%$/m);
+});

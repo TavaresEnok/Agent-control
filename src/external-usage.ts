@@ -1,5 +1,7 @@
 /** Parsers accept JSONL contents only; no messages or credentials are returned. */
 export type UsageRow={provider:string;model:string;effort:string;role:string;input:number|null;cache:number|null;output:number|null;calls:number|null;
+ /** Claude only: cache read (cheap) and cache write (dear), apart. `cache` keeps their sum for older readers. */
+ cacheRead?:number|null;cacheWrite?:number|null;
  /** Present only when the numbers cannot be trusted: the window has no known starting counter. */
  state?:'medição insuficiente'};
 export type Window={from?:string;to?:string};
@@ -58,7 +60,7 @@ export function readClaude(text:string,w:Window={}):UsageRow[]{
   const u=m.usage;const add=(old:number|null,value:number|null)=>old===null||value===null?null:old+value;
   row.input=add(row.input,num(u.input_tokens));row.output=add(row.output,num(u.output_tokens));
   const read=num(u.cache_read_input_tokens),creation=num(u.cache_creation_input_tokens);
-  row.cache=add(row.cache,read===null||creation===null?null:read+creation);row.calls=(row.calls??0)+1;
+  row.cache=add(row.cache,read===null||creation===null?null:read+creation);row.cacheRead=add(row.cacheRead??0,read);row.cacheWrite=add(row.cacheWrite??0,creation);row.calls=(row.calls??0)+1;
  }
  return [...grouped.values()];
 }

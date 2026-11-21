@@ -32,7 +32,8 @@ export async function readManagerRows(pool:{query:(sql:string,params:unknown[])=
 export function groupRows(rows:readonly Row[]):Row[]{
  const grouped=new Map<string,Row>();
  for(const row of rows){const key=JSON.stringify([row.source,row.provider,row.model,row.effort,row.role,row.outcome??'',row.measurement??'',row.state??'']);const prev=grouped.get(key);if(!prev){grouped.set(key,{...row});continue;}
-  for(const k of ['input','cache','output','calls'] as const)prev[k]=prev[k]===null||row[k]===null?null:prev[k]!+row[k]!;prev.total=prev.total==null||row.total==null?null:prev.total+row.total;}
+  for(const k of ['input','cache','output','calls'] as const)prev[k]=prev[k]===null||row[k]===null?null:prev[k]!+row[k]!;prev.total=prev.total==null||row.total==null?null:prev.total+row.total;
+  for(const k of ['cacheRead','cacheWrite'] as const)if(prev[k]!==undefined||row[k]!==undefined)prev[k]=prev[k]==null||row[k]==null?null:prev[k]!+row[k]!;}
  return [...grouped.values()];
 }
 
@@ -52,14 +53,23 @@ export function effectiveBatchLines(economyInput:unknown,label:string):string[]{
   '  módulo 10 (design): '+per(e.batchFiles,Math.min(e.batchTokens,DESIGN_TOKEN_CEILING))+(e.batchTokens>DESIGN_TOKEN_CEILING?' (teto do design: '+DESIGN_TOKEN_CEILING+')':'')];
 }
 
+/** Cache read, cache write and the share of input served from the cache. Claude reports input without the cache;
+ * Codex counts cached tokens inside input and has no cache write. Null where the source does not say. */
+export function cacheColumns(r:Row):{read:number|null;write:number|null;hit:string|null}{
+ if(r.provider==='codex'){const read=r.cache,input=r.input;return {read,write:null,hit:read!==null&&input?Math.round(read/input*100)+'%':null};}
+ const read=r.cacheRead??null,write=r.cacheWrite??null,input=r.input;
+ const all=read!==null&&write!==null&&input!==null?read+write+input:null;
+ return {read,write,hit:all?Math.round(read!/all*100)+'%':null};
+}
+
 /** The printed report. `problems` non-empty means partial coverage, stated before any number. */
 export function renderReport(rows:readonly Row[],problems:readonly string[],batchLines:readonly string[]):string[]{
  const out:string[]=[];
  if(problems.length){out.push('COBERTURA PARCIAL: '+problems.length+' fonte(s) não puderam ser lidas; os números abaixo estão incompletos.');for(const p of problems)out.push('  - '+p);}
  else out.push('Cobertura: todas as fontes foram lidas.');
  out.push('As fontes nativa e externa podem conter os mesmos jobs; não some as duas. Estimado e informado também não se somam; "desconhecido" é chamada sem número, não consumo zero.');
- out.push('fonte\tprovedor\tmodelo\tesforço\tpapel\tentrada\tcache\tsaída\tchamadas\ttotal informado\tdesfecho\tmedição');
- for(const r of rows)out.push([r.source,r.provider,r.model,r.effort,r.role,r.input,r.cache,r.output,r.calls,r.total,r.outcome??'-',r.measurement??measurementOf(r)].map(v=>v??'não medido').join('\t'));
+ out.push('fonte\tprovedor\tmodelo\tesforço\tpapel\tentrada\tcache\tsaída\tchamadas\ttotal informado\tdesfecho\tmedição\tcache lido\tcache gravado\tacerto do cache');
+ for(const r of rows){const c=cacheColumns(r);out.push([r.source,r.provider,r.model,r.effort,r.role,r.input,r.cache,r.output,r.calls,r.total,r.outcome??'-',r.measurement??measurementOf(r),c.read,c.write,c.hit].map(v=>v??'não medido').join('\t'));}
  out.push('Configuração efetiva de lotes por módulo:',...batchLines);
  return out;
 }
