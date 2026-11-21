@@ -4,6 +4,7 @@ import {z} from 'zod';
 import {codexPersonalCommand,runCodexExec} from './codex-personal.ts';
 import {initializeNativeWorkerEnvironment,readSignedWorkerLaunch,assertCodexSubscriptionIdentity} from './native-worker-security.ts';
 import {CodexPlanningAdapter,CodexPlanningFailure} from './codex-planning-adapter.ts';
+import {HARDENED_CLAUDE_BIN} from './claude-hardening.ts';
 import {ClaudePlanningAdapter,ClaudePlanningFailure} from './claude-planning-adapter.ts';
 import {CodexAppServerRunner} from '../upstream/cezar/packages/cezar/dist/core/codex-app-server-runner.js';
 import {ClaudeCliRunner} from '../upstream/cezar/packages/cezar/dist/core/claude-cli-runner.js';
@@ -37,7 +38,7 @@ async function main(){
    result={output:ran.failureCode?'':ran.output,tokensUsed:null,usageWindows:ran.usageWindows,sessionId:input.sessionId};
   }else{
   const adapter=input.provider==='claude'
-   ?new ClaudePlanningAdapter(new ClaudeCliRunner({bin:'/usr/local/bin/claude',timeoutMs:120000}))
+   ?new ClaudePlanningAdapter(new ClaudeCliRunner({bin:HARDENED_CLAUDE_BIN.evaluator,timeoutMs:120000}))
    :new CodexPlanningAdapter(new CodexAppServerRunner({bin:'/usr/local/bin/codex',timeoutMs:120000}));
   if(input.provider!=='claude')await assertCodexSubscriptionIdentity(input.providerSubjectDigest);
   result=await adapter.generate({sessionId:input.sessionId,model:input.model,effort:input.effort,sourceMessageRef:input.sourceMessageRef,text:input.text,

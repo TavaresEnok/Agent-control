@@ -41,6 +41,7 @@ import {usageWindowsObservationSchema} from '../upstream/cezar/packages/contract
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {replaceSecretClassFiles} from './verify-redact.ts';
 import {rememberExamStripNote} from './exam-strip-note.ts';
+import {reviewDiffDocument} from './review-diff.ts';
 import {describeBind,examAccountMount,examWorkerEnv,formatExamStripNote,stripExamHostileConfig} from './verify-exam-isolation.ts';
 import {postgresAccountLoginLock,prepareClaudeExamAccessToken,renewClaudeLoginInPlace,safeFailureCode,writePrivateAtomic} from './exam-login.ts';
 import {finishExamIntentTx} from './exam-intent.ts';
@@ -530,11 +531,15 @@ export class NativeExecutionSupervisor{
    if(workerArtifact&&repository){
     // The copy carries no Git metadata and no Git tool is offered: untrusted repository configuration must not run beside the credentials.
     await cp(p.work,workerArtifact,{recursive:true});await rm(join(workerArtifact,'.git'),{recursive:true,force:true});
-    if(isolateExam){await replaceSecretClassFiles(workerArtifact);const stripped=await stripExamHostileConfig(workerArtifact);const stripNote=formatExamStripNote(stripped);if(stripNote)rememberExamStripNote(input.intentId,stripNote);}
+    if(isolateExam)await replaceSecretClassFiles(workerArtifact);
+    // Every evaluator copy loses agent config (CLAUDE.md, AGENTS.md, .claude/, .mcp.json, .codex/ and the like, at any depth):
+    // the change under judgment must not instruct its judge or run a hook beside the judge's login. The diff still shows those files.
+    const stripped=await stripExamHostileConfig(workerArtifact);
+    if(isolateExam){const stripNote=formatExamStripNote(stripped);if(stripNote)rememberExamStripNote(input.intentId,stripNote);}
     if(!designExam&&!securityExam){
      // For an evaluator, `base` is the artifact commit; the change under review is that commit against the artifact's own base.
      const reviewed=(await this.ledger.pool.query('SELECT base_id FROM ac_artifacts WHERE id=$1',[input.artifactId])).rows[0];
-     if(reviewed?.base_id){const change=await new GitArtifacts(repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),change.diff+(change.truncated?'\n[diff truncated]\n':''),{mode:0o600,flag:'wx'});}
+     if(reviewed?.base_id){const change=await new GitArtifacts(repository).diff(input.base,String(reviewed.base_id));await writeFile(join(workerArtifact,'.agent-control-review.diff'),reviewDiffDocument(change,stripped),{mode:0o600,flag:'wx'});}
     }
    }
    await writeNativeSecretSnapshot(p.secretSnapshot,input.jobId,this.key,[token,...envSecrets,...accountSecrets]);

@@ -460,6 +460,8 @@ if (process.env.HOME && fs.existsSync(process.env.HOME)) {
       '--strict-mcp-config',
       '--mcp-config',
       '{"mcpServers":{}}',
+      '--settings',
+      '{"disableAllHooks":true}',
       '--max-turns',
       '1',
     ]);

@@ -106,7 +106,7 @@ export class NativeVerification{
   });
  }
  /** Combo QA model. Reuses the reviewer supervisor and verdict, and never writes script QA evidence. */
- async evaluateQaModel(principal:string,intent:Intent,authority:Authority,scriptStageId:string,artifact:ArtifactRow,material:{diff:string;truncated?:boolean;ownerRequest?:string;testTail:string},isCanceled:()=>boolean){
+ async evaluateQaModel(principal:string,intent:Intent,authority:Authority,scriptStageId:string,artifact:ArtifactRow,material:{diff:string;truncated?:boolean;diffBytes?:number;files?:readonly {status:string;path:string}[];filesTotal?:number;ownerRequest?:string;testTail:string},isCanceled:()=>boolean){
   if(isCanceled())throw new Refusal('STAGE_CANCELED');
   if(!await contextQaModel(this.ledger.pool,authority.contextId))throw new Refusal('QA_MODEL_UNAVAILABLE');
   const ids=qaModelIds(scriptStageId);
@@ -132,7 +132,7 @@ export class NativeVerification{
    });
    if(!attached.rowCount)throw new Refusal('QA_MODEL_RECONCILIATION_REQUIRED');
   }
-  const request=NativeExecutionRequest.parse(qaModelExecutionRequest({stageId:ids.stageId,sessionId:ids.sessionId,intentId:intent.id,grantId:grantId!,artifact,diff:material.diff,truncated:material.truncated,ownerRequest:material.ownerRequest,testTail:material.testTail}));
+  const request=NativeExecutionRequest.parse(qaModelExecutionRequest({stageId:ids.stageId,sessionId:ids.sessionId,intentId:intent.id,grantId:grantId!,artifact,diff:material.diff,truncated:material.truncated,diffBytes:material.diffBytes,files:material.files,filesTotal:material.filesTotal,ownerRequest:material.ownerRequest,testTail:material.testTail}));
   const account=(await this.ledger.pool.query('SELECT account_id FROM ac_capacity_grants WHERE id=$1 AND intent_id=$2 AND context_id=$3',[grantId,intent.id,authority.contextId])).rows[0];
   const candidates=this.supervisors.filter(s=>s.supportsAccount(account?.account_id)&&(prior?true:s.active!==false)&&(!prior||prior.account_id===account?.account_id&&s.executorDigest===prior.executor_digest&&s.keyFingerprint===prior.key_fingerprint));
   const supervisor=candidates.length===1?candidates[0]:undefined;

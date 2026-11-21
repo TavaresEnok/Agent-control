@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {Refusal} from './contracts.ts';
 import {loadInstallation, type Installation} from './installation.ts';
 import {deliverPersonalPush} from './personal-push.ts';
-import {diskNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
+import {diskNotice,dueNotices,ERROR_WINDOW_MINUTES,loginNotices,agentConfigNotices,personalAccountRoot,repeatedErrorNotices,type HealthNotice} from './personal-health.ts';
 
 const hourMs=60*60*1000;
 const imageId=/^sha256:[a-f0-9]{64}$/;
@@ -142,7 +142,7 @@ async function defaultLogins(config:Installation,installationFile:string,now:Dat
  const pool=new pg.Pool({connectionString:config.databaseUrl,max:1,connectionTimeoutMillis:5000});
  try{
   const rows=(await pool.query("SELECT id,provider FROM ac_accounts WHERE enabled AND mode='subscription_cli'")).rows as {id:string;provider:string}[];
-  return await loginNotices(accountRoot,rows,now,installationFile);
+  return [...await loginNotices(accountRoot,rows,now,installationFile),...await agentConfigNotices(accountRoot,rows)];
  }finally{await pool.end();}
 }
 

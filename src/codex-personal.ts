@@ -30,6 +30,13 @@ export function extractJsonObject(text:string):unknown{
  * bubblewrap sandbox cannot start inside it, so it is turned off. Evaluators get their checkout mounted read-only.
  * xhigh and max are already capped at high.
  */
+/**
+ * Proven against Codex 0.166.0 (tests/claude-hardening.test.ts, lab case): an MCP server in the account `config.toml`
+ * and one in a trusted project `.codex/config.toml` both start by default. `--ignore-user-config` drops the account
+ * config (auth still comes from CODEX_HOME) and with it the project trust, and hooks and plugins stay off.
+ */
+export const CODEX_HARDENING_ARGS=['--ignore-user-config','--disable','hooks','--disable','plugins'] as const;
+
 export function codexPersonalCommand(input:{role:CodexPersonalRole;model:string;effort:string;prompt:string;outputSchema?:Record<string,unknown>}){
  const mapped=cliEffort('codex',Effort.parse(input.effort));
  // Evaluators have no /work: their read-only copy of the artifact is mounted at /planning, as for Claude and Grok.
@@ -37,7 +44,7 @@ export function codexPersonalCommand(input:{role:CodexPersonalRole;model:string;
  const prompt=input.outputSchema&&input.role!=='programmer'&&input.role!=='manager'
   ?'Reply with ONLY one JSON object, no prose and no code fences, matching this JSON Schema: '+JSON.stringify(input.outputSchema)+'\n\n'+input.prompt
   :input.prompt;
- return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account/.codex'],args:['exec','--skip-git-repo-check','--sandbox','danger-full-access','--model',input.model,'-c','model_reasoning_effort='+mapped,'-C',cwd,prompt]};
+ return {bin:'/usr/local/bin/codex',env:['CODEX_HOME=/account/.codex'],args:['exec',...CODEX_HARDENING_ARGS,'--skip-git-repo-check','--sandbox','danger-full-access','--model',input.model,'-c','model_reasoning_effort='+mapped,'-C',cwd,prompt]};
 }
 
 /** Runs the personal Codex CLI. A usage-limit message becomes PROVIDER_USAGE_LIMIT. */

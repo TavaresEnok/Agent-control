@@ -1,3 +1,4 @@
+import {hardenedClaudeArgs} from './claude-hardening.ts';
 import {execFile} from 'node:child_process';
 import {join} from 'node:path';
 import type {Ledger} from './ledger.ts';
@@ -51,7 +52,7 @@ export function parseManagerDecision(stdout:string):ManagerDecision{
 /** Argv for the manager CLI. Does not spawn. Claude keeps xhigh and max; Grok and Codex cap at high. */
 export function managerChatCommand(provider:string,model:string,effort:string,prompt:string){
  const mapped=cliEffort(provider,Effort.parse(effort));
- if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,'--model',model,'--effort',mapped,'--output-format','text']};
+ if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,...hardenedClaudeArgs('evaluator'),'--model',model,'--effort',mapped,'--output-format','text']};
  if(provider==='grok')return {bin:'/usr/local/bin/grok',env:['HOME=/account'],args:['-p',prompt,'--model',model,'--reasoning-effort',mapped,'--output-format','plain','--cwd','/tmp','--no-plan','--always-approve']};
  return codexPersonalCommand({role:'manager',model,effort,prompt});
 }

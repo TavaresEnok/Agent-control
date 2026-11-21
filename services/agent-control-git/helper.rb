@@ -214,8 +214,25 @@ begin
     puts JSON.generate(identity.merge({protectedChanged: status.exitstatus == 1}))
   elsif input['action'] == 'diff'
     diff = git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', base, candidate, '--')
+    # The changed-file list travels whole whenever it fits, so a judge of a cut diff knows what it did not see.
+    names, _, name_status = AcSafeGit.capture('-C', repo, 'diff', '--name-status', '--no-renames', '-z', base, candidate, '--')
+    raise 'GIT_OPERATION_FAILED' unless name_status.success?
+    fields = names.split("\0")
+    files = []
+    budget = 12_000
+    total = 0
+    fields.each_slice(2) do |status_code, path|
+      next if path.nil? || path.empty?
+      total += 1
+      entry = { status: status_code.to_s[0, 2], path: path.dup.force_encoding('UTF-8').scrub }
+      cost = entry[:path].bytesize + 16
+      next if budget < cost
+      budget -= cost
+      files << entry
+    end
     puts JSON.generate(identity.merge({diff: diff.byteslice(0, 20_000).force_encoding('UTF-8').scrub,
-      truncated: diff.bytesize > 20_000, diffSha256: Digest::SHA256.hexdigest(diff)}))
+      truncated: diff.bytesize > 20_000, diffBytes: diff.bytesize, diffSha256: Digest::SHA256.hexdigest(diff),
+      files: files, filesTotal: total}))
   elsif input['action'] == 'snapshot'
     destination = input.fetch('destination')
     raise 'INVALID_REQUEST' unless destination.is_a?(String) && destination.start_with?('/') && !File.exist?(destination) && !File.symlink?(destination)

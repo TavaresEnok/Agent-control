@@ -1,6 +1,7 @@
 import {constants} from 'node:fs';
 import {chmod, copyFile, lstat, mkdir, mkdtemp, open, readdir, readlink, rm, symlink, unlink, writeFile} from 'node:fs/promises';
 import {join, relative, sep} from 'node:path';
+import {CLAUDE_HOOKS_OFF_SETTINGS} from './claude-hardening.ts';
 
 /** Basenames removed from the exam copy. Match is case-insensitive. */
 const EXAM_HOSTILE_NAMES = new Set(['.claude', '.mcp.json', '.codex', '.grok', '.cursor', 'claude.md', 'agents.md', 'grok.md', 'claude.local.md', '.agents']);
@@ -9,8 +10,9 @@ export function isExamHostileName(name: string): boolean {
   return EXAM_HOSTILE_NAMES.has(name.toLowerCase());
 }
 
-/** Symlinks unlinked from the exam copy. `paths` is capped; `count` is the real total. */
-export type ExamStripResult = {count: number; paths: string[]};
+/** Symlinks unlinked from the exam copy. `paths` is capped; `count` is the real total.
+ * `config` lists the agent-config entries removed (capped at 20), `configCount` their real total. */
+export type ExamStripResult = {count: number; paths: string[]; config: string[]; configCount: number};
 
 const STRIP_PATH_CAP = 20;
 
@@ -26,7 +28,9 @@ export async function stripExamHostileConfig(root: string): Promise<ExamStripRes
 async function stripExamTree(directory: string, root: string): Promise<ExamStripResult> {
   const entries = await readdir(directory, {withFileTypes: true});
   let count = 0;
+  let configCount = 0;
   const paths: string[] = [];
+  const config: string[] = [];
   for (const entry of entries) {
     const path = join(directory, entry.name);
     if (entry.isSymbolicLink()) {
@@ -37,16 +41,22 @@ async function stripExamTree(directory: string, root: string): Promise<ExamStrip
     }
     if (isExamHostileName(entry.name)) {
       await rm(path, {recursive: true, force: true});
+      configCount += 1;
+      if (config.length < STRIP_PATH_CAP) config.push(relative(root, path).split(sep).join('/'));
       continue;
     }
     if (!entry.isDirectory()) continue;
     const nested = await stripExamTree(path, root);
     count += nested.count;
+    configCount += nested.configCount;
     for (const item of nested.paths) {
       if (paths.length < STRIP_PATH_CAP) paths.push(item);
     }
+    for (const item of nested.config) {
+      if (config.length < STRIP_PATH_CAP) config.push(item);
+    }
   }
-  return {count, paths};
+  return {count, paths, config, configCount};
 }
 
 /** Portuguese report sentence. Undefined when the copy had no symlink. */
@@ -55,7 +65,7 @@ export function formatExamStripNote(result: {count: number; paths: readonly stri
   return `Symlinks removidos da cópia do exame: ${result.count}. Onde: ${result.paths.join(', ')}.`;
 }
 
-/** Argv the exam wrapper execs. `--setting-sources user` is first; every `--mcp-config` pair is dropped. */
+/** Argv the exam wrapper execs. The hardening flags come first; every `--mcp-config` pair is dropped. */
 export function examClaudeArgv(runnerArgv: readonly string[]): string[] {
   const filtered: string[] = [];
   for (let i = 0; i < runnerArgv.length; i += 1) {
@@ -65,8 +75,11 @@ export function examClaudeArgv(runnerArgv: readonly string[]): string[] {
     }
     filtered.push(runnerArgv[i]!);
   }
-  return ['--setting-sources', 'user', ...filtered];
+  return [...EXAM_CLAUDE_FLAGS, ...filtered];
 }
+
+/** `--setting-sources user`, no MCP server at all and no hook from any source. */
+export const EXAM_CLAUDE_FLAGS = ['--setting-sources', 'user', '--strict-mcp-config', '--settings', CLAUDE_HOOKS_OFF_SETTINGS] as const;
 
 export const EXAM_CLAUDE_WRAPPER_BIN = '/usr/local/bin/ac-exam-claude';
 
@@ -76,7 +89,7 @@ export function examClaudeWrapperSource(realBin: string, nodeShebang = '/usr/bin
 const {spawn} = require('node:child_process');
 const real = ${JSON.stringify(realBin)};
 const incoming = process.argv.slice(2);
-const args = ['--setting-sources', 'user'];
+const args = ${JSON.stringify(EXAM_CLAUDE_FLAGS)};
 for (let i = 0; i < incoming.length; i += 1) {
   if (incoming[i] === '--mcp-config') { i += 1; continue; }
   args.push(incoming[i]);

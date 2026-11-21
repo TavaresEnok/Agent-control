@@ -6,6 +6,9 @@ COPY --chmod=0555 codex /usr/local/bin/codex
 # Optional claude/grok binaries (AC_NATIVE_CLAUDE_BIN, AC_NATIVE_GROK_BIN). The directory may be empty.
 COPY --chmod=0555 extra-bin/ /usr/local/bin/
 COPY --chmod=0755 ac-exam-claude.cjs /usr/local/bin/ac-exam-claude
+# Every non-exam Claude run goes through one of these: no project or account hook, no project MCP server.
+COPY --chmod=0755 ac-claude-evaluator.cjs /usr/local/bin/ac-claude-evaluator
+COPY --chmod=0755 ac-claude-programmer.cjs /usr/local/bin/ac-claude-programmer
 # System CA bundle: the Codex CLI verifies TLS against it (Claude and Grok ship their own).
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates >/dev/null && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /account /input /output /planning /runner && chmod 0555 /runner

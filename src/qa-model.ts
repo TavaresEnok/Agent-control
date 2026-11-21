@@ -1,3 +1,4 @@
+import {changedFilesSummary,INCOMPLETE_REVIEW_RULE} from './review-diff.ts';
 import {tailForModel} from './manager-discipline.ts';
 import {CapacityPolicy} from './capacity.ts';
 import {Refusal} from './contracts.ts';
@@ -8,7 +9,7 @@ import {NativeReviewVerdict,nativeReviewOutputSchema} from './native-review-cont
 export function qaModelShouldRun(scriptStatus:string|undefined,qaModel:boolean|undefined){
  return scriptStatus==='passed'&&qaModel===true;
 }
-export const QA_MODEL_INSTRUCTION='You are the QA model. The script runner already finished. Read the diff, ownerRequest and testTail. ownerRequest holds the exact words of the owner for the whole plan; this change may be only one of several independent tasks, so judge it only for the files it touches and never reject because another part of the plan is absent here. Reject when the change should have a test and does not, or when the test does not really test the change. Documentation or other text-only changes need no test. Return only the reviewer verdict JSON with verdict pass or reject. Do not change files or claim that you executed the tests.';
+export const QA_MODEL_INSTRUCTION='You are the QA model. The script runner already finished. Read the diff, ownerRequest and testTail. ownerRequest holds the exact words of the owner for the whole plan; this change may be only one of several independent tasks, so judge it only for the files it touches and never reject because another part of the plan is absent here. Reject when the change should have a test and does not, or when the test does not really test the change. Documentation or other text-only changes need no test. changedFiles lists every changed file; diffTruncated true means the diff is cut. '+INCOMPLETE_REVIEW_RULE+' Return only the reviewer verdict JSON with verdict pass or reject. Do not change files or claim that you executed the tests.';
 
 export function qaModelIds(scriptStageId:string){
  return {stageId:managedId(scriptStageId,'qa-model','stage'),sessionId:managedId(scriptStageId,'qa-model','session'),attemptId:managedId(scriptStageId,'qa-model','attempt')};
@@ -45,8 +46,8 @@ export function parseQaModelVerdict(raw:unknown){
  return NativeReviewVerdict.parse(copy);
 }
 
-export function qaModelExecutionRequest(input:{stageId:string;sessionId:string;intentId:string;grantId:string;artifact:{id:string;policy_revision:number;commit_id:string;tree_id:string;base_id:string};diff:string;truncated?:boolean;ownerRequest?:string;testTail:string}){
- const task=JSON.stringify({instruction:QA_MODEL_INSTRUCTION,...(input.ownerRequest?{ownerRequest:input.ownerRequest}:{}),kind:'review',diff:input.diff.slice(0,20000),diffTruncated:Boolean(input.truncated),testTail:tailForModel(input.testTail,'qa-logs.bin do estágio '+input.stageId,40,8000),artifactId:input.artifact.id,policyRevision:input.artifact.policy_revision,commit:input.artifact.commit_id,tree:input.artifact.tree_id,base:input.artifact.base_id});
+export function qaModelExecutionRequest(input:{stageId:string;sessionId:string;intentId:string;grantId:string;artifact:{id:string;policy_revision:number;commit_id:string;tree_id:string;base_id:string};diff:string;truncated?:boolean;diffBytes?:number;files?:readonly {status:string;path:string}[];filesTotal?:number;ownerRequest?:string;testTail:string}){
+ const task=JSON.stringify({instruction:QA_MODEL_INSTRUCTION,...(input.ownerRequest?{ownerRequest:input.ownerRequest}:{}),kind:'review',changedFiles:changedFilesSummary({diff:input.diff,truncated:Boolean(input.truncated),diffBytes:input.diffBytes,files:input.files,filesTotal:input.filesTotal}),diff:input.diff.slice(0,20000),diffTruncated:Boolean(input.truncated),testTail:tailForModel(input.testTail,'qa-logs.bin do estágio '+input.stageId,40,8000),artifactId:input.artifact.id,policyRevision:input.artifact.policy_revision,commit:input.artifact.commit_id,tree:input.artifact.tree_id,base:input.artifact.base_id});
  return {jobId:input.stageId,intentId:input.intentId,grantId:input.grantId,sessionId:input.sessionId,base:input.artifact.commit_id,role:'qa' as const,task,writePaths:[] as string[],artifactId:input.artifact.id,outputSchema:structuredClone(nativeReviewOutputSchema)};
 }
 

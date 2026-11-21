@@ -96,6 +96,47 @@ export async function loginNotices(accountsRoot:string,accounts:readonly {id:str
  return notices;
 }
 
+/** Account files whose content can run a command or start a server beside the login. */
+const agentConfigFiles=['settings.json','.claude/settings.json','.claude.json','.codex/config.toml','.codex/hooks.json'];
+const jsonRisk=['hooks','statusLine','mcpServers','apiKeyHelper','enabledPlugins'];
+const tomlRisk=/^\s*(?:\[\s*(?:mcp_servers|hooks|plugins)\b|notify\s*=)/m;
+
+/** Keys in one account config file that run commands or servers. Unreadable or absent files say nothing. */
+export function agentConfigRisks(path:string,text:string):string[]{
+ if(path.endsWith('.toml'))return tomlRisk.test(text)?[path]:[];
+ if(path.endsWith('hooks.json'))return text.trim()?[path]:[];
+ let parsed:unknown;try{parsed=JSON.parse(text);}catch{return [];}
+ if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))return [];
+ const data=parsed as Record<string,unknown>;
+ const found=jsonRisk.filter(key=>{
+  const value=data[key];
+  return value!==undefined&&value!==null&&!(typeof value==='object'&&Object.keys(value as object).length===0);
+ });
+ // .claude.json keeps MCP servers per project too.
+ if(path==='.claude.json'&&data.projects&&typeof data.projects==='object'){
+  for(const project of Object.values(data.projects as Record<string,any>))
+   if(project&&typeof project==='object'&&project.mcpServers&&Object.keys(project.mcpServers).length){found.push('projects.mcpServers');break;}
+ }
+ return found.map(key=>path+':'+key);
+}
+
+/** One notice per account whose own config runs hooks, MCP servers or plugins. The launches turn those off
+ * (src/claude-hardening.ts, CODEX_HARDENING_ARGS), so this is a warning that a job or a person planted one. */
+export async function agentConfigNotices(accountsRoot:string,accounts:readonly {id:string}[],read:(path:string)=>Promise<string>=path=>readFile(path,'utf8')):Promise<HealthNotice[]>{
+ const notices:HealthNotice[]=[];
+ for(const account of accounts){
+  if(!/^[0-9a-f-]{36}$/.test(account.id))continue;
+  const risks:string[]=[];
+  for(const file of agentConfigFiles){
+   let text:string;try{text=await read(join(accountsRoot,account.id,file));}catch{continue;}
+   risks.push(...agentConfigRisks(file,text));
+  }
+  if(risks.length)notices.push({key:'agent-config:'+account.id+':'+risks.join(','),
+   text:`A conta ${account.id.slice(0,8)} tem configuração que roda comandos (${risks.join(', ')}). Os lançamentos do Agent Control desligam isso, mas confira quem gravou e remova.`,repeatMs:dayMs});
+ }
+ return notices;
+}
+
 /** Account login folder: the installation's accountHomesDirectory, else <dataDirectory>/accounts. */
 export function personalAccountRoot(config:{accountHomesDirectory?:string|undefined;dataDirectory:string}){
  return config.accountHomesDirectory??join(config.dataDirectory,'accounts');

@@ -34,6 +34,8 @@ export async function prepareNativeImage(kind,binaryPath,expected){
  }
  await copyFile(join(repo,'deploy',selected.dockerfile),join(context,'Dockerfile'));await chmod(join(context,'Dockerfile'),0o600);
  if(kind==='execution'){await copyFile(join(repo,'deploy','ac-exam-claude.cjs'),join(context,'ac-exam-claude.cjs'));await chmod(join(context,'ac-exam-claude.cjs'),0o755);}
+ // Hardened Claude wrappers (src/claude-hardening.ts): the execution and planning images both run Claude.
+ if(kind==='execution'||kind==='planning')for(const wrapper of ['ac-claude-evaluator.cjs','ac-claude-programmer.cjs']){await copyFile(join(repo,'deploy',wrapper),join(context,wrapper));await chmod(join(context,wrapper),0o755);}
  const bundle=await readFile(bundlePath),dockerfile=await readFile(join(context,'Dockerfile'));
  await writeFile(join(context,'MANIFEST.json'),JSON.stringify({schemaVersion:1,kind,publicCodexSha256:expected,extraBinarySha256:extra,bundleSha256:createHash('sha256').update(bundle).digest('hex'),
   dockerfileSha256:createHash('sha256').update(dockerfile).digest('hex'),sourceCommit:execFileSync('git',['rev-parse','HEAD'],{cwd:repo,encoding:'utf8'}).trim(),

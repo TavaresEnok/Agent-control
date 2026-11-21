@@ -105,7 +105,8 @@ export class GitArtifacts{
  }
  async diff(candidate:string,base:string){
   GitId.parse(candidate);GitId.parse(base);
-  const value=Identity.extend({diff:z.string().max(20000),truncated:z.boolean(),diffSha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict()
+  const value=Identity.extend({diff:z.string().max(20000),truncated:z.boolean(),diffBytes:z.number().int().nonnegative(),diffSha256:z.string().regex(/^[a-f0-9]{64}$/),
+   files:z.array(z.object({status:z.string().min(1).max(2),path:z.string().min(1).max(4096)}).strict()).max(2000),filesTotal:z.number().int().nonnegative()}).strict()
    .parse(await this.invoke({action:'diff',candidate,base}));
   if(value.commit!==candidate||value.base!==base)throw new Refusal('GIT_IDENTITY_MISMATCH');
   return value;

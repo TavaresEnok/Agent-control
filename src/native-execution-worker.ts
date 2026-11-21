@@ -6,6 +6,7 @@ import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {z} from 'zod';
 import {codexPersonalCommand,codexWorkerAssertsSubscriptionIdentity,runCodexExec} from './codex-personal.ts';
+import {HARDENED_CLAUDE_BIN,hardenedClaudeMode} from './claude-hardening.ts';
 import {EXAM_CLAUDE_WRAPPER_BIN,examCodexArgv,examLoginHomes,prepareExamClaudeHome,prepareExamLoginCopy} from './verify-exam-isolation.ts';
 import {initializeNativeWorkerEnvironment,readPrivateWorkerFile,readSignedWorkerLaunch,assertCodexSubscriptionIdentity,prepareNativeExternalAuth,readMountedCredentialSecrets} from './native-worker-security.ts';
 import {startToolForwarder,isPrivateToolAddress} from './native-tool-forwarder.ts';
@@ -90,7 +91,8 @@ async function main(){
  const capability=await readPrivateWorkerFile('/runner/exec-token',512);let token:string;
  try{token=capability.toString('utf8').trim();if(!/^[A-Za-z0-9._~-]{32,512}$/.test(token))throw Error('INVALID_TOOL_CAPABILITY');}finally{capability.fill(0);}
  let account:{secrets:string[];accessToken:string;accountId:string};
- let claudeBin='/usr/local/bin/claude';
+ // A non-exam Claude never runs bare: project and account hooks and project MCP servers stay off (src/claude-hardening.ts).
+ let claudeBin=HARDENED_CLAUDE_BIN[hardenedClaudeMode(input.role)];
  if(claudeExam){
   const prepared=await prepareClaudeExamWorkerEnv({oauthAccessToken:input.oauthAccessToken,credentialSnapshotTag:input.credentialSnapshotTag,execToken:token});
   account={secrets:prepared.secrets,accessToken:input.oauthAccessToken!,accountId:input.accountId};

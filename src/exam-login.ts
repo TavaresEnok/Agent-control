@@ -1,3 +1,4 @@
+import {CLAUDE_HOOKS_OFF_SETTINGS} from './claude-hardening.ts';
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {constants} from 'node:fs';
@@ -395,6 +396,9 @@ export async function renewClaudeLoginInPlace(
           '--strict-mcp-config',
           '--mcp-config',
           '{"mcpServers":{}}',
+          // Runs on the host with the account directory: a hook a job planted there must not run here.
+          '--settings',
+          CLAUDE_HOOKS_OFF_SETTINGS,
           '--max-turns',
           '1',
         ],

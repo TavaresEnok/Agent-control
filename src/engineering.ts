@@ -112,7 +112,7 @@ export class EngineeringStages{
    if(!this.options.nativeVerification||!this.options.nativeQa)throw new Refusal('QA_MODEL_UNAVAILABLE');
    const diff=await this.options.git.diff(artifact.commit_id,artifact.base_id);
    const testTail=await this.options.nativeQa.testLogTail(stage.id);
-   await this.options.nativeVerification.evaluateQaModel(principal,intent,authority,stage.id,artifact,{diff:diff.diff,truncated:diff.truncated,ownerRequest:await ownerRequest(authority.contextId,intent.id),testTail},isCanceled);
+   await this.options.nativeVerification.evaluateQaModel(principal,intent,authority,stage.id,artifact,{diff:diff.diff,truncated:diff.truncated,diffBytes:diff.diffBytes,files:diff.files,filesTotal:diff.filesTotal,ownerRequest:await ownerRequest(authority.contextId,intent.id),testTail},isCanceled);
   }:undefined;
   return this.options.nativeQa!.run(principal,intent,authority,stage,grantId,artifact,isCanceled,beforeRecord);
  }
@@ -687,16 +687,7 @@ export class EngineeringStages{
      }
     }
     if(Number(grant.manager_epoch)!==authority.epoch||grant.state!=='reserved')throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
-    if((node==='review'||node==='judge')&&grant.account_id){
-     // Real subscription accounts only: one synthetic fixture account legitimately plays every role.
-     // The same provider is refused too, so a reserve reviewer cannot be the writer.
-     const programmer=(await this.ledger.pool.query("SELECT g.account_id,a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.intent_id=$1 AND g.role='programmer' AND a.mode<>'synthetic' ORDER BY g.created_at DESC LIMIT 1",[intent.id])).rows[0];
-     if(programmer&&programmer.account_id===grant.account_id)throw new Refusal('REVIEWER_SAME_AS_PROGRAMMER');
-     if(programmer){
-      const reviewer=(await this.ledger.pool.query('SELECT provider FROM ac_accounts WHERE id=$1',[grant.account_id])).rows[0];
-      if(reviewer&&reviewer.provider===programmer.provider)throw new Refusal('REVIEWER_SAME_AS_PROGRAMMER');
-     }
-    }
+    if((node==='review'||node==='judge')&&grant.account_id)await assertReviewerIndependent((sql,params)=>this.ledger.pool.query(sql,params),intent.id,String(grant.account_id));
     if(nativeStage){
      let verified;
      if(node==='qa')verified=await this.runNativeQa(principal,intent,authority,stage,grant.id,artifact,()=>canceled||!this.running);
@@ -894,4 +885,14 @@ export class EngineeringStages{
   });
  }
  close(){this.running=false;for(const child of this.children)stop(child);this.options.isolatedVerification?.close();}
+}
+
+/** Review and judge grants only. Real subscription accounts only: one synthetic fixture account legitimately plays every role.
+ * The same account and the same provider are refused, so a reserve reviewer cannot be the writer. */
+export async function assertReviewerIndependent(query:(sql:string,params:unknown[])=>Promise<{rows:any[]}>,intentId:string,reviewerAccountId:string){
+ const programmer=(await query("SELECT g.account_id,a.provider FROM ac_capacity_grants g JOIN ac_accounts a ON a.id=g.account_id WHERE g.intent_id=$1 AND g.role='programmer' AND a.mode<>'synthetic' ORDER BY g.created_at DESC LIMIT 1",[intentId])).rows[0];
+ if(!programmer)return;
+ if(programmer.account_id===reviewerAccountId)throw new Refusal('REVIEWER_SAME_AS_PROGRAMMER');
+ const reviewer=(await query('SELECT provider FROM ac_accounts WHERE id=$1',[reviewerAccountId])).rows[0];
+ if(reviewer&&reviewer.provider===programmer.provider)throw new Refusal('REVIEWER_SAME_AS_PROGRAMMER');
 }
