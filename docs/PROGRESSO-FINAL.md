@@ -1993,4 +1993,7 @@ FIM
   - **Suíte completa:** 328 arquivos ok e nenhuma falha. `verification-modules-cleanup` falhou uma vez por tempo sob carga e passou ao rodar de novo.
   - **Antes:** backup `20261121-191621`, conferido. As imagens não precisaram ser reconstruídas: no código dos workers só mudaram comentários.
   - **Reavaliação independente** pela régua da análise dos concorrentes (Claude Sonnet 5.5, sem ver as notas anteriores): **6,5/10**. Antes eram 4,9; o maior concorrente, BMAD, tem 5,9.
+  - **Calibração (21/11, 19:40 UTC):** o mesmo tipo de avaliador (Claude Sonnet 5.5, mesma régua e mesmas instruções, só leitura) deu nota aos dois primeiros da análise original: BMAD-METHOD **6,2** (antes 5,9) e Superpowers **6,2** (antes 5,8). Comparado de igual para igual, o Agent Control (**6,5**) fica em 1º, com 0,3 de vantagem.
+    - O Agent Control ganha em orquestração, verificação e real vs promessa: a revisão independente e a prova são impostas em código.
+    - Perde em utilidade (4 contra 7,5 e 8) e em manutenção (4,5 contra 5,5 e 6).
 
