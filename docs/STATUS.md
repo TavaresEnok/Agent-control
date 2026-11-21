@@ -26,9 +26,9 @@ Gateway autenticado, ledger PostgreSQL com permissões, épocas e leases, capaci
 ## O que falta
 
 - Teste ponta a ponta do fluxo pedido, proposta, decisão, QA, revisão e integração com contas sintéticas, e teste de contrato dos adaptadores Cezar e Happier com o artefato distribuído. O gerente semântico e as CLIs reais já existem no modo pessoal: `src/server-main.ts` os conecta quando `activation: personal` e o bootstrap nativo estão ativos, e só o gateway administrativo sobe sem esse opt-in. A [bancada de planejamento com modelo real](implementation/REAL-PLANNING-SLICE-20261109.md) é histórica. Limitações por recurso: [ESTADO.md](ESTADO.md).
-- Autenticação e inferência com contas reais, que dependem de autorização específica.
+- Homologação das contas reais. No modo pessoal, autenticação e inferência com as contas do titular já rodam: em 21/11/2026, o gerente Codex e o Claude responderam com a saída em bloqueio ([PROGRESSO-FINAL.md](PROGRESSO-FINAL.md)). O Grok não foi provado, porque nenhum perfil de gerente dele estava ativo. Fora do modo pessoal, contas reais continuam bloqueadas.
 - Revisão independente de autenticação, E2EE, SQL, fencing, execução e Git (AC-IMP-0007).
-- Broker de produção sem `docker.sock` montado em serviços de aplicação; a montagem atual é de laboratório.
+- Broker de produção para o Docker. No modo pessoal, o gateway fala com o Docker pelo filtro `src/docker-filter.ts`. Na instalação viva, porém, o usuário do gateway está no grupo `docker` e pode ir direto ao daemon, o que equivale a root no host; é risco aceito pelo titular em 21/11/2026. No `deploy/compose.personal.yml`, o acesso passa por um `socat` sem filtro. Detalhes em [ESTADO.md](ESTADO.md).
 - SSH operacional, aparelho físico, piloto, migração e homologação.
 
-Achados abertos: [FINDINGS.md](validation/FINDINGS.md). Última rodada registrada, sem encerramento declarado: [R6](implementation/CONTINUACAO-R6-20261105.md).
+Achados abertos: [FINDINGS.md](validation/FINDINGS.md). Última rodada registrada: [melhorias da análise dos concorrentes](PLANO-MELHORIAS-CONCORRENTES.md), aplicada na instalação viva e fechada em 21/11/2026 (`62506567`). O andamento fica em [PROGRESSO-FINAL.md](PROGRESSO-FINAL.md). As rodadas R2 a R6 são históricas.
