@@ -26,7 +26,7 @@ export function assertNativeCorrectionDistinct(commit:string,tree:string,priorCo
  if(commit===priorCommit||tree===priorTree)throw new Refusal('NATIVE_CORRECTION_REUSED_COMMIT');
 }
 /** Runs the implementation stage of the existing native Cezar graph. Source
- * decryption is supplied only by an authorized, live Happier endpoint. */
+ * text is supplied only by an authorized, live conversation endpoint. */
 export class NativeImplementation{
  private readonly sources=new Map<string,Binding>();private active=true;
  constructor(readonly ledger:Ledger,readonly repository:string,readonly quality:Quality,private readonly supervisors:readonly NativeExecutionSupervisor[]){

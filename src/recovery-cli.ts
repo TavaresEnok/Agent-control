@@ -13,7 +13,7 @@ const path=z.string().refine(p=>isAbsolute(p)&&resolve(p)===p&&!/[\0\r\n]/.test(
 const host=RemoteHostInput.pick({id:true,hostname:true,port:true,username:true,publicKey:true,fingerprint:true,credentialRef:true,remoteRoot:true}).strict();
 const adapters={native:z.array(NativeResourceEnvelope).max(64),ssh:z.array(host).max(64),transport:RemoteReturnConfig.optional()};
 export const RecoveryCommandDescriptor=z.discriminatedUnion('operation',[
- z.object({operation:z.literal('backup-laboratory'),containerId:z.string().regex(/^[a-f0-9]{64}$/),directory:path,canonicalHistoryFile:path,vaultArchiveFile:path,happierSnapshotFile:path.optional()}).strict(),
+ z.object({operation:z.literal('backup-laboratory'),containerId:z.string().regex(/^[a-f0-9]{64}$/),directory:path,canonicalHistoryFile:path,vaultArchiveFile:path}).strict(),
  z.object({operation:z.literal('sweep'),principal:z.string().min(1).max(200),recoveryId:z.uuid(),...adapters}).strict(),
  z.object({operation:z.literal('release'),principal:z.string().min(1).max(200),recoveryId:z.uuid(),...adapters}).strict(),
 ]);

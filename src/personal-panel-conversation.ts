@@ -22,7 +22,7 @@ export const personalMessageInput = z.object({
   clientId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
 }).strict();
 
-/** Stable Happier local id for one panel send. A repeated clientId keeps this id. */
+/** Stable local id for one panel send. A repeated clientId keeps this id. */
 export function personalPanelLocalId(clientId: string) {
   return 'panel-' + clientId;
 }

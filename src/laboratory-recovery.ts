@@ -27,7 +27,7 @@ async function privateBytes(path:string,max=limit){
 }
 /** Fresh labelled laboratory only. Existing backup/vault tools remain the operational gate.
  * The source must already be quiescent; this helper never closes a live installation. */
-export async function backupLaboratoryDatabase(options:{containerId:string;sourceUrl:string;directory:string;canonicalHistoryFile:string;vaultArchiveFile:string;happierSnapshotFile?:string;recoveryInventory?:RecoveryInventoryConfig}){
+export async function backupLaboratoryDatabase(options:{containerId:string;sourceUrl:string;directory:string;canonicalHistoryFile:string;vaultArchiveFile:string;recoveryInventory?:RecoveryInventoryConfig}){
  const url=await validateContainer(options.containerId,options.sourceUrl),name=url.pathname.slice(1);
  if(!/^ac_implementation_test_r3[a-z0-9_]+$/.test(name))throw new Refusal('RECOVERY_SOURCE_DATABASE_REQUIRED');
  if(resolve(options.directory)!==options.directory||await realpath(options.directory)!==options.directory)throw new Refusal('RECOVERY_DIRECTORY_REQUIRED');
@@ -43,7 +43,7 @@ export async function backupLaboratoryDatabase(options:{containerId:string;sourc
   inventory=await ledger.tx(c=>requireRecoveryInventory(c,ledger));
   if(inventory&&inventory.config.installationId!==sourceInstallationId)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');
  }finally{await ledger.pool.end();}
- const snapshot=new pg.Client({connectionString:options.sourceUrl});await snapshot.connect();let dump:Buffer;let checkpoint:{snapshotId:string;capturedAt:string;artifacts?:{historySha256:string;vaultSha256:string;happierSha256?:string;happierCapturedAt?:string}};
+ const snapshot=new pg.Client({connectionString:options.sourceUrl});await snapshot.connect();let dump:Buffer;let checkpoint:{snapshotId:string;capturedAt:string;artifacts?:{historySha256:string;vaultSha256:string}};
  try{await snapshot.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
   const gate=(await snapshot.query('SELECT enabled,clock_timestamp() captured_at FROM ac_admission_control WHERE id=1 FOR SHARE')).rows[0];
   if(gate?.enabled!==false)throw new Refusal('RECOVERY_SOURCE_MUST_BE_QUIESCENT_SYNTHETIC');
@@ -58,10 +58,8 @@ export async function backupLaboratoryDatabase(options:{containerId:string;sourc
  finally{await snapshot.end();}
  const key=randomBytes(32),nonce=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,nonce),header={scope,sourceDatabase:name,sourceInstallationId,sha256:sha(dump)};
  const history=await privateBytes(options.canonicalHistoryFile),vault=await privateBytes(options.vaultArchiveFile);
- const happier=options.happierSnapshotFile?await privateBytes(options.happierSnapshotFile):undefined;
  checkpoint.artifacts={historySha256:sha(history),vaultSha256:sha(vault)};
- if(happier){const cut=z.object({scope:z.literal('ac-r3-happier-stopped'),capturedAt:z.string().datetime()}).passthrough().parse(JSON.parse(happier.toString('utf8')));if(Date.parse(cut.capturedAt)>Date.parse(checkpoint.capturedAt))throw new Refusal('RECOVERY_HAPPIER_CUT_AFTER_DATABASE');checkpoint.artifacts.happierSha256=sha(happier);checkpoint.artifacts.happierCapturedAt=cut.capturedAt;}
- const payload=Buffer.from(JSON.stringify({database:dump.toString('base64'),canonicalHistory:history.toString('base64'),vaultArchive:vault.toString('base64'),checkpoint,...(catalogCheckpoint?{catalogCheckpoint}:{}),...(happier?{happierSnapshot:happier.toString('base64')}:{})}));happier?.fill(0);
+ const payload=Buffer.from(JSON.stringify({database:dump.toString('base64'),canonicalHistory:history.toString('base64'),vaultArchive:vault.toString('base64'),checkpoint,...(catalogCheckpoint?{catalogCheckpoint}:{})}));
  cipher.setAAD(Buffer.from(JSON.stringify(header)));const ciphertext=Buffer.concat([cipher.update(payload),cipher.final()]);payload.fill(0);history.fill(0);vault.fill(0);
  const basename='ac-r3-recovery-'+randomUUID(),archiveFile=join(options.directory,basename+'.json'),keyFile=join(options.directory,basename+'.key');
  try{await writeFile(keyFile,key,{mode:0o600,flag:'wx'});await writeFile(archiveFile,JSON.stringify({...header,nonce:nonce.toString('hex'),tag:cipher.getAuthTag().toString('hex'),ciphertext:ciphertext.toString('base64')}),{mode:0o600,flag:'wx'});return {archiveFile,keyFile,sha256:header.sha256,sourceInstallationId};}
@@ -78,10 +76,10 @@ export async function restoreLaboratoryDatabase(options:{containerId:string;sour
  let payloadBytes:Buffer;
  try{payloadBytes=Buffer.concat([decipher.update(Buffer.from(ciphertext,'base64')),decipher.final()]);}catch{throw new Refusal('RECOVERY_ARCHIVE_AUTHENTICATION_FAILED');}finally{key.fill(0);}
  if(sourceDatabase!==url.pathname.slice(1))throw new Refusal('RECOVERY_SOURCE_DATABASE_MISMATCH');
- const payload=z.object({database:z.string().max(limit*2),canonicalHistory:z.string().max(limit*2),vaultArchive:z.string().max(limit*2),happierSnapshot:z.string().max(limit*2).optional(),catalogCheckpoint:RecoveryCatalogCheckpoint.optional(),checkpoint:z.object({snapshotId:z.string(),capturedAt:z.string().datetime(),artifacts:z.object({historySha256:z.string().length(64),vaultSha256:z.string().length(64),happierSha256:z.string().length(64).optional(),happierCapturedAt:z.string().datetime().optional()}).strict().optional()}).strict().optional()}).strict().parse(JSON.parse(payloadBytes.toString('utf8')));payloadBytes.fill(0);
+ const payload=z.object({database:z.string().max(limit*2),canonicalHistory:z.string().max(limit*2),vaultArchive:z.string().max(limit*2),catalogCheckpoint:RecoveryCatalogCheckpoint.optional(),checkpoint:z.object({snapshotId:z.string(),capturedAt:z.string().datetime(),artifacts:z.object({historySha256:z.string().length(64),vaultSha256:z.string().length(64)}).strict().optional()}).strict().optional()}).strict().parse(JSON.parse(payloadBytes.toString('utf8')));payloadBytes.fill(0);
  if(payload.catalogCheckpoint&&payload.catalogCheckpoint.installationId!==sourceInstallationId)throw new Refusal('RECOVERY_INVENTORY_POLICY_MISMATCH');
  const artifactHashes=payload.checkpoint?.artifacts;
- if(artifactHashes&&(sha(Buffer.from(payload.canonicalHistory,'base64'))!==artifactHashes.historySha256||sha(Buffer.from(payload.vaultArchive,'base64'))!==artifactHashes.vaultSha256||(payload.happierSnapshot&&sha(Buffer.from(payload.happierSnapshot,'base64'))!==artifactHashes.happierSha256)))throw new Refusal('RECOVERY_ARTIFACT_DIGEST_MISMATCH');
+ if(artifactHashes&&(sha(Buffer.from(payload.canonicalHistory,'base64'))!==artifactHashes.historySha256||sha(Buffer.from(payload.vaultArchive,'base64'))!==artifactHashes.vaultSha256))throw new Refusal('RECOVERY_ARTIFACT_DIGEST_MISMATCH');
  const dump=Buffer.from(payload.database,'base64');
  if(sha(dump)!==sha256)throw new Refusal('RECOVERY_DUMP_DIGEST_MISMATCH');
  const suffix=randomUUID().replaceAll('-',''),database='ac_r3_restore_'+suffix,containerDirectory='/tmp/ac-r3-recovery-'+suffix,local=join(options.directory,'restore-'+suffix);
@@ -121,7 +119,6 @@ export async function restoreLaboratoryDatabase(options:{containerId:string;sour
   await mkdir(artifactsDirectory,{mode:0o700});
   await writeFile(join(artifactsDirectory,'canonical-history.json'),Buffer.from(payload.canonicalHistory,'base64'),{mode:0o600,flag:'wx'});
   await writeFile(join(artifactsDirectory,'context-vault.archive'),Buffer.from(payload.vaultArchive,'base64'),{mode:0o600,flag:'wx'});
-  if(payload.happierSnapshot)await writeFile(join(artifactsDirectory,'happier.snapshot.json'),Buffer.from(payload.happierSnapshot,'base64'),{mode:0o600,flag:'wx'});
   return {database,url:target.href,artifactsDirectory,checkpoint:payload.checkpoint,catalogCheckpoint:payload.catalogCheckpoint,installationId,sourceInstallationId,admission:'closed' as const,physicalReconciliation:'required' as const,vaultActivation:'blocked-until-rewrapped' as const};
  }catch(error){await rm(artifactsDirectory,{recursive:true,force:true});if(created)await admin.query(`DROP DATABASE "${database}"`);throw error;}
  finally{await admin.end();await rm(local,{recursive:true,force:true});await docker(options.containerId,['rm','-rf',containerDirectory]);}

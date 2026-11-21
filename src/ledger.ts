@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
 import { Authority, Checkpoint, Command, digest, Id, Refusal, Projection } from './contracts.ts';
+import {CONVERSATION_CHANNEL} from './conversation-transport.ts';
 import { workflowFor } from './workflows.ts';
 import { Template } from './templates.ts';
 import {freezeManagedExecution} from './managed-plan.ts';
@@ -234,7 +235,7 @@ export class Ledger {
     const command = Command.parse(raw);
     // The owner CLI inserts this exam directly and does not call accept.
     if(command.payload.workflow==='design-readonly-v1')throw new Refusal('DESIGN_INTENT_NOT_PUBLIC',403);
-    if(command.payload.workflow==='engineering-native-v1'&&(channel!=='happier'||!afterAccept))throw new Refusal('NATIVE_CANONICAL_MESSAGE_REQUIRED',403);
+    if(command.payload.workflow==='engineering-native-v1'&&(channel!==CONVERSATION_CHANNEL||!afterAccept))throw new Refusal('NATIVE_CANONICAL_MESSAGE_REQUIRED',403);
     return this.tx(async c => {
       if(command.payload.workflow==='security-verify-readonly-v1'){
         const personal=await c.query("SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal'");

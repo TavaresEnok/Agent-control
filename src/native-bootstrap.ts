@@ -237,7 +237,7 @@ export async function prepareNativeBootstrap(config:Installation,client?:Bootstr
    if(identity.rows.length!==1||typeof identity.rows[0]?.id!=='string')throw new Refusal('NATIVE_RESOURCE_DATABASE_IDENTITY_MISMATCH',403);
    const extended=config as Installation&{remoteDevelopment?:{transport:{credentials:{path:string}[]};projects:{verifierKeyFile:string;tmpfsRoot:string}[]}};
    const protectedPaths=[config.project.repo,...config.projects.map(project=>project.repo),boot.planning.signingKeyFile,boot.execution.signingKeyFile,boot.review.signingKeyFile,
-    boot.planning.accountRoot,boot.execution.accountRoot,...(config.accountHomesDirectory?[config.accountHomesDirectory]:[]),...(config.managerTransport?[config.managerTransport.tokenFile]:[]),
+    boot.planning.accountRoot,boot.execution.accountRoot,...(config.accountHomesDirectory?[config.accountHomesDirectory]:[]),...(config.managerTransport?.tokenFile?[config.managerTransport.tokenFile]:[]),
     ...(config.contextVault?[config.contextVault.directory,config.contextVault.masterFile]:[]),...(config.remoteReturn?.credentials.map(item=>item.path)??[]),
     ...(extended.remoteDevelopment?.transport.credentials.map(item=>item.path)??[]),...(extended.remoteDevelopment?.projects.flatMap(item=>[item.verifierKeyFile,item.tmpfsRoot])??[])];
    resources=await prepareNativeResourceAttachment(boot.resources,identity.rows[0].id,{protectedPaths});

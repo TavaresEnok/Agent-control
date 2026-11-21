@@ -19,7 +19,6 @@ import {Usage} from './usage.ts';
 import {createUsageReportApi} from './usage-report-api.ts';
 import {environmentRefusal} from './project-environments.ts';
 import {GitArtifacts} from './git.ts';
-import type {HappierAuthRelay} from './auth-relay.ts';
 import {ProviderCollectors,type ProviderAdapter} from './providers.ts';
 import {createPlanningApi} from './planning-api.ts';
 import type {SemanticPlanning} from './semantic-planning.ts';
@@ -121,10 +120,7 @@ async function publicUi(path:string):Promise<Response|null>{
 
 export type Authenticator = (request: Request) => Promise<string | null>;
 export type ApiOptions = {
-  happierWebUrl?: string;
-  verifySessionAccess?: (principal: string, sessionId: string, request?: Request) => Promise<boolean>;
   sessions?: BrowserSessions;
-  authRelay?: HappierAuthRelay;
   providerAdapters?: readonly ProviderAdapter[];
   administrative?: AdministrativeOperations;
   managerStatus?: (contextId: string) => Promise<unknown> | undefined;
@@ -151,7 +147,7 @@ export type ApiOptions = {
 };
 export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: Authenticator,
   manager: (contextId: string) => Authority | undefined, options: ApiOptions = {}) {
-  const {happierWebUrl = 'http://127.0.0.1:18400', verifySessionAccess = async () => false, sessions, authRelay, providerAdapters = [],
+  const {sessions, providerAdapters = [],
     administrative, managerStatus, semanticPlanning, quotaRegistry, configurationControl, personalAccounts, personalPanel, pairCodeLogin, passwordLogin, personalVerification} = options;
   const projectMembership = (principal: string) => ledger.pool.query('SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2', [runtime.projectId, principal]);
   const projectOwnership = (principal: string) => ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'", [runtime.projectId, principal]);
@@ -177,9 +173,8 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(c.req.path==='/api/v1/ac/auth/config'&&c.req.method==='GET'){
       c.header('Cache-Control','no-store');
       const passwordLoginEnabled=personalPanel?await panelPasswordConfigured(personalPanel.dataDirectory):false;
-      return c.json({...(authRelay?.config??{enabled:false}),passwordLogin:passwordLoginEnabled});
+      return c.json({enabled:false,passwordLogin:passwordLoginEnabled});
     }
-    if(authRelay&&c.req.method==='POST'&&['/api/v1/ac/auth/pair','/api/v1/ac/auth/pair/claim'].includes(c.req.path))return next();
     if(c.req.path==='/api/v1/ac/auth/session'&&c.req.method==='POST'&&sessions)return next();
     if(c.req.method==='POST'&&(c.req.path==='/api/v1/ac/auth/code'||c.req.path==='/api/v1/ac/auth/password'))return next();
     const authenticationStarted=performance.now();
@@ -445,8 +440,6 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const ids=(await ledger.pool.query("SELECT id FROM ac_operator_keys WHERE principal_id=$1 AND state='active'",[principal])).rows.map(row=>row.id);
       c.header('Cache-Control','no-store');return c.json({principalId:principal,projectId:runtime.projectId,installationId:installation.id,operatorDeviceIds:ids});
     })
-    .post('/api/v1/ac/auth/pair',async c=>{if(!authRelay)throw new Refusal('INGRESS_DISABLED',403);return authRelay.forward(c.req.raw,'begin');})
-    .post('/api/v1/ac/auth/pair/claim',async c=>{if(!authRelay)throw new Refusal('INGRESS_DISABLED',403);return authRelay.forward(c.req.raw,'claim');})
     .post('/api/v1/ac/auth/session',async c=>{
       if(!sessions)throw new Refusal('INGRESS_DISABLED',403);const started=performance.now();
       try{return await sessions.issue(c.req.raw);}finally{c.set('authenticationMs',performance.now()-started);}
@@ -508,13 +501,6 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
       const command=await c.req.json();
       return c.json(await control.execute(c.get('principal'),command,proof));
     })
-    .post('/api/v1/ac/contexts', async c => {
-      const body = z.object({ projectId: Id, happierSessionId: z.string().min(1).max(200) }).strict().parse(await c.req.json());
-      if(body.projectId!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
-      if (!await verifySessionAccess(c.get('principal'), body.happierSessionId,c.req.raw)) throw new Refusal('SESSION_OWNERSHIP_UNVERIFIED', 403);
-      const contextId = await ledger.createContext(c.get('principal'), body.projectId, body.happierSessionId);
-      return c.json({ contextId }, 201);
-    })
     .post('/api/v1/ac/commands', async c => {
       const command = Command.parse(await c.req.json());
       await ledger.tx(async db=>{
@@ -550,26 +536,13 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
           seq: Number(row.seq), status: row.status }));
       });
       return c.json({ events });
-    })
-    .get('/api/v1/ac/runs/:id/conversation', async c => {
-      const runId = Id.parse(c.req.param('id'));
-      const row = await ledger.pool.query(`SELECT i.context_id,s.session_id FROM ac_intents i
-        JOIN ac_session_links s ON s.context_id=i.context_id WHERE i.run_id=$1`, [runId]);
-      if (!row.rowCount) throw new Refusal('RUN_FORBIDDEN', 403);
-      await ledger.tx(async db => {
-        const scope=await ledger.authorize(db,c.get('principal'),row.rows[0].context_id,false);
-        if(scope.project_id!==runtime.projectId)throw new Refusal('PROJECT_RUNTIME_MISMATCH',403);
-      });
-      const target = new URL('/session/' + encodeURIComponent(row.rows[0].session_id), happierWebUrl);
-      if (!['https:', 'http:'].includes(target.protocol)) throw new Refusal('INVALID_CHAT_ORIGIN');
-      return c.redirect(target.href, 303);
     });
   // Default-deny all native mutations, WebSocket/terminal/MCP and undocumented aliases.
   // Cezar is embedded, never exposed as a second private-port API.
   family.all('*', async c => {
     if (c.req.header('upgrade')) return c.json({ error: 'INGRESS_DISABLED' }, 403);
     // The cockpit is read-only. Its bookkeeping calls change nothing in the project and are answered
-    // here, so the page does not retry them in a loop; every real mutation still goes through Happier.
+    // here, so the page does not retry them in a loop; every real mutation still goes through the conversation.
     const plain=new URL(c.req.url).pathname.replace(/^\/api\/v1\/p\/[^/]+/,'/api/v1');
     // "Read" marks live in this process only; the page needs the receipt back or it retries forever.
     const read=/^\/api\/v1\/runs\/([a-f0-9-]{36})\/(read|unread)$/.exec(plain);
@@ -584,7 +557,7 @@ export function createApi(ledger: Ledger, runtime: CezarRuntime, authenticate: A
     if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/workspace/agent-profiles')return c.json({editable:false,profiles:[],profileCapableProviders:[],selections:{},defaults:{}});
     if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/workspace/agent-profiles/fallback-policy')return c.json({enabled:false,candidates:[],revision:0,incarnation:null,revocation:null});
     if(personalAccounts&&c.req.method==='GET'&&plain==='/api/v1/workspace/skills-update')return c.json({status:'current',available:false,autoUpdateEnabled:false,inherited:false,checkedAt:null,updatedAt:null,scopes:[],needsUpgradeNotes:false});
-    if (c.req.method !== 'GET') return c.json({ error: 'CANONICAL_HAPPIER_REQUIRED' }, 403);
+    if (c.req.method !== 'GET') return c.json({ error: 'CANONICAL_CONVERSATION_REQUIRED' }, 403);
     const url = new URL(c.req.url);
     let path = url.pathname;
     const scoped = path.match(/^\/api\/v1\/p\/([^/]+)(\/.*)$/);

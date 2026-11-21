@@ -6,7 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {Installation,loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeBootstrapSchemaError} from './native-bootstrap.ts';
-import {personalConnect,type PersonalHappierClient} from './personal-connect.ts';
+import {personalConnect} from './personal-connect.ts';
 import {assertRepositoryInsideRoot} from './personal-folders.ts';
 import {isPersonalRemoteCheckout} from './personal-ssh.ts';
 import {Projects} from './projects.ts';
@@ -15,10 +15,10 @@ export type PersonalProjectAddResult={projectId:string;label:string;repository:s
 
 /**
  * Attaches one Git repository to a personal installation that already exists.
- * Same database, same logins, same Happier account, token and machine.
+ * Same database, same logins and the same conversation key.
  * Phase 3 calls this from the panel. A second run does not create another project.
  */
-export async function addPersonalProject(installationPath:string,repository:string,label:string,options?:{happier?:PersonalHappierClient;insideRoot?:string}):Promise<PersonalProjectAddResult>{
+export async function addPersonalProject(installationPath:string,repository:string,label:string,options?:{insideRoot?:string}):Promise<PersonalProjectAddResult>{
  const clean=cleanLabel(label);
  const repo=await canonicalRepository(repository);
  if(options?.insideRoot)await assertRepositoryInsideRoot(options.insideRoot,repo);
@@ -57,7 +57,7 @@ export async function addPersonalProject(installationPath:string,repository:stri
   }
   await new Projects(ledger).register([project]);
  }finally{await ledger.close();}
- const connected=options?.happier?await personalConnect(installationPath,options.happier):await personalConnect(installationPath);
+ const connected=await personalConnect(installationPath);
  if(connected.state!=='connected')throw new Error('next' in connected?connected.next:'ACCOUNTS_REQUIRED');
  return {projectId:project.id,label:project.label,repository:repo,restart:`systemctl --user restart agent-control-gateway-${service}`};
 }

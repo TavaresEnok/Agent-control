@@ -36,7 +36,7 @@ export class BrowserSessions{
    [idDigest,principal,ciphertext.toString('base64'),nonce.toString('base64'),cipher.getAuthTag().toString('base64'),maxAgeSeconds]);
   return new Response(JSON.stringify({state:'authenticated'}),{status:200,headers:{'content-type':'application/json','cache-control':'no-store','set-cookie':this.cookieValue(id,maxAgeSeconds)}});
  }
- /** Personal login with no Happier bearer. The cookie names the principal; nothing is sent upstream. */
+ /** Personal login with no bearer. The cookie names the principal; nothing is sent upstream. */
  async issuePrincipal(request:Request,principal:string,maxAgeSeconds=this.options.maxAgeSeconds){
   if(!Number.isInteger(maxAgeSeconds)||maxAgeSeconds<60||maxAgeSeconds>2592000)throw Error('INVALID_BROWSER_SESSION_CONFIG');
   const origin=request.headers.get('origin');if(origin&&origin!==this.options.origin)throw new Refusal('CROSS_ORIGIN_FORBIDDEN',403);
@@ -72,26 +72,6 @@ export class BrowserSessions{
   if(value.authorization==null)return value.principal;
   try{const verified=await this.verifyBearer(new Request(this.options.origin+'/',{headers:{authorization:value.authorization}}));
    return verified===value.principal?verified:null;}catch{return null;}
- }
- /** Verify access to an existing encrypted Happier session, without receiving
-  * any content key or creating a second conversation. No token is returned. */
- async verifyHappierSession(request:Request,principal:string,sessionId:string,upstreamOrigin:string,requireOwner=false){
-  if(!sessionId||sessionId.length>200)return false;
-  try{
-   const upstream=new URL(upstreamOrigin);
-   if(!['http:','https:'].includes(upstream.protocol)||upstream.origin!==upstreamOrigin||
-    (upstream.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(upstream.hostname)))return false;
-   const cookie=await this.credential(request);
-   const authorization=request.headers.get('authorization')??(cookie?.principal===principal?cookie.authorization:null);
-   if(!authorization||await this.verifyBearer(new Request(this.options.origin+'/',{headers:{authorization}}))!==principal)return false;
-   const response=await fetch(upstreamOrigin+'/v2/sessions/'+encodeURIComponent(sessionId),{headers:{authorization},redirect:'error',signal:AbortSignal.timeout(5000)});
-   if(!response.ok)return false;
-   const value:unknown=await response.json();
-   return typeof value==='object'&&value!==null&&'session' in value&&typeof value.session==='object'&&value.session!==null&&
-    'id' in value.session&&value.session.id===sessionId&&'encryptionMode' in value.session&&value.session.encryptionMode==='e2ee'&&
-    // The upstream returns share:null to the owner and a share object to everyone else.
-    (!requireOwner||('share' in value.session&&value.session.share===null));
-  }catch{return false;}
  }
  async revoke(request:Request){
   const origin=request.headers.get('origin');if(origin&&origin!==this.options.origin)throw new Refusal('CROSS_ORIGIN_FORBIDDEN',403);

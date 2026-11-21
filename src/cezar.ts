@@ -336,7 +336,7 @@ export class CezarRuntime {
     if(delivery.parent_intent_id)throw new Refusal('SUBDELIVERY_DISPATCH_FORBIDDEN',403);
     await this.refreshSchedulerBudget();
     const pinned=await this.reconcileWorkflowVersion(intent,authority);
-    // Returning the stored run would let the Happier tick project status and events.
+    // Returning the stored run would let the conversation tick project status and events.
     // Retirement stays parked: no reserve, no spawn, no outbox or operation change.
     if(pinned.state==='retired')return;
     const recipe=intent.command.payload.workflow==='managed-synthetic-v1'?await readManagedRecipe(this.ledger,intent.id):undefined;

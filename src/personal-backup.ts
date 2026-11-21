@@ -154,25 +154,15 @@ async function regularFiles(root:string,includeManifest:boolean){
  return found;
 }
 
-async function ownsHappier(data:string){
- try{
-  const info=await lstat(join(data,'happier-shared-from'));
-  return !info.isFile();
- }catch(error){
-  if((error as NodeJS.ErrnoException).code==='ENOENT')return true;
-  throw error;
- }
-}
-
-async function copyData(source:string,dest:string,depth:number,includeHappier:boolean,rel=''){
+async function copyData(source:string,dest:string,depth:number,rel=''){
  await privateDir(dest);
  for(const entry of await readdir(source,{withFileTypes:true})){
   if(entry.isSymbolicLink())continue;
-  if(depth===0&&entry.isDirectory()&&(excludedDirectories.has(entry.name)||(!includeHappier&&entry.name==='happier')))continue;
+  if(depth===0&&entry.isDirectory()&&excludedDirectories.has(entry.name))continue;
   const from=join(source,entry.name),to=join(dest,entry.name);
   const entryRel=rel?`${rel}/${entry.name}`:entry.name;
   if(entry.isDirectory()&&excludedCachePaths.has(entryRel))continue;
-  if(entry.isDirectory())await copyData(from,to,depth+1,includeHappier,entryRel);
+  if(entry.isDirectory())await copyData(from,to,depth+1,entryRel);
   else if(entry.isFile()){
    await copyFile(from,to,constants.COPYFILE_EXCL);
    await chmod(to,0o600);
@@ -251,12 +241,12 @@ async function writeDump(file:string,db:DatabaseEndpoint,options:PersonalBackupO
 
 const restoreSteps=`# Restaurar
 
-Este backup contém segredos: a chave da conta Happier, os logins e a chave SSH. Guarde-o fora do servidor e fora de qualquer repositório.
+Este backup contém segredos: a chave da conversa, os logins e a chave SSH. Guarde-o fora do servidor e fora de qualquer repositório.
 
 1. Confira, sem restaurar nada: \`npm run personal:restore-check -- <esta-pasta>\`
 2. Coloque \`installation.json\` no lugar e copie o conteúdo de \`data/\` para o diretório de dados. Pastas no modo 700 e arquivos no modo 600.
 3. Crie um banco vazio e carregue \`database.dump\` com \`pg_restore\`. No contêiner: \`docker exec -i ac-personal-pg pg_restore --clean --if-exists -U USUARIO -d BANCO\`, com o arquivo na stdin.
-4. Suba de novo o gateway e o Happier desta instalação.
+4. Suba de novo o gateway desta instalação.
 
 Ficaram de fora, de propósito: \`native/\`, \`qa-cache/\`, \`remote/\`, \`verify-db/\` e os caches do Grype e do Trivy. As cópias remotas se refazem com \`git clone\` e as bases de vulnerabilidades se baixam de novo na manutenção semanal.
 `;
@@ -305,7 +295,7 @@ export async function runPersonalBackup(argv:string[],options:PersonalBackupOpti
   await privateDir(destination);
   await privateDir(backup);
   await privateFile(join(backup,'installation.json'),await readFile(resolve(installationArg)));
-  await copyData(dataReal,join(backup,'data'),0,await ownsHappier(dataReal));
+  await copyData(dataReal,join(backup,'data'),0);
   await writeDump(join(backup,'database.dump'),db,options);
   await privateFile(join(backup,'RESTAURAR.md'),restoreSteps);
   const listed=await regularFiles(backup,false);
@@ -313,7 +303,7 @@ export async function runPersonalBackup(argv:string[],options:PersonalBackupOpti
   for(const rel of listed)lines.push(`${await fileSha256(join(backup,rel))}  ${rel}`);
   await privateFile(join(backup,'MANIFEST.txt'),lines.join('\n')+'\n');
   const size=await treeBytes(backup);
-  return [`Backup em ${backup}`,`Tamanho: ${size} bytes`,'O backup contém segredos (chave da conta Happier, logins e chave SSH). Guarde-o fora do servidor.'];
+  return [`Backup em ${backup}`,`Tamanho: ${size} bytes`,'O backup contém segredos (chave da conversa, logins e chave SSH). Guarde-o fora do servidor.'];
  }catch(error){
   await rm(backup,{recursive:true,force:true});
   if(createdParent)await rm(destination,{recursive:true,force:true});

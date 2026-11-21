@@ -1,8 +1,6 @@
 import {workflowRuntimeParkingReason} from './workflow-generations.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { Socket } from 'socket.io-client';
-import type pg from 'pg';
 import { Authority, Checkpoint, Command, digest, Refusal } from './contracts.ts';
 import { Ledger } from './ledger.ts';
 import { ContextKeys, type EncryptionVariant } from './context-keys.ts';
@@ -10,261 +8,42 @@ import { Template } from './templates.ts';
 import type { CezarRuntime } from './cezar.ts';
 import type { SemanticPlanning } from './semantic-planning.ts';
 import { managerPlanPublishedSchema } from '../upstream/cezar/packages/contract/src/agent-control-plans.ts';
-import {chatConfigurationHandler} from './chat-control.ts';
-import type {Control} from './control.ts';
-import {keyFingerprint} from './context-keys.ts';
 import {Notifications,NotificationPolicy,nativeImagesRemovedNotice,notificationReason,notificationStatus} from './notifications.ts';
 import {classifyPersonalText,personalComboRefusal,personalComboRequest,personalControlWord,personalProgressLabel} from './personal-conversation.ts';
 import {applyPersonalCombo,describeAppliedCombo} from './personal-combos.ts';
 import {isRepeatablePersonalNotice,recentPersonalNotices,suppressRepeatedPersonalNotice} from './personal-notice.ts';
 import {personalPushBody,type PersonalPushNotice} from './personal-push.ts';
-import {panelMessageFromRecord,type PanelMessage,type PanelPage} from './personal-panel-conversation.ts';
-import {failureFacts,reserveAssumptionNotices,teamJobs,teamMessage,teamModelsMetadata,teamStatus} from './personal-team-feed.ts';
+import type {PanelPage} from './personal-panel-conversation.ts';
+import {failureFacts,reserveAssumptionNotices,teamJobs,teamMessage,teamStatus} from './personal-team-feed.ts';
 import {personalRepositoryContext} from './personal-runtime.ts';
 import {HISTORY_READ_TIMEOUT_MS,historyBeforeCurrent,managerEconomyOf,managerRepositoryContext,withinMs} from './manager-discipline.ts';
 import {markRemotePushNotice,remotePushNotices,syncRemoteBeforeRequest} from './personal-ssh.ts';
 import {bindOwnerRequest} from './personal-owner-request.ts';
 import {claudeLimitNotice} from './quota-exhaustion.ts';
 import {decideProposal,proposalStartIntentId,unstartedProposals,type ProposalDecision} from './proposal-decision.ts';
-import {bindPersonalOwnerMessage,enqueuePersonalOwner,readPersonalOwnerText,type ConversationTransport} from './conversation-transport.ts';
+import {CONVERSATION_CHANNEL,LocalConversationTransport,bindPersonalOwnerMessage,enqueuePersonalOwner,readPersonalOwnerText,type ConversationTransport} from './conversation-transport.ts';
 import {containFailure,logContainedFailure} from './failure-log.ts';
 
-/** Status, method and path of a failed Happier HTTP call; never the query, headers or body. */
+/** Status, method and path of a failed HTTP call; never the query, headers or body. */
 function httpFailureSuffix(error:Error){
  const e=error as {response?:{status?:number};config?:{method?:string;url?:string}};
  if(!e.config?.url)return '';
  let path='';try{path=new URL(e.config.url,'http://x').pathname.replace(/[^A-Za-z0-9/_.-]/g,'').slice(0,120);}catch{/* unparsable URL: the suffix keeps status and method only */}
  return ':'+String(e.response?.status??'no-response')+':'+String(e.config.method??'').toUpperCase()+' '+path;
 }
-type Rpc = {
-  onSocketConnect(socket: Socket): void; onSocketDisconnect(): void;
-  registerHandler?(method:string,handler:(data:unknown)=>Promise<unknown>):void;
-  handleRequest(data: unknown): Promise<unknown>;
-  invokeLocal(method: string, data: unknown): Promise<unknown>;
-  waitForRegisteredHandlers(methods: string[], options: { timeoutMs: number }): Promise<{ status: string }>;
-};
-// Private imports are encapsulated here. The pinned bundle's contract is exercised with the actual server.
-export type HappierBoundary = {
-  encrypt(key: Uint8Array, variant: EncryptionVariant, value: unknown): Uint8Array;
-  decrypt(key: Uint8Array, variant: EncryptionVariant, value: Uint8Array): unknown;
-  encodeBase64(value: Uint8Array): string; decodeBase64(value: string): Uint8Array;
-  createSessionSocketTransport(options: { token: string; sessionId: string; machineId: string; serverUrl: string; transports: string[] }):
-    { socket: Socket; transport: { connect(): Promise<void> } };
-  RpcHandlerManager: new (options: { scopePrefix: string; encryptionKey: Uint8Array; encryptionVariant: EncryptionVariant;
-    logger: () => void; authorizeRequest: (q: { method: string }) => Promise<{ ok: true } | { ok: false; error: string }> }) => Rpc;
-  registerSessionUserMessageSendHandler(rpc: Rpc, options: {
-    workingDirectory: string; revalidateExplicitUserRequest: () => Promise<{ status: 'ready' }>;
-    sessionRuntimeControls: { handleUserMessage(q: unknown): Promise<unknown> };
-  }): void;
-  materializeNextPendingQueueV2Message(options: Record<string, unknown>): Promise<unknown>;
-  resolveAcceptedPendingQueueV2Delivery(options: Record<string, unknown>): Promise<unknown>;
-  markPendingQueueV2DeliveryHandled(options: Record<string, unknown>): Promise<unknown>;
-  SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT: string;
-  SessionRuntimeActivitySnapshotRequestSchema: z.ZodType;
-  SessionRuntimeActivitySnapshotAckSchema: z.ZodType;
-};
-export async function loadHappier(): Promise<HappierBoundary> {
-  const value: unknown = await import(new URL('../upstream/happier/node_modules/.agent-control-boundary.mjs', import.meta.url).href);
-  const parsed = z.object({ encrypt: z.function(), decrypt: z.function(), encodeBase64: z.function(), decodeBase64: z.function(),
-    createSessionSocketTransport: z.function(), RpcHandlerManager: z.custom(value => typeof value === 'function'), registerSessionUserMessageSendHandler: z.function(),
-    materializeNextPendingQueueV2Message: z.function(), resolveAcceptedPendingQueueV2Delivery: z.function(), markPendingQueueV2DeliveryHandled: z.function(),
-    SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT: z.string(), SessionRuntimeActivitySnapshotRequestSchema: z.unknown(),
-    SessionRuntimeActivitySnapshotAckSchema: z.unknown(), }).passthrough().parse(value);
-  // Only this version-pinned external boundary needs a structural assertion; no unvalidated data escapes it.
-  return parsed as unknown as HappierBoundary;
-}
 export function stableId(value: string) {
   const h = createHash('sha256').update(value).digest('hex');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 const UserRequest = z.object({ text: z.string().min(1).max(100000), localId: z.string().min(1).max(200), meta: z.unknown().optional() });
-const Pending = z.object({ didMaterialize: z.boolean(), deferredReason: z.string().optional(),
-  message: z.object({ localId: z.string().nullable().optional(), content: z.object({ t: z.literal('encrypted'), c: z.string() }) }).nullable().optional() }).passthrough();
-const UserRecord = z.object({ role: z.literal('user'), content: z.object({ type: z.literal('text'), text: z.string() }), meta: z.unknown().optional() });
 
-async function boundedNetwork<T>(operation:(signal:AbortSignal)=>Promise<T>,timeoutMs:number,parent?:AbortSignal):Promise<T>{
-  if(parent?.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
-  const controller=new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
-  let aborted!:()=>void;
-  const cancelled=new Promise<never>((_,reject)=>{
-    aborted=()=>{controller.abort();reject(new Refusal('HAPPIER_TRANSPORT_CANCELED'));};
-    if(parent?.aborted)aborted();else parent?.addEventListener('abort',aborted,{once:true});
-    timer=setTimeout(()=>{controller.abort();reject(new Refusal('HAPPIER_TRANSPORT_TIMEOUT'));},timeoutMs);
-  });
-  try{return await Promise.race([Promise.resolve().then(()=>operation(controller.signal)),cancelled]);}
-  finally{clearTimeout(timer);parent?.removeEventListener('abort',aborted);}
-}
-
-function decryptHistoryContent(boundary: HappierBoundary, key: Uint8Array, variant: EncryptionVariant, content: unknown): unknown {
-  const envelope = z.object({ t: z.literal('encrypted'), c: z.string() }).parse(typeof content === 'string' ? JSON.parse(content) : content);
-  const decrypted = boundary.decrypt(key, variant, boundary.decodeBase64(envelope.c));
-  if (decrypted === null) throw new Refusal('INVALID_HISTORY_CIPHERTEXT');
-  return decrypted;
-}
-const HistoryPage = z.object({
-  messages: z.array(z.object({ id: z.string(), seq: z.number().int().nonnegative(), createdAt: z.number().int().nonnegative(), content: z.unknown() }).passthrough()),
-  hasMore: z.boolean(), nextBeforeSeq: z.number().int().positive().nullable(), nextAfterSeq: z.number().int().nonnegative().nullable().optional(),
-}).passthrough();
-
-// Read only the linked session using Happier's native backward cursor. Never silently
-// present a truncated or non-progressing traversal as a complete history.
-export async function recoverHistory(baseUrl: string, sessionId: string, token: string,
-  key: Uint8Array, boundary: HappierBoundary, fetchPage: typeof fetch = fetch, variant: EncryptionVariant = 'legacy',
-  authorize: () => Promise<void> = async () => {},options:{signal?:AbortSignal;timeoutMs?:number}={}): Promise<unknown[]> {
-  const messages: { seq: number; content: unknown }[] = [];
-  let before: number | undefined;
-  for (let page = 0; page < 100; page++) {
-    const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl);
-    url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
-    if (before !== undefined) url.searchParams.set('beforeSeq', String(before));
-    await authorize();
-    const data=await boundedNetwork(async signal=>{
-      const response=await fetchPage(url,{headers:{authorization:'Bearer '+token},signal});
-      if(!response.ok)throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
-      return response.json();
-    },options.timeoutMs??10000,options.signal);
-    const result = z.object({ messages: z.array(z.object({ seq: z.number().int().nonnegative(), content: z.unknown() }).passthrough()),
-      hasMore: z.boolean(), nextBeforeSeq: z.number().int().positive().nullable() }).passthrough().parse(data);
-    let previous = before ?? Infinity;
-    for (const message of result.messages) {
-      if (message.seq >= previous) throw new Refusal('HISTORY_ORDER_INVALID');
-      previous = message.seq; messages.push(message);
-    }
-    if (!result.hasMore) {
-      if (result.nextBeforeSeq !== null) throw new Refusal('HISTORY_CURSOR_INVALID');
-      await authorize();
-      return messages.reverse().map(message => decryptHistoryContent(boundary, key, variant, message.content));
-    }
-    if (!result.messages.length || result.nextBeforeSeq !== previous || (before !== undefined && result.nextBeforeSeq >= before))
-      throw new Refusal('HISTORY_CURSOR_INVALID');
-    before = result.nextBeforeSeq;
-  }
-  throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
-}
-
-/** Panel page of the same session history. Decrypts with the bridge key; drops non-text events.
- * Without `after`, the newest window. `next` is the sequence cursor for a later poll. */
-export async function readPanelTranscript(baseUrl: string, sessionId: string, token: string, key: Uint8Array, boundary: HappierBoundary,
-  variant: EncryptionVariant, authorize: () => Promise<void>, options: {after?: string; limit: number; signal?: AbortSignal; timeoutMs?: number; fetchPage?: typeof fetch}): Promise<PanelPage> {
-  const fetchPage = options.fetchPage ?? fetch;
-  const load = async (query: {before?: number; after?: number}) => {
-    const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl);
-    url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
-    if (query.before !== undefined) url.searchParams.set('beforeSeq', String(query.before));
-    if (query.after !== undefined) url.searchParams.set('afterSeq', String(query.after));
-    await authorize();
-    const data = await boundedNetwork(async signal => {
-      const response = await fetchPage(url, {headers: {authorization: 'Bearer ' + token}, signal, redirect: 'error'});
-      if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
-      return response.json();
-    }, options.timeoutMs ?? 10000, options.signal);
-    const parsed = HistoryPage.safeParse(data);
-    if (!parsed.success) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
-    return parsed.data;
-  };
-  const visible = (message: {id: string; seq: number; createdAt: number; content: unknown}) => {
-    const row = panelMessageFromRecord(message.id, message.createdAt, decryptHistoryContent(boundary, key, variant, message.content));
-    return row ? {row, seq: message.seq} : null;
-  };
-  if (options.after === undefined) {
-    const kept: {row: PanelPage['messages'][number]; seq: number}[] = [];
-    let before: number | undefined, high: number | undefined;
-    for (let page = 0; page < 100; page++) {
-      const result = await load({before});
-      let previous = before ?? Infinity;
-      for (const message of result.messages) {
-        if (message.seq >= previous) throw new Refusal('HISTORY_ORDER_INVALID');
-        previous = message.seq;
-        if (high === undefined) high = message.seq;
-        const item = visible(message);
-        if (!item) continue;
-        kept.push(item);
-        if (kept.length === options.limit) break;
-      }
-      if (kept.length === options.limit || !result.hasMore) {
-        if (!result.hasMore && result.nextBeforeSeq !== null && kept.length < options.limit) throw new Refusal('HISTORY_CURSOR_INVALID');
-        break;
-      }
-      if (!result.messages.length || result.nextBeforeSeq !== previous || (before !== undefined && result.nextBeforeSeq >= before))
-        throw new Refusal('HISTORY_CURSOR_INVALID');
-      before = result.nextBeforeSeq;
-      if (page === 99) throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
-    }
-    return {messages: kept.reverse().map(item => item.row), next: high === undefined ? null : String(high)};
-  }
-  const kept: PanelPage['messages'] = [];
-  let cursor = Number(options.after), high: number | undefined;
-  for (let page = 0; page < 100; page++) {
-    const result = await load({after: cursor});
-    let previous = cursor;
-    for (const message of result.messages) {
-      if (message.seq <= previous) throw new Refusal('HISTORY_ORDER_INVALID');
-      previous = message.seq; high = message.seq;
-      const item = visible(message);
-      if (!item) continue;
-      kept.push(item.row);
-      if (kept.length === options.limit) return {messages: kept, next: String(message.seq)};
-    }
-    if (!result.hasMore) {
-      if (result.nextAfterSeq != null) throw new Refusal('HISTORY_CURSOR_INVALID');
-      return {messages: kept, next: high === undefined ? options.after : String(high)};
-    }
-    if (!result.messages.length || result.nextAfterSeq == null || result.nextAfterSeq <= cursor) throw new Refusal('HISTORY_CURSOR_INVALID');
-    cursor = result.nextAfterSeq;
-  }
-  throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
-}
-
-/** Entire linked transcript, oldest first. Pages arrive newest-first and are reversed only after the cursor ends.
- * The importer runs this before the installation switches to local transport. */
-export async function readImportTranscript(baseUrl: string, sessionId: string, token: string, key: Uint8Array, boundary: HappierBoundary,
-  variant: EncryptionVariant, authorize: () => Promise<void>, options: {signal?: AbortSignal; timeoutMs?: number; fetchPage?: typeof fetch; pageLimit?: number} = {}): Promise<PanelMessage[]> {
-  const fetchPage = options.fetchPage ?? fetch;
-  const pageLimit = options.pageLimit ?? 10000;
-  const kept: PanelMessage[] = [];
-  let before: number | undefined;
-  for (let page = 0; page < pageLimit; page++) {
-    const url = new URL(`/v1/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl);
-    url.searchParams.set('scope', 'main'); url.searchParams.set('limit', '150');
-    if (before !== undefined) url.searchParams.set('beforeSeq', String(before));
-    await authorize();
-    const data = await boundedNetwork(async signal => {
-      const response = await fetchPage(url, {headers: {authorization: 'Bearer ' + token}, signal, redirect: 'error'});
-      if (!response.ok) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
-      return response.json();
-    }, options.timeoutMs ?? 10000, options.signal);
-    const parsed = HistoryPage.safeParse(data);
-    if (!parsed.success) throw new Refusal('AUTHORIZED_HISTORY_UNAVAILABLE');
-    const result = parsed.data;
-    let previous = before ?? Infinity;
-    for (const message of result.messages) {
-      if (message.seq >= previous) throw new Refusal('HISTORY_ORDER_INVALID');
-      previous = message.seq;
-      const row = panelMessageFromRecord(message.id, message.createdAt, decryptHistoryContent(boundary, key, variant, message.content));
-      if (row) kept.push(row);
-    }
-    if (!result.hasMore) {
-      if (result.nextBeforeSeq !== null) throw new Refusal('HISTORY_CURSOR_INVALID');
-      await authorize();
-      return kept.reverse();
-    }
-    if (!result.messages.length || result.nextBeforeSeq !== previous || (before !== undefined && result.nextBeforeSeq >= before))
-      throw new Refusal('HISTORY_CURSOR_INVALID');
-    before = result.nextBeforeSeq;
-  }
-  throw new Refusal('HISTORY_PAGE_LIMIT_EXCEEDED');
-}
-
-export class HappierEndpoint {
+export class ConversationEndpoint {
   readonly notifications:Notifications;
-  readonly socket: Socket;
-  readonly rpc: Rpc;
-  readonly transport;
   private timer: ReturnType<typeof setInterval> | undefined;
   private leaseTimer?:ReturnType<typeof setInterval>;
   private busy = false;
   private readonly lifecycle = new AbortController();
-  private conversation?: ConversationTransport;
+  private readonly conversation: ConversationTransport;
   private lastPendingAt = 0;
   private readonly announced=new Map<string,string>();
   private teamModelsAt=0;
@@ -272,64 +51,12 @@ export class HappierEndpoint {
   private readonly replanned=new Set<string>();
   private pendingFailure: unknown;
   lastError: string | undefined;
-  readonly transportEvents = new Set<string>();
   recoveredCheckpoint: Checkpoint | null = null;
-  recoveredMessages: unknown[] = [];
-  readonly seal: (value: unknown) => string;
-  constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime, readonly boundary: HappierBoundary,
-    readonly options: { baseUrl: string; token: string; key: Uint8Array; principal: string; sessionId: string; machineId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportTimeoutMs?:number; transportOnly?:boolean; configurationControl?:Control; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; dataDirectory?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>; projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
+  constructor(readonly ledger: Ledger, readonly runtime: CezarRuntime,
+    readonly options: { key: Uint8Array; principal: string; sessionId: string; authority: Authority; keyVersion?: number; encryptionVariant?: EncryptionVariant; notificationPolicy?:z.input<typeof NotificationPolicy>; transportOnly?:boolean; semanticPlanning?:SemanticPlanning; personalConversation?:boolean; teamFeedRoot?:string; dataDirectory?:string; managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat; projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy; deliverPersonalPush?:(notice:PersonalPushNotice)=>Promise<void> }, conversation?: ConversationTransport) {
     if(options.semanticPlanning&&(options.semanticPlanning.ledger!==ledger||options.transportOnly))throw new Refusal('SEMANTIC_MANAGER_CONFIGURATION_INVALID');
     this.notifications=new Notifications(ledger,options.notificationPolicy);
-    this.conversation = conversation ?? this.createHappierConversation();
-    if(this.conversation.kind==='local'){
-     this.seal=()=>{throw new Refusal('LOCAL_CIPHERTEXT_UNAVAILABLE');};
-     const socket={connected:false,onAny(){},on(){return socket;},emit(){},disconnect(){},timeout(){return socket;}} as unknown as Socket;
-     this.socket=socket;
-     this.transport={async connect(){}};
-     this.rpc={onSocketConnect(){},onSocketDisconnect(){},async handleRequest(){return {};},async invokeLocal(){throw new Refusal('HAPPIER_TRANSPORT_CANCELED');},async waitForRegisteredHandlers(){return {status:'ready'};}};
-     return;
-    }
-    this.seal = value => boundary.encodeBase64(boundary.encrypt(options.key, options.encryptionVariant ?? 'legacy', value));
-    const { socket, transport } = boundary.createSessionSocketTransport({ token: options.token, sessionId: options.sessionId,
-      machineId: options.machineId, serverUrl: options.baseUrl, transports: ['websocket'] });
-    this.socket = socket; this.transport = transport;
-    socket.onAny((name: string) => { this.transportEvents.add(name); });
-    this.rpc = new boundary.RpcHandlerManager({ scopePrefix: options.sessionId, encryptionKey: options.key, encryptionVariant: options.encryptionVariant ?? 'legacy', logger: () => {},
-      authorizeRequest: async q => {
-        if(!q.method.startsWith(options.sessionId+':'))return {ok:false,error:'scope_forbidden'};
-        try{await this.validateLink();return {ok:true};}catch{return {ok:false,error:'context_key_unauthorized'};}
-      } });
-    boundary.registerSessionUserMessageSendHandler(this.rpc, { workingDirectory: runtime.repo,
-      revalidateExplicitUserRequest: async () => ({ status: 'ready' }),
-      sessionRuntimeControls: { handleUserMessage: raw => this.accept(raw) } });
-    if(options.configurationControl){
-      if(options.configurationControl.ledger!==ledger)throw new Refusal('CONFIGURATION_LEDGER_MISMATCH');
-      if(!this.rpc.registerHandler)throw new Refusal('CONFIGURATION_RPC_UNAVAILABLE');
-      const configure=chatConfigurationHandler(options.configurationControl,{authority:options.authority,principal:options.principal,
-        sessionId:options.sessionId,keyVersion:options.keyVersion??1,encryptionVariant:options.encryptionVariant??'legacy',keyFingerprint:keyFingerprint(options.key)});
-      this.rpc.registerHandler('agent-control.configure',async raw=>{
-        try{
-          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
-          await this.validateLink();
-          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
-          return {ok:true,result:await configure(raw)};
-        }catch{return {ok:false,error:'CONFIGURATION_REQUEST_FAILED'};}
-      });
-    }
-    if(options.administrativeHandler){
-      if(!this.rpc.registerHandler)throw new Refusal('ADMIN_RPC_UNAVAILABLE');
-      this.rpc.registerHandler('agent-control.admin',async raw=>{
-        try{
-          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
-          await this.validateLink();
-          if(this.lifecycle.signal.aborted)throw new Refusal('MANAGER_STOPPED');
-          return {ok:true,result:await options.administrativeHandler!(options.authority.contextId,raw)};
-        }catch{return {ok:false,error:'ADMIN_REQUEST_FAILED'};}
-      });
-    }
-    socket.on('rpc-request', async (data: unknown, callback: (value: unknown) => void) => callback(await this.rpc.handleRequest(data)));
-    socket.on('connect', () => { if(this.lifecycle.signal.aborted){socket.disconnect();return;}this.onTransportConnected(); this.rpc.onSocketConnect(socket); });
-    socket.on('disconnect', () => this.rpc.onSocketDisconnect());
+    this.conversation = conversation ?? new LocalConversationTransport({ledger,contextId:options.authority.contextId,principal:options.principal});
   }
   async validateKey() {
     await new ContextKeys(this.ledger).validate(this.options.authority.contextId,this.options.keyVersion??1,this.options.encryptionVariant??'legacy',this.options.key);
@@ -350,56 +77,20 @@ export class HappierEndpoint {
     this.nativeSourceCleanup=this.runtime.nativeImplementation.bindSource(this.options.authority,async(intent,authority)=>{
       if(this.lifecycle.signal.aborted||authority.contextId!==this.options.authority.contextId||authority.epoch!==this.options.authority.epoch||authority.instanceId!==this.options.authority.instanceId)throw new Refusal('STALE_MANAGER');
       await this.validateLink();const payload=Command.parse(intent.command).payload;if(payload.workflow!=='engineering-native-v1')throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');
-      const plain=await readPersonalOwnerText(this.ledger.pool,this.options.authority.contextId,payload.localId);
-      let text=plain;
-      if(text===null){
-       if(this.activeConversation().kind==='local')throw new Refusal('NATIVE_TASK_SOURCE_MISSING');
-       const row=(await this.ledger.pool.query('SELECT ciphertext FROM ac_chat_messages WHERE id=$1 AND session_id=$2',[this.options.sessionId+'|'+payload.localId,this.options.sessionId])).rows[0];
-       if(!row)throw new Refusal('NATIVE_TASK_SOURCE_MISSING');
-       text=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(row.ciphertext))).content.text;
-      }
+      const text=await readPersonalOwnerText(this.ledger.pool,this.options.authority.contextId,payload.localId);
+      if(text===null)throw new Refusal('NATIVE_TASK_SOURCE_MISSING');
       if(digest(text)!==payload.messageDigest||payload.messageRef!==`message:${stableId(intent.context_id+'\0'+payload.localId)}`)throw new Refusal('NATIVE_TASK_SOURCE_MISMATCH');return text;
     });
   }
   async start() {
     try{
-    await this.activeConversation().start();
+    await this.conversation.start();
     await this.validateLink();
-    if(this.lifecycle.signal.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
-    if(this.activeConversation().kind==='local'){
-     this.bindNativeSource();
-     if(this.options.personalConversation){const unbind=bindOwnerRequest(this.options.authority.contextId,async intentId=>(await this.originalRequest(intentId)).text||undefined);this.lifecycle.signal.addEventListener('abort',unbind,{once:true});}
-     this.recoveredCheckpoint=await this.ledger.recoverCheckpoint(this.options.authority);
-     this.recoveredMessages=[];
-     this.recoveredCheckpoint=await this.ledger.recoverCheckpoint(this.options.authority);
-     if(this.lifecycle.signal.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
-     this.armTick();
-     return;
-    }
-    const timeout=this.options.transportTimeoutMs??10000;
-    const profile = await boundedNetwork(async signal=>{
-      const response=await fetch(this.options.baseUrl+'/v1/account/profile',{headers:{authorization:'Bearer '+this.options.token},signal});
-      if(!response.ok)throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH',403);
-      return response.json();
-    },timeout,this.lifecycle.signal);
-    if (z.object({ id: z.string() }).passthrough().parse(profile).id !== this.options.principal)
-      throw new Refusal('HAPPIER_PRINCIPAL_MISMATCH', 403);
+    if(this.lifecycle.signal.aborted)throw new Refusal('CONVERSATION_TRANSPORT_CANCELED');
     this.bindNativeSource();
     if(this.options.personalConversation){const unbind=bindOwnerRequest(this.options.authority.contextId,async intentId=>(await this.originalRequest(intentId)).text||undefined);this.lifecycle.signal.addEventListener('abort',unbind,{once:true});}
-    this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
-    this.recoveredMessages = await recoverHistory(this.options.baseUrl, this.options.sessionId, this.options.token, this.options.key, this.boundary, fetch, this.options.encryptionVariant??'legacy',()=>this.validateLink(),{signal:this.lifecycle.signal,timeoutMs:timeout});
-    // Fetching authorized pages may take time; re-read current structured state before activating RPC.
-    this.recoveredCheckpoint = await this.ledger.recoverCheckpoint(this.options.authority);
-    if(this.lifecycle.signal.aborted)throw new Refusal('HAPPIER_TRANSPORT_CANCELED');
-    const connecting=this.transport.connect();
-    void connecting.then(()=>{if(this.lifecycle.signal.aborted)this.socket.disconnect();},()=>{});
-    await boundedNetwork(()=>connecting,timeout,this.lifecycle.signal);
-    const methods=['session.userMessage.send',...(this.options.configurationControl?['agent-control.configure']:[]),...(this.options.administrativeHandler?['agent-control.admin']:[])];
-    const registered = await boundedNetwork(()=>this.rpc.waitForRegisteredHandlers(methods, { timeoutMs: timeout }),timeout,this.lifecycle.signal);
-    if (registered.status !== 'ready') {
-      this.socket.disconnect();
-      throw new Refusal('HAPPIER_NOT_READY_' + registered.status + '_' + [...this.transportEvents].join(','));
-    }
+    this.recoveredCheckpoint=await this.ledger.recoverCheckpoint(this.options.authority);
+    if(this.lifecycle.signal.aborted)throw new Refusal('CONVERSATION_TRANSPORT_CANCELED');
     this.armTick();
     }catch(error){this.close();throw error;}
   }
@@ -420,14 +111,14 @@ export class HappierEndpoint {
           [this.options.authority.contextId, { code }]).catch(error => logContainedFailure('MANAGER_BLOCKED_AUDIT_NOT_RECORDED', error));
         this.lastError = code;
         if (['STALE_MANAGER','CONTEXT_FORBIDDEN','PROJECT_RUNTIME_MISMATCH','CONTEXT_KEY_UNAUTHORIZED','SESSION_CONTEXT_MISMATCH'].includes(this.lastError)) this.close();
-        else if(code==='NATIVE_IMAGE_MISSING'){try{await this.say('native-images-missing',nativeImagesRemovedNotice);await this.deliverQueuedMessages();}catch(error){logContainedFailure('NATIVE_IMAGES_NOTICE_NOT_SENT',error);}}
+        else if(code==='NATIVE_IMAGE_MISSING'){try{await this.say('native-images-missing',nativeImagesRemovedNotice);}catch(error){logContainedFailure('NATIVE_IMAGES_NOTICE_NOT_SENT',error);}}
         else if(!['CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ORIGINAL_RESERVE_NOT_NEEDED','PROVIDER_USAGE_LIMIT'].includes(code)){
           // Critical controller blockers do not wait for the completion window.
           // Failure to publish preserves the same encrypted outbox for retry.
           try{
             await this.notifications.observe(this.options.principal,this.options.authority,this.options.sessionId,
               {entityId:this.options.authority.contextId,source:'manager',planRevision:0,seq:0,status:'blocked',reason:notificationReason(error)});
-            await this.flushNotifications();await this.deliverQueuedMessages();
+            await this.flushNotifications();
           }catch(error){logContainedFailure('MANAGER_BLOCKED_NOTICE_DEFERRED',error);}
         }
       }).finally(() => { this.busy = false; }); }, 300);
@@ -505,55 +196,22 @@ export class HappierEndpoint {
       deliveryAttemptId: randomUUID(), policyRevision: 1, action: payload.workflow==='semantic-proposal-v1'?'plan.propose':'plan.start', payload };
     // Bind encrypted request and intention in the same transaction, so a lost
     // response cannot leave a runnable planning intention without its source.
-    const intent = await this.ledger.accept(this.options.principal, command, this.options.authority, 'happier',async c=>{
-      if(this.activeConversation().kind==='local'){await bindPersonalOwnerMessage(c,this.options.authority.contextId,q.localId,q.text);return;}
-      const ciphertext=this.seal({role:'user',content:{type:'text',text:q.text},localKey:q.localId,meta:q.meta??{}});
-      const id=this.options.sessionId+'|'+q.localId;
-      await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,100) ON CONFLICT DO NOTHING',[id,this.options.sessionId,ciphertext]);
-      const stored=(await c.query('SELECT session_id,ciphertext FROM ac_chat_messages WHERE id=$1',[id])).rows[0];
-      if(!stored||stored.session_id!==this.options.sessionId)throw new Refusal('CHAT_MESSAGE_CONFLICT');
-      const message=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext)));
-      if(digest(message.content.text)!==digest(q.text))throw new Refusal('CHAT_MESSAGE_CONFLICT');
+    const intent = await this.ledger.accept(this.options.principal, command, this.options.authority, CONVERSATION_CHANNEL,async c=>{
+      await bindPersonalOwnerMessage(c,this.options.authority.contextId,q.localId,q.text);
     });
     return { handled: true, result: { ok: true, providerAcceptancePending: true, intentId: intent.id } };
   }
-  private async insertAgentMessage(c:pg.PoolClient,localId:string,value:unknown,priority:0|50):Promise<{id:string;seq:number}>{
-    const id=this.options.sessionId+'|'+localId,ciphertext=this.seal(value);
-    await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[id,this.options.sessionId,ciphertext,priority]);
-    const stored=(await c.query('SELECT session_id,ciphertext,sequence FROM ac_chat_messages WHERE id=$1',[id])).rows[0];
-    if(!stored||stored.session_id!==this.options.sessionId)throw new Refusal('CHAT_MESSAGE_CONFLICT');
-    const decoded=this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext));
-    if(decoded===null||digest(decoded)!==digest(value))throw new Refusal('CHAT_MESSAGE_CONFLICT');
-    return {id,seq:Number(stored.sequence)};
-  }
-  async ack(event: string, data: unknown): Promise<unknown> {
-    return new Promise((resolve, reject) => this.socket.timeout(8000).emit(event, data,
-      (error: Error | null, value: unknown) => error ? reject(error) : resolve(value)));
-  }
   private async flushNotifications(){
     await this.validateLink();
-    if(this.activeConversation().kind==='local')return this.notifications.flushToPersonal(this.options.principal,this.options.authority,this.options.sessionId,(localId,text)=>{this.notePersonalPush(localId,text);});
-    return this.notifications.flush(this.options.principal,this.options.authority,this.options.sessionId,this.seal,(localId,text)=>{this.notePersonalPush(localId,text);});
-  }
-  private async deliverQueuedMessages(){
-    if(this.activeConversation().kind==='local')return {sent:0};
-    return this.notifications.deliver(this.options.principal,this.options.authority,this.options.sessionId,
-      message=>this.ack('message',{sid:this.options.sessionId,message:message.ciphertext,localId:message.localId,echoToSender:true}),()=>this.validateLink());
+    return this.notifications.flushToPersonal(this.options.principal,this.options.authority,this.options.sessionId,(localId,text)=>{this.notePersonalPush(localId,text);});
   }
   private async processSemanticProposal(intent:import('./ledger.ts').Intent){
     const planner=this.options.semanticPlanning,command=Command.parse(intent.command),payload=command.payload;
     if(!planner||this.runtime.executionMode!=='execution'||command.action!=='plan.propose'||payload.workflow!=='semantic-proposal-v1')throw new Refusal('SEMANTIC_PLANNING_DISABLED');
     if(intent.state==='done')return;
     await this.validateLink();
-    const plain=await readPersonalOwnerText(this.ledger.pool,intent.context_id,payload.localId);
-    let sourceText=plain;
-    if(sourceText===null){
-     if(this.activeConversation().kind==='local')throw new Refusal('PLANNING_SOURCE_MISSING');
-     const source=(await this.ledger.pool.query('SELECT ciphertext FROM ac_chat_messages WHERE id=$1 AND session_id=$2',
-      [this.options.sessionId+'|'+payload.localId,this.options.sessionId])).rows[0];
-     if(!source)throw new Refusal('PLANNING_SOURCE_MISSING');
-     sourceText=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(source.ciphertext))).content.text;
-    }
+    const sourceText=await readPersonalOwnerText(this.ledger.pool,intent.context_id,payload.localId);
+    if(sourceText===null)throw new Refusal('PLANNING_SOURCE_MISSING');
     if(digest(sourceText)!==payload.messageDigest||payload.messageRef!==`message:${stableId(intent.context_id+'\0'+payload.localId)}`)throw new Refusal('PLANNING_SOURCE_MISMATCH');
     const callId=stableId('semantic-proposal-v1\0'+intent.id);
     const previous=(await this.ledger.pool.query('SELECT expected_revision FROM ac_semantic_planning_calls WHERE id=$1 AND context_id=$2',[callId,intent.context_id])).rows[0];
@@ -588,7 +246,7 @@ export class HappierEndpoint {
       await c.query("UPDATE ac_intents SET state='done' WHERE id=$1",[intent.id]);
       await c.query("UPDATE ac_outbox SET state='dispatched' WHERE intent_id=$1",[intent.id]);
       await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered'",[intent.operation_id,{kind:'semantic-proposal',callId,revision:result.revision,digest:result.digest}]);
-      await this.activeConversation().publishManagerText(localId,proposalText,message,c,0);
+      await this.conversation.publishManagerText(localId,proposalText,message,c,0);
       // Auto-approval is decided in the same commit as the publication: a crash after it leaves a durable
       // approved decision with a fixed execution id, which the recovery in tick() turns into exactly one execution.
       if(this.options.personalConversation){
@@ -624,7 +282,7 @@ export class HappierEndpoint {
     }
    }
    const message={role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli'}};
-   await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.activeConversation().publishManagerText(localId,text,message,c,0);});
+   await this.ledger.tx(async c=>{await this.ledger.authorize(c,this.options.principal,this.options.authority.contextId,false);await this.conversation.publishManagerText(localId,text,message,c,0);});
    this.notePersonalPush(localId,text);
   }
   /** Schedules a phone alert after the conversation write. A send failure is logged and never blocks the bridge. */
@@ -665,10 +323,6 @@ export class HappierEndpoint {
     if(typeof localId==='string'){
      const plain=await readPersonalOwnerText(this.ledger.pool,this.options.authority.contextId,localId);
      if(plain!==null)original=plain;
-     else if(this.activeConversation().kind!=='local'){
-      const stored=(await this.ledger.pool.query('SELECT ciphertext FROM ac_chat_messages WHERE id=$1 AND session_id=$2',[this.options.sessionId+'|'+localId,this.options.sessionId])).rows[0];
-      if(stored)original=UserRecord.parse(this.boundary.decrypt(this.options.key,this.options.encryptionVariant??'legacy',this.boundary.decodeBase64(stored.ciphertext))).content.text;
-     }
     }
    }
    return {text:original,revision};
@@ -697,7 +351,7 @@ export class HappierEndpoint {
    if(await exists())return;
    const context=(await this.ledger.pool.query('SELECT policy_revision FROM ac_contexts WHERE id=$1',[decision.contextId])).rows[0];
    try{
-    await this.ledger.accept(this.options.principal,{schemaVersion:1,contextId:decision.contextId,intentId,deliveryAttemptId:stableId('proposal-start-delivery\0'+intentId),policyRevision:context.policy_revision,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'approved:'+decision.digest.slice(0,32),proposalRevision:decision.revision,proposalDigest:decision.digest,native:true}},this.options.authority,'happier');
+    await this.ledger.accept(this.options.principal,{schemaVersion:1,contextId:decision.contextId,intentId,deliveryAttemptId:stableId('proposal-start-delivery\0'+intentId),policyRevision:context.policy_revision,action:'plan.start',payload:{workflow:'managed-synthetic-v1',messageRef:'approved:'+decision.digest.slice(0,32),proposalRevision:decision.revision,proposalDigest:decision.digest,native:true}},this.options.authority,CONVERSATION_CHANNEL);
    }catch(error){
     // A concurrent starter (or one that lost its answer) already created it, possibly under another policy revision.
     if(error instanceof Refusal&&error.code==='INTENT_PAYLOAD_CONFLICT'&&await exists())return;
@@ -745,12 +399,11 @@ export class HappierEndpoint {
     if (this.connectionState()!=='connected') return;
     await this.validateLink();
     await this.ledger.heartbeat(this.options.authority);
-    if(this.options.transportOnly){this.socket.emit('session-alive',{sid:this.options.sessionId,time:Date.now(),thinking:false,mode:'remote'});return;}
+    if(this.options.transportOnly)return;
     let recoveryFailure:unknown;
     try{await this.runtime.reconcileCancellations(this.options.authority,this.options.principal);}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure=error;}
     try{await this.runtime.recoverManaged(this.options.authority);}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure??=error;}
     if(this.options.personalConversation){try{await this.recoverProposalStarts();}catch(error){if(!workflowRuntimeParkingReason(error))recoveryFailure??=error;}}
-    this.socket.emit('session-alive', { sid: this.options.sessionId, time: Date.now(), thinking: false, mode: 'remote' });
     if (Date.now() - this.lastPendingAt >= 1000) {
       this.lastPendingAt = Date.now();
       try { await this.receivePending(); this.pendingFailure = undefined; }
@@ -789,7 +442,7 @@ export class HappierEndpoint {
               await c.query("UPDATE ac_intents SET state='failed' WHERE id=$1 AND context_id=$2",[intent.id,intent.context_id]);
               await c.query("UPDATE ac_outbox SET state='dispatched' WHERE intent_id=$1",[intent.id]);
               await c.query("UPDATE ac_operations SET state='completed',receipt=$2 WHERE id=$1 AND state='registered'",[intent.operation_id,{kind:'semantic-proposal',callId,failureCode:error.code}]);
-              await this.activeConversation().publishManagerText(localId,text,message,c,50);
+              await this.conversation.publishManagerText(localId,text,message,c,50);
               await this.ledger.refreshPending(c,intent.context_id);
             });
             this.notePersonalPush(localId,text);
@@ -856,7 +509,7 @@ export class HappierEndpoint {
     }
     if(this.options.personalConversation&&this.options.teamFeedRoot){
      // Once per process, retried at most once a minute; the profile list rarely changes.
-     if(this.teamModelsAt>=0&&Date.now()-this.teamModelsAt>60000){this.teamModelsAt=Date.now();await this.activeConversation().publishTeamModels().then(()=>{this.teamModelsAt=-1;},error=>{console.error(JSON.stringify({event:"TEAM_MODELS_NOT_PUBLISHED",error:String(error?.code??error?.message??error)}));});}
+     if(this.teamModelsAt>=0&&Date.now()-this.teamModelsAt>60000){this.teamModelsAt=Date.now();await this.conversation.publishTeamModels().then(()=>{this.teamModelsAt=-1;},error=>{console.error(JSON.stringify({event:"TEAM_MODELS_NOT_PUBLISHED",error:String(error?.code??error?.message??error)}));});}
      // Each role's own report: who ran it (provider, model, effort), what it said, changed or found.
      for(const job of await teamJobs(this.ledger.pool,this.options.authority.contextId)){
       if(this.announced.get('team|'+job.id)===job.state)continue;
@@ -907,140 +560,38 @@ export class HappierEndpoint {
       this.announced.set(notice.localId,'said');
      }
     }
-    await this.flushNotifications();await this.deliverQueuedMessages();
+    await this.flushNotifications();
     if (this.pendingFailure !== undefined) throw this.pendingFailure;
     if (recoveryFailure !== undefined) throw recoveryFailure;
     if (capacityWait) throw capacityWait;
   }
   private async receivePending() {
-    if(this.activeConversation().kind==='local'){
-     const claimed=await this.activeConversation().claimOwnerMessage();
-     if(!claimed)return;
-     try{await this.accept({text:claimed.text,localId:claimed.localId,meta:claimed.meta??{}});}
-     catch(error){
-      const transient=['STALE_MANAGER','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ADMISSION_CLOSED','HUMAN_PAUSED','MANAGER_RESTART_IN_PROGRESS'];
-      if(!this.options.personalConversation||!(error instanceof Refusal)||transient.includes(error.code))throw error;
-      await this.say('refused-'+claimed.localId,'Não consegui aceitar esta mensagem ('+error.code+'). Corrija a causa e envie de novo.');
-      await this.activeConversation().settleOwnerMessage(claimed.localId,'refused');
-      return;
-     }
-     await this.activeConversation().settleOwnerMessage(claimed.localId,'accepted');
+    const claimed=await this.conversation.claimOwnerMessage();
+    if(!claimed)return;
+    try{await this.accept({text:claimed.text,localId:claimed.localId,meta:claimed.meta??{}});}
+    catch(error){
+     // Personal mode: a definite product refusal is said and closed, so the message does not stay claimed forever.
+     // Transient conditions and unknown errors keep it claimed for the next tick.
+     const transient=['STALE_MANAGER','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ADMISSION_CLOSED','HUMAN_PAUSED','MANAGER_RESTART_IN_PROGRESS'];
+     if(!this.options.personalConversation||!(error instanceof Refusal)||transient.includes(error.code))throw error;
+     await this.say('refused-'+claimed.localId,'Não consegui aceitar esta mensagem ('+error.code+'). Corrija a causa e envie de novo.');
+     await this.conversation.settleOwnerMessage(claimed.localId,'refused');
      return;
     }
-    const claimed = await this.activeConversation().claimOwnerMessage();
-    if (!claimed) return;
-    try {
-      z.object({ ok: z.literal(true) }).passthrough().parse(await this.rpc.invokeLocal('session.userMessage.send',
-        { text: claimed.text, localId: claimed.localId, meta: claimed.meta ?? {} }));
-    } catch (error) {
-      // Personal mode: a refused message must not stay claimed forever in the Happier queue
-      // (it would show as "delivery uncertain" and need manual action). Say why and close the delivery.
-      // Only a definite product refusal is closed: it is raised before anything is recorded. Transient
-      // conditions and unknown errors keep the delivery claimed, as outside personal mode.
-      const transient=['STALE_MANAGER','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPACITY','ADMISSION_CLOSED','HUMAN_PAUSED','MANAGER_RESTART_IN_PROGRESS'];
-      if (!this.options.personalConversation || !(error instanceof Refusal) || transient.includes(error.code)) throw error;
-      await this.say('refused-' + claimed.localId, 'Não consegui aceitar esta mensagem (' + error.code + '). Corrija a causa e envie de novo.');
-      await this.activeConversation().settleOwnerMessage(claimed.localId, 'refused');
-      return;
-    }
-    await this.activeConversation().settleOwnerMessage(claimed.localId, 'accepted');
+    await this.conversation.settleOwnerMessage(claimed.localId,'accepted');
   }
-  connectionState(): 'connected'|'disconnected' {return this.activeConversation().connectionState();}
+  connectionState(): 'connected'|'disconnected' {return this.conversation.connectionState();}
   /** Same key and history read as the bridge. The caller already checked the project owner. */
   async readPanelConversation(after: string | undefined, limit: number): Promise<PanelPage> {
     if (this.lifecycle.signal.aborted) throw new Refusal('MANAGER_STOPPED');
     await this.validateLink();
-    return this.activeConversation().readPage(after, limit);
+    return this.conversation.readPage(after, limit);
   }
-  private async postSession(path: string, body: unknown): Promise<number> {
-    const response = await boundedNetwork(async signal => fetch(new URL(path, this.options.baseUrl), {
-      method: 'POST', headers: {authorization: 'Bearer ' + this.options.token, 'content-type': 'application/json'},
-      body: JSON.stringify(body), redirect: 'error', signal,
-    }), this.options.transportTimeoutMs ?? 10000, this.lifecycle.signal);
-    await response.body?.cancel().catch(() => {/* only the status is read; an unread body is dropped */});
-    return response.status;
-  }
-  /** Queue the text as the owner, the way the Happier app does, so receivePending accepts it.
-   * A rejected queue falls back to accept() and a transcript copy of the same ciphertext. */
+  /** Queue the owner's text in the local transcript; the next tick claims and accepts it. */
   async enqueueOwnerMessage(text: string, localId: string): Promise<void> {
     if (this.lifecycle.signal.aborted) throw new Refusal('MANAGER_STOPPED');
     await this.validateLink();
-    if(this.activeConversation().kind==='local'){await enqueuePersonalOwner(this.ledger.pool,this.options.authority.contextId,localId,text);return;}
-    const ciphertext = this.seal({role: 'user', content: {type: 'text', text}});
-    const queued = await this.postSession('/v2/sessions/' + encodeURIComponent(this.options.sessionId) + '/pending', {ciphertext, localId});
-    if (queued === 200 || queued === 409) return;
-    if (queued !== 400 && queued !== 401 && queued !== 403 && queued !== 404) throw new Refusal('OWNER_MESSAGE_NOT_QUEUED');
-    await this.accept({text, localId});
-    const mirrored = await this.postSession('/v2/sessions/' + encodeURIComponent(this.options.sessionId) + '/messages', {ciphertext, localId});
-    if (mirrored !== 200 && mirrored !== 409 && mirrored !== 400) throw new Refusal('OWNER_MESSAGE_NOT_RECORDED');
+    await enqueuePersonalOwner(this.ledger.pool,this.options.authority.contextId,localId,text);
   }
-  close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer);if(this.leaseTimer)clearInterval(this.leaseTimer); this.recoveredMessages=[];this.recoveredCheckpoint=null;this.conversation?.close();this.socket.disconnect(); }
-  private activeConversation(): ConversationTransport {
-    return this.conversation ??= this.createHappierConversation();
-  }
-  /** Socket reconnect clears the activity snapshot so the next claim asks again. */
-  private onTransportConnected() {
-    (this.conversation as ConversationTransport & {noteSocketConnected?: () => void} | undefined)?.noteSocketConnected?.();
-  }
-  /** Happier I/O. `ack` is read on each call so a test can replace `endpoint.ack` after construction. */
-  private createHappierConversation(): ConversationTransport & {noteSocketConnected(): void} {
-    const endpoint = this;
-    let runtimeReady = false;
-    let revision: number | undefined;
-    return {
-      kind: 'happier',
-      async start() {},
-      connectionState() { return endpoint.socket.connected ? 'connected' : 'disconnected'; },
-      noteSocketConnected() { runtimeReady = false; },
-      async claimOwnerMessage() {
-        if (!runtimeReady) {
-          const request = endpoint.boundary.SessionRuntimeActivitySnapshotRequestSchema.parse({ sessionId: endpoint.options.sessionId,
-            mutationId: randomUUID(), snapshot: { state: 'idle', activeCount: 0 } });
-          const result = z.object({ status: z.enum(['applied', 'unchanged']), projection: z.object({ revision: z.number() }).optional() }).passthrough()
-            .parse(await endpoint.ack(endpoint.boundary.SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT, request));
-          revision = result.projection?.revision; runtimeReady = true;
-        }
-        const pending = Pending.parse(await endpoint.boundary.materializeNextPendingQueueV2Message({ token: endpoint.options.token,
-          sessionId: endpoint.options.sessionId, socket: endpoint.socket, deliveryStateOptIn: true, deliveryTiming: 'after_runtime_idle',
-          foregroundState: 'ready', expectedRuntimeActivityRevision: revision }));
-        if (pending.deferredReason === 'runtime_activity_unknown') runtimeReady = false;
-        if (!(pending.didMaterialize && pending.message?.localId)) return null;
-        const record = UserRecord.parse(endpoint.boundary.decrypt(endpoint.options.key, endpoint.options.encryptionVariant ?? 'legacy', endpoint.boundary.decodeBase64(pending.message.content.c)));
-        return {text: record.content.text, localId: pending.message.localId, meta: record.meta ?? {}};
-      },
-      async settleOwnerMessage(localId) {
-        await endpoint.boundary.resolveAcceptedPendingQueueV2Delivery({ socket: endpoint.socket, sessionId: endpoint.options.sessionId, localId });
-        await endpoint.boundary.markPendingQueueV2DeliveryHandled({ token: endpoint.options.token, sessionId: endpoint.options.sessionId, localId });
-        runtimeReady = false;
-      },
-      async publishManagerText(localId, _text, record, client, priority = 0) {
-        const write = (c: pg.PoolClient) => endpoint.insertAgentMessage(c, localId, record, priority);
-        if (client) return write(client);
-        return endpoint.ledger.tx(async c => {
-          await endpoint.ledger.authorize(c, endpoint.options.principal, endpoint.options.authority.contextId, false);
-          return write(c);
-        });
-      },
-      readPage(after, limit) {
-        return readPanelTranscript(endpoint.options.baseUrl, endpoint.options.sessionId, endpoint.options.token, endpoint.options.key, endpoint.boundary, endpoint.options.encryptionVariant ?? 'legacy', () => endpoint.validateLink(), {after, limit, signal: endpoint.lifecycle.signal, timeoutMs: endpoint.options.transportTimeoutMs ?? 10000});
-      },
-      // Shows the team in the app's model picker instead of the Claude catalog: read the current metadata,
-      // add the team list and write it back at that version (a concurrent change only costs a retry).
-      async publishTeamModels() {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          const response = await fetch(endpoint.options.baseUrl + '/v2/sessions/' + encodeURIComponent(endpoint.options.sessionId), {headers: {authorization: 'Bearer ' + endpoint.options.token}, redirect: 'error', signal: AbortSignal.timeout(8000)});
-          if (!response.ok) throw new Error('session ' + response.status);
-          const body = z.object({session: z.object({metadata: z.string(), metadataVersion: z.number()}).passthrough()}).passthrough().parse(await response.json());
-          const current = endpoint.boundary.decrypt(endpoint.options.key, endpoint.options.encryptionVariant ?? 'legacy', endpoint.boundary.decodeBase64(body.session.metadata));
-          if (!current || typeof current !== 'object') throw new Error('metadata unreadable');
-          const next = await teamModelsMetadata(endpoint.ledger.pool, current as Record<string, unknown>);
-          if (!next) return;
-          const written = z.object({result: z.string()}).passthrough().parse(await endpoint.ack('update-metadata', {sid: endpoint.options.sessionId, metadata: endpoint.seal(next), expectedVersion: body.session.metadataVersion}));
-          if (written.result === 'success') return;
-          if (written.result !== 'version-mismatch') throw new Error('write ' + written.result);
-        }
-      },
-      close() {},
-    };
-  }
+  close() { this.nativeSourceCleanup?.();this.nativeSourceCleanup=undefined;this.lifecycle.abort();if (this.timer) clearInterval(this.timer);if(this.leaseTimer)clearInterval(this.leaseTimer);this.recoveredCheckpoint=null;this.conversation.close(); }
 }

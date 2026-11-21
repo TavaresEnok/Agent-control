@@ -3,10 +3,8 @@ import {z} from 'zod';
 import {Authority,Id,Refusal,digest} from './contracts.ts';
 import {ContextKeys,keyFingerprint,type EncryptionVariant} from './context-keys.ts';
 import {Ledger} from './ledger.ts';
-import {HappierEndpoint,type HappierBoundary} from './happier.ts';
+import {ConversationEndpoint} from './conversation.ts';
 import {LocalConversationTransport} from './conversation-transport.ts';
-import {Control} from './control.ts';
-import {nativeReviewVerifierDigest} from './native-verification.ts';
 import type {SemanticPlanning} from './semantic-planning.ts';
 import type {CezarRuntime} from './cezar.ts';
 import type {AdministrativeOperations,AdministrativeCapability} from './administrative-operations.ts';
@@ -250,24 +248,14 @@ export class ManagerRegistry{
  }
 }
 
-/** Reuses the existing native Happier endpoint. Credentials stay in this trusted
- * factory closure; only a private per-endpoint content-key copy reaches it. */
 export function administrativeEndpointDispatcher(registry:ManagerRegistry,service:AdministrativeOperations){
  if(registry.ledger!==service.ledger)throw new Refusal('ADMIN_SERVICE_LEDGER_MISMATCH',403);
  return async(contextId:string,raw:unknown)=>service.execute(await registry.administrativeCapability(contextId,service),raw);
 }
-export function happierEndpointFactory(ledger:Ledger,runtime:CezarRuntime,boundary:HappierBoundary,
- options:{baseUrl:string;token:string;machineId:string;transportOnly?:boolean;configurationControl?:Control;semanticPlanning?:SemanticPlanning;personalConversation?:boolean;teamFeedRoot?:string;dataDirectory?:string;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;administrativeHandler?:(contextId:string,raw:unknown)=>Promise<unknown>;projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy;deliverPersonalPush?:(notice:import('./personal-push.ts').PersonalPushNotice)=>Promise<void>}):ManagerEndpointFactory{
- const configurationControl=options.configurationControl??new Control(ledger,[],runtime.projectId,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
- return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,configurationControl,principal:input.principal,sessionId:input.sessionId,
-  authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant});
-}
-/** Personal transcript in Postgres. The boundary is never used: local start does not seal or decrypt. */
-export function localEndpointFactory(ledger:Ledger,runtime:CezarRuntime,
- options:Parameters<typeof happierEndpointFactory>[3]):ManagerEndpointFactory{
- const configurationControl=options.configurationControl??new Control(ledger,[],runtime.projectId,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
- const boundary=new Proxy({} as HappierBoundary,{get(){throw new Refusal('LOCAL_CIPHERTEXT_UNAVAILABLE');}});
- return input=>new HappierEndpoint(ledger,runtime,boundary,{...options,configurationControl,principal:input.principal,sessionId:input.sessionId,
+export type ConversationEndpointOptions={transportOnly?:boolean;semanticPlanning?:SemanticPlanning;personalConversation?:boolean;teamFeedRoot?:string;dataDirectory?:string;managerChat?:import('./personal-manager-chat.ts').PersonalManagerChat;projectLabel?:string;managerEconomy?:import('./manager-discipline.ts').ManagerEconomy;deliverPersonalPush?:(notice:import('./personal-push.ts').PersonalPushNotice)=>Promise<void>};
+/** Personal transcript in Postgres (ac_personal_messages). Only a private per-endpoint content-key copy reaches the endpoint. */
+export function localEndpointFactory(ledger:Ledger,runtime:CezarRuntime,options:ConversationEndpointOptions):ManagerEndpointFactory{
+ return input=>new ConversationEndpoint(ledger,runtime,{...options,principal:input.principal,sessionId:input.sessionId,
   authority:input.authority,key:input.key,keyVersion:input.keyVersion,encryptionVariant:input.encryptionVariant as EncryptionVariant},
   new LocalConversationTransport({ledger,contextId:input.authority.contextId,principal:input.principal}));
 }

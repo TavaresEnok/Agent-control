@@ -45,7 +45,7 @@ export async function createPersonalProject(input:{
  });
 }
 
-/** Removes a secondary project from the installation and archives its contexts. Repository files and the Happier conversation stay. */
+/** Removes a secondary project from the installation and archives its contexts. Repository files and the conversation transcript stay. */
 export async function archivePersonalProject(input:{installationPath:string;projectId:string;ledger:Ledger;underSystemd:boolean}):Promise<PersonalProjectCreateResult>{
  return withPersonalProjectCreation(async()=>{
   const config=await loadInstallation(input.installationPath);

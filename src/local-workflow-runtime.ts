@@ -23,10 +23,10 @@ async function measured(){
  const executableDigest=await (executableHash??=readFile(executable).then(bytes=>createHash('sha256').update(bytes).digest('hex')));
  const files=[...await packageFiles('src',extension),...await packageFiles('upstream/cezar/packages/cezar/dist','.js')].sort();
  const hashes=[];for(const name of files)hashes.push([name,createHash('sha256').update(await readFile(join(root,name))).digest('hex')]);
- // Bind the installed dependency specification and the actual generated E2EE
- // boundary. This does not claim to hash or attest all node_modules bytes.
+ // Bind the installed dependency specification. This does not claim to hash or
+ // attest all node_modules bytes.
  let manifestRoot=root;try{await readFile(join(manifestRoot,'package.json'));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;manifestRoot=dirname(root);}
- const specifications=['package.json','package-lock.json','upstream/cezar/package.json','upstream/cezar/package-lock.json','upstream/cezar/packages/cezar/package.json','upstream/cezar/packages/contract/package.json','upstream/happier/package.json','upstream/happier/yarn.lock','upstream/happier/packages/cli-common/package.json','upstream/happier/packages/protocol/package.json','adapters/happier-entry.ts','upstream/happier/node_modules/.agent-control-boundary.mjs'];
+ const specifications=['package.json','package-lock.json','upstream/cezar/package.json','upstream/cezar/package-lock.json','upstream/cezar/packages/cezar/package.json','upstream/cezar/packages/contract/package.json'];
  for(const name of specifications)hashes.push(['spec/'+name,createHash('sha256').update(await readFile(join(manifestRoot,name))).digest('hex')]);
  // Contracts imported directly from source are outside the emitted Cezar tree.
  for(const name of await packageFiles('upstream/cezar/packages/contract/src',extension))hashes.push([name,createHash('sha256').update(await readFile(join(root,name))).digest('hex')]);

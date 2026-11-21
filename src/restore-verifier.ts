@@ -127,6 +127,7 @@ function versionState(value:unknown):VersionState{
 }
 function componentForPath(path:string):FileComponent|null{
  if(path==='.state/keys'||path.startsWith('.state/keys/'))return 'vault';
+ // Lab backups made before the conversation server was retired keep its data under this path.
  if(path==='.state/happier'||path.startsWith('.state/happier/'))return 'context';
  if(path==='.state/browser-fixture.json')return 'ui_state';
  if(path==='.state/projects'||path.startsWith('.state/projects/'))return 'plan_receipts';

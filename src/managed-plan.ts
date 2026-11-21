@@ -217,7 +217,7 @@ function managedBatchRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentInt
 export function executionRecipe(plan:ManagerPlan,policies:PlanningPolicy[],parentIntentId:string,proposalRevision:number):ManagedRecipe{
  return managedBatchRecipe(plan,policies,parentIntentId,proposalRevision,false);
 }
-/** Frozen task contract. The digest is of this canonical text, not Happier plaintext. */
+/** Frozen task contract. The digest is of this canonical text, not the conversation plaintext. */
 export function nativeManagedTaskText(task:ManagerTask){
  return canonical({domain:'native-managed-task-v1',id:task.id,objectiveRef:task.objectiveRef,acceptanceRefs:task.acceptanceRefs,inputRefs:task.inputRefs,outputRefs:task.outputRefs,dependsOn:task.dependsOn,writePaths:task.writePaths});
 }

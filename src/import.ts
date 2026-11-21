@@ -119,7 +119,7 @@ export class IsolatedImport{
     await c.query('UPDATE ac_import_entries SET context_id=$2 WHERE id=$1',[entry.id,contextId]);
     await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'import.completed',$2)",[contextId,{importId:id,sourcePaused:entry.source_paused}]);
    }
-   // Ciphertext was only a temporary outbox. Happier remains the single transcript authority.
+   // Ciphertext was only a temporary outbox; it is not kept after delivery.
    await c.query('DELETE FROM ac_import_messages WHERE entry_id IN (SELECT id FROM ac_import_entries WHERE batch_id=$1)',[id]);
    const aliases=(await c.query('SELECT e.message_count FROM ac_import_v2_entry_aliases a JOIN ac_import_entries e ON e.id=a.entry_id WHERE a.batch_id=$1',[id])).rows;
    await c.query("UPDATE ac_import_batches SET state='completed',receipt=$2 WHERE id=$1",[id,{contexts:rows.length+aliases.length,messages:rows.reduce((total,row)=>total+row.message_count,0),...(aliases.length?{reusedContexts:aliases.length,reusedMessages:aliases.reduce((total,row)=>total+row.message_count,0)}:{}),sourceDigest:locked.input_digest}]);

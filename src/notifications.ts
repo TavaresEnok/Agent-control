@@ -14,8 +14,6 @@ const Reason=z.enum(['NONE','CAPACITY_BUSY','CAPACITY_QUEUED','NO_ELIGIBLE_CAPAC
 const Observation=z.object({entityId:Id,source:Source,planRevision:z.number().int().nonnegative(),seq:z.number().int().nonnegative().safe(),status:Status,reason:Reason.default('NONE')}).strict();
 type Observation=z.infer<typeof Observation>;
 type Item={id:string;entity_id:string;source:z.infer<typeof Source>;plan_revision:number;kind:'completion'|'blocker';status:z.infer<typeof Status>;reason:z.infer<typeof Reason>};
-const Acknowledgement=z.object({ok:z.literal(true),id:z.string().min(1).max(200),seq:z.number().int().positive().safe(),localId:z.string().min(1).max(200),didWrite:z.boolean()}).passthrough();
-export type OutgoingMessage={id:string;ciphertext:string;localId:string};
 
 export function notificationStatus(status:string):z.infer<typeof Status>{const parsed=Status.safeParse(status);return parsed.success?parsed.data:'unknown';}
 /** Shown when a native image was removed before any container existed. */
@@ -44,7 +42,7 @@ function line(item:Item){
 }
 
 /** The existing heartbeat calls this service. It owns no timer, runner or
- * scheduler. PG keeps only status metadata; canonical text remains in Happier. */
+ * scheduler. Batched text is written to the personal transcript. */
 export class Notifications{
  readonly policy:z.infer<typeof NotificationPolicy>;
  constructor(readonly ledger:Ledger,raw:z.input<typeof NotificationPolicy>={}){this.policy=NotificationPolicy.parse(raw);}
@@ -78,33 +76,7 @@ export class Notifications{
    return {duplicate:false,queued:true};
   });
  }
- async flush(principal:string,authority:Authority,sessionId:string,seal:(value:unknown)=>string,onText?:(localId:string,text:string)=>void){
-  const result=await this.ledger.tx(async c=>{
-   await this.scope(c,principal,authority,sessionId);
-   const items=(await c.query<Item>(`SELECT n.* FROM ac_notification_items n WHERE n.context_id=$1 AND n.session_id=$2 AND n.message_id IS NULL AND n.local_message_id IS NULL AND NOT n.superseded
-    AND (n.kind='blocker' OR EXISTS(SELECT 1 FROM ac_notification_items due WHERE due.context_id=n.context_id AND due.session_id=n.session_id
-      AND due.kind='completion' AND due.message_id IS NULL AND due.local_message_id IS NULL AND NOT due.superseded AND due.available_at<=clock_timestamp()))
-    ORDER BY CASE WHEN n.kind='blocker' THEN 0 ELSE 1 END,n.created_at,n.id LIMIT $3 FOR UPDATE OF n`,[authority.contextId,sessionId,this.policy.maxBatchSize*2])).rows;
-   let messages=0,observations=0;
-   const notes:{localId:string;text:string}[]=[];
-   for(const type of ['blocker','completion'] as const){
-    const group=items.filter(item=>item.kind===type).slice(0,this.policy.maxBatchSize);if(!group.length)continue;
-    const localId='notice-'+randomUUID(),id=sessionId+'|'+localId;
-    const text=(type==='completion'?`Atualização agrupada — ${group.length} conclusão(ões):`:`Atenção — ${group.length} bloqueio(s):`)+'\n'+group.map(item=>'- '+line(item)).join('\n');
-    const ciphertext=z.string().min(1).max(100000).parse(seal({role:'agent',content:{type:'output',data:{type:'assistant',uuid:localId,
-     message:{role:'assistant',content:[{type:'text',text}]}}},meta:{sentFrom:'cli',agentControl:{schemaVersion:1,kind:type,itemIds:group.map(item=>item.id)}}}));
-    await c.query('INSERT INTO ac_chat_messages(id,session_id,ciphertext,priority) VALUES($1,$2,$3,$4)',[id,sessionId,ciphertext,type==='blocker'?50:0]);
-    await c.query('UPDATE ac_notification_items SET message_id=$2 WHERE id=ANY($1::text[]) AND message_id IS NULL',[group.map(item=>item.id),id]);
-    await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'notifications.batched',$2)",[authority.contextId,{kind:type,count:group.length,messageId:id,epoch:authority.epoch}]);
-    notes.push({localId,text});
-    messages++;observations+=group.length;
-   }
-   return {messages,observations,notes};
-  });
-  if(result.messages)for(const note of result.notes)onText?.(note.localId,note.text);
-  return {messages:result.messages,observations:result.observations};
- }
- /** Same batch as flush, published into the personal table. Does not write ciphertext or message_id. */
+ /** Batches pending blockers and completions into one manager message in the personal table. */
  async flushToPersonal(principal:string,authority:Authority,sessionId:string,onText?:(localId:string,text:string)=>void){
   const result=await this.ledger.tx(async c=>{
    await this.scope(c,principal,authority,sessionId);
@@ -140,32 +112,5 @@ export class Notifications{
   });
   if(result.messages)for(const note of result.notes)onText?.(note.localId,note.text);
   return {messages:result.messages,observations:result.observations};
- }
- /** ACK loss retries the same immutable ciphertext/localId. A missing or
-  * negative ACK is not delivery. The provider's id/seq form an immutable receipt. */
- async deliver(principal:string,authority:Authority,sessionId:string,publish:(message:OutgoingMessage)=>Promise<unknown>,revalidate:()=>Promise<void>=async()=>{}){
-  const outgoing=await this.ledger.tx(async c=>{
-   await this.scope(c,principal,authority,sessionId);
-   return (await c.query<{id:string;ciphertext:string}>('SELECT id,ciphertext FROM ac_chat_messages WHERE session_id=$1 AND NOT sent ORDER BY priority DESC,sequence LIMIT $2',[sessionId,this.policy.maxDeliveriesPerTick])).rows;
-  });
-  let sent=0;
-  for(const message of outgoing){
-   await revalidate();
-   await this.ledger.heartbeat(authority);
-   await this.ledger.tx(async c=>{await this.scope(c,principal,authority,sessionId);});
-   const localId=message.id.slice(sessionId.length+1),raw=await publish({...message,localId});
-   const parsed=Acknowledgement.safeParse(raw);
-   if(!parsed.success||parsed.data.localId!==localId)throw new Refusal('HAPPIER_PUBLICATION_UNCONFIRMED');
-   const identity={id:parsed.data.id,seq:parsed.data.seq,localId},hash=digest(identity);
-   await this.ledger.tx(async c=>{
-    await this.scope(c,principal,authority,sessionId);
-    await c.query(`INSERT INTO ac_chat_publication_receipts(message_id,session_id,provider_message_id,provider_seq,local_id,identity_digest,acknowledged_epoch)
-     VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,[message.id,sessionId,identity.id,identity.seq,localId,hash,authority.epoch]);
-    const saved=(await c.query('SELECT identity_digest,session_id FROM ac_chat_publication_receipts WHERE message_id=$1',[message.id])).rows[0];
-    if(saved.identity_digest!==hash||saved.session_id!==sessionId)throw new Refusal('HAPPIER_PUBLICATION_RECEIPT_CONFLICT');
-    await c.query('UPDATE ac_chat_messages SET sent=true WHERE id=$1 AND session_id=$2 AND NOT sent',[message.id,sessionId]);
-   });sent++;
-  }
-  return {sent};
  }
 }

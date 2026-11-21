@@ -12,7 +12,6 @@ import {Ledger} from './ledger.ts';
 import {Projects,ProjectRuntimes} from './projects.ts';
 import {createProjectGateway} from './projects-api.ts';
 import {BrowserSessions} from './sessions.ts';
-import {HappierAuthRelay} from './auth-relay.ts';
 import {ProjectAdmin} from './project-admin.ts';
 import {ProjectEnvironments} from './project-environments.ts';
 import {createProjectEnvironmentApi} from './project-environments-api.ts';
@@ -88,19 +87,9 @@ async function main(){
   return;
  }
  if(command==='personal-connect'){
-  const local=extra.includes('--local');
+  // "--local" is still accepted from older scripts; the conversation is always local now.
   if(!path||extra.some(item=>item!=='--local'))throw Error('INVALID_INSTALLATION_COMMAND');
-  const {personalConnect}=await import('./personal-connect.ts');console.log(JSON.stringify(await personalConnect(path,undefined,{local})));return;
- }
- if(command==='import-conversation'){
-  if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
-  const {importPersonalConversation}=await import('./import-conversation.ts');
-  console.log(JSON.stringify(await importPersonalConversation(path)));return;
- }
- if(command==='app-key'){
-  if(!path||extra.length)throw Error('INVALID_INSTALLATION_COMMAND');
-  const {personalAppKey}=await import('./personal-connect.ts');const key=await personalAppKey(path);
-  console.log('Servidor Happier: '+key.server+'\nChave secreta (Restaurar com chave secreta): '+key.secretKey+'\nGuarde esta chave: ela é a sua conta e a chave da conversa.');return;
+  const {personalConnect}=await import('./personal-connect.ts');console.log(JSON.stringify(await personalConnect(path)));return;
  }
  if(command==='say'||command==='chat-log'){
   if(!path||(command==='say'?extra.length<1||extra.length>2:extra.length>1))throw Error('INVALID_INSTALLATION_COMMAND');
@@ -125,7 +114,7 @@ async function main(){
   process.exitCode=result.exitCode;
   return;
  }
- const descriptorCommands=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','import-stage','import-deliver','import-archive','export-context','config-export','config-read','recovery'];
+ const descriptorCommands=['context-key-authorize','context-key-import','context-key-rotate-plan','vault-backup','vault-restore','provider-home-initialize','provider-home-inspect','config-export','config-read','recovery'];
  const descriptorCommand=descriptorCommands.includes(command);
  if(!path||!(descriptorCommand||['initialize','inspect','operator-bootstrap','serve','vault-initialize'].includes(command))||extra.length!==(descriptorCommand?1:0))throw Error('INVALID_INSTALLATION_COMMAND');
  // Inventory dry-run. The installation path is not opened. No ledger and no vault.
@@ -140,9 +129,6 @@ async function main(){
  // Inspection must be able to report a missing root rather than abort before
  // its read-only checks. The private file and config schema remain mandatory.
  const config=command==='inspect'?Installation.parse(JSON.parse((await readPrivateFile(path)).toString('utf8'))):await loadInstallation(path);
- // The embedded Happier client resolves some HTTP calls from its own configuration, whose default is the public
- // Happier service. Pin it to this installation's server before that client is loaded, so nothing leaves the host.
- process.env.HAPPIER_SERVER_URL=config.happier.upstreamOrigin;process.env.HAPPIER_LOCAL_SERVER_URL=config.happier.upstreamOrigin;delete process.env.HAPPIER_PUBLIC_SERVER_URL;
  const localWorkflowRuntime=command==='serve'?await prepareWorkflowRuntimeRegistration(config.workflowRuntime):undefined;
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token,localWorkflowRuntime?.identity,installationVolumes(config));
  let workflowRegistration:Awaited<ReturnType<typeof startWorkflowRuntimeRegistration>>|undefined;
@@ -170,10 +156,6 @@ async function main(){
   if(command==='config-export'||command==='config-read'){
    const {executeConfigExport,executeConfigRead}=await import('./config-export-cli.ts');
    console.log(JSON.stringify(await (command==='config-export'?executeConfigExport(config,ledger,extra[0]!):executeConfigRead(config,ledger,extra[0]!))));return;
-  }
-  if(command==='export-context'){const {exportContext}=await import('./context-export-cli.ts');console.log(JSON.stringify(await exportContext(config,ledger,extra[0])));return;}
-  if(command==='import-stage'||command==='import-deliver'||command==='import-archive'){
-   const {executeImport}=await import('./import-cli.ts');console.log(JSON.stringify(await executeImport(command,config,ledger,extra[0])));return;
   }
   if(command==='provider-home-initialize'||command==='provider-home-inspect'){
    const {executeAccountHome}=await import('./account-homes-cli.ts');console.log(JSON.stringify(await executeAccountHome(command,config,ledger,extra[0])));return;
@@ -209,12 +191,11 @@ async function main(){
   process.env.CEZ_DRY_RUN='1';
   const {CezarRuntime}=await import('./cezar.ts'),{createApi}=await import('./api.ts');
   const key=await sessionKey(config);
-  const {happierProfileVerifier,personalCodeLogin,personalPasswordLogin}=await import('./personal-login.ts');
-  const verifyBearer=happierProfileVerifier(config.happier.upstreamOrigin);
-  const localTransport=config.managerTransport?.transport==='local';
-  // A direct Happier bearer does not open the panel while transport is local. Old cookies still use verifyBearer.
-  const verify=localTransport?async()=>null:verifyBearer;
-  const sessions=new BrowserSessions(ledger,key,verifyBearer,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
+  const {personalCodeLogin,personalPasswordLogin}=await import('./personal-login.ts');
+  // No bearer token opens the API: the panel signs in with the owner's password or a pair code, and the
+  // cookie names the principal. A cookie that still carries a bearer from an older login is refused.
+  const verify=async(_request:Request):Promise<string|null>=>null;
+  const sessions=new BrowserSessions(ledger,key,verify,{origin:config.http.publicOrigin,secure:config.http.publicOrigin.startsWith('https:'),maxAgeSeconds:config.sessionMaxAgeSeconds});key.fill(0);
   runtimes=new ProjectRuntimes(async project=>{
    const nativeBootstrap=project.id===config.project.id?nativeBootstrapRuntimeAttachment(project.id,prepared.report,prepared.resources):undefined;
    // Execution follows an active personal bootstrap and that project's own checkout.
@@ -225,18 +206,15 @@ async function main(){
    try{
     await runtime.start(execute?'execution':'administration-only');
     const control=new Control(ledger,quotaRegistry.adapters,project.id,undefined,{reviewDigest:runtime.engineering?.options.nativeVerification?nativeReviewVerifierDigest:undefined,qaDigest:runtime.engineering?.options.nativeQa?.verifierDigest,nativeExecutionEnabled:runtime.nativeExecutionReady});
-    const registry=await startConfiguredManagerTransport(config,ledger,runtime,control,{transportOnly:prepared.report.state!=='active',semanticPlanning:personalRuntime?.semantic,managerChat:personalRuntime?.managerChat,...(config.activation==='personal'?{dataDirectory:config.dataDirectory,projectLabel:[config.project,...config.projects].find(item=>item.id===runtime.projectId)?.label,managerEconomy:managerEconomyOf([config.project,...config.projects].find(item=>item.id===runtime.projectId)?.economy)}:{})});
+    const registry=await startConfiguredManagerTransport(config,ledger,runtime,{transportOnly:prepared.report.state!=='active',semanticPlanning:personalRuntime?.semantic,managerChat:personalRuntime?.managerChat,...(config.activation==='personal'?{dataDirectory:config.dataDirectory,projectLabel:[config.project,...config.projects].find(item=>item.id===runtime.projectId)?.label,managerEconomy:managerEconomyOf([config.project,...config.projects].find(item=>item.id===runtime.projectId)?.economy)}:{})});
     configurationControls.set(project.id,control);if(registry)managerTransports.set(project.id,registry);return runtime;
    }catch(error){await runtime.close();throw error;}
   });
-  const access=async(principal:string,sessionId:string,request?:Request)=>request?
-   sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin,true):false;
-  const relay=localTransport?undefined:new HappierAuthRelay(sessions,{upstreamUrl:config.happier.upstreamOrigin,webUrl:config.happier.webOrigin,publicServerUrl:config.happier.publicServerOrigin});
   let stopGateway=()=>{};
   const personalPanel=config.activation==='personal'?{roots:config.projectRoots,projectRepos:[config.project.repo,...config.projects.map(project=>project.repo)],installationPath:path,dataDirectory:config.dataDirectory,projectId:config.project.id,owner:config.project.owner,scheduleRestart(){setTimeout(()=>stopGateway(),1000);}}:undefined;
-  const pairCodeLogin=config.activation==='personal'?personalCodeLogin(config,ledger,sessions,verifyBearer):undefined;
-  const passwordLogin=config.activation==='personal'?personalPasswordLogin(config,ledger,sessions,verifyBearer):undefined;
-  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{happierWebUrl:config.happier.webOrigin,verifySessionAccess:access,sessions,authRelay:relay,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin,...(config.activation==='personal'&&personalRuntime?{personalVerification:(()=>{
+  const pairCodeLogin=config.activation==='personal'?personalCodeLogin(config,ledger,sessions):undefined;
+  const passwordLogin=config.activation==='personal'?personalPasswordLogin(config,ledger,sessions):undefined;
+  const appFor=(runtime:InstanceType<typeof CezarRuntime>)=>createApi(ledger,runtime,verify,contextId=>managerTransports.get(runtime.projectId)?.authority(contextId),{sessions,providerAdapters:quotaRegistry.adapters,managerStatus:async contextId=>{const status=await managerTransports.get(runtime.projectId)?.status(contextId);const active=prepared.report.state==='active';return status?{...status,executionEnabled:active,semanticManagerEnabled:active}:undefined;},quotaRegistry,configurationControl:configurationControls.get(runtime.projectId),personalAccounts:config.activation==='personal'?{add:(_principal,input)=>import('./account-add.ts').then(m=>m.addProviderAccount(config,ledger,input)),status:(_principal,accountId)=>import('./account-add.ts').then(m=>m.providerLogin(accountId)),readConversation:(principal,query)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.readPanelConversation(principal,query.after,query.limit);},sendMessage:(principal,input)=>{const registry=managerTransports.get(runtime.projectId);if(!registry)throw new Refusal('CONVERSATION_UNAVAILABLE',503);return registry.enqueuePanelMessage(principal,input.text,input.localId);}} :undefined,personalPanel,pairCodeLogin,passwordLogin,...(config.activation==='personal'&&personalRuntime?{personalVerification:(()=>{
    const bound=personalRuntime;
    if(!bound)throw new Error('PERSONAL_RUNTIME_REQUIRED');
    const executions=bound.executions;
@@ -310,7 +288,6 @@ async function main(){
   const defaultApp=appFor(defaultRuntime);
   const gateway=createProjectGateway({projects,runtimes:activeRuntimes,defaultProjectId:config.project.id,appFor,
    projectAdmin:createProjectAdminApi(new ProjectAdmin(ledger,config.projectRoots,config.dataDirectory,{remoteReturnTransport:remoteReturnTransport(config.remoteReturn),remoteDevelopment:configuredRemoteDevelopment(ledger,config.remoteDevelopment,(projectId,contextId)=>managerTransports.get(projectId)?.authority(contextId))})),
-   verifyConversationAccess:(request,principal,sessionId)=>sessions.verifyHappierSession(request,principal,sessionId,config.happier.upstreamOrigin),
    workflowGraphs:createWorkflowGraphApi(new WorkflowGraphs(ledger,config.projectRoots,config.dataDirectory)),
    projectEnvironments:createProjectEnvironmentApi(new ProjectEnvironments(ledger,config.projectRoots,config.dataDirectory)),
    installationAuthority:createInstallationAuthorityApi(new InstallationAuthority(ledger)),

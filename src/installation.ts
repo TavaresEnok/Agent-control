@@ -32,7 +32,7 @@ const httpsOrigin=()=>z.string().transform(value=>{
 const absolute=z.string().refine(isAbsolute,'Absolute path required');
 export const ProjectEconomy=z.object({map:z.boolean().default(true),measurement:z.boolean().default(true),batch:z.boolean().default(true),imageRetention:z.boolean().default(true),batchTokens:z.number().int().min(1000).max(200000).default(40000),batchFiles:z.number().int().min(1).max(32).default(8),managerDiscipline:z.boolean().default(true),managerContextTokens:z.number().int().min(500).max(20000).default(2500)}).strict();
 const projectDefinition=z.object({economy:ProjectEconomy.optional(),id:z.uuid(),label:z.string().min(1).max(200),repo:absolute,owner:z.string().min(1).max(200),publishedOrigin:httpsOrigin().optional(),publishedOrigins:z.array(httpsOrigin()).max(16).optional()}).strict();
-export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
+export const InstallationObject=z.object({schemaVersion:z.literal(1),mode:z.literal('administration-only'),
  activation:z.enum(['locked','personal']).default('locked'),
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
@@ -51,12 +51,13 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  nativeBootstrap:NativeBootstrapConfig.optional(),
  codexQuota:CodexQuotaRegistryConfig.optional(),
  verifyHomologationContainers:z.array(z.string().regex(/^[a-z0-9]([a-z0-9-]{0,62})$/)).max(32).optional(),
- managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute,machineId:z.string().min(1).max(200),
-  transport:z.enum(['happier','local']).default('happier'),
+ // The conversation is always the local transcript (ac_personal_messages). tokenFile and machineId are
+ // accepted, unused, so installation files written before the local transport became the only one still load.
+ managerTransport:z.object({principal:z.string().min(1).max(200),tokenFile:absolute.optional(),machineId:z.string().min(1).max(200).optional(),
+  transport:z.literal('local').default('local'),
   contexts:z.array(z.object({projectId:z.uuid(),contextId:z.uuid(),sessionId:z.string().min(1).max(200),profileId:z.string().min(1).max(100),
    keyVersion:z.number().int().positive(),encryptionVariant:z.enum(['legacy','dataKey'])}).strict()).min(1).max(100)}).strict().optional(),
  http:z.object({listen:z.literal('127.0.0.1'),port:z.number().int().min(1024).max(65535),publicOrigin:origin()}).strict(),
- happier:z.object({upstreamOrigin:origin(),webOrigin:origin(),publicServerOrigin:origin()}).strict(),
  sessionMaxAgeSeconds:z.number().int().min(60).max(2592000).default(86400),
 }).strict().refine(value=>!value.managerTransport||!!value.contextVault&&new Set(value.managerTransport.contexts.map(x=>x.contextId)).size===value.managerTransport.contexts.length,'Manager transport requires a vault and unique contexts').refine(value=>[value.project,...value.projects].every(p=>value.dataDirectory!==p.repo&&!value.dataDirectory.startsWith(p.repo+sep)),'Credential storage must be outside project repository').refine(value=>{const all=[value.project,...value.projects];return new Set(all.map(p=>p.id)).size===all.length&&new Set(all.map(p=>p.repo)).size===all.length;},'Duplicate project').refine(value=>new Set(value.projectRoots.map(root=>root.id)).size===value.projectRoots.length,'Duplicate project root')
  .refine(value=>!value.contextVault||[value.dataDirectory,value.contextVault.directory,value.contextVault.masterFile].every(path=>resolve(path)===path)&&
@@ -80,8 +81,16 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
    (!value.accountHomesDirectory||!overlaps(project.tmpfsRoot,resolve(value.accountHomesDirectory)))&&
    value.remoteDevelopment!.transport.credentials.every(credential=>!overlaps(credential.path,project.tmpfsRoot)&&!roots.some(root=>overlaps(credential.path,root)));
  }),'Remote development requires configured projects, private canonical verifier keys and isolated tmpfs/SSH paths')
- .refine(value=>value.managerTransport?.transport!=='local'||value.activation==='personal','LOCAL_TRANSPORT_REQUIRES_PERSONAL')
  .superRefine((value,ctx)=>{const code=nativeBootstrapSchemaError(value);if(code)ctx.addIssue({code:'custom',message:code});});
+/** Blocks of retired components that older installation files still carry. They are accepted and dropped before
+ * the strict schema runs, so an existing installation keeps loading; nothing reads them. Today this is only
+ * "happier", the conversation server removed in favour of the local transcript. */
+const RETIRED_INSTALLATION_BLOCKS=['happier'] as const;
+function dropRetiredBlocks(value:unknown){
+ if(!value||typeof value!=='object'||Array.isArray(value))return value;
+ const copy={...value as Record<string,unknown>};for(const key of RETIRED_INSTALLATION_BLOCKS)delete copy[key];return copy;
+}
+export const Installation=z.preprocess(dropRetiredBlocks,InstallationObject);
 export type Installation=z.infer<typeof Installation>;
 /** No symlink, hard-link, world-readable or foreign-owned credential files. */
 export async function readPrivateFile(path:string,maxBytes=65536,options:{canonical?:boolean}={}){

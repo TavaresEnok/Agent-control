@@ -4,7 +4,10 @@ import type {Ledger} from './ledger.ts';
 import type {PanelMessage, PanelPage} from './personal-panel-conversation.ts';
 
 /** How a personal conversation enters and leaves. The endpoint still owns accept, proposals and the tick. */
-export type ConversationKind = 'happier' | 'local';
+export type ConversationKind = 'local';
+/** Delivery channel recorded for conversation commands. The value is part of the ac_deliveries CHECK
+ * constraint created by migration 001 and is kept as stored data; it no longer names a transport. */
+export const CONVERSATION_CHANNEL = 'happier';
 export type ClaimedOwnerMessage = {text: string; localId: string; meta?: unknown};
 
 export interface ConversationTransport {
