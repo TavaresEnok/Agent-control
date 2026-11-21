@@ -10,7 +10,7 @@ for keyfile in (root/'.state/keys').glob('*'):
 files=[p.decode() for p in subprocess.check_output(['git','ls-files','-z'],cwd=root).split(b'\0') if p]
 hits=[];bad=[]
 for name in files:
- if name.startswith(('.state/','node_modules/','dist/','upstream/cezar/node_modules/','upstream/happier/node_modules/')):bad.append(name)
+ if name.startswith(('.state/','node_modules/','dist/','upstream/cezar/node_modules/')):bad.append(name)
  p=root/name
  if p.is_symlink() or not p.is_file():continue
  data=p.read_bytes()

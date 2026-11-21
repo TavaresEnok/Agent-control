@@ -6,7 +6,7 @@ selected=set()
 for arguments in [['git','ls-files','-z'],['git','ls-files','--others','--exclude-standard','-z']]:
  selected.update(raw.decode() for raw in subprocess.check_output(arguments,cwd=root).split(b'\0') if raw)
 result={}
-for name in ['cezar','happier']:
+for name in ['cezar']:
  result[name]=[];known=set()
  tree=subprocess.check_output(['git','-C',str(base/name),'ls-tree','-rz','HEAD'])
  for item in tree.split(b'\0'):

@@ -13,7 +13,7 @@ base = Path(sys.argv[1] if len(sys.argv) > 1 else '/home/app/projects/agent-cont
 changes = json.loads((root / 'upstream/CHANGES.json').read_text())
 provenance_path = root / 'upstream/PROVENANCE.json'
 provenance = json.loads(provenance_path.read_text())
-for name in ('cezar', 'happier'):
+for name in ('cezar',):
     repository = base / name
     commit = subprocess.check_output(['git', '-C', str(repository), 'rev-parse', 'HEAD'], text=True).strip()
     if commit != provenance[name]['commit']:
@@ -34,4 +34,4 @@ for name in ('cezar', 'happier'):
     target.write_bytes(patch)
     provenance[name]['patch_sha256'] = hashlib.sha256(patch).hexdigest()
 provenance_path.write_text(json.dumps(provenance, indent=2) + '\n')
-print(json.dumps({'state': 'upstream_patches_refreshed', 'refsChanged': False, 'upstreams': ['cezar', 'happier']}))
+print(json.dumps({'state': 'upstream_patches_refreshed', 'refsChanged': False, 'upstreams': ['cezar']}))

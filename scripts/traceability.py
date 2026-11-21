@@ -7,7 +7,7 @@ partial={'RF-01','RF-02','RF-03','RF-04','RF-15','RF-22','RF-23','RF-24','RF-28'
 for line in text.splitlines():
  if not re.match(r'^(RF-\d{2}|RNF-\d{2}|T\d{2})\t',line):continue
  parts=line.split('\t');id=parts[0]
- rows[id]={'id':id,'normative_row':line,'status':'partially_examined' if id in partial else 'future_phase','code_state':'partial' if id in partial else 'not_implemented','test_result':'partial_scope_only' if id in partial else 'not_run','evidence':'docs/validation/evidence/; ACCEPTANCE-I0-I2.md' if id in partial else '', 'files':'src/ledger.ts;src/cezar.ts;src/happier.ts;src/api.ts;tests/' if id in partial else '', 'independent_review':'pending','authorization':'isolated_synthetic_only','acceptance':'not_accepted','limitation':'A partial test does not approve the full requirement or acceptance scenario.'}
+ rows[id]={'id':id,'normative_row':line,'status':'partially_examined' if id in partial else 'future_phase','code_state':'partial' if id in partial else 'not_implemented','test_result':'partial_scope_only' if id in partial else 'not_run','evidence':'docs/validation/evidence/; ACCEPTANCE-I0-I2.md' if id in partial else '', 'files':'src/ledger.ts;src/cezar.ts;src/conversation.ts;src/api.ts;tests/' if id in partial else '', 'independent_review':'pending','authorization':'isolated_synthetic_only','acceptance':'not_accepted','limitation':'A partial test does not approve the full requirement or acceptance scenario.'}
 assert len([k for k in rows if k.startswith('RF-')])==57
 assert len([k for k in rows if k.startswith('RNF-')])==15
 assert len([k for k in rows if k.startswith('T')])==39

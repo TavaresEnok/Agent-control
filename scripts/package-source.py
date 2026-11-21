@@ -14,7 +14,7 @@ def is_environment(name):
  return path.name=='.env' or path.name.startswith('.env.') and not path.name.endswith('.example')
 
 def omitted_upstream_environment(name):
- return name.startswith(('upstream/cezar/','upstream/happier/')) and is_environment(name)
+ return name.startswith('upstream/cezar/') and is_environment(name)
 
 def environment_exclusions(root,commit):
  excluded=[]
@@ -60,7 +60,7 @@ def js(data):return (json.dumps(data,sort_keys=True,indent=2,ensure_ascii=False)
 
 def validate(root,commit):
  selected=entries(root,commit)
- required=['package.json','package-lock.json','upstream/cezar/package-lock.json','upstream/happier/yarn.lock',
+ required=['package.json','package-lock.json','upstream/cezar/package-lock.json',
   'upstream/PROVENANCE.json','upstream/CHANGES.json','docs/validation/evidence/IMPLEMENTATION_PROVENANCE.json',
   'docs/validation/ACCEPTANCE-I0-I2.md','docs/operations/DISTRIBUTION.md']
  for name in required:
@@ -69,7 +69,7 @@ def validate(root,commit):
  package=json.loads(read('package.json'));lock=json.loads(read('package-lock.json'))
  if lock.get('name')!=package.get('name') or lock.get('version')!=package.get('version') or lock.get('lockfileVersion')!=3:raise PackageError('ROOT_LOCK_MISMATCH')
  provenance=json.loads(read('upstream/PROVENANCE.json'))
- for upstream in ('cezar','happier'):
+ for upstream in ('cezar',):
   if not re.fullmatch('[a-f0-9]{40}',provenance.get(upstream,{}).get('commit','')):raise PackageError('UPSTREAM_COMMIT_REQUIRED')
   patch='upstream/patches/'+upstream+'-complete.patch'
   if patch not in selected or sha(read(patch))!=provenance[upstream].get('patch_sha256'):raise PackageError('UPSTREAM_PATCH_PROVENANCE_STALE')
@@ -81,7 +81,7 @@ def validate(root,commit):
   if sha(read(name))!=expected:raise PackageError('SOURCE_PROVENANCE_STALE: '+name)
  if sha(read('docs/validation/ACCEPTANCE-I0-I2.md'))!=implementation.get('criteria_sha256'):raise PackageError('CRITERIA_PROVENANCE_STALE')
  changes=json.loads(read('upstream/CHANGES.json'));modified=set()
- for upstream in ('cezar','happier'):
+ for upstream in ('cezar',):
   if not isinstance(changes.get(upstream),list):raise PackageError('UPSTREAM_CHANGES_REQUIRED')
   for change in changes[upstream]:
    name='upstream/'+upstream+'/'+change['path'];modified.add(name)
@@ -103,7 +103,7 @@ def write_package(root,commit,output):
  if output==root or root in output.parents:raise PackageError('OUTPUT_MUST_BE_OUTSIDE_REPOSITORY')
  if output.exists():raise PackageError('OUTPUT_ALREADY_EXISTS')
  manifest={'schemaVersion':1,'kind':'source-only','commit':commit,'sourceDateEpoch':timestamp,
-  'upstreams':{key:value['commit'] for key,value in provenance.items() if key in ('cezar','happier')},'files':[],'excluded':environment_exclusions(root,commit)}
+  'upstreams':{key:value['commit'] for key,value in provenance.items() if key in ('cezar',)},'files':[],'excluded':environment_exclusions(root,commit)}
  descriptor,temp=tempfile.mkstemp(prefix='.agent-control-package-',dir=output.parent)
  try:
   with os.fdopen(descriptor,'wb') as raw,gzip.GzipFile(filename='',fileobj=raw,mode='wb',mtime=0) as compressed,tarfile.open(fileobj=compressed,mode='w',format=tarfile.PAX_FORMAT) as archive,batch_reader(root) as read:
