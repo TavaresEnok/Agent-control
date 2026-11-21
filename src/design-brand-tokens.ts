@@ -16,7 +16,7 @@ export type DeclaredTokens = {
   sizes: number[];
   radii: number[];
   spaces: number[];
-  /** Dimensão sem nome de categoria. Vale para tamanho, raio e espaço que o arquivo não separa. */
+  /** Dimensão sem nome de categoria, como --header-height. Fica guardada, mas não é comparada. */
   dimensions: number[];
   families: string[];
   notes: string[];
@@ -228,16 +228,23 @@ function isCssFamilyToken(name: string, value: unknown): boolean {
   return true;
 }
 
+/**
+ * Cada declaração conta. Um tema escuro ou um @media que redefine --bg não apaga o valor claro.
+ * O alias segue a primeira declaração do nome.
+ */
 function parseCssTokens(source: string, text: string): DeclaredTokens {
-  const raw = new Map<string, RawToken>();
+  const first = new Map<string, RawToken>();
+  const all: RawToken[] = [];
   for (const decl of cssDeclarations(text)) {
-    if (!decl.prop.startsWith('--') || raw.size >= MAX_TOKENS) continue;
-    raw.set(decl.prop, {name: decl.prop, type: undefined, value: decl.value.replace(/!important/gi, '').trim()});
+    if (!decl.prop.startsWith('--') || all.length >= MAX_TOKENS) continue;
+    const token = {name: decl.prop, type: undefined, value: decl.value.replace(/!important/gi, '').trim()};
+    all.push(token);
+    if (!first.has(decl.prop)) first.set(decl.prop, token);
   }
   const tokens = emptyTokens(source);
   const aliasOf = (value: unknown) => (typeof value === 'string' ? CSS_ALIAS.exec(value.trim())?.[1] ?? null : null);
-  for (const token of raw.values()) {
-    const resolved = resolveAlias(token, key => raw.get(key), aliasOf, tokens.notes);
+  for (const token of all) {
+    const resolved = resolveAlias(token, key => first.get(key), aliasOf, tokens.notes);
     if (resolved === null) continue;
     if (isCssFamilyToken(token.name, resolved.value)) {
       tokens.families.push(...familyList(resolved.value));
@@ -259,9 +266,9 @@ export function parseDeclaredTokens(path: string, text: string): DeclaredTokens 
 export function declaredCategories(tokens: DeclaredTokens): BrandCategory[] {
   const out: BrandCategory[] = [];
   if (tokens.colors.length > 0) out.push('cor');
-  if (tokens.sizes.length > 0 || tokens.dimensions.length > 0) out.push('tamanho');
-  if (tokens.radii.length > 0 || tokens.dimensions.length > 0) out.push('raio');
-  if (tokens.spaces.length > 0 || tokens.dimensions.length > 0) out.push('espaco');
+  if (tokens.sizes.length > 0) out.push('tamanho');
+  if (tokens.radii.length > 0) out.push('raio');
+  if (tokens.spaces.length > 0) out.push('espaco');
   if (tokens.families.length > 0) out.push('familia');
   return out;
 }
@@ -303,9 +310,9 @@ export function compareWithDeclared(blocks: readonly BrandSampleBlock[], declare
     byRoute.set(block.route, list);
   }
   const off: BrandRouteOff[] = [];
-  const sizeSteps = declared.sizes.length > 0 ? declared.sizes : declared.dimensions;
-  const radiusSteps = declared.radii.length > 0 ? declared.radii : declared.dimensions;
-  const spaceSteps = declared.spaces.length > 0 ? declared.spaces : declared.dimensions;
+  const sizeSteps = declared.sizes;
+  const radiusSteps = declared.radii;
+  const spaceSteps = declared.spaces;
   const families = new Set(declared.families);
   for (const [route, samples] of byRoute) {
     const colors = new Map<string, Rgb>();

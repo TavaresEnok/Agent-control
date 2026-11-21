@@ -91,3 +91,22 @@ test('JSON quebrado dá nota e nenhum achado; arquivo grande é recusado', () =>
   assert.match(brandMarkdown(result), /não é JSON válido/);
   assert.throws(() => parseDeclaredTokens('tokens.css', `:root{--a:${'x'.repeat(300 * 1024)}}`), (error: unknown) => error instanceof Refusal && error.code === 'DESIGN_CONFIG_INVALID');
 });
+
+test('tema escuro e @media que redefinem o token não apagam o valor claro', () => {
+  const css = ':root{--bg:#ffffff;--fg:#111111;--space-md:16px}\n.dark{--bg:#000000;--fg:#eeeeee}\n@media (min-width: 900px){:root{--space-md:24px}}';
+  const declared = parseDeclaredTokens('tokens.css', css);
+  const light = compareWithDeclared([block('/', [{color: 'rgb(17, 17, 17)', backgroundColor: 'rgb(255, 255, 255)', padding: '16px'}])], declared);
+  assert.deepEqual(light.off, []);
+  const dark = compareWithDeclared([block('/', [{color: 'rgb(238, 238, 238)', backgroundColor: 'rgb(0, 0, 0)', padding: '24px'}])], declared);
+  assert.deepEqual(dark.off, []);
+  const stray = compareWithDeclared([block('/', [{color: 'rgb(124, 58, 237)'}])], declared);
+  assert.deepEqual(stray.off, [{route: '/', category: 'cor', values: ['#7c3aed']}]);
+});
+
+test('dimensão sem categoria, como --header-height, não abre tamanho, raio nem espaço', () => {
+  const declared = parseDeclaredTokens('tokens.css', ':root{--brand:#2563eb;--header-height:64px;--border-width:1px}');
+  assert.deepEqual(declared.dimensions, [64, 1]);
+  const result = compareWithDeclared([block('/', [{color: 'rgb(37, 99, 235)', fontSize: '16px', padding: '12px', borderRadius: '6px'}])], declared);
+  assert.deepEqual(result.categories, ['cor']);
+  assert.deepEqual(result.off, []);
+});
