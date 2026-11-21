@@ -41,6 +41,13 @@ function auditValue(root: Record<string, unknown>, name: string): number | null 
   return finiteNumber(audit.numericValue);
 }
 
+function auditScore(root: Record<string, unknown>, name: string): number | null {
+  if (!isRecord(root.audits)) return null;
+  const audit = root.audits[name];
+  if (!isRecord(audit)) return null;
+  return finiteNumber(audit.score);
+}
+
 function formFactorLabel(root: Record<string, unknown>): string {
   if (!isRecord(root.configSettings)) return '';
   const factor = root.configSettings.formFactor;
@@ -92,6 +99,21 @@ function findingsFromLhr(file: string, lhr: unknown): DesignRawFinding[] {
   const accessibility = categoryScore(root, 'accessibility');
   if (accessibility !== null && accessibility < ACCESSIBILITY_MIN) {
     findings.push(measuredFinding(labeled, 'LH-ACESSIBILIDADE', 'baixa', 'Acessibilidade', accessibility));
+  }
+  // Só no celular. Nota 0 reprova; nota nula ou auditoria ausente não diz nada.
+  if (factor === 'mobile') {
+    if (auditScore(root, 'viewport') === 0) {
+      findings.push(designRawFinding({
+        tool: TOOL, rule: 'LH-VIEWPORT', cwe: null, file: labeled, line: null, severity: 'media',
+        snippet: 'Lighthouse no celular: falta meta viewport com width ou initial-scale',
+      }));
+    }
+    if (auditScore(root, 'font-size') === 0) {
+      findings.push(designRawFinding({
+        tool: TOOL, rule: 'LH-FONTE-LEGIVEL', cwe: null, file: labeled, line: null, severity: 'baixa',
+        snippet: 'Lighthouse no celular: texto pequeno demais para ler sem ampliar',
+      }));
+    }
   }
   return findings;
 }

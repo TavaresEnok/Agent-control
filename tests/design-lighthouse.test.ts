@@ -100,3 +100,34 @@ test('texto JSON válido de um LHR ruim gera só desempenho médio', () => {
   assert.equal(findings[0]?.severity, 'media');
   assert.match(findings[0]?.snippet ?? '', /0\.2/);
 });
+
+function mobileLhr(audits: Record<string, unknown>, formFactor: string | null = 'mobile'): unknown {
+  return {
+    configSettings: {formFactor},
+    categories: {performance: {score: 0.99}, accessibility: {score: 1}},
+    audits: {'cumulative-layout-shift': {numericValue: 0.01}, 'largest-contentful-paint': {numericValue: 1000}, ...audits},
+  };
+}
+
+test('no celular, viewport com nota 0 dá LH-VIEWPORT média e font-size 0 dá LH-FONTE-LEGIVEL baixa', () => {
+  const findings = lighthouseToFindings('/a mobile', mobileLhr({viewport: {score: 0}, 'font-size': {score: 0}}));
+  assert.deepEqual(rulesOf(findings), ['LH-VIEWPORT', 'LH-FONTE-LEGIVEL']);
+  assert.equal(findings[0]?.severity, 'media');
+  assert.equal(findings[1]?.severity, 'baixa');
+  for (const item of findings) {
+    assert.equal(item.measure, undefined);
+    assert.equal(item.file, '/a mobile mobile');
+  }
+});
+
+test('nota nula, nota 1 ou auditoria ausente não gera viewport nem fonte', () => {
+  assert.deepEqual(lighthouseToFindings('/a mobile', mobileLhr({viewport: {score: null}, 'font-size': {score: null}})), []);
+  assert.deepEqual(lighthouseToFindings('/a mobile', mobileLhr({viewport: {score: 1}, 'font-size': {score: 1}})), []);
+  assert.deepEqual(lighthouseToFindings('/a mobile', mobileLhr({})), []);
+  assert.deepEqual(lighthouseToFindings('/a mobile', mobileLhr({viewport: 'x', 'font-size': {score: '0'}})), []);
+});
+
+test('relatório desktop não gera viewport nem fonte', () => {
+  assert.deepEqual(lighthouseToFindings('/a desktop', mobileLhr({viewport: {score: 0}, 'font-size': {score: 0}}, 'desktop')), []);
+  assert.deepEqual(lighthouseToFindings('/a', mobileLhr({viewport: {score: 0}, 'font-size': {score: 0}}, null)), []);
+});
