@@ -549,6 +549,8 @@ export class NativeExecutionSupervisor{
    const baseAccountMount=examAccountMount(join(this.config.accountRoot,g.account_id),isolateExam);
    workerEnv=examWorkerEnv(this.config.workerEnv,isolateExam);
    if(synthetic)workerEnv=workerEnv.filter(entry=>!entry.startsWith('AC_VERIFY_EXAM='));
+   // Personal egress (AC_PERSONAL_EGRESS=1 on the gateway): the worker sends every provider call through the allowlist proxy.
+   if(personal&&!synthetic&&process.env.AC_PERSONAL_EGRESS==='1')workerEnv=[...workerEnv,'AC_PERSONAL_EGRESS=1'];
    workerMounts=[...(claudeExam?[]:[baseAccountMount]),{source:p.input,destination:'/input',writable:false},{source:p.output,destination:'/output',writable:true},{source:p.planning,destination:'/planning',writable:false},{source:p.key,destination:'/runner/execution-public-key.pem',writable:false},{source:p.workerToken,destination:'/runner/exec-token',writable:false},...(workerOwnsCheckout?[{source:p.work,destination:'/work',writable:true}]:workerArtifact?[{source:workerArtifact,destination:'/work',writable:false}]:[])];
    const toolsWork=workerOwnsCheckout?join(p.root,'tools-workspace'):p.work;
    if(toolsWork!==p.work)await mkdir(toolsWork,{mode:0o700});

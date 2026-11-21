@@ -74,6 +74,8 @@ export function createClaudeWorkerRunner(claudeBin:string,timeoutMs:number):Clau
  * This file alone does not authorize, schedule, approve or integrate anything. */
 async function main(){
  const verifyExam=process.env.AC_VERIFY_EXAM==='1';
+ // Read before the environment is reset: the supervisor sets it only when the gateway runs with AC_PERSONAL_EGRESS=1.
+ const personalEgress=process.env.AC_PERSONAL_EGRESS==='1';
  if(process.argv.length!==2)throw Error('INVALID_WORKER_ARGUMENTS');
  initializeNativeWorkerEnvironment();
  await waitForNativeLaunch();
@@ -86,7 +88,7 @@ async function main(){
   return;
  }
  const personalCli=input.provider==='claude'||input.provider==='grok'||input.provider==='codex';
- initializeNativeWorkerEnvironment(personalCli?undefined:input.proxyUrl);
+ initializeNativeWorkerEnvironment(personalCli&&!personalEgress?undefined:input.proxyUrl);
  const claudeExam=isClaudeExamWorker({verifyExam,provider:input.provider,synthetic:input.synthetic});
  const planning=await lstat('/planning');if(!planning.isDirectory()||planning.isSymbolicLink())throw Error('INVALID_WORKER_DIRECTORY');
  const capability=await readPrivateWorkerFile('/runner/exec-token',512);let token:string;

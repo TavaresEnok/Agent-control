@@ -9,17 +9,50 @@ import socketserver
 import threading
 import time
 
-ALLOWED_HOSTS = frozenset({'chatgpt.com', 'auth.openai.com'})
+import sys
+
+HOST = re.compile(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+')
+# Locked mode default. A personal installation passes its provider hosts in AC_EGRESS_ALLOW.
+DEFAULT_HOSTS = ('chatgpt.com', 'auth.openai.com')
+
+def allowed_hosts(environ):
+    raw = environ.get('AC_EGRESS_ALLOW', '').strip()
+    if not raw:
+        return frozenset(DEFAULT_HOSTS)
+    hosts = [item.strip().lower() for item in raw.split(',') if item.strip()]
+    if not hosts or len(hosts) > 64 or not all(HOST.fullmatch(host) for host in hosts):
+        raise SystemExit('AC_EGRESS_ALLOW invalid')
+    return frozenset(hosts)
+
+def egress_mode(environ):
+    mode = environ.get('AC_EGRESS_MODE', 'enforce')
+    if mode not in ('enforce', 'observe'):
+        raise SystemExit('AC_EGRESS_MODE invalid')
+    return mode
+
+ALLOWED_HOSTS = allowed_hosts(os.environ)
+MODE = egress_mode(os.environ)
+
+def note(kind, host):
+    # Host names only: never a path, header or byte of the tunnel.
+    print(f'egress-{kind} {host}', file=sys.stderr, flush=True)
 SLOTS = threading.BoundedSemaphore(32)
 
-def target_from_header(header):
+def target_from_header(header, allowed=None, mode=None):
+    allowed = ALLOWED_HOSTS if allowed is None else allowed
+    mode = MODE if mode is None else mode
     if len(header) > 8192 or not header.endswith(b'\r\n\r\n'):
         raise ValueError('invalid header')
     lines = header.decode('ascii', errors='strict').split('\r\n')
     match = re.fullmatch(r'CONNECT ([a-z0-9.-]+):443 HTTP/1\.[01]', lines[0])
-    if not match or match.group(1) not in ALLOWED_HOSTS:
+    if not match or not HOST.fullmatch(match.group(1)):
         raise ValueError('target denied')
     host = match.group(1)
+    if host not in allowed:
+        # Observe mode learns the real destinations before enforcement; it still refuses private addresses below.
+        note('observe' if mode == 'observe' else 'denied', host)
+        if mode != 'observe':
+            raise ValueError('target denied')
     for line in lines[1:]:
         if not line:
             continue

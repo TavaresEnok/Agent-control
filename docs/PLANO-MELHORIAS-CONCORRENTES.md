@@ -188,13 +188,33 @@ Ordem: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11. As
 - O compose pessoal já cria `ac-native-provider` como `internal: true` com o `provider-egress`, mas a instalação viva roda pelo host, não pelo compose.
 
 **Checklist:**
-- [ ] 8.1 Levantar os destinos reais de cada CLI usado (Claude, Codex, Grok e o gerente), pelos textos dos binários na imagem e pela documentação local, sem rede nova. Lista inicial: `api.anthropic.com`, `console.anthropic.com`, `claude.ai`, `platform.claude.com`, `chatgpt.com`, `auth.openai.com`, `api.openai.com`, `api.x.ai`, `accounts.x.ai`. Confirmar cada um.
-- [ ] 8.2 Proxy: a lista de destinos vem de um arquivo da instalação, com a lista acima como padrão. Os testes do proxy cobrem um destino permitido e um recusado.
-- [ ] 8.3 Modo pessoal: o worker, o planejamento e o gerente passam a usar o proxy por padrão. `AC_PERSONAL_EGRESS=0` desliga, com aviso no vigia.
+- [x] 8.1 Levantar os destinos reais de cada CLI usado (Claude, Codex, Grok e o gerente), pelos textos dos binários na imagem e pela documentação local, sem rede nova. Lista inicial: `api.anthropic.com`, `console.anthropic.com`, `claude.ai`, `platform.claude.com`, `chatgpt.com`, `auth.openai.com`, `api.openai.com`, `api.x.ai`, `accounts.x.ai`. Confirmar cada um.
+- [x] 8.2 Proxy: a lista de destinos vem de um arquivo da instalação, com a lista acima como padrão. Os testes do proxy cobrem um destino permitido e um recusado.
+- [x] 8.3 Modo pessoal: o worker, o planejamento e o gerente passam a usar o proxy por padrão. `AC_PERSONAL_EGRESS=0` desliga, com aviso no vigia.
 - [ ] 8.4 `native-setup`: a rede `ac-native-provider` é criada como internal, e o contêiner `provider-egress` é ligado a ela e a uma rede de saída. A prontidão reprova se a rede não for internal.
 - [ ] 8.5 Teste de laboratório: um worker na rede não alcança `example.com` e alcança o proxy.
 - [ ] 8.6 Documentar em `docs/ESTADO.md`.
 - [ ] 8.7 Commit.
+**Destinos levantados nos binários da imagem do worker (21/11):**
+- Claude 2.1.329: `api.anthropic.com`, `platform.claude.com`, `claude.ai`
+- Codex 0.166.0: `chatgpt.com`, `auth.openai.com`, `api.openai.com`
+- Grok 1.0.70: `cli-chat-proxy.grok.com`, `api.x.ai`, `accounts.x.ai`
+
+São endereços que aparecem no texto dos binários, não tráfego observado. Por isso a aplicação começa no modo observação.
+
+**Procedimento de aplicação** (cada passo com o sim do titular, sem trabalho rodando):
+1. Backup da instalação.
+2. Construir a imagem `provider-egress` a partir deste ramo.
+3. Subir o contêiner `provider-egress`:
+   - rede `ac-native-provider-v2`, criada com `--internal`, com o apelido `provider-egress`;
+   - mais uma rede de saída comum;
+   - `AC_EGRESS_ALLOW` com a lista acima e `AC_EGRESS_MODE=observe`.
+4. Apontar a instalação para a nova rede (`providerNetworkId` no `nativeBootstrap` e `providerNetwork` no planejamento), pôr `AC_PERSONAL_EGRESS=1` no serviço do gateway e reiniciá-lo.
+5. Rodar tarefas reais por um dia e ler `egress-observe <destino>` nos logs do contêiner. Acrescentar à lista só o que for de provedor.
+6. Trocar para `AC_EGRESS_MODE=enforce`, rodar uma tarefa de prova de cada provedor e só então retirar a rede antiga.
+
+**Feito no código (`4ab5c3b6`… este commit):** o proxy aceita `AC_EGRESS_ALLOW` e `AC_EGRESS_MODE` (observe ou enforce, com o nome do destino recusado no log). Sem as variáveis, o padrão do modo travado continua igual. Com `AC_PERSONAL_EGRESS=1` no gateway, o worker de execução, o planejamento e o gerente passam pelo proxy. Testes: `provider-egress-proxy.test.ts`, 5/5.
+
 - [ ] 8.8 Na instalação viva, com o sim do titular, sem trabalho rodando:
   - backup;
   - criar `ac-native-provider-v2` (internal) e o `provider-egress`;

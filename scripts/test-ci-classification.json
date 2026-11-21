@@ -233,6 +233,7 @@
   "provider-collector-adapter.test.ts",
   "provider-collector-parsers.test.ts",
   "provider-dormant.test.ts",
+  "provider-egress-proxy.test.ts",
   "provider-eligibility.test.ts",
   "provider-failure.test.ts",
   "providers.test.ts",
