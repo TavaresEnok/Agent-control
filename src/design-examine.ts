@@ -18,7 +18,10 @@ import {
   DesignWorkerCall,
   type DesignPurpose,
   type DesignExamCoverage,
+  clampBasisSeverity,
   clampHighSeverity,
+  designBasis,
+  type DesignBasis,
   type DesignChecklistItem,
   type DesignMeasure as DesignMeasureValue,
   type DesignRawFinding,
@@ -128,6 +131,17 @@ function checklistIds(value: unknown): string[] {
   return ids;
 }
 
+/** Tira os acentos antes de comparar: 'preferência' vira 'preferencia'. */
+function foldText(value: string): string {
+  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+const BASIS_ALIASES: Record<string, DesignBasis> = {
+  preferencia: 'preferencia', preference: 'preferencia', gosto: 'preferencia',
+  hipotese: 'hipotese', hypothesis: 'hipotese',
+  medido: 'medido', measured: 'medido',
+};
+
 function fileToken(value: unknown): string {
   return String(value ?? '').trim().split(/[\s(]/)[0]?.slice(0, 400) ?? '';
 }
@@ -151,6 +165,7 @@ function normalizeDesignExam(value: unknown, fallback: {file: string; checklist:
     const line = Number.isInteger(lineNumber) && lineNumber > 0 ? lineNumber : null;
     const cwe = typeof finding.cwe === 'string' && /^CWE-\d{1,5}$/.test(finding.cwe) ? finding.cwe : null;
     const severity = SEVERITY_ALIASES[textOf(finding.severity, 40).toLowerCase()] ?? 'informativa';
+    const basis = BASIS_ALIASES[foldText(textOf(finding.basis, 40))];
     return [{
       title,
       severity,
@@ -161,6 +176,7 @@ function normalizeDesignExam(value: unknown, fallback: {file: string; checklist:
       cwe,
       reference,
       snippet: textOf(finding.snippet, 240),
+      ...(basis === undefined ? {} : {basis}),
     }];
   }).slice(0, 40);
   return {
@@ -316,6 +332,7 @@ const EXAM_INSTRUCTIONS = [
   'checklist é uma lista de ids em texto. severity é alta, media, baixa ou informativa. cwe é null ou CWE-n.',
   'Cada finding usa title, severity, file, line, scenario, suggestion, cwe, reference e snippet.',
   'O campo suggestion traz cor, px ou texto concreto. Não escreva no repositório.',
+  'Cada finding tem basis: hipotese (precisa de teste com usuário) ou preferencia (gosto). Medida vem da ferramenta, não do modelo.',
 ];
 
 function examQuestionLines(ids: readonly string[], checklist: readonly DesignChecklistItem[]): string[] {
@@ -785,9 +802,10 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
       for (const finding of exam.data.findings) {
         const source = examMeasurementSource(finding, input.rawFindings, screen.captures);
         const measure = source?.measure;
+        const basis = designBasis(finding.basis, measure);
         const clamped = DesignExamFinding.parse({
           title: finding.title,
-          severity: clampHighSeverity(finding.severity, measure),
+          severity: clampBasisSeverity(clampHighSeverity(finding.severity, measure), basis),
           file: finding.file,
           line: finding.line,
           scenario: finding.scenario,
@@ -796,8 +814,23 @@ export async function examineDesignScreens(input: DesignExamineInput): Promise<{
           reference: finding.reference,
           snippet: finding.snippet,
           ...(measure === undefined ? {} : {measure}),
+          basis,
         });
         findings.push(clamped);
+        if (basis === 'preferencia') {
+          // Gosto não vai ao revisor: fica provável, sem verificador, e não conta como falha.
+          confirmations.push({
+            finding: clamped,
+            confirm: {
+              kind: 'confirmacao',
+              status: 'provavel',
+              reason: 'Preferência estética, sem medida. Não entra como falha.',
+              proof: '',
+            },
+            verifier: null,
+          });
+          continue;
+        }
         if (measure !== undefined && finding.severity !== 'alta') {
           confirmations.push({
             finding: clamped,
