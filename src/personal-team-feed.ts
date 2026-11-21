@@ -108,6 +108,26 @@ export async function teamMessage(job:Job,options:TeamFeedOptions):Promise<TeamM
  return {id,text:`${name} ${verdict.verdict==='pass'?'aprovou':'rejeitou'}${findings?':\n'+findings:' sem apontamentos'}.`};
 }
 
+/**
+ * What went wrong in these intents, told the way the team feed tells it: a failed programmer, a QA that did not pass,
+ * a reviewer or judge that rejected. For the replan prompt, so the manager does not plan blind. The text comes from
+ * agents and logs, so the caller must label it as data. Oldest first, newest kept when the budget runs out.
+ */
+export async function failureFacts(pool:pg.Pool,contextId:string,intentIds:readonly string[],options:TeamFeedOptions,maxChars=6000):Promise<string>{
+ const wanted=new Set(intentIds);
+ const jobs=(await teamJobs(pool,contextId,200)).filter(job=>job.intentId&&wanted.has(String(job.intentId))&&['completed','failed'].includes(job.state));
+ const lines:string[]=[];
+ for(const job of jobs){
+  const failed=job.state==='failed'||(job.kind==='qa'&&job.receipt?.status!=='passed');
+  const message=await teamMessage(job,options).catch(()=>null);
+  if(!message)continue;
+  if(failed||/ rejeitou\b/.test(message.text))lines.push(message.text);
+ }
+ const kept:string[]=[];let size=0;
+ for(const line of lines.reverse()){if(size+line.length>maxChars)break;kept.unshift(line);size+=line.length+2;}
+ return kept.join('\n\n');
+}
+
 /** Grants whose skipped titular was out of quota or login, and whose chosen profile is another provider. */
 export async function reserveAssumptionNotices(pool:pg.Pool,contextId:string):Promise<{localId:string;text:string}[]>{
  const rows=(await pool.query(`SELECT g.role,p.model,selected.provider AS selected_provider,skipped.provider

@@ -124,3 +124,30 @@ test('the app model picker lists the team, once',async()=>{
  assert.deepEqual(next!.sessionModelsV1,{v:1,provider:'claude',updatedAt:1,currentModelId:'agent-control-team',availableModels:[{id:'agent-control-team',name:'Equipe Agent Control',description:'Gerente claude-sonnet-5-5 medium · Programador grok-4.7 medium'}]});
  assert.equal(await teamModelsMetadata(pool,next!,2),null);
 });
+
+test('failure facts carry the failed QA tail and the rejecting review, and skip what passed or belongs to other intents', async () => {
+ const {failureFacts} = await import('../src/personal-team-feed.ts');
+ const root = await mkdtemp(join(tmpdir(), 'team-facts-'));
+ try {
+  const plan = randomUUID(), task = randomUUID(), other = randomUUID();
+  const qaFail = randomUUID(), qaPass = randomUUID(), review = randomUUID(), approving = randomUUID(), foreign = randomUUID();
+  for (const id of [qaFail, qaPass]) await mkdir(join(root, id), {recursive: true});
+  for (const id of [review, approving, foreign]) await mkdir(join(root, id, 'output'), {recursive: true});
+  await writeFile(join(root, qaFail, 'qa-logs.bin'), frame('not ok 1 - soma\n# fail 1\n'));
+  await writeFile(join(root, qaPass, 'qa-logs.bin'), frame('# pass 3\n'));
+  await writeFile(join(root, review, 'output', 'execution-result.json'), JSON.stringify({output: JSON.stringify({verdict: 'reject', findings: [{severity: 'high', summary: 'falta validar a entrada'}]})}));
+  await writeFile(join(root, approving, 'output', 'execution-result.json'), JSON.stringify({output: JSON.stringify({verdict: 'pass', findings: []})}));
+  await writeFile(join(root, foreign, 'output', 'execution-result.json'), JSON.stringify({output: JSON.stringify({verdict: 'reject', findings: [{severity: 'low', summary: 'outro pedido'}]})}));
+  const row = (id: string, kind: string, state: string, intentId: string, receipt: unknown = {}) =>
+   ({id, kind, state, provider: kind === 'qa' ? null : 'claude', model: kind === 'qa' ? null : 'claude-sonnet-5-5', effort: kind === 'qa' ? null : 'high', receipt, base: null, intentId});
+  const rows = [row(qaPass, 'qa', 'completed', task, {status: 'passed'}), row(qaFail, 'qa', 'failed', task, {status: 'failed'}),
+   row(approving, 'reviewer', 'completed', task), row(review, 'reviewer', 'completed', task), row(foreign, 'reviewer', 'completed', other)];
+  const pool = {query: async () => ({rows: [...rows].reverse()})} as any;
+  const facts = await failureFacts(pool, randomUUID(), [plan, task], {executionHost: root});
+  assert.match(facts, /^QA reprovou: not ok 1 - soma\n# fail 1\.\n\nRevisor \(claude · claude-sonnet-5-5 · high\) rejeitou:\n• \[high\] falta validar a entrada\.$/);
+  assert.doesNotMatch(facts, /outro pedido|QA passou|aprovou/);
+  assert.equal(await failureFacts(pool, randomUUID(), [randomUUID()], {executionHost: root}), '');
+ } finally {
+  await rm(root, {recursive: true, force: true});
+ }
+});
