@@ -74,7 +74,7 @@ test('the real personal-services script writes units whose ExecStart keeps a rep
   const filter=await readFile(join(units,'agent-control-docker-filter-espaco.service'),'utf8');
   const filterArgv=parseExecStart(line(filter,'ExecStart'));
   assert.deepEqual(filterArgv.slice(0,6),[process.execPath,'--import','tsx',join(root,'src/docker-filter.ts'),join(data,'docker-filter.sock'),'/var/run/docker.sock']);
-  assert.deepEqual(filterArgv[6]!.split(':'),[data,'/tmp']);
+  assert.equal(filterArgv[6],'@'+installation);
   assert.ok(gateway.includes('Environment="AC_DOCKER_SOCKET='+join(data,'docker-filter.sock')+'"'));
   assert.match(gateway,/^Requires=agent-control-docker-filter-espaco\.service$/m);
   assert.doesNotMatch(gateway,/AC_PERSONAL_EGRESS/);

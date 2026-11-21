@@ -10,7 +10,9 @@ function decide(env: Record<string, string>, hosts: string[]) {
 spec=importlib.util.spec_from_file_location('proxy',${JSON.stringify(proxy)});m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 out=[]
 for h in json.loads(sys.argv[1]):
-  try: out.append(m.target_from_header(('CONNECT %s:443 HTTP/1.1\\r\\nHost: %s:443\\r\\n\\r\\n'%(h,h)).encode()))
+  port=':443' if not h.startswith('noport:') else ''
+  h=h.replace('noport:','')
+  try: out.append(m.target_from_header(('CONNECT %s:443 HTTP/1.1\\r\\nHost: %s%s\\r\\n\\r\\n'%(h,h,port)).encode()))
   except ValueError: out.append(None)
 print(json.dumps(out))`;
   const run = spawnSync('python3', ['-I', '-B', '-c', script, JSON.stringify(hosts)], {env: {PATH: '/usr/bin:/bin', ...env}, encoding: 'utf8'});
@@ -18,8 +20,9 @@ print(json.dumps(out))`;
 }
 
 test('the locked default still allows only the two OpenAI hosts', () => {
-  const {decided} = decide({}, ['chatgpt.com', 'auth.openai.com', 'api.anthropic.com', 'example.com']);
-  assert.deepEqual(decided, ['chatgpt.com', 'auth.openai.com', null, null]);
+  const {decided} = decide({}, ['chatgpt.com', 'auth.openai.com', 'api.anthropic.com', 'example.com', 'noport:chatgpt.com']);
+  // undici sends Host without the port: still the same target.
+  assert.deepEqual(decided, ['chatgpt.com', 'auth.openai.com', null, null, 'chatgpt.com']);
 });
 
 test('AC_EGRESS_ALLOW replaces the list and enforce mode names each refused host', () => {

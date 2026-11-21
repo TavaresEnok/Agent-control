@@ -892,7 +892,7 @@ test('a host renewal refuses an account whose settings would run something on th
   const dir = await mkdtemp(join(tmpdir(), 'ac-renew-settings-'));
   try {
     await assertAccountSettingsInert(dir);
-    await writeFile(join(dir, 'settings.json'), JSON.stringify({theme: 'dark', hooks: {}, env: {}}));
+    await writeFile(join(dir, 'settings.json'), JSON.stringify({theme: 'dark', hooks: {}, env: {DISABLE_TELEMETRY: '1'}}));
     await assertAccountSettingsInert(dir);
     for (const unsafe of [{apiKeyHelper: '/tmp/x.sh'}, {env: {NODE_OPTIONS: '--require /tmp/x.js'}}, {enabledPlugins: {x: true}}, {hooks: {SessionStart: []}}]) {
       await writeFile(join(dir, 'settings.json'), JSON.stringify(unsafe));

@@ -1,3 +1,4 @@
+import {EgressConfig} from './personal-egress.ts';
 import {constants} from 'node:fs';
 import {open,mkdir,realpath,stat} from 'node:fs/promises';
 import {isAbsolute,join,resolve,sep} from 'node:path';
@@ -36,6 +37,8 @@ export const Installation=z.object({schemaVersion:z.literal(1),mode:z.literal('a
  databaseUrl:z.string().url().refine(value=>['postgres:','postgresql:'].includes(new URL(value).protocol)),
  projectRoots:z.array(ProjectRoot.extend({path:absolute})).max(32).default([]),
  retention:z.object({automatic:z.enum(['off','preview','apply']).default('preview')}).strict().default({automatic:'preview'}),
+ /** Provider egress for personal workers (src/personal-egress.ts). Absent means off. */
+ egress:EgressConfig.optional(),
  dataDirectory:absolute,project:projectDefinition,projects:z.array(projectDefinition).max(99).default([]),
  publishedOrigins:z.array(httpsOrigin()).max(32).optional(),
  contextVault:z.object({directory:absolute,masterFile:absolute}).strict().optional(),

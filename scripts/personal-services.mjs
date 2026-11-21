@@ -46,13 +46,12 @@ const withHappier=!sharedFrom&&!localTransport;
 await mkdir(units,{recursive:true});
 if(withHappier)await writeFile(join(units,happier),unit('Agent Control: Happier server',[process.execPath,join(root,'scripts/personal-happier.mjs'),file]));
 // The gateway reaches Docker only through the filter (src/docker-filter.ts): fixed routes, no privileged create, host mounts
-// only under the installation, the project roots, the registered repositories and /tmp. It protects fully once the gateway
+// only under the installation, the project roots, the registered repositories and /tmp (read from the installation on every check). It protects fully once the gateway
 // user is outside the docker group; until then it still refuses what the product never asks for.
 const filterSocket=join(config.dataDirectory,'docker-filter.sock');
-const filterRoots=[...new Set([config.dataDirectory,config.accountHomesDirectory,'/tmp',...(config.projectRoots??[]).map(r=>r.path),config.project?.repo,...(config.projects??[]).map(p=>p.repo)].filter(v=>typeof v==='string'&&v.startsWith('/')&&v!=='/'))];
-await writeFile(join(units,dockerFilter),unit('Agent Control: filtro do Docker',[process.execPath,'--import','tsx',join(root,'src/docker-filter.ts'),filterSocket,'/var/run/docker.sock',filterRoots.join(':')],'Before='+gateway));
+await writeFile(join(units,dockerFilter),unit('Agent Control: filtro do Docker',[process.execPath,'--import','tsx',join(root,'src/docker-filter.ts'),filterSocket,'/var/run/docker.sock','@'+file],'Before='+gateway));
 // --egress turns on the allowlist proxy for every personal worker, planner and manager call (AC_PERSONAL_EGRESS=1).
-const egress=args.includes('--egress');
+const egress=args.includes('--egress')||['observe','enforce'].includes(config.egress?.mode);
 const gatewayEnvironment=[['AC_DOCKER_SOCKET',filterSocket],...(egress?[['AC_PERSONAL_EGRESS','1']]:[])];
 await writeFile(join(units,gateway),unit('Agent Control: gateway',[process.execPath,'--import','tsx',join(root,'src/server-main.ts'),'serve',file],(localTransport?'':`After=${happierUnit}\nWants=${happierUnit}\n`)+`After=${dockerFilter}\nRequires=${dockerFilter}`,gatewayEnvironment));
 systemctl('daemon-reload');if(withHappier)systemctl('enable','--now',happier);systemctl('enable','--now',dockerFilter);systemctl('enable','--now',gateway);

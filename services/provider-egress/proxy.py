@@ -61,7 +61,8 @@ def target_from_header(header, allowed=None, mode=None):
             raise ValueError('invalid header')
         if name.lower() in {'content-length', 'transfer-encoding', 'proxy-authorization'}:
             raise ValueError('unsupported header')
-        if name.lower() == 'host' and value.strip().lower() != host + ':443':
+        # Some clients (undici) send the Host header without the port.
+        if name.lower() == 'host' and value.strip().lower() not in (host, host + ':443'):
             raise ValueError('host mismatch')
     return host
 

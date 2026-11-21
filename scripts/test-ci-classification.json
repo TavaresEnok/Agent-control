@@ -183,6 +183,7 @@
   "personal-design-cli.test.ts",
   "personal-disk-limits-entrypoints.test.ts",
   "personal-disk.test.ts",
+  "personal-egress.test.ts",
   "personal-folders.test.ts",
   "personal-grant-sweep.test.ts",
   "personal-health.test.ts",

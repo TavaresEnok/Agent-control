@@ -1,7 +1,8 @@
+import {ensurePersonalEgress} from './personal-egress.ts';
 import {execFileSync} from 'node:child_process';
 import {createHash,createPublicKey,generateKeyPairSync,randomUUID} from 'node:crypto';
 import {mkdir,readFile,writeFile} from 'node:fs/promises';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
 import {z} from 'zod';
 import {Ledger} from './ledger.ts';
 import {loadInstallation} from './installation.ts';
@@ -30,9 +31,9 @@ import {publishFirstPersonalPolicies,refreshPersonalTemplates,shareProjectAccoun
 
 const Image=z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
-function providerNetwork(){
+function providerNetwork(internal=false){
  try{execFileSync('docker',['network','inspect','ac-native-provider'],{stdio:'ignore'});}
- catch{execFileSync('docker',['network','create','ac-native-provider'],{stdio:'ignore'});}
+ catch{execFileSync('docker',['network','create',...(internal?['--internal']:[]),'ac-native-provider'],{stdio:'ignore'});}
  const inspected=JSON.parse(execFileSync('docker',['network','inspect','ac-native-provider'],{encoding:'utf8'})) as {Id:string}[];
  const id=inspected[0]?.Id??'';
  if(!/^[a-f0-9]{64}$/.test(id))throw new Error('PROVIDER_NETWORK_UNAVAILABLE');
@@ -60,6 +61,9 @@ export async function nativeSetup(path:string){
  const images={planning:process.env.AC_NATIVE_PLANNING_IMAGE,worker:process.env.AC_NATIVE_WORKER_IMAGE,tools:process.env.AC_NATIVE_TOOLS_IMAGE};
  if(!Image.safeParse(images.planning).success||!Image.safeParse(images.worker).success||!Image.safeParse(images.tools).success)
   return {state:'images_required',directory:root,next:'Exporte AC_NATIVE_PLANNING_IMAGE, AC_NATIVE_WORKER_IMAGE e AC_NATIVE_TOOLS_IMAGE (sha256:...) e rode native-setup de novo.'};
+ // Egress first: it may recreate the provider network, whose id the bootstrap below records.
+ const egressDone=config.egress?ensurePersonalEgress(resolve(import.meta.dirname,'..'),config.egress):[];
+ if(egressDone.length)console.error('egress: '+egressDone.join('; '));
  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
  try{
   const accounts=(await ledger.pool.query("SELECT id,provider,resource_identity FROM ac_accounts a JOIN ac_account_access x ON x.account_id=a.id WHERE x.project_id=$1 AND a.mode='subscription_cli' AND a.provider IN ('codex','claude','grok')",[config.project.id])).rows;
@@ -71,7 +75,7 @@ export async function nativeSetup(path:string){
   const block={state:'active',contract:'native-bootstrap-configured-v1',projectId:config.project.id,contextId:config.managerTransport?.contexts.find(item=>item.projectId===config.project.id)?.contextId??context?.id??randomUUID(),epoch:1,instanceId:randomUUID(),source:'authorized-endpoint',
    accounts:accounts.map(account=>({accountId:account.id,subjectDigest:String(account.resource_identity).slice(account.provider.length+1)})),
    planning:{id:'personal-planning',imageId:images.planning,...retiredPlanning(config.nativeBootstrap,images.planning!),executorDigest:nativePlanningExecutorDigest(images.planning!),signingKeyFile:planningKey.file,keyFingerprint:planningKey.fingerprint,hostRoot:join(root,'planning-host'),accountRoot:config.accountHomesDirectory??join(root,'planning-accounts')},
-   execution:{id:'personal-execution',workerImage:images.worker,toolsImage:images.tools,...retiredExecution(config.nativeBootstrap,images.worker!,images.tools!),executorDigest:nativeExecutionExecutorDigest(images.worker!,images.tools!),signingKeyFile:executionKey.file,keyFingerprint:executionKey.fingerprint,hostRoot:join(root,'execution-host'),accountRoot:config.accountHomesDirectory??join(root,'execution-accounts'),providerNetworkId:providerNetwork(),workerEnv:['PATH=/usr/local/bin:/usr/bin:/bin'],toolsEnv:['PATH=/usr/local/bin:/usr/bin:/bin']},
+   execution:{id:'personal-execution',workerImage:images.worker,toolsImage:images.tools,...retiredExecution(config.nativeBootstrap,images.worker!,images.tools!),executorDigest:nativeExecutionExecutorDigest(images.worker!,images.tools!),signingKeyFile:executionKey.file,keyFingerprint:executionKey.fingerprint,hostRoot:join(root,'execution-host'),accountRoot:config.accountHomesDirectory??join(root,'execution-accounts'),providerNetworkId:providerNetwork(config.egress!==undefined&&config.egress.mode!=='off'),workerEnv:['PATH=/usr/local/bin:/usr/bin:/bin'],toolsEnv:['PATH=/usr/local/bin:/usr/bin:/bin']},
    qa,qaDigest:nativeQaContractDigest(qa),review:{signingKeyFile:reviewKey.file,keyFingerprint:reviewKey.fingerprint,verifierDigest:nativeReviewVerifierDigest}};
   // The QA stage refuses a policy whose QA verifier digest differs from this contract, so keep the latest revision in step with it.
   const qaDigestFor=async(projectId:string)=>nativeQaContractDigest(await resolvePersonalProjectQa({dataDirectory:config.dataDirectory,projectId,image:images.tools!,fallback:qa}));

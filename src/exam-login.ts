@@ -373,7 +373,9 @@ export async function ensureExamLoginFresh(input: {
  * waits 5s, sends SIGKILL to the group, and always waits for `exit` before removing the temp dir
  * or releasing the caller's lock.
  */
-const HOST_UNSAFE_SETTINGS = ['apiKeyHelper', 'env', 'hooks', 'statusLine', 'mcpServers', 'enabledPlugins', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper'];
+const HOST_UNSAFE_SETTINGS = ['apiKeyHelper', 'hooks', 'statusLine', 'mcpServers', 'enabledPlugins', 'awsAuthRefresh', 'awsCredentialExport', 'otelHeadersHelper'];
+/** env entries that make the host CLI load or run something else. DISABLE_TELEMETRY and the like stay allowed. */
+const HOST_UNSAFE_ENV = /^(?:NODE_OPTIONS|NODE_PATH|LD_PRELOAD|LD_LIBRARY_PATH|DYLD_.*|PATH|BASH_ENV|ENV|SHELL|HTTPS?_PROXY|ALL_PROXY|NO_PROXY|ANTHROPIC_BASE_URL|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_USE_.*|CLAUDE_CONFIG_DIR|CLAUDE_CODE_SHELL.*|.*HELPER.*)$/i;
 
 /** Refuses an account whose settings would run something on the host during a renewal. Unreadable or absent files say nothing. */
 export async function assertAccountSettingsInert(accountDir: string): Promise<void> {
@@ -385,6 +387,8 @@ export async function assertAccountSettingsInert(accountDir: string): Promise<vo
       const value = (parsed as Record<string, unknown>)[key];
       return value !== undefined && value !== null && !(typeof value === 'object' && Object.keys(value as object).length === 0) && value !== '';
     });
+    const env = (parsed as Record<string, unknown>).env;
+    if (env && typeof env === 'object' && Object.keys(env).some(key => HOST_UNSAFE_ENV.test(key))) found.push('env');
     if (found.length) throw Error('EXAM_LOGIN_ACCOUNT_SETTINGS_UNSAFE');
   }
 }
