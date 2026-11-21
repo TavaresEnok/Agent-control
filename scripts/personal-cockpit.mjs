@@ -64,7 +64,7 @@ ${domain} {
 const previous=await readFile(site,'utf8').catch(()=>null);
 // Download routes added by hand to this site (handle_path /downloads/...) survive a regeneration.
 const downloads=(previous??'').match(/\n\thandle_path \/downloads\/[^\n]*\{\n(?:\t\t[^\n]*\n)*\t\}\n/g)??[];
-if(downloads.length)body=body.replace('\timport seguranca\n','\timport seguranca'+downloads.join(''));
+if(downloads.length)body=body.replace('\timport seguranca\n','\timport seguranca'+[...new Set(downloads)].join(''));
 await writeFile(site+'.tmp',body,{mode:0o664});await rename(site+'.tmp',site);
 const caddy=(...a)=>execFileSync('docker',['exec',container,'caddy',...a],{encoding:'utf8',stdio:['ignore','pipe','pipe']});
 try{caddy('validate','--config','/etc/caddy/Caddyfile','--adapter','caddyfile');caddy('reload','--config','/etc/caddy/Caddyfile','--adapter','caddyfile');}
