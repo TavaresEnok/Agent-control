@@ -29,7 +29,15 @@ export type DesignRouteConfig = {
 
 export type DesignProjectConfig = {
   routes: Record<string, DesignRouteConfig>;
+  /** Arquivo de tokens do projeto, relativo à raiz: DTCG (.json) ou propriedades CSS (.css). */
+  tokens?: string;
+  /** Chave `sinaisGenericos`. Ausente vale verdadeiro. */
+  genericSignals?: boolean;
 };
+
+/** Arquivo de tokens acima disso é recusado. */
+export const DESIGN_TOKENS_MAX_BYTES = 256 * 1024;
+const MAX_TOKENS_PATH = 300;
 
 const STATE = new Set<string>(DESIGN_DECLARED_STATES);
 const MAX_ACTIONS = 20;
@@ -167,6 +175,14 @@ function parseRouteStates(value: unknown): Pick<DesignRouteConfig, 'bareStates' 
   throw new Refusal('DESIGN_CONFIG_INVALID', 400);
 }
 
+/** Caminho relativo, sem `..`, sem barra invertida, terminado em .json ou .css. */
+export function isDesignTokensPath(path: string): boolean {
+  if (path.length === 0 || path.length > MAX_TOKENS_PATH) return false;
+  if (path.startsWith('/') || /^[A-Za-z]:/.test(path) || path.includes('\\') || path.includes('..')) return false;
+  if (/[\u0000-\u001f]/.test(path)) return false;
+  return /\.(?:json|css)$/i.test(path);
+}
+
 /** Config ausente é válida e não inventa estado. JSON quebrado recusa. */
 export function parseDesignProjectConfig(text: string | undefined): DesignProjectConfig {
   if (text === undefined || text.trim().length === 0) return {routes: {}};
@@ -176,7 +192,10 @@ export function parseDesignProjectConfig(text: string | undefined): DesignProjec
   } catch {
     throw new Refusal('DESIGN_CONFIG_INVALID', 400);
   }
-  if (!isRecord(parsed) || !isRecord(parsed.routes)) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+  if (!isRecord(parsed)) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+  const extras = parseConfigExtras(parsed);
+  if (parsed.routes === undefined && Object.keys(extras).length > 0) return {routes: {}, ...extras};
+  if (!isRecord(parsed.routes)) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
   const routes: Record<string, DesignRouteConfig> = {};
   for (const [route, value] of Object.entries(parsed.routes)) {
     if (!route.startsWith('/') || route.includes('..') || route.length > 200) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
@@ -189,7 +208,20 @@ export function parseDesignProjectConfig(text: string | undefined): DesignProjec
     const states = parseRouteStates(Object.hasOwn(value, 'states') ? value.states : undefined);
     routes[route] = {dark: value.dark === true, ...(example === undefined ? {} : {example}), ...states};
   }
-  return {routes};
+  return {routes, ...extras};
+}
+
+function parseConfigExtras(parsed: Record<string, unknown>): Pick<DesignProjectConfig, 'tokens' | 'genericSignals'> {
+  const extras: Pick<DesignProjectConfig, 'tokens' | 'genericSignals'> = {};
+  if (Object.hasOwn(parsed, 'tokens')) {
+    if (typeof parsed.tokens !== 'string' || !isDesignTokensPath(parsed.tokens)) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    extras.tokens = parsed.tokens;
+  }
+  if (Object.hasOwn(parsed, 'sinaisGenericos')) {
+    if (typeof parsed.sinaisGenericos !== 'boolean') throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    extras.genericSignals = parsed.sinaisGenericos;
+  }
+  return extras;
 }
 
 export function sourceHasDarkTheme(files: readonly {text: string}[]): boolean {

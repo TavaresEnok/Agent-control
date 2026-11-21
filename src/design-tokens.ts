@@ -1,7 +1,7 @@
 import {readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {apcaLc, compositeRgb, deltaE2000, parseCssColor, wcagContrast, type Rgb} from './design-color.ts';
-import {DESIGN_PLANTED_RULES, designRawFinding, type DesignRawFinding} from './design-types.ts';
+import {DESIGN_PLANTED_RULES, designRawFinding, type DesignRawFinding, type DesignSeverity} from './design-types.ts';
 
 export type ComputedStyleSample = {
   selector?: string;
@@ -23,7 +23,19 @@ export type ComputedStyleSample = {
   height?: string;
   /** Fundo com imagem ou gradiente: o contraste não entra como achado. */
   contrastNote?: string;
+  /** Link em linha no meio do texto. Fica fora das regras de alvo. */
+  inText?: boolean;
 };
+
+export type DesignTokenOptions = {
+  /** Gravidade do alvo de 44px. No exame comum é baixa; o modo criar pode pedir alta. */
+  referenceTargetSeverity?: DesignSeverity;
+};
+
+/** Entrelinha de parágrafo abaixo disso fica apertada. */
+export const DESIGN_LINE_RATIO_MIN = 1.3;
+/** Acentos com ΔE2000 abaixo disso contam como um só. */
+const ACCENT_CLUSTER_DELTA = 2;
 
 export type DesignReferenceScale = {
   id: string;
@@ -50,7 +62,12 @@ export type TokenAnalysis = {
     offScale: number[];
     grays: string[];
     nearGrays: number;
+    /** Acentos agrupados por ΔE2000 < 2. */
     accents: number;
+    /** Acentos como valores exatos, sem agrupar. */
+    accentsRaw: number;
+    /** Razões entre entrelinha e tamanho, em ordem. */
+    lineRatios: number[];
     radii: number[];
     shadows: string[];
     durations: string[];
@@ -236,7 +253,25 @@ function contrastSample(sample: ComputedStyleSample): {ratio: number; apca: numb
   return {ratio: Math.round(ratio * 100) / 100, apca: Math.round(apcaLc(flat, background) * 10) / 10};
 }
 
-export function analyzeDesignTokens(file: string, samples: readonly ComputedStyleSample[], references: readonly DesignReferenceScale[]): TokenAnalysis {
+/** Agrupamento guloso: cada cor entra no primeiro grupo a menos de ΔE2000 2. */
+function clusterCount(colors: readonly Rgb[]): number {
+  const heads: Rgb[] = [];
+  for (const rgb of colors) {
+    if (!heads.some(head => deltaE2000(head, rgb) < ACCENT_CLUSTER_DELTA)) heads.push(rgb);
+  }
+  return heads.length;
+}
+
+function hexToRgb(value: string): Rgb {
+  return {r: parseInt(value.slice(1, 3), 16), g: parseInt(value.slice(3, 5), 16), b: parseInt(value.slice(5, 7), 16)};
+}
+
+export function analyzeDesignTokens(
+  file: string,
+  samples: readonly ComputedStyleSample[],
+  references: readonly DesignReferenceScale[],
+  options: DesignTokenOptions = {},
+): TokenAnalysis {
   const sizes: number[] = [];
   const families: string[] = [];
   const weights: number[] = [];
@@ -250,6 +285,8 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
   let contrastUnmeasured = 0;
   const targets: number[] = [];
   const targets24: number[] = [];
+  const lineRatioList: number[] = [];
+  const tightParagraphs: {line: number; size: number; ratio: number}[] = [];
   for (const sample of samples) {
     const size = pxOf(sample.fontSize);
     if (size !== null && size > 0) sizes.push(size);
@@ -259,6 +296,11 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
     if (Number.isFinite(weight) && weight > 0) weights.push(weight);
     const line = pxOf(sample.lineHeight);
     if (line !== null) lineHeights.push(line);
+    if (line !== null && size !== null && size > 0 && line > 0) {
+      const ratio = Math.round((line / size) * 100) / 100;
+      lineRatioList.push(ratio);
+      if (sample.selector === 'p' && line / size < DESIGN_LINE_RATIO_MIN) tightParagraphs.push({line, size, ratio});
+    }
     spaces.push(...numbersIn(sample.margin), ...numbersIn(sample.padding), ...numbersIn(sample.gap));
     radii.push(...numbersIn(sample.borderRadius));
     if (sample.boxShadow && sample.boxShadow !== 'none') shadows.push(sample.boxShadow.trim());
@@ -272,7 +314,8 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
     else if (contrast) contrasts.push(contrast);
     const width = pxOf(sample.width);
     const height = pxOf(sample.height);
-    const control = sample.selector === 'button' || sample.selector === 'a' || sample.selector === 'input';
+    const inlineLink = sample.selector === 'a' && sample.inText === true;
+    const control = !inlineLink && (sample.selector === 'button' || sample.selector === 'a' || sample.selector === 'input');
     if (control && width !== null && height !== null && width >= 8 && height >= 8) {
       const size = Math.min(width, height);
       if (size < 44) targets.push(size);
@@ -300,7 +343,9 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
       }
     }
   }
-  const accents = [...new Set(colors.filter(rgb => !isGray(rgb) && Math.max(rgb.r, rgb.g, rgb.b) > 40 && Math.min(rgb.r, rgb.g, rgb.b) < 250).map(hex))].length;
+  const accentHexes = [...new Set(colors.filter(rgb => !isGray(rgb) && Math.max(rgb.r, rgb.g, rgb.b) > 40 && Math.min(rgb.r, rgb.g, rgb.b) < 250).map(hex))];
+  const accentsRaw = accentHexes.length;
+  const accents = clusterCount(accentHexes.map(hexToRgb));
   const radiusList = uniqueSorted(radii);
   const shadowList = [...new Set(shadows)].slice(0, 40);
   const durationList = [...new Set(durations)].slice(0, 40);
@@ -350,7 +395,17 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
       rule: 'DESIGN-TOKENS-ACENTOS',
       file,
       severity: 'media',
-      snippet: `${accents} acentos`,
+      snippet: `${accents} acentos (${accentsRaw} valores exatos)`,
+    }));
+  }
+  const tightest = tightParagraphs.sort((a, b) => a.ratio - b.ratio)[0];
+  if (tightest !== undefined) {
+    findings.push(designRawFinding({
+      tool: 'tokens',
+      rule: 'DESIGN-TOKENS-ENTRELINHA',
+      file,
+      severity: 'baixa',
+      snippet: `parágrafo ${tightest.size}px com entrelinha ${tightest.line}px (razão ${tightest.ratio}, abaixo de ${DESIGN_LINE_RATIO_MIN})`,
     }));
   }
   const weak = contrasts.find(item => item.ratio > 1 && item.ratio < 4.5);
@@ -397,7 +452,7 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
       tool: 'tokens',
       rule: 'DESIGN-ALVO-REFERENCIA',
       file,
-      severity: 'alta',
+      severity: options.referenceTargetSeverity ?? 'baixa',
       snippet: `alvo ${smallTarget}px abaixo de 44px`,
       measure: {kind: 'target', px: smallTarget},
     }));
@@ -445,6 +500,8 @@ export function analyzeDesignTokens(file: string, samples: readonly ComputedStyl
       grays: grayList,
       nearGrays,
       accents,
+      accentsRaw,
+      lineRatios: uniqueSorted(lineRatioList),
       radii: radiusList,
       shadows: shadowList,
       durations: durationList,
@@ -463,7 +520,7 @@ export function tokenReportMarkdown(analysis: TokenAnalysis): string {
     `Famílias: ${analysis.summary.families.join(', ') || 'nenhuma'}.`,
     `Espaçamentos fora da grade de 4px: ${analysis.summary.offScale.join(', ') || 'nenhum'}.`,
     `Cinzas quase iguais (ΔE2000 < 3): ${analysis.summary.nearGrays}.`,
-    `Acentos: ${analysis.summary.accents}. Raios: ${analysis.summary.radii.join(', ') || 'nenhum'}.`,
+    `Acentos: ${analysis.summary.accents} (${analysis.summary.accentsRaw} valores exatos). Raios: ${analysis.summary.radii.join(', ') || 'nenhum'}.`,
     `Contraste não medido: ${analysis.summary.contrastUnmeasured}.`,
     `Paleta: ${analysis.summary.palette.stepsByHue.join(', ') || '0'} passos por matiz. Rampa: ${analysis.summary.palette.hasRamp ? 'sim' : 'não'}. Passos da referência: ${analysis.summary.palette.referenceSteps}.`,
     `A escala mais próxima é ${analysis.nearest.name} (distância ${analysis.nearest.distance}).`,

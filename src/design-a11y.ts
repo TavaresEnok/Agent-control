@@ -359,10 +359,61 @@ function unlabeledButtons(findings: DesignRawFinding[], file: string, html: stri
   }
 }
 
+export const CLICK_WITHOUT_KEYBOARD_RULE = 'WCAG-2-1-1-CLIQUE-SEM-TECLADO';
+const CLICK_WITHOUT_KEYBOARD_MAX = 5;
+const CLICKABLE_TAG = /<(div|span|li|td|tr|img)\b/gi;
+const CLICK_HANDLER = /(?:^|\s)(?:onclick|@click(?:\.[\w-]+)*|v-on:click(?:\.[\w-]+)*)\s*=/i;
+const ROLE_ATTR = /(?:^|[\s:])role\s*=/i;
+const TABINDEX_ATTR = /(?:^|[\s:])tabindex\s*=/i;
+const KEY_HANDLER = /(?:^|\s)(?:onkey(?:down|up|press)|@key(?:down|up|press)(?:\.[\w-]+)*|v-on:key(?:down|up|press)(?:\.[\w-]+)*)\s*=/i;
+const ARIA_HIDDEN = /(?:^|\s)aria-hidden\s*=\s*(?:["']true["']|\{\s*true\s*\})/i;
+const NAME_ATTR = /(?:^|[\s:])(?:class|classname|id)\s*=\s*("[^"]*"|'[^']*'|`[^`]*`|\{[^}]*\})/gi;
+const DISMISS_LAYER = /backdrop|overlay|scrim|mask/i;
+
+/** Fundo de modal fecha com clique e já tem Esc no próprio modal. */
+function isDismissLayer(attrs: string): boolean {
+  for (const match of attrs.matchAll(NAME_ATTR)) {
+    if (DISMISS_LAYER.test(match[1] ?? '')) return true;
+  }
+  return false;
+}
+
+function reachableByKeyboard(attrs: string): boolean {
+  if (ROLE_ATTR.test(attrs)) return true;
+  if (TABINDEX_ATTR.test(attrs) && KEY_HANDLER.test(attrs)) return true;
+  if (hasSpread(attrs)) return true;
+  if (ARIA_HIDDEN.test(attrs)) return true;
+  return isDismissLayer(attrs);
+}
+
+/** div, span, li, td, tr ou img com clique e sem caminho de teclado. No máximo 5 por arquivo. */
+function clickWithoutKeyboard(findings: DesignRawFinding[], file: string, html: string): void {
+  let count = 0;
+  for (const match of html.matchAll(CLICKABLE_TAG)) {
+    if (count >= CLICK_WITHOUT_KEYBOARD_MAX) return;
+    const start = match.index;
+    const tagEnd = endOfOpeningTag(html, start);
+    if (tagEnd < 0) continue;
+    const opening = html.slice(start, tagEnd + 1);
+    const {attrs} = openingParts(opening, match[0].length);
+    if (!CLICK_HANDLER.test(attrs) || reachableByKeyboard(attrs)) continue;
+    findings.push(designRawFinding({
+      tool: 'html',
+      rule: CLICK_WITHOUT_KEYBOARD_RULE,
+      file,
+      line: lineAt(html, start),
+      severity: 'media',
+      snippet: opening.replace(/\s+/g, ' ').slice(0, 180),
+    }));
+    count += 1;
+  }
+}
+
 export function staticHtmlFindings(file: string, html: string, css?: string): DesignRawFinding[] {
   const findings: DesignRawFinding[] = [];
   elementContrast(findings, file, html);
   unlabeledButtons(findings, file, html);
+  clickWithoutKeyboard(findings, file, html);
   if (css) elementContrast(findings, file, css);
   return findings;
 }
