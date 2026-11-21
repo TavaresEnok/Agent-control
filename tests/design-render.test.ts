@@ -3,9 +3,79 @@ import {test} from 'node:test';
 import {DESIGN_RENDER_RULES, parseRenderCells, renderFindings} from '../src/design-render.ts';
 import {clampHighSeverity, type DesignRawFinding} from '../src/design-types.ts';
 
-const {residueKind} = await import(new URL('../deploy/design-tools/run-exam.mjs', import.meta.url).href) as {
+const {residueKind, renderProbe} = await import(new URL('../deploy/design-tools/run-exam.mjs', import.meta.url).href) as {
   residueKind: (text: string) => string | null;
+  renderProbe: (options: Record<string, boolean>) => {overflow?: {px: number; clip: boolean; offenders: {sel: string; right: number}[]}};
 };
+
+type FakeElement = {
+  nodeType: 1;
+  tagName: string;
+  id: string;
+  isConnected: true;
+  parentElement: FakeElement | null;
+  children: FakeElement[];
+  style: Record<string, string>;
+  right: number;
+  scrollWidth: number;
+  clientWidth: number;
+  getAttribute: (name: string) => string | null;
+  getBoundingClientRect: () => {left: number; right: number; top: number; bottom: number; width: number; height: number};
+  contains: (other: FakeElement) => boolean;
+};
+
+function fake(tag: string, style: Record<string, string> = {}, right = 300, kids: FakeElement[] = [], className = ''): FakeElement {
+  const el: FakeElement = {
+    nodeType: 1,
+    tagName: tag.toUpperCase(),
+    id: '',
+    isConnected: true,
+    parentElement: null,
+    children: kids,
+    style,
+    right,
+    scrollWidth: 0,
+    clientWidth: 0,
+    getAttribute: name => (name === 'class' ? className : null),
+    getBoundingClientRect: () => ({left: 0, right: el.right, top: 0, bottom: 40, width: el.right, height: 40}),
+    contains: other => {
+      for (let node: FakeElement | null = other; node; node = node.parentElement) if (node === el) return true;
+      return false;
+    },
+  };
+  for (const kid of kids) kid.parentElement = el;
+  return el;
+}
+
+/** Roda a sonda num DOM de mentira de 375px. */
+function probeOverflow(kids: FakeElement[], rootStyle: Record<string, string> = {}, bodyStyle: Record<string, string> = {}, widths = {root: 375, body: 375}) {
+  const body = fake('body', bodyStyle, 375, kids);
+  const root = fake('html', rootStyle, 375, [body]);
+  root.scrollWidth = widths.root;
+  root.clientWidth = 375;
+  body.scrollWidth = widths.body;
+  const all: FakeElement[] = [];
+  const walk = (el: FakeElement) => {
+    for (const kid of el.children) {
+      all.push(kid);
+      walk(kid);
+    }
+  };
+  walk(body);
+  (body as unknown as {querySelectorAll: () => FakeElement[]}).querySelectorAll = () => all;
+  const saved = {window: globalThis.window, document: globalThis.document, getComputedStyle: globalThis.getComputedStyle};
+  const base = {overflowX: 'visible', position: 'static', transform: 'none', translate: 'none', display: 'block', visibility: 'visible', opacity: '1'};
+  Object.assign(globalThis, {
+    window: {innerWidth: 375},
+    document: {documentElement: root, body},
+    getComputedStyle: (el: FakeElement) => ({...base, ...el.style}),
+  });
+  try {
+    return renderProbe({overflow: true}).overflow;
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+}
 
 type Raw = Record<string, unknown>;
 
@@ -49,11 +119,19 @@ test('37px em 1440 é média, ainda com medida', () => {
 });
 
 test('overflow escondido no body dá média sem medida: conteúdo cortado', () => {
-  const [hit] = only(findings([cell('/a', 375, {overflow: {px: 0, clip: true, offenders: [{sel: 'div.x', right: 520}]}})]), DESIGN_RENDER_RULES.overflow);
+  const [hit] = only(findings([cell('/a', 375, {overflow: {px: 145, clip: true, offenders: [{sel: 'div.x', right: 520}]}})]), DESIGN_RENDER_RULES.overflow);
   assert.equal(hit?.severity, 'media');
   assert.equal(hit?.measure, undefined);
-  assert.match(hit?.snippet ?? '', /conteúdo cortado na lateral/);
+  assert.match(hit?.snippet ?? '', /conteúdo cortado na lateral.*div\.x/);
   assert.deepEqual(only(findings([cell('/a', 375, {overflow: {px: 0, clip: true, offenders: []}})]), DESIGN_RENDER_RULES.overflow), []);
+});
+
+test('com overflow escondido, elemento fora da tela sem sobra não gera achado', () => {
+  const drawer = {sel: 'nav.gaveta', right: 695};
+  assert.deepEqual(only(findings([cell('/a', 375, {overflow: {px: 0, clip: true, offenders: [drawer]}})]), DESIGN_RENDER_RULES.overflow), []);
+  assert.deepEqual(only(findings([cell('/a', 375, {overflow: {px: 1, clip: true, offenders: [drawer]}})]), DESIGN_RENDER_RULES.overflow), []);
+  // Sobra sem elemento listado: a sonda tirou gaveta e item fixo, então não há o que mostrar.
+  assert.deepEqual(only(findings([cell('/a', 375, {overflow: {px: 320, clip: true, offenders: []}})]), DESIGN_RENDER_RULES.overflow), []);
 });
 
 test('fica o pior valor entre temas, estados e larguras; um achado por rota', () => {
@@ -220,4 +298,35 @@ test('texto da página perde controle e marca de direção antes do trecho', () 
   assert.ok(hit);
   assert.doesNotMatch(hit.snippet, /[\u0000-\u001f‮]/);
   assert.match(hit.snippet, /p q: "a \{\{x\}\} b"/);
+});
+
+test('sonda: tela correta não lista nada e não sobra nada', () => {
+  assert.deepEqual(probeOverflow([fake('main', {}, 375, [fake('p', {}, 343)])]), {px: 0, clip: false, offenders: []});
+});
+
+test('sonda: faixa larga entra; gaveta fixa e menu deslocado de lado não', () => {
+  const read = probeOverflow([
+    fake('div', {}, 520, [], 'largo'),
+    fake('nav', {position: 'fixed'}, 695, [], 'gaveta'),
+    fake('aside', {transform: 'matrix(1, 0, 0, 1, 320, 0)'}, 695, [fake('a', {}, 690)], 'menu'),
+    fake('div', {translate: '100%'}, 750, [], 'aviso'),
+    fake('div', {transform: 'matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 280, 0, 0, 1)'}, 655, [], 'painel'),
+    fake('div', {overflowX: 'auto'}, 375, [fake('table', {}, 900)], 'rolagem'),
+  ], {}, {}, {root: 520, body: 520});
+  assert.deepEqual(read?.offenders, [{sel: 'div.largo', right: 520}]);
+  assert.equal(read?.px, 145);
+});
+
+test('sonda: com html e body escondidos, a sobra vem do body', () => {
+  const read = probeOverflow([fake('div', {}, 520, [], 'largo')], {overflowX: 'hidden'}, {overflowX: 'hidden'}, {root: 375, body: 520});
+  assert.equal(read?.clip, true);
+  assert.equal(read?.px, 145);
+  const [hit] = only(findings([cell('/a', 375, {overflow: read})]), DESIGN_RENDER_RULES.overflow);
+  assert.match(hit?.snippet ?? '', /conteúdo cortado na lateral/);
+});
+
+test('sonda: com body escondido, gaveta fixa fora da tela não gera achado', () => {
+  const read = probeOverflow([fake('nav', {position: 'fixed'}, 695, [], 'gaveta')], {}, {overflowX: 'hidden'});
+  assert.deepEqual(read, {px: 0, clip: true, offenders: []});
+  assert.deepEqual(findings([cell('/a', 375, {overflow: read})]), []);
 });

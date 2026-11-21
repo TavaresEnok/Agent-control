@@ -227,6 +227,17 @@ export function renderProbe(options) {
   const all = Array.from(body.querySelectorAll('*')).slice(0, 6000);
   const clips = (value) => value === 'hidden' || value === 'clip';
   const scrolls = (value) => value === 'auto' || value === 'scroll' || clips(value);
+  // Fixo ou deslocado de lado de propósito: menu fora da tela, gaveta, aviso. Não conta como transbordo.
+  const parked = (style) => {
+    if (style.position === 'fixed') return true;
+    const shift = String(style.translate || 'none');
+    if (shift !== 'none' && Math.abs(Number.parseFloat(shift)) >= 1) return true;
+    const matrix = /^matrix(3d)?\((.*)\)$/.exec(String(style.transform || 'none'));
+    if (!matrix) return false;
+    const values = matrix[2].split(',').map(Number);
+    const x = matrix[1] ? values[12] : values[4];
+    return Number.isFinite(x) && Math.abs(x) >= 1;
+  };
   if (options.overflow) {
     const clip = clips(getComputedStyle(root).overflowX) || clips(getComputedStyle(body).overflowX);
     const offenders = [];
@@ -236,9 +247,11 @@ export function renderProbe(options) {
       if (listed.some(item => item.contains(el))) continue;
       const rect = el.getBoundingClientRect();
       if (rect.width < 1 || rect.height < 1 || rect.right <= width + 1) continue;
+      if (parked(getComputedStyle(el))) continue;
       let contained = false;
       for (let node = el.parentElement; node && node !== body && node !== root; node = node.parentElement) {
-        if (scrolls(getComputedStyle(node).overflowX)) {
+        const style = getComputedStyle(node);
+        if (scrolls(style.overflowX) || parked(style)) {
           contained = true;
           break;
         }
@@ -247,7 +260,9 @@ export function renderProbe(options) {
       listed.push(el);
       offenders.push({sel: selectorOf(el), right: Math.round(rect.right)});
     }
-    out.overflow = {px: Math.max(0, Math.round(root.scrollWidth - root.clientWidth)), clip, offenders};
+    // Com html e body escondidos, o body vira a caixa de rolagem e guarda a sobra.
+    const scrollWidth = clip ? Math.max(root.scrollWidth, body.scrollWidth) : root.scrollWidth;
+    out.overflow = {px: Math.max(0, Math.round(scrollWidth - root.clientWidth)), clip, offenders};
   }
   if (options.clipped) {
     const clipped = [];

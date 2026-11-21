@@ -174,13 +174,15 @@ function offenderText(offenders: readonly {sel: string; right: number}[]): strin
 /**
  * Até 375px a rolagem lateral é alta e leva a medida. Em 768 e 1440 é média.
  * Com overflow-x escondido no html ou no body, a medida não vale: é média, conteúdo cortado.
+ * Nesse caso o achado pede as duas coisas: 2px ou mais sobrando e um elemento que passa da tela.
  */
 function overflowFinding(cells: readonly DesignRenderCell[]): DesignRawFinding[] {
   const ranked = cells.flatMap(cell => {
     const overflow = cell.overflow;
     if (!overflow) return [];
     if (overflow.clip) {
-      if (overflow.px < 2 && overflow.offenders.length === 0) return [];
+      // Só a lista de elementos não basta: menu fora da tela é comum. Precisa sobrar conteúdo de fato.
+      if (overflow.px < 2 || overflow.offenders.length === 0) return [];
       const reach = Math.max(overflow.px, ...overflow.offenders.map(item => item.right - cell.viewport));
       return [{cell, overflow, rank: 1, px: reach}];
     }
