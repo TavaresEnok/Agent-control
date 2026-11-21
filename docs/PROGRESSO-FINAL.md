@@ -1978,3 +1978,19 @@ FIM
   - **Exame de prova do módulo 1:** fez 49 chamadas do examinador pelo caminho novo e parou com `VERIFY_EXAM_TIMEOUT`. A causa foi o limite de 5 horas da conta Claude do exame (106%, bloqueado, renovação por volta de 20:30 UTC), não as mudanças: o job ficou esperando a cota além do prazo por chamada.
   - **Sobras antigas, anteriores a esta rodada:** 19 jobs `specialist` em `uncertain` de 19 e 20/11 e a trava `verificacoes/88a255f9…/andamento/.running` de 20/11 05:56, sem processo nem contêiner.
 
+- 21/11/2026 19:16 UTC — **Rodada 2 (manutenção e prova de economia) aplicada na instalação viva** (supervisor Claude; 5 frentes em worktrees, cada uma com revisão independente por modelo Claude distinto, Claude Sonnet 5.5 médio, só leitura; junção `rodada2/integra` até `c21d9eb9`).
+  - **Módulos grandes:**
+    - `src/verification-modules.ts`: de 3.600 linhas para 9 arquivos, o maior com 690 linhas; o arquivo original ficou como fachada.
+    - `src/native-execution-supervisor.ts`: de 2.131 linhas para 7 arquivos, o maior com 517 linhas.
+    - As revisões confirmaram o comportamento idêntico: mesmas linhas e mesmos membros, sem sobrescrita nem ciclo de import.
+  - **catch que engoliam erro:**
+    - cerca de 130 justificados no próprio bloco;
+    - cerca de 40 passaram a registrar `{"event","code"}` por `src/failure-log.ts`, entre eles `planTasksByRun`, a decisão do gerente, a cota esgotada não gravada e o escopo da revisão;
+    - `tests/swallowed-catch.test.ts` barra catch novo sem justificativa, inclusive `.catch(e=>null|false|[]|{})`.
+  - **Código morto e documentação:** removido `src/verify-intrusion.ts`; README, ESTADO e STATUS conferidos contra o código.
+  - **Prova de economia (B1):** `personal:economia` (`src/economy-trial.ts`), com o caso como unidade, mínimo de 10 casos, bootstrap determinístico e McNemar exato. O T5 deu "inconclusivo".
+  - **Teste antigo corrigido:** `native-terminal-retirement`.
+  - **Suíte completa:** 328 arquivos ok e nenhuma falha. `verification-modules-cleanup` falhou uma vez por tempo sob carga e passou ao rodar de novo.
+  - **Antes:** backup `20261121-191621`, conferido. As imagens não precisaram ser reconstruídas: no código dos workers só mudaram comentários.
+  - **Reavaliação independente** pela régua da análise dos concorrentes (Claude Sonnet 5.5, sem ver as notas anteriores): **6,5/10**. Antes eram 4,9; o maior concorrente, BMAD, tem 5,9.
+
