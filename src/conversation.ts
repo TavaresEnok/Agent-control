@@ -306,7 +306,6 @@ export class ConversationEndpoint {
    });
    await this.say('stop-'+row.id,'Parada solicitada.');
   }
-  /** One corrective proposal per failed delivery, through the same encrypted conversation path. */
   /** One automatic replan per conversation, remembered in the ledger so a restart does not ask again. */
   private async replanAlreadyRequested(){
    return Boolean((await this.ledger.pool.query(`SELECT 1 FROM ac_intents WHERE context_id=$1 AND command->'payload'->>'localId' LIKE 'replan-%' LIMIT 1`,[this.options.authority.contextId])).rowCount);
