@@ -275,7 +275,7 @@ Só as ideias, em poucas linhas nossas:
 
 ## 11. Integração, suíte e aplicação
 
-- [ ] 11.1 Suíte completa (`npm test`) no worktree, comparada com a linha de base da frente 0.
+- [x] 11.1 (21/11, `88f7d301` mais a reclassificação: 314 arquivos ok, 0 vazios; as únicas falhas são as 9 da linha de base; 10 arquivos pulados com o motivo, entre eles 8 que antes contavam como ok sem rodar nenhum teste) Suíte completa (`npm test`) no worktree, comparada com a linha de base da frente 0.
 - [x] 11.2 (frentes 1 a 7, feita em 21/11 sobre `709ee426..e6f870af`: revisão independente por modelo Claude distinto, Claude Sonnet 5.5, esforço médio, só leitura; não equivale a revisão humana nem de outro provedor) Revisão independente: um subagente Claude Sonnet 5.5, esforço médio, só leitura, recebe o diff de cada frente e este plano, sem a conclusão do autor (AGENTS.md, "Revisão independente com Claude"). Registrar o modelo e a versão revisada.
 - [x] 11.3 (`e58d1faa`: corrigidos os 2 altos, o recibo do QA rebaixado e o export-ignore no git archive, e os médios e baixos confirmados. **Ficaram registrados, sem correção:**
   - o resumo de dois executores seguidos (`a && b`) conta só o último;

@@ -127,12 +127,10 @@
   "module-performance-history.test.ts",
   "module-prontidao.test.ts",
   "module-qa-banco-local.test.ts",
-  "module-qa-browser.test.ts",
   "module-qa-carga-local.test.ts",
   "module-qa-contracts-lab.test.ts",
   "module-qa-contracts.test.ts",
   "module-qa-js-properties-lab.test.ts",
-  "module-qa-js-properties.test.ts",
   "module-qa-lab.test.ts",
   "module-qa-languages-lab.test.ts",
   "module-qa-linguagens-r2.test.ts",
@@ -338,8 +336,12 @@
   "worktree-lease.test.ts"
  ],
  "requer": {
+  "broker-recovery.test.ts": "env:AC_SANDBOX_DATABASE_URL",
+  "broker-terminal-recovery.test.ts": "env:AC_SANDBOX_DATABASE_URL",
+  "design-lab-image.test.ts": "env:AC_DESIGN_LAB",
   "happier.test.ts": "env:AC_TEST_HAPPIER_URL",
   "import.test.ts": "env:AC_TEST_HAPPIER_URL",
+  "managed-retirement-restart.test.ts": "env:AC_MANAGED_RETIREMENT_RESTART",
   "module-banco-exame.lab.test.ts": "env:AC_MODULE_LAB",
   "module-qa-contracts-lab.test.ts": "env:AC_MODULE_LAB",
   "module-qa-languages-lab.test.ts": "env:AC_MODULE_LAB",
@@ -347,6 +349,8 @@
   "r3-chat-config.test.ts": "env:AC_TEST_HAPPIER_URL",
   "r3-conversation-flow.test.ts": "env:AC_TEST_HAPPIER_URL",
   "r3-secret-surfaces.test.ts": "happier-build",
+  "sandbox.test.ts": "env:AC_SANDBOX_DATABASE_URL",
+  "ssh-restart.test.ts": "env:AC_SSH_RESTART_VERIFY",
   "verification-modules-cleanup.lab.test.ts": "env:AC_MODULE_CLEANUP_LAB"
  },
  "laboratorio": {
@@ -372,6 +376,8 @@
   "module-desempenho-lab.test.ts": "autoignorado sem o ambiente de laboratório: AC_MODULE_LAB=1 (imagem do módulo em Docker); rodou aqui e todos os subtestes foram pulados",
   "module-documentacao.test.ts": "23 subtestes passam e 24 são pulados, mas 2 falham sem a imagem do módulo (achados do TypeDoc); PENDENTE DE VALIDAÇÃO no laboratório",
   "module-prontidao-lab.test.ts": "autoignorado sem o ambiente de laboratório: AC_MODULE_LAB=1 (imagem do módulo em Docker); rodou aqui e todos os subtestes foram pulados",
+  "module-qa-browser.test.ts": "precisa dos pacotes fixados em deploy/modules/qa (npm ci nessa pasta); sem eles todos os testes pulam e o arquivo não prova nada",
+  "module-qa-js-properties.test.ts": "precisa dos pacotes fixados em deploy/modules/qa (npm ci nessa pasta); sem eles todos os testes pulam e o arquivo não prova nada",
   "native-artifact-pipeline.test.ts": "exige o banco do laboratório com nome /ac_implementation_test (falha ISOLATED_DATABASE_REQUIRED fora dele); PENDENTE DE VALIDAÇÃO: candidato a executar, rodar no laboratório antes de promover",
   "native-corrections.test.ts": "exige o banco do laboratório com nome /ac_implementation_test (falha ISOLATED_DATABASE_REQUIRED fora dele); PENDENTE DE VALIDAÇÃO: candidato a executar, rodar no laboratório antes de promover",
   "native-credential-isolation-physical.test.ts": "fixture física que exige o executor isolado do laboratório: ISOLATED_CREDENTIAL_TEST_OPT_IN_REQUIRED (isolamento físico de credenciais)",
