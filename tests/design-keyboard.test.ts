@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {FOCUS_COVERED_RULE, focusFindingsFromCss, keyboardFindings, parseFocusWalks} from '../src/design-keyboard.ts';
+import {FOCUS_COVERED_RULE, focusFindingsFromCss, keyboardFindings, parseFocusWalks, shadowDrawsRing} from '../src/design-keyboard.ts';
 import {DESIGN_PLANTED_RULES} from '../src/design-types.ts';
 
 const invisible = 'button:focus { outline: none; }\nbutton:focus-visible { outline: none; }\n';
@@ -37,6 +37,33 @@ const step = {selector: 'a.menu', index: 0, outlineWidth: '0px', outlineStyle: '
 test('anel de foco feito com box-shadow não gera achado', () => {
   const findings = keyboardFindings('/a 1440 claro padrao', [{...step, boxShadow: 'rgb(11, 87, 208) 0px 0px 0px 3px'}]);
   assert.deepEqual(findings, []);
+});
+
+test('sombra de repouso de cartão não conta como anel de foco', () => {
+  for (const boxShadow of [
+    'rgba(0, 0, 0, 0.2) 0px 1px 2px 0px',
+    'rgba(0, 0, 0, 0.1) 0px 4px 6px -1px, rgba(0, 0, 0, 0.1) 0px 2px 4px -2px',
+    'rgba(0, 0, 0, 0.05) 0px 0px 0px 1px',
+  ]) {
+    const findings = keyboardFindings('/a 1440 claro padrao', [{...step, boxShadow}]);
+    assert.equal(findings.some(item => item.rule === DESIGN_PLANTED_RULES.invisibleFocus), true, boxShadow);
+  }
+});
+
+test('anéis comuns de foco contam: Bootstrap, Tailwind, inset e brilho', () => {
+  for (const value of [
+    'rgba(13, 110, 253, 0.25) 0px 0px 0px 4px',
+    'rgb(255, 255, 255) 0px 0px 0px 2px, rgb(37, 99, 235) 0px 0px 0px 4px, rgba(0, 0, 0, 0) 0px 0px 0px 0px',
+    'rgb(29, 78, 216) 0px 0px 0px 2px inset',
+    'rgb(29, 78, 216) 0px 0px 6px 0px',
+    'color(srgb 0.1 0.3 0.8 / 0.6) 0px 0px 0px 3px',
+  ]) {
+    assert.equal(shadowDrawsRing(value), true, value);
+  }
+  assert.equal(shadowDrawsRing('rgba(0, 0, 0, 0) 0px 0px 0px 3px'), false);
+  assert.equal(shadowDrawsRing('transparent 0px 0px 0px 3px'), false);
+  assert.equal(shadowDrawsRing('none'), false);
+  assert.equal(shadowDrawsRing(undefined), false);
 });
 
 test('outline none sem sombra gera foco invisível, que fica informativo', () => {

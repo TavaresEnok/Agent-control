@@ -118,14 +118,60 @@ export function focusFindingsFromCss(file: string, css: string): DesignRawFindin
   })];
 }
 
+/** Divide a lista de sombras nas vírgulas de fora dos parênteses. */
+function shadowLayers(value: string): string[] {
+  const layers: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const char = value[i];
+    if (char === '(') depth += 1;
+    else if (char === ')') depth = Math.max(0, depth - 1);
+    else if (char === ',' && depth === 0) {
+      layers.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  layers.push(value.slice(start));
+  return layers.map(layer => layer.trim()).filter(Boolean);
+}
+
+function colorAlpha(color: string): number {
+  if (/^transparent$/i.test(color)) return 0;
+  const args = /\(([^()]*)\)/.exec(color)?.[1];
+  if (args === undefined) return 1;
+  const slash = args.split('/');
+  const raw = slash.length > 1 ? slash[1]?.trim() : /^(?:rgba|hsla)$/i.test(color.split('(')[0] ?? '') ? args.split(',')[3]?.trim() : undefined;
+  if (raw === undefined || raw === '') return 1;
+  const value = raw.endsWith('%') ? Number.parseFloat(raw) / 100 : Number.parseFloat(raw);
+  return Number.isFinite(value) ? value : 1;
+}
+
+/**
+ * Sombra que desenha anel de foco: sem deslocamento, com espalhamento ou desfoque, e cor de pelo menos 20%.
+ * Sombra de repouso de cartão tem deslocamento vertical e não conta. Anel quase transparente também não.
+ * Limite: um anel igual ao de repouso ainda conta, porque o passo não guarda a sombra sem foco.
+ * Sombra que não dá para ler conta como anel, para não acusar sem medida.
+ */
+export function shadowDrawsRing(value: string | undefined): boolean {
+  if (!value || value === 'none') return false;
+  for (const layer of shadowLayers(value)) {
+    const color = /(?:[a-z-]+\([^()]*\)|#[0-9a-f]{3,8}\b|\btransparent\b)/i.exec(layer)?.[0] ?? '';
+    const lengths = layer.replace(color, ' ').split(/\s+/).filter(token => /^-?\d*\.?\d+(?:px)?$/.test(token)).map(Number.parseFloat);
+    if (lengths.length < 2) return true;
+    const [x = 0, y = 0, blur = 0, spread = 0] = lengths;
+    if (x === 0 && y === 0 && (spread > 0 || blur > 0) && colorAlpha(color) >= 0.2) return true;
+  }
+  return false;
+}
+
 export function keyboardFindings(file: string, steps: readonly FocusStep[]): DesignRawFinding[] {
   const findings: DesignRawFinding[] = [];
   let previousY: number | null = null;
   for (const step of steps) {
-    // Sem contorno, mas com anel de sombra, o foco aparece.
+    // Sem contorno, mas com anel de sombra, o foco aparece. Sombra de repouso não é anel.
     const noOutline = step.outlineStyle === 'none' || step.outlineWidth === '0px';
-    const noShadow = !step.boxShadow || step.boxShadow === 'none';
-    const hidden = !step.visible || (noOutline && noShadow);
+    const hidden = !step.visible || (noOutline && !shadowDrawsRing(step.boxShadow));
     if (hidden) {
       findings.push(designRawFinding({
         tool: 'teclado',
