@@ -263,3 +263,20 @@ test('banco real: a migração aceita o registro do gerente (estimado e informad
     await rm(dir, {recursive: true, force: true});
   }
 });
+
+test('the Claude manager JSON gives the answer, the real usage with both cache counters and the answering model', async () => {
+ const {parseClaudeJsonResult, claudeAnsweredWith, managerUsage} = await import('../src/manager-discipline.ts');
+ const doc = (over: Record<string, unknown> = {}) => JSON.stringify({type: 'result', subtype: 'success', is_error: false, result: '{"kind":"answer","answer":"oi"}',
+  usage: {input_tokens: 120, output_tokens: 40, cache_read_input_tokens: 9000, cache_creation_input_tokens: 300}, modelUsage: {'claude-opus-5-5': {}, 'claude-haiku-5-5': {}}, ...over});
+ const parsed = parseClaudeJsonResult(doc())!;
+ assert.equal(parsed.text, '{"kind":"answer","answer":"oi"}');
+ assert.deepEqual(parsed.usage, {input: 120, output: 40, cacheRead: 9000, cacheWrite: 300});
+ assert.equal(claudeAnsweredWith(parsed, 'claude-opus-5-5'), true);
+ assert.equal(claudeAnsweredWith(parsed, 'claude-sonnet-5-5'), false);
+ assert.deepEqual(managerUsage('claude', 'prompt', doc(), ''), {input: 9420, output: 40, total: 9460, estimated: false, cacheRead: 9000, cacheWrite: 300});
+ // The offline "Not logged in" answer is a success subtype with is_error true: it is an error.
+ assert.equal(parseClaudeJsonResult(doc({is_error: true, result: 'Not logged in · Please run /login'}))!.isError, true);
+ assert.equal(parseClaudeJsonResult('plain text answer'), null);
+ // Without a JSON document the old estimate still applies, marked as estimated.
+ assert.equal(managerUsage('claude', 'x'.repeat(400), 'plain', '').estimated, true);
+});

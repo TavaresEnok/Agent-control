@@ -132,9 +132,36 @@ export function parseReportedTokens(provider:string,stdout:string,stderr:string)
  return Number.isSafeInteger(value)&&value>=0?value:null;
 }
 
-export type ManagerUsage={input:number|null;output:number|null;total:number|null;estimated:boolean};
+export type ManagerUsage={input:number|null;output:number|null;total:number|null;estimated:boolean;cacheRead?:number|null;cacheWrite?:number|null};
+
+/** `claude -p --output-format json`: the answer, the reported usage and the models that answered. Null when stdout is not that document. */
+export type ClaudeJsonResult={text:string;isError:boolean;usage:{input:number|null;output:number|null;cacheRead:number|null;cacheWrite:number|null}|null;models:string[]};
+export function parseClaudeJsonResult(stdout:string):ClaudeJsonResult|null{
+ let doc:unknown;
+ try{doc=JSON.parse(stdout.trim());}catch{return null;}
+ if(!doc||typeof doc!=='object'||Array.isArray(doc)||(doc as {type?:unknown}).type!=='result')return null;
+ const value=doc as Record<string,any>;
+ const count=(n:unknown)=>typeof n==='number'&&Number.isSafeInteger(n)&&n>=0?n:null;
+ const usage=value.usage&&typeof value.usage==='object'?{input:count(value.usage.input_tokens),output:count(value.usage.output_tokens),
+  cacheRead:count(value.usage.cache_read_input_tokens),cacheWrite:count(value.usage.cache_creation_input_tokens)}:null;
+ const models=value.modelUsage&&typeof value.modelUsage==='object'?Object.keys(value.modelUsage):[];
+ return {text:typeof value.result==='string'?value.result:'',isError:value.is_error===true||value.subtype!=='success',usage,models};
+}
+
+/** The requested model answered when one reported model is it (the CLI may add a small helper model beside it). */
+export function claudeAnsweredWith(result:ClaudeJsonResult,model:string){
+ return result.models.length===0||result.models.some(name=>name===model||name.startsWith(model+'-')||name.startsWith(model+'['));
+}
 /** Reported total when the CLI gave one; otherwise a size-based estimate, marked as estimated. */
 export function managerUsage(provider:string,prompt:string,stdout:string,stderr:string):ManagerUsage{
+ if(provider==='claude'){
+  const parsed=parseClaudeJsonResult(stdout)?.usage;
+  // Input, output and both cache counters as the provider reported them. Cache tokens are input too, billed apart.
+  if(parsed&&parsed.input!==null&&parsed.output!==null){
+   const cache=(parsed.cacheRead??0)+(parsed.cacheWrite??0);
+   return {input:parsed.input+cache,output:parsed.output,total:parsed.input+cache+parsed.output,estimated:false,cacheRead:parsed.cacheRead,cacheWrite:parsed.cacheWrite};
+  }
+ }
  const reported=parseReportedTokens(provider,stdout,stderr);
  if(reported!==null)return {input:null,output:null,total:reported,estimated:false};
  return {input:estimateTokens(prompt),output:estimateTokens(stdout),total:null,estimated:true};

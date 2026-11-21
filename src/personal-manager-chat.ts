@@ -5,7 +5,7 @@ import type {Ledger} from './ledger.ts';
 import {codexPersonalCommand} from './codex-personal.ts';
 import {claudeLimitFromText,codexLimitFromText,isProviderLimit,noteProviderExhaustion} from './quota-exhaustion.ts';
 import {cliEffort,Effort} from './effort.ts';
-import {compactConversation,managerUsage,type HistoryMessage} from './manager-discipline.ts';
+import {claudeAnsweredWith,compactConversation,managerUsage,parseClaudeJsonResult,type HistoryMessage} from './manager-discipline.ts';
 
 export type ManagerDecideOptions={
  /** Prior panel messages, oldest first, without the message being decided. Used only when `compact` is on. */
@@ -52,7 +52,7 @@ export function parseManagerDecision(stdout:string):ManagerDecision{
 /** Argv for the manager CLI. Does not spawn. Claude keeps xhigh and max; Grok and Codex cap at high. */
 export function managerChatCommand(provider:string,model:string,effort:string,prompt:string){
  const mapped=cliEffort(provider,Effort.parse(effort));
- if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,...hardenedClaudeArgs('evaluator'),'--model',model,'--effort',mapped,'--output-format','text']};
+ if(provider==='claude')return {bin:'/usr/local/bin/claude',env:['CLAUDE_CONFIG_DIR=/account'],args:['-p',prompt,...hardenedClaudeArgs('evaluator'),'--model',model,'--effort',mapped,'--output-format','json']};
  if(provider==='grok')return {bin:'/usr/local/bin/grok',env:['HOME=/account'],args:['-p',prompt,'--model',model,'--reasoning-effort',mapped,'--output-format','plain','--cwd','/tmp','--no-plan','--always-approve']};
  return codexPersonalCommand({role:'manager',model,effort,prompt});
 }
@@ -100,8 +100,10 @@ export class PersonalManagerChat{
  /** Records one attempt. Never throws: a failed write is counted, reported and retried once without numbers. */
  private async measure(profile:ManagerProfile,prompt:string,result:{stdout:string;stderr:string},outcome:ManagerOutcome,projectId?:string){
   this.status.attempts+=1;
-  const usage=outcome==='sucesso'?managerUsage(profile.provider,prompt,result.stdout,result.stderr):{input:null,output:null,total:null,estimated:false};
-  const measurement=outcome!=='sucesso'?'desconhecido':usage.estimated?'estimado':'informado';
+  // A failed attempt keeps the numbers the provider reported; only a success may fall back to the size estimate.
+  const measured=managerUsage(profile.provider,prompt,result.stdout,result.stderr);
+  const usage=outcome==='sucesso'||!measured.estimated?measured:{input:null,output:null,total:null,estimated:false};
+  const measurement=usage.total===null&&usage.input===null?'desconhecido':usage.estimated?'estimado':'informado';
   const insert=`INSERT INTO ac_manager_chat_usage(project_id,account_id,provider,model,effort,role,input_tokens,output_tokens,total_tokens,estimated,prompt_chars,outcome,measurement,collection_error)
    VALUES($1,$2,$3,$4,$5,'manager',$6,$7,$8,$9,$10,$11,$12,$13)`;
   const base=[profile.accountId,profile.provider,profile.model,profile.effort];
@@ -121,13 +123,16 @@ export class PersonalManagerChat{
   const prompt=this.buildPrompt(message,repositoryContext,options);
   for(const profile of await this.profiles()){
    const result=await this.run(profile,prompt);
-   const ok=result.code===0&&Boolean(result.stdout.trim());
+   // Claude answers in JSON: the text, the real usage and the model that answered. Another model is not this profile.
+   const parsed=profile.provider==='claude'?parseClaudeJsonResult(result.stdout):null;
+   const answer=parsed?parsed.text:result.stdout;
+   const ok=result.code===0&&Boolean(answer.trim())&&!(parsed&&(parsed.isError||!claudeAnsweredWith(parsed,profile.model)));
    const tails=[result.stdout.slice(-4000),result.stderr.slice(-4000)];
    const limit=ok?null:profile.provider==='claude'?claudeLimitFromText(tails):profile.provider==='codex'?codexLimitFromText(tails):null;
    const limited=!ok&&(limit!==null||isProviderLimit(tails[1])||isProviderLimit(tails[0])||/usage limit|rate limit|quota/i.test(tails[1]));
    if(options.measure)await this.measure(profile,prompt,result,ok?'sucesso':limited?'limite':'falha',options.projectId);
    if(limit){await noteProviderExhaustion(this.ledger,profile.accountId,limit.usageWindows).catch(()=>{});continue;}
-   if(ok)return parseManagerDecision(result.stdout);
+   if(ok)return parseManagerDecision(answer);
    if(limited)await noteProviderExhaustion(this.ledger,profile.accountId).catch(()=>{});
   }
   return null;
