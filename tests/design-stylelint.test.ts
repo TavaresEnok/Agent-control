@@ -87,3 +87,35 @@ test('json vazio ou sem warnings não gera achado', () => {
   assert.equal(fromCli[0]?.severity, 'baixa');
   assert.equal(fromCli[0]?.line, 1);
 });
+
+test('stylelintConfig recusa transition: all como aviso', () => {
+  const rules = stylelintConfig()['rules'] as Record<string, unknown>;
+  const entry = rules['declaration-property-value-disallowed-list'];
+  assert.ok(Array.isArray(entry));
+  const [lists, options] = entry as [Record<string, string[]>, Record<string, unknown>];
+  assert.deepEqual(lists.transition, ['/\\ball\\b/']);
+  assert.deepEqual(lists['transition-property'], ['/^all$/']);
+  assert.equal(options.severity, 'warning');
+  assert.equal(Object.keys(lists).includes('width'), false);
+  const pattern = new RegExp('\\ball\\b');
+  assert.equal(pattern.test('all 0.2s ease'), true);
+  assert.equal(pattern.test('opacity 0.2s, transform 0.2s'), false);
+  assert.equal(pattern.test('fall 1s'), false);
+  assert.doesNotThrow(() => JSON.parse(JSON.stringify(stylelintConfig())));
+});
+
+test('aviso de transition: all vira baixa com a frase de correção', () => {
+  const findings = stylelintToFindings('css/app.css', {
+    results: [{
+      warnings: [
+        {line: 5, rule: 'declaration-property-value-disallowed-list', severity: 'warning', text: 'Unexpected value "all 0.2s" for property "transition" (declaration-property-value-disallowed-list)'},
+        {line: 9, rule: 'declaration-property-value-disallowed-list', severity: 'warning', text: 'Unexpected value "red" for property "color" (declaration-property-value-disallowed-list)'},
+      ],
+    }],
+  });
+  assert.equal(findings.length, 2);
+  assert.equal(findings[0]?.snippet, 'transition: all anima o layout; liste só opacity e transform');
+  assert.equal(findings[0]?.severity, 'baixa');
+  assert.equal(findings[0]?.line, 5);
+  assert.match(findings[1]?.snippet ?? '', /color/);
+});
