@@ -7,7 +7,7 @@ import {mapModuleSnapshot} from '../src/module-exam-map.ts';
 import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
 import {test} from 'node:test';
 import {digest, Refusal} from '../src/contracts.ts';
-import type {CollectorCriterion, ModuleExamCollectorContext} from '../src/module-exam-collector-proof.ts';
+import {isMeasuredModuleRule, isPublicModuleRule, type CollectorCriterion, type ModuleExamCollectorContext} from '../src/module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleReviewProofReason, moduleReviewTask, readModuleReviewVerdict, type ModuleReviewObservation} from '../src/module-exam-proof.ts';
 import {examineFunctionalModule, moduleCollectorCandidate, moduleExamReadRequestBinding, moduleExamReviewEvidence, type ModuleExamCoverage, type ModuleExamSeat} from '../src/module-exam.ts';
 import {requestModuleCorrection, runVerificationModule, validateModuleCollectorObject, type ModuleRawFinding, type ModuleToolCoverage} from '../src/verification-modules.ts';
@@ -538,4 +538,35 @@ test('a publicação confirma uma medição funcional de cada módulo usando o s
     }
     assert.equal(tested.size, 8);
   });
+});
+
+test('regras medidas pela ferramenta ficam marcadas e as demais seguem para revisão', () => {
+  assert.equal(isMeasuredModuleRule('documentacao', 'typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), true);
+  assert.equal(isMeasuredModuleRule('conformidade', 'presidio-analyzer', 'PII_PERSON'), true);
+  assert.equal(isMeasuredModuleRule('arquitetura', 'ast-complexity', 'COMPLEXITY-CYCLOMATIC-HIGH'), true);
+  assert.equal(isMeasuredModuleRule('qa', 'node-test-v8', 'QA-COBERTURA-FUNCAO-SEM-TESTE'), true);
+  assert.equal(isMeasuredModuleRule('dependencias', 'npm-check-updates', 'NCU-OUTDATED-MAJOR'), true);
+  // Fatos que dependem de juízo continuam revisados.
+  assert.equal(isMeasuredModuleRule('conformidade', 'presidio-analyzer', 'PII_BR_CPF'), false);
+  assert.equal(isMeasuredModuleRule('arquitetura', 'jscpd', 'JSCPD-DUPLICATION'), false);
+  assert.equal(isMeasuredModuleRule('arquitetura', 'dependency-cruiser', 'DEPCRUISE-NO-CIRCULAR'), false);
+  assert.equal(isMeasuredModuleRule('qa', 'node-test-v8', 'QA-TESTE-FALHOU'), false);
+  assert.equal(isMeasuredModuleRule('banco', 'typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), false);
+  assert.equal(isMeasuredModuleRule('documentacao', 'outra', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), false);
+  assert.equal(isMeasuredModuleRule(undefined, 'typedoc', 'DOC-TYPEDOC-SIMBOLO-SEM-DOC'), false);
+});
+
+test('identificadores longos fixos dos coletores saem legíveis só no par de módulo e ferramenta', () => {
+  const rule = (module: 'documentacao' | 'arquitetura' | 'qa', tool: string, identifier: string) => validateModuleCollectorObject({
+    coverage: [{tool, version: '1', status: 'ok', detail: 'Fixture local.'}],
+    findings: [{tool, rule: identifier, file: 'src/demo.ts', line: 1, severity: 'media', message: 'Fixture local.', evidence: 'Linha 1.'}],
+  }, module).findings[0]!.rule;
+  assert.equal(rule('documentacao', 'typedoc', 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA'), 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA');
+  assert.equal(rule('arquitetura', 'dependency-cruiser', 'DEPCRUISE-LAYER-SERVICES-TO-PRESENTATION'), 'DEPCRUISE-LAYER-SERVICES-TO-PRESENTATION');
+  assert.equal(isPublicModuleRule('prontidao', 'prontidao-audit', 'PRONTIDAO-CABECALHO-SEGURANCA-AUSENTE'), true);
+  for (const altered of [rule('arquitetura', 'typedoc', 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA'),
+    rule('documentacao', 'knip', 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA'),
+    rule('documentacao', 'typedoc', 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA-X')]) {
+    assert.equal(altered, '[removido: alta entropia]');
+  }
 });

@@ -7,6 +7,7 @@ import {dirname, join, resolve} from 'node:path';
 import {test} from 'node:test';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {
+  aggregateUndocumentedSymbols,
   clampLine,
   copyRepoSafely,
   createDefaultMermaidParser,
@@ -258,12 +259,11 @@ test('as ferramentas fixadas encontram os defeitos e aprovam o controle limpo no
 
   const rules = new Set(defectiveResult.findings.map(f => `${f.tool}:${f.rule}:${f.file}`));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-PARAM-DESATUALIZADO:src/billing.ts'));
-  assert.ok(rules.has('typedoc:DOC-TYPEDOC-SIMBOLO-SEM-DOC:src/billing.ts'));
+  // A falta de JSDoc sai agregada por pacote; a amostra guarda a posição de cada símbolo.
   const undocumentedCharge = defectiveResult.findings.find(item => item.tool === 'typedoc'
-    && item.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC' && item.file === 'src/billing.ts');
-  assert.equal(undocumentedCharge?.line, 12);
-  assert.match(undocumentedCharge?.evidence ?? '',
-    /^\[warning\].*undocumentedCharge.* defined in .*\/src\/billing\.ts, does not have any documentation$/);
+    && item.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC' && item.evidence.includes('src/billing.ts:12 '));
+  assert.equal(undocumentedCharge?.severity, 'informativa');
+  assert.match(undocumentedCharge?.evidence ?? '', /src\/billing\.ts:12 \S*undocumentedCharge/);
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-LINK-QUEBRADO:src/api.ts'));
   assert.ok(rules.has('typedoc:DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA:README.md'));
   assert.ok(rules.has('dependency-cruiser:DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE:README.md'));
@@ -1387,10 +1387,9 @@ test('TypeDoc usa a declaração de avisos reais com mapas de declaração inequ
     assert.equal(coverage?.status, 'ok', coverage?.detail);
     assert.match(coverage.detail, /avisos_sem_origem=8$/);
     const findings = result.findings.filter(finding => finding.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC');
-    assert.deepEqual(findings.map(finding => [finding.file, finding.line]).sort(),
-      [['types/confirmed.d.ts', 1], ['types/direct.d.ts', 4]]);
-    assert.match(findings.find(finding => finding.file === 'types/confirmed.d.ts')?.evidence ?? '',
-      /defined in fixture\/original\/confirmed\.ts,/);
+    // Os dois avisos localizados ficam no achado agregado do pacote types.
+    assert.deepEqual(findings.map(finding => [finding.file, finding.line]), [['types/confirmed.d.ts', 1]]);
+    assert.match(findings[0]?.evidence ?? '', /^TypeDoc: 2 sem documentação em types; .*types\/confirmed\.d\.ts:1 .*types\/direct\.d\.ts:4 /);
     const pending = result.coverage.filter(row => row.tool === 'typedoc:aviso');
     assert.equal(pending.length, 8);
     for (const name of ['Empty', 'Nearby', 'Unmapped', 'Wrong', 'Multiple', 'Missing', 'Indexed', 'Hybrid']) {
@@ -2254,8 +2253,10 @@ test('rotas com colchetes, parênteses e Unicode preservam achados e cobertura s
     const raw = await runCollector({repoDir, ...syntheticTools(reflection, diagram, graph)});
     assertValidCollectorContract(raw);
     const validated = await validateWithBase(raw);
-    assert.equal(validated.findings.length, 18);
-    assert.deepEqual(new Set(validated.findings.map(f => f.file)), new Set(routeFiles));
+    // Os símbolos sem JSDoc saem num achado por pacote, e a amostra traz cada caminho.
+    assert.deepEqual(validated.findings.map(f => [f.rule, f.severity, f.file.split('/').slice(0, 2).join('/')]).sort(),
+      [['DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'informativa', 'src/app'], ['DOC-TYPEDOC-SIMBOLO-SEM-DOC', 'informativa', 'src/routes']]);
+    for (const file of routeFiles) assert.ok(validated.findings.some(f => f.evidence.includes(`${file}:1 `)), file);
     assert.equal(validated.coverage.find(row => row.tool === 'documentacao:limites'), undefined);
     assert.equal(validated.coverage.find(row => row.tool === 'documentacao:escopo'), undefined);
     assert.equal(validated.coverage.find(row => row.tool === 'documentacao:privacidade'), undefined);
@@ -2279,8 +2280,8 @@ test('rotas com colchetes, parênteses e Unicode preservam achados e cobertura s
       const realRaw = await runCollector({repoDir});
       assertValidCollectorContract(realRaw);
       const realValidated = await validateWithBase(realRaw);
-      assert.equal(realValidated.findings.length, 18);
-      assert.deepEqual(new Set(realValidated.findings.map(f => f.file)), new Set(routeFiles));
+      assert.equal(realValidated.findings.length, 2);
+      for (const file of routeFiles) assert.ok(realValidated.findings.some(f => f.evidence.includes(`${file}:1 `)), file);
       assert.equal(realValidated.coverage.find(row => row.tool === 'documentacao:limites'), undefined);
       assert.equal(realValidated.coverage.find(row => row.tool === 'documentacao:escopo'), undefined);
       assert.match(realValidated.coverage.find(row => row.tool === 'mermaid')?.detail ?? '', /diagrama_codigo_valido=true; erro_diagrama_gerado=$/);
@@ -2567,4 +2568,56 @@ test('regressão 2: diretório de 40 caracteres seguido de / continua protegido 
   } finally {
     rmSync(tmp, {recursive: true, force: true});
   }
+});
+
+test('símbolos sem JSDoc viram um achado informativo por pacote e o arquivo gerado sai do achado', () => {
+  const undocumented = (file: string, line: number) => ({tool: 'typedoc', rule: 'DOC-TYPEDOC-SIMBOLO-SEM-DOC', file, line,
+    severity: 'media' as const, message: `Símbolo público exportado "fn${line}" em ${file} não possui documentação JSDoc/TSDoc.`,
+    evidence: `TypeDoc reflection kind=64 name=fn${line} (${file}:${line}) sem summary/blockTags`});
+  const findings: ReturnType<typeof undocumented>[] = [];
+  const symbols: {file: string; hasDoc: boolean}[] = [];
+  for (const [pkg, count] of [['web/src', 20], ['api/core', 18], ['lib/util', 12]] as const) {
+    for (let line = 1; line <= count; line += 1) {
+      const file = `${pkg}/m${line % 3}.ts`;
+      findings.push(undocumented(file, line));
+      symbols.push({file, hasDoc: false});
+    }
+    symbols.push({file: `${pkg}/m0.ts`, hasDoc: true});
+  }
+  for (let line = 1; line <= 30; line += 1) findings.push(undocumented('web/src/api/schema.ts', line));
+  const other = {tool: 'typedoc', rule: 'DOC-TYPEDOC-LINK-QUEBRADO', file: 'web/src/m1.ts', line: 3, severity: 'media' as const,
+    message: 'Link quebrado.', evidence: 'aviso'};
+  const sources: Record<string, string> = {'web/src/api/schema.ts': '/**\n * This file was auto-generated by openapi-typescript.\n */\n'};
+  const result = aggregateUndocumentedSymbols([...findings, other], symbols, (file: string) => sources[file] ?? 'export {};\n');
+  const aggregated = result.findings.filter(f => f.rule === 'DOC-TYPEDOC-SIMBOLO-SEM-DOC');
+  assert.deepEqual(aggregated.map(f => [f.file.split('/').slice(0, 2).join('/'), f.severity]),
+    [['api/core', 'informativa'], ['lib/util', 'informativa'], ['web/src', 'informativa']]);
+  assert.match(aggregated[2]!.message, /^20 símbolo\(s\) .* em web\/src \(3 arquivo\(s\); 1 de 21 documentados, 5%\)\.$/);
+  assert.equal(aggregated[2]!.evidence.split(', ').length, 20);
+  assert.ok(!aggregated.some(f => f.evidence.includes('schema.ts')));
+  assert.ok(result.findings.includes(other));
+  assert.deepEqual([...result.generated], [['web/src/api/schema.ts', 30]]);
+});
+
+test('o Markdown de vendor fica fora da cópia e a mesma chamada na linha diverge uma vez', () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), 'doc-vendor-'));
+  try {
+    const srcDir = join(tempRoot, 'repo');
+    mkdirSync(join(srcDir, 'backend', 'vendor', 'github.com', 'river'), {recursive: true});
+    mkdirSync(join(srcDir, 'third_party', 'lib'), {recursive: true});
+    writeFileSync(join(srcDir, 'backend', 'vendor', 'github.com', 'river', 'AGENTS.md'), '`setup(db)`\n');
+    writeFileSync(join(srcDir, 'third_party', 'lib', 'README.md'), '`setup(db)`\n');
+    writeFileSync(join(srcDir, 'README.md'), '# Doc\n');
+    const {copiedFiles, skipped} = copyRepoSafely(srcDir, join(tempRoot, 'copy'));
+    assert.deepEqual(copiedFiles, ['README.md']);
+    assert.ok(skipped.includes('backend/vendor'));
+    assert.ok(skipped.includes('third_party'));
+  } finally {
+    rmSync(tempRoot, {recursive: true, force: true});
+  }
+  const symbols = [{kind: 64, name: 'setup', qualifiedName: 'setup', file: 'load/k6-lab.js', line: 25, hasDoc: true,
+    summaryText: '', blockTags: [], parameters: [{name: 'options', optional: false, hasDoc: false}]}];
+  const findings = crossCheckMarkdownAgainstTypedoc(['README.md'], symbols, () => '`setup(db)` e de novo `setup(db)`\n`setup(db)`\n');
+  assert.deepEqual(findings.map(f => [f.rule, f.line]),
+    [['DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA', 1], ['DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA', 2]]);
 });

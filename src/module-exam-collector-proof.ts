@@ -446,11 +446,59 @@ const rules: Record<VerificationModule, Record<string, CaseBuilder>> = {
   conformidade: {'ort:ORT_STRONG_COPYLEFT_DECLARED': ortLicense},
 };
 
+// Long rule IDs written as literals in the collectors. The entropy filter erased
+// them, so reports could not group or count findings by rule.
+const fixedRuleIds: Partial<Record<VerificationModule, Record<string, readonly string[]>>> = {
+  qa: {'fast-check': ['QA-FASTCHECK-PROPRIEDADE-VIOLADA']},
+  arquitetura: {'dependency-cruiser': ['DEPCRUISE-LAYER-DOMAIN-TO-PRESENTATION', 'DEPCRUISE-LAYER-SERVICES-TO-PRESENTATION']},
+  documentacao: {
+    typedoc: ['DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA'],
+    'dependency-cruiser': ['DOC-DEPCRUISE-DEPENDENCIA-DOCUMENTADA-INEXISTENTE', 'DOC-DEPCRUISE-IMPORT-NAO-RESOLVIDO'],
+  },
+  prontidao: {'prontidao-audit': [
+    'PRONTIDAO-BACKUP-DESTINO-INSEGURO', 'PRONTIDAO-BACKUP-RETENCAO-AUSENTE', 'PRONTIDAO-CABECALHO-HSTS-AUSENTE',
+    'PRONTIDAO-CABECALHO-SEGURANCA-AUSENTE', 'PRONTIDAO-CHAVE-PRIVADA-NO-REPOSITORIO', 'PRONTIDAO-DISCO-SEM-MONITORAMENTO',
+    'PRONTIDAO-HEALTHCHECK-COMPOSE-AUSENTE', 'PRONTIDAO-LIMITE-MEMORIA-AUSENTE', 'PRONTIDAO-PROVA-RESTAURACAO-AUSENTE',
+    'PRONTIDAO-REINICIO-AUTOMATICO-AUSENTE', 'PRONTIDAO-SEGREDO-COMPOSE-INLINE', 'PRONTIDAO-SEGREDO-SYSTEMD-INLINE',
+    'PRONTIDAO-SYSTEMD-MEMORIA-AUSENTE', 'PRONTIDAO-SYSTEMD-REINICIO-AUSENTE',
+  ]},
+  conformidade: {'npm-license-policy': ['LICENSE_DEPENDENCY_OBLIGATION_REVIEW']},
+};
+
 /** Only compile-time, public tool/rule pairs may bypass entropy heuristics. */
 export function isPublicModuleRule(module: VerificationModule | undefined, tool: unknown, rule: unknown): boolean {
   if (!module || typeof tool !== 'string' || typeof rule !== 'string' || tool.includes(':') || rule.includes(':')) return false;
   return Object.hasOwn(rules[module], tool + ':' + rule)
-    || (module === 'qa' && tool === 'fast-check' && rule === 'QA-FASTCHECK-PROPRIEDADE-VIOLADA');
+    || (Object.hasOwn(fixedRuleIds[module] ?? {}, tool) && fixedRuleIds[module]![tool]!.includes(rule));
+}
+
+// Metrics counted by the tool itself: symbols without JSDoc, unreachable files,
+// complexity, V8 counts, outdated versions and aggregated name or phone matches.
+// A model review adds nothing to them, so they are published as measured facts.
+const measuredRules: Partial<Record<VerificationModule, Record<string, readonly string[]>>> = {
+  qa: {'node-test-v8': ['QA-COBERTURA-FUNCAO-SEM-TESTE', 'QA-TESTE-PULADO-EXECUCAO']},
+  arquitetura: {
+    'ast-complexity': ['COMPLEXITY-CYCLOMATIC-HIGH', 'COMPLEXITY-NESTING-DEEP', 'COMPLEXITY-FILE-LARGE', 'COMPLEXITY-FILE-CYCLOMATIC'],
+    jscpd: ['JSCPD-COMPLEXITY-HIGH'],
+    knip: ['KNIP-UNUSED-FILE', 'KNIP-UNUSED-EXPORT', 'KNIP-UNUSED-NS-EXPORT', 'KNIP-UNUSED-TYPE', 'KNIP-UNUSED-NS-TYPE',
+      'KNIP-UNUSED-ENUM-MEMBER', 'KNIP-UNUSED-NS-MEMBER', 'KNIP-DUPLICATE-EXPORT', 'KNIP-UNUSED-DEV-DEPENDENCY'],
+  },
+  dependencias: {
+    'npm-check-updates': ['NCU-OUTDATED-MAJOR', 'NCU-OUTDATED-MINOR', 'NCU-OUTDATED-PATCH', 'NCU-OUTDATED-RANGE'],
+    'sbom-lockfile': ['LOCKFILE-MISSING', 'LOCKFILE-OUTDATED-RESOLVED', 'SBOM-OUTDATED-COMPONENT'],
+  },
+  documentacao: {typedoc: ['DOC-TYPEDOC-SIMBOLO-SEM-DOC']},
+  conformidade: {'presidio-analyzer': ['PII_PERSON', 'PII_PHONE_NUMBER']},
+};
+
+/**
+ * The collector's own measurement is the proof of this finding. The exam
+ * publishes it as confirmed by the tool and never sends it to a model reviewer.
+ */
+export function isMeasuredModuleRule(module: VerificationModule | undefined, tool: unknown, rule: unknown): boolean {
+  if (!module || typeof tool !== 'string' || typeof rule !== 'string') return false;
+  const tools = measuredRules[module] ?? {};
+  return Object.hasOwn(tools, tool) && tools[tool]!.includes(rule);
 }
 
 

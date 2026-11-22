@@ -62,6 +62,9 @@ export function parseTypedocReport(
   unlocated: number;
   unlocatedWarnings: {rule: string; message: string}[];
 };
+export function aggregateUndocumentedSymbols(
+  findings: Finding[], symbols: Pick<Symbol, 'file' | 'hasDoc'>[], readFile?: ReadFile,
+): {findings: Finding[]; generated: Map<string, number>};
 export function crossCheckMarkdownAgainstTypedoc(files: string[], symbols: Symbol[], readFile?: ReadFile): Finding[];
 export function parseDepcruiseReport(
   json: unknown, diagram: string, root: string, blocks?: Block[], readFile?: ReadFile, resolutionPartial?: boolean,
