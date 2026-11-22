@@ -1,4 +1,5 @@
 import type {ModuleExamBatch} from './module-exam.ts';
+import {removeDesignScratch} from './design-containers.ts';
 import {assertDiskSpaceForLaunch,launchVolumesOf} from './personal-disk.ts';
 import {constants, existsSync} from 'node:fs';
 import {lstat, mkdtemp, open, readFile, rm} from 'node:fs/promises';
@@ -210,7 +211,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
       });
     } finally {
-      if (loginDir !== undefined) await rm(loginDir, {recursive: true, force: true});
+      // A pasta inteira do login sai, com o state.json que o uid da imagem gravou.
+      if (loginDir !== undefined) await removeDesignScratch(dirname(loginDir));
     }
   })();
   if (image && !image.ok) {

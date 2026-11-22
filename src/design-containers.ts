@@ -58,3 +58,23 @@ export function resetDesignContainersForTest(): void {
   active.clear();
   remover = name => removeByDocker(name);
 }
+
+/**
+ * Apaga uma pasta de trabalho do design. As pastas que o contêiner (uid 65532) escreve ficam
+ * com sticky bit, e o sticky impede o host de apagar arquivos de outro uid. O host é dono das
+ * pastas: tira o sticky de cada uma (sem seguir link) e então apaga tudo.
+ */
+export async function removeDesignScratch(path: string): Promise<void> {
+  const {chmod, lstat, readdir, rm} = await import('node:fs/promises');
+  const {join} = await import('node:path');
+  const own = process.getuid?.();
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    if (depth > 8) return;
+    const info = await lstat(dir).catch(() => undefined);
+    if (!info || !info.isDirectory() || info.isSymbolicLink() || (own !== undefined && info.uid !== own)) return;
+    await chmod(dir, 0o700).catch(() => undefined /* the removal below reports what it can */);
+    for (const name of await readdir(dir).catch(() => [] as string[])) await walk(join(dir, name), depth + 1);
+  };
+  await walk(path, 0);
+  await rm(path, {recursive: true, force: true});
+}

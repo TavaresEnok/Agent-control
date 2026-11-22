@@ -69,7 +69,7 @@ export async function prepareTrust(origin, env = process.env, timeoutMs = 10000)
   const path = env.DESIGN_TRUST_CA;
   if (path === undefined || path === '') return;
   const home = env.HOME;
-  if (path !== TRUST_CA_PATH || typeof home !== 'string' || (home !== '/tmp' && !home.startsWith('/tmp/'))) throw new Error('DESIGN_TRUST_CA_FAILED');
+  if (path !== TRUST_CA_PATH || home !== '/tmp') throw new Error('DESIGN_TRUST_CA_FAILED');
   let ca;
   try {
     ca = readFileSync(path, 'utf8');

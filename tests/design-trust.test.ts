@@ -61,6 +61,7 @@ test('sem DESIGN_TRUST_CA nada muda; caminho ou HOME fora do esperado é recusad
   assert.equal(await prepareTrust('https://app.local', {}), undefined);
   await assert.rejects(prepareTrust('https://app.local', {DESIGN_TRUST_CA: '/etc/passwd', HOME: '/tmp'}), /DESIGN_TRUST_CA_FAILED/);
   await assert.rejects(prepareTrust('https://app.local', {DESIGN_TRUST_CA: '/trust/ca.pem', HOME: '/home/app'}), /DESIGN_TRUST_CA_FAILED/);
+  await assert.rejects(prepareTrust('https://app.local', {DESIGN_TRUST_CA: '/trust/ca.pem', HOME: '/tmp/../etc'}), /DESIGN_TRUST_CA_FAILED/);
 });
 
 test('a CA entra no banco NSS como âncora só de TLS, sem flag que ignore erro', () => {

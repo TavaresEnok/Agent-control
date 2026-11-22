@@ -7,7 +7,7 @@ import {Refusal} from './contracts.ts';
 import type {DesignCaptureDriver, DesignCaptureTheme} from './design-capture.ts';
 import type {DesignLogin} from './design-discover.ts';
 import {assertDesignDestination, assertDesignTarget, designTrustArguments} from './design-image.ts';
-import {claimDesignContainer, releaseDesignContainer} from './design-containers.ts';
+import {claimDesignContainer, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
 
 type DesignPage = {
   url(): string;
@@ -333,7 +333,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
     if (!info.isFile() || (info.mode & 0o777) !== 0o600) throw new Error('DESIGN_LOGIN_IMAGE');
     return state;
   } catch (error) {
-    await rm(directory, {recursive: true, force: true});
+    await removeDesignScratch(directory);
     throw error;
   } finally {
     await releaseDesignContainer(name);

@@ -80,3 +80,21 @@ test('o --ca exige a rede de homologação interna', async () => {
   await assert.rejects(assertInternalDesignNetwork(async () => 'false\n'), refused);
   await assert.rejects(assertInternalDesignNetwork(async () => { throw new Error('no such network'); }), refused);
 });
+
+test('a limpeza tira o sticky das pastas próprias, apaga tudo e não segue link', async () => {
+  const {chmod, mkdir, mkdtemp, writeFile, symlink, stat} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {join} = await import('node:path');
+  const {removeDesignScratch} = await import('../src/design-containers.ts');
+  const outside = await mkdtemp(join(tmpdir(), 'design-fora-'));
+  await writeFile(join(outside, 'manter.txt'), 'x');
+  const root = await mkdtemp(join(tmpdir(), 'design-login-teste-'));
+  await mkdir(join(root, 'out'));
+  await chmod(join(root, 'out'), 0o1777);
+  await writeFile(join(root, 'out', 'state.json'), '{}');
+  await symlink(outside, join(root, 'out', 'link'));
+  await removeDesignScratch(root);
+  await assert.rejects(stat(root));
+  assert.equal((await stat(join(outside, 'manter.txt'))).isFile(), true);
+  await removeDesignScratch(outside);
+});

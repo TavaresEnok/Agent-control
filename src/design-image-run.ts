@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
 import type {DesignToolReports} from './design-collect.ts';
-import {claimDesignContainer, closeDesignContainers, releaseDesignContainer} from './design-containers.ts';
+import {claimDesignContainer, closeDesignContainers, releaseDesignContainer, removeDesignScratch} from './design-containers.ts';
 import {DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
 import {parseFocusWalks, type FocusWalk} from './design-keyboard.ts';
 import {parseRenderCells, type DesignRenderCell} from './design-render.ts';
@@ -415,7 +415,7 @@ export async function executeDesignImage(input: {
       shots,
     };
   } finally {
-    await rm(output, {recursive: true, force: true});
+    await removeDesignScratch(output);
   }
 }
 

@@ -35,6 +35,17 @@ async function storageSnapshot(page) {
 }
 
 /** Segundo fator ou outra senha na tela: o login não terminou. */
+/** 'oculto' só quando o campo de senha comprovadamente não está na tela. Erro de leitura não conta. */
+async function passwordState(page) {
+  try {
+    const field = page.locator(login.passwordSelector);
+    if (await field.count() === 0) return 'oculto';
+    return await field.first().isVisible() ? 'visivel' : 'oculto';
+  } catch {
+    return 'desconhecido';
+  }
+}
+
 async function selectorVisible(page, selector) {
   try {
     return await page.locator(selector).first().isVisible();
