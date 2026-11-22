@@ -79,10 +79,15 @@ export function classifyExamReservation(
   seat: ExamSeat,
   avoidAccountIds: readonly string[] | undefined,
   attempt: number,
+  allowedAccountIds?: readonly string[],
 ): ExamReservationChoice {
   if (seat.provider !== 'claude') return {kind: 'skip', accountId: seat.accountId};
+  if (allowedAccountIds && !allowedAccountIds.includes(seat.accountId)) {
+    return {kind: 'skip', accountId: seat.accountId};
+  }
   const accepted = acceptClaudeExamSeat(seat);
-  if (avoidAccountIds?.includes(accepted.accountId) && attempt < 3) {
+  const canAvoid = !allowedAccountIds || allowedAccountIds.some(id => !avoidAccountIds?.includes(id));
+  if (canAvoid && avoidAccountIds?.includes(accepted.accountId) && attempt < 3) {
     return {kind: 'hold', accountId: accepted.accountId, seat: accepted};
   }
   return {kind: 'use', seat: accepted};
@@ -96,13 +101,20 @@ type SpecialistProfileRow = {id: string; model: string; effort?: string; provide
  * order (regular, then emergency). Profiles of other providers may come before it. A policy
  * entry whose profile or account cannot be resolved before that point leaves no priority
  * account, so callers that require it refuse instead of moving on to a later Claude account.
+ * When `allowedAccounts` is set, only Claude accounts in that set are eligible.
  */
-function firstClaudeAccountInPolicy(order: readonly string[], byId: ReadonlyMap<string, SpecialistProfileRow>): string | undefined {
+function firstClaudeAccountInPolicy(
+  order: readonly string[],
+  byId: ReadonlyMap<string, SpecialistProfileRow>,
+  allowedAccounts?: ReadonlySet<string>,
+): string | undefined {
   for (const id of order) {
     const item = byId.get(id);
     if (!item || typeof item.provider !== 'string') return undefined;
     if (item.provider !== 'claude') continue;
-    return typeof item.account_id === 'string' && item.account_id.length > 0 ? item.account_id : undefined;
+    if (typeof item.account_id !== 'string' || item.account_id.length === 0) return undefined;
+    if (allowedAccounts && !allowedAccounts.has(item.account_id)) continue;
+    return item.account_id;
   }
   return undefined;
 }
@@ -111,6 +123,7 @@ function firstClaudeAccountInPolicy(order: readonly string[], byId: ReadonlyMap<
 export async function loadSpecialistExamPlan(
   pool: {query: (text: string, values?: unknown[]) => Promise<{rows: unknown[]}>},
   contextId: string,
+  allowedAccounts?: readonly string[],
 ): Promise<SpecialistExamPlan> {
   const row = (await pool.query(
     `SELECT r.snapshot
@@ -119,7 +132,7 @@ export async function loadSpecialistExamPlan(
      WHERE x.id=$1`,
     [contextId],
   )).rows[0] as PolicySnapshotRow | undefined;
-  return specialistExamPlanFrom(pool, row);
+  return specialistExamPlanFrom(pool, row, allowedAccounts);
 }
 
 /** The plan of an immutable policy revision, such as the one a grant was reserved under. */
@@ -127,15 +140,17 @@ export async function loadSpecialistExamPlanAtRevision(
   pool: {query: (text: string, values?: unknown[]) => Promise<{rows: unknown[]}>},
   projectId: string,
   revision: number,
+  allowedAccounts?: readonly string[],
 ): Promise<SpecialistExamPlan> {
   const row = (await pool.query('SELECT snapshot FROM ac_policy_revisions WHERE project_id=$1 AND revision=$2',
     [projectId, revision])).rows[0] as PolicySnapshotRow | undefined;
-  return specialistExamPlanFrom(pool, row);
+  return specialistExamPlanFrom(pool, row, allowedAccounts);
 }
 
 async function specialistExamPlanFrom(
   pool: {query: (text: string, values?: unknown[]) => Promise<{rows: unknown[]}>},
   row: PolicySnapshotRow | undefined,
+  allowedAccounts?: readonly string[],
 ): Promise<SpecialistExamPlan> {
   const specialist = row?.snapshot?.roles?.specialist;
   const regular = Array.isArray(specialist?.regular) ? specialist.regular.filter((id): id is string => typeof id === 'string') : [];
@@ -150,14 +165,18 @@ async function specialistExamPlanFrom(
     [all],
   )).rows as SpecialistProfileRow[];
   const byId = new Map(profiles.map(item => [item.id, item]));
-  const isClaude = (id: string) => byId.get(id)?.provider === 'claude';
+  const allowedSet = allowedAccounts ? new Set(allowedAccounts) : undefined;
+  const isClaude = (id: string) => {
+    const item = byId.get(id);
+    return item?.provider === 'claude' && (!allowedSet || (typeof item.account_id === 'string' && allowedSet.has(item.account_id)));
+  };
   const claudeRegular = regular.filter(isClaude);
   const claudeEmergency = emergency.filter(isClaude);
   const accountByProfileId: Record<string, string> = {};
   for (const item of profiles) {
     if (typeof item.account_id === 'string' && item.account_id.length > 0) accountByProfileId[item.id] = item.account_id;
   }
-  const primaryClaudeAccountId = firstClaudeAccountInPolicy(all, byId);
+  const primaryClaudeAccountId = firstClaudeAccountInPolicy(all, byId, allowedSet);
   const orderedProfiles: SpecialistProfileDetail[] = [];
   for (const [chain, list] of [['regular', regular], ['emergency', emergency]] as const) {
     for (const id of list) {
@@ -265,6 +284,10 @@ export async function reserveSpecialistExamSeat(input: {
   intentId: string;
   purpose: 'create' | 'examiner' | 'reviewer';
   allowedAccounts?: readonly string[];
+  /** Active runtime Claude accounts when passed separately from project `allowedAccountIds`. */
+  runtimeAccounts?: readonly string[];
+  /** Explicit project `allowedAccountIds` restriction when `allowedAccounts` carries runtime accounts. */
+  projectAllowedAccounts?: readonly string[];
   avoidProfileId?: string;
   avoidProfileIds?: readonly string[];
   avoidAccountId?: string;
@@ -285,22 +308,57 @@ export async function reserveSpecialistExamSeat(input: {
   const avoidReviewerAccounts = uniqueReservationIds(input.avoidReviewerAccountIds);
   if (avoidReviewerAccounts.length > MAX_AVOID_REVIEWER_ACCOUNTS) throw new Refusal('EXAM_EXCLUSION_LIMIT', 400);
 
-  const plan = await loadSpecialistExamPlan(input.ledger.pool, input.authority.contextId);
+  const projectRestriction = input.projectAllowedAccounts
+    ?? (input.runtimeAccounts === undefined ? input.allowedAccounts : undefined);
+  const runtimeRestriction = input.runtimeAccounts
+    ?? (input.projectAllowedAccounts !== undefined ? input.allowedAccounts : undefined);
+
+  if (projectRestriction !== undefined) {
+    if (projectRestriction.length === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+    if (runtimeRestriction !== undefined) {
+      const runtimeSet = new Set(runtimeRestriction);
+      if (!projectRestriction.some(id => runtimeSet.has(id))) {
+        throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+      }
+    }
+  }
+  const effectiveAllowed = projectRestriction !== undefined && runtimeRestriction !== undefined
+    ? projectRestriction.filter(id => runtimeRestriction.includes(id))
+    : projectRestriction !== undefined
+      ? [...projectRestriction]
+      : runtimeRestriction !== undefined
+        ? [...runtimeRestriction]
+        : undefined;
+  if (effectiveAllowed !== undefined && effectiveAllowed.length === 0) {
+    throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+  }
+
+  const plan = await loadSpecialistExamPlan(
+    input.ledger.pool,
+    input.authority.contextId,
+    projectRestriction !== undefined ? effectiveAllowed : undefined,
+  );
+  if (
+    projectRestriction !== undefined
+    && plan.profiles.some(p => p.provider === 'claude')
+    && !plan.hasClaude
+  ) {
+    throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+  }
+
   if (input.requiredModel !== undefined || input.requiredEffort !== undefined || input.firstAccountOnly) {
     const unavailableCode = input.unavailableCode
       ?? (input.purpose === 'reviewer' ? 'DESIGN_REVIEWER_UNAVAILABLE' : 'MODULE_EXAM_EXAMINER_UNAVAILABLE');
     const primaryAccountId = plan.primaryClaudeAccountId;
     if (input.firstAccountOnly) {
       if (!primaryAccountId) throw new Refusal(unavailableCode, 409);
-      if (input.allowedAccounts && !input.allowedAccounts.includes(primaryAccountId)) {
+      if (effectiveAllowed && !effectiveAllowed.includes(primaryAccountId)) {
         throw new Refusal(unavailableCode, 409);
       }
     }
     const targetAccounts = input.firstAccountOnly && primaryAccountId
       ? [primaryAccountId]
-      : input.allowedAccounts
-        ? [...input.allowedAccounts]
-        : undefined;
+      : effectiveAllowed;
     const ordered = input.preferEmergencyFirst
       ? [...plan.profiles.filter(p => p.chain === 'emergency'), ...plan.profiles.filter(p => p.chain === 'regular')]
       : plan.profiles;
@@ -381,7 +439,7 @@ export async function reserveSpecialistExamSeat(input: {
         contextId: input.authority.contextId,
         role: 'specialist',
         provider: 'claude',
-        ...(input.allowedAccounts ? {allowedAccounts: [...input.allowedAccounts]} : {}),
+        ...(effectiveAllowed ? {allowedAccounts: [...effectiveAllowed]} : {}),
         examReviewer: {
           preparedProfiles: orderedReviewers,
           ...(avoidExaminerAccounts.length ? {avoidExaminerAccounts} : {}),
@@ -395,7 +453,11 @@ export async function reserveSpecialistExamSeat(input: {
       }
       throw error;
     }
-    return acceptReservedSeat({reserved, purpose: 'reviewer', releaseGrant: input.releaseGrant});
+    const seat = await acceptReservedSeat({reserved, purpose: 'reviewer', releaseGrant: input.releaseGrant});
+    if (effectiveAllowed && !effectiveAllowed.includes(seat.accountId)) {
+      return releaseReservedGrant(input.releaseGrant, seat.grantId, new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409));
+    }
+    return seat;
   }
   const preferredProfileId = input.purpose === 'create' ? plan.createProfileId : plan.examinerProfileId;
   const reserved = await input.capacity.reserveWithSeat(input.principal, {
@@ -403,9 +465,13 @@ export async function reserveSpecialistExamSeat(input: {
     intentId: input.intentId,
     contextId: input.authority.contextId,
     role: 'specialist',
-    ...(plan.hasClaude || input.allowedAccounts ? {provider: 'claude'} : {}),
-    ...(input.allowedAccounts ? {allowedAccounts: [...input.allowedAccounts]} : {}),
+    ...(plan.hasClaude || effectiveAllowed ? {provider: 'claude'} : {}),
+    ...(effectiveAllowed ? {allowedAccounts: [...effectiveAllowed]} : {}),
     ...(preferredProfileId ? {preferredProfileId} : {}),
   }, input.authority);
-  return acceptReservedSeat({reserved, purpose: input.purpose, releaseGrant: input.releaseGrant});
+  const seat = await acceptReservedSeat({reserved, purpose: input.purpose, releaseGrant: input.releaseGrant});
+  if (effectiveAllowed && !effectiveAllowed.includes(seat.accountId)) {
+    return releaseReservedGrant(input.releaseGrant, seat.grantId, new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409));
+  }
+  return seat;
 }

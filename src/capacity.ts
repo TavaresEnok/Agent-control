@@ -66,6 +66,8 @@ export const GrantRequest = z.object({ attemptId: Id, intentId: Id, contextId: I
   }).strict().optional(),
   /** Restrict runtime seats and surface quota exhaustion when none of them can be reserved. */
   allowedAccounts: z.array(Id).min(1).max(8).optional(),
+  /** The project's own account restriction (`allowedAccountIds`), recorded in the grant so the launch check applies it again. */
+  projectAllowedAccounts: z.array(Id).min(1).max(8).optional(),
   /** Profiles excluded for this reservation (never fallen back to). */
   avoidProfiles: z.array(Id).max(20).optional(),
   /** Restrict selection to profiles on this provider (never fallen back to another). */
@@ -506,6 +508,7 @@ export class Capacity {
         reason: selectionReason, preferredProfileId: preferred ?? null,
       };
       if (request.designPurpose) selection.designPurpose = request.designPurpose;
+      if (request.projectAllowedAccounts) selection.projectAllowedAccounts = request.projectAllowedAccounts;
       if (skippedCandidates.length === pos) selection.skippedCandidates = skippedCandidates;
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants
         (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,selection)

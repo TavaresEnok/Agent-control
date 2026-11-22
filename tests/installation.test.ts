@@ -61,3 +61,35 @@ test('project economy options are independent and validated', () => {
  assert.equal(ProjectEconomy.safeParse({map:'false'}).success,false);
  assert.equal(ProjectEconomy.parse({imageRetention:false}).imageRetention,false);
 });
+
+test('allowedAccountIds per project is optional and validates UUID format, uniqueness and bounds', () => {
+ const acc1 = randomUUID(), acc2 = randomUUID();
+ const baseConfig = {
+  schemaVersion: 1,
+  mode: 'administration-only',
+  databaseUrl: 'postgres://u:p@127.0.0.1:5432/db',
+  dataDirectory: '/tmp/ac-state',
+  project: {id: randomUUID(), label: 'Primary', repo: '/tmp/ac-repo-1', owner: 'owner-1'},
+  projects: [{id: randomUUID(), label: 'Secondary', repo: '/tmp/ac-repo-2', owner: 'owner-1'}],
+  http: {listen: '127.0.0.1', port: 18405, publicOrigin: 'http://127.0.0.1:18405'},
+ };
+ const parsedDefault = Installation.parse(baseConfig);
+ assert.equal(parsedDefault.project.allowedAccountIds, undefined);
+ assert.equal(parsedDefault.projects[0]?.allowedAccountIds, undefined);
+
+ const withAllowed = Installation.parse({
+  ...baseConfig,
+  project: {...baseConfig.project, allowedAccountIds: [acc1]},
+  projects: [{...baseConfig.projects[0]!, allowedAccountIds: [acc1, acc2]}],
+ });
+ assert.deepEqual(withAllowed.project.allowedAccountIds, [acc1]);
+ assert.deepEqual(withAllowed.projects[0]?.allowedAccountIds, [acc1, acc2]);
+
+ assert.throws(() => Installation.parse({...baseConfig, project: {...baseConfig.project, allowedAccountIds: []}}));
+ assert.throws(() => Installation.parse({...baseConfig, project: {...baseConfig.project, allowedAccountIds: ['not-a-uuid']}}));
+ assert.throws(() => Installation.parse({...baseConfig, project: {...baseConfig.project, allowedAccountIds: [acc1, acc1]}}));
+ assert.throws(() => Installation.parse({
+  ...baseConfig,
+  projects: [{...baseConfig.projects[0]!, allowedAccountIds: Array.from({length: 9}, () => randomUUID())}],
+ }));
+});

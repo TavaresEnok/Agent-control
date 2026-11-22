@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {chmod,readFile,readdir,realpath,rename,writeFile} from 'node:fs/promises';
 import {basename,dirname,join,resolve,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {Id,Refusal} from './contracts.ts';
 import {Installation,loadInstallation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeBootstrapSchemaError} from './native-bootstrap.ts';
@@ -12,6 +13,150 @@ import {isPersonalRemoteCheckout} from './personal-ssh.ts';
 import {Projects} from './projects.ts';
 
 export type PersonalProjectAddResult={projectId:string;label:string;repository:string;restart:string};
+export type PersonalProjectAccountsResult={
+ projectId:string;
+ label:string;
+ allowedAccountIds:string[]|null;
+ backupPath:string;
+ restart:string;
+};
+
+const CONTAS_USAGE='Uso: npm run personal:project -- --contas <instalação.json> <id-ou-rótulo-do-projeto> <uuid>[,<uuid>...]|--todas';
+
+const contasMessages:Record<string,string>={
+ PROJECT_CONTAS_USAGE:CONTAS_USAGE,
+ PERSONAL_ACTIVATION_REQUIRED:'A restrição de contas por projeto só roda numa instalação pessoal.',
+ NOT_FOUND:'Projeto não encontrado.',
+ PROJECT_AMBIGUOUS:'Há mais de um projeto com esse rótulo. Informe o UUID do projeto.',
+ PROJECT_ACCOUNT_INVALID:'UUID de conta inválido. Informe UUIDs separados por vírgula ou --todas.',
+ PROJECT_ACCOUNT_DUPLICATE:'A lista de contas permitidas contém UUID repetido.',
+ PROJECT_ACCOUNT_LIMIT:'A lista aceita no máximo 8 contas permitidas por projeto.',
+ PROJECT_ACCOUNT_INACTIVE:'A conta informada não existe ou não está ativa (ac_accounts.enabled) nesta instalação.',
+ INVALID_INSTALLATION:'O arquivo de instalação ficou inválido após a alteração.',
+};
+
+export function personalProjectContasFailureText(error:unknown):string{
+ const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'';
+ return contasMessages[code]??(code||'Não foi possível atualizar as contas permitidas do projeto.');
+}
+
+function stampOf(now:Date):string{
+ const pad=(value:number,width=2)=>value.toString().padStart(width,'0');
+ return `${pad(now.getUTCFullYear(),4)}${pad(now.getUTCMonth()+1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+}
+
+function parseContasSpec(spec:string|readonly string[]):string[]|null{
+ if(spec==='--todas')return null;
+ const rawParts=typeof spec==='string'?spec.split(','):spec;
+ if(rawParts.length===0)throw new Refusal('PROJECT_CONTAS_USAGE',400);
+ const parts=rawParts.map(item=>String(item).trim());
+ if(parts.some(item=>item.length===0))throw new Refusal('PROJECT_CONTAS_USAGE',400);
+ if(parts.length===1&&parts[0]==='--todas')return null;
+ if(parts.some(item=>item.startsWith('--')||!Id.safeParse(item).success))throw new Refusal('PROJECT_ACCOUNT_INVALID',400);
+ if(new Set(parts).size!==parts.length)throw new Refusal('PROJECT_ACCOUNT_DUPLICATE',400);
+ if(parts.length>8)throw new Refusal('PROJECT_ACCOUNT_LIMIT',400);
+ return parts;
+}
+
+export async function setPersonalProjectAccounts(
+ installationPath:string,
+ projectToken:string,
+ accountsSpec:string|readonly string[],
+ options?:{now?:Date},
+):Promise<PersonalProjectAccountsResult>{
+ const resolvedPath=resolve(installationPath);
+ const config=await loadInstallation(resolvedPath);
+ if(config.activation!=='personal')throw new Refusal('PERSONAL_ACTIVATION_REQUIRED',403);
+ const service=basename(config.dataDirectory).replace(/[^A-Za-z0-9_-]/g,'-')||'gateway';
+ const token=projectToken.trim();
+ if(!token||token.startsWith('--'))throw new Refusal('PROJECT_CONTAS_USAGE',400);
+ const hits=[config.project,...config.projects].filter(item=>item.id===token||item.label===token);
+ if(hits.length===0)throw new Refusal('NOT_FOUND',404);
+ if(hits.length>1)throw new Refusal('PROJECT_AMBIGUOUS',409);
+ const selected=hits[0]!;
+ const allowedAccountIds=parseContasSpec(accountsSpec);
+
+ if(allowedAccountIds!==null){
+  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+  try{
+   const rows=(await ledger.pool.query<{id:string;enabled:boolean;owner_id:string}>(
+    'SELECT id::text AS id, enabled, owner_id FROM ac_accounts WHERE id = ANY($1::uuid[])',
+    [allowedAccountIds],
+   )).rows;
+   const byId=new Map(rows.map(row=>[row.id,row]));
+   for(const accountId of allowedAccountIds){
+    const row=byId.get(accountId);
+    if(!row||!row.enabled||(row.owner_id!==selected.owner&&row.owner_id!==config.project.owner)){
+     throw new Refusal('PROJECT_ACCOUNT_INACTIVE',409);
+    }
+   }
+  }finally{
+   await ledger.close();
+  }
+ }
+
+ const originalBytes=await readFile(resolvedPath);
+ const raw=JSON.parse(originalBytes.toString('utf8')) as {
+  project?:Record<string,unknown>;
+  projects?:Record<string,unknown>[];
+ };
+ const applyToEntry=(entry:Record<string,unknown>)=>{
+  const next={...entry};
+  if(allowedAccountIds===null)delete next.allowedAccountIds;
+  else next.allowedAccountIds=allowedAccountIds;
+  return next;
+ };
+ if(raw.project&&raw.project.id===selected.id){
+  raw.project=applyToEntry(raw.project);
+ }
+ if(Array.isArray(raw.projects)){
+  raw.projects=raw.projects.map(entry=>entry&&entry.id===selected.id?applyToEntry(entry):entry);
+ }
+ const parsed=Installation.safeParse(raw);
+ if(!parsed.success)throw new Refusal('INVALID_INSTALLATION',400);
+ // Each write keeps its own copy: a second run in the same second gets a numbered name instead of losing the copy.
+ const stamp=stampOf(options?.now??new Date());
+ let backupPath='';
+ for(let index=1;;index++){
+  backupPath=join(dirname(resolvedPath),`installation.json.before-contas-${stamp}${index===1?'':'-'+index}`);
+  try{
+   await writeFile(backupPath,originalBytes,{mode:0o600,flag:'wx'});
+   break;
+  }catch(error){
+   if((error as NodeJS.ErrnoException).code!=='EEXIST'||index>=100)throw error;
+  }
+ }
+ await chmod(backupPath,0o600);
+ await writePrivate(resolvedPath,JSON.stringify(raw,null,2)+'\n');
+ return {
+  projectId:selected.id,
+  label:selected.label,
+  allowedAccountIds,
+  backupPath,
+  restart:`systemctl --user restart agent-control-gateway-${service}`,
+ };
+}
+
+export async function runPersonalProjectContasCli(argv:readonly string[],options?:{now?:Date}):Promise<string[]>{
+ const [flag,file,projectToken,accountsSpec,...extra]=argv;
+ if(
+  flag!=='--contas'
+  ||!file
+  ||!projectToken
+  ||!accountsSpec
+  ||extra.length>0
+  ||file.startsWith('--')
+  ||projectToken.startsWith('--')
+  ||(accountsSpec.startsWith('--')&&accountsSpec!=='--todas')
+ ){
+  throw new Refusal('PROJECT_CONTAS_USAGE',400);
+ }
+ const result=await setPersonalProjectAccounts(file,projectToken,accountsSpec,options);
+ const headline=result.allowedAccountIds===null
+  ?`Restrição de contas removida do projeto ${result.label} (${result.projectId}). Todas as contas ativas estão liberadas.`
+  :`Contas permitidas gravadas para o projeto ${result.label} (${result.projectId}): ${result.allowedAccountIds.join(', ')}.`;
+ return [headline,`Backup: ${result.backupPath}`,result.restart];
+}
 
 /**
  * Attaches one Git repository to a personal installation that already exists.
@@ -122,7 +267,18 @@ async function writePrivate(path:string,content:string){
 }
 
 async function main(){
- const argv=process.argv.slice(2),labelAt=argv.indexOf('--label'),label=labelAt<0?undefined:argv[labelAt+1];
+ const argv=process.argv.slice(2);
+ if(argv[0]==='--contas'){
+  try{
+   const lines=await runPersonalProjectContasCli(argv);
+   for(const line of lines)console.log(line);
+  }catch(error){
+   console.error(personalProjectContasFailureText(error));
+   process.exit(1);
+  }
+  return;
+ }
+ const labelAt=argv.indexOf('--label'),label=labelAt<0?undefined:argv[labelAt+1];
  const positionals=argv.filter((arg,index)=>arg!=='--label'&&index!==labelAt+1);
  const [file,repository]=positionals;
  if(!file||!repository||!label||file.startsWith('--')||repository.startsWith('--')||positionals.length!==2){

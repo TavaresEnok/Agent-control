@@ -149,7 +149,7 @@ function failure(error: unknown): string {
   return isProviderLimit(code) ? 'PROVIDER_USAGE_LIMIT' : code;
 }
 function fatal(error: unknown): boolean {
-  return error instanceof Refusal && (/(?:FORBIDDEN|SCOPE_MISMATCH|CANCEL)/.test(error.code) || ['STALE_MANAGER', 'HUMAN_PAUSED', 'ADMISSION_CLOSED', 'PERSONAL_ACTIVATION_REQUIRED'].includes(error.code));
+  return error instanceof Refusal && (/(?:FORBIDDEN|SCOPE_MISMATCH|CANCEL)/.test(error.code) || ['STALE_MANAGER', 'HUMAN_PAUSED', 'ADMISSION_CLOSED', 'PERSONAL_ACTIVATION_REQUIRED', 'PROJECT_ACCOUNTS_UNAVAILABLE'].includes(error.code));
 }
 function checkAbort(signal?: AbortSignal) { if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED'); }
 function parsedJson(raw: string): unknown {
@@ -205,6 +205,7 @@ function unavailableText(code: string) {
     return 'Revisor de outro provedor indisponível para o contexto.';
   }
   if (code === 'MODULE_EXAM_RUNTIME_UNAVAILABLE') return 'Runtime de exame indisponível.';
+  if (code === 'PROJECT_ACCOUNTS_UNAVAILABLE') return 'Nenhuma conta permitida para este projeto está disponível para o papel solicitado.';
   return `Exame ou confirmação indisponível. Código ${code}.`;
 }
 

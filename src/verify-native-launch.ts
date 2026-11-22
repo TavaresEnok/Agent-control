@@ -287,6 +287,7 @@ export async function reservePersonalRecheckReviewer(input: {
   principal: string;
   authority: Authority;
   intentId: string;
+  allowedAccounts?: readonly string[];
   avoidProviders?: readonly string[];
   exclusion?: RecheckReserveExclusion;
   releaseGrant: (grantId: string, how: 'not_started' | 'exited') => Promise<void>;
@@ -302,6 +303,7 @@ export async function reservePersonalRecheckReviewer(input: {
     authority: input.authority,
     intentId: input.intentId,
     purpose: 'reviewer',
+    ...(input.allowedAccounts ? {allowedAccounts: input.allowedAccounts} : {}),
     avoidProfileIds: input.exclusion?.avoidProfiles,
     avoidAccountIds: input.exclusion?.avoidExaminerAccounts,
     avoidReviewerAccountIds,

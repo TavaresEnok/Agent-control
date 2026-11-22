@@ -69,6 +69,7 @@ const messages: Record<string, string> = {
   PRONTIDAO_ORIGIN_INVALID: 'Origem HTTPS inválida; informe apenas esquema https:// sem usuário, caminho ou parâmetros.',
   PRONTIDAO_ORIGIN_UNAUTHORIZED: 'A origem HTTPS informada não está declarada e autorizada na instalação ou no projeto.',
   PROVIDER_USAGE_LIMIT: 'PROVIDER_USAGE_LIMIT. A cota do provedor foi atingida. Consulte as pendências no relatório.',
+  PROJECT_ACCOUNTS_UNAVAILABLE: 'Nenhuma conta permitida para este projeto está ativa e disponível no runtime para o papel solicitado.',
   EXAM_INTERRUPTED: 'A execução do módulo foi interrompida.',
 };
 
@@ -293,7 +294,8 @@ export async function runPersonalModuleCli(
         module, runId: parsed.runId, achadoIds: parsed.achadoIds, dataDirectory: config.dataDirectory, projectId: project.id,
         signal: recheckAbort?.signal,
         review: createPersonalModuleRecheck({ledger, principal: project.owner, authority,
-          loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger))}),
+          ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
+          loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger, project.allowedAccountIds))}),
       });
       const lines = results.map(result => {
         if (result.status !== 'pendente') return `${result.id} ${result.status}`;
@@ -357,7 +359,8 @@ export async function runPersonalModuleCli(
         ledger, principal: project.owner, authority: authority!, commit,
         mapEnabled: project.economy?.map,
         batch: project.economy?.batch === false ? false : {tokens: project.economy?.batchTokens ?? 40_000, files: project.economy?.batchFiles ?? 8},
-        loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger)),
+        ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
+        loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger, project.allowedAccountIds)),
         ...(waitForClaudeQuota ? {waitForClaudeQuota: true} : {}),
         ...(deps?.clock ? {clock: deps.clock} : {}),
         ...(deps?.onQuotaWait ? {onQuotaWait: deps.onQuotaWait} : {}),
@@ -373,6 +376,7 @@ export async function runPersonalModuleCli(
         commit,
         runId,
         signal,
+        ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
         ...(deps?.clock ? {createdAt: new Date(deps.clock.now())} : {}),
         image: measurement?.image ?? deps?.image,
         ...(deps?.rootDir !== undefined ? {rootDir: deps.rootDir} : {}),

@@ -157,6 +157,7 @@ export type VerificationModuleRunInput = {
     findings: readonly ModuleRawFinding[]; collector?: ModuleExamCollectorContext; signal?: AbortSignal}) => Promise<ModuleExamResult>;
   /** Optional independent reviewer worker. When present, findings are confirmed without passing author conclusions. */
   worker?: VerifyWorker;
+  allowedAccountIds?: readonly string[];
   notes?: readonly string[];
 };
 

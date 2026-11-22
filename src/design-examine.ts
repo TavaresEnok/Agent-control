@@ -560,6 +560,7 @@ function rethrowReviewer(error: unknown): boolean {
     || error.code === 'DESIGN_CONFIRMATION_INVALID'
     || error.code === 'EXAM_PROVIDER_UNSUPPORTED'
     || error.code === 'DESIGN_REVIEWER_UNAVAILABLE'
+    || error.code === 'PROJECT_ACCOUNTS_UNAVAILABLE'
     || error.code === 'EXAM_LOGIN_BUSY'
     || error.code === 'EXAM_LOGIN_RESTORE_FAILED'
   );

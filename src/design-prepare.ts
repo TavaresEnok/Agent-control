@@ -135,12 +135,13 @@ export async function prepareDesignSpecialist(input: {
   projectId: string;
   apply: boolean;
   primaryAccountId?: string;
+  allowedAccountIds?: readonly string[];
 }): Promise<DesignPrepareReport> {
   if (input.primaryAccountId !== undefined && !Id.safeParse(input.primaryAccountId).success) {
     throw new Refusal('DESIGN_USAGE', 400);
   }
   return input.ledger.tx(async client => {
-    const facts = await loadFacts(client, input.owner, input.projectId, input.apply);
+    const facts = await loadFacts(client, input.owner, input.projectId, input.apply, input.allowedAccountIds, input.primaryAccountId);
     const catalog = planCatalog(facts);
     const plan = seatPlan(facts, input.primaryAccountId);
     const contexts = (plan.reusePolicy
@@ -281,7 +282,14 @@ function catalogBlockedLines(catalog: readonly DesignCatalogModel[]): string[] {
   ];
 }
 
-async function loadFacts(client: pg.PoolClient, owner: string, projectId: string, apply: boolean): Promise<PrepareFacts> {
+async function loadFacts(
+  client: pg.PoolClient,
+  owner: string,
+  projectId: string,
+  apply: boolean,
+  allowedAccountIds?: readonly string[],
+  requestedPrimaryAccountId?: string,
+): Promise<PrepareFacts> {
   const mode = (await client.query<{mode: string}>('SELECT mode FROM ac_installation_activation WHERE id=1')).rows[0]?.mode;
   if (mode !== 'personal') throw new Refusal('PERSONAL_ACTIVATION_REQUIRED', 403);
   const member = await client.query(
@@ -290,14 +298,23 @@ async function loadFacts(client: pg.PoolClient, owner: string, projectId: string
   );
   if (!member.rowCount) throw new Refusal('PROJECT_OWNER_REQUIRED', 403);
   if (apply) await client.query('SELECT id FROM ac_projects WHERE id=$1 FOR UPDATE', [projectId]);
-  const accounts = (await client.query<{id: string}>(
+  const allAccounts = (await client.query<{id: string}>(
     `SELECT a.id::text AS id FROM ac_accounts a
      JOIN ac_account_access x ON x.account_id=a.id
      WHERE x.project_id=$1 AND a.owner_id=$2 AND a.provider='claude' AND a.enabled
      ORDER BY a.id`,
     [projectId, owner],
   )).rows;
-  if (accounts.length === 0) throw new Refusal('DESIGN_PREPARE_NO_CLAUDE', 409);
+  if (allAccounts.length === 0) throw new Refusal('DESIGN_PREPARE_NO_CLAUDE', 409);
+  const allowedSet = allowedAccountIds ? new Set(allowedAccountIds) : undefined;
+  if (allowedSet) {
+    if (allowedSet.size === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+    if (requestedPrimaryAccountId !== undefined && !allowedSet.has(requestedPrimaryAccountId)) {
+      throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+    }
+  }
+  const accounts = allowedSet ? allAccounts.filter(account => allowedSet.has(account.id)) : allAccounts;
+  if (accounts.length === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
   const profiles = (await client.query<{id: string; account_id: string; model: string; effort: string; enabled: boolean; revision: number}>(
     `SELECT p.id::text AS id, p.account_id::text AS account_id, p.model, p.effort, p.enabled, p.revision
      FROM ac_profiles p

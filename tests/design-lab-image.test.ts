@@ -104,7 +104,7 @@ test('a imagem real encontra os defeitos plantados do laboratório', {skip: !ena
     assert.equal(has('stylelint', 'declaration-no-important'), true, rules.join('\n'));
     assert.equal(has('tokens', 'DESIGN-TOKENS-TIPO-CONTAGEM'), true, rules.join('\n'));
     assert.equal(has('tokens', DESIGN_PLANTED_RULES.grays), true, rules.join('\n'));
-    assert.equal(parsed.findings.some(item => item.rule === 'DESIGN-ALVO-REFERENCIA' && item.measure?.kind === 'target' && item.measure.px <= 30), true, rules.join('\n'));
+    assert.equal(parsed.findings.some(item => item.rule === 'DESIGN-ALVO-REFERENCIA' && item.measure?.kind === 'target' && typeof item.measure.px === 'number' && item.measure.px <= 30), true, rules.join('\n'));
     assert.match(readme, /Crítica visual/);
     assert.match(readme, /Julgamento incerto/);
     assert.match(readme, /A rota \/item\/:id usou o exemplo \/item\/42/);

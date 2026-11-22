@@ -2,13 +2,14 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {chmod,mkdir,mkdtemp,readFile,realpath,rm,stat,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readdir,readFile,realpath,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {basename,join} from 'node:path';
 import {Capacity} from '../src/capacity.ts';
+import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {nativeReviewVerifierDigest} from '../src/native-review-contract.ts';
-import {addPersonalProject} from '../src/personal-project-add.ts';
+import {addPersonalProject,personalProjectContasFailureText,runPersonalProjectContasCli,setPersonalProjectAccounts} from '../src/personal-project-add.ts';
 import {QualityPolicies} from '../src/quality-policy.ts';
 import {Projects} from '../src/projects.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -115,6 +116,34 @@ test('adding a repository registers it once, shares accounts and publishes polic
   const again=JSON.parse(await readFile(file,'utf8')) as {projects:unknown[];managerTransport:{contexts:unknown[]}};
   assert.equal(again.projects.length,1);
   assert.equal(again.managerTransport.contexts.length,2);
+
+  // --contas grava e remove allowedAccountIds com backup 0600 e recusa UUID inválido/inativo
+  const disabledAcc=randomUUID();
+  await new Capacity(check).addAccount(owner,primaryId,{id:disabledAcc,provider:'claude',label:'disabled',resourceIdentity:'claude:'+disabledAcc,mode:'synthetic',eligibility:'documented_supported',eligibilitySource:'synthetic://personal-add',maxConcurrent:1});
+  await new Capacity(check).setEnabled(owner,primaryId,'account',{id:disabledAcc,enabled:false,expectedRevision:1});
+  await check.close();check=undefined;
+
+  await assert.rejects(()=>setPersonalProjectAccounts(file,'Segundo',[disabledAcc]),(e:unknown)=>e instanceof Refusal&&e.code==='PROJECT_ACCOUNT_INACTIVE'&&/está ativa/i.test(personalProjectContasFailureText(e)));
+  await assert.rejects(()=>runPersonalProjectContasCli(['--contas',file,'Segundo','nao-e-uuid']),(e:unknown)=>e instanceof Refusal&&e.code==='PROJECT_ACCOUNT_INVALID');
+
+  const setOut=await runPersonalProjectContasCli(['--contas',file,'Segundo',`${managerAccount},${programmerAccount}`]);
+  assert.match(setOut.join('\n'),/Contas permitidas gravadas/);
+  const withContas=JSON.parse(await readFile(file,'utf8')) as {projects:{id:string;allowedAccountIds?:string[]}[]};
+  assert.deepEqual(withContas.projects[0]?.allowedAccountIds,[managerAccount,programmerAccount]);
+  const backups=(await readdir(data)).filter(n=>n.startsWith('installation.json.before-contas-'));
+  assert.ok(backups.length>=1);
+  assert.equal((await stat(join(data,backups[0]!))).mode&0o077,0);
+  // Two writes in the same second keep two copies.
+  const fixed=new Date('2026-11-22T05:00:00.000Z');
+  await setPersonalProjectAccounts(file,'Segundo',[managerAccount],{now:fixed});
+  await setPersonalProjectAccounts(file,'Segundo',[programmerAccount],{now:fixed});
+  const sameSecond=(await readdir(data)).filter(n=>n.startsWith('installation.json.before-contas-')).length;
+  assert.equal(sameSecond,backups.length+2);
+  await setPersonalProjectAccounts(file,'Segundo',[managerAccount,programmerAccount]);
+
+  await runPersonalProjectContasCli(['--contas',file,result.projectId,'--todas']);
+  const cleared=JSON.parse(await readFile(file,'utf8')) as {projects:{id:string;allowedAccountIds?:string[]}[]};
+  assert.equal(cleared.projects[0]?.allowedAccountIds,undefined);
  }finally{
   await check?.close();
   await setup?.close();

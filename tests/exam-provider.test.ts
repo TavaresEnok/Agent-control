@@ -26,6 +26,11 @@ test('a reserva de exame aceita Claude e recusa Grok e Codex', () => {
   const sameAccount = classifyExamReservation(seat('claude', 'conta-a'), ['conta-a'], 3);
   assert.equal(sameAccount.kind, 'use');
   if (sameAccount.kind === 'use') assert.equal(sameAccount.seat.provider, 'claude');
+
+  const disallowed = classifyExamReservation(seat('claude', 'conta-b'), undefined, 0, ['conta-a']);
+  assert.equal(disallowed.kind, 'skip');
+  const allowed = classifyExamReservation(seat('claude', 'conta-a'), undefined, 0, ['conta-a']);
+  assert.equal(allowed.kind, 'use');
 });
 
 test('highFindingCloses fecha por Claude distinto ou pela prova de diff', () => {

@@ -398,10 +398,27 @@ export async function resolvePersonalDesign(
     }
     const runtime = await (known?.composeRuntime ?? composePersonalRuntime)(config, ledger);
     if (!runtime) throw new Refusal('DESIGN_WORKER_UNAVAILABLE', 503);
+    const rawSupervisors = runtime.executions as unknown as readonly DesignExamSupervisor[];
+    let allowedAccountIds: string[] | undefined;
+    let supervisors = rawSupervisors;
+    if (project.allowedAccountIds !== undefined) {
+      allowedAccountIds = project.allowedAccountIds.filter(id => rawSupervisors.some(s => s.active && s.supportsAccount(id)));
+      if (allowedAccountIds.length === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+      const allowedSet = new Set(allowedAccountIds);
+      supervisors = rawSupervisors.map(s => ({
+        get active() { return s.active; },
+        supportsAccount(accountId: string) {
+          return allowedSet.has(accountId) && s.supportsAccount(accountId);
+        },
+        start: s.start.bind(s),
+        reconcile: s.reconcile.bind(s),
+        retireTerminal: s.retireTerminal.bind(s),
+      }));
+    }
     intentId = await insertDesignIntent(ledger, principal, authority, project.id, commit, readonlyExam);
     const releaseGrant = (grantId: string, how: 'not_started' | 'exited') => releaseDesignGrant(ledger, principal, authority!, grantId, how);
     const worker = createDesignNativeWorker({
-      supervisors: runtime.executions as unknown as readonly DesignExamSupervisor[],
+      supervisors,
       ledger,
       principal,
       authority,
@@ -412,7 +429,7 @@ export async function resolvePersonalDesign(
     const capacity = new Capacity(ledger);
     const reserve = (role: 'specialist' | 'reviewer', _avoidProvider?: string, options?: DesignReserveOptions): Promise<DesignSeat> => {
       const purpose = options?.purpose ?? (role === 'reviewer' ? 'reviewer' : 'examiner');
-      return reserveDesignModel(ledger, capacity, principal, authority!, intentId!, purpose);
+      return reserveDesignModel(ledger, capacity, principal, authority!, intentId!, purpose, allowedAccountIds);
     };
     return {
       ledger,
