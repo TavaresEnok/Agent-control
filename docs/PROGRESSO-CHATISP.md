@@ -276,3 +276,7 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Fila nova** `/tmp/ac-gerente-chatisp/fila-rodada.sh`: no máximo 4 módulos ao mesmo tempo, só com carga abaixo de 12 e disco abaixo de 95%, design por último. Ela já está lançando banco, documentação, desempenho, prontidão, conformidade e design na mesma rodada `rodada-20261122-1922`, com registro em `fila.log`.
   - O `rodada-completa.sh` passa a usar a fila.
   - **Gerente: não relance nada desta rodada.** Só registre os resultados à medida que terminarem.
+- 22/11/2026 19:28 UTC — **Gerente: sessão curta, nada lançado.** Rodada `rodada-20261122-1922` em andamento; disco 93% (26 GB livres), carga ~6.
+  - **Rodando:** segurança (`personal-verify-cli`, pid 1799270), QA, dependências e arquitetura (pids 1786858, 1786933, 1786934, com `--esperar-cota`) e a fila `fila-rodada.sh` (pid 1810556), que lança banco, documentação, desempenho, prontidão, conformidade e design com no máximo 4 módulos ao mesmo tempo.
+  - **Logs antigos** de banco, documentação, desempenho, prontidão, conformidade e design mostram as interrupções por carga das 19:2x. A fila está relançando esses módulos; não relancei nada à mão.
+  - **Próximo passo:** quando um módulo terminar, registrar situação, arquivos julgados, achados por gravidade e tempo desde `inicio.txt`. Com todos terminados, rodar `personal:tokens --desde <inicio.txt>` e só então abrir a F3. Sem trabalhadores durante o exame.
