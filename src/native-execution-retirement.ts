@@ -18,16 +18,21 @@ export abstract class NativeExecutionRetirement extends NativeExecutionReconcile
    const expected=[['worker',row.worker_id,this.config.workerImage],['tools',row.tools_id,this.config.toolsImage]] as const;
    for(const [role,id,image] of expected){
     const name='ac-native-'+role+'-'+row.id;
-    const [byName,byId]=await Promise.all([this.docker.inspect(name),id?this.docker.inspect(id):null]);
-    if(!byName&&!byId)continue;
-    if(!byName||!byId||!id||row.executor_digest!==this.executorDigest)throw new Refusal(refusal);
+    const [byName,byIdRecorded]=await Promise.all([this.docker.inspect(name),id?this.docker.inspect(id):null]);
+    if(!byName&&!byIdRecorded)continue;
+    // A launch that died between creating the container and recording its id leaves a container that never ran
+    // (status created, pid 0). Its name, labels (job and launch digest) and image still bind it to this job.
+    const neverStarted=!id&&byName?.State.Status==='created';
+    const containerId=neverStarted?byName!.Id:id;
+    const byId=neverStarted?byName:byIdRecorded;
+    if(!byName||!byId||!containerId||row.executor_digest!==this.executorDigest)throw new Refusal(refusal);
     for(const item of [byName,byId]){
      const labels=item.Config.Labels,state=item.State;
-     if(item.Id!==id||item.Name!=='/'+name||item.Image!==image||labels['agent-control.job']!==row.id||
+     if(item.Id!==containerId||item.Name!=='/'+name||item.Image!==image||labels['agent-control.job']!==row.id||
       labels['agent-control.contract']!=='native-execution-v1'||labels['agent-control.launch']!==row.input_digest||
-      state.Running||state.Pid!==0||!['exited','dead'].includes(state.Status))throw new Refusal(refusal);
+      state.Running||state.Pid!==0||!['exited','dead','created'].includes(state.Status))throw new Refusal(refusal);
     }
-    ids.push(id);
+    ids.push(containerId);
    }
    const labeled=await this.docker.nativeJobContainerIds(row.id);
    if(labeled.length!==ids.length||labeled.some(id=>!ids.includes(id)))throw new Refusal(refusal);
