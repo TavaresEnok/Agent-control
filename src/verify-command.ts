@@ -16,7 +16,7 @@ import {collectToolFindings} from './verify-collect.ts';
 import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp, verifyDatabaseStampPresent} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
-import {isCapacityNativeWorker, type SecurityExamSupervisor} from './verify-native-launch.ts';
+import {inheritNativeWorkerCapacityPoll, isCapacityNativeWorker, type SecurityExamSupervisor} from './verify-native-launch.ts';
 import {
   runResolvedPersonalSecurityVerification,
   runSecurityVerification,
@@ -71,6 +71,8 @@ export type PersonalVerificationInput = {
   modelCallBudget?: number;
   mapEnabled?: boolean;
   batch?: SecurityBatch;
+  pollBackoff?: boolean;
+  wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   accountRoot?: string;
   allowedAccountIds?: readonly string[];
   timeLimitMs?: number;
@@ -155,6 +157,8 @@ type ReadyVerification = {
   modelCallBudget?: number;
   mapEnabled?: boolean;
   batch?: SecurityBatch;
+  pollBackoff?: boolean;
+  wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   accountRoot?: string;
   allowedAccountIds?: readonly string[];
   timeLimitMs: number;
@@ -206,6 +210,8 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     modelCalls: input.modelCalls,
     mapEnabled: input.mapEnabled,
     batch: input.batch,
+    pollBackoff: input.pollBackoff,
+    ...(input.wait ? {wait: input.wait} : {}),
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
     ...(input.allowedAccountIds !== undefined ? {allowedAccountIds: [...input.allowedAccountIds]} : {}),
@@ -229,6 +235,7 @@ function assertExamDeadline(startedMs: number, limitMs: number): void {
 /** Deadline guard. When the worker holds the static policy, the guard it returns inherits it, and no other wrapper does. */
 function workerWithDeadline(worker: VerifyWorker, startedMs: number, limitMs: number): VerifyWorker {
   const guard: VerifyWorker = {
+    ...(worker.stop ? {stop: () => worker.stop!()} : {}),
     async run(call) {
       assertExamDeadline(startedMs, limitMs);
       return worker.run(call);
@@ -236,6 +243,7 @@ function workerWithDeadline(worker: VerifyWorker, startedMs: number, limitMs: nu
   };
   const grant = staticPolicyWorkers.get(worker);
   if (grant) staticPolicyWorkers.set(guard, grant);
+  inheritNativeWorkerCapacityPoll(worker, guard);
   return guard;
 }
 
@@ -554,6 +562,10 @@ async function runJob(input: {
         modelCalls,
         mapEnabled: ready.mapEnabled,
         batch: ready.batch,
+        pollBackoff: ready.pollBackoff,
+        startedMs,
+        timeLimitMs: ready.timeLimitMs,
+        ...(ready.wait ? {wait: ready.wait} : {}),
         notes: (() => { const notes = [state.note, takeSuppressionNote(snapshot)].filter((note): note is string => Boolean(note)); return notes.length ? notes : undefined; })(),
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
@@ -858,6 +870,7 @@ export async function resolvePersonalVerification(
         projectId: project.id,
         mapEnabled: examRunOptions(project.economy).mapEnabled,
         batch: examRunOptions(project.economy).batch,
+        pollBackoff: examRunOptions(project.economy).pollBackoff,
         url: parsed.url,
         dataDirectory: config.dataDirectory,
         accountRoot: personalAccountRoot(config),

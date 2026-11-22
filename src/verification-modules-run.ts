@@ -9,7 +9,7 @@ import {previousPerformanceMeasurements} from './module-performance-history.ts';
 import {Capacity} from './capacity.ts';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
 import {finishExamIntentTx} from './exam-intent.ts';
-import {reserveSpecialistExamSeat} from './exam-provider.ts';
+import {clearExamContextCapacityWaits, reserveSpecialistExamSeat} from './exam-provider.ts';
 import type {Ledger, VerificationModule} from './ledger.ts';
 import {moduleContainerJournal, runBoundedCollectorProcess} from './module-container-cleanup.ts';
 import {moduleCollectorCandidate, moduleExamReadBinding, moduleExamReviewEvidence, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
@@ -106,11 +106,12 @@ async function confirmFindingWithReviewer(
       intentId,
       purpose: 'reviewer',
       ...(input.allowedAccountIds ? {allowedAccounts: input.allowedAccountIds} : {}),
+      capacityWait: {enabled: true, ...(input.signal ? {signal: input.signal} : {})},
       releaseGrant: grantId => capacity.transition(input.principal, grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}),
     });
   } catch (error) {
     if (error instanceof Refusal && ['CAPACITY_NOT_CONFIGURED', 'CAPACITY_POLICY_REQUIRED', 'DESIGN_REVIEWER_UNAVAILABLE',
-      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'PROVIDER_USAGE_LIMIT'].includes(error.code)) return pending;
+      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'PROVIDER_USAGE_LIMIT', 'CAPACITY_BUSY', 'CAPACITY_QUEUED'].includes(error.code)) return pending;
     throw error;
   }
   try {
@@ -621,6 +622,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     }
     throw error;
   } finally {
+    await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId);
     if (snapshot) await removeModuleSnapshot(snapshot);
   }
 }

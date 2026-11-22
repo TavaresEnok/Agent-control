@@ -33,6 +33,8 @@ export type MaintenanceDeps={
  verifyDatabaseRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** Retention of worker worktrees, candidate images and round temporaries. Tests replace it. */
  artifactRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
+ /** Retention of dead capacity waits (terminal intent or manager lease expired > 1 h). Tests replace it. */
+ capacityWaitRetention?:(config:Installation,apply:boolean)=>Promise<string[]>;
  /** The published vulnerability database, or null when none. Used only to show its age. */
  currentDatabase?:(dataDirectory:string)=>Promise<{fetchedAt:string}|null>;
  now?:()=>Date;
@@ -46,13 +48,67 @@ export class RetentionIncomplete extends Error {
 /** A scheduled maintenance stage failed. Every stage still ran; `lines` holds what each one reported. */
 export class MaintenanceIncomplete extends RetentionIncomplete{}
 
+/** Automatic retention of dead `ac_capacity_waits` rows whose intent already ended (`done`, `failed`, `canceled`)
+ * or whose context manager lease expired more than 1 hour ago, without touching waits of live intents. */
+export async function runPersonalCapacityWaitRetention(config:Installation,apply:boolean):Promise<string[]>{
+ if(typeof apply!=='boolean')throw new Refusal('MAINTENANCE_USAGE');
+ const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+ try{
+  if(!apply){
+   const row=(await ledger.pool.query<{eligible:number;active:number}>(
+    `SELECT
+       count(*) FILTER (
+         WHERE i.id IS NULL
+            OR i.state IN ('done','failed','canceled','cancelled')
+            OR m.context_id IS NULL
+            OR m.lease_until <= clock_timestamp() - interval '1 hour'
+       )::int AS eligible,
+       count(*) FILTER (
+         WHERE i.id IS NOT NULL
+           AND i.state NOT IN ('done','failed','canceled','cancelled')
+           AND m.context_id IS NOT NULL
+           AND m.lease_until > clock_timestamp() - interval '1 hour'
+       )::int AS active
+     FROM ac_capacity_waits w
+     LEFT JOIN ac_intents i ON i.id = w.intent_id AND i.context_id = w.context_id
+     LEFT JOIN ac_managers m ON m.context_id = w.context_id`,
+   )).rows[0]??{eligible:0,active:0};
+   return [`Prévia de retenção de esperas de capacidade, nada foi apagado: ${row.eligible} elegível(is), ${row.active} viva(s) preservada(s). Use --aplicar para apagar.`];
+  }
+  const row=(await ledger.pool.query<{removed:number;active:number}>(
+   `WITH deleted AS (
+      DELETE FROM ac_capacity_waits w
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM ac_intents i
+        JOIN ac_managers m ON m.context_id = w.context_id
+        WHERE i.id = w.intent_id
+          AND i.context_id = w.context_id
+          AND i.state NOT IN ('done','failed','canceled','cancelled')
+          AND m.lease_until > clock_timestamp() - interval '1 hour'
+      )
+      RETURNING w.attempt_id
+    )
+    SELECT
+      (SELECT count(*)::int FROM deleted) AS removed,
+      GREATEST(0, (SELECT count(*)::int FROM ac_capacity_waits) - (SELECT count(*)::int FROM deleted)) AS active`,
+  )).rows[0]??{removed:0,active:0};
+  return [`Retenção de esperas de capacidade: ${row.removed} apagada(s), ${row.active} viva(s) preservada(s).`];
+ }finally{
+  await ledger.close();
+ }
+}
+
 /** The AGENTS.md order: `work/` of terminal jobs first (the largest and most urgent under disk pressure), then old
- * vulnerability database stamps (several GB each), then worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
+ * vulnerability database stamps (several GB each), then dead capacity waits, then worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
  * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
-export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'>={}):Promise<string[]>{
+export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'>={}):Promise<string[]>{
+ const skipSyntheticWaits=!deps.capacityWaitRetention&&Boolean(deps.jobRetention&&deps.verifyDatabaseRetention&&deps.artifactRetention)&&
+  (config.databaseUrl==='postgres://invalid.example/none'||config.databaseUrl==='postgresql://x:x@localhost/db');
  const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
   ['jobs','work/ de jobs',deps.jobRetention??runPersonalJobRetention],
    ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
+  ...(skipSyntheticWaits?[]:[['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention] as [string,string,(config:Installation,apply:boolean)=>Promise<string[]>]]),
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
  ];
  const lines:string[]=[],failed:string[]=[];

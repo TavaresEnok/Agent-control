@@ -31,7 +31,14 @@ export type NativeCompletedSession = {
   contextId: string;
 };
 
+export type NativeWorkerCapacityPoll = {
+  wait: Wait;
+  pollBackoff: boolean;
+  signal: AbortSignal;
+};
+
 const nativeWorkerCompletedSessions = new WeakMap<VerifyWorker, WeakMap<object, NativeCompletedSession>>();
+const nativeWorkerCapacityPolls = new WeakMap<VerifyWorker, NativeWorkerCapacityPoll>();
 
 export function isCapacityNativeWorker(worker: VerifyWorker): boolean {
   return nativeWorkerCompletedSessions.has(worker);
@@ -39,6 +46,15 @@ export function isCapacityNativeWorker(worker: VerifyWorker): boolean {
 
 export function readNativeExamSession(worker: VerifyWorker, call: object): NativeCompletedSession | null {
   return nativeWorkerCompletedSessions.get(worker)?.get(call) ?? null;
+}
+
+export function readNativeWorkerCapacityPoll(worker: VerifyWorker): NativeWorkerCapacityPoll | null {
+  return nativeWorkerCapacityPolls.get(worker) ?? null;
+}
+
+export function inheritNativeWorkerCapacityPoll(source: VerifyWorker, target: VerifyWorker): void {
+  const poll = nativeWorkerCapacityPolls.get(source);
+  if (poll) nativeWorkerCapacityPolls.set(target, poll);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -226,9 +242,11 @@ export function createCapacityNativeWorker(input: {
   const {supervisors, principal, authority, base, releaseGrant, wait = sleep} = input;
   const poll = input.pollBackoff === false ? LEGACY_POLL : BACKOFF_POLL;
   const completedByCall = new WeakMap<object, NativeCompletedSession>();
+  const stopController = new AbortController();
   let active: {supervisor: SecurityExamSupervisor; request: SecurityExamRequest} | null = null;
   const worker: VerifyWorker = {
     async stop() {
+      stopController.abort();
       const current = active;
       const stop = current?.supervisor.stop?.bind(current.supervisor);
       if (!current || !stop) return;
@@ -272,6 +290,11 @@ export function createCapacityNativeWorker(input: {
     },
   };
   nativeWorkerCompletedSessions.set(worker, completedByCall);
+  nativeWorkerCapacityPolls.set(worker, {
+    wait,
+    pollBackoff: input.pollBackoff !== false,
+    signal: stopController.signal,
+  });
   return worker;
 }
 
@@ -291,11 +314,19 @@ export async function reservePersonalRecheckReviewer(input: {
   avoidProviders?: readonly string[];
   exclusion?: RecheckReserveExclusion;
   releaseGrant: (grantId: string, how: 'not_started' | 'exited') => Promise<void>;
+  wait?: Wait;
+  pollBackoff?: boolean;
+  deadlineMs?: number;
+  signal?: AbortSignal;
 }): Promise<{grantId: string; accountId: string; provider: string; role: 'specialist'}> {
   const avoidReviewerAccountIds = [
     ...(input.exclusion?.avoidAccounts ?? []),
     ...(input.avoidProviders ?? []).filter(id => Id.safeParse(id).success),
   ];
+  const hasWaitConfig = input.wait !== undefined
+    || input.pollBackoff !== undefined
+    || input.deadlineMs !== undefined
+    || input.signal !== undefined;
   const seat = await reserveSpecialistExamSeat({
     capacity: new Capacity(input.ledger),
     ledger: input.ledger,
@@ -307,6 +338,17 @@ export async function reservePersonalRecheckReviewer(input: {
     avoidProfileIds: input.exclusion?.avoidProfiles,
     avoidAccountIds: input.exclusion?.avoidExaminerAccounts,
     avoidReviewerAccountIds,
+    ...(hasWaitConfig
+      ? {
+          capacityWait: {
+            enabled: true,
+            pollBackoff: input.pollBackoff !== false,
+            deadlineMs: input.deadlineMs ?? EXAM_DEADLINE_MS,
+            ...(input.wait ? {sleep: (ms: number) => Promise.resolve(input.wait!(ms))} : {}),
+            ...(input.signal ? {signal: input.signal} : {}),
+          },
+        }
+      : {}),
     releaseGrant: grantId => input.releaseGrant(grantId, 'not_started'),
   });
   return {grantId: seat.grantId, accountId: seat.accountId, provider: seat.provider, role: 'specialist'};
@@ -338,7 +380,19 @@ export function createRecheckNativeWorker(input: {
             ...(parsed.avoidExaminerAccounts?.length ? {avoidExaminerAccounts: parsed.avoidExaminerAccounts} : {}),
           }
         : undefined;
-      const reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders, exclusion);
+      let reserved: Awaited<ReturnType<typeof reserveReviewer>> | undefined;
+      for (let attempt = 0; attempt < poll.attempts; attempt += 1) {
+        try {
+          reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders, exclusion);
+          break;
+        } catch (error) {
+          const isCapacityWait = error instanceof Refusal
+            && (error.code === 'CAPACITY_BUSY' || error.code === 'CAPACITY_QUEUED');
+          if (!isCapacityWait || attempt === poll.attempts - 1) throw error;
+          await wait(poll.waitMs(attempt));
+        }
+      }
+      if (!reserved) throw new Refusal('CAPACITY_QUEUED');
       const marked = call as {reviewerProvider?: string; reviewerAccountId?: string; reviewerSessionId?: string};
       marked.reviewerProvider = typeof reserved.provider === 'string' ? reserved.provider : '';
       marked.reviewerAccountId = typeof reserved.accountId === 'string' ? reserved.accountId : '';

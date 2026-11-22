@@ -6,6 +6,7 @@ import {basename, join} from 'node:path';
 import {z} from 'zod';
 import {digest, Id, Refusal, type Authority} from './contracts.ts';
 import {finishExamIntentTx} from './exam-intent.ts';
+import {clearExamContextCapacityWaits} from './exam-provider.ts';
 import type {Ledger, VerificationModule} from './ledger.ts';
 import {hasModuleReviewProof, moduleCollectorHypothesis, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
 import {readRecheckBlob, recheckHead, sameRecheckHistory} from './module-recheck-git.ts';
@@ -626,6 +627,7 @@ export async function recheckModuleFindings(
     return results.some(result => result.status !== 'pendente')
       ? publish(publication) : {results, publication: 'published'};
   } finally {
+    await clearExamContextCapacityWaits(ledger.pool, authority.contextId, intentId);
     if (!completed) {
       await ledger.tx(async client => {
         await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);
