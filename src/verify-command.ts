@@ -139,6 +139,9 @@ export type VerificationProgress = {
   note?: string;
   modelCalls?: number;
   durationMs?: number;
+  /** Arquivos já julgados pelo examinador e total a julgar, durante a fase de exame. */
+  judged?: number;
+  total?: number;
 };
 
 type ReadyVerification = {
@@ -175,6 +178,8 @@ type ProgressState = {
   note?: string;
   modelCalls?: number;
   durationMs?: number;
+  judged?: number;
+  total?: number;
 };
 
 function isErrno(error: unknown, code: string): boolean {
@@ -279,6 +284,10 @@ function renderProgress(state: ProgressState): string {
   if (state.note) body.note = state.note;
   if (state.modelCalls !== undefined) body.modelCalls = state.modelCalls;
   if (state.durationMs !== undefined) body.durationMs = state.durationMs;
+  if (state.judged !== undefined && state.total !== undefined) {
+    body.judged = state.judged;
+    body.total = state.total;
+  }
   return `${JSON.stringify(body)}\n`;
 }
 
@@ -563,6 +572,13 @@ async function runJob(input: {
         toolResults: collected.tools,
         runId: id,
         onPhase,
+        onProgress: async progress => {
+          if (state.status !== 'running') return;
+          state.judged = progress.judged;
+          state.total = progress.total;
+          state.modelCalls = progress.modelCalls;
+          await writePrivateFile(progressPath, renderProgress(state));
+        },
         modelCalls,
         mapEnabled: ready.mapEnabled,
         batch: ready.batch,
@@ -712,6 +728,10 @@ export async function readVerificationProgress(dataDirectory: string, projectId:
     if (typeof row.note === 'string') item.note = row.note;
     if (typeof row.modelCalls === 'number' && Number.isFinite(row.modelCalls)) item.modelCalls = row.modelCalls;
     if (typeof row.durationMs === 'number' && Number.isFinite(row.durationMs)) item.durationMs = row.durationMs;
+    if (Number.isSafeInteger(row.judged) && Number.isSafeInteger(row.total) && (row.judged as number) >= 0 && (row.judged as number) <= (row.total as number)) {
+      item.judged = row.judged as number;
+      item.total = row.total as number;
+    }
     rows.push(item);
   }
   rows.sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id));

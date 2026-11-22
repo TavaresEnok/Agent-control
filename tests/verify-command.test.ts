@@ -258,6 +258,10 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     assert.equal(finished[0]?.note, HOMOLOGATION_NOTE);
     assert.ok((finished[0]?.modelCalls ?? 0) >= 1);
     assert.equal(typeof finished[0]?.durationMs, 'number');
+    // A contagem da fase de exame fica gravada: arquivos julgados nunca passam do total.
+    assert.equal(typeof finished[0]?.total, 'number');
+    assert.ok((finished[0]?.total ?? 0) >= 1);
+    assert.ok((finished[0]?.judged ?? -1) >= 0 && (finished[0]?.judged ?? 0) <= (finished[0]?.total ?? 0));
     const reports = await listSecurityReports(dataDirectory, project);
     assert.equal(reports.some(item => item.id === begun.id && item.note.includes(HOMOLOGATION_NOTE)), true);
     assert.equal(networkCalled, false);
@@ -708,6 +712,24 @@ test('uma base podada entre a leitura do current.json e a reivindicação recusa
     assert.equal(toolsCalled, false);
     assert.deepEqual(await readdir(join(dataDirectory, 'verify-db', 'in-use')), []);
     await assert.rejects(stat(join(dataDirectory, 'verificacoes', projectId, 'andamento', '.running')));
+  } finally {
+    await rm(dataDirectory, {recursive: true, force: true});
+  }
+});
+
+test('o andamento só aceita contagem coerente de arquivos julgados', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-progress-'));
+  try {
+    const project = randomUUID();
+    const directory = join(dataDirectory, 'verificacoes', project, 'andamento');
+    await mkdir(directory, {recursive: true});
+    const base = {status: 'running', phase: 'exame', startedAt: '2026-11-22T10:00:00.000Z'};
+    await writeFile(join(directory, 'a.json'), JSON.stringify({...base, id: 'a', judged: 40, total: 120, modelCalls: 9}));
+    await writeFile(join(directory, 'b.json'), JSON.stringify({...base, id: 'b', judged: 130, total: 120}));
+    await writeFile(join(directory, 'c.json'), JSON.stringify({...base, id: 'c', judged: '4', total: 9}));
+    const rows = await readVerificationProgress(dataDirectory, project);
+    assert.deepEqual(rows.map(row => [row.id, row.judged, row.total]), [['a', 40, 120], ['b', undefined, undefined], ['c', undefined, undefined]]);
+    assert.equal(rows[0]?.modelCalls, 9);
   } finally {
     await rm(dataDirectory, {recursive: true, force: true});
   }

@@ -54,6 +54,8 @@ export type SecurityVerificationInput = {
   checklist?: readonly ChecklistItem[];
   runId?: string;
   onPhase?: (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => void | Promise<void>;
+  /** Called after each examiner call: files judged so far and files to judge. A failure here never stops the exam. */
+  onProgress?: (progress: {judged: number; total: number; modelCalls: number}) => void | Promise<void>;
   modelCalls?: {count: number};
   /** Absent uses DEFAULT_MODEL_CALL_BUDGET. Zero, negative, and non-finite values are refused. */
   modelCallBudget?: number;
@@ -270,6 +272,15 @@ async function examine(
     }
     mapMarkdown = redactUnknownSecrets(mapToMarkdown(map, files));
     if (input.onPhase) await input.onPhase('exame');
+    const totalToJudge = new Set(slices.flatMap(slice => slice.files)).size;
+    const judgedSoFar = new Set<string>();
+    const reportProgress = async () => {
+      if (!input.onProgress) return;
+      try {
+        await input.onProgress({judged: judgedSoFar.size, total: totalToJudge, modelCalls: trackedCalls.count});
+      } catch { /* progress is informational; the exam result is what counts */ }
+    };
+    await reportProgress();
     /** One examiner call over a slice. Returns the files it did not judge; a valid batch with gaps is retried file by file by the caller. */
     const examineSlice = async (slice: {id: string; files: string[]; checklist: string[]}, retry: boolean): Promise<string[]> => {
       const examined = await reserveAndRun(input, capacity, intent.id, 'examiner', examTask(slice, mapMarkdown, rawFindings, history, compactMap?.map), 'verify-exam', modelCallBudget, trackedCalls, undefined, undefined, undefined, staticPolicy);
@@ -286,6 +297,8 @@ async function examine(
       }));
       const declared = exam.success ? exam.data.checklist : [];
       for (const file of judged) addCoverage(coverage, file, examined.seat, slice.checklist, declared);
+      for (const file of judged) judgedSoFar.add(file);
+      await reportProgress();
       if (!exam.success) notes.push(`A fatia ${slice.id} não devolveu exame válido.`);
       else if (unjudged.length) notes.push(`O examinador não marcou como lido: ${unjudged.join(', ')}.`);
       if (!exam.success) return unjudged;

@@ -54,6 +54,9 @@ const progressSchema = z.object({
   id: z.string().min(1),
   status: z.string().min(1),
   phase: z.string().min(1),
+  judged: z.number().int().nonnegative().optional(),
+  total: z.number().int().nonnegative().optional(),
+  modelCalls: z.number().int().nonnegative().optional(),
 })
 const progressListSchema = z.object({
   runs: z.array(progressSchema),
@@ -289,6 +292,12 @@ function VerificacoesLista({ projectId }: { projectId?: string }) {
       </button>
       {startError ? <p role="alert">{startError}</p> : null}
       {progress ? <p>Fase: {labelPhase(progress.phase)}. Status: {progress.status}</p> : null}
+      {progress && progress.total !== undefined && progress.judged !== undefined ? (
+        <p>
+          Arquivos julgados: {progress.judged} de {progress.total}
+          {progress.modelCalls !== undefined ? `. Chamadas ao modelo: ${progress.modelCalls}` : ''}
+        </p>
+      ) : null}
       {error ? <p role="alert">{error}</p> : null}
       {items === null && !error ? <p>Carregando…</p> : null}
       {items && items.length === 0 ? <p>Nenhuma verificação ainda.</p> : null}
