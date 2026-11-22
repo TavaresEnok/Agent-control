@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash,generateKeyPairSync,randomUUID,sign,verify} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
-import {chmod,mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Ledger} from '../src/ledger.ts';
@@ -17,6 +17,9 @@ import {nativeExecutionExecutorDigest} from '../src/native-execution-contract.ts
 import {NativeQaContract,nativeQaContractDigest} from '../src/native-qa-contract.ts';
 import {nativeReviewVerifierDigest} from '../src/native-review-contract.ts';
 import {Authority,Refusal,canonical,digest} from '../src/contracts.ts';
+import {grantLaunchLockKey} from '../src/native-execution-shared.ts';
+import {loadInstallation} from '../src/installation.ts';
+import {recoverPersonalOrphanedExams} from '../src/personal-orphaned-exams.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const ZERO='0001-01-01T00:00:00Z';
@@ -33,9 +36,11 @@ async function fakeDocker(socket:string,state:Fake){
   if(state.unavailable){res.statusCode=503;res.end();return;}
   const container=(ref:string)=>state.containers.get(ref)??[...state.containers.values()].find(item=>item.Id===ref);
   if(method==='GET'&&url.startsWith('/v1.44/containers/json?')){
-   const {label:[filter]}=JSON.parse(new URL(url,'http://localhost').searchParams.get('filters')!);
+   const params=new URL(url,'http://localhost').searchParams;
+   const {label:[filter]}=JSON.parse(params.get('filters')!);
    const [name,value]=filter.split('=');
-   res.end(JSON.stringify([...state.containers.values()].filter(item=>item.Config.Labels[name]===value).map(item=>({Id:item.Id}))));
+   const matching=[...state.containers.values()].filter(item=>item.Config.Labels[name]===value&&(params.get('all')==='1'||item.State.Running));
+   res.end(JSON.stringify(matching.map(item=>({Id:item.Id}))));
    return;
   }
   if(method==='GET'&&url.startsWith('/v1.44/containers/')&&url.endsWith('/json')){
@@ -647,9 +652,60 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    assert.deepEqual(docker.mutations,[]);
   });
 
+  await t.test('recupera o worker sem resultado após lease vencido e ausência inclusive de contêiner parado',async()=>{
+   reset();
+   const live=await lease();
+   const orphan=await plantOrphan({state:'running',grantState:'running',workerId:hex(),tools:'absent',
+    runStatus:'running',intentState:'accepted',siblings:0});
+   await assert.rejects(recover(orphan),/NATIVE_ORPHAN_ACTIVE_LEASE/);
+   await db.releaseLease(live);
+   orphan.body.State={Status:'exited',Running:false,ExitCode:1,FinishedAt:new Date().toISOString()};
+   docker.containers.set('renamed-tools-'+orphan.jobId,orphan.body);
+   await assert.rejects(recover(orphan),/NATIVE_ORPHAN_CONTAINER_PRESENT/);
+   docker.containers.delete('renamed-tools-'+orphan.jobId);
+   assert.equal(await recover(orphan,false),'eligible');
+   assert.equal(await recover(orphan),'recovered');
+   const after=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   assert.equal(after.job.state,'failed');
+   assert.equal(after.job.receipt.payload.executionStarted,true);
+   assert.equal(after.job.receipt.payload.resultDigest,null);
+   assert.equal(after.job.receipt.payload.failureCode,'NATIVE_EXAM_ORPHANED_NO_RESULT');
+   assert.equal(after.grant.state,'released');
+   assert.equal(after.grant.physical_receipt.failureCode,'NATIVE_EXAM_ORPHANED_NO_RESULT');
+   assert.equal(after.journal.state,'removed');
+   assert.equal(await recover(orphan),'already_recovered');
+   const replay=await lease();
+   try{
+    const outcome=await supervisor.reconcile(owner,replay,orphan.request);
+    assert.equal(outcome.state,'failed');
+    assert.ok('failureCode' in outcome && outcome.failureCode==='NATIVE_EXAM_ORPHANED_NO_RESULT');
+   }finally{await db.releaseLease(replay);}
+  });
+
+  await t.test('preserva o worker sem resultado enquanto outra sessão segura o lock de lançamento',async()=>{
+   reset();
+   const orphan=await plantOrphan({state:'running',grantState:'running',workerId:hex(),tools:'absent',siblings:0});
+   const before=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   const holder=await db.pool.connect();
+   try{
+    await holder.query('BEGIN');
+    await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[grantLaunchLockKey(orphan.grantId)]);
+    await assert.rejects(recover(orphan),{code:'NATIVE_EXECUTION_BUSY'});
+    assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
+    assert.deepEqual(docker.mutations,[]);
+   }finally{
+    await holder.query('ROLLBACK');
+    holder.release();
+   }
+   assert.equal(await recover(orphan),'recovered');
+  });
+
   await t.test('a retenção prova e aplica a recuperação de módulo e de design sem início',async()=>{
    reset();
-   const module=await plantOrphan({tools:'absent',state:'running',grantState:'running',siblings:0});
+   const module=await plantOrphan({tools:'absent',state:'running',grantState:'running',workerId:hex(),launchDigest:hex(),siblings:0});
+   await db.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[module.jobId,module.toolsId]);
+   const work=join(module.root,'work');
+   await mkdir(work,{mode:0o700});
    await writeResult(module,0);
    const design=await db.createContext(owner,project,randomUUID());
    await db.pool.query("INSERT INTO ac_exam_contexts(project_id,module,context_id) VALUES($1,'design',$2)",[project,design]);
@@ -661,6 +717,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    assert.match(preview.stdout,new RegExp(module.jobId+'.*elegível'));
    assert.match(preview.stdout,new RegExp(unstarted.jobId+'.*elegível'));
    assert.equal((await snapshot(module.jobId,module.grantId,module.intentId)).job.state,'running');
+   assert.ok((await stat(work)).isDirectory());
    assert.equal((await snapshot(unstarted.jobId,unstarted.grantId,unstarted.intentId)).grant.state,'uncertain');
    const applied=await cli('--retencao-automatica','--aplicar');
    assert.equal(applied.status,0,applied.stdout+applied.stderr);
@@ -668,8 +725,19 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    assert.match(applied.stdout,new RegExp(unstarted.jobId+'.*reconciliado'));
    const done=await snapshot(module.jobId,module.grantId,module.intentId);
    assert.equal(done.grant.state,'released');
-   assert.equal(done.job.receipt.payload.exitCode,1);
+   assert.equal(done.job.state,'failed');
+   assert.equal(done.job.receipt.payload.exitCode,0);
    assert.equal(done.job.receipt.payload.workerExitCode,0);
+   assert.equal(done.grant.physical_receipt.exitCode,0);
+   assert.equal(done.job.receipt.payload.failureCode,'NATIVE_EXAM_ORPHANED');
+   await assert.rejects(stat(work),{code:'ENOENT'});
+   const replay=await lease();
+   try{
+    const outcome=await supervisor.reconcile(owner,replay,module.request);
+    assert.equal(outcome.state,'failed');
+    assert.ok('failureCode' in outcome && outcome.failureCode==='NATIVE_EXAM_ORPHANED');
+    assert.ok('output' in outcome && outcome.output==='resultado preservado');
+   }finally{await db.releaseLease(replay);}
    const beforeLaunch=await snapshot(unstarted.jobId,unstarted.grantId,unstarted.intentId);
    assert.equal(beforeLaunch.job.receipt.payload.executionStarted,false);
    assert.equal(beforeLaunch.grant.state,'released');
@@ -688,6 +756,45 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    assert.equal(command.status,1);
    assert.equal((await snapshot(own.jobId,own.grantId,own.intentId)).grant.state,'released',command.stderr);
    assert.equal((await snapshot(foreign.jobId,foreign.grantId,foreign.intentId)).grant.state,'running');
+  });
+
+  await t.test('repositório inexistente recusa com motivo de escopo',async()=>{
+   const orphan=await plantOrphan({tools:'absent',siblings:0});
+   await assert.rejects(supervisor.recoverOrphanedExam(owner,orphan.jobId,{
+    ...scope,contextId:orphan.contextId,repository:join(area,'repo-ausente'),
+   },false),{code:'NATIVE_EXECUTION_SCOPE_MISMATCH'});
+  });
+
+  await t.test('as varreduras automática e por contexto prosseguem após erro inesperado de um job',async()=>{
+   const rejected=await plantOrphan({tools:'absent',networkId:null,siblings:0});
+   const before=await snapshot(rejected.jobId,rejected.grantId,rejected.intentId);
+   const config=await loadInstallation(installationFile);
+   await db.pool.query(`
+    CREATE FUNCTION fixture_fail_orphan() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+     IF NEW.id = '${rejected.jobId}' AND NEW.state = 'failed' THEN
+      RAISE EXCEPTION 'falha de teste na gravação do job';
+     END IF;
+     RETURN NEW;
+    END;
+    $$;
+    CREATE TRIGGER fixture_fail_orphan BEFORE UPDATE ON ac_native_execution_jobs
+    FOR EACH ROW EXECUTE FUNCTION fixture_fail_orphan();
+   `);
+   try{
+    for(const selection of [{limit:100,deadline:Date.now()+60_000},{contextId:rejected.contextId}]){
+     const next=await plantOrphan({tools:'absent',networkId:null,siblings:0});
+     const lines=await recoverPersonalOrphanedExams(config,db,selection,true);
+     const rejectedIndex=lines.findIndex(line=>line.includes(rejected.jobId));
+     assert.ok(rejectedIndex>=0);
+     assert.match(lines[rejectedIndex],/preservado \(P0001\)/);
+     assert.ok(lines.findIndex(line=>line.includes(next.jobId)&&line.includes('reconciliado'))>rejectedIndex);
+     assert.deepEqual(await snapshot(rejected.jobId,rejected.grantId,rejected.intentId),before);
+     assert.equal((await snapshot(next.jobId,next.grantId,next.intentId)).grant.state,'released');
+    }
+   }finally{
+    await db.pool.query('DROP TRIGGER fixture_fail_orphan ON ac_native_execution_jobs; DROP FUNCTION fixture_fail_orphan()');
+   }
   });
  }finally{
   for(const close of closers)await close().catch(()=>undefined);

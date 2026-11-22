@@ -70,6 +70,24 @@ test('a recuperação fecha a rodada dos temporários de uma verificação aband
   }
 });
 
+test('limpa o andamento quando o diretório de dados é acessado por um link', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ac-verify-abandon-link-'));
+  try {
+    const data = join(root, 'dados');
+    const alias = join(root, 'atalho');
+    const dir = join(data, 'verificacoes', project, 'andamento');
+    await mkdir(dir, {recursive: true});
+    await symlink(data, alias);
+    await writeFile(join(dir, `${run}.json`), '{"status":"running"}');
+    await writeFile(join(dir, '.running'), run);
+    await failAbandonedVerifyRuns(ledger([{id: run, project_id: project}], {text: ''}), alias);
+    await assert.rejects(stat(join(dir, `${run}.json`)), {code: 'ENOENT'});
+    await assert.rejects(stat(join(dir, '.running')), {code: 'ENOENT'});
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
 test('marcador de outro run e lease ainda ativa não são apagados', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ac-verify-abandon-keep-'));
   try {

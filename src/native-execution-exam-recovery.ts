@@ -222,7 +222,13 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    if(!(await c.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) ok',[grantLaunchLockKey(job.grant_id)])).rows[0].ok)
     throw new Refusal('NATIVE_EXECUTION_BUSY');
    const context=await this.ledger.authorize(c,principal,scope.contextId);
-   if(context.role!=='owner'||context.project_id!==scope.projectId||await this.jobRepository(c,scope.projectId)!==await realpath(scope.repository))
+   if(context.role!=='owner'||context.project_id!==scope.projectId)
+    throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+   const scopedRepository=await realpath(scope.repository).catch(error=>{
+    if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+    throw error;
+   });
+   if(await this.jobRepository(c,scope.projectId)!==scopedRepository)
     throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    await fenceInstallationContext(c,scope.contextId,this.ledger.installationAuthority,true);
    // authorize holds the context anchor, which also fences acquire and heartbeat.
@@ -253,9 +259,9 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    const result=await this.orphanedExamResult(jobId);
    if(result&&row.physical_receipt?.executionStarted===false)throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
    await this.confirmOrphanedExamContainersAbsent(row);
-   if(!result){
-    // The worker ID is persisted before Docker starts it, and a signed
-    // launch is only published after that point. Tools alone cannot run a model.
+   // A recorded worker could have started even if it never wrote a result.
+   const executionStarted=Boolean(result||(row.worker_id&&row.physical_receipt?.executionStarted!==false));
+   if(!executionStarted){
     if(row.state!=='uncertain'||row.grant_state==='running'||row.worker_id||row.launch_digest||
      row.physical_receipt?.executionStarted===true)
      throw new Refusal('NATIVE_EXECUTION_OUTPUT_MISSING');
@@ -266,10 +272,10 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    }
    await this.retireOrphanedExamNetwork(row,apply);
    if(!apply)return 'eligible' as const;
-   const executionStarted=result!==null;
-   const exitCode=result?.exitCode||1;
+   const exitCode=result?.exitCode??1;
+   const failureCode=!result&&executionStarted?'NATIVE_EXAM_ORPHANED_NO_RESULT':result?.failureCode??'NATIVE_EXAM_ORPHANED';
    const physical={source:'native-orphaned-exam',jobId,containerId:row.worker_id,toolsContainerId:row.tools_id,networkId:row.network_id,
-    executionStarted,exitCode,workerExitCode:result?.exitCode??1,failureCode:result?.failureCode??'NATIVE_EXAM_ORPHANED',
+    executionStarted,exitCode,workerExitCode:exitCode,failureCode,
     resultDigest:result&&digest(result)};
    const grantPhysical=row.grant_state==='released'?row.physical_receipt:physical;
    const payload={schemaVersion:1,accountId:row.account_id,profileId:row.profile_id,profileDigest:row.profile_digest,jobId,
@@ -286,7 +292,7 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    if(!row.has_unresolved_job&&!row.has_open_grant){
     await finishExamIntentTx(c,this.ledger,{intentId:row.intent_id,contextId:scope.contextId},'failed');
    }
-   if(result)await this.removeLaunchFiles(jobId);
+   if(executionStarted)await this.removeLaunchFiles(jobId);
    return 'recovered' as const;
   }));
  }

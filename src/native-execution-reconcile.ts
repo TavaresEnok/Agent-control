@@ -109,7 +109,8 @@ export abstract class NativeExecutionReconciler extends NativeExecutionExamRecov
     payload.jobId!==input.jobId||payload.intentId!==input.intentId||payload.contextId!==authority.contextId||payload.grantId!==input.grantId||payload.sessionId!==input.sessionId||
     payload.epoch!==Number(job.manager_epoch)||payload.accountId!==job.account_id||payload.profileId!==job.profile_id||payload.profileDigest!==job.profile_digest||payload.inputDigest!==job.input_digest||payload.executorDigest!==this.executorDigest||
     grant?.state!=='released'||grant.account_id!==job.account_id||grant.profile_id!==job.profile_id||grant.role!==job.role||!grant.physical_receipt||payload.physicalDigest!==digest(grant.physical_receipt)||
-    ((payload.exitCode===0)!==(job.state==='completed')))throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
+    ((payload.exitCode===0)!==(job.state==='completed')&&!(job.state==='failed'&&payload.orphanedExam===true&&payload.failureCode==='NATIVE_EXAM_ORPHANED')))
+    throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
    if(payload.executionStarted===false&&this.validPreLaunchExamReceipt(grant.physical_receipt,job.id,Boolean(this.config.syntheticFixture))){
     this.verifyUnstartedReceipt(job,grant,receipt,authority.contextId);
     return {state:'failed',receipt,output:'',artifact:null,failureCode:grant.physical_receipt.reason};
