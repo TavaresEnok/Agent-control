@@ -10,6 +10,7 @@ import {nativeBootstrapSchemaError} from './native-bootstrap.ts';
 import {personalConnect} from './personal-connect.ts';
 import {assertRepositoryInsideRoot} from './personal-folders.ts';
 import {isPersonalRemoteCheckout} from './personal-ssh.ts';
+import {projectRepositoryIdentity} from './project-repository.ts';
 import {Projects} from './projects.ts';
 
 export type PersonalProjectAddResult={projectId:string;label:string;repository:string;restart:string};
@@ -23,7 +24,12 @@ export type PersonalProjectAccountsResult={
 
 const CONTAS_USAGE='Uso: npm run personal:project -- --contas <instalação.json> <id-ou-rótulo-do-projeto> <uuid>[,<uuid>...]|--todas';
 
+const addMessages:Record<string,string>={
+ PROJECT_REPOSITORY_PERMISSIONS:'O repositório e o .git precisam pertencer ao usuário do serviço e não podem ter escrita para grupo ou outros. Comando sugerido: chmod go-w <repo> <repo>/.git',
+};
+
 const contasMessages:Record<string,string>={
+ ...addMessages,
  PROJECT_CONTAS_USAGE:CONTAS_USAGE,
  PERSONAL_ACTIVATION_REQUIRED:'A restrição de contas por projeto só roda numa instalação pessoal.',
  NOT_FOUND:'Projeto não encontrado.',
@@ -38,6 +44,12 @@ const contasMessages:Record<string,string>={
 export function personalProjectContasFailureText(error:unknown):string{
  const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'';
  return contasMessages[code]??(code||'Não foi possível atualizar as contas permitidas do projeto.');
+}
+
+export function personalProjectAddFailureText(error:unknown,repo?:string):string{
+ const code=error instanceof Refusal?error.code:error instanceof Error?error.message:'';
+ const text=addMessages[code]??contasMessages[code]??(code||'Não foi possível acrescentar o projeto.');
+ return repo?text.replaceAll('<repo>',repo):text;
 }
 
 function stampOf(now:Date):string{
@@ -194,6 +206,12 @@ export async function addPersonalProject(installationPath:string,repository:stri
   const known=new Set([config.project.id,...config.projects.map(item=>item.id),project.id]);
   if(row&&!known.has(String(row.project_id)))throw new Error('REPOSITORY_OF_ANOTHER_INSTALLATION');
   if(options?.insideRoot)await assertRepositoryInsideRoot(options.insideRoot,repo);
+  try{
+   await projectRepositoryIdentity(repo);
+  }catch{
+   // projectRepositoryIdentity throws when permissions or git identity are invalid (e.g. mode & 0o022 !== 0 or uid mismatch)
+   throw new Refusal('PROJECT_REPOSITORY_PERMISSIONS',400);
+  }
   await backupInstallation(installationPath,clean);
   if(!existing){
    const raw=JSON.parse(await readFile(installationPath,'utf8')) as {projects?:Installation['project'][]};
@@ -290,7 +308,7 @@ async function main(){
   console.log(`Projeto ${result.label} acrescentado.`);
   console.log(result.restart);
  }catch(error){
-  console.log(error instanceof Error?error.message:String(error));
+  console.error(personalProjectAddFailureText(error,repository));
   process.exit(1);
  }
 }

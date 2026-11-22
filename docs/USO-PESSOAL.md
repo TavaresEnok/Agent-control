@@ -32,7 +32,7 @@ O comando acrescenta o projeto em `projects[]` com um id novo e o caminho absolu
 
 Antes de reescrever `installation.json`, o comando confere se `nativeBootstrap` aceita o repositório em `projects[]`. O arquivo anterior fica ao lado, em `installation.json.before-add-<label>`. Rodar de novo não duplica.
 
-O comando recusa um caminho que não é Git ou não tem branch, um repositório que já está nesta instalação, um caminho dentro do diretório de dados e um repositório que pertence a outra instalação.
+O comando recusa um caminho que não é Git ou não tem branch, um repositório que já está nesta instalação, um caminho dentro do diretório de dados e um repositório que pertence a outra instalação. Antes de qualquer gravação, também confere as permissões com `projectRepositoryIdentity` e recusa com `PROJECT_REPOSITORY_PERMISSIONS` se o repositório ou o `.git` tiver escrita para grupo ou outros ou não pertencer ao usuário do serviço (`chmod go-w <repo> <repo>/.git`).
 
 No fim ele pede o reinício do gateway que já está no ar. O nome do serviço é o diretório da instalação (o `basename` de `dataDirectory`), o mesmo critério de `personal:services`:
 

@@ -9,7 +9,7 @@ import {Capacity} from '../src/capacity.ts';
 import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {nativeReviewVerifierDigest} from '../src/native-review-contract.ts';
-import {addPersonalProject,personalProjectContasFailureText,runPersonalProjectContasCli,setPersonalProjectAccounts} from '../src/personal-project-add.ts';
+import {addPersonalProject,personalProjectAddFailureText,personalProjectContasFailureText,runPersonalProjectContasCli,setPersonalProjectAccounts} from '../src/personal-project-add.ts';
 import {QualityPolicies} from '../src/quality-policy.ts';
 import {Projects} from '../src/projects.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -67,6 +67,33 @@ test('adding a repository registers it once, shares accounts and publishes polic
   await assert.rejects(()=>addPersonalProject(file,foreign,'Alheio'),/REPOSITORY_OF_ANOTHER_INSTALLATION/);
   await assert.rejects(()=>addPersonalProject(file,dbonly,'Banco'),/REPOSITORY_OF_ANOTHER_INSTALLATION/);
 
+  // repo com modo 0775 é recusado com o código novo e nada é gravado (installation.json igual byte a byte e nenhum projeto novo no banco)
+  const beforeFile=await readFile(file);
+  check=new Ledger(fixture.url);
+  const beforeProjects=Number((await check.pool.query('SELECT count(*)::int n FROM ac_projects')).rows[0].n);
+  const beforeRepos=Number((await check.pool.query('SELECT count(*)::int n FROM ac_project_repositories')).rows[0].n);
+  await check.close();check=undefined;
+
+  await chmod(secondary,0o775);await chmod(join(secondary,'.git'),0o775);
+  await assert.rejects(
+   ()=>addPersonalProject(file,secondary,'Segundo'),
+   (err:unknown)=>{
+    assert.ok(err instanceof Refusal);
+    assert.equal(err.code,'PROJECT_REPOSITORY_PERMISSIONS');
+    assert.equal(err.status,400);
+    assert.match(personalProjectAddFailureText(err),/chmod go-w/i);
+    return true;
+   },
+  );
+  assert.deepEqual(await readFile(file),beforeFile);
+  await assert.rejects(()=>stat(join(data,'installation.json.before-add-Segundo')),{code:'ENOENT'});
+  check=new Ledger(fixture.url);
+  assert.equal(Number((await check.pool.query('SELECT count(*)::int n FROM ac_projects')).rows[0].n),beforeProjects);
+  assert.equal(Number((await check.pool.query('SELECT count(*)::int n FROM ac_project_repositories')).rows[0].n),beforeRepos);
+  await check.close();check=undefined;
+
+  // com 0755 segue como hoje
+  await chmod(secondary,0o755);await chmod(join(secondary,'.git'),0o755);
   const result=await addPersonalProject(file,secondary,'Segundo');
   assert.equal(result.repository,secondary);
   assert.equal(result.label,'Segundo');
