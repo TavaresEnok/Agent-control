@@ -59,6 +59,10 @@ const TYPEDOC_DOCUMENTATION_KINDS = new Map([
   ['Accessor', 262144], ['GetSignature', 524288], ['SetSignature', 1048576], ['TypeAlias', 2097152],
 ]);
 const TYPEDOC_LINK_TAGS = new Set(['@link', '@linkcode', '@linkplain']);
+const UNDOCUMENTED_RULE = 'DOC-TYPEDOC-SIMBOLO-SEM-DOC';
+const UNDOCUMENTED_SAMPLE = 20;
+// Só marcas de gerador: um "do not edit" solto também aparece em comentário escrito à mão.
+const GENERATED_HEADER = /@generated\b|auto-?generated|automatically generated|code generated .*do not edit|do not make direct changes/i;
 const TYPEDOC_DIRECT_LINK_BLOCKS = new Set(['', '@see', '@returns', '@throws']);
 
 const SKIP_DIRS = new Set([
@@ -76,6 +80,20 @@ const SKIP_DIRS = new Set([
   'venv',
   'target',
 ]);
+
+/**
+ * Pasta vendor do Go: ao lado de um go.mod e com vendor/modules.txt. A documentação dela é
+ * de terceiros. Qualquer outra pasta chamada vendor ou third_party é examinada como do projeto.
+ */
+function isGoVendorDir(srcPath, name) {
+  if (name !== 'vendor') return false;
+  try {
+    return lstatSync(join(dirname(srcPath), 'go.mod')).isFile() && lstatSync(join(srcPath, 'modules.txt')).isFile();
+  } catch {
+    // Manifest missing: the folder is the project's own code.
+    return false;
+  }
+}
 
 const UNTRUSTED_CONFIG_FILES = new Set([
   'typedoc.json',
@@ -340,7 +358,7 @@ export function copyRepoSafely(sourceRoot, destRoot, opts = {}, manifestScripts 
         continue;
       }
       if (st.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) {
+        if (SKIP_DIRS.has(entry.name) || entry.name.startsWith('.') || isGoVendorDir(srcPath, entry.name)) {
           skipped.push(relPath);
           continue;
         }
@@ -1219,6 +1237,77 @@ export function parseTypedocReport(rawJson, rawCliOutput, repoRoot, readFileFn =
   return {symbols, findings, unlocated: unlocatedWarnings.length, unlocatedWarnings};
 }
 
+function undocumentedPackage(file) {
+  const directories = file.split('/').slice(0, -1);
+  return directories.length ? directories.slice(0, 2).join('/') : '.';
+}
+
+/**
+ * A falta de JSDoc é contagem do TypeDoc: vira um achado informativo por pacote (os dois
+ * primeiros diretórios do caminho), com o total, a parte documentada e uma amostra.
+ * Arquivos com cabeçalho de código gerado saem do achado e voltam em `generated`.
+ * Achados de caminho protegido ou fora do formato publicável seguem um a um, para a
+ * contagem de omissões continuar igual.
+ */
+export function aggregateUndocumentedSymbols(findings, symbols, readFileFn = () => '') {
+  const headers = new Map();
+  const isGenerated = file => {
+    if (!headers.has(file)) {
+      let text = '';
+      try {
+        text = String(readFileFn(file) ?? '');
+      } catch {
+        // Unreadable file: it keeps its findings like any other source.
+      }
+      headers.set(file, text.split(/\r?\n/, 5).some(line => GENERATED_HEADER.test(line)));
+    }
+    return headers.get(file);
+  };
+  const generated = new Map();
+  const groups = new Map();
+  const kept = [];
+  for (const finding of findings) {
+    if (finding.rule !== UNDOCUMENTED_RULE || isProtectedReportPath(finding.file) || !isReportablePath(finding.file)) {
+      kept.push(finding);
+    } else if (isGenerated(finding.file)) {
+      generated.set(finding.file, (generated.get(finding.file) ?? 0) + 1);
+    } else {
+      const key = undocumentedPackage(finding.file);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(finding);
+    }
+  }
+  for (const [pkg, items] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
+    items.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+    const measured = symbols.filter(symbol => undocumentedPackage(symbol.file) === pkg && !isGenerated(symbol.file));
+    const documented = measured.filter(symbol => symbol.hasDoc).length;
+    const percent = measured.length ? Math.round((documented * 100) / measured.length) : 0;
+    const files = new Set(items.map(item => item.file)).size;
+    const sample = items.slice(0, UNDOCUMENTED_SAMPLE)
+      .map(item => `${item.file}:${item.line} ${/"([^"]+)"/.exec(item.message)?.[1] ?? ''}`.trim());
+    kept.push({
+      tool: 'typedoc',
+      rule: UNDOCUMENTED_RULE,
+      file: items[0].file,
+      line: items[0].line,
+      severity: 'informativa',
+      message: `${items.length} símbolo(s) público(s) exportado(s) sem documentação JSDoc/TSDoc em ${pkg} (${files} arquivo(s); ${documented} de ${measured.length} documentados, ${percent}%).`,
+      evidence: `TypeDoc: ${items.length} sem documentação em ${pkg}; amostra de ${sample.length}: ${sample.join(', ')}`,
+    });
+  }
+  return {findings: kept, generated};
+}
+
+/**
+ * O Markdown da raiz ou de docs/ fala do projeto todo. Os demais falam do pacote
+ * (o primeiro diretório) em que estão.
+ */
+function samePackage(mdFile, codeFile) {
+  const [top, ...rest] = mdFile.split('/');
+  if (!rest.length || top === 'docs' || top === 'doc') return true;
+  return codeFile.startsWith(`${top}/`);
+}
+
 /**
  * Cruza afirmações e assinaturas documentadas em arquivos Markdown com o catálogo
  * de símbolos reais extraído pelo TypeDoc.
@@ -1235,6 +1324,7 @@ export function crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readFileFn = 
   for (const file of mdFiles) {
     let checked = 0;
     let fence = null;
+    const reported = new Set();
     const lines = String(readFileFn(file) ?? '').split(/\r?\n/);
     for (const [index, lineText] of lines.entries()) {
       if (fence) {
@@ -1246,7 +1336,7 @@ export function crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readFileFn = 
 
       for (const match of lineText.matchAll(/(?<!`)`([A-Za-z_$][\w$]*)\(([^()`]*)\)`(?!`)/g)) {
         const [, name, args] = match;
-        const matches = functions.get(name);
+        const matches = functions.get(name)?.filter(symbol => samePackage(file, symbol.file));
         if (matches?.length !== 1) continue;
         const [symbol] = matches;
         const signatures = symbol.parameterLists ?? [symbol.parameters];
@@ -1260,6 +1350,9 @@ export function crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readFileFn = 
           (documented.length <= parameters.length || parameters.at(-1)?.rest) &&
           documented.every((arg, position) => arg === parameters[position]?.name)
         )) continue;
+        // A mesma chamada repetida na linha é uma divergência só.
+        if (reported.has(`${index}:${name}`)) continue;
+        reported.add(`${index}:${name}`);
         findings.push({
           tool: 'typedoc',
           rule: 'DOC-TYPEDOC-MARKDOWN-ASSINATURA-DESATUALIZADA',
@@ -2003,7 +2096,17 @@ export async function runCollector(opts = {}) {
           repoFilesSet,
         );
         const symbols = parsedTd.symbols.filter(symbol => repoFilesSet.has(symbol.file));
-        const tdFindings = parsedTd.findings.filter(finding => repoFilesSet.has(finding.file));
+        const aggregated = aggregateUndocumentedSymbols(
+          parsedTd.findings.filter(finding => repoFilesSet.has(finding.file)), symbols, readWorkFile);
+        const tdFindings = aggregated.findings;
+        for (const [file, count] of aggregated.generated) {
+          addCoverage({
+            tool: 'typedoc:gerado',
+            version: versions.typedoc,
+            status: 'skipped',
+            detail: `arquivo=${file}; gerado=sim; simbolos_sem_doc_ignorados=${count}`,
+          }, {file});
+        }
         const checkedByFile = new Map();
         const mdFindings = crossCheckMarkdownAgainstTypedoc(mdFiles, symbols, readWorkFile, checkedByFile);
         for (const [file, checked] of checkedByFile) {

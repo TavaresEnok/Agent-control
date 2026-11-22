@@ -102,10 +102,10 @@ const MODULE_EXPECTATIONS: Readonly<Record<VerificationModule, ModuleLabExpectat
   documentacao: {
     fixtureCandidates: ['tests/fixtures/module-documentacao/defective'],
     expectedOkTools: ['typedoc', 'dependency-cruiser', 'mermaid'],
+    // A falta de JSDoc sai agregada por pacote; a amostra da prova traz arquivo, linha e símbolo.
     matchFinding: f =>
-      f.where.file === 'src/billing.ts'
-      && f.sources.includes('DOC-TYPEDOC-SIMBOLO-SEM-DOC')
-      && f.where.line === 12 && /"(?:src\/billing\.)?undocumentedCharge"/.test(f.title),
+      f.sources.includes('DOC-TYPEDOC-SIMBOLO-SEM-DOC')
+      && /(?:: |, )src\/billing\.ts:12 (?:src\/billing\.)?undocumentedCharge(?:,|$)/.test(f.proof),
     coverageDetailPattern: /typedoc:file/,
   },
   conformidade: {
@@ -595,9 +595,9 @@ test('seletores de documentação e prontidão exigem o defeito específico apó
   const rawFindings = [
     {
       tool: 'typedoc', rule: 'DOC-TYPEDOC-SIMBOLO-SEM-DOC', file: 'src/billing.ts', line: 12,
-      severity: 'media',
-      message: 'Símbolo público exportado "undocumentedCharge" em src/billing.ts não possui documentação JSDoc/TSDoc.',
-      evidence: 'TypeDoc reflection kind=64 name=undocumentedCharge (src/billing.ts:12) sem summary/blockTags',
+      severity: 'informativa',
+      message: '1 símbolo(s) público(s) exportado(s) sem documentação JSDoc/TSDoc em src (1 arquivo(s); 0 de 1 documentados, 0%).',
+      evidence: 'TypeDoc: 1 sem documentação em src; amostra de 1: src/billing.ts:12 undocumentedCharge',
     },
     {
       tool: 'prontidao-audit', rule: 'PRONTIDAO-TLS-VERIFICACAO-DESABILITADA', file: 'src/tls-client.ts', line: 3,
@@ -613,14 +613,14 @@ test('seletores de documentação e prontidão exigem o defeito específico apó
   const doc = findings[0]!;
   const tls = findings[1]!;
   assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding(doc), true);
-  const qualified = {...doc, title: doc.title.replace('"undocumentedCharge"', '"src/billing.undocumentedCharge"')};
+  const qualified = {...doc, proof: doc.proof.replace(' undocumentedCharge', ' src/billing.undocumentedCharge')};
   assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding(qualified), true);
-  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...qualified, where: {...doc.where, line: 8}}), false);
-  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...qualified, title: qualified.title.replace('src/billing.', 'src/api.')}), false);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...qualified, proof: qualified.proof.replace(':12 ', ':8 ')}), false);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...qualified, proof: qualified.proof.replace(' src/billing.', ' src/api.')}), false);
   assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding(tls), true);
   assert.equal(tls.sources[1], '[removido: alta entropia]');
-  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, where: {...doc.where, file: 'src/api.ts'}}), false);
-  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, title: doc.title.replace('undocumentedCharge', 'otherCharge')}), false);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, proof: doc.proof.replace('src/billing.ts', 'src/api.ts')}), false);
+  assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, proof: doc.proof.replace('undocumentedCharge', 'otherCharge')}), false);
   assert.equal(MODULE_EXPECTATIONS.documentacao.matchFinding({...doc, sources: ['typedoc', 'outra-regra']}), false);
   assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding({...tls, where: {...tls.where, file: '.env'}}), false);
   assert.equal(MODULE_EXPECTATIONS.prontidao.matchFinding({...tls, sources: ['gitleaks']}), false);

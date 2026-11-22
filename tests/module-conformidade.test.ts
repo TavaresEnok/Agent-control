@@ -3172,3 +3172,46 @@ print(json.dumps({'missing': missing, 'mixed': mixed}))
     rmSync(scratch, {recursive: true, force: true});
   }
 });
+
+test('C9 agrega nomes e telefones por arquivo e mantém cada CPF', () => {
+  const result = JSON.parse(python(String.raw`
+import json
+from types import SimpleNamespace as Namespace
+from collector import Report
+from lgpd_analyzer import inspect_entities, presidio_diagnostics
+
+class SyntheticAnalyzer:
+    def analyze(self, *, text, language, entities):
+        found = []
+        offset = 0
+        for line in text.split("\n"):
+            kind, _, score = line.partition(":")
+            if kind in entities and (kind != "PERSON" or language == "pt"):
+                found.append(Namespace(entity_type=kind, score=float(score), start=offset, end=offset + len(line)))
+            offset += len(line) + 1
+        return found
+
+names = ["PERSON:0.9"] * 200 + ["PERSON:0.6"] * 5
+text = "\n".join(names + ["BR_CPF:0.9", "PHONE_NUMBER:0.9", "BR_CPF:0.9"])
+report = Report()
+with presidio_diagnostics() as diagnostics:
+    assert inspect_entities(SyntheticAnalyzer(), text, "src/clientes.ts", "2.2.366", report, diagnostics)
+    assert inspect_entities(SyntheticAnalyzer(), "PERSON:0.99", "src/i18n/pt.ts", "2.2.366", report, diagnostics)
+    assert inspect_entities(SyntheticAnalyzer(), "\n".join(["BR_CPF:0.9"] * 12), "src/lote.ts", "2.2.366", report, diagnostics)
+print(json.dumps(report.output()))
+`));
+  const rows = result.findings.map((row: {rule: string; file: string; line: number; severity: string}) =>
+    [row.rule, row.file, row.line, row.severity]);
+  assert.deepEqual(rows.filter((row: string[]) => row[1] === 'src/clientes.ts').sort(), [
+    ['PII_BR_CPF', 'src/clientes.ts', 206, 'media'],
+    ['PII_BR_CPF', 'src/clientes.ts', 208, 'media'],
+    ['PII_PERSON', 'src/clientes.ts', 1, 'informativa'],
+    ['PII_PHONE_NUMBER', 'src/clientes.ts', 207, 'informativa'],
+  ]);
+  const person = result.findings.find((row: {rule: string}) => row.rule === 'PII_PERSON');
+  assert.match(person.evidence, /ocorrências distintas=200 em 200 linhas; primeiras linhas: 1, 2, 3\./);
+  assert.ok(!rows.some((row: string[]) => row[1] === 'src/i18n/pt.ts'));
+  assert.equal(rows.filter((row: string[]) => row[1] === 'src/lote.ts').length, 10);
+  assert.match(result.coverage.find((row: {detail: string}) => row.detail.startsWith('src/lote.ts |')).detail,
+    /fora dos achados=2$/);
+});

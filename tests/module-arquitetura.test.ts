@@ -46,6 +46,7 @@ import {
   parseJscpdComplexityReport,
   parseJscpdReport,
   parseKnipReport,
+  reduceArchitectureNoise,
   runCollector,
 } from '../deploy/modules/arquitetura/collect.mjs';
 
@@ -236,8 +237,11 @@ test('publicação preserva rotas Git medidas e achados válidos com omissões a
       perFile.find(row => row.tool === 'dependency-cruiser:file')!.detail,
       `arquivo=${route}; deps=1; dependentes=0; instabilidade=n/a; ciclo=nao; violacao_camada=nao; metricas_parciais=sim`,
     );
-    assert.equal(parsed.findings.filter(finding => finding.file === route).length, 3);
+    // As exportações não usadas de route e peer saem num achado só do pacote.
+    assert.equal(parsed.findings.filter(finding => finding.file === route).length, 2);
     assert.equal(parsed.findings.filter(finding => finding.file === peer).length, 1);
+    assert.ok(parsed.findings.some(finding => finding.rule === 'KNIP-UNUSED-EXPORT' && finding.evidence.includes(route)
+      && finding.evidence.includes(peer)));
     assert.ok(parsed.findings.some(finding => finding.rule === 'JSCPD-DUPLICATION' && finding.evidence.includes('…')));
     assert.ok(!JSON.stringify(parsed).includes(syntheticValue));
 
@@ -1075,7 +1079,8 @@ test('runCollector entrega no máximo 999 achados quando a ferramenta reporta mi
     assert.equal(out.findings.length, 999);
     assert.ok(out.coverage.length <= 5000);
     const limit = out.coverage.find(row => row.tool === 'limites-do-coletor');
-    assert.match(limit?.detail ?? '', /achados_coletados=3300; achados_retidos=999; achados_omitidos=2301;/);
+    // 1100 arquivos sem uso e as 2200 exportações agregadas num achado do pacote.
+    assert.match(limit?.detail ?? '', /achados_coletados=1101; achados_retidos=999; achados_omitidos=102;/);
     assert.ok(out.coverage.some(row => row.tool === 'snapshot'));
     assertValidOutputContract(out);
     const parsed = parseModuleCollectorOutput(JSON.stringify(out), {module: 'arquitetura'});
@@ -2214,5 +2219,54 @@ test('publicação preserva rotas de interceptação longas em Markdown sem exim
   } finally {
     if (snapshot) await removeModuleSnapshot(snapshot);
     rmSync(root, {recursive: true, force: true});
+  }
+});
+
+test('complexidade, Knip e jscpd saem agregados, sem gravidade alta e com teto de pares', () => {
+  const thresholds = {fnCyclomaticMedia: 13, fnNestingMedia: 5, fileLocMedia: 300, fileCyclomaticMedia: 35};
+  const repo = mkdtempSync(join(tmpdir(), 'arch-noise-'));
+  try {
+    const branches = (count: number) => Array.from({length: count}, (_, i) => `  if (x === ${i}) return ${i};`).join('\n');
+    writeFileSync(join(repo, 'engine.ts'), [
+      `export function a(x: number) {\n${branches(14)}\n  return -1;\n}`,
+      `export function b(x: number) {\n${branches(30)}\n  return -1;\n}`,
+      `export function c(x: number) {\n${branches(15)}\n  return -1;\n}`,
+    ].join('\n'));
+    const ast = analyzeAstComplexity(repo, ['engine.ts'], thresholds);
+    const perFunction = ast.findings.filter(f => f.rule === 'COMPLEXITY-CYCLOMATIC-HIGH');
+    assert.equal(perFunction.length, 3);
+    assert.ok(ast.findings.every(f => f.severity !== 'alta'));
+    assert.deepEqual(perFunction.map(f => f.severity).sort(), ['baixa', 'baixa', 'media']);
+    const knip = (file: string, rule: string, name: string) => ({tool: 'knip', rule, file, line: 2, severity: 'baixa' as const,
+      message: `Exportação não utilizada: ${name} em ${file}`, evidence: `${file}:2 símbolo=${name}`});
+    const duplicate = (first: string, second: string, lines: number, start: number) => ({tool: 'jscpd', rule: 'JSCPD-DUPLICATION',
+      file: first, line: start, severity: lines >= 40 ? 'alta' as const : 'media' as const,
+      message: `Bloco duplicado (exact, ${lines} linhas, 90 tokens) também presente em ${second}:${start}-${start + lines - 1}`,
+      evidence: `${first}:${start}-${start + lines - 1} ~ ${second}:${start}-${start + lines - 1}; trecho="x"`});
+    const pairs = Array.from({length: 12}, (_, i) => duplicate(`src/p${i}.ts`, `src/q${i}.ts`, 10 + i, 1));
+    const reduced = reduceArchitectureNoise([
+      ...perFunction,
+      knip('web/src/a.ts', 'KNIP-UNUSED-EXPORT', 'x'), knip('web/src/b.ts', 'KNIP-UNUSED-EXPORT', 'y'),
+      knip('api/core/c.ts', 'KNIP-UNUSED-EXPORT', 'z'),
+      duplicate('src/a.ts', 'src/b.ts', 45, 1), duplicate('src/a.ts', 'src/b.ts', 12, 80),
+      ...pairs,
+    ]);
+    const complexity = reduced.findings.filter(f => f.rule === 'COMPLEXITY-CYCLOMATIC-HIGH');
+    assert.equal(complexity.length, 1);
+    assert.match(complexity[0]!.message, /^Função 'b' .*; 3 funções do arquivo acima do limite$/);
+    const exports = reduced.findings.filter(f => f.rule === 'KNIP-UNUSED-EXPORT');
+    assert.deepEqual(exports.map(f => [f.file, f.message]), [
+      ['web/src/a.ts', 'Exportação não utilizada: 2 ocorrências em web/src'],
+      ['api/core/c.ts', 'Exportação não utilizada: z em api/core/c.ts'],
+    ]);
+    const duplicates = reduced.findings.filter(f => f.rule === 'JSCPD-DUPLICATION');
+    assert.equal(duplicates.length, 10);
+    assert.equal(reduced.omittedDuplicatePairs, 3);
+    assert.deepEqual([duplicates[0]!.file, duplicates[0]!.severity], ['src/a.ts', 'media']);
+    assert.match(duplicates[0]!.message, /^2 blocos duplicados \(57 linhas no total, o maior com 45\) entre src\/a\.ts e src\/b\.ts$/);
+    assert.ok(duplicates.slice(1).every(f => f.severity === 'baixa'));
+    assert.ok(reduced.findings.every(f => f.severity !== 'alta'));
+  } finally {
+    rmSync(repo, {recursive: true, force: true});
   }
 });

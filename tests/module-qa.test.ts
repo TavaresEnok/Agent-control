@@ -43,7 +43,7 @@ const {collectQaModule, summarizeNodePasses, analyzeSourceFile, loadQaSyntax, an
   loadQaSyntax: () => Promise<unknown>;
   buildTraceability: (options: Record<string, unknown>) => {extraRows: QaCoverageRow[]; findings: QaFinding[]};
   measureValidatorCases: (options: Record<string, unknown>) => {coverageRow: QaCoverageRow; findings: QaFinding[]};
-  summarizeNodePasses: (passes: {summary: boolean; tests: {file: string; line: number; column: number; name: string; status: string}[]; coverage: never[]}[], sources: never[], version: string) => {extraRows: QaCoverageRow[]};
+  summarizeNodePasses: (passes: {summary: boolean; tests: {file: string; line: number; column: number; name: string; status: string}[]; coverage: never[]}[], sources: never[], version: string) => {extraRows: QaCoverageRow[]; findings: {rule: string; severity: string}[]};
 };
 
 const {verifyQaLockfiles} = (await import(
@@ -1701,4 +1701,18 @@ test('Go distingue ausência de casos, erro de compilação, dependência offlin
   const malformed = await run(0, passed, 'malformed');
   assert.equal(malformed.coverageRow.status, 'ok');
   assert.match(malformed.extraRows[3].detail, /sem medição/);
+});
+
+test('teste pulado e função sem execução no V8 são média; falha e oscilação seguem alta', () => {
+  const item = (name: string, status: string) => ({file: 'tests/sintetico.test.ts', line: 1, column: 1, name, status});
+  const pass = (statuses: string[]) => ({summary: true, tests: statuses.map((status, index) => item(`t${index}`, status)),
+    coverage: [{file: 'src/a.ts', coveredBranchCount: 0, totalBranchCount: 0, coveredFunctionCount: 0, totalFunctionCount: 1,
+      functions: [{name: 'exported', line: 3, count: 0}]}] as never[]});
+  const source = {file: 'src/a.ts', functions: [{name: 'exported', startLine: 3, isExported: true, exportNames: ['exported']}]};
+  const {findings} = summarizeNodePasses([pass(['skipped', 'failed', 'passed']), pass(['skipped', 'failed', 'failed']),
+    pass(['skipped', 'failed', 'passed'])], [source] as never[], '1');
+  assert.deepEqual(findings.map(f => [f.rule, f.severity]), [
+    ['QA-TESTE-PULADO-EXECUCAO', 'media'], ['QA-TESTE-FALHOU', 'alta'], ['QA-TESTE-OSCILANTE', 'alta'],
+    ['QA-COBERTURA-FUNCAO-SEM-TESTE', 'media'],
+  ]);
 });

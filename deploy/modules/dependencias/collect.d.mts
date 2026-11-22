@@ -63,6 +63,7 @@ export function readSafeRegularFile(filePath: string, maxBytes?: number): Promis
 export function discoverRepoFiles(repoRoot: string): Promise<DiscoveredRepoFiles>;
 export function findLineInPackageJson(rawText: string, pkgName: string, preferredSection?: string): number;
 export function isUnpinnedSpecifier(spec: string): boolean;
+export function aggregateOutdatedFindings(findings: ModuleFinding[]): ModuleFinding[];
 export function classifySemverRisk(
   currentSpec: string,
   targetSpec: string

@@ -102,15 +102,15 @@ test('laboratório real do módulo dependencias acha defeitos plantados e aprova
   assert.equal(dirty.coverage.some(c => c.status === 'failed'), false);
 
   assert.equal(
-    dirty.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MAJOR' && f.file === 'package.json' && f.severity === 'alta' && f.evidence.includes('express')),
+    dirty.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MAJOR' && f.file === 'package.json' && f.severity === 'baixa' && f.evidence.includes('express')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MINOR' && f.file === 'package.json' && f.severity === 'media' && f.evidence.includes('lodash')),
+    dirty.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-MINOR' && f.file === 'package.json' && f.severity === 'informativa' && f.evidence.includes('lodash')),
     true
   );
   assert.equal(
-    dirty.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-PATCH' && f.file === 'package.json' && f.severity === 'baixa' && f.evidence.includes('socket.io-client')),
+    dirty.findings.some(f => f.tool === 'npm-check-updates' && f.rule === 'NCU-OUTDATED-PATCH' && f.file === 'package.json' && f.severity === 'informativa' && f.evidence.includes('socket.io-client')),
     true
   );
   assert.equal(

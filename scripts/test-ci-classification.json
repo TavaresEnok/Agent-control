@@ -316,6 +316,7 @@
   "verification-modules-interop.test.ts",
   "verification-modules-persistence-r3.test.ts",
   "verification-modules-r2.test.ts",
+  "verification-modules-report.test.ts",
   "verification-modules-scenarios-r3.test.ts",
   "verification-modules.test.ts",
   "verify-abandon.test.ts",

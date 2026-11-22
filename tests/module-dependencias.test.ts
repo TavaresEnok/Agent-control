@@ -13,6 +13,7 @@ import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
 import {fetchLatestVersion, fetchRegistryVersion, type RegistryRequestOptions} from '../deploy/modules/dependencias/fetch-registry.mjs';
 import {
+  aggregateOutdatedFindings,
   analyzeLockfileAndSbom,
   classifySemverRisk,
   discoverRepoFiles,
@@ -44,6 +45,9 @@ const codemodHandshakeFixture = [
   '  return report;',
   '}',
 ].join('\n');
+
+const ncuLines = (findings: {rule: string; evidence: string}[]) => findings.filter(f => f.rule.startsWith('NCU-OUTDATED'))
+  .flatMap(f => f.evidence.split('\n').map(evidence => [f.rule, evidence]));
 
 test('Dockerfile e lockfiles do módulo dependencias são imutáveis e sem usuário root final', async () => {
   const dockerfile = await readFile(join(moduleDir, 'Dockerfile'), 'utf8');
@@ -140,9 +144,10 @@ test('regras ast-grep têm IDs únicos e codemod jscodeshift carrega sem erro', 
 });
 
 test('helpers de semver, linha em package.json, caminhos e parse do ast-grep', () => {
-  assert.equal(classifySemverRisk('^4.17.1', '^5.3.0').severity, 'alta');
-  assert.equal(classifySemverRisk('^4.17.15', '^4.18.1').severity, 'media');
-  assert.equal(classifySemverRisk('^4.8.3', '^4.8.4').severity, 'baixa');
+  // Desatualização não é defeito: major é baixa e o resto informativo.
+  assert.equal(classifySemverRisk('^4.17.1', '^5.3.0').severity, 'baixa');
+  assert.equal(classifySemverRisk('^4.17.15', '^4.18.1').severity, 'informativa');
+  assert.equal(classifySemverRisk('^4.8.3', '^4.8.4').severity, 'informativa');
   assert.equal(satisfiesRange('4.17.1', '^4.17.1'), true);
   assert.equal(satisfiesRange('5.0.0', '^4.17.1'), false);
   assert.equal(satisfiesRange('4.13.19', '^4.13.0'), true);
@@ -1024,16 +1029,18 @@ test('ncu comprova avanço semver por seção e preserva as análises de lock da
     ].join('\n'), {mode: 0o755});
     const result = await runCollection({repoRoot: root, registryPath, ncuBin, onlineMode: false,
       ncuVersion: 'sintetica', astGrepVersion: 'sintetica', jscodeshiftVersion: 'sintetica'});
-    const ncu = result.findings.filter(f => f.rule.startsWith('NCU-OUTDATED'));
-    assert.deepEqual(ncu.map(f => f.evidence), [
-      'dependencies: "pin": "1.0.0" -> "pin": "1.0.1"; package-lock.json#node_modules/pin="1.0.0"; registro="1.0.1"',
-      'dependencies: "range": "^1.0.0" -> "range": "^1.2.0"; package-lock.json#node_modules/range="1.0.0"; registro="1.2.0"',
-      'dependencies: "pre": "2.0.0-beta.1" -> "pre": "2.0.0"; package-lock.json#node_modules/pre="2.0.0-beta.1"; registro="2.0.0"',
-      'dependencies: "actualRisk": ">=1.0.0" -> "actualRisk": "^2.5.0"; package-lock.json#node_modules/actualRisk="2.4.0"; registro="2.5.0"',
+    // As atualizações saem num achado por regra e manifesto, uma evidência por linha.
+    assert.deepEqual(ncuLines(result.findings), [
+      ['NCU-OUTDATED-PATCH', 'dependencies: "pin": "1.0.0" -> "pin": "1.0.1"; package-lock.json#node_modules/pin="1.0.0"; registro="1.0.1"'],
+      ['NCU-OUTDATED-PATCH', 'dependencies: "pre": "2.0.0-beta.1" -> "pre": "2.0.0"; package-lock.json#node_modules/pre="2.0.0-beta.1"; registro="2.0.0"'],
+      ['NCU-OUTDATED-MINOR', 'dependencies: "range": "^1.0.0" -> "range": "^1.2.0"; package-lock.json#node_modules/range="1.0.0"; registro="1.2.0"'],
+      ['NCU-OUTDATED-MINOR', 'dependencies: "actualRisk": ">=1.0.0" -> "actualRisk": "^2.5.0"; package-lock.json#node_modules/actualRisk="2.4.0"; registro="2.5.0"'],
     ]);
-    assert.deepEqual(ncu.map(f => f.rule), ['NCU-OUTDATED-PATCH', 'NCU-OUTDATED-MINOR', 'NCU-OUTDATED-PATCH', 'NCU-OUTDATED-MINOR']);
+    // O lockfile desatualizado também sai num achado por arquivo, uma evidência por linha.
     const lock = result.findings.filter(f => f.rule === 'LOCKFILE-OUTDATED-RESOLVED');
-    assert.deepEqual(lock.map(f => /#node_modules\/([^:]+):/.exec(f.evidence)?.[1]), ['reducedFloor', 'union', 'shared', 'lowerBranch', 'shared']);
+    assert.equal(lock.length, 1);
+    assert.deepEqual(lock[0]!.evidence.split('\n').map(line => /#node_modules\/([^:]+):/.exec(line)?.[1]).sort(),
+      ['lowerBranch', 'reducedFloor', 'shared', 'shared', 'union']);
     assert.ok(result.coverage.some(row => row.status === 'skipped' &&
       row.detail.includes('pacote=backward; secao=dependencies; motivo=direcao_de_atualizacao_nao_comprovada')));
     for (const [pkg, reason] of [
@@ -1153,7 +1160,7 @@ test('ncu online confirma a publicação exata para npm e alias com catálogo lo
     ['NCU-OUTDATED-PATCH', 'dependencies: "alias": "npm:@synthetic/actual@>=1.0.0" -> "alias": "npm:@synthetic/actual@3.1.1"; package-lock.json#node_modules/alias="3.1.0"; registro="3.1.1"; origem=https://registry.npmjs.org/'],
   ];
   const result = await runCollection(options);
-  assert.deepEqual(result.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => [f.rule, f.evidence]), expected);
+  assert.deepEqual(ncuLines(result.findings), expected);
   for (const [pkg, reason] of [['identity', 'alvo_nao_confirmado_no_registro'], ['unpublished', 'alvo_nao_confirmado_no_registro'], ['regress', 'alvo_exato_nao_supera_lock'],
     ['skipRange', 'alvo_online_sem_versao_exata'], ['git', 'declaracao_nao_comparavel']]) {
     assert.ok(result.coverage.some(row => row.tool === 'npm-check-updates' && row.status === 'skipped' &&
@@ -1169,7 +1176,7 @@ test('ncu online confirma a publicação exata para npm e alias com catálogo lo
   ]);
   await writeFile(registryPath, '{"ordinary":"9.0.0","@synthetic/actual":"1.0.0"}');
   const stale = await runCollection(options);
-  assert.deepEqual(stale.findings.filter(f => f.rule.startsWith('NCU-OUTDATED')).map(f => [f.rule, f.evidence]), expected);
+  assert.deepEqual(ncuLines(stale.findings), expected);
 });
 
 test('lock npm usa a identidade de aliases modernos e legados e preserva versões fora de semver', async () => {
@@ -1583,4 +1590,44 @@ test('jscodeshift limita achados e bytes agregados mesmo com relatórios individ
   } finally {
     await rm(root, {recursive: true, force: true});
   }
+});
+
+test('atualizações saem num achado por regra e manifesto e o resto passa intacto', () => {
+  const outdated = (rule: string, file: string, pkg: string, line: number) => ({tool: 'npm-check-updates', rule, file, line,
+    severity: 'baixa' as const, message: `Dependência "${pkg}" desatualizada (^1.0.0 -> ^2.0.0; risco alto (mudança major)).`,
+    evidence: `dependencies: "${pkg}": "^1.0.0" -> "${pkg}": "^2.0.0"`});
+  const osv = {tool: 'osv-scanner', rule: 'OSV-VULN', file: 'package.json', line: 4, severity: 'alta' as const,
+    message: 'Vulnerabilidade conhecida.', evidence: 'GHSA'};
+  const many = Array.from({length: 80}, (_, index) => outdated('NCU-OUTDATED-MAJOR', 'web/package.json', `p${index}`, 50 + index));
+  const result = aggregateOutdatedFindings([
+    outdated('NCU-OUTDATED-MAJOR', 'package.json', 'express', 9), osv,
+    outdated('NCU-OUTDATED-MAJOR', 'package.json', 'lodash', 7),
+    outdated('NCU-OUTDATED-MINOR', 'package.json', 'pg', 8),
+    ...many,
+  ]);
+  assert.deepEqual(result.map(f => [f.rule, f.file, f.line]), [
+    ['NCU-OUTDATED-MAJOR', 'package.json', 7], ['OSV-VULN', 'package.json', 4],
+    ['NCU-OUTDATED-MINOR', 'package.json', 8], ['NCU-OUTDATED-MAJOR', 'web/package.json', 50],
+  ]);
+  assert.equal(result[0]!.message, '2 dependências desatualizadas (NCU-OUTDATED-MAJOR) em package.json: lodash, express');
+  assert.deepEqual(result[0]!.evidence.split('\n'), [
+    'dependencies: "lodash": "^1.0.0" -> "lodash": "^2.0.0"', 'dependencies: "express": "^1.0.0" -> "express": "^2.0.0"']);
+  assert.equal(result[1], osv);
+  assert.equal(result[2]!.message, outdated('NCU-OUTDATED-MINOR', 'package.json', 'pg', 8).message);
+  assert.ok(result[3]!.evidence.length <= 2000);
+  assert.match(result[3]!.evidence, /\ne mais \d+ dependência\(s\)$/);
+});
+
+test('lockfile e SBOM desatualizados saem num achado por arquivo com a maior gravidade', () => {
+  const locked = (pkg: string, line: number, severity: 'baixa' | 'informativa') => ({tool: 'sbom-lockfile',
+    rule: 'LOCKFILE-OUTDATED-RESOLVED', file: 'package-lock.json', line, severity,
+    message: `Versão travada em package-lock.json para "${pkg}" (1.0.0) está atrás da mais recente (2.0.0; risco alto (mudança major)).`,
+    evidence: `package-lock.json#node_modules/${pkg}: "${pkg}"@1.0.0 -> 2.0.0`});
+  const missing = {tool: 'sbom-lockfile', rule: 'LOCKFILE-MISSING', file: 'package.json', line: 1, severity: 'media' as const,
+    message: 'Sem lockfile.', evidence: 'package.json'};
+  const result = aggregateOutdatedFindings([locked('a', 30, 'informativa'), missing, locked('b', 12, 'baixa'), locked('c', 40, 'informativa')]);
+  assert.deepEqual(result.map(f => [f.rule, f.line, f.severity]),
+    [['LOCKFILE-OUTDATED-RESOLVED', 12, 'baixa'], ['LOCKFILE-MISSING', 1, 'media']]);
+  assert.equal(result[0]!.message, '3 dependências desatualizadas (LOCKFILE-OUTDATED-RESOLVED) em package-lock.json: b, a, c');
+  assert.equal(result[1], missing);
 });
