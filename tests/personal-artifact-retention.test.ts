@@ -10,6 +10,7 @@ import type {Installation} from '../src/installation.ts';
 import {mountPoints,mountedInside,closeRound,registerCandidateImage,registerRoundTemp,registerWorkerWorktree,runPersonalArtifactRetention,
  type CommandResult,type RetentionDeps} from '../src/personal-artifact-retention.ts';
 import {RetentionIncomplete,runRetentionStages} from '../src/personal-maintenance.ts';
+import {Refusal} from '../src/contracts.ts';
 
 const HOUR=3600_000;
 const gitEnv={PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0',LC_ALL:'C',
@@ -775,24 +776,31 @@ test('work/ of jobs is retained first, and a damaged artifact registry never sto
   const order:string[]=[];
   const jobRetention=async(_config:Installation,apply:boolean)=>{order.push('jobs');return [`jobs apply=${apply}`];};
   const artifactRetention=async(config:Installation,apply:boolean)=>{order.push('artifacts');return runPersonalArtifactRetention(config,apply,l.deps);};
+  const verifyDatabaseRetention=async(_config:Installation,apply:boolean)=>{order.push('verify-db');return [`bases apply=${apply}`];};
   for(let pass=0;pass<2;pass++){
-   const failure=await runRetentionStages(l.config,true,{jobRetention,artifactRetention}).then(()=>undefined,error=>error);
+   const failure=await runRetentionStages(l.config,true,{jobRetention,verifyDatabaseRetention,artifactRetention}).then(()=>undefined,error=>error);
    assert.ok(failure instanceof RetentionIncomplete);
    assert.deepEqual(failure.failed,['artifacts']);
    assert.equal(failure.lines[0],'jobs apply=true');
    assert.match(failure.lines.join('\n'),/Retenção de artefatos \(worktrees, imagens e temporários\) falhou \(RETENTION_REGISTRY_INVALID\); as demais etapas seguiram\./);
   }
-  assert.deepEqual(order,['jobs','artifacts','jobs','artifacts']);
+  assert.deepEqual(order,['jobs','verify-db','artifacts','jobs','verify-db','artifacts']);
   assert.ok(existsSync(w.path));
   // The other way round: a failing job stage still lets artifacts run.
   await rm(registryPath(l));
-  const failure=await runRetentionStages(l.config,false,{jobRetention:async()=>{throw new Error('database down');},artifactRetention}).then(()=>undefined,error=>error);
+  const failure=await runRetentionStages(l.config,false,{jobRetention:async()=>{throw new Error('database down');},verifyDatabaseRetention,artifactRetention}).then(()=>undefined,error=>error);
   assert.ok(failure instanceof RetentionIncomplete);
   assert.deepEqual(failure.failed,['jobs']);
   assert.match(failure.lines[0]!,/Retenção de work\/ de jobs falhou \(erro\)/);
   assert.match(failure.lines.at(-1)!,/Prévia, nada foi alterado/);
   // Both healthy: plain lines, jobs first.
-  assert.deepEqual((await runRetentionStages(l.config,false,{jobRetention,artifactRetention})).slice(0,1),['jobs apply=false']);
+  assert.deepEqual((await runRetentionStages(l.config,false,{jobRetention,verifyDatabaseRetention,artifactRetention})).slice(0,2),['jobs apply=false','bases apply=false']);
+  // A failing vulnerability-database stage still lets artifacts run, and is named in the failure.
+  const dbFailure=await runRetentionStages(l.config,false,{jobRetention,verifyDatabaseRetention:async()=>{throw new Refusal('VERIFY_DB_PRUNE_FAILED');},artifactRetention}).then(()=>undefined,error=>error);
+  assert.ok(dbFailure instanceof RetentionIncomplete);
+  assert.deepEqual(dbFailure.failed,['verify-db']);
+  assert.match(dbFailure.lines.join('\n'),/Retenção de bases de vulnerabilidades falhou \(VERIFY_DB_PRUNE_FAILED\); as demais etapas seguiram\./);
+  assert.match(dbFailure.lines.at(-1)!,/Prévia, nada foi alterado/);
  }finally{await cleanup(l);}
 });
 

@@ -13,7 +13,7 @@ import {Ledger} from './ledger.ts';
 import {endRound, trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
 import {personalAccountRoot} from './personal-health.ts';
 import {collectToolFindings} from './verify-collect.ts';
-import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp} from './verify-db.ts';
+import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp, verifyDatabaseStampPresent} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
 import {VERIFY_RUNTIME_BIN, verifyExamArguments} from './verify-image.ts';
 import {isCapacityNativeWorker, type SecurityExamSupervisor} from './verify-native-launch.ts';
@@ -409,6 +409,11 @@ async function claimExamDatabase(dataDirectory: string, databasesDirectory: stri
   const stamp = claimableDatabaseStamp(dataDirectory, databasesDirectory);
   if (!stamp) return undefined;
   await claimVerifyDatabaseStamp(dataDirectory, stamp, runId);
+  // A prune between reading current.json and this claim may have taken the stamp: never run on a missing base.
+  if (!await verifyDatabaseStampPresent(stamp)) {
+    await releaseVerifyDatabaseStamp(dataDirectory, stamp, runId);
+    throw new Refusal('VERIFY_DB_REPLACED', 409);
+  }
   return stamp;
 }
 

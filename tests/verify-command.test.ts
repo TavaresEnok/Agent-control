@@ -620,6 +620,8 @@ test('o carimbo da base é reivindicado no início e solto se o exame falha', as
   let toolsDir = '';
   try {
     await mkdir(databases, {recursive: true, mode: 0o700});
+    // A published stamp always has its manifest; the exam confirms it after claiming.
+    await writeFile(join(databases, 'manifest.json'), '{}\n');
     const seed = await commitDirectory(dataDirectory);
     const started = await beginPersonalVerification({
       ...blockedInput(dataDirectory, databases, {projectId, commit: seed}),
@@ -648,6 +650,27 @@ test('o carimbo da base é reivindicado no início e solto se o exame falha', as
     assert.deepEqual(await readdir(toolsDir), []);
   } finally {
     if (observed) await observed.catch(() => undefined);
+    await rm(dataDirectory, {recursive: true, force: true});
+  }
+});
+
+test('uma base podada entre a leitura do current.json e a reivindicação recusa o exame e solta o claim', async () => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-stamp-gone-'));
+  const databases = join(dataDirectory, 'verify-db', '20261117-030405');
+  const projectId = randomUUID();
+  let toolsCalled = false;
+  try {
+    // A pasta existe mas já não tem manifest: foi posta de lado por uma poda.
+    await mkdir(databases, {recursive: true, mode: 0o700});
+    const seed = await commitDirectory(dataDirectory);
+    await assert.rejects(beginPersonalVerification({
+      ...blockedInput(dataDirectory, databases, {projectId, commit: seed}),
+      runTools: async () => { toolsCalled = true; },
+    }), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_DB_REPLACED');
+    assert.equal(toolsCalled, false);
+    assert.deepEqual(await readdir(join(dataDirectory, 'verify-db', 'in-use')), []);
+    await assert.rejects(stat(join(dataDirectory, 'verificacoes', projectId, 'andamento', '.running')));
+  } finally {
     await rm(dataDirectory, {recursive: true, force: true});
   }
 });

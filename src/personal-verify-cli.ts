@@ -14,6 +14,7 @@ const messages:Record<string,string>={
  NOT_FOUND:'Projeto não encontrado.',
  VERIFY_CONTEXT_REQUIRED:'O projeto não tem um contexto para verificar.',
  VERIFY_DB_REQUIRED:'As bases de vulnerabilidade ainda não estão no servidor.',
+ VERIFY_DB_REPLACED:'A base de vulnerabilidades foi trocada durante o início do exame. Rode o exame de novo.',
  VERIFY_WORKER_UNAVAILABLE:'O runtime pessoal não está ativo.',
  VERIFY_EXTERNAL_TARGET:'A homologação tem que ficar em localhost, 127.0.0.1 ou no contêiner-alvo.',
  VERIFY_TARGET_ESCAPE:'A homologação aponta para outro destino.',
