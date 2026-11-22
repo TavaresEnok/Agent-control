@@ -43,12 +43,14 @@ test('an invalid list or mode stops the proxy instead of allowing everything', (
   assert.notEqual(decide({AC_EGRESS_MODE: 'open'}, []).status, 0);
 });
 
-test('personal workers and the planner use the proxy only when the gateway runs with AC_PERSONAL_EGRESS=1', async () => {
+test('native workers and the planner apply the personal proxy decision', async () => {
   const worker = await readFile(new URL('../src/native-execution-worker.ts', import.meta.url), 'utf8');
-  assert.ok(worker.indexOf("const personalEgress=process.env.AC_PERSONAL_EGRESS==='1';") < worker.indexOf('initializeNativeWorkerEnvironment();'));
+  const decision = worker.indexOf('const personalEgress=personalEgressEnabled();');
+  assert.ok(decision >= 0 && decision < worker.indexOf('initializeNativeWorkerEnvironment();'));
   assert.ok(worker.includes('initializeNativeWorkerEnvironment(personalCli&&!personalEgress?undefined:input.proxyUrl);'));
   const supervisor = await readFile(new URL('../src/native-execution-supervisor.ts', import.meta.url), 'utf8');
-  assert.ok(supervisor.includes("if(personal&&!synthetic&&process.env.AC_PERSONAL_EGRESS==='1')workerEnv=[...workerEnv,'AC_PERSONAL_EGRESS=1'];"));
+  assert.match(supervisor, /if\(personal&&!synthetic&&!input\.moduleExam\)\s*\{[^}]*if\(this\.config\.personalEgress\?\?personalEgressEnabled\(\)\)workerEnv\.push\('AC_PERSONAL_EGRESS=1'\);/);
   const planner = await readFile(new URL('../src/native-planning-supervisor.ts', import.meta.url), 'utf8');
-  assert.ok(planner.includes("rowCount&&process.env.AC_PERSONAL_EGRESS!=='1'?{}:{proxyUrl:'http://provider-egress:8080' as const}"));
+  assert.ok(planner.includes('const useProxy=!personal||(this.config.personalEgress??personalEgressEnabled());'));
+  assert.ok(planner.includes("...(useProxy?{proxyUrl:'http://provider-egress:8080' as const}:{})"));
 });

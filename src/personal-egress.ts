@@ -17,6 +17,23 @@ export const PERSONAL_EGRESS_HOSTS = [
 export const EgressConfig = z.object({mode: z.enum(['off', 'observe', 'enforce']).default('off'), allow: z.array(z.string().regex(HOST)).min(1).max(64).optional()}).strict();
 export type EgressConfig = z.infer<typeof EgressConfig>;
 
+export const PERSONAL_EGRESS_DISABLED = 'PERSONAL_EGRESS_DISABLED';
+export const PERSONAL_EGRESS_DISABLED_MESSAGE = 'Proxy de saída pessoal desativado por AC_PERSONAL_EGRESS=0.';
+let overrideWarningEmitted = false;
+
+/** Resolve personal proxy use from the installation default and the process override. */
+export function personalEgressEnabled(config?: {egress?: Pick<EgressConfig, 'mode'> | undefined}): boolean {
+  const override = process.env.AC_PERSONAL_EGRESS;
+  if (override === '0') {
+    if (!overrideWarningEmitted) {
+      overrideWarningEmitted = true;
+      process.emitWarning(PERSONAL_EGRESS_DISABLED_MESSAGE, {code: PERSONAL_EGRESS_DISABLED});
+    }
+    return false;
+  }
+  return override === '1' || config?.egress?.mode === 'observe' || config?.egress?.mode === 'enforce';
+}
+
 export const PROVIDER_NETWORK = 'ac-native-provider';
 export const EGRESS_CONTAINER = 'ac-provider-egress';
 

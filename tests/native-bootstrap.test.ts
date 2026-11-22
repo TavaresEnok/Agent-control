@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {execFileSync} from 'node:child_process';
 import {chmod,lstat,mkdir,mkdtemp,readFile,rm,symlink,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -14,6 +15,9 @@ import {nativeQaContractDigest,type NativeQaContract} from '../src/native-qa-con
 import {nativeReviewVerifierDigest} from '../src/native-review-contract.ts';
 import {nativeBootstrapSchemaError,assertManagerTransportAllowed,NativeBootstrapRefusal,assertNativeBootstrapAttachment,composeBenchNativeBootstrap,disabledNativeBootstrapReport,nativeBootstrapRuntimeAttachment,prepareNativeBootstrap,releaseProvenUnstartedGrant,type BenchRuntime,type NativeBootstrapAttachment,type NativeBootstrapSession} from '../src/native-bootstrap.ts';
 import {CezarRuntime} from '../src/cezar.ts';
+import {AccountHomes} from '../src/account-homes.ts';
+import {composePersonalExecutionSupervisors,composePersonalRuntime} from '../src/personal-runtime.ts';
+import type {PlanningInvocation} from '../src/semantic-planning.ts';
 import type {Authority} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 
@@ -485,6 +489,106 @@ test('configured resource attachment maps explicit database identity and keeps n
   actualIdentity=databaseInstallationId;const extendedConfig={...config,remoteDevelopment};await assert.rejects(prepareNativeBootstrap(extendedConfig,client),/NATIVE_RESOURCE_PROTECTED_PATH_UNSAFE/);
 
  }finally{await rm(env.root,{recursive:true,force:true});}
+});
+
+test('personal composition applies installation egress to execution, planning and manager chat',async t=>{
+ const env=await layout();
+ t.after(()=>rm(env.root,{recursive:true,force:true}));
+ const originalEgress=process.env.AC_PERSONAL_EGRESS;
+ const originalPath=process.env.PATH;
+ t.after(()=>{
+  if(originalEgress===undefined)delete process.env.AC_PERSONAL_EGRESS;
+  else process.env.AC_PERSONAL_EGRESS=originalEgress;
+  if(originalPath===undefined)delete process.env.PATH;
+  else process.env.PATH=originalPath;
+ });
+ delete process.env.AC_PERSONAL_EGRESS;
+ const bin=join(env.root,'bin'),dockerArgsFile=join(env.root,'docker-args.json');
+ await mkdir(bin);
+ await writeFile(join(bin,'docker'),[
+  '#!'+process.execPath,
+  "require('node:fs').writeFileSync("+JSON.stringify(dockerArgsFile)+",JSON.stringify(process.argv.slice(2)))",
+  "console.log(JSON.stringify({kind:'answer',answer:'Resposta de teste'}))",
+ ].join('\n'),{mode:0o700});
+ process.env.PATH=bin+(originalPath?':'+originalPath:'');
+ execFileSync('/usr/bin/git',['init','--quiet','--initial-branch=main',env.repo]);
+
+ const initial=configured(env);
+ const config=Installation.parse({...initial,activation:'personal',egress:{mode:'enforce'},
+  nativeBootstrap:{...initial.nativeBootstrap,state:'active'}});
+ const profile:PlanningInvocation['profile']={id:randomUUID(),accountId:env.accountId,provider:'codex',
+  model:'fixture-model',effort:'medium',mode:'subscription_cli'};
+ const invocation:PlanningInvocation={
+  callId:randomUUID(),intentId:randomUUID(),contextId:env.contextId,grantId:randomUUID(),sessionId:randomUUID(),executionEpoch:3,
+  inputDigest:hash('planning input'),profile,sourceMessageRef:'fixture:message',text:'Planeje uma mudança.',
+  constraints:{qualityRevision:1,targetRef:'refs/heads/main',knownReferences:[]},outputSchema:{type:'object'},assertAuthorized:async()=>{},
+ };
+ assert.ok(config.nativeBootstrap?.state==='active');
+ const account=config.nativeBootstrap.accounts[0]!;
+ const {owner}=config.project;
+ const query=async(sql:string)=>{
+  const prefix=sql.trim();
+  const selected=(...rows:Record<string,unknown>[])=>({rows,rowCount:rows.length});
+  if(prefix.startsWith('INSERT INTO ac_quota_observations')||prefix.startsWith('INSERT INTO ac_native_planning_jobs'))return selected();
+  if(prefix.startsWith('SELECT id FROM ac_capacity_grants WHERE state<>')||prefix.startsWith('SELECT id FROM ac_native_planning_jobs'))return selected();
+  if(prefix.startsWith('SELECT id,provider FROM ac_accounts'))return selected({id:env.accountId,provider:profile.provider});
+  if(prefix.startsWith('SELECT revision,snapshot FROM ac_quality_policies'))return selected({revision:1,snapshot:{
+   schemaVersion:1,requiredReviews:1,allowLowRiskQaWaiver:false,requireHumanIntegration:false,
+   verifierDigest:nativeReviewVerifierDigest,qaVerifierDigest:nativeQaContractDigest(qa),
+  }});
+  if(prefix.startsWith('SELECT max(revision) r FROM ac_quality_policies'))return selected({r:1});
+  if(prefix.startsWith('SELECT t.context_id,t.revision,t.snapshot'))return selected();
+  if(prefix.startsWith('SELECT * FROM ac_semantic_planning_calls'))return selected({
+   state:'uncertain',grant_id:invocation.grantId,execution_epoch:invocation.executionEpoch,input_digest:invocation.inputDigest,
+   selected_executor_id:'native-plan-codex',selected_executor_digest:nativePlanningExecutorDigest(env.planningImage),
+  });
+  if(prefix.startsWith('SELECT g.*,a.provider'))return selected({
+   state:'reserved',context_id:env.contextId,intent_id:invocation.intentId,manager_epoch:invocation.executionEpoch,
+   role:'manager',profile_role:'manager',account_id:env.accountId,profile_id:profile.id,model:profile.model,effort:profile.effort,
+   provider:profile.provider,mode:profile.mode,eligibility:'documented_supported',account_enabled:true,profile_enabled:true,
+   resource_identity:profile.provider+':'+account.subjectDigest,principal_id:owner,project_id:env.projectId,
+  });
+  if(prefix.startsWith('SELECT 1 FROM ac_installation_activation'))return selected({present:1});
+  if(prefix.startsWith('SELECT * FROM ac_recovery_inventory_policy'))return selected({required:false});
+  if(prefix.startsWith('SELECT instance_id FROM ac_managers'))return selected({instance_id:env.instanceId});
+  if(prefix.startsWith('SELECT a.id FROM ac_accounts'))return selected({id:env.accountId});
+  if(prefix.startsWith('SELECT g.state,a.enabled'))return selected({state:'reserved',account_enabled:true,profile_enabled:true,status:'available',fresh:true});
+  if(prefix.startsWith('SELECT a.id account_id,a.provider,p.model,p.effort'))return selected({
+   account_id:env.accountId,provider:profile.provider,model:profile.model,effort:profile.effort,
+  });
+  assert.fail('Consulta inesperada: '+sql);
+ };
+ const ledger={pool:{query},tx:async<T>(fn:(client:{query:typeof query})=>Promise<T>)=>fn({query}),
+  fence:async()=>{},assertIntentActive:async()=>{}} as unknown as Ledger;
+ t.mock.method(AccountHomes.prototype,'inspectGranted',async()=>({accountId:env.accountId,projectId:env.projectId,ownerId:owner,uid:'1',device:'1',inode:'1'}));
+
+ const supervisors=await composePersonalExecutionSupervisors(config,ledger);
+ assert.equal(supervisors.length,1);
+ assert.equal(supervisors[0]!['config'].personalEgress,true);
+ const runtime=await composePersonalRuntime(config,ledger);
+ assert.ok(runtime);
+ assert.equal(runtime.executions.length,1);
+ assert.equal(runtime.executions[0]!['config'].personalEgress,true);
+
+ const proxyUrl='http://provider-egress:8080';
+ const [planner]=runtime.planning;
+ assert.ok(planner);
+ const launchFile=join(config.nativeBootstrap.planning.hostRoot,invocation.callId,'input','launch.json');
+ const stopAfterLaunch=new Error('STOP_AFTER_PLANNING_LAUNCH');
+ Object.defineProperty(planner,'docker',{value:{
+  imagePresent:async()=>true,
+  create:async()=>{
+   const launch=JSON.parse(await readFile(launchFile,'utf8'));
+   assert.equal(launch.payload.proxyUrl,proxyUrl);
+   throw stopAfterLaunch;
+  },
+ }});
+ await assert.rejects(planner.executor.execute(invocation),error=>error===stopAfterLaunch);
+
+ assert.deepEqual(await runtime.managerChat.decide('Oi','Repositório de teste'),{kind:'answer',answer:'Resposta de teste'});
+ const args:string[]=JSON.parse(await readFile(dockerArgsFile,'utf8'));
+ assert.equal(args[0],'run');
+ assert.ok(args.some((arg,index)=>arg==='--env'&&args[index+1]==='HTTPS_PROXY='+proxyUrl));
 });
 
 test('weekly maintenance preserves retired images and records when installations may share Docker',async()=>{

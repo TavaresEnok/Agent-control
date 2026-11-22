@@ -26,6 +26,7 @@ import {EXAM_LOGIN_MARGIN_MS} from '../src/exam-login.ts';
 import {runDesignModule} from '../src/design-module.ts';
 import {runDesignCreate} from '../src/design-create.ts';
 import {runSecurityVerification} from '../src/verify-runtime.ts';
+import {personalEgressEnabled} from '../src/personal-egress.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 type Row = Record<string, unknown>;
@@ -1317,7 +1318,13 @@ rl.once('line', line => {
   }
 });
 
-test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo sem montar .credentials.json', async () => {
+test('validador e design usam o mesmo mecanismo sem montar .credentials.json e recebem o egress da instalação', async t => {
+  const previousEgress = process.env.AC_PERSONAL_EGRESS;
+  delete process.env.AC_PERSONAL_EGRESS;
+  t.after(() => {
+    if (previousEgress === undefined) delete process.env.AC_PERSONAL_EGRESS;
+    else process.env.AC_PERSONAL_EGRESS = previousEgress;
+  });
   const {ledger, memory} = substituteLedger();
   const area = await realpath(await mkdtemp(join(tmpdir(), 'ac-exam-all-paths-')));
   const repo = join(area, 'repo');
@@ -1355,7 +1362,7 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
     const image = 'sha256:' + 'c'.repeat(64);
     const created: {name: string; env: string[]; binds: string[]}[] = [];
     let sequence = 0;
-    const supervisor = new NativeExecutionSupervisor(ledger, {
+    const supervisorConfig = {
       id: 'claude-native-execution',
       workerImage: image,
       toolsImage: image,
@@ -1365,29 +1372,31 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       protectedRepositories: [],
       signingKeyPem: keys.privateKey.export({format: 'pem', type: 'pkcs8'}).toString(),
       providerNetworkId: 'd'.repeat(64),
-      provider: 'claude',
+      provider: 'claude' as const,
       socketPath: '/tmp/ac-no-host-socket.sock',
       accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
-      workerEnv: [],
       toolsEnv: [],
-    }, {assertAdmission: async () => {}});
-    (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
-    Object.defineProperty(supervisor, 'doc' + 'ker', {
-      value: {
-        imagePresent: async () => true,
-        inspect: async () => null,
-        inspectPrivateNetwork: async () => null,
-        stop: async () => {},
-        remove: async () => {},
-        createPrivateNetwork: async () => `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`,
-        create: async (name: string, configuration: {Env?: string[]; HostConfig?: {Binds?: string[]}}) => {
-          created.push({name, env: [...(configuration.Env ?? [])], binds: [...(configuration.HostConfig?.Binds ?? [])]});
-          return `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
-        },
-        start: async () => { throw new Error('STOP_AFTER_CREATE'); },
+    };
+    const docker = {
+      imagePresent: async () => true,
+      inspect: async () => null,
+      inspectPrivateNetwork: async () => null,
+      stop: async () => {},
+      remove: async () => {},
+      createPrivateNetwork: async () => `${(++sequence).toString(16).padStart(2, '0')}${'ab'.repeat(31)}`,
+      create: async (name: string, configuration: {Env?: string[]; HostConfig?: {Binds?: string[]}}) => {
+        created.push({name, env: [...(configuration.Env ?? [])], binds: [...(configuration.HostConfig?.Binds ?? [])]});
+        return `${(++sequence).toString(16).padStart(2, '0')}${'cd'.repeat(31)}`;
       },
-    });
-
+      start: async () => { throw new Error('STOP_AFTER_CREATE'); },
+    };
+    const makeSupervisor = (personalEgress: boolean | undefined, workerEnv: string[] = []) => {
+      const supervisor = new NativeExecutionSupervisor(ledger, {...supervisorConfig, personalEgress, workerEnv}, {assertAdmission: async () => {}});
+      (supervisor as unknown as {identity: (client: unknown, principal: string, authority: unknown, input: {grantId: string}) => Promise<Row>}).identity = async (_client, _principal, _authority, input) => memory.one('ac_capacity_grants', input.grantId);
+      Object.defineProperty(supervisor, 'doc' + 'ker', {value: docker});
+      return supervisor;
+    };
+    const supervisor = makeSupervisor(personalEgressEnabled({egress: {mode: 'enforce'}}));
     const mediumProfile = fixtureDesignPolicy(memory, context, account, profile);
     const cases = [
       {label: 'validador-examinador', workflow: 'security-verify-readonly-v1', role: 'specialist' as const, task: 'Exame de segurança.', exam: true},
@@ -1396,10 +1405,17 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
       {label: 'design-revisor', workflow: 'design-readonly-v1', role: 'specialist' as const, task: 'Pedido de confirmação.', exam: true},
       {label: 'design-critica', workflow: 'design-readonly-v1', role: 'specialist' as const, task: 'Pedido de crítica visual.', exam: true},
       {label: 'design-criar', workflow: 'design-readonly-v1', role: 'specialist' as const, task: 'Pedido de criação. Tela inicial.', exam: true},
-      {label: 'programador', workflow: 'engineering-native-v1', role: 'programmer' as const, task: 'Edite src/a.ts.', exam: false},
     ];
-
-    for (const item of cases) {
+    const programmer = {label: 'programador', workflow: 'engineering-native-v1', role: 'programmer' as const, task: 'Edite src/a.ts.', exam: false};
+    const launches = [
+      ...[...cases, programmer].map(item => ({item, launcher: supervisor, expectedEgress: ['AC_PERSONAL_EGRESS=1']})),
+      ...[
+        {label: 'proxy desativado', launcher: makeSupervisor(false)},
+        {label: 'workerEnv com =1', launcher: makeSupervisor(undefined, ['AC_PERSONAL_EGRESS=1'])},
+        {label: 'workerEnv com =0', launcher: makeSupervisor(undefined, ['AC_PERSONAL_EGRESS=0'])},
+      ].map(({label, launcher}) => ({item: {...programmer, label}, launcher, expectedEgress: []})),
+    ];
+    for (const {item, launcher, expectedEgress} of launches) {
       const purposes = {'design-revisor':'reviewer', 'design-critica':'visual', 'design-criar':'create', 'design-examinador':'examiner'} as const;
       const designPurpose = purposes[item.label as keyof typeof purposes];
       const intentId = randomUUID();
@@ -1426,13 +1442,14 @@ test('validador e design (examinador, revisor e criar) usam o mesmo mecanismo se
           const badGrant = randomUUID();
           const badJob = randomUUID();
           memory.insert('ac_capacity_grants', {...memory.one('ac_capacity_grants', grantId), ...wrong, id: badGrant});
-          await assert.rejects(() => supervisor.start(principal, authority, {...req, grantId: badGrant, jobId: badJob}), /DESIGN_CREATE_MODEL_UNAVAILABLE/);
+          await assert.rejects(() => launcher.start(principal, authority, {...req, grantId: badGrant, jobId: badJob}), /DESIGN_CREATE_MODEL_UNAVAILABLE/);
           assert.ok(!created.some(c => c.name.endsWith(badJob)));
         }
       }
-      await assert.rejects(() => supervisor.start(principal, authority, req), /STOP_AFTER_CREATE/);
+      await assert.rejects(() => launcher.start(principal, authority, req), /STOP_AFTER_CREATE/);
       const w = created.find(c => c.name === `ac-native-worker-${jobId}`);
       assert.ok(w, item.label);
+      assert.deepEqual(w.env.filter(entry => entry.startsWith('AC_PERSONAL_EGRESS=')), expectedEgress, item.label);
       assert.equal(w.env.includes('AC_VERIFY_EXAM=1'), item.exam, item.label);
       assert.equal(w.binds.some(b => b.includes(':/account')), !item.exam, item.label);
     }
@@ -2262,6 +2279,7 @@ process.exit(1);
       accountSubjects: [{accountId: account, subjectDigest: 'a'.repeat(64)}],
       workerEnv: ['AC_VERIFY_EXAM=1', 'AC_FIXTURE=1'],
       toolsEnv: [],
+      personalEgress: true,
       syntheticFixture: fixture,
     }, {assertAdmission: async () => {}});
     let sequence = 0;
@@ -2312,6 +2330,7 @@ process.exit(1);
     const workerMeta = created.find(c => c.name === `ac-native-worker-${jobId}`);
     assert.ok(workerMeta);
     assert.equal(workerMeta.env.includes('AC_VERIFY_EXAM=1'), false);
+    assert.equal(workerMeta.env.some(entry => entry.startsWith('AC_PERSONAL_EGRESS=')), false);
     assert.equal(workerMeta.binds.some(b => b.includes(':/account:')), true);
 
     const launch = JSON.parse(await readFile(join(spool, jobId, 'input', 'launch.json'), 'utf8')) as {
