@@ -141,7 +141,7 @@ test('examineFunctionalModule retoma no mesmo arquivo não julgado preservando c
   assert.equal(resumed.findings[0]?.status, 'confirmado');
   assert.equal(resumed.findings[0]?.verifier?.provider, 'codex');
   assert.ok(resumed.notes.includes('Rotas fora dos limites de envio ao examinador: 2.'));
-  assert.ok(resumed.notes.includes('Arquivos com envio limitado a linhas completas: 1.'));
+  assert.ok(resumed.notes.some(note => note.startsWith('Arquivos julgados só em parte') && note.includes('b-limited.ts')));
   assert.equal(resumed.notes.some(note => note.includes('PROVIDER_USAGE_LIMIT')), false);
   assert.equal(releases.length, 4);
 

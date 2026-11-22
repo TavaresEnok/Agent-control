@@ -477,9 +477,12 @@ const shortPublicId = (value: string, shape: RegExp) => shape.test(value) && red
  */
 export function isPublicModuleRule(module: VerificationModule | undefined, tool: unknown, rule: unknown): boolean {
   if (!module || typeof tool !== 'string' || typeof rule !== 'string' || tool.includes(':') || rule.includes(':')) return false;
-  return Object.hasOwn(rules[module], tool + ':' + rule)
+  const known = Object.hasOwn(rules[module], tool + ':' + rule)
     || (Object.hasOwn(fixedRuleIds[module] ?? {}, tool) && fixedRuleIds[module]![tool]!.includes(rule))
     || (shortPublicId(tool, SHORT_TOOL) && shortPublicId(rule, SHORT_RULE));
+  // A legible id the secret guard would refuse ("prontidao-tls-passivo:..." reads as "pass...: value") stays redacted,
+  // as before: otherwise the whole report would be refused with VERIFY_SECRET_IN_REPORT.
+  return known && !hasKnownSecret(tool + ':' + rule);
 }
 
 // Metrics counted by the tool itself: symbols without JSDoc, unused exports,

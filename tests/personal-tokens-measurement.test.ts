@@ -122,11 +122,11 @@ test('CLI: linha de Codex com base desconhecida sai como medição insuficiente,
 
 test('lotes: configuração efetiva por módulo, com o limite histórico do módulo 1 e o batchFiles dos demais', async () => {
   const padrao = effectiveBatchLines({}, 'p').join('\n');
-  assert.match(padrao, /módulo 1 \(segurança\): até 15 arquivos por chamada \(limite histórico fixo; batchFiles=8 não se aplica\) e orçamento de leitura de 160000 tokens/);
-  assert.match(padrao, /módulos 2 a 9: até 8 arquivos e 40000 tokens por chamada/);
+  assert.match(padrao, /módulo 1 \(segurança\): até 15 arquivos por chamada \(limite histórico fixo; batchFiles não se aplica\) e orçamento de leitura de 160000 tokens/);
+  assert.match(padrao, /módulos 2 a 9: até 20 arquivos e 40000 tokens por chamada/);
   assert.match(padrao, /módulo 10 \(design\): até 8 arquivos e 20000 tokens por chamada \(teto do design: 20000\)/);
   const um = effectiveBatchLines({batchFiles: 1, batchTokens: 10000}, 'p').join('\n');
-  assert.match(um, /módulo 1 .*até 15 arquivos.*batchFiles=1 não se aplica/);
+  assert.match(um, /módulo 1 .*até 15 arquivos.*batchFiles não se aplica/);
   assert.match(um, /módulos 2 a 9: 1 arquivo por chamada \(lote exige batchFiles >= 2\)/);
   assert.match(effectiveBatchLines({batch: false}, 'p').join('\n'), /módulos 1 a 10: 1 arquivo por chamada/);
   assert.match(effectiveBatchLines({batchFiles: 99}, 'p')[0]!, /inválida/);
