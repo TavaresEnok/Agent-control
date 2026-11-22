@@ -172,7 +172,7 @@ export type VerificationModuleRunResult = {
   toolCoverage: ModuleToolCoverage[];
   hasToolFailure: boolean;
   summary: ModuleReportSummary;
-  /** The examiner stopped or left files not judged by a failure code: the run is failed and the report partial. */
+  /** The examiner stopped (the run is failed) or left files not judged by a failure code (the run stays done); the report is partial. */
   examIncomplete?: {code: string; unjudged: number; total: number} | null;
   /** Findings whose review failed, with their distinct codes. */
   unreviewed?: {count: number; codes: string[]} | null;

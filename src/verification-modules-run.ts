@@ -507,8 +507,11 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     if (collectorCode !== 0 && !collectorData.coverage.some(row => row.status === 'failed')) {
       notes.push(`O coletor saiu com código ${collectorCode}.`);
     }
-    // A model exam that stopped or left files without judgement by a failure fails the run; the
-    // report is still written. A run without exam (tools only, or a remeasurement) is unaffected.
+    // A model exam that stopped (or never started) fails the run; the report is still written.
+    // Files left without judgement by a one-off failure keep the run done, because recheck, the
+    // measurement gate and the performance history read 'done' as a conclusive collector measurement;
+    // the result still carries them, so the CLI exits with MODULE_EXAM_INCOMPLETE.
+    // A run without exam (tools only, or a remeasurement) is unaffected.
     const unjudged = exam ? moduleExamUnjudgedByFailure(exam.coverage) : 0;
     const examIncomplete = exam && (exam.stopped || unjudged) ? {unjudged,
       code: exam.stopped ?? exam.coverage.find(row => moduleExamUnjudgedByFailure([row]))?.reason ?? 'MODULE_EXAM_UNAVAILABLE',
@@ -516,7 +519,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     const failedReviews = exam?.findings.filter(finding => finding.failure !== null) ?? [];
     const unreviewed = failedReviews.length
       ? {count: failedReviews.length, codes: [...new Set(failedReviews.map(finding => finding.failure!))]} : null;
-    const finalState: 'done' | 'failed' = hasToolFailure || examIncomplete ? 'failed' : 'done';
+    const finalState: 'done' | 'failed' = hasToolFailure || exam?.stopped ? 'failed' : 'done';
     const report = await input.ledger.tx(async c => {
       await input.ledger.authorize(c, input.principal, input.authority.contextId);
       await input.ledger.fence(c, input.authority);

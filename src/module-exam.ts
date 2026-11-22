@@ -295,8 +295,18 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     if (clean(file, 400) === file) notes.add(`Inventário de rotas em ${file} com omissão por ${reason}.`);
   }
   if (omissions.length > 20) notes.add(`Registros adicionais de omissão de rotas: ${omissions.length - 20}.`);
-  const coverage: ModuleExamCoverage[] = input.map.files.map(f => ({file: f.file, status: 'nao_julgado',
-    reason: f.reason ?? (input.toolsOnly ? null : unavailable) ?? (enabled ? 'não examinado' : 'modo somente ferramentas'), examiner: null, checklist: []}));
+  // Routing applies whenever the examiner runs or is unavailable, so a failed exam counts only the module's files.
+  // A file with collector evidence in this module is always examined, whatever its path.
+  const evidenced = new Set(input.findings.map(finding => finding.file));
+  const routed = input.scope !== false && (enabled || unavailable !== null) && !input.toolsOnly;
+  const outOfScope = new Set<string>();
+  const coverage: ModuleExamCoverage[] = input.map.files.map(f => {
+    const rule = routed && f.code !== null && !f.reason && !evidenced.has(f.file) ? moduleExamScope(input.module, f.file, f.code) : null;
+    if (rule) outOfScope.add(f.file);
+    return {file: f.file, status: 'nao_julgado', examiner: null, checklist: [], reason: rule ? `fora do escopo do módulo (regra ${rule})`
+      : f.reason ?? (input.toolsOnly ? null : unavailable) ?? (enabled ? 'não examinado' : 'modo somente ferramentas')};
+  });
+  const scoped = outOfScope.size;
   const filesByName = new Map(input.map.files.map(file => [file.file, file]));
   const coverageByFile = new Map(coverage.map(row => [row.file, row]));
   const reviewedRoutes = new Set<string>();
@@ -331,7 +341,6 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   }
 
   let stopExam = null as string | null;
-  let scoped = 0;
   // Tasks in flight share one Claude quota wait instead of each starting its own.
   let quotaGate: Promise<boolean> | null = null;
   const waitQuota = (context: ModuleExamClaudeQuotaWait) =>
@@ -362,14 +371,11 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     let limitedFiles = 0;
     for (const [index, file] of input.map.files.entries()) {
       checkAbort(input.signal);
-      if (file.code === null) continue;
+      if (file.code === null || outOfScope.has(file.file)) continue;
       const row = coverage[index]!;
       // Names reach the model only when sanitizing leaves them unchanged, so a response
       // can always be bound to the real inventory entry.
       if (clean(file.file, 400) !== file.file) { row.reason = 'nome protegido'; continue; }
-      // A file with collector evidence in this module is always examined, whatever its path.
-      const outside = input.scope === false || evidenceByFile.has(file.file) ? null : moduleExamScope(input.module, file.file, file.code);
-      if (outside) { row.reason = `fora do escopo do módulo (regra ${outside})`; scoped++; continue; }
       const {code, limited} = codeForExam(file.code);
       if (limited) limitedFiles++;
       const located = new Set(findModuleExamRoutes(file.file, code).map(moduleExamRouteKey));
@@ -783,7 +789,8 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       });
     };
     let outsideSample = 0;
-    /** Medium and low findings of one collector rule: a sample over distinct files goes to the reviewer in one call. */
+    /** Findings of one collector rule: a sample over distinct files goes to the reviewer in one call.
+     * When no sample verdict comes back, the rest of the group keeps the failure code of the sample. */
     const reviewGroup = async (members: Subject[]) => {
       const laneStop = stopReview ?? stopStandardReview;
       const candidates = laneStop ? [] : members.filter(ready).sort((a, b) => severityRank[a.finding.severity] - severityRank[b.finding.severity]);
@@ -816,15 +823,21 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         });
       }
       const rest = candidates.filter(s => !sample.includes(s));
-      const confirmed = sample.filter(s => s.finding.status === 'confirmado').length;
-      const discarded = sample.filter(s => s.finding.status === 'descartado').length;
+      const reviewed = sample.filter(s => s.finding.failure === null);
+      if (!reviewed.length) {
+        const code = sample[0]?.finding.failure ?? null;
+        for (const s of rest) { s.finding.failure = code; s.finding.reason = `Confirmação indisponível. Código ${code}.`; }
+        return;
+      }
+      const confirmed = reviewed.filter(s => s.finding.status === 'confirmado').length;
+      const discarded = reviewed.filter(s => s.finding.status === 'descartado').length;
       for (const s of rest) {
-        s.finding.reason = `Fora da amostra revisada da regra: ${confirmed} confirmado(s) e ${discarded} descartado(s) em ${sample.length} de ${candidates.length}.`;
+        s.finding.reason = `Fora da amostra revisada da regra: ${confirmed} confirmado(s) e ${discarded} descartado(s) em ${reviewed.length} de ${candidates.length}.`;
       }
       outsideSample += rest.length;
     };
-    // Triage before any reviewer call. Measured rules never reach the reviewer; the medium and low
-    // findings of one collector rule form a group; high findings and examiner findings go one by one.
+    // Triage before any reviewer call. Measured rules never reach the reviewer; the findings of one
+    // collector rule form a group (high ones apart, outside the ceiling); examiner findings go one by one.
     type Item = {members: Subject[]; group: boolean; capped: boolean};
     const items: Item[] = [];
     const byRule = new Map<string, Item>();
@@ -839,10 +852,12 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         measuredCount++;
         continue;
       }
-      if (!raw || s.finding.severity === 'alta') { items.push({members: [s], group: false, capped: !s.high && !raw}); continue; }
-      const key = JSON.stringify([raw.tool, raw.rule]);
+      if (!raw) { items.push({members: [s], group: false, capped: !s.high}); continue; }
+      // High collector findings of one rule share a sample too, in their own group outside the ceiling.
+      const high = s.finding.severity === 'alta';
+      const key = JSON.stringify([raw.tool, raw.rule, high]);
       let item = byRule.get(key);
-      if (!item) { item = {members: [], group: true, capped: true}; byRule.set(key, item); items.push(item); }
+      if (!item) { item = {members: [], group: true, capped: !high}; byRule.set(key, item); items.push(item); }
       item.members.push(s);
     }
     // The ceiling counts calls: the most severe groups and findings first, then the finding order.

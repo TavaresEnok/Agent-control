@@ -30,6 +30,7 @@ import {
   type VerificationModuleRunResult,
 } from './verification-modules.ts';
 import {composePersonalModuleExamRuntime, createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamClock, type ModuleExamRuntime} from './module-exam-native.ts';
+import {DEFAULT_MODULE_EXAM_BATCH, type ModuleExamBatch} from './module-exam.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {failAbandonedVerifyContext} from './verify-abandon.ts';
@@ -85,6 +86,17 @@ type ExamIncomplete = NonNullable<VerificationModuleRunResult['examIncomplete']>
 /** The incomplete exam, attached to the MODULE_EXAM_INCOMPLETE refusal so the message can name it. */
 function incompleteExam(result: VerificationModuleRunResult, examIncomplete: NonNullable<VerificationModuleRunResult['examIncomplete']>) {
   return Object.assign(new Refusal('MODULE_EXAM_INCOMPLETE', 409), {examIncomplete: {...examIncomplete, directory: result.directory}});
+}
+
+/** Batch and routing of the modules 2 to 9 from the project's economy. An absent batchFiles or batchTokens takes the
+ * module default, not the security one (8 files) that examRunOptions applies; `scope: false` turns the routing off. */
+export function moduleExamEconomy(economy: {batch?: boolean; batchTokens?: number; batchFiles?: number; scope?: boolean} | undefined):
+  {batch: ModuleExamBatch | false; scope?: false} {
+  return {
+    batch: economy?.batch === false ? false
+      : {tokens: economy?.batchTokens ?? DEFAULT_MODULE_EXAM_BATCH.tokens, files: economy?.batchFiles ?? DEFAULT_MODULE_EXAM_BATCH.files},
+    ...(economy?.scope === false ? {scope: false} : {}),
+  };
 }
 
 /** Lines printed for a finished run: its id, its report and, when any review failed, how many findings stayed unreviewed. */
@@ -388,9 +400,8 @@ export async function runPersonalModuleCli(
       const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
         mapEnabled: project.economy?.map,
-        // Per-project switch for the routing by module, once the economy schema carries it.
-        ...((project.economy as {scope?: boolean} | undefined)?.scope === false ? {scope: false} : {}),
-        batch: runOptions.batch,
+        ...moduleExamEconomy(project.economy),
+        toolsOnly: config.nativeBootstrap?.state !== 'active',
         pollBackoff: runOptions.pollBackoff,
         ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
         loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger, project.allowedAccountIds)),

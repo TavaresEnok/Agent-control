@@ -7,7 +7,9 @@ const VENDOR = /(?:^|\/)(?:vendor|node_modules|third_party)\//u;
 const GEN = /(?:\.pb\.go|\.sql\.go|_gen\.go)$|(?:^|\/)dbgen\//u;
 const CODE = /\.(?:go|ts|tsx|js|jsx|mjs|cjs|py|rb|java|kt|rs|php|cs)$/iu;
 const TEST = /(?:_test\.go|\.(?:test|spec)\.[^/]+|_test\.py)$|(?:^|\/)(?:__tests__|tests?|e2e|acceptance|testdata)\//u;
-const DOC = /\.(?:md|mdx|rst|adoc)$|(?:^|\/)docs\//iu;
+// A docs/ folder makes only its non-code files documentation: internal/docs/handler.go is still code.
+const DOC = /\.(?:md|mdx|rst|adoc)$/iu;
+const DOCS_DIR = /(?:^|\/)docs\//u;
 const MANIFEST = /^(?:go\.(?:mod|sum)|package[^/]*\.json|npm-shrinkwrap\.json|[^/]*\.lock|[^/]*\.lockb|[^/]*-lock\.(?:json|ya?ml)|gradle\.lockfile|requirements[^/]*|pyproject\.toml|Pipfile|Gemfile|Cargo\.toml|pom\.xml|[^/]*\.gradle(?:\.kts)?|composer\.json)$/u;
 const DOCKERFILE = /^(?:Dockerfile[^/]*|[^/]*\.dockerfile)$/iu;
 const WORKFLOW = /(?:^|\/)\.github\/workflows\//u;
@@ -48,7 +50,7 @@ export function moduleExamScope(module: VerificationModule, file: string, code: 
   if (VENDOR.test(file)) return 'vendor';
   const base = file.slice(file.lastIndexOf('/') + 1);
   const test = TEST.test(file);
-  const doc = DOC.test(file);
+  const doc = DOC.test(file) || (DOCS_DIR.test(file) && !CODE.test(file));
   const facts = {file, base, code: code ?? '', test, doc, manifest: MANIFEST.test(base),
     runtime: CODE.test(file) && !test && !GEN.test(file) && !doc};
   return rule.covers(facts) ? null : rule.id;

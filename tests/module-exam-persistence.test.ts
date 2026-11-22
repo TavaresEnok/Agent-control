@@ -309,3 +309,22 @@ test('exame que para por login vencido falha a execução, grava o relatório pa
     assert.equal(measured.examIncomplete, null);
   });
 });
+
+test('arquivo sem julgamento por falha pontual mantém a execução done e a medição, e a CLI recebe o exame incompleto', {skip: !databaseUrl}, async () => {
+  await withExamFixture(async input => {
+    const examiner: ModuleExamSeat = {provider: 'claude', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
+    const result = await runVerificationModule({...input, collectorOutput: observedOutput, async examinar(req) {
+      const map = await mapModuleSnapshot(req.snapshot);
+      return examineFunctionalModule({...req, commit: input.commit, map, reviewCap: 0, reserve: async () => examiner, release: async () => {},
+        worker: {async run(call) {
+          const task = JSON.parse(call.task);
+          // One file gets an answer that does not parse; the others are examined.
+          if (task.file === testFile) return 'sem json';
+          return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], routesReviewed: [], findings: []});
+        }}});
+    }});
+    assert.equal((await input.ledger.pool.query('SELECT status FROM ac_verify_runs WHERE id=$1', [result.runId])).rows[0].status, 'done');
+    assert.deepEqual(result.examIncomplete && [result.examIncomplete.code, result.examIncomplete.unjudged], ['MODULE_EXAM_RESPONSE_INVALID', 1]);
+    assert.ok(result.examIncomplete!.total >= result.examIncomplete!.unjudged);
+  });
+});

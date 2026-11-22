@@ -541,6 +541,9 @@ async function moduleExamSlots(ledger: Ledger, contextId: string): Promise<numbe
 
 export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | 'runtime' | 'signal'> & {
   mapEnabled?: boolean;
+  /** The installation has no native model execution configured. Only then does an empty runtime mean tools only;
+   * otherwise (every account disabled, for instance) it is an unavailable examiner and the exam counts as stopped. */
+  toolsOnly?: boolean;
   /** Per-file routing by module; `false` sends every file to every module. */
   scope?: boolean;
   /** Batch limits; `false` disables batching. Defaults to the product limits. */
@@ -570,9 +573,8 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       if (allowedClaudeCount === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
     }
     if (!runtime.some(seat => seat.provider === 'claude')) {
-      // An empty runtime is an installation without native model execution: tools only, by configuration.
       return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
-        ...(runtime.length === 0 ? {toolsOnly: true} : {})});
+        ...(runtime.length === 0 && input.toolsOnly ? {toolsOnly: true} : {})});
     }
     const supportedSeats = new Map(runtime.map(seat => [seat.provider, seat.accountIds]));
     const allowedClaudeAccounts = allowedSet

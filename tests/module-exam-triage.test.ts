@@ -1,10 +1,15 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {Refusal} from '../src/contracts.ts';
-import {examineFunctionalModule, MODULE_EXAM_REVIEW_SAMPLE, type ModuleExamInput, type ModuleExamSeat} from '../src/module-exam.ts';
-import {moduleRunLines} from '../src/personal-module-cli.ts';
+import {Refusal, type Authority} from '../src/contracts.ts';
+import type {Ledger} from '../src/ledger.ts';
+import {createPersonalModuleExam} from '../src/module-exam-native.ts';
+import {DEFAULT_MODULE_EXAM_BATCH, examineFunctionalModule, MODULE_EXAM_REVIEW_SAMPLE, type ModuleExamInput, type ModuleExamSeat} from '../src/module-exam.ts';
+import {moduleExamEconomy, moduleRunLines} from '../src/personal-module-cli.ts';
 import type {VerificationModuleRunResult} from '../src/verification-modules.ts';
 import {qaStaticFinding, qaStaticTool, reviewFixtureVerdict} from './fixtures/module-exam-review.ts';
 
@@ -179,4 +184,50 @@ test('instalação sem runtime de modelo: somente ferramentas sem contar como ex
   const missing = await examineFunctionalModule({module: 'qa', intentId, map: {files, routes: []}, findings: [],
     unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE'});
   assert.deepEqual([missing.stopped, missing.unjudgedByFailure], ['MODULE_EXAM_EXAMINER_UNAVAILABLE', 1]);
+});
+
+test('400 achados altos de uma regra da ferramenta viram uma chamada de amostra, fora do teto', async () => {
+  const {map, findings} = suite(40, 10);
+  const h = harness({map, findings: findings.map(finding => ({...finding, severity: 'alta' as const})), reviewCap: 0});
+  const result = await examineFunctionalModule(h.input);
+  assert.equal(h.reviews.length, 1);
+  assert.equal(h.reviews[0]!.items.length, MODULE_EXAM_REVIEW_SAMPLE);
+  assert.equal(result.findings.filter(finding => finding.status === 'confirmado').length, MODULE_EXAM_REVIEW_SAMPLE);
+  assert.ok(result.findings.every(finding => finding.reason !== 'Fora do teto de revisão do módulo.'));
+});
+
+test('amostra sem veredito: o resto da regra fica com o código da falha, não como fora da amostra', async () => {
+  const {map, findings} = suite(30, 10);
+  const examiner = seat('claude');
+  const h = harness({map, findings});
+  // The reviewer seat repeats the examiner account, so the sample call is refused.
+  const result = await examineFunctionalModule({...h.input, reserve: async () => examiner});
+  assert.equal(h.reviews.length, 0);
+  assert.ok(result.findings.every(finding => finding.failure === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT'
+    && finding.reason === 'Confirmação indisponível. Código MODULE_EXAM_PROVIDER_NOT_DISTINCT.'));
+  assert.ok(!result.notes.some(note => note.startsWith('Achados fora da amostra')));
+});
+
+test('módulos 2 a 9 usam o lote do módulo quando o projeto não fixa batchFiles; scope false desliga o roteamento', () => {
+  assert.deepEqual(moduleExamEconomy(undefined), {batch: DEFAULT_MODULE_EXAM_BATCH});
+  assert.deepEqual(moduleExamEconomy({batchTokens: 30_000}), {batch: {tokens: 30_000, files: DEFAULT_MODULE_EXAM_BATCH.files}});
+  assert.deepEqual(moduleExamEconomy({batchFiles: 5, scope: false}), {batch: {tokens: DEFAULT_MODULE_EXAM_BATCH.tokens, files: 5}, scope: false});
+  assert.deepEqual(moduleExamEconomy({batch: false, scope: true}), {batch: false});
+});
+
+test('runtime vazio só é somente ferramentas quando a instalação não tem execução nativa configurada', async () => {
+  const snapshot = await mkdtemp(join(tmpdir(), 'ac-triage-'));
+  try {
+    await writeFile(join(snapshot, 'a.ts'), 'export const a = 1;\n');
+    const exam = (toolsOnly?: boolean) => createPersonalModuleExam({ledger: {} as Ledger, principal: 'dono', authority: {} as Authority,
+      commit: 'a'.repeat(40), loadRuntime: async () => [], ...(toolsOnly === undefined ? {} : {toolsOnly})})({intentId, snapshot, module: 'qa', findings: []});
+    const configured = await exam(true);
+    assert.deepEqual([configured.stopped, configured.unjudgedByFailure], [null, 0]);
+    // Every account disabled leaves the runtime empty too: that is an unavailable examiner.
+    for (const disabled of [await exam(false), await exam()]) {
+      assert.deepEqual([disabled.stopped, disabled.unjudgedByFailure], ['MODULE_EXAM_EXAMINER_UNAVAILABLE', 1]);
+    }
+  } finally {
+    await rm(snapshot, {recursive: true, force: true});
+  }
 });

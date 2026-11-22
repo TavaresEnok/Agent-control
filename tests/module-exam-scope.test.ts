@@ -12,6 +12,10 @@ const table: [VerificationModule, string, string, boolean][] = [
   ['qa', 'internal/handler/user_test.go', plain, true],
   ['qa', 'web/src/App.tsx', plain, true],
   ['qa', 'docs/guia.md', '', false],
+  // Code inside a docs/ folder is still code: a Go package or a swagger generator.
+  ['qa', 'internal/docs/handler.go', plain, true],
+  ['arquitetura', 'api/docs/docs.go', plain, true],
+  ['qa', 'Docs/guia.md', '', false],
   ['qa', 'internal/db/dbgen/models.go', plain, false],
   ['qa', 'api/v1/chat.pb.go', plain, false],
   ['qa', 'vendor/github.com/x/y.go', plain, false],
@@ -117,4 +121,14 @@ test('scope false examina todos os arquivos, como antes', async () => {
   assert.deepEqual(sent, ['src/a.ts', 'README.md', 'src/b.ts']);
   assert.ok(result.coverage.every(row => row.status === 'lido'));
   assert.ok(result.notes.includes('Arquivos sem julgamento por modelo: 0. Achados pendentes: 1.'));
+});
+
+test('examinador indisponível conta só os arquivos do escopo do módulo', async () => {
+  const {sent, input} = documentation();
+  const result = await examineFunctionalModule({...input, worker: undefined, reserve: undefined, release: undefined,
+    unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE'});
+  assert.deepEqual(sent, []);
+  assert.deepEqual(result.coverage.map(row => row.reason), ['fora do escopo do módulo (regra documentacao-textos)',
+    'MODULE_EXAM_EXAMINER_UNAVAILABLE', 'MODULE_EXAM_EXAMINER_UNAVAILABLE']);
+  assert.deepEqual([result.stopped, result.unjudgedByFailure], ['MODULE_EXAM_EXAMINER_UNAVAILABLE', 2]);
 });
