@@ -286,3 +286,7 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Correção:** commit acima. Os dois órfãos foram reconciliados por `--recuperar-exame-orfao`, as vagas foram liberadas e os jobs voltaram a rodar às 20:56.
   - **Pendente:** um teste específico do caso `created` sem id.
   - **Lição:** módulos caídos por carga deixam vagas presas. A fila nova evita a carga, e o gerente deve rodar `--recuperar-exame-orfao` nos jobs `uncertain` de módulos que já falharam.
+- 22/11/2026 21:03 UTC — **Gerente: sessão curta, nada lançado.** Rodada `rodada-20261122-1922`; disco 93% (26 GB livres), carga ~4.
+  - **Rodando (4 módulos, o limite da fila):** QA (1786858), arquitetura (1786934), segurança (1799270) e banco (2228113, lançado pela fila às 20:58). A fila `fila-rodada.sh` (1810556) segue com documentação, desempenho, prontidão, conformidade e design.
+  - **Dependências terminou às 20:58 sem julgamento:** o log só diz "Nenhuma conta permitida para este projeto está ativa e disponível no runtime para o papel solicitado". Não é cota; pode ser vaga presa ou conta ocupada. **Pendente:** relançar `bash scripts/personal-dependencias.mjs <instalação> 98c62210-1fa3-4760-a16c-9ba38d694d63 --esperar-cota` quando abrir vaga (menos de 4 módulos ativos) e olhar `--recuperar-exame-orfao` se houver job `uncertain`. Não relancei agora para não passar de 4 módulos.
+  - Sem trabalhadores durante o exame. F3 só depois de todos os módulos terminarem e do `personal:tokens --desde 19:22`.
