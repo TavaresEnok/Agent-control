@@ -72,6 +72,7 @@ export type PersonalVerificationInput = {
   mapEnabled?: boolean;
   batch?: SecurityBatch;
   accountRoot?: string;
+  allowedAccountIds?: readonly string[];
   timeLimitMs?: number;
   networkRunner?: NetworkRunner;
 };
@@ -155,6 +156,7 @@ type ReadyVerification = {
   mapEnabled?: boolean;
   batch?: SecurityBatch;
   accountRoot?: string;
+  allowedAccountIds?: readonly string[];
   timeLimitMs: number;
   staticPolicy?: StaticCliPolicyGrant;
 };
@@ -206,6 +208,7 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     batch: input.batch,
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
+    ...(input.allowedAccountIds !== undefined ? {allowedAccountIds: [...input.allowedAccountIds]} : {}),
     timeLimitMs: chosenTimeLimit(input.timeLimitMs),
     staticPolicy: input.url === undefined
       ? heldStaticCliPolicy({worker: input.worker, projectId: input.projectId, commit: input.commit, authority: input.authority}) ?? undefined
@@ -550,6 +553,7 @@ async function runJob(input: {
       };
       if (ready.modelCallBudget !== undefined) verification.modelCallBudget = ready.modelCallBudget;
       if (ready.accountRoot) verification.accountRoot = ready.accountRoot;
+      if (ready.allowedAccountIds !== undefined) verification.allowedAccountIds = ready.allowedAccountIds;
       const result = ready.staticPolicy
         ? await runResolvedPersonalSecurityVerification(verification)
         : await runSecurityVerification(verification);
@@ -809,9 +813,27 @@ export async function resolvePersonalVerification(
     const composeRuntime = deps?.composeRuntime ?? (await import('./personal-runtime.ts')).composePersonalRuntime;
     const runtime = await composeRuntime(config, ledger);
     if (!runtime) throw new Refusal('VERIFY_WORKER_UNAVAILABLE', 503);
+    const rawSupervisors = runtime.executions as unknown as readonly SecurityExamSupervisor[];
+    let allowedAccountIds: string[] | undefined;
+    let supervisors = rawSupervisors;
+    if (project.allowedAccountIds !== undefined) {
+      allowedAccountIds = project.allowedAccountIds.filter(id => rawSupervisors.some(s => s.active && s.supportsAccount(id)));
+      if (allowedAccountIds.length === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+      const allowedSet = new Set(allowedAccountIds);
+      supervisors = rawSupervisors.map(s => ({
+        get active() { return s.active; },
+        supportsAccount(accountId: string) {
+          return allowedSet.has(accountId) && s.supportsAccount(accountId);
+        },
+        start: s.start.bind(s),
+        reconcile: s.reconcile.bind(s),
+        retireTerminal: s.retireTerminal.bind(s),
+        ...(s.stop ? {stop: s.stop.bind(s)} : {}),
+      }));
+    }
     const {createCapacityNativeWorker} = await import('./verify-native-launch.ts');
     const worker = createCapacityNativeWorker({
-      supervisors: runtime.executions as unknown as readonly SecurityExamSupervisor[],
+      supervisors,
       ledger,
       principal,
       authority,
@@ -834,6 +856,7 @@ export async function resolvePersonalVerification(
         url: parsed.url,
         dataDirectory: config.dataDirectory,
         accountRoot: personalAccountRoot(config),
+        ...(allowedAccountIds !== undefined ? {allowedAccountIds} : {}),
         repoPath: project.repo,
         commit,
         ledger,

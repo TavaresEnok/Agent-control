@@ -34,6 +34,11 @@ if(args[0]==='--add'){
  const result=spawnSync(process.execPath,['--import','tsx','src/personal-project-add.ts',file,repo,'--label',label],{cwd:root,stdio:'inherit'});
  process.exit(exitCodeOf(result));
 }
+if(args[0]==='--contas'){
+ const root=resolve(import.meta.dirname,'..');
+ const result=spawnSync(process.execPath,['--import','tsx','src/personal-project-add.ts',...args],{cwd:root,stdio:'inherit'});
+ process.exit(exitCodeOf(result));
+}
 const repoArg=args[0]&&!args[0].startsWith('--')?args[0]:undefined,db=flag('--db'),importLogins=args.includes('--import-logins');
 if(!repoArg||!db){console.log('Uso: npm run personal:project -- <repositório> --db <postgresql://...> [--label nome] [--import-logins]');process.exit(repoArg||db?1:0);}
 const root=resolve(import.meta.dirname,'..'),repo=await realpath(resolve(repoArg));

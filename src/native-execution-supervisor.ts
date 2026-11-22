@@ -172,7 +172,8 @@ export class NativeExecutionSupervisor extends NativeExecutionTerminalWork{
     if(personal && readonlyDesignExam(examWorkflowEarly,input.role)){
      const purpose=input.designPurpose;
      if(!purpose||current.selection?.designPurpose!==purpose)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
-     const profile=await requiredDesignProfile(c,authority.contextId,purpose);
+     const allowed=Array.isArray(current.selection?.allowedAccounts)?current.selection.allowedAccounts.filter((id:unknown):id is string=>typeof id==='string'):undefined;
+     const profile=await requiredDesignProfile(c,authority.contextId,purpose,allowed);
      if(this.config.provider!=='claude'||current.profile_id!==profile.id||current.account_id!==profile.account||
         current.model!==profile.model||current.effort!==profile.effort)throw new Refusal('DESIGN_CREATE_MODEL_UNAVAILABLE');
     }

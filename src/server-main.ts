@@ -268,8 +268,23 @@ async function main(){
      const {beginPersonalVerification,examRunOptions}=await import('./verify-command.ts');
      const examOptions=examRunOptions(project.economy);
      const {personalAccountRoot}=await import('./personal-health.ts');
-     const worker=createCapacityNativeWorker({supervisors:executions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:examOptions.pollBackoff});
-     return beginPersonalVerification({projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
+     const allowedAccountIds=project.allowedAccountIds!==undefined
+      ?project.allowedAccountIds.filter(id=>executions.some(s=>s.active&&s.supportsAccount(id)))
+      :undefined;
+     if(allowedAccountIds!==undefined&&allowedAccountIds.length===0)throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE',409);
+     const allowedSet=allowedAccountIds?new Set(allowedAccountIds):undefined;
+     const scopedExecutions=allowedSet
+      ?executions.map(s=>({
+       get active(){return s.active;},
+       supportsAccount:(id:string)=>allowedSet.has(id)&&s.supportsAccount(id),
+       start:s.start.bind(s),
+       reconcile:s.reconcile.bind(s),
+       retireTerminal:s.retireTerminal.bind(s),
+       stop:s.stop.bind(s),
+      }))
+      :executions;
+     const worker=createCapacityNativeWorker({supervisors:scopedExecutions,ledger,principal,authority,base:commit,releaseGrant:(grantId,how)=>releaseGrant(principal,authority,grantId,how),pollBackoff:examOptions.pollBackoff});
+     return beginPersonalVerification({projectId:panel.projectId,mapEnabled:examOptions.mapEnabled,batch:examOptions.batch,dataDirectory:panel.dataDirectory,repoPath:project.repo,...(body.url?{url:body.url}:{}),...(allowedAccountIds?{allowedAccountIds}:{}),ledger,principal,authority,policyRevision,commit,worker,databasesDirectory,image,installationPath:path,accountRoot:personalAccountRoot(config)});
     },
     recheck:async(principal,authority,input)=>{
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);
@@ -277,8 +292,23 @@ async function main(){
      const commit=await gitHead(project.repo);
      const {createRecheckNativeWorker,reservePersonalRecheckReviewer}=await import('./verify-native-launch.ts');
      const {recheckFindings}=await import('./verify-remediate.ts');
+     const allowedAccountIds=project.allowedAccountIds!==undefined
+      ?project.allowedAccountIds.filter(id=>executions.some(s=>s.active&&s.supportsAccount(id)))
+      :undefined;
+     if(allowedAccountIds!==undefined&&allowedAccountIds.length===0)throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE',409);
+     const allowedSet=allowedAccountIds?new Set(allowedAccountIds):undefined;
+     const scopedExecutions=allowedSet
+      ?executions.map(s=>({
+       get active(){return s.active;},
+       supportsAccount:(id:string)=>allowedSet.has(id)&&s.supportsAccount(id),
+       start:s.start.bind(s),
+       reconcile:s.reconcile.bind(s),
+       retireTerminal:s.retireTerminal.bind(s),
+       stop:s.stop.bind(s),
+      }))
+      :executions;
      const release=(grantId:string,how:'not_started'|'exited')=>releaseGrant(principal,authority,grantId,how);
-     const worker=createRecheckNativeWorker({supervisors:executions,principal,authority,base:commit,reserveReviewer:(intentId,avoidProviders,exclusion)=>reservePersonalRecheckReviewer({ledger,principal,authority,intentId,avoidProviders,exclusion,releaseGrant:release}),releaseGrant:release});
+     const worker=createRecheckNativeWorker({supervisors:scopedExecutions,principal,authority,base:commit,reserveReviewer:(intentId,avoidProviders,exclusion)=>reservePersonalRecheckReviewer({ledger,principal,authority,intentId,...(allowedAccountIds?{allowedAccounts:allowedAccountIds}:{}),avoidProviders,exclusion,releaseGrant:release}),releaseGrant:release});
      return recheckFindings(ledger,principal,authority,{...input,worker});
     },
    };

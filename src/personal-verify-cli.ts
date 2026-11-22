@@ -28,6 +28,7 @@ const messages:Record<string,string>={
  DESIGN_REVIEWER_UNAVAILABLE:'Falta um segundo perfil Claude na cadeia specialist para o revisor; rode `npm run personal:design -- preparar <instalação.json> <projectId> --aplicar`.',
  [VERIFY_RECHECK_NEW_EXAM_REQUIRED]:VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
  EXAM_PROVIDER_UNSUPPORTED:'O exame de leitura só aceita uma conta Claude.',
+ PROJECT_ACCOUNTS_UNAVAILABLE:'Nenhuma conta permitida para este projeto está ativa e disponível no runtime para o papel solicitado.',
  EXAM_LOGIN_STALE:EXAM_LOGIN_STALE_TEXT,
  EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,
  EXAM_LOGIN_RESTORE_FAILED:EXAM_LOGIN_RESTORE_FAILED_TEXT,

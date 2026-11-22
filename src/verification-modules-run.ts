@@ -105,6 +105,7 @@ async function confirmFindingWithReviewer(
       authority: input.authority,
       intentId,
       purpose: 'reviewer',
+      ...(input.allowedAccountIds ? {allowedAccounts: input.allowedAccountIds} : {}),
       releaseGrant: grantId => capacity.transition(input.principal, grantId, input.authority, 'released', {processId: 'module-confirm', state: 'not_started'}),
     });
   } catch (error) {

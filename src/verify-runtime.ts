@@ -61,6 +61,8 @@ export type SecurityVerificationInput = {
   accountSecrets?: readonly string[];
   /** Accounts folder. Secrets are read only from the reserved account directory, after the seat exists. */
   accountRoot?: string;
+  /** Optional per-project allowed account IDs (intersection with runtime accounts). */
+  allowedAccountIds?: readonly string[];
   notes?: readonly string[];
   /** Include the compact repository map in examiner tasks. Enabled by default. */
   mapEnabled?: boolean;
@@ -554,6 +556,7 @@ async function reserveAndRun(
     authority: input.authority,
     intentId,
     purpose,
+    ...(input.allowedAccountIds !== undefined ? {allowedAccounts: input.allowedAccountIds} : {}),
     avoidProfileId: avoidProfiles?.[0],
     ...(staticExaminer
       ? {
@@ -578,6 +581,9 @@ async function reserveAndRun(
   });
   let thrown: unknown;
   try {
+    if (input.allowedAccountIds && !input.allowedAccountIds.includes(seat.accountId)) {
+      throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+    }
     if (staticExaminer && (seat.provider !== 'claude' || seat.model !== 'claude-sonnet-5-5')) {
       throw new Refusal('MODULE_EXAM_EXAMINER_UNAVAILABLE', 409);
     }

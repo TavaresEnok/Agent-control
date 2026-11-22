@@ -40,6 +40,22 @@ No fim ele pede o reinício do gateway que já está no ar. O nome do serviço �
 systemctl --user restart agent-control-gateway-<nome>
 ```
 
+### Restringir as contas de um projeto
+
+Por padrão, cada projeto pode usar todas as contas ativas da instalação (`allowedAccountIds` ausente em `project` ou `projects[]` no `installation.json`). Para restringir um projeto (pelo UUID ou pelo rótulo) a uma ou mais contas ativas (`ac_accounts.enabled`) nos exames, revisões e etapas de design:
+
+```bash
+npm run personal:project -- --contas ~/.agent-control/ispagent/installation.json outro <uuid>[,<uuid>...]
+```
+
+Para remover a restrição e voltar a permitir todas as contas ativas:
+
+```bash
+npm run personal:project -- --contas ~/.agent-control/ispagent/installation.json outro --todas
+```
+
+Antes de atualizar o `installation.json`, o comando grava uma cópia em `installation.json.before-contas-<AAAAMMDD-HHMMSS>` e recusa qualquer UUID inválido ou que não seja uma conta ativa da instalação. Com a restrição ativa, o examinador e o revisor dos módulos 1 a 10 (incluindo `personal:verify`, a espera de cota `--esperar-cota` e o design em `preparar`, exame, crítica visual, confirmação e `criar`) usam apenas a interseção entre as contas do runtime e `allowedAccountIds`. Se a conta permitida estiver ocupada ou sem cota, a execução espera ou recusa sem cair para outra conta; se a interseção ficar vazia para o papel pedido, recusa com `PROJECT_ACCOUNTS_UNAVAILABLE`.
+
 ### Pastas que o painel pode abrir
 
 O painel só lista pastas dentro das raízes gravadas em `projectRoots`. Nada fora delas aparece.

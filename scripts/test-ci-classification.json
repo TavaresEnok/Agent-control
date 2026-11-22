@@ -230,6 +230,7 @@
   "project-admin-api.test.ts",
   "project-admin-sha256.test.ts",
   "project-admin.test.ts",
+  "project-allowed-accounts.test.ts",
   "project-ingress.test.ts",
   "project-templates.test.ts",
   "projects.test.ts",

@@ -32,6 +32,7 @@ type ReservationInput = {
   ledger: Ledger; principal: string; authority: Authority; intentId: string;
   module?: VerificationModule;
   supportedSeats: ReadonlyMap<ModuleExamProvider, ReadonlySet<string>>;
+  allowedAccountIds?: readonly string[];
 };
 
 export type ModuleExamClock = {
@@ -60,6 +61,12 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
 } {
   const capacity = new Capacity(input.ledger);
   let lastProvider: string | undefined;
+  const allowedSet = input.allowedAccountIds ? new Set(input.allowedAccountIds) : undefined;
+  const intersectAccounts = (accounts: ReadonlySet<string> | undefined): Set<string> => {
+    if (!accounts) return new Set();
+    if (!allowedSet) return new Set(accounts);
+    return new Set([...accounts].filter(id => allowedSet.has(id)));
+  };
   const release = async (seat: ModuleExamSeat, state: 'not_started'|'exited') => {
     await capacity.transition(input.principal, seat.grantId, input.authority, 'released', {processId: seat.grantId, state});
   };
@@ -72,8 +79,13 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
   ) => {
     if (target?.fromExaminer && target.severity === 'alta') {
       lastProvider = 'claude';
-      const accounts = input.supportedSeats.get('claude');
-      if (!accounts?.size) throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+      const runtimeAccounts = input.supportedSeats.get('claude');
+      if (!runtimeAccounts?.size) {
+        if (allowedSet) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+        throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+      }
+      const accounts = intersectAccounts(runtimeAccounts);
+      if (!accounts.size) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
       const seat = await reserveSpecialistExamSeat({
         capacity,
         ledger: input.ledger,
@@ -81,6 +93,8 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
         authority: input.authority,
         intentId: input.intentId,
         purpose: 'reviewer',
+        runtimeAccounts: [...runtimeAccounts],
+        ...(input.allowedAccountIds ? {projectAllowedAccounts: [...input.allowedAccountIds]} : {}),
         allowedAccounts: [...accounts],
         ...(avoid?.profileId ? {avoidProfileId: avoid.profileId} : {}),
         requiredModel: 'claude-opus-5-5',
@@ -98,8 +112,14 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
       }
       return seat;
     }
-    for (const [provider, accounts] of input.supportedSeats) {
-      if (provider === avoid?.provider || !accounts.size) continue;
+    let hadRuntimeProvider = false;
+    let hadAllowedIntersection = false;
+    for (const [provider, rawAccounts] of input.supportedSeats) {
+      if (provider === avoid?.provider || !rawAccounts.size) continue;
+      hadRuntimeProvider = true;
+      const accounts = intersectAccounts(rawAccounts);
+      if (!accounts.size) continue;
+      hadAllowedIntersection = true;
       lastProvider = provider;
       try {
         const seat = await capacity.reserveWithSeat(input.principal, {attemptId: randomUUID(), intentId: input.intentId,
@@ -121,6 +141,9 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
         throw error;
       }
     }
+    if (allowedSet && (!hadAllowedIntersection || !hadRuntimeProvider)) {
+      throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+    }
     throw new Refusal('MODULE_EXAM_REVIEWER_UNAVAILABLE');
   };
   return {
@@ -134,8 +157,13 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
       }
       if (!input.module) throw new Refusal('MODULE_EXAM_EXAMINER_UNAVAILABLE');
       lastProvider = 'claude';
-      const accounts = input.supportedSeats.get('claude');
-      if (!accounts?.size) throw new Refusal('MODULE_EXAM_EXAMINER_UNAVAILABLE');
+      const runtimeAccounts = input.supportedSeats.get('claude');
+      if (!runtimeAccounts?.size) {
+        if (allowedSet) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+        throw new Refusal('MODULE_EXAM_EXAMINER_UNAVAILABLE');
+      }
+      const accounts = intersectAccounts(runtimeAccounts);
+      if (!accounts.size) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
       const requirement = moduleExaminerRequirement(input.module);
       const seat = await reserveSpecialistExamSeat({
         capacity,
@@ -144,6 +172,8 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
         authority: input.authority,
         intentId: input.intentId,
         purpose: 'examiner',
+        runtimeAccounts: [...runtimeAccounts],
+        ...(input.allowedAccountIds ? {projectAllowedAccounts: [...input.allowedAccountIds]} : {}),
         allowedAccounts: [...accounts],
         requiredModel: requirement.model,
         requiredEffort: requirement.effort,
@@ -162,6 +192,7 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
 
 export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 'principal' | 'authority'> & {
   loadRuntime: () => Promise<ModuleExamRuntime>;
+  allowedAccountIds?: readonly string[];
 }): ModuleRecheckReview {
   let runtimePromise: Promise<ModuleExamRuntime> | undefined;
   let blocked: string | undefined;
@@ -169,11 +200,15 @@ export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 
     signal?.throwIfAborted();
     if (blocked) return {reason: blocked};
     runtimePromise ??= input.loadRuntime();
-    const runtime = await runtimePromise.catch(containFailure('MODULE_EXAM_RUNTIME_LOAD_FAILED', null));
+    const runtime = await runtimePromise.catch(error => {
+      if (error instanceof Refusal && error.code === 'PROJECT_ACCOUNTS_UNAVAILABLE') throw error;
+      return containFailure('MODULE_EXAM_RUNTIME_LOAD_FAILED', null)(error);
+    });
     signal?.throwIfAborted();
     if (!runtime) return {reason: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'};
     const reservations = createModuleExamReservations({...input, intentId,
-      supportedSeats: new Map(runtime.map(seat => [seat.provider, seat.accountIds]))});
+      supportedSeats: new Map(runtime.map(seat => [seat.provider, seat.accountIds])),
+      ...(input.allowedAccountIds ? {allowedAccountIds: input.allowedAccountIds} : {})});
     const highExaminer = Boolean(fromExaminer && severity === 'alta');
     let reviewer: ModuleExamSeat;
     try {
@@ -227,16 +262,29 @@ export type ModuleExamSupervisor = Pick<NativeExecutionSupervisor,
 type RuntimeSeat = {provider: ModuleExamProvider; accountIds: ReadonlySet<string>; supervisor: ModuleExamSupervisor};
 export type ModuleExamRuntime = readonly RuntimeSeat[];
 
-export async function composePersonalModuleExamRuntime(config: Installation, ledger: Ledger): Promise<ModuleExamRuntime> {
+export async function composePersonalModuleExamRuntime(
+  config: Installation,
+  ledger: Ledger,
+  allowedAccountIds?: readonly string[],
+): Promise<ModuleExamRuntime> {
   const boot = config.nativeBootstrap;
   if (boot?.state !== 'active') return [];
+  const allowedSet = allowedAccountIds ? new Set(allowedAccountIds) : undefined;
+  if (allowedSet && allowedSet.size === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+  const candidateAccounts = allowedSet
+    ? boot.accounts.filter(account => allowedSet.has(account.accountId))
+    : boot.accounts;
+  if (allowedSet && candidateAccounts.length === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
   const accounts = (await ledger.pool.query<{id: string; provider: string}>(`SELECT id,provider FROM ac_accounts
-    WHERE id=ANY($1::uuid[]) AND enabled AND mode='subscription_cli'`, [boot.accounts.map(account => account.accountId)])).rows;
-  if (!accounts.some(account => moduleExamProviders.some(provider => provider === account.provider))) return [];
+    WHERE id=ANY($1::uuid[]) AND enabled AND mode='subscription_cli'`, [candidateAccounts.map(account => account.accountId)])).rows;
+  if (!accounts.some(account => moduleExamProviders.some(provider => provider === account.provider))) {
+    if (allowedSet) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+    return [];
+  }
   const signingKeyPem = (await readPrivateFile(boot.execution.signingKeyFile)).toString('utf8');
   await renewPersonalQuota(ledger);
   return moduleExamProviders.flatMap(provider => {
-    const accountSubjects = boot.accounts.filter(account => accounts.some(row => row.id === account.accountId && row.provider === provider));
+    const accountSubjects = candidateAccounts.filter(account => accounts.some(row => row.id === account.accountId && row.provider === provider));
     if (!accountSubjects.length) return [];
     const supervisor = new NativeExecutionSupervisor(ledger, {
       id: boot.execution.id + '-' + provider, workerImage: boot.execution.workerImage, toolsImage: boot.execution.toolsImage,
@@ -436,6 +484,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
   /** Batch limits; `false` disables batching. Defaults to the product limits. */
   batch?: ModuleExamBatch | false;
   loadRuntime: () => Promise<ModuleExamRuntime>;
+  allowedAccountIds?: readonly string[];
   waitForClaudeQuota?: boolean;
   clock?: ModuleExamClock;
   onQuotaWait?: (info: {purpose: 'examiner' | 'reviewer'; file: string; delayMs: number}) => void;
@@ -444,12 +493,30 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
     const map = await mapModuleSnapshot(snapshot, signal, {aggregateOmissions: module === 'arquitetura'});
     let runtime: ModuleExamRuntime;
     try { runtime = await input.loadRuntime(); }
-    catch { return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'}); }
+    catch (error) {
+      if (error instanceof Refusal && error.code === 'PROJECT_ACCOUNTS_UNAVAILABLE') throw error;
+      return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'});
+    }
+    const allowedSet = input.allowedAccountIds ? new Set(input.allowedAccountIds) : undefined;
+    if (allowedSet) {
+      const claudeSeat = runtime.find(seat => seat.provider === 'claude');
+      const allowedClaudeCount = claudeSeat ? [...claudeSeat.accountIds].filter(id => allowedSet.has(id)).length : 0;
+      if (allowedClaudeCount === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
+    }
     if (!runtime.some(seat => seat.provider === 'claude')) {
       return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE'});
     }
     const supportedSeats = new Map(runtime.map(seat => [seat.provider, seat.accountIds]));
-    const reservations = createModuleExamReservations({...input, intentId, module, supportedSeats});
+    const allowedClaudeAccounts = allowedSet
+      ? new Set([...(supportedSeats.get('claude') ?? [])].filter(id => allowedSet.has(id)))
+      : supportedSeats.get('claude');
+    const reservations = createModuleExamReservations({
+      ...input,
+      intentId,
+      module,
+      supportedSeats,
+      ...(input.allowedAccountIds ? {allowedAccountIds: input.allowedAccountIds} : {}),
+    });
     const clock = input.clock ?? defaultExamClock;
     const waitForClaudeQuota = input.waitForClaudeQuota
       ? async ({purpose, provider, accountId, file, signal: waitSignal}: Parameters<NonNullable<ModuleExamInput['waitForClaudeQuota']>>[0]) => {
@@ -457,11 +524,15 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
           if (activeSignal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
           const effectiveProvider = provider !== 'unknown' ? provider : (reservations.lastAttemptProvider() ?? 'unknown');
           if (effectiveProvider !== 'claude') return false;
-          const claudeAccounts = supportedSeats.get('claude');
+          const claudeAccounts = allowedClaudeAccounts;
           if (!claudeAccounts?.size) return false;
           let targetAccountId = accountId;
           if (!targetAccountId) {
-            const plan = await loadSpecialistExamPlan(input.ledger.pool, input.authority.contextId);
+            const plan = await loadSpecialistExamPlan(
+              input.ledger.pool,
+              input.authority.contextId,
+              input.allowedAccountIds ? [...claudeAccounts] : undefined,
+            );
             targetAccountId = plan.primaryClaudeAccountId;
           }
           if (!targetAccountId || !claudeAccounts.has(targetAccountId)) return false;

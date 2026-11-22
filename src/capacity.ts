@@ -506,6 +506,7 @@ export class Capacity {
         reason: selectionReason, preferredProfileId: preferred ?? null,
       };
       if (request.designPurpose) selection.designPurpose = request.designPurpose;
+      if (request.allowedAccounts) selection.allowedAccounts = request.allowedAccounts;
       if (skippedCandidates.length === pos) selection.skippedCandidates = skippedCandidates;
       const grant = (await c.query<Grant>(`INSERT INTO ac_capacity_grants
         (id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,selection)
