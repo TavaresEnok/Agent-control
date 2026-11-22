@@ -9,7 +9,7 @@ import {VerifyWorkerCall, type VerifyWorker} from './verify-types.ts';
 
 // The native job may run until its 15 minute timeout. Polling every 2s has to outlast that.
 const EXAM_ATTEMPTS = 480;
-const EXAM_DEADLINE_MS = (EXAM_ATTEMPTS - 1) * 2000;
+export const EXAM_DEADLINE_MS = (EXAM_ATTEMPTS - 1) * 2000;
 const EXAM_WAIT_MAX_MS = 10_000;
 const EXAM_WAIT_MS = 2000;
 const STOP_CONFIRM_ATTEMPTS = 4;
@@ -314,19 +314,25 @@ export async function reservePersonalRecheckReviewer(input: {
   avoidProviders?: readonly string[];
   exclusion?: RecheckReserveExclusion;
   releaseGrant: (grantId: string, how: 'not_started' | 'exited') => Promise<void>;
+  enabled?: boolean;
   wait?: Wait;
   pollBackoff?: boolean;
   deadlineMs?: number;
+  deadlineAt?: number;
   signal?: AbortSignal;
 }): Promise<{grantId: string; accountId: string; provider: string; role: 'specialist'}> {
   const avoidReviewerAccountIds = [
     ...(input.exclusion?.avoidAccounts ?? []),
     ...(input.avoidProviders ?? []).filter(id => Id.safeParse(id).success),
   ];
-  const hasWaitConfig = input.wait !== undefined
+  const waitEnabled = input.enabled !== false && (
+    input.enabled === true
+    || input.wait !== undefined
     || input.pollBackoff !== undefined
     || input.deadlineMs !== undefined
-    || input.signal !== undefined;
+    || input.deadlineAt !== undefined
+    || input.signal !== undefined
+  );
   const seat = await reserveSpecialistExamSeat({
     capacity: new Capacity(input.ledger),
     ledger: input.ledger,
@@ -338,12 +344,13 @@ export async function reservePersonalRecheckReviewer(input: {
     avoidProfileIds: input.exclusion?.avoidProfiles,
     avoidAccountIds: input.exclusion?.avoidExaminerAccounts,
     avoidReviewerAccountIds,
-    ...(hasWaitConfig
+    ...(waitEnabled
       ? {
           capacityWait: {
             enabled: true,
             pollBackoff: input.pollBackoff !== false,
             deadlineMs: input.deadlineMs ?? EXAM_DEADLINE_MS,
+            ...(input.deadlineAt !== undefined ? {deadlineAt: input.deadlineAt} : {}),
             ...(input.wait ? {sleep: (ms: number) => Promise.resolve(input.wait!(ms))} : {}),
             ...(input.signal ? {signal: input.signal} : {}),
           },
@@ -380,19 +387,7 @@ export function createRecheckNativeWorker(input: {
             ...(parsed.avoidExaminerAccounts?.length ? {avoidExaminerAccounts: parsed.avoidExaminerAccounts} : {}),
           }
         : undefined;
-      let reserved: Awaited<ReturnType<typeof reserveReviewer>> | undefined;
-      for (let attempt = 0; attempt < poll.attempts; attempt += 1) {
-        try {
-          reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders, exclusion);
-          break;
-        } catch (error) {
-          const isCapacityWait = error instanceof Refusal
-            && (error.code === 'CAPACITY_BUSY' || error.code === 'CAPACITY_QUEUED');
-          if (!isCapacityWait || attempt === poll.attempts - 1) throw error;
-          await wait(poll.waitMs(attempt));
-        }
-      }
-      if (!reserved) throw new Refusal('CAPACITY_QUEUED');
+      const reserved = await reserveReviewer(parsed.intentId, parsed.avoidProviders, exclusion);
       const marked = call as {reviewerProvider?: string; reviewerAccountId?: string; reviewerSessionId?: string};
       marked.reviewerProvider = typeof reserved.provider === 'string' ? reserved.provider : '';
       marked.reviewerAccountId = typeof reserved.accountId === 'string' ? reserved.accountId : '';

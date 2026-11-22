@@ -48,7 +48,7 @@ test('scheduled retention reads the current switch for each run',async()=>{
   const file=join(root,'installation.json');
   const repo=join(root,'repo');await mkdir(repo);
   const body:any={schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:'postgresql://x:x@localhost/db',dataDirectory:root,project:{id:randomUUID(),label:'test',repo,owner:'test'},projects:[],http:{listen:'127.0.0.1',port:8765,publicOrigin:'http://localhost:8765'}};
-  const observed:boolean[]=[];const deps={jobRetention:async(_config:any,apply:boolean)=>{observed.push(apply);return [];},verifyDatabaseRetention:async()=>[],artifactRetention:async()=>[]};
+  const observed:boolean[]=[];const deps={jobRetention:async(_config:any,apply:boolean)=>{observed.push(apply);return [];},verifyDatabaseRetention:async()=>[],capacityWaitRetention:async()=>[],artifactRetention:async()=>[]};
   for(const automatic of [undefined,'off','preview','apply']){if(automatic)body.retention={automatic};await writeFile(file,JSON.stringify(body),{mode:0o600});await runPersonalMaintenance([file,'--retencao-agendada'],deps);}
   assert.deepEqual(observed,[false,false,true]);
  }finally{await rm(root,{recursive:true,force:true});}
@@ -73,6 +73,7 @@ function recorder(options:{dedicatedBuilder?:boolean;refreshFails?:boolean;reten
   refreshDatabases:async()=>{seen.refresh++;if(options.refreshFails)throw new Error('offline');},
   jobRetention:async(_c:unknown,apply:boolean)=>{seen.retention.push(apply);if(options.retentionFails)throw new Error('db down');return [apply?'jobs apagados':'jobs em prévia'];},
   verifyDatabaseRetention:async(_c:unknown,apply:boolean)=>[apply?'bases podadas':'bases em prévia'],
+  capacityWaitRetention:async(_c:unknown,apply:boolean)=>[apply?'esperas apagadas':'esperas em prévia'],
   artifactRetention:async()=>['artefatos ok'],
   docker:async(args:string[])=>{seen.docker.push(args);return args[0]==='buildx'&&args[1]==='inspect'&&!options.dedicatedBuilder?1:0;},
   currentDatabase:async()=>options.fetchedAt===null?null:{fetchedAt:options.fetchedAt??'2026-11-17T04:00:00.000Z'},

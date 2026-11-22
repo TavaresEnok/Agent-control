@@ -437,7 +437,7 @@ export async function runPersonalModuleCli(
     stopRecheckLease?.();
     try {
       if (authority) {
-        await clearExamContextCapacityWaits(ledger.pool, authority.contextId);
+        await clearExamContextCapacityWaits(ledger.pool, authority.contextId, undefined, authority.epoch);
         await releasePersonalVerifyLease(
           {pool: {query: (sql, params) => ledger.pool.query(sql, (params ?? []) as never[])}},
           authority,

@@ -103,12 +103,10 @@ export async function runPersonalCapacityWaitRetention(config:Installation,apply
  * vulnerability database stamps (several GB each), then dead capacity waits, then worktrees, images and temporaries. The stages are independent: a damaged artifact registry, a database outage or any other failure
  * of one stage never keeps the next one from running. A failure is reported after every stage has had its turn. */
 export async function runRetentionStages(config:Installation,apply:boolean,deps:Pick<MaintenanceDeps,'jobRetention'|'artifactRetention'|'verifyDatabaseRetention'|'capacityWaitRetention'>={}):Promise<string[]>{
- const skipSyntheticWaits=!deps.capacityWaitRetention&&Boolean(deps.jobRetention&&deps.verifyDatabaseRetention&&deps.artifactRetention)&&
-  (config.databaseUrl==='postgres://invalid.example/none'||config.databaseUrl==='postgresql://x:x@localhost/db');
  const stages:[string,string,(config:Installation,apply:boolean)=>Promise<string[]>][]=[
   ['jobs','work/ de jobs',deps.jobRetention??runPersonalJobRetention],
-   ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
-  ...(skipSyntheticWaits?[]:[['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention] as [string,string,(config:Installation,apply:boolean)=>Promise<string[]>]]),
+  ['verify-db','bases de vulnerabilidades',deps.verifyDatabaseRetention??((config,apply)=>runVerifyDatabaseRetention(config.dataDirectory,apply))],
+  ['capacity-waits','esperas de capacidade',deps.capacityWaitRetention??runPersonalCapacityWaitRetention],
   ['artifacts','artefatos (worktrees, imagens e temporários)',deps.artifactRetention??runPersonalArtifactRetention],
  ];
  const lines:string[]=[],failed:string[]=[];

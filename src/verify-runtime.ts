@@ -179,7 +179,7 @@ async function runVerificationWithPolicy(
     try { await finishExamIntent(input.ledger, {intentId: intent.id, contextId: input.authority.contextId}, 'failed'); } catch { /* the original failure stays visible */ }
     throw error;
   } finally {
-    await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intent.id);
+    await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intent.id, input.authority.epoch);
   }
 }
 

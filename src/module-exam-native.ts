@@ -4,6 +4,7 @@ import {Capacity} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
 import {
   clearExamContextCapacityWaits,
+  DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS,
   loadSpecialistExamPlan,
   moduleExaminerRequirement,
   reserveSpecialistExamSeat,
@@ -222,6 +223,7 @@ export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 
   let runtimePromise: Promise<ModuleExamRuntime> | undefined;
   let blocked: string | undefined;
   const clock = input.clock ?? defaultExamClock;
+  const deadlineAt = clock.now() + (input.capacityWaitDeadlineMs ?? DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS);
   return async ({intentId, commit, task, examiner, severity, fromExaminer, subject, signal}) => {
     try {
       signal?.throwIfAborted();
@@ -239,7 +241,7 @@ export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 
         capacityWait: {
           enabled: true,
           pollBackoff: input.pollBackoff !== false,
-          ...(input.capacityWaitDeadlineMs !== undefined ? {deadlineMs: input.capacityWaitDeadlineMs} : {}),
+          deadlineAt,
           now: () => clock.now(),
           sleep: (ms, waitSignal) => clock.sleep(ms, waitSignal ?? signal),
           ...(signal ? {signal} : {}),
@@ -290,7 +292,7 @@ export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 
         return {reason, reviewer};
       }
     } finally {
-      await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId);
+      await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId, input.authority.epoch);
     }
   };
 }
@@ -534,6 +536,8 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
   onQuotaWait?: (info: {purpose: 'examiner' | 'reviewer'; file: string; delayMs: number}) => void;
 }): ModuleExamCallback {
   return async ({intentId, snapshot, module, findings, collector, signal}): Promise<ModuleExamResult> => {
+    const clock = input.clock ?? defaultExamClock;
+    const deadlineAt = clock.now() + (input.capacityWaitDeadlineMs ?? DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS);
     const map = await mapModuleSnapshot(snapshot, signal, {aggregateOmissions: module === 'arquitetura'});
     let runtime: ModuleExamRuntime;
     try { runtime = await input.loadRuntime(); }
@@ -554,7 +558,6 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
     const allowedClaudeAccounts = allowedSet
       ? new Set([...(supportedSeats.get('claude') ?? [])].filter(id => allowedSet.has(id)))
       : supportedSeats.get('claude');
-    const clock = input.clock ?? defaultExamClock;
     const reservations = createModuleExamReservations({
       ...input,
       intentId,
@@ -564,7 +567,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       capacityWait: {
         enabled: true,
         pollBackoff: input.pollBackoff !== false,
-        ...(input.capacityWaitDeadlineMs !== undefined ? {deadlineMs: input.capacityWaitDeadlineMs} : {}),
+        deadlineAt,
         now: () => clock.now(),
         sleep: (ms, waitSignal) => clock.sleep(ms, waitSignal ?? signal),
         ...(signal ? {signal} : {}),
@@ -619,7 +622,7 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
         }),
       });
     } finally {
-      await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId);
+      await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId, input.authority.epoch);
     }
   };
 }

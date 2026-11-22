@@ -202,7 +202,7 @@ export async function runPersonalVerifySession(
     }
    }catch{/* status cleanup must not replace the original failure */}
   }
-  await clearExamContextCapacityWaits(ledger.pool,authority.contextId);
+  await clearExamContextCapacityWaits(ledger.pool,authority.contextId,undefined,authority.epoch);
   try{
    await releasePersonalVerifyLease({pool:{query:(sql,params)=>ledger.pool.query(sql,(params??[]) as never[])}},authority);
   }catch{/* release must not mask the exam error; the exit code is already chosen */}

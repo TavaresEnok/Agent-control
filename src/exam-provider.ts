@@ -17,7 +17,7 @@ export const DEFAULT_EXAM_CAPACITY_WAIT_MAX_MS = 10_000;
 export const DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS = 21_600_000;
 
 export type ExamCapacityWaitOptions = {
-  /** Wait when CAPACITY_BUSY or CAPACITY_QUEUED is returned. Default: true unless the same intent holds an active grant without explicit wait options. */
+  /** Wait when CAPACITY_BUSY or CAPACITY_QUEUED is returned. Default: false (must be enabled explicitly by the caller). */
   enabled?: boolean;
   /** Growing pause (true, default) or fixed 2s pause (false), matching examRunOptions.pollBackoff. */
   pollBackoff?: boolean;
@@ -32,7 +32,7 @@ export type ExamCapacityWaitOptions = {
   signal?: AbortSignal;
 };
 
-const pendingWaitsByScope = new Map<string, {attemptId: string; requestKey: string}>();
+const pendingWaitsByScope = new Map<string, {attemptId: string; requestKey: string; epoch: number}>();
 
 async function defaultCapacitySleep(ms: number, signal?: AbortSignal): Promise<void> {
   try {
@@ -43,20 +43,30 @@ async function defaultCapacitySleep(ms: number, signal?: AbortSignal): Promise<v
   }
 }
 
-/** Removes any queued capacity waits left for an exam context (or specific intent) when it finishes, fails, or is interrupted. */
+/** Removes any queued capacity waits left for an exam context (or specific intent/epoch) when it finishes, fails, or is interrupted. */
 export async function clearExamContextCapacityWaits(
   pool: {query: (text: string, values?: unknown[]) => Promise<unknown>},
   contextId: string,
   intentId?: string,
+  managerEpoch?: number,
 ): Promise<void> {
-  for (const key of [...pendingWaitsByScope.keys()]) {
-    if (intentId ? key === `${contextId}:${intentId}` : key.startsWith(`${contextId}:`)) {
+  for (const [key, entry] of [...pendingWaitsByScope.entries()]) {
+    const matchesScope = intentId ? key === `${contextId}:${intentId}` : key.startsWith(`${contextId}:`);
+    const matchesEpoch = managerEpoch === undefined || entry.epoch === managerEpoch;
+    if (matchesScope && matchesEpoch) {
       pendingWaitsByScope.delete(key);
     }
   }
   try {
-    if (intentId) {
+    if (intentId && managerEpoch !== undefined) {
+      await pool.query(
+        'DELETE FROM ac_capacity_waits WHERE context_id=$1 AND intent_id=$2 AND manager_epoch=$3',
+        [contextId, intentId, managerEpoch],
+      );
+    } else if (intentId) {
       await pool.query('DELETE FROM ac_capacity_waits WHERE context_id=$1 AND intent_id=$2', [contextId, intentId]);
+    } else if (managerEpoch !== undefined) {
+      await pool.query('DELETE FROM ac_capacity_waits WHERE context_id=$1 AND manager_epoch=$2', [contextId, managerEpoch]);
     } else {
       await pool.query('DELETE FROM ac_capacity_waits WHERE context_id=$1', [contextId]);
     }
@@ -83,26 +93,16 @@ export async function reserveWithCapacityQueue(input: {
   } else {
     if (previous) {
       await input.ledger.pool.query(
-        'DELETE FROM ac_capacity_waits WHERE attempt_id=$1 AND context_id=$2',
-        [previous.attemptId, input.authority.contextId],
+        'DELETE FROM ac_capacity_waits WHERE attempt_id=$1 AND context_id=$2 AND manager_epoch=$3',
+        [previous.attemptId, input.authority.contextId, previous.epoch],
       ).catch(() => undefined /* best-effort cleanup of superseded wait */);
     }
     attemptId = randomUUID();
-    pendingWaitsByScope.set(scopeKey, {attemptId, requestKey});
+    pendingWaitsByScope.set(scopeKey, {attemptId, requestKey, epoch: input.authority.epoch});
   }
   const fullRequest: z.input<typeof GrantRequest> = {attemptId, ...input.request};
   const waitOpts = input.capacityWait;
-  const explicitWait = waitOpts !== undefined && (
-    waitOpts.enabled !== undefined
-    || waitOpts.pollBackoff !== undefined
-    || waitOpts.baseMs !== undefined
-    || waitOpts.maxMs !== undefined
-    || waitOpts.deadlineMs !== undefined
-    || waitOpts.deadlineAt !== undefined
-    || waitOpts.now !== undefined
-    || waitOpts.sleep !== undefined
-    || waitOpts.signal !== undefined
-  );
+  const waitEnabled = waitOpts?.enabled === true;
   const pollBackoff = waitOpts?.pollBackoff !== false;
   const baseMs = waitOpts?.baseMs ?? DEFAULT_EXAM_CAPACITY_WAIT_BASE_MS;
   const maxMs = waitOpts?.maxMs ?? DEFAULT_EXAM_CAPACITY_WAIT_MAX_MS;
@@ -122,8 +122,8 @@ export async function reserveWithCapacityQueue(input: {
       pendingWaitsByScope.delete(scopeKey);
     }
     await input.ledger.pool.query(
-      'DELETE FROM ac_capacity_waits WHERE attempt_id=$1 AND context_id=$2',
-      [attemptId, input.authority.contextId],
+      'DELETE FROM ac_capacity_waits WHERE attempt_id=$1 AND context_id=$2 AND manager_epoch=$3',
+      [attemptId, input.authority.contextId, input.authority.epoch],
     ).catch(() => undefined /* best-effort cleanup on abort or terminal failure */);
   };
 
@@ -149,10 +149,10 @@ export async function reserveWithCapacityQueue(input: {
         await cleanupAttemptWait();
         throw error;
       }
-      if (waitOpts?.enabled === false) {
+      if (!waitEnabled) {
         throw error;
       }
-      if (!explicitWait && !waited) {
+      if (!waited) {
         const selfHeld = await input.ledger.pool.query(
           "SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND context_id=$2 AND state<>'released' LIMIT 1",
           [input.request.intentId, input.authority.contextId],

@@ -622,7 +622,7 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     }
     throw error;
   } finally {
-    await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId);
+    await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId, input.authority.epoch);
     if (snapshot) await removeModuleSnapshot(snapshot);
   }
 }

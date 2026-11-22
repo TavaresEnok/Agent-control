@@ -627,7 +627,7 @@ export async function recheckModuleFindings(
     return results.some(result => result.status !== 'pendente')
       ? publish(publication) : {results, publication: 'published'};
   } finally {
-    await clearExamContextCapacityWaits(ledger.pool, authority.contextId, intentId);
+    await clearExamContextCapacityWaits(ledger.pool, authority.contextId, intentId, authority.epoch);
     if (!completed) {
       await ledger.tx(async client => {
         await authorizeModuleRecheck(client, ledger, principal, authority, input.projectId);

@@ -139,6 +139,7 @@ async function main(){
  let bootstrapReport:{state:string;executionEnabled:boolean;inferenceEnabled:boolean}|undefined;
  const shutdownBootstrap=async()=>{await bootstrapSession?.shutdown();};
  let runtimes:ProjectRuntimes|undefined,serving=false,stopAbandonedVerifyRuns=()=>{};
+ const shutdownAbort=new AbortController();
  try{
   if(command==='inspect'){
    const {inspectInstallationReadiness}=await import('./installation-readiness.ts');
@@ -290,8 +291,10 @@ async function main(){
      const project=[config.project,...config.projects].find(item=>item.id===input.projectId);
      if(!project)throw new Refusal('NOT_FOUND',404);
      const commit=await gitHead(project.repo);
-     const {createRecheckNativeWorker,reservePersonalRecheckReviewer}=await import('./verify-native-launch.ts');
+     const {createRecheckNativeWorker,reservePersonalRecheckReviewer,EXAM_DEADLINE_MS}=await import('./verify-native-launch.ts');
+     const {examRunOptions}=await import('./verify-command.ts');
      const {recheckFindings}=await import('./verify-remediate.ts');
+     const examOptions=examRunOptions(project.economy);
      const allowedAccountIds=project.allowedAccountIds!==undefined
       ?project.allowedAccountIds.filter(id=>executions.some(s=>s.active&&s.supportsAccount(id)))
       :undefined;
@@ -308,8 +311,12 @@ async function main(){
       }))
       :executions;
      const release=(grantId:string,how:'not_started'|'exited')=>releaseGrant(principal,authority,grantId,how);
-     const worker=createRecheckNativeWorker({supervisors:scopedExecutions,principal,authority,base:commit,reserveReviewer:(intentId,avoidProviders,exclusion)=>reservePersonalRecheckReviewer({ledger,principal,authority,intentId,...(allowedAccountIds?{allowedAccounts:allowedAccountIds}:{}),avoidProviders,exclusion,releaseGrant:release}),releaseGrant:release});
-     return recheckFindings(ledger,principal,authority,{...input,worker});
+     const recheckAbort=new AbortController();
+     const signal=AbortSignal.any([shutdownAbort.signal,recheckAbort.signal]);
+     const deadlineAt=Date.now()+EXAM_DEADLINE_MS;
+     const worker=createRecheckNativeWorker({supervisors:scopedExecutions,principal,authority,base:commit,pollBackoff:examOptions.pollBackoff,reserveReviewer:(intentId,avoidProviders,exclusion)=>reservePersonalRecheckReviewer({ledger,principal,authority,intentId,...(allowedAccountIds?{allowedAccounts:allowedAccountIds}:{}),avoidProviders,exclusion,pollBackoff:examOptions.pollBackoff,deadlineMs:EXAM_DEADLINE_MS,deadlineAt,signal,releaseGrant:release}),releaseGrant:release});
+     try{return await recheckFindings(ledger,principal,authority,{...input,worker});}
+     finally{recheckAbort.abort();}
     },
    };
   })()}:{})});
@@ -331,7 +338,7 @@ async function main(){
   const server=serve({fetch:gateway,hostname:config.http.listen,port:config.http.port},()=>console.log(JSON.stringify({state:prepared.report.state==='active'?'personal_ready':'administration_ready',mode:config.mode,projectId:config.project.id,executionEnabled:prepared.report.executionEnabled,inferenceEnabled:prepared.report.inferenceEnabled,nativeBootstrap:bootstrapReport,workflowRuntime:workflowRegistration?.report})));
   serving=true;
   let closing=false;
-  const close=()=>{if(closing)return;closing=true;stopAbandonedVerifyRuns();server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}try{await workflowRegistration?.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
+  const close=()=>{if(closing)return;closing=true;shutdownAbort.abort();stopAbandonedVerifyRuns();server.close();void (async()=>{let failed=false;try{await closeManagers();}catch{failed=true;}try{await activeRuntimes.close();}catch{failed=true;}try{await shutdownBootstrap();}catch{failed=true;}try{await workflowRegistration?.close();}catch{failed=true;}finally{try{await ledger.close();}catch{failed=true;}}if(failed)console.error('INSTALLATION_SHUTDOWN_FAILED');process.exit(failed?1:0);})();};
   stopGateway=close;
   process.once('SIGTERM',close);process.once('SIGINT',close);
  }finally{if(!serving){stopAbandonedVerifyRuns();try{await shutdownBootstrap();}finally{try{await closeManagers();}finally{try{await runtimes?.close();}finally{try{await workflowRegistration?.close();}finally{await ledger.close();}}}}}}

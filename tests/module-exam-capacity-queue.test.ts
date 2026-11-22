@@ -7,11 +7,13 @@ import {join} from 'node:path';
 import {test} from 'node:test';
 import {Capacity} from '../src/capacity.ts';
 import {Refusal} from '../src/contracts.ts';
+import {clearExamContextCapacityWaits, reserveSpecialistExamSeat} from '../src/exam-provider.ts';
 import {Ledger} from '../src/ledger.ts';
-import type {ModuleExamClock} from '../src/module-exam-native.ts';
+import {createPersonalModuleExam, type ModuleExamClock} from '../src/module-exam-native.ts';
 import {moduleCliFailureText, runPersonalModuleCli} from '../src/personal-module-cli.ts';
 import {verifyCliFailureText} from '../src/personal-verify-cli.ts';
 import {readModuleReport, type ModuleCollectorOutput} from '../src/verification-modules.ts';
+import {createRecheckNativeWorker, reservePersonalRecheckReviewer} from '../src/verify-native-launch.ts';
 import {runSecurityVerification} from '../src/verify-runtime.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
@@ -238,6 +240,96 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
         'a espera do contexto interrompido deve ser removida imediatamente',
       );
       await capacity.transition(owner, blockerGrant.id, blockerAuth, 'released', {processId: 'blocker', state: 'not_started'});
+
+      // AC-5b: Single deadlineAt per round in createPersonalModuleExam (not 6h per reservation).
+      // With capacityWaitDeadlineMs=4000 and 2 files (batch:false):
+      // - File 1 waits 2000ms, then blocker releases so File 1 finishes.
+      // - Before File 2 reserves, blocker occupies the slot again; File 2 only has 2000ms remaining in the round deadline (not a fresh 4000ms!).
+      let roundNowMs = 5_000_000;
+      const roundSlept: number[] = [];
+      let activeBlockerGrant: {id: string} | undefined = await capacity.reserve(owner, {
+        attemptId: randomUUID(),
+        intentId: blockerIntent,
+        contextId: mainContext,
+        role: 'specialist',
+      }, blockerAuth);
+      const repoCommit = git('rev-parse', 'HEAD').toString('utf8').trim();
+      const docAuth = await ledger.acquire(owner, docExamCtx, randomUUID(), 'doc-round-deadline', 60);
+      const docRoundIntent = (await ledger.accept(owner, {
+        schemaVersion: 1,
+        intentId: randomUUID(),
+        deliveryAttemptId: randomUUID(),
+        contextId: docExamCtx,
+        policyRevision: revision,
+        action: 'plan.start',
+        payload: {workflow: 'security-verify-readonly-v1', messageRef: 'doc-round-deadline', projectId: project, commit: repoCommit},
+      }, docAuth, 'api')).id;
+      const docRoundRunId = randomUUID();
+      await ledger.pool.query(
+        `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module)
+         VALUES ($1,$2,$3,$4,$5,$6,'running','pending','documentacao')`,
+        [docRoundRunId, project, docExamCtx, docRoundIntent, owner, repoCommit],
+      );
+      const baseSup = runtime[0]!.supervisor;
+      const reblockingRuntime = [
+        {
+          ...runtime[0]!,
+          supervisor: {
+            ...baseSup,
+            start: baseSup.start.bind(baseSup),
+            stop: baseSup.stop.bind(baseSup),
+            reconcile: baseSup.reconcile.bind(baseSup),
+            async retireTerminal(...args: Parameters<typeof baseSup.retireTerminal>) {
+              const res = await baseSup.retireTerminal(...args);
+              if (!activeBlockerGrant) {
+                activeBlockerGrant = await capacity.reserve(owner, {
+                  attemptId: randomUUID(),
+                  intentId: blockerIntent,
+                  contextId: mainContext,
+                  role: 'specialist',
+                }, blockerAuth);
+              }
+              return res;
+            },
+            closeModuleExamEgress: baseSup.closeModuleExamEgress.bind(baseSup),
+          },
+        },
+        runtime[1]!,
+      ];
+      const examCallback = createPersonalModuleExam({
+        ledger,
+        principal: owner,
+        authority: docAuth,
+        commit: repoCommit,
+        batch: false,
+        pollBackoff: true,
+        capacityWaitDeadlineMs: 4000,
+        loadRuntime: async () => reblockingRuntime,
+        clock: {
+          now: () => roundNowMs,
+          async sleep(ms) {
+            roundSlept.push(ms);
+            roundNowMs += ms;
+            if (roundSlept.length === 1 && activeBlockerGrant) {
+              await capacity.transition(owner, activeBlockerGrant.id, blockerAuth, 'released', {processId: 'blocker', state: 'not_started'});
+              activeBlockerGrant = undefined;
+            }
+          },
+        },
+      });
+      const roundExamRes = await examCallback({
+        intentId: docRoundIntent,
+        snapshot: repo,
+        module: 'documentacao',
+        findings: [],
+      });
+      assert.deepEqual(roundSlept, [2000, 2000], 'a segunda reserva usa apenas o tempo restante do deadlineAt único da rodada (2000ms), não um novo prazo de 4000ms');
+      assert.equal(roundExamRes.coverage.find(c => c.file === 'src/a.ts')?.status, 'lido');
+      assert.equal(roundExamRes.coverage.find(c => c.file === 'src/b.ts')?.reason, 'CAPACITY_BUSY');
+      if (activeBlockerGrant) {
+        await capacity.transition(owner, activeBlockerGrant.id, blockerAuth, 'released', {processId: 'blocker', state: 'not_started'});
+      }
+      await ledger.releaseLease(docAuth);
       await ledger.releaseLease(blockerAuth);
     } finally {
       await fixture?.docker.close();
@@ -457,6 +549,163 @@ test('módulo 1 (personal:verify) com vaga ocupada ou fila à frente aguarda com
       );
       assert.match(verifyCliFailureText(new Refusal('CAPACITY_BUSY')), /vagas de execução/i);
       assert.match(moduleCliFailureText(new Refusal('CAPACITY_QUEUED'), 'documentacao'), /fila de capacidade/i);
+      await capacity.cancelWait(principal, blockingWaitId, otherAuth);
+
+      // AC-5b:
+      // 1) reserveSpecialistExamSeat defaults to enabled:false (fails immediately on CAPACITY_BUSY without waiting),
+      //    and when enabled:true is passed explicitly, selfHeld prevents an intent from waiting on its own held grant.
+      const testIntent = (await db.accept(principal, {
+        schemaVersion: 1,
+        intentId: randomUUID(),
+        deliveryAttemptId: randomUUID(),
+        contextId: verifyCtx,
+        policyRevision: revision,
+        action: 'plan.start',
+        payload: {workflow: 'baseline-synthetic-v1', messageRef: 'ac5b-test'},
+      }, verifyAuth, 'api')).id;
+      const otherHeld = await capacity.reserve(principal, {
+        attemptId: randomUUID(),
+        intentId: otherIntent,
+        contextId: otherCtx,
+        role: 'specialist',
+      }, otherAuth);
+      let defaultSlept = 0;
+      await assert.rejects(
+        reserveSpecialistExamSeat({
+          capacity,
+          ledger: db,
+          principal,
+          authority: verifyAuth,
+          intentId: testIntent,
+          purpose: 'examiner',
+          capacityWait: {
+            sleep: async () => { defaultSlept += 1; },
+          },
+          releaseGrant: async () => {},
+        }),
+        (err: unknown) => err instanceof Refusal && err.code === 'CAPACITY_BUSY',
+      );
+      assert.equal(defaultSlept, 0, 'o padrão de reserveSpecialistExamSeat deve ser enabled:false (sem espera implícita)');
+      await clearExamContextCapacityWaits(db.pool, verifyCtx, testIntent, verifyAuth.epoch);
+      await capacity.transition(principal, otherHeld.id, otherAuth, 'released', {processId: 'other', state: 'not_started'});
+
+      // Self-held check when enabled:true: if testIntent already holds the grant, a second reserve on testIntent refuses immediately without sleeping.
+      const selfGrant = await capacity.reserve(principal, {
+        attemptId: randomUUID(),
+        intentId: testIntent,
+        contextId: verifyCtx,
+        role: 'specialist',
+      }, verifyAuth);
+      let selfHeldSlept = 0;
+      await assert.rejects(
+        reserveSpecialistExamSeat({
+          capacity,
+          ledger: db,
+          principal,
+          authority: verifyAuth,
+          intentId: testIntent,
+          purpose: 'reviewer',
+          capacityWait: {
+            enabled: true,
+            sleep: async () => { selfHeldSlept += 1; },
+          },
+          releaseGrant: async () => {},
+        }),
+        (err: unknown) => err instanceof Refusal && err.code === 'CAPACITY_BUSY',
+      );
+      assert.equal(selfHeldSlept, 0, 'selfHeld deve impedir que uma intenção espere vaga bloqueada por ela mesma');
+      await clearExamContextCapacityWaits(db.pool, verifyCtx, testIntent, verifyAuth.epoch);
+
+      // 2) createRecheckNativeWorker + reservePersonalRecheckReviewer with signal, deadlineAt and pollBackoff:
+      //    does not repeat the internal wait 480 times, and aborts cleanly on signal.
+      let recheckSleeps = 0;
+      let reserveReviewerCalls = 0;
+      const recheckDeadlineAt = Date.now() + 4000;
+      const recheckWorker = createRecheckNativeWorker({
+        supervisors: [],
+        principal,
+        authority: otherAuth,
+        base: commit,
+        pollBackoff: true,
+        reserveReviewer: async (id, avoidProviders, exclusion) => {
+          reserveReviewerCalls += 1;
+          return reservePersonalRecheckReviewer({
+            ledger: db,
+            principal,
+            authority: otherAuth,
+            intentId: id,
+            avoidProviders,
+            exclusion,
+            pollBackoff: true,
+            deadlineAt: recheckDeadlineAt,
+            deadlineMs: 4000,
+            wait: async () => {
+              recheckSleeps += 1;
+            },
+            releaseGrant: async () => {},
+          });
+        },
+      });
+      await assert.rejects(
+        recheckWorker.run({
+          role: 'reviewer',
+          provider: 'recheck',
+          accountId: '00000000-0000-4000-8000-000000000001',
+          profileId: '00000000-0000-4000-8000-000000000002',
+          model: 'recheck',
+          grantId: '00000000-0000-4000-8000-000000000003',
+          intentId: otherIntent,
+          task: 'Pedido de confirmação.',
+          repo: 'sem-repositorio',
+          writePaths: [],
+          avoidProfiles: [profileA],
+        }),
+        (err: unknown) => err instanceof Refusal && err.code === 'CAPACITY_BUSY',
+      );
+      assert.equal(reserveReviewerCalls, 1, 'createRecheckNativeWorker não deve repetir a espera interna em um laço externo');
+      assert.ok(recheckSleeps >= 2 && recheckSleeps <= 4, `esperava poucas pausas até o prazo único, observou ${recheckSleeps}`);
+
+      // Signal abort during reservePersonalRecheckReviewer wait:
+      const abortCtrl = new AbortController();
+      await assert.rejects(
+        reservePersonalRecheckReviewer({
+          ledger: db,
+          principal,
+          authority: otherAuth,
+          intentId: otherIntent,
+          exclusion: {avoidProfiles: [profileA]},
+          pollBackoff: true,
+          deadlineMs: 60_000,
+          signal: abortCtrl.signal,
+          wait: async () => {
+            abortCtrl.abort();
+          },
+          releaseGrant: async () => {},
+        }),
+        (err: unknown) => err instanceof Refusal && err.code === 'EXAM_INTERRUPTED',
+      );
+      assert.equal(
+        (await db.pool.query('SELECT count(*)::int AS n FROM ac_capacity_waits WHERE context_id=$1', [otherCtx])).rows[0].n,
+        0,
+      );
+      await capacity.transition(principal, selfGrant.id, verifyAuth, 'released', {processId: 'self', state: 'not_started'});
+
+      // 3) clearExamContextCapacityWaits filtered by manager_epoch preserves waits of a newer manager epoch.
+      const oldEpochWait = randomUUID();
+      const newEpochWait = randomUUID();
+      await db.pool.query(
+        `INSERT INTO ac_capacity_waits(attempt_id,context_id,intent_id,role,request_digest,manager_epoch,reason,priority)
+         VALUES ($1,$2,$3,'specialist','old-ep',$4,'CAPACITY_BUSY',50),
+                ($5,$2,$3,'specialist','new-ep',$6,'CAPACITY_BUSY',50)`,
+        [oldEpochWait, verifyCtx, testIntent, verifyAuth.epoch, newEpochWait, verifyAuth.epoch + 1],
+      );
+      await clearExamContextCapacityWaits(db.pool, verifyCtx, undefined, verifyAuth.epoch);
+      const remainingEpochs = (await db.pool.query<{attempt_id: string; manager_epoch: number}>(
+        'SELECT attempt_id::text, manager_epoch::int FROM ac_capacity_waits WHERE context_id=$1',
+        [verifyCtx],
+      )).rows;
+      assert.deepEqual(remainingEpochs, [{attempt_id: newEpochWait, manager_epoch: verifyAuth.epoch + 1}]);
+      await clearExamContextCapacityWaits(db.pool, verifyCtx, undefined, verifyAuth.epoch + 1);
     } finally {
       await db.close();
       await database.close();
