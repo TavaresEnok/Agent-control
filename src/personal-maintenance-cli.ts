@@ -7,7 +7,7 @@ import {RetentionIncomplete,runPersonalMaintenance} from './personal-maintenance
 
 const messages:Record<string,string>={
  ...artifactCliMessages,
- MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--abandonar-design <jobId> | --recuperar-exame-passivo <jobId> | --recuperar-exame-orfao <jobId> | --liberar-work-exames (--projeto <id> [--limite N] [--apos <id>] | --job <id>...) [--aplicar] | --retencao-automatica [--aplicar]]\n'+ARTIFACT_USAGE,
+ MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--vagas-da-conta <contaId> <1-8> | --abandonar-design <jobId> | --recuperar-exame-passivo <jobId> | --recuperar-exame-orfao <jobId> | --liberar-work-exames (--projeto <id> [--limite N] [--apos <id>] | --job <id>...) [--aplicar] | --retencao-automatica [--aplicar]]\n'+ARTIFACT_USAGE,
  NATIVE_ORPHAN_ACTIVE_LEASE:'O contexto ainda tem um lease válido. O job e a vaga foram preservados.',
  NATIVE_ORPHAN_CONTAINER_PRESENT:'O worker ou o contêiner de ferramentas está ativo ou a identidade dele não foi confirmada. O job e a vaga foram preservados.',
  NATIVE_EXECUTION_JOB_NOT_FOUND:'Job de exame não encontrado nesta instalação.',

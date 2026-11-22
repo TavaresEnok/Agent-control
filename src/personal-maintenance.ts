@@ -174,7 +174,7 @@ function parseWorkRetirementArgs(installationPath:string,rest:readonly string[])
  return {installationPath,releaseExamWork:selection};
 }
 
-type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;recoverOrphanedExamJobId?:string;releaseExamWork?:WorkSelection;jobRetention?:{apply:boolean};artifactArgs?:string[]};
+type ParsedMaintenance={installationPath:string;accountConcurrency?:{accountId:string;maxConcurrent:number};recoverExamJobId?:string;recoverModuleExamJobId?:string;recoverOrphanedExamJobId?:string;releaseExamWork?:WorkSelection;jobRetention?:{apply:boolean};artifactArgs?:string[]};
 function parseMaintenanceArgs(argv:readonly string[]):ParsedMaintenance{
  const [installationPath,command,jobId]=argv;
  if(!installationPath||installationPath.startsWith('-'))throw new Refusal('MAINTENANCE_USAGE');
@@ -185,6 +185,11 @@ function parseMaintenanceArgs(argv:readonly string[]):ParsedMaintenance{
   const rest=argv.slice(2);
   if(rest.length>1||(rest.length===1&&rest[0]!=='--aplicar'))throw new Refusal('MAINTENANCE_USAGE');
   return {installationPath,jobRetention:{apply:rest.length===1}};
+ }
+ if(command==='--vagas-da-conta'){
+  const value=Number(argv[3]);
+  if(argv.length!==4||!Id.safeParse(argv[2]).success||!Number.isInteger(value)||value<1||value>8)throw new Refusal('MAINTENANCE_USAGE');
+  return {installationPath,accountConcurrency:{accountId:argv[2]!,maxConcurrent:value}};
  }
  if(argv.length!==3||!Id.safeParse(jobId).success)throw new Refusal('MAINTENANCE_USAGE');
  if(command==='--abandonar-design')return {installationPath,recoverExamJobId:jobId};
@@ -610,6 +615,14 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
  if(parsed.jobRetention)return runRetentionStages(config,parsed.jobRetention.apply,deps);
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
+ if(parsed.accountConcurrency){
+  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+  try{
+   const {Capacity}=await import('./capacity.ts');
+   const done=await new Capacity(ledger).setAccountConcurrency(config.project.owner,config.project.id,parsed.accountConcurrency.accountId,parsed.accountConcurrency.maxConcurrent);
+   return [`Conta ${done.accountId}: até ${done.maxConcurrent} sessões ao mesmo tempo.`];
+  }finally{await ledger.close();}
+ }
  if(parsed.recoverOrphanedExamJobId){
   const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
   try{return await recoverPersonalOrphanedExams(config,ledger,{jobId:parsed.recoverOrphanedExamJobId},true);}

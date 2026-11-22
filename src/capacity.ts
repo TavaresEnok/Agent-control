@@ -138,6 +138,20 @@ export class Capacity {
       if(digest(saved)!==digest({efforts:input.efforts,roles:input.roles,source:input.source}))throw new Refusal('CATALOG_ENTRY_CONFLICT');
     });
   }
+  /** The owner of a project the account serves changes how many sessions the account runs at once (1 to 8). */
+  async setAccountConcurrency(principal: string, projectId: string, accountId: string, maxConcurrent: number) {
+    const value = z.number().int().min(1).max(8).parse(maxConcurrent);
+    Id.parse(accountId);
+    return this.tx(async c => {
+      await this.owner(c, principal, projectId);
+      const updated = await c.query(
+        'UPDATE ac_accounts a SET max_concurrent=$2 FROM ac_account_access x WHERE a.id=$1 AND x.account_id=a.id AND x.project_id=$3 RETURNING a.max_concurrent',
+        [accountId, value, projectId]);
+      if (!updated.rowCount) throw new Refusal('NOT_FOUND', 404);
+      return {accountId, maxConcurrent: value};
+    });
+  }
+
   async addAccount(principal: string, projectId: string, raw: z.input<typeof AccountInput>) {
     const a = AccountInput.parse(raw);
     await this.tx(async c => {

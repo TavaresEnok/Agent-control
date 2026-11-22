@@ -161,3 +161,14 @@ test('old manager cannot reserve; successor cannot release an unreconciled old g
  await assert.rejects(service.transition(principal,grant.id,successor,'released',{processId:'fixture',state:'exited'}),/GRANT_RECONCILIATION_REQUIRED/);
  assert.equal((await db.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1',[grant.id])).rows[0].state,'reserved');
 });
+
+test('o dono muda as sessões simultâneas da conta (1 a 8); leitor e conta de outro projeto não', async () => {
+  assert.deepEqual(await service.setAccountConcurrency(principal, project, accounts[0]!, 4), {accountId: accounts[0], maxConcurrent: 4});
+  const row = (await db.pool.query('SELECT max_concurrent FROM ac_accounts WHERE id=$1', [accounts[0]])).rows[0];
+  assert.equal(row?.max_concurrent, 4);
+  await assert.rejects(service.setAccountConcurrency(principal, project, accounts[0]!, 9));
+  await assert.rejects(service.setAccountConcurrency(principal, project, accounts[0]!, 0));
+  await assert.rejects(service.setAccountConcurrency('reader', project, accounts[0]!, 2));
+  await assert.rejects(service.setAccountConcurrency(principal, project, randomUUID(), 2), (e: unknown) => (e as {code?: string}).code === 'NOT_FOUND');
+  await service.setAccountConcurrency(principal, project, accounts[0]!, 1);
+});
