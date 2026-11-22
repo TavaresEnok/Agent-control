@@ -280,3 +280,9 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Rodando:** segurança (`personal-verify-cli`, pid 1799270), QA, dependências e arquitetura (pids 1786858, 1786933, 1786934, com `--esperar-cota`) e a fila `fila-rodada.sh` (pid 1810556), que lança banco, documentação, desempenho, prontidão, conformidade e design com no máximo 4 módulos ao mesmo tempo.
   - **Logs antigos** de banco, documentação, desempenho, prontidão, conformidade e design mostram as interrupções por carga das 19:2x. A fila está relançando esses módulos; não relancei nada à mão.
   - **Próximo passo:** quando um módulo terminar, registrar situação, arquivos julgados, achados por gravidade e tempo desde `inicio.txt`. Com todos terminados, rodar `personal:tokens --desde <inicio.txt>` e só então abrir a F3. Sem trabalhadores durante o exame.
+- 22/11/2026 21:05 UTC — **Supervisor: rodada travada e destravada.**
+  - **O que aconteceu:** de 19:33 a 20:55 nenhum exame avançou. Os 4 módulos ativos ficaram na fila de capacidade porque dois jobs incertos do desempenho, que tinha caído por lease vencida, seguravam vagas da conta com a intenção aberta.
+  - **Defeito AC-19:** a recuperação de órfãos recusava contêiner em estado `created` e sem id gravado no job.
+  - **Correção:** commit acima. Os dois órfãos foram reconciliados por `--recuperar-exame-orfao`, as vagas foram liberadas e os jobs voltaram a rodar às 20:56.
+  - **Pendente:** um teste específico do caso `created` sem id.
+  - **Lição:** módulos caídos por carga deixam vagas presas. A fila nova evita a carga, e o gerente deve rodar `--recuperar-exame-orfao` nos jobs `uncertain` de módulos que já falharam.
