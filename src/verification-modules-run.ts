@@ -12,7 +12,7 @@ import {finishExamIntentTx} from './exam-intent.ts';
 import {clearExamContextCapacityWaits, reserveSpecialistExamSeat} from './exam-provider.ts';
 import type {Ledger, VerificationModule} from './ledger.ts';
 import {moduleContainerJournal, runBoundedCollectorProcess} from './module-container-cleanup.ts';
-import {moduleCollectorCandidate, moduleExamReadBinding, moduleExamReviewEvidence, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
+import {moduleCollectorCandidate, moduleExamReadBinding, moduleExamReviewEvidence, moduleExamUnjudgedByFailure, type ModuleExamCollectorReview, type ModuleExamResult} from './module-exam.ts';
 import {mapModuleSnapshot, readModuleExamFile} from './module-exam-map.ts';
 import {isPublicModuleRule} from './module-exam-collector-proof.ts';
 import {hasModuleReviewProof, moduleReviewObservationTitle, moduleReviewTask, readModuleReviewVerdict} from './module-exam-proof.ts';
@@ -507,7 +507,19 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
     if (collectorCode !== 0 && !collectorData.coverage.some(row => row.status === 'failed')) {
       notes.push(`O coletor saiu com código ${collectorCode}.`);
     }
-    const finalState: 'done' | 'failed' = hasToolFailure ? 'failed' : 'done';
+    // A model exam that stopped (or never started) fails the run; the report is still written.
+    // Files left without judgement by a one-off failure keep the run done, because recheck, the
+    // measurement gate and the performance history read 'done' as a conclusive collector measurement;
+    // the result still carries them, so the CLI exits with MODULE_EXAM_INCOMPLETE.
+    // A run without exam (tools only, or a remeasurement) is unaffected.
+    const unjudged = exam ? moduleExamUnjudgedByFailure(exam.coverage) : 0;
+    const examIncomplete = exam && (exam.stopped || unjudged) ? {unjudged,
+      code: exam.stopped ?? exam.coverage.find(row => moduleExamUnjudgedByFailure([row]))?.reason ?? 'MODULE_EXAM_UNAVAILABLE',
+      total: unjudged + exam.coverage.filter(row => row.status === 'lido').length} : null;
+    const failedReviews = exam?.findings.filter(finding => finding.failure !== null) ?? [];
+    const unreviewed = failedReviews.length
+      ? {count: failedReviews.length, codes: [...new Set(failedReviews.map(finding => finding.failure!))]} : null;
+    const finalState: 'done' | 'failed' = hasToolFailure || exam?.stopped ? 'failed' : 'done';
     const report = await input.ledger.tx(async c => {
       await input.ledger.authorize(c, input.principal, input.authority.contextId);
       await input.ledger.fence(c, input.authority);
@@ -601,6 +613,8 @@ export async function runVerificationModule(input: VerificationModuleRunInput): 
       toolCoverage: collectorData.coverage,
       hasToolFailure,
       summary: report.summary,
+      examIncomplete,
+      unreviewed,
     };
   } catch (error) {
     let rolledBackRun = false;

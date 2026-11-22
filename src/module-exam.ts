@@ -15,6 +15,7 @@ import {moduleCollectorHypothesis, moduleExamQuestions, moduleReviewObservationT
 import {scanModuleExamSource} from './module-exam-syntax.ts';
 import {isModuleExamTerminalNotice, parseModuleExamJsonObject} from './module-exam-worker.ts';
 import {distinctExamSessions, examFindingId, examFindingIdentity, examSubjectDigest, HIGH_REVIEWER_MODEL, HIGH_REVIEWER_PROVIDER, HIGH_SESSION_UNPROVEN} from './module-exam-sessions.ts';
+import {moduleExamScope} from './module-exam-scope.ts';
 
 const checklist: Record<VerificationModule, string> = {
   qa: 'Comportamento funcional, tratamento de erros e testes existentes',
@@ -60,7 +61,11 @@ export type ModuleExamCoverage = {file: string; status: 'lido' | 'nao_julgado'; 
   read?: {binding: string; commit?: string; sourceDigest: string; complete: boolean; requestId?: string; promptDigest?: string}};
 export type ModuleExamCandidate = {file: string; line: number; title: string; severity: 'alta'|'media'|'baixa'|'informativa'; evidence: string; source: string; hypothesis?: string; binding?: string; observation?: ModuleReviewObservation; reviewCommit?: string; status: 'confirmado'|'provavel'|'descartado'; reason: string; proof: string; verifier: {provider: string; model: string; accountId?: string; profileId?: string; grantId?: string; sessionId?: string} | null; examiner: {provider: string; accountId: string; profileId: string} | null; failure: string | null;
   decision?: ModuleReviewDecision; reviewReason?: string};
-export type ModuleExamResult = {mode: 'exame' | 'somente_ferramentas'; coverage: ModuleExamCoverage[]; routes: (ModuleExamMap['routes'][number] & {status: 'lido'|'nao_julgado'})[]; findings: ModuleExamCandidate[]; notes: string[]};
+export type ModuleExamResult = {mode: 'exame' | 'somente_ferramentas'; coverage: ModuleExamCoverage[]; routes: (ModuleExamMap['routes'][number] & {status: 'lido'|'nao_julgado'})[]; findings: ModuleExamCandidate[]; notes: string[];
+  /** Code that stopped the examiner, or the unavailability that kept it from starting. */
+  stopped?: string | null;
+  /** Files left not judged by a failure code, as moduleExamUnjudgedByFailure counts them. */
+  unjudgedByFailure?: number};
 export type ModuleExamReviewTarget = {severity: ModuleExamCandidate['severity']; source: string; fromExaminer: boolean};
 
 /** Reservations must enforce policy, project access and quota. The reviewer excludes the examiner provider. */
@@ -77,10 +82,22 @@ export type ModuleExamClaudeQuotaWait = {
 };
 
 type Prepared = {file: ModuleExamMap['files'][number]; row: ModuleExamCoverage; code: string; limited: boolean;
-  sent: unknown[]; sentRoutes: Set<string>; prompt: Record<string, unknown>; sourceDigest: string; complete: boolean; promptDigest: string; lines: string[]};
+  sent: unknown[]; sentRoutes: Set<string>; prompt: Record<string, unknown>; sourceDigest: string; complete: boolean; promptDigest: string; lines: string[];
+  /** Examiner findings of the accepted response, appended in file order once every call ends. */
+  found?: ModuleExamCandidate[]};
 /** Batch limits for the functional examiner: input-token budget and file count per call. Absent or files < 2 means one call per file. */
 export type ModuleExamBatch = {tokens: number; files: number};
-export const DEFAULT_MODULE_EXAM_BATCH: ModuleExamBatch = {tokens: 40_000, files: 8};
+/** Small files join until the token budget closes the batch, not the file count. */
+export const DEFAULT_MODULE_EXAM_BATCH: ModuleExamBatch = {tokens: 40_000, files: 20};
+/** Findings a whole batch response may carry; more than that makes the batch fail and split. */
+export const MODULE_EXAM_BATCH_FINDINGS = 60;
+/** Findings of one collector rule sent to the reviewer in a single call, spread over distinct files. */
+export const MODULE_EXAM_REVIEW_SAMPLE = 3;
+/** Review calls per module for rule groups and medium or low examiner findings. High findings are always reviewed. */
+export const DEFAULT_MODULE_EXAM_REVIEW_CAP = 15;
+/** Extension point: `tool:rule` keys the collector measures by itself, which never reach the reviewer.
+ * The deterministic collector rules fill it; an empty set sends every rule to review. */
+export const MODULE_EXAM_MEASURED_RULES: ReadonlySet<string> = new Set();
 
 export type ModuleExamInput = {
   module: VerificationModule; intentId: string; map: ModuleExamMap; findings: readonly ModuleRawFinding[]; commit?: string;
@@ -88,6 +105,8 @@ export type ModuleExamInput = {
   collectorReview?: Omit<ModuleExamCollectorReview, 'coverage' | 'relatedSources'>;
   worker?: ModuleExamWorker;
   unavailable?: string;
+  /** The installation has no model runtime: files stay in tools-only mode and the exam does not count as stopped. */
+  toolsOnly?: boolean;
   reserve?: (purpose: 'examiner'|'reviewer', avoid?: {provider: string; profileId: string; accountId: string}, target?: ModuleExamReviewTarget) => Promise<ModuleExamSeat>;
   /** Release only if launch did not start or the native supervisor has proved it exited. */
   release?: (seat: ModuleExamSeat, state: 'not_started'|'exited') => Promise<void>;
@@ -100,6 +119,14 @@ export type ModuleExamInput = {
   repoMap?: {map: string | null; reason?: string};
   mapEnabled?: boolean;
   batch?: ModuleExamBatch;
+  /** Routes files to the module by module-exam-scope.ts. `false` sends every file, as before. */
+  scope?: boolean;
+  /** Examiner and reviewer calls in flight at once, at most the evaluation seats. Default 1. */
+  concurrency?: number;
+  /** `false` sends every finding to its own reviewer call, with no sample, ceiling or measured rule, as before. */
+  reviewTriage?: boolean;
+  reviewCap?: number;
+  measuredRules?: ReadonlySet<string>;
   signal?: AbortSignal;
 };
 export type ModuleExamExecution = Omit<ModuleExamSeat, 'grantId'> & {grantId?: string; sessionId?: string};
@@ -150,8 +177,37 @@ function failure(error: unknown): string {
   return isProviderLimit(code) ? 'PROVIDER_USAGE_LIMIT' : code;
 }
 function fatal(error: unknown): boolean {
-  return error instanceof Refusal && (/(?:FORBIDDEN|SCOPE_MISMATCH|CANCEL)/.test(error.code) || ['STALE_MANAGER', 'HUMAN_PAUSED', 'ADMISSION_CLOSED', 'PERSONAL_ACTIVATION_REQUIRED', 'PROJECT_ACCOUNTS_UNAVAILABLE'].includes(error.code));
+  return error instanceof Refusal && (/(?:FORBIDDEN|SCOPE_MISMATCH|CANCEL)/.test(error.code) || ['STALE_MANAGER', 'HUMAN_PAUSED', 'ADMISSION_CLOSED', 'PERSONAL_ACTIVATION_REQUIRED', 'PROJECT_ACCOUNTS_UNAVAILABLE',
+    // The native supervisor wraps a pending prelaunch settlement (a stale login among them): no later job can start.
+    'NATIVE_PRELAUNCH_SETTLEMENT_PENDING'].includes(error.code));
 }
+/** Marks a worker refusal raised after the native supervisor proved the job terminal.
+ * Without the mark, a launched job that throws stops the whole exam. */
+export function examJobExited<T>(error: T): T {
+  if (error instanceof Refusal) Object.assign(error, {examJobExited: true});
+  return error;
+}
+function jobExited(error: unknown): boolean {
+  return error instanceof Refusal && (error as {examJobExited?: unknown}).examJobExited === true;
+}
+/** Files not judged because of a failure code. Inventory, size, protected-name and scope reasons are not failures. */
+export function moduleExamUnjudgedByFailure(coverage: readonly ModuleExamCoverage[]): number {
+  return coverage.filter(row => row.status === 'nao_julgado' && row.reason !== null && /^[A-Z][A-Z0-9_]*$/u.test(row.reason)).length;
+}
+/** Runs `run` over `items` with at most `limit` in flight. After a failure no item starts; the first error is thrown once all settle. */
+async function inPool<T>(items: readonly T[], limit: number, run: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  let failed: {error: unknown} | null = null;
+  const lane = async () => {
+    while (!failed && next < items.length) {
+      const item = items[next++]!;
+      try { await run(item); } catch (error) { failed ??= {error}; }
+    }
+  };
+  await Promise.all(Array.from({length: Math.max(1, Math.min(Math.floor(limit) || 1, items.length))}, lane));
+  if (failed) throw (failed as {error: unknown}).error;
+}
+const severityRank: Record<ModuleExamCandidate['severity'], number> = {alta: 0, media: 1, baixa: 2, informativa: 3};
 function checkAbort(signal?: AbortSignal) { if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED'); }
 function parsedJson(raw: string): unknown {
   const parsed = parseModuleExamJsonObject(raw);
@@ -206,6 +262,8 @@ function unavailableText(code: string) {
     return 'Revisor de outro provedor indisponível para o contexto.';
   }
   if (code === 'MODULE_EXAM_RUNTIME_UNAVAILABLE') return 'Runtime de exame indisponível.';
+  if (code === 'EXAM_LOGIN_STALE') return 'Login da conta Claude da instalação vencido; renove e rode de novo.';
+  if (code === 'EXAM_LOGIN_BUSY') return 'Login da conta Claude da instalação ocupado; renove e rode de novo.';
   if (code === 'PROJECT_ACCOUNTS_UNAVAILABLE') return 'Nenhuma conta permitida para este projeto está disponível para o papel solicitado.';
   return `Exame ou confirmação indisponível. Código ${code}.`;
 }
@@ -237,8 +295,18 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     if (clean(file, 400) === file) notes.add(`Inventário de rotas em ${file} com omissão por ${reason}.`);
   }
   if (omissions.length > 20) notes.add(`Registros adicionais de omissão de rotas: ${omissions.length - 20}.`);
-  const coverage: ModuleExamCoverage[] = input.map.files.map(f => ({file: f.file, status: 'nao_julgado',
-    reason: f.reason ?? unavailable ?? (enabled ? 'não examinado' : 'modo somente ferramentas'), examiner: null, checklist: []}));
+  // Routing applies whenever the examiner runs or is unavailable, so a failed exam counts only the module's files.
+  // A file with collector evidence in this module is always examined, whatever its path.
+  const evidenced = new Set(input.findings.map(finding => finding.file));
+  const routed = input.scope !== false && (enabled || unavailable !== null) && !input.toolsOnly;
+  const outOfScope = new Set<string>();
+  const coverage: ModuleExamCoverage[] = input.map.files.map(f => {
+    const rule = routed && f.code !== null && !f.reason && !evidenced.has(f.file) ? moduleExamScope(input.module, f.file, f.code) : null;
+    if (rule) outOfScope.add(f.file);
+    return {file: f.file, status: 'nao_julgado', examiner: null, checklist: [], reason: rule ? `fora do escopo do módulo (regra ${rule})`
+      : f.reason ?? (input.toolsOnly ? null : unavailable) ?? (enabled ? 'não examinado' : 'modo somente ferramentas')};
+  });
+  const scoped = outOfScope.size;
   const filesByName = new Map(input.map.files.map(file => [file.file, file]));
   const coverageByFile = new Map(coverage.map(row => [row.file, row]));
   const reviewedRoutes = new Set<string>();
@@ -273,6 +341,25 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
   }
 
   let stopExam = null as string | null;
+  // Tasks in flight share one Claude quota wait instead of each starting its own.
+  let quotaGate: Promise<boolean> | null = null;
+  const waitQuota = (context: ModuleExamClaudeQuotaWait) =>
+    quotaGate ??= input.waitForClaudeQuota!(context).finally(() => { quotaGate = null; });
+  const concurrency = input.concurrency ?? 1;
+  // Reservations go one at a time: concurrent ones of the same intent would share one capacity queue attempt.
+  let reserving: Promise<unknown> = Promise.resolve();
+  const reserveSeat = (...args: Parameters<NonNullable<ModuleExamInput['reserve']>>) => {
+    const next = reserving.then(() => reserve!(...args));
+    reserving = next.catch(() => undefined /* the caller handles its own reservation failure */);
+    return next.then(seat => { held++; return seat; });
+  };
+  // Seats this exam holds now. A reservation refused for capacity while a sibling call holds a seat
+  // waits for that seat instead of stopping the exam: the queue refuses an intent that already holds one.
+  let held = 0;
+  const wakers: (() => void)[] = [];
+  const freeSeat = () => { held--; for (const wake of wakers.splice(0)) wake(); };
+  const siblingSeat = () => new Promise<void>(resolve => wakers.push(resolve));
+  const capacityRefusal = (code: string) => code === 'CAPACITY_BUSY' || code === 'CAPACITY_QUEUED';
   if (worker && reserve && release) {
     const evidenceByFile = new Map<string, ModuleRawFinding[]>();
     for (const finding of input.findings) {
@@ -284,7 +371,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     let limitedFiles = 0;
     for (const [index, file] of input.map.files.entries()) {
       checkAbort(input.signal);
-      if (file.code === null) continue;
+      if (file.code === null || outOfScope.has(file.file)) continue;
       const row = coverage[index]!;
       // Names reach the model only when sanitizing leaves them unchanged, so a response
       // can always be bound to the real inventory entry.
@@ -349,30 +436,35 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         const key = moduleExamRouteKey(route);
         if (p.sentRoutes.has(key)) reviewedRoutes.add(key);
       }
+      const found: ModuleExamCandidate[] = [];
       for (const finding of data.findings) {
-        if (findings.length >= 999) { notes.add('Limite de 999 achados. Candidatos adicionais do examinador foram omitidos.'); break; }
         if (!p.lines[finding.line - 1]?.includes(finding.snippet)) continue;
         const title = clean(finding.title, 200).trim();
         if (!title) continue;
-        findings.push({file: p.file.file, line: finding.line, title, severity: finding.severity,
+        found.push({file: p.file.file, line: finding.line, title, severity: finding.severity,
           evidence: clean(finding.snippet, 240), source: 'examinador', hypothesis: clean(finding.hypothesis, 300),
           ...(input.commit ? {reviewCommit: input.commit} : {}),
           status: 'provavel', reason: 'Sem confirmação independente.',
           proof: '', verifier: null, examiner: {provider: seat.provider, accountId: seat.accountId, profileId: seat.profileId}, failure: null});
       }
+      p.found = found;
     };
+    const retries = {split: 0, batch: 0, high: 0, invalid: 0};
     /** Reserve, call, release and quota-wait around one worker call. `use` returns the files that must still run alone. */
     const attempt = async (group: Prepared[], use: (seat: ModuleExamSeat) => Promise<{call: Record<string, unknown>; output: string}>,
       onOutput: (output: string, seat: ModuleExamSeat, call: Record<string, unknown>) => Prepared[] | Promise<Prepared[]>,
       onError: 'stop' | 'alone'): Promise<Prepared[]> => {
       for (;;) {
         checkAbort(input.signal);
+        if (quotaGate) await quotaGate;
+        if (stopExam) { for (const p of group) p.row.reason = stopExam; return []; }
         let seat: ModuleExamSeat | undefined;
         let launched = false;
         let exited = false;
-        let waitQuota = false;
+        let waiting = false;
+        let sibling: Promise<void> | undefined;
         try {
-          seat = await reserve('examiner');
+          seat = await reserveSeat('examiner');
           checkAbort(input.signal);
           const prepare = await use(seat);
           launched = true;
@@ -382,11 +474,14 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
           return await onOutput(output, seat, prepare.call);
         } catch (error) {
           if (fatal(error) || input.signal?.aborted) throw error;
+          if (jobExited(error)) exited = true;
           const code = failure(error);
-          if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
-            waitQuota = true;
+          if (!seat && capacityRefusal(code) && held > 0) {
+            sibling = siblingSeat();
+          } else if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
+            waiting = true;
           } else if (onError === 'alone' && !stopCodes.has(code) && !(launched && !exited)) {
-            // A batch that failed as a whole returns every file to an isolated call.
+            // A batch that failed as a whole returns the group itself to the caller.
             return group;
           } else {
             for (const p of group) p.row.reason = code;
@@ -395,10 +490,12 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
             return [];
           }
         } finally {
-          if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
+          try { if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started'); }
+          finally { if (seat) freeSeat(); }
         }
-        if (waitQuota) {
-          const resumed = await input.waitForClaudeQuota!({
+        if (sibling) { await sibling; continue; }
+        if (waiting) {
+          const resumed = await waitQuota({
             purpose: 'examiner',
             provider: seat?.provider ?? 'claude',
             accountId: seat?.accountId,
@@ -432,14 +529,15 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         return [];
       }, 'stop');
     };
-    /** One call for several small files. Receipt, binding and coverage stay per file; an invalid or high-severity file runs alone. */
-    const runBatch = async (group: Prepared[]) => {
+    /** One call for several small files. Receipt, binding and coverage stay per file; an invalid or high-severity file runs alone.
+     * A batch that fails as a whole is tried once more as two halves before one call per file. */
+    const runBatch = async (group: Prepared[], split: boolean): Promise<void> => {
       if (stopExam) { for (const p of group) p.row.reason = stopExam; return; }
       const reqs = new Map(group.map(p => [p, requestFor(p)]));
       const alone = await attempt(group, async seat => {
         const first = group[0]!.prompt as {instruction: string; checklist: unknown; verificationQuestions: unknown};
         const task = JSON.stringify({
-          instruction: `EXAME EM LOTE. O pedido traz ${group.length} arquivos independentes em files. Responda somente com um único objeto JSON {"kind":"exame-lote","results":[...]} com exatamente um item por arquivo, na mesma ordem; cada item segue as regras abaixo aplicadas ao seu próprio arquivo (binding, filesRead, checklist, routesReviewed e findings do arquivo). Nunca misture arquivos. ${first.instruction}`,
+          instruction: `EXAME EM LOTE. O pedido traz ${group.length} arquivos independentes em files. Responda somente com um único objeto JSON {"kind":"exame-lote","results":[...]} com exatamente um item por arquivo, na mesma ordem; cada item segue as regras abaixo aplicadas ao seu próprio arquivo (binding, filesRead, checklist, routesReviewed e findings do arquivo). Nunca misture arquivos. Some no máximo ${MODULE_EXAM_BATCH_FINDINGS} achados no lote inteiro. ${first.instruction}`,
           module: input.module, ...commit, checklist: first.checklist, verificationQuestions: first.verificationQuestions,
           files: group.map(p => ({file: p.file.file, binding: reqs.get(p)!.binding, code: p.code,
             routes: (p.prompt as {routes: unknown}).routes, toolEvidence: (p.prompt as {toolEvidence: unknown}).toolEvidence,
@@ -451,41 +549,78 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       }, (output, seat) => {
         const envelope = z.object({kind: z.literal('exame-lote'), results: z.array(z.unknown())}).strict().safeParse(parsedJson(output));
         if (!envelope.success) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
+        // The response grows with the files: past the ceiling it may come cut, so the batch counts as failed.
+        const total = envelope.data.results.reduce<number>((sum, item) => {
+          const listed = (item as {findings?: unknown} | null)?.findings;
+          return sum + (Array.isArray(listed) ? listed.length : 0);
+        }, 0);
+        if (total > MODULE_EXAM_BATCH_FINDINGS) throw new Refusal('MODULE_EXAM_RESPONSE_INVALID');
         const retry: Prepared[] = [];
         for (const p of group) {
           const req = reqs.get(p)!;
           const item = envelope.data.results.find(candidate => (candidate as {binding?: unknown} | null)?.binding === req.binding);
           const result = ExamResponse.safeParse(item);
+          if (!result.success || result.data.filesRead[0] !== p.file.file || result.data.checklist[0] !== input.module) {
+            retries.invalid++; retry.push(p); continue;
+          }
           // A high finding needs its own native session, so that file is examined alone.
-          if (!result.success || result.data.filesRead[0] !== p.file.file || result.data.checklist[0] !== input.module
-            || result.data.findings.some(finding => finding.severity === 'alta')) { retry.push(p); continue; }
+          if (result.data.findings.some(finding => finding.severity === 'alta')) { retries.high++; retry.push(p); continue; }
           accept(p, result.data, req, seat);
         }
         return retry;
       }, 'alone');
+      // `attempt` hands back the same group only when the batch failed as a whole.
+      if (alone === group) {
+        if (split && group.length > 2) {
+          retries.split++;
+          const half = Math.ceil(group.length / 2);
+          for (const part of [group.slice(0, half), group.slice(half)]) {
+            if (part.length > 1) await runBatch(part, false); else await runAlone(part[0]!);
+          }
+          return;
+        }
+        retries.batch += group.length;
+      }
       for (const p of alone) await runAlone(p);
     };
     const batchBudget = input.batch && input.batch.files >= 2 ? input.batch : null;
-    const estimate = (p: Prepared) => Math.ceil((p.code.length + JSON.stringify(p.prompt).length) / 4);
+    // The instruction, checklist and questions go once per call; the rest of the prompt counts per file.
+    const sharedCost = (p: Prepared) => Math.ceil(JSON.stringify({instruction: p.prompt.instruction, checklist: p.prompt.checklist,
+      verificationQuestions: p.prompt.verificationQuestions}).length / 4);
+    const fileCost = (p: Prepared) => Math.ceil((p.code.length
+      + JSON.stringify({...p.prompt, instruction: undefined, checklist: undefined, verificationQuestions: undefined}).length) / 4);
+    const groups: Prepared[][] = [];
     for (let at = 0; at < prepared.length;) {
-      checkAbort(input.signal);
       const group: Prepared[] = [];
-      let tokens = 0;
+      let tokens = sharedCost(prepared[at]!);
       while (at + group.length < prepared.length) {
         const next = prepared[at + group.length]!;
-        const cost = estimate(next);
-        if (!batchBudget) { if (group.length) break; group.push(next); break; }
-        // A file over the budget stays alone; others join while both limits hold.
-        if (group.length && (cost > batchBudget.tokens || tokens + cost > batchBudget.tokens || group.length >= batchBudget.files)) break;
+        const cost = fileCost(next);
+        if (group.length && (!batchBudget || tokens + cost > batchBudget.tokens || group.length >= batchBudget.files)) break;
         group.push(next);
         tokens += cost;
-        if (cost > batchBudget.tokens) break;
+        // A file over the budget stays alone; others join while both limits hold.
+        if (!batchBudget || tokens > batchBudget.tokens) break;
       }
       at += group.length;
-      if (group.length > 1) await runBatch(group); else await runAlone(group[0]!);
+      groups.push(group);
+    }
+    await inPool(groups, concurrency, async group => {
+      checkAbort(input.signal);
+      if (group.length > 1) await runBatch(group, true); else await runAlone(group[0]!);
+    });
+    // Examiner findings join in file order, whatever order the calls ended in.
+    collect: for (const p of prepared) {
+      for (const candidate of p.found ?? []) {
+        if (findings.length >= 999) { notes.add('Limite de 999 achados. Candidatos adicionais do examinador foram omitidos.'); break collect; }
+        findings.push(candidate);
+      }
     }
     if (excludedRoutes) notes.add(`Rotas fora dos limites de envio ao examinador: ${excludedRoutes}.`);
     if (limitedFiles) notes.add(`Arquivos com envio limitado a linhas completas: ${limitedFiles}.`);
+    if (retries.split || retries.batch || retries.high || retries.invalid) {
+      notes.add(`Novas tentativas do exame: ${retries.split} lote(s) repetido(s) em duas metades; arquivos repetidos sozinhos por falha do lote inteiro ${retries.batch}, por achado alto ${retries.high} e por resposta inválida ${retries.invalid}.`);
+    }
 
     let stopReview = stopExam === 'PROVIDER_USAGE_LIMIT' ? stopExam : null;
     let stopStandardReview: string | null = null;
@@ -494,26 +629,122 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       ...input.collectorReview, coverage: coverageByFile,
       relatedSources: input.module === 'arquitetura' ? new Map(input.map.files.map(file => [file.file, file.code])) : undefined,
     } : undefined;
-    for (const [index, finding] of findings.entries()) {
-      checkAbort(input.signal);
+    type Subject = {index: number; finding: ModuleExamCandidate; file: ModuleExamMap['files'][number] | undefined;
+      row: ModuleExamCoverage | undefined; examiner: ModuleExamCandidate['examiner'] | ModuleExamExecution | null;
+      fromExaminer: boolean; high: boolean; evidence: ModuleReviewEvidence | null};
+    const subjects: Subject[] = findings.map((finding, index) => {
       const file = filesByName.get(finding.file);
       const row = coverageByFile.get(finding.file);
-      const examiner = finding.examiner ?? (row?.status === 'lido' ? row.examiner : null);
       const fromExaminer = index >= input.findings.length && finding.source === 'examinador';
-      const highExaminerFinding = fromExaminer && finding.severity === 'alta';
-      const laneStop = stopReview ?? (highExaminerFinding ? stopHighReview : stopStandardReview);
       const binding = file?.code ? moduleExamReadBinding(row, input, finding.file, file.code) : undefined;
-      const evidence = file?.code && binding ? moduleExamReviewEvidence(input.module, finding, file.code, input.findings[index], collectorReview, binding) : null;
-      if (laneStop || !evidence || !examiner) {
-        // Achado de ferramenta num pacote vendorizado: o modelo não leu o arquivo, e o relatório diz o motivo.
-        // Só os arquivos que de fato saíram: um arquivo omitido por tamanho, segredo ou limite mantém o motivo genérico.
-        const inVendor = !file && (input.map.vendored ?? []).some(entry => entry.paths?.includes(finding.file) === true);
-        finding.failure = laneStop ?? stopExam ?? (inVendor ? 'MODULE_EXAM_VENDORED' : 'MODULE_EXAM_EVIDENCE_UNAVAILABLE');
-        finding.reason = inVendor && !laneStop && !stopExam
-          ? 'Confirmação indisponível: o arquivo é de um pacote Go vendorizado, fora do exame do modelo. O achado da ferramenta segue sem revisão.'
-          : `Confirmação indisponível. Código ${finding.failure}.`;
-        continue;
+      return {index, finding, file, row, examiner: finding.examiner ?? (row?.status === 'lido' ? row.examiner : null),
+        fromExaminer, high: fromExaminer && finding.severity === 'alta',
+        evidence: file?.code && binding ? moduleExamReviewEvidence(input.module, finding, file.code, input.findings[index], collectorReview, binding) : null};
+    });
+    const ready = (s: Subject) => Boolean(s.evidence && s.examiner);
+    const markUnavailable = (s: Subject, laneStop: string | null) => {
+      // Achado de ferramenta num pacote vendorizado: o modelo não leu o arquivo, e o relatório diz o motivo.
+      // Só os arquivos que de fato saíram: um arquivo omitido por tamanho, segredo ou limite mantém o motivo genérico.
+      const inVendor = !s.file && (input.map.vendored ?? []).some(entry => entry.paths?.includes(s.finding.file) === true);
+      s.finding.failure = laneStop ?? stopExam ?? (inVendor ? 'MODULE_EXAM_VENDORED' : 'MODULE_EXAM_EVIDENCE_UNAVAILABLE');
+      s.finding.reason = inVendor && !laneStop && !stopExam
+        ? 'Confirmação indisponível: o arquivo é de um pacote Go vendorizado, fora do exame do modelo. O achado da ferramenta segue sem revisão.'
+        : `Confirmação indisponível. Código ${s.finding.failure}.`;
+    };
+    /** Records one reviewer verdict for `s`. False when the verdict does not parse. */
+    const applyVerdict = (s: Subject, parsed: unknown, seat: ModuleExamSeat, sessionId?: string): boolean => {
+      const {finding, evidence} = s;
+      const result = readModuleReviewVerdict(parsed);
+      if (!result || !evidence) return false;
+      finding.reviewReason = clean(result.reason, 2000);
+      const reason = moduleReviewProofReason(evidence, result);
+      if (reason) {
+        if (evidence.tool === 'examinador' && result.status === 'confirmado') {
+          finding.title = moduleReviewObservationTitle(result.observation) ?? finding.title;
+        }
+        finding.status = result.status;
+        if (result.decision) finding.decision = result.decision;
+        finding.reason = reason;
+        finding.proof = evidence.code;
+        finding.binding = result.binding;
+        finding.observation = result.observation;
+        finding.verifier = identity(seat, sessionId);
+      } else {
+        finding.reason = 'Sem prova localizada suficiente para decidir a hipótese.';
       }
+      return true;
+    };
+    type ReviewCall = z.infer<typeof ModuleExamCall> & {examSubject?: string; examSessionId?: string};
+    /** Reserve, call, release and quota-wait around one reviewer call for `members`. A failure applies to every member. */
+    const reviewCall = async (members: Subject[], high: boolean, prepare: (seat: ModuleExamSeat) => ReviewCall,
+      onOutput: (output: string, seat: ModuleExamSeat, call: ReviewCall) => Promise<void>) => {
+      const lead = members[0]!;
+      const fail = (code: string) => {
+        for (const s of members) { s.finding.failure = code; s.finding.reason = `Confirmação indisponível. Código ${code}.`; }
+        notes.add(unavailableText(code));
+      };
+      for (;;) {
+        checkAbort(input.signal);
+        if (quotaGate) await quotaGate;
+        const laneStop = stopReview ?? (high ? stopHighReview : stopStandardReview);
+        if (laneStop) { for (const s of members) markUnavailable(s, laneStop); return; }
+        let seat: ModuleExamSeat | undefined;
+        let launched = false;
+        let exited = false;
+        let waiting = false;
+        let sibling: Promise<void> | undefined;
+        try {
+          const worst = members.reduce((top, s) => severityRank[s.finding.severity] < severityRank[top] ? s.finding.severity : top, lead.finding.severity);
+          seat = await reserveSeat('reviewer', lead.examiner!, {severity: worst, source: lead.finding.source, fromExaminer: lead.fromExaminer});
+          checkAbort(input.signal);
+          const call = prepare(seat);
+          launched = true;
+          const output = await worker.run(call);
+          exited = true;
+          checkAbort(input.signal);
+          await onOutput(output, seat, call);
+          return;
+        } catch (error) {
+          if (fatal(error) || input.signal?.aborted) throw error;
+          if (jobExited(error)) exited = true;
+          const code = failure(error);
+          if (!seat && capacityRefusal(code) && held > 0) {
+            sibling = siblingSeat();
+          } else if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
+            waiting = true;
+          } else {
+            fail(code);
+            if (code === 'PROVIDER_USAGE_LIMIT' || capacityRefusal(code) || (launched && !exited)) stopReview = code;
+            else if (high && code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') stopHighReview = code;
+            else if (!high && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
+              || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT')) stopStandardReview = code;
+            return;
+          }
+        } finally {
+          try { if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started'); }
+          finally { if (seat) freeSeat(); }
+        }
+        if (sibling) { await sibling; continue; }
+        if (waiting) {
+          const resumed = await waitQuota({
+            purpose: 'reviewer',
+            provider: seat?.provider ?? 'unknown',
+            accountId: seat?.accountId,
+            file: lead.finding.file,
+            signal: input.signal,
+          });
+          if (!resumed) {
+            fail('PROVIDER_USAGE_LIMIT');
+            stopReview = 'PROVIDER_USAGE_LIMIT';
+            return;
+          }
+        }
+      }
+    };
+    const reviewOne = async (s: Subject) => {
+      const {finding, examiner, high: highExaminerFinding, evidence, row} = s;
+      const laneStop = stopReview ?? (highExaminerFinding ? stopHighReview : stopStandardReview);
+      if (laneStop || !evidence || !examiner) { markUnavailable(s, laneStop); return; }
       // A high examiner finding needs the examiner's own native session before any
       // reviewer seat is spent. Without it, or without a ledger check, it stays probable.
       const examinerExecution = highExaminerFinding && row?.examiner
@@ -523,109 +754,140 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
         finding.failure = HIGH_SESSION_UNPROVEN;
         finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
         notes.add(unavailableText(HIGH_SESSION_UNPROVEN));
-        continue;
+        return;
       }
       // Fields of the original request, read before the reviewer may rewrite the title.
-      const findingIdentity = examFindingIdentity({id: examFindingId(index), source: finding.source, file: finding.file,
+      const findingIdentity = examFindingIdentity({id: examFindingId(s.index), source: finding.source, file: finding.file,
         line: finding.line, severity: finding.severity, evidence: finding.evidence, hypothesis: finding.hypothesis});
-      for (;;) {
-        checkAbort(input.signal);
-        let seat: ModuleExamSeat | undefined;
-        let launched = false;
-        let exited = false;
-        let waitQuota = false;
-        try {
-          seat = await reserve('reviewer', examiner, {severity: finding.severity, source: finding.source, fromExaminer});
+      await reviewCall([s], highExaminerFinding, seat => {
+        if (highExaminerFinding) {
+          if (seat.provider !== HIGH_REVIEWER_PROVIDER || seat.model !== HIGH_REVIEWER_MODEL
+            || seat.profileId === examiner.profileId || seat.grantId === examinerExecution!.grantId) {
+            throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
+          }
+        } else if (seat.provider === examiner.provider || seat.profileId === examiner.profileId || seat.accountId === examiner.accountId) {
+          throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
+        }
+        const call: ReviewCall = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task: moduleReviewTask(evidence), writePaths: []});
+        call.examSubject = examSubjectDigest({purpose: 'reviewer', module: input.module,
+          intentId: input.intentId, commit: input.commit ?? null, file: finding.file, line: finding.line, finding: findingIdentity});
+        return call;
+      }, async (output, seat, call) => {
+        const reviewerSessionId = call.examSessionId;
+        // Parse first: a quota or login failure in the output keeps its own code.
+        const parsed = parsedJson(output);
+        if (highExaminerFinding) {
+          const reviewer = identity(seat, reviewerSessionId);
+          if (!distinctExamSessions(examinerExecution, reviewer)
+            || !await input.attestSessions!({examiner: examinerExecution!, reviewer, file: finding.file, line: finding.line,
+              finding: findingIdentity})) {
+            throw new Refusal(HIGH_SESSION_UNPROVEN);
+          }
           checkAbort(input.signal);
-          if (highExaminerFinding) {
-            if (seat.provider !== HIGH_REVIEWER_PROVIDER || seat.model !== HIGH_REVIEWER_MODEL
-              || seat.profileId === examiner.profileId || seat.grantId === examinerExecution!.grantId) {
-              throw new Refusal('MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE');
-            }
-          } else if (seat.provider === examiner.provider || seat.profileId === examiner.profileId || seat.accountId === examiner.accountId) {
+        }
+        if (!applyVerdict(s, parsed, seat, reviewerSessionId)) throw new Refusal('MODULE_CONFIRMATION_INVALID');
+      });
+    };
+    let outsideSample = 0;
+    /** Findings of one collector rule: a sample over distinct files goes to the reviewer in one call.
+     * When no sample verdict comes back, the rest of the group keeps the failure code of the sample. */
+    const reviewGroup = async (members: Subject[]) => {
+      const laneStop = stopReview ?? stopStandardReview;
+      const candidates = laneStop ? [] : members.filter(ready).sort((a, b) => severityRank[a.finding.severity] - severityRank[b.finding.severity]);
+      for (const s of members) if (!candidates.includes(s)) markUnavailable(s, laneStop);
+      const sample = candidates.filter((s, at) => candidates.findIndex(other => other.finding.file === s.finding.file) === at)
+        .slice(0, MODULE_EXAM_REVIEW_SAMPLE);
+      for (const s of candidates) if (sample.length < MODULE_EXAM_REVIEW_SAMPLE && !sample.includes(s)) sample.push(s);
+      if (sample.length === 1) await reviewOne(sample[0]!);
+      else if (sample.length > 1) {
+        const tasks = sample.map(s => JSON.parse(moduleReviewTask(s.evidence!)) as {binding: string});
+        await reviewCall(sample, false, seat => {
+          if (sample.some(s => seat.provider === s.examiner!.provider || seat.profileId === s.examiner!.profileId || seat.accountId === s.examiner!.accountId)) {
             throw new Refusal('MODULE_EXAM_PROVIDER_NOT_DISTINCT');
           }
-          const task = moduleReviewTask(evidence);
-          const call = ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
-          (call as {examSubject?: string}).examSubject = examSubjectDigest({purpose: 'reviewer', module: input.module,
-            intentId: input.intentId, commit: input.commit ?? null, file: finding.file, line: finding.line, finding: findingIdentity});
-          launched = true;
-          const output = await worker.run(call);
-          exited = true;
-          checkAbort(input.signal);
-          const reviewerSessionId = (call as {examSessionId?: string}).examSessionId;
-          // Parse first: a quota or login failure in the output keeps its own code.
-          const parsed = parsedJson(output);
-          if (highExaminerFinding) {
-            const reviewer = identity(seat, reviewerSessionId);
-            if (!distinctExamSessions(examinerExecution, reviewer)
-              || !await input.attestSessions!({examiner: examinerExecution!, reviewer, file: finding.file, line: finding.line,
-                finding: findingIdentity})) {
-              throw new Refusal(HIGH_SESSION_UNPROVEN);
-            }
-            checkAbort(input.signal);
-          }
-          const result = readModuleReviewVerdict(parsed);
-          if (!result) throw new Refusal('MODULE_CONFIRMATION_INVALID');
-          finding.reviewReason = clean(result.reason, 2000);
-          const reason = moduleReviewProofReason(evidence, result);
-          if (reason) {
-            if (evidence.tool === 'examinador' && result.status === 'confirmado') {
-              finding.title = moduleReviewObservationTitle(result.observation) ?? finding.title;
-            }
-            finding.status = result.status;
-            if (result.decision) finding.decision = result.decision;
-            finding.reason = reason;
-            finding.proof = evidence.code;
-            finding.binding = result.binding;
-            finding.observation = result.observation;
-            finding.verifier = identity(seat, reviewerSessionId);
-          } else {
-            finding.reason = 'Sem prova localizada suficiente para decidir a hipótese.';
-          }
-          break;
-        } catch (error) {
-          if (fatal(error) || input.signal?.aborted) throw error;
-          const code = failure(error);
-          if (code === 'PROVIDER_USAGE_LIMIT' && input.waitForClaudeQuota && (!seat || seat.provider === 'claude')) {
-            waitQuota = true;
-          } else {
-            finding.failure = code;
-            finding.reason = `Confirmação indisponível. Código ${code}.`;
-            notes.add(unavailableText(code));
-            if (code === 'PROVIDER_USAGE_LIMIT' || code === 'CAPACITY_BUSY' || code === 'CAPACITY_QUEUED' || (launched && !exited)) stopReview = code;
-            else if (highExaminerFinding && code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') stopHighReview = code;
-            else if (!highExaminerFinding && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
-              || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT')) stopStandardReview = code;
-            break;
-          }
-        } finally {
-          if (seat && (!launched || exited)) await release(seat, exited ? 'exited' : 'not_started');
-        }
-        if (waitQuota) {
-          const resumed = await input.waitForClaudeQuota!({
-            purpose: 'reviewer',
-            provider: seat?.provider ?? 'unknown',
-            accountId: seat?.accountId,
-            file: finding.file,
-            signal: input.signal,
+          const task = JSON.stringify({
+            instruction: `REVISÃO EM LOTE. O pedido traz ${tasks.length} hipóteses independentes da mesma regra em items. Responda somente com um único objeto JSON {"kind":"confirmacao-lote","results":[...]} com exatamente um item por hipótese, na mesma ordem; cada item segue a instrução do próprio item e copia o binding dele. Nunca misture itens.`,
+            items: tasks,
           });
-          if (!resumed) {
-            finding.failure = 'PROVIDER_USAGE_LIMIT';
-            finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
-            notes.add(unavailableText('PROVIDER_USAGE_LIMIT'));
-            stopReview = 'PROVIDER_USAGE_LIMIT';
-            break;
+          return ModuleExamCall.parse({...seat, role: 'specialist', intentId: input.intentId, task, writePaths: []});
+        }, async (output, seat) => {
+          const envelope = z.object({kind: z.literal('confirmacao-lote'), results: z.array(z.unknown())}).strict().safeParse(parsedJson(output));
+          if (!envelope.success) throw new Refusal('MODULE_CONFIRMATION_INVALID');
+          for (const [at, s] of sample.entries()) {
+            const verdict = envelope.data.results.find(item => (item as {binding?: unknown} | null)?.binding === tasks[at]!.binding);
+            if (applyVerdict(s, verdict, seat)) continue;
+            s.finding.failure = 'MODULE_CONFIRMATION_INVALID';
+            s.finding.reason = 'Confirmação indisponível. Código MODULE_CONFIRMATION_INVALID.';
+            notes.add(unavailableText('MODULE_CONFIRMATION_INVALID'));
           }
-        }
+        });
+      }
+      const rest = candidates.filter(s => !sample.includes(s));
+      const reviewed = sample.filter(s => s.finding.failure === null);
+      if (!reviewed.length) {
+        const code = sample[0]?.finding.failure ?? null;
+        for (const s of rest) { s.finding.failure = code; s.finding.reason = `Confirmação indisponível. Código ${code}.`; }
+        return;
+      }
+      const confirmed = reviewed.filter(s => s.finding.status === 'confirmado').length;
+      const discarded = reviewed.filter(s => s.finding.status === 'descartado').length;
+      for (const s of rest) {
+        s.finding.reason = `Fora da amostra revisada da regra: ${confirmed} confirmado(s) e ${discarded} descartado(s) em ${reviewed.length} de ${candidates.length}.`;
+      }
+      outsideSample += rest.length;
+    };
+    // Triage before any reviewer call. Measured rules never reach the reviewer; the findings of one
+    // collector rule form a group (high ones apart, outside the ceiling); examiner findings go one by one.
+    type Item = {members: Subject[]; group: boolean; capped: boolean};
+    const items: Item[] = [];
+    const byRule = new Map<string, Item>();
+    const triage = input.reviewTriage !== false;
+    const measuredRules = triage ? input.measuredRules ?? MODULE_EXAM_MEASURED_RULES : new Set<string>();
+    let measuredCount = 0;
+    for (const s of subjects) {
+      const raw = input.findings[s.index];
+      if (!triage) { items.push({members: [s], group: false, capped: false}); continue; }
+      if (raw && measuredRules.has(`${raw.tool}:${raw.rule}`)) {
+        s.finding.reason = 'Regra medida pela própria ferramenta, sem revisão por modelo.';
+        measuredCount++;
+        continue;
+      }
+      if (!raw) { items.push({members: [s], group: false, capped: !s.high}); continue; }
+      // High collector findings of one rule share a sample too, in their own group outside the ceiling.
+      const high = s.finding.severity === 'alta';
+      const key = JSON.stringify([raw.tool, raw.rule, high]);
+      let item = byRule.get(key);
+      if (!item) { item = {members: [], group: true, capped: !high}; byRule.set(key, item); items.push(item); }
+      item.members.push(s);
+    }
+    // The ceiling counts calls: the most severe groups and findings first, then the finding order.
+    const cap = Math.max(0, input.reviewCap ?? DEFAULT_MODULE_EXAM_REVIEW_CAP);
+    const worstOf = (item: Item) => Math.min(...item.members.map(s => severityRank[s.finding.severity]));
+    const overCap = new Set(items.filter(item => item.capped && item.members.some(ready))
+      .map((item, order) => ({item, order})).sort((a, b) => worstOf(a.item) - worstOf(b.item) || a.order - b.order)
+      .slice(cap).map(({item}) => item));
+    await inPool(items.filter(item => !overCap.has(item)), concurrency, async item => {
+      checkAbort(input.signal);
+      if (item.group) await reviewGroup(item.members); else await reviewOne(item.members[0]!);
+    });
+    let overCapCount = 0;
+    for (const item of overCap) {
+      for (const s of item.members) {
+        if (!ready(s)) { markUnavailable(s, stopReview); continue; }
+        s.finding.reason = 'Fora do teto de revisão do módulo.';
+        overCapCount++;
       }
     }
+    if (measuredCount) notes.add(`Achados de regra medida pela própria ferramenta, sem revisão por modelo: ${measuredCount}.`);
+    if (outsideSample) notes.add(`Achados fora da amostra revisada da sua regra (até ${MODULE_EXAM_REVIEW_SAMPLE} por regra): ${outsideSample}.`);
+    if (overCapCount) notes.add(`Achados fora do teto de revisão do módulo (${cap} chamadas): ${overCapCount}.`);
   }
-  notes.add(`Arquivos sem julgamento por modelo: ${coverage.filter(row => row.status === 'nao_julgado').length}. Achados pendentes: ${findings.filter(finding => finding.status === 'provavel').length}.`);
+  const unjudged = coverage.filter(row => row.status === 'nao_julgado').length;
+  notes.add(`${scoped ? `Arquivos fora do escopo do módulo: ${scoped}. ` : ''}Arquivos sem julgamento por modelo: ${unjudged - scoped}. Achados pendentes: ${findings.filter(finding => finding.status === 'provavel').length}.`);
   if (coverage.some(row => row.reason === 'PROVIDER_USAGE_LIMIT') || findings.some(finding => finding.failure === 'PROVIDER_USAGE_LIMIT')) {
     notes.add('PROVIDER_USAGE_LIMIT. A cota encerrou o consumo nesta execução.');
   }
   return {mode: coverage.some(row => row.status === 'lido') ? 'exame' : 'somente_ferramentas', coverage,
     routes: routes.map(route => ({...route, status: reviewedRoutes.has(moduleExamRouteKey(route)) ? 'lido' : 'nao_julgado'})),
-    findings, notes: [...notes]};
+    findings, notes: [...notes], stopped: stopExam ?? (input.toolsOnly ? null : unavailable), unjudgedByFailure: moduleExamUnjudgedByFailure(coverage)};
 }

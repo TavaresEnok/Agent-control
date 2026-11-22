@@ -17,7 +17,7 @@ import {createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamRu
 import {examineFunctionalModule, type ModuleExamSeat} from '../src/module-exam.ts';
 import {examFindingIdentity} from '../src/module-exam-sessions.ts';
 import {NativeExecutionSupervisor} from '../src/native-execution-supervisor.ts';
-import {runPersonalModuleCli} from '../src/personal-module-cli.ts';
+import {moduleCliFailureText, runPersonalModuleCli} from '../src/personal-module-cli.ts';
 import {readModuleReport, recheckModuleFindings, runVerificationModule} from '../src/verification-modules.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 import {qaStaticFinding, qaStaticTool, reviewFixtureVerdict, skipQuestion} from './fixtures/module-exam-review.ts';
@@ -384,6 +384,11 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
 
     // 2) Banco & Conformidade require Sonnet 5.5 HIGH on Max.
     examinerFindingsMode = 'none';
+    // The test file is outside these modules' routing: a schema and a source file give each one a file to examine.
+    await writeFile(join(repo, 'schema.sql'), 'CREATE TABLE pessoa (cpf text);\n');
+    await writeFile(join(repo, 'rota.ts'), 'export const rota = 1;\n');
+    git('add', '.');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'escopo');
     for (const mod of ['banco', 'conformidade'] as const) {
       const before = docker.launches.length;
       await runPersonalModuleCli(mod, [installation, project], {
@@ -414,6 +419,9 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
       }
     }
 
+    git('rm', '-q', 'rota.ts');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'sem escopo extra');
+
     // 3) Check loadSpecialistExamPlan reflects DB chain priority without hardcoding UUIDs.
     const qaCtx = (await ledger.ensureExamContext(owner, project, 'qa')).contextId;
     const plan = await loadSpecialistExamPlan(ledger.pool, qaCtx);
@@ -441,11 +449,15 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
       {provider: 'codex', accountIds: new Set([codexAccount]), supervisor: makeSupervisor('codex', [codexAccount])},
     ];
     let proBlockedDir = '';
-    await runPersonalModuleCli('qa', [installation, project], {
+    // No examiner means no file judged: the run fails with its partial report.
+    await assert.rejects(runPersonalModuleCli('qa', [installation, project], {
       collectorOutput: {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'ok'}], findings: []},
       moduleExamRuntime: async () => proOnlyRuntime,
       onResult(res) { proBlockedDir = res.directory; },
-    });
+    }), (err: unknown) => err instanceof Refusal && err.code === 'MODULE_EXAM_INCOMPLETE'
+      && moduleCliFailureText(err) === `O modelo não examinou 1 de 1 arquivos (código MODULE_EXAM_EXAMINER_UNAVAILABLE). Relatório parcial em ${proBlockedDir}.`);
+    const blockedRun = await ledger.pool.query("SELECT status FROM ac_verify_runs WHERE report_dir=$1", [proBlockedDir]);
+    assert.equal(blockedRun.rows[0]?.status, 'failed');
     assert.equal(docker.launches.length, beforeExhaust);
     assert.match(await readFile(join(proBlockedDir, 'cobertura.md'), 'utf8'), /Examinador indisponível/);
 
@@ -486,11 +498,11 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
     await capacity.assignPolicy(owner, mainContext, revNoBancoHigh);
     const beforeNoHigh = docker.launches.length;
     let bancoMissingDir = '';
-    await runPersonalModuleCli('banco', [installation, project], {
+    await assert.rejects(runPersonalModuleCli('banco', [installation, project], {
       collectorOutput: {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'ok'}], findings: []},
       moduleExamRuntime: async () => fullRuntime,
       onResult(res) { bancoMissingDir = res.directory; },
-    });
+    }), (err: unknown) => err instanceof Refusal && err.code === 'MODULE_EXAM_INCOMPLETE');
     assert.equal(docker.launches.length, beforeNoHigh);
     assert.match(await readFile(join(bancoMissingDir, 'cobertura.md'), 'utf8'), /Examinador indisponível/);
 
@@ -537,14 +549,17 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
       await capacity.assignPolicy(owner, qaCtx, revision);
       return revision;
     };
-    const examOnce = async (mod: VerificationModule) => {
+    const examOnce = async (mod: VerificationModule, incomplete = false) => {
       const before = docker!.launches.length;
       let directory = '';
-      await runPersonalModuleCli(mod, [installation, project], {
+      const running = runPersonalModuleCli(mod, [installation, project], {
         collectorOutput: {coverage: [{tool: qaStaticTool, version: '1', status: 'ok', detail: 'ok'}], findings: []},
         moduleExamRuntime: async () => fullRuntime,
         onResult(res) { directory = res.directory; },
       });
+      // Without an examiner the run fails, and the partial report says why.
+      if (incomplete) await assert.rejects(running, (err: unknown) => err instanceof Refusal && err.code === 'MODULE_EXAM_INCOMPLETE');
+      else await running;
       return {launches: docker!.launches.slice(before), directory};
     };
     examinerFindingsMode = 'none';
@@ -557,7 +572,7 @@ test('seleção por módulo exige Sonnet 5.5 medium/high na primeira conta da ca
     // Max listed first but without the module's profile: Pro (listed after) is not a fallback.
     await publishSpecialist(codexFirst, [pCodexMed, pOpusMax, pSonnetHighMax, pSonnetMedPro]);
     assert.equal((await loadSpecialistExamPlan(ledger.pool, qaCtx)).primaryClaudeAccountId, maxAccount);
-    const noMediumRun = await examOnce('qa');
+    const noMediumRun = await examOnce('qa', true);
     assert.equal(noMediumRun.launches.length, 0);
     assert.match(await readFile(join(noMediumRun.directory, 'cobertura.md'), 'utf8'), /Examinador indisponível/);
 

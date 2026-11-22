@@ -166,6 +166,14 @@ export async function createModuleExamFixture(input: {
     })});
     profiles.push(profileId);
   }
-  const docker = await fakeDocker(socket, input.answer ?? moduleExamFixtureAnswer);
+  const answer = input.answer ?? moduleExamFixtureAnswer;
+  // A grouped review answers each item as its own review would, inside one envelope.
+  const docker = await fakeDocker(socket, launch => {
+    const items = (JSON.parse(launch.task) as {items?: unknown[]}).items;
+    if (!items) return answer(launch);
+    const parts = items.map(item => answer({...launch, task: JSON.stringify(item)}));
+    return parts.find(part => part.failureCode) ?? {failureCode: null,
+      output: JSON.stringify({kind: 'confirmacao-lote', results: parts.map(part => JSON.parse(part.output))})};
+  });
   return {runtime, profiles, highProfile, docker};
 }
