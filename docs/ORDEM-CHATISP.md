@@ -113,7 +113,7 @@ Comandos de acionamento:
   ```
 - **Revisor:**
   ```
-  CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok claude -p "<ordem de revisão>" --model claude-opus-5-5 --effort medium --dangerously-skip-permissions --disallowedTools Edit Write NotebookEdit
+  CLAUDE_CONFIG_DIR=/home/app/.claude-trabalhadores/enok claude -p "<ordem de revisão>" --model claude-opus-5-5 --effort medium --max-turns 25 --dangerously-skip-permissions --disallowedTools Edit Write NotebookEdit
   ```
 - **Reserva Opus médio:**
   ```
@@ -122,10 +122,12 @@ Comandos de acionamento:
 
 Os commits usam `GIT_AUTHOR_NAME="Enok Tavares" GIT_AUTHOR_EMAIL=migration@localhost` e o mesmo nome e e-mail no committer, mais o trailer do modelo que escreveu.
 
-## Disciplina do gerente
+## Disciplina do gerente (economia, revista em 22/11/2026 a pedido do titular)
 
-- Espere trabalhadores, exames e revisões com um único comando bloqueante, como `while kill -0 <pid>; do sleep 120; done`. Leia só `tail -n 40` dos logs. Não consulte várias vezes seguidas.
-- Delegue as leituras longas aos trabalhadores e receba só a conclusão.
-- Mantenha o histórico curto. O estado fica em `docs/PROGRESSO-CHATISP.md`, não na memória da sessão.
-- Nunca fique parado. Enquanto um exame espera cota, adiante outra fase que não dependa dele.
-- Se a sua própria sessão estiver perto do limite de contexto, salve o estado no `PROGRESSO-CHATISP.md` e encerre. O vigia o reinicia em até 15 min e você continua de onde parou.
+Na primeira noite, o gerente gastou 57% dos tokens do Opus relendo o próprio histórico 469 vezes, a maior parte enquanto esperava exames. Por isso valem estas regras:
+- **Sem espera dentro da sessão.** Não use `sleep`, laço ou consulta repetida. Lance o processo em segundo plano, registre no progresso e encerre.
+- **O vigia acorda o gerente.** Ele roda só em shell, a cada 5 min, e chama o gerente quando um processo termina ou aparece um log novo.
+- **Sessões curtas**, com `--max-turns 30` e contexto limpo a cada vez. O estado fica em `docs/PROGRESSO-CHATISP.md`.
+- **Leitura curta:** só `tail -n 40` dos logs e `tail -n 60` do progresso.
+- **Revisor:** acionado com `--max-turns 25`. Recebe a ordem e o diff, lê só os arquivos tocados e devolve só os achados e o veredito.
+- **Medição:** rode `npm run personal:tokens -- <instalação> --desde <hora>` a cada fase e registre o resultado no progresso. Gerente mais revisor não podem passar dos trabalhadores somados.
