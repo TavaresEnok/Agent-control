@@ -5,7 +5,7 @@ import {finishExamIntent,withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_RESTORE_FAILED_TEXT,EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {clearExamContextCapacityWaits} from './exam-provider.ts';
 import {loadInstallation} from './installation.ts';
-import {beginPersonalVerification,resolvePersonalVerification} from './verify-command.ts';
+import {beginPersonalVerification,readVerificationProgress,resolvePersonalVerification} from './verify-command.ts';
 import {removeSecurityReport} from './verify-report.ts';
 import {VERIFY_RECHECK_NEW_EXAM_GUIDANCE,VERIFY_RECHECK_NEW_EXAM_REQUIRED} from './verify-remediate.ts';
 
@@ -39,6 +39,7 @@ const messages:Record<string,string>={
  EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,
  EXAM_LOGIN_RESTORE_FAILED:EXAM_LOGIN_RESTORE_FAILED_TEXT,
  EXAM_INTERRUPTED:'O exame foi interrompido.',
+ VERIFY_EXAM_INCOMPLETE:'A verificação terminou incompleta: o relatório foi gravado, mas há arquivos sem julgamento do examinador ou o relatório é parcial. Rode o exame de novo.',
 };
 
 export function verifyCliFailureText(error:unknown):string{
@@ -162,8 +163,10 @@ export async function runPersonalVerifySession(
   });
  });
  let failed:unknown;
+ let incomplete:Refusal|undefined;
+ let id:string;
  try{
-  return await withExamSignals(
+  id=await withExamSignals(
    async()=>{
     const started=await (deps?.begin??beginPersonalVerification)({
      ...resolved.input,
@@ -175,7 +178,12 @@ export async function runPersonalVerifySession(
     runId=started.id;
     console.log('Verificação '+started.id+' começou.');
     await Promise.race([job,aborted]);
-    console.log('Verificação '+started.id+' concluída.');
+    // The report is saved either way; only the progress file says whether every file was judged.
+    const row=(await readVerificationProgress(resolved.input.dataDirectory,resolved.input.projectId)).find(item=>item.id===started.id);
+    if(row?.status==='incomplete'){
+     console.log('Verificação '+started.id+' incompleta: '+(row.pending??0)+' de '+(row.total??0)+' arquivos sem julgamento.');
+     incomplete=new Refusal('VERIFY_EXAM_INCOMPLETE');
+    }else console.log('Verificação '+started.id+' concluída.');
     return started.id;
    },
    ()=>{
@@ -209,6 +217,9 @@ export async function runPersonalVerifySession(
   try{await resolved.close();}
   catch(error){if(!failed)throw error;}
  }
+ // Thrown after the cleanup above: the run and its intent are done in the ledger and must not be marked failed.
+ if(incomplete)throw incomplete;
+ return id;
 }
 
 async function main(){

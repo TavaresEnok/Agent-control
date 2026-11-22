@@ -43,18 +43,22 @@ export async function goVendorPackages(dir: string, name: string): Promise<Set<s
 }
 
 /**
- * Num pacote listado sai tudo o que o Go copia com o pacote (fontes, assembly, C, licenças,
- * documentação e configuração do autor), menos o que é script executável fora do Go: esse vai
- * ao exame, porque o projeto poderia servi-lo ou rodá-lo.
+ * Numa pasta vendor conferida sai tudo o que o Go copia (fontes, assembly, C, licenças, documentação,
+ * configuração e artefatos do autor), listado ou não no modules.txt, menos o que é script executável
+ * fora do Go: esse vai ao exame, porque o projeto poderia servi-lo ou rodá-lo.
  */
 const VENDOR_KEEP_EXAMINED = /\.(?:[cm]?[jt]sx?|py|sh|bash|zsh|ps1|php|rb|pl|lua|html?|vue|svelte)$/iu;
 
-/** O arquivo, relativo à pasta vendor, é de um pacote ou raiz de módulo listado e não é script. */
+/** O arquivo, relativo à pasta vendor, sai do exame do modelo: qualquer arquivo regular que não seja script. */
+export function isVendoredFile(relative: string): boolean {
+  return relative === 'modules.txt' || !VENDOR_KEEP_EXAMINED.test(relative.slice(relative.lastIndexOf('/') + 1));
+}
+
+/** O arquivo, relativo à pasta vendor, é de um pacote ou raiz de módulo listado no modules.txt. Só conta para a nota. */
 export function isListedVendorFile(relative: string, packages: ReadonlySet<string>): boolean {
   if (relative === 'modules.txt') return true;
   const slash = relative.lastIndexOf('/');
-  if (slash <= 0 || !packages.has(relative.slice(0, slash))) return false;
-  return !VENDOR_KEEP_EXAMINED.test(relative.slice(slash + 1));
+  return slash > 0 && packages.has(relative.slice(0, slash));
 }
 
 function goModRequirements(text: string): Map<string, string> {
@@ -85,13 +89,13 @@ async function readRegular(path: string, max: number): Promise<string | undefine
 export const VENDORED_REASON = 'pacotes Go de terceiros copiados em vendor e conferidos com o go.mod: fora do exame do modelo';
 
 /** Nota honesta para o relatório: o que saiu, a impressão digital e o que isso não cobre. */
-export function vendoredNote(entries: readonly {dir: string; files: number; digest?: string}[]): string {
-  const shown = entries.slice(0, 10).map(entry => `${entry.dir} (${entry.files} arquivos${entry.digest ? `, sha256 ${entry.digest}` : ''})`).join(', ');
+export function vendoredNote(entries: readonly {dir: string; files: number; unlisted?: number; digest?: string}[]): string {
+  const shown = entries.slice(0, 10).map(entry => `${entry.dir} (${entry.files} arquivos${entry.unlisted ? `, ${entry.unlisted} fora dos pacotes listados` : ''}${entry.digest ? `, sha256 ${entry.digest}` : ''})`).join(', ');
   const more = entries.length > 10 ? ` e mais ${entries.length - 10} pastas` : '';
-  return `Arquivos de pacotes Go de terceiros em vendor, declarados no go.mod e no modules.txt, ficaram fora do exame do modelo: ${shown}${more}. `
+  return `Arquivos de pastas vendor do Go, com módulos declarados no go.mod e no modules.txt, ficaram fora do exame do modelo: ${shown}${more}. `
     + 'Isso não prova que o código seja de terceiros: uma alteração local no código copiado não é detectada pelo modelo. '
     + 'As ferramentas do módulo que leem o repositório continuam lendo a pasta. A impressão digital mostra num reexame se esses arquivos mudaram. '
-    + 'Scripts e os arquivos fora dos pacotes listados seguem as regras normais do exame.';
+    + 'Scripts (.sh, .ps1, .lua, .py, .js e afins) seguem as regras normais do exame.';
 }
 
 /**

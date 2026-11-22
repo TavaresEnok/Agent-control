@@ -22,22 +22,24 @@ async function goRepo(over: {goMod?: string | null; modules?: string} = {}): Pro
   await writeFile(join(backend, 'vendor', 'github.com', 'lib', 'pq', 'conn.go'), 'package pq\n');
   await writeFile(join(backend, 'vendor', 'github.com', 'lib', 'pq', 'oid', 'types.go'), 'package oid\n');
   await writeFile(join(backend, 'vendor', 'golang.org', 'x', 'text', 'unicode', 'norm', 'norm.go'), 'package norm\n');
-  // Fora dos pacotes listados: vai ao exame, mesmo dentro de vendor.
+  // Fora dos pacotes listados: sai do exame como o resto de vendor, contado à parte na nota.
   await writeFile(join(backend, 'vendor', 'github.com', 'lib', 'pq', 'extra', 'porta.go'), 'package extra\n');
   await writeFile(join(backend, 'internal', 'app.go'), 'package internal\n');
   return root;
 }
 
-test('módulo 1: só os pacotes listados e conferidos com o go.mod saem; o resto de vendor é examinado', async () => {
+test('módulo 1: num vendor conferido com o go.mod todo arquivo regular sai, listado ou não; scripts ficam', async () => {
   const root = await goRepo();
   try {
     const vendored: VendoredFiles[] = [];
     const files = await listExamFiles(root, vendored);
-    assert.deepEqual(files, ['backend/go.mod', 'backend/internal/app.go', 'backend/vendor/github.com/lib/pq/extra/porta.go']);
+    assert.deepEqual(files, ['backend/go.mod', 'backend/internal/app.go']);
     assert.equal(vendored.length, 1);
     assert.equal(vendored[0]?.dir, 'backend/vendor');
+    assert.equal(vendored[0]?.unlisted, 1);
     assert.deepEqual(vendored[0]?.files.sort(), [
       'backend/vendor/github.com/lib/pq/conn.go',
+      'backend/vendor/github.com/lib/pq/extra/porta.go',
       'backend/vendor/github.com/lib/pq/oid/types.go',
       'backend/vendor/golang.org/x/text/unicode/norm/norm.go',
       'backend/vendor/modules.txt',
@@ -92,7 +94,7 @@ test('pacote fora do módulo do cabeçalho, ou antes de qualquer cabeçalho, dev
   }
 });
 
-test('num pacote listado só saem fontes Go, C e assembly e avisos de licença', async () => {
+test('em vendor conferido só scripts vão ao exame; fontes Go, C, assembly, licenças e artefatos soltos saem', async () => {
   const root = await goRepo();
   try {
     const pq = join(root, 'backend', 'vendor', 'github.com', 'lib', 'pq');
@@ -103,8 +105,23 @@ test('num pacote listado só saem fontes Go, C e assembly e avisos de licença',
     await writeFile(join(pq, 'LICENSE.ts'), 'export {};\n');
     await writeFile(join(pq, 'NOTICE.js'), 'module.exports = 1;\n');
     await writeFile(join(pq, 'LICENSE.md'), '# MIT\n');
+    // Fora de qualquer pacote listado, como os scripts e artefatos do autor que o go mod vendor não copia.
+    const loose = join(root, 'backend', 'vendor', 'github.com', 'x', 'tool');
+    await mkdir(loose, {recursive: true});
+    await writeFile(join(loose, 'regen.sh'), '#!/bin/sh\necho\n');
+    await writeFile(join(loose, 'wrk.lua'), 'print(1)\n');
+    await writeFile(join(loose, 'testdata.json'), '{}\n');
     const vendored: VendoredFiles[] = [];
     const files = await listExamFiles(root, vendored);
+    assert.ok(files.includes('backend/vendor/github.com/x/tool/regen.sh'), 'script solto em vendor vai ao exame');
+    assert.ok(files.includes('backend/vendor/github.com/x/tool/wrk.lua'));
+    assert.equal(files.includes('backend/vendor/github.com/x/tool/testdata.json'), false);
+    assert.ok(vendored[0]?.files.includes('backend/vendor/github.com/x/tool/testdata.json'));
+    assert.equal(vendored[0]?.unlisted, 2, 'porta.go e testdata.json estão fora dos pacotes listados');
+    const map = await mapModuleSnapshot(root);
+    assert.ok(map.files.some(row => row.file === 'backend/vendor/github.com/x/tool/regen.sh' && row.code !== null));
+    assert.equal(map.files.some(row => row.file === 'backend/vendor/github.com/x/tool/testdata.json'), false);
+    assert.equal(map.vendored?.[0]?.unlisted, 2);
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/handler.ts'));
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/build.sh'));
     assert.ok(files.includes('backend/vendor/github.com/lib/pq/LICENSE.ts'), 'nome de licença com extensão de código vai ao exame');
@@ -125,17 +142,19 @@ test('módulos 2 a 9: a pasta aparece com o motivo e a contagem, e a nota diz o 
       const map = await mapModuleSnapshot(root, undefined, {aggregateOmissions: aggregate});
       assert.equal(map.vendored?.length, 1);
       assert.equal(map.vendored?.[0]?.dir, 'backend/vendor');
-      assert.equal(map.vendored?.[0]?.files, 4);
+      assert.equal(map.vendored?.[0]?.files, 5);
+      assert.equal(map.vendored?.[0]?.unlisted, 1);
       assert.match(map.vendored?.[0]?.digest ?? '', /^[0-9a-f]{64}$/);
       assert.equal(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/conn.go'), false);
-      assert.ok(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/extra/porta.go' && row.code !== null));
+      assert.equal(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/extra/porta.go'), false);
       assert.ok(map.files.some(row => row.file === 'backend/internal/app.go' && row.code !== null));
     }
     const first = (await mapModuleSnapshot(root)).vendored?.[0]?.digest;
     await writeFile(join(root, 'backend', 'vendor', 'github.com', 'lib', 'pq', 'conn.go'), 'package pq\n// porta\n');
     assert.notEqual((await mapModuleSnapshot(root)).vendored?.[0]?.digest, first, 'a impressão digital muda com o código copiado');
-    const note = vendoredNote([{dir: 'backend/vendor', files: 4, digest: 'a'.repeat(64)}]);
-    assert.match(note, /backend\/vendor \(4 arquivos, sha256 a{64}\)/);
+    const note = vendoredNote([{dir: 'backend/vendor', files: 5, unlisted: 1, digest: 'a'.repeat(64)}]);
+    assert.match(note, /backend\/vendor \(5 arquivos, 1 fora dos pacotes listados, sha256 a{64}\)/);
+    assert.match(note, /Scripts \(\.sh, \.ps1, \.lua, \.py, \.js e afins\) seguem as regras normais do exame/);
     assert.match(note, /não prova que o código seja de terceiros/);
   } finally {
     await rm(root, {recursive: true, force: true});

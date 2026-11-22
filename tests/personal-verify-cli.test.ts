@@ -1,10 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
+import {mkdir, mkdtemp, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {setImmediate} from 'node:timers/promises';
 import {Refusal, type Authority} from '../src/contracts.ts';
 import type {Ledger} from '../src/ledger.ts';
-import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease, verifyCliFailureText} from '../src/personal-verify-cli.ts';
+import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease, runPersonalVerifySession, verifyCliFailureText} from '../src/personal-verify-cli.ts';
 import {createCapacityNativeWorker, type SecurityExamSupervisor} from '../src/verify-native-launch.ts';
 import type {VerifyWorkerCall} from '../src/verify-types.ts';
 
@@ -203,4 +206,39 @@ test('DESIGN_REVIEWER_UNAVAILABLE no validador orienta rodar preparar --aplicar'
 test('VERIFY_RECHECK_NEW_EXAM_REQUIRED orienta novo exame de segurança', () => {
   const text = verifyCliFailureText(new Refusal('VERIFY_RECHECK_NEW_EXAM_REQUIRED', 409));
   assert.match(text, /novo exame de segurança/i);
+});
+
+test('exame com arquivo sem julgamento: a CLI diz incompleta e recusa com VERIFY_EXAM_INCOMPLETE sem marcar a execução como falha', async ({mock}) => {
+  const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-cli-'));
+  const projectId = randomUUID();
+  const authority: Authority = {contextId: randomUUID(), instanceId: randomUUID(), epoch: 1};
+  const queries: string[] = [];
+  const ledger = {heartbeat: async () => {}, pool: {query: async (sql: string) => { queries.push(sql); return {rows: [], rowCount: 0}; }}};
+  const lines: string[] = [];
+  mock.method(console, 'log', (line: string) => { lines.push(line); });
+  try {
+    const session = (status: string) => {
+      const id = randomUUID();
+      const begin = (async (input: {observe?: (job: Promise<void>) => void}) => {
+        const folder = join(dataDirectory, 'verificacoes', projectId, 'andamento');
+        await mkdir(folder, {recursive: true});
+        await writeFile(join(folder, `${id}.json`), JSON.stringify({id, status, phase: 'done', startedAt: new Date().toISOString(), judged: 3, total: 5, pending: 2}));
+        input.observe?.(Promise.resolve());
+        return {id, status: 'running' as const, phase: 'ferramentas'};
+      }) as never;
+      const resolved = {input: {ledger, authority, worker: {run: async () => ''}, dataDirectory, projectId}, close: async () => {}} as never;
+      return {id, run: runPersonalVerifySession(resolved, {begin})};
+    };
+    const incomplete = session('incomplete');
+    await assert.rejects(incomplete.run, (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_EXAM_INCOMPLETE');
+    assert.ok(lines.includes(`Verificação ${incomplete.id} incompleta: 2 de 5 arquivos sem julgamento.`));
+    assert.equal(lines.some(line => line.includes('concluída')), false);
+    assert.equal(queries.some(sql => sql.includes("status='failed'")), false, 'a execução e a intenção seguem como terminadas');
+    assert.match(verifyCliFailureText(new Refusal('VERIFY_EXAM_INCOMPLETE')), /terminou incompleta/);
+    const done = session('done');
+    assert.equal(await done.run, done.id);
+    assert.ok(lines.includes(`Verificação ${done.id} concluída.`));
+  } finally {
+    await rm(dataDirectory, {recursive: true, force: true});
+  }
 });

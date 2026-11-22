@@ -2,7 +2,7 @@ import {lstat, readdir, readFile, realpath} from 'node:fs/promises';
 import {groupByBudget, sha256Text} from './exam-batch-proof.ts';
 import {basename, extname, isAbsolute, join, relative, sep} from 'node:path';
 import type {ChecklistItem} from './verify-types.ts';
-import {goVendorPackages, isListedVendorFile} from './vendored-dirs.ts';
+import {goVendorPackages, isListedVendorFile, isVendoredFile} from './vendored-dirs.ts';
 
 /** Input-token budget and file count per examiner call. `false` means one file per call. Absent keeps the historical slice of 15. */
 export type SecurityBatch = {tokens: number; files: number} | false;
@@ -14,14 +14,19 @@ const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', '.ai', 'verifi
 const SLICE_SIZE = 15;
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py']);
 
-export type VendoredFiles = {dir: string; files: string[]};
+/** `unlisted`: quantos dos arquivos estão fora dos pacotes listados no modules.txt. */
+export type VendoredFiles = {dir: string; files: string[]; unlisted?: number};
+
+/** Módulo 1: arquivos que não são código de produção e saem do modelo, por classe. As ferramentas e a confirmação continuam lendo. */
+export type AuxiliaryFiles = {testes: string[]; documentacao: string[]; gerados: string[]};
 
 /**
  * Lista do exame do modelo. `vendored` recebe, por pasta vendor do Go conferida com o go.mod,
- * os arquivos de pacotes de terceiros que ficaram fora da lista. Eles continuam legíveis
- * para confirmar achados das ferramentas.
+ * os arquivos de terceiros que ficaram fora da lista. Eles continuam legíveis
+ * para confirmar achados das ferramentas. Com `auxiliary`, testes, documentação e arquivos
+ * gerados também saem da lista, separados por classe.
  */
-export async function listExamFiles(repo: string, vendored?: VendoredFiles[], binaries?: string[]): Promise<string[]> {
+export async function listExamFiles(repo: string, vendored?: VendoredFiles[], binaries?: string[], auxiliary?: AuxiliaryFiles): Promise<string[]> {
   const root = await realpath(repo);
   const info = await lstat(root);
   if (!info.isDirectory()) throw new Error('REPOSITORIO_INVALIDO');
@@ -31,7 +36,11 @@ export async function listExamFiles(repo: string, vendored?: VendoredFiles[], bi
   // Sem a lista `binaries`, o comportamento antigo fica (outros chamadores).
   const found: string[] = [];
   for (const file of listed) {
-    if (binaries !== undefined && await binaryOrHuge(join(root, file))) binaries.push(file);
+    if (binaries === undefined && auxiliary === undefined) { found.push(file); continue; }
+    const head = await sniff(join(root, file));
+    if (binaries !== undefined && head !== undefined && (head === 'huge' || head.includes(0))) { binaries.push(file); continue; }
+    const kind = auxiliary === undefined ? null : auxiliaryKind(file, head === 'huge' ? undefined : head);
+    if (kind) auxiliary![kind].push(file);
     else found.push(file);
   }
   found.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
@@ -41,19 +50,41 @@ export async function listExamFiles(repo: string, vendored?: VendoredFiles[], bi
 const BINARY_SNIFF = 8192;
 const EXAM_TEXT_LIMIT = 2_000_000;
 
-async function binaryOrHuge(path: string): Promise<boolean> {
+/** The first bytes of the file, or 'huge' above the text limit. Undefined when unreadable: left in the list, the examiner reports it. */
+async function sniff(path: string): Promise<Buffer | 'huge' | undefined> {
   const {open} = await import('node:fs/promises');
   const handle = await open(path, 'r').catch(() => undefined /* unreadable: left in the list, the examiner reports it */);
-  if (!handle) return false;
+  if (!handle) return undefined;
   try {
     const info = await handle.stat();
-    if (info.size > EXAM_TEXT_LIMIT) return true;
+    if (info.size > EXAM_TEXT_LIMIT) return 'huge';
     const buffer = Buffer.alloc(Math.min(BINARY_SNIFF, info.size));
     const {bytesRead} = await handle.read(buffer, 0, buffer.length, 0);
-    return buffer.subarray(0, bytesRead).includes(0);
+    return buffer.subarray(0, bytesRead);
   } finally {
     await handle.close();
   }
+}
+
+const TEST_DIRECTORIES = new Set(['test', 'tests', '__tests__', '__mocks__', 'testdata', 'spec', 'e2e']);
+const TEST_NAME = /(?:_test\.go|\.(?:test|spec)\.[cm]?[jt]sx?|_test\.py)$|^test_.+\.py$/iu;
+const DOC_NAME = /\.(?:md|mdx|markdown|rst|adoc|txt)$/iu;
+// Lists the build reads, not prose.
+const NOT_DOC = /^(?:requirements|constraints)[\w.-]*\.txt$|^cmakelists\.txt$|^robots\.txt$/iu;
+const LOCKFILE = /^(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.ya?ml|go\.sum|cargo\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|uv\.lock)$/iu;
+const API_SPEC = /^(?:openapi|swagger)\.(?:json|ya?ml)$/iu;
+// Marker in a comment on one of the first lines: Go's "Code generated ... DO NOT EDIT", @generated, "This file was auto-generated".
+const GENERATED_HEADER = /^\s*(?:\/\/|#|\/\*+|\*|--|<!--)\s*(?:Code generated\b.*\bDO NOT EDIT\b|@generated\b|This file (?:was|is|has been) (?:auto-?generated|automatically generated|generated)\b)/imu;
+
+/** Class of a module 1 file kept out of the model, or null for production code. `head` is the start of the file when readable. */
+export function auxiliaryKind(file: string, head?: Buffer): keyof AuxiliaryFiles | null {
+  const parts = file.split('/');
+  const base = parts.at(-1)!;
+  if (TEST_NAME.test(base) || parts.slice(0, -1).some(part => TEST_DIRECTORIES.has(part.toLowerCase()))) return 'testes';
+  if (DOC_NAME.test(base) && !NOT_DOC.test(base)) return 'documentacao';
+  if (LOCKFILE.test(base) || API_SPEC.test(base)) return 'gerados';
+  if (head && GENERATED_HEADER.test(head.toString('utf8').split('\n', 5).join('\n'))) return 'gerados';
+  return null;
 }
 
 type VendorScope = {base: string; packages: ReadonlySet<string>; bucket: VendoredFiles};
@@ -82,9 +113,11 @@ async function walk(root: string, dir: string, found: string[], vendored: Vendor
     }
     if (!entry.isFile()) continue;
     const file = toPosix(relative(root, absolute));
-    // Arquivo de pacote listado no modules.txt: fora do modelo. Qualquer outro arquivo em vendor vai ao exame.
-    if (scope !== undefined && isListedVendorFile(toPosix(relative(scope.base, absolute)), scope.packages)) {
+    // Arquivo regular de vendor conferido: fora do modelo, menos script, que vai ao exame.
+    const inVendor = scope === undefined ? undefined : toPosix(relative(scope.base, absolute));
+    if (scope !== undefined && inVendor !== undefined && isVendoredFile(inVendor)) {
       scope.bucket.files.push(file);
+      if (!isListedVendorFile(inVendor, scope.packages)) scope.bucket.unlisted = (scope.bucket.unlisted ?? 0) + 1;
       continue;
     }
     found.push(file);

@@ -24,7 +24,7 @@ test('mapa inventaria fontes e rotas, omitindo credenciais, links e arquivos gra
     await writeFile(join(dir, 'src', 'routes.ts'), expressApp + 'app.get("/pedidos", handler);\nconst token = "sintetico-privado";');
     await writeFile(join(dir, '.env'), 'DADO_SINTETICO_NAO_LER');
     await writeFile(join(dir, 'pem-in-code.txt'), '-----BEGIN PRIVATE KEY-----\nsynthetic-pem-only\n-----END PRIVATE KEY-----\napp.get("/depois", handler);');
-    await writeFile(join(dir, 'huge.ts'), 'x'.repeat(17000));
+    await writeFile(join(dir, 'huge.ts'), 'x'.repeat(64_001));
     const sql = '\uFEFF-- Consulta\r\nSELECT 1;\r\n';
     await writeFile(join(dir, 'query.sql'), sql);
     await symlink('.env', join(dir, 'link'));

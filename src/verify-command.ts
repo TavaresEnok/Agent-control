@@ -39,12 +39,15 @@ export const NETWORK_COMMAND_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 60_000;
 
 /** Economy options of a project that shape one exam. The panel and the CLI both build them here, so the same project and inventory give the same map, tasks and slices. */
-export type ExamRunOptions = {mapEnabled: boolean; batch: SecurityBatch; pollBackoff: boolean};
-export function examRunOptions(economy: {map?: boolean; batch?: boolean; batchTokens?: number; batchFiles?: number; managerDiscipline?: boolean} | undefined): ExamRunOptions {
+export type ExamRunOptions = {mapEnabled: boolean; batch: SecurityBatch; pollBackoff: boolean; productionOnly: boolean};
+export function examRunOptions(economy: {map?: boolean; batch?: boolean; batchTokens?: number; batchFiles?: number; managerDiscipline?: boolean;
+  securityProductionOnly?: boolean} | undefined): ExamRunOptions {
   return {
     mapEnabled: economy?.map !== false,
     batch: economy?.batch === false ? false : {tokens: economy?.batchTokens ?? 40_000, files: economy?.batchFiles ?? 8},
     pollBackoff: economy?.managerDiscipline !== false,
+    // Module 1 sends only production code to the model; `securityProductionOnly: false` turns it off for the project.
+    productionOnly: economy?.securityProductionOnly !== false,
   };
 }
 
@@ -74,6 +77,7 @@ export type PersonalVerificationInput = {
   mapEnabled?: boolean;
   batch?: SecurityBatch;
   pollBackoff?: boolean;
+  productionOnly?: boolean;
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   accountRoot?: string;
   allowedAccountIds?: readonly string[];
@@ -142,6 +146,8 @@ export type VerificationProgress = {
   /** Arquivos já julgados pelo examinador e total a julgar, durante a fase de exame. */
   judged?: number;
   total?: number;
+  /** Status `incomplete`: arquivos que terminaram sem julgamento do examinador. */
+  pending?: number;
 };
 
 type ReadyVerification = {
@@ -163,6 +169,7 @@ type ReadyVerification = {
   mapEnabled?: boolean;
   batch?: SecurityBatch;
   pollBackoff?: boolean;
+  productionOnly?: boolean;
   wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
   accountRoot?: string;
   allowedAccountIds?: readonly string[];
@@ -172,7 +179,8 @@ type ReadyVerification = {
 
 type ProgressState = {
   id: string;
-  status: 'running' | 'done' | 'failed';
+  /** `incomplete`: the report exists, but files stayed without the examiner's judgment or the report is partial. */
+  status: 'running' | 'done' | 'incomplete' | 'failed';
   phase: string;
   startedAt: string;
   note?: string;
@@ -180,6 +188,7 @@ type ProgressState = {
   durationMs?: number;
   judged?: number;
   total?: number;
+  pending?: number;
 };
 
 function isErrno(error: unknown, code: string): boolean {
@@ -218,6 +227,7 @@ function requireReady(input: PersonalVerificationInput): ReadyVerification {
     mapEnabled: input.mapEnabled,
     batch: input.batch,
     pollBackoff: input.pollBackoff,
+    productionOnly: input.productionOnly,
     ...(input.wait ? {wait: input.wait} : {}),
     modelCallBudget: typeof input.modelCallBudget === 'number' ? input.modelCallBudget : undefined,
     accountRoot: typeof input.accountRoot === 'string' && input.accountRoot.length > 0 ? input.accountRoot : undefined,
@@ -296,6 +306,7 @@ function renderProgress(state: ProgressState): string {
     body.judged = state.judged;
     body.total = state.total;
   }
+  if (state.pending !== undefined) body.pending = state.pending;
   return `${JSON.stringify(body)}\n`;
 }
 
@@ -596,6 +607,7 @@ async function runJob(input: {
         mapEnabled: ready.mapEnabled,
         batch: ready.batch,
         pollBackoff: ready.pollBackoff,
+        productionOnly: ready.productionOnly,
         startedMs,
         timeLimitMs: ready.timeLimitMs,
         ...(ready.wait ? {wait: ready.wait} : {}),
@@ -608,10 +620,14 @@ async function runJob(input: {
         ? await runResolvedPersonalSecurityVerification(verification)
         : await runSecurityVerification(verification);
       if (result.partial) state.note = `Relatório parcial: parou ${result.partial.point} por falta de orçamento de chamadas do modelo.${state.note ? ` ${state.note}` : ''}`;
+      const pending = result.pendingFiles.length;
+      if (pending) state.note = `Exame incompleto: ${pending} de ${result.examFiles} arquivos sem julgamento do examinador.${state.note ? ` ${state.note}` : ''}`;
       const unavailable = collected.tools.filter(tool => tool.state === 'indisponivel' || tool.state === 'truncada');
       if (unavailable.length) state.note = `${state.note ? `${state.note} ` : ''}Ferramentas sem resultado completo: ${unavailable.map(tool => tool.name).join(', ')}.`;
       await progressWrites;
-      state.status = 'done';
+      // A partial report or a file without judgment is not a finished exam, even though the report is saved.
+      state.status = result.partial || pending ? 'incomplete' : 'done';
+      if (state.status === 'incomplete') { state.pending = pending; state.total = result.examFiles; state.judged = result.examFiles - pending; }
       state.phase = 'done';
       state.modelCalls = modelCalls.count;
       state.durationMs = Date.now() - startedMs;
@@ -747,6 +763,7 @@ export async function readVerificationProgress(dataDirectory: string, projectId:
       item.judged = row.judged as number;
       item.total = row.total as number;
     }
+    if (Number.isSafeInteger(row.pending) && (row.pending as number) >= 0) item.pending = row.pending as number;
     rows.push(item);
   }
   rows.sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id));
@@ -912,6 +929,7 @@ export async function resolvePersonalVerification(
         mapEnabled: examRunOptions(project.economy).mapEnabled,
         batch: examRunOptions(project.economy).batch,
         pollBackoff: examRunOptions(project.economy).pollBackoff,
+        productionOnly: examRunOptions(project.economy).productionOnly,
         url: parsed.url,
         dataDirectory: config.dataDirectory,
         accountRoot: personalAccountRoot(config),

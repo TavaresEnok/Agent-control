@@ -265,6 +265,24 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     const reports = await listSecurityReports(dataDirectory, project);
     assert.equal(reports.some(item => item.id === begun.id && item.note.includes(HOMOLOGATION_NOTE)), true);
     assert.equal(networkCalled, false);
+
+    // An examiner that never answers a valid exam leaves the file without judgment: the report is saved, the progress is not 'done'.
+    const unjudged: VerifyWorker = {async run(call) {
+      return call.task.startsWith('Pedido de exame.') ? 'isto não é JSON' : benchWorker().run(call);
+    }};
+    let second: Promise<void> | undefined;
+    const again = await beginPersonalVerification({projectId: project, url: 'http://127.0.0.1:9/app', dataDirectory, repoPath: repo, commit,
+      ledger: db, principal, authority, policyRevision: 1, worker: unjudged, databasesDirectory: databases, image, modelCalls: {count: 0},
+      networkRunner: async () => ({code: 0, stdout: 'true'}), runTools: async () => {}, observe: job => { second = job; }});
+    await second;
+    const incomplete = (await readVerificationProgress(dataDirectory, project)).find(row => row.id === again.id);
+    assert.equal(incomplete?.status, 'incomplete');
+    assert.equal(incomplete?.phase, 'done');
+    assert.equal(incomplete?.pending, 1);
+    assert.equal(incomplete?.total, 1);
+    assert.match(incomplete?.note ?? '', /^Exame incompleto: 1 de 1 arquivos sem julgamento do examinador\./);
+    const run = (await db.pool.query('SELECT status FROM ac_verify_runs WHERE id=$1', [again.id])).rows[0];
+    assert.equal(run?.status, 'done', 'o relatório gravado continua utilizável');
   } finally {
     releaseTools();
     if (observed) await observed.catch(() => undefined);
