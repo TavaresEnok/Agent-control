@@ -443,12 +443,16 @@ export function satisfiesRange(versionStr, rangeSpec) {
   return Boolean(semver.valid(versionStr) && semver.validRange(rangeSpec) !== null && semver.satisfies(versionStr, rangeSpec));
 }
 
-/** Classifies update risk and module severity from current and target semver specifiers. */
+/**
+ * Classifies update risk and module severity from current and target semver specifiers.
+ * Being outdated is not a defect: a major gap is low and the rest informative. Known
+ * vulnerabilities come from OSV and Grype with their own severity.
+ */
 export function classifySemverRisk(currentSpec, targetSpec) {
   const cur = minVersionFromSpec(String(currentSpec || ''));
   const tgt = minVersionFromSpec(String(targetSpec || ''));
   if (!cur || !tgt) {
-    return {diff: 'desconhecida', severity: 'media', rule: 'NCU-OUTDATED-RANGE', riskLabel: 'moderado'};
+    return {diff: 'desconhecida', severity: 'informativa', rule: 'NCU-OUTDATED-RANGE', riskLabel: 'moderado'};
   }
   let diff = 'outdated';
   if (cur.major !== tgt.major) diff = 'major';
@@ -457,15 +461,15 @@ export function classifySemverRisk(currentSpec, targetSpec) {
   else if (cur.pre.length > 0 || tgt.pre.length > 0) diff = 'prerelease';
 
   if (diff === 'major') {
-    return {diff, severity: 'alta', rule: 'NCU-OUTDATED-MAJOR', riskLabel: 'alto (mudança major)'};
+    return {diff, severity: 'baixa', rule: 'NCU-OUTDATED-MAJOR', riskLabel: 'alto (mudança major)'};
   }
   if (diff === 'minor') {
-    return {diff, severity: 'media', rule: 'NCU-OUTDATED-MINOR', riskLabel: 'médio (mudança minor)'};
+    return {diff, severity: 'informativa', rule: 'NCU-OUTDATED-MINOR', riskLabel: 'médio (mudança minor)'};
   }
   if (diff === 'patch' || diff === 'prerelease') {
-    return {diff, severity: 'baixa', rule: 'NCU-OUTDATED-PATCH', riskLabel: 'baixo (correção patch)'};
+    return {diff, severity: 'informativa', rule: 'NCU-OUTDATED-PATCH', riskLabel: 'baixo (correção patch)'};
   }
-  return {diff, severity: 'media', rule: 'NCU-OUTDATED-RANGE', riskLabel: 'moderado'};
+  return {diff, severity: 'informativa', rule: 'NCU-OUTDATED-RANGE', riskLabel: 'moderado'};
 }
 
 /** Loads offline/mounted JSON registry snapshot safely. */
@@ -1845,6 +1849,46 @@ export function validateModuleOutput(doc) {
   return doc;
 }
 
+const MAX_AGGREGATE_EVIDENCE = 2000;
+
+/**
+ * Junta as atualizações do npm-check-updates num achado por regra e manifesto, com os
+ * pacotes na mensagem e a evidência de cada um numa linha (até o limite do contrato).
+ */
+export function aggregateOutdatedFindings(findings) {
+  const groups = new Map();
+  const kept = [];
+  for (const finding of findings) {
+    if (finding.tool !== 'npm-check-updates' || !finding.rule.startsWith('NCU-OUTDATED-')) {
+      kept.push(finding);
+      continue;
+    }
+    const key = `${finding.rule}\0${finding.file}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      kept.push(groups.get(key));
+    }
+    groups.get(key).push(finding);
+  }
+  return kept.map(entry => {
+    if (!Array.isArray(entry)) return entry;
+    if (entry.length === 1) return entry[0];
+    const items = [...entry].sort((a, b) => a.line - b.line);
+    const names = items.map(item => /^Dependência "([^"]+)"/.exec(item.message)?.[1] ?? '?');
+    let evidence = '';
+    let listed = 0;
+    for (const item of items) {
+      const next = evidence ? `${evidence}\n${item.evidence}` : item.evidence;
+      if (next.length > MAX_AGGREGATE_EVIDENCE - 40) break;
+      evidence = next;
+      listed += 1;
+    }
+    if (listed < items.length) evidence += `\ne mais ${items.length - listed} dependência(s)`;
+    const message = `${items.length} dependências desatualizadas (${items[0].rule}) em ${items[0].file}: ${names.join(', ')}`;
+    return {...items[0], message: message.length > MAX_AGGREGATE_EVIDENCE ? `${message.slice(0, MAX_AGGREGATE_EVIDENCE - 1)}…` : message, evidence};
+  });
+}
+
 /** Runs the full Module 4 (dependencias) collection against repoRoot. */
 export async function runCollection(options = {}) {
   const repoRoot = resolve(options.repoRoot ?? process.env.AC_MODULE_REPO ?? '/repo');
@@ -1981,7 +2025,7 @@ export async function runCollection(options = {}) {
         ...copyCoverage,
       ],
       findings: [
-        ...ncuRes.findings,
+        ...aggregateOutdatedFindings(ncuRes.findings),
         ...astGrepRes.findings,
         ...jscodeshiftRes.findings,
         ...sbomLockRes.findings,
