@@ -486,6 +486,8 @@ test('execução running no ledger ou no andamento responde 409 e não chama fer
   const runningLedger = {
     pool: {query: async (sql: string) => {
       assert.match(sql, /ac_verify_runs/);
+      // Um módulo 2 a 10 rodando não bloqueia a segurança: só uma rodada de segurança conta.
+      assert.match(sql, /module = 'verify'/);
       return {rows: [{present: 1}], rowCount: 1};
     }},
   } as unknown as Ledger;

@@ -488,7 +488,9 @@ async function assertVerificationAvailable(ready: ReadyVerification): Promise<vo
   const pool = ready.ledger.pool as {query?: (sql: string, params: readonly unknown[]) => Promise<{rows?: unknown; rowCount?: unknown}>} | undefined;
   if (typeof pool?.query === 'function') {
     const found = await pool.query(
-      "SELECT 1 AS present FROM ac_verify_runs WHERE project_id = $1 AND status = 'running' LIMIT 1",
+      // Only a security run (module 'verify') blocks another one: the modules 2 to 10 keep their own lock per module and
+      // run side by side with module 1.
+      "SELECT 1 AS present FROM ac_verify_runs WHERE project_id = $1 AND module = 'verify' AND status = 'running' LIMIT 1",
       [ready.projectId],
     );
     const rows = found?.rows;
