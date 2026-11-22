@@ -85,16 +85,26 @@ test('a limpeza tira o sticky das pastas próprias, apaga tudo e não segue link
   const {chmod, mkdir, mkdtemp, writeFile, symlink, stat} = await import('node:fs/promises');
   const {tmpdir} = await import('node:os');
   const {join} = await import('node:path');
-  const {removeDesignScratch} = await import('../src/design-containers.ts');
+  const {designScratchRoot, removeDesignScratch} = await import('../src/design-containers.ts');
   const outside = await mkdtemp(join(tmpdir(), 'design-fora-'));
   await writeFile(join(outside, 'manter.txt'), 'x');
-  const root = await mkdtemp(join(tmpdir(), 'design-login-teste-'));
+  const root = await mkdtemp(join(tmpdir(), 'design-login-'));
   await mkdir(join(root, 'out'));
   await chmod(join(root, 'out'), 0o1777);
   await writeFile(join(root, 'out', 'state.json'), '{}');
   await symlink(outside, join(root, 'out', 'link'));
-  await removeDesignScratch(root);
+  // O estado do caminho da imagem (out/state.json) e o do host (state.json) acham a mesma raiz.
+  assert.equal(await designScratchRoot(join(root, 'out', 'state.json')), root);
+  assert.equal(await designScratchRoot(join(root, 'state.json')), root);
+  // Fora de uma pasta design-* filha do tmp, nada é apagado.
+  assert.equal(await designScratchRoot(join(outside, 'manter.txt')), undefined);
+  assert.equal(await removeDesignScratch(tmpdir()), false);
+  assert.equal(await removeDesignScratch(outside), false);
+  assert.equal(await removeDesignScratch(join(root, 'out')), false, 'só a raiz, nunca uma subpasta');
+  assert.equal((await stat(join(outside, 'manter.txt'))).isFile(), true);
+  assert.equal(await removeDesignScratch(root), true);
   await assert.rejects(stat(root));
   assert.equal((await stat(join(outside, 'manter.txt'))).isFile(), true);
-  await removeDesignScratch(outside);
+  const {rm} = await import('node:fs/promises');
+  await rm(outside, {recursive: true, force: true});
 });

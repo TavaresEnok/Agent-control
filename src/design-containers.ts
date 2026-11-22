@@ -59,22 +59,55 @@ export function resetDesignContainersForTest(): void {
   remover = name => removeByDocker(name);
 }
 
+const SCRATCH = /^design-(?:login|img)-[A-Za-z0-9]{6}$/;
+
+/**
+ * A pasta de trabalho do design que contém `path`: a primeira ancestral `design-login-XXXXXX`
+ * ou `design-img-XXXXXX` filha direta do tmp. Fora disso, nenhuma.
+ */
+export async function designScratchRoot(path: string): Promise<string | undefined> {
+  const {realpath} = await import('node:fs/promises');
+  const {tmpdir} = await import('node:os');
+  const {basename, dirname, resolve} = await import('node:path');
+  const temp = await realpath(tmpdir()).catch(() => undefined);
+  if (temp === undefined) return undefined;
+  let current = resolve(path);
+  for (let depth = 0; depth < 6; depth += 1) {
+    if (dirname(current) === temp && SCRATCH.test(basename(current))) return current;
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+  return undefined;
+}
+
 /**
  * Apaga uma pasta de trabalho do design. As pastas que o contêiner (uid 65532) escreve ficam
  * com sticky bit, e o sticky impede o host de apagar arquivos de outro uid. O host é dono das
  * pastas: tira o sticky de cada uma (sem seguir link) e então apaga tudo.
+ * Só aceita uma pasta design-login-* ou design-img-* filha direta do tmp, do próprio uid e que não
+ * seja link. Nunca lança: a limpeza não pode trocar o resultado nem o erro do exame.
  */
-export async function removeDesignScratch(path: string): Promise<void> {
-  const {chmod, lstat, readdir, rm} = await import('node:fs/promises');
-  const {join} = await import('node:path');
-  const own = process.getuid?.();
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > 8) return;
-    const info = await lstat(dir).catch(() => undefined);
-    if (!info || !info.isDirectory() || info.isSymbolicLink() || (own !== undefined && info.uid !== own)) return;
-    await chmod(dir, 0o700).catch(() => undefined /* the removal below reports what it can */);
-    for (const name of await readdir(dir).catch(() => [] as string[])) await walk(join(dir, name), depth + 1);
-  };
-  await walk(path, 0);
-  await rm(path, {recursive: true, force: true});
+export async function removeDesignScratch(path: string): Promise<boolean> {
+  try {
+    const {chmod, lstat, readdir, rm} = await import('node:fs/promises');
+    const {join} = await import('node:path');
+    const root = await designScratchRoot(path);
+    if (root === undefined || root !== (await import('node:path')).resolve(path)) return false;
+    const own = process.getuid?.();
+    const top = await lstat(root);
+    if (!top.isDirectory() || top.isSymbolicLink() || (own !== undefined && top.uid !== own)) return false;
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > 4) return;
+      const info = await lstat(dir).catch(() => undefined);
+      if (!info || !info.isDirectory() || info.isSymbolicLink() || (own !== undefined && info.uid !== own)) return;
+      await chmod(dir, 0o700).catch(() => undefined /* the removal below reports what it can */);
+      for (const name of await readdir(dir).catch(() => [] as string[])) await walk(join(dir, name), depth + 1);
+    };
+    await walk(root, 0);
+    await rm(root, {recursive: true, force: true});
+    return true;
+  } catch {
+    return false;
+  }
 }

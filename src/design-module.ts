@@ -1,5 +1,5 @@
 import type {ModuleExamBatch} from './module-exam.ts';
-import {removeDesignScratch} from './design-containers.ts';
+import {designScratchRoot, removeDesignScratch} from './design-containers.ts';
 import {assertDiskSpaceForLaunch,launchVolumesOf} from './personal-disk.ts';
 import {constants, existsSync} from 'node:fs';
 import {lstat, mkdtemp, open, readFile, rm} from 'node:fs/promises';
@@ -212,7 +212,11 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       });
     } finally {
       // A pasta inteira do login sai, com o state.json que o uid da imagem gravou.
-      if (loginDir !== undefined) await removeDesignScratch(dirname(loginDir));
+      if (loginState !== undefined) {
+        const scratch = await designScratchRoot(loginState);
+        if (scratch !== undefined) await removeDesignScratch(scratch);
+        else await rm(loginDir!, {recursive: true, force: true}).catch(() => undefined /* best-effort; the exam result stays */);
+      }
     }
   })();
   if (image && !image.ok) {

@@ -34,7 +34,6 @@ async function storageSnapshot(page) {
   }
 }
 
-/** Segundo fator ou outra senha na tela: o login não terminou. */
 /** 'oculto' só quando o campo de senha comprovadamente não está na tela. Erro de leitura não conta. */
 async function passwordState(page) {
   try {
@@ -54,6 +53,7 @@ async function selectorVisible(page, selector) {
   }
 }
 
+/** Segundo fator ou outra senha na tela: o login não terminou. */
 async function secondStepVisible(page) {
   try {
     const step = page.locator('input[type=password], input[autocomplete="one-time-code"]');
