@@ -1,6 +1,6 @@
 import {constants} from 'node:fs';
 import {lstat, open, realpath, rm} from 'node:fs/promises';
-import {join, resolve, sep} from 'node:path';
+import {join, sep} from 'node:path';
 import {endRound} from './personal-artifact-hooks.ts';
 import type {Ledger} from './ledger.ts';
 import {fenceInstallationContext} from './installation-authority-fence.ts';
@@ -67,10 +67,10 @@ async function readRunningMarker(path: string): Promise<string|undefined> {
 
 async function clearProgress(dataDirectory: string, projectId: string, runId: string): Promise<void> {
   if (!dataDirectory || dataDirectory.includes('\0') || !Uuid.test(projectId) || !Uuid.test(runId)) return;
-  const root = resolve(dataDirectory);
-  const dir = resolve(root, 'verificacoes', projectId, 'andamento');
-  if (!inside(root, dir)) return;
+  let dir: string;
   try {
+    const root = await realpath(dataDirectory);
+    dir = join(root, 'verificacoes', projectId, 'andamento');
     if (await realpath(dir) !== dir) return;
   } catch (error) {
     if (errno(error) === 'ENOENT') return;

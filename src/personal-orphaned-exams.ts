@@ -1,4 +1,5 @@
 import {Refusal} from './contracts.ts';
+import {failureCode} from './failure-log.ts';
 import type {Installation} from './installation.ts';
 import type {Ledger} from './ledger.ts';
 import {orphanedExamIntentSql} from './native-execution-shared.ts';
@@ -45,8 +46,8 @@ export async function recoverPersonalOrphanedExams(config: Installation, ledger:
    },apply);
    lines.push(`${job.id}: ${result==='eligible'?'exame órfão elegível para reconciliação':'exame órfão reconciliado, vaga liberada'}.`);
   } catch (error) {
-   if (manual || !(error instanceof Refusal)) throw error;
-   lines.push(`${job.id}: exame preservado (${error.code}).`);
+   if (manual) throw error;
+   lines.push(`${job.id}: exame preservado (${failureCode(error)}).`);
   }
  }
  return lines;

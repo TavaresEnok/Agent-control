@@ -107,8 +107,10 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
   if(row.grant_state!=='released'||row.grant_intent!==row.intent_id||row.grant_context!==row.context_id||row.grant_account!==row.account_id||row.grant_profile!==row.profile_id||row.grant_role!==row.role||row.resource_kind!=='model'||Number(row.grant_epoch)!==Number(row.manager_epoch))return refuse('grant_state');
   if(row.key_fingerprint!==this.fingerprint)return refuse('supervisor_identity');
   const receipt=row.receipt,payload=receipt?.payload,physical=row.physical_receipt,binding=row.binding,proof=row.proof;
+  const matchesState=payload&&((payload.exitCode===0)===(row.state==='completed')||
+   (row.state==='failed'&&payload.orphanedExam===true&&payload.failureCode==='NATIVE_EXAM_ORPHANED'));
   const receiptProven=this.receiptSignedByThisExecutor(receipt)&&payload.jobId===jobId&&payload.contextId===row.context_id&&payload.intentId===row.intent_id&&payload.grantId===row.grant_id&&payload.sessionId===row.session_id&&
-   payload.epoch===Number(row.manager_epoch)&&payload.inputDigest===row.input_digest&&payload.executorDigest===row.executor_digest&&(payload.exitCode===0)===(row.state==='completed')&&payload.executionStarted!==false&&
+   payload.epoch===Number(row.manager_epoch)&&payload.inputDigest===row.input_digest&&payload.executorDigest===row.executor_digest&&matchesState&&payload.executionStarted!==false&&
    Boolean(physical)&&payload.physicalDigest===digest(physical)&&physical.jobId===jobId&&physical.containerId===row.worker_id&&physical.toolsContainerId===row.tools_id&&physical.networkId===row.network_id;
   if(!receiptProven)return refuse('receipt');
   if(o.automatic){try{await this.directory(this.config.hostRoot);await this.directory(this.paths(jobId).root);}catch{return refuse('directory_unsafe');}}
