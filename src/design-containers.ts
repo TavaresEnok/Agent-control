@@ -77,7 +77,7 @@ export async function designScratchRoot(path: string): Promise<string | undefine
   const {realpath} = await import('node:fs/promises');
   const {tmpdir} = await import('node:os');
   const {basename, dirname, resolve} = await import('node:path');
-  const temp = await realpath(tmpdir()).catch(() => undefined);
+  const temp = await realpath(tmpdir()).catch(() => undefined /* no tmp root: nothing is treated as scratch, so nothing is removed */);
   if (temp === undefined) return undefined;
   let current = resolve(path);
   for (let depth = 0; depth < 6; depth += 1) {
@@ -107,7 +107,7 @@ export async function removeDesignScratch(path: string): Promise<boolean> {
     if (!top.isDirectory() || top.isSymbolicLink() || (own !== undefined && top.uid !== own)) return false;
     const walk = async (dir: string, depth: number): Promise<void> => {
       if (depth > 4) return;
-      const info = await lstat(dir).catch(() => undefined);
+      const info = await lstat(dir).catch(() => undefined /* gone already: nothing to unlock */);
       if (!info || !info.isDirectory() || info.isSymbolicLink() || (own !== undefined && info.uid !== own)) return;
       await chmod(dir, 0o700).catch(() => undefined /* the removal below reports what it can */);
       for (const name of await readdir(dir).catch(() => [] as string[])) await walk(join(dir, name), depth + 1);

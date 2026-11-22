@@ -75,9 +75,9 @@ function goModRequirements(text: string): Map<string, string> {
 }
 
 async function readRegular(path: string, max: number): Promise<string | undefined> {
-  const info = await lstat(path).catch(() => undefined);
+  const info = await lstat(path).catch(() => undefined /* missing manifest: the folder stays in the exam */);
   if (!info || !info.isFile() || info.isSymbolicLink() || info.size > max) return undefined;
-  return readFile(path, 'utf8').catch(() => undefined);
+  return readFile(path, 'utf8').catch(() => undefined /* unreadable manifest: the folder stays in the exam */);
 }
 
 export const VENDORED_REASON = 'pacotes Go de terceiros copiados em vendor e conferidos com o go.mod: fora do exame do modelo';
@@ -100,7 +100,7 @@ export async function vendoredDigest(vendorDir: string, relativeFiles: readonly 
   const {createHash} = await import('node:crypto');
   const hash = createHash('sha256');
   for (const file of [...relativeFiles].sort()) {
-    const body = await readFile(join(vendorDir, file)).catch(() => undefined);
+    const body = await readFile(join(vendorDir, file)).catch(() => undefined /* recorded as unreadable in the digest below */);
     hash.update(file).update('\0');
     if (body === undefined) hash.update('ilegivel\0');
     else hash.update(String(body.length)).update('\0').update(body);
