@@ -2022,3 +2022,17 @@ FIM
   - **Provas:** suíte completa com 322 arquivos ok e nenhuma falha. Na instalação viva: gateway `personal_ready`, painel 200, `auth/config` só com senha e `chat-log` lendo a conversa local.
   - **Efeito colateral:** sessões de navegador abertas com o token do Happier deixam de valer. Basta entrar de novo com usuário e senha.
 
+- 22/11/2026 01:30 UTC — **Módulo 10 (design) com as ideias de 10 ferramentas de design para agentes**, feito por Claude (sessão Claude Code) com subagentes Claude, a pedido do titular.
+  - **Análise:** Impeccable, gstack, UX/UI Agent Skills, UI UX Pro Max, Design Review (OneRedOak), Web Interface Guidelines (Vercel), Design Extract, Taste Skill, UI Skills e squirrelscan. Repositórios públicos lidos como dado, sem instalar nada, sem dependência nova. Plano consolidado com o que entra e o que sai, por ferramenta, com motivo.
+  - **Entrou:**
+    - base da prova por achado (medido, hipótese, preferência; preferência nunca conta como falha);
+    - "O que não foi possível verificar" preenchido e nota fixa de que nota alta não é certificação (W3C);
+    - relatório em Auditoria técnica, Crítica de design e Preferências; padrões repetidos; desde o último relatório; achados numerados por prioridade; sugestão por regra;
+    - 7 itens de checklist (estado na URL, envio de formulário, autocomplete, color-scheme, Intl, teclado do celular, espaço da imagem); telas .css recebem só itens de estilo;
+    - régua na página renderizada: rolagem horizontal (320 a 1440 px), texto cortado, imagem quebrada, fonte de campo abaixo de 16 px, sobras de modelo, gráfico sem alternativa, contraste no hover e no foco, movimento reduzido, título repetido; Tab real com foco encoberto; Lighthouse viewport e font-size;
+    - tokens: cores quase iguais agrupadas, entrelinha, link no texto fora do alvo, `DESIGN-ALVO-REFERENCIA` baixa no exame e alta só no criar; clique sem teclado; `transition: all`; tokens declarados do projeto; consistência entre telas; sinais de aparência genérica (seção informativa, desligável com `sinaisGenericos: false`).
+  - **Defeito antigo achado no laboratório:** o Node era o PID 1 do contêiner de design e não recolhia os Chrome encerrados; os zumbis enchiam o `--pids-limit` de 512 e o exame travava no Lighthouse. Agora o contêiner roda com `--init`, e cada rodada do Lighthouse tem teto de 120 s.
+  - **Revisões:** uma revisão independente só leitura por pacote (Claude Sonnet 5.5) e duas do conjunto (correção e segurança), registradas como "revisão independente por modelo Claude distinto". Todos os achados reais foram corrigidos. Não substitui revisão humana.
+  - **Provas:** suíte completa com 330 arquivos ok e nenhuma falha (1.789 testes); laboratório na imagem real `tests/design-lab-image.test.ts` com `AC_DESIGN_LAB=1`: 1 de 1, 538 s, todas as regras novas pegaram seus defeitos plantados e as telas corretas não disparam régua nem Tab.
+  - **Instalação viva:** backup `20261122-012639`; merge `3c60ef4a` em `task/personal-activation`; imagem `localhost:5000/ac-design:reconstrucao@sha256:be00392d7d47e5069a381b5676caf69a4e45284ef858e3a4e93c1eff561f51e7`; gateway reiniciado, `personal_ready`, painel 200.
+  - **Falta provar:** comparação antes e depois num projeto real (defeitos reais achados, alarmes falsos e efeito no modo criar).
