@@ -41,7 +41,7 @@ export type TerminalWorkRelease={jobId:string;state:'eligible'|'released'|'absen
 /** Test and diagnostics hook: called with the job lock held, after the plan is recorded, and just before the tree is removed. */
 export type TerminalWorkObserver=(step:'locked'|'prepared'|'removing')=>Promise<void>;
 export type TerminalWorkOptions={principal:string;contextId:string;projectId?:string;repository?:string;categories:readonly TerminalWorkCategory[];failed:boolean;lease?:Authority;automatic?:boolean;observe?:TerminalWorkObserver};
-export type TerminalWorkJudgment={category:TerminalWorkCategory;terminalDigest:string;checkOutput:(output:FileHandle)=>Promise<void>;checkWork?:(signal:AbortSignal)=>Promise<boolean>};
+export type TerminalWorkJudgment={category:TerminalWorkCategory;terminalDigest:string;retireReviewArtifact?:boolean;checkOutput:(output:FileHandle)=>Promise<void>;checkWork?:(signal:AbortSignal)=>Promise<boolean>};
 /** Explicit classification for automatic work retention. Read-only: the role never receives a writable `/work` (the physical launch inspection
  * refuses it) and the workflow is one that runs such evaluators. Programmer: the workflows whose programmer finalizes a registered artifact.
  * Anything else (for instance a specialist advising an engineering run) is unclassified and keeps its copy. */

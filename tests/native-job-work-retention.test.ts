@@ -27,15 +27,16 @@ test('the inventory is one pass over the job root and the cursor makes runs roun
  const area=await mkdtemp(join(tmpdir(),'ac-inventory-'));
  try{
   const root=join(area,'root');await mkdir(root,{mode:0o700});await chmod(root,0o700);
-  const withWork=[randomUUID(),randomUUID(),randomUUID()],without=[randomUUID(),randomUUID()];
-  for(const id of [...withWork,...without]){await mkdir(join(root,id));await mkdir(join(root,id,'output'));}
+  const withWork=[randomUUID(),randomUUID(),randomUUID()],withReviewOnly=randomUUID(),without=[randomUUID(),randomUUID()];
+  for(const id of [...withWork,withReviewOnly,...without]){await mkdir(join(root,id));await mkdir(join(root,id,'output'));}
   for(const id of withWork)await mkdir(join(root,id,'work'));
+  await mkdir(join(root,withReviewOnly,'review-artifact'));
   await writeFile(join(root,without[0]!,'work.log'),'not work');
   await mkdir(join(root,'not-a-job','work'),{recursive:true});await writeFile(join(root,'stray-file'),'x');
   await symlink(join(root,withWork[0]!),join(root,randomUUID()));
   const found=await inventoryJobWork(root);
-  assert.deepEqual(found.ids,[...withWork].sort());
-  assert.equal(found.scanned,5);
+  assert.deepEqual(found.ids,[...withWork,withReviewOnly].sort());
+  assert.equal(found.scanned,6);
   await chmod(root,0o755);await assert.rejects(inventoryJobWork(root),/Unsafe job directory/);
   assert.deepEqual(rotateAfter(['a','b','c','d'],undefined),['a','b','c','d']);
   assert.deepEqual(rotateAfter(['a','b','c','d'],'b'),['c','d','a','b']);
@@ -260,6 +261,8 @@ test('automatic job retention frees only proven categories, with the gateway run
    await writeFile(join(root,'output','execution-result.json'),JSON.stringify({schemaVersion:1,jobId,output:'',exitCode:code,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:failed?'synthetic_failure':null}),{mode:0o600});
    if(o.request!=='missing')await writeFile(join(root,'request.json'),JSON.stringify(o.request==='tampered'?{...request,task:'another task'}:request),{mode:0o600});
    await writeFile(join(root,'review-artifact','a.txt'),'artifact');
+   await writeFile(join(root,'review-artifact','copy.ts'),'r'.repeat(600));
+   await symlink(outside,join(root,'review-artifact','link-out'));
    await writeFile(join(root,'worker-terminal.log'),'log');
    if(!programmer&&o.work!=='none'&&!o.checkout){
     await mkdir(join(work,'src'),{recursive:true});await writeFile(join(work,'src','index.ts'),'x'.repeat(1000));
@@ -269,11 +272,12 @@ test('automatic job retention frees only proven categories, with the gateway run
    return {jobId,contextId,root,work,intentId,grantId,sessionId,receipt,request,artifact};
   };
   type Planted=Awaited<ReturnType<typeof plant>>;
-  const intact=async(p:Planted)=>{
-   for(const name of ['input','output','planning','review-artifact'])assert.ok(await exists(join(p.root,name)),name+' kept');
+  const intact=async(p:Planted,reviewKept=false)=>{
+   for(const name of ['input','output','planning'])assert.ok(await exists(join(p.root,name)),name+' kept');
+   assert.equal(await exists(join(p.root,'review-artifact')),reviewKept,'review-artifact');
+   if(reviewKept&&(await lstat(join(p.root,'review-artifact'))).isDirectory())assert.equal(await readFile(join(p.root,'review-artifact','a.txt'),'utf8'),'artifact');
    assert.equal(JSON.parse(await readFile(join(p.root,'output','execution-result.json'),'utf8')).jobId,p.jobId);
    if(await exists(join(p.root,'request.json')))assert.equal(JSON.parse(await readFile(join(p.root,'request.json'),'utf8')).jobId,p.jobId);
-   assert.equal(await readFile(join(p.root,'review-artifact','a.txt'),'utf8'),'artifact');
    assert.equal(await readFile(join(p.root,'worker-terminal.log'),'utf8'),'log');
   };
   const outsideIntact=async()=>assert.equal(await readFile(join(outside,'precious.txt'),'utf8'),'must survive');
@@ -327,18 +331,21 @@ test('automatic job retention frees only proven categories, with the gateway run
    const p=await plant(item.o);planted.set(item.label,p);
    const preview=await retire(p,false);
    assert.ok(await exists(p.work),item.label+': preview removes nothing');
+   assert.ok(await exists(join(p.root,'review-artifact')),item.label+': preview keeps review-artifact');
    const result=await retire(p,true);
    const [state,detail]=item.expect.split(':');
    assert.equal(result.state,state,item.label+' '+JSON.stringify(result));
+   const keepReview=result.state==='refused'||item.o.role==='programmer'||item.o.workflow==='design-readonly-v1';
    if(result.state==='refused'){
     assert.equal(result.reason,detail,item.label);assert.ok(await exists(p.work),item.label+': work kept');
     assert.equal(preview.state,'refused',item.label);
     assert.equal(await audits(p.jobId,'native.exam_work_release_planned'),0,item.label+': no plan recorded');
    }else{
     assert.equal(result.category,detail,item.label);assert.equal(preview.state,'eligible',item.label);
+    if(!keepReview&&detail==='passive-exam')assert.ok((preview.bytes??0)>=1600,item.label+': preview counts both work and review-artifact');
     assert.equal(await exists(p.work),false,item.label+': work gone');assert.equal(await audits(p.jobId),1,item.label);
    }
-   await intact(p);await outsideIntact();
+   await intact(p,keepReview);await outsideIntact();
   }
 
   // The artifact stays durable after the retirement: its private ref was created by CAS, survives garbage collection, is not moved by
@@ -372,11 +379,12 @@ test('automatic job retention frees only proven categories, with the gateway run
     const result=await supervisor.retireTerminalWork(owner,p.jobId,true,{...scope(p),observe:async seen=>{if(seen===step)await terminateHolder(p.jobId);}});
     assert.deepEqual(result,{jobId:p.jobId,state:'refused',reason:'session_lost'},step+' '+o.role);
     assert.ok(await exists(join(p.work,'.git')),step+': work untouched');
+    assert.ok(await exists(join(p.root,'review-artifact')),step+': review-artifact untouched');
     assert.equal(await audits(p.jobId),0);
     assert.equal(await audits(p.jobId,'native.exam_work_release_planned'),step==='locked'?0:1,step);
     const again=await retire(p,true);
     assert.equal(again.state,'released',step+' retried '+JSON.stringify(again));
-    assert.equal(await exists(p.work),false);assert.equal(await audits(p.jobId),1);await intact(p);
+    assert.equal(await exists(p.work),false);assert.equal(await audits(p.jobId),1);await intact(p,o.role==='programmer');
    }
   }
 
@@ -385,10 +393,11 @@ test('automatic job retention frees only proven categories, with the gateway run
    const p=await plant(o);await mutate(p);
    const result=await retire(p,true);
    assert.deepEqual([result.state,(result as {reason?:string}).reason],['refused',reason],label);
-   assert.ok(await exists(p.work),label+': work kept');await intact(p);
+   assert.ok(await exists(p.work),label+': work kept');await intact(p,true);
   };
   await refused('grant not released','grant_state',async()=>undefined,{grantState:'reserved'});
   await refused('work is a symlink','work_unsafe',async p=>{await rm(p.work,{recursive:true});await symlink(outside,p.work);});
+  await refused('review-artifact is a symlink','work_unsafe',async p=>{await rm(join(p.root,'review-artifact'),{recursive:true});await symlink(outside,join(p.root,'review-artifact'));});
   await refused('result no longer matches the receipt','receipt',p=>writeFile(join(p.root,'output','execution-result.json'),JSON.stringify({schemaVersion:1,jobId:p.jobId,output:'other',exitCode:0,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null})));
   const missingResult=await plant();
   await rm(join(missingResult.root,'output','execution-result.json'));
@@ -481,6 +490,22 @@ test('automatic job retention frees only proven categories, with the gateway run
   assert.equal(await audits(crashed.jobId,'native.exam_work_absent_after_plan'),1);
   await runPersonalJobRetention(config,true);
   assert.equal(await audits(crashed.jobId,'native.exam_work_absent_after_plan'),1);
+  assert.equal(await exists(join(crashed.root,'review-artifact')),false,'remaining review-artifact of a job whose work was already gone is also retired');
+  await intact(crashed,false);
+  // A passive exam job whose work was already retired in a previous run (with both planned and released in ac_audit) still has its remaining review-artifact retired and repeated idempotently.
+  const legacyRetired=await plant();
+  const legacySnap={job:await identify(legacyRetired.root),work:await identify(legacyRetired.work),bytes:1000};
+  for(const kind of ['native.exam_work_release_planned','native.exam_work_released'])
+   await db.pool.query('INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,$2,$3)',[legacyRetired.contextId,kind,{jobId:legacyRetired.jobId,terminalDigest:digest(legacyRetired.receipt),snapshot:legacySnap}]);
+  await rm(legacyRetired.work,{recursive:true});
+  const legacyPreview=await retire(legacyRetired,false);
+  assert.equal(legacyPreview.state,'eligible');
+  assert.ok(legacyPreview.state==='eligible'&&(legacyPreview.bytes??0)>=600);
+  const legacyApplied=await retire(legacyRetired,true);
+  assert.equal(legacyApplied.state,'released');
+  await intact(legacyRetired,false);
+  assert.deepEqual(await retire(legacyRetired,true),{jobId:legacyRetired.jobId,state:'absent'});
+  assert.deepEqual(await retire(legacyRetired,false),{jobId:legacyRetired.jobId,state:'absent'});
 
   // Budget and deadline stop early and leave a cursor behind; the next run resumes after it.
   const cursorRuns=[];for(let i=0;i<3;i++)cursorRuns.push(await plant());

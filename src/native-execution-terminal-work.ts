@@ -10,11 +10,11 @@ import {readPrivateWorkerFile} from './native-worker-security.ts';
 import {Id,type ModuleExamWorkRelease,type TerminalWorkCategory,type TerminalWorkRefusal,type TerminalWorkRelease,type TerminalWorkObserver,type TerminalWorkOptions,type TerminalWorkJudgment,terminalWorkClass,terminalWorkLockKey,readonlyDesignExam,NativeExecutionRequest,type Input,Result,readonlySecurityExam} from './native-execution-shared.ts';
 import {NativeExecutionRetirement} from './native-execution-retirement.ts';
 export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirement{
- /** Frees only the `work` checkout copy of one finished passive security/module exam (specialist, `security-verify-readonly-v1`).
-  * The answer lives in output/execution-result.json and nothing reads `work` once the job is completed, its grant released and its
-  * terminal retirement signed as removed (containers and network gone). review-artifact, proofs, logs and sibling jobs are never touched.
-  * Runs under the context lease and the job row lock, so it serializes with reconcile and retirement. Idempotent: no `work` is `absent`.
-  * `apply=false` only inspects. Programmer, design and any job without the full proof are refused. */
+ /** Frees the `work` and `review-artifact` copies of one finished passive security/module exam (specialist, `security-verify-readonly-v1`), or only `work` for a passive design exam.
+  * The answer lives in output/execution-result.json and nothing reads those copies once the job is completed, its grant released and its
+  * terminal retirement signed as removed (containers and network gone). Design review-artifact, proofs, logs, output/, request.json and sibling jobs are never touched.
+  * Runs under the context lease and the job row lock, so it serializes with reconcile and retirement. Idempotent: when already gone, returns `absent`.
+  * `apply=false` only inspects. Programmer, unapproved design and any job without the full proof are refused. */
  async releaseModuleExamWork(principal:string,authority:Authority,jobId:string,apply:boolean):Promise<ModuleExamWorkRelease>{
   return await this.terminalWork(jobId,apply,{principal,contextId:authority.contextId,categories:['passive-exam'],failed:false,lease:authority}) as ModuleExamWorkRelease;
  }
@@ -180,7 +180,8 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
     throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
    }
   };
-  return {category,terminalDigest:digest(receipt),checkOutput,...(checkWork?{checkWork}:{})};
+  const retireReviewArtifact=(category==='passive-exam'||category==='readonly-evaluator')&&!readonlyDesignExam(row.workflow,row.role);
+  return {category,terminalDigest:digest(receipt),retireReviewArtifact,checkOutput,...(checkWork?{checkWork}:{})};
  }
  protected async terminalWork(jobId:string,apply:boolean,o:TerminalWorkOptions):Promise<TerminalWorkRelease>{
   Id.parse(jobId);Id.parse(o.contextId);
@@ -194,23 +195,38 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
   const follow=(session:pg.ClientBase)=>{session.on('error',lost);session.on('end',lost);return ()=>{session.off('error',lost);session.off('end',lost);};};
   type Phase='preview'|'prepare'|'release';
   // Everything one phase needs from the database, read under the caller's transaction.
-  type Seen={judged:TerminalWorkJudgment;previous?:Record<string,any>;completed?:Record<string,any>;snapshot?:WorkIdentity};
+  type Seen={judged:TerminalWorkJudgment;previous?:Record<string,any>;completed?:Record<string,any>;snapshot?:WorkIdentity;workCompleted:boolean;reviewArtifactCompleted:boolean};
+  const validSnapshot=(s:any):s is WorkIdentity=>Boolean(s)&&typeof s.job==='string'&&/^\d+:\d+$/.test(s.job)&&
+   (s.work!==undefined||s.reviewArtifact!==undefined)&&
+   (s.work===undefined||(typeof s.work==='string'&&/^\d+:\d+$/.test(s.work)))&&
+   (s.reviewArtifact===undefined||(typeof s.reviewArtifact==='string'&&/^\d+:\d+$/.test(s.reviewArtifact)))&&
+   Number.isSafeInteger(s.bytes)&&s.bytes>=0;
   const read=async(c:pg.PoolClient,phase:Phase,artifacts:'preview'|'pin'|'strict'):Promise<{refusal:TerminalWorkRefusal}|Seen>=>{
    const judged=await this.judgeTerminalWork(c,jobId,o,artifacts);
    if('refusal' in judged)return judged;
    try{await this.directory(this.config.hostRoot);await this.directory(this.paths(jobId).root);}catch{return {refusal:'directory_unsafe'};}
-   const audit=async(kind:string)=>(await c.query("SELECT detail FROM ac_audit WHERE context_id=$1 AND kind=$2 AND detail->>'jobId'=$3 LIMIT 1",[o.contextId,kind,jobId])).rows[0]?.detail;
-   const previous=await audit(planned),completed=await audit(released)??await audit(unattributed);
-   const snapshot=previous?.snapshot as WorkIdentity|undefined;
-   if(previous&&(previous.terminalDigest!==judged.terminalDigest||!snapshot||!/^\d+:\d+$/.test(snapshot.job)||!/^\d+:\d+$/.test(snapshot.work)||!Number.isSafeInteger(snapshot.bytes)))return {refusal:'retirement'};
+   const audits=(await c.query<{kind:string;detail:Record<string,any>}>(
+    "SELECT kind,detail FROM ac_audit WHERE context_id=$1 AND kind IN ($2,$3,$4) AND detail->>'jobId'=$5 ORDER BY id ASC",
+    [o.contextId,planned,released,unattributed,jobId])).rows;
+   for(const row of audits){
+    if(row.detail?.terminalDigest!==judged.terminalDigest||!validSnapshot(row.detail?.snapshot))return {refusal:'retirement'};
+   }
+   const plans=audits.filter(r=>r.kind===planned).map(r=>r.detail);
+   const completions=audits.filter(r=>r.kind===released||r.kind===unattributed).map(r=>r.detail);
+   if(completions.length>plans.length||plans.length-completions.length>1)return {refusal:'work_unsafe'};
+   const workCompleted=completions.some(d=>Boolean(d.snapshot?.work));
+   const reviewArtifactCompleted=completions.some(d=>Boolean(d.snapshot?.reviewArtifact));
+   const openPlan=plans.length>completions.length?plans.at(-1):undefined;
+   const previous=openPlan,completed=openPlan?undefined:completions.at(-1);
+   const snapshot=openPlan?.snapshot as WorkIdentity|undefined;
    if(phase==='release'&&(!snapshot||completed))return {refusal:'work_unsafe'};
-   return {judged,previous,completed,snapshot};
+   return {judged,previous,completed,snapshot,workCompleted,reviewArtifactCompleted};
   };
   // The checkout proof runs on the very directory that was (or is about to be) planned: same device and inode.
   const workUnchanged=async(seen:Seen,identity:string|undefined)=>{
    if(!seen.judged.checkWork)return true;
    const current=await lstat(this.paths(jobId).work,{bigint:true}).catch(()=>undefined/* absent work dir is a valid state, judged below */);
-   if(!current)return true; // Nothing left to protect; the removal step reports `absent`.
+   if(!current)return Boolean(seen.workCompleted||seen.snapshot?.work); // Nothing left to protect when work was already proven and retired.
    if(!current.isDirectory()||(identity&&current.dev+':'+current.ino!==identity))return false;
    return seen.judged.checkWork(canceled.signal);
   };
@@ -220,14 +236,17 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
     if(phase==='release'&&!await workUnchanged(seen,seen.snapshot?.work))return {refusal:canceled.signal.aborted?'session_lost':'unregistered_change'};
     if(phase==='release')await o.observe?.('removing');
     if(canceled.signal.aborted)return {refusal:'session_lost'};
-    const operation=await examineWorkTree(this.config.hostRoot,jobId,seen.judged.checkOutput,phase==='release'?seen.snapshot:undefined,canceled.signal);
+    const options=seen.snapshot
+     ?{work:seen.snapshot.work!==undefined,reviewArtifact:seen.snapshot.reviewArtifact!==undefined}
+     :{work:true,reviewArtifact:Boolean(seen.judged.retireReviewArtifact)};
+    const operation=await examineWorkTree(this.config.hostRoot,jobId,seen.judged.checkOutput,phase==='release'?seen.snapshot:undefined,canceled.signal,options);
     if(operation.state==='present'&&!await workUnchanged(seen,operation.snapshot.work))return {refusal:canceled.signal.aborted?'session_lost':'unregistered_change'};
     return operation;
    }
    catch(error){return {refusal:canceled.signal.aborted?'session_lost':error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_MISSING'?'output_missing':error instanceof Refusal&&error.code==='NATIVE_EXECUTION_OUTPUT_INVALID'?'receipt':'work_unsafe'};}
   };
   const conclude=async(c:pg.PoolClient,seen:Seen,phase:Phase,operation:WorkOperation):Promise<TerminalWorkRelease>=>{
-   const {previous,completed,snapshot,judged}=seen;
+   const {previous,completed,snapshot,judged,workCompleted,reviewArtifactCompleted}=seen;
    const record=async(kind:string,identity:WorkIdentity)=>c.query('INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,$2,$3)',[o.contextId,kind,{jobId,snapshot:identity,terminalDigest:judged.terminalDigest}]);
    const category=judged.category;
    if(phase==='release'&&snapshot){
@@ -239,13 +258,15 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
     if(phase==='prepare'&&snapshot&&!completed)return {jobId,state:'eligible' as const,bytes:snapshot.bytes,category};
     return {jobId,state:'absent' as const};
    }
-   if(operation.state!=='present'||completed)return refuse('work_unsafe');
-   if(snapshot&&(snapshot.job!==operation.snapshot.job||snapshot.work!==operation.snapshot.work))return refuse('work_unsafe');
+   if(operation.state!=='present'||(operation.snapshot.work&&workCompleted)||(operation.snapshot.reviewArtifact&&reviewArtifactCompleted))return refuse('work_unsafe');
+   if(snapshot&&(snapshot.job!==operation.snapshot.job||
+    (operation.snapshot.work!==undefined&&operation.snapshot.work!==snapshot.work)||
+    (operation.snapshot.reviewArtifact!==undefined&&operation.snapshot.reviewArtifact!==snapshot.reviewArtifact)))return refuse('work_unsafe');
    if(phase==='prepare'&&!previous){
     if(canceled.signal.aborted)return refuse('session_lost');
     await record(planned,operation.snapshot);
    }
-   return {jobId,state:'eligible' as const,bytes:operation.snapshot.bytes,category};
+   return {jobId,state:'eligible' as const,bytes:(snapshot??operation.snapshot).bytes,category};
   };
   if(o.lease){
    const leased=async(phase:Phase)=>this.ledger.tx(async c=>{

@@ -250,13 +250,14 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
  const lines:string[]=[];
  const totals={eligible:0,released:0,absent:0,refused:0,busy:0,failed:0,bytes:0};
  try{
-  const columns='j.id::text,j.context_id::text,x.project_id::text,j.account_id::text,j.key_fingerprint';
-  type Candidate={id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string};
+  const columns="j.id::text,j.context_id::text,x.project_id::text,j.account_id::text,j.key_fingerprint,i.command->'payload'->>'workflow' AS workflow";
+  type Candidate={id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string;workflow:string|null};
   const found=selection.projectId
    ?(await ledger.pool.query<Candidate>(`SELECT ${columns} FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id
+      JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id
       JOIN ac_native_terminal_retirements r ON r.job_id=j.id AND r.state='removed'
       WHERE x.project_id=$1 AND j.state='completed' AND j.role='specialist' AND ($2::uuid IS NULL OR j.id>$2) ORDER BY j.id LIMIT $3`,[selection.projectId,selection.after??null,MAX_WORK_BATCH])).rows
-   :(await ledger.pool.query<Candidate>(`SELECT ${columns} FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE j.id=ANY($1::uuid[])`,[selection.jobIds])).rows;
+   :(await ledger.pool.query<Candidate>(`SELECT ${columns} FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id JOIN ac_intents i ON i.id=j.intent_id AND i.context_id=j.context_id WHERE j.id=ANY($1::uuid[])`,[selection.jobIds])).rows;
   for(const id of selection.jobIds??[])if(!found.some(row=>row.id===id)){lines.push(`${id}: recusado (not_found).`);totals.refused++;}
   const supervisors=await composePersonalExecutionSupervisors(config,ledger);
   const owners=new Map<string,string|undefined>();
@@ -266,11 +267,14 @@ export async function releaseExamWorkFromInstallation(config:Installation,select
    lastId=row.id;
    const project=projects.find(item=>item.id===row.project_id);
    if(!project){lines.push(`${row.id}: recusado (project).`);totals.refused++;continue;}
-   // The limit counts jobs actually freed (or eligible), so refusals never starve a repeated batch. Jobs without `work` are skipped without a lease.
+   // The limit counts jobs actually freed (or eligible), so refusals never starve a repeated batch. Jobs without `work` (and `review-artifact`) are skipped without a lease.
    if(selection.projectId){
-    const present=await lstat(join(boot.execution.hostRoot,row.id,'work')).then(()=>true,(e:NodeJS.ErrnoException)=>e.code==='ENOENT'?false:null);
-    if(present===null){totals.failed++;lines.push(row.id+': não foi possível inspecionar work.');continue;}
-    if(!present && !(await ledger.pool.query("SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind='native.exam_work_release_planned' AND NOT EXISTS(SELECT 1 FROM ac_audit WHERE context_id=$1 AND detail->>'jobId'=$2 AND kind IN ('native.exam_work_released','native.exam_work_absent_after_plan')) LIMIT 1",[row.context_id,row.id])).rowCount){totals.absent++;continue;}
+    const statChild=(name:string)=>lstat(join(boot.execution.hostRoot,row.id,name)).then(()=>true,(e:NodeJS.ErrnoException)=>e.code==='ENOENT'?false:null);
+    const workPresent=await statChild('work');
+    const reviewPresent=workPresent===false&&!readonlyDesignExam(row.workflow,'specialist')?await statChild('review-artifact'):false;
+    if(workPresent===null||reviewPresent===null){totals.failed++;lines.push(row.id+': não foi possível inspecionar work.');continue;}
+    const present=workPresent||reviewPresent;
+    if(!present && !(await ledger.pool.query("SELECT 1 FROM ac_audit p WHERE p.context_id=$1 AND p.detail->>'jobId'=$2 AND p.kind='native.exam_work_release_planned' AND NOT EXISTS(SELECT 1 FROM ac_audit q WHERE q.context_id=p.context_id AND q.detail->>'jobId'=p.detail->>'jobId' AND q.kind IN ('native.exam_work_released','native.exam_work_absent_after_plan') AND q.id>p.id) LIMIT 1",[row.context_id,row.id])).rowCount){totals.absent++;continue;}
    }
    const principal=project.owner;
    if(!owners.has(project.id))owners.set(project.id,(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,principal])).rowCount?principal:undefined);
@@ -315,7 +319,7 @@ const RETENTION_PAGE=100;
  * on one advisory lock for the whole run plus one per job, so overlapping watch ticks and manual runs only skip each other.
  * The inventory is one readdir of the job root plus one lstat per job; a persistent cursor makes consecutive runs walk the whole inventory
  * round-robin, so jobs that never become eligible cannot hold back the ones behind them. Without `apply` nothing is removed.
- * Receipts, results, reports, review artifacts, logs and the database are never touched. */
+ * Receipts, results, reports, programmer and design review artifacts, logs and the database are never touched. */
 export async function runPersonalJobRetention(config:Installation,apply:boolean,options:JobRetentionOptions={}):Promise<string[]>{
  if(typeof apply!=='boolean')throw new Refusal('MAINTENANCE_USAGE');
  const limit=options.limit??100,deadlineMs=options.deadlineMs??15*60*1000;
@@ -337,7 +341,7 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
   // A plan whose release never reached the journal only needs its audit row closed; its work is already gone.
   if(apply)for(const row of (await ledger.pool.query<{id:string}>(
    `SELECT DISTINCT p.detail->>'jobId' id FROM ac_audit p WHERE p.kind='native.exam_work_release_planned' AND NOT EXISTS(
-     SELECT 1 FROM ac_audit q WHERE q.context_id=p.context_id AND q.kind IN ('native.exam_work_released','native.exam_work_absent_after_plan') AND q.detail->>'jobId'=p.detail->>'jobId') LIMIT 200`)).rows)
+     SELECT 1 FROM ac_audit q WHERE q.context_id=p.context_id AND q.kind IN ('native.exam_work_released','native.exam_work_absent_after_plan') AND q.detail->>'jobId'=p.detail->>'jobId' AND q.id>p.id) LIMIT 200`)).rows)
    if(Id.safeParse(row.id).success)candidates.add(row.id);
   const order=rotateAfter([...candidates].sort(),await readRetentionCursor(cursorFile));
   const supervisors=await composePersonalExecutionSupervisors(config,ledger);
