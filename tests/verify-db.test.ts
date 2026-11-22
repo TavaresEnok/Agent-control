@@ -770,12 +770,54 @@ test('uma poda espera a outra: com a trava de um processo vivo nada é apagado',
       directory: join(parent, '20261122-040008'), fetchedAt: new Date().toISOString(), manifestSha256: 'abc',
     }) + '\n', {mode: 0o600});
     await writeFile(join(parent, '.poda.lock'), JSON.stringify({pid: process.ppid}) + '\n', {mode: 0o600});
-    assert.deepEqual(await pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0}), []);
+    await assert.rejects(pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0}), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_DB_PRUNE_BUSY');
+    assert.ok((await stat(join(parent, '20261120-052924'))).isDirectory());
+    // The maintenance stage reports a busy prune as a failure, never as "0 removed".
+    await assert.rejects(runVerifyDatabaseRetention(data, true, {usedPercent: 96, image}), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_DB_PRUNE_BUSY');
+    // A lock that cannot be read counts as held while it is recent.
+    await writeFile(join(parent, '.poda.lock'), '', {mode: 0o600});
+    await assert.rejects(pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0}), (error: unknown) => error instanceof Refusal && error.code === 'VERIFY_DB_PRUNE_BUSY');
     assert.ok((await stat(join(parent, '20261120-052924'))).isDirectory());
     // Trava de um processo morto é trocada, e a poda segue.
     await writeFile(join(parent, '.poda.lock'), JSON.stringify({pid: 2 ** 22 + 12345}) + '\n', {mode: 0o600});
     assert.deepEqual(await pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0}), ['20261120-052924']);
     await assert.rejects(stat(join(parent, '.poda.lock')));
+  } finally {
+    await rm(data, {recursive: true, force: true});
+  }
+});
+
+test('uma base reivindicada entre a troca de nome e a segunda leitura volta com o mesmo nome e conteúdo', async () => {
+  const data = await privateDirectory();
+  try {
+    const parent = join(data, 'verify-db');
+    await mkdir(parent, {recursive: true, mode: 0o700});
+    const old = join(parent, '20261120-052924');
+    const current = join(parent, '20261122-040008');
+    await mkdir(old, {mode: 0o777});
+    await writeFile(join(old, 'manifest.json'), 'antiga');
+    await mkdir(current, {mode: 0o777});
+    await writeFile(join(parent, 'current.json'), JSON.stringify({
+      directory: current, fetchedAt: new Date().toISOString(), manifestSha256: 'abc',
+    }) + '\n', {mode: 0o600});
+    let seenMissing = false;
+    const removed = await pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0, afterAside: async (name) => {
+      assert.equal(name, '20261120-052924');
+      // A run claims it now: its own confirmation would see the base missing and refuse.
+      await claimVerifyDatabaseStamp(data, old, runLive);
+      seenMissing = !(await verifyDatabaseStampPresent(old));
+    }});
+    assert.deepEqual(removed, []);
+    assert.equal(seenMissing, true);
+    assert.equal(await readFile(join(old, 'manifest.json'), 'utf8'), 'antiga');
+    assert.deepEqual((await readdir(parent)).filter((name) => name.startsWith('.descarte-')), []);
+    await releaseVerifyDatabaseStamp(data, old, runLive);
+    // A second read that fails also puts the base back.
+    const removedAgain = await pruneVerifyDatabaseStamps(data, image, undefined, {keepRecent: 0, afterAside: async () => {
+      await writeFile(join(parent, 'in-use', `${runOther}.json`), '{ilegível', {mode: 0o600});
+    }});
+    assert.deepEqual(removedAgain, []);
+    assert.equal(await readFile(join(old, 'manifest.json'), 'utf8'), 'antiga');
   } finally {
     await rm(data, {recursive: true, force: true});
   }
