@@ -196,3 +196,14 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - Fast-forward de `task/personal-activation` para `b5e63df2`. Os 5 `catch` sem justificativa foram corrigidos.
   - Painel gerado de novo, com backup do `dist` anterior em `/tmp/claude-1000/`, e gateway reiniciado e ativo.
   - Trabalho ainda pausado, a pedido do titular.
+- 22/11/2026 15:10 UTC — **Supervisor: eficiência, a pedido do titular.**
+  - **AC-16:** `personal:tokens` mostrava os exames como "não medido". Agora soma o que foi medido e conta à parte as chamadas sem número.
+  - **AC-17:** binários e arquivos acima de 2 MB saem do modelo no módulo 1 (`backend/m2demo` tem 32 MB). Nos pacotes vendorizados também sai a documentação de terceiros. No ChatISP, 1.210 arquivos vão ao modelo, contra 9.183 antes da AC-15.
+  - **Gerente por evento:** o vigia roda a cada 5 min, só em shell, e acorda o gerente quando um processo termina ou aparece log novo. As sessões têm `--max-turns 30`, sem espera interna. O revisor roda com `--max-turns 25`. Backup do vigia em `ac-gerente-chatisp.sh.before-eventos-20261122`. O vigia continua **desligado** (pausa do titular).
+  - Tudo aplicado na instalação viva (`f4278810`) e gateway reiniciado.
+  - **Medição:** módulo 8 rodando sozinho pelo caminho novo, log em `exames/m8-medicao-ac17.log`.
+- 22/11/2026 16:55 UTC — **Supervisor: meta do titular**: os 10 módulos em menos de 2 h, com menos tokens e o máximo de eficácia. O trabalho só volta quando tudo estiver resolvido.
+  - **Medição do módulo 8 pelo caminho novo:** o exame do modelo não rodou. A sessão Claude da conta Enok Max na instalação tinha vencido às 13:24, e o acerto falhou com `NATIVE_EXECUTION_SCOPE_MISMATCH`. Mesmo assim a CLI gerou um relatório com 806 achados prováveis, 802 deles `DOC-TYPEDOC-SIMBOLO-SEM-DOC` com gravidade média, e a tabela de gravidade zerada.
+  - A renovação do produto, rodada à mão, funcionou: a sessão vale até 23/11 00:44.
+  - **Conta de chamadas hoje:** módulos 2 a 9 mandam os mesmos 1.053 arquivos cada, em lotes de 8, o que dá cerca de 1.130 chamadas e 5 a 6 h com 2 vagas. Falta o roteamento por módulo.
+  - Diagnóstico em andamento, com 5 analistas só leitura: roteamento, ruído, custo, confiabilidade e Ponytail.
