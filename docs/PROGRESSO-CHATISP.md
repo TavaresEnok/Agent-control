@@ -207,3 +207,60 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - A renovação do produto, rodada à mão, funcionou: a sessão vale até 23/11 00:44.
   - **Conta de chamadas hoje:** módulos 2 a 9 mandam os mesmos 1.053 arquivos cada, em lotes de 8, o que dá cerca de 1.130 chamadas e 5 a 6 h com 2 vagas. Falta o roteamento por módulo.
   - Diagnóstico em andamento, com 5 analistas só leitura: roteamento, ruído, custo, confiabilidade e Ponytail.
+- 22/11/2026 17:05 UTC — **Supervisor: diagnóstico concluído e implementação em andamento.** O diagnóstico teve 5 analistas, 0,55 M tokens e 33 achados, em `/tmp/claude-1000/diagnostico.json`.
+  - **Conta:** os módulos 2 a 9 caem de ~1.056 para ~118 chamadas, com roteamento por módulo e lote de 20 arquivos. As revisões de achados de ferramenta caem de ~2.160 possíveis para ~40 a 60, com triagem e amostra por regra.
+  - **Paralelismo:** pool com o número de vagas.
+  - **Módulo 1:** de 81 para ~48 fatias.
+  - **Eficácia:** 17 arquivos bloqueados por falso positivo de chave AWS e 161 arquivos acima de 16 kB voltam ao exame.
+  - **Confiabilidade:** exame sem modelo deixa de sair como concluído.
+  - **Ideia do Ponytail:** a regra de mudança mínima entra no prompt do programador, no aceite das correções, no modo criar do design e nas ordens.
+  - **Implementação em 4 pacotes,** cada um no seu worktree, com revisão adversária e rodada de correção:
+    - P1: motor dos módulos 2 a 9;
+    - P2: ruído dos coletores;
+    - P3: inventário e módulo 1;
+    - P4: lançamento e Ponytail.
+  - **Depois:** integração, suíte completa, reconstrução das imagens dos módulos, `evaluation_limit` 4 e a prova dos 10 módulos no ChatISP com medição de tempo e tokens.
+- 22/11/2026 18:45 UTC — **Supervisor: integração da eficiência** no worktree `ac-wt/integ-ef`, ramo `task/ef-integracao`, commit `733f98d0`.
+  - **Pacotes:** os 4 juntos sem conflito. P1 e P3 foram reprovados na primeira revisão e corrigidos; P2 e P4 aprovados com ressalvas. Foram 12 agentes e 2,5 M tokens.
+  - **Cola da integração:**
+    - `batchFiles` fica opcional: os módulos 2 a 9 usam 20, e o padrão 8 anulava isso;
+    - `scope` e `securityProductionOnly` entram por projeto;
+    - as regras medidas do P2 ficam fora do revisor;
+    - `productionOnly` passa a ir pelo painel;
+    - o código de login do recibo para o exame;
+    - o painel mostra o estado "incompleta".
+  - **Medido no ChatISP:**
+    - módulos 2 a 9 com ~125 lotes: qa 41, arquitetura 25, desempenho 20, banco 13, conformidade 13, documentação 7, prontidão 5, dependências 1;
+    - módulo 1 com 690 arquivos e ~46 fatias, sem 305 testes, 172 documentos e 14 gerados;
+    - os 17 arquivos que eram bloqueados por falso positivo de chave AWS voltaram.
+  - **Imagens novas fixadas no ramo:** documentação `96a94688`, arquitetura `2146e049`, qa `b205f867`, dependências `8176f79f` e conformidade `1ccb5925`.
+  - **Disco** chegou a 95% com as imagens. Removi pela regra do `AGENTS.md` 15 worktrees de ramos já integrados e limpos, com os ramos preservados (lista em `/tmp/claude-1000/worktrees-removidos.txt`). Voltou a 92%.
+  - **Em andamento:** suíte completa e revisão final com três lentes e céticos.
+- 22/11/2026 19:30 UTC — **Supervisor: revisão final da integração**, com três lentes (eficácia, correção, custo) e um cético por achado médio ou alto. Foram 15 agentes e 1,36 M tokens, com 11 achados reais confirmados. Correções em `7692203c`:
+  - fonte Go fora do `modules.txt` volta ao exame;
+  - pasta `vendor/` ou `third_party/` do projeto segue as regras do módulo;
+  - pastas de teste só contam na raiz ou logo abaixo de uma pasta de topo;
+  - banco reconhece acesso em TS e Python;
+  - arquivos julgados em parte aparecem pelo nome;
+  - o cabeçalho "generated" só vale de 8 kB para cima;
+  - módulo 1 volta a uma fatia por vez, porque a reserva simultânea dividia uma tentativa. Fica proposto: chavear a fila por pista em `exam-provider.ts`;
+  - regras medidas seguem na amostra de revisão, porque a correção pelo produto exige achado confirmado.
+  - Suíte completa rodando de novo.
+- 22/11/2026 19:25 UTC — **Supervisor: eficiência aplicada na instalação viva. Pausa retirada a pedido do titular.**
+  - **Versão viva:** ramo `task/personal-activation` em `af947319`. Backup `personal:backup` ok, painel reconstruído e gateway reiniciado.
+  - **Suíte:** 334 de 340 arquivos aprovados. As 4 regressões da integração foram corrigidas. Restam 3 falhas, que também falham no ramo vivo antes desta rodada: `installation.test.ts` (inicialização privada), `proposal-decision.test.ts` (concorrência) e, só na suíte em paralelo, `prontidao-cli`.
+  - **Imagens novas dos coletores**, fixadas e registradas: documentação `96a94688`, arquitetura `2146e049`, qa `b205f867`, dependências `8176f79f` e conformidade `1ccb5925`. As antigas foram registradas para a retenção.
+  - **Vagas:** `evaluation_limit` foi de 2 para 4 por `Capacity.configure`, revisão 1 → 2. O limite de 2 por contexto continua.
+  - **Login Enok Max na instalação** vale até 23/11 00:44 UTC. A homologação está de pé.
+  - **PRÓXIMO PASSO DO GERENTE (F1, rodada única):**
+    1. Rode **uma vez**: `bash /tmp/ac-gerente-chatisp/rodada-completa.sh`. Ele lança os 10 módulos de uma vez, a capacidade do produto serializa o excesso, e imprime a pasta da rodada, com `inicio.txt` e um log por módulo.
+    2. Registre aqui a pasta e encerre. Não relance enquanto houver processo da rodada. O vigia acorda você quando um módulo terminar.
+    3. A cada módulo que terminar, registre:
+       - situação, de `tail -n 40` do log;
+       - arquivos julgados;
+       - achados por gravidade, pela tabela "Por regra" do README do relatório;
+       - tempo desde `inicio.txt`.
+    4. Quando todos terminarem, rode `npm run personal:tokens -- /home/app/.agent-control/ispagent/installation.json --desde <inicio.txt>` e registre:
+       - tokens por modelo;
+       - tempo total, com meta abaixo de 2 h.
+       Só então abra a F3 (correções, trabalhadores Sonnet 5.5 alto ou Opus 5.5 médio, nunca junto com exame).
