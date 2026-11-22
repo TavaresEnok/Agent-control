@@ -205,10 +205,10 @@ function parseCoverage(value: readonly DesignCoverageRow[]): DesignCoverageRow[]
   });
 }
 
-function failureCounts(achados: readonly DesignAchado[]): DesignReportSummary['counts'] {
+function failureCounts(achados: readonly DesignAchado[], all = false): DesignReportSummary['counts'] {
   const counts = {alta: 0, media: 0, baixa: 0, informativa: 0};
   for (const achado of achados) {
-    if (achado.status === 'confirmado' || achado.status === 'reaberto') counts[achado.severity] += 1;
+    if (all ? achado.status !== 'descartado' : achado.status === 'confirmado' || achado.status === 'reaberto') counts[achado.severity] += 1;
   }
   return counts;
 }
@@ -617,6 +617,7 @@ function readme(input: {
   note: string;
   total: number;
   counts: DesignReportSummary['counts'];
+  totals: DesignReportSummary['counts'];
   discarded: number;
   emptyState?: 'capturado' | 'não deu';
   emptyStates?: readonly DesignReportEmptyState[];
@@ -640,14 +641,14 @@ function readme(input: {
     '',
     '## Contagem por gravidade',
     '',
-    'A contagem abaixo inclui só achados com situação confirmado ou reaberto.',
+    'A nota de falha considera só a coluna de achados com situação confirmado ou reaberto.',
     '',
-    '| Gravidade | Quantidade |',
-    '|---|---|',
-    `| alta | ${input.counts.alta} |`,
-    `| média | ${input.counts.media} |`,
-    `| baixa | ${input.counts.baixa} |`,
-    `| informativa | ${input.counts.informativa} |`,
+    '| Gravidade | Total sem descartados | Confirmados ou reabertos (nota de falha) |',
+    '|---|---|---|',
+    `| alta | ${input.totals.alta} | ${input.counts.alta} |`,
+    `| média | ${input.totals.media} | ${input.counts.media} |`,
+    `| baixa | ${input.totals.baixa} | ${input.counts.baixa} |`,
+    `| informativa | ${input.totals.informativa} | ${input.counts.informativa} |`,
     '',
     ...(input.trust ? [input.trust, ''] : []),
     ...(input.patterns ? ['## Padrões repetidos', '', input.patterns, ''] : []),
@@ -1022,6 +1023,7 @@ export async function writeDesignReport(input: DesignReportWriteInput): Promise<
       note: input.note,
       total: achados.length,
       counts,
+      totals: failureCounts(achados, true),
       discarded,
       emptyState,
       emptyStates: input.emptyStates,

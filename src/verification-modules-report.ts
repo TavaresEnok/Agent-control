@@ -85,12 +85,48 @@ export function moduleReportDirectoryName(createdAt: Date, runId: string, module
   return `${stampOf(createdAt)}-${reportSuffix(runId)}-${module}`;
 }
 
-export function failureCounts(achados: readonly Achado[]): ModuleReportSummary['counts'] {
+export function failureCounts(achados: readonly Achado[], all = false): ModuleReportSummary['counts'] {
   const counts = {alta: 0, media: 0, baixa: 0, informativa: 0};
   for (const achado of achados) {
-    if (achado.status === 'confirmado' || achado.status === 'reaberto') counts[achado.severity] += 1;
+    if (all ? achado.status !== 'descartado' : achado.status === 'confirmado' || achado.status === 'reaberto') counts[achado.severity] += 1;
   }
   return counts;
+}
+
+const SEVERITY_ORDER: readonly Achado['severity'][] = ['alta', 'media', 'baixa', 'informativa'];
+const RULE_TABLE_LIMIT = 20;
+
+/** Severity table: every finding, and the confirmed or reopened ones that set the failure note. */
+function severityTable(counts: ModuleReportSummary['counts'], achados?: readonly Achado[]): string[] {
+  if (!achados) {
+    return ['| Gravidade | Quantidade |', '|---|---|', ...SEVERITY_ORDER.map(level => `| ${SEVERITY_LABEL[level]} | ${counts[level]} |`)];
+  }
+  const totals = failureCounts(achados, true);
+  return ['| Gravidade | Total sem descartados | Confirmados ou reabertos (nota de falha) |', '|---|---|---|',
+    ...SEVERITY_ORDER.map(level => `| ${SEVERITY_LABEL[level]} | ${totals[level]} | ${counts[level]} |`)];
+}
+
+/** The rules with the most findings, so a flood from one tool shows at a glance. */
+function ruleTable(achados: readonly Achado[]): string[] {
+  const groups = new Map<string, {count: number; severity: Achado['severity']; statuses: Map<Achado['status'], number>}>();
+  for (const achado of achados) {
+    const group = groups.get(achado.reference) ?? {count: 0, severity: achado.severity, statuses: new Map()};
+    group.count += 1;
+    if (SEVERITY_ORDER.indexOf(achado.severity) < SEVERITY_ORDER.indexOf(group.severity)) group.severity = achado.severity;
+    group.statuses.set(achado.status, (group.statuses.get(achado.status) ?? 0) + 1);
+    groups.set(achado.reference, group);
+  }
+  const rows = [...groups].sort(([a, left], [b, right]) => right.count - left.count || a.localeCompare(b));
+  return [
+    '## Por regra',
+    '',
+    ...(rows.length > RULE_TABLE_LIMIT ? [`As ${RULE_TABLE_LIMIT} regras com mais achados, de ${rows.length}.`, ''] : []),
+    '| Regra | Achados | Maior gravidade | Situação |',
+    '|---|---|---|---|',
+    ...rows.slice(0, RULE_TABLE_LIMIT).map(([reference, group]) => `| ${tableCell(reference)} | ${group.count} | ${SEVERITY_LABEL[group.severity]} | ${
+      [...group.statuses].map(([status, count]) => `${STATUS_LABEL[status]} ${count}`).join(', ')} |`),
+    '',
+  ];
 }
 
 function pt(count: number, singular: string, plural: string): string {
@@ -178,6 +214,8 @@ export function renderModuleReadme(input: {
   counts: ModuleReportSummary['counts'];
   discarded: number;
   toolCoverage: readonly ModuleToolCoverage[];
+  /** With the findings, the severity table also shows totals and a per-rule table follows. */
+  achados?: readonly Achado[];
 }): string {
   const title = MODULE_TITLES[input.module];
   const failing = input.counts.alta + input.counts.media + input.counts.baixa + input.counts.informativa;
@@ -201,13 +239,9 @@ export function renderModuleReadme(input: {
     '',
     '## Contagem por gravidade',
     '',
-    '| Gravidade | Quantidade |',
-    '|---|---|',
-    `| alta | ${input.counts.alta} |`,
-    `| média | ${input.counts.media} |`,
-    `| baixa | ${input.counts.baixa} |`,
-    `| informativa | ${input.counts.informativa} |`,
+    ...severityTable(input.counts, input.achados),
     '',
+    ...(input.achados?.length ? ruleTable(input.achados) : []),
     '## Nota de falha',
     '',
     failureNote(input.counts, failedTools.length),
@@ -468,6 +502,7 @@ export async function writeModuleReport(input: {
         counts,
         discarded,
         toolCoverage,
+        achados,
       })),
     },
     {segments: ['mapa.md'], body: guardReportText(mapMarkdown)},

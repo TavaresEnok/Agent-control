@@ -253,11 +253,11 @@ test('grava o relatorio privado, a contagem e a leitura', async () => {
     assert.match(readme, /--network design-homologation/);
     assert.match(readme, /## Estado vazio/);
     assert.match(readme, /Não houve registro de estado vazio: a captura não aconteceu\./);
-    assert.match(readme, /A contagem abaixo inclui só achados com situação confirmado ou reaberto\./);
-    assert.match(readme, /\| alta \| 1 \|/);
-    assert.match(readme, /\| média \| 1 \|/);
-    assert.match(readme, /\| baixa \| 0 \|/);
-    assert.match(readme, /\| informativa \| 0 \|/);
+    assert.match(readme, /A nota de falha considera só a coluna de achados com situação confirmado ou reaberto\./);
+    assert.match(readme, /\| alta \| \d+ \| 1 \|/);
+    assert.match(readme, /\| média \| \d+ \| 1 \|/);
+    assert.match(readme, /\| baixa \| \d+ \| 0 \|/);
+    assert.match(readme, /\| informativa \| \d+ \| 0 \|/);
     assert.match(readme, /Nota de falha: reprovado por achado confirmado ou reaberto de gravidade alta\./);
     assert.match(readme, /Há 1 achado descartado\. Essa contagem fica à parte e não entra na nota de falha\./);
     assert.ok(readme.includes(commit));
@@ -778,5 +778,21 @@ test('o relatório anterior é lido com as travas e erro vira null', async () =>
     const written = await writeDesignReport(reportInput(data, {raw: {findings: [{tool: 'axe'}]}, captures: []}));
     assert.ok(written);
     assert.equal(await previousRawFindings(data, projectId, '20261117-000000-design'), null);
+  });
+});
+
+test('a contagem por gravidade mostra o total ao lado dos confirmados ou reabertos', async () => {
+  const rows = [
+    achadoWith('ACH-001', {severity: 'media', status: 'provavel'}),
+    achadoWith('ACH-002', {severity: 'media', status: 'provavel'}),
+    achadoWith('ACH-003', {severity: 'media', status: 'provavel'}),
+    achadoWith('ACH-004', {severity: 'alta', status: 'confirmado'}),
+  ];
+  await withTemp(async data => {
+    const report = await writeDesignReport(reportInput(data, {achados: rows, captures: []}));
+    const readme = await readFile(join(report.directory, 'README.md'), 'utf8');
+    assert.ok(readme.includes('| Gravidade | Total sem descartados | Confirmados ou reabertos (nota de falha) |'));
+    assert.ok(readme.includes('| média | 3 | 0 |'));
+    assert.ok(readme.includes('| alta | 1 | 1 |'));
   });
 });
