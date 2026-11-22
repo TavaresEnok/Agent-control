@@ -11,7 +11,7 @@ import {Refusal} from '../src/contracts.ts';
 import {Ledger} from '../src/ledger.ts';
 import {ProviderCollectors} from '../src/providers.ts';
 import {createSyntheticProviderAdapter} from '../src/synthetic-provider-adapter.ts';
-import {beginPersonalVerification, defaultRunTools, NETWORK_COMMAND_TIMEOUT_MS, prepareExamSnapshot, readVerificationProgress, runBoundedCommand} from '../src/verify-command.ts';
+import {beginPersonalVerification, defaultRunTools, evaluationSlots, NETWORK_COMMAND_TIMEOUT_MS, prepareExamSnapshot, readVerificationProgress, runBoundedCommand, type VerifyJobOutcome} from '../src/verify-command.ts';
 import {VERIFY_RUNTIME_BIN} from '../src/verify-image.ts';
 import {listSecurityReports} from '../src/verify-report.ts';
 import type {VerifyWorker} from '../src/verify-types.ts';
@@ -265,6 +265,27 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     const reports = await listSecurityReports(dataDirectory, project);
     assert.equal(reports.some(item => item.id === begun.id && item.note.includes(HOMOLOGATION_NOTE)), true);
     assert.equal(networkCalled, false);
+
+    // An examiner that never answers a valid exam leaves the file without judgment: the report is saved, the progress is not 'done'.
+    const unjudged: VerifyWorker = {async run(call) {
+      return call.task.startsWith('Pedido de exame.') ? 'isto não é JSON' : benchWorker().run(call);
+    }};
+    let second: Promise<void> | undefined;
+    let ended: VerifyJobOutcome | undefined;
+    const again = await beginPersonalVerification({projectId: project, url: 'http://127.0.0.1:9/app', dataDirectory, repoPath: repo, commit,
+      ledger: db, principal, authority, policyRevision: 1, worker: unjudged, databasesDirectory: databases, image, modelCalls: {count: 0},
+      networkRunner: async () => ({code: 0, stdout: 'true'}), runTools: async () => {}, observe: job => { second = job; },
+      onOutcome: outcome => { ended = outcome; }});
+    await second;
+    assert.deepEqual(ended, {status: 'incomplete', pending: 1, total: 1, partial: false});
+    const incomplete = (await readVerificationProgress(dataDirectory, project)).find(row => row.id === again.id);
+    assert.equal(incomplete?.status, 'incomplete');
+    assert.equal(incomplete?.phase, 'done');
+    assert.equal(incomplete?.pending, 1);
+    assert.equal(incomplete?.total, 1);
+    assert.match(incomplete?.note ?? '', /^Exame incompleto: 1 de 1 arquivos sem julgamento do examinador\./);
+    const run = (await db.pool.query('SELECT status FROM ac_verify_runs WHERE id=$1', [again.id])).rows[0];
+    assert.equal(run?.status, 'done', 'o relatório gravado continua utilizável');
   } finally {
     releaseTools();
     if (observed) await observed.catch(() => undefined);
@@ -274,6 +295,19 @@ test('o exame grava andamento, espera as ferramentas e conta chamadas', {timeout
     await rm(dataDirectory, {recursive: true, force: true});
     await rm(databases, {recursive: true, force: true});
   }
+});
+
+test('o módulo 1 roda tantas fatias de uma vez quantas são as vagas de avaliação da instalação', async () => {
+  const ledgerWith = (query: unknown) => ({pool: {query}}) as unknown as Ledger;
+  assert.equal(await evaluationSlots(ledgerWith(async (sql: string) => {
+    assert.match(sql, /SELECT evaluation_limit FROM ac_capacity_config WHERE id=1/);
+    return {rows: [{evaluation_limit: 3}]};
+  })), 3);
+  // Without a readable configuration the slices run one at a time.
+  assert.equal(await evaluationSlots(ledgerWith(async () => ({rows: []}))), 1);
+  assert.equal(await evaluationSlots(ledgerWith(async () => ({rows: [{evaluation_limit: 0}]}))), 1);
+  assert.equal(await evaluationSlots(ledgerWith(async () => { throw new Error('sem tabela'); })), 1);
+  assert.equal(await evaluationSlots({} as unknown as Ledger), 1);
 });
 
 test('o prazo do exame é seis horas', async () => {

@@ -1,5 +1,5 @@
 import {Refusal} from './contracts.ts';
-import {goVendorPackages, isListedVendorFile, VENDORED_REASON, vendoredDigest} from './vendored-dirs.ts';
+import {goVendorPackages, isListedVendorFile, isVendoredFile, VENDORED_REASON, vendoredDigest} from './vendored-dirs.ts';
 import {constants} from 'node:fs';
 import {lstat, open, readdir} from 'node:fs/promises';
 import {join, sep} from 'node:path';
@@ -17,9 +17,10 @@ type RouteInventory = {routes: LocatedRoute[]; omissions: RouteOmission[];
   ambiguousLegacyKeys?: Set<string>; ambiguousLegacyLines?: Set<number>};
 export type ModuleExamMap = {files: ModuleExamFile[]; routes: ModuleExamRoute[]; fileOmissions?: number; routeOmissions?: number;
   routeOmissionDetails?: {file: string; reason: RouteOmission}[];
-  /** Pastas vendor do Go conferidas com o go.mod e quantos arquivos de pacotes listados ficaram fora do exame. */
-  vendored?: {dir: string; files: number; digest?: string; paths?: string[]}[]};
-const MAX_FILE_BYTES = 16000;
+  /** Pastas vendor do Go conferidas com o go.mod, quantos arquivos ficaram fora do exame e quantos deles estão fora dos pacotes listados. */
+  vendored?: {dir: string; files: number; unlisted?: number; digest?: string; paths?: string[]}[]};
+/** Read up to 64 kB; the exam sends at most its own limit of complete lines and records the file as read in part. */
+const MAX_FILE_BYTES = 64000;
 const MAX_TEXT_FILES = 10000;
 const SKIP = new Set(['.git', 'node_modules', 'dist', '.ai', 'verificacoes', '.claude', '.codex', '.grok', '.aws', '.ssh', '.config']);
 /** Drops secret previews while preserving original evidence line numbers. */
@@ -226,8 +227,8 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
     if (options?.aggregateOmissions && row.code === null) fileOmissions++;
     else files.push(row);
   }
-  const vendored: {dir: string; files: number; digest?: string; paths?: string[]}[] = [];
-  type VendorScope = {prefix: string; packages: ReadonlySet<string>; bucket: {dir: string; files: number; paths: string[]}};
+  const vendored: NonNullable<ModuleExamMap['vendored']> = [];
+  type VendorScope = {prefix: string; packages: ReadonlySet<string>; bucket: {dir: string; files: number; unlisted: number; paths: string[]}};
   async function walk(dir: string, prefix: string, scope?: VendorScope): Promise<void> {
     const entries = await readdir(dir, {withFileTypes: true});
     entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -250,12 +251,13 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
       if (entry.isDirectory()) {
         const packages = scope === undefined ? await goVendorPackages(absolute, entry.name) : undefined;
         if (packages !== undefined) {
-          const bucket = {dir: file, files: 0, paths: [] as string[]};
+          const bucket = {dir: file, files: 0, unlisted: 0, paths: [] as string[]};
           await walk(absolute, file, {prefix: file, packages, bucket});
           addFile({file, code: null, reason: `${VENDORED_REASON} (${bucket.files} arquivos)`});
           if (bucket.files) {
             const relativePaths = bucket.paths.map(path => path.slice(absolute.length + 1));
-            vendored.push({dir: bucket.dir, files: bucket.files, digest: await vendoredDigest(absolute, relativePaths),
+            vendored.push({dir: bucket.dir, files: bucket.files, ...(bucket.unlisted ? {unlisted: bucket.unlisted} : {}),
+              digest: await vendoredDigest(absolute, relativePaths),
               paths: relativePaths.map(path => `${bucket.dir}/${path.split(sep).join('/')}`)});
           }
           continue;
@@ -263,9 +265,11 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
         await walk(absolute, file, scope);
         continue;
       }
-      // Arquivo de pacote listado no modules.txt: não entra no inventário nem no limite de arquivos textuais.
-      if (scope !== undefined && entry.isFile() && isListedVendorFile(file.slice(scope.prefix.length + 1), scope.packages)) {
+      // Arquivo regular de vendor conferido que não é script: não entra no inventário nem no limite de arquivos textuais.
+      const inVendor = scope !== undefined && entry.isFile() ? file.slice(scope.prefix.length + 1) : undefined;
+      if (scope !== undefined && inVendor !== undefined && isVendoredFile(inVendor)) {
         scope.bucket.files += 1;
+        if (!isListedVendorFile(inVendor, scope.packages)) scope.bucket.unlisted += 1;
         scope.bucket.paths.push(absolute);
         continue;
       }

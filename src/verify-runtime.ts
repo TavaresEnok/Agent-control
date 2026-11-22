@@ -16,7 +16,7 @@ import {readNativeExamSession, readNativeWorkerCapacityPoll} from './verify-nati
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
-import {examFileSha256, examFileTokens, listExamFiles, planSecuritySlices, singleFileSlice, type SecurityBatch, type VendoredFiles} from './verify-slices.ts';
+import {examFileSha256, examFileTokens, listExamFiles, planSecuritySlices, singleFileSlice, type AuxiliaryFiles, type SecurityBatch, type VendoredFiles} from './verify-slices.ts';
 import {vendoredDigest, vendoredNote} from './vendored-dirs.ts';
 import {batchCallReceipt, type BatchCallReceipt} from './exam-batch-proof.ts';
 import {generateRepoMapSafe} from './repo-map.ts';
@@ -73,6 +73,10 @@ export type SecurityVerificationInput = {
   batch?: SecurityBatch;
   /** Grow capacity queue pauses from 2s up to 10s (default true, matching examRunOptions.pollBackoff). */
   pollBackoff?: boolean;
+  /** Examiner calls of the mandatory slices running at once (default 1). Results are applied in slice order, so the report does not depend on timing. */
+  concurrency?: number;
+  /** Tests, documentation and generated files stay out of the examiner (default true); the tools and the confirmation still read them. `false` sends them as before. */
+  productionOnly?: boolean;
   /** Round start timestamp in ms (defaults to Date.now()). */
   startedMs?: number;
   /** Round ceiling / capacity queue wait deadline in ms (defaults to EXAM_TIME_LIMIT_MS = 6h). */
@@ -126,6 +130,9 @@ export async function runSecurityVerification(input: SecurityVerificationInput):
   achados: Achado[];
   coverage: CoverageRow[];
   partial?: PartialStop;
+  /** Files given to the examiner that ended without its judgment, with or without a budget stop, and how many were given. */
+  pendingFiles: string[];
+  examFiles: number;
 }> {
   return runVerificationWithPolicy(input);
 }
@@ -137,6 +144,9 @@ export async function runResolvedPersonalSecurityVerification(input: SecurityVer
   achados: Achado[];
   coverage: CoverageRow[];
   partial?: PartialStop;
+  /** Files given to the examiner that ended without its judgment, with or without a budget stop, and how many were given. */
+  pendingFiles: string[];
+  examFiles: number;
 }> {
   const policy = authorizedStaticCliPolicy(input);
   if (!policy) throw new Refusal('VERIFY_STATIC_POLICY_UNAUTHORIZED', 403);
@@ -152,6 +162,9 @@ async function runVerificationWithPolicy(
   achados: Achado[];
   coverage: CoverageRow[];
   partial?: PartialStop;
+  /** Files given to the examiner that ended without its judgment, with or without a budget stop, and how many were given. */
+  pendingFiles: string[];
+  examFiles: number;
 }> {
   const modelCallBudget = resolveModelCallBudget(input.modelCallBudget);
   const startedMs = input.startedMs ?? Date.now();
@@ -232,16 +245,27 @@ async function examine(
   const root = input.examRoot ?? input.repoPath;
   const vendored: VendoredFiles[] = [];
   const binaries: string[] = [];
-  const files = await listExamFiles(root, vendored, binaries);
+  const auxiliary: AuxiliaryFiles | undefined = input.productionOnly === false ? undefined : {testes: [], documentacao: [], gerados: []};
+  const files = await listExamFiles(root, vendored, binaries, auxiliary);
+  if (auxiliary) {
+    const labels = {testes: 'testes', documentacao: 'documentação', gerados: 'arquivos gerados'} as const;
+    for (const kind of ['testes', 'documentacao', 'gerados'] as const) {
+      const out = auxiliary[kind];
+      // Generated code leaves by a header the repository itself writes: every such file is named, up to a bound, so the owner can check.
+      const shown = kind === 'gerados' ? 50 : 5;
+      if (out.length) notes.push(`Ficaram fora do exame do modelo ${out.length} ${labels[kind]}: ${out.slice(0, shown).join(', ')}${out.length > shown ? '…' : ''}. As ferramentas, como o gitleaks, continuam lendo esses arquivos.`);
+    }
+  }
   if (binaries.length) notes.push(`Arquivos binários ou acima de 2 MB ficaram fora do exame do modelo (${binaries.length}): ${binaries.slice(0, 10).join(', ')}${binaries.length > 10 ? '…' : ''}. As ferramentas continuam lendo esses arquivos.`);
   if (vendored.length) {
     // Mesma base dos módulos 2 a 9: caminhos relativos à pasta vendor.
-    const entries = await Promise.all(vendored.map(async entry => ({dir: entry.dir, files: entry.files.length,
+    const entries = await Promise.all(vendored.map(async entry => ({dir: entry.dir, files: entry.files.length, unlisted: entry.unlisted,
       digest: await vendoredDigest(join(root, entry.dir), entry.files.map(file => file.slice(entry.dir.length + 1)))})));
     notes.push(vendoredNote(entries));
   }
   // Os arquivos vendorizados não vão ao examinador, mas continuam legíveis na confirmação dos achados das ferramentas.
-  const allowedFiles = new Set([...files, ...binaries, ...vendored.flatMap(entry => entry.files)]);
+  const allowedFiles = new Set([...files, ...binaries, ...vendored.flatMap(entry => entry.files),
+    ...(auxiliary ? [...auxiliary.testes, ...auxiliary.documentacao, ...auxiliary.gerados] : [])]);
   const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(root, files), input.batch);
   const receipts: BatchCallReceipt[] = [];
   const pending = new Set<string>();
@@ -292,10 +316,16 @@ async function examine(
       } catch { /* progress is informational; the exam result is what counts */ }
     };
     await reportProgress();
-    /** One examiner call over a slice. Returns the files it did not judge; a valid batch with gaps is retried file by file by the caller. */
-    const examineSlice = async (slice: {id: string; files: string[]; checklist: string[]}, retry: boolean): Promise<string[]> => {
+    type Slice = {id: string; files: string[]; checklist: string[]};
+    /** The examiner call over a slice and the hashes of its files. It touches no shared state, so several may run at once. */
+    const callSlice = async (slice: Slice) => {
       const examined = await reserveAndRun(input, capacity, intent.id, 'examiner', examTask(slice, mapMarkdown, rawFindings, history, compactMap?.map), 'verify-exam', modelCallBudget, trackedCalls, undefined, undefined, undefined, staticPolicy);
       const exam = ExamResult.safeParse(coerceExamResult(parseJson(examined.output)));
+      const hashes = await Promise.all(slice.files.map(file => examFileSha256(root, file)));
+      return {examined, exam, hashes};
+    };
+    /** Applies one call. Returns the files it did not judge; a valid batch with gaps is retried file by file by the caller. */
+    const applySlice = async (slice: Slice, {examined, exam, hashes}: Awaited<ReturnType<typeof callSlice>>, retry: boolean): Promise<string[]> => {
       exams.push(exam.success ? exam.data : {slice: slice.id, invalid: true});
       const read = new Set(exam.success ? exam.data.filesRead : []);
       const judged = slice.files.filter(file => read.has(file));
@@ -304,7 +334,7 @@ async function examine(
         scope: 'seguranca', callId: slice.id, intentId: intent.id,
         provider: examined.seat.provider, model: examined.seat.model, accountId: examined.seat.accountId,
         profileId: examined.seat.profileId, grantId: examined.seat.grantId, sessionId: examined.sessionId,
-        files: await Promise.all(slice.files.map(async file => ({file, sha256: await examFileSha256(root, file), judged: read.has(file)}))),
+        files: slice.files.map((file, index) => ({file, sha256: hashes[index]!, judged: read.has(file)})),
       }));
       const declared = exam.success ? exam.data.checklist : [];
       for (const file of judged) addCoverage(coverage, file, examined.seat, slice.checklist, declared);
@@ -344,20 +374,21 @@ async function examine(
       }
       return unjudged;
     };
-    // Mandatory phase first: every slice, in order. A file a batch did not judge is queued for a single-file retry, which is optional.
+    // Mandatory phase first: every slice, applied in order. Each call costs exactly one model call, so the slices the budget
+    // pays for are known before any starts, as in the serial run. A file a batch did not judge is queued for a single-file retry, which is optional.
     const retryQueue: {file: string; sliceId: string}[] = [];
-    for (const slice of slices) {
-      if (!slice.files.length) continue;
-      if (budgetLeft() < 1) {
-        stopAt('exame', `antes da fatia ${slice.id}`);
-        for (const file of slice.files) pending.add(file);
-        continue;
-      }
-      const unjudged = await examineSlice(slice, false);
+    const runnable = slices.filter(slice => slice.files.length);
+    const affordable = runnable.slice(0, Math.max(0, Math.floor(budgetLeft())));
+    for (const slice of runnable.slice(affordable.length)) {
+      stopAt('exame', `antes da fatia ${slice.id}`);
+      for (const file of slice.files) pending.add(file);
+    }
+    await orderedPool(affordable, input.concurrency ?? 1, callSlice, async (slice, called) => {
+      const unjudged = await applySlice(slice, called, false);
       // No file stays without a judgment silently: the model failed the batch, so each missing file is asked alone, later and only with spare budget.
       if (slice.files.length > 1) for (const file of unjudged) retryQueue.push({file, sliceId: slice.id});
       else for (const file of unjudged) pending.add(file);
-    }
+    });
     for (const item of retryQueue) {
       // The retry may only spend what the confirmations of the findings already open (and of the tools) will not need.
       const owed = open.length + rawFindings.length;
@@ -366,7 +397,8 @@ async function examine(
         if (!notes.includes(BUDGET_RETRY_NOTE)) notes.push(BUDGET_RETRY_NOTE);
         continue;
       }
-      const alone = await examineSlice(singleFileSlice(item.file, checklist, `${item.sliceId}-${item.file}`.slice(0, 80)), true);
+      const single = singleFileSlice(item.file, checklist, `${item.sliceId}-${item.file}`.slice(0, 80));
+      const alone = await applySlice(single, await callSlice(single), true);
       if (alone.length) pending.add(item.file);
     }
     for (const file of [...pending].sort()) notes.push(`Arquivo pendente, sem julgamento do examinador: ${file}.`);
@@ -554,7 +586,44 @@ async function examine(
     if (!updated.rowCount) throw new Refusal('VERIFY_RUN_CONFLICT');
     await finishExamIntentTx(c, input.ledger, {intentId: intent.id, contextId: input.authority.contextId}, 'done');
   });
-  return {runId, directory: report.directory, achados, coverage: rows, ...(partial ? {partial} : {})};
+  return {runId, directory: report.directory, achados, coverage: rows, ...(partial ? {partial} : {}),
+    pendingFiles: [...pending].sort(), examFiles: files.length};
+}
+
+/**
+ * Runs `call` over the items with at most `limit` at once and hands each result to `apply` in item order,
+ * as soon as every earlier one was applied. After a failure no new call starts; the calls already running
+ * finish, and the failure of the earliest item is thrown.
+ */
+async function orderedPool<T, R>(items: readonly T[], limit: number, call: (item: T) => Promise<R>,
+  apply: (item: T, result: R) => Promise<void>): Promise<void> {
+  const results: ({ok: true; value: R} | {ok: false; error: unknown})[] = [];
+  let next = 0;
+  let applied = 0;
+  let failed = false;
+  let applying = Promise.resolve();
+  const drain = () => {
+    applying = applying.then(async () => {
+      while (!failed && applied < items.length && results[applied]?.ok) {
+        const index = applied++;
+        await apply(items[index]!, (results[index] as {value: R}).value);
+      }
+    }).catch(error => { failed = true; results[applied - 1] = {ok: false, error}; });
+    return applying;
+  };
+  const worker = async () => {
+    while (!failed && next < items.length) {
+      const index = next++;
+      try { results[index] = {ok: true, value: await call(items[index]!)}; }
+      catch (error) { results[index] = {ok: false, error}; failed = true; }
+      await drain();
+    }
+  };
+  const width = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
+  await Promise.all(Array.from({length: width}, worker));
+  await applying;
+  const failure = results.find(result => result && !result.ok);
+  if (failure && !failure.ok) throw failure.error;
 }
 
 type HighReviewCheck = {

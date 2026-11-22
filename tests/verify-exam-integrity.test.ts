@@ -496,8 +496,9 @@ test('o reexame de arquivo só gasta o que as confirmações devidas não vão p
 
 test('o painel e a CLI montam as opções do exame pela mesma função', async () => {
   const defaults = examRunOptions(undefined);
-  assert.deepEqual(defaults, {mapEnabled: true, batch: {tokens: 40_000, files: 8}, pollBackoff: true});
-  assert.deepEqual(examRunOptions({map: false, batch: false, managerDiscipline: false}), {mapEnabled: false, batch: false, pollBackoff: false});
+  assert.deepEqual(defaults, {mapEnabled: true, batch: {tokens: 40_000, files: 8}, pollBackoff: true, productionOnly: true});
+  assert.deepEqual(examRunOptions({map: false, batch: false, managerDiscipline: false, securityProductionOnly: false}),
+    {mapEnabled: false, batch: false, pollBackoff: false, productionOnly: false});
   assert.deepEqual(examRunOptions({batchTokens: 12_000, batchFiles: 3}).batch, {tokens: 12_000, files: 3});
   // As duas entradas chamam a função e nenhuma monta batch ou mapa à mão.
   const panel = await readFile('src/server-main.ts', 'utf8');

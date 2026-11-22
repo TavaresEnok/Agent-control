@@ -246,7 +246,8 @@ export function assertModuleRepoRelativePath(file: string): string {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
   const parts = trimmed.split('/');
-  if (parts.some(part => forbiddenSegment(part) || isSecretClassBasename(part)) || hasKnownSecret(trimmed)) {
+  // Each segment too: a key between slashes sits in a longer run of path characters that the whole-path pattern does not bound.
+  if (parts.some(part => forbiddenSegment(part) || isSecretClassBasename(part) || hasKnownSecret(part)) || hasKnownSecret(trimmed)) {
     throw new Refusal('VERIFY_PATH_FORBIDDEN', 400);
   }
   return parts.join('/');
