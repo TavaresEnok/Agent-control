@@ -273,8 +273,8 @@ export async function refreshVerifyDatabases(input: RefreshVerifyDatabasesInput)
     // A pressured prune may have taken the empty folder between its creation and this claim.
     if (await stampPresence(stamp) !== 'yes') throw new Error('VERIFY_DB_FETCH_FAILED');
   } catch {
-    await releaseVerifyDatabaseStamp(root, stamp, downloadClaim).catch(() => undefined);
-    await discardStamp(stamp, parent, image).catch(() => undefined);
+    await releaseVerifyDatabaseStamp(root, stamp, downloadClaim).catch(() => undefined /* the fetch already fails; a leftover claim of this pid expires with it */);
+    await discardStamp(stamp, parent, image).catch(() => undefined /* the fetch already fails; the next prune takes an unclaimed folder */);
     throw new Error('VERIFY_DB_FETCH_FAILED');
   }
   try {
@@ -671,7 +671,7 @@ async function takePruneLock(parent: string): Promise<{path: string; token: stri
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     } finally {
-      await unlink(temporary).catch(() => undefined);
+      await unlink(temporary).catch(() => undefined /* the temporary name is unique to this attempt and never read as the lock */);
     }
     let raw: string;
     try {
@@ -693,7 +693,7 @@ async function takePruneLock(parent: string): Promise<{path: string; token: stri
     } else if (claimHolderAlive(holder)) {
       return 'busy';
     }
-    const again = await readFile(path, 'utf8').catch(() => undefined);
+    const again = await readFile(path, 'utf8').catch(() => undefined /* unreadable now: compared below and treated as held */);
     if (again !== raw) return 'busy';
     await unlinkClaimFile(path);
   }
@@ -766,7 +766,7 @@ async function pruneHoldingLock(
       continue;
     }
     // Tests use this hook to claim the stamp, or break the claims, between the rename and the second read.
-    if (afterAside) await afterAside(name).catch(() => undefined);
+    if (afterAside) await afterAside(name).catch(() => undefined /* a test hook; the second read below decides */);
     let claimed: boolean;
     try {
       claimed = (await liveClaimStamps(parent, false, (options.keepRecent ?? 2) === 0)).some(stamp => directStampName(parent, stamp) === name);
