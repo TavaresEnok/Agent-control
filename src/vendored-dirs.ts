@@ -19,6 +19,7 @@ export async function goVendorPackages(dir: string, name: string): Promise<Set<s
   const declared = goModRequirements(goMod);
   const listed = new Set<string>();
   let modules = 0;
+  let current: string | undefined;
   for (const raw of modulesTxt.split('\n')) {
     const line = raw.trim();
     if (line === '' || line.startsWith('## ')) continue;
@@ -28,21 +29,30 @@ export async function goVendorPackages(dir: string, name: string): Promise<Set<s
       if (!path || !version) return undefined;
       if (arrow === '=>' && (target === undefined || target.startsWith('.') || target.startsWith('/'))) return undefined;
       if (declared.get(path) !== version) return undefined;
+      current = path;
       listed.add(path);
       modules += 1;
       continue;
     }
-    if (line.startsWith('#') || /\s/u.test(line) || line.includes('..')) return undefined;
+    // Cada pacote pertence ao módulo do cabeçalho logo acima: o próprio módulo ou um subcaminho dele.
+    if (current === undefined || line.startsWith('#') || /\s/u.test(line) || line.includes('..')) return undefined;
+    if (line !== current && !line.startsWith(`${current}/`)) return undefined;
     listed.add(line);
   }
   return modules > 0 ? listed : undefined;
 }
 
-/** O arquivo, relativo à pasta vendor, está num pacote ou raiz de módulo listado. */
+/** O que o `go mod vendor` copia: fontes Go, assembly e C, e os avisos de licença. */
+const VENDOR_SOURCE = /\.(?:go|s|c|h)$/u;
+const VENDOR_NOTICE = /^(?:LICEN[CS]E|COPYING|NOTICE|PATENTS|AUTHORS|CONTRIBUTORS)(?:[._-][A-Za-z0-9._-]*)?$/u;
+
+/** O arquivo, relativo à pasta vendor, é fonte ou aviso de um pacote ou raiz de módulo listado. */
 export function isListedVendorFile(relative: string, packages: ReadonlySet<string>): boolean {
   if (relative === 'modules.txt') return true;
   const slash = relative.lastIndexOf('/');
-  return slash > 0 && packages.has(relative.slice(0, slash));
+  if (slash <= 0 || !packages.has(relative.slice(0, slash))) return false;
+  const name = relative.slice(slash + 1);
+  return VENDOR_SOURCE.test(name) || VENDOR_NOTICE.test(name);
 }
 
 function goModRequirements(text: string): Map<string, string> {
@@ -72,10 +82,22 @@ async function readRegular(path: string, max: number): Promise<string | undefine
 
 export const VENDORED_REASON = 'pacotes Go de terceiros copiados em vendor e conferidos com o go.mod: fora do exame do modelo';
 
-/** Nota honesta para o relatório: o que saiu e o que isso não cobre. */
-export function vendoredNote(entries: readonly {dir: string; files: number}[]): string {
-  const list = entries.slice(0, 10).map(entry => `${entry.dir} (${entry.files} arquivos)`).join(', ');
-  return `Pacotes Go de terceiros em vendor, conferidos com o go.mod, ficaram fora do exame do modelo: ${list}. `
-    + 'As ferramentas leem o repositório inteiro e apontam vulnerabilidades conhecidas e segredos, mas não detectam uma alteração local no código copiado. '
-    + 'Arquivos em vendor fora dos pacotes listados no modules.txt foram examinados.';
+/** Nota honesta para o relatório: o que saiu, a impressão digital e o que isso não cobre. */
+export function vendoredNote(entries: readonly {dir: string; files: number; digest?: string}[]): string {
+  const list = entries.slice(0, 10).map(entry => `${entry.dir} (${entry.files} arquivos${entry.digest ? `, sha256 ${entry.digest.slice(0, 16)}` : ''})`).join(', ');
+  return `Pacotes Go de terceiros em vendor, declarados no go.mod e no modules.txt, ficaram fora do exame do modelo: ${list}. `
+    + 'Isso não prova que o código seja de terceiros: uma alteração local no código copiado não é detectada pelo modelo. '
+    + 'Gitleaks, OSV e Grype leem a pasta e apontam segredos e vulnerabilidades conhecidas. A impressão digital mostra num reexame se a pasta mudou. '
+    + 'Arquivos em vendor fora dos pacotes listados, ou com outra extensão, foram examinados.';
+}
+
+/** Impressão digital estável de uma lista de arquivos: caminho e conteúdo, em ordem. */
+export async function vendoredDigest(root: string, files: readonly string[]): Promise<string> {
+  const {createHash} = await import('node:crypto');
+  const hash = createHash('sha256');
+  for (const file of [...files].sort()) {
+    const body = await readFile(join(root, file)).catch(() => Buffer.alloc(0));
+    hash.update(file).update('\0').update(String(body.length)).update('\0').update(body);
+  }
+  return hash.digest('hex');
 }

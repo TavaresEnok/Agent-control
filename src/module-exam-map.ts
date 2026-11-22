@@ -1,5 +1,5 @@
 import {Refusal} from './contracts.ts';
-import {goVendorPackages, isListedVendorFile, VENDORED_REASON} from './vendored-dirs.ts';
+import {goVendorPackages, isListedVendorFile, VENDORED_REASON, vendoredDigest} from './vendored-dirs.ts';
 import {constants} from 'node:fs';
 import {lstat, open, readdir} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -18,7 +18,7 @@ type RouteInventory = {routes: LocatedRoute[]; omissions: RouteOmission[];
 export type ModuleExamMap = {files: ModuleExamFile[]; routes: ModuleExamRoute[]; fileOmissions?: number; routeOmissions?: number;
   routeOmissionDetails?: {file: string; reason: RouteOmission}[];
   /** Pastas vendor do Go conferidas com o go.mod e quantos arquivos de pacotes listados ficaram fora do exame. */
-  vendored?: {dir: string; files: number}[]};
+  vendored?: {dir: string; files: number; digest?: string}[]};
 const MAX_FILE_BYTES = 16000;
 const MAX_TEXT_FILES = 10000;
 const SKIP = new Set(['.git', 'node_modules', 'dist', '.ai', 'verificacoes', '.claude', '.codex', '.grok', '.aws', '.ssh', '.config']);
@@ -226,8 +226,8 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
     if (options?.aggregateOmissions && row.code === null) fileOmissions++;
     else files.push(row);
   }
-  const vendored: {dir: string; files: number}[] = [];
-  type VendorScope = {prefix: string; packages: ReadonlySet<string>; bucket: {dir: string; files: number}};
+  const vendored: {dir: string; files: number; digest?: string}[] = [];
+  type VendorScope = {prefix: string; packages: ReadonlySet<string>; bucket: {dir: string; files: number; paths: string[]}};
   async function walk(dir: string, prefix: string, scope?: VendorScope): Promise<void> {
     const entries = await readdir(dir, {withFileTypes: true});
     entries.sort((a, b) => a.name.localeCompare(b.name));
@@ -250,10 +250,13 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
       if (entry.isDirectory()) {
         const packages = scope === undefined ? await goVendorPackages(absolute, entry.name) : undefined;
         if (packages !== undefined) {
-          const bucket = {dir: file, files: 0};
+          const bucket = {dir: file, files: 0, paths: [] as string[]};
           await walk(absolute, file, {prefix: file, packages, bucket});
           addFile({file, code: null, reason: `${VENDORED_REASON} (${bucket.files} arquivos)`});
-          if (bucket.files) vendored.push(bucket);
+          if (bucket.files) {
+            const relativePaths = bucket.paths.map(path => path.slice(absolute.length + 1));
+            vendored.push({dir: bucket.dir, files: bucket.files, digest: await vendoredDigest(absolute, relativePaths)});
+          }
           continue;
         }
         await walk(absolute, file, scope);
@@ -262,6 +265,7 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
       // Arquivo de pacote listado no modules.txt: não entra no inventário nem no limite de arquivos textuais.
       if (scope !== undefined && entry.isFile() && isListedVendorFile(file.slice(scope.prefix.length + 1), scope.packages)) {
         scope.bucket.files += 1;
+        scope.bucket.paths.push(absolute);
         continue;
       }
       if (!entry.isFile()) { addFile({file, code: null, reason: 'tipo não examinado'}); continue; }

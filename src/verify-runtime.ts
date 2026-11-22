@@ -17,7 +17,7 @@ import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub}
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
 import {examFileSha256, examFileTokens, listExamFiles, planSecuritySlices, singleFileSlice, type SecurityBatch, type VendoredFiles} from './verify-slices.ts';
-import {vendoredNote} from './vendored-dirs.ts';
+import {vendoredDigest, vendoredNote} from './vendored-dirs.ts';
 import {batchCallReceipt, type BatchCallReceipt} from './exam-batch-proof.ts';
 import {generateRepoMapSafe} from './repo-map.ts';
 import {
@@ -232,7 +232,10 @@ async function examine(
   const root = input.examRoot ?? input.repoPath;
   const vendored: VendoredFiles[] = [];
   const files = await listExamFiles(root, vendored);
-  if (vendored.length) notes.push(vendoredNote(vendored.map(entry => ({dir: entry.dir, files: entry.files.length}))));
+  if (vendored.length) {
+    const entries = await Promise.all(vendored.map(async entry => ({dir: entry.dir, files: entry.files.length, digest: await vendoredDigest(root, entry.files)})));
+    notes.push(vendoredNote(entries));
+  }
   // Os arquivos vendorizados não vão ao examinador, mas continuam legíveis na confirmação dos achados das ferramentas.
   const allowedFiles = new Set([...files, ...vendored.flatMap(entry => entry.files)]);
   const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(root, files), input.batch);

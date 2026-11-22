@@ -505,8 +505,12 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
       const binding = file?.code ? moduleExamReadBinding(row, input, finding.file, file.code) : undefined;
       const evidence = file?.code && binding ? moduleExamReviewEvidence(input.module, finding, file.code, input.findings[index], collectorReview, binding) : null;
       if (laneStop || !evidence || !examiner) {
-        finding.failure = laneStop ?? stopExam ?? 'MODULE_EXAM_EVIDENCE_UNAVAILABLE';
-        finding.reason = `Confirmação indisponível. Código ${finding.failure}.`;
+        // Achado de ferramenta num pacote vendorizado: o modelo não leu o arquivo, e o relatório diz o motivo.
+        const inVendor = !file && (input.map.vendored ?? []).some(entry => finding.file.startsWith(`${entry.dir}/`));
+        finding.failure = laneStop ?? stopExam ?? (inVendor ? 'MODULE_EXAM_VENDORED' : 'MODULE_EXAM_EVIDENCE_UNAVAILABLE');
+        finding.reason = inVendor && !laneStop && !stopExam
+          ? 'Confirmação indisponível: o arquivo é de um pacote Go vendorizado, fora do exame do modelo. O achado da ferramenta segue sem revisão.'
+          : `Confirmação indisponível. Código ${finding.failure}.`;
         continue;
       }
       // A high examiner finding needs the examiner's own native session before any

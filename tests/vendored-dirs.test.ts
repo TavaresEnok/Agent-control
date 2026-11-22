@@ -76,16 +76,37 @@ test('sem go.mod, com versão divergente, substituição local ou modules.txt po
   }
 });
 
-test('um autoload.php ou bundle/ falso não esconde nada', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ac-vendor-falso-'));
+test('pacote fora do módulo do cabeçalho, ou antes de qualquer cabeçalho, devolve vendor ao exame', async () => {
+  for (const modules of [
+    MODULES.replace('github.com/lib/pq/oid', 'internal/auth'),
+    `example.com/app/internal/auth\n${MODULES}`,
+  ]) {
+    const root = await goRepo({modules});
+    try {
+      const vendored: VendoredFiles[] = [];
+      await listExamFiles(root, vendored);
+      assert.equal(vendored.length, 0);
+    } finally {
+      await rm(root, {recursive: true, force: true});
+    }
+  }
+});
+
+test('num pacote listado só saem fontes Go, C e assembly e avisos de licença', async () => {
+  const root = await goRepo();
   try {
-    await mkdir(join(root, 'src', 'vendor', 'bundle'), {recursive: true});
-    await writeFile(join(root, 'src', 'vendor', 'autoload.php'), '');
-    await writeFile(join(root, 'src', 'vendor', 'auth.ts'), 'export const ok = true;\n');
+    const pq = join(root, 'backend', 'vendor', 'github.com', 'lib', 'pq');
+    await writeFile(join(pq, 'handler.ts'), 'export {};\n');
+    await writeFile(join(pq, 'build.sh'), 'echo\n');
+    await writeFile(join(pq, 'LICENSE'), 'MIT\n');
+    await writeFile(join(pq, 'asm_amd64.s'), '// asm\n');
     const vendored: VendoredFiles[] = [];
     const files = await listExamFiles(root, vendored);
-    assert.ok(files.includes('src/vendor/auth.ts'));
-    assert.equal(vendored.length, 0);
+    assert.ok(files.includes('backend/vendor/github.com/lib/pq/handler.ts'));
+    assert.ok(files.includes('backend/vendor/github.com/lib/pq/build.sh'));
+    const out = vendored[0]?.files ?? [];
+    assert.ok(out.includes('backend/vendor/github.com/lib/pq/LICENSE'));
+    assert.ok(out.includes('backend/vendor/github.com/lib/pq/asm_amd64.s'));
   } finally {
     await rm(root, {recursive: true, force: true});
   }
@@ -96,14 +117,20 @@ test('módulos 2 a 9: a pasta aparece com o motivo e a contagem, e a nota diz o 
   try {
     for (const aggregate of [false, true]) {
       const map = await mapModuleSnapshot(root, undefined, {aggregateOmissions: aggregate});
-      assert.deepEqual(map.vendored, [{dir: 'backend/vendor', files: 4}]);
+      assert.equal(map.vendored?.length, 1);
+      assert.equal(map.vendored?.[0]?.dir, 'backend/vendor');
+      assert.equal(map.vendored?.[0]?.files, 4);
+      assert.match(map.vendored?.[0]?.digest ?? '', /^[0-9a-f]{64}$/);
       assert.equal(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/conn.go'), false);
       assert.ok(map.files.some(row => row.file === 'backend/vendor/github.com/lib/pq/extra/porta.go' && row.code !== null));
       assert.ok(map.files.some(row => row.file === 'backend/internal/app.go' && row.code !== null));
     }
-    const note = vendoredNote([{dir: 'backend/vendor', files: 4}]);
-    assert.match(note, /backend\/vendor \(4 arquivos\)/);
-    assert.match(note, /não detectam uma alteração local/);
+    const first = (await mapModuleSnapshot(root)).vendored?.[0]?.digest;
+    await writeFile(join(root, 'backend', 'vendor', 'github.com', 'lib', 'pq', 'conn.go'), 'package pq\n// porta\n');
+    assert.notEqual((await mapModuleSnapshot(root)).vendored?.[0]?.digest, first, 'a impressão digital muda com o código copiado');
+    const note = vendoredNote([{dir: 'backend/vendor', files: 4, digest: 'a'.repeat(64)}]);
+    assert.match(note, /backend\/vendor \(4 arquivos, sha256 a{16}\)/);
+    assert.match(note, /não prova que o código seja de terceiros/);
   } finally {
     await rm(root, {recursive: true, force: true});
   }
