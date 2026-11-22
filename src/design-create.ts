@@ -798,7 +798,8 @@ export async function runDesignCreate(input: {
   reserve: () => Promise<{provider: string; accountId: string; profileId: string; model: string; grantId: string}>;
   release: (seat: {provider: string; accountId: string; profileId: string; model: string; grantId: string}) => Promise<void>;
   intentId: string;
-  examine(round: number, files: readonly {path: string; text: string}[]): Promise<CreateExam>;
+  /** `tokens` é o tokens.json desta rodada, para o exame comparar as telas com os tokens gerados. */
+  examine(round: number, files: readonly {path: string; text: string}[], context: {tokens: {path: string; text: string}}): Promise<CreateExam>;
 }): Promise<{directory: string; rounds: CreateRound[]; indexPath: string}> {
   if (input.screens < 1 || input.screens > 8 || input.rounds < 1 || input.rounds > 5) throw new Refusal('DESIGN_CREATE_INVALID', 400);
   const firstTask = createTask({briefing: input.briefing, screens: input.screens, round: 1, referenceNote: input.referenceNote, rework: []});
@@ -885,7 +886,8 @@ export async function runDesignCreate(input: {
     }
     const roundDir = join(root, `rodada-${round}`);
     await mkdir(roundDir, {mode: 0o700});
-    await writePrivate(join(roundDir, 'tokens.json'), `${JSON.stringify(bundle.tokens, null, 2)}\n`);
+    const tokensText = `${JSON.stringify(bundle.tokens, null, 2)}\n`;
+    await writePrivate(join(roundDir, 'tokens.json'), tokensText);
     const files: {path: string; text: string}[] = [];
     const stored = new Map<string, StoredScreen>();
     for (const screen of ready) {
@@ -896,7 +898,7 @@ export async function runDesignCreate(input: {
       files.push({path: htmlName, text: screen.fileHtml}, {path: cssName, text: screen.css});
       stored.set(screen.name, screen);
     }
-    const examined = await input.examine(round, files);
+    const examined = await input.examine(round, files, {tokens: {path: 'tokens.json', text: tokensText}});
     const verdicts = new Map(examined.screens.map(screen => [screen.name.toLowerCase(), screen]));
     const approved: string[] = [];
     const rejected: string[] = [];

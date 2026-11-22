@@ -158,6 +158,9 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
     DESIGN_RUNTIME_BIN,
     'run',
     '--rm',
+    // Node é o PID 1 e não recolhe os processos do Chrome que terminam. Sem o init,
+    // os zumbis enchem o --pids-limit e o exame trava no meio do Lighthouse.
+    '--init',
     '--network',
     DESIGN_NETWORK,
     '--read-only',

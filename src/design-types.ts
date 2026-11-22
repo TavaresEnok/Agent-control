@@ -13,6 +13,13 @@ export type DesignSeverity = z.infer<typeof DesignSeverity>;
 export const DesignStatus = z.enum(['confirmado', 'provavel', 'descartado', 'fechado', 'reaberto']);
 export type DesignStatus = z.infer<typeof DesignStatus>;
 
+/**
+ * Base da prova de um achado. 'medido' vem só de uma medida aceita, nunca do modelo.
+ * 'hipotese' pede teste com usuário. 'preferencia' é gosto e nunca passa de informativa.
+ */
+export const DesignBasis = z.enum(['medido', 'hipotese', 'preferencia']);
+export type DesignBasis = z.infer<typeof DesignBasis>;
+
 export const DesignChecklistSource = z.enum([
   'NIELSEN', 'UX-LAW', 'WCAG-2.2', 'TOKENS', 'STATES', 'UX-WRITING', 'SMALL-SCREEN', 'VISUAL',
 ]);
@@ -66,6 +73,7 @@ export const DesignExamFinding = z.object({
   reference: z.string().min(1).max(120),
   snippet: z.string().max(240),
   measure: DesignMeasure.optional(),
+  basis: DesignBasis.optional(),
 }).strict();
 export type DesignExamFinding = z.infer<typeof DesignExamFinding>;
 
@@ -130,6 +138,8 @@ export const DesignAchado = z.object({
   acceptance: z.string().min(1).max(500),
   sources: z.array(z.string().min(1).max(200)).min(1).max(20),
   secretPreview: z.string().max(80).nullable(),
+  /** Opcional: achados.json antigos não têm o campo. */
+  basis: DesignBasis.optional(),
 }).strict();
 export type DesignAchado = z.infer<typeof DesignAchado>;
 
@@ -246,4 +256,15 @@ export function dedupeDesignFindings(findings: readonly DesignRawFinding[]): Des
 export function clampHighSeverity(severity: DesignSeverity, measure?: DesignMeasure | null): DesignSeverity {
   if (severity === 'alta' && acceptedMeasure(measure) === undefined) return 'media';
   return severity;
+}
+
+/** O modelo escolhe só entre hipótese e preferência. Com medida aceita, a base é sempre 'medido'. */
+export function designBasis(claimed: unknown, measure?: DesignMeasure | null): DesignBasis {
+  if (acceptedMeasure(measure) !== undefined) return 'medido';
+  return claimed === 'preferencia' ? 'preferencia' : 'hipotese';
+}
+
+/** Preferência nunca conta como falha. Aplique depois de clampHighSeverity. */
+export function clampBasisSeverity(severity: DesignSeverity, basis: DesignBasis): DesignSeverity {
+  return basis === 'preferencia' ? 'informativa' : severity;
 }

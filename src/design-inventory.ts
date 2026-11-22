@@ -724,6 +724,21 @@ function rawFinding(file: string, rule: string, line: number | null, snippet: st
   });
 }
 
+/** Declarações do CSS, sem comentários e sem prelúdio de @media. Linha de 1 em diante. */
+export function cssDeclarations(css: string): {prop: string; value: string; line: number}[] {
+  const prepared = stripAtRulePreludes(stripComments(css));
+  const ranges = braceRanges(prepared);
+  const all: Decl[] = [];
+  for (const range of ranges) all.push(...declarationsIn(prepared, directBody(prepared, range, ranges), range.open + 1));
+  all.sort((a, b) => a.index - b.index);
+  return all.map(decl => ({prop: decl.prop, value: decl.value, line: decl.line}));
+}
+
+/** Cores de um valor CSS: hex, rgb(), hsl() e nomes conhecidos. */
+export function colorsIn(value: string): {r: number; g: number; b: number; a: number}[] {
+  return extractColors(value, true);
+}
+
 export function inventoryFromCss(css: string): DesignInventory {
   return toInventory(analyzeCss(css));
 }

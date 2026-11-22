@@ -459,7 +459,7 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
       reserve: () => resolved.reserve('specialist', undefined, {purpose: 'create'}),
       release: seat => resolved.release(seat),
       intentId: resolved.intentId,
-      examine: async (_round, files) => {
+      examine: async (_round, files, context) => {
         const exam = await withCreatedServer(pinnedImage, files, (origin, repo) => runDesignModule({
           activation: 'personal',
           projectId: resolved.projectId,
@@ -482,6 +482,8 @@ async function runCreate(invocation: {installationPath: string; projectId: strin
           regressionThreshold: 0.1,
           routes: files.filter(file => file.path.endsWith('.html')).map(file => ({route: `/${file.path}`})),
           ...(references.length === 0 ? {} : {referenceFiles: references}),
+          createMode: true,
+          brandTokens: context.tokens,
         }));
         const screens = files.filter(file => file.path.endsWith('.html')).map(file => {
           const related = exam.findings.filter(item => findingOnHtml(item.file, file.path));

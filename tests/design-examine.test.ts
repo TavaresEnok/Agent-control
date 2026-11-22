@@ -686,3 +686,140 @@ test('mapa compacto pode ser desligado no exame de design', async () => {
   assert.match(tasks[0]!, /Mapa do repositório/);
   assert.doesNotMatch(tasks[1]!, /Mapa do repositório/);
 });
+
+function examReply(file: string, findings: Record<string, unknown>[]): string {
+  return JSON.stringify({kind: 'exame', filesRead: [file], checklist: ['DESIGN-NIELSEN-H1-ESTADO'], findings});
+}
+
+function examFinding(extra: Record<string, unknown>): Record<string, unknown> {
+  return {
+    title: 'Raio arredondado demais',
+    severity: 'alta',
+    file: screen.file,
+    line: 2,
+    scenario: 'O botão parece infantil.',
+    suggestion: 'Use border-radius: 4px.',
+    cwe: null,
+    reference: 'DESIGN-TOKENS-RAIO',
+    snippet: 'radius 13px',
+    ...extra,
+  };
+}
+
+test('preferência termina informativa, sem revisor e com confirmação provável sem verificador', async () => {
+  const kit = harness();
+  const tasks: string[] = [];
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [screen],
+    checklist: loadDesignChecklist(),
+    rawFindings: [],
+    worker: {
+      async run(workerCall) {
+        tasks.push(workerCall.task);
+        if (workerCall.task.startsWith('Pedido de exame.')) return examReply(screen.file, [examFinding({basis: 'Preferência'})]);
+        return kit.worker.run(workerCall);
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  assert.equal(result.findings.length, 1);
+  assert.equal(result.findings[0]?.severity, 'informativa');
+  assert.equal(result.findings[0]?.basis, 'preferencia');
+  assert.equal(result.confirmations.length, 1);
+  assert.equal(result.confirmations[0]?.verifier, null);
+  assert.deepEqual(result.confirmations[0]?.confirm, {
+    kind: 'confirmacao',
+    status: 'provavel',
+    reason: 'Preferência estética, sem medida. Não entra como falha.',
+    proof: '',
+  });
+  assert.equal(tasks.some(task => task.startsWith('Pedido de confirmação.')), false);
+  assert.equal(kit.events.includes('reserve:reviewer'), false);
+  assert.equal(result.modelCoverage.reviewer.requested, 0);
+});
+
+test('base declarada pelo modelo: medido sem medida vira hipótese e vai ao revisor', async () => {
+  const kit = harness();
+  const tasks: string[] = [];
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [screen],
+    checklist: loadDesignChecklist(),
+    rawFindings: [],
+    worker: {
+      async run(workerCall) {
+        tasks.push(workerCall.task);
+        if (workerCall.task.startsWith('Pedido de exame.')) {
+          return examReply(screen.file, [
+            examFinding({basis: 'medido', reference: 'DESIGN-NIELSEN-H1-ESTADO', severity: 'media'}),
+            examFinding({basis: 'hipótese', reference: 'DESIGN-UX-HICK', line: 3, severity: 'media'}),
+          ]);
+        }
+        return kit.worker.run(workerCall);
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  assert.deepEqual(result.findings.map(entry => entry.basis), ['hipotese', 'hipotese']);
+  assert.equal(tasks.filter(task => task.startsWith('Pedido de confirmação.')).length, 2);
+  assert.ok(result.confirmations.every(row => row.verifier !== null));
+});
+
+test('o pedido de exame explica a base e uma tela TSX recebe os itens novos', async () => {
+  const kit = harness();
+  const tasks: string[] = [];
+  await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [screen],
+    checklist: loadDesignChecklist(),
+    rawFindings: [],
+    worker: {
+      async run(workerCall) {
+        tasks.push(workerCall.task);
+        return kit.worker.run(workerCall);
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  const exam = tasks.find(task => task.startsWith('Pedido de exame.')) ?? '';
+  assert.ok(exam.includes('Cada finding tem basis: hipotese (precisa de teste com usuário) ou preferencia (gosto). Medida vem da ferramenta, não do modelo.'));
+  assert.ok(exam.includes('- DESIGN-ESTADOS-ENVIO [screen]:'));
+  assert.match(exam, /Itens: .*DESIGN-ESTADOS-ENVIO/);
+});
+
+test('folha .css recebe só itens de estilo e gerais', async () => {
+  const kit = harness();
+  const tasks: string[] = [];
+  const checklist = loadDesignChecklist();
+  const sheet = {file: 'src/tela.css', route: '/tela', code: '.botao {\n  color: #777;\n}\n', captureNote: 'sem captura'};
+  const result = await examineDesignScreens({
+    repo: '/tmp/repo-design',
+    intentId: randomUUID(),
+    screens: [sheet],
+    checklist,
+    rawFindings: [],
+    worker: {
+      async run(workerCall) {
+        tasks.push(workerCall.task);
+        return kit.worker.run(workerCall);
+      },
+    },
+    reserve: kit.reserve,
+    release: kit.release,
+  });
+  const exam = tasks.find(task => task.startsWith('Pedido de exame.')) ?? '';
+  assert.equal(exam.includes('[screen]'), false);
+  assert.equal(exam.includes('[copy]'), false);
+  assert.ok(exam.includes('- DESIGN-TOKENS-TEMA [style]:'));
+  assert.ok(exam.includes('- DESIGN-TEXTO-FORMATO [any]:'));
+  const expected = checklist.filter(entry => entry.appliesTo === 'style' || entry.appliesTo === 'any').map(entry => entry.id);
+  assert.equal(exam.match(/^Itens: (.*)$/m)?.[1], expected.join(', '));
+  assert.deepEqual(result.coverage[0]?.checklist, expected);
+});

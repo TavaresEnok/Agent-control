@@ -150,3 +150,33 @@ test('reexame individual com saída inválida ou sem a tela em filesRead fica pe
     }
   }
 });
+
+test('a base da prova passa pelo lote, que normaliza duas vezes', async () => {
+  const k = kit();
+  const tasks: string[] = [];
+  const list = screens(2);
+  const worker: DesignWorker = {
+    async run(call) {
+      tasks.push(call.task);
+      if (call.task.startsWith('Pedido de exame em lote.')) {
+        return JSON.stringify({kind: 'exame-lote', results: list.map(item => ({
+          file: item.file,
+          filesRead: [item.file],
+          checklist: ['DESIGN-NIELSEN-H1-ESTADO'],
+          findings: [{
+            title: 'Sombra pesada', severity: 'media', file: item.file, line: 2, scenario: 'A sombra pesa.',
+            suggestion: 'Use box-shadow: 0 1px 2px #0000001a.', cwe: null, reference: 'DESIGN-TOKENS-SOMBRA',
+            snippet: 'sombra', basis: 'preferência',
+          }],
+        }))});
+      }
+      return designBenchWorker().run(call);
+    },
+  };
+  const result = await examineDesignScreens({...base, intentId: randomUUID(), screens: list, batch: BATCH, worker, reserve: k.reserve, release: k.release});
+  assert.equal(tasks.length, 1);
+  assert.ok(tasks[0]!.includes('Cada finding tem basis:'));
+  assert.deepEqual(result.findings.map(item => [item.basis, item.severity]), [['preferencia', 'informativa'], ['preferencia', 'informativa']]);
+  assert.ok(result.confirmations.every(row => row.verifier === null && row.confirm.status === 'provavel'));
+  assert.equal(k.events.includes('reserve:reviewer'), false);
+});

@@ -11,9 +11,17 @@ export function stylelintConfig(): Record<string, unknown> {
       'block-no-empty': true,
       'color-no-invalid-hex': true,
       'declaration-no-important': true,
+      // Só `all`: width, height, top e left dariam ruído demais.
+      'declaration-property-value-disallowed-list': [
+        {transition: ['/\\ball\\b/'], 'transition-property': ['/^all$/']},
+        {severity: 'warning'},
+      ],
     },
   };
 }
+
+const DISALLOWED_VALUE_RULE = 'declaration-property-value-disallowed-list';
+export const TRANSITION_ALL_TEXT = 'transition: all anima o layout; liste só opacity e transform';
 
 function positiveLine(value: unknown): number | null {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) return null;
@@ -41,9 +49,10 @@ export function stylelintToFindings(file: string, report: unknown): DesignRawFin
       if (!isRecord(warning) || typeof warning.rule !== 'string') continue;
       const rule = warning.rule.trim();
       if (rule.length === 0) continue;
-      const text = typeof warning.text === 'string' && warning.text.trim().length > 0
+      const raw = typeof warning.text === 'string' && warning.text.trim().length > 0
         ? warning.text.trim()
         : rule;
+      const text = rule === DISALLOWED_VALUE_RULE && /transition/i.test(raw) ? TRANSITION_ALL_TEXT : raw;
       findings.push(designRawFinding({
         tool: 'stylelint',
         rule,

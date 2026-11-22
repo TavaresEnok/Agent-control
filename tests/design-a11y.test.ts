@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import {axeToFindings, pa11yToFindings, staticHtmlFindings} from '../src/design-a11y.ts';
 import {DESIGN_PLANTED_RULES, DesignRawFinding} from '../src/design-types.ts';
@@ -188,4 +189,57 @@ test('objeto antigo sem medida continua valido', () => {
   });
   assert.equal(parsed.severity, 'alta');
   assert.equal(parsed.measure, undefined);
+});
+
+const clickRule = 'WCAG-2-1-1-CLIQUE-SEM-TECLADO';
+const clicks = (html: string) => staticHtmlFindings('tela.tsx', html).filter(item => item.rule === clickRule);
+
+test('div com onClick e sem teclado vira achado media sem medida', () => {
+  const hits = clicks('<main>\n  <div className="card" onClick={() => abrir()}>Abrir</div>\n</main>');
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0]?.tool, 'html');
+  assert.equal(hits[0]?.severity, 'media');
+  assert.equal(hits[0]?.measure, undefined);
+  assert.equal(hits[0]?.line, 2);
+  assert.ok((hits[0]?.snippet.length ?? 0) <= 180);
+});
+
+test('role, tabIndex com tecla, spread, aria-hidden e fundo de modal não viram achado', () => {
+  assert.equal(clicks('<div role="button" onClick={abrir}>Abrir</div>').length, 0);
+  assert.equal(clicks('<div tabIndex={0} onKeyDown={tecla} onClick={abrir}>Abrir</div>').length, 0);
+  assert.equal(clicks('<div {...props} onClick={abrir}>Abrir</div>').length, 0);
+  assert.equal(clicks('<span aria-hidden="true" onClick={abrir}>x</span>').length, 0);
+  assert.equal(clicks('<div className="modal-backdrop" onClick={fechar}></div>').length, 0);
+  assert.equal(clicks('<div id="overlay" onclick="fechar()"></div>').length, 0);
+});
+
+test('tabIndex sem tecla, span, li, td, tr e img com clique viram achado', () => {
+  assert.equal(clicks('<div tabIndex={0} onClick={abrir}>Abrir</div>').length, 1);
+  assert.equal(clicks('<span onclick="abrir()">Abrir</span>').length, 1);
+  assert.equal(clicks('<ul><li onClick={abrir}>Um</li></ul>').length, 1);
+  assert.equal(clicks('<table><tr onClick={abrir}><td onClick={abrir}>1</td></tr></table>').length, 2);
+  assert.equal(clicks('<img src="a.png" alt="A" onClick={abrir} />').length, 1);
+  assert.equal(clicks('<button onClick={abrir}>Abrir</button>').length, 0);
+  assert.equal(clicks('<a href="/x" onClick={abrir}>Abrir</a>').length, 0);
+  assert.equal(clicks('<link rel="x"><track src="a">').length, 0);
+});
+
+test('clique do Vue com @click e v-on:click também conta', () => {
+  assert.equal(clicks('<template><div class="item" @click="abrir">Abrir</div></template>').length, 1);
+  assert.equal(clicks('<template><div @click.stop="abrir">Abrir</div></template>').length, 1);
+  assert.equal(clicks('<template><span v-on:click="abrir">Abrir</span></template>').length, 1);
+  assert.equal(clicks('<template><div tabindex="0" @keydown.enter="abrir" @click="abrir">Abrir</div></template>').length, 0);
+});
+
+test('no máximo 5 achados de clique sem teclado por arquivo', () => {
+  const html = Array.from({length: 7}, (_, index) => `<div onClick={() => abrir(${index})}>Item ${index}</div>`).join('\n');
+  assert.equal(clicks(html).length, 5);
+});
+
+test('telas corretas do laboratório não têm clique sem teclado', () => {
+  const root = new URL('./fixtures/design-lab/', import.meta.url);
+  for (const name of ['html/boa-inicio.html', 'html/boa-detalhe.html', 'src/BoaInicio.tsx', 'src/BoaDetalhe.tsx']) {
+    const text = readFileSync(new URL(name, root), 'utf8');
+    assert.equal(staticHtmlFindings(name, text).some(item => item.rule === clickRule), false, name);
+  }
 });

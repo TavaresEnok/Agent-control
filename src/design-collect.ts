@@ -3,6 +3,7 @@ import {missingEmptyStateFindings} from './design-discover.ts';
 import {inventoryFindingsFromCss} from './design-inventory.ts';
 import {focusFindingsFromCss, keyboardFindings, type FocusStep} from './design-keyboard.ts';
 import {lighthouseToFindings} from './design-lighthouse.ts';
+import {renderFindings, type DesignRenderCell} from './design-render.ts';
 import {stylelintToFindings} from './design-stylelint.ts';
 import {dedupeDesignFindings, type DesignRawFinding} from './design-types.ts';
 import {wallaceFindings} from './design-wallace.ts';
@@ -22,6 +23,8 @@ export type DesignToolReports = {
   stylelint?: readonly {file: string; report: unknown}[];
   cssAnalyzer?: readonly {file: string; report: unknown}[];
   keyboard?: readonly {file: string; steps: readonly FocusStep[]}[];
+  /** Régua da página renderizada, célula por célula. */
+  render?: readonly DesignRenderCell[];
 };
 
 /**
@@ -49,6 +52,8 @@ export function collectDesignFindings(
   for (const entry of tools?.stylelint ?? []) findings.push(...stylelintToFindings(entry.file, entry.report));
   for (const entry of tools?.cssAnalyzer ?? []) findings.push(...wallaceFindings(entry.file, entry.report));
   for (const entry of tools?.keyboard ?? []) findings.push(...keyboardFindings(entry.file, entry.steps));
+  // Uma chamada só: a regra do título compara as rotas entre si.
+  if (tools?.render !== undefined && tools.render.length > 0) findings.push(...renderFindings(tools.render));
   return dedupeDesignFindings(findings);
 }
 

@@ -305,7 +305,7 @@ async function writeLoginStateInImage(targetUrl: string, login: DesignLogin, pin
     await chmod(out, 0o1777);
     if (await commandCode('setfacl', ['-m', 'u:65532:r', cred]) !== 0) throw new Error('DESIGN_LOGIN_IMAGE');
     const code = await commandCode('docker', [
-      'run', '--rm', '--pull', 'never', '--user', '65532:65532',
+      'run', '--rm', '--init', '--pull', 'never', '--user', '65532:65532',
       '--network', 'design-homologation',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
       '--pids-limit', '512', '--memory', '2147483648', '--memory-swap', '2147483648',

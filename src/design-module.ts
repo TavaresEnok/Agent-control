@@ -1,7 +1,7 @@
 import type {ModuleExamBatch} from './module-exam.ts';
 import {assertDiskSpaceForLaunch,launchVolumesOf} from './personal-disk.ts';
 import {constants, existsSync} from 'node:fs';
-import {mkdtemp, open, readFile, rm} from 'node:fs/promises';
+import {lstat, mkdtemp, open, readFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -24,21 +24,37 @@ import {
   type DesignComputedSample,
   type DesignImageExecution,
   type DesignImageSpawn,
+  type ToolCoverageRow,
 } from './design-image-run.ts';
-import {parseDesignProjectConfig, planDesignRoutes, type DesignProjectConfig} from './design-project-config.ts';
+import {DESIGN_TOKENS_MAX_BYTES, parseDesignProjectConfig, planDesignRoutes, type DesignProjectConfig} from './design-project-config.ts';
+import {BRAND_TOOL, brandFindings, brandMarkdown, compareWithDeclared, parseDeclaredTokens, type BrandComparison} from './design-brand-tokens.ts';
+import {CONSISTENCY_TOOL, analyzeConsistency, consistencyFindings, consistencyMarkdown, type ConsistencyResult} from './design-consistency.ts';
+import {collectGenericSignals, genericLookMarkdown} from './design-generic.ts';
 import {stageDesignReferences} from './design-reference-files.ts';
 import {approveDesignBaseline, baselineBuffer, regressionHits, regressionMarkdown} from './design-regression.ts';
 import {stylelintConfig} from './design-stylelint.ts';
 import {analyzeDesignTokens, loadDesignReferences, tokenReportMarkdown} from './design-tokens.ts';
 import {visualReportMarkdown} from './design-visual.ts';
 import {markPngRect} from './design-mark.ts';
-import {readDesignReport, writeDesignReport, type DesignReportCapture} from './design-report.ts';
+import {
+  designFailureCode,
+  designReportDirectoryName,
+  previousRawFindings,
+  readDesignReport,
+  writeDesignReport,
+  type DesignReportCapture,
+  type DesignReportGap,
+} from './design-report.ts';
+import {deltaMarkdown} from './design-delta.ts';
+import {suggestionFor} from './design-suggestions.ts';
 import {loadDesignChecklist} from './design-checklist.ts';
 import {
   DESIGN_ACCEPTANCE,
   DesignAchado,
+  designBasis,
   type DesignAchado as DesignAchadoValue,
   type DesignConfirmResult,
+  type DesignExamCoverage,
   type DesignExamFinding,
   type DesignRawFinding,
   type DesignWorker,
@@ -88,12 +104,21 @@ export type DesignModuleInput = {
   scoreVisual?: boolean;
   recordStates?: boolean;
   computedSamples?: readonly DesignComputedSample[];
+  /** Blocos de amostra com rota, somados aos da imagem. Alimentam a consistência e os tokens do projeto. */
+  computedBlocks?: DesignImageExecution['computedBlocks'];
   analyzeTokens?: boolean;
   regressionThreshold?: number;
   approveBaseline?: boolean;
   referenceFiles?: readonly {name: string; bytes: Buffer}[];
   /** Rotas já resolvidas, usadas pelo modo criar. */
   routes?: readonly {route: string}[];
+  /**
+   * Exame chamado pelo laço do modo criar. Só aqui o alvo de 44px (DESIGN-ALVO-REFERENCIA)
+   * continua alta, para a tela gerada voltar com a área de toque maior. O exame comum usa baixa.
+   */
+  createMode?: boolean;
+  /** Tokens já em mãos, como o tokens.json que o modo criar gerou. Ganha da chave `tokens` do config. */
+  brandTokens?: {path: string; text: string};
 };
 
 export type DesignModuleResult = {
@@ -128,6 +153,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   const rawDesignConfig = await readRepoDesignConfig(input.repo, input.files);
   const projectConfig = parseDesignProjectConfig(rawDesignConfig);
   const hasProjectConfig = rawDesignConfig !== undefined && rawDesignConfig.trim().length > 0;
+  const brandSource = input.brandTokens ?? (projectConfig.tokens === undefined
+    ? undefined
+    : await readRepoTokensFile(input.repo, input.files, projectConfig.tokens));
   const plannedStates = input.recordStates === true ? statePlan(input.files, projectConfig) : undefined;
   const reference = input.referenceFiles === undefined || input.referenceFiles.length === 0
     ? undefined
@@ -144,13 +172,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       loginNote = 'O estado logado não foi capturado: o login no host falhou.';
     }
   }
-  const image = await (async () => {
-    try {
-      return input.image === undefined ? undefined : await executeDesignImage({
-    image: input.image.pinnedImage,
-    repository: input.repo,
-    targetUrl: input.targetUrl,
-    plan: input.routes !== undefined
+  const imagePlan = input.image === undefined
+    ? undefined
+    : input.routes !== undefined
       ? {
           routes: input.routes.slice(0, 40).map(route => ({
             route: route.route,
@@ -170,7 +194,14 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
           })),
           viewports: [375, 768, 1440],
           stylelint: stylelintConfig(),
-        },
+        };
+  const image = await (async () => {
+    try {
+      return input.image === undefined || imagePlan === undefined ? undefined : await executeDesignImage({
+    image: input.image.pinnedImage,
+    repository: input.repo,
+    targetUrl: input.targetUrl,
+    plan: imagePlan,
     ...(input.image.run === undefined ? {} : {run: input.image.run}),
     ...(input.image.timeoutMs === undefined ? {} : {timeoutMs: input.image.timeoutMs}),
     ...(loginState === undefined ? {} : {loginState}),
@@ -183,19 +214,33 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     await writeImageFailure(input, target.origin, image);
     throw new Refusal(image.code === 'DESIGN_IMAGE_TIMEOUT' ? 'DESIGN_IMAGE_TIMEOUT' : 'DESIGN_IMAGE_FAILED');
   }
+  const fileMap = routeFileMap(input.files, projectConfig);
+  // Régua e Tab entram pelo collect, para a rota virar o arquivo da tela que o examinador lê.
   const findings = attributeDesignFindings(
-    collectDesignFindings(input.files, mergeTools(input.tools, image?.tools)),
+    collectDesignFindings(input.files, mergeTools(input.tools, image === undefined
+      ? undefined
+      : {...image.tools, render: image.render, keyboard: image.keyboard})),
     input.files,
-    routeFileMap(input.files, projectConfig),
+    fileMap,
   );
-  for (const item of image?.declaredFindings ?? []) {
-    if (!findings.some(existing => existing.fingerprint === item.fingerprint)) findings.push(item);
-  }
+  pushNew(findings, image?.declaredFindings ?? []);
   const samples = [...(image?.computed ?? []), ...(input.computedSamples ?? [])];
   const tokens = samples.length > 0 || input.analyzeTokens === true
-    ? analyzeDesignTokens(input.files[0]?.path ?? 'tokens', samples, loadDesignReferences(referencesDirectory()))
+    ? analyzeDesignTokens(
+        input.files[0]?.path ?? 'tokens',
+        samples,
+        loadDesignReferences(referencesDirectory()),
+        input.createMode === true ? {referenceTargetSeverity: 'alta'} : {},
+      )
     : undefined;
   if (tokens) findings.push(...tokens.findings);
+  const blocks = [...(image?.computedBlocks ?? []), ...(input.computedBlocks ?? [])];
+  const consistency = blocks.length > 0 ? analyzeConsistency(blocks) : undefined;
+  if (consistency) pushNew(findings, attributeDesignFindings(consistencyFindings(consistency), input.files, fileMap));
+  const brand = brandComparison(brandSource, blocks);
+  if (brand.comparison) {
+    pushNew(findings, attributeDesignFindings(brandFindings(brand.comparison.off, brand.comparison.source), input.files, fileMap));
+  }
   const imageRows = image === undefined ? [] : applyHostFindingCounts(image.coverage, findings);
   const routes = screenRoutesForExam(input.files, input.routes);
   const loggedRoutes = new Set((image?.shots ?? []).filter(shot => shot.state === 'logado').map(shot => shot.route));
@@ -205,7 +250,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
       return !(loggedRoutes.has(route) && note.includes('logado não capturado'));
     }),
     ...(loginNote.length > 0 ? [loginNote] : []),
-    ...(image?.notes.filter(note => note.includes('indisponível')) ?? []),
+    ...imageStateNotes(image?.notes ?? []),
   ];
   const notes: string[] = [...stateNotes];
   if (reference) notes.push(reference.note);
@@ -234,8 +279,9 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     else if (!list.includes(route.route)) list.push(route.route);
   }
   let examined: Awaited<ReturnType<typeof examineDesignScreens>>;
+  let chosen: ReturnType<typeof chooseScreens>;
   try {
-    const chosen = chooseScreens(input.files, routes, findings);
+    chosen = chooseScreens(input.files, routes, findings);
     if (chosen.omitted > 0) notes.push(`O exame cobriu ${chosen.screens.length} de ${chosen.screens.length + chosen.omitted} arquivos de tela.`);
     const screens = chosen.screens.map(screen => {
       const related = routesByFile.get(screen.file) ?? [screen.route];
@@ -293,7 +339,11 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     '',
     screenCoverageMarkdown(coverageRows),
   ].join('\n');
-  const raw = designRawDocument(target.origin, findings);
+  const ranTools = toolsThatRan(input.files, image, imageRows, tokens !== undefined, findings, [
+    ...(consistency ? [CONSISTENCY_TOOL] : []),
+    ...(brand.comparison && brand.comparison.categories.length > 0 ? [BRAND_TOOL] : []),
+  ]);
+  const raw = {...designRawDocument(target.origin, findings), ferramentas: ranTools};
   const note = [input.note, ...notes].filter(part => part && part.trim().length > 0).join(' ').replace(/\s+/g, ' ').trim().slice(0, 500)
     || 'Verificação de design somente leitura concluída.';
   const referenceMarkdown = referenceSection(reference?.note, staged.references);
@@ -308,9 +358,25 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     stateNotes,
     hasProjectConfig,
   );
-  const split = measuredJudgedMarkdown(achados);
-  if (split.length > 0) extras.sections = [...(extras.sections ?? []), {title: 'Medido e julgado', markdown: split}];
+  const previous = await previousRawFindings(input.dataDirectory, input.projectId, designReportDirectoryName(input.createdAt));
+  extras.sections = [
+    ...(extras.sections ?? []),
+    ...analysisSections(input, projectConfig, brand, consistency),
+    {title: 'Desde o último relatório', markdown: deltaMarkdown(previous, {findings, tools: ranTools})},
+  ];
+  const gaps = collectDesignGaps({
+    plan: imagePlan,
+    imageRan: image !== undefined,
+    shots: image?.shots ?? [],
+    toolRows: imageRows,
+    omittedFiles: chosen.omittedFiles,
+    modelCoverage: examined.modelCoverage,
+    visualMissing: examined.visualMissing,
+    rawFindings: findings,
+    screenFiles: chosen.screens.map(screen => screen.file),
+  });
   assertPasswordAbsent(input.login?.password, {
+    gaps,
     mapMarkdown,
     raw,
     note,
@@ -335,6 +401,8 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
     note,
     captures: captured.files,
     emptyStates: captured.emptyStates,
+    gaps,
+    trust: true,
     ...extras,
   });
   const read = await readDesignReport(input.dataDirectory, input.projectId, input.runId);
@@ -372,11 +440,17 @@ function toAchado(
     .filter((part, at, all) => part.length > 0 && all.indexOf(part) === at)
     .join('\n')
     .slice(0, 2000);
+  const basis = designBasis(finding.basis, finding.measure);
   const sources = verifier === null
-    ? ['medida', finding.reference]
+    ? basis === 'preferencia'
+      ? ['preferencia', finding.reference]
+      : finding.measure
+        ? ['medida', finding.reference, 'examinador']
+        : ['medida', finding.reference]
     : ['examinador', finding.reference, verifier.provider, ...(finding.measure ? ['medida'] : [])];
   return DesignAchado.parse({
     id: `ACH-${String(index).padStart(3, '0')}`,
+    basis,
     title: finding.title.slice(0, 200),
     severity: finding.severity,
     status: confirm.status,
@@ -392,7 +466,8 @@ function toAchado(
   });
 }
 
-function assembleAchados(
+/** Junta confirmações e medidas e numera por prioridade. Exportada para os testes. */
+export function assembleAchados(
   rawFindings: readonly DesignRawFinding[],
   confirmations: readonly {
     finding: DesignExamFinding;
@@ -413,7 +488,20 @@ function assembleAchados(
     if (covered.has(raw.fingerprint)) continue;
     achados.push(raw.measure === undefined ? routeDownAchado(achados.length + 1, raw) : measuredRawAchado(achados.length + 1, raw));
   }
-  return achados;
+  return byPriority(achados);
+}
+
+const SEVERITY_ORDER: Record<DesignAchadoValue['severity'], number> = {alta: 0, media: 1, baixa: 2, informativa: 3};
+const STATUS_ORDER: Record<DesignAchadoValue['status'], number> = {confirmado: 0, reaberto: 0, provavel: 1, fechado: 2, descartado: 3};
+
+/** Gravidade, depois situação. A ordem de chegada desempata. ACH-001 é o primeiro a corrigir. */
+function byPriority(achados: readonly DesignAchadoValue[]): DesignAchadoValue[] {
+  return achados
+    .map((achado, at) => ({achado, at}))
+    .sort((left, right) => SEVERITY_ORDER[left.achado.severity] - SEVERITY_ORDER[right.achado.severity]
+      || STATUS_ORDER[left.achado.status] - STATUS_ORDER[right.achado.status]
+      || left.at - right.at)
+    .map(({achado}, index) => ({...achado, id: `ACH-${String(index + 1).padStart(3, '0')}`}));
 }
 
 function measuredRawAchado(index: number, finding: DesignRawFinding): DesignAchadoValue {
@@ -434,10 +522,11 @@ function measuredRawAchado(index: number, finding: DesignRawFinding): DesignAcha
     where: {file: finding.file.slice(0, 400), line: finding.line},
     scenario: `Medido por ${finding.tool}. ${finding.snippet}`.slice(0, 2000),
     proof: `Medido: ${detail}. ${finding.snippet}`.replace(/\s+/g, ' ').trim().slice(0, 2000),
-    suggestion: 'A medida confirma o achado. A correção precisa mudar o valor medido.',
+    suggestion: suggestionFor(finding.rule),
     acceptance: DESIGN_ACCEPTANCE,
     sources: ['medida', finding.tool],
     secretPreview: null,
+    basis: 'medido',
   });
 }
 
@@ -456,6 +545,7 @@ function routeDownAchado(index: number, finding: DesignRawFinding): DesignAchado
     acceptance: DESIGN_ACCEPTANCE,
     sources: ['medida', finding.tool],
     secretPreview: null,
+    basis: 'medido',
   });
 }
 
@@ -466,18 +556,111 @@ function referenceSection(note: string | undefined, references: readonly {name: 
   return lines.length === 0 ? undefined : lines.join('\n');
 }
 
-function measuredJudgedMarkdown(achados: readonly DesignAchadoValue[]): string {
-  if (achados.length === 0) return '';
-  const measured = achados.filter(item => item.verifier === null && item.sources.includes('medida'));
-  const judged = achados.filter(item => item.verifier !== null);
-  const line = (item: DesignAchadoValue) => `- ${item.id} ${item.reference} (${item.status})`;
-  return [
-    `Medidos: ${measured.length}. A medida confirma, sem modelo.`,
-    ...measured.map(line),
-    '',
-    `Julgados: ${judged.length}. O revisor confirmou.`,
-    ...judged.map(line),
-  ].join('\n');
+type GapPlan = {
+  routes: readonly {route: string; themes: readonly string[]; states: readonly unknown[]}[];
+  viewports: readonly number[];
+};
+
+function stateName(state: unknown): string {
+  if (typeof state === 'string') return state;
+  if (state && typeof state === 'object' && typeof (state as {name?: unknown}).name === 'string') return (state as {name: string}).name;
+  return 'padrao';
+}
+
+const ROUTE_DOWN = (finding: DesignRawFinding) => finding.tool === 'navegacao' && finding.rule === 'DESIGN-ROTA-INDISPONIVEL';
+
+/**
+ * Lacunas da rodada, para 'O que não foi possível verificar'. Função pura.
+ * Rota sem captura dá uma linha e nenhuma linha de largura. Estado sem captura em nenhuma largura também.
+ */
+export function collectDesignGaps(input: {
+  plan?: GapPlan;
+  imageRan: boolean;
+  shots: readonly {route: string; viewport: number; theme: string; state: string}[];
+  toolRows: readonly ToolCoverageRow[];
+  omittedFiles: readonly string[];
+  modelCoverage?: DesignExamCoverage;
+  visualMissing: readonly {file: string; route: string}[];
+  rawFindings: readonly DesignRawFinding[];
+  screenFiles: readonly string[];
+}): DesignReportGap[] {
+  const gaps: DesignReportGap[] = [];
+  if (!input.imageRan) gaps.push({kind: 'ferramenta', item: 'imagem', reason: 'não executada'});
+  if (input.imageRan && input.plan !== undefined) {
+    const shot = new Set(input.shots.map(item => `${item.route}\u001f${item.viewport}\u001f${item.theme}\u001f${item.state}`));
+    for (const route of input.plan.routes) {
+      const own = input.shots.filter(item => item.route === route.route);
+      if (own.length === 0) {
+        gaps.push({kind: 'rota', item: route.route, reason: 'nenhuma captura'});
+        continue;
+      }
+      for (const state of [...new Set(route.states.map(stateName))]) {
+        if (!own.some(item => item.state === state)) {
+          gaps.push({kind: 'estado', item: `${route.route} ${state}`, reason: 'sem captura em nenhuma largura'});
+          continue;
+        }
+        for (const theme of route.themes) {
+          for (const viewport of input.plan.viewports) {
+            if (shot.has(`${route.route}\u001f${viewport}\u001f${theme}\u001f${state}`)) continue;
+            gaps.push({kind: 'viewport', item: `${route.route} ${viewport}px ${theme} ${state}`, reason: 'sem captura'});
+          }
+        }
+      }
+    }
+  }
+  for (const row of input.toolRows) {
+    const failed = row.failure !== 'nenhuma';
+    if (!failed && row.executed !== '0') continue;
+    gaps.push({kind: 'ferramenta', item: row.tool, reason: failed ? `falhou: ${designFailureCode(row.failure)}` : 'não executou'});
+  }
+  for (const file of input.omittedFiles) {
+    gaps.push({kind: 'arquivo', item: file, reason: `fora do limite de ${MAX_SCREENS} telas do exame`});
+  }
+  if (input.modelCoverage) {
+    for (const [role, row] of [['examinador', input.modelCoverage.examiner], ['revisor', input.modelCoverage.reviewer]] as const) {
+      if (row.judged >= row.requested) continue;
+      gaps.push({kind: 'exame', item: `${role} ${row.model}`, reason: `${row.judged} de ${row.requested} julgadas, falha ${designFailureCode(row.failure)}`});
+    }
+  }
+  for (const item of input.visualMissing) {
+    gaps.push({kind: 'visual', item: `${item.route} (${item.file})`, reason: 'sem crítica visual completa'});
+  }
+  const screens = new Set(input.screenFiles);
+  const orphan = input.rawFindings.filter(item => item.measure === undefined && !ROUTE_DOWN(item) && !screens.has(item.file)).length;
+  if (orphan > 0) gaps.push({kind: 'exame', item: 'achados de ferramenta', reason: `${orphan} achados de ferramenta sem tela para conferir`});
+  return gaps.map(gap => ({kind: gap.kind, item: gap.item.trim() || '-', reason: gap.reason.trim() || '-'}));
+}
+
+const COVERAGE_TOOL: Record<string, string> = {'axe-core': 'axe'};
+
+/** Notas da imagem que vão para a seção Estados: rota indisponível e rota que redirecionou. */
+export function imageStateNotes(notes: readonly string[]): string[] {
+  return notes.filter(note => note.includes('indisponível') || note.includes('redirecionou'));
+}
+
+/** Ferramentas que rodaram nesta rodada. A próxima rodada só compara o que as duas mediram. */
+export function toolsThatRan(
+  files: readonly DesignSourceFile[],
+  image: DesignImageExecution | undefined,
+  rows: readonly ToolCoverageRow[],
+  tokens: boolean,
+  findings: readonly DesignRawFinding[],
+  analyses: readonly string[] = [],
+): string[] {
+  const ran = new Set(findings.map(item => item.tool));
+  // Consistência e tokens do projeto contam como rodados mesmo sem achado; senão o delta os daria como não comparados.
+  for (const tool of analyses) ran.add(tool);
+  if (files.some(file => /\.(?:html?|tsx|jsx|vue)$/i.test(file.path))) ran.add('html');
+  if (files.some(file => /\.css$/i.test(file.path))) {
+    ran.add('inventario');
+    ran.add('teclado');
+  }
+  if (tokens) ran.add('tokens');
+  if (image?.ok) ran.add('navegacao');
+  for (const row of rows) {
+    if (row.failure === 'nenhuma' && !/^0(?:\D|$)/.test(row.executed.trim())) ran.add(COVERAGE_TOOL[row.tool] ?? row.tool);
+  }
+  return [...ran].map(tool => tool.slice(0, 40)).sort((a, b) => a.localeCompare(b)).slice(0, 100);
 }
 
 /** Liga cada rota servida ao HTML de mesmo caminho. `/` usa `index.html`. */
@@ -508,7 +691,7 @@ function chooseScreens(
   files: readonly DesignSourceFile[],
   routes: readonly {file: string; route: string}[],
   findings: readonly DesignRawFinding[],
-): {screens: DesignExamineInput['screens']; omitted: number} {
+): {screens: DesignExamineInput['screens']; omitted: number; omittedFiles: string[]} {
   const routeOf = new Map<string, string>();
   for (const route of routes) {
     const key = route.file.slice(0, 400);
@@ -526,6 +709,7 @@ function chooseScreens(
   const picked = ranked.slice(0, MAX_SCREENS);
   return {
     omitted: ranked.length - picked.length,
+    omittedFiles: ranked.slice(MAX_SCREENS).map(file => file.path.slice(0, 400)),
     screens: picked.map(file => {
       const key = file.path.slice(0, 400);
       return {
@@ -707,8 +891,9 @@ function attributeDesignFindings(
   });
 }
 
-function filesDark(files: readonly {text: string}[]): boolean {
-  return files.some(file => /prefers-color-scheme\s*:\s*dark|data-theme|color-scheme\s*:/i.test(file.text));
+/** O projeto tem tema escuro. `color-scheme: light` sozinho não conta. */
+export function filesDark(files: readonly {text: string}[]): boolean {
+  return files.some(file => /prefers-color-scheme\s*:\s*dark|data-theme|color-scheme\s*:[^;}]*dark/i.test(file.text));
 }
 
 const DESIGN_CONFIG_FILE = 'design.config.json';
@@ -733,6 +918,83 @@ async function readRepoDesignConfig(repo: string, files: readonly DesignSourceFi
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Arquivo de tokens do projeto (chave `tokens`). Mesmo cuidado do design.config.json:
+ * sem seguir symlink em nenhum trecho do caminho e com teto de tamanho.
+ * Arquivo ausente ou ilegível volta como nota, sem achado. Arquivo grande demais recusa o config.
+ */
+async function readRepoTokensFile(
+  repo: string,
+  files: readonly DesignSourceFile[],
+  path: string,
+): Promise<{path: string; text?: string; note?: string}> {
+  const unreadable = {path, note: `O arquivo de tokens ${path} não pôde ser lido. Nada foi comparado.`};
+  const fromFiles = files.find(file => file.path === path)?.text;
+  if (fromFiles !== undefined) {
+    if (Buffer.byteLength(fromFiles, 'utf8') > DESIGN_TOKENS_MAX_BYTES) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    return {path, text: fromFiles};
+  }
+  const parts = path.split('/');
+  for (let at = 1; at < parts.length; at += 1) {
+    const info = await lstat(join(repo, ...parts.slice(0, at))).catch(() => undefined /* missing directory: note below */);
+    if (info === undefined || info.isSymbolicLink() || !info.isDirectory()) return unreadable;
+  }
+  const handle = await open(join(repo, ...parts), constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => undefined /* missing or symlink: note */);
+  if (handle === undefined) return unreadable;
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return unreadable;
+    if (info.size > DESIGN_TOKENS_MAX_BYTES) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    const bytes = await handle.readFile();
+    if (bytes.length > DESIGN_TOKENS_MAX_BYTES) throw new Refusal('DESIGN_CONFIG_INVALID', 400);
+    if (bytes.includes(0)) return unreadable;
+    return {path, text: bytes.toString('utf8')};
+  } finally {
+    await handle.close();
+  }
+}
+
+type BrandRun = {comparison?: BrandComparison; source?: string; note?: string};
+
+/** Compara as amostras medidas com os tokens do projeto. Sem amostra, nada é julgado. */
+function brandComparison(source: {path: string; text?: string; note?: string} | undefined, blocks: DesignImageExecution['computedBlocks']): BrandRun {
+  if (source === undefined) return {};
+  if (source.text === undefined) return {source: source.path, note: source.note ?? `O arquivo de tokens ${source.path} não pôde ser lido.`};
+  if (blocks.length === 0) return {source: source.path, note: 'A imagem não mediu a página. Os tokens do projeto não foram comparados.'};
+  if (Buffer.byteLength(source.text, 'utf8') > DESIGN_TOKENS_MAX_BYTES) {
+    return {source: source.path, note: `O arquivo de tokens ${source.path} passa de ${DESIGN_TOKENS_MAX_BYTES} bytes. Nada foi comparado.`};
+  }
+  return {source: source.path, comparison: compareWithDeclared(blocks, parseDeclaredTokens(source.path, source.text))};
+}
+
+function pushNew(findings: DesignRawFinding[], extra: readonly DesignRawFinding[]): void {
+  for (const item of extra) {
+    if (!findings.some(existing => existing.fingerprint === item.fingerprint)) findings.push(item);
+  }
+}
+
+/** Seções dos analisadores: sinais de modelo genérico, tokens do projeto e consistência entre telas. */
+function analysisSections(
+  input: DesignModuleInput,
+  config: DesignProjectConfig,
+  brand: BrandRun,
+  consistency: ConsistencyResult | undefined,
+): {title: string; markdown: string}[] {
+  const sections: {title: string; markdown: string}[] = [];
+  if (config.genericSignals !== false) {
+    const signals = collectGenericSignals(input.files);
+    if (input.scoreVisual === true || signals.length > 0) {
+      sections.push({title: 'Sinais de modelo genérico', markdown: genericLookMarkdown(signals)});
+    }
+  }
+  if (brand.comparison) sections.push({title: 'Tokens do projeto', markdown: brandMarkdown(brand.comparison)});
+  else if (brand.source !== undefined) {
+    sections.push({title: 'Tokens do projeto', markdown: `Fonte: \`${brand.source.replace(/[|`<>\r\n]/g, ' ')}\`.\n${brand.note ?? ''}`.trim()});
+  }
+  if (consistency) sections.push({title: 'Consistência entre telas', markdown: consistencyMarkdown(consistency)});
+  return sections;
 }
 
 function imageStates(route: {states: readonly {name: string; url?: string; acoes?: readonly string[]}[]; loginState: boolean}): unknown[] {
@@ -864,6 +1126,7 @@ function mergeTools(left: DesignToolReports | undefined, right: DesignToolReport
   const stylelint = [...(left?.stylelint ?? []), ...(right?.stylelint ?? [])];
   const cssAnalyzer = [...(left?.cssAnalyzer ?? []), ...(right?.cssAnalyzer ?? [])];
   const keyboard = [...(left?.keyboard ?? []), ...(right?.keyboard ?? [])];
+  const render = [...(left?.render ?? []), ...(right?.render ?? [])];
   return {
     ...(axe.length > 0 ? {axe} : {}),
     ...(pa11y.length > 0 ? {pa11y} : {}),
@@ -871,6 +1134,7 @@ function mergeTools(left: DesignToolReports | undefined, right: DesignToolReport
     ...(stylelint.length > 0 ? {stylelint} : {}),
     ...(cssAnalyzer.length > 0 ? {cssAnalyzer} : {}),
     ...(keyboard.length > 0 ? {keyboard} : {}),
+    ...(render.length > 0 ? {render} : {}),
   };
 }
 
@@ -891,5 +1155,8 @@ async function writeImageFailure(input: DesignModuleInput, origin: string, image
       {title: 'Execução da imagem', markdown: `O contêiner não entregou achados. Código ${image.code}.`},
     ],
     files: [{name: 'cobertura-ferramentas.md', body: toolCoverageMarkdown(image.coverage)}],
+    gaps: image.coverage
+      .filter(row => row.failure !== 'nenhuma' || row.executed === '0')
+      .map(row => ({kind: 'ferramenta' as const, item: row.tool, reason: row.failure !== 'nenhuma' ? `falhou: ${designFailureCode(row.failure)}` : 'não executou'})),
   });
 }
