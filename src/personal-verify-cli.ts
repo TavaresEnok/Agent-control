@@ -5,7 +5,7 @@ import {finishExamIntent,withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_RESTORE_FAILED_TEXT,EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
 import {clearExamContextCapacityWaits} from './exam-provider.ts';
 import {loadInstallation} from './installation.ts';
-import {beginPersonalVerification,readVerificationProgress,resolvePersonalVerification} from './verify-command.ts';
+import {beginPersonalVerification,resolvePersonalVerification,type VerifyJobOutcome} from './verify-command.ts';
 import {removeSecurityReport} from './verify-report.ts';
 import {VERIFY_RECHECK_NEW_EXAM_GUIDANCE,VERIFY_RECHECK_NEW_EXAM_REQUIRED} from './verify-remediate.ts';
 
@@ -168,8 +168,10 @@ export async function runPersonalVerifySession(
  try{
   id=await withExamSignals(
    async()=>{
+    let outcome:VerifyJobOutcome|undefined;
     const started=await (deps?.begin??beginPersonalVerification)({
      ...resolved.input,
+     onOutcome(ended){outcome=ended;},
      observe(pending){
       job=pending;
       void job.catch(()=>undefined/* marks the rejection handled; the owner awaits it and reports */);
@@ -178,10 +180,11 @@ export async function runPersonalVerifySession(
     runId=started.id;
     console.log('Verificação '+started.id+' começou.');
     await Promise.race([job,aborted]);
-    // The report is saved either way; only the progress file says whether every file was judged.
-    const row=(await readVerificationProgress(resolved.input.dataDirectory,resolved.input.projectId)).find(item=>item.id===started.id);
-    if(row?.status==='incomplete'){
-     console.log('Verificação '+started.id+' incompleta: '+(row.pending??0)+' de '+(row.total??0)+' arquivos sem julgamento.');
+    // The report is saved either way. Only the job's own outcome says it is complete: without it, the exam is not called done.
+    if(outcome?.status!=='done'){
+     const why=[...(outcome?.pending?[outcome.pending+' de '+outcome.total+' arquivos sem julgamento']:[]),
+      ...(outcome?.partial?['relatório parcial por falta de orçamento de chamadas do modelo']:[])];
+     console.log('Verificação '+started.id+' incompleta: '+(why.length?why.join('; '):'o exame não devolveu o resultado')+'.');
      incomplete=new Refusal('VERIFY_EXAM_INCOMPLETE');
     }else console.log('Verificação '+started.id+' concluída.');
     return started.id;

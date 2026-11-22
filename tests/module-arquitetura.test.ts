@@ -1791,7 +1791,8 @@ test('host e coletor alinham contrato global de redação entre caminho recusado
   const root = mkdtempSync(join(tmpdir(), 'arch-global-redact-compat-'));
   const repo = join(root, 'repo');
   const dataDirectory = join(root, 'data');
-  const globalRefusedPath = 'src/international/payment/reconciliation.ts';
+  // A mixed-case run of 40 base64 characters with a slash still looks like an AWS key; a lowercase path does not.
+  const globalRefusedPath = `src/${'Kq7wErTz'.repeat(3).slice(0, 20)}/${'JkLzXc'.repeat(3).slice(0, 15)}.ts`;
   const supportedLongPath = 'src/international/payments/reconciliation.ts';
   const protectedComponent = `src/token_${'A'.repeat(39)}G.ts`;
   const protectedAncestor = 'app/(portal)/.npmrc/[id].ts';
@@ -1800,6 +1801,7 @@ test('host e coletor alinham contrato global de redação entre caminho recusado
 
   assert.equal(hasKnownSecret(globalRefusedPath), true);
   assert.equal(hasKnownSecret(supportedLongPath), false);
+  assert.equal(hasKnownSecret('src/international/payment/reconciliation.ts'), false);
   assert.equal(hasKnownSecret(protectedComponent), true);
   assert.equal(hasKnownSecret(freeTextToken), true);
   assert.equal(redactUnknownSecrets(freeTextToken).includes(freeTextToken), false);

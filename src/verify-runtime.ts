@@ -251,7 +251,9 @@ async function examine(
     const labels = {testes: 'testes', documentacao: 'documentação', gerados: 'arquivos gerados'} as const;
     for (const kind of ['testes', 'documentacao', 'gerados'] as const) {
       const out = auxiliary[kind];
-      if (out.length) notes.push(`Ficaram fora do exame do modelo ${out.length} ${labels[kind]}: ${out.slice(0, 5).join(', ')}${out.length > 5 ? '…' : ''}. As ferramentas, como o gitleaks, continuam lendo esses arquivos.`);
+      // Generated code leaves by a header the repository itself writes: every such file is named, up to a bound, so the owner can check.
+      const shown = kind === 'gerados' ? 50 : 5;
+      if (out.length) notes.push(`Ficaram fora do exame do modelo ${out.length} ${labels[kind]}: ${out.slice(0, shown).join(', ')}${out.length > shown ? '…' : ''}. As ferramentas, como o gitleaks, continuam lendo esses arquivos.`);
     }
   }
   if (binaries.length) notes.push(`Arquivos binários ou acima de 2 MB ficaram fora do exame do modelo (${binaries.length}): ${binaries.slice(0, 10).join(', ')}${binaries.length > 10 ? '…' : ''}. As ferramentas continuam lendo esses arquivos.`);

@@ -40,6 +40,13 @@ const UNKNOWN_PATTERNS = [
   new RegExp(String.raw`(?:${ASSIGN_NAME})\w*["']?\s*[:=]\s*${NOT_A_MASK}(?!(?:null|true|false)\b)${SECRET_VALUE}`, 'gi'),
 ];
 
+// The 40-char AWS rule above also matches a lowercase repository path of 40 characters, such as
+// backend/internal/attendance/store/errors.go. A random key has no uppercase in about 1 of 10^9, so a lowercase run with a
+// slash is a path and stays. Kept outside the list: the collector of module 8 copies the list verbatim.
+const AWS_SECRET_KEY = UNKNOWN_PATTERNS.find(pattern => pattern.source.endsWith('[A-Za-z0-9+/]{40}(?![A-Za-z0-9+/])'))!;
+const LOWERCASE_PATH = /^[a-z0-9]*\/[a-z0-9/]*$/;
+const isLive = (pattern: RegExp, match: string) => pattern !== AWS_SECRET_KEY || !LOWERCASE_PATH.test(match);
+
 function fresh(pattern: RegExp, global: boolean): RegExp {
   const flags = new Set(pattern.flags);
   if (global) flags.add('g');
@@ -89,13 +96,15 @@ export function redactText(text: string, secrets: readonly string[]): string {
 
 export function redactUnknownSecrets(text: string, mask: (secret: string) => string = masked): string {
   let out = text;
-  for (const pattern of UNKNOWN_PATTERNS) out = out.replace(fresh(pattern, true), mask);
+  for (const pattern of UNKNOWN_PATTERNS) out = out.replace(fresh(pattern, true), match => (isLive(pattern, match) ? mask(match) : match));
   return out;
 }
 
 /** True when text still contains a live known secret. A mask from secretPreview does not count. */
 export function hasKnownSecret(text: string): boolean {
-  return UNKNOWN_PATTERNS.some(pattern => fresh(pattern, false).test(text));
+  return UNKNOWN_PATTERNS.some(pattern => pattern === AWS_SECRET_KEY
+    ? [...text.matchAll(fresh(pattern, true))].some(match => isLive(pattern, match[0]))
+    : fresh(pattern, false).test(text));
 }
 
 /** Basename only, compared in lowercase. `identity.ts` is not secret-class; `id_rsa` is. */

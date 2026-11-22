@@ -1658,14 +1658,15 @@ function assertNoHostSecretLeak(out: {coverage: unknown[]; findings: unknown[]})
 }
 
 test('caminhos detectados por hasKnownSecret são omitidos dos relatórios com declaração agregada e sem diagnóstico parcial', async () => {
-  const secretPath = 'deploy/modules/dependencias/dependencias-tools.lock.json';
+  // Mixed case: a lowercase run of 40 path characters is a path, not an AWS key.
+  const secretPath = 'deploy/Modules/Dependencias/Dependencias-tools.lock.json';
   const tokenPath = 'config/ghp_synthetic12345678901234567890.ts';
   assert.equal(hasKnownSecret(secretPath), true);
   assert.equal(hasKnownSecret(tokenPath), true);
 
   const dir = mkdtempSync(join(tmpdir(), 'prontidao-secret-path-'));
   try {
-    mkdirSync(join(dir, 'deploy', 'modules', 'dependencias'), {recursive: true});
+    mkdirSync(join(dir, 'deploy', 'Modules', 'Dependencias'), {recursive: true});
     mkdirSync(join(dir, 'config'), {recursive: true});
     mkdirSync(join(dir, 'scripts'), {recursive: true});
     writeFileSync(join(dir, 'Dockerfile'), 'FROM scratch\n');
@@ -1689,7 +1690,7 @@ test('caminhos detectados por hasKnownSecret são omitidos dos relatórios com d
     assert.match(cleanLimit?.detail ?? '', /^2 caminho\(s\) omitido\(s\)/);
     assertNoHostSecretLeak(clean);
     const serializedClean = JSON.stringify(clean);
-    for (const fragment of ['dependencias-tools', 'ghp_synthetic', 'depl\u2026', 'ghp_\u2026']) {
+    for (const fragment of ['Dependencias-tools', 'ghp_synthetic', 'depl\u2026', 'ghp_\u2026']) {
       assert.equal(serializedClean.includes(fragment), false);
     }
     await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(clean), {module: 'prontidao'}));
@@ -1713,7 +1714,7 @@ test('caminhos detectados por hasKnownSecret são omitidos dos relatórios com d
     assert.equal(scoped.includes(secretPath), false);
     assert.equal(scoped.includes(tokenPath), false);
     assertNoHostSecretLeak(partial);
-    assert.equal(JSON.stringify(partial).includes('dependencias-tools'), false);
+    assert.equal(JSON.stringify(partial).includes('Dependencias-tools'), false);
     await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(partial), {module: 'prontidao'}));
 
     const skipSecretPath = 'config/AKIA1234567890123456.json';
@@ -1747,7 +1748,7 @@ test('caminhos detectados por hasKnownSecret são omitidos dos relatórios com d
     assert.equal(withBlockedFinding.coverage.find(c => c.tool === 'trivy')?.status, 'failed');
     assert.equal(withBlockedFinding.coverage.some(c => c.tool === 'prontidao:limites' && c.status === 'failed'), true);
     assertNoHostSecretLeak(withBlockedFinding);
-    for (const fragment of ['dependencias-tools', 'ghp_synthetic', 'depl\u2026', 'ghp_\u2026']) {
+    for (const fragment of ['Dependencias-tools', 'ghp_synthetic', 'depl\u2026', 'ghp_\u2026']) {
       assert.equal(JSON.stringify(withBlockedFinding).includes(fragment), false);
     }
     await validateModuleCollectorPublication(dir, parseModuleCollectorOutput(JSON.stringify(withBlockedFinding), {module: 'prontidao'}));

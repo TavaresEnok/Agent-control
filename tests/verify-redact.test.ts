@@ -172,6 +172,30 @@ test('literal JSON null, true e false depois da chave não é segredo', () => {
   assert.equal(redactUnknownSecrets('password=valor-password-sem-aspas').includes('valor-password-sem-aspas'), false);
 });
 
+test('caminho de repositório em minúsculas não é chave AWS; chave com maiúsculas continua bloqueada, no caminho ou num segmento', async () => {
+  const {assertModuleRepoRelativePath} = await import('../src/verification-modules-contracts.ts');
+  for (const file of [
+    'backend/internal/attendance/store/errors.go',
+    'backend/internal/attendance/service/rows.go',
+    'backend/internal/attendance/pipeline/doc.go',
+    'backend/internal/presence/httpapi/routes.go',
+    'backend/internal/attendance/jobs/telemetry.go',
+    'backend/internal/platform/dbgen/users.sql.go',
+  ]) {
+    assert.equal(hasKnownSecret(file), false, file);
+    assert.equal(redactUnknownSecrets(file), file, file);
+    assert.equal(assertModuleRepoRelativePath(file), file, file);
+  }
+  const key = `${'wJalrXUtn'.padEnd(19, 'Q')}/${'b'.repeat(20)}`;
+  const segmentKey = `${'K7mdeNG'.repeat(6).slice(0, 40)}`;
+  assert.equal(hasKnownSecret(segmentKey), true);
+  for (const blocked of [key, `${'n'.repeat(19)}+${'m'.repeat(20)}`]) assert.equal(hasKnownSecret(blocked), true, blocked);
+  // Between slashes the key sits in a longer run; the path check reads each segment.
+  for (const blocked of [key, `src/${segmentKey}/app.ts`, `src/${segmentKey}.ts`]) {
+    assert.throws(() => assertModuleRepoRelativePath(blocked), blocked);
+  }
+});
+
 test('redige bearer, ghs, gho, npm, ASIA, rk_live, SendGrid e chave AWS sem comer sha1', () => {
   const bearerToken = 'super-token-ficticio-123';
   const ghs = `ghs_${'a'.repeat(20)}`;

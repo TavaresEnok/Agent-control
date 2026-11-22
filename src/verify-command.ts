@@ -70,6 +70,8 @@ export type PersonalVerificationInput = {
   worker?: VerifyWorker;
   runTools?: ToolRun;
   observe?: (job: Promise<void>) => void;
+  /** Called with how the job ended, before the observed job resolves. Absent when the job failed. */
+  onOutcome?: (outcome: VerifyJobOutcome) => void;
   databasesDirectory?: string;
   image?: string;
   modelCalls?: {count: number};
@@ -149,6 +151,9 @@ export type VerificationProgress = {
   /** Status `incomplete`: arquivos que terminaram sem julgamento do examinador. */
   pending?: number;
 };
+
+/** How a job that saved its report ended: `incomplete` when files stayed without the examiner's judgment or the report is partial. */
+export type VerifyJobOutcome = {status: 'done' | 'incomplete'; pending: number; total: number; partial: boolean};
 
 type ReadyVerification = {
   projectId: string;
@@ -469,6 +474,16 @@ async function homologationContainers(installationPath: string | undefined): Pro
   return config.verifyHomologationContainers ?? [];
 }
 
+/** Module 1 runs as many slices at once as the installation has evaluation slots. The capacity queue still gates every call. */
+export async function evaluationSlots(ledger: Ledger): Promise<number> {
+  const pool = ledger.pool as {query?: (sql: string, params: readonly unknown[]) => Promise<{rows?: unknown}>} | undefined;
+  if (typeof pool?.query !== 'function') return 1;
+  const found = await pool.query('SELECT evaluation_limit FROM ac_capacity_config WHERE id=1', [])
+    .catch(() => undefined /* parallel slices are only a speed-up: without the configuration the slices run one at a time */);
+  const limit = Array.isArray(found?.rows) ? (found.rows[0] as {evaluation_limit?: unknown} | undefined)?.evaluation_limit : undefined;
+  return Number.isSafeInteger(limit) && (limit as number) >= 1 ? limit as number : 1;
+}
+
 async function assertVerificationAvailable(ready: ReadyVerification): Promise<void> {
   const pool = ready.ledger.pool as {query?: (sql: string, params: readonly unknown[]) => Promise<{rows?: unknown; rowCount?: unknown}>} | undefined;
   if (typeof pool?.query === 'function') {
@@ -555,7 +570,7 @@ async function runJob(input: {
   networkRunner: NetworkRunner;
   /** The exam's single snapshot (parent folder). runJob removes it when the job ends. */
   snapshot: string;
-}): Promise<void> {
+}): Promise<VerifyJobOutcome> {
   const {ready, id, output, progressPath, state, modelCalls, startedMs, snapshot} = input;
   let progressWrites: Promise<void> = Promise.resolve();
   const onPhase = async (phase: 'mapa' | 'exame' | 'confirmacao' | 'relatorio') => {
@@ -608,6 +623,7 @@ async function runJob(input: {
         batch: ready.batch,
         pollBackoff: ready.pollBackoff,
         productionOnly: ready.productionOnly,
+        concurrency: await evaluationSlots(ready.ledger),
         startedMs,
         timeLimitMs: ready.timeLimitMs,
         ...(ready.wait ? {wait: ready.wait} : {}),
@@ -632,6 +648,7 @@ async function runJob(input: {
       state.modelCalls = modelCalls.count;
       state.durationMs = Date.now() - startedMs;
       await writePrivateFile(progressPath, renderProgress(state));
+      return {status: state.status, pending, total: result.examFiles, partial: Boolean(result.partial)};
     } catch (error) {
       try {
         await progressWrites;
@@ -711,7 +728,8 @@ export async function beginPersonalVerification(input: PersonalVerificationInput
     snapshot = await prepareExamSnapshot(ready.repoPath, ready.commit, Boolean(ready.staticPolicy),
       ready.staticPolicy ? {dataDirectory: ready.dataDirectory, projectId: ready.projectId, roundId: id} : undefined);
     await writePrivateFile(progressPath, renderProgress(state));
-    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot});
+    const job = runJob({ready, id, output, progressPath, state, modelCalls, startedMs, lockPath, databaseStamp, network, container, networkRunner, snapshot})
+      .then(outcome => { input.onOutcome?.(outcome); });
     started = true;
     input.observe?.(job);
     void job.catch(() => undefined /* marks the rejection handled; the owner awaits it and reports */);

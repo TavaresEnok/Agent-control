@@ -66,21 +66,26 @@ async function sniff(path: string): Promise<Buffer | 'huge' | undefined> {
   }
 }
 
-const TEST_DIRECTORIES = new Set(['test', 'tests', '__tests__', '__mocks__', 'testdata', 'spec', 'e2e']);
+// Test folders anywhere. `test`, `tests`, `spec` and `e2e` count only at the repository root: deeper, they are also route
+// and package names (app/api/test/route.ts, src/spec/handlers.ts), and production code must not leave the examiner by its folder.
+const TEST_DIRECTORIES = new Set(['__tests__', '__mocks__', 'testdata']);
+const ROOT_TEST_DIRECTORIES = new Set(['test', 'tests', 'spec', 'e2e']);
 const TEST_NAME = /(?:_test\.go|\.(?:test|spec)\.[cm]?[jt]sx?|_test\.py)$|^test_.+\.py$/iu;
 const DOC_NAME = /\.(?:md|mdx|markdown|rst|adoc|txt)$/iu;
 // Lists the build reads, not prose.
 const NOT_DOC = /^(?:requirements|constraints)[\w.-]*\.txt$|^cmakelists\.txt$|^robots\.txt$/iu;
 const LOCKFILE = /^(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.ya?ml|go\.sum|cargo\.lock|poetry\.lock|pipfile\.lock|composer\.lock|gemfile\.lock|uv\.lock)$/iu;
 const API_SPEC = /^(?:openapi|swagger)\.(?:json|ya?ml)$/iu;
-// Marker in a comment on one of the first lines: Go's "Code generated ... DO NOT EDIT", @generated, "This file was auto-generated".
-const GENERATED_HEADER = /^\s*(?:\/\/|#|\/\*+|\*|--|<!--)\s*(?:Code generated\b.*\bDO NOT EDIT\b|@generated\b|This file (?:was|is|has been) (?:auto-?generated|automatically generated|generated)\b)/imu;
+// Marker in a comment on one of the first lines: Go's exact line "// Code generated ... DO NOT EDIT.", @generated,
+// "This file was auto-generated". The repository writes it, so the note lists the files that left the examiner this way.
+const GENERATED_HEADER = /^(?:\/\/ Code generated .* DO NOT EDIT\.\r?$|\s*(?:\/\/|#|\/\*+|\*|--|<!--)\s*(?:@generated\b|This file (?:was|is|has been) (?:auto-?generated|automatically generated|generated)\b))/imu;
 
 /** Class of a module 1 file kept out of the model, or null for production code. `head` is the start of the file when readable. */
 export function auxiliaryKind(file: string, head?: Buffer): keyof AuxiliaryFiles | null {
   const parts = file.split('/');
   const base = parts.at(-1)!;
-  if (TEST_NAME.test(base) || parts.slice(0, -1).some(part => TEST_DIRECTORIES.has(part.toLowerCase()))) return 'testes';
+  const folders = parts.slice(0, -1).map(part => part.toLowerCase());
+  if (TEST_NAME.test(base) || folders.some(part => TEST_DIRECTORIES.has(part)) || (folders.length > 0 && ROOT_TEST_DIRECTORIES.has(folders[0]!))) return 'testes';
   if (DOC_NAME.test(base) && !NOT_DOC.test(base)) return 'documentacao';
   if (LOCKFILE.test(base) || API_SPEC.test(base)) return 'gerados';
   if (head && GENERATED_HEADER.test(head.toString('utf8').split('\n', 5).join('\n'))) return 'gerados';
