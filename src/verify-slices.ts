@@ -2,6 +2,7 @@ import {lstat, readdir, readFile, realpath} from 'node:fs/promises';
 import {groupByBudget, sha256Text} from './exam-batch-proof.ts';
 import {basename, extname, isAbsolute, join, relative, sep} from 'node:path';
 import type {ChecklistItem} from './verify-types.ts';
+import {isVendoredDependencyDir} from './vendored-dirs.ts';
 
 /** Input-token budget and file count per examiner call. `false` means one file per call. Absent keeps the historical slice of 15. */
 export type SecurityBatch = {tokens: number; files: number} | false;
@@ -13,24 +14,29 @@ const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', '.ai', 'verifi
 const SLICE_SIZE = 15;
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py']);
 
-export async function listExamFiles(repo: string): Promise<string[]> {
+/** `vendored` recebe as pastas vendor de terceiros que ficaram fora da lista. */
+export async function listExamFiles(repo: string, vendored?: string[]): Promise<string[]> {
   const root = await realpath(repo);
   const info = await lstat(root);
   if (!info.isDirectory()) throw new Error('REPOSITORIO_INVALIDO');
   const found: string[] = [];
-  await walk(root, root, found);
+  await walk(root, root, found, vendored);
   found.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   return found;
 }
 
-async function walk(root: string, dir: string, found: string[]): Promise<void> {
+async function walk(root: string, dir: string, found: string[], vendored?: string[]): Promise<void> {
   const entries = await readdir(dir, {withFileTypes: true});
   entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   for (const entry of entries) {
     const absolute = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (SKIP_DIRECTORIES.has(entry.name)) continue;
-      await walk(root, absolute, found);
+      if (await isVendoredDependencyDir(absolute, entry.name)) {
+        vendored?.push(toPosix(relative(root, absolute)));
+        continue;
+      }
+      await walk(root, absolute, found, vendored);
       continue;
     }
     if (entry.isSymbolicLink()) {

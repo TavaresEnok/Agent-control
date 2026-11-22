@@ -1,4 +1,5 @@
 import {Refusal} from './contracts.ts';
+import {isVendoredDependencyDir, VENDORED_REASON} from './vendored-dirs.ts';
 import {constants} from 'node:fs';
 import {lstat, open, readdir} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -240,6 +241,10 @@ export async function mapModuleSnapshot(snapshot: string, signal?: AbortSignal,
       if (((entry.isFile() || options?.aggregateOmissions) && secretName(file))
         || (options?.aggregateOmissions && hasKnownSecret(file))) {
         addFile({file, code: null, reason: 'arquivo de credenciais omitido'});
+        continue;
+      }
+      if (entry.isDirectory() && await isVendoredDependencyDir(absolute, entry.name)) {
+        addFile({file, code: null, reason: VENDORED_REASON});
         continue;
       }
       if (entry.isDirectory()) { await walk(absolute, file); continue; }

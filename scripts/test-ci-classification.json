@@ -318,6 +318,7 @@
   "verification-modules.test.ts",
   "verify-abandon.test.ts",
   "verify-account-secrets.test.ts",
+  "vendored-dirs.test.ts",
   "verify-api.test.ts",
   "verify-checklist.test.ts",
   "verify-coerce.test.ts",

@@ -229,7 +229,9 @@ async function examine(
   const rawFindings = (input.rawFindings ?? []).map(item => replaceRefusedRaw(RawFinding.parse(item), notes));
   const checklist = input.checklist ?? loadSecurityChecklist();
   const root = input.examRoot ?? input.repoPath;
-  const files = await listExamFiles(root);
+  const vendored: string[] = [];
+  const files = await listExamFiles(root, vendored);
+  if (vendored.length) notes.push(`Dependências de terceiros copiadas no repositório ficaram fora do exame do modelo e seguem cobertas pelas ferramentas: ${vendored.slice(0, 10).join(', ')}.`);
   const allowedFiles = new Set(files);
   const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(root, files), input.batch);
   const receipts: BatchCallReceipt[] = [];
