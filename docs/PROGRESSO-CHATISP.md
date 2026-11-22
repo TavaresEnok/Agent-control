@@ -294,3 +294,33 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Dependências** caiu com `PROJECT_ACCOUNTS_UNAVAILABLE`: o runtime ficou sem sessão Claude no momento em que reiniciei o gateway durante a rodada. **Regra: não reiniciar o gateway durante uma rodada.** O módulo voltou para a fila.
   - **Defeito AC-20 (`159eae27`):** a conta Max tinha `max_concurrent` fixo em 2, e o `evaluation_limit` 4 não fazia efeito. Novo `personal:maintenance --vagas-da-conta <conta> <1-8>`. A conta Enok Max foi para 4.
   - **Andamento às 21:35:** 88 jobs concluídos desde 20:55. A segurança vai em 239 de 697 arquivos (17 chamadas). Rodam qa, arquitetura e banco. Na fila: documentação, desempenho, prontidão, conformidade, dependências e design.
+- 22/11/2026 22:30 UTC — **Gerente: sessão curta.** Disco 93% (25 GB), carga ~4. Rodada `rodada-20261122-1922`.
+  - **Rodando (4, o limite da fila):** QA (1786858, 3 h 06), segurança (1799270, 3 h 04), banco (2228113, 1 h 30) e documentação (2684172, lançada pela fila às 22:25).
+  - **Arquitetura caiu às 22:25** com "Nenhuma conta permitida ... disponível no runtime" (mesma mensagem da dependências; não é cota, é a conta sem vaga/sessão no instante). Log antigo guardado em `m-arquitetura.falha-2225.log`. Coloquei arquitetura numa fila nova (`fila-rodada.sh ... arquitetura`), ao lado da fila de dependências (pid 2426502) e da fila original (1810556: desempenho, prontidão, conformidade, design). Elas só lançam com menos de 4 módulos ativos.
+  - **Pendente:** investigar por que a conta fica indisponível para o papel (vagas presas? `--recuperar-exame-orfao` em jobs `uncertain`). Se arquitetura ou dependências falharem de novo, o supervisor deve olhar o runtime. Não reiniciar o gateway na rodada. Sem trabalhadores durante o exame; F3 só depois de todos terminarem e do `personal:tokens --desde 19:22`.
+- 22/11/2026 22:34 UTC — **Gerente: sessão curta, nada lançado.** Disco 93% (24 GB), carga ~8. Rodada `rodada-20261122-1922`.
+  - **Rodando (4, o limite):** QA (1786858), segurança (1799270), banco (2228113), documentação (2684172).
+  - **Filas vivas:** 1810556 (desempenho, prontidão, conformidade, design), 2426502 (dependências), 2701198 (arquitetura). Lançam sozinhas quando houver menos de 4 módulos ativos.
+  - Nenhum módulo terminou desde a última sessão. Sem trabalhadores durante o exame; F3 só depois de todos terminarem e do `personal:tokens --desde 19:22`.
+- 22/11/2026 22:46 UTC — **Gerente: sessão curta, nada lançado.** Disco 93% (25 GB), carga ~5. Rodada `rodada-20261122-1922`.
+  - **Rodando (4, o limite):** QA (1786858, 3 h 22), segurança (1799270, 3 h 20), banco (2228113, 1 h 45) e arquitetura (2777135, relançada pela fila às 22:43).
+  - **Documentação caiu de novo às 22:42** (lançada às 22:25) com "Nenhuma conta permitida para este projeto está ativa e disponível no runtime para o papel solicitado" — mesma falha de dependências e arquitetura. Não é cota. Voltou para a fila 1810556 junto com desempenho, prontidão, conformidade e design; dependências segue na 2426502.
+  - **Pendente para o supervisor (defeito provável do produto):** a conta Enok Max fica "indisponível para o papel" quando o runtime tem 4 sessões ocupadas, apesar das vagas em 4 (AC-20). Olhar vagas presas e `--recuperar-exame-orfao` em jobs `uncertain`. Não reiniciar o gateway na rodada.
+  - Nenhum módulo terminou. Sem trabalhadores durante o exame; F3 só depois de todos terminarem e do `personal:tokens --desde 19:22`.
+- 22/11/2026 22:55 UTC — **Gerente: sessão curta, nada lançado.** Disco 93% (25 GB). Rodada `rodada-20261122-1922`.
+  - **Rodando (4):** QA (1786858, 3 h 32), segurança (1799270, 3 h 30), arquitetura (2777135) e desempenho (2817850, lançado pela fila às 22:51).
+  - **Banco caiu** (pid 2228113 não existe mais) com a mesma mensagem "Nenhuma conta permitida ... disponível no runtime para o papel solicitado" (4ª ocorrência: dependências, arquitetura, documentação, banco). Voltou para a fila 1810556 (banco, documentação, prontidão, conformidade, design); dependências segue na 2426502. Não relancei à mão.
+  - **Pendente para o supervisor:** a conta Enok Max some do runtime quando há 4 módulos ativos; investigar vagas presas e `--recuperar-exame-orfao`. Não reiniciar o gateway na rodada.
+  - Nenhum módulo concluiu. Sem trabalhadores durante o exame; F3 só depois de todos terminarem e do `personal:tokens --desde 19:22`.
+- 22/11/2026 23:05 UTC — **Supervisor, pausa por limite de uso da sessão. Defeito aberto AC-21 (alto):** banco, documentação, dependências e a 1ª tentativa de arquitetura caem com `PROJECT_ACCOUNTS_UNAVAILABLE`.
+  - **Suspeita:** em `src/exam-provider.ts`, `reserveSpecialistExamSeat`, linhas ~640–672.
+    - Quando a reserva volta com outra conta (ou a cadeia tem perfis da conta ajust), o produto libera a vaga e recusa em vez de esperar na fila.
+    - Os perfis antigos da ajust (`de7d4c47`) continuam na cadeia specialist da política.
+  - **Correção a investigar:**
+    - tratar como `CAPACITY_BUSY`, para entrar na espera;
+    - ou tirar os perfis ajust da cadeia pelo `personal:design -- preparar` ou pela política.
+  - **Andamento às 23:02:**
+    - segurança em 696 de 697 arquivos, na confirmação, com 59 chamadas;
+    - 435 jobs concluídos desde 20:55;
+    - rodam qa, arquitetura (relançada pelo gerente) e desempenho.
+  - **Gerente:** relance os módulos que caíram por AC-21 só quando a fila tiver vaga.
