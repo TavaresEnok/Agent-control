@@ -42,17 +42,19 @@ export async function goVendorPackages(dir: string, name: string): Promise<Set<s
   return modules > 0 ? listed : undefined;
 }
 
-/** O que o `go mod vendor` copia: fontes Go, assembly e C, e os avisos de licença. */
-const VENDOR_SOURCE = /\.(?:go|s|c|h)$/u;
-const VENDOR_NOTICE = /^(?:LICEN[CS]E|COPYING|NOTICE|PATENTS|AUTHORS|CONTRIBUTORS)(?:[-_][A-Za-z0-9]+)?(?:\.(?:txt|md|rst))?$/u;
+/**
+ * Num pacote listado sai tudo o que o Go copia com o pacote (fontes, assembly, C, licenças,
+ * documentação e configuração do autor), menos o que é script executável fora do Go: esse vai
+ * ao exame, porque o projeto poderia servi-lo ou rodá-lo.
+ */
+const VENDOR_KEEP_EXAMINED = /\.(?:[cm]?[jt]sx?|py|sh|bash|zsh|ps1|php|rb|pl|lua|html?|vue|svelte)$/iu;
 
-/** O arquivo, relativo à pasta vendor, é fonte ou aviso de um pacote ou raiz de módulo listado. */
+/** O arquivo, relativo à pasta vendor, é de um pacote ou raiz de módulo listado e não é script. */
 export function isListedVendorFile(relative: string, packages: ReadonlySet<string>): boolean {
   if (relative === 'modules.txt') return true;
   const slash = relative.lastIndexOf('/');
   if (slash <= 0 || !packages.has(relative.slice(0, slash))) return false;
-  const name = relative.slice(slash + 1);
-  return VENDOR_SOURCE.test(name) || VENDOR_NOTICE.test(name);
+  return !VENDOR_KEEP_EXAMINED.test(relative.slice(slash + 1));
 }
 
 function goModRequirements(text: string): Map<string, string> {
@@ -86,10 +88,10 @@ export const VENDORED_REASON = 'pacotes Go de terceiros copiados em vendor e con
 export function vendoredNote(entries: readonly {dir: string; files: number; digest?: string}[]): string {
   const shown = entries.slice(0, 10).map(entry => `${entry.dir} (${entry.files} arquivos${entry.digest ? `, sha256 ${entry.digest}` : ''})`).join(', ');
   const more = entries.length > 10 ? ` e mais ${entries.length - 10} pastas` : '';
-  return `Fontes de pacotes Go de terceiros em vendor, declarados no go.mod e no modules.txt, ficaram fora do exame do modelo: ${shown}${more}. `
+  return `Arquivos de pacotes Go de terceiros em vendor, declarados no go.mod e no modules.txt, ficaram fora do exame do modelo: ${shown}${more}. `
     + 'Isso não prova que o código seja de terceiros: uma alteração local no código copiado não é detectada pelo modelo. '
     + 'As ferramentas do módulo que leem o repositório continuam lendo a pasta. A impressão digital mostra num reexame se esses arquivos mudaram. '
-    + 'Os demais arquivos em vendor seguem as regras normais do exame.';
+    + 'Scripts e os arquivos fora dos pacotes listados seguem as regras normais do exame.';
 }
 
 /**

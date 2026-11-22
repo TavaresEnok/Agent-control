@@ -21,14 +21,39 @@ export type VendoredFiles = {dir: string; files: string[]};
  * os arquivos de pacotes de terceiros que ficaram fora da lista. Eles continuam legíveis
  * para confirmar achados das ferramentas.
  */
-export async function listExamFiles(repo: string, vendored?: VendoredFiles[]): Promise<string[]> {
+export async function listExamFiles(repo: string, vendored?: VendoredFiles[], binaries?: string[]): Promise<string[]> {
   const root = await realpath(repo);
   const info = await lstat(root);
   if (!info.isDirectory()) throw new Error('REPOSITORIO_INVALIDO');
+  const listed: string[] = [];
+  await walk(root, root, listed, vendored, undefined);
+  // Binário ou arquivo grande não é lido pelo examinador: ocupava uma vaga da fatia sem nada a julgar.
+  // Sem a lista `binaries`, o comportamento antigo fica (outros chamadores).
   const found: string[] = [];
-  await walk(root, root, found, vendored, undefined);
+  for (const file of listed) {
+    if (binaries !== undefined && await binaryOrHuge(join(root, file))) binaries.push(file);
+    else found.push(file);
+  }
   found.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   return found;
+}
+
+const BINARY_SNIFF = 8192;
+const EXAM_TEXT_LIMIT = 2_000_000;
+
+async function binaryOrHuge(path: string): Promise<boolean> {
+  const {open} = await import('node:fs/promises');
+  const handle = await open(path, 'r').catch(() => undefined /* unreadable: left in the list, the examiner reports it */);
+  if (!handle) return false;
+  try {
+    const info = await handle.stat();
+    if (info.size > EXAM_TEXT_LIMIT) return true;
+    const buffer = Buffer.alloc(Math.min(BINARY_SNIFF, info.size));
+    const {bytesRead} = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead).includes(0);
+  } finally {
+    await handle.close();
+  }
 }
 
 type VendorScope = {base: string; packages: ReadonlySet<string>; bucket: VendoredFiles};

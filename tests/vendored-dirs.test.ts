@@ -172,3 +172,19 @@ test('a impressão digital é a mesma no módulo 1 e nos módulos 2 a 9', async 
     await rm(root, {recursive: true, force: true});
   }
 });
+
+test('módulo 1: binário e arquivo acima de 2 MB saem do modelo, registrados à parte', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ac-bin-'));
+  try {
+    await writeFile(join(root, 'app.go'), 'package main\n');
+    await writeFile(join(root, 'm2demo'), Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0, 1, 2]));
+    await writeFile(join(root, 'grande.json'), 'x'.repeat(2_000_001));
+    const binaries: string[] = [];
+    assert.deepEqual(await listExamFiles(root, [], binaries), ['app.go']);
+    assert.deepEqual(binaries.sort(), ['grande.json', 'm2demo']);
+    // Sem a lista, o comportamento antigo fica para os outros chamadores.
+    assert.deepEqual((await listExamFiles(root)).sort(), ['app.go', 'grande.json', 'm2demo']);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});

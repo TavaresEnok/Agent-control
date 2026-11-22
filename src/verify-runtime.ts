@@ -231,7 +231,9 @@ async function examine(
   const checklist = input.checklist ?? loadSecurityChecklist();
   const root = input.examRoot ?? input.repoPath;
   const vendored: VendoredFiles[] = [];
-  const files = await listExamFiles(root, vendored);
+  const binaries: string[] = [];
+  const files = await listExamFiles(root, vendored, binaries);
+  if (binaries.length) notes.push(`Arquivos binários ou acima de 2 MB ficaram fora do exame do modelo (${binaries.length}): ${binaries.slice(0, 10).join(', ')}${binaries.length > 10 ? '…' : ''}. As ferramentas continuam lendo esses arquivos.`);
   if (vendored.length) {
     // Mesma base dos módulos 2 a 9: caminhos relativos à pasta vendor.
     const entries = await Promise.all(vendored.map(async entry => ({dir: entry.dir, files: entry.files.length,
@@ -239,7 +241,7 @@ async function examine(
     notes.push(vendoredNote(entries));
   }
   // Os arquivos vendorizados não vão ao examinador, mas continuam legíveis na confirmação dos achados das ferramentas.
-  const allowedFiles = new Set([...files, ...vendored.flatMap(entry => entry.files)]);
+  const allowedFiles = new Set([...files, ...binaries, ...vendored.flatMap(entry => entry.files)]);
   const slices = planSecuritySlices(files, checklist, input.batch === undefined ? new Map() : await examFileTokens(root, files), input.batch);
   const receipts: BatchCallReceipt[] = [];
   const pending = new Set<string>();
