@@ -225,7 +225,8 @@ test('confirma três condições distintas na mesma linha e rejeita observaçõe
     {...disabled, rule: 'QA-OPACO', evidence: skipped}, disabled, disabled, disabled, disabled];
   const valid: ReturnType<typeof reviewFixtureVerdict>[] = [];
   let reviews = 0;
-  const result = await examineFunctionalModule({module: 'qa', intentId, commit, findings: inputFindings,
+  // Every finding gets its own review here: the test is about the proof of each verdict.
+  const result = await examineFunctionalModule({module: 'qa', intentId, commit, findings: inputFindings, reviewTriage: false,
     map: {files: [{file, code, reason: null}, {file: otherFile, code, reason: null}], routes: []},
     reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
     worker: {async run(call) {

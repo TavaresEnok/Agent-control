@@ -18,6 +18,7 @@ import {type ModuleExamProvider, moduleExamProviders} from './module-exam-egress
 import type {ModuleExamCollectorContext} from './module-exam-collector-proof.ts';
 import {
   examineFunctionalModule,
+  examJobExited,
   CLAUDE_QUOTA_RETRY_INTERVAL_MS,
   type ModuleExamInput,
   DEFAULT_MODULE_EXAM_BATCH,
@@ -351,18 +352,22 @@ type WorkerInput = {
 /** The supervisor is solely responsible for a started grant; stop never implies exit. */
 function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
   const {ledger, principal, authority, signal} = input;
-  async function stopAndReconcile(supervisor: ModuleExamSupervisor, request: NativeRequest) {
+  /** True only when the supervisor reconciled the stopped job as terminal. */
+  async function stopAndReconcile(supervisor: ModuleExamSupervisor, request: NativeRequest): Promise<boolean> {
+    let terminal = false;
     try {
       await supervisor.stop(principal, authority, request);
       for (let attempt = 0; attempt < 4; attempt++) {
         const status = await supervisor.reconcile(principal, authority, request);
         if (status.state === 'completed' || status.state === 'failed') {
+          terminal = true;
           await supervisor.retireTerminal(principal, authority, request.jobId);
-          return;
+          return true;
         }
         if (attempt < 3) await delay(confirmationWait);
       }
-    } catch { /* The journal retains uncertain jobs and grants. */ }
+    } catch { /* The journal retains uncertain jobs and grants; retirement resumes from it. */ }
+    return terminal;
   }
   return {
     async run(call) {
@@ -396,14 +401,15 @@ function createModuleExamNativeWorker(input: WorkerInput): ModuleExamWorker {
           if (!outcome) throw new Refusal('MODULE_EXAM_TIMEOUT');
         } catch (error) {
           closeEgress();
-          await stopAndReconcile(supervisor, request);
+          const terminal = await stopAndReconcile(supervisor, request);
           if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
-          throw error;
+          // A job reconciled as terminal frees the caller to retry its files; an unproven one stops the exam.
+          throw terminal ? examJobExited(error) : error;
         }
         // A signed terminal outcome already sealed the physical receipt and released the grant.
         // Retirement can be resumed from the journal if housekeeping fails.
         await supervisor.retireTerminal(principal, authority, jobId).catch(() => undefined /* resumed from the journal by the retirement sweep */);
-        if (outcome.state === 'failed') throw new Refusal(safeFailureCode(outcome.failureCode, 'MODULE_EXAM_PROVIDER_FAILED'));
+        if (outcome.state === 'failed') throw examJobExited(new Refusal(safeFailureCode(outcome.failureCode, 'MODULE_EXAM_PROVIDER_FAILED')));
         return outcome.output;
       } catch (error) {
         // Before there is an execution journal the broker cannot have created a worker. A release
@@ -523,8 +529,20 @@ async function refreshClaudeExamQuotaForRetry(
   });
 }
 
+/** Evaluation seats this exam context may hold at once: the global limit and the context policy. */
+async function moduleExamSlots(ledger: Ledger, contextId: string): Promise<number> {
+  const row = (await ledger.pool.query<{slots: number | null}>(
+    `SELECT LEAST(c.evaluation_limit, (r.snapshot->>'maxEvaluatorsPerContext')::integer) AS slots
+     FROM ac_capacity_config c JOIN ac_contexts x ON x.id=$1
+     LEFT JOIN ac_policy_revisions r ON r.project_id=x.project_id AND r.revision=x.capacity_policy_revision
+     WHERE c.id=1`, [contextId])).rows[0];
+  return Math.max(1, Number(row?.slots) || 1);
+}
+
 export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | 'runtime' | 'signal'> & {
   mapEnabled?: boolean;
+  /** Per-file routing by module; `false` sends every file to every module. */
+  scope?: boolean;
   /** Batch limits; `false` disables batching. Defaults to the product limits. */
   batch?: ModuleExamBatch | false;
   pollBackoff?: boolean;
@@ -552,7 +570,9 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       if (allowedClaudeCount === 0) throw new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409);
     }
     if (!runtime.some(seat => seat.provider === 'claude')) {
-      return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE'});
+      // An empty runtime is an installation without native model execution: tools only, by configuration.
+      return examineFunctionalModule({intentId, module, map, findings, signal, unavailable: 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
+        ...(runtime.length === 0 ? {toolsOnly: true} : {})});
     }
     const supportedSeats = new Map(runtime.map(seat => [seat.provider, seat.accountIds]));
     const allowedClaudeAccounts = allowedSet
@@ -610,6 +630,8 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
     try {
       return await examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal, mapEnabled: input.mapEnabled,
         ...(input.batch === false ? {} : {batch: input.batch ?? DEFAULT_MODULE_EXAM_BATCH}),
+        ...(input.scope === false ? {scope: false} : {}),
+        concurrency: await moduleExamSlots(input.ledger, input.authority.contextId),
         ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
         worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
         reserve: reservations.reserve,

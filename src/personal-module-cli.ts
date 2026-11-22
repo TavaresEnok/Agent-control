@@ -77,7 +77,22 @@ const messages: Record<string, string> = {
   CAPACITY_BUSY: 'As vagas de execução do módulo estão ocupadas. Repita o exame quando houver uma vaga.',
   CAPACITY_QUEUED: 'O exame do módulo aguardou na fila de capacidade até o limite sem abrir vaga.',
   EXAM_INTERRUPTED: 'A execução do módulo foi interrompida.',
+  MODULE_EXAM_INCOMPLETE: 'O modelo não examinou todos os arquivos do módulo. Consulte o relatório parcial.',
+  NATIVE_PRELAUNCH_SETTLEMENT_PENDING: 'A partida de um job do exame ficou pendente de acerto (por exemplo, login da conta Claude vencido). Renove o login, rode npm run personal:maintenance e execute o módulo de novo.',
 };
+
+type ExamIncomplete = NonNullable<VerificationModuleRunResult['examIncomplete']> & {directory: string};
+/** The incomplete exam, attached to the MODULE_EXAM_INCOMPLETE refusal so the message can name it. */
+function incompleteExam(result: VerificationModuleRunResult, examIncomplete: NonNullable<VerificationModuleRunResult['examIncomplete']>) {
+  return Object.assign(new Refusal('MODULE_EXAM_INCOMPLETE', 409), {examIncomplete: {...examIncomplete, directory: result.directory}});
+}
+
+/** Lines printed for a finished run: its id, its report and, when any review failed, how many findings stayed unreviewed. */
+export function moduleRunLines(result: VerificationModuleRunResult): string[] {
+  const {unreviewed} = result;
+  return [result.runId, result.directory,
+    ...(unreviewed?.count ? [`Achados sem revisão: ${unreviewed.count} (código ${unreviewed.codes.join(', ')})`] : [])];
+}
 
 const recheckGuidance: Record<string, string> = {
   MODULE_RECHECK_ORIGINAL_UNKNOWN: 'Recupere o relatório e a cobertura originais para identificar a origem do achado.',
@@ -99,6 +114,10 @@ const recheckGuidance: Record<string, string> = {
 
 export function moduleCliFailureText(error: unknown, module?: VerificationModule): string {
   const code = error instanceof Refusal ? error.code : error instanceof Error ? error.message : '';
+  const incomplete = (error as {examIncomplete?: ExamIncomplete} | null)?.examIncomplete;
+  if (code === 'MODULE_EXAM_INCOMPLETE' && incomplete) {
+    return `O modelo não examinou ${incomplete.unjudged} de ${incomplete.total} arquivos (código ${incomplete.code}). Relatório parcial em ${incomplete.directory}.`;
+  }
   if (code === 'VERIFY_USAGE' && module) {
     const origin = module === 'prontidao' ? ' [--origem <https://...>]' : '';
     return `Uso: npm run personal:${module} -- <instalação.json> <projeto>${origin} ${moduleActions}`;
@@ -369,6 +388,8 @@ export async function runPersonalModuleCli(
       const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
         mapEnabled: project.economy?.map,
+        // Per-project switch for the routing by module, once the economy schema carries it.
+        ...((project.economy as {scope?: boolean} | undefined)?.scope === false ? {scope: false} : {}),
         batch: runOptions.batch,
         pollBackoff: runOptions.pollBackoff,
         ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
@@ -419,11 +440,12 @@ export async function runPersonalModuleCli(
         },
       );
       deps?.onResult?.(result);
-      if (providerLimited) throw new Refusal('PROVIDER_USAGE_LIMIT', 409);
+      if (providerLimited || result.examIncomplete?.code === 'PROVIDER_USAGE_LIMIT') throw new Refusal('PROVIDER_USAGE_LIMIT', 409);
+      if (result.examIncomplete) throw incompleteExam(result, result.examIncomplete);
       if (result.hasToolFailure) {
         throw new Refusal('VERIFY_TOOLS_FAILED', 409);
       }
-      return [result.runId, result.directory];
+      return moduleRunLines(result);
     } finally {
       stopLease();
       // Let the aborted run stop its collector and finish fenced cleanup before
@@ -470,9 +492,10 @@ async function main(): Promise<void> {
     const lines = await runPersonalModuleCli(module, process.argv.slice(3), {
       onQuotaWait: printClaudeQuotaWait,
       onResult(result) {
-        printed.push(result.runId, result.directory);
-        console.log(result.runId);
-        console.log(result.directory);
+        for (const line of moduleRunLines(result)) {
+          printed.push(line);
+          console.log(line);
+        }
       },
     });
     if (printed.length === 0) {

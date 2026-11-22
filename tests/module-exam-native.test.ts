@@ -345,8 +345,9 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
           return outcome;
         },
       }}]);
-      assert.equal(docker.logs.length, 6);
-      assert.equal(checkedRelease, 2);
+      // Two examiner jobs and one reviewer job: both findings of the rule share the grouped review.
+      assert.equal(docker.logs.length, 5);
+      assert.equal(checkedRelease, 1);
       assert.deepEqual(result?.achados.map(f => [f.status, f.verifier?.provider]), [['confirmado', 'codex'], ['confirmado', 'codex']]);
       const todoRun = result!.runId;
       assert.deepEqual((await ledger.pool.query('SELECT DISTINCT provenance FROM ac_verify_coverage WHERE run_id=$1', [result!.runId])).rows,
@@ -360,7 +361,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
 
       exhaust = true;
       await assert.rejects(run(async () => runtime), (error: unknown) => error instanceof Refusal && error.code === 'PROVIDER_USAGE_LIMIT');
-      assert.equal(docker.logs.length, 9);
+      assert.equal(docker.logs.length, 8);
       assert.equal(result?.achados.length, 2);
       assert.ok(result?.achados.every(f => f.status === 'provavel' && f.verifier === null));
       const report = await readFile(join(result!.directory, 'cobertura.md'), 'utf8');
@@ -369,7 +370,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
       assert.ok((await ledger.pool.query("SELECT exhausted_until FROM ac_accounts WHERE provider='codex'")).rows[0].exhausted_until);
       exhaust = false;
       await assert.rejects(run(async () => runtime), (error: unknown) => error instanceof Refusal && error.code === 'PROVIDER_USAGE_LIMIT');
-      assert.equal(docker.logs.length, 11);
+      assert.equal(docker.logs.length, 10);
       assert.ok(result?.achados.every(f => f.status === 'provavel' && f.verifier === null));
       assert.match(await readFile(join(result!.directory, 'cobertura.md'), 'utf8'), /PROVIDER_USAGE_LIMIT/);
       const grants = (await ledger.pool.query("SELECT state,physical_receipt FROM ac_capacity_grants ORDER BY created_at")).rows;
@@ -403,7 +404,7 @@ test('CLI pessoal usa reservas e recibos do supervisor e preserva pendências na
         retireTerminal: reviewerSupervisor.retireTerminal.bind(reviewerSupervisor),
       }}]), (error: unknown) => error instanceof Refusal && error.code === 'PROVIDER_USAGE_LIMIT');
       assert.ok(lostQuotaGrant);
-      assert.equal(docker.logs.length, 13);
+      assert.equal(docker.logs.length, 12);
       assert.equal((await ledger.pool.query('SELECT 1 FROM ac_native_execution_jobs WHERE grant_id=$1', [lostQuotaGrant])).rowCount, 0);
       const {rows: [unusedGrant]} = await ledger.pool.query('SELECT state, physical_receipt FROM ac_capacity_grants WHERE id=$1', [lostQuotaGrant]);
       assert.deepEqual(unusedGrant, {state: 'released', physical_receipt: {processId: lostQuotaGrant, state: 'not_started'}});

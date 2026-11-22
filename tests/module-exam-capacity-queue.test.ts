@@ -101,7 +101,7 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
       };
 
       // Gate the first exam (qa) inside supervisor.start so it holds the only capacity grant while
-      // the second exam (documentacao) attempts to reserve and enters the capacity queue.
+      // the second exam (arquitetura) attempts to reserve and enters the capacity queue.
       const baseClaude = runtime[0]!;
       const baseSupervisor = baseClaude.supervisor;
       let releaseFirstHold!: () => void;
@@ -133,7 +133,7 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
         runtime[1]!,
       ];
 
-      const docExamCtx = (await ledger.ensureExamContext(owner, project, 'documentacao')).contextId;
+      const docExamCtx = (await ledger.ensureExamContext(owner, project, 'arquitetura')).contextId;
       const docDelays: number[] = [];
       const firstReservationAttemptIds = new Set<string>();
       const firstReservationSequences = new Set<string>();
@@ -168,7 +168,7 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
       });
       await firstReserved;
 
-      const exam2Promise = runPersonalModuleCli('documentacao', [installation, project, '--esperar-cota'], {
+      const exam2Promise = runPersonalModuleCli('arquitetura', [installation, project, '--esperar-cota'], {
         collectorOutput,
         moduleExamRuntime: async () => runtime,
         clock: docClock,
@@ -182,7 +182,7 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
       assert.equal(firstReservationSequences.size, 1, 'a posição na fila (sequence) deve ser preservada');
 
       const qaReport = await readModuleReport(dataDirectory, project, qaRunId, 'qa');
-      const docReport = await readModuleReport(dataDirectory, project, docRunId, 'documentacao');
+      const docReport = await readModuleReport(dataDirectory, project, docRunId, 'arquitetura');
       assert.match(qaReport.coverageMarkdown, /src\/a\.ts \| lido/);
       assert.match(qaReport.coverageMarkdown, /src\/b\.ts \| lido/);
       assert.match(docReport.coverageMarkdown, /src\/a\.ts \| lido/);
@@ -226,7 +226,7 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
       };
 
       await assert.rejects(
-        runPersonalModuleCli('documentacao', [installation, project], {
+        runPersonalModuleCli('arquitetura', [installation, project], {
           collectorOutput,
           moduleExamRuntime: async () => runtime,
           clock: interruptClock,
@@ -267,7 +267,7 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
       const docRoundRunId = randomUUID();
       await ledger.pool.query(
         `INSERT INTO ac_verify_runs (id, project_id, context_id, intent_id, principal_id, commit_id, status, report_dir, module)
-         VALUES ($1,$2,$3,$4,$5,$6,'running','pending','documentacao')`,
+         VALUES ($1,$2,$3,$4,$5,$6,'running','pending','arquitetura')`,
         [docRoundRunId, project, docExamCtx, docRoundIntent, owner, repoCommit],
       );
       const baseSup = runtime[0]!.supervisor;
@@ -320,7 +320,7 @@ test('dois exames concorrentes com uma vaga só: o segundo aguarda com pausa cre
       const roundExamRes = await examCallback({
         intentId: docRoundIntent,
         snapshot: repo,
-        module: 'documentacao',
+        module: 'arquitetura',
         findings: [],
       });
       assert.deepEqual(roundSlept, [2000, 2000], 'a segunda reserva usa apenas o tempo restante do deadlineAt único da rodada (2000ms), não um novo prazo de 4000ms');

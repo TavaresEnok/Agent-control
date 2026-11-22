@@ -4,9 +4,10 @@ import {randomUUID} from 'node:crypto';
 import {readFile, unlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import {digest} from '../src/contracts.ts';
+import {digest, Refusal} from '../src/contracts.ts';
 import {mapModuleSnapshot} from '../src/module-exam-map.ts';
 import {examineFunctionalModule, type ModuleExamResult, type ModuleExamSeat} from '../src/module-exam.ts';
+import {moduleRunLines} from '../src/personal-module-cli.ts';
 import {recheckModuleFindings, runVerificationModule, type VerificationModuleRunInput} from '../src/verification-modules.ts';
 import {qaStaticFinding, qaStaticTool, reviewFixtureVerdict, skipQuestion} from './fixtures/module-exam-review.ts';
 import {withModuleRecoveryFixture} from './fixtures/module-recovery.ts';
@@ -170,7 +171,8 @@ test('runner revalida o vínculo e a prova antes da publicação', {skip: !datab
         const file = map.files.find(row => row.file === testFile)!;
         const snapshotSource = file.code!;
         if (changedSource) file.code = snapshotSource + '\nexport const subtotal = 5;\n';
-        const result = await examineFunctionalModule({...req, commit: input.commit, map,
+        // One review per finding: this test is about revalidating each verdict at publication.
+        const result = await examineFunctionalModule({...req, commit: input.commit, map, reviewTriage: false,
           reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
           worker: {async run(call) {
             const task = JSON.parse(call.task);
@@ -254,5 +256,56 @@ test('recusa a troca de evidência entre dois candidatos da mesma regra e linha'
       result.findings.reverse();
       return result;
     }}), /MODULE_EXAM_FINDINGS_INVALID/);
+  });
+});
+
+test('a revisão em amostra da mesma regra publica cada veredito com a prova revalidada', {skip: !databaseUrl}, async () => {
+  await withExamFixture(async input => {
+    const examiner: ModuleExamSeat = {provider: 'claude', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
+    const reviewer: ModuleExamSeat = {provider: 'codex', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
+    const calls: any[] = [];
+    const result = await runVerificationModule({...input, collectorOutput: observedOutput, async examinar(req) {
+      const map = await mapModuleSnapshot(req.snapshot);
+      return examineFunctionalModule({...req, commit: input.commit, map,
+        reserve: async purpose => purpose === 'examiner' ? examiner : reviewer, release: async () => {},
+        worker: {async run(call) {
+          const task = JSON.parse(call.task);
+          calls.push(task);
+          if (task.checklist) return JSON.stringify({kind: 'exame', binding: task.binding, filesRead: [task.file], checklist: ['qa'], findings: []});
+          const verdict = (item: any) => reviewFixtureVerdict(item, item.line === 1 ? skipped : item.criterion === 'math-random-call' ? random : wait);
+          return JSON.stringify(task.items ? {kind: 'confirmacao-lote', results: task.items.map(verdict)} : verdict(task));
+        }}});
+    }});
+    // The two findings of the nondeterminism rule share one reviewer call.
+    assert.deepEqual(calls.filter(task => !task.checklist).map(task => task.items?.length ?? 1), [1, 2]);
+    assert.deepEqual(result.achados.map(a => [a.status, a.verifier?.provider]), [['confirmado', 'codex'], ['confirmado', 'codex'], ['confirmado', 'codex']]);
+    assert.equal((await input.ledger.pool.query('SELECT status FROM ac_verify_runs WHERE id=$1', [result.runId])).rows[0].status, 'done');
+    assert.equal(result.examIncomplete, null);
+    assert.equal(result.unreviewed, null);
+  });
+});
+
+test('exame que para por login vencido falha a execução, grava o relatório parcial e conta os achados sem revisão', {skip: !databaseUrl}, async () => {
+  await withExamFixture(async input => {
+    const examiner: ModuleExamSeat = {provider: 'claude', model: 'fixture', accountId: randomUUID(), profileId: randomUUID(), grantId: randomUUID()};
+    const result = await runVerificationModule({...input, collectorOutput: observedOutput, async examinar(req) {
+      const map = await mapModuleSnapshot(req.snapshot);
+      return examineFunctionalModule({...req, commit: input.commit, map, reserve: async () => examiner, release: async () => {},
+        worker: {async run() { throw new Refusal('EXAM_LOGIN_STALE'); }}});
+    }});
+    const run = (await input.ledger.pool.query('SELECT r.status, i.state FROM ac_verify_runs r JOIN ac_intents i ON i.id=r.intent_id WHERE r.id=$1', [result.runId])).rows[0];
+    assert.deepEqual([run.status, run.state], ['failed', 'failed']);
+    assert.equal(result.examIncomplete?.code, 'EXAM_LOGIN_STALE');
+    assert.ok(result.examIncomplete!.unjudged > 0);
+    assert.equal(result.examIncomplete!.total, result.examIncomplete!.unjudged);
+    assert.deepEqual(result.unreviewed, {count: 3, codes: ['EXAM_LOGIN_STALE']});
+    assert.match(moduleRunLines(result).at(-1)!, /^Achados sem revisão: 3 \(código EXAM_LOGIN_STALE\)$/);
+    const coverage = await readFile(join(result.directory, 'cobertura.md'), 'utf8');
+    assert.match(coverage, /Modo: somente_ferramentas/);
+    assert.match(coverage, /Login da conta Claude da instalação vencido/);
+    // A run without model exam (remeasurement, tools only) keeps finishing as done.
+    const measured = await runVerificationModule({...input, collectorOutput: observedOutput});
+    assert.equal((await input.ledger.pool.query('SELECT status FROM ac_verify_runs WHERE id=$1', [measured.runId])).rows[0].status, 'done');
+    assert.equal(measured.examIncomplete, null);
   });
 });
