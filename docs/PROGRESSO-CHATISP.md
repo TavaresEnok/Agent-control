@@ -268,3 +268,11 @@ Ordem: `docs/ORDEM-CHATISP.md`. Equipe: `AGENTS.md`, seção "Equipe ChatISP". C
   - **Pasta da rodada:** `/tmp/ac-gerente-chatisp/exames/rodada-20261122-1922` (`inicio.txt` = 19:22 UTC; um log por módulo: `m01-seguranca.log`, `m-<módulo>.log`, `m10-design.log`).
   - **Processos:** 10 módulos lançados em segundo plano; a capacidade do produto serializa o excesso (4 vagas).
   - **Próximo passo do gerente:** não relançar enquanto houver processo da rodada. Quando módulo terminar, registrar situação (`tail -n 40`), arquivos julgados, achados por gravidade (tabela "Por regra" do README do relatório) e tempo desde `inicio.txt`. Quando todos terminarem: `npm run personal:tokens -- /home/app/.agent-control/ispagent/installation.json --desde <inicio.txt>`, registrar tokens por modelo e tempo total (meta < 2 h); só então abrir F3 (correções), nunca junto com exame.
+- 22/11/2026 19:24 UTC — **Supervisor:** o módulo 1 foi recusado na rodada com `VERIFY_ALREADY_RUNNING`. **Defeito AC-18:** a trava da segurança contava as rodadas dos módulos 2 a 10. Corrigido com teste em d1fe9a73, e o módulo 1 foi relançado na mesma rodada `rodada-20261122-1922` (log `m01-seguranca.log`).
+- 22/11/2026 19:30 UTC — **Supervisor:** os 10 módulos lançados de uma vez sobrecarregaram a máquina (10 núcleos, 15 GB, carga 18, 4 GB livres; o `painel_provedores` de produção roda no mesmo host).
+  - **Caíram por carga:** banco e documentação (`VERIFY_CONTAINER_CLEANUP_PENDING`) e desempenho (`STALE_MANAGER`, lease vencida).
+  - **Interrompidos:** prontidão e conformidade, e o design também parou.
+  - **Seguem rodando:** segurança, QA, arquitetura e dependências.
+  - **Fila nova** `/tmp/ac-gerente-chatisp/fila-rodada.sh`: no máximo 4 módulos ao mesmo tempo, só com carga abaixo de 12 e disco abaixo de 95%, design por último. Ela já está lançando banco, documentação, desempenho, prontidão, conformidade e design na mesma rodada `rodada-20261122-1922`, com registro em `fila.log`.
+  - O `rodada-completa.sh` passa a usar a fila.
+  - **Gerente: não relance nada desta rodada.** Só registre os resultados à medida que terminarem.
