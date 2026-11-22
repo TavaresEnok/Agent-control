@@ -11,7 +11,9 @@ async function files(root:string):Promise<string[]>{
 }
 
 /** One printed line group. `measurement` is informado (a total or counters were reported), estimado (size-based) or desconhecido. */
-export type Row=UsageRow & {source:string;total?:number|null;outcome?:string;measurement?:string};
+export type Row=UsageRow & {source:string;total?:number|null;outcome?:string;measurement?:string;
+ /** Chamadas do grupo sem número em cada contador. A soma mostra o que foi medido; estas ficam contadas à parte. */
+ missing?:{input?:number;cache?:number;output?:number}};
 const big=(v:unknown):number|null=>v===null||v===undefined?null:Number(v);
 const measurementOf=(r:UsageRow):string=>r.state??(r.input===null&&r.cache===null&&r.output===null?'desconhecido':'informado');
 
@@ -28,11 +30,23 @@ export async function readManagerRows(pool:{query:(sql:string,params:unknown[])=
  }catch(e){return {rows:[],problem:'tabela ac_manager_chat_usage ilegível ('+((e as {code?:unknown}).code??((e as Error).name||'erro'))+'): chamadas do gerente do painel NÃO estão nesta contagem'};}
 }
 
-/** Same key means same line; any unknown counter makes the sum unknown. Outcome and measurement stay apart, so an estimate never joins a reported total. */
+/**
+ * Same key means same line. A call without a number no longer erases the measured ones: the sum keeps what was
+ * reported and `missing` counts the calls without a number. A group where nothing was measured stays unknown.
+ * Outcome and measurement stay apart, so an estimate never joins a reported total.
+ */
 export function groupRows(rows:readonly Row[]):Row[]{
  const grouped=new Map<string,Row>();
- for(const row of rows){const key=JSON.stringify([row.source,row.provider,row.model,row.effort,row.role,row.outcome??'',row.measurement??'',row.state??'']);const prev=grouped.get(key);if(!prev){grouped.set(key,{...row});continue;}
-  for(const k of ['input','cache','output','calls'] as const)prev[k]=prev[k]===null||row[k]===null?null:prev[k]!+row[k]!;prev.total=prev.total==null||row.total==null?null:prev.total+row.total;
+ const miss=(row:Row,k:'input'|'cache'|'output',n:number)=>{if(n>0)(row.missing??={})[k]=(row.missing[k]??0)+n;};
+ const calls=(r:Row)=>r.calls??1;
+ for(const row of rows){const key=JSON.stringify([row.source,row.provider,row.model,row.effort,row.role,row.outcome??'',row.measurement??'',row.state??'']);const prev=grouped.get(key);
+  if(!prev){const first:Row={...row,missing:{...row.missing}};for(const k of ['input','cache','output'] as const)if(row[k]===null)miss(first,k,calls(row));grouped.set(key,first);continue;}
+  for(const k of ['input','cache','output'] as const){
+   if(row[k]===null){miss(prev,k,calls(row));continue;}
+   prev[k]=prev[k]===null?row[k]:prev[k]!+row[k]!;
+   const m=row.missing?.[k];if(m)miss(prev,k,m);
+  }
+  prev.calls=prev.calls===null||row.calls===null?null:prev.calls!+row.calls!;prev.total=prev.total==null||row.total==null?null:prev.total+row.total;
   for(const k of ['cacheRead','cacheWrite'] as const)if(prev[k]!==undefined||row[k]!==undefined)prev[k]=prev[k]==null||row[k]==null?null:prev[k]!+row[k]!;}
  return [...grouped.values()];
 }
@@ -69,7 +83,8 @@ export function renderReport(rows:readonly Row[],problems:readonly string[],batc
  else out.push('Cobertura: todas as fontes foram lidas.');
  out.push('As fontes nativa e externa podem conter os mesmos jobs; não some as duas. Estimado e informado também não se somam; "desconhecido" é chamada sem número, não consumo zero.');
  out.push('fonte\tprovedor\tmodelo\tesforço\tpapel\tentrada\tcache\tsaída\tchamadas\ttotal informado\tdesfecho\tmedição\tcache lido\tcache gravado\tacerto do cache');
- for(const r of rows){const c=cacheColumns(r);out.push([r.source,r.provider,r.model,r.effort,r.role,r.input,r.cache,r.output,r.calls,r.total,r.outcome??'-',r.measurement??measurementOf(r),c.read,c.write,c.hit].map(v=>v??'não medido').join('\t'));}
+ const counted=(r:Row,k:'input'|'cache'|'output'):string=>{const v=r[k],m=r.missing?.[k];if(v===null)return 'não medido';return m?`${v} (+${m} sem número)`:String(v);};
+ for(const r of rows){const c=cacheColumns(r);out.push([r.source,r.provider,r.model,r.effort,r.role,counted(r,'input'),counted(r,'cache'),counted(r,'output'),r.calls,r.total,r.outcome??'-',r.measurement??measurementOf(r),c.read,c.write,c.hit].map(v=>v??'não medido').join('\t'));}
  out.push('Configuração efetiva de lotes por módulo:',...batchLines);
  return out;
 }

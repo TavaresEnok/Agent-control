@@ -246,3 +246,19 @@ test('native Claude counters keep cache read and cache write apart and sum them 
   // An older observation without the split keeps the sum and leaves the split unknown.
   assert.equal(sumUsageAttempts({input: 1, output: 1, cache: 2, reasoning: null}, one).cacheRead, null);
 });
+
+test('uma chamada sem número não apaga as medidas do grupo: a soma fica e as faltantes são contadas', () => {
+  const base = {source: 'nativo', provider: 'claude', model: 'claude-sonnet-5-5', effort: 'high', role: 'specialist', calls: 1};
+  const rows: Row[] = [
+    {...base, input: 2, cache: 30_000, output: 6_000},
+    {...base, input: 3, cache: 10_000, output: 1_000},
+    {...base, input: null, cache: null, output: null},
+  ];
+  const [only] = groupRows(rows);
+  assert.deepEqual([only?.input, only?.cache, only?.output, only?.calls], [5, 40_000, 7_000, 3]);
+  assert.deepEqual(only?.missing, {input: 1, cache: 1, output: 1});
+  const text = renderReport([only!], [], []).join('\n');
+  assert.match(text, /\t5 \(\+1 sem número\)\t40000 \(\+1 sem número\)\t7000 \(\+1 sem número\)\t3\t/);
+  const [none] = groupRows([{...base, input: null, cache: null, output: null}]);
+  assert.equal(none?.input, null);
+});
