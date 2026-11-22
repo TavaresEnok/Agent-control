@@ -15,8 +15,8 @@ export async function recoverPersonalOrphanedExams(config: Installation, ledger:
   if (manual) throw new Refusal('NATIVE_EXECUTION_NOT_ELIGIBLE');
   return [];
  }
- const candidates = (await ledger.pool.query<{id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string}>(`
-  SELECT j.id,j.context_id,x.project_id,j.account_id,j.key_fingerprint
+ const candidates = (await ledger.pool.query<{id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string;executor_digest:string}>(`
+  SELECT j.id,j.context_id,x.project_id,j.account_id,j.key_fingerprint,j.executor_digest
   FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id JOIN ac_intents i ON i.id=j.intent_id
   JOIN ac_capacity_grants g ON g.id=j.grant_id
   WHERE ${manual ? 'j.id=$1' : `j.state IN ('running','uncertain') AND ${orphanedExamIntentSql}
@@ -38,8 +38,9 @@ export async function recoverPersonalOrphanedExams(config: Installation, ledger:
   }
   try {
    const project = projects.find(item=>item.id===job.project_id);
-   const supervisor = supervisors.find(item=>item.keyFingerprint===boot.execution.keyFingerprint&&
+   const matching = supervisors.filter(item=>item.keyFingerprint===boot.execution.keyFingerprint&&
     item.keyFingerprint===job.key_fingerprint&&item.supportsAccount(job.account_id));
+   const supervisor = matching.find(item=>item.executorDigest===job.executor_digest)??matching[0];
    if (!project || !supervisor) throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
    const result = await supervisor.recoverOrphanedExam(project.owner,job.id,{
     contextId:job.context_id,projectId:project.id,repository:project.repo,

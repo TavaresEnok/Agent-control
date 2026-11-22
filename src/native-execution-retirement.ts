@@ -8,9 +8,74 @@ import {join} from 'node:path';
 import {createPublicKey,sign,createHash,verify} from 'node:crypto';
 import pg from 'pg';
 import {Authority,canonical,digest,Refusal} from './contracts.ts';
-import {retireNativePrivateNetwork} from './native-execution-shared.ts';
+import {Id,retireNativePrivateNetwork} from './native-execution-shared.ts';
+import {fenceInstallationContext} from './installation-authority-fence.ts';
 import {NativeExecutionReconciler} from './native-execution-reconcile.ts';
 export abstract class NativeExecutionRetirement extends NativeExecutionReconciler{
+ protected async stoppedNativeContainers(row:Record<string,any>,refusal:string){
+  try{
+   const ids:string[]=[];
+   const expected=[['worker',row.worker_id,this.config.workerImage],['tools',row.tools_id,this.config.toolsImage]] as const;
+   for(const [role,id,image] of expected){
+    const name='ac-native-'+role+'-'+row.id;
+    const [byName,byId]=await Promise.all([this.docker.inspect(name),id?this.docker.inspect(id):null]);
+    if(!byName&&!byId)continue;
+    if(!byName||!byId||!id||row.executor_digest!==this.executorDigest)throw new Refusal(refusal);
+    for(const item of [byName,byId]){
+     const labels=item.Config.Labels,state=item.State;
+     if(item.Id!==id||item.Name!=='/'+name||item.Image!==image||labels['agent-control.job']!==row.id||
+      labels['agent-control.contract']!=='native-execution-v1'||labels['agent-control.launch']!==row.input_digest||
+      state.Running||state.Pid!==0||!['exited','dead'].includes(state.Status))throw new Refusal(refusal);
+    }
+    ids.push(id);
+   }
+   const labeled=await this.docker.nativeJobContainerIds(row.id);
+   if(labeled.length!==ids.length||labeled.some(id=>!ids.includes(id)))throw new Refusal(refusal);
+   return ids;
+  }catch(error){
+   if(error instanceof Refusal)throw error;
+   throw new Refusal('DOCKER_UNCERTAIN');
+  }
+ }
+ protected async removeStoppedNativeContainers(row:Record<string,any>,ids:string[],refusal:string){
+  const confirmed=await this.stoppedNativeContainers(row,refusal);
+  if(confirmed.length!==ids.length||confirmed.some((id,index)=>id!==ids[index]))throw new Refusal(refusal);
+  await this.removeRetiredContainerIds(ids);
+  if((await this.stoppedNativeContainers(row,refusal)).length)throw new Refusal(refusal);
+ }
+ protected async removeRetiredContainerIds(ids:readonly string[]){
+  // Docker rejects deletion of a running container when force is omitted.
+  for(const id of ids)await this.docker.remove(id);
+ }
+ /** Reclaim a stopped pair still present despite a signed terminal retirement. */
+ async reclaimRetiredContainers(principal:string,jobId:string,apply:boolean,scope:{contextId:string;projectId:string}){
+  Id.parse(jobId);
+  return this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
+   const context=await this.ledger.authorize(c,principal,scope.contextId);
+   if(context.role!=='owner'||context.project_id!==scope.projectId)throw new Refusal('NATIVE_RETIREMENT_SCOPE_MISMATCH');
+   await fenceInstallationContext(c,scope.contextId,this.ledger.installationAuthority,true);
+   const row=(await c.query(`SELECT j.*,g.state grant_state,r.state retirement_state,r.binding,r.proof
+    FROM ac_native_execution_jobs j JOIN ac_capacity_grants g ON g.id=j.grant_id
+    JOIN ac_native_terminal_retirements r ON r.job_id=j.id
+    WHERE j.id=$1 AND j.context_id=$2 FOR UPDATE OF j,g,r`,[jobId,scope.contextId])).rows[0];
+   const refusal='NATIVE_RETIREMENT_UNCONFIRMED',binding=row?.binding;
+   if(!row||!binding||!row.receipt||!['completed','failed'].includes(row.state)||row.grant_state!=='released'||
+    row.key_fingerprint!==this.fingerprint||row.executor_digest!==this.executorDigest||!this.supportsAccount(row.account_id)||
+    binding.schemaVersion!==1||binding.jobId!==jobId||binding.contextId!==row.context_id||binding.intentId!==row.intent_id||
+    binding.grantId!==row.grant_id||binding.sessionId!==row.session_id||binding.epoch!==Number(row.manager_epoch)||
+    binding.role!==row.role||binding.inputDigest!==row.input_digest||binding.terminalDigest!==digest(row.receipt)||
+    binding.workerId!==row.worker_id||binding.toolsId!==row.tools_id||binding.networkId!==row.network_id)
+    throw new Refusal(refusal);
+   this.verifyUnstartedRetirement({state:row.retirement_state,binding,proof:row.proof},binding);
+   const ids=await this.stoppedNativeContainers(row,refusal);
+   if(!ids.length)return 'absent' as const;
+   if(!apply)return 'eligible' as const;
+   await this.removeStoppedNativeContainers(row,ids,refusal);
+   await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.terminal_containers_reclaimed',$2)",
+    [scope.contextId,{jobId,containerIds:ids,proofDigest:digest(row.proof)}]);
+   return 'removed' as const;
+  }));
+ }
  /** Retire a terminal managed programmer pair. Both physical containers
   * must be absent before the permanently bound copy is marked neutralized. */
  async retireManagedWriter(principal:string,authority:Authority,jobId:string){
@@ -127,7 +192,7 @@ export abstract class NativeExecutionRetirement extends NativeExecutionReconcile
    if(row.writer_state==='neutralized'){await revoked(row,saved);return {state:'neutralized' as const};}
    if(row.writer_state!=='held'||saved?.state!=='prepared')throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
    await checked(row,saved);const observed=await pair(row,true);
-   for(const container of observed)if(container)await this.docker.remove(container.Id);
+   await this.removeRetiredContainerIds(observed.flatMap(container=>container?[container.Id]:[]));
    if(await this.docker.inspect(saved.worker_id)||await this.docker.inspect(saved.tools_id)||
     await this.docker.inspect('ac-native-worker-'+jobId)||await this.docker.inspect('ac-native-tools-'+jobId))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
    await removeNetwork(row);
@@ -225,7 +290,7 @@ export abstract class NativeExecutionRetirement extends NativeExecutionReconcile
   const retired=await this.ledger.tx(async c=>{
    const row=await locked(c),saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1 FOR UPDATE',[jobId])).rows[0];await check(row,saved);
    const items=await pair(row,true);if(saved.state==='removed'&&items.some(Boolean))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
-   for(const item of items)if(item)await this.docker.remove(item.Id);
+   await this.removeRetiredContainerIds(items.flatMap(item=>item?[item.Id]:[]));
    if(await this.docker.inspect(row.worker_id)||await this.docker.inspect(row.tools_id)||await this.docker.inspect('ac-native-worker-'+jobId)||await this.docker.inspect('ac-native-tools-'+jobId))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
    await retireNativePrivateNetwork(this.docker,{networkId:row.network_id,providerNetworkId:this.config.providerNetworkId,jobId,inputDigest:row.input_digest});
    if(saved.state==='prepared'){

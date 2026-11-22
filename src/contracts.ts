@@ -41,6 +41,9 @@ export function canonical(value: unknown): string {
   return result;
 }
 export const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
+export function acceptedCommandDigest(principal: string, {deliveryAttemptId, ...semantic}: Command) {
+  return digest({principal, ...semantic});
+}
 export class Refusal extends Error {
   constructor(public readonly code: string, public readonly status: 400 | 401 | 403 | 404 | 409 | 503 = 409) { super(code); }
 }

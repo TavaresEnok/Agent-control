@@ -9,7 +9,7 @@ const messages:Record<string,string>={
  ...artifactCliMessages,
  MAINTENANCE_USAGE:'Uso: npm run personal:maintenance -- <instalação.json> [--abandonar-design <jobId> | --recuperar-exame-passivo <jobId> | --recuperar-exame-orfao <jobId> | --liberar-work-exames (--projeto <id> [--limite N] [--apos <id>] | --job <id>...) [--aplicar] | --retencao-automatica [--aplicar]]\n'+ARTIFACT_USAGE,
  NATIVE_ORPHAN_ACTIVE_LEASE:'O contexto ainda tem um lease válido. O job e a vaga foram preservados.',
- NATIVE_ORPHAN_CONTAINER_PRESENT:'O worker ou o contêiner de ferramentas ainda existe. O job e a vaga foram preservados.',
+ NATIVE_ORPHAN_CONTAINER_PRESENT:'O worker ou o contêiner de ferramentas está ativo ou a identidade dele não foi confirmada. O job e a vaga foram preservados.',
  NATIVE_EXECUTION_JOB_NOT_FOUND:'Job de exame não encontrado nesta instalação.',
  NATIVE_EXECUTION_OUTPUT_MISSING:'O resultado do job está ausente e não foi possível comprovar que ele nunca começou.',
  NATIVE_EXECUTION_OUTPUT_INVALID:'O arquivo de resultado do job é inválido.',

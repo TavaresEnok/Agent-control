@@ -7,6 +7,7 @@ import {basename,dirname,join,resolve} from 'node:path';
 import {Id,Refusal,type Authority} from './contracts.ts';
 import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
+import {DockerDaemon} from './sandbox-broker.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRelease,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
 import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
@@ -401,7 +402,16 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
    `SELECT DISTINCT p.detail->>'jobId' id FROM ac_audit p WHERE p.kind='native.exam_work_release_planned' AND NOT EXISTS(
      SELECT 1 FROM ac_audit q WHERE q.context_id=p.context_id AND q.kind IN ('native.exam_work_released','native.exam_work_absent_after_plan') AND q.detail->>'jobId'=p.detail->>'jobId' AND q.id>p.id) LIMIT 200`)).rows)
    if(Id.safeParse(row.id).success)candidates.add(row.id);
-  const order=rotateAfter([...candidates].sort(),await readRetentionCursor(cursorFile));
+  let dockerJobIds:string[]=[];
+  try{
+   dockerJobIds=await new DockerDaemon().nativeContainerJobIds();
+  }catch{
+   lines.push('O Docker não confirmou o inventário de contêineres de jobs. A retenção de work/ segue.');
+  }
+  const containers=new Set(dockerJobIds.length?(await ledger.pool.query<{id:string}>(
+   `SELECT j.id::text FROM ac_native_execution_jobs j JOIN ac_native_terminal_retirements r ON r.job_id=j.id
+    WHERE j.id=ANY($1::uuid[]) AND j.state IN ('completed','failed') AND r.state='removed'`,[dockerJobIds])).rows.map(row=>row.id):[]);
+  const order=rotateAfter([...new Set([...candidates,...containers])].sort(),await readRetentionCursor(cursorFile));
   const supervisors=await composePersonalExecutionSupervisors(config,ledger);
   const owners=new Map<string,string|undefined>();
   const refused=new Map<string,number>();
@@ -410,34 +420,51 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
   let spent=0,examined=0,lastId:string|undefined,stopped=false;
   for(let from=0;from<order.length&&!stopped;from+=RETENTION_PAGE){
    const page=order.slice(from,from+RETENTION_PAGE);
-   const rows=new Map((await ledger.pool.query<{id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string}>(
-    `SELECT j.id::text,j.context_id::text,x.project_id::text,j.account_id::text,j.key_fingerprint FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE j.id=ANY($1::uuid[])`,[page])).rows.map(row=>[row.id,row]));
+   const rows=new Map((await ledger.pool.query<{id:string;context_id:string;project_id:string;account_id:string;key_fingerprint:string;executor_digest:string}>(
+    `SELECT j.id::text,j.context_id::text,x.project_id::text,j.account_id::text,j.key_fingerprint,j.executor_digest
+     FROM ac_native_execution_jobs j JOIN ac_contexts x ON x.id=j.context_id WHERE j.id=ANY($1::uuid[])`,[page])).rows.map(row=>[row.id,row]));
    for(const id of page){
     if(spent>=limit||Date.now()-started>=deadlineMs){stopped=true;break;}
     lastId=id;examined++;
     const row=rows.get(id);
     if(!row){totals.unknown++;continue;}
+    const reclaim=containers.has(id);
     const refuse=(reason:string)=>refused.set(reason,(refused.get(reason)??0)+1);
     const project=projects.find(item=>item.id===row.project_id);
     if(!project){refuse('project');continue;}
     if(!owners.has(project.id))owners.set(project.id,(await ledger.pool.query("SELECT 1 FROM ac_memberships WHERE project_id=$1 AND principal_id=$2 AND role='owner'",[project.id,project.owner])).rowCount?project.owner:undefined);
     const principal=owners.get(project.id);
     if(!principal){refuse('owner');continue;}
-    const supervisor=supervisors.find(item=>item.supportsAccount(row.account_id)&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
+    const matching=supervisors.filter(item=>item.supportsAccount(row.account_id)&&item.keyFingerprint===row.key_fingerprint&&item.keyFingerprint===boot.execution.keyFingerprint);
+    const pinned=matching.find(item=>item.executorDigest===row.executor_digest);
+    const supervisor=pinned??matching[0];
     if(!supervisor){refuse('supervisor_identity');continue;}
+    let counted=false;
     try{
+     if(reclaim){
+      if(!pinned){
+       lines.push(`${id}: contêineres preservados (MAINTENANCE_SUPERVISOR_UNAVAILABLE).`);
+       continue;
+      }
+      const result=await pinned.reclaimRetiredContainers(principal,id,apply,{contextId:row.context_id,projectId:project.id});
+      if(result!=='absent'){
+       spent++;counted=true;
+       lines.push(`${id}: contêineres parados ${result==='removed'?'retirados':'elegíveis para retirada'}.`);
+      }
+     }
+     if(!candidates.has(id))continue;
      const result=await supervisor.retireTerminalWork(principal,id,apply,{contextId:row.context_id,projectId:project.id,repository:project.repo});
      if(result.state==='refused'){
       if(result.reason==='busy')totals.busy++;else refuse(result.reason);
       if(result.reason==='output_missing')lines.push(`${id}: work preservado (output_missing); resultado ausente, requer análise.`);
      }else if(result.state==='absent')totals.absent++;
      else{
-      totals[result.state]++;totals.bytes+=result.bytes??0;spent++;
+      totals[result.state]++;totals.bytes+=result.bytes??0;if(!counted)spent++;
       byCategory.set(result.category??'?',(byCategory.get(result.category??'?')??0)+1);
       lines.push(`${id}: ${result.state==='released'?'work apagado':'work elegível'} (${result.bytes??0} bytes, ${result.category}).`);
      }
     }catch(error){
-     totals.failed++;spent++;
+     totals.failed++;if(!counted)spent++;
      lines.push(`${id}: falhou (${error instanceof Refusal?error.code:'erro'}); repete na próxima rodada.`);
     }
    }
