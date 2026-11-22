@@ -1,5 +1,6 @@
 import {X509Certificate} from 'node:crypto';
-import {chmod, lstat, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {chmod, mkdtemp, open, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
@@ -14,17 +15,23 @@ const BLOCK = /-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+?)-----END CE
  * Recusa chave privada, texto solto, link simbólico, arquivo grande e certificado que não seja de CA.
  */
 export async function readDesignTrustCa(path: string): Promise<string> {
-  let info;
+  // Abre sem seguir link e lê pelo mesmo descritor que foi conferido: nada troca o arquivo no meio.
+  let handle;
   try {
-    info = await lstat(path);
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch {
     throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
   }
-  if (!info.isFile() || info.size < 1 || info.size > MAX_BYTES) throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
-  const text = await readFile(path, 'utf8').catch(() => {
-    throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
-  });
-  return normalizeDesignTrustCa(text);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile() || info.size < 1 || info.size > MAX_BYTES) throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
+    const buffer = Buffer.alloc(MAX_BYTES + 1);
+    const {bytesRead} = await handle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead < 1 || bytesRead > MAX_BYTES) throw new Refusal('DESIGN_TRUST_CA_INVALID', 400);
+    return normalizeDesignTrustCa(buffer.subarray(0, bytesRead).toString('utf8'));
+  } finally {
+    await handle.close();
+  }
 }
 
 export function normalizeDesignTrustCa(text: string): string {

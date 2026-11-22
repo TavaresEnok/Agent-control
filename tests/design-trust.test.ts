@@ -8,6 +8,7 @@ import {after, before, test} from 'node:test';
 import {Refusal} from '../src/contracts.ts';
 import {parseDesignArgs} from '../src/design-command.ts';
 import {designRunArguments, designTrustArguments, DESIGN_TRUST_CA_MOUNT} from '../src/design-image.ts';
+import {executeDesignImage} from '../src/design-image-run.ts';
 import {normalizeDesignTrustCa, readDesignTrustCa, stageDesignTrustCa} from '../src/design-trust.ts';
 // @ts-expect-error módulo da imagem, em JavaScript puro
 import {spkiHash, trustFlags, verifiedTrustFlags} from '../deploy/design-tools/trust.mjs';
@@ -45,12 +46,13 @@ after(() => {
   rmSync(dir, {recursive: true, force: true});
 });
 
-test('a cadeia que fecha na CA vira a flag com as chaves exatas dela', async () => {
+test('a cadeia que fecha na CA vira a flag só com a chave do certificado final', async () => {
   const flags = await verifiedTrustFlags(`https://localhost:${port}`, caPem, 5000);
   assert.equal(flags.length, 1);
   const hashes = (flags[0] as string).replace('--ignore-certificate-errors-spki-list=', '').split(',');
-  assert.ok(hashes.includes(spkiHash(leafPem)));
-  assert.ok(hashes.includes(spkiHash(caPem)));
+  // Só a chave do certificado final: a da CA é pública e deixaria qualquer servidor anexá-la.
+  assert.deepEqual(hashes, [spkiHash(leafPem)]);
+  assert.equal(hashes.includes(spkiHash(caPem)), false);
 });
 
 test('outra CA, outro nome ou HTTP são recusados', async () => {
@@ -102,4 +104,44 @@ test('--ca exige https num host .local e não combina com --servir', () => {
   assert.throws(() => parseDesignArgs(['/i.json', id, '--url', 'http://chatisp.local', '--ca', '/tmp/ca.pem']), refusal('DESIGN_TRUST_CA_INVALID'));
   assert.throws(() => parseDesignArgs(['/i.json', id, '--url', 'https://localhost:8443', '--servir', '/tmp/telas', '--ca', '/tmp/ca.pem']), refusal('DESIGN_TRUST_CA_INVALID'));
   assert.throws(() => parseDesignArgs(['/i.json', id, '--url', 'https://chatisp.local', '--ca']), refusal('DESIGN_USAGE'));
+});
+
+test('--esperar-cota liga a espera do design e não aceita repetição', () => {
+  const id = '98c62210-1fa3-4760-a16c-9ba38d694d63';
+  assert.equal(parseDesignArgs(['/i.json', id, '--url', 'http://app.local', '--esperar-cota']).waitCapacity, true);
+  assert.equal(parseDesignArgs(['/i.json', id, '--url', 'http://app.local']).waitCapacity, undefined);
+  assert.throws(() => parseDesignArgs(['/i.json', id, '--url', 'http://app.local', '--esperar-cota', '--esperar-cota']), refusal('DESIGN_USAGE'));
+});
+
+test('a imagem que sai com 3 vira DESIGN_TRUST_CA_FAILED', async () => {
+  const result = await executeDesignImage({
+    image: 'localhost:5000/ac-design:reconstrucao@sha256:' + 'a'.repeat(64),
+    repository: '/tmp/repo',
+    targetUrl: 'https://chatisp.local',
+    plan: {routes: []},
+    trustCa: '/tmp/design-ca-x/ca.pem',
+    run: async () => ({code: 3, stderr: 'DESIGN_TRUST_CA_FAILED'}),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'DESIGN_TRUST_CA_FAILED');
+});
+
+test('o --ca não abre FIFO nem espera escritor', async () => {
+  const fifo = join(dir, 'ca.fifo');
+  assert.equal(spawnSync('mkfifo', [fifo]).status, 0);
+  await assert.rejects(readDesignTrustCa(fifo), refusal('DESIGN_TRUST_CA_INVALID'));
+});
+
+test('o contêiner do exame ganha nome conferido, para ser removido pelo host', () => {
+  const base = {
+    image: 'localhost:5000/ac-design:reconstrucao@sha256:' + 'a'.repeat(64),
+    repository: '/tmp/repo', output: '/tmp/out', targetUrl: 'http://app.local',
+    memoryBytes: 2147483648, nanoCpus: 2_000_000_000, pidsLimit: 512,
+  };
+  const name = 'ac-design-exam-6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b';
+  const argv = designRunArguments({...base, name});
+  assert.equal(argv[argv.indexOf('--name') + 1], name);
+  assert.equal(designRunArguments(base).includes('--name'), false);
+  assert.throws(() => designRunArguments({...base, name: 'ac-nexo-retratos'}), refusal('DESIGN_PATH_FORBIDDEN'));
+  assert.throws(() => designRunArguments({...base, name: `${name};rm`}), refusal('DESIGN_PATH_FORBIDDEN'));
 });

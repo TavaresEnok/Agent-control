@@ -13,7 +13,7 @@ import {UnstartedExamRetirementPending} from './native-execution-supervisor.ts';
 import {openDesignBrowser} from './design-browser.ts';
 import {parseDesignArgs, parseDesignInvocation, readDesignLoginFile, readDesignRepository, resolvePersonalDesign, type ResolvedPersonalDesign} from './design-command.ts';
 import {DesignCreateModelFailure, MAX_CREATE_TASK_CHARS, runDesignCreate, type CreateExam} from './design-create.ts';
-import {readRebuildImagePin} from './design-image-run.ts';
+import {readRebuildImagePin, removeActiveDesignContainers} from './design-image-run.ts';
 import {runDesignModule} from './design-module.ts';
 import {formatDesignPrepare, prepareDesignSpecialist} from './design-prepare.ts';
 import {readReferenceFiles} from './design-reference-files.ts';
@@ -351,6 +351,8 @@ export async function runDesignSession<T>(
     throw error;
   } finally {
     stopLease();
+    // Ctrl-C ou SIGTERM: o contêiner da imagem não morre com o cliente docker.
+    await removeActiveDesignContainers().catch(() => undefined /* best-effort; a container left behind ends at its own deadline */);
     if (cleanup) await cleanup().catch(() => undefined /* best-effort cleanup; the original error is what the caller sees */);
     await finishExamIntent(
       resolved.ledger,

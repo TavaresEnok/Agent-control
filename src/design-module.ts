@@ -215,7 +215,7 @@ export async function runDesignModule(input: DesignModuleInput): Promise<DesignM
   })();
   if (image && !image.ok) {
     await writeImageFailure(input, target.origin, image);
-    throw new Refusal(image.code === 'DESIGN_IMAGE_TIMEOUT' ? 'DESIGN_IMAGE_TIMEOUT' : 'DESIGN_IMAGE_FAILED');
+    throw new Refusal(image.code === 'DESIGN_IMAGE_TIMEOUT' || image.code === 'DESIGN_TRUST_CA_FAILED' ? image.code : 'DESIGN_IMAGE_FAILED');
   }
   const fileMap = routeFileMap(input.files, projectConfig);
   // Régua e Tab entram pelo collect, para a rota virar o arquivo da tela que o examinador lê.

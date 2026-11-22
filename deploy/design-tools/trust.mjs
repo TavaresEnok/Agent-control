@@ -3,8 +3,9 @@
  *
  * Sem DESIGN_TRUST_CA, nada muda: o Chrome recusa certificado que não seja público.
  * Com ela, o Node valida a cadeia do alvo contra essa CA, com o nome do host conferido,
- * e o Chrome passa a aceitar só as chaves dessa cadeia já validada. Outro certificado,
- * ou a mesma CA servindo outro host, continua recusado.
+ * e o Chrome passa a aceitar só a chave do certificado final dessa cadeia. O handshake prova
+ * a posse dessa chave. A chave da CA não entra na lista: o certificado dela é público, e
+ * qualquer servidor poderia anexá-lo como intermediário.
  */
 import {createHash, X509Certificate} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -62,7 +63,7 @@ export async function trustFlags(origin, env = process.env, timeoutMs = 10000) {
   return verifiedTrustFlags(origin, ca, timeoutMs);
 }
 
-/** Valida a cadeia do alvo contra a CA e devolve a flag com as chaves dessa cadeia. */
+/** Valida a cadeia do alvo contra a CA e devolve a flag só com a chave do certificado final. */
 export async function verifiedTrustFlags(origin, ca, timeoutMs = 10000) {
   if (new URL(origin).protocol !== 'https:') throw new Error('DESIGN_TRUST_CA_FAILED');
   let chain;
@@ -71,6 +72,7 @@ export async function verifiedTrustFlags(origin, ca, timeoutMs = 10000) {
   } catch {
     throw new Error('DESIGN_TRUST_CA_FAILED');
   }
-  if (chain.length === 0) throw new Error('DESIGN_TRUST_CA_FAILED');
-  return [`--ignore-certificate-errors-spki-list=${chain.map(spkiHash).join(',')}`];
+  const leaf = chain[0];
+  if (leaf === undefined) throw new Error('DESIGN_TRUST_CA_FAILED');
+  return [`--ignore-certificate-errors-spki-list=${spkiHash(leaf)}`];
 }

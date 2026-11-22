@@ -1,11 +1,12 @@
 import {spawn} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Refusal} from './contracts.ts';
 import type {DesignToolReports} from './design-collect.ts';
-import {DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
+import {DESIGN_EXAM_CONTAINER, DESIGN_RUNTIME_BIN, DESIGN_USER, designRunArguments, requirePinnedDesignImage} from './design-image.ts';
 import {parseFocusWalks, type FocusWalk} from './design-keyboard.ts';
 import {parseRenderCells, type DesignRenderCell} from './design-render.ts';
 import {stylelintConfig} from './design-stylelint.ts';
@@ -286,7 +287,33 @@ export function readRebuildImagePin(text: string): string {
   return requirePinnedDesignImage(line);
 }
 
-async function defaultSpawn(argv: readonly string[], timeoutMs: number): Promise<{code: number | null; stderr: string}> {
+/** Contêineres de exame deste processo que ainda podem estar de pé. */
+const activeExamContainers = new Set<string>();
+
+/** Matar o cliente `docker run` não para o contêiner: ele é removido pelo nome. */
+function removeExamContainer(name: string): Promise<void> {
+  if (!DESIGN_EXAM_CONTAINER.test(name)) return Promise.resolve();
+  return new Promise(resolve => {
+    const child = spawn(DESIGN_RUNTIME_BIN, ['rm', '-f', name], {stdio: 'ignore'});
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000);
+    child.on('error', () => { clearTimeout(timer); resolve(); });
+    child.on('close', () => { clearTimeout(timer); resolve(); });
+  });
+}
+
+/** Remove os contêineres de exame que ficaram de pé. A sessão do design chama no fim, também na interrupção. */
+export async function removeActiveDesignContainers(): Promise<void> {
+  const names = [...activeExamContainers];
+  activeExamContainers.clear();
+  await Promise.all(names.map(removeExamContainer));
+}
+
+async function defaultSpawn(argv: readonly string[], timeoutMs: number, name?: string): Promise<{code: number | null; stderr: string}> {
+  if (name !== undefined) activeExamContainers.add(name);
+  const finished = async <T>(value: T): Promise<T> => {
+    if (name !== undefined && activeExamContainers.delete(name)) await removeExamContainer(name);
+    return value;
+  };
   return new Promise(resolve => {
     const child = spawn(argv[0] ?? 'docker', argv.slice(1), {stdio: ['ignore', 'ignore', 'pipe']});
     const chunks: Buffer[] = [];
@@ -298,11 +325,12 @@ async function defaultSpawn(argv: readonly string[], timeoutMs: number): Promise
     }, timeoutMs);
     child.on('error', error => {
       clearTimeout(timer);
-      resolve({code: 1, stderr: error.message});
+      void finished({code: 1, stderr: error.message}).then(resolve);
     });
     child.on('close', code => {
       clearTimeout(timer);
-      resolve({code, stderr: Buffer.concat(chunks).toString('utf8').slice(0, 800)});
+      // Saída normal: o --rm já retirou o contêiner e o rm -f não acha nada. No prazo, é ele que para o exame.
+      void finished({code, stderr: Buffer.concat(chunks).toString('utf8').slice(0, 800)}).then(resolve);
     });
   });
 }
@@ -324,6 +352,7 @@ export async function executeDesignImage(input: {
   trustCa?: string;
 }): Promise<DesignImageExecution> {
   const output = await mkdtemp(join(tmpdir(), 'design-img-'));
+  const containerName = `ac-design-exam-${randomUUID()}`;
   try {
     // 0o1777 só enquanto o uid 65532 escreve; o host não é esse uid.
     await chmod(output, 0o1777);
@@ -343,6 +372,7 @@ export async function executeDesignImage(input: {
         pidsLimit: 512,
         ...(input.loginState === undefined ? {} : {loginState: input.loginState}),
         ...(input.trustCa === undefined ? {} : {trustCa: input.trustCa}),
+        ...(input.run === undefined ? {name: containerName} : {}),
       });
     } catch (error) {
       const code = error instanceof Refusal ? error.code : 'DESIGN_IMAGE_FAILED';
@@ -351,7 +381,7 @@ export async function executeDesignImage(input: {
     const timeoutMs = input.timeoutMs ?? 1_200_000;
     let spawned: {code: number | null; stderr: string};
     try {
-      spawned = input.run ? await input.run(argv, output) : await defaultSpawn(argv, timeoutMs);
+      spawned = input.run ? await input.run(argv, output) : await defaultSpawn(argv, timeoutMs, containerName);
     } catch (error) {
       const code = 'DESIGN_IMAGE_FAILED';
       return {
@@ -364,7 +394,8 @@ export async function executeDesignImage(input: {
     }
     const parsed = await readContainerJson(join(output, 'achados-brutos.json'));
     if (parsed === undefined) {
-      const code = spawned.code === null ? 'DESIGN_IMAGE_TIMEOUT' : 'DESIGN_IMAGE_FAILED';
+      // Saída 3: a cadeia da homologação não fechou na CA de --ca.
+      const code = spawned.code === null ? 'DESIGN_IMAGE_TIMEOUT' : spawned.code === 3 ? 'DESIGN_TRUST_CA_FAILED' : 'DESIGN_IMAGE_FAILED';
       const note = spawned.stderr.trim().slice(0, 180);
       return {
         ok: false,

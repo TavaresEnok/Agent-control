@@ -40,7 +40,11 @@ export type DesignRunInput = {
   loginState?: string;
   /** CA da homologação HTTPS, já conferida. O exame só aceita a cadeia que fecha nela. */
   trustCa?: string;
+  /** Nome do contêiner, para o host removê-lo no prazo ou na interrupção. */
+  name?: string;
 };
+
+export const DESIGN_EXAM_CONTAINER = /^ac-design-exam-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export const DESIGN_TRUST_CA_MOUNT = '/trust/ca.pem';
 
@@ -169,6 +173,8 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
     loginMount.push('--mount', `type=bind,source=${input.loginState},destination=/login/state.json,readonly`);
   }
   const trust = designTrustArguments(input.targetUrl, input.trustCa);
+  if (input.name !== undefined && !DESIGN_EXAM_CONTAINER.test(input.name)) throw new Refusal('DESIGN_PATH_FORBIDDEN');
+  const named = input.name === undefined ? [] : ['--name', input.name];
   const memory = String(input.memoryBytes);
   return [
     DESIGN_RUNTIME_BIN,
@@ -177,6 +183,7 @@ export function designRunArguments(input: DesignRunInput): readonly string[] {
     // Node é o PID 1 e não recolhe os processos do Chrome que terminam. Sem o init,
     // os zumbis enchem o --pids-limit e o exame trava no meio do Lighthouse.
     '--init',
+    ...named,
     '--network',
     DESIGN_NETWORK,
     '--read-only',

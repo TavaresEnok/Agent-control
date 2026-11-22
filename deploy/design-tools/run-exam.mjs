@@ -990,7 +990,14 @@ async function main() {
   const chrome = findChrome();
   if (chrome) process.env.PUPPETEER_EXECUTABLE_PATH = chrome;
   // Homologação HTTPS com CA própria: a cadeia é validada antes, e o Chrome só aceita as chaves dela.
-  const trust = await trustFlags(target.origin);
+  let trust;
+  try {
+    trust = await trustFlags(target.origin);
+  } catch {
+    // Código próprio: o host diz que a causa é a CA, não uma falha genérica da imagem.
+    console.error('DESIGN_TRUST_CA_FAILED');
+    process.exit(3);
+  }
   mkdirSync('/output/capturas', {recursive: true});
   const coverage = [];
   const axeReports = [];

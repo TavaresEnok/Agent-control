@@ -28,22 +28,30 @@ function cookieMap(cookies) {
   return new Map(cookies.map(cookie => [`${cookie.domain} ${cookie.path} ${cookie.name}`, cookie.value]));
 }
 
-/**
- * A sessão abriu quando o servidor gravou um cookie novo, ou mudou um existente, depois do envio,
- * e o campo de senha saiu da tela. O cookie do laboratório continua valendo sozinho.
- */
-function sessionOpened(before, cookies, passwordStillVisible) {
-  if (cookies.some(cookie => cookie.name === 'ac_lab_session' && cookie.value === 'aberta')) return true;
-  if (passwordStillVisible) return false;
+function cookieChanged(before, cookies) {
   return cookies.some(cookie => before.get(`${cookie.domain} ${cookie.path} ${cookie.name}`) !== cookie.value);
 }
 
-async function passwordVisible(page) {
+/** 'oculto' só quando o campo de senha comprovadamente não está na tela. Erro de leitura não conta. */
+async function passwordState(page) {
   try {
-    return await page.locator(login.passwordSelector).first().isVisible({timeout: 500});
+    const field = page.locator(login.passwordSelector);
+    if (await field.count() === 0) return 'oculto';
+    return await field.first().isVisible() ? 'visivel' : 'oculto';
   } catch {
-    return false;
+    return 'desconhecido';
   }
+}
+
+function samePage(a, b) {
+  return a.origin === b.origin && a.pathname.replace(/\/+$/u, '') === b.pathname.replace(/\/+$/u, '');
+}
+
+/** Formas em que a senha costuma aparecer gravada num cookie ou no localStorage. */
+function passwordForms(username, password) {
+  const forms = new Set([password, encodeURIComponent(password), Buffer.from(password).toString('base64')]);
+  if (typeof username === 'string') forms.add(Buffer.from(`${username}:${password}`).toString('base64'));
+  return [...forms].filter(form => form.length >= 4);
 }
 
 const login = JSON.parse(readFileSync('/login/login.json', 'utf8'));
@@ -69,19 +77,38 @@ try {
   await page.fill(login.usernameSelector, login.username);
   await page.fill(login.passwordSelector, login.password);
   const before = cookieMap(await context.cookies());
+  const loginPage = new URL(page.url());
   await page.click(login.submitSelector);
   const deadline = Date.now() + 30000;
   let open = false;
+  let hiddenReads = 0;
   while (Date.now() < deadline) {
-    if (sessionOpened(before, await context.cookies(), await passwordVisible(page))) {
+    await page.waitForTimeout(500);
+    const cookies = await context.cookies();
+    // O cookie do laboratório continua valendo sozinho.
+    if (cookies.some(cookie => cookie.name === 'ac_lab_session' && cookie.value === 'aberta')) {
       open = true;
       break;
     }
-    await page.waitForTimeout(250);
+    // Num sistema real: a página saiu do login, o campo de senha sumiu em duas leituras
+    // seguidas e o servidor gravou ou trocou um cookie. Senha errada fica na página de login.
+    const state = await passwordState(page);
+    hiddenReads = state === 'oculto' ? hiddenReads + 1 : 0;
+    let left = false;
+    try {
+      left = !samePage(new URL(page.url()), loginPage);
+    } catch {
+      left = false;
+    }
+    // Uma SPA que abre a sessão na mesma URL precisa do campo oculto por mais tempo.
+    if (cookieChanged(before, cookies) && hiddenReads >= 2 && (left || hiddenReads >= 4)) {
+      open = true;
+      break;
+    }
   }
   if (!open) process.exit(1);
   const body = JSON.stringify(await context.storageState());
-  if (body.includes(login.password)) process.exit(2);
+  if (passwordForms(login.username, login.password).some(form => body.includes(form))) process.exit(2);
   writeFileSync('/output/state.json', body, {mode: 0o600});
   chmodSync('/output/state.json', 0o600);
 } finally {
