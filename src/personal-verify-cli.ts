@@ -3,6 +3,7 @@ import {pathToFileURL} from 'node:url';
 import {Id,Refusal} from './contracts.ts';
 import {finishExamIntent,withExamSignals} from './exam-intent.ts';
 import {EXAM_LOGIN_BUSY_TEXT,EXAM_LOGIN_RESTORE_FAILED_TEXT,EXAM_LOGIN_STALE_TEXT} from './exam-login.ts';
+import {clearExamContextCapacityWaits} from './exam-provider.ts';
 import {loadInstallation} from './installation.ts';
 import {beginPersonalVerification,resolvePersonalVerification} from './verify-command.ts';
 import {removeSecurityReport} from './verify-report.ts';
@@ -31,6 +32,9 @@ const messages:Record<string,string>={
  [VERIFY_RECHECK_NEW_EXAM_REQUIRED]:VERIFY_RECHECK_NEW_EXAM_GUIDANCE,
  EXAM_PROVIDER_UNSUPPORTED:'O exame de leitura só aceita uma conta Claude.',
  PROJECT_ACCOUNTS_UNAVAILABLE:'Nenhuma conta permitida para este projeto está ativa e disponível no runtime para o papel solicitado.',
+ CAPACITY_BUSY:'As vagas de execução da verificação estão ocupadas. Repita o exame quando houver uma vaga.',
+ CAPACITY_QUEUED:'A verificação aguardou na fila de capacidade até o limite da rodada sem abrir vaga.',
+ VERIFY_EXAM_TIMEOUT:'A verificação passou do tempo limite da rodada.',
  EXAM_LOGIN_STALE:EXAM_LOGIN_STALE_TEXT,
  EXAM_LOGIN_BUSY:EXAM_LOGIN_BUSY_TEXT,
  EXAM_LOGIN_RESTORE_FAILED:EXAM_LOGIN_RESTORE_FAILED_TEXT,
@@ -198,6 +202,7 @@ export async function runPersonalVerifySession(
     }
    }catch{/* status cleanup must not replace the original failure */}
   }
+  await clearExamContextCapacityWaits(ledger.pool,authority.contextId,undefined,authority.epoch);
   try{
    await releasePersonalVerifyLease({pool:{query:(sql,params)=>ledger.pool.query(sql,(params??[]) as never[])}},authority);
   }catch{/* release must not mask the exam error; the exit code is already chosen */}

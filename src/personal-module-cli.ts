@@ -6,9 +6,11 @@ import {pathToFileURL} from 'node:url';
 import {Capacity} from './capacity.ts';
 import {Id, Refusal, type Authority} from './contracts.ts';
 import {withExamSignals} from './exam-intent.ts';
+import {clearExamContextCapacityWaits} from './exam-provider.ts';
 import {loadInstallation, type Installation} from './installation.ts';
 import {Ledger, type VerificationModule} from './ledger.ts';
 import {abortPersonalVerifyForLeaseLoss, keepPersonalVerifyLease, releasePersonalVerifyLease} from './personal-verify-cli.ts';
+import {examRunOptions} from './verify-command.ts';
 import {
   authorizeProjectHttpsOrigin,
   probePublishedHttpsOrigins,
@@ -72,6 +74,8 @@ const messages: Record<string, string> = {
   PRONTIDAO_ORIGIN_UNAUTHORIZED: 'A origem HTTPS informada não está declarada e autorizada na instalação ou no projeto.',
   PROVIDER_USAGE_LIMIT: 'PROVIDER_USAGE_LIMIT. A cota do provedor foi atingida. Consulte as pendências no relatório.',
   PROJECT_ACCOUNTS_UNAVAILABLE: 'Nenhuma conta permitida para este projeto está ativa e disponível no runtime para o papel solicitado.',
+  CAPACITY_BUSY: 'As vagas de execução do módulo estão ocupadas. Repita o exame quando houver uma vaga.',
+  CAPACITY_QUEUED: 'O exame do módulo aguardou na fila de capacidade até o limite sem abrir vaga.',
   EXAM_INTERRUPTED: 'A execução do módulo foi interrompida.',
 };
 
@@ -293,11 +297,14 @@ export async function runPersonalModuleCli(
       await new Capacity(ledger).assignPolicy(project.owner, exam.contextId, exam.mainCapacityPolicyRevision);
     }
 
+    const runOptions = examRunOptions(project.economy);
     if (parsed.kind === 'recheck') {
       const {results, publication} = await recheckModuleFindings(ledger, project.owner, authority, {
         module, runId: parsed.runId, achadoIds: parsed.achadoIds, dataDirectory: config.dataDirectory, projectId: project.id,
         signal: recheckAbort?.signal,
         review: createPersonalModuleRecheck({ledger, principal: project.owner, authority,
+          pollBackoff: runOptions.pollBackoff,
+          ...(deps?.clock ? {clock: deps.clock} : {}),
           ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
           loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger, project.allowedAccountIds))}),
       });
@@ -362,7 +369,8 @@ export async function runPersonalModuleCli(
       const runExam = measurement ? undefined : createPersonalModuleExam({
         ledger, principal: project.owner, authority: authority!, commit,
         mapEnabled: project.economy?.map,
-        batch: project.economy?.batch === false ? false : {tokens: project.economy?.batchTokens ?? 40_000, files: project.economy?.batchFiles ?? 8},
+        batch: runOptions.batch,
+        pollBackoff: runOptions.pollBackoff,
         ...(project.allowedAccountIds ? {allowedAccountIds: project.allowedAccountIds} : {}),
         loadRuntime: deps?.moduleExamRuntime ?? (() => composePersonalModuleExamRuntime(config, ledger, project.allowedAccountIds)),
         ...(waitForClaudeQuota ? {waitForClaudeQuota: true} : {}),
@@ -433,6 +441,7 @@ export async function runPersonalModuleCli(
     stopRecheckLease?.();
     try {
       if (authority) {
+        await clearExamContextCapacityWaits(ledger.pool, authority.contextId, undefined, authority.epoch);
         await releasePersonalVerifyLease(
           {pool: {query: (sql, params) => ledger.pool.query(sql, (params ?? []) as never[])}},
           authority,

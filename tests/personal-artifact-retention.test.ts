@@ -777,30 +777,38 @@ test('work/ of jobs is retained first, and a damaged artifact registry never sto
   const jobRetention=async(_config:Installation,apply:boolean)=>{order.push('jobs');return [`jobs apply=${apply}`];};
   const artifactRetention=async(config:Installation,apply:boolean)=>{order.push('artifacts');return runPersonalArtifactRetention(config,apply,l.deps);};
   const verifyDatabaseRetention=async(_config:Installation,apply:boolean)=>{order.push('verify-db');return [`bases apply=${apply}`];};
+  const capacityWaitRetention=async(_config:Installation,apply:boolean)=>{order.push('capacity-waits');return [`esperas apply=${apply}`];};
   for(let pass=0;pass<2;pass++){
-   const failure=await runRetentionStages(l.config,true,{jobRetention,verifyDatabaseRetention,artifactRetention}).then(()=>undefined,error=>error);
+   const failure=await runRetentionStages(l.config,true,{jobRetention,verifyDatabaseRetention,capacityWaitRetention,artifactRetention}).then(()=>undefined,error=>error);
    assert.ok(failure instanceof RetentionIncomplete);
    assert.deepEqual(failure.failed,['artifacts']);
    assert.equal(failure.lines[0],'jobs apply=true');
    assert.match(failure.lines.join('\n'),/Retenção de artefatos \(worktrees, imagens e temporários\) falhou \(RETENTION_REGISTRY_INVALID\); as demais etapas seguiram\./);
   }
-  assert.deepEqual(order,['jobs','verify-db','artifacts','jobs','verify-db','artifacts']);
+  assert.deepEqual(order,['jobs','verify-db','capacity-waits','artifacts','jobs','verify-db','capacity-waits','artifacts']);
   assert.ok(existsSync(w.path));
   // The other way round: a failing job stage still lets artifacts run.
   await rm(registryPath(l));
-  const failure=await runRetentionStages(l.config,false,{jobRetention:async()=>{throw new Error('database down');},verifyDatabaseRetention,artifactRetention}).then(()=>undefined,error=>error);
+  const failure=await runRetentionStages(l.config,false,{jobRetention:async()=>{throw new Error('database down');},verifyDatabaseRetention,capacityWaitRetention,artifactRetention}).then(()=>undefined,error=>error);
   assert.ok(failure instanceof RetentionIncomplete);
   assert.deepEqual(failure.failed,['jobs']);
   assert.match(failure.lines[0]!,/Retenção de work\/ de jobs falhou \(erro\)/);
   assert.match(failure.lines.at(-1)!,/Prévia, nada foi alterado/);
-  // Both healthy: plain lines, jobs first.
-  assert.deepEqual((await runRetentionStages(l.config,false,{jobRetention,verifyDatabaseRetention,artifactRetention})).slice(0,2),['jobs apply=false','bases apply=false']);
-  // A failing vulnerability-database stage still lets artifacts run, and is named in the failure.
-  const dbFailure=await runRetentionStages(l.config,false,{jobRetention,verifyDatabaseRetention:async()=>{throw new Refusal('VERIFY_DB_PRUNE_FAILED');},artifactRetention}).then(()=>undefined,error=>error);
+  // All healthy: plain lines, jobs first, then verify-db, then capacity-waits.
+  assert.deepEqual((await runRetentionStages(l.config,false,{jobRetention,verifyDatabaseRetention,capacityWaitRetention,artifactRetention})).slice(0,3),['jobs apply=false','bases apply=false','esperas apply=false']);
+  // A failing vulnerability-database stage still lets capacity-waits and artifacts run, and is named in the failure.
+  const dbFailure=await runRetentionStages(l.config,false,{jobRetention,verifyDatabaseRetention:async()=>{throw new Refusal('VERIFY_DB_PRUNE_FAILED');},capacityWaitRetention,artifactRetention}).then(()=>undefined,error=>error);
   assert.ok(dbFailure instanceof RetentionIncomplete);
   assert.deepEqual(dbFailure.failed,['verify-db']);
   assert.match(dbFailure.lines.join('\n'),/Retenção de bases de vulnerabilidades falhou \(VERIFY_DB_PRUNE_FAILED\); as demais etapas seguiram\./);
   assert.match(dbFailure.lines.at(-1)!,/Prévia, nada foi alterado/);
+  // A failing capacity-waits stage still lets jobs, verify-db and artifacts run, and is named in the failure.
+  const waitFailure=await runRetentionStages(l.config,false,{jobRetention,verifyDatabaseRetention,capacityWaitRetention:async()=>{throw new Refusal('CAPACITY_WAIT_PRUNE_FAILED');},artifactRetention}).then(()=>undefined,error=>error);
+  assert.ok(waitFailure instanceof RetentionIncomplete);
+  assert.deepEqual(waitFailure.failed,['capacity-waits']);
+  assert.deepEqual(waitFailure.lines.slice(0,2),['jobs apply=false','bases apply=false']);
+  assert.match(waitFailure.lines.join('\n'),/Retenção de esperas de capacidade falhou \(CAPACITY_WAIT_PRUNE_FAILED\); as demais etapas seguiram\./);
+  assert.match(waitFailure.lines.at(-1)!,/Prévia, nada foi alterado/);
  }finally{await cleanup(l);}
 });
 

@@ -2,7 +2,15 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {randomUUID} from 'node:crypto';
 import {Capacity} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
-import {loadSpecialistExamPlan, moduleExaminerRequirement, reserveSpecialistExamSeat} from './exam-provider.ts';
+import {
+  clearExamContextCapacityWaits,
+  DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS,
+  loadSpecialistExamPlan,
+  moduleExaminerRequirement,
+  reserveSpecialistExamSeat,
+  reserveWithCapacityQueue,
+  type ExamCapacityWaitOptions,
+} from './exam-provider.ts';
 import type {Ledger, VerificationModule} from './ledger.ts';
 import {safeFailureCode} from './exam-login.ts';
 import {readPrivateFile, type Installation} from './installation.ts';
@@ -33,6 +41,7 @@ type ReservationInput = {
   module?: VerificationModule;
   supportedSeats: ReadonlyMap<ModuleExamProvider, ReadonlySet<string>>;
   allowedAccountIds?: readonly string[];
+  capacityWait?: ExamCapacityWaitOptions;
 };
 
 export type ModuleExamClock = {
@@ -103,6 +112,7 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
         allowSameAccount: true,
         preferEmergencyFirst: true,
         unavailableCode: 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
+        ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
         releaseGrant: releaseNotStarted,
       });
       if (!accounts.has(seat.accountId) || seat.provider !== 'claude' || seat.model !== 'claude-opus-5-5'
@@ -122,10 +132,22 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
       hadAllowedIntersection = true;
       lastProvider = provider;
       try {
-        const seat = await capacity.reserveWithSeat(input.principal, {attemptId: randomUUID(), intentId: input.intentId,
-          contextId: input.authority.contextId, role: 'specialist', provider, allowedAccounts: [...accounts],
-          ...(avoid?.profileId ? {avoidProfiles: [avoid.profileId]} : {}),
-          ...(avoid?.accountId ? {avoidAccounts: [avoid.accountId]} : {})}, input.authority);
+        const seat = await reserveWithCapacityQueue({
+          capacity,
+          ledger: input.ledger,
+          principal: input.principal,
+          authority: input.authority,
+          ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
+          request: {
+            intentId: input.intentId,
+            contextId: input.authority.contextId,
+            role: 'specialist',
+            provider,
+            allowedAccounts: [...accounts],
+            ...(avoid?.profileId ? {avoidProfiles: [avoid.profileId]} : {}),
+            ...(avoid?.accountId ? {avoidAccounts: [avoid.accountId]} : {}),
+          },
+        });
         const result = {provider: seat.provider, model: seat.model, accountId: seat.grant.account_id, profileId: seat.grant.profile_id, grantId: seat.grant.id};
         if (result.provider === avoid?.provider || result.profileId === avoid?.profileId || result.accountId === avoid?.accountId) {
           await release(result, 'not_started');
@@ -179,6 +201,7 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
         requiredEffort: requirement.effort,
         firstAccountOnly: true,
         unavailableCode: 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
+        ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
         releaseGrant: releaseNotStarted,
       });
       if (!accounts.has(seat.accountId) || seat.provider !== 'claude' || seat.model !== requirement.model) {
@@ -193,62 +216,83 @@ export function createModuleExamReservations(input: ReservationInput): Pick<Requ
 export function createPersonalModuleRecheck(input: Pick<WorkerInput, 'ledger' | 'principal' | 'authority'> & {
   loadRuntime: () => Promise<ModuleExamRuntime>;
   allowedAccountIds?: readonly string[];
+  pollBackoff?: boolean;
+  clock?: ModuleExamClock;
+  capacityWaitDeadlineMs?: number;
 }): ModuleRecheckReview {
   let runtimePromise: Promise<ModuleExamRuntime> | undefined;
   let blocked: string | undefined;
+  const clock = input.clock ?? defaultExamClock;
+  const deadlineAt = clock.now() + (input.capacityWaitDeadlineMs ?? DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS);
   return async ({intentId, commit, task, examiner, severity, fromExaminer, subject, signal}) => {
-    signal?.throwIfAborted();
-    if (blocked) return {reason: blocked};
-    runtimePromise ??= input.loadRuntime();
-    const runtime = await runtimePromise.catch(error => {
-      if (error instanceof Refusal && error.code === 'PROJECT_ACCOUNTS_UNAVAILABLE') throw error;
-      return containFailure('MODULE_EXAM_RUNTIME_LOAD_FAILED', null)(error);
-    });
-    signal?.throwIfAborted();
-    if (!runtime) return {reason: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'};
-    const reservations = createModuleExamReservations({...input, intentId,
-      supportedSeats: new Map(runtime.map(seat => [seat.provider, seat.accountIds])),
-      ...(input.allowedAccountIds ? {allowedAccountIds: input.allowedAccountIds} : {})});
-    const highExaminer = Boolean(fromExaminer && severity === 'alta');
-    let reviewer: ModuleExamSeat;
     try {
-      reviewer = await reservations.reserveReviewer(
-        examiner,
-        severity ? {severity, source: fromExaminer ? 'examinador' : 'coletor', fromExaminer: Boolean(fromExaminer)} : undefined,
-      );
-    } catch (error) {
       signal?.throwIfAborted();
-      if (error instanceof Refusal && [
-        'MODULE_EXAM_REVIEWER_UNAVAILABLE', 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
-        'CAPACITY_NOT_CONFIGURED', 'CAPACITY_POLICY_REQUIRED',
-      ].includes(error.code)) {
-        return {reason: highExaminer ? 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE' : 'MODULE_EXAM_REVIEWER_UNAVAILABLE'};
-      }
-      if (error instanceof Refusal && error.code === 'PROVIDER_USAGE_LIMIT') {
-        blocked = error.code;
-        return {reason: blocked};
-      }
-      throw error;
-    }
-    try {
-      const worker = createModuleExamNativeWorker({...input, intentId, commit, signal, runtime});
-      const call = {...reviewer, role: 'specialist' as const, task, intentId, writePaths: [] as [],
-        ...(subject ? {examSubject: subject} : {})};
-      const output = await worker.run(call);
-      const sessionId = (call as {examSessionId?: string}).examSessionId;
-      return {output, reviewer: {...reviewer, ...(highExaminer && sessionId ? {sessionId} : {})}};
-    } catch (error) {
+      if (blocked) return {reason: blocked};
+      runtimePromise ??= input.loadRuntime();
+      const runtime = await runtimePromise.catch(error => {
+        if (error instanceof Refusal && error.code === 'PROJECT_ACCOUNTS_UNAVAILABLE') throw error;
+        return containFailure('MODULE_EXAM_RUNTIME_LOAD_FAILED', null)(error);
+      });
       signal?.throwIfAborted();
-      const grant = await input.ledger.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1', [reviewer.grantId]);
-      if (grant.rows[0]?.state !== 'released') {
-        blocked = 'MODULE_RECHECK_RESULT_UNCERTAIN';
-        return {reason: blocked, reviewer};
+      if (!runtime) return {reason: 'MODULE_EXAM_RUNTIME_UNAVAILABLE'};
+      const reservations = createModuleExamReservations({...input, intentId,
+        supportedSeats: new Map(runtime.map(seat => [seat.provider, seat.accountIds])),
+        ...(input.allowedAccountIds ? {allowedAccountIds: input.allowedAccountIds} : {}),
+        capacityWait: {
+          enabled: true,
+          pollBackoff: input.pollBackoff !== false,
+          deadlineAt,
+          now: () => clock.now(),
+          sleep: (ms, waitSignal) => clock.sleep(ms, waitSignal ?? signal),
+          ...(signal ? {signal} : {}),
+        }});
+      const highExaminer = Boolean(fromExaminer && severity === 'alta');
+      let reviewer: ModuleExamSeat;
+      try {
+        reviewer = await reservations.reserveReviewer(
+          examiner,
+          severity ? {severity, source: fromExaminer ? 'examinador' : 'coletor', fromExaminer: Boolean(fromExaminer)} : undefined,
+        );
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (error instanceof Refusal && [
+          'MODULE_EXAM_REVIEWER_UNAVAILABLE', 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE',
+          'CAPACITY_NOT_CONFIGURED', 'CAPACITY_POLICY_REQUIRED', 'CAPACITY_BUSY', 'CAPACITY_QUEUED',
+        ].includes(error.code)) {
+          return {
+            reason: (error.code === 'CAPACITY_BUSY' || error.code === 'CAPACITY_QUEUED')
+              ? error.code
+              : (highExaminer ? 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE' : 'MODULE_EXAM_REVIEWER_UNAVAILABLE'),
+          };
+        }
+        if (error instanceof Refusal && error.code === 'PROVIDER_USAGE_LIMIT') {
+          blocked = error.code;
+          return {reason: blocked};
+        }
+        throw error;
       }
-      const code = error instanceof Refusal ? error.code : '';
-      if (code === 'PROVIDER_USAGE_LIMIT') blocked = code;
-      const reason = code === 'PROVIDER_USAGE_LIMIT' || code === 'EXAM_LOGIN_STALE' || code === 'MODULE_EXAM_PROVIDER_UNAVAILABLE'
-        ? code : 'MODULE_EXAM_PROVIDER_FAILED';
-      return {reason, reviewer};
+      try {
+        const worker = createModuleExamNativeWorker({...input, intentId, commit, signal, runtime});
+        const call = {...reviewer, role: 'specialist' as const, task, intentId, writePaths: [] as [],
+          ...(subject ? {examSubject: subject} : {})};
+        const output = await worker.run(call);
+        const sessionId = (call as {examSessionId?: string}).examSessionId;
+        return {output, reviewer: {...reviewer, ...(highExaminer && sessionId ? {sessionId} : {})}};
+      } catch (error) {
+        signal?.throwIfAborted();
+        const grant = await input.ledger.pool.query('SELECT state FROM ac_capacity_grants WHERE id=$1', [reviewer.grantId]);
+        if (grant.rows[0]?.state !== 'released') {
+          blocked = 'MODULE_RECHECK_RESULT_UNCERTAIN';
+          return {reason: blocked, reviewer};
+        }
+        const code = error instanceof Refusal ? error.code : '';
+        if (code === 'PROVIDER_USAGE_LIMIT') blocked = code;
+        const reason = code === 'PROVIDER_USAGE_LIMIT' || code === 'EXAM_LOGIN_STALE' || code === 'MODULE_EXAM_PROVIDER_UNAVAILABLE'
+          ? code : 'MODULE_EXAM_PROVIDER_FAILED';
+        return {reason, reviewer};
+      }
+    } finally {
+      await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId, input.authority.epoch);
     }
   };
 }
@@ -483,6 +527,8 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
   mapEnabled?: boolean;
   /** Batch limits; `false` disables batching. Defaults to the product limits. */
   batch?: ModuleExamBatch | false;
+  pollBackoff?: boolean;
+  capacityWaitDeadlineMs?: number;
   loadRuntime: () => Promise<ModuleExamRuntime>;
   allowedAccountIds?: readonly string[];
   waitForClaudeQuota?: boolean;
@@ -490,6 +536,8 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
   onQuotaWait?: (info: {purpose: 'examiner' | 'reviewer'; file: string; delayMs: number}) => void;
 }): ModuleExamCallback {
   return async ({intentId, snapshot, module, findings, collector, signal}): Promise<ModuleExamResult> => {
+    const clock = input.clock ?? defaultExamClock;
+    const deadlineAt = clock.now() + (input.capacityWaitDeadlineMs ?? DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS);
     const map = await mapModuleSnapshot(snapshot, signal, {aggregateOmissions: module === 'arquitetura'});
     let runtime: ModuleExamRuntime;
     try { runtime = await input.loadRuntime(); }
@@ -516,8 +564,15 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
       module,
       supportedSeats,
       ...(input.allowedAccountIds ? {allowedAccountIds: input.allowedAccountIds} : {}),
+      capacityWait: {
+        enabled: true,
+        pollBackoff: input.pollBackoff !== false,
+        deadlineAt,
+        now: () => clock.now(),
+        sleep: (ms, waitSignal) => clock.sleep(ms, waitSignal ?? signal),
+        ...(signal ? {signal} : {}),
+      },
     });
-    const clock = input.clock ?? defaultExamClock;
     const waitForClaudeQuota = input.waitForClaudeQuota
       ? async ({purpose, provider, accountId, file, signal: waitSignal}: Parameters<NonNullable<ModuleExamInput['waitForClaudeQuota']>>[0]) => {
           const activeSignal = waitSignal ?? signal;
@@ -552,18 +607,22 @@ export function createPersonalModuleExam(input: Omit<WorkerInput, 'intentId' | '
           return true;
         }
       : undefined;
-    return examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal, mapEnabled: input.mapEnabled,
-      ...(input.batch === false ? {} : {batch: input.batch ?? DEFAULT_MODULE_EXAM_BATCH}),
-      ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
-      worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
-      reserve: reservations.reserve,
-      release: reservations.release,
-      ...(waitForClaudeQuota ? {waitForClaudeQuota} : {}),
-      attestSessions: ({examiner, reviewer, file, line, finding}) => attestDistinctExamSessions(input.ledger.pool, {
-        contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer, reviewerIntentId: intentId,
-        examinerSubject: examSubjectDigest({purpose: 'examiner', module, intentId, commit: input.commit, file}),
-        reviewerSubject: examSubjectDigest({purpose: 'reviewer', module, intentId, commit: input.commit, file, line, finding}),
-      }),
-    });
+    try {
+      return await examineFunctionalModule({intentId, module, map, findings, commit: input.commit, signal, mapEnabled: input.mapEnabled,
+        ...(input.batch === false ? {} : {batch: input.batch ?? DEFAULT_MODULE_EXAM_BATCH}),
+        ...(collector ? {collectorReview: {collector, intentId, snapshot}} : {}),
+        worker: createModuleExamNativeWorker({...input, intentId, runtime, signal}),
+        reserve: reservations.reserve,
+        release: reservations.release,
+        ...(waitForClaudeQuota ? {waitForClaudeQuota} : {}),
+        attestSessions: ({examiner, reviewer, file, line, finding}) => attestDistinctExamSessions(input.ledger.pool, {
+          contextId: input.authority.contextId, examiner, examinerIntentId: intentId, reviewer, reviewerIntentId: intentId,
+          examinerSubject: examSubjectDigest({purpose: 'examiner', module, intentId, commit: input.commit, file}),
+          reviewerSubject: examSubjectDigest({purpose: 'reviewer', module, intentId, commit: input.commit, file, line, finding}),
+        }),
+      });
+    } finally {
+      await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intentId, input.authority.epoch);
+    }
   };
 }

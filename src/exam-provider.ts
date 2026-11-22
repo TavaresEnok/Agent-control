@@ -1,7 +1,10 @@
 import {randomUUID} from 'node:crypto';
-import type {Capacity, ReservedSeatGrant} from './capacity.ts';
-import {Refusal, type Authority} from './contracts.ts';
+import {setTimeout as delay} from 'node:timers/promises';
+import type { z } from 'zod';
+import type {Capacity, GrantRequest, ReservedSeatGrant} from './capacity.ts';
+import {digest, Refusal, type Authority} from './contracts.ts';
 import type {Ledger, VerificationModule} from './ledger.ts';
+import {backoffMs} from './manager-discipline.ts';
 
 const MAX_AVOID_PROFILES = 20;
 const MAX_AVOID_EXAMINER_ACCOUNTS = 20;
@@ -9,6 +12,180 @@ const MAX_AVOID_REVIEWER_ACCOUNTS = 8;
 const MAX_PREPARED_PROFILES = 20;
 const MAX_RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_DELAY_MS = 15;
+export const DEFAULT_EXAM_CAPACITY_WAIT_BASE_MS = 2000;
+export const DEFAULT_EXAM_CAPACITY_WAIT_MAX_MS = 10_000;
+export const DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS = 21_600_000;
+
+export type ExamCapacityWaitOptions = {
+  /** Wait when CAPACITY_BUSY or CAPACITY_QUEUED is returned. Default: false (must be enabled explicitly by the caller). */
+  enabled?: boolean;
+  /** Growing pause (true, default) or fixed 2s pause (false), matching examRunOptions.pollBackoff. */
+  pollBackoff?: boolean;
+  baseMs?: number;
+  maxMs?: number;
+  /** Maximum total wait time in ms before failing with CAPACITY_BUSY / CAPACITY_QUEUED. */
+  deadlineMs?: number;
+  /** Absolute deadline timestamp in ms (takes precedence over deadlineMs). */
+  deadlineAt?: number;
+  now?: () => number;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  signal?: AbortSignal;
+};
+
+const pendingWaitsByScope = new Map<string, {attemptId: string; requestKey: string; epoch: number}>();
+
+async function defaultCapacitySleep(ms: number, signal?: AbortSignal): Promise<void> {
+  try {
+    await delay(ms, undefined, {signal});
+  } catch (error) {
+    if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+    throw error;
+  }
+}
+
+/** Removes any queued capacity waits left for an exam context (or specific intent/epoch) when it finishes, fails, or is interrupted. */
+export async function clearExamContextCapacityWaits(
+  pool: {query: (text: string, values?: unknown[]) => Promise<unknown>},
+  contextId: string,
+  intentId?: string,
+  managerEpoch?: number,
+): Promise<void> {
+  for (const [key, entry] of [...pendingWaitsByScope.entries()]) {
+    const matchesScope = intentId ? key === `${contextId}:${intentId}` : key.startsWith(`${contextId}:`);
+    const matchesEpoch = managerEpoch === undefined || entry.epoch === managerEpoch;
+    if (matchesScope && matchesEpoch) {
+      pendingWaitsByScope.delete(key);
+    }
+  }
+  try {
+    if (intentId && managerEpoch !== undefined) {
+      await pool.query(
+        'DELETE FROM ac_capacity_waits WHERE context_id=$1 AND intent_id=$2 AND manager_epoch=$3',
+        [contextId, intentId, managerEpoch],
+      );
+    } else if (intentId) {
+      await pool.query('DELETE FROM ac_capacity_waits WHERE context_id=$1 AND intent_id=$2', [contextId, intentId]);
+    } else if (managerEpoch !== undefined) {
+      await pool.query('DELETE FROM ac_capacity_waits WHERE context_id=$1 AND manager_epoch=$2', [contextId, managerEpoch]);
+    } else {
+      await pool.query('DELETE FROM ac_capacity_waits WHERE context_id=$1', [contextId]);
+    }
+  } catch {
+    /* wait cleanup on exit is best-effort and must not mask the exam outcome */
+  }
+}
+
+/** Reserves a model seat while reusing the same attemptId across queue waits so at most one wait row exists per reservation. */
+export async function reserveWithCapacityQueue(input: {
+  capacity: Capacity;
+  ledger: Ledger;
+  principal: string;
+  authority: Authority;
+  request: Omit<z.input<typeof GrantRequest>, 'attemptId'>;
+  capacityWait?: ExamCapacityWaitOptions;
+}): Promise<ReservedSeatGrant> {
+  const scopeKey = `${input.authority.contextId}:${input.request.intentId}`;
+  const requestKey = digest({epoch: input.authority.epoch, ...input.request});
+  const previous = pendingWaitsByScope.get(scopeKey);
+  let attemptId: string;
+  if (previous && previous.requestKey === requestKey) {
+    attemptId = previous.attemptId;
+  } else {
+    if (previous) {
+      await input.ledger.pool.query(
+        'DELETE FROM ac_capacity_waits WHERE attempt_id=$1 AND context_id=$2 AND manager_epoch=$3',
+        [previous.attemptId, input.authority.contextId, previous.epoch],
+      ).catch(() => undefined /* best-effort cleanup of superseded wait */);
+    }
+    attemptId = randomUUID();
+    pendingWaitsByScope.set(scopeKey, {attemptId, requestKey, epoch: input.authority.epoch});
+  }
+  const fullRequest: z.input<typeof GrantRequest> = {attemptId, ...input.request};
+  const waitOpts = input.capacityWait;
+  const waitEnabled = waitOpts?.enabled === true;
+  const pollBackoff = waitOpts?.pollBackoff !== false;
+  const baseMs = waitOpts?.baseMs ?? DEFAULT_EXAM_CAPACITY_WAIT_BASE_MS;
+  const maxMs = waitOpts?.maxMs ?? DEFAULT_EXAM_CAPACITY_WAIT_MAX_MS;
+  const now = waitOpts?.now ?? Date.now;
+  const sleep = waitOpts?.sleep ?? defaultCapacitySleep;
+  const signal = waitOpts?.signal;
+  const startedAt = now();
+  const deadlineMs = waitOpts?.deadlineAt !== undefined
+    ? Math.max(0, waitOpts.deadlineAt - startedAt)
+    : (waitOpts?.deadlineMs ?? DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS);
+  let elapsedMs = 0;
+  let attempt = 0;
+  let waited = false;
+
+  const cleanupAttemptWait = async () => {
+    if (pendingWaitsByScope.get(scopeKey)?.attemptId === attemptId) {
+      pendingWaitsByScope.delete(scopeKey);
+    }
+    await input.ledger.pool.query(
+      'DELETE FROM ac_capacity_waits WHERE attempt_id=$1 AND context_id=$2 AND manager_epoch=$3',
+      [attemptId, input.authority.contextId, input.authority.epoch],
+    ).catch(() => undefined /* best-effort cleanup on abort or terminal failure */);
+  };
+
+  for (;;) {
+    if (signal?.aborted) {
+      await cleanupAttemptWait();
+      throw new Refusal('EXAM_INTERRUPTED');
+    }
+    try {
+      const reserved = await input.capacity.reserveWithSeat(input.principal, fullRequest, input.authority);
+      if (pendingWaitsByScope.get(scopeKey)?.attemptId === attemptId) {
+        pendingWaitsByScope.delete(scopeKey);
+      }
+      return reserved;
+    } catch (error) {
+      if (signal?.aborted) {
+        await cleanupAttemptWait();
+        throw new Refusal('EXAM_INTERRUPTED');
+      }
+      const isCapacityWait = error instanceof Refusal
+        && (error.code === 'CAPACITY_BUSY' || error.code === 'CAPACITY_QUEUED');
+      if (!isCapacityWait) {
+        await cleanupAttemptWait();
+        throw error;
+      }
+      if (!waitEnabled) {
+        throw error;
+      }
+      if (!waited) {
+        const selfHeld = await input.ledger.pool.query(
+          "SELECT 1 FROM ac_capacity_grants WHERE intent_id=$1 AND context_id=$2 AND state<>'released' LIMIT 1",
+          [input.request.intentId, input.authority.contextId],
+        ).catch(() => ({rowCount: 0} /* fallback to waiting if the check cannot run */));
+        if (selfHeld.rowCount) {
+          throw error;
+        }
+      }
+      const currentElapsed = Math.max(elapsedMs, now() - startedAt);
+      if (currentElapsed >= deadlineMs) {
+        await cleanupAttemptWait();
+        throw error;
+      }
+      const stepMs = pollBackoff ? backoffMs(attempt, baseMs, maxMs) : baseMs;
+      const remainingMs = Math.max(1, deadlineMs - currentElapsed);
+      const delayMs = Math.min(stepMs, remainingMs);
+      attempt += 1;
+      waited = true;
+      try {
+        await sleep(delayMs, signal);
+      } catch (sleepError) {
+        await cleanupAttemptWait();
+        if (signal?.aborted) throw new Refusal('EXAM_INTERRUPTED');
+        throw sleepError;
+      }
+      if (signal?.aborted) {
+        await cleanupAttemptWait();
+        throw new Refusal('EXAM_INTERRUPTED');
+      }
+      elapsedMs = Math.max(currentElapsed + delayMs, now() - startedAt);
+    }
+  }
+}
 
 export type ExamSeat = {grantId: string; accountId: string; provider: string};
 export type SpecialistExamSeat = {
@@ -299,6 +476,7 @@ export async function reserveSpecialistExamSeat(input: {
   allowSameAccount?: boolean;
   preferEmergencyFirst?: boolean;
   unavailableCode?: string;
+  capacityWait?: ExamCapacityWaitOptions;
   releaseGrant: (grantId: string) => Promise<void>;
 }): Promise<SpecialistExamSeat> {
   const avoidProfiles = uniqueReservationIds(input.avoidProfileId, input.avoidProfileIds);
@@ -378,17 +556,23 @@ export async function reserveSpecialistExamSeat(input: {
     const combinedAvoidProfiles = uniqueReservationIds(avoidProfiles, nonMatchingOnTarget).slice(0, MAX_AVOID_PROFILES);
     let reserved: ReservedSeatGrant;
     try {
-      reserved = await input.capacity.reserveWithSeat(input.principal, {
-        attemptId: randomUUID(),
-        intentId: input.intentId,
-        contextId: input.authority.contextId,
-        role: 'specialist',
-        provider: 'claude',
-        ...(targetAccounts ? {allowedAccounts: targetAccounts} : {}),
-        preferredProfileId: matching[0]!.id,
-        ...(combinedAvoidProfiles.length ? {avoidProfiles: combinedAvoidProfiles} : {}),
-        ...(!input.allowSameAccount && avoidReviewerAccounts.length ? {avoidAccounts: avoidReviewerAccounts} : {}),
-      }, input.authority);
+      reserved = await reserveWithCapacityQueue({
+        capacity: input.capacity,
+        ledger: input.ledger,
+        principal: input.principal,
+        authority: input.authority,
+        ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
+        request: {
+          intentId: input.intentId,
+          contextId: input.authority.contextId,
+          role: 'specialist',
+          provider: 'claude',
+          ...(targetAccounts ? {allowedAccounts: targetAccounts} : {}),
+          preferredProfileId: matching[0]!.id,
+          ...(combinedAvoidProfiles.length ? {avoidProfiles: combinedAvoidProfiles} : {}),
+          ...(!input.allowSameAccount && avoidReviewerAccounts.length ? {avoidAccounts: avoidReviewerAccounts} : {}),
+        },
+      });
     } catch (error) {
       if (
         input.purpose === 'reviewer'
@@ -433,20 +617,26 @@ export async function reserveSpecialistExamSeat(input: {
     ];
     let reserved: ReservedSeatGrant;
     try {
-      reserved = await input.capacity.reserveWithSeat(input.principal, {
-        attemptId: randomUUID(),
-        intentId: input.intentId,
-        contextId: input.authority.contextId,
-        role: 'specialist',
-        provider: 'claude',
-        ...(effectiveAllowed ? {allowedAccounts: [...effectiveAllowed]} : {}),
-        examReviewer: {
-          preparedProfiles: orderedReviewers,
-          ...(avoidExaminerAccounts.length ? {avoidExaminerAccounts} : {}),
+      reserved = await reserveWithCapacityQueue({
+        capacity: input.capacity,
+        ledger: input.ledger,
+        principal: input.principal,
+        authority: input.authority,
+        ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
+        request: {
+          intentId: input.intentId,
+          contextId: input.authority.contextId,
+          role: 'specialist',
+          provider: 'claude',
+          ...(effectiveAllowed ? {allowedAccounts: [...effectiveAllowed]} : {}),
+          examReviewer: {
+            preparedProfiles: orderedReviewers,
+            ...(avoidExaminerAccounts.length ? {avoidExaminerAccounts} : {}),
+          },
+          ...(avoidProfiles.length ? {avoidProfiles} : {}),
+          ...(avoidReviewerAccounts.length ? {avoidAccounts: avoidReviewerAccounts} : {}),
         },
-        ...(avoidProfiles.length ? {avoidProfiles} : {}),
-        ...(avoidReviewerAccounts.length ? {avoidAccounts: avoidReviewerAccounts} : {}),
-      }, input.authority);
+      });
     } catch (error) {
       if (error instanceof Refusal && (error.code === 'NO_ELIGIBLE_CAPACITY' || error.code === 'ROLE_NOT_CONFIGURED')) {
         throw new Refusal('DESIGN_REVIEWER_UNAVAILABLE', 409);
@@ -460,15 +650,21 @@ export async function reserveSpecialistExamSeat(input: {
     return seat;
   }
   const preferredProfileId = input.purpose === 'create' ? plan.createProfileId : plan.examinerProfileId;
-  const reserved = await input.capacity.reserveWithSeat(input.principal, {
-    attemptId: randomUUID(),
-    intentId: input.intentId,
-    contextId: input.authority.contextId,
-    role: 'specialist',
-    ...(plan.hasClaude || effectiveAllowed ? {provider: 'claude'} : {}),
-    ...(effectiveAllowed ? {allowedAccounts: [...effectiveAllowed]} : {}),
-    ...(preferredProfileId ? {preferredProfileId} : {}),
-  }, input.authority);
+  const reserved = await reserveWithCapacityQueue({
+    capacity: input.capacity,
+    ledger: input.ledger,
+    principal: input.principal,
+    authority: input.authority,
+    ...(input.capacityWait ? {capacityWait: input.capacityWait} : {}),
+    request: {
+      intentId: input.intentId,
+      contextId: input.authority.contextId,
+      role: 'specialist',
+      ...(plan.hasClaude || effectiveAllowed ? {provider: 'claude'} : {}),
+      ...(effectiveAllowed ? {allowedAccounts: [...effectiveAllowed]} : {}),
+      ...(preferredProfileId ? {preferredProfileId} : {}),
+    },
+  });
   const seat = await acceptReservedSeat({reserved, purpose: input.purpose, releaseGrant: input.releaseGrant});
   if (effectiveAllowed && !effectiveAllowed.includes(seat.accountId)) {
     return releaseReservedGrant(input.releaseGrant, seat.grantId, new Refusal('PROJECT_ACCOUNTS_UNAVAILABLE', 409));

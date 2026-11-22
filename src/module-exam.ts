@@ -326,7 +326,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
     }
     const commit = input.commit ? {commit: input.commit} : {};
     const stopCodes = new Set(['PROVIDER_USAGE_LIMIT', 'EXAM_LOGIN_STALE', 'PROVIDER_AUTH_FAILED', 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
-      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'NATIVE_IMAGE_MISSING', 'MODULE_EXAM_EGRESS_UNAVAILABLE']);
+      'NO_ELIGIBLE_CAPACITY', 'ROLE_NOT_CONFIGURED', 'NATIVE_IMAGE_MISSING', 'MODULE_EXAM_EGRESS_UNAVAILABLE', 'CAPACITY_BUSY', 'CAPACITY_QUEUED']);
     const requestFor = (p: Prepared) => {
       const read = {requestId: randomUUID(), sourceDigest: p.sourceDigest, complete: p.complete, promptDigest: p.promptDigest, ...commit};
       const binding = moduleExamReadRequestBinding({...read, module: input.module, intentId: input.intentId, file: p.file.file});
@@ -586,7 +586,7 @@ export async function examineFunctionalModule(input: ModuleExamInput): Promise<M
             finding.failure = code;
             finding.reason = `Confirmação indisponível. Código ${code}.`;
             notes.add(unavailableText(code));
-            if (code === 'PROVIDER_USAGE_LIMIT' || (launched && !exited)) stopReview = code;
+            if (code === 'PROVIDER_USAGE_LIMIT' || code === 'CAPACITY_BUSY' || code === 'CAPACITY_QUEUED' || (launched && !exited)) stopReview = code;
             else if (highExaminerFinding && code === 'MODULE_EXAM_HIGH_REVIEWER_UNAVAILABLE') stopHighReview = code;
             else if (!highExaminerFinding && (code === 'MODULE_EXAM_REVIEWER_UNAVAILABLE'
               || code === 'MODULE_EXAM_PROVIDER_NOT_DISTINCT')) stopStandardReview = code;

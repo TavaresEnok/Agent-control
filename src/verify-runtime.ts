@@ -6,13 +6,13 @@ import {promisify} from 'node:util';
 import {Capacity} from './capacity.ts';
 import {Refusal, type Authority} from './contracts.ts';
 import {finishExamIntent, finishExamIntentTx} from './exam-intent.ts';
-import {reserveSpecialistExamSeat, type SpecialistExamSeat} from './exam-provider.ts';
+import {clearExamContextCapacityWaits, DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS, reserveSpecialistExamSeat, type SpecialistExamSeat} from './exam-provider.ts';
 import {Ledger, type Intent} from './ledger.ts';
 import {readMountedCredentialSecrets} from './native-worker-security.ts';
 import {loadSecurityChecklist} from './verify-checklist.ts';
 import {acceptSecurityVerification, assertPersonalActivation} from './verify-intent.ts';
 import {authorizedStaticCliPolicy} from './verify-command.ts';
-import {readNativeExamSession} from './verify-native-launch.ts';
+import {readNativeExamSession, readNativeWorkerCapacityPoll} from './verify-native-launch.ts';
 import {isSecretClassBasename, redactText, redactUnknownSecrets, secretFileStub} from './verify-redact.ts';
 import {reserveSecurityReportDirectory, writeSecurityReport} from './verify-report.ts';
 import {takeExamStripNote} from './exam-strip-note.ts';
@@ -68,6 +68,16 @@ export type SecurityVerificationInput = {
   mapEnabled?: boolean;
   /** Examiner batching (economy.batch). Absent keeps the historical slice of 15 files; `false` is one file per call. */
   batch?: SecurityBatch;
+  /** Grow capacity queue pauses from 2s up to 10s (default true, matching examRunOptions.pollBackoff). */
+  pollBackoff?: boolean;
+  /** Round start timestamp in ms (defaults to Date.now()). */
+  startedMs?: number;
+  /** Round ceiling / capacity queue wait deadline in ms (defaults to EXAM_TIME_LIMIT_MS = 6h). */
+  timeLimitMs?: number;
+  /** Optional sleep hook for capacity queue waiting. */
+  wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Optional abort signal to interrupt capacity queue waiting. */
+  signal?: AbortSignal;
 };
 
 type StaticCliPolicy = {
@@ -141,6 +151,11 @@ async function runVerificationWithPolicy(
   partial?: PartialStop;
 }> {
   const modelCallBudget = resolveModelCallBudget(input.modelCallBudget);
+  const startedMs = input.startedMs ?? Date.now();
+  const timeLimitMs = input.timeLimitMs ?? DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS;
+  if (typeof timeLimitMs !== 'number' || !Number.isFinite(timeLimitMs) || timeLimitMs < 0) {
+    throw new Refusal('VERIFY_LIMITS_INVALID');
+  }
   await assertPersonalActivation(input.ledger);
   assertReportOutsideRepo(input.repoPath, input.dataDirectory);
   const runId = input.runId ?? randomUUID();
@@ -158,11 +173,13 @@ async function runVerificationWithPolicy(
   });
   try {
     await insertRun(input, intent, runId);
-    return await examine(input, intent, runId, createdAt, reserved.directoryName, modelCallBudget, staticPolicy);
+    return await examine({...input, startedMs, timeLimitMs}, intent, runId, createdAt, reserved.directoryName, modelCallBudget, staticPolicy);
   } catch (error) {
     try { await markFailed(input.ledger, runId); } catch { /* the original failure stays visible */ }
     try { await finishExamIntent(input.ledger, {intentId: intent.id, contextId: input.authority.contextId}, 'failed'); } catch { /* the original failure stays visible */ }
     throw error;
+  } finally {
+    await clearExamContextCapacityWaits(input.ledger.pool, input.authority.contextId, intent.id, input.authority.epoch);
   }
 }
 
@@ -549,6 +566,13 @@ async function reserveAndRun(
     capacity.transition(input.principal, grantId, input.authority, 'released', {processId, state: 'not_started'});
   const staticExaminer = Boolean(staticPolicy && purpose === 'examiner');
   const staticHighReviewer = Boolean(staticPolicy && purpose === 'reviewer' && highReview);
+  const nativePoll = readNativeWorkerCapacityPoll(input.worker);
+  const pollBackoff = input.pollBackoff ?? nativePoll?.pollBackoff ?? true;
+  const signal = input.signal ?? nativePoll?.signal;
+  const sleep = input.wait
+    ?? (nativePoll ? (ms: number) => Promise.resolve(nativePoll.wait(ms)) : undefined);
+  const startedMs = input.startedMs ?? Date.now();
+  const timeLimitMs = input.timeLimitMs ?? DEFAULT_EXAM_CAPACITY_WAIT_DEADLINE_MS;
   const seat = await reserveSpecialistExamSeat({
     capacity,
     ledger: input.ledger,
@@ -560,7 +584,7 @@ async function reserveAndRun(
     avoidProfileId: avoidProfiles?.[0],
     ...(staticExaminer
       ? {
-          requiredModel: 'claude-sonnet-5-5',
+           requiredModel: 'claude-sonnet-5-5',
           requiredEffort: 'high',
           firstAccountOnly: true,
           unavailableCode: 'MODULE_EXAM_EXAMINER_UNAVAILABLE',
@@ -577,6 +601,13 @@ async function reserveAndRun(
         : {
             avoidAccountId: avoidAccounts?.[0],
           }),
+    capacityWait: {
+      enabled: true,
+      pollBackoff,
+      deadlineAt: startedMs + timeLimitMs,
+      ...(sleep ? {sleep} : {}),
+      ...(signal ? {signal} : {}),
+    },
     releaseGrant,
   });
   let thrown: unknown;
