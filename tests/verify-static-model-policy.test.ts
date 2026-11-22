@@ -60,6 +60,8 @@ async function setupEnvironment(label: string) {
   const dataDirectory = join(root, 'data');
   const databasesDirectory = join(dataDirectory, 'verify-db', '20261120-000000');
   await mkdir(databasesDirectory, {recursive: true, mode: 0o700});
+    // A published stamp has its manifest; the exam confirms it after claiming the stamp.
+    await writeFile(join(databasesDirectory, 'manifest.json'), '{}\n');
   await writeFile(join(dataDirectory, 'verify-image.json'), JSON.stringify({image: `sha256:${'ab'.repeat(32)}`}), {mode: 0o600});
   await writeFile(
     join(dataDirectory, 'verify-db', 'current.json'),
