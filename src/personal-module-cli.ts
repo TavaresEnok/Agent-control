@@ -29,6 +29,8 @@ import {
 } from './verification-modules.ts';
 import {composePersonalModuleExamRuntime, createPersonalModuleExam, createPersonalModuleRecheck, type ModuleExamClock, type ModuleExamRuntime} from './module-exam-native.ts';
 import {assertPersonalActivation} from './verify-intent.ts';
+import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
+import {failAbandonedVerifyContext} from './verify-abandon.ts';
 
 const moduleActions = '[--esperar-cota | --corrigir <runId> <ACH-001...> | --medir-correcao <runId> | --reverificar <runId> <ACH-001...> | --descartar <runId>]';
 const messages: Record<string, string> = {
@@ -279,6 +281,8 @@ export async function runPersonalModuleCli(
       recheckAbort.signal.throwIfAborted();
     }
     const exam = await ledger.ensureExamContext(project.owner, project.id, module);
+    await recoverPersonalOrphanedExams(config,ledger,{contextId:exam.contextId},true);
+    await failAbandonedVerifyContext(ledger,config.dataDirectory,project.owner,exam.contextId);
     authority = await acquirePersonalModule(ledger, project.owner, exam.contextId, module);
     if (recheckAbort) {
       stopRecheckLease = keepPersonalVerifyLease(ledger, authority, 5000,

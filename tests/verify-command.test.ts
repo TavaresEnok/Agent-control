@@ -481,6 +481,44 @@ test('execução running no ledger ou no andamento responde 409 e não chama fer
   }
 });
 
+test('andamentos running de rodadas terminais não bloqueiam a próxima verificação', async () => {
+  const root = await mkdtemp(join(tmpdir(),'ac-verify-terminal-progress-'));
+  const projectId = randomUUID();
+  const failed = randomUUID();
+  const done = randomUUID();
+  const directory = join(root,'verificacoes',projectId,'andamento');
+  const marker = join(directory,'.running');
+  let observed: Promise<void>|undefined;
+  try {
+    const commit = await commitDirectory(root);
+    await mkdir(directory,{recursive:true});
+    for (const id of [failed,done]) {
+      await writeFile(join(directory,id+'.json'),JSON.stringify({id,status:'running',phase:'ferramentas',startedAt:new Date().toISOString()}));
+    }
+    await writeFile(marker,failed);
+    const ledger = {pool:{query:async(sql:string,params:unknown[])=>{
+      if (sql.includes("status = 'running'")) return {rows:[],rowCount:0};
+      assert.match(sql,/status IN \('failed','done'\)/);
+      assert.equal(params[0],projectId);
+      assert.deepEqual(new Set(params[1] as string[]),new Set([failed,done]));
+      return {rows:[{id:failed},{id:done}],rowCount:2};
+    }}} as unknown as Ledger;
+    const begun = await beginPersonalVerification({
+      ...blockedInput(root,root,{projectId,commit,ledger}),
+      runTools:async()=>{throw Error('fim da coleta de teste');},
+      observe:job=>{observed=job;},
+    });
+    assert.notEqual(begun.id,failed);
+    assert.notEqual(begun.id,done);
+    for (const id of [failed,done]) await assert.rejects(stat(join(directory,id+'.json')),{code:'ENOENT'});
+    await assert.rejects(observed!,/fim da coleta de teste/);
+    await assert.rejects(stat(marker),{code:'ENOENT'});
+  } finally {
+    await observed?.catch(()=>undefined);
+    await rm(root,{recursive:true,force:true});
+  }
+});
+
 test('contêiner fora da lista não cria rede; na lista, o rm acontece se as ferramentas lançam', async () => {
   const dataDirectory = await mkdtemp(join(tmpdir(), 'ac-verify-forbid-'));
   const databases = await mkdtemp(join(tmpdir(), 'ac-verify-forbid-db-'));

@@ -616,11 +616,22 @@ export class Capacity {
       const grant = (await c.query('SELECT * FROM ac_capacity_grants WHERE id=$1 AND context_id=$2 FOR UPDATE', [Id.parse(grantId),authority.contextId])).rows[0];
       if (!grant) throw new Refusal('GRANT_FORBIDDEN',403);
       if (Number(grant.manager_epoch)!==authority.epoch) throw new Refusal('GRANT_RECONCILIATION_REQUIRED');
-      if (grant.state==='released') { if (next==='released') return; throw new Refusal('GRANT_ALREADY_RELEASED'); }
-      if (next==='running' && grant.state!=='reserved') throw new Refusal('INVALID_GRANT_TRANSITION');
-      if (next==='released' && !parsedReceipt) throw new Refusal('PHYSICAL_RECEIPT_REQUIRED');
-      if (next==='released' && parsedReceipt?.state==='not_started' && grant.state!=='reserved') throw new Refusal('PROCESS_MUST_EXIT');
-      await c.query('UPDATE ac_capacity_grants SET state=$2,physical_receipt=$3 WHERE id=$1', [grantId,next,parsedReceipt??null]);
+      await this.transitionLockedGrant(c,grant,next,parsedReceipt);
     });
+  }
+
+  private async transitionLockedGrant(c: pg.PoolClient, grant: {id:string;state:string},
+    next: 'running'|'uncertain'|'released', receipt?: Record<string,unknown>) {
+    if (grant.state==='released') { if (next==='released') return; throw new Refusal('GRANT_ALREADY_RELEASED'); }
+    if (next==='running' && grant.state!=='reserved') throw new Refusal('INVALID_GRANT_TRANSITION');
+    if (next==='released' && !receipt) throw new Refusal('PHYSICAL_RECEIPT_REQUIRED');
+    if (next==='released' && receipt?.state==='not_started' && grant.state!=='reserved') throw new Refusal('PROCESS_MUST_EXIT');
+    await c.query('UPDATE ac_capacity_grants SET state=$2,physical_receipt=$3 WHERE id=$1', [grant.id,next,receipt??null]);
+  }
+
+  /** The native exam recovery owns the context and grant locks and has proved physical absence.
+   * Keep the grant's original epoch and any immutable receipt from an earlier release. */
+  async releaseOrphanedNativeExamTx(c: pg.PoolClient, grant: {id:string;state:string}, physical: Record<string,unknown>) {
+    await this.transitionLockedGrant(c,grant,'released',physical);
   }
 }

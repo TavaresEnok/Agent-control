@@ -9,6 +9,7 @@ import {loadInstallation,type Installation} from './installation.ts';
 import {Ledger} from './ledger.ts';
 import {nativeExecutionExecutorDigest} from './native-execution-contract.ts';
 import {readonlyDesignExam,type NativeModuleExamRecovery,type ModuleExamWorkRelease,ModuleExamRecoveryPreserved} from './native-execution-supervisor.ts';
+import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
 import {inventoryJobWork,readRetentionCursor,rotateAfter,writeRetentionCursor} from './native-work-retention.ts';
 import {composePersonalExecutionSupervisors} from './personal-runtime.ts';
 import {readCurrentVerifyDatabase,refreshVerifyDatabases,runVerifyDatabaseRetention} from './verify-db.ts';
@@ -118,7 +119,7 @@ function parseWorkRetirementArgs(installationPath:string,rest:readonly string[])
  return {installationPath,releaseExamWork:selection};
 }
 
-type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;releaseExamWork?:WorkSelection;jobRetention?:{apply:boolean};artifactArgs?:string[]};
+type ParsedMaintenance={installationPath:string;recoverExamJobId?:string;recoverModuleExamJobId?:string;recoverOrphanedExamJobId?:string;releaseExamWork?:WorkSelection;jobRetention?:{apply:boolean};artifactArgs?:string[]};
 function parseMaintenanceArgs(argv:readonly string[]):ParsedMaintenance{
  const [installationPath,command,jobId]=argv;
  if(!installationPath||installationPath.startsWith('-'))throw new Refusal('MAINTENANCE_USAGE');
@@ -133,6 +134,7 @@ function parseMaintenanceArgs(argv:readonly string[]):ParsedMaintenance{
  if(argv.length!==3||!Id.safeParse(jobId).success)throw new Refusal('MAINTENANCE_USAGE');
  if(command==='--abandonar-design')return {installationPath,recoverExamJobId:jobId};
  if(command==='--recuperar-exame-passivo')return {installationPath,recoverModuleExamJobId:jobId};
+ if(command==='--recuperar-exame-orfao')return {installationPath,recoverOrphanedExamJobId:jobId};
  throw new Refusal('MAINTENANCE_USAGE');
 }
 
@@ -315,7 +317,7 @@ const RETENTION_PAGE=100;
  * on one advisory lock for the whole run plus one per job, so overlapping watch ticks and manual runs only skip each other.
  * The inventory is one readdir of the job root plus one lstat per job; a persistent cursor makes consecutive runs walk the whole inventory
  * round-robin, so jobs that never become eligible cannot hold back the ones behind them. Without `apply` nothing is removed.
- * Receipts, results, reports, review artifacts, logs and the database are never touched. */
+ * Orphaned passive exams are reconciled before inspecting terminal jobs. Results, reports and logs are preserved. */
 export async function runPersonalJobRetention(config:Installation,apply:boolean,options:JobRetentionOptions={}):Promise<string[]>{
  if(typeof apply!=='boolean')throw new Refusal('MAINTENANCE_USAGE');
  const limit=options.limit??100,deadlineMs=options.deadlineMs??15*60*1000;
@@ -331,6 +333,7 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
   if(!(await guard.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) ok',[JOB_RETENTION_LOCK])).rows[0].ok)
    return ['Retenção de jobs já em execução em outro processo; nada a fazer agora.'];
   const started=Date.now();
+  const lines=await recoverPersonalOrphanedExams(config,ledger,{limit,deadline:started+deadlineMs},apply);
   const cursorFile=join(config.dataDirectory,'job-work-retention.cursor');
   const {ids:withWork,scanned}=await inventoryJobWork(boot.execution.hostRoot);
   const candidates=new Set(withWork);
@@ -342,7 +345,6 @@ export async function runPersonalJobRetention(config:Installation,apply:boolean,
   const order=rotateAfter([...candidates].sort(),await readRetentionCursor(cursorFile));
   const supervisors=await composePersonalExecutionSupervisors(config,ledger);
   const owners=new Map<string,string|undefined>();
-  const lines:string[]=[];
   const refused=new Map<string,number>();
   const totals={eligible:0,released:0,absent:0,busy:0,failed:0,unknown:0,bytes:0};
   const byCategory=new Map<string,number>();
@@ -522,6 +524,11 @@ export async function runPersonalMaintenance(argv:string[],deps:MaintenanceDeps=
  if(parsed.releaseExamWork)return releaseExamWorkFromInstallation(config,parsed.releaseExamWork);
  if(parsed.jobRetention)return runRetentionStages(config,parsed.jobRetention.apply,deps);
  if(parsed.recoverModuleExamJobId)return recoverNeverStartedModuleExamFromInstallation(config,parsed.recoverModuleExamJobId);
+ if(parsed.recoverOrphanedExamJobId){
+  const ledger=new Ledger(config.databaseUrl,config.installationAuthority?.token);
+  try{return await recoverPersonalOrphanedExams(config,ledger,{jobId:parsed.recoverOrphanedExamJobId},true);}
+  finally{await ledger.close();}
+ }
  // Manual run without a flag: databases and the dedicated cache. Retention keeps its own commands and the watch.
  const lines=await runMaintenanceStages(config,file,deps,{retention:false}).catch(error=>{
   if(error instanceof MaintenanceIncomplete)return error.lines;// a manual run reports a failed stage and still finishes

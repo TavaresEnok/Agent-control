@@ -9,6 +9,9 @@ import {assertNativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {nativeContainerNeverStarted} from './native-execution-isolation.ts';
 import {readPrivateWorkerFile} from './native-worker-security.ts';
 import {finishExamIntentTx} from './exam-intent.ts';
+import {Capacity} from './capacity.ts';
+import {fenceInstallationContext} from './installation-authority-fence.ts';
+import {grantLaunchLockKey,Result} from './native-execution-shared.ts';
 import {Id,PreLaunchExamPhysicalReceipt,ModuleExamNeverStartedReceipt,PassiveExamModules,type ModuleExamRecoveryReason,DockerZeroTime,ModuleExamRemovalDomain,type NativeModuleExamRecovery,readonlyDesignExam,NativeExecutionRequest,type Input,type PersonalExamRecoveryScope,type ModuleExamRecoveryScope,moduleExamCompanion,retireNativePrivateNetwork,readonlySecurityExam,dockerUncertain} from './native-execution-shared.ts';
 import {NativeExecutionSupervisorCore} from './native-execution-core.ts';
 export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervisorCore{
@@ -36,18 +39,17 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
  protected unstartedRetirementBinding(row:Record<string,any>,receipt:unknown){
   return {schemaVersion:1,kind:'native-unstarted-retired',jobId:row.id,contextId:row.context_id,intentId:row.intent_id,grantId:row.grant_id,sessionId:row.session_id,epoch:Number(row.manager_epoch),role:row.role,inputDigest:row.input_digest,terminalDigest:digest(receipt),physicalDigest:digest(row.physical_receipt),workerId:null,toolsId:null,networkId:null,executionStarted:false};
  }
- protected async recordUnstartedRetirement(c:pg.PoolClient,authority:Authority,row:Record<string,any>,receipt:unknown){
-  const binding=this.unstartedRetirementBinding(row,receipt);
-  const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1 FOR UPDATE',[row.id])).rows[0];
+ protected async recordExamRetirement(c:pg.PoolClient,binding:{jobId:string;contextId:string}&Record<string,unknown>){
+  const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1 FOR UPDATE',[binding.jobId])).rows[0];
   if(saved?.state==='removed')return this.verifyUnstartedRetirement(saved,binding);
   if(!saved){
-   await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[row.id,binding]);
+   await c.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[binding.jobId,binding]);
   }else if(saved.state!=='prepared'||digest(saved.binding)!==digest(binding)){
    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   }
   const proof={payload:binding,signature:sign(null,Buffer.from('agent-control:native-terminal-retirement:v1\n'+canonical(binding)),this.key).toString('hex')};
-  await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[row.id,proof]);
-  await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.terminal_retired',$2)",[authority.contextId,{jobId:row.id,proofDigest:digest(proof)}]);
+  await c.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1 AND state='prepared'",[binding.jobId,proof]);
+  await c.query("INSERT INTO ac_audit(context_id,kind,detail) VALUES($1,'native.terminal_retired',$2)",[binding.contextId,{jobId:binding.jobId,proofDigest:digest(proof)}]);
  }
  protected verifyUnstartedRetirement(saved:Record<string,any>,binding:Record<string,unknown>){
   if(saved.state!=='removed'||digest(saved.binding)!==digest(binding)||!saved.proof?.payload||digest(saved.proof.payload)!==digest(binding)||
@@ -67,7 +69,7 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
   }
   return false;
  }
- protected async confirmUnstartedAbsence(jobId:string){
+ protected async confirmUnstartedSpool(jobId:string){
   await this.directory(this.config.hostRoot);
   const p=this.paths(jobId);
   const stat=async(path:string)=>lstat(path).catch(error=>{
@@ -84,14 +86,18 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    if(await stat(join(p.root,'worker-terminal.log'))||await stat(join(p.root,'tools-terminal.log')))
     throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
   }
+  if(await this.launchPendingExists(jobId))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+ }
+ protected async confirmUnstartedAbsence(jobId:string){
+  await this.confirmUnstartedSpool(jobId);
   const [worker,tools,network]=await Promise.all([
    this.docker.inspect('ac-native-worker-'+jobId),
    this.docker.inspect('ac-native-tools-'+jobId),
    this.docker.inspectNamedPrivateNetwork('ac-native-exec-'+jobId),
   ]);
-  if(worker||tools||network||await this.launchPendingExists(jobId))throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+  if(worker||tools||network)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
  }
- protected async loadUnstartedExam(c:pg.PoolClient,authority:Authority,jobId:string){
+ protected async loadUnstartedExam(c:pg.PoolClient,authority:Pick<Authority,'contextId'>,jobId:string){
   return (await c.query(`SELECT j.*,
    g.state grant_state,g.resource_kind grant_resource_kind,g.project_id grant_project_id,g.context_id grant_context_id,
    g.intent_id grant_intent_id,g.manager_epoch grant_epoch,g.account_id grant_account_id,g.profile_id grant_profile_id,
@@ -101,6 +107,11 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    p.model profile_model,p.effort profile_effort,p.role profile_role,
    EXISTS(SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal') personal,
    EXISTS(SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=j.context_id) dedicated_context,
+   (SELECT e.module FROM ac_exam_contexts e WHERE e.context_id=j.context_id) exam_module,
+   EXISTS(SELECT 1 FROM ac_verify_runs r JOIN ac_exam_contexts e USING (context_id,project_id,module)
+    WHERE r.context_id=j.context_id AND r.project_id=g.project_id AND
+     ((r.intent_id=j.intent_id AND r.commit_id=j.base_id) OR
+      (i.command->'payload'->>'messageRef'='recheck:'||r.id::text AND r.status IN ('done','failed')))) has_module_run,
    (SELECT x.id FROM ac_contexts x WHERE x.project_id=g.project_id AND NOT x.archived
      AND NOT EXISTS(SELECT 1 FROM ac_exam_contexts e WHERE e.context_id=x.id)
      ORDER BY x.created_at,x.id LIMIT 1) main_context_id,
@@ -174,11 +185,11 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    receipt=this.unstartedReceipt(row,row.physical_receipt);
    await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2 WHERE id=$1",[row.id,receipt]);
   }
-  await this.recordUnstartedRetirement(c,authority,row,receipt);
+  await this.recordExamRetirement(c,this.unstartedRetirementBinding(row,receipt));
   await finishExamIntentTx(c,this.ledger,{intentId:row.intent_id,contextId:authority.contextId},'failed');
   return {state:'failed' as const,retirement:'removed' as const,intentState:'failed' as const,receipt};
  }
- protected async validateOptionalUnstartedRequest(jobId:string,row:Record<string,any>,allowExplicitDesign:boolean){
+ protected async validateOptionalUnstartedRequest(jobId:string,row:Record<string,any>,allowExplicitDesign:boolean,orphanedPassive=false){
   await this.directory(this.config.hostRoot);
   const p=this.paths(jobId);
   if(!await lstat(p.root).catch(error=>{
@@ -194,10 +205,157 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    const request=NativeExecutionRequest.parse(JSON.parse(bytes.toString('utf8')));
    if(digest(request)!==row.input_digest||request.jobId!==jobId||request.intentId!==row.intent_id||request.grantId!==row.grant_id||
     request.sessionId!==row.session_id||request.role!==row.role||request.base!==row.base_id||
-    (!allowExplicitDesign&&(request.model||request.effort||request.designPurpose==='create'||request.task.startsWith('Pedido de criação.'))))
+    (!allowExplicitDesign&&((!orphanedPassive&&(request.model||request.effort))||request.designPurpose==='create'||request.task.startsWith('Pedido de criação.')))||
+    (orphanedPassive&&request.writePaths.length!==0))
     throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
   }finally{bytes.fill(0);}
  }
+
+ /** Reconcile an owner-scoped passive exam without taking over its manager epoch. */
+ async recoverOrphanedExam(principal:string,jobId:string,scope:{contextId:string;projectId:string;repository:string},apply:boolean){
+  Id.parse(jobId);
+  return this.serialEffect(jobId,()=>this.ledger.tx(async c=>{
+   const job=(await c.query('SELECT grant_id FROM ac_native_execution_jobs WHERE id=$1 AND context_id=$2',[jobId,scope.contextId])).rows[0];
+   if(!job)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
+   // Same lock as start() and the periodic grant sweep. The xact lock is held
+   // on the connection that commits the job, grant and journal together.
+   if(!(await c.query('SELECT pg_try_advisory_xact_lock(hashtextextended($1,0)) ok',[grantLaunchLockKey(job.grant_id)])).rows[0].ok)
+    throw new Refusal('NATIVE_EXECUTION_BUSY');
+   const context=await this.ledger.authorize(c,principal,scope.contextId);
+   if(context.role!=='owner'||context.project_id!==scope.projectId||await this.jobRepository(c,scope.projectId)!==await realpath(scope.repository))
+    throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+   await fenceInstallationContext(c,scope.contextId,this.ledger.installationAuthority,true);
+   // authorize holds the context anchor, which also fences acquire and heartbeat.
+   // A terminal run never overrides a live lease.
+   const manager=(await c.query('SELECT epoch,lease_until>clock_timestamp() AS live FROM ac_managers WHERE context_id=$1',[scope.contextId])).rows[0];
+   if(manager?.live)
+    throw new Refusal('NATIVE_ORPHAN_ACTIVE_LEASE');
+   const row=await this.loadUnstartedExam(c,scope,jobId);
+   if(!row)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
+   this.validateOrphanedExam(row,principal,scope.projectId);
+   if((!manager||Number(manager.epoch)<Number(row.manager_epoch))&&!(await c.query(
+    "SELECT 1 FROM ac_verify_runs WHERE intent_id=$1 AND context_id=$2 AND project_id=$3 AND status IN ('failed','done')",
+    [row.intent_id,row.context_id,scope.projectId])).rowCount)
+    throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   const saved=(await c.query('SELECT * FROM ac_native_terminal_retirements WHERE job_id=$1 FOR UPDATE',[jobId])).rows[0];
+   if(row.state==='failed'){
+    if(saved?.binding?.kind!=='native-orphaned-exam-retired'||row.grant_state!=='released')
+     throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+    this.verifyUnstartedRetirement(saved,this.orphanedExamBinding(row,row.receipt));
+    return 'already_recovered' as const;
+   }
+   if(saved)throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+   try{await this.validateOptionalUnstartedRequest(jobId,row,false,true);}
+   catch(error){
+    if(error instanceof Refusal)throw error;
+    throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+   }
+   const result=await this.orphanedExamResult(jobId);
+   if(result&&row.physical_receipt?.executionStarted===false)throw new Refusal('NATIVE_EXECUTION_RECEIPT_MISMATCH');
+   await this.confirmOrphanedExamContainersAbsent(row);
+   if(!result){
+    // The worker ID is persisted before Docker starts it, and a signed
+    // launch is only published after that point. Tools alone cannot run a model.
+    if(row.state!=='uncertain'||row.grant_state==='running'||row.worker_id||row.launch_digest||
+     row.physical_receipt?.executionStarted===true)
+     throw new Refusal('NATIVE_EXECUTION_OUTPUT_MISSING');
+    await this.confirmUnstartedSpool(jobId);
+   }else{
+    const input=this.paths(jobId).input;
+    try{await this.directory(input);}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+   }
+   await this.retireOrphanedExamNetwork(row,apply);
+   if(!apply)return 'eligible' as const;
+   const executionStarted=result!==null;
+   const exitCode=result?.exitCode||1;
+   const physical={source:'native-orphaned-exam',jobId,containerId:row.worker_id,toolsContainerId:row.tools_id,networkId:row.network_id,
+    executionStarted,exitCode,workerExitCode:result?.exitCode??1,failureCode:result?.failureCode??'NATIVE_EXAM_ORPHANED',
+    resultDigest:result&&digest(result)};
+   const grantPhysical=row.grant_state==='released'?row.physical_receipt:physical;
+   const payload={schemaVersion:1,accountId:row.account_id,profileId:row.profile_id,profileDigest:row.profile_digest,jobId,
+    intentId:row.intent_id,contextId:row.context_id,grantId:row.grant_id,sessionId:row.session_id,epoch:Number(row.manager_epoch),
+    inputDigest:row.input_digest,executorDigest:row.executor_digest,outputDigest:digest(result?.output??''),physicalDigest:digest(grantPhysical),
+    exitCode,workerExitCode:physical.workerExitCode,artifact:null,executionStarted,orphanedExam:true,
+    resultDigest:physical.resultDigest,failureCode:physical.failureCode};
+   const receipt={payload,signature:sign(null,Buffer.from('agent-control:native-execution-receipt:v1\n'+canonical(payload)),this.key).toString('hex')};
+   await new Capacity(this.ledger).releaseOrphanedNativeExamTx(c,{id:row.grant_id,state:row.grant_state},physical);
+   await c.query("UPDATE ac_native_execution_jobs SET state='failed',receipt=$2 WHERE id=$1",[jobId,receipt]);
+   await this.recordExamRetirement(c,this.orphanedExamBinding(row,receipt));
+   // Multiple slices or reviewers can share one intent. Only close it once
+   // every sibling job and reservation has been settled.
+   if(!row.has_unresolved_job&&!row.has_open_grant){
+    await finishExamIntentTx(c,this.ledger,{intentId:row.intent_id,contextId:scope.contextId},'failed');
+   }
+   if(result)await this.removeLaunchFiles(jobId);
+   return 'recovered' as const;
+  }));
+ }
+
+ protected validateOrphanedExam(row:Record<string,any>,principal:string,projectId:string){
+  const command=row.intent_command,payload=command?.payload,module=row.exam_module;
+  const target=`${projectId}:${row.base_id}`;
+  const design=readonlyDesignExam(payload?.workflow,row.role)&&module==='design'&&payload?.messageRef==='design-exam:'+target;
+  const security=readonlySecurityExam(payload?.workflow,row.role)&&(
+   (module==='verify'||module==null)&&payload?.messageRef==='verify:'+target||
+   PassiveExamModules.has(module)&&row.has_module_run&&(payload?.messageRef===module+':'+target||
+    typeof payload?.messageRef==='string'&&payload.messageRef.startsWith('recheck:')&&Id.safeParse(payload.messageRef.slice(8)).success));
+  if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||(!design&&!security)||
+   row.has_operation||row.has_stage_operation||row.has_child_intent||row.has_active_admission||
+   command?.schemaVersion!==1||command.action!=='plan.start'||command.intentId!==row.intent_id||command.contextId!==row.context_id||
+   payload.projectId!==projectId||payload.commit!==row.base_id||digest(command)!==row.intent_digest||
+   Number(row.intent_epoch)!==Number(row.manager_epoch))
+   throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+  if(row.grant_resource_kind!=='model'||row.grant_project_id!==projectId||row.grant_context_id!==row.context_id||
+   row.grant_intent_id!==row.intent_id||Number(row.grant_epoch)!==Number(row.manager_epoch)||
+   row.grant_account_id!==row.account_id||row.grant_profile_id!==row.profile_id||row.grant_role!==row.role||
+   (row.grant_state==='released'&&!row.physical_receipt))
+   throw new Refusal('NATIVE_EXECUTION_GRANT_MISMATCH');
+  if(row.key_fingerprint!==this.fingerprint||!this.subjects.has(row.account_id)||this.config.syntheticFixture)
+   throw new Refusal('NATIVE_EXECUTION_REPLAY_MISMATCH');
+  if(!['running','uncertain','failed'].includes(row.state)||(row.state!=='failed'&&row.receipt))
+   throw new Refusal('NATIVE_RETIREMENT_UNCONFIRMED');
+ }
+
+ protected orphanedExamBinding(row:Record<string,any>,receipt:unknown){
+  return {schemaVersion:1,kind:'native-orphaned-exam-retired',jobId:row.id,contextId:row.context_id,intentId:row.intent_id,
+   grantId:row.grant_id,sessionId:row.session_id,epoch:Number(row.manager_epoch),role:row.role,inputDigest:row.input_digest,
+   terminalDigest:digest(receipt),workerId:row.worker_id,toolsId:row.tools_id,networkId:row.network_id};
+ }
+
+ protected async orphanedExamResult(jobId:string){
+  const p=this.paths(jobId);
+  try{
+   await this.directory(p.root);
+   await this.directory(p.output);
+   const bytes=await readPrivateWorkerFile(join(p.output,'execution-result.json'),2*1024*1024);
+   try{
+    const result=Result.parse(JSON.parse(bytes.toString('utf8')));
+    if(result.jobId!==jobId||(result.exitCode===0&&result.failureCode!==null))throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+    return result;
+   }finally{bytes.fill(0);}
+  }catch(error){
+   if((error as NodeJS.ErrnoException).code==='ENOENT')return null;
+   throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');
+  }
+ }
+
+ protected async confirmOrphanedExamContainersAbsent(row:Record<string,any>){
+  const names=['ac-native-worker-'+row.id,'ac-native-tools-'+row.id];
+  const inspected=await Promise.all([...names,...[row.worker_id,row.tools_id].filter(Boolean)].map(id=>this.docker.inspect(id))).catch(error=>{
+   if(error instanceof Refusal)throw error;
+   throw new Refusal('DOCKER_UNCERTAIN');
+  });
+  if(inspected.some(Boolean)||await this.docker.hasNativeJobContainer(row.id))throw new Refusal('NATIVE_ORPHAN_CONTAINER_PRESENT');
+ }
+
+ protected async retireOrphanedExamNetwork(row:Record<string,any>,apply:boolean){
+  const name='ac-native-exec-'+row.id;
+  const network=await this.docker.inspectNamedPrivateNetwork(name);
+  if(network&&network.Id!==row.network_id)throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
+  if(row.network_id)await retireNativePrivateNetwork(this.docker,{networkId:row.network_id,providerNetworkId:this.config.providerNetworkId,jobId:row.id,inputDigest:row.input_digest},apply);
+  if(apply&&await this.docker.inspectNamedPrivateNetwork(name))throw new Refusal('NATIVE_RETIREMENT_NETWORK_UNCONFIRMED');
+ }
+
  /** Settle a single personal exam with a durable pre-launch refusal and no physical resources. */
  async recoverUnstartedExam(principal:string,authority:Authority,jobId:string,localOwnerScope?:PersonalExamRecoveryScope){
   return this.recoverUnstartedExamWithProof(principal,authority,jobId,localOwnerScope,false);

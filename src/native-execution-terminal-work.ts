@@ -174,7 +174,8 @@ export abstract class NativeExecutionTerminalWork extends NativeExecutionRetirem
     const bytes=await readPrivateWorkerFile(join('/proc/self/fd',String(output.fd),'execution-result.json'),2*1024*1024);
     const result=Result.parse(JSON.parse(bytes.toString('utf8')));
     const good=state==='completed'?result.exitCode===0&&result.failureCode===null:result.exitCode===payload.workerExitCode;
-    if(result.jobId!==jobId||!good||digest(result.output)!==payload.outputDigest)throw Error();
+    if(result.jobId!==jobId||!good||digest(result.output)!==payload.outputDigest||
+     (payload.orphanedExam===true&&digest(result)!==payload.resultDigest))throw Error();
    }catch(error){
     if((error as NodeJS.ErrnoException).code==='ENOENT')throw new Refusal('NATIVE_EXECUTION_OUTPUT_MISSING');
     throw new Refusal('NATIVE_EXECUTION_OUTPUT_INVALID');

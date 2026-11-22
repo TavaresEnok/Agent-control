@@ -1,7 +1,9 @@
 import {constants} from 'node:fs';
-import {lstat, open, rm} from 'node:fs/promises';
+import {lstat, open, realpath, rm} from 'node:fs/promises';
 import {join, resolve, sep} from 'node:path';
 import {endRound} from './personal-artifact-hooks.ts';
+import type {Ledger} from './ledger.ts';
+import {fenceInstallationContext} from './installation-authority-fence.ts';
 
 const Uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -33,7 +35,7 @@ async function removeProgress(path: string): Promise<void> {
   await rm(path, {force: true});
 }
 
-async function removeRunningMarker(path: string, runId: string): Promise<void> {
+async function readRunningMarker(path: string): Promise<string|undefined> {
   let info;
   try {
     info = await lstat(path);
@@ -43,14 +45,24 @@ async function removeRunningMarker(path: string, runId: string): Promise<void> {
   }
   if (info.isSymbolicLink() || !info.isFile()) return;
   let text = '';
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let handle;
   try {
-    text = (await handle.readFile({encoding: 'utf8'})).trim();
+    handle=await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (errno(error)==='ENOENT'||errno(error)==='ELOOP') return;
+    throw error;
+  }
+  try {
+    const current=await handle.stat();
+    if (!current.isFile() || current.size>128) return;
+    const bytes=Buffer.alloc(129);
+    const {bytesRead}=await handle.read(bytes,0,bytes.length,0);
+    if (bytesRead>128) return;
+    text=bytes.toString('utf8',0,bytesRead).trim();
   } finally {
     await handle.close();
   }
-  if (text !== runId) return;
-  await rm(path, {force: true});
+  return text;
 }
 
 async function clearProgress(dataDirectory: string, projectId: string, runId: string): Promise<void> {
@@ -58,24 +70,57 @@ async function clearProgress(dataDirectory: string, projectId: string, runId: st
   const root = resolve(dataDirectory);
   const dir = resolve(root, 'verificacoes', projectId, 'andamento');
   if (!inside(root, dir)) return;
+  try {
+    if (await realpath(dir) !== dir) return;
+  } catch (error) {
+    if (errno(error) === 'ENOENT') return;
+    throw error;
+  }
   const progress = join(dir, `${runId}.json`);
   const marker = join(dir, '.running');
   if (!inside(dir, progress) || !inside(dir, marker)) return;
   await removeProgress(progress);
-  await removeRunningMarker(marker, runId);
+  if (await readRunningMarker(marker) === runId) await rm(marker, {force: true});
 }
 
-/** Runs left `running` without a live manager lease are failed, and their progress files are removed. */
-export async function failAbandonedVerifyRuns(ledger: VerifyRunLedger, dataDirectory: string): Promise<void> {
-  const result = await ledger.pool.query(
-    "UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE status='running' AND NOT EXISTS (SELECT 1 FROM ac_managers m WHERE m.context_id = ac_verify_runs.context_id AND m.lease_until > clock_timestamp()) RETURNING id, project_id",
-  );
-  for (const row of result.rows) {
+const FailAbandoned = "UPDATE ac_verify_runs SET status='failed', finished_at=clock_timestamp() WHERE status='running' AND NOT EXISTS (SELECT 1 FROM ac_managers m WHERE m.context_id = ac_verify_runs.context_id AND m.lease_until > clock_timestamp())";
+
+async function clearFailedRuns(rows: readonly AbandonedRow[], dataDirectory: string) {
+  for (const row of rows) {
     const id = typeof row.id === 'string' ? row.id : '';
     const projectId = typeof row.project_id === 'string' ? row.project_id : '';
     await clearProgress(dataDirectory, projectId, id);
     await endRound({dataDirectory,projectId,roundId:id});
   }
+}
+
+/** Runs left `running` without a live manager lease are failed, and their progress files are removed. */
+export async function failAbandonedVerifyRuns(ledger: VerifyRunLedger, dataDirectory: string): Promise<void> {
+  const result = await ledger.pool.query(FailAbandoned + ' RETURNING id, project_id');
+  await clearFailedRuns(result.rows,dataDirectory);
+}
+
+/** At CLI startup, serialize the lease check with acquisition and heartbeat. */
+export async function failAbandonedVerifyContext(ledger: Ledger, dataDirectory: string, principal: string, contextId: string) {
+  const result = await ledger.tx(async c=>{
+    await ledger.authorize(c,principal,contextId);
+    await fenceInstallationContext(c,contextId,ledger.installationAuthority,true);
+    return c.query(FailAbandoned + ' AND context_id=$1 RETURNING id, project_id',[contextId]);
+  });
+  await clearFailedRuns(result.rows,dataDirectory);
+}
+
+/** Remove stale progress for terminal rounds even if another process finalized them. */
+export async function clearTerminalVerifyProgress(ledger: VerifyRunLedger, dataDirectory: string, projectId: string, progressIds: string[]) {
+  if (!Uuid.test(projectId)) return;
+  const marker = await readRunningMarker(join(dataDirectory,'verificacoes',projectId,'andamento','.running'));
+  const ids = [...new Set([...progressIds, ...(marker ? [marker] : [])].filter(id => Uuid.test(id)))];
+  if (!ids.length) return;
+  const result = await ledger.pool.query(
+    "SELECT id FROM ac_verify_runs WHERE project_id=$1 AND id=ANY($2::uuid[]) AND status IN ('failed','done')",
+    [projectId,ids],
+  );
+  for (const row of result.rows) if (typeof row.id==='string') await clearProgress(dataDirectory,projectId,row.id);
 }
 
 /** Repeats the sweep. A still-valid lease matches nothing; a sweep error stays in the timer. */

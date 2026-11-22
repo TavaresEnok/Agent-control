@@ -12,6 +12,8 @@ import {loadInstallation, readPrivateFile, type Installation} from './installati
 import {Ledger} from './ledger.ts';
 import {endRound, trackRoundTemp, type RoundScope} from './personal-artifact-hooks.ts';
 import {personalAccountRoot} from './personal-health.ts';
+import {recoverPersonalOrphanedExams} from './personal-orphaned-exams.ts';
+import {clearTerminalVerifyProgress,failAbandonedVerifyContext} from './verify-abandon.ts';
 import {collectToolFindings} from './verify-collect.ts';
 import {claimVerifyDatabaseStamp, readCurrentVerifyDatabase, releaseVerifyDatabaseStamp, verifyDatabaseStampPresent} from './verify-db.ts';
 import {attachInternalTarget, dynamicScanPlan} from './verify-dynamic.ts';
@@ -443,6 +445,8 @@ async function assertVerificationAvailable(ready: ReadyVerification): Promise<vo
     if ((Array.isArray(rows) && rows.length > 0) || (typeof rowCount === 'number' && rowCount > 0)) {
       throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
     }
+    const progress = await readVerificationProgress(ready.dataDirectory, ready.projectId);
+    await clearTerminalVerifyProgress(ready.ledger,ready.dataDirectory,ready.projectId,progress.filter(row=>row.status==='running').map(row=>row.id));
   }
   const progress = await readVerificationProgress(ready.dataDirectory, ready.projectId);
   if (progress.some(row => row.status === 'running')) throw new Refusal('VERIFY_ALREADY_RUNNING', 409);
@@ -811,6 +815,8 @@ export async function resolvePersonalVerification(
     const exam = await ledger.ensureExamContext(principal, project.id, 'verify');
     const policyRevision = exam.policyRevision;
     if (!Number.isInteger(policyRevision) || policyRevision < 1) throw new Refusal('VERIFY_CONTEXT_REQUIRED', 409);
+    await recoverPersonalOrphanedExams(config,ledger,{contextId:exam.contextId},true);
+    await failAbandonedVerifyContext(ledger,config.dataDirectory,principal,exam.contextId);
     authority = await acquirePersonalVerify(ledger, principal, exam.contextId);
     if (exam.mainCapacityPolicyRevision !== null && exam.capacityPolicyRevision !== exam.mainCapacityPolicyRevision) {
       await new Capacity(ledger).assignPolicy(principal, exam.contextId, exam.mainCapacityPolicyRevision);
