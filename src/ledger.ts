@@ -3,7 +3,7 @@ import {fenceInstallationContext,type InstallationFenceToken} from './installati
 import { randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import pg from 'pg';
-import { Authority, Checkpoint, Command, digest, Id, Refusal, Projection } from './contracts.ts';
+import { acceptedCommandDigest, Authority, Checkpoint, Command, digest, Id, Refusal, Projection } from './contracts.ts';
 import {CONVERSATION_CHANNEL} from './conversation-transport.ts';
 import { workflowFor } from './workflows.ts';
 import { Template } from './templates.ts';
@@ -245,8 +245,8 @@ export class Ledger {
       if (command.contextId !== a.contextId) throw new Refusal('AUTHORITY_SCOPE_MISMATCH', 403);
       // Serialize duplicate intent IDs across contexts before binding their payload.
       await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [command.intentId]);
-      const { deliveryAttemptId, ...semantic } = command;
-      const hash = digest({ principal, ...semantic });
+      const { deliveryAttemptId } = command;
+      const hash = acceptedCommandDigest(principal, command);
       const old = await c.query<Intent & { digest: string }>('SELECT * FROM ac_intents WHERE id=$1', [command.intentId]);
       let intent: Intent;
       if (old.rowCount) {

@@ -20,6 +20,7 @@ import {Authority,Refusal,canonical,digest} from '../src/contracts.ts';
 import {grantLaunchLockKey} from '../src/native-execution-shared.ts';
 import {loadInstallation} from '../src/installation.ts';
 import {recoverPersonalOrphanedExams} from '../src/personal-orphaned-exams.ts';
+import {acceptSecurityVerification} from '../src/verify-intent.ts';
 import {isolatedDatabase} from './fixtures/isolated-database.ts';
 
 const ZERO='0001-01-01T00:00:00Z';
@@ -81,9 +82,10 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   await db.pool.query("UPDATE ac_installation_activation SET mode='personal' WHERE id=1");
   const capacity=new Capacity(db);
   const project=randomUUID(),owner='app-'+randomUUID(),gateway='gateway:owner-'+randomUUID(),account=randomUUID(),profile=randomUUID();
+  const otherProject=randomUUID(),otherRepo=join(area,'outro-repo');
   const repo=join(area,'repo'),dataDir=join(area,'data'),spool=join(dataDir,'exec-host'),accounts=join(dataDir,'accounts');
   const planHost=join(dataDir,'plan-host'),planAccounts=join(dataDir,'plan-accounts'),keysDir=join(dataDir,'keys'),vaultDir=join(dataDir,'vault');
-  for(const dir of [repo,dataDir,spool,accounts,planHost,planAccounts,keysDir,vaultDir]){await mkdir(dir,{recursive:true,mode:0o700});await chmod(dir,0o700);}
+  for(const dir of [repo,otherRepo,dataDir,spool,accounts,planHost,planAccounts,keysDir,vaultDir]){await mkdir(dir,{recursive:true,mode:0o700});await chmod(dir,0o700);}
   const commit='e'.repeat(40);
   await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[project,'Passive exam recovery fixture']);
   await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner'),($1,$3,'owner'),($1,$4,'operator')",[project,owner,gateway,'operator-'+randomUUID()]);
@@ -97,6 +99,13 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const mainContext=await db.createContext(gateway,project,randomUUID());
   const gatewayAuthority=await db.acquire(gateway,mainContext,randomUUID(),'gateway-manager',60);
   await db.pool.query("INSERT INTO ac_exam_contexts(project_id,module,context_id) VALUES($1,'verify',$2)",[project,mainContext]);
+  await db.pool.query('INSERT INTO ac_projects VALUES($1,$2)',[otherProject,'Outro projeto da mesma instalação']);
+  await db.pool.query("INSERT INTO ac_memberships VALUES($1,$2,'owner')",[otherProject,owner]);
+  await db.pool.query('INSERT INTO ac_project_repositories(project_id,repo) VALUES($1,$2)',[otherProject,otherRepo]);
+  await db.pool.query("INSERT INTO ac_policy_revisions(project_id,revision,digest,snapshot,published_by) VALUES($1,1,$2,'{}',$3)",[otherProject,'b'.repeat(64),owner]);
+  const otherVerifyContext=await db.createContext(owner,otherProject,randomUUID());
+  await db.pool.query("INSERT INTO ac_exam_contexts(project_id,module,context_id) VALUES($1,'verify',$2)",[otherProject,otherVerifyContext]);
+  const projectOf=(contextId:string)=>contextId===otherVerifyContext?otherProject:project;
 
   const keys=generateKeyPairSync('ed25519'),otherKeys=generateKeyPairSync('ed25519');
   const pem=keys.privateKey.export({format:'pem',type:'pkcs8'}).toString();
@@ -112,22 +121,26 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const user=`${process.getuid?.()}:${process.getgid?.()}`;
 
   type Plant={workflow?:string;module?:string;intentState?:string;runStatus?:string;grantState?:string;state?:string;workerId?:string;launchDigest?:string;networkId?:string|null;
-   messageModule?:string;noRun?:boolean;bindManagerEpoch?:boolean;
+   messageModule?:string;noRun?:boolean;bindManagerEpoch?:boolean;verifyAuthority?:Authority;
    tools?:'created'|'running'|'absent';noNetwork?:boolean;noRequest?:boolean;plainRequest?:boolean;context?:string;siblings?:number};
-  const insertIntent=async(contextId:string,workflow:string,module:string,state:string,runStatus:string,messageModule=module,noRun=false,epoch=1)=>{
-   const intentId=randomUUID();
-   const command={schemaVersion:1 as const,intentId,deliveryAttemptId:randomUUID(),contextId,policyRevision:0,action:'plan.start' as const,payload:{workflow,messageRef:`${messageModule}:${project}:${commit}`,projectId:project,commit}};
-   await db.pool.query(`INSERT INTO ac_intents (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,0)`,
-    [intentId,contextId,owner,digest(command),JSON.stringify(command),randomUUID(),randomUUID(),epoch]);
+  const insertIntent=async(contextId:string,workflow:string,module:string,state:string,runStatus:string,messageModule=module,noRun=false,epoch=1,verifyAuthority?:Authority)=>{
+   const projectId=projectOf(contextId);
+   const intentId=verifyAuthority?(await acceptSecurityVerification(db,owner,verifyAuthority,{projectId,commit,policyRevision:1})).id:randomUUID();
+   if(!verifyAuthority){
+    const command={schemaVersion:1 as const,intentId,deliveryAttemptId:randomUUID(),contextId,policyRevision:1,action:'plan.start' as const,payload:{workflow,messageRef:`${messageModule}:${projectId}:${commit}`,projectId,commit}};
+    await db.pool.query(`INSERT INTO ac_intents (id,context_id,principal_id,digest,command,operation_id,run_id,manager_epoch,plan_revision)
+     SELECT $1,id,$3,$4,$5::jsonb,$6,$7,$8,plan_revision FROM ac_contexts WHERE id=$2`,
+     [intentId,contextId,owner,digest(command),JSON.stringify(command),randomUUID(),randomUUID(),epoch]);
+   }
    if(!noRun)await db.pool.query(`INSERT INTO ac_verify_runs (id,project_id,context_id,intent_id,principal_id,commit_id,status,report_dir,module) VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8)`,
-    [randomUUID(),project,contextId,intentId,owner,commit,runStatus,module]);
+    [randomUUID(),projectId,contextId,intentId,owner,commit,runStatus,module]);
    await db.pool.query('UPDATE ac_intents SET state=$2 WHERE id=$1',[intentId,state]);
    return intentId;
   };
   const insertGrant=async(intentId:string,contextId:string,epoch:number,state:string,receipt:unknown=null)=>{
    const id=randomUUID();
    await db.pool.query(`INSERT INTO ac_capacity_grants(id,attempt_id,intent_id,context_id,manager_epoch,account_id,profile_id,role,project_id,policy_revision,config_revision,request_digest,emergency,state,physical_receipt)
-    VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,$10,$11)`,[id,randomUUID(),intentId,contextId,epoch,account,profile,project,digest({grant:id}),state,receipt]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,'specialist',$8,1,1,$9,false,$10,$11)`,[id,randomUUID(),intentId,contextId,epoch,account,profile,projectOf(contextId),digest({grant:id}),state,receipt]);
    return id;
   };
   const profileDigest=digest({accountId:account,profileId:profile,model:'claude-sonnet-5-5',effort:'medium',role:'specialist'});
@@ -143,7 +156,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   const plant=async(o:Plant={})=>{
    const contextId=o.context??examContext,epoch=await epochOf(contextId);
    const intentId=await insertIntent(contextId,o.workflow??'security-verify-readonly-v1',o.module??'qa',o.intentState??'failed',o.runStatus??'failed',
-    o.messageModule,o.noRun,o.bindManagerEpoch?epoch:1);
+    o.messageModule,o.noRun,o.bindManagerEpoch?epoch:1,o.verifyAuthority);
    for(let i=0;i<(o.siblings??3);i++){
     const sibling=randomUUID(),siblingGrant=await insertGrant(intentId,contextId,Number(epoch),'released',{executionStarted:true,jobId:sibling});
     await insertJob({jobId:sibling,intentId,grantId:siblingGrant,contextId,sessionId:randomUUID(),inputDigest:digest({sibling}),state:'failed',epoch:Number(epoch),networkId:hex(),workerId:hex(),receipt:{terminal:true}});
@@ -160,7 +173,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    const toolsId=hex(),toolsName='ac-native-tools-'+jobId;
    const body:Body={Id:toolsId,Image:image,Config:{User:user,Labels:labels,Entrypoint:companion,Cmd:[],Env:[],WorkingDir:'/'},
     State:{Status:'created',Running:false,ExitCode:0,FinishedAt:ZERO,StartedAt:ZERO,Pid:0},
-    HostConfig:{NetworkMode:networkId,ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9},Mounts:[]};
+    HostConfig:{NetworkMode:networkId??'none',ReadonlyRootfs:true,Privileged:false,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],PidsLimit:96,Memory:512*1024*1024,NanoCpus:1e9},Mounts:[]};
    if(o.tools==='running')body.State={Status:'running',Running:true,ExitCode:0,FinishedAt:ZERO,StartedAt:'2026-11-20T00:00:00Z',Pid:4242};
    if(o.tools!=='absent')docker.containers.set(toolsName,body);
    if(networkId&&!o.noNetwork)docker.networks.set(networkId,{Id:networkId,Name:'ac-native-exec-'+jobId,Internal:true,Labels:labels,Containers:{}});
@@ -170,9 +183,10 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    const job=(await db.pool.query('SELECT state,worker_id,tools_id,network_id,launch_digest,receipt FROM ac_native_execution_jobs WHERE id=$1',[jobId])).rows[0];
    const grant=(await db.pool.query('SELECT state,physical_receipt FROM ac_capacity_grants WHERE id=$1',[grantId])).rows[0];
    const intent=(await db.pool.query('SELECT state FROM ac_intents WHERE id=$1',[intentId])).rows[0];
+   const operation=(await db.pool.query('SELECT * FROM ac_operations WHERE intent_id=$1',[intentId])).rows[0];
    const run=(await db.pool.query('SELECT status,finished_at FROM ac_verify_runs WHERE intent_id=$1',[intentId])).rows[0];
    const journal=(await db.pool.query('SELECT state FROM ac_native_terminal_retirements WHERE job_id=$1',[jobId])).rows[0];
-   return {job,grant,intent,run,journal};
+   return {job,grant,intent,operation,run,journal};
   };
   const reset=()=>{docker.beforeNetworkDelete=undefined;docker.mutations.length=0;docker.forbidden.length=0;docker.unavailable=false;docker.failNetworkDelete=0;docker.failContainerDelete=false;};
   /** Evidence is insufficient: nothing physical or durable changes and the reason comes back. */
@@ -528,6 +542,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    schemaVersion:1,mode:'administration-only',activation:'personal',databaseUrl:fixture.url,dataDirectory:dataDir,
    contextVault:{directory:vaultDir,masterFile:vaultMaster},
    project:{id:project,label:'Passive exam project',repo,owner},
+   projects:[{id:otherProject,label:'Outro projeto',repo:otherRepo,owner}],
    managerTransport:{principal:gateway,tokenFile,machineId:'machine-fixture',transport:'local',contexts:[{projectId:project,contextId:mainContext,sessionId:'sess-1',profileId:profile,keyVersion:1,encryptionVariant:'dataKey'}]},
    nativeBootstrap:{
     state:'active',contract:'native-bootstrap-configured-v1',projectId:project,contextId:mainContext,epoch:gatewayAuthority.epoch,instanceId:gatewayAuthority.instanceId,source:'authorized-endpoint',
@@ -588,25 +603,48 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
   // The security module (verify) and design are never recovered by this command, even with a never-started tools container.
   await db.releaseLease(gatewayAuthority);
   const verifyAuthority=await db.acquire(owner,mainContext,randomUUID(),'personal-maintenance',60);
-  const securityModule=await plant({module:'verify',context:mainContext});
+  const securityModule=await plant({module:'verify',context:mainContext,verifyAuthority,plainRequest:true});
   await refuse(securityModule,/NATIVE_EXECUTION_SCOPE_MISMATCH/,()=>supervisor.recoverNeverStartedModuleExam(owner,verifyAuthority,securityModule.jobId,scope));
   await db.releaseLease(verifyAuthority);
 
-  const plantOrphan=(options:Plant)=>plant({...options,bindManagerEpoch:true});
+  const plantOrphan=async(options:Plant)=>{
+   if(options.module!=='verify')return plant({...options,bindManagerEpoch:true});
+   const verifyAuthority=await db.acquire(owner,options.context??mainContext,randomUUID(),'personal-verify',60);
+   try{return await plant({...options,verifyAuthority,bindManagerEpoch:true});}
+   finally{await db.releaseLease(verifyAuthority);}
+  };
   const recover=(job:Awaited<ReturnType<typeof plant>>,apply=true)=>
    supervisor.recoverOrphanedExam(owner,job.jobId,{...scope,contextId:job.contextId},apply);
-  const writeResult=(job:Awaited<ReturnType<typeof plant>>,exitCode=1,resultJobId=job.jobId)=>
+  const writeResult=(job:Awaited<ReturnType<typeof plant>>,exitCode=1,resultJobId=job.jobId,failureCode=exitCode?'EXECUTION_CANCELED':null)=>
    writeFile(join(job.root,'output','execution-result.json'),JSON.stringify({
     schemaVersion:1,jobId:resultJobId,output:'resultado preservado',normalizedTokensUsed:null,
-    usageWindows:null,nativeSessionId:null,failureCode:exitCode?'EXECUTION_CANCELED':null,exitCode,
+    usageWindows:null,nativeSessionId:null,failureCode,exitCode,
    }),{mode:0o600});
+  const plantStoppedContainers=async(job:Awaited<ReturnType<typeof plant>>,workerId:string)=>{
+   await db.pool.query('UPDATE ac_native_execution_jobs SET tools_id=$2 WHERE id=$1',[job.jobId,job.toolsId]);
+   const stopped={Status:'exited',Running:false,ExitCode:1,FinishedAt:new Date().toISOString()};
+   const workerName='ac-native-worker-'+job.jobId;
+   docker.containers.set(workerName,{...job.body,Id:workerId,State:stopped});
+   docker.containers.set(job.toolsName,{...job.body,State:{...stopped,ExitCode:0}});
+   return ()=>{
+    docker.containers.delete(workerName);
+    docker.containers.delete(job.toolsName);
+   };
+  };
 
   await t.test('a CLI reconcilia segurança com resultado, libera a vaga e registra a retirada',async()=>{
    reset();
+   const workerId=hex();
    const orphan=await plantOrphan({module:'verify',context:mainContext,tools:'absent',state:'running',grantState:'running',plainRequest:true,
-    workerId:hex(),launchDigest:hex(),intentState:'accepted',siblings:0});
+    workerId,launchDigest:hex(),siblings:0});
    await writeResult(orphan);
+   const clearContainers=await plantStoppedContainers(orphan,workerId);
    const before=await snapshot(orphan.jobId,orphan.grantId,orphan.intentId);
+   assert.equal(before.operation.state,'registered');
+   await assert.rejects(recover(orphan,false),{code:'NATIVE_ORPHAN_CONTAINER_PRESENT'});
+   assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
+   assert.deepEqual(docker.mutations,[]);
+   clearContainers();
    assert.equal(await recover(orphan,false),'eligible');
    assert.deepEqual(await snapshot(orphan.jobId,orphan.grantId,orphan.intentId),before);
    assert.deepEqual(docker.mutations,[]);
@@ -619,6 +657,7 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
    assert.equal(after.grant.state,'released');
    assert.equal(after.grant.physical_receipt.failureCode,'EXECUTION_CANCELED');
    assert.equal(after.intent.state,'failed');
+   assert.deepEqual(after.operation,before.operation);
    assert.equal(after.journal.state,'removed');
    assert.deepEqual(docker.mutations,['DELETE network '+orphan.networkId]);
    assert.equal(await recover(orphan),'already_recovered');
@@ -628,6 +667,67 @@ test('passive module-exam recovery retires only a proven never-started attempt, 
     assert.equal(reconciled.state,'failed');
     assert.ok('failureCode' in reconciled && reconciled.failureCode==='EXECUTION_CANCELED');
    }finally{await db.releaseLease(replay);}
+  });
+
+  await t.test('a CLI recupera um verify antigo de outro projeto da mesma instalação',async()=>{
+   reset();
+   const workerId=hex();
+   const older=await plantOrphan({module:'verify',context:otherVerifyContext,tools:'absent',state:'running',grantState:'running',
+    plainRequest:true,workerId,launchDigest:hex(),networkId:null,siblings:0});
+   await writeResult(older,1,older.jobId,'PROVIDER_USAGE_LIMIT');
+   const clearContainers=await plantStoppedContainers(older,workerId);
+   await db.pool.query("UPDATE ac_native_execution_jobs SET created_at=now()-interval '1 day' WHERE id=$1",[older.jobId]);
+   await db.pool.query("UPDATE ac_managers SET lease_until=now()-interval '1 day' WHERE context_id=$1",[older.contextId]);
+   const before=await snapshot(older.jobId,older.grantId,older.intentId);
+   await assert.rejects(recover(older,false),{code:'NATIVE_EXECUTION_SCOPE_MISMATCH'});
+   const blocked=await cli('--retencao-automatica');
+   assert.equal(blocked.status,0,blocked.stdout+blocked.stderr);
+   assert.match(blocked.stdout,new RegExp(older.jobId+'.*NATIVE_ORPHAN_CONTAINER_PRESENT'));
+   assert.deepEqual(await snapshot(older.jobId,older.grantId,older.intentId),before);
+   assert.deepEqual(docker.mutations,[]);
+   clearContainers();
+   const preview=await cli('--retencao-automatica');
+   assert.equal(preview.status,0,preview.stdout+preview.stderr);
+   assert.match(preview.stdout,new RegExp(older.jobId+'.*elegível'));
+   assert.deepEqual(await snapshot(older.jobId,older.grantId,older.intentId),before);
+   assert.deepEqual(docker.mutations,[]);
+   const applied=await cli('--recuperar-exame-orfao',older.jobId);
+   assert.equal(applied.status,0,applied.stderr);
+   const after=await snapshot(older.jobId,older.grantId,older.intentId);
+   assert.equal(after.job.state,'failed');
+   assert.equal(after.grant.state,'released');
+   assert.equal(after.grant.physical_receipt.failureCode,'PROVIDER_USAGE_LIMIT');
+   assert.equal(after.journal.state,'removed');
+   assert.deepEqual(after.operation,before.operation);
+  });
+
+  await t.test('verify recusa digest adulterado e operação ativa ou de outro intent',async()=>{
+   reset();
+   const orphan=await plantOrphan({module:'verify',context:mainContext,tools:'absent',state:'running',grantState:'running',
+    plainRequest:true,workerId:hex(),intentState:'accepted',siblings:0});
+   await writeResult(orphan);
+   const {digest:storedDigest,command}=(await db.pool.query('SELECT digest,command FROM ac_intents WHERE id=$1',[orphan.intentId])).rows[0];
+   const refuseVerify=()=>assert.rejects(recover(orphan,false),{code:'NATIVE_EXECUTION_SCOPE_MISMATCH'});
+   await db.pool.query('UPDATE ac_intents SET digest=$2 WHERE id=$1',[orphan.intentId,digest(command)]);
+   await refuseVerify();
+   await db.pool.query('UPDATE ac_intents SET digest=$2 WHERE id=$1',[orphan.intentId,storedDigest]);
+   await db.pool.query("UPDATE ac_operations SET state='running' WHERE intent_id=$1",[orphan.intentId]);
+   await refuseVerify();
+   await db.pool.query("UPDATE ac_operations SET state='registered',grant_id=$2 WHERE intent_id=$1",[orphan.intentId,orphan.grantId]);
+   await refuseVerify();
+   await db.pool.query("UPDATE ac_operations SET state='completed',grant_id=NULL WHERE intent_id=$1",[orphan.intentId]);
+   const foreign=await plantOrphan({tools:'absent',siblings:0});
+   await db.pool.query("INSERT INTO ac_operations(id,intent_id,state,manager_epoch) VALUES($1,$2,'registered',1)",[orphan.jobId,foreign.intentId]);
+   await refuseVerify();
+   await db.pool.query('DELETE FROM ac_operations WHERE id=$1',[orphan.jobId]);
+   assert.equal(await recover(orphan,false),'eligible');
+   const replay=await db.acquire(owner,mainContext,randomUUID(),'personal-verify',60);
+   try{await assert.rejects(recover(orphan,false),{code:'NATIVE_ORPHAN_ACTIVE_LEASE'});}
+   finally{await db.releaseLease(replay);}
+   assert.equal((await snapshot(orphan.jobId,orphan.grantId,orphan.intentId)).grant.state,'running');
+   assert.deepEqual(docker.mutations,[]);
+   assert.equal(await recover(orphan),'recovered');
+   assert.equal((await snapshot(orphan.jobId,orphan.grantId,orphan.intentId)).intent.state,'failed');
   });
 
   await t.test('a recuperação recusa lease válido, contêiner, resultado errado e falta de prova',async()=>{

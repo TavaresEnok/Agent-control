@@ -3,7 +3,7 @@ import {lstat,realpath,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createPublicKey,sign,verify} from 'node:crypto';
 import pg from 'pg';
-import {Authority,canonical,digest,Refusal} from './contracts.ts';
+import {acceptedCommandDigest,Authority,canonical,Command,digest,Refusal} from './contracts.ts';
 import {DockerDaemon} from './sandbox-broker.ts';
 import {assertNativeSyntheticFixture} from './native-synthetic-fixture.ts';
 import {nativeContainerNeverStarted} from './native-execution-isolation.ts';
@@ -102,7 +102,7 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
    g.state grant_state,g.resource_kind grant_resource_kind,g.project_id grant_project_id,g.context_id grant_context_id,
    g.intent_id grant_intent_id,g.manager_epoch grant_epoch,g.account_id grant_account_id,g.profile_id grant_profile_id,
    g.role grant_role,g.physical_receipt,
-   i.principal_id,i.parent_intent_id,i.state intent_state,i.command intent_command,i.digest intent_digest,i.manager_epoch intent_epoch,
+   i.principal_id,i.parent_intent_id,i.state intent_state,i.command intent_command,i.digest intent_digest,i.manager_epoch intent_epoch,i.operation_id intent_operation_id,
    a.provider account_provider,a.mode account_mode,a.resource_identity account_resource_identity,
    p.model profile_model,p.effort profile_effort,p.role profile_role,
    EXISTS(SELECT 1 FROM ac_installation_activation WHERE id=1 AND mode='personal') personal,
@@ -238,7 +238,11 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
     throw new Refusal('NATIVE_ORPHAN_ACTIVE_LEASE');
    const row=await this.loadUnstartedExam(c,scope,jobId);
    if(!row)throw new Refusal('NATIVE_EXECUTION_JOB_NOT_FOUND',404);
-   this.validateOrphanedExam(row,principal,scope.projectId);
+   const operations=(await c.query(`SELECT o.id,o.intent_id,o.manager_epoch,o.state,o.grant_id,o.native_session_id,
+    o.handle IS NOT NULL has_handle,o.receipt IS NOT NULL has_receipt,
+    EXISTS(SELECT 1 FROM ac_execution_launches l WHERE l.operation_id=o.id) has_launch
+    FROM ac_operations o WHERE o.id=$1 OR o.intent_id=$2 FOR UPDATE OF o`,[jobId,row.intent_id])).rows;
+   this.validateOrphanedExam(row,operations,principal,scope.projectId);
    if((!manager||Number(manager.epoch)<Number(row.manager_epoch))&&!(await c.query(
     "SELECT 1 FROM ac_verify_runs WHERE intent_id=$1 AND context_id=$2 AND project_id=$3 AND status IN ('failed','done')",
     [row.intent_id,row.context_id,scope.projectId])).rowCount)
@@ -297,20 +301,34 @@ export abstract class NativeExecutionExamRecovery extends NativeExecutionSupervi
   }));
  }
 
- protected validateOrphanedExam(row:Record<string,any>,principal:string,projectId:string){
+ protected validateOrphanedExam(row:Record<string,any>,operations:Record<string,any>[],principal:string,projectId:string){
   const command=row.intent_command,payload=command?.payload,module=row.exam_module;
   const target=`${projectId}:${row.base_id}`;
   const design=readonlyDesignExam(payload?.workflow,row.role)&&module==='design'&&payload?.messageRef==='design-exam:'+target;
-  const security=readonlySecurityExam(payload?.workflow,row.role)&&(
-   (module==='verify'||module==null)&&payload?.messageRef==='verify:'+target||
-   PassiveExamModules.has(module)&&row.has_module_run&&(payload?.messageRef===module+':'+target||
-    typeof payload?.messageRef==='string'&&payload.messageRef.startsWith('recheck:')&&Id.safeParse(payload.messageRef.slice(8)).success));
-  if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||(!design&&!security)||
-   row.has_operation||row.has_stage_operation||row.has_child_intent||row.has_active_admission||
+  const security=readonlySecurityExam(payload?.workflow,row.role);
+  const verify=security&&(module==='verify'||module==null)&&payload?.messageRef==='verify:'+target;
+  const moduleExam=security&&PassiveExamModules.has(module)&&row.has_module_run&&(payload?.messageRef===module+':'+target||
+    typeof payload?.messageRef==='string'&&payload.messageRef.startsWith('recheck:')&&Id.safeParse(payload.messageRef.slice(8)).success);
+  if(!row.personal||row.principal_id!==principal||row.parent_intent_id!==null||(!design&&!verify&&!moduleExam)||
+   row.has_stage_operation||row.has_child_intent||row.has_active_admission||
    command?.schemaVersion!==1||command.action!=='plan.start'||command.intentId!==row.intent_id||command.contextId!==row.context_id||
-   payload.projectId!==projectId||payload.commit!==row.base_id||digest(command)!==row.intent_digest||
+   payload.projectId!==projectId||payload.commit!==row.base_id||
    Number(row.intent_epoch)!==Number(row.manager_epoch))
    throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+  if(verify){
+   // Ledger.accept registers an operation for the intent. Verify launches a separate native job.
+   // Only the unused registration (after the lease check), or its terminal form, is compatible.
+   const parsed=Command.safeParse(command);
+   const [operation]=operations;
+   if(!parsed.success||acceptedCommandDigest(principal,parsed.data)!==row.intent_digest||
+    operations.length!==1||operation.id!==row.intent_operation_id||operation.intent_id!==row.intent_id||
+    operation.id===row.id||Number(operation.manager_epoch)!==Number(row.intent_epoch)||
+    operation.grant_id!==null||operation.native_session_id!==null||operation.has_handle||operation.has_launch||
+    !(operation.state==='completed'||(operation.state==='registered'&&!operation.has_receipt)))
+    throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+  }else if(operations.length||digest(command)!==row.intent_digest){
+   throw new Refusal('NATIVE_EXECUTION_SCOPE_MISMATCH');
+  }
   if(row.grant_resource_kind!=='model'||row.grant_project_id!==projectId||row.grant_context_id!==row.context_id||
    row.grant_intent_id!==row.intent_id||Number(row.grant_epoch)!==Number(row.manager_epoch)||
    row.grant_account_id!==row.account_id||row.grant_profile_id!==row.profile_id||row.grant_role!==row.role||
