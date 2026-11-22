@@ -65,7 +65,7 @@ test('finished passive exam work copies are released only with the full proof, o
   const signWith=(key:typeof keys.privateKey,domain:string,payload:unknown)=>sign(null,Buffer.from(domain+canonical(payload)),key).toString('hex');
   const receiptDomain='agent-control:native-execution-receipt:v1\n',retirementDomain='agent-control:native-terminal-retirement:v1\n';
 
-  type Plant={workflow?:string;state?:string;grantState?:string;retirement?:'removed'|'prepared'|'none'|'forged'|'mismatch';receiptKey?:typeof keys.privateKey;work?:'tree'|'none'|'symlink'|'file';rootMode?:number};
+  type Plant={workflow?:string;state?:string;grantState?:string;retirement?:'removed'|'prepared'|'none'|'forged'|'mismatch';receiptKey?:typeof keys.privateKey;work?:'tree'|'none'|'symlink'|'file';review?:'tree'|'none'|'symlink'|'file';rootMode?:number};
   const plant=async(o:Plant={})=>{
    const contextId=await db.createContext(owner,project,randomUUID());
    const intentId=randomUUID(),jobId=randomUUID(),grantId=randomUUID(),sessionId=randomUUID();
@@ -88,12 +88,20 @@ test('finished passive exam work copies are released only with the full proof, o
     await db.pool.query("INSERT INTO ac_native_terminal_retirements(job_id,binding,state) VALUES($1,$2,'prepared')",[jobId,saved]);
     if(mode!=='prepared')await db.pool.query("UPDATE ac_native_terminal_retirements SET state='removed',proof=$2 WHERE job_id=$1",[jobId,{payload:saved,signature:signWith(mode==='forged'?otherKeys.privateKey:keys.privateKey,retirementDomain,saved)}]);
    }
-   const root=join(spool,jobId),work=join(root,'work');
+   const root=join(spool,jobId),work=join(root,'work'),review=join(root,'review-artifact');
    await mkdir(root,{mode:0o700});await chmod(root,o.rootMode??0o700);
-   for(const dir of ['input','output','planning','review-artifact'])await mkdir(join(root,dir),{mode:0o700});
+   for(const dir of ['input','output','planning'])await mkdir(join(root,dir),{mode:0o700});
    await writeFile(join(root,'output','execution-result.json'),JSON.stringify({schemaVersion:1,jobId,output:'',exitCode:0,normalizedTokensUsed:null,usageWindows:null,nativeSessionId:null,failureCode:null}),{mode:0o600});
-   await writeFile(join(root,'review-artifact','a.txt'),'artifact');
    await writeFile(join(root,'worker-terminal.log'),'log');
+   const reviewMode=o.review??(o.work==='none'?'none':'tree');
+   if(reviewMode==='symlink')await symlink(outside,review);
+   else if(reviewMode==='file')await writeFile(review,'x');
+   else if(reviewMode!=='none'){
+    await mkdir(review,{mode:0o700});
+    await writeFile(join(review,'a.txt'),'artifact');
+    await writeFile(join(review,'copy.ts'),'r'.repeat(600));
+    await symlink(outside,join(review,'link-out'));await symlink(join(outside,'precious.txt'),join(review,'link-file'));
+   }
    if(o.work==='symlink')await symlink(outside,work);
    else if(o.work==='file')await writeFile(work,'x');
    else if(o.work!=='none'){
@@ -109,10 +117,11 @@ test('finished passive exam work copies are released only with the full proof, o
    const authority=await db.acquire(principal,p.contextId,randomUUID(),'personal-maintenance',60);
    try{return await by.releaseModuleExamWork(principal,authority,p.jobId,apply);}finally{await db.releaseLease(authority);}
   };
-  const intact=async(p:Planted)=>{
-   for(const name of ['input','output','planning','review-artifact'])assert.ok(await exists(join(p.root,name)),name+' kept');
+  const intact=async(p:Planted,reviewKept=false)=>{
+   for(const name of ['input','output','planning'])assert.ok(await exists(join(p.root,name)),name+' kept');
+   assert.equal(await exists(join(p.root,'review-artifact')),reviewKept,'review-artifact');
+   if(reviewKept&&(await lstat(join(p.root,'review-artifact'))).isDirectory())assert.equal(await readFile(join(p.root,'review-artifact','a.txt'),'utf8'),'artifact');
    assert.equal(JSON.parse(await readFile(join(p.root,'output','execution-result.json'),'utf8')).jobId,p.jobId);
-   assert.equal(await readFile(join(p.root,'review-artifact','a.txt'),'utf8'),'artifact');
    assert.equal(await readFile(join(p.root,'worker-terminal.log'),'utf8'),'log');
   };
   const outsideIntact=async()=>assert.equal(await readFile(join(outside,'precious.txt'),'utf8'),'must survive');
@@ -126,7 +135,7 @@ test('finished passive exam work copies are released only with the full proof, o
   const design=await plant({workflow:'design-readonly-v1'});
   await db.pool.query("UPDATE ac_capacity_grants SET selection=jsonb_set(coalesce(selection,'{}'::jsonb),'{designPurpose}',to_jsonb('examiner'::text)) WHERE id=(SELECT grant_id FROM ac_native_execution_jobs WHERE id=$1)",[design.jobId]);
   assert.equal((await run(design,true)).state,'released');
-  await intact(design);
+  await intact(design,true);
   // An interrupted plan must not apply to a checkout that was subsequently replaced.
   const replaced=await plant();
   const previous=(await db.pool.query('SELECT receipt FROM ac_native_execution_jobs WHERE id=$1',[replaced.jobId])).rows[0].receipt;
@@ -143,33 +152,44 @@ test('finished passive exam work copies are released only with the full proof, o
   try{await assert.rejects(run(interrupted,true),/synthetic audit failure/);}
   finally{await db.pool.query('DROP TRIGGER retention_audit_failure ON ac_audit; DROP FUNCTION fail_retention_audit()');}
   assert.equal(await exists(interrupted.work),false);
+  assert.equal(await exists(join(interrupted.root,'review-artifact')),false);
   assert.equal(await audits(interrupted.jobId),0);
   assert.equal((await run(interrupted,true)).state,'absent');
   assert.equal(await audits(interrupted.jobId),0);
   assert.equal((await db.pool.query("SELECT 1 FROM ac_audit WHERE kind='native.exam_work_absent_after_plan' AND detail->>'jobId'=$1",[interrupted.jobId])).rowCount,1);
-  // 1. Inspection changes nothing; apply frees only work, leaves the journal and siblings alone, and is repeatable.
-  const a=await plant(),neighbour=await plant();
+  // 1. Inspection changes nothing; apply frees work and review-artifact, leaves the journal and siblings alone, and is repeatable.
+  const a=await plant(),neighbour=await plant(),reviewOnly=await plant({work:'none',review:'tree'});
   const before=await journal();
   const preview=await run(a,false);
   assert.equal(preview.state,'eligible');
-  assert.ok(preview.state==='eligible'&&(preview.bytes??0)>=1000);
+  assert.ok(preview.state==='eligible'&&(preview.bytes??0)>=1600,'preview counts both work and review-artifact');
   assert.ok(await exists(a.work));
+  assert.ok(await exists(join(a.root,'review-artifact')));
   assert.equal((await run(a,true)).state,'released');
   assert.equal(await exists(a.work),false);
-  await intact(a);await outsideIntact();
-  assert.ok(await exists(neighbour.work),'a sibling job keeps its work');await intact(neighbour);
+  assert.equal(await exists(join(a.root,'review-artifact')),false);
+  await intact(a,false);await outsideIntact();
+  assert.ok(await exists(neighbour.work),'a sibling job keeps its work');await intact(neighbour,true);
   assert.equal(await journal(),before,'the retirement journal is untouched');
   assert.equal(await audits(a.jobId),1);
   assert.deepEqual(await run(a,true),{jobId:a.jobId,state:'absent'});
   assert.deepEqual(await run(a,false),{jobId:a.jobId,state:'absent'});
   assert.equal(await audits(a.jobId),1,'a repeat adds no audit');
+  // A finished passive exam whose work was already removed still has its review-artifact freed and audited.
+  const reviewOnlyPreview=await run(reviewOnly,false);
+  assert.equal(reviewOnlyPreview.state,'eligible');
+  assert.ok(reviewOnlyPreview.state==='eligible'&&(reviewOnlyPreview.bytes??0)>=600);
+  assert.equal((await run(reviewOnly,true)).state,'released');
+  await intact(reviewOnly,false);
+  assert.equal(await audits(reviewOnly.jobId),1);
+  assert.deepEqual(await run(reviewOnly,true),{jobId:reviewOnly.jobId,state:'absent'});
 
   // 2. Negatives: wrong state, proof, type or scope. Nothing is removed and the reason is named.
   const refused=async(label:string,reason:string,o:Plant,principal=owner)=>{
    const p=await plant(o);
    const result=await run(p,true,principal);
    assert.deepEqual([result.state,(result as {reason?:string}).reason],['refused',reason],label);
-   assert.ok(await exists(p.work),label+': work kept');await intact(p);await outsideIntact();
+   assert.ok(await exists(p.work),label+': work kept');await intact(p,true);await outsideIntact();
   };
   await refused('failed job','job_state',{state:'failed'});
   await refused('grant not released','grant_state',{grantState:'reserved'});
@@ -182,6 +202,8 @@ test('finished passive exam work copies are released only with the full proof, o
   await refused('another principal','not_passive_exam',{},operator);
   await refused('work is a symlink','work_unsafe',{work:'symlink'});
   await refused('work is a file','work_unsafe',{work:'file'});
+  await refused('review-artifact is a symlink','work_unsafe',{review:'symlink'});
+  await refused('review-artifact is a file','work_unsafe',{review:'file'});
   await refused('job root is not private','directory_unsafe',{rootMode:0o755});
   assert.ok((await readdir(outside)).includes('precious.txt'));
   // A job asked for through another job's context is not found, never guessed.

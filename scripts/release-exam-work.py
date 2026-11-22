@@ -75,13 +75,13 @@ def main():
     expected_parent, job_name, expected_job, expected_work, *leaf = sys.argv[1:]
     child_name = 'work'
     if leaf:
-        if len(leaf) != 1 or not re.fullmatch(r'(?:ac-[A-Za-z0-9._-]{1,120}|\.removendo-[a-f0-9-]{36})', leaf[0]):
+        if len(leaf) != 1 or not re.fullmatch(r'(?:work|review-artifact|ac-[A-Za-z0-9._-]{1,120}|\.removendo-[a-f0-9-]{36})', leaf[0]):
             raise ValueError('Invalid temporary directory')
         child_name = leaf[0]
     checked(libc.prctl(1, signal.SIGKILL, 0, 0, 0))  # PR_SET_PDEATHSIG
     if os.getppid() != int(expected_parent):
         raise ValueError('Manager exited')
-    fcntl.flock(work if leaf else job, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fcntl.flock(job if child_name in ('work', 'review-artifact') else work, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def still_bound():
         for parent, name, expected in ((host, job_name, expected_job), (job, child_name, expected_work)):

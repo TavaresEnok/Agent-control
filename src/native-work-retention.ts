@@ -64,10 +64,10 @@ async function treeSize(dir: FileHandle, mount: string): Promise<number> {
   return bytes;
 }
 
-export type WorkIdentity = {job: string; work: string; bytes: number};
+export type WorkIdentity = {job: string; work?: string; reviewArtifact?: string; bytes: number};
 export type WorkOperation = {state:'absent'|'released'} | {state:'present'; snapshot:WorkIdentity};
 
-async function release(root:FileHandle,job:FileHandle,work:FileHandle,jobId:string,planned:WorkIdentity,signal?:AbortSignal,temporaryName?:string):Promise<WorkOperation> {
+async function release(root:FileHandle,job:FileHandle,work:FileHandle,jobId:string,planned:{job:string;work:string;bytes:number},signal?:AbortSignal,temporaryName?:string):Promise<WorkOperation> {
   signal?.throwIfAborted();
   const child=spawn('/usr/bin/python3',['-I',helper,String(process.pid),jobId,planned.job,planned.work,...(temporaryName?[temporaryName]:[])],{
     stdio:['ignore','pipe','ignore',root.fd,job.fd,work.fd],env:{PATH:'/usr/bin:/bin'},signal,killSignal:'SIGKILL'
@@ -87,8 +87,10 @@ async function release(root:FileHandle,job:FileHandle,work:FileHandle,jobId:stri
   return {state:'released'};
 }
 
-export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(dir:FileHandle)=>Promise<void>,planned?:WorkIdentity,signal?:AbortSignal):Promise<WorkOperation> {
+export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(dir:FileHandle)=>Promise<void>,planned?:WorkIdentity,signal?:AbortSignal,options?:{work?:boolean;reviewArtifact?:boolean}):Promise<WorkOperation> {
   Id.parse(jobId);
+  const checkWork=planned?planned.work!==undefined:(options?.work??true);
+  const checkReview=planned?planned.reviewArtifact!==undefined:(options?.reviewArtifact??false);
   const root=await openRoot(hostRoot);
   try {
     await assertPrivate(root);
@@ -99,22 +101,49 @@ export async function examineWorkTree(hostRoot:string,jobId:string,checkOutput:(
       if(mount!==await mountId(root))throw Error('Unexpected job mount');
       const output=await open(anchored(job,'output'),directoryFlags);
       try {await assertPrivate(output);if(await mountId(output)!==mount)throw Error('Unexpected output mount');await checkOutput(output);} finally {await output.close();}
-      if(planned&&await identity(job)!==planned.job)throw Error('Job changed');
-      let work:FileHandle;
-      try {work=await open(anchored(job,'work'),directoryFlags);}
-      catch(error){
-        if((error as NodeJS.ErrnoException).code==='ENOENT')return {state:'absent'};
-        throw error;
-      }
-      try {
-        const stat=await work.stat();
-        if(stat.uid!==process.getuid?.()||await mountId(work)!==mount)throw Error('Unsafe work directory');
-        if(planned){
-          if(await identity(work)!==planned.work)throw Error('Checkout changed');
-          return await release(root,job,work,jobId,planned,signal);
+      const jobIdentity=await identity(job);
+      if(planned&&jobIdentity!==planned.job)throw Error('Job changed');
+      const openChild=async(name:'work'|'review-artifact',expected?:string)=>{
+        let dir:FileHandle;
+        try {dir=await open(anchored(job,name),directoryFlags);}
+        catch(error){
+          if((error as NodeJS.ErrnoException).code==='ENOENT')return undefined;
+          throw error;
         }
-        return {state:'present',snapshot:{job:await identity(job),work:await identity(work),bytes:await treeSize(work,mount)}};
-      } finally {await work.close();}
+        try {
+          const stat=await dir.stat();
+          if(stat.uid!==process.getuid?.()||await mountId(dir)!==mount)throw Error('Unsafe work directory');
+          const id=await identity(dir);
+          if(expected&&id!==expected)throw Error('Checkout changed');
+          return {dir,id};
+        } catch(error){
+          await dir.close();
+          throw error;
+        }
+      };
+      if(planned){
+        const work=checkWork?await openChild('work',planned.work):undefined;
+        try {
+          const review=checkReview?await openChild('review-artifact',planned.reviewArtifact):undefined;
+          try {
+            if(!work&&!review)return {state:'absent'};
+            if(work)await release(root,job,work.dir,jobId,{job:planned.job,work:planned.work!,bytes:planned.bytes},signal,'work');
+            if(review)await release(root,job,review.dir,jobId,{job:planned.job,work:planned.reviewArtifact!,bytes:planned.bytes},signal,'review-artifact');
+            return {state:'released'};
+          } finally {await review?.dir.close();}
+        } finally {await work?.dir.close();}
+      }
+      let workId:string|undefined,reviewId:string|undefined,bytes=0;
+      if(checkWork){
+        const work=await openChild('work');
+        if(work)try{workId=work.id;bytes+=await treeSize(work.dir,mount);}finally{await work.dir.close();}
+      }
+      if(checkReview){
+        const review=await openChild('review-artifact');
+        if(review)try{reviewId=review.id;bytes+=await treeSize(review.dir,mount);}finally{await review.dir.close();}
+      }
+      if(!workId&&!reviewId)return {state:'absent'};
+      return {state:'present',snapshot:{job:jobIdentity,...(workId?{work:workId}:{}),...(reviewId?{reviewArtifact:reviewId}:{}),bytes}};
     } finally {await job.close();}
   } finally {await root.close();}
 }
@@ -138,7 +167,7 @@ export async function releaseRegisteredDirectory(path:string, expected:{dev:stri
   }finally{await root.close();}
 }
 
-/** Job directories that still have a `work` entry, in id order. One readdir of the host root plus one lstat per
+/** Job directories that still have a `work` or `review-artifact` entry, in id order. One readdir of the host root plus lstat per
  * job: no database scan and no tree walk, so the cost follows the number of jobs, not the size of their copies.
  * Only directory entries named like job ids are considered; whatever else lives in the root is ignored. */
 export async function inventoryJobWork(hostRoot:string):Promise<{ids:string[];scanned:number}> {
@@ -147,12 +176,13 @@ export async function inventoryJobWork(hostRoot:string):Promise<{ids:string[];sc
     await assertPrivate(root);
     const names=(await readdir(anchored(root,'.'),{withFileTypes:true})).filter(entry=>entry.isDirectory()&&Id.safeParse(entry.name).success).map(entry=>entry.name).sort();
     const ids:string[]=[];
+    const hasChild=(rel:string)=>lstat(anchored(root,rel)).then(()=>true,(error:NodeJS.ErrnoException)=>{
+      if(error.code==='ENOENT'||error.code==='ENOTDIR')return false;
+      throw error;
+    });
     for(let i=0;i<names.length;i+=32){
       const page=names.slice(i,i+32);
-      const found=await Promise.all(page.map(name=>lstat(anchored(root,name+'/work')).then(()=>true,(error:NodeJS.ErrnoException)=>{
-        if(error.code==='ENOENT'||error.code==='ENOTDIR')return false;
-        throw error;
-      })));
+      const found=await Promise.all(page.map(async name=>await hasChild(name+'/work')||await hasChild(name+'/review-artifact')));
       page.forEach((name,index)=>{if(found[index])ids.push(name);});
     }
     return {ids,scanned:names.length};

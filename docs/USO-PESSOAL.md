@@ -389,7 +389,7 @@ npm run personal:maintenance -- <instalação.json> --liberar-work-exames --job 
 
 Cada página consulta até 200 candidatos. Quando houver uma continuação, repita o comando do projeto com o valor de `--apos` exibido. O proprietário pode aplicar uma página com `--aplicar`.
 
-Para liberar `work/`, o supervisor confere a autorização do proprietário, a reserva liberada, o recibo de conclusão, o resultado em disco e a prova assinada da retirada dos contêineres e da rede. Nos jobs de design, as finalidades aceitas são exame, crítica e confirmação. A preparação da retirada é registrada antes da exclusão. Uma repetição pode concluir o registro de auditoria se o banco falhar depois da remoção. O supervisor percorre a cópia por descritores de diretório. Os relatórios, os arquivos de entrada e saída e `review-artifact/` continuam disponíveis.
+Para liberar `work/`, o supervisor confere a autorização do proprietário, a reserva liberada, o recibo de conclusão, o resultado em disco e a prova assinada da retirada dos contêineres e da rede. Nos jobs de design, as finalidades aceitas são exame, crítica e confirmação. A preparação da retirada é registrada antes da exclusão. Uma repetição pode concluir o registro de auditoria se o banco falhar depois da remoção. O supervisor percorre a cópia por descritores de diretório. Nos exames passivos fora de design também é retirado `review-artifact/` logo após `work/`; os relatórios, os arquivos de entrada e saída e o `review-artifact/` de design continuam disponíveis.
 
 ### Retenção automática das cópias `work/` de jobs terminados
 
@@ -414,7 +414,7 @@ Todas as categorias exigem personal, recibo assinado por este executor, grant li
 
 `registerArtifact` repete com segurança depois da retirada: com o artefato já registrado, confere a identidade no repositório e não lê mais o `work/`. Duas chamadas simultâneas registram uma vez só.
 
-Ficam sempre: `request.json`, `input/`, `output/`, `planning/`, `review-artifact/`, logs, recibos, diário de retirada e banco. Para outras retenções (artefatos), use o ponto de integração `JobRetentionExtension` em `runPersonalJobRetention(config, apply, {extensions})`. A função é a mesma que o vigia chama.
+Nos exames passivos e avaliadores somente leitura (exceto design), a retenção também retira `review-artifact/` logo depois de `work/`, somando as duas cópias na prévia; ficam sempre `request.json`, `input/`, `output/`, `planning/`, o `review-artifact/` de programador e de design, logs, recibos, diário de retirada e banco. Para outras retenções (artefatos), use o ponto de integração `JobRetentionExtension` em `runPersonalJobRetention(config, apply, {extensions})`. A função é a mesma que o vigia chama.
 
 O mesmo comando também retém os artefatos registrados (worktrees de trabalhadores, imagens candidatas e temporários `ac-*` de rodadas). A ordem é a do AGENTS.md: primeiro o `work/` dos jobs, depois os artefatos. As etapas não dependem uma da outra. Se o registro de artefatos estiver danificado ou o banco cair, a outra etapa roda assim mesmo, e o comando informa a etapa que falhou e termina com erro. No vigia, isso aparece como `retention=failed`.
 
