@@ -114,6 +114,12 @@ const DEFAULT_THRESHOLDS = Object.freeze({
   jscpdComplexityAlta: 50,
 });
 
+// Complexidade é métrica de manutenção, não defeito: baixa acima do limiar e
+// média só a partir do dobro dele.
+function complexitySeverity(value, limit) {
+  return value >= 2 * limit ? 'media' : 'baixa';
+}
+
 function toPosix(value) {
   return String(value ?? '').replace(/\\/g, '/');
 }
@@ -582,7 +588,7 @@ export function parseKnipReport(rawJson, repoRoot, candidateFiles, includesFile 
           rule: 'KNIP-UNUSED-FILE',
           file: target,
           line: 1,
-          severity: 'media',
+          severity: 'baixa',
           message: `Arquivo não alcançável a partir das entradas do projeto: ${target}`,
           evidence: `knip files: ${target}`,
         });
@@ -772,7 +778,7 @@ export function parseJscpdComplexityReport(rawJson, repoRoot, scannedBaseDir, co
     fileMetrics.push({file: rel, complexity, lines, tokens, format: String(item.format ?? '')});
 
     if (!coveredAstFiles.has(rel) && complexity >= DEFAULT_THRESHOLDS.jscpdComplexityMedia) {
-      const severity = complexity >= DEFAULT_THRESHOLDS.jscpdComplexityAlta ? 'alta' : 'media';
+      const severity = complexitySeverity(complexity, DEFAULT_THRESHOLDS.jscpdComplexityMedia);
       findings.push({
         tool: 'jscpd',
         rule: 'JSCPD-COMPLEXITY-HIGH',
@@ -1063,7 +1069,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
           rule: 'COMPLEXITY-CYCLOMATIC-HIGH',
           file: relFile,
           line: clampLine(lex.fnLine),
-          severity: lex.maxFnCyclomatic >= thresholds.fnCyclomaticAlta ? 'alta' : 'media',
+          severity: complexitySeverity(lex.maxFnCyclomatic, thresholds.fnCyclomaticMedia),
           message: `Função '${lex.fnName}' com complexidade ciclomática alta (${lex.maxFnCyclomatic}, limite ${thresholds.fnCyclomaticMedia})`,
           evidence: `${relFile}:${lex.fnLine} funcao=${lex.fnName}; complexidade_ciclomatica=${lex.maxFnCyclomatic}; profundidade_max=${lex.maxNesting}`,
         });
@@ -1074,7 +1080,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
           rule: 'COMPLEXITY-NESTING-DEEP',
           file: relFile,
           line: clampLine(lex.fnLine),
-          severity: lex.maxNesting >= thresholds.fnNestingAlta ? 'alta' : 'media',
+          severity: complexitySeverity(lex.maxNesting, thresholds.fnNestingMedia),
           message: `Função '${lex.fnName}' com aninhamento excessivo (${lex.maxNesting} níveis, limite ${thresholds.fnNestingMedia})`,
           evidence: `${relFile}:${lex.fnLine} funcao=${lex.fnName}; profundidade_max=${lex.maxNesting}`,
         });
@@ -1086,7 +1092,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
           rule: 'COMPLEXITY-FILE-LARGE',
           file: relFile,
           line: 1,
-          severity: loc >= thresholds.fileLocAlta ? 'alta' : 'media',
+          severity: complexitySeverity(loc, thresholds.fileLocMedia),
           message: `Arquivo extenso demais (${loc} linhas úteis, limite ${thresholds.fileLocMedia})`,
           evidence: `${relFile}:1 linhas_uteis=${loc}; linhas_totais=${lines.length}; funcoes=${lex.functionsCount}`,
         });
@@ -1236,7 +1242,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
 
       if (complexity >= thresholds.fnCyclomaticMedia) {
         complexFunctionsCount += 1;
-        const severity = complexity >= thresholds.fnCyclomaticAlta ? 'alta' : 'media';
+        const severity = complexitySeverity(complexity, thresholds.fnCyclomaticMedia);
         findings.push({
           tool: 'ast-complexity',
           rule: 'COMPLEXITY-CYCLOMATIC-HIGH',
@@ -1249,7 +1255,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
       }
 
       if (deepest >= thresholds.fnNestingMedia) {
-        const severity = deepest >= thresholds.fnNestingAlta ? 'alta' : 'media';
+        const severity = complexitySeverity(deepest, thresholds.fnNestingMedia);
         findings.push({
           tool: 'ast-complexity',
           rule: 'COMPLEXITY-NESTING-DEEP',
@@ -1280,7 +1286,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
 
     if (loc >= thresholds.fileLocMedia) {
       largeFilesCount += 1;
-      const severity = loc >= thresholds.fileLocAlta ? 'alta' : 'media';
+      const severity = complexitySeverity(loc, thresholds.fileLocMedia);
       findings.push({
         tool: 'ast-complexity',
         rule: 'COMPLEXITY-FILE-LARGE',
@@ -1293,7 +1299,7 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
     }
 
     if (fileCyclomatic >= thresholds.fileCyclomaticMedia) {
-      const severity = fileCyclomatic >= thresholds.fileCyclomaticAlta ? 'alta' : 'media';
+      const severity = complexitySeverity(fileCyclomatic, thresholds.fileCyclomaticMedia);
       findings.push({
         tool: 'ast-complexity',
         rule: 'COMPLEXITY-FILE-CYCLOMATIC',
@@ -1327,6 +1333,93 @@ export function analyzeAstComplexity(workRepoDir, jsTsFiles, thresholds = DEFAUL
       largeFiles: largeFilesCount,
     },
   };
+}
+
+const PER_FUNCTION_RULES = new Set(['COMPLEXITY-CYCLOMATIC-HIGH', 'COMPLEXITY-NESTING-DEEP']);
+const KNIP_PACKAGE_RULES = new Set(['KNIP-UNUSED-EXPORT', 'KNIP-UNUSED-NS-EXPORT', 'KNIP-UNUSED-TYPE', 'KNIP-UNUSED-NS-TYPE',
+  'KNIP-UNUSED-ENUM-MEMBER', 'KNIP-UNUSED-NS-MEMBER', 'KNIP-DUPLICATE-EXPORT']);
+const MAX_DUPLICATE_PAIRS = 10;
+const MAX_AGGREGATE_TEXT = 1900;
+
+function packageOf(file) {
+  const directories = file.split('/').slice(0, -1);
+  return directories.length ? directories.slice(0, 2).join('/') : '.';
+}
+
+function joinBounded(parts, separator) {
+  let text = '';
+  let used = 0;
+  for (const part of parts) {
+    const next = text ? `${text}${separator}${part}` : part;
+    if (next.length > MAX_AGGREGATE_TEXT) break;
+    text = next;
+    used += 1;
+  }
+  return used < parts.length ? `${text}${separator}e mais ${parts.length - used}` : text;
+}
+
+function groupBy(items, key) {
+  const groups = new Map();
+  for (const item of items) {
+    const name = key(item);
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(item);
+  }
+  return groups;
+}
+
+/**
+ * Junta os achados medidos que se repetem: complexidade por função vira um achado por
+ * arquivo com a pior função, exportações não usadas do Knip um por pacote, dependências
+ * de desenvolvimento não usadas um por manifesto e duplicações do jscpd um por par de
+ * arquivos, com no máximo MAX_DUPLICATE_PAIRS pares. Os números ficam na evidência.
+ */
+export function reduceArchitectureNoise(findings) {
+  const kept = [];
+  const perFunction = [];
+  const knip = [];
+  const duplicates = [];
+  for (const finding of findings) {
+    if (finding.tool === 'ast-complexity' && PER_FUNCTION_RULES.has(finding.rule)) perFunction.push(finding);
+    else if (finding.tool === 'knip' && (KNIP_PACKAGE_RULES.has(finding.rule) || finding.rule === 'KNIP-UNUSED-DEV-DEPENDENCY')) knip.push(finding);
+    else if (finding.tool === 'jscpd' && finding.rule === 'JSCPD-DUPLICATION') duplicates.push(finding);
+    else kept.push(finding);
+  }
+  const metric = finding => Number(/(?:complexidade_ciclomatica|profundidade_max)=(\d+)/.exec(finding.evidence)?.[1] ?? 0);
+  for (const items of groupBy(perFunction, item => `${item.rule}\0${item.file}`).values()) {
+    const worst = items.reduce((best, item) => (metric(item) > metric(best) ? item : best));
+    kept.push(items.length === 1 ? worst
+      : {...worst, message: `${worst.message}; ${items.length} funções do arquivo acima do limite`});
+  }
+  const knipKey = item => `${item.rule}\0${item.rule === 'KNIP-UNUSED-DEV-DEPENDENCY' ? item.file : packageOf(item.file)}`;
+  for (const items of groupBy(knip, knipKey).values()) {
+    if (items.length === 1) {
+      kept.push(items[0]);
+      continue;
+    }
+    items.sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
+    const [first] = items;
+    const label = first.message.split(':')[0];
+    const scope = first.rule === 'KNIP-UNUSED-DEV-DEPENDENCY' ? first.file : packageOf(first.file);
+    kept.push({...first, severity: 'baixa', message: `${label}: ${items.length} ocorrências em ${scope}`,
+      evidence: joinBounded(items.map(item => item.evidence), '; ')});
+  }
+  const linesOf = item => Number(/\(\S+, (\d+) linhas,/.exec(item.message)?.[1] ?? 0);
+  const partner = item => /também presente em (.+):\d+-\d+$/.exec(item.message)?.[1] ?? '';
+  const pairs = [...groupBy(duplicates, item => `${item.file}\0${partner(item)}`).values()].map(items => {
+    items.sort((a, b) => a.line - b.line);
+    const largest = Math.max(...items.map(linesOf));
+    const total = items.reduce((sum, item) => sum + linesOf(item), 0);
+    const severity = largest >= 40 ? 'media' : 'baixa';
+    const finding = items.length === 1 ? {...items[0], severity} : {
+      ...items[0], severity,
+      message: `${items.length} blocos duplicados (${total} linhas no total, o maior com ${largest}) entre ${items[0].file} e ${partner(items[0])}`,
+      evidence: joinBounded(items.map(item => item.evidence), '\n'),
+    };
+    return {finding, largest, total};
+  }).sort((a, b) => b.largest - a.largest || b.total - a.total || compareFindings(a.finding, b.finding));
+  kept.push(...pairs.slice(0, MAX_DUPLICATE_PAIRS).map(pair => pair.finding));
+  return {findings: kept, omittedDuplicatePairs: Math.max(0, pairs.length - MAX_DUPLICATE_PAIRS)};
 }
 
 function coverageLimit(total, listed) {
@@ -1841,7 +1934,16 @@ export function runCollector(options = {}) {
       }
     }
 
-    return boundCollectorOutput({coverage, findings});
+    const reduced = reduceArchitectureNoise(findings);
+    if (reduced.omittedDuplicatePairs) {
+      coverage.push({
+        tool: 'jscpd:limite',
+        version: versions.jscpd,
+        status: 'skipped',
+        detail: `pares_duplicados_publicados=${MAX_DUPLICATE_PAIRS}; pares_omitidos=${reduced.omittedDuplicatePairs}; criterio=maior_bloco_primeiro`,
+      });
+    }
+    return boundCollectorOutput({coverage, findings: reduced.findings});
   } finally {
     rmSync(workRoot, {recursive: true, force: true});
   }
