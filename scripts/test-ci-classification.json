@@ -159,6 +159,7 @@
   "native-execution-repository-isolation.test.ts",
   "native-failure-diagnostics.test.ts",
   "native-model-policy-admission.test.ts",
+  "native-module-exam-prelaunch.test.ts",
   "native-parallel.test.ts",
   "native-pause.test.ts",
   "native-private-network-retirement.test.ts",
