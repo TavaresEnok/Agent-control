@@ -124,6 +124,7 @@
   "module-documentation-artifacts.test.ts",
   "module-exam-batch.test.ts",
   "module-exam-collector-proof.test.ts",
+  "module-exam-capacity-queue.test.ts",
   "module-exam-finding-binding.test.ts",
   "module-exam-native.test.ts",
   "module-exam-persistence.test.ts",
